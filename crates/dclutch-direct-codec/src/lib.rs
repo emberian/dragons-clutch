@@ -7,6 +7,8 @@
 mod generated_layout;
 #[rustfmt::skip]
 mod generated_lifecycle;
+#[rustfmt::skip]
+mod generated_registered_controller;
 
 /// Bytes in one independently signed compact intent.
 pub const COMPACT_INTENT_BYTES: usize = generated_layout::COMPACT_INTENT_BYTES_VALUE;
@@ -20,6 +22,12 @@ pub const REGISTERED_FILL_PROGRAM_BYTES: usize = generated_lifecycle::REGISTERED
 /// Lean-owned bytecode deriving remaining quantity, replay sequence, and phase.
 pub const REGISTERED_FILL_PROGRAM: [u8; REGISTERED_FILL_PROGRAM_BYTES] =
     generated_lifecycle::REGISTERED_FILL_PROGRAM;
+/// Bytes in one controller request to fill two registered intents.
+pub const REGISTERED_CONTROLLER_INSTRUCTION_BYTES: usize =
+    generated_registered_controller::REGISTERED_CONTROLLER_BYTES_VALUE;
+/// Bytes in the claim-owner request derived from a registered controller fill.
+pub const REGISTERED_CLAIM_FILL_BYTES: usize =
+    generated_registered_controller::REGISTERED_CLAIM_FILL_BYTES_VALUE;
 /// Scalar inputs consumed by the Lean-owned registered residual-fill program.
 pub const REGISTERED_FILL_INPUT_COUNT: usize = generated_lifecycle::REGISTERED_INPUT_COUNT;
 /// Registered lifecycle input register containing the signed lifecycle tag.
@@ -193,6 +201,25 @@ pub struct RegisteredIntentStateV1 {
     pub sequence: u64,
 }
 
+/// Matcher-selected fill over two already authenticated registration states.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RegisteredFillInstructionV1 {
+    /// Global controller PDA bump.
+    pub controller_bump: u8,
+    /// Seller registered-intent PDA bump.
+    pub seller_registration_bump: u8,
+    /// Buyer registered-intent PDA bump.
+    pub buyer_registration_bump: u8,
+    /// Seller maker/outcome Position PDA bump.
+    pub seller_position_bump: u8,
+    /// Buyer maker/outcome Position PDA bump.
+    pub buyer_position_bump: u8,
+    /// Matcher-selected positive fill.
+    pub fill: u64,
+    /// Matcher-selected execution price at the Market profile scale.
+    pub execution_price: u64,
+}
+
 impl RegisteredIntentStateV1 {
     /// Project the persisted semantic authority into the generated VM input prefix.
     #[must_use]
@@ -247,6 +274,123 @@ impl RegisteredIntentStateV1 {
         generated_lifecycle::encode_registered_state_fields!(output, self);
         Ok(output)
     }
+}
+
+impl RegisteredFillInstructionV1 {
+    /// Strictly decode one canonical registered-fill controller request.
+    pub fn decode(input: &[u8]) -> Result<Self, Error> {
+        exact_width(input, REGISTERED_CONTROLLER_INSTRUCTION_BYTES)?;
+        exact_magic(
+            input,
+            &generated_registered_controller::REGISTERED_CONTROLLER_MAGIC_BYTES,
+        )?;
+        if u16_at(
+            input,
+            generated_registered_controller::REGISTERED_CONTROLLER_VERSION_OFFSET,
+        )? != generated_registered_controller::REGISTERED_CONTROLLER_ABI_VERSION
+        {
+            return Err(Error::UnsupportedVersion);
+        }
+        reserved(
+            input,
+            generated_registered_controller::REGISTERED_CONTROLLER_RESERVED_OFFSET,
+            1,
+        )?;
+        Ok(Self {
+            controller_bump: byte(
+                input,
+                generated_registered_controller::REGISTERED_CONTROLLER_BUMP_OFFSET,
+            )?,
+            seller_registration_bump: byte(
+                input,
+                generated_registered_controller::REGISTERED_SELLER_REGISTRATION_BUMP_OFFSET,
+            )?,
+            buyer_registration_bump: byte(
+                input,
+                generated_registered_controller::REGISTERED_BUYER_REGISTRATION_BUMP_OFFSET,
+            )?,
+            seller_position_bump: byte(
+                input,
+                generated_registered_controller::REGISTERED_SELLER_POSITION_BUMP_OFFSET,
+            )?,
+            buyer_position_bump: byte(
+                input,
+                generated_registered_controller::REGISTERED_BUYER_POSITION_BUMP_OFFSET,
+            )?,
+            fill: u64_at(
+                input,
+                generated_registered_controller::REGISTERED_CONTROLLER_FILL_OFFSET,
+            )?,
+            execution_price: u64_at(
+                input,
+                generated_registered_controller::REGISTERED_CONTROLLER_EXECUTION_PRICE_OFFSET,
+            )?,
+        })
+    }
+
+    /// Encode one canonical registered-fill controller request.
+    pub fn encode(self) -> Result<[u8; REGISTERED_CONTROLLER_INSTRUCTION_BYTES], Error> {
+        let mut output = [0_u8; REGISTERED_CONTROLLER_INSTRUCTION_BYTES];
+        put(
+            &mut output,
+            generated_registered_controller::REGISTERED_CONTROLLER_MAGIC_OFFSET,
+            &generated_registered_controller::REGISTERED_CONTROLLER_MAGIC_BYTES,
+        )?;
+        put(
+            &mut output,
+            generated_registered_controller::REGISTERED_CONTROLLER_VERSION_OFFSET,
+            &generated_registered_controller::REGISTERED_CONTROLLER_ABI_VERSION.to_le_bytes(),
+        )?;
+        put_byte(
+            &mut output,
+            generated_registered_controller::REGISTERED_CONTROLLER_BUMP_OFFSET,
+            self.controller_bump,
+        )?;
+        put_byte(
+            &mut output,
+            generated_registered_controller::REGISTERED_SELLER_REGISTRATION_BUMP_OFFSET,
+            self.seller_registration_bump,
+        )?;
+        put_byte(
+            &mut output,
+            generated_registered_controller::REGISTERED_BUYER_REGISTRATION_BUMP_OFFSET,
+            self.buyer_registration_bump,
+        )?;
+        put_byte(
+            &mut output,
+            generated_registered_controller::REGISTERED_SELLER_POSITION_BUMP_OFFSET,
+            self.seller_position_bump,
+        )?;
+        put_byte(
+            &mut output,
+            generated_registered_controller::REGISTERED_BUYER_POSITION_BUMP_OFFSET,
+            self.buyer_position_bump,
+        )?;
+        put(
+            &mut output,
+            generated_registered_controller::REGISTERED_CONTROLLER_FILL_OFFSET,
+            &self.fill.to_le_bytes(),
+        )?;
+        put(
+            &mut output,
+            generated_registered_controller::REGISTERED_CONTROLLER_EXECUTION_PRICE_OFFSET,
+            &self.execution_price.to_le_bytes(),
+        )?;
+        Ok(output)
+    }
+}
+
+/// Derive the only registered-fill request accepted by the claim owner.
+pub fn registered_claim_fill_instruction(
+    fill: u64,
+) -> Result<[u8; REGISTERED_CLAIM_FILL_BYTES], Error> {
+    let mut output = generated_registered_controller::REGISTERED_CLAIM_FILL_TEMPLATE;
+    put(
+        &mut output,
+        generated_registered_controller::REGISTERED_CLAIM_FILL_OFFSET,
+        &fill.to_le_bytes(),
+    )?;
+    Ok(output)
 }
 
 impl ControllerInstructionV1 {
@@ -491,6 +635,74 @@ mod tests {
         let encoded = state.encode().expect("registered state encoding");
         assert_eq!(encoded, generated_lifecycle::REGISTERED_STATE_EXAMPLE);
         assert_eq!(RegisteredIntentStateV1::decode(&encoded), Ok(state));
+    }
+
+    #[test]
+    fn registered_controller_matches_lean_and_round_trips() {
+        let instruction = RegisteredFillInstructionV1 {
+            controller_bump: 1,
+            seller_registration_bump: 2,
+            buyer_registration_bump: 3,
+            seller_position_bump: 4,
+            buyer_position_bump: 5,
+            fill: 2_000,
+            execution_price: 500_000,
+        };
+        let encoded = instruction
+            .encode()
+            .expect("registered controller encoding");
+        assert_eq!(
+            encoded,
+            generated_registered_controller::REGISTERED_CONTROLLER_EXAMPLE
+        );
+        assert_eq!(
+            RegisteredFillInstructionV1::decode(&encoded),
+            Ok(instruction)
+        );
+        assert_eq!(
+            registered_claim_fill_instruction(instruction.fill),
+            Ok([
+                b'D', b'C', b'R', b'F', 1, 0, 0, 0, 0xd0, 0x07, 0, 0, 0, 0, 0, 0,
+            ])
+        );
+    }
+
+    #[test]
+    fn hostile_registered_controller_refuses() {
+        let instruction = RegisteredFillInstructionV1 {
+            controller_bump: 1,
+            seller_registration_bump: 2,
+            buyer_registration_bump: 3,
+            seller_position_bump: 4,
+            buyer_position_bump: 5,
+            fill: 2_000,
+            execution_price: 500_000,
+        };
+        let encoded = instruction
+            .encode()
+            .expect("registered controller encoding");
+        assert_eq!(
+            RegisteredFillInstructionV1::decode(&encoded[..encoded.len() - 1]),
+            Err(Error::InvalidLength)
+        );
+        let mut hostile = encoded;
+        hostile[generated_registered_controller::REGISTERED_CONTROLLER_MAGIC_OFFSET] ^= 1;
+        assert_eq!(
+            RegisteredFillInstructionV1::decode(&hostile),
+            Err(Error::InvalidMagic)
+        );
+        let mut hostile = encoded;
+        hostile[generated_registered_controller::REGISTERED_CONTROLLER_VERSION_OFFSET] = 2;
+        assert_eq!(
+            RegisteredFillInstructionV1::decode(&hostile),
+            Err(Error::UnsupportedVersion)
+        );
+        let mut hostile = encoded;
+        hostile[generated_registered_controller::REGISTERED_CONTROLLER_RESERVED_OFFSET] = 1;
+        assert_eq!(
+            RegisteredFillInstructionV1::decode(&hostile),
+            Err(Error::NonzeroReserved)
+        );
     }
 
     #[test]

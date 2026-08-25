@@ -15,7 +15,9 @@ use dclutch_core_contract::{MARKET_ROOT_BYTES, MarketRoot, Phase};
 use dclutch_direct_codec::{
     COMPACT_INTENT_BYTES, COMPILED_DIRECT_CAPACITY_ID_V1, COMPILED_DIRECT_CHILD_SCHEMA_ID_V1,
     COMPILED_DIRECT_DERIVATION_ID_V1, COMPILED_DIRECT_RELEASE_ID_V1, CONTROLLER_INSTRUCTION_BYTES,
-    CompactIntentV1, ControllerInstructionV1,
+    CompactIntentV1, ControllerInstructionV1, REGISTERED_CLAIM_FILL_BYTES,
+    REGISTERED_CONTROLLER_INSTRUCTION_BYTES, RegisteredFillInstructionV1, RegisteredIntentStateV1,
+    registered_claim_fill_instruction,
 };
 use dclutch_direct_contract::{
     DIRECT_CAPABILITY_KIND_ID_V2, PRICE_SCALE, VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3,
@@ -57,6 +59,8 @@ use solana_sdk_ids::{ed25519_program, sysvar};
 pub const CONTROLLER_SEED: &[u8] = b"dclutch-controller-v1";
 /// Canonical compiled-Direct maker replay-root domain.
 pub const REPLAY_SEED: &[u8] = b"dclutch/direct-replay/v3";
+/// Canonical registered-intent PDA domain.
+pub const REGISTERED_SEED: &[u8] = b"dclutch/direct-registered/v1";
 /// Canonical maker/outcome Position domain for the successor experiment.
 pub const POSITION_SEED: &[u8] = b"dclutch/position/v1";
 /// Canonical Market PDA domain shared with the protocol adapter.
@@ -150,13 +154,29 @@ struct MarketAuthority {
 #[cfg(not(feature = "no-entrypoint"))]
 solana_program::entrypoint_no_alloc!(process_instruction);
 
+/// Dispatch one exact inline or registered Direct controller request.
+#[inline(never)]
+pub fn process_instruction(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    match instruction_data.len() {
+        CONTROLLER_INSTRUCTION_BYTES => process_inline(program_id, accounts, instruction_data),
+        REGISTERED_CONTROLLER_INSTRUCTION_BYTES => {
+            process_registered_fill(program_id, accounts, instruction_data)
+        }
+        _ => Err(ControllerError::AccountFrame.into()),
+    }
+}
+
 /// Authenticate compact signed intents, run Lean bytecode, and invoke children.
 ///
 /// The instruction contains no claim or custody plan. Both are derived only
 /// after exact Ed25519, Market/Realm/capability/policy, replay, Position, PDA,
 /// and token checks.
 #[inline(never)]
-pub fn process_instruction(
+fn process_inline(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
@@ -361,6 +381,218 @@ pub fn process_instruction(
     )
 }
 
+#[inline(never)]
+fn process_registered_fill(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    if accounts.len() != 17 {
+        return Err(ControllerError::AccountFrame.into());
+    }
+    let instruction = RegisteredFillInstructionV1::decode(instruction_data)
+        .map_err(|_| ControllerError::Instruction)?;
+
+    let mut iterator = accounts.iter();
+    let controller = next(&mut iterator)?;
+    let seller_registration = next(&mut iterator)?;
+    let buyer_registration = next(&mut iterator)?;
+    let journal = next(&mut iterator)?;
+    let seller_position = next(&mut iterator)?;
+    let buyer_position = next(&mut iterator)?;
+    let claim_program = next(&mut iterator)?;
+    let custody_program = next(&mut iterator)?;
+    let market = next(&mut iterator)?;
+    let realm = next(&mut iterator)?;
+    let fee_policy = next(&mut iterator)?;
+    let capability_manifest = next(&mut iterator)?;
+    let mint = next(&mut iterator)?;
+    let source = next(&mut iterator)?;
+    let seller = next(&mut iterator)?;
+    let venue = next(&mut iterator)?;
+    let token_program = next(&mut iterator)?;
+
+    validate_registered_account_frame(
+        program_id,
+        controller,
+        seller_registration,
+        buyer_registration,
+        journal,
+        seller_position,
+        buyer_position,
+        claim_program,
+        custody_program,
+        market,
+        realm,
+        fee_policy,
+        capability_manifest,
+        mint,
+        source,
+        seller,
+        venue,
+        token_program,
+    )?;
+    let authority = authenticate_market_authority(
+        market,
+        realm,
+        fee_policy,
+        capability_manifest,
+        mint,
+        venue,
+        token_program,
+    )?;
+    let controller_bump_seed = [instruction.controller_bump];
+    let controller_seeds: [&[u8]; 2] = [CONTROLLER_SEED, &controller_bump_seed];
+    let expected_controller = Pubkey::create_program_address(&controller_seeds, program_id)
+        .map_err(|_| ControllerError::ControllerPda)?;
+    if controller.key != &expected_controller {
+        return Err(ControllerError::ControllerPda.into());
+    }
+
+    let seller_state = decode_registered_state(seller_registration, controller)?;
+    let buyer_state = decode_registered_state(buyer_registration, controller)?;
+    let seller_intent = seller_state.intent;
+    let buyer_intent = buyer_state.intent;
+    if seller_state.phase != 0
+        || buyer_state.phase != 0
+        || seller_state.remaining == 0
+        || buyer_state.remaining == 0
+        || seller_state.remaining > seller_intent.maximum_fill
+        || buyer_state.remaining > buyer_intent.maximum_fill
+        || seller_intent.market != market.key.to_bytes()
+        || buyer_intent.market != market.key.to_bytes()
+        || seller_intent.generation != authority.generation
+        || buyer_intent.generation != authority.generation
+        || seller_intent.collateral_account != seller.key.to_bytes()
+        || buyer_intent.collateral_account != source.key.to_bytes()
+        || seller_intent.fee_basis_points != authority.fee_basis_points
+        || buyer_intent.fee_basis_points != authority.fee_basis_points
+    {
+        return Err(ControllerError::MarketAuthority.into());
+    }
+    let makers = [
+        Pubkey::new_from_array(seller_state.maker),
+        Pubkey::new_from_array(buyer_state.maker),
+    ];
+    if makers[0] == Pubkey::default() || makers[1] == Pubkey::default() || makers[0] == makers[1] {
+        return Err(ControllerError::ClaimState.into());
+    }
+
+    let generation = authority.generation.to_le_bytes();
+    let seller_nonce = seller_intent.nonce.to_le_bytes();
+    let buyer_nonce = buyer_intent.nonce.to_le_bytes();
+    let seller_registration_bump_seed = [instruction.seller_registration_bump];
+    let buyer_registration_bump_seed = [instruction.buyer_registration_bump];
+    let seller_registration_seeds: [&[u8]; 6] = [
+        REGISTERED_SEED,
+        market.key.as_ref(),
+        &generation,
+        makers[0].as_ref(),
+        &seller_nonce,
+        &seller_registration_bump_seed,
+    ];
+    let buyer_registration_seeds: [&[u8]; 6] = [
+        REGISTERED_SEED,
+        market.key.as_ref(),
+        &generation,
+        makers[1].as_ref(),
+        &buyer_nonce,
+        &buyer_registration_bump_seed,
+    ];
+    if seller_registration.key
+        != &Pubkey::create_program_address(&seller_registration_seeds, program_id)
+            .map_err(|_| ControllerError::ReplayPda)?
+        || buyer_registration.key
+            != &Pubkey::create_program_address(&buyer_registration_seeds, program_id)
+                .map_err(|_| ControllerError::ReplayPda)?
+    {
+        return Err(ControllerError::ReplayPda.into());
+    }
+
+    authenticate_position_addresses(
+        program_id,
+        market,
+        makers,
+        [seller_intent.outcome, buyer_intent.outcome],
+        [
+            instruction.seller_position_bump,
+            instruction.buyer_position_bump,
+        ],
+        seller_position,
+        buyer_position,
+    )?;
+    let seller_position_state = decode_position_state(seller_position, controller)?;
+    let buyer_position_state = decode_position_state(buyer_position, controller)?;
+    if seller_position_state.outcome != u64::from(seller_intent.outcome)
+        || buyer_position_state.outcome != u64::from(buyer_intent.outcome)
+    {
+        return Err(ControllerError::ClaimState.into());
+    }
+    let claim_state = ClaimState {
+        seller_nonce: seller_state.sequence,
+        buyer_nonce: buyer_state.sequence,
+        seller_claims: seller_position_state.claims,
+        buyer_claims: buyer_position_state.claims,
+    };
+    let token_state = authenticate_token_state(
+        authority,
+        makers[1],
+        buyer_registration,
+        mint,
+        source,
+        seller,
+        venue,
+        token_program,
+    )?;
+    let mut seller_execution = seller_intent;
+    seller_execution.nonce = seller_state.sequence;
+    seller_execution.maximum_fill = seller_state.remaining;
+    let mut buyer_execution = buyer_intent;
+    buyer_execution.nonce = buyer_state.sequence;
+    buyer_execution.maximum_fill = buyer_state.remaining;
+    let mut registers = build_registers(
+        authority,
+        seller_execution,
+        buyer_execution,
+        makers,
+        claim_state,
+        token_state,
+        instruction.fill,
+        instruction.execution_price,
+        Clock::get().map_err(|_| ControllerError::Instruction)?.slot,
+    )?;
+    dclutch_transition_vm::execute(&DIRECT_PROGRAM, &mut registers)
+        .map_err(|_| ControllerError::Transition)?;
+    let claim_instruction = registered_claim_fill_instruction(instruction.fill)
+        .map_err(|_| ControllerError::Instruction)?;
+    let custody_plan = custody_plan(&registers)?;
+
+    increment_journal(journal)?;
+    invoke_registered_claim(
+        controller,
+        seller_registration,
+        buyer_registration,
+        seller_position,
+        buyer_position,
+        claim_program,
+        &controller_seeds,
+        claim_instruction,
+    )?;
+    invoke_custody(
+        controller,
+        buyer_registration,
+        mint,
+        source,
+        seller,
+        venue,
+        token_program,
+        custody_program,
+        &controller_seeds,
+        &buyer_registration_seeds,
+        custody_plan,
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 fn validate_account_frame(
@@ -467,6 +699,145 @@ fn validate_account_frame(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn validate_registered_account_frame(
+    program_id: &Pubkey,
+    controller: &AccountInfo<'_>,
+    seller_registration: &AccountInfo<'_>,
+    buyer_registration: &AccountInfo<'_>,
+    journal: &AccountInfo<'_>,
+    seller_position: &AccountInfo<'_>,
+    buyer_position: &AccountInfo<'_>,
+    claim_program: &AccountInfo<'_>,
+    custody_program: &AccountInfo<'_>,
+    market: &AccountInfo<'_>,
+    realm: &AccountInfo<'_>,
+    fee_policy: &AccountInfo<'_>,
+    capability_manifest: &AccountInfo<'_>,
+    mint: &AccountInfo<'_>,
+    source: &AccountInfo<'_>,
+    seller: &AccountInfo<'_>,
+    venue: &AccountInfo<'_>,
+    token_program: &AccountInfo<'_>,
+) -> Result<(), ControllerError> {
+    if controller.is_signer
+        || controller.is_writable
+        || controller.executable
+        || seller_registration.is_signer
+        || !seller_registration.is_writable
+        || seller_registration.executable
+        || buyer_registration.is_signer
+        || !buyer_registration.is_writable
+        || buyer_registration.executable
+        || journal.is_signer
+        || !journal.is_writable
+        || journal.executable
+        || seller_position.is_signer
+        || !seller_position.is_writable
+        || seller_position.executable
+        || buyer_position.is_signer
+        || !buyer_position.is_writable
+        || buyer_position.executable
+        || !readonly_executable(claim_program)
+        || !readonly_executable(custody_program)
+        || !readonly_data(market)
+        || !readonly_data(realm)
+        || !readonly_data(fee_policy)
+        || !readonly_data(capability_manifest)
+        || mint.is_signer
+        || mint.is_writable
+        || mint.executable
+        || source.is_signer
+        || !source.is_writable
+        || source.executable
+        || seller.is_signer
+        || !seller.is_writable
+        || seller.executable
+        || venue.is_signer
+        || !venue.is_writable
+        || venue.executable
+        || !readonly_executable(token_program)
+    {
+        return Err(ControllerError::AccountAuthority);
+    }
+    if journal.owner != program_id
+        || seller_registration.owner != &CLAIM_PROGRAM_ID
+        || buyer_registration.owner != &CLAIM_PROGRAM_ID
+        || seller_position.owner != &CLAIM_PROGRAM_ID
+        || buyer_position.owner != &CLAIM_PROGRAM_ID
+        || claim_program.key != &CLAIM_PROGRAM_ID
+        || custody_program.key != &CUSTODY_PROGRAM_ID
+    {
+        return Err(ControllerError::AccountAuthority);
+    }
+    let keys = [
+        controller.key,
+        seller_registration.key,
+        buyer_registration.key,
+        journal.key,
+        seller_position.key,
+        buyer_position.key,
+        claim_program.key,
+        custody_program.key,
+        market.key,
+        realm.key,
+        fee_policy.key,
+        capability_manifest.key,
+        mint.key,
+        source.key,
+        seller.key,
+        venue.key,
+        token_program.key,
+    ];
+    for (index, left) in keys.iter().enumerate() {
+        if keys.iter().skip(index + 1).any(|right| left == right) {
+            return Err(ControllerError::AccountAuthority);
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_position_addresses(
+    program_id: &Pubkey,
+    market: &AccountInfo<'_>,
+    makers: [Pubkey; 2],
+    outcomes: [u8; 2],
+    bumps: [u8; 2],
+    seller_position: &AccountInfo<'_>,
+    buyer_position: &AccountInfo<'_>,
+) -> Result<(), ControllerError> {
+    let seller_outcome_seed = [outcomes[0]];
+    let buyer_outcome_seed = [outcomes[1]];
+    let seller_bump_seed = [bumps[0]];
+    let buyer_bump_seed = [bumps[1]];
+    let seller_seeds: [&[u8]; 5] = [
+        POSITION_SEED,
+        market.key.as_ref(),
+        makers[0].as_ref(),
+        &seller_outcome_seed,
+        &seller_bump_seed,
+    ];
+    let buyer_seeds: [&[u8]; 5] = [
+        POSITION_SEED,
+        market.key.as_ref(),
+        makers[1].as_ref(),
+        &buyer_outcome_seed,
+        &buyer_bump_seed,
+    ];
+    if seller_position.key
+        != &Pubkey::create_program_address(&seller_seeds, program_id)
+            .map_err(|_| ControllerError::ClaimState)?
+        || buyer_position.key
+            != &Pubkey::create_program_address(&buyer_seeds, program_id)
+                .map_err(|_| ControllerError::ClaimState)?
+    {
+        return Err(ControllerError::ClaimState);
+    }
+    Ok(())
+}
+
 fn readonly_data(account: &AccountInfo<'_>) -> bool {
     !account.is_signer && !account.is_writable && !account.executable
 }
@@ -556,6 +927,20 @@ fn decode_replay_state(
     Ok(ReplayState {
         nonce: read_u64(&data, 40)?,
     })
+}
+
+fn decode_registered_state(
+    registration: &AccountInfo<'_>,
+    controller: &AccountInfo<'_>,
+) -> Result<RegisteredIntentStateV1, ControllerError> {
+    let data = registration
+        .try_borrow_data()
+        .map_err(|_| ControllerError::ClaimState)?;
+    let state = RegisteredIntentStateV1::decode(&data).map_err(|_| ControllerError::ClaimState)?;
+    if state.controller != controller.key.to_bytes() {
+        return Err(ControllerError::ClaimState);
+    }
+    Ok(state)
 }
 
 fn decode_position_state(
@@ -970,6 +1355,41 @@ fn invoke_claim<'info>(
             controller.clone(),
             seller_replay.clone(),
             buyer_replay.clone(),
+            seller_position.clone(),
+            buyer_position.clone(),
+            claim_program.clone(),
+        ],
+        &[controller_seeds],
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn invoke_registered_claim<'info>(
+    controller: &AccountInfo<'info>,
+    seller_registration: &AccountInfo<'info>,
+    buyer_registration: &AccountInfo<'info>,
+    seller_position: &AccountInfo<'info>,
+    buyer_position: &AccountInfo<'info>,
+    claim_program: &AccountInfo<'info>,
+    controller_seeds: &[&[u8]],
+    instruction: [u8; REGISTERED_CLAIM_FILL_BYTES],
+) -> ProgramResult {
+    invoke_signed(
+        &Instruction {
+            program_id: CLAIM_PROGRAM_ID,
+            accounts: std::vec![
+                AccountMeta::new_readonly(*controller.key, true),
+                AccountMeta::new(*seller_registration.key, false),
+                AccountMeta::new(*buyer_registration.key, false),
+                AccountMeta::new(*seller_position.key, false),
+                AccountMeta::new(*buyer_position.key, false),
+            ],
+            data: instruction.to_vec(),
+        },
+        &[
+            controller.clone(),
+            seller_registration.clone(),
+            buyer_registration.clone(),
             seller_position.clone(),
             buyer_position.clone(),
             claim_program.clone(),

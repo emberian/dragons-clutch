@@ -69,8 +69,9 @@ both authenticated registrations, joins the results to the sole Position
 balances, and proves exact claim conservation. The 20,568-byte claim-owner ELF
 now dispatches this 16-byte request profile alongside inline execution; its
 real-ELF campaign covers reusable and terminal fills plus hostile rollback.
-Registration account creation and controller register/fill/cancel/expire
-dispatch remain the next physical boundary.
+The 32-byte controller request now drives that child route and real SPL custody
+without repeating maker signatures. Registration account creation plus
+controller register/cancel/expire dispatch remain the next physical boundary.
 
 `CompiledPhysical.compilePhysicalPlan` then constructs the claim and custody
 plans from successful program outputs instead of caller-supplied gross, fee, or

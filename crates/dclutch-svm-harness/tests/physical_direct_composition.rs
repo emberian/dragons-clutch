@@ -22,7 +22,7 @@ use dclutch_core_contract::{ContentId, MarketIdentity, MarketRoot, Phase};
 use dclutch_direct_codec::{
     COMPACT_INTENT_BYTES, COMPILED_DIRECT_CAPACITY_ID_V1, COMPILED_DIRECT_CHILD_SCHEMA_ID_V1,
     COMPILED_DIRECT_DERIVATION_ID_V1, COMPILED_DIRECT_RELEASE_ID_V1, CompactIntentV1,
-    ControllerInstructionV1,
+    ControllerInstructionV1, RegisteredFillInstructionV1, RegisteredIntentStateV1,
 };
 use dclutch_direct_contract::{
     DIRECT_CAPABILITY_KIND_ID_V2, VENUE_FEE_POLICY_BYTES_V3, VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3,
@@ -62,6 +62,7 @@ const CUSTODY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([75_u8; 32]);
 const PROTOCOL_PROGRAM_ID: Pubkey = Pubkey::new_from_array([68_u8; 32]);
 const CONTROLLER_SEED: &[u8] = b"dclutch-controller-v1";
 const REPLAY_SEED: &[u8] = b"dclutch/direct-replay/v3";
+const REGISTERED_SEED: &[u8] = b"dclutch/direct-registered/v1";
 const POSITION_SEED: &[u8] = b"dclutch/position/v1";
 const REPLAY_STATE_BYTES: usize = 48;
 const POSITION_STATE_BYTES: usize = 56;
@@ -307,6 +308,27 @@ fn compact_intent(market: Pubkey, collateral: Pubkey, side: u8, nonce: u64) -> C
     }
 }
 
+fn registered_intent(market: Pubkey, collateral: Pubkey, side: u8) -> CompactIntentV1 {
+    CompactIntentV1 {
+        lifecycle: 2,
+        ..compact_intent(market, collateral, side, 0)
+    }
+}
+
+fn registered_state(controller: Pubkey, maker: Pubkey, intent: CompactIntentV1) -> Vec<u8> {
+    RegisteredIntentStateV1 {
+        phase: 0,
+        controller: controller.to_bytes(),
+        maker: maker.to_bytes(),
+        intent,
+        remaining: intent.maximum_fill,
+        sequence: 0,
+    }
+    .encode()
+    .expect("canonical registered state")
+    .to_vec()
+}
+
 fn controller_data(controller_bump: u8, fixture: MarketFixture, nonce: u64) -> Vec<u8> {
     ControllerInstructionV1 {
         controller_bump,
@@ -321,6 +343,21 @@ fn controller_data(controller_bump: u8, fixture: MarketFixture, nonce: u64) -> V
     }
     .encode()
     .expect("fixed controller instruction")
+    .to_vec()
+}
+
+fn registered_controller_data(controller_bump: u8, fixture: MarketFixture, fill: u64) -> Vec<u8> {
+    RegisteredFillInstructionV1 {
+        controller_bump,
+        seller_registration_bump: fixture.seller_bump,
+        buyer_registration_bump: fixture.buyer_bump,
+        seller_position_bump: fixture.seller_position_bump,
+        buyer_position_bump: fixture.buyer_position_bump,
+        fill,
+        execution_price: PRICE,
+    }
+    .encode()
+    .expect("registered controller instruction")
     .to_vec()
 }
 
@@ -399,6 +436,38 @@ fn controller_instruction(
             AccountMeta::new(fixture.tokens.venue, false),
             AccountMeta::new_readonly(token_program_id(), false),
             AccountMeta::new_readonly(sysvar::instructions::ID, false),
+        ],
+        data,
+    }
+}
+
+fn registered_controller_instruction(
+    controller: Pubkey,
+    journal: Pubkey,
+    fixture: MarketFixture,
+    mint: Pubkey,
+    data: Vec<u8>,
+) -> Instruction {
+    Instruction {
+        program_id: CONTROLLER_PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new_readonly(controller, false),
+            AccountMeta::new(fixture.seller_replay, false),
+            AccountMeta::new(fixture.buyer_replay, false),
+            AccountMeta::new(journal, false),
+            AccountMeta::new(fixture.seller_position, false),
+            AccountMeta::new(fixture.buyer_position, false),
+            AccountMeta::new_readonly(CLAIM_PROGRAM_ID, false),
+            AccountMeta::new_readonly(CUSTODY_PROGRAM_ID, false),
+            AccountMeta::new_readonly(fixture.market, false),
+            AccountMeta::new_readonly(fixture.realm, false),
+            AccountMeta::new_readonly(fixture.fee_policy, false),
+            AccountMeta::new_readonly(fixture.capability_manifest, false),
+            AccountMeta::new_readonly(mint, false),
+            AccountMeta::new(fixture.tokens.source, false),
+            AccountMeta::new(fixture.tokens.seller, false),
+            AccountMeta::new(fixture.tokens.venue, false),
+            AccountMeta::new_readonly(token_program_id(), false),
         ],
         data,
     }
@@ -827,6 +896,70 @@ fn market_fixture(
         seller_replay,
         seller_bump,
         buyer_replay,
+        buyer_bump,
+        seller_position,
+        seller_position_bump,
+        buyer_position,
+        buyer_position_bump,
+        tokens,
+    }
+}
+
+fn registered_market_fixture(
+    authority: MarketFixtureAuthority,
+    seller: Pubkey,
+    buyer: Pubkey,
+    tokens: TokenTriplet,
+) -> MarketFixture {
+    let generation = GENERATION.to_le_bytes();
+    let nonce = 0_u64.to_le_bytes();
+    let (seller_registration, seller_bump) = Pubkey::find_program_address(
+        &[
+            REGISTERED_SEED,
+            authority.market.as_ref(),
+            &generation,
+            seller.as_ref(),
+            &nonce,
+        ],
+        &CONTROLLER_PROGRAM_ID,
+    );
+    let (buyer_registration, buyer_bump) = Pubkey::find_program_address(
+        &[
+            REGISTERED_SEED,
+            authority.market.as_ref(),
+            &generation,
+            buyer.as_ref(),
+            &nonce,
+        ],
+        &CONTROLLER_PROGRAM_ID,
+    );
+    let outcome = [1_u8];
+    let (seller_position, seller_position_bump) = Pubkey::find_program_address(
+        &[
+            POSITION_SEED,
+            authority.market.as_ref(),
+            seller.as_ref(),
+            &outcome,
+        ],
+        &CONTROLLER_PROGRAM_ID,
+    );
+    let (buyer_position, buyer_position_bump) = Pubkey::find_program_address(
+        &[
+            POSITION_SEED,
+            authority.market.as_ref(),
+            buyer.as_ref(),
+            &outcome,
+        ],
+        &CONTROLLER_PROGRAM_ID,
+    );
+    MarketFixture {
+        market: authority.market,
+        realm: authority.realm,
+        fee_policy: authority.fee_policy,
+        capability_manifest: authority.capability_manifest,
+        seller_replay: seller_registration,
+        seller_bump,
+        buyer_replay: buyer_registration,
         buyer_bump,
         seller_position,
         seller_position_bump,
@@ -1606,5 +1739,305 @@ async fn signed_intents_compile_to_claims_and_real_token_transfers_atomically() 
         lookup_creation_cu[1],
         lookup_retirement_cu[0],
         lookup_retirement_cu[1],
+    );
+}
+
+#[tokio::test]
+async fn registered_residuals_reuse_authenticated_state_and_real_custody_atomically() {
+    require_sbf();
+    let seller_maker = Keypair::new();
+    let buyer_maker = Keypair::new();
+    let (controller, controller_bump) =
+        Pubkey::find_program_address(&[CONTROLLER_SEED], &CONTROLLER_PROGRAM_ID);
+    let journal_key = Pubkey::new_unique();
+    let mint_key = Pubkey::new_unique();
+    let success_tokens = TokenTriplet {
+        source: Pubkey::new_unique(),
+        seller: Pubkey::new_unique(),
+        venue: Pubkey::new_unique(),
+    };
+    let refusal_tokens = TokenTriplet {
+        source: Pubkey::new_unique(),
+        seller: Pubkey::new_unique(),
+        venue: Pubkey::new_unique(),
+    };
+    let (success_authority, success_market, realm_bytes, success_policy, success_manifest) =
+        authority_records(mint_key, success_tokens.venue);
+    let (refusal_authority, refusal_market, refusal_realm, refusal_policy, refusal_manifest) =
+        authority_records(mint_key, refusal_tokens.venue);
+    assert_eq!(success_authority.realm, refusal_authority.realm);
+    assert_eq!(realm_bytes, refusal_realm);
+    let success = registered_market_fixture(
+        success_authority,
+        seller_maker.pubkey(),
+        buyer_maker.pubkey(),
+        success_tokens,
+    );
+    let refusal = registered_market_fixture(
+        refusal_authority,
+        seller_maker.pubkey(),
+        buyer_maker.pubkey(),
+        refusal_tokens,
+    );
+
+    let mut test = ProgramTest::new("dclutch_controller_proof_sbf", CONTROLLER_PROGRAM_ID, None);
+    test.prefer_bpf(true);
+    test.add_program("dclutch_claims_proof_sbf", CLAIM_PROGRAM_ID, None);
+    test.add_program("dclutch_custody_proof_sbf", CUSTODY_PROGRAM_ID, None);
+    test.add_program("spl_token", token_program_id(), None);
+    add_program_account(&mut test, controller);
+    for fixture in [success, refusal] {
+        add_claim_state(
+            &mut test,
+            fixture.seller_replay,
+            registered_state(
+                controller,
+                seller_maker.pubkey(),
+                registered_intent(fixture.market, fixture.tokens.seller, 0),
+            ),
+        );
+        add_claim_state(
+            &mut test,
+            fixture.buyer_replay,
+            registered_state(
+                controller,
+                buyer_maker.pubkey(),
+                registered_intent(fixture.market, fixture.tokens.source, 1),
+            ),
+        );
+        add_claim_state(
+            &mut test,
+            fixture.seller_position,
+            position_state(controller, 1, 5_000),
+        );
+        add_claim_state(
+            &mut test,
+            fixture.buyer_position,
+            position_state(controller, 1, 200),
+        );
+    }
+    test.add_account(
+        journal_key,
+        Account {
+            lamports: Rent::default().minimum_balance(JOURNAL_BYTES),
+            data: journal(0),
+            owner: CONTROLLER_PROGRAM_ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+    add_protocol_account(&mut test, success_authority.realm, realm_bytes);
+    for (authority, market, policy, manifest) in [
+        (
+            success_authority,
+            success_market,
+            success_policy,
+            success_manifest,
+        ),
+        (
+            refusal_authority,
+            refusal_market,
+            refusal_policy,
+            refusal_manifest,
+        ),
+    ] {
+        add_protocol_account(&mut test, authority.market, market);
+        add_protocol_account(&mut test, authority.fee_policy, policy);
+        add_protocol_account(&mut test, authority.capability_manifest, manifest);
+    }
+    test.add_account(
+        mint_key,
+        Account {
+            lamports: Rent::default().minimum_balance(MINT_BYTES),
+            data: mint(40_000, 6),
+            owner: token_program_id(),
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+    for (fixture, frozen) in [(success, false), (refusal, true)] {
+        add_token_account(
+            &mut test,
+            fixture.tokens.source,
+            token_account(
+                mint_key,
+                buyer_maker.pubkey(),
+                2_000,
+                Some((fixture.buyer_replay, 1_002)),
+                false,
+            ),
+        );
+        add_token_account(
+            &mut test,
+            fixture.tokens.seller,
+            token_account(mint_key, seller_maker.pubkey(), 100, None, false),
+        );
+        add_token_account(
+            &mut test,
+            fixture.tokens.venue,
+            token_account(mint_key, Pubkey::new_unique(), 20, None, frozen),
+        );
+    }
+    let mut context = test.start_with_context().await;
+
+    let untouched_journal = account(&mut context, journal_key).await;
+    let untouched_claims = claim_state_accounts(&mut context, success).await;
+    let untouched_source = account(&mut context, success.tokens.source).await;
+    let mut wrong_data = registered_controller_data(controller_bump, success, 1_000);
+    wrong_data[12] = success.buyer_bump.wrapping_add(1);
+    let wrong_coordinate = submit(
+        &mut context,
+        &[registered_controller_instruction(
+            controller,
+            journal_key,
+            success,
+            mint_key,
+            wrong_data,
+        )],
+    )
+    .await;
+    assert!(
+        !wrong_coordinate.accepted,
+        "wrong registered-intent coordinate must refuse"
+    );
+    assert_eq!(account(&mut context, journal_key).await, untouched_journal);
+    assert_eq!(
+        claim_state_accounts(&mut context, success).await,
+        untouched_claims
+    );
+    assert_eq!(
+        account(&mut context, success.tokens.source).await,
+        untouched_source
+    );
+
+    let fill_data = registered_controller_data(controller_bump, success, 1_000);
+    let first = submit(
+        &mut context,
+        &[registered_controller_instruction(
+            controller,
+            journal_key,
+            success,
+            mint_key,
+            fill_data.clone(),
+        )],
+    )
+    .await;
+    assert!(first.accepted, "first registered residual fill must commit");
+    let claims = claim_state_accounts(&mut context, success).await;
+    let seller = RegisteredIntentStateV1::decode(&claims[0].data).expect("seller registration");
+    let buyer = RegisteredIntentStateV1::decode(&claims[1].data).expect("buyer registration");
+    assert_eq!(
+        (seller.remaining, seller.sequence, seller.phase),
+        (1_000, 1, 0)
+    );
+    assert_eq!(
+        (buyer.remaining, buyer.sequence, buyer.phase),
+        (1_000, 1, 0)
+    );
+    assert_eq!(read_u64(&claims[2].data, 48), 4_000);
+    assert_eq!(read_u64(&claims[3].data, 48), 1_200);
+    assert_eq!(
+        read_u64(&account(&mut context, success.tokens.source).await.data, 64),
+        1_499
+    );
+    assert_eq!(
+        read_u64(&account(&mut context, success.tokens.seller).await.data, 64),
+        600
+    );
+    assert_eq!(
+        read_u64(&account(&mut context, success.tokens.venue).await.data, 64),
+        21
+    );
+
+    let second = submit(
+        &mut context,
+        &[registered_controller_instruction(
+            controller,
+            journal_key,
+            success,
+            mint_key,
+            fill_data,
+        )],
+    )
+    .await;
+    assert!(
+        second.accepted,
+        "terminal registered residual fill must commit"
+    );
+    let claims = claim_state_accounts(&mut context, success).await;
+    let seller = RegisteredIntentStateV1::decode(&claims[0].data).expect("seller registration");
+    let buyer = RegisteredIntentStateV1::decode(&claims[1].data).expect("buyer registration");
+    assert_eq!((seller.remaining, seller.sequence, seller.phase), (0, 2, 1));
+    assert_eq!((buyer.remaining, buyer.sequence, buyer.phase), (0, 2, 1));
+    assert_eq!(read_u64(&claims[2].data, 48), 3_000);
+    assert_eq!(read_u64(&claims[3].data, 48), 2_200);
+    assert_eq!(
+        read_u64(&account(&mut context, journal_key).await.data, 8),
+        2
+    );
+    assert_eq!(
+        read_u64(&account(&mut context, success.tokens.source).await.data, 64),
+        998
+    );
+    assert_eq!(
+        read_u64(&account(&mut context, success.tokens.seller).await.data, 64),
+        1_100
+    );
+    assert_eq!(
+        read_u64(&account(&mut context, success.tokens.venue).await.data, 64),
+        22
+    );
+
+    let journal_before = account(&mut context, journal_key).await;
+    let claims_before = claim_state_accounts(&mut context, refusal).await;
+    let source_before = account(&mut context, refusal.tokens.source).await;
+    let seller_before = account(&mut context, refusal.tokens.seller).await;
+    let venue_before = account(&mut context, refusal.tokens.venue).await;
+    let late_refusal = submit(
+        &mut context,
+        &[registered_controller_instruction(
+            controller,
+            journal_key,
+            refusal,
+            mint_key,
+            registered_controller_data(controller_bump, refusal, 1_000),
+        )],
+    )
+    .await;
+    assert!(
+        !late_refusal.accepted,
+        "frozen venue must refuse after the first real Token CPI"
+    );
+    let token_success = format!("Program {} success", token_program_id());
+    assert!(
+        late_refusal.logs.iter().any(|line| line == &token_success),
+        "logs must prove first official Token CPI completed before refusal"
+    );
+    assert_eq!(account(&mut context, journal_key).await, journal_before);
+    assert_eq!(
+        claim_state_accounts(&mut context, refusal).await,
+        claims_before
+    );
+    assert_eq!(
+        account(&mut context, refusal.tokens.source).await,
+        source_before
+    );
+    assert_eq!(
+        account(&mut context, refusal.tokens.seller).await,
+        seller_before
+    );
+    assert_eq!(
+        account(&mut context, refusal.tokens.venue).await,
+        venue_before
+    );
+
+    eprintln!(
+        "registered Direct CU: wrong coordinate={}, first residual={}, terminal residual={}, late rollback={}; wire: legacy={} bytes, all-address v0={} bytes",
+        wrong_coordinate.compute_units,
+        first.compute_units,
+        second.compute_units,
+        late_refusal.compute_units,
+        first.wire_bytes,
+        first.v0_wire_bytes,
     );
 }
