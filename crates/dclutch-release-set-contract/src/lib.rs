@@ -39,6 +39,10 @@ pub const EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1: [u8; IDENTITY_BYTES] = [
     0x8b, 0xa3, 0xbc, 0x19, 0x7f, 0xea, 0xa1, 0x87, 0xa0, 0xa3, 0x92, 0x7b, 0x16, 0xb2, 0x5d, 0x83,
     0x79, 0x2c, 0x5f, 0x33, 0x5a, 0xf2, 0x43, 0x39, 0xa5, 0x4c, 0x38, 0xcc, 0x07, 0x23, 0x03, 0x58,
 ];
+/// Universal release-pinned caller-authority PDA seed domain.
+pub const CALLER_AUTHORITY_PDA_DOMAIN_V1: &[u8] = b"dclutch:role-authority:v1";
+
+const _: () = assert!(CALLER_AUTHORITY_PDA_DOMAIN_V1.len() <= 32);
 
 const SCHEMA_OFFSET: usize = 8;
 const PROFILE_OFFSET: usize = 10;
@@ -66,6 +70,8 @@ pub enum Error {
     ZeroArtifactReleaseId,
     /// Equal program or release identities did not identify the same pair.
     InconsistentAliasedRoleBinding,
+    /// A Market, context, or role-request digest in a caller authority was zero.
+    ZeroCallerAuthorityCoordinate,
 }
 
 /// Result alias for execution-release-set operations.
@@ -185,6 +191,96 @@ pub enum ExecutionRoleV1 {
     Resolution = 3,
     /// Realm-selected token custody and physical transfer adapter.
     Custody = 4,
+}
+
+/// Exact ordered seed projection for one release-pinned caller authority.
+///
+/// The PDA is derived under the Registry-selected caller program. The role is
+/// the caller's execution role, never the target child's role. The request
+/// digest is computed before any outer orchestration envelope, which makes the
+/// authority construction acyclic.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CallerAuthoritySeedsV1 {
+    release_set: [u8; IDENTITY_BYTES],
+    market: [u8; IDENTITY_BYTES],
+    caller_role: [u8; 1],
+    context: [u8; IDENTITY_BYTES],
+    role_request_digest: [u8; IDENTITY_BYTES],
+}
+
+impl CallerAuthoritySeedsV1 {
+    /// Validate and construct the sole universal release-pinned seed order.
+    pub fn new(
+        release_set: ContentId,
+        market: [u8; IDENTITY_BYTES],
+        caller_role: ExecutionRoleV1,
+        context: [u8; IDENTITY_BYTES],
+        role_request_digest: [u8; IDENTITY_BYTES],
+    ) -> Result<Self> {
+        if [market, context, role_request_digest]
+            .iter()
+            .any(|value| value.iter().all(|byte| *byte == 0))
+        {
+            return Err(Error::ZeroCallerAuthorityCoordinate);
+        }
+        Ok(Self {
+            release_set: release_set.to_bytes(),
+            market,
+            caller_role: [caller_role as u8],
+            context,
+            role_request_digest,
+        })
+    }
+
+    /// Return the exact PDA seed order.
+    #[must_use]
+    pub fn as_slices(&self) -> [&[u8]; 6] {
+        [
+            CALLER_AUTHORITY_PDA_DOMAIN_V1,
+            &self.release_set,
+            &self.market,
+            &self.caller_role,
+            &self.context,
+            &self.role_request_digest,
+        ]
+    }
+
+    /// Return the immutable release-set identity.
+    #[must_use]
+    pub const fn release_set(self) -> [u8; IDENTITY_BYTES] {
+        self.release_set
+    }
+
+    /// Return the exact Market identity.
+    #[must_use]
+    pub const fn market(self) -> [u8; IDENTITY_BYTES] {
+        self.market
+    }
+
+    /// Return the caller's execution role.
+    #[must_use]
+    pub const fn caller_role(self) -> ExecutionRoleV1 {
+        let [caller_role] = self.caller_role;
+        match caller_role {
+            0 => ExecutionRoleV1::Core,
+            1 => ExecutionRoleV1::Claims,
+            2 => ExecutionRoleV1::Trading,
+            3 => ExecutionRoleV1::Resolution,
+            _ => ExecutionRoleV1::Custody,
+        }
+    }
+
+    /// Return the nonzero replay context.
+    #[must_use]
+    pub const fn context(self) -> [u8; IDENTITY_BYTES] {
+        self.context
+    }
+
+    /// Return the digest of the exact role-owned request.
+    #[must_use]
+    pub const fn role_request_digest(self) -> [u8; IDENTITY_BYTES] {
+        self.role_request_digest
+    }
 }
 
 impl ExecutionRoleV1 {
@@ -421,6 +517,94 @@ mod tests {
             role(5, 15),
         )
         .expect("canonical release set")
+    }
+
+    #[test]
+    fn caller_authority_has_one_exact_acyclic_seed_order() {
+        let release_set = ContentId::new([21; IDENTITY_BYTES]).expect("nonzero release set");
+        let seeds = CallerAuthoritySeedsV1::new(
+            release_set,
+            [22; IDENTITY_BYTES],
+            ExecutionRoleV1::Core,
+            [23; IDENTITY_BYTES],
+            [24; IDENTITY_BYTES],
+        )
+        .expect("canonical caller authority");
+        let release_set_bytes = [21; IDENTITY_BYTES];
+        let market = [22; IDENTITY_BYTES];
+        let role = [ExecutionRoleV1::Core as u8];
+        let context = [23; IDENTITY_BYTES];
+        let request_digest = [24; IDENTITY_BYTES];
+        let expected: [&[u8]; 6] = [
+            CALLER_AUTHORITY_PDA_DOMAIN_V1,
+            release_set_bytes.as_slice(),
+            market.as_slice(),
+            role.as_slice(),
+            context.as_slice(),
+            request_digest.as_slice(),
+        ];
+        assert_eq!(seeds.as_slices(), expected);
+        assert_eq!(seeds.release_set(), release_set_bytes);
+        assert_eq!(seeds.market(), market);
+        assert_eq!(seeds.caller_role(), ExecutionRoleV1::Core);
+        assert_eq!(seeds.context(), context);
+        assert_eq!(seeds.role_request_digest(), request_digest);
+
+        for caller_role in ALL_EXECUTION_ROLES_V1 {
+            let projection = CallerAuthoritySeedsV1::new(
+                release_set,
+                market,
+                caller_role,
+                context,
+                request_digest,
+            )
+            .expect("every release role has one caller authority");
+            assert_eq!(projection.caller_role(), caller_role);
+            assert_ne!(
+                projection,
+                CallerAuthoritySeedsV1::new(
+                    release_set,
+                    market,
+                    caller_role,
+                    [25; IDENTITY_BYTES],
+                    request_digest,
+                )
+                .expect("substituted context is independently valid")
+            );
+        }
+    }
+
+    #[test]
+    fn caller_authority_refuses_zero_market_context_or_request_digest() {
+        let release_set = ContentId::new([21; IDENTITY_BYTES]).expect("nonzero release set");
+        for (market, context, request_digest) in [
+            (
+                [0; IDENTITY_BYTES],
+                [23; IDENTITY_BYTES],
+                [24; IDENTITY_BYTES],
+            ),
+            (
+                [22; IDENTITY_BYTES],
+                [0; IDENTITY_BYTES],
+                [24; IDENTITY_BYTES],
+            ),
+            (
+                [22; IDENTITY_BYTES],
+                [23; IDENTITY_BYTES],
+                [0; IDENTITY_BYTES],
+            ),
+        ] {
+            assert_eq!(
+                CallerAuthoritySeedsV1::new(
+                    release_set,
+                    market,
+                    ExecutionRoleV1::Core,
+                    context,
+                    request_digest,
+                ),
+                Err(Error::ZeroCallerAuthorityCoordinate)
+            );
+        }
     }
 
     fn mutate(bytes: &mut [u8], offset: usize, value: u8) {
