@@ -4,3 +4,7 @@ defaultTargets = ["DClutchSemantics"]
 
 [[lean_lib]]
 name = "DClutchSemantics"
+
+[[lean_exe]]
+name = "emit-vectors"
+root = "EmitVectors"

@@ -16,7 +16,13 @@ Rust implementation. It currently provides:
 - gap-free replay advancement;
 - whole-state rollback on refusal;
 - a cumulative-fee telescoping theorem; and
+- a canonical 8-byte header and fixed 16-byte Effect encoding;
+- a reproducible 120-byte Lean-emitted vector; and
 - executable admitted and hostile fixtures.
+
+`dclutch-effect-kernel` is the first physical refinement target. It is safe
+Rust, `no_std`, `no_alloc`, fixed-capacity, and transactionally applies the
+Lean-emitted vector. It does not reimplement Direct admission.
 
 Run:
 

@@ -1,4 +1,5 @@
 import DClutchSemantics.DirectProofs
+import DClutchSemantics.Codec
 
 /-!
 # Executable examples
@@ -83,6 +84,15 @@ theorem frame_effects_execute :
     runEffects frame.sellerIntent.outcome (effectPlan frame).effects frame.pre =
       some (postState frame) :=
   effectPlan_refines_transition frame frame_admissible
+
+theorem frame_encoded_plan_length :
+    (Codec.encodePlan (effectPlan frame)).length = 120 := by
+  native_decide
+
+theorem frame_encoded_plan_hex :
+    Codec.hex (Codec.encodePlan (effectPlan frame)) =
+      "444345460107000000000000000000000100000000000000000100000000000008000000000000000100010001000000d0070000000000000201010001000000d0070000000000000101020000000000ea030000000000000200020000000000e80300000000000002020200000000000200000000000000" := by
+  native_decide
 
 theorem frame_post_state :
     (execute frame frame_admissible).post = {

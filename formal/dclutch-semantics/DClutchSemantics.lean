@@ -1,6 +1,7 @@
 import DClutchSemantics.IR
 import DClutchSemantics.Direct
 import DClutchSemantics.DirectProofs
+import DClutchSemantics.Codec
 import DClutchSemantics.Examples
 
 /-!

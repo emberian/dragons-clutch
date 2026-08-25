@@ -6,6 +6,7 @@ members = [
     "crates/dclutch-core-contract",
     "crates/dclutch-dealer-contract",
     "crates/dclutch-direct-contract",
+    "crates/dclutch-effect-kernel",
     "crates/dclutch-general-contract",
     "crates/dclutch-kernel",
     "crates/dclutch-market-contract",

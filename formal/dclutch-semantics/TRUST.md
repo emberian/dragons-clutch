@@ -14,6 +14,10 @@ For an `Admissible` inline ordinary Direct frame, Lean 4 checks that:
 - the fee uses the named floor boundary; and
 - a refused frame exposes the unchanged pre-state.
 
+Lean also checks the general encoded length equations for V1 headers, effect
+records, and plans, plus the exact 120-byte hexadecimal encoding of the Direct
+example.
+
 `cumulativeFee_monotone` proves monotonicity of the concrete floor-fee function,
 and `cumulative_floor_fee_fragmentation_independent` combines it with the
 telescoping subtraction theorem. Matcher-selected fragmentation therefore
@@ -21,12 +25,13 @@ cannot change a resting order's final cumulative fee in the semantic model.
 
 ## Not yet connected
 
-- canonical byte encoding and codec round trips;
 - generated safe-Rust and TypeScript clients;
 - Ed25519 instruction authenticity;
 - Solana account ownership, signer/writable flags, PDA derivation, CPI, sysvars,
   Token/Token-2022 semantics, rent, and transaction rollback;
-- refinement from the Lean effect interpreter to an SBF executor;
+- a machine-checked refinement from the Lean effect interpreter to the Rust
+  microkernel (`dclutch-effect-kernel` currently supplies cross-language vector,
+  round-trip, execution, hostile-parser, and late-rollback tests only);
 - refinement from the executor's deployed ELF bytes to Lean's sBPF semantics;
 - compute-unit, stack, ELF-size, and rent measurements;
 - all Direct routes other than inline ordinary execution; and
