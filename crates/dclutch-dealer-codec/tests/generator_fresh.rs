@@ -7,6 +7,16 @@ use std::process::Command;
 fn checked_in_rust_is_exact_lean_generator_output() {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let formal = manifest.join("../../formal/dclutch-semantics");
+    let build = Command::new("lake")
+        .args(["build", "DClutchSemantics"])
+        .current_dir(&formal)
+        .output()
+        .expect("build imported Lean semantic library");
+    assert!(
+        build.status.success(),
+        "semantic library build failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
     let output = Command::new("lake")
         .args(["env", "lean", "--run", "EmitDealerLiquidityAbiRust.lean"])
         .current_dir(&formal)
