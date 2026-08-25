@@ -33,3 +33,198 @@ pub(crate) const CONTROLLER_SELLER_OFFSET: usize = 32;
 pub(crate) const CONTROLLER_BUYER_OFFSET: usize = 168;
 pub(crate) const CONTROLLER_RESERVED_OFFSET: usize = 15;
 pub(crate) const CONTROLLER_RESERVED_WIDTH: usize = 1;
+
+macro_rules! decode_compact_intent_fields {
+    ($input:expr) => {
+        $crate::CompactIntentV1 {
+            side: $crate::byte($input, $crate::generated_layout::INTENT_SIDE_OFFSET)?,
+            outcome: $crate::byte($input, $crate::generated_layout::INTENT_OUTCOME_OFFSET)?,
+            lifecycle: $crate::byte($input, $crate::generated_layout::INTENT_LIFECYCLE_OFFSET)?,
+            market: $crate::array($input, $crate::generated_layout::INTENT_MARKET_OFFSET)?,
+            generation: $crate::u64_at($input, $crate::generated_layout::INTENT_GENERATION_OFFSET)?,
+            nonce: $crate::u64_at($input, $crate::generated_layout::INTENT_NONCE_OFFSET)?,
+            valid_from: $crate::u64_at($input, $crate::generated_layout::INTENT_VALID_FROM_OFFSET)?,
+            valid_through: $crate::u64_at(
+                $input,
+                $crate::generated_layout::INTENT_VALID_THROUGH_OFFSET,
+            )?,
+            maximum_fill: $crate::u64_at(
+                $input,
+                $crate::generated_layout::INTENT_MAXIMUM_FILL_OFFSET,
+            )?,
+            limit_price: $crate::u64_at(
+                $input,
+                $crate::generated_layout::INTENT_LIMIT_PRICE_OFFSET,
+            )?,
+            fee_basis_points: $crate::u16_at(
+                $input,
+                $crate::generated_layout::INTENT_FEE_BASIS_POINTS_OFFSET,
+            )?,
+            collateral_account: $crate::array(
+                $input,
+                $crate::generated_layout::INTENT_COLLATERAL_ACCOUNT_OFFSET,
+            )?,
+        }
+    };
+}
+pub(crate) use decode_compact_intent_fields;
+
+macro_rules! encode_compact_intent_fields {
+    ($output:ident, $value:ident) => {{
+        $crate::put_byte(
+            &mut $output,
+            $crate::generated_layout::INTENT_SIDE_OFFSET,
+            $value.side,
+        )?;
+        $crate::put_byte(
+            &mut $output,
+            $crate::generated_layout::INTENT_OUTCOME_OFFSET,
+            $value.outcome,
+        )?;
+        $crate::put_byte(
+            &mut $output,
+            $crate::generated_layout::INTENT_LIFECYCLE_OFFSET,
+            $value.lifecycle,
+        )?;
+        $crate::put(
+            &mut $output,
+            $crate::generated_layout::INTENT_MARKET_OFFSET,
+            &$value.market,
+        )?;
+        $crate::put(
+            &mut $output,
+            $crate::generated_layout::INTENT_GENERATION_OFFSET,
+            &$value.generation.to_le_bytes(),
+        )?;
+        $crate::put(
+            &mut $output,
+            $crate::generated_layout::INTENT_NONCE_OFFSET,
+            &$value.nonce.to_le_bytes(),
+        )?;
+        $crate::put(
+            &mut $output,
+            $crate::generated_layout::INTENT_VALID_FROM_OFFSET,
+            &$value.valid_from.to_le_bytes(),
+        )?;
+        $crate::put(
+            &mut $output,
+            $crate::generated_layout::INTENT_VALID_THROUGH_OFFSET,
+            &$value.valid_through.to_le_bytes(),
+        )?;
+        $crate::put(
+            &mut $output,
+            $crate::generated_layout::INTENT_MAXIMUM_FILL_OFFSET,
+            &$value.maximum_fill.to_le_bytes(),
+        )?;
+        $crate::put(
+            &mut $output,
+            $crate::generated_layout::INTENT_LIMIT_PRICE_OFFSET,
+            &$value.limit_price.to_le_bytes(),
+        )?;
+        $crate::put(
+            &mut $output,
+            $crate::generated_layout::INTENT_FEE_BASIS_POINTS_OFFSET,
+            &$value.fee_basis_points.to_le_bytes(),
+        )?;
+        $crate::put(
+            &mut $output,
+            $crate::generated_layout::INTENT_COLLATERAL_ACCOUNT_OFFSET,
+            &$value.collateral_account,
+        )?;
+    }};
+}
+pub(crate) use encode_compact_intent_fields;
+
+macro_rules! decode_controller_fields {
+    ($input:expr) => {
+        $crate::ControllerInstructionV1 {
+            controller_bump: $crate::byte(
+                $input,
+                $crate::generated_layout::CONTROLLER_BUMP_OFFSET,
+            )?,
+            seller_replay_bump: $crate::byte(
+                $input,
+                $crate::generated_layout::CONTROLLER_SELLER_REPLAY_BUMP_OFFSET,
+            )?,
+            buyer_replay_bump: $crate::byte(
+                $input,
+                $crate::generated_layout::CONTROLLER_BUYER_REPLAY_BUMP_OFFSET,
+            )?,
+            seller_position_bump: $crate::byte(
+                $input,
+                $crate::generated_layout::CONTROLLER_SELLER_POSITION_BUMP_OFFSET,
+            )?,
+            buyer_position_bump: $crate::byte(
+                $input,
+                $crate::generated_layout::CONTROLLER_BUYER_POSITION_BUMP_OFFSET,
+            )?,
+            fill: $crate::u64_at($input, $crate::generated_layout::CONTROLLER_FILL_OFFSET)?,
+            execution_price: $crate::u64_at(
+                $input,
+                $crate::generated_layout::CONTROLLER_EXECUTION_PRICE_OFFSET,
+            )?,
+            seller: $crate::CompactIntentV1::decode($crate::slice(
+                $input,
+                $crate::generated_layout::CONTROLLER_SELLER_OFFSET,
+                $crate::COMPACT_INTENT_BYTES,
+            )?)?,
+            buyer: $crate::CompactIntentV1::decode($crate::slice(
+                $input,
+                $crate::generated_layout::CONTROLLER_BUYER_OFFSET,
+                $crate::COMPACT_INTENT_BYTES,
+            )?)?,
+        }
+    };
+}
+pub(crate) use decode_controller_fields;
+
+macro_rules! encode_controller_fields {
+    ($output:ident, $value:ident) => {{
+        $crate::put_byte(
+            &mut $output,
+            $crate::generated_layout::CONTROLLER_BUMP_OFFSET,
+            $value.controller_bump,
+        )?;
+        $crate::put_byte(
+            &mut $output,
+            $crate::generated_layout::CONTROLLER_SELLER_REPLAY_BUMP_OFFSET,
+            $value.seller_replay_bump,
+        )?;
+        $crate::put_byte(
+            &mut $output,
+            $crate::generated_layout::CONTROLLER_BUYER_REPLAY_BUMP_OFFSET,
+            $value.buyer_replay_bump,
+        )?;
+        $crate::put_byte(
+            &mut $output,
+            $crate::generated_layout::CONTROLLER_SELLER_POSITION_BUMP_OFFSET,
+            $value.seller_position_bump,
+        )?;
+        $crate::put_byte(
+            &mut $output,
+            $crate::generated_layout::CONTROLLER_BUYER_POSITION_BUMP_OFFSET,
+            $value.buyer_position_bump,
+        )?;
+        $crate::put(
+            &mut $output,
+            $crate::generated_layout::CONTROLLER_FILL_OFFSET,
+            &$value.fill.to_le_bytes(),
+        )?;
+        $crate::put(
+            &mut $output,
+            $crate::generated_layout::CONTROLLER_EXECUTION_PRICE_OFFSET,
+            &$value.execution_price.to_le_bytes(),
+        )?;
+        $crate::put(
+            &mut $output,
+            $crate::generated_layout::CONTROLLER_SELLER_OFFSET,
+            &$value.seller.encode()?,
+        )?;
+        $crate::put(
+            &mut $output,
+            $crate::generated_layout::CONTROLLER_BUYER_OFFSET,
+            &$value.buyer.encode()?,
+        )?;
+    }};
+}
+pub(crate) use encode_controller_fields;

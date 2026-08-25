@@ -101,20 +101,7 @@ impl CompactIntentV1 {
             generated_layout::INTENT_RESERVED_B_OFFSET,
             generated_layout::INTENT_RESERVED_B_WIDTH,
         )?;
-        Ok(Self {
-            side: byte(input, generated_layout::INTENT_SIDE_OFFSET)?,
-            outcome: byte(input, generated_layout::INTENT_OUTCOME_OFFSET)?,
-            lifecycle: byte(input, generated_layout::INTENT_LIFECYCLE_OFFSET)?,
-            market: array(input, generated_layout::INTENT_MARKET_OFFSET)?,
-            generation: u64_at(input, generated_layout::INTENT_GENERATION_OFFSET)?,
-            nonce: u64_at(input, generated_layout::INTENT_NONCE_OFFSET)?,
-            valid_from: u64_at(input, generated_layout::INTENT_VALID_FROM_OFFSET)?,
-            valid_through: u64_at(input, generated_layout::INTENT_VALID_THROUGH_OFFSET)?,
-            maximum_fill: u64_at(input, generated_layout::INTENT_MAXIMUM_FILL_OFFSET)?,
-            limit_price: u64_at(input, generated_layout::INTENT_LIMIT_PRICE_OFFSET)?,
-            fee_basis_points: u16_at(input, generated_layout::INTENT_FEE_BASIS_POINTS_OFFSET)?,
-            collateral_account: array(input, generated_layout::INTENT_COLLATERAL_ACCOUNT_OFFSET)?,
-        })
+        Ok(generated_layout::decode_compact_intent_fields!(input))
     }
 
     /// Encode one canonical compact intent.
@@ -126,62 +113,7 @@ impl CompactIntentV1 {
             generated_layout::VERSION_OFFSET,
             &VERSION.to_le_bytes(),
         )?;
-        put_byte(&mut output, generated_layout::INTENT_SIDE_OFFSET, self.side)?;
-        put_byte(
-            &mut output,
-            generated_layout::INTENT_OUTCOME_OFFSET,
-            self.outcome,
-        )?;
-        put_byte(
-            &mut output,
-            generated_layout::INTENT_LIFECYCLE_OFFSET,
-            self.lifecycle,
-        )?;
-        put(
-            &mut output,
-            generated_layout::INTENT_MARKET_OFFSET,
-            &self.market,
-        )?;
-        put(
-            &mut output,
-            generated_layout::INTENT_GENERATION_OFFSET,
-            &self.generation.to_le_bytes(),
-        )?;
-        put(
-            &mut output,
-            generated_layout::INTENT_NONCE_OFFSET,
-            &self.nonce.to_le_bytes(),
-        )?;
-        put(
-            &mut output,
-            generated_layout::INTENT_VALID_FROM_OFFSET,
-            &self.valid_from.to_le_bytes(),
-        )?;
-        put(
-            &mut output,
-            generated_layout::INTENT_VALID_THROUGH_OFFSET,
-            &self.valid_through.to_le_bytes(),
-        )?;
-        put(
-            &mut output,
-            generated_layout::INTENT_MAXIMUM_FILL_OFFSET,
-            &self.maximum_fill.to_le_bytes(),
-        )?;
-        put(
-            &mut output,
-            generated_layout::INTENT_LIMIT_PRICE_OFFSET,
-            &self.limit_price.to_le_bytes(),
-        )?;
-        put(
-            &mut output,
-            generated_layout::INTENT_FEE_BASIS_POINTS_OFFSET,
-            &self.fee_basis_points.to_le_bytes(),
-        )?;
-        put(
-            &mut output,
-            generated_layout::INTENT_COLLATERAL_ACCOUNT_OFFSET,
-            &self.collateral_account,
-        )?;
+        generated_layout::encode_compact_intent_fields!(output, self);
         Ok(output)
     }
 }
@@ -220,34 +152,7 @@ impl ControllerInstructionV1 {
             generated_layout::CONTROLLER_RESERVED_OFFSET,
             generated_layout::CONTROLLER_RESERVED_WIDTH,
         )?;
-        Ok(Self {
-            controller_bump: byte(input, generated_layout::CONTROLLER_BUMP_OFFSET)?,
-            seller_replay_bump: byte(
-                input,
-                generated_layout::CONTROLLER_SELLER_REPLAY_BUMP_OFFSET,
-            )?,
-            buyer_replay_bump: byte(input, generated_layout::CONTROLLER_BUYER_REPLAY_BUMP_OFFSET)?,
-            seller_position_bump: byte(
-                input,
-                generated_layout::CONTROLLER_SELLER_POSITION_BUMP_OFFSET,
-            )?,
-            buyer_position_bump: byte(
-                input,
-                generated_layout::CONTROLLER_BUYER_POSITION_BUMP_OFFSET,
-            )?,
-            fill: u64_at(input, generated_layout::CONTROLLER_FILL_OFFSET)?,
-            execution_price: u64_at(input, generated_layout::CONTROLLER_EXECUTION_PRICE_OFFSET)?,
-            seller: CompactIntentV1::decode(slice(
-                input,
-                generated_layout::CONTROLLER_SELLER_OFFSET,
-                COMPACT_INTENT_BYTES,
-            )?)?,
-            buyer: CompactIntentV1::decode(slice(
-                input,
-                generated_layout::CONTROLLER_BUYER_OFFSET,
-                COMPACT_INTENT_BYTES,
-            )?)?,
-        })
+        Ok(generated_layout::decode_controller_fields!(input))
     }
 
     /// Encode one canonical controller instruction.
@@ -263,51 +168,7 @@ impl ControllerInstructionV1 {
             generated_layout::VERSION_OFFSET,
             &VERSION.to_le_bytes(),
         )?;
-        put_byte(
-            &mut output,
-            generated_layout::CONTROLLER_BUMP_OFFSET,
-            self.controller_bump,
-        )?;
-        put_byte(
-            &mut output,
-            generated_layout::CONTROLLER_SELLER_REPLAY_BUMP_OFFSET,
-            self.seller_replay_bump,
-        )?;
-        put_byte(
-            &mut output,
-            generated_layout::CONTROLLER_BUYER_REPLAY_BUMP_OFFSET,
-            self.buyer_replay_bump,
-        )?;
-        put_byte(
-            &mut output,
-            generated_layout::CONTROLLER_SELLER_POSITION_BUMP_OFFSET,
-            self.seller_position_bump,
-        )?;
-        put_byte(
-            &mut output,
-            generated_layout::CONTROLLER_BUYER_POSITION_BUMP_OFFSET,
-            self.buyer_position_bump,
-        )?;
-        put(
-            &mut output,
-            generated_layout::CONTROLLER_FILL_OFFSET,
-            &self.fill.to_le_bytes(),
-        )?;
-        put(
-            &mut output,
-            generated_layout::CONTROLLER_EXECUTION_PRICE_OFFSET,
-            &self.execution_price.to_le_bytes(),
-        )?;
-        put(
-            &mut output,
-            generated_layout::CONTROLLER_SELLER_OFFSET,
-            &self.seller.encode()?,
-        )?;
-        put(
-            &mut output,
-            generated_layout::CONTROLLER_BUYER_OFFSET,
-            &self.buyer.encode()?,
-        )?;
+        generated_layout::encode_controller_fields!(output, self);
         Ok(output)
     }
 }
