@@ -6,21 +6,16 @@ use dclutch_capability_contract::{
 };
 use dclutch_collateral_contract::{FOUND_MARKET_AND_FUND_BYTES, FoundMarketAndFundV1};
 use dclutch_core_contract::{ContentId as CoreContentId, MarketIdentity, Phase};
-use dclutch_kernel::resolution::categorical_pyth_v1::{
-    CategoricalPythV1PolicyInput, MAX_PRICE_CELLS,
-};
 use dclutch_market_contract::market::CategoricalMarketV1;
 use dclutch_product_contract::{
     ContentId as ProductContentId,
     capacity::{CapacityEnvelope, CapacityProfileId, CapacityProfileV1, CapacityProfileV1Input},
     claim::{CategoricalUnitV1, CategoricalUnitV1Input},
     product::{InstanceV1, InstanceV1Input},
+    result_domain::{FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1, FiniteResultDomainV1},
 };
-use dclutch_pyth_contract::{
-    feed_profile::PythFeedProfileV1,
-    funding::{FUNDING_BYTES, FundingStateV1, construct_required_resolution_funding},
-    policy::CategoricalPythPolicyRecordV1,
-    resolution_material::CategoricalPythResolutionMaterialV1,
+use dclutch_pyth_contract::funding::{
+    FUNDING_BYTES, FundingStateV1, construct_required_resolution_funding,
 };
 use dclutch_realm_contract::{FreezeAuthorityPolicy, MintAuthorityPolicy, RealmV1, RealmV1Input};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
@@ -28,9 +23,17 @@ use dclutch_rent_contract::{
     CreateRentCreditV1, RENT_CREDIT_BYTES_V1, RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority,
     RentCreditV1,
 };
+use dclutch_source_contract::{
+    CapacityEnvelope as SourceCapacityEnvelope, ContentId as SourceContentId,
+    PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1, ProviderReleaseV1, PythAdapterConfigV1,
+    ResolutionPolicyV1, RoundingBoundary, SOURCE_MATERIAL_BYTES,
+    SOURCE_MATERIAL_SCHEMA_RELEASE_PREIMAGE_V1, SourceAccessProfile, SourceCapacityProfileV1,
+    SourceMaterialInputV1, SourceSpecV1, StatisticKind, StatisticSpecV1, WindowKind, WindowSpecV1,
+    encode_source_material_into_v1,
+};
 use solana_account::Account;
 use solana_program::{
-    hash::hash,
+    hash::{hash, hashv},
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
     rent::Rent,
@@ -50,7 +53,6 @@ const REALM_SCHEMA_LABEL: &[u8] = b"dclutch/schema/realm-v1";
 const INSTANCE_SCHEMA_LABEL: &[u8] = b"dclutch/schema/product-instance-v1";
 const CLAIM_SCHEMA_LABEL: &[u8] = b"dclutch/schema/categorical-unit-claim-v1";
 const CAPACITY_SCHEMA_LABEL: &[u8] = b"dclutch/schema/product-capacity-profile-v1";
-const MATERIAL_SCHEMA_LABEL: &[u8] = b"dclutch/schema/categorical-pyth-resolution-material-v1";
 const MANIFEST_SCHEMA_LABEL: &[u8] = b"dclutch/schema/capability-manifest-profile-1-v1";
 
 #[derive(Clone, Copy)]
@@ -114,6 +116,114 @@ fn core_id(bytes: [u8; 32]) -> CoreContentId {
     CoreContentId::new(bytes).expect("nonzero deterministic core identity")
 }
 
+fn source_id(bytes: [u8; 32]) -> SourceContentId {
+    SourceContentId::new(bytes).expect("nonzero deterministic Source identity")
+}
+
+fn source_material_bytes(
+    instance: InstanceV1,
+    instance_digest: [u8; 32],
+    result_domain: FiniteResultDomainV1,
+) -> Vec<u8> {
+    let capacity = SourceCapacityProfileV1::new(
+        SourceCapacityEnvelope::Measured,
+        1,
+        0,
+        source_id([40; 32]),
+        source_id([41; 32]),
+        512,
+        0,
+    )
+    .expect("canonical Source capacity");
+    let capacity_id = source_id(hash(&capacity.to_bytes()).to_bytes());
+    let provider = ProviderReleaseV1::new(
+        source_id([42; 32]),
+        source_id(PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1),
+        source_id([14; 32]),
+        source_id([43; 32]),
+        source_id([44; 32]),
+    );
+    let provider_id = source_id(hash(&provider.to_bytes()).to_bytes());
+    let adapter = PythAdapterConfigV1::new([11; 32], 0, 1).expect("canonical Pyth adapter config");
+    let adapter_id = source_id(hash(&adapter.to_bytes()).to_bytes());
+    let source = SourceSpecV1::new(
+        source_id(result_domain.coordinate_domain_id().to_bytes()),
+        source_id(result_domain.result_unit_id().to_bytes()),
+        provider_id,
+        SourceAccessProfile::PythTerminalOneTransaction,
+        adapter_id,
+        capacity_id,
+    );
+    let source_spec_id = source_id(hash(&source.to_bytes()).to_bytes());
+    let window = WindowSpecV1::new(
+        source_spec_id,
+        WindowKind::Terminal,
+        1,
+        1,
+        1,
+        1,
+        source_id([45; 32]),
+    )
+    .expect("canonical terminal window");
+    let window_id = source_id(hash(&window.to_bytes()).to_bytes());
+    let statistic = StatisticSpecV1::new(
+        source_id(result_domain.result_unit_id().to_bytes()),
+        source_id(result_domain.result_unit_id().to_bytes()),
+        StatisticKind::TerminalSample,
+        RoundingBoundary::ExactRational,
+        1,
+        0,
+        capacity_id,
+        source_id([46; 32]),
+        capacity,
+    )
+    .expect("canonical terminal statistic");
+    let statistic_id = source_id(hash(&statistic.to_bytes()).to_bytes());
+    let domain_bytes = result_domain.to_bytes();
+    let domain_id = source_id(
+        hashv(&[
+            FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1,
+            &[0],
+            domain_bytes.as_slice(),
+        ])
+        .to_bytes(),
+    );
+    let product_instance_id = source_id(instance_digest);
+    let policy = ResolutionPolicyV1::new(
+        capacity_id,
+        product_instance_id,
+        source_spec_id,
+        window_id,
+        statistic_id,
+        domain_id,
+        None,
+    );
+    let mut bytes = vec![0; SOURCE_MATERIAL_BYTES];
+    encode_source_material_into_v1(
+        &mut bytes,
+        SourceMaterialInputV1 {
+            policy: &policy,
+            capacity_profile_id: capacity_id,
+            capacity_profile: &capacity,
+            primary_source_id: source_spec_id,
+            primary_source: &source,
+            primary_provider_release_id: provider_id,
+            primary_provider_release: &provider,
+            primary_adapter_config: &adapter,
+            window_id,
+            window: &window,
+            statistic_id,
+            statistic: &statistic,
+            product_instance_id,
+            product_instance: &instance,
+            result_domain: &result_domain,
+            recovery: None,
+        },
+    )
+    .expect("canonical Product-bound Source material");
+    bytes
+}
+
 fn account(data: Vec<u8>) -> Account {
     Account {
         lamports: Rent::default().minimum_balance(data.len()),
@@ -146,11 +256,11 @@ fn vacant_cursor() -> Account {
     Account::new(0, 0, &system_program::ID)
 }
 
-fn resolution_entry(kind: u8, policy_id: CoreContentId, quoted_rent: u64) -> CapabilityEntryV1 {
+fn resolution_entry(kind: u8, material_id: CoreContentId, quoted_rent: u64) -> CapabilityEntryV1 {
     CapabilityEntryV1::new(
         core_id([kind; 32]),
-        core_id([14; 32]),
-        policy_id,
+        core_id(PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1),
+        material_id,
         core_id([15; 32]),
         core_id([16; 32]),
         core_id([17; 32]),
@@ -249,10 +359,23 @@ fn fixture(fault: Fault) -> Fixture {
     } else {
         claim_capacity_id
     };
+    let result_domain =
+        FiniteResultDomainV1::new(product_id([12; 32]), product_id([13; 32]), 1, &[])
+            .expect("canonical binary Product result domain");
+    let result_domain_bytes = result_domain.to_bytes();
+    let result_domain_id = product_id(
+        hashv(&[
+            FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1,
+            &[0],
+            result_domain_bytes.as_slice(),
+        ])
+        .to_bytes(),
+    );
     let instance_value = InstanceV1::new(InstanceV1Input {
         terms_id: product_id([9; 32]),
         occurrence_id: product_id([10; 32]),
         claim_basis_id: instance_claim_id,
+        result_domain_id,
         capacity_profile_id: instance_capacity_id,
         partition_cell_count: 2,
     })
@@ -263,45 +386,23 @@ fn fixture(fault: Fault) -> Fixture {
     let (claim, claim_cursor) = record_addresses(CLAIM_SCHEMA_LABEL, &claim_bytes);
     let (capacity, capacity_cursor) = record_addresses(CAPACITY_SCHEMA_LABEL, &capacity_bytes);
 
-    let feed_profile =
-        PythFeedProfileV1::new([11; 32], [12; 32], [13; 32]).expect("canonical Pyth feed profile");
-    let upper_edges = [0u128; MAX_PRICE_CELLS];
-    let policy = CategoricalPythPolicyRecordV1::new(CategoricalPythV1PolicyInput {
-        pyth_release_id: [14; 32],
-        feed_profile_id: hash(&feed_profile.to_bytes()).to_bytes(),
-        target_time: 1,
-        grace: 0,
-        window: 1,
-        max_crossing_lag: 1,
-        max_age: 1,
-        max_future_skew: 1,
-        confidence_multiplier: 1,
-        max_confidence_bps: 1,
-        max_normalized_confidence_atoms: 1,
-        normalized_decimals: 0,
-        price_cell_count: 1,
-        upper_edges,
-        failure_outcome_index: 1,
-    })
-    .expect("canonical categorical policy");
-    let material_value = CategoricalPythResolutionMaterialV1::new(policy, feed_profile)
-        .expect("canonical resolution material");
-    let material_bytes = material_value.to_bytes();
-    let (material, material_cursor) = record_addresses(MATERIAL_SCHEMA_LABEL, &material_bytes);
-    let policy_digest = hash(&policy.to_bytes()).to_bytes();
+    let material_bytes = source_material_bytes(instance_value, instance_digest, result_domain);
+    let (material, material_cursor) =
+        record_addresses(SOURCE_MATERIAL_SCHEMA_RELEASE_PREIMAGE_V1, &material_bytes);
+    let material_digest = hash(&material_bytes).to_bytes();
 
     let fund_rent = Rent::default().minimum_balance(FUNDING_BYTES);
-    let policy_id = core_id(policy_digest);
-    let valid_manifest_bytes = manifest_bytes(&[resolution_entry(61, policy_id, fund_rent)]);
+    let material_id = core_id(material_digest);
+    let valid_manifest_bytes = manifest_bytes(&[resolution_entry(61, material_id, fund_rent)]);
     let manifest_bytes = match fault {
         Fault::MissingResolutionManifest => manifest_bytes(&[]),
         Fault::AmbiguousResolutionManifest => manifest_bytes(&[
-            resolution_entry(61, policy_id, fund_rent),
-            resolution_entry(62, policy_id, fund_rent),
+            resolution_entry(61, material_id, fund_rent),
+            resolution_entry(62, material_id, fund_rent),
         ]),
         Fault::WrongResolutionQuote => manifest_bytes(&[resolution_entry(
             61,
-            policy_id,
+            material_id,
             fund_rent.checked_add(1).expect("wrong quote rent"),
         )]),
         _ => valid_manifest_bytes.clone(),
@@ -313,7 +414,7 @@ fn fixture(fault: Fault) -> Fixture {
         core_id(realm_digest),
         core_id(instance_digest),
         core_id(claim_digest),
-        policy_id,
+        material_id,
         core_id(manifest_digest),
         GENERATION,
     );
@@ -325,7 +426,7 @@ fn fixture(fault: Fault) -> Fixture {
     let manifest_value =
         CapabilityManifestV1::decode(&valid_manifest_bytes).expect("canonical manifest");
     let selected = manifest_value
-        .required_founding_entry_for_config(policy_id)
+        .required_founding_entry_for_config(material_id)
         .expect("selected founding resolution capability");
     let funding = construct_required_resolution_funding(
         core_id(manifest_digest),
@@ -401,7 +502,7 @@ fn fixture(fault: Fault) -> Fixture {
     test.add_account(claim_cursor, vacant_cursor());
     test.add_account(capacity, account(capacity_bytes.to_vec()));
     test.add_account(capacity_cursor, vacant_cursor());
-    test.add_account(material, account(material_bytes.to_vec()));
+    test.add_account(material, account(material_bytes));
     test.add_account(material_cursor, vacant_cursor());
     test.add_account(manifest, account(manifest_bytes));
     test.add_account(manifest_cursor, vacant_cursor());

@@ -6,28 +6,36 @@ use dclutch_capability_contract::{
     MANIFEST_HEADER_BYTES,
 };
 use dclutch_core_contract::{ContentId, MarketIdentity, MarketRoot, Phase};
-use dclutch_kernel::resolution::categorical_pyth_v1::{
-    CategoricalPythV1PolicyInput, MAX_PRICE_CELLS,
-};
 use dclutch_market_contract::market::{CategoricalMarketV1, CategoricalSettlementSummaryV1};
-use dclutch_product_contract::terminal::ResolutionKind;
+use dclutch_product_contract::{
+    ContentId as ProductContentId,
+    capacity::CapacityProfileId,
+    product::{InstanceV1, InstanceV1Input},
+    result_domain::{FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1, FiniteResultDomainV1},
+    terminal::ResolutionKind,
+};
 use dclutch_pyth_contract::{
-    feed_profile::PythFeedProfileV1,
     funding::{
         FUNDING_BYTES, construct_required_resolution_funding, required_resolution_minimum_balance,
     },
     instruction::{RESOLVE_FAILURE_BYTES, ResolveCategoricalFailureV1},
-    policy::CategoricalPythPolicyRecordV1,
-    resolution_material::CategoricalPythResolutionMaterialV1,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_rent_contract::{
     CreateRentCreditV1, RENT_CREDIT_BYTES_V1, RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority,
     RentCreditV1,
 };
+use dclutch_source_contract::{
+    CapacityEnvelope as SourceCapacityEnvelope, ContentId as SourceContentId,
+    PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1, ProviderReleaseV1, PythAdapterConfigV1,
+    ResolutionPolicyV1, RoundingBoundary, SOURCE_MATERIAL_BYTES,
+    SOURCE_MATERIAL_SCHEMA_RELEASE_PREIMAGE_V1, SourceAccessProfile, SourceCapacityProfileV1,
+    SourceMaterialInputV1, SourceSpecV1, StatisticKind, StatisticSpecV1, WindowKind, WindowSpecV1,
+    encode_source_material_into_v1,
+};
 use solana_account::Account;
 use solana_program::{
-    hash::hash,
+    hash::{hash, hashv},
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
     rent::Rent,
@@ -44,7 +52,6 @@ const BOUNTY: u64 = 31;
 const SPONSOR_EXCESS: u64 = 37;
 const BOUNTY_OPENING: u64 = 41;
 const SPONSOR_OPENING: u64 = 43;
-const MATERIAL_SCHEMA_LABEL: &[u8] = b"dclutch/schema/categorical-pyth-resolution-material-v1";
 const MANIFEST_SCHEMA_LABEL: &[u8] = b"dclutch/schema/capability-manifest-profile-1-v1";
 
 struct Fixture {
@@ -81,26 +88,122 @@ fn require_sbf_out_dir() {
     );
 }
 
-fn policy(target_time: i64, window: u32) -> CategoricalPythPolicyRecordV1 {
-    let profile = PythFeedProfileV1::new([4; 32], [5; 32], [6; 32]).expect("profile");
-    CategoricalPythPolicyRecordV1::new(CategoricalPythV1PolicyInput {
-        pyth_release_id: [1; 32],
-        feed_profile_id: hash(&profile.to_bytes()).to_bytes(),
-        target_time,
-        grace: 0,
-        window,
-        max_crossing_lag: 1,
-        max_age: 1,
-        max_future_skew: 1,
-        confidence_multiplier: 1,
-        max_confidence_bps: 1,
-        max_normalized_confidence_atoms: 1,
-        normalized_decimals: 0,
-        price_cell_count: 1,
-        upper_edges: [0; MAX_PRICE_CELLS],
-        failure_outcome_index: 1,
+fn product_id(bytes: [u8; 32]) -> ProductContentId {
+    ProductContentId::new(bytes).expect("nonzero deterministic Product identity")
+}
+
+fn source_id(bytes: [u8; 32]) -> SourceContentId {
+    SourceContentId::new(bytes).expect("nonzero deterministic Source identity")
+}
+
+fn source_material_bytes(terminal_time: i64) -> (Vec<u8>, [u8; 32], [u8; 32]) {
+    let result_domain = FiniteResultDomainV1::new(product_id([5; 32]), product_id([6; 32]), 1, &[])
+        .expect("canonical binary Product result domain");
+    let result_domain_bytes = result_domain.to_bytes();
+    let result_domain_digest = hashv(&[
+        FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1,
+        &[0],
+        result_domain_bytes.as_slice(),
+    ])
+    .to_bytes();
+    let claim_id = [13; 32];
+    let instance = InstanceV1::new(InstanceV1Input {
+        terms_id: product_id([12; 32]),
+        occurrence_id: product_id([14; 32]),
+        claim_basis_id: product_id(claim_id),
+        result_domain_id: product_id(result_domain_digest),
+        capacity_profile_id: CapacityProfileId::new(product_id([15; 32])),
+        partition_cell_count: 2,
     })
-    .expect("failure-eligible policy")
+    .expect("canonical Product instance");
+    let instance_digest = hash(&instance.to_bytes()).to_bytes();
+    let capacity = SourceCapacityProfileV1::new(
+        SourceCapacityEnvelope::Measured,
+        1,
+        0,
+        source_id([31; 32]),
+        source_id([32; 32]),
+        512,
+        0,
+    )
+    .expect("canonical Source capacity");
+    let capacity_id = source_id(hash(&capacity.to_bytes()).to_bytes());
+    let provider = ProviderReleaseV1::new(
+        source_id([33; 32]),
+        source_id(PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1),
+        source_id([1; 32]),
+        source_id([34; 32]),
+        source_id([35; 32]),
+    );
+    let provider_id = source_id(hash(&provider.to_bytes()).to_bytes());
+    let adapter = PythAdapterConfigV1::new([4; 32], 0, 1).expect("canonical Pyth adapter config");
+    let adapter_id = source_id(hash(&adapter.to_bytes()).to_bytes());
+    let source = SourceSpecV1::new(
+        source_id(result_domain.coordinate_domain_id().to_bytes()),
+        source_id(result_domain.result_unit_id().to_bytes()),
+        provider_id,
+        SourceAccessProfile::PythTerminalOneTransaction,
+        adapter_id,
+        capacity_id,
+    );
+    let source_spec_id = source_id(hash(&source.to_bytes()).to_bytes());
+    let window = WindowSpecV1::new(
+        source_spec_id,
+        WindowKind::Terminal,
+        terminal_time,
+        terminal_time,
+        1,
+        1,
+        source_id([36; 32]),
+    )
+    .expect("canonical terminal window");
+    let window_id = source_id(hash(&window.to_bytes()).to_bytes());
+    let statistic = StatisticSpecV1::new(
+        source_id(result_domain.result_unit_id().to_bytes()),
+        source_id(result_domain.result_unit_id().to_bytes()),
+        StatisticKind::TerminalSample,
+        RoundingBoundary::ExactRational,
+        1,
+        0,
+        capacity_id,
+        source_id([37; 32]),
+        capacity,
+    )
+    .expect("canonical terminal statistic");
+    let statistic_id = source_id(hash(&statistic.to_bytes()).to_bytes());
+    let policy = ResolutionPolicyV1::new(
+        capacity_id,
+        source_id(instance_digest),
+        source_spec_id,
+        window_id,
+        statistic_id,
+        source_id(result_domain_digest),
+        None,
+    );
+    let mut material = vec![0; SOURCE_MATERIAL_BYTES];
+    encode_source_material_into_v1(
+        &mut material,
+        SourceMaterialInputV1 {
+            policy: &policy,
+            capacity_profile_id: capacity_id,
+            capacity_profile: &capacity,
+            primary_source_id: source_spec_id,
+            primary_source: &source,
+            primary_provider_release_id: provider_id,
+            primary_provider_release: &provider,
+            primary_adapter_config: &adapter,
+            window_id,
+            window: &window,
+            statistic_id,
+            statistic: &statistic,
+            product_instance_id: source_id(instance_digest),
+            product_instance: &instance,
+            result_domain: &result_domain,
+            recovery: None,
+        },
+    )
+    .expect("canonical Product-bound Source material");
+    (material, instance_digest, claim_id)
 }
 
 fn account(lamports: u64, data: Vec<u8>, owner: Pubkey) -> Account {
@@ -143,11 +246,11 @@ fn vacant_cursor() -> Account {
     Account::new(0, 0, &system_program::ID)
 }
 
-fn manifest_bytes(policy_id: ContentId, fund_rent: u64) -> Vec<u8> {
+fn manifest_bytes(material_id: ContentId, fund_rent: u64) -> Vec<u8> {
     let entry = CapabilityEntryV1::new(
         ContentId::new([21; 32]).expect("kind"),
-        ContentId::new([1; 32]).expect("Pyth release"),
-        policy_id,
+        ContentId::new(PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1).expect("Pyth Source extension"),
+        material_id,
         ContentId::new([22; 32]).expect("capacity"),
         ContentId::new([23; 32]).expect("child schema"),
         ContentId::new([24; 32]).expect("derivation"),
@@ -179,28 +282,25 @@ fn manifest_bytes(policy_id: ContentId, fund_rent: u64) -> Vec<u8> {
     bytes
 }
 
-fn fixture(target_time: i64, window: u32, underfunded: bool) -> Fixture {
+fn fixture(terminal_time: i64, underfunded: bool) -> Fixture {
     require_sbf_out_dir();
-    let policy_record = policy(target_time, window);
-    let feed = PythFeedProfileV1::new([4; 32], [5; 32], [6; 32]).expect("feed");
-    let material = CategoricalPythResolutionMaterialV1::new(policy_record, feed).expect("material");
-    let material_bytes = material.to_bytes();
+    let (material_bytes, product_instance_id, claim_id) = source_material_bytes(terminal_time);
     let fund_rent = Rent::default().minimum_balance(FUNDING_BYTES);
-    let policy_id = ContentId::new(hash(&policy_record.to_bytes()).to_bytes()).expect("policy id");
-    let manifest_bytes = manifest_bytes(policy_id, fund_rent);
+    let material_id = ContentId::new(hash(&material_bytes).to_bytes()).expect("SourceMaterial ID");
+    let manifest_bytes = manifest_bytes(material_id, fund_rent);
     let manifest_id = ContentId::new(hash(&manifest_bytes).to_bytes()).expect("manifest id");
     let manifest = CapabilityManifestV1::decode(&manifest_bytes).expect("manifest decode");
     let selected = manifest
-        .required_founding_entry_for_config(policy_id)
+        .required_founding_entry_for_config(material_id)
         .expect("selected entry");
     let fund_state =
         construct_required_resolution_funding(manifest_id, manifest, selected, fund_rent, 1)
             .expect("active raw funding state");
     let identity = MarketIdentity::new(
         ContentId::new([11; 32]).expect("realm"),
-        ContentId::new([12; 32]).expect("terms"),
-        ContentId::new([13; 32]).expect("basis"),
-        policy_id,
+        ContentId::new(product_instance_id).expect("Product instance"),
+        ContentId::new(claim_id).expect("claim basis"),
+        material_id,
         manifest_id,
         GENERATION,
     );
@@ -256,18 +356,18 @@ fn fixture(target_time: i64, window: u32, underfunded: bool) -> Fixture {
         minimum.checked_add(SPONSOR_EXCESS).expect("fund excess")
     };
     let fund_before = account(fund_lamports, fund_state.to_bytes().to_vec(), PROGRAM_ID);
-    let wrong_material = CategoricalPythResolutionMaterialV1::new(policy(7, window), feed)
-        .expect("substitution material")
-        .to_bytes()
-        .to_vec();
+    let (wrong_material, wrong_product_instance_id, wrong_claim_id) = source_material_bytes(7);
+    assert_eq!(wrong_product_instance_id, product_instance_id);
+    assert_eq!(wrong_claim_id, claim_id);
     let empty_manifest = CapabilityManifestV1::empty()
         .expect("empty manifest")
         .as_bytes()
         .to_vec();
-    let (material_key, material_cursor) = record_addresses(MATERIAL_SCHEMA_LABEL, &material_bytes);
+    let (material_key, material_cursor) =
+        record_addresses(SOURCE_MATERIAL_SCHEMA_RELEASE_PREIMAGE_V1, &material_bytes);
     let (manifest_key, manifest_cursor) = record_addresses(MANIFEST_SCHEMA_LABEL, &manifest_bytes);
     let (substitute_material, substitute_material_cursor) =
-        record_addresses(MATERIAL_SCHEMA_LABEL, &wrong_material);
+        record_addresses(SOURCE_MATERIAL_SCHEMA_RELEASE_PREIMAGE_V1, &wrong_material);
     let (substitute_manifest, substitute_manifest_cursor) =
         record_addresses(MANIFEST_SCHEMA_LABEL, &empty_manifest);
     let mut test = ProgramTest::new("dclutch_sbf", PROGRAM_ID, None);
@@ -277,10 +377,7 @@ fn fixture(target_time: i64, window: u32, underfunded: bool) -> Fixture {
         account(1_000_000, market_before.clone(), PROGRAM_ID),
     );
     test.add_account(fund, fund_before.clone());
-    test.add_account(
-        material_key,
-        finalized_record_account(material_bytes.to_vec()),
-    );
+    test.add_account(material_key, finalized_record_account(material_bytes));
     test.add_account(material_cursor, vacant_cursor());
     test.add_account(manifest_key, finalized_record_account(manifest_bytes));
     test.add_account(manifest_cursor, vacant_cursor());
@@ -459,7 +556,7 @@ async fn assert_rollback(
 
 #[tokio::test]
 async fn body_free_failure_resolves_closes_raw_fund_and_refuses_replay() {
-    let fixture = fixture(-1_000_000, 1, false);
+    let fixture = fixture(-1_000_000, false);
     let instruction = failure_instruction(
         &fixture,
         fixture.material,
@@ -583,21 +680,21 @@ async fn body_free_failure_resolves_closes_raw_fund_and_refuses_replay() {
 async fn failure_refusals_preserve_market_raw_fund_and_payouts() {
     for (fixture, material, material_cursor, manifest, manifest_cursor) in [
         {
-            let fixture = fixture(9_999_999_999, 1, false);
+            let fixture = fixture(9_999_999_999, false);
             (fixture, None, None, None, None)
         },
         {
-            let fixture = fixture(-1_000_000, 1, true);
+            let fixture = fixture(-1_000_000, true);
             (fixture, None, None, None, None)
         },
         {
-            let fixture = fixture(-1_000_000, 1, false);
+            let fixture = fixture(-1_000_000, false);
             let material = fixture.substitute_material;
             let cursor = fixture.substitute_material_cursor;
             (fixture, Some(material), Some(cursor), None, None)
         },
         {
-            let fixture = fixture(-1_000_000, 1, false);
+            let fixture = fixture(-1_000_000, false);
             let manifest = fixture.substitute_manifest;
             let cursor = fixture.substitute_manifest_cursor;
             (fixture, None, None, Some(manifest), Some(cursor))
