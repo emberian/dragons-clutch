@@ -451,6 +451,7 @@ dependencies = [
  "dclutch-rent-contract",
  "dclutch-series-contract",
  "dclutch-source-contract",
+ "dclutch-structured-contract",
  "dclutch-terminal-contract",
  "dclutch-token-svm",
  "solana-instructions-sysvar",
