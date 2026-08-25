@@ -130,6 +130,7 @@ def magic : List UInt8 := [0x44, 0x43, 0x54, 0x56] -- `DCTV`
 def version : UInt8 := 1
 def headerBytes : Nat := 8
 def instructionBytes : Nat := 16
+def maxInstructions : Nat := 64
 
 def opcode : Op → UInt8
   | .loadConst .. => 0

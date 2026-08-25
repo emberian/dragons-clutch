@@ -1,0 +1,35 @@
+[package]
+name = "dclutch-trading-sbf"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Canonical data-driven Trading SBF adapter"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+path = "src/lib.rs"
+
+[features]
+default = []
+no-entrypoint = []
+custom-heap = []
+custom-panic = []
+
+[dependencies]
+dclutch-capability-contract = { path = "../../crates/dclutch-capability-contract" }
+dclutch-capability-program-contract = { path = "../../crates/dclutch-capability-program-contract" }
+dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
+dclutch-market-core-codec = { path = "../../crates/dclutch-market-core-codec" }
+dclutch-registry-svm = { path = "../../crates/dclutch-registry-svm" }
+dclutch-release-set-contract = { path = "../../crates/dclutch-release-set-contract" }
+dclutch-transition-vm = { path = "../../crates/dclutch-transition-vm" }
+solana-program = { version = "=3.0.0", default-features = false }
+
+[dev-dependencies]
+dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }
+solana-hash = "=4.6.0"
+solana-message = { version = "=3.1.0", features = ["bincode"] }
+
+[lints]
+workspace = true

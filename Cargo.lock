@@ -307,6 +307,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-capability-program-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-contract",
+ "dclutch-core-contract",
+ "dclutch-release-set-contract",
+ "dclutch-transition-vm",
+]
+
+[[package]]
 name = "dclutch-claims-proof-sbf"
 version = "0.1.0"
 dependencies = [
@@ -756,6 +766,23 @@ name = "dclutch-token-svm"
 version = "0.1.0"
 dependencies = [
  "sha2",
+]
+
+[[package]]
+name = "dclutch-trading-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-contract",
+ "dclutch-capability-program-contract",
+ "dclutch-core-contract",
+ "dclutch-market-core-codec",
+ "dclutch-record-contract",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
+ "dclutch-transition-vm",
+ "solana-hash 4.6.0",
+ "solana-message",
+ "solana-program",
 ]
 
 [[package]]

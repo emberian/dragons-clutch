@@ -109,7 +109,7 @@ impl Default for Registers {
 ///
 /// Register writes are committed only after all instructions succeed.
 pub fn execute(program: &[u8], registers: &mut Registers) -> Result<(), Error> {
-    let count = decode_header(program)?;
+    let count = validate_program(program)?;
     let mut next = *registers;
     let mut index = 0_usize;
     while index < count {
@@ -125,6 +125,30 @@ pub fn execute(program: &[u8], registers: &mut Registers) -> Result<(), Error> {
     }
     *registers = next;
     Ok(())
+}
+
+/// Hostile-validate one canonical program without evaluating its checks.
+///
+/// This is the admission boundary for content-addressed programs whose
+/// register values are supplied only during a later invocation. It validates
+/// the exact count-derived width, every opcode, reserved byte, unused operand,
+/// immediate, and referenced register. The returned value is the canonical
+/// instruction count.
+pub fn validate_program(program: &[u8]) -> Result<usize, Error> {
+    let count = decode_header(program)?;
+    let mut index = 0_usize;
+    while index < count {
+        let offset = HEADER_BYTES
+            .checked_add(
+                index
+                    .checked_mul(INSTRUCTION_BYTES)
+                    .ok_or(Error::InvalidLength)?,
+            )
+            .ok_or(Error::InvalidLength)?;
+        validate_instruction(program, offset)?;
+        index = index.checked_add(1).ok_or(Error::InvalidCount)?;
+    }
+    Ok(count)
 }
 
 fn decode_header(program: &[u8]) -> Result<usize, Error> {
@@ -269,6 +293,76 @@ fn execute_instruction(
             }
         }
         _ => Err(Error::UnknownOpcode),
+    }
+}
+
+fn validate_instruction(program: &[u8], offset: usize) -> Result<(), Error> {
+    let opcode = byte(program, offset)?;
+    let a = usize::from(byte(program, add(offset, 1)?)?);
+    let b = usize::from(byte(program, add(offset, 2)?)?);
+    let c = usize::from(byte(program, add(offset, 3)?)?);
+    let d = usize::from(byte(program, add(offset, 4)?)?);
+    if byte(program, add(offset, 5)?)? != 0
+        || byte(program, add(offset, 6)?)? != 0
+        || byte(program, add(offset, 7)?)? != 0
+    {
+        return Err(Error::NonzeroReserved);
+    }
+    let immediate = read_u64(program, add(offset, 8)?)?;
+    match opcode {
+        0 => {
+            scalar_register(a)?;
+            canonical([b, c, d], immediate, true)
+        }
+        1 | 4 | 5 | 12 => {
+            scalar_register(a)?;
+            scalar_register(b)?;
+            canonical([c, d, 0], immediate, false)
+        }
+        2 | 3 => {
+            identity_register(a)?;
+            identity_register(b)?;
+            canonical([c, d, 0], immediate, false)
+        }
+        6 => {
+            scalar_register(a)?;
+            canonical([b, c, d], immediate, false)
+        }
+        7 | 11 | 13 | 15 => {
+            scalar_register(a)?;
+            scalar_register(b)?;
+            scalar_register(c)?;
+            canonical([d, 0, 0], immediate, false)
+        }
+        8 => {
+            scalar_register(a)?;
+            scalar_register(b)?;
+            canonical([c, d, 0], immediate, false)
+        }
+        9 | 10 | 14 => {
+            scalar_register(a)?;
+            scalar_register(b)?;
+            scalar_register(c)?;
+            scalar_register(d)?;
+            canonical([0, 0, 0], immediate, false)
+        }
+        _ => Err(Error::UnknownOpcode),
+    }
+}
+
+fn scalar_register(index: usize) -> Result<(), Error> {
+    if index < MAX_SCALARS {
+        Ok(())
+    } else {
+        Err(Error::InvalidRegister)
+    }
+}
+
+fn identity_register(index: usize) -> Result<(), Error> {
+    if index < MAX_IDENTITIES {
+        Ok(())
+    } else {
+        Err(Error::InvalidRegister)
     }
 }
 
@@ -429,6 +523,7 @@ mod tests {
     fn lean_program_derives_exact_direct_outputs() {
         let bytes = program();
         assert_eq!(bytes.len(), 568);
+        assert_eq!(validate_program(&bytes), Ok(35));
         let mut registers = example();
         execute(&bytes, &mut registers).expect("Lean example program");
         assert_eq!(registers.scalar(34), Ok(1_000));
@@ -605,5 +700,23 @@ mod tests {
             assert!(execute(&bytes, &mut registers).is_err());
             assert_eq!(registers, before);
         }
+    }
+
+    #[test]
+    fn syntax_validation_is_independent_of_hostile_runtime_values() {
+        let bytes = encoded_program(&[instruction(6, 0, 0, 0, 0, 0)]);
+        assert_eq!(validate_program(&bytes), Ok(1));
+
+        let mut registers = Registers::zeroed();
+        assert_eq!(execute(&bytes, &mut registers), Err(Error::CheckFailed));
+
+        let mut noncanonical = bytes;
+        *noncanonical
+            .get_mut(HEADER_BYTES + 2)
+            .expect("unused operand") = 1;
+        assert_eq!(
+            validate_program(&noncanonical),
+            Err(Error::NoncanonicalInstruction)
+        );
     }
 }

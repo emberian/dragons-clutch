@@ -2,6 +2,7 @@
 members = [
     "crates/dclutch-bearer-contract",
     "crates/dclutch-capability-contract",
+    "crates/dclutch-capability-program-contract",
     "crates/dclutch-collateral-contract",
     "crates/dclutch-core-contract",
     "crates/dclutch-dealer-contract",
@@ -51,6 +52,7 @@ members = [
     "programs/dclutch-product-payoff-sbf",
     "programs/dclutch-product-evidence-sbf",
     "programs/dclutch-sbf",
+    "programs/dclutch-trading-sbf",
 ]
 resolver = "2"
 

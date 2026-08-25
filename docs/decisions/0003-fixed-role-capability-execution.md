@@ -1,7 +1,19 @@
 # Decision 0003: fixed-role capability execution
 
-Status: accepted for successor convergence on 2026-08-25. This is an
-architecture and wire decision, not release or deployment evidence.
+Status: accepted as the safe V1 convergence profile on 2026-08-25 and reopened
+for principled generalization on 2026-08-25. This is an architecture and wire
+decision, not release or deployment evidence. It fixes canonical state/effect
+authority for the current vertical; it is not a permanent claim that every
+future execution strategy must be interpreted or that no separately admitted
+accelerator can execute the same semantic descriptor.
+
+The active generalization target keeps Trading as the canonical owner and
+commit boundary while allowing a future Registry-authenticated, stateless AOT
+accelerator to consume the same content-addressed descriptor and return the
+same checked effect plan. Such an accelerator must be translation-validated
+against that descriptor and may not create a second state, claim, custody, or
+release authority. A genuinely state-owning sixth role still requires a new
+measured release-set profile and authority decision.
 
 ## Context
 
@@ -102,8 +114,15 @@ For a Core-to-Trading capability activation or closure, the role-owned request
 bytes are:
 
 ```text
-CapabilityExecutionSelectionV1 || exact family request
+CapabilityExecutionSelectionV1(144)
+  || FundingListHeaderV1(16)
+  || exact family request
 ```
+
+The funding header carries only magic, version, count, and canonical reserved
+bytes. The selected entry index remains solely in the selector. There is no
+caller-supplied funding-key or entry-index vector and no second funding-list
+record.
 
 `CoreEffectEnvelopeV1.target_role` must be Trading for `ActivateCapability`
 and `CloseCapability`. `role_request_bytes` and `role_request_digest` bind the
@@ -121,13 +140,46 @@ canonical bytes, selection, and Market/release-set join. Repeating a
 caller-supplied selector would waste packet space and create a second apparent
 authority for the already-persisted selection.
 
-The finalized funding list is likewise content-addressed activation authority,
-not an inline payload copied behind this selector. A maximum funding-list
-profile must be authenticated from its canonical account/preimage. Packet tests
-must compile the maximum-account activation transaction and prove it remains
-within the runtime packet limit; a construction that inlines all 592 funding
-bytes with the current envelope, selector, and family request is refused as
-oversized.
+The authenticated `FundingStateV1` accounts are the funding list. Core reads
+the first `count` standard funding accounts, hostile-decodes each account's
+authoritative `entry_index`, requires those indices to be strictly increasing,
+derives each PDA from Market, generation, manifest, and entry under the fixed
+Trading role, validates owner, custody, status, and pairwise distinctness, and
+requires membership of the selected entry. Each family request, descriptor,
+and account profile must additionally bind and derive the exact funding
+accounts that its semantics consume, and the Trading child rechecks the same
+16-byte header. Packet tests compile the maximum-account activation as a full
+versioned transaction and prove the resulting wire remains within the runtime
+packet limit; they do not merely add instruction-byte widths.
+
+## Capability descriptor and one composite root
+
+`CapabilityEntryV1.release_id` is the SHA-256 digest of every canonical byte of
+one finalized, account-resident `CapabilityProgramV1`. Activation carries the
+descriptor account, not its bytes in instruction data. The raw-record owner,
+PDA, schema release, finalized status, complete digest, and absent staging
+cursor must all be authenticated before decoding. The V1 bounded descriptor is
+at most 1,312 bytes; the current 768-byte record-page profile publishes that
+maximum as two Append transactions rather than claiming it fits one activation
+instruction.
+
+Trading owns exactly one child-root account for the selected capability:
+
+```text
+CapabilityRootHeaderV1(232 immutable)
+  || descriptor-defined mutable root-state tail
+```
+
+The header stores Market, generation, selected release set, and the exact
+authenticated activation selector. It is an immutable projection of the
+manifest selection, not a second semantic owner. The descriptor's explicit
+`root_state_bytes` fixes the tail width and the whole account must be exactly
+`232 + root_state_bytes` bytes. The manifest entry's `child_schema_id` equals
+the descriptor's `root_schema_id` and identifies the mutable tail schema; the
+common header schema is implied by the checked Trading artifact/profile and is
+not a competing manifest fact. Activation creates and rents this one composite
+account, family code receives only its mutable tail, hot actions authenticate
+the unchanged header, and closure deletes this one account.
 
 ## Open family dispatch without a family enum
 
@@ -135,14 +187,26 @@ Neither `kind_id` nor `release_id` is matched against a permanent Rust enum of
 General, Dealer, or Series. The Trading interpreter authenticates the finalized
 semantic preimage whose content identity is `selection.capability_release()`.
 Successor-ready family semantics compile to one canonical, versioned
-capability-program/descriptor schema containing the request schema, state and
-account profile, derivation policy, checked transition program, and allowed
-effect schema. Trading hostile-decodes that descriptor and interprets its
-bounded program over authenticated fixed-layout views.
+capability-program/descriptor schema containing the request schema, mutable
+root-tail schema and exact width, account profile, derivation policy, checked
+transition program, and allowed effect schema. Trading V1 hostile-decodes that
+descriptor and interprets its bounded program over authenticated fixed-layout
+views. The descriptor defines semantics and allowed effects independently of
+execution strategy; this decision does not preclude a later measured,
+Registry-authenticated and translation-validated stateless accelerator from
+executing the same descriptor without acquiring Trading state/effect authority.
 
 A family that still requires a family-specific Rust dispatcher has not crossed
 the successor gate. Its standalone ELF may remain an explicitly experimental
 measurement artifact, but it is not a Market-authorized successor Program.
+Likewise, a generic dispatcher followed by a compiled list of family-specific
+schema IDs, AccountProfile projectors, derivations, or effect handlers has not
+crossed that gate merely because it removed the family enum. The initial
+`SupportedContentV1` API is a fail-closed physical-profile foundation, not
+proof of open-family convergence. Final admission requires finalized and
+interpreted AccountProfile, derivation, and effect-projection languages—or an
+equivalently certified AOT profile—so those identities select authenticated
+semantic data rather than named Rust cases.
 
 Distinct PDA domains and state schemas remain valid. They are derived under
 the one Trading Program, with the manifest, kind, release, config, Market, and
@@ -163,7 +227,8 @@ aliasing. Separate semantic modules do not imply separate executable Programs.
    Trading Program.
 5. Trading independently reauthenticates Core before trusting the Core PDA,
    rejoins the selection to the Market and manifest entry, authenticates the
-   finalized capability-release descriptor, and interprets it.
+   finalized capability-release descriptor whose exact digest is the selected
+   capability release, and interprets it under the V1 strategy.
 6. Trading derives child requests rather than accepting plans. For Claims or
    Custody CPI it uses `CallerAuthoritySeedsV1` with caller role Trading. Each
    child independently reauthenticates Trading and consumes its own canonical
@@ -197,6 +262,10 @@ The converged implementation must include adversarial coverage for:
   treating either as the other's record schema;
 - malformed, noncanonical, unknown-version, or content-hash-mismatched family
   descriptors and configs;
+- zero, oversized, truncated, extended, or descriptor-mismatched mutable
+  root-state tails, and any attempt to rewrite the immutable root header;
+- missing, duplicate, unordered, wrong-owner, wrong-PDA, wrong-entry,
+  wrong-custody, wrong-status, or selected-entry-omitting FundingState accounts;
 - a family identifier that would require a hard-coded dispatcher rather than
   the admitted generic descriptor schema;
 - arbitrary signers, PDAs derived under an unregistered family Program, wrong
