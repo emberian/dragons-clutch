@@ -12,11 +12,14 @@
 #[cfg(test)]
 extern crate std;
 
+/// Canonical trailing request authenticated by a Core effect envelope.
+pub mod activation;
 #[allow(missing_docs)]
 mod generated;
 /// Minimal persistent root and canonical activation plan.
 pub mod root;
 
+pub use activation::*;
 pub use root::*;
 
 /// Exact canonical `GeneralConfigV2` byte width.
@@ -34,19 +37,10 @@ pub const GENERAL_CONFIG_SCHEMA_ID_V2: [u8; 32] = [
     0xa4, 0x55, 0x3f, 0x77, 0x39, 0x6e, 0x5b, 0x16, 0xee, 0xd6, 0x42, 0x1d, 0x83, 0x54, 0x8b, 0x50,
     0xa1, 0x4b, 0xa3, 0x9c, 0x88, 0xe6, 0x7c, 0x83, 0x33, 0xb7, 0x46, 0xb1, 0x17, 0x0e, 0xe8, 0x20,
 ];
-/// Domain label for the reviewed General successor capability release.
-pub const GENERAL_CAPABILITY_RELEASE_PREIMAGE_V2: &[u8] =
-    b"dclutch/general/frequent-batch-release/v2";
-/// SHA-256 of [`GENERAL_CAPABILITY_RELEASE_PREIMAGE_V2`].
-pub const GENERAL_CAPABILITY_RELEASE_ID_V2: [u8; 32] = [
-    0x13, 0xe0, 0x07, 0xac, 0x87, 0x42, 0x4f, 0x29, 0x76, 0x74, 0x7c, 0x86, 0x71, 0x42, 0x8a, 0x89,
-    0x7d, 0xe9, 0xde, 0x39, 0x66, 0x2c, 0x13, 0xc1, 0xed, 0x4d, 0xa1, 0x8c, 0xc6, 0x89, 0xfb, 0x8b,
-];
-
 /// Explicit refusal from hostile config bytes or invalid immutable semantics.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
-    /// The account did not contain exactly 200 bytes.
+    /// The account did not contain exactly 232 bytes.
     InvalidLength,
     /// Magic, schema version, or artifact profile differed.
     UnsupportedSchema,
@@ -54,8 +48,6 @@ pub enum Error {
     NonCanonicalReservedBytes,
     /// An immutable content identity or authority was zero.
     ZeroIdentity,
-    /// The capability release was not the reviewed V2 release.
-    UnrecognizedCapability,
     /// Outcome width was outside this explicitly bounded physical profile.
     InvalidOutcomeCount,
     /// A required capacity, duration, scale, or reward was zero.
@@ -78,8 +70,8 @@ pub struct GeneralConfigV2Input {
     pub capacity_profile_id: [u8; 32],
     /// Exact ClaimBasis content identity.
     pub claim_basis_id: [u8; 32],
-    /// Reviewed General capability release.
-    pub capability_release_id: [u8; 32],
+    /// Content identity of the selected canonical capability-program descriptor.
+    pub capability_program_id: [u8; 32],
     /// Immutable Market occurrence generation.
     pub generation: u64,
     /// Positive simplex denominator.
@@ -116,6 +108,7 @@ impl GeneralConfigV2 {
         if [
             input.capacity_profile_id,
             input.claim_basis_id,
+            input.capability_program_id,
             input.selection_policy_id,
             input.quote_surplus_beneficiary,
         ]
@@ -123,9 +116,6 @@ impl GeneralConfigV2 {
         .any(is_zero)
         {
             return Err(Error::ZeroIdentity);
-        }
-        if input.capability_release_id != GENERAL_CAPABILITY_RELEASE_ID_V2 {
-            return Err(Error::UnrecognizedCapability);
         }
         if !(2..=u16::try_from(MAX_OUTCOMES_V2).map_err(|_| Error::InvalidOutcomeCount)?)
             .contains(&input.outcome_count)
@@ -177,9 +167,9 @@ impl GeneralConfigV2 {
             outcome_count: read_u16(bytes, generated::CONFIG_OUTCOME_COUNT_OFFSET)?,
             capacity_profile_id: read_array(bytes, generated::CONFIG_CAPACITY_PROFILE_ID_OFFSET)?,
             claim_basis_id: read_array(bytes, generated::CONFIG_CLAIM_BASIS_ID_OFFSET)?,
-            capability_release_id: read_array(
+            capability_program_id: read_array(
                 bytes,
-                generated::CONFIG_CAPABILITY_RELEASE_ID_OFFSET,
+                generated::CONFIG_CAPABILITY_PROGRAM_ID_OFFSET,
             )?,
             generation: read_u64(bytes, generated::CONFIG_GENERATION_OFFSET)?,
             price_scale: read_u64(bytes, generated::CONFIG_PRICE_SCALE_OFFSET)?,
@@ -236,8 +226,8 @@ impl GeneralConfigV2 {
                 self.input.claim_basis_id,
             ),
             (
-                generated::CONFIG_CAPABILITY_RELEASE_ID_OFFSET,
-                self.input.capability_release_id,
+                generated::CONFIG_CAPABILITY_PROGRAM_ID_OFFSET,
+                self.input.capability_program_id,
             ),
             (
                 generated::CONFIG_SELECTION_POLICY_ID_OFFSET,
@@ -299,10 +289,10 @@ impl GeneralConfigV2 {
         self.input.claim_basis_id
     }
 
-    /// Reviewed General successor capability release.
+    /// Content identity of the selected canonical capability-program descriptor.
     #[must_use]
-    pub const fn capability_release_id(self) -> [u8; 32] {
-        self.input.capability_release_id
+    pub const fn capability_program_id(self) -> [u8; 32] {
+        self.input.capability_program_id
     }
 
     /// Immutable occurrence generation.
@@ -474,7 +464,7 @@ mod tests {
         GeneralConfigV2Input {
             capacity_profile_id: capacity,
             claim_basis_id: claim_basis,
-            capability_release_id: GENERAL_CAPABILITY_RELEASE_ID_V2,
+            capability_program_id: id(0x23),
             generation: 7,
             price_scale: 100,
             collection_slots: 10,
@@ -498,10 +488,6 @@ mod tests {
         assert_eq!(
             Sha256::digest(GENERAL_CONFIG_SCHEMA_PREIMAGE_V2).as_slice(),
             GENERAL_CONFIG_SCHEMA_ID_V2
-        );
-        assert_eq!(
-            Sha256::digest(GENERAL_CAPABILITY_RELEASE_PREIMAGE_V2).as_slice(),
-            GENERAL_CAPABILITY_RELEASE_ID_V2
         );
     }
 
@@ -536,10 +522,6 @@ mod tests {
                 generated::CONFIG_RESERVED_OFFSET,
                 Error::NonCanonicalReservedBytes,
             ),
-            (
-                generated::CONFIG_CAPABILITY_RELEASE_ID_OFFSET,
-                Error::UnrecognizedCapability,
-            ),
         ] {
             let mut hostile = canonical;
             let byte = hostile
@@ -551,6 +533,7 @@ mod tests {
         for offset in [
             generated::CONFIG_CAPACITY_PROFILE_ID_OFFSET,
             generated::CONFIG_CLAIM_BASIS_ID_OFFSET,
+            generated::CONFIG_CAPABILITY_PROGRAM_ID_OFFSET,
             generated::CONFIG_SELECTION_POLICY_ID_OFFSET,
             generated::CONFIG_QUOTE_SURPLUS_BENEFICIARY_OFFSET,
         ] {

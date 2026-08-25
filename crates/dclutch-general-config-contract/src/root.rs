@@ -1,8 +1,10 @@
-//! Minimal persistent General root and activation planning.
+//! Minimal mutable General root-state tail and activation planning.
 //!
-//! The root retains one configuration fact: the content identity of the exact
-//! [`crate::GeneralConfigV2`] preimage.  Every hot caller must supply that
-//! preimage, hash it at the physical boundary, and call
+//! One Trading-owned account contains the immutable common capability-root
+//! header followed by this 128-byte tail. The tail retains one configuration
+//! fact: the content identity of the exact [`crate::GeneralConfigV2`] preimage.
+//! Every hot caller must supply that preimage, hash it at the physical
+//! boundary, and call
 //! [`GeneralRootV2::require_hot_context`] before using any configuration field.
 
 use dclutch_capability_contract::{
@@ -13,10 +15,8 @@ use dclutch_core_contract::{ContentId, MarketRoot, Phase};
 
 use crate::GeneralConfigV2;
 
-/// Exact canonical byte width of [`GeneralRootV2`].
+/// Exact canonical byte width of the mutable [`GeneralRootV2`] tail.
 pub const GENERAL_ROOT_BYTES_V2: usize = crate::generated::GENERAL_ROOT_BYTES_V2;
-/// PDA seed domain for one General root under the Registry-selected Trading program.
-pub const GENERAL_ROOT_PDA_DOMAIN_V2: &[u8] = b"dclutch:general-root:v2";
 /// Domain preimage for the General capability-kind identity.
 pub const GENERAL_CAPABILITY_KIND_PREIMAGE_V1: &[u8] = b"dclutch/general/capability-kind/v1";
 /// SHA-256 of [`GENERAL_CAPABILITY_KIND_PREIMAGE_V1`].
@@ -24,19 +24,12 @@ pub const GENERAL_CAPABILITY_KIND_ID_V1: [u8; 32] = [
     0xcb, 0x8b, 0xc8, 0x7d, 0xbb, 0xf9, 0xee, 0x58, 0xfc, 0xe8, 0x60, 0x01, 0xa1, 0xbb, 0x5d, 0x1f,
     0x2a, 0xf5, 0x7c, 0xec, 0x1d, 0xee, 0xff, 0x86, 0x66, 0x10, 0xca, 0x7f, 0xc4, 0x27, 0x4c, 0xb5,
 ];
-/// Domain preimage for the V2 General-root layout selected by the manifest.
-pub const GENERAL_CHILD_SCHEMA_PREIMAGE_V2: &[u8] = b"dclutch/general/child-schema/v2";
-/// SHA-256 of [`GENERAL_CHILD_SCHEMA_PREIMAGE_V2`].
-pub const GENERAL_CHILD_SCHEMA_ID_V2: [u8; 32] = [
-    0x32, 0x11, 0x52, 0x7b, 0x45, 0x96, 0x6c, 0xf8, 0x9e, 0x92, 0xe8, 0x8f, 0xff, 0xba, 0x85, 0xd2,
-    0x62, 0x1a, 0x35, 0x1f, 0xeb, 0xc4, 0xb1, 0x26, 0x6a, 0x50, 0xf2, 0x73, 0xc2, 0x7f, 0x3b, 0x76,
-];
-/// Domain preimage for the V2 General-root derivation selected by the manifest.
-pub const GENERAL_CHILD_DERIVATION_PREIMAGE_V2: &[u8] = b"dclutch/general/child-derivation/v2";
-/// SHA-256 of [`GENERAL_CHILD_DERIVATION_PREIMAGE_V2`].
-pub const GENERAL_CHILD_DERIVATION_ID_V2: [u8; 32] = [
-    0x0f, 0x1c, 0xf2, 0x7e, 0x84, 0xff, 0x04, 0x0d, 0x5a, 0xd6, 0x0b, 0x04, 0x14, 0xb4, 0xdf, 0x34,
-    0xae, 0xf6, 0xa7, 0xe1, 0x9a, 0xe7, 0x2d, 0x3f, 0x38, 0xe5, 0x5a, 0xd3, 0x7f, 0xaf, 0x1e, 0x14,
+/// Schema label for the descriptor-selected mutable General root-state tail.
+pub const GENERAL_ROOT_SCHEMA_PREIMAGE_V2: &[u8] = b"dclutch/schema/general-root-v2";
+/// SHA-256 of [`GENERAL_ROOT_SCHEMA_PREIMAGE_V2`].
+pub const GENERAL_ROOT_SCHEMA_ID_V2: [u8; 32] = [
+    0xb9, 0x45, 0x37, 0xe8, 0xb1, 0xb6, 0xbd, 0x12, 0x52, 0x90, 0x5a, 0xf7, 0xef, 0x7d, 0xa6, 0x04,
+    0x70, 0x81, 0xed, 0x19, 0xd3, 0xe2, 0xae, 0x8c, 0xef, 0x52, 0xe3, 0xe7, 0x60, 0xba, 0x74, 0x9d,
 ];
 
 /// Persistent General-root lifecycle.
@@ -93,7 +86,7 @@ pub enum RootError {
     CapabilityMissing,
     /// More than one exact General capability entry was present.
     CapabilityAmbiguous,
-    /// An exact entry selected another release, config, capacity, child schema, or derivation.
+    /// An exact entry selected another descriptor, config, capacity, or root-state schema.
     CapabilityMismatch,
     /// Market phase did not admit the entry's immutable activation policy.
     ActivationPhaseMismatch,
@@ -124,7 +117,7 @@ impl From<dclutch_capability_contract::Error> for RootError {
 /// Result alias for General-root operations.
 pub type RootResult<T> = core::result::Result<T, RootError>;
 
-/// Minimal canonical General root.
+/// Minimal mutable General state appended to the immutable Trading root header.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralRootV2 {
     lifecycle: GeneralLifecycleV2,
@@ -438,7 +431,7 @@ pub enum GeneralActivationDispositionV2 {
     Idempotent,
 }
 
-/// Atomic activation result for the future canonical Core activation CPI.
+/// Broad pure composition of Core preconditions and General-owned activation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralActivationV2 {
     disposition: GeneralActivationDispositionV2,
@@ -465,7 +458,7 @@ impl GeneralActivationV2 {
     pub const fn market_after(self) -> MarketRoot {
         self.market_after
     }
-    /// Exact funding poststate; only its owning Core boundary may store it.
+    /// Exact funding poststate; only the capability controller may store it.
     #[must_use]
     pub const fn funding_after(self) -> FundingStateV1 {
         self.funding_after
@@ -482,13 +475,118 @@ impl GeneralActivationV2 {
     }
 }
 
+/// General-owned result behind a Core-authenticated capability envelope.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralOwnedActivationV2 {
+    disposition: GeneralActivationDispositionV2,
+    root_state: GeneralRootV2,
+    funding_after: FundingStateV1,
+    creation: DustSafeRootCreationV2,
+}
+
+impl GeneralOwnedActivationV2 {
+    /// Whether the adapter creates accounts or proves the exact prior result.
+    #[must_use]
+    pub const fn disposition(self) -> GeneralActivationDispositionV2 {
+        self.disposition
+    }
+    /// Exact mutable General tail to persist or preserve.
+    #[must_use]
+    pub const fn root_state(self) -> GeneralRootV2 {
+        self.root_state
+    }
+    /// Exact shared capability-funding poststate owned by General.
+    #[must_use]
+    pub const fn funding_after(self) -> FundingStateV1 {
+        self.funding_after
+    }
+    /// Exact dust-safe physical split; all zeros on replay.
+    #[must_use]
+    pub const fn creation(self) -> DustSafeRootCreationV2 {
+        self.creation
+    }
+}
+
+/// Run General-owned activation after Core and the common Trading boundary
+/// authenticate the finalized manifest, descriptor, immutable composite-root
+/// header, and exact selected-entry request.
+///
+/// This function does not inspect a finalized-record wrapper or mutate Core
+/// state. It consumes the canonical manifest itself because that is the sole
+/// owner of the selected 528-byte funding quote. General alone advances and
+/// persists `funding` and the mutable tail in the same composite account; Core
+/// verifies the acknowledgement before incrementing its outstanding-capability
+/// count. `exact_root_rent_lamports` and `precreation_lamports` always refer to
+/// the complete common-header plus General-tail account.
+#[allow(clippy::too_many_arguments)]
+pub fn activate_general_owned_v2(
+    market_key: [u8; 32],
+    generation: u64,
+    manifest_id: ContentId,
+    manifest: CapabilityManifestV1<'_>,
+    entry_index: u16,
+    config_id: ContentId,
+    config: GeneralConfigV2,
+    funding: FundingStateV1,
+    custody: FundingCustodyObservationV1,
+    current_slot: u64,
+    exact_root_rent_lamports: u64,
+    precreation_lamports: u64,
+    existing_root_state: Option<GeneralRootV2>,
+) -> RootResult<GeneralOwnedActivationV2> {
+    if is_zero(&market_key) || exact_root_rent_lamports == 0 {
+        return Err(RootError::ZeroIdentity);
+    }
+    if config.generation() != generation || funding.entry_index() != entry_index {
+        return Err(RootError::CapabilityMismatch);
+    }
+    let entry = manifest.entry(entry_index)?;
+    if entry.kind_id().to_bytes() != GENERAL_CAPABILITY_KIND_ID_V1
+        || entry.release_id().to_bytes() != config.capability_program_id()
+        || entry.config_id() != config_id
+        || entry.capacity_profile_id().to_bytes() != config.capacity_profile_id()
+        || entry.child_schema_id().to_bytes() != GENERAL_ROOT_SCHEMA_ID_V2
+    {
+        return Err(RootError::CapabilityMismatch);
+    }
+    let expected_state = GeneralRootV2::active(market_key, config_id.to_bytes(), generation)?;
+    if let Some(present) = existing_root_state {
+        if present != expected_state || precreation_lamports != exact_root_rent_lamports {
+            return Err(RootError::ActivationReplayMismatch);
+        }
+        funding.validate_against(manifest_id, manifest, custody)?;
+        if funding.status() != FundingStatus::Active || funding.activation_slot() != current_slot {
+            return Err(RootError::ActivationReplayMismatch);
+        }
+        return Ok(GeneralOwnedActivationV2 {
+            disposition: GeneralActivationDispositionV2::Idempotent,
+            root_state: present,
+            funding_after: funding,
+            creation: DustSafeRootCreationV2::new(0, 0),
+        });
+    }
+    let mut funding_after = funding;
+    let debit = funding_after.activate(manifest_id, manifest, custody, current_slot)?;
+    if debit.rent_lamports() != exact_root_rent_lamports || debit.creation_lamports() != 0 {
+        return Err(RootError::ActivationFundingMismatch);
+    }
+    Ok(GeneralOwnedActivationV2 {
+        disposition: GeneralActivationDispositionV2::Create,
+        root_state: expected_state,
+        funding_after,
+        creation: DustSafeRootCreationV2::new(exact_root_rent_lamports, precreation_lamports),
+    })
+}
+
 /// Plan canonical Market→manifest→config General activation.
 ///
 /// The caller authenticates the Market PDA and Registry ownership, hashes the
 /// exact manifest and config accounts into the supplied content IDs, and
 /// reauthenticates this program as the Registry-selected Trading release.  A
-/// physical implementation must ask the canonical Core owner to store
-/// `market_after` and `funding_after`; General must never write those accounts.
+/// physical implementation asks Core to store `market_after`; the capability
+/// controller alone stores `funding_after` and must do so atomically with its
+/// child effects. This broader pure composition remains an executable model of
+/// Core's precondition, not a duplicate physical authority path.
 #[allow(clippy::too_many_arguments)]
 pub fn plan_general_activation_v2(
     market_key: [u8; 32],
@@ -516,11 +614,10 @@ pub fn plan_general_activation_v2(
     config
         .require_market_coordinates(identity.generation(), identity.claim_basis_id().to_bytes())?;
     let (entry_index, entry) = select_general_entry(manifest, config_id)?;
-    if entry.release_id().to_bytes() != crate::GENERAL_CAPABILITY_RELEASE_ID_V2
+    if entry.release_id().to_bytes() != config.capability_program_id()
         || entry.config_id() != config_id
         || entry.capacity_profile_id().to_bytes() != config.capacity_profile_id()
-        || entry.child_schema_id().to_bytes() != GENERAL_CHILD_SCHEMA_ID_V2
-        || entry.child_derivation_id().to_bytes() != GENERAL_CHILD_DERIVATION_ID_V2
+        || entry.child_schema_id().to_bytes() != GENERAL_ROOT_SCHEMA_ID_V2
     {
         return Err(RootError::CapabilityMismatch);
     }
@@ -662,11 +759,11 @@ mod tests {
         ContentId::new(id(low)).unwrap_or_else(|error| panic!("content fixture: {error:?}"))
     }
 
-    fn config() -> GeneralConfigV2 {
+    fn config_for_program(capability_program_id: [u8; 32]) -> GeneralConfigV2 {
         GeneralConfigV2::new(crate::GeneralConfigV2Input {
             capacity_profile_id: id(0x41),
             claim_basis_id: id(0x42),
-            capability_release_id: crate::GENERAL_CAPABILITY_RELEASE_ID_V2,
+            capability_program_id,
             generation: 7,
             price_scale: 100,
             collection_slots: 10,
@@ -680,6 +777,10 @@ mod tests {
             quote_surplus_beneficiary: id(0x43),
         })
         .unwrap_or_else(|error| panic!("config fixture: {error:?}"))
+    }
+
+    fn config() -> GeneralConfigV2 {
+        config_for_program(id(0x23))
     }
 
     fn quote(rent: u64, creation: u64) -> FundingQuoteV1 {
@@ -715,14 +816,13 @@ mod tests {
         CapabilityEntryV1::new(
             ContentId::new(GENERAL_CAPABILITY_KIND_ID_V1)
                 .unwrap_or_else(|error| panic!("kind fixture: {error:?}")),
-            ContentId::new(crate::GENERAL_CAPABILITY_RELEASE_ID_V2)
+            ContentId::new(config().capability_program_id())
                 .unwrap_or_else(|error| panic!("release fixture: {error:?}")),
             config_id,
             capacity_id,
-            ContentId::new(GENERAL_CHILD_SCHEMA_ID_V2)
+            ContentId::new(GENERAL_ROOT_SCHEMA_ID_V2)
                 .unwrap_or_else(|error| panic!("schema fixture: {error:?}")),
-            ContentId::new(GENERAL_CHILD_DERIVATION_ID_V2)
-                .unwrap_or_else(|error| panic!("derivation fixture: {error:?}")),
+            content(0x82),
             ActivationPolicy::RequiredAtFounding,
             0,
             0,
@@ -742,12 +842,8 @@ mod tests {
             GENERAL_CAPABILITY_KIND_ID_V1
         );
         assert_eq!(
-            Sha256::digest(GENERAL_CHILD_SCHEMA_PREIMAGE_V2).as_slice(),
-            GENERAL_CHILD_SCHEMA_ID_V2
-        );
-        assert_eq!(
-            Sha256::digest(GENERAL_CHILD_DERIVATION_PREIMAGE_V2).as_slice(),
-            GENERAL_CHILD_DERIVATION_ID_V2
+            Sha256::digest(GENERAL_ROOT_SCHEMA_PREIMAGE_V2).as_slice(),
+            GENERAL_ROOT_SCHEMA_ID_V2
         );
     }
 
@@ -856,6 +952,145 @@ mod tests {
             above.exact_rent_lamports() + above.unsolicited_surplus_lamports(),
             above.precreation_lamports()
         );
+    }
+
+    #[test]
+    fn core_signed_activation_advances_only_general_owned_root_and_funding() {
+        let config = config();
+        let config_id = content(0x51);
+        let manifest_id = content(0x52);
+        let entry = general_entry(config_id, content(0x41), quote(100, 0));
+        let mut manifest_storage = [0_u8; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
+        let manifest = CapabilityManifestV1::encode_into(&[entry], &mut manifest_storage)
+            .unwrap_or_else(|error| panic!("manifest fixture: {error:?}"));
+        let pending_custody = FundingCustodyObservationV1::native_only(120, 20)
+            .unwrap_or_else(|error| panic!("custody fixture: {error:?}"));
+        let funding = FundingStateV1::new(manifest_id, manifest, 0, pending_custody)
+            .unwrap_or_else(|error| panic!("funding fixture: {error:?}"));
+        let created = activate_general_owned_v2(
+            id(0x11),
+            7,
+            manifest_id,
+            manifest,
+            0,
+            config_id,
+            config,
+            funding,
+            pending_custody,
+            9,
+            100,
+            40,
+            None,
+        )
+        .unwrap_or_else(|error| panic!("General-owned activation: {error:?}"));
+        assert_eq!(
+            created.disposition(),
+            GeneralActivationDispositionV2::Create
+        );
+        assert_eq!(created.funding_after().status(), FundingStatus::Active);
+        assert_eq!(created.funding_after().activation_slot(), 9);
+        assert_eq!(created.creation().funding_top_up_lamports(), 60);
+        assert_eq!(created.creation().displaced_prepaid_lamports(), 40);
+
+        let active_custody = FundingCustodyObservationV1::native_only(20, 20)
+            .unwrap_or_else(|error| panic!("active custody fixture: {error:?}"));
+        let replay = activate_general_owned_v2(
+            id(0x11),
+            7,
+            manifest_id,
+            manifest,
+            0,
+            config_id,
+            config,
+            created.funding_after(),
+            active_custody,
+            9,
+            100,
+            100,
+            Some(created.root_state()),
+        )
+        .unwrap_or_else(|error| panic!("General-owned replay: {error:?}"));
+        assert_eq!(
+            replay.disposition(),
+            GeneralActivationDispositionV2::Idempotent
+        );
+        assert_eq!(replay.root_state(), created.root_state());
+        assert_eq!(replay.funding_after(), created.funding_after());
+        assert_eq!(replay.creation(), DustSafeRootCreationV2::new(0, 0));
+
+        let stale = activate_general_owned_v2(
+            id(0x11),
+            7,
+            manifest_id,
+            manifest,
+            0,
+            config_id,
+            config,
+            created.funding_after(),
+            active_custody,
+            10,
+            100,
+            100,
+            Some(created.root_state()),
+        );
+        assert_eq!(stale, Err(RootError::ActivationReplayMismatch));
+        let dusty_replay = activate_general_owned_v2(
+            id(0x11),
+            7,
+            manifest_id,
+            manifest,
+            0,
+            config_id,
+            config,
+            created.funding_after(),
+            active_custody,
+            9,
+            100,
+            101,
+            Some(created.root_state()),
+        );
+        assert_eq!(dusty_replay, Err(RootError::ActivationReplayMismatch));
+    }
+
+    #[test]
+    fn substituted_capability_program_identity_refuses_without_funding_mutation() {
+        let config = config();
+        let substituted_config = config_for_program(id(0x24));
+        let config_id = content(0x51);
+        let manifest_id = content(0x52);
+        let entry = general_entry(config_id, content(0x41), quote(100, 0));
+        let mut manifest_storage = [0_u8; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
+        let manifest = CapabilityManifestV1::encode_into(&[entry], &mut manifest_storage)
+            .unwrap_or_else(|error| panic!("manifest fixture: {error:?}"));
+        let custody = FundingCustodyObservationV1::native_only(120, 20)
+            .unwrap_or_else(|error| panic!("custody fixture: {error:?}"));
+        let funding = FundingStateV1::new(manifest_id, manifest, 0, custody)
+            .unwrap_or_else(|error| panic!("funding fixture: {error:?}"));
+        let funding_before = funding;
+
+        assert_ne!(
+            config.capability_program_id(),
+            substituted_config.capability_program_id()
+        );
+        assert_eq!(
+            activate_general_owned_v2(
+                id(0x11),
+                7,
+                manifest_id,
+                manifest,
+                0,
+                config_id,
+                substituted_config,
+                funding,
+                custody,
+                9,
+                100,
+                40,
+                None,
+            ),
+            Err(RootError::CapabilityMismatch)
+        );
+        assert_eq!(funding, funding_before);
     }
 
     #[test]
