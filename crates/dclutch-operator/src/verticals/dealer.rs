@@ -501,11 +501,7 @@ fn activate_width<const N: usize>(
     market: MarketFacts,
     rent: &solana_program::rent::Rent,
 ) -> Result<DealerActivateReport, VerticalError> {
-    if state.capability_manifest_finalization.schema_release_id
-        != CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1
-    {
-        return Err(VerticalError::FinalizationMismatch);
-    }
+    require_manifest_schema(state.capability_manifest_finalization.schema_release_id)?;
     foundation::authenticate_finalized_record(
         program_id,
         rent,
@@ -529,12 +525,12 @@ fn activate_width<const N: usize>(
     let selected = manifest
         .entry(funding.entry_index())
         .map_err(|_| VerticalError::ContentMismatch)?;
-    if selected.kind_id().to_bytes() != DEALER_CAPABILITY_KIND_ID_V1
-        || selected.release_id().to_bytes() != DEALER_CAPABILITY_RELEASE_ID_V1
-        || selected.config_id() != config_id
-    {
-        return Err(VerticalError::ContentMismatch);
-    }
+    require_dealer_selection(
+        selected.kind_id().to_bytes(),
+        selected.release_id().to_bytes(),
+        selected.config_id(),
+        config_id,
+    )?;
     let realm = authenticate_realm(
         program_id,
         &state.realm,
@@ -561,19 +557,17 @@ fn activate_width<const N: usize>(
         funding,
     )
     .map_err(|_| VerticalError::PdaMismatch)?;
-    if state.funding_state.key
-        != Pubkey::find_program_address(&funding_seeds.seed_components(), &program_id).0
-    {
-        return Err(VerticalError::PdaMismatch);
-    }
+    require_pda(
+        state.funding_state.key,
+        Pubkey::find_program_address(&funding_seeds.seed_components(), &program_id).0,
+    )?;
     let authority_seeds =
         CapabilityFundingAuthorityDerivationV1::new(state.funding_state.key.to_bytes())
             .map_err(|_| VerticalError::PdaMismatch)?;
-    if state.funding_authority.key
-        != Pubkey::find_program_address(&authority_seeds.seed_components(), &program_id).0
-    {
-        return Err(VerticalError::PdaMismatch);
-    }
+    require_pda(
+        state.funding_authority.key,
+        Pubkey::find_program_address(&authority_seeds.seed_components(), &program_id).0,
+    )?;
     require_vacant(&state.funding_authority)?;
     let vault_seeds =
         CapabilityFundingVaultDerivationV1::new(state.funding_authority.key.to_bytes(), binding)
@@ -597,6 +591,13 @@ fn activate_width<const N: usize>(
         .map_err(|_| VerticalError::InvalidState)?;
     let state_rent = rent.minimum_balance(FUNDING_STATE_BYTES);
     let token_rent = rent.minimum_balance(ACCOUNT_BYTES);
+    require_exact_funding_principal(
+        funding.remaining().native_lamports_total(),
+        funding.remaining().realm_collateral_total(),
+        state.funding_state.lamports,
+        state_rent,
+        funding_token.amount,
+    )?;
     let vault_observation = RealmCollateralVaultObservationV1::new(
         state.funding_collateral_vault.key.to_bytes(),
         state.funding_authority.key.to_bytes(),
@@ -2206,6 +2207,54 @@ fn amounts<const N: usize>(
         .map_err(|_| VerticalError::InvalidState)
 }
 
+fn require_manifest_schema(schema: [u8; 32]) -> Result<(), VerticalError> {
+    if schema == CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1 {
+        Ok(())
+    } else {
+        Err(VerticalError::FinalizationMismatch)
+    }
+}
+
+fn require_dealer_selection(
+    kind: [u8; 32],
+    release: [u8; 32],
+    selected_config: ContentId,
+    config: ContentId,
+) -> Result<(), VerticalError> {
+    if kind == DEALER_CAPABILITY_KIND_ID_V1
+        && release == DEALER_CAPABILITY_RELEASE_ID_V1
+        && selected_config == config
+    {
+        Ok(())
+    } else {
+        Err(VerticalError::ContentMismatch)
+    }
+}
+
+fn require_pda(actual: Pubkey, expected: Pubkey) -> Result<(), VerticalError> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(VerticalError::PdaMismatch)
+    }
+}
+
+fn require_exact_funding_principal(
+    native_principal: u64,
+    collateral_principal: u64,
+    state_lamports: u64,
+    state_rent: u64,
+    collateral_tokens: u64,
+) -> Result<(), VerticalError> {
+    if state_lamports.checked_sub(state_rent) != Some(native_principal)
+        || collateral_tokens != collateral_principal
+    {
+        Err(VerticalError::ContentMismatch)
+    } else {
+        Ok(())
+    }
+}
+
 fn require_vacant(account: &ObservedAccount) -> Result<(), VerticalError> {
     if account.owner == system_program::ID
         && !account.executable
@@ -2401,17 +2450,80 @@ mod tests {
     }
 
     #[test]
-    fn activation_remains_unavailable_without_shared_manifest_authority() {
+    fn activation_refuses_wrong_selected_kind_release_and_config() {
+        let config = id(40);
         assert_eq!(
-            build_dealer_activate_pool_v1(
-                Pubkey::new_from_array([90; 32]),
-                DealerActivateChoice {
-                    initial_lp_id: [1; 32],
-                    initial_claim_quantity: 1,
-                    initial_shares: 1,
-                },
+            require_dealer_selection(
+                DEALER_CAPABILITY_KIND_ID_V1,
+                DEALER_CAPABILITY_RELEASE_ID_V1,
+                config,
+                config,
             ),
-            Err(VerticalError::AbiUnavailable)
+            Ok(())
         );
+        assert_eq!(
+            require_dealer_selection([41; 32], DEALER_CAPABILITY_RELEASE_ID_V1, config, config,),
+            Err(VerticalError::ContentMismatch)
+        );
+        assert_eq!(
+            require_dealer_selection(DEALER_CAPABILITY_KIND_ID_V1, [42; 32], config, config,),
+            Err(VerticalError::ContentMismatch)
+        );
+        assert_eq!(
+            require_dealer_selection(
+                DEALER_CAPABILITY_KIND_ID_V1,
+                DEALER_CAPABILITY_RELEASE_ID_V1,
+                id(43),
+                config,
+            ),
+            Err(VerticalError::ContentMismatch)
+        );
+    }
+
+    #[test]
+    fn activation_refuses_wrong_manifest_schema_and_pda() {
+        assert_eq!(
+            require_manifest_schema(CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1),
+            Ok(())
+        );
+        assert_eq!(
+            require_manifest_schema([44; 32]),
+            Err(VerticalError::FinalizationMismatch)
+        );
+        let canonical = Pubkey::new_from_array([45; 32]);
+        assert_eq!(require_pda(canonical, canonical), Ok(()));
+        assert_eq!(
+            require_pda(canonical, Pubkey::new_from_array([46; 32])),
+            Err(VerticalError::PdaMismatch)
+        );
+    }
+
+    #[test]
+    fn activation_refuses_inexact_funding_dimensions() {
+        assert_eq!(
+            require_exact_funding_principal(600, 105_000, 1_600, 1_000, 105_000),
+            Ok(())
+        );
+        assert_eq!(
+            require_exact_funding_principal(600, 105_000, 1_599, 1_000, 105_000),
+            Err(VerticalError::ContentMismatch)
+        );
+        assert_eq!(
+            require_exact_funding_principal(600, 105_000, 1_600, 1_000, 104_999),
+            Err(VerticalError::ContentMismatch)
+        );
+    }
+
+    #[test]
+    fn activation_refuses_occupied_fresh_physical_state() {
+        let mut vacant = observed(
+            Pubkey::new_from_array([47; 32]),
+            system_program::ID,
+            0,
+            Vec::new(),
+        );
+        assert_eq!(require_vacant(&vacant), Ok(()));
+        vacant.lamports = 1;
+        assert_eq!(require_vacant(&vacant), Err(VerticalError::InvalidState));
     }
 }
