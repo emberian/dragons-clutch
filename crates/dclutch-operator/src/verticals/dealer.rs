@@ -1523,6 +1523,7 @@ fn authenticate_realm(
     Ok(RealmFacts { release })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn authenticate_pool_vault(
     program_id: Pubkey,
     account: &ObservedAccount,
