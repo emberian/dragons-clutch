@@ -531,10 +531,10 @@ fn build_activation_plan_boxed<'manifest, 'info, const N: usize>(
     {
         return Err(AdapterError::AccountIdentity.into());
     }
-    let contract_plan = activate_general_v1(
+    let contract_plan = activate_general_plan_boxed(
         frame,
         instruction,
-        market.root(),
+        market,
         config_id,
         config,
         market_identity_id,
@@ -544,8 +544,7 @@ fn build_activation_plan_boxed<'manifest, 'info, const N: usize>(
         capability_custody,
         GeneralActivationCapitalizationV1::new(root_rent, funding_rent),
         slot,
-    )
-    .map_err(|_| AdapterError::FoundingAuthentication)?;
+    )?;
     let capability_derivation = contract_plan.funding().capability_funding_derivation();
     let (expected_capability_funding, _) =
         Pubkey::find_program_address(&capability_derivation.seed_components(), program_id);
@@ -584,6 +583,41 @@ fn build_activation_plan_boxed<'manifest, 'info, const N: usize>(
         rent_credit,
         rent_credit_lamports: rent_credit_account.lamports(),
     }))
+}
+
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn activate_general_plan_boxed<'manifest, const N: usize>(
+    frame: GeneralAccountFrameV1<'_>,
+    instruction: ActivateGeneralV1,
+    market: &CategoricalMarketV1<N>,
+    config_id: dclutch_general_contract::ContentId,
+    config: GeneralConfigV1,
+    market_identity_id: dclutch_general_contract::ContentId,
+    manifest_id: dclutch_general_contract::ContentId,
+    manifest: CapabilityManifestV1<'manifest>,
+    capability_funding: FundingStateV1,
+    capability_custody: FundingCustodyObservationV1,
+    capitalization: GeneralActivationCapitalizationV1,
+    slot: u64,
+) -> Result<Box<dclutch_general_contract::GeneralActivationPlanV1<'manifest>>, ProgramError> {
+    Ok(Box::new(
+        activate_general_v1(
+            frame,
+            instruction,
+            market.root(),
+            config_id,
+            config,
+            market_identity_id,
+            manifest_id,
+            manifest,
+            capability_funding,
+            capability_custody,
+            capitalization,
+            slot,
+        )
+        .map_err(|_| AdapterError::FoundingAuthentication)?,
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
