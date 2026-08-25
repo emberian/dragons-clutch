@@ -7,14 +7,15 @@
 use alloc::{boxed::Box, vec::Vec};
 
 use dclutch_capability_contract::{
-    CapabilityFundingAuthorityDerivationV1, CapabilityFundingDerivationV1,
-    CapabilityFundingVaultDerivationV1, CapabilityManifestV1, FUNDING_STATE_BYTES,
-    FundingCustodyObservationV1, FundingStateV1, RealmCollateralCustodyV1,
+    CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingAuthorityDerivationV1,
+    CapabilityFundingDerivationV1, CapabilityFundingVaultDerivationV1, CapabilityManifestV1,
+    FUNDING_STATE_BYTES, FundingCustodyObservationV1, FundingStateV1, RealmCollateralCustodyV1,
     RealmCollateralVaultObservationV1,
 };
 use dclutch_core_contract::ContentId;
 use dclutch_dealer_contract::{
-    LiquidityAmounts, LpPosition, RentCreditTerms, TradeSide,
+    DEALER_CAPABILITY_KIND_ID_V1, DEALER_CAPABILITY_RELEASE_ID_V1, LiquidityAmounts, LpPosition,
+    RentCreditTerms, TradeSide,
     activation::{activate_pool_into, retire_pool_in_place},
     frame::{
         ConfigPdaSeedsV1, DealerAccountMetaV1, DealerCollateralCompartmentV1,
@@ -61,7 +62,6 @@ use crate::{
         recognized_program_loader, require_authority_policy, require_freeze_policy,
         select_adapter_release,
     },
-    records::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
 };
 
 const ACTION_OFFSET: usize = 10;
@@ -383,6 +383,11 @@ fn authenticate_activation_funding<const N: usize>(
     let selected = manifest
         .entry(funding.entry_index())
         .map_err(|_| AdapterError::PositionAuthentication)?;
+    if selected.kind_id().to_bytes() != DEALER_CAPABILITY_KIND_ID_V1
+        || selected.release_id().to_bytes() != DEALER_CAPABILITY_RELEASE_ID_V1
+    {
+        return Err(AdapterError::PositionAuthentication.into());
+    }
     let binding = selected
         .funding_quote()
         .realm_collateral()

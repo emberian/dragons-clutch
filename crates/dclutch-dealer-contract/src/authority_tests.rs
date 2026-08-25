@@ -11,7 +11,8 @@ use dclutch_capability_contract::{
 use dclutch_core_contract::{ContentId, MarketIdentity, MarketRoot, Phase};
 
 use crate::{
-    LiquidityAttachment, LiquidityConfigV1, RentCreditTerms,
+    DEALER_CAPABILITY_KIND_ID_V1, DEALER_CAPABILITY_RELEASE_ID_V1, LiquidityAttachment,
+    LiquidityConfigV1, RentCreditTerms,
     activation::{ActivationError, activate_pool_into},
     frame::{
         ConfigPdaSeedsV1, DEALER_CONFIG_SCHEMA_RELEASE_ID_V1, DEALER_LP_PDA_DOMAIN_V1,
@@ -365,8 +366,8 @@ fn activation_uses_shared_funding_authority_and_chain_derived_amounts() {
         RealmCollateralBindingV1::new(id(1), id(31), [32; 32], [33; 32], OWNER).expect("binding");
     let quote = FundingQuoteV1::new(amounts, Some(collateral_binding)).expect("quote");
     let entry = CapabilityEntryV1::new(
-        id(6),
-        id(21),
+        ContentId::new(DEALER_CAPABILITY_KIND_ID_V1).expect("Dealer kind"),
+        ContentId::new(DEALER_CAPABILITY_RELEASE_ID_V1).expect("Dealer release"),
         id(7),
         id(23),
         id(24),
@@ -408,8 +409,13 @@ fn activation_uses_shared_funding_authority_and_chain_derived_amounts() {
             .expect("funding custody");
     let funding = FundingStateV1::new(id(5), manifest, 0, funding_custody).expect("funding");
     let funding_state = [36; 32];
-    let attachment =
-        LiquidityAttachment::new(market_identity, id(21), id(7), OWNER).expect("attachment");
+    let attachment = LiquidityAttachment::new(
+        market_identity,
+        ContentId::new(DEALER_CAPABILITY_RELEASE_ID_V1).expect("Dealer release"),
+        id(7),
+        OWNER,
+    )
+    .expect("attachment");
     let request = ActivatePoolV1::new(9, 0, [44; 32], 1_000, 1_000).expect("open wire");
     let config = config::<2, 2>();
     let profile = LiquidityProfileV1::new(2, 2).expect("profile");
@@ -485,4 +491,54 @@ fn activation_uses_shared_funding_authority_and_chain_derived_amounts() {
         ),
         Err(ActivationError::AuthorityMismatch)
     );
+
+    let dealer_kind = ContentId::new(DEALER_CAPABILITY_KIND_ID_V1).expect("Dealer kind");
+    let dealer_release = ContentId::new(DEALER_CAPABILITY_RELEASE_ID_V1).expect("Dealer release");
+    for (kind, release) in [(id(6), dealer_release), (dealer_kind, id(21))] {
+        let hostile_entry = CapabilityEntryV1::new(
+            kind,
+            release,
+            id(7),
+            id(23),
+            id(24),
+            id(25),
+            ActivationPolicy::RequiredAtFounding,
+            0,
+            0,
+            [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+            quote,
+        )
+        .expect("hostile entry");
+        let mut hostile_storage = [0u8; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
+        let hostile_manifest =
+            CapabilityManifestV1::encode_into(&[hostile_entry], &mut hostile_storage)
+                .expect("hostile manifest");
+        let hostile_funding = FundingStateV1::new(id(5), hostile_manifest, 0, funding_custody)
+            .expect("hostile funding");
+        let mut hostile_pool = vec![0; profile.pool_len().expect("Pool width")];
+        assert_eq!(
+            activate_pool_into::<2>(
+                market,
+                MARKET_ADDRESS,
+                hostile_manifest,
+                hostile_funding,
+                funding_state,
+                funding_authority,
+                funding_custody,
+                attachment,
+                config_view,
+                profile,
+                &mut hostile_pool,
+                POOL_ADDRESS,
+                LP_ADDRESS,
+                OWNER,
+                rent(100),
+                rent(100),
+                RentCreditTerms::new(POOL_ADDRESS, 100).expect("Pool Position rent"),
+                request,
+                50,
+            ),
+            Err(ActivationError::AuthorityMismatch)
+        );
+    }
 }

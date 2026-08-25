@@ -52,6 +52,15 @@ pub const MAX_DEPENDENCIES_PER_CAPABILITY: usize = 16;
 pub const MANIFEST_MAGIC: [u8; 8] = *b"DCLTCAP1";
 /// Implemented manifest schema version.
 pub const MANIFEST_SCHEMA_VERSION: u16 = 1;
+/// Opaque schema/validator-release identity for canonical profile-1 manifests.
+///
+/// The SVM adapter and offchain operators share this semantic owner when they
+/// derive finalized raw-record addresses. It is not a deployed-program or ELF
+/// identity.
+pub const CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
+    0x6b, 0xce, 0xf7, 0xb2, 0x83, 0x67, 0xcb, 0x8d, 0x08, 0x97, 0x10, 0xba, 0x58, 0xe6, 0x84, 0x31,
+    0x2f, 0x43, 0x4c, 0x4b, 0xc4, 0x20, 0xee, 0xfd, 0x0f, 0x7a, 0x15, 0x0a, 0x90, 0x82, 0x88, 0xdf,
+];
 /// Implemented provisional artifact profile.
 pub const ARTIFACT_PROFILE_V1: u16 = 1;
 /// Canonical transient Market-opening readiness magic.

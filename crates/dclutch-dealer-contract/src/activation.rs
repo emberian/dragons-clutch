@@ -15,8 +15,8 @@ use dclutch_capability_contract::{
 use dclutch_core_contract::{MarketRoot, Phase};
 
 use crate::{
-    Error as DealerError, LiquidityAmounts, LiquidityAttachment, LpPosition, PoolRetirementReceipt,
-    RentCreditTerms,
+    DEALER_CAPABILITY_KIND_ID_V1, DEALER_CAPABILITY_RELEASE_ID_V1, Error as DealerError,
+    LiquidityAmounts, LiquidityAttachment, LpPosition, PoolRetirementReceipt, RentCreditTerms,
     frame::{FrameError, LpPositionPdaSeedsV1, PoolPdaSeedsV1, PoolPositionPdaSeedsV1},
     instruction::ActivatePoolV1,
     runtime::{
@@ -163,7 +163,9 @@ pub fn activate_pool_into<const N: usize>(
     let selected = manifest
         .entry(funding.entry_index())
         .map_err(ActivationError::Capability)?;
-    if selected.config_id() != config.content_id()
+    if selected.kind_id().to_bytes() != DEALER_CAPABILITY_KIND_ID_V1
+        || selected.release_id().to_bytes() != DEALER_CAPABILITY_RELEASE_ID_V1
+        || selected.config_id() != config.content_id()
         || selected.config_id() != attachment.liquidity_config_id()
         || selected.release_id() != attachment.capability_release_id()
     {
