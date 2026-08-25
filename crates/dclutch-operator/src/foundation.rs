@@ -24,11 +24,9 @@ use dclutch_market_contract::market::{
 };
 use dclutch_product_contract::{
     ContentId as ProductContentId, capacity::CapacityProfileV1, claim::CategoricalUnitV1,
-    product::InstanceV1,
+    product::InstanceV1, result_domain::FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1,
 };
-use dclutch_pyth_contract::{
-    funding::FUNDING_BYTES, resolution_material::CategoricalPythResolutionMaterialV1,
-};
+use dclutch_pyth_contract::funding::FUNDING_BYTES;
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_BYTES, REALM_PDA_DOMAIN, RealmV1,
     RealmV1Input,
@@ -36,10 +34,11 @@ use dclutch_realm_contract::{
 use dclutch_record_contract::{
     ContentDigest, RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1, SchemaReleaseId,
 };
+use dclutch_source_contract::{SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1, SourceMaterialViewV1};
 use dclutch_token_svm::{ACCOUNT_BYTES, CollateralAdapterReleaseV1, PRODUCTION_ADAPTER_RELEASES};
 use solana_program::{
     account_info::AccountInfo,
-    hash::hash,
+    hash::{hash, hashv},
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
     sysvar::{SysvarSerialize, rent::Rent},
@@ -47,6 +46,20 @@ use solana_program::{
 use solana_sdk_ids::{bpf_loader, bpf_loader_upgradeable, native_loader, system_program, sysvar};
 
 use crate::{Finality, MARKET_SEED, Observation, ObservedAccount, authenticate_rent_credit};
+
+mod creation;
+
+pub use creation::*;
+
+pub(crate) const REALM_SCHEMA_RELEASE_PREIMAGE_V1: &[u8] = b"dclutch/schema/realm-v1";
+pub(crate) const PRODUCT_INSTANCE_SCHEMA_RELEASE_PREIMAGE_V1: &[u8] =
+    b"dclutch/schema/product-instance-v1";
+pub(crate) const CATEGORICAL_CLAIM_SCHEMA_RELEASE_PREIMAGE_V1: &[u8] =
+    b"dclutch/schema/categorical-unit-claim-v1";
+pub(crate) const PRODUCT_CAPACITY_SCHEMA_RELEASE_PREIMAGE_V1: &[u8] =
+    b"dclutch/schema/product-capacity-profile-v1";
+pub(crate) const CAPABILITY_MANIFEST_SCHEMA_RELEASE_PREIMAGE_V1: &[u8] =
+    b"dclutch/schema/capability-manifest-profile-1-v1";
 
 /// Initial Market generation created by this foundation workflow.
 ///
@@ -163,7 +176,7 @@ pub struct FoundMarketState {
     pub capacity_profile: ObservedAccount,
     /// Canonical finalized-record proof for the CapacityProfile raw bytes.
     pub capacity_profile_finalization: FinalizedRecordProof,
-    /// Canonical Pyth resolution material record.
+    /// Canonical provider-neutral SourceMaterial record.
     pub resolution_material: ObservedAccount,
     /// Canonical finalized-record proof for the resolution-material raw bytes.
     pub resolution_material_finalization: FinalizedRecordProof,
@@ -317,7 +330,7 @@ pub enum FoundationError {
     InvalidMint,
     /// A present Mint or freeze authority lacked affirmative issuer-risk consent.
     IssuerAuthorityConsentRequired,
-    /// A Realm or immutable Product/Capability/Pyth record did not decode.
+    /// A Realm or immutable Product/Capability/Source record did not decode.
     InvalidRecord,
     /// Canonical decoded bytes differed from observed bytes.
     NonCanonicalRecord,
@@ -503,26 +516,41 @@ pub fn build_found_market_and_fund_v1(
         state.system_program.key,
         state.rent_sysvar.key,
     ])?;
-    for (record, proof) in [
-        (&state.realm, &state.realm_finalization),
+    for (record, proof, schema_release_id) in [
+        (
+            &state.realm,
+            &state.realm_finalization,
+            hash(REALM_SCHEMA_RELEASE_PREIMAGE_V1).to_bytes(),
+        ),
         (
             &state.product_instance,
             &state.product_instance_finalization,
+            hash(PRODUCT_INSTANCE_SCHEMA_RELEASE_PREIMAGE_V1).to_bytes(),
         ),
-        (&state.claim_basis, &state.claim_basis_finalization),
+        (
+            &state.claim_basis,
+            &state.claim_basis_finalization,
+            hash(CATEGORICAL_CLAIM_SCHEMA_RELEASE_PREIMAGE_V1).to_bytes(),
+        ),
         (
             &state.capacity_profile,
             &state.capacity_profile_finalization,
+            hash(PRODUCT_CAPACITY_SCHEMA_RELEASE_PREIMAGE_V1).to_bytes(),
         ),
         (
             &state.resolution_material,
             &state.resolution_material_finalization,
+            SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1,
         ),
         (
             &state.capability_manifest,
             &state.capability_manifest_finalization,
+            hash(CAPABILITY_MANIFEST_SCHEMA_RELEASE_PREIMAGE_V1).to_bytes(),
         ),
     ] {
+        if proof.schema_release_id != schema_release_id {
+            return Err(FoundationError::AddressMismatch);
+        }
         authenticate_finalized_record(program_id, &rent, record, proof)?;
     }
 
@@ -563,32 +591,50 @@ pub fn build_found_market_and_fund_v1(
     }
     let instance_id = hash(&state.product_instance.data).to_bytes();
 
-    let resolution_material =
-        CategoricalPythResolutionMaterialV1::decode(&state.resolution_material.data)
-            .map_err(|_| FoundationError::InvalidRecord)?;
-    require_canonical(
-        &state.resolution_material.data,
-        &resolution_material.to_bytes(),
-    )?;
-    let policy_id = hash(&resolution_material.policy().to_bytes()).to_bytes();
-    if hash(&resolution_material.feed_profile().to_bytes()).to_bytes()
-        != *resolution_material.policy().feed_profile_id()
+    let source_material = SourceMaterialViewV1::decode(&state.resolution_material.data)
+        .map_err(|_| FoundationError::InvalidRecord)?;
+    let material_instance_id = source_material
+        .product_instance_id()
+        .map_err(|_| FoundationError::InvalidRecord)?;
+    let policy = source_material
+        .policy()
+        .map_err(|_| FoundationError::InvalidRecord)?;
+    let result_domain = source_material
+        .result_domain()
+        .map_err(|_| FoundationError::InvalidRecord)?;
+    let result_domain_bytes = result_domain.to_bytes();
+    let result_domain_id = hashv(&[
+        FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1,
+        &[0],
+        result_domain_bytes.as_slice(),
+    ])
+    .to_bytes();
+    if material_instance_id.to_bytes() != instance_id
+        || policy.product_instance_id().to_bytes() != instance_id
+        || policy.result_domain_id().to_bytes() != result_domain_id
+        || instance.result_domain_id().to_bytes() != result_domain_id
+        || result_domain.outcome_count() != outcome_count
+        || instance.partition_cell_count() != u32::from(result_domain.outcome_count())
     {
         return Err(FoundationError::ContentLinkMismatch);
     }
+    let (_, provider_release) = source_material
+        .primary_provider_release()
+        .map_err(|_| FoundationError::InvalidRecord)?;
+    let material_id = hash(source_material.as_bytes()).to_bytes();
 
     let manifest = CapabilityManifestV1::decode(&state.capability_manifest.data)
         .map_err(|_| FoundationError::InvalidRecord)?;
     let manifest_id = hash(manifest.as_bytes()).to_bytes();
     let fund_rent = rent.minimum_balance(FUNDING_BYTES);
-    let policy_capability_id =
-        CapabilityContentId::new(policy_id).map_err(|_| FoundationError::ContentLinkMismatch)?;
+    let material_capability_id =
+        CapabilityContentId::new(material_id).map_err(|_| FoundationError::ContentLinkMismatch)?;
     let resolution_funding = manifest
-        .required_founding_entry_for_config(policy_capability_id)
+        .required_founding_entry_for_config(material_capability_id)
         .map_err(|_| FoundationError::InvalidFundingAuthority)?;
     let funding_entry = resolution_funding.entry();
-    if funding_entry.config_id() != policy_capability_id
-        || funding_entry.release_id().to_bytes() != *resolution_material.policy().release_id()
+    if funding_entry.config_id() != material_capability_id
+        || funding_entry.release_id().to_bytes() != provider_release.adapter_release_id().to_bytes()
     {
         return Err(FoundationError::ContentLinkMismatch);
     }
@@ -600,7 +646,7 @@ pub fn build_found_market_and_fund_v1(
         core_id(realm_id)?,
         core_id(instance_id)?,
         core_id(claim_id_bytes)?,
-        core_id(policy_id)?,
+        core_id(material_id)?,
         core_id(manifest_id)?,
         FOUNDATION_GENERATION,
     );
@@ -762,6 +808,13 @@ pub fn build_open_collateral_vault_v1(
         state.system_program.key,
         state.rent_sysvar.key,
     ])?;
+    if state.capability_manifest_finalization.schema_release_id
+        != hash(CAPABILITY_MANIFEST_SCHEMA_RELEASE_PREIMAGE_V1).to_bytes()
+        || state.realm_finalization.schema_release_id
+            != hash(REALM_SCHEMA_RELEASE_PREIMAGE_V1).to_bytes()
+    {
+        return Err(FoundationError::AddressMismatch);
+    }
     authenticate_finalized_record(
         program_id,
         &rent,

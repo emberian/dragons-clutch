@@ -4,20 +4,21 @@ use dclutch_capability_contract::{
     FundingCustodyObservationV1, FundingQuoteV1, MANIFEST_HEADER_BYTES, RealmCollateralBindingV1,
 };
 use dclutch_collateral_contract::{CreateRealmV1, FoundMarketAndFundV1};
-use dclutch_kernel::resolution::categorical_pyth_v1::{
-    CategoricalPythV1PolicyInput, MAX_PRICE_CELLS,
-};
 use dclutch_product_contract::{
     ContentId as ProductContentId,
     capacity::{CapacityEnvelope, CapacityProfileId, CapacityProfileV1Input},
     claim::CategoricalUnitV1Input,
     product::InstanceV1Input,
+    result_domain::FiniteResultDomainV1,
 };
-use dclutch_pyth_contract::{
-    feed_profile::PythFeedProfileV1, funding::construct_required_resolution_funding,
-    policy::CategoricalPythPolicyRecordV1,
-};
+use dclutch_pyth_contract::funding::construct_required_resolution_funding;
 use dclutch_rent_contract::{RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1};
+use dclutch_source_contract::{
+    CapacityEnvelope as SourceCapacityEnvelope, MAX_RECOVERY_ATTEMPTS,
+    PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1, ProviderReleaseV1, PythAdapterConfigV1,
+    ResolutionPolicyV1, RoundingBoundary, SourceAccessProfile, SourceCapacityProfileV1,
+    SourceMaterialV1, SourceSpecV1, StatisticKind, StatisticSpecV1, WindowKind, WindowSpecV1,
+};
 use solana_program::sysvar::SysvarSerialize;
 
 use super::*;
@@ -109,10 +110,9 @@ fn observed(
 
 fn finalized_record(
     program_id: Pubkey,
-    schema_byte: u8,
+    schema: [u8; 32],
     data: Vec<u8>,
 ) -> (ObservedAccount, FinalizedRecordProof) {
-    let schema = [schema_byte; 32];
     let digest = hash(&data).to_bytes();
     let (raw, _) = Pubkey::find_program_address(
         &[RAW_RECORD_PDA_SEED_V1, schema.as_slice(), digest.as_slice()],
@@ -133,6 +133,34 @@ fn finalized_record(
             staging_cursor: observed(cursor, system_program::ID, 0, Vec::new(), false),
         },
     )
+}
+
+fn replace_finalized_record(
+    program_id: Pubkey,
+    record: &mut ObservedAccount,
+    proof: &mut FinalizedRecordProof,
+    data: Vec<u8>,
+) {
+    let digest = hash(&data).to_bytes();
+    record.key = Pubkey::find_program_address(
+        &[
+            RAW_RECORD_PDA_SEED_V1,
+            proof.schema_release_id.as_slice(),
+            digest.as_slice(),
+        ],
+        &program_id,
+    )
+    .0;
+    proof.staging_cursor.key = Pubkey::find_program_address(
+        &[
+            STAGING_CURSOR_PDA_SEED_V1,
+            proof.schema_release_id.as_slice(),
+            digest.as_slice(),
+        ],
+        &program_id,
+    )
+    .0;
+    record.data = data;
 }
 
 fn rent_account() -> ObservedAccount {
@@ -238,33 +266,107 @@ fn capacity(max_partition_cells: u32) -> CapacityProfileV1 {
     .expect("capacity")
 }
 
-fn policy(outcome_count: u8, feed_profile_id: [u8; 32]) -> CategoricalPythPolicyRecordV1 {
-    let mut edges = [0u128; MAX_PRICE_CELLS];
-    for (index, edge) in edges
-        .iter_mut()
-        .take(usize::from(outcome_count.saturating_sub(2)))
-        .enumerate()
-    {
-        *edge = u128::try_from(index).expect("small index") + 1;
-    }
-    CategoricalPythPolicyRecordV1::new(CategoricalPythV1PolicyInput {
-        pyth_release_id: [11; 32],
-        feed_profile_id,
-        target_time: 1_800_000_010,
-        grace: 5,
-        window: 30,
-        max_crossing_lag: 10,
-        max_age: 10,
-        max_future_skew: 2,
-        confidence_multiplier: 1,
-        max_confidence_bps: 100,
-        max_normalized_confidence_atoms: 100,
-        normalized_decimals: 6,
-        price_cell_count: u16::from(outcome_count.saturating_sub(1)),
-        upper_edges: edges,
-        failure_outcome_index: u16::from(outcome_count.saturating_sub(1)),
-    })
-    .expect("policy")
+fn source_id(bytes: [u8; 32]) -> dclutch_source_contract::ContentId {
+    dclutch_source_contract::ContentId::new(bytes).expect("nonzero Source id")
+}
+
+fn source_material(
+    instance: InstanceV1,
+    instance_id: [u8; 32],
+    domain: FiniteResultDomainV1,
+) -> SourceMaterialV1 {
+    let capacity = SourceCapacityProfileV1::new(
+        SourceCapacityEnvelope::Measured,
+        1,
+        0,
+        source_id([37; 32]),
+        source_id([38; 32]),
+        512,
+        1,
+    )
+    .expect("source capacity");
+    let capacity_id = source_id(hash(&capacity.to_bytes()).to_bytes());
+    let provider = ProviderReleaseV1::new(
+        source_id([31; 32]),
+        source_id(PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1),
+        source_id([32; 32]),
+        source_id([33; 32]),
+        source_id([34; 32]),
+    );
+    let provider_id = source_id(hash(&provider.to_bytes()).to_bytes());
+    let adapter = PythAdapterConfigV1::new([35; 32], -8, 10_000).expect("Pyth config");
+    let adapter_id = source_id(hash(&adapter.to_bytes()).to_bytes());
+    let source = SourceSpecV1::new(
+        source_id(domain.coordinate_domain_id().to_bytes()),
+        source_id(domain.result_unit_id().to_bytes()),
+        provider_id,
+        SourceAccessProfile::PythTerminalOneTransaction,
+        adapter_id,
+        capacity_id,
+    );
+    let primary_source_id = source_id(hash(&source.to_bytes()).to_bytes());
+    let window = WindowSpecV1::new(
+        primary_source_id,
+        WindowKind::Terminal,
+        1_800_000_010,
+        1_800_000_010,
+        10,
+        2,
+        source_id([36; 32]),
+    )
+    .expect("terminal window");
+    let window_id = source_id(hash(&window.to_bytes()).to_bytes());
+    let statistic = StatisticSpecV1::new(
+        source_id(domain.result_unit_id().to_bytes()),
+        source_id(domain.result_unit_id().to_bytes()),
+        StatisticKind::TerminalSample,
+        RoundingBoundary::ExactRational,
+        1,
+        0,
+        capacity_id,
+        source_id([39; 32]),
+        capacity,
+    )
+    .expect("terminal statistic");
+    let statistic_id = source_id(hash(&statistic.to_bytes()).to_bytes());
+    let domain_bytes = domain.to_bytes();
+    let domain_id = source_id(
+        hashv(&[
+            FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1,
+            &[0],
+            domain_bytes.as_slice(),
+        ])
+        .to_bytes(),
+    );
+    let policy = ResolutionPolicyV1::new(
+        capacity_id,
+        source_id(instance_id),
+        primary_source_id,
+        window_id,
+        statistic_id,
+        domain_id,
+        None,
+    );
+    SourceMaterialV1::new(
+        policy,
+        capacity_id,
+        capacity,
+        primary_source_id,
+        source,
+        provider_id,
+        provider,
+        adapter,
+        window_id,
+        window,
+        statistic_id,
+        statistic,
+        source_id(instance_id),
+        instance,
+        domain,
+        None,
+        [None; MAX_RECOVERY_ATTEMPTS],
+    )
+    .expect("canonical Source material")
 }
 
 fn resolution_manifest(
@@ -306,7 +408,11 @@ impl FoundFixture {
         let token_program = Pubkey::new_from_array(dclutch_token_svm::LEGACY_TOKEN_PROGRAM_ID);
         let (realm, _) = expected_realm(program_id, mint, token_program);
         let realm_data = realm.to_bytes().to_vec();
-        let (realm, realm_finalization) = finalized_record(program_id, 1, realm_data.clone());
+        let (realm, realm_finalization) = finalized_record(
+            program_id,
+            hash(REALM_SCHEMA_RELEASE_PREIMAGE_V1).to_bytes(),
+            realm_data.clone(),
+        );
 
         let capacity = capacity(max_partition_cells);
         let capacity_data = capacity.to_bytes().to_vec();
@@ -322,44 +428,73 @@ impl FoundFixture {
         .expect("claim");
         let claim_data = claim.to_bytes().to_vec();
         let claim_id_bytes = hash(&claim_data).to_bytes();
+        let cuts = (0..outcome_count.saturating_sub(2))
+            .map(i128::from)
+            .collect::<Vec<_>>();
+        let result_domain =
+            FiniteResultDomainV1::new(product_id([41; 32]), product_id([42; 32]), 1, &cuts)
+                .expect("finite result domain");
+        let result_domain_bytes = result_domain.to_bytes();
+        let result_domain_id = product_id(
+            hashv(&[
+                FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1,
+                &[0],
+                result_domain_bytes.as_slice(),
+            ])
+            .to_bytes(),
+        );
         let instance = InstanceV1::new(InstanceV1Input {
             terms_id: product_id([3; 32]),
             occurrence_id: product_id([4; 32]),
             claim_basis_id: product_id(claim_id_bytes),
+            result_domain_id,
             capacity_profile_id: capacity_id,
             partition_cell_count: u32::from(outcome_count),
         })
         .expect("instance");
         let instance_data = instance.to_bytes().to_vec();
-        let (product_instance, product_instance_finalization) =
-            finalized_record(program_id, 2, instance_data.clone());
-        let (claim_basis, claim_basis_finalization) = finalized_record(program_id, 3, claim_data);
-        let (capacity_profile, capacity_profile_finalization) =
-            finalized_record(program_id, 4, capacity_data);
+        let (product_instance, product_instance_finalization) = finalized_record(
+            program_id,
+            hash(PRODUCT_INSTANCE_SCHEMA_RELEASE_PREIMAGE_V1).to_bytes(),
+            instance_data.clone(),
+        );
+        let (claim_basis, claim_basis_finalization) = finalized_record(
+            program_id,
+            hash(CATEGORICAL_CLAIM_SCHEMA_RELEASE_PREIMAGE_V1).to_bytes(),
+            claim_data,
+        );
+        let (capacity_profile, capacity_profile_finalization) = finalized_record(
+            program_id,
+            hash(PRODUCT_CAPACITY_SCHEMA_RELEASE_PREIMAGE_V1).to_bytes(),
+            capacity_data,
+        );
 
-        let feed_profile = PythFeedProfileV1::new([5; 32], [6; 32], [7; 32]).expect("feed profile");
-        let policy = policy(outcome_count, hash(&feed_profile.to_bytes()).to_bytes());
-        let material = CategoricalPythResolutionMaterialV1::new(policy, feed_profile)
-            .expect("resolution material");
+        let material = source_material(instance, hash(&instance_data).to_bytes(), result_domain);
         let material_data = material.to_bytes().to_vec();
-        let (resolution_material, resolution_material_finalization) =
-            finalized_record(program_id, 5, material_data);
-        let policy_id_bytes = hash(&policy.to_bytes()).to_bytes();
+        let (resolution_material, resolution_material_finalization) = finalized_record(
+            program_id,
+            SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1,
+            material_data,
+        );
+        let material_id_bytes = hash(&resolution_material.data).to_bytes();
         let fund_rent = Rent::default().minimum_balance(FUNDING_BYTES);
         let funding_quote = native_resolution_quote(fund_rent, 17, 23);
         let manifest_data = resolution_manifest(
-            *policy.release_id(),
-            policy_id_bytes,
+            PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1,
+            material_id_bytes,
             [23; 32],
             funding_quote,
         );
-        let (capability_manifest, capability_manifest_finalization) =
-            finalized_record(program_id, 6, manifest_data.clone());
+        let (capability_manifest, capability_manifest_finalization) = finalized_record(
+            program_id,
+            hash(CAPABILITY_MANIFEST_SCHEMA_RELEASE_PREIMAGE_V1).to_bytes(),
+            manifest_data.clone(),
+        );
         let identity = MarketIdentity::new(
             core_id(hash(&realm_data).to_bytes()).expect("realm ID"),
             core_id(hash(&instance_data).to_bytes()).expect("instance ID"),
             core_id(claim_id_bytes).expect("claim ID"),
-            core_id(policy_id_bytes).expect("policy ID"),
+            core_id(material_id_bytes).expect("SourceMaterial ID"),
             core_id(hash(&manifest_data).to_bytes()).expect("manifest ID"),
             FOUNDATION_GENERATION,
         );
@@ -371,7 +506,7 @@ impl FoundFixture {
             CapabilityContentId::new(hash(manifest.as_bytes()).to_bytes()).expect("manifest ID");
         let selected = manifest
             .required_founding_entry_for_config(
-                CapabilityContentId::new(policy_id_bytes).expect("policy"),
+                CapabilityContentId::new(material_id_bytes).expect("SourceMaterial"),
             )
             .expect("selected");
         let funding = construct_required_resolution_funding(
@@ -436,6 +571,272 @@ impl FoundFixture {
             identity,
         }
     }
+}
+
+fn creation_input(fixture: &FoundFixture) -> ReleaseBoundCreationInputV1 {
+    ReleaseBoundCreationInputV1 {
+        program_id: fixture.program_id,
+        sponsor: fixture.state.sponsor.key,
+        realm: RealmV1::decode(&fixture.state.realm.data).expect("Realm"),
+        product_capacity_profile: CapacityProfileV1::decode(&fixture.state.capacity_profile.data)
+            .expect("Product capacity"),
+        claim_basis: CategoricalUnitV1::decode(&fixture.state.claim_basis.data)
+            .expect("claim basis"),
+        product_instance: InstanceV1::decode(&fixture.state.product_instance.data)
+            .expect("Product Instance"),
+        source_material: SourceMaterialV1::decode(&fixture.state.resolution_material.data)
+            .expect("SourceMaterial"),
+        capability_manifest: fixture.state.capability_manifest.data.clone(),
+        rent: Rent::default(),
+        current_slot: observation().slot,
+    }
+}
+
+#[test]
+fn release_bound_creation_compiles_exact_found_admission_and_honest_gaps() {
+    let fixture = FoundFixture::new(4, 16);
+    let input = creation_input(&fixture);
+    let plan = compile_release_bound_creation_v1(&input).expect("creation plan");
+    let found = build_found_market_and_fund_v1(fixture.program_id, &fixture.state)
+        .expect("finalized Found plan");
+    assert_eq!(plan.identity, fixture.identity);
+    assert_eq!(plan.identity, found.identity);
+    assert_eq!(plan.market_address, found.market_address);
+    assert_eq!(plan.fund_address, found.fund_address);
+    assert_eq!(plan.rent_credit_address, fixture.state.rent_credit.key);
+    assert_eq!(plan.outcome_count, 4);
+    assert_eq!(plan.resolution_funding, found.resolution_funding);
+    assert_eq!(plan.debit, found.debit);
+    assert_eq!(plan.records.len(), 6);
+    for (obligation, observed, proof) in [
+        (
+            &plan.records[0],
+            &fixture.state.realm,
+            &fixture.state.realm_finalization,
+        ),
+        (
+            &plan.records[1],
+            &fixture.state.product_instance,
+            &fixture.state.product_instance_finalization,
+        ),
+        (
+            &plan.records[2],
+            &fixture.state.claim_basis,
+            &fixture.state.claim_basis_finalization,
+        ),
+        (
+            &plan.records[3],
+            &fixture.state.capacity_profile,
+            &fixture.state.capacity_profile_finalization,
+        ),
+        (
+            &plan.records[4],
+            &fixture.state.resolution_material,
+            &fixture.state.resolution_material_finalization,
+        ),
+        (
+            &plan.records[5],
+            &fixture.state.capability_manifest,
+            &fixture.state.capability_manifest_finalization,
+        ),
+    ] {
+        assert_eq!(obligation.content, observed.data);
+        assert_eq!(obligation.content_id, hash(&observed.data).to_bytes());
+        assert_eq!(obligation.raw_record, observed.key);
+        assert_eq!(obligation.schema_release_id, proof.schema_release_id);
+        assert_eq!(obligation.staging_cursor, proof.staging_cursor.key);
+    }
+    assert_eq!(
+        plan.direct_stages,
+        vec![
+            CreationStageReportV1 {
+                stage: CreationStageV1::CompileCanonicalArtifacts,
+                status: CreationStageStatusV1::Complete,
+            },
+            CreationStageReportV1 {
+                stage: CreationStageV1::CreateRealm,
+                status: CreationStageStatusV1::FinalizedObservationRequired,
+            },
+            CreationStageReportV1 {
+                stage: CreationStageV1::CreateRentCredit,
+                status: CreationStageStatusV1::FinalizedObservationRequired,
+            },
+            CreationStageReportV1 {
+                stage: CreationStageV1::PublishImmutableRecords,
+                status: CreationStageStatusV1::BuilderUnavailable(
+                    CreationBuilderGapV1::ImmutableRecordPublication,
+                ),
+            },
+            CreationStageReportV1 {
+                stage: CreationStageV1::FoundMarketAndFund,
+                status: CreationStageStatusV1::FinalizedObservationRequired,
+            },
+            CreationStageReportV1 {
+                stage: CreationStageV1::OpenCollateralVault,
+                status: CreationStageStatusV1::FinalizedObservationRequired,
+            },
+        ]
+    );
+    assert_eq!(
+        plan.series_stages,
+        vec![
+            CreationStageReportV1 {
+                stage: CreationStageV1::CompileCanonicalArtifacts,
+                status: CreationStageStatusV1::Complete,
+            },
+            CreationStageReportV1 {
+                stage: CreationStageV1::CreateRealm,
+                status: CreationStageStatusV1::FinalizedObservationRequired,
+            },
+            CreationStageReportV1 {
+                stage: CreationStageV1::CreateRentCredit,
+                status: CreationStageStatusV1::FinalizedObservationRequired,
+            },
+            CreationStageReportV1 {
+                stage: CreationStageV1::PublishImmutableRecords,
+                status: CreationStageStatusV1::BuilderUnavailable(
+                    CreationBuilderGapV1::ImmutableRecordPublication,
+                ),
+            },
+            CreationStageReportV1 {
+                stage: CreationStageV1::CreateSeries,
+                status: CreationStageStatusV1::BuilderUnavailable(
+                    CreationBuilderGapV1::SeriesCreate,
+                ),
+            },
+            CreationStageReportV1 {
+                stage: CreationStageV1::InstantiateSeriesOccurrence,
+                status: CreationStageStatusV1::BuilderUnavailable(
+                    CreationBuilderGapV1::SeriesSourceMaterialDerivation,
+                ),
+            },
+            CreationStageReportV1 {
+                stage: CreationStageV1::ConsumeSeriesTicketAndFound,
+                status: CreationStageStatusV1::BuilderUnavailable(
+                    CreationBuilderGapV1::SeriesConsumeAndFound,
+                ),
+            },
+            CreationStageReportV1 {
+                stage: CreationStageV1::OpenCollateralVault,
+                status: CreationStageStatusV1::FinalizedObservationRequired,
+            },
+        ]
+    );
+}
+
+#[test]
+fn terminal_pyth_user_inputs_compile_the_canonical_product_and_source_records() {
+    let fixture = FoundFixture::new(5, 16);
+    let expected = creation_input(&fixture);
+    let material = expected.source_material;
+    let (_, source_capacity_profile) = material.capacity_profile();
+    let (_, provider_release) = material.primary_provider_release();
+    let window = material.window();
+    let statistic = material.statistic();
+    let input = TerminalPythCreationInputV1 {
+        program_id: fixture.program_id,
+        sponsor: fixture.state.sponsor.key,
+        realm: expected.realm,
+        product_capacity_profile: expected.product_capacity_profile,
+        terms_id: expected.product_instance.terms_id(),
+        occurrence_id: expected.product_instance.occurrence_id(),
+        result_domain: material.result_domain(),
+        source_capacity_profile,
+        provider_release,
+        pyth_adapter_config: material.primary_adapter_config(),
+        target_unix_seconds: window.start_unix_seconds(),
+        max_age_seconds: window.max_age_seconds(),
+        max_future_skew_seconds: window.max_future_skew_seconds(),
+        schedule_id: window.schedule_id(),
+        evaluator_release_id: statistic.evaluator_release_id(),
+        capability_manifest: expected.capability_manifest,
+        rent: expected.rent,
+        current_slot: expected.current_slot,
+    };
+    let compiled = compile_terminal_pyth_creation_v1(&input).expect("terminal Pyth plan");
+    assert_eq!(compiled.claim_basis, expected.claim_basis);
+    assert_eq!(compiled.product_instance, expected.product_instance);
+    assert_eq!(compiled.source_material, material);
+    assert_eq!(compiled.found.identity, fixture.identity);
+    assert_eq!(
+        compiled.found.records[4].schema_release_id,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1
+    );
+
+    let mut unsupported_provider = input.clone();
+    unsupported_provider.provider_release = ProviderReleaseV1::new(
+        source_id([31; 32]),
+        source_id([94; 32]),
+        source_id([32; 32]),
+        source_id([33; 32]),
+        source_id([34; 32]),
+    );
+    assert_eq!(
+        compile_terminal_pyth_creation_v1(&unsupported_provider),
+        Err(FoundationError::ContentLinkMismatch)
+    );
+
+    let mut invalid_window = input;
+    invalid_window.max_age_seconds = 0;
+    assert_eq!(
+        compile_terminal_pyth_creation_v1(&invalid_window),
+        Err(FoundationError::InvalidRecord)
+    );
+}
+
+#[test]
+fn creation_preflight_refuses_product_source_and_manifest_substitution() {
+    let fixture = FoundFixture::new(3, 16);
+    let input = creation_input(&fixture);
+
+    let mut wrong_product = input.clone();
+    wrong_product.product_instance = InstanceV1::new(InstanceV1Input {
+        terms_id: input.product_instance.terms_id(),
+        occurrence_id: input.product_instance.occurrence_id(),
+        claim_basis_id: input.product_instance.claim_basis_id(),
+        result_domain_id: product_id([99; 32]),
+        capacity_profile_id: input.product_instance.capacity_profile_id(),
+        partition_cell_count: input.product_instance.partition_cell_count(),
+    })
+    .expect("structurally valid hostile Product");
+    assert_eq!(
+        compile_release_bound_creation_v1(&wrong_product),
+        Err(FoundationError::ContentLinkMismatch)
+    );
+
+    let mut wrong_source = input.clone();
+    let other_instance = InstanceV1::new(InstanceV1Input {
+        terms_id: input.product_instance.terms_id(),
+        occurrence_id: product_id([98; 32]),
+        claim_basis_id: input.product_instance.claim_basis_id(),
+        result_domain_id: input.product_instance.result_domain_id(),
+        capacity_profile_id: input.product_instance.capacity_profile_id(),
+        partition_cell_count: input.product_instance.partition_cell_count(),
+    })
+    .expect("other Product");
+    let domain = input.source_material.result_domain();
+    wrong_source.source_material = source_material(
+        other_instance,
+        hash(&other_instance.to_bytes()).to_bytes(),
+        domain,
+    );
+    assert_eq!(
+        compile_release_bound_creation_v1(&wrong_source),
+        Err(FoundationError::ContentLinkMismatch)
+    );
+
+    let mut wrong_manifest = input;
+    let fund_rent = wrong_manifest.rent.minimum_balance(FUNDING_BYTES);
+    wrong_manifest.capability_manifest = resolution_manifest(
+        PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1,
+        [97; 32],
+        [23; 32],
+        native_resolution_quote(fund_rent, 17, 23),
+    );
+    assert_eq!(
+        compile_release_bound_creation_v1(&wrong_manifest),
+        Err(FoundationError::InvalidFundingAuthority)
+    );
 }
 
 #[test]
@@ -587,10 +988,13 @@ fn found_market_rebuilds_identity_pdas_wire_privileges_and_debit() {
     );
     assert_eq!(
         report.resolution_funding.entry().release_id().to_bytes(),
-        *CategoricalPythResolutionMaterialV1::decode(&fixture.state.resolution_material.data)
+        SourceMaterialViewV1::decode(&fixture.state.resolution_material.data)
             .expect("material")
-            .policy()
-            .release_id()
+            .primary_provider_release()
+            .expect("primary provider")
+            .1
+            .adapter_release_id()
+            .to_bytes()
     );
     assert_eq!(
         report
@@ -633,53 +1037,81 @@ fn found_market_rebuilds_identity_pdas_wire_privileges_and_debit() {
 fn founding_funding_authority_refuses_wrong_quote_config_and_release() {
     let fixture = FoundFixture::new(2, 16);
     let material =
-        CategoricalPythResolutionMaterialV1::decode(&fixture.state.resolution_material.data)
-            .expect("material");
-    let release_id = *material.policy().release_id();
-    let config_id = hash(&material.policy().to_bytes()).to_bytes();
+        SourceMaterialViewV1::decode(&fixture.state.resolution_material.data).expect("material");
+    let release_id = material
+        .primary_provider_release()
+        .expect("provider")
+        .1
+        .adapter_release_id()
+        .to_bytes();
+    let config_id = hash(material.as_bytes()).to_bytes();
     let capability_capacity_id = [23; 32];
     let fund_rent = Rent::default().minimum_balance(FUNDING_BYTES);
 
     let mut wrong_rent = fixture.state.clone();
     let wrong_rent_quote =
         native_resolution_quote(fund_rent.checked_add(1).expect("small rent"), 17, 23);
-    wrong_rent.capability_manifest.data = resolution_manifest(
+    let wrong_rent_manifest = resolution_manifest(
         release_id,
         config_id,
         capability_capacity_id,
         wrong_rent_quote,
     );
+    replace_finalized_record(
+        fixture.program_id,
+        &mut wrong_rent.capability_manifest,
+        &mut wrong_rent.capability_manifest_finalization,
+        wrong_rent_manifest,
+    );
     let before = wrong_rent.clone();
     assert_eq!(
         build_found_market_and_fund_v1(fixture.program_id, &wrong_rent),
-        Err(FoundationError::AddressMismatch)
+        Err(FoundationError::InvalidFundingAuthority)
     );
     assert_eq!(wrong_rent, before);
 
     let exact_quote = native_resolution_quote(fund_rent, 17, 23);
     let mut wrong_config = fixture.state.clone();
-    wrong_config.capability_manifest.data =
+    let wrong_config_manifest =
         resolution_manifest(release_id, [71; 32], capability_capacity_id, exact_quote);
+    replace_finalized_record(
+        fixture.program_id,
+        &mut wrong_config.capability_manifest,
+        &mut wrong_config.capability_manifest_finalization,
+        wrong_config_manifest,
+    );
     assert_eq!(
         build_found_market_and_fund_v1(fixture.program_id, &wrong_config),
-        Err(FoundationError::AddressMismatch)
+        Err(FoundationError::InvalidFundingAuthority)
     );
 
     let mut wrong_release = fixture.state.clone();
-    wrong_release.capability_manifest.data =
+    let wrong_release_manifest =
         resolution_manifest([72; 32], config_id, capability_capacity_id, exact_quote);
+    replace_finalized_record(
+        fixture.program_id,
+        &mut wrong_release.capability_manifest,
+        &mut wrong_release.capability_manifest_finalization,
+        wrong_release_manifest,
+    );
     assert_eq!(
         build_found_market_and_fund_v1(fixture.program_id, &wrong_release),
-        Err(FoundationError::AddressMismatch)
+        Err(FoundationError::ContentLinkMismatch)
     );
 
     let zero_bounty = native_resolution_quote(fund_rent, 17, 0);
     let mut missing_bounty = fixture.state.clone();
-    missing_bounty.capability_manifest.data =
+    let missing_bounty_manifest =
         resolution_manifest(release_id, config_id, capability_capacity_id, zero_bounty);
+    replace_finalized_record(
+        fixture.program_id,
+        &mut missing_bounty.capability_manifest,
+        &mut missing_bounty.capability_manifest_finalization,
+        missing_bounty_manifest,
+    );
     assert_eq!(
         build_found_market_and_fund_v1(fixture.program_id, &missing_bounty),
-        Err(FoundationError::AddressMismatch)
+        Err(FoundationError::InvalidFundingAuthority)
     );
 }
 
@@ -708,15 +1140,71 @@ fn wrong_pda_owner_and_content_link_refuse_without_partial_plan() {
         terms_id: product_id([3; 32]),
         occurrence_id: instance.occurrence_id(),
         claim_basis_id: product_id([99; 32]),
+        result_domain_id: instance.result_domain_id(),
         capacity_profile_id: CapacityProfileId::new(product_id(
             hash(&wrong_link.capacity_profile.data).to_bytes(),
         )),
         partition_cell_count: 2,
     })
     .expect("hostile linked instance");
-    wrong_link.product_instance.data = replacement.to_bytes().to_vec();
+    replace_finalized_record(
+        fixture.program_id,
+        &mut wrong_link.product_instance,
+        &mut wrong_link.product_instance_finalization,
+        replacement.to_bytes().to_vec(),
+    );
     assert_eq!(
         build_found_market_and_fund_v1(fixture.program_id, &wrong_link),
+        Err(FoundationError::ContentLinkMismatch)
+    );
+}
+
+#[test]
+fn found_refuses_canonical_source_substitution_and_wrong_record_release() {
+    let fixture = FoundFixture::new(3, 16);
+    let instance = InstanceV1::decode(&fixture.state.product_instance.data).expect("instance");
+    let other_instance = InstanceV1::new(InstanceV1Input {
+        terms_id: instance.terms_id(),
+        occurrence_id: product_id([96; 32]),
+        claim_basis_id: instance.claim_basis_id(),
+        result_domain_id: instance.result_domain_id(),
+        capacity_profile_id: instance.capacity_profile_id(),
+        partition_cell_count: instance.partition_cell_count(),
+    })
+    .expect("other instance");
+    let domain = SourceMaterialV1::decode(&fixture.state.resolution_material.data)
+        .expect("material")
+        .result_domain();
+    let substituted = source_material(
+        other_instance,
+        hash(&other_instance.to_bytes()).to_bytes(),
+        domain,
+    );
+    let mut wrong_source = fixture.state.clone();
+    replace_finalized_record(
+        fixture.program_id,
+        &mut wrong_source.resolution_material,
+        &mut wrong_source.resolution_material_finalization,
+        substituted.to_bytes().to_vec(),
+    );
+    assert_eq!(
+        build_found_market_and_fund_v1(fixture.program_id, &wrong_source),
+        Err(FoundationError::ContentLinkMismatch)
+    );
+
+    let mut wrong_release = fixture.state.clone();
+    wrong_release
+        .product_instance_finalization
+        .schema_release_id = [95; 32];
+    let data = wrong_release.product_instance.data.clone();
+    replace_finalized_record(
+        fixture.program_id,
+        &mut wrong_release.product_instance,
+        &mut wrong_release.product_instance_finalization,
+        data,
+    );
+    assert_eq!(
+        build_found_market_and_fund_v1(fixture.program_id, &wrong_release),
         Err(FoundationError::AddressMismatch)
     );
 }
@@ -745,15 +1233,28 @@ fn unsupported_outcome_width_refuses_before_instruction_construction() {
         terms_id: product_id([3; 32]),
         occurrence_id: product_id([4; 32]),
         claim_basis_id: product_id(hash(&claim_data).to_bytes()),
+        result_domain_id: InstanceV1::decode(&fixture.state.product_instance.data)
+            .expect("instance")
+            .result_domain_id(),
         capacity_profile_id: capacity_id,
         partition_cell_count: 17,
     })
     .expect("17-cell Product remains valid outside categorical adapter profile");
-    fixture.state.claim_basis.data = claim_data;
-    fixture.state.product_instance.data = instance.to_bytes().to_vec();
+    replace_finalized_record(
+        fixture.program_id,
+        &mut fixture.state.claim_basis,
+        &mut fixture.state.claim_basis_finalization,
+        claim_data,
+    );
+    replace_finalized_record(
+        fixture.program_id,
+        &mut fixture.state.product_instance,
+        &mut fixture.state.product_instance_finalization,
+        instance.to_bytes().to_vec(),
+    );
     assert_eq!(
         build_found_market_and_fund_v1(fixture.program_id, &fixture.state),
-        Err(FoundationError::AddressMismatch)
+        Err(FoundationError::InvalidOutcomeCount)
     );
 }
 
