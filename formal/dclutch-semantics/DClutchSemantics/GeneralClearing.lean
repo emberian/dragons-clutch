@@ -22,6 +22,66 @@ and transaction rollback remain named adapter/runtime obligations.
 
 namespace DClutch.General
 
+/-! ## Named physical boundary and liftable bounds -/
+
+/-- Why a physical capacity bound exists. The semantic machine itself has no
+such ceiling. -/
+inductive BoundAuthority where
+  | mathematical
+  | chainDerived
+  | measuredProfile
+  | provisional
+  deriving DecidableEq, Repr
+
+/-- One independently liftable implementation bound. A provisional bound is
+invalid without an explicit lifting-plan identity. -/
+structure CapacityBound where
+  value : Nat
+  authority : BoundAuthority
+  profileId : Nat
+  liftingPlanId : Nat
+  deriving DecidableEq, Repr
+
+def CapacityBound.valid (bound : CapacityBound) : Bool :=
+  0 < bound.value && bound.profileId != 0 &&
+    match bound.authority with
+    | .provisional => bound.liftingPlanId != 0
+    | _ => true
+
+/-- Solana adapters select a profile of independent bounds; changing page or
+transaction capacity does not create another General semantic program. -/
+structure PhysicalProfile where
+  outcomeCount : CapacityBound
+  executionsPerPage : CapacityBound
+  pagesPerCandidate : CapacityBound
+  scalarLimit : CapacityBound
+  deriving DecidableEq, Repr
+
+def PhysicalProfile.valid (profile : PhysicalProfile) : Bool :=
+  profile.outcomeCount.valid && profile.executionsPerPage.valid &&
+    profile.pagesPerCandidate.valid && profile.scalarLimit.valid
+
+/-- Exact obligations discharged outside this pure model. Keeping the boundary
+as data prevents a Lean theorem from being misreported as a theorem about
+signatures, SHA-256, SBF, CPI, or the Solana bank. -/
+structure AdapterBoundary where
+  candidateContentAuthenticated : Bool
+  orderSignaturesAuthenticated : Bool
+  replayAvailabilityAuthenticated : Bool
+  accountOwnershipAuthenticated : Bool
+  fixedWidthArithmeticRefinesNat : Bool
+  cpiEffectsMatchPlan : Bool
+  transactionRollbackAtomic : Bool
+  deriving DecidableEq, Repr
+
+def AdapterBoundary.complete (boundary : AdapterBoundary) : Bool :=
+  boundary.candidateContentAuthenticated &&
+    boundary.orderSignaturesAuthenticated &&
+    boundary.replayAvailabilityAuthenticated &&
+    boundary.accountOwnershipAuthenticated &&
+    boundary.fixedWidthArithmeticRefinesNat &&
+    boundary.cpiEffectsMatchPlan && boundary.transactionRollbackAtomic
+
 def valueAt (values : List Nat) (index : Nat) : Nat :=
   values[index]?.getD 0
 

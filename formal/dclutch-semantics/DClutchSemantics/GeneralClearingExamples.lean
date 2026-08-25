@@ -9,6 +9,43 @@ data. They are proofs about the Lean model, not claims about the SBF adapter.
 
 namespace DClutch.General.Examples
 
+def localProfile : PhysicalProfile := {
+  outcomeCount := {
+    value := 16
+    authority := .measuredProfile
+    profileId := 1
+    liftingPlanId := 0
+  }
+  executionsPerPage := {
+    value := 32
+    authority := .chainDerived
+    profileId := 2
+    liftingPlanId := 0
+  }
+  pagesPerCandidate := {
+    value := 64
+    authority := .provisional
+    profileId := 3
+    liftingPlanId := 9001
+  }
+  scalarLimit := {
+    value := 18446744073709551615
+    authority := .mathematical
+    profileId := 4
+    liftingPlanId := 0
+  }
+}
+
+example : localProfile.valid = true := by native_decide
+
+example :
+    ({
+      value := 64
+      authority := .provisional
+      profileId := 3
+      liftingPlanId := 0
+    } : CapacityBound).valid = false := by native_decide
+
 def receiveOutcomeZero : Order := {
   orderId := 101
   ownerId := 11
