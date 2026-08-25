@@ -11,7 +11,8 @@
 //!   and Rent.
 //! - Instantiate: actor, root, recipe, aggregate, CapacityProfile, derived
 //!   occurrence, occurrence capitalization, escrow, ticket, then the five
-//!   finalization cursors in matching record order, System, and Rent.
+//!   existing finalization cursors, occurrence Source material and its cursor,
+//!   System, and Rent.
 //! - Consume: the exact Found18 frame first, with its sponsor role interpreted
 //!   only as the temporary permissionless payer, followed by root, recipe,
 //!   aggregate, derived occurrence, occurrence capitalization, ticket, and the
@@ -27,13 +28,15 @@ use dclutch_series_contract::{
     AccountMetaV1, CapitalizationAggregateV1, CloseExhaustedFrameV1, CloseExhaustedV1,
     ConsumeTicketV1, CreateSeriesFrameV1, CreateSeriesV1, DerivedOccurrenceV1, IdentityV1,
     InstantiateNextFrameV1, InstantiateNextV1, OCCURRENCE_TICKET_BYTES_V1,
-    OccurrenceCapitalizationV1, OccurrenceTicketV1, SERIES_ESCROW_BYTES_V1,
-    SERIES_ESCROW_PDA_DOMAIN_V1, SERIES_INSTRUCTION_MAGIC_V1, SERIES_OCCURRENCE_ARTIFACT_BYTES_V1,
-    SERIES_REPLAY_GUARD_BYTES_V1, SERIES_REPLAY_GUARD_PDA_DOMAIN_V1, SERIES_ROOT_BYTES_V1,
-    SERIES_ROOT_PDA_DOMAIN_V1, SERIES_TICKET_PDA_DOMAIN_V1, SeriesEscrowV1, SeriesRecipeV1,
-    SeriesReplayGuardV1, SeriesRootV1, VacantAccountFactsV1, plan_close_exhausted_v1,
+    OccurrenceCapitalizationV1, OccurrenceSourceMaterialV1, OccurrenceTicketV1,
+    SERIES_ESCROW_BYTES_V1, SERIES_ESCROW_PDA_DOMAIN_V1, SERIES_INSTRUCTION_MAGIC_V1,
+    SERIES_OCCURRENCE_ARTIFACT_BYTES_V1, SERIES_REPLAY_GUARD_BYTES_V1,
+    SERIES_REPLAY_GUARD_PDA_DOMAIN_V1, SERIES_ROOT_BYTES_V1, SERIES_ROOT_PDA_DOMAIN_V1,
+    SERIES_TICKET_PDA_DOMAIN_V1, SeriesEscrowV1, SeriesRecipeV1, SeriesReplayGuardV1, SeriesRootV1,
+    VacantAccountFactsV1, authenticate_occurrence_source_material_v1, plan_close_exhausted_v1,
     plan_consume_ticket_v1, plan_create_series_v1, plan_instantiate_next_v1,
 };
+use dclutch_source_contract::SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1;
 use solana_program::{
     account_info::AccountInfo,
     clock::Clock,
@@ -55,13 +58,13 @@ use crate::{
     records::{
         CAPACITY_PROFILE_SCHEMA_RELEASE_ID_V1, SERIES_AGGREGATE_SCHEMA_RELEASE_ID_V1,
         SERIES_CAPITALIZATION_SCHEMA_RELEASE_ID_V1, SERIES_DERIVED_SCHEMA_RELEASE_ID_V1,
-        SERIES_RECIPE_SCHEMA_RELEASE_ID_V1, authenticate_rent_credit, refund_authority,
+        SERIES_RECIPE_SCHEMA_RELEASE_ID_V2, authenticate_rent_credit, refund_authority,
         require_unchanged_rent_credit, with_authenticated_finalized_record_v1,
     },
 };
 
 const CREATE_ACCOUNTS_V1: usize = 13;
-const INSTANTIATE_ACCOUNTS_V1: usize = 16;
+const INSTANTIATE_ACCOUNTS_V1: usize = 18;
 const FOUND_ACCOUNTS_V1: usize = 18;
 const CONSUME_ACCOUNTS_V1: usize = 28;
 const CLOSE_ACCOUNTS_V1: usize = 6;
@@ -115,15 +118,18 @@ pub(crate) fn dispatch(
 
 /// Exact physical action-3 frame.
 ///
-/// Accounts 0..18 are passed unchanged to the Found semantic owner. The four
-/// Found/Series aliases are physical, not repeated: RentCredit=3,
-/// CapacityProfile=7, CapacityProfileCursor=13, System=16, Rent=17.
+/// Accounts 0..18 are passed unchanged to the Found semantic owner. Shared
+/// Found/Series roles are physical, not repeated: actor/sponsor=0,
+/// RentCredit=3, CapacityProfile=7, SourceMaterial=8,
+/// CapacityProfileCursor=13, SourceMaterialCursor=14, System=16, Rent=17.
 struct ConsumeFrame<'a, 'info> {
     found_accounts: &'a [AccountInfo<'info>],
     actor: &'a AccountInfo<'info>,
     rent_credit: &'a AccountInfo<'info>,
     capacity_profile: &'a AccountInfo<'info>,
     capacity_profile_cursor: &'a AccountInfo<'info>,
+    resolution_material: &'a AccountInfo<'info>,
+    resolution_material_cursor: &'a AccountInfo<'info>,
     rent_sysvar: &'a AccountInfo<'info>,
     root: &'a AccountInfo<'info>,
     recipe: &'a AccountInfo<'info>,
@@ -151,6 +157,8 @@ impl<'a, 'info> ConsumeFrame<'a, 'info> {
             rent_credit: account(accounts, 3)?,
             capacity_profile: account(accounts, 7)?,
             capacity_profile_cursor: account(accounts, 13)?,
+            resolution_material: account(accounts, 8)?,
+            resolution_material_cursor: account(accounts, 14)?,
             rent_sysvar: account(accounts, 17)?,
             root: account(accounts, 18)?,
             recipe: account(accounts, 19)?,
@@ -177,10 +185,12 @@ impl<'a, 'info> ConsumeFrame<'a, 'info> {
             frame.aggregate,
             frame.derived,
             frame.capitalization,
+            frame.resolution_material,
             frame.recipe_cursor,
             frame.aggregate_cursor,
             frame.derived_cursor,
             frame.capitalization_cursor,
+            frame.resolution_material_cursor,
         ] {
             require_readonly(immutable)?;
         }
@@ -261,6 +271,8 @@ struct InstantiateFrame<'a, 'info> {
     capacity_profile_cursor: &'a AccountInfo<'info>,
     derived_cursor: &'a AccountInfo<'info>,
     capitalization_cursor: &'a AccountInfo<'info>,
+    resolution_material: &'a AccountInfo<'info>,
+    resolution_material_cursor: &'a AccountInfo<'info>,
     system_program: &'a AccountInfo<'info>,
     rent_sysvar: &'a AccountInfo<'info>,
 }
@@ -285,8 +297,10 @@ impl<'a, 'info> InstantiateFrame<'a, 'info> {
             capacity_profile_cursor: account(accounts, 11)?,
             derived_cursor: account(accounts, 12)?,
             capitalization_cursor: account(accounts, 13)?,
-            system_program: account(accounts, 14)?,
-            rent_sysvar: account(accounts, 15)?,
+            resolution_material: account(accounts, 14)?,
+            resolution_material_cursor: account(accounts, 15)?,
+            system_program: account(accounts, 16)?,
+            rent_sysvar: account(accounts, 17)?,
         };
         InstantiateNextFrameV1::validate(&[
             meta(frame.actor),
@@ -294,6 +308,7 @@ impl<'a, 'info> InstantiateFrame<'a, 'info> {
             meta(frame.recipe),
             meta(frame.derived),
             meta(frame.capitalization),
+            meta(frame.resolution_material),
             meta(frame.escrow),
             meta(frame.ticket),
             meta(frame.system_program),
@@ -307,6 +322,7 @@ impl<'a, 'info> InstantiateFrame<'a, 'info> {
         require_readonly(frame.capacity_profile_cursor)?;
         require_readonly(frame.derived_cursor)?;
         require_readonly(frame.capitalization_cursor)?;
+        require_readonly(frame.resolution_material_cursor)?;
         require_distinct(accounts)?;
         Ok(frame)
     }
@@ -645,6 +661,14 @@ fn authenticate_instantiate(
         frame.rent_sysvar,
         capitalization_digest,
     )?;
+    let resolution_material_digest = record_digest(frame.resolution_material)?;
+    let source_material = authenticate_series_source_material(
+        program_id,
+        frame.resolution_material,
+        frame.resolution_material_cursor,
+        frame.rent_sysvar,
+        resolution_material_digest,
+    )?;
 
     let index = instruction.expected_index.to_le_bytes();
     let root_key = frame.root.key.to_bytes();
@@ -665,6 +689,7 @@ fn authenticate_instantiate(
         &aggregate,
         identity(derived_digest)?,
         &derived,
+        source_material,
         identity(capitalization_digest)?,
         &capitalization,
         instruction,
@@ -798,6 +823,14 @@ fn authenticate_consume(
         frame.rent_sysvar,
         capitalization_digest,
     )?;
+    let resolution_material_digest = record_digest(frame.resolution_material)?;
+    let source_material = authenticate_series_source_material(
+        program_id,
+        frame.resolution_material,
+        frame.resolution_material_cursor,
+        frame.rent_sysvar,
+        resolution_material_digest,
+    )?;
     let ticket = decode_program_record::<OCCURRENCE_TICKET_BYTES_V1, OccurrenceTicketV1>(
         program_id,
         frame.ticket,
@@ -822,6 +855,7 @@ fn authenticate_consume(
         &aggregate,
         identity(derived_digest)?,
         &derived,
+        source_material,
         identity(capitalization_digest)?,
         &capitalization,
         ticket,
@@ -1078,7 +1112,7 @@ fn authenticate_recipe<'info>(
         account,
         cursor,
         rent,
-        SERIES_RECIPE_SCHEMA_RELEASE_ID_V1,
+        SERIES_RECIPE_SCHEMA_RELEASE_ID_V2,
         digest,
         |record| {
             SeriesRecipeV1::decode(record.exact_content())
@@ -1154,6 +1188,27 @@ fn authenticate_derived<'info>(
         digest,
         |record| {
             DerivedOccurrenceV1::decode(record.exact_content())
+                .map_err(|_| AdapterError::SeriesAuthentication.into())
+        },
+    )
+}
+
+fn authenticate_series_source_material<'info>(
+    program_id: &Pubkey,
+    account: &AccountInfo<'info>,
+    cursor: &AccountInfo<'info>,
+    rent: &AccountInfo<'info>,
+    digest: [u8; 32],
+) -> Result<OccurrenceSourceMaterialV1, ProgramError> {
+    with_authenticated_finalized_record_v1(
+        program_id,
+        account,
+        cursor,
+        rent,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1,
+        digest,
+        |record| {
+            authenticate_occurrence_source_material_v1(identity(digest)?, record.exact_content())
                 .map_err(|_| AdapterError::SeriesAuthentication.into())
         },
     )
@@ -1605,8 +1660,8 @@ mod tests {
     #[test]
     fn series_record_release_ids_are_pinned_to_labels() {
         assert_eq!(
-            hash(b"dclutch/schema/series-recipe-v1").to_bytes(),
-            SERIES_RECIPE_SCHEMA_RELEASE_ID_V1
+            hash(b"dclutch/schema/series-recipe-v2").to_bytes(),
+            SERIES_RECIPE_SCHEMA_RELEASE_ID_V2
         );
         assert_eq!(
             hash(b"dclutch/schema/series-capitalization-aggregate-v1").to_bytes(),

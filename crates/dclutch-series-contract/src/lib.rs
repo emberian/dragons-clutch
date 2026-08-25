@@ -1816,6 +1816,8 @@ pub struct InstantiateNextFrameV1 {
     pub derived_occurrence: AccountMetaV1,
     /// Immutable exact capitalization item.
     pub occurrence_capitalization: AccountMetaV1,
+    /// Immutable occurrence-specific Source material.
+    pub source_material: AccountMetaV1,
     /// Writable Series escrow.
     pub series_escrow: AccountMetaV1,
     /// Vacant writable ticket PDA.
@@ -1828,13 +1830,14 @@ pub struct InstantiateNextFrameV1 {
 
 impl InstantiateNextFrameV1 {
     /// Validate exact role order, privileges, canonical programs, and non-aliasing.
-    pub fn validate(accounts: &[AccountMetaV1; 9]) -> Result<Self> {
+    pub fn validate(accounts: &[AccountMetaV1; 10]) -> Result<Self> {
         let [
             actor,
             root,
             recipe,
             derived,
             capitalization,
+            source_material,
             escrow,
             ticket,
             system,
@@ -1845,18 +1848,29 @@ impl InstantiateNextFrameV1 {
         require_privilege(recipe, false, false, false)?;
         require_privilege(derived, false, false, false)?;
         require_privilege(capitalization, false, false, false)?;
+        require_privilege(source_material, false, false, false)?;
         require_privilege(escrow, false, true, false)?;
         require_privilege(ticket, false, true, false)?;
         require_system(system)?;
         require_rent(rent)?;
         require_distinct(accounts)?;
-        require_nonzero_roles(&[actor, root, recipe, derived, capitalization, escrow, ticket])?;
+        require_nonzero_roles(&[
+            actor,
+            root,
+            recipe,
+            derived,
+            capitalization,
+            source_material,
+            escrow,
+            ticket,
+        ])?;
         Ok(Self {
             actor,
             series_root: root,
             recipe,
             derived_occurrence: derived,
             occurrence_capitalization: capitalization,
+            source_material,
             series_escrow: escrow,
             occurrence_ticket: ticket,
             system_program: system,

@@ -27,9 +27,10 @@ The recipe commits:
 
 Every content identity is nonzero. V1 admits exactly one pinned Product compiler
 and four pinned derivation release IDs: a fixed occurrence-artifact/Product
-derivation, a shared immutable source policy, a shared immutable capability
-manifest, and canonical Market-identity derivation. Any mixed or unknown
-release set refuses. The contract recomputes the complete
+derivation, the V2 Source-material template projection, a shared immutable
+capability manifest, and canonical Market-identity derivation. Any mixed or
+unknown release set refuses. The superseded static-policy release is not a
+compatibility path. The contract recomputes the complete
 `DerivedOccurrenceV1` and its content identity; caller-authored derived fields
 are never authority.
 
@@ -40,18 +41,47 @@ Product `OccurrenceV1` preimage and the Product contract's canonical 192-byte
 domain; Series has no parallel Product-instance layout. The Market release hashes
 the canonical 168-byte Market identity. The exact occurrence-capitalization
 record is separately hashed, so changing funding changes only the bound
-capitalization identity, not Product or Market identity. This V1 source release
-uses one immutable `source_schedule_id` as the shared source specification,
-window, statistic, and resolution-policy identity; capability similarly uses
-the immutable `capability_template_id` directly. A future per-occurrence source
-compiler is a new pinned release rather than caller discretion.
+capitalization identity, not Product or Market identity. The V2 source release
+uses `source_schedule_id` only as a reusable, domain-separated template
+projection. It commits every canonical Source-material byte except the exact
+occurrence-varying Product-instance coordinates and both copies of the recovery
+policy ID whose digest necessarily contains that Product coordinate. The
+normalized recovery policy itself remains committed, as do the exact capacity,
+source, provider, adapter configuration, window, statistic, result domain, and
+ordered recovery slots. The final Market `resolution_policy_id` is always the
+SHA-256 content ID of the complete occurrence-specific `SourceMaterialV1`
+bytes, never the template projection. Capability continues to use the immutable
+`capability_template_id` directly.
+
+The fixed-point-free construction order is exact:
+
+1. construct any fully valid Source material carrying the intended reusable
+   Source facts and compute its V2 template projection;
+2. place that final projection in the recipe, encode the recipe, and compute
+   the final recipe content ID;
+3. call `derive_occurrence_product_v1` for an index to obtain the Product-owned
+   occurrence and exact Product `InstanceV1`;
+4. construct and finalize the occurrence Source material against that exact
+   Product instance and compute its distinct full content ID;
+5. authenticate the material bytes with
+   `authenticate_occurrence_source_material_v1`, then derive and finalize the
+   occurrence record and its Market identity.
+
+Changing only the template material's Product coordinates cannot change the
+schedule projection. Submitting such a material for another occurrence still
+refuses because the occurrence transition requires equality with the exact
+Product instance derived from the final recipe ID. There is no provisional
+digest, caller-authored fact bundle, or second Product authority.
 
 Before accepting Create, and again before instantiation, the SBF release
 authenticates the recipe-selected CapacityProfile and proves that the fixed
 104-byte, one-page occurrence artifact and categorical outcome width fit it.
 Create therefore cannot strand prepaid principal behind an intrinsically
 inadmissible recipe. The fixed Product compiler release ID is checked by the
-pure recipe decoder rather than carried as an unused advisory field.
+pure recipe decoder rather than carried as an unused advisory field. The
+recipe itself is admitted only under `dclutch/schema/series-recipe-v2`; the old
+recipe schema release is refused so `source_schedule_id` is never reinterpreted
+under its former cyclic semantics.
 
 The root persists the immutable refund authority as the one semantic owner of
 the beneficiary choice. The Rent contract's one-credit-per-authority PDA rule
@@ -100,7 +130,12 @@ root's next index and scheduled time, and the authenticated chain clock must
 have reached that time. The authenticated derivation record must
 bind the same recipe, index, time, generation, occurrence, source, resolution,
 capability-manifest, Market-identity, and capitalization identities. The
-capitalization item must bind the same recipe, schedule, and index.
+capitalization item must bind the same recipe, schedule, and index. The adapter
+also authenticates the final occurrence SourceMaterial record and staging
+cursor, recomputes its full digest and reusable projection, and proves its
+embedded Product instance and Product-owned result domain equal the exact
+recipe derivation. The action-2 physical frame has 18 accounts; SourceMaterial
+and its cursor are roles 14 and 15, immediately before System and Rent.
 
 Success atomically:
 
@@ -119,14 +154,15 @@ The last item moves the root to `Exhausted`. A stale request, skipped index,
 wrong time, wrong derivation, wrong capitalization, underfunded escrow, or
 arithmetic failure leaves root state unchanged.
 
-The ticket is intentionally a compact one-use semantic bridge. A future Found
-adapter must authenticate the same immutable recipe, derivation, and
-capitalization records; derive and Found the exact committed Market; distribute
+The ticket is intentionally a compact one-use semantic bridge. The current
+Found composition authenticates the same immutable recipe, derivation,
+capitalization, and occurrence SourceMaterial records; derives and Founds the
+exact committed Market; distributes
 exactly the ticket's Market principal; credit the ticket's rent plus unsolicited
 lamport donations to the immutable beneficiary's permanent RentCredit; and
-decrement the Series ticket count atomically. Until the complete physical frame
-is measured, this crate makes no claim that those actions fit one Solana
-transaction.
+decrements the Series ticket count atomically. Action 3 retains its 28-account
+frame and reuses the Found material/raw-record cursor roles at indices 8 and 14
+rather than adding parallel Series accounts.
 
 `FoundCompositionObligationsV1` is the exact transient output of successful
 ticket validation. It carries Realm, Terms, ClaimBasis, CapacityProfile,

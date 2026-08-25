@@ -1517,14 +1517,15 @@ fn exact_frames_reject_aliasing_and_privilege_escalation() {
         meta([3; 32], false, false, false),
         meta([4; 32], false, false, false),
         meta([5; 32], false, false, false),
-        meta([6; 32], false, true, false),
+        meta([6; 32], false, false, false),
         meta([7; 32], false, true, false),
+        meta([8; 32], false, true, false),
         meta(SYSTEM_PROGRAM_ID, false, false, true),
         meta(RENT_SYSVAR_ID, false, false, false),
     ];
     assert!(InstantiateNextFrameV1::validate(&accounts).is_ok());
     let mut aliased = accounts;
-    aliased.get_mut(6).expect("fixed role").key = [6; 32];
+    aliased.get_mut(7).expect("fixed role").key = [7; 32];
     assert_eq!(
         InstantiateNextFrameV1::validate(&aliased),
         Err(Error::AccountAlias)

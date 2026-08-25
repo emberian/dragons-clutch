@@ -104,9 +104,9 @@ pub(crate) const CAPACITY_PROFILE_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
     0xed, 0x25, 0x2a, 0x2a, 0xc5, 0x55, 0xf0, 0xe3, 0x4f, 0xfc, 0x23, 0xac, 0x91, 0xd8, 0x6c, 0x61,
     0xbe, 0x6d, 0xd9, 0x81, 0x24, 0x47, 0x57, 0x49, 0x94, 0x69, 0xbb, 0x99, 0xba, 0x55, 0x36, 0x50,
 ];
-pub(crate) const SERIES_RECIPE_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
-    0x25, 0xd2, 0x2f, 0x56, 0x52, 0x55, 0x02, 0x03, 0x77, 0x15, 0xb0, 0x74, 0xfe, 0xd8, 0xcf, 0x37,
-    0x31, 0x8c, 0xdc, 0x40, 0x75, 0xfa, 0xb0, 0x86, 0x8a, 0x1e, 0x2f, 0x11, 0x85, 0x91, 0x97, 0xf6,
+pub(crate) const SERIES_RECIPE_SCHEMA_RELEASE_ID_V2: [u8; 32] = [
+    0xff, 0xb3, 0x98, 0x35, 0xbf, 0x80, 0xbd, 0x3c, 0x21, 0x6f, 0xd9, 0x07, 0xa8, 0x0b, 0xc5, 0x88,
+    0xab, 0x57, 0x82, 0x48, 0xe8, 0xea, 0x67, 0x46, 0x7d, 0x75, 0xce, 0x1a, 0xe7, 0xdc, 0x4c, 0x3c,
 ];
 pub(crate) const SERIES_AGGREGATE_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
     0x36, 0xdc, 0xc9, 0xd8, 0x3c, 0x7a, 0x89, 0xeb, 0xb2, 0x4f, 0xd2, 0x44, 0x79, 0x23, 0xca, 0x68,
@@ -157,8 +157,8 @@ const RELEASE_LABELS_AND_IDS_V1: [(&[u8], [u8; 32]); 15] = [
         SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1,
     ),
     (
-        b"dclutch/schema/series-recipe-v1",
-        SERIES_RECIPE_SCHEMA_RELEASE_ID_V1,
+        b"dclutch/schema/series-recipe-v2",
+        SERIES_RECIPE_SCHEMA_RELEASE_ID_V2,
     ),
     (
         b"dclutch/schema/series-capitalization-aggregate-v1",
@@ -981,7 +981,7 @@ fn validate_found_schema(schema_release_id: SchemaReleaseId, content: &[u8]) -> 
         return SourceMaterialViewV1::decode(content).is_ok()
             && validate_source_material_links(content);
     }
-    if schema == SERIES_RECIPE_SCHEMA_RELEASE_ID_V1 {
+    if schema == SERIES_RECIPE_SCHEMA_RELEASE_ID_V2 {
         return SeriesRecipeV1::decode(content)
             .map(|value| value.to_bytes().as_slice() == content)
             .unwrap_or(false);
@@ -1116,7 +1116,7 @@ fn is_supported_found_schema_release(schema_release_id: SchemaReleaseId) -> bool
             | CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1
             | VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3
             | SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1
-            | SERIES_RECIPE_SCHEMA_RELEASE_ID_V1
+            | SERIES_RECIPE_SCHEMA_RELEASE_ID_V2
             | SERIES_AGGREGATE_SCHEMA_RELEASE_ID_V1
             | SERIES_DERIVED_SCHEMA_RELEASE_ID_V1
             | SERIES_CAPITALIZATION_SCHEMA_RELEASE_ID_V1
@@ -1142,7 +1142,7 @@ fn is_admissible_found_schema_length(
         }
         VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3 => length == VENUE_FEE_POLICY_BYTES_V3,
         SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1 => length == SOURCE_MATERIAL_BYTES,
-        SERIES_RECIPE_SCHEMA_RELEASE_ID_V1 => length == SERIES_RECIPE_BYTES_V1,
+        SERIES_RECIPE_SCHEMA_RELEASE_ID_V2 => length == SERIES_RECIPE_BYTES_V1,
         SERIES_AGGREGATE_SCHEMA_RELEASE_ID_V1 => length == CAPITALIZATION_AGGREGATE_BYTES_V1,
         SERIES_DERIVED_SCHEMA_RELEASE_ID_V1 => length == DERIVED_OCCURRENCE_BYTES_V1,
         SERIES_CAPITALIZATION_SCHEMA_RELEASE_ID_V1 => length == OCCURRENCE_CAPITALIZATION_BYTES_V1,
@@ -1812,7 +1812,7 @@ mod tests {
                 VENUE_FEE_POLICY_BYTES_V3,
             ),
             (SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1, SOURCE_MATERIAL_BYTES),
-            (SERIES_RECIPE_SCHEMA_RELEASE_ID_V1, SERIES_RECIPE_BYTES_V1),
+            (SERIES_RECIPE_SCHEMA_RELEASE_ID_V2, SERIES_RECIPE_BYTES_V1),
             (
                 SERIES_AGGREGATE_SCHEMA_RELEASE_ID_V1,
                 CAPITALIZATION_AGGREGATE_BYTES_V1,
@@ -1839,6 +1839,14 @@ mod tests {
                 u64::try_from(exact_length.saturating_add(1)).expect("bounded length"),
             ));
         }
+        let obsolete_series_recipe =
+            SchemaReleaseId::new(hash(b"dclutch/schema/series-recipe-v1").to_bytes())
+                .expect("obsolete Series recipe schema");
+        assert!(!is_supported_found_schema_release(obsolete_series_recipe));
+        assert!(!is_admissible_found_schema_length(
+            obsolete_series_recipe,
+            u64::try_from(SERIES_RECIPE_BYTES_V1).expect("bounded recipe length"),
+        ));
         let manifest = SchemaReleaseId::new(CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1)
             .expect("manifest schema");
         assert!(is_admissible_found_schema_length(
@@ -2024,7 +2032,7 @@ mod tests {
         };
         for (schema, bytes) in [
             (
-                SERIES_RECIPE_SCHEMA_RELEASE_ID_V1,
+                SERIES_RECIPE_SCHEMA_RELEASE_ID_V2,
                 recipe.to_bytes().to_vec(),
             ),
             (
