@@ -10,6 +10,9 @@
 
 use core::convert::TryInto;
 
+/// Content-bound Product admission and pure Claims transition candidates.
+pub mod product_claims;
+
 #[rustfmt::skip]
 #[allow(missing_docs)]
 mod generated;
