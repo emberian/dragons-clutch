@@ -42,8 +42,12 @@ It refuses to equate a prefix hash, a nonzero padded payload, or a merely
 ELF-shaped file with the checked artifact.
 
 The ELF validator requires ELF64, little-endian, current ELF version, shared
-object type, and the BPF/SBF machine identifier. This is format evidence, not a
-proof of compiler correctness or runtime behavior.
+object type, and one of the two machine identifiers accepted by Solana's sBPF
+loader: legacy `EM_BPF = 247` or registered `EM_SBF = 263`. Current
+platform-tools emit `EM_SBF`; accepting only the legacy identifier would make
+the release gate reject the artifact that the current runtime actually loads.
+This is format evidence, not a proof of compiler correctness or runtime
+behavior.
 
 Metadata must state that both accounts were owned by the named loader, that the
 Program account was executable, and that ProgramData was not executable. Those

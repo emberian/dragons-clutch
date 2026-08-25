@@ -54,13 +54,17 @@ impl Fixture {
 }
 
 fn sbf_elf() -> Result<Vec<u8>> {
+    sbf_elf_for_machine(ELF_MACHINE_SBF)
+}
+
+fn sbf_elf_for_machine(machine: u16) -> Result<Vec<u8>> {
     let mut elf = vec![0_u8; ELF_HEADER_BYTES];
     put(&mut elf, 0, &[0x7f, b'E', b'L', b'F'])?;
     put(&mut elf, 4, &[ELF_CLASS_64])?;
     put(&mut elf, 5, &[ELF_DATA_LITTLE_ENDIAN])?;
     put(&mut elf, 6, &[ELF_CURRENT_VERSION])?;
     put(&mut elf, 16, &ELF_TYPE_SHARED_OBJECT.to_le_bytes())?;
-    put(&mut elf, 18, &ELF_MACHINE_BPF.to_le_bytes())?;
+    put(&mut elf, 18, &machine.to_le_bytes())?;
     put(&mut elf, 20, &u32::from(ELF_CURRENT_VERSION).to_le_bytes())?;
     put(&mut elf, 52, &64_u16.to_le_bytes())?;
     Ok(elf)
@@ -314,6 +318,14 @@ fn loader_link_exact_elf_and_zero_padding_are_all_required() -> Result<()> {
 
 #[test]
 fn sbf_header_and_pyth_semantic_owner_are_not_bypassed() -> Result<()> {
+    assert_eq!(validate_sbf_elf(&[]), Err(Error::InvalidSbfElf));
+    assert_eq!(validate_sbf_elf(&sbf_elf_for_machine(ELF_MACHINE_BPF)?), Ok(()));
+    assert_eq!(validate_sbf_elf(&sbf_elf_for_machine(ELF_MACHINE_SBF)?), Ok(()));
+    assert_eq!(
+        validate_sbf_elf(&sbf_elf_for_machine(ELF_MACHINE_SBF - 1)?),
+        Err(Error::InvalidSbfElf)
+    );
+
     for offset in [0, 4, 5, 6, 16, 18, 20, 52] {
         let mut hostile = Fixture::capability()?;
         *hostile.elf.get_mut(offset).ok_or(Error::InvalidLength)? ^= 1;

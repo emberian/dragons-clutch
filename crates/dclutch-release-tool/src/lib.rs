@@ -64,7 +64,10 @@ const ELF_CLASS_64: u8 = 2;
 const ELF_DATA_LITTLE_ENDIAN: u8 = 1;
 const ELF_CURRENT_VERSION: u8 = 1;
 const ELF_TYPE_SHARED_OBJECT: u16 = 3;
+/// Legacy eBPF envelope still admitted by the Solana sBPF loader.
 const ELF_MACHINE_BPF: u16 = 247;
+/// Registered Solana Binary Format envelope emitted by current platform-tools.
+const ELF_MACHINE_SBF: u16 = 263;
 
 /// Refusal from canonical metadata, evidence, manifest, or verification.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -846,13 +849,16 @@ fn validate_sbf_elf(bytes: &[u8]) -> Result<()> {
     if bytes.len() > LOADER_V3_MAX_ELF_BYTES {
         return Err(Error::ArtifactExceedsLoaderLimit);
     }
-    if bytes.len() < ELF_HEADER_BYTES
-        || bytes.get(..4) != Some([0x7f, b'E', b'L', b'F'].as_slice())
+    if bytes.len() < ELF_HEADER_BYTES {
+        return Err(Error::InvalidSbfElf);
+    }
+    let machine = read_u16(bytes, 18)?;
+    if bytes.get(..4) != Some([0x7f, b'E', b'L', b'F'].as_slice())
         || read_byte(bytes, 4)? != ELF_CLASS_64
         || read_byte(bytes, 5)? != ELF_DATA_LITTLE_ENDIAN
         || read_byte(bytes, 6)? != ELF_CURRENT_VERSION
         || read_u16(bytes, 16)? != ELF_TYPE_SHARED_OBJECT
-        || read_u16(bytes, 18)? != ELF_MACHINE_BPF
+        || (machine != ELF_MACHINE_BPF && machine != ELF_MACHINE_SBF)
         || read_u32(bytes, 20)? != u32::from(ELF_CURRENT_VERSION)
         || read_u16(bytes, 52)? != 64
     {
