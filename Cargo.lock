@@ -476,6 +476,13 @@ name = "dclutch-record-contract"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-release-set-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+]
+
+[[package]]
 name = "dclutch-release-tool"
 version = "0.1.0"
 dependencies = [

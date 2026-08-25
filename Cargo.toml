@@ -17,6 +17,7 @@ members = [
     "crates/dclutch-product-compiler",
     "crates/dclutch-product-contract",
     "crates/dclutch-record-contract",
+    "crates/dclutch-release-set-contract",
     "crates/dclutch-release-tool",
     "crates/dclutch-realm-contract",
     "crates/dclutch-rent-contract",

@@ -136,9 +136,14 @@ or corresponds to distinct state ownership.
 ## Required cross-program commitment
 
 Pinning `CLAIM_PROGRAM_ID` and `CUSTODY_PROGRAM_ID` in Rust is sufficient for
-the experiment and insufficient for protocol succession.  A canonical
-`ExecutionReleaseSetV1` (name provisional) must be a content-addressed semantic
-object selected by the immutable capability manifest.  It needs to bind:
+the experiment and insufficient for protocol succession.  The canonical
+[`ExecutionReleaseSetV1`](../../crates/dclutch-release-set-contract/README.md)
+is now implemented as a 336-byte content-addressed semantic object.  It binds
+the five exact `(program identity, artifact-release identity)` role pairs,
+allows roles to merge only through one identical pair, and hostile-decodes
+without allocation.  It still needs to be selected by a successor immutable
+capability-manifest profile and activated against checked release records.  The
+complete release relationship needs to bind:
 
 - semantic release, Product/Frame schema, Effect schema, and account-profile
   identities;
@@ -212,9 +217,9 @@ tractable than a 9 MB monolithic CFG.
 
 Proceed with the multiprogram successor, subject to two nonnegotiable gates:
 
-1. replace the experimental single-controller claim binding with a
-   Market-authorized `ExecutionReleaseSetV1` and one canonical claim/replay
-   owner; and
+1. make the implemented `ExecutionReleaseSetV1` a Market-authorized successor
+   manifest coordinate, then replace the experimental single-controller claim
+   binding with its canonical multi-controller claim/replay owner; and
 2. implement the same signed Direct ordinary transition both monolithically and
    through the split release set, then record exact CU, account keys, packet
    bytes, ELF/rent totals, and hostile rollback from one clean source commit.
