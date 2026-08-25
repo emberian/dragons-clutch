@@ -297,9 +297,8 @@ fn map_general_frame_error(error: dclutch_general_contract::Error) -> ProgramErr
     }
 }
 
-#[derive(Clone, Copy)]
-struct ActivationPlan<const N: usize> {
-    market_after: CategoricalMarketV1<N>,
+struct ActivationPlan {
+    market_after: Vec<u8>,
     capability_funding_after: FundingStateV1,
     root: GeneralRootV1,
     general_funding: GeneralFundingV1,
@@ -493,7 +492,7 @@ fn build_activation_plan_boxed<'manifest, 'info, const N: usize>(
     general_funding_account: &AccountInfo<'info>,
     rent_credit: RentCreditV1,
     rent_credit_account: &AccountInfo<'info>,
-) -> Result<Box<ActivationPlan<N>>, ProgramError> {
+) -> Result<Box<ActivationPlan>, ProgramError> {
     let manifest =
         CapabilityManifestV1::decode(manifest_bytes).map_err(|_| AdapterError::AccountData)?;
     let entry = manifest
@@ -561,6 +560,7 @@ fn build_activation_plan_boxed<'manifest, 'info, const N: usize>(
         market.settlement(),
     )
     .map_err(|_| AdapterError::MarketTransition)?;
+    let market_after = encode_market_bytes(&market_after)?;
     Ok(Box::new(ActivationPlan {
         market_after,
         capability_funding_after: contract_plan.funding().capability_funding_after(),
@@ -621,7 +621,7 @@ fn activate_general_plan_boxed<'manifest, const N: usize>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn execute_activation<'info, const N: usize>(
+fn execute_activation<'info>(
     program_id: &Pubkey,
     activator: &AccountInfo<'info>,
     market_account: &AccountInfo<'info>,
@@ -630,7 +630,7 @@ fn execute_activation<'info, const N: usize>(
     general_funding_account: &AccountInfo<'info>,
     rent_credit_account: &AccountInfo<'info>,
     system: &AccountInfo<'info>,
-    plan: &ActivationPlan<N>,
+    plan: &ActivationPlan,
 ) -> Result<(), ProgramError> {
     let activation_credit = plan
         .root_rent
@@ -667,7 +667,7 @@ fn execute_activation<'info, const N: usize>(
         general_funding_account,
         plan.general_lamports,
     )?;
-    write_market(market_account, plan.market_after)?;
+    write_account_bytes(market_account, &plan.market_after)?;
     write_capability_funding(capability_funding_account, plan.capability_funding_after)?;
     write_root(root_account, plan.root)?;
     write_general_funding(general_funding_account, plan.general_funding)?;
@@ -705,9 +705,7 @@ fn execute_activation<'info, const N: usize>(
         return Err(AdapterError::FoundingPostcondition.into());
     }
     require_unchanged_rent_credit(program_id, rent_credit_account, plan.rent_credit)?;
-    let persisted_market =
-        authenticate_market::<N>(program_id, market_account, market_account.key.to_bytes())?;
-    if persisted_market != plan.market_after {
+    if !account_bytes_equal(market_account, &plan.market_after)? {
         return Err(AdapterError::FoundingPostcondition.into());
     }
     let persisted_capability = decode_capability_funding(capability_funding_account)?;
@@ -1599,6 +1597,28 @@ fn process_close_batch(
     require_unchanged_rent_credit(program_id, rent_credit, rent_credit_state)
 }
 
+struct BeginSettlementExecutionPlan {
+    batch: BatchRootV1,
+    candidate: Vec<u8>,
+    cursor: Vec<u8>,
+    position: Vec<u8>,
+    cursor_seeds: GeneralSettlementCursorPdaSeedsV1,
+    escrow_seeds: GeneralSettlementEscrowPdaSeedsV1,
+    cursor_bump: u8,
+    position_bump: u8,
+    escrow_bump: u8,
+    exact_rents: [u64; 3],
+    actor_reimbursement: u64,
+    candidate_refund: u64,
+    reward: u64,
+    actor_before: u64,
+    candidate_after: u64,
+    rent_credit_before: u64,
+    rent_credit_surplus: u64,
+    rent_credit_state: RentCreditV1,
+    realm: RealmFacts,
+}
+
 fn process_begin_settlement<const N: usize>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -1748,6 +1768,71 @@ fn process_begin_settlement<const N: usize>(
         cursor_account.key.to_bytes(),
         config.generation(),
     )?;
+    let surplus = begin
+        .temporary_surplus_refund_lamports()
+        .iter()
+        .try_fold(begin.candidate_refund_lamports(), |total, amount| {
+            total.checked_add(*amount)
+        })
+        .ok_or(AdapterError::Arithmetic)?;
+    let candidate_after = candidate_before
+        .checked_sub(actor_reimbursement)
+        .and_then(|value| value.checked_sub(begin.candidate_refund_lamports()))
+        .ok_or(AdapterError::Arithmetic)?;
+    let execution = BeginSettlementExecutionPlan {
+        batch,
+        candidate: encode_candidate_bytes(candidate.as_ref())?,
+        cursor: encode_settlement_cursor_bytes(&begin.cursor())?,
+        position: encode_position_bytes(settlement_position.as_ref())?,
+        cursor_seeds,
+        escrow_seeds,
+        cursor_bump,
+        position_bump,
+        escrow_bump,
+        exact_rents,
+        actor_reimbursement,
+        candidate_refund: begin.candidate_refund_lamports(),
+        reward: begin.reward_lamports(),
+        actor_before,
+        candidate_after,
+        rent_credit_before,
+        rent_credit_surplus: surplus,
+        rent_credit_state,
+        realm,
+    };
+    execute_begin_settlement(
+        program_id,
+        actor,
+        market_account,
+        batch_account,
+        candidate_account,
+        cursor_account,
+        settlement_position_account,
+        settlement_quote_escrow,
+        mint,
+        token_program,
+        rent_credit,
+        system,
+        &execution,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_begin_settlement<'info>(
+    program_id: &Pubkey,
+    actor: &AccountInfo<'info>,
+    market_account: &AccountInfo<'info>,
+    batch_account: &AccountInfo<'info>,
+    candidate_account: &AccountInfo<'info>,
+    cursor_account: &AccountInfo<'info>,
+    settlement_position_account: &AccountInfo<'info>,
+    settlement_quote_escrow: &AccountInfo<'info>,
+    mint: &AccountInfo<'info>,
+    token_program: &AccountInfo<'info>,
+    rent_credit: &AccountInfo<'info>,
+    system: &AccountInfo<'info>,
+    plan: &BeginSettlementExecutionPlan,
+) -> Result<(), ProgramError> {
     preflight_mutable(&[
         actor,
         batch_account,
@@ -1757,34 +1842,35 @@ fn process_begin_settlement<const N: usize>(
         settlement_quote_escrow,
         rent_credit,
     ])?;
-    transfer_owned_lamports(candidate_account, actor, actor_reimbursement)?;
-    transfer_owned_lamports(
-        candidate_account,
-        rent_credit,
-        begin.candidate_refund_lamports(),
-    )?;
+    transfer_owned_lamports(candidate_account, actor, plan.actor_reimbursement)?;
+    transfer_owned_lamports(candidate_account, rent_credit, plan.candidate_refund)?;
     create_general_pda_account(
         actor,
         cursor_account,
         rent_credit,
         system,
         program_id,
-        exact_rents[0],
-        cursor_bytes,
-        &cursor_seeds.seed_components(),
-        cursor_bump,
+        plan.exact_rents[0],
+        plan.cursor.len(),
+        &plan.cursor_seeds.seed_components(),
+        plan.cursor_bump,
         false,
     )?;
+    let position_components = [
+        POSITION_PDA_DOMAIN,
+        market_account.key.as_ref(),
+        cursor_account.key.as_ref(),
+    ];
     create_general_pda_account(
         actor,
         settlement_position_account,
         rent_credit,
         system,
         program_id,
-        exact_rents[1],
-        position_bytes,
+        plan.exact_rents[1],
+        plan.position.len(),
         &position_components,
-        position_bump,
+        plan.position_bump,
         false,
     )?;
     create_general_pda_account(
@@ -1793,14 +1879,14 @@ fn process_begin_settlement<const N: usize>(
         rent_credit,
         system,
         token_program.key,
-        exact_rents[2],
+        plan.exact_rents[2],
         ACCOUNT_BYTES,
-        &escrow_seeds.seed_components(),
-        escrow_bump,
+        &plan.escrow_seeds.seed_components(),
+        plan.escrow_bump,
         false,
     )?;
     let initialize = token_initialize_instruction(
-        realm.release,
+        plan.realm.release,
         *settlement_quote_escrow.key,
         *mint.key,
         *cursor_account.key,
@@ -1814,54 +1900,42 @@ fn process_begin_settlement<const N: usize>(
         ],
     )
     .map_err(|_| AdapterError::VaultInitializeCpi)?;
-    write_batch(batch_account, batch)?;
-    write_candidate(candidate_account, *candidate)?;
-    write_settlement_cursor(cursor_account, begin.cursor())?;
-    write_position(settlement_position_account, *settlement_position)?;
-
-    let surplus = begin
-        .temporary_surplus_refund_lamports()
-        .iter()
-        .try_fold(begin.candidate_refund_lamports(), |total, amount| {
-            total.checked_add(*amount)
-        })
-        .ok_or(AdapterError::Arithmetic)?;
+    write_batch(batch_account, plan.batch)?;
+    write_account_bytes(candidate_account, &plan.candidate)?;
+    write_account_bytes(cursor_account, &plan.cursor)?;
+    write_account_bytes(settlement_position_account, &plan.position)?;
     if actor.lamports()
-        != actor_before
-            .checked_add(begin.reward_lamports())
+        != plan
+            .actor_before
+            .checked_add(plan.reward)
             .ok_or(AdapterError::Arithmetic)?
+        || candidate_account.lamports() != plan.candidate_after
         || rent_credit.lamports()
-            != rent_credit_before
-                .checked_add(surplus)
+            != plan
+                .rent_credit_before
+                .checked_add(plan.rent_credit_surplus)
                 .ok_or(AdapterError::Arithmetic)?
-        || cursor_account.lamports() != exact_rents[0]
-        || settlement_position_account.lamports() != exact_rents[1]
-        || settlement_quote_escrow.lamports() != exact_rents[2]
+        || cursor_account.lamports() != plan.exact_rents[0]
+        || settlement_position_account.lamports() != plan.exact_rents[1]
+        || settlement_quote_escrow.lamports() != plan.exact_rents[2]
+        || !account_bytes_equal(candidate_account, &plan.candidate)?
+        || !account_bytes_equal(cursor_account, &plan.cursor)?
+        || !account_bytes_equal(settlement_position_account, &plan.position)?
     {
         return Err(AdapterError::PositionPostcondition.into());
     }
-    candidate
-        .validate_capitalization(CandidateCapitalizationV1 {
-            account_lamports: candidate_account.lamports(),
-            exact_state_rent_lamports: candidate_rent,
-        })
-        .map_err(|_| AdapterError::PositionPostcondition)?;
-    authenticate_settlement_quote_escrow(
+    let quote = authenticate_settlement_quote_escrow(
         program_id,
         settlement_quote_escrow,
         mint,
         token_program,
-        realm,
+        plan.realm,
         cursor_account.key,
-    )
-    .and_then(|state| {
-        if state.amount == 0 {
-            Ok(())
-        } else {
-            Err(AdapterError::PositionPostcondition.into())
-        }
-    })?;
-    require_unchanged_rent_credit(program_id, rent_credit, rent_credit_state)
+    )?;
+    if quote.amount != 0 {
+        return Err(AdapterError::PositionPostcondition.into());
+    }
+    require_unchanged_rent_credit(program_id, rent_credit, plan.rent_credit_state)
 }
 
 fn process_collect_settlement_page<const N: usize>(
@@ -2142,8 +2216,45 @@ fn collect_settlement_execution<'info, const N: usize>(
                 .map_err(|_| AdapterError::PositionAuthentication)?;
         }
     }
-    let amount = effect.quote_debit_from_escrow();
-    if amount != 0 {
+    let quote_amount = effect.quote_debit_from_escrow();
+    let custody_after = custody.reserved_quote_atoms();
+    let custody_bytes = encode_custody_bytes(&custody)?;
+    execute_collect_quote(
+        program_id,
+        state_account,
+        custody_account,
+        quote_escrow,
+        settlement_quote_escrow,
+        mint,
+        token_program,
+        realm,
+        custody_seeds,
+        bump,
+        quote_amount,
+        custody_after,
+        state,
+        &custody_bytes,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_collect_quote<'info>(
+    program_id: &Pubkey,
+    state_account: &AccountInfo<'info>,
+    custody_account: &AccountInfo<'info>,
+    quote_escrow: &AccountInfo<'info>,
+    settlement_quote_escrow: &AccountInfo<'info>,
+    mint: &AccountInfo<'info>,
+    token_program: &AccountInfo<'info>,
+    realm: RealmFacts,
+    custody_seeds: GeneralOrderCustodyPdaSeedsV1,
+    bump: u8,
+    quote_amount: u64,
+    custody_after: u64,
+    state: OrderStateV1,
+    custody_bytes: &[u8],
+) -> Result<(), ProgramError> {
+    if quote_amount != 0 {
         let components = custody_seeds.seed_components();
         let bump_seed = [bump];
         let signer = [components[0], components[1], bump_seed.as_slice()];
@@ -2153,7 +2264,7 @@ fn collect_settlement_execution<'info, const N: usize>(
             *mint.key,
             *settlement_quote_escrow.key,
             *custody_account.key,
-            amount,
+            quote_amount,
             realm.mint.decimals,
         )?;
         invoke_signed(
@@ -2170,7 +2281,7 @@ fn collect_settlement_execution<'info, const N: usize>(
         .map_err(|_| AdapterError::CollateralTransferCpi)?;
     }
     write_order_state(state_account, state)?;
-    write_custody(custody_account, custody)?;
+    write_account_bytes(custody_account, custody_bytes)?;
     let quote_after = authenticate_order_quote_escrow(
         program_id,
         quote_escrow,
@@ -2179,10 +2290,27 @@ fn collect_settlement_execution<'info, const N: usize>(
         token_program,
         realm,
     )?;
-    if quote_after.amount != custody.reserved_quote_atoms() {
+    if quote_after.amount != custody_after || !account_bytes_equal(custody_account, custody_bytes)?
+    {
         return Err(AdapterError::PositionPostcondition.into());
     }
     Ok(())
+}
+
+struct MaterializeExecutionPlan {
+    action: SettlementMaterializationActionV1,
+    reward: u64,
+    actor_before: u64,
+    candidate_after: u64,
+    market: Vec<u8>,
+    candidate: Vec<u8>,
+    cursor: Vec<u8>,
+    position: Vec<u8>,
+    market_identity_digest: [u8; 32],
+    market_hoard_after: u64,
+    quote_after: u64,
+    vault_after: u64,
+    realm: RealmFacts,
 }
 
 fn process_materialize_settlement<const N: usize>(
@@ -2315,6 +2443,65 @@ fn process_materialize_settlement<const N: usize>(
     if settlement_position.balances() != &materialization.claim_inventory_after() {
         return Err(AdapterError::PositionPostcondition.into());
     }
+    let expected_vault = match materialization.action() {
+        SettlementMaterializationActionV1::None => vault_before.amount,
+        SettlementMaterializationActionV1::Split(quantity) => vault_before
+            .amount
+            .checked_add(quantity)
+            .ok_or(AdapterError::Arithmetic)?,
+        SettlementMaterializationActionV1::Merge(quantity) => vault_before
+            .amount
+            .checked_sub(quantity)
+            .ok_or(AdapterError::Arithmetic)?,
+    };
+    let reward = materialization.reward_lamports();
+    let execution = MaterializeExecutionPlan {
+        action: materialization.action(),
+        reward,
+        actor_before: actor.lamports(),
+        candidate_after: candidate_account
+            .lamports()
+            .checked_sub(reward)
+            .ok_or(AdapterError::Arithmetic)?,
+        market: encode_market_bytes(&market_after)?,
+        candidate: encode_candidate_bytes(candidate.as_ref())?,
+        cursor: encode_settlement_cursor_bytes(cursor.as_ref())?,
+        position: encode_position_bytes(settlement_position.as_ref())?,
+        market_identity_digest: hash(&market.root().identity().to_bytes()).to_bytes(),
+        market_hoard_after: market_after.hoard_atoms(),
+        quote_after: materialization.quote_inventory_after(),
+        vault_after: expected_vault,
+        realm,
+    };
+    execute_materialization(
+        program_id,
+        actor,
+        market_account,
+        vault,
+        candidate_account,
+        cursor_account,
+        settlement_position_account,
+        settlement_quote_escrow,
+        mint,
+        token_program,
+        &execution,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_materialization<'info>(
+    program_id: &Pubkey,
+    actor: &AccountInfo<'info>,
+    market_account: &AccountInfo<'info>,
+    vault: &AccountInfo<'info>,
+    candidate_account: &AccountInfo<'info>,
+    cursor_account: &AccountInfo<'info>,
+    settlement_position_account: &AccountInfo<'info>,
+    settlement_quote_escrow: &AccountInfo<'info>,
+    mint: &AccountInfo<'info>,
+    token_program: &AccountInfo<'info>,
+    plan: &MaterializeExecutionPlan,
+) -> Result<(), ProgramError> {
     preflight_mutable(&[
         actor,
         market_account,
@@ -2324,7 +2511,7 @@ fn process_materialize_settlement<const N: usize>(
         settlement_position_account,
         settlement_quote_escrow,
     ])?;
-    match materialization.action() {
+    match plan.action {
         SettlementMaterializationActionV1::None => {}
         SettlementMaterializationActionV1::Split(quantity) => {
             let seeds = GeneralSettlementCursorPdaSeedsV1::new(candidate_account.key.to_bytes())
@@ -2334,13 +2521,13 @@ fn process_materialize_settlement<const N: usize>(
             let bump_seed = [bump];
             let signer = [components[0], components[1], bump_seed.as_slice()];
             let transfer = token_transfer_instruction(
-                realm.release,
+                plan.realm.release,
                 *settlement_quote_escrow.key,
                 *mint.key,
                 *vault.key,
                 *cursor_account.key,
                 quantity,
-                realm.mint.decimals,
+                plan.realm.mint.decimals,
             )?;
             invoke_signed(
                 &transfer,
@@ -2356,25 +2543,24 @@ fn process_materialize_settlement<const N: usize>(
             .map_err(|_| AdapterError::CollateralTransferCpi)?;
         }
         SettlementMaterializationActionV1::Merge(quantity) => {
-            let identity_digest = hash(&market.root().identity().to_bytes()).to_bytes();
             let (_, bump) = Pubkey::find_program_address(
-                &[MARKET_SEED, identity_digest.as_slice()],
+                &[MARKET_SEED, plan.market_identity_digest.as_slice()],
                 program_id,
             );
             let bump_seed = [bump];
             let signer = [
                 MARKET_SEED,
-                identity_digest.as_slice(),
+                plan.market_identity_digest.as_slice(),
                 bump_seed.as_slice(),
             ];
             let transfer = token_transfer_instruction(
-                realm.release,
+                plan.realm.release,
                 *vault.key,
                 *mint.key,
                 *settlement_quote_escrow.key,
                 *market_account.key,
                 quantity,
-                realm.mint.decimals,
+                plan.realm.mint.decimals,
             )?;
             invoke_signed(
                 &transfer,
@@ -2390,17 +2576,17 @@ fn process_materialize_settlement<const N: usize>(
             .map_err(|_| AdapterError::CollateralTransferCpi)?;
         }
     }
-    transfer_owned_lamports(candidate_account, actor, materialization.reward_lamports())?;
-    write_market(market_account, market_after)?;
-    write_candidate(candidate_account, *candidate)?;
-    write_settlement_cursor(cursor_account, *cursor)?;
-    write_position(settlement_position_account, *settlement_position)?;
+    transfer_owned_lamports(candidate_account, actor, plan.reward)?;
+    write_account_bytes(market_account, &plan.market)?;
+    write_account_bytes(candidate_account, &plan.candidate)?;
+    write_account_bytes(cursor_account, &plan.cursor)?;
+    write_account_bytes(settlement_position_account, &plan.position)?;
     let quote_after = authenticate_settlement_quote_escrow(
         program_id,
         settlement_quote_escrow,
         mint,
         token_program,
-        realm,
+        plan.realm,
         cursor_account.key,
     )?;
     let vault_after = authenticate_collateral_vault(
@@ -2409,31 +2595,25 @@ fn process_materialize_settlement<const N: usize>(
         vault,
         mint,
         token_program,
-        realm,
-        market_after.hoard_atoms(),
+        plan.realm,
+        plan.market_hoard_after,
     )?;
-    let expected_vault = match materialization.action() {
-        SettlementMaterializationActionV1::None => vault_before.amount,
-        SettlementMaterializationActionV1::Split(quantity) => vault_before
-            .amount
-            .checked_add(quantity)
-            .ok_or(AdapterError::Arithmetic)?,
-        SettlementMaterializationActionV1::Merge(quantity) => vault_before
-            .amount
-            .checked_sub(quantity)
-            .ok_or(AdapterError::Arithmetic)?,
-    };
-    if quote_after.amount != materialization.quote_inventory_after()
-        || vault_after.amount != expected_vault
+    if actor.lamports()
+        != plan
+            .actor_before
+            .checked_add(plan.reward)
+            .ok_or(AdapterError::Arithmetic)?
+        || candidate_account.lamports() != plan.candidate_after
+        || quote_after.amount != plan.quote_after
+        || vault_after.amount != plan.vault_after
+        || !account_bytes_equal(market_account, &plan.market)?
+        || !account_bytes_equal(candidate_account, &plan.candidate)?
+        || !account_bytes_equal(cursor_account, &plan.cursor)?
+        || !account_bytes_equal(settlement_position_account, &plan.position)?
     {
         return Err(AdapterError::PositionPostcondition.into());
     }
-    candidate
-        .validate_capitalization(CandidateCapitalizationV1 {
-            account_lamports: candidate_account.lamports(),
-            exact_state_rent_lamports: candidate_rent,
-        })
-        .map_err(|_| AdapterError::PositionPostcondition.into())
+    Ok(())
 }
 
 fn process_distribute_settlement_page<const N: usize>(
@@ -2699,14 +2879,41 @@ fn distribute_settlement_execution<'info, const N: usize>(
                 .map_err(|_| AdapterError::PositionAuthentication)?;
         }
     }
-    let destination_before = authenticate_quote_destination(
+    let amount = execution_plan.custody_effect.quote_credit_to_owner();
+    let owner_position = encode_position_bytes(&owner_position)?;
+    execute_distribute_quote(
+        program_id,
+        candidate_account,
+        cursor_account,
+        settlement_quote_escrow,
+        owner_position_account,
         destination,
         mint,
         token_program,
         realm,
         execution.order.owner().to_bytes(),
-    )?;
-    let amount = execution_plan.custody_effect.quote_credit_to_owner();
+        amount,
+        &owner_position,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_distribute_quote<'info>(
+    program_id: &Pubkey,
+    candidate_account: &AccountInfo<'info>,
+    cursor_account: &AccountInfo<'info>,
+    settlement_quote_escrow: &AccountInfo<'info>,
+    owner_position_account: &AccountInfo<'info>,
+    destination: &AccountInfo<'info>,
+    mint: &AccountInfo<'info>,
+    token_program: &AccountInfo<'info>,
+    realm: RealmFacts,
+    owner: [u8; 32],
+    amount: u64,
+    owner_position: &[u8],
+) -> Result<(), ProgramError> {
+    let destination_before =
+        authenticate_quote_destination(destination, mint, token_program, realm, owner)?;
     if amount != 0 {
         let cursor_seeds = GeneralSettlementCursorPdaSeedsV1::new(candidate_account.key.to_bytes())
             .map_err(|_| AdapterError::PositionAuthentication)?;
@@ -2740,23 +2947,31 @@ fn distribute_settlement_execution<'info, const N: usize>(
         )
         .map_err(|_| AdapterError::CollateralTransferCpi)?;
     }
-    write_position(owner_position_account, owner_position)?;
-    let destination_after = authenticate_quote_destination(
-        destination,
-        mint,
-        token_program,
-        realm,
-        execution.order.owner().to_bytes(),
-    )?;
+    write_account_bytes(owner_position_account, owner_position)?;
+    let destination_after =
+        authenticate_quote_destination(destination, mint, token_program, realm, owner)?;
     if destination_after.amount
         != destination_before
             .amount
             .checked_add(amount)
             .ok_or(AdapterError::Arithmetic)?
+        || !account_bytes_equal(owner_position_account, owner_position)?
     {
         return Err(AdapterError::PositionPostcondition.into());
     }
     Ok(())
+}
+
+struct FinishSettlementExecutionPlan {
+    batch: BatchRootV1,
+    candidate: Vec<u8>,
+    cursor: Vec<u8>,
+    position: Vec<u8>,
+    quote: TokenAccount,
+    reward: u64,
+    actor_before: u64,
+    candidate_after: u64,
+    realm: RealmFacts,
 }
 
 fn process_finish_settlement<const N: usize>(
@@ -2856,6 +3071,47 @@ fn process_finish_settlement<const N: usize>(
             },
         )
         .map_err(|_| AdapterError::MarketTransition)?;
+    let execution = FinishSettlementExecutionPlan {
+        batch,
+        candidate: encode_candidate_bytes(candidate.as_ref())?,
+        cursor: encode_settlement_cursor_bytes(cursor.as_ref())?,
+        position: encode_position_bytes(&settlement_position)?,
+        quote: settlement_quote,
+        reward,
+        actor_before: actor.lamports(),
+        candidate_after: candidate_account
+            .lamports()
+            .checked_sub(reward)
+            .ok_or(AdapterError::Arithmetic)?,
+        realm,
+    };
+    execute_finish_settlement(
+        program_id,
+        actor,
+        batch_account,
+        candidate_account,
+        cursor_account,
+        settlement_position_account,
+        settlement_quote_escrow,
+        mint,
+        token_program,
+        &execution,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_finish_settlement<'info>(
+    program_id: &Pubkey,
+    actor: &AccountInfo<'info>,
+    batch_account: &AccountInfo<'info>,
+    candidate_account: &AccountInfo<'info>,
+    cursor_account: &AccountInfo<'info>,
+    settlement_position_account: &AccountInfo<'info>,
+    settlement_quote_escrow: &AccountInfo<'info>,
+    mint: &AccountInfo<'info>,
+    token_program: &AccountInfo<'info>,
+    plan: &FinishSettlementExecutionPlan,
+) -> Result<(), ProgramError> {
     preflight_mutable(&[
         actor,
         batch_account,
@@ -2864,34 +3120,43 @@ fn process_finish_settlement<const N: usize>(
         settlement_position_account,
         settlement_quote_escrow,
     ])?;
-    transfer_owned_lamports(candidate_account, actor, reward)?;
-    write_batch(batch_account, batch)?;
-    write_candidate(candidate_account, *candidate)?;
-    write_settlement_cursor(cursor_account, *cursor)?;
-    if authenticate_position::<N>(
+    transfer_owned_lamports(candidate_account, actor, plan.reward)?;
+    write_batch(batch_account, plan.batch)?;
+    write_account_bytes(candidate_account, &plan.candidate)?;
+    write_account_bytes(cursor_account, &plan.cursor)?;
+    let quote = authenticate_settlement_quote_escrow(
         program_id,
-        settlement_position_account,
-        market_account,
+        settlement_quote_escrow,
+        mint,
+        token_program,
+        plan.realm,
         cursor_account.key,
-        config.generation(),
-    )? != settlement_position
-        || authenticate_settlement_quote_escrow(
-            program_id,
-            settlement_quote_escrow,
-            mint,
-            token_program,
-            realm,
-            cursor_account.key,
-        )? != settlement_quote
+    )?;
+    if actor.lamports()
+        != plan
+            .actor_before
+            .checked_add(plan.reward)
+            .ok_or(AdapterError::Arithmetic)?
+        || candidate_account.lamports() != plan.candidate_after
+        || quote != plan.quote
+        || !account_bytes_equal(candidate_account, &plan.candidate)?
+        || !account_bytes_equal(cursor_account, &plan.cursor)?
+        || !account_bytes_equal(settlement_position_account, &plan.position)?
     {
         return Err(AdapterError::PositionPostcondition.into());
     }
-    candidate
-        .validate_capitalization(CandidateCapitalizationV1 {
-            account_lamports: candidate_account.lamports(),
-            exact_state_rent_lamports: candidate_rent,
-        })
-        .map_err(|_| AdapterError::PositionPostcondition.into())
+    Ok(())
+}
+
+struct CloseSettlementExecutionPlan {
+    batch: BatchRootV1,
+    candidate: Vec<u8>,
+    reward: u64,
+    candidate_after: u64,
+    rent_credit_lamports: u64,
+    rent_credit_before: u64,
+    rent_credit_state: RentCreditV1,
+    realm: RealmFacts,
 }
 
 fn process_close_settlement<const N: usize>(
@@ -3023,6 +3288,47 @@ fn process_close_settlement<const N: usize>(
     {
         return Err(AdapterError::PositionPostcondition.into());
     }
+    let reward = close.continuation_reward_lamports;
+    let execution = CloseSettlementExecutionPlan {
+        batch,
+        candidate: encode_candidate_bytes(candidate.as_ref())?,
+        reward,
+        candidate_after: candidate_account
+            .lamports()
+            .checked_sub(reward)
+            .ok_or(AdapterError::Arithmetic)?,
+        rent_credit_lamports: close.rent_credit_lamports,
+        rent_credit_before,
+        rent_credit_state,
+        realm,
+    };
+    execute_close_settlement(
+        program_id,
+        actor,
+        batch_account,
+        candidate_account,
+        cursor_account,
+        settlement_position_account,
+        settlement_quote_escrow,
+        token_program,
+        rent_credit,
+        &execution,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_close_settlement<'info>(
+    program_id: &Pubkey,
+    actor: &AccountInfo<'info>,
+    batch_account: &AccountInfo<'info>,
+    candidate_account: &AccountInfo<'info>,
+    cursor_account: &AccountInfo<'info>,
+    settlement_position_account: &AccountInfo<'info>,
+    settlement_quote_escrow: &AccountInfo<'info>,
+    token_program: &AccountInfo<'info>,
+    rent_credit: &AccountInfo<'info>,
+    plan: &CloseSettlementExecutionPlan,
+) -> Result<(), ProgramError> {
     preflight_mutable(&[
         actor,
         batch_account,
@@ -3032,9 +3338,9 @@ fn process_close_settlement<const N: usize>(
         settlement_quote_escrow,
         rent_credit,
     ])?;
-    transfer_owned_lamports(candidate_account, actor, close.continuation_reward_lamports)?;
-    write_batch(batch_account, batch)?;
-    write_candidate(candidate_account, *candidate)?;
+    transfer_owned_lamports(candidate_account, actor, plan.reward)?;
+    write_batch(batch_account, plan.batch)?;
+    write_account_bytes(candidate_account, &plan.candidate)?;
     let cursor_seeds = GeneralSettlementCursorPdaSeedsV1::new(candidate_account.key.to_bytes())
         .map_err(|_| AdapterError::PositionAuthentication)?;
     let components = cursor_seeds.seed_components();
@@ -3042,7 +3348,7 @@ fn process_close_settlement<const N: usize>(
     let bump_seed = [bump];
     let signer = [components[0], components[1], bump_seed.as_slice()];
     let token_close = token_close_instruction(
-        realm.release,
+        plan.realm.release,
         *settlement_quote_escrow.key,
         *rent_credit.key,
         *cursor_account.key,
@@ -3060,23 +3366,20 @@ fn process_close_settlement<const N: usize>(
     .map_err(|_| AdapterError::PositionClose)?;
     close_program_account(settlement_position_account, rent_credit)?;
     close_program_account(cursor_account, rent_credit)?;
-    if cursor_account.lamports() != 0
+    if candidate_account.lamports() != plan.candidate_after
+        || cursor_account.lamports() != 0
         || settlement_position_account.lamports() != 0
         || settlement_quote_escrow.lamports() != 0
         || rent_credit.lamports()
-            != rent_credit_before
-                .checked_add(close.rent_credit_lamports)
+            != plan
+                .rent_credit_before
+                .checked_add(plan.rent_credit_lamports)
                 .ok_or(AdapterError::Arithmetic)?
+        || !account_bytes_equal(candidate_account, &plan.candidate)?
     {
         return Err(AdapterError::PositionPostcondition.into());
     }
-    require_unchanged_rent_credit(program_id, rent_credit, rent_credit_state)?;
-    candidate
-        .validate_capitalization(CandidateCapitalizationV1 {
-            account_lamports: candidate_account.lamports(),
-            exact_state_rent_lamports: candidate_rent,
-        })
-        .map_err(|_| AdapterError::PositionPostcondition.into())
+    require_unchanged_rent_credit(program_id, rent_credit, plan.rent_credit_state)
 }
 
 fn process_quiesce(
@@ -3421,11 +3724,13 @@ struct RealmFacts {
     mint: dclutch_token_svm::Mint,
 }
 
-#[derive(Clone, Copy)]
-struct AdmissionPlan<const N: usize> {
+struct AdmissionPlan {
     state: OrderStateV1,
-    custody: GeneralOrderCustodyV1<N>,
-    position: PositionV1<N>,
+    custody: Vec<u8>,
+    position: Vec<u8>,
+    state_seeds: GeneralOrderStatePdaSeedsV1,
+    custody_seeds: GeneralOrderCustodyPdaSeedsV1,
+    escrow_seeds: GeneralQuoteEscrowPdaSeedsV1,
     state_bump: u8,
     custody_bump: u8,
     escrow_bump: u8,
@@ -3597,8 +3902,11 @@ fn process_admit_order<const N: usize>(
 
     let plan = Box::new(AdmissionPlan {
         state: admission.order_state,
-        custody: admission.custody,
-        position: *position,
+        custody: encode_custody_bytes(&admission.custody)?,
+        position: encode_position_bytes(position.as_ref())?,
+        state_seeds,
+        custody_seeds,
+        escrow_seeds,
         state_bump,
         custody_bump,
         escrow_bump,
@@ -3623,7 +3931,6 @@ fn process_admit_order<const N: usize>(
         rent_credit,
         token_program,
         system,
-        *order,
         plan.as_ref(),
     )?;
     initialize_and_fund_escrow(
@@ -3652,7 +3959,7 @@ fn process_admit_order<const N: usize>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn create_order_accounts<'info, const N: usize>(
+fn create_order_accounts<'info>(
     program_id: &Pubkey,
     payer: &AccountInfo<'info>,
     state: &AccountInfo<'info>,
@@ -3661,11 +3968,8 @@ fn create_order_accounts<'info, const N: usize>(
     rent_credit: &AccountInfo<'info>,
     token_program: &AccountInfo<'info>,
     system: &AccountInfo<'info>,
-    order: PortfolioOrderV1<N>,
-    plan: &AdmissionPlan<N>,
+    plan: &AdmissionPlan,
 ) -> Result<(), ProgramError> {
-    let state_seeds = GeneralOrderStatePdaSeedsV1::new(*plan.position.market(), order)
-        .map_err(|_| AdapterError::PositionAuthentication)?;
     create_general_pda_account(
         payer,
         state,
@@ -3674,12 +3978,10 @@ fn create_order_accounts<'info, const N: usize>(
         program_id,
         plan.state_rent,
         ORDER_STATE_BYTES,
-        &state_seeds.seed_components(),
+        &plan.state_seeds.seed_components(),
         plan.state_bump,
         false,
     )?;
-    let custody_seed = GeneralOrderCustodyPdaSeedsV1::new(state.key.to_bytes())
-        .map_err(|_| AdapterError::PositionAuthentication)?;
     create_general_pda_account(
         payer,
         custody,
@@ -3687,13 +3989,11 @@ fn create_order_accounts<'info, const N: usize>(
         system,
         program_id,
         plan.custody_rent,
-        GeneralOrderCustodyV1::<N>::encoded_len().map_err(|_| AdapterError::Arithmetic)?,
-        &custody_seed.seed_components(),
+        plan.custody.len(),
+        &plan.custody_seeds.seed_components(),
         plan.custody_bump,
         false,
     )?;
-    let escrow_seed = GeneralQuoteEscrowPdaSeedsV1::new(custody.key.to_bytes())
-        .map_err(|_| AdapterError::PositionAuthentication)?;
     create_general_pda_account(
         payer,
         escrow,
@@ -3702,20 +4002,20 @@ fn create_order_accounts<'info, const N: usize>(
         token_program.key,
         plan.escrow_rent,
         ACCOUNT_BYTES,
-        &escrow_seed.seed_components(),
+        &plan.escrow_seeds.seed_components(),
         plan.escrow_bump,
         false,
     )
 }
 
-fn initialize_and_fund_escrow<'info, const N: usize>(
+fn initialize_and_fund_escrow<'info>(
     source: &AccountInfo<'info>,
     escrow: &AccountInfo<'info>,
     mint: &AccountInfo<'info>,
     token_program: &AccountInfo<'info>,
     owner: &AccountInfo<'info>,
     custody: &AccountInfo<'info>,
-    plan: &AdmissionPlan<N>,
+    plan: &AdmissionPlan,
 ) -> Result<(), ProgramError> {
     let initialize =
         token_initialize_instruction(plan.realm.release, *escrow.key, *mint.key, *custody.key)?;
@@ -3748,7 +4048,7 @@ fn initialize_and_fund_escrow<'info, const N: usize>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn persist_admission<const N: usize>(
+fn persist_admission(
     program_id: &Pubkey,
     payer: &AccountInfo<'_>,
     state_account: &AccountInfo<'_>,
@@ -3760,11 +4060,11 @@ fn persist_admission<const N: usize>(
     token_program: &AccountInfo<'_>,
     rent_credit: &AccountInfo<'_>,
     rent_credit_state: RentCreditV1,
-    plan: &AdmissionPlan<N>,
+    plan: &AdmissionPlan,
 ) -> Result<(), ProgramError> {
     write_order_state(state_account, plan.state)?;
-    write_custody(custody_account, plan.custody)?;
-    write_position(position_account, plan.position)?;
+    write_account_bytes(custody_account, &plan.custody)?;
+    write_account_bytes(position_account, &plan.position)?;
     let payer_rent = plan
         .state_rent
         .saturating_sub(plan.state_before)
@@ -3810,11 +4110,10 @@ fn persist_admission<const N: usize>(
     require_unchanged_rent_credit(program_id, rent_credit, rent_credit_state)
 }
 
-#[derive(Clone, Copy)]
-struct ReleasePlan<const N: usize> {
+struct ReleasePlan {
     state: OrderStateV1,
-    position: PositionV1<N>,
-    release: dclutch_general_contract::GeneralCustodyReleaseV1<N>,
+    position: Vec<u8>,
+    quote_atoms: u64,
     custody_bump: u8,
     realm: RealmFacts,
     source_before: TokenAccount,
@@ -3991,8 +4290,8 @@ fn process_release_order<const N: usize>(
     ])?;
     let plan = Box::new(ReleasePlan {
         state,
-        position: *position,
-        release: *release,
+        position: encode_position_bytes(position.as_ref())?,
+        quote_atoms: release.quote_atoms,
         custody_bump,
         realm,
         source_before,
@@ -4016,7 +4315,7 @@ fn process_release_order<const N: usize>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn execute_release<'info, const N: usize>(
+fn execute_release<'info>(
     program_id: &Pubkey,
     state_account: &AccountInfo<'info>,
     custody_account: &AccountInfo<'info>,
@@ -4026,21 +4325,21 @@ fn execute_release<'info, const N: usize>(
     mint: &AccountInfo<'info>,
     token_program: &AccountInfo<'info>,
     rent_credit: &AccountInfo<'info>,
-    plan: &ReleasePlan<N>,
+    plan: &ReleasePlan,
 ) -> Result<(), ProgramError> {
     let custody_seed = GeneralOrderCustodyPdaSeedsV1::new(state_account.key.to_bytes())
         .map_err(|_| AdapterError::PositionAuthentication)?;
     let components = custody_seed.seed_components();
     let bump = [plan.custody_bump];
     let signer = [components[0], components[1], bump.as_slice()];
-    if plan.release.quote_atoms != 0 {
+    if plan.quote_atoms != 0 {
         let transfer = token_transfer_instruction(
             plan.realm.release,
             *quote_escrow.key,
             *mint.key,
             *quote_destination.key,
             *custody_account.key,
-            plan.release.quote_atoms,
+            plan.quote_atoms,
             plan.realm.mint.decimals,
         )?;
         invoke_signed(
@@ -4077,7 +4376,7 @@ fn execute_release<'info, const N: usize>(
         .validate_post(quote_escrow.lamports(), rent_credit.lamports())
         .map_err(|_| AdapterError::PositionClose)?;
     write_order_state(state_account, plan.state)?;
-    write_position(position_account, plan.position)?;
+    write_account_bytes(position_account, &plan.position)?;
     close_program_account(custody_account, rent_credit)?;
     plan.custody_close
         .validate_post(custody_account.lamports(), rent_credit.lamports())
@@ -4095,11 +4394,11 @@ fn execute_release<'info, const N: usize>(
         token_program,
         plan.realm,
         plan.destination_before,
-        plan.release.quote_atoms,
+        plan.quote_atoms,
     )?;
     // The closed source was authenticated before CPI and is now absent. Its
     // exact prior token amount was the release quantity.
-    if plan.source_before.amount != plan.release.quote_atoms {
+    if plan.source_before.amount != plan.quote_atoms {
         return Err(AdapterError::PositionPostcondition.into());
     }
     Ok(())
@@ -4816,6 +5115,114 @@ fn decode_custody<const N: usize>(
     GeneralOrderCustodyV1::decode(&data).map_err(|_| AdapterError::AccountData.into())
 }
 
+fn encode_market_bytes<const N: usize>(
+    market: &CategoricalMarketV1<N>,
+) -> Result<Vec<u8>, ProgramError> {
+    let len = CategoricalMarketV1::<N>::encoded_len().map_err(|_| AdapterError::Arithmetic)?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(len)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    bytes.resize(len, 0);
+    market
+        .encode(&mut bytes)
+        .map_err(|_| AdapterError::MarketTransition)?;
+    if CategoricalMarketV1::<N>::decode(&bytes) != Ok(*market) {
+        return Err(AdapterError::FoundingPostcondition.into());
+    }
+    Ok(bytes)
+}
+
+fn encode_custody_bytes<const N: usize>(
+    custody: &GeneralOrderCustodyV1<N>,
+) -> Result<Vec<u8>, ProgramError> {
+    let len = GeneralOrderCustodyV1::<N>::encoded_len().map_err(|_| AdapterError::Arithmetic)?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(len)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    bytes.resize(len, 0);
+    custody
+        .encode(&mut bytes)
+        .map_err(|_| AdapterError::PositionPostcondition)?;
+    if GeneralOrderCustodyV1::<N>::decode(&bytes) != Ok(*custody) {
+        return Err(AdapterError::PositionPostcondition.into());
+    }
+    Ok(bytes)
+}
+
+fn encode_position_bytes<const N: usize>(
+    position: &PositionV1<N>,
+) -> Result<Vec<u8>, ProgramError> {
+    let len = PositionV1::<N>::encoded_len().map_err(|_| AdapterError::Arithmetic)?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(len)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    bytes.resize(len, 0);
+    position
+        .encode(&mut bytes)
+        .map_err(|_| AdapterError::PositionPostcondition)?;
+    if PositionV1::<N>::decode(&bytes) != Ok(*position) {
+        return Err(AdapterError::PositionPostcondition.into());
+    }
+    Ok(bytes)
+}
+
+fn encode_candidate_bytes<const N: usize>(
+    candidate: &CandidateStateV1<N>,
+) -> Result<Vec<u8>, ProgramError> {
+    let len = CandidateStateV1::<N>::encoded_len().map_err(|_| AdapterError::Arithmetic)?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(len)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    bytes.resize(len, 0);
+    candidate
+        .encode(&mut bytes)
+        .map_err(|_| AdapterError::PositionPostcondition)?;
+    if CandidateStateV1::<N>::decode(&bytes) != Ok(*candidate) {
+        return Err(AdapterError::PositionPostcondition.into());
+    }
+    Ok(bytes)
+}
+
+fn encode_settlement_cursor_bytes<const N: usize>(
+    cursor: &SettlementCursorV1<N>,
+) -> Result<Vec<u8>, ProgramError> {
+    let len = SettlementCursorV1::<N>::encoded_len().map_err(|_| AdapterError::Arithmetic)?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(len)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    bytes.resize(len, 0);
+    cursor
+        .encode(&mut bytes)
+        .map_err(|_| AdapterError::PositionPostcondition)?;
+    if SettlementCursorV1::<N>::decode(&bytes) != Ok(*cursor) {
+        return Err(AdapterError::PositionPostcondition.into());
+    }
+    Ok(bytes)
+}
+
+fn write_account_bytes(account: &AccountInfo<'_>, bytes: &[u8]) -> Result<(), ProgramError> {
+    let mut data = account
+        .try_borrow_mut_data()
+        .map_err(|_| AdapterError::AccountData)?;
+    if data.len() != bytes.len() {
+        return Err(AdapterError::AccountData.into());
+    }
+    data.copy_from_slice(bytes);
+    Ok(())
+}
+
+fn account_bytes_equal(account: &AccountInfo<'_>, bytes: &[u8]) -> Result<bool, ProgramError> {
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| AdapterError::AccountData)?;
+    Ok(&data[..] == bytes)
+}
+
 fn write_market<const N: usize>(
     account: &AccountInfo<'_>,
     market: CategoricalMarketV1<N>,
@@ -5092,22 +5499,6 @@ fn write_order_state(account: &AccountInfo<'_>, state: OrderStateV1) -> Result<(
         .encode(&mut data)
         .map_err(|_| AdapterError::PositionPostcondition)?;
     if OrderStateV1::decode(&data) != Ok(state) {
-        return Err(AdapterError::PositionPostcondition.into());
-    }
-    Ok(())
-}
-
-fn write_custody<const N: usize>(
-    account: &AccountInfo<'_>,
-    custody: GeneralOrderCustodyV1<N>,
-) -> Result<(), ProgramError> {
-    let mut data = account
-        .try_borrow_mut_data()
-        .map_err(|_| AdapterError::PositionPostcondition)?;
-    custody
-        .encode(&mut data)
-        .map_err(|_| AdapterError::PositionPostcondition)?;
-    if GeneralOrderCustodyV1::<N>::decode(&data) != Ok(custody) {
         return Err(AdapterError::PositionPostcondition.into());
     }
     Ok(())
