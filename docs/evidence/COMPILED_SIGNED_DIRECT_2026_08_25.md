@@ -247,11 +247,16 @@ are unique. The controller now patches only successor nonces, outcome, fill,
 gross, and fee. It no longer owns duplicate plan magic, version, count, opcode,
 party, resource, reserved-byte, or record-layout literals.
 
-`example_materialization_matches_encoding` checks that applying the complete
-patch sequence to the canonical example equals the ordinary typed Lean
-encoders. This is not yet a general patch-materialization theorem. The Rust
-patch function and each adapter expression's correctness remain unverified
-boundaries, but register ordering is no longer a parallel Rust authority.
+Commit `008d1e56ac8632c67a0a126c2862f0ceab5d155e` closes the general
+template-materialization link. A reusable `patchLE_append_encodeLE` theorem and
+eight field-specific consequences prove that each generated offset replaces
+exactly its intended little-endian word. The composed
+`materialize_claim_plan_eq_encode` and
+`materialize_custody_plan_eq_encode` theorems cover arbitrary nonces, outcomes,
+fills, gross, and fee, not just the canonical fixture. The Rust patch function
+and each adapter expression's correctness remain unverified boundaries, but
+neither register ordering nor physical-plan wire geometry is a parallel Rust
+authority.
 
 The generated transition program remains exactly 568 bytes with SHA-256
 `72cc0faa6a9768b766a3003c8ff6f38889f564f49005ce68b2187c98349bff5c`.

@@ -56,6 +56,12 @@ preserves the 568-byte program, 79,680-byte controller footprint, and measured
 CU; its value is one semantic ABI owner and a smaller adapter boundary, not
 benchmark theater.
 
+The template route is general rather than fixture-scoped: Lean proves every
+named dynamic-span replacement, composes the exact Rust patch order, and shows
+that arbitrary materialized claim/custody values equal the canonical typed
+encoders. The remaining boundary is implementation refinement for the tiny
+safe-Rust patch primitive and the account-to-field adapter expressions.
+
 ## Proposed narrow waist
 
 ```text
