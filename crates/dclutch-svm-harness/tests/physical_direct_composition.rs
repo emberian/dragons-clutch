@@ -2169,6 +2169,19 @@ async fn registered_residuals_reuse_authenticated_state_and_real_custody_atomica
         21
     );
 
+    // The residual frame is intentionally byte-for-byte identical to the
+    // first fill.  Advance the bank solely to obtain a distinct recent
+    // blockhash: otherwise a repeated payer/message pair is rejected by the
+    // bank's signature cache before the controller can derive sequence one
+    // from the persisted registrations.
+    let second_fill_clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("post-first-fill Clock sysvar");
+    context
+        .warp_to_slot(second_fill_clock.slot + 1)
+        .expect("advance to a distinct residual-fill transaction blockhash");
     let second = submit(
         &mut context,
         &[registered_controller_instruction(
