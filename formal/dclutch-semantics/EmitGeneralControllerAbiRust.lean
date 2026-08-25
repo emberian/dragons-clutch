@@ -70,7 +70,8 @@ def main : IO Unit := do
     emitOffset "SELECTION" name selectionLayout field
   for (name, field) in [
       ("VERSION", SettlementField.version), ("PHASE", .phase),
-      ("OUTCOME_COUNT", .outcomeCount), ("RESERVED", .reserved),
+      ("OUTCOME_COUNT", .outcomeCount), ("NEXT_EXECUTION", .nextExecution),
+      ("RESERVED", .reserved),
       ("CANDIDATE_ID", .candidateId), ("PAGE_COUNT", .pageCount),
       ("NEXT_PAGE", .nextPage), ("REVISION", .revision),
       ("CLAIM_INVENTORY", .claimInventory), ("QUOTE_INVENTORY", .quoteInventory),
@@ -80,7 +81,7 @@ def main : IO Unit := do
       ("VERSION", RequestField.version), ("ACTION", .action),
       ("RESERVED_A", .reservedA), ("EXPECTED_REVISION", .expectedRevision),
       ("CANDIDATE_ID", .candidateId), ("PAGE_INDEX", .pageIndex),
-      ("RESERVED_B", .reservedB)] do
+      ("EXECUTION_INDEX", .executionIndex), ("RESERVED_B", .reservedB)] do
     emitOffset "REQUEST" name requestLayout field
   IO.println "pub(crate) const ACTION_CONSIDER: u8 = 0;"
   IO.println "pub(crate) const ACTION_FREEZE: u8 = 1;"

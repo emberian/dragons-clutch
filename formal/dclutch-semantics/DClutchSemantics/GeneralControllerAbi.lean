@@ -101,14 +101,14 @@ def selectionSchema : List (FieldSpec SelectionField) := [
 ]
 
 inductive SettlementField where
-  | magic | version | phase | outcomeCount | reserved | candidateId
+  | magic | version | phase | outcomeCount | nextExecution | reserved | candidateId
   | pageCount | nextPage | revision | claimInventory
   | quoteInventory | quoteSurplusPaid
   deriving DecidableEq, Repr
 
 def settlementSchema : List (FieldSpec SettlementField) := [
   ⟨.magic, .bytes 8⟩, ⟨.version, .u16⟩, ⟨.phase, .u8⟩,
-  ⟨.outcomeCount, .u8⟩, ⟨.reserved, .reserved 4⟩,
+  ⟨.outcomeCount, .u8⟩, ⟨.nextExecution, .u8⟩, ⟨.reserved, .reserved 3⟩,
   ⟨.candidateId, .bytes 32⟩, ⟨.pageCount, .u32⟩,
   ⟨.nextPage, .u32⟩, ⟨.revision, .u64⟩,
   ⟨.claimInventory, .nested (maxOutcomes * 8)⟩,
@@ -117,14 +117,14 @@ def settlementSchema : List (FieldSpec SettlementField) := [
 
 inductive RequestField where
   | magic | version | action | reservedA | expectedRevision
-  | candidateId | pageIndex | reservedB
+  | candidateId | pageIndex | executionIndex | reservedB
   deriving DecidableEq, Repr
 
 def requestSchema : List (FieldSpec RequestField) := [
   ⟨.magic, .bytes 8⟩, ⟨.version, .u16⟩, ⟨.action, .u8⟩,
   ⟨.reservedA, .reserved 5⟩, ⟨.expectedRevision, .u64⟩,
   ⟨.candidateId, .bytes 32⟩, ⟨.pageIndex, .u32⟩,
-  ⟨.reservedB, .reserved 4⟩
+  ⟨.executionIndex, .u8⟩, ⟨.reservedB, .reserved 3⟩
 ]
 
 def candidateLayout := specialize candidateSchema
@@ -192,7 +192,8 @@ theorem cursor_coordinates_are_canonical :
       (.revision, 112, 8), (.reservedB, 120, 8)] ∧
     coordinates settlementLayout = [
       (.magic, 0, 8), (.version, 8, 2), (.phase, 10, 1),
-      (.outcomeCount, 11, 1), (.reserved, 12, 4), (.candidateId, 16, 32),
+      (.outcomeCount, 11, 1), (.nextExecution, 12, 1), (.reserved, 13, 3),
+      (.candidateId, 16, 32),
       (.pageCount, 48, 4), (.nextPage, 52, 4), (.revision, 56, 8),
       (.claimInventory, 64, 128), (.quoteInventory, 192, 8),
       (.quoteSurplusPaid, 200, 8)] := by native_decide
@@ -201,7 +202,7 @@ theorem request_coordinates_are_canonical : coordinates requestLayout = [
     (.magic, 0, 8), (.version, 8, 2), (.action, 10, 1),
     (.reservedA, 11, 5), (.expectedRevision, 16, 8),
     (.candidateId, 24, 32), (.pageIndex, 56, 4),
-    (.reservedB, 60, 4)] := by native_decide
+    (.executionIndex, 60, 1), (.reservedB, 61, 3)] := by native_decide
 
 theorem policy_coordinates_are_canonical : coordinates policyLayout = [
     (.magic, 0, 8), (.version, 8, 2), (.criterionCount, 10, 1),
@@ -287,6 +288,7 @@ structure SettlementCursorV1 where
   candidateId : Nat
   pageCount : Nat
   nextPage : Nat
+  nextExecution : Nat
   revision : Nat
   claimInventory : List Nat
   quoteInventory : Nat
@@ -298,6 +300,7 @@ structure ControllerRequestV1 where
   expectedRevision : Nat
   candidateId : Nat
   pageIndex : Nat
+  executionIndex : Nat
   deriving DecidableEq, Repr
 
 def encodeVector (values : List Nat) : List UInt8 :=
@@ -343,7 +346,8 @@ def encodeSelection (value : SelectionCursorV1) : List UInt8 :=
 
 def encodeSettlement (value : SettlementCursorV1) : List UInt8 :=
   settlementMagic ++ Codec.encodeLE 2 abiVersion ++
-  [value.phase.tag, UInt8.ofNat value.outcomeCount] ++ List.replicate 4 0 ++
+  [value.phase.tag, UInt8.ofNat value.outcomeCount, UInt8.ofNat value.nextExecution] ++
+  List.replicate 3 0 ++
   Codec.encodeLE 32 value.candidateId ++ Codec.encodeLE 4 value.pageCount ++
   Codec.encodeLE 4 value.nextPage ++ Codec.encodeLE 8 value.revision ++
   encodeVector value.claimInventory ++ Codec.encodeLE 8 value.quoteInventory ++
@@ -353,7 +357,7 @@ def encodeRequest (value : ControllerRequestV1) : List UInt8 :=
   requestMagic ++ Codec.encodeLE 2 abiVersion ++ [value.action.tag] ++
   List.replicate 5 0 ++ Codec.encodeLE 8 value.expectedRevision ++
   Codec.encodeLE 32 value.candidateId ++ Codec.encodeLE 4 value.pageIndex ++
-  List.replicate 4 0
+  [UInt8.ofNat value.executionIndex] ++ List.replicate 3 0
 
 def exampleCandidate : CandidateDataV1 := {
   outcomeCount := 2, candidateId := 0x11, productId := 0x22, batchId := 0x33,
@@ -383,12 +387,13 @@ def exampleSelection : SelectionCursorV1 := {
 
 def exampleSettlement : SettlementCursorV1 := {
   phase := .collecting, outcomeCount := 2, candidateId := 0x11,
-  pageCount := 1, nextPage := 0, revision := 3, claimInventory := [0, 0],
+  pageCount := 1, nextPage := 0, nextExecution := 0, revision := 3, claimInventory := [0, 0],
   quoteInventory := 0, quoteSurplusPaid := 0
 }
 
 def exampleRequest : ControllerRequestV1 := {
-  action := .collect, expectedRevision := 3, candidateId := 0x11, pageIndex := 0
+  action := .collect, expectedRevision := 3, candidateId := 0x11,
+  pageIndex := 0, executionIndex := 0
 }
 
 theorem example_encoding_lengths :

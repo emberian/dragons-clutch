@@ -343,6 +343,21 @@ impl ExecutionV1 {
         deliver_per_lot: [0; MAX_OUTCOMES],
     };
 
+    /// Decode one active row for a checked runtime outcome width.
+    ///
+    /// Quote fields remain candidate fragments. The General verifier must
+    /// aggregate them by order identity before applying quote rounding.
+    pub fn decode_for_outcomes(input: &[u8], outcome_count: u8) -> Result<Self> {
+        Self::decode_active(input, outcome_count)
+    }
+
+    /// Encode one active row outside its parent page using the supplied width.
+    pub fn to_bytes_for_outcomes(self, outcome_count: u8) -> Result<[u8; EXECUTION_BYTES]> {
+        let mut output = [0_u8; EXECUTION_BYTES];
+        self.encode_active(&mut output, outcome_count)?;
+        Ok(output)
+    }
+
     fn decode_active(input: &[u8], outcome_count: u8) -> Result<Self> {
         exact_width(input, EXECUTION_BYTES)?;
         let value = Self {
@@ -455,6 +470,121 @@ impl ExecutionV1 {
         }
         require_inactive_zero(&self.receive_per_lot, count)?;
         require_inactive_zero(&self.deliver_per_lot, count)
+    }
+}
+
+/// Stack-bounded borrowed view of one fixed-capacity candidate page.
+///
+/// This view validates the complete wire, including inactive row storage, but
+/// decodes active rows one at a time. Its stack footprint therefore does not
+/// grow with [`MAX_EXECUTIONS_PER_PAGE`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PageViewV1<'a> {
+    input: &'a [u8],
+    outcome_count: u8,
+    candidate_id: [u8; 32],
+    page_index: u32,
+    page_count: u32,
+    execution_count: u8,
+}
+
+impl<'a> PageViewV1<'a> {
+    /// Hostile-decode one exact page without constructing its 32-row array.
+    pub fn decode(input: &'a [u8]) -> Result<Self> {
+        header(
+            input,
+            PAGE_BYTES,
+            &generated_general_controller::PAGE_MAGIC,
+            generated_general_controller::PAGE_VERSION_OFFSET,
+        )?;
+        require_zero(
+            input,
+            generated_general_controller::PAGE_RESERVED_A_OFFSET,
+            4,
+        )?;
+        require_zero(
+            input,
+            generated_general_controller::PAGE_RESERVED_B_OFFSET,
+            8,
+        )?;
+        let value = Self {
+            input,
+            outcome_count: byte_at(
+                input,
+                generated_general_controller::PAGE_OUTCOME_COUNT_OFFSET,
+            )?,
+            candidate_id: array_at(
+                input,
+                generated_general_controller::PAGE_CANDIDATE_ID_OFFSET,
+            )?,
+            page_index: u32_at(input, generated_general_controller::PAGE_PAGE_INDEX_OFFSET)?,
+            page_count: u32_at(input, generated_general_controller::PAGE_PAGE_COUNT_OFFSET)?,
+            execution_count: byte_at(
+                input,
+                generated_general_controller::PAGE_EXECUTION_COUNT_OFFSET,
+            )?,
+        };
+        value.validate_header()?;
+        let count = usize::from(value.execution_count);
+        for index in 0..MAX_EXECUTIONS_PER_PAGE {
+            let row = execution_slice(input, index)?;
+            if index < count {
+                ExecutionV1::decode_active(row, value.outcome_count)?;
+            } else if !row.iter().all(|byte| *byte == 0) {
+                return Err(Error::NonCanonicalPadding);
+            }
+        }
+        Ok(value)
+    }
+
+    /// Active outcome prefix length.
+    pub const fn outcome_count(self) -> u8 {
+        self.outcome_count
+    }
+
+    /// Candidate identity shared with the candidate header.
+    pub const fn candidate_id(self) -> [u8; 32] {
+        self.candidate_id
+    }
+
+    /// Zero-based page coordinate.
+    pub const fn page_index(self) -> u32 {
+        self.page_index
+    }
+
+    /// Total candidate page count.
+    pub const fn page_count(self) -> u32 {
+        self.page_count
+    }
+
+    /// Active execution row count.
+    pub const fn execution_count(self) -> u8 {
+        self.execution_count
+    }
+
+    /// Decode one active row by runtime coordinate.
+    pub fn execution(self, index: usize) -> Result<ExecutionV1> {
+        if index >= usize::from(self.execution_count) {
+            return Err(Error::InvalidCursor);
+        }
+        ExecutionV1::decode_active(execution_slice(self.input, index)?, self.outcome_count)
+    }
+
+    fn validate_header(self) -> Result<()> {
+        active_count(self.outcome_count)?;
+        let count = usize::from(self.execution_count);
+        if count == 0
+            || count > MAX_EXECUTIONS_PER_PAGE
+            || self.page_count == 0
+            || self.page_count > MAX_PAGES_PER_CANDIDATE
+            || self.page_index >= self.page_count
+        {
+            return Err(Error::InvalidCursor);
+        }
+        if is_zero(&self.candidate_id) {
+            return Err(Error::ZeroCoordinate);
+        }
+        Ok(())
     }
 }
 
@@ -865,6 +995,8 @@ pub struct SettlementCursorV1 {
     pub page_count: u32,
     /// Next page for collecting/distributing, otherwise canonical zero.
     pub next_page: u32,
+    /// Next row within the current page, otherwise canonical zero.
+    pub next_execution: u8,
     /// Optimistic concurrency revision.
     pub revision: u64,
     /// Exact fixed-capacity claim inventory.
@@ -887,7 +1019,7 @@ impl SettlementCursorV1 {
         require_zero(
             input,
             generated_general_controller::SETTLEMENT_RESERVED_OFFSET,
-            4,
+            3,
         )?;
         let value = Self {
             phase: Phase::decode(byte_at(
@@ -909,6 +1041,10 @@ impl SettlementCursorV1 {
             next_page: u32_at(
                 input,
                 generated_general_controller::SETTLEMENT_NEXT_PAGE_OFFSET,
+            )?,
+            next_execution: byte_at(
+                input,
+                generated_general_controller::SETTLEMENT_NEXT_EXECUTION_OFFSET,
             )?,
             revision: u64_at(
                 input,
@@ -949,6 +1085,11 @@ impl SettlementCursorV1 {
             &mut output,
             generated_general_controller::SETTLEMENT_OUTCOME_COUNT_OFFSET,
             self.outcome_count,
+        )?;
+        put_byte(
+            &mut output,
+            generated_general_controller::SETTLEMENT_NEXT_EXECUTION_OFFSET,
+            self.next_execution,
         )?;
         put(
             &mut output,
@@ -998,18 +1139,24 @@ impl SettlementCursorV1 {
         }
         require_inactive_zero(&self.claim_inventory, count)?;
         match self.phase {
-            Phase::Collecting | Phase::Distributing if self.next_page >= self.page_count => {
+            Phase::Collecting | Phase::Distributing
+                if self.next_page >= self.page_count
+                    || usize::from(self.next_execution) >= MAX_EXECUTIONS_PER_PAGE =>
+            {
                 Err(Error::InvalidCursor)
             }
             Phase::Collecting | Phase::Distributing => Ok(()),
             Phase::Terminal
                 if self.next_page != 0
+                    || self.next_execution != 0
                     || self.quote_inventory != 0
                     || self.claim_inventory.iter().any(|value| *value != 0) =>
             {
                 Err(Error::NonCanonicalPadding)
             }
-            Phase::Materializing | Phase::ReadyToClose | Phase::Terminal if self.next_page != 0 => {
+            Phase::Materializing | Phase::ReadyToClose | Phase::Terminal
+                if self.next_page != 0 || self.next_execution != 0 =>
+            {
                 Err(Error::InvalidCursor)
             }
             Phase::Materializing | Phase::ReadyToClose | Phase::Terminal => Ok(()),
@@ -1028,6 +1175,8 @@ pub struct ControllerRequestV1 {
     pub candidate_id: Option<[u8; 32]>,
     /// Page coordinate for collect/distribute, canonical zero otherwise.
     pub page_index: u32,
+    /// Execution-row coordinate for collect/distribute, canonical zero otherwise.
+    pub execution_index: u8,
 }
 
 impl ControllerRequestV1 {
@@ -1047,7 +1196,7 @@ impl ControllerRequestV1 {
         require_zero(
             input,
             generated_general_controller::REQUEST_RESERVED_B_OFFSET,
-            4,
+            3,
         )?;
         let action = Action::decode(byte_at(
             input,
@@ -1067,6 +1216,10 @@ impl ControllerRequestV1 {
             page_index: u32_at(
                 input,
                 generated_general_controller::REQUEST_PAGE_INDEX_OFFSET,
+            )?,
+            execution_index: byte_at(
+                input,
+                generated_general_controller::REQUEST_EXECUTION_INDEX_OFFSET,
             )?,
         };
         value.validate()?;
@@ -1104,6 +1257,11 @@ impl ControllerRequestV1 {
             generated_general_controller::REQUEST_PAGE_INDEX_OFFSET,
             &self.page_index.to_le_bytes(),
         )?;
+        put_byte(
+            &mut output,
+            generated_general_controller::REQUEST_EXECUTION_INDEX_OFFSET,
+            self.execution_index,
+        )?;
         Ok(output)
     }
 
@@ -1112,13 +1270,31 @@ impl ControllerRequestV1 {
             return Err(Error::ZeroCoordinate);
         }
         match self.action {
-            Action::Freeze if self.candidate_id.is_none() && self.page_index == 0 => Ok(()),
-            Action::Collect | Action::Distribute if self.candidate_id.is_some() => Ok(()),
+            Action::Freeze
+                if self.candidate_id.is_none()
+                    && self.page_index == 0
+                    && self.execution_index == 0 =>
+            {
+                Ok(())
+            }
             Action::Consider
-            | Action::InitializeSettlement
-            | Action::Materialize
-            | Action::Close
-                if self.candidate_id.is_some() && self.page_index == 0 =>
+                if self.candidate_id.is_some()
+                    && self.page_index < MAX_PAGES_PER_CANDIDATE
+                    && self.execution_index == 0 =>
+            {
+                Ok(())
+            }
+            Action::Collect | Action::Distribute
+                if self.candidate_id.is_some()
+                    && self.page_index < MAX_PAGES_PER_CANDIDATE
+                    && usize::from(self.execution_index) < MAX_EXECUTIONS_PER_PAGE =>
+            {
+                Ok(())
+            }
+            Action::InitializeSettlement | Action::Materialize | Action::Close
+                if self.candidate_id.is_some()
+                    && self.page_index == 0
+                    && self.execution_index == 0 =>
             {
                 Ok(())
             }
@@ -1403,6 +1579,7 @@ mod tests {
             candidate_id: id(0x11),
             page_count: 1,
             next_page: 0,
+            next_execution: 0,
             revision: 3,
             claim_inventory: [0; MAX_OUTCOMES],
             quote_inventory: 0,
@@ -1423,6 +1600,7 @@ mod tests {
             expected_revision: 3,
             candidate_id: Some(id(0x11)),
             page_index: 0,
+            execution_index: 0,
         };
         let request_bytes = request.to_bytes()?;
         assert_eq!(request_bytes, generated_general_controller::REQUEST_EXAMPLE);
@@ -1475,6 +1653,7 @@ mod tests {
             expected_revision: 3,
             candidate_id: Some(id(0x11)),
             page_index: 0,
+            execution_index: 0,
         }
         .to_bytes()?;
         for length in 0..CONTROLLER_REQUEST_BYTES {
@@ -1505,6 +1684,7 @@ mod tests {
             candidate_id: id(1),
             page_count: 1,
             next_page: 0,
+            next_execution: 0,
             revision: 0,
             claim_inventory: [0; MAX_OUTCOMES],
             quote_inventory: 0,
@@ -1602,6 +1782,7 @@ mod tests {
             expected_revision: 4,
             candidate_id: None,
             page_index: 0,
+            execution_index: 0,
         };
         let mut request_bytes = request.to_bytes()?;
         request_bytes[generated_general_controller::REQUEST_ACTION_OFFSET] = 255;
@@ -1616,6 +1797,7 @@ mod tests {
             candidate_id: id(1),
             page_count: 1,
             next_page: 0,
+            next_execution: 0,
             revision: 8,
             claim_inventory: [0; MAX_OUTCOMES],
             quote_inventory: 0,

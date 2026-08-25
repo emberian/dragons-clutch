@@ -1,0 +1,16 @@
+[package]
+name = "dclutch-general-adapter-contract"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Bounded verifier and streamed settlement contract for General clearing"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+dclutch-general-codec = { path = "../dclutch-general-codec" }
+
+[lints]
+workspace = true
