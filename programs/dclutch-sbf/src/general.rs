@@ -2415,6 +2415,7 @@ fn process_distribute_settlement_page<const N: usize>(
         rent_credit,
         &Pubkey::new_from_array(candidate.submitter().to_bytes()),
     )?;
+    let rent_credit_before = rent_credit.lamports();
     let mut owner_positions = [None; MAX_EXECUTIONS_PER_PAGE_V1];
     let mut quote_destinations = [None; MAX_EXECUTIONS_PER_PAGE_V1];
     for (index, execution) in page
@@ -2570,6 +2571,13 @@ fn process_distribute_settlement_page<const N: usize>(
     write_settlement_cursor(cursor_account, cursor)?;
     write_position(settlement_position_account, settlement_position)?;
     close_program_account(page_account, rent_credit)?;
+    if rent_credit.lamports()
+        != rent_credit_before
+            .checked_add(page_close.rent_credit_lamports)
+            .ok_or(AdapterError::Arithmetic)?
+    {
+        return Err(AdapterError::PositionPostcondition.into());
+    }
     require_unchanged_rent_credit(program_id, rent_credit, rent_credit_state)?;
     let settlement_quote_after = authenticate_settlement_quote_escrow(
         program_id,
