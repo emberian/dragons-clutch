@@ -25,6 +25,11 @@ pub const CHECKED_RELEASE_FIXED_BYTES_V1: usize = 388;
 pub const LOADER_V3_PROGRAMDATA_METADATA_BYTES: usize = 45;
 /// Exact Loader V3 Program account-data width.
 pub const LOADER_V3_PROGRAM_BYTES: usize = 36;
+/// Solana's maximum permitted data length for one account.
+pub const SOLANA_MAX_PERMITTED_ACCOUNT_DATA_BYTES: usize = 10 * 1024 * 1024;
+/// Largest ELF that fits in a Loader V3 ProgramData account without padding.
+pub const LOADER_V3_MAX_ELF_BYTES: usize =
+    SOLANA_MAX_PERMITTED_ACCOUNT_DATA_BYTES - LOADER_V3_PROGRAMDATA_METADATA_BYTES;
 /// Canonical metadata-file header.
 pub const RELEASE_METADATA_HEADER_V1: &str = "dclutch-release-metadata-v1";
 
@@ -96,6 +101,8 @@ pub enum Error {
     ArithmeticOverflow,
     /// The supplied artifact was not a supported SBF ELF envelope.
     InvalidSbfElf,
+    /// The ELF plus mandatory Loader V3 metadata cannot fit in one account.
+    ArtifactExceedsLoaderLimit,
     /// The existing Loader V3 parser refused account data.
     LoaderV3(LoaderV3Error),
     /// Program account data named a different ProgramData account.
@@ -104,6 +111,8 @@ pub enum Error {
     LoaderObservationMismatch,
     /// ProgramData was too short to contain the fixed metadata and exact ELF.
     ProgramDataTooShort,
+    /// ProgramData exceeded Solana's maximum permitted account-data length.
+    ProgramDataExceedsAccountLimit,
     /// The exact ELF did not occur at the fixed ProgramData payload offset.
     DeployedElfMismatch,
     /// Bytes after the checked ELF contained nonzero data.
@@ -652,6 +661,17 @@ impl CheckedReleaseV1 {
         {
             return Err(Error::InvalidLength);
         }
+        if self.elf_len
+            > u64::try_from(LOADER_V3_MAX_ELF_BYTES).map_err(|_| Error::ArithmeticOverflow)?
+        {
+            return Err(Error::ArtifactExceedsLoaderLimit);
+        }
+        if self.programdata_account_len
+            > u64::try_from(SOLANA_MAX_PERMITTED_ACCOUNT_DATA_BYTES)
+                .map_err(|_| Error::ArithmeticOverflow)?
+        {
+            return Err(Error::ProgramDataExceedsAccountLimit);
+        }
         let required_programdata = self
             .programdata_elf_offset
             .checked_add(self.elf_len)
@@ -721,6 +741,9 @@ pub fn build_checked_release(evidence: ReleaseEvidenceV1<'_>) -> Result<CheckedR
     }
     validate_semantic_preimage(evidence.metadata.semantic_kind, evidence.semantic_preimage)?;
     validate_sbf_elf(evidence.elf)?;
+    if evidence.programdata_account_data.len() > SOLANA_MAX_PERMITTED_ACCOUNT_DATA_BYTES {
+        return Err(Error::ProgramDataExceedsAccountLimit);
+    }
     let program = ProgramV3View::parse(evidence.program_account_data)?;
     if program.programdata_key() != evidence.metadata.programdata_id {
         return Err(Error::ProgramDataLinkMismatch);
@@ -820,6 +843,9 @@ fn validate_semantic_preimage(kind: SemanticPreimageKindV1, bytes: &[u8]) -> Res
 }
 
 fn validate_sbf_elf(bytes: &[u8]) -> Result<()> {
+    if bytes.len() > LOADER_V3_MAX_ELF_BYTES {
+        return Err(Error::ArtifactExceedsLoaderLimit);
+    }
     if bytes.len() < ELF_HEADER_BYTES
         || bytes.get(..4) != Some([0x7f, b'E', b'L', b'F'].as_slice())
         || read_byte(bytes, 4)? != ELF_CLASS_64

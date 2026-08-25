@@ -337,3 +337,25 @@ fn sbf_header_and_pyth_semantic_owner_are_not_bypassed() -> Result<()> {
     ));
     Ok(())
 }
+
+#[test]
+fn loader_account_limits_are_release_admission_not_deployment_lore() -> Result<()> {
+    let mut largest = sbf_elf()?;
+    largest.resize(LOADER_V3_MAX_ELF_BYTES, 0);
+    assert_eq!(validate_sbf_elf(&largest), Ok(()));
+    largest.push(0);
+    assert_eq!(
+        validate_sbf_elf(&largest),
+        Err(Error::ArtifactExceedsLoaderLimit)
+    );
+
+    let mut oversized_programdata = Fixture::capability()?;
+    oversized_programdata
+        .programdata
+        .resize(SOLANA_MAX_PERMITTED_ACCOUNT_DATA_BYTES + 1, 0);
+    assert_eq!(
+        build_checked_release(oversized_programdata.evidence()),
+        Err(Error::ProgramDataExceedsAccountLimit)
+    );
+    Ok(())
+}
