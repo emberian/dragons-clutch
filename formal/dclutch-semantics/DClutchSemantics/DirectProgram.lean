@@ -16,60 +16,226 @@ open DClutch
 open DClutch.Direct
 open DClutch.TransitionVM
 
+/-- Ordered scalar-register schema. Constructor order is the wire index; Rust
+constant names are emitted from this same typed data rather than maintained as
+parallel numeric literals. -/
+inductive ScalarSlot where
+  | phase | slot | sellerFrom | sellerThrough | buyerFrom | buyerThrough
+  | sellerSide | buyerSide | sellerGeneration | buyerGeneration
+  | sellerOutcome | buyerOutcome | outcomeCount
+  | sellerLifecycle | sellerMaximum | buyerLifecycle | buyerMaximum
+  | sellerNonce | buyerNonce | sellerNextNonce | buyerNextNonce
+  | sellerLimit | executionPrice | buyerLimit | priceScale
+  | sellerFeeBps | buyerFeeBps | policyFeeBps | fill
+  | sellerClaims | buyerClaims | buyerCollateral | sellerCollateral
+  | venueCollateral | grossOutput | feeOutput | zero | one | feeDenominator
+  | sellerNonceOutput | buyerNonceOutput
+  deriving DecidableEq, Repr
+
+namespace ScalarSlot
+
+def all : List ScalarSlot := [
+  .phase, .slot, .sellerFrom, .sellerThrough, .buyerFrom, .buyerThrough,
+  .sellerSide, .buyerSide, .sellerGeneration, .buyerGeneration,
+  .sellerOutcome, .buyerOutcome, .outcomeCount,
+  .sellerLifecycle, .sellerMaximum, .buyerLifecycle, .buyerMaximum,
+  .sellerNonce, .buyerNonce, .sellerNextNonce, .buyerNextNonce,
+  .sellerLimit, .executionPrice, .buyerLimit, .priceScale,
+  .sellerFeeBps, .buyerFeeBps, .policyFeeBps, .fill,
+  .sellerClaims, .buyerClaims, .buyerCollateral, .sellerCollateral,
+  .venueCollateral, .grossOutput, .feeOutput, .zero, .one, .feeDenominator,
+  .sellerNonceOutput, .buyerNonceOutput
+]
+
+@[simp] def index : ScalarSlot → Nat
+  | .phase => 0
+  | .slot => 1
+  | .sellerFrom => 2
+  | .sellerThrough => 3
+  | .buyerFrom => 4
+  | .buyerThrough => 5
+  | .sellerSide => 6
+  | .buyerSide => 7
+  | .sellerGeneration => 8
+  | .buyerGeneration => 9
+  | .sellerOutcome => 10
+  | .buyerOutcome => 11
+  | .outcomeCount => 12
+  | .sellerLifecycle => 13
+  | .sellerMaximum => 14
+  | .buyerLifecycle => 15
+  | .buyerMaximum => 16
+  | .sellerNonce => 17
+  | .buyerNonce => 18
+  | .sellerNextNonce => 19
+  | .buyerNextNonce => 20
+  | .sellerLimit => 21
+  | .executionPrice => 22
+  | .buyerLimit => 23
+  | .priceScale => 24
+  | .sellerFeeBps => 25
+  | .buyerFeeBps => 26
+  | .policyFeeBps => 27
+  | .fill => 28
+  | .sellerClaims => 29
+  | .buyerClaims => 30
+  | .buyerCollateral => 31
+  | .sellerCollateral => 32
+  | .venueCollateral => 33
+  | .grossOutput => 34
+  | .feeOutput => 35
+  | .zero => 36
+  | .one => 37
+  | .feeDenominator => 38
+  | .sellerNonceOutput => 39
+  | .buyerNonceOutput => 40
+
+def rustName : ScalarSlot → String
+  | .phase => "SCALAR_PHASE"
+  | .slot => "SCALAR_SLOT"
+  | .sellerFrom => "SCALAR_SELLER_FROM"
+  | .sellerThrough => "SCALAR_SELLER_THROUGH"
+  | .buyerFrom => "SCALAR_BUYER_FROM"
+  | .buyerThrough => "SCALAR_BUYER_THROUGH"
+  | .sellerSide => "SCALAR_SELLER_SIDE"
+  | .buyerSide => "SCALAR_BUYER_SIDE"
+  | .sellerGeneration => "SCALAR_SELLER_GENERATION"
+  | .buyerGeneration => "SCALAR_BUYER_GENERATION"
+  | .sellerOutcome => "SCALAR_SELLER_OUTCOME"
+  | .buyerOutcome => "SCALAR_BUYER_OUTCOME"
+  | .outcomeCount => "SCALAR_OUTCOME_COUNT"
+  | .sellerLifecycle => "SCALAR_SELLER_LIFECYCLE"
+  | .sellerMaximum => "SCALAR_SELLER_MAXIMUM"
+  | .buyerLifecycle => "SCALAR_BUYER_LIFECYCLE"
+  | .buyerMaximum => "SCALAR_BUYER_MAXIMUM"
+  | .sellerNonce => "SCALAR_SELLER_NONCE"
+  | .buyerNonce => "SCALAR_BUYER_NONCE"
+  | .sellerNextNonce => "SCALAR_SELLER_NEXT_NONCE"
+  | .buyerNextNonce => "SCALAR_BUYER_NEXT_NONCE"
+  | .sellerLimit => "SCALAR_SELLER_LIMIT"
+  | .executionPrice => "SCALAR_EXECUTION_PRICE"
+  | .buyerLimit => "SCALAR_BUYER_LIMIT"
+  | .priceScale => "SCALAR_PRICE_SCALE"
+  | .sellerFeeBps => "SCALAR_SELLER_FEE_BPS"
+  | .buyerFeeBps => "SCALAR_BUYER_FEE_BPS"
+  | .policyFeeBps => "SCALAR_POLICY_FEE_BPS"
+  | .fill => "SCALAR_FILL"
+  | .sellerClaims => "SCALAR_SELLER_CLAIMS"
+  | .buyerClaims => "SCALAR_BUYER_CLAIMS"
+  | .buyerCollateral => "SCALAR_BUYER_COLLATERAL"
+  | .sellerCollateral => "SCALAR_SELLER_COLLATERAL"
+  | .venueCollateral => "SCALAR_VENUE_COLLATERAL"
+  | .grossOutput => "SCALAR_GROSS_OUTPUT"
+  | .feeOutput => "SCALAR_FEE_OUTPUT"
+  | .zero => "SCALAR_ZERO"
+  | .one => "SCALAR_ONE"
+  | .feeDenominator => "SCALAR_FEE_DENOMINATOR"
+  | .sellerNonceOutput => "SCALAR_SELLER_NONCE_OUTPUT"
+  | .buyerNonceOutput => "SCALAR_BUYER_NONCE_OUTPUT"
+
+theorem index_matches_constructor (register : ScalarSlot) :
+    index register = register.ctorIdx := by
+  cases register <;> rfl
+
+theorem indices_are_canonical :
+    all.map index = List.range all.length := by
+  native_decide
+
+theorem rust_names_are_unique : (all.map rustName).Nodup := by
+  native_decide
+
+end ScalarSlot
+
 namespace Scalar
 
-def phase := 0
-def slot := 1
-def sellerFrom := 2
-def sellerThrough := 3
-def buyerFrom := 4
-def buyerThrough := 5
-def sellerSide := 6
-def buyerSide := 7
-def sellerGeneration := 8
-def buyerGeneration := 9
-def sellerOutcome := 10
-def buyerOutcome := 11
-def outcomeCount := 12
-def sellerLifecycle := 13
-def sellerMaximum := 14
-def buyerLifecycle := 15
-def buyerMaximum := 16
-def sellerNonce := 17
-def buyerNonce := 18
-def sellerNextNonce := 19
-def buyerNextNonce := 20
-def sellerLimit := 21
-def executionPrice := 22
-def buyerLimit := 23
-def priceScale := 24
-def sellerFeeBps := 25
-def buyerFeeBps := 26
-def policyFeeBps := 27
-def fill := 28
-def sellerClaims := 29
-def buyerClaims := 30
-def buyerCollateral := 31
-def sellerCollateral := 32
-def venueCollateral := 33
-def grossOutput := 34
-def feeOutput := 35
-def zero := 36
-def one := 37
-def feeDenominator := 38
-def sellerNonceOutput := 39
-def buyerNonceOutput := 40
-def count := 41
+def phase := ScalarSlot.index .phase
+def slot := ScalarSlot.index .slot
+def sellerFrom := ScalarSlot.index .sellerFrom
+def sellerThrough := ScalarSlot.index .sellerThrough
+def buyerFrom := ScalarSlot.index .buyerFrom
+def buyerThrough := ScalarSlot.index .buyerThrough
+def sellerSide := ScalarSlot.index .sellerSide
+def buyerSide := ScalarSlot.index .buyerSide
+def sellerGeneration := ScalarSlot.index .sellerGeneration
+def buyerGeneration := ScalarSlot.index .buyerGeneration
+def sellerOutcome := ScalarSlot.index .sellerOutcome
+def buyerOutcome := ScalarSlot.index .buyerOutcome
+def outcomeCount := ScalarSlot.index .outcomeCount
+def sellerLifecycle := ScalarSlot.index .sellerLifecycle
+def sellerMaximum := ScalarSlot.index .sellerMaximum
+def buyerLifecycle := ScalarSlot.index .buyerLifecycle
+def buyerMaximum := ScalarSlot.index .buyerMaximum
+def sellerNonce := ScalarSlot.index .sellerNonce
+def buyerNonce := ScalarSlot.index .buyerNonce
+def sellerNextNonce := ScalarSlot.index .sellerNextNonce
+def buyerNextNonce := ScalarSlot.index .buyerNextNonce
+def sellerLimit := ScalarSlot.index .sellerLimit
+def executionPrice := ScalarSlot.index .executionPrice
+def buyerLimit := ScalarSlot.index .buyerLimit
+def priceScale := ScalarSlot.index .priceScale
+def sellerFeeBps := ScalarSlot.index .sellerFeeBps
+def buyerFeeBps := ScalarSlot.index .buyerFeeBps
+def policyFeeBps := ScalarSlot.index .policyFeeBps
+def fill := ScalarSlot.index .fill
+def sellerClaims := ScalarSlot.index .sellerClaims
+def buyerClaims := ScalarSlot.index .buyerClaims
+def buyerCollateral := ScalarSlot.index .buyerCollateral
+def sellerCollateral := ScalarSlot.index .sellerCollateral
+def venueCollateral := ScalarSlot.index .venueCollateral
+def grossOutput := ScalarSlot.index .grossOutput
+def feeOutput := ScalarSlot.index .feeOutput
+def zero := ScalarSlot.index .zero
+def one := ScalarSlot.index .one
+def feeDenominator := ScalarSlot.index .feeDenominator
+def sellerNonceOutput := ScalarSlot.index .sellerNonceOutput
+def buyerNonceOutput := ScalarSlot.index .buyerNonceOutput
+def count := ScalarSlot.all.length
 
 end Scalar
 
+/-- Ordered identity-register schema. -/
+inductive IdentitySlot where
+  | sellerMarket | buyerMarket | sellerMaker | buyerMaker
+  deriving DecidableEq, Repr
+
+namespace IdentitySlot
+
+def all : List IdentitySlot := [
+  .sellerMarket, .buyerMarket, .sellerMaker, .buyerMaker
+]
+
+@[simp] def index : IdentitySlot → Nat
+  | .sellerMarket => 0
+  | .buyerMarket => 1
+  | .sellerMaker => 2
+  | .buyerMaker => 3
+
+def rustName : IdentitySlot → String
+  | .sellerMarket => "IDENTITY_SELLER_MARKET"
+  | .buyerMarket => "IDENTITY_BUYER_MARKET"
+  | .sellerMaker => "IDENTITY_SELLER_MAKER"
+  | .buyerMaker => "IDENTITY_BUYER_MAKER"
+
+theorem index_matches_constructor (register : IdentitySlot) :
+    index register = register.ctorIdx := by
+  cases register <;> rfl
+
+theorem indices_are_canonical :
+    all.map index = List.range all.length := by
+  native_decide
+
+theorem rust_names_are_unique : (all.map rustName).Nodup := by
+  native_decide
+
+end IdentitySlot
+
 namespace Identity
 
-def sellerMarket := 0
-def buyerMarket := 1
-def sellerMaker := 2
-def buyerMaker := 3
-def count := 4
+def sellerMarket := IdentitySlot.index .sellerMarket
+def buyerMarket := IdentitySlot.index .buyerMarket
+def sellerMaker := IdentitySlot.index .sellerMaker
+def buyerMaker := IdentitySlot.index .buyerMaker
+def count := IdentitySlot.all.length
 
 end Identity
 
@@ -218,10 +384,11 @@ private theorem run_program_stages (initial : State) :
   simp only [program, runStages, run_append, run_append_fn]
   rfl
 
-theorem register_shape (frame : FillFrame) :
+  theorem register_shape (frame : FillFrame) :
     (state frame).scalars.size = Scalar.count ∧
     (state frame).identities.size = Identity.count := by
-  simp [state, registerState, Scalar.count, Identity.count]
+  simp [state, registerState, Scalar.count, Identity.count,
+    ScalarSlot.all, IdentitySlot.all]
 
 theorem program_length : program.length = 35 := by
   native_decide

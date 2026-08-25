@@ -31,7 +31,10 @@ use dclutch_token_svm::{
     PRODUCTION_ADAPTER_RELEASES,
 };
 use dclutch_transition_vm::Registers;
-use generated_direct_program::DIRECT_PROGRAM;
+use generated_direct_program::{
+    DIRECT_PROGRAM, IDENTITY_COUNT, SCALAR_BUYER_NONCE_OUTPUT, SCALAR_FEE_OUTPUT, SCALAR_FILL,
+    SCALAR_GROSS_OUTPUT, SCALAR_SELLER_NONCE_OUTPUT,
+};
 use solana_instructions_sysvar::{load_current_index_checked, load_instruction_at_checked};
 use solana_program::{
     account_info::{AccountInfo, next_account_info},
@@ -819,7 +822,9 @@ fn build_registers(
     slot: u64,
 ) -> Result<Registers, ControllerError> {
     let mut registers = Registers::zeroed();
-    let scalars = [
+    // Inputs occupy the schema prefix before the first program-owned output.
+    // This type boundary fails compilation if Lean changes that partition.
+    let scalars: [u64; SCALAR_GROSS_OUTPUT] = [
         authority.phase as u64,
         slot,
         seller.valid_from,
@@ -860,15 +865,13 @@ fn build_registers(
             .set_scalar(index, value)
             .map_err(|_| ControllerError::Transition)?;
     }
-    for (index, identity) in [
+    let identities: [[u8; 32]; IDENTITY_COUNT] = [
         seller.market,
         buyer.market,
         makers[0].to_bytes(),
         makers[1].to_bytes(),
-    ]
-    .into_iter()
-    .enumerate()
-    {
+    ];
+    for (index, identity) in identities.into_iter().enumerate() {
         registers
             .set_identity(index, identity)
             .map_err(|_| ControllerError::Transition)?;
@@ -888,28 +891,28 @@ fn claim_plan(
         8,
         [0, 0, 0, 0],
         0,
-        register_scalar(registers, 39)?,
+        register_scalar(registers, SCALAR_SELLER_NONCE_OUTPUT)?,
     )?;
     write_effect(
         &mut plan,
         24,
         [0, 1, 0, 0],
         0,
-        register_scalar(registers, 40)?,
+        register_scalar(registers, SCALAR_BUYER_NONCE_OUTPUT)?,
     )?;
     write_effect(
         &mut plan,
         40,
         [1, 0, 1, 0],
         u32::from(outcome),
-        register_scalar(registers, 28)?,
+        register_scalar(registers, SCALAR_FILL)?,
     )?;
     write_effect(
         &mut plan,
         56,
         [2, 1, 1, 0],
         u32::from(outcome),
-        register_scalar(registers, 28)?,
+        register_scalar(registers, SCALAR_FILL)?,
     )?;
     Ok(plan)
 }
@@ -919,9 +922,9 @@ fn custody_plan(registers: &Registers) -> Result<[u8; CUSTODY_PLAN_BYTES], Contr
     let mut plan = [0_u8; CUSTODY_PLAN_BYTES];
     plan[..8].copy_from_slice(&[b'D', b'C', b'C', b'P', 1, 2, 0, 0]);
     plan[8..16].copy_from_slice(&[1, 0, 0, 0, 0, 0, 0, 0]);
-    plan[16..24].copy_from_slice(&register_scalar(registers, 34)?.to_le_bytes());
+    plan[16..24].copy_from_slice(&register_scalar(registers, SCALAR_GROSS_OUTPUT)?.to_le_bytes());
     plan[24..32].copy_from_slice(&[1, 2, 0, 0, 0, 0, 0, 0]);
-    plan[32..40].copy_from_slice(&register_scalar(registers, 35)?.to_le_bytes());
+    plan[32..40].copy_from_slice(&register_scalar(registers, SCALAR_FEE_OUTPUT)?.to_le_bytes());
     Ok(plan)
 }
 
