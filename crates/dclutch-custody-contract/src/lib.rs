@@ -23,8 +23,9 @@ pub use generated::{
 
 use generated::*;
 
-/// Exact caller-authority PDA seed domain.
-pub const CALLER_AUTHORITY_PDA_DOMAIN_V1: &[u8] = b"dclutch:role-authority:v1";
+/// The caller role is the canonical release-set role type, not a Custody DTO.
+pub use dclutch_release_set_contract::ExecutionRoleV1 as CallerRoleV1;
+
 /// Exact Custody transfer-authority PDA seed domain.
 pub const CUSTODY_AUTHORITY_PDA_DOMAIN_V1: &[u8] = b"dclutch:custody-authority:v1";
 /// Exact per-context Custody replay PDA seed domain.
@@ -108,32 +109,6 @@ impl OperationV1 {
     }
 }
 
-/// Registry role whose selected program requested the custody effect.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(u8)]
-pub enum CallerRoleV1 {
-    /// Core lifecycle program.
-    Core = 0,
-    /// Claims-representation program.
-    Claims = 1,
-    /// Direct, General, Dealer, or other selected trading program.
-    Trading = 2,
-    /// Resolution and funded-recovery program.
-    Resolution = 3,
-}
-
-impl CallerRoleV1 {
-    fn decode(value: u8) -> Result<Self> {
-        match value {
-            0 => Ok(Self::Core),
-            1 => Ok(Self::Claims),
-            2 => Ok(Self::Trading),
-            3 => Ok(Self::Resolution),
-            _ => Err(Error::UnknownCallerRole),
-        }
-    }
-}
-
 /// Economic compartment labeling one exact token account role.
 ///
 /// These tags are evidence, not balances. The caller remains the sole owner of
@@ -177,6 +152,106 @@ impl CompartmentV1 {
             8 => Ok(Self::RecoveryReserve),
             _ => Err(Error::UnknownCompartment),
         }
+    }
+
+    /// Return the canonical one-byte physical compartment seed.
+    pub const fn tag(self) -> u8 {
+        self as u8
+    }
+}
+
+/// Canonical Custody transfer-authority seeds under the Custody program.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CustodyAuthoritySeedsV1 {
+    market: [u8; 32],
+    release_set: [u8; 32],
+}
+
+impl CustodyAuthoritySeedsV1 {
+    /// Project the sole transfer-authority tuple from one request.
+    pub const fn from_request(request: CustodyRequestV1) -> Self {
+        Self {
+            market: request.market,
+            release_set: request.release_set,
+        }
+    }
+
+    /// Borrow the exact ordered SVM seed slices, excluding the bump.
+    pub fn as_slices(&self) -> [&[u8]; 3] {
+        [
+            CUSTODY_AUTHORITY_PDA_DOMAIN_V1,
+            &self.market,
+            &self.release_set,
+        ]
+    }
+}
+
+/// Canonical per-context replay seeds under the Custody program.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CustodyReplaySeedsV1 {
+    market: [u8; 32],
+    release_set: [u8; 32],
+    context: [u8; 32],
+}
+
+impl CustodyReplaySeedsV1 {
+    /// Project the sole replay tuple from one request.
+    pub const fn from_request(request: CustodyRequestV1) -> Self {
+        Self {
+            market: request.market,
+            release_set: request.release_set,
+            context: request.context,
+        }
+    }
+
+    /// Borrow the exact ordered SVM seed slices, excluding the bump.
+    pub fn as_slices(&self) -> [&[u8]; 4] {
+        [
+            CUSTODY_REPLAY_PDA_DOMAIN_V1,
+            &self.market,
+            &self.release_set,
+            &self.context,
+        ]
+    }
+}
+
+/// Canonical compartment/context Vault seeds under the Custody program.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CustodyVaultSeedsV1 {
+    market: [u8; 32],
+    release_set: [u8; 32],
+    context: [u8; 32],
+    compartment: [u8; 1],
+}
+
+impl CustodyVaultSeedsV1 {
+    /// Project source- or destination-side Vault seeds.
+    pub const fn from_request(request: CustodyRequestV1, source: bool) -> Self {
+        Self {
+            market: request.market,
+            release_set: request.release_set,
+            context: if source {
+                request.source_vault_context
+            } else {
+                request.destination_vault_context
+            },
+            compartment: [if source {
+                request.source_compartment.tag()
+            } else {
+                request.destination_compartment.tag()
+            }],
+        }
+    }
+
+    /// Borrow the exact ordered SVM seed slices, excluding the bump.
+    pub fn as_slices(&self) -> [&[u8]; 5] {
+        [
+            CUSTODY_VAULT_PDA_DOMAIN_V1,
+            &self.market,
+            &self.release_set,
+            &self.context,
+            &self.compartment,
+        ]
     }
 }
 
@@ -264,7 +339,7 @@ impl CustodyRequestV1 {
         require_zero(input, REQUEST_RESERVED_OFFSET, RESERVED_REQUEST_BYTES)?;
         let value = Self {
             operation: OperationV1::decode(read_byte(input, REQUEST_OPERATION_OFFSET)?)?,
-            caller_role: CallerRoleV1::decode(read_byte(input, REQUEST_CALLER_ROLE_OFFSET)?)?,
+            caller_role: decode_caller_role(read_byte(input, REQUEST_CALLER_ROLE_OFFSET)?)?,
             source_compartment: CompartmentV1::decode(read_byte(
                 input,
                 REQUEST_SOURCE_COMPARTMENT_OFFSET,
@@ -398,6 +473,9 @@ impl CustodyRequestV1 {
         ] {
             require_nonzero(&value)?;
         }
+        if self.caller_role == CallerRoleV1::Custody {
+            return Err(Error::UnknownCallerRole);
+        }
         if self.expected_revision.checked_add(1) != Some(self.resulting_revision) {
             return Err(Error::RevisionOverflow);
         }
@@ -429,6 +507,7 @@ impl CustodyRequestV1 {
                     || is_zero(&self.destination)
                     || !is_zero(&self.source_vault_context)
                     || is_zero(&self.destination_vault_context)
+                    || self.destination_vault_context != self.context
                     || is_zero(&self.mint)
                     || is_zero(&self.token_program)
                     || is_zero(&self.payer)
@@ -472,6 +551,7 @@ impl CustodyRequestV1 {
                     || !is_zero(&self.destination)
                     || is_zero(&self.source_vault_context)
                     || !is_zero(&self.destination_vault_context)
+                    || self.source_vault_context != self.context
                     || is_zero(&self.mint)
                     || is_zero(&self.token_program)
                     || !is_zero(&self.payer)
@@ -556,7 +636,7 @@ impl CustodyReplayV1 {
         }
         require_zero(input, REPLAY_RESERVED_HEADER_OFFSET, 4)?;
         let value = Self {
-            caller_role: CallerRoleV1::decode(read_byte(input, REPLAY_CALLER_ROLE_OFFSET)?)?,
+            caller_role: decode_caller_role(read_byte(input, REPLAY_CALLER_ROLE_OFFSET)?)?,
             release_set: read_array(input, REPLAY_RELEASE_SET_OFFSET)?,
             market: read_array(input, REPLAY_MARKET_OFFSET)?,
             realm: read_array(input, REPLAY_REALM_OFFSET)?,
@@ -625,6 +705,13 @@ impl CustodyReplayV1 {
         }
         if request.expected_revision != self.next_revision {
             return Err(Error::ReplayRevisionMismatch);
+        }
+        if matches!(
+            request.operation,
+            OperationV1::OpenVault | OperationV1::CloseVault
+        ) && request.rent_refund != self.rent_refund
+        {
+            return Err(Error::ReplayBindingMismatch);
         }
         if is_zero(&request_digest) || is_zero(&poststate_commitment) {
             return Err(Error::InvalidOperationShape);
@@ -778,7 +865,7 @@ impl CustodyReceiptV1 {
         require_zero(input, RECEIPT_RESERVED_OFFSET, RESERVED_RECEIPT_BYTES)?;
         Ok(Self {
             operation: OperationV1::decode(read_byte(input, RECEIPT_OPERATION_OFFSET)?)?,
-            caller_role: CallerRoleV1::decode(read_byte(input, RECEIPT_CALLER_ROLE_OFFSET)?)?,
+            caller_role: decode_caller_role(read_byte(input, RECEIPT_CALLER_ROLE_OFFSET)?)?,
             source_compartment: CompartmentV1::decode(read_byte(
                 input,
                 RECEIPT_SOURCE_COMPARTMENT_OFFSET,
@@ -911,6 +998,16 @@ fn require_header(input: &[u8], magic: &[u8; 8], width: usize, version: usize) -
         return Err(Error::UnsupportedSchema);
     }
     Ok(())
+}
+
+fn decode_caller_role(value: u8) -> Result<CallerRoleV1> {
+    match value {
+        0 => Ok(CallerRoleV1::Core),
+        1 => Ok(CallerRoleV1::Claims),
+        2 => Ok(CallerRoleV1::Trading),
+        3 => Ok(CallerRoleV1::Resolution),
+        _ => Err(Error::UnknownCallerRole),
+    }
 }
 
 fn require_nonzero(value: &[u8; 32]) -> Result<()> {
@@ -1096,6 +1193,9 @@ mod tests {
         hostile.expected_revision = u64::MAX;
         hostile.resulting_revision = 0;
         assert_eq!(hostile.validate(), Err(Error::RevisionOverflow));
+        let mut hostile = transfer();
+        hostile.caller_role = CallerRoleV1::Custody;
+        assert_eq!(hostile.validate(), Err(Error::UnknownCallerRole));
     }
 
     #[test]

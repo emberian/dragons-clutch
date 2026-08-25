@@ -1,0 +1,45 @@
+[package]
+name = "dclutch-custody-sbf"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+rust-version = "1.89"
+description = "Thin authenticated SBF adapter for canonical dClutch custody"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+path = "src/lib.rs"
+
+[features]
+default = []
+no-entrypoint = []
+custom-heap = []
+custom-panic = []
+
+[dependencies]
+dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
+dclutch-custody-contract = { path = "../../crates/dclutch-custody-contract" }
+dclutch-realm-contract = { path = "../../crates/dclutch-realm-contract" }
+dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }
+dclutch-registry-svm = { path = "../../crates/dclutch-registry-svm" }
+dclutch-release-set-contract = { path = "../../crates/dclutch-release-set-contract" }
+dclutch-token-svm = { path = "../../crates/dclutch-token-svm" }
+solana-program = { version = "=3.0.0", default-features = false }
+solana-sdk-ids = "=3.1.0"
+solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
+
+[workspace]
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(target_os, values("solana"))'] }
+
+[lints.clippy]
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+checked_conversions = "deny"
+float_arithmetic = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+unwrap_used = "deny"

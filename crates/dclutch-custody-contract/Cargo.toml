@@ -6,6 +6,9 @@ license = "AGPL-3.0-or-later"
 rust-version = "1.89"
 description = "Generated fixed-layout contract for canonical dClutch collateral custody"
 
+[dependencies]
+dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
+
 [workspace]
 
 [lints.rust]
