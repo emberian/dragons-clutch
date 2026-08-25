@@ -1,5 +1,6 @@
 import DClutchSemantics.DirectControllerCodec
 import DClutchSemantics.DirectProgram
+import DClutchSemantics.RegisteredControllerAbi
 
 /-!
 # Direct translation-validation corpus
@@ -16,6 +17,192 @@ open DClutch.Codec
 open DClutch.Direct
 open DClutch.DirectControllerCodec
 open DClutch.TransitionVM
+
+namespace RegisteredTerminalCorpus
+
+open DClutch.Direct
+open DClutch.DirectLifecycle
+open DClutch.Direct.RegisteredControllerAbi
+
+def actionTag : RegisteredPhysical.TerminalAction → Nat
+  | .cancel => 0
+  | .expire => 1
+
+def actionName : RegisteredPhysical.TerminalAction → String
+  | .cancel => "cancel"
+  | .expire => "expire"
+
+def actions : List RegisteredPhysical.TerminalAction := [.cancel, .expire]
+
+def boundaries : List Nat := [
+  0, 1, 2, 254, 255, 256, 257, 65534, 65535, 65536,
+  4294967295, 4294967296, 18446744073709551614, 18446744073709551615
+]
+
+def atCycle (index : Nat) : Nat :=
+  boundaries[index % boundaries.length]?.getD 0
+
+def changedByte (byte : UInt8) : UInt8 := UInt8.ofNat (byte.toNat + 1)
+
+def acceptance (value : Option α) : String :=
+  if value.isSome then "accept" else "reject"
+
+def controllerInstruction
+    (action : RegisteredPhysical.TerminalAction) (index : Nat) : Terminal.InstructionV1 := {
+  action
+  controllerBump := UInt8.ofNat (index * 11 + 2)
+  registrationBump := UInt8.ofNat (index * 13 + 3)
+  expectedSequence := atCycle index
+}
+
+def caseName (action : RegisteredPhysical.TerminalAction) (index : Nat) : String :=
+  s!"{actionName action}-{index}"
+
+def emitController (action : RegisteredPhysical.TerminalAction) (index : Nat) : IO Unit := do
+  let instruction := controllerInstruction action index
+  let name := caseName action index
+  let encoded := Terminal.encode instruction
+  IO.println <| String.intercalate "|" [
+    "terminal-controller", name, toString (actionTag action),
+    toString instruction.controllerBump.toNat,
+    toString instruction.registrationBump.toNat,
+    toString instruction.expectedSequence, hex encoded
+  ]
+  for offset in List.range encoded.length do
+    let mutated := encoded.set offset (changedByte (encoded[offset]?.getD 0))
+    IO.println <| String.intercalate "|" [
+      "terminal-controller-mutation", name, toString offset,
+      acceptance (Terminal.decode mutated)
+    ]
+  for width in List.range encoded.length do
+    let truncated := encoded.take width
+    IO.println <| String.intercalate "|" [
+      "terminal-controller-hostile", name, s!"truncate-{width}",
+      hex truncated, acceptance (Terminal.decode truncated)
+    ]
+  let padded := encoded ++ [0]
+  IO.println <| String.intercalate "|" [
+    "terminal-controller-hostile", name, "pad-1", hex padded,
+    acceptance (Terminal.decode padded)
+  ]
+
+def emitClaim (action : RegisteredPhysical.TerminalAction) (index : Nat) : IO Unit := do
+  let sequence := atCycle index
+  let name := caseName action index
+  let encoded := RegisteredPhysical.encodeTerminalInstruction action sequence
+  IO.println <| String.intercalate "|" [
+    "terminal-claim", name, toString (actionTag action),
+    toString sequence, hex encoded
+  ]
+  for offset in List.range encoded.length do
+    let mutated := encoded.set offset (changedByte (encoded[offset]?.getD 0))
+    IO.println <| String.intercalate "|" [
+      "terminal-claim-mutation", name, toString offset,
+      acceptance (RegisteredPhysical.decodeTerminalInstruction mutated)
+    ]
+  for width in List.range encoded.length do
+    let truncated := encoded.take width
+    IO.println <| String.intercalate "|" [
+      "terminal-claim-hostile", name, s!"truncate-{width}",
+      hex truncated,
+      acceptance (RegisteredPhysical.decodeTerminalInstruction truncated)
+    ]
+  let padded := encoded ++ [0]
+  IO.println <| String.intercalate "|" [
+    "terminal-claim-hostile", name, "pad-1", hex padded,
+    acceptance (RegisteredPhysical.decodeTerminalInstruction padded)
+  ]
+
+def intent (maker maximum validThrough : Nat) : Intent := {
+  market := 101
+  generation := 3
+  maker
+  nonce := 0
+  validFromSlot := 10
+  validThroughSlot := validThrough
+  side := .sell
+  lifecycle := .goodTillCancelled
+  outcome := 1
+  maxFill := maximum
+  limitPrice := 500000
+  feeBasisPoints := 25
+}
+
+def state (phase : DirectLifecycle.Phase) (remaining maximum sequence validThrough maker : Nat) :
+    DirectLifecycle.State := {
+  terms := intent maker maximum validThrough
+  phase
+  remaining
+  sequence
+}
+
+structure TransitionCase where
+  name : String
+  action : RegisteredPhysical.TerminalAction
+  state : DirectLifecycle.State
+  slot : Nat
+  expectedSequence : Nat
+  actorMaker : Nat
+
+def transition (test : TransitionCase) : Option DirectLifecycle.State :=
+  match test.action with
+  | .cancel =>
+      if test.actorMaker = test.state.terms.maker then
+        DirectLifecycle.cancel { state := test.state, expectedSequence := test.expectedSequence }
+      else none
+  | .expire =>
+      DirectLifecycle.expire {
+        state := test.state
+        slot := test.slot
+        expectedSequence := test.expectedSequence
+      }
+
+def transitionCases : List TransitionCase := [
+  ⟨"cancel", .cancel, state .open 100 100 7 20 11, 0, 7, 11⟩,
+  ⟨"cancel-stale-sequence", .cancel, state .open 100 100 7 20 11, 0, 6, 11⟩,
+  ⟨"cancel-sequence-overflow", .cancel,
+    state .open 100 100 18446744073709551615 20 11,
+    0, 18446744073709551615, 11⟩,
+  ⟨"cancel-wrong-maker", .cancel, state .open 100 100 7 20 11, 0, 7, 12⟩,
+  ⟨"cancel-cancelled", .cancel, state .cancelled 100 100 7 20 11, 0, 7, 11⟩,
+  ⟨"cancel-expired", .cancel, state .expired 100 100 7 20 11, 0, 7, 11⟩,
+  ⟨"cancel-filled", .cancel, state .filled 0 100 7 20 11, 0, 7, 11⟩,
+  ⟨"cancel-invalid-open-zero", .cancel, state .open 0 100 7 20 11, 0, 7, 11⟩,
+  ⟨"cancel-invalid-remaining", .cancel, state .open 101 100 7 20 11, 0, 7, 11⟩,
+  ⟨"expire", .expire, state .open 100 100 7 20 11, 21, 7, 99⟩,
+  ⟨"expire-at-boundary", .expire, state .open 100 100 7 20 11, 20, 7, 99⟩,
+  ⟨"expire-before-boundary", .expire, state .open 100 100 7 20 11, 19, 7, 99⟩,
+  ⟨"expire-stale-sequence", .expire, state .open 100 100 7 20 11, 21, 6, 99⟩,
+  ⟨"expire-sequence-overflow", .expire,
+    state .open 100 100 18446744073709551615 20 11,
+    21, 18446744073709551615, 99⟩,
+  ⟨"expire-cancelled", .expire, state .cancelled 100 100 7 20 11, 21, 7, 99⟩,
+  ⟨"expire-expired", .expire, state .expired 100 100 7 20 11, 21, 7, 99⟩,
+  ⟨"expire-filled", .expire, state .filled 0 100 7 20 11, 21, 7, 99⟩,
+  ⟨"expire-invalid-open-zero", .expire, state .open 0 100 7 20 11, 21, 7, 99⟩,
+  ⟨"expire-invalid-remaining", .expire, state .open 101 100 7 20 11, 21, 7, 99⟩
+]
+
+def emitTransition (test : TransitionCase) : IO Unit := do
+  let fields := [
+    "terminal-transition", test.name, toString (actionTag test.action),
+    toString (DirectLifecycleProgram.phaseTag test.state.phase),
+    toString test.state.remaining, toString test.state.terms.maxFill,
+    toString test.state.sequence, toString test.state.terms.validThroughSlot,
+    toString test.slot, toString test.expectedSequence,
+    toString test.state.terms.maker, toString test.actorMaker
+  ]
+  match transition test with
+  | none => IO.println <| String.intercalate "|" (fields ++ ["reject"])
+  | some result =>
+      IO.println <| String.intercalate "|" (fields ++ [
+        "accept", toString (DirectLifecycleProgram.phaseTag result.phase),
+        toString result.remaining, toString result.terms.maxFill,
+        toString result.sequence, toString result.terms.validThroughSlot,
+        toString result.terms.maker
+      ])
+
+end RegisteredTerminalCorpus
 
 def natCsv (values : Array Nat) : String :=
   String.intercalate "," (values.toList.map toString)
@@ -197,6 +384,12 @@ def main : IO Unit := do
     emitIntent index
   for index in List.range (boundary64.length / 2) do
     emitController index
+  for action in RegisteredTerminalCorpus.actions do
+    for index in List.range RegisteredTerminalCorpus.boundaries.length do
+      RegisteredTerminalCorpus.emitController action index
+      RegisteredTerminalCorpus.emitClaim action index
+  for test in RegisteredTerminalCorpus.transitionCases do
+    RegisteredTerminalCorpus.emitTransition test
   for entry in microProgramCases do
     emitVmProgramCase entry.1 entry.2.1 entry.2.2
   for entry in coordinatedStates do

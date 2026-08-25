@@ -5,11 +5,16 @@ use std::{collections::BTreeMap, env, error::Error, fmt, fs, path::Path};
 
 use dclutch_direct_codec::{
     COMPACT_INTENT_BYTES, CONTROLLER_INSTRUCTION_BYTES, CompactIntentV1, ControllerInstructionV1,
+    REGISTERED_CLAIM_TERMINAL_BYTES, REGISTERED_TERMINAL_INSTRUCTION_BYTES,
+    RegisteredTerminalAction, RegisteredTerminalInstructionV1,
+    registered_claim_terminal_instruction,
 };
 use dclutch_transition_vm::{Registers, execute};
 
 #[cfg(kani)]
 mod kani_proofs;
+
+mod terminal;
 
 mod generated_program {
     #![allow(dead_code, unused_imports, unused_macros)]
@@ -41,10 +46,16 @@ type Result<T> = std::result::Result<T, Box<dyn Error>>;
 struct Statistics {
     intents: usize,
     controllers: usize,
+    terminal_controllers: usize,
+    terminal_claims: usize,
     abi_mutations: usize,
+    abi_hostile_widths: usize,
     vm_cases: usize,
     vm_accepts: usize,
     vm_refusals: usize,
+    terminal_transitions: usize,
+    terminal_accepts: usize,
+    terminal_refusals: usize,
     rust_roundtrips: usize,
 }
 
@@ -281,6 +292,239 @@ fn validate_controller_mutation(
     require_equal(actual, expected, &context)
 }
 
+#[derive(Clone)]
+struct TerminalControllerCase {
+    bytes: Vec<u8>,
+}
+
+#[derive(Clone)]
+struct TerminalClaimCase {
+    bytes: Vec<u8>,
+}
+
+fn terminal_actions(
+    tag: &str,
+    context: &str,
+) -> Result<(terminal::Action, RegisteredTerminalAction)> {
+    let tag = parse_u8(tag, context)?;
+    let local = terminal::Action::from_tag(tag)
+        .ok_or_else(|| failure(format!("{context}: unknown action tag {tag}")))?;
+    let rust = match local {
+        terminal::Action::Cancel => RegisteredTerminalAction::Cancel,
+        terminal::Action::Expire => RegisteredTerminalAction::Expire,
+    };
+    Ok((local, rust))
+}
+
+fn disposition(value: &str, context: &str) -> Result<bool> {
+    match value {
+        "accept" => Ok(true),
+        "reject" => Ok(false),
+        _ => Err(failure(format!("{context}: invalid Lean disposition"))),
+    }
+}
+
+fn validate_terminal_controller(
+    fields: &[&str],
+    cases: &mut BTreeMap<String, TerminalControllerCase>,
+) -> Result<()> {
+    if fields.len() != 7 {
+        return Err(failure("terminal controller: wrong field count"));
+    }
+    let context = format!("terminal controller {}", fields[1]);
+    let (_, action) = terminal_actions(fields[2], &context)?;
+    let instruction = RegisteredTerminalInstructionV1 {
+        action,
+        controller_bump: parse_u8(fields[3], &context)?,
+        registration_bump: parse_u8(fields[4], &context)?,
+        expected_sequence: parse_u64(fields[5], &context)?,
+    };
+    let expected = decode_hex(fields[6], &context)?;
+    require_equal(
+        expected.len(),
+        REGISTERED_TERMINAL_INSTRUCTION_BYTES,
+        &context,
+    )?;
+    let encoded = instruction
+        .encode()
+        .map_err(|error| failure(format!("{context}: Rust encoder refused: {error:?}")))?;
+    require_equal(encoded.as_slice(), expected.as_slice(), &context)?;
+    require_equal(
+        RegisteredTerminalInstructionV1::decode(&expected),
+        Ok(instruction),
+        &context,
+    )?;
+    if cases
+        .insert(
+            fields[1].to_owned(),
+            TerminalControllerCase { bytes: expected },
+        )
+        .is_some()
+    {
+        return Err(failure(format!("{context}: duplicate name")));
+    }
+    Ok(())
+}
+
+fn validate_terminal_controller_mutation(
+    fields: &[&str],
+    cases: &BTreeMap<String, TerminalControllerCase>,
+) -> Result<()> {
+    if fields.len() != 4 {
+        return Err(failure("terminal controller mutation: wrong field count"));
+    }
+    let context = format!(
+        "terminal controller mutation {} byte {}",
+        fields[1], fields[2]
+    );
+    let case = cases
+        .get(fields[1])
+        .ok_or_else(|| failure(format!("{context}: unknown case")))?;
+    let mut bytes = case.bytes.clone();
+    let offset = fields[2]
+        .parse::<usize>()
+        .map_err(|error| failure(format!("{context}: invalid offset: {error}")))?;
+    let byte = bytes
+        .get_mut(offset)
+        .ok_or_else(|| failure(format!("{context}: offset out of bounds")))?;
+    *byte = changed_byte(*byte);
+    let actual = RegisteredTerminalInstructionV1::decode(&bytes).is_ok();
+    require_equal(actual, disposition(fields[3], &context)?, &context)
+}
+
+fn validate_terminal_controller_hostile(
+    fields: &[&str],
+    cases: &BTreeMap<String, TerminalControllerCase>,
+) -> Result<()> {
+    if fields.len() != 5 {
+        return Err(failure("terminal controller hostile: wrong field count"));
+    }
+    let context = format!("terminal controller hostile {} {}", fields[1], fields[2]);
+    if !cases.contains_key(fields[1]) {
+        return Err(failure(format!("{context}: unknown case")));
+    }
+    let bytes = decode_hex(fields[3], &context)?;
+    let actual = RegisteredTerminalInstructionV1::decode(&bytes).is_ok();
+    require_equal(actual, disposition(fields[4], &context)?, &context)
+}
+
+fn validate_terminal_claim(
+    fields: &[&str],
+    cases: &mut BTreeMap<String, TerminalClaimCase>,
+) -> Result<()> {
+    if fields.len() != 5 {
+        return Err(failure("terminal claim: wrong field count"));
+    }
+    let context = format!("terminal claim {}", fields[1]);
+    let (local_action, rust_action) = terminal_actions(fields[2], &context)?;
+    let sequence = parse_u64(fields[3], &context)?;
+    let expected = decode_hex(fields[4], &context)?;
+    require_equal(expected.len(), REGISTERED_CLAIM_TERMINAL_BYTES, &context)?;
+    let encoded = registered_claim_terminal_instruction(rust_action, sequence)
+        .map_err(|error| failure(format!("{context}: Rust encoder refused: {error:?}")))?;
+    require_equal(encoded.as_slice(), expected.as_slice(), &context)?;
+    require_equal(
+        terminal::decode_claim(&expected),
+        Some((local_action, sequence)),
+        &context,
+    )?;
+    if cases
+        .insert(fields[1].to_owned(), TerminalClaimCase { bytes: expected })
+        .is_some()
+    {
+        return Err(failure(format!("{context}: duplicate name")));
+    }
+    Ok(())
+}
+
+fn validate_terminal_claim_mutation(
+    fields: &[&str],
+    cases: &BTreeMap<String, TerminalClaimCase>,
+) -> Result<()> {
+    if fields.len() != 4 {
+        return Err(failure("terminal claim mutation: wrong field count"));
+    }
+    let context = format!("terminal claim mutation {} byte {}", fields[1], fields[2]);
+    let case = cases
+        .get(fields[1])
+        .ok_or_else(|| failure(format!("{context}: unknown case")))?;
+    let mut bytes = case.bytes.clone();
+    let offset = fields[2]
+        .parse::<usize>()
+        .map_err(|error| failure(format!("{context}: invalid offset: {error}")))?;
+    let byte = bytes
+        .get_mut(offset)
+        .ok_or_else(|| failure(format!("{context}: offset out of bounds")))?;
+    *byte = changed_byte(*byte);
+    let actual = terminal::decode_claim(&bytes).is_some();
+    require_equal(actual, disposition(fields[3], &context)?, &context)
+}
+
+fn validate_terminal_claim_hostile(
+    fields: &[&str],
+    cases: &BTreeMap<String, TerminalClaimCase>,
+) -> Result<()> {
+    if fields.len() != 5 {
+        return Err(failure("terminal claim hostile: wrong field count"));
+    }
+    let context = format!("terminal claim hostile {} {}", fields[1], fields[2]);
+    if !cases.contains_key(fields[1]) {
+        return Err(failure(format!("{context}: unknown case")));
+    }
+    let bytes = decode_hex(fields[3], &context)?;
+    let actual = terminal::decode_claim(&bytes).is_some();
+    require_equal(actual, disposition(fields[4], &context)?, &context)
+}
+
+fn validate_terminal_transition(fields: &[&str], statistics: &mut Statistics) -> Result<()> {
+    if fields.len() != 13 && fields.len() != 19 {
+        return Err(failure("terminal transition: wrong field count"));
+    }
+    let context = format!("terminal transition {}", fields[1]);
+    let (action, _) = terminal_actions(fields[2], &context)?;
+    let before = terminal::State {
+        phase: parse_u8(fields[3], &context)?,
+        remaining: parse_u64(fields[4], &context)?,
+        maximum: parse_u64(fields[5], &context)?,
+        sequence: parse_u64(fields[6], &context)?,
+        valid_through: parse_u64(fields[7], &context)?,
+        maker: parse_u64(fields[10], &context)?,
+    };
+    let request = terminal::Request {
+        action,
+        slot: parse_u64(fields[8], &context)?,
+        expected_sequence: parse_u64(fields[9], &context)?,
+        actor_maker: parse_u64(fields[11], &context)?,
+    };
+    let expected_accept = disposition(fields[12], &context)?;
+    let mut after = before;
+    let actual_accept = terminal::apply(&mut after, request);
+    require_equal(actual_accept, expected_accept, &context)?;
+    if expected_accept {
+        if fields.len() != 19 {
+            return Err(failure(format!("{context}: acceptance omitted post-state")));
+        }
+        let expected = terminal::State {
+            phase: parse_u8(fields[13], &context)?,
+            remaining: parse_u64(fields[14], &context)?,
+            maximum: parse_u64(fields[15], &context)?,
+            sequence: parse_u64(fields[16], &context)?,
+            valid_through: parse_u64(fields[17], &context)?,
+            maker: parse_u64(fields[18], &context)?,
+        };
+        require_equal(after, expected, &context)?;
+        statistics.terminal_accepts += 1;
+    } else {
+        if fields.len() != 13 {
+            return Err(failure(format!("{context}: refusal carried post-state")));
+        }
+        require_equal(after, before, &format!("{context}: rollback"))?;
+        statistics.terminal_refusals += 1;
+    }
+    statistics.terminal_transitions += 1;
+    Ok(())
+}
+
 fn identity(value: u64) -> [u8; 32] {
     let mut bytes = [0_u8; 32];
     bytes[..8].copy_from_slice(&value.to_le_bytes());
@@ -490,6 +734,8 @@ fn validate(path: &Path) -> Result<Statistics> {
     let mut intents = BTreeMap::new();
     let mut intent_bytes = BTreeMap::new();
     let mut controller_bytes = BTreeMap::new();
+    let mut terminal_controllers = BTreeMap::new();
+    let mut terminal_claims = BTreeMap::new();
     let mut program_seen = false;
 
     for (line_index, line) in lines.enumerate() {
@@ -526,6 +772,33 @@ fn validate(path: &Path) -> Result<Statistics> {
                 validate_controller_mutation(&fields, &controller_bytes)?;
                 statistics.abi_mutations += 1;
             }
+            Some("terminal-controller") => {
+                validate_terminal_controller(&fields, &mut terminal_controllers)?;
+                statistics.terminal_controllers += 1;
+            }
+            Some("terminal-controller-mutation") => {
+                validate_terminal_controller_mutation(&fields, &terminal_controllers)?;
+                statistics.abi_mutations += 1;
+            }
+            Some("terminal-controller-hostile") => {
+                validate_terminal_controller_hostile(&fields, &terminal_controllers)?;
+                statistics.abi_hostile_widths += 1;
+            }
+            Some("terminal-claim") => {
+                validate_terminal_claim(&fields, &mut terminal_claims)?;
+                statistics.terminal_claims += 1;
+            }
+            Some("terminal-claim-mutation") => {
+                validate_terminal_claim_mutation(&fields, &terminal_claims)?;
+                statistics.abi_mutations += 1;
+            }
+            Some("terminal-claim-hostile") => {
+                validate_terminal_claim_hostile(&fields, &terminal_claims)?;
+                statistics.abi_hostile_widths += 1;
+            }
+            Some("terminal-transition") => {
+                validate_terminal_transition(&fields, &mut statistics)?;
+            }
             Some("vm") => validate_vm(&fields, &mut statistics)?,
             Some("vm-program") => validate_vm_program(&fields, &mut statistics)?,
             Some(kind) => {
@@ -560,12 +833,19 @@ fn main() -> Result<()> {
     }
     let statistics = validate(Path::new(&path))?;
     println!(
-        "translation validation passed: {} Lean ABI values, {} single-byte ABI mutations, {} Lean VM states ({} accepted, {} refused with rollback), {} deterministic Rust roundtrips",
-        statistics.intents + statistics.controllers,
+        "translation validation passed: {} Lean ABI values, {} single-byte ABI mutations, {} hostile ABI widths, {} Lean VM states ({} accepted, {} refused with rollback), {} registered terminal transitions ({} accepted, {} refused with exact rollback), {} deterministic Rust roundtrips",
+        statistics.intents
+            + statistics.controllers
+            + statistics.terminal_controllers
+            + statistics.terminal_claims,
         statistics.abi_mutations,
+        statistics.abi_hostile_widths,
         statistics.vm_cases,
         statistics.vm_accepts,
         statistics.vm_refusals,
+        statistics.terminal_transitions,
+        statistics.terminal_accepts,
+        statistics.terminal_refusals,
         statistics.rust_roundtrips,
     );
     Ok(())

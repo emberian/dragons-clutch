@@ -30,10 +30,18 @@ printf 'lean_direct_program_sha256=%s\n' \
   "$(sha256_file "$repository_dir/formal/dclutch-semantics/DClutchSemantics/DirectProgram.lean")"
 printf 'lean_vm_sha256=%s\n' \
   "$(sha256_file "$repository_dir/formal/dclutch-semantics/DClutchSemantics/TransitionVM.lean")"
+printf 'lean_terminal_controller_abi_sha256=%s\n' \
+  "$(sha256_file "$repository_dir/formal/dclutch-semantics/DClutchSemantics/RegisteredControllerAbi.lean")"
+printf 'lean_terminal_physical_sha256=%s\n' \
+  "$(sha256_file "$repository_dir/formal/dclutch-semantics/DClutchSemantics/RegisteredPhysical.lean")"
+printf 'lean_direct_lifecycle_sha256=%s\n' \
+  "$(sha256_file "$repository_dir/formal/dclutch-semantics/DClutchSemantics/DirectLifecycle.lean")"
 printf 'rust_codec_sha256=%s\n' \
   "$(sha256_file "$repository_dir/crates/dclutch-direct-codec/src/lib.rs")"
 printf 'rust_vm_sha256=%s\n' \
   "$(sha256_file "$repository_dir/crates/dclutch-transition-vm/src/lib.rs")"
+printf 'rust_terminal_validator_sha256=%s\n' \
+  "$(sha256_file "$validator_dir/src/terminal.rs")"
 printf 'program_include_sha256=%s\n' \
   "$(sha256_file "$repository_dir/programs/dclutch-controller-proof-sbf/src/generated_direct_program.rs")"
 rustc -Vv

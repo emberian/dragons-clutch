@@ -14,6 +14,24 @@ admission, checked subtraction, equality selection, and zero selection. This
 keeps newly added VM opcodes inside the cross-language boundary even before a
 full specialized market program consumes every opcode.
 
+The registered terminal extension independently checks:
+
+- every Lean-emitted cancellation and expiry controller request against the
+  public safe-Rust encoder and strict decoder;
+- every Lean-emitted claim-child cancellation and expiry request against the
+  public safe-Rust encoder and a validator-local strict classifier;
+- every single-byte mutation, every truncated width, and a padded width for
+  both wire formats; and
+- a safe mutable physical projection of cancellation and expiry against the
+  Lean transition result, including exact refusal rollback for stale sequence,
+  sequence overflow, wrong phase, invalid state, premature expiry, and maker
+  mismatch.
+
+Maker authentication is an adapter observation rather than a field in Lean's
+`CancelFrame`. The corpus therefore wraps Lean `cancel` with the same explicit
+maker-equality gate evaluated by the independent Rust projection. Expiry is
+permissionless and ignores that observation.
+
 Run:
 
 ```sh
@@ -26,12 +44,22 @@ CPI, account authentication, or transaction rollback. Rust interpreter
 refusals are additionally checked to leave the supplied register frame
 unchanged.
 
-`src/kani_proofs.rs` also contains four bit-precise universal proof targets for
-all fixed-width intent/controller values, every truncated intent width, and the
-reserved intent spans. They are deliberately `cfg(kani)`-gated, following the
-Kani project's integration guidance. They are **not current evidence**: Kani is
-not installed on the checked macOS host, so no Kani result is claimed until a
-specific release/toolchain is pinned and the harnesses actually complete.
+The terminal physical projection in `src/terminal.rs` is validator code, not
+the on-chain implementation. The shipping safe-Rust claim API currently
+exposes the encoder; its child-instruction decoder lives across the SBF adapter
+boundary. Accordingly, agreement with the validator-local strict claim
+classifier is wire-format evidence, not a source-refinement claim about that
+adapter parser. Likewise, the transition comparison does not establish that
+the SBF account mutation path refines the Lean transition; exact-ELF and
+real-runtime campaigns remain separate evidence.
+
+`src/kani_proofs.rs` also contains six bit-precise universal proof targets for
+all fixed-width intent/controller values, the registered terminal controller,
+every truncated intent and terminal-controller width, and the reserved intent
+spans. They are deliberately `cfg(kani)`-gated, following the Kani project's
+integration guidance. They are **not current evidence**: Kani is not installed
+on the checked macOS host, so no Kani result is claimed until a specific
+release/toolchain is pinned and the harnesses actually complete.
 
 The identity bridge maps each Lean `Nat` identity in this corpus injectively
 into the first eight little-endian bytes of a physical 32-byte Rust identity.
