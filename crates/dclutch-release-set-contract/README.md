@@ -23,7 +23,18 @@ composing adapter must:
 4. persist or authenticate one activation binding before lending any
    controller PDA authority.
 
-The live capability manifest and controller are intentionally not wired yet.
-That convergence requires a successor manifest profile; reinterpreting the
-existing `release_id` field in place would create two meanings for already
-founded Markets.
+`CapabilityExecutionSelectionV1` is the Lean-owned, generated-layout projection
+from one exact manifest entry to the fixed Trading role. It carries the
+manifest, entry index, kind, semantic capability release, and config—never a
+Program, artifact release, or family tag. Core reconstructs this 144-byte value
+for activation and closure, then selects the executable only through the
+Market's Trading binding. Hot actions authenticate the selection persisted in
+the Trading-owned child root and do not repeat the prefix.
+
+The capability entry's `release_id` remains semantic capability authority. It
+is not an artifact-release ID and cannot be used as a dynamic Program registry
+key. General, Dealer, Direct, Series, and later data-defined families share the
+one Registry-selected Trading interpreter.
+
+Run `./check-generated.sh` from this directory to prove the checked-in Rust
+layout is the exact output of the Lean ABI emitter.

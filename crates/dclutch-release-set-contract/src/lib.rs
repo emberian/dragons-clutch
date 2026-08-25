@@ -12,6 +12,21 @@
 
 use dclutch_core_contract::ContentId;
 
+#[rustfmt::skip]
+#[allow(missing_docs)]
+mod generated_capability_execution;
+
+pub use generated_capability_execution::{
+    CAPABILITY_EXECUTION_SELECTION_BYTES_V1, CAPABILITY_EXECUTION_SELECTION_CONFIG_OFFSET,
+    CAPABILITY_EXECUTION_SELECTION_ENTRY_INDEX_OFFSET, CAPABILITY_EXECUTION_SELECTION_KIND_OFFSET,
+    CAPABILITY_EXECUTION_SELECTION_MAGIC_OFFSET, CAPABILITY_EXECUTION_SELECTION_MAGIC_V1,
+    CAPABILITY_EXECUTION_SELECTION_MANIFEST_OFFSET, CAPABILITY_EXECUTION_SELECTION_PROFILE_OFFSET,
+    CAPABILITY_EXECUTION_SELECTION_PROFILE_V1, CAPABILITY_EXECUTION_SELECTION_RELEASE_OFFSET,
+    CAPABILITY_EXECUTION_SELECTION_RESERVED_OFFSET,
+    CAPABILITY_EXECUTION_SELECTION_SCHEMA_VERSION_OFFSET,
+    CAPABILITY_EXECUTION_SELECTION_SCHEMA_VERSION_V1,
+};
+
 /// Bytes in one program-identity or content-identity coordinate.
 pub const IDENTITY_BYTES: usize = 32;
 /// Number of semantic execution roles in profile 1.
@@ -50,7 +65,6 @@ const RESERVED_OFFSET: usize = 12;
 const RESERVED_BYTES: usize = 4;
 const PROGRAM_OFFSET: usize = 0;
 const ARTIFACT_RELEASE_OFFSET: usize = IDENTITY_BYTES;
-
 /// Stable refusal returned by the execution-release-set contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -72,6 +86,8 @@ pub enum Error {
     InconsistentAliasedRoleBinding,
     /// A release set, Market, context, or role-request digest was zero.
     ZeroCallerAuthorityCoordinate,
+    /// A manifest, capability kind, capability release, or config identity was zero.
+    ZeroCapabilityExecutionCoordinate,
 }
 
 /// Result alias for execution-release-set operations.
@@ -302,6 +318,183 @@ impl CallerAuthoritySeedsV1 {
     }
 }
 
+/// Canonical projection from one authenticated capability entry to one fixed
+/// execution role.
+///
+/// This value is not capability authority and deliberately contains no
+/// Program or artifact-release identity. A composing Core must rebuild it
+/// byte-for-byte from the immutable Market-selected manifest entry. The
+/// selected Program and artifact then come only from the Market-selected
+/// [`ExecutionReleaseSetV1`] binding for [`Self::executor_role`].
+///
+/// For activation and closure, the projection is the fixed prefix of the
+/// role-owned request hashed by the Core effect envelope. Hot actions instead
+/// authenticate the exact selection persisted in the Trading-owned child root.
+/// General, Dealer, Direct, Series, and other data-defined venue families
+/// select [`ExecutionRoleV1::Trading`]; they do not dynamically register
+/// family-specific Program identities.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CapabilityExecutionSelectionV1 {
+    entry_index: u16,
+    manifest: ContentId,
+    kind: ContentId,
+    capability_release: ContentId,
+    config: ContentId,
+}
+
+impl CapabilityExecutionSelectionV1 {
+    /// Construct one manifest-derived fixed-role projection.
+    pub fn new(
+        entry_index: u16,
+        manifest: ContentId,
+        kind: ContentId,
+        capability_release: ContentId,
+        config: ContentId,
+    ) -> Result<Self> {
+        Ok(Self {
+            entry_index,
+            manifest,
+            kind,
+            capability_release,
+            config,
+        })
+    }
+
+    /// Validate raw coordinates and construct one projection.
+    pub fn from_bytes(
+        entry_index: u16,
+        manifest: [u8; IDENTITY_BYTES],
+        kind: [u8; IDENTITY_BYTES],
+        capability_release: [u8; IDENTITY_BYTES],
+        config: [u8; IDENTITY_BYTES],
+    ) -> Result<Self> {
+        Self::new(
+            entry_index,
+            capability_coordinate(manifest)?,
+            capability_coordinate(kind)?,
+            capability_coordinate(capability_release)?,
+            capability_coordinate(config)?,
+        )
+    }
+
+    /// Hostile-decode one exact canonical projection.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() != CAPABILITY_EXECUTION_SELECTION_BYTES_V1 {
+            return Err(Error::InvalidLength);
+        }
+        if bytes.get(
+            CAPABILITY_EXECUTION_SELECTION_MAGIC_OFFSET
+                ..CAPABILITY_EXECUTION_SELECTION_MAGIC_OFFSET
+                    + CAPABILITY_EXECUTION_SELECTION_MAGIC_V1.len(),
+        ) != Some(CAPABILITY_EXECUTION_SELECTION_MAGIC_V1.as_slice())
+        {
+            return Err(Error::InvalidMagic);
+        }
+        if read_u16(bytes, CAPABILITY_EXECUTION_SELECTION_SCHEMA_VERSION_OFFSET)?
+            != CAPABILITY_EXECUTION_SELECTION_SCHEMA_VERSION_V1
+        {
+            return Err(Error::UnsupportedSchema);
+        }
+        if read_u16(bytes, CAPABILITY_EXECUTION_SELECTION_PROFILE_OFFSET)?
+            != CAPABILITY_EXECUTION_SELECTION_PROFILE_V1
+        {
+            return Err(Error::UnsupportedArtifactProfile);
+        }
+        require_zero(bytes, CAPABILITY_EXECUTION_SELECTION_RESERVED_OFFSET, 2)?;
+        Self::from_bytes(
+            read_u16(bytes, CAPABILITY_EXECUTION_SELECTION_ENTRY_INDEX_OFFSET)?,
+            read_array(bytes, CAPABILITY_EXECUTION_SELECTION_MANIFEST_OFFSET)?,
+            read_array(bytes, CAPABILITY_EXECUTION_SELECTION_KIND_OFFSET)?,
+            read_array(bytes, CAPABILITY_EXECUTION_SELECTION_RELEASE_OFFSET)?,
+            read_array(bytes, CAPABILITY_EXECUTION_SELECTION_CONFIG_OFFSET)?,
+        )
+    }
+
+    /// Encode the one exact canonical projection.
+    pub fn to_bytes(self) -> [u8; CAPABILITY_EXECUTION_SELECTION_BYTES_V1] {
+        let mut output = [0_u8; CAPABILITY_EXECUTION_SELECTION_BYTES_V1];
+        copy_infallible(
+            &mut output,
+            CAPABILITY_EXECUTION_SELECTION_MAGIC_OFFSET,
+            &CAPABILITY_EXECUTION_SELECTION_MAGIC_V1,
+        );
+        put_u16(
+            &mut output,
+            CAPABILITY_EXECUTION_SELECTION_SCHEMA_VERSION_OFFSET,
+            CAPABILITY_EXECUTION_SELECTION_SCHEMA_VERSION_V1,
+        );
+        put_u16(
+            &mut output,
+            CAPABILITY_EXECUTION_SELECTION_PROFILE_OFFSET,
+            CAPABILITY_EXECUTION_SELECTION_PROFILE_V1,
+        );
+        put_u16(
+            &mut output,
+            CAPABILITY_EXECUTION_SELECTION_ENTRY_INDEX_OFFSET,
+            self.entry_index,
+        );
+        copy_infallible(
+            &mut output,
+            CAPABILITY_EXECUTION_SELECTION_MANIFEST_OFFSET,
+            self.manifest.as_bytes(),
+        );
+        copy_infallible(
+            &mut output,
+            CAPABILITY_EXECUTION_SELECTION_KIND_OFFSET,
+            self.kind.as_bytes(),
+        );
+        copy_infallible(
+            &mut output,
+            CAPABILITY_EXECUTION_SELECTION_RELEASE_OFFSET,
+            self.capability_release.as_bytes(),
+        );
+        copy_infallible(
+            &mut output,
+            CAPABILITY_EXECUTION_SELECTION_CONFIG_OFFSET,
+            self.config.as_bytes(),
+        );
+        output
+    }
+
+    /// Return the sole fixed execution role for data-defined capabilities.
+    pub const fn executor_role(self) -> ExecutionRoleV1 {
+        ExecutionRoleV1::Trading
+    }
+
+    /// Return the canonical entry index in the authenticated manifest.
+    pub const fn entry_index(self) -> u16 {
+        self.entry_index
+    }
+
+    /// Return the immutable Market-selected manifest identity.
+    pub const fn manifest(self) -> ContentId {
+        self.manifest
+    }
+
+    /// Return the selected capability-kind identity.
+    pub const fn kind(self) -> ContentId {
+        self.kind
+    }
+
+    /// Return the selected semantic capability-release identity.
+    pub const fn capability_release(self) -> ContentId {
+        self.capability_release
+    }
+
+    /// Return the selected immutable capability configuration identity.
+    pub const fn config(self) -> ContentId {
+        self.config
+    }
+
+    /// Resolve the sole Program/artifact pair selected for this capability.
+    pub const fn execution_binding(
+        self,
+        release_set: ExecutionReleaseSetV1,
+    ) -> ExecutionRoleBindingV1 {
+        release_set.binding(ExecutionRoleV1::Trading)
+    }
+}
+
 impl ExecutionRoleV1 {
     const fn index(self) -> usize {
         match self {
@@ -472,6 +665,10 @@ fn read_u16(bytes: &[u8], offset: usize) -> Result<u16> {
     Ok(u16::from_le_bytes(read_array(bytes, offset)?))
 }
 
+fn capability_coordinate(bytes: [u8; IDENTITY_BYTES]) -> Result<ContentId> {
+    ContentId::new(bytes).map_err(|_| Error::ZeroCapabilityExecutionCoordinate)
+}
+
 fn read_array<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N]> {
     subslice(bytes, offset, N)?
         .try_into()
@@ -525,6 +722,10 @@ mod tests {
 
     fn role(program_byte: u8, release_byte: u8) -> ExecutionRoleBindingV1 {
         ExecutionRoleBindingV1::new(program(program_byte), release(release_byte))
+    }
+
+    fn content(byte: u8) -> ContentId {
+        ContentId::new([byte; IDENTITY_BYTES]).expect("nonzero content identity")
     }
 
     fn fixture() -> ExecutionReleaseSetV1 {
@@ -624,6 +825,149 @@ mod tests {
                 Err(Error::ZeroCallerAuthorityCoordinate)
             );
         }
+    }
+
+    #[test]
+    fn capability_execution_selection_is_exact_manifest_projection_not_program_authority() {
+        let selection = CapabilityExecutionSelectionV1::new(
+            7,
+            content(21),
+            content(22),
+            content(23),
+            content(24),
+        )
+        .expect("canonical capability execution selection");
+        let bytes = selection.to_bytes();
+        assert_eq!(bytes.len(), CAPABILITY_EXECUTION_SELECTION_BYTES_V1);
+        assert_eq!(CAPABILITY_EXECUTION_SELECTION_BYTES_V1, 144);
+        assert_eq!(
+            bytes.get(..16),
+            Some(
+                [
+                    b'D', b'C', b'L', b'T', b'C', b'E', b'R', b'1', 1, 0, 1, 0, 7, 0, 0, 0,
+                ]
+                .as_slice()
+            )
+        );
+        assert_eq!(
+            bytes.get(
+                CAPABILITY_EXECUTION_SELECTION_MANIFEST_OFFSET
+                    ..CAPABILITY_EXECUTION_SELECTION_KIND_OFFSET
+            ),
+            Some([21; IDENTITY_BYTES].as_slice())
+        );
+        assert_eq!(
+            bytes.get(
+                CAPABILITY_EXECUTION_SELECTION_KIND_OFFSET
+                    ..CAPABILITY_EXECUTION_SELECTION_RELEASE_OFFSET
+            ),
+            Some([22; IDENTITY_BYTES].as_slice())
+        );
+        assert_eq!(
+            bytes.get(
+                CAPABILITY_EXECUTION_SELECTION_RELEASE_OFFSET
+                    ..CAPABILITY_EXECUTION_SELECTION_CONFIG_OFFSET
+            ),
+            Some([23; IDENTITY_BYTES].as_slice())
+        );
+        assert_eq!(
+            bytes.get(CAPABILITY_EXECUTION_SELECTION_CONFIG_OFFSET..),
+            Some([24; IDENTITY_BYTES].as_slice())
+        );
+        assert_eq!(
+            CapabilityExecutionSelectionV1::decode(&bytes),
+            Ok(selection)
+        );
+        assert_eq!(selection.executor_role(), ExecutionRoleV1::Trading);
+        assert_eq!(selection.entry_index(), 7);
+        assert_eq!(selection.manifest(), content(21));
+        assert_eq!(selection.kind(), content(22));
+        assert_eq!(selection.capability_release(), content(23));
+        assert_eq!(selection.config(), content(24));
+        assert_eq!(
+            selection.execution_binding(fixture()),
+            fixture().binding(ExecutionRoleV1::Trading)
+        );
+    }
+
+    #[test]
+    fn capability_execution_selection_refuses_zero_coordinates() {
+        let canonical = CapabilityExecutionSelectionV1::new(
+            0,
+            content(21),
+            content(22),
+            content(23),
+            content(24),
+        )
+        .expect("canonical capability execution selection")
+        .to_bytes();
+        for offset in [
+            CAPABILITY_EXECUTION_SELECTION_MANIFEST_OFFSET,
+            CAPABILITY_EXECUTION_SELECTION_KIND_OFFSET,
+            CAPABILITY_EXECUTION_SELECTION_RELEASE_OFFSET,
+            CAPABILITY_EXECUTION_SELECTION_CONFIG_OFFSET,
+        ] {
+            let mut hostile = canonical;
+            hostile
+                .get_mut(offset..offset + IDENTITY_BYTES)
+                .expect("identity coordinate")
+                .fill(0);
+            assert_eq!(
+                CapabilityExecutionSelectionV1::decode(&hostile),
+                Err(Error::ZeroCapabilityExecutionCoordinate)
+            );
+        }
+    }
+
+    #[test]
+    fn capability_execution_selection_hostile_decoding_is_total() {
+        let selection = CapabilityExecutionSelectionV1::new(
+            u16::MAX,
+            content(21),
+            content(22),
+            content(23),
+            content(24),
+        )
+        .expect("canonical capability execution selection");
+        let canonical = selection.to_bytes();
+        assert_eq!(
+            CapabilityExecutionSelectionV1::decode(
+                canonical
+                    .get(..canonical.len() - 1)
+                    .expect("nonempty fixture")
+            ),
+            Err(Error::InvalidLength)
+        );
+        let mut extended = Vec::from(canonical);
+        extended.push(0);
+        assert_eq!(
+            CapabilityExecutionSelectionV1::decode(&extended),
+            Err(Error::InvalidLength)
+        );
+        for (offset, expected) in [
+            (0, Error::InvalidMagic),
+            (
+                CAPABILITY_EXECUTION_SELECTION_SCHEMA_VERSION_OFFSET,
+                Error::UnsupportedSchema,
+            ),
+            (
+                CAPABILITY_EXECUTION_SELECTION_PROFILE_OFFSET,
+                Error::UnsupportedArtifactProfile,
+            ),
+            (
+                CAPABILITY_EXECUTION_SELECTION_RESERVED_OFFSET,
+                Error::NonCanonicalReservedBytes,
+            ),
+        ] {
+            let mut hostile = canonical;
+            mutate(&mut hostile, offset, u8::MAX);
+            assert_eq!(
+                CapabilityExecutionSelectionV1::decode(&hostile),
+                Err(expected)
+            );
+        }
+
+        assert_eq!(selection.executor_role(), ExecutionRoleV1::Trading);
     }
 
     fn mutate(bytes: &mut [u8], offset: usize, value: u8) {
