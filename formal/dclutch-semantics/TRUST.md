@@ -105,9 +105,10 @@ cannot change a resting order's final cumulative fee in the semantic model.
   (claim, signed experimental controller, custody, and official SPL Token are
   measured together; Realm selection and release-authentication costs remain
   absent);
-- registration and replay-account retirement after terminal state (prepaid
-  dust-tolerant creation, registered fill, cancellation, and expiry dispatch
-  now have adversarial real-ELF execution evidence); and
+- global replay-root retirement at Market teardown (terminal registration
+  retirement now returns rent to the persisted maker and removes buyer SPL
+  delegation; prepaid creation, fill, cancellation, and expiry also have
+  adversarial real-ELF execution evidence); and
 - all other protocol families.
 
 The package uses Lean 4.30.0. No theorem contains `sorry`, an axiom, an

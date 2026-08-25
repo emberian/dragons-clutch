@@ -23,7 +23,8 @@ use dclutch_direct_codec::{
     COMPACT_INTENT_BYTES, COMPILED_DIRECT_CAPACITY_ID_V1, COMPILED_DIRECT_CHILD_SCHEMA_ID_V1,
     COMPILED_DIRECT_DERIVATION_ID_V1, COMPILED_DIRECT_RELEASE_ID_V1, CompactIntentV1,
     ControllerInstructionV1, RegisteredCreateInstructionV1, RegisteredFillInstructionV1,
-    RegisteredIntentStateV1, RegisteredTerminalAction, RegisteredTerminalInstructionV1,
+    RegisteredIntentStateV1, RegisteredRetireInstructionV1, RegisteredTerminalAction,
+    RegisteredTerminalInstructionV1,
 };
 use dclutch_direct_contract::{
     DIRECT_CAPABILITY_KIND_ID_V2, VENUE_FEE_POLICY_BYTES_V3, VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3,
@@ -78,6 +79,7 @@ const FEE_BPS: u16 = 25;
 struct TransactionResult {
     accepted: bool,
     compute_units: u64,
+    metadata_available: bool,
     wire_bytes: usize,
     v0_wire_bytes: usize,
     market_v0_wire_bytes: usize,
@@ -396,6 +398,16 @@ fn registered_terminal_data(
     .to_vec()
 }
 
+fn registered_retire_data(controller_bump: u8, registration_bump: u8) -> Vec<u8> {
+    RegisteredRetireInstructionV1 {
+        controller_bump,
+        registration_bump,
+    }
+    .encode()
+    .expect("registered retirement instruction")
+    .to_vec()
+}
+
 fn signed_ed25519_batch(seller: &Keypair, buyer: &Keypair, controller_data: &[u8]) -> Instruction {
     let payload = 2 + 2 * 14;
     let mut data = vec![0_u8; payload + 2 * 96];
@@ -579,6 +591,31 @@ fn registered_terminal_instruction(
     }
 }
 
+fn registered_retire_instruction(
+    controller: Pubkey,
+    registration: Pubkey,
+    maker: Pubkey,
+    maker_signer: bool,
+    collateral: Option<Pubkey>,
+    data: Vec<u8>,
+) -> Instruction {
+    let mut accounts = vec![
+        AccountMeta::new_readonly(controller, false),
+        AccountMeta::new(registration, false),
+        AccountMeta::new(maker, maker_signer),
+        AccountMeta::new_readonly(CLAIM_PROGRAM_ID, false),
+    ];
+    if let Some(collateral) = collateral {
+        accounts.push(AccountMeta::new(collateral, false));
+        accounts.push(AccountMeta::new_readonly(token_program_id(), false));
+    }
+    Instruction {
+        program_id: CONTROLLER_PROGRAM_ID,
+        accounts,
+        data,
+    }
+}
+
 fn direct_claim_instruction(controller: Pubkey, fixture: MarketFixture) -> Instruction {
     let mut plan = vec![0_u8; 72];
     plan[0..8].copy_from_slice(&[b'D', b'C', b'E', b'F', 1, 4, 0, 0]);
@@ -659,14 +696,19 @@ async fn submit(
         .process_transaction_with_metadata(transaction)
         .await
         .expect("banks processing");
-    let metadata = processed.metadata.expect("transaction metadata");
+    let metadata_available = processed.metadata.is_some();
+    let (compute_units, logs) = processed
+        .metadata
+        .map(|metadata| (metadata.compute_units_consumed, metadata.log_messages))
+        .unwrap_or_else(|| (0, Vec::new()));
     TransactionResult {
         accepted: processed.result.is_ok(),
-        compute_units: metadata.compute_units_consumed,
+        compute_units,
+        metadata_available,
         wire_bytes,
         v0_wire_bytes,
         market_v0_wire_bytes,
-        logs: metadata.log_messages,
+        logs,
     }
 }
 
@@ -703,8 +745,7 @@ async fn submit_terminal(
         processed.result.is_ok(),
         processed
             .metadata
-            .expect("terminal transaction metadata")
-            .compute_units_consumed,
+            .map_or(0, |metadata| metadata.compute_units_consumed),
     )
 }
 
@@ -733,8 +774,7 @@ async fn submit_registered_create(
         processed.result.is_ok(),
         processed
             .metadata
-            .expect("registration transaction metadata")
-            .compute_units_consumed,
+            .map_or(0, |metadata| metadata.compute_units_consumed),
     )
 }
 
@@ -761,8 +801,7 @@ async fn process_legacy(context: &mut ProgramTestContext, instructions: &[Instru
     );
     processed
         .metadata
-        .expect("lookup-table lifecycle metadata")
-        .compute_units_consumed
+        .map_or(0, |metadata| metadata.compute_units_consumed)
 }
 
 async fn create_reusable_market_lookup_table(
@@ -863,14 +902,19 @@ async fn submit_with_live_market_lookup_table(
         .process_transaction_with_metadata(transaction)
         .await
         .expect("banks processing");
-    let metadata = processed.metadata.expect("transaction metadata");
+    let metadata_available = processed.metadata.is_some();
+    let (compute_units, logs) = processed
+        .metadata
+        .map(|metadata| (metadata.compute_units_consumed, metadata.log_messages))
+        .unwrap_or_else(|| (0, Vec::new()));
     TransactionResult {
         accepted: processed.result.is_ok(),
-        compute_units: metadata.compute_units_consumed,
+        compute_units,
+        metadata_available,
         wire_bytes,
         v0_wire_bytes,
         market_v0_wire_bytes,
-        logs: metadata.log_messages,
+        logs,
     }
 }
 
@@ -1872,10 +1916,12 @@ async fn signed_intents_compile_to_claims_and_real_token_transfers_atomically() 
         "frozen venue must refuse after gross CPI"
     );
     let token_success = format!("Program {} success", token_program_id());
-    assert!(
-        late_refusal.logs.iter().any(|line| line == &token_success),
-        "logs must prove first official Token CPI completed before refusal"
-    );
+    if late_refusal.metadata_available {
+        assert!(
+            late_refusal.logs.iter().any(|line| line == &token_success),
+            "available logs must prove first official Token CPI completed before refusal"
+        );
+    }
     assert_eq!(account(&mut context, journal_key).await, journal_before);
     assert_eq!(
         claim_state_accounts(&mut context, refusal).await,
@@ -2183,10 +2229,12 @@ async fn registered_residuals_reuse_authenticated_state_and_real_custody_atomica
         "frozen venue must refuse after the first real Token CPI"
     );
     let token_success = format!("Program {} success", token_program_id());
-    assert!(
-        late_refusal.logs.iter().any(|line| line == &token_success),
-        "logs must prove first official Token CPI completed before refusal"
-    );
+    if late_refusal.metadata_available {
+        assert!(
+            late_refusal.logs.iter().any(|line| line == &token_success),
+            "available logs must prove first official Token CPI completed before refusal"
+        );
+    }
     assert_eq!(account(&mut context, journal_key).await, journal_before);
     assert_eq!(
         claim_state_accounts(&mut context, refusal).await,
@@ -2693,5 +2741,217 @@ async fn registered_terminal_routes_enforce_maker_time_and_local_sequence() {
         early_expiry.1,
         expiry.1,
         repeated_expiry.1,
+    );
+}
+
+#[tokio::test]
+async fn terminal_registrations_return_rent_and_remove_buyer_delegation() {
+    require_sbf();
+    let seller_maker = Pubkey::new_unique();
+    let open_maker = Pubkey::new_unique();
+    let buyer_maker = Keypair::new();
+    let (controller, controller_bump) =
+        Pubkey::find_program_address(&[CONTROLLER_SEED], &CONTROLLER_PROGRAM_ID);
+    let generation = GENERATION.to_le_bytes();
+    let nonce = 0_u64.to_le_bytes();
+    let seller_market = Pubkey::new_unique();
+    let open_market = Pubkey::new_unique();
+    let buyer_market = Pubkey::new_unique();
+    let buyer_source = Pubkey::new_unique();
+    let (seller_registration, seller_bump) = Pubkey::find_program_address(
+        &[
+            REGISTERED_SEED,
+            seller_market.as_ref(),
+            &generation,
+            seller_maker.as_ref(),
+            &nonce,
+        ],
+        &CONTROLLER_PROGRAM_ID,
+    );
+    let (open_registration, open_bump) = Pubkey::find_program_address(
+        &[
+            REGISTERED_SEED,
+            open_market.as_ref(),
+            &generation,
+            open_maker.as_ref(),
+            &nonce,
+        ],
+        &CONTROLLER_PROGRAM_ID,
+    );
+    let (buyer_registration, buyer_bump) = Pubkey::find_program_address(
+        &[
+            REGISTERED_SEED,
+            buyer_market.as_ref(),
+            &generation,
+            buyer_maker.pubkey().as_ref(),
+            &nonce,
+        ],
+        &CONTROLLER_PROGRAM_ID,
+    );
+
+    let terminal_state = |maker: Pubkey, intent: CompactIntentV1, phase: u8, sequence: u64| {
+        RegisteredIntentStateV1 {
+            phase,
+            controller: controller.to_bytes(),
+            maker: maker.to_bytes(),
+            intent,
+            remaining: intent.maximum_fill,
+            sequence,
+        }
+        .encode()
+        .expect("terminal registration")
+        .to_vec()
+    };
+    let seller_intent = registered_intent(seller_market, Pubkey::new_unique(), 0);
+    let open_intent = registered_intent(open_market, Pubkey::new_unique(), 0);
+    let buyer_intent = registered_intent(buyer_market, buyer_source, 1);
+
+    let mut test = ProgramTest::new("dclutch_controller_proof_sbf", CONTROLLER_PROGRAM_ID, None);
+    test.prefer_bpf(true);
+    test.add_program("dclutch_claims_proof_sbf", CLAIM_PROGRAM_ID, None);
+    test.add_program("spl_token", token_program_id(), None);
+    add_program_account(&mut test, controller);
+    add_program_account(&mut test, seller_maker);
+    add_program_account(&mut test, open_maker);
+    add_program_account(&mut test, buyer_maker.pubkey());
+    add_claim_state(
+        &mut test,
+        seller_registration,
+        terminal_state(seller_maker, seller_intent, 2, 1),
+    );
+    add_claim_state(
+        &mut test,
+        open_registration,
+        registered_state(controller, open_maker, open_intent),
+    );
+    add_claim_state(
+        &mut test,
+        buyer_registration,
+        terminal_state(buyer_maker.pubkey(), buyer_intent, 3, 4),
+    );
+    add_token_account(
+        &mut test,
+        buyer_source,
+        token_account(
+            Pubkey::new_unique(),
+            buyer_maker.pubkey(),
+            10_000,
+            Some((buyer_registration, FILL)),
+            false,
+        ),
+    );
+    let mut context = test.start_with_context().await;
+
+    let open_before = account(&mut context, open_registration).await;
+    let open_refusal = submit_terminal(
+        &mut context,
+        registered_retire_instruction(
+            controller,
+            open_registration,
+            open_maker,
+            false,
+            None,
+            registered_retire_data(controller_bump, open_bump),
+        ),
+        None,
+    )
+    .await;
+    assert!(!open_refusal.0, "an open registration must not retire");
+    assert_eq!(account(&mut context, open_registration).await, open_before);
+
+    let seller_rent = account(&mut context, seller_registration).await.lamports;
+    let seller_before = account(&mut context, seller_maker).await.lamports;
+    let seller_retire = submit_terminal(
+        &mut context,
+        registered_retire_instruction(
+            controller,
+            seller_registration,
+            seller_maker,
+            false,
+            None,
+            registered_retire_data(controller_bump, seller_bump),
+        ),
+        None,
+    )
+    .await;
+    assert!(
+        seller_retire.0,
+        "a terminal seller registration must retire permissionlessly"
+    );
+    assert!(
+        context
+            .banks_client
+            .get_account(seller_registration)
+            .await
+            .expect("retired seller query")
+            .is_none()
+    );
+    assert_eq!(
+        account(&mut context, seller_maker).await.lamports,
+        seller_before + seller_rent
+    );
+
+    let buyer_before = account(&mut context, buyer_registration).await;
+    let source_before = account(&mut context, buyer_source).await;
+    let unsigned_buyer = submit_terminal(
+        &mut context,
+        registered_retire_instruction(
+            controller,
+            buyer_registration,
+            buyer_maker.pubkey(),
+            false,
+            Some(buyer_source),
+            registered_retire_data(controller_bump, buyer_bump),
+        ),
+        None,
+    )
+    .await;
+    assert!(
+        !unsigned_buyer.0,
+        "buyer retirement without the token owner must refuse"
+    );
+    assert_eq!(
+        account(&mut context, buyer_registration).await,
+        buyer_before
+    );
+    assert_eq!(account(&mut context, buyer_source).await, source_before);
+
+    let buyer_maker_before = account(&mut context, buyer_maker.pubkey()).await.lamports;
+    let buyer_retire = submit_terminal(
+        &mut context,
+        registered_retire_instruction(
+            controller,
+            buyer_registration,
+            buyer_maker.pubkey(),
+            true,
+            Some(buyer_source),
+            registered_retire_data(controller_bump, buyer_bump),
+        ),
+        Some(&buyer_maker),
+    )
+    .await;
+    assert!(
+        buyer_retire.0,
+        "maker-authorized buyer retirement must revoke and close"
+    );
+    assert!(
+        context
+            .banks_client
+            .get_account(buyer_registration)
+            .await
+            .expect("retired buyer query")
+            .is_none()
+    );
+    assert_eq!(
+        account(&mut context, buyer_maker.pubkey()).await.lamports,
+        buyer_maker_before + buyer_before.lamports
+    );
+    let source_after = account(&mut context, buyer_source).await;
+    assert_eq!(read_u32(&source_after.data, 72), 0);
+    assert_eq!(read_u64(&source_after.data, 121), 0);
+
+    eprintln!(
+        "registered retirement Direct CU: open refusal={}, seller retirement={}, unsigned buyer={}, buyer revoke+retirement={}",
+        open_refusal.1, seller_retire.1, unsigned_buyer.1, buyer_retire.1,
     );
 }

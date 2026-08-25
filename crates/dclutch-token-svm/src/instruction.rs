@@ -6,6 +6,8 @@ use crate::{Address, Error, Result, TokenProgram};
 
 /// Official `CloseAccount` instruction tag.
 pub const CLOSE_ACCOUNT_TAG: u8 = 9;
+/// Official `Revoke` instruction tag.
+pub const REVOKE_TAG: u8 = 5;
 /// Official `TransferChecked` instruction tag.
 pub const TRANSFER_CHECKED_TAG: u8 = 12;
 /// Official `InitializeAccount3` instruction tag.
@@ -17,6 +19,8 @@ pub const INITIALIZE_ACCOUNT3_DATA_BYTES: usize = 33;
 pub const TRANSFER_CHECKED_DATA_BYTES: usize = 10;
 /// Exact `CloseAccount` instruction-data width.
 pub const CLOSE_ACCOUNT_DATA_BYTES: usize = 1;
+/// Exact `Revoke` instruction-data width.
+pub const REVOKE_DATA_BYTES: usize = 1;
 
 /// One SDK-free instruction account role.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -82,6 +86,8 @@ pub type InitializeAccount3Instruction = InstructionSpec<2, INITIALIZE_ACCOUNT3_
 pub type TransferCheckedInstruction = InstructionSpec<4, TRANSFER_CHECKED_DATA_BYTES>;
 /// Exact single-authority `CloseAccount` specification.
 pub type CloseAccountInstruction = InstructionSpec<3, CLOSE_ACCOUNT_DATA_BYTES>;
+/// Exact single-owner `Revoke` specification.
+pub type RevokeInstruction = InstructionSpec<2, REVOKE_DATA_BYTES>;
 
 /// Build exact `InitializeAccount3` data and its two ordered account roles.
 ///
@@ -161,6 +167,22 @@ pub fn close_account(
     })
 }
 
+/// Build exact single-owner `Revoke` data and ordered roles.
+///
+/// The roles are the writable token account and its readonly signer owner.
+/// Multisignature expansion is outside this exact profile.
+pub fn revoke(program_id: Address, account: Address, owner: Address) -> Result<RevokeInstruction> {
+    TokenProgram::parse(program_id)?;
+    Ok(InstructionSpec {
+        program_id,
+        accounts: [
+            AccountMeta::new(account, false, true),
+            AccountMeta::new(owner, true, false),
+        ],
+        data: [REVOKE_TAG],
+    })
+}
+
 /// Borrowed exact `InitializeAccount3` instruction-data view.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InitializeAccount3View<'a> {
@@ -211,6 +233,19 @@ pub struct CloseAccountView<'a> {
     raw: &'a [u8],
 }
 
+/// Borrowed exact `Revoke` instruction-data view.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RevokeView<'a> {
+    raw: &'a [u8],
+}
+
+impl<'a> RevokeView<'a> {
+    /// Borrow the one exact tag byte.
+    pub const fn raw(&self) -> &'a [u8] {
+        self.raw
+    }
+}
+
 impl<'a> CloseAccountView<'a> {
     /// Borrow the one exact tag byte.
     pub const fn raw(&self) -> &'a [u8] {
@@ -227,6 +262,8 @@ pub enum InstructionDataView<'a> {
     TransferChecked(TransferCheckedView<'a>),
     /// Exact `CloseAccount` data.
     CloseAccount(CloseAccountView<'a>),
+    /// Exact `Revoke` data.
+    Revoke(RevokeView<'a>),
 }
 
 impl<'a> InstructionDataView<'a> {
@@ -251,6 +288,9 @@ impl<'a> InstructionDataView<'a> {
             CLOSE_ACCOUNT_TAG if bytes.len() == CLOSE_ACCOUNT_DATA_BYTES => {
                 Ok(Self::CloseAccount(CloseAccountView { raw: bytes }))
             }
+            REVOKE_TAG if bytes.len() == REVOKE_DATA_BYTES => {
+                Ok(Self::Revoke(RevokeView { raw: bytes }))
+            }
             _ => Err(Error::InvalidInstruction),
         }
     }
@@ -261,6 +301,7 @@ impl<'a> InstructionDataView<'a> {
             Self::InitializeAccount3(view) => view.raw(),
             Self::TransferChecked(view) => view.raw(),
             Self::CloseAccount(view) => view.raw(),
+            Self::Revoke(view) => view.raw(),
         }
     }
 }
@@ -340,6 +381,19 @@ mod tests {
                 ]
             );
         }
+
+        let revoked = revoke(LEGACY_TOKEN_PROGRAM_ID, [1; 32], [2; 32]);
+        assert!(revoked.is_ok());
+        if let Ok(value) = revoked {
+            assert_eq!(value.data(), &[5]);
+            assert_eq!(
+                value.accounts(),
+                &[
+                    AccountMeta::new([1; 32], false, true),
+                    AccountMeta::new([2; 32], true, false),
+                ]
+            );
+        }
     }
 
     #[test]
@@ -376,8 +430,19 @@ mod tests {
             InstructionDataView::parse(&[9]),
             Ok(InstructionDataView::CloseAccount(_))
         ));
+        assert!(matches!(
+            InstructionDataView::parse(&[5]),
+            Ok(InstructionDataView::Revoke(_))
+        ));
 
-        for invalid in [&[][..], &[9, 0][..], &[12][..], &[18][..], &[255][..]] {
+        for invalid in [
+            &[][..],
+            &[5, 0][..],
+            &[9, 0][..],
+            &[12][..],
+            &[18][..],
+            &[255][..],
+        ] {
             assert_eq!(
                 InstructionDataView::parse(invalid),
                 Err(Error::InvalidInstruction)
@@ -408,6 +473,10 @@ mod tests {
         );
         assert_eq!(
             close_account(unknown, [1; 32], [2; 32], [3; 32]),
+            Err(Error::UnsupportedProgram)
+        );
+        assert_eq!(
+            revoke(unknown, [1; 32], [2; 32]),
             Err(Error::UnsupportedProgram)
         );
     }

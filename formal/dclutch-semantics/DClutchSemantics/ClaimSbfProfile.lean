@@ -205,4 +205,30 @@ theorem exact_profile :
 
 end RegisteredTerminal
 
+namespace RegisteredRetire
+
+def registrationOffset : Nat := authorityOffset + accountSpan authorityRole
+def registrationDataOffset : Nat := registrationOffset + accountHeaderBytes
+def makerOffset : Nat := registrationOffset + accountSpan Registered.registrationRole
+
+/-- The maker account may contain arbitrary data.  Only its header has a fixed
+offset; the pinned loader-v1 adapter computes the trailing program-id offset
+from the authenticated data length at runtime. -/
+def instructionLengthOffset (makerDataBytes : Nat) : Nat :=
+  makerOffset + accountHeaderBytes + makerDataBytes + maxPermittedDataIncrease +
+    alignPadding8 makerDataBytes + rentEpochBytes
+
+def programIdOffset (makerDataBytes : Nat) : Nat :=
+  instructionLengthOffset makerDataBytes + 8
+
+theorem exact_profile_prefix :
+    registrationOffset = 10344 ∧
+    registrationDataOffset = 10432 ∧
+    makerOffset = 20912 ∧
+    instructionLengthOffset 0 = 31248 ∧
+    programIdOffset 0 = 31256 := by
+  native_decide
+
+end RegisteredRetire
+
 end DClutch.ClaimSbfProfile

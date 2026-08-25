@@ -18,10 +18,10 @@ use dclutch_direct_codec::{
     CompactIntentV1, ControllerInstructionV1, REGISTERED_CLAIM_FILL_BYTES,
     REGISTERED_CLAIM_TERMINAL_BYTES, REGISTERED_CONTROLLER_INSTRUCTION_BYTES,
     REGISTERED_CREATE_INSTRUCTION_BYTES, REGISTERED_INTENT_STATE_BYTES,
-    REGISTERED_TERMINAL_INSTRUCTION_BYTES, RegisteredCreateInstructionV1,
-    RegisteredFillInstructionV1, RegisteredIntentStateV1, RegisteredTerminalAction,
-    RegisteredTerminalInstructionV1, registered_claim_fill_instruction,
-    registered_claim_terminal_instruction,
+    REGISTERED_RETIRE_INSTRUCTION_BYTES, REGISTERED_TERMINAL_INSTRUCTION_BYTES,
+    RegisteredCreateInstructionV1, RegisteredFillInstructionV1, RegisteredIntentStateV1,
+    RegisteredRetireInstructionV1, RegisteredTerminalAction, RegisteredTerminalInstructionV1,
+    registered_claim_fill_instruction, registered_claim_terminal_instruction,
 };
 use dclutch_direct_contract::{
     DIRECT_CAPABILITY_KIND_ID_V2, PRICE_SCALE, VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3,
@@ -33,8 +33,8 @@ use dclutch_realm_contract::{
 };
 use dclutch_record_contract::RAW_RECORD_PDA_SEED_V1;
 use dclutch_token_svm::{
-    ACCOUNT_BYTES, COption, ExactTransferProfileV1, LEGACY_TOKEN_PROGRAM_ID,
-    PRODUCTION_ADAPTER_RELEASES,
+    ACCOUNT_BYTES, AccountState, COption, ExactTransferProfileV1, LEGACY_TOKEN_PROGRAM_ID,
+    PRODUCTION_ADAPTER_RELEASES, TokenAccount, revoke,
 };
 use dclutch_transition_vm::Registers;
 use generated_direct_program::{
@@ -176,6 +176,9 @@ pub fn process_instruction(
         }
         REGISTERED_CREATE_INSTRUCTION_BYTES => {
             process_registered_create(program_id, accounts, instruction_data)
+        }
+        REGISTERED_RETIRE_INSTRUCTION_BYTES => {
+            process_registered_retire(program_id, accounts, instruction_data)
         }
         REGISTERED_TERMINAL_INSTRUCTION_BYTES => {
             process_registered_terminal(program_id, accounts, instruction_data)
@@ -852,6 +855,113 @@ fn process_registered_terminal(
     )
 }
 
+/// Retire one terminal registration and return its rent to the persisted maker.
+///
+/// Seller registrations are permissionlessly collectible because they grant
+/// no token delegation. Buyer registrations require the maker and revoke any
+/// surviving SPL delegation before the claim owner drains the account.
+#[inline(never)]
+fn process_registered_retire(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    if accounts.len() != 4 && accounts.len() != 6 {
+        return Err(ControllerError::AccountFrame.into());
+    }
+    let instruction = RegisteredRetireInstructionV1::decode(instruction_data)
+        .map_err(|_| ControllerError::Instruction)?;
+    let mut iterator = accounts.iter();
+    let controller = next(&mut iterator)?;
+    let registration = next(&mut iterator)?;
+    let maker = next(&mut iterator)?;
+    let claim_program = next(&mut iterator)?;
+    validate_registered_retire_frame(program_id, controller, registration, maker, claim_program)?;
+
+    let controller_bump_seed = [instruction.controller_bump];
+    let controller_seeds: [&[u8]; 2] = [CONTROLLER_SEED, &controller_bump_seed];
+    let expected_controller = Pubkey::create_program_address(&controller_seeds, program_id)
+        .map_err(|_| ControllerError::ControllerPda)?;
+    if controller.key != &expected_controller {
+        return Err(ControllerError::ControllerPda.into());
+    }
+    let state = decode_registered_state(registration, controller)?;
+    if state.maker != maker.key.to_bytes()
+        || state.intent.side > 1
+        || state.intent.lifecycle > 2
+        || state.intent.valid_from > state.intent.valid_through
+        || state.intent.maximum_fill == 0
+        || state.remaining > state.intent.maximum_fill
+        || state.phase == 0
+        || state.phase > 3
+        || (state.phase == 1 && state.remaining != 0)
+    {
+        return Err(ControllerError::ClaimState.into());
+    }
+
+    let generation = state.intent.generation.to_le_bytes();
+    let nonce = state.intent.nonce.to_le_bytes();
+    let registration_bump_seed = [instruction.registration_bump];
+    let registration_seeds: [&[u8]; 6] = [
+        REGISTERED_SEED,
+        &state.intent.market,
+        &generation,
+        maker.key.as_ref(),
+        &nonce,
+        &registration_bump_seed,
+    ];
+    if registration.key
+        != &Pubkey::create_program_address(&registration_seeds, program_id)
+            .map_err(|_| ControllerError::ReplayPda)?
+    {
+        return Err(ControllerError::ReplayPda.into());
+    }
+
+    match state.intent.side {
+        0 => {
+            if accounts.len() != 4 {
+                return Err(ControllerError::AccountFrame.into());
+            }
+        }
+        1 => {
+            if accounts.len() != 6 || !maker.is_signer {
+                return Err(ControllerError::Signature.into());
+            }
+            let collateral = next(&mut iterator)?;
+            let token_program = next(&mut iterator)?;
+            validate_retirement_token_frame(
+                registration,
+                maker,
+                collateral,
+                token_program,
+                state.intent.collateral_account,
+            )?;
+            let before = retirement_token_state(registration, maker, collateral, token_program)?;
+            match before.delegate {
+                COption::Some(delegate) if delegate == registration.key.to_bytes() => {
+                    invoke_token_revoke(collateral, maker, token_program)?;
+                    let after =
+                        retirement_token_state(registration, maker, collateral, token_program)?;
+                    if after.delegate != COption::None || after.delegated_amount != 0 {
+                        return Err(ControllerError::TokenState.into());
+                    }
+                }
+                COption::None if before.delegated_amount == 0 => {}
+                _ => return Err(ControllerError::TokenState.into()),
+            }
+        }
+        _ => return Err(ControllerError::ClaimState.into()),
+    }
+
+    invoke_registered_retire(
+        controller,
+        registration,
+        maker,
+        claim_program,
+        &controller_seeds,
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 fn validate_account_frame(
@@ -1183,6 +1293,94 @@ fn validate_registered_terminal_frame(
         return Err(ControllerError::AccountAuthority);
     }
     Ok(())
+}
+
+fn validate_registered_retire_frame(
+    program_id: &Pubkey,
+    controller: &AccountInfo<'_>,
+    registration: &AccountInfo<'_>,
+    maker: &AccountInfo<'_>,
+    claim_program: &AccountInfo<'_>,
+) -> Result<(), ControllerError> {
+    if controller.is_signer
+        || controller.is_writable
+        || controller.executable
+        || registration.is_signer
+        || !registration.is_writable
+        || registration.executable
+        || !maker.is_writable
+        || maker.executable
+        || !readonly_executable(claim_program)
+        || registration.owner != &CLAIM_PROGRAM_ID
+        || claim_program.key != &CLAIM_PROGRAM_ID
+        || registration.owner == program_id
+    {
+        return Err(ControllerError::AccountAuthority);
+    }
+    let keys = [
+        controller.key,
+        registration.key,
+        maker.key,
+        claim_program.key,
+    ];
+    for (index, left) in keys.iter().enumerate() {
+        if keys.iter().skip(index + 1).any(|right| left == right) {
+            return Err(ControllerError::AccountAuthority);
+        }
+    }
+    Ok(())
+}
+
+fn validate_retirement_token_frame(
+    registration: &AccountInfo<'_>,
+    maker: &AccountInfo<'_>,
+    collateral: &AccountInfo<'_>,
+    token_program: &AccountInfo<'_>,
+    expected_collateral: [u8; 32],
+) -> Result<(), ControllerError> {
+    if collateral.is_signer
+        || !collateral.is_writable
+        || collateral.executable
+        || !readonly_executable(token_program)
+        || token_program.key.to_bytes() != LEGACY_TOKEN_PROGRAM_ID
+        || collateral.owner != token_program.key
+        || collateral.key.to_bytes() != expected_collateral
+        || collateral.key == registration.key
+        || collateral.key == maker.key
+        || collateral.key == token_program.key
+        || registration.key == token_program.key
+        || maker.key == token_program.key
+    {
+        return Err(ControllerError::AccountAuthority);
+    }
+    Ok(())
+}
+
+fn retirement_token_state(
+    registration: &AccountInfo<'_>,
+    maker: &AccountInfo<'_>,
+    collateral: &AccountInfo<'_>,
+    token_program: &AccountInfo<'_>,
+) -> Result<TokenAccount, ControllerError> {
+    if token_program.key.to_bytes() != LEGACY_TOKEN_PROGRAM_ID
+        || collateral.owner != token_program.key
+    {
+        return Err(ControllerError::TokenState);
+    }
+    let account = TokenAccount::parse(
+        &collateral
+            .try_borrow_data()
+            .map_err(|_| ControllerError::TokenState)?,
+    )
+    .map_err(|_| ControllerError::TokenState)?;
+    if account.owner != maker.key.to_bytes()
+        || account.native_reserve != COption::None
+        || account.state == AccountState::Uninitialized
+        || matches!(account.delegate, COption::Some(delegate) if delegate != registration.key.to_bytes())
+    {
+        return Err(ControllerError::TokenState);
+    }
+    Ok(account)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1913,6 +2111,57 @@ fn invoke_registered_terminal<'info>(
         &[
             controller.clone(),
             registration.clone(),
+            claim_program.clone(),
+        ],
+        &[controller_seeds],
+    )
+}
+
+fn invoke_token_revoke<'info>(
+    collateral: &AccountInfo<'info>,
+    maker: &AccountInfo<'info>,
+    token_program: &AccountInfo<'info>,
+) -> ProgramResult {
+    let specification = revoke(
+        token_program.key.to_bytes(),
+        collateral.key.to_bytes(),
+        maker.key.to_bytes(),
+    )
+    .map_err(|_| ControllerError::TokenState)?;
+    invoke(
+        &Instruction {
+            program_id: *token_program.key,
+            accounts: std::vec![
+                AccountMeta::new(*collateral.key, false),
+                AccountMeta::new_readonly(*maker.key, true),
+            ],
+            data: specification.data().to_vec(),
+        },
+        &[collateral.clone(), maker.clone(), token_program.clone()],
+    )
+}
+
+fn invoke_registered_retire<'info>(
+    controller: &AccountInfo<'info>,
+    registration: &AccountInfo<'info>,
+    maker: &AccountInfo<'info>,
+    claim_program: &AccountInfo<'info>,
+    controller_seeds: &[&[u8]],
+) -> ProgramResult {
+    invoke_signed(
+        &Instruction {
+            program_id: CLAIM_PROGRAM_ID,
+            accounts: std::vec![
+                AccountMeta::new_readonly(*controller.key, true),
+                AccountMeta::new(*registration.key, false),
+                AccountMeta::new(*maker.key, maker.is_signer),
+            ],
+            data: std::vec![],
+        },
+        &[
+            controller.clone(),
+            registration.clone(),
+            maker.clone(),
             claim_program.clone(),
         ],
         &[controller_seeds],

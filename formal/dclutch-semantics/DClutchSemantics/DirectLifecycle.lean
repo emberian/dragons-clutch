@@ -471,4 +471,35 @@ theorem cancelled_registration_cannot_cancel_again
     cases terminal
   simp [cancel, refused]
 
+/-! ## Terminal registration retirement
+
+Retirement destroys no economic balance.  It is admitted only after the sole
+registered execution authority is terminal.  The physical adapter separately
+binds the refund destination to the persisted maker and, for buyer intents,
+revokes the maker's SPL delegation before the account owner returns rent.
+-/
+
+def RetireAdmissible (state : State) : Prop :=
+  state.Valid ∧ state.phase ≠ .open
+
+instance (state : State) : Decidable (RetireAdmissible state) := by
+  unfold RetireAdmissible
+  infer_instance
+
+def retire (state : State) : Option Unit :=
+  if RetireAdmissible state then some () else none
+
+theorem terminal_state_retires
+    (state : State) (valid : state.Valid) (terminal : state.phase ≠ .open) :
+    retire state = some () := by
+  simp [retire, RetireAdmissible, valid, terminal]
+
+theorem open_state_cannot_retire
+    (state : State) (openState : state.phase = .open) :
+    retire state = none := by
+  have refused : ¬ RetireAdmissible state := by
+    intro admitted
+    exact admitted.2 openState
+  simp [retire, refused]
+
 end DClutch.DirectLifecycle

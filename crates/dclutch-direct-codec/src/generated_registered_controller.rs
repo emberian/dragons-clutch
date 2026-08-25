@@ -85,3 +85,19 @@ pub(crate) const REGISTERED_TERMINAL_EXPIRE_EXAMPLE: [u8; 24] = [
     0x44, 0x43, 0x4c, 0x54, 0x52, 0x47, 0x54, 0x31, 0x01, 0x00, 0x01, 0x02, 0x03, 0x00, 0x00, 0x00,
     0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];
+
+pub(crate) const REGISTERED_RETIRE_BYTES_VALUE: usize = 16;
+pub(crate) const REGISTERED_RETIRE_ABI_VERSION: u16 = 1;
+pub(crate) const REGISTERED_RETIRE_MAGIC_BYTES: [u8; 8] = [
+    0x44, 0x43, 0x4c, 0x54, 0x52, 0x47, 0x58, 0x31,
+];
+pub(crate) const REGISTERED_RETIRE_MAGIC_OFFSET: usize = 0;
+pub(crate) const REGISTERED_RETIRE_VERSION_OFFSET: usize = 8;
+pub(crate) const REGISTERED_RETIRE_CONTROLLER_BUMP_OFFSET: usize = 10;
+pub(crate) const REGISTERED_RETIRE_REGISTRATION_BUMP_OFFSET: usize = 11;
+pub(crate) const REGISTERED_RETIRE_RESERVED_OFFSET: usize = 12;
+
+#[cfg(test)]
+pub(crate) const REGISTERED_RETIRE_EXAMPLE: [u8; 16] = [
+    0x44, 0x43, 0x4c, 0x54, 0x52, 0x47, 0x58, 0x31, 0x01, 0x00, 0x02, 0x03, 0x00, 0x00, 0x00, 0x00,
+];

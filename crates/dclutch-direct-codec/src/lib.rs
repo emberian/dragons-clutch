@@ -37,6 +37,9 @@ pub const REGISTERED_TERMINAL_INSTRUCTION_BYTES: usize =
 /// Bytes in one claim-owner cancellation or expiry request.
 pub const REGISTERED_CLAIM_TERMINAL_BYTES: usize =
     generated_registered_controller::REGISTERED_CLAIM_CANCEL_TEMPLATE.len();
+/// Bytes in one terminal registered-intent account-retirement request.
+pub const REGISTERED_RETIRE_INSTRUCTION_BYTES: usize =
+    generated_registered_controller::REGISTERED_RETIRE_BYTES_VALUE;
 /// Scalar inputs consumed by the Lean-owned registered residual-fill program.
 pub const REGISTERED_FILL_INPUT_COUNT: usize = generated_lifecycle::REGISTERED_INPUT_COUNT;
 /// Registered lifecycle input register containing the signed lifecycle tag.
@@ -264,6 +267,15 @@ pub struct RegisteredTerminalInstructionV1 {
     pub registration_bump: u8,
     /// Exact current registration-local sequence observed by the caller.
     pub expected_sequence: u64,
+}
+
+/// One request to retire a terminal registered-intent account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RegisteredRetireInstructionV1 {
+    /// Global controller PDA bump.
+    pub controller_bump: u8,
+    /// Registered-intent PDA bump.
+    pub registration_bump: u8,
 }
 
 impl RegisteredIntentStateV1 {
@@ -603,6 +615,67 @@ impl RegisteredTerminalInstructionV1 {
             &mut output,
             generated_registered_controller::REGISTERED_TERMINAL_EXPECTED_SEQUENCE_OFFSET,
             &self.expected_sequence.to_le_bytes(),
+        )?;
+        Ok(output)
+    }
+}
+
+impl RegisteredRetireInstructionV1 {
+    /// Strictly decode one canonical registered retirement request.
+    pub fn decode(input: &[u8]) -> Result<Self, Error> {
+        exact_width(input, REGISTERED_RETIRE_INSTRUCTION_BYTES)?;
+        exact_magic(
+            input,
+            &generated_registered_controller::REGISTERED_RETIRE_MAGIC_BYTES,
+        )?;
+        if u16_at(
+            input,
+            generated_registered_controller::REGISTERED_RETIRE_VERSION_OFFSET,
+        )? != generated_registered_controller::REGISTERED_RETIRE_ABI_VERSION
+        {
+            return Err(Error::UnsupportedVersion);
+        }
+        reserved(
+            input,
+            generated_registered_controller::REGISTERED_RETIRE_RESERVED_OFFSET,
+            REGISTERED_RETIRE_INSTRUCTION_BYTES
+                .checked_sub(generated_registered_controller::REGISTERED_RETIRE_RESERVED_OFFSET)
+                .ok_or(Error::InvalidLength)?,
+        )?;
+        Ok(Self {
+            controller_bump: byte(
+                input,
+                generated_registered_controller::REGISTERED_RETIRE_CONTROLLER_BUMP_OFFSET,
+            )?,
+            registration_bump: byte(
+                input,
+                generated_registered_controller::REGISTERED_RETIRE_REGISTRATION_BUMP_OFFSET,
+            )?,
+        })
+    }
+
+    /// Encode one canonical registered retirement request.
+    pub fn encode(self) -> Result<[u8; REGISTERED_RETIRE_INSTRUCTION_BYTES], Error> {
+        let mut output = [0_u8; REGISTERED_RETIRE_INSTRUCTION_BYTES];
+        put(
+            &mut output,
+            generated_registered_controller::REGISTERED_RETIRE_MAGIC_OFFSET,
+            &generated_registered_controller::REGISTERED_RETIRE_MAGIC_BYTES,
+        )?;
+        put(
+            &mut output,
+            generated_registered_controller::REGISTERED_RETIRE_VERSION_OFFSET,
+            &generated_registered_controller::REGISTERED_RETIRE_ABI_VERSION.to_le_bytes(),
+        )?;
+        put_byte(
+            &mut output,
+            generated_registered_controller::REGISTERED_RETIRE_CONTROLLER_BUMP_OFFSET,
+            self.controller_bump,
+        )?;
+        put_byte(
+            &mut output,
+            generated_registered_controller::REGISTERED_RETIRE_REGISTRATION_BUMP_OFFSET,
+            self.registration_bump,
         )?;
         Ok(output)
     }
@@ -1047,6 +1120,31 @@ mod tests {
         );
         assert_eq!(
             RegisteredTerminalInstructionV1::decode(&bytes[..bytes.len() - 1]),
+            Err(Error::InvalidLength)
+        );
+    }
+
+    #[test]
+    fn registered_retirement_matches_lean_and_refuses_hostile_bytes() {
+        let request = RegisteredRetireInstructionV1 {
+            controller_bump: 2,
+            registration_bump: 3,
+        };
+        let bytes = request.encode().expect("retirement encoding");
+        assert_eq!(
+            bytes,
+            generated_registered_controller::REGISTERED_RETIRE_EXAMPLE
+        );
+        assert_eq!(RegisteredRetireInstructionV1::decode(&bytes), Ok(request));
+
+        let mut hostile = bytes;
+        hostile[generated_registered_controller::REGISTERED_RETIRE_RESERVED_OFFSET] = 1;
+        assert_eq!(
+            RegisteredRetireInstructionV1::decode(&hostile),
+            Err(Error::NonzeroReserved)
+        );
+        assert_eq!(
+            RegisteredRetireInstructionV1::decode(&bytes[..bytes.len() - 1]),
             Err(Error::InvalidLength)
         );
     }

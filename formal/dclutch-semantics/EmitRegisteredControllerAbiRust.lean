@@ -57,3 +57,13 @@ def main : IO Unit := do
   IO.println "#[cfg(test)]"
   emitRustBytes "pub(crate)" "REGISTERED_TERMINAL_EXPIRE_EXAMPLE"
     (Terminal.encode Terminal.exampleExpire)
+  IO.println ""
+  IO.println s!"pub(crate) const REGISTERED_RETIRE_BYTES_VALUE: usize = {Retirement.bytes};"
+  IO.println s!"pub(crate) const REGISTERED_RETIRE_ABI_VERSION: u16 = {Retirement.version};"
+  emitRustBytes "pub(crate)" "REGISTERED_RETIRE_MAGIC_BYTES" Retirement.magic
+  for field in Retirement.Field.all do
+    IO.println s!"pub(crate) const {Retirement.Field.rustName field}: usize = {Retirement.Field.offset field};"
+  IO.println ""
+  IO.println "#[cfg(test)]"
+  emitRustBytes "pub(crate)" "REGISTERED_RETIRE_EXAMPLE"
+    (Retirement.encode Retirement.exampleInstruction)
