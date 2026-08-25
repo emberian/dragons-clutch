@@ -27,6 +27,14 @@ Lean-emitted vector. It does not reimplement Direct admission. The
 current authenticated inline-ordinary reference transition and compares replay,
 claims, gross collateral, and fee custody.
 
+The isolated SBF measurement adapter executes the plan in 1,238 CU from a
+12,016-byte no-allocation, size-optimized ELF. qedsvm v0.11.0 independently
+executes the exact artifact at the same CU count, but its lifter refuses the
+current Rust/SDK memory-alias shape; no artifact theorem is claimed. These
+results establish feasibility only. The adapter's semantic-authority,
+artifact-refinement, and real-custody gaps are explicit in
+`docs/evidence/LEAN_EFFECT_SBF_EXPERIMENT_2026_08_25.md`.
+
 Run:
 
 ```sh

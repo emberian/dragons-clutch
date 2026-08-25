@@ -33,8 +33,12 @@ cannot change a resting order's final cumulative fee in the semantic model.
   microkernel (`dclutch-effect-kernel` currently supplies cross-language vector,
   round-trip, execution, hostile-parser, late-rollback, and one concrete
   differential Direct-reference test only);
-- refinement from the executor's deployed ELF bytes to Lean's sBPF semantics;
-- compute-unit, stack, ELF-size, and rent measurements;
+- refinement from the executor's deployed ELF bytes to Lean's sBPF semantics
+  (qedsvm v0.11.0 executes the pinned ELF and agrees on CU, but its lifter
+  refuses the current Rust/SDK alias shape and emits no theorem);
+- compute-unit, stack, ELF-size, and rent measurements for a complete
+  controller-plus-custody successor (the isolated executor measurements are
+  recorded separately and do not close that boundary);
 - all Direct routes other than inline ordinary execution; and
 - all other protocol families.
 
