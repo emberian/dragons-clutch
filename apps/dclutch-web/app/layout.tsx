@@ -13,9 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'dClutch · Read-only chain explorer',
+  title: 'dClutch · Bounded-state markets',
   description:
-    'A local-first, read-only projection of dClutch program state from a user-selected Solana JSON-RPC endpoint.',
+    'Explore the dClutch interface for fully collateralized bounded-state markets, trading, liquidity, and settlement.',
 };
 
 export default function RootLayout({

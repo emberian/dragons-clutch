@@ -1,5 +1,5 @@
-import ChainExplorer from '@/components/ChainExplorer';
+import TradingPreview from '@/components/TradingPreview';
 
 export default function Home() {
-  return <ChainExplorer />;
+  return <TradingPreview />;
 }
