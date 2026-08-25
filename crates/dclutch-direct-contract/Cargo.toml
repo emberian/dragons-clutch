@@ -12,5 +12,8 @@ path = "src/lib.rs"
 dclutch-rent-contract = { path = "../dclutch-rent-contract" }
 dclutch-realm-contract = { path = "../dclutch-realm-contract" }
 
+[dev-dependencies]
+dclutch-effect-kernel = { path = "../dclutch-effect-kernel" }
+
 [lints]
 workspace = true

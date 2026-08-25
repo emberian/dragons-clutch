@@ -183,7 +183,11 @@ impl Plan {
         let mut index = 0_usize;
         while index < usize::from(count) {
             let offset = HEADER_BYTES
-                .checked_add(index.checked_mul(EFFECT_BYTES).ok_or(Error::InvalidLength)?)
+                .checked_add(
+                    index
+                        .checked_mul(EFFECT_BYTES)
+                        .ok_or(Error::InvalidLength)?,
+                )
                 .ok_or(Error::InvalidLength)?;
             let effect = decode_effect(input, offset)?;
             let destination = effects.get_mut(index).ok_or(Error::InvalidCount)?;
@@ -236,7 +240,11 @@ impl Plan {
         let mut index = 0_usize;
         while index < self.len() {
             let offset = HEADER_BYTES
-                .checked_add(index.checked_mul(EFFECT_BYTES).ok_or(Error::InvalidLength)?)
+                .checked_add(
+                    index
+                        .checked_mul(EFFECT_BYTES)
+                        .ok_or(Error::InvalidLength)?,
+                )
                 .ok_or(Error::InvalidLength)?;
             encode_effect(
                 self.effect(index).ok_or(Error::InvalidCount)?,
@@ -277,10 +285,7 @@ pub fn execute(plan: &Plan, state: &mut State) -> Result<(), Error> {
     let mut next = *state;
     let mut index = 0_usize;
     while index < plan.len() {
-        apply_effect(
-            &mut next,
-            plan.effect(index).ok_or(Error::InvalidCount)?,
-        )?;
+        apply_effect(&mut next, plan.effect(index).ok_or(Error::InvalidCount)?)?;
         index = index.checked_add(1).ok_or(Error::InvalidCount)?;
     }
     *state = next;
@@ -451,7 +456,7 @@ mod tests {
         State {
             outcome: 1,
             seller_next_nonce: 0,
-            buyer_next_nonce: 7,
+            buyer_next_nonce: 0,
             seller_claims: 5000,
             buyer_claims: 200,
             buyer_collateral: 2000,
@@ -477,7 +482,7 @@ mod tests {
             State {
                 outcome: 1,
                 seller_next_nonce: 1,
-                buyer_next_nonce: 8,
+                buyer_next_nonce: 1,
                 seller_claims: 3000,
                 buyer_claims: 2200,
                 buyer_collateral: 998,
@@ -557,10 +562,7 @@ mod tests {
         let mut state = pre_state();
         state.seller_claims = 1999;
         let original = state;
-        assert_eq!(
-            execute(&plan, &mut state),
-            Err(Error::InsufficientBalance)
-        );
+        assert_eq!(execute(&plan, &mut state), Err(Error::InsufficientBalance));
         assert_eq!(state, original);
     }
 }

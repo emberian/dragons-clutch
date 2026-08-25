@@ -14,7 +14,7 @@ open DClutch
 def binaryProduct : ProductIR := {
   outcomeCount := 2
   outcomeCountPositive := by decide
-  priceScale := 1000
+  priceScale := 1000000
   priceScalePositive := by decide
 }
 
@@ -34,7 +34,7 @@ def sellerIntent : Intent := {
   lifecycle := .fillOrKill
   outcome := 1
   maxFill := 2000
-  limitPrice := 400
+  limitPrice := 400000
   feePolicyId := 77
 }
 
@@ -42,14 +42,14 @@ def buyerIntent : Intent := {
   market := 101
   generation := 3
   maker := 12
-  nonce := 7
+  nonce := 0
   validFromSlot := 95
   validThroughSlot := 120
   side := .buy
   lifecycle := .fillOrKill
   outcome := 1
   maxFill := 2000
-  limitPrice := 600
+  limitPrice := 600000
   feePolicyId := 77
 }
 
@@ -63,7 +63,7 @@ def frame : FillFrame := {
   buyerIntent := buyerIntent
   pre := {
     sellerNextNonce := 0
-    buyerNextNonce := 7
+    buyerNextNonce := 0
     sellerClaims := 5000
     buyerClaims := 200
     buyerCollateral := 2000
@@ -71,7 +71,7 @@ def frame : FillFrame := {
     venueCollateral := 20
   }
   fill := 2000
-  executionPrice := 500
+  executionPrice := 500000
   gross := 1000
   fee := 2
 }
@@ -91,13 +91,13 @@ theorem frame_encoded_plan_length :
 
 theorem frame_encoded_plan_hex :
     Codec.hex (Codec.encodePlan (effectPlan frame)) =
-      "444345460107000000000000000000000100000000000000000100000000000008000000000000000100010001000000d0070000000000000201010001000000d0070000000000000101020000000000ea030000000000000200020000000000e80300000000000002020200000000000200000000000000" := by
+      "444345460107000000000000000000000100000000000000000100000000000001000000000000000100010001000000d0070000000000000201010001000000d0070000000000000101020000000000ea030000000000000200020000000000e80300000000000002020200000000000200000000000000" := by
   native_decide
 
 theorem frame_post_state :
     (execute frame frame_admissible).post = {
       sellerNextNonce := 1
-      buyerNextNonce := 8
+      buyerNextNonce := 1
       sellerClaims := 3000
       buyerClaims := 2200
       buyerCollateral := 998

@@ -332,6 +332,7 @@ dependencies = [
 name = "dclutch-direct-contract"
 version = "0.1.0"
 dependencies = [
+ "dclutch-effect-kernel",
  "dclutch-realm-contract",
  "dclutch-rent-contract",
 ]

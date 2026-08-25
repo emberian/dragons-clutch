@@ -22,7 +22,10 @@ Rust implementation. It currently provides:
 
 `dclutch-effect-kernel` is the first physical refinement target. It is safe
 Rust, `no_std`, `no_alloc`, fixed-capacity, and transactionally applies the
-Lean-emitted vector. It does not reimplement Direct admission.
+Lean-emitted vector. It does not reimplement Direct admission. The
+`dclutch-direct-contract` test suite executes that same vector beside the
+current authenticated inline-ordinary reference transition and compares replay,
+claims, gross collateral, and fee custody.
 
 Run:
 

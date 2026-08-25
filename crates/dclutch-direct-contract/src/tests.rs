@@ -1,5 +1,9 @@
 #![allow(clippy::indexing_slicing)]
 
+use dclutch_effect_kernel::{
+    MAX_PLAN_BYTES as EFFECT_PLAN_BYTES, Plan as EffectPlan, State as EffectState,
+    execute as execute_effect_plan,
+};
 use dclutch_realm_contract::PositionV1;
 
 use super::*;
@@ -29,6 +33,32 @@ fn runtime_position<const N: usize>(value: PositionV1<N>) -> Result<DirectPositi
 
 fn key(value: u8) -> [u8; 32] {
     [value; 32]
+}
+
+const LEAN_DIRECT_EFFECT_HEX: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../formal/dclutch-semantics/vectors/direct-inline-ordinary-v1.hex"
+));
+
+fn hex_nibble(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        _ => None,
+    }
+}
+
+fn lean_direct_effect_bytes() -> [u8; EFFECT_PLAN_BYTES] {
+    let source = LEAN_DIRECT_EFFECT_HEX.trim().as_bytes();
+    assert_eq!(source.len(), EFFECT_PLAN_BYTES * 2);
+    let mut output = [0_u8; EFFECT_PLAN_BYTES];
+    for (destination, pair) in output.iter_mut().zip(source.chunks_exact(2)) {
+        let high = pair.first().and_then(|value| hex_nibble(*value));
+        let low = pair.get(1).and_then(|value| hex_nibble(*value));
+        *destination =
+            high.expect("Lean fixture high nibble") * 16 + low.expect("Lean fixture low nibble");
+    }
+    output
 }
 
 fn intent(
@@ -1478,6 +1508,102 @@ fn inline_fok_ioc_consumes_same_nonce_without_live_rent_and_cross_mode_replay_re
         }),
         Err(Error::NonceMismatch)
     );
+    Ok(())
+}
+
+#[test]
+fn lean_effect_plan_matches_inline_ordinary_reference() -> Result<()> {
+    let ask = intent_lifecycle(
+        IntentLifecycleV2::InlineFillOrKill,
+        (1, Side::Sell, 1, 0, 400_000, 2_000, 25),
+    )?;
+    let bid = intent_lifecycle(
+        IntentLifecycleV2::InlineFillOrKill,
+        (2, Side::Buy, 1, 0, 600_000, 2_000, 25),
+    )?;
+    let instruction = encode_inline_ordinary_instruction_v2(2_000, 500_000, ask, bid)?;
+    let ed = canonical_ed25519_test_instruction([key(1), key(2)], [34, 266], [232, 232], 5);
+    let authorizations = inspect_preceding_ed25519_batch_v2(
+        Ed25519InstructionViewV2 {
+            program_id: ED25519_PROGRAM_ID_3_0,
+            ed25519_data: ed
+                .get(..canonical_ed25519_test_instruction_len(2))
+                .ok_or(Error::InvalidSignatureInstruction)?,
+            preceding_index: 4,
+            current_index: 5,
+            current_data: &instruction,
+        },
+        [
+            Ed25519ExpectationV2 {
+                message_offset: 34,
+                signer: key(1),
+                message: &ask.signed_preimage(),
+            },
+            Ed25519ExpectationV2 {
+                message_offset: 266,
+                signer: key(2),
+                message: &bid.signed_preimage(),
+            },
+        ],
+    )?;
+    let reference = settle_inline_ordinary_v2(InlineOrdinaryMatchV2 {
+        phase: adapter::MarketPhaseV2::Open,
+        slot: 12,
+        seller_replay_root: ReplayRootStateV2::absent(1),
+        buyer_replay_root: ReplayRootStateV2::absent(2),
+        root_creation_payer: key(200),
+        seller_intent: ask,
+        buyer_intent: bid,
+        seller_authorization: authorizations[0],
+        buyer_authorization: authorizations[1],
+        seller_accounts: inline_accounts(ask),
+        buyer_accounts: inline_accounts(bid),
+        seller_position: position(1, [0, 5_000])?,
+        buyer_position: position(2, [0, 200])?,
+        collateral_mint: key(6),
+        buyer_debit_authority: buy_authority(bid, buy_reserve(bid)),
+        fill: 2_000,
+        execution_price: 500_000,
+        fee_policy: policy(25)?,
+        fee_config_digest: key(8),
+        fee_recipient_account: key(99),
+    })?;
+
+    let plan = EffectPlan::decode(&lean_direct_effect_bytes()).expect("Lean plan decodes");
+    let mut state = EffectState {
+        outcome: 1,
+        seller_next_nonce: 0,
+        buyer_next_nonce: 0,
+        seller_claims: 5_000,
+        buyer_claims: 200,
+        buyer_collateral: 2_000,
+        seller_collateral: 100,
+        venue_collateral: 20,
+    };
+    execute_effect_plan(&plan, &mut state).expect("Lean plan executes");
+
+    assert_eq!(
+        state.seller_next_nonce,
+        reference.seller_replay_root.next_registration_nonce()
+    );
+    assert_eq!(
+        state.buyer_next_nonce,
+        reference.buyer_replay_root.next_registration_nonce()
+    );
+    assert_eq!(state.seller_claims, reference.seller_position.balances()[1]);
+    assert_eq!(state.buyer_claims, reference.buyer_position.balances()[1]);
+    assert_eq!(reference.gross_collateral_transfer, 1_000);
+    assert_eq!(reference.venue_fee_transfer, 2);
+    assert_eq!(reference.buyer_total_collateral_debit, 1_002);
+    assert_eq!(
+        state.buyer_collateral,
+        2_000 - reference.buyer_total_collateral_debit
+    );
+    assert_eq!(
+        state.seller_collateral,
+        100 + reference.gross_collateral_transfer
+    );
+    assert_eq!(state.venue_collateral, 20 + reference.venue_fee_transfer);
     Ok(())
 }
 

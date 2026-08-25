@@ -31,7 +31,8 @@ cannot change a resting order's final cumulative fee in the semantic model.
   Token/Token-2022 semantics, rent, and transaction rollback;
 - a machine-checked refinement from the Lean effect interpreter to the Rust
   microkernel (`dclutch-effect-kernel` currently supplies cross-language vector,
-  round-trip, execution, hostile-parser, and late-rollback tests only);
+  round-trip, execution, hostile-parser, late-rollback, and one concrete
+  differential Direct-reference test only);
 - refinement from the executor's deployed ELF bytes to Lean's sBPF semantics;
 - compute-unit, stack, ELF-size, and rent measurements;
 - all Direct routes other than inline ordinary execution; and

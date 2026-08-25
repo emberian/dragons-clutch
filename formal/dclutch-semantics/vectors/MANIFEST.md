@@ -9,6 +9,8 @@
 - Encoded bytes: 120
 - Header bytes: 8
 - Effect records: 7 × 16 bytes
+- Differential consumer:
+  `dclutch-direct-contract::tests::lean_effect_plan_matches_inline_ordinary_reference`
 
 The vector is a reproducible semantic fixture. It is not a deployment artifact
 or evidence about an SBF program.
