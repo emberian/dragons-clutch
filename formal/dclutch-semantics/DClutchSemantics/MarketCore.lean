@@ -1,4 +1,3 @@
-import DClutchSemantics.EconomicKernel
 import DClutchSemantics.ExecutionRelease
 import DClutchSemantics.SourceResolution
 import Std.Tactic
@@ -8,8 +7,12 @@ import Std.Tactic
 
 This module is the small lifecycle shared by every dClutch Market.  It owns an
 immutable Realm, canonical Product/result-domain identities, one immutable
-execution-release set, exact rent/funding commitments, the universal economic
-state, terminal admission, redemption, and retirement.  Trading venues,
+execution-release set, exact prepaid creation, universal lifecycle,
+terminal admission, redemption routing, and retirement.  The Claims child is
+the sole owner of mutable claim supply and Hoard principal; Core stores only
+immutable coordinates and lifecycle. Source/Resolution is the sole
+owner of action-specific funding allocations, work, balances, and closure.
+Trading venues,
 liquidity, wrappers, bearer representations, and recovery depth are absent:
 they are capability children rather than optional Core slots.
 
@@ -46,14 +49,12 @@ structure Product where
   capacityProfileId : Identity
   compilerReleaseId : Identity
   outcomeCount : Nat
-  scalarLimit : Nat
   deriving DecidableEq, Repr
 
 def Product.valid (product : Product) : Bool :=
   product.productId != 0 && product.resultDomainId != 0 &&
   product.claimBasisId != 0 && product.capacityProfileId != 0 &&
-  product.compilerReleaseId != 0 && 1 < product.outcomeCount &&
-  0 < product.scalarLimit
+  product.compilerReleaseId != 0 && 1 < product.outcomeCount
 
 /-- Exact immutable Market identity.  `marketId` is the adapter-checked
 canonical content/address identity for these coordinates. -/
@@ -63,6 +64,7 @@ structure MarketIdentity where
   productId : Identity
   resultDomainId : Identity
   resolutionPolicyId : Identity
+  capabilityManifestId : Identity
   executionReleaseSetId : Identity
   generation : Nat
   deriving DecidableEq, Repr
@@ -70,7 +72,8 @@ structure MarketIdentity where
 def MarketIdentity.valid (identity : MarketIdentity) : Bool :=
   identity.marketId != 0 && identity.realmId != 0 &&
   identity.productId != 0 && identity.resultDomainId != 0 &&
-  identity.resolutionPolicyId != 0 && identity.executionReleaseSetId != 0
+  identity.resolutionPolicyId != 0 && identity.capabilityManifestId != 0 &&
+  identity.executionReleaseSetId != 0
 
 /-! ## Dust-tolerant exact account creation -/
 
@@ -132,105 +135,42 @@ theorem rent_reserve_partition (before reserved : Nat) :
   unfold rentTopUp
   omega
 
-/-- Exact prepaid Found requirements.  Work capital and deferred custody rent
-are present lamports.  Future fees and Hoard collateral do not appear. -/
+/-- Exact prepaid Core-owned Market account requirement. Capability funding,
+Hoard initialization, readiness, and custody are child-owned effects. -/
 structure FoundingQuote where
   marketRent : Nat
-  hoardRent : Nat
-  fundRent : Nat
-  readinessRent : Nat
-  custodyRent : Nat
-  sourceFundingAllocationId : Identity
-  sourceWorkCapital : Nat
   deriving DecidableEq, Repr
 
 def FoundingQuote.valid (quote : FoundingQuote) : Bool :=
-  0 < quote.marketRent && 0 < quote.hoardRent && 0 < quote.fundRent &&
-  0 < quote.readinessRent && 0 < quote.custodyRent &&
-  quote.sourceFundingAllocationId != 0 && 0 < quote.sourceWorkCapital
+  0 < quote.marketRent
 
 structure FoundingAccounts where
   payerLamports : Nat
   rentCreditId : Identity
-  rentCreditLamports : Nat
   market : VacantAccount
-  hoard : VacantAccount
-  fund : VacantAccount
-  readiness : VacantAccount
   deriving DecidableEq, Repr
-
-/-- Adapter-authenticated canonical fixed Core children.  This is a closed
-fixed set; venue and wrapper addresses are deliberately not Core fields. -/
-structure CoreAccountCoordinates where
-  derivationAuthenticated : Bool
-  marketId : Identity
-  hoardId : Identity
-  fundId : Identity
-  readinessId : Identity
-  custodyId : Identity
-  rentCreditId : Identity
-  deriving DecidableEq, Repr
-
-def CoreAccountCoordinates.addresses (coordinates : CoreAccountCoordinates) : List Identity := [
-  coordinates.marketId,
-  coordinates.hoardId,
-  coordinates.fundId,
-  coordinates.readinessId,
-  coordinates.custodyId,
-  coordinates.rentCreditId
-]
-
-def CoreAccountCoordinates.valid (coordinates : CoreAccountCoordinates) : Bool :=
-  coordinates.derivationAuthenticated &&
-  coordinates.addresses.all (fun address => address != 0) &&
-  decide (coordinates.addresses.Pairwise fun left right => left ≠ right)
-
-def FoundingAccounts.addresses (accounts : FoundingAccounts) : List Identity := [
-  accounts.rentCreditId,
-  accounts.market.address,
-  accounts.hoard.address,
-  accounts.fund.address,
-  accounts.readiness.address
-]
-
-def FoundingAccounts.distinct (accounts : FoundingAccounts) : Bool :=
-  decide (accounts.addresses.Pairwise fun left right => left ≠ right)
 
 structure FoundingFrame where
   realm : Realm
   product : Product
   identity : MarketIdentity
   coreAdmission : ExecutionRelease.Admission
-  coordinates : CoreAccountCoordinates
   quote : FoundingQuote
   accounts : FoundingAccounts
   deriving DecidableEq, Repr
 
 structure FoundingCreationPlan where
   market : AccountCreation
-  hoard : AccountCreation
-  fund : AccountCreation
-  readiness : AccountCreation
   payerDebit : Nat
   payerAfter : Nat
   deriving DecidableEq, Repr
 
 def foundingCreationPlan (frame : FoundingFrame) : FoundingCreationPlan :=
   let market := planAccountCreation frame.accounts.market frame.quote.marketRent 0
-  let hoard := planAccountCreation frame.accounts.hoard frame.quote.hoardRent 0
-  let fundPrincipal := frame.quote.sourceWorkCapital + frame.quote.custodyRent
-  let fund := planAccountCreation frame.accounts.fund frame.quote.fundRent fundPrincipal
-  let readiness :=
-    planAccountCreation frame.accounts.readiness frame.quote.readinessRent 0
-  let debit := market.rentTopUp + hoard.rentTopUp +
-    fund.rentTopUp + fund.semanticPrincipal + readiness.rentTopUp
   {
     market
-    hoard
-    fund
-    readiness
-    payerDebit := debit
-    payerAfter := frame.accounts.payerLamports - debit
+    payerDebit := market.rentTopUp
+    payerAfter := frame.accounts.payerLamports - market.rentTopUp
   }
 
 def foundingAccepts (frame : FoundingFrame) : Bool :=
@@ -242,16 +182,11 @@ def foundingAccepts (frame : FoundingFrame) : Bool :=
   frame.identity.executionReleaseSetId == frame.coreAdmission.selected.releaseSetId &&
   frame.coreAdmission.marketReleaseSetId == frame.identity.executionReleaseSetId &&
   ExecutionRelease.admits frame.coreAdmission .core &&
-  frame.coordinates.valid && frame.coordinates.marketId == frame.identity.marketId &&
-  frame.accounts.rentCreditId == frame.coordinates.rentCreditId &&
-  frame.accounts.market.address == frame.coordinates.marketId &&
-  frame.accounts.hoard.address == frame.coordinates.hoardId &&
-  frame.accounts.fund.address == frame.coordinates.fundId &&
-  frame.accounts.readiness.address == frame.coordinates.readinessId &&
   frame.quote.valid &&
-  frame.accounts.market.valid && frame.accounts.hoard.valid &&
-  frame.accounts.fund.valid && frame.accounts.readiness.valid &&
-  frame.accounts.distinct && plan.payerDebit <= frame.accounts.payerLamports
+  frame.accounts.rentCreditId != 0 && frame.accounts.market.valid &&
+  frame.accounts.market.address == frame.identity.marketId &&
+  frame.accounts.market.address != frame.accounts.rentCreditId &&
+  plan.payerDebit <= frame.accounts.payerLamports
 
 /-! ## Persistent Core state -/
 
@@ -269,150 +204,52 @@ inductive Readiness where
   | consumed
   deriving DecidableEq, Repr
 
-/-- Semantic capital classes.  Claimant Hoard principal has its own field and
-is tied exactly to the Economic kernel. -/
-structure Capital where
-  marketRent : Nat
-  marketDonation : Nat
-  hoardRent : Nat
-  hoardDonation : Nat
-  fundRent : Nat
-  fundDonation : Nat
-  readinessRent : Nat
-  readinessDonation : Nat
-  custodyRent : Nat
-  custodyDonation : Nat
-  deferredCustodyRent : Nat
-  rentCredit : Nat
-  deriving DecidableEq, Repr
-
-structure FundingCommitment where
-  allocationId : Identity
-  initialWorkCapital : Nat
-  deriving DecidableEq, Repr
-
 structure State where
-  realm : Realm
-  product : Product
   identity : MarketIdentity
-  executionReleases : ExecutionRelease.ReleaseSet
-  coordinates : CoreAccountCoordinates
+  rentBeneficiaryId : Identity
   phase : Phase
   readiness : Readiness
-  capital : Capital
-  funding : FundingCommitment
+  outstandingCapabilities : Nat
   terminalReceiptId : Identity
-  terminalFundingRemaining : Nat
-  economic : Economic.State
   deriving DecidableEq, Repr
 
-def zeroVector (count : Nat) : List Nat := List.replicate count 0
-
-def initialEconomic (product : Product) : Economic.State := {
-  phase := .open
-  hoard := 0
-  supply := zeroVector product.outcomeCount
-  nativeSupply := zeroVector product.outcomeCount
-  materializedSupply := zeroVector product.outcomeCount
-  sourceNative := zeroVector product.outcomeCount
-  sourceMaterialized := zeroVector product.outcomeCount
-  destinationNative := zeroVector product.outcomeCount
-  destinationMaterialized := zeroVector product.outcomeCount
-}
-
-def phaseMatches (state : State) : Bool :=
-  match state.phase, state.economic.phase with
-  | .founding, .open => state.readiness != .consumed
-  | .open, .open => state.readiness = .consumed
-  | .terminal left, .terminal right => left = right && state.readiness = .consumed
-  | .retiring left, .retiring right => left = right && state.readiness = .consumed
-  | .retired, .retired => state.readiness = .consumed
-  | _, _ => false
+def lifecyclePhaseValid (state : State) : Bool :=
+  match state.phase with
+  | .founding => state.readiness != .consumed
+  | .open | .terminal _ | .retiring _ | .retired => state.readiness = .consumed
 
 def terminalFieldsValid (state : State) : Bool :=
   match state.phase with
-  | .founding | .open => state.terminalReceiptId = 0 && state.terminalFundingRemaining = 0
+  | .founding | .open => state.terminalReceiptId = 0
   | .terminal _ | .retiring _ => state.terminalReceiptId != 0
-  | .retired => state.terminalReceiptId != 0 && state.terminalFundingRemaining = 0
+  | .retired => state.terminalReceiptId != 0
 
-def capitalPhaseValid (state : State) : Bool :=
+def childCountPhaseValid (state : State) : Bool :=
   match state.phase with
-  | .founding =>
-      0 < state.capital.marketRent && 0 < state.capital.hoardRent &&
-      0 < state.capital.fundRent && 0 < state.capital.readinessRent &&
-      0 < state.capital.deferredCustodyRent && state.capital.custodyRent = 0
-  | .open | .terminal _ | .retiring _ =>
-      0 < state.capital.marketRent && 0 < state.capital.hoardRent &&
-      0 < state.capital.fundRent && state.capital.readinessRent = 0 &&
-      state.capital.deferredCustodyRent = 0 && 0 < state.capital.custodyRent
-  | .retired =>
-      state.capital.marketRent = 0 && state.capital.marketDonation = 0 &&
-      state.capital.hoardRent = 0 && state.capital.hoardDonation = 0 &&
-      state.capital.fundRent = 0 && state.capital.fundDonation = 0 &&
-      state.capital.readinessRent = 0 && state.capital.readinessDonation = 0 &&
-      state.capital.custodyRent = 0 && state.capital.custodyDonation = 0 &&
-      state.capital.deferredCustodyRent = 0
+  | .retired => state.outstandingCapabilities = 0
+  | _ => true
 
 /-- Complete executable invariant. -/
 def State.valid (state : State) : Bool :=
-  state.realm.valid && state.product.valid && state.identity.valid &&
-  state.identity.realmId == state.realm.realmId &&
-  state.identity.productId == state.product.productId &&
-  state.identity.resultDomainId == state.product.resultDomainId &&
-  state.identity.executionReleaseSetId == state.executionReleases.releaseSetId &&
-  ExecutionRelease.releaseSetValid state.executionReleases &&
-  state.coordinates.valid && state.coordinates.marketId == state.identity.marketId &&
-  state.funding.allocationId != 0 && 0 < state.funding.initialWorkCapital &&
-  phaseMatches state && terminalFieldsValid state && capitalPhaseValid state &&
-  Economic.valid state.product.outcomeCount state.product.scalarLimit state.economic
+  state.identity.valid && state.rentBeneficiaryId != 0 &&
+  lifecyclePhaseValid state && terminalFieldsValid state && childCountPhaseValid state
 
 def initialState (frame : FoundingFrame) : State :=
-  let plan := foundingCreationPlan frame
   {
-    realm := frame.realm
-    product := frame.product
     identity := frame.identity
-    executionReleases := frame.coreAdmission.selected
-    coordinates := frame.coordinates
+    rentBeneficiaryId := frame.accounts.rentCreditId
     phase := .founding
     readiness := .prepaid
-    capital := {
-      marketRent := frame.quote.marketRent
-      marketDonation := plan.market.donation
-      hoardRent := frame.quote.hoardRent
-      hoardDonation := plan.hoard.donation
-      fundRent := frame.quote.fundRent
-      fundDonation := plan.fund.donation
-      readinessRent := frame.quote.readinessRent
-      readinessDonation := plan.readiness.donation
-      custodyRent := 0
-      custodyDonation := 0
-      deferredCustodyRent := frame.quote.custodyRent
-      rentCredit := frame.accounts.rentCreditLamports
-    }
-    funding := {
-      allocationId := frame.quote.sourceFundingAllocationId
-      initialWorkCapital := frame.quote.sourceWorkCapital
-    }
+    outstandingCapabilities := 0
     terminalReceiptId := 0
-    terminalFundingRemaining := 0
-    economic := initialEconomic frame.product
   }
 
 structure FoundingResult (frame : FoundingFrame) where
   post : State
-  sourceFunding : SourceResolution.FundingState
   creation : FoundingCreationPlan
   accepted : foundingAccepts frame = true
   postExact : post = initialState frame
   postValid : post.valid = true
-  fundingExact : sourceFunding = {
-    allocationId := frame.quote.sourceFundingAllocationId
-    initialCapital := frame.quote.sourceWorkCapital
-    remainingCapital := frame.quote.sourceWorkCapital
-    paidCapital := 0
-    callCount := 0
-  }
 
 inductive Refusal where
   | notAdmissible
@@ -420,10 +257,9 @@ inductive Refusal where
   | wrongRelease
   | wrongPhase
   | wrongRealmCollateral
-  | wrongFunding
   | invalidTerminalReceipt
   | invalidAccount
-  | economicRefusal
+  | childEffectRefusal
   | candidateInvariantFailure
   deriving DecidableEq, Repr
 
@@ -432,21 +268,12 @@ def found? (frame : FoundingFrame) : Except Refusal (FoundingResult frame) :=
   if accepted : foundingAccepts frame = true then
     let candidate := initialState frame
     if candidateValid : candidate.valid = true then
-      let funding : SourceResolution.FundingState := {
-        allocationId := frame.quote.sourceFundingAllocationId
-        initialCapital := frame.quote.sourceWorkCapital
-        remainingCapital := frame.quote.sourceWorkCapital
-        paidCapital := 0
-        callCount := 0
-      }
       .ok {
         post := candidate
-        sourceFunding := funding
         creation := foundingCreationPlan frame
         accepted
         postExact := rfl
         postValid := candidateValid
-        fundingExact := rfl
       }
     else .error .candidateInvariantFailure
   else .error .notAdmissible
@@ -457,12 +284,27 @@ def admissionMatches
     (state : State) (admission : ExecutionRelease.Admission)
     (role : ExecutionRelease.Role) : Bool :=
   admission.marketReleaseSetId == state.identity.executionReleaseSetId &&
-  admission.selected == state.executionReleases &&
+  admission.selected.releaseSetId == state.identity.executionReleaseSetId &&
   ExecutionRelease.admits admission role
 
-structure FundActivation where
-  resolutionAdmission : ExecutionRelease.Admission
-  funding : SourceResolution.FundingState
+/-! Child programs own their request/receipt schemas. Core consumes only a
+derived trust-boundary observation; callers cannot author these booleans at the
+physical boundary because the adapter derives them from same-call CPI return
+data and authenticated post-accounts. -/
+structure ChildEffectObservation where
+  exactRequestAuthenticated : Bool
+  exactReceiptAuthenticated : Bool
+  postResourceAuthenticated : Bool
+  deriving DecidableEq, Repr
+
+def ChildEffectObservation.complete (observation : ChildEffectObservation) : Bool :=
+  observation.exactRequestAuthenticated && observation.exactReceiptAuthenticated &&
+  observation.postResourceAuthenticated
+
+structure ReadinessVerification where
+  coreAdmission : ExecutionRelease.Admission
+  manifestReadinessAuthenticated : Bool
+  readinessEffect : ChildEffectObservation
   deriving DecidableEq, Repr
 
 structure CollateralObservation where
@@ -479,133 +321,174 @@ def collateralMatches (realm : Realm) (observation : CollateralObservation) : Bo
   observation.tokenProgramId == realm.tokenProgramId &&
   observation.collateralReleaseId == realm.collateralReleaseId
 
+structure ClaimsEffectObservation extends ChildEffectObservation where
+  payout : Nat
+  aggregateEmpty : Bool
+  deriving DecidableEq, Repr
+
+/-- Exact generic optional-child effect. Manifest/Funding ownership remains in
+the capability child; Core stores only the outstanding-child replay count. -/
+structure CapabilityChildFrame where
+  childAdmission : ExecutionRelease.Admission
+  targetRole : ExecutionRelease.Role
+  manifestEntryAuthenticated : Bool
+  fundingStateAuthenticated : Bool
+  effect : ChildEffectObservation
+  deriving DecidableEq, Repr
+
 structure OpenFrame where
   custodyAdmission : ExecutionRelease.Admission
+  realm : Realm
+  realmRecordAuthenticated : Bool
+  custodyDerivationAuthenticated : Bool
   collateral : CollateralObservation
   custody : VacantAccount
+  custodyRentMinimum : Nat
+  custodyRentAuthenticated : Bool
+  custodyEffect : ChildEffectObservation
   deriving DecidableEq, Repr
+
+/-- Exact ephemeral Custody creation plan. The physical adapter derives the
+rent minimum from trusted Rent data and authenticates the same child request;
+Core does not persist a mirror of the resulting account balance. -/
+def openCreationPlan (frame : OpenFrame) : AccountCreation :=
+  planAccountCreation frame.custody frame.custodyRentMinimum 0
 
 structure TerminalFrame where
   resolutionAdmission : ExecutionRelease.Admission
+  product : Product
+  productRecordAuthenticated : Bool
   certificate : SourceResolution.Certificate
   deriving DecidableEq, Repr
 
-structure EconomicFrame where
+structure SplitFrame where
   claimsAdmission : ExecutionRelease.Admission
   custodyAdmission : ExecutionRelease.Admission
-  bindings : Economic.Bindings
-  command : Economic.Command
+  quantity : Nat
+  claims : ClaimsEffectObservation
+  custody : ChildEffectObservation
+  deriving DecidableEq, Repr
+
+structure RedemptionFrame where
+  claimsAdmission : ExecutionRelease.Admission
+  custodyAdmission : ExecutionRelease.Admission
+  product : Product
+  productRecordAuthenticated : Bool
+  outcome : Nat
+  quantity : Nat
+  claims : ClaimsEffectObservation
+  custody : Option ChildEffectObservation
   deriving DecidableEq, Repr
 
 structure RetirementFrame where
   coreAdmission : ExecutionRelease.Admission
+  claimsAdmission : ExecutionRelease.Admission
+  resolutionAdmission : ExecutionRelease.Admission
   custodyAdmission : ExecutionRelease.Admission
-  funding : SourceResolution.FundingState
+  claims : ClaimsEffectObservation
+  source : ChildEffectObservation
+  custody : ChildEffectObservation
+  coreAccountLamports : Nat
+  coreAccountAuthenticated : Bool
+  rentCreditAuthenticated : Bool
   deriving DecidableEq, Repr
 
 inductive Command where
-  | activateFund (frame : FundActivation)
+  | verifyReadiness (frame : ReadinessVerification)
   | openMarket (frame : OpenFrame)
-  | economic (frame : EconomicFrame)
+  | split (frame : SplitFrame)
+  | redeem (frame : RedemptionFrame)
   | admitTerminal (frame : TerminalFrame)
   | beginRetiring (coreAdmission : ExecutionRelease.Admission)
+  | activateCapability (frame : CapabilityChildFrame)
+  | closeCapability (frame : CapabilityChildFrame)
   | retire (frame : RetirementFrame)
   deriving DecidableEq, Repr
 
-def emptyProgram : Direct.Physical.PhysicalPlan := {
-  claimEffects := EffectPlan.mk []
-  custodyTransfers := []
-}
-
 structure Candidate (pre : State) where
   post : State
-  program : Direct.Physical.PhysicalPlan
-  realmPreserved : post.realm = pre.realm
-  productPreserved : post.product = pre.product
+  payout : Nat
   identityPreserved : post.identity = pre.identity
-  releasesPreserved : post.executionReleases = pre.executionReleases
-  coordinatesPreserved : post.coordinates = pre.coordinates
+  rentBeneficiaryPreserved : post.rentBeneficiaryId = pre.rentBeneficiaryId
 
-def fundingConserved (funding : SourceResolution.FundingState) : Bool :=
-  funding.initialCapital = funding.remainingCapital + funding.paidCapital
-
-def activateFundCandidate
-    (state : State) (frame : FundActivation) : Except Refusal (Candidate state) := do
+def verifyReadinessCandidate
+    (state : State) (frame : ReadinessVerification) : Except Refusal (Candidate state) := do
   if state.phase != .founding || state.readiness != .prepaid then throw .wrongPhase
-  if !admissionMatches state frame.resolutionAdmission .resolution then throw .wrongRelease
-  if frame.funding.allocationId != state.funding.allocationId ||
-      frame.funding.initialCapital != state.funding.initialWorkCapital ||
-      frame.funding.remainingCapital != state.funding.initialWorkCapital ||
-      frame.funding.paidCapital != 0 || frame.funding.callCount != 0 ||
-      !fundingConserved frame.funding then throw .wrongFunding
+  if !admissionMatches state frame.coreAdmission .core then throw .wrongRelease
+  if !frame.manifestReadinessAuthenticated || !frame.readinessEffect.complete then
+    throw .childEffectRefusal
   pure {
     post := { state with readiness := .ready }
-    program := emptyProgram
-    realmPreserved := rfl
-    productPreserved := rfl
+    payout := 0
     identityPreserved := rfl
-    releasesPreserved := rfl
-    coordinatesPreserved := rfl
+    rentBeneficiaryPreserved := rfl
   }
 
 def openCandidate (state : State) (frame : OpenFrame) : Except Refusal (Candidate state) := do
   if state.phase != .founding || state.readiness != .ready then throw .wrongPhase
   if !admissionMatches state frame.custodyAdmission .custody then throw .wrongRelease
-  if !collateralMatches state.realm frame.collateral then throw .wrongRealmCollateral
-  if !frame.custody.valid || frame.custody.address != state.coordinates.custodyId then
+  if !frame.realmRecordAuthenticated || !frame.realm.valid ||
+      frame.realm.realmId != state.identity.realmId ||
+      !collateralMatches frame.realm frame.collateral then throw .wrongRealmCollateral
+  if !frame.custodyDerivationAuthenticated then throw .invalidAccount
+  if !frame.custodyEffect.complete || !frame.custodyRentAuthenticated ||
+      frame.custodyRentMinimum = 0 then throw .childEffectRefusal
+  if !frame.custody.valid || frame.custody.address == state.identity.marketId ||
+      frame.custody.address == state.rentBeneficiaryId then
     throw .invalidAccount
-  let reserved := state.capital.deferredCustodyRent
-  let topUp := rentTopUp frame.custody.lamports reserved
-  let unusedReserve := reserved - topUp
-  let readinessRefund := state.capital.readinessRent + state.capital.readinessDonation
-  let postCapital := {
-    state.capital with
-    readinessRent := 0
-    readinessDonation := 0
-    custodyRent := reserved
-    custodyDonation := donationAboveRent frame.custody.lamports reserved
-    deferredCustodyRent := 0
-    rentCredit := state.capital.rentCredit + unusedReserve + readinessRefund
-  }
   pure {
-    post := { state with phase := .open, readiness := .consumed, capital := postCapital }
-    program := emptyProgram
-    realmPreserved := rfl
-    productPreserved := rfl
+    post := { state with phase := .open, readiness := .consumed }
+    payout := 0
     identityPreserved := rfl
-    releasesPreserved := rfl
-    coordinatesPreserved := rfl
+    rentBeneficiaryPreserved := rfl
   }
 
-def economicCandidate
-    (state : State) (frame : EconomicFrame) : Except Refusal (Candidate state) := do
+def splitCandidate
+    (state : State) (frame : SplitFrame) : Except Refusal (Candidate state) := do
+  if state.phase != .open then throw .wrongPhase
   if !admissionMatches state frame.claimsAdmission .claims ||
       !admissionMatches state frame.custodyAdmission .custody then throw .wrongRelease
-  if frame.command = .retireTerminal then throw .wrongPhase
-  let economicFrame : Economic.Frame := {
-    outcomeCount := state.product.outcomeCount
-    scalarLimit := state.product.scalarLimit
-    bindings := frame.bindings
-    pre := state.economic
-    command := frame.command
+  if frame.quantity = 0 || !frame.claims.toChildEffectObservation.complete ||
+      !frame.custody.complete || frame.claims.payout != 0 || frame.claims.aggregateEmpty then
+    throw .childEffectRefusal
+  pure {
+    post := state
+    payout := 0
+    identityPreserved := rfl
+    rentBeneficiaryPreserved := rfl
   }
-  match Economic.execute? economicFrame with
-  | .error _ => throw .economicRefusal
-  | .ok settlement => pure {
-      post := { state with economic := settlement.post }
-      program := settlement.program
-      realmPreserved := rfl
-      productPreserved := rfl
-      identityPreserved := rfl
-      releasesPreserved := rfl
-      coordinatesPreserved := rfl
-    }
+
+def terminalWinner? (state : State) : Option Nat :=
+  match state.phase with
+  | .terminal winner | .retiring winner => some winner
+  | _ => none
+
+def redemptionCandidate
+    (state : State) (frame : RedemptionFrame) : Except Refusal (Candidate state) := do
+  let some winner := terminalWinner? state | throw .wrongPhase
+  if !admissionMatches state frame.claimsAdmission .claims ||
+      !admissionMatches state frame.custodyAdmission .custody then throw .wrongRelease
+  if !frame.productRecordAuthenticated || !frame.product.valid ||
+      frame.product.productId != state.identity.productId ||
+      frame.product.resultDomainId != state.identity.resultDomainId ||
+      frame.quantity = 0 || frame.product.outcomeCount ≤ frame.outcome ||
+      !frame.claims.toChildEffectObservation.complete then
+    throw .childEffectRefusal
+  let payout := if frame.outcome = winner then frame.quantity else 0
+  let custodyMatches := if payout = 0 then frame.custody.isNone
+    else frame.custody.any ChildEffectObservation.complete
+  if frame.claims.payout != payout || !custodyMatches then throw .childEffectRefusal
+  pure {
+    post := state
+    payout
+    identityPreserved := rfl
+    rentBeneficiaryPreserved := rfl
+  }
 
 def certificateValid (certificate : SourceResolution.Certificate) : Bool :=
   certificate.marketId != 0 && certificate.sourceMaterialId != 0 &&
-  certificate.productId != 0 && certificate.fundingAllocationId != 0 &&
-  certificate.receiptAccountId != 0 && certificate.generation != 0 &&
-  0 < certificate.workPaid &&
+  certificate.productId != 0 && certificate.receiptAccountId != 0 &&
+  certificate.generation != 0 &&
   match certificate.kind with
   | .resolutionSuccess =>
       certificate.routeId != 0 && certificate.providerEvidenceId != 0 &&
@@ -613,36 +496,35 @@ def certificateValid (certificate : SourceResolution.Certificate) : Bool :=
   | .recoveryAdvanced | .exhausted | .resolutionFailure =>
       certificate.providerEvidenceId = 0 && certificate.result = ⟨0, 0⟩
 
-def terminalCertificateMatches (state : State) (certificate : SourceResolution.Certificate) : Bool :=
+def terminalCertificateMatches
+    (state : State) (product : Product) (productRecordAuthenticated : Bool)
+    (certificate : SourceResolution.Certificate) : Bool :=
+  productRecordAuthenticated && product.valid &&
+  product.productId == state.identity.productId &&
+  product.resultDomainId == state.identity.resultDomainId &&
   certificateValid certificate &&
   (certificate.kind == .resolutionSuccess || certificate.kind == .resolutionFailure) &&
   certificate.marketId == state.identity.marketId &&
   certificate.sourceMaterialId == state.identity.resolutionPolicyId &&
-  certificate.productId == state.product.productId &&
+  certificate.productId == product.productId &&
   certificate.generation == state.identity.generation &&
-  certificate.fundingAllocationId == state.funding.allocationId &&
-  certificate.fundingRemaining <= state.funding.initialWorkCapital &&
-  certificate.selector < state.product.outcomeCount
+  certificate.selector < product.outcomeCount
 
 def terminalCandidate
     (state : State) (frame : TerminalFrame) : Except Refusal (Candidate state) := do
   if state.phase != .open then throw .wrongPhase
   if !admissionMatches state frame.resolutionAdmission .resolution then throw .wrongRelease
-  if !terminalCertificateMatches state frame.certificate then throw .invalidTerminalReceipt
+  if !terminalCertificateMatches state frame.product frame.productRecordAuthenticated
+      frame.certificate then throw .invalidTerminalReceipt
   let winner := frame.certificate.selector
   pure {
     post := { state with
       phase := .terminal winner
       terminalReceiptId := frame.certificate.receiptAccountId
-      terminalFundingRemaining := frame.certificate.fundingRemaining
-      economic := { state.economic with phase := .terminal winner }
     }
-    program := emptyProgram
-    realmPreserved := rfl
-    productPreserved := rfl
+    payout := 0
     identityPreserved := rfl
-    releasesPreserved := rfl
-    coordinatesPreserved := rfl
+    rentBeneficiaryPreserved := rfl
   }
 
 def beginRetiringCandidate
@@ -651,83 +533,73 @@ def beginRetiringCandidate
   if !admissionMatches state admission .core then throw .wrongRelease
   match state.phase with
   | .terminal winner => pure {
-      post := { state with
-        phase := .retiring winner
-        economic := { state.economic with phase := .retiring winner }
-      }
-      program := emptyProgram
-      realmPreserved := rfl
-      productPreserved := rfl
+      post := { state with phase := .retiring winner }
+      payout := 0
       identityPreserved := rfl
-      releasesPreserved := rfl
-      coordinatesPreserved := rfl
+      rentBeneficiaryPreserved := rfl
     }
   | _ => throw .wrongPhase
 
-def retirementRefund (state : State) (funding : SourceResolution.FundingState) : Nat :=
-  state.capital.marketRent + state.capital.marketDonation +
-  state.capital.hoardRent + state.capital.hoardDonation +
-  state.capital.fundRent + state.capital.fundDonation + funding.remainingCapital +
-  state.capital.custodyRent + state.capital.custodyDonation
+def capabilityFrameValid (state : State) (frame : CapabilityChildFrame) : Bool :=
+  frame.targetRole != .core && admissionMatches state frame.childAdmission frame.targetRole &&
+  frame.manifestEntryAuthenticated && frame.fundingStateAuthenticated && frame.effect.complete
 
-def clearedCapital (state : State) (refund : Nat) : Capital := {
-  marketRent := 0
-  marketDonation := 0
-  hoardRent := 0
-  hoardDonation := 0
-  fundRent := 0
-  fundDonation := 0
-  readinessRent := 0
-  readinessDonation := 0
-  custodyRent := 0
-  custodyDonation := 0
-  deferredCustodyRent := 0
-  rentCredit := state.capital.rentCredit + refund
-}
+def activateCapabilityCandidate
+    (state : State) (frame : CapabilityChildFrame) : Except Refusal (Candidate state) := do
+  if state.phase != .open then throw .wrongPhase
+  if !capabilityFrameValid state frame then throw .childEffectRefusal
+  pure {
+    post := { state with outstandingCapabilities := state.outstandingCapabilities + 1 }
+    payout := 0
+    identityPreserved := rfl
+    rentBeneficiaryPreserved := rfl
+  }
+
+def closeCapabilityCandidate
+    (state : State) (frame : CapabilityChildFrame) : Except Refusal (Candidate state) := do
+  match state.phase with
+  | .open | .terminal _ | .retiring _ => pure ()
+  | _ => throw .wrongPhase
+  if state.outstandingCapabilities = 0 || !capabilityFrameValid state frame then
+    throw .childEffectRefusal
+  pure {
+    post := { state with outstandingCapabilities := state.outstandingCapabilities - 1 }
+    payout := 0
+    identityPreserved := rfl
+    rentBeneficiaryPreserved := rfl
+  }
 
 def retireCandidate
     (state : State) (frame : RetirementFrame) : Except Refusal (Candidate state) := do
   if !admissionMatches state frame.coreAdmission .core ||
+      !admissionMatches state frame.claimsAdmission .claims ||
+      !admissionMatches state frame.resolutionAdmission .resolution ||
       !admissionMatches state frame.custodyAdmission .custody then throw .wrongRelease
   match state.phase with
   | .retiring _ => pure ()
   | _ => throw .wrongPhase
-  if frame.funding.allocationId != state.funding.allocationId ||
-      frame.funding.initialCapital != state.funding.initialWorkCapital ||
-      frame.funding.remainingCapital != state.terminalFundingRemaining ||
-      !fundingConserved frame.funding then throw .wrongFunding
-  let economicFrame : Economic.Frame := {
-    outcomeCount := state.product.outcomeCount
-    scalarLimit := state.product.scalarLimit
-    bindings := { source := .seller, destination := .buyer, hoard := .venue }
-    pre := state.economic
-    command := .retireTerminal
+  if state.outstandingCapabilities != 0 then throw .childEffectRefusal
+  if !frame.claims.toChildEffectObservation.complete || !frame.claims.aggregateEmpty ||
+      frame.claims.payout != 0 || !frame.source.complete || !frame.custody.complete then
+    throw .childEffectRefusal
+  if !frame.coreAccountAuthenticated || !frame.rentCreditAuthenticated then
+    throw .invalidAccount
+  pure {
+    post := { state with phase := .retired }
+    payout := frame.coreAccountLamports
+    identityPreserved := rfl
+    rentBeneficiaryPreserved := rfl
   }
-  match Economic.execute? economicFrame with
-  | .error _ => throw .economicRefusal
-  | .ok settlement =>
-      let refund := retirementRefund state frame.funding
-      pure {
-        post := { state with
-          phase := .retired
-          capital := clearedCapital state refund
-          terminalFundingRemaining := 0
-          economic := settlement.post
-        }
-        program := settlement.program
-        realmPreserved := rfl
-        productPreserved := rfl
-        identityPreserved := rfl
-        releasesPreserved := rfl
-        coordinatesPreserved := rfl
-      }
 
 def candidateFor (state : State) : Command → Except Refusal (Candidate state)
-  | .activateFund frame => activateFundCandidate state frame
+  | .verifyReadiness frame => verifyReadinessCandidate state frame
   | .openMarket frame => openCandidate state frame
-  | .economic frame => economicCandidate state frame
+  | .split frame => splitCandidate state frame
+  | .redeem frame => redemptionCandidate state frame
   | .admitTerminal frame => terminalCandidate state frame
   | .beginRetiring admission => beginRetiringCandidate state admission
+  | .activateCapability frame => activateCapabilityCandidate state frame
+  | .closeCapability frame => closeCapabilityCandidate state frame
   | .retire frame => retireCandidate state frame
 
 structure Settlement (pre : State) (command : Command) where
@@ -739,9 +611,8 @@ structure Settlement (pre : State) (command : Command) where
 def Settlement.post {pre : State} {command : Command}
     (settlement : Settlement pre command) : State := settlement.candidate.post
 
-def Settlement.program {pre : State} {command : Command}
-    (settlement : Settlement pre command) : Direct.Physical.PhysicalPlan :=
-  settlement.candidate.program
+def Settlement.payout {pre : State} {command : Command}
+    (settlement : Settlement pre command) : Nat := settlement.candidate.payout
 
 /-- Total transition boundary: every hostile input is either a complete valid
 post-state/program or a checked refusal. -/
@@ -776,19 +647,6 @@ theorem refusal_rolls_back
   unfold runState
   rw [failed]
 
-theorem found_hoard_principal_is_zero (frame : FoundingFrame) :
-    (initialState frame).economic.hoard = 0 := rfl
-
-theorem found_hoard_account_has_no_semantic_principal (frame : FoundingFrame) :
-    (foundingCreationPlan frame).hoard.semanticPrincipal = 0 := rfl
-
-theorem found_work_capital_is_exact (frame : FoundingFrame) :
-    (initialState frame).funding.initialWorkCapital = frame.quote.sourceWorkCapital := rfl
-
-theorem found_fund_principal_is_exact (frame : FoundingFrame) :
-    (foundingCreationPlan frame).fund.semanticPrincipal =
-      frame.quote.sourceWorkCapital + frame.quote.custodyRent := rfl
-
 theorem found_payer_debit_is_exact
     (frame : FoundingFrame)
     (funded : (foundingCreationPlan frame).payerDebit ≤ frame.accounts.payerLamports) :
@@ -798,14 +656,11 @@ theorem found_payer_debit_is_exact
     (foundingCreationPlan frame).payerDebit = frame.accounts.payerLamports
   exact Nat.sub_add_cancel funded
 
-theorem successful_step_preserves_immutable_coordinates
+theorem successful_step_preserves_immutable_identity
     (state : State) (command : Command) (settlement : Settlement state command) :
-    settlement.post.realm = state.realm ∧ settlement.post.product = state.product ∧
     settlement.post.identity = state.identity ∧
-    settlement.post.executionReleases = state.executionReleases ∧
-    settlement.post.coordinates = state.coordinates := by
-  exact ⟨settlement.candidate.realmPreserved, settlement.candidate.productPreserved,
-    settlement.candidate.identityPreserved, settlement.candidate.releasesPreserved,
-    settlement.candidate.coordinatesPreserved⟩
+    settlement.post.rentBeneficiaryId = state.rentBeneficiaryId := by
+  exact ⟨settlement.candidate.identityPreserved,
+    settlement.candidate.rentBeneficiaryPreserved⟩
 
 end DClutch.MarketCore

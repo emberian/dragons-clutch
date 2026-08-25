@@ -1,67 +1,69 @@
 # dClutch Market Core codec
 
 This standalone crate is the generated, fixed-memory interpreter for
-`DClutchSemantics.MarketCore`. It is intentionally not wired into the workspace
-or an SBF adapter yet.
+`DClutchSemantics.MarketCore`. It is safe Rust, `no_std`, `no_alloc`, and is not
+yet an account-owning Solana adapter.
 
-`DClutchSemantics.MarketCoreAbi` owns the canonical field order, widths, and
-offsets. `EmitMarketCoreRust.lean` emits both those constants and the safe Rust
-interpreter. `MarketCorePhysicalAbi` and `EmitMarketCorePhysicalRust` own the
-cross-program wire boundary. The fixed Market header is 1,416 bytes and the
-request is 72 bytes.
-Claim vectors are one exact borrowed account-data tail of `7 * N * 8` bytes,
-with canonical little-endian `u64` values and `N` equal to the Product's runtime
-`outcome_count`; the ABI imposes no width-specialized Market semantics or
-provisional maximum N. This representation requires neither alignment casts nor
-an adapter heap.
+`MarketCoreAbi.lean` owns the semantic wire layout. The V2 Market header is
+exactly 320 bytes and the request is 72 bytes. The header persists only:
 
-The physical boundary is deliberately factored rather than padded into one
-maximum account or request shape:
+- immutable Market identity references and generation;
+- lifecycle phase, readiness, and terminal winner/receipt;
+- the immutable RentCredit beneficiary; and
+- a checked count of outstanding manifest-selected optional capabilities.
 
-- `CoreEffectEnvelopeV1` is a 280-byte routing/replay prefix. It binds a single
-  role-owned request by exact byte length and SHA-256 digest. Claims, Custody,
-  and Resolution remain the sole owners of their token, position, funding, and
-  certificate facts.
-- `CoreEffectAckV1` is a 240-byte normalized acknowledgement. It binds the full
-  effect digest, current role program, release set, Market, context, exact
-  pre-revisions, monotonic post-revisions, and the role-owned poststate digest.
-- `SeriesCoreRequestV1` is a 336-byte Core-owned child request. Its
-  Prepare/Consume/Expire shape binds the exact release set, template, ticket,
-  Market, Realm, Product, founder, beneficiary, revisions, rent, work, and
-  positive Ticket-owned Hoard principal. Its
-  Close shape is disjoint and requires every occurrence-only field to be zero.
-- `SeriesCoreAckV1` is a 264-byte Core-produced receipt for that direct boundary.
-  It binds the Registry-selected Core program, exact request digest, release
-  set, Template, Ticket, Market, occurrence-derived generation, caller replay
-  revisions, and the digest of all Core-owned post-resources. Close has a
-  disjoint zero-Ticket/zero-Market/zero-generation shape.
+Realm, Product, release-set records, Claims aggregate/Hoard principal, Custody,
+Source funding, capability FundingState, child balances, rent, and closure facts
+remain owned by their canonical records and programs. Core reauthenticates those
+facts at transition boundaries and consumes exact child effects; it does not
+cache parallel mutable truths or store a width-dependent economic tail. Product
+width is therefore runtime data with no const-N or N=16 semantic ceiling.
+
+Found produces one dust-tolerant creation plan for the Core Market account.
+Readiness, custody creation, Claims initialization, and optional capability
+activation are separately authenticated child effects. `ActivateCapability`
+and `CloseCapability` share one generic manifest/Funding-backed boundary and
+maintain `outstanding_capabilities`; retirement refuses while it is nonzero.
+Claims, Source, and Custody terminal closures are fixed lifecycle effects and
+are not counted as optional capabilities. Retirement returns only the observed
+Core account lamports to the persisted RentCredit after all exact closure
+receipts authenticate.
+
+## Physical boundaries
+
+`MarketCorePhysicalAbi.lean` and `EmitMarketCorePhysicalRust.lean` own the
+cross-program wires:
+
+- `CoreEffectEnvelopeV1` is a 280-byte routing/replay prefix binding one exact
+  role request by byte length and SHA-256 digest.
+- `CoreEffectAckV1` is a 240-byte acknowledgement binding the full effect,
+  selected role program, release set, Market, context, revisions, and child
+  post-resource digest.
+- `SeriesCoreRequestV1` is a separate 336-byte Series-to-Core request; Series is
+  not an execution-release role. `SeriesCoreAckV1` is 264 bytes.
+
+Fixed actions select Claims, Custody, or Resolution. The generic capability
+actions accept exactly one non-Core target role. The release-pinned Core caller
+PDA uses the sole release-set-owned `CallerAuthoritySeedsV1`; the target role is
+never substituted for caller role Core.
+
+The Market PDA under the Registry-selected Core program uses
+`["dclutch/market-core/state/v1", realm, product, result_domain,
+resolution_policy, capability_manifest, release_set, generation_le]`.
+`MarketCoreStateSeedsV1` is the canonical projection.
+
+`CoreMarketViewV1::authenticate` is a pure semantic join over a decoded sparse
+Core header plus `CoreReferenceObservationV1`. A production adapter must derive
+the observation booleans from exact finalized Realm, Product/Terms/result-domain,
+and Registry release-set accounts and from the Claims-owned aggregate PDA; they
+are not caller-authored instruction fields. The concrete account order, owner,
+PDA, loader, and return-data checks remain the explicitly unverified isolated
+Core SBF boundary.
 
 The full-effect digest is
 `SHA256("dclutch/core-effect/v1" || u32_le(280) || envelope ||
-u32_le(role_request_bytes) || role_request)`. The release-pinned caller PDA is
-derived under the selected Core program from the sole release-set-owned
-`CallerAuthoritySeedsV1` projection: `["dclutch:role-authority:v1",
-release_set, market, Core, context, role_request_digest]`. This avoids both
-caller-authored attestations and a digest fixed point: all PDA inputs exist
-before the envelope is encoded, while the resulting authority is still exact
-to one role request and replay context. The envelope's `target_role` is the
-child role and never substitutes for caller role Core. Series is not an
-execution-release role; its 336-byte request is a separate direct Series-to-Core
-boundary authenticated from the exact Template and Ticket. For occurrence
-actions, `market_generation = u64::from(occurrence) + 1`; Close has no Market
-generation. The Series program signs with its PDA derived as
-`["dclutch/series-core-caller/v1", template, SHA256(exact_request_bytes)]`.
-Core must recompute that request digest, derive the PDA under the authenticated
-owner of the exact Template/Ticket, and require the PDA signer. Series accepts
-the 264-byte receipt only from the Registry-selected Core program as the
-immediate return-data producer and rechecks the exact Core post-resource digest.
+u32_le(role_request_bytes) || role_request)`.
 
-The interpreter validates all inputs before applying a transition. It separates
-rent, unclassified donation, Source work funding, deferred custody rent, and
-claimant Hoard principal. It consumes current Registry/Core execution-release
-receipts but does not authenticate accounts, derive addresses, move tokens,
-perform CPI, or supply transaction rollback. Those remain named adapter duties.
-
-Run `./check.sh` to rebuild the Lean ABI, compare the checked-in Rust against
-fresh generator output byte-for-byte, and run formatting, tests, and strict
-Clippy.
+Run `./check.sh` to rebuild the Lean ABI and examples, compare both generated
+Rust files byte-for-byte, then run formatting, all crate tests, and strict
+all-target Clippy.

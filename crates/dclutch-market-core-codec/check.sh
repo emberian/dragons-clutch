@@ -12,6 +12,7 @@ trap 'rm -f "$generated" "$generated_physical"' EXIT HUP INT TERM
   cd "$formal_dir"
   lake build DClutchSemantics.MarketCoreAbi
   lake build DClutchSemantics.MarketCorePhysicalAbi
+  lake build DClutchSemantics.MarketCoreExamples
   lake env lean --run EmitMarketCoreRust.lean > "$generated"
   lake env lean --run EmitMarketCorePhysicalRust.lean > "$generated_physical"
 )

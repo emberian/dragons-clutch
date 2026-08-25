@@ -21,11 +21,13 @@ def seriesMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x43, 0x53, 0x52, 0x31]
 def seriesAckMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x43, 0x53, 0x41, 0x31]
 def effectDigestDomain : List UInt8 := "dclutch/core-effect/v1".toUTF8.toList
 def seriesCallerAuthorityDomain : List UInt8 := "dclutch/series-core-caller/v1".toUTF8.toList
+def marketStateDomain : List UInt8 := "dclutch/market-core/state/v1".toUTF8.toList
 def version : Nat := 1
 
 theorem effect_digest_domain_fits_sha_seed : effectDigestDomain.length ≤ 32 := by native_decide
 theorem series_caller_authority_domain_fits_pda_seed :
     seriesCallerAuthorityDomain.length ≤ 32 := by native_decide
+theorem market_state_domain_fits_pda_seed : marketStateDomain.length ≤ 32 := by native_decide
 
 inductive EffectField where
   | magic | version | action | targetRole | reservedHeader

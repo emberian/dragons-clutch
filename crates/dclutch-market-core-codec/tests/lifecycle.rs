@@ -1,12 +1,14 @@
-//! Hostile generated Market Core ABI and lifecycle coverage.
+//! Hostile generated Market Core ABI and sparse lifecycle coverage.
 
 use dclutch_market_core_codec::{
-    AccountCreation, Action, Admission, Binding, CollateralObservation, CoreCoordinates, CoreState,
-    EconomicTail, EconomicVector, Error, FoundingAccounts, FoundingFrame, FoundingQuote,
-    FundingState, Holder, Identity, MarketIdentity, Phase, Product, REQUEST_BYTES, Readiness,
-    Realm, ReleaseReceipt, ReleaseSet, Representation, Request, Role, STATE_BYTES, TerminalReceipt,
-    VacantAccount, activate_fund, admit_terminal, begin_retiring, found, open_market,
-    redeem_terminal, retire, split_complete_set,
+    ACTION_ACTIVATE_CAPABILITY_TAG, ACTION_CLOSE_CAPABILITY_TAG, ACTION_VERIFY_READINESS_TAG,
+    AccountCreation, Action, Admission, Binding, CapabilityChildObservation,
+    ChildEffectObservation, ClaimsEffectObservation, CollateralObservation, CoreState, Error,
+    FoundingAccounts, FoundingFrame, FoundingQuote, Holder, Identity, MarketIdentity, Phase,
+    Product, REQUEST_BYTES, Readiness, Realm, ReleaseReceipt, ReleaseSet, Representation, Request,
+    Role, STATE_BYTES, TerminalReceipt, VacantAccount, activate_capability_child, admit_terminal,
+    begin_retiring, close_capability_child, found, open_market, redeem_terminal, retire,
+    split_complete_set, verify_readiness,
 };
 
 fn id(byte: u8) -> Identity {
@@ -61,6 +63,39 @@ fn admission(role: Role) -> Admission {
     }
 }
 
+fn realm() -> Realm {
+    Realm {
+        realm_id: id(20),
+        collateral_mint: id(21),
+        token_program: id(22),
+        collateral_release: id(23),
+    }
+}
+
+fn product(outcome_count: u32) -> Product {
+    Product {
+        product_id: id(30),
+        result_domain: id(31),
+        claim_basis: id(32),
+        capacity_profile: id(33),
+        compiler_release: id(34),
+        outcome_count,
+    }
+}
+
+fn identity() -> MarketIdentity {
+    MarketIdentity {
+        market_id: id(40),
+        realm_id: id(20),
+        product_id: id(30),
+        result_domain: id(31),
+        resolution_policy: id(41),
+        capability_manifest: id(42),
+        selected_release_set: id(10),
+        generation: 7,
+    }
+}
+
 fn vacant(address: Identity, lamports: u64) -> VacantAccount {
     VacantAccount {
         address,
@@ -71,63 +106,17 @@ fn vacant(address: Identity, lamports: u64) -> VacantAccount {
     }
 }
 
-fn founding_frame(outcome_count: u32) -> FoundingFrame {
-    let realm = Realm {
-        realm_id: id(20),
-        collateral_mint: id(21),
-        token_program: id(22),
-        collateral_release: id(23),
-    };
-    let product = Product {
-        product_id: id(30),
-        result_domain: id(31),
-        claim_basis: id(32),
-        capacity_profile: id(33),
-        compiler_release: id(34),
-        outcome_count,
-        scalar_limit: 1_000,
-    };
-    let identity = MarketIdentity {
-        market_id: id(40),
-        realm_id: realm.realm_id,
-        product_id: product.product_id,
-        result_domain: product.result_domain,
-        resolution_policy: id(41),
-        selected_release_set: release_set().release_set_id,
-        generation: 7,
-    };
-    let coordinates = CoreCoordinates {
-        derivation_authenticated: true,
-        market: identity.market_id,
-        hoard: id(42),
-        fund: id(43),
-        readiness: id(44),
-        custody: id(45),
-        rent_credit: id(46),
-    };
+fn founding_frame(outcome_count: u32, market_lamports: u64) -> FoundingFrame {
     FoundingFrame {
-        realm,
-        product,
-        identity,
+        realm: realm(),
+        product: product(outcome_count),
+        identity: identity(),
         core_admission: admission(Role::Core),
-        coordinates,
-        quote: FoundingQuote {
-            market_rent: 100,
-            hoard_rent: 50,
-            fund_rent: 80,
-            readiness_rent: 30,
-            custody_rent: 70,
-            source_funding_allocation: id(50),
-            source_work_capital: 500,
-        },
+        quote: FoundingQuote { market_rent: 100 },
         accounts: FoundingAccounts {
             payer_lamports: 5_000,
-            rent_credit: coordinates.rent_credit,
-            rent_credit_lamports: 100,
-            market: vacant(coordinates.market, 7),
-            hoard: vacant(coordinates.hoard, 55),
-            fund: vacant(coordinates.fund, 10),
-            readiness: vacant(coordinates.readiness, 35),
+            rent_credit: id(46),
+            market: vacant(id(40), market_lamports),
         },
     }
 }
@@ -136,528 +125,498 @@ fn admin(action: Action, state: CoreState) -> Request {
     Request::administrative(action, state.identity.generation, state.identity.market_id)
 }
 
-fn collateral(state: CoreState) -> CollateralObservation {
-    CollateralObservation {
-        adapter_authenticated: true,
-        realm_id: state.realm.realm_id,
-        collateral_mint: state.realm.collateral_mint,
-        token_program: state.realm.token_program,
-        collateral_release: state.realm.collateral_release,
+fn child() -> ChildEffectObservation {
+    ChildEffectObservation {
+        exact_request_authenticated: true,
+        exact_receipt_authenticated: true,
+        post_resource_authenticated: true,
     }
 }
 
-fn ready_open_state(outcome_count: u32) -> CoreState {
-    let frame = founding_frame(outcome_count);
-    let mut result =
-        found(Request::administrative(Action::Found, 7, id(40)), frame).expect("found succeeds");
-    activate_fund(
-        admin(Action::ActivateFund, result.state),
-        &mut result.state,
-        admission(Role::Resolution),
-        result.source_funding,
+fn claims(payout: u64, aggregate_empty: bool) -> ClaimsEffectObservation {
+    ClaimsEffectObservation {
+        child: child(),
+        payout,
+        aggregate_empty,
+    }
+}
+
+fn capability(role: Role) -> CapabilityChildObservation {
+    CapabilityChildObservation {
+        target_role: role,
+        admission: admission(role),
+        manifest_entry_authenticated: true,
+        funding_state_authenticated: true,
+        effect: child(),
+    }
+}
+
+fn collateral() -> CollateralObservation {
+    let realm = realm();
+    CollateralObservation {
+        adapter_authenticated: true,
+        realm_id: realm.realm_id,
+        collateral_mint: realm.collateral_mint,
+        token_program: realm.token_program,
+        collateral_release: realm.collateral_release,
+    }
+}
+
+fn ready_state(outcome_count: u32) -> CoreState {
+    let mut result = found(
+        Request::administrative(Action::Found, 7, id(40)),
+        founding_frame(outcome_count, 7),
     )
-    .expect("fund becomes ready");
-    let state_before = result.state;
-    open_market(
-        admin(Action::OpenMarket, state_before),
+    .expect("found succeeds");
+    let request = admin(Action::VerifyReadiness, result.state);
+    verify_readiness(
+        request,
         &mut result.state,
-        admission(Role::Custody),
-        collateral(state_before),
-        vacant(state_before.coordinates.custody, 20),
+        admission(Role::Core),
+        true,
+        child(),
     )
-    .expect("market opens");
+    .expect("readiness verifies");
     result.state
 }
 
-struct Vectors {
-    bytes: Vec<u8>,
-    outcome_count: u32,
-}
-
-impl Vectors {
-    fn zero(width: usize) -> Self {
-        let outcome_count = u32::try_from(width).expect("fixture width fits u32");
-        Self {
-            bytes: vec![0; EconomicTail::byte_len(outcome_count).expect("fixture tail width")],
-            outcome_count,
-        }
-    }
-
-    fn view(&mut self) -> EconomicTail<'_> {
-        EconomicTail::new(&mut self.bytes, self.outcome_count).expect("fixture tail validates")
-    }
-
-    fn all_equal(&mut self, vector: EconomicVector, expected: u64) -> bool {
-        let outcome_count = self.outcome_count;
-        let view = self.view();
-        (0..outcome_count).all(|outcome| {
-            view.value(vector, outcome)
-                .is_ok_and(|value| value == expected)
-        })
-    }
-
-    fn value_count(&self) -> usize {
-        usize::try_from(self.outcome_count).expect("fixture width fits usize")
-    }
-
-    fn snapshot(&self) -> Vec<u8> {
-        self.bytes.clone()
-    }
-
-    fn is_zero(&mut self) -> bool {
-        for vector in [
-            EconomicVector::Supply,
-            EconomicVector::NativeSupply,
-            EconomicVector::MaterializedSupply,
-            EconomicVector::SourceNative,
-            EconomicVector::SourceMaterialized,
-            EconomicVector::DestinationNative,
-            EconomicVector::DestinationMaterialized,
-        ] {
-            if !self.all_equal(vector, 0) {
-                return false;
-            }
-        }
-        true
-    }
-}
-
-#[test]
-fn funded_lifecycle_preserves_every_compartment_and_round_trips() {
-    let frame = founding_frame(4);
-    let mut result =
-        found(Request::administrative(Action::Found, 7, id(40)), frame).expect("found succeeds");
-    assert_eq!(result.plan.payer_debit, 733);
-    assert_eq!(result.plan.payer_after, 4_267);
-    assert_eq!(result.plan.market.rent_top_up, 93);
-    assert_eq!(result.plan.hoard.donation, 5);
-    assert_eq!(result.plan.fund.semantic_principal, 570);
-    assert_eq!(result.plan.readiness.donation, 5);
-    assert_eq!(result.state.hoard_principal, 0);
-    assert_eq!(result.state.capital.deferred_custody_rent, 70);
-    assert_eq!(result.source_funding.remaining_capital, 500);
-
-    activate_fund(
-        admin(Action::ActivateFund, result.state),
-        &mut result.state,
-        admission(Role::Resolution),
-        result.source_funding,
-    )
-    .expect("fund becomes ready");
-    assert_eq!(result.state.readiness, Readiness::Ready);
-
-    let state_before_open = result.state;
-    let top_up = open_market(
-        admin(Action::OpenMarket, state_before_open),
-        &mut result.state,
+fn open_state(outcome_count: u32) -> CoreState {
+    let mut state = ready_state(outcome_count);
+    let request = admin(Action::OpenMarket, state);
+    open_market(
+        request,
+        &mut state,
         admission(Role::Custody),
-        collateral(state_before_open),
-        vacant(state_before_open.coordinates.custody, 20),
+        realm(),
+        true,
+        true,
+        collateral(),
+        vacant(id(60), 20),
+        70,
+        true,
+        child(),
     )
     .expect("market opens");
-    assert_eq!(top_up, 50);
-    assert_eq!(result.state.phase, Phase::Open);
-    assert_eq!(result.state.capital.custody_rent, 70);
-    assert_eq!(result.state.capital.custody_donation, 0);
-    assert_eq!(result.state.capital.rent_credit, 155);
+    state
+}
 
-    let mut vectors = Vectors::zero(4);
-    split_complete_set(
-        Request::split(
-            Holder::Source,
-            Representation::Native,
-            10,
-            result.state.identity.generation,
-            result.state.identity.market_id,
-        ),
-        &mut result.state,
-        &mut vectors.view(),
-        admission(Role::Claims),
-        admission(Role::Custody),
-    )
-    .expect("complete set splits");
-    assert!(vectors.all_equal(EconomicVector::Supply, 10));
-    assert!(vectors.all_equal(EconomicVector::NativeSupply, 10));
-    assert!(vectors.all_equal(EconomicVector::SourceNative, 10));
-    assert_eq!(result.state.hoard_principal, 10);
-
-    let receipt = TerminalReceipt {
-        receipt_id: id(60),
-        market_id: result.state.identity.market_id,
-        resolution_policy: result.state.identity.resolution_policy,
-        product_id: result.state.product.product_id,
-        generation: result.state.identity.generation,
-        selector: 1,
-        funding_allocation: result.state.funding.allocation_id,
-        funding_remaining: 400,
+fn terminal_receipt(selector: u32) -> TerminalReceipt {
+    TerminalReceipt {
+        receipt_id: id(80),
+        market_id: id(40),
+        resolution_policy: id(41),
+        product_id: id(30),
+        generation: 7,
+        selector,
         authenticated: true,
-    };
+    }
+}
+
+fn terminal_state(outcome_count: u32, selector: u32) -> CoreState {
+    let mut state = open_state(outcome_count);
+    let request = admin(Action::AdmitTerminal, state);
     admit_terminal(
-        admin(Action::AdmitTerminal, result.state),
-        &mut result.state,
+        request,
+        &mut state,
         admission(Role::Resolution),
-        receipt,
-        &vectors.view(),
+        product(outcome_count),
+        true,
+        terminal_receipt(selector),
     )
     .expect("terminal receipt admits");
-    assert_eq!(result.state.phase, Phase::Terminal);
-    assert_eq!(result.state.terminal_winner, 1);
-
-    begin_retiring(
-        admin(Action::BeginRetiring, result.state),
-        &mut result.state,
-        admission(Role::Core),
-    )
-    .expect("retirement begins");
-    for outcome in 0_u32..4 {
-        let request = Request::redeem(
-            Holder::Source,
-            Representation::Native,
-            outcome,
-            10,
-            result.state.identity.generation,
-            result.state.identity.market_id,
-        );
-        let payout = redeem_terminal(
-            request,
-            &mut result.state,
-            &mut vectors.view(),
-            admission(Role::Claims),
-            admission(Role::Custody),
-        )
-        .expect("claim redeems");
-        assert_eq!(payout, u64::from(outcome == 1) * 10);
-    }
-    assert_eq!(result.state.hoard_principal, 0);
-    assert!(vectors.is_zero());
-
-    let funding = FundingState {
-        allocation_id: result.state.funding.allocation_id,
-        initial_capital: 500,
-        remaining_capital: 400,
-        paid_capital: 100,
-        call_count: 1,
-    };
-    let refund = retire(
-        admin(Action::Retire, result.state),
-        &mut result.state,
-        &vectors.view(),
-        admission(Role::Core),
-        admission(Role::Custody),
-        funding,
-    )
-    .expect("empty market retires");
-    assert_eq!(refund, 705);
-    assert_eq!(result.state.phase, Phase::Retired);
-    assert_eq!(result.state.capital.rent_credit, 860);
-    let encoded = result.state.encode().expect("state encodes");
-    assert_eq!(encoded.len(), STATE_BYTES);
-    assert_eq!(CoreState::decode(&encoded), Ok(result.state));
+    state
 }
 
 #[test]
-fn runtime_product_width_has_no_width_specialized_branch() {
-    let mut state = ready_open_state(17);
-    let mut vectors = Vectors::zero(17);
-    split_complete_set(
-        Request::split(
-            Holder::Destination,
-            Representation::Materialized,
-            3,
-            state.identity.generation,
-            state.identity.market_id,
-        ),
-        &mut state,
-        &mut vectors.view(),
-        admission(Role::Claims),
-        admission(Role::Custody),
-    )
-    .expect("runtime width executes");
-    assert_eq!(vectors.value_count(), 17);
-    assert!(vectors.all_equal(EconomicVector::Supply, 3));
-    assert!(vectors.all_equal(EconomicVector::MaterializedSupply, 3));
-    assert!(vectors.all_equal(EconomicVector::DestinationMaterialized, 3));
-}
+fn sparse_state_and_request_schema_are_fresh_and_hostile_decodable() {
+    assert_eq!(STATE_BYTES, 320);
+    assert_eq!(REQUEST_BYTES, 72);
+    assert_eq!(ACTION_VERIFY_READINESS_TAG, 1);
+    assert_eq!(ACTION_ACTIVATE_CAPABILITY_TAG, 8);
+    assert_eq!(ACTION_CLOSE_CAPABILITY_TAG, 9);
 
-#[test]
-fn hostile_request_and_state_bytes_are_refused() {
-    let state = ready_open_state(4);
-    let request = Request::split(
-        Holder::Source,
-        Representation::Native,
-        10,
-        state.identity.generation,
-        state.identity.market_id,
-    );
-    let encoded = request.encode().expect("request encodes");
-    assert_eq!(encoded.len(), REQUEST_BYTES);
-    assert_eq!(Request::decode(&encoded), Ok(request));
-
-    let mut bad_magic = encoded;
-    *bad_magic.first_mut().expect("request has magic") ^= 1;
-    assert_eq!(Request::decode(&bad_magic), Err(Error::InvalidMagic));
-
-    let mut bad_reserved = encoded;
-    *bad_reserved.get_mut(13).expect("reserved byte exists") = 1;
-    assert_eq!(Request::decode(&bad_reserved), Err(Error::NonzeroReserved));
-
-    let mut bad_tag = encoded;
-    *bad_tag.get_mut(10).expect("action tag exists") = u8::MAX;
-    assert_eq!(Request::decode(&bad_tag), Err(Error::InvalidTag));
+    let mut state = open_state(17);
+    state.outstanding_capabilities = 9;
+    let encoded = state.encode().expect("state encodes");
+    assert_eq!(CoreState::decode(&encoded), Ok(state));
     assert_eq!(
-        Request::decode(&encoded[..REQUEST_BYTES - 1]),
+        u64::from_le_bytes(encoded[248..256].try_into().expect("count slice")),
+        9
+    );
+
+    for action in [
+        Action::VerifyReadiness,
+        Action::ActivateCapability,
+        Action::CloseCapability,
+    ] {
+        let request = admin(action, state);
+        assert_eq!(
+            Request::decode(&request.encode().expect("request encodes")),
+            Ok(request)
+        );
+    }
+
+    let mut old_magic = encoded;
+    old_magic[7] = b'1';
+    assert_eq!(CoreState::decode(&old_magic), Err(Error::InvalidMagic));
+    assert_eq!(
+        CoreState::decode(&encoded[..STATE_BYTES - 1]),
         Err(Error::InvalidLength)
     );
 
-    let state_bytes = state.encode().expect("state encodes");
-    let mut state_reserved = state_bytes;
-    *state_reserved
-        .get_mut(308)
-        .expect("product reserved byte exists") = 1;
-    assert_eq!(
-        CoreState::decode(&state_reserved),
-        Err(Error::NonzeroReserved)
-    );
-
-    let mut substituted_realm = state_bytes;
-    substituted_realm
-        .get_mut(352..384)
-        .expect("identity Realm field exists")
-        .copy_from_slice(&id(99).to_bytes());
-    assert_eq!(
-        CoreState::decode(&substituted_realm),
-        Err(Error::InvalidPhase)
-    );
+    let bytes = admin(Action::OpenMarket, state)
+        .encode()
+        .expect("request encodes");
+    let mut reserved = bytes;
+    reserved[13] = 1;
+    assert_eq!(Request::decode(&reserved), Err(Error::NonzeroReserved));
+    let mut unknown = bytes;
+    unknown[10] = 10;
+    assert_eq!(Request::decode(&unknown), Err(Error::InvalidTag));
 }
 
 #[test]
-fn found_refuses_release_identity_coordinate_and_account_substitution() {
-    let request = Request::administrative(Action::Found, 7, id(40));
-
-    let mut wrong_realm = founding_frame(4);
-    wrong_realm.identity.realm_id = id(99);
-    assert_eq!(found(request, wrong_realm), Err(Error::InvalidFunding));
-
-    let mut wrong_rent_credit = founding_frame(4);
-    wrong_rent_credit.accounts.rent_credit = id(99);
+fn found_creates_only_the_dust_tolerant_core_market_account() {
+    let result = found(
+        Request::administrative(Action::Found, 7, id(40)),
+        founding_frame(17, 7),
+    )
+    .expect("found succeeds");
     assert_eq!(
-        found(request, wrong_rent_credit),
+        result.plan.market,
+        AccountCreation {
+            before: 7,
+            rent_minimum: 100,
+            rent_top_up: 93,
+            semantic_principal: 0,
+            donation: 0,
+            after: 100,
+        }
+    );
+    assert_eq!(result.plan.payer_debit, 93);
+    assert_eq!(result.plan.payer_after, 4_907);
+    assert_eq!(result.state.rent_beneficiary, id(46));
+    assert_eq!(result.state.outstanding_capabilities, 0);
+
+    let donated = found(
+        Request::administrative(Action::Found, 7, id(40)),
+        founding_frame(17, 107),
+    )
+    .expect("above-rent vacancy is classified donation");
+    assert_eq!(donated.plan.market.rent_top_up, 0);
+    assert_eq!(donated.plan.market.donation, 7);
+    assert_eq!(donated.plan.payer_debit, 0);
+
+    let mut aliased = founding_frame(17, 0);
+    aliased.accounts.rent_credit = aliased.accounts.market.address;
+    assert_eq!(
+        found(Request::administrative(Action::Found, 7, id(40)), aliased),
         Err(Error::InvalidCoordinates)
     );
-
-    let mut aliased = founding_frame(4);
-    aliased.coordinates.hoard = aliased.coordinates.market;
-    assert_eq!(found(request, aliased), Err(Error::InvalidFunding));
-
-    let mut substituted_release = founding_frame(4);
-    substituted_release.core_admission.receipt.observed = binding(99);
-    assert_eq!(
-        found(request, substituted_release),
-        Err(Error::InvalidFunding)
-    );
-
-    let mut release_alias = founding_frame(4);
-    let mut bindings = release_alias.core_admission.selected.bindings;
-    let claims = bindings.get_mut(1).expect("claims binding exists");
-    claims.program = selected_binding(release_alias.core_admission.selected, Role::Core).program;
-    release_alias.core_admission.selected.bindings = bindings;
-    assert_eq!(found(request, release_alias), Err(Error::InvalidFunding));
 }
 
 #[test]
-fn failed_transitions_are_atomic() {
-    let mut state = ready_open_state(4);
-    let state_before = state;
-    let mut vectors = Vectors::zero(4);
-    split_complete_set(
-        Request::split(
-            Holder::Source,
-            Representation::Native,
-            990,
-            state.identity.generation,
-            state.identity.market_id,
-        ),
-        &mut state,
-        &mut vectors.view(),
-        admission(Role::Claims),
-        admission(Role::Custody),
+fn readiness_and_open_require_exact_external_child_evidence_before_commit() {
+    let result = found(
+        Request::administrative(Action::Found, 7, id(40)),
+        founding_frame(3, 0),
     )
-    .expect("large valid split seeds overflow boundary");
-    let vectors_before = vectors.snapshot();
-    let error = split_complete_set(
-        Request::split(
-            Holder::Source,
-            Representation::Native,
-            10,
-            state.identity.generation,
-            state.identity.market_id,
+    .expect("found succeeds");
+    let mut state = result.state;
+    let before = state;
+    let mut incomplete = child();
+    incomplete.post_resource_authenticated = false;
+    assert_eq!(
+        verify_readiness(
+            admin(Action::VerifyReadiness, state),
+            &mut state,
+            admission(Role::Core),
+            true,
+            incomplete
         ),
+        Err(Error::InvalidChildEffect)
+    );
+    assert_eq!(state, before);
+    verify_readiness(
+        admin(Action::VerifyReadiness, state),
         &mut state,
-        &mut vectors.view(),
+        admission(Role::Core),
+        true,
+        child(),
+    )
+    .expect("readiness verifies");
+
+    let before = state;
+    let mut wrong = realm();
+    wrong.collateral_mint = id(99);
+    assert_eq!(
+        open_market(
+            admin(Action::OpenMarket, state),
+            &mut state,
+            admission(Role::Custody),
+            wrong,
+            true,
+            true,
+            collateral(),
+            vacant(id(60), 20),
+            70,
+            true,
+            child(),
+        ),
+        Err(Error::InvalidCoordinates)
+    );
+    assert_eq!(state, before);
+
+    let creation = open_market(
+        admin(Action::OpenMarket, state),
+        &mut state,
+        admission(Role::Custody),
+        realm(),
+        true,
+        true,
+        collateral(),
+        vacant(id(60), 75),
+        70,
+        true,
+        child(),
+    )
+    .expect("open accepts exact dust classification");
+    assert_eq!(creation.rent_top_up, 0);
+    assert_eq!(creation.donation, 5);
+    assert_eq!(state.phase, Phase::Open);
+    assert_eq!(state.readiness, Readiness::Consumed);
+}
+
+#[test]
+fn split_is_runtime_width_and_never_mutates_sparse_core_state() {
+    let state = open_state(17);
+    let before = state;
+    split_complete_set(
+        Request::split(Holder::Source, Representation::Native, 10, 7, id(40)),
+        &state,
         admission(Role::Claims),
         admission(Role::Custody),
-    );
-    assert_eq!(error, Err(Error::ArithmeticOverflow));
-    assert_eq!(state.hoard_principal, 990);
-    assert_eq!(state.phase, state_before.phase);
-    assert_eq!(vectors.snapshot(), vectors_before);
+        claims(0, false),
+        child(),
+    )
+    .expect("runtime-width split effects authenticate");
+    assert_eq!(state, before);
 
-    state = ready_open_state(4);
-    vectors = Vectors::zero(4);
-    let state_before_receipt = state;
-    let bad_receipt = TerminalReceipt {
-        receipt_id: id(60),
-        market_id: state.identity.market_id,
-        resolution_policy: id(99),
-        product_id: state.product.product_id,
-        generation: state.identity.generation,
-        selector: 1,
-        funding_allocation: state.funding.allocation_id,
-        funding_remaining: 400,
-        authenticated: true,
-    };
+    let mut incomplete = child();
+    incomplete.exact_receipt_authenticated = false;
+    assert_eq!(
+        split_complete_set(
+            Request::split(Holder::Source, Representation::Native, 10, 7, id(40)),
+            &state,
+            admission(Role::Claims),
+            admission(Role::Custody),
+            claims(0, false),
+            incomplete,
+        ),
+        Err(Error::InvalidChildEffect)
+    );
+}
+
+#[test]
+fn terminal_and_redemption_reauthenticate_product_without_funding_mirrors() {
+    let mut state = open_state(17);
+    let before = state;
+    let mut wrong = terminal_receipt(16);
+    wrong.product_id = id(99);
     assert_eq!(
         admit_terminal(
             admin(Action::AdmitTerminal, state),
             &mut state,
             admission(Role::Resolution),
-            bad_receipt,
-            &vectors.view(),
+            product(17),
+            true,
+            wrong
         ),
         Err(Error::InvalidTerminalReceipt)
     );
-    assert_eq!(state, state_before_receipt);
+    assert_eq!(state, before);
 
-    let mut founding = found(
-        Request::administrative(Action::Found, 7, id(40)),
-        founding_frame(4),
-    )
-    .expect("found succeeds")
-    .state;
-    activate_fund(
-        admin(Action::ActivateFund, founding),
-        &mut founding,
-        admission(Role::Resolution),
-        FundingState {
-            allocation_id: id(50),
-            initial_capital: 500,
-            remaining_capital: 500,
-            paid_capital: 0,
-            call_count: 0,
-        },
-    )
-    .expect("fund becomes ready");
-    let founding_before = founding;
-    let mut wrong_collateral = collateral(founding);
-    wrong_collateral.collateral_mint = id(99);
-    assert_eq!(
-        open_market(
-            admin(Action::OpenMarket, founding),
-            &mut founding,
-            admission(Role::Custody),
-            wrong_collateral,
-            vacant(founding_before.coordinates.custody, 0),
-        ),
-        Err(Error::InvalidCoordinates)
-    );
-    assert_eq!(founding, founding_before);
-}
-
-#[test]
-fn retirement_requires_terminal_zero_liabilities_and_exact_funding() {
-    let mut state = ready_open_state(3);
-    let mut vectors = Vectors::zero(3);
-    split_complete_set(
-        Request::split(
-            Holder::Source,
-            Representation::Native,
-            5,
-            state.identity.generation,
-            state.identity.market_id,
-        ),
-        &mut state,
-        &mut vectors.view(),
-        admission(Role::Claims),
-        admission(Role::Custody),
-    )
-    .expect("split succeeds");
-    let receipt = TerminalReceipt {
-        receipt_id: id(60),
-        market_id: state.identity.market_id,
-        resolution_policy: state.identity.resolution_policy,
-        product_id: state.product.product_id,
-        generation: state.identity.generation,
-        selector: 0,
-        funding_allocation: state.funding.allocation_id,
-        funding_remaining: 400,
-        authenticated: true,
-    };
     admit_terminal(
         admin(Action::AdmitTerminal, state),
         &mut state,
         admission(Role::Resolution),
-        receipt,
-        &vectors.view(),
+        product(17),
+        true,
+        terminal_receipt(16),
     )
-    .expect("terminal admits");
+    .expect("exact Source-owned terminal receipt admits");
+    assert_eq!(state.terminal_winner, 16);
+
     assert_eq!(
-        retire(
-            admin(Action::Retire, state),
-            &mut state,
-            &vectors.view(),
-            admission(Role::Core),
+        redeem_terminal(
+            Request::redeem(Holder::Source, Representation::Native, 16, 10, 7, id(40)),
+            &state,
+            admission(Role::Claims),
             admission(Role::Custody),
-            FundingState {
-                allocation_id: id(50),
-                initial_capital: 500,
-                remaining_capital: 400,
-                paid_capital: 100,
-                call_count: 1,
-            },
+            product(17),
+            true,
+            claims(10, false),
+            Some(child()),
         ),
-        Err(Error::InvalidPhase)
+        Ok(10)
     );
+    assert_eq!(
+        redeem_terminal(
+            Request::redeem(Holder::Source, Representation::Native, 15, 10, 7, id(40)),
+            &state,
+            admission(Role::Claims),
+            admission(Role::Custody),
+            product(17),
+            true,
+            claims(0, false),
+            None,
+        ),
+        Ok(0)
+    );
+    assert_eq!(
+        redeem_terminal(
+            Request::redeem(Holder::Source, Representation::Native, 16, 10, 7, id(40)),
+            &state,
+            admission(Role::Claims),
+            admission(Role::Custody),
+            product(17),
+            false,
+            claims(10, false),
+            Some(child()),
+        ),
+        Err(Error::InvalidChildEffect)
+    );
+}
+
+#[test]
+fn generic_capability_count_has_one_manifest_funding_and_replay_boundary() {
+    let mut state = open_state(3);
+    let before = state;
+    let mut forged = capability(Role::Trading);
+    forged.manifest_entry_authenticated = false;
+    assert_eq!(
+        activate_capability_child(admin(Action::ActivateCapability, state), &mut state, forged),
+        Err(Error::InvalidChildEffect)
+    );
+    assert_eq!(state, before);
+    assert_eq!(
+        activate_capability_child(
+            admin(Action::ActivateCapability, state),
+            &mut state,
+            capability(Role::Core)
+        ),
+        Err(Error::InvalidChildEffect)
+    );
+
+    activate_capability_child(
+        admin(Action::ActivateCapability, state),
+        &mut state,
+        capability(Role::Trading),
+    )
+    .expect("manifest-selected optional child activates");
+    assert_eq!(state.outstanding_capabilities, 1);
+    assert_eq!(
+        CoreState::decode(&state.encode().expect("state encodes"))
+            .expect("state decodes")
+            .outstanding_capabilities,
+        1
+    );
+
+    close_capability_child(
+        admin(Action::CloseCapability, state),
+        &mut state,
+        capability(Role::Trading),
+    )
+    .expect("exact close receipt decrements");
+    assert_eq!(state.outstanding_capabilities, 0);
+    assert_eq!(
+        close_capability_child(
+            admin(Action::CloseCapability, state),
+            &mut state,
+            capability(Role::Trading)
+        ),
+        Err(Error::InvalidChildEffect)
+    );
+
+    state.outstanding_capabilities = u64::MAX;
+    assert_eq!(
+        activate_capability_child(
+            admin(Action::ActivateCapability, state),
+            &mut state,
+            capability(Role::Trading)
+        ),
+        Err(Error::ArithmeticOverflow)
+    );
+    assert_eq!(state.outstanding_capabilities, u64::MAX);
+}
+
+#[test]
+fn retirement_requires_all_child_closures_and_returns_only_core_lamports() {
+    let mut state = terminal_state(3, 1);
     begin_retiring(
         admin(Action::BeginRetiring, state),
         &mut state,
         admission(Role::Core),
     )
-    .expect("retirement begins");
+    .expect("begin retiring");
+    state.outstanding_capabilities = 1;
     let before = state;
     assert_eq!(
         retire(
             admin(Action::Retire, state),
             &mut state,
-            &vectors.view(),
             admission(Role::Core),
+            admission(Role::Claims),
+            admission(Role::Resolution),
             admission(Role::Custody),
-            FundingState {
-                allocation_id: id(50),
-                initial_capital: 500,
-                remaining_capital: 400,
-                paid_capital: 100,
-                call_count: 1,
-            },
+            claims(0, true),
+            child(),
+            child(),
+            123,
+            true,
+            true,
         ),
-        Err(Error::InvalidEconomicState)
+        Err(Error::InvalidChildEffect)
     );
     assert_eq!(state, before);
-}
 
-#[test]
-fn account_creation_shape_is_exact_and_dust_tolerant() {
-    let frame = founding_frame(4);
-    let result =
-        found(Request::administrative(Action::Found, 7, id(40)), frame).expect("found succeeds");
+    state.outstanding_capabilities = 0;
+    let before = state;
     assert_eq!(
-        result.plan.hoard,
-        AccountCreation {
-            before: 55,
-            rent_minimum: 50,
-            rent_top_up: 0,
-            semantic_principal: 0,
-            donation: 5,
-            after: 55,
-        }
+        retire(
+            admin(Action::Retire, state),
+            &mut state,
+            admission(Role::Core),
+            admission(Role::Claims),
+            admission(Role::Resolution),
+            admission(Role::Custody),
+            claims(0, true),
+            child(),
+            child(),
+            123,
+            false,
+            true,
+        ),
+        Err(Error::InvalidAccount)
     );
+    assert_eq!(state, before);
+
+    assert_eq!(
+        retire(
+            admin(Action::Retire, state),
+            &mut state,
+            admission(Role::Core),
+            admission(Role::Claims),
+            admission(Role::Resolution),
+            admission(Role::Custody),
+            claims(0, true),
+            child(),
+            child(),
+            123,
+            true,
+            true,
+        ),
+        Ok(123)
+    );
+    assert_eq!(state.phase, Phase::Retired);
 }

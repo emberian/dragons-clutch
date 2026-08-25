@@ -1,4 +1,5 @@
 import DClutchSemantics.MarketCorePhysicalAbi
+import DClutchSemantics.Codec
 
 /-! Emit the Lean-owned Market Core cross-program physical offsets. -/
 
@@ -26,6 +27,7 @@ def main : IO Unit := do
   emitBytes "SERIES_CORE_ACK_MAGIC_V1" seriesAckMagic
   emitBytes "CORE_EFFECT_DIGEST_DOMAIN_V1" effectDigestDomain
   emitBytes "SERIES_CORE_CALLER_AUTHORITY_PDA_DOMAIN_V1" seriesCallerAuthorityDomain
+  emitBytes "MARKET_CORE_STATE_PDA_DOMAIN_V1" marketStateDomain
   for field in effectLayout do
     IO.println s!"pub(crate) const {EffectField.rustName field.spec.name}: usize = {field.offset};"
   for field in ackLayout do

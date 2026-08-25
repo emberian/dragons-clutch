@@ -12,7 +12,7 @@
 //! `SeriesCoreRequestV1` boundary.
 
 use crate::{
-    Error, Identity, Role,
+    CoreState, Error, Identity, MarketIdentity, Phase, Product, Realm, ReleaseSet, Role,
     generated_physical::{
         ACK_ACTION_OFFSET, ACK_CONTEXT_OFFSET, ACK_EFFECT_DIGEST_OFFSET, ACK_MAGIC_OFFSET,
         ACK_MARKET_OFFSET, ACK_POST_RESOURCE_A_REVISION_OFFSET,
@@ -74,6 +74,10 @@ pub enum CoreEffectActionV1 {
     CloseFund = 8,
     /// Close zero-balance custody to its persisted RentCredit destination.
     CloseCustody = 9,
+    /// Activate one manifest-selected optional capability child.
+    ActivateCapability = 10,
+    /// Close one manifest-selected optional capability child.
+    CloseCapability = 11,
 }
 
 impl CoreEffectActionV1 {
@@ -89,22 +93,30 @@ impl CoreEffectActionV1 {
             7 => Ok(Self::RedeemCustody),
             8 => Ok(Self::CloseFund),
             9 => Ok(Self::CloseCustody),
+            10 => Ok(Self::ActivateCapability),
+            11 => Ok(Self::CloseCapability),
             _ => Err(Error::InvalidTag),
         }
     }
 
     /// Return the single target release-set role that may execute the effect.
     #[must_use]
-    pub const fn target_role(self) -> Role {
+    pub const fn fixed_target_role(self) -> Option<Role> {
         match self {
             Self::CreateFund | Self::VerifyFundReady | Self::AdmitTerminal | Self::CloseFund => {
-                Role::Resolution
+                Some(Role::Resolution)
             }
             Self::OpenCustody | Self::SplitCustody | Self::RedeemCustody | Self::CloseCustody => {
-                Role::Custody
+                Some(Role::Custody)
             }
-            Self::SplitClaims | Self::RedeemClaims => Role::Claims,
+            Self::SplitClaims | Self::RedeemClaims => Some(Role::Claims),
+            Self::ActivateCapability | Self::CloseCapability => None,
         }
+    }
+
+    fn permits_target_role(self, target_role: Role) -> bool {
+        self.fixed_target_role()
+            .map_or(target_role != Role::Core, |fixed| target_role == fixed)
     }
 }
 
@@ -144,7 +156,7 @@ impl CoreEffectEnvelopeV1 {
         expected_resource_b_revision: u64,
         role_request_bytes: u32,
     ) -> Result<Self, Error> {
-        if target_role != action.target_role() || role_request_bytes == 0 {
+        if !action.permits_target_role(target_role) || role_request_bytes == 0 {
             return Err(Error::InvalidCoordinates);
         }
         Ok(Self {
@@ -372,7 +384,7 @@ impl CoreEffectAckV1 {
         pre_resource_b_revision: u64,
         post_resource_b_revision: u64,
     ) -> Result<Self, Error> {
-        if target_role != action.target_role()
+        if !action.permits_target_role(target_role)
             || post_resource_a_revision < pre_resource_a_revision
             || post_resource_b_revision < pre_resource_b_revision
         {
@@ -569,6 +581,181 @@ impl SeriesCoreActionV1 {
             3 => Ok(Self::Close),
             _ => Err(Error::InvalidTag),
         }
+    }
+}
+
+/// Exact Market-state PDA seeds under the Registry-selected Core program.
+///
+/// The address commits every immutable Market identity coordinate. The
+/// resulting PDA is itself the canonical `market_id` stored in [`CoreState`];
+/// adapters must derive it first and then require exact equality to that field.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MarketCoreStateSeedsV1 {
+    realm: [u8; IDENTITY_BYTES],
+    product: [u8; IDENTITY_BYTES],
+    result_domain: [u8; IDENTITY_BYTES],
+    resolution_policy: [u8; IDENTITY_BYTES],
+    capability_manifest: [u8; IDENTITY_BYTES],
+    release_set: [u8; IDENTITY_BYTES],
+    generation: [u8; 8],
+}
+
+impl MarketCoreStateSeedsV1 {
+    /// Project the unique state coordinates, excluding the derived address.
+    #[must_use]
+    pub const fn new(identity: MarketIdentity) -> Self {
+        Self {
+            realm: identity.realm_id.to_bytes(),
+            product: identity.product_id.to_bytes(),
+            result_domain: identity.result_domain.to_bytes(),
+            resolution_policy: identity.resolution_policy.to_bytes(),
+            capability_manifest: identity.capability_manifest.to_bytes(),
+            release_set: identity.selected_release_set.to_bytes(),
+            generation: identity.generation.to_le_bytes(),
+        }
+    }
+
+    /// Return the sole ordered PDA seed projection, excluding the bump.
+    #[must_use]
+    pub fn as_slices(&self) -> [&[u8]; 8] {
+        [
+            crate::MARKET_CORE_STATE_PDA_DOMAIN_V1.as_slice(),
+            &self.realm,
+            &self.product,
+            &self.result_domain,
+            &self.resolution_policy,
+            &self.capability_manifest,
+            &self.release_set,
+            &self.generation,
+        ]
+    }
+}
+
+/// External immutable records and derived child coordinates authenticated at
+/// one Core transition boundary. None of these child-owned facts is cached in
+/// the sparse Core state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CoreReferenceObservationV1 {
+    /// Finalized immutable Realm projection.
+    pub realm: Realm,
+    /// Finalized immutable Product projection.
+    pub product: Product,
+    /// Current finalized Registry release-set projection.
+    pub release_set: ReleaseSet,
+    /// Exact Realm record and content identity were authenticated.
+    pub realm_record_authenticated: bool,
+    /// Exact Product record and content identity were authenticated.
+    pub product_record_authenticated: bool,
+    /// Exact release-set record and Registry activation were authenticated.
+    pub release_set_record_authenticated: bool,
+    /// Claims aggregate was derived under the selected Claims program from the
+    /// logical Market using the Claims-owned seed contract.
+    pub claims_aggregate_derivation_authenticated: bool,
+}
+
+/// Narrow semantic projection authenticated from one decoded Core Market.
+///
+/// SDK adapters must first authenticate the Market account owner, PDA, exact
+/// exact header width, and current Registry Core release. This projection then
+/// prevents Claims, Dealer, and other children from independently restating
+/// the Core Market, Claims aggregate, Realm, Product, or release-set join.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CoreMarketViewV1 {
+    market: Identity,
+    claims_aggregate: Identity,
+    realm: Realm,
+    product: Product,
+    release_set: ReleaseSet,
+    generation: u64,
+    phase: Phase,
+    terminal_winner: Option<u32>,
+}
+
+impl CoreMarketViewV1 {
+    /// Authenticate exact observed coordinates against decoded Core state.
+    pub fn authenticate(
+        state: CoreState,
+        observed_market: Identity,
+        observed_claims_aggregate: Identity,
+        references: CoreReferenceObservationV1,
+    ) -> Result<Self, Error> {
+        if !references.realm_record_authenticated
+            || !references.product_record_authenticated
+            || !references.release_set_record_authenticated
+            || !references.claims_aggregate_derivation_authenticated
+            || !references.product.valid()
+            || !references.release_set.valid()
+            || observed_market != state.identity.market_id
+            || observed_claims_aggregate == observed_market
+            || observed_claims_aggregate == state.rent_beneficiary
+            || references.realm.realm_id != state.identity.realm_id
+            || references.product.product_id != state.identity.product_id
+            || references.product.result_domain != state.identity.result_domain
+            || references.release_set.release_set_id != state.identity.selected_release_set
+        {
+            return Err(Error::InvalidCoordinates);
+        }
+        Ok(Self {
+            market: observed_market,
+            claims_aggregate: observed_claims_aggregate,
+            realm: references.realm,
+            product: references.product,
+            release_set: references.release_set,
+            generation: state.identity.generation,
+            phase: state.phase,
+            terminal_winner: match state.phase {
+                Phase::Terminal | Phase::Retiring | Phase::Retired => Some(state.terminal_winner),
+                Phase::Founding | Phase::Open => None,
+            },
+        })
+    }
+
+    /// Exact Core Market PDA/logical Claims Market identity.
+    #[must_use]
+    pub const fn market(self) -> Identity {
+        self.market
+    }
+
+    /// Distinct Claims-owned aggregate selected by Core coordinates.
+    #[must_use]
+    pub const fn claims_aggregate(self) -> Identity {
+        self.claims_aggregate
+    }
+
+    /// Sole immutable collateral Realm projection.
+    #[must_use]
+    pub const fn realm(self) -> Realm {
+        self.realm
+    }
+
+    /// Sole immutable Product/result-domain projection.
+    #[must_use]
+    pub const fn product(self) -> Product {
+        self.product
+    }
+
+    /// Sole immutable five-role release set.
+    #[must_use]
+    pub const fn release_set(self) -> ReleaseSet {
+        self.release_set
+    }
+
+    /// Current Market generation.
+    #[must_use]
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+
+    /// Current Core lifecycle phase.
+    #[must_use]
+    pub const fn phase(self) -> Phase {
+        self.phase
+    }
+
+    /// Terminal winner, present only after exact terminal admission.
+    #[must_use]
+    pub const fn terminal_winner(self) -> Option<u32> {
+        self.terminal_winner
     }
 }
 

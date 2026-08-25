@@ -1,8 +1,10 @@
 //! Hostile coverage for the Lean-owned cross-program physical ABI.
 
 use dclutch_market_core_codec::{
-    CORE_EFFECT_ACK_BYTES_V1, CORE_EFFECT_ENVELOPE_BYTES_V1, CoreEffectAckV1, CoreEffectActionV1,
-    CoreEffectEnvelopeV1, Error, Identity, Role, SERIES_CORE_ACK_BYTES_V1,
+    Binding, CORE_EFFECT_ACK_BYTES_V1, CORE_EFFECT_ENVELOPE_BYTES_V1, CoreEffectAckV1,
+    CoreEffectActionV1, CoreEffectEnvelopeV1, CoreMarketViewV1, CoreReferenceObservationV1,
+    CoreState, Error, Identity, MARKET_CORE_STATE_PDA_DOMAIN_V1, MarketCoreStateSeedsV1,
+    MarketIdentity, Phase, Product, Readiness, Realm, ReleaseSet, Role, SERIES_CORE_ACK_BYTES_V1,
     SERIES_CORE_CALLER_AUTHORITY_PDA_DOMAIN_V1, SERIES_CORE_REQUEST_BYTES_V1, SeriesCoreAckV1,
     SeriesCoreActionV1, SeriesCoreCallerSeedsV1, SeriesCoreRequestV1,
 };
@@ -115,6 +117,55 @@ fn effect_envelope_is_exact_role_bound_and_round_trips() {
         envelope.validate_role_request(416, id(8)),
         Err(Error::InvalidCoordinates)
     );
+}
+
+#[test]
+fn generic_capability_envelopes_bind_one_non_core_target_role() {
+    for action in [
+        CoreEffectActionV1::ActivateCapability,
+        CoreEffectActionV1::CloseCapability,
+    ] {
+        assert_eq!(action.fixed_target_role(), None);
+        let envelope = CoreEffectEnvelopeV1::new(
+            action,
+            Role::Trading,
+            id(1),
+            id(2),
+            id(3),
+            id(4),
+            id(5),
+            id(6),
+            id(7),
+            8,
+            9,
+            10,
+            416,
+        )
+        .expect("optional capability routes to its selected child role");
+        assert_eq!(envelope.target_role(), Role::Trading);
+        assert_eq!(
+            CoreEffectEnvelopeV1::decode(&envelope.encode().expect("envelope encodes")),
+            Ok(envelope)
+        );
+        assert_eq!(
+            CoreEffectEnvelopeV1::new(
+                action,
+                Role::Core,
+                id(1),
+                id(2),
+                id(3),
+                id(4),
+                id(5),
+                id(6),
+                id(7),
+                8,
+                9,
+                10,
+                416,
+            ),
+            Err(Error::InvalidCoordinates)
+        );
+    }
 }
 
 #[test]
@@ -383,6 +434,161 @@ fn series_generation_and_caller_pda_are_exact_to_the_request() {
         seeds,
         SeriesCoreCallerSeedsV1::new(request, id(51)),
         "a substituted request digest must select another caller PDA",
+    );
+}
+
+#[test]
+fn market_state_pda_commits_every_immutable_coordinate() {
+    let identity = MarketIdentity {
+        market_id: id(40),
+        realm_id: id(41),
+        product_id: id(42),
+        result_domain: id(43),
+        resolution_policy: id(44),
+        capability_manifest: id(48),
+        selected_release_set: id(45),
+        generation: 46,
+    };
+    let realm = id(41).to_bytes();
+    let product = id(42).to_bytes();
+    let result_domain = id(43).to_bytes();
+    let resolution = id(44).to_bytes();
+    let capability_manifest = id(48).to_bytes();
+    let release_set = id(45).to_bytes();
+    let generation = 46_u64.to_le_bytes();
+    let expected: [&[u8]; 8] = [
+        MARKET_CORE_STATE_PDA_DOMAIN_V1.as_slice(),
+        realm.as_slice(),
+        product.as_slice(),
+        result_domain.as_slice(),
+        resolution.as_slice(),
+        capability_manifest.as_slice(),
+        release_set.as_slice(),
+        generation.as_slice(),
+    ];
+    assert_eq!(MarketCoreStateSeedsV1::new(identity).as_slices(), expected);
+
+    let mut substituted = identity;
+    substituted.generation = 47;
+    assert_ne!(
+        MarketCoreStateSeedsV1::new(identity),
+        MarketCoreStateSeedsV1::new(substituted),
+    );
+    substituted = identity;
+    substituted.resolution_policy = id(47);
+    assert_ne!(
+        MarketCoreStateSeedsV1::new(identity),
+        MarketCoreStateSeedsV1::new(substituted),
+    );
+}
+
+fn core_state_for_view() -> CoreState {
+    CoreState {
+        phase: Phase::Open,
+        readiness: Readiness::Consumed,
+        terminal_winner: 0,
+        identity: MarketIdentity {
+            market_id: id(40),
+            realm_id: id(41),
+            product_id: id(46),
+            result_domain: id(47),
+            resolution_policy: id(56),
+            capability_manifest: id(67),
+            selected_release_set: id(45),
+            generation: 7,
+        },
+        outstanding_capabilities: 0,
+        rent_beneficiary: id(66),
+        terminal_receipt: None,
+    }
+}
+
+fn references_for_view() -> CoreReferenceObservationV1 {
+    CoreReferenceObservationV1 {
+        realm: Realm {
+            realm_id: id(41),
+            collateral_mint: id(42),
+            token_program: id(43),
+            collateral_release: id(44),
+        },
+        product: Product {
+            product_id: id(46),
+            result_domain: id(47),
+            claim_basis: id(48),
+            capacity_profile: id(49),
+            compiler_release: id(55),
+            outcome_count: 3,
+        },
+        release_set: ReleaseSet {
+            release_set_id: id(45),
+            bindings: [
+                Binding {
+                    program: id(50),
+                    artifact_release: id(60),
+                    semantic_release: id(70),
+                },
+                Binding {
+                    program: id(51),
+                    artifact_release: id(61),
+                    semantic_release: id(71),
+                },
+                Binding {
+                    program: id(52),
+                    artifact_release: id(62),
+                    semantic_release: id(72),
+                },
+                Binding {
+                    program: id(53),
+                    artifact_release: id(63),
+                    semantic_release: id(73),
+                },
+                Binding {
+                    program: id(54),
+                    artifact_release: id(64),
+                    semantic_release: id(74),
+                },
+            ],
+        },
+        realm_record_authenticated: true,
+        product_record_authenticated: true,
+        release_set_record_authenticated: true,
+        claims_aggregate_derivation_authenticated: true,
+    }
+}
+
+#[test]
+fn core_market_view_joins_logical_market_and_distinct_claims_aggregate() {
+    let state = core_state_for_view();
+    let references = references_for_view();
+    let view = CoreMarketViewV1::authenticate(state, id(40), id(57), references)
+        .expect("exact Core coordinates join");
+    assert_eq!(view.market(), id(40));
+    assert_eq!(view.claims_aggregate(), id(57));
+    assert_ne!(view.market(), view.claims_aggregate());
+    assert_eq!(view.realm(), references.realm);
+    assert_eq!(view.product(), references.product);
+    assert_eq!(view.release_set(), references.release_set);
+    assert_eq!(view.generation(), 7);
+    assert_eq!(view.phase(), Phase::Open);
+    assert_eq!(
+        CoreMarketViewV1::authenticate(state, id(57), id(57), references),
+        Err(Error::InvalidCoordinates)
+    );
+    assert_eq!(
+        CoreMarketViewV1::authenticate(state, id(40), id(40), references),
+        Err(Error::InvalidCoordinates)
+    );
+    assert_eq!(
+        CoreMarketViewV1::authenticate(
+            state,
+            id(40),
+            id(57),
+            CoreReferenceObservationV1 {
+                product_record_authenticated: false,
+                ..references
+            },
+        ),
+        Err(Error::InvalidCoordinates)
     );
 }
 
