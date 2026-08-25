@@ -509,7 +509,12 @@ pub struct DirectCloseReplayRegistrationReport {
 }
 
 mod bearer;
+mod series_lifecycle;
+mod source;
+
 pub use bearer::*;
+pub use series_lifecycle::*;
+pub use source::*;
 mod dealer;
 pub use dealer::*;
 
@@ -1051,8 +1056,10 @@ struct SourceMarketFacts {
     generation: u64,
     phase: Phase,
     child_count: u64,
+    outcome_count: u8,
     resolution_policy_id: [u8; 32],
     claim_basis_id: [u8; 32],
+    rent_refund: [u8; 32],
 }
 
 fn source_market(
@@ -1103,8 +1110,10 @@ fn source_market_width<const N: usize>(
         generation: market.root().identity().generation(),
         phase: market.root().phase(),
         child_count: market.root().outstanding_children(),
+        outcome_count: u8::try_from(N).map_err(|_| VerticalError::InvalidState)?,
         resolution_policy_id: market.root().identity().resolution_policy_id().to_bytes(),
         claim_basis_id: market.root().identity().claim_basis_id().to_bytes(),
+        rent_refund: market.root().rent_refund(),
     })
 }
 
@@ -1546,7 +1555,7 @@ fn authenticate_system_program(account: &ObservedAccount) -> Result<(), Vertical
     }
 }
 
-fn decode_clock(account: &ObservedAccount) -> Result<Clock, VerticalError> {
+pub(crate) fn decode_clock(account: &ObservedAccount) -> Result<Clock, VerticalError> {
     if account.key != sysvar::clock::ID
         || account.owner != sysvar::ID
         || account.executable

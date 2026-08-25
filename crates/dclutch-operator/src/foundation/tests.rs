@@ -12,6 +12,11 @@ use dclutch_product_contract::{
     result_domain::FiniteResultDomainV1,
 };
 use dclutch_pyth_contract::funding::construct_required_resolution_funding;
+use dclutch_record_contract::{
+    AccountId as RecordAccountId, AddressDerivationObligationV1, AppendPageV1, BeginRecordV1,
+    CANONICAL_RECORD_DEPLOYMENT_PROFILE_V1, RawRecordValidationObligationV1, RecordAdapterV1,
+    StagingLivenessPolicyV1, prepare_append_page_v1, prepare_begin_v1,
+};
 use dclutch_rent_contract::{RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1};
 use dclutch_source_contract::{
     CapacityEnvelope as SourceCapacityEnvelope, PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1,
@@ -20,7 +25,7 @@ use dclutch_source_contract::{
     SourceSpecV1, StatisticKind, StatisticSpecV1, WindowKind, WindowSpecV1,
     encode_source_material_into_v1,
 };
-use solana_program::sysvar::SysvarSerialize;
+use solana_program::{clock::Clock, sysvar::SysvarSerialize};
 
 use super::*;
 
@@ -184,6 +189,48 @@ fn rent_account() -> ObservedAccount {
 
 fn system_program_account() -> ObservedAccount {
     observed(system_program::ID, native_loader::ID, 1, Vec::new(), true)
+}
+
+fn clock_account() -> ObservedAccount {
+    let clock = Clock {
+        slot: observation().slot,
+        unix_timestamp: observation().unix_timestamp,
+        ..Clock::default()
+    };
+    let mut data = vec![0u8; Clock::size_of()];
+    let mut lamports = 1;
+    let mut info = AccountInfo::new(
+        &sysvar::clock::ID,
+        false,
+        false,
+        &mut lamports,
+        &mut data,
+        &sysvar::ID,
+        false,
+    );
+    clock.to_account_info(&mut info).expect("serialize Clock");
+    drop(info);
+    observed(sysvar::clock::ID, sysvar::ID, 1, data, false)
+}
+
+struct PermissiveRecordTestAdapter;
+
+impl RecordAdapterV1 for PermissiveRecordTestAdapter {
+    fn validate_page_envelope(&self, _: &dclutch_record_contract::PageEnvelopeV1) -> bool {
+        true
+    }
+
+    fn validate_staging_liveness_policy(&self, _: &StagingLivenessPolicyV1) -> bool {
+        true
+    }
+
+    fn validate_canonical_addresses(&self, _: &AddressDerivationObligationV1) -> bool {
+        true
+    }
+
+    fn validate_raw_record(&self, _: &RawRecordValidationObligationV1<'_>) -> bool {
+        true
+    }
 }
 
 fn mint_data(outcome_authorities: bool) -> Vec<u8> {
@@ -658,9 +705,7 @@ fn release_bound_creation_compiles_exact_found_admission_and_honest_gaps() {
             },
             CreationStageReportV1 {
                 stage: CreationStageV1::PublishImmutableRecords,
-                status: CreationStageStatusV1::BuilderUnavailable(
-                    CreationBuilderGapV1::ImmutableRecordPublication,
-                ),
+                status: CreationStageStatusV1::FinalizedObservationRequired,
             },
             CreationStageReportV1 {
                 stage: CreationStageV1::FoundMarketAndFund,
@@ -689,15 +734,11 @@ fn release_bound_creation_compiles_exact_found_admission_and_honest_gaps() {
             },
             CreationStageReportV1 {
                 stage: CreationStageV1::PublishImmutableRecords,
-                status: CreationStageStatusV1::BuilderUnavailable(
-                    CreationBuilderGapV1::ImmutableRecordPublication,
-                ),
+                status: CreationStageStatusV1::FinalizedObservationRequired,
             },
             CreationStageReportV1 {
                 stage: CreationStageV1::CreateSeries,
-                status: CreationStageStatusV1::BuilderUnavailable(
-                    CreationBuilderGapV1::SeriesCreate,
-                ),
+                status: CreationStageStatusV1::FinalizedObservationRequired,
             },
             CreationStageReportV1 {
                 stage: CreationStageV1::InstantiateSeriesOccurrence,
@@ -705,9 +746,7 @@ fn release_bound_creation_compiles_exact_found_admission_and_honest_gaps() {
             },
             CreationStageReportV1 {
                 stage: CreationStageV1::ConsumeSeriesTicketAndFound,
-                status: CreationStageStatusV1::BuilderUnavailable(
-                    CreationBuilderGapV1::SeriesConsumeAndFound,
-                ),
+                status: CreationStageStatusV1::FinalizedObservationRequired,
             },
             CreationStageReportV1 {
                 stage: CreationStageV1::OpenCollateralVault,
@@ -751,6 +790,24 @@ fn terminal_pyth_user_inputs_compile_the_canonical_product_and_source_records() 
         rent: expected.rent,
         current_slot: expected.current_slot,
     };
+    let artifacts = compile_terminal_pyth_artifacts_v1(&TerminalPythArtifactInputV1 {
+        product_capacity_profile: input.product_capacity_profile,
+        terms_id: input.terms_id,
+        occurrence_id: input.occurrence_id,
+        result_domain: input.result_domain,
+        source_capacity_profile: input.source_capacity_profile,
+        provider_release: input.provider_release,
+        pyth_adapter_config: input.pyth_adapter_config,
+        target_unix_seconds: input.target_unix_seconds,
+        max_age_seconds: input.max_age_seconds,
+        max_future_skew_seconds: input.max_future_skew_seconds,
+        schedule_id: input.schedule_id,
+        evaluator_release_id: input.evaluator_release_id,
+    })
+    .expect("manifest-independent terminal artifacts");
+    assert_eq!(artifacts.claim_basis, expected.claim_basis);
+    assert_eq!(artifacts.product_instance, expected.product_instance);
+    assert_eq!(artifacts.source_material, expected.source_material);
     let compiled = compile_terminal_pyth_creation_v1(&input).expect("terminal Pyth plan");
     assert_eq!(compiled.claim_basis, expected.claim_basis);
     assert_eq!(compiled.product_instance, expected.product_instance);
@@ -783,6 +840,100 @@ fn terminal_pyth_user_inputs_compile_the_canonical_product_and_source_records() 
     assert_eq!(
         compile_terminal_pyth_creation_v1(&invalid_window),
         Err(FoundationError::InvalidRecord)
+    );
+}
+
+#[test]
+fn immutable_publication_derives_begin_append_finalize_and_complete() {
+    let fixture = FoundFixture::new(3, 16);
+    let plan = compile_release_bound_creation_v1(&creation_input(&fixture)).expect("creation plan");
+    let obligation = plan.records.first().expect("Realm obligation").clone();
+    let vacant = |key, dust| observed(key, system_program::ID, dust, Vec::new(), false);
+    let mut state = ImmutableRecordPublicationState {
+        sponsor: fixture.state.sponsor.clone(),
+        raw_record: vacant(obligation.raw_record, 3),
+        staging_cursor: vacant(obligation.staging_cursor, 5),
+        rent_credit: fixture.state.rent_credit.clone(),
+        system_program: system_program_account(),
+        rent_sysvar: rent_account(),
+        clock_sysvar: clock_account(),
+    };
+    let begin = build_immutable_record_publication_step_v1(fixture.program_id, &state, &obligation)
+        .expect("Begin derives from canonical profile");
+    assert_eq!(begin.action, ImmutableRecordPublicationActionV1::Begin);
+    let begin_instruction = begin.instruction.expect("Begin instruction");
+    assert_eq!(begin_instruction.accounts.len(), 7);
+    let begin_wire = BeginRecordV1::decode(&begin_instruction.data).expect("Begin wire");
+    let cursor_rent =
+        Rent::default().minimum_balance(dclutch_record_contract::STAGING_CURSOR_BYTES_V1);
+    let liveness = CANONICAL_RECORD_DEPLOYMENT_PROFILE_V1
+        .staging_liveness_policy(cursor_rent)
+        .expect("canonical liveness");
+    let transition = prepare_begin_v1(
+        &PermissiveRecordTestAdapter,
+        begin_wire,
+        liveness,
+        observation().slot,
+        RecordAccountId::new(obligation.raw_record.to_bytes()).expect("raw ID"),
+        RecordAccountId::new(obligation.staging_cursor.to_bytes()).expect("cursor ID"),
+        RecordAccountId::new(state.sponsor.key.to_bytes()).expect("sponsor ID"),
+    )
+    .expect("pure Begin");
+    state.raw_record = observed(
+        obligation.raw_record,
+        fixture.program_id,
+        Rent::default().minimum_balance(obligation.content.len()),
+        vec![0; obligation.content.len()],
+        false,
+    );
+    state.staging_cursor = observed(
+        obligation.staging_cursor,
+        fixture.program_id,
+        cursor_rent * 2,
+        transition.cursor().to_bytes().to_vec(),
+        false,
+    );
+    let append =
+        build_immutable_record_publication_step_v1(fixture.program_id, &state, &obligation)
+            .expect("Append derives exact next page");
+    assert_eq!(append.action, ImmutableRecordPublicationActionV1::Append);
+    let append_instruction = append.instruction.expect("Append instruction");
+    assert_eq!(append_instruction.accounts.len(), 3);
+    let append_wire = AppendPageV1::decode(&append_instruction.data).expect("Append wire");
+    let append_transition = prepare_append_page_v1(
+        transition.cursor(),
+        RecordAccountId::new(obligation.raw_record.to_bytes()).expect("raw ID"),
+        RecordAccountId::new(obligation.staging_cursor.to_bytes()).expect("cursor ID"),
+        u64::try_from(obligation.content.len()).expect("record width"),
+        append_wire,
+    )
+    .expect("pure Append");
+    state.raw_record.data.copy_from_slice(&obligation.content);
+    state.staging_cursor.data = append_transition.next_cursor().to_bytes().to_vec();
+    let finalize =
+        build_immutable_record_publication_step_v1(fixture.program_id, &state, &obligation)
+            .expect("Finalize follows complete cursor");
+    assert_eq!(
+        finalize.action,
+        ImmutableRecordPublicationActionV1::Finalize
+    );
+    assert_eq!(finalize.instruction.expect("Finalize").accounts.len(), 3);
+
+    state.staging_cursor = vacant(obligation.staging_cursor, 7);
+    let complete =
+        build_immutable_record_publication_step_v1(fixture.program_id, &state, &obligation)
+            .expect("vacant cursor proves completion");
+    assert_eq!(
+        complete.action,
+        ImmutableRecordPublicationActionV1::Complete
+    );
+    assert!(complete.instruction.is_none());
+
+    let mut substitution = obligation;
+    substitution.content_id[0] ^= 1;
+    assert_eq!(
+        build_immutable_record_publication_step_v1(fixture.program_id, &state, &substitution),
+        Err(FoundationError::ContentLinkMismatch)
     );
 }
 

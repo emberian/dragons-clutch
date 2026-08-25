@@ -1382,6 +1382,75 @@ mod tests {
     }
 
     #[test]
+    fn source_create_is_chain_derived_and_refuses_material_or_pda_substitution() {
+        let (program, resolution) = fixture();
+        let facts = market_facts(program, resolution.market.key, &resolution.market.data)
+            .expect("Market facts");
+        let generation = facts.generation.to_le_bytes();
+        let (destination, _) = Pubkey::find_program_address(
+            &[
+                dclutch_source_contract::SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V1,
+                resolution.market.key.as_ref(),
+                generation.as_slice(),
+            ],
+            &program,
+        );
+        let mut rent_credit = resolution.rent_credit.clone();
+        rent_credit.lamports = u64::MAX;
+        let state = verticals::SourceCreateResolutionState {
+            payer: account(
+                Pubkey::new_from_array([88; 32]),
+                system_program::ID,
+                u64::MAX,
+                Vec::new(),
+            ),
+            resolution_state_destination: account(destination, system_program::ID, 7, Vec::new()),
+            market: resolution.market.clone(),
+            resolution_material: resolution.resolution_material.clone(),
+            resolution_material_finalization: resolution.resolution_material_finalization.clone(),
+            rent_credit,
+            system_program: system_program_account(),
+            rent_sysvar: resolution.rent_sysvar.clone(),
+        };
+        let report = verticals::build_source_create_resolution_v1(program, &state)
+            .expect("chain-derived Source Create");
+        assert_eq!(report.instruction.accounts.len(), 8);
+        assert_eq!(report.resolution_state, destination);
+        assert_eq!(report.expected_market_child_count, facts.child_count);
+        let decoded =
+            dclutch_source_contract::SourceInstructionV1::decode(&report.instruction.data)
+                .expect("Source Create wire");
+        if let dclutch_source_contract::SourceInstructionV1::CreateResolution(wire) = decoded {
+            assert_eq!(wire.market(), state.market.key.to_bytes());
+            assert_eq!(wire.generation(), facts.generation);
+            assert_eq!(wire.expected_market_child_count(), facts.child_count);
+            assert_eq!(wire.material_id().to_bytes(), facts.resolution_material_id);
+        }
+        assert!(matches!(
+            decoded,
+            dclutch_source_contract::SourceInstructionV1::CreateResolution(_)
+        ));
+
+        let mut wrong_material = state.clone();
+        *wrong_material
+            .resolution_material
+            .data
+            .get_mut(16)
+            .expect("SourceMaterial body") ^= 1;
+        assert!(matches!(
+            verticals::build_source_create_resolution_v1(program, &wrong_material),
+            Err(verticals::VerticalError::FinalizationMismatch)
+                | Err(verticals::VerticalError::ContentMismatch)
+        ));
+        let mut wrong_destination = state;
+        wrong_destination.resolution_state_destination.key = Pubkey::new_from_array([89; 32]);
+        assert_eq!(
+            verticals::build_source_create_resolution_v1(program, &wrong_destination),
+            Err(verticals::VerticalError::PdaMismatch)
+        );
+    }
+
+    #[test]
     fn source_material_is_the_root_and_product_domain_identity_is_domain_separated() {
         let (program, state) = fixture();
         let mut facts =

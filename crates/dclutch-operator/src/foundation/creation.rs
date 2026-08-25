@@ -208,6 +208,52 @@ pub struct TerminalPythCreationInputV1 {
     pub current_slot: u64,
 }
 
+/// Canonical Product and terminal-Source inputs which do not depend on a
+/// realized capability manifest.
+///
+/// This is the first phase of creation. It breaks the otherwise impossible
+/// host ordering in which a manifest entry must select `hash(SourceMaterial)`
+/// before the SourceMaterial bytes are available. Every field remains a
+/// canonical contract value; this bundle introduces no parallel semantic ID.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TerminalPythArtifactInputV1 {
+    /// Product capacity selected for the claim and Instance.
+    pub product_capacity_profile: CapacityProfileV1,
+    /// Existing reusable Product Terms content identity.
+    pub terms_id: ProductContentId,
+    /// Existing Product Occurrence content identity.
+    pub occurrence_id: ProductContentId,
+    /// User-selected exhaustive, disjoint, ordered finite result domain.
+    pub result_domain: FiniteResultDomainV1,
+    /// Source capacity profile bounding the terminal observation.
+    pub source_capacity_profile: SourceCapacityProfileV1,
+    /// Real provider adapter/deployment/decoding/transport release tuple.
+    pub provider_release: ProviderReleaseV1,
+    /// Exact real Pyth feed and integer-normalization configuration.
+    pub pyth_adapter_config: PythAdapterConfigV1,
+    /// Terminal resolution instant.
+    pub target_unix_seconds: i64,
+    /// Maximum admitted age of the provider observation.
+    pub max_age_seconds: u32,
+    /// Maximum admitted future skew of the provider observation.
+    pub max_future_skew_seconds: u32,
+    /// Immutable terminal schedule release identity.
+    pub schedule_id: SourceContentId,
+    /// Immutable terminal statistic evaluator release identity.
+    pub evaluator_release_id: SourceContentId,
+}
+
+/// Manifest-independent canonical artifacts from terminal-Pyth semantics.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TerminalPythArtifactsV1 {
+    /// Derived exhaustive categorical claim basis.
+    pub claim_basis: CategoricalUnitV1,
+    /// Derived occurrence-specific Product Instance.
+    pub product_instance: InstanceV1,
+    /// Exact canonical provider-neutral SourceMaterial bytes.
+    pub source_material: Vec<u8>,
+}
+
 /// Canonical artifacts and direct Found admission compiled from terminal-Pyth inputs.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TerminalPythCreationPlanV1 {
@@ -258,6 +304,49 @@ pub struct ReleaseBoundCreationPlanV1 {
 pub fn compile_terminal_pyth_creation_v1(
     input: &TerminalPythCreationInputV1,
 ) -> Result<TerminalPythCreationPlanV1, FoundationError> {
+    let artifacts = compile_terminal_pyth_artifacts_v1(&TerminalPythArtifactInputV1 {
+        product_capacity_profile: input.product_capacity_profile,
+        terms_id: input.terms_id,
+        occurrence_id: input.occurrence_id,
+        result_domain: input.result_domain,
+        source_capacity_profile: input.source_capacity_profile,
+        provider_release: input.provider_release,
+        pyth_adapter_config: input.pyth_adapter_config,
+        target_unix_seconds: input.target_unix_seconds,
+        max_age_seconds: input.max_age_seconds,
+        max_future_skew_seconds: input.max_future_skew_seconds,
+        schedule_id: input.schedule_id,
+        evaluator_release_id: input.evaluator_release_id,
+    })?;
+    let found = compile_release_bound_creation_v1(&ReleaseBoundCreationInputV1 {
+        program_id: input.program_id,
+        sponsor: input.sponsor,
+        realm: input.realm,
+        product_capacity_profile: input.product_capacity_profile,
+        claim_basis: artifacts.claim_basis,
+        product_instance: artifacts.product_instance,
+        source_material: artifacts.source_material.clone(),
+        capability_manifest: input.capability_manifest.clone(),
+        rent: input.rent.clone(),
+        current_slot: input.current_slot,
+    })?;
+    Ok(TerminalPythCreationPlanV1 {
+        claim_basis: artifacts.claim_basis,
+        product_instance: artifacts.product_instance,
+        source_material: artifacts.source_material,
+        found,
+    })
+}
+
+/// Compile Product claim/Instance and exact SourceMaterial before a manifest exists.
+///
+/// The caller can hash the returned `source_material`, build the canonical
+/// manifest whose unique founding entry selects that digest, and only then
+/// invoke [`compile_terminal_pyth_creation_v1`] for full release/funding
+/// validation. No provisional identity or callback-authored manifest is used.
+pub fn compile_terminal_pyth_artifacts_v1(
+    input: &TerminalPythArtifactInputV1,
+) -> Result<TerminalPythArtifactsV1, FoundationError> {
     input
         .result_domain
         .validate()
@@ -366,23 +455,10 @@ pub fn compile_terminal_pyth_creation_v1(
         },
     )
     .map_err(|_| FoundationError::ContentLinkMismatch)?;
-    let found = compile_release_bound_creation_v1(&ReleaseBoundCreationInputV1 {
-        program_id: input.program_id,
-        sponsor: input.sponsor,
-        realm: input.realm,
-        product_capacity_profile: input.product_capacity_profile,
-        claim_basis,
-        product_instance,
-        source_material: source_material.clone(),
-        capability_manifest: input.capability_manifest.clone(),
-        rent: input.rent.clone(),
-        current_slot: input.current_slot,
-    })?;
-    Ok(TerminalPythCreationPlanV1 {
+    Ok(TerminalPythArtifactsV1 {
         claim_basis,
         product_instance,
         source_material,
-        found,
     })
 }
 
@@ -578,9 +654,7 @@ pub fn compile_release_bound_creation_v1(
         },
         CreationStageReportV1 {
             stage: CreationStageV1::PublishImmutableRecords,
-            status: CreationStageStatusV1::BuilderUnavailable(
-                CreationBuilderGapV1::ImmutableRecordPublication,
-            ),
+            status: CreationStageStatusV1::FinalizedObservationRequired,
         },
     ];
     let direct_stages = vec![
@@ -604,7 +678,7 @@ pub fn compile_release_bound_creation_v1(
         shared_stages[3],
         CreationStageReportV1 {
             stage: CreationStageV1::CreateSeries,
-            status: CreationStageStatusV1::BuilderUnavailable(CreationBuilderGapV1::SeriesCreate),
+            status: CreationStageStatusV1::FinalizedObservationRequired,
         },
         CreationStageReportV1 {
             stage: CreationStageV1::InstantiateSeriesOccurrence,
@@ -612,9 +686,7 @@ pub fn compile_release_bound_creation_v1(
         },
         CreationStageReportV1 {
             stage: CreationStageV1::ConsumeSeriesTicketAndFound,
-            status: CreationStageStatusV1::BuilderUnavailable(
-                CreationBuilderGapV1::SeriesConsumeAndFound,
-            ),
+            status: CreationStageStatusV1::FinalizedObservationRequired,
         },
         CreationStageReportV1 {
             stage: CreationStageV1::OpenCollateralVault,

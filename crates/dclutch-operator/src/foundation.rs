@@ -48,8 +48,10 @@ use solana_sdk_ids::{bpf_loader, bpf_loader_upgradeable, native_loader, system_p
 use crate::{Finality, MARKET_SEED, Observation, ObservedAccount, authenticate_rent_credit};
 
 mod creation;
+mod publication;
 
 pub use creation::*;
+pub use publication::*;
 
 pub(crate) const REALM_SCHEMA_RELEASE_PREIMAGE_V1: &[u8] = b"dclutch/schema/realm-v1";
 pub(crate) const PRODUCT_INSTANCE_SCHEMA_RELEASE_PREIMAGE_V1: &[u8] =
@@ -461,6 +463,17 @@ pub fn build_found_market_and_fund_v1(
     program_id: Pubkey,
     state: &FoundMarketState,
 ) -> Result<FoundMarketReport, FoundationError> {
+    build_found_market_and_fund_with_sponsor_credit_v1(program_id, state, 0)
+}
+
+/// Internal atomic-composition entry used when an authenticated parent action
+/// transfers exact principal into the transient Found sponsor immediately
+/// before executing the already-preflighted Found plan.
+pub(crate) fn build_found_market_and_fund_with_sponsor_credit_v1(
+    program_id: Pubkey,
+    state: &FoundMarketState,
+    anticipated_sponsor_credit: u64,
+) -> Result<FoundMarketReport, FoundationError> {
     let observation = require_observation(&[
         state.sponsor.observation,
         state.market_destination.observation,
@@ -687,7 +700,12 @@ pub fn build_found_market_and_fund_v1(
     let total_sponsor_debit = market_rent
         .checked_add(native_funding.total_lamports)
         .ok_or(FoundationError::ArithmeticOverflow)?;
-    require_sponsor_balance(state.sponsor.lamports, total_sponsor_debit)?;
+    let available_sponsor_lamports = state
+        .sponsor
+        .lamports
+        .checked_add(anticipated_sponsor_credit)
+        .ok_or(FoundationError::ArithmeticOverflow)?;
+    require_sponsor_balance(available_sponsor_lamports, total_sponsor_debit)?;
 
     let wire = FoundMarketAndFundV1::new(identity, outcome_count)
         .map_err(|_| FoundationError::InstructionEncoding)?;
