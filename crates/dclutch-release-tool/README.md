@@ -43,6 +43,38 @@ manifest, evidence mismatch, ELF change, semantic-preimage change, Loader
 linkage change, ProgramData change, metadata change, or nonzero allocation
 padding.
 
+## Multiprogram release sets
+
+The successor runtime is promoted as one Registry-selected five-role set, not
+as unrelated individually checked programs. `CheckedExecutionReleaseSetV1`
+binds the canonical Core, Claims, Trading, Resolution, and Custody release-set
+preimage to each role's compact onchain `ArtifactReleaseV1` record and complete
+`CheckedReleaseV1` manifest identity.
+
+```text
+dclutch-release-tool create-set \
+  --release-set <execution-release-set.bin> \
+  --core <core.checked> --claims <claims.checked> \
+  --trading <trading.checked> --resolution <resolution.checked> \
+  --custody <custody.checked> --out <multiprogram.checked> \
+  [--text-out <multiprogram.txt>]
+
+dclutch-release-tool verify-set \
+  --manifest <multiprogram.checked> \
+  --core <core.checked> --claims <claims.checked> \
+  --trading <trading.checked> --resolution <resolution.checked> \
+  --custody <custody.checked> [--text-out <multiprogram.txt>]
+
+dclutch-release-tool inspect-set --manifest <multiprogram.checked> \
+  [--text-out <multiprogram.txt>]
+```
+
+Construction refuses program or artifact-release substitution. Verification
+re-decodes all five checked manifests, derives their compact Registry records,
+and requires the entire set to rebuild byte-for-byte. The manifest is offline
+reproducibility evidence: the Registry activation cache remains the sole
+runtime authority, and this is neither deployment nor public-network evidence.
+
 ## Metadata V1
 
 The metadata input is canonical UTF-8 text. Lines must occur in this exact

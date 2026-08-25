@@ -15,6 +15,10 @@ use dclutch_pyth_svm::{
 };
 use sha2::{Digest, Sha256};
 
+mod multiprogram;
+
+pub use multiprogram::*;
+
 /// Canonical checked-release magic.
 pub const CHECKED_RELEASE_MAGIC_V1: [u8; 8] = *b"DCLTREL1";
 /// Implemented checked-release schema.
@@ -128,6 +132,17 @@ pub enum Error {
     InvalidManifestLength,
     /// Supplied evidence rebuilt to a different checked manifest.
     CheckedManifestMismatch,
+    /// A checked release could not be projected into the canonical onchain
+    /// artifact-release record.
+    InvalidArtifactRelease,
+    /// A five-role execution release set was malformed or did not bind the
+    /// supplied checked artifacts exactly.
+    InvalidExecutionReleaseSet,
+    /// A multiprogram release evidence manifest was malformed or noncanonical.
+    InvalidMultiprogramManifest,
+    /// Supplied checked-release manifests rebuilt to a different multiprogram
+    /// evidence manifest.
+    CheckedMultiprogramManifestMismatch,
 }
 
 impl fmt::Display for Error {
@@ -650,6 +665,21 @@ impl CheckedReleaseV1 {
     /// Return the optional Loader V3 upgrade authority.
     pub const fn upgrade_authority(&self) -> Option<[u8; 32]> {
         self.upgrade_authority
+    }
+
+    /// Return the exact deployed Program identity.
+    pub const fn program_id(&self) -> [u8; 32] {
+        self.program_id
+    }
+
+    /// Return the exact deployed ProgramData identity.
+    pub const fn programdata_id(&self) -> [u8; 32] {
+        self.programdata_id
+    }
+
+    /// Return the exact Loader V3 program identity.
+    pub const fn loader_program_id(&self) -> [u8; 32] {
+        self.loader_program_id
     }
 
     fn validate(&self) -> Result<()> {

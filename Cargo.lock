@@ -569,6 +569,8 @@ version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
  "dclutch-pyth-svm",
+ "dclutch-registry-contract",
+ "dclutch-release-set-contract",
  "sha2",
 ]
 

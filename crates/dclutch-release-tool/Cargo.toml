@@ -16,6 +16,8 @@ path = "src/main.rs"
 [dependencies]
 dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-pyth-svm = { path = "../dclutch-pyth-svm" }
+dclutch-registry-contract = { path = "../dclutch-registry-contract" }
+dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
 sha2 = "=0.10.9"
 
 [lints]

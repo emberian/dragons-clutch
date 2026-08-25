@@ -12,12 +12,14 @@ use std::{
     process::ExitCode,
 };
 
+use dclutch_release_set_contract::ExecutionReleaseSetV1;
 use dclutch_release_tool::{
-    BuildMetadataV1, CheckedReleaseV1, ReleaseEvidenceV1, build_checked_release,
-    verify_checked_release,
+    BuildMetadataV1, CheckedExecutionReleaseSetV1, CheckedReleaseV1, ReleaseEvidenceV1,
+    build_checked_execution_release_set, build_checked_release,
+    verify_checked_execution_release_set, verify_checked_release,
 };
 
-const USAGE: &str = "usage:\n  dclutch-release-tool create --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify --manifest PATH --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH [--text-out PATH]\n  dclutch-release-tool inspect --manifest PATH [--text-out PATH]";
+const USAGE: &str = "usage:\n  dclutch-release-tool create --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify --manifest PATH --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH [--text-out PATH]\n  dclutch-release-tool inspect --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-set --release-set PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-set --manifest PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH [--text-out PATH]\n  dclutch-release-tool inspect-set --manifest PATH [--text-out PATH]";
 
 fn main() -> ExitCode {
     match run() {
@@ -45,8 +47,54 @@ fn run() -> Result<(), String> {
         "create" => create(&mut flags),
         "verify" => verify(&mut flags),
         "inspect" => inspect(&mut flags),
+        "create-set" => create_set(&mut flags),
+        "verify-set" => verify_set(&mut flags),
+        "inspect-set" => inspect_set(&mut flags),
         _ => Err(format!("unknown command: {command}")),
     }
+}
+
+fn create_set(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), String> {
+    let output = required(flags, "--out")?;
+    let text_output = flags.remove("--text-out");
+    let release_set = load_release_set(required(flags, "--release-set")?)?;
+    let manifests = CheckedManifestFiles::load(flags)?;
+    require_no_flags(flags)?;
+    let checked = manifests.decode()?;
+    let result = build_checked_execution_release_set(
+        release_set,
+        [
+            &checked[0],
+            &checked[1],
+            &checked[2],
+            &checked[3],
+            &checked[4],
+        ],
+    )
+    .map_err(format_release_error)?;
+    fs::write(&output, result.encode())
+        .map_err(|error| format!("failed writing {}: {error}", output.display()))?;
+    emit_set_text(result, text_output)
+}
+
+fn verify_set(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), String> {
+    let manifest_path = required(flags, "--manifest")?;
+    let text_output = flags.remove("--text-out");
+    let manifests = CheckedManifestFiles::load(flags)?;
+    require_no_flags(flags)?;
+    let manifest = read_bytes(manifest_path)?;
+    let result = verify_checked_execution_release_set(&manifest, manifests.refs())
+        .map_err(format_release_error)?;
+    emit_set_text(result, text_output)
+}
+
+fn inspect_set(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), String> {
+    let manifest_path = required(flags, "--manifest")?;
+    let text_output = flags.remove("--text-out");
+    require_no_flags(flags)?;
+    let manifest = read_bytes(manifest_path)?;
+    let result = CheckedExecutionReleaseSetV1::decode(&manifest).map_err(format_release_error)?;
+    emit_set_text(result, text_output)
 }
 
 fn create(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), String> {
@@ -85,6 +133,22 @@ fn inspect(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), String> {
 
 fn emit_text(release: &CheckedReleaseV1, output: Option<PathBuf>) -> Result<(), String> {
     let text = release.render_text().map_err(format_release_error)?;
+    if let Some(path) = output {
+        fs::write(&path, text)
+            .map_err(|error| format!("failed writing {}: {error}", path.display()))
+    } else {
+        io::stdout()
+            .lock()
+            .write_all(text.as_bytes())
+            .map_err(|error| format!("failed writing stdout: {error}"))
+    }
+}
+
+fn emit_set_text(
+    release_set: CheckedExecutionReleaseSetV1,
+    output: Option<PathBuf>,
+) -> Result<(), String> {
+    let text = release_set.render_text().map_err(format_release_error)?;
     if let Some(path) = output {
         fs::write(&path, text)
             .map_err(|error| format!("failed writing {}: {error}", path.display()))
@@ -140,6 +204,50 @@ struct EvidenceFiles {
     program_account_data: Vec<u8>,
     programdata_account_data: Vec<u8>,
     metadata: BuildMetadataV1,
+}
+
+struct CheckedManifestFiles {
+    manifests: [Vec<u8>; 5],
+}
+
+impl CheckedManifestFiles {
+    fn load(flags: &mut BTreeMap<String, PathBuf>) -> Result<Self, String> {
+        Ok(Self {
+            manifests: [
+                read_bytes(required(flags, "--core")?)?,
+                read_bytes(required(flags, "--claims")?)?,
+                read_bytes(required(flags, "--trading")?)?,
+                read_bytes(required(flags, "--resolution")?)?,
+                read_bytes(required(flags, "--custody")?)?,
+            ],
+        })
+    }
+
+    fn decode(&self) -> Result<[CheckedReleaseV1; 5], String> {
+        Ok([
+            CheckedReleaseV1::decode(&self.manifests[0]).map_err(format_release_error)?,
+            CheckedReleaseV1::decode(&self.manifests[1]).map_err(format_release_error)?,
+            CheckedReleaseV1::decode(&self.manifests[2]).map_err(format_release_error)?,
+            CheckedReleaseV1::decode(&self.manifests[3]).map_err(format_release_error)?,
+            CheckedReleaseV1::decode(&self.manifests[4]).map_err(format_release_error)?,
+        ])
+    }
+
+    fn refs(&self) -> [&[u8]; 5] {
+        [
+            &self.manifests[0],
+            &self.manifests[1],
+            &self.manifests[2],
+            &self.manifests[3],
+            &self.manifests[4],
+        ]
+    }
+}
+
+fn load_release_set(path: PathBuf) -> Result<ExecutionReleaseSetV1, String> {
+    let bytes = read_bytes(path)?;
+    ExecutionReleaseSetV1::decode(&bytes)
+        .map_err(|error| format!("execution release set refused: {error:?}"))
 }
 
 impl EvidenceFiles {
