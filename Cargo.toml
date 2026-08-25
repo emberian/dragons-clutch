@@ -24,9 +24,9 @@ members = [
     "crates/dclutch-structured-contract",
     "crates/dclutch-terminal-contract",
     "crates/dclutch-token-svm",
-    "programs/dclutch-effect-proof-sbf",
     "programs/dclutch-effect-sbf",
     "programs/dclutch-controller-proof-sbf",
+    "programs/dclutch-claims-proof-sbf",
     "programs/dclutch-sbf",
 ]
 resolver = "2"

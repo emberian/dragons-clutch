@@ -14,9 +14,9 @@ Accounts are exactly:
 
 1. read-only controller-authority PDA;
 2. writable controller-owned journal;
-3. writable Effect projection;
-4. read-only executable exact-account Effect program.
+3. writable claim projection;
+4. read-only executable exact-account claim program.
 
-Instruction data is one bump byte followed by one 120-byte Effect V1 plan. The
+Instruction data is one bump byte followed by one 72-byte Effect V1 claim plan. The
 controller derives `PDA("dclutch-controller-v1", bump)` under its runtime program
-ID and forwards only the Effect plan.
+ID and forwards only the claim plan.

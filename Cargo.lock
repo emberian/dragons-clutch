@@ -307,6 +307,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-claims-proof-sbf"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-collateral-contract"
 version = "0.1.0"
 dependencies = [
@@ -346,10 +350,6 @@ dependencies = [
 
 [[package]]
 name = "dclutch-effect-kernel"
-version = "0.1.0"
-
-[[package]]
-name = "dclutch-effect-proof-sbf"
 version = "0.1.0"
 
 [[package]]

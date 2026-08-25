@@ -1,10 +1,6 @@
 #![cfg_attr(target_os = "solana", no_std)]
 
-//! Alias-simple exact-account SBF proof target for one Lean-owned Effect shape.
-//!
-//! This is deliberately not a deployable market program. It is an artifact
-//! experiment over the loader-owned ABI-v1 input buffer. The only `unsafe`
-//! operations are the explicit loader-memory adapter boundary in this file.
+//! Alias-simple exact-account SBF executor for the Lean-owned claim plan.
 
 include!("generated_profile.rs");
 
@@ -44,21 +40,20 @@ fn add_checked(left: u64, right: u64) -> Option<u64> {
     }
 }
 
-/// Execute the exact two-account projection profile.
+/// Execute one exact controller-authorized four-effect claim plan.
 ///
 /// # Safety boundary
 ///
 /// The pinned Solana loader must provide a non-null, aligned ABI-v1 buffer with
-/// the complete extent implied by the generated exact-account profile.
+/// the complete extent implied by the Lean-generated exact-account profile.
 #[no_mangle]
 pub extern "C" fn entrypoint(input: *mut u8) -> u64 {
     if input.is_null() {
         return ERROR;
     }
 
-    // SAFETY: extent and alignment are loader assumptions named above. Every
-    // semantic byte, privilege, owner, length, and alias is checked before the
-    // projection is written, and writes occur only after all arithmetic checks.
+    // SAFETY: the loader extent/alignment assumption is named above. All
+    // semantic bytes and write authority are checked before the four writes.
     unsafe {
         if read_u64(input, ACCOUNT_COUNT_OFFSET) != 2
             || read_u64(input, AUTHORITY_OFFSET) != AUTHORITY_FRAME_WORD
@@ -95,9 +90,6 @@ pub extern "C" fn entrypoint(input: *mut u8) -> u64 {
             || (read_u64(input, INSTRUCTION_OFFSET + 40) >> 32) != outcome
             || (read_u64(input, INSTRUCTION_OFFSET + 56) & 0xffff_ffff) != EFFECT_3_TAG
             || (read_u64(input, INSTRUCTION_OFFSET + 56) >> 32) != outcome
-            || read_u64(input, INSTRUCTION_OFFSET + 72) != EFFECT_4_TAG
-            || read_u64(input, INSTRUCTION_OFFSET + 88) != EFFECT_5_TAG
-            || read_u64(input, INSTRUCTION_OFFSET + 104) != EFFECT_6_TAG
         {
             return ERROR;
         }
@@ -106,10 +98,6 @@ pub extern "C" fn entrypoint(input: *mut u8) -> u64 {
         let buyer_nonce = read_u64(input, PROJECTION_DATA_OFFSET + 56);
         let seller_claims = read_u64(input, PROJECTION_DATA_OFFSET + 64);
         let buyer_claims = read_u64(input, PROJECTION_DATA_OFFSET + 72);
-        let buyer_collateral = read_u64(input, PROJECTION_DATA_OFFSET + 80);
-        let seller_collateral = read_u64(input, PROJECTION_DATA_OFFSET + 88);
-        let venue_collateral = read_u64(input, PROJECTION_DATA_OFFSET + 96);
-
         let next_seller = match add_checked(seller_nonce, 1) {
             Some(value) => value,
             None => return ERROR,
@@ -122,35 +110,15 @@ pub extern "C" fn entrypoint(input: *mut u8) -> u64 {
         let plan_buyer_nonce = read_u64(input, INSTRUCTION_OFFSET + 32);
         let claim_debit = read_u64(input, INSTRUCTION_OFFSET + 48);
         let claim_credit = read_u64(input, INSTRUCTION_OFFSET + 64);
-        let collateral_debit = read_u64(input, INSTRUCTION_OFFSET + 80);
-        let seller_credit = read_u64(input, INSTRUCTION_OFFSET + 96);
-        let venue_credit = read_u64(input, INSTRUCTION_OFFSET + 112);
 
         if plan_seller_nonce != next_seller
             || plan_buyer_nonce != next_buyer
             || claim_debit != claim_credit
             || seller_claims < claim_debit
-            || buyer_collateral < collateral_debit
         {
             return ERROR;
         }
-
         let next_buyer_claims = match add_checked(buyer_claims, claim_credit) {
-            Some(value) => value,
-            None => return ERROR,
-        };
-        let collateral_sum = match add_checked(seller_credit, venue_credit) {
-            Some(value) => value,
-            None => return ERROR,
-        };
-        if collateral_debit != collateral_sum {
-            return ERROR;
-        }
-        let next_seller_collateral = match add_checked(seller_collateral, seller_credit) {
-            Some(value) => value,
-            None => return ERROR,
-        };
-        let next_venue_collateral = match add_checked(venue_collateral, venue_credit) {
             Some(value) => value,
             None => return ERROR,
         };
@@ -163,13 +131,6 @@ pub extern "C" fn entrypoint(input: *mut u8) -> u64 {
             seller_claims - claim_debit,
         );
         write_u64(input, PROJECTION_DATA_OFFSET + 72, next_buyer_claims);
-        write_u64(
-            input,
-            PROJECTION_DATA_OFFSET + 80,
-            buyer_collateral - collateral_debit,
-        );
-        write_u64(input, PROJECTION_DATA_OFFSET + 88, next_seller_collateral);
-        write_u64(input, PROJECTION_DATA_OFFSET + 96, next_venue_collateral);
         0
     }
 }

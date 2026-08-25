@@ -1,7 +1,7 @@
 //! Real two-program SBF campaign for the controller-PDA authority membrane.
 //!
 //! This is not Direct admission or custody evidence. It tests authentic PDA
-//! delegation and cross-program rollback against the exact Effect ELF.
+//! delegation and cross-program rollback against the exact claim ELF.
 
 use std::{env, path::PathBuf};
 
@@ -17,20 +17,20 @@ use solana_sdk_ids::system_program;
 use solana_transaction::Transaction;
 
 const CONTROLLER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([67_u8; 32]);
-const EFFECT_PROGRAM_ID: Pubkey = Pubkey::new_from_array([83_u8; 32]);
+const EFFECT_PROGRAM_ID: Pubkey = Pubkey::new_from_array([81_u8; 32]);
 const CONTROLLER_SEED: &[u8] = b"dclutch-controller-v1";
-const STATE_BYTES: usize = 104;
+const STATE_BYTES: usize = 80;
 const JOURNAL_BYTES: usize = 16;
 const VECTOR_HEX: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../formal/dclutch-semantics/vectors/direct-inline-ordinary-v1.hex"
+    "/../../formal/dclutch-semantics/vectors/direct-inline-ordinary-claims-v1.hex"
 ));
 
 fn require_sbf() {
     let directory = env::var("SBF_OUT_DIR").expect("SBF_OUT_DIR is required for real ELF tests");
     for artifact in [
         "dclutch_controller_proof_sbf.so",
-        "dclutch_effect_proof_sbf.so",
+        "dclutch_claims_proof_sbf.so",
     ] {
         assert!(
             PathBuf::from(&directory).join(artifact).is_file(),
@@ -61,16 +61,13 @@ fn read_u64(bytes: &[u8], index: usize) -> u64 {
     u64::from_le_bytes(bytes[offset..offset + 8].try_into().expect("u64 field"))
 }
 
-fn projection(authority: Pubkey, venue_collateral: u64) -> Vec<u8> {
+fn projection(authority: Pubkey, buyer_claims: u64) -> Vec<u8> {
     let mut bytes = vec![0_u8; STATE_BYTES];
-    bytes[0..4].copy_from_slice(b"DCES");
+    bytes[0..4].copy_from_slice(b"DCCS");
     bytes[4] = 1;
     bytes[8..40].copy_from_slice(authority.as_ref());
     bytes[40..44].copy_from_slice(&1_u32.to_le_bytes());
-    for (index, value) in [0, 0, 5_000, 200, 2_000, 100, venue_collateral]
-        .into_iter()
-        .enumerate()
-    {
+    for (index, value) in [0, 0, 5_000, buyer_claims].into_iter().enumerate() {
         put_u64(&mut bytes, index, value);
     }
     bytes
@@ -167,7 +164,7 @@ async fn only_controller_can_delegate_and_child_failure_rolls_back_caller() {
 
     let mut test = ProgramTest::new("dclutch_controller_proof_sbf", CONTROLLER_PROGRAM_ID, None);
     test.prefer_bpf(true);
-    test.add_program("dclutch_effect_proof_sbf", EFFECT_PROGRAM_ID, None);
+    test.add_program("dclutch_claims_proof_sbf", EFFECT_PROGRAM_ID, None);
     test.add_account(controller, Account::new(1_000_000, 0, &system_program::ID));
     test.add_account(
         journal_key,
@@ -183,7 +180,7 @@ async fn only_controller_can_delegate_and_child_failure_rolls_back_caller() {
         success_key,
         Account {
             lamports: Rent::default().minimum_balance(STATE_BYTES),
-            data: projection(controller, 20),
+            data: projection(controller, 200),
             owner: EFFECT_PROGRAM_ID,
             executable: false,
             rent_epoch: 0,
@@ -193,7 +190,7 @@ async fn only_controller_can_delegate_and_child_failure_rolls_back_caller() {
         refusal_key,
         Account {
             lamports: Rent::default().minimum_balance(STATE_BYTES),
-            data: projection(controller, u64::MAX),
+            data: projection(controller, u64::MAX - 1_000),
             owner: EFFECT_PROGRAM_ID,
             executable: false,
             rent_epoch: 0,
@@ -244,7 +241,7 @@ async fn only_controller_can_delegate_and_child_failure_rolls_back_caller() {
     .await;
     assert!(
         !refusal_ok,
-        "late venue overflow must escape as child refusal"
+        "late buyer-claim overflow must escape as child refusal"
     );
     assert_eq!(account(&mut context, journal_key).await, journal_before);
     assert_eq!(account(&mut context, refusal_key).await, refusal_before);

@@ -17,12 +17,12 @@ use solana_program::{
 
 /// PDA seed defining the controller authority namespace.
 pub const CONTROLLER_SEED: &[u8] = b"dclutch-controller-v1";
-/// Bytes in the exact Effect V1 plan forwarded to the child executor.
-pub const EFFECT_PLAN_BYTES: usize = 120;
+/// Bytes in the exact Effect V1 claim plan forwarded to the child executor.
+pub const EFFECT_PLAN_BYTES: usize = 72;
 /// Bytes in the canonical controller journal.
 pub const JOURNAL_BYTES: usize = 16;
-/// Exact-account Effect proof-program identity used by this experiment.
-pub const EFFECT_PROGRAM_ID: Pubkey = Pubkey::new_from_array([83_u8; 32]);
+/// Exact-account claim proof-program identity used by this experiment.
+pub const EFFECT_PROGRAM_ID: Pubkey = Pubkey::new_from_array([81_u8; 32]);
 
 const JOURNAL_MAGIC: &[u8; 4] = b"DCCJ";
 

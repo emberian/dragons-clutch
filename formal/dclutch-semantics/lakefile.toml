@@ -10,8 +10,8 @@ name = "emit-vectors"
 root = "EmitVectors"
 
 [[lean_exe]]
-name = "emit-sbf-profile"
-root = "EmitSbfProfile"
+name = "emit-claim-sbf-profile"
+root = "EmitClaimSbfProfile"
 
 [[lean_exe]]
 name = "emit-claim-vector"
