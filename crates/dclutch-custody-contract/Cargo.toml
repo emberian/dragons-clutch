@@ -9,8 +9,6 @@ description = "Generated fixed-layout contract for canonical dClutch collateral 
 [dependencies]
 dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
 
-[workspace]
-
 [lints.rust]
 missing_docs = "deny"
 unsafe_code = "forbid"

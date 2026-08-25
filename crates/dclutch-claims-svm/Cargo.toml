@@ -8,8 +8,6 @@ description = "Runtime-width Claims child packet and receipt ABI"
 
 [dependencies]
 
-[workspace]
-
 [lints.rust]
 missing_docs = "deny"
 unsafe_code = "forbid"

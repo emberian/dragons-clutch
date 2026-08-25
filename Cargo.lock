@@ -325,6 +325,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-claims-svm"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-collateral-contract"
 version = "0.1.0"
 dependencies = [
@@ -356,12 +360,23 @@ name = "dclutch-core-contract"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-custody-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-release-set-contract",
+]
+
+[[package]]
 name = "dclutch-custody-proof-sbf"
 version = "0.1.0"
 dependencies = [
  "dclutch-token-svm",
  "solana-program",
 ]
+
+[[package]]
+name = "dclutch-dealer-codec"
+version = "0.1.0"
 
 [[package]]
 name = "dclutch-dealer-contract"
@@ -411,6 +426,10 @@ dependencies = [
  "dclutch-token-svm",
  "solana-program",
 ]
+
+[[package]]
+name = "dclutch-economic-slice-kernel"
+version = "0.1.0"
 
 [[package]]
 name = "dclutch-effect-kernel"

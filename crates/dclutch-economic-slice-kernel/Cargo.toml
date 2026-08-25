@@ -8,8 +8,6 @@ description = "Runtime-width aggregate Market and dynamic Position economic kern
 
 [dependencies]
 
-[workspace]
-
 [lints.rust]
 missing_docs = "deny"
 unsafe_code = "forbid"
