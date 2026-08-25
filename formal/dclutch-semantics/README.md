@@ -70,8 +70,13 @@ balances, and proves exact claim conservation. The 20,568-byte claim-owner ELF
 now dispatches this 16-byte request profile alongside inline execution; its
 real-ELF campaign covers reusable and terminal fills plus hostile rollback.
 The 32-byte controller request now drives that child route and real SPL custody
-without repeating maker signatures. Registration account creation plus
-controller register/cancel/expire dispatch remain the next physical boundary.
+without repeating maker signatures. Separate 24-byte, sequence-pinned terminal
+requests drive maker-signed cancellation or permissionless post-window expiry;
+the claim owner admits only an open registration and advances its phase and
+local sequence atomically. The real-ELF campaign covers stale sequence, maker
+impersonation, premature expiry, and terminal replay with byte-for-byte refusal
+state. Registration account creation and its prepaid funding/replay boundary
+remain the next physical gate.
 
 `CompiledPhysical.compilePhysicalPlan` then constructs the claim and custody
 plans from successful program outputs instead of caller-supplied gross, fee, or

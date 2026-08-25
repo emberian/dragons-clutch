@@ -151,4 +151,33 @@ theorem exact_frames :
 
 end Registered
 
+namespace RegisteredTerminal
+
+def registrationRole : AccountRole := Registered.registrationRole
+def registrationOffset : Nat := authorityOffset + accountSpan authorityRole
+def registrationDataOffset : Nat := registrationOffset + accountHeaderBytes
+def instructionLengthOffset : Nat := registrationOffset + accountSpan registrationRole
+def instructionOffset : Nat := instructionLengthOffset + 8
+def instructionBytes : Nat := Direct.RegisteredPhysical.terminalInstructionBytes
+def programIdOffset : Nat := instructionOffset + instructionBytes
+
+def cancelHeaderWord : Nat :=
+  SbfProfile.wordAt
+    (Direct.RegisteredPhysical.terminalInstructionMagic .cancel) 0
+
+def expireHeaderWord : Nat :=
+  SbfProfile.wordAt
+    (Direct.RegisteredPhysical.terminalInstructionMagic .expire) 0
+
+theorem exact_profile :
+    registrationOffset = 10344 ∧
+    registrationDataOffset = 10432 ∧
+    instructionLengthOffset = 20912 ∧
+    instructionOffset = 20920 ∧
+    instructionBytes = 16 ∧
+    programIdOffset = 20936 := by
+  native_decide
+
+end RegisteredTerminal
+
 end DClutch.ClaimSbfProfile

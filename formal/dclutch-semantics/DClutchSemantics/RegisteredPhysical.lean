@@ -146,4 +146,70 @@ theorem decode_encode_instruction (fill : Nat)
     instructionBytes, DClutch.Codec.encodeLE_length,
     DClutch.Codec.decodeLE_encodeLE, Nat.ne_of_gt positive, fits]
 
+/-! ## Single-registration terminal routes -/
+
+inductive TerminalAction where
+  | cancel | expire
+  deriving DecidableEq, Repr
+
+structure TerminalPlan where
+  phase : Nat
+  sequence : Nat
+  deriving DecidableEq, Repr
+
+def cancelPlan? (frame : DirectLifecycle.CancelFrame) : Option TerminalPlan :=
+  (DirectLifecycle.cancel frame).map fun state => {
+    phase := DirectLifecycleProgram.phaseTag state.phase
+    sequence := state.sequence
+  }
+
+def expirePlan? (frame : DirectLifecycle.ExpireFrame) : Option TerminalPlan :=
+  (DirectLifecycle.expire frame).map fun state => {
+    phase := DirectLifecycleProgram.phaseTag state.phase
+    sequence := state.sequence
+  }
+
+theorem admitted_cancel_plan
+    (frame : DirectLifecycle.CancelFrame)
+    (admitted : DirectLifecycle.CancelAdmissible frame) :
+    cancelPlan? frame = some { phase := 2, sequence := frame.state.sequence + 1 } := by
+  simp [cancelPlan?, DirectLifecycle.cancel, admitted,
+    DirectLifecycleProgram.phaseTag]
+
+theorem admitted_expire_plan
+    (frame : DirectLifecycle.ExpireFrame)
+    (admitted : DirectLifecycle.ExpireAdmissible frame) :
+    expirePlan? frame = some { phase := 3, sequence := frame.state.sequence + 1 } := by
+  simp [expirePlan?, DirectLifecycle.expire, admitted,
+    DirectLifecycleProgram.phaseTag]
+
+def terminalInstructionMagic : TerminalAction → List UInt8
+  | .cancel => [0x44, 0x43, 0x52, 0x43, 1, 0, 0, 0] -- `DCRC`, V1
+  | .expire => [0x44, 0x43, 0x52, 0x45, 1, 0, 0, 0] -- `DCRE`, V1
+
+def terminalInstructionBytes : Nat := 16
+
+def encodeTerminalInstruction (action : TerminalAction) (expectedSequence : Nat) :
+    List UInt8 :=
+  terminalInstructionMagic action ++ DClutch.Codec.encodeLE 8 expectedSequence
+
+def decodeTerminalInstruction (bytes : List UInt8) : Option (TerminalAction × Nat) := do
+  if bytes.length != terminalInstructionBytes then none else
+  let action <-
+    if bytes.take 8 = terminalInstructionMagic .cancel then some TerminalAction.cancel
+    else if bytes.take 8 = terminalInstructionMagic .expire then some TerminalAction.expire
+    else none
+  some (action, DClutch.Codec.decodeLE (bytes.drop 8))
+
+theorem terminal_instruction_lengths (action : TerminalAction) (expectedSequence : Nat) :
+    (encodeTerminalInstruction action expectedSequence).length = terminalInstructionBytes := by
+  cases action <;>
+    simp [encodeTerminalInstruction, terminalInstructionMagic,
+      terminalInstructionBytes, DClutch.Codec.encodeLE_length]
+
+theorem terminal_instruction_examples_round_trip :
+    decodeTerminalInstruction (encodeTerminalInstruction .cancel 7) = some (.cancel, 7) ∧
+    decodeTerminalInstruction (encodeTerminalInstruction .expire 9) = some (.expire, 9) := by
+  native_decide
+
 end DClutch.Direct.RegisteredPhysical

@@ -50,5 +50,13 @@ def main : IO Unit :=
     rustConstant "REGISTERED_DATA_BYTES" "u64" Registered.registrationRole.dataBytes,
     rustConstant "REGISTERED_INSTRUCTION_BYTES" "u64" Registered.instructionBytes,
     rustConstant "REGISTERED_MAGIC_WORD" "u64" Registered.registrationMagicWord,
-    rustConstant "REGISTERED_INSTRUCTION_HEADER_WORD" "u64" Registered.instructionHeaderWord
+    rustConstant "REGISTERED_INSTRUCTION_HEADER_WORD" "u64" Registered.instructionHeaderWord,
+    rustConstant "TERMINAL_REGISTRATION_OFFSET" "usize" RegisteredTerminal.registrationOffset,
+    rustConstant "TERMINAL_REGISTRATION_DATA_OFFSET" "usize" RegisteredTerminal.registrationDataOffset,
+    rustConstant "TERMINAL_INSTRUCTION_LENGTH_OFFSET" "usize" RegisteredTerminal.instructionLengthOffset,
+    rustConstant "TERMINAL_INSTRUCTION_OFFSET" "usize" RegisteredTerminal.instructionOffset,
+    rustConstant "TERMINAL_PROGRAM_ID_OFFSET" "usize" RegisteredTerminal.programIdOffset,
+    rustConstant "TERMINAL_INSTRUCTION_BYTES" "u64" RegisteredTerminal.instructionBytes,
+    rustConstant "TERMINAL_CANCEL_HEADER_WORD" "u64" RegisteredTerminal.cancelHeaderWord,
+    rustConstant "TERMINAL_EXPIRE_HEADER_WORD" "u64" RegisteredTerminal.expireHeaderWord
   ]

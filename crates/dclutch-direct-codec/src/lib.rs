@@ -28,6 +28,12 @@ pub const REGISTERED_CONTROLLER_INSTRUCTION_BYTES: usize =
 /// Bytes in the claim-owner request derived from a registered controller fill.
 pub const REGISTERED_CLAIM_FILL_BYTES: usize =
     generated_registered_controller::REGISTERED_CLAIM_FILL_BYTES_VALUE;
+/// Bytes in one controller cancellation or permissionless expiry request.
+pub const REGISTERED_TERMINAL_INSTRUCTION_BYTES: usize =
+    generated_registered_controller::REGISTERED_TERMINAL_BYTES_VALUE;
+/// Bytes in one claim-owner cancellation or expiry request.
+pub const REGISTERED_CLAIM_TERMINAL_BYTES: usize =
+    generated_registered_controller::REGISTERED_CLAIM_CANCEL_TEMPLATE.len();
 /// Scalar inputs consumed by the Lean-owned registered residual-fill program.
 pub const REGISTERED_FILL_INPUT_COUNT: usize = generated_lifecycle::REGISTERED_INPUT_COUNT;
 /// Registered lifecycle input register containing the signed lifecycle tag.
@@ -90,6 +96,8 @@ pub enum Error {
     NonzeroReserved,
     /// A persisted registered-intent phase was not open, filled, cancelled, or expired.
     InvalidPhase,
+    /// A registered terminal action was not cancellation or expiry.
+    InvalidAction,
     /// A fixed output field could not be written.
     Output,
 }
@@ -218,6 +226,28 @@ pub struct RegisteredFillInstructionV1 {
     pub fill: u64,
     /// Matcher-selected execution price at the Market profile scale.
     pub execution_price: u64,
+}
+
+/// Terminal mutation selected for one registered intent.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RegisteredTerminalAction {
+    /// Maker-authorized cancellation.
+    Cancel,
+    /// Permissionless expiry after the signed validity window.
+    Expire,
+}
+
+/// One sequence-pinned registered cancellation or expiry request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RegisteredTerminalInstructionV1 {
+    /// Cancellation or expiry.
+    pub action: RegisteredTerminalAction,
+    /// Global controller PDA bump.
+    pub controller_bump: u8,
+    /// Registered-intent PDA bump.
+    pub registration_bump: u8,
+    /// Exact current registration-local sequence observed by the caller.
+    pub expected_sequence: u64,
 }
 
 impl RegisteredIntentStateV1 {
@@ -380,6 +410,102 @@ impl RegisteredFillInstructionV1 {
     }
 }
 
+impl RegisteredTerminalInstructionV1 {
+    /// Strictly decode one canonical registered terminal request.
+    pub fn decode(input: &[u8]) -> Result<Self, Error> {
+        exact_width(input, REGISTERED_TERMINAL_INSTRUCTION_BYTES)?;
+        exact_magic(
+            input,
+            &generated_registered_controller::REGISTERED_TERMINAL_MAGIC_BYTES,
+        )?;
+        if u16_at(
+            input,
+            generated_registered_controller::REGISTERED_TERMINAL_VERSION_OFFSET,
+        )? != generated_registered_controller::REGISTERED_TERMINAL_ABI_VERSION
+        {
+            return Err(Error::UnsupportedVersion);
+        }
+        reserved(
+            input,
+            generated_registered_controller::REGISTERED_TERMINAL_RESERVED_OFFSET,
+            generated_registered_controller::REGISTERED_TERMINAL_EXPECTED_SEQUENCE_OFFSET
+                .checked_sub(generated_registered_controller::REGISTERED_TERMINAL_RESERVED_OFFSET)
+                .ok_or(Error::InvalidLength)?,
+        )?;
+        let action = match byte(
+            input,
+            generated_registered_controller::REGISTERED_TERMINAL_ACTION_OFFSET,
+        )? {
+            generated_registered_controller::REGISTERED_TERMINAL_CANCEL => {
+                RegisteredTerminalAction::Cancel
+            }
+            generated_registered_controller::REGISTERED_TERMINAL_EXPIRE => {
+                RegisteredTerminalAction::Expire
+            }
+            _ => return Err(Error::InvalidAction),
+        };
+        Ok(Self {
+            action,
+            controller_bump: byte(
+                input,
+                generated_registered_controller::REGISTERED_TERMINAL_CONTROLLER_BUMP_OFFSET,
+            )?,
+            registration_bump: byte(
+                input,
+                generated_registered_controller::REGISTERED_TERMINAL_REGISTRATION_BUMP_OFFSET,
+            )?,
+            expected_sequence: u64_at(
+                input,
+                generated_registered_controller::REGISTERED_TERMINAL_EXPECTED_SEQUENCE_OFFSET,
+            )?,
+        })
+    }
+
+    /// Encode one canonical registered terminal request.
+    pub fn encode(self) -> Result<[u8; REGISTERED_TERMINAL_INSTRUCTION_BYTES], Error> {
+        let mut output = [0_u8; REGISTERED_TERMINAL_INSTRUCTION_BYTES];
+        put(
+            &mut output,
+            generated_registered_controller::REGISTERED_TERMINAL_MAGIC_OFFSET,
+            &generated_registered_controller::REGISTERED_TERMINAL_MAGIC_BYTES,
+        )?;
+        put(
+            &mut output,
+            generated_registered_controller::REGISTERED_TERMINAL_VERSION_OFFSET,
+            &generated_registered_controller::REGISTERED_TERMINAL_ABI_VERSION.to_le_bytes(),
+        )?;
+        let action = match self.action {
+            RegisteredTerminalAction::Cancel => {
+                generated_registered_controller::REGISTERED_TERMINAL_CANCEL
+            }
+            RegisteredTerminalAction::Expire => {
+                generated_registered_controller::REGISTERED_TERMINAL_EXPIRE
+            }
+        };
+        put_byte(
+            &mut output,
+            generated_registered_controller::REGISTERED_TERMINAL_ACTION_OFFSET,
+            action,
+        )?;
+        put_byte(
+            &mut output,
+            generated_registered_controller::REGISTERED_TERMINAL_CONTROLLER_BUMP_OFFSET,
+            self.controller_bump,
+        )?;
+        put_byte(
+            &mut output,
+            generated_registered_controller::REGISTERED_TERMINAL_REGISTRATION_BUMP_OFFSET,
+            self.registration_bump,
+        )?;
+        put(
+            &mut output,
+            generated_registered_controller::REGISTERED_TERMINAL_EXPECTED_SEQUENCE_OFFSET,
+            &self.expected_sequence.to_le_bytes(),
+        )?;
+        Ok(output)
+    }
+}
+
 /// Derive the only registered-fill request accepted by the claim owner.
 pub fn registered_claim_fill_instruction(
     fill: u64,
@@ -389,6 +515,27 @@ pub fn registered_claim_fill_instruction(
         &mut output,
         generated_registered_controller::REGISTERED_CLAIM_FILL_OFFSET,
         &fill.to_le_bytes(),
+    )?;
+    Ok(output)
+}
+
+/// Derive the only sequence-pinned terminal request accepted by the claim owner.
+pub fn registered_claim_terminal_instruction(
+    action: RegisteredTerminalAction,
+    expected_sequence: u64,
+) -> Result<[u8; REGISTERED_CLAIM_TERMINAL_BYTES], Error> {
+    let mut output = match action {
+        RegisteredTerminalAction::Cancel => {
+            generated_registered_controller::REGISTERED_CLAIM_CANCEL_TEMPLATE
+        }
+        RegisteredTerminalAction::Expire => {
+            generated_registered_controller::REGISTERED_CLAIM_EXPIRE_TEMPLATE
+        }
+    };
+    put(
+        &mut output,
+        generated_registered_controller::REGISTERED_CLAIM_TERMINAL_SEQUENCE_OFFSET,
+        &expected_sequence.to_le_bytes(),
     )?;
     Ok(output)
 }
@@ -702,6 +849,73 @@ mod tests {
         assert_eq!(
             RegisteredFillInstructionV1::decode(&hostile),
             Err(Error::NonzeroReserved)
+        );
+    }
+
+    #[test]
+    fn registered_terminal_requests_match_lean() {
+        let cancel = RegisteredTerminalInstructionV1 {
+            action: RegisteredTerminalAction::Cancel,
+            controller_bump: 2,
+            registration_bump: 3,
+            expected_sequence: 7,
+        };
+        let expire = RegisteredTerminalInstructionV1 {
+            action: RegisteredTerminalAction::Expire,
+            ..cancel
+        };
+        let cancel_bytes = cancel.encode().expect("cancel encoding");
+        let expire_bytes = expire.encode().expect("expire encoding");
+        assert_eq!(
+            cancel_bytes,
+            generated_registered_controller::REGISTERED_TERMINAL_CANCEL_EXAMPLE
+        );
+        assert_eq!(
+            expire_bytes,
+            generated_registered_controller::REGISTERED_TERMINAL_EXPIRE_EXAMPLE
+        );
+        assert_eq!(
+            RegisteredTerminalInstructionV1::decode(&cancel_bytes),
+            Ok(cancel)
+        );
+        assert_eq!(
+            RegisteredTerminalInstructionV1::decode(&expire_bytes),
+            Ok(expire)
+        );
+        assert_eq!(
+            registered_claim_terminal_instruction(RegisteredTerminalAction::Cancel, 7),
+            Ok([b'D', b'C', b'R', b'C', 1, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0,])
+        );
+        assert_eq!(
+            registered_claim_terminal_instruction(RegisteredTerminalAction::Expire, 7),
+            Ok([b'D', b'C', b'R', b'E', 1, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0,])
+        );
+    }
+
+    #[test]
+    fn hostile_registered_terminal_requests_refuse() {
+        let request = RegisteredTerminalInstructionV1 {
+            action: RegisteredTerminalAction::Cancel,
+            controller_bump: 2,
+            registration_bump: 3,
+            expected_sequence: 7,
+        };
+        let bytes = request.encode().expect("terminal encoding");
+        let mut hostile = bytes;
+        hostile[generated_registered_controller::REGISTERED_TERMINAL_ACTION_OFFSET] = 2;
+        assert_eq!(
+            RegisteredTerminalInstructionV1::decode(&hostile),
+            Err(Error::InvalidAction)
+        );
+        let mut hostile = bytes;
+        hostile[generated_registered_controller::REGISTERED_TERMINAL_RESERVED_OFFSET] = 1;
+        assert_eq!(
+            RegisteredTerminalInstructionV1::decode(&hostile),
+            Err(Error::NonzeroReserved)
+        );
+        assert_eq!(
+            RegisteredTerminalInstructionV1::decode(&bytes[..bytes.len() - 1]),
+            Err(Error::InvalidLength)
         );
     }
 

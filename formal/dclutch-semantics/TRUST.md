@@ -105,8 +105,9 @@ cannot change a resting order's final cumulative fee in the semantic model.
   (claim, signed experimental controller, custody, and official SPL Token are
   measured together; Realm selection and release-authentication costs remain
   absent);
-- an SBF registration account-creation route and physical registered fill,
-  cancellation, and expiry dispatch consuming the new canonical state; and
+- an SBF registration account-creation route consuming the new canonical state
+  (physical registered fill, cancellation, and expiry dispatch now have
+  adversarial real-ELF execution evidence); and
 - all other protocol families.
 
 The package uses Lean 4.30.0. No theorem contains `sorry`, an axiom, an

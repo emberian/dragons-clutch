@@ -33,10 +33,18 @@ The real-SVM campaign checks these runtime properties for the pinned artifacts:
 The registered campaign additionally checks a wrong registration coordinate,
 two successive GTC residual fills, terminal closure, real SPL delegation by the
 buyer registration PDA, and transaction-wide rollback after a late frozen-venue
-failure. Measured registered fills consume 59,129--59,138 CU end to end; their
+failure. Measured registered fills consume 59,134--59,143 CU end to end; their
 legacy transaction is 762 bytes and the all-address v0 form is 271 bytes. The
-current verifier-clean artifacts are 113,128 bytes for the controller and
-20,568 bytes for the dual-profile claim owner.
+current verifier-clean artifacts are 120,024 bytes for the controller and
+21,288 bytes for the multi-profile claim owner.
+
+The terminal campaign executes separate 24-byte controller requests through
+the same exact claim owner. Cancellation requires the persisted maker's native
+transaction signature; expiry is permissionless only after `valid_through`.
+Both requests pin the registration-local sequence. Successful cancellation and
+expiry consumed 6,256 and 6,237 CU respectively. Stale sequence, maker
+impersonation, premature expiry, and repeated terminal requests all refused
+without changing the registration.
 
 This remains an experiment, not a release. The Market execution profile is
 controller-owned but does not yet have immutable release-artifact admission.
@@ -46,5 +54,5 @@ TypeScript codecs. Refinement theorems for both parsers remain open. Realm
 selection and release authorization are authenticated for the inline route.
 The registered successor now has a Lean-owned 232-byte state ABI and 168-byte
 residual program consumed by the safe Rust codec. Registered fill dispatch is
-now physically complete. Account-creation funding plus register, cancel, and
-expire dispatch remain successor gates.
+now physically complete, as are maker cancellation and permissionless expiry.
+Prepaid account creation plus signed registration remain the successor gate.

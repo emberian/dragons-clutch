@@ -5,10 +5,11 @@
 include!("generated_profile.rs");
 
 use dclutch_direct_codec::{
-    RegisteredIntentStateV1, REGISTERED_FILL_PROGRAM, REGISTERED_PHASE_OUTPUT_REGISTER,
+    REGISTERED_FILL_PROGRAM, REGISTERED_PHASE_OUTPUT_REGISTER,
     REGISTERED_REMAINING_OUTPUT_REGISTER, REGISTERED_SEQUENCE_OUTPUT_REGISTER,
+    RegisteredIntentStateV1,
 };
-use dclutch_transition_vm::{execute, Registers};
+use dclutch_transition_vm::{Registers, execute};
 
 const ERROR: u64 = 5_u64 << 32;
 
@@ -53,11 +54,7 @@ unsafe fn equal_32(input: *mut u8, left: usize, right: usize) -> bool {
 #[inline(always)]
 fn add_checked(left: u64, right: u64) -> Option<u64> {
     let result = left.wrapping_add(right);
-    if result < left {
-        None
-    } else {
-        Some(result)
-    }
+    if result < left { None } else { Some(result) }
 }
 
 #[inline(always)]
@@ -148,16 +145,18 @@ pub unsafe extern "C" fn entrypoint(input: *mut u8) -> u64 {
         return ERROR;
     }
 
-    // Both routes have the same authority and first mutable-account offset.
-    // The first mutable account's exact data width selects the canonical ABI;
-    // no caller-provided action tag can reinterpret state bytes.
+    // Five-account fills share the same authority and first mutable-account
+    // offset; the first mutable account's exact width selects inline versus
+    // registered fill. Two-account terminal mutations have their own exact
+    // profile. No caller-provided tag can reinterpret account state bytes.
     unsafe {
-        if read_u64(input, ACCOUNT_COUNT_OFFSET) != 5 {
-            return ERROR;
-        }
-        match read_u64(input, SELLER_REPLAY_OFFSET + 80) {
-            REPLAY_DATA_BYTES => execute_inline(input),
-            REGISTERED_DATA_BYTES => execute_registered(input),
+        match read_u64(input, ACCOUNT_COUNT_OFFSET) {
+            5 => match read_u64(input, SELLER_REPLAY_OFFSET + 80) {
+                REPLAY_DATA_BYTES => execute_inline(input),
+                REGISTERED_DATA_BYTES => execute_registered(input),
+                _ => ERROR,
+            },
+            2 => execute_registered_terminal(input),
             _ => ERROR,
         }
     }
@@ -433,6 +432,88 @@ unsafe fn execute_registered(input: *mut u8) -> u64 {
     }
 }
 
+#[inline(always)]
+unsafe fn exact_terminal_registered_frame(input: *mut u8) -> bool {
+    // SAFETY: propagated from the generated two-account terminal profile.
+    unsafe {
+        read_u64(input, TERMINAL_REGISTRATION_OFFSET) == REGISTERED_FRAME_WORD
+            && read_u64(input, TERMINAL_REGISTRATION_OFFSET + 80) == REGISTERED_DATA_BYTES
+            && equal_32(
+                input,
+                TERMINAL_REGISTRATION_OFFSET + 40,
+                TERMINAL_PROGRAM_ID_OFFSET,
+            )
+            && equal_32(
+                input,
+                AUTHORITY_OFFSET + 8,
+                TERMINAL_REGISTRATION_DATA_OFFSET + 16,
+            )
+            && read_u64(input, TERMINAL_REGISTRATION_DATA_OFFSET) == REGISTERED_MAGIC_WORD
+    }
+}
+
+#[inline(always)]
+fn terminal_successor(
+    state: RegisteredIntentStateV1,
+    expected_sequence: u64,
+    phase: u8,
+) -> Option<u64> {
+    if state.phase != 0
+        || state.remaining == 0
+        || state.remaining > state.intent.maximum_fill
+        || state.sequence != expected_sequence
+        || (phase != 2 && phase != 3)
+    {
+        return None;
+    }
+    add_checked(state.sequence, 1)
+}
+
+#[inline(never)]
+unsafe fn execute_registered_terminal(input: *mut u8) -> u64 {
+    // SAFETY: the exact two-account profile is checked before decoding or
+    // writing the registration. The single write set is committed only after
+    // sequence, phase, and arithmetic admission succeeds.
+    unsafe {
+        if read_u64(input, AUTHORITY_OFFSET) != AUTHORITY_FRAME_WORD
+            || read_u64(input, AUTHORITY_OFFSET + 80) != 0
+            || !exact_terminal_registered_frame(input)
+            || equal_32(
+                input,
+                AUTHORITY_OFFSET + 8,
+                TERMINAL_REGISTRATION_OFFSET + 8,
+            )
+            || read_u64(input, TERMINAL_INSTRUCTION_LENGTH_OFFSET) != TERMINAL_INSTRUCTION_BYTES
+        {
+            return ERROR;
+        }
+        let header = read_u64(input, TERMINAL_INSTRUCTION_OFFSET);
+        let phase = if header == TERMINAL_CANCEL_HEADER_WORD {
+            2
+        } else if header == TERMINAL_EXPIRE_HEADER_WORD {
+            3
+        } else {
+            return ERROR;
+        };
+        let state = match decode_registered(input, TERMINAL_REGISTRATION_DATA_OFFSET) {
+            Some(state) => state,
+            None => return ERROR,
+        };
+        let expected_sequence = read_u64(input, TERMINAL_INSTRUCTION_OFFSET + 8);
+        let next_sequence = match terminal_successor(state, expected_sequence, phase) {
+            Some(sequence) => sequence,
+            None => return ERROR,
+        };
+        write_u8(input, TERMINAL_REGISTRATION_DATA_OFFSET + 10, phase);
+        write_u64(
+            input,
+            TERMINAL_REGISTRATION_DATA_OFFSET + 224,
+            next_sequence,
+        );
+        0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     extern crate std;
@@ -495,5 +576,20 @@ mod tests {
         let mut overflow = state(0, 2);
         overflow.sequence = u64::MAX;
         assert!(registered_successor(overflow, 500).is_none());
+    }
+
+    #[test]
+    fn terminal_mutations_are_sequence_pinned() {
+        let open = state(0, 2);
+        assert_eq!(terminal_successor(open, 4, 2), Some(5));
+        assert_eq!(terminal_successor(open, 4, 3), Some(5));
+        assert_eq!(terminal_successor(open, 3, 2), None);
+        assert_eq!(terminal_successor(open, 4, 1), None);
+        let mut terminal = open;
+        terminal.phase = 2;
+        assert_eq!(terminal_successor(terminal, 4, 2), None);
+        let mut overflow = open;
+        overflow.sequence = u64::MAX;
+        assert_eq!(terminal_successor(overflow, u64::MAX, 2), None);
     }
 }

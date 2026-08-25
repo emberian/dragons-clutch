@@ -27,3 +27,23 @@ def main : IO Unit := do
   IO.println "#[cfg(test)]"
   emitRustBytes "pub(crate)" "REGISTERED_CONTROLLER_EXAMPLE"
     (encode exampleInstruction)
+  IO.println ""
+  IO.println s!"pub(crate) const REGISTERED_TERMINAL_BYTES_VALUE: usize = {Terminal.bytes};"
+  IO.println s!"pub(crate) const REGISTERED_TERMINAL_ABI_VERSION: u16 = {Terminal.version};"
+  emitRustBytes "pub(crate)" "REGISTERED_TERMINAL_MAGIC_BYTES" Terminal.magic
+  for field in Terminal.Field.all do
+    IO.println s!"pub(crate) const {Terminal.Field.rustName field}: usize = {Terminal.Field.offset field};"
+  IO.println "pub(crate) const REGISTERED_TERMINAL_CANCEL: u8 = 0;"
+  IO.println "pub(crate) const REGISTERED_TERMINAL_EXPIRE: u8 = 1;"
+  emitRustBytes "pub(crate)" "REGISTERED_CLAIM_CANCEL_TEMPLATE"
+    (DClutch.Direct.RegisteredPhysical.encodeTerminalInstruction .cancel 0)
+  emitRustBytes "pub(crate)" "REGISTERED_CLAIM_EXPIRE_TEMPLATE"
+    (DClutch.Direct.RegisteredPhysical.encodeTerminalInstruction .expire 0)
+  IO.println "pub(crate) const REGISTERED_CLAIM_TERMINAL_SEQUENCE_OFFSET: usize = 8;"
+  IO.println ""
+  IO.println "#[cfg(test)]"
+  emitRustBytes "pub(crate)" "REGISTERED_TERMINAL_CANCEL_EXAMPLE"
+    (Terminal.encode Terminal.exampleCancel)
+  IO.println "#[cfg(test)]"
+  emitRustBytes "pub(crate)" "REGISTERED_TERMINAL_EXPIRE_EXAMPLE"
+    (Terminal.encode Terminal.exampleExpire)

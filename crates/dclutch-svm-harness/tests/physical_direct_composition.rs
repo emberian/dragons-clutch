@@ -23,6 +23,7 @@ use dclutch_direct_codec::{
     COMPACT_INTENT_BYTES, COMPILED_DIRECT_CAPACITY_ID_V1, COMPILED_DIRECT_CHILD_SCHEMA_ID_V1,
     COMPILED_DIRECT_DERIVATION_ID_V1, COMPILED_DIRECT_RELEASE_ID_V1, CompactIntentV1,
     ControllerInstructionV1, RegisteredFillInstructionV1, RegisteredIntentStateV1,
+    RegisteredTerminalAction, RegisteredTerminalInstructionV1,
 };
 use dclutch_direct_contract::{
     DIRECT_CAPABILITY_KIND_ID_V2, VENUE_FEE_POLICY_BYTES_V3, VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3,
@@ -361,6 +362,23 @@ fn registered_controller_data(controller_bump: u8, fixture: MarketFixture, fill:
     .to_vec()
 }
 
+fn registered_terminal_data(
+    action: RegisteredTerminalAction,
+    controller_bump: u8,
+    registration_bump: u8,
+    expected_sequence: u64,
+) -> Vec<u8> {
+    RegisteredTerminalInstructionV1 {
+        action,
+        controller_bump,
+        registration_bump,
+        expected_sequence,
+    }
+    .encode()
+    .expect("registered terminal instruction")
+    .to_vec()
+}
+
 fn signed_ed25519_batch(seller: &Keypair, buyer: &Keypair, controller_data: &[u8]) -> Instruction {
     let payload = 2 + 2 * 14;
     let mut data = vec![0_u8; payload + 2 * 96];
@@ -473,6 +491,27 @@ fn registered_controller_instruction(
     }
 }
 
+fn registered_terminal_instruction(
+    controller: Pubkey,
+    registration: Pubkey,
+    maker: Option<Pubkey>,
+    data: Vec<u8>,
+) -> Instruction {
+    let mut accounts = vec![
+        AccountMeta::new_readonly(controller, false),
+        AccountMeta::new(registration, false),
+    ];
+    if let Some(maker) = maker {
+        accounts.push(AccountMeta::new_readonly(maker, true));
+    }
+    accounts.push(AccountMeta::new_readonly(CLAIM_PROGRAM_ID, false));
+    Instruction {
+        program_id: CONTROLLER_PROGRAM_ID,
+        accounts,
+        data,
+    }
+}
+
 fn direct_claim_instruction(controller: Pubkey, fixture: MarketFixture) -> Instruction {
     let mut plan = vec![0_u8; 72];
     plan[0..8].copy_from_slice(&[b'D', b'C', b'E', b'F', 1, 4, 0, 0]);
@@ -562,6 +601,44 @@ async fn submit(
         market_v0_wire_bytes,
         logs: metadata.log_messages,
     }
+}
+
+async fn submit_terminal(
+    context: &mut ProgramTestContext,
+    instruction: Instruction,
+    maker: Option<&Keypair>,
+) -> (bool, u64) {
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    let transaction = match maker {
+        Some(maker) => Transaction::new_signed_with_payer(
+            &[instruction],
+            Some(&context.payer.pubkey()),
+            &[&context.payer, maker],
+            blockhash,
+        ),
+        None => Transaction::new_signed_with_payer(
+            &[instruction],
+            Some(&context.payer.pubkey()),
+            &[&context.payer],
+            blockhash,
+        ),
+    };
+    let processed = context
+        .banks_client
+        .process_transaction_with_metadata(transaction)
+        .await
+        .expect("terminal transaction processing");
+    (
+        processed.result.is_ok(),
+        processed
+            .metadata
+            .expect("terminal transaction metadata")
+            .compute_units_consumed,
+    )
 }
 
 async fn process_legacy(context: &mut ProgramTestContext, instructions: &[Instruction]) -> u64 {
@@ -2039,5 +2116,253 @@ async fn registered_residuals_reuse_authenticated_state_and_real_custody_atomica
         late_refusal.compute_units,
         first.wire_bytes,
         first.v0_wire_bytes,
+    );
+}
+
+#[tokio::test]
+async fn registered_terminal_routes_enforce_maker_time_and_local_sequence() {
+    require_sbf();
+    let cancel_maker = Keypair::new();
+    let wrong_maker = Keypair::new();
+    let expiry_maker = Pubkey::new_unique();
+    let (controller, controller_bump) =
+        Pubkey::find_program_address(&[CONTROLLER_SEED], &CONTROLLER_PROGRAM_ID);
+    let cancel_market = Pubkey::new_unique();
+    let expiry_market = Pubkey::new_unique();
+    let generation = GENERATION.to_le_bytes();
+    let nonce = 0_u64.to_le_bytes();
+    let (cancel_registration, cancel_bump) = Pubkey::find_program_address(
+        &[
+            REGISTERED_SEED,
+            cancel_market.as_ref(),
+            &generation,
+            cancel_maker.pubkey().as_ref(),
+            &nonce,
+        ],
+        &CONTROLLER_PROGRAM_ID,
+    );
+    let (expiry_registration, expiry_bump) = Pubkey::find_program_address(
+        &[
+            REGISTERED_SEED,
+            expiry_market.as_ref(),
+            &generation,
+            expiry_maker.as_ref(),
+            &nonce,
+        ],
+        &CONTROLLER_PROGRAM_ID,
+    );
+
+    let cancel_intent = registered_intent(cancel_market, Pubkey::new_unique(), 0);
+    let mut expiry_intent = registered_intent(expiry_market, Pubkey::new_unique(), 1);
+    expiry_intent.valid_through = 100;
+    let cancel_state = registered_state(controller, cancel_maker.pubkey(), cancel_intent);
+    let expiry_state = RegisteredIntentStateV1 {
+        phase: 0,
+        controller: controller.to_bytes(),
+        maker: expiry_maker.to_bytes(),
+        intent: expiry_intent,
+        remaining: expiry_intent.maximum_fill,
+        sequence: 3,
+    }
+    .encode()
+    .expect("canonical expiry registration")
+    .to_vec();
+
+    let mut test = ProgramTest::new("dclutch_controller_proof_sbf", CONTROLLER_PROGRAM_ID, None);
+    test.prefer_bpf(true);
+    test.add_program("dclutch_claims_proof_sbf", CLAIM_PROGRAM_ID, None);
+    add_program_account(&mut test, controller);
+    add_program_account(&mut test, cancel_maker.pubkey());
+    add_program_account(&mut test, wrong_maker.pubkey());
+    add_claim_state(&mut test, cancel_registration, cancel_state);
+    add_claim_state(&mut test, expiry_registration, expiry_state);
+    let mut context = test.start_with_context().await;
+
+    let cancel_before = account(&mut context, cancel_registration).await;
+    let stale_cancel = submit_terminal(
+        &mut context,
+        registered_terminal_instruction(
+            controller,
+            cancel_registration,
+            Some(cancel_maker.pubkey()),
+            registered_terminal_data(
+                RegisteredTerminalAction::Cancel,
+                controller_bump,
+                cancel_bump,
+                1,
+            ),
+        ),
+        Some(&cancel_maker),
+    )
+    .await;
+    assert!(!stale_cancel.0, "stale local sequence must refuse cancel");
+    assert_eq!(
+        account(&mut context, cancel_registration).await,
+        cancel_before
+    );
+
+    let impersonated_cancel = submit_terminal(
+        &mut context,
+        registered_terminal_instruction(
+            controller,
+            cancel_registration,
+            Some(wrong_maker.pubkey()),
+            registered_terminal_data(
+                RegisteredTerminalAction::Cancel,
+                controller_bump,
+                cancel_bump,
+                0,
+            ),
+        ),
+        Some(&wrong_maker),
+    )
+    .await;
+    assert!(
+        !impersonated_cancel.0,
+        "a signer other than the persisted maker must refuse cancel"
+    );
+    assert_eq!(
+        account(&mut context, cancel_registration).await,
+        cancel_before
+    );
+
+    let cancel = submit_terminal(
+        &mut context,
+        registered_terminal_instruction(
+            controller,
+            cancel_registration,
+            Some(cancel_maker.pubkey()),
+            registered_terminal_data(
+                RegisteredTerminalAction::Cancel,
+                controller_bump,
+                cancel_bump,
+                0,
+            ),
+        ),
+        Some(&cancel_maker),
+    )
+    .await;
+    assert!(cancel.0, "the exact maker-authorized cancel must commit");
+    let cancelled_account = account(&mut context, cancel_registration).await;
+    let cancelled =
+        RegisteredIntentStateV1::decode(&cancelled_account.data).expect("cancelled registration");
+    assert_eq!(
+        (cancelled.phase, cancelled.remaining, cancelled.sequence),
+        (2, FILL, 1)
+    );
+
+    let repeated_cancel = submit_terminal(
+        &mut context,
+        registered_terminal_instruction(
+            controller,
+            cancel_registration,
+            Some(cancel_maker.pubkey()),
+            registered_terminal_data(
+                RegisteredTerminalAction::Cancel,
+                controller_bump,
+                cancel_bump,
+                1,
+            ),
+        ),
+        Some(&cancel_maker),
+    )
+    .await;
+    assert!(!repeated_cancel.0, "terminal cancel replay must refuse");
+    assert_eq!(
+        account(&mut context, cancel_registration).await,
+        cancelled_account
+    );
+
+    let expiry_before = account(&mut context, expiry_registration).await;
+    let clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("Clock sysvar");
+    assert!(clock.slot <= expiry_intent.valid_through);
+    let early_expiry = submit_terminal(
+        &mut context,
+        registered_terminal_instruction(
+            controller,
+            expiry_registration,
+            None,
+            registered_terminal_data(
+                RegisteredTerminalAction::Expire,
+                controller_bump,
+                expiry_bump,
+                3,
+            ),
+        ),
+        None,
+    )
+    .await;
+    assert!(
+        !early_expiry.0,
+        "expiry at or before valid-through must refuse"
+    );
+    assert_eq!(
+        account(&mut context, expiry_registration).await,
+        expiry_before
+    );
+
+    context
+        .warp_to_slot(expiry_intent.valid_through + 1)
+        .expect("advance beyond the signed validity window");
+    let expiry = submit_terminal(
+        &mut context,
+        registered_terminal_instruction(
+            controller,
+            expiry_registration,
+            None,
+            registered_terminal_data(
+                RegisteredTerminalAction::Expire,
+                controller_bump,
+                expiry_bump,
+                3,
+            ),
+        ),
+        None,
+    )
+    .await;
+    assert!(expiry.0, "permissionless post-window expiry must commit");
+    let expired_account = account(&mut context, expiry_registration).await;
+    let expired =
+        RegisteredIntentStateV1::decode(&expired_account.data).expect("expired registration");
+    assert_eq!(
+        (expired.phase, expired.remaining, expired.sequence),
+        (3, FILL, 4)
+    );
+
+    let repeated_expiry = submit_terminal(
+        &mut context,
+        registered_terminal_instruction(
+            controller,
+            expiry_registration,
+            None,
+            registered_terminal_data(
+                RegisteredTerminalAction::Expire,
+                controller_bump,
+                expiry_bump,
+                4,
+            ),
+        ),
+        None,
+    )
+    .await;
+    assert!(!repeated_expiry.0, "terminal expiry replay must refuse");
+    assert_eq!(
+        account(&mut context, expiry_registration).await,
+        expired_account
+    );
+
+    eprintln!(
+        "registered terminal Direct CU: stale cancel={}, impersonated cancel={}, cancel={}, replayed cancel={}, early expiry={}, expiry={}, replayed expiry={}",
+        stale_cancel.1,
+        impersonated_cancel.1,
+        cancel.1,
+        repeated_cancel.1,
+        early_expiry.1,
+        expiry.1,
+        repeated_expiry.1,
     );
 }

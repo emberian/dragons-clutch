@@ -16,8 +16,10 @@ use dclutch_direct_codec::{
     COMPACT_INTENT_BYTES, COMPILED_DIRECT_CAPACITY_ID_V1, COMPILED_DIRECT_CHILD_SCHEMA_ID_V1,
     COMPILED_DIRECT_DERIVATION_ID_V1, COMPILED_DIRECT_RELEASE_ID_V1, CONTROLLER_INSTRUCTION_BYTES,
     CompactIntentV1, ControllerInstructionV1, REGISTERED_CLAIM_FILL_BYTES,
-    REGISTERED_CONTROLLER_INSTRUCTION_BYTES, RegisteredFillInstructionV1, RegisteredIntentStateV1,
-    registered_claim_fill_instruction,
+    REGISTERED_CLAIM_TERMINAL_BYTES, REGISTERED_CONTROLLER_INSTRUCTION_BYTES,
+    REGISTERED_TERMINAL_INSTRUCTION_BYTES, RegisteredFillInstructionV1, RegisteredIntentStateV1,
+    RegisteredTerminalAction, RegisteredTerminalInstructionV1, registered_claim_fill_instruction,
+    registered_claim_terminal_instruction,
 };
 use dclutch_direct_contract::{
     DIRECT_CAPABILITY_KIND_ID_V2, PRICE_SCALE, VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3,
@@ -165,6 +167,9 @@ pub fn process_instruction(
         CONTROLLER_INSTRUCTION_BYTES => process_inline(program_id, accounts, instruction_data),
         REGISTERED_CONTROLLER_INSTRUCTION_BYTES => {
             process_registered_fill(program_id, accounts, instruction_data)
+        }
+        REGISTERED_TERMINAL_INSTRUCTION_BYTES => {
+            process_registered_terminal(program_id, accounts, instruction_data)
         }
         _ => Err(ControllerError::AccountFrame.into()),
     }
@@ -593,6 +598,92 @@ fn process_registered_fill(
     )
 }
 
+#[inline(never)]
+fn process_registered_terminal(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    let instruction = RegisteredTerminalInstructionV1::decode(instruction_data)
+        .map_err(|_| ControllerError::Instruction)?;
+    let expected_accounts = match instruction.action {
+        RegisteredTerminalAction::Cancel => 4,
+        RegisteredTerminalAction::Expire => 3,
+    };
+    if accounts.len() != expected_accounts {
+        return Err(ControllerError::AccountFrame.into());
+    }
+    let mut iterator = accounts.iter();
+    let controller = next(&mut iterator)?;
+    let registration = next(&mut iterator)?;
+    let (maker, claim_program) = match instruction.action {
+        RegisteredTerminalAction::Cancel => (Some(next(&mut iterator)?), next(&mut iterator)?),
+        RegisteredTerminalAction::Expire => (None, next(&mut iterator)?),
+    };
+    validate_registered_terminal_frame(program_id, controller, registration, maker, claim_program)?;
+
+    let controller_bump_seed = [instruction.controller_bump];
+    let controller_seeds: [&[u8]; 2] = [CONTROLLER_SEED, &controller_bump_seed];
+    let expected_controller = Pubkey::create_program_address(&controller_seeds, program_id)
+        .map_err(|_| ControllerError::ControllerPda)?;
+    if controller.key != &expected_controller {
+        return Err(ControllerError::ControllerPda.into());
+    }
+    let state = decode_registered_state(registration, controller)?;
+    if state.phase != 0
+        || state.remaining == 0
+        || state.remaining > state.intent.maximum_fill
+        || state.intent.side > 1
+        || state.intent.lifecycle > 2
+        || state.sequence != instruction.expected_sequence
+    {
+        return Err(ControllerError::ClaimState.into());
+    }
+    match (instruction.action, maker) {
+        (RegisteredTerminalAction::Cancel, Some(maker)) => {
+            if state.maker != maker.key.to_bytes() {
+                return Err(ControllerError::Signature.into());
+            }
+        }
+        (RegisteredTerminalAction::Expire, None) => {
+            let slot = Clock::get().map_err(|_| ControllerError::Instruction)?.slot;
+            if slot <= state.intent.valid_through {
+                return Err(ControllerError::Transition.into());
+            }
+        }
+        _ => return Err(ControllerError::AccountFrame.into()),
+    }
+
+    let generation = state.intent.generation.to_le_bytes();
+    let nonce = state.intent.nonce.to_le_bytes();
+    let maker = Pubkey::new_from_array(state.maker);
+    let registration_bump_seed = [instruction.registration_bump];
+    let registration_seeds: [&[u8]; 6] = [
+        REGISTERED_SEED,
+        &state.intent.market,
+        &generation,
+        maker.as_ref(),
+        &nonce,
+        &registration_bump_seed,
+    ];
+    if registration.key
+        != &Pubkey::create_program_address(&registration_seeds, program_id)
+            .map_err(|_| ControllerError::ReplayPda)?
+    {
+        return Err(ControllerError::ReplayPda.into());
+    }
+    let claim_instruction =
+        registered_claim_terminal_instruction(instruction.action, instruction.expected_sequence)
+            .map_err(|_| ControllerError::Instruction)?;
+    invoke_registered_terminal(
+        controller,
+        registration,
+        claim_program,
+        &controller_seeds,
+        claim_instruction,
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 fn validate_account_frame(
@@ -794,6 +885,46 @@ fn validate_registered_account_frame(
         if keys.iter().skip(index + 1).any(|right| left == right) {
             return Err(ControllerError::AccountAuthority);
         }
+    }
+    Ok(())
+}
+
+fn validate_registered_terminal_frame(
+    program_id: &Pubkey,
+    controller: &AccountInfo<'_>,
+    registration: &AccountInfo<'_>,
+    maker: Option<&AccountInfo<'_>>,
+    claim_program: &AccountInfo<'_>,
+) -> Result<(), ControllerError> {
+    if controller.is_signer
+        || controller.is_writable
+        || controller.executable
+        || registration.is_signer
+        || !registration.is_writable
+        || registration.executable
+        || !readonly_executable(claim_program)
+        || registration.owner != &CLAIM_PROGRAM_ID
+        || claim_program.key != &CLAIM_PROGRAM_ID
+    {
+        return Err(ControllerError::AccountAuthority);
+    }
+    if let Some(maker) = maker {
+        if !maker.is_signer || maker.is_writable || maker.executable {
+            return Err(ControllerError::AccountAuthority);
+        }
+        if maker.key == controller.key
+            || maker.key == registration.key
+            || maker.key == claim_program.key
+        {
+            return Err(ControllerError::AccountAuthority);
+        }
+    }
+    if controller.key == registration.key
+        || controller.key == claim_program.key
+        || registration.key == claim_program.key
+        || registration.owner == program_id
+    {
+        return Err(ControllerError::AccountAuthority);
     }
     Ok(())
 }
@@ -1392,6 +1523,31 @@ fn invoke_registered_claim<'info>(
             buyer_registration.clone(),
             seller_position.clone(),
             buyer_position.clone(),
+            claim_program.clone(),
+        ],
+        &[controller_seeds],
+    )
+}
+
+fn invoke_registered_terminal<'info>(
+    controller: &AccountInfo<'info>,
+    registration: &AccountInfo<'info>,
+    claim_program: &AccountInfo<'info>,
+    controller_seeds: &[&[u8]],
+    instruction: [u8; REGISTERED_CLAIM_TERMINAL_BYTES],
+) -> ProgramResult {
+    invoke_signed(
+        &Instruction {
+            program_id: CLAIM_PROGRAM_ID,
+            accounts: std::vec![
+                AccountMeta::new_readonly(*controller.key, true),
+                AccountMeta::new(*registration.key, false),
+            ],
+            data: instruction.to_vec(),
+        },
+        &[
+            controller.clone(),
+            registration.clone(),
             claim_program.clone(),
         ],
         &[controller_seeds],
