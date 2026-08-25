@@ -16,7 +16,7 @@ use dclutch_core_contract::ContentId;
 use dclutch_release_set_contract::{
     CAPABILITY_EXECUTION_SELECTION_BYTES_V1, CapabilityExecutionSelectionV1,
 };
-use dclutch_transition_vm::{Registers, execute, validate_program};
+use dclutch_transition_vm::v2::{ProgramV2, RegisterInput, RegisterOutput, execute_atomic};
 
 #[rustfmt::skip]
 #[allow(missing_docs)]
@@ -62,7 +62,7 @@ pub const CAPABILITY_ACTIVATION_EFFECT_SCHEMA_ID_V1: [u8; 32] = [
 /// Exact PDA domain for every immutable common Trading child root.
 pub const CAPABILITY_ROOT_PDA_DOMAIN_V1: &[u8] = b"dclutch:capability-root:v1";
 /// Exact maximum descriptor rent under pinned Solana `Rent::default()`.
-pub const CAPABILITY_PROGRAM_MAX_RENT_LAMPORTS_V1: u64 = 10_022_400;
+pub const CAPABILITY_PROGRAM_MAX_RENT_LAMPORTS_V1: u64 = 9_966_720;
 
 const _: () = assert!(CAPABILITY_ROOT_PDA_DOMAIN_V1.len() <= 32);
 
@@ -98,6 +98,28 @@ pub enum Error {
 /// Result alias for capability-program operations.
 pub type Result<T> = core::result::Result<T, Error>;
 
+/// Caller-owned runtime-width banks for one atomic ProgramV2 execution.
+pub struct CapabilityRegistersV2<'a> {
+    input: RegisterInput<'a>,
+    scratch: RegisterOutput<'a>,
+    output: RegisterOutput<'a>,
+}
+
+impl<'a> CapabilityRegistersV2<'a> {
+    /// Construct one exact input/scratch/output projection.
+    pub const fn new(
+        input: RegisterInput<'a>,
+        scratch: RegisterOutput<'a>,
+        output: RegisterOutput<'a>,
+    ) -> Self {
+        Self {
+            input,
+            scratch,
+            output,
+        }
+    }
+}
+
 /// Borrowed typed view of one finalized data-defined capability program.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CapabilityProgramV1<'a> {
@@ -110,7 +132,7 @@ pub struct CapabilityProgramV1<'a> {
     capacity_profile: ContentId,
     effect_schema: ContentId,
     root_state_bytes: u32,
-    transition_program: &'a [u8],
+    transition_program: ProgramV2<'a>,
 }
 
 impl<'a> CapabilityProgramV1<'a> {
@@ -134,7 +156,7 @@ impl<'a> CapabilityProgramV1<'a> {
         {
             return Err(Error::UnsupportedSchema);
         }
-        if read_u16(bytes, CAPABILITY_PROGRAM_PROFILE_OFFSET)? != CAPABILITY_PROGRAM_PROFILE_V1 {
+        if read_u16(bytes, CAPABILITY_PROGRAM_PROFILE_OFFSET)? != CAPABILITY_PROGRAM_PROFILE_V2 {
             return Err(Error::UnsupportedArtifactProfile);
         }
         require_zero(bytes, CAPABILITY_PROGRAM_RESERVED_OFFSET, 4)?;
@@ -146,14 +168,12 @@ impl<'a> CapabilityProgramV1<'a> {
         {
             return Err(Error::InvalidRootStateBytes);
         }
-        let transition_program = bytes
-            .get(CAPABILITY_PROGRAM_HEADER_BYTES_V1..)
-            .ok_or(Error::InvalidLength)?;
-        let count =
-            validate_program(transition_program).map_err(|_| Error::InvalidTransitionProgram)?;
-        if count == 0 {
-            return Err(Error::InvalidTransitionProgram);
-        }
+        let transition_program = ProgramV2::decode(
+            bytes
+                .get(CAPABILITY_PROGRAM_HEADER_BYTES_V1..)
+                .ok_or(Error::InvalidLength)?,
+        )
+        .map_err(|_| Error::InvalidTransitionProgram)?;
         Ok(Self {
             kind: content(bytes, CAPABILITY_PROGRAM_KIND_OFFSET)?,
             config_schema: content(bytes, CAPABILITY_PROGRAM_CONFIG_SCHEMA_OFFSET)?,
@@ -205,9 +225,15 @@ impl<'a> CapabilityProgramV1<'a> {
         }
     }
 
-    /// Execute the descriptor's checked transition over authenticated registers.
-    pub fn execute(self, registers: &mut Registers) -> Result<()> {
-        execute(self.transition_program, registers).map_err(|_| Error::TransitionRefused)
+    /// Execute the descriptor's ProgramV2 transition over runtime-width banks.
+    pub fn execute(self, registers: CapabilityRegistersV2<'_>) -> Result<()> {
+        execute_atomic(
+            self.transition_program,
+            registers.input,
+            registers.scratch,
+            registers.output,
+        )
+        .map_err(|_| Error::TransitionRefused)
     }
 
     /// Return the selected capability kind.
@@ -251,7 +277,7 @@ impl<'a> CapabilityProgramV1<'a> {
         root_account_bytes(self)
     }
     /// Borrow the canonical transition program.
-    pub const fn transition_program(self) -> &'a [u8] {
+    pub const fn transition_program(self) -> ProgramV2<'a> {
         self.transition_program
     }
 }
@@ -620,26 +646,30 @@ mod tests {
     }
 
     fn program_bytes(instruction_count: usize) -> Vec<u8> {
-        let mut bytes = vec![0_u8; 8 + instruction_count * 16];
+        let mut bytes = vec![0_u8; 16 + instruction_count * 24];
         fixture_write(&mut bytes, 0, b"DCTV");
-        fixture_set(&mut bytes, 4, 1);
-        fixture_set(
+        fixture_set(&mut bytes, 4, 2);
+        fixture_write(
             &mut bytes,
-            5,
-            u8::try_from(instruction_count).expect("profile count"),
+            6,
+            &u16::try_from(instruction_count)
+                .expect("profile count")
+                .to_le_bytes(),
         );
+        fixture_write(&mut bytes, 8, &300_u16.to_le_bytes());
+        fixture_write(&mut bytes, 10, &1_u16.to_le_bytes());
         for index in 0..instruction_count {
-            let offset = 8 + index * 16;
+            let offset = 16 + index * 24;
             fixture_set(&mut bytes, offset, 0);
-            fixture_set(
+            fixture_write(
                 &mut bytes,
-                offset + 1,
-                u8::try_from(index % 64).expect("register"),
+                offset + 2,
+                &u16::try_from(index % 300).expect("register").to_le_bytes(),
             );
             fixture_write(
                 &mut bytes,
-                offset + 8,
-                &u64::try_from(index).expect("immediate").to_le_bytes(),
+                offset + 16,
+                &u64::try_from(index + 1).expect("immediate").to_le_bytes(),
             );
         }
         bytes
@@ -650,7 +680,11 @@ mod tests {
         let mut bytes = vec![0_u8; CAPABILITY_PROGRAM_HEADER_BYTES_V1 + transition.len()];
         fixture_write(&mut bytes, 0, &CAPABILITY_PROGRAM_MAGIC_V1);
         fixture_write(&mut bytes, 8, &1_u16.to_le_bytes());
-        fixture_write(&mut bytes, 10, &1_u16.to_le_bytes());
+        fixture_write(
+            &mut bytes,
+            CAPABILITY_PROGRAM_PROFILE_OFFSET,
+            &CAPABILITY_PROGRAM_PROFILE_V2.to_le_bytes(),
+        );
         for (offset, byte) in [
             (CAPABILITY_PROGRAM_KIND_OFFSET, 1),
             (CAPABILITY_PROGRAM_CONFIG_SCHEMA_OFFSET, 2),
@@ -702,7 +736,9 @@ mod tests {
             .expect("join");
         assert_eq!(decoded.kind(), id(1));
         assert_eq!(decoded.root_state_bytes(), 128);
-        assert_eq!(decoded.transition_program(), program_bytes(1));
+        assert_eq!(decoded.transition_program().bytes(), program_bytes(1));
+        assert_eq!(decoded.transition_program().scalar_count(), 300);
+        assert_eq!(decoded.transition_program().identity_count(), 1);
         let supported = SupportedContentV1 {
             config_schema: id(2),
             request_schema: id(3),
@@ -712,15 +748,52 @@ mod tests {
             effect_schema: id(8),
         };
         supported.require(decoded).expect("supported content");
-        let mut registers = Registers::zeroed();
-        decoded.execute(&mut registers).expect("transition");
+        let input_scalars = vec![0_u64; 300];
+        let input_identities = vec![[0_u8; 32]; 1];
+        let mut scratch_scalars = vec![0_u64; 300];
+        let mut scratch_identities = vec![[0_u8; 32]; 1];
+        let mut output_scalars = vec![0_u64; 300];
+        let mut output_identities = vec![[0_u8; 32]; 1];
+        decoded
+            .execute(CapabilityRegistersV2::new(
+                RegisterInput {
+                    scalars: &input_scalars,
+                    identities: &input_identities,
+                },
+                RegisterOutput {
+                    scalars: &mut scratch_scalars,
+                    identities: &mut scratch_identities,
+                },
+                RegisterOutput {
+                    scalars: &mut output_scalars,
+                    identities: &mut output_identities,
+                },
+            ))
+            .expect("transition");
+        assert_eq!(output_scalars.first(), Some(&1));
     }
 
     #[test]
     fn maximum_descriptor_width_is_exact_and_decodable() {
-        let bytes = descriptor(64);
+        let bytes = descriptor(CAPABILITY_PROGRAM_TRANSITION_MAX_INSTRUCTIONS_V2);
+        assert_eq!(CAPABILITY_PROGRAM_MAX_BYTES_V1, 1_304);
         assert_eq!(bytes.len(), CAPABILITY_PROGRAM_MAX_BYTES_V1);
         assert!(CapabilityProgramV1::decode(&bytes).is_ok());
+
+        let direct_shaped = descriptor(35);
+        assert_eq!(
+            direct_shaped.len() - CAPABILITY_PROGRAM_HEADER_BYTES_V1,
+            856
+        );
+        assert_eq!(direct_shaped.len(), 1_136);
+        assert!(CapabilityProgramV1::decode(&direct_shaped).is_ok());
+
+        assert_eq!(
+            CapabilityProgramV1::decode(&descriptor(
+                CAPABILITY_PROGRAM_TRANSITION_MAX_INSTRUCTIONS_V2 + 1
+            )),
+            Err(Error::InvalidLength)
+        );
     }
 
     #[test]
@@ -762,6 +835,17 @@ mod tests {
             effect_schema: id(8),
         };
         assert_eq!(unsupported.require(decoded), Err(Error::UnsupportedContent));
+
+        let mut legacy_fixed_bank_body = canonical.clone();
+        fixture_set(
+            &mut legacy_fixed_bank_body,
+            CAPABILITY_PROGRAM_HEADER_BYTES_V1 + 4,
+            1,
+        );
+        assert_eq!(
+            CapabilityProgramV1::decode(&legacy_fixed_bank_body),
+            Err(Error::InvalidTransitionProgram)
+        );
 
         let mut zero_state = canonical;
         fixture_fill(

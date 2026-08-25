@@ -3,7 +3,8 @@
 use dclutch_capability_contract::{CapabilityEntryV1, CapabilityManifestV1};
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_ACCOUNT_MAX_BYTES_V1, CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityProgramV1,
-    CapabilityRootHeaderV1, Error as CapabilityProgramError, SupportedContentV1,
+    CapabilityRegistersV2, CapabilityRootHeaderV1, Error as CapabilityProgramError,
+    SupportedContentV1,
 };
 use dclutch_core_contract::ContentId;
 use dclutch_market_core_codec::{
@@ -13,7 +14,6 @@ use dclutch_registry_svm::AuthenticatedRoleReceiptV1;
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, CapabilityExecutionSelectionV1, ExecutionRoleV1,
 };
-use dclutch_transition_vm::Registers;
 use solana_program::{hash::hash, pubkey::Pubkey};
 
 use crate::TradingSbfError;
@@ -345,7 +345,7 @@ pub fn dispatch_activation_authenticated<'descriptor>(
     descriptor_bytes: &'descriptor [u8],
     config_bytes: &[u8],
     supported: SupportedContentV1,
-    registers: &mut Registers,
+    registers: CapabilityRegistersV2<'_>,
 ) -> Result<CapabilityProgramV1<'descriptor>, TradingSbfError> {
     let selection = context.selection();
     if hash(manifest_bytes).to_bytes() != selection.manifest().to_bytes() {
@@ -381,7 +381,7 @@ pub fn dispatch_hot_authenticated<'descriptor>(
     descriptor_bytes: &'descriptor [u8],
     config_bytes: &[u8],
     supported: SupportedContentV1,
-    registers: &mut Registers,
+    registers: CapabilityRegistersV2<'_>,
 ) -> Result<CapabilityProgramV1<'descriptor>, TradingSbfError> {
     let descriptor =
         authenticate_common_content(context, descriptor_bytes, config_bytes, supported)?;
@@ -460,8 +460,10 @@ mod tests {
         CAPABILITY_PROGRAM_EFFECT_SCHEMA_OFFSET, CAPABILITY_PROGRAM_HEADER_BYTES_V1,
         CAPABILITY_PROGRAM_KIND_OFFSET, CAPABILITY_PROGRAM_MAGIC_V1,
         CAPABILITY_PROGRAM_MAX_BYTES_V1, CAPABILITY_PROGRAM_MAX_RENT_LAMPORTS_V1,
+        CAPABILITY_PROGRAM_PROFILE_OFFSET, CAPABILITY_PROGRAM_PROFILE_V2,
         CAPABILITY_PROGRAM_REQUEST_SCHEMA_OFFSET, CAPABILITY_PROGRAM_ROOT_SCHEMA_OFFSET,
-        CAPABILITY_PROGRAM_ROOT_STATE_BYTES_OFFSET, CAPABILITY_ROOT_HEADER_BYTES_V1,
+        CAPABILITY_PROGRAM_ROOT_STATE_BYTES_OFFSET,
+        CAPABILITY_PROGRAM_TRANSITION_MAX_INSTRUCTIONS_V2, CAPABILITY_ROOT_HEADER_BYTES_V1,
         initialize_root_account_v1,
     };
     use dclutch_market_core_codec::{
@@ -473,6 +475,7 @@ mod tests {
     };
     use dclutch_release_set_contract::CAPABILITY_EXECUTION_SELECTION_BYTES_V1;
     use dclutch_release_set_contract::{ArtifactReleaseIdV1, ProgramIdentityV1};
+    use dclutch_transition_vm::v2::{RegisterInput, RegisterOutput};
     use solana_hash::Hash;
     use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
     use solana_program::instruction::{AccountMeta, Instruction};
@@ -525,10 +528,14 @@ mod tests {
     }
 
     fn descriptor_bytes() -> vec::Vec<u8> {
-        let mut bytes = vec![0_u8; CAPABILITY_PROGRAM_HEADER_BYTES_V1 + 24];
+        let mut bytes = vec![0_u8; CAPABILITY_PROGRAM_HEADER_BYTES_V1 + 40];
         fixture_write(&mut bytes, 0, &CAPABILITY_PROGRAM_MAGIC_V1);
         fixture_write(&mut bytes, 8, &1_u16.to_le_bytes());
-        fixture_write(&mut bytes, 10, &1_u16.to_le_bytes());
+        fixture_write(
+            &mut bytes,
+            CAPABILITY_PROGRAM_PROFILE_OFFSET,
+            &CAPABILITY_PROGRAM_PROFILE_V2.to_le_bytes(),
+        );
         for (offset, byte) in [
             (CAPABILITY_PROGRAM_KIND_OFFSET, 1),
             (CAPABILITY_PROGRAM_CONFIG_SCHEMA_OFFSET, 2),
@@ -548,10 +555,81 @@ mod tests {
         );
         let program = CAPABILITY_PROGRAM_HEADER_BYTES_V1;
         fixture_write(&mut bytes, program, b"DCTV");
-        fixture_set(&mut bytes, program + 4, 1);
-        fixture_set(&mut bytes, program + 5, 1);
-        fixture_write(&mut bytes, program + 16, &17_u64.to_le_bytes());
+        fixture_set(&mut bytes, program + 4, 2);
+        fixture_write(&mut bytes, program + 6, &1_u16.to_le_bytes());
+        fixture_write(&mut bytes, program + 8, &1_u16.to_le_bytes());
+        fixture_write(&mut bytes, program + 32, &17_u64.to_le_bytes());
         bytes
+    }
+
+    fn activation_result<'descriptor>(
+        context: TradingFamilyContextV1,
+        manifest: &[u8],
+        descriptor: &'descriptor [u8],
+        config: &[u8],
+        supported: SupportedContentV1,
+    ) -> Result<CapabilityProgramV1<'descriptor>, TradingSbfError> {
+        let input = [0_u64; 1];
+        let input_identities: [[u8; 32]; 0] = [];
+        let mut scratch = [0_u64; 1];
+        let mut scratch_identities: [[u8; 32]; 0] = [];
+        let mut output = [0_u64; 1];
+        let mut output_identities: [[u8; 32]; 0] = [];
+        dispatch_activation_authenticated(
+            context,
+            manifest,
+            descriptor,
+            config,
+            supported,
+            CapabilityRegistersV2::new(
+                RegisterInput {
+                    scalars: &input,
+                    identities: &input_identities,
+                },
+                RegisterOutput {
+                    scalars: &mut scratch,
+                    identities: &mut scratch_identities,
+                },
+                RegisterOutput {
+                    scalars: &mut output,
+                    identities: &mut output_identities,
+                },
+            ),
+        )
+    }
+
+    fn hot_result<'descriptor>(
+        context: TradingFamilyContextV1,
+        descriptor: &'descriptor [u8],
+        config: &[u8],
+        supported: SupportedContentV1,
+    ) -> Result<CapabilityProgramV1<'descriptor>, TradingSbfError> {
+        let input = [0_u64; 1];
+        let input_identities: [[u8; 32]; 0] = [];
+        let mut scratch = [0_u64; 1];
+        let mut scratch_identities: [[u8; 32]; 0] = [];
+        let mut output = [0_u64; 1];
+        let mut output_identities: [[u8; 32]; 0] = [];
+        dispatch_hot_authenticated(
+            context,
+            descriptor,
+            config,
+            supported,
+            CapabilityRegistersV2::new(
+                RegisterInput {
+                    scalars: &input,
+                    identities: &input_identities,
+                },
+                RegisterOutput {
+                    scalars: &mut scratch,
+                    identities: &mut scratch_identities,
+                },
+                RegisterOutput {
+                    scalars: &mut output,
+                    identities: &mut output_identities,
+                },
+            ),
+        )
     }
 
     fn canonical_dispatch_fixture() -> (
@@ -628,18 +706,11 @@ mod tests {
     #[test]
     fn descriptor_hash_is_the_manifest_release_authority() {
         let (context, manifest, descriptor, config, supported) = canonical_dispatch_fixture();
-        let mut registers = Registers::zeroed();
-        let admitted = dispatch_activation_authenticated(
-            context,
-            &manifest,
-            &descriptor,
-            &config,
-            supported,
-            &mut registers,
-        )
-        .expect("authenticated data-defined dispatch");
+        let admitted = activation_result(context, &manifest, &descriptor, &config, supported)
+            .expect("authenticated data-defined dispatch");
         assert_eq!(admitted.kind(), id(1));
-        assert_eq!(registers.scalar(0), Ok(17));
+        assert_eq!(admitted.transition_program().instruction_count(), 1);
+        assert_eq!(admitted.transition_program().scalar_count(), 1);
 
         let mut substituted_descriptor = descriptor;
         let substituted_effect = substituted_descriptor
@@ -653,13 +724,12 @@ mod tests {
             substituted_effect,
         );
         assert_eq!(
-            dispatch_activation_authenticated(
+            activation_result(
                 context,
                 &manifest,
                 &substituted_descriptor,
                 &config,
                 supported,
-                &mut Registers::zeroed(),
             ),
             Err(TradingSbfError::Content)
         );
@@ -667,13 +737,12 @@ mod tests {
         let first = substituted_config.first().copied().expect("config byte") ^ 1;
         fixture_set(&mut substituted_config, 0, first);
         assert_eq!(
-            dispatch_activation_authenticated(
+            activation_result(
                 context,
                 &manifest,
                 &descriptor_bytes(),
                 &substituted_config,
                 supported,
-                &mut Registers::zeroed(),
             ),
             Err(TradingSbfError::Content)
         );
@@ -774,12 +843,10 @@ mod tests {
     #[test]
     fn hot_dispatch_uses_persisted_selection_without_manifest_input() {
         let (context, _manifest, descriptor, config, supported) = canonical_dispatch_fixture();
-        let mut registers = Registers::zeroed();
-        let admitted =
-            dispatch_hot_authenticated(context, &descriptor, &config, supported, &mut registers)
-                .expect("authenticated hot dispatch");
+        let admitted = hot_result(context, &descriptor, &config, supported)
+            .expect("authenticated hot dispatch");
         assert_eq!(admitted.kind(), id(1));
-        assert_eq!(registers.scalar(0), Ok(17));
+        assert_eq!(admitted.transition_program().instruction_count(), 1);
 
         let mut substituted_descriptor = descriptor;
         let byte = substituted_descriptor
@@ -793,13 +860,7 @@ mod tests {
             byte,
         );
         assert_eq!(
-            dispatch_hot_authenticated(
-                context,
-                &substituted_descriptor,
-                &config,
-                supported,
-                &mut Registers::zeroed(),
-            ),
+            hot_result(context, &substituted_descriptor, &config, supported,),
             Err(TradingSbfError::Content)
         );
 
@@ -807,20 +868,15 @@ mod tests {
         let first = substituted_config.first().copied().expect("config byte") ^ 1;
         fixture_set(&mut substituted_config, 0, first);
         assert_eq!(
-            dispatch_hot_authenticated(
-                context,
-                &descriptor_bytes(),
-                &substituted_config,
-                supported,
-                &mut Registers::zeroed(),
-            ),
+            hot_result(context, &descriptor_bytes(), &substituted_config, supported,),
             Err(TradingSbfError::Content)
         );
     }
 
     #[test]
     fn maximum_descriptor_has_exact_rent_and_bounded_record_publication() {
-        assert_eq!(CAPABILITY_PROGRAM_MAX_BYTES_V1, 1_312);
+        assert_eq!(CAPABILITY_PROGRAM_TRANSITION_MAX_INSTRUCTIONS_V2, 42);
+        assert_eq!(CAPABILITY_PROGRAM_MAX_BYTES_V1, 1_304);
         assert_eq!(
             solana_program::rent::Rent::default().minimum_balance(CAPABILITY_PROGRAM_MAX_BYTES_V1),
             CAPABILITY_PROGRAM_MAX_RENT_LAMPORTS_V1
@@ -830,7 +886,7 @@ mod tests {
         assert_eq!(CAPABILITY_PROGRAM_MAX_BYTES_V1.div_ceil(page), 2);
         assert_eq!(BEGIN_RECORD_BYTES_V1, 176);
         assert_eq!(APPEND_PAGE_HEADER_BYTES_V1 + page, 808);
-        assert_eq!(APPEND_PAGE_HEADER_BYTES_V1 + (1_312 - page), 584);
+        assert_eq!(APPEND_PAGE_HEADER_BYTES_V1 + (1_304 - page), 576);
         assert_eq!(UNIT_REQUEST_BYTES_V1, 16);
         assert_eq!(
             solana_program::rent::Rent::default()

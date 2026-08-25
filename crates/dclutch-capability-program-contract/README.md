@@ -10,12 +10,13 @@ is never instruction data and never an executable artifact-release identity.
 
 The 280-byte descriptor header binds exact kind, schema, account, derivation,
 capacity, allowed-effect content identities, and the exact mutable root-tail
-width. It is followed by one
-canonical runtime-width `DCTV` program. The profile admits 1–64 instructions,
-so the exact maximum descriptor is 1,312 bytes. Under the pinned Solana
-`Rent::default()` profile its account requires 10,022,400 rent-exempt lamports.
+width. Descriptor artifact profile 2 is followed by one canonical runtime-width
+TransitionVM `ProgramV2`; legacy V1 fixed-bank bodies fail closed. The existing
+1,312-byte finalized-record ceiling admits at most 42 V2 instructions, making
+the exact maximum canonical descriptor 1,304 bytes. Under the pinned Solana
+`Rent::default()` profile its account requires 9,966,720 rent-exempt lamports.
 The descriptor owns those semantics independently of execution strategy. The
-V1 Trading artifact interprets `DCTV`; a later checked profile could use a
+current Trading artifact interprets ProgramV2; a later checked profile could use a
 Registry-authenticated, translation-validated stateless accelerator over the
 same descriptor, while Trading remains the canonical state/effect authority.
 
@@ -30,10 +31,10 @@ compiled General/Dealer/Series list.
 
 The existing immutable-record protocol publishes that maximum in four bounded
 transactions: Begin (176 instruction bytes), Append page 0 (40 + 768), Append
-page 1 (40 + 544), and Finalize (16). Activation receives the finalized record
+page 1 (40 + 536), and Finalize (16). Activation receives the finalized record
 account, checks its raw-record owner/PDA/finalized-cursor absence and complete
 digest, and requires that digest to equal the selected `release_id`. It does
-not inline 1,312 descriptor bytes into the activation packet.
+not inline 1,304 descriptor bytes into the activation packet.
 
 One Trading-owned root account is the 232-byte immutable
 `CapabilityRootHeaderV1` followed by the descriptor-sized mutable family-state

@@ -4,10 +4,10 @@ use dclutch_capability_program_contract::{
     CAPABILITY_PROGRAM_ACCOUNT_PROFILE_OFFSET, CAPABILITY_PROGRAM_CAPACITY_PROFILE_OFFSET,
     CAPABILITY_PROGRAM_CONFIG_SCHEMA_OFFSET, CAPABILITY_PROGRAM_DERIVATION_POLICY_OFFSET,
     CAPABILITY_PROGRAM_EFFECT_SCHEMA_OFFSET, CAPABILITY_PROGRAM_HEADER_BYTES_V1,
-    CAPABILITY_PROGRAM_KIND_OFFSET, CAPABILITY_PROGRAM_MAGIC_V1,
-    CAPABILITY_PROGRAM_REQUEST_SCHEMA_OFFSET, CAPABILITY_PROGRAM_ROOT_SCHEMA_OFFSET,
-    CAPABILITY_PROGRAM_ROOT_STATE_BYTES_OFFSET, CAPABILITY_ROOT_HEADER_BYTES_V1,
-    CapabilityRootHeaderV1, initialize_root_account_v1,
+    CAPABILITY_PROGRAM_KIND_OFFSET, CAPABILITY_PROGRAM_MAGIC_V1, CAPABILITY_PROGRAM_PROFILE_OFFSET,
+    CAPABILITY_PROGRAM_PROFILE_V2, CAPABILITY_PROGRAM_REQUEST_SCHEMA_OFFSET,
+    CAPABILITY_PROGRAM_ROOT_SCHEMA_OFFSET, CAPABILITY_PROGRAM_ROOT_STATE_BYTES_OFFSET,
+    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, initialize_root_account_v1,
 };
 use dclutch_dealer_codec::{
     Action, CANDIDATE_BYTES, CandidateInput, CurveBand, CurveInput, Phase, Side, encode_candidate,
@@ -46,14 +46,19 @@ fn policy(market: [u8; 32], release: [u8; 32]) -> Policy {
 
 fn descriptor_bytes() -> Vec<u8> {
     let supported = supported_content_v2().expect("supported profile");
-    let mut transition = vec![0_u8; 24];
+    let mut transition = vec![0_u8; 40];
     put(&mut transition, 0, b"DCTV");
-    *transition.get_mut(4).expect("transition version byte") = 1;
-    *transition.get_mut(5).expect("transition opcode byte") = 1;
+    *transition.get_mut(4).expect("transition version byte") = 2;
+    put(&mut transition, 6, &1_u16.to_le_bytes());
+    put(&mut transition, 8, &1_u16.to_le_bytes());
     let mut output = vec![0_u8; CAPABILITY_PROGRAM_HEADER_BYTES_V1 + transition.len()];
     put(&mut output, 0, &CAPABILITY_PROGRAM_MAGIC_V1);
     put(&mut output, 8, &1_u16.to_le_bytes());
-    put(&mut output, 10, &1_u16.to_le_bytes());
+    put(
+        &mut output,
+        CAPABILITY_PROGRAM_PROFILE_OFFSET,
+        &CAPABILITY_PROGRAM_PROFILE_V2.to_le_bytes(),
+    );
     for (offset, value) in [
         (
             CAPABILITY_PROGRAM_KIND_OFFSET,

@@ -13,7 +13,7 @@ use dclutch_capability_contract::{
 };
 use dclutch_capability_program_contract::{
     CAPABILITY_ACTIVATION_EFFECT_SCHEMA_ID_V1, CAPABILITY_ROOT_DERIVATION_RELEASE_ID_V1,
-    CapabilityRootHeaderV1, SupportedContentV1,
+    CapabilityRegistersV2, CapabilityRootHeaderV1, SupportedContentV1,
 };
 use dclutch_general_config_contract::{
     GENERAL_ACTIVATION_REQUEST_SCHEMA_ID_V2, GENERAL_CONFIG_SCHEMA_ID_V2, GENERAL_ROOT_BYTES_V2,
@@ -21,7 +21,7 @@ use dclutch_general_config_contract::{
     GeneralConfigV2, GeneralRootV2, activate_general_owned_v2,
 };
 use dclutch_market_core_codec::{CoreEffectActionV1, CoreEffectEnvelopeV1, Identity, Role};
-use dclutch_transition_vm::Registers;
+use dclutch_transition_vm::v2::{RegisterInput, RegisterOutput};
 use solana_program::{
     hash::{hash, hashv},
     pubkey::Pubkey,
@@ -245,14 +245,14 @@ pub fn prepare_activation_authenticated(
         return Err(GeneralActivationError::Content);
     }
 
-    let mut registers = activation_registers(context, request, config, resources)?;
-    let descriptor = dispatch_activation_authenticated(
+    let descriptor = dispatch_general_transition_v2(
         context,
         manifest_bytes,
         descriptor_bytes,
         config_bytes,
-        supported_content()?,
-        &mut registers,
+        request,
+        config,
+        resources,
     )?;
     if descriptor.root_state_bytes()
         != u32::try_from(GENERAL_ROOT_BYTES_V2).map_err(|_| GeneralActivationError::Arithmetic)?
@@ -396,13 +396,64 @@ fn supported_content() -> Result<SupportedContentV1, GeneralActivationError> {
     })
 }
 
+const GENERAL_ACTIVATION_SCALARS_V2: usize = 20;
+const GENERAL_ACTIVATION_IDENTITIES_V2: usize = 8;
+
+struct GeneralActivationRegistersV2 {
+    scalars: [u64; GENERAL_ACTIVATION_SCALARS_V2],
+    identities: [[u8; 32]; GENERAL_ACTIVATION_IDENTITIES_V2],
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn dispatch_general_transition_v2<'descriptor>(
+    context: TradingFamilyContextV1,
+    manifest_bytes: &[u8],
+    descriptor_bytes: &'descriptor [u8],
+    config_bytes: &[u8],
+    request: GeneralActivationRequestV2,
+    config: GeneralConfigV2,
+    resources: GeneralActivationResourcesV2,
+) -> Result<
+    dclutch_capability_program_contract::CapabilityProgramV1<'descriptor>,
+    GeneralActivationError,
+> {
+    let registers = activation_registers(context, request, config, resources)?;
+    let mut scratch_scalars = [0_u64; GENERAL_ACTIVATION_SCALARS_V2];
+    let mut scratch_identities = [[0_u8; 32]; GENERAL_ACTIVATION_IDENTITIES_V2];
+    let mut output_scalars = [0_u64; GENERAL_ACTIVATION_SCALARS_V2];
+    let mut output_identities = [[0_u8; 32]; GENERAL_ACTIVATION_IDENTITIES_V2];
+    dispatch_activation_authenticated(
+        context,
+        manifest_bytes,
+        descriptor_bytes,
+        config_bytes,
+        supported_content()?,
+        CapabilityRegistersV2::new(
+            RegisterInput {
+                scalars: &registers.scalars,
+                identities: &registers.identities,
+            },
+            RegisterOutput {
+                scalars: &mut scratch_scalars,
+                identities: &mut scratch_identities,
+            },
+            RegisterOutput {
+                scalars: &mut output_scalars,
+                identities: &mut output_identities,
+            },
+        ),
+    )
+    .map_err(GeneralActivationError::from)
+}
+
 fn activation_registers(
     context: TradingFamilyContextV1,
     request: GeneralActivationRequestV2,
     config: GeneralConfigV2,
     resources: GeneralActivationResourcesV2,
-) -> Result<Registers, GeneralActivationError> {
-    let mut registers = Registers::zeroed();
+) -> Result<GeneralActivationRegistersV2, GeneralActivationError> {
+    let mut scalars = [0_u64; GENERAL_ACTIVATION_SCALARS_V2];
     for (index, value) in [
         (0, 1),
         (1, context.generation()),
@@ -423,10 +474,11 @@ fn activation_registers(
         (13, resources.funding_state_lamports()),
         (14, resources.rent_credit_lamports()),
     ] {
-        registers
-            .set_scalar(index, value)
-            .map_err(|_| GeneralActivationError::Content)?;
+        *scalars
+            .get_mut(index)
+            .ok_or(GeneralActivationError::Content)? = value;
     }
+    let mut identities = [[0_u8; 32]; GENERAL_ACTIVATION_IDENTITIES_V2];
     for (index, value) in [
         (0, context.market()),
         (1, context.release_set().to_bytes()),
@@ -437,11 +489,14 @@ fn activation_registers(
         (6, resources.rent_credit_key()),
         (7, context.selection().manifest().to_bytes()),
     ] {
-        registers
-            .set_identity(index, value)
-            .map_err(|_| GeneralActivationError::Content)?;
+        *identities
+            .get_mut(index)
+            .ok_or(GeneralActivationError::Content)? = value;
     }
-    Ok(registers)
+    Ok(GeneralActivationRegistersV2 {
+        scalars,
+        identities,
+    })
 }
 
 fn activation_poststate_digest(
@@ -500,7 +555,7 @@ mod tests {
         CAPABILITY_PROGRAM_CONFIG_SCHEMA_OFFSET, CAPABILITY_PROGRAM_DERIVATION_POLICY_OFFSET,
         CAPABILITY_PROGRAM_EFFECT_SCHEMA_OFFSET, CAPABILITY_PROGRAM_HEADER_BYTES_V1,
         CAPABILITY_PROGRAM_KIND_OFFSET, CAPABILITY_PROGRAM_MAGIC_V1,
-        CAPABILITY_PROGRAM_PROFILE_OFFSET, CAPABILITY_PROGRAM_PROFILE_V1,
+        CAPABILITY_PROGRAM_PROFILE_OFFSET, CAPABILITY_PROGRAM_PROFILE_V2,
         CAPABILITY_PROGRAM_REQUEST_SCHEMA_OFFSET, CAPABILITY_PROGRAM_ROOT_SCHEMA_OFFSET,
         CAPABILITY_PROGRAM_ROOT_STATE_BYTES_OFFSET, CAPABILITY_PROGRAM_SCHEMA_VERSION_OFFSET,
         CAPABILITY_PROGRAM_SCHEMA_VERSION_V1, CAPABILITY_ROOT_HEADER_BYTES_V1,
@@ -511,7 +566,7 @@ mod tests {
     use dclutch_release_set_contract::{
         ArtifactReleaseIdV1, CapabilityExecutionSelectionV1, ExecutionRoleV1, ProgramIdentityV1,
     };
-    use dclutch_transition_vm::{HEADER_BYTES, INSTRUCTION_BYTES, MAGIC, VERSION};
+    use dclutch_transition_vm::v2::{HEADER_BYTES, INSTRUCTION_BYTES, MAGIC, VERSION};
 
     use super::*;
 
@@ -550,12 +605,12 @@ mod tests {
             .copy_from_slice(value);
     }
 
-    fn instruction(opcode: u8, a: u8, b: u8, immediate: u64) -> [u8; INSTRUCTION_BYTES] {
+    fn instruction(opcode: u8, a: u16, b: u16, immediate: u64) -> [u8; INSTRUCTION_BYTES] {
         let mut encoded = [0_u8; INSTRUCTION_BYTES];
         encoded[0] = opcode;
-        encoded[1] = a;
-        encoded[2] = b;
-        encoded[8..].copy_from_slice(&immediate.to_le_bytes());
+        encoded[2..4].copy_from_slice(&a.to_le_bytes());
+        encoded[4..6].copy_from_slice(&b.to_le_bytes());
+        encoded[16..].copy_from_slice(&immediate.to_le_bytes());
         encoded
     }
 
@@ -582,8 +637,23 @@ mod tests {
         let mut program = Vec::with_capacity(HEADER_BYTES + instructions.len() * INSTRUCTION_BYTES);
         program.extend_from_slice(&MAGIC);
         program.push(VERSION);
-        program.push(u8::try_from(instructions.len()).expect("instruction count"));
-        program.extend_from_slice(&[0, 0]);
+        program.push(0);
+        program.extend_from_slice(
+            &u16::try_from(instructions.len())
+                .expect("instruction count")
+                .to_le_bytes(),
+        );
+        program.extend_from_slice(
+            &u16::try_from(GENERAL_ACTIVATION_SCALARS_V2)
+                .expect("scalar count")
+                .to_le_bytes(),
+        );
+        program.extend_from_slice(
+            &u16::try_from(GENERAL_ACTIVATION_IDENTITIES_V2)
+                .expect("identity count")
+                .to_le_bytes(),
+        );
+        program.extend_from_slice(&[0; 4]);
         for encoded in instructions {
             program.extend_from_slice(&encoded);
         }
@@ -602,7 +672,7 @@ mod tests {
         write(
             &mut descriptor,
             CAPABILITY_PROGRAM_PROFILE_OFFSET,
-            &CAPABILITY_PROGRAM_PROFILE_V1.to_le_bytes(),
+            &CAPABILITY_PROGRAM_PROFILE_V2.to_le_bytes(),
         );
         for (offset, value) in [
             (

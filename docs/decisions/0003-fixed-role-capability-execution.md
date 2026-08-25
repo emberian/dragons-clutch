@@ -158,10 +158,14 @@ packet limit; they do not merely add instruction-byte widths.
 one finalized, account-resident `CapabilityProgramV1`. Activation carries the
 descriptor account, not its bytes in instruction data. The raw-record owner,
 PDA, schema release, finalized status, complete digest, and absent staging
-cursor must all be authenticated before decoding. The V1 bounded descriptor is
-at most 1,312 bytes; the current 768-byte record-page profile publishes that
-maximum as two Append transactions rather than claiming it fits one activation
-instruction.
+cursor must all be authenticated before decoding. Descriptor schema V1's
+current artifact profile 2 admits only runtime-width TransitionVM `ProgramV2`;
+the former V1 fixed-bank body is not an alternate decode path. Under the
+existing 1,312-byte finalized-record ceiling, the 280-byte header plus V2's
+16-byte header and 24-byte instructions admits at most 42 instructions, for an
+exact maximum canonical descriptor of 1,304 bytes. The current 768-byte
+record-page profile publishes that maximum as two Append transactions rather
+than claiming it fits one activation instruction.
 
 Trading owns exactly one child-root account for the selected capability:
 

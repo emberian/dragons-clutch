@@ -57,14 +57,16 @@ any FundingState, or manifest. Aliasing wholly inside the suffix is neither
 universally accepted nor rejected here; the authenticated AccountProfile owns
 that decision.
 
-The maximum 1,312-byte `CapabilityProgramV1` is a finalized raw-record account,
-not instruction data. Its pinned default-rent balance is 10,022,400 lamports and
-the existing 768-byte record-page profile publishes it as two Append pages.
+The maximum 1,304-byte schema-V1/profile-2 `CapabilityProgramV1` is a finalized
+raw-record account, not instruction data. Its pinned default-rent balance is
+9,966,720 lamports and the existing 768-byte record-page profile publishes it
+as two Append pages. Its transition body is hostile-decoded as runtime-width
+TransitionVM `ProgramV2`; V1 fixed-bank bodies are not an alternate path.
 
 This base intentionally does not apply effects or dispatch to a family module.
 Those integrations land only with exact schema support, child authority,
 postcondition checks, commit-last persistence, and hostile rollback coverage.
-The fixed five state-owning roles and V1 interpreter are a safe release profile,
+The fixed five state-owning roles and current interpreter are a safe release profile,
 not a permanent execution-strategy ceiling. A future checked stateless
 accelerator may consume the same descriptor only through a new measured,
 Registry-authenticated profile; it does not acquire Trading state or effect

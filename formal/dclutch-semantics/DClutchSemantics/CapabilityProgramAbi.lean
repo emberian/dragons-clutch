@@ -1,6 +1,6 @@
 import DClutchSemantics.AbiSchema
 import DClutchSemantics.CapabilityExecutionAbi
-import DClutchSemantics.TransitionVM
+import DClutchSemantics.TransitionVMV2
 
 /-!
 # Data-defined capability-program and Trading child-root ABIs
@@ -21,7 +21,8 @@ open DClutch.AbiSchema
 def descriptorMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x43, 0x50, 0x52, 0x31]
 def rootMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x43, 0x52, 0x54, 0x31]
 def schemaVersion : Nat := 1
-def artifactProfile : Nat := 1
+def descriptorArtifactProfile : Nat := 2
+def rootArtifactProfile : Nat := 1
 
 inductive DescriptorField where
   | magic | schemaVersion | artifactProfile | reserved
@@ -49,9 +50,14 @@ def descriptorSchema : List (FieldSpec DescriptorField) := [
 
 def descriptorLayout : List (PlacedField DescriptorField) := specialize descriptorSchema
 def descriptorHeaderBytes : Nat := schemaWidth descriptorSchema
+def finalizedRecordMaxBytes : Nat := 1312
+def transitionMaxInstructions : Nat :=
+  (finalizedRecordMaxBytes - descriptorHeaderBytes - TransitionVMV2.Codec.headerBytes) /
+    TransitionVMV2.Codec.instructionBytes
+def transitionMaxBytes : Nat := TransitionVMV2.Codec.headerBytes +
+  transitionMaxInstructions * TransitionVMV2.Codec.instructionBytes
 def descriptorMaxBytes : Nat := descriptorHeaderBytes +
-  TransitionVM.Codec.headerBytes +
-    TransitionVM.Codec.maxInstructions * TransitionVM.Codec.instructionBytes
+  transitionMaxBytes
 def rootStateMaxBytes : Nat := 4096
 
 namespace DescriptorField
@@ -109,7 +115,11 @@ def rustName : RootField → String
 end RootField
 
 theorem descriptor_header_width_is_exact : descriptorHeaderBytes = 280 := by native_decide
-theorem descriptor_max_width_is_exact : descriptorMaxBytes = 1312 := by native_decide
+theorem transition_max_instructions_is_exact : transitionMaxInstructions = 42 := by native_decide
+theorem transition_max_width_is_exact : transitionMaxBytes = 1024 := by native_decide
+theorem descriptor_max_width_is_exact : descriptorMaxBytes = 1304 := by native_decide
+theorem descriptor_fits_finalized_record_bound :
+    descriptorMaxBytes ≤ finalizedRecordMaxBytes := by native_decide
 theorem descriptor_names_are_unique :
     (descriptorSchema.map fun field => field.name).Nodup := by native_decide
 theorem descriptor_fields_are_disjoint :
