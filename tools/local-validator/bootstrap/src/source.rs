@@ -42,9 +42,9 @@ use dclutch_record_contract::{
 };
 use dclutch_source_contract::{
     CapacityEnvelope as SourceCapacityEnvelope, ContentId as SourceContentId,
-    PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1, ProviderReleaseV1, PythAdapterConfigV1,
-    SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V1, SourceCapacityProfileV1, SourceMaterialViewV1,
-    SourceResolutionPhaseV1, SourceResolutionStateV1,
+    NORMALIZED_EVIDENCE_BYTES, PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1, ProviderReleaseV1,
+    PythAdapterConfigV1, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V1, SourceCapacityProfileV1,
+    SourceMaterialViewV1, SourceResolutionPhaseV1, SourceResolutionStateV1,
 };
 use serde::Serialize;
 use sha2::Digest;
@@ -181,7 +181,7 @@ pub(super) fn execute_integrated_source(
         0,
         source_id(b"dclutch/local-validator/pyth-source-verifier/v1")?,
         source_id(b"dclutch/local-validator/pyth-source-measurement/v1")?,
-        134,
+        u32::try_from(NORMALIZED_EVIDENCE_BYTES)?,
         0,
     )
     .map_err(|error| BootstrapError(format!("invalid Source capacity: {error:?}")))?;
@@ -1354,5 +1354,14 @@ mod tests {
             .staging_liveness_policy(1)
             .expect("positive cleanup bounty");
         assert!(profile.validates_staging_liveness_policy(liveness, 1));
+    }
+
+    #[test]
+    fn source_capacity_measures_normalized_evidence_not_provider_account() {
+        assert_eq!(NORMALIZED_EVIDENCE_BYTES, 208);
+        assert_ne!(
+            NORMALIZED_EVIDENCE_BYTES,
+            dclutch_pyth_svm::FULL_PRICE_UPDATE_V2_LEN
+        );
     }
 }
