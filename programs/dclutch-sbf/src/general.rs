@@ -100,91 +100,149 @@ fn dispatch_width<const N: usize>(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> Result<(), ProgramError> {
-    let instruction = Box::new(
-        GeneralInstructionV1::<N>::decode(instruction_data)
-            .map_err(|_| AdapterError::InvalidInstruction)?,
-    );
-    let tag = instruction.tag();
+    let tag = GeneralInstructionV1::<N>::decode_tag(instruction_data)
+        .map_err(|_| AdapterError::InvalidInstruction)?;
     validate_contract_frame(tag, accounts)?;
-    match instruction.as_ref() {
-        GeneralInstructionV1::Activate(instruction) => {
-            process_activate::<N>(program_id, accounts, *instruction)
-        }
-        GeneralInstructionV1::OpenBatch(replay) => process_open_batch::<N>(
+    match tag {
+        GeneralInstructionTagV1::Activate => process_activate::<N>(
             program_id,
             accounts,
-            replay.generation,
-            replay.batch_sequence,
+            GeneralInstructionV1::<N>::decode_activate(instruction_data)
+                .map_err(|_| AdapterError::InvalidInstruction)?,
         ),
-        GeneralInstructionV1::LockBatch(replay) => process_lock_batch(
-            program_id,
-            accounts,
-            replay.generation,
-            replay.batch_sequence,
-        ),
-        GeneralInstructionV1::AdmitOrder(order) => process_admit_order(program_id, accounts, order),
-        GeneralInstructionV1::CancelOrder(order) => {
-            process_release_order(program_id, accounts, order, true)
+        GeneralInstructionTagV1::OpenBatch | GeneralInstructionTagV1::LockBatch => {
+            let replay = GeneralInstructionV1::<N>::decode_batch_replay(instruction_data, tag)
+                .map_err(|_| AdapterError::InvalidInstruction)?;
+            if tag == GeneralInstructionTagV1::OpenBatch {
+                process_open_batch::<N>(
+                    program_id,
+                    accounts,
+                    replay.generation,
+                    replay.batch_sequence,
+                )
+            } else {
+                process_lock_batch(
+                    program_id,
+                    accounts,
+                    replay.generation,
+                    replay.batch_sequence,
+                )
+            }
         }
-        GeneralInstructionV1::CloseOrder(order) => {
-            process_release_order(program_id, accounts, order, false)
+        GeneralInstructionTagV1::AdmitOrder
+        | GeneralInstructionTagV1::CancelOrder
+        | GeneralInstructionTagV1::CloseOrder => {
+            let order = GeneralInstructionV1::<N>::decode_order(instruction_data, tag)
+                .map_err(|_| AdapterError::InvalidInstruction)?;
+            match tag {
+                GeneralInstructionTagV1::AdmitOrder => {
+                    process_admit_order(program_id, accounts, &order)
+                }
+                GeneralInstructionTagV1::CancelOrder => {
+                    process_release_order(program_id, accounts, &order, true)
+                }
+                GeneralInstructionTagV1::CloseOrder => {
+                    process_release_order(program_id, accounts, &order, false)
+                }
+                _ => Err(AdapterError::InvalidInstruction.into()),
+            }
         }
-        GeneralInstructionV1::SubmitCandidate(instruction) => {
-            process_submit_candidate(program_id, accounts, instruction)
+        GeneralInstructionTagV1::SubmitCandidate => {
+            let instruction =
+                GeneralInstructionV1::<N>::decode_candidate_submission(instruction_data)
+                    .map_err(|_| AdapterError::InvalidInstruction)?;
+            process_submit_candidate(program_id, accounts, &instruction)
         }
-        GeneralInstructionV1::CreateCandidatePage(instruction) => {
-            process_create_candidate_page(program_id, accounts, instruction)
+        GeneralInstructionTagV1::CreateCandidatePage => {
+            let instruction = Box::new(
+                GeneralInstructionV1::<N>::decode_candidate_page_creation(instruction_data)
+                    .map_err(|_| AdapterError::InvalidInstruction)?,
+            );
+            process_create_candidate_page(program_id, accounts, instruction.as_ref())
         }
-        GeneralInstructionV1::VerifyCandidatePage(reference) => {
-            process_verify_candidate_page::<N>(program_id, accounts, *reference)
+        GeneralInstructionTagV1::VerifyCandidatePage
+        | GeneralInstructionTagV1::CollectSettlementPage
+        | GeneralInstructionTagV1::DistributeSettlementPage
+        | GeneralInstructionTagV1::CloseCandidatePage => {
+            let reference =
+                GeneralInstructionV1::<N>::decode_candidate_page_reference(instruction_data, tag)
+                    .map_err(|_| AdapterError::InvalidInstruction)?;
+            match tag {
+                GeneralInstructionTagV1::VerifyCandidatePage => {
+                    process_verify_candidate_page::<N>(program_id, accounts, reference)
+                }
+                GeneralInstructionTagV1::CollectSettlementPage => {
+                    process_collect_settlement_page::<N>(program_id, accounts, reference)
+                }
+                GeneralInstructionTagV1::DistributeSettlementPage => {
+                    process_distribute_settlement_page::<N>(program_id, accounts, reference)
+                }
+                GeneralInstructionTagV1::CloseCandidatePage => {
+                    process_close_candidate_page::<N>(program_id, accounts, reference)
+                }
+                _ => Err(AdapterError::InvalidInstruction.into()),
+            }
         }
-        GeneralInstructionV1::FinishCandidate(candidate_id) => {
-            process_finish_candidate::<N>(program_id, accounts, *candidate_id)
+        GeneralInstructionTagV1::FinishCandidate
+        | GeneralInstructionTagV1::ConsiderCandidate
+        | GeneralInstructionTagV1::BeginSettlement
+        | GeneralInstructionTagV1::MaterializeSettlement
+        | GeneralInstructionTagV1::FinishSettlement
+        | GeneralInstructionTagV1::CloseCandidate
+        | GeneralInstructionTagV1::CloseSettlement
+        | GeneralInstructionTagV1::RejectCandidate
+        | GeneralInstructionTagV1::ExpireSettlement => {
+            let candidate_id =
+                GeneralInstructionV1::<N>::decode_candidate_id(instruction_data, tag)
+                    .map_err(|_| AdapterError::InvalidInstruction)?;
+            match tag {
+                GeneralInstructionTagV1::FinishCandidate => {
+                    process_finish_candidate::<N>(program_id, accounts, candidate_id)
+                }
+                GeneralInstructionTagV1::ConsiderCandidate => {
+                    process_consider_candidate::<N>(program_id, accounts, candidate_id)
+                }
+                GeneralInstructionTagV1::BeginSettlement => {
+                    process_begin_settlement::<N>(program_id, accounts, candidate_id)
+                }
+                GeneralInstructionTagV1::MaterializeSettlement => {
+                    process_materialize_settlement::<N>(program_id, accounts, candidate_id)
+                }
+                GeneralInstructionTagV1::FinishSettlement => {
+                    process_finish_settlement::<N>(program_id, accounts, candidate_id)
+                }
+                GeneralInstructionTagV1::CloseCandidate => {
+                    process_close_candidate::<N>(program_id, accounts, candidate_id)
+                }
+                GeneralInstructionTagV1::CloseSettlement => {
+                    process_close_settlement::<N>(program_id, accounts, candidate_id)
+                }
+                GeneralInstructionTagV1::RejectCandidate => {
+                    process_reject_candidate::<N>(program_id, accounts, candidate_id)
+                }
+                GeneralInstructionTagV1::ExpireSettlement => {
+                    process_expire_settlement::<N>(program_id, accounts, candidate_id)
+                }
+                _ => Err(AdapterError::InvalidInstruction.into()),
+            }
         }
-        GeneralInstructionV1::ConsiderCandidate(candidate_id) => {
-            process_consider_candidate::<N>(program_id, accounts, *candidate_id)
+        GeneralInstructionTagV1::LockSelection | GeneralInstructionTagV1::CloseBatch => {
+            let replay = GeneralInstructionV1::<N>::decode_batch_replay(instruction_data, tag)
+                .map_err(|_| AdapterError::InvalidInstruction)?;
+            if tag == GeneralInstructionTagV1::LockSelection {
+                process_lock_selection(program_id, accounts, replay)
+            } else {
+                process_close_batch(program_id, accounts, replay)
+            }
         }
-        GeneralInstructionV1::LockSelection(replay) => {
-            process_lock_selection(program_id, accounts, *replay)
-        }
-        GeneralInstructionV1::CloseCandidatePage(reference) => {
-            process_close_candidate_page::<N>(program_id, accounts, *reference)
-        }
-        GeneralInstructionV1::RejectCandidate(candidate_id) => {
-            process_reject_candidate::<N>(program_id, accounts, *candidate_id)
-        }
-        GeneralInstructionV1::ExpireSettlement(candidate_id) => {
-            process_expire_settlement::<N>(program_id, accounts, *candidate_id)
-        }
-        GeneralInstructionV1::CloseCandidate(candidate_id) => {
-            process_close_candidate::<N>(program_id, accounts, *candidate_id)
-        }
-        GeneralInstructionV1::CloseBatch(replay) => {
-            process_close_batch(program_id, accounts, *replay)
-        }
-        GeneralInstructionV1::BeginSettlement(candidate_id) => {
-            process_begin_settlement::<N>(program_id, accounts, *candidate_id)
-        }
-        GeneralInstructionV1::CollectSettlementPage(reference) => {
-            process_collect_settlement_page::<N>(program_id, accounts, *reference)
-        }
-        GeneralInstructionV1::MaterializeSettlement(candidate_id) => {
-            process_materialize_settlement::<N>(program_id, accounts, *candidate_id)
-        }
-        GeneralInstructionV1::DistributeSettlementPage(reference) => {
-            process_distribute_settlement_page::<N>(program_id, accounts, *reference)
-        }
-        GeneralInstructionV1::FinishSettlement(candidate_id) => {
-            process_finish_settlement::<N>(program_id, accounts, *candidate_id)
-        }
-        GeneralInstructionV1::CloseSettlement(candidate_id) => {
-            process_close_settlement::<N>(program_id, accounts, *candidate_id)
-        }
-        GeneralInstructionV1::Quiesce(generation) => {
-            process_quiesce(program_id, accounts, *generation)
-        }
-        GeneralInstructionV1::CloseGeneral(generation) => {
-            process_close_general::<N>(program_id, accounts, *generation)
+        GeneralInstructionTagV1::Quiesce | GeneralInstructionTagV1::CloseGeneral => {
+            let generation = GeneralInstructionV1::<N>::decode_generation(instruction_data, tag)
+                .map_err(|_| AdapterError::InvalidInstruction)?;
+            if tag == GeneralInstructionTagV1::Quiesce {
+                process_quiesce(program_id, accounts, generation)
+            } else {
+                process_close_general::<N>(program_id, accounts, generation)
+            }
         }
     }
 }

@@ -860,6 +860,62 @@ fn exact_state_and_wire_widths_have_no_max_padding() {
 }
 
 #[test]
+fn typed_instruction_decoders_preserve_exact_wire_authority() {
+    let reference = GeneralCandidatePageV1 {
+        candidate_id: id(40),
+        page_id: id(50),
+    };
+    let instruction = GeneralInstructionV1::<2>::CollectSettlementPage(reference);
+    let mut wire = vec![0; instruction.encoded_len().unwrap()];
+    instruction.encode(&mut wire).unwrap();
+    assert_eq!(
+        GeneralInstructionV1::<2>::decode_tag(&wire),
+        Ok(GeneralInstructionTagV1::CollectSettlementPage)
+    );
+    assert_eq!(
+        GeneralInstructionV1::<2>::decode_candidate_page_reference(
+            &wire,
+            GeneralInstructionTagV1::CollectSettlementPage,
+        ),
+        Ok(reference)
+    );
+    assert_eq!(
+        GeneralInstructionV1::<2>::decode_candidate_page_reference(
+            &wire,
+            GeneralInstructionTagV1::VerifyCandidatePage,
+        ),
+        Err(Error::UnknownAction)
+    );
+    wire.push(0);
+    assert_eq!(
+        GeneralInstructionV1::<2>::decode_candidate_page_reference(
+            &wire,
+            GeneralInstructionTagV1::CollectSettlementPage,
+        ),
+        Err(Error::InvalidLength)
+    );
+
+    let stored_page = page();
+    let creation = CreateGeneralCandidatePageV1 {
+        candidate_id: id(60),
+        page_id: page_id(stored_page),
+        page: stored_page,
+    };
+    let instruction = GeneralInstructionV1::<2>::CreateCandidatePage(creation);
+    let mut wire = vec![0; instruction.encoded_len().unwrap()];
+    instruction.encode(&mut wire).unwrap();
+    assert_eq!(
+        GeneralInstructionV1::<2>::decode_candidate_page_creation(&wire),
+        Ok(creation)
+    );
+    wire[10] = GeneralInstructionTagV1::SubmitCandidate as u8;
+    assert_eq!(
+        GeneralInstructionV1::<2>::decode_candidate_page_creation(&wire),
+        Err(Error::UnknownAction)
+    );
+}
+
+#[test]
 fn hostile_reserved_substitution_and_child_saturation_refuse() {
     let mut config_bytes = config().to_bytes();
     config_bytes[168] = 1;

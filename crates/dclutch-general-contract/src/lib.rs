@@ -808,26 +808,170 @@ pub enum GeneralInstructionV1<const N: usize> {
 }
 
 impl<const N: usize> GeneralInstructionV1<N> {
+    /// Decode only the exact action tag after authenticating the common header.
+    pub fn decode_tag(bytes: &[u8]) -> Result<GeneralInstructionTagV1> {
+        validate_instruction_header::<N>(bytes)?;
+        GeneralInstructionTagV1::decode(read_u8(bytes, 10)?)
+    }
+
+    /// Decode the exact activation payload without constructing the maximum instruction enum.
+    pub fn decode_activate(bytes: &[u8]) -> Result<ActivateGeneralV1> {
+        require_instruction_tag::<N>(bytes, GeneralInstructionTagV1::Activate)?;
+        exact_len(bytes, GENERAL_INSTRUCTION_HEADER_BYTES + 8)?;
+        Ok(ActivateGeneralV1 {
+            expected_market_child_count: read_u64(bytes, GENERAL_INSTRUCTION_HEADER_BYTES)?,
+        })
+    }
+
+    /// Decode one exact generation/batch replay payload for `expected`.
+    pub fn decode_batch_replay(
+        bytes: &[u8],
+        expected: GeneralInstructionTagV1,
+    ) -> Result<GeneralBatchReplayV1> {
+        if !matches!(
+            expected,
+            GeneralInstructionTagV1::OpenBatch
+                | GeneralInstructionTagV1::LockBatch
+                | GeneralInstructionTagV1::LockSelection
+                | GeneralInstructionTagV1::CloseBatch
+        ) {
+            return Err(Error::UnknownAction);
+        }
+        require_instruction_tag::<N>(bytes, expected)?;
+        exact_len(bytes, GENERAL_INSTRUCTION_HEADER_BYTES + 16)?;
+        Ok(GeneralBatchReplayV1 {
+            generation: read_u64(bytes, GENERAL_INSTRUCTION_HEADER_BYTES)?,
+            batch_sequence: read_u64(bytes, GENERAL_INSTRUCTION_HEADER_BYTES + 8)?,
+        })
+    }
+
+    /// Decode one exact order payload for an order lifecycle action.
+    pub fn decode_order(
+        bytes: &[u8],
+        expected: GeneralInstructionTagV1,
+    ) -> Result<PortfolioOrderV1<N>> {
+        if !matches!(
+            expected,
+            GeneralInstructionTagV1::AdmitOrder
+                | GeneralInstructionTagV1::CancelOrder
+                | GeneralInstructionTagV1::CloseOrder
+        ) {
+            return Err(Error::UnknownAction);
+        }
+        require_instruction_tag::<N>(bytes, expected)?;
+        let order_bytes = PortfolioOrderV1::<N>::encoded_len()?;
+        exact_len(bytes, GENERAL_INSTRUCTION_HEADER_BYTES + order_bytes)?;
+        PortfolioOrderV1::decode(subslice(
+            bytes,
+            GENERAL_INSTRUCTION_HEADER_BYTES,
+            order_bytes,
+        )?)
+    }
+
+    /// Decode the exact candidate-submission payload.
+    pub fn decode_candidate_submission(bytes: &[u8]) -> Result<SubmitGeneralCandidateV1<N>> {
+        require_instruction_tag::<N>(bytes, GeneralInstructionTagV1::SubmitCandidate)?;
+        let submission_bytes = CandidateSubmissionV1::<N>::encoded_len()?;
+        exact_len(
+            bytes,
+            GENERAL_INSTRUCTION_HEADER_BYTES + CONTENT_ID_BYTES + submission_bytes,
+        )?;
+        Ok(SubmitGeneralCandidateV1 {
+            candidate_id: read_id(bytes, GENERAL_INSTRUCTION_HEADER_BYTES)?,
+            submission: CandidateSubmissionV1::decode(subslice(
+                bytes,
+                GENERAL_INSTRUCTION_HEADER_BYTES + CONTENT_ID_BYTES,
+                submission_bytes,
+            )?)?,
+        })
+    }
+
+    /// Decode the exact candidate-page creation payload.
+    pub fn decode_candidate_page_creation(bytes: &[u8]) -> Result<CreateGeneralCandidatePageV1<N>> {
+        require_instruction_tag::<N>(bytes, GeneralInstructionTagV1::CreateCandidatePage)?;
+        let prefix = GENERAL_INSTRUCTION_HEADER_BYTES + 2 * CONTENT_ID_BYTES;
+        if bytes.len() < prefix + CANDIDATE_PAGE_BASE_BYTES {
+            return Err(Error::InvalidLength);
+        }
+        Ok(CreateGeneralCandidatePageV1 {
+            candidate_id: read_id(bytes, GENERAL_INSTRUCTION_HEADER_BYTES)?,
+            page_id: read_id(bytes, GENERAL_INSTRUCTION_HEADER_BYTES + CONTENT_ID_BYTES)?,
+            page: CandidatePageV1::decode(bytes.get(prefix..).ok_or(Error::InvalidLength)?)?,
+        })
+    }
+
+    /// Decode one exact candidate/page reference for `expected`.
+    pub fn decode_candidate_page_reference(
+        bytes: &[u8],
+        expected: GeneralInstructionTagV1,
+    ) -> Result<GeneralCandidatePageV1> {
+        if !matches!(
+            expected,
+            GeneralInstructionTagV1::VerifyCandidatePage
+                | GeneralInstructionTagV1::CollectSettlementPage
+                | GeneralInstructionTagV1::DistributeSettlementPage
+                | GeneralInstructionTagV1::CloseCandidatePage
+        ) {
+            return Err(Error::UnknownAction);
+        }
+        require_instruction_tag::<N>(bytes, expected)?;
+        exact_len(
+            bytes,
+            GENERAL_INSTRUCTION_HEADER_BYTES + 2 * CONTENT_ID_BYTES,
+        )?;
+        Ok(GeneralCandidatePageV1 {
+            candidate_id: read_id(bytes, GENERAL_INSTRUCTION_HEADER_BYTES)?,
+            page_id: read_id(bytes, GENERAL_INSTRUCTION_HEADER_BYTES + CONTENT_ID_BYTES)?,
+        })
+    }
+
+    /// Decode one exact candidate identity for `expected`.
+    pub fn decode_candidate_id(
+        bytes: &[u8],
+        expected: GeneralInstructionTagV1,
+    ) -> Result<ContentId> {
+        if !matches!(
+            expected,
+            GeneralInstructionTagV1::FinishCandidate
+                | GeneralInstructionTagV1::ConsiderCandidate
+                | GeneralInstructionTagV1::BeginSettlement
+                | GeneralInstructionTagV1::MaterializeSettlement
+                | GeneralInstructionTagV1::FinishSettlement
+                | GeneralInstructionTagV1::CloseCandidate
+                | GeneralInstructionTagV1::CloseSettlement
+                | GeneralInstructionTagV1::RejectCandidate
+                | GeneralInstructionTagV1::ExpireSettlement
+        ) {
+            return Err(Error::UnknownAction);
+        }
+        require_instruction_tag::<N>(bytes, expected)?;
+        exact_len(bytes, GENERAL_INSTRUCTION_HEADER_BYTES + CONTENT_ID_BYTES)?;
+        read_id(bytes, GENERAL_INSTRUCTION_HEADER_BYTES)
+    }
+
+    /// Decode one exact generation payload for `expected`.
+    pub fn decode_generation(bytes: &[u8], expected: GeneralInstructionTagV1) -> Result<u64> {
+        if !matches!(
+            expected,
+            GeneralInstructionTagV1::Quiesce | GeneralInstructionTagV1::CloseGeneral
+        ) {
+            return Err(Error::UnknownAction);
+        }
+        require_instruction_tag::<N>(bytes, expected)?;
+        exact_len(bytes, GENERAL_INSTRUCTION_HEADER_BYTES + 8)?;
+        read_u64(bytes, GENERAL_INSTRUCTION_HEADER_BYTES)
+    }
+
     /// Decode exactly one action, refusing width substitution and trailing bytes.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        validate_instruction_header::<N>(bytes)?;
-        let tag = GeneralInstructionTagV1::decode(read_u8(bytes, 10)?)?;
+        let tag = Self::decode_tag(bytes)?;
         match tag {
-            GeneralInstructionTagV1::Activate => {
-                exact_len(bytes, GENERAL_INSTRUCTION_HEADER_BYTES + 8)?;
-                Ok(Self::Activate(ActivateGeneralV1 {
-                    expected_market_child_count: read_u64(bytes, GENERAL_INSTRUCTION_HEADER_BYTES)?,
-                }))
-            }
+            GeneralInstructionTagV1::Activate => Ok(Self::Activate(Self::decode_activate(bytes)?)),
             GeneralInstructionTagV1::OpenBatch
             | GeneralInstructionTagV1::LockBatch
             | GeneralInstructionTagV1::LockSelection
             | GeneralInstructionTagV1::CloseBatch => {
-                exact_len(bytes, GENERAL_INSTRUCTION_HEADER_BYTES + 16)?;
-                let replay = GeneralBatchReplayV1 {
-                    generation: read_u64(bytes, GENERAL_INSTRUCTION_HEADER_BYTES)?,
-                    batch_sequence: read_u64(bytes, GENERAL_INSTRUCTION_HEADER_BYTES + 8)?,
-                };
+                let replay = Self::decode_batch_replay(bytes, tag)?;
                 Ok(match tag {
                     GeneralInstructionTagV1::OpenBatch => Self::OpenBatch(replay),
                     GeneralInstructionTagV1::LockBatch => Self::LockBatch(replay),
@@ -839,13 +983,7 @@ impl<const N: usize> GeneralInstructionV1<N> {
             GeneralInstructionTagV1::AdmitOrder
             | GeneralInstructionTagV1::CancelOrder
             | GeneralInstructionTagV1::CloseOrder => {
-                let order_bytes = PortfolioOrderV1::<N>::encoded_len()?;
-                exact_len(bytes, GENERAL_INSTRUCTION_HEADER_BYTES + order_bytes)?;
-                let order = PortfolioOrderV1::decode(subslice(
-                    bytes,
-                    GENERAL_INSTRUCTION_HEADER_BYTES,
-                    order_bytes,
-                )?)?;
+                let order = Self::decode_order(bytes, tag)?;
                 Ok(match tag {
                     GeneralInstructionTagV1::AdmitOrder => Self::AdmitOrder(order),
                     GeneralInstructionTagV1::CancelOrder => Self::CancelOrder(order),
@@ -853,45 +991,16 @@ impl<const N: usize> GeneralInstructionV1<N> {
                     _ => return Err(Error::UnknownAction),
                 })
             }
-            GeneralInstructionTagV1::SubmitCandidate => {
-                let submission_bytes = CandidateSubmissionV1::<N>::encoded_len()?;
-                exact_len(
-                    bytes,
-                    GENERAL_INSTRUCTION_HEADER_BYTES + CONTENT_ID_BYTES + submission_bytes,
-                )?;
-                Ok(Self::SubmitCandidate(SubmitGeneralCandidateV1 {
-                    candidate_id: read_id(bytes, GENERAL_INSTRUCTION_HEADER_BYTES)?,
-                    submission: CandidateSubmissionV1::decode(subslice(
-                        bytes,
-                        GENERAL_INSTRUCTION_HEADER_BYTES + CONTENT_ID_BYTES,
-                        submission_bytes,
-                    )?)?,
-                }))
-            }
-            GeneralInstructionTagV1::CreateCandidatePage => {
-                let prefix = GENERAL_INSTRUCTION_HEADER_BYTES + 2 * CONTENT_ID_BYTES;
-                if bytes.len() < prefix + CANDIDATE_PAGE_BASE_BYTES {
-                    return Err(Error::InvalidLength);
-                }
-                Ok(Self::CreateCandidatePage(CreateGeneralCandidatePageV1 {
-                    candidate_id: read_id(bytes, GENERAL_INSTRUCTION_HEADER_BYTES)?,
-                    page_id: read_id(bytes, GENERAL_INSTRUCTION_HEADER_BYTES + CONTENT_ID_BYTES)?,
-                    page: CandidatePageV1::decode(
-                        bytes.get(prefix..).ok_or(Error::InvalidLength)?,
-                    )?,
-                }))
-            }
+            GeneralInstructionTagV1::SubmitCandidate => Ok(Self::SubmitCandidate(
+                Self::decode_candidate_submission(bytes)?,
+            )),
+            GeneralInstructionTagV1::CreateCandidatePage => Ok(Self::CreateCandidatePage(
+                Self::decode_candidate_page_creation(bytes)?,
+            )),
             GeneralInstructionTagV1::VerifyCandidatePage
             | GeneralInstructionTagV1::CollectSettlementPage
             | GeneralInstructionTagV1::DistributeSettlementPage => {
-                exact_len(
-                    bytes,
-                    GENERAL_INSTRUCTION_HEADER_BYTES + 2 * CONTENT_ID_BYTES,
-                )?;
-                let page = GeneralCandidatePageV1 {
-                    candidate_id: read_id(bytes, GENERAL_INSTRUCTION_HEADER_BYTES)?,
-                    page_id: read_id(bytes, GENERAL_INSTRUCTION_HEADER_BYTES + CONTENT_ID_BYTES)?,
-                };
+                let page = Self::decode_candidate_page_reference(bytes, tag)?;
                 Ok(match tag {
                     GeneralInstructionTagV1::VerifyCandidatePage => Self::VerifyCandidatePage(page),
                     GeneralInstructionTagV1::CollectSettlementPage => {
@@ -912,8 +1021,7 @@ impl<const N: usize> GeneralInstructionV1<N> {
             | GeneralInstructionTagV1::CloseSettlement
             | GeneralInstructionTagV1::RejectCandidate
             | GeneralInstructionTagV1::ExpireSettlement => {
-                exact_len(bytes, GENERAL_INSTRUCTION_HEADER_BYTES + CONTENT_ID_BYTES)?;
-                let candidate_id = read_id(bytes, GENERAL_INSTRUCTION_HEADER_BYTES)?;
+                let candidate_id = Self::decode_candidate_id(bytes, tag)?;
                 Ok(match tag {
                     GeneralInstructionTagV1::FinishCandidate => Self::FinishCandidate(candidate_id),
                     GeneralInstructionTagV1::ConsiderCandidate => {
@@ -935,19 +1043,11 @@ impl<const N: usize> GeneralInstructionV1<N> {
                     _ => return Err(Error::UnknownAction),
                 })
             }
-            GeneralInstructionTagV1::CloseCandidatePage => {
-                exact_len(
-                    bytes,
-                    GENERAL_INSTRUCTION_HEADER_BYTES + 2 * CONTENT_ID_BYTES,
-                )?;
-                Ok(Self::CloseCandidatePage(GeneralCandidatePageV1 {
-                    candidate_id: read_id(bytes, GENERAL_INSTRUCTION_HEADER_BYTES)?,
-                    page_id: read_id(bytes, GENERAL_INSTRUCTION_HEADER_BYTES + CONTENT_ID_BYTES)?,
-                }))
-            }
+            GeneralInstructionTagV1::CloseCandidatePage => Ok(Self::CloseCandidatePage(
+                Self::decode_candidate_page_reference(bytes, tag)?,
+            )),
             GeneralInstructionTagV1::Quiesce | GeneralInstructionTagV1::CloseGeneral => {
-                exact_len(bytes, GENERAL_INSTRUCTION_HEADER_BYTES + 8)?;
-                let generation = read_u64(bytes, GENERAL_INSTRUCTION_HEADER_BYTES)?;
+                let generation = Self::decode_generation(bytes, tag)?;
                 Ok(match tag {
                     GeneralInstructionTagV1::Quiesce => Self::Quiesce(generation),
                     GeneralInstructionTagV1::CloseGeneral => Self::CloseGeneral(generation),
@@ -7101,6 +7201,16 @@ fn validate_instruction_header<const N: usize>(bytes: &[u8]) -> Result<()> {
         return Err(Error::InvalidOutcomeCount);
     }
     require_zero(bytes, 12, 4)
+}
+
+fn require_instruction_tag<const N: usize>(
+    bytes: &[u8],
+    expected: GeneralInstructionTagV1,
+) -> Result<()> {
+    if GeneralInstructionV1::<N>::decode_tag(bytes)? != expected {
+        return Err(Error::UnknownAction);
+    }
+    Ok(())
 }
 
 fn encode_batch_replay(out: &mut [u8], replay: GeneralBatchReplayV1) {
