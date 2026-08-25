@@ -7,25 +7,27 @@
 //! `CORE_EFFECT_DIGEST_DOMAIN_V1 || u32_le(280) || envelope ||
 //! u32_le(role_request_bytes) || role_request`. The caller authority is the PDA
 //! under `caller_program` with seeds
-//! `[CORE_CALLER_AUTHORITY_PDA_DOMAIN_V1, release_set, market, action_u8,
-//! role_u8, context, role_request_digest]`.
+//! `CallerAuthoritySeedsV1`, always with caller role Core. Series is not an
+//! execution-release role and calls Core through the separate
+//! `SeriesCoreRequestV1` boundary.
 
 use crate::{
-    CORE_CALLER_AUTHORITY_PDA_DOMAIN_V1, Error, Identity, Role,
+    Error, Identity, Role,
     generated_physical::{
         ACK_ACTION_OFFSET, ACK_CONTEXT_OFFSET, ACK_EFFECT_DIGEST_OFFSET, ACK_MAGIC_OFFSET,
         ACK_MARKET_OFFSET, ACK_POST_RESOURCE_A_REVISION_OFFSET,
         ACK_POST_RESOURCE_B_REVISION_OFFSET, ACK_POST_RESOURCE_DIGEST_OFFSET,
         ACK_PRE_RESOURCE_A_REVISION_OFFSET, ACK_PRE_RESOURCE_B_REVISION_OFFSET,
-        ACK_RELEASE_SET_OFFSET, ACK_RESERVED_OFFSET, ACK_ROLE_OFFSET, ACK_ROLE_PROGRAM_OFFSET,
-        ACK_VERSION_OFFSET, CORE_EFFECT_ACK_BYTES_V1, CORE_EFFECT_ACK_MAGIC_V1,
-        CORE_EFFECT_ENVELOPE_BYTES_V1, CORE_EFFECT_MAGIC_V1, EFFECT_ACTION_OFFSET,
-        EFFECT_CALLER_AUTHORITY_OFFSET, EFFECT_CALLER_PROGRAM_OFFSET, EFFECT_CONTEXT_OFFSET,
-        EFFECT_EXPECTED_RESOURCE_A_REVISION_OFFSET, EFFECT_EXPECTED_RESOURCE_B_REVISION_OFFSET,
-        EFFECT_GENERATION_OFFSET, EFFECT_MAGIC_OFFSET, EFFECT_MARKET_OFFSET,
-        EFFECT_PARENT_STATE_DIGEST_OFFSET, EFFECT_RELEASE_SET_OFFSET, EFFECT_RESERVED_BODY_OFFSET,
-        EFFECT_RESERVED_HEADER_OFFSET, EFFECT_ROLE_OFFSET, EFFECT_ROLE_REQUEST_BYTES_OFFSET,
-        EFFECT_ROLE_REQUEST_DIGEST_OFFSET, EFFECT_VERSION_OFFSET, PHYSICAL_ABI_VERSION_V1,
+        ACK_RELEASE_SET_OFFSET, ACK_RESERVED_OFFSET, ACK_ROLE_PROGRAM_OFFSET,
+        ACK_TARGET_ROLE_OFFSET, ACK_VERSION_OFFSET, CORE_EFFECT_ACK_BYTES_V1,
+        CORE_EFFECT_ACK_MAGIC_V1, CORE_EFFECT_ENVELOPE_BYTES_V1, CORE_EFFECT_MAGIC_V1,
+        EFFECT_ACTION_OFFSET, EFFECT_CALLER_AUTHORITY_OFFSET, EFFECT_CALLER_PROGRAM_OFFSET,
+        EFFECT_CONTEXT_OFFSET, EFFECT_EXPECTED_RESOURCE_A_REVISION_OFFSET,
+        EFFECT_EXPECTED_RESOURCE_B_REVISION_OFFSET, EFFECT_GENERATION_OFFSET, EFFECT_MAGIC_OFFSET,
+        EFFECT_MARKET_OFFSET, EFFECT_PARENT_STATE_DIGEST_OFFSET, EFFECT_RELEASE_SET_OFFSET,
+        EFFECT_RESERVED_BODY_OFFSET, EFFECT_RESERVED_HEADER_OFFSET,
+        EFFECT_ROLE_REQUEST_BYTES_OFFSET, EFFECT_ROLE_REQUEST_DIGEST_OFFSET,
+        EFFECT_TARGET_ROLE_OFFSET, EFFECT_VERSION_OFFSET, PHYSICAL_ABI_VERSION_V1,
         SERIES_ACTION_OFFSET, SERIES_BENEFICIARY_OFFSET, SERIES_CAPABILITY_RENT_OFFSET,
         SERIES_CLOSE_RENT_OFFSET, SERIES_CORE_REQUEST_BYTES_V1, SERIES_CORE_REQUEST_MAGIC_V1,
         SERIES_EXPECTED_SERIES_REVISION_OFFSET, SERIES_EXPECTED_TICKET_REVISION_OFFSET,
@@ -36,6 +38,7 @@ use crate::{
         SERIES_TICKET_OFFSET, SERIES_VERSION_OFFSET, SERIES_WORK_OFFSET,
     },
 };
+use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 
 const IDENTITY_BYTES: usize = 32;
 const ZERO_IDENTITY: [u8; IDENTITY_BYTES] = [0; IDENTITY_BYTES];
@@ -64,14 +67,6 @@ pub enum CoreEffectActionV1 {
     CloseFund = 8,
     /// Close zero-balance custody to its persisted RentCredit destination.
     CloseCustody = 9,
-    /// Reserve the exact Core resources selected by one Series ticket.
-    SeriesPrepare = 10,
-    /// Consume one Series ticket into its exact immutable Market.
-    SeriesConsume = 11,
-    /// Expire a prepared Series ticket and refund its persisted owner.
-    SeriesExpire = 12,
-    /// Close a terminal Series through its persisted refund owner.
-    SeriesClose = 13,
 }
 
 impl CoreEffectActionV1 {
@@ -87,17 +82,13 @@ impl CoreEffectActionV1 {
             7 => Ok(Self::RedeemCustody),
             8 => Ok(Self::CloseFund),
             9 => Ok(Self::CloseCustody),
-            10 => Ok(Self::SeriesPrepare),
-            11 => Ok(Self::SeriesConsume),
-            12 => Ok(Self::SeriesExpire),
-            13 => Ok(Self::SeriesClose),
             _ => Err(Error::InvalidTag),
         }
     }
 
-    /// Return the single release-set role that may execute the effect.
+    /// Return the single target release-set role that may execute the effect.
     #[must_use]
-    pub const fn role(self) -> Role {
+    pub const fn target_role(self) -> Role {
         match self {
             Self::CreateFund | Self::VerifyFundReady | Self::AdmitTerminal | Self::CloseFund => {
                 Role::Resolution
@@ -106,9 +97,6 @@ impl CoreEffectActionV1 {
                 Role::Custody
             }
             Self::SplitClaims | Self::RedeemClaims => Role::Claims,
-            Self::SeriesPrepare | Self::SeriesConsume | Self::SeriesExpire | Self::SeriesClose => {
-                Role::Core
-            }
         }
     }
 }
@@ -117,7 +105,7 @@ impl CoreEffectActionV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CoreEffectEnvelopeV1 {
     action: CoreEffectActionV1,
-    role: Role,
+    target_role: Role,
     caller_program: Identity,
     caller_authority: Identity,
     release_set: Identity,
@@ -131,39 +119,12 @@ pub struct CoreEffectEnvelopeV1 {
     role_request_bytes: u32,
 }
 
-/// Exact ordered seed projection for the release-pinned caller PDA.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CoreCallerAuthoritySeedsV1 {
-    release_set: [u8; IDENTITY_BYTES],
-    market: [u8; IDENTITY_BYTES],
-    action: [u8; 1],
-    role: [u8; 1],
-    context: [u8; IDENTITY_BYTES],
-    role_request_digest: [u8; IDENTITY_BYTES],
-}
-
-impl CoreCallerAuthoritySeedsV1 {
-    /// Return the sole canonical PDA seed order.
-    #[must_use]
-    pub fn as_slices(&self) -> [&[u8]; 7] {
-        [
-            &CORE_CALLER_AUTHORITY_PDA_DOMAIN_V1,
-            &self.release_set,
-            &self.market,
-            &self.action,
-            &self.role,
-            &self.context,
-            &self.role_request_digest,
-        ]
-    }
-}
-
 impl CoreEffectEnvelopeV1 {
     /// Construct one envelope. The adapter supplies the exact request digest.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         action: CoreEffectActionV1,
-        role: Role,
+        target_role: Role,
         caller_program: Identity,
         caller_authority: Identity,
         release_set: Identity,
@@ -176,12 +137,12 @@ impl CoreEffectEnvelopeV1 {
         expected_resource_b_revision: u64,
         role_request_bytes: u32,
     ) -> Result<Self, Error> {
-        if role != action.role() || role_request_bytes == 0 {
+        if target_role != action.target_role() || role_request_bytes == 0 {
             return Err(Error::InvalidCoordinates);
         }
         Ok(Self {
             action,
-            role,
+            target_role,
             caller_program,
             caller_authority,
             release_set,
@@ -206,10 +167,10 @@ impl CoreEffectEnvelopeV1 {
         require_zero(input, EFFECT_RESERVED_HEADER_OFFSET, 4)?;
         require_zero(input, EFFECT_RESERVED_BODY_OFFSET, 12)?;
         let action = CoreEffectActionV1::decode(read_u8(input, EFFECT_ACTION_OFFSET)?)?;
-        let role = decode_role(read_u8(input, EFFECT_ROLE_OFFSET)?)?;
+        let target_role = decode_role(read_u8(input, EFFECT_TARGET_ROLE_OFFSET)?)?;
         Self::new(
             action,
-            role,
+            target_role,
             read_identity(input, EFFECT_CALLER_PROGRAM_OFFSET)?,
             read_identity(input, EFFECT_CALLER_AUTHORITY_OFFSET)?,
             read_identity(input, EFFECT_RELEASE_SET_OFFSET)?,
@@ -230,7 +191,11 @@ impl CoreEffectEnvelopeV1 {
         put(&mut output, EFFECT_MAGIC_OFFSET, &CORE_EFFECT_MAGIC_V1)?;
         put_u16(&mut output, EFFECT_VERSION_OFFSET, PHYSICAL_ABI_VERSION_V1)?;
         put_u8(&mut output, EFFECT_ACTION_OFFSET, self.action as u8)?;
-        put_u8(&mut output, EFFECT_ROLE_OFFSET, role_tag(self.role))?;
+        put_u8(
+            &mut output,
+            EFFECT_TARGET_ROLE_OFFSET,
+            role_tag(self.target_role),
+        )?;
         put_identity(
             &mut output,
             EFFECT_CALLER_PROGRAM_OFFSET,
@@ -288,16 +253,15 @@ impl CoreEffectEnvelopeV1 {
     }
 
     /// Project the only allowed release-pinned caller PDA seed sequence.
-    #[must_use]
-    pub const fn caller_authority_seeds(self) -> CoreCallerAuthoritySeedsV1 {
-        CoreCallerAuthoritySeedsV1 {
-            release_set: self.release_set.to_bytes(),
-            market: self.market.to_bytes(),
-            action: [self.action as u8],
-            role: [role_tag(self.role)],
-            context: self.context.to_bytes(),
-            role_request_digest: self.role_request_digest.to_bytes(),
-        }
+    pub fn caller_authority_seeds(self) -> Result<CallerAuthoritySeedsV1, Error> {
+        CallerAuthoritySeedsV1::from_bytes(
+            self.release_set.to_bytes(),
+            self.market.to_bytes(),
+            ExecutionRoleV1::Core,
+            self.context.to_bytes(),
+            self.role_request_digest.to_bytes(),
+        )
+        .map_err(|_| Error::InvalidRelease)
     }
 
     /// Selected effect.
@@ -305,10 +269,10 @@ impl CoreEffectEnvelopeV1 {
     pub const fn action(self) -> CoreEffectActionV1 {
         self.action
     }
-    /// Selected role.
+    /// Selected target role. The caller role is always Core.
     #[must_use]
-    pub const fn role(self) -> Role {
-        self.role
+    pub const fn target_role(self) -> Role {
+        self.target_role
     }
     /// Exact calling program.
     #[must_use]
@@ -371,7 +335,7 @@ impl CoreEffectEnvelopeV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CoreEffectAckV1 {
     action: CoreEffectActionV1,
-    role: Role,
+    target_role: Role,
     role_program: Identity,
     release_set: Identity,
     market: Identity,
@@ -389,7 +353,7 @@ impl CoreEffectAckV1 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         action: CoreEffectActionV1,
-        role: Role,
+        target_role: Role,
         role_program: Identity,
         release_set: Identity,
         market: Identity,
@@ -401,7 +365,7 @@ impl CoreEffectAckV1 {
         pre_resource_b_revision: u64,
         post_resource_b_revision: u64,
     ) -> Result<Self, Error> {
-        if role != action.role()
+        if target_role != action.target_role()
             || post_resource_a_revision < pre_resource_a_revision
             || post_resource_b_revision < pre_resource_b_revision
         {
@@ -409,7 +373,7 @@ impl CoreEffectAckV1 {
         }
         Ok(Self {
             action,
-            role,
+            target_role,
             role_program,
             release_set,
             market,
@@ -433,7 +397,7 @@ impl CoreEffectAckV1 {
         require_zero(input, ACK_RESERVED_OFFSET, 4)?;
         Self::new(
             CoreEffectActionV1::decode(read_u8(input, ACK_ACTION_OFFSET)?)?,
-            decode_role(read_u8(input, ACK_ROLE_OFFSET)?)?,
+            decode_role(read_u8(input, ACK_TARGET_ROLE_OFFSET)?)?,
             read_identity(input, ACK_ROLE_PROGRAM_OFFSET)?,
             read_identity(input, ACK_RELEASE_SET_OFFSET)?,
             read_identity(input, ACK_MARKET_OFFSET)?,
@@ -453,7 +417,11 @@ impl CoreEffectAckV1 {
         put(&mut output, ACK_MAGIC_OFFSET, &CORE_EFFECT_ACK_MAGIC_V1)?;
         put_u16(&mut output, ACK_VERSION_OFFSET, PHYSICAL_ABI_VERSION_V1)?;
         put_u8(&mut output, ACK_ACTION_OFFSET, self.action as u8)?;
-        put_u8(&mut output, ACK_ROLE_OFFSET, role_tag(self.role))?;
+        put_u8(
+            &mut output,
+            ACK_TARGET_ROLE_OFFSET,
+            role_tag(self.target_role),
+        )?;
         put_identity(&mut output, ACK_ROLE_PROGRAM_OFFSET, self.role_program)?;
         put_identity(&mut output, ACK_RELEASE_SET_OFFSET, self.release_set)?;
         put_identity(&mut output, ACK_MARKET_OFFSET, self.market)?;
@@ -495,7 +463,7 @@ impl CoreEffectAckV1 {
         full_effect_digest: Identity,
     ) -> Result<(), Error> {
         if self.action != envelope.action
-            || self.role != envelope.role
+            || self.target_role != envelope.target_role
             || self.role_program != expected_role_program
             || self.release_set != envelope.release_set
             || self.market != envelope.market
@@ -514,10 +482,10 @@ impl CoreEffectAckV1 {
     pub const fn action(self) -> CoreEffectActionV1 {
         self.action
     }
-    /// Selected role.
+    /// Selected target role.
     #[must_use]
-    pub const fn role(self) -> Role {
-        self.role
+    pub const fn target_role(self) -> Role {
+        self.target_role
     }
     /// Exact current role program.
     #[must_use]

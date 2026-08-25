@@ -15,13 +15,10 @@ pub const SERIES_CORE_REQUEST_MAGIC_V1: [u8; 8] = [
 pub const CORE_EFFECT_DIGEST_DOMAIN_V1: [u8; 22] = [
     0x64, 0x63, 0x6c, 0x75, 0x74, 0x63, 0x68, 0x2f, 0x63, 0x6f, 0x72, 0x65, 0x2d, 0x65, 0x66, 0x66, 0x65, 0x63, 0x74, 0x2f, 0x76, 0x31,
 ];
-pub const CORE_CALLER_AUTHORITY_PDA_DOMAIN_V1: [u8; 22] = [
-    0x64, 0x63, 0x6c, 0x75, 0x74, 0x63, 0x68, 0x2f, 0x63, 0x6f, 0x72, 0x65, 0x2d, 0x63, 0x61, 0x6c, 0x6c, 0x65, 0x72, 0x2f, 0x76, 0x31,
-];
 pub(crate) const EFFECT_MAGIC_OFFSET: usize = 0;
 pub(crate) const EFFECT_VERSION_OFFSET: usize = 8;
 pub(crate) const EFFECT_ACTION_OFFSET: usize = 10;
-pub(crate) const EFFECT_ROLE_OFFSET: usize = 11;
+pub(crate) const EFFECT_TARGET_ROLE_OFFSET: usize = 11;
 pub(crate) const EFFECT_RESERVED_HEADER_OFFSET: usize = 12;
 pub(crate) const EFFECT_CALLER_PROGRAM_OFFSET: usize = 16;
 pub(crate) const EFFECT_CALLER_AUTHORITY_OFFSET: usize = 48;
@@ -38,7 +35,7 @@ pub(crate) const EFFECT_RESERVED_BODY_OFFSET: usize = 268;
 pub(crate) const ACK_MAGIC_OFFSET: usize = 0;
 pub(crate) const ACK_VERSION_OFFSET: usize = 8;
 pub(crate) const ACK_ACTION_OFFSET: usize = 10;
-pub(crate) const ACK_ROLE_OFFSET: usize = 11;
+pub(crate) const ACK_TARGET_ROLE_OFFSET: usize = 11;
 pub(crate) const ACK_RESERVED_OFFSET: usize = 12;
 pub(crate) const ACK_ROLE_PROGRAM_OFFSET: usize = 16;
 pub(crate) const ACK_RELEASE_SET_OFFSET: usize = 48;

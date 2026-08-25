@@ -34,12 +34,15 @@ maximum account or request shape:
 The full-effect digest is
 `SHA256("dclutch/core-effect/v1" || u32_le(280) || envelope ||
 u32_le(role_request_bytes) || role_request)`. The release-pinned caller PDA is
-derived under `caller_program` from
-`["dclutch/core-caller/v1", release_set, market, action_u8, role_u8,
-context, role_request_digest]`. `CoreCallerAuthoritySeedsV1::as_slices` is the
-canonical seed projection. This avoids both caller-authored attestations and a
-digest fixed point: all PDA inputs exist before the envelope is encoded, while
-the resulting authority is still exact to one role request and replay context.
+derived under the selected Core program from the sole release-set-owned
+`CallerAuthoritySeedsV1` projection: `["dclutch:role-authority:v1",
+release_set, market, Core, context, role_request_digest]`. This avoids both
+caller-authored attestations and a digest fixed point: all PDA inputs exist
+before the envelope is encoded, while the resulting authority is still exact
+to one role request and replay context. The envelope's `target_role` is the
+child role and never substitutes for caller role Core. Series is not an
+execution-release role; its 336-byte request is a separate direct Series-to-Core
+boundary authenticated from the exact Template and Ticket.
 
 The interpreter validates all inputs before applying a transition. It separates
 rent, unclassified donation, Source work funding, deferred custody rent, and

@@ -1,10 +1,11 @@
 //! Hostile coverage for the Lean-owned cross-program physical ABI.
 
 use dclutch_market_core_codec::{
-    CORE_CALLER_AUTHORITY_PDA_DOMAIN_V1, CORE_EFFECT_ACK_BYTES_V1, CORE_EFFECT_ENVELOPE_BYTES_V1,
-    CoreEffectAckV1, CoreEffectActionV1, CoreEffectEnvelopeV1, Error, Identity, Role,
-    SERIES_CORE_REQUEST_BYTES_V1, SeriesCoreActionV1, SeriesCoreRequestV1,
+    CORE_EFFECT_ACK_BYTES_V1, CORE_EFFECT_ENVELOPE_BYTES_V1, CoreEffectAckV1, CoreEffectActionV1,
+    CoreEffectEnvelopeV1, Error, Identity, Role, SERIES_CORE_REQUEST_BYTES_V1, SeriesCoreActionV1,
+    SeriesCoreRequestV1,
 };
+use dclutch_release_set_contract::{CALLER_AUTHORITY_PDA_DOMAIN_V1, ExecutionRoleV1};
 
 fn id(byte: u8) -> Identity {
     Identity::new([byte; 32]).expect("fixture identity is nonzero")
@@ -54,7 +55,7 @@ fn effect_envelope_is_exact_role_bound_and_round_trips() {
     assert_eq!(bytes.len(), CORE_EFFECT_ENVELOPE_BYTES_V1);
     assert_eq!(CoreEffectEnvelopeV1::decode(&bytes), Ok(envelope));
     assert_eq!(envelope.action(), CoreEffectActionV1::CreateFund);
-    assert_eq!(envelope.role(), Role::Resolution);
+    assert_eq!(envelope.target_role(), Role::Resolution);
     assert_eq!(envelope.caller_program(), id(1));
     assert_eq!(envelope.caller_authority(), id(2));
     assert_eq!(envelope.release_set(), id(3));
@@ -68,21 +69,22 @@ fn effect_envelope_is_exact_role_bound_and_round_trips() {
     assert_eq!(envelope.role_request_bytes(), 416);
     let release_set = id(3).to_bytes();
     let market = id(4).to_bytes();
-    let action = [CoreEffectActionV1::CreateFund as u8];
-    let role = [Role::Resolution as u8];
+    let caller_role = [ExecutionRoleV1::Core as u8];
     let context = id(5).to_bytes();
     let request_digest = id(7).to_bytes();
-    let expected_seeds: [&[u8]; 7] = [
-        CORE_CALLER_AUTHORITY_PDA_DOMAIN_V1.as_slice(),
+    let expected_seeds: [&[u8]; 6] = [
+        CALLER_AUTHORITY_PDA_DOMAIN_V1,
         release_set.as_slice(),
         market.as_slice(),
-        action.as_slice(),
-        role.as_slice(),
+        caller_role.as_slice(),
         context.as_slice(),
         request_digest.as_slice(),
     ];
     assert_eq!(
-        envelope.caller_authority_seeds().as_slices(),
+        envelope
+            .caller_authority_seeds()
+            .expect("valid Core caller authority")
+            .as_slices(),
         expected_seeds
     );
     assert_eq!(envelope.validate_role_request(416, id(7)), Ok(()));
@@ -184,7 +186,7 @@ fn acknowledgement_binds_full_effect_and_monotonic_revisions() {
     assert_eq!(CoreEffectAckV1::decode(&bytes), Ok(ack));
     assert_eq!(ack.validate_for(envelope, id(20), id(21)), Ok(()));
     assert_eq!(ack.action(), CoreEffectActionV1::CreateFund);
-    assert_eq!(ack.role(), Role::Resolution);
+    assert_eq!(ack.target_role(), Role::Resolution);
     assert_eq!(ack.role_program(), id(20));
     assert_eq!(ack.release_set(), id(3));
     assert_eq!(ack.market(), id(4));

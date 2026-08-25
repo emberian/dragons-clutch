@@ -19,14 +19,12 @@ def effectMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x43, 0x45, 0x46, 0x31]
 def ackMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x43, 0x41, 0x4b, 0x31]
 def seriesMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x43, 0x53, 0x52, 0x31]
 def effectDigestDomain : List UInt8 := "dclutch/core-effect/v1".toUTF8.toList
-def callerAuthorityDomain : List UInt8 := "dclutch/core-caller/v1".toUTF8.toList
 def version : Nat := 1
 
 theorem effect_digest_domain_fits_sha_seed : effectDigestDomain.length ≤ 32 := by native_decide
-theorem caller_authority_domain_fits_pda_seed : callerAuthorityDomain.length ≤ 32 := by native_decide
 
 inductive EffectField where
-  | magic | version | action | role | reservedHeader
+  | magic | version | action | targetRole | reservedHeader
   | callerProgram | callerAuthority | releaseSet | market | context
   | parentStateDigest | roleRequestDigest
   | generation | expectedResourceARevision | expectedResourceBRevision
@@ -34,7 +32,7 @@ inductive EffectField where
   deriving DecidableEq, Repr
 
 def effectSchema : List (FieldSpec EffectField) := [
-  ⟨.magic, .bytes 8⟩, ⟨.version, .u16⟩, ⟨.action, .u8⟩, ⟨.role, .u8⟩,
+  ⟨.magic, .bytes 8⟩, ⟨.version, .u16⟩, ⟨.action, .u8⟩, ⟨.targetRole, .u8⟩,
   ⟨.reservedHeader, .reserved 4⟩,
   ⟨.callerProgram, .bytes 32⟩, ⟨.callerAuthority, .bytes 32⟩,
   ⟨.releaseSet, .bytes 32⟩, ⟨.market, .bytes 32⟩, ⟨.context, .bytes 32⟩,
@@ -51,7 +49,7 @@ namespace EffectField
 
 def rustName : EffectField → String
   | .magic => "EFFECT_MAGIC_OFFSET" | .version => "EFFECT_VERSION_OFFSET"
-  | .action => "EFFECT_ACTION_OFFSET" | .role => "EFFECT_ROLE_OFFSET"
+  | .action => "EFFECT_ACTION_OFFSET" | .targetRole => "EFFECT_TARGET_ROLE_OFFSET"
   | .reservedHeader => "EFFECT_RESERVED_HEADER_OFFSET"
   | .callerProgram => "EFFECT_CALLER_PROGRAM_OFFSET"
   | .callerAuthority => "EFFECT_CALLER_AUTHORITY_OFFSET"
@@ -71,14 +69,14 @@ theorem effect_schema_unique : (effectSchema.map fun field => field.name).Nodup 
 theorem effect_fields_disjoint : effectLayout.Pairwise Before := specializeFrom_pairwise 0 effectSchema
 
 inductive AckField where
-  | magic | version | action | role | reserved
+  | magic | version | action | targetRole | reserved
   | roleProgram | releaseSet | market | context | effectDigest | postResourceDigest
   | preResourceARevision | postResourceARevision
   | preResourceBRevision | postResourceBRevision
   deriving DecidableEq, Repr
 
 def ackSchema : List (FieldSpec AckField) := [
-  ⟨.magic, .bytes 8⟩, ⟨.version, .u16⟩, ⟨.action, .u8⟩, ⟨.role, .u8⟩,
+  ⟨.magic, .bytes 8⟩, ⟨.version, .u16⟩, ⟨.action, .u8⟩, ⟨.targetRole, .u8⟩,
   ⟨.reserved, .reserved 4⟩,
   ⟨.roleProgram, .bytes 32⟩, ⟨.releaseSet, .bytes 32⟩, ⟨.market, .bytes 32⟩,
   ⟨.context, .bytes 32⟩, ⟨.effectDigest, .bytes 32⟩,
@@ -94,7 +92,7 @@ namespace AckField
 
 def rustName : AckField → String
   | .magic => "ACK_MAGIC_OFFSET" | .version => "ACK_VERSION_OFFSET"
-  | .action => "ACK_ACTION_OFFSET" | .role => "ACK_ROLE_OFFSET"
+  | .action => "ACK_ACTION_OFFSET" | .targetRole => "ACK_TARGET_ROLE_OFFSET"
   | .reserved => "ACK_RESERVED_OFFSET" | .roleProgram => "ACK_ROLE_PROGRAM_OFFSET"
   | .releaseSet => "ACK_RELEASE_SET_OFFSET" | .market => "ACK_MARKET_OFFSET"
   | .context => "ACK_CONTEXT_OFFSET" | .effectDigest => "ACK_EFFECT_DIGEST_OFFSET"

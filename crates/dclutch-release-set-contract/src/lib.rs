@@ -70,7 +70,7 @@ pub enum Error {
     ZeroArtifactReleaseId,
     /// Equal program or release identities did not identify the same pair.
     InconsistentAliasedRoleBinding,
-    /// A Market, context, or role-request digest in a caller authority was zero.
+    /// A release set, Market, context, or role-request digest was zero.
     ZeroCallerAuthorityCoordinate,
 }
 
@@ -230,6 +230,25 @@ impl CallerAuthoritySeedsV1 {
             context,
             role_request_digest,
         })
+    }
+
+    /// Validate raw release-set bytes and construct the canonical projection.
+    pub fn from_bytes(
+        release_set: [u8; IDENTITY_BYTES],
+        market: [u8; IDENTITY_BYTES],
+        caller_role: ExecutionRoleV1,
+        context: [u8; IDENTITY_BYTES],
+        role_request_digest: [u8; IDENTITY_BYTES],
+    ) -> Result<Self> {
+        let release_set =
+            ContentId::new(release_set).map_err(|_| Error::ZeroCallerAuthorityCoordinate)?;
+        Self::new(
+            release_set,
+            market,
+            caller_role,
+            context,
+            role_request_digest,
+        )
     }
 
     /// Return the exact PDA seed order.

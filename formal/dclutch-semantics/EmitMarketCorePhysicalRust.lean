@@ -23,7 +23,6 @@ def main : IO Unit := do
   emitBytes "CORE_EFFECT_ACK_MAGIC_V1" ackMagic
   emitBytes "SERIES_CORE_REQUEST_MAGIC_V1" seriesMagic
   emitBytes "CORE_EFFECT_DIGEST_DOMAIN_V1" effectDigestDomain
-  emitBytes "CORE_CALLER_AUTHORITY_PDA_DOMAIN_V1" callerAuthorityDomain
   for field in effectLayout do
     IO.println s!"pub(crate) const {EffectField.rustName field.spec.name}: usize = {field.offset};"
   for field in ackLayout do
