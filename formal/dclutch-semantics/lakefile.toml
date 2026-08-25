@@ -24,3 +24,7 @@ root = "EmitCustodyVector"
 [[lean_exe]]
 name = "emit-direct-program"
 root = "EmitDirectProgram"
+
+[[lean_exe]]
+name = "emit-direct-program-rust"
+root = "EmitDirectProgramRust"

@@ -322,7 +322,11 @@ dependencies = [
 name = "dclutch-controller-proof-sbf"
 version = "0.1.0"
 dependencies = [
+ "dclutch-token-svm",
+ "dclutch-transition-vm",
+ "solana-instructions-sysvar",
  "solana-program",
+ "solana-sdk-ids",
 ]
 
 [[package]]

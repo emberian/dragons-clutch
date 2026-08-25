@@ -1,0 +1,142 @@
+import DClutchSemantics.Codec
+
+/-!
+# Direct controller ABI
+
+Lean owns the exact byte layout presented to the native Ed25519 precompile and
+the successor Direct controller.  A maker identity is deliberately absent from
+`CompactIntentV1`: the verified Ed25519 public key is its sole semantic owner.
+The signed immutable execution-profile key selects the fee policy; each maker
+also signs the exact accepted fee rate.
+-/
+
+namespace DClutch.DirectControllerCodec
+
+open DClutch.Codec
+
+/-- A fixed 32-byte coordinate without an allocation-dependent runtime shape. -/
+abbrev Bytes32 := Fin 32 → UInt8
+
+def encodeBytes32 (bytes : Bytes32) : List UInt8 := List.ofFn bytes
+
+theorem encodeBytes32_length (bytes : Bytes32) :
+    (encodeBytes32 bytes).length = 32 := by
+  simp [encodeBytes32]
+
+def zeros (count : Nat) : List UInt8 := List.replicate count 0
+
+def intentMagic : List UInt8 :=
+  [0x44, 0x43, 0x4c, 0x54, 0x44, 0x49, 0x52, 0x33] -- `DCLTDIR3`
+
+def controllerMagic : List UInt8 :=
+  [0x44, 0x43, 0x4c, 0x54, 0x43, 0x54, 0x4c, 0x31] -- `DCLTCTL1`
+
+def profileMagic : List UInt8 :=
+  [0x44, 0x43, 0x4c, 0x54, 0x50, 0x52, 0x46, 0x31] -- `DCLTPRF1`
+
+def version : Nat := 1
+def compactIntentBytes : Nat := 136
+def controllerInstructionBytes : Nat := 304
+def marketProfileBytes : Nat := 136
+
+/-- One independently signed reusable limit intent.
+
+`side`, `outcome`, and `lifecycle` are semantic tags. All numeric fields are
+encoded little-endian. Physical admission separately checks that Nat values fit
+their named widths before this encoder's output is released.
+-/
+structure CompactIntentV1 where
+  side : UInt8
+  outcome : UInt8
+  lifecycle : UInt8
+  executionProfile : Bytes32
+  generation : Nat
+  nonce : Nat
+  validFrom : Nat
+  validThrough : Nat
+  maximumFill : Nat
+  limitPrice : Nat
+  feeBasisPoints : Nat
+  collateralAccount : Bytes32
+
+def encodeCompactIntentV1 (intent : CompactIntentV1) : List UInt8 :=
+  intentMagic ++
+  encodeLE 2 version ++
+  [intent.side, intent.outcome, intent.lifecycle] ++
+  zeros 3 ++
+  encodeBytes32 intent.executionProfile ++
+  encodeLE 8 intent.generation ++
+  encodeLE 8 intent.nonce ++
+  encodeLE 8 intent.validFrom ++
+  encodeLE 8 intent.validThrough ++
+  encodeLE 8 intent.maximumFill ++
+  encodeLE 8 intent.limitPrice ++
+  encodeLE 2 intent.feeBasisPoints ++
+  zeros 6 ++
+  encodeBytes32 intent.collateralAccount
+
+theorem encodeCompactIntentV1_length (intent : CompactIntentV1) :
+    (encodeCompactIntentV1 intent).length = compactIntentBytes := by
+  simp [encodeCompactIntentV1, intentMagic, compactIntentBytes,
+    encodeLE_length, encodeBytes32_length, zeros]
+
+/-- Matcher-selected coordinates surrounding two independently signed intents. -/
+structure ControllerInstructionV1 where
+  controllerBump : UInt8
+  sellerReplayBump : UInt8
+  buyerReplayBump : UInt8
+  sellerPositionBump : UInt8
+  buyerPositionBump : UInt8
+  fill : Nat
+  executionPrice : Nat
+  seller : CompactIntentV1
+  buyer : CompactIntentV1
+
+def encodeControllerInstructionV1 (instruction : ControllerInstructionV1) : List UInt8 :=
+  controllerMagic ++
+  encodeLE 2 version ++
+  [instruction.controllerBump, instruction.sellerReplayBump,
+    instruction.buyerReplayBump, instruction.sellerPositionBump,
+    instruction.buyerPositionBump] ++
+  zeros 1 ++
+  encodeLE 8 instruction.fill ++
+  encodeLE 8 instruction.executionPrice ++
+  encodeCompactIntentV1 instruction.seller ++
+  encodeCompactIntentV1 instruction.buyer
+
+theorem encodeControllerInstructionV1_length (instruction : ControllerInstructionV1) :
+    (encodeControllerInstructionV1 instruction).length = controllerInstructionBytes := by
+  simp [encodeControllerInstructionV1, controllerMagic,
+    controllerInstructionBytes, compactIntentBytes, encodeLE_length,
+    encodeCompactIntentV1_length, zeros]
+
+/-- Immutable capability-specific execution policy selected by both intents. -/
+structure MarketProfileV1 where
+  phase : UInt8
+  outcomeCount : UInt8
+  generation : Nat
+  priceScale : Nat
+  feeBasisPoints : Nat
+  tokenProgram : Bytes32
+  collateralMint : Bytes32
+  feeRecipient : Bytes32
+
+def encodeMarketProfileV1 (profile : MarketProfileV1) : List UInt8 :=
+  profileMagic ++
+  encodeLE 2 version ++
+  [profile.phase, profile.outcomeCount] ++
+  zeros 4 ++
+  encodeLE 8 profile.generation ++
+  encodeLE 8 profile.priceScale ++
+  encodeLE 2 profile.feeBasisPoints ++
+  zeros 6 ++
+  encodeBytes32 profile.tokenProgram ++
+  encodeBytes32 profile.collateralMint ++
+  encodeBytes32 profile.feeRecipient
+
+theorem encodeMarketProfileV1_length (profile : MarketProfileV1) :
+    (encodeMarketProfileV1 profile).length = marketProfileBytes := by
+  simp [encodeMarketProfileV1, profileMagic, marketProfileBytes,
+    encodeLE_length, encodeBytes32_length, zeros]
+
+end DClutch.DirectControllerCodec

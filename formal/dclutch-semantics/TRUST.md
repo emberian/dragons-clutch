@@ -17,15 +17,19 @@ For an `Admissible` inline ordinary Direct frame, Lean 4 checks that:
 Lean also checks the general encoded length equations for V1 headers, effect
 records, and plans, plus the exact 120-byte semantic-plan and 72-byte physical
 claim-plan encodings of the Direct example. It checks the concrete account
-offsets, privilege words, claim-state tag, instruction length, and four effect
+offsets, privilege words, replay/Position state tags, instruction length, and four effect
 tags emitted for the exact-account claim executor. That concrete check assumes
 the named loader-v1 serialization formula.
 Lean also checks that the multiprogram physical plan's four replay/claim effects
 and two indivisible custody transfers execute to projections that join to the
 same Direct post-state, and that the custody projection conserves collateral.
-The semantic intent now binds both fee-policy identity and the exact maker-
-accepted fee rate. Lean checks the transition program's 37-instruction shape,
-600-byte encoding, admitted example outputs, and zero-fill refusal.
+The semantic intent binds the exact maker-accepted fee rate. The immutable
+execution-profile identity owns fee-policy selection rather than duplicating
+another identifier in every intent. Lean
+checks the transition program's 35-instruction shape, 568-byte encoding,
+admitted example outputs, and zero-fill refusal.
+Lean owns the compact intent, controller-instruction, and Market-profile data
+structures and proves their encodings are exactly 136, 304, and 136 bytes.
 
 `cumulativeFee_monotone` proves monotonicity of the concrete floor-fee function,
 and `cumulative_floor_fee_fragmentation_independent` combines it with the
@@ -40,7 +44,9 @@ cannot change a resting order's final cumulative fee in the semantic model.
 - a machine-checked refinement from Lean's transition VM to the safe Rust
   `dclutch-transition-vm` interpreter (cross-language exact-vector, hostile-
   bytecode, hostile-frame, rollback, and integer-boundary tests exist);
-- Ed25519 instruction authenticity;
+- a proof of native Ed25519 instruction authenticity (the real-SVM campaign
+  separately executes a two-signature native batch and a tampered-message
+  refusal);
 - a proof of Solana account ownership, signer/writable flags, PDA derivation,
   CPI, sysvars, Token/Token-2022 semantics, rent, and transaction rollback
   (the exact claim, controller, custody, and official SPL Token ELFs now provide
@@ -54,12 +60,13 @@ cannot change a resting order's final cumulative fee in the semantic model.
 - an implementation-level proof that real Solana CPI sequencing has the
   abstract `atomicCommit` behavior (transaction rollback is still a separately
   tested runtime property);
-- whole-CFG artifact coverage (qedsvm v0.11.0 emits and Lean checks one
-  successful-path Hoare triple for the generated four-effect claim
-  target; the general Rust/SDK executor remains outside its alias model);
+- whole-CFG artifact coverage (qedsvm v0.11.0 checks one successful path of the
+  superseded combined-projection claim artifact; the canonical four-account
+  owner model and the general Rust/SDK executor remain outside its alias model);
 - compute-unit, stack, ELF-size, and rent measurements for a complete successor
-  (claim, experimental controller, and custody are measured together; signed
-  admission, Realm selection, and release-authentication costs remain absent);
+  (claim, signed experimental controller, custody, and official SPL Token are
+  measured together; Realm selection and release-authentication costs remain
+  absent);
 - all Direct routes other than inline ordinary execution; and
 - all other protocol families.
 

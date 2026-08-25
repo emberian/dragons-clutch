@@ -33,9 +33,9 @@ the corresponding Lean theorems are in `DClutchSemantics.Physical`.
 
 ## Compiled transition program
 
-`direct-inline-ordinary-program-v1.hex` is the 600-byte output of
+`direct-inline-ordinary-program-v1.hex` is the 568-byte output of
 `lake exe emit-direct-program`. `DClutchSemantics.DirectProgram.program`
-contains 37 fixed sixteen-byte instructions over 41 scalar registers and seven
+contains 35 fixed sixteen-byte instructions over 41 scalar registers and four
 abstract identity registers. It does not accept gross or fee as caller facts:
 it derives exact quote divisibility, the quotient, and the named floor fee into
 output registers after checking the Direct admission relations. Native

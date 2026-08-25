@@ -36,7 +36,6 @@ def sellerIntent : Intent := {
   outcome := 1
   maxFill := 2000
   limitPrice := 400000
-  feePolicyId := 77
   feeBasisPoints := 25
 }
 
@@ -52,14 +51,12 @@ def buyerIntent : Intent := {
   outcome := 1
   maxFill := 2000
   limitPrice := 600000
-  feePolicyId := 77
   feeBasisPoints := 25
 }
 
 def frame : FillFrame := {
   product := binaryProduct
   feePolicy := feePolicy
-  feePolicyId := 77
   phase := .open
   slot := 100
   sellerIntent := sellerIntent

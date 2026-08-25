@@ -58,7 +58,6 @@ structure Intent where
   outcome : Nat
   maxFill : Nat
   limitPrice : Nat
-  feePolicyId : Nat
   feeBasisPoints : Nat
   deriving DecidableEq, Repr
 
@@ -92,7 +91,6 @@ authoritative caller assertions. -/
 structure FillFrame where
   product : ProductIR
   feePolicy : FeePolicy
-  feePolicyId : Nat
   phase : Phase
   slot : Nat
   sellerIntent : Intent
@@ -142,8 +140,6 @@ structure Admissible (frame : FillFrame) : Prop where
   sellerPrice : frame.sellerIntent.limitPrice ≤ frame.executionPrice
   buyerPrice : frame.executionPrice ≤ frame.buyerIntent.limitPrice
   priceInScale : frame.executionPrice ≤ frame.product.priceScale
-  sellerFeePolicy : frame.sellerIntent.feePolicyId = frame.feePolicyId
-  buyerFeePolicy : frame.buyerIntent.feePolicyId = frame.feePolicyId
   sellerFeeRate : frame.sellerIntent.feeBasisPoints = frame.feePolicy.basisPoints
   buyerFeeRate : frame.buyerIntent.feeBasisPoints = frame.feePolicy.basisPoints
   exactQuote : frame.fill * frame.executionPrice = frame.gross * frame.product.priceScale
@@ -184,8 +180,6 @@ def accepts (frame : FillFrame) : Bool :=
   decide (frame.sellerIntent.limitPrice ≤ frame.executionPrice) &&
   decide (frame.executionPrice ≤ frame.buyerIntent.limitPrice) &&
   decide (frame.executionPrice ≤ frame.product.priceScale) &&
-  decide (frame.sellerIntent.feePolicyId = frame.feePolicyId) &&
-  decide (frame.buyerIntent.feePolicyId = frame.feePolicyId) &&
   decide (frame.sellerIntent.feeBasisPoints = frame.feePolicy.basisPoints) &&
   decide (frame.buyerIntent.feeBasisPoints = frame.feePolicy.basisPoints) &&
   decide (frame.fill * frame.executionPrice = frame.gross * frame.product.priceScale) &&
@@ -217,8 +211,6 @@ theorem accepts_iff (frame : FillFrame) : accepts frame = true ↔ Admissible fr
     rcases evidence with ⟨evidence, exactQuote⟩
     rcases evidence with ⟨evidence, buyerFeeRate⟩
     rcases evidence with ⟨evidence, sellerFeeRate⟩
-    rcases evidence with ⟨evidence, buyerFeePolicy⟩
-    rcases evidence with ⟨evidence, sellerFeePolicy⟩
     rcases evidence with ⟨evidence, priceInScale⟩
     rcases evidence with ⟨evidence, buyerPrice⟩
     rcases evidence with ⟨evidence, sellerPrice⟩
@@ -246,8 +238,8 @@ theorem accepts_iff (frame : FillFrame) : accepts frame = true ↔ Admissible fr
       buyerSlotAfterStart, buyerSlotBeforeEnd, sellerSide, buyerSide, sameMarket,
       sameGeneration, sameOutcome, distinctMakers, outcomeInDomain, sellerLifecycle,
       buyerLifecycle, sellerNonce, buyerNonce, sellerNonceCanAdvance,
-      buyerNonceCanAdvance, sellerPrice, buyerPrice, priceInScale, sellerFeePolicy,
-      buyerFeePolicy, sellerFeeRate, buyerFeeRate, exactQuote, exactFloorFee,
+      buyerNonceCanAdvance, sellerPrice, buyerPrice, priceInScale, sellerFeeRate,
+      buyerFeeRate, exactQuote, exactFloorFee,
       fillU64, priceU64, grossU64, feeU64,
       sellerHasClaims, buyerHasCollateral, buyerClaimCreditFits,
       sellerCollateralCreditFits, venueCreditFits
@@ -266,8 +258,6 @@ theorem accepts_iff (frame : FillFrame) : accepts frame = true ↔ Admissible fr
     apply And.intro ?_ admitted.exactQuote
     apply And.intro ?_ admitted.buyerFeeRate
     apply And.intro ?_ admitted.sellerFeeRate
-    apply And.intro ?_ admitted.buyerFeePolicy
-    apply And.intro ?_ admitted.sellerFeePolicy
     apply And.intro ?_ admitted.priceInScale
     apply And.intro ?_ admitted.buyerPrice
     apply And.intro ?_ admitted.sellerPrice

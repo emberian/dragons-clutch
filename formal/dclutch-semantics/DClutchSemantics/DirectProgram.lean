@@ -69,10 +69,7 @@ def sellerMarket := 0
 def buyerMarket := 1
 def sellerMaker := 2
 def buyerMaker := 3
-def sellerFeePolicy := 4
-def buyerFeePolicy := 5
-def selectedFeePolicy := 6
-def count := 7
+def count := 4
 
 end Identity
 
@@ -135,10 +132,7 @@ def state (frame : FillFrame) : State := {
     frame.sellerIntent.market,
     frame.buyerIntent.market,
     frame.sellerIntent.maker,
-    frame.buyerIntent.maker,
-    frame.sellerIntent.feePolicyId,
-    frame.buyerIntent.feePolicyId,
-    frame.feePolicyId
+    frame.buyerIntent.maker
   ]
 }
 
@@ -169,8 +163,6 @@ def program : List Op := [
   .scalarLe Scalar.sellerLimit Scalar.executionPrice,
   .scalarLe Scalar.executionPrice Scalar.buyerLimit,
   .scalarLe Scalar.executionPrice Scalar.priceScale,
-  .identityEq Identity.sellerFeePolicy Identity.selectedFeePolicy,
-  .identityEq Identity.buyerFeePolicy Identity.selectedFeePolicy,
   .scalarEq Scalar.sellerFeeBps Scalar.policyFeeBps,
   .scalarEq Scalar.buyerFeeBps Scalar.policyFeeBps,
   .scalarLe Scalar.policyFeeBps Scalar.feeDenominator,
@@ -188,7 +180,7 @@ theorem register_shape (frame : FillFrame) :
     (state frame).identities.length = Identity.count := by
   simp [state, Scalar.count, Identity.count]
 
-theorem program_length : program.length = 37 := by
+theorem program_length : program.length = 35 := by
   native_decide
 
 def outputs (state : State) : Option (Nat × Nat × Nat × Nat) := do
@@ -206,7 +198,7 @@ theorem hostile_zero_fill_refuses :
   native_decide
 
 theorem encoded_program_length :
-    (TransitionVM.Codec.encodeProgram program).length = 600 := by
+    (TransitionVM.Codec.encodeProgram program).length = 568 := by
   native_decide
 
 end DClutch.DirectProgram

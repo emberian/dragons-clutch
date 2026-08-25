@@ -5,8 +5,9 @@ import DClutchSemantics.Examples
 /-!
 # Exact-account claim-executor Solana ABI-v1 profile
 
-This specializes the common loader-v1 layout arithmetic to the claim-only
-projection and the four effects derived by `Physical.physicalPlan`.
+This specializes the common loader-v1 layout arithmetic to four canonical
+state owners: one replay root and one Position for each maker. No combined
+pairwise projection is allowed to own or fragment either fact.
 -/
 
 namespace DClutch.ClaimSbfProfile
@@ -14,18 +15,31 @@ namespace DClutch.ClaimSbfProfile
 open DClutch
 open DClutch.SbfProfile
 
-def projectionRole : AccountRole := {
+def replayRole : AccountRole := {
   signer := false
   writable := true
   executable := false
-  dataBytes := 80
+  dataBytes := 48
+}
+
+def positionRole : AccountRole := {
+  signer := false
+  writable := true
+  executable := false
+  dataBytes := 56
 }
 
 def accountCountOffset : Nat := 0
 def authorityOffset : Nat := 8
-def projectionOffset : Nat := authorityOffset + accountSpan authorityRole
-def projectionDataOffset : Nat := projectionOffset + accountHeaderBytes
-def instructionLengthOffset : Nat := projectionOffset + accountSpan projectionRole
+def sellerReplayOffset : Nat := authorityOffset + accountSpan authorityRole
+def buyerReplayOffset : Nat := sellerReplayOffset + accountSpan replayRole
+def sellerPositionOffset : Nat := buyerReplayOffset + accountSpan replayRole
+def buyerPositionOffset : Nat := sellerPositionOffset + accountSpan positionRole
+def sellerReplayDataOffset : Nat := sellerReplayOffset + accountHeaderBytes
+def buyerReplayDataOffset : Nat := buyerReplayOffset + accountHeaderBytes
+def sellerPositionDataOffset : Nat := sellerPositionOffset + accountHeaderBytes
+def buyerPositionDataOffset : Nat := buyerPositionOffset + accountHeaderBytes
+def instructionLengthOffset : Nat := buyerPositionOffset + accountSpan positionRole
 def instructionOffset : Nat := instructionLengthOffset + 8
 
 def planBytes : List UInt8 :=
@@ -41,21 +55,31 @@ def planWord (index : Nat) : Nat :=
 def effectMetadata (index : Nat) : Nat := planWord (1 + 2 * index)
 def effectTag (index : Nat) : Nat := effectMetadata index % (2 ^ 32)
 
-def stateMagicWord : Nat :=
-  SbfProfile.decodeLE [0x44, 0x43, 0x43, 0x53, 1, 0, 0, 0] -- `DCCS`, V1
+def replayMagicWord : Nat :=
+  SbfProfile.decodeLE [0x44, 0x43, 0x52, 0x50, 1, 0, 0, 0] -- `DCRP`, V1
+
+def positionMagicWord : Nat :=
+  SbfProfile.decodeLE [0x44, 0x43, 0x50, 0x4e, 1, 0, 0, 0] -- `DCPN`, V1
 
 theorem exact_offsets :
     authorityOffset = 8 ∧
-    projectionOffset = 10344 ∧
-    projectionDataOffset = 10432 ∧
-    instructionLengthOffset = 20760 ∧
-    instructionOffset = 20768 ∧
-    programIdOffset = 20840 := by
+    sellerReplayOffset = 10344 ∧
+    buyerReplayOffset = 20728 ∧
+    sellerPositionOffset = 31112 ∧
+    buyerPositionOffset = 41504 ∧
+    sellerReplayDataOffset = 10432 ∧
+    buyerReplayDataOffset = 20816 ∧
+    sellerPositionDataOffset = 31200 ∧
+    buyerPositionDataOffset = 41592 ∧
+    instructionLengthOffset = 51896 ∧
+    instructionOffset = 51904 ∧
+    programIdOffset = 51976 := by
   native_decide
 
 theorem exact_frames :
     accountFrameWord authorityRole = 511 ∧
-    accountFrameWord projectionRole = 65791 := by
+    accountFrameWord replayRole = 65791 ∧
+    accountFrameWord positionRole = 65791 := by
   native_decide
 
 theorem exact_instruction_shape :

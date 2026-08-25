@@ -337,7 +337,7 @@ mod tests {
                 .set_scalar(index, value)
                 .expect("example scalar register");
         }
-        for (index, value) in [101_u8, 101, 11, 12, 77, 77, 77].into_iter().enumerate() {
+        for (index, value) in [101_u8, 101, 11, 12].into_iter().enumerate() {
             registers
                 .set_identity(index, [value; 32])
                 .expect("example identity register");
@@ -348,7 +348,7 @@ mod tests {
     #[test]
     fn lean_program_derives_exact_direct_outputs() {
         let bytes = program();
-        assert_eq!(bytes.len(), 600);
+        assert_eq!(bytes.len(), 568);
         let mut registers = example();
         execute(&bytes, &mut registers).expect("Lean example program");
         assert_eq!(registers.scalar(34), Ok(1_000));
