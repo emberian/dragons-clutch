@@ -4319,10 +4319,10 @@ impl<const N: usize> CandidateStateV1<N> {
     pub fn verify_page(
         &mut self,
         page_id: ContentId,
-        page: CandidatePageV1<N>,
-        root: GeneralRootV1,
-        config: GeneralConfigV1,
-        batch: BatchRootV1,
+        page: &CandidatePageV1<N>,
+        root: &GeneralRootV1,
+        config: &GeneralConfigV1,
+        batch: &BatchRootV1,
         now_slot: u64,
         capitalization: CandidateCapitalizationV1,
     ) -> Result<u64> {
@@ -4358,24 +4358,24 @@ impl<const N: usize> CandidateStateV1<N> {
         }
         let mut next = *self;
         for execution in page.executions.iter().take(count).flatten() {
-            next.verify_execution(*execution, root, config, batch)?;
+            next.verify_execution(execution, root, config, batch)?;
         }
         next.verified_pages = next_page_count;
         next.next_page_id = page.next_page_id;
         next.phase = CandidatePhase::Verifying;
-        let reward = next.consume_verification(config)?;
+        let reward = next.consume_verification(*config)?;
         *self = next;
         Ok(reward)
     }
 
     fn verify_execution(
         &mut self,
-        execution: ExecutionV1<N>,
-        root: GeneralRootV1,
-        config: GeneralConfigV1,
-        batch: BatchRootV1,
+        execution: &ExecutionV1<N>,
+        root: &GeneralRootV1,
+        config: &GeneralConfigV1,
+        batch: &BatchRootV1,
     ) -> Result<()> {
-        validate_execution_binding(&execution, &root, &config, &batch)?;
+        validate_execution_binding(execution, root, config, batch)?;
         if self
             .last_order_id
             .is_some_and(|last| execution.order.order_id <= last)

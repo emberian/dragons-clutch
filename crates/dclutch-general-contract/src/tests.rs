@@ -207,10 +207,10 @@ fn valid_candidate(
     candidate
         .verify_page(
             stored_page_id,
-            stored_page,
-            root(),
-            config(),
-            *batch,
+            &stored_page,
+            &root(),
+            &config(),
+            batch,
             11,
             capitalization(candidate),
         )
@@ -311,10 +311,10 @@ fn linked_page_substitution_is_refused_atomically() {
     assert_eq!(
         candidate.verify_page(
             id(99),
-            stored_page,
-            root(),
-            config(),
-            batch,
+            &stored_page,
+            &root(),
+            &config(),
+            &batch,
             11,
             capitalization(candidate),
         ),
@@ -326,10 +326,10 @@ fn linked_page_substitution_is_refused_atomically() {
     assert_eq!(
         candidate.verify_page(
             stored_page_id,
-            substituted,
-            root(),
-            config(),
-            batch,
+            &substituted,
+            &root(),
+            &config(),
+            &batch,
             11,
             capitalization(candidate),
         ),
@@ -455,10 +455,10 @@ fn candidate_capital_is_segregated_and_round_trips() {
     candidate
         .verify_page(
             stored_page_id,
-            stored_page,
-            root(),
-            config(),
-            batch,
+            &stored_page,
+            &root(),
+            &config(),
+            &batch,
             11,
             capitalization(candidate),
         )

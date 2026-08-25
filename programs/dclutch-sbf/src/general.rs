@@ -95,6 +95,7 @@ pub(crate) fn dispatch(
     }
 }
 
+#[inline(never)]
 fn dispatch_width<const N: usize>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -411,7 +412,7 @@ fn process_activate<const N: usize>(
     let market_identity_id =
         dclutch_general_contract::ContentId::new(hash(&identity.to_bytes()).to_bytes())
             .map_err(|_| AdapterError::ContentIdentity)?;
-    let plan = with_authenticated_finalized_record_v1(
+    let plan = Box::new(with_authenticated_finalized_record_v1(
         program_id,
         manifest_account,
         manifest_cursor,
@@ -515,7 +516,7 @@ fn process_activate<const N: usize>(
                 },
             )
         },
-    )?;
+    )?);
     preflight_mutable(&[
         activator,
         market_account,
@@ -533,7 +534,7 @@ fn process_activate<const N: usize>(
         general_funding_account,
         rent_credit_account,
         system,
-        plan,
+        plan.as_ref(),
     )
 }
 
@@ -547,7 +548,7 @@ fn execute_activation<'info, const N: usize>(
     general_funding_account: &AccountInfo<'info>,
     rent_credit_account: &AccountInfo<'info>,
     system: &AccountInfo<'info>,
-    plan: ActivationPlan<N>,
+    plan: &ActivationPlan<N>,
 ) -> Result<(), ProgramError> {
     let activation_credit = plan
         .root_rent
@@ -1107,12 +1108,12 @@ fn process_verify_candidate_page<const N: usize>(
     let page_account = account(accounts, 6)?;
     let root = authenticate_root(program_id, root_account)?;
     let config_id = root.config_id();
-    let page = authenticate_candidate_page::<N>(
+    let page = Box::new(authenticate_candidate_page::<N>(
         program_id,
         page_account,
         candidate_account,
         reference.page_id,
-    )?;
+    )?);
     if usize::from(page.execution_count)
         != accounts
             .len()
@@ -1131,18 +1132,18 @@ fn process_verify_candidate_page<const N: usize>(
         config_id.to_bytes(),
         |config, _| Ok(config),
     )?;
-    let batch = authenticate_batch(
-        program_id,
-        batch_account,
-        root_account,
-        decode_candidate::<N>(candidate_account)?.batch_sequence(),
-        config_id,
-    )?;
-    let mut candidate = authenticate_candidate(
+    let mut candidate = Box::new(authenticate_candidate(
         program_id,
         candidate_account,
         batch_account,
         reference.candidate_id,
+    )?);
+    let batch = authenticate_batch(
+        program_id,
+        batch_account,
+        root_account,
+        candidate.batch_sequence(),
+        config_id,
     )?;
     for (index, execution) in page
         .executions
@@ -1168,10 +1169,10 @@ fn process_verify_candidate_page<const N: usize>(
     let reward = candidate
         .verify_page(
             reference.page_id,
-            page,
-            root,
-            config,
-            batch,
+            page.as_ref(),
+            &root,
+            &config,
+            &batch,
             authenticate_clock(clock_sysvar)?.slot,
             CandidateCapitalizationV1 {
                 account_lamports: before,
@@ -1183,7 +1184,7 @@ fn process_verify_candidate_page<const N: usize>(
         .map_err(|_| AdapterError::MarketTransition)?;
     preflight_mutable(&[actor, candidate_account])?;
     transfer_owned_lamports(candidate_account, actor, reward)?;
-    write_candidate(candidate_account, candidate)
+    write_candidate(candidate_account, *candidate)
 }
 
 fn process_finish_candidate<const N: usize>(
@@ -1213,7 +1214,7 @@ fn process_finish_candidate<const N: usize>(
         .finish_verification(config, batch, cap, authenticate_clock(clock_sysvar)?.slot)
         .map_err(|_| AdapterError::MarketTransition)?;
     let _ = root;
-    pay_candidate_reward(actor, candidate_account, candidate, reward)
+    pay_candidate_reward(actor, candidate_account, *candidate, reward)
 }
 
 fn process_consider_candidate<const N: usize>(
@@ -1241,7 +1242,7 @@ fn process_consider_candidate<const N: usize>(
     )?;
     let reward = batch
         .consider_candidate(
-            &mut candidate,
+            candidate.as_mut(),
             config,
             cap,
             authenticate_clock(clock_sysvar)?.slot,
@@ -1250,7 +1251,7 @@ fn process_consider_candidate<const N: usize>(
     preflight_mutable(&[actor, batch_account, candidate_account])?;
     transfer_owned_lamports(candidate_account, actor, reward)?;
     write_batch(batch_account, batch)?;
-    write_candidate(candidate_account, candidate)
+    write_candidate(candidate_account, *candidate)
 }
 
 fn process_lock_selection(
@@ -1327,7 +1328,7 @@ fn process_reject_candidate<const N: usize>(
     let reward = candidate
         .reject(config, cap, authenticate_clock(clock_sysvar)?.slot)
         .map_err(|_| AdapterError::MarketTransition)?;
-    pay_candidate_reward(actor, candidate_account, candidate, reward)
+    pay_candidate_reward(actor, candidate_account, *candidate, reward)
 }
 
 fn process_expire_settlement<const N: usize>(
@@ -1355,7 +1356,7 @@ fn process_expire_settlement<const N: usize>(
     )?;
     let reward = batch
         .expire_unsettled(
-            &mut candidate,
+            candidate.as_mut(),
             config,
             cap,
             authenticate_clock(clock_sysvar)?.slot,
@@ -1364,7 +1365,7 @@ fn process_expire_settlement<const N: usize>(
     preflight_mutable(&[actor, batch_account, candidate_account])?;
     transfer_owned_lamports(candidate_account, actor, reward)?;
     write_batch(batch_account, batch)?;
-    write_candidate(candidate_account, candidate)
+    write_candidate(candidate_account, *candidate)
 }
 
 fn process_close_candidate_page<const N: usize>(
@@ -1412,7 +1413,7 @@ fn process_close_candidate_page<const N: usize>(
     }
     preflight_mutable(&[actor, candidate_account, page_account, rent_credit])?;
     transfer_owned_lamports(candidate_account, actor, close.cleanup_reward_lamports)?;
-    write_candidate(candidate_account, candidate)?;
+    write_candidate(candidate_account, *candidate)?;
     close_program_account(page_account, rent_credit)?;
     require_unchanged_rent_credit(program_id, rent_credit, rent_credit_state)
 }
@@ -1446,7 +1447,7 @@ fn process_close_candidate<const N: usize>(
         &Pubkey::new_from_array(candidate.submitter().to_bytes()),
     )?;
     let close = batch
-        .close_candidate_child(candidate, config, cap)
+        .close_candidate_child(*candidate, config, cap)
         .map_err(|_| AdapterError::MarketTransition)?;
     if close.rent_credit_lamports
         != candidate_account
@@ -1582,8 +1583,12 @@ fn process_begin_settlement<const N: usize>(
         token_program,
         market.root().identity().realm_id().to_bytes(),
     )?;
-    let mut candidate =
-        authenticate_candidate::<N>(program_id, candidate_account, batch_account, candidate_id)?;
+    let mut candidate = Box::new(authenticate_candidate::<N>(
+        program_id,
+        candidate_account,
+        batch_account,
+        candidate_id,
+    )?);
     let mut batch = authenticate_batch(
         program_id,
         batch_account,
@@ -1642,22 +1647,24 @@ fn process_begin_settlement<const N: usize>(
     let candidate_before = candidate_account.lamports();
     let actor_before = actor.lamports();
     let rent_credit_before = rent_credit.lamports();
-    let begin = SettlementCursorV1::begin(
-        &mut candidate,
-        &mut batch,
-        root,
-        config,
-        CandidateCapitalizationV1 {
-            account_lamports: candidate_before,
-            exact_state_rent_lamports: candidate_rent,
-        },
-        SettlementRentObservationV1 {
-            exact_rent_lamports: exact_rents,
-            precreation_lamports: precreation,
-        },
-        authenticate_clock(clock_sysvar)?.slot,
-    )
-    .map_err(|_| AdapterError::MarketTransition)?;
+    let begin = Box::new(
+        SettlementCursorV1::begin(
+            candidate.as_mut(),
+            &mut batch,
+            root,
+            config,
+            CandidateCapitalizationV1 {
+                account_lamports: candidate_before,
+                exact_state_rent_lamports: candidate_rent,
+            },
+            SettlementRentObservationV1 {
+                exact_rent_lamports: exact_rents,
+                precreation_lamports: precreation,
+            },
+            authenticate_clock(clock_sysvar)?.slot,
+        )
+        .map_err(|_| AdapterError::MarketTransition)?,
+    );
     let top_ups = begin.temporary_top_up_lamports();
     let actor_reimbursement = top_ups
         .iter()
@@ -1738,7 +1745,7 @@ fn process_begin_settlement<const N: usize>(
     )
     .map_err(|_| AdapterError::VaultInitializeCpi)?;
     write_batch(batch_account, batch)?;
-    write_candidate(candidate_account, candidate)?;
+    write_candidate(candidate_account, *candidate)?;
     write_settlement_cursor(cursor_account, begin.cursor())?;
     write_position(settlement_position_account, settlement_position)?;
 
@@ -1809,12 +1816,12 @@ fn process_collect_settlement_page<const N: usize>(
     let settlement_position_account = account(accounts, 14)?;
     let settlement_quote_escrow = account(accounts, 15)?;
     let page_account = account(accounts, 16)?;
-    let page = authenticate_candidate_page::<N>(
+    let page = Box::new(authenticate_candidate_page::<N>(
         program_id,
         page_account,
         candidate_account,
         reference.page_id,
-    )?;
+    )?);
     let execution_count = usize::from(page.execution_count);
     if execution_count == 0
         || execution_count > MAX_EXECUTIONS_PER_PAGE_V1
@@ -1851,12 +1858,12 @@ fn process_collect_settlement_page<const N: usize>(
         token_program,
         market.root().identity().realm_id().to_bytes(),
     )?;
-    let mut candidate = authenticate_candidate::<N>(
+    let mut candidate = Box::new(authenticate_candidate::<N>(
         program_id,
         candidate_account,
         batch_account,
         reference.candidate_id,
-    )?;
+    )?);
     let batch = authenticate_batch(
         program_id,
         batch_account,
@@ -1869,14 +1876,14 @@ fn process_collect_settlement_page<const N: usize>(
         cursor_account,
         candidate_account,
     )?);
-    let mut cursor = *cursor_before;
-    let mut settlement_position = authenticate_position::<N>(
+    let mut cursor = cursor_before.clone();
+    let mut settlement_position = Box::new(authenticate_position::<N>(
         program_id,
         settlement_position_account,
         market_account,
         cursor_account.key,
         config.generation(),
-    )?;
+    )?);
     let settlement_quote_before = authenticate_settlement_quote_escrow(
         program_id,
         settlement_quote_escrow,
@@ -1951,7 +1958,7 @@ fn process_collect_settlement_page<const N: usize>(
         .collect_page(
             reference.page_id,
             &page,
-            &mut candidate,
+            candidate.as_mut(),
             &root,
             &config,
             &batch,
@@ -2074,9 +2081,9 @@ fn process_collect_settlement_page<const N: usize>(
         return Err(AdapterError::PositionPostcondition.into());
     }
     transfer_owned_lamports(candidate_account, actor, result.settlement_reward_lamports)?;
-    write_candidate(candidate_account, candidate)?;
-    write_settlement_cursor(cursor_account, cursor)?;
-    write_position(settlement_position_account, settlement_position)?;
+    write_candidate(candidate_account, *candidate)?;
+    write_settlement_cursor(cursor_account, *cursor)?;
+    write_position(settlement_position_account, *settlement_position)?;
     let settlement_quote_after = authenticate_settlement_quote_escrow(
         program_id,
         settlement_quote_escrow,
@@ -2148,8 +2155,12 @@ fn process_materialize_settlement<const N: usize>(
         token_program,
         market.root().identity().realm_id().to_bytes(),
     )?;
-    let mut candidate =
-        authenticate_candidate::<N>(program_id, candidate_account, batch_account, candidate_id)?;
+    let mut candidate = Box::new(authenticate_candidate::<N>(
+        program_id,
+        candidate_account,
+        batch_account,
+        candidate_id,
+    )?);
     let batch = authenticate_batch(
         program_id,
         batch_account,
@@ -2157,15 +2168,18 @@ fn process_materialize_settlement<const N: usize>(
         candidate.batch_sequence(),
         root.config_id(),
     )?;
-    let mut cursor =
-        authenticate_settlement_cursor::<N>(program_id, cursor_account, candidate_account)?;
-    let mut settlement_position = authenticate_position::<N>(
+    let mut cursor = Box::new(authenticate_settlement_cursor::<N>(
+        program_id,
+        cursor_account,
+        candidate_account,
+    )?);
+    let mut settlement_position = Box::new(authenticate_position::<N>(
         program_id,
         settlement_position_account,
         market_account,
         cursor_account.key,
         config.generation(),
-    )?;
+    )?);
     let quote_before = authenticate_settlement_quote_escrow(
         program_id,
         settlement_quote_escrow,
@@ -2187,20 +2201,22 @@ fn process_materialize_settlement<const N: usize>(
     let candidate_rent = rent.minimum_balance(
         CandidateStateV1::<N>::encoded_len().map_err(|_| AdapterError::Arithmetic)?,
     );
-    let materialization = cursor
-        .materialize(
-            &mut candidate,
-            batch,
-            root,
-            config,
-            *settlement_position.balances(),
-            quote_before.amount,
-            CandidateCapitalizationV1 {
-                account_lamports: candidate_account.lamports(),
-                exact_state_rent_lamports: candidate_rent,
-            },
-        )
-        .map_err(|_| AdapterError::MarketTransition)?;
+    let materialization = Box::new(
+        cursor
+            .materialize(
+                candidate.as_mut(),
+                batch,
+                root,
+                config,
+                *settlement_position.balances(),
+                quote_before.amount,
+                CandidateCapitalizationV1 {
+                    account_lamports: candidate_account.lamports(),
+                    exact_state_rent_lamports: candidate_rent,
+                },
+            )
+            .map_err(|_| AdapterError::MarketTransition)?,
+    );
     let mut market_after = market;
     match materialization.action() {
         SettlementMaterializationActionV1::None => {}
@@ -2301,9 +2317,9 @@ fn process_materialize_settlement<const N: usize>(
     }
     transfer_owned_lamports(candidate_account, actor, materialization.reward_lamports())?;
     write_market(market_account, market_after)?;
-    write_candidate(candidate_account, candidate)?;
-    write_settlement_cursor(cursor_account, cursor)?;
-    write_position(settlement_position_account, settlement_position)?;
+    write_candidate(candidate_account, *candidate)?;
+    write_settlement_cursor(cursor_account, *cursor)?;
+    write_position(settlement_position_account, *settlement_position)?;
     let quote_after = authenticate_settlement_quote_escrow(
         program_id,
         settlement_quote_escrow,
@@ -2368,12 +2384,12 @@ fn process_distribute_settlement_page<const N: usize>(
     let settlement_quote_escrow = account(accounts, 15)?;
     let page_account = account(accounts, 16)?;
     let rent_credit = account(accounts, 17)?;
-    let page = authenticate_candidate_page::<N>(
+    let page = Box::new(authenticate_candidate_page::<N>(
         program_id,
         page_account,
         candidate_account,
         reference.page_id,
-    )?;
+    )?);
     let execution_count = usize::from(page.execution_count);
     if execution_count == 0
         || execution_count > MAX_EXECUTIONS_PER_PAGE_V1
@@ -2410,12 +2426,12 @@ fn process_distribute_settlement_page<const N: usize>(
         token_program,
         market.root().identity().realm_id().to_bytes(),
     )?;
-    let mut candidate = authenticate_candidate::<N>(
+    let mut candidate = Box::new(authenticate_candidate::<N>(
         program_id,
         candidate_account,
         batch_account,
         reference.candidate_id,
-    )?;
+    )?);
     let batch = authenticate_batch(
         program_id,
         batch_account,
@@ -2428,14 +2444,14 @@ fn process_distribute_settlement_page<const N: usize>(
         cursor_account,
         candidate_account,
     )?);
-    let mut cursor = *cursor_before;
-    let mut settlement_position = authenticate_position::<N>(
+    let mut cursor = cursor_before.clone();
+    let mut settlement_position = Box::new(authenticate_position::<N>(
         program_id,
         settlement_position_account,
         market_account,
         cursor_account.key,
         config.generation(),
-    )?;
+    )?);
     let settlement_quote_before = authenticate_settlement_quote_escrow(
         program_id,
         settlement_quote_escrow,
@@ -2485,7 +2501,7 @@ fn process_distribute_settlement_page<const N: usize>(
         .distribute_page(
             reference.page_id,
             &page,
-            &mut candidate,
+            candidate.as_mut(),
             &root,
             &config,
             &batch,
@@ -2630,9 +2646,9 @@ fn process_distribute_settlement_page<const N: usize>(
         .checked_add(page_close.cleanup_reward_lamports)
         .ok_or(AdapterError::Arithmetic)?;
     transfer_owned_lamports(candidate_account, actor, total_reward)?;
-    write_candidate(candidate_account, candidate)?;
-    write_settlement_cursor(cursor_account, cursor)?;
-    write_position(settlement_position_account, settlement_position)?;
+    write_candidate(candidate_account, *candidate)?;
+    write_settlement_cursor(cursor_account, *cursor)?;
+    write_position(settlement_position_account, *settlement_position)?;
     close_program_account(page_account, rent_credit)?;
     if rent_credit.lamports()
         != rent_credit_before
@@ -2711,8 +2727,12 @@ fn process_finish_settlement<const N: usize>(
         token_program,
         market.root().identity().realm_id().to_bytes(),
     )?;
-    let mut candidate =
-        authenticate_candidate::<N>(program_id, candidate_account, batch_account, candidate_id)?;
+    let mut candidate = Box::new(authenticate_candidate::<N>(
+        program_id,
+        candidate_account,
+        batch_account,
+        candidate_id,
+    )?);
     let mut batch = authenticate_batch(
         program_id,
         batch_account,
@@ -2720,8 +2740,11 @@ fn process_finish_settlement<const N: usize>(
         candidate.batch_sequence(),
         root.config_id(),
     )?;
-    let mut cursor =
-        authenticate_settlement_cursor::<N>(program_id, cursor_account, candidate_account)?;
+    let mut cursor = Box::new(authenticate_settlement_cursor::<N>(
+        program_id,
+        cursor_account,
+        candidate_account,
+    )?);
     let settlement_position = authenticate_position::<N>(
         program_id,
         settlement_position_account,
@@ -2743,7 +2766,7 @@ fn process_finish_settlement<const N: usize>(
     );
     let reward = cursor
         .finish(
-            &mut candidate,
+            candidate.as_mut(),
             &mut batch,
             root,
             config,
@@ -2765,8 +2788,8 @@ fn process_finish_settlement<const N: usize>(
     ])?;
     transfer_owned_lamports(candidate_account, actor, reward)?;
     write_batch(batch_account, batch)?;
-    write_candidate(candidate_account, candidate)?;
-    write_settlement_cursor(cursor_account, cursor)?;
+    write_candidate(candidate_account, *candidate)?;
+    write_settlement_cursor(cursor_account, *cursor)?;
     if authenticate_position::<N>(
         program_id,
         settlement_position_account,
@@ -2844,8 +2867,12 @@ fn process_close_settlement<const N: usize>(
         token_program,
         market.root().identity().realm_id().to_bytes(),
     )?;
-    let mut candidate =
-        authenticate_candidate::<N>(program_id, candidate_account, batch_account, candidate_id)?;
+    let mut candidate = Box::new(authenticate_candidate::<N>(
+        program_id,
+        candidate_account,
+        batch_account,
+        candidate_id,
+    )?);
     let mut batch = authenticate_batch(
         program_id,
         batch_account,
@@ -2889,7 +2916,7 @@ fn process_close_settlement<const N: usize>(
     ];
     let close = cursor
         .close(
-            &mut candidate,
+            candidate.as_mut(),
             &mut batch,
             root,
             config,
@@ -2930,7 +2957,7 @@ fn process_close_settlement<const N: usize>(
     ])?;
     transfer_owned_lamports(candidate_account, actor, close.continuation_reward_lamports)?;
     write_batch(batch_account, batch)?;
-    write_candidate(candidate_account, candidate)?;
+    write_candidate(candidate_account, *candidate)?;
     let cursor_seeds = GeneralSettlementCursorPdaSeedsV1::new(candidate_account.key.to_bytes())
         .map_err(|_| AdapterError::PositionAuthentication)?;
     let components = cursor_seeds.seed_components();
@@ -3096,7 +3123,7 @@ fn authenticate_candidate_transition<'info, const N: usize>(
         GeneralRootV1,
         GeneralConfigV1,
         BatchRootV1,
-        CandidateStateV1<N>,
+        Box<CandidateStateV1<N>>,
         CandidateCapitalizationV1,
     ),
     ProgramError,
@@ -3110,8 +3137,12 @@ fn authenticate_candidate_transition<'info, const N: usize>(
         root.config_id().to_bytes(),
         |config, _| Ok(config),
     )?;
-    let candidate =
-        authenticate_candidate(program_id, candidate_account, batch_account, candidate_id)?;
+    let candidate = Box::new(authenticate_candidate(
+        program_id,
+        candidate_account,
+        batch_account,
+        candidate_id,
+    )?);
     let batch = authenticate_batch(
         program_id,
         batch_account,
@@ -3264,13 +3295,13 @@ fn process_admit_order<const N: usize>(
     }
     authenticate_order_id(*order)?;
     let rent_credit_state = authenticate_rent_credit(program_id, rent_credit, owner.key)?;
-    let mut position = authenticate_position::<N>(
+    let mut position = Box::new(authenticate_position::<N>(
         program_id,
         position_account,
         market_account,
         owner.key,
         config.generation(),
-    )?;
+    )?);
 
     let state_seeds = GeneralOrderStatePdaSeedsV1::new(market_account.key.to_bytes(), *order)
         .map_err(|_| AdapterError::PositionAuthentication)?;
@@ -3294,14 +3325,16 @@ fn process_admit_order<const N: usize>(
         return Err(AdapterError::AccountIdentity.into());
     }
 
-    let admission = GeneralOrderCustodyV1::admit(
-        *order,
-        root,
-        config,
-        rent_credit.key.to_bytes(),
-        quote_escrow.key.to_bytes(),
-    )
-    .map_err(|_| AdapterError::PositionAuthentication)?;
+    let admission = Box::new(
+        GeneralOrderCustodyV1::admit(
+            *order,
+            root,
+            config,
+            rent_credit.key.to_bytes(),
+            quote_escrow.key.to_bytes(),
+        )
+        .map_err(|_| AdapterError::PositionAuthentication)?,
+    );
     for (index, amount) in admission.reserve.claim_atoms().iter().enumerate() {
         if *amount != 0 {
             position
@@ -3338,10 +3371,10 @@ fn process_admit_order<const N: usize>(
         rent_credit,
     ])?;
 
-    let plan = AdmissionPlan {
+    let plan = Box::new(AdmissionPlan {
         state: admission.order_state,
         custody: admission.custody,
-        position,
+        position: *position,
         state_bump,
         custody_bump,
         escrow_bump,
@@ -3356,7 +3389,7 @@ fn process_admit_order<const N: usize>(
         rent_credit_lamports: rent_credit.lamports(),
         source_before,
         realm,
-    };
+    });
     create_order_accounts(
         program_id,
         owner,
@@ -3367,7 +3400,7 @@ fn process_admit_order<const N: usize>(
         token_program,
         system,
         *order,
-        plan,
+        plan.as_ref(),
     )?;
     initialize_and_fund_escrow(
         quote_source,
@@ -3376,7 +3409,7 @@ fn process_admit_order<const N: usize>(
         token_program,
         owner,
         custody_account,
-        plan,
+        plan.as_ref(),
     )?;
     persist_admission(
         program_id,
@@ -3390,7 +3423,7 @@ fn process_admit_order<const N: usize>(
         token_program,
         rent_credit,
         rent_credit_state,
-        plan,
+        plan.as_ref(),
     )
 }
 
@@ -3405,7 +3438,7 @@ fn create_order_accounts<'info, const N: usize>(
     token_program: &AccountInfo<'info>,
     system: &AccountInfo<'info>,
     order: PortfolioOrderV1<N>,
-    plan: AdmissionPlan<N>,
+    plan: &AdmissionPlan<N>,
 ) -> Result<(), ProgramError> {
     let state_seeds = GeneralOrderStatePdaSeedsV1::new(*plan.position.market(), order)
         .map_err(|_| AdapterError::PositionAuthentication)?;
@@ -3458,7 +3491,7 @@ fn initialize_and_fund_escrow<'info, const N: usize>(
     token_program: &AccountInfo<'info>,
     owner: &AccountInfo<'info>,
     custody: &AccountInfo<'info>,
-    plan: AdmissionPlan<N>,
+    plan: &AdmissionPlan<N>,
 ) -> Result<(), ProgramError> {
     let initialize =
         token_initialize_instruction(plan.realm.release, *escrow.key, *mint.key, *custody.key)?;
@@ -3503,7 +3536,7 @@ fn persist_admission<const N: usize>(
     token_program: &AccountInfo<'_>,
     rent_credit: &AccountInfo<'_>,
     rent_credit_state: RentCreditV1,
-    plan: AdmissionPlan<N>,
+    plan: &AdmissionPlan<N>,
 ) -> Result<(), ProgramError> {
     write_order_state(state_account, plan.state)?;
     write_custody(custody_account, plan.custody)?;
@@ -3654,7 +3687,7 @@ fn process_release_order<const N: usize>(
     if custody_account.key != &expected_custody || custody_account.owner != program_id {
         return Err(AdapterError::AccountIdentity.into());
     }
-    let custody = decode_custody::<N>(custody_account)?;
+    let custody = Box::new(decode_custody::<N>(custody_account)?);
     if custody.quote_escrow() != quote_escrow.key.to_bytes()
         || custody.rent_beneficiary() != rent_credit.key.to_bytes()
         || custody.owner() != order.owner()
@@ -3671,14 +3704,14 @@ fn process_release_order<const N: usize>(
         rent_credit,
         &Pubkey::new_from_array(order.owner().to_bytes()),
     )?;
-    let mut position = authenticate_position::<N>(
+    let mut position = Box::new(authenticate_position::<N>(
         program_id,
         position_account,
         market_account,
         &Pubkey::new_from_array(order.owner().to_bytes()),
         config.generation(),
-    )?;
-    let release = if cancellation {
+    )?);
+    let release = Box::new(if cancellation {
         let slot = authenticate_clock(clock_sysvar.ok_or(AdapterError::AccountFrameLength)?)?.slot;
         custody
             .cancel_and_release(
@@ -3695,7 +3728,7 @@ fn process_release_order<const N: usize>(
         custody
             .close_after_batch(&mut state, *order, batch, root, config)
             .map_err(|_| AdapterError::MarketTransition)?
-    };
+    });
     for (index, amount) in release.claim_atoms.iter().enumerate() {
         if *amount != 0 {
             position
@@ -3733,10 +3766,10 @@ fn process_release_order<const N: usize>(
         quote_destination,
         rent_credit,
     ])?;
-    let plan = ReleasePlan {
+    let plan = Box::new(ReleasePlan {
         state,
-        position,
-        release,
+        position: *position,
+        release: *release,
         custody_bump,
         realm,
         source_before,
@@ -3744,7 +3777,7 @@ fn process_release_order<const N: usize>(
         escrow_close,
         custody_close,
         rent_credit_state,
-    };
+    });
     execute_release(
         program_id,
         state_account,
@@ -3755,7 +3788,7 @@ fn process_release_order<const N: usize>(
         mint,
         token_program,
         rent_credit,
-        plan,
+        plan.as_ref(),
     )
 }
 
@@ -3770,7 +3803,7 @@ fn execute_release<'info, const N: usize>(
     mint: &AccountInfo<'info>,
     token_program: &AccountInfo<'info>,
     rent_credit: &AccountInfo<'info>,
-    plan: ReleasePlan<N>,
+    plan: &ReleasePlan<N>,
 ) -> Result<(), ProgramError> {
     let custody_seed = GeneralOrderCustodyPdaSeedsV1::new(state_account.key.to_bytes())
         .map_err(|_| AdapterError::PositionAuthentication)?;
