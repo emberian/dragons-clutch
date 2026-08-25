@@ -8,7 +8,6 @@
 //! signer stored in the state projection is the explicit trust boundary for
 //! semantic admission. See the adjacent README before interpreting results.
 
-#[cfg(test)]
 extern crate std;
 
 use dclutch_effect_kernel::{Plan, State, execute};
@@ -124,7 +123,7 @@ impl ProjectionV1 {
 }
 
 #[cfg(not(feature = "no-entrypoint"))]
-solana_program::entrypoint!(process_instruction);
+solana_program::entrypoint_no_alloc!(process_instruction);
 
 /// Execute one already-admitted effect plan against one owned projection.
 ///
