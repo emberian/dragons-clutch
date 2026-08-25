@@ -14,7 +14,8 @@ use crate::{
     ArtifactUpgradePolicyV1, DeploymentObservationV1, EXECUTION_AUTHORITY_MANIFEST_BYTES_V1,
     EXECUTION_AUTHORITY_MANIFEST_MAGIC_V1, Error, ExecutionAuthorityManifestV1,
     ExecutionReleaseActivationInputsV1, activate_execution_release_set_v1,
-    authenticate_market_execution_v1,
+    activate_execution_role_into_v1, authenticate_market_execution_v1,
+    initialize_activation_cache_v1,
 };
 
 const ROLE_CACHE_HEADER_BYTES: usize = 48;
@@ -547,6 +548,46 @@ fn activation_closes_every_role_and_roundtrips_its_projection() {
         ActivatedExecutionReleaseSetV1::decode(&encoded),
         Ok(activated)
     );
+}
+
+#[test]
+fn streaming_activation_is_byte_identical_to_the_owned_host_api() {
+    let fixture = Fixture::distinct();
+    let expected = fixture.activate().to_bytes();
+    let mut streamed = [0_u8; ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1];
+    initialize_activation_cache_v1(
+        &mut streamed,
+        fixture.core_program,
+        fixture.release_set_id,
+        &fixture.release_set,
+    )
+    .expect("initialize exact cache");
+    for (role, index) in [
+        (ExecutionRoleV1::Core, 0),
+        (ExecutionRoleV1::Claims, 1),
+        (ExecutionRoleV1::Trading, 2),
+        (ExecutionRoleV1::Resolution, 3),
+        (ExecutionRoleV1::Custody, 4),
+    ] {
+        let input = activation_input(
+            copied(&fixture.artifact_ids, index),
+            copied(&fixture.releases, index),
+        );
+        activate_execution_role_into_v1(
+            &mut streamed,
+            fixture.core_program,
+            fixture.release_set_id,
+            &fixture.release_set,
+            role,
+            &input,
+        )
+        .expect("stream one authenticated role");
+    }
+    assert_eq!(streamed, expected);
+    let view = crate::ActivatedExecutionReleaseSetViewV1::decode(&streamed)
+        .expect("complete borrowed view");
+    assert_eq!(view.execution_release_set_id(), Ok(fixture.release_set_id));
+    assert_eq!(view.release_set_projection(), Ok(fixture.release_set));
 }
 
 #[test]

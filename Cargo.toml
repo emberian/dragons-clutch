@@ -20,6 +20,7 @@ members = [
     "crates/dclutch-product-contract",
     "crates/dclutch-record-contract",
     "crates/dclutch-registry-contract",
+    "crates/dclutch-registry-svm",
     "crates/dclutch-release-set-contract",
     "crates/dclutch-release-tool",
     "crates/dclutch-resolution-codec",
@@ -37,6 +38,7 @@ members = [
     "programs/dclutch-custody-proof-sbf",
     "programs/dclutch-economic-sbf",
     "programs/dclutch-resolution-proof-sbf",
+    "programs/dclutch-registry-sbf",
     "programs/dclutch-sbf",
 ]
 resolver = "2"

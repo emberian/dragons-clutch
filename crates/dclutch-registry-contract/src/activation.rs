@@ -139,6 +139,64 @@ impl ActivatedRoleV1 {
     }
 }
 
+/// Borrowed hostile-validated view of one Registry-owned activation cache.
+///
+/// This view avoids copying all five artifact releases into one SBF stack
+/// frame. It validates the same projection and decodes only the role a caller
+/// actually consumes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ActivatedExecutionReleaseSetViewV1<'a> {
+    bytes: &'a [u8],
+}
+
+impl<'a> ActivatedExecutionReleaseSetViewV1<'a> {
+    /// Hostile-decode one exact complete activation cache without copying it.
+    pub fn decode(bytes: &'a [u8]) -> Result<Self> {
+        validate_activation_header(bytes)?;
+        let value = Self { bytes };
+        value.validate_projection()?;
+        Ok(value)
+    }
+
+    /// Return the exact activated release-set content identity.
+    pub fn execution_release_set_id(self) -> Result<ContentId> {
+        ContentId::new(read_array(self.bytes, RELEASE_SET_ID_OFFSET)?)
+            .map_err(|_| Error::ZeroIdentity)
+    }
+
+    /// Decode one activated role from the borrowed cache.
+    pub fn role(self, role: ExecutionRoleV1) -> Result<ActivatedRoleV1> {
+        decode_role(self.bytes, role)
+    }
+
+    /// Reconstruct the exact release-set projection cached by this state.
+    pub fn release_set_projection(self) -> Result<ExecutionReleaseSetV1> {
+        ExecutionReleaseSetV1::new(
+            projection_binding(self.role(ExecutionRoleV1::Core)?),
+            projection_binding(self.role(ExecutionRoleV1::Claims)?),
+            projection_binding(self.role(ExecutionRoleV1::Trading)?),
+            projection_binding(self.role(ExecutionRoleV1::Resolution)?),
+            projection_binding(self.role(ExecutionRoleV1::Custody)?),
+        )
+        .map_err(Error::from)
+    }
+
+    fn validate_projection(self) -> Result<()> {
+        self.release_set_projection()?;
+        for (left_index, left) in ALL_ROLES.into_iter().enumerate() {
+            for right in ALL_ROLES.into_iter().skip(left_index + 1) {
+                let left_role = self.role(left)?;
+                let right_role = self.role(right)?;
+                let same_pair = projection_binding(left_role) == projection_binding(right_role);
+                if same_pair && left_role != right_role {
+                    return Err(Error::AliasedRoleActivationMismatch);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Registry-owned derived cache for one fully activated release set.
 ///
 /// Every embedded release is an exact byte-for-byte projection of its sole
@@ -157,31 +215,15 @@ pub struct ActivatedExecutionReleaseSetV1 {
 impl ActivatedExecutionReleaseSetV1 {
     /// Hostile-decode one exact Registry-owned activation cache.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() != ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1 {
-            return Err(Error::InvalidLength);
-        }
-        if bytes.get(..ACTIVATED_EXECUTION_RELEASE_SET_MAGIC_V1.len())
-            != Some(ACTIVATED_EXECUTION_RELEASE_SET_MAGIC_V1.as_slice())
-        {
-            return Err(Error::InvalidMagic);
-        }
-        if read_u16(bytes, SCHEMA_OFFSET)? != ACTIVATED_EXECUTION_RELEASE_SET_SCHEMA_VERSION_V1 {
-            return Err(Error::UnsupportedSchema);
-        }
-        if read_u16(bytes, PROFILE_OFFSET)? != ACTIVATED_EXECUTION_RELEASE_SET_PROFILE_V1 {
-            return Err(Error::UnsupportedArtifactProfile);
-        }
-        require_zero(bytes, RESERVED_OFFSET, RESERVED_BYTES)?;
+        let view = ActivatedExecutionReleaseSetViewV1::decode(bytes)?;
         let value = Self {
-            execution_release_set_id: ContentId::new(read_array(bytes, RELEASE_SET_ID_OFFSET)?)
-                .map_err(|_| Error::ZeroIdentity)?,
-            core: decode_role(bytes, ExecutionRoleV1::Core)?,
-            claims: decode_role(bytes, ExecutionRoleV1::Claims)?,
-            trading: decode_role(bytes, ExecutionRoleV1::Trading)?,
-            resolution: decode_role(bytes, ExecutionRoleV1::Resolution)?,
-            custody: decode_role(bytes, ExecutionRoleV1::Custody)?,
+            execution_release_set_id: view.execution_release_set_id()?,
+            core: view.role(ExecutionRoleV1::Core)?,
+            claims: view.role(ExecutionRoleV1::Claims)?,
+            trading: view.role(ExecutionRoleV1::Trading)?,
+            resolution: view.role(ExecutionRoleV1::Resolution)?,
+            custody: view.role(ExecutionRoleV1::Custody)?,
         };
-        value.validate_projection()?;
         Ok(value)
     }
 
@@ -265,6 +307,101 @@ impl ActivatedExecutionReleaseSetV1 {
     }
 }
 
+/// Initialize one transaction-local activation-cache buffer.
+///
+/// The buffer must be the exact zero-filled account allocation. Call
+/// [`activate_execution_role_into_v1`] once for every role, in canonical role
+/// order, and finish with [`ActivatedExecutionReleaseSetViewV1::decode`]. A
+/// composing SBF adapter may write directly into a newly created PDA because a
+/// later refusal rolls the entire transaction back.
+pub fn initialize_activation_cache_v1(
+    output: &mut [u8],
+    current_core_program: ProgramIdentityV1,
+    finalized_release_set_id: ContentId,
+    release_set: &ExecutionReleaseSetV1,
+) -> Result<()> {
+    if output.len() != ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1 {
+        return Err(Error::InvalidLength);
+    }
+    if output.iter().any(|byte| *byte != 0) {
+        return Err(Error::NonCanonicalReservedBytes);
+    }
+    if release_set.binding(ExecutionRoleV1::Core).program() != current_core_program {
+        return Err(Error::CoreProgramMismatch);
+    }
+    copy_infallible(output, 0, &ACTIVATED_EXECUTION_RELEASE_SET_MAGIC_V1);
+    put_u16(
+        output,
+        SCHEMA_OFFSET,
+        ACTIVATED_EXECUTION_RELEASE_SET_SCHEMA_VERSION_V1,
+    );
+    put_u16(
+        output,
+        PROFILE_OFFSET,
+        ACTIVATED_EXECUTION_RELEASE_SET_PROFILE_V1,
+    );
+    copy_infallible(
+        output,
+        RELEASE_SET_ID_OFFSET,
+        finalized_release_set_id.as_bytes(),
+    );
+    Ok(())
+}
+
+/// Authenticate and write one exact role into an initialized cache buffer.
+///
+/// A slot may be empty or already contain the exact same activated role.
+/// Conflicting rewrites and conflicting bytes for any aliased role refuse.
+pub fn activate_execution_role_into_v1(
+    output: &mut [u8],
+    current_core_program: ProgramIdentityV1,
+    finalized_release_set_id: ContentId,
+    release_set: &ExecutionReleaseSetV1,
+    role: ExecutionRoleV1,
+    input: &ArtifactActivationInputV1,
+) -> Result<()> {
+    validate_activation_header(output)?;
+    if read_array::<IDENTITY_BYTES>(output, RELEASE_SET_ID_OFFSET)?
+        != finalized_release_set_id.to_bytes()
+    {
+        return Err(Error::ReleaseSetSelectionMismatch);
+    }
+    if release_set.binding(ExecutionRoleV1::Core).program() != current_core_program {
+        return Err(Error::CoreProgramMismatch);
+    }
+    let expected = release_set.binding(role);
+    authenticate_role(expected, input)?;
+    let activated = activated(input);
+    let mut encoded_role = [0_u8; ACTIVATED_ROLE_BYTES_V1];
+    copy_infallible(
+        &mut encoded_role,
+        0,
+        activated.artifact_release_id.as_bytes(),
+    );
+    copy_infallible(
+        &mut encoded_role,
+        IDENTITY_BYTES,
+        &activated.release.to_bytes(),
+    );
+    for other in ALL_ROLES {
+        let other_offset = role_offset(other);
+        let other_bytes = subslice(output, other_offset, ACTIVATED_ROLE_BYTES_V1)?;
+        let initialized = other_bytes.iter().any(|byte| *byte != 0);
+        if other == role {
+            if initialized && other_bytes != encoded_role {
+                return Err(Error::AliasedRoleActivationMismatch);
+            }
+        } else if expected == release_set.binding(other)
+            && initialized
+            && other_bytes != encoded_role
+        {
+            return Err(Error::AliasedRoleActivationMismatch);
+        }
+    }
+    copy_infallible(output, role_offset(role), &encoded_role);
+    Ok(())
+}
+
 /// Check all finalized releases and current Loader observations, then produce
 /// the sole Registry-owned activation cache.
 ///
@@ -346,4 +483,22 @@ fn decode_role(bytes: &[u8], role: ExecutionRoleV1) -> Result<ActivatedRoleV1> {
             ARTIFACT_RELEASE_BYTES_V1,
         )?)?,
     })
+}
+
+fn validate_activation_header(bytes: &[u8]) -> Result<()> {
+    if bytes.len() != ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1 {
+        return Err(Error::InvalidLength);
+    }
+    if bytes.get(..ACTIVATED_EXECUTION_RELEASE_SET_MAGIC_V1.len())
+        != Some(ACTIVATED_EXECUTION_RELEASE_SET_MAGIC_V1.as_slice())
+    {
+        return Err(Error::InvalidMagic);
+    }
+    if read_u16(bytes, SCHEMA_OFFSET)? != ACTIVATED_EXECUTION_RELEASE_SET_SCHEMA_VERSION_V1 {
+        return Err(Error::UnsupportedSchema);
+    }
+    if read_u16(bytes, PROFILE_OFFSET)? != ACTIVATED_EXECUTION_RELEASE_SET_PROFILE_V1 {
+        return Err(Error::UnsupportedArtifactProfile);
+    }
+    require_zero(bytes, RESERVED_OFFSET, RESERVED_BYTES)
 }

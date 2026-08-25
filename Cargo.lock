@@ -508,6 +508,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-registry-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-record-contract",
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
+ "solana-program",
+ "solana-sdk-ids",
+ "solana-system-interface",
+]
+
+[[package]]
+name = "dclutch-registry-svm"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-release-set-contract",
+]
+
+[[package]]
 name = "dclutch-release-set-contract"
 version = "0.1.0"
 dependencies = [
