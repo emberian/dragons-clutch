@@ -15,12 +15,15 @@ This repository is active greenfield development. It has no deployed program,
 official frontend, live market, wallet integration, production source profile,
 or release.
 
-An experimental Lean-owned semantic specializer now emits canonical Direct
-Effect bytes and an exact Solana ABI-v1 proof profile. Its isolated 2,232-byte
-SBF target executes the example plan in 155 CU, and one exact successful machine
-path has a qedsvm-generated, Lean-kernel-checked Hoare triple. This is not a
-production successor: controller-PDA authentication, real SPL custody,
-high-level-to-machine composition, and complete path coverage remain open.
+An experimental Lean-owned semantic specializer now emits separate canonical
+Direct claim and custody plans. Its 1,872-byte claim executor has a
+qedsvm-generated, Lean-kernel-checked successful-path Hoare triple. A real-SVM
+campaign composes that executor with a controller PDA, a 24,800-byte custody
+adapter, and the official SPL Token 9.0.0 ELF: a complete two-transfer example
+commits in 24,901 CU, while a failure after the first token CPI restores every
+earlier mutation byte-for-byte. This is not a production successor: signed
+intent admission, Realm and release authentication, high-level-to-machine
+composition, and complete path coverage remain open.
 
 The implemented first-profile foundation includes exact categorical
 complete-set accounting, compact Market/Realm/Position contracts, funded

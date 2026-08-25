@@ -13,12 +13,14 @@ artifact.
 The general SDK/no-allocation Effect executor is 12,016 bytes, requires about
 0.086 SOL of equivalent Loader V3 capitalization, and executes its seven-effect
 fixture in 1,238 CU. The successor generated claim executor is 1,872 bytes,
-requires about 0.015 SOL, and executes its four-effect plan in 110 CU. An
-ordinary-SDK controller experiment composes with it in 3,810 CU; the two clean
-optimized ELFs total 16,184 bytes and about 0.117 SOL. This is still not a fair
-feature-for-feature comparison with the complete protocol because custody,
-signed admission, and registries are absent. It does show that deployment,
-semantic, and repository units need not be the same object.
+requires about 0.015 SOL, and executes its four-effect plan in 110 CU. The
+current physical experiment adds a 17,760-byte controller and 24,800-byte real
+custody adapter. The three first-party ELFs total 44,432 bytes and about 0.316
+SOL; composed with the official SPL Token 9.0.0 ELF, the two-transfer Direct
+example commits in 24,901 CU. This is still not a fair feature-for-feature
+comparison with the complete protocol because signed admission and registries
+are absent. It does show that deployment, semantic, and repository units need
+not be the same object.
 
 ## Proposed narrow waist
 
@@ -139,10 +141,11 @@ fixture execution, or qedsvm execution mode is never described as verification.
 - One successful Direct fixture is not property-space differential evidence.
   Generate admitted and hostile frames across quantities, prices, nonces,
   balances, fees, and arithmetic boundaries, then compare both implementations.
-- The active claim projection no longer co-locates SPL balances: Lean derives a
-  separate 40-byte two-transfer custody plan. That plan still must execute
-  against real Realm-selected token accounts and replay-root delegate authority
-  before the physical refinement is complete.
+- The active claim projection no longer co-locates SPL balances. Lean's separate
+  40-byte two-transfer custody plan now executes against real legacy SPL Token
+  accounts under the replay-root delegate, with exact postconditions and a late
+  rollback campaign. Realm selection, signed admission, and release identity
+  remain outside the current controller envelope.
 - Multiple programs reduce per-program rent and proof surface but add CPI CU,
   more release identities, authority PDAs, and aggregate program rent. Measure
   the complete partition before succession.
@@ -166,7 +169,10 @@ No current Rust route is deleted until one complete vertical slice has:
 10. a checked release manifest binding source, toolchains, ELFs, program IDs,
     ProgramData identities, and theorem digests.
 
-The claim slice has passed portions of gates 1–4, 6, 8, and 9. The PDA authority
-membrane is real-SVM tested, but gate 4 remains open because signed-intent and
-release authentication are absent. No complete succession gate set has passed
-until custody is real and the theorem chain is composed.
+The claim/custody slice has passed portions of gates 1–6, 8, and 9. The PDA
+authority membrane and real legacy SPL custody are real-SVM tested, including a
+refusal after one successful token CPI. Gates 4 and 5 remain incomplete because
+signed-intent, Realm, and release authentication are absent; gate 6 remains
+partial because only the claim success path reaches the artifact theorem. No
+complete succession gate set has passed until the controller derives the plans
+from authenticated inputs and the theorem chain is composed.

@@ -46,22 +46,25 @@ Failure at a gate is evidence against succession, not a reason to weaken it.
 
 ## Evidence to date
 
-The first semantic slice, canonical codec, safe fixed-capacity executor,
-concrete differential Direct test, and isolated real-SVM execution are now
-implemented. The no-allocation SDK executor is 12,016 bytes and consumes 1,238
-CU. A Lean-generated exact-account proof target is 2,232 bytes and consumes 155
-CU. qedsvm v0.11.0 emits a successful-path Hoare triple over its exact 164 SBF
-instructions, and Lean checks the stored theorem after a documented duplicate
-wrapper-rewrite workaround. See
-`docs/evidence/LEAN_EFFECT_PROOF_TARGET_2026_08_25.md` for exact source,
+The first semantic slice, canonical codecs, concrete differential Direct test,
+and isolated real-SVM execution are implemented. The specialized claim target
+is 1,872 bytes and consumes 110 CU; qedsvm v0.11.0 emits a successful-path
+Hoare triple over its exact ELF and Lean checks the stored theorem. A subsequent
+four-program campaign composes the claim executor, controller PDA, real custody
+adapter, and official SPL Token 9.0.0 ELF. The physical example commits in
+24,901 CU, and a refusal after one successful token CPI restores all earlier
+claim, journal, and token mutations byte-for-byte. See
+`docs/evidence/LEAN_CLAIM_EXECUTOR_2026_08_25.md` and
+`docs/evidence/PHYSICAL_DIRECT_COMPOSITION_2026_08_25.md` for exact source,
 artifact, toolchain, rent, rollback, theorem, and limitation details.
 
 This evidence strongly favors continuing the experiment, but does not accept a
-successor. The proof-target ELF deliberately omits semantic-controller
-authentication and real SPL custody. Its path theorem is not yet composed with
-the high-level Direct refinement theorem or extended to complete path coverage.
-It therefore cannot satisfy the integrated size, CU, or deployed refinement
-gates yet.
+successor. The controller still accepts pre-derived plans rather than deriving
+them from authenticated signed intents, Product, Realm, and release state. The
+claim path theorem is not yet composed with the high-level Direct refinement
+theorem, extended to complete path coverage, or joined to an artifact theorem
+for custody. The experiment therefore does not yet satisfy the full integrated
+or deployed-refinement gates.
 
 ## Bounds
 
