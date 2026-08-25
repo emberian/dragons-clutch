@@ -8,6 +8,7 @@ import DClutchSemantics.Physical
 import DClutchSemantics.ClaimSbfProfile
 import DClutchSemantics.TransitionVM
 import DClutchSemantics.DirectProgram
+import DClutchSemantics.CompiledPhysical
 import DClutchSemantics.DirectControllerCodec
 
 /-!
