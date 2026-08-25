@@ -122,3 +122,27 @@ composition. This proves only the named local validator release and exact ELF
 execution. Regenerated Loader headers, deployment slots, and current wall clock
 remain outside captured-devnet release identity, and the evidence keeps that
 boundary machine-readable.
+
+## Registry + Resolution successor profile
+
+`dclutch-successor-validator` is the current small-program composition profile.
+It uses a fresh ledger on RPC `20890`, installs exact complete immutable Loader
+V3 accounts for separately attested Registry and Resolution ELFs, and loads the
+committed real Pyth router and receiver ELFs. Unlike `--upgradeable-program`, the
+prepared ProgramData accounts preserve the canonical fixed 45-byte Loader V3
+metadata span: variant `3`, slot `0`, authority `None`, zero authority padding,
+then the exact ELF. The launcher and runtime both verify these facts.
+
+The standalone [`successor`](bootstrap/successor/README.md) package prepares a
+hash-pinned genesis plan, activates and reauthenticates the Registry release set,
+consumes a real posted 134-byte Pyth PriceUpdate in Resolution, executes funded
+recovery/exhaustion/failure, and proves late-refusal rollback against exact
+account hashes. It is localhost-only and uses ephemeral in-memory client keys.
+
+This profile intentionally records that Registry records, Markets, Source
+states, and Funding were prepared as genesis inputs because the presently
+deployed small-program set does not create them. Resolution certificates are
+created by the real SBF program. No checked production release or captured Pyth
+deployment identity is claimed. See the successor README for the full launch
+sequence, artifact attestations, immutable Loader boundary, timing policy, and
+the exact validated checkpoint.
