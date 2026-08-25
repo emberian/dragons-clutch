@@ -1596,12 +1596,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-registry-contract"
+name = "dclutch-pyth-svm"
 version = "0.1.0"
-dependencies = [
- "dclutch-core-contract",
- "dclutch-release-set-contract",
-]
 
 [[package]]
 name = "dclutch-realm-contract"
@@ -1612,6 +1608,22 @@ name = "dclutch-record-contract"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-registry-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-release-set-contract",
+]
+
+[[package]]
+name = "dclutch-registry-svm"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-release-set-contract",
+]
+
+[[package]]
 name = "dclutch-release-set-contract"
 version = "0.1.0"
 dependencies = [
@@ -1620,6 +1632,10 @@ dependencies = [
 
 [[package]]
 name = "dclutch-rent-contract"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-resolution-codec"
 version = "0.1.0"
 
 [[package]]
@@ -1656,11 +1672,14 @@ dependencies = [
  "dclutch-product-contract",
  "dclutch-product-payoff-svm",
  "dclutch-pyth-contract",
+ "dclutch-pyth-svm",
  "dclutch-realm-contract",
  "dclutch-record-contract",
  "dclutch-registry-contract",
+ "dclutch-registry-svm",
  "dclutch-release-set-contract",
  "dclutch-rent-contract",
+ "dclutch-resolution-codec",
  "dclutch-series-contract",
  "dclutch-source-contract",
  "dclutch-terminal-contract",

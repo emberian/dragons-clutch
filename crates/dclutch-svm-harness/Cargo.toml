@@ -19,10 +19,13 @@ dclutch-economic-kernel = { path = "../dclutch-economic-kernel" }
 dclutch-kernel = { path = "../dclutch-kernel" }
 dclutch-market-contract = { path = "../dclutch-market-contract" }
 dclutch-pyth-contract = { path = "../dclutch-pyth-contract" }
+dclutch-pyth-svm = { path = "../dclutch-pyth-svm", features = ["synthetic-local-fixture"] }
 dclutch-realm-contract = { path = "../dclutch-realm-contract" }
 dclutch-record-contract = { path = "../dclutch-record-contract" }
 dclutch-registry-contract = { path = "../dclutch-registry-contract" }
+dclutch-registry-svm = { path = "../dclutch-registry-svm" }
 dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
+dclutch-resolution-codec = { path = "../dclutch-resolution-codec" }
 dclutch-token-svm = { path = "../dclutch-token-svm" }
 dclutch-product-contract = { path = "../dclutch-product-contract" }
 dclutch-product-payoff-svm = { path = "../dclutch-product-payoff-svm" }

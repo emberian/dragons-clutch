@@ -17,6 +17,27 @@ immutable collateral-Realm creation through a real System CPI and the
 permissionless, body-free failure route. The harness does not yet test a
 provider price update.
 
+The successor Resolution campaign executes the compiled Registry and
+Resolution ELFs against the provenance-pinned local-validator projection of
+the captured Pyth receiver/router programs and account bodies. It covers one
+primary success, one funded recovery, exhausted Product failure, exact bounty
+credit, certificate sequencing, and a late transaction-wide refusal:
+
+```sh
+cargo build-sbf \
+  --manifest-path programs/dclutch-registry-sbf/Cargo.toml \
+  --lto --optimize-size --sbf-out-dir target/deploy
+cargo build-sbf \
+  --manifest-path programs/dclutch-resolution-proof-sbf/Cargo.toml \
+  --lto --optimize-size --sbf-out-dir target/deploy
+SBF_OUT_DIR=../../target/deploy \
+  cargo test --test resolution_successor -- --nocapture
+```
+
+This is local real-SVM evidence. The captured update is synthetic-local, and
+the campaign is not provider availability, devnet, deployment, or mainnet
+evidence.
+
 Run Realm creation evidence with:
 
 ```sh

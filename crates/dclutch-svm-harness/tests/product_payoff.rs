@@ -338,6 +338,27 @@ async fn real_elf_emits_exact_evaluation_and_liability_certificates() {
     assert_eq!(evaluation_account.owner, PROGRAM_ID);
     assert_eq!(evaluation_account.data, expected_evaluation.to_bytes());
     assert_eq!(evaluation_account.data.len(), PAYOFF_CERTIFICATE_BYTES_V1);
+    let idempotent_cu = submit(
+        &mut fixture.context,
+        instruction(
+            payer,
+            evaluation_address,
+            &fixture.product,
+            &fixture.artifact,
+            fixture.programdata,
+            evaluation.to_bytes().to_vec(),
+        ),
+    )
+    .await
+    .expect("idempotent evaluation transaction");
+    let repeated_evaluation = fixture
+        .context
+        .banks_client
+        .get_account(evaluation_address)
+        .await
+        .expect("query repeated evaluation")
+        .expect("repeated evaluation certificate");
+    assert_eq!(repeated_evaluation, evaluation_account);
 
     let liability = PayoffRequestV1::new(
         CertificateKindV1::Liability,
@@ -382,11 +403,12 @@ async fn real_elf_emits_exact_evaluation_and_liability_certificates() {
     assert_eq!(liability_account.data, expected_liability.to_bytes());
     assert!(!expected_liability.collateralized());
     eprintln!(
-        "product payoff exact output: elf={} evaluation_certificate={} liability_certificate={} evaluation_cu={} liability_cu={}",
+        "product payoff exact output: elf={} evaluation_certificate={} liability_certificate={} evaluation_cu={} idempotent_cu={} liability_cu={}",
         hex(fixture.elf_digest),
         hex(hash(&evaluation_account.data).to_bytes()),
         hex(hash(&liability_account.data).to_bytes()),
         evaluation_cu,
+        idempotent_cu,
         liability_cu,
     );
 }
@@ -446,6 +468,36 @@ async fn real_elf_refuses_hostile_records_queries_and_wires_with_rollback() {
         .expect("query after")
         .expect("certificate after");
     assert_eq!(after, before, "wire refusal preserves exact certificate");
+
+    let mut occupied = before.clone();
+    *occupied
+        .data
+        .get_mut(PAYOFF_CERTIFICATE_BYTES_V1 - 1)
+        .expect("certificate last byte") = 1;
+    fixture.context.set_account(
+        &canonical_address,
+        &AccountSharedData::from(occupied.clone()),
+    );
+    refused(
+        &mut fixture.context,
+        instruction(
+            payer,
+            canonical_address,
+            &fixture.product,
+            &fixture.artifact,
+            fixture.programdata,
+            canonical.to_bytes().to_vec(),
+        ),
+    )
+    .await;
+    let occupied_after = fixture
+        .context
+        .banks_client
+        .get_account(canonical_address)
+        .await
+        .expect("query occupied certificate")
+        .expect("occupied certificate remains");
+    assert_eq!(occupied_after, occupied);
 
     let out_of_domain = PayoffRequestV1::new(
         CertificateKindV1::Evaluation,

@@ -57,6 +57,8 @@ canonical-record envelope containing noncanonical Product bytes, a
 structurally valid artifact release naming a substituted ELF digest, and a
 non-vacant staging PDA. Refused transactions created no certificate, and a
 late wire refusal preserved a previously emitted certificate byte-for-byte.
+Exact certificate replay was idempotent at 63,315 CU; a deliberately occupied
+certificate PDA with different bytes refused and retained those prior bytes.
 
 These are local build and ProgramTest observations, not a checked release,
 deployment, universal SBF refinement theorem, or mainnet evidence. A rebuild
