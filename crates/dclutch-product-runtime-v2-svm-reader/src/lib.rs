@@ -75,7 +75,9 @@ pub struct AuthenticatedRecordV2 {
 }
 
 impl AuthenticatedRecordV2 {
-    fn as_coordinate(self) -> Result<FinalizedRecordCoordinateV2> {
+    /// Project the exact finalized coordinate after authentication. This is a
+    /// reference cache, not a substitute for repeating authentication.
+    pub fn coordinate(self) -> Result<FinalizedRecordCoordinateV2> {
         Ok(FinalizedRecordCoordinateV2 {
             schema_id: self.schema_id,
             content_digest: self.content_digest,
@@ -123,9 +125,9 @@ impl AuthenticatedProductRuntimeV2 {
         let receipt =
             AdmissionReceiptV2::decode(receipt_bytes).map_err(|_| Error::ReceiptMismatch)?;
         let expected = AdmissionReceiptV2 {
-            product: self.product_record.as_coordinate()?,
-            result_domain: self.result_domain_record.as_coordinate()?,
-            portfolio: self.portfolio_record.as_coordinate()?,
+            product: self.product_record.coordinate()?,
+            result_domain: self.result_domain_record.coordinate()?,
+            portfolio: self.portfolio_record.coordinate()?,
         };
         if receipt != expected {
             return Err(Error::ReceiptMismatch);
@@ -204,9 +206,9 @@ pub fn authenticate_product_runtime_v2<'accounts, 'info>(
         .try_borrow_data()
         .map_err(|_| Error::Borrow)?;
     let receipt = AdmissionReceiptV2 {
-        product: product_record.as_coordinate()?,
-        result_domain: result_domain_record.as_coordinate()?,
-        portfolio: portfolio_record.as_coordinate()?,
+        product: product_record.coordinate()?,
+        result_domain: result_domain_record.coordinate()?,
+        portfolio: portfolio_record.coordinate()?,
     };
     let projection =
         admit_authenticated_records_v2(receipt, &product_data, &domain_data, &portfolio_data)

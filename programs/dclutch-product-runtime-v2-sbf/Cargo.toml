@@ -19,7 +19,7 @@ custom-panic = []
 [dependencies]
 dclutch-product-runtime-v2 = { path = "../../crates/dclutch-product-runtime-v2" }
 dclutch-product-runtime-v2-admission = { path = "../../crates/dclutch-product-runtime-v2-admission" }
-dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }
+dclutch-product-runtime-v2-svm-reader = { path = "../../crates/dclutch-product-runtime-v2-svm-reader" }
 solana-program = { version = "=3.0.0", default-features = false }
 solana-sdk-ids = "=3.1.0"
 

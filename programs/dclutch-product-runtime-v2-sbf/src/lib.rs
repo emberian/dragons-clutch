@@ -12,23 +12,22 @@
 
 extern crate std;
 
-use dclutch_product_runtime_v2::ContentId;
 use dclutch_product_runtime_v2_admission::{
     ADMISSION_RECEIPT_BYTES_V2, ADMISSION_RECEIPT_PDA_DOMAIN_V2, AdmissionReceiptV2,
-    AdmissionRequestV2, FinalizedRecordCoordinateV2, PORTFOLIO_SCHEMA_ID_V2,
-    PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2, admit_authenticated_records_v2,
+    AdmissionRequestV2,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_product_runtime_v2_svm_reader::{
+    FinalizedRecordFrameV2, ProductRuntimeFrameV2, authenticate_product_runtime_v2,
+};
 use solana_program::{
     account_info::{AccountInfo, next_account_info},
     entrypoint::ProgramResult,
-    hash::hash,
     program_error::ProgramError,
     pubkey::Pubkey,
     rent::Rent,
     sysvar::SysvarSerialize,
 };
-use solana_sdk_ids::{system_program, sysvar};
+use solana_sdk_ids::sysvar;
 
 /// Exact executable account count.
 pub const ADMISSION_ACCOUNT_COUNT_V2: usize = 9;
@@ -119,56 +118,61 @@ pub fn process_instruction(
         *marker = 0xee;
     }
 
-    let product_coordinate = authenticate_finalized_record(
-        registry,
-        product_raw,
-        product_staging,
+    let authenticated = authenticate_product_runtime_v2(
+        registry.key,
         &rent,
-        PRODUCT_RECORD_SCHEMA_ID_V2,
         request.product_digest,
-        AdmissionSbfErrorV2::ProductRecord,
-    )?;
-    let domain_coordinate = authenticate_finalized_record(
-        registry,
-        domain_raw,
-        domain_staging,
-        &rent,
-        RESULT_DOMAIN_SCHEMA_ID_V2,
-        request.result_domain_digest,
-        AdmissionSbfErrorV2::ResultDomainRecord,
-    )?;
-    let portfolio_coordinate = authenticate_finalized_record(
-        registry,
-        portfolio_raw,
-        portfolio_staging,
-        &rent,
-        PORTFOLIO_SCHEMA_ID_V2,
-        request.portfolio_digest,
-        AdmissionSbfErrorV2::PortfolioRecord,
-    )?;
+        ProductRuntimeFrameV2 {
+            product: FinalizedRecordFrameV2 {
+                raw: product_raw,
+                staging: product_staging,
+            },
+            result_domain: FinalizedRecordFrameV2 {
+                raw: domain_raw,
+                staging: domain_staging,
+            },
+            portfolio: FinalizedRecordFrameV2 {
+                raw: portfolio_raw,
+                staging: portfolio_staging,
+            },
+        },
+    )
+    .map_err(|error| match error {
+        dclutch_product_runtime_v2_svm_reader::Error::ProductRecord => {
+            AdmissionSbfErrorV2::ProductRecord
+        }
+        dclutch_product_runtime_v2_svm_reader::Error::ResultDomainRecord => {
+            AdmissionSbfErrorV2::ResultDomainRecord
+        }
+        dclutch_product_runtime_v2_svm_reader::Error::PortfolioRecord => {
+            AdmissionSbfErrorV2::PortfolioRecord
+        }
+        dclutch_product_runtime_v2_svm_reader::Error::Borrow => AdmissionSbfErrorV2::Borrow,
+        _ => AdmissionSbfErrorV2::Composition,
+    })?;
+    if authenticated.result_domain_record.content_digest != request.result_domain_digest
+        || authenticated.portfolio_record.content_digest != request.portfolio_digest
+    {
+        return Err(AdmissionSbfErrorV2::Instruction.into());
+    }
     let admitted = AdmissionReceiptV2 {
-        product: product_coordinate,
-        result_domain: domain_coordinate,
-        portfolio: portfolio_coordinate,
+        product: authenticated
+            .product_record
+            .coordinate()
+            .map_err(|_| AdmissionSbfErrorV2::Composition)?,
+        result_domain: authenticated
+            .result_domain_record
+            .coordinate()
+            .map_err(|_| AdmissionSbfErrorV2::Composition)?,
+        portfolio: authenticated
+            .portfolio_record
+            .coordinate()
+            .map_err(|_| AdmissionSbfErrorV2::Composition)?,
     };
-    let product_data = product_raw
-        .try_borrow_data()
-        .map_err(|_| AdmissionSbfErrorV2::Borrow)?;
-    let domain_data = domain_raw
-        .try_borrow_data()
-        .map_err(|_| AdmissionSbfErrorV2::Borrow)?;
-    let portfolio_data = portfolio_raw
-        .try_borrow_data()
-        .map_err(|_| AdmissionSbfErrorV2::Borrow)?;
-    admit_authenticated_records_v2(admitted, &product_data, &domain_data, &portfolio_data)
-        .map_err(|_| AdmissionSbfErrorV2::Composition)?;
     let mut encoded = [0_u8; ADMISSION_RECEIPT_BYTES_V2];
     admitted
         .encode_into(&mut encoded)
         .map_err(|_| AdmissionSbfErrorV2::Composition)?;
-    drop(portfolio_data);
-    drop(domain_data);
-    drop(product_data);
     receipt
         .try_borrow_mut_data()
         .map_err(|_| AdmissionSbfErrorV2::Borrow)?
@@ -238,55 +242,6 @@ fn validate_frame<'info>(
         return Err(AdmissionSbfErrorV2::Receipt.into());
     }
     Ok(())
-}
-
-fn authenticate_finalized_record(
-    registry: &AccountInfo<'_>,
-    raw: &AccountInfo<'_>,
-    staging: &AccountInfo<'_>,
-    rent: &Rent,
-    schema: [u8; 32],
-    expected_digest: ContentId,
-    refusal: AdmissionSbfErrorV2,
-) -> Result<FinalizedRecordCoordinateV2, ProgramError> {
-    let digest = expected_digest.to_bytes();
-    let expected_raw = Pubkey::find_program_address(
-        &[RAW_RECORD_PDA_SEED_V1, schema.as_slice(), digest.as_slice()],
-        registry.key,
-    )
-    .0;
-    let expected_staging = Pubkey::find_program_address(
-        &[
-            STAGING_CURSOR_PDA_SEED_V1,
-            schema.as_slice(),
-            digest.as_slice(),
-        ],
-        registry.key,
-    )
-    .0;
-    let raw_data = raw
-        .try_borrow_data()
-        .map_err(|_| AdmissionSbfErrorV2::Borrow)?;
-    if raw.key != &expected_raw
-        || raw.owner != registry.key
-        || hash(&raw_data).to_bytes() != digest
-        || !rent.is_exempt(raw.lamports(), raw_data.len())
-        || staging.key != &expected_staging
-        || staging.owner != &system_program::ID
-        || staging.data_len() != 0
-    {
-        return Err(refusal.into());
-    }
-    Ok(FinalizedRecordCoordinateV2 {
-        schema_id: content(schema)?,
-        content_digest: expected_digest,
-        raw_account: content(raw.key.to_bytes())?,
-        staging_account: content(staging.key.to_bytes())?,
-    })
-}
-
-fn content(bytes: [u8; 32]) -> Result<ContentId, ProgramError> {
-    ContentId::new(bytes).map_err(|_| AdmissionSbfErrorV2::Composition.into())
 }
 
 fn require_distinct(accounts: &[AccountInfo<'_>]) -> ProgramResult {

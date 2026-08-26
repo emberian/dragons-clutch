@@ -1552,7 +1552,7 @@ dependencies = [
  "dclutch-product-runtime-v2",
  "dclutch-product-runtime-v2-admission",
  "dclutch-product-runtime-v2-operator",
- "dclutch-record-contract",
+ "dclutch-product-runtime-v2-svm-reader",
  "solana-account 4.3.2",
  "solana-program",
  "solana-program-test",
@@ -1560,6 +1560,17 @@ dependencies = [
  "solana-sdk-ids",
  "solana-transaction 4.1.6",
  "tokio",
+]
+
+[[package]]
+name = "dclutch-product-runtime-v2-svm-reader"
+version = "0.1.0"
+dependencies = [
+ "dclutch-product-runtime-v2",
+ "dclutch-product-runtime-v2-admission",
+ "dclutch-record-contract",
+ "solana-program",
+ "solana-sdk-ids",
 ]
 
 [[package]]
