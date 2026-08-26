@@ -8,14 +8,15 @@
 //! union. Root and Ticket writes are outer-only commit-last authority.
 
 use dclutch_account_profile_contract::v2::{
-    AccountPrestateV2, AccountProfileV2, DYNAMIC_FIXED_SPAN_ENTRY_BYTES,
-    DYNAMIC_FIXED_SPAN_HEADER_BYTES, OPERATION_BYTES, RULE_BYTES, TrustedBuiltinIdentityV2,
-    TrustedEnvironmentV2, TrustedIdentityEnvironmentV2,
+    AccountPrestateV2, DYNAMIC_FIXED_SPAN_ENTRY_BYTES, DYNAMIC_FIXED_SPAN_HEADER_BYTES,
+    OPERATION_BYTES, RULE_BYTES, TrustedBuiltinIdentityV2, TrustedEnvironmentV2,
+    TrustedIdentityEnvironmentV2,
     encode::{
         AccountAliasInputV2, AccountCoordinateV2, AccountEffectPermissionsV2,
         AccountOperationInputV2, AccountPrivilegesV2, AccountRuleInputV2,
         AccountRuleWithPrestateInputV2, DynamicFixedSpanInputV2, IdentityCoordinateV2,
-        RegisterGeometryV2, encode_account_profile_with_dynamic_fixed_span_v2_generated_atomic,
+        RegisterGeometryV2,
+        encode_account_profile_with_dynamic_fixed_span_v2_borrowed_generated_atomic,
     },
 };
 
@@ -90,7 +91,11 @@ pub fn encode_series_consume_account_profile_v4_atomic(
         require_current_owner(ROOT)?,
         require_current_owner(TICKET_REPLAY)?,
     ];
-    encode_account_profile_with_dynamic_fixed_span_v2_generated_atomic(
+    let mut project_fixed_rule = |coordinate| {
+        fixed_rule(input.fixed_data_lengths, usize::from(coordinate))
+            .map_err(|_| dclutch_account_profile_contract::v2::Error::InvalidLength)
+    };
+    encode_account_profile_with_dynamic_fixed_span_v2_borrowed_generated_atomic(
         TrustedEnvironmentV2::None,
         TrustedIdentityEnvironmentV2::CurrentExecutingProgram {
             destination: CURRENT_TRADING_IDENTITY,
@@ -107,10 +112,7 @@ pub fn encode_series_consume_account_profile_v4_atomic(
         }],
         u16::try_from(FIXED_RULE_COUNT)
             .map_err(|_| SeriesConsumeAccountProfileErrorV4::Geometry)?,
-        |coordinate| {
-            fixed_rule(input.fixed_data_lengths, usize::from(coordinate))
-                .map_err(|_| dclutch_account_profile_contract::v2::Error::InvalidLength)
-        },
+        &mut project_fixed_rule,
         &span_rules,
         &operations,
         RegisterGeometryV2 {
@@ -123,7 +125,6 @@ pub fn encode_series_consume_account_profile_v4_atomic(
         output,
     )
     .map_err(SeriesConsumeAccountProfileErrorV4::Profile)?;
-    AccountProfileV2::decode(output).map_err(SeriesConsumeAccountProfileErrorV4::Profile)?;
     Ok(())
 }
 
@@ -353,7 +354,8 @@ mod tests {
 
     use alloc::vec;
     use dclutch_account_profile_contract::{
-        EFFECT_PERMISSION_WRITE_DATA, v2::DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE,
+        EFFECT_PERMISSION_WRITE_DATA,
+        v2::{AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE},
     };
 
     use super::*;

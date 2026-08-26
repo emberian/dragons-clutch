@@ -830,6 +830,44 @@ pub fn encode_account_profile_with_dynamic_fixed_span_v2_generated_atomic<F>(
 where
     F: FnMut(u16) -> Result<AccountRuleWithPrestateInputV2, Error>,
 {
+    let mut fixed_rule = fixed_rule;
+    encode_account_profile_with_dynamic_fixed_span_v2_borrowed_generated_atomic(
+        trusted_environment,
+        trusted_identity_environment,
+        trusted_builtin_identity,
+        dynamic_spans,
+        fixed_rule_count,
+        &mut fixed_rule,
+        span_rules,
+        fixed_operations,
+        registers,
+        scratch,
+        output,
+    )
+}
+
+/// Encode Profile 13 from a borrowed generated-rule projector.
+///
+/// This has identical failure-atomic semantics and bytes to
+/// [`encode_account_profile_with_dynamic_fixed_span_v2_generated_atomic`].
+/// The explicit borrowed callback is a physical refinement for constrained
+/// targets: it prevents a large family projector from being monomorphized into
+/// the semantic-owner encoder's hostile-decode frame.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+pub fn encode_account_profile_with_dynamic_fixed_span_v2_borrowed_generated_atomic(
+    trusted_environment: TrustedEnvironmentV2,
+    trusted_identity_environment: TrustedIdentityEnvironmentV2,
+    trusted_builtin_identity: TrustedBuiltinIdentityV2,
+    dynamic_spans: &[DynamicFixedSpanInputV2],
+    fixed_rule_count: u16,
+    fixed_rule: &mut dyn FnMut(u16) -> Result<AccountRuleWithPrestateInputV2, Error>,
+    span_rules: &[AccountRuleWithPrestateInputV2],
+    fixed_operations: &[AccountOperationInputV2],
+    registers: RegisterGeometryV2,
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<(), Error> {
     encode_account_profile_atomic_with_span(
         AccountProfileArtifactV2::DynamicFixedSpan,
         trusted_environment,
