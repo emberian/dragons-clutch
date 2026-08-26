@@ -506,6 +506,7 @@ pub fn build_equity_request_v3(
 }
 
 /// Rejoin one signed request to the exact current authenticated chain state.
+#[inline(never)]
 pub fn authenticate_equity_request_v3(
     request: DealerEquityRequestV3<'_>,
     chain: EquityPoolChainProjectionV3<'_>,
@@ -550,6 +551,7 @@ pub fn authenticate_equity_request_v3(
 }
 
 /// Derive the physical intent solely from authenticated request data.
+#[inline(never)]
 pub fn materialize_equity_intent_v3<'a>(
     request: DealerEquityRequestV3<'_>,
     chain: EquityPoolChainProjectionV3<'_>,

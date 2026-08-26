@@ -367,7 +367,7 @@ fn runtime_width_equity_request_is_chain_derived_and_rejoins_physical_intent() {
         &request_bank,
         request_bytes,
         request,
-        physical,
+        &physical,
     )
     .expect("cash then Claims route order");
     assert_eq!(composition.claims_route(), Some(1));
@@ -384,7 +384,7 @@ fn runtime_width_equity_request_is_chain_derived_and_rejoins_physical_intent() {
             &request_bank,
             request_bytes,
             request,
-            physical,
+            &physical,
         )
         .is_err()
     );

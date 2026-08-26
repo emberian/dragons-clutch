@@ -46,82 +46,80 @@ pub type DealerRouteResultV3<T> = core::result::Result<T, DealerRouteErrorV3>;
 
 /// One expected canonical Custody request sequence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DealerCustodySequenceV3 {
-    requests: [Option<MultiLpCustodyRequestV3>; MAX_DEALER_CUSTODY_ROUTES_V3],
-    count: u8,
+pub enum DealerCustodySequenceV3<'a> {
+    /// Borrow the scenario plan and exact physical effects without copying requests.
+    Scenario {
+        /// Plan owning the active prefix length.
+        plan: &'a ScenarioAtomicPlanV3,
+        /// Exact scenario effects in semantic order.
+        effects: &'a [Option<super::v3_composer::ScenarioCustodyEffectV3>],
+    },
+    /// Borrow one complete multi-LP plan without copying its request bank.
+    MultiLp(&'a MultiLpPlanV3),
 }
 
-impl DealerCustodySequenceV3 {
+impl<'a> DealerCustodySequenceV3<'a> {
     /// Project the exact ordered sequence from a scenario-fill plan.
     pub fn from_scenario(
-        plan: ScenarioAtomicPlanV3,
-        effects: &[Option<super::v3_composer::ScenarioCustodyEffectV3>],
+        plan: &'a ScenarioAtomicPlanV3,
+        effects: &'a [Option<super::v3_composer::ScenarioCustodyEffectV3>],
     ) -> DealerRouteResultV3<Self> {
-        let mut requests = [None; MAX_DEALER_CUSTODY_ROUTES_V3];
         let count = usize::from(plan.custody_count);
-        if count > requests.len() || effects.len() != requests.len() {
+        if count > MAX_DEALER_CUSTODY_ROUTES_V3 || effects.len() != MAX_DEALER_CUSTODY_ROUTES_V3 {
             return Err(DealerRouteErrorV3::InvalidSequence);
         }
-        for (index, destination) in requests.iter_mut().take(count).enumerate() {
-            *destination = Some(
-                effects
-                    .get(index)
-                    .copied()
-                    .flatten()
-                    .ok_or(DealerRouteErrorV3::InvalidSequence)?
-                    .request,
-            );
+        for effect in effects.iter().take(count) {
+            effect.ok_or(DealerRouteErrorV3::InvalidSequence)?;
         }
         if effects.iter().skip(count).any(Option::is_some) {
             return Err(DealerRouteErrorV3::InvalidSequence);
         }
-        Ok(Self {
-            requests,
-            count: plan.custody_count,
-        })
+        Ok(Self::Scenario { plan, effects })
     }
 
     /// Project the exact ordered Custody subsequence from one equity action.
-    pub fn from_multi_lp(plan: MultiLpPlanV3) -> DealerRouteResultV3<Self> {
-        let mut requests = [None; MAX_DEALER_CUSTODY_ROUTES_V3];
+    pub fn from_multi_lp(plan: &'a MultiLpPlanV3) -> DealerRouteResultV3<Self> {
         let count = usize::from(plan.custody_count);
-        if count > requests.len() || count > plan.custody.len() {
+        if count > MAX_DEALER_CUSTODY_ROUTES_V3 || count > plan.custody.len() {
             return Err(DealerRouteErrorV3::InvalidSequence);
         }
-        for (index, destination) in requests.iter_mut().take(count).enumerate() {
-            *destination = Some(
-                plan.custody
-                    .get(index)
-                    .copied()
-                    .flatten()
-                    .ok_or(DealerRouteErrorV3::InvalidSequence)?
-                    .request,
-            );
+        for effect in plan.custody.iter().take(count) {
+            effect.ok_or(DealerRouteErrorV3::InvalidSequence)?;
         }
         if plan.custody.iter().skip(count).any(Option::is_some) {
             return Err(DealerRouteErrorV3::InvalidSequence);
         }
-        Ok(Self {
-            requests,
-            count: plan.custody_count,
-        })
+        Ok(Self::MultiLp(plan))
     }
 
     /// Active request count.
     pub const fn count(self) -> u8 {
-        self.count
+        match self {
+            Self::Scenario { plan, .. } => plan.custody_count,
+            Self::MultiLp(plan) => plan.custody_count,
+        }
     }
 
     /// Decode one active request.
     pub fn request(self, index: u8) -> DealerRouteResultV3<MultiLpCustodyRequestV3> {
-        if index >= self.count {
+        if index >= self.count() {
             return Err(DealerRouteErrorV3::InvalidSequence);
         }
-        self.requests
-            .get(usize::from(index))
-            .copied()
-            .flatten()
-            .ok_or(DealerRouteErrorV3::InvalidSequence)
+        match self {
+            Self::Scenario { effects, .. } => effects
+                .get(usize::from(index))
+                .copied()
+                .flatten()
+                .map(|effect| effect.request)
+                .ok_or(DealerRouteErrorV3::InvalidSequence),
+            Self::MultiLp(plan) => plan
+                .custody
+                .get(usize::from(index))
+                .copied()
+                .flatten()
+                .map(|effect| effect.request)
+                .ok_or(DealerRouteErrorV3::InvalidSequence),
+        }
     }
 }
 
@@ -186,13 +184,14 @@ impl DealerCustodyCompositionV3 {
 /// Non-Custody routes remain owned by the common outer and other fixed-role
 /// composition validators.  Disabled routes emit no invocation and therefore
 /// cannot stand in for an expected Dealer effect.
+#[inline(never)]
 pub fn authenticate_dealer_custody_routes_v3(
     program: ProgramV3<'_>,
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
     request_bank: &[u8],
-    expected: DealerCustodySequenceV3,
+    expected: DealerCustodySequenceV3<'_>,
 ) -> DealerRouteResultV3<DealerCustodyCompositionV3> {
     if program
         .request_bytes(tail_count)
@@ -279,7 +278,7 @@ pub fn authenticate_dealer_equity_routes_v3(
     request_bank: &[u8],
     family_request: &[u8],
     request: DealerEquityRequestV3<'_>,
-    plan: MultiLpPlanV3,
+    plan: &MultiLpPlanV3,
 ) -> DealerRouteResultV3<DealerEquityCompositionV3> {
     if family_request != request.bytes() {
         return Err(DealerRouteErrorV3::ClaimsMismatch);
@@ -391,13 +390,14 @@ pub fn authenticate_dealer_equity_routes_v3(
     })
 }
 
+#[inline(never)]
 fn validate_equity_route_grammar(
     program: ProgramV3<'_>,
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
     signed: Option<dclutch_claims_svm::signed_delta_v3::SignedDeltaPlanV3<'_>>,
-    plan: MultiLpPlanV3,
+    plan: &MultiLpPlanV3,
 ) -> DealerRouteResultV3<()> {
     let (route_count, active) = match plan.action {
         MultiLpActionV3::Add => (

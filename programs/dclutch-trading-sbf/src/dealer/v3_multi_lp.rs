@@ -11,7 +11,7 @@ use dclutch_custody_contract::{
     CUSTODY_REQUEST_BYTES_V1, CallerRoleV1, CompartmentV1, ContextV1, CustodyAuthoritySeedsV1,
     CustodyReceiptV1, CustodyRequestV1, CustodyVaultSeedsV1, DELEGATED_CUSTODY_RECEIPT_BYTES_V2,
     DELEGATED_CUSTODY_REQUEST_BYTES_V2, DelegatedCustodyReceiptV2, DelegatedCustodyRequestV2,
-    OperationV1,
+    OperationV1, ReceiptEvidenceV1,
 };
 use dclutch_dealer_codec::scenario::{ClaimsInventoryObservation, ScenarioSolvencyReport};
 use solana_program::{hash::hash, pubkey::Pubkey};
@@ -561,6 +561,7 @@ pub struct MultiLpPlanV3 {
 /// The obligation and equity slices are explicitly caller-owned scratch and
 /// must not be treated as authoritative state.
 #[allow(clippy::too_many_arguments)]
+#[inline(never)]
 pub fn prepare_multi_lp_v3(
     context: MultiLpContextV3,
     collateral: MultiLpCollateralFrameV3,
@@ -724,9 +725,6 @@ pub fn prepare_multi_lp_v3(
         .checked_sub(equity.collateral_in)
         .and_then(|value| value.checked_add(equity.collateral_out))
         .ok_or(MultiLpErrorV3::Arithmetic)?;
-    let (custody, custody_count, hoard_after) =
-        prepare_equity_custody_sequence(context, collateral, equity, external_after)?;
-
     let next_lp = DealerLpPositionV3 {
         revision: lp
             .revision
@@ -752,7 +750,7 @@ pub fn prepare_multi_lp_v3(
         present_capital: equity.collateral_after,
         locked_capital_floor: context.locked_capital_floor,
     };
-    Ok(MultiLpPlanV3 {
+    let mut result = MultiLpPlanV3 {
         action: intent.action(),
         lp_owner: collateral.lp_owner,
         share_delta: equity.share_delta,
@@ -762,18 +760,28 @@ pub fn prepare_multi_lp_v3(
         maximum_complete_sets_to_merge: equity.maximum_complete_sets_to_merge,
         solvency_before,
         solvency_after,
-        custody,
-        custody_count,
+        custody: [None; MAX_MULTI_LP_CUSTODY_EFFECTS_V3],
+        custody_count: 0,
         external_after,
         principal_after: equity.collateral_after,
-        hoard_after,
+        hoard_after: collateral.hoard_balance,
         obligation_digest_after: hash(post_obligation).to_bytes(),
         lp_digest_after: hash(&staged_lp).to_bytes(),
         obligation_revision_after: staged_projection.revision(),
         lp_revision_after: next_lp.revision,
         total_equity_shares_after: staged_projection.total_equity_shares(),
         lp_equity_shares_after: next_lp.equity_shares,
-    })
+    };
+    let (custody_count, hoard_after) = prepare_equity_custody_sequence(
+        context,
+        collateral,
+        equity,
+        external_after,
+        &mut result.custody,
+    )?;
+    result.custody_count = custody_count;
+    result.hoard_after = hoard_after;
+    Ok(result)
 }
 
 /// Verify one immediate Custody receipt in the admitted global route order.
@@ -799,40 +807,18 @@ pub fn verify_multi_lp_custody_receipt_v3(
     effect.request.encode_into(request_slice)?;
     let request_digest = hash(request_slice).to_bytes();
     let evidence = match effect.request {
-        MultiLpCustodyRequestV3::Canonical(request) => {
-            let receipt =
-                CustodyReceiptV1::decode(custody_receipt).map_err(|_| MultiLpErrorV3::Custody)?;
-            receipt
-                .verify_for(request, request_digest, custody_poststate_commitment)
-                .map_err(|_| MultiLpErrorV3::Custody)?;
-            receipt.evidence
-        }
-        MultiLpCustodyRequestV3::Delegated(request) => {
-            if custody_receipt.len() != DELEGATED_CUSTODY_RECEIPT_BYTES_V2 {
-                return Err(MultiLpErrorV3::Custody);
-            }
-            let receipt = DelegatedCustodyReceiptV2::decode(custody_receipt)
-                .map_err(|_| MultiLpErrorV3::Custody)?;
-            if receipt.starts_atomic_debit != request.starts_atomic_debit
-                || receipt.terminal != request.terminal
-                || receipt.delegate_before != request.delegate_before
-                || receipt.delegate_after != request.delegate_after
-                || receipt.total_debit != request.total_debit
-                || receipt.allowance_before != request.allowance_before
-                || receipt.allowance_after != request.allowance_after
-            {
-                return Err(MultiLpErrorV3::Custody);
-            }
-            receipt
-                .custody
-                .verify_for(
-                    request.custody,
-                    request_digest,
-                    custody_poststate_commitment,
-                )
-                .map_err(|_| MultiLpErrorV3::Custody)?;
-            receipt.custody.evidence
-        }
+        MultiLpCustodyRequestV3::Canonical(request) => verify_canonical_custody_receipt_v3(
+            request,
+            request_digest,
+            custody_receipt,
+            custody_poststate_commitment,
+        )?,
+        MultiLpCustodyRequestV3::Delegated(request) => verify_delegated_custody_receipt_v3(
+            request,
+            request_digest,
+            custody_receipt,
+            custody_poststate_commitment,
+        )?,
     };
     if evidence.source_after != effect.source_after
         || evidence.destination_after != effect.destination_after
@@ -840,6 +826,49 @@ pub fn verify_multi_lp_custody_receipt_v3(
         return Err(MultiLpErrorV3::Postcondition);
     }
     Ok(())
+}
+
+#[inline(never)]
+fn verify_canonical_custody_receipt_v3(
+    request: CustodyRequestV1,
+    request_digest: [u8; 32],
+    receipt_bytes: &[u8],
+    poststate_commitment: [u8; 32],
+) -> MultiLpResultV3<ReceiptEvidenceV1> {
+    let receipt = CustodyReceiptV1::decode(receipt_bytes).map_err(|_| MultiLpErrorV3::Custody)?;
+    receipt
+        .verify_for(request, request_digest, poststate_commitment)
+        .map_err(|_| MultiLpErrorV3::Custody)?;
+    Ok(receipt.evidence)
+}
+
+#[inline(never)]
+fn verify_delegated_custody_receipt_v3(
+    request: DelegatedCustodyRequestV2,
+    request_digest: [u8; 32],
+    receipt_bytes: &[u8],
+    poststate_commitment: [u8; 32],
+) -> MultiLpResultV3<ReceiptEvidenceV1> {
+    if receipt_bytes.len() != DELEGATED_CUSTODY_RECEIPT_BYTES_V2 {
+        return Err(MultiLpErrorV3::Custody);
+    }
+    let receipt =
+        DelegatedCustodyReceiptV2::decode(receipt_bytes).map_err(|_| MultiLpErrorV3::Custody)?;
+    if receipt.starts_atomic_debit != request.starts_atomic_debit
+        || receipt.terminal != request.terminal
+        || receipt.delegate_before != request.delegate_before
+        || receipt.delegate_after != request.delegate_after
+        || receipt.total_debit != request.total_debit
+        || receipt.allowance_before != request.allowance_before
+        || receipt.allowance_after != request.allowance_after
+    {
+        return Err(MultiLpErrorV3::Custody);
+    }
+    receipt
+        .custody
+        .verify_for(request.custody, request_digest, poststate_commitment)
+        .map_err(|_| MultiLpErrorV3::Custody)?;
+    Ok(receipt.custody.evidence)
 }
 
 /// Verify all write-last pool, share, and Claims postconditions.
@@ -1003,12 +1032,9 @@ fn prepare_equity_custody_sequence(
     frame: MultiLpCollateralFrameV3,
     plan: PoolEquityPlanV3,
     external_after: u64,
-) -> MultiLpResultV3<(
-    [Option<MultiLpCustodyEffectV3>; MAX_MULTI_LP_CUSTODY_EFFECTS_V3],
-    u8,
-    u64,
-)> {
-    let mut effects = [None; MAX_MULTI_LP_CUSTODY_EFFECTS_V3];
+    effects: &mut [Option<MultiLpCustodyEffectV3>; MAX_MULTI_LP_CUSTODY_EFFECTS_V3],
+) -> MultiLpResultV3<(u8, u64)> {
+    effects.fill(None);
     let mut count = 0_usize;
     let mut external = frame.lp_external_balance;
     let mut principal = frame.principal_balance;
@@ -1022,7 +1048,7 @@ fn prepare_equity_custody_sequence(
             &mut external,
             &mut principal,
             &mut hoard,
-            &mut effects,
+            effects,
             &mut count,
         )?;
     }
@@ -1035,7 +1061,7 @@ fn prepare_equity_custody_sequence(
             &mut external,
             &mut principal,
             &mut hoard,
-            &mut effects,
+            effects,
             &mut count,
         )?;
     }
@@ -1048,7 +1074,7 @@ fn prepare_equity_custody_sequence(
             &mut external,
             &mut principal,
             &mut hoard,
-            &mut effects,
+            effects,
             &mut count,
         )?;
     }
@@ -1061,7 +1087,7 @@ fn prepare_equity_custody_sequence(
             &mut external,
             &mut principal,
             &mut hoard,
-            &mut effects,
+            effects,
             &mut count,
         )?;
     }
@@ -1069,7 +1095,6 @@ fn prepare_equity_custody_sequence(
         return Err(MultiLpErrorV3::Postcondition);
     }
     Ok((
-        effects,
         u8::try_from(count).map_err(|_| MultiLpErrorV3::Arithmetic)?,
         hoard,
     ))
