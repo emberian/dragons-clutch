@@ -45,6 +45,8 @@ import {
   HOT_FIXED_ACCOUNT_COUNT_V3,
   HOT_LIFECYCLE_RAW_ACCOUNT_V3,
   HOT_LIFECYCLE_STAGING_ACCOUNT_V3,
+  HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
+  HOT_LINKED_BASIS_STAGING_ACCOUNT_V3,
   HOT_MANIFEST_RAW_ACCOUNT_V3,
   HOT_MANIFEST_STAGING_ACCOUNT_V3,
   HOT_MARKET_ACCOUNT_V3,
@@ -66,6 +68,15 @@ import {
   HOT_TRADING_PROGRAMDATA_ACCOUNT_V3,
   HOT_TRANSITION_RAW_ACCOUNT_V3,
   HOT_TRANSITION_STAGING_ACCOUNT_V3,
+  BASIS_HEADER_BYTES_V3,
+  BASIS_MAGIC_V3,
+  BASIS_SCHEMA_V3,
+  BASIS_WIDTH_OFFSET_V3,
+  EXACT_CATEGORICAL_BOUNDARY_V3,
+  GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+  KNOT_BYTES_V3,
+  TERM_BYTES_V3,
+  TERM_FLOOR_EXACT_COMPLEMENT_BOUNDARY_V3,
   IDENTITY_BUYER_NATIVE_SIGNER_V3,
   IDENTITY_SELLER_NATIVE_SIGNER_V3,
   LIFECYCLE_SCHEMA_RELEASE_ID,
@@ -98,6 +109,7 @@ const MARKET_PRODUCT_RECORD_OFFSET = 80;
 const ACCOUNT_PROFILE_OPERATION_BYTES = 16;
 const ACCOUNT_PROFILE_TAIL_COUNT_OPCODE = 8;
 const ACTIVATION_CACHE_TRADING_OFFSET = 48 + 2 * (32 + ARTIFACT_RELEASE_BYTES);
+const BASIS_SEMANTIC_DOMAIN_V3 = new TextEncoder().encode('dclutch/product-basis/semantic/v3');
 
 export type DirectHotRouteCoordinateV3 = Readonly<{ address: string; isSigner: boolean; isWritable: boolean }>;
 
@@ -128,6 +140,130 @@ function same(left: Uint8Array, right: Uint8Array): boolean {
 function readU32(bytes: Uint8Array, offset: number): number {
   const value = slice(bytes, offset, 4);
   return new DataView(value.buffer, value.byteOffset, value.byteLength).getUint32(0, true);
+}
+
+function concat(...parts: ReadonlyArray<Uint8Array>): Uint8Array {
+  const output = new Uint8Array(parts.reduce((total, part) => total + part.length, 0));
+  let offset = 0;
+  for (const part of parts) { output.set(part, offset); offset += part.length; }
+  return output;
+}
+
+export async function validateProductBasisV3(
+  bytes: Uint8Array,
+  productId: Uint8Array,
+  resultDomainDigest: Uint8Array,
+  domain: Uint8Array,
+): Promise<number> {
+  if (bytes.length < BASIS_HEADER_BYTES_V3 || !same(slice(bytes, 0, 8), BASIS_MAGIC_V3)
+      || u16(bytes, 8) !== BASIS_SCHEMA_V3 || u16(bytes, 10) !== BASIS_HEADER_BYTES_V3
+      || readU32(bytes, 12) !== bytes.length) throw new Error('Product basis has the wrong exact V3 header or width');
+  requireZero(bytes, 18, 2, 'Product basis header');
+  requireZero(bytes, 208, 48, 'Product basis header tail');
+  const kind = bytes[16];
+  const rounding = bytes[17];
+  const basisWidth = readU32(bytes, BASIS_WIDTH_OFFSET_V3);
+  const knotCount = readU32(bytes, 24);
+  const termCount = readU32(bytes, 28);
+  const payoutScale = u64(bytes, 160);
+  const knotDenominator = u64(bytes, 168);
+  [32, 64, 96, 128, 176].forEach((offset) => requireNonzero(slice(bytes, offset, 32), 'Product basis identity'));
+  if (!same(slice(bytes, 32, 32), productId)
+      || !same(slice(bytes, 64, 32), resultDomainDigest)
+      || !same(slice(bytes, 96, 32), slice(domain, 64, 32))
+      || !same(slice(bytes, 128, 32), slice(domain, 96, 32))) {
+    throw new Error('Product basis does not join the authenticated Product and result domain');
+  }
+  const semantic = await sha256(concat(BASIS_SEMANTIC_DOMAIN_V3, slice(bytes, 0, 32), slice(bytes, 96, bytes.length - 96)));
+  if (!same(semantic, slice(domain, 128, 32))) throw new Error('Product basis semantic identity differs from Product-owned liability basis');
+  if (basisWidth === 0 || payoutScale === 0n) throw new Error('Product basis has zero width or payout scale');
+  if (kind === 1) {
+    if (rounding !== EXACT_CATEGORICAL_BOUNDARY_V3 || payoutScale !== 1n || knotDenominator !== 1n
+        || knotCount !== 0 || termCount !== 0 || bytes.length !== BASIS_HEADER_BYTES_V3) {
+      throw new Error('categorical Product basis is not canonical Q=1');
+    }
+    return basisWidth;
+  }
+  if (kind !== 2 || rounding !== TERM_FLOOR_EXACT_COMPLEMENT_BOUNDARY_V3 || basisWidth < 2
+      || knotDenominator === 0n || termCount === 0) throw new Error('graded Product basis kind or counts are not canonical');
+  const expected = BASIS_HEADER_BYTES_V3 + basisWidth * 8 + knotCount * KNOT_BYTES_V3 + termCount * TERM_BYTES_V3;
+  if (!Number.isSafeInteger(expected) || expected !== bytes.length) throw new Error('graded Product basis runtime tail has the wrong exact width');
+  let payoutTotal = 0n;
+  for (let index = 0; index < basisWidth; index += 1) {
+    const payout = u64(bytes, BASIS_HEADER_BYTES_V3 + index * 8);
+    if (payout > payoutScale) throw new Error('graded Product failure payout exceeds its exact scale');
+    payoutTotal += payout;
+  }
+  if (payoutTotal !== payoutScale) throw new Error('graded Product failure payouts are not an exact partition');
+  let priorKnot: bigint | null = null;
+  const knotStart = BASIS_HEADER_BYTES_V3 + basisWidth * 8;
+  for (let index = 0; index < knotCount; index += 1) {
+    const offset = knotStart + index * KNOT_BYTES_V3;
+    const unsigned = new DataView(bytes.buffer, bytes.byteOffset + offset, 16);
+    const low = unsigned.getBigUint64(0, true);
+    const high = unsigned.getBigInt64(8, true);
+    const knot = (high << 64n) | low;
+    if (priorKnot !== null && knot <= priorKnot) throw new Error('graded Product knots are not strictly ordered');
+    priorKnot = knot;
+  }
+  const termStart = knotStart + knotCount * KNOT_BYTES_V3;
+  let priorKey = '';
+  let lastClaim = -1;
+  const terms: Array<Readonly<{ tag: number; left: number; peak: number; right: number; amplitude: bigint }>> = [];
+  for (let index = 0; index < termCount; index += 1) {
+    const offset = termStart + index * TERM_BYTES_V3;
+    const claim = readU32(bytes, offset);
+    const tag = bytes[offset + 4];
+    requireZero(bytes, offset + 5, 3, 'graded Product term');
+    const left = readU32(bytes, offset + 8);
+    const peak = readU32(bytes, offset + 12);
+    const right = readU32(bytes, offset + 16);
+    requireZero(bytes, offset + 20, 4, 'graded Product term');
+    const amplitude = u64(bytes, offset + 24);
+    const shapeValid = (tag === 0 && left === 0 && peak === 0 && right === 0)
+      || ((tag === 1 || tag === 2) && peak === 0 && left < right && right < knotCount)
+      || (tag === 3 && left < peak && peak < right && right < knotCount);
+    if (!shapeValid || amplitude === 0n || claim >= basisWidth - 1 || (lastClaim < 0 ? claim !== 0 : claim !== lastClaim && claim !== lastClaim + 1)) {
+      throw new Error('graded Product term is invalid or skips a primary claim');
+    }
+    const key = [claim, tag, left, peak, right].map((value) => value.toString().padStart(10, '0')).join(':');
+    if (priorKey !== '' && key <= priorKey) throw new Error('graded Product terms are not in canonical order');
+    priorKey = key; lastClaim = claim;
+    terms.push(Object.freeze({ tag, left, peak, right, amplitude }));
+  }
+  if (lastClaim + 1 !== basisWidth - 1) throw new Error('graded Product terms do not cover every primary claim');
+  const knots: bigint[] = [];
+  for (let index = 0; index < knotCount; index += 1) {
+    const offset = knotStart + index * KNOT_BYTES_V3;
+    const view = new DataView(bytes.buffer, bytes.byteOffset + offset, 16);
+    knots.push((view.getBigInt64(8, true) << 64n) | view.getBigUint64(0, true));
+  }
+  const evaluate = (term: (typeof terms)[number], x: bigint): bigint => {
+    if (term.tag === 0) return term.amplitude;
+    const left = knots[term.left];
+    const right = knots[term.right];
+    if (left === undefined || right === undefined) throw new Error('graded Product term selects an absent knot');
+    const rising = x <= left ? 0n : x >= right ? term.amplitude : term.amplitude * (x - left) / (right - left);
+    if (term.tag === 1) return rising;
+    const falling = x <= left ? term.amplitude : x >= right ? 0n : term.amplitude * (right - x) / (right - left);
+    if (term.tag === 2) return falling;
+    const peak = knots[term.peak];
+    if (peak === undefined) throw new Error('graded Product tent selects an absent peak');
+    const tentRise = x <= left ? 0n : x >= peak ? term.amplitude : term.amplitude * (x - left) / (peak - left);
+    const tentFall = x <= peak ? term.amplitude : x >= right ? 0n : term.amplitude * (right - x) / (right - peak);
+    return tentRise < tentFall ? tentRise : tentFall;
+  };
+  const cells = knots.length < 2 ? [[knots[0] ?? 0n, knots[0] ?? 0n]] : knots.slice(0, -1).map((left, index) => [left, knots[index + 1]]);
+  for (const [left, right] of cells) {
+    let bound = 0n;
+    for (const term of terms) {
+      const leftValue = evaluate(term, left);
+      const rightValue = evaluate(term, right);
+      bound += leftValue > rightValue ? leftValue : rightValue;
+    }
+    if (bound > payoutScale) throw new Error('graded Product basis exceeds its checked cell envelope');
+  }
+  return basisWidth;
 }
 
 function key(value: string, field: string): PublicKey {
@@ -596,6 +732,13 @@ export async function inspectDirectHotRouteV3(
   const productGraph = decodeCoreFoundProductGraphV2(
     productRaw.data, resultDomainRaw.data, portfolioRaw.data, resultDomainDigest, portfolioDigest,
   );
+  const linkedBasisRaw = await finalizedRecord(client, observation.accounts, registryProgram,
+    fixed[HOT_LINKED_BASIS_RAW_ACCOUNT_V3].address, fixed[HOT_LINKED_BASIS_STAGING_ACCOUNT_V3].address,
+    GRADED_BASIS_RECORD_SCHEMA_ID_V3, await sha256(required(observation.accounts, fixed[HOT_LINKED_BASIS_RAW_ACCOUNT_V3].address, 'Product basis').data), 'Product basis');
+  const basisWidth = await validateProductBasisV3(linkedBasisRaw.data, productGraph.productId, resultDomainDigest, resultDomainRaw.data);
+  if (linkedBasisRaw.data[16] === 1 && basisWidth !== productGraph.outcomeCount) {
+    throw new Error('categorical Product basis width differs from Product-owned outcome count');
+  }
 
   const profileRaw = await finalizedRecord(client, observation.accounts, registryProgram,
     fixed[HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3].address, fixed[HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3].address,
@@ -625,6 +768,7 @@ export async function inspectDirectHotRouteV3(
     configRaw,
     productRaw,
     portfolioRaw,
+    linkedBasisRaw,
     ...runtimeAccounts,
   ];
   const logicalRuntimeMetas = [
@@ -632,10 +776,11 @@ export async function inspectDirectHotRouteV3(
     fixed[HOT_CONFIG_RAW_ACCOUNT_V3],
     fixed[HOT_PRODUCT_RAW_ACCOUNT_V3],
     fixed[HOT_PORTFOLIO_RAW_ACCOUNT_V3],
+    fixed[HOT_LINKED_BASIS_RAW_ACCOUNT_V3],
     ...runtimeMetas,
   ];
   const outcomeCount = tailCountFromProfile(profileRaw.data, logicalRuntimeAccounts);
-  if (outcomeCount !== productGraph.outcomeCount) throw new Error('AccountProfile runtime width differs from Product-owned outcome count');
+  if (outcomeCount !== basisWidth) throw new Error('AccountProfile runtime width differs from Product-owned basis width');
   validateRuntimeAccountProfileV2(profileRaw.data, outcomeCount, logicalRuntimeMetas);
 
   let checkedOuter: CheckedHotOuterEvidenceV3 = Object.freeze({ status: 'unavailable', reason: 'no user-supplied checked infrastructure manifest recognizes this Trading release' });

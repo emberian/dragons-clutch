@@ -1,5 +1,5 @@
-import DirectWorkspace from '@/components/DirectWorkspace';
+import DirectTradeWorkspace from '@/components/DirectTradeWorkspace';
 
 export default function DirectPage() {
-  return <DirectWorkspace />;
+  return <DirectTradeWorkspace />;
 }

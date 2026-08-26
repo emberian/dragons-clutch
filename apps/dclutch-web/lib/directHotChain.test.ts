@@ -4,8 +4,10 @@ import {
   decodeDirectDescriptorV3,
   decodeDirectRootSelectionV1,
   decodeSelectedDirectManifestEntryV1,
+  validateProductBasisV3,
   validateDirectSignedRequestProfileV2,
 } from './directHotChain';
+import { sha256 } from './bytes';
 import * as Abi from './generated/directInlineV3';
 
 function identity(seed: number): Uint8Array {
@@ -22,6 +24,40 @@ function putU32(bytes: Uint8Array, offset: number, value: number): void {
 
 function putU64(bytes: Uint8Array, offset: number, value: bigint): void {
   new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).setBigUint64(offset, value, true);
+}
+
+function concat(...parts: ReadonlyArray<Uint8Array>): Uint8Array {
+  const output = new Uint8Array(parts.reduce((total, part) => total + part.length, 0));
+  let offset = 0;
+  for (const part of parts) { output.set(part, offset); offset += part.length; }
+  return output;
+}
+
+async function categoricalBasisFixture(): Promise<Readonly<{ basis: Uint8Array; domain: Uint8Array }>> {
+  const basis = new Uint8Array(Abi.BASIS_HEADER_BYTES_V3);
+  basis.set(Abi.BASIS_MAGIC_V3);
+  putU16(basis, 8, Abi.BASIS_SCHEMA_V3);
+  putU16(basis, 10, Abi.BASIS_HEADER_BYTES_V3);
+  putU32(basis, 12, basis.length);
+  basis[16] = 1;
+  basis[17] = Abi.EXACT_CATEGORICAL_BOUNDARY_V3;
+  putU32(basis, Abi.BASIS_WIDTH_OFFSET_V3, 3);
+  basis.set(identity(1), 32);
+  basis.set(identity(2), 64);
+  basis.set(identity(3), 96);
+  basis.set(identity(4), 128);
+  putU64(basis, 160, 1n);
+  putU64(basis, 168, 1n);
+  basis.set(identity(5), 176);
+  const domain = new Uint8Array(160);
+  domain.set(identity(3), 64);
+  domain.set(identity(4), 96);
+  domain.set(await sha256(concat(
+    new TextEncoder().encode('dclutch/product-basis/semantic/v3'),
+    basis.slice(0, 32),
+    basis.slice(96),
+  )), 128);
+  return Object.freeze({ basis, domain });
 }
 
 function rootFixture(): Uint8Array {
@@ -152,5 +188,18 @@ describe('Direct V3 chain-selected artifacts', () => {
     reserved[Abi.REQUEST_PROFILE_V2_HEADER_BYTES + Abi.REQUEST_PROFILE_HEADER_BYTES_V1
       + Abi.REQUEST_OPERATION_RESERVED_BYTE_OFFSET] = 1;
     expect(() => validateDirectSignedRequestProfileV2(reserved)).toThrow(/reserved/);
+  });
+
+  it('hostile-decodes the Hot38 Product-basis continuation and semantic join', async () => {
+    const fixture = await categoricalBasisFixture();
+    await expect(validateProductBasisV3(fixture.basis, identity(1), identity(2), fixture.domain)).resolves.toBe(3);
+
+    const substituted = fixture.basis.slice();
+    substituted.set(identity(9), 32);
+    await expect(validateProductBasisV3(substituted, identity(1), identity(2), fixture.domain)).rejects.toThrow(/does not join/);
+
+    const noncanonical = fixture.basis.slice();
+    noncanonical[208] = 1;
+    await expect(validateProductBasisV3(noncanonical, identity(1), identity(2), fixture.domain)).rejects.toThrow(/reserved/);
   });
 });

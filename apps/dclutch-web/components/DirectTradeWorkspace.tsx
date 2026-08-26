@@ -24,7 +24,6 @@ import {
   requestReadonlyWalletIdentityV1,
   requestWalletMessageSignatureV1,
   requestWalletTransactionSignatureV1,
-  submitSignedTransactionV1,
 } from '@/lib/walletHandoff';
 
 const MAX_U64 = 18_446_744_073_709_551_615n;
@@ -35,6 +34,7 @@ const FIXED_ROLES = Object.freeze([
   'Lifecycle raw', 'Lifecycle staging', 'Strategy raw', 'Strategy staging', 'Activation cache', 'Core program',
   'Core ProgramData', 'Trading program', 'Trading ProgramData', 'Registry program', 'Rent sysvar', 'Instructions sysvar',
   'Product raw', 'Product staging', 'result domain raw', 'result domain staging', 'portfolio raw', 'portfolio staging',
+  'Product basis raw', 'Product basis staging',
 ]);
 
 type ParticipantFields = Readonly<{
@@ -191,8 +191,6 @@ export default function DirectTradeWorkspace() {
   const [wallet, setWallet] = useState('');
   const [walletStatus, setWalletStatus] = useState('No wallet identity has been requested.');
   const [signed, setSigned] = useState<WalletSignedTransactionV1 | null>(null);
-  const [submitConfirmed, setSubmitConfirmed] = useState(false);
-  const [submission, setSubmission] = useState('No transaction has been submitted.');
 
   const inspection = routeState.kind === 'ready' ? routeState.inspection : null;
   const preview = useMemo(() => {
@@ -274,13 +272,15 @@ export default function DirectTradeWorkspace() {
     } catch (error) { setWalletStatus(`Refused: ${errorMessage(error)}`); }
   }
 
-  async function submitTransaction() {
-    if (signed === null || !submitConfirmed) return;
-    setSubmission('Submitting the already-signed packet with preflight…');
-    try {
-      const result = await submitSignedTransactionV1(new SolanaRpcClient(endpoint), signed.transaction);
-      setSubmission(`RPC accepted signature ${result}. Confirmation/finality is not claimed by this response.`);
-    } catch (error) { setSubmission(`Refused: ${errorMessage(error)}`); }
+  function downloadPacket() {
+    if (plan === null) return;
+    const wire = signed?.wireBytes ?? plan.wireBytes;
+    const blob = new Blob([wire as BlobPart], { type: 'application/octet-stream' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `dclutch-direct-${signed === null ? 'unsigned' : 'wallet-signed'}-${wire.length}.bin`;
+    link.click();
+    URL.revokeObjectURL(link.href);
   }
 
   return <main className="product-shell trade-v3-shell">
@@ -290,7 +290,7 @@ export default function DirectTradeWorkspace() {
 
     <form className="trade-v3-card route-card" onSubmit={inspectRoute}>
       <header><span>01</span><div><h2>Acquire the action-selected route</h2><p>The address map is transport, not truth. Every account is reacquired and joined against the current Registry/Core/Trading state.</p></div></header>
-      <div className="trade-v3-route-grid"><label><span>Finalized RPC endpoint</span><input type="url" required value={endpoint} onChange={(event) => setEndpoint(event.target.value.trim())} /></label><label><span>Optional {CHECKED_INFRASTRUCTURE_BYTES_V1.toLocaleString()}-byte checked infrastructure · base64</span><textarea value={infrastructureText} onChange={(event) => setInfrastructureText(event.target.value.trim())} /></label><label className="route-json"><span>Exact 36-account + runtime-suffix route manifest · JSON</span><textarea required spellCheck={false} value={routeText} onChange={(event) => setRouteText(event.target.value)} /></label></div>
+      <div className="trade-v3-route-grid"><label><span>Finalized RPC endpoint</span><input type="url" required value={endpoint} onChange={(event) => setEndpoint(event.target.value.trim())} /></label><label><span>Optional {CHECKED_INFRASTRUCTURE_BYTES_V1.toLocaleString()}-byte checked infrastructure · base64</span><textarea value={infrastructureText} onChange={(event) => setInfrastructureText(event.target.value.trim())} /></label><label className="route-json"><span>Exact Hot38 + strategy/runtime-suffix route manifest · JSON</span><textarea required spellCheck={false} value={routeText} onChange={(event) => setRouteText(event.target.value)} /></label></div>
       <button disabled={routeState.kind === 'loading'}>{routeState.kind === 'loading' ? 'Reading finalized route…' : 'Authenticate route'}</button><p className="direct-status" aria-live="polite">{routeState.message}</p>
       {inspection && <div className="trade-v3-evidence"><article><span>Outcome width</span><strong>{inspection.route.outcomeCount.toLocaleString()}</strong><small>Product-derived u32</small></article><article><span>Price / fee</span><strong>{inspection.route.priceScale.toString()} / {inspection.route.feeBasisPoints} bps</strong><small>immutable Direct config</small></article><article><span>Program selector</span><strong>{inspection.selectedProgramDigest.slice(0, 16)}…</strong><small>InlineOrdinary action 1</small></article><article><span>Strategy → VM</span><strong>{inspection.strategyDigest.slice(0, 8)}… → {inspection.transitionDigest.slice(0, 8)}…</strong><small>interpreted V2 / V3</small></article></div>}
     </form>
@@ -307,11 +307,11 @@ export default function DirectTradeWorkspace() {
     </form>
 
     <section className="trade-v3-card signing-card">
-      <header><span>03</span><div><h2>Wallet handoff and explicit submission</h2><p>Connecting reads only identity. Maker signing, transaction signing, and submission are three separate user-triggered actions.</p></div></header>
-      <div className="signing-grid"><article><span>Wallet identity</span><strong>{wallet || 'not connected'}</strong><button type="button" onClick={() => void connectWallet()}>Connect identity</button><p>{walletStatus}</p></article><article><span>Unsigned / signed packet</span><strong>{plan ? `${plan.wireBytes.length} bytes · ${plan.loadedAddresses} ALT` : 'no transaction built'}</strong><button type="button" disabled={plan === null} onClick={() => void signTransaction()}>Sign as transaction payer</button><p>{signed ? `${signed.complete ? 'Complete' : 'Partial'} signature set · ${signed.wireBytes.length} bytes` : 'No transaction signature requested.'}</p></article><article className="submission-boundary"><span>External state change</span><strong>{submission}</strong><label className="submit-confirm"><input type="checkbox" checked={submitConfirmed} onChange={(event) => setSubmitConfirmed(event.target.checked)} /><span>I explicitly authorize submitting this exact signed packet to the selected RPC.</span></label><button type="button" disabled={signed?.complete !== true || !submitConfirmed} onClick={() => void submitTransaction()}>Submit signed transaction with preflight</button></article></div>
+      <header><span>03</span><div><h2>Wallet handoff and exact packet export</h2><p>Connecting reads only identity. Maker and transaction signing are separate explicit wallet requests. Submission is deliberately outside this workbench.</p></div></header>
+      <div className="signing-grid"><article><span>Wallet identity</span><strong>{wallet || 'not connected'}</strong><button type="button" onClick={() => void connectWallet()}>Connect identity</button><p>{walletStatus}</p></article><article><span>Unsigned / signed packet</span><strong>{plan ? `${plan.wireBytes.length} bytes · ${plan.loadedAddresses} ALT` : 'no transaction built'}</strong><button type="button" disabled={plan === null} onClick={() => void signTransaction()}>Sign as transaction payer</button><button type="button" disabled={plan === null} onClick={downloadPacket}>Download exact packet</button><p>{signed ? `${signed.complete ? 'Complete' : 'Partial'} signature set · ${signed.wireBytes.length} bytes. Export it for an external submitter.` : 'No transaction signature requested.'}</p></article></div>
       {plan && <details className="trade-v3-bytes"><summary>Exact transaction material</summary><dl><div><dt>Required signer</dt><dd>{plan.requiredSigners.join(', ')}</dd></div><div><dt>Wire bytes</dt><dd>{signed ? base64(signed.wireBytes) : base64(plan.wireBytes)}</dd></div><div><dt>Request bytes</dt><dd>{hex(plan.requestBytes)}</dd></div></dl></details>}
     </section>
 
-    <footer className="product-footer"><span>Chain state and checked release evidence are authoritative.</span><span>No automatic wallet request · no automatic submission</span></footer>
+    <footer className="product-footer"><span>Chain state and checked release evidence are authoritative.</span><span>No automatic wallet request · no submission path</span></footer>
   </main>;
 }

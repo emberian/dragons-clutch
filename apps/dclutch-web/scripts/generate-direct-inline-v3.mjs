@@ -23,6 +23,8 @@ const sources = Object.freeze({
   lifecycle: readFileSync(new URL('crates/dclutch-account-profile-contract/src/lifecycle_v3.rs', root), 'utf8'),
   strategy: readFileSync(new URL('crates/dclutch-execution-strategy-contract/src/v2.rs', root), 'utf8'),
   strategyGenerated: readFileSync(new URL('crates/dclutch-execution-strategy-contract/src/generated_v2.rs', root), 'utf8'),
+  basis: readFileSync(new URL('crates/dclutch-product-payoff-v2-codec/src/runtime_v3.rs', root), 'utf8'),
+  basisGenerated: readFileSync(new URL('crates/dclutch-product-payoff-v2-codec/src/generated_admission_v3.rs', root), 'utf8'),
 });
 const outputUrl = new URL('../lib/generated/directInlineV3.ts', import.meta.url);
 
@@ -69,6 +71,10 @@ const scalars = Object.freeze([
   ['hot', 'HOT_PRODUCT_RAW_ACCOUNT_V3'], ['hot', 'HOT_PRODUCT_STAGING_ACCOUNT_V3'],
   ['hot', 'HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3'], ['hot', 'HOT_RESULT_DOMAIN_STAGING_ACCOUNT_V3'],
   ['hot', 'HOT_PORTFOLIO_RAW_ACCOUNT_V3'], ['hot', 'HOT_PORTFOLIO_STAGING_ACCOUNT_V3'],
+  ['hot', 'HOT_LINKED_BASIS_RAW_ACCOUNT_V3'], ['hot', 'HOT_LINKED_BASIS_STAGING_ACCOUNT_V3'],
+  ['basis', 'BASIS_SCHEMA_V3'], ['basis', 'BASIS_HEADER_BYTES_V3'], ['basis', 'BASIS_WIDTH_OFFSET_V3'],
+  ['basis', 'KNOT_BYTES_V3'], ['basis', 'TERM_BYTES_V3'], ['basis', 'EXACT_CATEGORICAL_BOUNDARY_V3'],
+  ['basis', 'TERM_FLOOR_EXACT_COMPLEMENT_BOUNDARY_V3'],
   ['descriptor', 'CAPABILITY_PROGRAM_V3_BYTES'], ['descriptor', 'CAPABILITY_PROGRAM_V3_SCHEMA_VERSION'],
   ['descriptor', 'CAPABILITY_PROGRAM_V3_ARTIFACT_PROFILE'], ['descriptor', 'CAPABILITY_PROGRAM_V3_TRANSITION_SCHEMA_VERSION'],
   ['descriptor', 'CAPABILITY_PROGRAM_V3_REQUEST_PROFILE_SCHEMA_VERSION'], ['descriptor', 'CAPABILITY_PROGRAM_V3_KIND_OFFSET'],
@@ -154,6 +160,7 @@ output += 'export const DIRECT_INLINE_ORDINARY_ACTION_V3 = 1 as const;\n';
 output += 'export const DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3 = DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3 + 2 * DIRECT_SIGNED_PARTICIPANT_BYTES_V3 + 16;\n\n';
 for (const [source, name] of [
   ['hot', 'HOT_EXECUTION_MAGIC_V3'], ['descriptor', 'CAPABILITY_PROGRAM_V3_MAGIC'],
+  ['basis', 'BASIS_MAGIC_V3'], ['basisGenerated', 'GRADED_BASIS_RECORD_SCHEMA_ID_V3'],
   ['root', 'CAPABILITY_ROOT_MAGIC_V1'], ['selection', 'CAPABILITY_EXECUTION_SELECTION_MAGIC_V1'],
   ['manifest', 'MANIFEST_MAGIC'], ['direct', 'DIRECT_EXECUTION_REQUEST_MAGIC_V3'],
   ['direct', 'DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3'], ['direct', 'DIRECT_SUCCESSOR_KIND_ID_V3'],
