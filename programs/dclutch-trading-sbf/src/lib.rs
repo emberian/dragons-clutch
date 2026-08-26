@@ -80,6 +80,14 @@ mod projected_custody_composition_v4;
 ))]
 #[allow(dead_code)]
 mod projected_core_composition_v4;
+/// Exact projected-Hoard realization route and receipt join.
+#[cfg(any(
+    feature = "families",
+    feature = "series-family",
+    feature = "dealer-family"
+))]
+#[allow(dead_code)]
+mod projected_realize_composition_v4;
 /// Compact projected-Market execution and persisted-state reconstruction.
 #[cfg(any(
     feature = "families",
