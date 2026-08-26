@@ -1,6 +1,6 @@
 //! Complete finalized-artifact join for data-defined General execution.
 //!
-//! `CapabilityProgramSetV1` selects one complete descriptor from the exact
+//! `CapabilityProgramSetV2` selects one schema-bound descriptor from the exact
 //! action byte in the General request. This module joins that descriptor to its
 //! config, AccountProfile, lifecycle policy, RequestProfile, ExecutionStrategy,
 //! TransitionVM, and EffectProgram artifacts. It is a release/admission
@@ -16,8 +16,8 @@ use dclutch_capability_program_contract::{
         HOT_RUNTIME_LINKED_BASIS_COORDINATE_V3, HOT_RUNTIME_PORTFOLIO_COORDINATE_V3,
         HOT_RUNTIME_PRODUCT_COORDINATE_V3, HOT_RUNTIME_ROOT_COORDINATE_V3,
     },
-    set_v1::{CapabilityProgramSetV1, SelectorWidthV1},
-    v3::CapabilityProgramV3,
+    set_v2::{CapabilityProgramSetV2, SelectorWidthV2},
+    v3::{CapabilityProgramV3, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_V3_SCHEMA_RELEASE_ID},
 };
 use dclutch_claims_svm::{
     CallerRole as ClaimsCallerRole,
@@ -197,24 +197,26 @@ pub fn authenticate_general_artifacts_v3<'a>(
         return Err(GeneralArtifactErrorV3::Geometry);
     }
     require_selected(selection.program_set, artifacts.program_set)?;
-    let set = CapabilityProgramSetV1::decode_selected(
+    let set = CapabilityProgramSetV2::decode_selected(
         selection.program_set,
         digest(artifacts.program_set),
         artifacts.program_set,
     )
     .map_err(|_| GeneralArtifactErrorV3::ProgramSet)?;
     if set.selector_offset() != GENERAL_CONTROLLER_ACTION_SELECTOR_OFFSET_V3
-        || set.selector_width() != SelectorWidthV1::U8
+        || set.selector_width() != SelectorWidthV2::U8
     {
         return Err(GeneralArtifactErrorV3::ProgramSet);
     }
     let request =
         ControllerRequestV2::decode(family_request).map_err(|_| GeneralArtifactErrorV3::Request)?;
     let selected_descriptor = set
-        .select(family_request)
+        .select_descriptor(family_request)
         .map_err(|_| GeneralArtifactErrorV3::ProgramSet)?;
     let descriptor_id = digest(artifacts.descriptor);
-    if selected_descriptor.to_bytes() != descriptor_id {
+    if selected_descriptor.schema().to_bytes() != CAPABILITY_PROGRAM_V3_SCHEMA_RELEASE_ID
+        || selected_descriptor.program().to_bytes() != descriptor_id
+    {
         return Err(GeneralArtifactErrorV3::ContentIdentity);
     }
     let descriptor = CapabilityProgramV3::decode(artifacts.descriptor)
@@ -875,10 +877,6 @@ mod tests {
             .copy_from_slice(value);
     }
 
-    fn set_byte(output: &mut [u8], offset: usize, value: u8) {
-        *output.get_mut(offset).expect("fixture byte") = value;
-    }
-
     fn id(value: [u8; 32]) -> ContentId {
         ContentId::new(value).expect("nonzero fixture identity")
     }
@@ -1109,19 +1107,26 @@ mod tests {
     }
 
     fn program_set(descriptor: [u8; 32]) -> Vec<u8> {
-        let mut output = vec![0_u8; 72];
-        put(&mut output, 0, b"DCLTCPS1");
-        put(&mut output, 8, &1_u16.to_le_bytes());
-        put(&mut output, 10, &1_u16.to_le_bytes());
-        put(
-            &mut output,
-            12,
-            &GENERAL_CONTROLLER_ACTION_SELECTOR_OFFSET_V3.to_le_bytes(),
+        use dclutch_capability_program_contract::set_v2::{
+            CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, SelectorWidthV2,
+            encode_program_set_v2, encoded_program_set_bytes_v2,
+        };
+
+        let entry = CapabilityProgramSetEntryV2::new(
+            Action::Freeze as u32,
+            CapabilityDescriptorReferenceV2::new(
+                id(CAPABILITY_PROGRAM_V3_SCHEMA_RELEASE_ID),
+                id(descriptor),
+            ),
         );
-        set_byte(&mut output, 16, 1);
-        put(&mut output, 18, &1_u16.to_le_bytes());
-        put(&mut output, 32, &(Action::Freeze as u32).to_le_bytes());
-        put(&mut output, 36, &descriptor);
+        let mut output = vec![0_u8; encoded_program_set_bytes_v2(1).expect("one descriptor")];
+        encode_program_set_v2(
+            GENERAL_CONTROLLER_ACTION_SELECTOR_OFFSET_V3,
+            SelectorWidthV2::U8,
+            &[entry],
+            &mut output,
+        )
+        .expect("V2 program set");
         output
     }
 

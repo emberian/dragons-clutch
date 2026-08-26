@@ -43,12 +43,12 @@ pub const GENERAL_TRANSITION_INSTRUCTION_PLACEHOLDER_V3: InstructionV3 =
 #[must_use]
 pub const fn general_transition_instruction_count_v3(action: Action) -> (usize, usize, usize) {
     match action {
-        Action::Consider => (12, 1, 0),
-        Action::Freeze => (14, 1, 0),
-        Action::InitializeSettlement => (18, 2, 0),
-        Action::Collect | Action::Distribute => (16, 4, 0),
-        Action::Materialize => (13, 1, 0),
-        Action::Close => (21, 6, 0),
+        Action::Consider => (13, 1, 0),
+        Action::Freeze => (15, 1, 0),
+        Action::InitializeSettlement => (19, 2, 0),
+        Action::Collect | Action::Distribute => (17, 4, 0),
+        Action::Materialize => (14, 1, 0),
+        Action::Close => (23, 6, 0),
     }
 }
 
@@ -133,6 +133,7 @@ fn append_common(action: Action, output: &mut [InstructionV3], cursor: &mut usiz
         ),
         InstructionV3::load_const(s(scalar::LOCAL_STATE_KIND)?, u64::from(kind.tag())),
         InstructionV3::nonzero(s(scalar::OUTCOME_COUNT)?),
+        InstructionV3::scalar_eq(s(scalar::ZERO)?, s(scalar::OUTCOME_COUNT)?),
         InstructionV3::scalar_eq(s(scalar::STATE_BUMP)?, s(scalar::PRIMARY_CANONICAL_BUMP)?),
         InstructionV3::identity_eq(i(identity::PRIMARY_OWNER)?, i(identity::TRADING_PROGRAM)?),
         InstructionV3::nonzero(s(scalar::PRIMARY_RENT_PRINCIPAL)?),
@@ -257,6 +258,7 @@ fn append_action(action: Action, output: &mut [InstructionV3], cursor: &mut usiz
                     i(identity::TRADING_PROGRAM)?,
                 ),
                 InstructionV3::nonzero(s(scalar::TERMINAL_RENT_PRINCIPAL)?),
+                InstructionV3::load_const(s(scalar::ZERO)?, 0),
                 InstructionV3::scalar_eq(s(scalar::POSITION_TABLE_COUNT)?, s(scalar::ZERO)?),
                 InstructionV3::increment_into(
                     s(scalar::CUSTODY_EXPECTED_REVISION)?,
@@ -449,6 +451,8 @@ mod tests {
             .expect("scalar width");
             let mut input_scalars = vec![0_u64; scalar_count];
             input_scalars[usize::try_from(scalar::OUTCOME_COUNT).expect("outcome register")] =
+                u64::from(count);
+            input_scalars[usize::try_from(scalar::ZERO).expect("persisted outcome width")] =
                 u64::from(count);
             input_scalars[usize::try_from(scalar::STATE_BUMP).expect("bump")] = 7;
             input_scalars
