@@ -2652,6 +2652,7 @@ fn decode_claims_composition_boxed_v3<'request>(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[inline(never)]
 fn preflight_child_routes_v3<'accounts, 'info>(
     program_id: &Pubkey,
     frame: HotFrameV3<'accounts, 'info>,
@@ -2900,6 +2901,7 @@ struct ChildExecutionStateV3 {
 const _: [(); 88] = [(); core::mem::size_of::<ChildExecutionStateV3>()];
 
 #[allow(clippy::too_many_arguments)]
+#[inline(never)]
 fn execute_child_routes_v3<'accounts, 'info>(
     program_id: &Pubkey,
     frame: HotFrameV3<'accounts, 'info>,
@@ -4382,6 +4384,7 @@ fn shadow_routes_v3(
     Ok(output)
 }
 
+#[inline(never)]
 fn preflight_local_effects(
     effect: SelectedEffectProgramV4<'_>,
     tail_count: u32,
