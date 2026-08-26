@@ -32,38 +32,30 @@ use super::{
 
 /// First exact strategy-owned physical account after the common Hot prefix.
 pub const SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3: usize = HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3;
-/// Finalized selected CapabilityProgram raw record.
-pub const SERIES_SHADOW_CAPABILITY_RAW_ACCOUNT_V3: usize = SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3;
-/// Vacant staging cursor for the selected CapabilityProgram record.
-pub const SERIES_SHADOW_CAPABILITY_STAGING_ACCOUNT_V3: usize =
-    SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3 + 1;
-/// Finalized ExecutionStrategy raw record.
-pub const SERIES_SHADOW_STRATEGY_RAW_ACCOUNT_V3: usize =
-    SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3 + 2;
-/// Vacant staging cursor for the ExecutionStrategy record.
-pub const SERIES_SHADOW_STRATEGY_STAGING_ACCOUNT_V3: usize =
-    SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3 + 3;
 /// Finalized translation Certificate raw record.
 pub const SERIES_SHADOW_CERTIFICATE_RAW_ACCOUNT_V3: usize =
-    SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3 + 4;
+    SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3;
 /// Vacant staging cursor for the Certificate record.
 pub const SERIES_SHADOW_CERTIFICATE_STAGING_ACCOUNT_V3: usize =
-    SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3 + 5;
+    SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3 + 1;
 /// Finalized immutable accelerator ArtifactRelease raw record.
 pub const SERIES_SHADOW_ARTIFACT_RAW_ACCOUNT_V3: usize =
-    SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3 + 6;
+    SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3 + 2;
 /// Vacant staging cursor for the ArtifactRelease record.
 pub const SERIES_SHADOW_ARTIFACT_STAGING_ACCOUNT_V3: usize =
-    SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3 + 7;
+    SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3 + 3;
 /// Current accelerator Program account authenticated by the ArtifactRelease.
 pub const SERIES_SHADOW_ACCELERATOR_PROGRAM_ACCOUNT_V3: usize =
-    SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3 + 8;
+    SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3 + 4;
 /// Current accelerator ProgramData account authenticated by the ArtifactRelease.
 pub const SERIES_SHADOW_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3: usize =
-    SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3 + 9;
-/// Exact physical account count through the Shadow strategy suffix.
-pub const SERIES_SHADOW_FIXED_ACCOUNT_COUNT_V3: usize =
-    SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3 + 10;
+    SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3 + 5;
+/// Trading caller-authority PDA supplied after the six Shadow strategy extras.
+pub const SERIES_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3: usize =
+    SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3 + 6;
+/// First AccountProfile-defined physical runtime account.
+pub const SERIES_SHADOW_RUNTIME_ACCOUNTS_START_V3: usize =
+    SERIES_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3 + 1;
 /// Maximum fixed-buffer width of one generic Series Shadow request.
 pub const SERIES_SHADOW_MAXIMUM_REQUEST_BYTES_V3: usize =
     SHADOW_REQUEST_HEADER_BYTES_V3 + SERIES_ACTION_MAXIMUM_BYTES_V3;
@@ -303,9 +295,10 @@ fn content_id(bytes: &[u8]) -> Result<ContentId> {
 }
 
 const _: () = assert!(SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3 == 38);
-const _: () = assert!(SERIES_SHADOW_ACCELERATOR_PROGRAM_ACCOUNT_V3 == 46);
-const _: () = assert!(SERIES_SHADOW_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3 == 47);
-const _: () = assert!(SERIES_SHADOW_FIXED_ACCOUNT_COUNT_V3 == 48);
+const _: () = assert!(SERIES_SHADOW_ACCELERATOR_PROGRAM_ACCOUNT_V3 == 42);
+const _: () = assert!(SERIES_SHADOW_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3 == 43);
+const _: () = assert!(SERIES_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3 == 44);
+const _: () = assert!(SERIES_SHADOW_RUNTIME_ACCOUNTS_START_V3 == 45);
 
 #[cfg(test)]
 mod tests {
@@ -395,8 +388,10 @@ mod tests {
                 .all(|b| *b == 0)
         );
         assert_eq!(SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3, 38);
-        assert_eq!(SERIES_SHADOW_ACCELERATOR_PROGRAM_ACCOUNT_V3, 46);
-        assert_eq!(SERIES_SHADOW_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3, 47);
+        assert_eq!(SERIES_SHADOW_ACCELERATOR_PROGRAM_ACCOUNT_V3, 42);
+        assert_eq!(SERIES_SHADOW_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3, 43);
+        assert_eq!(SERIES_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3, 44);
+        assert_eq!(SERIES_SHADOW_RUNTIME_ACCOUNTS_START_V3, 45);
         assert_eq!(
             request.digests.family_request,
             family_request_digest_v3(&family).expect("family digest")
