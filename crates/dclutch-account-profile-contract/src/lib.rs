@@ -16,6 +16,8 @@ use core::convert::{TryFrom, TryInto};
 use dclutch_effect_kernel::v2::AccountPermission;
 use dclutch_transition_vm::v2::{RegisterInput, RegisterOutput};
 
+/// Data-defined Trading-owned PDA derivation and state lifecycle policy.
+pub mod lifecycle_v3;
 /// Runtime-tail account and register projection profiles.
 pub mod v2;
 
