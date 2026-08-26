@@ -4,6 +4,7 @@ use std::{env, error::Error as StdError, fmt, io::Write, path::PathBuf};
 
 use solana_sdk::pubkey::Pubkey;
 
+mod market;
 mod model;
 mod plan;
 mod rpc;

@@ -1,8 +1,9 @@
 # Successor immutable-infrastructure bootstrap
 
 This standalone localhost utility prepares the exact immutable substrate for
-the current multi-program successor. It does not manufacture a partial Market
-or call a legacy direct Resolution ABI.
+the current multi-program successor and then drives the first market lifecycle
+through a real local validator. It does not seed mutable protocol state or call
+a legacy direct Resolution ABI.
 
 The prepared plan binds seven pairwise-distinct, real SBF artifacts:
 
@@ -27,10 +28,11 @@ and must be created by the canonical initialization transaction.
 
 ## Evidence boundary
 
-Only Loader accounts and finalized Registry record bodies are prepared as
-genesis fixtures. Core's genesis ProgramData is explicitly pre-init and not an
-accepted immutable release observation. The supervisor now executes the
-infrastructure boundary as real localhost transactions:
+Only Loader accounts and the infrastructure release records required to start
+the successor are prepared as genesis fixtures. Core's genesis ProgramData is
+explicitly pre-init and not an accepted immutable release observation. The
+supervisor executes the remaining infrastructure and market boundary as real
+localhost transactions:
 
 1. Core initialization of the sole Registry/Rent infrastructure profile.
 2. Loader-v3 revocation of Core's ephemeral authority to `None`, followed by
@@ -42,26 +44,32 @@ than clearing the former key; the ELF still begins at byte 45. The runner pins
 and verifies that exact retained-byte poststate, while Registry never exposes
 inactive bytes as an authority.
 
+3. Creation of a real Token-2022 collateral Mint and wallet, preserving raw
+   `u64` atoms and treating the full `u8` decimals field as display metadata.
+4. Bounded Registry `Begin -> Append -> Finalize` publication of the Realm,
+   Runtime-V2 Product graph, Source material, recovery policy, and capability
+   manifest. The Product root, result domain, and portfolio are compiled and
+   published through one chain-derived graph state machine.
+5. One same-slot pre-credit projection of the canonical Market and
+   `Market+generation` lifecycle-rent PDA, followed by RentCreditV2 creation
+   and finalized reacquisition.
+6. Canonical Core Found31 creation from the post-credit snapshot.
+
 It emits finalized transaction metadata, exact poststate account hashes, and
-three hostile observations: a wrong authority cannot initialize, activation
-cannot recognize Core before revocation, and a late substituted ProgramData
-rolls back an earlier instruction in the same transaction.
+hostile observations for wrong infrastructure authority, pre-revocation
+activation, late atomic rollback, substituted Registry refund wallet, and a
+substituted lifecycle credit in Found31.
 
-The following remain market-specific transactions:
+The runner creates every signing keypair in process memory, gives `prepare`
+only the Core authority public key, and retains no private key on disk. The run
+spec contains semantic market inputs—not account addresses or caller-authored
+digests. The Rust compiler and chain-derived operators own every record digest,
+PDA, instruction frame, and next publication action.
 
-3. RentCredit creation through the selected Rent program.
-4. Canonical 31-account Found.
-5. Core-owned Source creation/funding and Resolution consumption of the real
-   locally posted Pyth update.
-
-The run spec intentionally contains no authority key and no market DTO. The
-runner creates one Core keypair in memory, gives `prepare` only its public key,
-retains it across validator start/init/revocation, then drops it when the
-guarded child is stopped. RentCreditV2 and Found31 require finalized Realm,
-ProductV3 basis/result-domain, portfolio, resolution, execution-manifest, and
-lifecycle-policy record pairs plus exact generation, refund wallet, Hoard
-principal, and lifecycle-rent funding. The evidence names this seam instead of
-inventing a partial Market.
+The deliberate stopping point is the first Market opening. Found31 is live,
+but the old `OpenVault` order commits Core Open before Claims FoundingV5. The
+evidence therefore refuses to call it and names the required atomic sequence:
+projected Custody, Core permit, Claims FoundingV5, then Core Open-last.
 
 ## Safety boundary
 
@@ -125,7 +133,7 @@ aliased Registry/Rent profile. The authority argument is only a public
 observation supplied by the same-process `run` supervisor; this utility never
 persists its corresponding private key.
 
-## Run the infrastructure campaign
+## Run the infrastructure and Found31 campaign
 
 `tools/local-validator/dclutch-successor-validator` verifies all artifact
 attestations, the generated plan, and every account JSON hash. Write a run spec
@@ -134,7 +142,7 @@ whose seven program objects each contain `program_id`, absolute `elf_path`,
 
 ```json
 {
-  "schema": "dclutch-local-successor-run-spec-v1",
+  "schema": "dclutch-local-successor-run-spec-v2",
   "rpc_url": "http://127.0.0.1:20890/",
   "launcher": "/absolute/dclutch/tools/local-validator/dclutch-successor-validator",
   "ledger": "/absolute/new/successor-ledger",
@@ -147,7 +155,29 @@ whose seven program objects each contain `program_id`, absolute `elf_path`,
   "trading": { "program_id": "...", "elf_path": "/absolute/trading.so", "elf_sha256": "...", "semantic_release_id": "...", "attestation": "/absolute/trading-attestation.json" },
   "resolution": { "program_id": "...", "elf_path": "/absolute/resolution.so", "elf_sha256": "...", "semantic_release_id": "...", "attestation": "/absolute/resolution-attestation.json" },
   "custody": { "program_id": "...", "elf_path": "/absolute/custody.so", "elf_sha256": "...", "semantic_release_id": "...", "attestation": "/absolute/custody-attestation.json" },
-  "rent_credit": { "program_id": "...", "elf_path": "/absolute/rent.so", "elf_sha256": "...", "semantic_release_id": "...", "attestation": "/absolute/rent-attestation.json" }
+  "rent_credit": { "program_id": "...", "elf_path": "/absolute/rent.so", "elf_sha256": "...", "semantic_release_id": "...", "attestation": "/absolute/rent-attestation.json" },
+  "market": {
+    "generation": 1,
+    "collateral_display_decimals": 9,
+    "initial_collateral_atoms": 1000000000,
+    "product_id": "32-byte-lowercase-hex",
+    "coordinate_domain_id": "32-byte-lowercase-hex",
+    "result_unit_id": "32-byte-lowercase-hex",
+    "claim_basis_id": "32-byte-lowercase-hex",
+    "liability_basis_id": "32-byte-lowercase-hex",
+    "representation_release_id": "32-byte-lowercase-hex",
+    "mapping_release_id": "32-byte-lowercase-hex",
+    "cut_denominator": 1,
+    "cuts": ["0"],
+    "portfolio_denominator": 1,
+    "coefficients": [0, 1, 0],
+    "primary_source_spec_id": "32-byte-lowercase-hex",
+    "window_spec_id": "32-byte-lowercase-hex",
+    "statistic_spec_id": "32-byte-lowercase-hex",
+    "failure_policy_release_id": "32-byte-lowercase-hex",
+    "recovery_policy_hex": "canonical-RecoveryPolicyV2-bytes-as-lowercase-hex",
+    "capability_manifest_hex": "canonical-CapabilityManifestV1-bytes-as-lowercase-hex"
+  }
 }
 ```
 
@@ -160,7 +190,10 @@ cargo run --manifest-path tools/local-validator/bootstrap/successor/Cargo.toml -
 
 The command stops its child before returning but does not delete the ledger.
 The evidence file contains the public ephemeral authority, never its private
-bytes, and the exact market-specific seam for the next lifecycle campaign.
+bytes, every finalized Registry/Rent/Core poststate, and the exact remaining
+atomic-open seam. Placeholder text in the example is explanatory and will not
+parse; produce the semantic IDs, RecoveryPolicyV2, and CapabilityManifestV1
+through the canonical Rust tooling used by the intended release.
 
 ## Local checks
 

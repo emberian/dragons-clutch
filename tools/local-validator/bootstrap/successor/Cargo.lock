@@ -335,6 +335,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-capability-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+]
+
+[[package]]
 name = "dclutch-core-contract"
 version = "0.1.0"
 
@@ -344,13 +351,22 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "bincode",
+ "dclutch-capability-contract",
  "dclutch-core-contract",
+ "dclutch-market-core-codec",
+ "dclutch-product-runtime-v2",
+ "dclutch-product-runtime-v2-admission",
+ "dclutch-product-runtime-v2-operator",
  "dclutch-pyth-svm",
+ "dclutch-realm-contract",
  "dclutch-record-contract",
  "dclutch-registry-contract",
  "dclutch-registry-svm",
  "dclutch-release-set-contract",
+ "dclutch-rent-contract",
  "dclutch-resolution-codec",
+ "dclutch-source-contract",
+ "dclutch-token-svm",
  "reqwest",
  "serde",
  "serde_json",
@@ -363,11 +379,77 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-market-core-codec"
+version = "0.1.0"
+dependencies = [
+ "dclutch-release-set-contract",
+ "sha2 0.10.9",
+]
+
+[[package]]
+name = "dclutch-product-compiler"
+version = "0.1.0"
+dependencies = [
+ "dclutch-product-contract",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-product-runtime-v2",
+ "sha2 0.10.9",
+]
+
+[[package]]
+name = "dclutch-product-contract"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-product-payoff-v2-codec"
+version = "0.1.0"
+dependencies = [
+ "dclutch-product-runtime-v2",
+ "sha2 0.10.9",
+]
+
+[[package]]
+name = "dclutch-product-runtime-v2"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-product-runtime-v2-admission"
+version = "0.1.0"
+dependencies = [
+ "dclutch-product-runtime-v2",
+]
+
+[[package]]
+name = "dclutch-product-runtime-v2-operator"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-contract",
+ "dclutch-market-core-codec",
+ "dclutch-product-compiler",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-product-runtime-v2",
+ "dclutch-product-runtime-v2-admission",
+ "dclutch-realm-contract",
+ "dclutch-record-contract",
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
+ "dclutch-rent-contract",
+ "dclutch-source-contract",
+ "solana-program",
+ "solana-sdk-ids",
+]
+
+[[package]]
 name = "dclutch-pyth-svm"
 version = "0.1.0"
 dependencies = [
  "dclutch-registry-svm",
 ]
+
+[[package]]
+name = "dclutch-realm-contract"
+version = "0.1.0"
 
 [[package]]
 name = "dclutch-record-contract"
@@ -397,7 +479,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-rent-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-market-core-codec",
+]
+
+[[package]]
 name = "dclutch-resolution-codec"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-source-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-product-contract",
+ "dclutch-product-runtime-v2",
+]
+
+[[package]]
+name = "dclutch-token-svm"
 version = "0.1.0"
 
 [[package]]

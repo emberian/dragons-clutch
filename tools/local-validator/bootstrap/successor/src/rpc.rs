@@ -130,6 +130,65 @@ impl Rpc {
             .ok_or_else(|| Error::new(format!("missing {label} account {address}")))
     }
 
+    pub(crate) fn finalized_accounts(
+        &mut self,
+        addresses: &[Pubkey],
+        minimum_slot: u64,
+    ) -> Result<(u64, Vec<Option<RpcAccount>>)> {
+        if addresses.is_empty() || addresses.len() > 100 {
+            return Err(Error::new(
+                "getMultipleAccounts requires one through 100 exact addresses",
+            ));
+        }
+        let value = self.call(
+            "getMultipleAccounts",
+            &json!([addresses.iter().map(ToString::to_string).collect::<Vec<_>>(), {
+                "encoding":"base64",
+                "commitment":"finalized",
+                "minContextSlot":minimum_slot
+            }]),
+        )?;
+        let slot = value
+            .get("context")
+            .and_then(|context| context.get("slot"))
+            .and_then(Value::as_u64)
+            .ok_or_else(|| Error::new("getMultipleAccounts omitted context slot"))?;
+        if slot < minimum_slot {
+            return Err(Error::new(
+                "getMultipleAccounts returned a snapshot before the required transaction",
+            ));
+        }
+        let values = value
+            .get("value")
+            .and_then(Value::as_array)
+            .ok_or_else(|| Error::new("getMultipleAccounts omitted values"))?;
+        if values.len() != addresses.len() {
+            return Err(Error::new(
+                "getMultipleAccounts response width differed from request",
+            ));
+        }
+        let accounts = values
+            .iter()
+            .map(parse_optional_account)
+            .collect::<Result<Vec<_>>>()?;
+        Ok((slot, accounts))
+    }
+
+    pub(crate) fn finalized_slot(&mut self) -> Result<u64> {
+        self.call("getSlot", &json!([{"commitment":"finalized"}]))?
+            .as_u64()
+            .ok_or_else(|| Error::new("getSlot result was not a u64"))
+    }
+
+    pub(crate) fn minimum_balance(&mut self, data_len: usize) -> Result<u64> {
+        self.call(
+            "getMinimumBalanceForRentExemption",
+            &json!([data_len, {"commitment":"finalized"}]),
+        )?
+        .as_u64()
+        .ok_or_else(|| Error::new("rent minimum result was not a u64"))
+    }
+
     pub(crate) fn airdrop(
         &mut self,
         label: &str,
@@ -154,6 +213,16 @@ impl Rpc {
         self.send_inner(label, instructions, payer, false)
     }
 
+    pub(crate) fn send_with_signers(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        payer: &Keypair,
+        additional_signers: &[&Keypair],
+    ) -> Result<TransactionEvidence> {
+        self.send_inner_with_signers(label, instructions, payer, additional_signers, false)
+    }
+
     pub(crate) fn send_expected_failure(
         &mut self,
         label: &str,
@@ -170,6 +239,32 @@ impl Rpc {
         payer: &Keypair,
         expect_failure: bool,
     ) -> Result<TransactionEvidence> {
+        self.send_inner_with_signers(label, instructions, payer, &[], expect_failure)
+    }
+
+    fn send_inner_with_signers(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        payer: &Keypair,
+        additional_signers: &[&Keypair],
+        expect_failure: bool,
+    ) -> Result<TransactionEvidence> {
+        if additional_signers
+            .iter()
+            .any(|signer| signer.pubkey() == payer.pubkey())
+        {
+            return Err(Error::new("transaction signer list duplicated its payer"));
+        }
+        for (index, signer) in additional_signers.iter().enumerate() {
+            if additional_signers
+                .iter()
+                .skip(index.saturating_add(1))
+                .any(|other| other.pubkey() == signer.pubkey())
+            {
+                return Err(Error::new("transaction signer list contained duplicates"));
+            }
+        }
         let blockhash = self.latest_blockhash()?;
         let mut bounded_instructions = Vec::with_capacity(instructions.len().saturating_add(1));
         let mut compute_limit_data = Vec::with_capacity(5);
@@ -181,10 +276,17 @@ impl Rpc {
             data: compute_limit_data,
         });
         bounded_instructions.extend_from_slice(instructions);
+        let mut signers: Vec<&dyn Signer> = Vec::with_capacity(additional_signers.len() + 1);
+        signers.push(payer);
+        signers.extend(
+            additional_signers
+                .iter()
+                .map(|signer| *signer as &dyn Signer),
+        );
         let transaction = Transaction::new_signed_with_payer(
             &bounded_instructions,
             Some(&payer.pubkey()),
-            &[payer],
+            &signers,
             blockhash,
         );
         let encoded = BASE64.encode(
@@ -200,7 +302,8 @@ impl Rpc {
                     "preflightCommitment":"confirmed",
                     "maxRetries": 8
                 }]),
-            )?
+            )
+            .map_err(|error| Error::new(format!("{label}: {error}")))?
             .as_str()
             .ok_or_else(|| Error::new("sendTransaction result was not a signature"))?
             .parse::<Signature>()
@@ -226,7 +329,7 @@ impl Rpc {
         expect_failure: bool,
     ) -> Result<TransactionEvidence> {
         let mut status = None;
-        for _ in 0..120 {
+        for _ in 0..600 {
             let result = self.call(
                 "getSignatureStatuses",
                 &json!([[signature.to_string()], {"searchTransactionHistory":true}]),
@@ -259,7 +362,7 @@ impl Rpc {
             )));
         }
         let mut transaction = None;
-        for _ in 0..120 {
+        for _ in 0..600 {
             let candidate = self.call(
                 "getTransaction",
                 &json!([signature.to_string(), {
@@ -362,6 +465,31 @@ impl Rpc {
             logs: Vec::new(),
         })
     }
+}
+
+fn parse_optional_account(value: &Value) -> Result<Option<RpcAccount>> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let encoded = value
+        .get("data")
+        .and_then(Value::as_array)
+        .and_then(|values| values.first())
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::new("account omitted base64 data"))?;
+    let data = BASE64
+        .decode(encoded)
+        .map_err(|error| Error::new(format!("account base64: {error}")))?;
+    Ok(Some(RpcAccount {
+        lamports: u64_field(value, "lamports")?,
+        owner: pubkey(string_field(value, "owner")?)?,
+        executable: value
+            .get("executable")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| Error::new("account omitted executable"))?,
+        rent_epoch: u64_field(value, "rentEpoch")?,
+        data,
+    }))
 }
 
 pub(crate) fn account_evidence(address: Pubkey, account: &RpcAccount) -> AccountEvidence {

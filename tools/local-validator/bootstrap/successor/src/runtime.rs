@@ -9,6 +9,18 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(test)]
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use dclutch_product_runtime_v2_operator::{
+    AccountObservationV2, CompiledProductRecordsV2,
+    publication::{
+        ProductPublicationContentV2, ProductPublicationMemberV2, ProductPublicationStateV2,
+        RecordPublicationActionV1, RecordPublicationContentV1, RecordPublicationStateV1,
+        build_product_publication_step_v2, build_record_publication_step_v1,
+        derive_record_addresses_v1, product_publication_content_v2,
+    },
+};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1;
 use dclutch_registry_svm::RegistryInstructionV1;
@@ -37,12 +49,18 @@ use crate::{
     rpc::{Rpc, account_evidence, validate_loopback_url},
 };
 
-const RUN_SPEC_SCHEMA_V1: &str = "dclutch-local-successor-run-spec-v1";
-const RUN_EVIDENCE_SCHEMA_V1: &str = "dclutch-local-successor-run-evidence-v1";
+const RUN_SPEC_SCHEMA_V2: &str = "dclutch-local-successor-run-spec-v2";
+const RUN_EVIDENCE_SCHEMA_V2: &str = "dclutch-local-successor-run-evidence-v2";
 const EXPECTED_RPC_URL: &str = "http://127.0.0.1:20890/";
 const AUTHORITY_LAMPORTS: u64 = 5_000_000_000;
 const VALIDATOR_READY_TIMEOUT: Duration = Duration::from_secs(60);
-const MARKET_SPECIFIC_INPUT_SEAM: &str = "Infrastructure activation is complete. LifecycleRentCreditV2 and Found31 require one market-specific input bundle that is not present in the infrastructure run spec: finalized Realm, ProductV3 basis/result-domain, portfolio, resolution, execution-manifest, and lifecycle-policy record pairs; exact generation, immutable refund wallet, initial Hoard principal, and lifecycle-rent funding. The supervisor refuses to invent any of those authorities or economics.";
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PublishedRecord {
+    pub(crate) schema: [u8; 32],
+    pub(crate) digest: [u8; 32],
+    pub(crate) raw: Pubkey,
+    pub(crate) staging: Pubkey,
+}
 
 struct ValidatorChild {
     child: Child,
@@ -284,6 +302,14 @@ pub(crate) fn execute(spec_path: &Path) -> Result<()> {
     verify_core_programdata(&mut rpc, &plan)?;
     verify_activation(&mut rpc, &plan)?;
 
+    let market = crate::market::execute_found_market(
+        &mut rpc,
+        &plan,
+        &spec.market,
+        &authority,
+        &mut transactions,
+    )?;
+
     let mut accounts = BTreeMap::new();
     for (label, address) in [
         ("core_programdata", pubkey(&plan.core.programdata_id)?),
@@ -294,29 +320,32 @@ pub(crate) fn execute(spec_path: &Path) -> Result<()> {
         let account = rpc.required_account(address, label)?;
         accounts.insert(label.into(), account_evidence(address, &account));
     }
+    accounts.extend(market.accounts);
+    let mut completed = vec![
+        "generated one ephemeral Core authority in process memory".into(),
+        "prepared exact public-key-only genesis plan".into(),
+        "started and health-bound guarded localhost validator".into(),
+        "proved wrong-authority infrastructure refusal".into(),
+        "initialized exact Core Registry/Rent infrastructure profile".into(),
+        "proved release activation refuses before Core revocation".into(),
+        "revoked Core Loader-v3 upgrade authority to None".into(),
+        "verified exact immutable Core ProgramData poststate".into(),
+        "activated exact immutable five-role release set".into(),
+        "proved late-failure atomic rollback".into(),
+    ];
+    completed.extend(market.completed);
     let evidence = SuccessorRunEvidence {
-        schema: RUN_EVIDENCE_SCHEMA_V1.into(),
+        schema: RUN_EVIDENCE_SCHEMA_V2.into(),
         rpc_url: rpc.url().into(),
         ledger: spec.ledger.clone(),
         validator_log: validator_log.display().to_string(),
         plan_sha256,
         core_upgrade_authority_pubkey: authority.pubkey().to_string(),
         private_key_persisted: false,
-        completed: vec![
-            "generated one ephemeral Core authority in process memory".into(),
-            "prepared exact public-key-only genesis plan".into(),
-            "started and health-bound guarded localhost validator".into(),
-            "proved wrong-authority infrastructure refusal".into(),
-            "initialized exact Core Registry/Rent infrastructure profile".into(),
-            "proved release activation refuses before Core revocation".into(),
-            "revoked Core Loader-v3 upgrade authority to None".into(),
-            "verified exact immutable Core ProgramData poststate".into(),
-            "activated exact immutable five-role release set".into(),
-            "proved late-failure atomic rollback".into(),
-        ],
+        completed,
         transactions,
         accounts,
-        market_specific_input_seam: MARKET_SPECIFIC_INPUT_SEAM.into(),
+        remaining_execution_seam: crate::market::REMAINING_OPEN_SEAM.into(),
     };
     write_evidence(Path::new(&spec.output), &evidence)?;
     let mut stdout = std::io::stdout();
@@ -447,7 +476,7 @@ fn substitute_last_role_programdata(
     Ok(())
 }
 
-fn record(plan: &SuccessorPlan, label: &str) -> Result<(Pubkey, Pubkey)> {
+pub(crate) fn record(plan: &SuccessorPlan, label: &str) -> Result<(Pubkey, Pubkey)> {
     let pair = plan
         .records
         .get(label)
@@ -469,6 +498,248 @@ fn record(plan: &SuccessorPlan, label: &str) -> Result<(Pubkey, Pubkey)> {
         return Err(Error::new(format!("record {label} PDA mismatch")));
     }
     Ok((raw, staging))
+}
+
+pub(crate) fn publish_record(
+    rpc: &mut Rpc,
+    registry: Pubkey,
+    payer: &Keypair,
+    schema: [u8; 32],
+    content: &[u8],
+    hostile_refund_wallet: Option<Pubkey>,
+    transactions: &mut Vec<crate::model::TransactionEvidence>,
+) -> Result<PublishedRecord> {
+    let publication = RecordPublicationContentV1 {
+        schema_release_id: schema,
+        content,
+    };
+    let (raw, staging, digest) = derive_record_addresses_v1(registry, publication)
+        .map_err(|error| Error::new(format!("derive record publication: {error:?}")))?;
+    let mut minimum_slot = transactions
+        .last()
+        .map(|transaction| transaction.slot)
+        .unwrap_or(rpc.finalized_slot()?);
+    for _ in 0..1024 {
+        let keys = [
+            payer.pubkey(),
+            raw,
+            staging,
+            system_program::ID,
+            sysvar::rent::ID,
+            sysvar::clock::ID,
+        ];
+        let (slot, values) = rpc.finalized_accounts(&keys, minimum_slot)?;
+        let observations = publication_observations(slot, &keys, &values)?;
+        let state = RecordPublicationStateV1 {
+            sponsor: observations[0],
+            raw_record: observations[1],
+            staging_cursor: observations[2],
+            system_program: observations[3],
+            rent: observations[4],
+            clock: observations[5],
+        };
+        let plan = build_record_publication_step_v1(registry, publication, state)
+            .map_err(|error| Error::new(format!("chain-derived record publication: {error:?}")))?;
+        if plan.action == RecordPublicationActionV1::Complete {
+            verify_published_record(rpc, registry, raw, staging, content)?;
+            return Ok(PublishedRecord {
+                schema,
+                digest,
+                raw,
+                staging,
+            });
+        }
+        let instruction = plan
+            .instruction
+            .ok_or_else(|| Error::new("incomplete record publication omitted instruction"))?;
+        if plan.action == RecordPublicationActionV1::Finalize
+            && let Some(hostile_wallet) = hostile_refund_wallet
+        {
+            let mut hostile = instruction.clone();
+            hostile
+                .accounts
+                .get_mut(2)
+                .ok_or_else(|| Error::new("Finalize omitted refund-wallet coordinate"))?
+                .pubkey = hostile_wallet;
+            transactions.push(rpc.send_expected_failure(
+                "publish record: substituted refund wallet refuses",
+                &[hostile],
+                payer,
+            )?);
+        }
+        let label = format!("publish record: {:?}", plan.action);
+        let evidence = rpc.send(&label, &[instruction], payer)?;
+        minimum_slot = evidence.slot;
+        transactions.push(evidence);
+    }
+    Err(Error::new(
+        "record publication exceeded its bounded transition count",
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn publish_product_graph(
+    rpc: &mut Rpc,
+    registry: Pubkey,
+    payer: &Keypair,
+    compiled: CompiledProductRecordsV2,
+    product: &[u8],
+    result_domain: &[u8],
+    portfolio: &[u8],
+    transactions: &mut Vec<crate::model::TransactionEvidence>,
+) -> Result<(PublishedRecord, PublishedRecord, PublishedRecord)> {
+    let content =
+        product_publication_content_v2(registry, compiled, product, result_domain, portfolio)
+            .map_err(|error| Error::new(format!("Product publication graph: {error:?}")))?;
+    let coordinates = product_publication_coordinates(registry, content)?;
+    let mut minimum_slot = transactions
+        .last()
+        .map(|transaction| transaction.slot)
+        .unwrap_or(rpc.finalized_slot()?);
+    for _ in 0..3072 {
+        let keys = [
+            payer.pubkey(),
+            coordinates[0].0,
+            coordinates[0].1,
+            coordinates[1].0,
+            coordinates[1].1,
+            coordinates[2].0,
+            coordinates[2].1,
+            system_program::ID,
+            sysvar::rent::ID,
+            sysvar::clock::ID,
+        ];
+        let (slot, values) = rpc.finalized_accounts(&keys, minimum_slot)?;
+        let observations = publication_observations(slot, &keys, &values)?;
+        let state = |raw, staging| RecordPublicationStateV1 {
+            sponsor: observations[0],
+            raw_record: observations[raw],
+            staging_cursor: observations[staging],
+            system_program: observations[7],
+            rent: observations[8],
+            clock: observations[9],
+        };
+        let plan = build_product_publication_step_v2(
+            registry,
+            content,
+            ProductPublicationStateV2 {
+                product: state(1, 2),
+                result_domain: state(3, 4),
+                portfolio: state(5, 6),
+            },
+        )
+        .map_err(|error| Error::new(format!("chain-derived Product publication: {error:?}")))?;
+        if plan.member == ProductPublicationMemberV2::Complete {
+            for ((raw, staging, _), body) in
+                coordinates
+                    .iter()
+                    .copied()
+                    .zip([product, result_domain, portfolio])
+            {
+                verify_published_record(rpc, registry, raw, staging, body)?;
+            }
+            let published = |index: usize, schema| PublishedRecord {
+                schema,
+                digest: coordinates[index].2,
+                raw: coordinates[index].0,
+                staging: coordinates[index].1,
+            };
+            return Ok((
+                published(
+                    0,
+                    dclutch_product_runtime_v2_admission::PRODUCT_RECORD_SCHEMA_ID_V2,
+                ),
+                published(
+                    1,
+                    dclutch_product_runtime_v2_admission::RESULT_DOMAIN_SCHEMA_ID_V2,
+                ),
+                published(
+                    2,
+                    dclutch_product_runtime_v2_admission::PORTFOLIO_SCHEMA_ID_V2,
+                ),
+            ));
+        }
+        let instruction = plan
+            .record
+            .instruction
+            .ok_or_else(|| Error::new("incomplete Product publication omitted instruction"))?;
+        let label = format!(
+            "publish Product graph: {:?} {:?}",
+            plan.member, plan.record.action
+        );
+        let evidence = rpc.send(&label, &[instruction], payer)?;
+        minimum_slot = evidence.slot;
+        transactions.push(evidence);
+    }
+    Err(Error::new(
+        "Product graph publication exceeded its bounded transition count",
+    ))
+}
+
+fn product_publication_coordinates(
+    registry: Pubkey,
+    content: ProductPublicationContentV2<'_>,
+) -> Result<[(Pubkey, Pubkey, [u8; 32]); 3]> {
+    Ok([
+        derive_record_addresses_v1(registry, content.product)
+            .map_err(|error| Error::new(format!("Product record address: {error:?}")))?,
+        derive_record_addresses_v1(registry, content.result_domain)
+            .map_err(|error| Error::new(format!("domain record address: {error:?}")))?,
+        derive_record_addresses_v1(registry, content.portfolio)
+            .map_err(|error| Error::new(format!("portfolio record address: {error:?}")))?,
+    ])
+}
+
+fn publication_observations<'a, const N: usize>(
+    slot: u64,
+    keys: &[Pubkey; N],
+    values: &'a [Option<crate::rpc::RpcAccount>],
+) -> Result<[AccountObservationV2<'a>; N]> {
+    let observations = keys
+        .iter()
+        .copied()
+        .zip(values)
+        .map(|(key, value)| match value {
+            Some(account) => AccountObservationV2 {
+                slot,
+                key,
+                owner: account.owner,
+                lamports: account.lamports,
+                executable: account.executable,
+                data: &account.data,
+            },
+            None => AccountObservationV2 {
+                slot,
+                key,
+                owner: system_program::ID,
+                lamports: 0,
+                executable: false,
+                data: &[],
+            },
+        })
+        .collect::<Vec<_>>();
+    observations
+        .try_into()
+        .map_err(|_| Error::new("publication snapshot width changed"))
+}
+
+fn verify_published_record(
+    rpc: &mut Rpc,
+    registry: Pubkey,
+    raw: Pubkey,
+    staging: Pubkey,
+    content: &[u8],
+) -> Result<()> {
+    let finalized = rpc.required_account(raw, "finalized Registry record")?;
+    if finalized.owner != registry
+        || finalized.executable
+        || finalized.data != content
+        || finalized.lamports < rpc.minimum_balance(content.len())?
+        || rpc.account(staging)?.is_some()
+    {
+        return Err(Error::new("finalized Registry record poststate mismatch"));
+    }
+    Ok(())
 }
 
 fn verify_profile(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<()> {
@@ -527,9 +798,10 @@ fn verify_activation(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<()> {
 }
 
 fn validate_spec(spec: &SuccessorRunSpec) -> Result<()> {
-    if spec.schema != RUN_SPEC_SCHEMA_V1 {
+    if spec.schema != RUN_SPEC_SCHEMA_V2 {
         return Err(Error::new("unsupported successor run-spec schema"));
     }
+    crate::market::validate_market_input(&spec.market)?;
     let rpc = validate_loopback_url(&spec.rpc_url)?;
     if rpc.as_str() != EXPECTED_RPC_URL {
         return Err(Error::new(format!(
@@ -831,7 +1103,7 @@ fn artifact_id(value: &str) -> Result<ArtifactReleaseIdV1> {
         .map_err(|error| Error::new(format!("artifact release ID: {error:?}")))
 }
 
-fn decode_hex(value: &str) -> Result<Vec<u8>> {
+pub(crate) fn decode_hex(value: &str) -> Result<Vec<u8>> {
     if value.len() & 1 == 1
         || !value
             .bytes()
@@ -1004,18 +1276,24 @@ mod tests {
 
     #[test]
     fn real_sbf_infrastructure_revoke_and_registry_activation_when_supplied() {
-        let (Ok(core_elf), Ok(registry_elf)) = (
+        let (Ok(core_elf), Ok(registry_elf), Ok(rent_elf)) = (
             std::env::var("DCLUTCH_SUCCESSOR_CORE_ELF"),
             std::env::var("DCLUTCH_SUCCESSOR_REGISTRY_ELF"),
+            std::env::var("DCLUTCH_SUCCESSOR_RENT_ELF"),
         ) else {
             return;
         };
         let core_elf = fs::canonicalize(core_elf).expect("canonical Core test ELF");
         let registry_elf = fs::canonicalize(registry_elf).expect("canonical Registry test ELF");
+        let rent_elf = fs::canonicalize(rent_elf).expect("canonical Rent test ELF");
         let authority = Keypair::new();
         let root = std::env::temp_dir().join(format!(
-            "dclutch-successor-real-sbf-{}",
-            Pubkey::new_unique()
+            "dclutch-successor-real-sbf-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("wall clock after epoch")
+                .as_nanos()
         ));
         fs::create_dir(&root).expect("create real-SBF test root");
         let digest = |path: &Path| {
@@ -1025,6 +1303,7 @@ mod tests {
         };
         let registry_sha = digest(&registry_elf);
         let core_sha = digest(&core_elf);
+        let rent_sha = digest(&rent_elf);
         let program = |tag| Pubkey::new_from_array([tag; 32]);
         let plan = crate::plan::prepare(PrepareArgs {
             account_dir: root.join("accounts"),
@@ -1057,8 +1336,8 @@ mod tests {
             custody_sha256: registry_sha.clone(),
             custody_semantic_release_id: "16".repeat(32),
             rent_credit_program: program(0x37),
-            rent_credit_elf: registry_elf,
-            rent_credit_sha256: registry_sha,
+            rent_credit_elf: rent_elf,
+            rent_credit_sha256: rent_sha,
             rent_credit_semantic_release_id: "17".repeat(32),
         })
         .expect("prepare real-SBF infrastructure plan");
@@ -1157,6 +1436,45 @@ mod tests {
         )
         .expect("real-SBF activation succeeds");
         verify_activation(&mut rpc, &plan).expect("real-SBF activation cache");
+
+        let mut publication_transactions = Vec::new();
+        let published = publish_record(
+            &mut rpc,
+            pubkey(&plan.registry.program_id).expect("Registry program"),
+            &authority,
+            [0x61; 32],
+            b"transaction-produced successor Registry record",
+            Some(hostile.pubkey()),
+            &mut publication_transactions,
+        )
+        .expect("real-SBF record publication");
+        assert_eq!(published.schema, [0x61; 32]);
+        assert_eq!(
+            published.digest,
+            <[u8; 32]>::from(sha2::Sha256::digest(
+                b"transaction-produced successor Registry record"
+            ))
+        );
+        assert!(publication_transactions.len() >= 4);
+
+        let market_input = crate::market::test_market_input(
+            pubkey(&plan.registry.program_id).expect("Registry program"),
+        )
+        .expect("canonical market input");
+        let market_evidence = crate::market::execute_found_market(
+            &mut rpc,
+            &plan,
+            &market_input,
+            &authority,
+            &mut publication_transactions,
+        )
+        .expect("real-SBF RentV2 and Found31 campaign");
+        assert!(market_evidence.accounts.contains_key("market"));
+        assert!(
+            market_evidence
+                .accounts
+                .contains_key("lifecycle_rent_credit")
+        );
 
         let recipient = Pubkey::new_unique();
         let authority_before = rpc

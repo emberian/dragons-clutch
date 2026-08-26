@@ -29,6 +29,32 @@ pub(crate) struct SuccessorRunSpec {
     pub(crate) resolution: RunProgramInput,
     pub(crate) custody: RunProgramInput,
     pub(crate) rent_credit: RunProgramInput,
+    pub(crate) market: MarketRunInput,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct MarketRunInput {
+    pub(crate) generation: u64,
+    pub(crate) collateral_display_decimals: u8,
+    pub(crate) initial_collateral_atoms: u64,
+    pub(crate) product_id: String,
+    pub(crate) coordinate_domain_id: String,
+    pub(crate) result_unit_id: String,
+    pub(crate) claim_basis_id: String,
+    pub(crate) liability_basis_id: String,
+    pub(crate) representation_release_id: String,
+    pub(crate) mapping_release_id: String,
+    pub(crate) cut_denominator: u64,
+    pub(crate) cuts: Vec<String>,
+    pub(crate) portfolio_denominator: u64,
+    pub(crate) coefficients: Vec<u64>,
+    pub(crate) primary_source_spec_id: String,
+    pub(crate) window_spec_id: String,
+    pub(crate) statistic_spec_id: String,
+    pub(crate) failure_policy_release_id: String,
+    pub(crate) recovery_policy_hex: String,
+    pub(crate) capability_manifest_hex: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -138,5 +164,5 @@ pub(crate) struct SuccessorRunEvidence {
     pub(crate) completed: Vec<String>,
     pub(crate) transactions: Vec<TransactionEvidence>,
     pub(crate) accounts: BTreeMap<String, AccountEvidence>,
-    pub(crate) market_specific_input_seam: String,
+    pub(crate) remaining_execution_seam: String,
 }
