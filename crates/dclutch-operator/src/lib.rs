@@ -41,6 +41,8 @@ use solana_sdk_ids::system_program;
 
 pub use dclutch_resolution_core_v3_operator::{Finality, Observation, ObservedAccount};
 
+/// Canonical schema-bound CapabilityProgramSetV2 artifact construction.
+pub mod capability_program_set_v2;
 /// Chain-derived compiled Direct transaction construction.
 pub mod compiled_direct;
 /// Chain-derived unsigned Dealer junior-equity Hot execution construction.
