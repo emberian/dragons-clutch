@@ -635,7 +635,6 @@ impl<'a> ProgramV4<'a> {
             if previous_route.is_some_and(|previous| previous >= span.route)
                 || span.route >= self.base.route_count()
                 || span.selector_common_scalar >= self.base.common_scalar_count()
-                || span.base_fixed_account_count == 0
                 || span.base_fixed_account_count != route.fixed_account_count()
                 || span.allowed_extensions == 0
             {
@@ -1099,6 +1098,95 @@ mod tests {
                 })
             );
         }
+    }
+
+    #[test]
+    fn zero_base_span_omits_or_materializes_one_optional_child_frame() {
+        const OPTIONAL_BASE_BYTES: usize = HEADER_BYTES + 2 * ROUTE_BYTES + OPERATION_BYTES;
+        const OPTIONAL_BYTES: usize = HEADER_BYTES_V4 + DYNAMIC_SPAN_BYTES_V4 + OPTIONAL_BASE_BYTES;
+        let routes = [
+            RouteInputV3 {
+                role: FixedRole::Custody,
+                kind: RouteKindV3::Once,
+                enable_common_scalar: Some(0),
+                witness_range_common_scalar: None,
+                receipt_dependency: None,
+                fixed_account_start: 0,
+                fixed_account_count: 0,
+                item_account_start: 0,
+                item_account_count: 0,
+                fixed_request: &[],
+                item_request: &[],
+            },
+            RouteInputV3 {
+                role: FixedRole::Claims,
+                kind: RouteKindV3::Once,
+                enable_common_scalar: None,
+                witness_range_common_scalar: None,
+                receipt_dependency: None,
+                fixed_account_start: 0,
+                fixed_account_count: 20,
+                item_account_start: 0,
+                item_account_count: 0,
+                fixed_request: &[],
+                item_request: &[],
+            },
+        ];
+        let effect = EffectInstructionV3::write_u64(
+            AccountCoordinateV3::fixed(20),
+            0,
+            ScalarCoordinateV3::common(0),
+        );
+        let mut base_scratch = [0; OPTIONAL_BASE_BYTES];
+        let mut base = [0; OPTIONAL_BASE_BYTES];
+        encode_effect_program_v3_atomic(
+            EffectGeometryV3 {
+                fixed_accounts: 21,
+                item_account_stride: 0,
+                common_scalars: 1,
+                item_scalar_stride: 0,
+                common_identities: 1,
+                item_identity_stride: 0,
+            },
+            &routes,
+            &[effect],
+            &[],
+            &mut base_scratch,
+            &mut base,
+        )
+        .expect("optional base");
+        let span = DynamicFixedSpanV4::new(0, 0, 0, (1_u64 << 0) | (1_u64 << 14));
+        let mut scratch = [0; OPTIONAL_BYTES];
+        let mut output = [0; OPTIONAL_BYTES];
+        encode_program_v4_atomic(
+            &base,
+            BorrowedRangePolicyV4::DisjointExactCoverage,
+            1,
+            &[span],
+            &[],
+            &mut scratch,
+            &mut output,
+        )
+        .expect("optional successor");
+        let program = ProgramV4::decode(&output).expect("decode");
+        assert_eq!(program.account_count(0, &[0]), Ok(21));
+        assert_eq!(program.account_count(0, &[14]), Ok(35));
+        assert_eq!(
+            program
+                .resolved_invocation(0, 0, 0, &[14], &[[1; 32]])
+                .expect("enabled")
+                .invocation
+                .fixed_account_count,
+            14
+        );
+        assert_eq!(
+            program.resolved_fixed_effect(0, 0, &[14], &[[1; 32]]),
+            Ok(ResolvedEffectV3::WriteScalar {
+                account: 34,
+                offset: 0,
+                value: 14,
+            })
+        );
     }
 
     #[test]
