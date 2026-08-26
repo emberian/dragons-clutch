@@ -6,6 +6,7 @@
 //! against those semantic owners before creating a Market or a permit.
 
 use crate::{Error, Identity};
+use sha2::{Digest, Sha256};
 
 /// Exact generic-founding request magic.
 pub const GENERIC_FOUNDING_REQUEST_MAGIC_V1: [u8; 8] = *b"DCLTGFQ1";
@@ -18,6 +19,12 @@ pub const GENERIC_FOUNDING_ACK_BYTES_V1: usize = 248;
 /// Domain for the exact ordered generic FundingState account list.
 pub const GENERIC_FOUNDING_FUNDING_LIST_DOMAIN_V1: &[u8] =
     b"dclutch/generic-founding-funding-list/v1";
+/// Domain for the Core Found-and-permit post-resource commitment.
+pub const GENERIC_FOUNDING_FOUND_POST_RESOURCE_DOMAIN_V1: &[u8] =
+    b"dclutch/generic-founding-found-post-resource/v1";
+/// Domain for the Core final-Open post-resource commitment.
+pub const GENERIC_FOUNDING_OPEN_POST_RESOURCE_DOMAIN_V1: &[u8] =
+    b"dclutch/generic-founding-open-post-resource/v1";
 /// Maximum FundingState count admitted by the first physical profile.
 pub const GENERIC_FOUNDING_MAX_FUNDING_STATES_V1: usize = 16;
 
@@ -26,6 +33,32 @@ const REQUEST_IDENTITIES_OFFSET: usize = 16;
 const REQUEST_GENERATION_OFFSET: usize = 336;
 const ACK_IDENTITIES_OFFSET: usize = 16;
 const ACK_GENERATION_OFFSET: usize = 240;
+
+/// Hash one exact ordered, nonempty, alias-free FundingState address list.
+///
+/// The canonical preimage is `domain || 0 || u16_le(count) || key...`.
+pub fn generic_founding_funding_list_id_v1(funding_states: &[Identity]) -> Result<Identity, Error> {
+    if funding_states.is_empty() || funding_states.len() > GENERIC_FOUNDING_MAX_FUNDING_STATES_V1 {
+        return Err(Error::InvalidCoordinates);
+    }
+    let count = u16::try_from(funding_states.len()).map_err(|_| Error::InvalidCoordinates)?;
+    let mut hasher = Sha256::new();
+    hasher.update(GENERIC_FOUNDING_FUNDING_LIST_DOMAIN_V1);
+    hasher.update([0]);
+    hasher.update(count.to_le_bytes());
+    for (index, key) in funding_states.iter().enumerate() {
+        if funding_states
+            .get(..index)
+            .ok_or(Error::InvalidLength)?
+            .iter()
+            .any(|prior| prior == key)
+        {
+            return Err(Error::InvalidCoordinates);
+        }
+        hasher.update(key.to_bytes());
+    }
+    Identity::new(hasher.finalize().into())
+}
 
 /// Stage of the atomic generic founding protocol.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -675,6 +708,23 @@ mod tests {
                 2,
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn funding_list_is_ordered_alias_free_and_width_bounded() {
+        let left =
+            generic_founding_funding_list_id_v1(&[id(1), id(2), id(3)]).expect("ordered list");
+        let right =
+            generic_founding_funding_list_id_v1(&[id(3), id(2), id(1)]).expect("reverse list");
+        assert_ne!(left, right);
+        assert_eq!(
+            generic_founding_funding_list_id_v1(&[id(1), id(1)]),
+            Err(Error::InvalidCoordinates)
+        );
+        assert_eq!(
+            generic_founding_funding_list_id_v1(&[]),
+            Err(Error::InvalidCoordinates)
         );
     }
 }

@@ -21,7 +21,8 @@ use dclutch_custody_contract::{
 };
 use dclutch_market_core_codec::{
     Action, CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1, CORE_EFFECT_ENVELOPE_BYTES_V1,
-    CapabilityFundingHeaderV1, CoreEffectEnvelopeV1, PROJECT_FOUND_REQUEST_BYTES_V1,
+    CapabilityFundingHeaderV1, CoreEffectEnvelopeV1, GENERIC_FOUNDING_REQUEST_BYTES_V1,
+    GENERIC_FOUNDING_REQUEST_MAGIC_V1, GenericFoundingRequestV1, PROJECT_FOUND_REQUEST_BYTES_V1,
     PROJECT_FOUND_REQUEST_MAGIC_V1, ProjectFoundRequestV1, REQUEST_BYTES,
     RETIREMENT_BUNDLE_BYTES_V1, Request, SERIES_CORE_REQUEST_BYTES_V1,
     SERIES_CORE_REQUEST_MAGIC_V1, SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1,
@@ -59,6 +60,10 @@ pub use execute_provider_v3::{
     EXECUTE_PROVIDER_ACCOUNT_COUNT_V3, EXECUTE_PROVIDER_PREFIX_BYTES_V3,
 };
 pub use frame::{FOUND_ACCOUNT_COUNT_V2, INITIALIZE_INFRASTRUCTURE_ACCOUNT_COUNT_V1};
+pub use generic_founding_v1::{
+    GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1, GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1,
+    GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1,
+};
 pub use retire_v1::{RETIREMENT_ACCOUNT_COUNT_V1, RETIREMENT_INSTRUCTION_BYTES_V1};
 pub use series_consume::{
     SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V1, SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V1,
@@ -146,6 +151,26 @@ pub fn process_instruction(
         let request = SeriesPermitExpiryRequestV1::decode(request_bytes)
             .map_err(|_| CoreSbfError::Instruction)?;
         return series_permit_expiry::process(program_id, accounts, request, proof_bytes);
+    }
+    if instruction_data.len() >= GENERIC_FOUNDING_REQUEST_BYTES_V1
+        && instruction_data.get(..GENERIC_FOUNDING_REQUEST_MAGIC_V1.len())
+            == Some(GENERIC_FOUNDING_REQUEST_MAGIC_V1.as_slice())
+    {
+        let request_bytes = instruction_data
+            .get(..GENERIC_FOUNDING_REQUEST_BYTES_V1)
+            .ok_or(CoreSbfError::Instruction)?;
+        let dependency_bytes = instruction_data
+            .get(GENERIC_FOUNDING_REQUEST_BYTES_V1..)
+            .ok_or(CoreSbfError::Instruction)?;
+        let request = GenericFoundingRequestV1::decode(request_bytes)
+            .map_err(|_| CoreSbfError::Instruction)?;
+        return generic_founding_v1::process(
+            program_id,
+            accounts,
+            request,
+            request_bytes,
+            dependency_bytes,
+        );
     }
     if instruction_data.len() >= SERIES_CORE_REQUEST_BYTES_V1
         && instruction_data.get(..SERIES_CORE_REQUEST_MAGIC_V1.len())
