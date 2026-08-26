@@ -62,6 +62,7 @@ members = [
     "crates/dclutch-realm-contract",
     "crates/dclutch-rent-contract",
     "crates/dclutch-representation-composition-v3-kernel",
+    "crates/dclutch-representation-composition-v3-operator",
     "crates/dclutch-series-contract",
     "crates/dclutch-series-v3-kernel",
     "crates/dclutch-source-contract",
