@@ -74,6 +74,8 @@ pub enum BatchErrorV2 {
     ZeroIdentity,
     /// A typed identity refused hostile bytes.
     Identity,
+    /// A typed continuation profile did not match its exact roles or coordinates.
+    ContinuationProfileMismatch,
 }
 
 /// Result alias for batched Registry wires.

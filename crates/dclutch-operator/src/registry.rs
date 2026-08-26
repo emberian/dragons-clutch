@@ -34,6 +34,9 @@ use solana_sdk_ids::{bpf_loader_upgradeable, native_loader, system_program, sysv
 
 use crate::{Finality, Observation, ObservedAccount, versioned::PACKET_DATA_BYTES};
 
+/// Chain-derived Core+Trading Registry continuation construction.
+pub mod hot_continuation_v1;
+
 /// Exact number of accounts consumed by release-set activation.
 pub const REGISTRY_ACTIVATE_ACCOUNT_COUNT_V1: usize = 26;
 /// Exact number of accounts consumed by one role reauthentication.
@@ -670,10 +673,7 @@ fn authenticate_cache_identity<'a>(
         &registry_program,
     )
     .0;
-    let core = activated
-        .role(ExecutionRoleV1::Core)
-        .map_err(|_| Error::InvalidActivationCache)?;
-    if cache.key != expected || core.release().program().to_bytes() != registry_program.to_bytes() {
+    if cache.key != expected {
         return Err(Error::InvalidActivationCache);
     }
     Ok(activated)

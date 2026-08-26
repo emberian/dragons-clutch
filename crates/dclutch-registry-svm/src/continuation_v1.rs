@@ -18,6 +18,9 @@ pub const REGISTRY_CONTINUATION_REQUEST_MAGIC_V1: [u8; 8] = *b"DCLRGCI1";
 pub const REGISTRY_CONTINUATION_SCHEMA_V1: u16 = 1;
 /// PDA domain for the invocation-scoped Registry admission signer.
 pub const REGISTRY_CONTINUATION_ADMISSION_DOMAIN_V1: &[u8] = b"dclutch:registry-continuation:v1";
+/// Exact ordered Registry role batch for common Trading Hot execution.
+pub const CORE_TRADING_HOT_CONTINUATION_ROLES_V1: [ExecutionRoleV1; 2] =
+    [ExecutionRoleV1::Core, ExecutionRoleV1::Trading];
 
 const COUNT_OFFSET: usize = 10;
 const MASK_OFFSET: usize = 11;
@@ -76,6 +79,23 @@ impl RegistryContinuationRequestV1 {
             role_mask: batch.role_mask(),
             roles: encoded,
         })
+    }
+
+    /// Construct the sole canonical Core+Trading top-level Hot continuation.
+    pub fn new_core_trading_hot(
+        release_set_id: ContentId,
+        activation_cache_digest: ContentId,
+        hot_instruction_digest: ContentId,
+        hot_instruction_len: u32,
+    ) -> Result<Self, BatchErrorV2> {
+        Self::new(
+            release_set_id,
+            activation_cache_digest,
+            hot_instruction_digest,
+            hot_instruction_len,
+            ExecutionRoleV1::Trading,
+            &CORE_TRADING_HOT_CONTINUATION_ROLES_V1,
+        )
     }
 
     /// Decode one exact canonical fixed header.
@@ -210,6 +230,32 @@ impl RegistryContinuationRequestV1 {
             return None;
         }
         self.roles.get(index).and_then(|tag| decode_role(*tag).ok())
+    }
+
+    /// Verify the exact typed Core+Trading Hot profile and every recomputed
+    /// coordinate. The caller must independently hash the complete cache and
+    /// byte-exact Hot instruction before calling this helper.
+    pub fn verify_core_trading_hot(
+        self,
+        release_set_id: ContentId,
+        activation_cache_digest: ContentId,
+        hot_instruction_digest: ContentId,
+        hot_instruction_len: u32,
+    ) -> Result<(), BatchErrorV2> {
+        if self.release_set_id != release_set_id
+            || self.activation_cache_digest != activation_cache_digest
+            || self.continuation_digest != hot_instruction_digest
+            || self.continuation_len != hot_instruction_len
+            || self.continuation_role != ExecutionRoleV1::Trading
+            || usize::from(self.role_count) != CORE_TRADING_HOT_CONTINUATION_ROLES_V1.len()
+            || CORE_TRADING_HOT_CONTINUATION_ROLES_V1
+                .iter()
+                .enumerate()
+                .any(|(index, role)| self.role(index) != Some(*role))
+        {
+            return Err(BatchErrorV2::ContinuationProfileMismatch);
+        }
+        Ok(())
     }
 }
 
@@ -408,6 +454,43 @@ mod tests {
             RegistryContinuationAdmissionSeedsV1::new(claims, [4; 32], digest(&batch.to_bytes()))
                 .expect("Claims seeds");
         assert_ne!(seeds.continuation_role(), claims_seeds.continuation_role());
+    }
+
+    #[test]
+    fn core_trading_hot_profile_binds_order_role_and_exact_instruction() {
+        let request = RegistryContinuationRequestV1::new_core_trading_hot(
+            content(1),
+            content(2),
+            content(3),
+            4_096,
+        )
+        .expect("Core+Trading Hot continuation");
+        assert_eq!(
+            request.verify_core_trading_hot(content(1), content(2), content(3), 4_096),
+            Ok(())
+        );
+        for hostile in [
+            request.verify_core_trading_hot(content(9), content(2), content(3), 4_096),
+            request.verify_core_trading_hot(content(1), content(9), content(3), 4_096),
+            request.verify_core_trading_hot(content(1), content(2), content(9), 4_096),
+            request.verify_core_trading_hot(content(1), content(2), content(3), 4_095),
+        ] {
+            assert_eq!(hostile, Err(BatchErrorV2::ContinuationProfileMismatch));
+        }
+
+        let core_only = RegistryContinuationRequestV1::new(
+            content(1),
+            content(2),
+            content(3),
+            4_096,
+            ExecutionRoleV1::Core,
+            &[ExecutionRoleV1::Core],
+        )
+        .expect("generic Core continuation");
+        assert_eq!(
+            core_only.verify_core_trading_hot(content(1), content(2), content(3), 4_096),
+            Err(BatchErrorV2::ContinuationProfileMismatch)
+        );
     }
 
     #[test]
