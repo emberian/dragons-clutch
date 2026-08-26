@@ -276,6 +276,8 @@ impl ClaimsFoundingRequestV5 {
             .checked_mul(input.basis_scale)
             .ok_or(ClaimsFoundingErrorV5::InvalidCollateralTransfer)?;
         if collateral == 0
+            || input.post_source_amount != 0
+            || input.pre_source_amount != collateral
             || input
                 .pre_source_amount
                 .checked_sub(input.post_source_amount)
@@ -894,8 +896,8 @@ mod tests {
             claim_count: 5,
             quantity: 7,
             basis_scale: 11,
-            pre_source_amount: 177,
-            post_source_amount: 100,
+            pre_source_amount: 77,
+            post_source_amount: 0,
             pre_hoard_amount: 23,
             post_hoard_amount: 100,
             pre_custody_revision: 24,

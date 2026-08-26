@@ -25,8 +25,8 @@ use dclutch_claims_svm::{
 };
 use dclutch_custody_contract::{CallerRoleV1, CustodyReplayV1};
 use dclutch_custody_contract::{
-    PROJECTED_CUSTODY_RECEIPT_BYTES_V1, PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
-    ProjectedCustodyReceiptV1,
+    PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1, PROJECTED_CUSTODY_RECEIPT_BYTES_V1,
+    PROJECTED_HOARD_CONTEXT_DOMAIN_V1, ProjectedCustodyLockReceiptV1, ProjectedCustodyReceiptV1,
 };
 use dclutch_market_core_codec::{
     CoreState, FoundingIntentV5, Identity, Phase as CorePhase, SERIES_FOUNDING_PERMIT_BYTES_V1,
@@ -61,6 +61,7 @@ pub const CLAIMS_FOUNDING_ACCOUNT_COUNT_V5: usize = 32;
 /// Exact request plus typed projected-Custody receipt instruction width.
 pub const CLAIMS_FOUNDING_INSTRUCTION_BYTES_V5: usize =
     dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_REQUEST_BYTES_V5
+        + PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1
         + PROJECTED_CUSTODY_RECEIPT_BYTES_V1;
 
 const AUTHORITY: usize = 0;
@@ -215,8 +216,10 @@ pub fn process(
 ) -> Result<(), ProgramError> {
     let decoded = decode_instruction(instruction_data)?;
     let request = decoded.request;
+    let lock_receipt = decoded.lock_receipt;
     let projected_receipt = decoded.projected_receipt;
     let request_digest = decoded.request_digest;
+    let lock_receipt_digest = decoded.lock_receipt_digest;
     let projected_receipt_digest = decoded.projected_receipt_digest;
     let accounts = FoundingAccounts::parse(account_infos)?;
     authenticate_privileges(program_id, accounts, &request)?;
@@ -226,10 +229,17 @@ pub fn process(
         accounts,
         &request,
         request_digest,
+        &lock_receipt,
+        lock_receipt_digest,
         &projected_receipt,
         projected_receipt_digest,
     )?;
-    authenticate_custody_poststate(accounts, &request, &projected_receipt)?;
+    authenticate_custody_poststate(
+        accounts,
+        &request,
+        &projected_receipt,
+        projected_receipt_digest,
+    )?;
     let market = authenticate_product_core(program_id, accounts, &request)?;
     authenticate_rent_and_vacancy(program_id, accounts, &request, market)?;
 
@@ -252,19 +262,34 @@ fn decode_instruction(instruction_data: &[u8]) -> Result<DecodedFounding, Progra
         .get(..dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_REQUEST_BYTES_V5)
         .ok_or(ClaimsFoundingSbfErrorV5::Instruction)?;
     let projected_receipt_bytes = instruction_data
-        .get(dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_REQUEST_BYTES_V5..)
+        .get(
+            dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_REQUEST_BYTES_V5
+                ..dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_REQUEST_BYTES_V5
+                    + PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1,
+        )
+        .ok_or(ClaimsFoundingSbfErrorV5::Instruction)?;
+    let realized_receipt_bytes = instruction_data
+        .get(
+            dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_REQUEST_BYTES_V5
+                + PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1..,
+        )
         .ok_or(ClaimsFoundingSbfErrorV5::Instruction)?;
     Ok(DecodedFounding {
         request: Box::new(
             ClaimsFoundingRequestV5::decode(request_bytes)
                 .map_err(|_| ClaimsFoundingSbfErrorV5::Instruction)?,
         ),
+        lock_receipt: Box::new(
+            ProjectedCustodyLockReceiptV1::decode(projected_receipt_bytes)
+                .map_err(|_| ClaimsFoundingSbfErrorV5::Custody)?,
+        ),
         projected_receipt: Box::new(
-            ProjectedCustodyReceiptV1::decode(projected_receipt_bytes)
+            ProjectedCustodyReceiptV1::decode(realized_receipt_bytes)
                 .map_err(|_| ClaimsFoundingSbfErrorV5::Custody)?,
         ),
         request_digest: hash(request_bytes).to_bytes(),
-        projected_receipt_digest: hash(projected_receipt_bytes).to_bytes(),
+        lock_receipt_digest: hash(projected_receipt_bytes).to_bytes(),
+        projected_receipt_digest: hash(realized_receipt_bytes).to_bytes(),
     })
 }
 
@@ -303,8 +328,10 @@ struct FoundingCandidates {
 
 struct DecodedFounding {
     request: Box<ClaimsFoundingRequestV5>,
+    lock_receipt: Box<ProjectedCustodyLockReceiptV1>,
     projected_receipt: Box<ProjectedCustodyReceiptV1>,
     request_digest: [u8; 32],
+    lock_receipt_digest: [u8; 32],
     projected_receipt_digest: [u8; 32],
 }
 
@@ -419,6 +446,8 @@ fn authenticate_permit_and_projection(
     accounts: FoundingAccounts<'_, '_>,
     request: &ClaimsFoundingRequestV5,
     request_digest: [u8; 32],
+    lock_receipt: &ProjectedCustodyLockReceiptV1,
+    lock_receipt_digest: [u8; 32],
     projected_receipt: &ProjectedCustodyReceiptV1,
     projected_receipt_digest: [u8; 32],
 ) -> Result<(), ProgramError> {
@@ -453,6 +482,14 @@ fn authenticate_permit_and_projection(
         .map_err(|_| ClaimsFoundingSbfErrorV5::Accounts)?;
     let core_digest = hash(&core_data).to_bytes();
     drop(core_data);
+    authenticate_lock_receipt(
+        intent,
+        request,
+        lock_receipt,
+        projected_context,
+        lock_receipt_digest,
+        projected_receipt,
+    )?;
     authenticate_projected_receipt(
         intent,
         request,
@@ -461,6 +498,33 @@ fn authenticate_permit_and_projection(
         projected_receipt_digest,
         core_digest,
     )
+}
+
+#[inline(never)]
+fn authenticate_lock_receipt(
+    intent: FoundingIntentV5,
+    request: &ClaimsFoundingRequestV5,
+    lock_receipt: &ProjectedCustodyLockReceiptV1,
+    projected_context: [u8; 32],
+    lock_receipt_digest: [u8; 32],
+    projected_receipt: &ProjectedCustodyReceiptV1,
+) -> Result<(), ProgramError> {
+    if lock_receipt.market != request.market()
+        || lock_receipt.release_set != request.release_set()
+        || lock_receipt.context_digest != projected_context
+        || lock_receipt.source_vault != request.funding_source()
+        || lock_receipt.hoard_vault != request.hoard()
+        || lock_receipt.rent_credit != request.rent_credit()
+        || lock_receipt.request_digest != request.custody_request_digest()
+        || lock_receipt_digest != request.custody_receipt_digest()
+        || lock_receipt.amount != request.collateral_transferred()
+        || lock_receipt.resulting_revision.checked_add(1)
+            != Some(intent.projected_resulting_revision())
+        || projected_receipt.resulting_revision != intent.projected_resulting_revision()
+    {
+        return Err(ClaimsFoundingSbfErrorV5::Custody.into());
+    }
+    Ok(())
 }
 
 #[inline(never)]
@@ -489,8 +553,8 @@ fn authenticate_permit_body(
         || intent.projected_replay().to_bytes() != request.custody_replay()
         || intent.funding_source().to_bytes() != request.funding_source()
         || intent.hoard().to_bytes() != request.hoard()
-        || intent.projected_request_digest().to_bytes() != request.custody_request_digest()
-        || intent.projected_receipt_digest().to_bytes() != request.custody_receipt_digest()
+        || intent.projected_request_digest().to_bytes() == request.custody_request_digest()
+        || intent.projected_receipt_digest().to_bytes() == request.custody_receipt_digest()
         || intent.trading_program().to_bytes() != request.trading_program()
         || intent.claims_program().to_bytes() != request.claims_program()
         || intent.rent_credit().to_bytes() != request.rent_credit()
@@ -522,11 +586,11 @@ fn authenticate_projected_receipt(
         || projected_receipt.context_digest != projected_context
         || projected_receipt.hoard_vault != request.hoard()
         || projected_receipt.amount != request.collateral_transferred()
-        || projected_receipt.request_digest != request.custody_request_digest()
+        || projected_receipt.request_digest != intent.projected_request_digest().to_bytes()
         || projected_receipt.market_state_digest != core_digest
         || projected_receipt.rent_credit != request.rent_credit()
         || projected_receipt.resulting_revision != intent.projected_resulting_revision()
-        || projected_receipt_digest != request.custody_receipt_digest()
+        || projected_receipt_digest != intent.projected_receipt_digest().to_bytes()
     {
         return Err(ClaimsFoundingSbfErrorV5::Custody.into());
     }
@@ -580,36 +644,29 @@ fn authenticate_custody_poststate(
     accounts: FoundingAccounts<'_, '_>,
     request: &ClaimsFoundingRequestV5,
     projected_receipt: &ProjectedCustodyReceiptV1,
+    projected_receipt_digest: [u8; 32],
 ) -> Result<(), ProgramError> {
     if accounts.funding_source.key.to_bytes() != request.funding_source()
         || accounts.hoard.key.to_bytes() != request.hoard()
         || accounts.custody_replay.key.to_bytes() != request.custody_replay()
-        || accounts.funding_source.owner != accounts.hoard.owner
-        || TokenProgram::parse(accounts.funding_source.owner.to_bytes()).is_err()
+        || accounts.funding_source.owner != &system_program::ID
+        || accounts.funding_source.lamports() != 0
+        || !accounts.funding_source.data_is_empty()
+        || accounts.funding_source.executable
+        || TokenProgram::parse(accounts.hoard.owner.to_bytes()).is_err()
         || accounts.custody_replay.owner != accounts.custody_program.key
     {
         return Err(ClaimsFoundingSbfErrorV5::Custody.into());
     }
-    let source_data = accounts
-        .funding_source
-        .try_borrow_data()
-        .map_err(|_| ClaimsFoundingSbfErrorV5::Accounts)?;
     let hoard_data = accounts
         .hoard
         .try_borrow_data()
         .map_err(|_| ClaimsFoundingSbfErrorV5::Accounts)?;
-    let source =
-        TokenAccount::parse(&source_data).map_err(|_| ClaimsFoundingSbfErrorV5::Custody)?;
     let hoard = TokenAccount::parse(&hoard_data).map_err(|_| ClaimsFoundingSbfErrorV5::Custody)?;
-    if source.mint != hoard.mint
-        || source.amount != request.post_source_amount()
+    if request.post_source_amount() != 0
+        || request.pre_source_amount() != request.collateral_transferred()
         || hoard.amount != request.post_hoard_amount()
-        || source.state != AccountState::Initialized
         || hoard.state != AccountState::Initialized
-        || !source.delegate.is_none()
-        || source.delegated_amount != 0
-        || !source.native_reserve.is_none()
-        || !source.close_authority.is_none()
         || !hoard.delegate.is_none()
         || hoard.delegated_amount != 0
         || !hoard.native_reserve.is_none()
@@ -638,8 +695,8 @@ fn authenticate_custody_poststate(
         || replay.rent_refund != request.rent_credit()
         || replay.open_vault_count != 1
         || replay.next_revision != request.post_custody_revision()
-        || replay.last_request_digest != request.custody_request_digest()
-        || replay.last_poststate_commitment != request.custody_receipt_digest()
+        || replay.last_request_digest != projected_receipt.request_digest
+        || replay.last_poststate_commitment != projected_receipt_digest
         || replay.last_request_digest != projected_receipt.request_digest
     {
         return Err(ClaimsFoundingSbfErrorV5::Custody.into());
@@ -1045,15 +1102,34 @@ mod tests {
     fn fixture() -> (
         ClaimsFoundingRequestV5,
         SeriesFoundingPermitV1,
+        ProjectedCustodyLockReceiptV1,
         ProjectedCustodyReceiptV1,
         [u8; 32],
         [u8; 32],
+        [u8; 32],
     ) {
-        let projected_request_digest = id(19);
+        let lock_request_digest = id(19);
+        let projected_request_digest = id(20);
         let core_digest = id(24);
         let ticket_context = id(22);
         let projected_context =
             hashv(&[PROJECTED_HOARD_CONTEXT_DOMAIN_V1, ticket_context.as_slice()]).to_bytes();
+        let lock_receipt = ProjectedCustodyLockReceiptV1 {
+            market: id(2),
+            release_set: id(1),
+            context_digest: projected_context,
+            source_vault: id(12),
+            source_replay: id(25),
+            hoard_vault: id(13),
+            rent_credit: id(15),
+            request_digest: lock_request_digest,
+            amount: 77,
+            source_vault_rent_lamports: 30,
+            source_replay_rent_lamports: 31,
+            resulting_revision: 4,
+        };
+        let lock_receipt_digest =
+            hash(&lock_receipt.encode().expect("canonical lock receipt")).to_bytes();
         let projected_receipt = ProjectedCustodyReceiptV1 {
             realized: true,
             aborted_open: false,
@@ -1119,14 +1195,14 @@ mod tests {
             rent_program: id(16),
             claims_program: id(17),
             trading_program: id(18),
-            custody_request_digest: projected_request_digest,
-            custody_receipt_digest: projected_receipt_digest,
+            custody_request_digest: lock_request_digest,
+            custody_receipt_digest: lock_receipt_digest,
             generation: 21,
             claim_count: 5,
             quantity: 7,
             basis_scale: 11,
-            pre_source_amount: 177,
-            post_source_amount: 100,
+            pre_source_amount: 77,
+            post_source_amount: 0,
             pre_hoard_amount: 23,
             post_hoard_amount: 100,
             pre_custody_revision: 0,
@@ -1150,7 +1226,9 @@ mod tests {
         (
             request,
             permit,
+            lock_receipt,
             projected_receipt,
+            lock_receipt_digest,
             projected_receipt_digest,
             core_digest,
         )
@@ -1158,7 +1236,8 @@ mod tests {
 
     #[test]
     fn exact_instruction_and_permit_projection_join() {
-        let (request, permit, projected, projected_digest, core_digest) = fixture();
+        let (request, permit, lock, projected, lock_digest, projected_digest, core_digest) =
+            fixture();
         let request_bytes = request.to_bytes();
         let request_digest = hash(&request_bytes).to_bytes();
         let intent = authenticate_permit_body(permit, &request, request_digest)
@@ -1177,7 +1256,10 @@ mod tests {
             core_digest,
         )
         .expect("projected receipt binds intent");
+        authenticate_lock_receipt(intent, &request, &lock, context, lock_digest, &projected)
+            .expect("lock receipt binds intent");
         let mut instruction = Vec::from(request_bytes);
+        instruction.extend_from_slice(&lock.encode().expect("lock bytes"));
         instruction.extend_from_slice(&projected.encode().expect("projected bytes"));
         assert!(decode_instruction(&instruction).is_ok());
         let short = instruction
@@ -1188,7 +1270,8 @@ mod tests {
 
     #[test]
     fn substituted_request_permit_and_projected_receipt_refuse() {
-        let (request, permit, projected, projected_digest, core_digest) = fixture();
+        let (request, permit, lock, projected, lock_digest, projected_digest, core_digest) =
+            fixture();
         let request_digest = hash(&request.to_bytes()).to_bytes();
         let mut hostile_input = request.input();
         hostile_input.trading_program = id(99);
@@ -1216,10 +1299,24 @@ mod tests {
             )
             .is_err()
         );
+        let mut hostile_lock = lock;
+        hostile_lock.source_vault = id(97);
+        assert!(
+            authenticate_lock_receipt(
+                intent,
+                &request,
+                &hostile_lock,
+                context,
+                lock_digest,
+                &projected,
+            )
+            .is_err()
+        );
         let mut obsolete = request.to_bytes();
         obsolete[..8]
             .copy_from_slice(&dclutch_claims_svm::founding_v4::CLAIMS_FOUNDING_REQUEST_MAGIC_V4);
         let mut instruction = Vec::from(obsolete);
+        instruction.extend_from_slice(&lock.encode().expect("lock bytes"));
         instruction.extend_from_slice(&projected.encode().expect("projected bytes"));
         assert!(decode_instruction(&instruction).is_err());
     }
