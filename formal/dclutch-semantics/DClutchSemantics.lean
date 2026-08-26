@@ -53,6 +53,7 @@ import DClutchSemantics.RequestProfileAbi
 import DClutchSemantics.RequestProfileV4Abi
 import DClutchSemantics.StateLifecyclePolicyV5Abi
 import DClutchSemantics.AccountProfileV2Profile13
+import DClutchSemantics.RepresentationCompositionV3Abi
 
 /-!
 Fresh Lean-owned semantics for dClutch's compact protocol specializer.
