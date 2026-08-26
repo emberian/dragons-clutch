@@ -29,10 +29,12 @@ dclutch-rent-contract = { path = "../../../../crates/dclutch-rent-contract" }
 dclutch-resolution-codec = { path = "../../../../crates/dclutch-resolution-codec" }
 dclutch-source-contract = { path = "../../../../crates/dclutch-source-contract" }
 dclutch-token-svm = { path = "../../../../crates/dclutch-token-svm" }
+dclutch-versioned-message-operator = { path = "../../../../crates/dclutch-versioned-message-operator" }
 reqwest = { version = "=0.12.28", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.149"
 sha2 = "=0.10.9"
+solana-hash = "=4.6.0"
 solana-program = { version = "=3.0.0", default-features = false }
 solana-loader-v3-interface = { version = "=6.1.0", features = ["bincode"] }
 solana-sdk = "=3.0.0"

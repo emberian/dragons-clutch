@@ -53,12 +53,22 @@ inactive bytes as an authority.
 5. One same-slot pre-credit projection of the canonical Market and
    `Market+generation` lifecycle-rent PDA, followed by RentCreditV2 creation
    and finalized reacquisition.
-6. Canonical Core Found31 creation from the post-credit snapshot.
+6. Publication of a finalized address lookup table covering the Found frame,
+   and submission of Found31 as a packet-safe v0 transaction. With its keys
+   inline the canonical 31-account frame serialises to 1,242 raw bytes against
+   Solana's 1,232-byte legacy limit — it misses by ten. Routing is table data,
+   never protocol authority: only
+   non-signer coordinates and the invoked Program are routed, the fee payer and
+   every signer stay in the message's static key list, and the table is
+   authority-owned rather than frozen so its rent stays recoverable.
+7. Canonical Core Found31 creation from the post-credit snapshot.
 
 It emits finalized transaction metadata, exact poststate account hashes, and
 hostile observations for wrong infrastructure authority, pre-revocation
-activation, late atomic rollback, substituted Registry refund wallet, and a
-substituted lifecycle credit in Found31.
+activation, late atomic rollback, substituted Registry refund wallet, a
+substituted lifecycle credit in Found31, and a substituted Market coordinate
+under attacker-chosen routing whose whole multi-instruction transaction must
+roll back to a fee-only debit.
 
 The runner creates every signing keypair in process memory, gives `prepare`
 only the Core authority public key, and retains no private key on disk. The run
@@ -66,10 +76,34 @@ spec contains semantic market inputs—not account addresses or caller-authored
 digests. The Rust compiler and chain-derived operators own every record digest,
 PDA, instruction frame, and next publication action.
 
-The deliberate stopping point is the first Market opening. Found31 is live,
-but the old `OpenVault` order commits Core Open before Claims FoundingV5. The
-evidence therefore refuses to call it and names the required atomic sequence:
-projected Custody, Core permit, Claims FoundingV5, then Core Open-last.
+## The current stopping point
+
+Measured on a real localhost validator on 2026-08-26, the campaign reaches
+Found31 and **Found31 does not execute**: it exhausts Solana's per-transaction
+maximum of 1,400,000 compute units. Release authentication hashes whole
+ProgramData ELFs on chain -- the ~1.0 MB Core ELF twice in the same
+transaction, once inside Core and once inside the Registry role CPI -- and that
+hashing alone is roughly 1.19M CU. The compute limit is already the protocol
+maximum, so there is no headroom to buy. No Market is created and the Market is
+not Open. The full decomposition, and the two defects that had to be fixed
+before the campaign could get this far, are in
+`docs/evidence/GENERIC_FOUNDING_REACHABILITY_2026_08_26.md`.
+
+Beyond that ceiling, the atomic generic founding outer (`DCLTGMF1`,
+`programs/dclutch-trading-sbf/src/generic_market_founding_v1.rs`) -- which has
+the correct Lock -> Found/permit -> Realize -> Claims FoundingV5 -> Core
+Open-last order in one rollback domain -- remains unreachable for two
+structural reasons recorded with file and line in the same document:
+
+- a Trading capability root can only be activated against a Core Market that
+  already exists, and generic founding needs one for the Market it is about to
+  create; and
+- no live Trading route emits the projected-Custody `Initialize`/`OpenHoard`
+  requests whose resulting state the outer's Lock stage consumes.
+
+A third defect on that path -- the capability-root selection was a SHA-256
+fixed point and so unsatisfiable for every well-formed artifact -- was fixed at
+its semantic owner in `386f254`.
 
 ## Safety boundary
 
@@ -187,6 +221,29 @@ Then execute:
 cargo run --manifest-path tools/local-validator/bootstrap/successor/Cargo.toml --offline -- run \
   --spec /absolute/successor-run-spec.json
 ```
+
+### Generating the `market` object
+
+Do not hand-write the `market` object; the example above is explanatory and
+will not parse. Generate the canonical local demo Market -- a small categorical
+SOL/USD range-protection Product over the captured synthetic-local Pyth release
+in `fixtures/pyth/local-upgraded-2026-08-22` -- with:
+
+```text
+cargo run --manifest-path tools/local-validator/bootstrap/successor/Cargo.toml --offline -- \
+  demo-market --registry-program-id REGISTRY_ID
+```
+
+Its coordinate domain is USD cents per SOL with `cut_denominator` 100 and cuts
+at `12000` and `18000`, so the three ordinary regions are below $120.00, inside
+$120.00-$180.00, and at or above $180.00, followed by the explicit failure
+outcome. The portfolio coefficients `[1, 0, 1, 0]` pay one unit of the
+liability basis in either tail and nothing inside the band or on failure. Every
+semantic identifier is a domain-separated digest naming the spec it stands for,
+and the resolution identifiers bind the captured release's adapter identity.
+That release is a **local lab projection** documented in
+`docs/evidence/PYTH_SYNTHETIC_RELEASE_V1.md`, never a production provider
+release, and this Market is a lab demo, not a product offering.
 
 The command stops its child before returning but does not delete the ledger.
 The evidence file contains the public ephemeral authority, never its private

@@ -32,7 +32,7 @@ pub(crate) struct SuccessorRunSpec {
     pub(crate) market: MarketRunInput,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct MarketRunInput {
     pub(crate) generation: u64,

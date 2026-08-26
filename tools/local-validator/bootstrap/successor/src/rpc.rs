@@ -1,6 +1,7 @@
 use std::{net::IpAddr, thread, time::Duration};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use dclutch_versioned_message_operator::{Finality, Observation, ObservedAccount};
 use reqwest::{Url, blocking::Client, redirect::Policy};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -9,7 +10,7 @@ use solana_sdk::{
     instruction::Instruction,
     pubkey::Pubkey,
     signature::{Keypair, Signature, Signer},
-    transaction::Transaction,
+    transaction::{Transaction, VersionedTransaction},
 };
 
 use crate::{
@@ -174,6 +175,44 @@ impl Rpc {
         Ok((slot, accounts))
     }
 
+    /// Reacquire one finalized account as an exact routing observation.
+    ///
+    /// Address lookup tables are transaction routing data, never protocol
+    /// authority. The observation is still finalized and slot-pinned so the
+    /// shared compiler can refuse a table extended in the observed slot.
+    pub(crate) fn finalized_observed_accounts(
+        &mut self,
+        addresses: &[Pubkey],
+        minimum_slot: u64,
+    ) -> Result<(Observation, Vec<ObservedAccount>)> {
+        let (slot, accounts) = self.finalized_accounts(addresses, minimum_slot)?;
+        let observation = Observation {
+            slot,
+            unix_timestamp: self.block_time(slot)?,
+            finality: Finality::Finalized,
+        };
+        let mut observed = Vec::with_capacity(addresses.len());
+        for (key, account) in addresses.iter().copied().zip(accounts) {
+            let account = account
+                .ok_or_else(|| Error::new(format!("finalized observation missing {key}")))?;
+            observed.push(ObservedAccount {
+                observation,
+                key,
+                owner: account.owner,
+                lamports: account.lamports,
+                executable: account.executable,
+                data: account.data,
+            });
+        }
+        Ok((observation, observed))
+    }
+
+    pub(crate) fn block_time(&mut self, slot: u64) -> Result<i64> {
+        self.call("getBlockTime", &json!([slot]))?
+            .as_i64()
+            .ok_or_else(|| Error::new("getBlockTime result was not an integer"))
+    }
+
     pub(crate) fn finalized_slot(&mut self) -> Result<u64> {
         self.call("getSlot", &json!([{"commitment":"finalized"}]))?
             .as_u64()
@@ -232,6 +271,84 @@ impl Rpc {
         self.send_inner(label, instructions, payer, true)
     }
 
+    /// Submit one packet-safe v0 transaction routed through finalized tables.
+    ///
+    /// The canonical Found and generic-founding frames exceed the 1,232-byte
+    /// legacy packet with their account keys inline; the shared versioned
+    /// message operator owns table admission and packet geometry.
+    pub(crate) fn send_v0(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        payer: &Keypair,
+        observation: Observation,
+        tables: &[ObservedAccount],
+    ) -> Result<TransactionEvidence> {
+        self.send_v0_inner(label, instructions, payer, observation, tables, false)
+    }
+
+    pub(crate) fn send_v0_expected_failure(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        payer: &Keypair,
+        observation: Observation,
+        tables: &[ObservedAccount],
+    ) -> Result<TransactionEvidence> {
+        self.send_v0_inner(label, instructions, payer, observation, tables, true)
+    }
+
+    fn send_v0_inner(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        payer: &Keypair,
+        observation: Observation,
+        tables: &[ObservedAccount],
+        expect_failure: bool,
+    ) -> Result<TransactionEvidence> {
+        let blockhash = self.latest_blockhash()?;
+        let bounded = bounded_instructions(instructions);
+        let plan = dclutch_versioned_message_operator::compile_v0_message(
+            payer.pubkey(),
+            &bounded,
+            solana_hash::Hash::new_from_array(blockhash.to_bytes()),
+            observation,
+            tables,
+        )
+        .map_err(|error| Error::new(format!("{label}: v0 message compilation: {error:?}")))?;
+        let transaction = VersionedTransaction::try_new(plan.message, &[payer])
+            .map_err(|error| Error::new(format!("{label}: sign v0 transaction: {error}")))?;
+        let signature = self.submit(label, &transaction, expect_failure)?;
+        self.confirm(label, signature, expect_failure)
+    }
+
+    fn submit<T: serde::Serialize>(
+        &mut self,
+        label: &str,
+        transaction: &T,
+        expect_failure: bool,
+    ) -> Result<Signature> {
+        let encoded = BASE64.encode(
+            bincode::serialize(transaction)
+                .map_err(|error| Error::new(format!("serialize transaction: {error}")))?,
+        );
+        self.call(
+            "sendTransaction",
+            &json!([encoded, {
+                "encoding":"base64",
+                "skipPreflight": expect_failure,
+                "preflightCommitment":"confirmed",
+                "maxRetries": 8
+            }]),
+        )
+        .map_err(|error| Error::new(format!("{label}: {error}")))?
+        .as_str()
+        .ok_or_else(|| Error::new("sendTransaction result was not a signature"))?
+        .parse::<Signature>()
+        .map_err(|error| Error::new(format!("transaction signature: {error}")))
+    }
+
     fn send_inner(
         &mut self,
         label: &str,
@@ -266,16 +383,7 @@ impl Rpc {
             }
         }
         let blockhash = self.latest_blockhash()?;
-        let mut bounded_instructions = Vec::with_capacity(instructions.len().saturating_add(1));
-        let mut compute_limit_data = Vec::with_capacity(5);
-        compute_limit_data.push(2);
-        compute_limit_data.extend_from_slice(&LOCAL_PROTOCOL_COMPUTE_UNIT_LIMIT.to_le_bytes());
-        bounded_instructions.push(Instruction {
-            program_id: solana_sdk_ids::compute_budget::ID,
-            accounts: Vec::new(),
-            data: compute_limit_data,
-        });
-        bounded_instructions.extend_from_slice(instructions);
+        let bounded_instructions = bounded_instructions(instructions);
         let mut signers: Vec<&dyn Signer> = Vec::with_capacity(additional_signers.len() + 1);
         signers.push(payer);
         signers.extend(
@@ -289,25 +397,7 @@ impl Rpc {
             &signers,
             blockhash,
         );
-        let encoded = BASE64.encode(
-            bincode::serialize(&transaction)
-                .map_err(|error| Error::new(format!("serialize transaction: {error}")))?,
-        );
-        let signature = self
-            .call(
-                "sendTransaction",
-                &json!([encoded, {
-                    "encoding":"base64",
-                    "skipPreflight": expect_failure,
-                    "preflightCommitment":"confirmed",
-                    "maxRetries": 8
-                }]),
-            )
-            .map_err(|error| Error::new(format!("{label}: {error}")))?
-            .as_str()
-            .ok_or_else(|| Error::new("sendTransaction result was not a signature"))?
-            .parse::<Signature>()
-            .map_err(|error| Error::new(format!("transaction signature: {error}")))?;
+        let signature = self.submit(label, &transaction, expect_failure)?;
         self.confirm(label, signature, expect_failure)
     }
 
@@ -397,6 +487,12 @@ impl Rpc {
             .ok_or_else(|| Error::new(format!("{label} transaction omitted slot")))?;
         let fee_lamports = u64_field(meta, "fee")?;
         let compute_units_consumed = meta.get("computeUnitsConsumed").and_then(Value::as_u64);
+        eprintln!(
+            "campaign transaction: slot={slot} fee={fee_lamports} compute_units={} {label}",
+            compute_units_consumed
+                .map(|units| units.to_string())
+                .unwrap_or_else(|| "unavailable".into())
+        );
         let logs = meta
             .get("logMessages")
             .and_then(Value::as_array)
@@ -465,6 +561,20 @@ impl Rpc {
             logs: Vec::new(),
         })
     }
+}
+
+fn bounded_instructions(instructions: &[Instruction]) -> Vec<Instruction> {
+    let mut bounded = Vec::with_capacity(instructions.len().saturating_add(1));
+    let mut compute_limit_data = Vec::with_capacity(5);
+    compute_limit_data.push(2);
+    compute_limit_data.extend_from_slice(&LOCAL_PROTOCOL_COMPUTE_UNIT_LIMIT.to_le_bytes());
+    bounded.push(Instruction {
+        program_id: solana_sdk_ids::compute_budget::ID,
+        accounts: Vec::new(),
+        data: compute_limit_data,
+    });
+    bounded.extend_from_slice(instructions);
+    bounded
 }
 
 fn parse_optional_account(value: &Value) -> Result<Option<RpcAccount>> {

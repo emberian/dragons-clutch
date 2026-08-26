@@ -1286,6 +1286,20 @@ mod tests {
         let core_elf = fs::canonicalize(core_elf).expect("canonical Core test ELF");
         let registry_elf = fs::canonicalize(registry_elf).expect("canonical Registry test ELF");
         let rent_elf = fs::canonicalize(rent_elf).expect("canonical Rent test ELF");
+        // The Found path invokes only Registry, Core, and Rent. When the real
+        // Claims/Trading/Resolution/Custody artifacts are supplied the release
+        // set binds them exactly; otherwise each role is a distinct immutable
+        // Loader deployment of the Registry ELF, and the evidence says so.
+        let role_elf = |name: &str| {
+            std::env::var(name)
+                .ok()
+                .map(|value| fs::canonicalize(value).expect("canonical role test ELF"))
+                .unwrap_or_else(|| registry_elf.clone())
+        };
+        let claims_elf = role_elf("DCLUTCH_SUCCESSOR_CLAIMS_ELF");
+        let trading_elf = role_elf("DCLUTCH_SUCCESSOR_TRADING_ELF");
+        let resolution_elf = role_elf("DCLUTCH_SUCCESSOR_RESOLUTION_ELF");
+        let custody_elf = role_elf("DCLUTCH_SUCCESSOR_CUSTODY_ELF");
         let authority = Keypair::new();
         let root = std::env::temp_dir().join(format!(
             "dclutch-successor-real-sbf-{}-{}",
@@ -1318,22 +1332,22 @@ mod tests {
             core_semantic_release_id: "12".repeat(32),
             core_bootstrap_upgrade_authority: authority.pubkey(),
             claims_program: program(0x33),
-            claims_elf: registry_elf.clone(),
-            claims_sha256: registry_sha.clone(),
+            claims_sha256: digest(&claims_elf),
+            claims_elf,
             claims_semantic_release_id: "13".repeat(32),
             trading_program: program(0x34),
-            trading_elf: registry_elf.clone(),
-            trading_sha256: registry_sha.clone(),
+            trading_sha256: digest(&trading_elf),
+            trading_elf,
             trading_semantic_release_id: "14".repeat(32),
             resolution_program: program(0x35),
-            resolution_elf: registry_elf.clone(),
-            resolution_sha256: registry_sha.clone(),
+            resolution_sha256: digest(&resolution_elf),
+            resolution_elf,
             resolution_semantic_release_id: hex(
                 &dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V4,
             ),
             custody_program: program(0x36),
-            custody_elf: registry_elf.clone(),
-            custody_sha256: registry_sha.clone(),
+            custody_sha256: digest(&custody_elf),
+            custody_elf,
             custody_semantic_release_id: "16".repeat(32),
             rent_credit_program: program(0x37),
             rent_credit_elf: rent_elf,
@@ -1457,10 +1471,10 @@ mod tests {
         );
         assert!(publication_transactions.len() >= 4);
 
-        let market_input = crate::market::test_market_input(
+        let market_input = crate::market::demo_market_input(
             pubkey(&plan.registry.program_id).expect("Registry program"),
         )
-        .expect("canonical market input");
+        .expect("canonical demo market input");
         let market_evidence = crate::market::execute_found_market(
             &mut rpc,
             &plan,

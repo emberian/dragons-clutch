@@ -38,17 +38,21 @@ use solana_sdk::{
     signature::{Keypair, Signer},
 };
 use solana_sdk_ids::{system_program, sysvar};
-use solana_system_interface::instruction::create_account;
+use solana_system_interface::instruction::{create_account, transfer};
+
+use dclutch_versioned_message_operator::{
+    Observation, ObservedAccount, build_lookup_table_creation_v1,
+};
 
 use crate::{
     Error, Result,
     model::{AccountEvidence, MarketRunInput, SuccessorPlan, TransactionEvidence},
-    plan::{hex32, pubkey},
+    plan::{hex, hex32, pubkey},
     rpc::{Rpc, RpcAccount, account_evidence},
     runtime::{PublishedRecord, decode_hex, publish_product_graph, publish_record, record},
 };
 
-pub(crate) const REMAINING_OPEN_SEAM: &str = "Found31 is live with transaction-published Product, Realm, Source, RecoveryPolicy, and capability-manifest records and a real lifecycle RentCreditV2. The next transaction is intentionally refused until the canonical atomic projected-Custody -> Core permit -> Claims FoundingV5 -> Core Open-last operator lands; the current OpenVault order commits Core Open before Claims founding and is not a valid release path.";
+pub(crate) const REMAINING_OPEN_SEAM: &str = "The campaign publishes the Realm/Product/Source/RecoveryPolicy/capability-manifest graph, creates a real lifecycle RentCreditV2, and routes the oversized 31-account Found frame through a finalized address lookup table as a packet-safe v0 transaction. Canonical Found31 then exhausts Solana's 1,400,000 compute maximum: release authentication hashes whole ProgramData ELFs on chain, the Core ELF twice in one transaction, so no Market is created and the Market is not Open. Beyond that ceiling the atomic DCLTGMF1 outer is still unreachable: no live route can create a Trading capability root for a Market that does not exist yet, and no live route can create the projected-Custody state its Lock stage consumes. See docs/evidence/GENERIC_FOUNDING_REACHABILITY_2026_08_26.md.";
 
 pub(crate) struct MarketExecutionEvidence {
     pub(crate) completed: Vec<String>,
@@ -282,24 +286,77 @@ pub(crate) fn execute_found_market(
     )?;
     let found = build_found_instruction_v2(input.generation, state)
         .map_err(|error| Error::new(format!("chain-derived Found31: {error:?}")))?;
+    // The canonical 31-account Found frame does not fit the 1,232-byte legacy
+    // packet with its keys inline. Routing is table data, never authority: the
+    // shared versioned-message operator owns table admission and geometry.
+    let (routing, tables) = publish_routing_table(
+        rpc,
+        payer,
+        "Found31",
+        std::slice::from_ref(&found.instruction),
+        transactions,
+    )?;
     let mut hostile = found.instruction.clone();
     hostile
         .accounts
         .get_mut(2)
         .ok_or_else(|| Error::new("Found31 omitted RentCredit coordinate"))?
         .pubkey = payer.pubkey();
-    transactions.push(rpc.send_expected_failure(
+    transactions.push(rpc.send_v0_expected_failure(
         "Found31 refuses substituted lifecycle credit",
         &[hostile],
         payer,
+        routing,
+        &tables,
     )?);
     if rpc.account(market)?.is_some() {
         return Err(Error::new("hostile Found31 left a Market account"));
     }
-    transactions.push(rpc.send(
+
+    // Routing data is not authority. The Market address is derived from the
+    // immutable identity, so substituting it under an attacker-chosen table
+    // must refuse and must roll the whole multi-instruction transaction back
+    // to a fee-only debit.
+    let rollback_recipient = Pubkey::new_unique();
+    let substituted_market_key = Pubkey::new_unique();
+    let payer_before = rpc.required_account(payer.pubkey(), "Found31 rollback prestate")?;
+    let mut substituted_market = found.instruction.clone();
+    substituted_market
+        .accounts
+        .get_mut(1)
+        .ok_or_else(|| Error::new("Found31 omitted the Market coordinate"))?
+        .pubkey = substituted_market_key;
+    let rolled_back = rpc.send_v0_expected_failure(
+        "Found31 refuses a substituted Market coordinate and rolls the transaction back",
+        &[
+            transfer(&payer.pubkey(), &rollback_recipient, 1),
+            substituted_market,
+        ],
+        payer,
+        routing,
+        &tables,
+    )?;
+    let rollback_fee = rolled_back
+        .fee_lamports
+        .ok_or_else(|| Error::new("refused Found31 omitted its fee"))?;
+    let payer_after = rpc.required_account(payer.pubkey(), "Found31 rollback poststate")?;
+    if rpc.account(rollback_recipient)?.is_some()
+        || rpc.account(substituted_market_key)?.is_some()
+        || rpc.account(market)?.is_some()
+        || payer_after.lamports.checked_add(rollback_fee) != Some(payer_before.lamports)
+    {
+        return Err(Error::new(
+            "refused Found31 did not roll its whole transaction back to a fee-only debit",
+        ));
+    }
+
+    transactions.push(rolled_back);
+    transactions.push(rpc.send_v0(
         "create canonical Found31 Market",
         &[found.instruction],
         payer,
+        routing,
+        &tables,
     )?);
     let market_account = rpc.required_account(market, "Found31 Market")?;
     let market_state = CoreState::decode(&market_account.data)
@@ -339,6 +396,8 @@ pub(crate) fn execute_found_market(
             "derived Market and lifecycle-credit coordinates from one finalized pre-credit projection".into(),
             "created and reacquired the exact Market-scoped LifecycleRentCreditV2".into(),
             "proved Found31 rejects a substituted lifecycle credit".into(),
+            "proved a substituted Market coordinate under attacker-chosen routing refuses and rolls the whole transaction back to a fee-only debit".into(),
+            "routed the oversized 31-account Found frame through a finalized address lookup table as a packet-safe v0 transaction".into(),
             "created and verified the canonical Founding Market through the chain-derived Found31 operator".into(),
         ],
         accounts,
@@ -500,6 +559,74 @@ fn publish_market_records(
             manifest,
         },
         semantic_product_id,
+    ))
+}
+
+/// Publish one finalized address lookup table covering an oversized frame.
+///
+/// Only non-signer coordinates and the invoked Program are routed; the fee
+/// payer and every signer stay in the message's static key list. The table is
+/// authority-owned so its rent stays recoverable, and it is never frozen.
+fn publish_routing_table(
+    rpc: &mut Rpc,
+    payer: &Keypair,
+    label: &str,
+    instructions: &[Instruction],
+    transactions: &mut Vec<TransactionEvidence>,
+) -> Result<(Observation, Vec<ObservedAccount>)> {
+    let mut addresses: Vec<Pubkey> = Vec::new();
+    let push = |key: Pubkey, addresses: &mut Vec<Pubkey>| {
+        if key != payer.pubkey() && !addresses.contains(&key) {
+            addresses.push(key);
+        }
+    };
+    for instruction in instructions {
+        push(instruction.program_id, &mut addresses);
+        for meta in &instruction.accounts {
+            if !meta.is_signer {
+                push(meta.pubkey, &mut addresses);
+            }
+        }
+    }
+    let recent_slot = rpc.finalized_slot()?;
+    let plan =
+        build_lookup_table_creation_v1(payer.pubkey(), payer.pubkey(), recent_slot, &addresses)
+            .map_err(|error| Error::new(format!("{label} routing table plan: {error:?}")))?;
+    transactions.push(rpc.send(
+        &format!("create {label} routing address lookup table"),
+        std::slice::from_ref(&plan.create),
+        payer,
+    )?);
+    for (index, extension) in plan.extensions.iter().enumerate() {
+        transactions.push(rpc.send(
+            &format!("extend {label} routing table page {index}"),
+            std::slice::from_ref(extension),
+            payer,
+        )?);
+    }
+    let extended_slot = transactions
+        .last()
+        .map(|transaction| transaction.slot)
+        .ok_or_else(|| Error::new("routing table publication omitted a finalized slot"))?;
+    // A table is only usable strictly after the slot that last extended it.
+    let minimum_slot = extended_slot
+        .checked_add(1)
+        .ok_or_else(|| Error::new("routing table slot overflow"))?;
+    await_finalized_slot(rpc, minimum_slot)?;
+    let (observation, tables) =
+        rpc.finalized_observed_accounts(&[plan.lookup_table], minimum_slot)?;
+    Ok((observation, tables))
+}
+
+fn await_finalized_slot(rpc: &mut Rpc, minimum_slot: u64) -> Result<()> {
+    for _ in 0..600 {
+        if rpc.finalized_slot()? >= minimum_slot {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    Err(Error::new(
+        "validator did not finalize a slot after the routing table extension",
     ))
 }
 
@@ -800,41 +927,110 @@ fn canonical_i128(value: &str) -> Result<i128> {
     Ok(parsed)
 }
 
-#[cfg(test)]
-pub(crate) fn test_market_input(registry: Pubkey) -> Result<MarketRunInput> {
+/// Domain-separated preimage prefix for every demo semantic identifier.
+///
+/// A demo identifier is the SHA-256 of `domain || 00 || part || 00 || part...`.
+/// It names a semantic spec; it is not a checked production release row and no
+/// registry publishes it outside this local lab.
+const DEMO_ID_DOMAIN_V1: &[u8] = b"dclutch/local-demo-market/v1";
+
+fn demo_id(role: &str, parts: &[&[u8]]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(DEMO_ID_DOMAIN_V1);
+    hasher.update([0]);
+    hasher.update(role.as_bytes());
+    for part in parts {
+        hasher.update([0]);
+        hasher.update(part);
+    }
+    hasher.finalize().into()
+}
+
+/// Construct the canonical local demo Market: SOL/USD range protection.
+///
+/// The Product is a small categorical partition of USD-cents-per-SOL with cuts
+/// at 12000 and 18000, so the three ordinary regions are "below 120.00",
+/// "inside [120.00, 180.00)", and "at or above 180.00", followed by the
+/// explicit failure outcome. The portfolio pays one unit of the liability
+/// basis in either tail and nothing inside the range or on failure, which is
+/// the payoff a holder buys as protection against SOL/USD leaving the band.
+///
+/// Every semantic identifier is a domain-separated digest naming the spec it
+/// stands for, and the resolution identifiers additionally bind the captured
+/// synthetic-local Pyth release from
+/// `fixtures/pyth/local-upgraded-2026-08-22`. That release is a local lab
+/// projection documented in `docs/evidence/PYTH_SYNTHETIC_RELEASE_V1.md`; it is
+/// not a production provider release, and this Market is not a mainnet or
+/// devnet product.
+pub(crate) fn demo_market_input(registry: Pubkey) -> Result<MarketRunInput> {
     use dclutch_capability_contract::{
         ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1,
         ContentId as CapabilityContentId, FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES,
         MAX_DEPENDENCIES_PER_CAPABILITY,
     };
+    use dclutch_pyth_svm::synthetic_fixture::synthetic_local_release_v1;
     use dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V4;
     use dclutch_source_contract::{RECOVERY_POLICY_MAX_ATTEMPTS_V2, RecoveryAttemptV2};
 
-    let hex_id = |byte: u8| crate::plan::hex(&[byte; 32]);
+    let fixture = synthetic_local_release_v1()
+        .map_err(|error| Error::new(format!("synthetic-local Pyth release: {error:?}")))?;
+    let local_label = fixture.local_label();
+    let adapter = fixture.release().adapter_id();
+    let feed = b"sol-usd".as_slice();
+
+    let product_identity = demo_id("product/sol-usd-range-protection", &[&local_label]);
+    let coordinate_domain = demo_id("coordinate-domain/usd-cents-per-sol", &[]);
+    let result_unit = demo_id("result-unit/usd-cents", &[]);
+    let claim_basis = demo_id("claim-basis/unit-complete-set", &[]);
+    let liability_basis = demo_id("liability-basis/collateral-atom", &[]);
+    let representation = demo_id("representation/categorical-fixed-width", &[]);
+    let mapping = demo_id("mapping/scaled-integer-cut", &[&coordinate_domain]);
+    let primary_source = demo_id("source-spec/pyth-price-update", &[&adapter, feed]);
+    let window = demo_id("window-spec/single-verified-post-at-expiry", &[&adapter]);
+    let statistic = demo_id("statistic-spec/last-verified-price", &[&adapter]);
+    let failure_policy = demo_id("failure-policy/explicit-failure-outcome", &[]);
+    let recovery_allocation = demo_id("recovery/funding-allocation", &[&local_label]);
+    let recovery_source = demo_id("recovery/secondary-source-spec", &[&adapter, feed]);
+    let recovery_authority = demo_id("recovery/attempt-authority", &[&local_label]);
+    let recovery_root = demo_id("recovery/policy-root", &[&local_label]);
+
+    let cut_denominator = 100_u64;
+    let cuts: Vec<i128> = vec![12_000, 18_000];
+    let coefficients: Vec<u64> = vec![1, 0, 1, 0];
+    let outcome_count = coefficients.len();
+
     let product = ProductCompilationInputV2 {
-        product_id: product_id(&hex_id(1))?,
-        coordinate_domain_id: product_id(&hex_id(2))?,
-        result_unit_id: product_id(&hex_id(3))?,
-        claim_basis_id: product_id(&hex_id(4))?,
-        liability_basis_id: product_id(&hex_id(5))?,
-        representation_release_id: product_id(&hex_id(6))?,
-        mapping_release_id: product_id(&hex_id(7))?,
-        cut_denominator: 10,
-        cuts: &[1],
+        product_id: ProductContentId::new(product_identity)
+            .map_err(|error| Error::new(format!("demo Product ID: {error:?}")))?,
+        coordinate_domain_id: ProductContentId::new(coordinate_domain)
+            .map_err(|error| Error::new(format!("demo coordinate domain: {error:?}")))?,
+        result_unit_id: ProductContentId::new(result_unit)
+            .map_err(|error| Error::new(format!("demo result unit: {error:?}")))?,
+        claim_basis_id: ProductContentId::new(claim_basis)
+            .map_err(|error| Error::new(format!("demo claim basis: {error:?}")))?,
+        liability_basis_id: ProductContentId::new(liability_basis)
+            .map_err(|error| Error::new(format!("demo liability basis: {error:?}")))?,
+        representation_release_id: ProductContentId::new(representation)
+            .map_err(|error| Error::new(format!("demo representation: {error:?}")))?,
+        mapping_release_id: ProductContentId::new(mapping)
+            .map_err(|error| Error::new(format!("demo mapping: {error:?}")))?,
+        cut_denominator,
+        cuts: &cuts,
         portfolio_denominator: 1,
-        coefficients: &[1, 0, 0],
+        coefficients: &coefficients,
     };
     let mut product_bytes = [0_u8; PRODUCT_RECORD_BYTES_V2];
     let mut domain = vec![
         0_u8;
-        result_domain_record_bytes(1)
-            .map_err(|error| Error::new(format!("test domain: {error:?}")))?
+        result_domain_record_bytes(cuts.len()).map_err(|error| Error::new(
+            format!("demo domain width: {error:?}")
+        ))?
     ];
     let mut portfolio = vec![
         0_u8;
-        portfolio_record_bytes(3).map_err(|error| Error::new(format!(
-            "test portfolio: {error:?}"
-        )))?
+        portfolio_record_bytes(outcome_count).map_err(|error| Error::new(
+            format!("demo portfolio width: {error:?}")
+        ))?
     ];
     compile_product_records_v2(
         registry,
@@ -843,100 +1039,129 @@ pub(crate) fn test_market_input(registry: Pubkey) -> Result<MarketRunInput> {
         &mut domain,
         &mut portfolio,
     )
-    .map_err(|error| Error::new(format!("test Product: {error:?}")))?;
+    .map_err(|error| Error::new(format!("demo Product compiler: {error:?}")))?;
     let product_digest: [u8; 32] = Sha256::digest(product_bytes).into();
 
     let attempt = RecoveryAttemptV2::new(
-        source_id(&hex_id(0x21))?,
-        source_id(&hex_id(0x22))?,
+        SourceContentId::new(recovery_source)
+            .map_err(|error| Error::new(format!("demo recovery source: {error:?}")))?,
+        SourceContentId::new(recovery_authority)
+            .map_err(|error| Error::new(format!("demo recovery authority: {error:?}")))?,
         2_000_000_000,
-        source_id(&hex_id(0x23))?,
+        SourceContentId::new(recovery_allocation)
+            .map_err(|error| Error::new(format!("demo recovery allocation: {error:?}")))?,
     )
-    .map_err(|error| Error::new(format!("test recovery attempt: {error:?}")))?;
+    .map_err(|error| Error::new(format!("demo recovery attempt: {error:?}")))?;
     let mut attempts = [None; RECOVERY_POLICY_MAX_ATTEMPTS_V2];
     attempts[0] = Some(attempt);
-    let recovery = RecoveryPolicyV2::new(source_id(&hex_id(0x24))?, attempts, 1)
-        .map_err(|error| Error::new(format!("test recovery policy: {error:?}")))?;
+    let recovery = RecoveryPolicyV2::new(
+        SourceContentId::new(recovery_root)
+            .map_err(|error| Error::new(format!("demo recovery root: {error:?}")))?,
+        attempts,
+        1,
+    )
+    .map_err(|error| Error::new(format!("demo recovery policy: {error:?}")))?;
     let recovery_bytes = recovery.to_bytes();
     let recovery_digest: [u8; 32] = Sha256::digest(recovery_bytes).into();
     let material = SourceMaterialV2::new(
         SourceContentId::new(product_digest)
-            .map_err(|error| Error::new(format!("test Product digest: {error:?}")))?,
-        source_id(&hex_id(0x21))?,
-        source_id(&hex_id(0x25))?,
-        source_id(&hex_id(0x26))?,
+            .map_err(|error| Error::new(format!("demo Product digest: {error:?}")))?,
+        SourceContentId::new(primary_source)
+            .map_err(|error| Error::new(format!("demo primary source: {error:?}")))?,
+        SourceContentId::new(window)
+            .map_err(|error| Error::new(format!("demo window: {error:?}")))?,
+        SourceContentId::new(statistic)
+            .map_err(|error| Error::new(format!("demo statistic: {error:?}")))?,
         Some(
             SourceContentId::new(recovery_digest)
-                .map_err(|error| Error::new(format!("test recovery digest: {error:?}")))?,
+                .map_err(|error| Error::new(format!("demo recovery digest: {error:?}")))?,
         ),
-        source_id(&hex_id(0x27))?,
+        SourceContentId::new(failure_policy)
+            .map_err(|error| Error::new(format!("demo failure policy: {error:?}")))?,
     );
     let material_digest: [u8; 32] = Sha256::digest(material.to_bytes()).into();
+
     let native = CompartmentFundingV1::native_lamports(1)
-        .map_err(|error| Error::new(format!("test funding: {error:?}")))?;
+        .map_err(|error| Error::new(format!("demo funding: {error:?}")))?;
     let none = CompartmentFundingV1::not_applicable();
     let amounts = FundingAmountsV1::new(native, native, none, none, native, none, none)
-        .map_err(|error| Error::new(format!("test funding amounts: {error:?}")))?;
+        .map_err(|error| Error::new(format!("demo funding amounts: {error:?}")))?;
     let quote = FundingQuoteV1::new(amounts, None)
-        .map_err(|error| Error::new(format!("test funding quote: {error:?}")))?;
+        .map_err(|error| Error::new(format!("demo funding quote: {error:?}")))?;
     let release = CapabilityContentId::new(RESOLUTION_CONTROLLER_RELEASE_ID_V4)
-        .map_err(|error| Error::new(format!("test Resolution release: {error:?}")))?;
-    let configs = [
-        attempt.funding_allocation_id().to_bytes(),
-        recovery_digest,
-        material_digest,
+        .map_err(|error| Error::new(format!("demo Resolution release: {error:?}")))?;
+    let mut entries_input: Vec<([u8; 32], [u8; 32])> = vec![
+        (
+            demo_id("capability/resolve-primary", &[&local_label]),
+            attempt.funding_allocation_id().to_bytes(),
+        ),
+        (
+            demo_id("capability/recovery-policy", &[&local_label]),
+            recovery_digest,
+        ),
+        (
+            demo_id("capability/source-material", &[&local_label]),
+            material_digest,
+        ),
     ];
+    // The manifest is canonical only when entries are strictly ordered by
+    // capability-kind identity; the demo kinds are digests, so sort them.
+    entries_input.sort_by_key(|entry| entry.0);
     let mut entries = Vec::new();
-    for (index, config) in configs.into_iter().enumerate() {
-        let kind = u8::try_from(0x31_usize + index)
-            .map_err(|_| Error::new("test capability kind overflow"))?;
+    for (index, (kind, config)) in entries_input.into_iter().enumerate() {
+        let entry_index =
+            u16::try_from(index).map_err(|_| Error::new("demo capability index overflow"))?;
         entries.push(
             CapabilityEntryV1::new(
-                CapabilityContentId::new([kind; 32])
-                    .map_err(|error| Error::new(format!("test kind: {error:?}")))?,
+                CapabilityContentId::new(kind)
+                    .map_err(|error| Error::new(format!("demo capability kind: {error:?}")))?,
                 release,
                 CapabilityContentId::new(config)
-                    .map_err(|error| Error::new(format!("test config: {error:?}")))?,
-                CapabilityContentId::new([0x41; 32])
-                    .map_err(|error| Error::new(format!("test capacity: {error:?}")))?,
-                CapabilityContentId::new([0x42; 32])
-                    .map_err(|error| Error::new(format!("test schema: {error:?}")))?,
-                CapabilityContentId::new([0x43; 32])
-                    .map_err(|error| Error::new(format!("test derivation: {error:?}")))?,
+                    .map_err(|error| Error::new(format!("demo capability config: {error:?}")))?,
+                CapabilityContentId::new(demo_id("capability/capacity", &[&[entry_index as u8]]))
+                    .map_err(|error| Error::new(format!("demo capability capacity: {error:?}")))?,
+                CapabilityContentId::new(demo_id("capability/schema", &[]))
+                    .map_err(|error| Error::new(format!("demo capability schema: {error:?}")))?,
+                CapabilityContentId::new(demo_id("capability/derivation", &[])).map_err(
+                    |error| Error::new(format!("demo capability derivation: {error:?}")),
+                )?,
                 ActivationPolicy::RequiredAtFounding,
                 0,
                 0,
                 [0; MAX_DEPENDENCIES_PER_CAPABILITY],
                 quote,
             )
-            .map_err(|error| Error::new(format!("test capability entry: {error:?}")))?,
+            .map_err(|error| Error::new(format!("demo capability entry: {error:?}")))?,
         );
     }
     let mut manifest = vec![0_u8; MANIFEST_HEADER_BYTES + entries.len() * CAPABILITY_ENTRY_BYTES];
     CapabilityManifestV1::encode_into(&entries, &mut manifest)
-        .map_err(|error| Error::new(format!("test capability manifest: {error:?}")))?;
-    Ok(MarketRunInput {
+        .map_err(|error| Error::new(format!("demo capability manifest: {error:?}")))?;
+
+    let input = MarketRunInput {
         generation: 1,
         collateral_display_decimals: 6,
         initial_collateral_atoms: 1_000_000_000,
-        product_id: hex_id(1),
-        coordinate_domain_id: hex_id(2),
-        result_unit_id: hex_id(3),
-        claim_basis_id: hex_id(4),
-        liability_basis_id: hex_id(5),
-        representation_release_id: hex_id(6),
-        mapping_release_id: hex_id(7),
-        cut_denominator: 10,
-        cuts: vec!["1".into()],
+        product_id: hex(&product_identity),
+        coordinate_domain_id: hex(&coordinate_domain),
+        result_unit_id: hex(&result_unit),
+        claim_basis_id: hex(&claim_basis),
+        liability_basis_id: hex(&liability_basis),
+        representation_release_id: hex(&representation),
+        mapping_release_id: hex(&mapping),
+        cut_denominator,
+        cuts: cuts.iter().map(|cut| cut.to_string()).collect(),
         portfolio_denominator: 1,
-        coefficients: vec![1, 0, 0],
-        primary_source_spec_id: hex_id(0x21),
-        window_spec_id: hex_id(0x25),
-        statistic_spec_id: hex_id(0x26),
-        failure_policy_release_id: hex_id(0x27),
-        recovery_policy_hex: crate::plan::hex(&recovery_bytes),
-        capability_manifest_hex: crate::plan::hex(&manifest),
-    })
+        coefficients,
+        primary_source_spec_id: hex(&primary_source),
+        window_spec_id: hex(&window),
+        statistic_spec_id: hex(&statistic),
+        failure_policy_release_id: hex(&failure_policy),
+        recovery_policy_hex: hex(&recovery_bytes),
+        capability_manifest_hex: hex(&manifest),
+    };
+    validate_market_input(&input)?;
+    Ok(input)
 }
 
 #[cfg(test)]

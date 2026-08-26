@@ -367,10 +367,12 @@ dependencies = [
  "dclutch-resolution-codec",
  "dclutch-source-contract",
  "dclutch-token-svm",
+ "dclutch-versioned-message-operator",
  "reqwest",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "solana-hash 4.6.0",
  "solana-loader-v3-interface",
  "solana-program",
  "solana-sdk",
@@ -490,6 +492,24 @@ name = "dclutch-resolution-codec"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-resolution-core-v3-operator"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-contract",
+ "dclutch-market-core-codec",
+ "dclutch-product-runtime-v2",
+ "dclutch-product-runtime-v2-admission",
+ "dclutch-record-contract",
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
+ "dclutch-resolution-codec",
+ "dclutch-source-contract",
+ "solana-program",
+ "solana-sdk-ids",
+]
+
+[[package]]
 name = "dclutch-source-contract"
 version = "0.1.0"
 dependencies = [
@@ -500,6 +520,17 @@ dependencies = [
 [[package]]
 name = "dclutch-token-svm"
 version = "0.1.0"
+
+[[package]]
+name = "dclutch-versioned-message-operator"
+version = "0.1.0"
+dependencies = [
+ "dclutch-resolution-core-v3-operator",
+ "solana-address-lookup-table-interface",
+ "solana-hash 4.6.0",
+ "solana-message",
+ "solana-program",
+]
 
 [[package]]
 name = "der"
@@ -1884,7 +1915,13 @@ version = "3.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8dedafa11d25554279235dd0539d378adc144183eca65072a302c9592cc6a591"
 dependencies = [
+ "bincode",
+ "bytemuck",
+ "serde",
+ "serde_derive",
  "solana-clock",
+ "solana-instruction",
+ "solana-instruction-error",
  "solana-pubkey 4.3.0",
  "solana-sdk-ids",
  "solana-slot-hashes",
