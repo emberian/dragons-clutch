@@ -803,6 +803,10 @@ name = "dclutch-rent-contract"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-request-profile-contract"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-resolution-codec"
 version = "0.1.0"
 

@@ -10,8 +10,6 @@ description = "Total no-alloc request-byte projector for data-driven Trading"
 [lib]
 path = "src/lib.rs"
 
-[workspace]
-
 [lints.rust]
 missing_docs = "deny"
 unsafe_code = "forbid"
