@@ -1357,6 +1357,13 @@ struct AuthenticatedHotInvocationV3 {
     native_message_offset_bias: u16,
     strategy_extras_start: usize,
     permits_fixed_market_union: bool,
+    role_authentication: HotRoleAuthenticationV3,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HotRoleAuthenticationV3 {
+    ReauthenticateRegistry,
+    AuthenticatedContinuation,
 }
 
 #[inline(never)]
@@ -1384,6 +1391,7 @@ fn authenticate_hot_invocation_v3(
             native_message_offset_bias: 0,
             strategy_extras_start: HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3,
             permits_fixed_market_union: false,
+            role_authentication: HotRoleAuthenticationV3::ReauthenticateRegistry,
         });
     }
 
@@ -1504,6 +1512,7 @@ fn authenticate_hot_invocation_v3(
             .checked_add(1)
             .ok_or(TradingSbfError::Content)?,
         permits_fixed_market_union: true,
+        role_authentication: HotRoleAuthenticationV3::AuthenticatedContinuation,
     })
 }
 
@@ -1533,7 +1542,13 @@ pub fn process_hot_execution_v3(
     }
 
     let market = authenticate_market_boxed_v3(&frame, envelope)?;
-    let root = authenticate_root_boxed_v3(program_id, &frame, envelope, &market)?;
+    let root = authenticate_root_boxed_v3(
+        program_id,
+        &frame,
+        envelope,
+        &market,
+        invocation.role_authentication,
+    )?;
     let context = &root.context;
     let immutable_root_header = &root.immutable_header;
 
@@ -2384,24 +2399,32 @@ fn authenticate_root_boxed_v3<'accounts, 'info>(
     frame: &HotFrameV3<'accounts, 'info>,
     envelope: HotExecutionEnvelopeV3,
     market: &CoreState,
+    role_authentication: HotRoleAuthenticationV3,
 ) -> Result<Box<AuthenticatedRootV3>, ProgramError> {
-    let core_receipt = reauthenticate_role(
-        *frame,
-        ExecutionRoleV1::Core,
-        frame.core_program,
-        frame.core_programdata,
-        envelope.release_set(),
-    )?;
-    if core_receipt.program().as_bytes() != &frame.core_program.key.to_bytes() {
-        return Err(TradingSbfError::Release.into());
-    }
-    let trading_receipt = reauthenticate_role(
-        *frame,
-        ExecutionRoleV1::Trading,
-        frame.trading_program,
-        frame.trading_programdata,
-        envelope.release_set(),
-    )?;
+    let trading_receipt = match role_authentication {
+        HotRoleAuthenticationV3::ReauthenticateRegistry => {
+            let core_receipt = reauthenticate_role(
+                *frame,
+                ExecutionRoleV1::Core,
+                frame.core_program,
+                frame.core_programdata,
+                envelope.release_set(),
+            )?;
+            if core_receipt.program().as_bytes() != &frame.core_program.key.to_bytes() {
+                return Err(TradingSbfError::Release.into());
+            }
+            reauthenticate_role(
+                *frame,
+                ExecutionRoleV1::Trading,
+                frame.trading_program,
+                frame.trading_programdata,
+                envelope.release_set(),
+            )?
+        }
+        HotRoleAuthenticationV3::AuthenticatedContinuation => {
+            authenticate_continuation_root_roles_v3(*frame, envelope)?
+        }
+    };
     let root_data = frame
         .root
         .try_borrow_data()
@@ -2430,6 +2453,15 @@ fn authenticate_root_boxed_v3<'accounts, 'info>(
         context,
         immutable_header: root_header.to_bytes(),
     }))
+}
+
+#[inline(never)]
+fn authenticate_continuation_root_roles_v3(
+    frame: HotFrameV3<'_, '_>,
+    envelope: HotExecutionEnvelopeV3,
+) -> Result<AuthenticatedRoleReceiptV1, ProgramError> {
+    let (trading_receipt, _, _) = authenticate_accelerator_activation_v4(frame, envelope)?;
+    Ok(trading_receipt)
 }
 
 #[inline(never)]
@@ -7188,6 +7220,10 @@ mod tests {
         );
         assert_eq!(authenticated.native_message_offset_bias, 0);
         assert!(authenticated.permits_fixed_market_union);
+        assert_eq!(
+            authenticated.role_authentication,
+            HotRoleAuthenticationV3::AuthenticatedContinuation
+        );
         assert!(HotFrameV3::parse(&program_id, &accounts, false).is_err());
         assert!(HotFrameV3::parse(&program_id, &accounts, true).is_ok());
 

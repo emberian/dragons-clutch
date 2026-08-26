@@ -32,20 +32,26 @@ mod child_receipt_v3;
 pub mod admitted_composition_v3;
 
 /// Family-neutral EffectProgram V3 composition for canonical Claims CPIs.
-#[cfg(any(
-    feature = "families",
-    feature = "series-family",
-    feature = "dealer-family"
+#[cfg(all(
+    not(feature = "shadow-accelerator-auth-only"),
+    any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    )
 ))]
 pub mod claims_composition_v3;
 /// Family-neutral EffectProgram V3 composition for canonical Core CPIs.
 #[cfg(not(feature = "shadow-accelerator-auth-only"))]
 pub mod core_composition_v3;
 /// Family-neutral EffectProgram V3 composition for canonical Custody CPIs.
-#[cfg(any(
-    feature = "families",
-    feature = "series-family",
-    feature = "dealer-family"
+#[cfg(all(
+    not(feature = "shadow-accelerator-auth-only"),
+    any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    )
 ))]
 pub mod custody_composition_v3;
 /// Dealer family projection behind the common data-defined Trading boundary.
@@ -77,26 +83,35 @@ pub mod native_signature;
 #[cfg(not(feature = "shadow-accelerator-auth-only"))]
 pub mod outer;
 /// Exact Claims Founding route and ordered projected-receipt join.
-#[cfg(any(
-    feature = "families",
-    feature = "series-family",
-    feature = "dealer-family"
+#[cfg(all(
+    not(feature = "shadow-accelerator-auth-only"),
+    any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    )
 ))]
 #[allow(dead_code)]
 mod projected_claims_composition_v4;
 /// Exact current-Core Found route and acknowledgment join for projected Markets.
-#[cfg(any(
-    feature = "families",
-    feature = "series-family",
-    feature = "dealer-family"
+#[cfg(all(
+    not(feature = "shadow-accelerator-auth-only"),
+    any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    )
 ))]
 #[allow(dead_code)]
 mod projected_core_composition_v4;
 /// Family-neutral projected-Custody route-zero execution and receipt join.
-#[cfg(any(
-    feature = "families",
-    feature = "series-family",
-    feature = "dealer-family"
+#[cfg(all(
+    not(feature = "shadow-accelerator-auth-only"),
+    any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    )
 ))]
 #[allow(dead_code)]
 mod projected_custody_composition_v4;
@@ -108,18 +123,24 @@ mod projected_custody_composition_v4;
 ))]
 pub mod projected_market_v2;
 /// Final Core Open and Trading replay commit-last boundary.
-#[cfg(any(
-    feature = "families",
-    feature = "series-family",
-    feature = "dealer-family"
+#[cfg(all(
+    not(feature = "shadow-accelerator-auth-only"),
+    any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    )
 ))]
 #[allow(dead_code)]
 mod projected_open_composition_v4;
 /// Exact projected-Hoard realization route and receipt join.
-#[cfg(any(
-    feature = "families",
-    feature = "series-family",
-    feature = "dealer-family"
+#[cfg(all(
+    not(feature = "shadow-accelerator-auth-only"),
+    any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    )
 ))]
 #[allow(dead_code)]
 mod projected_realize_composition_v4;
