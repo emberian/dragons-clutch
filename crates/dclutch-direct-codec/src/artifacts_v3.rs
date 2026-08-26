@@ -10,6 +10,7 @@
 
 use dclutch_account_profile_contract::v2::AccountProfileV2;
 use dclutch_capability_program_contract::{
+    hot_v3::HOT_FAMILY_REQUEST_OFFSET_V3,
     set_v1::{CapabilityProgramSetV1, SelectorWidthV1},
     v3::CapabilityProgramV3,
 };
@@ -77,6 +78,8 @@ pub enum DirectArtifactErrorV3 {
     AccountProfile,
     /// RequestProfile hostile decode or request width refused.
     RequestProfile,
+    /// Native-signature count or absolute current-instruction slices differed.
+    NativeSignature,
     /// Transition hostile decode refused.
     Transition,
     /// Effect hostile decode or role admission refused.
@@ -195,6 +198,7 @@ pub fn authenticate_direct_artifacts_v3<'a>(
         descriptor,
         artifacts.request_profile,
     )?;
+    validate_native_signature_slices(semantic_request.action(), tail_count, request_profile)?;
     require_content(
         descriptor.transition_program().to_bytes(),
         artifacts.transition,
@@ -227,6 +231,48 @@ pub fn authenticate_direct_artifacts_v3<'a>(
         transition,
         effect,
     })
+}
+
+fn validate_native_signature_slices(
+    action: DirectExecutionActionV3,
+    tail_count: u32,
+    profile: DirectRequestProfileV3<'_>,
+) -> Result<()> {
+    use crate::execution_v3::{native_signature_count_v3, native_signature_slice_v3};
+
+    let expected_count = native_signature_count_v3(action, tail_count);
+    match profile {
+        DirectRequestProfileV3::Unsigned(_) if expected_count == 0 => Ok(()),
+        DirectRequestProfileV3::Unsigned(_) => Err(DirectArtifactErrorV3::NativeSignature),
+        DirectRequestProfileV3::Signed(profile) => {
+            let signatures = profile.native_signatures();
+            if signatures.requirement_count() != expected_count {
+                return Err(DirectArtifactErrorV3::NativeSignature);
+            }
+            let request_data_offset = u32::try_from(HOT_FAMILY_REQUEST_OFFSET_V3)
+                .map_err(|_| DirectArtifactErrorV3::NativeSignature)?;
+            let mut participant = 0_u32;
+            while participant < expected_count {
+                let expected = native_signature_slice_v3(action, tail_count, participant)
+                    .map_err(|_| DirectArtifactErrorV3::NativeSignature)?;
+                let absolute = request_data_offset
+                    .checked_add(expected.message_offset)
+                    .ok_or(DirectArtifactErrorV3::NativeSignature)?;
+                let observed = signatures
+                    .requirement(participant)
+                    .map_err(|_| DirectArtifactErrorV3::NativeSignature)?;
+                if u32::from(observed.message_offset()) != absolute
+                    || observed.message_bytes() != expected.message_bytes
+                {
+                    return Err(DirectArtifactErrorV3::NativeSignature);
+                }
+                participant = participant
+                    .checked_add(1)
+                    .ok_or(DirectArtifactErrorV3::NativeSignature)?;
+            }
+            Ok(())
+        }
+    }
 }
 
 fn decode_request_profile<'a>(
@@ -449,6 +495,62 @@ mod tests {
         output
     }
 
+    fn signed_request_profile(requirements: &[(u16, u16, u32)]) -> Vec<u8> {
+        let mut embedded = request_profile();
+        put(
+            &mut embedded,
+            28,
+            &u16::try_from(requirements.len())
+                .expect("identity width")
+                .to_le_bytes(),
+        );
+        let header = dclutch_request_profile_contract::v2::REQUEST_PROFILE_V2_HEADER_BYTES;
+        let requirement_bytes =
+            dclutch_request_profile_contract::v2::NATIVE_SIGNATURE_REQUIREMENT_BYTES_V1;
+        let mut output =
+            vec![0_u8; header + embedded.len() + requirements.len() * requirement_bytes];
+        put(
+            &mut output,
+            0,
+            &dclutch_request_profile_contract::v2::REQUEST_PROFILE_V2_MAGIC,
+        );
+        put(
+            &mut output,
+            8,
+            &dclutch_request_profile_contract::v2::REQUEST_PROFILE_V2_SCHEMA_VERSION.to_le_bytes(),
+        );
+        put(
+            &mut output,
+            10,
+            &dclutch_request_profile_contract::v2::REQUEST_PROFILE_V2_ARTIFACT_PROFILE
+                .to_le_bytes(),
+        );
+        put(
+            &mut output,
+            12,
+            &u32::try_from(embedded.len())
+                .expect("embedded width")
+                .to_le_bytes(),
+        );
+        put(
+            &mut output,
+            16,
+            &u32::try_from(requirements.len())
+                .expect("requirement count")
+                .to_le_bytes(),
+        );
+        let mut cursor = header;
+        put(&mut output, cursor, &embedded);
+        cursor += embedded.len();
+        for (message_offset, message_bytes, destination) in requirements {
+            put(&mut output, cursor, &message_offset.to_le_bytes());
+            put(&mut output, cursor + 2, &message_bytes.to_le_bytes());
+            put(&mut output, cursor + 4, &destination.to_le_bytes());
+            cursor += requirement_bytes;
+        }
+        output
+    }
+
     fn transition() -> Vec<u8> {
         let mut output = vec![0_u8; 56];
         put(&mut output, 0, &dclutch_transition_vm::v3::MAGIC);
@@ -611,12 +713,40 @@ mod tests {
             12,
             &(DirectExecutionActionV3::InlineOrdinary as u32).to_le_bytes(),
         );
-        assert!(authenticate_direct_artifacts_v3(
-            fixture.selection(),
+        assert!(
+            authenticate_direct_artifacts_v3(
+                fixture.selection(),
             fixture.artifacts(),
             &request,
             0,
-        )
-        .is_err());
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn signed_profile_binds_the_frozen_hot_absolute_slices() {
+        assert_eq!(HOT_FAMILY_REQUEST_OFFSET_V3, 128);
+        let exact = signed_request_profile(&[(192, 172, 0), (396, 172, 1)]);
+        let profile = RequestProfileV2::decode(&exact).expect("signed profile");
+        assert_eq!(
+            validate_native_signature_slices(
+                DirectExecutionActionV3::InlineOrdinary,
+                0,
+                DirectRequestProfileV3::Signed(profile),
+            ),
+            Ok(())
+        );
+
+        let wrong = signed_request_profile(&[(191, 172, 0), (396, 172, 1)]);
+        let wrong = RequestProfileV2::decode(&wrong).expect("structural profile");
+        assert_eq!(
+            validate_native_signature_slices(
+                DirectExecutionActionV3::InlineOrdinary,
+                0,
+                DirectRequestProfileV3::Signed(wrong),
+            ),
+            Err(DirectArtifactErrorV3::NativeSignature)
+        );
     }
 }

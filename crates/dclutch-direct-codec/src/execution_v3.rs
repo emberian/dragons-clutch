@@ -126,6 +126,95 @@ pub enum DirectExecutionRequestErrorV3 {
 /// Result alias for Direct execution requests.
 pub type Result<T> = core::result::Result<T, DirectExecutionRequestErrorV3>;
 
+/// One canonical signed-message slice relative to the start of the complete
+/// [`DirectExecutionRequestV3`] bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectNativeSignatureSliceV3 {
+    /// Relative byte offset of the exact signed preimage, excluding the maker key.
+    pub message_offset: u32,
+    /// Exact signed-preimage width.
+    pub message_bytes: u16,
+    /// Canonical participant ordinal; zero for every non-affine signed action.
+    pub participant: u32,
+}
+
+/// Number of required native signatures for one selected Direct action.
+pub const fn native_signature_count_v3(action: DirectExecutionActionV3, tail_count: u32) -> u32 {
+    match action {
+        DirectExecutionActionV3::InlineOrdinary => 2,
+        DirectExecutionActionV3::RegisterSell
+        | DirectExecutionActionV3::RegisterBuy
+        | DirectExecutionActionV3::CancelRegistered
+        | DirectExecutionActionV3::CancelThrough => 1,
+        DirectExecutionActionV3::SplitInline | DirectExecutionActionV3::MergeInline => tail_count,
+        DirectExecutionActionV3::FillRegisteredOrdinary
+        | DirectExecutionActionV3::SplitRegistered
+        | DirectExecutionActionV3::MergeRegistered
+        | DirectExecutionActionV3::ExpireRegistered
+        | DirectExecutionActionV3::CloseInvalidated
+        | DirectExecutionActionV3::CloseMakerReplay
+        | DirectExecutionActionV3::CloseDirectRoot => 0,
+    }
+}
+
+/// Return one exact Direct-relative native signed-message slice.
+pub fn native_signature_slice_v3(
+    action: DirectExecutionActionV3,
+    tail_count: u32,
+    participant: u32,
+) -> Result<DirectNativeSignatureSliceV3> {
+    if participant >= native_signature_count_v3(action, tail_count) {
+        return Err(DirectExecutionRequestErrorV3::InvalidField);
+    }
+    let (message_offset, message_bytes) = match action {
+        DirectExecutionActionV3::InlineOrdinary => {
+            let stride = u32::try_from(DIRECT_SIGNED_PARTICIPANT_BYTES_V3)
+                .map_err(|_| DirectExecutionRequestErrorV3::Arithmetic)?;
+            let offset = 64_u32
+                .checked_add(
+                    participant
+                        .checked_mul(stride)
+                        .ok_or(DirectExecutionRequestErrorV3::Arithmetic)?,
+                )
+                .ok_or(DirectExecutionRequestErrorV3::Arithmetic)?;
+            (offset, COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2)
+        }
+        DirectExecutionActionV3::RegisterSell
+        | DirectExecutionActionV3::RegisterBuy
+        | DirectExecutionActionV3::CancelRegistered => {
+            (64, COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2)
+        }
+        DirectExecutionActionV3::CancelThrough => (64, CANCEL_THROUGH_SIGNED_PREIMAGE_BYTES_V2),
+        DirectExecutionActionV3::SplitInline | DirectExecutionActionV3::MergeInline => {
+            let stride = u32::try_from(DIRECT_SIGNED_PARTICIPANT_BYTES_V3)
+                .map_err(|_| DirectExecutionRequestErrorV3::Arithmetic)?;
+            let offset = 80_u32
+                .checked_add(
+                    participant
+                        .checked_mul(stride)
+                        .ok_or(DirectExecutionRequestErrorV3::Arithmetic)?,
+                )
+                .ok_or(DirectExecutionRequestErrorV3::Arithmetic)?;
+            (offset, COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2)
+        }
+        DirectExecutionActionV3::FillRegisteredOrdinary
+        | DirectExecutionActionV3::SplitRegistered
+        | DirectExecutionActionV3::MergeRegistered
+        | DirectExecutionActionV3::ExpireRegistered
+        | DirectExecutionActionV3::CloseInvalidated
+        | DirectExecutionActionV3::CloseMakerReplay
+        | DirectExecutionActionV3::CloseDirectRoot => {
+            return Err(DirectExecutionRequestErrorV3::InvalidField);
+        }
+    };
+    Ok(DirectNativeSignatureSliceV3 {
+        message_offset,
+        message_bytes: u16::try_from(message_bytes)
+            .map_err(|_| DirectExecutionRequestErrorV3::Arithmetic)?,
+        participant,
+    })
+}
+
 /// One signer and the exact signed CompactIntent DTO.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DirectSignedParticipantV3 {
@@ -735,6 +824,63 @@ mod tests {
         assert_eq!(
             DirectExecutionRequestV3::decode(&legacy, 3),
             Err(DirectExecutionRequestErrorV3::InvalidMagic)
+        );
+    }
+
+    #[test]
+    fn native_signature_slices_are_exact_and_runtime_width() {
+        assert_eq!(
+            native_signature_slice_v3(DirectExecutionActionV3::InlineOrdinary, 0, 0),
+            Ok(DirectNativeSignatureSliceV3 {
+                message_offset: 64,
+                message_bytes: 172,
+                participant: 0,
+            })
+        );
+        assert_eq!(
+            native_signature_slice_v3(DirectExecutionActionV3::InlineOrdinary, 0, 1),
+            Ok(DirectNativeSignatureSliceV3 {
+                message_offset: 268,
+                message_bytes: 172,
+                participant: 1,
+            })
+        );
+        assert_eq!(
+            native_signature_slice_v3(DirectExecutionActionV3::RegisterBuy, 0, 0),
+            Ok(DirectNativeSignatureSliceV3 {
+                message_offset: 64,
+                message_bytes: 172,
+                participant: 0,
+            })
+        );
+        assert_eq!(
+            native_signature_slice_v3(DirectExecutionActionV3::CancelThrough, 0, 0),
+            Ok(DirectNativeSignatureSliceV3 {
+                message_offset: 64,
+                message_bytes: 96,
+                participant: 0,
+            })
+        );
+
+        assert_eq!(
+            native_signature_count_v3(DirectExecutionActionV3::SplitInline, u32::MAX),
+            u32::MAX
+        );
+        assert_eq!(
+            native_signature_slice_v3(DirectExecutionActionV3::MergeInline, 4, 3),
+            Ok(DirectNativeSignatureSliceV3 {
+                message_offset: 692,
+                message_bytes: 172,
+                participant: 3,
+            })
+        );
+        assert!(native_signature_slice_v3(DirectExecutionActionV3::MergeInline, 4, 4).is_err());
+        assert_eq!(
+            native_signature_count_v3(DirectExecutionActionV3::ExpireRegistered, 16),
+            0
+        );
+        assert!(
+            native_signature_slice_v3(DirectExecutionActionV3::ExpireRegistered, 16, 0).is_err()
         );
     }
 }
