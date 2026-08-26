@@ -606,6 +606,24 @@ pub fn project_general_selection_candidate_scratch_v3(
     apply_general_selection_candidate_v3(action, selection_after, outcome_count, candidate_scratch)
 }
 
+/// Apply Consider/Freeze directly to one complete non-authoritative bank.
+///
+/// This is the bounded-heap SBF accelerator seam: authenticated scratch pages
+/// are assembled into `candidate_scratch` once, then the semantic projection
+/// mutates that workspace in place. Callers must not emit an acknowledgement
+/// unless this function succeeds for the complete Product-derived width.
+pub fn project_general_selection_candidate_in_place_v3(
+    action: Action,
+    selection_after: &[u8],
+    outcome_count: u32,
+    candidate_scratch: &mut [u8],
+) -> Result<()> {
+    if candidate_scratch.len() != general_hot_candidate_bank_len_v3(outcome_count)? {
+        return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
+    }
+    apply_general_selection_candidate_v3(action, selection_after, outcome_count, candidate_scratch)
+}
+
 fn apply_general_selection_candidate_v3(
     action: Action,
     selection_after: &[u8],
@@ -709,6 +727,28 @@ pub fn project_general_initialize_candidate_scratch_v3(
         return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
     }
     source.copy_complete_bank_v3(candidate_scratch)?;
+    apply_general_initialize_candidate_v3(
+        cursor_after,
+        outcome_count,
+        environment,
+        candidate_scratch,
+    )
+}
+
+/// Apply settlement initialization directly to one complete non-authoritative bank.
+///
+/// This avoids retaining a second 14KiB register bank at hostile widths while
+/// preserving Trading's authority boundary: the workspace remains candidate
+/// data until its whole-bank digest is acknowledged and accepted by Hot.
+pub fn project_general_initialize_candidate_in_place_v3(
+    cursor_after: &[u8],
+    outcome_count: u32,
+    environment: GeneralHotEnvironmentV3,
+    candidate_scratch: &mut [u8],
+) -> Result<()> {
+    if candidate_scratch.len() != general_hot_candidate_bank_len_v3(outcome_count)? {
+        return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
+    }
     apply_general_initialize_candidate_v3(
         cursor_after,
         outcome_count,
@@ -932,6 +972,30 @@ pub fn project_general_hot_candidate_scratch_v3(
         return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
     }
     source.copy_complete_bank_v3(candidate_scratch)?;
+    apply_general_hot_candidate_v3(
+        effect_plan,
+        cursor_after,
+        outcome_count,
+        environment,
+        candidate_scratch,
+    )
+}
+
+/// Apply one collect/materialize/distribute/close plan directly to a complete bank.
+///
+/// The buffer is an accelerator-owned scratch candidate, never persisted
+/// state. Semantic refusal may leave scratch bytes changed, but no partial
+/// bank can become authoritative because no acknowledgement is emitted.
+pub fn project_general_hot_candidate_in_place_v3(
+    effect_plan: &[u8],
+    cursor_after: &[u8],
+    outcome_count: u32,
+    environment: GeneralHotEnvironmentV3,
+    candidate_scratch: &mut [u8],
+) -> Result<()> {
+    if candidate_scratch.len() != general_hot_candidate_bank_len_v3(outcome_count)? {
+        return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
+    }
     apply_general_hot_candidate_v3(
         effect_plan,
         cursor_after,
@@ -1847,6 +1911,16 @@ mod tests {
             )
             .expect("complete candidate");
             assert!(matches!(accepted, ExecutionCandidateV2::Accepted(_)));
+            let mut in_place = input.clone();
+            project_general_hot_candidate_in_place_v3(
+                &materialize_plan(outcome_count),
+                &materialize_cursor(outcome_count),
+                outcome_count,
+                environment,
+                &mut in_place,
+            )
+            .expect("one-workspace candidate");
+            assert_eq!(in_place, output);
             assert_eq!(read_scalar(&output, scalar::CLAIMS_ADMIT_ACTIVE), Ok(0));
             assert_eq!(read_scalar(&output, scalar::CLAIMS_POSITION_COUNT), Ok(1));
             assert_eq!(
@@ -1913,6 +1987,15 @@ mod tests {
                 ),
                 Ok(ExecutionCandidateV2::Accepted(_))
             ));
+            let mut in_place = input.clone();
+            project_general_initialize_candidate_in_place_v3(
+                &initialized_cursor(outcome_count),
+                outcome_count,
+                environment,
+                &mut in_place,
+            )
+            .expect("one-workspace initialize candidate");
+            assert_eq!(in_place, output);
             assert_eq!(
                 read_scalar(&output, scalar::CURSOR_RESULTING_REVISION),
                 Ok(1)
