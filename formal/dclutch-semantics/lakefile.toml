@@ -72,3 +72,7 @@ root = "EmitSourceResolutionStateV2AbiRust"
 [[lean_exe]]
 name = "emit-source-resolution-terminal-v2-abi-rust"
 root = "EmitSourceResolutionTerminalV2AbiRust"
+
+[[lean_exe]]
+name = "emit-request-profile-abi-rust"
+root = "EmitRequestProfileAbiRust"

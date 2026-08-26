@@ -12,34 +12,40 @@
 
 use core::convert::TryInto;
 
-/// Canonical RequestProfile magic.
-pub const MAGIC: [u8; 8] = *b"DCLTRP01";
-/// Finalized-record schema label for RequestProfile programs.
-pub const SCHEMA_RELEASE_PREIMAGE: &[u8] = b"dclutch/schema/request-profile-v1";
-/// SHA-256 of [`SCHEMA_RELEASE_PREIMAGE`].
-pub const SCHEMA_RELEASE_ID: [u8; 32] = [
-    0xaa, 0x02, 0x96, 0xe0, 0xcf, 0xf2, 0x18, 0x8d, 0x7e, 0x8e, 0x0f, 0xfe, 0x7e, 0x9f, 0xad, 0x92,
-    0xb2, 0x25, 0x3f, 0x74, 0x44, 0xa6, 0x93, 0x6c, 0x40, 0x04, 0x1d, 0x14, 0xd5, 0xca, 0x1c, 0x6c,
-];
-/// Canonical RequestProfile schema version.
-pub const VERSION: u16 = 1;
-/// Canonical RequestProfile artifact profile.
-pub const ARTIFACT_PROFILE: u16 = 1;
-/// Exact header width.
-pub const HEADER_BYTES: usize = 32;
-/// Exact operation width.
-pub const OPERATION_BYTES: usize = 24;
+#[rustfmt::skip]
+#[allow(missing_docs)]
+mod generated;
 
-const OP_REQUIRE_U8: u8 = 0;
-const OP_REQUIRE_U16: u8 = 1;
-const OP_REQUIRE_U32: u8 = 2;
-const OP_REQUIRE_U64: u8 = 3;
-const OP_REQUIRE_ZERO_RANGE: u8 = 4;
-const OP_PROJECT_U8: u8 = 5;
-const OP_PROJECT_U16: u8 = 6;
-const OP_PROJECT_U32: u8 = 7;
-const OP_PROJECT_U64: u8 = 8;
-const OP_PROJECT_IDENTITY: u8 = 9;
+pub use generated::{
+    REQUEST_PROFILE_ARTIFACT_PROFILE_V1 as ARTIFACT_PROFILE,
+    REQUEST_PROFILE_HEADER_BYTES_V1 as HEADER_BYTES, REQUEST_PROFILE_MAGIC_V1 as MAGIC,
+    REQUEST_PROFILE_MAX_BYTES_V1 as MAX_BYTES,
+    REQUEST_PROFILE_OPERATION_BYTES_V1 as OPERATION_BYTES,
+    REQUEST_PROFILE_SCHEMA_RELEASE_ID_V1 as SCHEMA_RELEASE_ID,
+    REQUEST_PROFILE_SCHEMA_RELEASE_PREIMAGE_V1 as SCHEMA_RELEASE_PREIMAGE,
+    REQUEST_PROFILE_SCHEMA_VERSION_V1 as VERSION,
+};
+
+use generated::{
+    OP_PROJECT_IDENTITY, OP_PROJECT_U8, OP_PROJECT_U16, OP_PROJECT_U32, OP_PROJECT_U64,
+    OP_REQUIRE_U8, OP_REQUIRE_U16, OP_REQUIRE_U32, OP_REQUIRE_U64, OP_REQUIRE_ZERO_RANGE,
+    REQUEST_OPERATION_IMMEDIATE_OFFSET, REQUEST_OPERATION_OPCODE_OFFSET,
+    REQUEST_OPERATION_REGISTER_OFFSET, REQUEST_OPERATION_REGISTER_SPACE_OFFSET,
+    REQUEST_OPERATION_REQUEST_OFFSET_OFFSET, REQUEST_OPERATION_REQUEST_SPACE_OFFSET,
+    REQUEST_OPERATION_RESERVED_BYTE_OFFSET, REQUEST_OPERATION_RESERVED_OFFSET,
+    REQUEST_OPERATION_RESERVED_SHORT_OFFSET, REQUEST_PROFILE_ARTIFACT_OFFSET,
+    REQUEST_PROFILE_COMMON_IDENTITIES_OFFSET, REQUEST_PROFILE_COMMON_SCALARS_OFFSET,
+    REQUEST_PROFILE_FIXED_OPERATIONS_OFFSET, REQUEST_PROFILE_FIXED_REQUEST_BYTES_OFFSET,
+    REQUEST_PROFILE_ITEM_IDENTITY_STRIDE_OFFSET, REQUEST_PROFILE_ITEM_OPERATIONS_OFFSET,
+    REQUEST_PROFILE_ITEM_REQUEST_BYTES_OFFSET, REQUEST_PROFILE_ITEM_SCALAR_STRIDE_OFFSET,
+    REQUEST_PROFILE_MAGIC_OFFSET, REQUEST_PROFILE_VERSION_OFFSET,
+};
+
+#[cfg(test)]
+use generated::{
+    AGREEMENT_PROFILE_V1, AGREEMENT_REQUEST_TAIL2_V1, OVERSIZED_PROFILE_V1,
+    PROFILE_REFUSAL_CORPUS_V1, REQUEST_REFUSAL_CORPUS_TAIL2_V1,
+};
 
 /// Stable hostile-decode or request-projection refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -123,24 +129,28 @@ impl<'a> RequestProfileV1<'a> {
 
     /// Hostile-decode and prevalidate one complete RequestProfile.
     pub fn decode(bytes: &'a [u8]) -> Result<Self> {
-        if bytes.len() < HEADER_BYTES {
+        if bytes.len() < HEADER_BYTES || bytes.len() > MAX_BYTES {
             return Err(Error::InvalidLength);
         }
-        if bytes.get(..8) != Some(MAGIC.as_slice()) {
+        if bytes.get(REQUEST_PROFILE_MAGIC_OFFSET..REQUEST_PROFILE_MAGIC_OFFSET + MAGIC.len())
+            != Some(MAGIC.as_slice())
+        {
             return Err(Error::InvalidMagic);
         }
-        if read_u16(bytes, 8)? != VERSION || read_u16(bytes, 10)? != ARTIFACT_PROFILE {
+        if read_u16(bytes, REQUEST_PROFILE_VERSION_OFFSET)? != VERSION
+            || read_u16(bytes, REQUEST_PROFILE_ARTIFACT_OFFSET)? != ARTIFACT_PROFILE
+        {
             return Err(Error::UnsupportedProfile);
         }
         let value = Self {
-            fixed_request_bytes: read_u32(bytes, 12)?,
-            item_request_bytes: read_u32(bytes, 16)?,
-            fixed_operations: read_u16(bytes, 20)?,
-            item_operations: read_u16(bytes, 22)?,
-            common_scalars: read_u16(bytes, 24)?,
-            item_scalar_stride: read_u16(bytes, 26)?,
-            common_identities: read_u16(bytes, 28)?,
-            item_identity_stride: read_u16(bytes, 30)?,
+            fixed_request_bytes: read_u32(bytes, REQUEST_PROFILE_FIXED_REQUEST_BYTES_OFFSET)?,
+            item_request_bytes: read_u32(bytes, REQUEST_PROFILE_ITEM_REQUEST_BYTES_OFFSET)?,
+            fixed_operations: read_u16(bytes, REQUEST_PROFILE_FIXED_OPERATIONS_OFFSET)?,
+            item_operations: read_u16(bytes, REQUEST_PROFILE_ITEM_OPERATIONS_OFFSET)?,
+            common_scalars: read_u16(bytes, REQUEST_PROFILE_COMMON_SCALARS_OFFSET)?,
+            item_scalar_stride: read_u16(bytes, REQUEST_PROFILE_ITEM_SCALAR_STRIDE_OFFSET)?,
+            common_identities: read_u16(bytes, REQUEST_PROFILE_COMMON_IDENTITIES_OFFSET)?,
+            item_identity_stride: read_u16(bytes, REQUEST_PROFILE_ITEM_IDENTITY_STRIDE_OFFSET)?,
             bytes,
         };
         if value.fixed_request_bytes == 0
@@ -302,23 +312,23 @@ struct Operation {
 
 impl Operation {
     fn decode(bytes: &[u8], offset: usize) -> Result<Self> {
-        let request_space = byte(bytes, add(offset, 1)?)?;
-        let register_space = byte(bytes, add(offset, 2)?)?;
+        let request_space = byte(bytes, add(offset, REQUEST_OPERATION_REQUEST_SPACE_OFFSET)?)?;
+        let register_space = byte(bytes, add(offset, REQUEST_OPERATION_REGISTER_SPACE_OFFSET)?)?;
         if request_space > 1
             || register_space > 1
-            || byte(bytes, add(offset, 3)?)? != 0
-            || read_u16(bytes, add(offset, 10)?)? != 0
-            || read_u32(bytes, add(offset, 20)?)? != 0
+            || byte(bytes, add(offset, REQUEST_OPERATION_RESERVED_BYTE_OFFSET)?)? != 0
+            || read_u16(bytes, add(offset, REQUEST_OPERATION_RESERVED_SHORT_OFFSET)?)? != 0
+            || read_u32(bytes, add(offset, REQUEST_OPERATION_RESERVED_OFFSET)?)? != 0
         {
             return Err(Error::NonCanonicalReserved);
         }
         Ok(Self {
-            opcode: byte(bytes, offset)?,
+            opcode: byte(bytes, add(offset, REQUEST_OPERATION_OPCODE_OFFSET)?)?,
             request_item: request_space == 1,
             register_item: register_space == 1,
-            request_offset: read_u32(bytes, add(offset, 4)?)?,
-            register: read_u16(bytes, add(offset, 8)?)?,
-            immediate: read_u64(bytes, add(offset, 12)?)?,
+            request_offset: read_u32(bytes, add(offset, REQUEST_OPERATION_REQUEST_OFFSET_OFFSET)?)?,
+            register: read_u16(bytes, add(offset, REQUEST_OPERATION_REGISTER_OFFSET)?)?,
+            immediate: read_u64(bytes, add(offset, REQUEST_OPERATION_IMMEDIATE_OFFSET)?)?,
         })
     }
 
@@ -646,76 +656,16 @@ fn read_u64(bytes: &[u8], offset: usize) -> Result<u64> {
 mod tests {
     extern crate std;
 
-    use std::vec;
     use std::vec::Vec;
 
     use super::*;
 
-    fn put(output: &mut [u8], offset: usize, value: &[u8]) {
-        let end = offset.checked_add(value.len()).expect("fixture width");
-        output
-            .get_mut(offset..end)
-            .expect("fixture slice")
-            .copy_from_slice(value);
-    }
-
-    fn operation(
-        opcode: u8,
-        item: bool,
-        register_item: bool,
-        request_offset: u32,
-        register: u16,
-        immediate: u64,
-    ) -> [u8; OPERATION_BYTES] {
-        let mut output = [0_u8; OPERATION_BYTES];
-        *output.get_mut(0).expect("opcode") = opcode;
-        *output.get_mut(1).expect("request space") = u8::from(item);
-        *output.get_mut(2).expect("register space") = u8::from(register_item);
-        put(&mut output, 4, &request_offset.to_le_bytes());
-        put(&mut output, 8, &register.to_le_bytes());
-        put(&mut output, 12, &immediate.to_le_bytes());
-        output
-    }
-
     fn canonical() -> Vec<u8> {
-        let magic = u64::from_le_bytes(*b"DCLTRQ01");
-        let operations = [
-            operation(OP_REQUIRE_U64, false, false, 0, 0, magic),
-            operation(OP_REQUIRE_U8, false, false, 8, 0, 2),
-            operation(OP_REQUIRE_ZERO_RANGE, false, false, 9, 0, 7),
-            operation(OP_PROJECT_U64, true, true, 0, 0, 0),
-            operation(OP_PROJECT_IDENTITY, true, true, 8, 0, 0),
-        ];
-        let mut output = vec![0_u8; HEADER_BYTES + operations.len() * OPERATION_BYTES];
-        put(&mut output, 0, &MAGIC);
-        for (offset, value) in [
-            (8, VERSION),
-            (10, ARTIFACT_PROFILE),
-            (20, 3),
-            (22, 2),
-            (24, 1),
-            (26, 1),
-            (30, 1),
-        ] {
-            put(&mut output, offset, &value.to_le_bytes());
-        }
-        put(&mut output, 12, &16_u32.to_le_bytes());
-        put(&mut output, 16, &40_u32.to_le_bytes());
-        for (index, value) in operations.iter().enumerate() {
-            put(&mut output, HEADER_BYTES + index * OPERATION_BYTES, value);
-        }
-        output
+        AGREEMENT_PROFILE_V1.to_vec()
     }
 
     fn request() -> [u8; 96] {
-        let mut output = [0_u8; 96];
-        put(&mut output, 0, b"DCLTRQ01");
-        *output.get_mut(8).expect("action") = 2;
-        put(&mut output, 16, &3_u64.to_le_bytes());
-        put(&mut output, 24, &[0x31; 32]);
-        put(&mut output, 56, &4_u64.to_le_bytes());
-        put(&mut output, 64, &[0x41; 32]);
-        output
+        AGREEMENT_REQUEST_TAIL2_V1
     }
 
     #[test]
@@ -797,15 +747,56 @@ mod tests {
 
     #[test]
     fn hostile_program_and_content_selection_refuse() {
-        let canonical = canonical();
-        for offset in [0, 8, HEADER_BYTES + 3, HEADER_BYTES + 20] {
-            let mut hostile = canonical.clone();
-            *hostile.get_mut(offset).expect("hostile byte") ^= 1;
-            assert!(RequestProfileV1::decode(&hostile).is_err());
+        for hostile in &PROFILE_REFUSAL_CORPUS_V1 {
+            assert!(RequestProfileV1::decode(hostile).is_err());
         }
+        let canonical = canonical();
         assert_eq!(
             RequestProfileV1::decode_selected([1; 32], [2; 32], &canonical),
             Err(Error::ProgramIdentityMismatch)
+        );
+    }
+
+    #[test]
+    fn generated_request_refusals_preserve_outputs() {
+        let bytes = canonical();
+        let profile = RequestProfileV1::decode(&bytes).expect("profile");
+        for request in &REQUEST_REFUSAL_CORPUS_TAIL2_V1 {
+            let input_scalars = [9_u64; 3];
+            let input_identities = [[9_u8; 32]; 2];
+            let mut scratch_scalars = [0_u64; 3];
+            let mut scratch_identities = [[0_u8; 32]; 2];
+            let mut output_scalars = [8_u64; 3];
+            let mut output_identities = [[8_u8; 32]; 2];
+            let before_scalars = output_scalars;
+            let before_identities = output_identities;
+            assert!(
+                project_atomic(
+                    profile,
+                    2,
+                    request,
+                    ProjectionRegistersV1 {
+                        input_scalars: &input_scalars,
+                        input_identities: &input_identities,
+                        scratch_scalars: &mut scratch_scalars,
+                        scratch_identities: &mut scratch_identities,
+                        output_scalars: &mut output_scalars,
+                        output_identities: &mut output_identities,
+                    },
+                )
+                .is_err()
+            );
+            assert_eq!(output_scalars, before_scalars);
+            assert_eq!(output_identities, before_identities);
+        }
+    }
+
+    #[test]
+    fn finalized_record_cap_refuses_internally_consistent_oversized_profile() {
+        assert_eq!(OVERSIZED_PROFILE_V1.len(), 1328);
+        assert_eq!(
+            RequestProfileV1::decode(&OVERSIZED_PROFILE_V1),
+            Err(Error::InvalidLength)
         );
     }
 
@@ -814,7 +805,7 @@ mod tests {
         let mut bytes = canonical();
         let first_item_operation = HEADER_BYTES + 3 * OPERATION_BYTES;
         *bytes
-            .get_mut(first_item_operation + 2)
+            .get_mut(first_item_operation + REQUEST_OPERATION_REGISTER_SPACE_OFFSET)
             .expect("register-space byte") = 0;
         assert_eq!(
             RequestProfileV1::decode(&bytes),

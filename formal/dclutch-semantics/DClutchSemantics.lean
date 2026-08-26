@@ -44,6 +44,7 @@ import DClutchSemantics.SeriesExamples
 import DClutchSemantics.MarketCore
 import DClutchSemantics.MarketCoreExamples
 import DClutchSemantics.CapabilityProgramV3Abi
+import DClutchSemantics.RequestProfileAbi
 
 /-!
 Fresh Lean-owned semantics for dClutch's compact protocol specializer.
