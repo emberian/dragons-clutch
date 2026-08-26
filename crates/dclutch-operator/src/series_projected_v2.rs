@@ -289,33 +289,40 @@ fn pack_profile13_accounts(
     let physical_count = profile
         .physical_account_count_with_dynamic_spans(0, &spans)
         .map_err(|_| SeriesProjectedOperatorErrorV2::AccountGeometry)?;
+    let mut observations: Vec<Option<SeriesProjectedLogicalAccountV2>> = vec![None; physical_count];
+    for (logical, account) in logical_accounts.iter().copied().enumerate() {
+        let ordinal = profile
+            .physical_account_ordinal_with_dynamic_spans(0, &spans, logical)
+            .map_err(|_| SeriesProjectedOperatorErrorV2::AccountGeometry)?;
+        let observed = observations
+            .get_mut(ordinal)
+            .ok_or(SeriesProjectedOperatorErrorV2::AccountGeometry)?;
+        if observed.is_some_and(|representative| {
+            representative.key != account.key || representative.data_len != account.data_len
+        }) {
+            return Err(SeriesProjectedOperatorErrorV2::AliasSubstitution);
+        }
+        *observed = Some(account);
+    }
     let mut accounts = Vec::with_capacity(physical_count);
     let mut physical_ordinal = 0_usize;
     while physical_ordinal < physical_count {
         let geometry = profile
             .physical_account_geometry_with_dynamic_spans(0, &spans, physical_ordinal)
             .map_err(|_| SeriesProjectedOperatorErrorV2::AccountGeometry)?;
-        let representative = *logical_accounts
-            .get(geometry.logical_representative())
+        let representative = observations
+            .get(physical_ordinal)
+            .copied()
+            .flatten()
             .ok_or(SeriesProjectedOperatorErrorV2::AccountGeometry)?;
-        require_data_geometry(geometry.data(), representative.data_len)?;
-        let mut logical = 0_usize;
-        while logical < logical_count {
-            let ordinal = profile
-                .physical_account_ordinal_with_dynamic_spans(0, &spans, logical)
-                .map_err(|_| SeriesProjectedOperatorErrorV2::AccountGeometry)?;
-            if ordinal == physical_ordinal {
-                let alias = logical_accounts
-                    .get(logical)
-                    .ok_or(SeriesProjectedOperatorErrorV2::AccountGeometry)?;
-                if alias.key != representative.key || alias.data_len != representative.data_len {
-                    return Err(SeriesProjectedOperatorErrorV2::AliasSubstitution);
-                }
-            }
-            logical = logical
-                .checked_add(1)
-                .ok_or(SeriesProjectedOperatorErrorV2::AccountGeometry)?;
+        if logical_accounts
+            .get(geometry.logical_representative())
+            .copied()
+            != Some(representative)
+        {
+            return Err(SeriesProjectedOperatorErrorV2::AccountGeometry);
         }
+        require_data_geometry(geometry.data(), representative.data_len)?;
         let privileges = geometry.privileges();
         accounts.push(if privileges.writable() {
             AccountMeta::new(representative.key, privileges.signer())
@@ -654,7 +661,7 @@ mod tests {
         );
 
         let mut wrong_data = logical;
-        wrong_data[0].data_len = wrong_data[0].data_len.saturating_add(1);
+        wrong_data[1].data_len = wrong_data[1].data_len.saturating_add(1);
         assert_eq!(
             pack_profile13_accounts(profile, FUNDING_COUNT, &wrong_data),
             Err(SeriesProjectedOperatorErrorV2::AccountData)
