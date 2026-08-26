@@ -8,7 +8,7 @@
 
 use core::convert::TryFrom;
 
-use super::{ProjectionRegistersV1, RequestProfileV1, project_atomic};
+use super::{ProjectionRegistersV1, ProjectionTargetV1, RequestProfileV1, project_atomic};
 
 /// RequestProfile V2 magic.
 pub const REQUEST_PROFILE_V2_MAGIC: [u8; 8] = *b"DCLTRP02";
@@ -294,6 +294,13 @@ impl<'a> RequestProfileV2<'a> {
     /// Borrow the complete canonical V2 content preimage.
     pub const fn bytes(self) -> &'a [u8] {
         self.bytes
+    }
+
+    /// Whether the embedded V1 projector writes `target`.
+    pub fn writes_register(self, target: ProjectionTargetV1) -> Result<bool> {
+        self.request
+            .writes_register(target)
+            .map_err(|_| Error::InvalidEmbeddedProfile)
     }
 
     /// Delegate exact request validation and projection to the embedded V1 owner.

@@ -176,6 +176,35 @@ pub enum TrustedEnvironmentV2 {
     },
 }
 
+/// Scalar or identity register kind inspected for profile write authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProjectionRegisterKindV2 {
+    /// Scalar register bank.
+    Scalar,
+    /// Identity register bank.
+    Identity,
+}
+
+/// Common or current-item register space inspected for write authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProjectionRegisterSpaceV2 {
+    /// Common register prefix.
+    Common,
+    /// Current Product-item stride.
+    Item,
+}
+
+/// One typed logical register destination.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProjectionTargetV2 {
+    /// Scalar or identity bank.
+    pub kind: ProjectionRegisterKindV2,
+    /// Common or item-relative register space.
+    pub space: ProjectionRegisterSpaceV2,
+    /// Local register coordinate.
+    pub index: u16,
+}
+
 impl TrustedEnvironmentV2 {
     /// Current-slot destination, when selected.
     pub const fn current_slot_destination(self) -> Option<u16> {
@@ -429,6 +458,39 @@ impl<'a> AccountProfileV2<'a> {
     /// Common scalar that the outer must seed from its trusted current slot.
     pub const fn trusted_current_slot_scalar(self) -> Option<u16> {
         self.trusted_environment.current_slot_destination()
+    }
+
+    /// Whether any account projection or trusted-environment seed writes `target`.
+    ///
+    /// This is a static artifact inspection. It does not execute projections or
+    /// infer physical aliases.
+    pub fn writes_register(self, target: ProjectionTargetV2) -> Result<bool> {
+        if target.kind == ProjectionRegisterKindV2::Scalar
+            && target.space == ProjectionRegisterSpaceV2::Common
+            && self.trusted_current_slot_scalar() == Some(target.index)
+        {
+            return Ok(true);
+        }
+        let expected = (
+            target.kind == ProjectionRegisterKindV2::Identity,
+            target.space == ProjectionRegisterSpaceV2::Item,
+            target.index,
+        );
+        let mut fixed = 0_u16;
+        while fixed < self.fixed_operations {
+            if self.operation(false, fixed)?.projection_target()? == Some(expected) {
+                return Ok(true);
+            }
+            fixed = fixed.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        let mut item = 0_u16;
+        while item < self.item_operations {
+            if self.operation(true, item)?.projection_target()? == Some(expected) {
+                return Ok(true);
+            }
+            item = item.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        Ok(false)
     }
 
     /// Borrow complete canonical profile bytes.

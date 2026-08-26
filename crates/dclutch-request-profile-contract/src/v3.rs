@@ -6,7 +6,7 @@
 //! executor must additionally prove that exactly one selected child route
 //! borrows the complete suffix. This contract never interprets child payloads.
 
-use super::{ProjectionRegistersV1, RequestProfileV1, project_atomic};
+use super::{ProjectionRegistersV1, ProjectionTargetV1, RequestProfileV1, project_atomic};
 
 /// RequestProfile V3 magic.
 pub const REQUEST_PROFILE_V3_MAGIC: [u8; 8] = *b"DCLTRP03";
@@ -196,6 +196,13 @@ impl<'a> RequestProfileV3<'a> {
     /// Borrow the complete finalized content preimage.
     pub const fn bytes(self) -> &'a [u8] {
         self.bytes
+    }
+
+    /// Whether the embedded V1 prefix projector writes `target`.
+    pub fn writes_register(self, target: ProjectionTargetV1) -> Result<bool> {
+        self.request
+            .writes_register(target)
+            .map_err(|_| Error::InvalidEmbeddedProfile)
     }
 
     /// Split one complete request into the profiled prefix and opaque witness.

@@ -183,6 +183,19 @@ impl<'a> ProgramV3<'a> {
         self.bytes
     }
 
+    /// Whether any transition instruction writes `target`.
+    pub fn writes_register(self, target: RegisterWriteTargetV3) -> Result<bool> {
+        let mut index = 0_usize;
+        let count = self.operation_count()?;
+        while index < count {
+            if self.instruction(index)?.write_target()? == Some(target) {
+                return Ok(true);
+            }
+            index = index.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        Ok(false)
+    }
+
     fn operation_count(self) -> Result<usize> {
         usize::from(self.prelude_ops)
             .checked_add(usize::from(self.item_ops))
@@ -227,6 +240,26 @@ pub enum RegisterSpaceV3 {
     Common,
     /// One register in the current runtime-item stride.
     Item,
+}
+
+/// Scalar or identity transition write bank.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RegisterKindV3 {
+    /// Scalar register bank.
+    Scalar,
+    /// Identity register bank.
+    Identity,
+}
+
+/// One typed logical transition destination.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RegisterWriteTargetV3 {
+    /// Scalar or identity bank.
+    pub kind: RegisterKindV3,
+    /// Common or current-item register space.
+    pub space: RegisterSpaceV3,
+    /// Local register coordinate.
+    pub index: u16,
 }
 
 /// One typed scalar-register operand.
@@ -868,6 +901,29 @@ impl Instruction {
         }
     }
 
+    fn write_target(self) -> Result<Option<RegisterWriteTargetV3>> {
+        let (kind, slot) = match self.opcode {
+            OP_LOAD_CONST => (RegisterKindV3::Scalar, 0),
+            OP_INCREMENT_INTO | OP_COPY_SCALAR => (RegisterKindV3::Scalar, 1),
+            OP_MUL_DIV_EXACT | OP_MUL_DIV_FLOOR | OP_SELECT_EQ => (RegisterKindV3::Scalar, 3),
+            OP_SUB_INTO | OP_SELECT_ZERO | OP_CHECKED_ADD_INTO | OP_CHECKED_MUL_INTO
+            | OP_MIN_INTO | OP_MAX_INTO => (RegisterKindV3::Scalar, 2),
+            OP_COPY_IDENTITY => (RegisterKindV3::Identity, 1),
+            OP_SCALAR_EQ | OP_IDENTITY_EQ | OP_IDENTITY_NE | OP_SCALAR_LT | OP_SCALAR_LE
+            | OP_NONZERO | OP_LIFECYCLE_ACCEPTS | OP_ADD_LE | OP_ADD_FITS_U64 => return Ok(None),
+            _ => return Err(Error::UnknownOpcode),
+        };
+        Ok(Some(RegisterWriteTargetV3 {
+            kind,
+            space: if self.space(slot)? {
+                RegisterSpaceV3::Item
+            } else {
+                RegisterSpaceV3::Common
+            },
+            index: self.operand(slot)?,
+        }))
+    }
+
     fn space(self, slot: usize) -> Result<bool> {
         let shift = u32::try_from(slot).map_err(|_| Error::InvalidRegister)?;
         Ok((self.spaces & 1_u8.checked_shl(shift).ok_or(Error::InvalidRegister)?) != 0)
@@ -1252,6 +1308,30 @@ mod tests {
         )
         .expect("typed program");
         let program = ProgramV3::decode(&output).expect("round trip");
+        assert_eq!(
+            program.writes_register(RegisterWriteTargetV3 {
+                kind: RegisterKindV3::Scalar,
+                space: RegisterSpaceV3::Common,
+                index: 0,
+            }),
+            Ok(true)
+        );
+        assert_eq!(
+            program.writes_register(RegisterWriteTargetV3 {
+                kind: RegisterKindV3::Scalar,
+                space: RegisterSpaceV3::Common,
+                index: 1,
+            }),
+            Ok(false)
+        );
+        assert_eq!(
+            program.writes_register(RegisterWriteTargetV3 {
+                kind: RegisterKindV3::Identity,
+                space: RegisterSpaceV3::Common,
+                index: 0,
+            }),
+            Ok(false)
+        );
         let mut scalar_scratch = [0_u64; 2];
         let mut scalar_output = [99_u64; 2];
         execute_fold_atomic(

@@ -993,6 +993,30 @@ mod tests {
             TrustedEnvironmentV2::CurrentSlot { destination: 1 }
         );
         assert_eq!(profile.trusted_current_slot_scalar(), Some(1));
+        assert_eq!(
+            profile.writes_register(crate::v2::ProjectionTargetV2 {
+                kind: crate::v2::ProjectionRegisterKindV2::Scalar,
+                space: crate::v2::ProjectionRegisterSpaceV2::Common,
+                index: 0,
+            }),
+            Ok(true)
+        );
+        assert_eq!(
+            profile.writes_register(crate::v2::ProjectionTargetV2 {
+                kind: crate::v2::ProjectionRegisterKindV2::Scalar,
+                space: crate::v2::ProjectionRegisterSpaceV2::Common,
+                index: 1,
+            }),
+            Ok(true)
+        );
+        assert_eq!(
+            profile.writes_register(crate::v2::ProjectionTargetV2 {
+                kind: crate::v2::ProjectionRegisterKindV2::Identity,
+                space: crate::v2::ProjectionRegisterSpaceV2::Common,
+                index: 0,
+            }),
+            Ok(false)
+        );
 
         let data = [0x55, 0x34, 0x12, 0xaa];
         let accounts = [AccountObservationV1::new(

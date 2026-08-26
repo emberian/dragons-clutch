@@ -104,6 +104,35 @@ pub struct ProjectionRegistersV1<'a> {
     pub output_identities: &'a mut [[u8; 32]],
 }
 
+/// Scalar or identity request-projection destination bank.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProjectionRegisterKindV1 {
+    /// Scalar register bank.
+    Scalar,
+    /// Identity register bank.
+    Identity,
+}
+
+/// Common or current-item request-projection destination space.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProjectionRegisterSpaceV1 {
+    /// Common register prefix.
+    Common,
+    /// Current Product-item stride.
+    Item,
+}
+
+/// One typed logical request-projection destination.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProjectionTargetV1 {
+    /// Scalar or identity bank.
+    pub kind: ProjectionRegisterKindV1,
+    /// Common or item-relative register space.
+    pub space: ProjectionRegisterSpaceV1,
+    /// Local register coordinate.
+    pub index: u16,
+}
+
 /// Borrowed hostile-decoded RequestProfile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RequestProfileV1<'a> {
@@ -259,6 +288,30 @@ impl<'a> RequestProfileV1<'a> {
     /// Borrow exact canonical program bytes.
     pub const fn bytes(self) -> &'a [u8] {
         self.bytes
+    }
+
+    /// Whether any request projection writes `target`.
+    pub fn writes_register(self, target: ProjectionTargetV1) -> Result<bool> {
+        let expected = (
+            target.kind == ProjectionRegisterKindV1::Identity,
+            target.space == ProjectionRegisterSpaceV1::Item,
+            target.index,
+        );
+        let mut fixed = 0_u16;
+        while fixed < self.fixed_operations {
+            if self.operation(false, fixed)?.projection_target() == Some(expected) {
+                return Ok(true);
+            }
+            fixed = fixed.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        let mut item = 0_u16;
+        while item < self.item_operations {
+            if self.operation(true, item)?.projection_target() == Some(expected) {
+                return Ok(true);
+            }
+            item = item.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        Ok(false)
     }
 
     fn operation(self, item_body: bool, index: u16) -> Result<Operation> {
@@ -679,6 +732,30 @@ mod tests {
     fn fixed_and_product_tail_fields_project_atomically() {
         let bytes = canonical();
         let profile = RequestProfileV1::decode(&bytes).expect("profile");
+        assert_eq!(
+            profile.writes_register(ProjectionTargetV1 {
+                kind: ProjectionRegisterKindV1::Scalar,
+                space: ProjectionRegisterSpaceV1::Item,
+                index: 0,
+            }),
+            Ok(true)
+        );
+        assert_eq!(
+            profile.writes_register(ProjectionTargetV1 {
+                kind: ProjectionRegisterKindV1::Identity,
+                space: ProjectionRegisterSpaceV1::Item,
+                index: 0,
+            }),
+            Ok(true)
+        );
+        assert_eq!(
+            profile.writes_register(ProjectionTargetV1 {
+                kind: ProjectionRegisterKindV1::Scalar,
+                space: ProjectionRegisterSpaceV1::Common,
+                index: 0,
+            }),
+            Ok(false)
+        );
         let request = request();
         let input_scalars = [9_u64; 3];
         let input_identities = [[9_u8; 32]; 2];
