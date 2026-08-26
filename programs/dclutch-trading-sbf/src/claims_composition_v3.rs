@@ -202,9 +202,9 @@ fn invocation_request<'a>(
     }
 }
 
-fn invocation_accounts<'accounts, 'info>(
+fn invocation_accounts<'info>(
     invocation: ResolvedInvocationV3,
-    accounts: &'accounts [AccountInfo<'info>],
+    accounts: &[AccountInfo<'info>],
 ) -> Result<Vec<AccountInfo<'info>>, ProgramError> {
     let mut output = Vec::new();
     let fixed_start = usize::from(invocation.fixed_account_start);
