@@ -59,9 +59,46 @@ gates. It is not release evidence.
 
 | Lane | Scope | State |
 |---|---|---|
-| S1 stabilize | whole-tree git surgery + workspace convergence | launched |
-| L3 frontend | `apps/dclutch-web` only | launched |
+| W1 open-market | bootstrap successor + generic founding campaign | active |
+| W2 hot-fast-path | `hot_v3.rs` + registry fast path + 1.4M gate | active |
 
-Lane protocol: named-file staging only; inspect the complete staged path list
-before every commit (AGENTS.md); never `git add -A`; never `git stash`; report
-incoherent WIP rather than deleting or "fixing" it.
+Lane protocol: **commit with `git commit --only -- <paths>` exclusively** —
+staged-list inspection alone has a proven race (two collisions on 2026-08-26);
+never `git add -A`; never `git stash`; report incoherent WIP rather than
+deleting or "fixing" it. Unfiltered `-p <crate>` test suites are forbidden.
+
+## Cycle-1 log
+
+- S1 + L3 complete (2026-08-26). Root workspace gate fully clean; web suite
+  171 passed; `/markets` route exists; Wallet Standard discovery landed
+  (Talisman ships Solana wallet-standard support since v3.0.0). The
+  contaminated commit was re-split at LINGER₁: the gen-2 deletion sweep is now
+  its own commit ("sbf: delete superseded bearer and structured authority
+  paths", −16,662 lines). The `series_v2` seam fix revealed 54 Series unit
+  tests that had never compiled; they pass.
+- Stashes: `stash@{0}`/`stash@{1}` touch `hot_v3.rs` (W2 inventories them;
+  `{1}` is substantive dynamic-span WIP); `stash@{2}` is source-contract WIP,
+  unowned.
+
+## Queue (next linger points)
+
+- **LINGER₂ Sonnet batch** (one batched Opus reviewer behind it): fold all
+  satellite workspaces into the root workspace (no dependency skew exists —
+  every lock pins solana-program 3.0.0); delete the two empty skeleton dirs
+  (`crates/dclutch-series-v2-kernel`, `programs/dclutch-effect-proof-sbf` —
+  owner check first); un-gitignore `programs/dclutch-series-sbf/Cargo.lock`;
+  clear the 30-warning `dealer_chain` fixture debt.
+- **Frontend ABI convergence** (small Opus): `302ad80` made the Registry
+  continuation headerless and deleted `DIRECT_NATIVE_EVIDENCE_REGISTRY_BIAS_V3`;
+  the web generator + checked-in `lib/generated/directInlineV3.ts` are stale
+  against the protocol. Also the two pre-existing verify failures
+  (`abi:found` marker, `abi:rational-terminal-v3` ENOENT) and converging
+  `productV2.decodeCapability` onto `lib/capabilityManifest.ts`.
+- **Cycle-2 General charter item**: general-sbf's activation handler
+  (`c1cdc82`-era) needs the missing contract-side counterpart — the
+  `GENERAL_ROOT_PDA_DOMAIN_V2` preimage is a protocol fact its owner must mint.
+- **Cycle-3 pull-forwards** (from L3): `/markets/:market` detail before the
+  wizard; portfolio via direct Position-PDA derivation (`[POSITION_SEED,
+  market, owner]` — no indexer needed); wizard = compose `/product-v2` →
+  `/found` carrying compiled Product identity. The missing market *indexer*
+  remains the one honest discovery gap.
