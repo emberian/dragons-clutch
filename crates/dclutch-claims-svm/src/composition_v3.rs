@@ -81,7 +81,7 @@ pub struct ClaimsCompositionV3<'a> {
     affine: Option<AffineBatchPlanV2<'a>>,
     signed_delta: Option<SignedDeltaPlanV3<'a>>,
     sparse_native_transfer: Option<SparseNativeTransferV1>,
-    founding: Option<ClaimsFoundingRequestV5>,
+    founding: Option<&'a [u8]>,
     close: Option<ProtocolPositionRequestV2>,
     admit_route: Option<u16>,
     mutation_route: u16,
@@ -243,20 +243,8 @@ impl<'a> ClaimsCompositionV3<'a> {
                     mutation_route = Some(route_index);
                     state = CompositionStateV3::Affined;
                 } else if request.get(..8) == Some(CLAIMS_FOUNDING_REQUEST_MAGIC_V5.as_slice()) {
-                    if route.kind() != RouteKindV3::Once || state != CompositionStateV3::Start {
-                        return Err(ClaimsCompositionErrorV3::Order);
-                    }
-                    let decoded = ClaimsFoundingRequestV5::decode(request)
-                        .map_err(|_| ClaimsCompositionErrorV3::Route)?;
-                    require_founding_parent(decoded, parent)?;
-                    if invocation.fixed_account_count != CLAIMS_FOUNDING_FIXED_ACCOUNT_COUNT_V5
-                        || invocation.item_account_count != 0
-                        || invocation.repeated_item_count != 0
-                        || invocation.borrowed_witness.is_some()
-                    {
-                        return Err(ClaimsCompositionErrorV3::Route);
-                    }
-                    founding = Some(decoded);
+                    validate_founding_route(route.kind(), state, invocation, request, parent)?;
+                    founding = Some(request);
                     mutation_route = Some(route_index);
                     state = CompositionStateV3::Affined;
                 } else {
@@ -320,8 +308,9 @@ impl<'a> ClaimsCompositionV3<'a> {
     }
 
     /// Sole canonical permit-authorized founding mutation, when selected.
-    pub const fn founding(self) -> Option<ClaimsFoundingRequestV5> {
+    pub fn founding(self) -> Option<ClaimsFoundingRequestV5> {
         self.founding
+            .and_then(|request| ClaimsFoundingRequestV5::decode(request).ok())
     }
 
     /// Optional canonical zero-Position close request.
@@ -457,6 +446,30 @@ fn require_founding_parent(
     } else {
         Ok(())
     }
+}
+
+#[inline(never)]
+fn validate_founding_route(
+    kind: RouteKindV3,
+    state: CompositionStateV3,
+    invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
+    request: &[u8],
+    parent: ClaimsCompositionParentV3,
+) -> Result<(), ClaimsCompositionErrorV3> {
+    if kind != RouteKindV3::Once || state != CompositionStateV3::Start {
+        return Err(ClaimsCompositionErrorV3::Order);
+    }
+    let decoded =
+        ClaimsFoundingRequestV5::decode(request).map_err(|_| ClaimsCompositionErrorV3::Route)?;
+    require_founding_parent(decoded, parent)?;
+    if invocation.fixed_account_count != CLAIMS_FOUNDING_FIXED_ACCOUNT_COUNT_V5
+        || invocation.item_account_count != 0
+        || invocation.repeated_item_count != 0
+        || invocation.borrowed_witness.is_some()
+    {
+        return Err(ClaimsCompositionErrorV3::Route);
+    }
+    Ok(())
 }
 
 fn require_admission_join(
