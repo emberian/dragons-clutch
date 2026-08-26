@@ -7,9 +7,15 @@ rust-version.workspace = true
 description = "Fixed-layout codecs for Lean-owned compiled Direct data"
 
 [dependencies]
+dclutch-account-profile-contract = { path = "../dclutch-account-profile-contract" }
+dclutch-capability-program-contract = { path = "../dclutch-capability-program-contract" }
+dclutch-effect-kernel = { path = "../dclutch-effect-kernel" }
+dclutch-request-profile-contract = { path = "../dclutch-request-profile-contract" }
+dclutch-transition-vm = { path = "../dclutch-transition-vm" }
+sha2 = { version = "=0.10.9", default-features = false }
 
 [dev-dependencies]
-dclutch-transition-vm = { path = "../dclutch-transition-vm" }
+dclutch-core-contract = { path = "../dclutch-core-contract" }
 
 [lints]
 workspace = true
