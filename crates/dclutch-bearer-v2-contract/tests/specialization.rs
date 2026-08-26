@@ -530,7 +530,7 @@ fn same_width_recipe_graph_digest_and_root_substitutions_refuse() {
 }
 
 #[test]
-fn terminal_winner_replay_release_and_asset_substitutions_refuse() {
+fn terminal_resolution_replay_release_and_asset_substitutions_are_exact() {
     let graph_bytes = basis_graph_fixture(id(20), id(14));
     let descriptor_bytes = descriptor_fixture(id(20), id(21), id(14), [0, 10, 0]);
     let projection_bytes = projection_fixture(9);
@@ -543,10 +543,20 @@ fn terminal_winner_replay_release_and_asset_substitutions_refuse() {
     )
     .expect("terminal request");
 
+    for winner in 0..WIDTH {
+        prepare(
+            bearer,
+            terminal,
+            projection,
+            identity(id(41)),
+            BearerResolutionV2::Resolved { winner },
+        )
+        .expect("resolved winning or losing Bearer claim");
+    }
     for hostile in [
         BearerResolutionV2::Unresolved,
-        BearerResolutionV2::Resolved { winner: 0 },
-        BearerResolutionV2::Resolved { winner: 2 },
+        BearerResolutionV2::Resolved { winner: WIDTH },
+        BearerResolutionV2::Resolved { winner: u32::MAX },
     ] {
         assert_eq!(
             prepare(bearer, terminal, projection, identity(id(41)), hostile),

@@ -71,9 +71,10 @@ pub struct BearerAssetIdentityV2 {
 pub enum BearerResolutionV2 {
     /// No final winning Product outcome was supplied.
     Unresolved,
-    /// Claims authenticated this final winning Product outcome.
+    /// Claims authenticated this final Product outcome.
     Resolved {
-        /// Final winning outcome.
+        /// Final winning outcome. It need not be the Bearer coordinate: a
+        /// losing claim redeems with exact zero payout.
         winner: u32,
     },
 }
@@ -91,7 +92,7 @@ pub enum Error {
     UnsupportedAction,
     /// The request selected another outcome or physical asset identity.
     AssetMismatch,
-    /// Terminal redemption lacked the exact selected winning outcome.
+    /// Terminal redemption was unresolved or named an outcome outside the Product domain.
     TerminalMismatch,
     /// The shared Rational Representation contract refused the physical request.
     Representation(RepresentationError),
@@ -257,13 +258,14 @@ pub fn prepare<'a>(
     }
     let asset = request.asset(0).map_err(Error::Representation)?;
     authenticate_asset(asset, asset_identity, bearer.denominator())?;
-    if header.action == RepresentationActionV2::RedeemTerminal
-        && resolution
-            != (BearerResolutionV2::Resolved {
-                winner: bearer.selected_outcome,
-            })
-    {
-        return Err(Error::TerminalMismatch);
+    if header.action == RepresentationActionV2::RedeemTerminal {
+        match resolution {
+            BearerResolutionV2::Resolved { winner }
+                if winner < bearer.descriptor.outcome_count() => {}
+            BearerResolutionV2::Unresolved | BearerResolutionV2::Resolved { .. } => {
+                return Err(Error::TerminalMismatch);
+            }
+        }
     }
     prepare_representation(request, bearer.descriptor, projection, bearer.graph)
         .map_err(Error::Representation)
