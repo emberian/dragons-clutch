@@ -156,7 +156,7 @@ pub fn evaluate_dealer_scenario_admitted_v4(
     .map_err(|_| DealerScenarioAdmittedErrorV4::Semantics)?;
     project_dealer_scenario_hot_registers_v4(
         request,
-        plan,
+        &plan,
         chain.candidate_obligation,
         custody_effects,
         chain.trading_program,

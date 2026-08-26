@@ -879,7 +879,7 @@ const fn scenario_u32_fields() -> [(DealerCustodyScalarFieldV3, usize); 2] {
 #[allow(clippy::too_many_arguments)]
 pub fn project_dealer_scenario_hot_registers_v4(
     request: DealerScenarioTradeRequestV3<'_>,
-    plan: ScenarioAtomicPlanV3,
+    plan: &ScenarioAtomicPlanV3,
     candidate_obligation: DealerObligationProjectionV3<'_>,
     custody_effects: &[Option<ScenarioCustodyEffectV3>; MAX_DEALER_SCENARIO_CUSTODY_EFFECTS_V3],
     trading_program: [u8; 32],
@@ -892,6 +892,65 @@ pub fn project_dealer_scenario_hot_registers_v4(
     let expected_scalars = usize::from(DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4)
         .checked_add(width)
         .ok_or(DealerScenarioArtifactsErrorV4::Arithmetic)?;
+    validate_scenario_projection_header_v4(
+        request,
+        plan,
+        candidate_obligation,
+        trading_program,
+        trusted_current_slot,
+        expected_scalars,
+        scalars,
+        identities,
+    )?;
+    let parent_digest = hash(request.bytes()).to_bytes();
+    let active_count =
+        validate_scenario_custody_bank_v4(custody_effects, plan.custody_count, parent_digest)?;
+    validate_scenario_custody_amounts_v4(
+        request,
+        plan,
+        custody_effects,
+        active_count,
+        parent_digest,
+    )?;
+
+    let mut staged_scalars = vec![0_u64; expected_scalars];
+    let mut staged_identities =
+        vec![[0_u8; 32]; usize::from(DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4)];
+    seed_scenario_projection_header_v4(
+        request,
+        plan,
+        trading_program,
+        trusted_current_slot,
+        parent_digest,
+        &mut staged_scalars,
+        &mut staged_identities,
+    )?;
+    project_scenario_custody_bank_v4(
+        custody_effects,
+        active_count,
+        parent_digest,
+        trading_program,
+        &mut staged_scalars,
+        &mut staged_identities,
+    )?;
+    project_scenario_obligations_v4(candidate_obligation, &mut staged_scalars)?;
+    scalars.copy_from_slice(&staged_scalars);
+    identities.copy_from_slice(&staged_identities);
+    Ok(())
+}
+
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn validate_scenario_projection_header_v4(
+    request: DealerScenarioTradeRequestV3<'_>,
+    plan: &ScenarioAtomicPlanV3,
+    candidate_obligation: DealerObligationProjectionV3<'_>,
+    trading_program: [u8; 32],
+    trusted_current_slot: u64,
+    expected_scalars: usize,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+) -> Result<(), DealerScenarioArtifactsErrorV4> {
     if scalars.len() != expected_scalars
         || identities.len() != usize::from(DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4)
         || trading_program == [0; 32]
@@ -921,7 +980,16 @@ pub fn project_dealer_scenario_hot_registers_v4(
     {
         return Err(DealerScenarioArtifactsErrorV4::Projection);
     }
-    let active_count = usize::from(plan.custody_count);
+    Ok(())
+}
+
+#[inline(never)]
+fn validate_scenario_custody_bank_v4(
+    custody_effects: &[Option<ScenarioCustodyEffectV3>; MAX_DEALER_SCENARIO_CUSTODY_EFFECTS_V3],
+    custody_count: u8,
+    parent_digest: [u8; 32],
+) -> Result<usize, DealerScenarioArtifactsErrorV4> {
+    let active_count = usize::from(custody_count);
     if active_count > custody_effects.len()
         || custody_effects
             .iter()
@@ -930,42 +998,42 @@ pub fn project_dealer_scenario_hot_registers_v4(
     {
         return Err(DealerScenarioArtifactsErrorV4::Projection);
     }
-    let parent_digest = hash(request.bytes()).to_bytes();
-    let mut by_slot = [None; DEALER_SCENARIO_CUSTODY_ROUTE_COUNT_V4];
-    for effect in custody_effects.iter().take(active_count).copied() {
+    for (index, effect) in custody_effects
+        .iter()
+        .take(active_count)
+        .copied()
+        .enumerate()
+    {
         let effect = effect.ok_or(DealerScenarioArtifactsErrorV4::Projection)?;
         let slot = classify_scenario_custody(effect.request)
             .ok_or(DealerScenarioArtifactsErrorV4::Projection)?;
         if effect.request.custody().semantic.parent_request_digest != parent_digest
-            || by_slot
-                .get_mut(slot)
+            || custody_effects
+                .get(..index)
                 .ok_or(DealerScenarioArtifactsErrorV4::Projection)?
-                .replace(effect)
-                .is_some()
+                .iter()
+                .copied()
+                .flatten()
+                .any(|prior| classify_scenario_custody(prior.request) == Some(slot))
         {
             return Err(DealerScenarioArtifactsErrorV4::Projection);
         }
     }
-    let incoming = request.direction == ScenarioTradeDirectionV3::CounterpartyPaysDealer;
-    let outgoing = request.direction == ScenarioTradeDirectionV3::DealerPaysCounterparty;
-    let expected_amounts = [
-        if incoming { request.principal } else { 0 },
-        if incoming { request.realized_fee } else { 0 },
-        if outgoing { request.realized_fee } else { 0 },
-        plan.scenario.minimum_complete_sets_to_split,
-        plan.scenario.maximum_complete_sets_to_merge,
-        if outgoing {
-            request
-                .principal
-                .checked_sub(request.realized_fee)
-                .ok_or(DealerScenarioArtifactsErrorV4::Projection)?
-        } else {
-            0
-        },
-    ];
+    Ok(active_count)
+}
+
+#[inline(never)]
+fn validate_scenario_custody_amounts_v4(
+    request: DealerScenarioTradeRequestV3<'_>,
+    plan: &ScenarioAtomicPlanV3,
+    custody_effects: &[Option<ScenarioCustodyEffectV3>; MAX_DEALER_SCENARIO_CUSTODY_EFFECTS_V3],
+    active_count: usize,
+    parent_digest: [u8; 32],
+) -> Result<(), DealerScenarioArtifactsErrorV4> {
     let mut observed_count = 0_usize;
-    for (slot, expected_amount) in expected_amounts.iter().copied().enumerate() {
-        match by_slot.get(slot).copied().flatten() {
+    for slot in 0..DEALER_SCENARIO_CUSTODY_ROUTE_COUNT_V4 {
+        let expected_amount = scenario_expected_custody_amount_v4(request, plan, slot)?;
+        match find_scenario_custody_effect_v4(custody_effects, active_count, parent_digest, slot)? {
             Some(effect)
                 if expected_amount != 0 && effect.request.custody().amount == expected_amount =>
             {
@@ -980,43 +1048,52 @@ pub fn project_dealer_scenario_hot_registers_v4(
     if observed_count != active_count {
         return Err(DealerScenarioArtifactsErrorV4::Projection);
     }
+    Ok(())
+}
 
-    let mut staged_scalars = vec![0_u64; expected_scalars];
-    let mut staged_identities =
-        vec![[0_u8; 32]; usize::from(DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4)];
+#[inline(never)]
+fn seed_scenario_projection_header_v4(
+    request: DealerScenarioTradeRequestV3<'_>,
+    plan: &ScenarioAtomicPlanV3,
+    trading_program: [u8; 32],
+    trusted_current_slot: u64,
+    parent_digest: [u8; 32],
+    staged_scalars: &mut [u64],
+    staged_identities: &mut [[u8; 32]],
+) -> Result<(), DealerScenarioArtifactsErrorV4> {
     set_scenario_scalar(
-        &mut staged_scalars,
+        staged_scalars,
         DEALER_SCENARIO_POSITION_COUNT_SCALAR_V4,
         u64::from(request.claims_position_count),
     )?;
     set_scenario_scalar(
-        &mut staged_scalars,
+        staged_scalars,
         DEALER_SCENARIO_WITNESS_BYTES_SCALAR_V4,
         u64::from(request.claims_packet_bytes),
     )?;
     set_scenario_scalar(
-        &mut staged_scalars,
+        staged_scalars,
         DEALER_SCENARIO_WITNESS_OFFSET_SCALAR_V4,
         u64::try_from(DEALER_SCENARIO_TRADE_HEADER_BYTES_V3)
             .map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic)?,
     )?;
     set_scenario_scalar(
-        &mut staged_scalars,
+        staged_scalars,
         DEALER_SCENARIO_CURRENT_SLOT_SCALAR_V4,
         trusted_current_slot,
     )?;
     set_scenario_scalar(
-        &mut staged_scalars,
+        staged_scalars,
         DEALER_SCENARIO_EXPIRY_SCALAR_V4,
         request.expires_at,
     )?;
     set_scenario_scalar(
-        &mut staged_scalars,
+        staged_scalars,
         DEALER_SCENARIO_MAX_POSITION_COUNT_SCALAR_V4,
         2,
     )?;
     set_scenario_scalar(
-        &mut staged_scalars,
+        staged_scalars,
         DEALER_SCENARIO_OBLIGATION_REVISION_SCALAR_V4,
         plan.obligation_revision_after,
     )?;
@@ -1024,32 +1101,56 @@ pub fn project_dealer_scenario_hot_registers_v4(
         .get_mut(0)
         .ok_or(DealerScenarioArtifactsErrorV4::Projection)? = parent_digest;
     set_scenario_identity(
-        &mut staged_identities,
+        staged_identities,
         DEALER_SCENARIO_CURRENT_TRADING_IDENTITY_V4,
         trading_program,
     )?;
     set_scenario_identity(
-        &mut staged_identities,
+        staged_identities,
         DEALER_SCENARIO_OBLIGATION_IDENTITY_V4,
         request.obligation,
     )?;
-    for (slot, effect) in by_slot.iter().copied().enumerate() {
-        let Some(effect) = effect else { continue };
+    Ok(())
+}
+
+#[inline(never)]
+fn project_scenario_custody_bank_v4(
+    custody_effects: &[Option<ScenarioCustodyEffectV3>; MAX_DEALER_SCENARIO_CUSTODY_EFFECTS_V3],
+    active_count: usize,
+    parent_digest: [u8; 32],
+    trading_program: [u8; 32],
+    staged_scalars: &mut [u64],
+    staged_identities: &mut [[u8; 32]],
+) -> Result<(), DealerScenarioArtifactsErrorV4> {
+    for slot in 0..DEALER_SCENARIO_CUSTODY_ROUTE_COUNT_V4 {
+        let Some(effect) =
+            find_scenario_custody_effect_v4(custody_effects, active_count, parent_digest, slot)?
+        else {
+            continue;
+        };
         if effect.request.custody().caller_program != trading_program {
             return Err(DealerScenarioArtifactsErrorV4::Projection);
         }
         set_scenario_scalar(
-            &mut staged_scalars,
+            staged_scalars,
             scenario_route_span_scalar(slot)?,
             u64::from(DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3),
         )?;
         project_scenario_custody_request(
             u16::try_from(slot).map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic)?,
             effect.request,
-            &mut staged_scalars,
-            &mut staged_identities,
+            staged_scalars,
+            staged_identities,
         )?;
     }
+    Ok(())
+}
+
+#[inline(never)]
+fn project_scenario_obligations_v4(
+    candidate_obligation: DealerObligationProjectionV3<'_>,
+    staged_scalars: &mut [u64],
+) -> Result<(), DealerScenarioArtifactsErrorV4> {
     for (index, obligation) in candidate_obligation.obligations().enumerate() {
         let destination = usize::from(DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4)
             .checked_add(index)
@@ -1058,9 +1159,53 @@ pub fn project_dealer_scenario_hot_registers_v4(
             .get_mut(destination)
             .ok_or(DealerScenarioArtifactsErrorV4::Projection)? = obligation;
     }
-    scalars.copy_from_slice(&staged_scalars);
-    identities.copy_from_slice(&staged_identities);
     Ok(())
+}
+
+fn find_scenario_custody_effect_v4(
+    custody_effects: &[Option<ScenarioCustodyEffectV3>; MAX_DEALER_SCENARIO_CUSTODY_EFFECTS_V3],
+    active_count: usize,
+    parent_digest: [u8; 32],
+    slot: usize,
+) -> Result<Option<ScenarioCustodyEffectV3>, DealerScenarioArtifactsErrorV4> {
+    let mut found = None;
+    for effect in custody_effects.iter().take(active_count).copied() {
+        let effect = effect.ok_or(DealerScenarioArtifactsErrorV4::Projection)?;
+        if classify_scenario_custody(effect.request) == Some(slot)
+            && (effect.request.custody().semantic.parent_request_digest != parent_digest
+                || found.replace(effect).is_some())
+        {
+            return Err(DealerScenarioArtifactsErrorV4::Projection);
+        }
+    }
+    Ok(found)
+}
+
+fn scenario_expected_custody_amount_v4(
+    request: DealerScenarioTradeRequestV3<'_>,
+    plan: &ScenarioAtomicPlanV3,
+    slot: usize,
+) -> Result<u64, DealerScenarioArtifactsErrorV4> {
+    let incoming = request.direction == ScenarioTradeDirectionV3::CounterpartyPaysDealer;
+    let outgoing = request.direction == ScenarioTradeDirectionV3::DealerPaysCounterparty;
+    match slot {
+        0 => Ok(if incoming { request.principal } else { 0 }),
+        1 => Ok(if incoming { request.realized_fee } else { 0 }),
+        2 => Ok(if outgoing { request.realized_fee } else { 0 }),
+        3 => Ok(plan.scenario.minimum_complete_sets_to_split),
+        4 => Ok(plan.scenario.maximum_complete_sets_to_merge),
+        5 => {
+            if outgoing {
+                request
+                    .principal
+                    .checked_sub(request.realized_fee)
+                    .ok_or(DealerScenarioArtifactsErrorV4::Projection)
+            } else {
+                Ok(0)
+            }
+        }
+        _ => Err(DealerScenarioArtifactsErrorV4::Projection),
+    }
 }
 
 fn project_scenario_custody_request(
