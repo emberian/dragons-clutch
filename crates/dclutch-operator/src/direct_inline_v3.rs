@@ -6,6 +6,7 @@
 //! RPC, signs maker material, signs a transaction, or submits one.
 
 use crate::{
+    foundation::{authenticate_finalized_record, decode_rent, FinalizedRecordProof},
     product_graph_observation_v3::{
         authenticate_product_graph_observation_v3, AuthenticatedProductGraphObservationV3,
         FinalizedProductGraphAccountsV3,
@@ -13,20 +14,36 @@ use crate::{
     Finality, Observation, ObservedAccount,
 };
 use dclutch_account_profile_contract::v2::AccountPrestateV2;
+use dclutch_capability_contract::{CapabilityManifestV1, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1};
 use dclutch_capability_program_contract::{
     hot_v3::{
-        HotExecutionEnvelopeV3, HOT_CONFIG_RAW_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3,
-        HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
-        HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3, HOT_PORTFOLIO_RAW_ACCOUNT_V3,
-        HOT_PRODUCT_RAW_ACCOUNT_V3, HOT_REGISTRY_PROGRAM_ACCOUNT_V3, HOT_RENT_SYSVAR_ACCOUNT_V3,
-        HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3,
-        HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
+        HotExecutionEnvelopeV3, HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
+        HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3,
+        HOT_CONFIG_STAGING_ACCOUNT_V3, HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
+        HOT_DESCRIPTOR_STAGING_ACCOUNT_V3, HOT_EFFECT_RAW_ACCOUNT_V3,
+        HOT_EFFECT_STAGING_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
+        HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3, HOT_LIFECYCLE_RAW_ACCOUNT_V3,
+        HOT_LIFECYCLE_STAGING_ACCOUNT_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
+        HOT_MANIFEST_RAW_ACCOUNT_V3, HOT_MANIFEST_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3,
+        HOT_PORTFOLIO_RAW_ACCOUNT_V3, HOT_PRODUCT_RAW_ACCOUNT_V3, HOT_PROGRAM_SET_RAW_ACCOUNT_V3,
+        HOT_PROGRAM_SET_STAGING_ACCOUNT_V3, HOT_REGISTRY_PROGRAM_ACCOUNT_V3,
+        HOT_RENT_SYSVAR_ACCOUNT_V3, HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3,
+        HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3, HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3,
+        HOT_ROOT_ACCOUNT_V3, HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3, HOT_STRATEGY_RAW_ACCOUNT_V3,
+        HOT_STRATEGY_STAGING_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
+        HOT_TRANSITION_RAW_ACCOUNT_V3, HOT_TRANSITION_STAGING_ACCOUNT_V3,
     },
-    v4::SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
+    set_v2::{CapabilityProgramSetV2, CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2},
+    v4::{
+        ArtifactReferenceV4, CapabilityProgramV4,
+        SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
+    },
+    CapabilityRootHeaderV1, CAPABILITY_ROOT_HEADER_BYTES_V1,
 };
 use dclutch_direct_codec::{
     artifacts_v4::{
-        authenticate_direct_artifacts_v4, DirectArtifactBytesV4, DirectArtifactSelectionV4,
+        authenticate_direct_artifacts_v4, DirectArtifactBundleV4, DirectArtifactBytesV4,
+        DirectArtifactSelectionV4,
     },
     execution_v3::{
         encode_header_v3, DirectExecutionActionV3, DirectExecutionRequestV3,
@@ -34,6 +51,7 @@ use dclutch_direct_codec::{
     },
     intent_v2::{CompactIntentV2, COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2},
 };
+use dclutch_release_set_contract::ExecutionRoleV1;
 use solana_address_lookup_table_interface::{
     program as lookup_table_program, state::AddressLookupTable,
 };
@@ -285,11 +303,13 @@ pub fn compile_direct_inline_request_v3(
 }
 
 /// Build one complete chain-derived Direct inline batch without signing or submitting.
+///
+/// Artifact selection and bytes are derived exclusively from the finalized
+/// accounts in `state`; callers cannot supply a parallel descriptor/config
+/// selection or detached artifact bodies.
 #[allow(clippy::too_many_arguments)]
-pub fn build_direct_inline_hot_v3(
+pub fn build_direct_inline_hot_v4(
     state: &DirectInlineHotStateV3,
-    artifact_selection: DirectArtifactSelectionV4,
-    artifact_bytes: DirectArtifactBytesV4<'_>,
     seller: SignedDirectIntentV3,
     buyer: SignedDirectIntentV3,
     fill: u64,
@@ -305,13 +325,7 @@ pub fn build_direct_inline_hot_v3(
     let observation = validate_frame(state, checked)?;
     let product = authenticate_product_graph(state)?;
     let request = compile_direct_inline_request_v3(seller, buyer, fill, execution_price)?;
-    let bundle = authenticate_direct_artifacts_v4(
-        artifact_selection,
-        artifact_bytes,
-        &request,
-        product.outcome_count,
-    )
-    .map_err(|_| Error::ArtifactMismatch)?;
+    let bundle = authenticate_chain_artifacts_v4(state, &request, product.outcome_count)?;
     if bundle.action != DirectExecutionActionV3::InlineOrdinary
         || !bundle.request_profile.requires_native_signature()
     {
@@ -381,7 +395,12 @@ pub fn build_direct_inline_hot_v3(
         hot_instruction_data,
         observation,
         selected_program_schema: CAPABILITY_PROGRAM_SCHEMA_ID_V4,
-        selected_program: hash(artifact_bytes.descriptor).to_bytes(),
+        selected_program: hash(
+            &fixed_account(state, HOT_DESCRIPTOR_RAW_ACCOUNT_V3)?
+                .account
+                .data,
+        )
+        .to_bytes(),
         outcome_count: product.outcome_count,
         product_record: product.product_record,
         trading_artifact_release: checked.artifact_release,
@@ -389,6 +408,232 @@ pub fn build_direct_inline_hot_v3(
         required_instruction_signers,
         preview,
     })
+}
+
+fn authenticate_chain_artifacts_v4<'a>(
+    state: &'a DirectInlineHotStateV3,
+    request: &'a [u8],
+    outcome_count: u32,
+) -> Result<DirectArtifactBundleV4<'a>, Error> {
+    let registry = fixed_account(state, HOT_REGISTRY_PROGRAM_ACCOUNT_V3)?
+        .account
+        .key;
+    let rent = decode_rent(&fixed_account(state, HOT_RENT_SYSVAR_ACCOUNT_V3)?.account)
+        .map_err(|_| Error::ArtifactMismatch)?;
+    let root = &fixed_account(state, HOT_ROOT_ACCOUNT_V3)?.account;
+    let header = CapabilityRootHeaderV1::decode(
+        root.data
+            .get(..CAPABILITY_ROOT_HEADER_BYTES_V1)
+            .ok_or(Error::ArtifactMismatch)?,
+    )
+    .map_err(|_| Error::ArtifactMismatch)?;
+    let trading = fixed_account(state, HOT_TRADING_PROGRAM_ACCOUNT_V3)?
+        .account
+        .key;
+    let market = fixed_account(state, HOT_MARKET_ACCOUNT_V3)?.account.key;
+    let seeds = header.seeds();
+    if root.owner != trading
+        || root.executable
+        || header.release_set().to_bytes() != state.release_set
+        || header.market() != market.to_bytes()
+        || header.generation() != state.generation
+        || header.selection().executor_role() != ExecutionRoleV1::Trading
+        || Pubkey::find_program_address(&seeds.as_slices(), &trading).0 != root.key
+    {
+        return Err(Error::ArtifactMismatch);
+    }
+    let selection = header.selection();
+    let manifest_data = finalized_record(
+        state,
+        registry,
+        &rent,
+        HOT_MANIFEST_RAW_ACCOUNT_V3,
+        HOT_MANIFEST_STAGING_ACCOUNT_V3,
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        selection.manifest().to_bytes(),
+    )?;
+    let manifest =
+        CapabilityManifestV1::decode(manifest_data).map_err(|_| Error::ArtifactMismatch)?;
+    let entry = manifest
+        .entry(selection.entry_index())
+        .map_err(|_| Error::ArtifactMismatch)?;
+
+    let program_set_data = finalized_record(
+        state,
+        registry,
+        &rent,
+        HOT_PROGRAM_SET_RAW_ACCOUNT_V3,
+        HOT_PROGRAM_SET_STAGING_ACCOUNT_V3,
+        CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+        selection.capability_release().to_bytes(),
+    )?;
+    let program_set = CapabilityProgramSetV2::decode_selected(
+        selection.capability_release().to_bytes(),
+        hash(program_set_data).to_bytes(),
+        program_set_data,
+    )
+    .map_err(|_| Error::ArtifactMismatch)?;
+    let descriptor_reference = program_set
+        .select_descriptor(request)
+        .map_err(|_| Error::ArtifactMismatch)?;
+    if descriptor_reference.schema().to_bytes() != CAPABILITY_PROGRAM_SCHEMA_ID_V4 {
+        return Err(Error::ArtifactMismatch);
+    }
+    let descriptor_data = finalized_record(
+        state,
+        registry,
+        &rent,
+        HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
+        HOT_DESCRIPTOR_STAGING_ACCOUNT_V3,
+        CAPABILITY_PROGRAM_SCHEMA_ID_V4,
+        descriptor_reference.program().to_bytes(),
+    )?;
+    let descriptor =
+        CapabilityProgramV4::decode(descriptor_data).map_err(|_| Error::ArtifactMismatch)?;
+    descriptor
+        .validate_selection(selection, entry)
+        .map_err(|_| Error::ArtifactMismatch)?;
+    let expected_root_bytes = CAPABILITY_ROOT_HEADER_BYTES_V1
+        .checked_add(usize::try_from(descriptor.root_state_bytes()).map_err(|_| Error::Arithmetic)?)
+        .ok_or(Error::Arithmetic)?;
+    if root.data.len() != expected_root_bytes {
+        return Err(Error::ArtifactMismatch);
+    }
+
+    let config = finalized_record(
+        state,
+        registry,
+        &rent,
+        HOT_CONFIG_RAW_ACCOUNT_V3,
+        HOT_CONFIG_STAGING_ACCOUNT_V3,
+        descriptor.config_schema().to_bytes(),
+        selection.config().to_bytes(),
+    )?;
+    let account_profile = finalized_artifact(
+        state,
+        registry,
+        &rent,
+        HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
+        HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
+        descriptor.account_profile(),
+    )?;
+    let request_profile = finalized_artifact(
+        state,
+        registry,
+        &rent,
+        HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3,
+        HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3,
+        descriptor.request_profile(),
+    )?;
+    let transition = finalized_artifact(
+        state,
+        registry,
+        &rent,
+        HOT_TRANSITION_RAW_ACCOUNT_V3,
+        HOT_TRANSITION_STAGING_ACCOUNT_V3,
+        descriptor.transition(),
+    )?;
+    let effect = finalized_artifact(
+        state,
+        registry,
+        &rent,
+        HOT_EFFECT_RAW_ACCOUNT_V3,
+        HOT_EFFECT_STAGING_ACCOUNT_V3,
+        descriptor.effect(),
+    )?;
+    let lifecycle_policy = finalized_artifact(
+        state,
+        registry,
+        &rent,
+        HOT_LIFECYCLE_RAW_ACCOUNT_V3,
+        HOT_LIFECYCLE_STAGING_ACCOUNT_V3,
+        descriptor.lifecycle(),
+    )?;
+    let strategy = finalized_artifact(
+        state,
+        registry,
+        &rent,
+        HOT_STRATEGY_RAW_ACCOUNT_V3,
+        HOT_STRATEGY_STAGING_ACCOUNT_V3,
+        descriptor.strategy(),
+    )?;
+    authenticate_direct_artifacts_v4(
+        DirectArtifactSelectionV4 {
+            program_set: selection.capability_release().to_bytes(),
+            config: selection.config().to_bytes(),
+        },
+        DirectArtifactBytesV4 {
+            program_set: program_set_data,
+            descriptor: descriptor_data,
+            config,
+            account_profile,
+            lifecycle_policy,
+            request_profile,
+            strategy,
+            transition,
+            effect,
+        },
+        request,
+        outcome_count,
+    )
+    .map_err(|_| Error::ArtifactMismatch)
+}
+
+fn finalized_artifact<'a>(
+    state: &'a DirectInlineHotStateV3,
+    registry: Pubkey,
+    rent: &solana_program::rent::Rent,
+    raw_coordinate: usize,
+    staging_coordinate: usize,
+    reference: ArtifactReferenceV4,
+) -> Result<&'a [u8], Error> {
+    finalized_record(
+        state,
+        registry,
+        rent,
+        raw_coordinate,
+        staging_coordinate,
+        reference.schema().to_bytes(),
+        reference.program().to_bytes(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finalized_record<'a>(
+    state: &'a DirectInlineHotStateV3,
+    registry: Pubkey,
+    rent: &solana_program::rent::Rent,
+    raw_coordinate: usize,
+    staging_coordinate: usize,
+    schema: [u8; 32],
+    expected_content: [u8; 32],
+) -> Result<&'a [u8], Error> {
+    let raw = &fixed_account(state, raw_coordinate)?.account;
+    let staging = &fixed_account(state, staging_coordinate)?.account;
+    authenticate_finalized_record(
+        registry,
+        rent,
+        raw,
+        &FinalizedRecordProof {
+            schema_release_id: schema,
+            staging_cursor: staging.clone(),
+        },
+    )
+    .map_err(|_| Error::ArtifactMismatch)?;
+    if hash(&raw.data).to_bytes() != expected_content {
+        return Err(Error::ArtifactMismatch);
+    }
+    Ok(&raw.data)
+}
+
+fn fixed_account(
+    state: &DirectInlineHotStateV3,
+    coordinate: usize,
+) -> Result<&ObservedAccountMetaV3, Error> {
+    state
+        .fixed_accounts
+        .get(coordinate)
+        .ok_or(Error::FixedFrameMismatch)
 }
 
 /// Compile the exact adjacent pair through one canonical finalized LUT.
@@ -767,7 +1012,37 @@ mod tests {
     use std::borrow::Cow;
 
     use super::*;
+    use dclutch_capability_contract::{
+        ActivationPolicy, CapabilityEntryV1, CompartmentFundingV1, FundingAmountsV1,
+        FundingQuoteV1, CAPABILITY_ENTRY_BYTES, MANIFEST_HEADER_BYTES,
+        MAX_DEPENDENCIES_PER_CAPABILITY,
+    };
+    use dclutch_capability_program_contract::set_v2::{
+        encode_program_set_v2, encoded_program_set_bytes_v2, CapabilityDescriptorReferenceV2,
+        CapabilityProgramSetEntryV2, SelectorWidthV2,
+    };
+    use dclutch_custody_contract::CustodyReplayLayoutV1;
+    use dclutch_direct_codec::{
+        ordinary_account_artifacts_v3::DirectInlineOrdinaryAccountProfileInputV3,
+        ordinary_bundle_v4::{
+            build_direct_inline_ordinary_hot_bundle_v4, DirectInlineOrdinaryHotBundleInputV4,
+        },
+        ordinary_effect_artifacts_v3::DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3,
+        successor::{
+            DirectExecutionConfigV1, DirectRootStateV1, DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1,
+            DIRECT_MAKER_REPLAY_BYTES_V1, DIRECT_ROOT_SCHEMA_ID_V1,
+        },
+    };
+    use dclutch_product_runtime_v2::{
+        DOMAIN_CUT_BYTES, DOMAIN_HEADER_BYTES, PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_HEADER_BYTES,
+    };
+    use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
+    use dclutch_realm_contract::REALM_BYTES;
+    use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+    use dclutch_release_set_contract::CapabilityExecutionSelectionV1;
     use solana_address_lookup_table_interface::state::LookupTableMeta;
+    use solana_program::{account_info::AccountInfo, rent::Rent, sysvar::SysvarSerialize};
+    use solana_sdk_ids::system_program;
 
     fn key(value: u8) -> Pubkey {
         Pubkey::new_from_array([value; 32])
@@ -930,6 +1205,359 @@ mod tests {
         )
     }
 
+    fn ordinary_logical_lengths() -> Vec<u32> {
+        let mut output = vec![0_u32; usize::from(DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3)];
+        *output.get_mut(0).expect("root") = u32::try_from(
+            CAPABILITY_ROOT_HEADER_BYTES_V1
+                + dclutch_direct_codec::successor::DIRECT_ROOT_STATE_BYTES_V1,
+        )
+        .expect("root width");
+        *output.get_mut(1).expect("config") =
+            u32::try_from(dclutch_direct_codec::successor::DIRECT_EXECUTION_CONFIG_BYTES_V1)
+                .expect("config width");
+        *output.get_mut(2).expect("Product") =
+            u32::try_from(PRODUCT_RECORD_BYTES_V2).expect("Product width");
+        *output.get_mut(3).expect("portfolio") =
+            u32::try_from(PORTFOLIO_HEADER_BYTES + 3 * PORTFOLIO_COEFFICIENT_BYTES)
+                .expect("portfolio width");
+        *output.get_mut(4).expect("basis") = 24;
+        for coordinate in [5_usize, 8] {
+            *output.get_mut(coordinate).expect("maker") =
+                u32::try_from(DIRECT_MAKER_REPLAY_BYTES_V1).expect("maker width");
+        }
+        *output.get_mut(7).expect("seller RentCredit") = 64;
+        *output.get_mut(10).expect("buyer RentCredit") = 64;
+        *output.get_mut(13).expect("Claims aggregate") = 256 + 3 * 8;
+        *output.get_mut(14).expect("basis alias") = *output.get(4).expect("basis");
+        *output.get_mut(16).expect("Product alias") =
+            u32::try_from(PRODUCT_RECORD_BYTES_V2).expect("Product width");
+        *output.get_mut(18).expect("domain") =
+            u32::try_from(DOMAIN_HEADER_BYTES - DOMAIN_CUT_BYTES + 3 * DOMAIN_CUT_BYTES)
+                .expect("domain width");
+        *output.get_mut(20).expect("portfolio alias") = *output.get(3).expect("portfolio");
+        *output.get_mut(22).expect("Registry") = 17;
+        *output.get_mut(23).expect("Core") = 352;
+        *output.get_mut(24).expect("activation") = 128;
+        *output.get_mut(25).expect("Registry cache") = 36;
+        *output.get_mut(26).expect("Claims program") = 36;
+        *output.get_mut(27).expect("Claims ProgramData") = 1_024;
+        *output.get_mut(28).expect("source admission") = 36;
+        *output.get_mut(29).expect("source staging") = 1_024;
+        *output.get_mut(30).expect("destination admission") = 36;
+        *output.get_mut(31).expect("destination staging") = 1_024;
+        let position = 128 + 3 * 8;
+        *output.get_mut(32).expect("source Position") = position;
+        *output.get_mut(33).expect("destination Position") = position;
+        *output.get_mut(35).expect("Core alias") = *output.get(23).expect("Core");
+        *output.get_mut(36).expect("activation alias") = *output.get(24).expect("activation");
+        *output.get_mut(37).expect("Registry alias") = *output.get(25).expect("Registry");
+        *output.get_mut(38).expect("Claims alias") = *output.get(26).expect("Claims");
+        *output.get_mut(39).expect("ProgramData alias") = *output.get(27).expect("ProgramData");
+        *output.get_mut(40).expect("Realm") = u32::try_from(REALM_BYTES).expect("Realm width");
+        *output.get_mut(42).expect("Custody replay") =
+            u32::try_from(CustodyReplayLayoutV1::BYTES).expect("replay width");
+        *output.get_mut(43).expect("mint") = 82;
+        *output.get_mut(44).expect("buyer token") = 165;
+        *output.get_mut(45).expect("seller token") = 165;
+        *output.get_mut(47).expect("token program") = 36;
+        *output.get_mut(73).expect("fee token") = 165;
+        for (account, representative) in [
+            (49, 23),
+            (50, 24),
+            (51, 25),
+            (52, 26),
+            (53, 27),
+            (54, 40),
+            (55, 41),
+            (56, 42),
+            (57, 43),
+            (58, 44),
+            (59, 45),
+            (60, 46),
+            (61, 47),
+            (63, 23),
+            (64, 24),
+            (65, 25),
+            (66, 26),
+            (67, 27),
+            (68, 40),
+            (69, 41),
+            (70, 42),
+            (71, 43),
+            (72, 44),
+            (74, 46),
+            (75, 47),
+            (77, 23),
+            (78, 24),
+            (79, 25),
+            (80, 26),
+            (81, 27),
+            (82, 40),
+            (83, 41),
+            (84, 42),
+            (85, 43),
+            (86, 44),
+            (87, 73),
+            (88, 46),
+            (89, 47),
+        ] {
+            let value = *output.get(representative).expect("representative");
+            *output.get_mut(account).expect("route alias") = value;
+        }
+        output
+    }
+
+    fn put_rent(state: &mut DirectInlineHotStateV3, rent: &Rent) {
+        let rent_account = &mut state
+            .fixed_accounts
+            .get_mut(HOT_RENT_SYSVAR_ACCOUNT_V3)
+            .expect("Rent account")
+            .account;
+        rent_account.owner = sysvar::ID;
+        rent_account.data = vec![0_u8; Rent::size_of()];
+        let mut lamports = rent_account.lamports;
+        let mut info = AccountInfo::new(
+            &rent_account.key,
+            false,
+            false,
+            &mut lamports,
+            &mut rent_account.data,
+            &rent_account.owner,
+            false,
+        );
+        rent.to_account_info(&mut info).expect("serialize Rent");
+    }
+
+    fn put_finalized_record(
+        state: &mut DirectInlineHotStateV3,
+        rent: &Rent,
+        raw_coordinate: usize,
+        staging_coordinate: usize,
+        schema: [u8; 32],
+        data: Vec<u8>,
+    ) {
+        let registry = state
+            .fixed_accounts
+            .get(HOT_REGISTRY_PROGRAM_ACCOUNT_V3)
+            .expect("Registry")
+            .account
+            .key;
+        let digest = hash(&data).to_bytes();
+        let raw = Pubkey::find_program_address(
+            &[RAW_RECORD_PDA_SEED_V1, schema.as_slice(), digest.as_slice()],
+            &registry,
+        )
+        .0;
+        let staging = Pubkey::find_program_address(
+            &[
+                STAGING_CURSOR_PDA_SEED_V1,
+                schema.as_slice(),
+                digest.as_slice(),
+            ],
+            &registry,
+        )
+        .0;
+        let raw_account = &mut state
+            .fixed_accounts
+            .get_mut(raw_coordinate)
+            .expect("raw record")
+            .account;
+        raw_account.key = raw;
+        raw_account.owner = registry;
+        raw_account.lamports = rent.minimum_balance(data.len());
+        raw_account.executable = false;
+        raw_account.data = data;
+        let staging_account = &mut state
+            .fixed_accounts
+            .get_mut(staging_coordinate)
+            .expect("staging cursor")
+            .account;
+        staging_account.key = staging;
+        staging_account.owner = system_program::ID;
+        staging_account.lamports = 0;
+        staging_account.executable = false;
+        staging_account.data.clear();
+    }
+
+    fn core_id(bytes: [u8; 32]) -> dclutch_core_contract::ContentId {
+        dclutch_core_contract::ContentId::new(bytes).expect("nonzero core content ID")
+    }
+
+    fn capability_id(bytes: [u8; 32]) -> dclutch_capability_contract::ContentId {
+        dclutch_capability_contract::ContentId::new(bytes).expect("nonzero capability content ID")
+    }
+
+    fn chain_artifact_fixture() -> (DirectInlineHotStateV3, [u8; 456]) {
+        let (mut state, checked) = hot38_state();
+        let rent = Rent::default();
+        put_rent(&mut state, &rent);
+        let lengths = ordinary_logical_lengths();
+        let capacity_profile = [0x44; 32];
+        let bundle =
+            build_direct_inline_ordinary_hot_bundle_v4(DirectInlineOrdinaryHotBundleInputV4 {
+                account_profile: DirectInlineOrdinaryAccountProfileInputV3 {
+                    logical_data_lengths: &lengths,
+                },
+                capacity_profile,
+            })
+            .expect("ordinary artifact bundle");
+        let descriptor = CapabilityProgramV4::decode(&bundle.descriptor).expect("descriptor");
+        let config = DirectExecutionConfigV1::new(1_000_000, 25, [0x45; 32])
+            .expect("config")
+            .encode();
+        let config_digest = hash(&config).to_bytes();
+        let descriptor_digest = hash(&bundle.descriptor).to_bytes();
+        let set_entry = CapabilityProgramSetEntryV2::new(
+            DirectExecutionActionV3::InlineOrdinary as u32,
+            CapabilityDescriptorReferenceV2::new(
+                core_id(CAPABILITY_PROGRAM_SCHEMA_ID_V4),
+                core_id(descriptor_digest),
+            ),
+        );
+        let mut program_set =
+            vec![0_u8; encoded_program_set_bytes_v2(1).expect("ProgramSet width")];
+        encode_program_set_v2(12, SelectorWidthV2::U32, &[set_entry], &mut program_set)
+            .expect("ProgramSet");
+        let program_set_digest = hash(&program_set).to_bytes();
+        let amounts = FundingAmountsV1::new(
+            CompartmentFundingV1::native_lamports(1).expect("Rent funding"),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+        )
+        .expect("Funding amounts");
+        let entry = CapabilityEntryV1::new(
+            capability_id(dclutch_direct_codec::execution_v3::DIRECT_SUCCESSOR_KIND_ID_V3),
+            capability_id(program_set_digest),
+            capability_id(config_digest),
+            capability_id(capacity_profile),
+            capability_id(DIRECT_ROOT_SCHEMA_ID_V1),
+            capability_id(hash(&bundle.lifecycle_policy).to_bytes()),
+            ActivationPolicy::PrepaidLazy,
+            1_000,
+            0,
+            [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+            FundingQuoteV1::new(amounts, None).expect("Funding quote"),
+        )
+        .expect("manifest entry");
+        let mut manifest = vec![0_u8; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
+        CapabilityManifestV1::encode_into(&[entry], &mut manifest).expect("manifest");
+        let manifest_digest = hash(&manifest).to_bytes();
+        let selection = CapabilityExecutionSelectionV1::new(
+            0,
+            capability_id(manifest_digest),
+            capability_id(dclutch_direct_codec::execution_v3::DIRECT_SUCCESSOR_KIND_ID_V3),
+            capability_id(program_set_digest),
+            capability_id(config_digest),
+        )
+        .expect("selection");
+        let market = state
+            .fixed_accounts
+            .get(HOT_MARKET_ACCOUNT_V3)
+            .expect("Market")
+            .account
+            .key;
+        let release_set = [0x46; 32];
+        state.release_set = release_set;
+        state.generation = 9;
+        let header = CapabilityRootHeaderV1::new(
+            core_id(release_set),
+            market.to_bytes(),
+            state.generation,
+            selection,
+        )
+        .expect("root header");
+        let mut root_data = header.to_bytes().to_vec();
+        root_data.extend_from_slice(&DirectRootStateV1::new().encode());
+        let root_key =
+            Pubkey::find_program_address(&header.seeds().as_slices(), &checked.trading_program).0;
+        let root = &mut state
+            .fixed_accounts
+            .get_mut(HOT_ROOT_ACCOUNT_V3)
+            .expect("root")
+            .account;
+        root.key = root_key;
+        root.owner = checked.trading_program;
+        root.lamports = rent.minimum_balance(root_data.len());
+        root.data = root_data;
+        state
+            .runtime_accounts
+            .get_mut(0)
+            .expect("runtime root")
+            .account = root.clone();
+
+        for (raw, staging, schema, data) in [
+            (
+                HOT_MANIFEST_RAW_ACCOUNT_V3,
+                HOT_MANIFEST_STAGING_ACCOUNT_V3,
+                CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+                manifest,
+            ),
+            (
+                HOT_PROGRAM_SET_RAW_ACCOUNT_V3,
+                HOT_PROGRAM_SET_STAGING_ACCOUNT_V3,
+                CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+                program_set,
+            ),
+            (
+                HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
+                HOT_DESCRIPTOR_STAGING_ACCOUNT_V3,
+                CAPABILITY_PROGRAM_SCHEMA_ID_V4,
+                bundle.descriptor.to_vec(),
+            ),
+            (
+                HOT_CONFIG_RAW_ACCOUNT_V3,
+                HOT_CONFIG_STAGING_ACCOUNT_V3,
+                DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1,
+                config.to_vec(),
+            ),
+            (
+                HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
+                HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
+                descriptor.account_profile().schema().to_bytes(),
+                bundle.account_profile.to_vec(),
+            ),
+            (
+                HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3,
+                HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3,
+                descriptor.request_profile().schema().to_bytes(),
+                bundle.request_profile.to_vec(),
+            ),
+            (
+                HOT_TRANSITION_RAW_ACCOUNT_V3,
+                HOT_TRANSITION_STAGING_ACCOUNT_V3,
+                descriptor.transition().schema().to_bytes(),
+                bundle.transition.to_vec(),
+            ),
+            (
+                HOT_EFFECT_RAW_ACCOUNT_V3,
+                HOT_EFFECT_STAGING_ACCOUNT_V3,
+                descriptor.effect().schema().to_bytes(),
+                bundle.effect.to_vec(),
+            ),
+            (
+                HOT_LIFECYCLE_RAW_ACCOUNT_V3,
+                HOT_LIFECYCLE_STAGING_ACCOUNT_V3,
+                descriptor.lifecycle().schema().to_bytes(),
+                bundle.lifecycle_policy.to_vec(),
+            ),
+            (
+                HOT_STRATEGY_RAW_ACCOUNT_V3,
+                HOT_STRATEGY_STAGING_ACCOUNT_V3,
+                descriptor.strategy().schema().to_bytes(),
+                bundle.strategy.to_vec(),
+            ),
+        ] {
+            put_finalized_record(&mut state, &rent, raw, staging, schema, data);
+        }
+        let request = compile_direct_inline_request_v3(intent(0, 1), intent(1, 2), 1_000, 500_000)
+            .expect("Direct request");
+        (state, request)
+    }
+
     #[test]
     fn inline_request_has_exact_signed_offsets_and_u32_outcome() {
         let seller = intent(0, 1);
@@ -952,6 +1580,52 @@ mod tests {
         assert_eq!(
             request.get(448..456),
             Some(500_000_u64.to_le_bytes().as_slice())
+        );
+    }
+
+    #[test]
+    fn chain_frame_is_the_only_artifact_authority() {
+        let (state, request) = chain_artifact_fixture();
+        let bundle = authenticate_chain_artifacts_v4(&state, &request, 70_001)
+            .expect("chain-selected Direct artifacts");
+        assert_eq!(bundle.action, DirectExecutionActionV3::InlineOrdinary);
+
+        let mut wrong_root_owner = state.clone();
+        wrong_root_owner
+            .fixed_accounts
+            .get_mut(HOT_ROOT_ACCOUNT_V3)
+            .expect("root")
+            .account
+            .owner = key(199);
+        assert_eq!(
+            authenticate_chain_artifacts_v4(&wrong_root_owner, &request, 70_001),
+            Err(Error::ArtifactMismatch)
+        );
+
+        let mut live_staging = state.clone();
+        live_staging
+            .fixed_accounts
+            .get_mut(HOT_DESCRIPTOR_STAGING_ACCOUNT_V3)
+            .expect("descriptor staging")
+            .account
+            .data = vec![1];
+        assert_eq!(
+            authenticate_chain_artifacts_v4(&live_staging, &request, 70_001),
+            Err(Error::ArtifactMismatch)
+        );
+
+        let mut substituted_descriptor = state;
+        *substituted_descriptor
+            .fixed_accounts
+            .get_mut(HOT_DESCRIPTOR_RAW_ACCOUNT_V3)
+            .expect("descriptor")
+            .account
+            .data
+            .get_mut(16)
+            .expect("descriptor kind") ^= 1;
+        assert_eq!(
+            authenticate_chain_artifacts_v4(&substituted_descriptor, &request, 70_001),
+            Err(Error::ArtifactMismatch)
         );
     }
 
