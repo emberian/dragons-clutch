@@ -1346,7 +1346,7 @@ impl<'a> StateLifecyclePolicyV3<'a> {
             if recipe.account == coordinate {
                 if matching_recipe.is_some()
                     || recipe.data_base != rule.data_length()
-                    || recipe.data_stride != 0
+                    || recipe.data_stride != rule.data_item_stride()
                 {
                     return Err(Error::ProfileMismatch);
                 }
@@ -3341,14 +3341,17 @@ mod tests {
 
     use super::*;
     use crate::v2::{
-        self, AccountPrestateV2, ProjectionRegistersV2, TrustedEnvironmentV2,
+        self, AccountPrestateV2, ProjectionRegistersV2, TrustedBuiltinIdentityV2,
+        TrustedEnvironmentV2, TrustedIdentityEnvironmentV2,
         encode::{
             AccountAliasInputV2, AccountCoordinateV2, AccountEffectPermissionsV2,
             AccountOperationInputV2, AccountPrivilegesV2, AccountRuleInputV2,
-            AccountRuleWithPrestateInputV2, IdentityCoordinateV2, RegisterGeometryV2,
-            ScalarCoordinateV2, encode_account_profile_with_lifecycle_v2_atomic,
+            AccountRuleWithPrestateInputV2, DynamicFixedSpanInputV2, IdentityCoordinateV2,
+            RegisterGeometryV2, ScalarCoordinateV2,
+            encode_account_profile_with_dynamic_fixed_span_v2_atomic,
+            encode_account_profile_with_lifecycle_v2_atomic,
         },
-        project_atomic,
+        project_atomic, project_dynamic_fixed_spans_atomic,
     };
 
     const DIRECT_MAKER_DOMAIN: &[u8] = b"dclutch/direct-replay/v2";
@@ -4495,6 +4498,200 @@ mod tests {
             })
         );
         assert_eq!(plan.effective_state_data_bytes(), 0);
+    }
+
+    #[test]
+    fn runtime_width_lifecycle_recipe_joins_exact_profile_geometry() {
+        let state_rule = AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: AccountPrivilegesV2::new(false, true, false),
+                effect_permissions: AccountEffectPermissionsV2::new(false, true, true),
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length: 16,
+                data_item_stride: 8,
+            },
+            prestate: AccountPrestateV2::LifecycleBound,
+        };
+        let payer_rule = AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: AccountPrivilegesV2::new(true, true, false),
+                effect_permissions: AccountEffectPermissionsV2::new(true, false, false),
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length: 0,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::Exact,
+        };
+        let readonly_rule = AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: AccountPrivilegesV2::new(false, false, false),
+                effect_permissions: AccountEffectPermissionsV2::new(false, false, false),
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length: 4,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::Exact,
+        };
+        let opaque_rule = AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: AccountPrivilegesV2::new(false, false, false),
+                effect_permissions: AccountEffectPermissionsV2::new(false, false, false),
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length: 0,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::AuthenticatedOpaqueReadonlyData,
+        };
+        let spans = [DynamicFixedSpanInputV2 {
+            insertion_coordinate: 3,
+            count_scalar: 1,
+            rule_start: 0,
+            rule_stride: 1,
+            minimum: 1,
+            maximum: 258,
+            step: 1,
+        }];
+        let fixed_rules = [state_rule, payer_rule, readonly_rule];
+        let span_rules = [opaque_rule];
+        let operations = [
+            AccountOperationInputV2::RequireOwner {
+                account: AccountCoordinateV2::fixed(1),
+                expected: IdentityCoordinateV2::common(0),
+            },
+            AccountOperationInputV2::ProjectTailCountU32 {
+                account: AccountCoordinateV2::fixed(2),
+                destination: ScalarCoordinateV2::common(0),
+                data_offset: 0,
+            },
+        ];
+        let profile_width = v2::DYNAMIC_FIXED_SPAN_HEADER_BYTES
+            + v2::DYNAMIC_FIXED_SPAN_ENTRY_BYTES
+            + (fixed_rules.len() + span_rules.len()) * v2::RULE_BYTES
+            + operations.len() * v2::OPERATION_BYTES;
+        let mut profile_scratch = vec![0_u8; profile_width];
+        let mut profile_bytes = vec![0_u8; profile_width];
+        encode_account_profile_with_dynamic_fixed_span_v2_atomic(
+            TrustedEnvironmentV2::None,
+            TrustedIdentityEnvironmentV2::None,
+            TrustedBuiltinIdentityV2::None,
+            &spans,
+            &fixed_rules,
+            &span_rules,
+            &operations,
+            RegisterGeometryV2 {
+                common_scalars: 2,
+                item_scalar_stride: 0,
+                common_identities: 1,
+                item_identity_stride: 0,
+            },
+            &mut profile_scratch,
+            &mut profile_bytes,
+        )
+        .expect("runtime-width lifecycle Profile13");
+        let profile = AccountProfileV2::decode(&profile_bytes).expect("decode Profile13");
+
+        let policy_bytes_for = |data_base, data_stride| {
+            let recipes = [encode::LifecycleRecipeInputV3 {
+                state: encode::LifecycleAccountCoordinateV3::fixed(0),
+                seed_start: 0,
+                seed_count: 1,
+                bump_offset: 0,
+                data_base,
+                data_stride,
+            }];
+            let seeds = [encode::LifecycleSeedInputV3::CanonicalBump];
+            let plans = [encode::LifecyclePlanInputV3 {
+                action: 1,
+                operation: encode::LifecycleOperationInputV3::AuthenticateOrCreate,
+                recipe: 0,
+                payer: Some(encode::LifecycleAccountCoordinateV3::fixed(1)),
+                rent_credit: Some(encode::LifecycleAccountCoordinateV3::fixed(2)),
+                principal: Some(encode::LifecycleRegisterCoordinateV3::common(0)),
+                beneficiary: Some(encode::LifecycleRegisterCoordinateV3::common(0)),
+                guard: encode::LifecycleGuardInputV3::Always,
+            }];
+            let width = HEADER_BYTES + RECIPE_BYTES + SEED_BYTES + ACTION_PLAN_BYTES;
+            let mut scratch = vec![0_u8; width];
+            let mut output = vec![0_u8; width];
+            encode::encode_lifecycle_policy_v3_atomic(
+                &recipes,
+                &seeds,
+                &plans,
+                &mut scratch,
+                &mut output,
+            )
+            .expect("lifecycle policy");
+            output
+        };
+        let policy_bytes = policy_bytes_for(16, 8);
+        let policy = StateLifecyclePolicyV3::decode(&policy_bytes).expect("decode lifecycle");
+        policy
+            .validate_account_profile(profile)
+            .expect("exact affine geometry joins");
+        let selected = policy.action_plan(1, 0).expect("selected lifecycle");
+        assert_eq!(selected.target_data_bytes(3), Ok(40));
+        assert_eq!(selected.target_data_bytes(u32::MAX), Err(Error::Arithmetic));
+
+        for hostile in [policy_bytes_for(15, 8), policy_bytes_for(16, 7)] {
+            assert_eq!(
+                StateLifecyclePolicyV3::decode(&hostile)
+                    .expect("hostile policy remains decodable")
+                    .validate_account_profile(profile),
+                Err(Error::ProfileMismatch)
+            );
+        }
+
+        let payer_owner = [0x33; 32];
+        let opaque_data = [0x55];
+        let count_data = 3_u32.to_le_bytes();
+        let project = |state_data: &[u8]| {
+            let accounts = [
+                AccountObservationV1::new([0x10; 32], TRADING, 1, state_data, false, true, false),
+                AccountObservationV1::new([0x11; 32], payer_owner, 1, &[], true, true, false),
+                AccountObservationV1::new(
+                    [0x12; 32],
+                    [0x44; 32],
+                    1,
+                    &count_data,
+                    false,
+                    false,
+                    false,
+                ),
+                AccountObservationV1::new(
+                    [0x13; 32],
+                    [0x55; 32],
+                    1,
+                    &opaque_data,
+                    false,
+                    false,
+                    false,
+                ),
+            ];
+            let input_scalars = [0_u64, 1];
+            let input_identities = [payer_owner];
+            let mut scratch_scalars = [0_u64; 2];
+            let mut scratch_identities = [[0_u8; 32]; 1];
+            let mut output_scalars = [9_u64; 2];
+            let mut output_identities = [[9_u8; 32]; 1];
+            project_dynamic_fixed_spans_atomic(
+                profile,
+                3,
+                &[1],
+                &accounts,
+                ProjectionRegistersV2 {
+                    input_scalars: &input_scalars,
+                    input_identities: &input_identities,
+                    scratch_scalars: &mut scratch_scalars,
+                    scratch_identities: &mut scratch_identities,
+                    output_scalars: &mut output_scalars,
+                    output_identities: &mut output_identities,
+                },
+            )
+        };
+        assert_eq!(project(&[]), Ok(()));
+        assert_eq!(project(&[0_u8; 40]), Ok(()));
+        assert_eq!(project(&[0_u8; 39]), Err(v2::Error::DataLengthMismatch));
+        assert_eq!(project(&[0_u8; 41]), Err(v2::Error::DataLengthMismatch));
     }
 
     #[test]
