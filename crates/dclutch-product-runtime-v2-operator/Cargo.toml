@@ -16,6 +16,7 @@ dclutch-product-runtime-v2-admission = { path = "../dclutch-product-runtime-v2-a
 dclutch-realm-contract = { path = "../dclutch-realm-contract" }
 dclutch-record-contract = { path = "../dclutch-record-contract" }
 dclutch-registry-contract = { path = "../dclutch-registry-contract" }
+dclutch-registry-svm = { path = "../dclutch-registry-svm" }
 dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
 dclutch-rent-contract = { path = "../dclutch-rent-contract" }
 dclutch-source-contract = { path = "../dclutch-source-contract" }

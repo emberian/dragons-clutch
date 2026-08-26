@@ -9,8 +9,8 @@ use dclutch_product_runtime_v2_operator::{
     AccountObservationV2, CompiledProductRecordsV2, Error, FinalizedRecordObservationV2,
     ProductCompilationInputV2, compile_product_records_v2,
     found::{
-        FOUND_ACCOUNT_COUNT_V2, FinalizedReferenceObservationV2, FoundStateV2, FoundUnavailableV2,
-        build_found_instruction_v2, inspect_found_v2,
+        FOUND_ACCOUNT_COUNT_V2, FinalizedReferenceObservationV2, FoundStateV2,
+        build_found_instruction_v2,
     },
 };
 use dclutch_realm_contract::{
@@ -18,13 +18,15 @@ use dclutch_realm_contract::{
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
-    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ArtifactActivationInputV1,
-    ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
-    activate_execution_role_into_v1, initialize_activation_cache_v1,
+    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
+    ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactActivationInputV1, ArtifactReleaseV1,
+    ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
+    initialize_activation_cache_v1,
 };
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1, ExecutionReleaseSetV1,
-    ExecutionRoleBindingV1, ExecutionRoleV1, ProgramIdentityV1,
+    ExecutionRoleBindingV1, ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
+    ProgramIdentityV1, ProtocolInfrastructureProfileV1,
 };
 use dclutch_rent_contract::{RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1};
 use dclutch_source_contract::{
@@ -174,13 +176,13 @@ fn program_identity(program: Pubkey) -> ProgramIdentityV1 {
     ProgramIdentityV1::new(program.to_bytes()).expect("program identity")
 }
 
-fn artifact_release(programdata: Pubkey) -> ArtifactReleaseV1 {
+fn artifact_release(program: Pubkey, programdata: Pubkey, elf: &[u8]) -> ArtifactReleaseV1 {
     ArtifactReleaseV1::new(
-        program_identity(CORE),
+        program_identity(program),
         program_identity(bpf_loader_upgradeable::ID),
         programdata.to_bytes(),
         CoreContentId::new([0xb1; 32]).expect("semantic release"),
-        [0xb2; 32],
+        hash(elf).to_bytes(),
         71,
         ArtifactUpgradePolicyV1::Immutable,
         None,
@@ -192,8 +194,7 @@ fn artifact_id(release: ArtifactReleaseV1) -> ArtifactReleaseIdV1 {
     ArtifactReleaseIdV1::new(hash(&release.to_bytes()).to_bytes()).expect("artifact identity")
 }
 
-fn activation(programdata: Pubkey) -> (ExecutionReleaseSetV1, Pubkey, Vec<u8>) {
-    let release = artifact_release(programdata);
+fn activation(release: ArtifactReleaseV1) -> (ExecutionReleaseSetV1, Pubkey, Vec<u8>) {
     let binding = ExecutionRoleBindingV1::new(release.program(), artifact_id(release));
     let release_set = ExecutionReleaseSetV1::new(binding, binding, binding, binding, binding)
         .expect("release set");
@@ -202,13 +203,13 @@ fn activation(programdata: Pubkey) -> (ExecutionReleaseSetV1, Pubkey, Vec<u8>) {
     let mut bytes = vec![0_u8; ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1];
     initialize_activation_cache_v1(&mut bytes, release_set_id).expect("activation cache");
     let observation = DeploymentObservationV1::new(
-        CORE.to_bytes(),
+        release.program().to_bytes(),
         bpf_loader_upgradeable::ID.to_bytes(),
         true,
-        programdata.to_bytes(),
+        release.programdata(),
         bpf_loader_upgradeable::ID.to_bytes(),
         false,
-        programdata.to_bytes(),
+        release.programdata(),
         bpf_loader_upgradeable::ID.to_bytes(),
         release.deployment_slot(),
         release.elf_digest(),
@@ -229,6 +230,30 @@ fn activation(programdata: Pubkey) -> (ExecutionReleaseSetV1, Pubkey, Vec<u8>) {
     let cache =
         Pubkey::find_program_address(&[ACTIVATION_PDA_DOMAIN_V1, &release_set_digest], &REGISTRY).0;
     (release_set, cache, bytes)
+}
+
+fn loader_program_data(programdata: Pubkey) -> Vec<u8> {
+    let mut data = vec![0_u8; 36];
+    put(&mut data, 0, &2_u32.to_le_bytes());
+    put(&mut data, 4, programdata.as_ref());
+    data
+}
+
+fn loader_programdata_data(elf: &[u8]) -> Vec<u8> {
+    let mut data = vec![0_u8; 45 + elf.len()];
+    put(&mut data, 0, &3_u32.to_le_bytes());
+    put(&mut data, 4, &71_u64.to_le_bytes());
+    put(&mut data, 12, &[0]);
+    put(&mut data, 45, elf);
+    data
+}
+
+fn put(output: &mut [u8], offset: usize, bytes: &[u8]) {
+    let end = offset.checked_add(bytes.len()).expect("fixture offset");
+    output
+        .get_mut(offset..end)
+        .expect("fixture output")
+        .copy_from_slice(bytes);
 }
 
 fn rent_data() -> Vec<u8> {
@@ -252,6 +277,18 @@ struct Fixture {
     activation_cache: Pubkey,
     activation_data: Vec<u8>,
     core_programdata: Pubkey,
+    core_program_data: Vec<u8>,
+    core_programdata_data: Vec<u8>,
+    registry_artifact: RecordBacking,
+    registry_programdata: Pubkey,
+    registry_program_data: Vec<u8>,
+    registry_programdata_data: Vec<u8>,
+    rent_artifact: RecordBacking,
+    rent_programdata: Pubkey,
+    rent_program_data: Vec<u8>,
+    rent_programdata_data: Vec<u8>,
+    infrastructure_profile: Pubkey,
+    infrastructure_profile_data: Vec<u8>,
     rent_credit: Pubkey,
     rent_credit_data: Vec<u8>,
     rent_data: Vec<u8>,
@@ -290,11 +327,36 @@ impl Fixture {
         );
         let core_programdata =
             Pubkey::find_program_address(&[CORE.as_ref()], &bpf_loader_upgradeable::ID).0;
-        let (release_set, activation_cache, activation_data) = activation(core_programdata);
+        let core_elf = b"dclutch-core-found-v2-fixture";
+        let core_release = artifact_release(CORE, core_programdata, core_elf);
+        let (release_set, activation_cache, activation_data) = activation(core_release);
         let release_set = RecordBacking::new(
             EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1,
             release_set.to_bytes().to_vec(),
         );
+        let registry_programdata =
+            Pubkey::find_program_address(&[REGISTRY.as_ref()], &bpf_loader_upgradeable::ID).0;
+        let registry_elf = b"dclutch-registry-v1-fixture";
+        let registry_release = artifact_release(REGISTRY, registry_programdata, registry_elf);
+        let registry_artifact = RecordBacking::new(
+            ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            registry_release.to_bytes().to_vec(),
+        );
+        let rent_programdata =
+            Pubkey::find_program_address(&[RENT_PROGRAM.as_ref()], &bpf_loader_upgradeable::ID).0;
+        let rent_elf = b"dclutch-rent-v1-fixture";
+        let rent_release = artifact_release(RENT_PROGRAM, rent_programdata, rent_elf);
+        let rent_artifact = RecordBacking::new(
+            ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            rent_release.to_bytes().to_vec(),
+        );
+        let profile = ProtocolInfrastructureProfileV1::new(
+            ExecutionRoleBindingV1::new(registry_release.program(), artifact_id(registry_release)),
+            ExecutionRoleBindingV1::new(rent_release.program(), artifact_id(rent_release)),
+        )
+        .expect("infrastructure profile");
+        let infrastructure_profile =
+            Pubkey::find_program_address(&[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1], &CORE).0;
         let authority = RefundAuthority::new(PAYER.to_bytes()).expect("refund authority");
         let (rent_credit, bump) = Pubkey::find_program_address(
             &[RENT_CREDIT_PDA_DOMAIN_V1, &authority.to_bytes()],
@@ -326,6 +388,18 @@ impl Fixture {
             activation_cache,
             activation_data,
             core_programdata,
+            core_program_data: loader_program_data(core_programdata),
+            core_programdata_data: loader_programdata_data(core_elf),
+            registry_artifact,
+            registry_programdata,
+            registry_program_data: loader_program_data(registry_programdata),
+            registry_programdata_data: loader_programdata_data(registry_elf),
+            rent_artifact,
+            rent_programdata,
+            rent_program_data: loader_program_data(rent_programdata),
+            rent_programdata_data: loader_programdata_data(rent_elf),
+            infrastructure_profile,
+            infrastructure_profile_data: profile.to_bytes().to_vec(),
             rent_credit,
             rent_credit_data,
             rent_data: rent_data(),
@@ -344,7 +418,13 @@ impl Fixture {
                 false,
                 &self.rent_credit_data,
             ),
-            rent_program: account(RENT_PROGRAM, native_loader::ID, 1, true, &[]),
+            rent_program: account(
+                RENT_PROGRAM,
+                bpf_loader_upgradeable::ID,
+                1,
+                true,
+                &self.rent_program_data,
+            ),
             realm: self.realm.reference(),
             product: self.graph.product.observation(),
             result_domain: self.graph.domain.observation(),
@@ -359,41 +439,109 @@ impl Fixture {
                 false,
                 &self.activation_data,
             ),
-            core_program: account(CORE, bpf_loader_upgradeable::ID, 1, true, &[]),
+            core_program: account(
+                CORE,
+                bpf_loader_upgradeable::ID,
+                1,
+                true,
+                &self.core_program_data,
+            ),
             core_programdata: account(
                 self.core_programdata,
                 bpf_loader_upgradeable::ID,
                 1,
                 false,
-                &[],
+                &self.core_programdata_data,
             ),
-            registry_program: account(REGISTRY, native_loader::ID, 1, true, &[]),
+            registry_program: account(
+                REGISTRY,
+                bpf_loader_upgradeable::ID,
+                1,
+                true,
+                &self.registry_program_data,
+            ),
             rent: account(sysvar::rent::ID, sysvar::ID, 1, false, &self.rent_data),
             system_program: account(system_program::ID, native_loader::ID, 1, true, &[]),
+            infrastructure_profile: account(
+                self.infrastructure_profile,
+                CORE,
+                Rent::default().minimum_balance(self.infrastructure_profile_data.len()),
+                false,
+                &self.infrastructure_profile_data,
+            ),
+            registry_artifact: self.registry_artifact.observation(),
+            registry_programdata: account(
+                self.registry_programdata,
+                bpf_loader_upgradeable::ID,
+                1,
+                false,
+                &self.registry_programdata_data,
+            ),
+            rent_artifact: self.rent_artifact.observation(),
+            rent_programdata: account(
+                self.rent_programdata,
+                bpf_loader_upgradeable::ID,
+                1,
+                false,
+                &self.rent_programdata_data,
+            ),
         }
     }
 }
 
 #[test]
-fn valid_found24_is_unavailable_without_infrastructure_authority() {
+fn valid_found31_exports_runtime_width_instruction() {
     let fixture = Fixture::new();
     assert_eq!(fixture.graph.report.outcome_count, 258);
-    assert_eq!(FOUND_ACCOUNT_COUNT_V2, 24);
-    let inspection = inspect_found_v2(GENERATION, fixture.state()).expect("Found inspection");
-    assert_eq!(inspection.outcome_count, 258);
-    assert_eq!(inspection.account_count, 24);
-    assert_eq!(inspection.market_address, fixture.market);
+    assert_eq!(FOUND_ACCOUNT_COUNT_V2, 31);
+    let plan =
+        build_found_instruction_v2(GENERATION, fixture.state()).expect("Found instruction plan");
+    assert_eq!(plan.outcome_count, 258);
+    assert_eq!(plan.instruction.accounts.len(), 31);
+    assert_eq!(plan.market_address, fixture.market);
     assert_eq!(
-        inspection.product.product_record_digest.to_bytes(),
+        plan.product.product_record_digest.to_bytes(),
         fixture.graph.product.digest
     );
     assert_eq!(
-        inspection.unavailable,
-        FoundUnavailableV2::InfrastructureProfileAbsent
+        plan.instruction
+            .accounts
+            .get(24)
+            .expect("profile meta")
+            .pubkey,
+        fixture.infrastructure_profile
     );
     assert_eq!(
-        build_found_instruction_v2(GENERATION, fixture.state()),
-        Err(Error::UnselectedInfrastructurePrograms)
+        plan.instruction
+            .accounts
+            .get(25)
+            .expect("Registry artifact meta")
+            .pubkey,
+        fixture.registry_artifact.raw
+    );
+    assert_eq!(
+        plan.instruction
+            .accounts
+            .get(27)
+            .expect("Registry ProgramData meta")
+            .pubkey,
+        fixture.registry_programdata
+    );
+    assert_eq!(
+        plan.instruction
+            .accounts
+            .get(28)
+            .expect("Rent artifact meta")
+            .pubkey,
+        fixture.rent_artifact.raw
+    );
+    assert_eq!(
+        plan.instruction
+            .accounts
+            .get(30)
+            .expect("Rent ProgramData meta")
+            .pubkey,
+        fixture.rent_programdata
     );
 }
 
@@ -467,6 +615,75 @@ fn stale_snapshot_and_caller_supplied_rent_projection_refuse() {
             }
         ),
         Err(Error::ObservationMismatch)
+    );
+}
+
+#[test]
+fn substituted_profile_and_mutable_infrastructure_refuse() {
+    let fixture = Fixture::new();
+    let mut hostile_profile = fixture.infrastructure_profile_data.clone();
+    *hostile_profile.get_mut(48).expect("artifact byte") ^= 1;
+    let state = fixture.state();
+    assert_eq!(
+        build_found_instruction_v2(
+            GENERATION,
+            FoundStateV2 {
+                infrastructure_profile: AccountObservationV2 {
+                    data: &hostile_profile,
+                    ..state.infrastructure_profile
+                },
+                ..state
+            }
+        ),
+        Err(Error::CrossRecordMismatch)
+    );
+
+    let mutable_release = ArtifactReleaseV1::new(
+        program_identity(REGISTRY),
+        program_identity(bpf_loader_upgradeable::ID),
+        fixture.registry_programdata.to_bytes(),
+        CoreContentId::new([0xb1; 32]).expect("semantic release"),
+        hash(b"dclutch-registry-v1-fixture").to_bytes(),
+        71,
+        ArtifactUpgradePolicyV1::ExactAuthority,
+        Some([0xee; 32]),
+    )
+    .expect("mutable artifact");
+    let mutable_artifact = RecordBacking::new(
+        ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        mutable_release.to_bytes().to_vec(),
+    );
+    assert_eq!(
+        build_found_instruction_v2(
+            GENERATION,
+            FoundStateV2 {
+                registry_artifact: mutable_artifact.observation(),
+                ..fixture.state()
+            }
+        ),
+        Err(Error::CrossRecordMismatch)
+    );
+}
+
+#[test]
+fn stale_registry_elf_refuses_before_transaction_export() {
+    let fixture = Fixture::new();
+    let mut stale_programdata = fixture.registry_programdata_data.clone();
+    let last = stale_programdata.len().saturating_sub(1);
+    *stale_programdata.get_mut(last).expect("ELF byte") ^= 1;
+    let state = fixture.state();
+    assert_eq!(
+        build_found_instruction_v2(
+            GENERATION,
+            FoundStateV2 {
+                registry_programdata: AccountObservationV2 {
+                    data: &stale_programdata,
+                    ..state.registry_programdata
+                },
+                ..state
+            }
+        ),
+        Err(Error::CrossRecordMismatch)
     );
 }
 

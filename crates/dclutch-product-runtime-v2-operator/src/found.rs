@@ -2,7 +2,7 @@
 //!
 //! This builder accepts one finalized account snapshot, independently
 //! authenticates every immutable record coordinate and cross-record join, and
-//! emits the exact unsigned 24-account Core Found instruction. It performs no
+//! emits the exact unsigned 31-account Core Found instruction. It performs no
 //! RPC, signing, submission, funding, or account mutation.
 
 use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
@@ -14,9 +14,15 @@ use dclutch_product_runtime_v2_admission::{
     PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2, admit_authenticated_records_v2,
 };
 use dclutch_realm_contract::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
-use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
+use dclutch_registry_contract::{
+    ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1,
+    ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
+};
+use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_release_set_contract::{
-    EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1, ExecutionReleaseSetV1, ExecutionRoleV1,
+    ArtifactReleaseIdV1, EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1, ExecutionReleaseSetV1,
+    ExecutionRoleBindingV1, ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, ProtocolInfrastructureProfileV1,
 };
 use dclutch_rent_contract::{RENT_CREDIT_PDA_DOMAIN_V1, RentCreditV1};
 use dclutch_source_contract::{
@@ -24,19 +30,20 @@ use dclutch_source_contract::{
 };
 use solana_program::{
     account_info::AccountInfo,
+    hash::hash,
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
     rent::Rent,
     sysvar::SysvarSerialize,
 };
-use solana_sdk_ids::{native_loader, system_program, sysvar};
+use solana_sdk_ids::{bpf_loader_upgradeable, native_loader, system_program, sysvar};
 
 use crate::{
     AccountObservationV2, Error, FinalizedRecordObservationV2, Result, coordinate, digest,
 };
 
 /// Exact number of accounts in the Runtime V2 Core Found frame.
-pub const FOUND_ACCOUNT_COUNT_V2: usize = 24;
+pub const FOUND_ACCOUNT_COUNT_V2: usize = 31;
 
 /// One non-Product finalized raw/staging record observation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -56,7 +63,7 @@ pub struct FoundStateV2<'a> {
     pub market: AccountObservationV2<'a>,
     /// Existing permanent RentCredit account.
     pub rent_credit: AccountObservationV2<'a>,
-    /// Caller-supplied executable Rent candidate; not canonical until profile-pinned.
+    /// Exact executable Rent program selected by the immutable profile.
     pub rent_program: AccountObservationV2<'a>,
     /// Finalized Realm raw/staging pair.
     pub realm: FinalizedReferenceObservationV2<'a>,
@@ -78,24 +85,34 @@ pub struct FoundStateV2<'a> {
     pub core_program: AccountObservationV2<'a>,
     /// Current Core ProgramData account named by the activated release.
     pub core_programdata: AccountObservationV2<'a>,
-    /// Caller-supplied executable Registry candidate owning the observed records.
+    /// Exact executable Registry program selected by the immutable profile.
     pub registry_program: AccountObservationV2<'a>,
     /// Canonical Rent sysvar observation.
     pub rent: AccountObservationV2<'a>,
     /// Canonical executable System Program observation.
     pub system_program: AccountObservationV2<'a>,
+    /// Immutable per-Core Registry/Rent selection PDA.
+    pub infrastructure_profile: AccountObservationV2<'a>,
+    /// Finalized immutable Registry artifact release.
+    pub registry_artifact: FinalizedRecordObservationV2<'a>,
+    /// Current Registry ProgramData observation.
+    pub registry_programdata: AccountObservationV2<'a>,
+    /// Finalized immutable Rent artifact release.
+    pub rent_artifact: FinalizedRecordObservationV2<'a>,
+    /// Current Rent ProgramData observation.
+    pub rent_programdata: AccountObservationV2<'a>,
 }
 
 /// Exact chain-derived Runtime V2 Core Found plan.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FoundInstructionPlanV2 {
-    /// Exact unsigned 24-account instruction.
+    /// Exact unsigned 31-account instruction.
     pub instruction: Instruction,
-    /// Sole Market address derived from this authority-incomplete candidate.
+    /// Sole Market address derived from the authenticated snapshot.
     pub market_address: Pubkey,
-    /// Candidate Market identity reconstructed relative to the supplied Registry.
+    /// Market identity reconstructed from the exact selected Registry.
     pub market_identity: MarketIdentity,
-    /// Product graph projection authenticated relative to the supplied Registry.
+    /// Product graph projection authenticated under the selected Registry.
     pub product: AdmissionProjectionV2,
     /// Runtime native outcome width, including explicit failure.
     pub outcome_count: u32,
@@ -103,64 +120,14 @@ pub struct FoundInstructionPlanV2 {
     pub observation_slot: u64,
     /// Exact Market rent top-up required from the payer.
     pub market_rent_top_up: u64,
-}
-
-/// Exact reason a fully authenticated Found snapshot cannot export a transaction.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FoundUnavailableV2 {
-    /// Core does not yet pin Registry and Rent artifact releases.
-    InfrastructureProfileAbsent,
-}
-
-/// Chain-derived Found projection safe to display without exporting a transaction.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FoundInspectionV2 {
-    /// Sole Market address derived from this authority-incomplete candidate.
-    pub market_address: Pubkey,
-    /// Candidate Market identity reconstructed relative to the supplied Registry.
-    pub market_identity: MarketIdentity,
-    /// Product graph projection authenticated relative to the supplied Registry.
-    pub product: AdmissionProjectionV2,
-    /// Runtime native outcome width, including explicit failure.
-    pub outcome_count: u32,
-    /// Shared finalized observation slot.
-    pub observation_slot: u64,
-    /// Exact Market rent top-up required from the payer.
-    pub market_rent_top_up: u64,
-    /// Frozen outer account count the unavailable successor would require.
-    pub account_count: usize,
-    /// Exact missing onchain authority that prevents transaction export.
-    pub unavailable: FoundUnavailableV2,
-}
-
-/// Reauthenticate one finalized Runtime V2 snapshot and report exact Found availability.
-pub fn inspect_found_v2(generation: u64, state: FoundStateV2<'_>) -> Result<FoundInspectionV2> {
-    let prepared = prepare_found_instruction_v2(generation, state)?;
-    Ok(FoundInspectionV2 {
-        market_address: prepared.market_address,
-        market_identity: prepared.market_identity,
-        product: prepared.product,
-        outcome_count: prepared.outcome_count,
-        observation_slot: prepared.observation_slot,
-        market_rent_top_up: prepared.market_rent_top_up,
-        account_count: prepared.instruction.accounts.len(),
-        unavailable: FoundUnavailableV2::InfrastructureProfileAbsent,
-    })
 }
 
 /// Reauthenticate one finalized Runtime V2 snapshot and construct Core Found.
-///
-/// This deliberately refuses until the current Core artifact pins an immutable
-/// infrastructure profile and authenticates the exact Registry and Rent
-/// artifact releases. Use [`inspect_found_v2`] to obtain the complete
-/// chain-derived display projection and exact unavailable reason without
-/// exporting a transaction payload.
 pub fn build_found_instruction_v2(
     generation: u64,
     state: FoundStateV2<'_>,
 ) -> Result<FoundInstructionPlanV2> {
-    let _prepared = prepare_found_instruction_v2(generation, state)?;
-    Err(Error::UnselectedInfrastructurePrograms)
+    prepare_found_instruction_v2(generation, state)
 }
 
 fn prepare_found_instruction_v2(
@@ -241,6 +208,7 @@ fn prepare_found_instruction_v2(
         return Err(Error::InvalidRecord);
     }
     authenticate_activation(state, release_set_digest.to_bytes(), release_set)?;
+    authenticate_infrastructure(state, &rent)?;
     authenticate_rent_credit(state)?;
 
     let mut market_identity = MarketIdentity {
@@ -329,6 +297,11 @@ fn authenticate_runtime_accounts(state: FoundStateV2<'_>) -> Result<()> {
         || !state.core_program.executable
         || state.core_programdata.executable
         || state.activation_cache.executable
+        || state.infrastructure_profile.owner != state.core_program.key
+        || state.infrastructure_profile.executable
+        || state.infrastructure_profile.data.len() != PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1
+        || state.registry_programdata.executable
+        || state.rent_programdata.executable
         || state.system_program.key != system_program::ID
         || state.system_program.owner != native_loader::ID
         || !state.system_program.executable
@@ -348,6 +321,8 @@ fn authenticate_record_rent_minima(state: FoundStateV2<'_>, rent: &Rent) -> Resu
         state.source_material.record,
         state.capability_manifest.record,
         state.execution_release_set.record,
+        state.registry_artifact,
+        state.rent_artifact,
     ];
     if records
         .iter()
@@ -424,7 +399,115 @@ fn authenticate_activation(
     {
         return Err(Error::CrossRecordMismatch);
     }
+    authenticate_current_deployment(state.core_program, state.core_programdata, release, true)?;
     Ok(())
+}
+
+fn authenticate_infrastructure(state: FoundStateV2<'_>, rent: &Rent) -> Result<()> {
+    let expected_profile = Pubkey::find_program_address(
+        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
+        &state.core_program.key,
+    )
+    .0;
+    if state.infrastructure_profile.key != expected_profile
+        || state.infrastructure_profile.lamports
+            < rent.minimum_balance(PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1)
+    {
+        return Err(Error::AccountAuthority);
+    }
+    let profile = ProtocolInfrastructureProfileV1::decode(state.infrastructure_profile.data)
+        .map_err(|_| Error::InvalidRecord)?;
+    if profile.registry().program().to_bytes() != state.registry_program.key.to_bytes()
+        || profile.rent().program().to_bytes() != state.rent_program.key.to_bytes()
+    {
+        return Err(Error::CrossRecordMismatch);
+    }
+    let registry = authenticate_artifact(
+        state.registry_program.key,
+        state.registry_artifact,
+        state.registry_program,
+        state.registry_programdata,
+    )?;
+    let rent_program = authenticate_artifact(
+        state.registry_program.key,
+        state.rent_artifact,
+        state.rent_program,
+        state.rent_programdata,
+    )?;
+    if registry != profile.registry() || rent_program != profile.rent() {
+        return Err(Error::CrossRecordMismatch);
+    }
+    Ok(())
+}
+
+fn authenticate_artifact(
+    registry: Pubkey,
+    observation: FinalizedRecordObservationV2<'_>,
+    program: AccountObservationV2<'_>,
+    programdata: AccountObservationV2<'_>,
+) -> Result<ExecutionRoleBindingV1> {
+    let coordinate =
+        authenticate_product_record(registry, ARTIFACT_RELEASE_SCHEMA_ID_V1, observation)?;
+    let release =
+        ArtifactReleaseV1::decode(observation.raw.data).map_err(|_| Error::InvalidRecord)?;
+    if release.program().to_bytes() != program.key.to_bytes()
+        || release.upgrade_policy() != ArtifactUpgradePolicyV1::Immutable
+    {
+        return Err(Error::CrossRecordMismatch);
+    }
+    authenticate_current_deployment(program, programdata, release, true)?;
+    let artifact_release = ArtifactReleaseIdV1::new(coordinate.content_digest.to_bytes())
+        .map_err(|_| Error::InvalidRecord)?;
+    Ok(ExecutionRoleBindingV1::new(
+        release.program(),
+        artifact_release,
+    ))
+}
+
+fn authenticate_current_deployment(
+    program: AccountObservationV2<'_>,
+    programdata: AccountObservationV2<'_>,
+    release: ArtifactReleaseV1,
+    require_immutable: bool,
+) -> Result<()> {
+    if release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
+        || release.program().to_bytes() != program.key.to_bytes()
+        || release.programdata() != programdata.key.to_bytes()
+        || program.owner != bpf_loader_upgradeable::ID
+        || programdata.owner != bpf_loader_upgradeable::ID
+        || !program.executable
+        || programdata.executable
+        || (require_immutable && release.upgrade_policy() != ArtifactUpgradePolicyV1::Immutable)
+    {
+        return Err(Error::AccountAuthority);
+    }
+    let program_view = ProgramV3View::parse(program.data).map_err(|_| Error::InvalidRecord)?;
+    let expected_programdata =
+        Pubkey::find_program_address(&[program.key.as_ref()], &bpf_loader_upgradeable::ID).0;
+    if program_view.programdata() != release.programdata()
+        || programdata.key != expected_programdata
+    {
+        return Err(Error::CrossRecordMismatch);
+    }
+    let programdata_view =
+        ProgramDataV3View::parse(programdata.data).map_err(|_| Error::InvalidRecord)?;
+    let deployment = DeploymentObservationV1::new(
+        program.key.to_bytes(),
+        program.owner.to_bytes(),
+        program.executable,
+        programdata.key.to_bytes(),
+        programdata.owner.to_bytes(),
+        programdata.executable,
+        program_view.programdata(),
+        bpf_loader_upgradeable::ID.to_bytes(),
+        programdata_view.deployment_slot(),
+        hash(programdata_view.elf()).to_bytes(),
+        programdata_view.upgrade_authority(),
+    )
+    .map_err(|_| Error::InvalidRecord)?;
+    release
+        .authenticate_deployment(deployment)
+        .map_err(|_| Error::CrossRecordMismatch)
 }
 
 fn authenticate_rent_credit(state: FoundStateV2<'_>) -> Result<()> {
@@ -493,6 +576,13 @@ fn found_metas(state: FoundStateV2<'_>) -> Vec<AccountMeta> {
         AccountMeta::new_readonly(state.registry_program.key, false),
         AccountMeta::new_readonly(state.rent.key, false),
         AccountMeta::new_readonly(state.system_program.key, false),
+        AccountMeta::new_readonly(state.infrastructure_profile.key, false),
+        AccountMeta::new_readonly(state.registry_artifact.raw.key, false),
+        AccountMeta::new_readonly(state.registry_artifact.staging.key, false),
+        AccountMeta::new_readonly(state.registry_programdata.key, false),
+        AccountMeta::new_readonly(state.rent_artifact.raw.key, false),
+        AccountMeta::new_readonly(state.rent_artifact.staging.key, false),
+        AccountMeta::new_readonly(state.rent_programdata.key, false),
     ]
 }
 
@@ -522,6 +612,13 @@ fn all_accounts(state: FoundStateV2<'_>) -> [AccountObservationV2<'_>; FOUND_ACC
         state.registry_program,
         state.rent,
         state.system_program,
+        state.infrastructure_profile,
+        state.registry_artifact.raw,
+        state.registry_artifact.staging,
+        state.registry_programdata,
+        state.rent_artifact.raw,
+        state.rent_artifact.staging,
+        state.rent_programdata,
     ]
 }
 

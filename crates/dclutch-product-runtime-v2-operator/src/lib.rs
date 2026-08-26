@@ -52,8 +52,6 @@ pub enum Error {
     CrossRecordMismatch,
     /// Payer principal could not cover the exact current Market rent top-up.
     InsufficientPayer,
-    /// Core does not yet authenticate Registry/Rent infrastructure releases.
-    UnselectedInfrastructurePrograms,
 }
 
 /// Operator result alias.

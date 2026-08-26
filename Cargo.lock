@@ -668,6 +668,7 @@ dependencies = [
  "dclutch-product-runtime-v2-admission",
  "dclutch-realm-contract",
  "dclutch-record-contract",
+ "dclutch-registry-svm",
  "dclutch-registry-contract",
  "dclutch-release-set-contract",
  "dclutch-rent-contract",
