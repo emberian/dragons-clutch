@@ -8,6 +8,8 @@
 //! supplied as `request_id`; this ABI carries only Claims-owned economic facts.
 //! The vector tail is borrowed, exact-width, and never allocated.
 
+pub mod affine_batch_v2;
+
 /// Bytes before the runtime-width `u64` quantity vector.
 pub const CLAIMS_PLAN_HEADER_BYTES_V1: usize = 208;
 /// Bytes in one exact claim quantity.
