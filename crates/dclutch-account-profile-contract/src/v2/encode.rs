@@ -10,15 +10,15 @@ use super::{
     ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE, ARTIFACT_PROFILE,
     AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE, AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES,
     AccountPrestateV2, AccountProfileV2, Error, HEADER_BYTES, LIFECYCLE_PRESTATE_ARTIFACT_PROFILE,
-    MAGIC, NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE, OP_PROJECT_DATA_IDENTITY,
-    OP_PROJECT_DATA_IDENTITY_AFFINE, OP_PROJECT_DATA_IDENTITY_SELECTED,
+    MAGIC, NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE, NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE,
+    OP_PROJECT_DATA_IDENTITY, OP_PROJECT_DATA_IDENTITY_AFFINE, OP_PROJECT_DATA_IDENTITY_SELECTED,
     OP_PROJECT_DATA_IDENTITY_SELECTED_AFFINE, OP_PROJECT_DATA_U8, OP_PROJECT_DATA_U16,
     OP_PROJECT_DATA_U32, OP_PROJECT_DATA_U64, OP_PROJECT_DATA_U64_AFFINE,
     OP_PROJECT_DATA_U64_SELECTED, OP_PROJECT_DATA_U64_SELECTED_AFFINE, OP_PROJECT_KEY,
-    OP_PROJECT_LAMPORTS, OP_PROJECT_NONZERO_U64_TAIL_COUNT, OP_PROJECT_OWNER,
-    OP_PROJECT_TAIL_COUNT_U32, OP_REQUIRE_KEY, OP_REQUIRE_OWNER, OP_SELECT_DATA_WINDOW,
-    OPERATION_BYTES, RULE_BYTES, SELECTED_WINDOW_ARTIFACT_PROFILE, TRUSTED_BUILTIN_IDENTITY_OFFSET,
-    TRUSTED_BUILTIN_KIND_OFFSET, TRUSTED_BUILTIN_SYSTEM_PROGRAM,
+    OP_PROJECT_LAMPORTS, OP_PROJECT_NONZERO_U64_TAIL_COUNT, OP_PROJECT_NONZERO_U64_TAIL_ROWS,
+    OP_PROJECT_OWNER, OP_PROJECT_TAIL_COUNT_U32, OP_REQUIRE_KEY, OP_REQUIRE_OWNER,
+    OP_SELECT_DATA_WINDOW, OPERATION_BYTES, RULE_BYTES, SELECTED_WINDOW_ARTIFACT_PROFILE,
+    TRUSTED_BUILTIN_IDENTITY_OFFSET, TRUSTED_BUILTIN_KIND_OFFSET, TRUSTED_BUILTIN_SYSTEM_PROGRAM,
     TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE, TRUSTED_ENVIRONMENT_CURRENT_SLOT,
     TRUSTED_ENVIRONMENT_KIND_OFFSET, TRUSTED_ENVIRONMENT_SCALAR_OFFSET,
     TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE, TRUSTED_EXECUTING_PROGRAM_CURRENT,
@@ -57,6 +57,8 @@ pub enum AccountProfileArtifactV2 {
     NonzeroU64TailCount,
     /// Physical-representative route aliases plus optional trusted builtin.
     AuthenticatedRouteAlias,
+    /// Ordered sparse rows derived from one authenticated immutable `u64` tail.
+    NonzeroU64TailRows,
 }
 
 impl AccountProfileArtifactV2 {
@@ -76,6 +78,7 @@ impl AccountProfileArtifactV2 {
             }
             Self::NonzeroU64TailCount => NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE,
             Self::AuthenticatedRouteAlias => AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE,
+            Self::NonzeroU64TailRows => NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE,
         }
     }
 
@@ -83,7 +86,8 @@ impl AccountProfileArtifactV2 {
         match self {
             Self::TrustedExecutingProgram
             | Self::AdapterAuthenticatedVariableDataAlias
-            | Self::NonzeroU64TailCount => TRUSTED_EXECUTING_PROGRAM_HEADER_BYTES,
+            | Self::NonzeroU64TailCount
+            | Self::NonzeroU64TailRows => TRUSTED_EXECUTING_PROGRAM_HEADER_BYTES,
             Self::AuthenticatedRouteAlias => AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES,
             _ => HEADER_BYTES,
         }
@@ -337,6 +341,20 @@ pub enum AccountOperationInputV2 {
         destination: ScalarCoordinateV2,
         /// Exact byte offset at which the `u64` tail begins.
         tail_offset: u32,
+    },
+    /// Derive exact ordered nonzero `u64` support rows into a flat common bank.
+    ProjectNonzeroU64TailRows {
+        /// Fixed adapter-authenticated descriptor account.
+        account: AccountCoordinateV2,
+        /// Protected common scalar receiving exact positive K.
+        count_destination: ScalarCoordinateV2,
+        /// First common scalar receiving row-zero outcome.
+        rows_destination: ScalarCoordinateV2,
+        /// Exact byte offset at which Product-N coefficients begin.
+        tail_offset: u32,
+        /// Exact common-scalar stride between row starts; outcome and
+        /// coefficient occupy offsets zero and one.
+        row_scalar_stride: u16,
     },
     /// Select the sole Product-owned runtime-tail count.
     ProjectTailCountU32 {
@@ -652,6 +670,39 @@ pub fn encode_account_profile_with_nonzero_u64_tail_count_v2_atomic(
     )
 }
 
+/// Encode profile 12 with one exact ordered nonzero-`u64` tail-row projection.
+///
+/// Runtime projection receives Product-authenticated N, requires exact
+/// `tail_offset + N * 8` bytes, derives positive K, requires K to exactly fill
+/// the artifact-owned flat row bank, and writes each row's ordered outcome and
+/// nonzero coefficient atomically.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_account_profile_with_nonzero_u64_tail_rows_v2_atomic(
+    trusted_environment: TrustedEnvironmentV2,
+    trusted_identity_environment: TrustedIdentityEnvironmentV2,
+    fixed_rules: &[AccountRuleWithPrestateInputV2],
+    item_rules: &[AccountRuleWithPrestateInputV2],
+    fixed_operations: &[AccountOperationInputV2],
+    item_operations: &[AccountOperationInputV2],
+    registers: RegisterGeometryV2,
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<(), Error> {
+    encode_account_profile_atomic(
+        AccountProfileArtifactV2::NonzeroU64TailRows,
+        trusted_environment,
+        trusted_identity_environment,
+        TrustedBuiltinIdentityV2::None,
+        RuleInputsV2::WithPrestate(fixed_rules),
+        RuleInputsV2::WithPrestate(item_rules),
+        fixed_operations,
+        item_operations,
+        registers,
+        scratch,
+        output,
+    )
+}
+
 /// Encode profile 11 with authenticated physical route representatives.
 ///
 /// Later fixed aliases declare only route-local privilege subsets and inherit
@@ -740,6 +791,7 @@ fn encode_account_profile_atomic(
                 | AccountProfileArtifactV2::AdapterAuthenticatedVariableDataAlias
                 | AccountProfileArtifactV2::NonzeroU64TailCount
                 | AccountProfileArtifactV2::AuthenticatedRouteAlias
+                | AccountProfileArtifactV2::NonzeroU64TailRows
         )
     {
         return Err(Error::InvalidTrustedEnvironment);
@@ -753,6 +805,7 @@ fn encode_account_profile_atomic(
                 | AccountProfileArtifactV2::AdapterAuthenticatedVariableDataAlias
                 | AccountProfileArtifactV2::NonzeroU64TailCount
                 | AccountProfileArtifactV2::AuthenticatedRouteAlias
+                | AccountProfileArtifactV2::NonzeroU64TailRows
         )
     {
         return Err(Error::InvalidTrustedExecutingProgram);
@@ -978,6 +1031,27 @@ impl AccountOperationInputV2 {
                 tail_offset,
                 8,
             ),
+            Self::ProjectNonzeroU64TailRows {
+                account,
+                count_destination,
+                rows_destination,
+                tail_offset,
+                row_scalar_stride,
+            } => {
+                let packed = if count_destination.item {
+                    0
+                } else {
+                    u32::from(count_destination.index) << 16 | u32::from(row_scalar_stride)
+                };
+                EncodedOperationV2 {
+                    opcode: OP_PROJECT_NONZERO_U64_TAIL_ROWS,
+                    account,
+                    register_item: rows_destination.item,
+                    register: rows_destination.index,
+                    data_offset: tail_offset,
+                    data_stride: packed,
+                }
+            }
             Self::ProjectTailCountU32 {
                 account,
                 destination,
@@ -2630,6 +2704,353 @@ mod tests {
             );
             assert_eq!(missing_output, before);
         }
+    }
+
+    #[test]
+    fn nonzero_u64_tail_rows_are_ordered_exact_and_failure_atomic() {
+        const TAIL_OFFSET: u32 = 16;
+        const TAIL_COUNT: u32 = 5;
+
+        let readonly = AccountRuleInputV2 {
+            privileges: READONLY,
+            effect_permissions: NO_EFFECTS,
+            alias: AccountAliasInputV2::SelfCoordinate,
+            data_length: 4,
+            data_item_stride: 0,
+        };
+        let rules = [
+            AccountRuleWithPrestateInputV2 {
+                rule: readonly,
+                prestate: AccountPrestateV2::Exact,
+            },
+            AccountRuleWithPrestateInputV2 {
+                rule: AccountRuleInputV2 {
+                    data_length: TAIL_OFFSET,
+                    ..readonly
+                },
+                prestate: AccountPrestateV2::AdapterAuthenticatedVariableData,
+            },
+        ];
+        let tail_projection = AccountOperationInputV2::ProjectTailCountU32 {
+            account: AccountCoordinateV2::fixed(0),
+            destination: ScalarCoordinateV2::common(1),
+            data_offset: 0,
+        };
+        let rows_projection = AccountOperationInputV2::ProjectNonzeroU64TailRows {
+            account: AccountCoordinateV2::fixed(1),
+            count_destination: ScalarCoordinateV2::common(0),
+            rows_destination: ScalarCoordinateV2::common(2),
+            tail_offset: TAIL_OFFSET,
+            row_scalar_stride: 2,
+        };
+        let operations = [tail_projection, rows_projection];
+        let registers = RegisterGeometryV2 {
+            common_scalars: 8,
+            item_scalar_stride: 0,
+            common_identities: 0,
+            item_identity_stride: 0,
+        };
+        let width = TRUSTED_EXECUTING_PROGRAM_HEADER_BYTES
+            + rules.len() * RULE_BYTES
+            + operations.len() * OPERATION_BYTES;
+        let mut scratch = std::vec![0_u8; width];
+        let mut encoded = std::vec![0_u8; width];
+        encode_account_profile_with_nonzero_u64_tail_rows_v2_atomic(
+            TrustedEnvironmentV2::None,
+            TrustedIdentityEnvironmentV2::None,
+            &rules,
+            &[],
+            &operations,
+            &[],
+            registers,
+            &mut scratch,
+            &mut encoded,
+        )
+        .expect("profile12");
+        let profile = AccountProfileV2::decode(&encoded).expect("decode profile12");
+        assert_eq!(
+            profile.artifact_profile(),
+            NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
+        );
+        let projection = profile
+            .nonzero_u64_tail_rows_projection()
+            .expect("inspect projection")
+            .expect("row projection");
+        assert_eq!(projection.account(), 1);
+        assert_eq!(projection.count_destination(), 0);
+        assert_eq!(projection.rows_destination(), 2);
+        assert_eq!(projection.tail_offset(), TAIL_OFFSET);
+        assert_eq!(projection.row_scalar_stride(), 2);
+
+        let product = TAIL_COUNT.to_le_bytes();
+        let descriptor = descriptor_with_coefficients(TAIL_OFFSET, &[0, 7, 5, 0, 9]);
+        let project =
+            |selected_profile: AccountProfileV2<'_>, descriptor_data: &[u8], output: &mut [u64]| {
+                let observations = [
+                    AccountObservationV1::new([1; 32], [2; 32], 1, &product, false, false, false),
+                    AccountObservationV1::new_adapter_authenticated_variable_data(
+                        [3; 32],
+                        [4; 32],
+                        1,
+                        descriptor_data,
+                        false,
+                        false,
+                        false,
+                    ),
+                ];
+                let input_scalars = std::vec![0_u64; output.len()];
+                let input_identities: [[u8; 32]; 0] = [];
+                let mut scalar_scratch = std::vec![0_u64; output.len()];
+                let mut identity_scratch: [[u8; 32]; 0] = [];
+                let mut output_identities: [[u8; 32]; 0] = [];
+                project_atomic(
+                    selected_profile,
+                    TAIL_COUNT,
+                    &observations,
+                    ProjectionRegistersV2 {
+                        input_scalars: &input_scalars,
+                        input_identities: &input_identities,
+                        scratch_scalars: &mut scalar_scratch,
+                        scratch_identities: &mut identity_scratch,
+                        output_scalars: output,
+                        output_identities: &mut output_identities,
+                    },
+                )
+            };
+        let mut output = [99_u64; 8];
+        project(profile, &descriptor, &mut output).expect("derive exact ordered rows");
+        assert_eq!(output, [3, 5, 1, 7, 2, 5, 4, 9]);
+
+        for index in 0_u16..8 {
+            assert_eq!(
+                profile.writes_register(crate::v2::ProjectionTargetV2 {
+                    kind: crate::v2::ProjectionRegisterKindV2::Scalar,
+                    space: crate::v2::ProjectionRegisterSpaceV2::Common,
+                    index,
+                }),
+                Ok(true)
+            );
+        }
+
+        let short = descriptor
+            .get(..descriptor.len() - 1)
+            .expect("short")
+            .to_vec();
+        let mut long = descriptor.clone();
+        long.push(0);
+        for hostile in [&short[..], &long[..]] {
+            let mut refused = [77_u64; 8];
+            let before = refused;
+            assert_eq!(
+                project(profile, hostile, &mut refused),
+                Err(Error::DataLengthMismatch)
+            );
+            assert_eq!(refused, before);
+        }
+
+        let all_zero = descriptor_with_coefficients(TAIL_OFFSET, &[0; 5]);
+        let mut refused = [55_u64; 8];
+        let before = refused;
+        assert_eq!(
+            project(profile, &all_zero, &mut refused),
+            Err(Error::EmptyNonzeroTail)
+        );
+        assert_eq!(refused, before);
+
+        for common_scalars in [6_u16, 10] {
+            let hostile_registers = RegisterGeometryV2 {
+                common_scalars,
+                ..registers
+            };
+            let mut hostile_scratch = std::vec![0_u8; width];
+            let mut hostile_encoded = std::vec![0_u8; width];
+            encode_account_profile_with_nonzero_u64_tail_rows_v2_atomic(
+                TrustedEnvironmentV2::None,
+                TrustedIdentityEnvironmentV2::None,
+                &rules,
+                &[],
+                &operations,
+                &[],
+                hostile_registers,
+                &mut hostile_scratch,
+                &mut hostile_encoded,
+            )
+            .expect("hostile K geometry still decodes");
+            let hostile_profile =
+                AccountProfileV2::decode(&hostile_encoded).expect("hostile profile");
+            let mut hostile_output = std::vec![88_u64; usize::from(common_scalars)];
+            let before = hostile_output.clone();
+            assert_eq!(
+                project(hostile_profile, &descriptor, &mut hostile_output),
+                Err(Error::SupportRowCountMismatch)
+            );
+            assert_eq!(hostile_output, before);
+        }
+
+        for hostile_operations in [
+            [rows_projection, rows_projection],
+            [tail_projection, tail_projection],
+            [
+                rows_projection,
+                AccountOperationInputV2::ProjectDataU64 {
+                    account: AccountCoordinateV2::fixed(0),
+                    destination: ScalarCoordinateV2::common(3),
+                    data_offset: 0,
+                },
+            ],
+        ] {
+            let mut hostile_scratch = std::vec![0_u8; width];
+            let mut hostile_output = std::vec![0x66_u8; width];
+            let before = hostile_output.clone();
+            assert_eq!(
+                encode_account_profile_with_nonzero_u64_tail_rows_v2_atomic(
+                    TrustedEnvironmentV2::None,
+                    TrustedIdentityEnvironmentV2::None,
+                    &rules,
+                    &[],
+                    &hostile_operations,
+                    &[],
+                    registers,
+                    &mut hostile_scratch,
+                    &mut hostile_output,
+                ),
+                Err(Error::DuplicateProjection)
+            );
+            assert_eq!(hostile_output, before);
+        }
+
+        for missing in [[tail_projection], [rows_projection]] {
+            let missing_width =
+                TRUSTED_EXECUTING_PROGRAM_HEADER_BYTES + rules.len() * RULE_BYTES + OPERATION_BYTES;
+            let mut missing_scratch = std::vec![0_u8; missing_width];
+            let mut missing_output = std::vec![0x77_u8; missing_width];
+            let before = missing_output.clone();
+            assert_eq!(
+                encode_account_profile_with_nonzero_u64_tail_rows_v2_atomic(
+                    TrustedEnvironmentV2::None,
+                    TrustedIdentityEnvironmentV2::None,
+                    &rules,
+                    &[],
+                    &missing,
+                    &[],
+                    registers,
+                    &mut missing_scratch,
+                    &mut missing_output,
+                ),
+                Err(Error::NonCanonicalOperation)
+            );
+            assert_eq!(missing_output, before);
+        }
+
+        for hostile_rows in [
+            AccountOperationInputV2::ProjectNonzeroU64TailRows {
+                account: AccountCoordinateV2::fixed(1),
+                count_destination: ScalarCoordinateV2::common(2),
+                rows_destination: ScalarCoordinateV2::common(2),
+                tail_offset: TAIL_OFFSET,
+                row_scalar_stride: 2,
+            },
+            AccountOperationInputV2::ProjectNonzeroU64TailRows {
+                account: AccountCoordinateV2::fixed(1),
+                count_destination: ScalarCoordinateV2::common(0),
+                rows_destination: ScalarCoordinateV2::common(2),
+                tail_offset: TAIL_OFFSET,
+                row_scalar_stride: 1,
+            },
+            AccountOperationInputV2::ProjectNonzeroU64TailRows {
+                account: AccountCoordinateV2::fixed(1),
+                count_destination: ScalarCoordinateV2::common(0),
+                rows_destination: ScalarCoordinateV2::item(0),
+                tail_offset: TAIL_OFFSET,
+                row_scalar_stride: 2,
+            },
+            AccountOperationInputV2::ProjectNonzeroU64TailRows {
+                account: AccountCoordinateV2::fixed(1),
+                count_destination: ScalarCoordinateV2::item(0),
+                rows_destination: ScalarCoordinateV2::common(2),
+                tail_offset: TAIL_OFFSET,
+                row_scalar_stride: 2,
+            },
+            AccountOperationInputV2::ProjectNonzeroU64TailRows {
+                account: AccountCoordinateV2::fixed(1),
+                count_destination: ScalarCoordinateV2::common(0),
+                rows_destination: ScalarCoordinateV2::common(2),
+                tail_offset: TAIL_OFFSET + 1,
+                row_scalar_stride: 2,
+            },
+        ] {
+            let hostile_operations = [tail_projection, hostile_rows];
+            let mut hostile_scratch = std::vec![0_u8; width];
+            let mut hostile_output = std::vec![0x33_u8; width];
+            let before = hostile_output.clone();
+            assert_eq!(
+                encode_account_profile_with_nonzero_u64_tail_rows_v2_atomic(
+                    TrustedEnvironmentV2::None,
+                    TrustedIdentityEnvironmentV2::None,
+                    &rules,
+                    &[],
+                    &hostile_operations,
+                    &[],
+                    registers,
+                    &mut hostile_scratch,
+                    &mut hostile_output,
+                ),
+                Err(Error::NonCanonicalOperation)
+            );
+            assert_eq!(hostile_output, before);
+        }
+
+        let item_geometry = RegisterGeometryV2 {
+            item_scalar_stride: 1,
+            ..registers
+        };
+        let mut hostile_scratch = std::vec![0_u8; width];
+        let mut hostile_output = std::vec![0x22_u8; width];
+        let before = hostile_output.clone();
+        assert_eq!(
+            encode_account_profile_with_nonzero_u64_tail_rows_v2_atomic(
+                TrustedEnvironmentV2::None,
+                TrustedIdentityEnvironmentV2::None,
+                &rules,
+                &[],
+                &operations,
+                &[],
+                item_geometry,
+                &mut hostile_scratch,
+                &mut hostile_output,
+            ),
+            Err(Error::NonCanonicalOperation)
+        );
+        assert_eq!(hostile_output, before);
+
+        let mut wrong_rules = rules;
+        wrong_rules[1].prestate = AccountPrestateV2::Exact;
+        let mut wrong_scratch = std::vec![0_u8; width];
+        let mut wrong_output = std::vec![0x11_u8; width];
+        let before = wrong_output.clone();
+        assert_eq!(
+            encode_account_profile_with_nonzero_u64_tail_rows_v2_atomic(
+                TrustedEnvironmentV2::None,
+                TrustedIdentityEnvironmentV2::None,
+                &wrong_rules,
+                &[],
+                &operations,
+                &[],
+                registers,
+                &mut wrong_scratch,
+                &mut wrong_output,
+            ),
+            Err(Error::InvalidVariableDataPrestate)
+        );
+        assert_eq!(wrong_output, before);
+    }
+
+    fn descriptor_with_coefficients(tail_offset: u32, coefficients: &[u64]) -> std::vec::Vec<u8> {
+        let mut descriptor = std::vec![0_u8; usize::try_from(tail_offset).expect("tail offset")];
+        for coefficient in coefficients {
+            descriptor.extend_from_slice(&coefficient.to_le_bytes());
+        }
+        descriptor
     }
 
     #[test]

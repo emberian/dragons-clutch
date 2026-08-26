@@ -55,6 +55,9 @@ pub const NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE: u16 = 10;
 /// group, route-local privilege subsets, and an optional trusted System
 /// Program identity supplied by the adapter.
 pub const AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE: u16 = 11;
+/// Successor profile deriving an exact ordered sparse `u64` support into a
+/// descriptor-specialized flat common scalar row bank.
+pub const NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE: u16 = 12;
 /// Exact V2 header width.
 pub const HEADER_BYTES: usize = 32;
 /// Exact profile-8 header width including the trusted role-identity declaration.
@@ -110,6 +113,7 @@ const OP_PROJECT_DATA_IDENTITY_SELECTED_AFFINE: u8 = 15;
 const OP_PROJECT_DATA_U16: u8 = 16;
 const OP_PROJECT_DATA_U8: u8 = 17;
 const OP_PROJECT_NONZERO_U64_TAIL_COUNT: u8 = 18;
+const OP_PROJECT_NONZERO_U64_TAIL_ROWS: u8 = 19;
 
 /// Encode one fixed-account `u8` data projection into a common `u64` scalar.
 ///
@@ -238,6 +242,8 @@ pub enum Error {
     InvalidTrustedBuiltin,
     /// A projection attempted to overwrite a trusted builtin identity.
     TrustedBuiltinOverwrite,
+    /// Derived sparse support did not exactly fill the artifact-owned row bank.
+    SupportRowCountMismatch,
 }
 
 /// Result alias for runtime-tail profiles.
@@ -433,6 +439,44 @@ pub struct NonzeroU64TailCountProjectionV2 {
     tail_offset: u32,
 }
 
+/// One fixed authenticated descriptor tail projected as exact ordered sparse
+/// `(outcome, coefficient)` rows into a flat common scalar bank.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NonzeroU64TailRowsProjectionV2 {
+    account: u16,
+    count_destination: u16,
+    rows_destination: u16,
+    tail_offset: u32,
+    row_scalar_stride: u16,
+}
+
+impl NonzeroU64TailRowsProjectionV2 {
+    /// Fixed adapter-authenticated descriptor account.
+    pub const fn account(self) -> u16 {
+        self.account
+    }
+
+    /// Protected common scalar receiving exact positive K.
+    pub const fn count_destination(self) -> u16 {
+        self.count_destination
+    }
+
+    /// First common scalar in the artifact-owned row bank.
+    pub const fn rows_destination(self) -> u16 {
+        self.rows_destination
+    }
+
+    /// Exact byte offset at which Product-N `u64` coefficients begin.
+    pub const fn tail_offset(self) -> u32 {
+        self.tail_offset
+    }
+
+    /// Exact common-scalar stride between row starts.
+    pub const fn row_scalar_stride(self) -> u16 {
+        self.row_scalar_stride
+    }
+}
+
 impl NonzeroU64TailCountProjectionV2 {
     /// Fixed adapter-authenticated descriptor account.
     pub const fn account(self) -> u16 {
@@ -560,6 +604,7 @@ impl<'a> AccountProfileV2<'a> {
                     | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
                     | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
                     | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
+                    | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
             )
         {
             return Err(Error::UnsupportedProfile);
@@ -573,6 +618,7 @@ impl<'a> AccountProfileV2<'a> {
                 | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
                 | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
                 | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
+                | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
         ) && read_u32(bytes, 28)? != 0
         {
             return Err(Error::NonCanonicalReserved);
@@ -754,14 +800,17 @@ impl<'a> AccountProfileV2<'a> {
         );
         let mut fixed = 0_u16;
         while fixed < self.fixed_operations {
-            if self.operation(false, fixed)?.projection_target()? == Some(expected) {
+            if self
+                .operation(false, fixed)?
+                .writes_target(self, expected)?
+            {
                 return Ok(true);
             }
             fixed = fixed.checked_add(1).ok_or(Error::InvalidLength)?;
         }
         let mut item = 0_u16;
         while item < self.item_operations {
-            if self.operation(true, item)?.projection_target()? == Some(expected) {
+            if self.operation(true, item)?.writes_target(self, expected)? {
                 return Ok(true);
             }
             item = item.checked_add(1).ok_or(Error::InvalidLength)?;
@@ -781,6 +830,7 @@ impl<'a> AccountProfileV2<'a> {
                 | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
                 | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
                 | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
+                | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
         ) {
             if self.artifact_profile == AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE {
                 AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES
@@ -980,6 +1030,32 @@ impl<'a> AccountProfileV2<'a> {
         Ok(found)
     }
 
+    /// Return the sole authenticated ordered nonzero-`u64` row projection
+    /// selected by profile 12, if present.
+    pub fn nonzero_u64_tail_rows_projection(
+        self,
+    ) -> Result<Option<NonzeroU64TailRowsProjectionV2>> {
+        let mut found = None;
+        let mut index = 0_u16;
+        while index < self.fixed_operations {
+            let operation = self.operation(false, index)?;
+            if operation.opcode == OP_PROJECT_NONZERO_U64_TAIL_ROWS {
+                if found.is_some() {
+                    return Err(Error::DuplicateProjection);
+                }
+                found = Some(NonzeroU64TailRowsProjectionV2 {
+                    account: operation.account,
+                    count_destination: operation.support_count_destination()?,
+                    rows_destination: operation.register,
+                    tail_offset: operation.data_offset,
+                    row_scalar_stride: operation.support_row_scalar_stride()?,
+                });
+            }
+            index = index.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        Ok(found)
+    }
+
     fn operation(self, item_template: bool, index: u16) -> Result<Operation> {
         let count = if item_template {
             self.item_operations
@@ -1103,6 +1179,7 @@ impl<'a> AccountProfileV2<'a> {
             NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE if adapter_authenticated_variable_data => {
                 Ok(())
             }
+            NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE if adapter_authenticated_variable_data => Ok(()),
             AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE if authenticated_route_alias => Ok(()),
             LIFECYCLE_PRESTATE_ARTIFACT_PROFILE => Err(Error::InvalidLifecyclePrestate),
             ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE => {
@@ -1112,6 +1189,7 @@ impl<'a> AccountProfileV2<'a> {
                 Err(Error::InvalidVariableDataPrestate)
             }
             NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE => Err(Error::InvalidVariableDataPrestate),
+            NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE => Err(Error::InvalidVariableDataPrestate),
             AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE => Err(Error::InvalidRouteAlias),
             _ if !lifecycle_bound
                 && !adapter_authenticated_variable_data
@@ -1173,6 +1251,11 @@ impl<'a> AccountProfileV2<'a> {
         }
         if self.artifact_profile == NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
             && self.nonzero_u64_tail_count_projection()?.is_none()
+        {
+            return Err(Error::NonCanonicalOperation);
+        }
+        if self.artifact_profile == NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
+            && self.nonzero_u64_tail_rows_projection()?.is_none()
         {
             return Err(Error::NonCanonicalOperation);
         }
@@ -1246,7 +1329,11 @@ impl<'a> AccountProfileV2<'a> {
             || self.item_identity_stride != 0
             || self.has_affine_data_length()?;
         let projection = self.tail_count_projection()?;
-        if (affine || self.artifact_profile == NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE)
+        if (affine
+            || matches!(
+                self.artifact_profile,
+                NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
+            ))
             && projection.is_none()
         {
             Err(Error::NonCanonicalOperation)
@@ -1274,24 +1361,23 @@ impl<'a> AccountProfileV2<'a> {
     }
 
     fn require_unique_projection(self, item: bool, index: u16, operation: Operation) -> Result<()> {
-        let Some(target) = operation.projection_target()? else {
+        let target = operation.projection_target()?;
+        let support_rows = operation.opcode == OP_PROJECT_NONZERO_U64_TAIL_ROWS;
+        if target.is_none() && !support_rows {
             return Ok(());
-        };
-        if self
-            .trusted_current_slot_scalar()
-            .is_some_and(|destination| target == (false, false, destination))
+        }
+        if let Some(destination) = self.trusted_current_slot_scalar()
+            && operation.writes_target(self, (false, false, destination))?
         {
             return Err(Error::TrustedEnvironmentOverwrite);
         }
-        if self
-            .trusted_current_executing_program_identity()
-            .is_some_and(|destination| target == (true, false, destination))
+        if let Some(destination) = self.trusted_current_executing_program_identity()
+            && operation.writes_target(self, (true, false, destination))?
         {
             return Err(Error::TrustedExecutingProgramOverwrite);
         }
-        if self
-            .trusted_system_program_identity()
-            .is_some_and(|destination| target == (true, false, destination))
+        if let Some(destination) = self.trusted_system_program_identity()
+            && operation.writes_target(self, (true, false, destination))?
         {
             return Err(Error::TrustedBuiltinOverwrite);
         }
@@ -1305,8 +1391,22 @@ impl<'a> AccountProfileV2<'a> {
         };
         let mut prior = 0_u16;
         while prior < index && prior < count {
-            if self.operation(item, prior)?.projection_target()? == Some(target) {
-                return Err(Error::DuplicateProjection);
+            let prior_operation = self.operation(item, prior)?;
+            if let Some(target) = target {
+                if prior_operation.writes_target(self, target)? {
+                    return Err(Error::DuplicateProjection);
+                }
+            } else {
+                let mut register = 0_u16;
+                while register < self.common_scalars {
+                    let target = (false, false, register);
+                    if operation.writes_target(self, target)?
+                        && prior_operation.writes_target(self, target)?
+                    {
+                        return Err(Error::DuplicateProjection);
+                    }
+                    register = register.checked_add(1).ok_or(Error::InvalidLength)?;
+                }
             }
             prior = prior.checked_add(1).ok_or(Error::InvalidLength)?;
         }
@@ -1324,6 +1424,7 @@ fn decode_trusted_environment(bytes: &[u8], artifact_profile: u16) -> Result<Tru
             | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
             | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
             | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
+            | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
     ) {
         return Ok(TrustedEnvironmentV2::None);
     }
@@ -1349,6 +1450,7 @@ fn decode_trusted_identity_environment(
             | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
             | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
             | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
+            | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
     ) {
         return Ok(TrustedIdentityEnvironmentV2::None);
     }
@@ -1733,6 +1835,14 @@ impl Operation {
         })
     }
 
+    fn support_count_destination(self) -> Result<u16> {
+        u16::try_from(self.data_stride >> 16).map_err(|_| Error::InvalidCoordinate)
+    }
+
+    fn support_row_scalar_stride(self) -> Result<u16> {
+        u16::try_from(self.data_stride & u32::from(u16::MAX)).map_err(|_| Error::InvalidCoordinate)
+    }
+
     fn validate(
         self,
         profile: AccountProfileV2<'_>,
@@ -1818,6 +1928,7 @@ impl Operation {
                             | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
                             | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
                             | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
+                            | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
                     )
                 {
                     return Err(Error::NonCanonicalOperation);
@@ -1869,6 +1980,7 @@ impl Operation {
                         | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
                         | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
                         | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
+                        | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
                 ) || item_body
                     || self.account_item
                     || self.register_item
@@ -1911,6 +2023,7 @@ impl Operation {
                         | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
                         | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
                         | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
+                        | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
                 ) || item_body
                     || self.account_item
                     || self.register_item
@@ -1953,6 +2066,29 @@ impl Operation {
                     || self.account_item
                     || self.register_item
                     || self.data_stride != 8
+                    || self.data_offset != account_rule.data_length
+                    || account_rule.prestate != AccountPrestateV2::AdapterAuthenticatedVariableData
+                {
+                    return Err(Error::NonCanonicalOperation);
+                }
+            }
+            OP_PROJECT_NONZERO_U64_TAIL_ROWS => {
+                let count_destination = self.support_count_destination()?;
+                let row_stride = self.support_row_scalar_stride()?;
+                let row_registers = profile
+                    .common_scalars
+                    .checked_sub(self.register)
+                    .ok_or(Error::InvalidCoordinate)?;
+                if profile.artifact_profile != NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
+                    || item_body
+                    || self.account_item
+                    || self.register_item
+                    || profile.item_scalar_stride != 0
+                    || count_destination >= profile.common_scalars
+                    || count_destination >= self.register
+                    || row_stride < 2
+                    || row_registers == 0
+                    || row_registers % row_stride != 0
                     || self.data_offset != account_rule.data_length
                     || account_rule.prestate != AccountPrestateV2::AdapterAuthenticatedVariableData
                 {
@@ -2007,6 +2143,31 @@ impl Operation {
                 | OP_PROJECT_DATA_IDENTITY_SELECTED_AFFINE
         );
         Ok(Some((identity, self.register_item, self.register)))
+    }
+
+    fn writes_target(
+        self,
+        profile: AccountProfileV2<'_>,
+        target: (bool, bool, u16),
+    ) -> Result<bool> {
+        if self.opcode != OP_PROJECT_NONZERO_U64_TAIL_ROWS {
+            return Ok(self.projection_target()? == Some(target));
+        }
+        let (identity, item, register) = target;
+        if identity || item {
+            return Ok(false);
+        }
+        if register == self.support_count_destination()? {
+            return Ok(true);
+        }
+        let stride = self.support_row_scalar_stride()?;
+        let Some(relative) = register.checked_sub(self.register) else {
+            return Ok(false);
+        };
+        if register >= profile.common_scalars || stride == 0 {
+            return Ok(false);
+        }
+        Ok(relative % stride < 2)
     }
 
     fn is_selected_affine_projection(self) -> bool {
@@ -2160,6 +2321,70 @@ impl Operation {
                     return Err(Error::EmptyNonzeroTail);
                 }
                 write_scalar(scalars, scalar()?, count)
+            }
+            OP_PROJECT_NONZERO_U64_TAIL_ROWS => {
+                let expected = u64::from(tail_count)
+                    .checked_mul(8)
+                    .and_then(|tail| u64::from(self.data_offset).checked_add(tail))
+                    .and_then(|width| usize::try_from(width).ok())
+                    .ok_or(Error::DataLengthMismatch)?;
+                if account.data().len() != expected {
+                    return Err(Error::DataLengthMismatch);
+                }
+                let stride = usize::from(self.support_row_scalar_stride()?);
+                let row_start = usize::from(self.register);
+                let expected_rows = scalars
+                    .len()
+                    .checked_sub(row_start)
+                    .filter(|remaining| *remaining != 0 && *remaining % stride == 0)
+                    .map(|remaining| remaining / stride)
+                    .ok_or(Error::InvalidCoordinate)?;
+                let mut support_row = 0_usize;
+                let mut outcome = 0_u32;
+                while outcome < tail_count {
+                    let offset = u64::from(outcome)
+                        .checked_mul(8)
+                        .and_then(|tail| u64::from(self.data_offset).checked_add(tail))
+                        .and_then(|value| usize::try_from(value).ok())
+                        .ok_or(Error::DataOutOfBounds)?;
+                    let end = offset.checked_add(8).ok_or(Error::DataOutOfBounds)?;
+                    let coefficient = u64::from_le_bytes(
+                        account
+                            .data()
+                            .get(offset..end)
+                            .ok_or(Error::DataOutOfBounds)?
+                            .try_into()
+                            .map_err(|_| Error::DataOutOfBounds)?,
+                    );
+                    if coefficient != 0 {
+                        if support_row >= expected_rows {
+                            return Err(Error::SupportRowCountMismatch);
+                        }
+                        let destination = support_row
+                            .checked_mul(stride)
+                            .and_then(|relative| row_start.checked_add(relative))
+                            .ok_or(Error::InvalidCoordinate)?;
+                        write_scalar(scalars, destination, u64::from(outcome))?;
+                        write_scalar(
+                            scalars,
+                            destination.checked_add(1).ok_or(Error::InvalidCoordinate)?,
+                            coefficient,
+                        )?;
+                        support_row = support_row.checked_add(1).ok_or(Error::InvalidLength)?;
+                    }
+                    outcome = outcome.checked_add(1).ok_or(Error::InvalidLength)?;
+                }
+                if support_row == 0 {
+                    return Err(Error::EmptyNonzeroTail);
+                }
+                if support_row != expected_rows {
+                    return Err(Error::SupportRowCountMismatch);
+                }
+                write_scalar(
+                    scalars,
+                    usize::from(self.support_count_destination()?),
+                    u64::try_from(support_row).map_err(|_| Error::InvalidLength)?,
+                )
             }
             OP_PROJECT_DATA_IDENTITY => {
                 let value = projected_data_field(account.data(), rule, self.data_offset, 32)?
@@ -2368,6 +2593,7 @@ fn decode_rule(bytes: &[u8], offset: usize, artifact_profile: u16) -> Result<Acc
             | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
             | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
             | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
+            | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
     ) {
         match prestate_tag {
             0 => AccountPrestateV2::Exact,
@@ -2378,6 +2604,7 @@ fn decode_rule(bytes: &[u8], offset: usize, artifact_profile: u16) -> Result<Acc
                 ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
                     | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
                     | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
+                    | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
             ) =>
             {
                 AccountPrestateV2::AdapterAuthenticatedVariableDataAlias
