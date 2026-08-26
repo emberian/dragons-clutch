@@ -15,8 +15,12 @@ use dclutch_fractional_claim_kernel::{
     FRACTIONAL_TERMS_SCHEMA_ID_V1, FractionalTermsAdmissionV1, FractionalTermsV1,
 };
 use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2};
+use dclutch_product_runtime_v2::{
+    ContentId, PortfolioV2, ProductJoinV2, ResultDomainV2, join_product_v2,
+};
 use dclutch_product_runtime_v2_admission::{
-    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
+    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
+    RESULT_DOMAIN_SCHEMA_ID_V2,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_request_profile_contract::SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID;
@@ -232,6 +236,9 @@ pub struct FractionalPreparedChainArtifactsV1<'a> {
     admissions: FractionalArtifactAdmissionsV1,
     artifacts: FractionalArtifactBytesV1<'a>,
     terms: FractionalTermsV1<'a>,
+    product_record: ProductRecordV2,
+    product_join: ProductJoinV2,
+    portfolio: PortfolioV2<'a>,
 }
 
 impl<'a> FractionalPreparedChainArtifactsV1<'a> {
@@ -258,6 +265,21 @@ impl<'a> FractionalPreparedChainArtifactsV1<'a> {
     /// Checked multiprogram release boundary.
     pub const fn checked_release(self) -> CheckedFractionalReleaseV1 {
         self.checked
+    }
+
+    /// Hostile-decoded Product root bound by the authenticated Market.
+    pub const fn product_record(self) -> ProductRecordV2 {
+        self.product_record
+    }
+
+    /// Exact Product→domain→native-basis→portfolio join.
+    pub const fn product_join(self) -> ProductJoinV2 {
+        self.product_join
+    }
+
+    /// Canonical runtime-width Product portfolio, including the sole final-floor tag.
+    pub const fn portfolio(self) -> PortfolioV2<'a> {
+        self.portfolio
     }
 }
 
@@ -329,6 +351,24 @@ pub fn prepare_fractional_chain_artifacts_v1<'a>(
         finalized_record(pair, checked.registry_program(), schema, None, &rent)?;
     }
     if product.product_record != market.identity.product_record.to_bytes() {
+        return Err(Error::ChainArtifacts);
+    }
+    let product_record =
+        ProductRecordV2::decode(&snapshot.product_raw.data).map_err(|_| Error::ChainArtifacts)?;
+    let result_domain = ResultDomainV2::decode(&snapshot.result_domain_raw.data)
+        .map_err(|_| Error::ChainArtifacts)?;
+    let portfolio =
+        PortfolioV2::decode(&snapshot.portfolio_raw.data).map_err(|_| Error::ChainArtifacts)?;
+    let result_domain_id = ContentId::new(digest(&snapshot.result_domain_raw.data))
+        .map_err(|_| Error::ChainArtifacts)?;
+    let portfolio_id =
+        ContentId::new(digest(&snapshot.portfolio_raw.data)).map_err(|_| Error::ChainArtifacts)?;
+    let product_join = join_product_v2(result_domain_id, portfolio_id, result_domain, portfolio)
+        .map_err(|_| Error::ChainArtifacts)?;
+    if product_record.product_id() != product_join.product_id
+        || product_record.result_domain_digest() != product_join.result_domain_id
+        || product_record.portfolio_digest() != product_join.representation_id
+    {
         return Err(Error::ChainArtifacts);
     }
 
@@ -487,6 +527,9 @@ pub fn prepare_fractional_chain_artifacts_v1<'a>(
             effect: effect.bytes,
         },
         terms,
+        product_record,
+        product_join,
+        portfolio,
     })
 }
 

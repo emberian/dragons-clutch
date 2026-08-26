@@ -10,6 +10,7 @@
 //! input and are rechecked by the onchain child route.
 
 mod artifacts;
+mod composition;
 mod records;
 
 use dclutch_fractional_claim_contract::{
@@ -35,7 +36,12 @@ use solana_program::{
 pub use artifacts::{
     FRACTIONAL_COMMON_IDENTITIES_V1, FRACTIONAL_COMMON_SCALARS_V1,
     FractionalArtifactCompilerErrorV1, FractionalClaimsAccountRuleV1,
-    FractionalFinalizedArtifactBundleV1, build_fractional_finalized_artifact_bundle_v1,
+    FractionalFinalizedArtifactBundleV1, build_fractional_composed_artifact_bundle_v1,
+    build_fractional_finalized_artifact_bundle_v1,
+};
+pub use composition::{
+    CheckedFractionalCompositionV1, check_fractional_composition_bundle_v1,
+    decode_and_check_fractional_composition_v1,
 };
 pub use records::{
     CheckedFractionalReleaseInputV1, CheckedFractionalReleaseV1, FinalizedArtifactRecordV1,
@@ -166,6 +172,8 @@ pub enum Error {
     AccountFrame,
     /// Unsigned v0 compilation or packet sizing refused.
     Message,
+    /// Composition DAG, Product basis, or exact retranslation differed.
+    Composition,
 }
 
 /// Result alias.

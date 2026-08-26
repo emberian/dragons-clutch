@@ -350,6 +350,7 @@ dependencies = [
  "dclutch-product-runtime-v2",
  "dclutch-product-runtime-v2-admission",
  "dclutch-record-contract",
+ "dclutch-representation-composition-v3-kernel",
  "dclutch-request-profile-contract",
  "dclutch-resolution-core-v3-operator",
  "dclutch-token-svm",
@@ -409,6 +410,10 @@ version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
 ]
+
+[[package]]
+name = "dclutch-representation-composition-v3-kernel"
+version = "0.1.0"
 
 [[package]]
 name = "dclutch-request-profile-contract"

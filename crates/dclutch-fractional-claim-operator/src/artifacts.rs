@@ -75,6 +75,8 @@ use dclutch_transition_vm::v3::{
 };
 use sha2::{Digest, Sha256};
 
+use crate::CheckedFractionalCompositionV1;
+
 /// Scalar bank width shared by Account, Request, Transition, and Effect programs.
 pub const FRACTIONAL_COMMON_SCALARS_V1: u16 = 7;
 /// Identity bank width shared by Account, Request, Transition, and Effect programs.
@@ -233,6 +235,20 @@ pub fn build_fractional_finalized_artifact_bundle_v1(
     };
     validate_bundle(&bundle, claims_frame.len(), physical_profile)?;
     Ok(bundle)
+}
+
+/// Emit the ordinary Fractional artifacts only after a composition DAG was
+/// checked to flatten exactly to the existing Product-owned payoff basis.
+///
+/// The witness changes no request, terms, effect, payout, or custody bytes.
+/// It is release-compiler evidence for the same canonical Product portfolio.
+pub fn build_fractional_composed_artifact_bundle_v1(
+    action: FractionalActionV1,
+    physical_profile: [u8; 32],
+    claims_frame: &[FractionalClaimsAccountRuleV1],
+    _witness: CheckedFractionalCompositionV1<'_>,
+) -> Result<FractionalFinalizedArtifactBundleV1, FractionalArtifactCompilerErrorV1> {
+    build_fractional_finalized_artifact_bundle_v1(action, physical_profile, claims_frame)
 }
 
 fn encode_account_profile(

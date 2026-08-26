@@ -16,8 +16,10 @@ dclutch-execution-strategy-contract = { path = "../dclutch-execution-strategy-co
 dclutch-fractional-claim-contract = { path = "../dclutch-fractional-claim-contract" }
 dclutch-fractional-claim-kernel = { path = "../dclutch-fractional-claim-kernel" }
 dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
+dclutch-product-runtime-v2 = { path = "../dclutch-product-runtime-v2" }
 dclutch-product-runtime-v2-admission = { path = "../dclutch-product-runtime-v2-admission" }
 dclutch-record-contract = { path = "../dclutch-record-contract" }
+dclutch-representation-composition-v3-kernel = { path = "../dclutch-representation-composition-v3-kernel" }
 dclutch-request-profile-contract = { path = "../dclutch-request-profile-contract" }
 dclutch-resolution-core-v3-operator = { path = "../dclutch-resolution-core-v3-operator" }
 dclutch-token-svm = { path = "../dclutch-token-svm" }
@@ -27,9 +29,6 @@ sha2 = "=0.10.9"
 solana-hash = "=4.6.0"
 solana-program = { version = "=3.0.0", default-features = false }
 solana-sdk-ids = "=3.1.0"
-
-[dev-dependencies]
-dclutch-product-runtime-v2 = { path = "../dclutch-product-runtime-v2" }
 
 [workspace]
 
