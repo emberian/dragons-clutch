@@ -374,11 +374,20 @@ fn rules(
         .rule
         .data_length = width(CustodyReplayLayoutV1::BYTES)?;
 
+    // An authenticated route alias is a privilege-free logical view: the
+    // representative coordinate is the single semantic owner of the route's
+    // physical privileges.  Every Direct alias already observed exactly its
+    // representative's privileges, so declaring none here changes no authority.
     for (account, representative) in ROUTE_ALIASES {
-        let privileges = rule_at(&output, usize::from(*account))?.rule.privileges;
+        let privileges = rule_at(&output, usize::from(*representative))?
+            .rule
+            .privileges;
+        if rule_at(&output, usize::from(*account))?.rule.privileges != privileges {
+            return Err(DirectOrdinaryAccountArtifactErrorV3::Geometry);
+        }
         *rule_mut(&mut output, usize::from(*account))? = AccountRuleWithPrestateInputV2 {
             rule: AccountRuleInputV2 {
-                privileges,
+                privileges: readonly,
                 effect_permissions: none,
                 alias: AccountAliasInputV2::Fixed(*representative),
                 data_length: 0,
@@ -1124,3 +1133,4 @@ mod tests {
         assert!(output.iter().all(|byte| *byte == 0x33));
     }
 }
+

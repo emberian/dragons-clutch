@@ -332,11 +332,20 @@ fn rules(
                 .ok_or(DirectRegisteredAccountArtifactErrorV4::Geometry)?;
         }
     }
+    // An authenticated route alias is a privilege-free logical view: the
+    // representative coordinate is the single semantic owner of the route's
+    // physical privileges.  The equality check keeps that fact observed rather
+    // than silently discarded when the alias is rewritten.
     for (account, representative) in ROUTE_ALIASES {
-        let privileges = rule_at(&output, usize::from(*account))?.rule.privileges;
+        let privileges = rule_at(&output, usize::from(*representative))?
+            .rule
+            .privileges;
+        if rule_at(&output, usize::from(*account))?.rule.privileges != privileges {
+            return Err(DirectRegisteredAccountArtifactErrorV4::Geometry);
+        }
         *rule_mut(&mut output, usize::from(*account))? = AccountRuleWithPrestateInputV2 {
             rule: AccountRuleInputV2 {
-                privileges,
+                privileges: readonly,
                 effect_permissions: none,
                 alias: AccountAliasInputV2::Fixed(*representative),
                 data_length: 0,
