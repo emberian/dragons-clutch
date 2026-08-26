@@ -22,8 +22,7 @@ use dclutch_execution_strategy_contract::v2::{
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
     ARTIFACT_RELEASE_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
-    ArtifactUpgradePolicyV1, DeploymentObservationV1,
-    immutable_release_elf_digest_v1,
+    ArtifactUpgradePolicyV1, DeploymentObservationV1, immutable_release_elf_digest_v1,
 };
 use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_release_set_contract::ArtifactReleaseIdV1;
@@ -581,7 +580,9 @@ fn authenticate_deployment_v2(
         return Err(TradingSbfError::Content);
     }
     let elf_digest = activation_bound_elf
-        .then(|| immutable_release_elf_digest_v1(release, programdata_view.upgrade_authority()).ok())
+        .then(|| {
+            immutable_release_elf_digest_v1(release, programdata_view.upgrade_authority()).ok()
+        })
         .flatten()
         .unwrap_or_else(|| hash(programdata_view.elf()).to_bytes());
     let observation = DeploymentObservationV1::new(

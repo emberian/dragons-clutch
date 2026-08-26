@@ -1133,4 +1133,3 @@ mod tests {
         assert!(output.iter().all(|byte| *byte == 0x33));
     }
 }
-

@@ -182,9 +182,8 @@ fn immutable_deployment_observation(
     if programdata_view.upgrade_authority().is_some() {
         return Err(RegistryError::Deployment.into());
     }
-    let elf_digest =
-        immutable_release_elf_digest_v1(release, programdata_view.upgrade_authority())
-            .map_err(|_| RegistryError::Deployment)?;
+    let elf_digest = immutable_release_elf_digest_v1(release, programdata_view.upgrade_authority())
+        .map_err(|_| RegistryError::Deployment)?;
     DeploymentObservationV1::new(
         program.key.to_bytes(),
         program.owner.to_bytes(),

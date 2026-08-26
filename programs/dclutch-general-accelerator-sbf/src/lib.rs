@@ -16,7 +16,7 @@ extern crate std;
 use alloc::{vec, vec::Vec};
 
 use dclutch_capability_program_contract::hot_v3::{
-    HotExecutionEnvelopeV3, HOT_RUNTIME_CONFIG_COORDINATE_V3, HOT_RUNTIME_PRODUCT_COORDINATE_V3,
+    HOT_RUNTIME_CONFIG_COORDINATE_V3, HOT_RUNTIME_PRODUCT_COORDINATE_V3, HotExecutionEnvelopeV3,
 };
 use dclutch_core_contract::ContentId;
 use dclutch_execution_strategy_contract::{
@@ -25,38 +25,40 @@ use dclutch_execution_strategy_contract::{
         ADMITTED_RUNTIME_ACCOUNTS_START_V3, ADMITTED_TRADING_PROGRAM_ACCOUNT_V3,
     },
     v2::{
-        AcceleratorAckV2, AcceleratorRequestV2, AuthenticatedScratchPageV2, RequestTransportV2,
-        ACCELERATOR_ACK_HEADER_BYTES_V2,
+        ACCELERATOR_ACK_HEADER_BYTES_V2, AcceleratorAckV2, AcceleratorRequestV2,
+        AuthenticatedScratchPageV2, RequestTransportV2,
     },
 };
 use dclutch_general_adapter_contract::{
     account_rules_v3::general_account_profile_fixed_count_v3,
     admitted_accelerator_v3::authenticate_frozen_selection_v3,
     hot_candidate_v3::{
-        general_hot_candidate_bank_len_v3, general_hot_environment_from_bank_v3,
-        general_hot_scalar_count_v3, project_general_hot_candidate_in_place_v3,
+        GENERAL_HOT_COMMON_IDENTITIES_V3, general_hot_candidate_bank_len_v3,
+        general_hot_environment_from_bank_v3, general_hot_scalar_count_v3,
+        project_general_hot_candidate_in_place_v3,
         project_general_initialize_candidate_in_place_v3,
-        project_general_selection_candidate_in_place_v3, GENERAL_HOT_COMMON_IDENTITIES_V3,
+        project_general_selection_candidate_in_place_v3,
     },
     local_state_v3::{GeneralLocalStateKindV3, GeneralLocalStateV3},
     runtime_manifest::SettlementManifestV2,
     runtime_selection::{
-        consider_verified_candidate_v2, freeze_selection_v2, RuntimeSelectionCursorV2,
-        RUNTIME_SELECTION_CURSOR_BYTES_V2,
+        RUNTIME_SELECTION_CURSOR_BYTES_V2, RuntimeSelectionCursorV2,
+        consider_verified_candidate_v2, freeze_selection_v2,
     },
     runtime_settlement::{
+        RuntimeSettlementActionV2, RuntimeSettlementViewV2,
         evaluate_runtime_settlement_in_place_v2, initialize_runtime_settlement_in_place_v2,
-        runtime_settlement_effect_len_v2, RuntimeSettlementActionV2, RuntimeSettlementViewV2,
+        runtime_settlement_effect_len_v2,
     },
-    runtime_width::{settlement_cursor_len, VerifiedCandidateV2},
+    runtime_width::{VerifiedCandidateV2, settlement_cursor_len},
     state_artifacts_v3::{
+        GENERAL_PRIMARY_STATE_ACCOUNT_V3, GeneralReadonlyEvidenceKindV3,
         general_readonly_evidence_count_v3, general_readonly_evidence_v3,
-        GeneralReadonlyEvidenceKindV3, GENERAL_PRIMARY_STATE_ACCOUNT_V3,
     },
 };
 use dclutch_general_codec::{
-    successor_request_v2::{ControllerRequestV2, CONTROLLER_REQUEST_BYTES_V2},
     Action, SelectionPolicyV1,
+    successor_request_v2::{CONTROLLER_REQUEST_BYTES_V2, ControllerRequestV2},
 };
 use dclutch_general_config_contract::v3::GeneralConfigV3;
 use solana_instructions_sysvar::{load_current_index_checked, load_instruction_at_checked};
