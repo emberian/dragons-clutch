@@ -1,0 +1,32 @@
+[package]
+name = "dclutch-series-shadow-program-test"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+publish = false
+
+[workspace]
+
+[dependencies]
+dclutch-core-contract = { path = "../../../crates/dclutch-core-contract" }
+dclutch-series-shadow-bundle-generator = { path = "../generator" }
+dclutch-series-shadow-sbf = { path = "..", features = ["no-entrypoint"] }
+sha2 = "0.10"
+solana-account = "=4.3.2"
+solana-program = { version = "=3.0.0", default-features = false }
+solana-program-test = { version = "=4.2.1", features = ["agave-unstable-api"] }
+solana-sdk = "=3.0.0"
+solana-sdk-ids = "=3.1.0"
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"
+
+[lints.clippy]
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+checked_conversions = "deny"
+float_arithmetic = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+unwrap_used = "deny"
