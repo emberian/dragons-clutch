@@ -631,7 +631,17 @@ fn validate_context(
     )
     .0
     .to_bytes();
-    if collateral.principal_vault != expected_vault
+    let expected_obligation = Pubkey::find_program_address(
+        &[
+            super::v3_obligation::DEALER_OBLIGATION_PDA_DOMAIN_V3,
+            &context.child_root,
+        ],
+        &Pubkey::new_from_array(context.trading_program),
+    )
+    .0
+    .to_bytes();
+    if context.obligation_account != expected_obligation
+        || collateral.principal_vault != expected_vault
         || collateral.principal_vault == collateral.lp_external_account
         || obligation.child_root() != context.child_root
         || obligation.position_owner() != claims.position_owner
