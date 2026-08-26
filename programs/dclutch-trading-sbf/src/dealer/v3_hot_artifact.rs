@@ -327,7 +327,7 @@ pub fn project_dealer_equity_hot_registers_v3(
         .take(custody_slot_count(plan.action))
         .enumerate()
     {
-        match by_slot[slot] {
+        match by_slot.get(slot).copied().flatten() {
             Some(child) if amount != 0 && child.custody().amount == amount => {}
             None if amount == 0 => {}
             _ => return Err(DealerEquityArtifactErrorV3::Projection),
@@ -336,26 +336,47 @@ pub fn project_dealer_equity_hot_registers_v3(
 
     let mut staged_scalars = vec![0_u64; expected_scalars];
     let mut staged_identities = vec![[0_u8; 32]; expected_identities];
-    staged_scalars[usize::from(DEALER_EQUITY_OBLIGATION_REVISION_SCALAR_V3)] =
-        plan.obligation_revision_after;
-    staged_scalars[usize::from(DEALER_EQUITY_TOTAL_SHARES_SCALAR_V3)] =
-        plan.total_equity_shares_after;
-    staged_scalars[usize::from(DEALER_EQUITY_LP_REVISION_SCALAR_V3)] = plan.lp_revision_after;
-    staged_scalars[usize::from(DEALER_EQUITY_LP_SHARES_SCALAR_V3)] = plan.lp_equity_shares_after;
-    staged_scalars[usize::from(DEALER_EQUITY_WITNESS_OFFSET_SCALAR_V3)] =
+    set_scalar(
+        &mut staged_scalars,
+        DEALER_EQUITY_OBLIGATION_REVISION_SCALAR_V3,
+        plan.obligation_revision_after,
+    )?;
+    set_scalar(
+        &mut staged_scalars,
+        DEALER_EQUITY_TOTAL_SHARES_SCALAR_V3,
+        plan.total_equity_shares_after,
+    )?;
+    set_scalar(
+        &mut staged_scalars,
+        DEALER_EQUITY_LP_REVISION_SCALAR_V3,
+        plan.lp_revision_after,
+    )?;
+    set_scalar(
+        &mut staged_scalars,
+        DEALER_EQUITY_LP_SHARES_SCALAR_V3,
+        plan.lp_equity_shares_after,
+    )?;
+    set_scalar(
+        &mut staged_scalars,
+        DEALER_EQUITY_WITNESS_OFFSET_SCALAR_V3,
         u64::try_from(dealer_equity_witness_offset_v3())
-            .map_err(|_| DealerEquityArtifactErrorV3::Arithmetic)?;
-    staged_scalars[usize::from(DEALER_EQUITY_WITNESS_BYTES_SCALAR_V3)] =
+            .map_err(|_| DealerEquityArtifactErrorV3::Arithmetic)?,
+    )?;
+    set_scalar(
+        &mut staged_scalars,
+        DEALER_EQUITY_WITNESS_BYTES_SCALAR_V3,
         u64::try_from(request.claims_packet().len())
-            .map_err(|_| DealerEquityArtifactErrorV3::Arithmetic)?;
+            .map_err(|_| DealerEquityArtifactErrorV3::Arithmetic)?,
+    )?;
     let current_slot = dealer_current_slot_scalar_register_v3(plan.action)
         .ok_or(DealerEquityArtifactErrorV3::Arithmetic)?;
     let expiry = dealer_expiry_scalar_register_v3(plan.action)
         .ok_or(DealerEquityArtifactErrorV3::Arithmetic)?;
-    staged_scalars[usize::from(current_slot)] = trusted_current_slot;
-    staged_scalars[usize::from(expiry)] = request.expires_at;
-    staged_identities[usize::from(DEALER_EQUITY_PARENT_REQUEST_DIGEST_IDENTITY_V3)] =
-        parent_request_digest;
+    set_scalar(&mut staged_scalars, current_slot, trusted_current_slot)?;
+    set_scalar(&mut staged_scalars, expiry, request.expires_at)?;
+    *staged_identities
+        .get_mut(usize::from(DEALER_EQUITY_PARENT_REQUEST_DIGEST_IDENTITY_V3))
+        .ok_or(DealerEquityArtifactErrorV3::Geometry)? = parent_request_digest;
     for (slot, child) in by_slot
         .iter()
         .copied()
@@ -372,6 +393,18 @@ pub fn project_dealer_equity_hot_registers_v3(
     }
     scalars.copy_from_slice(&staged_scalars);
     identities.copy_from_slice(&staged_identities);
+    Ok(())
+}
+
+#[cfg(not(target_os = "solana"))]
+fn set_scalar(
+    scalars: &mut [u64],
+    index: u16,
+    value: u64,
+) -> Result<(), DealerEquityArtifactErrorV3> {
+    *scalars
+        .get_mut(usize::from(index))
+        .ok_or(DealerEquityArtifactErrorV3::Geometry)? = value;
     Ok(())
 }
 

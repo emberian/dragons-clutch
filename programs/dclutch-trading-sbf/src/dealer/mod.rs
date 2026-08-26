@@ -48,6 +48,10 @@ pub mod v3_multi_lp;
 pub mod v3_obligation;
 /// Chain-derived unsigned requests for every Dealer V3 multi-LP action.
 pub mod v3_operator;
+/// Exact logical AccountProfile for admitted junior-equity execution.
+pub mod v3_profile;
+/// One global selector authority and finalized V3 capability descriptors.
+pub mod v3_release;
 /// EffectProgram V3 admission for exact Dealer Custody request sequences.
 pub mod v3_route;
 /// Runtime-width exact trade requests and scenario-solvent physical composition.

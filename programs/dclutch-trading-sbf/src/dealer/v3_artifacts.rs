@@ -262,8 +262,11 @@ pub fn encode_dealer_equity_request_profile_v3(
         .map_err(|_| DealerEquityArtifactsErrorV3::RequestProfile)?;
         DEALER_EQUITY_V1_PROFILE_BYTES_V3
     };
+    let embedded = embedded_output
+        .get(..embedded_bytes)
+        .ok_or(DealerEquityArtifactsErrorV3::Geometry)?;
     if signed_position_count == 0 {
-        scratch.copy_from_slice(&embedded_output[..embedded_bytes]);
+        scratch.copy_from_slice(embedded);
         RequestProfileV1::decode(scratch)
             .map_err(|_| DealerEquityArtifactsErrorV3::RequestProfile)?;
         output.copy_from_slice(scratch);
@@ -271,7 +274,7 @@ pub fn encode_dealer_equity_request_profile_v3(
     }
     let (minimum_bytes, maximum_bytes) = dealer_equity_witness_bounds_v3(signed_position_count)?;
     encode_request_profile_v3_atomic(
-        &embedded_output[..embedded_bytes],
+        embedded,
         BorrowedWitnessPolicyV3 {
             minimum_bytes,
             maximum_bytes,
@@ -357,13 +360,14 @@ pub fn decode_dealer_equity_request_profile_v3<'a>(
     }
     let mut scratch = [0_u8; DEALER_EQUITY_REQUEST_PROFILE_MAX_BYTES_V3];
     let mut canonical = [0_u8; DEALER_EQUITY_REQUEST_PROFILE_MAX_BYTES_V3];
-    encode_dealer_equity_request_profile_v3(
-        action,
-        signed_position_count,
-        &mut scratch[..expected],
-        &mut canonical[..expected],
-    )?;
-    if bytes != &canonical[..expected] {
+    let scratch = scratch
+        .get_mut(..expected)
+        .ok_or(DealerEquityArtifactsErrorV3::RequestProfile)?;
+    let canonical = canonical
+        .get_mut(..expected)
+        .ok_or(DealerEquityArtifactsErrorV3::RequestProfile)?;
+    encode_dealer_equity_request_profile_v3(action, signed_position_count, scratch, canonical)?;
+    if bytes != canonical {
         return Err(DealerEquityArtifactsErrorV3::RequestProfile);
     }
     if signed_position_count == 0 {
@@ -389,13 +393,14 @@ pub fn decode_dealer_equity_transition_v3<'a>(
     }
     let mut scratch = [0_u8; DEALER_EQUITY_TRANSITION_MAX_BYTES_V3];
     let mut canonical = [0_u8; DEALER_EQUITY_TRANSITION_MAX_BYTES_V3];
-    encode_dealer_equity_transition_v3(
-        action,
-        signed_position_count,
-        &mut scratch[..expected],
-        &mut canonical[..expected],
-    )?;
-    if bytes != &canonical[..expected] {
+    let scratch = scratch
+        .get_mut(..expected)
+        .ok_or(DealerEquityArtifactsErrorV3::Transition)?;
+    let canonical = canonical
+        .get_mut(..expected)
+        .ok_or(DealerEquityArtifactsErrorV3::Transition)?;
+    encode_dealer_equity_transition_v3(action, signed_position_count, scratch, canonical)?;
+    if bytes != canonical {
         return Err(DealerEquityArtifactsErrorV3::Transition);
     }
     TransitionProgramV3::decode(bytes).map_err(|_| DealerEquityArtifactsErrorV3::Transition)

@@ -13,11 +13,11 @@ use solana_program::{hash::hash, pubkey::Pubkey};
 
 use super::{
     v3_composer::{
-        prepare_scenario_atomic_v3, ScenarioAtomicPlanV3, ScenarioCollateralFrameV3,
-        ScenarioComposerContextV3, ScenarioComposerErrorV3, ScenarioFillInputV3,
-        ScenarioQuoteDirectionV3, ScenarioQuoteLegV3,
+        ScenarioAtomicPlanV3, ScenarioCollateralFrameV3, ScenarioComposerContextV3,
+        ScenarioComposerErrorV3, ScenarioFillInputV3, ScenarioQuoteDirectionV3, ScenarioQuoteLegV3,
+        prepare_scenario_atomic_v3,
     },
-    v3_obligation::{DealerObligationProjectionV3, DEALER_OBLIGATION_PDA_DOMAIN_V3},
+    v3_obligation::{DEALER_OBLIGATION_PDA_DOMAIN_V3, DealerObligationProjectionV3},
 };
 
 /// Canonical exact-fill request magic.
@@ -30,8 +30,8 @@ pub const DEALER_SCENARIO_TRADE_SELECTOR_OFFSET_V3: u32 = 10;
 pub const DEALER_SCENARIO_TRADE_HEADER_BYTES_V3: usize = 384;
 /// One acquired and one delivered quantity per outcome.
 pub const DEALER_SCENARIO_TRADE_ITEM_BYTES_V3: usize = 16;
-/// Sole exact-fill action admitted by this wire.
-pub const DEALER_SCENARIO_TRADE_ACTION_V3: u16 = 1;
+/// Sole exact-fill action in the global Dealer selector space.
+pub const DEALER_SCENARIO_TRADE_ACTION_V3: u16 = 9;
 
 /// Stable refusal from request decoding, construction, or execution joining.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

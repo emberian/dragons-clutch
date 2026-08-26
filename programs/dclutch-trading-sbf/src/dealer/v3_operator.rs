@@ -8,8 +8,8 @@ use dclutch_capability_program_contract::set_v1::CapabilityProgramSetV1;
 use dclutch_core_contract::ContentId;
 use solana_program::{hash::hash, pubkey::Pubkey};
 
-use super::v3_multi_lp::{DealerLpPositionV3, DEALER_LP_POSITION_PDA_DOMAIN_V3};
-use super::v3_obligation::{DealerObligationProjectionV3, DEALER_OBLIGATION_PDA_DOMAIN_V3};
+use super::v3_multi_lp::{DEALER_LP_POSITION_PDA_DOMAIN_V3, DealerLpPositionV3};
+use super::v3_obligation::{DEALER_OBLIGATION_PDA_DOMAIN_V3, DealerObligationProjectionV3};
 
 /// Exact unsigned multi-LP request width.
 pub const DEALER_MULTI_LP_REQUEST_BYTES_V3: usize = 312;
@@ -25,9 +25,9 @@ pub const DEALER_MULTI_LP_ACTION_SELECTOR_OFFSET_V3: u32 = 10;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MultiLpRequestActionV3 {
     /// Create one vacant prepaid Trading-owned LP Position.
-    Open = 1,
+    Open = 7,
     /// Reclaim one zero-share LP Position to its immutable refund recipient.
-    Close = 4,
+    Close = 8,
 }
 
 /// Stable refusal from unsigned request construction.
@@ -126,8 +126,8 @@ impl DealerMultiLpRequestV3 {
             return Err(MultiLpOperatorErrorV3::InvalidRequest);
         }
         let action = match read_u16(bytes, 10)? {
-            1 => MultiLpRequestActionV3::Open,
-            4 => MultiLpRequestActionV3::Close,
+            7 => MultiLpRequestActionV3::Open,
+            8 => MultiLpRequestActionV3::Close,
             _ => return Err(MultiLpOperatorErrorV3::InvalidRequest),
         };
         let value = Self {
