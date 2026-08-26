@@ -736,7 +736,45 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         request_bytes,
     )?;
 
-    Ok(Box::new(AuthenticatedAcceleratorInvocationV4 {
+    Ok(assemble_authenticated_accelerator_invocation_v4(
+        request,
+        envelope,
+        hot_instruction,
+        strategy,
+        context,
+        product_runtime,
+        claims_program,
+        custody_program,
+        selected_action,
+        span_widths,
+        input_bank,
+        scalars,
+        identities,
+        frame,
+        runtime_accounts,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn assemble_authenticated_accelerator_invocation_v4<'request, 'accounts, 'info>(
+    request: AcceleratorRequestV2<'request>,
+    envelope: HotExecutionEnvelopeV3,
+    hot_instruction: Vec<u8>,
+    strategy: Box<AuthenticatedExecutionStrategyV2>,
+    context: Box<AdmittedInvocationContextV3>,
+    product_runtime: Box<AuthenticatedProductRuntimeV3<'accounts, 'info>>,
+    claims_program: ContentId,
+    custody_program: ContentId,
+    selected_action: u32,
+    span_widths: Vec<u32>,
+    input_bank: Vec<u8>,
+    scalars: Vec<u64>,
+    identities: Vec<[u8; 32]>,
+    frame: HotFrameV3<'accounts, 'info>,
+    runtime_accounts: &'accounts [AccountInfo<'info>],
+) -> Box<AuthenticatedAcceleratorInvocationV4<'request, 'accounts, 'info>> {
+    Box::new(AuthenticatedAcceleratorInvocationV4 {
         request,
         envelope,
         hot_instruction,
@@ -759,7 +797,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
             frame.effect_raw,
         ],
         runtime_accounts,
-    }))
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
