@@ -556,9 +556,14 @@ impl AdmittedBasisV2 {
 
     /// Build complete split candidates after checking the exact worst-case liability.
     ///
-    /// Both output buffers remain unchanged on refusal. For the two admitted
-    /// evaluator families, `Q * max(supply)` is the exact maximum liability:
-    /// categorical winners and the two ramp endpoints each attain a vertex.
+    /// Both output buffers remain unchanged on refusal.
+    ///
+    /// `Q * max(supply)` is the exact maximum liability for both admitted
+    /// evaluator families, and that is now a theorem rather than a comment:
+    /// `Basis.liability_le_peak_mul_scale` bounds every basis, while
+    /// `categoricalBasis_globally_solvent_iff` and
+    /// `CappedRampComplement.globally_solvent_iff` show the bound is attained
+    /// at a categorical winner and at each ramp knot coordinate.
     pub fn plan_split_into(
         self,
         aggregate_before: &[u64],

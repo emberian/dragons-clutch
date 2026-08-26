@@ -30,10 +30,29 @@ scale and denominators plus `i64` signed numerators. Checked `i128` cross
 products and `u128` interpolation products cover that complete profile. These
 are physical representation bounds, not mathematical basis-width limits.
 
-`src/generated.rs` contains only Lean-emitted ABI constants and agreement/
-refusal cases. The evaluator, hostile decoder, liability arithmetic, and split
-planner are handwritten Rust. Regeneration must go to a temporary file and be
-compared before atomically replacing the accepted generated file.
+Complete-set merge, claim transfer, and single-claim terminal redemption are
+executed by the same runtime-width planner as split. Liability and collateral
+move by exactly the same amount in every admitted transition:
+
+```text
+split   L(T + q*1, p) = L(T,p) + q*Q      H' = H + q*Q
+merge   L(T - q*1, p) + q*Q = L(T,p)      H' + q*Q = H
+redeem  L(T - q*e_i, p) + q*p_i = L(T,p)  H' + q*p_i = H
+trade   aggregate T unchanged, so L and H are both unchanged
+```
+
+`maximum_liability_v2` is the certified pre-resolution envelope `Q * peak(T)`.
+Lean bounds exact liability by it for every basis and proves it attained for
+both admitted evaluator families, so covering it is solvency at every admitted
+terminal result without enumerating the result domain.
+
+`src/generated.rs` contains only Lean-emitted ABI constants plus three corpora:
+sixteen agreement cases, nineteen hostile refusal cases, and twenty-four
+runtime-width transition cases covering split, merge, and terminal redemption
+with every reachable refusal tag. The evaluator, hostile decoder, liability
+arithmetic, and transition planners are handwritten Rust. Regeneration must go
+to a temporary file and be compared before atomically replacing the accepted
+generated file; `check-generated.sh` performs exactly that.
 
 The crate is a canonical workspace member. Capability admission and Market
 migration remain separately gated work.
