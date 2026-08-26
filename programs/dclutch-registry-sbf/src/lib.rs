@@ -45,6 +45,7 @@ use solana_system_interface::instruction::create_account;
 
 mod batch_v2;
 mod continuation_v1;
+mod record_v1;
 
 /// Exact account count for permissionless release-set activation.
 pub const ACTIVATE_ACCOUNT_COUNT_V1: usize = 26;
@@ -79,6 +80,8 @@ pub enum RegistryError {
     Batch = 10,
     /// Registry-authenticated continuation header, signer, or child refused.
     Continuation = 11,
+    /// Immutable-record publication wire, frame, transition, or account refused.
+    Record = 12,
 }
 
 impl From<RegistryError> for ProgramError {
@@ -105,6 +108,16 @@ pub fn process_instruction(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
+    if instruction_data.get(..8)
+        == Some(dclutch_record_contract::RECORD_INSTRUCTION_MAGIC_V1.as_slice())
+        && (instruction_data
+            .get(10)
+            .copied()
+            .is_some_and(|action| action >= 2)
+            || instruction_data.len() != dclutch_registry_svm::REGISTRY_INSTRUCTION_BYTES_V1)
+    {
+        return record_v1::dispatch(program_id, accounts, instruction_data);
+    }
     if instruction_data.get(..8)
         == Some(
             dclutch_registry_svm::continuation_v1::REGISTRY_CONTINUATION_REQUEST_MAGIC_V1
