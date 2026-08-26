@@ -17,10 +17,12 @@ use dclutch_claims_svm::{
         LiabilityBasisPositionViewV2,
     },
     signed_delta_v3::{
-        DeltaDirectionV3, PositionDeltaInputV3, PositionDeltaV3,
-        SIGNED_DELTA_POST_RESOURCE_DIGEST_DOMAIN_V3, SIGNED_DELTA_TABLE_DIGEST_DOMAIN_V3,
-        SignedDeltaPlanInputV3, SignedDeltaPlanV3, SignedDeltaPositionV3,
-        SignedDeltaReceiptCommitmentV3, SignedDeltaReceiptV3, SignedDeltaV3, plan_bytes,
+        DeltaDirectionV3, PositionDeltaInputV3, PositionDeltaV3, SIGNED_DELTA_BYTES_V3,
+        SIGNED_DELTA_PLAN_HEADER_BYTES_V3, SIGNED_DELTA_POSITION_BYTES_V3,
+        SIGNED_DELTA_POST_RESOURCE_DIGEST_DOMAIN_V3, SIGNED_DELTA_ROW_BYTES_V3,
+        SIGNED_DELTA_TABLE_DIGEST_DOMAIN_V3, SignedDeltaPlanInputV3, SignedDeltaPlanV3,
+        SignedDeltaPositionV3, SignedDeltaReceiptCommitmentV3, SignedDeltaReceiptV3, SignedDeltaV3,
+        ValidatedSignedDeltaConstructionV3, plan_bytes,
     },
 };
 use dclutch_fractional_claim_contract::{
@@ -138,6 +140,140 @@ pub struct FractionalSignedDeltaLoweringV1 {
     shape: FractionalSignedDeltaShapeV1,
 }
 
+/// Canonical Fractional economic plan prepared for a physical Claims CPI.
+///
+/// This allocation-bounded form commits the exact existing Fractional request
+/// and canonical SignedDeltaV3 packet without materializing duplicate complete
+/// post-state candidates in the adapter heap. Claims remains the sole writer;
+/// its receipt is joined to the actual returned resources afterward.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedFractionalSignedDeltaV1 {
+    release_set: [u8; 32],
+    market: [u8; 32],
+    product_record_digest: [u8; 32],
+    semantic_basis_id: [u8; 32],
+    linked_basis_record_digest: [u8; 32],
+    positions: CanonicalPositions,
+    action: FractionalActionV1,
+    request_digest: [u8; 32],
+    claims_program: [u8; 32],
+    pre_fractional_revision: u64,
+    post_fractional_revision: u64,
+    pre_market_revision: u64,
+    post_market_revision: u64,
+    native_claims: u64,
+    collateral_atoms: u64,
+    shape: FractionalSignedDeltaShapeV1,
+}
+
+impl PreparedFractionalSignedDeltaV1 {
+    /// Existing Fractional action whose native effect was prepared.
+    pub const fn action(self) -> FractionalActionV1 {
+        self.action
+    }
+
+    /// SHA-256 of the existing exact Fractional request bytes.
+    pub const fn request_digest(self) -> [u8; 32] {
+        self.request_digest
+    }
+
+    /// Registry-selected Claims program required to produce the receipt.
+    pub const fn claims_program(self) -> [u8; 32] {
+        self.claims_program
+    }
+
+    /// Fractional optimistic pre-revision bound by the request.
+    pub const fn pre_fractional_revision(self) -> u64 {
+        self.pre_fractional_revision
+    }
+
+    /// Fractional revision required after the enclosing atomic action.
+    pub const fn post_fractional_revision(self) -> u64 {
+        self.post_fractional_revision
+    }
+
+    /// Claims aggregate optimistic pre-revision.
+    pub const fn pre_market_revision(self) -> u64 {
+        self.pre_market_revision
+    }
+
+    /// Claims aggregate revision required after child success.
+    pub const fn post_market_revision(self) -> u64 {
+        self.post_market_revision
+    }
+
+    /// Whole native claims moved or terminally debited.
+    pub const fn native_claims(self) -> u64 {
+        self.native_claims
+    }
+
+    /// Exact categorical collateral owed by the enclosing action.
+    pub const fn collateral_atoms(self) -> u64 {
+        self.collateral_atoms
+    }
+
+    /// Exact runtime packet and table geometry.
+    pub const fn shape(self) -> FractionalSignedDeltaShapeV1 {
+        self.shape
+    }
+
+    /// Current release set authenticated from Claims state.
+    pub const fn release_set(self) -> [u8; 32] {
+        self.release_set
+    }
+
+    /// Logical Core Market authenticated from Claims state.
+    pub const fn market(self) -> [u8; 32] {
+        self.market
+    }
+
+    /// Borrow the exact canonical Position, aggregate, and row table preimages.
+    ///
+    /// This is the small physical-adapter hashing boundary. The prepared value
+    /// owns the authenticated runtime geometry, while the adapter hashes the
+    /// actual packet bytes it will pass to Claims using its native SHA-256
+    /// facility. The packet is still hostile-decoded independently by Claims.
+    pub fn table_bytes(self, packet: &[u8]) -> Result<(&[u8], &[u8], &[u8])> {
+        if packet.len() != self.shape.packet_bytes {
+            return Err(Error::WidthMismatch);
+        }
+        let position_bytes = usize::try_from(self.shape.position_count)
+            .ok()
+            .and_then(|count| count.checked_mul(SIGNED_DELTA_POSITION_BYTES_V3))
+            .ok_or(Error::Arithmetic)?;
+        let aggregate_bytes = usize::try_from(self.shape.claim_count)
+            .ok()
+            .and_then(|count| count.checked_mul(SIGNED_DELTA_BYTES_V3))
+            .ok_or(Error::Arithmetic)?;
+        let row_bytes = usize::try_from(self.shape.position_delta_count)
+            .ok()
+            .and_then(|count| count.checked_mul(SIGNED_DELTA_ROW_BYTES_V3))
+            .ok_or(Error::Arithmetic)?;
+        let positions_start = SIGNED_DELTA_PLAN_HEADER_BYTES_V3;
+        let aggregates_start = positions_start
+            .checked_add(position_bytes)
+            .ok_or(Error::Arithmetic)?;
+        let rows_start = aggregates_start
+            .checked_add(aggregate_bytes)
+            .ok_or(Error::Arithmetic)?;
+        let rows_end = rows_start.checked_add(row_bytes).ok_or(Error::Arithmetic)?;
+        if rows_end != packet.len() {
+            return Err(Error::WidthMismatch);
+        }
+        Ok((
+            packet
+                .get(positions_start..aggregates_start)
+                .ok_or(Error::WidthMismatch)?,
+            packet
+                .get(aggregates_start..rows_start)
+                .ok_or(Error::WidthMismatch)?,
+            packet
+                .get(rows_start..rows_end)
+                .ok_or(Error::WidthMismatch)?,
+        ))
+    }
+}
+
 impl FractionalSignedDeltaLoweringV1 {
     /// Existing Fractional action whose economic effect was lowered.
     pub const fn action(self) -> FractionalActionV1 {
@@ -240,6 +376,176 @@ pub fn fractional_signed_delta_shape_v1(
         packet_bytes: plan_bytes(market.claim_count, position_count, position_delta_count)
             .map_err(|_| Error::SignedDelta)?,
     })
+}
+
+/// Prepare canonical SignedDeltaV3 bytes without duplicating complete
+/// post-state candidate buffers in a physical adapter.
+pub fn prepare_fractional_signed_delta_v1(
+    input: FractionalSignedDeltaInputV1<'_>,
+    aggregate_scratch: &mut [SignedDeltaV3],
+    position_delta_scratch: &mut [PositionDeltaV3],
+    packet_output: &mut [u8],
+) -> Result<PreparedFractionalSignedDeltaV1> {
+    let market = validate_common(input)?;
+    let shape = fractional_signed_delta_shape_v1(input)?;
+    if aggregate_scratch.len()
+        != usize::try_from(shape.claim_count).map_err(|_| Error::Arithmetic)?
+        || position_delta_scratch.len()
+            != usize::try_from(shape.position_delta_count).map_err(|_| Error::Arithmetic)?
+        || packet_output.len() != shape.packet_bytes
+    {
+        return Err(Error::WidthMismatch);
+    }
+    let reserve = decode_position(
+        input.reserve_position_bytes,
+        input.market_account,
+        input.reserve_owner,
+        market.basis_id,
+        market.claim_count,
+    )?;
+    let actor = match input.actor_position_bytes {
+        Some(bytes) => Some(decode_position(
+            bytes,
+            input.market_account,
+            input.request.input().owner,
+            market.basis_id,
+            market.claim_count,
+        )?),
+        None => None,
+    };
+    let neutral =
+        SignedDeltaV3::new(DeltaDirectionV3::Neutral, 0).map_err(|_| Error::SignedDelta)?;
+    aggregate_scratch.fill(neutral);
+    let (positions, reserve_index, actor_index) = canonical_positions(input, reserve, actor)?;
+    validate_and_fill_effects(
+        input,
+        market,
+        reserve,
+        actor,
+        reserve_index,
+        actor_index,
+        aggregate_scratch,
+        position_delta_scratch,
+    )?;
+    let request_digest = digest(&input.request.to_bytes());
+    let header = SignedDeltaPlanInputV3 {
+        caller_role: CallerRole::Trading,
+        release_set: market.release_set,
+        market: market.logical_market,
+        request_id: request_digest,
+        product_record_digest: input.request.input().product_record,
+        semantic_basis_id: market.basis_id,
+        linked_basis_record_digest: input.linked_basis_record_digest,
+        expected_market_revision: market.revision,
+        claim_count: market.claim_count,
+    };
+    let one = core::slice::from_ref(&positions.first);
+    let two = positions.second.map(|second| [positions.first, second]);
+    let position_table = two.as_ref().map_or(one, <[_; 2]>::as_slice);
+    let construction = ValidatedSignedDeltaConstructionV3::new(
+        header,
+        position_table,
+        aggregate_scratch,
+        position_delta_scratch,
+    )
+    .map_err(|_| Error::SignedDelta)?;
+    construction
+        .encode_plan_into(packet_output)
+        .map_err(|_| Error::SignedDelta)?;
+    Ok(PreparedFractionalSignedDeltaV1 {
+        release_set: header.release_set,
+        market: header.market,
+        product_record_digest: header.product_record_digest,
+        semantic_basis_id: header.semantic_basis_id,
+        linked_basis_record_digest: header.linked_basis_record_digest,
+        positions,
+        action: input.request.action(),
+        request_digest,
+        claims_program: input.claims_program,
+        pre_fractional_revision: input.request.input().expected_revision,
+        post_fractional_revision: input.post_fractional_revision,
+        pre_market_revision: market.revision,
+        post_market_revision: market.revision.checked_add(1).ok_or(Error::Arithmetic)?,
+        native_claims: input.native_claims,
+        collateral_atoms: input.collateral_atoms,
+        shape,
+    })
+}
+
+/// Join a prepared Fractional plan to the sole Claims receipt and exact
+/// returned post-resource bytes.
+pub fn validate_prepared_fractional_signed_delta_postcondition_v1(
+    expected: PreparedFractionalSignedDeltaV1,
+    packet_digest: [u8; 32],
+    table_digest: [u8; 32],
+    post_resource_digest: [u8; 32],
+    receipt_bytes: &[u8],
+    post_market: &[u8],
+    post_positions: &[&[u8]],
+) -> Result<()> {
+    if post_positions.len()
+        != usize::try_from(expected.shape.position_count).map_err(|_| Error::Arithmetic)?
+    {
+        return Err(Error::ReceiptMismatch);
+    }
+    let market =
+        LiabilityBasisMarketViewV2::decode(post_market).map_err(|_| Error::ReceiptMismatch)?;
+    if market.revision != expected.post_market_revision
+        || market.logical_market != expected.market
+        || market.release_set != expected.release_set
+        || market.basis_id != expected.semantic_basis_id
+        || market.claim_count != expected.shape.claim_count
+    {
+        return Err(Error::ReceiptMismatch);
+    }
+    let mut index = 0_u32;
+    while index < expected.shape.position_count {
+        let table = expected.positions.position(index)?;
+        let bytes = *post_positions
+            .get(usize::try_from(index).map_err(|_| Error::Arithmetic)?)
+            .ok_or(Error::ReceiptMismatch)?;
+        let position =
+            LiabilityBasisPositionViewV2::decode(bytes).map_err(|_| Error::ReceiptMismatch)?;
+        if position.owner != table.owner()
+            || position.revision
+                != table
+                    .expected_revision()
+                    .checked_add(1)
+                    .ok_or(Error::Arithmetic)?
+            || position.basis_id != market.basis_id
+            || position.claim_count != expected.shape.claim_count
+        {
+            return Err(Error::ReceiptMismatch);
+        }
+        index = index.checked_add(1).ok_or(Error::Arithmetic)?;
+    }
+    let commitment = SignedDeltaReceiptCommitmentV3::new(
+        packet_digest,
+        table_digest,
+        expected.claims_program,
+        post_resource_digest,
+    )
+    .map_err(|_| Error::ReceiptMismatch)?;
+    let receipt =
+        SignedDeltaReceiptV3::decode(receipt_bytes).map_err(|_| Error::ReceiptMismatch)?;
+    if receipt.caller_role() != CallerRole::Trading
+        || receipt.release_set() != expected.release_set
+        || receipt.market() != expected.market
+        || receipt.request_id() != expected.request_digest
+        || receipt.product_record_digest() != expected.product_record_digest
+        || receipt.semantic_basis_id() != expected.semantic_basis_id
+        || receipt.linked_basis_record_digest() != expected.linked_basis_record_digest
+        || receipt.pre_market_revision() != expected.pre_market_revision
+        || receipt.post_market_revision() != expected.post_market_revision
+        || receipt.claim_count() != expected.shape.claim_count
+        || receipt.position_count() != expected.shape.position_count
+        || receipt.position_delta_count() != expected.shape.position_delta_count
+    {
+        return Err(Error::ReceiptMismatch);
+    }
+    receipt
+        .validate_physical_commitment(commitment)
+        .map_err(|_| Error::ReceiptMismatch)
 }
 
 /// Lower one exact Fractional native effect into canonical SignedDeltaV3.
@@ -572,9 +878,20 @@ fn decode_position(
     Ok(position)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CanonicalPositions {
     first: SignedDeltaPositionV3,
     second: Option<SignedDeltaPositionV3>,
+}
+
+impl CanonicalPositions {
+    fn position(self, index: u32) -> Result<SignedDeltaPositionV3> {
+        match index {
+            0 => Ok(self.first),
+            1 => self.second.ok_or(Error::ReceiptMismatch),
+            _ => Err(Error::ReceiptMismatch),
+        }
+    }
 }
 
 fn canonical_positions(
@@ -818,9 +1135,13 @@ fn write_candidates(
     )?;
     let mut outcome = 0_u32;
     while outcome < market.claim_count {
-        let before = market
-            .supply(input.market_bytes, outcome)
-            .map_err(|_| Error::ClaimsState)?;
+        // `validate_common` already hostile-decoded this exact aggregate. Do
+        // not re-decode it for every runtime tail coordinate.
+        let before = read_claim(
+            input.market_bytes,
+            LiabilityBasisMarketLayoutV2::SUPPLIES,
+            outcome,
+        )?;
         let after = apply(
             before,
             *aggregates

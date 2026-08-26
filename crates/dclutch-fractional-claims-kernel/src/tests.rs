@@ -328,6 +328,82 @@ fn canonical_receipt_and_exact_post_resources_validate_without_fractional_receip
 }
 
 #[test]
+fn prepared_physical_boundary_is_byte_identical_and_refuses_commitment_substitution() {
+    let state = state(&[20, 30, 40], &[3, 4, 5], &[7, 8, 9]);
+    let input = input(&state, FractionalActionV1::Wrap, 0, 2);
+    let (complete, complete_packet, post_market, post_positions) = lower(input);
+    let shape = fractional_signed_delta_shape_v1(input).unwrap();
+    let neutral = SignedDeltaV3::new(DeltaDirectionV3::Neutral, 0).unwrap();
+    let mut aggregates = vec![neutral; usize::try_from(shape.claim_count()).unwrap()];
+    let mut rows = vec![dummy_row(shape.claim_count()); 2];
+    let mut packet = vec![0xa5; shape.packet_bytes()];
+    let prepared =
+        prepare_fractional_signed_delta_v1(input, &mut aggregates, &mut rows, &mut packet).unwrap();
+    assert_eq!(packet, complete_packet);
+    let (position_table, aggregate_table, row_table) = prepared.table_bytes(&packet).unwrap();
+    assert_eq!(
+        digestv(&[
+            SIGNED_DELTA_TABLE_DIGEST_DOMAIN_V3,
+            position_table,
+            aggregate_table,
+            row_table,
+        ]),
+        complete.table_digest()
+    );
+    let (_, short_packet) = packet.split_last().unwrap();
+    assert_eq!(
+        prepared.table_bytes(short_packet),
+        Err(Error::WidthMismatch)
+    );
+    let plan = SignedDeltaPlanV3::decode(&packet).unwrap();
+    let receipt = SignedDeltaReceiptV3::new(
+        plan,
+        complete.packet_digest(),
+        complete.table_digest(),
+        CLAIMS,
+        complete.post_resource_digest(),
+        complete.post_market_revision(),
+    )
+    .unwrap()
+    .to_bytes();
+    let position_refs: Vec<&[u8]> = post_positions.iter().map(Vec::as_slice).collect();
+    assert_eq!(
+        validate_prepared_fractional_signed_delta_postcondition_v1(
+            prepared,
+            complete.packet_digest(),
+            complete.table_digest(),
+            complete.post_resource_digest(),
+            &receipt,
+            &post_market,
+            &position_refs,
+        ),
+        Ok(())
+    );
+    for substitution in [0_u8, 1, 2] {
+        let mut packet_digest = complete.packet_digest();
+        let mut table_digest = complete.table_digest();
+        let mut resource_digest = complete.post_resource_digest();
+        match substitution {
+            0 => packet_digest[0] ^= 1,
+            1 => table_digest[0] ^= 1,
+            _ => resource_digest[0] ^= 1,
+        }
+        assert_eq!(
+            validate_prepared_fractional_signed_delta_postcondition_v1(
+                prepared,
+                packet_digest,
+                table_digest,
+                resource_digest,
+                &receipt,
+                &post_market,
+                &position_refs,
+            ),
+            Err(Error::ReceiptMismatch)
+        );
+    }
+}
+
+#[test]
 fn no_native_effect_alias_stale_economics_and_substitution_refuse() {
     let state = state(&[20, 30, 40], &[3, 4, 5], &[7, 8, 9]);
     for action in [

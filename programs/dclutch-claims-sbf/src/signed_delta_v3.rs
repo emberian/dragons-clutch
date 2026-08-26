@@ -29,17 +29,20 @@ use dclutch_claims_svm::{
 };
 use dclutch_core_contract::ContentId;
 use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV2};
+use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
+use dclutch_registry_svm::batch_v2::{AuthenticatedRoleBatchReceiptV2, RoleBatchRequestV2};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
-    program::set_return_data,
+    instruction::{AccountMeta, Instruction},
+    program::{get_return_data, invoke, set_return_data},
     program_error::ProgramError,
     pubkey::Pubkey,
 };
 use solana_sdk_ids::sysvar;
 
-use super::{affine_batch_v2::authenticate_runtime_product_basis_core_v2, reauthenticate};
+use super::affine_batch_v2::authenticate_runtime_product_basis_core_v2;
 use crate::liability_basis_v2::{
     LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
     LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, MarketViewV2, PositionViewV2,
@@ -116,6 +119,16 @@ struct SignedDeltaAccountsV3<'accounts, 'info> {
     core_program: &'accounts AccountInfo<'info>,
     core_programdata: &'accounts AccountInfo<'info>,
     positions: &'accounts [AccountInfo<'info>],
+}
+
+#[derive(Clone, Copy)]
+struct ExpectedRoleV3 {
+    role: ExecutionRoleV1,
+    program: [u8; 32],
+    programdata: [u8; 32],
+    artifact_release: [u8; 32],
+    semantic_release: [u8; 32],
+    deployment_slot: u64,
 }
 
 impl<'accounts, 'info> SignedDeltaAccountsV3<'accounts, 'info> {
@@ -409,36 +422,158 @@ fn authenticate_releases(
     accounts: &SignedDeltaAccountsV3<'_, '_>,
     plan: SignedDeltaPlanV3<'_>,
 ) -> Result<(), ProgramError> {
-    let caller = reauthenticate(
-        accounts.registry,
-        accounts.cache,
-        execution_role(plan.caller_role()),
-        accounts.caller_program,
-        accounts.caller_programdata,
+    let requested = if plan.caller_role() == CallerRole::Core {
+        Vec::from([
+            (
+                ExecutionRoleV1::Core,
+                accounts.core_program,
+                accounts.core_programdata,
+            ),
+            (
+                ExecutionRoleV1::Claims,
+                accounts.claims_program,
+                accounts.claims_programdata,
+            ),
+        ])
+    } else {
+        Vec::from([
+            (
+                ExecutionRoleV1::Core,
+                accounts.core_program,
+                accounts.core_programdata,
+            ),
+            (
+                ExecutionRoleV1::Claims,
+                accounts.claims_program,
+                accounts.claims_programdata,
+            ),
+            (
+                ExecutionRoleV1::Trading,
+                accounts.caller_program,
+                accounts.caller_programdata,
+            ),
+        ])
+    };
+    let (cache_digest, expected) = expected_role_batch(accounts, plan, &requested)?;
+    let roles: Vec<_> = requested.iter().map(|entry| entry.0).collect();
+    let request = RoleBatchRequestV2::new(
+        ContentId::new(plan.release_set()).map_err(|_| SignedDeltaSbfErrorV3::Release)?,
+        cache_digest,
+        &roles,
     )
     .map_err(|_| SignedDeltaSbfErrorV3::Release)?;
-    let claims = reauthenticate(
-        accounts.registry,
-        accounts.cache,
-        ExecutionRoleV1::Claims,
-        accounts.claims_program,
-        accounts.claims_programdata,
+    let request_bytes = request.to_bytes();
+    let mut metas = Vec::with_capacity(1_usize.saturating_add(requested.len().saturating_mul(2)));
+    let mut infos = Vec::with_capacity(2_usize.saturating_add(requested.len().saturating_mul(2)));
+    metas.push(AccountMeta::new_readonly(*accounts.cache.key, false));
+    infos.push(accounts.cache.clone());
+    for (_, program, programdata) in &requested {
+        metas.push(AccountMeta::new_readonly(*program.key, false));
+        metas.push(AccountMeta::new_readonly(*programdata.key, false));
+        infos.push((*program).clone());
+        infos.push((*programdata).clone());
+    }
+    infos.push(accounts.registry.clone());
+    invoke(
+        &Instruction {
+            program_id: *accounts.registry.key,
+            accounts: metas,
+            data: request_bytes.to_vec(),
+        },
+        &infos,
     )
     .map_err(|_| SignedDeltaSbfErrorV3::Release)?;
-    let core = reauthenticate(
-        accounts.registry,
-        accounts.cache,
-        ExecutionRoleV1::Core,
-        accounts.core_program,
-        accounts.core_programdata,
-    )
-    .map_err(|_| SignedDeltaSbfErrorV3::Release)?;
-    for receipt in [caller, claims, core] {
-        if receipt.execution_release_set_id().as_bytes() != &plan.release_set() {
+    let (producer, receipt_bytes) = get_return_data().ok_or(SignedDeltaSbfErrorV3::Release)?;
+    if producer != *accounts.registry.key {
+        return Err(SignedDeltaSbfErrorV3::Release.into());
+    }
+    let receipt = AuthenticatedRoleBatchReceiptV2::decode(&receipt_bytes)
+        .map_err(|_| SignedDeltaSbfErrorV3::Release)?;
+    let request_digest = ContentId::new(hash(&request_bytes).to_bytes())
+        .map_err(|_| SignedDeltaSbfErrorV3::Release)?;
+    if receipt.registry_program().to_bytes() != accounts.registry.key.to_bytes()
+        || receipt.activation_cache() != accounts.cache.key.to_bytes()
+        || receipt.activation_cache_digest() != cache_digest
+        || receipt.release_set_id().to_bytes() != plan.release_set()
+        || receipt.request_digest() != request_digest
+        || receipt.role_mask() != request.role_mask()
+        || usize::from(receipt.role_count()) != expected.len()
+    {
+        return Err(SignedDeltaSbfErrorV3::Release.into());
+    }
+    for (index, expected) in expected.iter().copied().enumerate() {
+        let observed = receipt
+            .observation(index)
+            .ok_or(SignedDeltaSbfErrorV3::Release)?
+            .map_err(|_| SignedDeltaSbfErrorV3::Release)?;
+        if observed.role() != expected.role
+            || observed.program().to_bytes() != expected.program
+            || observed.programdata() != expected.programdata
+            || observed.artifact_release_id().to_bytes() != expected.artifact_release
+            || observed.semantic_release_id().to_bytes() != expected.semantic_release
+            || observed.deployment_slot() != expected.deployment_slot
+        {
             return Err(SignedDeltaSbfErrorV3::Release.into());
         }
     }
     Ok(())
+}
+
+type RequestedRoleV3<'accounts, 'info> = (
+    ExecutionRoleV1,
+    &'accounts AccountInfo<'info>,
+    &'accounts AccountInfo<'info>,
+);
+
+fn expected_role_batch(
+    accounts: &SignedDeltaAccountsV3<'_, '_>,
+    plan: SignedDeltaPlanV3<'_>,
+    requested: &[RequestedRoleV3<'_, '_>],
+) -> Result<(ContentId, Vec<ExpectedRoleV3>), ProgramError> {
+    let bytes = accounts
+        .cache
+        .try_borrow_data()
+        .map_err(|_| SignedDeltaSbfErrorV3::Release)?;
+    let view = ActivatedExecutionReleaseSetViewV1::decode(&bytes)
+        .map_err(|_| SignedDeltaSbfErrorV3::Release)?;
+    let expected_cache = Pubkey::find_program_address(
+        &[ACTIVATION_PDA_DOMAIN_V1, &plan.release_set()],
+        accounts.registry.key,
+    )
+    .0;
+    if accounts.cache.key != &expected_cache
+        || accounts.cache.owner != accounts.registry.key
+        || view
+            .execution_release_set_id()
+            .map_err(|_| SignedDeltaSbfErrorV3::Release)?
+            .to_bytes()
+            != plan.release_set()
+    {
+        return Err(SignedDeltaSbfErrorV3::Release.into());
+    }
+    let mut expected = Vec::with_capacity(requested.len());
+    for (role, program, programdata) in requested.iter().copied() {
+        let activated = view
+            .role(role)
+            .map_err(|_| SignedDeltaSbfErrorV3::Release)?;
+        let release = activated.release();
+        if release.program().to_bytes() != program.key.to_bytes()
+            || release.programdata() != programdata.key.to_bytes()
+        {
+            return Err(SignedDeltaSbfErrorV3::Release.into());
+        }
+        expected.push(ExpectedRoleV3 {
+            role,
+            program: program.key.to_bytes(),
+            programdata: programdata.key.to_bytes(),
+            artifact_release: activated.artifact_release_id().to_bytes(),
+            semantic_release: release.semantic_release_id().to_bytes(),
+            deployment_slot: release.deployment_slot(),
+        });
+    }
+    let digest =
+        ContentId::new(hash(&bytes).to_bytes()).map_err(|_| SignedDeltaSbfErrorV3::Release)?;
+    Ok((digest, expected))
 }
 
 fn authenticate_market(

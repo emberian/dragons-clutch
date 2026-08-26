@@ -26,8 +26,7 @@ pub const SIGNED_DELTA_RECEIPT_MAGIC_V3: [u8; 8] = *b"DCLSDR03";
 pub const SIGNED_DELTA_WIRE_VERSION_V3: u16 = 3;
 /// Domain prefix for the digest of the exact ordered Position, aggregate-delta,
 /// and Position-delta tables borrowed from [`SignedDeltaPlanV3::table_bytes`].
-pub const SIGNED_DELTA_TABLE_DIGEST_DOMAIN_V3: &[u8] =
-    b"dclutch/claims/signed-delta-table/v3";
+pub const SIGNED_DELTA_TABLE_DIGEST_DOMAIN_V3: &[u8] = b"dclutch/claims/signed-delta-table/v3";
 /// Domain prefix for the digest of the exact post-commit Claims Market bytes
 /// followed by every post-commit Position in canonical plan-table order.
 pub const SIGNED_DELTA_POST_RESOURCE_DIGEST_DOMAIN_V3: &[u8] =
@@ -348,6 +347,173 @@ pub struct SignedDeltaPlanV3<'a> {
     position_deltas: &'a [u8],
 }
 
+/// Fully checked typed construction for one canonical SignedDeltaV3 packet.
+///
+/// Unlike [`SignedDeltaPlanV3`], this value does not borrow hostile wire
+/// bytes. Its private fields can only be obtained after the same identity,
+/// count, ordering, bounds, use, and conservation invariants required by
+/// [`SignedDeltaPlanV3::decode`] have succeeded over typed inputs. Encoding a
+/// validated construction therefore need not hostile-decode its own output.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ValidatedSignedDeltaConstructionV3<'a> {
+    input: SignedDeltaPlanInputV3,
+    positions: &'a [SignedDeltaPositionV3],
+    aggregate_deltas: &'a [SignedDeltaV3],
+    position_deltas: &'a [PositionDeltaV3],
+}
+
+impl<'a> ValidatedSignedDeltaConstructionV3<'a> {
+    /// Validate every canonical plan invariant over typed caller-owned tables.
+    pub fn new(
+        input: SignedDeltaPlanInputV3,
+        positions: &'a [SignedDeltaPositionV3],
+        aggregate_deltas: &'a [SignedDeltaV3],
+        position_deltas: &'a [PositionDeltaV3],
+    ) -> Result<Self> {
+        let position_count =
+            u32::try_from(positions.len()).map_err(|_| SignedDeltaErrorV3::InvalidCount)?;
+        let position_delta_count =
+            u32::try_from(position_deltas.len()).map_err(|_| SignedDeltaErrorV3::InvalidCount)?;
+        if input.claim_count == 0
+            || position_count == 0
+            || position_delta_count == 0
+            || input.expected_market_revision == u64::MAX
+            || aggregate_deltas.len()
+                != usize::try_from(input.claim_count)
+                    .map_err(|_| SignedDeltaErrorV3::InvalidCount)?
+        {
+            return Err(SignedDeltaErrorV3::InvalidCount);
+        }
+        if [
+            input.release_set,
+            input.market,
+            input.request_id,
+            input.product_record_digest,
+            input.semantic_basis_id,
+            input.linked_basis_record_digest,
+        ]
+        .into_iter()
+        .any(is_zero)
+        {
+            return Err(SignedDeltaErrorV3::ZeroIdentity);
+        }
+        for (index, position) in positions.iter().copied().enumerate() {
+            if index != 0
+                && positions
+                    .get(index - 1)
+                    .ok_or(SignedDeltaErrorV3::InvalidPositionTable)?
+                    .owner()
+                    >= position.owner()
+            {
+                return Err(SignedDeltaErrorV3::InvalidPositionTable);
+            }
+            let index =
+                u32::try_from(index).map_err(|_| SignedDeltaErrorV3::InvalidPositionTable)?;
+            if !position_deltas
+                .iter()
+                .any(|row| row.position_index() == index)
+            {
+                return Err(SignedDeltaErrorV3::InvalidPositionTable);
+            }
+        }
+        for (index, row) in position_deltas.iter().copied().enumerate() {
+            if row.position_index() >= position_count || row.outcome() >= input.claim_count {
+                return Err(SignedDeltaErrorV3::InvalidIndex);
+            }
+            if index != 0 {
+                let previous = position_deltas
+                    .get(index - 1)
+                    .ok_or(SignedDeltaErrorV3::InvalidCoordinateOrder)?;
+                if (previous.position_index(), previous.outcome())
+                    >= (row.position_index(), row.outcome())
+                {
+                    return Err(SignedDeltaErrorV3::InvalidCoordinateOrder);
+                }
+            }
+        }
+        for (outcome, aggregate) in aggregate_deltas.iter().copied().enumerate() {
+            let outcome = u32::try_from(outcome).map_err(|_| SignedDeltaErrorV3::InvalidCount)?;
+            validate_typed_conservation(outcome, aggregate, position_deltas)?;
+        }
+        Ok(Self {
+            input,
+            positions,
+            aggregate_deltas,
+            position_deltas,
+        })
+    }
+
+    /// Exact canonical packet width.
+    pub fn encoded_bytes(self) -> Result<usize> {
+        plan_bytes(
+            self.input.claim_count,
+            u32::try_from(self.positions.len()).map_err(|_| SignedDeltaErrorV3::InvalidCount)?,
+            u32::try_from(self.position_deltas.len())
+                .map_err(|_| SignedDeltaErrorV3::InvalidCount)?,
+        )
+    }
+
+    /// Emit byte-identical canonical wire bytes without revalidating them as
+    /// hostile input.
+    pub fn encode_into(self, output: &mut [u8]) -> Result<()> {
+        encode_validated_into(self, output)
+    }
+
+    /// Emit canonical bytes and return their already-validated borrowed plan
+    /// projection without hostile-decoding those just-produced bytes.
+    pub fn encode_plan_into<'output>(
+        self,
+        output: &'output mut [u8],
+    ) -> Result<SignedDeltaPlanV3<'output>> {
+        encode_validated_into(self, output)?;
+        let position_count =
+            u32::try_from(self.positions.len()).map_err(|_| SignedDeltaErrorV3::InvalidCount)?;
+        let position_delta_count = u32::try_from(self.position_deltas.len())
+            .map_err(|_| SignedDeltaErrorV3::InvalidCount)?;
+        let positions_bytes = table_bytes(position_count, SIGNED_DELTA_POSITION_BYTES_V3)?;
+        let aggregate_bytes = table_bytes(self.input.claim_count, SIGNED_DELTA_BYTES_V3)?;
+        let position_delta_bytes = table_bytes(position_delta_count, SIGNED_DELTA_ROW_BYTES_V3)?;
+        let aggregate_offset = add(SIGNED_DELTA_PLAN_HEADER_BYTES_V3, positions_bytes)?;
+        let position_delta_offset = add(aggregate_offset, aggregate_bytes)?;
+        Ok(SignedDeltaPlanV3 {
+            input: self.input,
+            position_count,
+            position_delta_count,
+            positions: slice(output, SIGNED_DELTA_PLAN_HEADER_BYTES_V3, positions_bytes)?,
+            aggregate_deltas: slice(output, aggregate_offset, aggregate_bytes)?,
+            position_deltas: slice(output, position_delta_offset, position_delta_bytes)?,
+        })
+    }
+
+    /// Current release set bound by the validated header.
+    pub const fn release_set(self) -> [u8; 32] {
+        self.input.release_set
+    }
+
+    /// Logical Core Market bound by the validated header.
+    pub const fn market(self) -> [u8; 32] {
+        self.input.market
+    }
+
+    /// Caller-owned request identity bound by the validated header.
+    pub const fn request_id(self) -> [u8; 32] {
+        self.input.request_id
+    }
+
+    /// Semantic LiabilityBasis identity bound by the validated header.
+    pub const fn semantic_basis_id(self) -> [u8; 32] {
+        self.input.semantic_basis_id
+    }
+
+    /// Return one typed canonical Position-table entry.
+    pub fn position(self, index: u32) -> Result<SignedDeltaPositionV3> {
+        self.positions
+            .get(usize::try_from(index).map_err(|_| SignedDeltaErrorV3::InvalidIndex)?)
+            .copied()
+            .ok_or(SignedDeltaErrorV3::InvalidIndex)
+    }
+}
+
 impl<'a> SignedDeltaPlanV3<'a> {
     /// Decode and fully canonicalize one hostile packet without allocation.
     pub fn decode(input: &'a [u8]) -> Result<Self> {
@@ -402,63 +568,13 @@ impl<'a> SignedDeltaPlanV3<'a> {
         position_deltas: &[PositionDeltaV3],
         output: &mut [u8],
     ) -> Result<()> {
-        let position_count =
-            u32::try_from(positions.len()).map_err(|_| SignedDeltaErrorV3::InvalidCount)?;
-        let position_delta_count =
-            u32::try_from(position_deltas.len()).map_err(|_| SignedDeltaErrorV3::InvalidCount)?;
-        if aggregate_deltas.len()
-            != usize::try_from(input.claim_count).map_err(|_| SignedDeltaErrorV3::InvalidCount)?
-        {
-            return Err(SignedDeltaErrorV3::InvalidCount);
-        }
-        let expected = plan_bytes(input.claim_count, position_count, position_delta_count)?;
-        if output.len() != expected {
-            return Err(SignedDeltaErrorV3::InvalidLength);
-        }
-        output.fill(0);
-        put(output, 0, &SIGNED_DELTA_PLAN_MAGIC_V3)?;
-        put(
-            output,
-            VERSION_OFFSET,
-            &SIGNED_DELTA_WIRE_VERSION_V3.to_le_bytes(),
-        )?;
-        put(output, CALLER_ROLE_OFFSET, &[input.caller_role as u8])?;
-        for (offset, value) in [
-            (RELEASE_SET_OFFSET, input.release_set),
-            (MARKET_OFFSET, input.market),
-            (REQUEST_OFFSET, input.request_id),
-            (PRODUCT_OFFSET, input.product_record_digest),
-            (BASIS_OFFSET, input.semantic_basis_id),
-            (LINKED_BASIS_RECORD_OFFSET, input.linked_basis_record_digest),
-        ] {
-            put(output, offset, &value)?;
-        }
-        put(
-            output,
-            MARKET_REVISION_OFFSET,
-            &input.expected_market_revision.to_le_bytes(),
-        )?;
-        put(output, CLAIM_COUNT_OFFSET, &input.claim_count.to_le_bytes())?;
-        put(output, POSITION_COUNT_OFFSET, &position_count.to_le_bytes())?;
-        put(
-            output,
-            POSITION_DELTA_COUNT_OFFSET,
-            &position_delta_count.to_le_bytes(),
-        )?;
-        let mut offset = SIGNED_DELTA_PLAN_HEADER_BYTES_V3;
-        for position in positions.iter().copied() {
-            position.encode_into(slice_mut(output, offset, SIGNED_DELTA_POSITION_BYTES_V3)?)?;
-            offset = add(offset, SIGNED_DELTA_POSITION_BYTES_V3)?;
-        }
-        for delta in aggregate_deltas.iter().copied() {
-            delta.encode_into(slice_mut(output, offset, SIGNED_DELTA_BYTES_V3)?)?;
-            offset = add(offset, SIGNED_DELTA_BYTES_V3)?;
-        }
-        for delta in position_deltas.iter().copied() {
-            delta.encode_into(slice_mut(output, offset, SIGNED_DELTA_ROW_BYTES_V3)?)?;
-            offset = add(offset, SIGNED_DELTA_ROW_BYTES_V3)?;
-        }
-        SignedDeltaPlanV3::decode(&*output).map(|_| ())
+        ValidatedSignedDeltaConstructionV3::new(
+            input,
+            positions,
+            aggregate_deltas,
+            position_deltas,
+        )?
+        .encode_into(output)
     }
 
     fn validate(self) -> Result<()> {
@@ -614,6 +730,121 @@ impl<'a> SignedDeltaPlanV3<'a> {
     pub const fn table_bytes(self) -> (&'a [u8], &'a [u8], &'a [u8]) {
         (self.positions, self.aggregate_deltas, self.position_deltas)
     }
+}
+
+fn encode_validated_into(
+    value: ValidatedSignedDeltaConstructionV3<'_>,
+    output: &mut [u8],
+) -> Result<()> {
+    if output.len() != value.encoded_bytes()? {
+        return Err(SignedDeltaErrorV3::InvalidLength);
+    }
+    output.fill(0);
+    put(output, 0, &SIGNED_DELTA_PLAN_MAGIC_V3)?;
+    put(
+        output,
+        VERSION_OFFSET,
+        &SIGNED_DELTA_WIRE_VERSION_V3.to_le_bytes(),
+    )?;
+    put(output, CALLER_ROLE_OFFSET, &[value.input.caller_role as u8])?;
+    for (offset, identity) in [
+        (RELEASE_SET_OFFSET, value.input.release_set),
+        (MARKET_OFFSET, value.input.market),
+        (REQUEST_OFFSET, value.input.request_id),
+        (PRODUCT_OFFSET, value.input.product_record_digest),
+        (BASIS_OFFSET, value.input.semantic_basis_id),
+        (
+            LINKED_BASIS_RECORD_OFFSET,
+            value.input.linked_basis_record_digest,
+        ),
+    ] {
+        put(output, offset, &identity)?;
+    }
+    put(
+        output,
+        MARKET_REVISION_OFFSET,
+        &value.input.expected_market_revision.to_le_bytes(),
+    )?;
+    put(
+        output,
+        CLAIM_COUNT_OFFSET,
+        &value.input.claim_count.to_le_bytes(),
+    )?;
+    put(
+        output,
+        POSITION_COUNT_OFFSET,
+        &u32::try_from(value.positions.len())
+            .map_err(|_| SignedDeltaErrorV3::InvalidCount)?
+            .to_le_bytes(),
+    )?;
+    put(
+        output,
+        POSITION_DELTA_COUNT_OFFSET,
+        &u32::try_from(value.position_deltas.len())
+            .map_err(|_| SignedDeltaErrorV3::InvalidCount)?
+            .to_le_bytes(),
+    )?;
+    let mut offset = SIGNED_DELTA_PLAN_HEADER_BYTES_V3;
+    for position in value.positions.iter().copied() {
+        position.encode_into(slice_mut(output, offset, SIGNED_DELTA_POSITION_BYTES_V3)?)?;
+        offset = add(offset, SIGNED_DELTA_POSITION_BYTES_V3)?;
+    }
+    for delta in value.aggregate_deltas.iter().copied() {
+        // The complete output was zero-filled above, which is exactly the
+        // canonical Neutral/0 encoding. Runtime-width transfer-heavy plans
+        // therefore pay only for nonzero aggregate coordinates.
+        if delta.direction() != DeltaDirectionV3::Neutral {
+            delta.encode_into(slice_mut(output, offset, SIGNED_DELTA_BYTES_V3)?)?;
+        }
+        offset = add(offset, SIGNED_DELTA_BYTES_V3)?;
+    }
+    for delta in value.position_deltas.iter().copied() {
+        delta.encode_into(slice_mut(output, offset, SIGNED_DELTA_ROW_BYTES_V3)?)?;
+        offset = add(offset, SIGNED_DELTA_ROW_BYTES_V3)?;
+    }
+    Ok(())
+}
+
+fn validate_typed_conservation(
+    outcome: u32,
+    aggregate: SignedDeltaV3,
+    position_deltas: &[PositionDeltaV3],
+) -> Result<()> {
+    let mut credits = 0_u128;
+    let mut debits = 0_u128;
+    for row in position_deltas.iter().copied() {
+        if row.outcome() != outcome {
+            continue;
+        }
+        match row.delta().direction() {
+            DeltaDirectionV3::Neutral => return Err(SignedDeltaErrorV3::NonCanonical),
+            DeltaDirectionV3::Credit => {
+                credits = credits
+                    .checked_add(u128::from(row.delta().magnitude()))
+                    .ok_or(SignedDeltaErrorV3::Arithmetic)?;
+            }
+            DeltaDirectionV3::Debit => {
+                debits = debits
+                    .checked_add(u128::from(row.delta().magnitude()))
+                    .ok_or(SignedDeltaErrorV3::Arithmetic)?;
+            }
+        }
+    }
+    let conserved = match credits.cmp(&debits) {
+        core::cmp::Ordering::Equal => aggregate.direction() == DeltaDirectionV3::Neutral,
+        core::cmp::Ordering::Greater => {
+            aggregate.direction() == DeltaDirectionV3::Credit
+                && credits.checked_sub(debits) == Some(u128::from(aggregate.magnitude()))
+        }
+        core::cmp::Ordering::Less => {
+            aggregate.direction() == DeltaDirectionV3::Debit
+                && debits.checked_sub(credits) == Some(u128::from(aggregate.magnitude()))
+        }
+    };
+    if !conserved {
+        return Err(SignedDeltaErrorV3::Conservation);
+    }
+    Ok(())
 }
 
 /// Exact fixed receipt for one committed signed-delta batch.
@@ -848,7 +1079,52 @@ impl SignedDeltaReceiptV3 {
         expected: SignedDeltaReceiptCommitmentV3,
     ) -> Result<()> {
         self.validate_plan(plan)?;
+        self.validate_physical_commitment(expected)
+    }
+
+    /// Require the independently recomputed packet, table, producer, and
+    /// post-resource commitments. The caller must separately validate the
+    /// plan-owned fields through [`Self::validate_plan`] or an equivalent
+    /// non-forgeable typed construction.
+    pub fn validate_physical_commitment(
+        self,
+        expected: SignedDeltaReceiptCommitmentV3,
+    ) -> Result<()> {
         if self.packet_digest != expected.packet_digest
+            || self.table_digest != expected.table_digest
+            || self.claims_program != expected.claims_program
+            || self.post_resource_digest != expected.post_resource_digest
+        {
+            return Err(SignedDeltaErrorV3::ReceiptMismatch);
+        }
+        Ok(())
+    }
+
+    /// Require exact agreement with a non-forgeable typed construction and
+    /// every independently recomputed physical commitment, without
+    /// hostile-decoding bytes that construction just emitted.
+    pub fn validate_construction(
+        self,
+        plan: ValidatedSignedDeltaConstructionV3<'_>,
+        expected: SignedDeltaReceiptCommitmentV3,
+    ) -> Result<()> {
+        let position_count =
+            u32::try_from(plan.positions.len()).map_err(|_| SignedDeltaErrorV3::InvalidCount)?;
+        let position_delta_count = u32::try_from(plan.position_deltas.len())
+            .map_err(|_| SignedDeltaErrorV3::InvalidCount)?;
+        if self.caller_role != plan.input.caller_role
+            || self.release_set != plan.input.release_set
+            || self.market != plan.input.market
+            || self.request_id != plan.input.request_id
+            || self.product_record_digest != plan.input.product_record_digest
+            || self.semantic_basis_id != plan.input.semantic_basis_id
+            || self.linked_basis_record_digest != plan.input.linked_basis_record_digest
+            || self.pre_market_revision != plan.input.expected_market_revision
+            || Some(self.post_market_revision) != plan.input.expected_market_revision.checked_add(1)
+            || self.claim_count != plan.input.claim_count
+            || self.position_count != position_count
+            || self.position_delta_count != position_delta_count
+            || self.packet_digest != expected.packet_digest
             || self.table_digest != expected.table_digest
             || self.claims_program != expected.claims_program
             || self.post_resource_digest != expected.post_resource_digest
@@ -861,6 +1137,34 @@ impl SignedDeltaReceiptV3 {
     /// Return the exact packet digest.
     pub const fn packet_digest(self) -> [u8; 32] {
         self.packet_digest
+    }
+    /// Return the caller role authenticated by Claims.
+    pub const fn caller_role(self) -> CallerRole {
+        self.caller_role
+    }
+    /// Return the current release set authenticated by Claims.
+    pub const fn release_set(self) -> [u8; 32] {
+        self.release_set
+    }
+    /// Return the logical Core Market authenticated by Claims.
+    pub const fn market(self) -> [u8; 32] {
+        self.market
+    }
+    /// Return the caller-owned request identity authenticated by Claims.
+    pub const fn request_id(self) -> [u8; 32] {
+        self.request_id
+    }
+    /// Return the finalized Product record digest authenticated by Claims.
+    pub const fn product_record_digest(self) -> [u8; 32] {
+        self.product_record_digest
+    }
+    /// Return the semantic LiabilityBasis identity authenticated by Claims.
+    pub const fn semantic_basis_id(self) -> [u8; 32] {
+        self.semantic_basis_id
+    }
+    /// Return the finalized linked-basis digest authenticated by Claims.
+    pub const fn linked_basis_record_digest(self) -> [u8; 32] {
+        self.linked_basis_record_digest
     }
     /// Return the digest of all three ordered runtime tables.
     pub const fn table_digest(self) -> [u8; 32] {
@@ -881,6 +1185,18 @@ impl SignedDeltaReceiptV3 {
     /// Return the aggregate post-revision.
     pub const fn post_market_revision(self) -> u64 {
         self.post_market_revision
+    }
+    /// Return the runtime claim width authenticated by Claims.
+    pub const fn claim_count(self) -> u32 {
+        self.claim_count
+    }
+    /// Return the unique Position-table width authenticated by Claims.
+    pub const fn position_count(self) -> u32 {
+        self.position_count
+    }
+    /// Return the Position-delta row count authenticated by Claims.
+    pub const fn position_delta_count(self) -> u32 {
+        self.position_delta_count
     }
 }
 
@@ -1093,6 +1409,48 @@ mod tests {
     }
 
     #[test]
+    fn validated_typed_construction_is_byte_identical_and_refuses_hostile_tables() {
+        let positions = [
+            SignedDeltaPositionV3::new([7; 32], 3).expect("a"),
+            SignedDeltaPositionV3::new([8; 32], 4).expect("b"),
+        ];
+        let aggregates = [neutral(), credit(5)];
+        let deltas = [row(0, 1, credit(12), 2, 2), row(1, 1, debit(7), 2, 2)];
+        let validated =
+            ValidatedSignedDeltaConstructionV3::new(header(2), &positions, &aggregates, &deltas)
+                .expect("validated construction");
+        let mut direct = vec![0; validated.encoded_bytes().expect("width")];
+        validated.encode_into(&mut direct).expect("direct encode");
+        let mut compatibility = vec![0; direct.len()];
+        SignedDeltaPlanV3::encode_into(
+            header(2),
+            &positions,
+            &aggregates,
+            &deltas,
+            &mut compatibility,
+        )
+        .expect("compatibility encode");
+        assert_eq!(direct, compatibility);
+        assert!(SignedDeltaPlanV3::decode(&direct).is_ok());
+
+        let unsorted = [positions[1], positions[0]];
+        assert_eq!(
+            ValidatedSignedDeltaConstructionV3::new(header(2), &unsorted, &aggregates, &deltas,),
+            Err(SignedDeltaErrorV3::InvalidPositionTable)
+        );
+        let duplicate = [row(0, 1, credit(12), 2, 2), row(0, 1, debit(7), 2, 2)];
+        assert_eq!(
+            ValidatedSignedDeltaConstructionV3::new(header(2), &positions, &aggregates, &duplicate,),
+            Err(SignedDeltaErrorV3::InvalidPositionTable)
+        );
+        let nonconserving = [neutral(), credit(4)];
+        assert_eq!(
+            ValidatedSignedDeltaConstructionV3::new(header(2), &positions, &nonconserving, &deltas,),
+            Err(SignedDeltaErrorV3::Conservation)
+        );
+    }
+
+    #[test]
     fn duplicate_unsorted_and_nonconserving_coordinates_refuse() {
         let positions = [
             SignedDeltaPositionV3::new([7; 32], 3).expect("a"),
@@ -1160,9 +1518,8 @@ mod tests {
         let plan = SignedDeltaPlanV3::decode(&bytes).expect("plan");
         let receipt = SignedDeltaReceiptV3::new(plan, [8; 32], [9; 32], [10; 32], [11; 32], 8)
             .expect("receipt");
-        let commitment =
-            SignedDeltaReceiptCommitmentV3::new([8; 32], [9; 32], [10; 32], [11; 32])
-                .expect("commitment");
+        let commitment = SignedDeltaReceiptCommitmentV3::new([8; 32], [9; 32], [10; 32], [11; 32])
+            .expect("commitment");
         assert_eq!(
             SignedDeltaReceiptV3::decode(&receipt.to_bytes()).expect("decode"),
             receipt
