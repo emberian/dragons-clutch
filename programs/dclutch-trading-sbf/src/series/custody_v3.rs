@@ -7,7 +7,7 @@
 //! route or its amount.
 
 use dclutch_custody_contract::{
-    CallerRoleV1, CompartmentV1, ContextV1, CustodyRequestV1, OperationV1,
+    CallerRoleV1, CompartmentV1, ContextV1, CustodyReceiptV1, CustodyRequestV1, OperationV1,
 };
 use dclutch_series_v3_kernel::escrow::{
     PrepareSeriesEscrowPlanV3, SeriesEscrowEffectKindV3, SeriesEscrowEffectV3,
@@ -23,6 +23,8 @@ pub enum SeriesCustodyProjectionErrorV3 {
     MissingRent,
     /// The projected request did not satisfy the canonical Custody contract.
     CustodyRequest,
+    /// Custody did not acknowledge the exact request and replay poststate.
+    CustodyReceipt,
 }
 
 /// Adapter-authenticated physical observations shared by one escrow action.
@@ -79,6 +81,25 @@ pub fn project_terminal_custody_v3(
         project_effect(close_vault, physical)?,
         project_effect(close_replay, physical)?,
     ])
+}
+
+/// Require one immediate Custody return value to acknowledge the exact request.
+///
+/// The SBF caller must additionally require Custody to be the current return-
+/// data producer. `request_digest` is SHA-256 of the exact encoded request and
+/// `replay_state_digest` is SHA-256 of the exact post-CPI replay account bytes.
+pub fn verify_series_custody_receipt_v3(
+    request: CustodyRequestV1,
+    receipt_bytes: &[u8],
+    request_digest: [u8; 32],
+    replay_state_digest: [u8; 32],
+) -> Result<CustodyReceiptV1, SeriesCustodyProjectionErrorV3> {
+    let receipt = CustodyReceiptV1::decode(receipt_bytes)
+        .map_err(|_| SeriesCustodyProjectionErrorV3::CustodyReceipt)?;
+    receipt
+        .verify_for(request, request_digest, replay_state_digest)
+        .map_err(|_| SeriesCustodyProjectionErrorV3::CustodyReceipt)?;
+    Ok(receipt)
 }
 
 fn project_effect(
@@ -257,6 +278,7 @@ const fn require_rent(value: u64) -> Result<(), SeriesCustodyProjectionErrorV3> 
 #[cfg(test)]
 mod tests {
     use dclutch_core_contract::ContentId;
+    use dclutch_custody_contract::ReceiptEvidenceV1;
     use dclutch_series_v3_kernel::escrow::{
         consume_series_escrow_v3, expire_series_escrow_v3, prepare_series_escrow_v3,
     };
@@ -265,7 +287,7 @@ mod tests {
         SERIES_TEMPLATE_BYTES_V3, SERIES_TICKET_BYTES_V3, admit_occurrence, admit_ticket,
         generated, occurrence_content_id, pre_founding_series_escrow, template_content_id,
     };
-    use solana_program::hash::hashv;
+    use solana_program::hash::{hash, hashv};
 
     use super::*;
 
@@ -415,6 +437,46 @@ mod tests {
         assert_eq!(
             project_terminal_custody_v3(consume_series_escrow_v3(projection), no_rent),
             Err(SeriesCustodyProjectionErrorV3::MissingRent)
+        );
+    }
+
+    #[test]
+    fn receipt_must_bind_exact_request_and_current_replay_digest() {
+        let projection = escrow();
+        let request = project_terminal_custody_v3(consume_series_escrow_v3(projection), physical())
+            .expect("terminal requests")[0];
+        let request_digest = hash(&request.to_bytes().expect("request bytes")).to_bytes();
+        let replay_digest = [31; 32];
+        let receipt = CustodyReceiptV1::new(
+            request,
+            request_digest,
+            ReceiptEvidenceV1 {
+                source_before: request.amount,
+                source_after: 0,
+                destination_before: 7,
+                destination_after: 7 + request.amount,
+                poststate_commitment: [30; 32],
+                replay_state_digest: replay_digest,
+            },
+        )
+        .expect("receipt");
+        let receipt_bytes = receipt.to_bytes().expect("receipt bytes");
+        assert_eq!(
+            verify_series_custody_receipt_v3(
+                request,
+                &receipt_bytes,
+                request_digest,
+                replay_digest,
+            ),
+            Ok(receipt)
+        );
+        assert_eq!(
+            verify_series_custody_receipt_v3(request, &receipt_bytes, [99; 32], replay_digest),
+            Err(SeriesCustodyProjectionErrorV3::CustodyReceipt)
+        );
+        assert_eq!(
+            verify_series_custody_receipt_v3(request, &receipt_bytes, request_digest, [98; 32]),
+            Err(SeriesCustodyProjectionErrorV3::CustodyReceipt)
         );
     }
 }
