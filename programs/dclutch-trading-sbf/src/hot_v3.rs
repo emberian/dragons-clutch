@@ -63,8 +63,9 @@ use dclutch_effect_kernel::{
     v2::{AccountInput, AccountPermission, FixedRole},
     v3::{
         ProgramV3 as EffectProgramV3, ProjectionV3, ResolvedEffectV3,
-        SCHEMA_RELEASE_ID as EFFECT_SCHEMA_ID_V3, project_atomic as project_effects_atomic,
+        project_atomic as project_effects_atomic,
     },
+    v4::{ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4},
 };
 use dclutch_execution_strategy_contract::{
     admitted_v3::AdmittedInvocationContextV3,
@@ -136,6 +137,9 @@ use crate::{
         CoreCompositionParentV3, execute_core_route_v3, preflight_core_route_v3,
     },
     dispatch::TradingFamilyContextV1,
+    dynamic_accounts_v4::{
+        downgrade_dynamic_child_accounts_v4, expand_dynamic_physical_accounts_v4,
+    },
     execution_strategy_v2::{
         ADMITTED_AOT_STRATEGY_ACCOUNT_COUNT_V2, AuthenticatedExecutionStrategyV2,
         INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2, SHADOW_AOT_STRATEGY_ACCOUNT_COUNT_V2,
@@ -146,6 +150,69 @@ use crate::{
     },
     shadow_composition_v3::{ShadowCpiFrameV3, execute_shadow_aot_v3},
 };
+
+/// One authenticated Effect artifact selected by the schema-bound V4
+/// capability descriptor. V3 remains an explicit migration input; successor
+/// descriptors execute through V4 resolution so account spans and local
+/// effects share one coordinate authority.
+#[derive(Clone, Copy)]
+struct SelectedEffectProgramV4<'a> {
+    base: EffectProgramV3<'a>,
+    successor: EffectProgramV4<'a>,
+}
+
+impl<'a> SelectedEffectProgramV4<'a> {
+    const fn base(self) -> EffectProgramV3<'a> {
+        self.base
+    }
+
+    fn resolved_invocation(
+        self,
+        route: u16,
+        invocation: u32,
+        tail_count: u32,
+        scalars: &[u64],
+        identities: &[[u8; 32]],
+    ) -> Result<dclutch_effect_kernel::v3::ResolvedInvocationV3, TradingSbfError> {
+        self.successor
+            .resolved_invocation(route, invocation, tail_count, scalars, identities)
+            .map(|resolved| resolved.invocation)
+            .map_err(|_| TradingSbfError::Content)
+    }
+
+    fn resolved_fixed_effect(
+        self,
+        index: u16,
+        tail_count: u32,
+        scalars: &[u64],
+        identities: &[[u8; 32]],
+    ) -> Result<ResolvedEffectV3, TradingSbfError> {
+        self.successor
+            .resolved_fixed_effect(index, tail_count, scalars, identities)
+            .map_err(|_| TradingSbfError::Content)
+    }
+
+    fn resolved_item_effect(
+        self,
+        item: u32,
+        index: u16,
+        tail_count: u32,
+        scalars: &[u64],
+        identities: &[[u8; 32]],
+    ) -> Result<ResolvedEffectV3, TradingSbfError> {
+        self.successor
+            .resolved_item_effect(item, index, tail_count, scalars, identities)
+            .map_err(|_| TradingSbfError::Content)
+    }
+}
+
+impl<'a> core::ops::Deref for SelectedEffectProgramV4<'a> {
+    type Target = EffectProgramV3<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.base
+    }
+}
 
 #[cfg(feature = "families")]
 use crate::resolution_composition_v3::{
@@ -407,15 +474,7 @@ pub fn process_hot_execution_v3(
         descriptor.effect().schema().to_bytes(),
         descriptor.effect().program().to_bytes(),
     )?;
-    if descriptor.effect().schema().to_bytes() != EFFECT_SCHEMA_ID_V3 {
-        return Err(TradingSbfError::UnsupportedContent.into());
-    }
-    let effect = EffectProgramV3::decode_selected(
-        descriptor.effect().program().to_bytes(),
-        hash(&effect_data).to_bytes(),
-        &effect_data,
-    )
-    .map_err(|_| TradingSbfError::Content)?;
+    let effect = decode_selected_effect_v4(descriptor.effect().schema().to_bytes(), &effect_data)?;
 
     let provisional_scalar_count = effect
         .scalar_count(product_outcome_count)
@@ -464,6 +523,7 @@ pub fn process_hot_execution_v3(
     let runtime_accounts = expand_runtime_accounts_v3(
         account_profile,
         product_outcome_count,
+        &[],
         [
             frame.root,
             frame.config_raw,
@@ -769,7 +829,7 @@ pub fn process_hot_execution_v3(
     let mut scratch_requests = vec![0_u8; request_bytes];
     let mut output_requests = vec![0_u8; request_bytes];
     project_effects_atomic(
-        effect,
+        effect.base(),
         tail_count,
         ProjectionV3 {
             scalars: &transition_output_scalars,
@@ -821,7 +881,7 @@ pub fn process_hot_execution_v3(
     )?;
     let lifecycle_plans = revalidated_lifecycle.plans;
     let effect_accounts =
-        downgraded_effect_accounts_v3(account_profile, tail_count, &runtime_accounts)?;
+        downgraded_effect_accounts_v3(account_profile, tail_count, &[], &runtime_accounts)?;
     preflight_child_routes_v3(
         program_id,
         *frame,
@@ -901,7 +961,7 @@ struct PreparedHotCommitV3<'a, 'accounts, 'info, 'artifact> {
     program_id: &'a Pubkey,
     frame: &'a HotFrameV3<'accounts, 'info>,
     request_profile: RequestProfileKindV3<'artifact>,
-    effect: EffectProgramV3<'artifact>,
+    effect: SelectedEffectProgramV4<'artifact>,
     tail_count: u32,
     scalars: &'a [u64],
     identities: &'a [[u8; 32]],
@@ -1446,7 +1506,7 @@ struct ShadowCandidateViewV3<'a, 'data, 'accounts, 'info> {
     root_prestate: [u8; 32],
     selected_program: ContentId,
     selected_action: u32,
-    effect: EffectProgramV3<'a>,
+    effect: SelectedEffectProgramV4<'a>,
     tail_count: u32,
     scalars: &'a [u64],
     identities: &'a [[u8; 32]],
@@ -1586,15 +1646,32 @@ fn logical_projection_key_v3(
 fn expand_runtime_accounts_v3<'accounts, 'info>(
     profile: AccountProfileV2<'_>,
     tail_count: u32,
+    span_counts: &[u32],
     injected: [&'accounts AccountInfo<'info>; 5],
     supplied_suffix: &'accounts [AccountInfo<'info>],
 ) -> Result<Vec<&'accounts AccountInfo<'info>>, ProgramError> {
-    let logical_count = profile
-        .logical_account_count(tail_count)
-        .map_err(|_| TradingSbfError::Content)?;
-    let physical_count = profile
-        .physical_account_count(tail_count)
-        .map_err(|_| TradingSbfError::Content)?;
+    let dynamic = profile.dynamic_fixed_span_count() != 0;
+    let logical_count = if dynamic {
+        profile
+            .logical_account_count_with_dynamic_spans(tail_count, span_counts)
+            .map_err(|_| TradingSbfError::Content)?
+    } else {
+        if !span_counts.is_empty() {
+            return Err(TradingSbfError::Content.into());
+        }
+        profile
+            .logical_account_count(tail_count)
+            .map_err(|_| TradingSbfError::Content)?
+    };
+    let physical_count = if dynamic {
+        profile
+            .physical_account_count_with_dynamic_spans(tail_count, span_counts)
+            .map_err(|_| TradingSbfError::Content)?
+    } else {
+        profile
+            .physical_account_count(tail_count)
+            .map_err(|_| TradingSbfError::Content)?
+    };
     if logical_count > MAX_HOT_RUNTIME_ACCOUNTS_V3
         || physical_count < injected.len()
         || supplied_suffix.len()
@@ -1605,21 +1682,39 @@ fn expand_runtime_accounts_v3<'accounts, 'info>(
         return Err(TradingSbfError::Content.into());
     }
     for coordinate in 0..injected.len() {
-        if profile
-            .representative(tail_count, coordinate)
-            .map_err(|_| TradingSbfError::Content)?
-            != coordinate
-            || profile
+        let representative = if dynamic {
+            profile
+                .representative_with_dynamic_spans(tail_count, span_counts, coordinate)
+                .map_err(|_| TradingSbfError::Content)?
+        } else {
+            profile
+                .representative(tail_count, coordinate)
+                .map_err(|_| TradingSbfError::Content)?
+        };
+        let ordinal = if dynamic {
+            profile
+                .physical_account_ordinal_with_dynamic_spans(tail_count, span_counts, coordinate)
+                .map_err(|_| TradingSbfError::Content)?
+        } else {
+            profile
                 .physical_account_ordinal(tail_count, coordinate)
                 .map_err(|_| TradingSbfError::Content)?
-                != coordinate
-        {
+        };
+        if representative != coordinate || ordinal != coordinate {
             return Err(TradingSbfError::Content.into());
         }
     }
     let mut physical = Vec::with_capacity(physical_count);
     physical.extend(injected);
     physical.extend(supplied_suffix.iter());
+    if dynamic {
+        return expand_dynamic_physical_accounts_v4(
+            profile,
+            tail_count,
+            span_counts,
+            physical.as_slice(),
+        );
+    }
     let mut logical = Vec::with_capacity(logical_count);
     let mut coordinate = 0_usize;
     while coordinate < logical_count {
@@ -1635,8 +1730,20 @@ fn expand_runtime_accounts_v3<'accounts, 'info>(
 fn downgraded_effect_accounts_v3<'info>(
     profile: AccountProfileV2<'_>,
     tail_count: u32,
+    span_counts: &[u32],
     logical_accounts: &[&AccountInfo<'info>],
 ) -> Result<Vec<AccountInfo<'info>>, ProgramError> {
+    if profile.dynamic_fixed_span_count() != 0 {
+        return downgrade_dynamic_child_accounts_v4(
+            profile,
+            tail_count,
+            span_counts,
+            logical_accounts,
+        );
+    }
+    if !span_counts.is_empty() {
+        return Err(TradingSbfError::Content.into());
+    }
     if logical_accounts.len()
         != profile
             .logical_account_count(tail_count)
@@ -2181,7 +2288,7 @@ fn require_lifecycle_replan_agreement_v4(
 
 fn require_lifecycle_effect_bindings_v4(
     plans: &[PreparedLifecycleInvocationV3],
-    effect: EffectProgramV3<'_>,
+    effect: SelectedEffectProgramV4<'_>,
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
@@ -2583,7 +2690,7 @@ fn apply_lifecycle_closes_v3(
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
 fn decode_claims_composition_boxed_v3<'request>(
-    effect: EffectProgramV3<'_>,
+    effect: SelectedEffectProgramV4<'_>,
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
@@ -2592,7 +2699,7 @@ fn decode_claims_composition_boxed_v3<'request>(
     parent: ClaimsCompositionParentV3,
 ) -> Result<Box<ClaimsCompositionV3<'request>>, ProgramError> {
     ClaimsCompositionV3::decode_selected_with_witness(
-        effect,
+        effect.base(),
         tail_count,
         scalars,
         identities,
@@ -2608,7 +2715,7 @@ fn decode_claims_composition_boxed_v3<'request>(
 fn preflight_child_routes_v3<'accounts, 'info>(
     program_id: &Pubkey,
     frame: HotFrameV3<'accounts, 'info>,
-    effect: EffectProgramV3<'_>,
+    effect: SelectedEffectProgramV4<'_>,
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
@@ -2715,13 +2822,13 @@ fn preflight_child_routes_v3<'accounts, 'info>(
             let invocation = effect
                 .resolved_invocation(route, invocation_index, tail_count, scalars, identities)
                 .map_err(|_| TradingSbfError::Content)?;
-            require_chain_receipt_width_v3(effect, invocation)?;
+            require_chain_receipt_width_v3(effect.base(), invocation)?;
             require_no_common_projection_child_accounts_v3(invocation)?;
             require_child_disjoint_from_local(invocation, aliases, &locally_mutated)?;
             match invocation.role {
                 FixedRole::Core => preflight_core_route_v3(
                     program_id,
-                    effect,
+                    effect.base(),
                     route,
                     invocation_index,
                     tail_count,
@@ -2777,7 +2884,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                     ))]
                     preflight_custody_route_v3(
                         program_id,
-                        effect,
+                        effect.base(),
                         route,
                         invocation_index,
                         tail_count,
@@ -2805,7 +2912,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                     #[cfg(feature = "families")]
                     preflight_resolution_route_v3(
                         program_id,
-                        effect,
+                        effect.base(),
                         route,
                         invocation_index,
                         tail_count,
@@ -2844,7 +2951,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
     program_id: &Pubkey,
     frame: HotFrameV3<'accounts, 'info>,
     request_profile: RequestProfileKindV3<'_>,
-    effect: EffectProgramV3<'_>,
+    effect: SelectedEffectProgramV4<'_>,
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
@@ -3018,7 +3125,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                     FixedRole::Core,
                     execute_core_route_v3(
                         program_id,
-                        effect,
+                        effect.base(),
                         route,
                         invocation,
                         tail_count,
@@ -3047,7 +3154,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                     {
                         let receipt = execute_claims_route_v3(
                             program_id,
-                            effect,
+                            effect.base(),
                             claims_composition
                                 .as_deref()
                                 .copied()
@@ -3084,7 +3191,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                     {
                         let digest = execute_custody_route_v3(
                             program_id,
-                            effect,
+                            effect.base(),
                             route,
                             invocation,
                             tail_count,
@@ -3120,7 +3227,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                     {
                         let digest = execute_resolution_route_v3(
                             program_id,
-                            effect,
+                            effect.base(),
                             route,
                             invocation,
                             tail_count,
@@ -3287,7 +3394,7 @@ fn child_receipt_provenance_v4(
     feature = "dealer-family"
 ))]
 fn has_active_role(
-    effect: EffectProgramV3<'_>,
+    effect: SelectedEffectProgramV4<'_>,
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
@@ -3313,7 +3420,7 @@ fn has_active_role(
 }
 
 fn local_mutation_representatives(
-    effect: EffectProgramV3<'_>,
+    effect: SelectedEffectProgramV4<'_>,
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
@@ -3726,12 +3833,33 @@ fn decode_request_profile<'a>(
     }
 }
 
+#[inline(never)]
+fn decode_selected_effect_v4<'a>(
+    schema: [u8; 32],
+    bytes: &'a [u8],
+) -> Result<SelectedEffectProgramV4<'a>, ProgramError> {
+    if schema != EFFECT_SCHEMA_ID_V4 {
+        return Err(TradingSbfError::UnsupportedContent.into());
+    }
+    let successor = EffectProgramV4::decode(bytes).map_err(|_| TradingSbfError::Content)?;
+    // This first accepted runtime slice is exact fixed topology. Dynamic spans
+    // and borrowed ranges remain fail-closed until their physical expansion
+    // and child-request append paths are committed together.
+    if successor.span_count() != 0 || successor.range_count() != 0 {
+        return Err(TradingSbfError::UnsupportedContent.into());
+    }
+    Ok(SelectedEffectProgramV4 {
+        base: successor.base(),
+        successor,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn require_geometry(
     account: AccountProfileV2<'_>,
     request: RequestProfileKindV3<'_>,
     transition: TransitionProgramV3<'_>,
-    effect: EffectProgramV3<'_>,
+    effect: SelectedEffectProgramV4<'_>,
     tail_count: u32,
     family_request: &[u8],
     runtime_accounts: usize,
@@ -3770,7 +3898,7 @@ fn require_geometry(
 
 fn require_borrowed_witness_coverage_v3<'a>(
     request_profile: RequestProfileKindV3<'a>,
-    effect: EffectProgramV3<'_>,
+    effect: SelectedEffectProgramV4<'_>,
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
@@ -4088,7 +4216,7 @@ fn require_trusted_environment_register_ownership_v3(
 }
 
 fn shadow_routes_v3(
-    effect: EffectProgramV3<'_>,
+    effect: SelectedEffectProgramV4<'_>,
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
@@ -4186,7 +4314,7 @@ fn shadow_routes_v3(
 }
 
 fn preflight_local_effects(
-    effect: EffectProgramV3<'_>,
+    effect: SelectedEffectProgramV4<'_>,
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
@@ -4256,7 +4384,7 @@ fn require_root_write_is_state_only(
 
 #[allow(clippy::too_many_arguments)]
 fn commit_local_effects(
-    effect: EffectProgramV3<'_>,
+    effect: SelectedEffectProgramV4<'_>,
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
@@ -4709,6 +4837,56 @@ mod tests {
     };
 
     #[test]
+    fn effect_v4_schema_and_zero_extension_envelope_are_exact() {
+        use dclutch_effect_kernel::{
+            v3::{
+                HEADER_BYTES,
+                encode::{EffectGeometryV3, encode_effect_program_v3_atomic},
+            },
+            v4::{BorrowedRangePolicyV4, HEADER_BYTES_V4, encode_program_v4_atomic},
+        };
+        let mut base_scratch = [0_u8; HEADER_BYTES];
+        let mut base = [0_u8; HEADER_BYTES];
+        encode_effect_program_v3_atomic(
+            EffectGeometryV3 {
+                fixed_accounts: 1,
+                item_account_stride: 0,
+                common_scalars: 1,
+                item_scalar_stride: 0,
+                common_identities: 0,
+                item_identity_stride: 0,
+            },
+            &[],
+            &[],
+            &[],
+            &mut base_scratch,
+            &mut base,
+        )
+        .expect("fixed base");
+        let mut scratch = vec![0_u8; HEADER_BYTES_V4 + HEADER_BYTES];
+        let mut output = vec![0_u8; HEADER_BYTES_V4 + HEADER_BYTES];
+        encode_program_v4_atomic(
+            &base,
+            BorrowedRangePolicyV4::DisjointExactCoverage,
+            1,
+            &[],
+            &[],
+            &mut scratch,
+            &mut output,
+        )
+        .expect("zero-extension successor");
+        let selected =
+            decode_selected_effect_v4(EFFECT_SCHEMA_ID_V4, &output).expect("selected V4 effect");
+        assert_eq!(selected.successor.span_count(), 0);
+        assert_eq!(selected.successor.range_count(), 0);
+        assert!(decode_selected_effect_v4([7; 32], &output).is_err());
+
+        let mut hostile = output;
+        hostile[0] ^= 1;
+        assert!(decode_selected_effect_v4(EFFECT_SCHEMA_ID_V4, &hostile).is_err());
+    }
+
+    #[test]
     fn selector_is_exact_and_does_not_shadow_activation() {
         assert!(is_hot_execution_v3(b"DCLTHOT3"));
         assert!(!is_hot_execution_v3(b"DCLTHOT2"));
@@ -4799,6 +4977,7 @@ mod tests {
         let logical = expand_runtime_accounts_v3(
             profile,
             0,
+            &[],
             [
                 &physical[0],
                 &physical[1],
@@ -4812,8 +4991,8 @@ mod tests {
         assert_eq!(logical.len(), 7);
         assert_eq!(logical[4].key, logical[6].key);
 
-        let child =
-            downgraded_effect_accounts_v3(profile, 0, &logical).expect("downgrade route views");
+        let child = downgraded_effect_accounts_v3(profile, 0, &[], &logical)
+            .expect("downgrade route views");
         assert!(child[4].is_writable);
         assert!(!child[6].is_writable);
         assert_eq!(child[4].key, child[6].key);
@@ -4821,6 +5000,7 @@ mod tests {
             expand_runtime_accounts_v3(
                 profile,
                 0,
+                &[],
                 [
                     &physical[0],
                     &physical[1],

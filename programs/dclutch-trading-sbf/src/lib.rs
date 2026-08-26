@@ -51,6 +51,8 @@ pub mod direct;
 pub mod dispatch;
 /// V3 descriptor joins for independently finalized runtime-tail artifacts.
 pub mod dispatch_v3;
+/// Profile13 physical representative expansion shared by prefix and continuation.
+mod dynamic_accounts_v4;
 /// Registry-authenticated family-neutral Execution Strategy V2 admission.
 pub mod execution_strategy_v2;
 /// General family projection behind the common data-defined Trading boundary.
