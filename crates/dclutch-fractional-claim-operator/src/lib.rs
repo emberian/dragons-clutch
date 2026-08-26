@@ -10,6 +10,7 @@
 //! input and are rechecked by the onchain child route.
 
 mod artifacts;
+mod claims;
 mod composition;
 mod records;
 
@@ -38,6 +39,11 @@ pub use artifacts::{
     FractionalArtifactCompilerErrorV1, FractionalClaimsAccountRuleV1,
     FractionalFinalizedArtifactBundleV1, build_fractional_composed_artifact_bundle_v1,
     build_fractional_finalized_artifact_bundle_v1,
+};
+pub use claims::{
+    FractionalClaimsPositionSnapshotV1, FractionalSignedDeltaChainObservationV1,
+    FractionalSignedDeltaChainPlanV1, build_fractional_signed_delta_instruction_v1,
+    lower_fractional_action_to_signed_delta_v1, validate_fractional_signed_delta_chain_result_v1,
 };
 pub use composition::{
     CheckedFractionalCompositionV1, check_fractional_composition_bundle_v1,
@@ -174,6 +180,8 @@ pub enum Error {
     Message,
     /// Composition DAG, Product basis, or exact retranslation differed.
     Composition,
+    /// Canonical Claims SignedDelta lowering, frame, receipt, or post-state refused.
+    Claims,
 }
 
 /// Result alias.

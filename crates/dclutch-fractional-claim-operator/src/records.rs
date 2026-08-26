@@ -230,6 +230,7 @@ pub struct FractionalChainArtifactSnapshotV1<'a> {
 pub struct FractionalPreparedChainArtifactsV1<'a> {
     checked: CheckedFractionalReleaseV1,
     observation: Observation,
+    root_key: Pubkey,
     root: FractionalRootV1,
     context: FractionalRequestContextV1,
     selection: FractionalArtifactSelectionV1,
@@ -250,6 +251,11 @@ impl<'a> FractionalPreparedChainArtifactsV1<'a> {
     /// Minimal authenticated root.
     pub const fn root(self) -> FractionalRootV1 {
         self.root
+    }
+
+    /// Canonical Trading-owned Fractional root account and Claims reserve owner.
+    pub const fn root_key(self) -> Pubkey {
+        self.root_key
     }
 
     /// Kernel-owned exact terms.
@@ -494,6 +500,7 @@ pub fn prepare_fractional_chain_artifacts_v1<'a>(
     Ok(FractionalPreparedChainArtifactsV1 {
         checked,
         observation,
+        root_key: snapshot.root.key,
         root,
         context: FractionalRequestContextV1 {
             release_set: selection.release_set,
