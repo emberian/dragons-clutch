@@ -11,8 +11,8 @@ use dclutch_claims_svm::{
     protocol_position_v2::{ProtocolPositionClaimsCapabilitySeedsV2, ProtocolPositionSeedsV2},
     signed_delta_v3::{SignedDeltaPlanV3, SignedDeltaReceiptV3},
 };
-use dclutch_custody_contract::{CustodyReceiptV1, CustodyRequestV1};
 use dclutch_core_contract::ContentId;
+use dclutch_custody_contract::{CustodyReceiptV1, CustodyRequestV1};
 use dclutch_rational_representation_v2_contract::{
     AffineBatchContextV2, CompletionEvidenceV2, PreparedRepresentationV2,
     RATIONAL_ASSET_ACCOUNT_COUNT_V2, RATIONAL_BASE_ACCOUNT_COUNT_V2,
@@ -20,13 +20,16 @@ use dclutch_rational_representation_v2_contract::{
     RepresentationRequestV2, TokenEffectStyleV2, finalize, prepare,
 };
 use dclutch_rational_representation_v2_kernel::{
-    ContentAdmissionV2, CoordinateObservation, DescriptorAdmissionV2, RepresentationDescriptorV2,
-    RepresentationGraphV2, SCALAR_BYTES, STRUCTURED_HEADER_BYTES, STRUCTURED_VECTOR_COUNT,
-    StructuredProjectionHeaderV2, StructuredProjectionV2,
+    CoordinateObservation, DescriptorAdmissionV2, RepresentationDescriptorV2, SCALAR_BYTES,
+    STRUCTURED_HEADER_BYTES, STRUCTURED_VECTOR_COUNT, StructuredProjectionHeaderV2,
+    StructuredProjectionV2,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_svm::batch_v2::{AuthenticatedRoleBatchReceiptV2, RoleBatchRequestV2};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_representation_composition_v3_kernel::{
+    CompositionExposureBundleV3, RecordAdmissionV3,
+};
 use dclutch_token_svm::{
     TOKEN_2022_PROGRAM_ID, Token2022BehaviorAccountFactsV2, Token2022BehaviorMintFactsV2,
     Token2022BehaviorProfileV2,
@@ -313,13 +316,13 @@ fn prepare_and_execute<'accounts, 'info>(
         .graph_raw
         .try_borrow_data()
         .map_err(|_| ClaimsSbfError::Accounts)?;
-    let graph = RepresentationGraphV2::decode(
+    let exposure = CompositionExposureBundleV3::decode(
         &graph_data,
-        ContentAdmissionV2 {
-            selected_graph_id: header.graph_id,
-            finalized_graph_id: header.graph_id,
-            recomputed_graph_digest: authenticated.admission.graph_digest(),
-            finalized_graph_digest: authenticated.admission.graph_digest(),
+        RecordAdmissionV3 {
+            selected_id: header.graph_id,
+            finalized_id: header.graph_id,
+            recomputed_digest: authenticated.admission.graph_digest(),
+            finalized_digest: authenticated.admission.graph_digest(),
             record_authenticated: true,
         },
     )
@@ -329,7 +332,7 @@ fn prepare_and_execute<'accounts, 'info>(
     let projection_bytes = build_projection(program_id, account_infos, base, request, descriptor)?;
     let projection = StructuredProjectionV2::decode(&projection_bytes)
         .map_err(|_| ClaimsSbfError::Representation)?;
-    let prepared = prepare(request, descriptor, projection, graph)
+    let prepared = prepare(request, descriptor, projection, exposure)
         .map_err(|_| ClaimsSbfError::Representation)?;
 
     execute_prepared(
@@ -690,11 +693,7 @@ fn authenticate_release_batch<'info>(
     registry: &AccountInfo<'info>,
     cache: &AccountInfo<'info>,
     release_set: [u8; 32],
-    entries: &[(
-        ExecutionRoleV1,
-        &AccountInfo<'info>,
-        &AccountInfo<'info>,
-    )],
+    entries: &[(ExecutionRoleV1, &AccountInfo<'info>, &AccountInfo<'info>)],
 ) -> Result<(), ProgramError> {
     let cache_digest = {
         let bytes = cache
@@ -1578,6 +1577,7 @@ fn execute_terminal_claims<'accounts, 'info>(
             result_domain_staging: base.result_domain_staging,
             portfolio_record: base.portfolio_record,
             portfolio_staging: base.portfolio_staging,
+            graph_record: base.graph_raw,
             rent: base.rent,
             core_market: base.core_market,
             cache: base.cache,

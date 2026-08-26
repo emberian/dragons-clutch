@@ -30,6 +30,7 @@ use dclutch_rational_representation_v2_contract::{
 use dclutch_realm_contract::REALM_SCHEMA_RELEASE_ID_V1;
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_representation_composition_v3_kernel::RecordAdmissionV3;
 use dclutch_token_svm::TokenAccount;
 use solana_program::{
     account_info::AccountInfo,
@@ -61,6 +62,7 @@ pub(crate) struct RationalTerminalFrameV3<'accounts, 'info> {
     pub(crate) result_domain_staging: &'accounts AccountInfo<'info>,
     pub(crate) portfolio_record: &'accounts AccountInfo<'info>,
     pub(crate) portfolio_staging: &'accounts AccountInfo<'info>,
+    pub(crate) graph_record: &'accounts AccountInfo<'info>,
     pub(crate) rent: &'accounts AccountInfo<'info>,
     pub(crate) core_market: &'accounts AccountInfo<'info>,
     pub(crate) cache: &'accounts AccountInfo<'info>,
@@ -133,15 +135,19 @@ pub(crate) fn execute_rational_terminal_v3<'accounts, 'info>(
         frame.collateral_mint.key.to_bytes(),
         frame.custody_authority.key.to_bytes(),
     )?;
-    let width = usize::try_from(authenticated.admission.basis_width())
+    let claims_width = usize::try_from(authenticated.admission.basis_width())
+        .map_err(|_| ClaimsSbfError::Economic)?;
+    let product_width = usize::try_from(authenticated.result_outcome_count)
         .map_err(|_| ClaimsSbfError::Economic)?;
     let neutral = SignedDeltaV3::new(
         dclutch_claims_svm::signed_delta_v3::DeltaDirectionV3::Neutral,
         0,
     )
     .map_err(|_| ClaimsSbfError::Economic)?;
-    let mut payout_scratch = vec![0_u64; width];
-    let mut aggregate_scratch = vec![neutral; width];
+    let mut product_payout_scratch = vec![0_u64; product_width];
+    let mut translation_scratch = vec![0_u64; claims_width];
+    let mut claims_payout_scratch = vec![0_u64; claims_width];
+    let mut aggregate_scratch = vec![neutral; claims_width];
     let mut packet = vec![
         0_u8;
         plan_bytes(authenticated.admission.basis_width(), 1, 1)
@@ -159,10 +165,22 @@ pub(crate) fn execute_rational_terminal_v3<'accounts, 'info>(
         .linked_basis_record
         .try_borrow_data()
         .map_err(|_| ClaimsSbfError::Accounts)?;
+    let exposure = frame
+        .graph_record
+        .try_borrow_data()
+        .map_err(|_| ClaimsSbfError::Accounts)?;
     let payout = encode_product_basis_terminal_signed_delta_v3(
         ProductBasisTerminalInputV3 {
             product_basis_bytes: &basis,
             representation: authenticated.admission,
+            composition_exposure_bytes: &exposure,
+            composition_exposure_admission: RecordAdmissionV3 {
+                selected_id: authenticated.admission.graph_id(),
+                finalized_id: authenticated.admission.graph_id(),
+                recomputed_digest: hash(&exposure).to_bytes(),
+                finalized_digest: authenticated.admission.graph_digest(),
+                record_authenticated: true,
+            },
             product_record_digest: authenticated.product_record_digest,
             market_account: frame.aggregate.key.to_bytes(),
             market_bytes: &market,
@@ -178,11 +196,14 @@ pub(crate) fn execute_rational_terminal_v3<'accounts, 'info>(
             expected_position_revision: header.expected_custody_position_revision,
             hoard_before,
         },
-        &mut payout_scratch,
+        &mut product_payout_scratch,
+        &mut translation_scratch,
+        &mut claims_payout_scratch,
         &mut aggregate_scratch,
         &mut packet,
     )
     .map_err(|_| ClaimsSbfError::Economic)?;
+    drop(exposure);
     drop(basis);
     drop(position);
     drop(market);

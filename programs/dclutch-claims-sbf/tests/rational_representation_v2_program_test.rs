@@ -11,9 +11,8 @@ use std::{env, fs, path::PathBuf, vec::Vec};
 
 use dclutch_claims_sbf::liability_basis_v2::{
     LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketInputV2, LiabilityBasisPositionInputV2,
-    TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2,
-    encode_liability_basis_market_v2, encode_liability_basis_position_v2,
-    encode_terminal_coordinate_v2,
+    TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2, encode_liability_basis_market_v2,
+    encode_liability_basis_position_v2, encode_terminal_coordinate_v2,
 };
 use dclutch_claims_svm::{
     CallerRole,
@@ -21,9 +20,7 @@ use dclutch_claims_svm::{
         ProductBasisTerminalInputV3, TERMINAL_CANDIDATE_DOMAIN_V3,
         encode_product_basis_terminal_signed_delta_v3,
     },
-    protocol_position_v2::{
-        ProtocolPositionClaimsCapabilitySeedsV2, ProtocolPositionSeedsV2,
-    },
+    protocol_position_v2::{ProtocolPositionClaimsCapabilitySeedsV2, ProtocolPositionSeedsV2},
     signed_delta_v3::{DeltaDirectionV3, SignedDeltaV3, plan_bytes},
 };
 use dclutch_core_contract::ContentId;
@@ -31,15 +28,15 @@ use dclutch_custody_contract::{
     CallerRoleV1 as CustodyCallerRoleV1, CompartmentV1, ContextV1, CustodyAuthoritySeedsV1,
     CustodyReplaySeedsV1, CustodyReplayV1, CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
 };
+use dclutch_market_core_codec::{
+    CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase as CorePhase, Readiness,
+};
 use dclutch_product_payoff_v2_codec::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
     runtime_v3::{
         BasisInputV3, BasisKindV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, basis_record_bytes_v3,
         compile_basis_v3, semantic_basis_preimage_v3,
     },
-};
-use dclutch_market_core_codec::{
-    CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase as CorePhase, Readiness,
 };
 use dclutch_product_runtime_v2::{
     ContentId as RuntimeContentId, PortfolioInputV2, ResultDomainInputV2, compile_portfolio_v2,
@@ -52,17 +49,14 @@ use dclutch_product_runtime_v2_admission::{
 use dclutch_rational_representation_v2_contract::{
     ABSENT_REVISION, ASSET_BYTES_V2, AssetV2, CallerRoleV2, RATIONAL_ASSET_ACCOUNT_COUNT_V2,
     RATIONAL_BASE_ACCOUNT_COUNT_V2, RATIONAL_REPLAY_BYTES_V2, RATIONAL_REPLAY_MAGIC_V2,
-    RATIONAL_REPLAY_SEED_V2,
-    RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2, RATIONAL_SHARD_MINT_SEED_V2,
-    RATIONAL_STRUCTURED_CUSTODY_SEED_V2, RATIONAL_TERMINAL_ACCOUNT_COUNT_V2,
-    REQUEST_HEADER_BYTES_V2, RepresentationActionV2, RepresentationRequestHeaderV2,
-    RepresentationRequestV2,
+    RATIONAL_REPLAY_SEED_V2, RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
+    RATIONAL_SHARD_MINT_SEED_V2, RATIONAL_STRUCTURED_CUSTODY_SEED_V2,
+    RATIONAL_TERMINAL_ACCOUNT_COUNT_V2, REQUEST_HEADER_BYTES_V2, RepresentationActionV2,
+    RepresentationRequestHeaderV2, RepresentationRequestV2,
 };
 use dclutch_rational_representation_v2_kernel::{
     ContentAdmissionV2, DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3,
-    DescriptorAdmissionV2, GRAPH_EDGE_BYTES, GRAPH_HEADER_BYTES, GRAPH_MAGIC_V2, GRAPH_NODE_BYTES,
-    REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3, REPRESENTATION_GRAPH_SCHEMA_RELEASE_ID_V2,
-    SCALAR_BYTES, SCHEMA_VERSION_V2,
+    DescriptorAdmissionV2, REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
     product_v3::{
         ProductRepresentationInputV3, ProductRuntimeProjectionV3, RepresentationContextV3,
         TerminalScenarioV3, admit_product_representation_v3,
@@ -81,6 +75,11 @@ use dclutch_registry_contract::{
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
     ExecutionRoleV1, ProgramIdentityV1,
+};
+use dclutch_representation_composition_v3_kernel::{
+    COMPOSITION_EXPOSURE_SCHEMA_ID_V3, CompositionExposureInputV3, CompositionExposureRowInputV3,
+    CompositionExposureTermV3, RecordAdmissionV3, composition_exposure_bytes_v3,
+    encode_composition_exposure_v3_atomic,
 };
 use dclutch_token_svm::{PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID, TokenAccount};
 use solana_account::Account;
@@ -434,149 +433,54 @@ fn add_finalized_record(
     (raw, staging, digest)
 }
 
-#[derive(Clone, Copy)]
-struct GraphNode {
-    id: [u8; 32],
-    rank: u32,
-    first_edge: u32,
-    edge_count: u32,
-    kind: u8,
-    parameter: u64,
-    exposure: [u64; 2],
-}
-
-#[derive(Clone, Copy)]
-struct GraphEdge {
-    child_id: [u8; 32],
-    child_index: u32,
-    multiplicity: u64,
-}
-
-fn graph_bytes(changed: bool) -> Vec<u8> {
-    let graph_id = [0x31; 32];
-    let root = [0x45; 32];
-    let final_multiplicities = if changed { [4, 6] } else { [3, 7] };
-    let first_multiplicity = *final_multiplicities.first().expect("first multiplicity");
-    let second_multiplicity = *final_multiplicities.get(1).expect("second multiplicity");
-    let nodes = [
-        GraphNode {
-            id: [0x41; 32],
-            rank: 0,
-            first_edge: 0,
-            edge_count: 0,
-            kind: 0,
-            parameter: 0,
-            exposure: [100, 0],
+fn graph_bytes(
+    changed: bool,
+    market: Pubkey,
+    release_set: [u8; 32],
+    product: &ProductClaimsFixture,
+) -> Vec<u8> {
+    let terms = [
+        [CompositionExposureTermV3 {
+            product_coordinate: 0,
+            numerator: if changed { 2 } else { 1 },
+        }],
+        [CompositionExposureTermV3 {
+            product_coordinate: 1,
+            numerator: 1,
+        }],
+    ];
+    let rows = [
+        CompositionExposureRowInputV3 {
+            node_id: [0x41; 32],
+            denominator: 1,
+            terms: &terms[0],
         },
-        GraphNode {
-            id: [0x42; 32],
-            rank: 0,
-            first_edge: 0,
-            edge_count: 0,
-            kind: 0,
-            parameter: 1,
-            exposure: [0, 100],
-        },
-        GraphNode {
-            id: [0x43; 32],
-            rank: 1,
-            first_edge: 0,
-            edge_count: 1,
-            kind: 1,
-            parameter: DENOMINATOR,
-            exposure: [10, 0],
-        },
-        GraphNode {
-            id: [0x44; 32],
-            rank: 1,
-            first_edge: 1,
-            edge_count: 1,
-            kind: 1,
-            parameter: DENOMINATOR,
-            exposure: [0, 10],
-        },
-        GraphNode {
-            id: root,
-            rank: 2,
-            first_edge: 2,
-            edge_count: 2,
-            kind: 2,
-            parameter: 0,
-            exposure: [first_multiplicity * 10, second_multiplicity * 10],
+        CompositionExposureRowInputV3 {
+            node_id: [0x42; 32],
+            denominator: 1,
+            terms: &terms[1],
         },
     ];
-    let edges = [
-        GraphEdge {
-            child_id: [0x41; 32],
-            child_index: 0,
-            multiplicity: 1,
+    let length =
+        composition_exposure_bytes_v3(OUTCOME_COUNT, OUTCOME_COUNT).expect("exposure record width");
+    let mut scratch = vec![0_u8; length];
+    let mut output = vec![0_u8; length];
+    encode_composition_exposure_v3_atomic(
+        CompositionExposureInputV3 {
+            market: market.to_bytes(),
+            result_domain: product.result_domain_id,
+            release_set,
+            product_basis: product.linked_basis_digest,
+            representation_basis: product.basis_id,
+            graph_id: [0x31; 32],
+            product_width: OUTCOME_COUNT,
+            rows: &rows,
         },
-        GraphEdge {
-            child_id: [0x42; 32],
-            child_index: 1,
-            multiplicity: 1,
-        },
-        GraphEdge {
-            child_id: [0x43; 32],
-            child_index: 2,
-            multiplicity: first_multiplicity,
-        },
-        GraphEdge {
-            child_id: [0x44; 32],
-            child_index: 3,
-            multiplicity: second_multiplicity,
-        },
-    ];
-    let mut bytes = vec![
-        0;
-        GRAPH_HEADER_BYTES
-            + nodes.len() * GRAPH_NODE_BYTES
-            + edges.len() * GRAPH_EDGE_BYTES
-            + nodes.len() * 2 * SCALAR_BYTES
-    ];
-    put(&mut bytes, 0, &GRAPH_MAGIC_V2);
-    put(&mut bytes, 8, &SCHEMA_VERSION_V2.to_le_bytes());
-    put(&mut bytes, 16, &graph_id);
-    put(&mut bytes, 48, &root);
-    put_u32(&mut bytes, 80, OUTCOME_COUNT);
-    put_u32(
-        &mut bytes,
-        84,
-        u32::try_from(nodes.len()).expect("node count"),
-    );
-    put_u32(
-        &mut bytes,
-        88,
-        u32::try_from(edges.len()).expect("edge count"),
-    );
-    put_u64(&mut bytes, 96, 100);
-    for (index, node) in nodes.iter().enumerate() {
-        let offset = GRAPH_HEADER_BYTES + index * GRAPH_NODE_BYTES;
-        put(&mut bytes, offset, &node.id);
-        put_u32(&mut bytes, offset + 32, node.rank);
-        put_u32(&mut bytes, offset + 36, node.first_edge);
-        put_u32(&mut bytes, offset + 40, node.edge_count);
-        *bytes.get_mut(offset + 44).expect("node kind") = node.kind;
-        put_u64(&mut bytes, offset + 48, node.parameter);
-    }
-    let edge_start = GRAPH_HEADER_BYTES + nodes.len() * GRAPH_NODE_BYTES;
-    for (index, edge) in edges.iter().enumerate() {
-        let offset = edge_start + index * GRAPH_EDGE_BYTES;
-        put(&mut bytes, offset, &edge.child_id);
-        put_u32(&mut bytes, offset + 32, edge.child_index);
-        put_u64(&mut bytes, offset + 40, edge.multiplicity);
-    }
-    let exposure_start = edge_start + edges.len() * GRAPH_EDGE_BYTES;
-    for (node_index, node) in nodes.iter().enumerate() {
-        for (outcome, value) in node.exposure.iter().enumerate() {
-            put_u64(
-                &mut bytes,
-                exposure_start + (node_index * 2 + outcome) * SCALAR_BYTES,
-                *value,
-            );
-        }
-    }
-    bytes
+        &mut scratch,
+        &mut output,
+    )
+    .expect("canonical exposure record");
+    output
 }
 
 fn descriptor_bytes(
@@ -713,11 +617,12 @@ fn add_product_claims(test: &mut ProgramTest) -> ProductClaimsFixture {
         terms: &[],
         failure_payouts: &[],
     };
-    let mut provisional = vec![
-        0_u8;
-        basis_record_bytes_v3(BasisKindV3::CategoricalQ1, OUTCOME_COUNT as usize, 0, 0)
-            .expect("ProductBasisV3 width")
-    ];
+    let mut provisional =
+        vec![
+            0_u8;
+            basis_record_bytes_v3(BasisKindV3::CategoricalQ1, OUTCOME_COUNT as usize, 0, 0)
+                .expect("ProductBasisV3 width")
+        ];
     compile_basis_v3(provisional_input, &mut provisional).expect("provisional ProductBasisV3");
     let semantic =
         semantic_basis_preimage_v3(&provisional).expect("ProductBasisV3 semantic preimage");
@@ -772,11 +677,12 @@ fn add_product_claims(test: &mut ProgramTest) -> ProductClaimsFixture {
     .expect("Product root");
     let (product_record, product_staging, product_digest) =
         add_finalized_record(test, PRODUCT_RECORD_SCHEMA_ID_V2, &product);
-    let mut linked = vec![
-        0_u8;
-        basis_record_bytes_v3(BasisKindV3::CategoricalQ1, OUTCOME_COUNT as usize, 0, 0)
-            .expect("ProductBasisV3 width")
-    ];
+    let mut linked =
+        vec![
+            0_u8;
+            basis_record_bytes_v3(BasisKindV3::CategoricalQ1, OUTCOME_COUNT as usize, 0, 0)
+                .expect("ProductBasisV3 width")
+        ];
     compile_basis_v3(
         BasisInputV3 {
             result_domain_id: domain_digest,
@@ -1254,12 +1160,22 @@ fn terminal_candidate_digest(
     .expect("terminal Position prestate");
     let neutral = SignedDeltaV3::new(DeltaDirectionV3::Neutral, 0).expect("neutral delta");
     let mut payouts = vec![0_u64; usize::try_from(OUTCOME_COUNT).expect("outcome width")];
+    let mut translation_scratch = vec![0_u64; payouts.len()];
+    let mut claims_payouts = vec![0_u64; payouts.len()];
     let mut aggregate_deltas = vec![neutral; payouts.len()];
     let mut packet = vec![0_u8; plan_bytes(OUTCOME_COUNT, 1, 1).expect("terminal packet width")];
     let payout = encode_product_basis_terminal_signed_delta_v3(
         ProductBasisTerminalInputV3 {
             product_basis_bytes: &product.linked_basis_bytes,
             representation: admission,
+            composition_exposure_bytes: graph_bytes,
+            composition_exposure_admission: RecordAdmissionV3 {
+                selected_id: [0x31; 32],
+                finalized_id: [0x31; 32],
+                recomputed_digest: graph_digest,
+                finalized_digest: graph_digest,
+                record_authenticated: true,
+            },
             product_record_digest: product.product_digest,
             market_account: aggregate.to_bytes(),
             market_bytes: &market_bytes,
@@ -1276,6 +1192,8 @@ fn terminal_candidate_digest(
             hoard_before: INITIAL_HOARD_ATOMS,
         },
         &mut payouts,
+        &mut translation_scratch,
+        &mut claims_payouts,
         &mut aggregate_deltas,
         &mut packet,
     )
@@ -1378,14 +1296,14 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
     .0;
     let receipt_mint = Pubkey::new_from_array(if terminal { [0x76; 32] } else { [0x75; 32] });
     let actor_receipt = Pubkey::new_from_array(if terminal { [0x78; 32] } else { [0x77; 32] });
-    let graph = graph_bytes(false);
+    let graph = graph_bytes(false, market, release_set, &product_claims);
     let (graph_raw, graph_staging, graph_digest) =
-        add_finalized_record(&mut test, REPRESENTATION_GRAPH_SCHEMA_RELEASE_ID_V2, &graph);
-    let alternate_graph = graph_bytes(true);
+        add_finalized_record(&mut test, COMPOSITION_EXPOSURE_SCHEMA_ID_V3, &graph);
+    let alternate_graph = graph_bytes(true, market, release_set, &product_claims);
     let (alternate_graph_raw, alternate_graph_staging, alternate_graph_digest) =
         add_finalized_record(
             &mut test,
-            REPRESENTATION_GRAPH_SCHEMA_RELEASE_ID_V2,
+            COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
             &alternate_graph,
         );
     assert_ne!(graph_digest, alternate_graph_digest);
