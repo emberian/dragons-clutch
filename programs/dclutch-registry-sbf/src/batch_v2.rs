@@ -21,6 +21,11 @@ use solana_sdk_ids::bpf_loader_upgradeable;
 
 use super::{RegistryError, authenticate_cache_identity, deployment_observation};
 
+pub(super) struct AuthenticatedBatchV2 {
+    pub(super) cache_digest: ContentId,
+    pub(super) observations: Vec<RoleDeploymentObservationV2>,
+}
+
 /// Process one fixed, canonical role batch.
 #[inline(never)]
 pub(super) fn process(
@@ -30,6 +35,36 @@ pub(super) fn process(
 ) -> ProgramResult {
     let request = RoleBatchRequestV2::decode(instruction_data)
         .map_err(|_| ProgramError::from(RegistryError::Batch))?;
+    let authenticated = authenticate_request(program_id, accounts, request)?;
+    let cache = accounts.first().ok_or(RegistryError::AccountFrame)?;
+    let request_digest =
+        ContentId::new(hash(instruction_data).to_bytes()).map_err(|_| RegistryError::Batch)?;
+    let registry_program =
+        ProgramIdentityV1::new(program_id.to_bytes()).map_err(|_| RegistryError::Batch)?;
+    let mut receipt = [0_u8; ROLE_BATCH_RECEIPT_BYTES_V2];
+    encode_role_batch_receipt_v2(
+        RoleBatchReceiptInputV2 {
+            registry_program,
+            activation_cache: cache.key.to_bytes(),
+            activation_cache_digest: authenticated.cache_digest,
+            release_set_id: request.release_set_id(),
+            request_digest,
+            observations: &authenticated.observations,
+        },
+        &mut receipt,
+    )
+    .map_err(|_| RegistryError::Batch)?;
+    set_return_data(&receipt);
+    Ok(())
+}
+
+/// Authenticate one exact read-only batch without materializing return data.
+#[inline(never)]
+pub(super) fn authenticate_request(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: RoleBatchRequestV2,
+) -> Result<AuthenticatedBatchV2, ProgramError> {
     let expected_accounts = 1_usize
         .checked_add(
             usize::from(request.role_count())
@@ -77,25 +112,10 @@ pub(super) fn process(
     }
     drop(cache_data);
 
-    let request_digest =
-        ContentId::new(hash(instruction_data).to_bytes()).map_err(|_| RegistryError::Batch)?;
-    let registry_program =
-        ProgramIdentityV1::new(program_id.to_bytes()).map_err(|_| RegistryError::Batch)?;
-    let mut receipt = [0_u8; ROLE_BATCH_RECEIPT_BYTES_V2];
-    encode_role_batch_receipt_v2(
-        RoleBatchReceiptInputV2 {
-            registry_program,
-            activation_cache: cache.key.to_bytes(),
-            activation_cache_digest: cache_digest,
-            release_set_id: request.release_set_id(),
-            request_digest,
-            observations: &observations,
-        },
-        &mut receipt,
-    )
-    .map_err(|_| RegistryError::Batch)?;
-    set_return_data(&receipt);
-    Ok(())
+    Ok(AuthenticatedBatchV2 {
+        cache_digest,
+        observations,
+    })
 }
 
 #[inline(never)]

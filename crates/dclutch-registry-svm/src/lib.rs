@@ -15,6 +15,8 @@ use dclutch_release_set_contract::{ArtifactReleaseIdV1, ExecutionRoleV1, Program
 
 /// Canonical family-neutral batched role authentication wires.
 pub mod batch_v2;
+/// Invocation-scoped Registry-authenticated continuation wires.
+pub mod continuation_v1;
 
 /// Exact Upgradeable Loader V3 Program account-data width.
 pub const LOADER_V3_PROGRAM_BYTES: usize = 36;

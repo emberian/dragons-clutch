@@ -715,7 +715,11 @@ mod tests {
             Err(BatchErrorV2::NonCanonicalReserved)
         );
         assert_eq!(
-            RoleBatchRequestV2::decode(&bytes[..bytes.len() - 1]),
+            RoleBatchRequestV2::decode(
+                bytes
+                    .get(..bytes.len() - 1)
+                    .expect("one-byte-short request"),
+            ),
             Err(BatchErrorV2::InvalidLength)
         );
     }
@@ -809,7 +813,11 @@ mod tests {
         );
         assert!(output.iter().all(|byte| *byte == 0x5a));
         assert_eq!(
-            AuthenticatedRoleBatchReceiptV2::decode(&bytes[..bytes.len() - 1]),
+            AuthenticatedRoleBatchReceiptV2::decode(
+                bytes
+                    .get(..bytes.len() - 1)
+                    .expect("one-byte-short receipt"),
+            ),
             Err(BatchErrorV2::InvalidLength)
         );
     }
