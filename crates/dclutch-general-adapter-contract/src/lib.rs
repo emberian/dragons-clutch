@@ -16,6 +16,11 @@
 #[cfg(test)]
 extern crate std;
 
+/// Exact canonical Claims/Custody packet construction and receipt verification.
+pub mod child_packets;
+/// Exact funded batch, candidate, page, abort, and terminal lifecycle.
+pub mod lifecycle;
+
 use dclutch_general_codec::{
     CandidateV1, ExecutionV1, MAX_EXECUTIONS_PER_PAGE, MAX_OUTCOMES, MAX_PAGES_PER_CANDIDATE,
     PageViewV1, Phase, SelectionCriterion, SelectionCursorV1, SelectionPolicyV1,
