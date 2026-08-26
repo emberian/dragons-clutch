@@ -51,7 +51,8 @@ const _: () =
 /// Exact canonical Custody transfer frame.
 pub const DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3: u16 = 14;
 /// Exact canonical SignedDelta frame before its Position tail.
-pub const DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3: u16 = 20;
+pub const DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3: u16 =
+    dclutch_claims_svm::frame_spec_v1::SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3;
 /// Trading-owned state accounts committed after all child routes.
 pub const DEALER_EQUITY_LOCAL_ACCOUNT_COUNT_V3: u16 = 2;
 

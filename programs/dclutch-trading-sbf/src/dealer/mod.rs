@@ -62,6 +62,8 @@ pub mod v3_route;
 pub mod v3_trade;
 /// Selector-9 Request/Transition/Effect V4 artifact joins.
 pub mod v3_trade_artifacts;
+/// Selector-9 Profile13 protected physical-account geometry.
+pub mod v3_trade_profile;
 
 /// Canonical Dealer capability-kind label.
 pub const DEALER_KIND_PREIMAGE_V2: &[u8] = b"dclutch/capability/dealer-v2";

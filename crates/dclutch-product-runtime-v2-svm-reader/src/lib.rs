@@ -23,6 +23,7 @@
 /// Exact Product/representation Registry authentication.
 pub mod representation_v3;
 
+pub use dclutch_product_payoff_v2_codec::runtime_v3::BASIS_WIDTH_OFFSET_V3;
 use dclutch_product_payoff_v2_codec::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
     runtime_v3::{
