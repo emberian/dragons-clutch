@@ -55,6 +55,7 @@ dependencies = [
 name = "dclutch-capability-program-contract"
 version = "0.1.0"
 dependencies = [
+ "dclutch-account-profile-contract",
  "dclutch-capability-contract",
  "dclutch-core-contract",
  "dclutch-release-set-contract",
@@ -98,6 +99,9 @@ dependencies = [
 [[package]]
 name = "dclutch-fractional-claim-kernel"
 version = "0.1.0"
+dependencies = [
+ "dclutch-representation-composition-v3-kernel",
+]
 
 [[package]]
 name = "dclutch-release-set-contract"
@@ -105,6 +109,10 @@ version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
 ]
+
+[[package]]
+name = "dclutch-representation-composition-v3-kernel"
+version = "0.1.0"
 
 [[package]]
 name = "dclutch-request-profile-contract"

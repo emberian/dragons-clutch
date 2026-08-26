@@ -11,6 +11,7 @@
 
 mod artifacts;
 mod request;
+mod request_v2;
 mod root;
 
 pub use artifacts::{
@@ -34,6 +35,12 @@ pub use request::{
     FRACTIONAL_REQUEST_TOKEN_BEHAVIOR_OFFSET_V1, FractionalActionV1,
     FractionalFamilyRequestInputV1, FractionalFamilyRequestV1, FractionalRequestErrorV1,
     NO_TERMINAL_OUTCOME_V1, Result as RequestResult,
+};
+pub use request_v2::{
+    FRACTIONAL_EXPOSURE_REQUEST_BYTES_V2, FRACTIONAL_EXPOSURE_REQUEST_MAGIC_V2,
+    FRACTIONAL_EXPOSURE_REQUEST_SCHEMA_ID_V2, FRACTIONAL_EXPOSURE_REQUEST_SCHEMA_PREIMAGE_V2,
+    FractionalExposureActionV2, FractionalExposureRequestErrorV2, FractionalExposureRequestInputV2,
+    FractionalExposureRequestV2, NO_EXPOSURE_COORDINATE_V2, Result as ExposureRequestResult,
 };
 pub use root::{
     FRACTIONAL_ROOT_BYTES_V1, FRACTIONAL_ROOT_MAGIC_V1, FRACTIONAL_ROOT_MARKET_OFFSET_V1,
