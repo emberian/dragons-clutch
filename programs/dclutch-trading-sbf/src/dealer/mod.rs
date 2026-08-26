@@ -41,6 +41,8 @@ pub mod physical;
 pub mod v3_composer;
 /// Exact scenario-residual junior pool-equity kernel.
 pub mod v3_equity;
+/// Canonical sparse SignedDeltaV3 packet for junior-equity Claims movement.
+pub mod v3_equity_claims;
 /// Runtime-width chain-derived junior-equity contribution/redemption requests.
 pub mod v3_equity_operator;
 /// Canonical Claims Position plus Trading obligation activation and retirement.

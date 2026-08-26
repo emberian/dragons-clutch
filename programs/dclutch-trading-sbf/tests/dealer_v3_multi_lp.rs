@@ -6,10 +6,10 @@ use dclutch_custody_contract::{CompartmentV1, CustodyVaultSeedsV1};
 use dclutch_dealer_codec::scenario::ClaimsInventoryObservation;
 use dclutch_trading_sbf::dealer::{
     v3_equity_operator::{
+        DEALER_EQUITY_CONTRIBUTE_P2_SELECTOR_V3, DEALER_EQUITY_HEADER_BYTES_V3,
         DEALER_EQUITY_SELECTOR_OFFSET_V3, DealerEquityRequestV3, EquityOperatorErrorV3,
         EquityPoolChainProjectionV3, EquityRequestActionV3, EquityRequestIntentV3,
-        build_equity_request_v3, equity_request_bytes_v3, materialize_equity_intent_v3,
-        prepare_equity_request_v3,
+        build_equity_request_v3, materialize_equity_intent_v3, prepare_equity_request_v3,
     },
     v3_multi_lp::{
         DEALER_LP_POSITION_BYTES_V3, DEALER_LP_POSITION_PDA_DOMAIN_V3,
@@ -126,7 +126,7 @@ fn fixture() -> Fixture {
     }
 }
 
-fn program_set(action: EquityRequestActionV3) -> Vec<u8> {
+fn program_set(selector: u16) -> Vec<u8> {
     let mut bytes = vec![0; 72];
     bytes[..8].copy_from_slice(b"DCLTCPS1");
     bytes[8..10].copy_from_slice(&1_u16.to_le_bytes());
@@ -134,7 +134,7 @@ fn program_set(action: EquityRequestActionV3) -> Vec<u8> {
     bytes[12..16].copy_from_slice(&DEALER_EQUITY_SELECTOR_OFFSET_V3.to_le_bytes());
     bytes[16] = 2;
     bytes[18..20].copy_from_slice(&1_u16.to_le_bytes());
-    bytes[32..36].copy_from_slice(&(action as u32).to_le_bytes());
+    bytes[32..36].copy_from_slice(&u32::from(selector).to_le_bytes());
     bytes[36..68].copy_from_slice(&[42; 32]);
     bytes
 }
@@ -182,6 +182,9 @@ fn runtime_width_equity_request_is_chain_derived_and_rejoins_physical_intent() {
         lp_position_bytes: &f.lp,
         dealer_claims,
         lp_claims,
+        product_record_digest: [15; 32],
+        linked_basis_record_digest: [16; 32],
+        claims_market_revision: 7,
         collateral,
         locked_capital_floor: f.context.locked_capital_floor,
         generation: f.context.generation,
@@ -189,10 +192,15 @@ fn runtime_width_equity_request_is_chain_derived_and_rejoins_physical_intent() {
         expires_at: 25,
         terminal: false,
     };
-    let set_bytes = program_set(EquityRequestActionV3::Contribute);
+    let set_bytes = program_set(DEALER_EQUITY_CONTRIBUTE_P2_SELECTOR_V3);
     let set = CapabilityProgramSetV1::decode(&set_bytes).expect("program set");
-    let mut output = vec![0; equity_request_bytes_v3(3).expect("width")];
+    let mut output = vec![0; 1024];
     let mut obligation_scratch = [0; 3];
+    let mut builder_before = [0; 3];
+    let mut builder_after = [0; 3];
+    let mut builder_transferred = [0; 3];
+    let mut builder_post_dealer = [0; 3];
+    let mut builder_post_lp = [0; 3];
     let unsigned = build_equity_request_v3(
         chain,
         EquityRequestIntentV3::Contribute {
@@ -203,15 +211,26 @@ fn runtime_width_equity_request_is_chain_derived_and_rejoins_physical_intent() {
         set,
         &mut output,
         &mut obligation_scratch,
+        &mut builder_before,
+        &mut builder_after,
+        &mut builder_transferred,
+        &mut builder_post_dealer,
+        &mut builder_post_lp,
     )
     .expect("proportional request");
-    assert_eq!(unsigned.request_bytes, 504);
+    assert_eq!(unsigned.request_bytes, 944);
     assert_eq!(unsigned.selected_program.to_bytes(), [42; 32]);
-    let request = DealerEquityRequestV3::decode(&output).expect("request");
-    assert_eq!(request.action, EquityRequestActionV3::Contribute);
-    assert_eq!(request.claim(2), Ok(10));
+    let request_bytes = output.get(..unsigned.request_bytes).expect("request bytes");
+    let request = DealerEquityRequestV3::decode(request_bytes).expect("request");
+    assert_eq!(request.action(), EquityRequestActionV3::Contribute);
+    assert_eq!(request.selector(), DEALER_EQUITY_CONTRIBUTE_P2_SELECTOR_V3);
+    assert_eq!(request.claims_packet().len(), 464);
+    assert_eq!(
+        request.claims_packet().as_ptr(),
+        request_bytes[DEALER_EQUITY_HEADER_BYTES_V3..].as_ptr()
+    );
     let mut decoded_claims = [0; 3];
-    let intent = materialize_equity_intent_v3(request, &mut decoded_claims).expect("intent");
+    let intent = materialize_equity_intent_v3(request, chain, &mut decoded_claims).expect("intent");
     assert_eq!(
         intent,
         MultiLpIntentV3::Contribute {
@@ -224,7 +243,7 @@ fn runtime_width_equity_request_is_chain_derived_and_rejoins_physical_intent() {
     );
 
     let mut physical_context = f.context;
-    physical_context.parent_request_digest = hash(&output).to_bytes();
+    physical_context.parent_request_digest = hash(request_bytes).to_bytes();
     let mut request_claims = [0; 3];
     let mut physical_obligations = [0; 3];
     let mut before = [0; 3];
@@ -296,6 +315,9 @@ fn unsigned_equity_builder_refuses_dilution_before_emitting_request() {
             revision: 6,
             inventory: &lp_inventory,
         },
+        product_record_digest: [15; 32],
+        linked_basis_record_digest: [16; 32],
+        claims_market_revision: 7,
         collateral: MultiLpCollateralFrameV3 {
             lp_external_account: [14; 32],
             lp_owner: [8; 32],
@@ -311,10 +333,15 @@ fn unsigned_equity_builder_refuses_dilution_before_emitting_request() {
         expires_at: 25,
         terminal: false,
     };
-    let set_bytes = program_set(EquityRequestActionV3::Contribute);
+    let set_bytes = program_set(DEALER_EQUITY_CONTRIBUTE_P2_SELECTOR_V3);
     let set = CapabilityProgramSetV1::decode(&set_bytes).expect("program set");
-    let mut output = vec![0xa5; equity_request_bytes_v3(3).expect("width")];
+    let mut output = vec![0xa5; 1024];
     let mut obligation_scratch = [0; 3];
+    let mut before = [0; 3];
+    let mut after = [0; 3];
+    let mut transferred = [0; 3];
+    let mut post_dealer = [0; 3];
+    let mut post_lp = [0; 3];
     assert_eq!(
         build_equity_request_v3(
             chain,
@@ -326,6 +353,11 @@ fn unsigned_equity_builder_refuses_dilution_before_emitting_request() {
             set,
             &mut output,
             &mut obligation_scratch,
+            &mut before,
+            &mut after,
+            &mut transferred,
+            &mut post_dealer,
+            &mut post_lp,
         ),
         Err(EquityOperatorErrorV3::InvalidIntent)
     );
