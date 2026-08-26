@@ -334,7 +334,7 @@ mod tests {
         output
     }
 
-    fn bind_profile11_aliases(selected: &mut ConstructedHotOpenSelectedV3, fixed: &[AccountMeta]) {
+    fn bind_profile13_aliases(selected: &mut ConstructedHotOpenSelectedV3, fixed: &[AccountMeta]) {
         let accounts = &mut selected.claims_child.instruction.accounts;
         let claims = accounts.get(14).expect("Claims").clone();
         *accounts.get_mut(21).expect("Claims alias") = claims;
@@ -356,7 +356,7 @@ mod tests {
     fn selected_open_builds_hot38_and_binds_complete_family_digest() {
         let fixed = fixed();
         let mut selected = selected();
-        bind_profile11_aliases(&mut selected, &fixed);
+        bind_profile13_aliases(&mut selected, &fixed);
         let artifacts = crate::test_open_fixture_v3::open_artifact_fixture_v3(
             key(9).to_bytes(),
             key(1).to_bytes(),
@@ -427,7 +427,7 @@ mod tests {
             }),
         };
         let mut hostile = selected();
-        bind_profile11_aliases(&mut hostile, &fixed);
+        bind_profile13_aliases(&mut hostile, &fixed);
         *hostile.family_request.last_mut().expect("family byte") ^= 1;
         assert_eq!(
             build_rational_open_selected_hot_instruction_v3(
@@ -441,7 +441,7 @@ mod tests {
         );
 
         let mut hostile = selected();
-        bind_profile11_aliases(&mut hostile, &fixed);
+        bind_profile13_aliases(&mut hostile, &fixed);
         hostile
             .claims_child
             .instruction
@@ -461,7 +461,7 @@ mod tests {
         );
 
         let mut hostile = selected();
-        bind_profile11_aliases(&mut hostile, &fixed);
+        bind_profile13_aliases(&mut hostile, &fixed);
         assert_eq!(
             build_rational_open_selected_hot_instruction_v3(
                 &state,

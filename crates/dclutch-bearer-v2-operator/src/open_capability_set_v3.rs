@@ -8,7 +8,9 @@ use dclutch_capability_program_contract::{
     v4::{CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4},
 };
 use dclutch_core_contract::ContentId;
-use dclutch_effect_kernel::v3::ProgramV3 as EffectProgramV3;
+use dclutch_effect_kernel::v4::{
+    ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4,
+};
 use dclutch_rational_representation_v2_contract::{
     AuthenticatedTokenBehaviorV2, RepresentationActionV2,
 };
@@ -212,13 +214,16 @@ fn descriptor_entry_inner(
     if descriptor.config_schema().to_bytes() != TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2 {
         return Err(Error::ArtifactGeometry);
     }
-    let effect = EffectProgramV3::decode_selected(
-        descriptor.effect().program().to_bytes(),
-        hash(effect_bytes).to_bytes(),
-        effect_bytes,
-    )
-    .map_err(Error::EffectArtifact)?;
-    let (fixed, _) = effect.route_template(0).map_err(Error::EffectArtifact)?;
+    if descriptor.effect().schema().to_bytes() != EFFECT_SCHEMA_ID_V4
+        || descriptor.effect().program().to_bytes() != hash(effect_bytes).to_bytes()
+    {
+        return Err(Error::ArtifactGeometry);
+    }
+    let effect = EffectProgramV4::decode(effect_bytes).map_err(Error::EffectArtifactV4)?;
+    let (fixed, _) = effect
+        .base()
+        .route_template(0)
+        .map_err(Error::EffectArtifact)?;
     if fixed.get(REQUEST_ACTION_OFFSET).copied() != Some(expected_action as u8) {
         return Err(Error::ArtifactGeometry);
     }

@@ -1,18 +1,18 @@
 //! Data-defined Hot artifacts for selected open Bearer split and merge.
 
 use dclutch_account_profile_contract::lifecycle_v3::{
-    SUCCESSOR_SCHEMA_RELEASE_ID as LIFECYCLE_SCHEMA_ID_V4, StateLifecyclePolicyV4,
+    CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5 as LIFECYCLE_SCHEMA_ID_V5, StateLifecyclePolicyV5,
 };
 use dclutch_account_profile_contract::v2::{
-    AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE, AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES,
-    AccountPrestateV2, AccountProfileV2, OPERATION_BYTES as ACCOUNT_OPERATION_BYTES,
+    AccountPrestateV2, AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE,
+    DYNAMIC_FIXED_SPAN_HEADER_BYTES, OPERATION_BYTES as ACCOUNT_OPERATION_BYTES,
     RULE_BYTES as ACCOUNT_RULE_BYTES, TrustedBuiltinIdentityV2, TrustedEnvironmentV2,
     TrustedIdentityEnvironmentV2,
     encode::{
         AccountAliasInputV2, AccountCoordinateV2, AccountEffectPermissionsV2,
         AccountOperationInputV2, AccountPrivilegesV2, AccountRuleInputV2,
         AccountRuleWithPrestateInputV2, RegisterGeometryV2, ScalarCoordinateV2,
-        encode_account_profile_with_authenticated_route_alias_v2_atomic,
+        encode_account_profile_with_dynamic_fixed_span_v2_atomic,
     },
 };
 use dclutch_capability_program_contract::v4::{
@@ -23,11 +23,16 @@ use dclutch_effect_kernel::{
     v2::FixedRole,
     v3::{
         HEADER_BYTES as EFFECT_HEADER_BYTES, OPERATION_BYTES as EFFECT_OPERATION_BYTES,
-        ProgramV3 as EffectProgramV3, ROUTE_BYTES as EFFECT_ROUTE_BYTES, RouteKindV3,
+        ROUTE_BYTES as EFFECT_ROUTE_BYTES, RouteKindV3,
         encode::{
             EffectGeometryV3, EffectInstructionV3, IdentityCoordinateV3, RequestSpaceV3,
             RouteInputV3, ScalarCoordinateV3, encode_effect_program_v3_atomic,
         },
+    },
+    v4::{
+        BorrowedRangePolicyV4, HEADER_BYTES_V4 as EFFECT_V4_HEADER_BYTES,
+        ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4,
+        encode_program_v4_atomic,
     },
 };
 use dclutch_execution_strategy_contract::v2::{
@@ -145,7 +150,8 @@ pub struct RationalOpenSelectedHotBundleInputV3<'a> {
 pub struct RationalOpenSelectedHotBundleV3 {
     /// Exact config record body selected alongside the descriptor.
     pub token_behavior_selection: [u8; TOKEN_BEHAVIOR_SELECTION_BYTES_V2],
-    /// Profile11 logical account interpreter with compact physical aliases.
+    /// Profile13 logical account interpreter with compact physical aliases and
+    /// opaque authenticated Loader/Token data.
     pub account_profile: Vec<u8>,
     /// Exact open-family RequestProfile.
     pub request_profile: Vec<u8>,
@@ -212,7 +218,7 @@ pub fn build_rational_open_selected_hot_bundle_v3(
                 dclutch_request_profile_contract::SCHEMA_RELEASE_ID,
                 digest(&request_profile)?.to_bytes(),
             )?,
-            lifecycle: artifact(LIFECYCLE_SCHEMA_ID_V4, lifecycle_id.to_bytes())?,
+            lifecycle: artifact(LIFECYCLE_SCHEMA_ID_V5, lifecycle_id.to_bytes())?,
             strategy: artifact(
                 EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
                 digest(&strategy)?.to_bytes(),
@@ -221,10 +227,7 @@ pub fn build_rational_open_selected_hot_bundle_v3(
                 dclutch_transition_vm::v3::SCHEMA_RELEASE_ID,
                 digest(&transition)?.to_bytes(),
             )?,
-            effect: artifact(
-                dclutch_effect_kernel::v3::SCHEMA_RELEASE_ID,
-                digest(&effect)?.to_bytes(),
-            )?,
+            effect: artifact(EFFECT_SCHEMA_ID_V4, digest(&effect)?.to_bytes())?,
         },
         input.root_state_bytes,
     )
@@ -258,7 +261,7 @@ pub fn validate_rational_open_selected_hot_bundle_v3(
     let account =
         AccountProfileV2::decode(&bundle.account_profile).map_err(Error::AccountProfileArtifact)?;
     let lifecycle_id = digest(&bundle.lifecycle_policy)?;
-    let lifecycle = StateLifecyclePolicyV4::decode_selected(
+    let lifecycle = StateLifecyclePolicyV5::decode_selected(
         descriptor.lifecycle().program().to_bytes(),
         lifecycle_id.to_bytes(),
         &bundle.lifecycle_policy,
@@ -277,13 +280,9 @@ pub fn validate_rational_open_selected_hot_bundle_v3(
         TransitionProgramV3::decode(&bundle.transition).map_err(Error::TransitionArtifact)?;
     let strategy =
         ExecutionStrategyProgramV2::decode(&bundle.strategy).map_err(Error::ExecutionStrategy)?;
-    let effect = EffectProgramV3::decode_selected(
-        descriptor.effect().program().to_bytes(),
-        hash(&bundle.effect).to_bytes(),
-        &bundle.effect,
-    )
-    .map_err(Error::EffectArtifact)?;
-    let route = effect.route(0).map_err(Error::EffectArtifact)?;
+    let effect = EffectProgramV4::decode(&bundle.effect).map_err(Error::EffectArtifactV4)?;
+    let effect_base = effect.base();
+    let route = effect_base.route(0).map_err(Error::EffectArtifact)?;
     if descriptor.request_schema().to_bytes() != OPEN_REPRESENTATION_HOT_REQUEST_SCHEMA_ID_V3
         || descriptor.config_schema().to_bytes() != TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2
         || descriptor.derivation_policy() != lifecycle_id
@@ -297,7 +296,7 @@ pub fn validate_rational_open_selected_hot_bundle_v3(
                 dclutch_request_profile_contract::SCHEMA_RELEASE_ID,
                 digest(&bundle.request_profile)?.to_bytes(),
             )?
-        || descriptor.lifecycle() != artifact(LIFECYCLE_SCHEMA_ID_V4, lifecycle_id.to_bytes())?
+        || descriptor.lifecycle() != artifact(LIFECYCLE_SCHEMA_ID_V5, lifecycle_id.to_bytes())?
         || descriptor.strategy()
             != artifact(
                 EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
@@ -308,15 +307,12 @@ pub fn validate_rational_open_selected_hot_bundle_v3(
                 dclutch_transition_vm::v3::SCHEMA_RELEASE_ID,
                 digest(&bundle.transition)?.to_bytes(),
             )?
-        || descriptor.effect()
-            != artifact(
-                dclutch_effect_kernel::v3::SCHEMA_RELEASE_ID,
-                digest(&bundle.effect)?.to_bytes(),
-            )?
+        || descriptor.effect() != artifact(EFFECT_SCHEMA_ID_V4, digest(&bundle.effect)?.to_bytes())?
         || strategy.disposition() != StrategyDispositionV2::Interpreted
         || strategy.transition_schema() != descriptor.transition().schema()
         || strategy.transition_program() != descriptor.transition().program()
-        || account.artifact_profile() != AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
+        || account.artifact_profile() != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+        || account.dynamic_fixed_span_count() != 0
         || account.fixed_account_count() != RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3
         || account.item_account_stride() != 0
         || account.common_scalar_count() != narrow_u16(RATIONAL_OPEN_SELECTED_COMMON_SCALARS_V3)?
@@ -336,12 +332,16 @@ pub fn validate_rational_open_selected_hot_bundle_v3(
         || transition.common_scalar_count() != narrow_u16(RATIONAL_OPEN_SELECTED_COMMON_SCALARS_V3)?
         || transition.common_identity_count()
             != narrow_u16(RATIONAL_OPEN_SELECTED_COMMON_IDENTITIES_V3)?
-        || effect.fixed_account_count() != RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3
-        || effect.item_account_stride() != 0
-        || effect.common_scalar_count() != narrow_u16(RATIONAL_OPEN_SELECTED_COMMON_SCALARS_V3)?
-        || effect.common_identity_count()
+        || effect.span_count() != 0
+        || effect.range_count() != 0
+        || effect.semantic_prefix_bytes() != narrow_u32(REQUEST_BYTES)?
+        || effect_base.fixed_account_count() != RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3
+        || effect_base.item_account_stride() != 0
+        || effect_base.common_scalar_count()
+            != narrow_u16(RATIONAL_OPEN_SELECTED_COMMON_SCALARS_V3)?
+        || effect_base.common_identity_count()
             != narrow_u16(RATIONAL_OPEN_SELECTED_COMMON_IDENTITIES_V3)?
-        || effect.route_count() != 1
+        || effect_base.route_count() != 1
         || route.role() != FixedRole::Claims
         || route.kind() != RouteKindV3::Once
         || route.fixed_account_count() != RATIONAL_OPEN_SELECTED_CHILD_ACCOUNTS_V3
@@ -380,7 +380,7 @@ fn encode_account_profile(input: RationalOpenSelectedHotBundleInputV3<'_>) -> Re
     for index in 0..input.logical_data_lengths.len() {
         let writable = matches!(index, 0 | 16 | 17 | 28 | 37 | 38 | 39);
         let signer = index == 8;
-        let executable = matches!(index, 6 | 19 | 23 | 26 | 27);
+        let executable = matches!(index, 6 | 15 | 19 | 21 | 23 | 26 | 27);
         let alias = match index {
             26 => AccountAliasInputV2::Fixed(19),
             29 => AccountAliasInputV2::Fixed(4),
@@ -388,10 +388,16 @@ fn encode_account_profile(input: RationalOpenSelectedHotBundleInputV3<'_>) -> Re
             35 => AccountAliasInputV2::Fixed(3),
             _ => AccountAliasInputV2::SelfCoordinate,
         };
+        let opaque = matches!(
+            index,
+            6 | 7 | 19 | 20 | 21 | 23 | 24 | 25 | 27 | 38 | 39 | 40
+        );
         let prestate = if index == 4 {
             AccountPrestateV2::AdapterAuthenticatedVariableData
         } else if alias != AccountAliasInputV2::SelfCoordinate {
             AccountPrestateV2::AuthenticatedRouteAlias
+        } else if opaque {
+            AccountPrestateV2::AuthenticatedOpaqueReadonlyData
         } else {
             AccountPrestateV2::Exact
         };
@@ -399,6 +405,7 @@ fn encode_account_profile(input: RationalOpenSelectedHotBundleInputV3<'_>) -> Re
             1 => narrow_u32(TOKEN_BEHAVIOR_SELECTION_BYTES_V2)?,
             4 => u32::try_from(BASIS_HEADER_BYTES_V3).map_err(|_| Error::AccountProfileInput)?,
             26 | 29 | 31 | 35 => 0,
+            _ if opaque => 0,
             _ => *input
                 .logical_data_lengths
                 .get(index)
@@ -420,12 +427,12 @@ fn encode_account_profile(input: RationalOpenSelectedHotBundleInputV3<'_>) -> Re
         destination: ScalarCoordinateV2::common(narrow_u16(SCALAR_PRODUCT_OUTCOME_COUNT)?),
         data_offset: narrow_u32(BASIS_WIDTH_OFFSET_V3)?,
     }];
-    let width = AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES
+    let width = DYNAMIC_FIXED_SPAN_HEADER_BYTES
         + rules.len() * ACCOUNT_RULE_BYTES
         + ACCOUNT_OPERATION_BYTES;
     let mut scratch = vec![0_u8; width];
     let mut output = vec![0_u8; width];
-    encode_account_profile_with_authenticated_route_alias_v2_atomic(
+    encode_account_profile_with_dynamic_fixed_span_v2_atomic(
         TrustedEnvironmentV2::CurrentSlot {
             destination: narrow_u16(SCALAR_CURRENT_SLOT)?,
         },
@@ -433,10 +440,10 @@ fn encode_account_profile(input: RationalOpenSelectedHotBundleInputV3<'_>) -> Re
             destination: narrow_u16(ID_CURRENT_TRADING)?,
         },
         TrustedBuiltinIdentityV2::None,
+        &[],
         &rules,
         &[],
         &operations,
-        &[],
         register_geometry()?,
         &mut scratch,
         &mut output,
@@ -590,8 +597,8 @@ fn encode_request_profile(action: RepresentationActionV2) -> Result<Vec<u8>> {
 fn encode_transition() -> Result<Vec<u8>> {
     let s = |index| ScalarRegisterV3::common(narrow_u16(index).unwrap_or_default());
     let instructions = [
-        InstructionV3::scalar_eq(s(SCALAR_OUTCOME_COUNT), s(SCALAR_PRODUCT_OUTCOME_COUNT)),
-        InstructionV3::scalar_lt(s(SCALAR_SELECTED_OUTCOME), s(SCALAR_PRODUCT_OUTCOME_COUNT)),
+        InstructionV3::nonzero(s(SCALAR_OUTCOME_COUNT)),
+        InstructionV3::scalar_lt(s(SCALAR_SELECTED_OUTCOME), s(SCALAR_OUTCOME_COUNT)),
         InstructionV3::nonzero(s(SCALAR_QUANTITY)),
         InstructionV3::nonzero(s(SCALAR_DENOMINATOR)),
         InstructionV3::scalar_eq(s(SCALAR_COEFFICIENT), s(SCALAR_DENOMINATOR)),
@@ -753,7 +760,7 @@ fn encode_effect(action: RepresentationActionV2) -> Result<Vec<u8>> {
         + instructions.len() * EFFECT_OPERATION_BYTES
         + template.len();
     let mut scratch = vec![0_u8; width];
-    let mut output = vec![0_u8; width];
+    let mut base = vec![0_u8; width];
     encode_effect_program_v3_atomic(
         EffectGeometryV3 {
             fixed_accounts: RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3,
@@ -767,9 +774,21 @@ fn encode_effect(action: RepresentationActionV2) -> Result<Vec<u8>> {
         &instructions,
         &[],
         &mut scratch,
-        &mut output,
+        &mut base,
     )
     .map_err(Error::EffectArtifact)?;
+    let mut scratch = vec![0_u8; EFFECT_V4_HEADER_BYTES + base.len()];
+    let mut output = vec![0_u8; EFFECT_V4_HEADER_BYTES + base.len()];
+    encode_program_v4_atomic(
+        &base,
+        BorrowedRangePolicyV4::DisjointExactCoverage,
+        narrow_u32(REQUEST_BYTES)?,
+        &[],
+        &[],
+        &mut scratch,
+        &mut output,
+    )
+    .map_err(Error::EffectArtifactV4)?;
     Ok(output)
 }
 
@@ -893,7 +912,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_actions_build_one_profile11_once_route() {
+    fn selected_actions_build_one_profile13_once_route() {
         let basis = basis(258, 1);
         let lengths = lengths(&basis);
         for action in [
@@ -919,19 +938,27 @@ mod tests {
             assert_eq!(alias.prestate(), AccountPrestateV2::AuthenticatedRouteAlias);
             assert_eq!(alias.alias_index(), 4);
             assert_eq!(alias.effect_permissions(), 0);
-            assert_eq!(account.logical_account_count(0), Ok(41));
-            assert_eq!(account.physical_account_count(0), Ok(37));
+            assert_eq!(account.dynamic_fixed_span_count(), 0);
+            assert_eq!(
+                account.logical_account_count_with_dynamic_spans(0, &[]),
+                Ok(41)
+            );
+            assert_eq!(
+                account.physical_account_count_with_dynamic_spans(0, &[]),
+                Ok(37)
+            );
+            for coordinate in [6_u16, 7, 19, 20, 21, 23, 24, 25, 27, 38, 39, 40] {
+                assert_eq!(
+                    account
+                        .rule(false, coordinate)
+                        .expect("opaque rule")
+                        .prestate(),
+                    AccountPrestateV2::AuthenticatedOpaqueReadonlyData
+                );
+            }
 
-            let effect = EffectProgramV3::decode_selected(
-                CapabilityProgramV4::decode(&bundle.descriptor)
-                    .expect("descriptor")
-                    .effect()
-                    .program()
-                    .to_bytes(),
-                hash(&bundle.effect).to_bytes(),
-                &bundle.effect,
-            )
-            .expect("effect");
+            let effect = EffectProgramV4::decode(&bundle.effect).expect("effect");
+            let effect = effect.base();
             let (template, item) = effect.route_template(0).expect("route template");
             assert_eq!(item, []);
             assert_eq!(

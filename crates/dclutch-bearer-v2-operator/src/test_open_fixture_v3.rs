@@ -3,7 +3,7 @@ use dclutch_account_profile_contract::lifecycle_v3::{
     encode::{
         LifecycleAccountCoordinateV3, LifecycleGuardInputV3, LifecycleOperationInputV3,
         LifecyclePlanInputV3, LifecycleRecipeInputV3, LifecycleSeedInputV3,
-        encode_lifecycle_policy_v4_atomic,
+        encode_lifecycle_policy_v5_atomic,
     },
 };
 use dclutch_product_payoff_v2_codec::runtime_v3::{
@@ -45,7 +45,11 @@ pub(crate) fn open_artifact_fixture_v3(
     release_set: [u8; 32],
     outcome_count: u32,
 ) -> OpenArtifactFixtureV3 {
-    let token_behavior = authenticated_token_behavior_v3(id(4), realm, release_set, outcome_count);
+    const REPRESENTATION_K: u32 = 3;
+    let token_behavior =
+        authenticated_token_behavior_v3(id(4), realm, release_set, REPRESENTATION_K);
+    let representation_descriptor =
+        representation_descriptor_v3(id(4), release_set, REPRESENTATION_K);
     let basis = basis(outcome_count);
     let mut selected_lengths = [0_u32; RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3 as usize];
     selected_lengths[4] = u32::try_from(basis.len()).expect("basis length");
@@ -75,6 +79,7 @@ pub(crate) fn open_artifact_fixture_v3(
             fixed_data_lengths: &structured_lengths,
             item_data_lengths: [64, 82, 165, 165],
             product_basis: &basis,
+            representation_descriptor,
             kind: id(10),
             authenticated_token_behavior: token_behavior,
             root_schema: id(11),
@@ -111,7 +116,9 @@ pub(crate) fn lifecycle_policy() -> &'static [u8] {
     use std::sync::OnceLock;
 
     static POLICY: OnceLock<Vec<u8>> = OnceLock::new();
-    POLICY.get_or_init(|| encode_lifecycle_fixture(8)).as_slice()
+    POLICY
+        .get_or_init(|| encode_lifecycle_fixture(8))
+        .as_slice()
 }
 
 fn encode_lifecycle_fixture(root_data_bytes: u32) -> Vec<u8> {
@@ -137,18 +144,16 @@ fn encode_lifecycle_fixture(root_data_bytes: u32) -> Vec<u8> {
         beneficiary: None,
         guard: LifecycleGuardInputV3::Always,
     }];
-    let width = HEADER_BYTES
-        + RECIPE_BYTES
-        + 2 * SEED_BYTES
-        + ACTION_PLAN_BYTES
-        + PROTECTED_OUTPUT_BYTES;
+    let width =
+        HEADER_BYTES + RECIPE_BYTES + 2 * SEED_BYTES + ACTION_PLAN_BYTES + PROTECTED_OUTPUT_BYTES;
     let mut scratch = vec![0_u8; width];
     let mut output = vec![0_u8; width];
-    encode_lifecycle_policy_v4_atomic(
+    encode_lifecycle_policy_v5_atomic(
         &recipes,
         &seeds,
         &plans,
         &[None],
+        &[],
         &[],
         &mut scratch,
         &mut output,
@@ -163,6 +168,33 @@ pub(crate) fn authenticated_token_behavior_v3(
     release_set: [u8; 32],
     outcome_count: u32,
 ) -> AuthenticatedTokenBehaviorV2 {
+    let descriptor = representation_descriptor_v3(descriptor_id, release_set, outcome_count);
+    let selection = TokenBehaviorSelectionV2::new(realm, release_set)
+        .expect("selection")
+        .to_bytes();
+    let selection_id = hash(&selection).to_bytes();
+    authenticate_token_behavior_v2(
+        descriptor,
+        realm,
+        &selection,
+        TokenBehaviorRecordAdmissionV2 {
+            selected_schema_id: TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
+            finalized_schema_id: TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
+            selected_content_digest: selection_id,
+            finalized_content_digest: selection_id,
+            recomputed_content_digest: selection_id,
+            record_authenticated: true,
+            market_realm_authenticated: true,
+        },
+    )
+    .expect("authenticated Token behavior")
+}
+
+pub(crate) fn representation_descriptor_v3(
+    descriptor_id: [u8; 32],
+    release_set: [u8; 32],
+    outcome_count: u32,
+) -> RepresentationDescriptorV2<'static> {
     let outcome_count = usize::try_from(outcome_count).expect("outcome count");
     let mut descriptor_bytes =
         vec![0_u8; DESCRIPTOR_HEADER_BYTES + outcome_count * DESCRIPTOR_COEFFICIENT_BYTES];
@@ -188,7 +220,7 @@ pub(crate) fn authenticated_token_behavior_v3(
         DESCRIPTOR_HEADER_BYTES,
         &10_u64.to_le_bytes(),
     );
-    let descriptor = RepresentationDescriptorV2::decode(
+    RepresentationDescriptorV2::decode(
         Box::leak(descriptor_bytes.into_boxed_slice()),
         DescriptorAdmissionV2 {
             selected_descriptor_id: descriptor_id,
@@ -200,26 +232,7 @@ pub(crate) fn authenticated_token_behavior_v3(
             authority_derivation_authenticated: true,
         },
     )
-    .expect("representation descriptor");
-    let selection = TokenBehaviorSelectionV2::new(realm, release_set)
-        .expect("selection")
-        .to_bytes();
-    let selection_id = hash(&selection).to_bytes();
-    authenticate_token_behavior_v2(
-        descriptor,
-        realm,
-        &selection,
-        TokenBehaviorRecordAdmissionV2 {
-            selected_schema_id: TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
-            finalized_schema_id: TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
-            selected_content_digest: selection_id,
-            finalized_content_digest: selection_id,
-            recomputed_content_digest: selection_id,
-            record_authenticated: true,
-            market_realm_authenticated: true,
-        },
-    )
-    .expect("authenticated Token behavior")
+    .expect("representation descriptor")
 }
 
 fn basis(width: u32) -> [u8; BASIS_HEADER_BYTES_V3] {

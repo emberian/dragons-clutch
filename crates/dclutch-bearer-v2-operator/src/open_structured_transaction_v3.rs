@@ -25,9 +25,9 @@ pub struct ConstructedHotOpenStructuredV3 {
     pub family_request: Vec<u8>,
     /// SHA-256 of the complete family request.
     pub family_digest: [u8; 32],
-    /// Exact `32 + 4*N` account Claims child under `family_digest`.
+    /// Exact `32 + 4*K` account Claims child under `family_digest`.
     pub claims_child: ConstructedInstructionV2,
-    /// Product-authenticated runtime outcome count.
+    /// Descriptor-owned representation coordinate count `K`.
     pub outcome_count: u32,
 }
 
@@ -43,7 +43,7 @@ pub struct RationalOpenStructuredHotInstructionV3 {
     pub required_wallet_signers: Vec<Pubkey>,
     /// Exact family request digest bound into the Claims child.
     pub family_digest: [u8; 32],
-    /// Product-authenticated runtime outcome count.
+    /// Descriptor-owned representation coordinate count `K`.
     pub outcome_count: u32,
     /// Digest of the checked multiprogram release manifest.
     pub checked_manifest_digest: [u8; 32],
@@ -83,6 +83,7 @@ pub fn build_rational_open_structured_hot_instruction_v3(
     .map_err(Error::HotContract)?;
     if !family.is_structured().map_err(Error::HotContract)?
         || family.asset_count().map_err(Error::HotContract)? != structured.outcome_count
+        || bundle.representation_outcome_count != structured.outcome_count
     {
         return Err(Error::HotInstruction);
     }
@@ -241,7 +242,7 @@ mod tests {
     use solana_program::instruction::AccountMeta;
     use solana_sdk_ids::sysvar;
 
-    const OUTCOMES: u32 = 2;
+    const OUTCOMES: u32 = 3;
 
     fn key(value: u8) -> Pubkey {
         Pubkey::new_from_array([value; 32])
@@ -322,7 +323,7 @@ mod tests {
         accounts.get_mut(0).expect("caller").is_signer = true;
         *accounts.get_mut(3).expect("actor") = AccountMeta::new_readonly(key(6), true);
         *accounts.get_mut(14).expect("Claims") = AccountMeta::new_readonly(claims_program, false);
-        for index in [11_usize, 20, 21, 34, 35, 38, 39] {
+        for index in [11_usize, 20, 21, 34, 35, 38, 39, 42, 43] {
             accounts.get_mut(index).expect("writable child").is_writable = true;
         }
         ConstructedHotOpenStructuredV3 {
@@ -383,7 +384,7 @@ mod tests {
         }
     }
 
-    fn bind_profile11_aliases(
+    fn bind_profile13_aliases(
         structured: &mut ConstructedHotOpenStructuredV3,
         fixed: &[AccountMeta],
     ) {
@@ -408,7 +409,7 @@ mod tests {
     fn structured_builds_hot38_plus_exact_affine_child() {
         let fixed = fixed();
         let mut structured = structured();
-        bind_profile11_aliases(&mut structured, &fixed);
+        bind_profile13_aliases(&mut structured, &fixed);
         let artifacts = crate::test_open_fixture_v3::open_artifact_fixture_v3(
             key(9).to_bytes(),
             key(1).to_bytes(),
@@ -425,7 +426,7 @@ mod tests {
         assert_eq!(built.outcome_count, OUTCOMES);
         assert_eq!(
             built.instruction.accounts.len(),
-            HOT_FIXED_ACCOUNT_COUNT_V3 + 36
+            HOT_FIXED_ACCOUNT_COUNT_V3 + 40
         );
         assert!(
             !built
@@ -451,8 +452,8 @@ mod tests {
             OUTCOMES,
         );
         let mut hostile = structured();
-        bind_profile11_aliases(&mut hostile, &fixed);
-        hostile.outcome_count = 3;
+        bind_profile13_aliases(&mut hostile, &fixed);
+        hostile.outcome_count = 2;
         assert_eq!(
             build_rational_open_structured_hot_instruction_v3(
                 &state(&fixed),
@@ -464,7 +465,7 @@ mod tests {
             Err(Error::HotInstruction)
         );
         let mut hostile = structured();
-        bind_profile11_aliases(&mut hostile, &fixed);
+        bind_profile13_aliases(&mut hostile, &fixed);
         *hostile.family_request.last_mut().expect("family byte") ^= 1;
         assert!(
             build_rational_open_structured_hot_instruction_v3(

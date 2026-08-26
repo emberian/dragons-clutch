@@ -1,8 +1,6 @@
 //! Unsigned chain-derived Hot instruction construction for terminal redemption.
 
-use dclutch_account_profile_contract::v2::{
-    AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE, AccountProfileV2,
-};
+use dclutch_account_profile_contract::v2::{AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE};
 use dclutch_capability_program_contract::hot_v3::{
     HOT_CONFIG_RAW_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
     HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
@@ -211,7 +209,7 @@ fn build_hot_instruction_from_claims_child_inner_v3(
     data.extend_from_slice(family_request);
 
     let physical_child_accounts = match profile {
-        Some((profile, tail_count)) => compact_profile11_child_accounts_v3(
+        Some((profile, tail_count)) => compact_profile13_child_accounts_v3(
             state,
             child_accounts,
             expected_child_accounts,
@@ -252,7 +250,7 @@ fn build_hot_instruction_from_claims_child_inner_v3(
     })
 }
 
-fn compact_profile11_child_accounts_v3(
+fn compact_profile13_child_accounts_v3(
     state: &RationalTerminalHotStateV3<'_>,
     child_accounts: &[AccountMeta],
     expected_child_accounts: usize,
@@ -263,9 +261,10 @@ fn compact_profile11_child_accounts_v3(
     let expected_logical = INJECTED
         .checked_add(expected_child_accounts)
         .ok_or(Error::HotInstruction)?;
-    if profile.artifact_profile() != AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
+    if profile.artifact_profile() != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+        || profile.dynamic_fixed_span_count() != 0
         || profile
-            .logical_account_count(tail_count)
+            .logical_account_count_with_dynamic_spans(tail_count, &[])
             .map_err(Error::AccountProfileArtifact)?
             != expected_logical
         || child_accounts.len() != expected_child_accounts
@@ -273,14 +272,14 @@ fn compact_profile11_child_accounts_v3(
         return Err(Error::HotInstruction);
     }
     let physical = profile
-        .physical_account_count(tail_count)
+        .physical_account_count_with_dynamic_spans(tail_count, &[])
         .map_err(Error::AccountProfileArtifact)?;
     if physical < INJECTED {
         return Err(Error::HotInstruction);
     }
     for coordinate in 0..INJECTED {
         if profile
-            .representative(tail_count, coordinate)
+            .representative_with_dynamic_spans(tail_count, &[], coordinate)
             .map_err(Error::AccountProfileArtifact)?
             != coordinate
         {
@@ -299,7 +298,7 @@ fn compact_profile11_child_accounts_v3(
             .checked_add(child_index)
             .ok_or(Error::HotInstruction)?;
         let route = profile
-            .route_privileges(tail_count, logical)
+            .route_privileges_with_dynamic_spans(tail_count, &[], logical)
             .map_err(Error::AccountProfileArtifact)?;
         if account.is_writable != route.writable()
             || (child_index != 0 && account.is_signer != route.signer())
@@ -308,7 +307,7 @@ fn compact_profile11_child_accounts_v3(
             return Err(Error::HotInstruction);
         }
         let representative = profile
-            .representative(tail_count, logical)
+            .representative_with_dynamic_spans(tail_count, &[], logical)
             .map_err(Error::AccountProfileArtifact)?;
         let representative_meta = if representative < INJECTED {
             injected_meta_v3(state, representative)?
@@ -344,18 +343,18 @@ fn physical_privileges_v3(
     representative: usize,
 ) -> Result<(bool, bool)> {
     let logical = profile
-        .logical_account_count(tail_count)
+        .logical_account_count_with_dynamic_spans(tail_count, &[])
         .map_err(Error::AccountProfileArtifact)?;
     let mut signer = false;
     let mut writable = false;
     for coordinate in 0..logical {
         if profile
-            .representative(tail_count, coordinate)
+            .representative_with_dynamic_spans(tail_count, &[], coordinate)
             .map_err(Error::AccountProfileArtifact)?
             == representative
         {
             let route = profile
-                .route_privileges(tail_count, coordinate)
+                .route_privileges_with_dynamic_spans(tail_count, &[], coordinate)
                 .map_err(Error::AccountProfileArtifact)?;
             signer |= route.signer();
             writable |= route.writable();

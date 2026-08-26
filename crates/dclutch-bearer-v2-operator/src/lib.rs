@@ -106,6 +106,8 @@ pub enum Error {
     TransitionArtifact(dclutch_transition_vm::v3::Error),
     /// Typed terminal EffectProgram artifact encoding refused.
     EffectArtifact(dclutch_effect_kernel::v3::Error),
+    /// Typed EffectProgram successor envelope encoding or decoding refused.
+    EffectArtifactV4(dclutch_effect_kernel::v4::ErrorV4),
     /// Typed terminal AccountProfile artifact encoding refused.
     AccountProfileArtifact(dclutch_account_profile_contract::v2::Error),
     /// ProductBasisV3 bytes or logical account observations differed.
