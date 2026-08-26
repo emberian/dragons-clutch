@@ -9,13 +9,15 @@ use dclutch_core_contract::ContentId;
 use solana_program::pubkey::Pubkey;
 
 use super::{
-    AdmittedOccurrenceV3, AdmittedTicketV3, AuthenticatedProductProjectionV2, SeriesV3Error,
-    TemplateV3, admit_occurrence_bytes, admit_ticket,
+    AccountKeyV3, AdmittedOccurrenceV3, AdmittedTicketV3, AuthenticatedProductProjectionV2,
+    PrepareSeriesEscrowPlanV3, SeriesEscrowEffectV3, SeriesV3Error, TemplateV3,
+    admit_occurrence_bytes, admit_ticket, consume_series_escrow_v3, expire_series_escrow_v3,
     instruction::{SeriesActionRequestV3, SeriesActionV3},
     lifecycle::{
         ClosePlanV3, LifecycleErrorV3, OccurrenceCommitPlanV3, PendingFundingPlanV3, RetirePlanV3,
         plan_close, plan_consume, plan_expire, plan_prepare, plan_retire,
     },
+    pre_founding_series_escrow, prepare_series_escrow_v3,
     state::{SeriesStateV3, TicketStateV3},
     template_content_id,
 };
@@ -97,6 +99,24 @@ impl<'a> AuthenticatedSeriesActionV3<'a> {
         )?)
     }
 
+    /// Project the canonical pre-founding Custody replay and collateral lock.
+    pub fn plan_prepare_escrow(
+        self,
+        product: AuthenticatedProductProjectionV2,
+        registry_program: AccountKeyV3,
+    ) -> Result<PrepareSeriesEscrowPlanV3, SeriesProjectorErrorV3> {
+        if self.action() != SeriesActionV3::Prepare {
+            return Err(SeriesProjectorErrorV3::Frame);
+        }
+        let escrow = pre_founding_series_escrow(
+            self.required_occurrence()?,
+            self.required_ticket()?,
+            product,
+            registry_program,
+        )?;
+        Ok(prepare_series_escrow_v3(escrow))
+    }
+
     /// Plan one atomic Ticket-to-Found consumption.
     #[allow(clippy::too_many_arguments)]
     pub fn plan_consume(
@@ -125,6 +145,24 @@ impl<'a> AuthenticatedSeriesActionV3<'a> {
         )?)
     }
 
+    /// Project the exact post-Found SeriesEscrow-to-Hoard effect.
+    pub fn plan_consume_escrow(
+        self,
+        product: AuthenticatedProductProjectionV2,
+        registry_program: AccountKeyV3,
+    ) -> Result<SeriesEscrowEffectV3, SeriesProjectorErrorV3> {
+        if self.action() != SeriesActionV3::Consume {
+            return Err(SeriesProjectorErrorV3::Frame);
+        }
+        let escrow = pre_founding_series_escrow(
+            self.required_occurrence()?,
+            self.required_ticket()?,
+            product,
+            registry_program,
+        )?;
+        Ok(consume_series_escrow_v3(escrow))
+    }
+
     /// Plan one exact expiry after the retry deadline.
     pub fn plan_expire(
         self,
@@ -146,6 +184,24 @@ impl<'a> AuthenticatedSeriesActionV3<'a> {
             self.request.expected_ticket_revision(),
             now_slot,
         )?)
+    }
+
+    /// Project the exact post-deadline SeriesEscrow refund effect.
+    pub fn plan_expire_escrow(
+        self,
+        product: AuthenticatedProductProjectionV2,
+        registry_program: AccountKeyV3,
+    ) -> Result<SeriesEscrowEffectV3, SeriesProjectorErrorV3> {
+        if self.action() != SeriesActionV3::Expire {
+            return Err(SeriesProjectorErrorV3::Frame);
+        }
+        let escrow = pre_founding_series_escrow(
+            self.required_occurrence()?,
+            self.required_ticket()?,
+            product,
+            registry_program,
+        )?;
+        Ok(expire_series_escrow_v3(escrow))
     }
 
     /// Plan deletion of one terminal replay account.
@@ -352,7 +408,7 @@ mod tests {
             accepted.template_id()
         );
 
-        let mut substituted = request;
+        let mut substituted = request.clone();
         *substituted.get_mut(48).expect("occurrence identity") ^= 1;
         let substituted = SeriesActionRequestV3::decode(&substituted).expect("hostile decodes");
         assert_eq!(
@@ -363,6 +419,29 @@ mod tests {
                 Some(&ticket),
             ),
             Err(SeriesProjectorErrorV3::Content)
+        );
+
+        let product = AuthenticatedProductProjectionV2::new(
+            accepted
+                .occurrence()
+                .expect("occurrence")
+                .occurrence()
+                .product_record(),
+            ContentId::new([61; 32]).expect("stable Product"),
+            ContentId::new([62; 32]).expect("result domain"),
+        );
+        let effect = accepted
+            .plan_consume_escrow(product, AccountKeyV3::new([59; 32]).expect("Registry"))
+            .expect("Consume escrow effect");
+        assert_eq!(
+            effect.kind(),
+            crate::series::SeriesEscrowEffectKindV3::ConsumeIntoHoard
+        );
+        assert_eq!(effect.expected_revision(), 2);
+        assert!(effect.hoard_is_destination());
+        assert_eq!(
+            accepted.plan_prepare_escrow(product, AccountKeyV3::new([59; 32]).expect("Registry")),
+            Err(SeriesProjectorErrorV3::Frame)
         );
     }
 

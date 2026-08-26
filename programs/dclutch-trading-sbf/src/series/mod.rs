@@ -23,6 +23,10 @@ pub mod state;
 /// Terminal Ticket-retire/root-close differential execution oracle.
 pub mod terminal;
 
+pub use dclutch_series_v3_kernel::escrow::{
+    PrepareSeriesEscrowPlanV3, SeriesEscrowEffectKindV3, SeriesEscrowEffectV3,
+    consume_series_escrow_v3, expire_series_escrow_v3, prepare_series_escrow_v3,
+};
 #[cfg(test)]
 pub(crate) use dclutch_series_v3_kernel::generated;
 pub use dclutch_series_v3_kernel::{
