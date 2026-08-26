@@ -4,17 +4,16 @@ version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 rust-version = "1.89"
-description = "Canonical Rational Representation V2 request constructor for Bearer claims"
+description = "Chain-derived Rational Representation V2 specialization gate for Bearer claims"
 
 [dependencies]
 dclutch-bearer-v2-contract = { path = "../dclutch-bearer-v2-contract" }
-dclutch-rational-representation-v2-contract = { path = "../dclutch-rational-representation-v2-contract" }
 dclutch-rational-representation-v2-kernel = { path = "../dclutch-rational-representation-v2-kernel" }
 dclutch-rational-representation-v2-operator = { path = "../dclutch-rational-representation-v2-operator" }
 solana-program = { version = "=3.0.0", default-features = false }
-spl-associated-token-account-interface = { version = "=2.0.0", default-features = false }
 
 [dev-dependencies]
+dclutch-rational-representation-v2-contract = { path = "../dclutch-rational-representation-v2-contract" }
 dclutch-token-svm = { path = "../dclutch-token-svm" }
 
 [workspace]

@@ -289,7 +289,6 @@ dependencies = [
  "dclutch-rational-representation-v2-operator",
  "dclutch-token-svm",
  "solana-program",
- "spl-associated-token-account-interface",
 ]
 
 [[package]]
