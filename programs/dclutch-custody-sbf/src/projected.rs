@@ -16,7 +16,7 @@ use dclutch_market_core_codec::{
 use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use dclutch_registry_svm::{AuthenticatedRoleReceiptV1, RegistryInstructionV1};
 use dclutch_release_set_contract::ExecutionRoleV1;
-use dclutch_rent_contract::{RENT_CREDIT_PDA_DOMAIN_V1, RentCreditV1};
+use dclutch_rent_contract::lifecycle_v2::LifecycleRentCreditV2;
 use dclutch_token_svm::{
     ACCOUNT_BYTES, ExactTransferInput, ExactTransferProfileV1, PRODUCTION_ADAPTER_RELEASES,
     close_account, initialize_account3, transfer_checked,
@@ -305,11 +305,19 @@ fn authenticate_rent_credit(
     let data = account
         .try_borrow_data()
         .map_err(|_| CustodySbfError::Create)?;
-    let credit = RentCreditV1::decode(&data).map_err(|_| CustodySbfError::Create)?;
-    let authority = credit.refund_authority().to_bytes();
-    let bump = [credit.pda_bump()];
+    let credit = LifecycleRentCreditV2::decode(&data).map_err(|_| CustodySbfError::Create)?;
+    validate_lifecycle_credit_binding(
+        credit,
+        request.market,
+        request.release_set,
+        request.generation,
+    )?;
+    let seeds = credit.pda_seeds();
+    let market = seeds.market().to_bytes();
+    let generation = seeds.generation();
+    let bump = [seeds.bump()];
     let expected = Pubkey::create_program_address(
-        &[RENT_CREDIT_PDA_DOMAIN_V1, &authority, &bump],
+        &[seeds.domain(), &market, &generation, &bump],
         account.owner,
     )
     .map_err(|_| CustodySbfError::Create)?;
@@ -317,6 +325,57 @@ fn authenticate_rent_credit(
         return Err(CustodySbfError::Create.into());
     }
     Ok(())
+}
+
+fn validate_lifecycle_credit_binding(
+    credit: LifecycleRentCreditV2,
+    market: [u8; 32],
+    release_set: [u8; 32],
+    generation: u64,
+) -> Result<(), ProgramError> {
+    if credit.market().to_bytes() != market
+        || credit.release_set().to_bytes() != release_set
+        || credit.generation() != generation
+    {
+        Err(CustodySbfError::Create.into())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_rent_tests {
+    use dclutch_rent_contract::{RefundAuthority, lifecycle_v2::LifecycleAccountIdV2};
+
+    use super::*;
+
+    fn id(byte: u8) -> [u8; 32] {
+        [byte; 32]
+    }
+
+    #[test]
+    fn projected_custody_refuses_cross_release_credit_reuse() {
+        let credit = LifecycleRentCreditV2::new(
+            RefundAuthority::new(id(1)).expect("refund wallet"),
+            LifecycleAccountIdV2::new(id(2)).expect("Market"),
+            LifecycleAccountIdV2::new(id(3)).expect("release set"),
+            4,
+            5,
+        )
+        .expect("lifecycle credit");
+        assert_eq!(
+            validate_lifecycle_credit_binding(credit, id(2), id(3), 4),
+            Ok(())
+        );
+        assert_eq!(
+            validate_lifecycle_credit_binding(credit, id(2), id(6), 4),
+            Err(CustodySbfError::Create.into())
+        );
+        assert_eq!(
+            validate_lifecycle_credit_binding(credit, id(2), id(3), 5),
+            Err(CustodySbfError::Create.into())
+        );
+    }
 }
 
 #[inline(never)]
