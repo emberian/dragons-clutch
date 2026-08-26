@@ -64,8 +64,8 @@ pub const DIRECT_INLINE_ORDINARY_STRATEGY_BYTES_V3: usize = EXECUTION_STRATEGY_P
 pub const DIRECT_INLINE_ORDINARY_DESCRIPTOR_BYTES_V4: usize = CAPABILITY_PROGRAM_V4_BYTES;
 /// SHA-256 identity of the exact runtime-polymorphic AccountProfile11.
 pub const DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_ID_V3: [u8; 32] = [
-    0x7f, 0x00, 0x01, 0xa9, 0xb6, 0xeb, 0xf2, 0xa3, 0x95, 0xc6, 0xae, 0xf9, 0x2a, 0xed, 0x04, 0x66,
-    0x20, 0xb2, 0x2e, 0xa5, 0x14, 0x48, 0x9c, 0x65, 0x3d, 0x01, 0x99, 0xde, 0x4b, 0x8e, 0x10, 0x24,
+    0xc9, 0xa9, 0x0f, 0xab, 0x1c, 0x57, 0x89, 0x01, 0x0c, 0x84, 0xe8, 0x83, 0x77, 0x6a, 0x18, 0x25,
+    0x13, 0x49, 0xd2, 0xac, 0xd0, 0xc6, 0xcf, 0x67, 0xda, 0x7d, 0x98, 0xae, 0xe4, 0x37, 0x2f, 0x1e,
 ];
 /// SHA-256 identity of the exact maker LifecycleV4 policy.
 pub const DIRECT_INLINE_ORDINARY_LIFECYCLE_ID_V4: [u8; 32] = [
@@ -374,6 +374,7 @@ mod tests {
     };
     use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
     use dclutch_realm_contract::REALM_BYTES;
+    use dclutch_rent_contract::RENT_CREDIT_BYTES_V1;
     use std::{vec, vec::Vec};
 
     fn logical_lengths(basis_bytes: u32) -> Vec<u32> {
@@ -392,8 +393,10 @@ mod tests {
             *output.get_mut(coordinate).expect("maker") =
                 u32::try_from(crate::successor::DIRECT_MAKER_REPLAY_BYTES_V1).expect("maker");
         }
-        *output.get_mut(7).expect("seller rent") = 64;
-        *output.get_mut(10).expect("buyer rent") = 64;
+        *output.get_mut(7).expect("seller rent") =
+            u32::try_from(RENT_CREDIT_BYTES_V1).expect("RentCredit width");
+        *output.get_mut(10).expect("buyer rent") =
+            u32::try_from(RENT_CREDIT_BYTES_V1).expect("RentCredit width");
         *output.get_mut(13).expect("claims aggregate") =
             u32::try_from(LIABILITY_BASIS_MARKET_HEADER_BYTES_V2 + 3 * 8).expect("aggregate");
         *output.get_mut(14).expect("basis alias") = basis_bytes;

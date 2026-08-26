@@ -36,6 +36,7 @@ use dclutch_product_runtime_v2::{
 };
 use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
 use dclutch_realm_contract::{REALM_BYTES, RealmLayoutV1};
+use dclutch_rent_contract::RENT_CREDIT_BYTES_V1;
 
 use crate::{
     ordinary_effect_artifacts_v3::{
@@ -488,8 +489,10 @@ fn validate_lengths(lengths: &[u32]) -> Result<(), DirectOrdinaryAccountArtifact
         || length_at(lengths, 4)? < width(BASIS_PREFIX_BYTES)?
         || length_at(lengths, 5)? != width(DIRECT_MAKER_REPLAY_BYTES_V1)?
         || length_at(lengths, 6)? != 0
+        || length_at(lengths, 7)? != width(RENT_CREDIT_BYTES_V1)?
         || length_at(lengths, 8)? != width(DIRECT_MAKER_REPLAY_BYTES_V1)?
         || length_at(lengths, 9)? != 0
+        || length_at(lengths, 10)? != width(RENT_CREDIT_BYTES_V1)?
         || length_at(lengths, 11)? != 0
         || length_at(lengths, 40)? != width(REALM_BYTES)?
         || length_at(lengths, 42)? != width(CustodyReplayLayoutV1::BYTES)?
@@ -739,9 +742,9 @@ mod tests {
             width(PORTFOLIO_HEADER_BYTES + 3 * PORTFOLIO_COEFFICIENT_BYTES).expect("portfolio");
         output[4] = basis_bytes;
         output[5] = width(DIRECT_MAKER_REPLAY_BYTES_V1).expect("maker");
-        output[7] = 64;
+        output[7] = width(RENT_CREDIT_BYTES_V1).expect("seller RentCredit");
         output[8] = width(DIRECT_MAKER_REPLAY_BYTES_V1).expect("maker");
-        output[10] = 64;
+        output[10] = width(RENT_CREDIT_BYTES_V1).expect("buyer RentCredit");
         output[13] =
             width(LIABILITY_BASIS_MARKET_HEADER_BYTES_V2 + 3 * CLAIMS_ROW_BYTES).expect("market");
         output[14] = basis_bytes;
@@ -881,6 +884,27 @@ mod tests {
             output,
             [0x5a; DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3]
         );
+    }
+
+    #[test]
+    fn legacy_64_byte_rent_credit_geometry_refuses_atomically() {
+        let mut hostile = lengths(256);
+        hostile[7] = 64;
+        hostile[10] = 64;
+        let mut scratch = [0_u8; DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3];
+        let mut output = [0x5a_u8; DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3];
+        let before = output;
+        assert_eq!(
+            encode_direct_inline_ordinary_account_profile_v3_atomic(
+                DirectInlineOrdinaryAccountProfileInputV3 {
+                    logical_data_lengths: &hostile,
+                },
+                &mut scratch,
+                &mut output,
+            ),
+            Err(DirectOrdinaryAccountArtifactErrorV3::Geometry)
+        );
+        assert_eq!(output, before);
     }
 
     #[test]
