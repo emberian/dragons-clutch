@@ -22,6 +22,10 @@ pub mod child_packets;
 pub mod lifecycle;
 /// Stateless, failure-atomic candidate and settlement plan evaluation.
 pub mod plan;
+/// Streamed runtime-width candidate verification and exact selection comparison.
+pub mod runtime_verify;
+/// Runtime-width borrowed records without fixed outcome or page capacities.
+pub mod runtime_width;
 /// Lean-owned action-specific request projections for generic Trading.
 pub mod specialization;
 

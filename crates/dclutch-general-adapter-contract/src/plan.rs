@@ -171,20 +171,6 @@ pub fn evaluate_consider_v2(
     buffers: ConsiderPlanBuffersV2<'_>,
 ) -> PlanResultV2<ConsiderPlanSummaryV2> {
     require_consider_widths(&view, &buffers)?;
-    let candidate = CandidateV1::decode(view.candidate).map_err(|_| PlanErrorV2::InvalidInput)?;
-    let policy = SelectionPolicyV1::decode(view.policy).map_err(|_| PlanErrorV2::InvalidInput)?;
-    view.limits.require_candidate(candidate)?;
-    if policy.policy_id != view.limits.selection_policy_id {
-        return Err(PlanErrorV2::ConfigMismatch);
-    }
-    let page = PageViewV1::decode(view.page).map_err(|_| PlanErrorV2::InvalidInput)?;
-    if page.candidate_id() != candidate.candidate_id
-        || page.outcome_count() != candidate.outcome_count
-        || page.page_count() != candidate.page_count
-    {
-        return Err(PlanErrorV2::CoordinateMismatch);
-    }
-
     let ConsiderPlanBuffersV2 {
         verification_scratch,
         verification_output,
@@ -193,70 +179,26 @@ pub fn evaluate_consider_v2(
         certificate_scratch,
         certificate_output,
     } = buffers;
-    let mut verifier = if view.verification_before.iter().all(|byte| *byte == 0) {
-        if view.expected_revision != 0 || page.page_index() != 0 {
-            return Err(PlanErrorV2::CoordinateMismatch);
-        }
-        CandidateVerifierV1::begin(candidate)
-    } else {
-        let value = CandidateVerifierV1::decode(view.verification_before)
-            .map_err(|_| PlanErrorV2::InvalidInput)?;
-        if value.candidate() != candidate
-            || value.next_page() != page.page_index()
-            || value.revision() != view.expected_revision
-        {
-            return Err(PlanErrorV2::CoordinateMismatch);
-        }
-        value
-    };
-    verifier
-        .ingest_page_at(view.page, view.expected_revision)
-        .map_err(|_| PlanErrorV2::Transition)?;
-    if verifier.order_count() > view.limits.max_orders_per_candidate {
-        return Err(PlanErrorV2::ConfigMismatch);
-    }
-    verification_scratch.fill(0);
-    verifier
-        .encode_into(verification_scratch)
-        .map_err(|_| PlanErrorV2::Transition)?;
+    let prepared = prepare_page_verification_v2(&view, verification_scratch)?;
     selection_scratch.copy_from_slice(view.selection_before);
     certificate_scratch.copy_from_slice(view.certificate_before);
-    let complete = verifier.is_complete();
-    if complete {
-        if certificate_scratch.iter().any(|byte| *byte != 0) {
-            return Err(PlanErrorV2::CoordinateMismatch);
-        }
-        let verified = verifier.finish().map_err(|_| PlanErrorV2::Transition)?;
-        let incumbent = decode_incumbent(
-            selection_scratch,
-            view.incumbent_certificate,
-            candidate,
-            policy,
-        )?;
-        let selection_revision = selection_revision(selection_scratch)?;
-        consider_verified_input(
-            selection_scratch,
-            certificate_scratch,
-            ConsiderVerifiedInputV1 {
-                candidate: &candidate,
-                policy: &policy,
-                verified: &verified,
-                incumbent: incumbent.as_ref(),
-                expected_revision: selection_revision,
-            },
-        )
-        .map_err(|_| PlanErrorV2::Transition)?;
-    } else if certificate_scratch.iter().any(|byte| *byte != 0) {
-        return Err(PlanErrorV2::CoordinateMismatch);
-    }
+    prepare_selection_v2(
+        view.candidate,
+        view.policy,
+        view.incumbent_certificate,
+        verification_scratch,
+        selection_scratch,
+        certificate_scratch,
+        prepared.complete,
+    )?;
 
     verification_output.copy_from_slice(verification_scratch);
     selection_output.copy_from_slice(selection_scratch);
     certificate_output.copy_from_slice(certificate_scratch);
     Ok(ConsiderPlanSummaryV2 {
-        complete,
-        order_count: verifier.order_count(),
-        selection_considered: complete,
+        complete: prepared.complete,
+        order_count: prepared.order_count,
+        selection_considered: prepared.complete,
     })
 }
 
@@ -272,6 +214,79 @@ pub fn evaluate_consider_row_v2(
     buffers: ConsiderPlanBuffersV2<'_>,
 ) -> PlanResultV2<ConsiderPlanSummaryV2> {
     require_consider_row_widths(&view, &buffers)?;
+    let ConsiderPlanBuffersV2 {
+        verification_scratch,
+        verification_output,
+        selection_scratch,
+        selection_output,
+        certificate_scratch,
+        certificate_output,
+    } = buffers;
+    let prepared = prepare_row_verification_v2(&view, verification_scratch)?;
+    selection_scratch.copy_from_slice(view.selection_before);
+    certificate_scratch.copy_from_slice(view.certificate_before);
+    prepare_selection_v2(
+        view.candidate,
+        view.policy,
+        view.incumbent_certificate,
+        verification_scratch,
+        selection_scratch,
+        certificate_scratch,
+        prepared.complete,
+    )?;
+
+    verification_output.copy_from_slice(verification_scratch);
+    selection_output.copy_from_slice(selection_scratch);
+    certificate_output.copy_from_slice(certificate_scratch);
+    Ok(ConsiderPlanSummaryV2 {
+        complete: prepared.complete,
+        order_count: prepared.order_count,
+        selection_considered: prepared.complete,
+    })
+}
+
+#[derive(Clone, Copy)]
+struct PreparedVerificationV2 {
+    complete: bool,
+    order_count: u32,
+}
+
+#[inline(never)]
+fn prepare_page_verification_v2(
+    view: &ConsiderPlanViewV2<'_>,
+    verification_scratch: &mut [u8],
+) -> PlanResultV2<PreparedVerificationV2> {
+    let candidate = CandidateV1::decode(view.candidate).map_err(|_| PlanErrorV2::InvalidInput)?;
+    let policy = SelectionPolicyV1::decode(view.policy).map_err(|_| PlanErrorV2::InvalidInput)?;
+    view.limits.require_candidate(candidate)?;
+    if policy.policy_id != view.limits.selection_policy_id {
+        return Err(PlanErrorV2::ConfigMismatch);
+    }
+    let page = PageViewV1::decode(view.page).map_err(|_| PlanErrorV2::InvalidInput)?;
+    if page.candidate_id() != candidate.candidate_id
+        || page.outcome_count() != candidate.outcome_count
+        || page.page_count() != candidate.page_count
+    {
+        return Err(PlanErrorV2::CoordinateMismatch);
+    }
+    let mut verifier = load_verifier_v2(
+        view.verification_before,
+        candidate,
+        page.page_index(),
+        0,
+        view.expected_revision,
+    )?;
+    verifier
+        .ingest_page_at(view.page, view.expected_revision)
+        .map_err(|_| PlanErrorV2::Transition)?;
+    store_verifier_v2(verifier, view.limits, verification_scratch)
+}
+
+#[inline(never)]
+fn prepare_row_verification_v2(
+    view: &ConsiderRowPlanViewV2<'_>,
+    verification_scratch: &mut [u8],
+) -> PlanResultV2<PreparedVerificationV2> {
     let candidate = CandidateV1::decode(view.candidate).map_err(|_| PlanErrorV2::InvalidInput)?;
     let policy = SelectionPolicyV1::decode(view.policy).map_err(|_| PlanErrorV2::InvalidInput)?;
     view.limits.require_candidate(candidate)?;
@@ -287,32 +302,13 @@ pub fn evaluate_consider_row_v2(
     {
         return Err(PlanErrorV2::CoordinateMismatch);
     }
-
-    let ConsiderPlanBuffersV2 {
-        verification_scratch,
-        verification_output,
-        selection_scratch,
-        selection_output,
-        certificate_scratch,
-        certificate_output,
-    } = buffers;
-    let mut verifier = if view.verification_before.iter().all(|byte| *byte == 0) {
-        if view.expected_page != 0 || view.expected_execution != 0 || view.expected_revision != 0 {
-            return Err(PlanErrorV2::CoordinateMismatch);
-        }
-        CandidateVerifierV1::begin(candidate)
-    } else {
-        let value = CandidateVerifierV1::decode(view.verification_before)
-            .map_err(|_| PlanErrorV2::InvalidInput)?;
-        if value.candidate() != candidate
-            || value.next_page() != view.expected_page
-            || value.next_execution() != view.expected_execution
-            || value.revision() != view.expected_revision
-        {
-            return Err(PlanErrorV2::CoordinateMismatch);
-        }
-        value
-    };
+    let mut verifier = load_verifier_v2(
+        view.verification_before,
+        candidate,
+        view.expected_page,
+        view.expected_execution,
+        view.expected_revision,
+    )?;
     verifier
         .ingest_execution_row_at(
             view.page,
@@ -321,52 +317,96 @@ pub fn evaluate_consider_row_v2(
             view.expected_revision,
         )
         .map_err(|_| PlanErrorV2::Transition)?;
-    if verifier.order_count() > view.limits.max_orders_per_candidate {
+    store_verifier_v2(verifier, view.limits, verification_scratch)
+}
+
+#[inline(never)]
+fn load_verifier_v2(
+    verification_before: &[u8],
+    candidate: CandidateV1,
+    expected_page: u32,
+    expected_execution: u8,
+    expected_revision: u64,
+) -> PlanResultV2<CandidateVerifierV1> {
+    if verification_before.iter().all(|byte| *byte == 0) {
+        if expected_page != 0 || expected_execution != 0 || expected_revision != 0 {
+            return Err(PlanErrorV2::CoordinateMismatch);
+        }
+        Ok(CandidateVerifierV1::begin(candidate))
+    } else {
+        let value = CandidateVerifierV1::decode(verification_before)
+            .map_err(|_| PlanErrorV2::InvalidInput)?;
+        if value.candidate() != candidate
+            || value.next_page() != expected_page
+            || value.next_execution() != expected_execution
+            || value.revision() != expected_revision
+        {
+            return Err(PlanErrorV2::CoordinateMismatch);
+        }
+        Ok(value)
+    }
+}
+
+#[inline(never)]
+fn store_verifier_v2(
+    verifier: CandidateVerifierV1,
+    limits: GeneralPlanLimitsV2,
+    verification_scratch: &mut [u8],
+) -> PlanResultV2<PreparedVerificationV2> {
+    if verifier.order_count() > limits.max_orders_per_candidate {
         return Err(PlanErrorV2::ConfigMismatch);
     }
+    let prepared = PreparedVerificationV2 {
+        complete: verifier.is_complete(),
+        order_count: verifier.order_count(),
+    };
     verification_scratch.fill(0);
     verifier
         .encode_into(verification_scratch)
         .map_err(|_| PlanErrorV2::Transition)?;
-    selection_scratch.copy_from_slice(view.selection_before);
-    certificate_scratch.copy_from_slice(view.certificate_before);
-    let complete = verifier.is_complete();
-    if complete {
-        if certificate_scratch.iter().any(|byte| *byte != 0) {
-            return Err(PlanErrorV2::CoordinateMismatch);
-        }
-        let verified = verifier.finish().map_err(|_| PlanErrorV2::Transition)?;
-        let incumbent = decode_incumbent(
-            selection_scratch,
-            view.incumbent_certificate,
-            candidate,
-            policy,
-        )?;
-        let selection_revision = selection_revision(selection_scratch)?;
-        consider_verified_input(
-            selection_scratch,
-            certificate_scratch,
-            ConsiderVerifiedInputV1 {
-                candidate: &candidate,
-                policy: &policy,
-                verified: &verified,
-                incumbent: incumbent.as_ref(),
-                expected_revision: selection_revision,
-            },
-        )
-        .map_err(|_| PlanErrorV2::Transition)?;
-    } else if certificate_scratch.iter().any(|byte| *byte != 0) {
+    Ok(prepared)
+}
+
+#[inline(never)]
+fn prepare_selection_v2(
+    candidate_bytes: &[u8],
+    policy_bytes: &[u8],
+    incumbent_certificate: Option<&[u8]>,
+    verification_scratch: &[u8],
+    selection_scratch: &mut [u8],
+    certificate_scratch: &mut [u8],
+    complete: bool,
+) -> PlanResultV2<()> {
+    if !complete {
+        return if certificate_scratch.iter().any(|byte| *byte != 0) {
+            Err(PlanErrorV2::CoordinateMismatch)
+        } else {
+            Ok(())
+        };
+    }
+    if certificate_scratch.iter().any(|byte| *byte != 0) {
         return Err(PlanErrorV2::CoordinateMismatch);
     }
-
-    verification_output.copy_from_slice(verification_scratch);
-    selection_output.copy_from_slice(selection_scratch);
-    certificate_output.copy_from_slice(certificate_scratch);
-    Ok(ConsiderPlanSummaryV2 {
-        complete,
-        order_count: verifier.order_count(),
-        selection_considered: complete,
-    })
+    let candidate = CandidateV1::decode(candidate_bytes).map_err(|_| PlanErrorV2::InvalidInput)?;
+    let policy = SelectionPolicyV1::decode(policy_bytes).map_err(|_| PlanErrorV2::InvalidInput)?;
+    let verified = CandidateVerifierV1::decode(verification_scratch)
+        .map_err(|_| PlanErrorV2::InvalidInput)?
+        .finish()
+        .map_err(|_| PlanErrorV2::Transition)?;
+    let incumbent = decode_incumbent(selection_scratch, incumbent_certificate, candidate, policy)?;
+    let expected_revision = selection_revision(selection_scratch)?;
+    consider_verified_input(
+        selection_scratch,
+        certificate_scratch,
+        ConsiderVerifiedInputV1 {
+            candidate: &candidate,
+            policy: &policy,
+            verified: &verified,
+            incumbent: incumbent.as_ref(),
+            expected_revision,
+        },
+    )
+    .map_err(|_| PlanErrorV2::Transition)
 }
 
 /// Evaluate permissionless selection freeze into caller-owned candidate bytes.
