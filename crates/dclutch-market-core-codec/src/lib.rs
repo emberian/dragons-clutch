@@ -21,6 +21,7 @@ mod generated_physical {
 
 mod capability;
 mod physical;
+mod project_found;
 
 pub use capability::*;
 pub use generated::*;
@@ -34,3 +35,4 @@ pub use generated_physical::{
     SERIES_CORE_REQUEST_BYTES_V1, SERIES_CORE_REQUEST_MAGIC_V1,
 };
 pub use physical::*;
+pub use project_found::*;

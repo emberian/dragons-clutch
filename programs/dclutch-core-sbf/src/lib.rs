@@ -14,6 +14,7 @@ extern crate alloc;
 use dclutch_market_core_codec::{
     Action, CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1, CORE_EFFECT_ENVELOPE_BYTES_V1,
     CapabilityFundingHeaderV1, CoreEffectEnvelopeV1, REQUEST_BYTES, Request,
+    PROJECT_FOUND_REQUEST_BYTES_V1, PROJECT_FOUND_REQUEST_MAGIC_V1, ProjectFoundRequestV1,
     SERIES_CORE_REQUEST_BYTES_V1, SERIES_CORE_REQUEST_MAGIC_V1, SeriesCoreRequestV1,
 };
 use dclutch_release_set_contract::{
@@ -120,6 +121,18 @@ pub fn process_instruction(
         let request =
             SeriesCoreRequestV1::decode(request_bytes).map_err(|_| CoreSbfError::Instruction)?;
         return series_consume::process(program_id, accounts, request, request_bytes, proof_bytes);
+    }
+    if instruction_data.len() == PROJECT_FOUND_REQUEST_BYTES_V1
+        && instruction_data.get(..PROJECT_FOUND_REQUEST_MAGIC_V1.len())
+            == Some(PROJECT_FOUND_REQUEST_MAGIC_V1.as_slice())
+    {
+        let projected = ProjectFoundRequestV1::decode(instruction_data)
+            .map_err(|_| CoreSbfError::Instruction)?;
+        let found_bytes = projected
+            .found
+            .encode()
+            .map_err(|_| CoreSbfError::Instruction)?;
+        return found::project(program_id, accounts, projected.found, &found_bytes);
     }
     let request_bytes = instruction_data
         .get(..REQUEST_BYTES)

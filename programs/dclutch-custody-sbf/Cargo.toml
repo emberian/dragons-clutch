@@ -25,6 +25,7 @@ dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }
 dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }
 dclutch-registry-svm = { path = "../../crates/dclutch-registry-svm" }
 dclutch-release-set-contract = { path = "../../crates/dclutch-release-set-contract" }
+dclutch-rent-contract = { path = "../../crates/dclutch-rent-contract" }
 dclutch-token-svm = { path = "../../crates/dclutch-token-svm" }
 solana-program = { version = "=3.0.0", default-features = false }
 solana-sdk-ids = "=3.1.0"

@@ -14,6 +14,8 @@ use dclutch_custody_contract::{
     CUSTODY_RECEIPT_BYTES_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1,
     CustodyAuthoritySeedsV1, CustodyReceiptV1, CustodyReplaySeedsV1, CustodyReplayV1,
     CustodyRequestV1, CustodyVaultSeedsV1, OperationV1, ReceiptEvidenceV1,
+    PROJECTED_CUSTODY_REQUEST_BYTES_V1, PROJECTED_CUSTODY_REQUEST_MAGIC_V1,
+    ProjectedCustodyRequestV1,
 };
 use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV1, STATE_BYTES};
 use dclutch_realm_contract::{
@@ -108,6 +110,14 @@ pub fn process_instruction(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
+    if instruction_data.len() == PROJECTED_CUSTODY_REQUEST_BYTES_V1
+        && instruction_data.get(..PROJECTED_CUSTODY_REQUEST_MAGIC_V1.len())
+            == Some(PROJECTED_CUSTODY_REQUEST_MAGIC_V1.as_slice())
+    {
+        let request = ProjectedCustodyRequestV1::decode(instruction_data)
+            .map_err(|_| CustodySbfError::Instruction)?;
+        return projected::process(program_id, accounts, request, instruction_data);
+    }
     let request =
         CustodyRequestV1::decode(instruction_data).map_err(|_| CustodySbfError::Instruction)?;
     require_account_count(accounts, request.operation)?;

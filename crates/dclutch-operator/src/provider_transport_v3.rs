@@ -22,7 +22,7 @@ use solana_program::{
 };
 use solana_sdk_ids::{system_program, sysvar};
 
-use crate::ObservedAccount;
+use crate::{Finality, Observation, ObservedAccount};
 
 /// Resolution submission account count frozen by the physical adapter.
 pub const PROVIDER_SUBMIT_ACCOUNT_COUNT_V3: usize = 38;
@@ -122,6 +122,16 @@ pub fn build_provider_submit_v3(
     deployment: ProviderSubmitDeploymentV3,
     intent: &ProviderSubmitIntentV3,
 ) -> Result<ProviderTransportReportV3, ProviderTransportOperatorErrorV3> {
+    require_same_finalized_observation(&[
+        &snapshot.market,
+        &snapshot.source_state,
+        &snapshot.source_material,
+        &snapshot.source_spec,
+        &snapshot.source_provider_release,
+        &snapshot.pyth_release,
+        &snapshot.window,
+        &snapshot.encoded_vaa,
+    ])?;
     PostUpdateParamsView::parse(&intent.post_update_body)
         .map_err(|_| ProviderTransportOperatorErrorV3::Intent)?;
     let market = CoreState::decode(&snapshot.market.data)
@@ -347,6 +357,7 @@ pub fn build_provider_reclaim_v3(
     pyth_release: &ObservedAccount,
     deployment: ProviderReclaimDeploymentV3,
 ) -> Result<ProviderTransportReportV3, ProviderTransportOperatorErrorV3> {
+    require_same_finalized_observation(&[lifecycle_account, pyth_release])?;
     let lifecycle = ProviderUpdateLifecycleV3::decode(&lifecycle_account.data)
         .map_err(|_| ProviderTransportOperatorErrorV3::Lifecycle)?;
     if lifecycle.status != ProviderUpdateStatusV3::Consumed
@@ -457,4 +468,20 @@ fn distinct(accounts: &[AccountMeta]) -> bool {
             .skip(index + 1)
             .all(|other| other.pubkey != account.pubkey)
     })
+}
+
+fn require_same_finalized_observation(
+    accounts: &[&ObservedAccount],
+) -> Result<Observation, ProviderTransportOperatorErrorV3> {
+    let first = accounts
+        .first()
+        .ok_or(ProviderTransportOperatorErrorV3::State)?
+        .observation;
+    if first.finality != Finality::Finalized
+        || accounts.iter().any(|account| account.observation != first)
+    {
+        Err(ProviderTransportOperatorErrorV3::State)
+    } else {
+        Ok(first)
+    }
 }

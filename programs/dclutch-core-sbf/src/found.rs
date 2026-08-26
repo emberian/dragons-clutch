@@ -3,7 +3,8 @@
 use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
 use dclutch_market_core_codec::{
     Action, CoreState, FoundingAccounts, FoundingFrame, FoundingQuote, MarketCoreStateSeedsV2,
-    MarketIdentity, Product, Realm, Request, Role, STATE_BYTES, VacantAccount, found,
+    MarketIdentity, Product, ProjectFoundReceiptV1, Realm, Request, Role, STATE_BYTES,
+    VacantAccount, found,
 };
 use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV2};
 use dclutch_realm_contract::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
@@ -19,7 +20,7 @@ use dclutch_source_contract::{
 use solana_program::{
     account_info::AccountInfo,
     hash::hash,
-    program::{invoke, invoke_signed},
+    program::{invoke, invoke_signed, set_return_data},
     pubkey::Pubkey,
     rent::Rent,
     sysvar::SysvarSerialize,
@@ -62,10 +63,51 @@ struct CreationPlan {
 pub(crate) struct PreparedFound {
     creation: CreationPlan,
     pub(crate) realm_id: [u8; 32],
+    pub(crate) collateral_mint: [u8; 32],
+    pub(crate) token_program: [u8; 32],
+    pub(crate) collateral_release: [u8; 32],
+    pub(crate) product_record_id: [u8; 32],
+    pub(crate) product_id: [u8; 32],
     pub(crate) product: Product,
     pub(crate) resolution_policy_id: [u8; 32],
     pub(crate) manifest_id: [u8; 32],
     pub(crate) release_set_id: [u8; 32],
+}
+
+/// Authenticate the exact Found31 authority graph and return its future
+/// Market projection without acquiring any writable account or applying the
+/// prepared creation plan.
+#[inline(never)]
+pub(crate) fn project(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: Request,
+    exact_found_request: &[u8],
+) -> Result<(), solana_program::program_error::ProgramError> {
+    if request.action != Action::Found {
+        return Err(CoreSbfError::Instruction.into());
+    }
+    let frame = FoundAccounts::parse_project(program_id, accounts)?;
+    let rent = Rent::from_account_info(frame.rent).map_err(|_| CoreSbfError::Creation)?;
+    let prepared = prepare(program_id, &frame, request, &rent)?;
+    let receipt = ProjectFoundReceiptV1::new(
+        request.market,
+        request.generation,
+        identity(prepared.realm_id)?,
+        identity(prepared.collateral_mint)?,
+        identity(prepared.token_program)?,
+        identity(prepared.collateral_release)?,
+        identity(prepared.product_record_id)?,
+        identity(prepared.product_id)?,
+        identity(prepared.resolution_policy_id)?,
+        identity(prepared.release_set_id)?,
+        identity(frame.rent_program.key.to_bytes())?,
+        hash(exact_found_request).to_bytes(),
+    )
+    .map_err(|_| CoreSbfError::Transition)?;
+    let bytes = receipt.encode().map_err(|_| CoreSbfError::Transition)?;
+    set_return_data(&bytes);
+    Ok(())
 }
 
 #[inline(never)]
@@ -131,6 +173,11 @@ pub(crate) fn prepare(
     authenticate_release_record(frame, rent, references.release_set_id, admission.selected)?;
     let projection = PreparedFound {
         realm_id: references.realm_id,
+        collateral_mint: *references.realm.collateral_mint(),
+        token_program: *references.realm.token_program(),
+        collateral_release: *references.realm.collateral_adapter_release_id(),
+        product_record_id: references.product_record_id,
+        product_id: references.product_id,
         product: references.product,
         resolution_policy_id: references.resolution_policy_id,
         manifest_id: references.manifest_id,

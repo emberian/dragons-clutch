@@ -16,10 +16,12 @@ extern crate std;
 
 #[allow(missing_docs)]
 mod generated;
+mod projected;
 
 pub use generated::{
     ABI_VERSION_V1, CUSTODY_RECEIPT_BYTES_V1, CUSTODY_REPLAY_BYTES_V1, CUSTODY_REQUEST_BYTES_V1,
 };
+pub use projected::*;
 
 use generated::*;
 

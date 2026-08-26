@@ -14,8 +14,8 @@ use dclutch_capability_program_contract::{
 };
 use dclutch_core_contract::ContentId as CoreContentId;
 use dclutch_market_core_codec::{
-    Action, CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness, Request,
-    STATE_BYTES,
+    Action, CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase,
+    ProjectFoundRequestV1, Readiness, Request, STATE_BYTES,
 };
 use dclutch_product_runtime_v2::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
 use dclutch_product_runtime_v2_admission::{FinalizedRecordCoordinateV2, PRODUCT_RECORD_BYTES_V2};
@@ -1017,6 +1017,25 @@ fn found_instruction(fixture: &Fixture, swap_artifacts: bool) -> Instruction {
     }
 }
 
+fn project_found_instruction(fixture: &Fixture, swap_artifacts: bool) -> Instruction {
+    let mut instruction = found_instruction(fixture, swap_artifacts);
+    *instruction.accounts.first_mut().expect("payer") =
+        AccountMeta::new_readonly(fixture.payer.pubkey(), false);
+    *instruction.accounts.get_mut(1).expect("Market") =
+        AccountMeta::new_readonly(fixture.market, false);
+    let found = Request::administrative(
+        Action::Found,
+        GENERATION,
+        identity(fixture.market.to_bytes()),
+    );
+    instruction.data = ProjectFoundRequestV1::new(found)
+        .expect("ProjectFound")
+        .encode()
+        .expect("ProjectFound bytes")
+        .to_vec();
+    instruction
+}
+
 async fn execute(
     mut fixture: Fixture,
     instruction: Instruction,
@@ -1032,6 +1051,31 @@ async fn execute(
         &[instruction],
         Some(&context.payer.pubkey()),
         &[&context.payer, &fixture.payer],
+        blockhash,
+    );
+    let accepted = context
+        .banks_client
+        .process_transaction(transaction)
+        .await
+        .is_ok();
+    (fixture, context, accepted)
+}
+
+async fn execute_project(
+    mut fixture: Fixture,
+    instruction: Instruction,
+) -> (Fixture, solana_program_test::ProgramTestContext, bool) {
+    let test = fixture.test.take().expect("ProgramTest");
+    let context = test.start_with_context().await;
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    let transaction = Transaction::new_signed_with_payer(
+        &[instruction],
+        Some(&context.payer.pubkey()),
+        &[&context.payer],
         blockhash,
     );
     let accepted = context
@@ -1120,6 +1164,45 @@ async fn real_found31_accepts_258_outcomes_after_immutable_infrastructure_auth()
         state.identity.registry_program.to_bytes(),
         REGISTRY_PROGRAM_ID.to_bytes()
     );
+}
+
+#[tokio::test]
+async fn project_found31_authenticates_without_signature_or_market_mutation() {
+    let fixture = fixture(false);
+    let instruction = project_found_instruction(&fixture, false);
+    assert!(!instruction.accounts[0].is_signer);
+    assert!(!instruction.accounts[0].is_writable);
+    assert!(!instruction.accounts[1].is_writable);
+    let (fixture, context, accepted) = execute_project(fixture, instruction).await;
+    assert!(accepted);
+    let market = context
+        .banks_client
+        .get_account(fixture.market)
+        .await
+        .expect("Market query")
+        .expect("vacant Market");
+    assert_eq!(market.owner, system_program::ID);
+    assert!(market.data.is_empty());
+    assert_eq!(
+        market.lamports,
+        Rent::default().minimum_balance(STATE_BYTES)
+    );
+}
+
+#[tokio::test]
+async fn projected_found31_refuses_swapped_infrastructure_without_market_mutation() {
+    let fixture = fixture(false);
+    let instruction = project_found_instruction(&fixture, true);
+    let (fixture, context, accepted) = execute_project(fixture, instruction).await;
+    assert!(!accepted);
+    let market = context
+        .banks_client
+        .get_account(fixture.market)
+        .await
+        .expect("Market query")
+        .expect("vacant Market");
+    assert_eq!(market.owner, system_program::ID);
+    assert!(market.data.is_empty());
 }
 
 #[tokio::test]

@@ -14,6 +14,7 @@ use dclutch_registry_contract::{
     ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1,
     ArtifactUpgradePolicyV1,
 };
+use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_release_set_contract::{
     ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, ProtocolInfrastructureProfileV1,
@@ -43,7 +44,7 @@ use solana_program::{
     pubkey::Pubkey,
     rent::Rent,
 };
-use solana_sdk_ids::{system_program, sysvar};
+use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign, transfer};
 
 use crate::{
@@ -995,6 +996,33 @@ fn authenticate_reclaim_release(
 ) -> ProgramResult {
     if frame.account(7).key.to_bytes() != lifecycle.registry_program {
         return Err(ResolutionError::ResolutionRelease.into());
+    }
+    let expected_registry_programdata = Pubkey::find_program_address(
+        &[frame.account(7).key.as_ref()],
+        &bpf_loader_upgradeable::ID,
+    )
+    .0;
+    let registry_program_data = frame
+        .account(7)
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::ResolutionDeployment)?;
+    let registry_program = ProgramV3View::parse(&registry_program_data)
+        .map_err(|_| ResolutionError::ResolutionDeployment)?;
+    let registry_programdata_data = frame
+        .account(8)
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::ResolutionDeployment)?;
+    let registry_programdata = ProgramDataV3View::parse(&registry_programdata_data)
+        .map_err(|_| ResolutionError::ResolutionDeployment)?;
+    if frame.account(7).owner != &bpf_loader_upgradeable::ID
+        || frame.account(8).owner != &bpf_loader_upgradeable::ID
+        || !frame.account(7).executable
+        || frame.account(8).executable
+        || frame.account(8).key != &expected_registry_programdata
+        || registry_program.programdata() != frame.account(8).key.to_bytes()
+        || registry_programdata.upgrade_authority().is_some()
+    {
+        return Err(ResolutionError::ResolutionDeployment.into());
     }
     let activation_data = frame
         .account(6)

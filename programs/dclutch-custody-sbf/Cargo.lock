@@ -1531,6 +1531,7 @@ version = "0.1.0"
 name = "dclutch-custody-contract"
 version = "0.1.0"
 dependencies = [
+ "dclutch-market-core-codec",
  "dclutch-release-set-contract",
 ]
 
@@ -1546,6 +1547,7 @@ dependencies = [
  "dclutch-registry-contract",
  "dclutch-registry-svm",
  "dclutch-release-set-contract",
+ "dclutch-rent-contract",
  "dclutch-token-svm",
  "solana-account 4.3.2",
  "solana-program",
@@ -1597,6 +1599,10 @@ version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
 ]
+
+[[package]]
+name = "dclutch-rent-contract"
+version = "0.1.0"
 
 [[package]]
 name = "dclutch-token-svm"

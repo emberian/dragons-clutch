@@ -51,6 +51,28 @@ impl<'accounts, 'info> FoundAccounts<'accounts, 'info> {
         program_id: &Pubkey,
         accounts: &'accounts [AccountInfo<'info>],
     ) -> Result<Self, CoreSbfError> {
+        Self::parse_with_mode(program_id, accounts, true)
+    }
+
+    /// Parse the exact same Found31 identities for a stateless projection.
+    ///
+    /// Projection never receives write or signature authority over the payer
+    /// or future Market. All immutable authorities remain in the identical
+    /// order and are authenticated by the same Found implementation.
+    #[inline(never)]
+    pub fn parse_project(
+        program_id: &Pubkey,
+        accounts: &'accounts [AccountInfo<'info>],
+    ) -> Result<Self, CoreSbfError> {
+        Self::parse_with_mode(program_id, accounts, false)
+    }
+
+    #[inline(never)]
+    fn parse_with_mode(
+        program_id: &Pubkey,
+        accounts: &'accounts [AccountInfo<'info>],
+        mutating: bool,
+    ) -> Result<Self, CoreSbfError> {
         if accounts.len() != FOUND_ACCOUNT_COUNT_V2 {
             return Err(CoreSbfError::AccountFrame);
         }
@@ -91,11 +113,11 @@ impl<'accounts, 'info> FoundAccounts<'accounts, 'info> {
             return Err(CoreSbfError::AccountFrame);
         };
         require_distinct(accounts)?;
-        if !payer.is_signer
-            || !payer.is_writable
+        if payer.is_signer != mutating
+            || payer.is_writable != mutating
             || payer.executable
             || market.is_signer
-            || !market.is_writable
+            || market.is_writable != mutating
             || market.executable
             || rent_credit.is_signer
             || rent_credit.is_writable
