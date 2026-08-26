@@ -1,0 +1,32 @@
+[package]
+name = "dclutch-token-behavior-program-test"
+version = "0.1.0"
+edition = "2024"
+publish = false
+rust-version = "1.89"
+
+[dependencies]
+dclutch-token-svm = { path = ".." }
+solana-program = "=3.0.0"
+solana-program-test = { version = "=4.2.1", features = ["agave-unstable-api"] }
+solana-sdk = "=3.0.0"
+solana-system-interface = { version = "=3.2.0", features = ["bincode"] }
+solana-transaction = "=4.1.6"
+spl-token-2022 = { version = "=11.0.0", features = ["no-entrypoint"] }
+spl-token-2022-interface = { version = "=3.1.1", default-features = false }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[workspace]
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"
+
+[lints.clippy]
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+checked_conversions = "deny"
+float_arithmetic = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+unwrap_used = "deny"
