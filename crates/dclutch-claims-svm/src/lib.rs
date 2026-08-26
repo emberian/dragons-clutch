@@ -9,6 +9,7 @@
 //! The vector tail is borrowed, exact-width, and never allocated.
 
 pub mod affine_batch_v2;
+pub mod protocol_position_v2;
 
 /// Bytes before the runtime-width `u64` quantity vector.
 pub const CLAIMS_PLAN_HEADER_BYTES_V1: usize = 208;
