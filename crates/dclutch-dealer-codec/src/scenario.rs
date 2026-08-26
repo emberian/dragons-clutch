@@ -6,10 +6,12 @@
 //! a parallel reserve implementation.
 
 use dclutch_dealer_scenario_kernel::{
-    plan_scenario_netting, ClaimsInventoryExpectation, ScenarioTransition,
+    assess_scenario_solvency, plan_scenario_netting, ClaimsInventoryExpectation,
+    ScenarioSolvencySnapshot, ScenarioTransition,
 };
 pub use dclutch_dealer_scenario_kernel::{
     ClaimsInventoryObservation, Error as ScenarioError, ScenarioNettingPlan as ScenarioPlan,
+    ScenarioSolvencyReport,
 };
 
 /// Stable refusal at the Dealer scenario-profile boundary.
@@ -95,6 +97,45 @@ pub struct DescriptorScenarioInput<'a> {
 pub struct GrossCoveredScenarioInput<'a> {
     /// General descriptor-bound input with zero terminal obligations.
     pub scenario: DescriptorScenarioInput<'a>,
+}
+
+/// Borrowed descriptor-bound scenario-solvency snapshot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DescriptorSolvencyInput<'a> {
+    /// Immutable descriptor projection.
+    pub descriptor: ScenarioSolvencyDescriptor,
+    /// Canonical Claims Position projection.
+    pub position: ClaimsInventoryObservation<'a>,
+    /// Optimistic Claims Position revision bound by the request.
+    pub expected_position_revision: u64,
+    /// Present eligible collateral; realized fees and anticipated revenue are excluded.
+    pub present_capital: u64,
+    /// Exact terminal obligations from their canonical authenticated owner.
+    pub obligations: &'a [u64],
+}
+
+/// Assess one immutable Dealer state without planning a split or merge.
+///
+/// The caller-owned equity output remains byte-for-byte unchanged on every
+/// refusal.  This is the admission seam for LP capital changes whose Claims
+/// inventory does not otherwise move.
+pub fn assess_descriptor_solvency(
+    input: DescriptorSolvencyInput<'_>,
+    equity_by_scenario: &mut [i128],
+) -> ScenarioResult<ScenarioSolvencyReport> {
+    assess_scenario_solvency(
+        ScenarioSolvencySnapshot {
+            position: input.position,
+            expected: input
+                .descriptor
+                .expectation(input.expected_position_revision),
+            present_capital: input.present_capital,
+            obligations: input.obligations,
+            locked_capital_floor: input.descriptor.locked_capital_floor,
+        },
+        equity_by_scenario,
+    )
+    .map_err(ScenarioProfileError::Kernel)
 }
 
 /// Execute the sole descriptor-bound generalized scenario planner.
@@ -262,5 +303,59 @@ mod tests {
         );
         assert_eq!(post_inventory, [0xa5; 3]);
         assert_eq!(post_equity, [0x5a; 3]);
+    }
+
+    #[test]
+    fn descriptor_assessment_accepts_exact_pre_and_post_capital() {
+        let before_obligations = [3, 7, 4];
+        let after_obligations = [8, 12, 9];
+        let mut before_equity = [0; 3];
+        let before = assess_descriptor_solvency(
+            DescriptorSolvencyInput {
+                descriptor: descriptor(4),
+                position: position(&[1, 5, 2]),
+                expected_position_revision: 7,
+                present_capital: 10,
+                obligations: &before_obligations,
+            },
+            &mut before_equity,
+        )
+        .expect("incoming state");
+        let mut after_equity = [0; 3];
+        let after = assess_descriptor_solvency(
+            DescriptorSolvencyInput {
+                descriptor: descriptor(4),
+                position: position(&[1, 5, 2]),
+                expected_position_revision: 7,
+                present_capital: 15,
+                obligations: &after_obligations,
+            },
+            &mut after_equity,
+        )
+        .expect("LP principal and every obligation rise together");
+        assert_eq!(before.minimum_equity, after.minimum_equity);
+        assert_eq!(before_equity, after_equity);
+    }
+
+    #[test]
+    fn descriptor_assessment_refusal_does_not_touch_output() {
+        let mut output = [0x5a; 3];
+        let hostile = assess_descriptor_solvency(
+            DescriptorSolvencyInput {
+                descriptor: descriptor(9),
+                position: position(&[1, 1, 1]),
+                expected_position_revision: 7,
+                present_capital: 3,
+                obligations: &[0, 0, 0],
+            },
+            &mut output,
+        );
+        assert_eq!(
+            hostile,
+            Err(ScenarioProfileError::Kernel(
+                ScenarioError::CandidateBelowLockedFloor
+            ))
+        );
+        assert_eq!(output, [0x5a; 3]);
     }
 }

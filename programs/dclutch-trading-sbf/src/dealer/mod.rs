@@ -34,6 +34,12 @@ pub mod lifecycle;
 pub mod operator;
 /// Exact Claims/Custody child packets and receipt postconditions.
 pub mod physical;
+/// Scenario-solvent, custody-backed multi-LP capital under canonical Trading.
+pub mod v3_multi_lp;
+/// Trading-owned runtime-width terminal obligations for scenario-solvent Dealer V3.
+pub mod v3_obligation;
+/// Chain-derived unsigned requests for every Dealer V3 multi-LP action.
+pub mod v3_operator;
 
 /// Canonical Dealer capability-kind label.
 pub const DEALER_KIND_PREIMAGE_V2: &[u8] = b"dclutch/capability/dealer-v2";
