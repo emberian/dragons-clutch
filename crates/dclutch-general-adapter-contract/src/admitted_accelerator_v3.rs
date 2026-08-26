@@ -82,8 +82,6 @@ pub struct GeneralAdmittedSelectionViewV3<'a> {
     pub selection_before: &'a [u8],
     /// Authenticated interpreted policy; required only for Consider.
     pub policy: Option<SelectionPolicyV1>,
-    /// Exact incumbent verified candidate when the cursor is already live.
-    pub incumbent_verified: Option<&'a [u8]>,
     /// Exact submitted verified candidate; required only for Consider.
     pub submitted_verified: Option<&'a [u8]>,
 }
@@ -162,7 +160,6 @@ pub fn evaluate_general_admitted_selection_v3<'a>(
             consider_verified_candidate_v2(
                 policy,
                 view.selection_before,
-                view.incumbent_verified,
                 submitted,
                 bundle.request.expected_revision,
                 selection_scratch,
@@ -171,10 +168,7 @@ pub fn evaluate_general_admitted_selection_v3<'a>(
             .map_err(|_| GeneralAdmittedAcceleratorErrorV3::Settlement)?;
         }
         Action::Freeze => {
-            if view.policy.is_some()
-                || view.incumbent_verified.is_some()
-                || view.submitted_verified.is_some()
-            {
+            if view.policy.is_some() || view.submitted_verified.is_some() {
                 return Err(GeneralAdmittedAcceleratorErrorV3::Action);
             }
             freeze_selection_v2(

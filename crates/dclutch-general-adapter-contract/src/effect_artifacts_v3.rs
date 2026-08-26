@@ -233,8 +233,8 @@ pub const GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3: EffectInstructionV3 =
 /// Return `(fixed, repeated-item)` instruction counts for one action artifact.
 pub const fn general_effect_instruction_count_v3(action: Action) -> (usize, usize) {
     match action {
-        Action::Consider => (20, 0),
-        Action::Freeze => (14, 0),
+        Action::Consider => (22, 0),
+        Action::Freeze => (16, 0),
         Action::InitializeSettlement => (54, 1),
         Action::Collect | Action::Materialize | Action::Distribute => (48, 12),
         Action::Close => (92, 1),
@@ -704,6 +704,14 @@ fn append_general_state_patches(
             (
                 RuntimeSelectionLayoutV2::price_scale(),
                 scalar::SELECTION_PRICE_SCALE,
+            ),
+            (
+                RuntimeSelectionLayoutV2::best_filled_lots(),
+                scalar::SELECTION_BEST_FILLED_LOTS,
+            ),
+            (
+                RuntimeSelectionLayoutV2::best_quote_surplus(),
+                scalar::SELECTION_BEST_QUOTE_SURPLUS,
             ),
         ] {
             push_fixed(

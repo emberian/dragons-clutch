@@ -12,12 +12,15 @@ use sha2::{Digest, Sha256};
 use dclutch_general_codec::SelectionPolicyV1;
 
 use crate::{
-    runtime_verify::{RuntimeVerifyErrorV2, runtime_candidate_better_v2},
+    runtime_verify::{
+        RuntimeCandidateComparisonKeyV2, RuntimeVerifyErrorV2, runtime_candidate_key_better_v2,
+        runtime_verified_balance_v2,
+    },
     runtime_width::{VerifiedCandidateV2, verified_candidate_len},
 };
 
 /// Exact byte width of a successor General selection cursor.
-pub const RUNTIME_SELECTION_CURSOR_BYTES_V2: usize = 208;
+pub const RUNTIME_SELECTION_CURSOR_BYTES_V2: usize = 224;
 
 const MAGIC: [u8; 8] = *b"DCGSEL02";
 const VERSION: u16 = 2;
@@ -111,6 +114,16 @@ impl RuntimeSelectionLayoutV2 {
     pub const fn best_verified_digest() -> u32 {
         176
     }
+
+    /// Filled-lots component of the persisted best-candidate comparison key.
+    pub const fn best_filled_lots() -> u32 {
+        208
+    }
+
+    /// Quote-surplus component of the persisted best-candidate comparison key.
+    pub const fn best_quote_surplus() -> u32 {
+        216
+    }
 }
 
 /// Selection progress phase.
@@ -165,6 +178,10 @@ pub struct RuntimeSelectionHeaderV2 {
     pub best_candidate_id: [u8; 32],
     /// SHA-256 digest of the exact selected verified-candidate bytes.
     pub best_verified_digest: [u8; 32],
+    /// Filled-lots component of the selected candidate comparison key.
+    pub best_filled_lots: u64,
+    /// Quote-surplus component of the selected candidate comparison key.
+    pub best_quote_surplus: u64,
     /// Whether selection is still open or frozen.
     pub phase: RuntimeSelectionPhaseV2,
 }
@@ -198,6 +215,8 @@ impl<'a> RuntimeSelectionCursorV2<'a> {
             policy_id: read_array32(bytes, 112)?,
             best_candidate_id: read_array32(bytes, 144)?,
             best_verified_digest: read_array32(bytes, 176)?,
+            best_filled_lots: read_u64(bytes, 208)?,
+            best_quote_surplus: read_u64(bytes, 216)?,
             phase: RuntimeSelectionPhaseV2::decode(byte(bytes, 10)?)?,
         };
         validate_header(header)?;
@@ -244,12 +263,12 @@ pub type Result<T> = core::result::Result<T, RuntimeSelectionErrorV2>;
 /// Evaluate one verified submission into an exact selection candidate.
 ///
 /// `cursor_before` is either the exact all-zero vacant state or a canonical
-/// open cursor. Existing cursors require the exact incumbent certificate whose
-/// digest they persist. Scratch may change on refusal; output never does.
+/// open cursor. The cursor persists the complete interpreted comparison key,
+/// so a later submission never requires an optional incumbent account.
+/// Scratch may change on refusal; output never does.
 pub fn consider_verified_candidate_v2(
     policy: SelectionPolicyV1,
     cursor_before: &[u8],
-    incumbent_verified: Option<&[u8]>,
     submitted_verified: &[u8],
     expected_revision: u64,
     scratch: &mut [u8],
@@ -266,15 +285,37 @@ pub fn consider_verified_candidate_v2(
         return Err(RuntimeSelectionErrorV2::InvalidLength);
     }
     let submitted_digest = digest(submitted_verified);
+    let submitted_balance =
+        runtime_verified_balance_v2(submitted_verified).map_err(map_comparison)?;
+    let submitted_key = RuntimeCandidateComparisonKeyV2 {
+        filled_lots: submitted_header.filled_lots,
+        quote_surplus: submitted_balance.quote_surplus,
+        candidate_id: submitted_header.candidate_id,
+    };
     let vacant = cursor_before.iter().all(|value| *value == 0);
-    let (revision, submitted_count, selected_header, selected_digest) = if vacant {
-        if expected_revision != 0 || incumbent_verified.is_some() {
+    let mut next = if vacant {
+        if expected_revision != 0 {
             return Err(RuntimeSelectionErrorV2::RevisionMismatch);
         }
-        (0, 0, submitted_header, submitted_digest)
+        RuntimeSelectionHeaderV2 {
+            outcome_count: submitted_header.outcome_count,
+            revision: 0,
+            submitted_count: 0,
+            best_candidate_coordinate: submitted_header.candidate_coordinate,
+            best_verified_revision: submitted_header.revision,
+            price_scale: submitted_header.price_scale,
+            product_id: submitted_header.product_id,
+            batch_id: submitted_header.batch_id,
+            policy_id: policy.policy_id,
+            best_candidate_id: submitted_header.candidate_id,
+            best_verified_digest: submitted_digest,
+            best_filled_lots: submitted_key.filled_lots,
+            best_quote_surplus: submitted_key.quote_surplus,
+            phase: RuntimeSelectionPhaseV2::Open,
+        }
     } else {
         let cursor = RuntimeSelectionCursorV2::decode(cursor_before)?;
-        let header = cursor.header();
+        let mut header = cursor.header();
         if header.phase != RuntimeSelectionPhaseV2::Open {
             return Err(RuntimeSelectionErrorV2::InvalidPhase);
         }
@@ -289,57 +330,35 @@ pub fn consider_verified_candidate_v2(
         {
             return Err(RuntimeSelectionErrorV2::Substitution);
         }
-        let incumbent_bytes = incumbent_verified.ok_or(RuntimeSelectionErrorV2::Substitution)?;
-        let incumbent = VerifiedCandidateV2::decode(incumbent_bytes)
-            .map_err(|_| RuntimeSelectionErrorV2::Substitution)?;
-        let incumbent_header = incumbent.header();
-        if digest(incumbent_bytes) != header.best_verified_digest
-            || incumbent_header.candidate_id != header.best_candidate_id
-            || incumbent_header.candidate_coordinate != header.best_candidate_coordinate
-            || incumbent_header.revision != header.best_verified_revision
-        {
-            return Err(RuntimeSelectionErrorV2::Substitution);
-        }
         if submitted_digest == header.best_verified_digest {
             return Err(RuntimeSelectionErrorV2::DuplicateCandidate);
         }
-        let better = runtime_candidate_better_v2(&policy, submitted_verified, incumbent_bytes)
-            .map_err(map_comparison)?;
-        let (selected, selected_digest) = if better {
-            (submitted_header, submitted_digest)
-        } else {
-            (incumbent_header, header.best_verified_digest)
+        let incumbent_key = RuntimeCandidateComparisonKeyV2 {
+            filled_lots: header.best_filled_lots,
+            quote_surplus: header.best_quote_surplus,
+            candidate_id: header.best_candidate_id,
         };
-        (
-            header.revision,
-            header.submitted_count,
-            selected,
-            selected_digest,
-        )
+        if runtime_candidate_key_better_v2(&policy, submitted_key, incumbent_key)
+            .map_err(map_comparison)?
+        {
+            header.best_candidate_coordinate = submitted_header.candidate_coordinate;
+            header.best_verified_revision = submitted_header.revision;
+            header.best_candidate_id = submitted_header.candidate_id;
+            header.best_verified_digest = submitted_digest;
+            header.best_filled_lots = submitted_key.filled_lots;
+            header.best_quote_surplus = submitted_key.quote_surplus;
+        }
+        header
     };
-    let next_revision = revision
+    next.revision = next
+        .revision
         .checked_add(1)
         .ok_or(RuntimeSelectionErrorV2::ArithmeticOverflow)?;
-    let next_submitted = submitted_count
+    next.submitted_count = next
+        .submitted_count
         .checked_add(1)
         .ok_or(RuntimeSelectionErrorV2::ArithmeticOverflow)?;
-    encode_into(
-        RuntimeSelectionHeaderV2 {
-            outcome_count: selected_header.outcome_count,
-            revision: next_revision,
-            submitted_count: next_submitted,
-            best_candidate_coordinate: selected_header.candidate_coordinate,
-            best_verified_revision: selected_header.revision,
-            price_scale: selected_header.price_scale,
-            product_id: selected_header.product_id,
-            batch_id: selected_header.batch_id,
-            policy_id: policy.policy_id,
-            best_candidate_id: selected_header.candidate_id,
-            best_verified_digest: selected_digest,
-            phase: RuntimeSelectionPhaseV2::Open,
-        },
-        scratch,
-    )?;
+    encode_into(next, scratch)?;
     output.copy_from_slice(scratch);
     Ok(())
 }
@@ -391,7 +410,9 @@ fn encode_into(header: RuntimeSelectionHeaderV2, output: &mut [u8]) -> Result<()
     put(output, 80, &header.batch_id)?;
     put(output, 112, &header.policy_id)?;
     put(output, 144, &header.best_candidate_id)?;
-    put(output, 176, &header.best_verified_digest)
+    put(output, 176, &header.best_verified_digest)?;
+    put(output, 208, &header.best_filled_lots.to_le_bytes())?;
+    put(output, 216, &header.best_quote_surplus.to_le_bytes())
 }
 
 fn validate_header(header: RuntimeSelectionHeaderV2) -> Result<()> {
@@ -553,7 +574,6 @@ mod tests {
             consider_verified_candidate_v2(
                 policy(),
                 &vacant(),
-                None,
                 &first,
                 0,
                 &mut scratch,
@@ -562,11 +582,12 @@ mod tests {
             .expect("first submission");
             let first_cursor = RuntimeSelectionCursorV2::decode(&selection).expect("selection");
             assert_eq!(first_cursor.header().best_candidate_id, [8; 32]);
+            assert_eq!(first_cursor.header().best_filled_lots, 2);
+            assert_eq!(first_cursor.header().best_quote_surplus, 2);
             let before = selection;
             consider_verified_candidate_v2(
                 policy(),
                 &before,
-                Some(&first),
                 &better,
                 1,
                 &mut scratch,
@@ -575,6 +596,8 @@ mod tests {
             .expect("better submission");
             let cursor = RuntimeSelectionCursorV2::decode(&selection).expect("selection");
             assert_eq!(cursor.header().best_candidate_id, [7; 32]);
+            assert_eq!(cursor.header().best_filled_lots, 3);
+            assert_eq!(cursor.header().best_quote_surplus, 3);
             assert_eq!(cursor.header().submitted_count, 2);
             assert_eq!(cursor.header().revision, 2);
         }
@@ -586,21 +609,12 @@ mod tests {
         let inferior = verified(1, 4, 2, 4);
         let mut scratch = vacant();
         let mut selection = vacant();
-        consider_verified_candidate_v2(
-            policy(),
-            &vacant(),
-            None,
-            &best,
-            0,
-            &mut scratch,
-            &mut selection,
-        )
-        .expect("first");
+        consider_verified_candidate_v2(policy(), &vacant(), &best, 0, &mut scratch, &mut selection)
+            .expect("first");
         let before = selection;
         consider_verified_candidate_v2(
             policy(),
             &before,
-            Some(&best),
             &inferior,
             1,
             &mut scratch,
@@ -611,6 +625,8 @@ mod tests {
             .expect("selection")
             .header();
         assert_eq!(header.best_candidate_id, [5; 32]);
+        assert_eq!(header.best_filled_lots, 5);
+        assert_eq!(header.best_quote_surplus, 5);
         assert_eq!(header.submitted_count, 2);
     }
 
@@ -619,16 +635,8 @@ mod tests {
         let candidate = verified(1, 7, 1, 3);
         let mut scratch = vacant();
         let mut open = vacant();
-        consider_verified_candidate_v2(
-            policy(),
-            &vacant(),
-            None,
-            &candidate,
-            0,
-            &mut scratch,
-            &mut open,
-        )
-        .expect("open");
+        consider_verified_candidate_v2(policy(), &vacant(), &candidate, 0, &mut scratch, &mut open)
+            .expect("open");
         let mut frozen = [0x55; RUNTIME_SELECTION_CURSOR_BYTES_V2];
         let before = frozen;
         assert_eq!(
@@ -657,7 +665,6 @@ mod tests {
         consider_verified_candidate_v2(
             policy(),
             &vacant(),
-            None,
             &first,
             0,
             &mut scratch,
@@ -668,27 +675,18 @@ mod tests {
         let output_before = [0x66; RUNTIME_SELECTION_CURSOR_BYTES_V2];
         let mut output = output_before;
         assert_eq!(
-            consider_verified_candidate_v2(
-                policy(),
-                &open,
-                Some(&first),
-                &first,
-                1,
-                &mut scratch,
-                &mut output,
-            ),
+            consider_verified_candidate_v2(policy(), &open, &first, 1, &mut scratch, &mut output,),
             Err(RuntimeSelectionErrorV2::DuplicateCandidate)
         );
         assert_eq!(output, output_before);
 
-        let mut substituted = first.clone();
-        *substituted.last_mut().expect("tail") ^= 1;
+        let mut substituted = second.clone();
+        substituted[64] ^= 1;
         assert_eq!(
             consider_verified_candidate_v2(
                 policy(),
                 &open,
-                Some(&substituted),
-                &second,
+                &substituted,
                 1,
                 &mut scratch,
                 &mut output,
@@ -713,7 +711,6 @@ mod tests {
         consider_verified_candidate_v2(
             policy(),
             &vacant(),
-            None,
             &candidate,
             0,
             &mut scratch,
@@ -722,6 +719,8 @@ mod tests {
         .expect("selection");
         assert_eq!(RuntimeSelectionLayoutV2::magic(), 0);
         assert_eq!(RuntimeSelectionLayoutV2::version(), 8);
+        assert_eq!(RuntimeSelectionLayoutV2::best_filled_lots(), 208);
+        assert_eq!(RuntimeSelectionLayoutV2::best_quote_surplus(), 216);
         assert_eq!(
             selection[RuntimeSelectionLayoutV2::phase() as usize],
             PHASE_OPEN
@@ -741,6 +740,22 @@ mod tests {
             )
             .expect("identity"),
             [7; 32]
+        );
+        assert_eq!(
+            read_u64(
+                &selection,
+                RuntimeSelectionLayoutV2::best_filled_lots() as usize,
+            )
+            .expect("filled lots"),
+            3
+        );
+        assert_eq!(
+            read_u64(
+                &selection,
+                RuntimeSelectionLayoutV2::best_quote_surplus() as usize,
+            )
+            .expect("quote surplus"),
+            3
         );
         RuntimeSelectionCursorV2::decode(&selection).expect("canonical decoder");
     }

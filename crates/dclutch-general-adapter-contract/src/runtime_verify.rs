@@ -421,6 +421,21 @@ pub struct RuntimeCandidateBalanceV2 {
     pub quote_surplus: u64,
 }
 
+/// Complete persisted key for comparing best valid submitted candidates.
+///
+/// These are exactly the three facts interpreted by [`SelectionPolicyV1`].
+/// Persisting this key lets later submissions be compared without requiring an
+/// optional incumbent-certificate account in the authenticated runtime frame.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeCandidateComparisonKeyV2 {
+    /// Candidate-wide filled-lots objective.
+    pub filled_lots: u64,
+    /// Exact quote remainder after materialization and credits.
+    pub quote_surplus: u64,
+    /// Immutable Candidate content identity.
+    pub candidate_id: [u8; 32],
+}
+
 /// Return the exact `288 + 40N` runtime verifier cursor width.
 pub fn runtime_verifier_len_v2(outcome_count: u32) -> RuntimeVerifyResultV2<usize> {
     if outcome_count == 0 {
@@ -708,29 +723,47 @@ pub fn runtime_candidate_better_v2(
     }
     let left_balance = runtime_verified_balance_v2(left_bytes)?;
     let right_balance = runtime_verified_balance_v2(right_bytes)?;
+    runtime_candidate_key_better_v2(
+        policy,
+        RuntimeCandidateComparisonKeyV2 {
+            filled_lots: left_header.filled_lots,
+            quote_surplus: left_balance.quote_surplus,
+            candidate_id: left_header.candidate_id,
+        },
+        RuntimeCandidateComparisonKeyV2 {
+            filled_lots: right_header.filled_lots,
+            quote_surplus: right_balance.quote_surplus,
+            candidate_id: right_header.candidate_id,
+        },
+    )
+}
+
+/// Compare two complete candidate keys under one immutable interpreted policy.
+///
+/// The caller must already have established that both candidates inhabit the
+/// same Product, Batch, outcome-width, and price-scale comparison domain. This
+/// helper is the sole interpreter for the persisted comparison key.
+pub fn runtime_candidate_key_better_v2(
+    policy: &SelectionPolicyV1,
+    left: RuntimeCandidateComparisonKeyV2,
+    right: RuntimeCandidateComparisonKeyV2,
+) -> RuntimeVerifyResultV2<bool> {
     for criterion in policy
         .criteria
         .iter()
         .take(usize::from(policy.criterion_count))
     {
         match criterion {
-            SelectionCriterion::MaximizeFilledLots
-                if left_header.filled_lots != right_header.filled_lots =>
-            {
-                return Ok(left_header.filled_lots > right_header.filled_lots);
+            SelectionCriterion::MaximizeFilledLots if left.filled_lots != right.filled_lots => {
+                return Ok(left.filled_lots > right.filled_lots);
             }
             SelectionCriterion::MinimizeQuoteSurplus
-                if left_balance.quote_surplus != right_balance.quote_surplus =>
+                if left.quote_surplus != right.quote_surplus =>
             {
-                return Ok(left_balance.quote_surplus < right_balance.quote_surplus);
+                return Ok(left.quote_surplus < right.quote_surplus);
             }
-            SelectionCriterion::MinimizeCandidateId
-                if left_header.candidate_id != right_header.candidate_id =>
-            {
-                return Ok(le_numeric_id(
-                    &left_header.candidate_id,
-                    &right_header.candidate_id,
-                ));
+            SelectionCriterion::MinimizeCandidateId if left.candidate_id != right.candidate_id => {
+                return Ok(le_numeric_id(&left.candidate_id, &right.candidate_id));
             }
             _ => {}
         }

@@ -23,7 +23,7 @@ use crate::{
 };
 
 /// Exact common scalar-register count in the General Hot38 ABI.
-pub const GENERAL_HOT_COMMON_SCALARS_V3: u32 = 84;
+pub const GENERAL_HOT_COMMON_SCALARS_V3: u32 = 86;
 /// Outcome index, quantity, three claim magnitudes, and cursor inventory.
 pub const GENERAL_HOT_ITEM_SCALAR_STRIDE_V3: u32 = 6;
 /// Exact common identity-register count in the General Hot38 ABI.
@@ -201,6 +201,10 @@ pub mod scalar {
     pub const LOCAL_STATE_VERSION: u32 = 82;
     /// General local-state selection/settlement kind.
     pub const LOCAL_STATE_KIND: u32 = 83;
+    /// Filled-lots component of the best submitted candidate comparison key.
+    pub const SELECTION_BEST_FILLED_LOTS: u32 = 84;
+    /// Quote-surplus component of the best submitted candidate comparison key.
+    pub const SELECTION_BEST_QUOTE_SURPLUS: u32 = 85;
 }
 
 /// Scalar coordinates within each Product-outcome item bank.
@@ -477,6 +481,11 @@ pub fn project_general_selection_candidate_v3<'a>(
             header.best_verified_revision,
         ),
         (scalar::SELECTION_PRICE_SCALE, header.price_scale),
+        (scalar::SELECTION_BEST_FILLED_LOTS, header.best_filled_lots),
+        (
+            scalar::SELECTION_BEST_QUOTE_SURPLUS,
+            header.best_quote_surplus,
+        ),
         (
             scalar::SELECTION_MAGIC,
             RuntimeSelectionLayoutV2::magic_u64(),
