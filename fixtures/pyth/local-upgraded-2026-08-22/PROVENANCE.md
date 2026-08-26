@@ -78,6 +78,14 @@ recreating the material calls above against the pinned upstream checkout and
 will normally select another valid 13-of-19 subset. This is a named fixture
 provenance limitation, not a claim of source-level reproducibility.
 
+`guardian-set-0.account.hex` is the lowercase hexadecimal encoding of the
+exact 404-byte GuardianSet account observed after the captured router ELF
+executed `LegacyInitialize` with `router-initialize.data`. It is reproducible
+offline by the ProgramTest fixture from the pinned router ELF and instruction:
+little-endian index zero and count 19, nineteen 20-byte keys, exact creation
+and expiration timestamps, and the canonical eight-byte zero allocation tail.
+The digest below is over the 404 decoded bytes, not the textual hex envelope.
+
 The two `.so` files are the exact ELF tails of those ProgramData accounts.
 The campaign reconstructs the complete Upgradeable Loader ProgramData bodies
 with their decoded slots and common upgrade authority, and checks complete-body
@@ -104,6 +112,7 @@ SHA-256 pins:
 | router Program | `1ee590ae23d5ecbf775aba910f06a993dee8f77bfd7028790dbd349651c8034b` |
 | router ProgramData | `f26f4b53b0f980455886116f500fa74ba475e51b1acb7f486b18afa9d73d948f` |
 | `router-initialize.data` | `3667940a4428a8f2411a0ff11157ecc4ba1076c3c61273a108da6405c51e0b0b` |
+| decoded `guardian-set-0.account.hex` | `418389d26a00e4726d96ddb92b02ad0b32b3965cdc0f9bc57275e2ab37745903` |
 | `receiver-initialize.data` | `d9c80906af92f99a0c8441f4463186056b1c12cb990999acfa198a46ec62729f` |
 | `receiver-config.account` | `05038cf707afceac3df1aae735b096344ad639506b00f1db0ac1c084d6b645aa` |
 | `signed.vaa` | `ed8b973f36a932b9ec88659953859c8096f14e5aebd085bbe32b22c41a142c0d` |

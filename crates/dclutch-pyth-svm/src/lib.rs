@@ -40,8 +40,8 @@ pub use release::{
 };
 pub use router_accounts::{
     ENCODED_VAA_DISCRIMINATOR_V1, ENCODED_VAA_HEADER_BYTES_V1, ENCODED_VAA_VERIFIED_STATUS_V1,
-    GUARDIAN_ADDRESS_BYTES_V1, GUARDIAN_SET_DISCRIMINATOR_V1, GUARDIAN_SET_HEADER_BYTES_V1,
-    GuardianSetV1, RouterAccountErrorV1, VerifiedEncodedVaaV1,
+    GUARDIAN_ADDRESS_BYTES_V1, GUARDIAN_SET_HEADER_BYTES_V1, GuardianSetV1, RouterAccountErrorV1,
+    VerifiedEncodedVaaV1,
 };
 #[cfg(feature = "synthetic-local-fixture")]
 pub use synthetic_fixture::{

@@ -2,16 +2,15 @@
 
 /// Anchor discriminator for the router `EncodedVaa` account.
 pub const ENCODED_VAA_DISCRIMINATOR_V1: [u8; 8] = [0xe2, 0x65, 0xa3, 0x04, 0x85, 0xa0, 0x54, 0xf5];
-/// Anchor discriminator for the router `GuardianSet` account.
-pub const GUARDIAN_SET_DISCRIMINATOR_V1: [u8; 8] = [0x78, 0x4d, 0x4a, 0x62, 0x22, 0x53, 0x60, 0x7d];
 /// Router processing status for a cryptographically verified VAA.
 pub const ENCODED_VAA_VERIFIED_STATUS_V1: u8 = 2;
 /// Fixed Anchor/Borsh header before the signed VAA vector payload.
 pub const ENCODED_VAA_HEADER_BYTES_V1: usize = 46;
-/// Serialized GuardianSet header through its vector count.
-pub const GUARDIAN_SET_HEADER_BYTES_V1: usize = 16;
+/// Serialized legacy GuardianSet header through its vector count.
+pub const GUARDIAN_SET_HEADER_BYTES_V1: usize = 8;
 /// One Ethereum guardian address width.
 pub const GUARDIAN_ADDRESS_BYTES_V1: usize = 20;
+const GUARDIAN_SET_ALLOCATION_TAIL_BYTES_V1: usize = 8;
 
 /// Stable hostile router-account refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -120,16 +119,18 @@ pub struct GuardianSetV1<'a> {
 }
 
 impl<'a> GuardianSetV1<'a> {
-    /// Parse the pinned Anchor/Borsh GuardianSet layout.
+    /// Parse the pinned legacy/Borsh GuardianSet layout.
     pub fn parse(bytes: &'a [u8]) -> Result<Self, RouterAccountErrorV1> {
-        if bytes.len() < GUARDIAN_SET_HEADER_BYTES_V1 + GUARDIAN_ADDRESS_BYTES_V1 + 8 {
+        if bytes.len()
+            < GUARDIAN_SET_HEADER_BYTES_V1
+                + GUARDIAN_ADDRESS_BYTES_V1
+                + 8
+                + GUARDIAN_SET_ALLOCATION_TAIL_BYTES_V1
+        {
             return Err(RouterAccountErrorV1::InvalidLength);
         }
-        if array::<8>(bytes, 0)? != GUARDIAN_SET_DISCRIMINATOR_V1 {
-            return Err(RouterAccountErrorV1::InvalidDiscriminator);
-        }
-        let index = u32::from_le_bytes(array(bytes, 8)?);
-        let count = u32::from_le_bytes(array(bytes, 12)?);
+        let index = u32::from_le_bytes(array(bytes, 0)?);
+        let count = u32::from_le_bytes(array(bytes, 4)?);
         let count =
             usize::try_from(count).map_err(|_| RouterAccountErrorV1::InvalidGuardianCount)?;
         if count == 0 || count > usize::from(u8::MAX) {
@@ -142,6 +143,12 @@ impl<'a> GuardianSetV1<'a> {
         let times_end = keys_end
             .checked_add(8)
             .ok_or(RouterAccountErrorV1::InvalidLength)?;
+        let account_end = times_end
+            .checked_add(GUARDIAN_SET_ALLOCATION_TAIL_BYTES_V1)
+            .ok_or(RouterAccountErrorV1::InvalidLength)?;
+        if bytes.len() != account_end {
+            return Err(RouterAccountErrorV1::InvalidLength);
+        }
         let keys = bytes
             .get(GUARDIAN_SET_HEADER_BYTES_V1..keys_end)
             .ok_or(RouterAccountErrorV1::InvalidLength)?;
@@ -264,15 +271,47 @@ mod tests {
         signed
     }
 
+    fn guardian_account(index: u32, count: u32) -> std::vec::Vec<u8> {
+        let key_bytes = usize::try_from(count)
+            .expect("bounded guardian count")
+            .checked_mul(GUARDIAN_ADDRESS_BYTES_V1)
+            .expect("bounded guardian bytes");
+        let mut account = std::vec![
+            0_u8;
+            GUARDIAN_SET_HEADER_BYTES_V1
+                + key_bytes
+                + 8
+                + GUARDIAN_SET_ALLOCATION_TAIL_BYTES_V1
+        ];
+        account
+            .get_mut(..4)
+            .expect("guardian index region")
+            .copy_from_slice(&index.to_le_bytes());
+        account
+            .get_mut(4..8)
+            .expect("guardian count region")
+            .copy_from_slice(&count.to_le_bytes());
+        account
+    }
+
+    fn decode_hex(hex: &str) -> std::vec::Vec<u8> {
+        let value = hex.trim().as_bytes();
+        assert_eq!(value.len() % 2, 0, "hex fixture has complete bytes");
+        value
+            .chunks_exact(2)
+            .map(|pair| {
+                let pair = core::str::from_utf8(pair).expect("ASCII hex fixture");
+                u8::from_str_radix(pair, 16).expect("lowercase hex fixture")
+            })
+            .collect()
+    }
+
     #[test]
     fn verified_vaa_and_guardian_set_join_exactly() {
         let encoded = encoded_account([7; 32], &signed_vaa(9, 3));
         let vaa = VerifiedEncodedVaaV1::parse(&encoded).expect("verified VAA");
 
-        let mut guardians = [0_u8; 16 + 20 * 5 + 8];
-        guardians[..8].copy_from_slice(&GUARDIAN_SET_DISCRIMINATOR_V1);
-        guardians[8..12].copy_from_slice(&9_u32.to_le_bytes());
-        guardians[12..16].copy_from_slice(&5_u32.to_le_bytes());
+        let guardians = guardian_account(9, 5);
         let set = GuardianSetV1::parse(&guardians).expect("guardian set");
         assert_eq!(set.authenticate(vaa, 5, 3), Ok(()));
         assert_eq!(
@@ -290,10 +329,7 @@ mod tests {
             Err(RouterAccountErrorV1::NotVerified)
         );
         *encoded.get_mut(8).expect("status byte") = 2;
-        let mut guardians = [0_u8; 16 + 20 + 8];
-        guardians[..8].copy_from_slice(&GUARDIAN_SET_DISCRIMINATOR_V1);
-        guardians[8..12].copy_from_slice(&1_u32.to_le_bytes());
-        guardians[12..16].copy_from_slice(&1_u32.to_le_bytes());
+        let guardians = guardian_account(1, 1);
         let vaa = VerifiedEncodedVaaV1::parse(&encoded).expect("verified VAA");
         assert_eq!(
             GuardianSetV1::parse(&guardians)
@@ -377,5 +413,67 @@ mod tests {
         assert_eq!(view.signature_count(), 13);
         assert_eq!(view.write_authority(), [7; 32]);
         assert_eq!(view.signed_vaa(), SIGNED);
+    }
+
+    #[test]
+    fn captured_real_guardian_set_has_the_legacy_layout() {
+        const CAPTURED: &str = include_str!(
+            "../../../fixtures/pyth/local-upgraded-2026-08-22/guardian-set-0.account.hex"
+        );
+        let account = decode_hex(CAPTURED);
+        assert_eq!(account.len(), 404);
+        let view = GuardianSetV1::parse(&account).expect("captured GuardianSet");
+        assert_eq!(view.index(), 0);
+        assert_eq!(view.guardian_count(), 19);
+        assert_eq!(view.creation_time(), 1_787_748_953);
+        assert_eq!(view.expiration_time(), 0);
+    }
+
+    #[test]
+    fn guardian_count_length_timestamp_and_tail_substitutions_refuse() {
+        let canonical = guardian_account(0, 3);
+
+        let mut zero_count = canonical.clone();
+        zero_count
+            .get_mut(4..8)
+            .expect("guardian count region")
+            .copy_from_slice(&0_u32.to_le_bytes());
+        assert_eq!(
+            GuardianSetV1::parse(&zero_count),
+            Err(RouterAccountErrorV1::InvalidGuardianCount)
+        );
+
+        let mut overclaimed = canonical.clone();
+        overclaimed
+            .get_mut(4..8)
+            .expect("guardian count region")
+            .copy_from_slice(&4_u32.to_le_bytes());
+        assert_eq!(
+            GuardianSetV1::parse(&overclaimed),
+            Err(RouterAccountErrorV1::InvalidLength)
+        );
+
+        let mut truncated = canonical.clone();
+        truncated.pop();
+        assert_eq!(
+            GuardianSetV1::parse(&truncated),
+            Err(RouterAccountErrorV1::InvalidLength)
+        );
+
+        let times = GUARDIAN_SET_HEADER_BYTES_V1 + 3 * GUARDIAN_ADDRESS_BYTES_V1;
+        let mut shifted_timestamp = canonical.clone();
+        shifted_timestamp
+            .get_mut(times..times + 4)
+            .expect("creation timestamp")
+            .copy_from_slice(&7_u32.to_le_bytes());
+        let shifted = GuardianSetV1::parse(&shifted_timestamp).expect("valid shifted timestamp");
+        assert_eq!(shifted.creation_time(), 7);
+
+        let mut noncanonical_tail = canonical;
+        *noncanonical_tail.last_mut().expect("allocation tail") = 1;
+        assert_eq!(
+            GuardianSetV1::parse(&noncanonical_tail),
+            Err(RouterAccountErrorV1::NonCanonicalTail)
+        );
     }
 }
