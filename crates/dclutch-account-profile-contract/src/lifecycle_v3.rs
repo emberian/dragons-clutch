@@ -216,6 +216,60 @@ impl SelectedLifecycleV3<'_> {
         self.plan.operation()
     }
 
+    /// Whether this plan runs once or once for every authenticated runtime item.
+    pub fn invocation_scope(self) -> Result<CoordinateScopeV3> {
+        Ok(self.policy.recipe(self.plan.recipe)?.account.scope)
+    }
+
+    /// Exact number of mandatory invocation candidates for this plan.
+    ///
+    /// Fixed plans run once. Item plans run exactly `tail_count` times; a
+    /// guard may then disable an individual invocation.
+    pub fn invocation_count(self, tail_count: u32) -> Result<u32> {
+        match self.invocation_scope()? {
+            CoordinateScopeV3::Fixed => Ok(1),
+            CoordinateScopeV3::Item => Ok(tail_count),
+        }
+    }
+
+    /// Convert one canonical invocation ordinal into its optional item index.
+    pub fn invocation_item(self, tail_count: u32, ordinal: u32) -> Result<Option<u32>> {
+        match self.invocation_scope()? {
+            CoordinateScopeV3::Fixed if ordinal == 0 => Ok(None),
+            CoordinateScopeV3::Item if ordinal < tail_count => Ok(Some(ordinal)),
+            _ => Err(Error::InvalidCoordinate),
+        }
+    }
+
+    /// Project the exact expanded AccountProfile indices used by one invocation.
+    pub fn project_account_indices(
+        self,
+        profile: AccountProfileV2<'_>,
+        tail_count: u32,
+        item_index: Option<u32>,
+    ) -> Result<LifecycleAccountIndicesV3> {
+        self.policy.validate_account_profile(profile)?;
+        let recipe = self.policy.recipe(self.plan.recipe)?;
+        validate_item(recipe.account.scope, tail_count, item_index)?;
+        Ok(LifecycleAccountIndicesV3 {
+            state: expanded_account_index(profile, tail_count, item_index, recipe.account)?,
+            payer: self
+                .plan
+                .payer
+                .map(|coordinate| {
+                    expanded_account_index(profile, tail_count, item_index, coordinate)
+                })
+                .transpose()?,
+            rent_credit: self
+                .plan
+                .rent_credit
+                .map(|coordinate| {
+                    expanded_account_index(profile, tail_count, item_index, coordinate)
+                })
+                .transpose()?,
+        })
+    }
+
     /// Exact seed count for this selected derivation recipe.
     pub fn seed_count(self) -> Result<u8> {
         Ok(self.policy.recipe(self.plan.recipe)?.seed_count)
@@ -259,6 +313,31 @@ impl SelectedLifecycleV3<'_> {
                 profile, tail_count, item_index, registers, source,
             )? == expected),
         }
+    }
+}
+
+/// Expanded physical account indices for one selected lifecycle invocation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LifecycleAccountIndicesV3 {
+    state: usize,
+    payer: Option<usize>,
+    rent_credit: Option<usize>,
+}
+
+impl LifecycleAccountIndicesV3 {
+    /// Exact Trading state/vacancy account index.
+    pub const fn state(self) -> usize {
+        self.state
+    }
+
+    /// Exact payer index for Create; absent for Authenticate/Close.
+    pub const fn payer(self) -> Option<usize> {
+        self.payer
+    }
+
+    /// Exact permanent RentCredit index for Create/Close.
+    pub const fn rent_credit(self) -> Option<usize> {
+        self.rent_credit
     }
 }
 
@@ -401,20 +480,26 @@ impl<'a> StateLifecyclePolicyV3<'a> {
         let mut plan_index = 0_u16;
         while plan_index < self.plans {
             let plan = self.plan(plan_index)?;
+            let recipe = self.recipe(plan.recipe)?;
             if let Some(payer) = plan.payer {
                 validate_account_coordinate(profile, payer)?;
+                validate_invocation_reference(recipe.account.scope, payer.scope)?;
             }
             if let Some(credit) = plan.rent_credit {
                 validate_account_coordinate(profile, credit)?;
+                validate_invocation_reference(recipe.account.scope, credit.scope)?;
             }
             if let Some(principal) = plan.principal {
                 validate_scalar_source(profile, principal)?;
+                validate_invocation_source(recipe.account.scope, principal)?;
             }
             if let Some(beneficiary) = plan.beneficiary {
                 validate_identity_source(profile, beneficiary)?;
+                validate_invocation_source(recipe.account.scope, beneficiary)?;
             }
             if let PlanGuardV3::ScalarEq { source, .. } = plan.guard {
                 validate_scalar_source(profile, source)?;
+                validate_invocation_source(recipe.account.scope, source)?;
             }
             plan_index = plan_index.checked_add(1).ok_or(Error::Arithmetic)?;
         }
@@ -1383,6 +1468,28 @@ fn validate_account_coordinate(
     }
 }
 
+fn validate_invocation_reference(
+    invocation: CoordinateScopeV3,
+    reference: CoordinateScopeV3,
+) -> Result<()> {
+    if reference == CoordinateScopeV3::Fixed || invocation == CoordinateScopeV3::Item {
+        Ok(())
+    } else {
+        Err(Error::ProfileMismatch)
+    }
+}
+
+fn validate_invocation_source(
+    invocation: CoordinateScopeV3,
+    source: RegisterSourceV3,
+) -> Result<()> {
+    if !source.item || invocation == CoordinateScopeV3::Item {
+        Ok(())
+    } else {
+        Err(Error::ProfileMismatch)
+    }
+}
+
 fn require_permissions(
     profile: AccountProfileV2<'_>,
     coordinate: AccountCoordinateV3,
@@ -1889,6 +1996,18 @@ mod tests {
         };
 
         let maker = policy.action_plan(2, 0).expect("maker create");
+        assert_eq!(maker.invocation_scope(), Ok(CoordinateScopeV3::Fixed));
+        assert_eq!(maker.invocation_count(3), Ok(1));
+        assert_eq!(maker.invocation_item(3, 0), Ok(None));
+        assert_eq!(maker.invocation_item(3, 1), Err(Error::InvalidCoordinate));
+        assert_eq!(
+            maker.project_account_indices(profile, 3, None),
+            Ok(LifecycleAccountIndicesV3 {
+                state: 1,
+                payer: Some(2),
+                rent_credit: Some(3),
+            })
+        );
         assert_eq!(maker.seed_count(), Ok(5));
         assert_eq!(
             maker
@@ -1906,6 +2025,17 @@ mod tests {
         );
 
         let record = policy.action_plan(3, 0).expect("record create");
+        assert_eq!(record.invocation_scope(), Ok(CoordinateScopeV3::Item));
+        assert_eq!(record.invocation_count(3), Ok(3));
+        assert_eq!(record.invocation_item(3, 2), Ok(Some(2)));
+        assert_eq!(
+            record.project_account_indices(profile, 3, Some(2)),
+            Ok(LifecycleAccountIndicesV3 {
+                state: 6,
+                payer: Some(2),
+                rent_credit: Some(3),
+            })
+        );
         assert_eq!(record.seed_count(), Ok(7));
         assert_eq!(
             record
