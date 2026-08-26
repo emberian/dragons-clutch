@@ -5,7 +5,10 @@ use dclutch_request_profile_contract::v2::{
     seed_authenticated_signers_atomic,
 };
 use solana_instructions_sysvar::{load_current_index_checked, load_instruction_at_checked};
-use solana_program::{account_info::AccountInfo, program_error::ProgramError, pubkey::Pubkey};
+use solana_program::{
+    account_info::AccountInfo, instruction::Instruction, program_error::ProgramError,
+    pubkey::Pubkey,
+};
 use solana_sdk_ids::{ed25519_program, sysvar};
 
 use crate::TradingSbfError;
@@ -22,17 +25,7 @@ pub fn authenticate_current_top_level_instruction(
     current_instruction_data: &[u8],
     instructions: &AccountInfo<'_>,
 ) -> Result<u16, ProgramError> {
-    if instructions.key != &sysvar::instructions::ID
-        || instructions.is_signer
-        || instructions.is_writable
-        || instructions.executable
-    {
-        return Err(TradingSbfError::NativeSignature.into());
-    }
-    let current =
-        load_current_index_checked(instructions).map_err(|_| TradingSbfError::NativeSignature)?;
-    let observed = load_instruction_at_checked(usize::from(current), instructions)
-        .map_err(|_| TradingSbfError::NativeSignature)?;
+    let (current, observed) = load_current_top_level_instruction(instructions)?;
     if observed.program_id != *program_id
         || observed.data.as_slice() != current_instruction_data
         || observed.accounts.len() != current_accounts.len()
@@ -48,6 +41,25 @@ pub fn authenticate_current_top_level_instruction(
         }
     }
     Ok(current)
+}
+
+/// Load the exact current top-level instruction after authenticating the
+/// canonical Instructions sysvar account shape.
+pub(crate) fn load_current_top_level_instruction(
+    instructions: &AccountInfo<'_>,
+) -> Result<(u16, Instruction), ProgramError> {
+    if instructions.key != &sysvar::instructions::ID
+        || instructions.is_signer
+        || instructions.is_writable
+        || instructions.executable
+    {
+        return Err(TradingSbfError::NativeSignature.into());
+    }
+    let current =
+        load_current_index_checked(instructions).map_err(|_| TradingSbfError::NativeSignature)?;
+    let observed = load_instruction_at_checked(usize::from(current), instructions)
+        .map_err(|_| TradingSbfError::NativeSignature)?;
+    Ok((current, observed))
 }
 
 /// Authenticate one exact top-level Trading instruction and its immediately
@@ -71,6 +83,31 @@ pub fn authenticate_and_seed_native_signatures(
         current_instruction_data,
         instructions,
     )?;
+    seed_native_signatures_at_authenticated_instruction(
+        current,
+        current_instruction_data,
+        instructions,
+        profile,
+        tail_count,
+        registers,
+    )
+}
+
+/// Seed native-signature identities after the enclosing adapter has already
+/// authenticated the exact current top-level invocation.
+///
+/// Registry continuation mode needs this narrower seam because the current
+/// top-level program is Registry while the signed message remains the exact
+/// nested Trading Hot bytes. The caller owns authentication of `current` and
+/// those byte-exact nested bytes before reaching this function.
+pub(crate) fn seed_native_signatures_at_authenticated_instruction(
+    current: u16,
+    current_instruction_data: &[u8],
+    instructions: &AccountInfo<'_>,
+    profile: RequestProfileV2<'_>,
+    tail_count: u32,
+    registers: NativeSignatureRegistersV1<'_>,
+) -> Result<(), ProgramError> {
     if current == 0 {
         return Err(TradingSbfError::NativeSignature.into());
     }
@@ -288,6 +325,65 @@ mod tests {
         )
         .expect("native evidence");
         assert_eq!(output, [[7; 32]]);
+    }
+
+    #[test]
+    fn registry_outer_keeps_self_contained_signature_bound_to_nested_hot_bytes() {
+        let mut nested_hot = [0_u8; 32];
+        nested_hot
+            .get_mut(20..23)
+            .expect("message")
+            .copy_from_slice(b"sig");
+        let mut registry_outer = vec![0xa5; 128];
+        registry_outer.extend_from_slice(&nested_hot);
+        let profile_bytes = profile_bytes(20, 3);
+        let profile = RequestProfileV2::decode(&profile_bytes).expect("profile");
+        let native = ed25519_data(b"sig", [7; 32]);
+        let mut sysvar_lamports = 1;
+        let mut sysvar_data = Vec::new();
+        let instructions = sysvar_account(
+            &ed25519_program::ID,
+            &native,
+            &registry_outer,
+            &CURRENT_ACCOUNT,
+            &mut sysvar_lamports,
+            &mut sysvar_data,
+        );
+        let input = [[0_u8; 32]];
+        let mut scratch = [[9_u8; 32]];
+        let mut output = [[8_u8; 32]];
+        seed_native_signatures_at_authenticated_instruction(
+            1,
+            &nested_hot,
+            &instructions,
+            profile,
+            0,
+            NativeSignatureRegistersV1 {
+                input_identities: &input,
+                scratch_identities: &mut scratch,
+                output_identities: &mut output,
+            },
+        )
+        .expect("self-contained signature over nested Hot bytes");
+        assert_eq!(output, [[7; 32]]);
+
+        let mut substituted = nested_hot;
+        substituted[20] ^= 1;
+        assert!(
+            seed_native_signatures_at_authenticated_instruction(
+                1,
+                &substituted,
+                &instructions,
+                profile,
+                0,
+                NativeSignatureRegistersV1 {
+                    input_identities: &input,
+                    scratch_identities: &mut scratch,
+                    output_identities: &mut output,
+                },
+            )
+            .is_err()
+        );
     }
 
     #[test]
