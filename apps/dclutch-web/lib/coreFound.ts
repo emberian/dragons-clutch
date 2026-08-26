@@ -12,6 +12,7 @@ import {
   CREATE_LIFECYCLE_RENT_CREDIT_BYTES_V2,
   CORE_ACTION_FOUND_TAG,
   CORE_FOUND_ACCOUNT_COUNT_V2,
+  CORE_FOUND_ACCOUNT_ROLES_V2,
   CORE_REQUEST_BYTES,
   CORE_REQUEST_MAGIC,
   CORE_STATE_BYTES,
@@ -432,8 +433,8 @@ export function compileCoreFoundTransactionV2(input: Readonly<{
   const requestBytes = foundRequest(input.generation, market);
   const metas = input.accountAddresses.map((address, index) => ({
     pubkey: key(address, `Found account ${index}`),
-    isSigner: index === 0,
-    isWritable: index === 0 || index === 1,
+    isSigner: CORE_FOUND_ACCOUNT_ROLES_V2[index].signer,
+    isWritable: CORE_FOUND_ACCOUNT_ROLES_V2[index].writable,
   }));
   const instruction = new TransactionInstruction({
     programId: key(input.coreProgram, 'Core program'),

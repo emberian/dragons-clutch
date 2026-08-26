@@ -10,6 +10,7 @@ import {
   validateCoreFoundCapabilityManifestV1,
   validateCoreFoundSourceMaterialV2,
 } from './coreFound';
+import { CORE_FOUND_ACCOUNT_ROLES_V2 } from './generated/coreFound';
 import { type SolanaRpcClient } from './rpc';
 
 function put(bytes: Uint8Array, offset: number, value: Uint8Array): void { bytes.set(value, offset); }
@@ -102,6 +103,20 @@ describe('Core Found31 browser kernel', () => {
     expect(compiled.requiredSigners).toEqual([accounts[0]]);
     expect(compiled.transaction.message.compiledInstructions).toHaveLength(1);
     expect(compiled.transaction.message.compiledInstructions[0].accountKeyIndexes).toHaveLength(31);
+    // Privileges are the ones `found_metas` emits in
+    // crates/dclutch-product-runtime-v2-operator/src/found.rs: payer writable
+    // and signing, the Market destination writable, every other role readonly.
+    expect(CORE_FOUND_ACCOUNT_ROLES_V2[0]).toEqual({ signer: true, writable: true });
+    expect(CORE_FOUND_ACCOUNT_ROLES_V2[1]).toEqual({ signer: false, writable: true });
+    expect(CORE_FOUND_ACCOUNT_ROLES_V2.filter((role) => role.signer)).toHaveLength(1);
+    expect(CORE_FOUND_ACCOUNT_ROLES_V2.filter((role) => role.writable)).toHaveLength(2);
+    const message = compiled.transaction.message;
+    accounts.forEach((address, index) => {
+      const position = message.staticAccountKeys.findIndex((value) => value.toBase58() === address);
+      expect(position).toBeGreaterThanOrEqual(0);
+      expect(message.isAccountSigner(position)).toBe(CORE_FOUND_ACCOUNT_ROLES_V2[index].signer);
+      expect(message.isAccountWritable(position)).toBe(CORE_FOUND_ACCOUNT_ROLES_V2[index].writable);
+    });
   });
 
   it('derives a Market-generation lifecycle credit and binds its sole refund wallet and release set', () => {

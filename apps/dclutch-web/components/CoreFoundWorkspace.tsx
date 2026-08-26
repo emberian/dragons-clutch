@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { FormEvent, useState } from 'react';
 
 import { prepareCoreFoundV2, type CoreFoundInputV2, type CoreFoundPlanV2 } from '@/lib/coreFound';
-import { CORE_FOUND_ACCOUNT_LABELS_V2 } from '@/lib/generated/coreFound';
+import { CORE_FOUND_ACCOUNT_LABELS_V2, CORE_FOUND_ACCOUNT_ROLES_V2 } from '@/lib/generated/coreFound';
 import { SolanaRpcClient } from '@/lib/rpc';
 
 type AddressField = Exclude<keyof CoreFoundInputV2, 'generation'>;
@@ -46,6 +46,14 @@ function encodeBase64(bytes: Uint8Array): string {
   let binary = '';
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary);
+}
+
+function accountRole(index: number): string {
+  const role = CORE_FOUND_ACCOUNT_ROLES_V2[index];
+  if (role === undefined) return 'unknown role';
+  if (role.signer && role.writable) return 'writable · signer';
+  if (role.signer) return 'signer';
+  return role.writable ? 'writable' : 'read only';
 }
 
 function compact(value: string): string {
@@ -112,7 +120,7 @@ export default function CoreFoundWorkspace() {
 
       <section className="direct-card found-accounts">
         <header className="direct-card-heading"><span>03</span><div><h2>Exact account projection</h2><p>The order below is the instruction ABI. Only payer and the new Market are writable; only payer signs.</p></div></header>
-        <ol>{ready.plan.accountAddresses.map((address, index) => <li key={address}><span>{index.toString().padStart(2, '0')}</span><strong>{CORE_FOUND_ACCOUNT_LABELS_V2[index]}</strong><code>{address}</code><small>{index === 0 ? 'writable · signer' : index === 1 ? 'writable' : 'read only'}</small></li>)}</ol>
+        <ol>{ready.plan.accountAddresses.map((address, index) => <li key={address}><span>{index.toString().padStart(2, '0')}</span><strong>{CORE_FOUND_ACCOUNT_LABELS_V2[index]}</strong><code>{address}</code><small>{accountRole(index)}</small></li>)}</ol>
       </section>
     </>}
   </main>;

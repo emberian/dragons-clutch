@@ -40,29 +40,36 @@ function array(name, values) {
   return `export const ${name} = Uint8Array.from([${values.map((value) => `0x${value.toString(16).padStart(2, '0')}`).join(', ')}]);\n`;
 }
 
-function foundAccountLabels() {
-  const marker = sources.operator.indexOf('fn all_accounts');
-  const start = sources.operator.indexOf('    [\n', marker);
+function foundAccountMetas() {
+  const marker = sources.operator.indexOf('fn found_metas');
+  const start = sources.operator.indexOf('    vec![\n', marker);
   const end = sources.operator.indexOf('    ]\n', start);
   if (marker < 0 || start < 0 || end < 0) throw new Error('missing canonical Found account projection');
-  const fields = sources.operator.slice(start + 6, end).split('\n')
-    .map((line) => line.trim().replace(/,$/, ''))
-    .filter(Boolean);
-  const labels = Object.freeze({
-    'state.payer': 'payer', 'state.market': 'Market destination', 'state.rent_credit': 'RentCredit', 'state.rent_program': 'Rent program',
-    'state.realm.record.raw': 'Realm raw', 'state.realm.record.staging': 'Realm staging', 'state.product.raw': 'Product raw', 'state.product.staging': 'Product staging',
-    'state.result_domain.raw': 'result domain raw', 'state.result_domain.staging': 'result domain staging', 'state.portfolio.raw': 'portfolio raw', 'state.portfolio.staging': 'portfolio staging',
-    'state.source_material.record.raw': 'Source material raw', 'state.source_material.record.staging': 'Source staging', 'state.capability_manifest.record.raw': 'capability manifest raw', 'state.capability_manifest.record.staging': 'capability staging',
-    'state.execution_release_set.record.raw': 'execution release set raw', 'state.execution_release_set.record.staging': 'release-set staging', 'state.activation_cache': 'activation cache', 'state.core_program': 'Core program',
-    'state.core_programdata': 'Core ProgramData', 'state.registry_program': 'Registry program', 'state.rent': 'Rent sysvar', 'state.system_program': 'System program',
-    'state.infrastructure_profile': 'infrastructure profile', 'state.registry_artifact.raw': 'Registry artifact raw', 'state.registry_artifact.staging': 'Registry artifact staging',
-    'state.registry_programdata': 'Registry ProgramData', 'state.rent_artifact.raw': 'Rent artifact raw', 'state.rent_artifact.staging': 'Rent artifact staging', 'state.rent_programdata': 'Rent ProgramData',
-  });
-  return fields.map((field) => {
-    const label = labels[field];
-    if (label === undefined) throw new Error(`unrecognized canonical Found account field ${field}`);
-    return label;
-  });
+  return sources.operator.slice(start + 10, end).split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const meta = line.match(/^AccountMeta::(new|new_readonly)\((state\.[a-z_.]+)\.key, (true|false)\),$/);
+      if (!meta) throw new Error(`unparsed canonical Found account meta ${line}`);
+      return Object.freeze({ field: meta[2], writable: meta[1] === 'new', signer: meta[3] === 'true' });
+    });
+}
+
+const FOUND_ACCOUNT_LABELS = Object.freeze({
+  'state.payer': 'payer', 'state.market': 'Market destination', 'state.rent_credit': 'RentCredit', 'state.rent_program': 'Rent program',
+  'state.realm.record.raw': 'Realm raw', 'state.realm.record.staging': 'Realm staging', 'state.product.raw': 'Product raw', 'state.product.staging': 'Product staging',
+  'state.result_domain.raw': 'result domain raw', 'state.result_domain.staging': 'result domain staging', 'state.portfolio.raw': 'portfolio raw', 'state.portfolio.staging': 'portfolio staging',
+  'state.source_material.record.raw': 'Source material raw', 'state.source_material.record.staging': 'Source staging', 'state.capability_manifest.record.raw': 'capability manifest raw', 'state.capability_manifest.record.staging': 'capability staging',
+  'state.execution_release_set.record.raw': 'execution release set raw', 'state.execution_release_set.record.staging': 'release-set staging', 'state.activation_cache': 'activation cache', 'state.core_program': 'Core program',
+  'state.core_programdata': 'Core ProgramData', 'state.registry_program': 'Registry program', 'state.rent': 'Rent sysvar', 'state.system_program': 'System program',
+  'state.infrastructure_profile': 'infrastructure profile', 'state.registry_artifact.raw': 'Registry artifact raw', 'state.registry_artifact.staging': 'Registry artifact staging',
+  'state.registry_programdata': 'Registry ProgramData', 'state.rent_artifact.raw': 'Rent artifact raw', 'state.rent_artifact.staging': 'Rent artifact staging', 'state.rent_programdata': 'Rent ProgramData',
+});
+
+function foundAccountLabel(field) {
+  const label = FOUND_ACCOUNT_LABELS[field];
+  if (label === undefined) throw new Error(`unrecognized canonical Found account field ${field}`);
+  return label;
 }
 
 let output = '// @generated from canonical Rust/Lean-emitted Core Found ABIs; do not edit.\n';
@@ -76,9 +83,10 @@ for (const name of [
   'LIFECYCLE_RENT_SCHEMA_VERSION_V2',
 ]) output += `export const ${name} = ${scalar('lifecycleRent', name)} as const;\n`;
 output += `export const CORE_FOUND_ACCOUNT_COUNT_V2 = ${scalar('operator', 'FOUND_ACCOUNT_COUNT_V2')} as const;\n`;
-const accountLabels = foundAccountLabels();
-if (accountLabels.length !== scalar('operator', 'FOUND_ACCOUNT_COUNT_V2')) throw new Error('Found account count and projection differ');
-output += `export const CORE_FOUND_ACCOUNT_LABELS_V2 = Object.freeze(${JSON.stringify(accountLabels)}) as ReadonlyArray<string>;\n`;
+const accountMetas = foundAccountMetas();
+if (accountMetas.length !== scalar('operator', 'FOUND_ACCOUNT_COUNT_V2')) throw new Error('Found account count and projection differ');
+output += `export const CORE_FOUND_ACCOUNT_LABELS_V2 = Object.freeze(${JSON.stringify(accountMetas.map((meta) => foundAccountLabel(meta.field)))}) as ReadonlyArray<string>;\n`;
+output += `export const CORE_FOUND_ACCOUNT_ROLES_V2 = Object.freeze(${JSON.stringify(accountMetas.map(({ signer, writable }) => ({ signer, writable })))}) as ReadonlyArray<Readonly<{ signer: boolean; writable: boolean }>>;\n`;
 output += array('CORE_REQUEST_MAGIC', bytes('core', 'REQUEST_MAGIC'));
 output += array('MARKET_CORE_STATE_PDA_DOMAIN_V2', bytes('physical', 'MARKET_CORE_STATE_PDA_DOMAIN_V2'));
 for (const [source, name] of [
