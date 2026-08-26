@@ -23,28 +23,6 @@ fn id(byte: u8) -> ContentId {
     ContentId::new([byte; 32]).expect("nonzero fixture identity")
 }
 
-const fn key_table() -> [[u8; 32]; 256] {
-    let mut table = [[0_u8; 32]; 256];
-    let mut byte = 0_usize;
-    while byte < 256 {
-        table[byte] = [byte as u8; 32];
-        byte += 1;
-    }
-    table
-}
-
-/// Borrowed test identities: `AccountObservationV1` holds its key and owner by
-/// reference, so a fixture identity has to outlive the observation bank.
-static KEYS: [[u8; 32]; 256] = key_table();
-
-fn key(byte: u8) -> [u8; 32] {
-    KEYS[byte as usize]
-}
-
-fn key_ref(byte: u8) -> &'static [u8; 32] {
-    &KEYS[byte as usize]
-}
-
 fn put<const N: usize>(target: &mut [u8], offset: usize, value: &[u8; N]) {
     target
         .get_mut(offset..offset + N)
@@ -84,7 +62,6 @@ struct SemanticFixture {
     ticket_state: [u8; dclutch_series_v3_kernel::replay::SERIES_TICKET_STATE_BYTES_V3],
     clock: [u8; 40],
     product: AuthenticatedProductProjectionV2,
-    template_id: ContentId,
     market: [u8; 32],
     root_bytes: [u8; 32],
     template_id_bytes: [u8; 32],
@@ -170,7 +147,6 @@ impl SemanticFixture {
             ticket_state,
             clock,
             product: AuthenticatedProductProjectionV2::new(product_record, id(61), id(62)),
-            template_id,
             market,
             root_bytes: id(10).to_bytes(),
             template_id_bytes: template_id.to_bytes(),
@@ -223,7 +199,7 @@ impl SemanticFixture {
     ) -> Vec<AccountObservationV1<'a>> {
         let mut observations =
             vec![
-                AccountObservationV1::new(key_ref(200), key_ref(201), 1, &[], false, false, false);
+                AccountObservationV1::new(&[200_u8; 32], &[201_u8; 32], 1, &[], false, false, false);
                 SERIES_CLOCK_COORDINATE_V4 + 1
             ];
         let mut set = |coordinate, value| {
@@ -247,7 +223,7 @@ impl SemanticFixture {
             SERIES_CONFIG_COORDINATE_V4,
             AccountObservationV1::new(
                 &self.template_id_bytes,
-                key_ref(201),
+                &[201_u8; 32],
                 1,
                 &self.template,
                 false,
@@ -259,7 +235,7 @@ impl SemanticFixture {
             SERIES_PRODUCT_COORDINATE_V4,
             AccountObservationV1::new(
                 &self.product_record_bytes,
-                key_ref(201),
+                &[201_u8; 32],
                 1,
                 &[],
                 false,
@@ -271,7 +247,7 @@ impl SemanticFixture {
             SERIES_REGISTRY_COORDINATE_V4,
             AccountObservationV1::new(
                 &self.registry_program_bytes,
-                key_ref(202),
+                &[202_u8; 32],
                 1,
                 &[],
                 false,
@@ -283,7 +259,7 @@ impl SemanticFixture {
             SERIES_TRADING_COORDINATE_V4,
             AccountObservationV1::new(
                 &self.trading_program_bytes,
-                key_ref(202),
+                &[202_u8; 32],
                 1,
                 &[],
                 false,
@@ -293,12 +269,12 @@ impl SemanticFixture {
         );
         set(
             SERIES_MARKET_COORDINATE_V4,
-            AccountObservationV1::new(&self.market, key_ref(203), 1, &[], false, true, false),
+            AccountObservationV1::new(&self.market, &[203_u8; 32], 1, &[], false, true, false),
         );
         set(
             SERIES_TICKET_STATE_COORDINATE_V4,
             AccountObservationV1::new(
-                key_ref(72),
+                &[72_u8; 32],
                 &self.trading_program_bytes,
                 1,
                 ticket_state,
@@ -311,7 +287,7 @@ impl SemanticFixture {
             SERIES_TEMPLATE_RAW_COORDINATE_V4,
             AccountObservationV1::new(
                 &self.template_id_bytes,
-                key_ref(201),
+                &[201_u8; 32],
                 1,
                 &self.template,
                 false,
@@ -321,15 +297,15 @@ impl SemanticFixture {
         );
         set(
             SERIES_OCCURRENCE_RAW_COORDINATE_V4,
-            AccountObservationV1::new(key_ref(73), key_ref(201), 1, &self.occurrence, false, false, false),
+            AccountObservationV1::new(&[73_u8; 32], &[201_u8; 32], 1, &self.occurrence, false, false, false),
         );
         set(
             SERIES_TICKET_RAW_COORDINATE_V4,
-            AccountObservationV1::new(key_ref(74), key_ref(201), 1, ticket, false, false, false),
+            AccountObservationV1::new(&[74_u8; 32], &[201_u8; 32], 1, ticket, false, false, false),
         );
         set(
             SERIES_CLOCK_COORDINATE_V4,
-            AccountObservationV1::new(key_ref(75), key_ref(202), 1, &self.clock, false, false, false),
+            AccountObservationV1::new(&[75_u8; 32], &[202_u8; 32], 1, &self.clock, false, false, false),
         );
         observations
     }
@@ -435,7 +411,7 @@ fn replay_root_ticket_product_and_account_substitution_refuse() {
         &fixture.series_state,
         &fixture.ticket_state,
         &fixture.ticket,
-        key_ref(97),
+        &[97_u8; 32],
     );
     assert_eq!(
         evaluate_semantic_core_request(shadow, &observations, fixture.facts()),
