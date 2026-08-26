@@ -6,6 +6,7 @@ use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1
 use dclutch_registry_contract::ACTIVATION_PDA_DOMAIN_V1;
 use dclutch_release_set_contract::PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1;
 use dclutch_resolution_codec::{
+    PROVIDER_RECLAIM_REQUEST_BYTES_V3, PROVIDER_SUBMIT_REQUEST_BYTES_V3,
     PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
     PYTH_RELEASE_RECORD_SCHEMA_ID_V1, ProviderReclaimRequestV3, ProviderSubmitRequestV3,
     ProviderUpdateLifecycleV3, ProviderUpdateStatusV3,
@@ -15,6 +16,7 @@ use dclutch_source_contract::{
     SourceMaterialV2, SourceResolutionPhaseV1, SourceResolutionStateV2, SourceSpecV1,
     WINDOW_SPEC_SCHEMA_ID_V1, WindowSpecV1,
 };
+use solana_hash::Hash;
 use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},
@@ -22,7 +24,10 @@ use solana_program::{
 };
 use solana_sdk_ids::{system_program, sysvar};
 
-use crate::{Finality, Observation, ObservedAccount};
+use crate::{
+    Finality, Observation, ObservedAccount,
+    versioned::{VersionedMessagePlanV0, compile_v0_message_with_optional_tables},
+};
 
 /// Resolution submission account count frozen by the physical adapter.
 pub const PROVIDER_SUBMIT_ACCOUNT_COUNT_V3: usize = 38;
@@ -110,10 +115,31 @@ pub struct ProviderSubmitDeploymentV3 {
 pub struct ProviderTransportReportV3 {
     /// Exact unsigned instruction.
     pub instruction: Instruction,
+    /// Finalized observation from which every semantic account was derived.
+    pub observation: Observation,
     /// Resolution-owned lifecycle PDA.
     pub lifecycle: Pubkey,
     /// Resolution-owned Receiver write-authority PDA.
     pub update_authority: Pubkey,
+}
+
+/// Unsigned packet-safe provider transaction and its exact signing boundary.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderTransportTransactionPlanV3 {
+    /// Exact unsigned v0 message and packet geometry.
+    pub message: VersionedMessagePlanV0,
+    /// Canonical signer order required by the message.
+    pub required_signers: Vec<Pubkey>,
+}
+
+/// Refusal from a mutated provider report or unsafe transaction routing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProviderTransportTransactionErrorV3 {
+    /// The instruction no longer had the frozen discriminator, account order,
+    /// privilege profile, or request-to-account joins.
+    Frame,
+    /// Finalized lookup-table selection or signed packet geometry refused.
+    Routing(crate::versioned::Error),
 }
 
 /// Build one exact real-provider submission from same-snapshot chain state.
@@ -122,7 +148,7 @@ pub fn build_provider_submit_v3(
     deployment: ProviderSubmitDeploymentV3,
     intent: &ProviderSubmitIntentV3,
 ) -> Result<ProviderTransportReportV3, ProviderTransportOperatorErrorV3> {
-    require_same_finalized_observation(&[
+    let observation = require_same_finalized_observation(&[
         &snapshot.market,
         &snapshot.source_state,
         &snapshot.source_material,
@@ -333,6 +359,7 @@ pub fn build_provider_submit_v3(
             accounts,
             data,
         },
+        observation,
         lifecycle,
         update_authority,
     })
@@ -357,7 +384,7 @@ pub fn build_provider_reclaim_v3(
     pyth_release: &ObservedAccount,
     deployment: ProviderReclaimDeploymentV3,
 ) -> Result<ProviderTransportReportV3, ProviderTransportOperatorErrorV3> {
-    require_same_finalized_observation(&[lifecycle_account, pyth_release])?;
+    let observation = require_same_finalized_observation(&[lifecycle_account, pyth_release])?;
     let lifecycle = ProviderUpdateLifecycleV3::decode(&lifecycle_account.data)
         .map_err(|_| ProviderTransportOperatorErrorV3::Lifecycle)?;
     if lifecycle.status != ProviderUpdateStatusV3::Consumed
@@ -433,8 +460,158 @@ pub fn build_provider_reclaim_v3(
             accounts,
             data,
         },
+        observation,
         lifecycle: lifecycle_account.key,
         update_authority,
+    })
+}
+
+/// Compile one exact provider submission into an unsigned v0 message.
+///
+/// The provider submitter is the fee payer and the Receiver update account is
+/// the second required signer. No key is generated, signed, or submitted here.
+/// A lookup table is optional at the API boundary, but the 38-account route
+/// will normally refuse the 1,232-byte packet limit until a finalized active
+/// table contributes addresses.
+pub fn compile_provider_submit_v0(
+    report: &ProviderTransportReportV3,
+    recent_blockhash: Hash,
+    lookup_tables: &[ObservedAccount],
+) -> Result<ProviderTransportTransactionPlanV3, ProviderTransportTransactionErrorV3> {
+    let request = validate_submit_report(report)?;
+    let required_signers = vec![
+        Pubkey::new_from_array(request.provider_submitter),
+        Pubkey::new_from_array(request.update_account),
+    ];
+    compile_provider_v0(report, recent_blockhash, lookup_tables, required_signers)
+}
+
+/// Compile one exact permissionless reclaim into an unsigned v0 message.
+///
+/// The permissionless resolver is both fee payer and sole transaction signer.
+/// The Resolution update-authority PDA signs only the Receiver CPI onchain.
+pub fn compile_provider_reclaim_v0(
+    report: &ProviderTransportReportV3,
+    recent_blockhash: Hash,
+    lookup_tables: &[ObservedAccount],
+) -> Result<ProviderTransportTransactionPlanV3, ProviderTransportTransactionErrorV3> {
+    let request = validate_reclaim_report(report)?;
+    let required_signers = vec![Pubkey::new_from_array(request.resolver)];
+    compile_provider_v0(report, recent_blockhash, lookup_tables, required_signers)
+}
+
+fn compile_provider_v0(
+    report: &ProviderTransportReportV3,
+    recent_blockhash: Hash,
+    lookup_tables: &[ObservedAccount],
+    required_signers: Vec<Pubkey>,
+) -> Result<ProviderTransportTransactionPlanV3, ProviderTransportTransactionErrorV3> {
+    let payer = *required_signers
+        .first()
+        .ok_or(ProviderTransportTransactionErrorV3::Frame)?;
+    let message = compile_v0_message_with_optional_tables(
+        payer,
+        core::slice::from_ref(&report.instruction),
+        recent_blockhash,
+        report.observation,
+        lookup_tables,
+    )
+    .map_err(ProviderTransportTransactionErrorV3::Routing)?;
+    if usize::from(message.required_signatures) != required_signers.len() {
+        return Err(ProviderTransportTransactionErrorV3::Frame);
+    }
+    Ok(ProviderTransportTransactionPlanV3 {
+        message,
+        required_signers,
+    })
+}
+
+fn validate_submit_report(
+    report: &ProviderTransportReportV3,
+) -> Result<ProviderSubmitRequestV3, ProviderTransportTransactionErrorV3> {
+    let accounts = &report.instruction.accounts;
+    let prefix = report
+        .instruction
+        .data
+        .get(..PROVIDER_SUBMIT_REQUEST_BYTES_V3)
+        .ok_or(ProviderTransportTransactionErrorV3::Frame)?;
+    let request = ProviderSubmitRequestV3::decode(prefix)
+        .map_err(|_| ProviderTransportTransactionErrorV3::Frame)?;
+    let body = report
+        .instruction
+        .data
+        .get(PROVIDER_SUBMIT_REQUEST_BYTES_V3..)
+        .filter(|bytes| !bytes.is_empty())
+        .ok_or(ProviderTransportTransactionErrorV3::Frame)?;
+    if accounts.len() != PROVIDER_SUBMIT_ACCOUNT_COUNT_V3
+        || report.instruction.program_id != account_key(accounts, 14)?
+        || account_key(accounts, 0)?.to_bytes() != request.provider_submitter
+        || account_key(accounts, 1)?.to_bytes() != request.update_account
+        || account_key(accounts, 2)?.to_bytes() != request.lifecycle
+        || account_key(accounts, 3)? != report.update_authority
+        || account_key(accounts, 4)?.to_bytes() != request.refund_recipient
+        || account_key(accounts, 5)?.to_bytes() != request.market
+        || account_key(accounts, 8)?.to_bytes() != request.registry_program
+        || account_key(accounts, 16)?.to_bytes() != request.source_state
+        || account_key(accounts, 17)?.to_bytes() != request.source_material
+        || account_key(accounts, 32)?.to_bytes() != request.encoded_vaa
+        || report.lifecycle.to_bytes() != request.lifecycle
+        || hash(body).to_bytes() != request.post_body_digest
+        || !exact_submit_privileges(accounts)
+        || !distinct(accounts)
+    {
+        return Err(ProviderTransportTransactionErrorV3::Frame);
+    }
+    Ok(request)
+}
+
+fn validate_reclaim_report(
+    report: &ProviderTransportReportV3,
+) -> Result<ProviderReclaimRequestV3, ProviderTransportTransactionErrorV3> {
+    let accounts = &report.instruction.accounts;
+    let request = ProviderReclaimRequestV3::decode(&report.instruction.data)
+        .map_err(|_| ProviderTransportTransactionErrorV3::Frame)?;
+    if report.instruction.data.len() != PROVIDER_RECLAIM_REQUEST_BYTES_V3
+        || accounts.len() != PROVIDER_RECLAIM_ACCOUNT_COUNT_V3
+        || report.instruction.program_id != account_key(accounts, 9)?
+        || account_key(accounts, 0)?.to_bytes() != request.resolver
+        || account_key(accounts, 1)?.to_bytes() != request.lifecycle
+        || account_key(accounts, 2)?.to_bytes() != request.update_account
+        || account_key(accounts, 3)? != report.update_authority
+        || account_key(accounts, 4)?.to_bytes() != request.refund_recipient
+        || account_key(accounts, 5)?.to_bytes() != request.certificate
+        || report.lifecycle.to_bytes() != request.lifecycle
+        || !exact_reclaim_privileges(accounts)
+        || !distinct(accounts)
+    {
+        return Err(ProviderTransportTransactionErrorV3::Frame);
+    }
+    Ok(request)
+}
+
+fn account_key(
+    accounts: &[AccountMeta],
+    index: usize,
+) -> Result<Pubkey, ProviderTransportTransactionErrorV3> {
+    accounts
+        .get(index)
+        .map(|account| account.pubkey)
+        .ok_or(ProviderTransportTransactionErrorV3::Frame)
+}
+
+fn exact_submit_privileges(accounts: &[AccountMeta]) -> bool {
+    accounts.iter().enumerate().all(|(index, account)| {
+        let expected_signer = matches!(index, 0 | 1);
+        let expected_writable = matches!(index, 0 | 1 | 2 | 34);
+        account.is_signer == expected_signer && account.is_writable == expected_writable
+    })
+}
+
+fn exact_reclaim_privileges(accounts: &[AccountMeta]) -> bool {
+    accounts.iter().enumerate().all(|(index, account)| {
+        let expected_signer = index == 0;
+        let expected_writable = matches!(index, 1..=4);
+        account.is_signer == expected_signer && account.is_writable == expected_writable
     })
 }
 
@@ -483,5 +660,210 @@ fn require_same_finalized_observation(
         Err(ProviderTransportOperatorErrorV3::State)
     } else {
         Ok(first)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use solana_address_lookup_table_interface::{
+        program,
+        state::{AddressLookupTable, LookupTableMeta},
+    };
+    use std::borrow::Cow;
+
+    fn key(byte: u8) -> Pubkey {
+        Pubkey::new_from_array([byte; 32])
+    }
+
+    fn observation(slot: u64) -> Observation {
+        Observation {
+            slot,
+            unix_timestamp: 1_800_000_000,
+            finality: Finality::Finalized,
+        }
+    }
+
+    fn account_frame(count: usize, program_index: usize) -> Vec<AccountMeta> {
+        (0..count)
+            .map(|index| {
+                let address = if index == program_index {
+                    key(200)
+                } else {
+                    key(u8::try_from(index + 1).expect("small frame"))
+                };
+                AccountMeta::new_readonly(address, false)
+            })
+            .collect()
+    }
+
+    fn submit_report() -> ProviderTransportReportV3 {
+        let mut accounts = account_frame(PROVIDER_SUBMIT_ACCOUNT_COUNT_V3, 14);
+        for index in [0, 1, 2, 34] {
+            accounts[index].is_writable = true;
+        }
+        accounts[0].is_signer = true;
+        accounts[1].is_signer = true;
+        let body = vec![0xa5; 64];
+        let request = ProviderSubmitRequestV3 {
+            generation: 7,
+            reclaim_after_unix_seconds: 1_800_000_100,
+            market: accounts[5].pubkey.to_bytes(),
+            source_state: accounts[16].pubkey.to_bytes(),
+            lifecycle: accounts[2].pubkey.to_bytes(),
+            source_material: accounts[17].pubkey.to_bytes(),
+            provider_release: key(213).to_bytes(),
+            update_account: accounts[1].pubkey.to_bytes(),
+            provider_submitter: accounts[0].pubkey.to_bytes(),
+            refund_recipient: accounts[4].pubkey.to_bytes(),
+            release_set: key(210).to_bytes(),
+            registry_program: accounts[8].pubkey.to_bytes(),
+            encoded_vaa: accounts[32].pubkey.to_bytes(),
+            post_body_digest: hash(&body).to_bytes(),
+        };
+        let mut data = request.to_bytes().expect("submit request").to_vec();
+        data.extend_from_slice(&body);
+        ProviderTransportReportV3 {
+            instruction: Instruction {
+                program_id: accounts[14].pubkey,
+                accounts,
+                data,
+            },
+            observation: observation(90),
+            lifecycle: Pubkey::new_from_array(request.lifecycle),
+            update_authority: key(4),
+        }
+    }
+
+    fn reclaim_report() -> ProviderTransportReportV3 {
+        let mut accounts = account_frame(PROVIDER_RECLAIM_ACCOUNT_COUNT_V3, 9);
+        for index in 1..=4 {
+            accounts[index].is_writable = true;
+        }
+        accounts[0].is_signer = true;
+        let request = ProviderReclaimRequestV3 {
+            generation: 7,
+            terminal_sequence: 3,
+            market: key(210).to_bytes(),
+            source_state: key(211).to_bytes(),
+            lifecycle: accounts[1].pubkey.to_bytes(),
+            certificate: accounts[5].pubkey.to_bytes(),
+            update_account: accounts[2].pubkey.to_bytes(),
+            resolver: accounts[0].pubkey.to_bytes(),
+            refund_recipient: accounts[4].pubkey.to_bytes(),
+            release_set: key(212).to_bytes(),
+        };
+        ProviderTransportReportV3 {
+            instruction: Instruction {
+                program_id: accounts[9].pubkey,
+                accounts,
+                data: request.to_bytes().expect("reclaim request").to_vec(),
+            },
+            observation: observation(90),
+            lifecycle: Pubkey::new_from_array(request.lifecycle),
+            update_authority: key(4),
+        }
+    }
+
+    fn lookup_table(report: &ProviderTransportReportV3) -> ObservedAccount {
+        let addresses = report
+            .instruction
+            .accounts
+            .iter()
+            .filter(|account| !account.is_signer)
+            .map(|account| account.pubkey)
+            .collect::<Vec<_>>();
+        let table = AddressLookupTable {
+            meta: LookupTableMeta {
+                authority: Some(key(220)),
+                last_extended_slot: report.observation.slot - 1,
+                deactivation_slot: u64::MAX,
+                ..LookupTableMeta::default()
+            },
+            addresses: Cow::Owned(addresses),
+        };
+        ObservedAccount {
+            observation: report.observation,
+            key: key(221),
+            owner: program::id(),
+            lamports: 1_000_000,
+            executable: false,
+            data: table.serialize_for_tests().expect("lookup table bytes"),
+        }
+    }
+
+    #[test]
+    fn reclaim_fits_inline_and_reports_only_permissionless_resolver() {
+        let report = reclaim_report();
+        let plan = compile_provider_reclaim_v0(&report, Hash::new_from_array([7; 32]), &[])
+            .expect("inline reclaim");
+        assert_eq!(
+            plan.required_signers,
+            vec![report.instruction.accounts[0].pubkey]
+        );
+        assert_eq!(plan.message.required_signatures, 1);
+        assert_eq!(plan.message.loaded_addresses, 0);
+        assert!(plan.message.wire_bytes <= crate::versioned::PACKET_DATA_BYTES);
+    }
+
+    #[test]
+    fn submission_requires_routing_and_reports_both_real_signers() {
+        let report = submit_report();
+        let request = ProviderSubmitRequestV3::decode(
+            &report.instruction.data[..PROVIDER_SUBMIT_REQUEST_BYTES_V3],
+        )
+        .expect("submit request");
+        assert_ne!(
+            report.instruction.accounts[23].pubkey.to_bytes(),
+            request.provider_release,
+            "content digest must not be confused with its finalized-record PDA",
+        );
+        assert_eq!(
+            compile_provider_submit_v0(&report, Hash::new_from_array([7; 32]), &[]),
+            Err(ProviderTransportTransactionErrorV3::Routing(
+                crate::versioned::Error::PacketTooLarge,
+            ))
+        );
+        let table = lookup_table(&report);
+        let plan = compile_provider_submit_v0(
+            &report,
+            Hash::new_from_array([7; 32]),
+            core::slice::from_ref(&table),
+        )
+        .expect("table-routed submission");
+        assert_eq!(
+            plan.required_signers,
+            vec![
+                report.instruction.accounts[0].pubkey,
+                report.instruction.accounts[1].pubkey,
+            ]
+        );
+        assert_eq!(plan.message.required_signatures, 2);
+        assert!(plan.message.loaded_addresses > 0);
+        assert!(plan.message.wire_bytes <= crate::versioned::PACKET_DATA_BYTES);
+    }
+
+    #[test]
+    fn privilege_mutation_and_stale_tables_refuse() {
+        let mut submit = submit_report();
+        submit.instruction.accounts[1].is_signer = false;
+        assert_eq!(
+            compile_provider_submit_v0(&submit, Hash::new_from_array([7; 32]), &[]),
+            Err(ProviderTransportTransactionErrorV3::Frame)
+        );
+
+        let reclaim = reclaim_report();
+        let mut stale = lookup_table(&reclaim);
+        stale.observation.slot -= 1;
+        assert_eq!(
+            compile_provider_reclaim_v0(
+                &reclaim,
+                Hash::new_from_array([7; 32]),
+                core::slice::from_ref(&stale),
+            ),
+            Err(ProviderTransportTransactionErrorV3::Routing(
+                crate::versioned::Error::ObservationMismatch,
+            ))
+        );
     }
 }

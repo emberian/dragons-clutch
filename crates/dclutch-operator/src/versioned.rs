@@ -182,6 +182,48 @@ pub fn compile_v0_message(
     observation: Observation,
     table_accounts: &[ObservedAccount],
 ) -> Result<VersionedMessagePlanV0, Error> {
+    compile_v0_message_inner(
+        payer,
+        instructions,
+        recent_blockhash,
+        observation,
+        table_accounts,
+        true,
+    )
+}
+
+/// Compile an unsigned packet-safe v0 message, using finalized lookup tables
+/// when supplied and otherwise retaining all accounts inline.
+///
+/// This is appropriate for transaction families whose small routes fit the
+/// packet without a table while their larger routes require one. Supplying a
+/// table that contributes no address still refuses; an empty table list is the
+/// only way to request an inline message.
+pub fn compile_v0_message_with_optional_tables(
+    payer: Pubkey,
+    instructions: &[Instruction],
+    recent_blockhash: Hash,
+    observation: Observation,
+    table_accounts: &[ObservedAccount],
+) -> Result<VersionedMessagePlanV0, Error> {
+    compile_v0_message_inner(
+        payer,
+        instructions,
+        recent_blockhash,
+        observation,
+        table_accounts,
+        false,
+    )
+}
+
+fn compile_v0_message_inner(
+    payer: Pubkey,
+    instructions: &[Instruction],
+    recent_blockhash: Hash,
+    observation: Observation,
+    table_accounts: &[ObservedAccount],
+    require_lookup: bool,
+) -> Result<VersionedMessagePlanV0, Error> {
     let mut tables = Vec::with_capacity(table_accounts.len());
     let mut table_keys = Vec::with_capacity(table_accounts.len());
     let mut seen_addresses = Vec::new();
@@ -226,7 +268,7 @@ pub fn compile_v0_message(
                 .and_then(|value| value.checked_add(lookup.readonly_indexes.len()))
         })
         .ok_or(Error::Arithmetic)?;
-    if loaded_addresses == 0 {
+    if loaded_addresses == 0 && (require_lookup || !table_accounts.is_empty()) {
         return Err(Error::NoLookupUsed);
     }
     let required_signatures = message.header.num_required_signatures;
