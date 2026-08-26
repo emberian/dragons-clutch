@@ -583,6 +583,7 @@ dependencies = [
 name = "dclutch-operator"
 version = "0.1.0"
 dependencies = [
+ "dclutch-account-profile-contract",
  "dclutch-bearer-contract",
  "dclutch-bearer-v2-operator",
  "dclutch-capability-contract",
