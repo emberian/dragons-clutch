@@ -27,8 +27,11 @@ pub use bundle::{
     build_rational_lifecycle_hot_bundle_v3, validate_rational_lifecycle_hot_bundle_v3,
 };
 pub use compact_artifacts_v4::{
+    RATIONAL_LIFECYCLE_COMPACT_DESCRIPTOR_BYTES_V4, RATIONAL_LIFECYCLE_COMPACT_STRATEGY_BYTES_V4,
     RationalLifecycleCompactArtifactInputV4, RationalLifecycleCompactArtifactsV4,
-    encode_rational_lifecycle_compact_artifacts_v4,
+    RationalLifecycleCompactBundleInputV4, RationalLifecycleCompactBundleV4,
+    build_rational_lifecycle_compact_bundle_v4, encode_rational_lifecycle_compact_artifacts_v4,
+    validate_rational_lifecycle_compact_bundle_v4,
 };
 pub use effect::{
     RATIONAL_LIFECYCLE_HOT_INJECTED_ACCOUNT_COUNT_V3, encode_rational_lifecycle_effect_v3,
