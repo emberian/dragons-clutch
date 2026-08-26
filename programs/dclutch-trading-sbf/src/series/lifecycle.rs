@@ -13,12 +13,15 @@ use dclutch_core_contract::ContentId;
 use dclutch_market_core_codec::{
     Identity as CoreIdentity, SeriesCoreAckV1, SeriesCoreActionV1, SeriesCoreRequestV1,
 };
+use dclutch_series_v3_kernel::plan::{
+    ReplayCandidateV3, SeriesReplayActionV3, SeriesReplayWitnessV3, evaluate_replay_v3,
+};
 use solana_program::pubkey::Pubkey;
 
 use super::{
     AdmittedOccurrenceV3, AdmittedTicketV3, AuthenticatedProductProjectionV2, OccurrenceV3,
     SeriesV3Error, TemplateV3, core_request, funding_list_id, pubkey,
-    state::{SeriesStateError, SeriesStateV3, TicketPhaseV3, TicketStateV3},
+    state::{SeriesStateError, SeriesStateV3, TicketStateV3},
 };
 
 const MAXIMUM_FUNDING_STATES: usize = 16;
@@ -305,11 +308,21 @@ pub fn plan_prepare(
         .checked_add(native)
         .ok_or(LifecycleErrorV3::Arithmetic)?;
     let (top_up, dust_refund) = dust_tolerant_exact(current_ticket_lamports, required);
+    let witness = evaluate_joint_replay(
+        SeriesReplayActionV3::Prepare {
+            ticket_record: ticket_record_id,
+        },
+        template.occurrence_count(),
+        expected_series_revision,
+        series,
+        None,
+    )?;
+    let (series_after, ticket_after) = replacement_pair(witness, template.occurrence_count())?;
     Ok((
         OccurrenceCommitPlanV3 {
             core_request: None,
-            series_after: series.prepare_ticket(expected_series_revision)?,
-            ticket_after: TicketStateV3::prepared(ticket_record_id),
+            series_after,
+            ticket_after,
             occurrence_count: template.occurrence_count(),
             native_from_ticket: 0,
             funding: None,
@@ -344,7 +357,6 @@ pub fn plan_consume(
         expected_ticket_revision,
         now_slot,
         SeriesCoreActionV1::Consume,
-        TicketPhaseV3::Consumed,
         Some(funding),
     )
 }
@@ -372,7 +384,6 @@ pub fn plan_expire(
         expected_ticket_revision,
         now_slot,
         SeriesCoreActionV1::Expire,
-        TicketPhaseV3::Expired,
         None,
     )
 }
@@ -389,7 +400,6 @@ fn common_terminal_plan(
     expected_ticket_revision: u64,
     now_slot: u64,
     action: SeriesCoreActionV1,
-    terminal: TicketPhaseV3,
     funding: Option<PendingFundingPlanV3>,
 ) -> Result<OccurrenceCommitPlanV3, LifecycleErrorV3> {
     let ticket = admitted_ticket.ticket();
@@ -435,11 +445,29 @@ fn common_terminal_plan(
     } else {
         None
     };
+    let replay_action = match action {
+        SeriesCoreActionV1::Consume => SeriesReplayActionV3::Consume {
+            ticket_record: ticket_record_id,
+            expected_ticket_revision,
+        },
+        SeriesCoreActionV1::Expire => SeriesReplayActionV3::Expire {
+            ticket_record: ticket_record_id,
+            expected_ticket_revision,
+        },
+        _ => return Err(LifecycleErrorV3::Content),
+    };
+    let witness = evaluate_joint_replay(
+        replay_action,
+        template.occurrence_count(),
+        expected_series_revision,
+        series,
+        Some(ticket_state),
+    )?;
+    let (series_after, ticket_after) = replacement_pair(witness, template.occurrence_count())?;
     Ok(OccurrenceCommitPlanV3 {
         core_request,
-        series_after: series
-            .settle_current(expected_series_revision, template.occurrence_count())?,
-        ticket_after: ticket_state.settle(expected_ticket_revision, terminal)?,
+        series_after,
+        ticket_after,
         occurrence_count: template.occurrence_count(),
         native_from_ticket: occurrence.funds().checked_native_total()?,
         funding,
@@ -471,6 +499,7 @@ impl RetirePlanV3 {
 
 /// Plan deletion of one non-replayable ticket account.
 pub fn plan_retire(
+    occurrence_count: u32,
     series: SeriesStateV3,
     ticket_state: TicketStateV3,
     admitted_ticket: AdmittedTicketV3,
@@ -478,14 +507,27 @@ pub fn plan_retire(
     expected_ticket_revision: u64,
     observed_ticket_lamports: u64,
 ) -> Result<RetirePlanV3, LifecycleErrorV3> {
-    if !ticket_state.phase().terminal()
-        || ticket_state.revision() != expected_ticket_revision
-        || ticket_state.ticket_record_id() != admitted_ticket.content_id()
-    {
+    let witness = evaluate_joint_replay(
+        SeriesReplayActionV3::Retire {
+            ticket_record: admitted_ticket.content_id(),
+            expected_ticket_revision,
+        },
+        occurrence_count,
+        expected_series_revision,
+        series,
+        Some(ticket_state),
+    )?;
+    let series_after = match witness.series() {
+        ReplayCandidateV3::Replace(bytes) => SeriesStateV3::decode(&bytes, occurrence_count)?,
+        ReplayCandidateV3::Unchanged | ReplayCandidateV3::Delete => {
+            return Err(LifecycleErrorV3::Replay);
+        }
+    };
+    if witness.ticket() != ReplayCandidateV3::Delete {
         return Err(LifecycleErrorV3::Replay);
     }
     Ok(RetirePlanV3 {
-        series_after: series.retire_ticket(expected_series_revision)?,
+        series_after,
         refund_owner: pubkey(admitted_ticket.ticket().refund_owner()),
         lamports_to_refund_owner: observed_ticket_lamports,
     })
@@ -527,7 +569,18 @@ pub fn plan_close(
     observed_root_lamports: u64,
     exact_root_rent: u64,
 ) -> Result<ClosePlanV3, LifecycleErrorV3> {
-    series.admit_close(expected_series_revision)?;
+    let witness = evaluate_joint_replay(
+        SeriesReplayActionV3::Close,
+        template.occurrence_count(),
+        expected_series_revision,
+        series,
+        None,
+    )?;
+    if witness.series() != ReplayCandidateV3::Delete
+        || witness.ticket() != ReplayCandidateV3::Unchanged
+    {
+        return Err(LifecycleErrorV3::Replay);
+    }
     let classified = exact_root_rent
         .checked_add(series.close_rent_remaining())
         .ok_or(LifecycleErrorV3::Arithmetic)?;
@@ -540,6 +593,44 @@ pub fn plan_close(
         root_rent: exact_root_rent,
         donation,
     })
+}
+
+fn evaluate_joint_replay(
+    action: SeriesReplayActionV3,
+    occurrence_count: u32,
+    expected_series_revision: u64,
+    series: SeriesStateV3,
+    ticket: Option<TicketStateV3>,
+) -> Result<SeriesReplayWitnessV3, LifecycleErrorV3> {
+    let series_bytes = series.encode(occurrence_count)?;
+    let ticket_bytes = ticket.map(TicketStateV3::encode);
+    evaluate_replay_v3(
+        action,
+        occurrence_count,
+        expected_series_revision,
+        &series_bytes,
+        ticket_bytes.as_ref().map(<[u8; 64]>::as_slice),
+    )
+    .map_err(|_| LifecycleErrorV3::Replay)
+}
+
+fn replacement_pair(
+    witness: SeriesReplayWitnessV3,
+    occurrence_count: u32,
+) -> Result<(SeriesStateV3, TicketStateV3), LifecycleErrorV3> {
+    let series = match witness.series() {
+        ReplayCandidateV3::Replace(bytes) => SeriesStateV3::decode(&bytes, occurrence_count)?,
+        ReplayCandidateV3::Unchanged | ReplayCandidateV3::Delete => {
+            return Err(LifecycleErrorV3::Replay);
+        }
+    };
+    let ticket = match witness.ticket() {
+        ReplayCandidateV3::Replace(bytes) => TicketStateV3::decode(&bytes)?,
+        ReplayCandidateV3::Unchanged | ReplayCandidateV3::Delete => {
+            return Err(LifecycleErrorV3::Replay);
+        }
+    };
+    Ok((series, ticket))
 }
 
 fn dust_tolerant_exact(observed: u64, required: u64) -> (u64, u64) {

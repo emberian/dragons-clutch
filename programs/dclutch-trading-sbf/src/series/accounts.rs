@@ -660,7 +660,7 @@ mod tests {
             .settle(0, TicketPhaseV3::Consumed)
             .expect("terminal Ticket");
         let plan =
-            plan_retire(before, ticket_state, admitted_ticket, 2, 1, 11).expect("retire plan");
+            plan_retire(1, before, ticket_state, admitted_ticket, 2, 1, 11).expect("retire plan");
         let mut root_data = vec![0_u8; SERIES_ROOT_ACCOUNT_BYTES_V3];
         root_data
             .get_mut(CAPABILITY_ROOT_HEADER_BYTES_V1..)
@@ -701,11 +701,11 @@ mod tests {
             .settle(0, TicketPhaseV3::Expired)
             .expect("terminal Ticket");
         assert_eq!(
-            plan_retire(before, ticket_state, admitted_ticket, 2, 0, 11),
+            plan_retire(1, before, ticket_state, admitted_ticket, 2, 0, 11),
             Err(crate::series::lifecycle::LifecycleErrorV3::Replay)
         );
         let plan =
-            plan_retire(before, ticket_state, admitted_ticket, 2, 1, 11).expect("retire plan");
+            plan_retire(1, before, ticket_state, admitted_ticket, 2, 1, 11).expect("retire plan");
         let root = runtime_account(
             Pubkey::new_from_array([52; 32]),
             program_id,

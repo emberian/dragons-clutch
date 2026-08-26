@@ -159,6 +159,7 @@ impl<'a> AuthenticatedSeriesActionV3<'a> {
             return Err(SeriesProjectorErrorV3::Frame);
         }
         Ok(plan_retire(
+            self.template.occurrence_count(),
             series,
             ticket_state,
             self.required_ticket()?,
