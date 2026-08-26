@@ -31,6 +31,8 @@ pub const VERSION: u16 = 2;
 pub const ARTIFACT_PROFILE: u16 = 2;
 /// Runtime-tail physical profile with affine account lengths and selected windows.
 pub const SELECTED_WINDOW_ARTIFACT_PROFILE: u16 = 3;
+/// Selected-window profile with checked narrow integer projections into `u64` scalars.
+pub const TYPED_SCALAR_ARTIFACT_PROFILE: u16 = 4;
 /// Exact V2 header width.
 pub const HEADER_BYTES: usize = 32;
 /// Exact account-rule width.
@@ -54,6 +56,39 @@ const OP_PROJECT_DATA_U64_SELECTED: u8 = 12;
 const OP_PROJECT_DATA_IDENTITY_SELECTED: u8 = 13;
 const OP_PROJECT_DATA_U64_SELECTED_AFFINE: u8 = 14;
 const OP_PROJECT_DATA_IDENTITY_SELECTED_AFFINE: u8 = 15;
+const OP_PROJECT_DATA_U16: u8 = 16;
+
+/// Encode one fixed-account `u16` data projection into a common `u64` scalar.
+///
+/// This operation is admitted only by [`TYPED_SCALAR_ARTIFACT_PROFILE`]. The
+/// destination scalar receives the zero-extended little-endian value. All
+/// arguments are validated before `output` is mutated.
+pub fn encode_project_data_u16_operation_v2(
+    output: &mut [u8],
+    account: u16,
+    register: u16,
+    data_offset: u32,
+) -> Result<()> {
+    if output.len() != OPERATION_BYTES || data_offset.checked_add(2).is_none() {
+        return Err(Error::InvalidLength);
+    }
+    let mut candidate = [0_u8; OPERATION_BYTES];
+    *candidate.get_mut(0).ok_or(Error::InvalidLength)? = OP_PROJECT_DATA_U16;
+    candidate
+        .get_mut(2..4)
+        .ok_or(Error::InvalidLength)?
+        .copy_from_slice(&account.to_le_bytes());
+    candidate
+        .get_mut(6..8)
+        .ok_or(Error::InvalidLength)?
+        .copy_from_slice(&register.to_le_bytes());
+    candidate
+        .get_mut(8..12)
+        .ok_or(Error::InvalidLength)?
+        .copy_from_slice(&data_offset.to_le_bytes());
+    output.copy_from_slice(&candidate);
+    Ok(())
+}
 
 /// Stable hostile-decode or projection refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -218,7 +253,7 @@ impl<'a> AccountProfileV2<'a> {
         if read_u16(bytes, 8)? != VERSION
             || !matches!(
                 artifact_profile,
-                ARTIFACT_PROFILE | SELECTED_WINDOW_ARTIFACT_PROFILE
+                ARTIFACT_PROFILE | SELECTED_WINDOW_ARTIFACT_PROFILE | TYPED_SCALAR_ARTIFACT_PROFILE
             )
         {
             return Err(Error::UnsupportedProfile);
@@ -909,8 +944,14 @@ impl Operation {
             OP_PROJECT_DATA_U64
             | OP_PROJECT_DATA_IDENTITY
             | OP_PROJECT_DATA_U32
+            | OP_PROJECT_DATA_U16
             | OP_PROJECT_TAIL_COUNT_U32 => {
                 if self.data_stride != 0 {
+                    return Err(Error::NonCanonicalOperation);
+                }
+                if self.opcode == OP_PROJECT_DATA_U16
+                    && profile.artifact_profile != TYPED_SCALAR_ARTIFACT_PROFILE
+                {
                     return Err(Error::NonCanonicalOperation);
                 }
             }
@@ -949,8 +990,10 @@ impl Operation {
                 }
             }
             OP_SELECT_DATA_WINDOW => {
-                if profile.artifact_profile != SELECTED_WINDOW_ARTIFACT_PROFILE
-                    || item_body
+                if !matches!(
+                    profile.artifact_profile,
+                    SELECTED_WINDOW_ARTIFACT_PROFILE | TYPED_SCALAR_ARTIFACT_PROFILE
+                ) || item_body
                     || self.account_item
                     || self.register_item
                     || self.data_stride == 0
@@ -982,8 +1025,10 @@ impl Operation {
                 } else {
                     32
                 };
-                if profile.artifact_profile != SELECTED_WINDOW_ARTIFACT_PROFILE
-                    || item_body
+                if !matches!(
+                    profile.artifact_profile,
+                    SELECTED_WINDOW_ARTIFACT_PROFILE | TYPED_SCALAR_ARTIFACT_PROFILE
+                ) || item_body
                     || self.account_item
                     || self.register_item
                     || self.data_stride != 0
@@ -1046,6 +1091,7 @@ impl Operation {
                 | OP_PROJECT_DATA_U64_SELECTED_AFFINE
                 | OP_PROJECT_DATA_IDENTITY_SELECTED_AFFINE
                 | OP_PROJECT_DATA_U32
+                | OP_PROJECT_DATA_U16
                 | OP_PROJECT_TAIL_COUNT_U32
         )
     }
@@ -1141,6 +1187,16 @@ impl Operation {
                     scalars,
                     scalar()?,
                     u64::from(u32::from_le_bytes(
+                        bytes.try_into().map_err(|_| Error::DataOutOfBounds)?,
+                    )),
+                )
+            }
+            OP_PROJECT_DATA_U16 => {
+                let bytes = data_field(account.data(), self.data_offset, 2)?;
+                write_scalar(
+                    scalars,
+                    scalar()?,
+                    u64::from(u16::from_le_bytes(
                         bytes.try_into().map_err(|_| Error::DataOutOfBounds)?,
                     )),
                 )
@@ -1689,6 +1745,31 @@ mod tests {
         data
     }
 
+    fn typed_u16_profile_bytes(artifact_profile: u16) -> Vec<u8> {
+        let mut encoded_operation = [0_u8; OPERATION_BYTES];
+        encode_project_data_u16_operation_v2(&mut encoded_operation, 0, 0, 1)
+            .expect("encode u16 projection");
+        let mut output = vec![0_u8; HEADER_BYTES + RULE_BYTES + OPERATION_BYTES];
+        put(&mut output, 0, &MAGIC);
+        for (offset, value) in [
+            (8, VERSION),
+            (10, artifact_profile),
+            (12, 1),
+            (14, 0),
+            (16, 1),
+            (18, 0),
+            (20, 1),
+            (22, 0),
+            (24, 0),
+            (26, 0),
+        ] {
+            put(&mut output, offset, &value.to_le_bytes());
+        }
+        put(&mut output, HEADER_BYTES, &rule(4));
+        put(&mut output, HEADER_BYTES + RULE_BYTES, &encoded_operation);
+        output
+    }
+
     fn observations(duplicate_across_items: bool) -> Vec<AccountObservationV1<'static>> {
         let second = if duplicate_across_items {
             [0x21; 32]
@@ -1751,6 +1832,54 @@ mod tests {
             ),
             Ok(2)
         );
+    }
+
+    #[test]
+    fn typed_u16_projection_zero_extends_and_is_profile_gated_atomically() {
+        let bytes = typed_u16_profile_bytes(TYPED_SCALAR_ARTIFACT_PROFILE);
+        let profile = AccountProfileV2::decode(&bytes).expect("typed profile");
+        let data = [0x55, 0x34, 0x12, 0xaa];
+        let accounts = [AccountObservationV1::new(
+            [1; 32], [2; 32], 0, &data, false, false, false,
+        )];
+        let mut scratch_scalars = [0_u64];
+        let mut output_scalars = [9_u64];
+        project_atomic(
+            profile,
+            0,
+            &accounts,
+            ProjectionRegistersV2 {
+                input_scalars: &[0],
+                input_identities: &[],
+                scratch_scalars: &mut scratch_scalars,
+                scratch_identities: &mut [],
+                output_scalars: &mut output_scalars,
+                output_identities: &mut [],
+            },
+        )
+        .expect("typed projection");
+        assert_eq!(output_scalars, [0x1234]);
+
+        assert_eq!(
+            AccountProfileV2::decode(&typed_u16_profile_bytes(SELECTED_WINDOW_ARTIFACT_PROFILE)),
+            Err(Error::NonCanonicalOperation)
+        );
+
+        let mut short = [7_u8; OPERATION_BYTES - 1];
+        let before = short;
+        assert_eq!(
+            encode_project_data_u16_operation_v2(&mut short, 0, 0, 0),
+            Err(Error::InvalidLength)
+        );
+        assert_eq!(short, before);
+
+        let mut overflow = [7_u8; OPERATION_BYTES];
+        let before = overflow;
+        assert_eq!(
+            encode_project_data_u16_operation_v2(&mut overflow, 0, 0, u32::MAX),
+            Err(Error::InvalidLength)
+        );
+        assert_eq!(overflow, before);
     }
 
     #[test]
