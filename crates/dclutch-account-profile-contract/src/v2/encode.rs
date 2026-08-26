@@ -6,17 +6,20 @@
 //! output.
 
 use super::{
-    ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE, ARTIFACT_PROFILE, AccountPrestateV2,
-    AccountProfileV2, Error, HEADER_BYTES, LIFECYCLE_PRESTATE_ARTIFACT_PROFILE, MAGIC,
-    OP_PROJECT_DATA_IDENTITY, OP_PROJECT_DATA_IDENTITY_AFFINE, OP_PROJECT_DATA_IDENTITY_SELECTED,
+    AccountPrestateV2, AccountProfileV2, Error, TrustedEnvironmentV2, TrustedIdentityEnvironmentV2,
+    ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE, ARTIFACT_PROFILE, HEADER_BYTES,
+    LIFECYCLE_PRESTATE_ARTIFACT_PROFILE, MAGIC, OPERATION_BYTES, OP_PROJECT_DATA_IDENTITY,
+    OP_PROJECT_DATA_IDENTITY_AFFINE, OP_PROJECT_DATA_IDENTITY_SELECTED,
     OP_PROJECT_DATA_IDENTITY_SELECTED_AFFINE, OP_PROJECT_DATA_U16, OP_PROJECT_DATA_U32,
     OP_PROJECT_DATA_U64, OP_PROJECT_DATA_U64_AFFINE, OP_PROJECT_DATA_U64_SELECTED,
     OP_PROJECT_DATA_U64_SELECTED_AFFINE, OP_PROJECT_KEY, OP_PROJECT_LAMPORTS, OP_PROJECT_OWNER,
-    OP_PROJECT_TAIL_COUNT_U32, OP_REQUIRE_KEY, OP_REQUIRE_OWNER, OP_SELECT_DATA_WINDOW,
-    OPERATION_BYTES, RULE_BYTES, SELECTED_WINDOW_ARTIFACT_PROFILE,
-    TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE, TRUSTED_ENVIRONMENT_CURRENT_SLOT,
-    TRUSTED_ENVIRONMENT_KIND_OFFSET, TRUSTED_ENVIRONMENT_SCALAR_OFFSET,
-    TYPED_SCALAR_ARTIFACT_PROFILE, TrustedEnvironmentV2, VERSION,
+    OP_PROJECT_TAIL_COUNT_U32, OP_REQUIRE_KEY, OP_REQUIRE_OWNER, OP_SELECT_DATA_WINDOW, RULE_BYTES,
+    SELECTED_WINDOW_ARTIFACT_PROFILE, TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE,
+    TRUSTED_ENVIRONMENT_CURRENT_SLOT, TRUSTED_ENVIRONMENT_KIND_OFFSET,
+    TRUSTED_ENVIRONMENT_SCALAR_OFFSET, TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE,
+    TRUSTED_EXECUTING_PROGRAM_CURRENT, TRUSTED_EXECUTING_PROGRAM_HEADER_BYTES,
+    TRUSTED_EXECUTING_PROGRAM_IDENTITY_OFFSET, TRUSTED_EXECUTING_PROGRAM_KIND_OFFSET,
+    TYPED_SCALAR_ARTIFACT_PROFILE, VERSION,
 };
 use crate::{
     EFFECT_PERMISSION_CREDIT_LAMPORTS, EFFECT_PERMISSION_DEBIT_LAMPORTS,
@@ -39,6 +42,8 @@ pub enum AccountProfileArtifactV2 {
     /// Lifecycle-prestate profile with explicitly adapter-authenticated,
     /// variable-width readonly fixed-prefix records.
     AdapterAuthenticatedVariableData,
+    /// Variable-data successor with optional trusted executing-program identity.
+    TrustedExecutingProgram,
 }
 
 impl AccountProfileArtifactV2 {
@@ -52,6 +57,14 @@ impl AccountProfileArtifactV2 {
             Self::AdapterAuthenticatedVariableData => {
                 ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE
             }
+            Self::TrustedExecutingProgram => TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE,
+        }
+    }
+
+    const fn header_bytes(self) -> usize {
+        match self {
+            Self::TrustedExecutingProgram => TRUSTED_EXECUTING_PROGRAM_HEADER_BYTES,
+            _ => HEADER_BYTES,
         }
     }
 }
@@ -425,6 +438,7 @@ pub fn encode_account_profile_with_environment_v2_atomic(
     encode_account_profile_atomic(
         artifact,
         trusted_environment,
+        TrustedIdentityEnvironmentV2::None,
         RuleInputsV2::Exact(fixed_rules),
         RuleInputsV2::Exact(item_rules),
         fixed_operations,
@@ -454,6 +468,7 @@ pub fn encode_account_profile_with_lifecycle_v2_atomic(
     encode_account_profile_atomic(
         AccountProfileArtifactV2::LifecyclePrestate,
         trusted_environment,
+        TrustedIdentityEnvironmentV2::None,
         RuleInputsV2::WithPrestate(fixed_rules),
         RuleInputsV2::WithPrestate(item_rules),
         fixed_operations,
@@ -484,6 +499,39 @@ pub fn encode_account_profile_with_adapter_authenticated_variable_data_v2_atomic
     encode_account_profile_atomic(
         AccountProfileArtifactV2::AdapterAuthenticatedVariableData,
         trusted_environment,
+        TrustedIdentityEnvironmentV2::None,
+        RuleInputsV2::WithPrestate(fixed_rules),
+        RuleInputsV2::WithPrestate(item_rules),
+        fixed_operations,
+        item_operations,
+        registers,
+        scratch,
+        output,
+    )
+}
+
+/// Encode profile 8 with trusted runtime scalar and role-identity declarations.
+///
+/// The identity declaration names only a common register. The authenticated
+/// outer seeds that register with its Registry-selected current program before
+/// account projection. Profile 8 retains lifecycle-bound and explicitly
+/// adapter-authenticated variable-data prestates from profile 7.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_account_profile_with_trusted_executing_program_v2_atomic(
+    trusted_environment: TrustedEnvironmentV2,
+    trusted_identity_environment: TrustedIdentityEnvironmentV2,
+    fixed_rules: &[AccountRuleWithPrestateInputV2],
+    item_rules: &[AccountRuleWithPrestateInputV2],
+    fixed_operations: &[AccountOperationInputV2],
+    item_operations: &[AccountOperationInputV2],
+    registers: RegisterGeometryV2,
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<(), Error> {
+    encode_account_profile_atomic(
+        AccountProfileArtifactV2::TrustedExecutingProgram,
+        trusted_environment,
+        trusted_identity_environment,
         RuleInputsV2::WithPrestate(fixed_rules),
         RuleInputsV2::WithPrestate(item_rules),
         fixed_operations,
@@ -527,6 +575,7 @@ impl RuleInputsV2<'_> {
 fn encode_account_profile_atomic(
     artifact: AccountProfileArtifactV2,
     trusted_environment: TrustedEnvironmentV2,
+    trusted_identity_environment: TrustedIdentityEnvironmentV2,
     fixed_rules: RuleInputsV2<'_>,
     item_rules: RuleInputsV2<'_>,
     fixed_operations: &[AccountOperationInputV2],
@@ -541,9 +590,17 @@ fn encode_account_profile_atomic(
             AccountProfileArtifactV2::TrustedEnvironment
                 | AccountProfileArtifactV2::LifecyclePrestate
                 | AccountProfileArtifactV2::AdapterAuthenticatedVariableData
+                | AccountProfileArtifactV2::TrustedExecutingProgram
         )
     {
         return Err(Error::InvalidTrustedEnvironment);
+    }
+    if trusted_identity_environment
+        .current_executing_program_destination()
+        .is_some()
+        && artifact != AccountProfileArtifactV2::TrustedExecutingProgram
+    {
+        return Err(Error::InvalidTrustedExecutingProgram);
     }
     let fixed_account_count = u16::try_from(fixed_rules.len()).map_err(|_| Error::InvalidLength)?;
     let item_account_stride = u16::try_from(item_rules.len()).map_err(|_| Error::InvalidLength)?;
@@ -562,7 +619,7 @@ fn encode_account_profile_atomic(
                 .and_then(|count| count.checked_mul(OPERATION_BYTES))
                 .and_then(|operations| rules.checked_add(operations))
         })
-        .and_then(|body| HEADER_BYTES.checked_add(body))
+        .and_then(|body| artifact.header_bytes().checked_add(body))
         .ok_or(Error::InvalidLength)?;
     if scratch.len() != expected || output.len() != expected {
         return Err(Error::InvalidLength);
@@ -595,7 +652,21 @@ fn encode_account_profile_atomic(
             TRUSTED_ENVIRONMENT_CURRENT_SLOT,
         )?;
     }
-    let mut cursor = HEADER_BYTES;
+    if let TrustedIdentityEnvironmentV2::CurrentExecutingProgram { destination } =
+        trusted_identity_environment
+    {
+        write(
+            scratch,
+            TRUSTED_EXECUTING_PROGRAM_IDENTITY_OFFSET,
+            &destination.to_le_bytes(),
+        )?;
+        write_byte(
+            scratch,
+            TRUSTED_EXECUTING_PROGRAM_KIND_OFFSET,
+            TRUSTED_EXECUTING_PROGRAM_CURRENT,
+        )?;
+    }
+    let mut cursor = artifact.header_bytes();
     let mut rule_index = 0_usize;
     while rule_index < fixed_rules.len() {
         let (rule, prestate) = fixed_rules.get(rule_index)?;
@@ -880,8 +951,8 @@ mod tests {
     extern crate std;
 
     use super::*;
+    use crate::v2::{project_atomic, ProjectionRegistersV2, TRUSTED_ENVIRONMENT_RESERVED_OFFSET};
     use crate::AccountObservationV1;
-    use crate::v2::{ProjectionRegistersV2, TRUSTED_ENVIRONMENT_RESERVED_OFFSET, project_atomic};
 
     const READONLY: AccountPrivilegesV2 = AccountPrivilegesV2::new(false, false, false);
     const WRITABLE: AccountPrivilegesV2 = AccountPrivilegesV2::new(false, true, false);
@@ -1619,5 +1690,182 @@ mod tests {
             Err(Error::InvalidTrustedEnvironment)
         );
         assert_eq!(refused_output, before);
+    }
+
+    #[test]
+    fn trusted_executing_program_is_profile8_only_bounded_and_overwrite_safe() {
+        let rules = [AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: READONLY,
+                effect_permissions: NO_EFFECTS,
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length: 4,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::AdapterAuthenticatedVariableData,
+        }];
+        let operations = [
+            AccountOperationInputV2::ProjectDataU32 {
+                account: AccountCoordinateV2::fixed(0),
+                destination: ScalarCoordinateV2::common(0),
+                data_offset: 0,
+            },
+            AccountOperationInputV2::ProjectKey {
+                account: AccountCoordinateV2::fixed(0),
+                destination: IdentityCoordinateV2::common(1),
+            },
+        ];
+        let registers = RegisterGeometryV2 {
+            common_scalars: 2,
+            item_scalar_stride: 0,
+            common_identities: 3,
+            item_identity_stride: 0,
+        };
+        let width = TRUSTED_EXECUTING_PROGRAM_HEADER_BYTES
+            + RULE_BYTES
+            + operations.len() * OPERATION_BYTES;
+        let mut scratch = std::vec![0_u8; width];
+        let mut encoded = std::vec![0_u8; width];
+        encode_account_profile_with_trusted_executing_program_v2_atomic(
+            TrustedEnvironmentV2::CurrentSlot { destination: 1 },
+            TrustedIdentityEnvironmentV2::CurrentExecutingProgram { destination: 2 },
+            &rules,
+            &[],
+            &operations,
+            &[],
+            registers,
+            &mut scratch,
+            &mut encoded,
+        )
+        .expect("profile8");
+        let profile = AccountProfileV2::decode(&encoded).expect("decode profile8");
+        assert_eq!(
+            profile.artifact_profile(),
+            TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
+        );
+        assert_eq!(profile.trusted_current_slot_scalar(), Some(1));
+        assert_eq!(
+            profile.trusted_current_executing_program_identity(),
+            Some(2)
+        );
+        assert_eq!(
+            profile.trusted_identity_environment(),
+            TrustedIdentityEnvironmentV2::CurrentExecutingProgram { destination: 2 }
+        );
+        assert!(profile
+            .writes_register(crate::v2::ProjectionTargetV2 {
+                kind: crate::v2::ProjectionRegisterKindV2::Identity,
+                space: crate::v2::ProjectionRegisterSpaceV2::Common,
+                index: 2,
+            })
+            .expect("inspect trusted writer"));
+
+        let data = 0x4433_2211_u32.to_le_bytes();
+        let account = AccountObservationV1::new_adapter_authenticated_variable_data(
+            [4; 32], [5; 32], 9, &data, false, false, false,
+        );
+        let input_scalars = [0_u64, 77];
+        let input_identities = [[0; 32], [0; 32], [8; 32]];
+        let mut scratch_scalars = [0_u64; 2];
+        let mut scratch_identities = [[0_u8; 32]; 3];
+        let mut output_scalars = [9_u64; 2];
+        let mut output_identities = [[9_u8; 32]; 3];
+        project_atomic(
+            profile,
+            0,
+            &[account],
+            ProjectionRegistersV2 {
+                input_scalars: &input_scalars,
+                input_identities: &input_identities,
+                scratch_scalars: &mut scratch_scalars,
+                scratch_identities: &mut scratch_identities,
+                output_scalars: &mut output_scalars,
+                output_identities: &mut output_identities,
+            },
+        )
+        .expect("project profile8");
+        assert_eq!(output_scalars, [0x4433_2211, 77]);
+        assert_eq!(output_identities, [[0; 32], [4; 32], [8; 32]]);
+
+        for (offset, value, expected) in [
+            (
+                TRUSTED_EXECUTING_PROGRAM_IDENTITY_OFFSET,
+                3,
+                Error::InvalidTrustedExecutingProgram,
+            ),
+            (
+                TRUSTED_EXECUTING_PROGRAM_KIND_OFFSET,
+                2,
+                Error::InvalidTrustedExecutingProgram,
+            ),
+            (
+                crate::v2::TRUSTED_EXECUTING_PROGRAM_RESERVED_OFFSET,
+                1,
+                Error::InvalidTrustedExecutingProgram,
+            ),
+        ] {
+            let mut hostile = encoded.clone();
+            *hostile.get_mut(offset).expect("hostile profile8 header") = value;
+            assert_eq!(AccountProfileV2::decode(&hostile), Err(expected));
+        }
+        let truncated = encoded
+            .get(..encoded.len().saturating_sub(1))
+            .expect("truncated profile8");
+        assert_eq!(
+            AccountProfileV2::decode(truncated),
+            Err(Error::InvalidLength)
+        );
+        let mut relabeled = encoded.clone();
+        relabeled
+            .get_mut(10..12)
+            .expect("profile")
+            .copy_from_slice(&ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE.to_le_bytes());
+        assert_eq!(
+            AccountProfileV2::decode(&relabeled),
+            Err(Error::InvalidLength)
+        );
+
+        let colliding_operations = [AccountOperationInputV2::ProjectKey {
+            account: AccountCoordinateV2::fixed(0),
+            destination: IdentityCoordinateV2::common(2),
+        }];
+        let colliding_width = TRUSTED_EXECUTING_PROGRAM_HEADER_BYTES + RULE_BYTES + OPERATION_BYTES;
+        let mut colliding_scratch = std::vec![0_u8; colliding_width];
+        let mut refused = std::vec![0x55_u8; colliding_width];
+        let before = refused.clone();
+        assert_eq!(
+            encode_account_profile_with_trusted_executing_program_v2_atomic(
+                TrustedEnvironmentV2::CurrentSlot { destination: 1 },
+                TrustedIdentityEnvironmentV2::CurrentExecutingProgram { destination: 2 },
+                &rules,
+                &[],
+                &colliding_operations,
+                &[],
+                registers,
+                &mut colliding_scratch,
+                &mut refused,
+            ),
+            Err(Error::TrustedExecutingProgramOverwrite)
+        );
+        assert_eq!(refused, before);
+
+        let mut out_of_bounds_scratch = std::vec![0_u8; width];
+        let mut out_of_bounds = std::vec![0x66_u8; width];
+        let out_of_bounds_before = out_of_bounds.clone();
+        assert_eq!(
+            encode_account_profile_with_trusted_executing_program_v2_atomic(
+                TrustedEnvironmentV2::CurrentSlot { destination: 1 },
+                TrustedIdentityEnvironmentV2::CurrentExecutingProgram { destination: 3 },
+                &rules,
+                &[],
+                &operations,
+                &[],
+                registers,
+                &mut out_of_bounds_scratch,
+                &mut out_of_bounds,
+            ),
+            Err(Error::InvalidTrustedExecutingProgram)
+        );
+        assert_eq!(out_of_bounds, out_of_bounds_before);
     }
 }

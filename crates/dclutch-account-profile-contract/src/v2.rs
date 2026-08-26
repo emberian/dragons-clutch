@@ -43,8 +43,12 @@ pub const LIFECYCLE_PRESTATE_ARTIFACT_PROFILE: u16 = 6;
 /// Lifecycle-prestate profile admitting explicit adapter-authenticated
 /// variable-width, readonly fixed-prefix records.
 pub const ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE: u16 = 7;
+/// Variable-data successor with an optional trusted current-executing-program identity.
+pub const TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE: u16 = 8;
 /// Exact V2 header width.
 pub const HEADER_BYTES: usize = 32;
+/// Exact profile-8 header width including the trusted role-identity declaration.
+pub const TRUSTED_EXECUTING_PROGRAM_HEADER_BYTES: usize = 36;
 /// Exact account-rule width.
 pub const RULE_BYTES: usize = 16;
 /// Exact projection-operation width.
@@ -55,9 +59,17 @@ pub const TRUSTED_ENVIRONMENT_SCALAR_OFFSET: usize = 28;
 pub const TRUSTED_ENVIRONMENT_KIND_OFFSET: usize = 30;
 /// Trusted-environment reserved-byte offset.
 pub const TRUSTED_ENVIRONMENT_RESERVED_OFFSET: usize = 31;
+/// Little-endian trusted current-executing-program identity-coordinate offset.
+pub const TRUSTED_EXECUTING_PROGRAM_IDENTITY_OFFSET: usize = 32;
+/// Trusted current-executing-program kind-tag offset.
+pub const TRUSTED_EXECUTING_PROGRAM_KIND_OFFSET: usize = 34;
+/// Trusted current-executing-program reserved-byte offset.
+pub const TRUSTED_EXECUTING_PROGRAM_RESERVED_OFFSET: usize = 35;
 
 const TRUSTED_ENVIRONMENT_NONE: u8 = 0;
 const TRUSTED_ENVIRONMENT_CURRENT_SLOT: u8 = 1;
+const TRUSTED_EXECUTING_PROGRAM_NONE: u8 = 0;
+const TRUSTED_EXECUTING_PROGRAM_CURRENT: u8 = 1;
 
 const OP_REQUIRE_KEY: u8 = 0;
 const OP_REQUIRE_OWNER: u8 = 1;
@@ -157,6 +169,10 @@ pub enum Error {
     InvalidTrustedEnvironment,
     /// A projection attempted to overwrite a trusted-environment scalar.
     TrustedEnvironmentOverwrite,
+    /// Trusted-role tag, reserved byte, or identity coordinate was invalid.
+    InvalidTrustedExecutingProgram,
+    /// A projection attempted to overwrite the trusted current-program identity.
+    TrustedExecutingProgramOverwrite,
     /// A lifecycle-bound alternative prestate was malformed or used outside profile 6.
     InvalidLifecyclePrestate,
     /// A variable-width prestate was malformed, unauthenticated, or used outside profile 7.
@@ -177,6 +193,22 @@ pub enum TrustedEnvironmentV2 {
     /// Current trusted runtime slot, seeded by the outer before projection.
     CurrentSlot {
         /// Common scalar coordinate receiving the trusted slot.
+        destination: u16,
+    },
+}
+
+/// Trusted current role identity supplied by the authenticated outer.
+///
+/// This declares only a common identity destination. The outer is responsible
+/// for seeding the Registry-authenticated current executing program before
+/// account projection; caller suffix accounts never supply this fact.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TrustedIdentityEnvironmentV2 {
+    /// No trusted role identity is declared.
+    None,
+    /// Registry-authenticated current executing program.
+    CurrentExecutingProgram {
+        /// Common identity coordinate receiving the authenticated program ID.
         destination: u16,
     },
 }
@@ -216,6 +248,16 @@ impl TrustedEnvironmentV2 {
         match self {
             Self::None => None,
             Self::CurrentSlot { destination } => Some(destination),
+        }
+    }
+}
+
+impl TrustedIdentityEnvironmentV2 {
+    /// Current-executing-program destination, when selected.
+    pub const fn current_executing_program_destination(self) -> Option<u16> {
+        match self {
+            Self::None => None,
+            Self::CurrentExecutingProgram { destination } => Some(destination),
         }
     }
 }
@@ -338,6 +380,7 @@ pub struct AccountProfileV2<'a> {
     common_identities: u16,
     item_identity_stride: u16,
     trusted_environment: TrustedEnvironmentV2,
+    trusted_identity_environment: TrustedIdentityEnvironmentV2,
     bytes: &'a [u8],
 }
 
@@ -360,6 +403,7 @@ impl<'a> AccountProfileV2<'a> {
                     | TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE
                     | LIFECYCLE_PRESTATE_ARTIFACT_PROFILE
                     | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE
+                    | TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
             )
         {
             return Err(Error::UnsupportedProfile);
@@ -369,6 +413,7 @@ impl<'a> AccountProfileV2<'a> {
             TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE
                 | LIFECYCLE_PRESTATE_ARTIFACT_PROFILE
                 | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE
+                | TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
         ) && read_u32(bytes, 28)? != 0
         {
             return Err(Error::NonCanonicalReserved);
@@ -384,6 +429,10 @@ impl<'a> AccountProfileV2<'a> {
             common_identities: read_u16(bytes, 24)?,
             item_identity_stride: read_u16(bytes, 26)?,
             trusted_environment: decode_trusted_environment(bytes, artifact_profile)?,
+            trusted_identity_environment: decode_trusted_identity_environment(
+                bytes,
+                artifact_profile,
+            )?,
             bytes,
         };
         if value.fixed_accounts == 0
@@ -402,6 +451,13 @@ impl<'a> AccountProfileV2<'a> {
         {
             return Err(Error::InvalidTrustedEnvironment);
         }
+        if value
+            .trusted_identity_environment
+            .current_executing_program_destination()
+            .is_some_and(|destination| destination >= value.common_identities)
+        {
+            return Err(Error::InvalidTrustedExecutingProgram);
+        }
         let rules = usize::from(value.fixed_accounts)
             .checked_add(usize::from(value.item_account_stride))
             .ok_or(Error::InvalidLength)?;
@@ -415,7 +471,7 @@ impl<'a> AccountProfileV2<'a> {
                     .checked_mul(OPERATION_BYTES)
                     .and_then(|ops| width.checked_add(ops))
             })
-            .and_then(|body| HEADER_BYTES.checked_add(body))
+            .and_then(|body| value.header_bytes().checked_add(body))
             .ok_or(Error::InvalidLength)?;
         if bytes.len() != expected {
             return Err(Error::InvalidLength);
@@ -471,6 +527,17 @@ impl<'a> AccountProfileV2<'a> {
         self.trusted_environment.current_slot_destination()
     }
 
+    /// Trusted current-role declaration and its common-identity destination.
+    pub const fn trusted_identity_environment(self) -> TrustedIdentityEnvironmentV2 {
+        self.trusted_identity_environment
+    }
+
+    /// Common identity that the outer must seed with the authenticated program ID.
+    pub const fn trusted_current_executing_program_identity(self) -> Option<u16> {
+        self.trusted_identity_environment
+            .current_executing_program_destination()
+    }
+
     /// Whether any account projection or trusted-environment seed writes `target`.
     ///
     /// This is a static artifact inspection. It does not execute projections or
@@ -479,6 +546,12 @@ impl<'a> AccountProfileV2<'a> {
         if target.kind == ProjectionRegisterKindV2::Scalar
             && target.space == ProjectionRegisterSpaceV2::Common
             && self.trusted_current_slot_scalar() == Some(target.index)
+        {
+            return Ok(true);
+        }
+        if target.kind == ProjectionRegisterKindV2::Identity
+            && target.space == ProjectionRegisterSpaceV2::Common
+            && self.trusted_current_executing_program_identity() == Some(target.index)
         {
             return Ok(true);
         }
@@ -509,6 +582,14 @@ impl<'a> AccountProfileV2<'a> {
         self.bytes
     }
 
+    const fn header_bytes(self) -> usize {
+        if self.artifact_profile == TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE {
+            TRUSTED_EXECUTING_PROGRAM_HEADER_BYTES
+        } else {
+            HEADER_BYTES
+        }
+    }
+
     /// Return one fixed rule or one repeated item-template rule.
     pub fn rule(self, item_template: bool, index: u16) -> Result<AccountRuleV2> {
         let count = if item_template {
@@ -528,7 +609,7 @@ impl<'a> AccountProfileV2<'a> {
         };
         let offset = ordinal
             .checked_mul(RULE_BYTES)
-            .and_then(|body| HEADER_BYTES.checked_add(body))
+            .and_then(|body| self.header_bytes().checked_add(body))
             .ok_or(Error::InvalidLength)?;
         decode_rule(self.bytes, offset, self.artifact_profile)
     }
@@ -613,7 +694,7 @@ impl<'a> AccountProfileV2<'a> {
                     .checked_mul(OPERATION_BYTES)
                     .and_then(|ops| rules.checked_add(ops))
             })
-            .and_then(|body| HEADER_BYTES.checked_add(body))
+            .and_then(|body| self.header_bytes().checked_add(body))
             .ok_or(Error::InvalidLength)?;
         Operation::decode(self.bytes, offset)
     }
@@ -658,6 +739,7 @@ impl<'a> AccountProfileV2<'a> {
             {
                 Ok(())
             }
+            TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE => Ok(()),
             LIFECYCLE_PRESTATE_ARTIFACT_PROFILE => Err(Error::InvalidLifecyclePrestate),
             ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE => {
                 Err(Error::InvalidVariableDataPrestate)
@@ -819,6 +901,12 @@ impl<'a> AccountProfileV2<'a> {
         {
             return Err(Error::TrustedEnvironmentOverwrite);
         }
+        if self
+            .trusted_current_executing_program_identity()
+            .is_some_and(|destination| target == (true, false, destination))
+        {
+            return Err(Error::TrustedExecutingProgramOverwrite);
+        }
         if item && !operation.register_item {
             return Err(Error::DuplicateProjection);
         }
@@ -844,6 +932,7 @@ fn decode_trusted_environment(bytes: &[u8], artifact_profile: u16) -> Result<Tru
         TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE
             | LIFECYCLE_PRESTATE_ARTIFACT_PROFILE
             | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE
+            | TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
     ) {
         return Ok(TrustedEnvironmentV2::None);
     }
@@ -856,6 +945,29 @@ fn decode_trusted_environment(bytes: &[u8], artifact_profile: u16) -> Result<Tru
         TRUSTED_ENVIRONMENT_NONE if destination == 0 => Ok(TrustedEnvironmentV2::None),
         TRUSTED_ENVIRONMENT_CURRENT_SLOT => Ok(TrustedEnvironmentV2::CurrentSlot { destination }),
         _ => Err(Error::InvalidTrustedEnvironment),
+    }
+}
+
+fn decode_trusted_identity_environment(
+    bytes: &[u8],
+    artifact_profile: u16,
+) -> Result<TrustedIdentityEnvironmentV2> {
+    if artifact_profile != TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE {
+        return Ok(TrustedIdentityEnvironmentV2::None);
+    }
+    let destination = read_u16(bytes, TRUSTED_EXECUTING_PROGRAM_IDENTITY_OFFSET)?;
+    let kind = byte(bytes, TRUSTED_EXECUTING_PROGRAM_KIND_OFFSET)?;
+    if byte(bytes, TRUSTED_EXECUTING_PROGRAM_RESERVED_OFFSET)? != 0 {
+        return Err(Error::InvalidTrustedExecutingProgram);
+    }
+    match kind {
+        TRUSTED_EXECUTING_PROGRAM_NONE if destination == 0 => {
+            Ok(TrustedIdentityEnvironmentV2::None)
+        }
+        TRUSTED_EXECUTING_PROGRAM_CURRENT => {
+            Ok(TrustedIdentityEnvironmentV2::CurrentExecutingProgram { destination })
+        }
+        _ => Err(Error::InvalidTrustedExecutingProgram),
     }
 }
 
@@ -1222,6 +1334,7 @@ impl Operation {
                             | TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE
                             | LIFECYCLE_PRESTATE_ARTIFACT_PROFILE
                             | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE
+                            | TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
                     )
                 {
                     return Err(Error::NonCanonicalOperation);
@@ -1269,6 +1382,7 @@ impl Operation {
                         | TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE
                         | LIFECYCLE_PRESTATE_ARTIFACT_PROFILE
                         | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE
+                        | TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
                 ) || item_body
                     || self.account_item
                     || self.register_item
@@ -1307,6 +1421,7 @@ impl Operation {
                         | TYPED_SCALAR_ARTIFACT_PROFILE
                         | TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE
                         | LIFECYCLE_PRESTATE_ARTIFACT_PROFILE
+                        | TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
                 ) || item_body
                     || self.account_item
                     || self.register_item
@@ -1680,7 +1795,11 @@ fn decode_rule(bytes: &[u8], offset: usize, artifact_profile: u16) -> Result<Acc
             1 => AccountPrestateV2::LifecycleBound,
             _ => return Err(Error::InvalidLifecyclePrestate),
         }
-    } else if artifact_profile == ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE {
+    } else if matches!(
+        artifact_profile,
+        ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE
+            | TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
+    ) {
         match prestate_tag {
             0 => AccountPrestateV2::Exact,
             1 => AccountPrestateV2::LifecycleBound,
@@ -2381,22 +2500,20 @@ mod tests {
                 } else {
                     accounts.get(..4).expect("short accounts")
                 };
-            assert!(
-                project_atomic(
-                    profile,
-                    2,
-                    used,
-                    ProjectionRegistersV2 {
-                        input_scalars: &input_scalars,
-                        input_identities: &input_identities,
-                        scratch_scalars: &mut scratch_scalars,
-                        scratch_identities: &mut scratch_identities,
-                        output_scalars: &mut output_scalars,
-                        output_identities: &mut output_identities,
-                    }
-                )
-                .is_err()
-            );
+            assert!(project_atomic(
+                profile,
+                2,
+                used,
+                ProjectionRegistersV2 {
+                    input_scalars: &input_scalars,
+                    input_identities: &input_identities,
+                    scratch_scalars: &mut scratch_scalars,
+                    scratch_identities: &mut scratch_identities,
+                    output_scalars: &mut output_scalars,
+                    output_identities: &mut output_identities,
+                }
+            )
+            .is_err());
             assert_eq!(output_scalars, before_scalars);
             assert_eq!(output_identities, before_identities);
         }
