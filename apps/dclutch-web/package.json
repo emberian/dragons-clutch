@@ -19,6 +19,8 @@
     "abi:found:verify": "node scripts/generate-core-found.mjs --check",
     "abi:direct-v3": "node scripts/generate-direct-inline-v3.mjs",
     "abi:direct-v3:verify": "node scripts/generate-direct-inline-v3.mjs --check",
+    "abi:dealer-v3": "node scripts/generate-dealer-equity-v3.mjs",
+    "abi:dealer-v3:verify": "node scripts/generate-dealer-equity-v3.mjs --check",
     "abi:rational-terminal-v3": "node scripts/generate-rational-terminal-hot-v3.mjs",
     "abi:rational-terminal-v3:verify": "node scripts/generate-rational-terminal-hot-v3.mjs --check",
     "fixtures:verify": "node scripts/verify-fixtures.mjs"
