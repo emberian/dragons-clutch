@@ -16,8 +16,13 @@ use dclutch_account_profile_contract::lifecycle_v3::{
 };
 use dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1;
 use dclutch_claims_svm::{
-    CLAIMS_PLAN_HEADER_BYTES_V1, CallerRole as ClaimsCallerRole, ClaimsAction, ClaimsPlanV1,
-    ClaimsReceiptV1,
+    CallerRole as ClaimsCallerRole,
+    affine_batch_v2::{
+        AFFINE_BATCH_PLAN_HEADER_BYTES_V2, AFFINE_BATCH_POSITION_BYTES_V2,
+        AFFINE_BATCH_ROW_BYTES_V2, AffineBatchPlanInputV2, AffineBatchPlanV2,
+        AffineBatchPositionV2, AffineBatchReceiptV2, AffineBatchRowInputV2, AffineBatchRowV2,
+        DeltaDirectionV2, SignedMagnitudeV2,
+    },
 };
 use dclutch_custody_contract::{
     CallerRoleV1, CompartmentV1, ContextV1, CustodyAuthoritySeedsV1, CustodyReceiptV1,
@@ -37,6 +42,10 @@ use super::physical::{
 
 /// Seller-net and combined-fee are the only positive inline collateral routes.
 pub const DIRECT_INLINE_CUSTODY_EFFECT_CAPACITY_V2: usize = 2;
+/// Exact ordinary affine Claims request: header, two Positions, one row.
+pub const DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2: usize = AFFINE_BATCH_PLAN_HEADER_BYTES_V2
+    + 2 * AFFINE_BATCH_POSITION_BYTES_V2
+    + AFFINE_BATCH_ROW_BYTES_V2;
 
 /// Exact external token observations for one inline ordinary match.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -72,6 +81,8 @@ pub struct DirectInlinePhysicalContextV2 {
     pub custody_authority: [u8; 32],
     /// SHA-256 of the complete canonical parent Trading request.
     pub parent_request_digest: [u8; 32],
+    /// Exact finalized linked LiabilityBasis record digest.
+    pub linked_basis_record_digest: [u8; 32],
     /// Claims aggregate revision before the transfer.
     pub claims_market_revision: u64,
     /// Seller Position revision before the transfer.
@@ -151,7 +162,6 @@ pub fn prepare_inline_ordinary_physical_v2(
     context: DirectInlinePhysicalContextV2,
     lifecycle: DirectInlineLifecyclePlansV3,
     collateral: DirectInlineCollateralFrameV2,
-    quantity_scratch: &mut [u8],
     claims_scratch: &mut [u8],
     claims_output: &mut [u8],
 ) -> Result<DirectInlinePhysicalPlanV2> {
@@ -163,54 +173,64 @@ pub fn prepare_inline_ordinary_physical_v2(
     validate_replay(context)?;
     validate_collateral(direct, context, collateral, settlement)?;
 
-    let tail_bytes = usize::try_from(direct.execution.outcome_count)
-        .map_err(|_| DirectPhysicalError::Width)?
-        .checked_mul(8)
-        .ok_or(DirectPhysicalError::Width)?;
-    let claims_bytes = CLAIMS_PLAN_HEADER_BYTES_V1
-        .checked_add(tail_bytes)
-        .ok_or(DirectPhysicalError::Width)?;
-    if quantity_scratch.len() != tail_bytes
-        || claims_scratch.len() != claims_bytes
-        || claims_output.len() != claims_bytes
-    {
+    let claims_bytes = DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2;
+    if claims_scratch.len() != claims_bytes || claims_output.len() != claims_bytes {
         return Err(DirectPhysicalError::Width);
     }
 
     let custody = compile_custody(direct, context, collateral, settlement)?;
-    quantity_scratch.fill(0);
-    let quantity_offset = usize::try_from(direct.seller.authenticated.intent().outcome)
-        .map_err(|_| DirectPhysicalError::Width)?
-        .checked_mul(8)
-        .ok_or(DirectPhysicalError::Width)?;
-    quantity_scratch
-        .get_mut(
-            quantity_offset
-                ..quantity_offset
-                    .checked_add(8)
-                    .ok_or(DirectPhysicalError::Width)?,
+    let positions = [
+        AffineBatchPositionV2::new(
+            direct.seller.authenticated.maker(),
+            context.seller_position_revision,
         )
-        .ok_or(DirectPhysicalError::Width)?
-        .copy_from_slice(&direct.execution.fill.to_le_bytes());
-    let claims = ClaimsPlanV1::new(
-        ClaimsAction::TransferNative,
-        ClaimsCallerRole::Trading,
-        context.core_market.release_set().release_set_id.to_bytes(),
-        context.core_market.market().to_bytes(),
-        context.parent_request_digest,
-        direct.seller.authenticated.maker(),
-        direct.buyer.authenticated.maker(),
-        context.claims_market_revision,
-        context.seller_position_revision,
-        context.buyer_position_revision,
+        .map_err(|_| DirectPhysicalError::Claims)?,
+        AffineBatchPositionV2::new(
+            direct.buyer.authenticated.maker(),
+            context.buyer_position_revision,
+        )
+        .map_err(|_| DirectPhysicalError::Claims)?,
+    ];
+    let neutral = SignedMagnitudeV2::new(DeltaDirectionV2::Neutral, 0)
+        .map_err(|_| DirectPhysicalError::Claims)?;
+    let row = AffineBatchRowV2::new(
+        AffineBatchRowInputV2 {
+            source_present: true,
+            destination_present: true,
+            outcome: direct.seller.authenticated.intent().outcome,
+            source_position_index: 0,
+            destination_position_index: 1,
+            aggregate_delta: neutral,
+            source_delta: SignedMagnitudeV2::new(DeltaDirectionV2::Debit, direct.execution.fill)
+                .map_err(|_| DirectPhysicalError::Claims)?,
+            destination_delta: SignedMagnitudeV2::new(
+                DeltaDirectionV2::Credit,
+                direct.execution.fill,
+            )
+            .map_err(|_| DirectPhysicalError::Claims)?,
+        },
         direct.execution.outcome_count,
-        quantity_scratch,
+        2,
     )
     .map_err(|_| DirectPhysicalError::Claims)?;
-    claims
-        .encode_into(claims_scratch)
-        .map_err(|_| DirectPhysicalError::Claims)?;
-    ClaimsPlanV1::decode(claims_scratch).map_err(|_| DirectPhysicalError::Claims)?;
+    AffineBatchPlanV2::encode_into(
+        AffineBatchPlanInputV2 {
+            caller_role: ClaimsCallerRole::Trading,
+            release_set: context.core_market.release_set().release_set_id.to_bytes(),
+            market: context.core_market.market().to_bytes(),
+            request_id: context.parent_request_digest,
+            product_record_digest: context.core_market.product().product_record.to_bytes(),
+            semantic_basis_id: context.core_market.product().liability_basis.to_bytes(),
+            linked_basis_record_digest: context.linked_basis_record_digest,
+            expected_market_revision: context.claims_market_revision,
+            outcome_count: direct.execution.outcome_count,
+        },
+        &positions,
+        &[row],
+        claims_scratch,
+    )
+    .map_err(|_| DirectPhysicalError::Claims)?;
+    AffineBatchPlanV2::decode(claims_scratch).map_err(|_| DirectPhysicalError::Claims)?;
     claims_output.copy_from_slice(claims_scratch);
 
     Ok(DirectInlinePhysicalPlanV2 {
@@ -322,23 +342,22 @@ pub fn verify_inline_claims_receipt_v2(
     context: DirectInlinePhysicalContextV2,
     claims_packet: &[u8],
     receipt_bytes: &[u8],
+    expected_post_resource_digest: [u8; 32],
 ) -> Result<()> {
-    let plan = ClaimsPlanV1::decode(claims_packet).map_err(|_| DirectPhysicalError::Claims)?;
+    if expected_post_resource_digest == [0; 32] {
+        return Err(DirectPhysicalError::ZeroIdentity);
+    }
+    let plan = AffineBatchPlanV2::decode(claims_packet).map_err(|_| DirectPhysicalError::Claims)?;
     let receipt =
-        ClaimsReceiptV1::decode(receipt_bytes).map_err(|_| DirectPhysicalError::Claims)?;
-    if receipt.caller_role() != ClaimsCallerRole::Trading
-        || receipt.action() != ClaimsAction::TransferNative
-        || receipt.release_set_id() != context.core_market.release_set().release_set_id.to_bytes()
-        || receipt.market() != context.core_market.market().to_bytes()
-        || receipt.request_id() != context.parent_request_digest
-        || receipt.packet_digest() != hash(claims_packet).to_bytes()
+        AffineBatchReceiptV2::decode(receipt_bytes).map_err(|_| DirectPhysicalError::Claims)?;
+    receipt
+        .validate_plan(plan)
+        .map_err(|_| DirectPhysicalError::Claims)?;
+    let (positions, rows) = plan.table_bytes();
+    if receipt.packet_digest() != hash(claims_packet).to_bytes()
+        || receipt.table_digest() != solana_program::hash::hashv(&[positions, rows]).to_bytes()
         || receipt.claims_program() != context.claims_program
-        || receipt.pre_market_revision() != context.claims_market_revision
-        || receipt.post_market_revision() != checked_next(context.claims_market_revision)?
-        || receipt.post_source_revision() != checked_next(context.seller_position_revision)?
-        || receipt.post_destination_revision() != checked_next(context.buyer_position_revision)?
-        || receipt.payout() != 0
-        || plan.source_owner() == plan.destination_owner()
+        || receipt.post_resource_digest() != expected_post_resource_digest
     {
         return Err(DirectPhysicalError::Postcondition);
     }
@@ -414,6 +433,7 @@ fn validate_context(
         context.custody_replay,
         context.custody_authority,
         context.parent_request_digest,
+        context.linked_basis_record_digest,
     ] {
         if identity == [0; 32] {
             return Err(DirectPhysicalError::ZeroIdentity);

@@ -6,7 +6,7 @@ use dclutch_account_profile_contract::lifecycle_v3::{
 };
 use dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1;
 use dclutch_claims_svm::{
-    CLAIMS_PLAN_HEADER_BYTES_V1, CallerRole as ClaimsCallerRole, ClaimsPlanV1, ClaimsReceiptV1,
+    CallerRole as ClaimsCallerRole,
     affine_batch_v2::{
         AffineBatchPlanInputV2, AffineBatchPlanV2, AffineBatchPositionV2, AffineBatchReceiptV2,
         AffineBatchRowInputV2, AffineBatchRowV2, DeltaDirectionV2, SignedMagnitudeV2,
@@ -2084,6 +2084,7 @@ fn inline_physical_fixture(
             },
             custody_authority,
             parent_request_digest: id(17),
+            linked_basis_record_digest: id(39),
             claims_market_revision: 8,
             seller_position_revision: 9,
             buyer_position_revision: 10,
@@ -2171,15 +2172,13 @@ fn maker_lifecycle_plan(
 #[test]
 fn inline_ioc_projects_claims_and_net_then_combined_fee_with_residual_delegate() {
     let (direct, context, collateral) = inline_physical_fixture(40, 1, 66);
-    let mut quantities = [0_u8; 24];
-    let mut claims_scratch = [0_u8; CLAIMS_PLAN_HEADER_BYTES_V1 + 24];
-    let mut claims_output = [0xa5_u8; CLAIMS_PLAN_HEADER_BYTES_V1 + 24];
+    let mut claims_scratch = [0_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
+    let mut claims_output = [0xa5_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
     let plan = prepare_inline_ordinary_physical_v2(
         direct,
         context,
         inline_lifecycle_plans(direct, context),
         collateral,
-        &mut quantities,
         &mut claims_scratch,
         &mut claims_output,
     )
@@ -2199,11 +2198,24 @@ fn inline_ioc_projects_claims_and_net_then_combined_fee_with_residual_delegate()
     assert_eq!(fee.request.expected_revision, 8);
     assert_eq!(fee.request.semantic.transfer_index, 1);
     assert_eq!(fee.delegated_after, 44);
-    let claims = ClaimsPlanV1::decode(&claims_output).expect("Claims plan");
-    assert_eq!(claims.source_owner(), id(2));
-    assert_eq!(claims.destination_owner(), id(3));
-    assert_eq!(claims.quantity(1), Ok(40));
-    assert_eq!(claims.quantity(0), Ok(0));
+    let claims = AffineBatchPlanV2::decode(&claims_output).expect("Claims plan");
+    assert_eq!(claims.position_count(), 2);
+    assert_eq!(claims.row_count(), 1);
+    assert_eq!(claims.position(0).expect("seller Position").owner(), id(2));
+    assert_eq!(claims.position(1).expect("buyer Position").owner(), id(3));
+    let row = claims.row(0).expect("ordinary transfer row");
+    assert_eq!(row.outcome(), 1);
+    assert_eq!(row.source_position_index(), 0);
+    assert_eq!(row.destination_position_index(), 1);
+    assert_eq!(row.aggregate_delta().direction(), DeltaDirectionV2::Neutral);
+    assert_eq!(row.aggregate_delta().magnitude(), 0);
+    assert_eq!(row.source_delta().direction(), DeltaDirectionV2::Debit);
+    assert_eq!(row.source_delta().magnitude(), 40);
+    assert_eq!(
+        row.destination_delta().direction(),
+        DeltaDirectionV2::Credit
+    );
+    assert_eq!(row.destination_delta().magnitude(), 40);
 
     let mut root = [0xa5; DIRECT_ROOT_STATE_BYTES_V1];
     let mut seller = [0xa5; DIRECT_MAKER_REPLAY_BYTES_V1];
@@ -2231,15 +2243,13 @@ fn inline_ioc_projects_claims_and_net_then_combined_fee_with_residual_delegate()
 #[test]
 fn inline_fok_price_improvement_accepts_worst_case_allowance_and_leaves_residual() {
     let (direct, context, collateral) = inline_physical_fixture(100, 0, 66);
-    let mut quantities = [0_u8; 24];
-    let mut claims_scratch = [0_u8; CLAIMS_PLAN_HEADER_BYTES_V1 + 24];
-    let mut claims_output = [0_u8; CLAIMS_PLAN_HEADER_BYTES_V1 + 24];
+    let mut claims_scratch = [0_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
+    let mut claims_output = [0_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
     let plan = prepare_inline_ordinary_physical_v2(
         direct,
         context,
         inline_lifecycle_plans(direct, context),
         collateral,
-        &mut quantities,
         &mut claims_scratch,
         &mut claims_output,
     )
@@ -2253,34 +2263,41 @@ fn inline_fok_price_improvement_accepts_worst_case_allowance_and_leaves_residual
 #[test]
 fn inline_receipts_bind_exact_claims_custody_and_delegate_poststate() {
     let (direct, context, collateral) = inline_physical_fixture(40, 1, 66);
-    let mut quantities = [0_u8; 24];
-    let mut claims_scratch = [0_u8; CLAIMS_PLAN_HEADER_BYTES_V1 + 24];
-    let mut claims_output = [0_u8; CLAIMS_PLAN_HEADER_BYTES_V1 + 24];
+    let mut claims_scratch = [0_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
+    let mut claims_output = [0_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
     let plan = prepare_inline_ordinary_physical_v2(
         direct,
         context,
         inline_lifecycle_plans(direct, context),
         collateral,
-        &mut quantities,
         &mut claims_scratch,
         &mut claims_output,
     )
     .expect("plan");
-    let claims = ClaimsPlanV1::decode(&claims_output).expect("claims");
-    let claims_receipt = ClaimsReceiptV1::new(
+    let claims = AffineBatchPlanV2::decode(&claims_output).expect("claims");
+    let (positions, rows) = claims.table_bytes();
+    let post_resource_digest = id(77);
+    let claims_receipt = AffineBatchReceiptV2::new(
         claims,
         hash(&claims_output).to_bytes(),
+        hashv(&[positions, rows]).to_bytes(),
         context.claims_program,
-        9,
-        10,
-        11,
-        0,
-        id(77),
+        post_resource_digest,
+        context.claims_market_revision + 1,
     )
     .expect("claims receipt")
     .to_bytes();
-    verify_inline_claims_receipt_v2(context, &claims_output, &claims_receipt)
-        .expect("claims receipt verification");
+    verify_inline_claims_receipt_v2(
+        context,
+        &claims_output,
+        &claims_receipt,
+        post_resource_digest,
+    )
+    .expect("claims receipt verification");
+    assert_eq!(
+        verify_inline_claims_receipt_v2(context, &claims_output, &claims_receipt, id(76)),
+        Err(DirectPhysicalError::Postcondition)
+    );
 
     let net = plan.custody[0].expect("net");
     let request_bytes = net.request.to_bytes().expect("request");
@@ -2311,9 +2328,8 @@ fn inline_receipts_bind_exact_claims_custody_and_delegate_poststate() {
 #[test]
 fn inline_refuses_underallowance_alias_replay_and_lifecycle_substitution() {
     let (direct, context, collateral) = inline_physical_fixture(40, 1, 21);
-    let mut quantities = [0_u8; 24];
-    let mut claims_scratch = [0_u8; CLAIMS_PLAN_HEADER_BYTES_V1 + 24];
-    let mut claims_output = [0xa5_u8; CLAIMS_PLAN_HEADER_BYTES_V1 + 24];
+    let mut claims_scratch = [0_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
+    let mut claims_output = [0xa5_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
     let before = claims_output;
     assert_eq!(
         prepare_inline_ordinary_physical_v2(
@@ -2321,7 +2337,6 @@ fn inline_refuses_underallowance_alias_replay_and_lifecycle_substitution() {
             context,
             inline_lifecycle_plans(direct, context),
             collateral,
-            &mut quantities,
             &mut claims_scratch,
             &mut claims_output,
         ),
@@ -2343,7 +2358,6 @@ fn inline_refuses_underallowance_alias_replay_and_lifecycle_substitution() {
                 },
                 ..collateral
             },
-            &mut quantities,
             &mut claims_scratch,
             &mut claims_output,
         ),
@@ -2368,7 +2382,6 @@ fn inline_refuses_underallowance_alias_replay_and_lifecycle_substitution() {
             context,
             inline_lifecycle_plans(direct, context),
             aliased,
-            &mut quantities,
             &mut claims_scratch,
             &mut claims_output,
         ),
@@ -2442,7 +2455,6 @@ fn inline_refuses_underallowance_alias_replay_and_lifecycle_substitution() {
         context,
         first_lifecycle,
         funded_collateral,
-        &mut quantities,
         &mut claims_scratch,
         &mut claims_output,
     )
@@ -2472,7 +2484,6 @@ fn inline_refuses_underallowance_alias_replay_and_lifecycle_substitution() {
             context,
             substituted,
             funded_collateral,
-            &mut quantities,
             &mut claims_scratch,
             &mut claims_output,
         ),
