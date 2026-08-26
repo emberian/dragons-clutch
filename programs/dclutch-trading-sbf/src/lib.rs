@@ -73,6 +73,16 @@ pub mod execution_strategy_v2;
 /// General family projection behind the common data-defined Trading boundary.
 #[cfg(feature = "families")]
 pub mod general;
+/// Generic atomic Custody→Core→Claims Market founding and commit-last Open.
+#[cfg(all(
+    not(feature = "shadow-accelerator-auth-only"),
+    any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    )
+))]
+pub mod generic_market_founding_v1;
 /// Family-neutral authenticated V3 hot execution outer.
 #[cfg(not(feature = "shadow-accelerator-auth-only"))]
 pub mod hot_v3;
@@ -222,6 +232,18 @@ pub fn process_instruction(
     instruction_data: &[u8],
 ) -> ProgramResult {
     require_instruction_account_bound_v3(accounts.len())?;
+    #[cfg(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    ))]
+    if generic_market_founding_v1::is_generic_market_founding_v1(instruction_data) {
+        return generic_market_founding_v1::process_generic_market_founding_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
     if hot_v3::is_hot_execution_v3(instruction_data) {
         hot_v3::process_hot_execution_v3(program_id, accounts, instruction_data)
     } else {
