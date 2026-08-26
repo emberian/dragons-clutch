@@ -45,7 +45,7 @@ function MarketCard({ card }: Readonly<{ card: MarketDiscoveryCardV1 }>) {
   if (card.status === 'refused') {
     return <article className="market-discovery-card refused">
       <div className="market-card-top"><span className="provenance-chip refused">{provenanceChipV1(card.provenance)}</span><span className="phase-chip">no phase</span></div>
-      <h3 title={card.address}>{shortAddressV1(card.address, 10)}</h3>
+      <h3><Link href={`/markets/${card.address}`} title={card.address}>{shortAddressV1(card.address, 10)}</Link></h3>
       <p className="market-refusal">{card.refusal}</p>
       <p className="market-observation">Finalized observation slot {card.observedSlot}</p>
     </article>;
@@ -55,13 +55,14 @@ function MarketCard({ card }: Readonly<{ card: MarketDiscoveryCardV1 }>) {
       <span className="provenance-chip">{provenanceChipV1(card.provenance)}</span>
       <span className={`phase-chip phase-${card.phase.toLowerCase()}`}>{card.phase}</span>
     </div>
-    <h3 title={card.address}>{shortAddressV1(card.address, 10)}</h3>
+    <h3><Link href={`/markets/${card.address}`} title={card.address}>{shortAddressV1(card.address, 10)}</Link></h3>
     <dl className="market-card-facts">
       <div><dt>Hoard atoms · raw u64</dt><dd>{card.hoardAtoms}</dd></div>
       <div><dt>Generation</dt><dd>{card.generation}</dd></div>
       <div><dt>Outcome count</dt><dd>{card.outcomeCount}</dd></div>
       <div><dt>Outstanding children</dt><dd>{card.outstandingChildren}</dd></div>
       <div><dt>Per-outcome supply · raw u64</dt><dd>{card.supplyAtoms.join(' · ')}</dd></div>
+      <div><dt>Exact required backing · raw u64</dt><dd>{card.requiredBackingAtoms}</dd></div>
       <div><dt>Settlement</dt><dd>{card.settlement.status === 'resolved'
         ? `${card.settlement.label} · state ${card.settlement.winner} · sequence ${card.settlement.terminalSequence}`
         : card.settlement.label}</dd></div>
@@ -72,6 +73,7 @@ function MarketCard({ card }: Readonly<{ card: MarketDiscoveryCardV1 }>) {
       <div><dt>Finalized observed slot</dt><dd>{card.observedSlot}</dd></div>
     </dl>
     <p className="market-hoard-note">Hoard atoms are the Market&apos;s exact collateral principal. They are not liquidity, TVL, or a balance available to any participant.</p>
+    <p className="market-observation"><Link href={`/markets/${card.address}`}>Open this Market field by field →</Link></p>
     {card.collateral.status === 'refused' && <p className="market-refusal">{card.collateral.reason}</p>}
     <CapabilityBadges capabilities={card.capabilities} />
     <ul className="market-bindings">
@@ -132,6 +134,7 @@ export default function MarketDiscoveryWorkspace() {
       <Link className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Link>
       <nav>
         <Link className="active" href="/markets">Markets</Link>
+        <Link href="/portfolio">Portfolio</Link>
         <Link href="/create">Create</Link>
         <Link href="/trade">Trade</Link>
         <Link href="/liquidity">Liquidity</Link>

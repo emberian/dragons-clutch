@@ -678,6 +678,59 @@ footer { display: flex; justify-content: space-between; gap: 20px; margin-top: 3
 .wallet-directory details summary { cursor: pointer; color: #8d876d; }
 .wallet-directory details p { margin-top: 6px; overflow-wrap: anywhere; }
 
+/* market detail + portfolio */
+.detail-section-provenance { display: grid; gap: 6px; justify-items: end; text-align: right; }
+.detail-section-provenance small { max-width: 320px; color: #8d876d; font: 8px/1.5 var(--font-geist-mono); }
+.trade-v3-card > header:has(.detail-section-provenance) { grid-template-columns: 34px 1fr auto; }
+.detail-facts { display: grid; gap: 0; margin: 0; border-top: 1px solid var(--line); }
+.detail-facts > div { display: grid; grid-template-columns: minmax(0,.7fr) minmax(0,1fr); gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.detail-facts dt { color: #69776e; font: 8px var(--font-geist-mono); text-transform: uppercase; letter-spacing: .05em; }
+.detail-facts dd { margin: 0; color: #b8c5bb; font: 9px/1.5 var(--font-geist-mono); overflow-wrap: anywhere; }
+.detail-identity dd code { color: #9fb0a4; font: 8px/1.5 var(--font-geist-mono); overflow-wrap: anywhere; }
+.detail-copyable dd { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.detail-copyable dd code { flex: 1 1 220px; min-width: 0; color: #8ea395; font: 8px/1.5 var(--font-geist-mono); overflow-wrap: anywhere; }
+.detail-copyable dd .secondary-action { min-height: 28px; padding: 0 10px; font-size: 8px; }
+.detail-subhead { margin: 4px 0 0; color: #7f8e84; font: 9px var(--font-geist-mono); text-transform: uppercase; letter-spacing: .08em; }
+.phase-meaning { margin: 0; padding: 12px 14px; border: 1px solid rgba(105,212,174,.18); border-radius: 10px; background: rgba(105,212,174,.035); color: #93a89b; font: 9px/1.6 var(--font-geist-mono); }
+.phase-meaning strong { color: var(--signal); text-transform: uppercase; letter-spacing: .06em; }
+.outcome-vector { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
+.outcome-vector li { min-width: 0; padding: 12px 13px; border: 1px solid var(--line); border-radius: 10px; background: rgba(1,8,4,.42); }
+.outcome-vector li.winning-outcome { border-color: rgba(185,255,100,.3); background: rgba(185,255,100,.05); }
+.outcome-vector span, .outcome-vector strong, .outcome-vector small { display: block; }
+.outcome-vector span { color: #67766d; font: 8px var(--font-geist-mono); text-transform: uppercase; letter-spacing: .06em; }
+.outcome-vector strong { margin-top: 7px; color: #d6e0d8; font: 16px var(--font-geist-mono); overflow-wrap: anywhere; }
+.outcome-vector li.winning-outcome strong { color: var(--acid); }
+.outcome-vector small { margin-top: 5px; color: #68766d; font: 8px/1.45 var(--font-geist-mono); }
+.capability-drawers { display: grid; gap: 8px; }
+.capability-drawer { padding: 12px 14px; border: 1px solid var(--line); border-radius: 11px; background: rgba(1,8,4,.4); }
+.capability-drawer summary { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; cursor: pointer; }
+.capability-drawer summary small { color: #68766d; font: 8px var(--font-geist-mono); }
+.capability-drawer[open] summary { margin-bottom: 12px; }
+.capability-drawer .detail-facts { margin-bottom: 12px; }
+.capability-funding table { width: 100%; border-collapse: collapse; font: 8px/1.5 var(--font-geist-mono); }
+.capability-funding th { padding: 6px 8px; border-bottom: 1px solid var(--line); color: #67766d; font-weight: 400; text-align: left; text-transform: uppercase; letter-spacing: .06em; }
+.capability-funding td { padding: 6px 8px; border-bottom: 1px solid var(--line); color: #b8c5bb; overflow-wrap: anywhere; }
+.capability-funding tbody tr.compartment-empty td { color: #5d6b63; }
+.capability-funding tfoot td { color: var(--signal); }
+.capability-funding p { margin: 10px 0 0; color: #68766d; font: 8px/1.55 var(--font-geist-mono); }
+.portfolio-entry { display: grid; gap: 12px; min-width: 0; padding: 18px; border: 1px solid var(--line); border-radius: 13px; background: rgba(8,16,11,.96); }
+.portfolio-entry.refused { border-color: rgba(255,126,102,.28); }
+.portfolio-entry .market-card-top a { color: #d6e0d8; font: 13px var(--font-geist-mono); text-decoration: none; overflow-wrap: anywhere; }
+.portfolio-entry .market-card-top a:hover { color: var(--acid); }
+.portfolio-entry .market-card-facts { margin: 0; }
+.portfolio-position-provenance { display: flex; gap: 8px; align-items: center; }
+.portfolio-position-provenance small { color: #67766d; font: 8px var(--font-geist-mono); text-transform: uppercase; letter-spacing: .06em; }
+.portfolio-claim { padding: 13px 14px; border: 1px solid rgba(185,255,100,.22); border-radius: 10px; background: rgba(185,255,100,.04); }
+.portfolio-claim span { display: block; color: #7f8e84; font: 8px var(--font-geist-mono); text-transform: uppercase; letter-spacing: .06em; }
+.portfolio-claim strong { display: block; margin-top: 7px; color: var(--acid); font: 21px var(--font-geist-mono); }
+.portfolio-claim p { margin: 9px 0 0; color: #7f8e84; font: 8px/1.6 var(--font-geist-mono); }
+.market-discovery-card h3 a { color: inherit; text-decoration: none; }
+.market-discovery-card h3 a:hover { color: var(--acid); }
+.market-observation a { color: var(--signal); text-decoration: none; }
+.market-observation a:hover { color: var(--acid); }
+.eyebrow a { color: inherit; text-decoration: none; }
+.eyebrow a:hover { color: var(--acid); }
+
 @media (max-width: 760px) {
   .shell { width: min(100% - 24px, 1180px); }
   .not-official { display: none; }
@@ -710,6 +763,10 @@ footer { display: flex; justify-content: space-between; gap: 20px; margin-top: 3
   .inventory-row > span { display: none; }
   .custody-ledger, .liquidity-proof { grid-template-columns: 1fr 1fr; }
   .market-card-grid { grid-template-columns: 1fr; }
+  .trade-v3-card > header:has(.detail-section-provenance) { grid-template-columns: 34px 1fr; }
+  .detail-section-provenance { justify-items: start; text-align: left; }
+  .detail-facts > div { grid-template-columns: 1fr; gap: 4px; }
+  .outcome-vector { grid-template-columns: 1fr 1fr; }
   .direct-form-grid, .direct-output dl, .registered-state-grid, .registered-facts, .creation-boundary, .release-manifest-grid, .product-author-grid, .product-region-grid, .local-metrics, .local-evidence-grid, .local-scenarios, .local-account-grid, .found-boundaries, .found-facts, .trade-v3-hero, .trade-v3-route-grid, .trade-v3-evidence, .trade-v3-common, .trade-v3-participants, .trade-v3-execution, .trade-v3-preview, .signing-grid { grid-template-columns: 1fr; }
   .trade-v3-shell { width: min(100% - 24px,1280px); }
   .trade-v3-route-grid .route-json, .signing-grid .submission-boundary, .trade-v3-preview p { grid-column: auto; }
