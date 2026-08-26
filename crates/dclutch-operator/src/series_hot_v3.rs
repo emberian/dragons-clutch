@@ -324,9 +324,10 @@ fn authenticate_frame<'a>(
             .ok_or(SeriesHotOperatorErrorV3::FixedFrameMismatch)?,
     )
     .map_err(|_| SeriesHotOperatorErrorV3::FixedFrameMismatch)?;
+    let root_seeds = header.seeds();
     if header.market() != market.account.key.to_bytes()
         || header.selection().executor_role() != ExecutionRoleV1::Trading
-        || Pubkey::find_program_address(&header.seeds().as_slices(), &checked.trading_program).0
+        || Pubkey::find_program_address(&root_seeds.as_slices(), &checked.trading_program).0
             != root_meta.account.key
     {
         return Err(SeriesHotOperatorErrorV3::FixedFrameMismatch);
