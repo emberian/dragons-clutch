@@ -8,12 +8,12 @@
 use dclutch_market_core_codec::SeriesCoreRequestV1;
 
 use crate::{
-    plan::{evaluate_replay_v3, SeriesReplayActionV3, SeriesReplayWitnessV3},
+    AccountKeyV3, AuthenticatedProductProjectionV2, PrefoundingSeriesEscrowV3,
+    plan::{SeriesReplayActionV3, SeriesReplayWitnessV3, evaluate_replay_v3},
     pre_founding_series_escrow,
     replay::SeriesStateV3,
-    request::{admit_series_action_v3, AdmittedSeriesActionV3, SeriesActionV3},
-    series_core_consume_request, AccountKeyV3, AuthenticatedProductProjectionV2,
-    PrefoundingSeriesEscrowV3,
+    request::{AdmittedSeriesActionV3, SeriesActionV3, admit_series_action_v3},
+    series_core_consume_request,
 };
 
 /// Stable refusal from stateless Series Shadow evaluation.
@@ -73,7 +73,7 @@ pub enum SeriesShadowEffectKindV3 {
     None,
     /// Initialize replay, open SeriesEscrow, and lock collateral.
     Prepare,
-    /// Transfer to Hoard, Found through Core, then close escrow resources.
+    /// Atomically credit projected Hoard and close SeriesEscrow, then found.
     Consume,
     /// Refund collateral, then close escrow resources.
     Expire,
@@ -280,9 +280,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        generated, occurrence_content_id, plan::ReplayCandidateV3, replay::TicketStateV3,
-        request::encode_series_action_header_v3, template_content_id, ticket_content_id,
-        OccurrenceV3,
+        OccurrenceV3, generated, occurrence_content_id, plan::ReplayCandidateV3,
+        replay::TicketStateV3, request::encode_series_action_header_v3, template_content_id,
+        ticket_content_id,
     };
 
     const HASH_SEPARATOR: [u8; 1] = [0];

@@ -4,6 +4,52 @@ fn key(byte: u8) -> AccountKeyV3 {
     AccountKeyV3::new([byte; 32]).expect("nonzero test key")
 }
 
+fn core_id(byte: u8) -> CoreIdentity {
+    CoreIdentity::new([byte; 32]).expect("nonzero Core identity")
+}
+
+fn permit_expiry_request(
+    admitted: AdmittedOccurrenceV3,
+    ticket: AdmittedTicketV3,
+    product: AuthenticatedProductProjectionV2,
+    ticket_context: CoreIdentity,
+) -> SeriesPermitExpiryRequestV1 {
+    let template = admitted.template();
+    let occurrence = admitted.occurrence();
+    let ticket_record = ticket.ticket();
+    let intent = dclutch_market_core_codec::FoundingIntentV5::new(
+        255,
+        core_content_identity(template.release_set()).expect("release"),
+        core_account_identity(occurrence.market()).expect("Market"),
+        core_content_identity(product.product_record()).expect("Product record"),
+        core_id(100),
+        core_account_identity(ticket_record.founder()).expect("founder"),
+        ticket_context,
+        core_id(101),
+        core_id(102),
+        core_id(103),
+        core_id(104),
+        core_id(105),
+        core_id(106),
+        core_id(107),
+        core_id(108),
+        core_id(109),
+        u64::from(occurrence.occurrence()) + 1,
+        occurrence.funds().hoard_principal(),
+        1,
+        template
+            .retry_through(occurrence.occurrence())
+            .expect("retry deadline"),
+        4,
+        1,
+    )
+    .expect("canonical founding intent");
+    let permit =
+        dclutch_market_core_codec::SeriesFoundingPermitV1::new(intent, core_id(110), core_id(111))
+            .expect("canonical permit");
+    SeriesPermitExpiryRequestV1::new(permit)
+}
+
 fn put<const N: usize>(target: &mut [u8], offset: usize, value: &[u8; N]) {
     target
         .get_mut(offset..offset + N)
@@ -298,6 +344,27 @@ fn consume_core_request_is_one_sdk_free_occurrence_projection() {
 }
 
 #[test]
+fn permit_expiry_candidate_joins_series_owned_semantics() {
+    let fixture = Fixture::new();
+    let admitted = fixture.admit();
+    let ticket = admit_ticket(&fixture.ticket).expect("admitted Ticket");
+    let request = permit_expiry_request(
+        admitted,
+        ticket,
+        fixture.product,
+        core_content_identity(ticket.content_id()).expect("Ticket context"),
+    );
+    validate_series_permit_expiry_request_v3(admitted, ticket, fixture.product, request)
+        .expect("exact Series permit expiry");
+
+    let substituted = permit_expiry_request(admitted, ticket, fixture.product, core_id(112));
+    assert_eq!(
+        validate_series_permit_expiry_request_v3(admitted, ticket, fixture.product, substituted,),
+        Err(SeriesV3Error::Commitment)
+    );
+}
+
+#[test]
 fn atomic_consume_composes_core_escrow_funding_and_commit_last_replay() {
     let fixture = Fixture::new();
     let admitted = fixture.admit();
@@ -351,24 +418,10 @@ fn atomic_consume_composes_core_escrow_funding_and_commit_last_replay() {
         composition.replay().ticket(),
         plan::ReplayCandidateV3::Replace(_)
     ));
-    let escrow = composition.escrow().effects();
-    assert_eq!(
-        escrow[0].kind(),
-        escrow::SeriesEscrowEffectKindV3::ConsumeIntoHoard
-    );
-    assert_eq!(escrow[0].expected_revision(), 3);
-    assert_eq!(escrow[0].resulting_revision(), 4);
-    assert_eq!(escrow[0].amount(), funds.hoard_principal());
-    assert_eq!(
-        escrow[1].kind(),
-        escrow::SeriesEscrowEffectKindV3::CloseEscrowVault
-    );
-    assert_eq!(escrow[1].expected_revision(), 4);
-    assert_eq!(
-        escrow[2].kind(),
-        escrow::SeriesEscrowEffectKindV3::CloseReplay
-    );
-    assert_eq!(escrow[2].resulting_revision(), 6);
+    let escrow = composition.escrow();
+    assert_eq!(escrow.source_replay_revision(), 3);
+    assert_eq!(escrow.amount(), funds.hoard_principal());
+    assert_eq!(escrow.escrow().ticket_id(), admitted_ticket.content_id());
 
     let after_retry = admitted
         .template()

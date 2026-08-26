@@ -12,7 +12,7 @@ use dclutch_market_core_codec::SeriesCoreRequestV1;
 use crate::{
     AccountKeyV3, AdmittedOccurrenceV3, AdmittedTicketV3, AuthenticatedProductProjectionV2,
     SeriesV3Error,
-    escrow::{TerminalSeriesEscrowPlanV3, consume_series_escrow_v3},
+    escrow::{ConsumeSeriesEscrowPlanV3, consume_series_escrow_v3},
     plan::{
         SeriesReplayActionV3, SeriesReplayPlanErrorV3, SeriesReplayWitnessV3, evaluate_replay_v3,
     },
@@ -48,7 +48,7 @@ impl From<SeriesReplayPlanErrorV3> for SeriesConsumeCompositionErrorV3 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SeriesConsumeCompositionV3 {
     core_request: SeriesCoreRequestV1,
-    escrow: TerminalSeriesEscrowPlanV3,
+    escrow: ConsumeSeriesEscrowPlanV3,
     replay: SeriesReplayWitnessV3,
     funding_list: ContentId,
     native_from_ticket: u64,
@@ -60,8 +60,8 @@ impl SeriesConsumeCompositionV3 {
         self.core_request
     }
 
-    /// Exact SeriesEscrow-to-Hoard and terminal cleanup expectations.
-    pub const fn escrow(self) -> TerminalSeriesEscrowPlanV3 {
+    /// Exact projected-Hoard credit and atomic SeriesEscrow cleanup expectation.
+    pub const fn escrow(self) -> ConsumeSeriesEscrowPlanV3 {
         self.escrow
     }
 

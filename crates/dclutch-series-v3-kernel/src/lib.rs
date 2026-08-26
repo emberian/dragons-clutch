@@ -13,7 +13,7 @@
 use dclutch_core_contract::ContentId;
 use dclutch_market_core_codec::{
     Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, SeriesCoreActionV1,
-    SeriesCoreRequestV1,
+    SeriesCoreRequestV1, SeriesPermitExpiryRequestV1,
 };
 use sha2::{Digest, Sha256};
 
@@ -965,6 +965,50 @@ pub fn series_core_consume_request(
         funds.hoard_principal,
     )
     .map_err(|_| SeriesV3Error::Commitment)
+}
+
+/// Validate one exact Core permit-expiry request against Series-owned facts.
+///
+/// The 640-byte physical request contains a candidate permit because the
+/// canonical PDA is still System-owned and has no data before Consume. This
+/// SDK-free join proves the immutable release, Market, Product record,
+/// founder, Ticket context, generation, retry deadline, and total Hoard
+/// principal. Adapter-owned program, vault, replay, and RentCredit identities
+/// remain independently authenticated physical observations.
+pub fn validate_series_permit_expiry_request_v3(
+    admitted: AdmittedOccurrenceV3,
+    admitted_ticket: AdmittedTicketV3,
+    product: AuthenticatedProductProjectionV2,
+    request: SeriesPermitExpiryRequestV1,
+) -> Result<(), SeriesV3Error> {
+    let ticket = admitted_ticket.ticket;
+    admitted.require_ticket(ticket)?;
+    let template = admitted.template;
+    let occurrence = admitted.occurrence;
+    if occurrence.product_record != product.product_record {
+        return Err(SeriesV3Error::Commitment);
+    }
+    let intent = request.permit().intent();
+    let expected_expiry = template.retry_through(occurrence.occurrence)?;
+    let expected_generation = u64::from(occurrence.occurrence)
+        .checked_add(1)
+        .ok_or(SeriesV3Error::Schedule)?;
+    let principal = intent
+        .quantity()
+        .checked_mul(intent.basis_scale())
+        .ok_or(SeriesV3Error::Funding)?;
+    if intent.release_set() != core_content_identity(template.release_set)?
+        || intent.market() != core_account_identity(occurrence.market)?
+        || intent.product_record() != core_content_identity(product.product_record)?
+        || intent.founder() != core_account_identity(ticket.founder)?
+        || intent.ticket_context() != core_content_identity(admitted_ticket.content_id)?
+        || intent.generation() != expected_generation
+        || intent.expiry_slot() != expected_expiry
+        || principal != occurrence.funds.hoard_principal
+    {
+        return Err(SeriesV3Error::Commitment);
+    }
+    Ok(())
 }
 
 /// Hash an exact ordered, nonempty, alias-free FundingState key list.
