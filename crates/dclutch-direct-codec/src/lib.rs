@@ -15,6 +15,7 @@ mod generated_intent_v2;
 pub mod artifacts_v3;
 pub mod execution_v3;
 pub mod intent_v2;
+pub mod ordinary_artifacts_v3;
 pub mod ordinary_v3;
 pub mod successor;
 

@@ -21,13 +21,13 @@ use crate::{
 /// Exact common scalar-bank width for inline ordinary V3.
 pub const DIRECT_ORDINARY_COMMON_SCALARS_V3: usize = 64;
 /// Exact common identity-bank width for inline ordinary V3.
-pub const DIRECT_ORDINARY_COMMON_IDENTITIES_V3: usize = 32;
+pub const DIRECT_ORDINARY_COMMON_IDENTITIES_V3: usize = 42;
 /// Ordinary has no Product-item scalar tail.
 pub const DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3: u16 = 0;
 /// Ordinary has no Product-item identity tail.
 pub const DIRECT_ORDINARY_ITEM_IDENTITY_STRIDE_V3: u16 = 0;
 /// Exact instruction count of the ordinary semantic program.
-pub const DIRECT_ORDINARY_TRANSITION_INSTRUCTIONS_V3: usize = 39;
+pub const DIRECT_ORDINARY_TRANSITION_INSTRUCTIONS_V3: usize = 51;
 /// Exact encoded ordinary TransitionVM V3 width.
 pub const DIRECT_ORDINARY_TRANSITION_BYTES_V3: usize = dclutch_transition_vm::v3::HEADER_BYTES
     + DIRECT_ORDINARY_TRANSITION_INSTRUCTIONS_V3 * dclutch_transition_vm::v3::INSTRUCTION_BYTES;
@@ -217,14 +217,34 @@ pub const IDENTITY_SELLER_POSITION_V3: usize = 25;
 pub const IDENTITY_BUYER_POSITION_V3: usize = 26;
 /// Identity register: fee recipient's exact collateral token account.
 pub const IDENTITY_FEE_TOKEN_ACCOUNT_V3: usize = 27;
-/// Identity register: Direct root permanent RentCredit.
-pub const IDENTITY_ROOT_RENT_CREDIT_V3: usize = 28;
-/// Identity register: seller maker-root permanent RentCredit.
-pub const IDENTITY_SELLER_RENT_CREDIT_V3: usize = 29;
-/// Identity register: buyer maker-root permanent RentCredit.
-pub const IDENTITY_BUYER_RENT_CREDIT_V3: usize = 30;
-/// Identity register: native System program.
-pub const IDENTITY_SYSTEM_PROGRAM_V3: usize = 31;
+/// Identity register: seller-signed collateral token account.
+pub const IDENTITY_SELLER_COLLATERAL_REQUEST_V3: usize = 28;
+/// Identity register: buyer-signed collateral token account.
+pub const IDENTITY_BUYER_COLLATERAL_REQUEST_V3: usize = 29;
+/// Identity register: authenticated seller destination token account.
+pub const IDENTITY_SELLER_TOKEN_ACCOUNT_V3: usize = 30;
+/// Identity register: authenticated buyer source token account.
+pub const IDENTITY_BUYER_TOKEN_ACCOUNT_V3: usize = 31;
+/// Identity register: persisted seller token authority.
+pub const IDENTITY_SELLER_TOKEN_OWNER_V3: usize = 32;
+/// Identity register: persisted buyer token authority.
+pub const IDENTITY_BUYER_TOKEN_OWNER_V3: usize = 33;
+/// Identity register: persisted fee token authority.
+pub const IDENTITY_FEE_TOKEN_OWNER_V3: usize = 34;
+/// Identity register: seller token-account mint.
+pub const IDENTITY_SELLER_TOKEN_MINT_V3: usize = 35;
+/// Identity register: buyer token-account mint.
+pub const IDENTITY_BUYER_TOKEN_MINT_V3: usize = 36;
+/// Identity register: fee token-account mint.
+pub const IDENTITY_FEE_TOKEN_MINT_V3: usize = 37;
+/// Identity register: buyer token-account delegate.
+pub const IDENTITY_BUYER_TOKEN_DELEGATE_V3: usize = 38;
+/// Identity register: seller token-account owner program.
+pub const IDENTITY_SELLER_TOKEN_PROGRAM_V3: usize = 39;
+/// Identity register: buyer token-account owner program.
+pub const IDENTITY_BUYER_TOKEN_PROGRAM_V3: usize = 40;
+/// Identity register: fee token-account owner program.
+pub const IDENTITY_FEE_TOKEN_PROGRAM_V3: usize = 41;
 
 /// Stable register projection or program-emission refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -317,14 +337,30 @@ pub struct DirectOrdinaryAuthenticatedContextV3 {
     pub buyer_position: [u8; 32],
     /// Exact fee collateral token account.
     pub fee_token_account: [u8; 32],
-    /// Permanent Direct-root RentCredit.
-    pub root_rent_credit: [u8; 32],
-    /// Permanent seller maker-root RentCredit.
-    pub seller_rent_credit: [u8; 32],
-    /// Permanent buyer maker-root RentCredit.
-    pub buyer_rent_credit: [u8; 32],
-    /// Native System program.
-    pub system_program: [u8; 32],
+    /// Authenticated seller destination token account.
+    pub seller_token_account: [u8; 32],
+    /// Authenticated buyer source token account.
+    pub buyer_token_account: [u8; 32],
+    /// Persisted seller token authority.
+    pub seller_token_owner: [u8; 32],
+    /// Persisted buyer token authority.
+    pub buyer_token_owner: [u8; 32],
+    /// Persisted fee token authority.
+    pub fee_token_owner: [u8; 32],
+    /// Seller token-account mint.
+    pub seller_token_mint: [u8; 32],
+    /// Buyer token-account mint.
+    pub buyer_token_mint: [u8; 32],
+    /// Fee token-account mint.
+    pub fee_token_mint: [u8; 32],
+    /// Buyer token-account delegate.
+    pub buyer_token_delegate: [u8; 32],
+    /// Seller token-account owner program.
+    pub seller_token_program: [u8; 32],
+    /// Buyer token-account owner program.
+    pub buyer_token_program: [u8; 32],
+    /// Fee token-account owner program.
+    pub fee_token_program: [u8; 32],
     /// Native signature adapter's seller identity.
     pub seller_native_signer: [u8; 32],
     /// Native signature adapter's buyer identity.
@@ -381,10 +417,20 @@ pub fn project_direct_ordinary_registers_v3(
         context.seller_position,
         context.buyer_position,
         context.fee_token_account,
-        context.root_rent_credit,
-        context.seller_rent_credit,
-        context.buyer_rent_credit,
-        context.system_program,
+        request.seller.intent.collateral_account,
+        request.buyer.intent.collateral_account,
+        context.seller_token_account,
+        context.buyer_token_account,
+        context.seller_token_owner,
+        context.buyer_token_owner,
+        context.fee_token_owner,
+        context.seller_token_mint,
+        context.buyer_token_mint,
+        context.fee_token_mint,
+        context.buyer_token_delegate,
+        context.seller_token_program,
+        context.buyer_token_program,
+        context.fee_token_program,
     ];
     if identities.contains(&[0; 32]) {
         return Err(DirectOrdinaryRegisterErrorV3::ZeroIdentity);
@@ -527,6 +573,54 @@ const DIRECT_ORDINARY_PROGRAM_V3: [InstructionV3; DIRECT_ORDINARY_TRANSITION_INS
     InstructionV3::identity_ne(
         identity(IDENTITY_SELLER_REQUEST_MAKER_V3),
         identity(IDENTITY_BUYER_REQUEST_MAKER_V3),
+    ),
+    InstructionV3::identity_eq(
+        identity(IDENTITY_SELLER_COLLATERAL_REQUEST_V3),
+        identity(IDENTITY_SELLER_TOKEN_ACCOUNT_V3),
+    ),
+    InstructionV3::identity_eq(
+        identity(IDENTITY_BUYER_COLLATERAL_REQUEST_V3),
+        identity(IDENTITY_BUYER_TOKEN_ACCOUNT_V3),
+    ),
+    InstructionV3::identity_eq(
+        identity(IDENTITY_SELLER_TOKEN_OWNER_V3),
+        identity(IDENTITY_SELLER_REQUEST_MAKER_V3),
+    ),
+    InstructionV3::identity_eq(
+        identity(IDENTITY_BUYER_TOKEN_OWNER_V3),
+        identity(IDENTITY_BUYER_REQUEST_MAKER_V3),
+    ),
+    InstructionV3::identity_eq(
+        identity(IDENTITY_FEE_TOKEN_OWNER_V3),
+        identity(IDENTITY_FEE_RECIPIENT_V3),
+    ),
+    InstructionV3::identity_eq(
+        identity(IDENTITY_SELLER_TOKEN_MINT_V3),
+        identity(IDENTITY_MINT_V3),
+    ),
+    InstructionV3::identity_eq(
+        identity(IDENTITY_BUYER_TOKEN_MINT_V3),
+        identity(IDENTITY_MINT_V3),
+    ),
+    InstructionV3::identity_eq(
+        identity(IDENTITY_FEE_TOKEN_MINT_V3),
+        identity(IDENTITY_MINT_V3),
+    ),
+    InstructionV3::identity_eq(
+        identity(IDENTITY_BUYER_TOKEN_DELEGATE_V3),
+        identity(IDENTITY_CUSTODY_AUTHORITY_V3),
+    ),
+    InstructionV3::identity_eq(
+        identity(IDENTITY_SELLER_TOKEN_PROGRAM_V3),
+        identity(IDENTITY_TOKEN_PROGRAM_V3),
+    ),
+    InstructionV3::identity_eq(
+        identity(IDENTITY_BUYER_TOKEN_PROGRAM_V3),
+        identity(IDENTITY_TOKEN_PROGRAM_V3),
+    ),
+    InstructionV3::identity_eq(
+        identity(IDENTITY_FEE_TOKEN_PROGRAM_V3),
+        identity(IDENTITY_TOKEN_PROGRAM_V3),
     ),
     InstructionV3::scalar_lt(
         scalar(SCALAR_SELLER_OUTCOME_V3),
@@ -719,10 +813,18 @@ mod tests {
             seller_position: id(46),
             buyer_position: id(47),
             fee_token_account: id(48),
-            root_rent_credit: id(49),
-            seller_rent_credit: id(50),
-            buyer_rent_credit: id(51),
-            system_program: id(52),
+            seller_token_account: id(20),
+            buyer_token_account: id(21),
+            seller_token_owner: id(2),
+            buyer_token_owner: id(3),
+            fee_token_owner: id(60),
+            seller_token_mint: id(39),
+            buyer_token_mint: id(39),
+            fee_token_mint: id(39),
+            buyer_token_delegate: id(45),
+            seller_token_program: id(40),
+            buyer_token_program: id(40),
+            fee_token_program: id(40),
             seller_native_signer: id(2),
             buyer_native_signer: id(3),
         }
@@ -777,7 +879,7 @@ mod tests {
         let config = DirectExecutionConfigV1::new(100, 1_000, id(60)).expect("config");
         let mut output = [99_u64; DIRECT_ORDINARY_COMMON_SCALARS_V3];
         execute(request(), context(config), &mut output).expect("ordinary transition");
-        assert_eq!(DIRECT_ORDINARY_TRANSITION_BYTES_V3, 968);
+        assert_eq!(DIRECT_ORDINARY_TRANSITION_BYTES_V3, 1_256);
         assert_eq!(output[SCALAR_SELLER_NONCE_AFTER_V3], 5);
         assert_eq!(output[SCALAR_BUYER_NONCE_AFTER_V3], 10);
         assert_eq!(output[SCALAR_GROSS_V3], 10);
@@ -811,6 +913,27 @@ mod tests {
             assert!(execute(request, context, &mut output).is_err());
             assert_eq!(output, before);
         }
+
+        let mut hostile_token = context(config);
+        hostile_token.buyer_token_account = id(90);
+        let mut output = [0x55_u64; DIRECT_ORDINARY_COMMON_SCALARS_V3];
+        let before = output;
+        assert!(execute(request(), hostile_token, &mut output).is_err());
+        assert_eq!(output, before);
+
+        let mut hostile_owner = context(config);
+        hostile_owner.fee_token_owner = id(90);
+        let mut output = [0x55_u64; DIRECT_ORDINARY_COMMON_SCALARS_V3];
+        let before = output;
+        assert!(execute(request(), hostile_owner, &mut output).is_err());
+        assert_eq!(output, before);
+
+        let mut hostile_delegate = context(config);
+        hostile_delegate.buyer_token_delegate = id(90);
+        let mut output = [0x55_u64; DIRECT_ORDINARY_COMMON_SCALARS_V3];
+        let before = output;
+        assert!(execute(request(), hostile_delegate, &mut output).is_err());
+        assert_eq!(output, before);
 
         let mut wrong_content = context(config);
         wrong_content.config_content_id[0] ^= 1;
