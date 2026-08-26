@@ -34,6 +34,7 @@ use crate::{
         DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3, DIRECT_EXECUTION_REQUEST_SELECTOR_OFFSET_V3,
         DIRECT_SUCCESSOR_KIND_ID_V3, DirectExecutionActionV3, DirectExecutionRequestV3,
     },
+    ordinary_v3::{IDENTITY_BUYER_NATIVE_SIGNER_V3, IDENTITY_SELLER_NATIVE_SIGNER_V3},
     successor::{
         DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, DIRECT_ROOT_SCHEMA_ID_V1, DIRECT_ROOT_STATE_BYTES_V1,
         DirectExecutionConfigV1,
@@ -318,6 +319,8 @@ fn validate_native_signature_slices(
                     .map_err(|_| DirectArtifactErrorV3::NativeSignature)?;
                 if u32::from(observed.message_offset()) != absolute
                     || observed.message_bytes() != expected.message_bytes
+                    || observed.destination_identity_register()
+                        != native_signature_destination_identity_register_v3(action, participant)?
                 {
                     return Err(DirectArtifactErrorV3::NativeSignature);
                 }
@@ -328,6 +331,22 @@ fn validate_native_signature_slices(
             Ok(())
         }
     }
+}
+
+fn native_signature_destination_identity_register_v3(
+    action: DirectExecutionActionV3,
+    participant: u32,
+) -> Result<u32> {
+    let register = match (action, participant) {
+        (DirectExecutionActionV3::InlineOrdinary, 0) => IDENTITY_SELLER_NATIVE_SIGNER_V3,
+        (DirectExecutionActionV3::InlineOrdinary, 1) => IDENTITY_BUYER_NATIVE_SIGNER_V3,
+        // Every signed action needs its own generated register contract before
+        // its descriptor can become executable. Refusing unknown destinations
+        // prevents a structurally valid signature profile from writing maker
+        // evidence into an arbitrary identity register.
+        _ => return Err(DirectArtifactErrorV3::NativeSignature),
+    };
+    u32::try_from(register).map_err(|_| DirectArtifactErrorV3::NativeSignature)
 }
 
 fn decode_request_profile<'a>(
@@ -903,9 +922,9 @@ mod tests {
         assert!(
             authenticate_direct_artifacts_v3(
                 fixture.selection(),
-            fixture.artifacts(),
-            &request,
-            0,
+                fixture.artifacts(),
+                &request,
+                0,
             )
             .is_err()
         );
@@ -954,7 +973,18 @@ mod tests {
     #[test]
     fn signed_profile_binds_the_frozen_hot_absolute_slices() {
         assert_eq!(HOT_FAMILY_REQUEST_OFFSET_V3, 128);
-        let exact = signed_request_profile(&[(192, 172, 0), (396, 172, 1)]);
+        let exact = signed_request_profile(&[
+            (
+                192,
+                172,
+                u32::try_from(IDENTITY_SELLER_NATIVE_SIGNER_V3).expect("seller signer register"),
+            ),
+            (
+                396,
+                172,
+                u32::try_from(IDENTITY_BUYER_NATIVE_SIGNER_V3).expect("buyer signer register"),
+            ),
+        ]);
         let profile = RequestProfileV2::decode(&exact).expect("signed profile");
         assert_eq!(
             validate_native_signature_slices(
@@ -965,13 +995,43 @@ mod tests {
             Ok(())
         );
 
-        let wrong = signed_request_profile(&[(191, 172, 0), (396, 172, 1)]);
+        let wrong = signed_request_profile(&[
+            (
+                191,
+                172,
+                u32::try_from(IDENTITY_SELLER_NATIVE_SIGNER_V3).expect("seller signer register"),
+            ),
+            (
+                396,
+                172,
+                u32::try_from(IDENTITY_BUYER_NATIVE_SIGNER_V3).expect("buyer signer register"),
+            ),
+        ]);
         let wrong = RequestProfileV2::decode(&wrong).expect("structural profile");
         assert_eq!(
             validate_native_signature_slices(
                 DirectExecutionActionV3::InlineOrdinary,
                 0,
                 DirectRequestProfileV3::Signed(wrong),
+            ),
+            Err(DirectArtifactErrorV3::NativeSignature)
+        );
+
+        let wrong_destination = signed_request_profile(&[
+            (192, 172, 0),
+            (
+                396,
+                172,
+                u32::try_from(IDENTITY_BUYER_NATIVE_SIGNER_V3).expect("buyer signer register"),
+            ),
+        ]);
+        let wrong_destination =
+            RequestProfileV2::decode(&wrong_destination).expect("structural profile");
+        assert_eq!(
+            validate_native_signature_slices(
+                DirectExecutionActionV3::InlineOrdinary,
+                0,
+                DirectRequestProfileV3::Signed(wrong_destination),
             ),
             Err(DirectArtifactErrorV3::NativeSignature)
         );
