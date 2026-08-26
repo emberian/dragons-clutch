@@ -360,7 +360,7 @@ mod tests {
     fn canonical_rules() -> [AccountRuleWithPrestateInputV2; 2] {
         [
             rule(
-                false,
+                true,
                 AccountAliasInputV2::SelfCoordinate,
                 AccountPrestateV2::Exact,
                 16,
@@ -411,7 +411,7 @@ mod tests {
             Ok(0)
         );
         assert!(
-            !profile
+            profile
                 .route_privileges_with_dynamic_spans(0, &[1], 0)
                 .expect("route zero privileges")
                 .writable()

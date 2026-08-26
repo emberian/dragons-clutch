@@ -1662,8 +1662,7 @@ impl<'a> AccountProfileV2<'a> {
                 let representative = self.rule(false, rule.alias_index)?;
                 if representative.alias_kind != AliasKindV2::SelfCoordinate
                     || representative.alias_index != 0
-                    || rule.privileges & 1 != 0
-                    || rule.privileges & 0x04 != representative.privileges & 0x04
+                    || rule.privileges & !representative.privileges != 0
                 {
                     return Err(Error::InvalidRouteAlias);
                 }
@@ -3415,7 +3414,8 @@ fn validate_rule(
             || rule.alias_index != 0
             || rule.privileges != 0x02
             || rule.data_length == 0
-            || rule.data_item_stride != 0
+            || (rule.data_item_stride != 0
+                && artifact_profile != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE)
             || rule.effect_permissions
                 & (EFFECT_PERMISSION_CREDIT_LAMPORTS | EFFECT_PERMISSION_WRITE_DATA)
                 != (EFFECT_PERMISSION_CREDIT_LAMPORTS | EFFECT_PERMISSION_WRITE_DATA))

@@ -3563,10 +3563,10 @@ mod tests {
     }
 
     #[test]
-    fn authenticated_route_aliases_use_one_union_privileged_representative() {
+    fn authenticated_route_aliases_require_one_prior_privilege_superset() {
         let representative = AccountRuleWithPrestateInputV2 {
             rule: AccountRuleInputV2 {
-                privileges: READONLY,
+                privileges: AccountPrivilegesV2::new(true, true, false),
                 effect_permissions: NO_EFFECTS,
                 alias: AccountAliasInputV2::SelfCoordinate,
                 data_length: 4,
@@ -3576,7 +3576,7 @@ mod tests {
         };
         let writable_alias = AccountRuleWithPrestateInputV2 {
             rule: AccountRuleInputV2 {
-                privileges: WRITABLE,
+                privileges: AccountPrivilegesV2::new(true, true, false),
                 effect_permissions: NO_EFFECTS,
                 alias: AccountAliasInputV2::Fixed(0),
                 data_length: 0,
@@ -3671,7 +3671,7 @@ mod tests {
             Err(Error::InvalidCoordinate)
         );
         assert!(
-            !profile
+            profile
                 .route_privileges(0, 0)
                 .expect("representative route")
                 .writable()
@@ -3683,6 +3683,12 @@ mod tests {
                 .writable()
         );
         assert!(
+            profile
+                .route_privileges(0, 1)
+                .expect("signed route")
+                .signer()
+        );
+        assert!(
             !profile
                 .route_privileges(0, 2)
                 .expect("read route")
@@ -3691,7 +3697,7 @@ mod tests {
 
         let body = [7_u8; 4];
         let representative_observation =
-            AccountObservationV1::new([1; 32], [2; 32], 9, &body, false, true, false);
+            AccountObservationV1::new([1; 32], [2; 32], 9, &body, true, true, false);
         let system_observation =
             AccountObservationV1::new([3; 32], [4; 32], 0, &[], false, false, true);
         let accounts = [
@@ -3761,7 +3767,7 @@ mod tests {
             ],
             Error::PrivilegeMismatch,
         );
-        let substituted = AccountObservationV1::new([9; 32], [2; 32], 9, &body, false, true, false);
+        let substituted = AccountObservationV1::new([9; 32], [2; 32], 9, &body, true, true, false);
         assert_refuses(
             &[
                 representative_observation,
@@ -3771,7 +3777,7 @@ mod tests {
             ],
             Error::AliasMismatch,
         );
-        let wrong_owner = AccountObservationV1::new([1; 32], [9; 32], 9, &body, false, true, false);
+        let wrong_owner = AccountObservationV1::new([1; 32], [9; 32], 9, &body, true, true, false);
         assert_refuses(
             &[
                 representative_observation,
@@ -3783,7 +3789,7 @@ mod tests {
         );
         let other_body = [8_u8; 4];
         let wrong_data =
-            AccountObservationV1::new([1; 32], [2; 32], 9, &other_body, false, true, false);
+            AccountObservationV1::new([1; 32], [2; 32], 9, &other_body, true, true, false);
         assert_refuses(
             &[
                 representative_observation,
@@ -3794,7 +3800,7 @@ mod tests {
             Error::AliasMismatch,
         );
         let wrong_lamports =
-            AccountObservationV1::new([1; 32], [2; 32], 10, &body, false, true, false);
+            AccountObservationV1::new([1; 32], [2; 32], 10, &body, true, true, false);
         assert_refuses(
             &[
                 representative_observation,
@@ -3805,27 +3811,57 @@ mod tests {
             Error::AliasMismatch,
         );
 
-        let mut signer_alias_rules = rules;
-        signer_alias_rules[1].rule.privileges = AccountPrivilegesV2::new(true, true, false);
-        let mut hostile_scratch = std::vec![0_u8; width];
-        let mut hostile_output = std::vec![0x55_u8; width];
-        let before = hostile_output.clone();
-        assert_eq!(
-            encode_account_profile_with_authenticated_route_alias_v2_atomic(
-                TrustedEnvironmentV2::CurrentSlot { destination: 0 },
-                TrustedIdentityEnvironmentV2::CurrentExecutingProgram { destination: 1 },
-                TrustedBuiltinIdentityV2::SystemProgram { destination: 2 },
-                &signer_alias_rules,
-                &[],
-                &[],
-                &[],
-                registers,
-                &mut hostile_scratch,
-                &mut hostile_output,
-            ),
-            Err(Error::InvalidRouteAlias)
-        );
-        assert_eq!(hostile_output, before);
+        for escalation in [
+            AccountPrivilegesV2::new(true, false, false),
+            AccountPrivilegesV2::new(false, true, false),
+            AccountPrivilegesV2::new(false, false, true),
+        ] {
+            let base = AccountRuleWithPrestateInputV2 {
+                rule: AccountRuleInputV2 {
+                    privileges: READONLY,
+                    effect_permissions: NO_EFFECTS,
+                    alias: AccountAliasInputV2::SelfCoordinate,
+                    data_length: 4,
+                    data_item_stride: 0,
+                },
+                prestate: AccountPrestateV2::Exact,
+            };
+            let alias = AccountRuleWithPrestateInputV2 {
+                rule: AccountRuleInputV2 {
+                    privileges: escalation,
+                    effect_permissions: NO_EFFECTS,
+                    alias: AccountAliasInputV2::Fixed(0),
+                    data_length: 0,
+                    data_item_stride: 0,
+                },
+                prestate: AccountPrestateV2::AuthenticatedRouteAlias,
+            };
+            let escalation_width = AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES + 2 * RULE_BYTES;
+            let mut hostile_scratch = std::vec![0_u8; escalation_width];
+            let mut hostile_output = std::vec![0x55_u8; escalation_width];
+            let before = hostile_output.clone();
+            assert_eq!(
+                encode_account_profile_with_authenticated_route_alias_v2_atomic(
+                    TrustedEnvironmentV2::None,
+                    TrustedIdentityEnvironmentV2::None,
+                    TrustedBuiltinIdentityV2::None,
+                    &[base, alias],
+                    &[],
+                    &[],
+                    &[],
+                    RegisterGeometryV2 {
+                        common_scalars: 1,
+                        item_scalar_stride: 0,
+                        common_identities: 0,
+                        item_identity_stride: 0,
+                    },
+                    &mut hostile_scratch,
+                    &mut hostile_output,
+                ),
+                Err(Error::InvalidRouteAlias)
+            );
+            assert_eq!(hostile_output, before);
+        }
 
         let alias_offset = AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES + RULE_BYTES;
         for hostile_index in [1_u16, 2, 7] {
@@ -4082,6 +4118,170 @@ mod tests {
         );
         assert_eq!(hostile_output_scalars, [77]);
         assert_eq!(hostile_output_identities, [[0x77; 32]]);
+    }
+
+    #[test]
+    fn dynamic_spans_admit_exact_runtime_width_lifecycle_state_atomically() {
+        let lifecycle = AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: WRITABLE,
+                effect_permissions: AccountEffectPermissionsV2::new(false, true, true),
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length: 16,
+                data_item_stride: 8,
+            },
+            prestate: AccountPrestateV2::LifecycleBound,
+        };
+        let opaque = AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: READONLY,
+                effect_permissions: NO_EFFECTS,
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length: 0,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::AuthenticatedOpaqueReadonlyData,
+        };
+        let count_source = AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: READONLY,
+                effect_permissions: NO_EFFECTS,
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length: 4,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::Exact,
+        };
+        let operations = [AccountOperationInputV2::ProjectTailCountU32 {
+            account: AccountCoordinateV2::fixed(0),
+            destination: ScalarCoordinateV2::common(0),
+            data_offset: 0,
+        }];
+        let spans = [DynamicFixedSpanInputV2 {
+            insertion_coordinate: 2,
+            count_scalar: 1,
+            rule_start: 0,
+            rule_stride: 1,
+            minimum: 1,
+            maximum: 1,
+            step: 1,
+        }];
+        let width = DYNAMIC_FIXED_SPAN_HEADER_BYTES
+            + DYNAMIC_FIXED_SPAN_ENTRY_BYTES
+            + 3 * RULE_BYTES
+            + OPERATION_BYTES;
+        let mut encode_scratch = std::vec![0_u8; width];
+        let mut encoded = std::vec![0_u8; width];
+        encode_account_profile_with_dynamic_fixed_span_v2_atomic(
+            TrustedEnvironmentV2::None,
+            TrustedIdentityEnvironmentV2::None,
+            TrustedBuiltinIdentityV2::None,
+            &spans,
+            &[count_source, lifecycle],
+            &[opaque],
+            &operations,
+            RegisterGeometryV2 {
+                common_scalars: 2,
+                item_scalar_stride: 0,
+                common_identities: 0,
+                item_identity_stride: 0,
+            },
+            &mut encode_scratch,
+            &mut encoded,
+        )
+        .expect("runtime-width lifecycle Profile13");
+        let profile = AccountProfileV2::decode(&encoded).expect("decode Profile13");
+        assert_eq!(
+            profile
+                .physical_account_geometry_with_dynamic_spans(3, &[1], 1)
+                .expect("runtime-width lifecycle geometry")
+                .data(),
+            PhysicalAccountDataGeometryV2::VacantOrExact { live_bytes: 40 }
+        );
+
+        let owner = [0x22; 32];
+        let opaque_data = [0x55];
+        let count_data = 3_u32.to_le_bytes();
+        let project = |state_data: &[u8], output: &mut [u64; 2]| {
+            let accounts = [
+                AccountObservationV1::new([3; 32], owner, 1, &count_data, false, false, false),
+                AccountObservationV1::new([1; 32], owner, 9, state_data, false, true, false),
+                AccountObservationV1::new([2; 32], owner, 1, &opaque_data, false, false, false),
+            ];
+            let input = [7_u64, 1];
+            let mut scratch_scalars = [0_u64; 2];
+            project_dynamic_fixed_spans_atomic(
+                profile,
+                3,
+                &[1],
+                &accounts,
+                ProjectionRegistersV2 {
+                    input_scalars: &input,
+                    input_identities: &[],
+                    scratch_scalars: &mut scratch_scalars,
+                    scratch_identities: &mut [],
+                    output_scalars: output,
+                    output_identities: &mut [],
+                },
+            )
+        };
+
+        let mut vacant_output = [9_u64; 2];
+        project(&[], &mut vacant_output).expect("vacant lifecycle prestate");
+        assert_eq!(vacant_output, [3, 1]);
+
+        let mut live = [0_u8; 40];
+        live.get_mut(8..16)
+            .expect("projected field")
+            .copy_from_slice(&41_u64.to_le_bytes());
+        let mut live_output = [9_u64; 2];
+        project(&live, &mut live_output).expect("exact runtime-width live prestate");
+        assert_eq!(live_output, [3, 1]);
+
+        for hostile in [&live[..39], &live[..]] {
+            let oversized = if hostile.len() == live.len() {
+                Some(std::vec![0_u8; 41])
+            } else {
+                None
+            };
+            let hostile = oversized.as_deref().unwrap_or(hostile);
+            let mut output = [99_u64; 2];
+            let before = output;
+            assert_eq!(
+                project(hostile, &mut output),
+                Err(Error::DataLengthMismatch)
+            );
+            assert_eq!(output, before);
+        }
+
+        assert_eq!(
+            profile.physical_account_geometry_with_dynamic_spans(u32::MAX, &[u32::MAX], 1),
+            Err(Error::InvalidDynamicSpan)
+        );
+
+        let legacy_width = HEADER_BYTES + RULE_BYTES;
+        let mut legacy_scratch = std::vec![0_u8; legacy_width];
+        let mut legacy_output = std::vec![0x99_u8; legacy_width];
+        let legacy_before = legacy_output.clone();
+        assert_eq!(
+            encode_account_profile_with_lifecycle_v2_atomic(
+                TrustedEnvironmentV2::None,
+                &[lifecycle],
+                &[],
+                &[],
+                &[],
+                RegisterGeometryV2 {
+                    common_scalars: 1,
+                    item_scalar_stride: 0,
+                    common_identities: 0,
+                    item_identity_stride: 0,
+                },
+                &mut legacy_scratch,
+                &mut legacy_output,
+            ),
+            Err(Error::InvalidLifecyclePrestate)
+        );
+        assert_eq!(legacy_output, legacy_before);
     }
 
     #[test]
