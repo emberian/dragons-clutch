@@ -18,10 +18,16 @@ pub mod encode;
 pub mod v2;
 /// Descriptor-selected RequestProfile V3 with one exact borrowed child witness.
 pub mod v3;
+/// Descriptor-bound compact repeated-row RequestProfile V4.
+pub mod v4;
 
 #[rustfmt::skip]
 #[allow(missing_docs)]
 mod generated;
+
+#[rustfmt::skip]
+#[allow(missing_docs)]
+mod generated_v4;
 
 pub use generated::{
     REQUEST_PROFILE_ARTIFACT_PROFILE_V1 as ARTIFACT_PROFILE,
@@ -518,6 +524,35 @@ impl Operation {
         }
     }
 
+    fn validate_request(
+        self,
+        profile: RequestProfileV1<'_>,
+        item: Option<u32>,
+        request: &[u8],
+    ) -> Result<()> {
+        let start = request_index(profile, self.request_item, item, self.request_offset)?;
+        let width = usize::try_from(self.read_width()?).map_err(|_| Error::InvalidCoordinate)?;
+        let field = request
+            .get(start..start.checked_add(width).ok_or(Error::ArithmeticOverflow)?)
+            .ok_or(Error::InvalidCoordinate)?;
+        match self.opcode {
+            OP_REQUIRE_U8 => require(
+                u64::from(*field.first().ok_or(Error::InvalidCoordinate)?) == self.immediate,
+            ),
+            OP_REQUIRE_U16 => {
+                require(u64::from(u16::from_le_bytes(array(field)?)) == self.immediate)
+            }
+            OP_REQUIRE_U32 => {
+                require(u64::from(u32::from_le_bytes(array(field)?)) == self.immediate)
+            }
+            OP_REQUIRE_U64 => require(u64::from_le_bytes(array(field)?) == self.immediate),
+            OP_REQUIRE_ZERO_RANGE => require(field.iter().all(|byte| *byte == 0)),
+            OP_PROJECT_U8 | OP_PROJECT_U16 | OP_PROJECT_U32 | OP_PROJECT_U64
+            | OP_PROJECT_IDENTITY => Ok(()),
+            _ => Err(Error::UnknownOperation),
+        }
+    }
+
     fn write_scalar(
         self,
         profile: RequestProfileV1<'_>,
@@ -553,6 +588,41 @@ impl Operation {
         *output.get_mut(index).ok_or(Error::InvalidCoordinate)? = value;
         Ok(())
     }
+}
+
+/// Validate every request check and projection read without materializing a register bank.
+///
+/// Profile decoding has already proved that every projection destination is typed, unique,
+/// and within the declared scalar or identity bank. This pass therefore has exactly the same
+/// request-acceptance boundary as [`project_atomic`], while allowing artifact admission code to
+/// validate a selected request without allocating output banks that it does not consume.
+pub fn validate_request(
+    profile: RequestProfileV1<'_>,
+    tail_count: u32,
+    request: &[u8],
+) -> Result<()> {
+    if request.len() != profile.request_bytes(tail_count)? {
+        return Err(Error::InvalidLength);
+    }
+    let mut operation = 0_u16;
+    while operation < profile.fixed_operations {
+        profile
+            .operation(false, operation)?
+            .validate_request(profile, None, request)?;
+        operation = operation.checked_add(1).ok_or(Error::InvalidLength)?;
+    }
+    let mut item = 0_u32;
+    while item < tail_count {
+        operation = 0;
+        while operation < profile.item_operations {
+            profile
+                .operation(true, operation)?
+                .validate_request(profile, Some(item), request)?;
+            operation = operation.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        item = item.checked_add(1).ok_or(Error::InvalidLength)?;
+    }
+    Ok(())
 }
 
 /// Validate the complete request and project all typed fields atomically.
@@ -757,6 +827,7 @@ mod tests {
             Ok(false)
         );
         let request = request();
+        validate_request(profile, 2, &request).expect("request-only validation");
         let input_scalars = [9_u64; 3];
         let input_identities = [[9_u8; 32]; 2];
         let mut scratch_scalars = [0_u64; 3];
@@ -846,6 +917,7 @@ mod tests {
         let bytes = canonical();
         let profile = RequestProfileV1::decode(&bytes).expect("profile");
         for request in &REQUEST_REFUSAL_CORPUS_TAIL2_V1 {
+            assert!(validate_request(profile, 2, request).is_err());
             let input_scalars = [9_u64; 3];
             let input_identities = [[9_u8; 32]; 2];
             let mut scratch_scalars = [0_u64; 3];
