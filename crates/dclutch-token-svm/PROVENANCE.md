@@ -1,8 +1,9 @@
 # SPL Token ABI provenance
 
-This crate was implemented from ABI facts in two locally cached official
-interface releases. They are references only: neither interface crate is a
-dependency, and this crate contains no Solana SDK type.
+This crate was implemented from ABI facts in locally cached official interface
+releases. Production code has no interface or Solana SDK dependency and owns no
+SDK type. Tests use the exact official Token-2022 and token-metadata interface
+crates to generate an independent extended-Mint encoding.
 
 ## Legacy Token reference
 
@@ -36,6 +37,22 @@ dependency, and this crate contains no Solana SDK type.
   `502b8309d3243f81d3bb7b2ff5f9e412c48d4d68f354b8994792389fc904defd`
 - `src/extension/mint_close_authority.rs` SHA-256:
   `d68a5cc324c217e5e18a86dab363f9f67c19e14e828f942f534ff6e9db441a3b`
+- `src/extension/metadata_pointer/mod.rs` SHA-256:
+  `db4f962e95f2a652b8faf06c8821cb2c7e6ecd31e90cc27d46df0ca143768633`
+- `src/extension/token_metadata/mod.rs` SHA-256:
+  `294202a665a9c1b0c0fda959e8b037e5145f09cb198ff305e02cefaefe8f74c3`
+- `src/extension/permissioned_burn/mod.rs` SHA-256:
+  `7ecbf5d694e90d48c4e3c1f1eeb0bf31081cf9a12fb43e5f8186177ca5b58f62`
+
+## Token metadata reference
+
+- Crate: `spl-token-metadata-interface` 1.0.1
+- Repository: <https://github.com/solana-program/token-metadata>
+- License declared by the crate: Apache-2.0
+- crates.io archive SHA-256:
+  `3d3d96f175e7022ff200464dfa75a3708a4e9b70c83c4ecd04fe52ee479f4fef`
+- `src/state.rs` SHA-256:
+  `865edf6b1d21d913403308e4bd6347d7210e02489c46c243ecd5210995f791de`
 
 The archive digests were computed directly from
 `~/.cargo/registry/cache/index.crates.io-1949cf8c6b5b557f/*.crate`; source-file
@@ -52,6 +69,10 @@ digests were computed from the corresponding extracted registry directories on
   then type/length/value TLV entries;
 - `MintCloseAuthority` extension tag `3`, length `32`, with the official
   `MaybeNull<Address>` all-zero absence encoding;
+- `MetadataPointer` tag `18`, fixed 64-byte authority/address body;
+- `TokenMetadata` tag `19`, variable-length Borsh body with update authority,
+  associated Mint, three strings, and additional string pairs;
+- `PermissionedBurn` tag `28`, fixed 32-byte authority body;
 - instruction tags and bodies: `CloseAccount = 9`,
   `TransferChecked = 12 || amount:u64le || decimals:u8`, and
   `InitializeAccount3 = 18 || owner:[u8;32]`;
@@ -73,6 +94,22 @@ initialized base Mint, canonical zero padding, the Mint account type, and one
 extensions, noncanonical padding, and trailing bytes. This narrow exception is
 for lifecycle-created protocol Mints whose zero supply must permit exact rent
 reclamation; it does not broaden the ordinary transfer profile.
+
+The Token behavior V2 representation profile admits the full Token-2022 `u8`
+display-decimal field while keeping every economic amount in raw `u64` base
+units. It requires protocol-controlled `MintCloseAuthority` and
+`PermissionedBurn`, refuses a freeze authority, and optionally admits only an
+immutable self-pointing `MetadataPointer` plus immutable, fully consumed
+`TokenMetadata`. Token Accounts remain exact 165-byte base Accounts. TLV
+physical order is not semantic; the parser authenticates the exact set and
+refuses duplicates, spare storage, unknown types, and every extension that can
+change supply, balance, transfer, authority, freeze, or close behavior.
+
+The V2 behavior profile content ID is
+`12393cc73ab258c746a4a185a47606956841b4ce0d53b3aa04c7e614d4381462`.
+The immutable Realm/release selection schema ID is
+`b492dc12857a10e9ad28c5855c6955a0107f581735727134c021d4dfff9ea0e8`;
+one selection content digest is SHA-256 over the exact 144 semantic bytes.
 
 The fixed builders cover the single-authority/PDA forms needed by dClutch.
 Multisignature signer expansion is not claimed by this profile.
