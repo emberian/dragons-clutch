@@ -10,7 +10,6 @@ describe('market lifecycle workbench', () => {
     expect(html).toContain('Author &amp; fund');
     expect(html).toContain('Compile Product V2 result domain');
     expect(html).toContain('Found common Core Market');
-    expect(html).toContain('Registry and Rent program plus ArtifactRelease identities');
     expect(html).toContain('Reacquire the execution surface first.');
     expect(html).toContain('Transaction unavailable');
     expect(html).not.toContain('Illustrative');

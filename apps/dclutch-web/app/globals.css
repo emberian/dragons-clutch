@@ -48,6 +48,37 @@ a { color: inherit; }
 .direct-output dl div { min-width: 0; }
 .direct-output dt { color: #6f8075; font: 9px var(--font-geist-mono); text-transform: uppercase; }
 .direct-output dd { margin: 5px 0 0; color: #b8c5bb; font: 10px/1.5 var(--font-geist-mono); overflow-wrap: anywhere; }
+.found-heading > p { max-width: 600px; }
+.found-boundaries { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; margin-bottom: 16px; overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: var(--line); }
+.found-boundaries article { min-height: 145px; padding: 21px; background: rgba(7,14,10,.96); }
+.found-boundaries span { color: var(--acid); font: 8px var(--font-geist-mono); }
+.found-boundaries strong { display: block; margin-top: 15px; font-size: 12px; }
+.found-boundaries p { margin: 7px 0 0; color: #6e7c73; font-size: 9px; line-height: 1.55; }
+.found-form { margin-top: 0; }
+.found-control-grid { grid-template-columns: 2fr 1fr; }
+.found-record-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.found-empty { grid-template-columns: 90px 1fr; align-items: center; min-height: 235px; }
+.found-empty .radar { margin: 0; }
+.found-empty h2 { font-size: clamp(26px, 3vw, 42px); }
+.found-empty p:last-child { max-width: 720px; color: var(--muted); line-height: 1.65; }
+.found-verdict { display: grid; grid-template-columns: auto 1fr; gap: 8px 18px; align-items: center; padding: 16px; border: 1px solid rgba(185,255,100,.18); border-radius: 11px; background: rgba(185,255,100,.035); }
+.found-verdict span { padding: 6px 9px; border-radius: 999px; color: #efd784; background: rgba(239,215,132,.09); font: 8px var(--font-geist-mono); }
+.found-verdict strong { color: #d4ded6; font: 12px var(--font-geist-mono); }
+.found-verdict p { grid-column: 1 / -1; margin: 2px 0 0; color: #6e7b72; font-size: 9px; line-height: 1.5; }
+.found-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; margin: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 11px; background: var(--line); }
+.found-facts div { min-width: 0; padding: 14px; background: rgba(8,16,11,.98); }
+.found-facts dt { color: #6c7a71; font: 8px var(--font-geist-mono); text-transform: uppercase; }
+.found-facts dd { margin: 6px 0 0; color: #b9c5bb; font: 9px/1.5 var(--font-geist-mono); overflow-wrap: anywhere; }
+.direct-card textarea.found-packet { min-height: 150px; }
+.found-export { display: flex; gap: 14px; align-items: center; }
+.found-export a { padding: 11px 14px; border-radius: 9px; background: var(--acid); color: #17200f; font: 750 10px var(--font-geist-mono); text-decoration: none; }
+.found-export span { color: #718078; font: 9px var(--font-geist-mono); }
+.found-accounts ol { display: grid; gap: 1px; margin: 0; padding: 0; list-style: none; background: var(--line); }
+.found-accounts li { display: grid; grid-template-columns: 28px 150px minmax(0, 1fr) 100px; gap: 11px; align-items: center; min-width: 0; padding: 11px 13px; background: rgba(7,14,10,.98); }
+.found-accounts li > span { color: var(--acid); font: 8px var(--font-geist-mono); }
+.found-accounts li strong { font-size: 9px; }
+.found-accounts code { color: #718078; font: 8px/1.45 var(--font-geist-mono); overflow-wrap: anywhere; }
+.found-accounts small { color: #8b978e; font: 8px var(--font-geist-mono); text-align: right; }
 .registered-workspace { margin-top: 30px; border-color: rgba(105,212,174,.24); }
 .registered-state-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .registered-state-card { min-width: 0; padding: 18px; border: 1px solid var(--line); border-radius: 13px; background: rgba(4,12,8,.55); }
@@ -563,7 +594,11 @@ footer { display: flex; justify-content: space-between; gap: 20px; margin-top: 3
   .inventory-row { grid-template-columns: minmax(150px, 1fr) repeat(3, 48px); }
   .inventory-row > span { display: none; }
   .custody-ledger, .liquidity-proof { grid-template-columns: 1fr 1fr; }
-  .direct-form-grid, .direct-output dl, .registered-state-grid, .registered-facts, .creation-boundary, .release-manifest-grid, .product-author-grid, .product-region-grid, .local-metrics, .local-evidence-grid, .local-scenarios, .local-account-grid { grid-template-columns: 1fr; }
+  .direct-form-grid, .direct-output dl, .registered-state-grid, .registered-facts, .creation-boundary, .release-manifest-grid, .product-author-grid, .product-region-grid, .local-metrics, .local-evidence-grid, .local-scenarios, .local-account-grid, .found-boundaries, .found-facts { grid-template-columns: 1fr; }
+  .found-empty { grid-template-columns: 1fr; }
+  .found-accounts li { grid-template-columns: 24px 1fr; }
+  .found-accounts code, .found-accounts small { grid-column: 2; text-align: left; }
+  .found-export { align-items: flex-start; flex-direction: column; }
   .local-status-strip { grid-template-columns: 9px 1fr; }.local-status-strip span { grid-column: 2; padding-bottom: 12px; }
   .local-transactions > article { grid-template-columns: 24px 1fr; }.local-transactions dl { grid-column: 2; }
   .custody-ledger article:nth-child(2) { border-right: 0; }

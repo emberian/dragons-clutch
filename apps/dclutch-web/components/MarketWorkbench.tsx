@@ -41,7 +41,7 @@ function actionByName(action: string): OperatorWorkflowV1 {
 }
 
 function requiresMarket(workflow: OperatorWorkflowV1): boolean {
-  return workflow.family !== 'Release' && !(workflow.family === 'Creation' && workflow.action === 'Compile Product V2 result domain');
+  return workflow.family !== 'Release' && workflow.family !== 'Creation';
 }
 
 export default function MarketWorkbench({ initialStage = 'author' }: Readonly<{ initialStage?: StageId }>) {
