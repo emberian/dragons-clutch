@@ -100,24 +100,57 @@ pub fn project_consume_v3(
     expiry_slot: u64,
     physical: SeriesProjectedCustodyPhysicalV3,
 ) -> Result<SeriesProjectedConsumeV3> {
-    let base = base_request(plan.escrow(), expiry_slot, physical)?;
-    if plan.source_replay_revision() != base.funding_source_replay_revision {
-        return Err(SeriesProjectedCustodyErrorV3::Request);
-    }
     Ok(SeriesProjectedConsumeV3 {
-        lock_and_close_source: with_transition(
-            base,
+        lock_and_close_source: project_consume_edge_v3(
+            plan,
+            expiry_slot,
+            physical,
             ProjectedCustodyOperationV1::LockHoardAndCloseSource,
             2,
-            plan.amount(),
         )?,
-        realize_and_close: with_transition(
-            base,
+        realize_and_close: project_consume_edge_v3(
+            plan,
+            expiry_slot,
+            physical,
             ProjectedCustodyOperationV1::RealizeAndClose,
             3,
-            plan.amount(),
         )?,
     })
+}
+
+/// Project only the pre-Found Hoard credit and SeriesEscrow source closure.
+///
+/// This narrow entrypoint lets SBF callers validate one 768-byte child packet
+/// at a time rather than retaining both Consume packets in one stack frame.
+#[inline(never)]
+pub fn project_lock_and_close_source_v3(
+    plan: ConsumeSeriesEscrowPlanV3,
+    expiry_slot: u64,
+    physical: SeriesProjectedCustodyPhysicalV3,
+) -> Result<ProjectedCustodyRequestV1> {
+    project_consume_edge_v3(
+        plan,
+        expiry_slot,
+        physical,
+        ProjectedCustodyOperationV1::LockHoardAndCloseSource,
+        2,
+    )
+}
+
+/// Project only the post-Found projected-Hoard realization and replay close.
+#[inline(never)]
+pub fn project_realize_and_close_v3(
+    plan: ConsumeSeriesEscrowPlanV3,
+    expiry_slot: u64,
+    physical: SeriesProjectedCustodyPhysicalV3,
+) -> Result<ProjectedCustodyRequestV1> {
+    project_consume_edge_v3(
+        plan,
+        expiry_slot,
+        physical,
+        ProjectedCustodyOperationV1::RealizeAndClose,
+        3,
+    )
 }
 
 /// Project expiry cleanup of the prepared but still-empty projected Hoard.
@@ -207,6 +240,21 @@ fn base_request(
         .validate()
         .map_err(|_| SeriesProjectedCustodyErrorV3::Request)?;
     Ok(request)
+}
+
+#[inline(never)]
+fn project_consume_edge_v3(
+    plan: ConsumeSeriesEscrowPlanV3,
+    expiry_slot: u64,
+    physical: SeriesProjectedCustodyPhysicalV3,
+    operation: ProjectedCustodyOperationV1,
+    expected_revision: u64,
+) -> Result<ProjectedCustodyRequestV1> {
+    let base = base_request(plan.escrow(), expiry_slot, physical)?;
+    if plan.source_replay_revision() != base.funding_source_replay_revision {
+        return Err(SeriesProjectedCustodyErrorV3::Request);
+    }
+    with_transition(base, operation, expected_revision, plan.amount())
 }
 
 fn with_transition(

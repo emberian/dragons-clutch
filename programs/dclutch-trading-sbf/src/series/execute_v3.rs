@@ -37,7 +37,8 @@ use super::{
     },
     instruction::SERIES_ACTION_HEADER_BYTES_V3,
     projected_custody_v3::{
-        SeriesProjectedCustodyErrorV3, SeriesProjectedCustodyPhysicalV3, project_consume_v3,
+        SeriesProjectedCustodyErrorV3, SeriesProjectedCustodyPhysicalV3,
+        project_lock_and_close_source_v3, project_realize_and_close_v3,
     },
     projector::{AuthenticatedSeriesActionV3, SeriesProjectorErrorV3},
 };
@@ -211,145 +212,226 @@ pub struct SeriesConsumeExecutionInputsV3<'a, 'content> {
 
 /// Stage one complete Consume without invoking a program or writing state.
 pub fn stage_series_consume_execution_v3<'a>(
-    inputs: SeriesConsumeExecutionInputsV3<'a, 'a>,
+    inputs: &SeriesConsumeExecutionInputsV3<'a, 'a>,
 ) -> Result<SeriesConsumeExecutionPlanV3<'a>> {
-    let composition = inputs.action.compose_consume(
-        inputs.product,
-        inputs.registry_program,
-        inputs.ticket_state_key,
-        inputs.series_bytes,
-        inputs.ticket_state_bytes,
-        inputs.now_slot,
+    let composition = compose_execution_v3(inputs)?;
+    let expiry_slot = occurrence_expiry_slot_v3(inputs)?;
+    let calls = stage_consume_calls_v3(inputs, &composition, expiry_slot)?;
+    Ok(SeriesConsumeExecutionPlanV3 { composition, calls })
+}
+
+#[inline(never)]
+fn stage_consume_calls_v3<'a>(
+    inputs: &SeriesConsumeExecutionInputsV3<'a, 'a>,
+    composition: &SeriesConsumeCompositionV3,
+    expiry_slot: u64,
+) -> Result<[SeriesStagedChildCallV3<'a>; SERIES_CONSUME_ROUTE_COUNT_V3]> {
+    let lock = stage_child_call_v3(
+        inputs,
+        0,
+        SeriesInvocationExpectationV3 {
+            role: FixedRole::Custody,
+            request_offset: SERIES_CONSUME_LOCK_OFFSET_V3,
+            request_len: SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
+            borrows_witness: false,
+            receipt_dependencies: &SERIES_NO_RECEIPT_DEPENDENCIES_V3,
+        },
     )?;
+    validate_projected_lock_v3(
+        composition,
+        expiry_slot,
+        inputs.projected_custody,
+        lock.request(),
+    )?;
+
+    let found = stage_child_call_v3(
+        inputs,
+        1,
+        SeriesInvocationExpectationV3 {
+            role: FixedRole::Core,
+            request_offset: SERIES_CONSUME_CORE_FOUND_OFFSET_V3,
+            request_len: SERIES_CONSUME_CORE_REQUEST_BYTES_V3,
+            borrows_witness: true,
+            receipt_dependencies: &SERIES_CORE_FOUND_RECEIPT_DEPENDENCIES_V3,
+        },
+    )?;
+    validate_core_request_v3(composition, found.request())?;
+
+    let realize = stage_child_call_v3(
+        inputs,
+        2,
+        SeriesInvocationExpectationV3 {
+            role: FixedRole::Custody,
+            request_offset: SERIES_CONSUME_REALIZE_OFFSET_V3,
+            request_len: SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
+            borrows_witness: false,
+            receipt_dependencies: &SERIES_NO_RECEIPT_DEPENDENCIES_V3,
+        },
+    )?;
+    validate_projected_realize_v3(
+        composition,
+        expiry_slot,
+        inputs.projected_custody,
+        realize.request(),
+    )?;
+
+    let claims = stage_child_call_v3(
+        inputs,
+        3,
+        SeriesInvocationExpectationV3 {
+            role: FixedRole::Claims,
+            request_offset: SERIES_CONSUME_CLAIMS_OFFSET_V3,
+            request_len: SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3,
+            borrows_witness: false,
+            receipt_dependencies: &SERIES_CLAIMS_RECEIPT_DEPENDENCIES_V3,
+        },
+    )?;
+    validate_claims_request_v3(claims.request())?;
+
+    let open = stage_child_call_v3(
+        inputs,
+        4,
+        SeriesInvocationExpectationV3 {
+            role: FixedRole::Core,
+            request_offset: SERIES_CONSUME_CORE_OPEN_OFFSET_V3,
+            request_len: SERIES_CONSUME_CORE_REQUEST_BYTES_V3,
+            borrows_witness: true,
+            receipt_dependencies: &SERIES_CORE_OPEN_RECEIPT_DEPENDENCIES_V3,
+        },
+    )?;
+    validate_core_request_v3(composition, open.request())?;
+    Ok([lock, found, realize, claims, open])
+}
+
+#[inline(never)]
+fn compose_execution_v3(
+    inputs: &SeriesConsumeExecutionInputsV3<'_, '_>,
+) -> Result<SeriesConsumeCompositionV3> {
+    inputs
+        .action
+        .compose_consume(
+            inputs.product,
+            inputs.registry_program,
+            inputs.ticket_state_key,
+            inputs.series_bytes,
+            inputs.ticket_state_bytes,
+            inputs.now_slot,
+        )
+        .map_err(SeriesExecuteErrorV3::from)
+}
+
+#[inline(never)]
+fn occurrence_expiry_slot_v3(inputs: &SeriesConsumeExecutionInputsV3<'_, '_>) -> Result<u64> {
     let occurrence = inputs
         .action
         .occurrence()
         .ok_or(SeriesExecuteErrorV3::Invocation)?
         .occurrence()
         .occurrence();
-    let expiry_slot = inputs
+    inputs
         .action
         .template()
         .retry_through(occurrence)
-        .map_err(|_| SeriesExecuteErrorV3::Invocation)?;
-    let projected =
-        project_consume_v3(composition.escrow(), expiry_slot, inputs.projected_custody)?;
-    let expected_core = composition
+        .map_err(|_| SeriesExecuteErrorV3::Invocation)
+}
+
+#[inline(never)]
+fn validate_core_request_v3(
+    composition: &SeriesConsumeCompositionV3,
+    request: &[u8],
+) -> Result<()> {
+    let expected = composition
         .core_request()
         .encode()
         .map_err(|_| SeriesExecuteErrorV3::RequestBank)?;
-    let expected_projected = [
-        projected
-            .lock_and_close_source
-            .encode()
-            .map_err(|_| SeriesExecuteErrorV3::RequestBank)?,
-        projected
-            .realize_and_close
-            .encode()
-            .map_err(|_| SeriesExecuteErrorV3::RequestBank)?,
-    ];
-
-    let mut calls: [Option<SeriesStagedChildCallV3<'a>>; SERIES_CONSUME_ROUTE_COUNT_V3] =
-        [None; SERIES_CONSUME_ROUTE_COUNT_V3];
-    for (index, invocation) in inputs.invocations.into_iter().enumerate() {
-        let expected = match index {
-            0 => SeriesInvocationExpectationV3 {
-                role: FixedRole::Custody,
-                request_offset: SERIES_CONSUME_LOCK_OFFSET_V3,
-                request_len: SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
-                borrows_witness: false,
-                receipt_dependencies: &SERIES_NO_RECEIPT_DEPENDENCIES_V3,
-            },
-            1 => SeriesInvocationExpectationV3 {
-                role: FixedRole::Core,
-                request_offset: SERIES_CONSUME_CORE_FOUND_OFFSET_V3,
-                request_len: SERIES_CONSUME_CORE_REQUEST_BYTES_V3,
-                borrows_witness: true,
-                receipt_dependencies: &SERIES_CORE_FOUND_RECEIPT_DEPENDENCIES_V3,
-            },
-            2 => SeriesInvocationExpectationV3 {
-                role: FixedRole::Custody,
-                request_offset: SERIES_CONSUME_REALIZE_OFFSET_V3,
-                request_len: SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
-                borrows_witness: false,
-                receipt_dependencies: &SERIES_NO_RECEIPT_DEPENDENCIES_V3,
-            },
-            3 => SeriesInvocationExpectationV3 {
-                role: FixedRole::Claims,
-                request_offset: SERIES_CONSUME_CLAIMS_OFFSET_V3,
-                request_len: SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3,
-                borrows_witness: false,
-                receipt_dependencies: &SERIES_CLAIMS_RECEIPT_DEPENDENCIES_V3,
-            },
-            4 => SeriesInvocationExpectationV3 {
-                role: FixedRole::Core,
-                request_offset: SERIES_CONSUME_CORE_OPEN_OFFSET_V3,
-                request_len: SERIES_CONSUME_CORE_REQUEST_BYTES_V3,
-                borrows_witness: true,
-                receipt_dependencies: &SERIES_CORE_OPEN_RECEIPT_DEPENDENCIES_V3,
-            },
-            _ => return Err(SeriesExecuteErrorV3::Invocation),
-        };
-        let request = validate_invocation(
-            invocation,
-            inputs.artifacts.effect,
-            expected,
-            inputs.hot.ir_request_bank(),
-        )?;
-        let witness = expected
-            .borrows_witness
-            .then_some(inputs.artifacts.slices.witness);
-        if index == 1 || index == 4 {
-            if request != expected_core {
-                return Err(SeriesExecuteErrorV3::RequestBank);
-            }
-        } else if index == 0 || index == 2 {
-            let projected = ProjectedCustodyRequestV1::decode(request)
-                .map_err(|_| SeriesExecuteErrorV3::RequestBank)?;
-            let operation = if index == 0 {
-                ProjectedCustodyOperationV1::LockHoardAndCloseSource
-            } else {
-                ProjectedCustodyOperationV1::RealizeAndClose
-            };
-            if projected.operation != operation {
-                return Err(SeriesExecuteErrorV3::RequestBank);
-            }
-            let expected = if index == 0 {
-                expected_projected[0]
-            } else {
-                expected_projected[1]
-            };
-            if request != expected {
-                return Err(SeriesExecuteErrorV3::RequestBank);
-            }
-        } else if ClaimsFoundingRequestV5::decode(request).is_err() {
-            return Err(SeriesExecuteErrorV3::RequestBank);
-        }
-        let base_request_digest = match witness {
-            Some(witness) => hashv(&[request, witness]).to_bytes(),
-            None => hash(request).to_bytes(),
-        };
-        *calls
-            .get_mut(index)
-            .ok_or(SeriesExecuteErrorV3::Invocation)? = Some(SeriesStagedChildCallV3 {
-            invocation,
-            request,
-            witness,
-            base_request_digest,
-        });
+    if request == expected {
+        Ok(())
+    } else {
+        Err(SeriesExecuteErrorV3::RequestBank)
     }
-    let [
-        Some(lock),
-        Some(found),
-        Some(realize),
-        Some(claims),
-        Some(open),
-    ] = calls
-    else {
-        return Err(SeriesExecuteErrorV3::Invocation);
+}
+
+#[inline(never)]
+fn validate_projected_lock_v3(
+    composition: &SeriesConsumeCompositionV3,
+    expiry_slot: u64,
+    physical: SeriesProjectedCustodyPhysicalV3,
+    request: &[u8],
+) -> Result<()> {
+    let decoded = ProjectedCustodyRequestV1::decode(request)
+        .map_err(|_| SeriesExecuteErrorV3::RequestBank)?;
+    if decoded.operation != ProjectedCustodyOperationV1::LockHoardAndCloseSource {
+        return Err(SeriesExecuteErrorV3::RequestBank);
+    }
+    let expected = project_lock_and_close_source_v3(composition.escrow(), expiry_slot, physical)?
+        .encode()
+        .map_err(|_| SeriesExecuteErrorV3::RequestBank)?;
+    if request == expected {
+        Ok(())
+    } else {
+        Err(SeriesExecuteErrorV3::RequestBank)
+    }
+}
+
+#[inline(never)]
+fn validate_projected_realize_v3(
+    composition: &SeriesConsumeCompositionV3,
+    expiry_slot: u64,
+    physical: SeriesProjectedCustodyPhysicalV3,
+    request: &[u8],
+) -> Result<()> {
+    let decoded = ProjectedCustodyRequestV1::decode(request)
+        .map_err(|_| SeriesExecuteErrorV3::RequestBank)?;
+    if decoded.operation != ProjectedCustodyOperationV1::RealizeAndClose {
+        return Err(SeriesExecuteErrorV3::RequestBank);
+    }
+    let expected = project_realize_and_close_v3(composition.escrow(), expiry_slot, physical)?
+        .encode()
+        .map_err(|_| SeriesExecuteErrorV3::RequestBank)?;
+    if request == expected {
+        Ok(())
+    } else {
+        Err(SeriesExecuteErrorV3::RequestBank)
+    }
+}
+
+#[inline(never)]
+fn validate_claims_request_v3(request: &[u8]) -> Result<()> {
+    ClaimsFoundingRequestV5::decode(request)
+        .map(|_| ())
+        .map_err(|_| SeriesExecuteErrorV3::RequestBank)
+}
+
+#[inline(never)]
+fn stage_child_call_v3<'a>(
+    inputs: &SeriesConsumeExecutionInputsV3<'a, 'a>,
+    index: usize,
+    expected: SeriesInvocationExpectationV3<'_>,
+) -> Result<SeriesStagedChildCallV3<'a>> {
+    let invocation = inputs
+        .invocations
+        .get(index)
+        .copied()
+        .ok_or(SeriesExecuteErrorV3::Invocation)?;
+    let request = validate_invocation(
+        invocation,
+        inputs.artifacts.effect,
+        expected,
+        inputs.hot.ir_request_bank(),
+    )?;
+    let witness = expected
+        .borrows_witness
+        .then_some(inputs.artifacts.slices.witness);
+    let base_request_digest = match witness {
+        Some(witness) => hashv(&[request, witness]).to_bytes(),
+        None => hash(request).to_bytes(),
     };
-    let calls = [lock, found, realize, claims, open];
-    Ok(SeriesConsumeExecutionPlanV3 { composition, calls })
+    Ok(SeriesStagedChildCallV3 {
+        invocation,
+        request,
+        witness,
+        base_request_digest,
+    })
 }
 
 fn validate_invocation<'a>(
