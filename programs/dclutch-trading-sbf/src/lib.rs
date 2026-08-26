@@ -26,12 +26,12 @@ mod child_receipt_v3;
 pub mod admitted_composition_v3;
 
 /// Family-neutral EffectProgram V3 composition for canonical Claims CPIs.
-#[cfg(feature = "families")]
+#[cfg(any(feature = "families", feature = "series-family"))]
 pub mod claims_composition_v3;
 /// Family-neutral EffectProgram V3 composition for canonical Core CPIs.
 pub mod core_composition_v3;
 /// Family-neutral EffectProgram V3 composition for canonical Custody CPIs.
-#[cfg(feature = "families")]
+#[cfg(any(feature = "families", feature = "series-family"))]
 pub mod custody_composition_v3;
 /// Dealer family projection behind the common data-defined Trading boundary.
 #[cfg(feature = "families")]

@@ -145,16 +145,16 @@ use crate::resolution_composition_v3::{
     ResolutionCompositionParentV3, execute_resolution_route_v3, preflight_resolution_route_v3,
 };
 
-#[cfg(feature = "families")]
+#[cfg(any(feature = "families", feature = "series-family"))]
 use crate::{
     claims_composition_v3::{ClaimsRouteReceiptV3, execute_claims_route_v3},
     custody_composition_v3::{
         CustodyCompositionParentV3, execute_custody_route_v3, preflight_custody_route_v3,
     },
 };
-#[cfg(feature = "families")]
+#[cfg(any(feature = "families", feature = "series-family"))]
 use dclutch_claims_svm::composition_v3::{ClaimsCompositionParentV3, ClaimsCompositionV3};
-#[cfg(feature = "families")]
+#[cfg(any(feature = "families", feature = "series-family"))]
 use dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1;
 
 // These are SBF-heap profile bounds, not semantic/product limits. The lifting
@@ -1705,7 +1705,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
     }
     let locally_mutated =
         local_mutation_representatives(effect, tail_count, scalars, identities, aliases)?;
-    #[cfg(feature = "families")]
+    #[cfg(any(feature = "families", feature = "series-family"))]
     let claims_composition =
         if has_active_role(effect, tail_count, scalars, identities, FixedRole::Claims)? {
             Some(
@@ -1728,7 +1728,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
         } else {
             None
         };
-    #[cfg(feature = "families")]
+    #[cfg(any(feature = "families", feature = "series-family"))]
     let claims_program = if claims_composition.is_some() {
         Some(selected_role_program_v3(
             frame,
@@ -1739,7 +1739,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
     } else {
         None
     };
-    #[cfg(feature = "families")]
+    #[cfg(any(feature = "families", feature = "series-family"))]
     let custody_program =
         if has_active_role(effect, tail_count, scalars, identities, FixedRole::Custody)? {
             Some(selected_role_program_v3(
@@ -1803,7 +1803,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                     },
                 )?,
                 FixedRole::Claims => {
-                    #[cfg(feature = "families")]
+                    #[cfg(any(feature = "families", feature = "series-family"))]
                     {
                         let composition = claims_composition.ok_or(TradingSbfError::Content)?;
                         let selected = claims_program.ok_or(TradingSbfError::Release)?;
@@ -1820,11 +1820,11 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                             return Err(TradingSbfError::Content.into());
                         }
                     }
-                    #[cfg(not(feature = "families"))]
+                    #[cfg(not(any(feature = "families", feature = "series-family")))]
                     return Err(TradingSbfError::UnsupportedContent.into());
                 }
                 FixedRole::Custody => {
-                    #[cfg(feature = "families")]
+                    #[cfg(any(feature = "families", feature = "series-family"))]
                     preflight_custody_route_v3(
                         program_id,
                         effect,
@@ -1844,7 +1844,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                             trading_program: program_id.to_bytes(),
                         },
                     )?;
-                    #[cfg(not(feature = "families"))]
+                    #[cfg(not(any(feature = "families", feature = "series-family")))]
                     return Err(TradingSbfError::UnsupportedContent.into());
                 }
                 FixedRole::Resolution => {
@@ -1908,7 +1908,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
     if effect.route_count() == 0 {
         return Ok(transcript);
     }
-    #[cfg(feature = "families")]
+    #[cfg(any(feature = "families", feature = "series-family"))]
     let claims_composition =
         if has_active_role(effect, tail_count, scalars, identities, FixedRole::Claims)? {
             Some(
@@ -1931,7 +1931,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
         } else {
             None
         };
-    #[cfg(feature = "families")]
+    #[cfg(any(feature = "families", feature = "series-family"))]
     let claims_program = if claims_composition.is_some() {
         Some(selected_role_program_v3(
             frame,
@@ -1942,7 +1942,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
     } else {
         None
     };
-    #[cfg(feature = "families")]
+    #[cfg(any(feature = "families", feature = "series-family"))]
     let custody_program =
         if has_active_role(effect, tail_count, scalars, identities, FixedRole::Custody)? {
             Some(selected_role_program_v3(
@@ -1991,9 +1991,9 @@ fn execute_child_routes_v3<'accounts, 'info>(
                     .map_err(|_| TradingSbfError::Content)?;
                 let dependency_program = match dependency.producer_role {
                     FixedRole::Core => frame.core_program,
-                    #[cfg(feature = "families")]
+                    #[cfg(any(feature = "families", feature = "series-family"))]
                     FixedRole::Claims => claims_program.ok_or(TradingSbfError::Release)?,
-                    #[cfg(feature = "families")]
+                    #[cfg(any(feature = "families", feature = "series-family"))]
                     FixedRole::Custody => custody_program.ok_or(TradingSbfError::Release)?,
                     #[cfg(feature = "families")]
                     FixedRole::Resolution => resolution_program.ok_or(TradingSbfError::Release)?,
@@ -2068,7 +2068,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                     frame.core_program,
                 ),
                 FixedRole::Claims => {
-                    #[cfg(feature = "families")]
+                    #[cfg(any(feature = "families", feature = "series-family"))]
                     {
                         let receipt = execute_claims_route_v3(
                             program_id,
@@ -2090,11 +2090,11 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             claims_program.ok_or(TradingSbfError::Release)?,
                         )
                     }
-                    #[cfg(not(feature = "families"))]
+                    #[cfg(not(any(feature = "families", feature = "series-family")))]
                     return Err(TradingSbfError::UnsupportedContent.into());
                 }
                 FixedRole::Custody => {
-                    #[cfg(feature = "families")]
+                    #[cfg(any(feature = "families", feature = "series-family"))]
                     {
                         let digest = execute_custody_route_v3(
                             program_id,
@@ -2122,7 +2122,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             custody_program.ok_or(TradingSbfError::Release)?,
                         )
                     }
-                    #[cfg(not(feature = "families"))]
+                    #[cfg(not(any(feature = "families", feature = "series-family")))]
                     return Err(TradingSbfError::UnsupportedContent.into());
                 }
                 FixedRole::Resolution => {
@@ -2291,7 +2291,7 @@ fn child_receipt_provenance_v4(
     })
 }
 
-#[cfg(feature = "families")]
+#[cfg(any(feature = "families", feature = "series-family"))]
 fn has_active_role(
     effect: EffectProgramV3<'_>,
     tail_count: u32,
@@ -2463,7 +2463,7 @@ fn require_no_common_projection_child_accounts_v3(
     Ok(())
 }
 
-#[cfg(feature = "families")]
+#[cfg(any(feature = "families", feature = "series-family"))]
 fn invocation_accounts_contain_program(
     invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
     accounts: &[AccountInfo<'_>],
@@ -2510,7 +2510,7 @@ fn invocation_accounts_contain_program(
     Ok(count)
 }
 
-#[cfg(feature = "families")]
+#[cfg(any(feature = "families", feature = "series-family"))]
 fn selected_role_program_v3<'accounts, 'info>(
     frame: HotFrameV3<'_, 'info>,
     accounts: &'accounts [AccountInfo<'info>],
@@ -2550,7 +2550,7 @@ fn selected_role_program_v3<'accounts, 'info>(
     found.ok_or_else(|| TradingSbfError::Release.into())
 }
 
-#[cfg(feature = "families")]
+#[cfg(any(feature = "families", feature = "series-family"))]
 fn claims_receipt_digest_v3(receipt: ClaimsRouteReceiptV3) -> Result<[u8; 32], ProgramError> {
     let bytes = match receipt {
         ClaimsRouteReceiptV3::Admit(value) => value
@@ -3506,6 +3506,17 @@ mod tests {
         assert!(is_hot_execution_v3(b"DCLTHOT3"));
         assert!(!is_hot_execution_v3(b"DCLTHOT2"));
         assert!(!is_hot_execution_v3(b"DCLTHOT"));
+    }
+
+    #[cfg(any(feature = "families", feature = "series-family"))]
+    #[test]
+    fn selected_family_profile_links_real_claims_and_custody_routes() {
+        let _claims_route = execute_claims_route_v3;
+        let _custody_preflight = preflight_custody_route_v3;
+        let _custody_route = execute_custody_route_v3;
+
+        assert_ne!(core::mem::size_of::<ClaimsRouteReceiptV3>(), 0);
+        assert_ne!(core::mem::size_of::<CustodyCompositionParentV3>(), 0);
     }
 
     #[test]
