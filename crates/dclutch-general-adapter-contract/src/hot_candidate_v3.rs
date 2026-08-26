@@ -1,4 +1,4 @@
-//! Complete General Hot36 candidate-register ABI.
+//! Complete General Hot38 candidate-register ABI.
 //!
 //! The AccountProfile first projects independently authenticated readonly
 //! observations into one exact register bank.  General then overwrites only
@@ -16,12 +16,12 @@ use crate::{
     runtime_verify::RuntimeCompleteSetMoveV2,
 };
 
-/// Exact common scalar-register count in the General Hot36 ABI.
-pub const GENERAL_HOT_COMMON_SCALARS_V3: u32 = 47;
+/// Exact common scalar-register count in the General Hot38 ABI.
+pub const GENERAL_HOT_COMMON_SCALARS_V3: u32 = 53;
 /// Outcome index, quantity, and three exact signed-magnitude fields per outcome.
 pub const GENERAL_HOT_ITEM_SCALAR_STRIDE_V3: u32 = 5;
-/// Exact common identity-register count in the General Hot36 ABI.
-pub const GENERAL_HOT_COMMON_IDENTITIES_V3: u32 = 27;
+/// Exact common identity-register count in the General Hot38 ABI.
+pub const GENERAL_HOT_COMMON_IDENTITIES_V3: u32 = 28;
 /// General has no per-outcome identity tail.
 pub const GENERAL_HOT_ITEM_IDENTITY_STRIDE_V3: u32 = 0;
 
@@ -121,6 +121,18 @@ pub mod scalar {
     pub const SETTLEMENT_POST_POSITION_REVISION: u32 = 45;
     /// Exact amount for the selected Custody request.
     pub const CUSTODY_AMOUNT: u32 = 46;
+    /// Exact replay-account rent principal used for initialize/terminal close.
+    pub const CUSTODY_REPLAY_RENT_LAMPORTS: u32 = 47;
+    /// Exact vault-account rent principal used for open/terminal close.
+    pub const CUSTODY_VAULT_RENT_LAMPORTS: u32 = 48;
+    /// CloseVault pre-revision after the optional terminal surplus transfer.
+    pub const CUSTODY_CLOSE_VAULT_EXPECTED_REVISION: u32 = 49;
+    /// CloseVault post-revision and CloseReplay pre-revision.
+    pub const CUSTODY_CLOSE_VAULT_RESULTING_REVISION: u32 = 50;
+    /// Terminal CloseReplay post-revision.
+    pub const CUSTODY_CLOSE_REPLAY_RESULTING_REVISION: u32 = 51;
+    /// Canonical zero used only by initialization child templates.
+    pub const ZERO: u32 = 52;
 }
 
 /// Scalar coordinates within each Product-outcome item bank.
@@ -193,11 +205,15 @@ pub mod identity {
     pub const POSITION_ZERO_OWNER: u32 = 25;
     /// Canonical sorted Position-table owner one; zero for one-position plans.
     pub const POSITION_ONE_OWNER: u32 = 26;
+    /// Canonical General root identity and Custody replay namespace.
+    pub const GENERAL_ROOT: u32 = 27;
 }
 
 /// Independently authenticated environment needed by exact Claims/Custody packets.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralHotEnvironmentV3 {
+    /// Canonical General root identity and Custody replay namespace.
+    pub general_root: [u8; 32],
     /// Digest of the exact authenticated Hot request.
     pub parent_request_digest: [u8; 32],
     /// Selected execution release set.
@@ -268,6 +284,10 @@ pub struct GeneralHotEnvironmentV3 {
     pub custody_expected_revision: u64,
     /// Ordered transfer index.
     pub transfer_index: u16,
+    /// Exact replay-account rent principal.
+    pub custody_replay_rent_principal: u64,
+    /// Exact vault-account rent principal.
+    pub custody_vault_rent_principal: u64,
 }
 
 /// Stable refusal from General Hot candidate projection.
@@ -364,6 +384,16 @@ pub fn project_general_hot_candidate_v3<'a>(
     );
     let custody_resulting_revision = environment
         .custody_expected_revision
+        .checked_add(1)
+        .ok_or(GeneralHotCandidateErrorV3::RevisionOverflow)?;
+    let custody_close_vault_expected_revision = environment
+        .custody_expected_revision
+        .checked_add(u64::from(header.custody_active))
+        .ok_or(GeneralHotCandidateErrorV3::RevisionOverflow)?;
+    let custody_close_vault_resulting_revision = custody_close_vault_expected_revision
+        .checked_add(1)
+        .ok_or(GeneralHotCandidateErrorV3::RevisionOverflow)?;
+    let custody_close_replay_resulting_revision = custody_close_vault_resulting_revision
         .checked_add(1)
         .ok_or(GeneralHotCandidateErrorV3::RevisionOverflow)?;
     let claims_post_market_revision = environment
@@ -500,6 +530,27 @@ pub fn project_general_hot_candidate_v3<'a>(
             settlement_post_position_revision,
         ),
         (scalar::CUSTODY_AMOUNT, custody_amount),
+        (
+            scalar::CUSTODY_REPLAY_RENT_LAMPORTS,
+            environment.custody_replay_rent_principal,
+        ),
+        (
+            scalar::CUSTODY_VAULT_RENT_LAMPORTS,
+            environment.custody_vault_rent_principal,
+        ),
+        (
+            scalar::CUSTODY_CLOSE_VAULT_EXPECTED_REVISION,
+            custody_close_vault_expected_revision,
+        ),
+        (
+            scalar::CUSTODY_CLOSE_VAULT_RESULTING_REVISION,
+            custody_close_vault_resulting_revision,
+        ),
+        (
+            scalar::CUSTODY_CLOSE_REPLAY_RESULTING_REVISION,
+            custody_close_replay_resulting_revision,
+        ),
+        (scalar::ZERO, 0),
     ] {
         write_scalar(scratch, coordinate, value)?;
     }
@@ -603,6 +654,7 @@ pub fn project_general_hot_candidate_v3<'a>(
         ),
         (identity::POSITION_ZERO_OWNER, position.zero_owner),
         (identity::POSITION_ONE_OWNER, position.one_owner),
+        (identity::GENERAL_ROOT, environment.general_root),
     ] {
         write_identity(scratch, scalar_count, coordinate, value)?;
     }
@@ -785,6 +837,7 @@ fn validate_environment(
     environment: GeneralHotEnvironmentV3,
 ) -> Result<()> {
     for identity in [
+        environment.general_root,
         environment.parent_request_digest,
         environment.release_set,
         environment.market,
@@ -806,10 +859,12 @@ fn validate_environment(
         || environment.settlement_position_revision == u64::MAX
         || environment.position_rent_principal == 0
         || environment.admission_rent_principal == 0
+        || environment.custody_replay_rent_principal == 0
+        || environment.custody_vault_rent_principal == 0
         || environment.observed_position_lamports < environment.position_rent_principal
         || environment.observed_admission_lamports < environment.admission_rent_principal
         || environment.payer != [0; 32]
-        || environment.rent_refund != [0; 32]
+        || (action == RuntimeSettlementActionV2::Close && environment.rent_refund == [0; 32])
     {
         return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
     }
@@ -989,6 +1044,7 @@ mod tests {
 
     fn environment() -> GeneralHotEnvironmentV3 {
         GeneralHotEnvironmentV3 {
+            general_root: [21; 32],
             parent_request_digest: [1; 32],
             release_set: [2; 32],
             market: [3; 32],
@@ -1024,6 +1080,8 @@ mod tests {
             rent_refund: [0; 32],
             custody_expected_revision: 22,
             transfer_index: 1,
+            custody_replay_rent_principal: 23,
+            custody_vault_rent_principal: 24,
         }
     }
 

@@ -41,6 +41,80 @@ const EXECUTION_PHASE: u8 = 2;
 const PAGE_PHASE: u8 = 3;
 const VERIFIED_PHASE: u8 = 9;
 
+/// Typed canonical Settlement Cursor coordinates for generic Effect writes.
+///
+/// The decoder remains the semantic owner of these offsets. Artifact builders
+/// consume this projection instead of copying numeric wire coordinates.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SettlementCursorLayoutV2;
+
+impl SettlementCursorLayoutV2 {
+    /// Cursor magic byte offset.
+    pub const fn magic() -> u32 {
+        0
+    }
+
+    /// Cursor version byte offset.
+    pub const fn version() -> u32 {
+        8
+    }
+
+    /// Cursor phase byte offset.
+    pub const fn phase() -> u32 {
+        10
+    }
+
+    /// Product-derived outcome-count offset.
+    pub const fn outcome_count() -> u32 {
+        12
+    }
+
+    /// Total verifier-emitted order-count offset.
+    pub const fn order_count() -> u32 {
+        16
+    }
+
+    /// Next settlement order offset.
+    pub const fn next_order() -> u32 {
+        20
+    }
+
+    /// Optimistic cursor revision offset.
+    pub const fn revision() -> u32 {
+        24
+    }
+
+    /// Selected Candidate identity offset.
+    pub const fn candidate_id() -> u32 {
+        32
+    }
+
+    /// Quote-inventory offset.
+    pub const fn quote_inventory() -> u32 {
+        64
+    }
+
+    /// Complete-set-quantity offset.
+    pub const fn complete_set_quantity() -> u32 {
+        72
+    }
+
+    /// Terminal-coordinate offset.
+    pub const fn terminal_coordinate() -> u32 {
+        80
+    }
+
+    /// Runtime inventory-tail base offset.
+    pub const fn inventory_base() -> u32 {
+        SETTLEMENT_CURSOR_HEADER_BYTES_V2 as u32
+    }
+
+    /// Runtime inventory-tail item stride.
+    pub const fn inventory_stride() -> u32 {
+        8
+    }
+}
+
 /// Stable refusal from a hostile successor-General runtime-width record.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeWidthErrorV2 {
@@ -1390,5 +1464,43 @@ mod tests {
         // Quote caps and fragments have no offset in this fixed geometry: the
         // authenticated order and streamed verifier own those facts instead.
         assert_eq!(execution_len(width).expect("width"), 128);
+    }
+
+    #[test]
+    fn settlement_layout_projection_roundtrips_through_semantic_owner() {
+        let mut cursor = vec![0; settlement_cursor_len(1).expect("cursor width")];
+        SettlementCursorV2::encode_into(
+            SettlementCursorHeaderV2 {
+                outcome_count: 1,
+                order_count: 2,
+                next_order: 1,
+                revision: 7,
+                candidate_id: CANDIDATE,
+                quote_inventory: 11,
+                complete_set_quantity: 13,
+                terminal_coordinate: 0,
+                phase: SettlementPhaseV2::Collecting,
+            },
+            &[17],
+            &mut cursor,
+        )
+        .expect("cursor encode");
+        assert_eq!(
+            u32_at(&cursor, SettlementCursorLayoutV2::outcome_count() as usize),
+            Ok(1)
+        );
+        assert_eq!(
+            u64_at(&cursor, SettlementCursorLayoutV2::revision() as usize),
+            Ok(7)
+        );
+        assert_eq!(
+            array32_at(&cursor, SettlementCursorLayoutV2::candidate_id() as usize),
+            Ok(CANDIDATE)
+        );
+        assert_eq!(
+            u64_at(&cursor, SettlementCursorLayoutV2::inventory_base() as usize),
+            Ok(17)
+        );
+        SettlementCursorV2::decode(&cursor).expect("canonical decoder");
     }
 }

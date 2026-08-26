@@ -57,9 +57,9 @@ def profile (action : Action) : Profile := {
   -- The common Strategy bank has one stable geometry for all action-selected
   -- programs. Request projection fills only the action's coordinates; account
   -- projection and Transition own the remaining values.
-  commonScalars := 47
+  commonScalars := 53
   itemScalarStride := 5
-  commonIdentities := 27
+  commonIdentities := 28
   itemIdentityStride := 0
   fixedOperations := requirePrefix action ++
     (if action = .freeze then freezeCoordinates else if action = .consider ||
@@ -88,15 +88,15 @@ theorem all_actions_have_distinct_checked_profiles :
   native_decide
 
 theorem freeze_has_no_candidate_projection :
-    (profile .freeze).commonIdentities = 27 ∧
+    (profile .freeze).commonIdentities = 28 ∧
       (profile .freeze).fixedOperations.any
         (fun operation => operation.kind = .requireZeroRange ∧
           operation.requestOffset = 24 ∧ operation.immediate = 32) := by native_decide
 
 theorem row_actions_project_runtime_coordinates :
-    (profile .consider).commonScalars = 47 ∧
-      (profile .collect).commonScalars = 47 ∧
-      (profile .distribute).commonScalars = 47 ∧
+    (profile .consider).commonScalars = 53 ∧
+      (profile .collect).commonScalars = 53 ∧
+      (profile .distribute).commonScalars = 53 ∧
       (profile .consider).itemScalarStride = 5 := by native_decide
 
 end DClutch.General.RequestProfilesV1

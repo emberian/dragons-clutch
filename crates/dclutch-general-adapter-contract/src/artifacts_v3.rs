@@ -13,8 +13,8 @@ use dclutch_account_profile_contract::{
 use dclutch_capability_program_contract::{
     hot_v3::{
         HOT_RUNTIME_CONFIG_COORDINATE_V3, HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3,
-        HOT_RUNTIME_PORTFOLIO_COORDINATE_V3, HOT_RUNTIME_PRODUCT_COORDINATE_V3,
-        HOT_RUNTIME_ROOT_COORDINATE_V3,
+        HOT_RUNTIME_LINKED_BASIS_COORDINATE_V3, HOT_RUNTIME_PORTFOLIO_COORDINATE_V3,
+        HOT_RUNTIME_PRODUCT_COORDINATE_V3, HOT_RUNTIME_ROOT_COORDINATE_V3,
     },
     set_v1::{CapabilityProgramSetV1, SelectorWidthV1},
     v3::CapabilityProgramV3,
@@ -37,7 +37,11 @@ use dclutch_effect_kernel::{
     v3::{ProgramV3 as EffectProgramV3, RouteKindV3},
 };
 use dclutch_execution_strategy_contract::v2::{
-    EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyProgramV2,
+    AdmittedAotAuthorizationV2, AuthenticatedInterpreterArtifactsV2,
+    EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
+    EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyAdmissionV2,
+    ExecutionStrategyCertificateV2, ExecutionStrategyProgramV2, StrategyDispositionV2,
+    validate_admitted_aot_v2,
 };
 use dclutch_general_codec::{Action, CONTROLLER_REQUEST_BYTES, ControllerRequestV1};
 use dclutch_general_config_contract::{
@@ -48,6 +52,7 @@ use dclutch_product_runtime_v2::{
     PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_COEFFICIENT_COUNT_OFFSET, PORTFOLIO_HEADER_BYTES,
 };
 use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
+use dclutch_release_set_contract::ArtifactReleaseIdV1;
 use dclutch_request_profile_contract::{ProjectionRegistersV1, RequestProfileV1, project_atomic};
 use dclutch_transition_vm::v3::ProgramV3 as TransitionProgramV3;
 use sha2::{Digest, Sha256};
@@ -91,6 +96,10 @@ pub struct GeneralArtifactBytesV3<'a> {
     pub request_profile: &'a [u8],
     /// Descriptor-selected ExecutionStrategy V2.
     pub strategy: &'a [u8],
+    /// Strategy-selected semantic-equivalence certificate.
+    pub certificate: &'a [u8],
+    /// Registry-admitted certificate authorization.
+    pub admission: &'a [u8],
     /// Strategy-selected TransitionVM program.
     pub transition: &'a [u8],
     /// Common Trading local/child effect program.
@@ -104,6 +113,8 @@ pub struct GeneralArtifactSelectionV3 {
     pub program_set: [u8; 32],
     /// Manifest entry selecting the exact config bytes.
     pub config: [u8; 32],
+    /// Registry-authenticated stateless accelerator ArtifactRelease.
+    pub artifact_release: [u8; 32],
 }
 
 /// Complete borrowed artifact bundle after every content and geometry join.
@@ -123,6 +134,8 @@ pub struct GeneralArtifactBundleV3<'a> {
     pub request_profile: RequestProfileV1<'a>,
     /// Exact execution strategy.
     pub strategy: ExecutionStrategyProgramV2,
+    /// Private proof that the selected AOT chain was admitted completely.
+    pub admitted_aot: AdmittedAotAuthorizationV2,
     /// Exact underlying transition program.
     pub transition: TransitionProgramV3<'a>,
     /// Exact common effect program.
@@ -152,6 +165,8 @@ pub enum GeneralArtifactErrorV3 {
     RequestProfile,
     /// ExecutionStrategy selection refused.
     Strategy,
+    /// Translation certificate or Registry admission refused.
+    Admission,
     /// Transition program selection or decoding refused.
     Transition,
     /// EffectProgram selection or route grammar refused.
@@ -262,6 +277,23 @@ pub fn authenticate_general_artifacts_v3<'a>(
     strategy
         .validate_descriptor_selection(strategy_id, descriptor)
         .map_err(|_| GeneralArtifactErrorV3::Strategy)?;
+    if strategy.disposition() != StrategyDispositionV2::AdmittedAot
+        || strategy.certificate_schema().to_bytes() != EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2
+        || strategy.admission_schema().to_bytes() != EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2
+    {
+        return Err(GeneralArtifactErrorV3::Strategy);
+    }
+    let certificate_id = content(digest(artifacts.certificate))?;
+    let admission_id = content(digest(artifacts.admission))?;
+    if strategy.certificate_program() != Some(certificate_id)
+        || strategy.admission_program() != Some(admission_id)
+    {
+        return Err(GeneralArtifactErrorV3::Admission);
+    }
+    let certificate = ExecutionStrategyCertificateV2::decode(artifacts.certificate)
+        .map_err(|_| GeneralArtifactErrorV3::Admission)?;
+    let admission = ExecutionStrategyAdmissionV2::decode(artifacts.admission)
+        .map_err(|_| GeneralArtifactErrorV3::Admission)?;
     require_content(
         strategy.transition_program().to_bytes(),
         artifacts.transition,
@@ -279,6 +311,25 @@ pub fn authenticate_general_artifacts_v3<'a>(
         artifacts.effect,
     )
     .map_err(|_| GeneralArtifactErrorV3::Effect)?;
+    let admitted_aot = validate_admitted_aot_v2(
+        strategy_id,
+        strategy,
+        descriptor,
+        certificate_id,
+        certificate,
+        AuthenticatedInterpreterArtifactsV2 {
+            account_profile_program: descriptor.account_profile(),
+            request_profile_schema: descriptor.request_profile_schema(),
+            request_profile_program: descriptor.request_profile_program(),
+            transition_schema: strategy.transition_schema(),
+            transition_program: strategy.transition_program(),
+            effect_program: descriptor.effect_program(),
+        },
+        ArtifactReleaseIdV1::new(selection.artifact_release)
+            .map_err(|_| GeneralArtifactErrorV3::Admission)?,
+        Some((admission_id, admission)),
+    )
+    .map_err(|_| GeneralArtifactErrorV3::Admission)?;
     validate_geometry(
         tail_count,
         family_request.len(),
@@ -297,6 +348,7 @@ pub fn authenticate_general_artifacts_v3<'a>(
         lifecycle_policy,
         request_profile,
         strategy,
+        admitted_aot,
         transition,
         effect,
         tail_count,
@@ -474,6 +526,27 @@ fn validate_hot_account_profile(account: AccountProfileV2<'_>) -> Result<()> {
         {
             return Err(GeneralArtifactErrorV3::Geometry);
         }
+    }
+    let linked_basis = account
+        .rule(
+            false,
+            u16::try_from(HOT_RUNTIME_LINKED_BASIS_COORDINATE_V3)
+                .map_err(|_| GeneralArtifactErrorV3::Geometry)?,
+        )
+        .map_err(|_| GeneralArtifactErrorV3::AccountProfile)?;
+    // The exact linked-basis record width is selected by this immutable
+    // AccountProfile and checked against the authenticated raw record by Hot.
+    // It is deliberately not derived from Product N: graded bases may carry a
+    // runtime term/knot tail whose width is independent of the outcome count.
+    if linked_basis.privileges() != 0
+        || linked_basis.effect_permissions() != 0
+        || linked_basis.alias_kind()
+            != dclutch_account_profile_contract::v2::AliasKindV2::SelfCoordinate
+        || linked_basis.alias_index() != 0
+        || linked_basis.data_length() == 0
+        || linked_basis.data_item_stride() != 0
+    {
+        return Err(GeneralArtifactErrorV3::Geometry);
     }
     let projection = account
         .tail_count_projection()
@@ -718,6 +791,8 @@ mod tests {
         lifecycle: Vec<u8>,
         request_profile: Vec<u8>,
         strategy: Vec<u8>,
+        certificate: Vec<u8>,
+        admission: Vec<u8>,
         transition: Vec<u8>,
         effect: Vec<u8>,
         request: [u8; CONTROLLER_REQUEST_BYTES],
@@ -733,6 +808,8 @@ mod tests {
                 lifecycle_policy: &self.lifecycle,
                 request_profile: &self.request_profile,
                 strategy: &self.strategy,
+                certificate: &self.certificate,
+                admission: &self.admission,
                 transition: &self.transition,
                 effect: &self.effect,
             }
@@ -742,6 +819,7 @@ mod tests {
             GeneralArtifactSelectionV3 {
                 program_set: digest(&self.set),
                 config: digest(&self.config),
+                artifact_release: [13; 32],
             }
         }
     }
@@ -836,6 +914,7 @@ mod tests {
                 PORTFOLIO_HEADER_BYTES,
                 PORTFOLIO_COEFFICIENT_BYTES,
             ),
+            (HOT_RUNTIME_LINKED_BASIS_COORDINATE_V3, 0, 256, 0),
         ] {
             let rule = HEADER_BYTES + coordinate * RULE_BYTES;
             set_byte(&mut output, rule, privileges);
@@ -1033,21 +1112,38 @@ mod tests {
         let lifecycle = lifecycle_policy();
         let request_profile = general_request_profile_bytes_v1(Action::Freeze).to_vec();
         let transition = transition();
+        let effect = effect();
+        let certificate = ExecutionStrategyCertificateV2::new(
+            id(digest(&account)),
+            id(dclutch_request_profile_contract::SCHEMA_RELEASE_ID),
+            id(digest(&request_profile)),
+            id(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID),
+            id(digest(&transition)),
+            id(digest(&effect)),
+            ArtifactReleaseIdV1::new([13; 32]).expect("artifact release"),
+            id([14; 32]),
+            id([15; 32]),
+            id([16; 32]),
+        )
+        .to_bytes()
+        .to_vec();
+        let admission = ExecutionStrategyAdmissionV2::new(id(digest(&certificate)))
+            .to_bytes()
+            .to_vec();
         let strategy = ExecutionStrategyProgramV2::new(
-            StrategyDispositionV2::Interpreted,
+            StrategyDispositionV2::AdmittedAot,
             id(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID),
             id(digest(&transition)),
             id(EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2),
-            None,
+            Some(id(digest(&certificate))),
             id(EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2),
-            None,
+            Some(id(digest(&admission))),
             id(ACCELERATOR_REQUEST_SCHEMA_ID_V2),
             id(ACCELERATOR_ACK_SCHEMA_ID_V2),
         )
-        .expect("interpreted strategy")
+        .expect("admitted strategy")
         .to_bytes()
         .to_vec();
-        let effect = effect();
         let capacity = [8; 32];
         let descriptor = CapabilityProgramV3::new(
             id(GENERAL_CAPABILITY_KIND_ID_V1),
@@ -1101,6 +1197,8 @@ mod tests {
             lifecycle,
             request_profile,
             strategy,
+            certificate,
+            admission,
             transition,
             effect,
             request,
@@ -1229,6 +1327,7 @@ mod tests {
                 GeneralArtifactSelectionV3 {
                     program_set: digest(&hostile_set),
                     config: digest(&hostile_config_bytes),
+                    artifact_release: fixture.selection().artifact_release,
                 },
                 GeneralArtifactBytesV3 {
                     program_set: &hostile_set,
@@ -1238,13 +1337,15 @@ mod tests {
                     lifecycle_policy: &fixture.lifecycle,
                     request_profile: &fixture.request_profile,
                     strategy: &fixture.strategy,
+                    certificate: &fixture.certificate,
+                    admission: &fixture.admission,
                     transition: &fixture.transition,
                     effect: &fixture.effect,
                 },
                 &fixture.request,
                 258,
             ),
-            Err(GeneralArtifactErrorV3::Geometry)
+            Err(GeneralArtifactErrorV3::Admission)
         );
     }
 

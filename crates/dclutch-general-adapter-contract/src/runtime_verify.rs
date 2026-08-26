@@ -31,6 +31,140 @@ const CURRENT_DELIVER_TAIL: usize = 2;
 const CLAIM_INPUTS_TAIL: usize = 3;
 const CLAIM_OUTPUTS_TAIL: usize = 4;
 
+/// Typed canonical verifier-cursor coordinates for generic Effect writes.
+///
+/// The runtime verifier remains the single wire-layout owner; data-defined
+/// artifacts consume these accessors instead of repeating offsets.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeVerifierLayoutV2;
+
+impl RuntimeVerifierLayoutV2 {
+    /// Verifier magic byte offset.
+    pub const fn magic() -> u32 {
+        0
+    }
+
+    /// Verifier version byte offset.
+    pub const fn version() -> u32 {
+        8
+    }
+
+    /// Current-order presence byte offset.
+    pub const fn has_current_order() -> u32 {
+        10
+    }
+
+    /// Product-derived outcome count offset.
+    pub const fn outcome_count() -> u32 {
+        12
+    }
+
+    /// Declared page count offset.
+    pub const fn page_count() -> u32 {
+        16
+    }
+
+    /// Next page index offset.
+    pub const fn next_page_index() -> u32 {
+        20
+    }
+
+    /// Next row index offset.
+    pub const fn next_row_index() -> u32 {
+        24
+    }
+
+    /// Distinct completed-order count offset.
+    pub const fn order_count() -> u32 {
+        28
+    }
+
+    /// Optimistic verifier revision offset.
+    pub const fn revision() -> u32 {
+        32
+    }
+
+    /// Candidate coordinate offset.
+    pub const fn candidate_coordinate() -> u32 {
+        40
+    }
+
+    /// Candidate identity offset.
+    pub const fn candidate_id() -> u32 {
+        48
+    }
+
+    /// Product identity offset.
+    pub const fn product_id() -> u32 {
+        80
+    }
+
+    /// Batch identity offset.
+    pub const fn batch_id() -> u32 {
+        112
+    }
+
+    /// Price-scale offset.
+    pub const fn price_scale() -> u32 {
+        144
+    }
+
+    /// Filled-lots aggregate offset.
+    pub const fn filled_lots() -> u32 {
+        152
+    }
+
+    /// Quote-debit aggregate offset.
+    pub const fn quote_debit() -> u32 {
+        160
+    }
+
+    /// Quote-credit aggregate offset.
+    pub const fn quote_credit() -> u32 {
+        168
+    }
+
+    /// Current-order identity offset.
+    pub const fn current_order_id() -> u32 {
+        176
+    }
+
+    /// Current-order owner offset.
+    pub const fn current_owner_id() -> u32 {
+        208
+    }
+
+    /// Current-order nonce offset.
+    pub const fn current_nonce() -> u32 {
+        240
+    }
+
+    /// Current-order maximum-lots offset.
+    pub const fn current_max_lots() -> u32 {
+        248
+    }
+
+    /// Current-order debit cap offset.
+    pub const fn current_max_quote_debit_per_lot() -> u32 {
+        256
+    }
+
+    /// Current-order accumulated lots offset.
+    pub const fn current_lots() -> u32 {
+        264
+    }
+
+    /// First runtime `u64` tail offset.
+    pub const fn tails_base() -> u32 {
+        RUNTIME_VERIFIER_HEADER_BYTES_V2 as u32
+    }
+
+    /// Bytes per Product outcome in one verifier tail.
+    pub const fn tail_item_stride() -> u32 {
+        8
+    }
+}
+
 /// Stable refusal from runtime-width candidate verification.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeVerifyErrorV2 {

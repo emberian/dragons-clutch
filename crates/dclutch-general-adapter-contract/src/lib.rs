@@ -16,11 +16,15 @@
 #[cfg(test)]
 extern crate std;
 
+/// Read-only admitted-AOT General settlement evaluator.
+pub mod admitted_accelerator_v3;
 /// Complete content-addressed General V3 artifact joins for generic Trading.
 pub mod artifacts_v3;
 /// Exact canonical Claims/Custody packet construction and receipt verification.
 pub mod child_packets;
-/// Complete General Hot36 candidate register ABI for exact child packets.
+/// Generated exact-child EffectProgram artifacts for every General action.
+pub mod effect_artifacts_v3;
+/// Complete General Hot38 candidate register ABI for exact child packets.
 pub mod hot_candidate_v3;
 /// Exact funded batch, candidate, page, abort, and terminal lifecycle.
 pub mod lifecycle;
@@ -32,6 +36,8 @@ pub mod release_v3;
 pub mod runtime_candidate;
 /// Verifier-emitted runtime-width per-order settlement manifests.
 pub mod runtime_manifest;
+/// Runtime-width best-valid-submitted-candidate selection and freeze.
+pub mod runtime_selection;
 /// Permissionless runtime-width settlement over verifier-emitted order manifests.
 pub mod runtime_settlement;
 /// Streamed runtime-width candidate verification and exact selection comparison.
