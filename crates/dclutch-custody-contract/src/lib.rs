@@ -18,11 +18,13 @@ extern crate std;
 mod generated;
 mod projected;
 
+mod request_layout;
 pub use generated::{
     ABI_VERSION_V1, CUSTODY_RECEIPT_BYTES_V1, CUSTODY_REPLAY_BYTES_V1, CUSTODY_REQUEST_BYTES_V1,
 };
 pub use projected::*;
 
+pub use request_layout::CustodyRequestLayoutV1;
 use generated::*;
 
 /// The caller role is the canonical release-set role type, not a Custody DTO.
