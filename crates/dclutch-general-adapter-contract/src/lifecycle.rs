@@ -193,9 +193,13 @@ impl CandidateFundingV2 {
             .ok_or(LifecycleError::Arithmetic)
     }
 
-    /// Require byte-state compartments to match the physical native balance.
+    /// Require physical custody to cover every semantic compartment.
+    ///
+    /// Unsolicited surplus is never reclassified into a work compartment. It
+    /// remains physically present through continuations and routes only to the
+    /// immutable RentCredit when the candidate closes.
     pub fn require_physical(self, observed_lamports: u64) -> LifecycleResult<()> {
-        if self.exact_lamports()? == observed_lamports {
+        if self.exact_lamports()? <= observed_lamports {
             Ok(())
         } else {
             Err(LifecycleError::PhysicalBalance)
@@ -219,11 +223,14 @@ impl CandidateFundingV2 {
             .checked_sub(exact_page_rent)
             .ok_or(LifecycleError::Arithmetic)?;
         self.advance_revision()?;
+        let candidate_lamports_after = observed_lamports
+            .checked_sub(exact_page_rent)
+            .ok_or(LifecycleError::Arithmetic)?;
         Ok(FundingMoveV2 {
             account_top_up: exact_page_rent,
             actor_reward: 0,
             rent_credit: 0,
-            candidate_lamports_after: self.exact_lamports()?,
+            candidate_lamports_after,
         })
     }
 
@@ -322,11 +329,14 @@ impl CandidateFundingV2 {
             .checked_sub(reward)
             .ok_or(LifecycleError::InsufficientCompartment)?;
         self.advance_revision()?;
+        let candidate_lamports_after = observed_lamports
+            .checked_sub(reward)
+            .ok_or(LifecycleError::Arithmetic)?;
         Ok(FundingMoveV2 {
             account_top_up: 0,
             actor_reward: reward,
             rent_credit: 0,
-            candidate_lamports_after: self.exact_lamports()?,
+            candidate_lamports_after,
         })
     }
 
@@ -1056,20 +1066,28 @@ mod tests {
         let mut funding = CandidateFundingV2::new(10, 20, 30, 40, 50).expect("funding");
         let before = funding.exact_lamports().expect("total");
         assert_eq!(before, 150);
-        let page = funding.create_page(before, 20, 0).expect("page");
+        let page = funding.create_page(before + 7, 20, 0).expect("page");
         assert_eq!(page.account_top_up, 20);
-        assert_eq!(page.candidate_lamports_after, 130);
+        assert_eq!(page.candidate_lamports_after, 137);
         assert_eq!(
-            funding.pay_verification(130, 31, 1),
+            funding.pay_verification(137, 31, 1),
             Err(LifecycleError::InsufficientCompartment)
         );
-        let verify = funding.pay_verification(130, 30, 1).expect("verify");
+        let verify = funding.pay_verification(137, 30, 1).expect("verify");
         assert_eq!(verify.actor_reward, 30);
-        let settle = funding.pay_settlement(100, 40, 2).expect("settle");
+        assert_eq!(verify.candidate_lamports_after, 107);
+        let settle = funding.pay_settlement(107, 40, 2).expect("settle");
         assert_eq!(settle.actor_reward, 40);
-        let closed = funding.close(60, 10, 3).expect("close");
+        assert_eq!(settle.candidate_lamports_after, 67);
+        let closed = funding.close(67, 10, 3).expect("close");
         assert_eq!(closed.actor_reward, 10);
-        assert_eq!(closed.rent_credit, 50);
+        assert_eq!(closed.rent_credit, 57);
+        assert_eq!(closed.candidate_lamports_after, 0);
+
+        let mut donated = CandidateFundingV2::new(10, 0, 0, 0, 10).expect("donated funding");
+        let closed = donated.close(27, 10, 0).expect("donated close");
+        assert_eq!(closed.actor_reward, 10);
+        assert_eq!(closed.rent_credit, 17);
         assert_eq!(closed.candidate_lamports_after, 0);
     }
 
