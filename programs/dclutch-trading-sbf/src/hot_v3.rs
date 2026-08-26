@@ -21,11 +21,11 @@ use dclutch_account_profile_contract::{
         StateLifecyclePlanV3, StateLifecyclePolicyV5, plan_lifecycle_with_protected_outputs_atomic,
     },
     v2::{
-        AccountPrestateV2, AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE,
-        ProjectionRegistersV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2,
-        TrustedEnvironmentV2, derive_effect_permissions,
-        derive_effect_permissions_with_dynamic_spans, project_atomic as project_accounts_atomic,
-        project_dynamic_fixed_spans_atomic, project_tail_count_atomic,
+        AccountPrestateV2, AccountProfileV2, ProjectionRegistersV2,
+        SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2, TrustedEnvironmentV2,
+        derive_effect_permissions, derive_effect_permissions_with_dynamic_spans,
+        project_atomic as project_accounts_atomic, project_dynamic_fixed_spans_atomic,
+        project_tail_count_atomic,
     },
 };
 use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
@@ -451,7 +451,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     accelerator_program: &Pubkey,
     accounts: &'accounts [AccountInfo<'info>],
     request_bytes: &'request [u8],
-) -> Result<AuthenticatedAcceleratorInvocationV4<'request, 'accounts, 'info>, ProgramError> {
+) -> Result<Box<AuthenticatedAcceleratorInvocationV4<'request, 'accounts, 'info>>, ProgramError> {
     let request =
         AcceleratorRequestV2::decode(request_bytes).map_err(|_| TradingSbfError::Content)?;
     let caller_authority = account(accounts, 0)?;
@@ -684,19 +684,17 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         &lifecycle_data,
     )
     .map_err(|_| TradingSbfError::Content)?;
-    let mut span_widths =
-        if account_profile.artifact_profile() == DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
-            vec![0_u32; usize::from(account_profile.dynamic_fixed_span_count())]
-        } else {
-            Vec::new()
-        };
-    if account_profile.artifact_profile() == DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
+    let mut span_widths = if account_profile.uses_dynamic_fixed_spans() {
+        vec![0_u32; usize::from(account_profile.dynamic_fixed_span_count())]
+    } else {
+        Vec::new()
+    };
+    if account_profile.uses_dynamic_fixed_spans() {
         account_profile
             .dynamic_span_widths_from_scalars(&scalars, &mut span_widths)
             .map_err(|_| TradingSbfError::Content)?;
     }
-    let logical_count = if account_profile.artifact_profile() == DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
-    {
+    let logical_count = if account_profile.uses_dynamic_fixed_spans() {
         account_profile
             .logical_account_count_with_dynamic_spans(request.tail_count(), &span_widths)
             .map_err(|_| TradingSbfError::Content)?
@@ -815,7 +813,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         request_bytes,
     )?;
 
-    Ok(AuthenticatedAcceleratorInvocationV4 {
+    Ok(Box::new(AuthenticatedAcceleratorInvocationV4 {
         request,
         envelope,
         hot_instruction,
@@ -840,7 +838,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
             frame.effect_raw,
         ],
         runtime_accounts,
-    })
+    }))
 }
 
 fn authenticate_accelerator_top_level_v4(
@@ -1918,7 +1916,7 @@ pub fn process_hot_execution_v3(
     )?;
     let aliases = (0..runtime_accounts.len())
         .map(|coordinate| {
-            if account_profile.artifact_profile() == DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
+            if account_profile.uses_dynamic_fixed_spans() {
                 account_profile
                     .representative_with_dynamic_spans(
                         tail_count,
@@ -2627,7 +2625,7 @@ fn project_hot_effects_v3(
         .collect::<Vec<_>>();
     apply_lifecycle_candidates_v3(lifecycle_plans, aliases, &mut account_inputs)?;
     let mut permissions = vec![AccountPermission::read_only(); runtime_account_count];
-    if account_profile.artifact_profile() == DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
+    if account_profile.uses_dynamic_fixed_spans() {
         derive_effect_permissions_with_dynamic_spans(
             account_profile,
             tail_count,
@@ -2996,7 +2994,7 @@ fn require_dynamic_span_transition_ownership_v3(
     profile: AccountProfileV2<'_>,
     transition: TransitionProgramV3<'_>,
 ) -> Result<(), ProgramError> {
-    if profile.artifact_profile() != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
+    if !profile.uses_dynamic_fixed_spans() {
         return Ok(());
     }
     let mut index = 0_u16;
@@ -3025,7 +3023,7 @@ fn require_dynamic_span_values_v3(
     expected: &[u32],
     scalars: &[u64],
 ) -> Result<(), ProgramError> {
-    if profile.artifact_profile() != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
+    if !profile.uses_dynamic_fixed_spans() {
         return if expected.is_empty() {
             Ok(())
         } else {
@@ -3066,7 +3064,7 @@ fn authenticate_dynamic_span_widths_v3(
     scalar_count: usize,
     identity_count: usize,
 ) -> Result<AuthenticatedDynamicSpanWidthsV3, ProgramError> {
-    if profile.artifact_profile() != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
+    if !profile.uses_dynamic_fixed_spans() {
         if profile.dynamic_fixed_span_count() != 0 || effect.successor.span_count() != 0 {
             return Err(TradingSbfError::Content.into());
         }
@@ -3196,7 +3194,7 @@ fn authenticated_input_scratch_pages_v3<'accounts, 'info>(
     let Some(transport_span) = transport_span else {
         return Ok(&[]);
     };
-    if profile.artifact_profile() != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+    if !profile.uses_dynamic_fixed_spans()
         || span_counts.len() != usize::from(profile.dynamic_fixed_span_count())
         || transport_span >= profile.dynamic_fixed_span_count()
     {
@@ -3247,7 +3245,7 @@ fn expand_runtime_accounts_v3<'accounts, 'info>(
     injected: [&'accounts AccountInfo<'info>; 5],
     supplied_suffix: &'accounts [AccountInfo<'info>],
 ) -> Result<Vec<&'accounts AccountInfo<'info>>, ProgramError> {
-    let dynamic = profile.artifact_profile() == DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE;
+    let dynamic = profile.uses_dynamic_fixed_spans();
     let logical_count = if dynamic {
         profile
             .logical_account_count_with_dynamic_spans(tail_count, span_counts)
@@ -3331,7 +3329,7 @@ fn downgraded_effect_accounts_v3<'info>(
     span_counts: &[u32],
     logical_accounts: &[&AccountInfo<'info>],
 ) -> Result<Vec<AccountInfo<'info>>, ProgramError> {
-    if profile.artifact_profile() == DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
+    if profile.uses_dynamic_fixed_spans() {
         return downgrade_dynamic_child_accounts_v4(
             profile,
             tail_count,
@@ -5528,7 +5526,7 @@ fn require_geometry(
 ) -> Result<(), ProgramError> {
     request.require_request_shape(tail_count, family_request)?;
     let request_v1 = request.v1();
-    let expected_accounts = if account.artifact_profile() == DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
+    let expected_accounts = if account.uses_dynamic_fixed_spans() {
         account
             .logical_account_count_with_dynamic_spans(tail_count, span_counts)
             .map_err(|_| TradingSbfError::Content)?
@@ -5795,7 +5793,7 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
         &mut input_scalars,
         &mut input_identities,
     )?;
-    if account_profile.artifact_profile() == DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
+    if account_profile.uses_dynamic_fixed_spans() {
         if span_counts.len() != usize::from(account_profile.dynamic_fixed_span_count()) {
             return Err(TradingSbfError::Content.into());
         }
@@ -5828,7 +5826,7 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
         output_scalars: &mut account_output_scalars,
         output_identities: &mut account_output_identities,
     };
-    if account_profile.artifact_profile() == DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
+    if account_profile.uses_dynamic_fixed_spans() {
         project_dynamic_fixed_spans_atomic(
             account_profile,
             tail_count,
@@ -5900,7 +5898,7 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
             output_identities: &mut request_output_identities,
         },
     )?;
-    if account_profile.artifact_profile() == DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
+    if account_profile.uses_dynamic_fixed_spans() {
         let mut revalidated = vec![0_u32; span_counts.len()];
         account_profile
             .dynamic_span_widths_from_scalars(&request_output_scalars, &mut revalidated)
@@ -7145,7 +7143,7 @@ mod tests {
         let profile = AccountProfileV2::decode(&bytes).expect("decode profile13");
         assert_eq!(
             profile.artifact_profile(),
-            DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+            dclutch_account_profile_contract::v2::DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
         );
         assert_eq!(profile.dynamic_fixed_span_count(), 0);
 
