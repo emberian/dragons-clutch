@@ -24,11 +24,15 @@ dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
 dclutch-effect-kernel = { path = "../../crates/dclutch-effect-kernel" }
 dclutch-execution-strategy-contract = { path = "../../crates/dclutch-execution-strategy-contract" }
 dclutch-market-core-codec = { path = "../../crates/dclutch-market-core-codec" }
+dclutch-product-runtime-v2-svm-reader = { path = "../../crates/dclutch-product-runtime-v2-svm-reader" }
+dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }
 dclutch-request-profile-contract = { path = "../../crates/dclutch-request-profile-contract" }
 dclutch-series-v3-kernel = { path = "../../crates/dclutch-series-v3-kernel" }
+dclutch-trading-sbf = { path = "../dclutch-trading-sbf", default-features = false, features = ["series-family", "no-entrypoint"] }
 dclutch-transition-vm = { path = "../../crates/dclutch-transition-vm" }
 sha2 = { version = "0.10", default-features = false }
 solana-program = { version = "=3.0.0", default-features = false }
+solana-sdk-ids = "=3.1.0"
 
 [workspace]
 
