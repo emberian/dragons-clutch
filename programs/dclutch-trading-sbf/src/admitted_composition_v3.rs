@@ -710,7 +710,10 @@ mod tests {
             decode_register_bank(&bytes, 3, 2).expect("decode"),
             (scalars.to_vec(), identities.to_vec())
         );
-        assert!(decode_register_bank(&bytes[..bytes.len() - 1], 3, 2).is_err());
+        let truncated = bytes
+            .get(..bytes.len().saturating_sub(1))
+            .expect("truncated register bank");
+        assert!(decode_register_bank(truncated, 3, 2).is_err());
     }
 
     #[test]
