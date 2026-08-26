@@ -124,10 +124,7 @@ const CUSTODY_EXPECTED_REVISION: u64 = 8;
 const INITIAL_RECIPIENT_ATOMS: u64 = 5;
 const INITIAL_HOARD_ATOMS: u64 = 9;
 const PACKET_LIMIT: usize = 1_232;
-const TOKEN_2022_V11_ELF_DIGEST: [u8; 32] = [
-    0xe2, 0xac, 0xdf, 0xb7, 0x50, 0x88, 0x14, 0x62, 0xad, 0x61, 0x3a, 0x15, 0xcc, 0x9c, 0x54, 0xae,
-    0x17, 0xce, 0x06, 0x65, 0x80, 0xe8, 0x67, 0xe1, 0xe6, 0x35, 0xfb, 0xdf, 0xe0, 0x1f, 0x56, 0x97,
-];
+const TOKEN_2022_V11_PROVENANCE: &str = include_str!("../fixtures/token-2022-v11.provenance");
 
 struct Artifacts {
     claims: Vec<u8>,
@@ -225,6 +222,38 @@ struct Submission {
     logs: Vec<String>,
 }
 
+fn token_2022_provenance_value(key: &str) -> &'static str {
+    let prefix = format!("{key}=");
+    let mut values = TOKEN_2022_V11_PROVENANCE
+        .lines()
+        .filter_map(|line| line.strip_prefix(&prefix));
+    let value = values.next().expect("Token-2022 provenance key");
+    assert!(
+        values.next().is_none(),
+        "duplicate Token-2022 provenance key: {key}"
+    );
+    value
+}
+
+fn decode_sha256(value: &str) -> [u8; 32] {
+    assert_eq!(value.len(), 64, "SHA-256 must contain 64 hex digits");
+    let mut output = [0_u8; 32];
+    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+        let digits = str::from_utf8(pair).expect("ASCII SHA-256 digits");
+        *output.get_mut(index).expect("SHA-256 byte") =
+            u8::from_str_radix(digits, 16).expect("hex SHA-256 digit");
+    }
+    output
+}
+
+fn expected_token_2022_v11_elf_digest() -> [u8; 32] {
+    decode_sha256(token_2022_provenance_value("canonical_elf_sha256"))
+}
+
+fn token_2022_v11_fixture_authenticates(bytes: &[u8]) -> bool {
+    hash(bytes).to_bytes() == expected_token_2022_v11_elf_digest()
+}
+
 fn artifacts() -> Artifacts {
     let directory = PathBuf::from(env::var("SBF_OUT_DIR").expect("SBF_OUT_DIR is required"));
     let read = |name: &str| {
@@ -233,9 +262,8 @@ fn artifacts() -> Artifacts {
         fs::read(path).expect("read real ELF")
     };
     let token_2022 = read("spl_token_2022.so");
-    assert_eq!(
-        hash(&token_2022).to_bytes(),
-        TOKEN_2022_V11_ELF_DIGEST,
+    assert!(
+        token_2022_v11_fixture_authenticates(&token_2022),
         "the matching real Token-2022 v11 runtime is required"
     );
     Artifacts {
@@ -246,6 +274,28 @@ fn artifacts() -> Artifacts {
         token_2022,
         caller: read("dclutch_rational_v2_test_caller_sbf.so"),
     }
+}
+
+#[test]
+fn token_2022_v11_fixture_refuses_every_sampled_byte_substitution() {
+    let directory = PathBuf::from(env::var("SBF_OUT_DIR").expect("SBF_OUT_DIR is required"));
+    let mut bytes = fs::read(directory.join("spl_token_2022.so")).expect("read Token-2022 ELF");
+    assert!(token_2022_v11_fixture_authenticates(&bytes));
+    assert_ne!(
+        expected_token_2022_v11_elf_digest(),
+        decode_sha256(token_2022_provenance_value("macos_arm64_audit_elf_sha256")),
+        "the cross-host audit artifact must not become an accepted substitute"
+    );
+
+    let last = bytes.len().checked_sub(1).expect("nonempty Token-2022 ELF");
+    for offset in [0, bytes.len() / 2, last] {
+        let byte = bytes.get_mut(offset).expect("sampled ELF byte");
+        *byte ^= 1;
+        assert!(!token_2022_v11_fixture_authenticates(&bytes));
+        let byte = bytes.get_mut(offset).expect("sampled ELF byte");
+        *byte ^= 1;
+    }
+    assert!(token_2022_v11_fixture_authenticates(&bytes));
 }
 
 fn put(output: &mut [u8], offset: usize, input: &[u8]) {

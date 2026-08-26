@@ -3,7 +3,8 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/../../../.." && pwd)"
 sbf_out="$(mktemp -d /tmp/dclutch-rational-lifecycle.XXXXXX)"
-: "${TOKEN_2022_V11_MANIFEST:?set TOKEN_2022_V11_MANIFEST to the pinned spl-token-2022 11.0.0 Cargo.toml}"
+: "${TOKEN_2022_V11_CRATE:?set TOKEN_2022_V11_CRATE to the pinned spl-token-2022 11.0.0 crate archive}"
+fixture_builder="$repo_root/programs/dclutch-claims-sbf/fixtures/prepare-token-2022-v11.sh"
 
 cleanup() {
   rm -rf -- "$sbf_out"
@@ -20,7 +21,7 @@ for manifest in \
 do
   cargo build-sbf --manifest-path "$manifest" --sbf-out-dir "$sbf_out"
 done
-cargo build-sbf --manifest-path "$TOKEN_2022_V11_MANIFEST" --sbf-out-dir "$sbf_out"
+"$fixture_builder" "$TOKEN_2022_V11_CRATE" "$sbf_out"
 
 SBF_OUT_DIR="$sbf_out" cargo test \
   --locked \
