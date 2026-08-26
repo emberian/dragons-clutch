@@ -49,6 +49,38 @@ pub struct SourceResolutionDecisionV2 {
     terminal_sequence: u64,
 }
 
+/// Structurally authenticated terminal facts used by retirement after Core
+/// has already admitted the Product-bound terminal certificate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SourceResolutionTerminalProjectionV2 {
+    route: SourceResolutionRouteV1,
+    selector: u32,
+    resolution_evidence_id: ContentId,
+    terminal_sequence: u64,
+}
+
+impl SourceResolutionTerminalProjectionV2 {
+    /// Provider-neutral primary/recovery/failure terminal route.
+    pub const fn route(self) -> SourceResolutionRouteV1 {
+        self.route
+    }
+
+    /// Native runtime-width terminal selector.
+    pub const fn selector(self) -> u32 {
+        self.selector
+    }
+
+    /// Exact accepted evidence content identity.
+    pub const fn resolution_evidence_id(self) -> ContentId {
+        self.resolution_evidence_id
+    }
+
+    /// Positive terminal replay sequence.
+    pub const fn terminal_sequence(self) -> u64 {
+        self.terminal_sequence
+    }
+}
+
 impl SourceResolutionDecisionV2 {
     fn new(
         route: SourceResolutionRouteV1,
@@ -456,6 +488,28 @@ impl SourceResolutionStateV2 {
                 .ok_or(Error::NonCanonicalState)?,
             self.terminal_sequence,
         )
+    }
+
+    /// Project already-admitted terminal facts for retirement without
+    /// accepting a caller-authored Product outcome count. Close must rejoin
+    /// these facts to Core's admitted Product root, selector, and receipt.
+    pub fn terminal_projection(self) -> Result<SourceResolutionTerminalProjectionV2> {
+        if !matches!(
+            self.phase,
+            SourceResolutionPhaseV1::Resolved
+                | SourceResolutionPhaseV1::FailureCommitted
+                | SourceResolutionPhaseV1::Retired
+        ) {
+            return Err(Error::InvalidRecoveryTransition);
+        }
+        Ok(SourceResolutionTerminalProjectionV2 {
+            route: self.terminal_route.ok_or(Error::NonCanonicalState)?,
+            selector: self.result_selector,
+            resolution_evidence_id: self
+                .resolution_evidence_id
+                .ok_or(Error::NonCanonicalState)?,
+            terminal_sequence: self.terminal_sequence,
+        })
     }
 
     /// Retire a terminal state and return the exactly-one Market child delta.

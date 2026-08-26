@@ -339,6 +339,29 @@ impl ResolutionCertificateV2 {
         }
     }
 
+    /// Rejoin a previously admitted terminal certificate to Core's exact
+    /// Product-record root and terminal selector during retirement. Product
+    /// width is not accepted from the Close request; Core established it at
+    /// Admit by independently authenticating the Product graph.
+    pub fn validate_admitted_terminal(
+        self,
+        authenticated_product_record_digest: [u8; 32],
+        authenticated_selector: u32,
+    ) -> Result<()> {
+        if self.product_record_digest != authenticated_product_record_digest {
+            return Err(Error::ProductAuthorityMismatch);
+        }
+        if self.selector != authenticated_selector {
+            return Err(Error::InvalidSelector);
+        }
+        match self.kind {
+            ResolutionCertificateKindV2::ResolutionSuccess
+            | ResolutionCertificateKindV2::ResolutionFailure => Ok(()),
+            ResolutionCertificateKindV2::RecoveryAdvanced
+            | ResolutionCertificateKindV2::Exhausted => Err(Error::InvalidReceiptShape),
+        }
+    }
+
     /// Exact Product Runtime V2 Product-record content digest.
     pub const fn product_record_digest(self) -> [u8; 32] {
         self.product_record_digest
@@ -672,6 +695,15 @@ mod tests {
                 .expect("failure");
         assert_eq!(failure.selector(), 257);
         assert_eq!(failure.validate_terminal_product(id(4), 258), Ok(()));
+        assert_eq!(failure.validate_admitted_terminal(id(4), 257), Ok(()));
+        assert_eq!(
+            failure.validate_admitted_terminal(id(4), 258),
+            Err(Error::InvalidSelector)
+        );
+        assert_eq!(
+            failure.validate_admitted_terminal(id(9), 257),
+            Err(Error::ProductAuthorityMismatch)
+        );
         assert_eq!(
             failure.validate_terminal_product(id(4), 259),
             Err(Error::InvalidSelector)

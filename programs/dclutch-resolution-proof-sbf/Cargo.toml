@@ -22,6 +22,8 @@ dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
 dclutch-market-contract = { path = "../../crates/dclutch-market-contract" }
 dclutch-market-core-codec = { path = "../../crates/dclutch-market-core-codec" }
 dclutch-product-contract = { path = "../../crates/dclutch-product-contract" }
+dclutch-product-runtime-v2 = { path = "../../crates/dclutch-product-runtime-v2" }
+dclutch-product-runtime-v2-svm-reader = { path = "../../crates/dclutch-product-runtime-v2-svm-reader" }
 dclutch-pyth-svm = { path = "../../crates/dclutch-pyth-svm" }
 dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }
 dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }

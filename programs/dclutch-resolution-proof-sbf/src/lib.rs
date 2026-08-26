@@ -2,56 +2,22 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-//! Registry-bound primary-Pyth Source Resolution controller.
+//! Registry-bound Core-effect Source Resolution controller.
 
 extern crate std;
 
-use core::convert::TryFrom;
-
 use dclutch_capability_contract::CapabilityManifestV1;
-use dclutch_market_core_codec::{
-    CoreState, MarketCoreStateSeedsV1, Phase as CorePhase, Readiness as CoreReadiness,
-};
-use dclutch_product_contract::product::{InstanceV1, PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1};
-use dclutch_product_contract::result_domain::FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1;
-use dclutch_pyth_svm::{FullPriceUpdateV2, PythReleaseV1, ReceiverConfigV2View};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{
-    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
-    ActivatedExecutionReleaseSetViewV1, DeploymentObservationV1,
-};
+use dclutch_registry_contract::DeploymentObservationV1;
 use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
-use dclutch_release_set_contract::ExecutionRoleV1;
-use dclutch_resolution_codec::{
-    AcceptPythRequestV1, FUNDED_TRANSITION_REQUEST_BYTES, PRIMARY_CERTIFICATE_SEQUENCE_V3,
-    PYTH_EVIDENCE_CONTENT_DOMAIN_V1, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
-    RESOLUTION_CERTIFICATE_BYTES, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-    RESOLUTION_CONTROLLER_RELEASE_ID_V4, ResolutionCertificateKindV1, ResolutionCertificateV1,
-};
-use dclutch_source_contract::{
-    PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1,
-    SOURCE_RESOLUTION_STATE_BYTES, SourceAccessProfile, SourceMaterialViewV1,
-    SourceResolutionPhaseV1, SourceResolutionStateV1,
-};
+use dclutch_source_contract::{RecoveryPolicyV2, SourceMaterialV2};
 use solana_program::{
-    account_info::{AccountInfo, next_account_info},
-    clock::Clock,
-    entrypoint::ProgramResult,
-    hash::{hash, hashv},
-    program::invoke_signed,
-    program_error::ProgramError,
-    pubkey::Pubkey,
-    rent::Rent,
-    sysvar::SysvarSerialize,
+    account_info::AccountInfo, clock::Clock, entrypoint::ProgramResult, hash::hash,
+    program_error::ProgramError, pubkey::Pubkey, rent::Rent, sysvar::SysvarSerialize,
 };
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
-use solana_system_interface::instruction::{allocate, assign};
-
-/// Exact number of accounts in the primary-Pyth successor frame.
-pub const ACCEPT_PYTH_ACCOUNT_COUNT: usize = 21;
 
 mod core_effect;
-mod funded;
 
 /// Stable Resolution controller refusal.
 #[repr(u32)]
@@ -97,17 +63,8 @@ impl From<ResolutionError> for ProgramError {
 
 pub(crate) enum RecordKind {
     CapabilityManifest,
-    SourceMaterial,
-    ProductInstance,
-    PythRelease,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct MarketAuthority {
-    pub(crate) product_instance_id: [u8; 32],
-    pub(crate) result_domain_id: [u8; 32],
-    pub(crate) registry_program: Pubkey,
-    pub(crate) semantic_capability_manifest_id: [u8; 32],
+    SourceMaterialV2,
+    RecoveryPolicyV2,
 }
 
 #[cfg(not(feature = "no-entrypoint"))]
@@ -127,6 +84,15 @@ pub fn process_instruction(
     if core_effect::is_core_effect(instruction_data) {
         return core_effect::process_core_effect(program_id, accounts, instruction_data);
     }
+    Err(ResolutionError::Instruction.into())
+}
+
+#[cfg(any())]
+fn removed_legacy_v1_direct_instruction(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+) -> ProgramResult {
     if instruction_data.len() == FUNDED_TRANSITION_REQUEST_BYTES {
         return funded::process_funded_transition(program_id, accounts, instruction_data);
     }
@@ -366,6 +332,7 @@ pub fn process_instruction(
     )
 }
 
+#[cfg(any())]
 fn validate_frame(accounts: &[AccountInfo<'_>], program_id: &Pubkey) -> ProgramResult {
     for (index, account) in accounts.iter().enumerate() {
         if account.is_signer {
@@ -406,6 +373,7 @@ pub(crate) fn authenticate_rent(account: &AccountInfo<'_>) -> Result<Rent, Progr
     Rent::from_account_info(account).map_err(|_| ResolutionError::Sysvar.into())
 }
 
+#[cfg(any())]
 pub(crate) fn authenticate_state_account(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
@@ -437,6 +405,7 @@ pub(crate) fn authenticate_state_account(
 
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
+#[cfg(any())]
 pub(crate) fn authenticate_market_and_resolution_release(
     program_id: &Pubkey,
     market: &AccountInfo<'_>,
@@ -454,7 +423,7 @@ pub(crate) fn authenticate_market_and_resolution_release(
         .try_borrow_data()
         .map_err(|_| ResolutionError::MarketAuthority)?;
     let core_state = CoreState::decode(&data).map_err(|_| ResolutionError::MarketAuthority)?;
-    let market_seeds = MarketCoreStateSeedsV1::new(core_state.identity);
+    let market_seeds = MarketCoreStateSeedsV2::new(core_state.identity);
     let expected_market = Pubkey::find_program_address(&market_seeds.as_slices(), market.owner).0;
     if !rent.is_exempt(market.lamports(), data.len())
         || core_state.phase != CorePhase::Open
@@ -490,7 +459,9 @@ pub(crate) fn authenticate_market_and_resolution_release(
     )?;
     Ok(MarketAuthority {
         product_instance_id: core_state.identity.product_id.to_bytes(),
-        result_domain_id: core_state.identity.result_domain.to_bytes(),
+        // The legacy direct V1 path has no authenticated Runtime V2 domain
+        // projection and must fail closed until its separate physical cut.
+        result_domain_id: [0_u8; 32],
         registry_program,
         semantic_capability_manifest_id: core_state.identity.capability_manifest.to_bytes(),
     })
@@ -535,9 +506,8 @@ pub(crate) fn authenticate_finalized_record(
     }
     let valid = match kind {
         RecordKind::CapabilityManifest => CapabilityManifestV1::decode(bytes).is_ok(),
-        RecordKind::SourceMaterial => SourceMaterialViewV1::decode(bytes).is_ok(),
-        RecordKind::ProductInstance => InstanceV1::decode(bytes).is_ok(),
-        RecordKind::PythRelease => PythReleaseV1::decode(bytes).is_ok(),
+        RecordKind::SourceMaterialV2 => SourceMaterialV2::decode(bytes).is_ok(),
+        RecordKind::RecoveryPolicyV2 => RecoveryPolicyV2::decode(bytes).is_ok(),
     };
     if !valid {
         return Err(ResolutionError::FinalizedRecord.into());
@@ -545,6 +515,7 @@ pub(crate) fn authenticate_finalized_record(
     Ok(())
 }
 
+#[cfg(any())]
 fn authenticate_activation_cache<'a>(
     account: &AccountInfo<'_>,
     registry_program: Pubkey,
@@ -587,6 +558,7 @@ fn authenticate_activation_cache<'a>(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(any())]
 fn authenticate_resolution_release(
     program_id: &Pubkey,
     program: &AccountInfo<'_>,
@@ -654,6 +626,7 @@ fn deployment_observation(
     .map_err(|_| ResolutionError::ResolutionDeployment.into())
 }
 
+#[cfg(any())]
 pub(crate) fn authenticate_material_components(
     material: SourceMaterialViewV1<'_>,
     market_product_instance_id: [u8; 32],
@@ -698,6 +671,7 @@ pub(crate) fn authenticate_material_components(
     Ok(())
 }
 
+#[cfg(any())]
 pub(crate) fn authenticate_product_instance(
     material: SourceMaterialViewV1<'_>,
     authority: MarketAuthority,
@@ -736,6 +710,7 @@ pub(crate) fn authenticate_product_instance(
 
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
+#[cfg(any())]
 fn authenticate_pyth_release_record(
     registry_program: Pubkey,
     raw: &AccountInfo<'_>,
@@ -778,6 +753,7 @@ fn authenticate_pyth_release_record(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(any())]
 fn authenticate_provider_release(
     selected: dclutch_source_contract::ProviderReleaseV1,
     release: PythReleaseV1,
@@ -827,6 +803,7 @@ fn authenticate_provider_release(
     Ok(())
 }
 
+#[cfg(any())]
 fn authenticate_provider_loader(
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
@@ -863,6 +840,7 @@ fn authenticate_provider_loader(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(any())]
 fn commit_outputs<'info>(
     state: &AccountInfo<'info>,
     certificate: &AccountInfo<'info>,
@@ -896,6 +874,7 @@ fn commit_outputs<'info>(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(any())]
 pub(crate) fn initialize_certificate_output<'info>(
     program_id: &Pubkey,
     state: &AccountInfo<'info>,
@@ -976,6 +955,7 @@ pub(crate) fn initialize_certificate_output<'info>(
     Ok(())
 }
 
+#[cfg(any())]
 fn next<'a, 'info>(
     iterator: &mut core::slice::Iter<'a, AccountInfo<'info>>,
 ) -> Result<&'a AccountInfo<'info>, ProgramError> {

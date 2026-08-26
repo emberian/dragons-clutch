@@ -49,7 +49,7 @@ pub use source_material_v2::SourceMaterialV2;
 pub use source_recovery_policy_v2::{RecoveryAttemptV2, RecoveryPolicyV2};
 pub use source_resolution_v2::{
     SourceResolutionCreationPlanV2, SourceResolutionDecisionV2, SourceResolutionPdaSeedsV2,
-    SourceResolutionStateV2,
+    SourceResolutionStateV2, SourceResolutionTerminalProjectionV2,
 };
 
 /// Exact width of one runtime-width Source resolution state.

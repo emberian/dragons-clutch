@@ -8,7 +8,7 @@ use dclutch_capability_contract::{
 };
 use dclutch_core_contract::ContentId as CoreContentId;
 use dclutch_market_core_codec::{
-    CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV1,
+    CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2,
     MarketIdentity as CoreMarketIdentity, Phase as CorePhase, Readiness as CoreReadiness,
 };
 use dclutch_product_contract::{
@@ -37,7 +37,6 @@ use dclutch_resolution_codec::{
     FundedTransitionActionV3, FundedTransitionRequestV3, PRIMARY_CERTIFICATE_SEQUENCE_V3,
     PYTH_RELEASE_RECORD_SCHEMA_ID_V1, RESOLUTION_CERTIFICATE_BYTES,
     RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V4,
-    ResolutionCertificateKindV1, ResolutionCertificateV1,
 };
 use dclutch_source_contract::{
     CapacityEnvelope, ContentId as SourceContentId, PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1,
@@ -45,8 +44,8 @@ use dclutch_source_contract::{
     RecoveryPolicyV1, ResolutionPolicyV1, RoundingBoundary, SOURCE_MATERIAL_BYTES,
     SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V1,
     SourceAccessProfile, SourceCapacityProfileV1, SourceMaterialInputV1,
-    SourceRecoveryMaterialInputV1, SourceResolutionPhaseV1, SourceResolutionStateV1, SourceSpecV1,
-    StatisticKind, StatisticSpecV1, WindowKind, WindowSpecV1, encode_source_material_into_v1,
+    SourceRecoveryMaterialInputV1, SourceResolutionStateV1, SourceSpecV1, StatisticKind,
+    StatisticSpecV1, WindowKind, WindowSpecV1, encode_source_material_into_v1,
 };
 use solana_program::{
     account_info::AccountInfo,
@@ -571,8 +570,8 @@ fn fixture() -> Fixture {
     let provisional_identity = CoreMarketIdentity {
         market_id: core_identity([0xc9; 32]),
         realm_id: core_identity([0xc1; 32]),
+        product_record: core_identity(product_instance_id),
         product_id: core_identity(product_instance_id),
-        result_domain: core_identity(domain_id),
         resolution_policy: core_identity(material_id),
         capability_manifest: core_identity(capability_manifest_id),
         selected_release_set: core_identity(release_set_id.to_bytes()),
@@ -580,7 +579,7 @@ fn fixture() -> Fixture {
         generation: GENERATION,
     };
     let market_key = Pubkey::find_program_address(
-        &MarketCoreStateSeedsV1::new(provisional_identity).as_slices(),
+        &MarketCoreStateSeedsV2::new(provisional_identity).as_slices(),
         &core_program,
     )
     .0;
@@ -827,7 +826,6 @@ struct FundedFixture {
     program_id: Pubkey,
     accounts: [AccountInfo<'static>; 17],
     request: [u8; FUNDED_TRANSITION_REQUEST_BYTES],
-    work_paid: u64,
 }
 
 fn funded_fixture(action: FundedTransitionActionV3, prepare_prior: bool) -> FundedFixture {
@@ -993,7 +991,6 @@ fn funded_fixture(action: FundedTransitionActionV3, prepare_prior: bool) -> Fund
         program_id: base.program_id,
         accounts,
         request,
-        work_paid: 7,
     }
 }
 
@@ -1053,7 +1050,7 @@ fn assert_refusal_atomic(fixture: &Fixture, expected: ResolutionError) {
 }
 
 #[test]
-fn core_state_registry_and_product_authority_substitutions_refuse_atomically() {
+fn legacy_v1_authority_substitutions_cannot_reenable_removed_dispatch() {
     let founding = fixture();
     {
         let mut market_data = founding.accounts[2]
@@ -1069,7 +1066,7 @@ fn core_state_registry_and_product_authority_substitutions_refuse_atomically() {
         .expect("valid founding Core state");
         market_data.copy_from_slice(&bytes);
     }
-    assert_refusal_atomic(&founding, ResolutionError::MarketAuthority);
+    assert_refusal_atomic(&founding, ResolutionError::Instruction);
 
     let mut substituted_registry = fixture();
     let activation = &substituted_registry.accounts[3];
@@ -1087,7 +1084,7 @@ fn core_state_registry_and_product_authority_substitutions_refuse_atomically() {
         key(0xef),
         false,
     );
-    assert_refusal_atomic(&substituted_registry, ResolutionError::ResolutionRelease);
+    assert_refusal_atomic(&substituted_registry, ResolutionError::Instruction);
 
     let mut digest_as_product_key = fixture();
     let product = &digest_as_product_key.accounts[8];
@@ -1105,7 +1102,7 @@ fn core_state_registry_and_product_authority_substitutions_refuse_atomically() {
         product_owner,
         false,
     );
-    assert_refusal_atomic(&digest_as_product_key, ResolutionError::FinalizedRecord);
+    assert_refusal_atomic(&digest_as_product_key, ResolutionError::Instruction);
 
     let mut core_owned_product = fixture();
     let product = &core_owned_product.accounts[8];
@@ -1124,7 +1121,7 @@ fn core_state_registry_and_product_authority_substitutions_refuse_atomically() {
         core_program,
         false,
     );
-    assert_refusal_atomic(&core_owned_product, ResolutionError::FinalizedRecord);
+    assert_refusal_atomic(&core_owned_product, ResolutionError::Instruction);
 
     let legacy_parallel_authority = fixture();
     let before = output_snapshot(&legacy_parallel_authority);
@@ -1138,7 +1135,7 @@ fn core_state_registry_and_product_authority_substitutions_refuse_atomically() {
             &legacy_accounts,
             &legacy_parallel_authority.request,
         ),
-        Err(ProgramError::Custom(ResolutionError::AccountFrame as u32))
+        Err(ProgramError::Custom(ResolutionError::Instruction as u32))
     );
     assert_eq!(output_snapshot(&legacy_parallel_authority), before);
 }
@@ -1239,167 +1236,38 @@ fn registry_owned_records_refuse_digest_keys_core_owner_and_substituted_registry
 }
 
 #[test]
-fn registry_bound_full_pyth_observation_emits_one_compact_certificate() {
+fn legacy_v1_primary_frame_cannot_bypass_runtime_v2_product_authority() {
     let fixture = fixture();
-    process_instruction(&fixture.program_id, &fixture.accounts, &fixture.request)
-        .expect("authenticated primary Pyth admission");
-    let state_data = fixture
-        .accounts
-        .first()
-        .expect("Source state")
-        .try_borrow_data()
-        .expect("Source state data");
-    let state = SourceResolutionStateV1::decode(&state_data).expect("resolved Source state");
-    assert_eq!(state.phase(), SourceResolutionPhaseV1::Resolved);
-    let certificate_data = fixture
-        .accounts
-        .get(1)
-        .expect("certificate")
-        .try_borrow_data()
-        .expect("certificate data");
-    let certificate = ResolutionCertificateV1::decode(&certificate_data).expect("certificate");
-    assert_eq!(
-        certificate.kind,
-        ResolutionCertificateKindV1::ResolutionSuccess
-    );
-    assert_eq!(certificate.generation, GENERATION);
-    assert_eq!(certificate.selector, 1);
-    assert_eq!(certificate.result_numerator, i128::from(PRICE));
-    assert_eq!(certificate.result_denominator, 1);
-    assert_eq!(
-        certificate.observed_at,
-        u64::try_from(NOW).expect("positive time")
-    );
-    assert_eq!(certificate.funding_allocation, [0; 32]);
-    assert_eq!(certificate.work_paid, 0);
-    assert_eq!(certificate.funding_remaining, 0);
+    assert_refusal_atomic(&fixture, ResolutionError::Instruction);
 }
 
 #[test]
-fn first_recovery_consumes_exact_bounty_and_emits_ordered_certificate() {
+fn legacy_v1_first_recovery_frame_cannot_bypass_runtime_v2_product_authority() {
     let fixture = funded_fixture(FundedTransitionActionV3::FailNext, false);
-    let funding_before = fixture.accounts[2].lamports();
-    let worker_before = fixture.accounts[3].lamports();
-    process_instruction(&fixture.program_id, &fixture.accounts, &fixture.request)
-        .expect("funded first recovery");
-
-    let state_data = fixture.accounts[0].try_borrow_data().expect("Source state");
-    let state = SourceResolutionStateV1::decode(&state_data).expect("recovery state");
-    assert_eq!(state.phase(), SourceResolutionPhaseV1::Recovery);
-    assert_eq!(state.active_recovery_attempt(), Some(0));
-
-    let funding_data = fixture.accounts[2]
-        .try_borrow_data()
-        .expect("funding state");
-    let funding = FundingStateV1::decode(&funding_data).expect("funding state");
-    assert_eq!(funding.remaining().bounty().amount(), 0);
-    assert_eq!(funding.released().bounty().amount(), fixture.work_paid);
-    assert_eq!(
-        fixture.accounts[2].lamports(),
-        funding_before - fixture.work_paid
-    );
-    assert_eq!(
-        fixture.accounts[3].lamports(),
-        worker_before + fixture.work_paid
-    );
-
-    let certificate_data = fixture.accounts[1]
-        .try_borrow_data()
-        .expect("recovery certificate");
-    let certificate =
-        ResolutionCertificateV1::decode(&certificate_data).expect("canonical recovery certificate");
-    assert_eq!(
-        certificate.kind,
-        ResolutionCertificateKindV1::RecoveryAdvanced
-    );
-    assert_eq!(certificate.attempt_index, 1);
-    assert_eq!(certificate.selector, 0);
-    assert_eq!(certificate.provider_evidence, [0; 32]);
-    assert_eq!(certificate.work_paid, fixture.work_paid);
-    assert_eq!(certificate.funding_remaining, 0);
-    assert_eq!(certificate.observed_at, 111);
+    assert_funded_refusal_atomic(&fixture, ResolutionError::Instruction);
 }
 
 #[test]
-fn last_recovery_exhaustion_consumes_exact_bounty_and_emits_ordered_certificate() {
+fn legacy_v1_exhaustion_frame_cannot_bypass_runtime_v2_product_authority() {
     let fixture = funded_fixture(FundedTransitionActionV3::Exhaust, true);
-    let funding_before = fixture.accounts[2].lamports();
-    let worker_before = fixture.accounts[3].lamports();
-    process_instruction(&fixture.program_id, &fixture.accounts, &fixture.request)
-        .expect("funded recovery exhaustion");
-
-    let state_data = fixture.accounts[0].try_borrow_data().expect("Source state");
-    let state = SourceResolutionStateV1::decode(&state_data).expect("exhausted state");
-    assert_eq!(state.phase(), SourceResolutionPhaseV1::Exhausted);
-    assert_eq!(state.active_recovery_attempt(), None);
-
-    let funding_data = fixture.accounts[2]
-        .try_borrow_data()
-        .expect("funding state");
-    let funding = FundingStateV1::decode(&funding_data).expect("funding state");
-    assert_eq!(funding.remaining().bounty().amount(), 0);
-    assert_eq!(funding.released().bounty().amount(), fixture.work_paid);
-    assert_eq!(
-        fixture.accounts[2].lamports(),
-        funding_before - fixture.work_paid
-    );
-    assert_eq!(
-        fixture.accounts[3].lamports(),
-        worker_before + fixture.work_paid
-    );
-
-    let certificate_data = fixture.accounts[1]
-        .try_borrow_data()
-        .expect("exhaustion certificate");
-    let certificate = ResolutionCertificateV1::decode(&certificate_data)
-        .expect("canonical exhaustion certificate");
-    assert_eq!(certificate.kind, ResolutionCertificateKindV1::Exhausted);
-    assert_ne!(certificate.route, [0; 32]);
-    assert_eq!(certificate.attempt_index, 1);
-    assert_eq!(certificate.selector, 0);
-    assert_eq!(certificate.provider_evidence, [0; 32]);
-    assert_eq!(certificate.funding_allocation, fixture.request[64..96]);
-    assert_eq!(certificate.work_paid, fixture.work_paid);
-    assert_eq!(certificate.funding_remaining, 0);
-    assert_eq!(certificate.observed_at, 121);
+    assert_funded_refusal_atomic(&fixture, ResolutionError::Instruction);
 }
 
 #[test]
-fn explicit_failure_consumes_exact_bounty_and_uses_product_final_selector() {
+fn legacy_v1_failure_frame_cannot_bypass_runtime_v2_product_authority() {
     let fixture = funded_fixture(FundedTransitionActionV3::CommitFailure, true);
-    process_instruction(&fixture.program_id, &fixture.accounts, &fixture.request)
-        .expect("funded explicit failure");
-    let state_data = fixture.accounts[0].try_borrow_data().expect("Source state");
-    let state = SourceResolutionStateV1::decode(&state_data).expect("failure state");
-    assert_eq!(state.phase(), SourceResolutionPhaseV1::FailureCommitted);
-
-    let certificate_data = fixture.accounts[1]
-        .try_borrow_data()
-        .expect("failure certificate");
-    let certificate =
-        ResolutionCertificateV1::decode(&certificate_data).expect("canonical failure certificate");
-    assert_eq!(
-        certificate.kind,
-        ResolutionCertificateKindV1::ResolutionFailure
-    );
-    assert_eq!(certificate.route, [0; 32]);
-    assert_eq!(certificate.attempt_index, 1);
-    assert_eq!(certificate.selector, 2);
-    assert_eq!(certificate.provider_evidence, [0; 32]);
-    assert_eq!(certificate.result_denominator, 0);
-    assert_eq!(certificate.observed_at, 0);
-    assert_eq!(certificate.work_paid, fixture.work_paid);
+    assert_funded_refusal_atomic(&fixture, ResolutionError::Instruction);
 }
 
 #[test]
-fn funded_recovery_hostile_coordinates_and_late_output_refuse_atomically() {
+fn legacy_v1_funded_hostiles_cannot_reenable_removed_dispatch() {
     let mut wrong_allocation = funded_fixture(FundedTransitionActionV3::FailNext, false);
     wrong_allocation.request[64] ^= 1;
-    assert_funded_refusal_atomic(&wrong_allocation, ResolutionError::Transition);
+    assert_funded_refusal_atomic(&wrong_allocation, ResolutionError::Instruction);
 
     let mut skipped_index = funded_fixture(FundedTransitionActionV3::FailNext, false);
     skipped_index.request[24] = 1;
-    assert_funded_refusal_atomic(&skipped_index, ResolutionError::Transition);
+    assert_funded_refusal_atomic(&skipped_index, ResolutionError::Instruction);
 
     let early = funded_fixture(FundedTransitionActionV3::FailNext, false);
     let early_clock = Clock {
@@ -1413,7 +1281,7 @@ fn funded_recovery_hostile_coordinates_and_late_output_refuse_atomically() {
         .try_borrow_mut_data()
         .expect("Clock")
         .copy_from_slice(&bincode::serialize(&early_clock).expect("Clock bytes"));
-    assert_funded_refusal_atomic(&early, ResolutionError::Transition);
+    assert_funded_refusal_atomic(&early, ResolutionError::Instruction);
 
     let occupied = funded_fixture(FundedTransitionActionV3::FailNext, false);
     occupied.accounts[1]
@@ -1422,19 +1290,19 @@ fn funded_recovery_hostile_coordinates_and_late_output_refuse_atomically() {
         .first_mut()
         .map(|byte| *byte = 1)
         .expect("certificate byte");
-    assert_funded_refusal_atomic(&occupied, ResolutionError::OutputState);
+    assert_funded_refusal_atomic(&occupied, ResolutionError::Instruction);
 }
 
 #[test]
-fn failure_before_explicit_exhaustion_refuses_all_four_outputs_atomically() {
+fn legacy_v1_failure_phase_cannot_reenable_removed_dispatch() {
     let fixture = funded_fixture(FundedTransitionActionV3::CommitFailure, false);
-    assert_funded_refusal_atomic(&fixture, ResolutionError::Transition);
+    assert_funded_refusal_atomic(&fixture, ResolutionError::Instruction);
 }
 
 #[test]
-fn exhaustion_before_recovery_or_before_deadline_refuses_all_four_outputs_atomically() {
+fn legacy_v1_exhaustion_phase_cannot_reenable_removed_dispatch() {
     let missing_recovery = funded_fixture(FundedTransitionActionV3::Exhaust, false);
-    assert_funded_refusal_atomic(&missing_recovery, ResolutionError::Transition);
+    assert_funded_refusal_atomic(&missing_recovery, ResolutionError::Instruction);
 
     let early = funded_fixture(FundedTransitionActionV3::Exhaust, true);
     let early_clock = Clock {
@@ -1448,18 +1316,18 @@ fn exhaustion_before_recovery_or_before_deadline_refuses_all_four_outputs_atomic
         .try_borrow_mut_data()
         .expect("Clock")
         .copy_from_slice(&bincode::serialize(&early_clock).expect("Clock bytes"));
-    assert_funded_refusal_atomic(&early, ResolutionError::Transition);
+    assert_funded_refusal_atomic(&early, ResolutionError::Instruction);
 }
 
 #[test]
-fn hostile_product_identity_refuses_before_any_output_write() {
+fn legacy_v1_product_identity_cannot_reenable_removed_dispatch() {
     let mut fixture = fixture();
     fixture.request[24] ^= 1;
-    assert_refusal_atomic(&fixture, ResolutionError::ProductDomain);
+    assert_refusal_atomic(&fixture, ResolutionError::Instruction);
 }
 
 #[test]
-fn excessive_provider_confidence_refuses_without_partial_state() {
+fn legacy_v1_provider_hostile_cannot_reenable_removed_dispatch() {
     let fixture = fixture();
     {
         let mut update = fixture
@@ -1473,11 +1341,11 @@ fn excessive_provider_confidence_refuses_without_partial_state() {
             .expect("confidence")
             .copy_from_slice(&u64::MAX.to_le_bytes());
     }
-    assert_refusal_atomic(&fixture, ResolutionError::ProviderObservation);
+    assert_refusal_atomic(&fixture, ResolutionError::Instruction);
 }
 
 #[test]
-fn occupied_certificate_refuses_at_commit_and_preserves_both_outputs() {
+fn legacy_v1_occupied_output_cannot_reenable_removed_dispatch() {
     let fixture = fixture();
     {
         let mut certificate = fixture
@@ -1488,5 +1356,5 @@ fn occupied_certificate_refuses_at_commit_and_preserves_both_outputs() {
             .expect("certificate bytes");
         *certificate.first_mut().expect("first byte") = 1;
     }
-    assert_refusal_atomic(&fixture, ResolutionError::OutputState);
+    assert_refusal_atomic(&fixture, ResolutionError::Instruction);
 }
