@@ -5,12 +5,20 @@ use dclutch_claims_svm::lbv2_terminal_v2::{
     LBV2_TERMINAL_ABSENT_CUSTODY_REVISION_V2, Lbv2TerminalRedeemReceiptV2,
     Lbv2TerminalRedeemRequestInputV2, Lbv2TerminalRedeemRequestV2,
 };
+use dclutch_claims_svm::{
+    CallerRole,
+    signed_delta_v3::{
+        DeltaDirectionV3, PositionDeltaInputV3, PositionDeltaV3, SignedDeltaPlanInputV3,
+        SignedDeltaPlanV3, SignedDeltaPositionV3, SignedDeltaReceiptV3, SignedDeltaV3, plan_bytes,
+    },
+};
 use dclutch_rational_representation_v2_contract::{
     ABSENT_REVISION, ASSET_BYTES_V2, AffineBatchContextV2, AssetV2, CallerRoleV2,
     CompletionEvidenceV2, Error, RATIONAL_ASSET_ACCOUNT_COUNT_V2, RATIONAL_BASE_ACCOUNT_COUNT_V2,
     RATIONAL_TERMINAL_ACCOUNT_COUNT_V2, REQUEST_HEADER_BYTES_V2, RepresentationActionV2,
     RepresentationReceiptV2, RepresentationRequestHeaderV2, RepresentationRequestV2,
-    TokenEffectStyleV2, finalize, prepare,
+    SignedDeltaTerminalEvidenceV3, TokenEffectStyleV2, finalize, prepare,
+    validate_signed_delta_terminal_v3,
 };
 use dclutch_rational_representation_v2_kernel::{
     ContentAdmissionV2, DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3,
@@ -818,6 +826,96 @@ fn terminal_requires_typed_lbv2_evidence_and_accepts_exact_zero_payout() {
     assert_eq!(receipt.payout(), 0);
     assert_eq!(receipt.post_claims_market_revision(), 11);
     assert_eq!(receipt.post_custody_position_revision(), 31);
+}
+
+#[test]
+fn product_v3_terminal_accepts_only_one_exact_signed_delta_debit() {
+    let selected = assets()[0];
+    let rows = asset_bytes(&[selected]);
+    let request =
+        RepresentationRequestV2::new(header(RepresentationActionV2::RedeemTerminal, 0, 1), &rows)
+            .expect("terminal request");
+    let neutral = SignedDeltaV3::new(DeltaDirectionV3::Neutral, 0).expect("neutral");
+    let debit = SignedDeltaV3::new(DeltaDirectionV3::Debit, 1).expect("debit");
+    let positions = [SignedDeltaPositionV3::new(id(53), 30).expect("position")];
+    let aggregate = [debit, neutral];
+    let rows = [PositionDeltaV3::new(
+        PositionDeltaInputV3 {
+            position_index: 0,
+            outcome: 0,
+            delta: debit,
+        },
+        1,
+        2,
+    )
+    .expect("row")];
+    let mut packet_bytes = vec![0; plan_bytes(2, 1, 1).expect("packet width")];
+    SignedDeltaPlanV3::encode_into(
+        SignedDeltaPlanInputV3 {
+            caller_role: CallerRole::Trading,
+            release_set: id(1),
+            market: id(2),
+            request_id: id(30),
+            product_record_digest: id(80),
+            semantic_basis_id: id(81),
+            linked_basis_record_digest: id(82),
+            expected_market_revision: 10,
+            claim_count: 2,
+        },
+        &positions,
+        &aggregate,
+        &rows,
+        &mut packet_bytes,
+    )
+    .expect("terminal packet");
+    let packet = SignedDeltaPlanV3::decode(&packet_bytes).expect("decode terminal packet");
+    let packet_digest = id(83);
+    let receipt = SignedDeltaReceiptV3::new(packet, packet_digest, id(84), id(31), id(85), 11)
+        .expect("terminal receipt");
+    let completion = validate_signed_delta_terminal_v3(
+        request,
+        SignedDeltaTerminalEvidenceV3 {
+            request_digest: id(30),
+            claims_program: id(31),
+            packet_digest,
+            packet,
+            receipt,
+        },
+    )
+    .expect("exact terminal completion");
+    assert_eq!(completion.effect_digest, packet_digest);
+    assert_eq!(completion.resource_digest, id(85));
+    assert_eq!(completion.market_revision, 11);
+    assert_eq!(completion.custody_position_revision, 31);
+
+    for hostile in [
+        SignedDeltaTerminalEvidenceV3 {
+            request_digest: id(99),
+            claims_program: id(31),
+            packet_digest,
+            packet,
+            receipt,
+        },
+        SignedDeltaTerminalEvidenceV3 {
+            request_digest: id(30),
+            claims_program: id(99),
+            packet_digest,
+            packet,
+            receipt,
+        },
+        SignedDeltaTerminalEvidenceV3 {
+            request_digest: id(30),
+            claims_program: id(31),
+            packet_digest: id(99),
+            packet,
+            receipt,
+        },
+    ] {
+        assert_eq!(
+            validate_signed_delta_terminal_v3(request, hostile),
+            Err(Error::ClaimsMismatch)
+        );
+    }
 }
 
 #[test]

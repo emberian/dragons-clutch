@@ -6,6 +6,9 @@ use dclutch_claims_svm::affine_batch_v2::{
 use dclutch_claims_svm::lbv2_terminal_v2::{
     Lbv2TerminalRedeemReceiptV2, Lbv2TerminalRedeemRequestV2,
 };
+use dclutch_claims_svm::signed_delta_v3::{
+    DeltaDirectionV3, SignedDeltaPlanV3, SignedDeltaReceiptV3,
+};
 use dclutch_custody_contract::{
     CallerRoleV1 as CustodyCallerRoleV1, CompartmentV1, CustodyReceiptV1, CustodyRequestV1,
 };
@@ -749,6 +752,113 @@ fn validate_custody(
             evidence.custody_replay_digest,
         )
         .map_err(|_| Error::CustodyMismatch)
+}
+
+/// Exact family-neutral terminal Claims evidence produced by the ProductBasisV3
+/// planner and canonical SignedDeltaV3 executor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SignedDeltaTerminalEvidenceV3<'a> {
+    /// SHA-256 of the complete enclosing representation request.
+    pub request_digest: [u8; 32],
+    /// Current Registry-authenticated Claims program which wrote state.
+    pub claims_program: [u8; 32],
+    /// SHA-256 of the exact canonical SignedDeltaV3 packet.
+    pub packet_digest: [u8; 32],
+    /// Exact runtime-width terminal debit packet.
+    pub packet: SignedDeltaPlanV3<'a>,
+    /// Exact canonical receipt returned after Claims state committed.
+    pub receipt: SignedDeltaReceiptV3,
+}
+
+/// Checked terminal Claims postcondition projected for representation replay.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SignedDeltaTerminalCompletionV3 {
+    /// SHA-256 of the exact canonical terminal packet.
+    pub effect_digest: [u8; 32],
+    /// SHA-256 of the post aggregate followed by the post Position.
+    pub resource_digest: [u8; 32],
+    /// Canonical aggregate post-revision.
+    pub market_revision: u64,
+    /// Canonical custody Position post-revision.
+    pub custody_position_revision: u64,
+}
+
+/// Validate the sole ProductBasisV3 terminal Claims shape.
+///
+/// The packet contains one already-netted debit at the selected native claim.
+/// Product evaluation and collateral payout remain outside this no-crypto
+/// receipt boundary; those facts are authenticated by the Product V3 reader
+/// and typed Custody request respectively.
+pub fn validate_signed_delta_terminal_v3(
+    request: RepresentationRequestV2<'_>,
+    evidence: SignedDeltaTerminalEvidenceV3<'_>,
+) -> Result<SignedDeltaTerminalCompletionV3> {
+    let header = request.header();
+    if header.action != RepresentationActionV2::RedeemTerminal
+        || is_zero(evidence.request_digest)
+        || is_zero(evidence.claims_program)
+        || is_zero(evidence.packet_digest)
+    {
+        return Err(Error::ClaimsMismatch);
+    }
+    evidence
+        .receipt
+        .validate_plan(evidence.packet)
+        .map_err(|_| Error::ClaimsMismatch)?;
+    let expected_role = match header.caller_role {
+        CallerRoleV2::Core => dclutch_claims_svm::CallerRole::Core,
+        CallerRoleV2::Trading => dclutch_claims_svm::CallerRole::Trading,
+    };
+    let asset = request.asset(0)?;
+    let position = evidence
+        .packet
+        .position(0)
+        .map_err(|_| Error::ClaimsMismatch)?;
+    let aggregate = evidence
+        .packet
+        .aggregate_delta(header.selected_outcome)
+        .map_err(|_| Error::ClaimsMismatch)?;
+    let row = evidence
+        .packet
+        .position_delta(0)
+        .map_err(|_| Error::ClaimsMismatch)?;
+    let post_market_revision = header
+        .expected_claims_market_revision
+        .checked_add(1)
+        .ok_or(Error::ArithmeticOverflow)?;
+    let post_position_revision = header
+        .expected_custody_position_revision
+        .checked_add(1)
+        .ok_or(Error::ArithmeticOverflow)?;
+    if evidence.packet.caller_role() != expected_role
+        || evidence.packet.release_set() != header.release_set
+        || evidence.packet.market() != header.market
+        || evidence.packet.request_id() != evidence.request_digest
+        || evidence.packet.expected_market_revision() != header.expected_claims_market_revision
+        || evidence.packet.claim_count() != header.outcome_count
+        || evidence.packet.position_count() != 1
+        || evidence.packet.position_delta_count() != 1
+        || position.owner() != asset.claims_custody_owner
+        || position.expected_revision() != header.expected_custody_position_revision
+        || aggregate.direction() != DeltaDirectionV3::Debit
+        || aggregate.magnitude() != header.quantity
+        || row.position_index() != 0
+        || row.outcome() != header.selected_outcome
+        || row.delta().direction() != DeltaDirectionV3::Debit
+        || row.delta().magnitude() != header.quantity
+        || evidence.receipt.packet_digest() != evidence.packet_digest
+        || evidence.receipt.claims_program() != evidence.claims_program
+        || evidence.receipt.pre_market_revision() != header.expected_claims_market_revision
+        || evidence.receipt.post_market_revision() != post_market_revision
+    {
+        return Err(Error::ClaimsMismatch);
+    }
+    Ok(SignedDeltaTerminalCompletionV3 {
+        effect_digest: evidence.packet_digest,
+        resource_digest: evidence.receipt.post_resource_digest(),
+        market_revision: post_market_revision,
+        custody_position_revision: post_position_revision,
+    })
 }
 
 fn decode_action(value: u8) -> Result<RepresentationActionV2> {

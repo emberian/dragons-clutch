@@ -89,7 +89,10 @@ pub use plan::{
     AffineBatchContextV2, PreparedRepresentationV2, TokenEffectIterV2, TokenEffectStyleV2,
     TokenEffectV2, prepare,
 };
-pub use receipt::{CompletionEvidenceV2, RepresentationReceiptV2, finalize};
+pub use receipt::{
+    CompletionEvidenceV2, RepresentationReceiptV2, SignedDeltaTerminalCompletionV3,
+    SignedDeltaTerminalEvidenceV3, finalize, validate_signed_delta_terminal_v3,
+};
 pub use replay::{
     RATIONAL_REPLAY_BYTES_V2, RATIONAL_REPLAY_MAGIC_V2, RATIONAL_REPLAY_VERSION_V2,
     RationalReplayV2,
