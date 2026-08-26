@@ -6,6 +6,9 @@
 //! single unsigned v0 message through one exact canonical lookup table. It
 //! performs no RPC, signing, submission, or account mutation.
 
+use dclutch_account_profile_contract::lifecycle_v3::{
+    LifecycleOperationV3, LifecycleRegistersV3, LifecycleSeedInputValueV3, SelectedLifecycleV3,
+};
 use dclutch_capability_program_contract::hot_v3::{
     HOT_CONFIG_RAW_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
     HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3,
@@ -16,6 +19,17 @@ use dclutch_capability_program_contract::hot_v3::{
 use dclutch_execution_strategy_contract::v2::{BankTransportV2, classify_bank_transport_v2};
 use dclutch_general_adapter_contract::artifacts_v3::{
     GeneralArtifactBytesV3, GeneralArtifactSelectionV3, authenticate_general_artifacts_v3,
+};
+use dclutch_general_adapter_contract::{
+    hot_candidate_v3::{identity as general_identity, scalar as general_scalar},
+    local_state_v3::{GeneralLocalStateKindV3, GeneralLocalStateV3},
+    state_artifacts_v3::{
+        GENERAL_CLOSE_PAYER_ACCOUNT_V3, GENERAL_CLOSE_RENT_CREDIT_ACCOUNT_V3,
+        GENERAL_PRIMARY_PAYER_ACCOUNT_V3, GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3,
+        GENERAL_PRIMARY_STATE_ACCOUNT_V3, GENERAL_TERMINAL_STATE_ACCOUNT_V3,
+        encode_general_state_lifecycle_v3_atomic, general_child_account_start_v3,
+        general_state_lifecycle_bytes_v3,
+    },
 };
 use dclutch_general_codec::{
     Action,
@@ -30,7 +44,7 @@ use solana_program::{
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
 };
-use solana_sdk_ids::sysvar;
+use solana_sdk_ids::{system_program, sysvar};
 
 use crate::{
     Finality, Observation, ObservedAccount,
@@ -103,6 +117,54 @@ pub struct GeneralHotStateV3 {
     pub checked_release: Option<CheckedGeneralHotReleaseV3>,
 }
 
+/// Canonical action-state addresses derived from the authenticated lifecycle policy.
+///
+/// These values are an operator projection, never authority. Trading derives the
+/// same addresses and bumps again before it creates, authenticates, or closes
+/// either account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralLifecycleProjectionV3 {
+    /// Canonical selection or settlement state selected by the action.
+    pub primary_state: Pubkey,
+    /// Canonical primary-state PDA bump written into the request witness.
+    pub primary_state_bump: u8,
+    /// Close-only canonical terminal state.
+    pub terminal_state: Option<Pubkey>,
+    /// Close-only canonical terminal-state PDA bump.
+    pub terminal_state_bump: Option<u8>,
+    /// Close-only terminal coordinate, equal to the consumed revision plus one.
+    pub terminal_coordinate: Option<u64>,
+    /// First family child account after the exact lifecycle frame.
+    pub child_account_start: u16,
+}
+
+/// Exact content identities of the complete authenticated General artifact graph.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralHotArtifactDigestsV3 {
+    /// Action-selector CapabilityProgramSetV1.
+    pub program_set: [u8; 32],
+    /// Action-selected CapabilityProgramV3 descriptor.
+    pub descriptor: [u8; 32],
+    /// Immutable GeneralConfigV3.
+    pub config: [u8; 32],
+    /// Runtime-width AccountProfileV2.
+    pub account_profile: [u8; 32],
+    /// Protected StateLifecyclePolicyV3.
+    pub lifecycle_policy: [u8; 32],
+    /// Exact action RequestProfileV1.
+    pub request_profile: [u8; 32],
+    /// Selected ExecutionStrategyProgramV2.
+    pub strategy: [u8; 32],
+    /// Translation-equivalence certificate.
+    pub certificate: [u8; 32],
+    /// Registry admission for that certificate.
+    pub admission: [u8; 32],
+    /// Exact admitted TransitionProgramV3.
+    pub transition: [u8; 32],
+    /// Exact action EffectProgramV3.
+    pub effect: [u8; 32],
+}
+
 /// Complete unsigned General instruction with exact checked provenance.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GeneralHotInstructionV3 {
@@ -122,16 +184,14 @@ pub struct GeneralHotInstructionV3 {
     pub trading_artifact_release: [u8; 32],
     /// Exact admitted General accelerator ArtifactRelease identity.
     pub general_artifact_release: [u8; 32],
-    /// Action-selected CapabilityProgramV3 content digest.
-    pub selected_program: [u8; 32],
-    /// Selected CapabilityProgramSetV1 content digest.
-    pub selected_program_set: [u8; 32],
-    /// Selected GeneralConfigV3 content digest.
-    pub selected_config: [u8; 32],
+    /// Complete exact content identities selected by the artifact graph.
+    pub artifacts: GeneralHotArtifactDigestsV3,
     /// Authenticated Product graph-root content digest.
     pub product_record: [u8; 32],
     /// Digest of the exact canonical family request.
     pub family_request_digest: [u8; 32],
+    /// Canonical action-state projection derived from the lifecycle artifact.
+    pub lifecycle: GeneralLifecycleProjectionV3,
 }
 
 /// Packet-safe unsigned General transaction plus its exact signer report.
@@ -147,6 +207,16 @@ pub struct GeneralHotTransactionPlanV3 {
     pub checked_manifest_digest: [u8; 32],
     /// Product-authenticated runtime outcome count.
     pub outcome_count: u32,
+    /// Exact immutable Trading ArtifactRelease identity.
+    pub trading_artifact_release: [u8; 32],
+    /// Exact immutable admitted General accelerator ArtifactRelease identity.
+    pub general_artifact_release: [u8; 32],
+    /// Complete exact content identities selected by the artifact graph.
+    pub artifacts: GeneralHotArtifactDigestsV3,
+    /// Authenticated Product graph-root content digest.
+    pub product_record: [u8; 32],
+    /// Canonical action-state projection carried by the request.
+    pub lifecycle: GeneralLifecycleProjectionV3,
 }
 
 /// Stable refusal from General artifact, account, release, or packet checks.
@@ -168,6 +238,8 @@ pub enum GeneralHotOperatorErrorV3 {
     StrategyGeometry,
     /// AccountProfile expansion, privilege, alias, or width differed.
     RuntimeGeometry,
+    /// Lifecycle bytes, plan geometry, state shape, PDA, or bump differed.
+    Lifecycle,
     /// Required signer reporting differed from the compiled message.
     Signer,
     /// The lookup table was not the exact canonical address set.
@@ -180,9 +252,11 @@ pub enum GeneralHotOperatorErrorV3 {
 
 /// Build one complete chain-derived General Hot instruction.
 ///
-/// `request` is re-encoded canonically. The action-specific account width and
-/// privileges come only from the authenticated AccountProfile selected by that
-/// request; this operator carries no parallel per-action account table.
+/// `request` is re-encoded canonically. Its two bump fields are untrusted
+/// placeholders: this constructor replaces them with bumps derived from the
+/// authenticated lifecycle policy and the exact observed state addresses. The
+/// action-specific account width and privileges come only from the selected
+/// AccountProfile; this operator carries no parallel per-action account table.
 pub fn build_general_hot_instruction_v3(
     state: &GeneralHotStateV3,
     artifact_selection: GeneralArtifactSelectionV3,
@@ -195,12 +269,40 @@ pub fn build_general_hot_instruction_v3(
     validate_release(checked, artifact_selection)?;
     let observation = validate_fixed_frame(state, checked)?;
     let product = authenticate_product_graph(state)?;
-    let request_bytes = request
+    let mut canonical_request = ControllerRequestV2 {
+        state_bump: 0,
+        terminal_record_bump: 0,
+        ..request
+    };
+    let provisional_request_bytes = canonical_request
         .to_bytes()
         .map_err(|_| GeneralHotOperatorErrorV3::Artifact)?;
-    if request_bytes.len() != CONTROLLER_REQUEST_BYTES_V2 {
+    if provisional_request_bytes.len() != CONTROLLER_REQUEST_BYTES_V2 {
         return Err(GeneralHotOperatorErrorV3::Arithmetic);
     }
+    let provisional_bundle = authenticate_general_artifacts_v3(
+        artifact_selection,
+        artifact_bytes,
+        &provisional_request_bytes,
+        product.outcome_count,
+    )
+    .map_err(|_| GeneralHotOperatorErrorV3::Artifact)?;
+    if provisional_bundle.request != canonical_request {
+        return Err(GeneralHotOperatorErrorV3::Artifact);
+    }
+    let provisional_lifecycle = project_general_lifecycle_v3(
+        state,
+        provisional_bundle,
+        canonical_request,
+        checked.trading_program,
+    )?;
+    canonical_request.state_bump = provisional_lifecycle.primary_state_bump;
+    canonical_request.terminal_record_bump = provisional_lifecycle
+        .terminal_state_bump
+        .unwrap_or_default();
+    let request_bytes = canonical_request
+        .to_bytes()
+        .map_err(|_| GeneralHotOperatorErrorV3::Artifact)?;
     let bundle = authenticate_general_artifacts_v3(
         artifact_selection,
         artifact_bytes,
@@ -208,8 +310,13 @@ pub fn build_general_hot_instruction_v3(
         product.outcome_count,
     )
     .map_err(|_| GeneralHotOperatorErrorV3::Artifact)?;
-    if bundle.request != request {
+    if bundle.request != canonical_request {
         return Err(GeneralHotOperatorErrorV3::Artifact);
+    }
+    let lifecycle =
+        project_general_lifecycle_v3(state, bundle, canonical_request, checked.trading_program)?;
+    if lifecycle != provisional_lifecycle {
+        return Err(GeneralHotOperatorErrorV3::Lifecycle);
     }
     validate_strategy_geometry(state, bundle)?;
     validate_runtime_geometry(state, bundle)?;
@@ -274,18 +381,17 @@ pub fn build_general_hot_instruction_v3(
     };
     Ok(GeneralHotInstructionV3 {
         instruction,
-        action: request.action,
+        action: canonical_request.action,
         outcome_count: product.outcome_count,
         observation,
         required_instruction_signers,
         checked_manifest_digest: checked.checked_manifest_digest,
         trading_artifact_release: checked.trading_artifact_release,
         general_artifact_release: checked.general_artifact_release,
-        selected_program: hash(artifact_bytes.descriptor).to_bytes(),
-        selected_program_set: artifact_selection.program_set,
-        selected_config: artifact_selection.config,
+        artifacts: artifact_digests(artifact_bytes),
         product_record: product.product_record,
         family_request_digest: hash(&request_bytes).to_bytes(),
+        lifecycle,
     })
 }
 
@@ -339,6 +445,11 @@ pub fn compile_general_hot_v0(
         action: report.action,
         checked_manifest_digest: report.checked_manifest_digest,
         outcome_count: report.outcome_count,
+        trading_artifact_release: report.trading_artifact_release,
+        general_artifact_release: report.general_artifact_release,
+        artifacts: report.artifacts,
+        product_record: report.product_record,
+        lifecycle: report.lifecycle,
     })
 }
 
@@ -384,6 +495,22 @@ fn validate_release(
         return Err(GeneralHotOperatorErrorV3::UnrecognizedRelease);
     }
     Ok(())
+}
+
+fn artifact_digests(bytes: GeneralArtifactBytesV3<'_>) -> GeneralHotArtifactDigestsV3 {
+    GeneralHotArtifactDigestsV3 {
+        program_set: hash(bytes.program_set).to_bytes(),
+        descriptor: hash(bytes.descriptor).to_bytes(),
+        config: hash(bytes.config).to_bytes(),
+        account_profile: hash(bytes.account_profile).to_bytes(),
+        lifecycle_policy: hash(bytes.lifecycle_policy).to_bytes(),
+        request_profile: hash(bytes.request_profile).to_bytes(),
+        strategy: hash(bytes.strategy).to_bytes(),
+        certificate: hash(bytes.certificate).to_bytes(),
+        admission: hash(bytes.admission).to_bytes(),
+        transition: hash(bytes.transition).to_bytes(),
+        effect: hash(bytes.effect).to_bytes(),
+    }
 }
 
 fn validate_fixed_frame(
@@ -608,6 +735,360 @@ fn logical_runtime_account(
     }
 }
 
+fn project_general_lifecycle_v3(
+    state: &GeneralHotStateV3,
+    bundle: dclutch_general_adapter_contract::artifacts_v3::GeneralArtifactBundleV3<'_>,
+    request: ControllerRequestV2,
+    trading_program: Pubkey,
+) -> Result<GeneralLifecycleProjectionV3, GeneralHotOperatorErrorV3> {
+    let policy_bytes = general_state_lifecycle_bytes_v3(request.action)
+        .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
+    let mut scratch = vec![0_u8; policy_bytes];
+    let mut canonical = vec![0_u8; policy_bytes];
+    encode_general_state_lifecycle_v3_atomic(request.action, &mut scratch, &mut canonical)
+        .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
+    if bundle.lifecycle_policy.bytes() != canonical.as_slice() {
+        return Err(GeneralHotOperatorErrorV3::Lifecycle);
+    }
+
+    let plan_count = bundle
+        .lifecycle_policy
+        .action_plan_count(request.action as u32)
+        .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
+    let expected_plan_count = if request.action == Action::Close {
+        2
+    } else {
+        1
+    };
+    if plan_count != expected_plan_count {
+        return Err(GeneralHotOperatorErrorV3::Lifecycle);
+    }
+    let scalar_width = affine_register_width(
+        bundle.account_profile.common_scalar_count(),
+        bundle.account_profile.item_scalar_stride(),
+        bundle.tail_count,
+    )?;
+    let identity_width = affine_register_width(
+        bundle.account_profile.common_identity_count(),
+        bundle.account_profile.item_identity_stride(),
+        bundle.tail_count,
+    )?;
+    let mut scalars = vec![0_u64; scalar_width];
+    let mut identities = vec![[0_u8; 32]; identity_width];
+    let root = logical_runtime_account(state, 0)?.account.key;
+    set_identity(
+        &mut identities,
+        general_identity::GENERAL_ROOT,
+        root.to_bytes(),
+    )?;
+    set_identity(
+        &mut identities,
+        general_identity::CANDIDATE,
+        request.candidate_id.unwrap_or([0; 32]),
+    )?;
+    let terminal_coordinate =
+        canonical_terminal_coordinate_v3(request.action, request.expected_revision)?;
+    if let Some(value) = terminal_coordinate {
+        set_scalar(
+            &mut scalars,
+            general_scalar::CURSOR_TERMINAL_COORDINATE,
+            value,
+        )?;
+    }
+    let registers = LifecycleRegistersV3 {
+        scalars: &scalars,
+        identities: &identities,
+    };
+    let primary_plan = bundle
+        .lifecycle_policy
+        .action_plan(request.action as u32, 0)
+        .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
+    let primary_expected_operation = if request.action == Action::Close {
+        LifecycleOperationV3::Close
+    } else {
+        LifecycleOperationV3::AuthenticateOrCreate
+    };
+    let primary = derive_lifecycle_state_v3(
+        state,
+        bundle.account_profile,
+        bundle.tail_count,
+        registers,
+        primary_plan,
+        primary_expected_operation,
+        usize::from(GENERAL_PRIMARY_STATE_ACCOUNT_V3),
+        if request.action == Action::Close {
+            None
+        } else {
+            Some(usize::from(GENERAL_PRIMARY_PAYER_ACCOUNT_V3))
+        },
+        Some(usize::from(if request.action == Action::Close {
+            GENERAL_CLOSE_RENT_CREDIT_ACCOUNT_V3
+        } else {
+            GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3
+        })),
+        trading_program,
+        if matches!(request.action, Action::Consider | Action::Freeze) {
+            GeneralLocalStateKindV3::Selection
+        } else {
+            GeneralLocalStateKindV3::Settlement
+        },
+    )?;
+
+    let terminal = if request.action == Action::Close {
+        let plan = bundle
+            .lifecycle_policy
+            .action_plan(request.action as u32, 1)
+            .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
+        let terminal = derive_lifecycle_state_v3(
+            state,
+            bundle.account_profile,
+            bundle.tail_count,
+            registers,
+            plan,
+            LifecycleOperationV3::AuthenticateOrCreate,
+            usize::from(GENERAL_TERMINAL_STATE_ACCOUNT_V3),
+            Some(usize::from(GENERAL_CLOSE_PAYER_ACCOUNT_V3)),
+            Some(usize::from(GENERAL_CLOSE_RENT_CREDIT_ACCOUNT_V3)),
+            trading_program,
+            GeneralLocalStateKindV3::Settlement,
+        )?;
+        if terminal.key == primary.key {
+            return Err(GeneralHotOperatorErrorV3::Lifecycle);
+        }
+        Some(terminal)
+    } else {
+        None
+    };
+    let child_account_start = general_child_account_start_v3(request.action);
+    let expected_child_start = if request.action == Action::Close {
+        9
+    } else {
+        8
+    };
+    if child_account_start != expected_child_start {
+        return Err(GeneralHotOperatorErrorV3::Lifecycle);
+    }
+    let projection = GeneralLifecycleProjectionV3 {
+        primary_state: primary.key,
+        primary_state_bump: primary.bump,
+        terminal_state: terminal.map(|value| value.key),
+        terminal_state_bump: terminal.map(|value| value.bump),
+        terminal_coordinate,
+        child_account_start,
+    };
+    if (request.state_bump != 0 && request.state_bump != projection.primary_state_bump)
+        || (request.terminal_record_bump != 0
+            && Some(request.terminal_record_bump) != projection.terminal_state_bump)
+    {
+        return Err(GeneralHotOperatorErrorV3::Lifecycle);
+    }
+    Ok(projection)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DerivedLifecycleStateV3 {
+    key: Pubkey,
+    bump: u8,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn derive_lifecycle_state_v3(
+    state: &GeneralHotStateV3,
+    profile: dclutch_account_profile_contract::v2::AccountProfileV2<'_>,
+    tail_count: u32,
+    registers: LifecycleRegistersV3<'_>,
+    selected: SelectedLifecycleV3<'_>,
+    expected_operation: LifecycleOperationV3,
+    expected_state: usize,
+    expected_payer: Option<usize>,
+    expected_rent_credit: Option<usize>,
+    trading_program: Pubkey,
+    state_kind: GeneralLocalStateKindV3,
+) -> Result<DerivedLifecycleStateV3, GeneralHotOperatorErrorV3> {
+    if selected.operation() != expected_operation
+        || selected.invocation_count(tail_count).ok() != Some(1)
+        || selected.invocation_item(tail_count, 0).ok() != Some(None)
+        || !selected
+            .uses_canonical_bump()
+            .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?
+    {
+        return Err(GeneralHotOperatorErrorV3::Lifecycle);
+    }
+    let indices = selected
+        .project_account_indices(profile, tail_count, None)
+        .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
+    if indices.state() != expected_state
+        || indices.payer() != expected_payer
+        || indices.rent_credit() != expected_rent_credit
+    {
+        return Err(GeneralHotOperatorErrorV3::Lifecycle);
+    }
+    let seed_count = selected
+        .seed_count()
+        .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
+    let mut seed_values = Vec::with_capacity(
+        usize::from(seed_count)
+            .checked_sub(1)
+            .ok_or(GeneralHotOperatorErrorV3::Lifecycle)?,
+    );
+    let mut saw_bump = false;
+    for ordinal in 0..seed_count {
+        match selected
+            .materialize_seed_input(profile, tail_count, None, registers, ordinal)
+            .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?
+        {
+            LifecycleSeedInputValueV3::Bytes(value) if !saw_bump && !value.is_empty() => {
+                seed_values.push(value.as_slice().to_vec());
+            }
+            LifecycleSeedInputValueV3::CanonicalBump
+                if !saw_bump && ordinal.checked_add(1) == Some(seed_count) =>
+            {
+                saw_bump = true;
+            }
+            LifecycleSeedInputValueV3::Bytes(_) | LifecycleSeedInputValueV3::CanonicalBump => {
+                return Err(GeneralHotOperatorErrorV3::Lifecycle);
+            }
+        }
+    }
+    if !saw_bump || seed_values.is_empty() {
+        return Err(GeneralHotOperatorErrorV3::Lifecycle);
+    }
+    let seed_refs = seed_values.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let (key, bump) = Pubkey::find_program_address(&seed_refs, &trading_program);
+    let state_account = logical_runtime_account(state, indices.state())?;
+    if state_account.account.key != key
+        || state_account.account.key == Pubkey::default()
+        || state_account.is_signer
+        || !state_account.is_writable
+        || state_account.account.executable
+    {
+        return Err(GeneralHotOperatorErrorV3::Lifecycle);
+    }
+    let data_bytes = usize::try_from(
+        selected
+            .target_data_bytes(tail_count)
+            .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?,
+    )
+    .map_err(|_| GeneralHotOperatorErrorV3::Arithmetic)?;
+    let live = state_account.account.owner == trading_program
+        && state_account.account.data.len() == data_bytes;
+    let vacant =
+        state_account.account.owner == system_program::ID && state_account.account.data.is_empty();
+    let accepted = match expected_operation {
+        LifecycleOperationV3::Authenticate | LifecycleOperationV3::Close => live,
+        LifecycleOperationV3::Create => vacant,
+        LifecycleOperationV3::AuthenticateOrCreate => live || vacant,
+    };
+    if !accepted {
+        return Err(GeneralHotOperatorErrorV3::Lifecycle);
+    }
+    if live {
+        let decoded = GeneralLocalStateV3::decode(&state_account.account.data)
+            .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
+        if decoded.header().bump != bump || decoded.header().kind != state_kind {
+            return Err(GeneralHotOperatorErrorV3::Lifecycle);
+        }
+    }
+    validate_lifecycle_funding_accounts(
+        state,
+        indices.state(),
+        indices.payer(),
+        indices.rent_credit(),
+    )?;
+    Ok(DerivedLifecycleStateV3 { key, bump })
+}
+
+fn canonical_terminal_coordinate_v3(
+    action: Action,
+    expected_revision: u64,
+) -> Result<Option<u64>, GeneralHotOperatorErrorV3> {
+    if action == Action::Close {
+        expected_revision
+            .checked_add(1)
+            .map(Some)
+            .ok_or(GeneralHotOperatorErrorV3::Arithmetic)
+    } else {
+        Ok(None)
+    }
+}
+
+fn validate_lifecycle_funding_accounts(
+    state: &GeneralHotStateV3,
+    state_index: usize,
+    payer_index: Option<usize>,
+    rent_credit_index: Option<usize>,
+) -> Result<(), GeneralHotOperatorErrorV3> {
+    let state_key = logical_runtime_account(state, state_index)?.account.key;
+    let payer_key = payer_index
+        .map(|index| {
+            let payer = logical_runtime_account(state, index)?;
+            if payer.account.key == Pubkey::default()
+                || !payer.is_signer
+                || !payer.is_writable
+                || payer.account.executable
+            {
+                return Err(GeneralHotOperatorErrorV3::Lifecycle);
+            }
+            Ok(payer.account.key)
+        })
+        .transpose()?;
+    let rent_credit_key = rent_credit_index
+        .map(|index| {
+            let credit = logical_runtime_account(state, index)?;
+            if credit.account.key == Pubkey::default()
+                || credit.is_signer
+                || !credit.is_writable
+                || credit.account.executable
+            {
+                return Err(GeneralHotOperatorErrorV3::Lifecycle);
+            }
+            Ok(credit.account.key)
+        })
+        .transpose()?;
+    if payer_key == Some(state_key)
+        || rent_credit_key == Some(state_key)
+        || payer_key.is_some() && payer_key == rent_credit_key
+    {
+        return Err(GeneralHotOperatorErrorV3::Lifecycle);
+    }
+    Ok(())
+}
+
+fn affine_register_width(
+    common: u16,
+    stride: u16,
+    tail_count: u32,
+) -> Result<usize, GeneralHotOperatorErrorV3> {
+    usize::from(stride)
+        .checked_mul(
+            usize::try_from(tail_count).map_err(|_| GeneralHotOperatorErrorV3::Arithmetic)?,
+        )
+        .and_then(|tail| usize::from(common).checked_add(tail))
+        .ok_or(GeneralHotOperatorErrorV3::Arithmetic)
+}
+
+fn set_scalar(
+    scalars: &mut [u64],
+    coordinate: u32,
+    value: u64,
+) -> Result<(), GeneralHotOperatorErrorV3> {
+    *scalars
+        .get_mut(usize::try_from(coordinate).map_err(|_| GeneralHotOperatorErrorV3::Arithmetic)?)
+        .ok_or(GeneralHotOperatorErrorV3::Lifecycle)? = value;
+    Ok(())
+}
+
+fn set_identity(
+    identities: &mut [[u8; 32]],
+    coordinate: u32,
+    value: [u8; 32],
+) -> Result<(), GeneralHotOperatorErrorV3> {
+    *identities
+        .get_mut(usize::try_from(coordinate).map_err(|_| GeneralHotOperatorErrorV3::Arithmetic)?)
+        .ok_or(GeneralHotOperatorErrorV3::Lifecycle)? = value;
+    Ok(())
+}
+
 fn signer_keys(accounts: &[AccountMeta]) -> Result<Vec<Pubkey>, GeneralHotOperatorErrorV3> {
     let mut signers = Vec::new();
     for account in accounts.iter().filter(|account| account.is_signer) {
@@ -657,11 +1138,29 @@ mod tests {
             checked_manifest_digest: [8; 32],
             trading_artifact_release: [9; 32],
             general_artifact_release: [10; 32],
-            selected_program: [11; 32],
-            selected_program_set: [12; 32],
-            selected_config: [13; 32],
-            product_record: [14; 32],
-            family_request_digest: [15; 32],
+            artifacts: GeneralHotArtifactDigestsV3 {
+                program_set: [11; 32],
+                descriptor: [12; 32],
+                config: [13; 32],
+                account_profile: [14; 32],
+                lifecycle_policy: [15; 32],
+                request_profile: [16; 32],
+                strategy: [17; 32],
+                certificate: [18; 32],
+                admission: [19; 32],
+                transition: [20; 32],
+                effect: [21; 32],
+            },
+            product_record: [22; 32],
+            family_request_digest: [23; 32],
+            lifecycle: GeneralLifecycleProjectionV3 {
+                primary_state: key(203),
+                primary_state_bump: 7,
+                terminal_state: None,
+                terminal_state_bump: None,
+                terminal_coordinate: None,
+                child_account_start: 8,
+            },
         }
     }
 
@@ -687,6 +1186,42 @@ mod tests {
         }
     }
 
+    fn lifecycle_funding_state() -> GeneralHotStateV3 {
+        let observed = |value: u8, owner: Pubkey| ObservedAccount {
+            observation: observation(),
+            key: key(value),
+            owner,
+            lamports: 1_000_000,
+            executable: false,
+            data: Vec::new(),
+        };
+        GeneralHotStateV3 {
+            fixed_accounts: Vec::new(),
+            strategy_accounts: Vec::new(),
+            runtime_suffix_accounts: vec![
+                GeneralObservedAccountMetaV3 {
+                    account: observed(30, system_program::ID),
+                    is_signer: false,
+                    is_writable: true,
+                },
+                GeneralObservedAccountMetaV3 {
+                    account: observed(31, system_program::ID),
+                    is_signer: true,
+                    is_writable: true,
+                },
+                GeneralObservedAccountMetaV3 {
+                    account: observed(32, key(33)),
+                    is_signer: false,
+                    is_writable: true,
+                },
+            ],
+            release_set: [1; 32],
+            generation: 1,
+            minimum_finalized_slot: observation().slot,
+            checked_release: None,
+        }
+    }
+
     #[test]
     fn canonical_lut_compiles_packet_and_reports_payer_then_actor() {
         let report = report(192);
@@ -698,6 +1233,7 @@ mod tests {
         assert_eq!(plan.message.required_signatures, 2);
         assert!(plan.message.loaded_addresses >= 90);
         assert!(plan.message.wire_bytes <= crate::versioned::PACKET_DATA_BYTES);
+        assert_eq!(plan.lifecycle, report.lifecycle);
     }
 
     #[test]
@@ -733,6 +1269,71 @@ mod tests {
             Err(GeneralHotOperatorErrorV3::Routing(
                 crate::versioned::Error::PacketTooLarge
             ))
+        );
+    }
+
+    #[test]
+    fn lifecycle_funding_requires_exact_signer_privileges_and_no_alias() {
+        let state = lifecycle_funding_state();
+        assert_eq!(
+            validate_lifecycle_funding_accounts(&state, 5, Some(6), Some(7)),
+            Ok(())
+        );
+
+        let mut unsigned = state.clone();
+        unsigned
+            .runtime_suffix_accounts
+            .get_mut(1)
+            .expect("payer")
+            .is_signer = false;
+        assert_eq!(
+            validate_lifecycle_funding_accounts(&unsigned, 5, Some(6), Some(7)),
+            Err(GeneralHotOperatorErrorV3::Lifecycle)
+        );
+
+        let mut signer_credit = state.clone();
+        signer_credit
+            .runtime_suffix_accounts
+            .get_mut(2)
+            .expect("RentCredit")
+            .is_signer = true;
+        assert_eq!(
+            validate_lifecycle_funding_accounts(&signer_credit, 5, Some(6), Some(7)),
+            Err(GeneralHotOperatorErrorV3::Lifecycle)
+        );
+
+        let mut alias = state;
+        let state_key = alias
+            .runtime_suffix_accounts
+            .first()
+            .expect("state")
+            .account
+            .key;
+        alias
+            .runtime_suffix_accounts
+            .get_mut(2)
+            .expect("RentCredit")
+            .account
+            .key = state_key;
+        assert_eq!(
+            validate_lifecycle_funding_accounts(&alias, 5, Some(6), Some(7)),
+            Err(GeneralHotOperatorErrorV3::Lifecycle)
+        );
+    }
+
+    #[test]
+    fn terminal_coordinate_is_revision_successor_and_overflow_refuses() {
+        assert_eq!(
+            canonical_terminal_coordinate_v3(Action::Close, 41),
+            Ok(Some(42))
+        );
+        assert_eq!(
+            canonical_terminal_coordinate_v3(Action::Freeze, u64::MAX),
+            Ok(None)
+        );
+        assert_eq!(
+            canonical_terminal_coordinate_v3(Action::Close, u64::MAX),
+            Err(GeneralHotOperatorErrorV3::Arithmetic)
         );
     }
 }
