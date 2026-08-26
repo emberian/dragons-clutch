@@ -70,8 +70,7 @@ pub use dclutch_direct_codec::execution_v3::DIRECT_INLINE_ORDINARY_REQUEST_BYTES
 const ED25519_DESCRIPTOR_BYTES: usize = 14;
 const ED25519_SIGNATURES: usize = 2;
 const ED25519_HEADER_BYTES: usize = 2 + ED25519_SIGNATURES * ED25519_DESCRIPTOR_BYTES;
-const ED25519_PARTICIPANT_BYTES: usize = 32 + 64;
-const CURRENT_HOT_INSTRUCTION_INDEX: u16 = 1;
+const ED25519_PARTICIPANT_BYTES: usize = 32 + 64 + COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2;
 
 /// One exact detached maker signature and its canonical signed intent.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -939,10 +938,7 @@ fn native_ed25519_instruction(
         let descriptor = 2 + index * ED25519_DESCRIPTOR_BYTES;
         let public_key = ED25519_HEADER_BYTES + index * ED25519_PARTICIPANT_BYTES;
         let signature = public_key + 32;
-        let family_offset = if index == 0 { 64 } else { 268 };
-        let message = HOT_FAMILY_REQUEST_OFFSET_V3
-            .checked_add(family_offset)
-            .ok_or(Error::Arithmetic)?;
+        let message = signature.checked_add(64).ok_or(Error::Arithmetic)?;
         for (offset, value) in [
             (descriptor, signature),
             (descriptor + 2, usize::from(u16::MAX)),
@@ -950,7 +946,7 @@ fn native_ed25519_instruction(
             (descriptor + 6, usize::from(u16::MAX)),
             (descriptor + 8, message),
             (descriptor + 10, COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2),
-            (descriptor + 12, usize::from(CURRENT_HOT_INSTRUCTION_INDEX)),
+            (descriptor + 12, usize::from(u16::MAX)),
         ] {
             put(
                 &mut data,
@@ -962,6 +958,14 @@ fn native_ed25519_instruction(
         }
         put(&mut data, public_key, participant.maker.as_ref())?;
         put(&mut data, signature, &participant.signature)?;
+        put(
+            &mut data,
+            message,
+            &participant
+                .intent
+                .signed_preimage()
+                .map_err(|_| Error::EconomicMismatch)?,
+        )?;
     }
     Ok(Instruction {
         program_id: ed25519_program::ID,
@@ -1668,19 +1672,39 @@ mod tests {
     }
 
     #[test]
-    fn adjacent_ed25519_reads_messages_from_hot_instruction_one() {
+    fn adjacent_ed25519_is_self_contained_for_registry_continuation() {
         let seller = intent(0, 1);
         let buyer = intent(1, 2);
         let instruction = native_ed25519_instruction([seller, buyer]).expect("native evidence");
         assert_eq!(instruction.program_id, ed25519_program::ID);
         assert_eq!(instruction.data.first().copied(), Some(2));
-        for (descriptor, expected_message) in [(2_usize, 192_u16), (16, 396)] {
+        assert_eq!(instruction.data.len(), 566);
+        for (descriptor, expected_message, participant) in
+            [(2_usize, 126_u16, seller), (16, 394, buyer)]
+        {
             assert_eq!(
                 read_test_u16(&instruction.data, descriptor + 8),
                 expected_message
             );
             assert_eq!(read_test_u16(&instruction.data, descriptor + 10), 172);
-            assert_eq!(read_test_u16(&instruction.data, descriptor + 12), 1);
+            for index_offset in [2_usize, 6, 12] {
+                assert_eq!(
+                    read_test_u16(&instruction.data, descriptor + index_offset),
+                    u16::MAX
+                );
+            }
+            let start = usize::from(expected_message);
+            let end = start + COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2;
+            assert_eq!(
+                instruction.data.get(start..end),
+                Some(
+                    participant
+                        .intent
+                        .signed_preimage()
+                        .expect("signed preimage")
+                        .as_slice()
+                )
+            );
         }
     }
 
