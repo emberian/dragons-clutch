@@ -2,7 +2,7 @@ import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
 import * as Abi from './generated/rationalTerminalHotV3';
-import { compileRationalTerminalHotV3, encodeRationalTerminalHotRequestV3, specializeRationalTerminalChildV2 } from './rationalTerminalHotV3';
+import { compileRationalTerminalHotV3, encodeRationalTerminalHotRequestV3, evaluateRationalTerminalPayoutV3, specializeRationalTerminalChildV2 } from './rationalTerminalHotV3';
 
 function key(seed: number): string { return new PublicKey(new Uint8Array(32).fill(seed)).toBase58(); }
 function id(seed: number): Uint8Array { return new Uint8Array(32).fill(seed); }
@@ -18,6 +18,28 @@ function input() {
       claimsCustodyOwner: key(14), coefficient: 1n, expectedShardSupply: 100n,
       expectedActorShards: 20n, expectedStructuredShards: 0n },
   } as const;
+}
+
+function putU16(output: Uint8Array, offset: number, value: number): void { new DataView(output.buffer).setUint16(offset, value, true); }
+function putU32(output: Uint8Array, offset: number, value: number): void { new DataView(output.buffer).setUint32(offset, value, true); }
+function putU64(output: Uint8Array, offset: number, value: bigint): void { new DataView(output.buffer).setBigUint64(offset, value, true); }
+
+function categoricalBasis(): Uint8Array {
+  const output = new Uint8Array(256); output.set(new TextEncoder().encode('DCLTPAY3'));
+  putU16(output, 8, 3); putU16(output, 10, 256); putU32(output, 12, output.length); output[16] = 1;
+  putU32(output, 20, 3); putU64(output, 160, 1n); putU64(output, 168, 1n); return output;
+}
+
+function gradedBasis(): Uint8Array {
+  // Two primary constant terms of 3 and 5, then exact complement 2 at Q=10.
+  const output = new Uint8Array(256 + 3 * 8 + 2 * 32); output.set(new TextEncoder().encode('DCLTPAY3'));
+  putU16(output, 8, 3); putU16(output, 10, 256); putU32(output, 12, output.length); output[16] = 2; output[17] = 1;
+  putU32(output, 20, 3); putU32(output, 24, 0); putU32(output, 28, 2); putU64(output, 160, 10n); putU64(output, 168, 1n);
+  [4n, 0n, 6n].forEach((value, index) => putU64(output, 256 + index * 8, value));
+  for (const [index, amplitude] of [3n, 5n].entries()) {
+    const offset = 280 + index * 32; putU32(output, offset, index); output[offset + 4] = 0; putU64(output, offset + 24, amplitude);
+  }
+  return output;
 }
 
 describe('Rational terminal Hot V3 codec', () => {
@@ -48,5 +70,19 @@ describe('Rational terminal Hot V3 codec', () => {
     expect(compiled.rawShardBurn).toBe(20n);
     expect(compiled.payoutPolicy).toBe('product-derived-including-zero');
     expect(compiled.childRequest.slice(144, 176)).toEqual(compiled.familyDigest);
+  });
+
+  it('evaluates categorical wins and losses without inventing a positive Custody transfer', () => {
+    expect(evaluateRationalTerminalPayoutV3({ basis: categoricalBasis(), resultOutcomeCount: 3, terminalWinner: 1,
+      selectedOutcome: 1, rawQuantity: 7n, terminalCoordinate: null })).toMatchObject({ rawPayout: 7n, losing: false, scenario: 'categorical' });
+    expect(evaluateRationalTerminalPayoutV3({ basis: categoricalBasis(), resultOutcomeCount: 3, terminalWinner: 1,
+      selectedOutcome: 2, rawQuantity: 7n, terminalCoordinate: null })).toMatchObject({ rawPayout: 0n, losing: true, scenario: 'categorical' });
+  });
+
+  it('evaluates graded ordinary and explicit failure partitions with the same exact raw quantity', () => {
+    expect(evaluateRationalTerminalPayoutV3({ basis: gradedBasis(), resultOutcomeCount: 4, terminalWinner: 1,
+      selectedOutcome: 2, rawQuantity: 2n, terminalCoordinate: { numerator: 7n, denominator: 3n } })).toMatchObject({ payoutPerShard: 2n, rawPayout: 4n, scenario: 'graded-rational' });
+    expect(evaluateRationalTerminalPayoutV3({ basis: gradedBasis(), resultOutcomeCount: 4, terminalWinner: 3,
+      selectedOutcome: 0, rawQuantity: 2n, terminalCoordinate: null })).toMatchObject({ payoutPerShard: 4n, rawPayout: 8n, scenario: 'graded-failure' });
   });
 });
