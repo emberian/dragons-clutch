@@ -284,11 +284,7 @@ fn validate_request_coordinates(
         || request.market != market.to_bytes()
         || request.child_root != root.to_bytes()
         || request.generation != state.generation
-        || request.expires_at
-            < state.fixed_accounts[HOT_ROOT_ACCOUNT_V3]
-                .account
-                .observation
-                .slot
+        || request.expires_at < fixed(state, HOT_ROOT_ACCOUNT_V3)?.account.observation.slot
     {
         return Err(DealerEquityHotOperatorErrorV3::Request);
     }
@@ -332,7 +328,10 @@ fn validate_strategy_geometry(
             .strategy_accounts
             .iter()
             .any(|account| account.is_signer || account.is_writable)
-        || !state.strategy_accounts[ADMITTED_ACCELERATOR_PROGRAM_EXTRA_V3]
+        || !state
+            .strategy_accounts
+            .get(ADMITTED_ACCELERATOR_PROGRAM_EXTRA_V3)
+            .ok_or(DealerEquityHotOperatorErrorV3::StrategyGeometry)?
             .account
             .executable
     {
@@ -390,7 +389,12 @@ fn validate_runtime_geometry(
     ];
     for coordinate in 0..expected_runtime {
         let account = if coordinate < injected.len() {
-            fixed(state, injected[coordinate])?
+            fixed(
+                state,
+                *injected
+                    .get(coordinate)
+                    .ok_or(DealerEquityHotOperatorErrorV3::RuntimeGeometry)?,
+            )?
         } else {
             state
                 .runtime_suffix_accounts
@@ -420,7 +424,12 @@ fn validate_runtime_geometry(
             .representative(0, coordinate)
             .map_err(|_| DealerEquityHotOperatorErrorV3::RuntimeGeometry)?;
         let canonical = if representative < injected.len() {
-            fixed(state, injected[representative])?
+            fixed(
+                state,
+                *injected
+                    .get(representative)
+                    .ok_or(DealerEquityHotOperatorErrorV3::RuntimeGeometry)?,
+            )?
         } else {
             state
                 .runtime_suffix_accounts
