@@ -123,3 +123,24 @@ fn stale_and_substituted_product_or_token_records_refuse_before_planning() {
         Err(Error::ChainArtifacts)
     ));
 }
+
+#[test]
+fn same_finalized_runtime_graph_authenticates_at_258_outcomes() {
+    let fixture = FractionalChainFixtureV1::new_with_outcomes(
+        FractionalActionV1::Wrap,
+        [62; 32],
+        &compiler_only_claims_frame(),
+        258,
+    );
+    let prepared = fixture.prepare();
+    assert_eq!(prepared.terms().outcome_count(), 258);
+    assert_eq!(fixture.reserves.len(), 258);
+    assert_eq!(
+        prepared
+            .terms()
+            .shard_mint(257)
+            .expect("last Mint")
+            .get(..4),
+        Some(258_u32.to_le_bytes().as_slice())
+    );
+}

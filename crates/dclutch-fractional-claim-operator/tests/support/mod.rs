@@ -98,6 +98,19 @@ impl FractionalChainFixtureV1 {
         physical_profile: [u8; 32],
         claims_frame: &[FractionalClaimsAccountRuleV1],
     ) -> Self {
+        Self::new_with_outcomes(action, physical_profile, claims_frame, 3)
+    }
+
+    pub fn new_with_outcomes(
+        action: FractionalActionV1,
+        physical_profile: [u8; 32],
+        claims_frame: &[FractionalClaimsAccountRuleV1],
+        outcome_count: usize,
+    ) -> Self {
+        assert!(
+            outcome_count >= 2,
+            "Product must include ordinary and failure outcomes"
+        );
         let observation = Observation {
             slot: 9_001,
             unix_timestamp: 1_800_000_000,
@@ -116,7 +129,12 @@ impl FractionalChainFixtureV1 {
         let liability_basis = content(34);
         let representation_release = content(35);
 
-        let cuts = [0_i128];
+        let ordinary_cuts = outcome_count
+            .checked_sub(2)
+            .expect("minimum Product width checked");
+        let cuts: Vec<i128> = (0..ordinary_cuts)
+            .map(|index| i128::try_from(index).expect("fixture cut index"))
+            .collect();
         let mut domain = vec![0; result_domain_record_bytes(cuts.len()).expect("domain width")];
         compile_result_domain_v2(
             ResultDomainInputV2 {
@@ -133,7 +151,7 @@ impl FractionalChainFixtureV1 {
         )
         .expect("canonical Product domain");
         let domain_digest = digest(&domain);
-        let coefficients = [1_u64, 1, 1];
+        let coefficients = vec![1_u64; outcome_count];
         let mut portfolio =
             vec![0; portfolio_record_bytes(coefficients.len()).expect("portfolio width")];
         compile_portfolio_v2(
@@ -197,7 +215,17 @@ impl FractionalChainFixtureV1 {
             .expect("Token behavior")
             .to_bytes();
         let token_behavior_digest = digest(&token_behavior);
-        let shard_mints = [bytes(51), bytes(52), bytes(53)];
+        let shard_mints: Vec<[u8; 32]> = (0..outcome_count)
+            .map(|index| {
+                let mut mint = [0_u8; 32];
+                let ordinal = u32::try_from(index)
+                    .expect("fixture outcome")
+                    .checked_add(1)
+                    .expect("fixture Mint ordinal");
+                mint[..4].copy_from_slice(&ordinal.to_le_bytes());
+                mint
+            })
+            .collect();
         let terms_width = fractional_terms_bytes_v1(shard_mints.len()).expect("terms width");
         let mut terms_scratch = vec![0; terms_width];
         let mut terms = vec![0; terms_width];
@@ -368,20 +396,20 @@ impl FractionalChainFixtureV1 {
                 false,
                 root.to_vec(),
             ),
-            reserves: vec![
-                OutcomeReserveV1 {
-                    locked_native_claims: 2,
-                    shard_supply: 20,
-                },
-                OutcomeReserveV1 {
-                    locked_native_claims: 3,
-                    shard_supply: 30,
-                },
-                OutcomeReserveV1 {
-                    locked_native_claims: 4,
-                    shard_supply: 40,
-                },
-            ],
+            reserves: (0..outcome_count)
+                .map(|index| {
+                    let locked_native_claims = u64::try_from(index)
+                        .expect("fixture outcome")
+                        .checked_add(2)
+                        .expect("fixture reserve quantity");
+                    OutcomeReserveV1 {
+                        locked_native_claims,
+                        shard_supply: locked_native_claims
+                            .checked_mul(10)
+                            .expect("fixture shard supply"),
+                    }
+                })
+                .collect(),
         }
     }
 
