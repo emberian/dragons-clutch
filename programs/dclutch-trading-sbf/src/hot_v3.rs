@@ -105,6 +105,11 @@ use crate::{
 };
 
 #[cfg(feature = "families")]
+use crate::resolution_composition_v3::{
+    ResolutionCompositionParentV3, execute_resolution_route_v3, preflight_resolution_route_v3,
+};
+
+#[cfg(feature = "families")]
 use crate::{
     claims_composition_v3::{ClaimsRouteReceiptV3, execute_claims_route_v3},
     custody_composition_v3::{
@@ -593,6 +598,8 @@ pub fn process_hot_execution_v3(
         family_request,
         request_digest,
         envelope,
+        context.selection().capability_release().to_bytes(),
+        selected_program.to_bytes(),
         &aliases,
     )?;
     drop(observations);
@@ -610,6 +617,8 @@ pub fn process_hot_execution_v3(
         family_request,
         request_digest,
         envelope,
+        context.selection().capability_release().to_bytes(),
+        selected_program.to_bytes(),
     )?;
     apply_lifecycle_closes_v3(program_id, &lifecycle_plans, &runtime_accounts, &rent)?;
     commit_local_effects(
@@ -1150,10 +1159,16 @@ fn preflight_child_routes_v3<'accounts, 'info>(
     family_request: &[u8],
     request_digest: [u8; 32],
     envelope: HotExecutionEnvelopeV3,
+    capability_program_set: [u8; 32],
+    selected_capability_program: [u8; 32],
     aliases: &[usize],
 ) -> Result<(), ProgramError> {
     #[cfg(not(feature = "families"))]
-    let _ = request_digest;
+    let _ = (
+        request_digest,
+        capability_program_set,
+        selected_capability_program,
+    );
     if effect.route_count() == 0 {
         return Ok(());
     }
@@ -1204,6 +1219,23 @@ fn preflight_child_routes_v3<'accounts, 'info>(
         } else {
             None
         };
+    #[cfg(feature = "families")]
+    let resolution_program = if has_active_role(
+        effect,
+        tail_count,
+        scalars,
+        identities,
+        FixedRole::Resolution,
+    )? {
+        Some(selected_role_program_v3(
+            frame,
+            effect_accounts,
+            ExecutionRoleV1::Resolution,
+            envelope.release_set(),
+        )?)
+    } else {
+        None
+    };
 
     let mut route = 0_u16;
     while route < effect.route_count() {
@@ -1282,6 +1314,31 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                     return Err(TradingSbfError::UnsupportedContent.into());
                 }
                 FixedRole::Resolution => {
+                    #[cfg(feature = "families")]
+                    preflight_resolution_route_v3(
+                        program_id,
+                        effect,
+                        route,
+                        invocation_index,
+                        tail_count,
+                        scalars,
+                        identities,
+                        effect_accounts,
+                        request_bank,
+                        family_request,
+                        resolution_program.ok_or(TradingSbfError::Release)?,
+                        ResolutionCompositionParentV3 {
+                            release_set: envelope.release_set(),
+                            market: envelope.market(),
+                            generation: envelope.generation(),
+                            parent_request_digest: request_digest,
+                            trading_program: program_id.to_bytes(),
+                            capability_program_set,
+                            selected_capability_program,
+                            activation_account: frame.activation_cache.key.to_bytes(),
+                        },
+                    )?;
+                    #[cfg(not(feature = "families"))]
                     return Err(TradingSbfError::UnsupportedContent.into());
                 }
             }
@@ -1307,7 +1364,11 @@ fn execute_child_routes_v3<'accounts, 'info>(
     family_request: &[u8],
     request_digest: [u8; 32],
     envelope: HotExecutionEnvelopeV3,
+    capability_program_set: [u8; 32],
+    selected_capability_program: [u8; 32],
 ) -> Result<[u8; 32], ProgramError> {
+    #[cfg(not(feature = "families"))]
+    let _ = (capability_program_set, selected_capability_program);
     let mut transcript = hashv(&[CHILD_EXECUTION_DIGEST_DOMAIN_V3, &request_digest]).to_bytes();
     if effect.route_count() == 0 {
         return Ok(transcript);
@@ -1357,6 +1418,23 @@ fn execute_child_routes_v3<'accounts, 'info>(
         } else {
             None
         };
+    #[cfg(feature = "families")]
+    let resolution_program = if has_active_role(
+        effect,
+        tail_count,
+        scalars,
+        identities,
+        FixedRole::Resolution,
+    )? {
+        Some(selected_role_program_v3(
+            frame,
+            effect_accounts,
+            ExecutionRoleV1::Resolution,
+            envelope.release_set(),
+        )?)
+    } else {
+        None
+    };
 
     let mut route = 0_u16;
     while route < effect.route_count() {
@@ -1440,6 +1518,34 @@ fn execute_child_routes_v3<'accounts, 'info>(
                     return Err(TradingSbfError::UnsupportedContent.into());
                 }
                 FixedRole::Resolution => {
+                    #[cfg(feature = "families")]
+                    {
+                        let digest = execute_resolution_route_v3(
+                            program_id,
+                            effect,
+                            route,
+                            invocation,
+                            tail_count,
+                            scalars,
+                            identities,
+                            effect_accounts,
+                            request_bank,
+                            family_request,
+                            resolution_program.ok_or(TradingSbfError::Release)?,
+                            ResolutionCompositionParentV3 {
+                                release_set: envelope.release_set(),
+                                market: envelope.market(),
+                                generation: envelope.generation(),
+                                parent_request_digest: request_digest,
+                                trading_program: program_id.to_bytes(),
+                                capability_program_set,
+                                selected_capability_program,
+                                activation_account: frame.activation_cache.key.to_bytes(),
+                            },
+                        )?;
+                        (FixedRole::Resolution, digest)
+                    }
+                    #[cfg(not(feature = "families"))]
                     return Err(TradingSbfError::UnsupportedContent.into());
                 }
             };

@@ -49,6 +49,7 @@ dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }
 dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }
 dclutch-request-profile-contract = { path = "../../crates/dclutch-request-profile-contract" }
 dclutch-release-set-contract = { path = "../../crates/dclutch-release-set-contract" }
+dclutch-resolution-codec = { path = "../../crates/dclutch-resolution-codec" }
 dclutch-rent-contract = { path = "../../crates/dclutch-rent-contract" }
 dclutch-series-v3-kernel = { path = "../../crates/dclutch-series-v3-kernel" }
 dclutch-transition-vm = { path = "../../crates/dclutch-transition-vm" }

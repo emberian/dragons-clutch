@@ -44,6 +44,8 @@ pub mod hot_v3;
 pub mod native_signature;
 /// Family-neutral executable Core-to-Trading boundary.
 pub mod outer;
+/// Family-neutral EffectProgram V3 composition for canonical Resolution CPIs.
+pub mod resolution_composition_v3;
 /// Series family projection behind the common data-defined Trading boundary.
 #[cfg(feature = "families")]
 pub mod series;
