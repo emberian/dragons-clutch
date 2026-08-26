@@ -25,6 +25,12 @@ use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
     ExecutionRoleV1, ProgramIdentityV1,
 };
+use dclutch_rent_contract::{
+    RefundAuthority,
+    lifecycle_v2::{
+        LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
+    },
+};
 use dclutch_token_svm::{LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES};
 use solana_account::Account;
 use solana_program::{
@@ -35,7 +41,7 @@ use solana_program::{
 };
 use solana_program_option::COption;
 use solana_program_pack::Pack;
-use solana_program_test::ProgramTest;
+use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
 use solana_sdk::signature::{Keypair, Signer};
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 use solana_transaction::Transaction;
@@ -44,6 +50,7 @@ use spl_token_interface::state::Mint as SplMint;
 const CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xd1; 32]);
 const CUSTODY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xd2; 32]);
 const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xd3; 32]);
+const RENT_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xd4; 32]);
 const GENERATION: u64 = 9;
 
 struct Artifacts {
@@ -65,7 +72,17 @@ struct Fixture {
     vault: Pubkey,
     authority: Pubkey,
     mint: Pubkey,
+    rent_credit: Pubkey,
     payer: Keypair,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct OpeningSnapshot {
+    market: Account,
+    replay: Option<Account>,
+    vault: Option<Account>,
+    payer_lamports: u64,
+    rent_credit_lamports: u64,
 }
 
 fn artifacts() -> Artifacts {
@@ -326,13 +343,36 @@ fn fixture() -> (ProgramTest, Fixture) {
     )
     .0;
     identity.market_id = CoreIdentity::new(market.to_bytes()).expect("Market");
+    let refund_wallet = RefundAuthority::new([0xd5; 32]).expect("refund wallet");
+    let (rent_credit, rent_credit_bump) = Pubkey::find_program_address(
+        &[
+            LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+            market.as_ref(),
+            &GENERATION.to_le_bytes(),
+        ],
+        &RENT_PROGRAM_ID,
+    );
+    let rent_credit_value = LifecycleRentCreditV2::new(
+        refund_wallet,
+        LifecycleAccountIdV2::new(market.to_bytes()).expect("Market identity"),
+        LifecycleAccountIdV2::new(release_set).expect("release-set identity"),
+        GENERATION,
+        rent_credit_bump,
+    )
+    .expect("lifecycle RentCredit");
+    add_account(
+        &mut test,
+        rent_credit,
+        RENT_PROGRAM_ID,
+        rent_credit_value.to_bytes().to_vec(),
+    );
     let state = CoreState {
         phase: Phase::Founding,
         readiness: Readiness::Ready,
         terminal_winner: 0,
         identity,
         outstanding_capabilities: 0,
-        rent_beneficiary: CoreIdentity::new(payer.pubkey().to_bytes()).expect("beneficiary"),
+        rent_beneficiary: CoreIdentity::new(rent_credit.to_bytes()).expect("RentCredit"),
         terminal_receipt: None,
     };
     add_account(
@@ -347,6 +387,7 @@ fn fixture() -> (ProgramTest, Fixture) {
         realm,
         mint,
         payer.pubkey(),
+        rent_credit,
         OperationV1::InitializeReplay,
     );
     let replay = Pubkey::find_program_address(
@@ -382,6 +423,7 @@ fn fixture() -> (ProgramTest, Fixture) {
             vault,
             authority,
             mint,
+            rent_credit,
             payer,
         },
     )
@@ -393,6 +435,7 @@ fn custody_request(
     realm: [u8; 32],
     mint: Pubkey,
     payer: Pubkey,
+    rent_refund: Pubkey,
     operation: OperationV1,
 ) -> CustodyRequestV1 {
     let core_request = Request::administrative(
@@ -431,7 +474,7 @@ fn custody_request(
         mint: [0; 32],
         token_program: [0; 32],
         payer: payer.to_bytes(),
-        rent_refund: payer.to_bytes(),
+        rent_refund: rent_refund.to_bytes(),
         expected_revision: 0,
         resulting_revision: 1,
         amount: 0,
@@ -457,13 +500,20 @@ fn custody_request(
     request
 }
 
-fn core_instruction(fixture: &Fixture, operation: OperationV1) -> Instruction {
+fn core_instruction_with_coordinates(
+    fixture: &Fixture,
+    operation: OperationV1,
+    request_payer: Pubkey,
+    rent_refund: Pubkey,
+    outer_payer: Pubkey,
+) -> Instruction {
     let custody = custody_request(
         fixture.release_set,
         fixture.market,
         fixture.realm,
         fixture.mint,
-        fixture.payer.pubkey(),
+        request_payer,
+        rent_refund,
         operation,
     );
     let custody_bytes = custody.to_bytes().expect("Custody request");
@@ -495,7 +545,7 @@ fn core_instruction(fixture: &Fixture, operation: OperationV1) -> Instruction {
     ];
     match operation {
         OperationV1::InitializeReplay => accounts.extend([
-            AccountMeta::new(fixture.payer.pubkey(), true),
+            AccountMeta::new(outer_payer, true),
             AccountMeta::new_readonly(system_program::ID, false),
             AccountMeta::new_readonly(sysvar::rent::ID, false),
         ]),
@@ -504,7 +554,7 @@ fn core_instruction(fixture: &Fixture, operation: OperationV1) -> Instruction {
             AccountMeta::new(fixture.vault, false),
             AccountMeta::new_readonly(fixture.authority, false),
             AccountMeta::new_readonly(Pubkey::new_from_array(LEGACY_TOKEN_PROGRAM_ID), false),
-            AccountMeta::new(fixture.payer.pubkey(), true),
+            AccountMeta::new(outer_payer, true),
             AccountMeta::new_readonly(system_program::ID, false),
             AccountMeta::new_readonly(sysvar::rent::ID, false),
         ]),
@@ -529,32 +579,143 @@ fn core_instruction(fixture: &Fixture, operation: OperationV1) -> Instruction {
     }
 }
 
+fn core_instruction(fixture: &Fixture, operation: OperationV1) -> Instruction {
+    core_instruction_with_coordinates(
+        fixture,
+        operation,
+        fixture.payer.pubkey(),
+        fixture.rent_credit,
+        fixture.payer.pubkey(),
+    )
+}
+
+async fn submit(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+    instruction: Instruction,
+    sponsor_signs: bool,
+) -> Result<(), BanksClientError> {
+    let blockhash = context.banks_client.get_latest_blockhash().await?;
+    let transaction = if sponsor_signs {
+        Transaction::new_signed_with_payer(
+            &[instruction],
+            Some(&context.payer.pubkey()),
+            &[&context.payer, &fixture.payer],
+            blockhash,
+        )
+    } else {
+        Transaction::new_signed_with_payer(
+            &[instruction],
+            Some(&context.payer.pubkey()),
+            &[&context.payer],
+            blockhash,
+        )
+    };
+    context.banks_client.process_transaction(transaction).await
+}
+
+async fn opening_snapshot(context: &mut ProgramTestContext, fixture: &Fixture) -> OpeningSnapshot {
+    OpeningSnapshot {
+        market: context
+            .banks_client
+            .get_account(fixture.market)
+            .await
+            .expect("Market query")
+            .expect("Market"),
+        replay: context
+            .banks_client
+            .get_account(fixture.replay)
+            .await
+            .expect("replay query"),
+        vault: context
+            .banks_client
+            .get_account(fixture.vault)
+            .await
+            .expect("Vault query"),
+        payer_lamports: context
+            .banks_client
+            .get_balance(fixture.payer.pubkey())
+            .await
+            .expect("payer balance"),
+        rent_credit_lamports: context
+            .banks_client
+            .get_balance(fixture.rent_credit)
+            .await
+            .expect("RentCredit balance"),
+    }
+}
+
 #[tokio::test]
 async fn real_core_opens_exact_registry_realm_custody_and_commits_last() {
     let (test, fixture) = fixture();
-    let context = test.start_with_context().await;
+    let mut context = test.start_with_context().await;
+    let before_hostile = opening_snapshot(&mut context, &fixture).await;
+    let wrong_payer = core_instruction_with_coordinates(
+        &fixture,
+        OperationV1::InitializeReplay,
+        context.payer.pubkey(),
+        fixture.rent_credit,
+        fixture.payer.pubkey(),
+    );
+    assert!(
+        submit(&mut context, &fixture, wrong_payer, true)
+            .await
+            .is_err()
+    );
+
+    let mut missing_signer = core_instruction(&fixture, OperationV1::InitializeReplay);
+    missing_signer
+        .accounts
+        .get_mut(11)
+        .expect("sponsor")
+        .is_signer = false;
+    assert!(
+        submit(&mut context, &fixture, missing_signer, false)
+            .await
+            .is_err()
+    );
+    let mut read_only_sponsor = core_instruction(&fixture, OperationV1::InitializeReplay);
+    read_only_sponsor
+        .accounts
+        .get_mut(11)
+        .expect("sponsor")
+        .is_writable = false;
+    assert!(
+        submit(&mut context, &fixture, read_only_sponsor, true)
+            .await
+            .is_err()
+    );
+    let substituted_refund = core_instruction_with_coordinates(
+        &fixture,
+        OperationV1::InitializeReplay,
+        fixture.payer.pubkey(),
+        context.payer.pubkey(),
+        fixture.payer.pubkey(),
+    );
+    assert!(
+        submit(&mut context, &fixture, substituted_refund, true)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        opening_snapshot(&mut context, &fixture).await,
+        before_hostile,
+        "payer/refund/privilege refusals leave Market, Custody, sponsor, and RentCredit unchanged"
+    );
     let payer_before = context
         .banks_client
         .get_balance(fixture.payer.pubkey())
         .await
         .expect("payer balance");
     for operation in [OperationV1::InitializeReplay, OperationV1::OpenVault] {
-        let blockhash = context
-            .banks_client
-            .get_latest_blockhash()
-            .await
-            .expect("blockhash");
-        let transaction = Transaction::new_signed_with_payer(
-            &[core_instruction(&fixture, operation)],
-            Some(&context.payer.pubkey()),
-            &[&context.payer, &fixture.payer],
-            blockhash,
-        );
-        context
-            .banks_client
-            .process_transaction(transaction)
-            .await
-            .expect("Core/Custody effect");
+        submit(
+            &mut context,
+            &fixture,
+            core_instruction(&fixture, operation),
+            true,
+        )
+        .await
+        .expect("Core/Custody effect");
     }
     let market = context
         .banks_client
@@ -574,6 +735,7 @@ async fn real_core_opens_exact_registry_realm_custody_and_commits_last() {
     let replay = CustodyReplayV1::decode(&replay.data).expect("Custody replay");
     assert_eq!(replay.next_revision, 2);
     assert_eq!(replay.open_vault_count, 1);
+    assert_eq!(replay.rent_refund, fixture.rent_credit.to_bytes());
     let vault = context
         .banks_client
         .get_account(fixture.vault)
