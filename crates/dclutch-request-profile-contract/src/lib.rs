@@ -12,6 +12,8 @@
 
 use core::convert::TryInto;
 
+/// Safe, allocation-free typed RequestProfile V1 artifact encoder.
+pub mod encode;
 /// Descriptor-selected RequestProfile V2 with generic native-signature evidence.
 pub mod v2;
 

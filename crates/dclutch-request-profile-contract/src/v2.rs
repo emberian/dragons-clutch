@@ -78,6 +78,22 @@ pub struct NativeSignatureRequirementV1 {
 }
 
 impl NativeSignatureRequirementV1 {
+    /// Construct one exact current-instruction range and identity destination.
+    ///
+    /// Complete ordering, nonoverlap, and destination uniqueness are checked by
+    /// [`encode_request_profile_v2_atomic`] and hostile decoding.
+    pub const fn new(
+        message_offset: u16,
+        message_bytes: u16,
+        destination_identity_register: u32,
+    ) -> Self {
+        Self {
+            message_offset,
+            message_bytes,
+            destination_identity_register,
+        }
+    }
+
     /// Absolute byte offset in the complete current Trading instruction.
     pub const fn message_offset(self) -> u16 {
         self.message_offset
@@ -92,6 +108,71 @@ impl NativeSignatureRequirementV1 {
     pub const fn destination_identity_register(self) -> u32 {
         self.destination_identity_register
     }
+}
+
+/// Encode one complete signed RequestProfile V2 into caller-owned buffers.
+///
+/// The embedded V1 bytes are hostile-decoded first. The candidate wrapper is
+/// then built in `scratch`, hostile-decoded as a complete V2 profile, and
+/// copied to `output` only after every signature requirement accepts.
+pub fn encode_request_profile_v2_atomic(
+    embedded_v1: &[u8],
+    requirements: &[NativeSignatureRequirementV1],
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<()> {
+    RequestProfileV1::decode(embedded_v1).map_err(|_| Error::InvalidEmbeddedProfile)?;
+    let count = u32::try_from(requirements.len()).map_err(|_| Error::ArithmeticOverflow)?;
+    let embedded_bytes = u32::try_from(embedded_v1.len()).map_err(|_| Error::ArithmeticOverflow)?;
+    let tail_bytes = requirements
+        .len()
+        .checked_mul(NATIVE_SIGNATURE_REQUIREMENT_BYTES_V1)
+        .ok_or(Error::ArithmeticOverflow)?;
+    let expected = REQUEST_PROFILE_V2_HEADER_BYTES
+        .checked_add(embedded_v1.len())
+        .and_then(|prefix| prefix.checked_add(tail_bytes))
+        .ok_or(Error::ArithmeticOverflow)?;
+    if scratch.len() != expected || output.len() != expected {
+        return Err(Error::InvalidLength);
+    }
+    scratch.fill(0);
+    write(scratch, 0, &REQUEST_PROFILE_V2_MAGIC)?;
+    write(scratch, 8, &REQUEST_PROFILE_V2_SCHEMA_VERSION.to_le_bytes())?;
+    write(
+        scratch,
+        10,
+        &REQUEST_PROFILE_V2_ARTIFACT_PROFILE.to_le_bytes(),
+    )?;
+    write(
+        scratch,
+        EMBEDDED_V1_BYTES_OFFSET,
+        &embedded_bytes.to_le_bytes(),
+    )?;
+    write(scratch, REQUIREMENT_COUNT_OFFSET, &count.to_le_bytes())?;
+    write(scratch, REQUEST_PROFILE_V2_HEADER_BYTES, embedded_v1)?;
+    let mut cursor = REQUEST_PROFILE_V2_HEADER_BYTES
+        .checked_add(embedded_v1.len())
+        .ok_or(Error::ArithmeticOverflow)?;
+    for requirement in requirements {
+        write(scratch, cursor, &requirement.message_offset.to_le_bytes())?;
+        write(
+            scratch,
+            add(cursor, 2)?,
+            &requirement.message_bytes.to_le_bytes(),
+        )?;
+        write(
+            scratch,
+            add(cursor, 4)?,
+            &requirement.destination_identity_register.to_le_bytes(),
+        )?;
+        cursor = add(cursor, NATIVE_SIGNATURE_REQUIREMENT_BYTES_V1)?;
+    }
+    if cursor != expected {
+        return Err(Error::InvalidLength);
+    }
+    RequestProfileV2::decode(scratch)?;
+    output.copy_from_slice(scratch);
+    Ok(())
 }
 
 /// Borrowed fixed-entry native-signature evidence tail.
@@ -420,6 +501,15 @@ fn u16_from(value: usize) -> Result<u16> {
     u16::try_from(value).map_err(|_| Error::ArithmeticOverflow)
 }
 
+fn write(output: &mut [u8], offset: usize, bytes: &[u8]) -> Result<()> {
+    let end = add(offset, bytes.len())?;
+    output
+        .get_mut(offset..end)
+        .ok_or(Error::InvalidLength)?
+        .copy_from_slice(bytes);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     extern crate std;
@@ -560,6 +650,54 @@ mod tests {
         )
         .expect("evidence");
         assert_eq!(output, [[7; 32], [8; 32]]);
+    }
+
+    #[test]
+    fn typed_v2_encoder_round_trips_and_preserves_output_on_refusal() {
+        let requirements = [
+            NativeSignatureRequirementV1::new(20, 3, 0),
+            NativeSignatureRequirementV1::new(30, 4, 1),
+        ];
+        let width = REQUEST_PROFILE_V2_HEADER_BYTES
+            + AGREEMENT_PROFILE_V1.len()
+            + requirements.len() * NATIVE_SIGNATURE_REQUIREMENT_BYTES_V1;
+        let mut scratch = vec![0_u8; width];
+        let mut output = vec![9_u8; width];
+        encode_request_profile_v2_atomic(
+            &AGREEMENT_PROFILE_V1,
+            &requirements,
+            &mut scratch,
+            &mut output,
+        )
+        .expect("typed v2 profile");
+        let decoded = RequestProfileV2::decode(&output).expect("decode encoded v2 profile");
+        assert_eq!(decoded.native_signatures().requirement_count(), 2);
+        assert_eq!(
+            decoded
+                .native_signatures()
+                .requirement(1)
+                .expect("second requirement")
+                .destination_identity_register(),
+            1
+        );
+
+        let overlapping = [
+            NativeSignatureRequirementV1::new(20, 3, 0),
+            NativeSignatureRequirementV1::new(22, 4, 1),
+        ];
+        let mut hostile_scratch = vec![0_u8; width];
+        let mut hostile_output = vec![7_u8; width];
+        let before = hostile_output.clone();
+        assert_eq!(
+            encode_request_profile_v2_atomic(
+                &AGREEMENT_PROFILE_V1,
+                &overlapping,
+                &mut hostile_scratch,
+                &mut hostile_output,
+            ),
+            Err(Error::InvalidRequirement)
+        );
+        assert_eq!(hostile_output, before);
     }
 
     #[test]
