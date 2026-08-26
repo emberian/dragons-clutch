@@ -43,6 +43,10 @@ printf 'rust_codec_sha256=%s\n' \
   "$(sha256_file "$repository_dir/crates/dclutch-direct-codec/src/lib.rs")"
 printf 'rust_vm_sha256=%s\n' \
   "$(sha256_file "$repository_dir/crates/dclutch-transition-vm/src/lib.rs")"
+printf 'rust_direct_aot_sha256=%s\n' \
+  "$(sha256_file "$repository_dir/crates/dclutch-direct-aot-contract/src/lib.rs")"
+printf 'rust_direct_aot_generated_sha256=%s\n' \
+  "$(sha256_file "$repository_dir/crates/dclutch-direct-aot-contract/src/generated.rs")"
 printf 'rust_terminal_validator_sha256=%s\n' \
   "$(sha256_file "$validator_dir/src/terminal.rs")"
 printf 'rust_registration_validator_sha256=%s\n' \

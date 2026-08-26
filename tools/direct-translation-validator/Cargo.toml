@@ -7,6 +7,7 @@ rust-version = "1.89"
 description = "Independent executable translation validator for Lean-owned Direct ABI and VM observations"
 
 [dependencies]
+dclutch-direct-aot-contract = { path = "../../crates/dclutch-direct-aot-contract" }
 dclutch-direct-codec = { path = "../../crates/dclutch-direct-codec" }
 dclutch-transition-vm = { path = "../../crates/dclutch-transition-vm" }
 

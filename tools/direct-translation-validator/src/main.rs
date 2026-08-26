@@ -3,6 +3,10 @@
 
 use std::{collections::BTreeMap, env, error::Error, fmt, fs, path::Path};
 
+use dclutch_direct_aot_contract::{
+    DIRECT_PROGRAM_V2_IDENTITIES, DIRECT_PROGRAM_V2_SCALARS, RegisterInput as AotInput,
+    RegisterOutput as AotOutput, execute_atomic as execute_aot,
+};
 use dclutch_direct_codec::{
     COMPACT_INTENT_BYTES, CONTROLLER_INSTRUCTION_BYTES, CompactIntentV1, ControllerInstructionV1,
     REGISTERED_CLAIM_TERMINAL_BYTES, REGISTERED_CREATE_INSTRUCTION_BYTES,
@@ -57,6 +61,9 @@ struct Statistics {
     vm_cases: usize,
     vm_accepts: usize,
     vm_refusals: usize,
+    aot_cases: usize,
+    aot_accepts: usize,
+    aot_refusals: usize,
     terminal_transitions: usize,
     terminal_accepts: usize,
     terminal_refusals: usize,
@@ -804,12 +811,130 @@ fn validate_vm_case(
     Ok(())
 }
 
+fn validate_direct_aot_case(
+    name: &str,
+    input_scalars_csv: &str,
+    input_identities_csv: &str,
+    disposition: &str,
+    output: Option<(&str, &str)>,
+    statistics: &mut Statistics,
+) -> Result<()> {
+    const SCALARS: usize = DIRECT_PROGRAM_V2_SCALARS as usize;
+    const IDENTITIES: usize = DIRECT_PROGRAM_V2_IDENTITIES as usize;
+
+    let context = format!("Direct AOT {name}");
+    let input_scalars = parse_csv(input_scalars_csv, &format!("{context} input scalars"))?;
+    let input_identities = parse_csv(input_identities_csv, &format!("{context} input identities"))?;
+    let scalars: [u64; SCALARS] = input_scalars.try_into().map_err(|values: Vec<u64>| {
+        failure(format!(
+            "{context}: expected {SCALARS} scalar inputs, observed {}",
+            values.len()
+        ))
+    })?;
+    let identity_values: [u64; IDENTITIES] =
+        input_identities.try_into().map_err(|values: Vec<u64>| {
+            failure(format!(
+                "{context}: expected {IDENTITIES} identity inputs, observed {}",
+                values.len()
+            ))
+        })?;
+    let identities = identity_values.map(identity);
+
+    let mut scratch_scalars = [0xa5a5_a5a5_a5a5_a5a5_u64; SCALARS];
+    let mut scratch_identities = [[0xa5_u8; 32]; IDENTITIES];
+    let output_scalars_before = [0x5a5a_5a5a_5a5a_5a5a_u64; SCALARS];
+    let output_identities_before = [[0x5a_u8; 32]; IDENTITIES];
+    let mut actual_scalars = output_scalars_before;
+    let mut actual_identities = output_identities_before;
+    let result = execute_aot(
+        AotInput {
+            scalars: &scalars,
+            identities: &identities,
+        },
+        AotOutput {
+            scalars: &mut scratch_scalars,
+            identities: &mut scratch_identities,
+        },
+        AotOutput {
+            scalars: &mut actual_scalars,
+            identities: &mut actual_identities,
+        },
+    );
+
+    match disposition {
+        "reject" => {
+            if output.is_some() {
+                return Err(failure(format!("{context}: refusal carried post-state")));
+            }
+            if result.is_ok() {
+                return Err(failure(format!("{context}: AOT accepted Lean refusal")));
+            }
+            require_equal(
+                actual_scalars,
+                output_scalars_before,
+                &format!("{context}: scalar rollback"),
+            )?;
+            require_equal(
+                actual_identities,
+                output_identities_before,
+                &format!("{context}: identity rollback"),
+            )?;
+            statistics.aot_refusals += 1;
+        }
+        "accept" => {
+            let (output_scalars_csv, output_identities_csv) = output
+                .ok_or_else(|| failure(format!("{context}: acceptance omitted post-state")))?;
+            result.map_err(|error| {
+                failure(format!("{context}: AOT refused Lean acceptance: {error:?}"))
+            })?;
+            let expected_scalars: [u64; SCALARS] =
+                parse_csv(output_scalars_csv, &format!("{context} output scalars"))?
+                    .try_into()
+                    .map_err(|values: Vec<u64>| {
+                        failure(format!(
+                            "{context}: expected {SCALARS} scalar outputs, observed {}",
+                            values.len()
+                        ))
+                    })?;
+            let expected_identity_values: [u64; IDENTITIES] = parse_csv(
+                output_identities_csv,
+                &format!("{context} output identities"),
+            )?
+            .try_into()
+            .map_err(|values: Vec<u64>| {
+                failure(format!(
+                    "{context}: expected {IDENTITIES} identity outputs, observed {}",
+                    values.len()
+                ))
+            })?;
+            require_equal(actual_scalars, expected_scalars, &context)?;
+            require_equal(
+                actual_identities,
+                expected_identity_values.map(identity),
+                &context,
+            )?;
+            statistics.aot_accepts += 1;
+        }
+        value => return Err(failure(format!("{context}: invalid disposition {value:?}"))),
+    }
+    statistics.aot_cases += 1;
+    Ok(())
+}
+
 fn validate_vm(fields: &[&str], statistics: &mut Statistics) -> Result<()> {
     if fields.len() != 5 && fields.len() != 7 {
         return Err(failure("vm case: wrong field count"));
     }
     validate_vm_case(
         generated_program::bytes(),
+        fields[1],
+        fields[2],
+        fields[3],
+        fields[4],
+        (fields.len() == 7).then(|| (fields[5], fields[6])),
+        statistics,
+    )?;
+    validate_direct_aot_case(
         fields[1],
         fields[2],
         fields[3],
@@ -1059,7 +1184,7 @@ fn main() -> Result<()> {
     }
     let statistics = validate(Path::new(&path))?;
     println!(
-        "translation validation passed: {} Lean ABI values, {} single-byte ABI mutations, {} hostile ABI widths, {} Lean VM states ({} accepted, {} refused with rollback), registered creation corpus {} ABIs/{} mutations/{} hostile widths and {} transitions ({} accepted, {} refused with exact rollback), {} registered terminal transitions ({} accepted, {} refused with exact rollback), {} deterministic Rust roundtrips",
+        "translation validation passed: {} Lean ABI values, {} single-byte ABI mutations, {} hostile ABI widths, {} Lean VM states ({} accepted, {} refused with rollback), {} Direct AOT states ({} accepted, {} refused with rollback), registered creation corpus {} ABIs/{} mutations/{} hostile widths and {} transitions ({} accepted, {} refused with exact rollback), {} registered terminal transitions ({} accepted, {} refused with exact rollback), {} deterministic Rust roundtrips",
         statistics.intents
             + statistics.controllers
             + statistics.registered_creations
@@ -1070,6 +1195,9 @@ fn main() -> Result<()> {
         statistics.vm_cases,
         statistics.vm_accepts,
         statistics.vm_refusals,
+        statistics.aot_cases,
+        statistics.aot_accepts,
+        statistics.aot_refusals,
         statistics.registered_creations,
         statistics.registered_creation_mutations,
         statistics.registered_creation_hostile_widths,
