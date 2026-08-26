@@ -42,6 +42,8 @@ use solana_sdk_ids::system_program;
 
 /// Chain-derived compiled Direct transaction construction.
 pub mod compiled_direct;
+/// Chain-derived unsigned Dealer junior-equity Hot execution construction.
+pub mod dealer_equity_hot_v3;
 /// Exact delegated-allowance Custody successor CPI construction.
 pub mod delegated_custody;
 /// Chain-derived action-selected Direct V3 inline execution construction.
