@@ -11,11 +11,17 @@
 //! the exact denominator.
 
 mod hot_artifacts_v3;
+mod hot_effect_v3;
 mod hot_terminal_v3;
 
 pub use hot_artifacts_v3::{
     RATIONAL_TERMINAL_REQUEST_PROFILE_BYTES_V3, RATIONAL_TERMINAL_TRANSITION_BYTES_V3,
     encode_rational_terminal_request_profile_v3, encode_rational_terminal_transition_v3,
+};
+pub use hot_effect_v3::{
+    RATIONAL_TERMINAL_CLAIMS_ACCOUNT_COUNT_V3, RATIONAL_TERMINAL_EFFECT_BYTES_V3,
+    RATIONAL_TERMINAL_HOT_INJECTED_ACCOUNT_COUNT_V3, RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3,
+    encode_rational_terminal_effect_v3,
 };
 pub use hot_terminal_v3::{ConstructedHotTerminalV3, construct_chain_hot_redeem_terminal_v3};
 
@@ -43,6 +49,8 @@ pub enum Error {
     RequestProfileArtifact(dclutch_request_profile_contract::Error),
     /// Typed terminal TransitionVM artifact encoding refused.
     TransitionArtifact(dclutch_transition_vm::v3::Error),
+    /// Typed terminal EffectProgram artifact encoding refused.
+    EffectArtifact(dclutch_effect_kernel::v3::Error),
     /// Finalized descriptor/graph bytes were not the selected Bearer basis vector.
     NotBearer,
 }

@@ -284,6 +284,7 @@ name = "dclutch-bearer-v2-operator"
 version = "0.1.0"
 dependencies = [
  "dclutch-bearer-v2-contract",
+ "dclutch-effect-kernel",
  "dclutch-rational-representation-v2-contract",
  "dclutch-rational-representation-v2-kernel",
  "dclutch-rational-representation-v2-operator",

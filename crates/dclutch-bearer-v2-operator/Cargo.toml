@@ -8,6 +8,7 @@ description = "Chain-derived Rational Representation V2 specialization gate for 
 
 [dependencies]
 dclutch-bearer-v2-contract = { path = "../dclutch-bearer-v2-contract" }
+dclutch-effect-kernel = { path = "../dclutch-effect-kernel" }
 dclutch-rational-representation-v2-contract = { path = "../dclutch-rational-representation-v2-contract" }
 dclutch-rational-representation-v2-kernel = { path = "../dclutch-rational-representation-v2-kernel" }
 dclutch-rational-representation-v2-operator = { path = "../dclutch-rational-representation-v2-operator" }
