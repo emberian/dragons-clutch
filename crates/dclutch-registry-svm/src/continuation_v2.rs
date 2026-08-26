@@ -8,10 +8,13 @@
 use dclutch_core_contract::ContentId;
 use dclutch_release_set_contract::ExecutionRoleV1;
 
-use crate::batch_v2::{BatchErrorV2, RoleBatchRequestV2};
-
-/// PDA domain for one headerless invocation-scoped Registry admission signer.
-pub const TRANSPARENT_HOT_ADMISSION_DOMAIN_V2: &[u8] = b"dclutch:registry-hot-continuation:v2";
+use crate::{
+    batch_v2::{BatchErrorV2, RoleBatchRequestV2},
+    continuation_v1::{
+        REGISTRY_CONTINUATION_ADMISSION_DOMAIN_V1, RegistryContinuationAdmissionSeedsV1,
+        RegistryContinuationRequestV1,
+    },
+};
 /// Exact ordered role batch authenticated for transparent Trading Hot.
 pub const TRANSPARENT_HOT_ROLES_V2: [ExecutionRoleV1; 2] =
     [ExecutionRoleV1::Core, ExecutionRoleV1::Trading];
@@ -51,10 +54,18 @@ impl TransparentHotContinuationV2 {
 
     /// Reconstruct the sole canonical ordered Registry batch.
     pub fn role_batch_request(self) -> Result<RoleBatchRequestV2, BatchErrorV2> {
-        RoleBatchRequestV2::new(
+        self.as_v1_request()?.role_batch_request()
+    }
+
+    /// Reconstruct the established typed continuation authority from derived
+    /// facts. V2 removes only its serialized header and creates no new signer
+    /// domain.
+    pub fn as_v1_request(self) -> Result<RegistryContinuationRequestV1, BatchErrorV2> {
+        RegistryContinuationRequestV1::new_core_trading_hot(
             self.release_set_id,
             self.activation_cache_digest,
-            &TRANSPARENT_HOT_ROLES_V2,
+            self.hot_instruction_digest,
+            self.hot_instruction_len,
         )
     }
 
@@ -101,20 +112,24 @@ impl TransparentHotAdmissionSeedsV2 {
         if activation_cache.iter().all(|byte| *byte == 0) {
             return Err(BatchErrorV2::ZeroIdentity);
         }
-        let batch = continuation.role_batch_request()?;
+        let established = RegistryContinuationAdmissionSeedsV1::new(
+            continuation.as_v1_request()?,
+            activation_cache,
+            batch_request_digest,
+        )?;
         Ok(Self {
             release_set_id: continuation.release_set_id,
             activation_cache,
             batch_request_digest,
-            role_mask: [batch.role_mask()],
-            continuation_role: [2],
+            role_mask: established.role_mask(),
+            continuation_role: established.continuation_role(),
             hot_instruction_digest: continuation.hot_instruction_digest,
         })
     }
 
-    /// Exact V2 PDA domain.
+    /// Established admission PDA domain; V2 removes only wire redundancy.
     pub const fn domain(self) -> &'static [u8] {
-        TRANSPARENT_HOT_ADMISSION_DOMAIN_V2
+        REGISTRY_CONTINUATION_ADMISSION_DOMAIN_V1
     }
 
     /// Exact release-set bytes.
@@ -182,7 +197,7 @@ mod tests {
         assert_eq!(seeds.role_mask(), [0b00101]);
         assert_eq!(seeds.continuation_role(), [2]);
         assert_eq!(seeds.hot_instruction_digest(), digest(hot).to_bytes());
-        assert_ne!(
+        assert_eq!(
             seeds.domain(),
             crate::continuation_v1::REGISTRY_CONTINUATION_ADMISSION_DOMAIN_V1
         );
