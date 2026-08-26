@@ -1,4 +1,4 @@
-//! Complete content-addressed Hot artifact bundle for inline ordinary Direct.
+//! Complete schema-bound Hot artifact bundle for inline ordinary Direct.
 //!
 //! This host-side emitter is the sole Direct-specific artifact builder. The
 //! runtime Trading program remains family-neutral: it authenticates these
@@ -6,46 +6,51 @@
 //! routes, and commits once.
 
 use dclutch_account_profile_contract::{
-    lifecycle_v3::StateLifecyclePolicyV4, v2::AccountProfileV2,
+    lifecycle_v3::{StateLifecyclePolicyV4, SUCCESSOR_SCHEMA_RELEASE_ID as LIFECYCLE_SCHEMA_ID_V4},
+    v2::{AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2},
 };
-use dclutch_capability_program_contract::v3::{CAPABILITY_PROGRAM_V3_BYTES, CapabilityProgramV3};
+use dclutch_capability_program_contract::v4::{
+    ArtifactReferenceV4, CapabilityArtifactsV4, CapabilityProgramV4, CAPABILITY_PROGRAM_V4_BYTES,
+};
 use dclutch_core_contract::ContentId;
-use dclutch_effect_kernel::v3::ProgramV3 as EffectProgramV3;
+use dclutch_effect_kernel::v3::{
+    ProgramV3 as EffectProgramV3, SCHEMA_RELEASE_ID as EFFECT_SCHEMA_ID_V4,
+};
 use dclutch_execution_strategy_contract::v2::{
-    EXECUTION_STRATEGY_PROGRAM_BYTES_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
-    ExecutionStrategyProgramV2, StrategyDispositionV2,
+    ExecutionStrategyProgramV2, StrategyDispositionV2, EXECUTION_STRATEGY_PROGRAM_BYTES_V2,
+    EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
 };
 use dclutch_request_profile_contract::v2::{
-    REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID, RequestProfileV2,
+    RequestProfileV2, REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID,
 };
 use dclutch_transition_vm::v3::ProgramV3 as TransitionProgramV3;
 use sha2::{Digest, Sha256};
 
 use crate::{
     execution_v3::{
-        DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3, DIRECT_SUCCESSOR_KIND_ID_V3, DirectExecutionActionV3,
+        DirectExecutionActionV3, DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3, DIRECT_SUCCESSOR_KIND_ID_V3,
     },
     ordinary_account_artifacts_v3::{
-        DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3, DirectInlineOrdinaryAccountProfileInputV3,
         encode_direct_inline_ordinary_account_profile_v3_atomic,
+        DirectInlineOrdinaryAccountProfileInputV3, DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3,
     },
     ordinary_artifacts_v3::{
+        direct_inline_ordinary_strategy_v3, encode_inline_ordinary_request_profile_v3_atomic,
         DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_V1_BYTES_V3,
-        DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_V2_BYTES_V3, direct_inline_ordinary_strategy_v3,
-        encode_inline_ordinary_request_profile_v3_atomic,
+        DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_V2_BYTES_V3,
     },
     ordinary_effect_artifacts_v3::{
-        DIRECT_INLINE_ORDINARY_EFFECT_BYTES_V4, DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3,
-        encode_direct_inline_ordinary_effect_v4_atomic,
+        encode_direct_inline_ordinary_effect_v4_atomic, DIRECT_INLINE_ORDINARY_EFFECT_BYTES_V4,
+        DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3,
     },
     ordinary_v3::{
-        DIRECT_ORDINARY_COMMON_IDENTITIES_V3, DIRECT_ORDINARY_COMMON_SCALARS_V3,
-        DIRECT_ORDINARY_ITEM_IDENTITY_STRIDE_V3, DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3,
-        DIRECT_ORDINARY_TRANSITION_BYTES_V3, encode_direct_ordinary_transition_v3,
+        encode_direct_ordinary_transition_v3, DIRECT_ORDINARY_COMMON_IDENTITIES_V3,
+        DIRECT_ORDINARY_COMMON_SCALARS_V3, DIRECT_ORDINARY_ITEM_IDENTITY_STRIDE_V3,
+        DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3, DIRECT_ORDINARY_TRANSITION_BYTES_V3,
     },
     state_artifacts_v3::{
-        DIRECT_INLINE_ORDINARY_LIFECYCLE_BYTES_V4,
         encode_direct_inline_ordinary_lifecycle_v4_atomic,
+        DIRECT_INLINE_ORDINARY_LIFECYCLE_BYTES_V4,
     },
     successor::{
         DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, DIRECT_ROOT_SCHEMA_ID_V1, DIRECT_ROOT_STATE_BYTES_V1,
@@ -55,7 +60,7 @@ use crate::{
 /// Exact interpreted ExecutionStrategy record width.
 pub const DIRECT_INLINE_ORDINARY_STRATEGY_BYTES_V3: usize = EXECUTION_STRATEGY_PROGRAM_BYTES_V2;
 /// Exact CapabilityProgram descriptor width.
-pub const DIRECT_INLINE_ORDINARY_DESCRIPTOR_BYTES_V3: usize = CAPABILITY_PROGRAM_V3_BYTES;
+pub const DIRECT_INLINE_ORDINARY_DESCRIPTOR_BYTES_V4: usize = CAPABILITY_PROGRAM_V4_BYTES;
 /// SHA-256 identity of the exact runtime-polymorphic AccountProfile11.
 pub const DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_ID_V3: [u8; 32] = [
     0x7f, 0x00, 0x01, 0xa9, 0xb6, 0xeb, 0xf2, 0xa3, 0x95, 0xc6, 0xae, 0xf9, 0x2a, 0xed, 0x04, 0x66,
@@ -74,7 +79,7 @@ pub const DIRECT_INLINE_ORDINARY_EFFECT_ID_V4: [u8; 32] = [
 
 /// Chain-selected facts that are not owned by the Direct artifact family.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DirectInlineOrdinaryHotBundleInputV3<'a> {
+pub struct DirectInlineOrdinaryHotBundleInputV4<'a> {
     /// Exact logical account observations used to validate runtime-width rules.
     pub account_profile: DirectInlineOrdinaryAccountProfileInputV3<'a>,
     /// Manifest-selected physical capacity profile content identity.
@@ -83,7 +88,7 @@ pub struct DirectInlineOrdinaryHotBundleInputV3<'a> {
 
 /// Every finalized record selected by one ordinary CapabilityProgram.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DirectInlineOrdinaryHotBundleV3 {
+pub struct DirectInlineOrdinaryHotBundleV4 {
     /// Runtime-width AccountProfile11 bytes.
     pub account_profile: [u8; DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3],
     /// Maker AuthenticateOrCreate LifecycleV4 bytes.
@@ -97,12 +102,12 @@ pub struct DirectInlineOrdinaryHotBundleV3 {
     /// Ordered Sparse Claims plus delegated Custody EffectV4 bytes.
     pub effect: [u8; DIRECT_INLINE_ORDINARY_EFFECT_BYTES_V4],
     /// Descriptor joining every artifact above.
-    pub descriptor: [u8; DIRECT_INLINE_ORDINARY_DESCRIPTOR_BYTES_V3],
+    pub descriptor: [u8; DIRECT_INLINE_ORDINARY_DESCRIPTOR_BYTES_V4],
 }
 
 /// Stable bundle emission or hostile-validation refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DirectInlineOrdinaryHotBundleErrorV3 {
+pub enum DirectInlineOrdinaryHotBundleErrorV4 {
     /// A nonzero finalized content identity or fixed width was invalid.
     Content,
     /// AccountProfile construction or decoding refused.
@@ -124,9 +129,9 @@ pub enum DirectInlineOrdinaryHotBundleErrorV3 {
 }
 
 /// Emit and independently hostile-check one complete ordinary Hot bundle.
-pub fn build_direct_inline_ordinary_hot_bundle_v3(
-    input: DirectInlineOrdinaryHotBundleInputV3<'_>,
-) -> Result<DirectInlineOrdinaryHotBundleV3, DirectInlineOrdinaryHotBundleErrorV3> {
+pub fn build_direct_inline_ordinary_hot_bundle_v4(
+    input: DirectInlineOrdinaryHotBundleInputV4<'_>,
+) -> Result<DirectInlineOrdinaryHotBundleV4, DirectInlineOrdinaryHotBundleErrorV4> {
     let mut account_scratch = [0_u8; DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3];
     let mut account_profile = [0_u8; DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3];
     encode_direct_inline_ordinary_account_profile_v3_atomic(
@@ -134,7 +139,7 @@ pub fn build_direct_inline_ordinary_hot_bundle_v3(
         &mut account_scratch,
         &mut account_profile,
     )
-    .map_err(|_| DirectInlineOrdinaryHotBundleErrorV3::AccountProfile)?;
+    .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::AccountProfile)?;
 
     let mut lifecycle_scratch = [0_u8; DIRECT_INLINE_ORDINARY_LIFECYCLE_BYTES_V4];
     let mut lifecycle_policy = [0_u8; DIRECT_INLINE_ORDINARY_LIFECYCLE_BYTES_V4];
@@ -142,7 +147,7 @@ pub fn build_direct_inline_ordinary_hot_bundle_v3(
         &mut lifecycle_scratch,
         &mut lifecycle_policy,
     )
-    .map_err(|_| DirectInlineOrdinaryHotBundleErrorV3::Lifecycle)?;
+    .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Lifecycle)?;
 
     let mut request_v1_scratch = [0_u8; DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_V1_BYTES_V3];
     let mut request_v1 = [0_u8; DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_V1_BYTES_V3];
@@ -154,38 +159,46 @@ pub fn build_direct_inline_ordinary_hot_bundle_v3(
         &mut request_v2_scratch,
         &mut request_profile,
     )
-    .map_err(|_| DirectInlineOrdinaryHotBundleErrorV3::RequestProfile)?;
+    .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::RequestProfile)?;
 
     let mut transition_scratch = [0_u8; DIRECT_ORDINARY_TRANSITION_BYTES_V3];
     let mut transition = [0_u8; DIRECT_ORDINARY_TRANSITION_BYTES_V3];
     encode_direct_ordinary_transition_v3(&mut transition_scratch, &mut transition)
-        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV3::Transition)?;
+        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Transition)?;
     let strategy = direct_inline_ordinary_strategy_v3()
-        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV3::Strategy)?;
+        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Strategy)?;
 
     let mut effect_scratch = [0_u8; DIRECT_INLINE_ORDINARY_EFFECT_BYTES_V4];
     let mut effect = [0_u8; DIRECT_INLINE_ORDINARY_EFFECT_BYTES_V4];
     encode_direct_inline_ordinary_effect_v4_atomic(&mut effect_scratch, &mut effect)
-        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV3::Effect)?;
+        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Effect)?;
 
-    let descriptor_value = CapabilityProgramV3::new(
+    let account_id = digest(&account_profile);
+    let lifecycle_id = digest(&lifecycle_policy);
+    let request_id = digest(&request_profile);
+    let transition_id = digest(&transition);
+    let strategy_id = digest(&strategy);
+    let effect_id = digest(&effect);
+    let descriptor_value = CapabilityProgramV4::new(
         content(DIRECT_SUCCESSOR_KIND_ID_V3)?,
         content(DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1)?,
         content(DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3)?,
         content(DIRECT_ROOT_SCHEMA_ID_V1)?,
-        content(digest(&account_profile))?,
-        content(digest(&lifecycle_policy))?,
+        content(lifecycle_id)?,
         content(input.capacity_profile)?,
-        content(digest(&effect))?,
-        content(REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID)?,
-        content(digest(&request_profile))?,
-        content(EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2)?,
-        content(digest(&strategy))?,
+        CapabilityArtifactsV4 {
+            account_profile: artifact(ACCOUNT_PROFILE_SCHEMA_ID_V2, account_id)?,
+            request_profile: artifact(REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID, request_id)?,
+            lifecycle: artifact(LIFECYCLE_SCHEMA_ID_V4, lifecycle_id)?,
+            strategy: artifact(EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, strategy_id)?,
+            transition: artifact(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID, transition_id)?,
+            effect: artifact(EFFECT_SCHEMA_ID_V4, effect_id)?,
+        },
         u32::try_from(DIRECT_ROOT_STATE_BYTES_V1)
-            .map_err(|_| DirectInlineOrdinaryHotBundleErrorV3::Geometry)?,
+            .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Geometry)?,
     )
-    .map_err(|_| DirectInlineOrdinaryHotBundleErrorV3::Descriptor)?;
-    let bundle = DirectInlineOrdinaryHotBundleV3 {
+    .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Descriptor)?;
+    let bundle = DirectInlineOrdinaryHotBundleV4 {
         account_profile,
         lifecycle_policy,
         request_profile,
@@ -194,81 +207,95 @@ pub fn build_direct_inline_ordinary_hot_bundle_v3(
         effect,
         descriptor: descriptor_value.encode(),
     };
-    validate_direct_inline_ordinary_hot_bundle_v3(&bundle, input.capacity_profile)?;
+    validate_direct_inline_ordinary_hot_bundle_v4(&bundle, input.capacity_profile)?;
     Ok(bundle)
 }
 
 /// Hostile-decode and join every artifact selected by one ordinary descriptor.
-pub fn validate_direct_inline_ordinary_hot_bundle_v3(
-    bundle: &DirectInlineOrdinaryHotBundleV3,
+pub fn validate_direct_inline_ordinary_hot_bundle_v4(
+    bundle: &DirectInlineOrdinaryHotBundleV4,
     capacity_profile: [u8; 32],
-) -> Result<(), DirectInlineOrdinaryHotBundleErrorV3> {
-    let descriptor = CapabilityProgramV3::decode(&bundle.descriptor)
-        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV3::Descriptor)?;
+) -> Result<(), DirectInlineOrdinaryHotBundleErrorV4> {
+    let descriptor = CapabilityProgramV4::decode(&bundle.descriptor)
+        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Descriptor)?;
     if descriptor.kind().to_bytes() != DIRECT_SUCCESSOR_KIND_ID_V3
         || descriptor.config_schema().to_bytes() != DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1
         || descriptor.request_schema().to_bytes() != DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3
         || descriptor.root_schema().to_bytes() != DIRECT_ROOT_SCHEMA_ID_V1
-        || descriptor.account_profile().to_bytes() != digest(&bundle.account_profile)
         || descriptor.derivation_policy().to_bytes() != digest(&bundle.lifecycle_policy)
         || descriptor.capacity_profile().to_bytes() != capacity_profile
-        || descriptor.effect_program().to_bytes() != digest(&bundle.effect)
-        || descriptor.request_profile_schema().to_bytes() != REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID
-        || descriptor.request_profile_program().to_bytes() != digest(&bundle.request_profile)
-        || descriptor.transition_schema().to_bytes() != EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2
-        || descriptor.transition_program().to_bytes() != digest(&bundle.strategy)
+        || descriptor.account_profile()
+            != artifact(
+                ACCOUNT_PROFILE_SCHEMA_ID_V2,
+                digest(&bundle.account_profile),
+            )?
+        || descriptor.request_profile()
+            != artifact(
+                REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID,
+                digest(&bundle.request_profile),
+            )?
+        || descriptor.lifecycle()
+            != artifact(LIFECYCLE_SCHEMA_ID_V4, digest(&bundle.lifecycle_policy))?
+        || descriptor.strategy()
+            != artifact(
+                EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
+                digest(&bundle.strategy),
+            )?
+        || descriptor.transition()
+            != artifact(
+                dclutch_transition_vm::v3::SCHEMA_RELEASE_ID,
+                digest(&bundle.transition),
+            )?
+        || descriptor.effect() != artifact(EFFECT_SCHEMA_ID_V4, digest(&bundle.effect))?
         || descriptor.root_state_bytes()
             != u32::try_from(DIRECT_ROOT_STATE_BYTES_V1)
-                .map_err(|_| DirectInlineOrdinaryHotBundleErrorV3::Geometry)?
+                .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Geometry)?
     {
-        return Err(DirectInlineOrdinaryHotBundleErrorV3::Descriptor);
+        return Err(DirectInlineOrdinaryHotBundleErrorV4::Descriptor);
     }
     let account = AccountProfileV2::decode(&bundle.account_profile)
-        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV3::AccountProfile)?;
+        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::AccountProfile)?;
     let lifecycle_id = digest(&bundle.lifecycle_policy);
     let lifecycle = StateLifecyclePolicyV4::decode_selected(
-        descriptor.derivation_policy().to_bytes(),
+        descriptor.lifecycle().program().to_bytes(),
         lifecycle_id,
         &bundle.lifecycle_policy,
     )
-    .map_err(|_| DirectInlineOrdinaryHotBundleErrorV3::Lifecycle)?;
+    .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Lifecycle)?;
     lifecycle
         .validate_account_profile(account)
-        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV3::Lifecycle)?;
+        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Lifecycle)?;
     if lifecycle
         .action_plan_count(DirectExecutionActionV3::InlineOrdinary as u32)
-        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV3::Lifecycle)?
+        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Lifecycle)?
         != 2
     {
-        return Err(DirectInlineOrdinaryHotBundleErrorV3::Lifecycle);
+        return Err(DirectInlineOrdinaryHotBundleErrorV4::Lifecycle);
     }
     let request_id = digest(&bundle.request_profile);
     let request = RequestProfileV2::decode_selected(
-        descriptor.request_profile_program().to_bytes(),
+        descriptor.request_profile().program().to_bytes(),
         request_id,
         &bundle.request_profile,
     )
-    .map_err(|_| DirectInlineOrdinaryHotBundleErrorV3::RequestProfile)?;
+    .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::RequestProfile)?;
     let transition = TransitionProgramV3::decode(&bundle.transition)
-        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV3::Transition)?;
+        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Transition)?;
     let strategy = ExecutionStrategyProgramV2::decode(&bundle.strategy)
-        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV3::Strategy)?;
-    strategy
-        .validate_descriptor_selection(descriptor.transition_program(), descriptor)
-        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV3::Strategy)?;
+        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Strategy)?;
     if strategy.disposition() != StrategyDispositionV2::Interpreted
-        || strategy.transition_schema().to_bytes() != dclutch_transition_vm::v3::SCHEMA_RELEASE_ID
-        || strategy.transition_program().to_bytes() != digest(&bundle.transition)
+        || strategy.transition_schema() != descriptor.transition().schema()
+        || strategy.transition_program() != descriptor.transition().program()
     {
-        return Err(DirectInlineOrdinaryHotBundleErrorV3::Strategy);
+        return Err(DirectInlineOrdinaryHotBundleErrorV4::Strategy);
     }
     let effect_id = digest(&bundle.effect);
     let effect = EffectProgramV3::decode_selected(
-        descriptor.effect_program().to_bytes(),
+        descriptor.effect().program().to_bytes(),
         effect_id,
         &bundle.effect,
     )
-    .map_err(|_| DirectInlineOrdinaryHotBundleErrorV3::Effect)?;
+    .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Effect)?;
     validate_geometry(account, request, transition, effect)
 }
 
@@ -277,13 +304,13 @@ fn validate_geometry(
     request: RequestProfileV2<'_>,
     transition: TransitionProgramV3<'_>,
     effect: EffectProgramV3<'_>,
-) -> Result<(), DirectInlineOrdinaryHotBundleErrorV3> {
+) -> Result<(), DirectInlineOrdinaryHotBundleErrorV4> {
     let request = request.request_profile();
     let fixed_accounts = DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3;
     let common_scalars = u16::try_from(DIRECT_ORDINARY_COMMON_SCALARS_V3)
-        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV3::Geometry)?;
+        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Geometry)?;
     let common_identities = u16::try_from(DIRECT_ORDINARY_COMMON_IDENTITIES_V3)
-        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV3::Geometry)?;
+        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Geometry)?;
     if account.fixed_account_count() != fixed_accounts
         || account.item_account_stride() != 0
         || account.common_scalar_count() != common_scalars
@@ -305,13 +332,23 @@ fn validate_geometry(
         || effect.common_identity_count() != common_identities
         || effect.item_identity_stride() != DIRECT_ORDINARY_ITEM_IDENTITY_STRIDE_V3
     {
-        return Err(DirectInlineOrdinaryHotBundleErrorV3::Geometry);
+        return Err(DirectInlineOrdinaryHotBundleErrorV4::Geometry);
     }
     Ok(())
 }
 
-fn content(bytes: [u8; 32]) -> Result<ContentId, DirectInlineOrdinaryHotBundleErrorV3> {
-    ContentId::new(bytes).map_err(|_| DirectInlineOrdinaryHotBundleErrorV3::Content)
+fn content(bytes: [u8; 32]) -> Result<ContentId, DirectInlineOrdinaryHotBundleErrorV4> {
+    ContentId::new(bytes).map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Content)
+}
+
+fn artifact(
+    schema: [u8; 32],
+    program: [u8; 32],
+) -> Result<ArtifactReferenceV4, DirectInlineOrdinaryHotBundleErrorV4> {
+    Ok(ArtifactReferenceV4::new(
+        content(schema)?,
+        content(program)?,
+    ))
 }
 
 fn digest(bytes: &[u8]) -> [u8; 32] {
@@ -435,9 +472,9 @@ mod tests {
         output
     }
 
-    fn build(basis_bytes: u32) -> DirectInlineOrdinaryHotBundleV3 {
+    fn build(basis_bytes: u32) -> DirectInlineOrdinaryHotBundleV4 {
         let lengths = logical_lengths(basis_bytes);
-        build_direct_inline_ordinary_hot_bundle_v3(DirectInlineOrdinaryHotBundleInputV3 {
+        build_direct_inline_ordinary_hot_bundle_v4(DirectInlineOrdinaryHotBundleInputV4 {
             account_profile: DirectInlineOrdinaryAccountProfileInputV3 {
                 logical_data_lengths: &lengths,
             },
@@ -463,21 +500,21 @@ mod tests {
                 DIRECT_INLINE_ORDINARY_EFFECT_ID_V4,
             ]
         );
-        validate_direct_inline_ordinary_hot_bundle_v3(&categorical, [0x44; 32]).expect("validate");
+        validate_direct_inline_ordinary_hot_bundle_v4(&categorical, [0x44; 32]).expect("validate");
     }
 
     #[test]
     fn capacity_or_effect_substitution_refuses_exactly() {
         let bundle = build(256);
         assert_eq!(
-            validate_direct_inline_ordinary_hot_bundle_v3(&bundle, [0x45; 32]),
-            Err(DirectInlineOrdinaryHotBundleErrorV3::Descriptor)
+            validate_direct_inline_ordinary_hot_bundle_v4(&bundle, [0x45; 32]),
+            Err(DirectInlineOrdinaryHotBundleErrorV4::Descriptor)
         );
         let mut hostile = bundle;
         *hostile.effect.get_mut(128).expect("effect byte") ^= 1;
         assert_eq!(
-            validate_direct_inline_ordinary_hot_bundle_v3(&hostile, [0x44; 32]),
-            Err(DirectInlineOrdinaryHotBundleErrorV3::Descriptor)
+            validate_direct_inline_ordinary_hot_bundle_v4(&hostile, [0x44; 32]),
+            Err(DirectInlineOrdinaryHotBundleErrorV4::Descriptor)
         );
     }
 }

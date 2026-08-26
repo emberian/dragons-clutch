@@ -12,14 +12,14 @@ mod generated_registered_controller;
 #[rustfmt::skip]
 #[allow(missing_docs)]
 mod generated_intent_v2;
-pub mod artifacts_v3;
+pub mod artifacts_v4;
 pub mod execution_v3;
 pub mod intent_v2;
 #[cfg(not(target_os = "solana"))]
 pub mod ordinary_account_artifacts_v3;
 pub mod ordinary_artifacts_v3;
 #[cfg(not(target_os = "solana"))]
-pub mod ordinary_bundle_v3;
+pub mod ordinary_bundle_v4;
 #[cfg(not(target_os = "solana"))]
 pub mod ordinary_effect_artifacts_v3;
 pub mod ordinary_v3;
@@ -839,7 +839,7 @@ mod tests {
     extern crate std;
 
     use super::*;
-    use dclutch_transition_vm::{Registers, execute};
+    use dclutch_transition_vm::{execute, Registers};
     use std::{string::String, vec::Vec};
 
     const LEAN_VECTORS: &str =
@@ -999,9 +999,7 @@ mod tests {
         );
         assert_eq!(
             registered_claim_fill_instruction(instruction.fill),
-            Ok([
-                b'D', b'C', b'R', b'F', 1, 0, 0, 0, 0xd0, 0x07, 0, 0, 0, 0, 0, 0,
-            ])
+            Ok([b'D', b'C', b'R', b'F', 1, 0, 0, 0, 0xd0, 0x07, 0, 0, 0, 0, 0, 0,])
         );
     }
 

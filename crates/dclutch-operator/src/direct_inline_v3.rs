@@ -6,29 +6,33 @@
 //! RPC, signs maker material, signs a transaction, or submits one.
 
 use crate::{
-    Finality, Observation, ObservedAccount,
     product_graph_observation_v3::{
-        AuthenticatedProductGraphObservationV3, FinalizedProductGraphAccountsV3,
-        authenticate_product_graph_observation_v3,
+        authenticate_product_graph_observation_v3, AuthenticatedProductGraphObservationV3,
+        FinalizedProductGraphAccountsV3,
     },
+    Finality, Observation, ObservedAccount,
 };
 use dclutch_account_profile_contract::v2::AccountPrestateV2;
-use dclutch_capability_program_contract::hot_v3::{
-    HOT_CONFIG_RAW_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
-    HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3,
-    HOT_PORTFOLIO_RAW_ACCOUNT_V3, HOT_PRODUCT_RAW_ACCOUNT_V3, HOT_REGISTRY_PROGRAM_ACCOUNT_V3,
-    HOT_RENT_SYSVAR_ACCOUNT_V3, HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3,
-    HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3, HotExecutionEnvelopeV3,
+use dclutch_capability_program_contract::{
+    hot_v3::{
+        HotExecutionEnvelopeV3, HOT_CONFIG_RAW_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3,
+        HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
+        HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3, HOT_PORTFOLIO_RAW_ACCOUNT_V3,
+        HOT_PRODUCT_RAW_ACCOUNT_V3, HOT_REGISTRY_PROGRAM_ACCOUNT_V3, HOT_RENT_SYSVAR_ACCOUNT_V3,
+        HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3,
+        HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
+    },
+    v4::SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
 };
 use dclutch_direct_codec::{
-    artifacts_v3::{
-        DirectArtifactBytesV3, DirectArtifactSelectionV3, authenticate_direct_artifacts_v3,
+    artifacts_v4::{
+        authenticate_direct_artifacts_v4, DirectArtifactBytesV4, DirectArtifactSelectionV4,
     },
     execution_v3::{
+        encode_header_v3, DirectExecutionActionV3, DirectExecutionRequestV3,
         DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3, DIRECT_SIGNED_PARTICIPANT_BYTES_V3,
-        DirectExecutionActionV3, DirectExecutionRequestV3, encode_header_v3,
     },
-    intent_v2::{COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2, CompactIntentV2},
+    intent_v2::{CompactIntentV2, COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2},
 };
 use solana_address_lookup_table_interface::{
     program as lookup_table_program, state::AddressLookupTable,
@@ -41,7 +45,7 @@ use solana_program::{
 };
 use solana_sdk_ids::{ed25519_program, sysvar};
 
-use crate::versioned::{VersionedMessagePlanV0, compile_v0_message};
+use crate::versioned::{compile_v0_message, VersionedMessagePlanV0};
 
 /// Exact Direct V3 InlineOrdinary family-request width.
 pub const DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3: usize =
@@ -150,7 +154,9 @@ pub struct DirectInlineHotReportV3 {
     pub hot_instruction_data: Vec<u8>,
     /// Same finalized observation selecting every physical account.
     pub observation: Observation,
-    /// Action-selected CapabilityProgramV3 content digest.
+    /// Schema of the action-selected CapabilityProgramV4 descriptor.
+    pub selected_program_schema: [u8; 32],
+    /// Action-selected CapabilityProgramV4 content digest.
     pub selected_program: [u8; 32],
     /// Product-authenticated runtime outcome count.
     pub outcome_count: u32,
@@ -175,7 +181,9 @@ pub struct DirectInlineHotTransactionPlanV3 {
     pub required_signers: Vec<Pubkey>,
     /// Product-authenticated runtime outcome count.
     pub outcome_count: u32,
-    /// Action-selected CapabilityProgramV3 content digest.
+    /// Schema of the action-selected CapabilityProgramV4 descriptor.
+    pub selected_program_schema: [u8; 32],
+    /// Action-selected CapabilityProgramV4 content digest.
     pub selected_program: [u8; 32],
     /// Exact immutable Trading ArtifactRelease identity.
     pub trading_artifact_release: [u8; 32],
@@ -280,8 +288,8 @@ pub fn compile_direct_inline_request_v3(
 #[allow(clippy::too_many_arguments)]
 pub fn build_direct_inline_hot_v3(
     state: &DirectInlineHotStateV3,
-    artifact_selection: DirectArtifactSelectionV3,
-    artifact_bytes: DirectArtifactBytesV3<'_>,
+    artifact_selection: DirectArtifactSelectionV4,
+    artifact_bytes: DirectArtifactBytesV4<'_>,
     seller: SignedDirectIntentV3,
     buyer: SignedDirectIntentV3,
     fill: u64,
@@ -297,7 +305,7 @@ pub fn build_direct_inline_hot_v3(
     let observation = validate_frame(state, checked)?;
     let product = authenticate_product_graph(state)?;
     let request = compile_direct_inline_request_v3(seller, buyer, fill, execution_price)?;
-    let bundle = authenticate_direct_artifacts_v3(
+    let bundle = authenticate_direct_artifacts_v4(
         artifact_selection,
         artifact_bytes,
         &request,
@@ -372,6 +380,7 @@ pub fn build_direct_inline_hot_v3(
         instructions: [native, trading],
         hot_instruction_data,
         observation,
+        selected_program_schema: CAPABILITY_PROGRAM_SCHEMA_ID_V4,
         selected_program: hash(artifact_bytes.descriptor).to_bytes(),
         outcome_count: product.outcome_count,
         product_record: product.product_record,
@@ -392,6 +401,7 @@ pub fn compile_direct_inline_hot_v0(
     if payer == Pubkey::default()
         || report.observation.finality != Finality::Finalized
         || report.observation.slot == 0
+        || report.selected_program_schema != CAPABILITY_PROGRAM_SCHEMA_ID_V4
         || report.trading_artifact_release == [0; 32]
         || report.checked_manifest_digest == [0; 32]
         || lookup_table.observation != report.observation
@@ -427,6 +437,7 @@ pub fn compile_direct_inline_hot_v0(
         message,
         required_signers,
         outcome_count: report.outcome_count,
+        selected_program_schema: report.selected_program_schema,
         selected_program: report.selected_program,
         trading_artifact_release: report.trading_artifact_release,
         checked_manifest_digest: report.checked_manifest_digest,
@@ -573,7 +584,7 @@ fn authenticate_product_graph(
 
 fn validate_runtime_profile(
     state: &DirectInlineHotStateV3,
-    bundle: dclutch_direct_codec::artifacts_v3::DirectArtifactBundleV3<'_>,
+    bundle: dclutch_direct_codec::artifacts_v4::DirectArtifactBundleV4<'_>,
     outcome_count: u32,
 ) -> Result<(), Error> {
     let profile = bundle.account_profile;
@@ -810,6 +821,7 @@ mod tests {
             ],
             hot_instruction_data: vec![7; data_bytes],
             observation: observation(),
+            selected_program_schema: CAPABILITY_PROGRAM_SCHEMA_ID_V4,
             selected_program: [8; 32],
             outcome_count: 258,
             product_record: [9; 32],
@@ -1024,6 +1036,10 @@ mod tests {
         assert!(plan.message.loaded_addresses >= 90);
         assert!(plan.message.wire_bytes <= crate::versioned::PACKET_DATA_BYTES);
         assert_eq!(plan.outcome_count, 258);
+        assert_eq!(
+            plan.selected_program_schema,
+            CAPABILITY_PROGRAM_SCHEMA_ID_V4
+        );
         assert_eq!(plan.selected_program, [8; 32]);
     }
 
@@ -1055,17 +1071,30 @@ mod tests {
         );
 
         let oversized = transaction_report(2_000);
-        let lookup = lookup(&oversized, payer);
+        let oversized_lookup = lookup(&oversized, payer);
         assert_eq!(
             compile_direct_inline_hot_v0(
                 &oversized,
                 payer,
                 Hash::new_from_array([16; 32]),
-                &lookup,
+                &oversized_lookup,
             ),
             Err(DirectInlineTransactionErrorV3::Routing(
                 crate::versioned::Error::PacketTooLarge
             ))
+        );
+
+        let mut wrong_schema = report;
+        wrong_schema.selected_program_schema[0] ^= 1;
+        let lookup = lookup(&wrong_schema, payer);
+        assert_eq!(
+            compile_direct_inline_hot_v0(
+                &wrong_schema,
+                payer,
+                Hash::new_from_array([16; 32]),
+                &lookup,
+            ),
+            Err(DirectInlineTransactionErrorV3::Snapshot)
         );
     }
 }

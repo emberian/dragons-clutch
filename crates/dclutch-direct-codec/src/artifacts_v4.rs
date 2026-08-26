@@ -1,7 +1,7 @@
-//! Exact finalized-artifact joins for data-driven Direct execution.
+//! Exact schema-bound finalized-artifact joins for data-driven Direct execution.
 //!
-//! A `CapabilityProgramSetV1` minimally selects one full
-//! `CapabilityProgramV3` by the action in [`DirectExecutionRequestV3`]. This
+//! A `CapabilityProgramSetV2` minimally selects one schema-bound
+//! `CapabilityProgramV4` by the action in [`DirectExecutionRequestV3`]. This
 //! module then joins every independently finalized artifact by its SHA-256
 //! content identity, hostile-decodes all four interpreters, and requires one
 //! coherent runtime-width register/account geometry. The descriptor selects an
@@ -11,42 +11,47 @@
 //! Transition and Effect programs and commits once after fixed-role receipts.
 
 use dclutch_account_profile_contract::{
-    lifecycle_v3::StateLifecyclePolicyV4, v2::AccountProfileV2,
+    lifecycle_v3::{StateLifecyclePolicyV4, SUCCESSOR_SCHEMA_RELEASE_ID as LIFECYCLE_SCHEMA_ID_V4},
+    v2::{AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2},
 };
 use dclutch_capability_program_contract::{
     hot_v3::HOT_FAMILY_REQUEST_OFFSET_V3,
-    set_v1::{CapabilityProgramSetV1, SelectorWidthV1},
-    v3::CapabilityProgramV3,
+    set_v2::{CapabilityProgramSetV2, SelectorWidthV2},
+    v4::{CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4},
 };
-use dclutch_effect_kernel::{v2::FixedRole, v3::ProgramV3 as EffectProgramV3};
+use dclutch_core_contract::ContentId;
+use dclutch_effect_kernel::{
+    v2::FixedRole,
+    v3::{ProgramV3 as EffectProgramV3, SCHEMA_RELEASE_ID as EFFECT_SCHEMA_ID_V4},
+};
 use dclutch_execution_strategy_contract::v2::{
-    EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyProgramV2, StrategyDispositionV2,
+    ExecutionStrategyProgramV2, StrategyDispositionV2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
 };
 use dclutch_request_profile_contract::{
+    v2::{RequestProfileV2, REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID},
     RequestProfileV1,
-    v2::{REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID, RequestProfileV2},
 };
 use dclutch_transition_vm::v3::ProgramV3 as TransitionProgramV3;
 use sha2::{Digest, Sha256};
 
 use crate::{
     execution_v3::{
-        DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3, DIRECT_EXECUTION_REQUEST_SELECTOR_OFFSET_V3,
-        DIRECT_SUCCESSOR_KIND_ID_V3, DirectExecutionActionV3, DirectExecutionRequestV3,
+        DirectExecutionActionV3, DirectExecutionRequestV3, DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3,
+        DIRECT_EXECUTION_REQUEST_SELECTOR_OFFSET_V3, DIRECT_SUCCESSOR_KIND_ID_V3,
     },
     ordinary_v3::{IDENTITY_BUYER_NATIVE_SIGNER_V3, IDENTITY_SELLER_NATIVE_SIGNER_V3},
     successor::{
-        DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, DIRECT_ROOT_SCHEMA_ID_V1, DIRECT_ROOT_STATE_BYTES_V1,
-        DirectExecutionConfigV1,
+        DirectExecutionConfigV1, DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, DIRECT_ROOT_SCHEMA_ID_V1,
+        DIRECT_ROOT_STATE_BYTES_V1,
     },
 };
 
 /// Exact descriptor-selected raw finalized artifacts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DirectArtifactBytesV3<'a> {
+pub struct DirectArtifactBytesV4<'a> {
     /// Canonical action-to-program set bytes.
     pub program_set: &'a [u8],
-    /// Selected fixed CapabilityProgramV3 descriptor bytes.
+    /// Selected fixed CapabilityProgramV4 descriptor bytes.
     pub descriptor: &'a [u8],
     /// Immutable Direct execution config bytes.
     pub config: &'a [u8],
@@ -66,7 +71,7 @@ pub struct DirectArtifactBytesV3<'a> {
 
 /// External immutable content selections already authenticated from records.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DirectArtifactSelectionV3 {
+pub struct DirectArtifactSelectionV4 {
     /// Capability release selected by the manifest; this is the ProgramSet ID.
     pub program_set: [u8; 32],
     /// Config content selected by the manifest entry.
@@ -75,7 +80,7 @@ pub struct DirectArtifactSelectionV3 {
 
 /// Stable artifact-selection or geometry refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DirectArtifactErrorV3 {
+pub enum DirectArtifactErrorV4 {
     /// A selected content identity was zero or its raw bytes hashed differently.
     ContentIdentity,
     /// ProgramSet selector geometry was not offset-12 canonical `u32` LE.
@@ -104,16 +109,16 @@ pub enum DirectArtifactErrorV3 {
     Geometry,
 }
 
-/// Result alias for Direct V3 artifact joins.
-pub type Result<T> = core::result::Result<T, DirectArtifactErrorV3>;
+/// Result alias for schema-bound Direct V4 artifact joins.
+pub type Result<T> = core::result::Result<T, DirectArtifactErrorV4>;
 
 /// Fully joined borrowed Direct artifact bundle.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DirectArtifactBundleV3<'a> {
+pub struct DirectArtifactBundleV4<'a> {
     /// Selected action from the exact family request.
     pub action: DirectExecutionActionV3,
     /// Selected full descriptor.
-    pub descriptor: CapabilityProgramV3,
+    pub descriptor: CapabilityProgramV4,
     /// Immutable price and fee policy.
     pub config: DirectExecutionConfigV1,
     /// Exact runtime-tail account interpreter.
@@ -155,44 +160,51 @@ impl<'a> DirectRequestProfileV3<'a> {
 }
 
 /// Authenticate and join one complete action bundle.
-pub fn authenticate_direct_artifacts_v3<'a>(
-    selection: DirectArtifactSelectionV3,
-    artifacts: DirectArtifactBytesV3<'a>,
+pub fn authenticate_direct_artifacts_v4<'a>(
+    selection: DirectArtifactSelectionV4,
+    artifacts: DirectArtifactBytesV4<'a>,
     request: &'a [u8],
     tail_count: u32,
-) -> Result<DirectArtifactBundleV3<'a>> {
+) -> Result<DirectArtifactBundleV4<'a>> {
     require_selected(selection.program_set, artifacts.program_set)?;
-    let set = CapabilityProgramSetV1::decode_selected(
+    let set = CapabilityProgramSetV2::decode_selected(
         selection.program_set,
         digest(artifacts.program_set),
         artifacts.program_set,
     )
-    .map_err(|_| DirectArtifactErrorV3::ProgramSet)?;
+    .map_err(|_| DirectArtifactErrorV4::ProgramSet)?;
     if set.selector_offset() != DIRECT_EXECUTION_REQUEST_SELECTOR_OFFSET_V3
-        || set.selector_width() != SelectorWidthV1::U32
+        || set.selector_width() != SelectorWidthV2::U32
     {
-        return Err(DirectArtifactErrorV3::ProgramSet);
+        return Err(DirectArtifactErrorV4::ProgramSet);
     }
     let semantic_request = DirectExecutionRequestV3::decode(request, tail_count)
-        .map_err(|_| DirectArtifactErrorV3::Request)?;
-    let selected_descriptor = set
-        .select(request)
-        .map_err(|_| DirectArtifactErrorV3::ProgramSet)?;
-    if selected_descriptor.to_bytes() != digest(artifacts.descriptor) {
-        return Err(DirectArtifactErrorV3::ContentIdentity);
-    }
-    let descriptor = CapabilityProgramV3::decode(artifacts.descriptor)
-        .map_err(|_| DirectArtifactErrorV3::Descriptor)?;
+        .map_err(|_| DirectArtifactErrorV4::Request)?;
+    let descriptor_id = digest(artifacts.descriptor);
+    set.require_descriptor(
+        request,
+        content(CAPABILITY_PROGRAM_SCHEMA_ID_V4)?,
+        content(descriptor_id)?,
+    )
+    .map_err(|_| DirectArtifactErrorV4::ProgramSet)?;
+    let descriptor = CapabilityProgramV4::decode(artifacts.descriptor)
+        .map_err(|_| DirectArtifactErrorV4::Descriptor)?;
     if descriptor.kind().to_bytes() != DIRECT_SUCCESSOR_KIND_ID_V3
         || descriptor.config_schema().to_bytes() != DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1
         || descriptor.request_schema().to_bytes() != DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3
         || descriptor.root_schema().to_bytes() != DIRECT_ROOT_SCHEMA_ID_V1
         || descriptor.root_state_bytes()
             != u32::try_from(DIRECT_ROOT_STATE_BYTES_V1)
-                .map_err(|_| DirectArtifactErrorV3::Geometry)?
-        || descriptor.transition_schema().to_bytes() != EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2
+                .map_err(|_| DirectArtifactErrorV4::Geometry)?
+        || descriptor.derivation_policy() != descriptor.lifecycle().program()
+        || descriptor.account_profile().schema().to_bytes() != ACCOUNT_PROFILE_SCHEMA_ID_V2
+        || descriptor.lifecycle().schema().to_bytes() != LIFECYCLE_SCHEMA_ID_V4
+        || descriptor.strategy().schema().to_bytes() != EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2
+        || descriptor.transition().schema().to_bytes()
+            != dclutch_transition_vm::v3::SCHEMA_RELEASE_ID
+        || descriptor.effect().schema().to_bytes() != EFFECT_SCHEMA_ID_V4
     {
-        return Err(DirectArtifactErrorV3::Descriptor);
+        return Err(DirectArtifactErrorV4::Descriptor);
     }
 
     require_selected(selection.config, artifacts.config)?;
@@ -201,35 +213,35 @@ pub fn authenticate_direct_artifacts_v3<'a>(
         digest(artifacts.config),
         artifacts.config,
     )
-    .map_err(|_| DirectArtifactErrorV3::Config)?;
+    .map_err(|_| DirectArtifactErrorV4::Config)?;
     require_content(
-        descriptor.account_profile().to_bytes(),
+        descriptor.account_profile().program().to_bytes(),
         artifacts.account_profile,
     )?;
     let account_profile = AccountProfileV2::decode(artifacts.account_profile)
-        .map_err(|_| DirectArtifactErrorV3::AccountProfile)?;
+        .map_err(|_| DirectArtifactErrorV4::AccountProfile)?;
     require_content(
-        descriptor.derivation_policy().to_bytes(),
+        descriptor.lifecycle().program().to_bytes(),
         artifacts.lifecycle_policy,
     )?;
     let lifecycle_policy = StateLifecyclePolicyV4::decode_selected(
-        descriptor.derivation_policy().to_bytes(),
+        descriptor.lifecycle().program().to_bytes(),
         digest(artifacts.lifecycle_policy),
         artifacts.lifecycle_policy,
     )
-    .map_err(|_| DirectArtifactErrorV3::LifecyclePolicy)?;
+    .map_err(|_| DirectArtifactErrorV4::LifecyclePolicy)?;
     lifecycle_policy
         .validate_account_profile(account_profile)
-        .map_err(|_| DirectArtifactErrorV3::LifecyclePolicy)?;
+        .map_err(|_| DirectArtifactErrorV4::LifecyclePolicy)?;
     if lifecycle_policy
         .action_plan_count(semantic_request.action() as u32)
-        .map_err(|_| DirectArtifactErrorV3::LifecyclePolicy)?
+        .map_err(|_| DirectArtifactErrorV4::LifecyclePolicy)?
         == 0
     {
-        return Err(DirectArtifactErrorV3::LifecyclePolicy);
+        return Err(DirectArtifactErrorV4::LifecyclePolicy);
     }
     require_content(
-        descriptor.request_profile_program().to_bytes(),
+        descriptor.request_profile().program().to_bytes(),
         artifacts.request_profile,
     )?;
     let request_profile = decode_request_profile(
@@ -239,33 +251,33 @@ pub fn authenticate_direct_artifacts_v3<'a>(
     )?;
     validate_native_signature_slices(semantic_request.action(), tail_count, request_profile)?;
     require_content(
-        descriptor.transition_program().to_bytes(),
+        descriptor.strategy().program().to_bytes(),
         artifacts.strategy,
     )?;
     let strategy = ExecutionStrategyProgramV2::decode(artifacts.strategy)
-        .map_err(|_| DirectArtifactErrorV3::Strategy)?;
-    strategy
-        .validate_descriptor_selection(descriptor.transition_program(), descriptor)
-        .map_err(|_| DirectArtifactErrorV3::Strategy)?;
-    if strategy.disposition() != StrategyDispositionV2::Interpreted {
-        return Err(DirectArtifactErrorV3::Strategy);
+        .map_err(|_| DirectArtifactErrorV4::Strategy)?;
+    if strategy.disposition() != StrategyDispositionV2::Interpreted
+        || strategy.transition_schema() != descriptor.transition().schema()
+        || strategy.transition_program() != descriptor.transition().program()
+    {
+        return Err(DirectArtifactErrorV4::Strategy);
     }
     require_content(
         strategy.transition_program().to_bytes(),
         artifacts.transition,
     )?;
     if strategy.transition_schema().to_bytes() != dclutch_transition_vm::v3::SCHEMA_RELEASE_ID {
-        return Err(DirectArtifactErrorV3::Transition);
+        return Err(DirectArtifactErrorV4::Transition);
     }
     let transition = TransitionProgramV3::decode(artifacts.transition)
-        .map_err(|_| DirectArtifactErrorV3::Transition)?;
-    require_content(descriptor.effect_program().to_bytes(), artifacts.effect)?;
+        .map_err(|_| DirectArtifactErrorV4::Transition)?;
+    require_content(descriptor.effect().program().to_bytes(), artifacts.effect)?;
     let effect = EffectProgramV3::decode_selected(
-        descriptor.effect_program().to_bytes(),
+        descriptor.effect().program().to_bytes(),
         digest(artifacts.effect),
         artifacts.effect,
     )
-    .map_err(|_| DirectArtifactErrorV3::Effect)?;
+    .map_err(|_| DirectArtifactErrorV4::Effect)?;
 
     validate_geometry(
         semantic_request.action(),
@@ -276,7 +288,7 @@ pub fn authenticate_direct_artifacts_v3<'a>(
         transition,
         effect,
     )?;
-    Ok(DirectArtifactBundleV3 {
+    Ok(DirectArtifactBundleV4 {
         action: semantic_request.action(),
         descriptor,
         config,
@@ -299,34 +311,34 @@ fn validate_native_signature_slices(
     let expected_count = native_signature_count_v3(action, tail_count);
     match profile {
         DirectRequestProfileV3::Unsigned(_) if expected_count == 0 => Ok(()),
-        DirectRequestProfileV3::Unsigned(_) => Err(DirectArtifactErrorV3::NativeSignature),
+        DirectRequestProfileV3::Unsigned(_) => Err(DirectArtifactErrorV4::NativeSignature),
         DirectRequestProfileV3::Signed(profile) => {
             let signatures = profile.native_signatures();
             if signatures.requirement_count() != expected_count {
-                return Err(DirectArtifactErrorV3::NativeSignature);
+                return Err(DirectArtifactErrorV4::NativeSignature);
             }
             let request_data_offset = u32::try_from(HOT_FAMILY_REQUEST_OFFSET_V3)
-                .map_err(|_| DirectArtifactErrorV3::NativeSignature)?;
+                .map_err(|_| DirectArtifactErrorV4::NativeSignature)?;
             let mut participant = 0_u32;
             while participant < expected_count {
                 let expected = native_signature_slice_v3(action, tail_count, participant)
-                    .map_err(|_| DirectArtifactErrorV3::NativeSignature)?;
+                    .map_err(|_| DirectArtifactErrorV4::NativeSignature)?;
                 let absolute = request_data_offset
                     .checked_add(expected.message_offset)
-                    .ok_or(DirectArtifactErrorV3::NativeSignature)?;
+                    .ok_or(DirectArtifactErrorV4::NativeSignature)?;
                 let observed = signatures
                     .requirement(participant)
-                    .map_err(|_| DirectArtifactErrorV3::NativeSignature)?;
+                    .map_err(|_| DirectArtifactErrorV4::NativeSignature)?;
                 if u32::from(observed.message_offset()) != absolute
                     || observed.message_bytes() != expected.message_bytes
                     || observed.destination_identity_register()
                         != native_signature_destination_identity_register_v3(action, participant)?
                 {
-                    return Err(DirectArtifactErrorV3::NativeSignature);
+                    return Err(DirectArtifactErrorV4::NativeSignature);
                 }
                 participant = participant
                     .checked_add(1)
-                    .ok_or(DirectArtifactErrorV3::NativeSignature)?;
+                    .ok_or(DirectArtifactErrorV4::NativeSignature)?;
             }
             Ok(())
         }
@@ -344,34 +356,35 @@ fn native_signature_destination_identity_register_v3(
         // its descriptor can become executable. Refusing unknown destinations
         // prevents a structurally valid signature profile from writing maker
         // evidence into an arbitrary identity register.
-        _ => return Err(DirectArtifactErrorV3::NativeSignature),
+        _ => return Err(DirectArtifactErrorV4::NativeSignature),
     };
-    u32::try_from(register).map_err(|_| DirectArtifactErrorV3::NativeSignature)
+    u32::try_from(register).map_err(|_| DirectArtifactErrorV4::NativeSignature)
 }
 
 fn decode_request_profile<'a>(
     action: DirectExecutionActionV3,
-    descriptor: CapabilityProgramV3,
+    descriptor: CapabilityProgramV4,
     bytes: &'a [u8],
 ) -> Result<DirectRequestProfileV3<'a>> {
-    let selected = descriptor.request_profile_program().to_bytes();
+    let selected = descriptor.request_profile().program().to_bytes();
     let authenticated = digest(bytes);
     if action_requires_native_signature(action) {
-        if descriptor.request_profile_schema().to_bytes() != REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID {
-            return Err(DirectArtifactErrorV3::Descriptor);
+        if descriptor.request_profile().schema().to_bytes() != REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID
+        {
+            return Err(DirectArtifactErrorV4::Descriptor);
         }
         RequestProfileV2::decode_selected(selected, authenticated, bytes)
             .map(DirectRequestProfileV3::Signed)
-            .map_err(|_| DirectArtifactErrorV3::RequestProfile)
+            .map_err(|_| DirectArtifactErrorV4::RequestProfile)
     } else {
-        if descriptor.request_profile_schema().to_bytes()
+        if descriptor.request_profile().schema().to_bytes()
             != dclutch_request_profile_contract::SCHEMA_RELEASE_ID
         {
-            return Err(DirectArtifactErrorV3::Descriptor);
+            return Err(DirectArtifactErrorV4::Descriptor);
         }
         RequestProfileV1::decode_selected(selected, authenticated, bytes)
             .map(DirectRequestProfileV3::Unsigned)
-            .map_err(|_| DirectArtifactErrorV3::RequestProfile)
+            .map_err(|_| DirectArtifactErrorV4::RequestProfile)
     }
 }
 
@@ -400,7 +413,7 @@ fn validate_geometry(
 ) -> Result<()> {
     if request
         .request_bytes(tail_count)
-        .map_err(|_| DirectArtifactErrorV3::RequestProfile)?
+        .map_err(|_| DirectArtifactErrorV4::RequestProfile)?
         != request_bytes
         || account.common_scalar_count() != request.common_scalar_count()
         || account.item_scalar_stride() != request.item_scalar_stride()
@@ -417,7 +430,7 @@ fn validate_geometry(
         || account.fixed_account_count() != effect.fixed_account_count()
         || account.item_account_stride() != effect.item_account_stride()
     {
-        return Err(DirectArtifactErrorV3::Geometry);
+        return Err(DirectArtifactErrorV4::Geometry);
     }
     let complementary = matches!(
         action,
@@ -432,20 +445,20 @@ fn validate_geometry(
         transition.item_scalar_stride(),
         effect.item_account_stride(),
     ) {
-        return Err(DirectArtifactErrorV3::Geometry);
+        return Err(DirectArtifactErrorV4::Geometry);
     }
     let mut route = 0_u16;
     while route < effect.route_count() {
         let role = effect
             .route(route)
-            .map_err(|_| DirectArtifactErrorV3::Effect)?
+            .map_err(|_| DirectArtifactErrorV4::Effect)?
             .role();
         if !matches!(role, FixedRole::Claims | FixedRole::Custody) {
-            return Err(DirectArtifactErrorV3::Effect);
+            return Err(DirectArtifactErrorV4::Effect);
         }
         route = route
             .checked_add(1)
-            .ok_or(DirectArtifactErrorV3::Geometry)?;
+            .ok_or(DirectArtifactErrorV4::Geometry)?;
     }
     Ok(())
 }
@@ -471,7 +484,7 @@ const fn tail_shape_is_admissible(
 
 fn require_selected(selected: [u8; 32], bytes: &[u8]) -> Result<()> {
     if selected == [0; 32] || selected != digest(bytes) {
-        Err(DirectArtifactErrorV3::ContentIdentity)
+        Err(DirectArtifactErrorV4::ContentIdentity)
     } else {
         Ok(())
     }
@@ -479,6 +492,10 @@ fn require_selected(selected: [u8; 32], bytes: &[u8]) -> Result<()> {
 
 fn require_content(selected: [u8; 32], bytes: &[u8]) -> Result<()> {
     require_selected(selected, bytes)
+}
+
+fn content(bytes: [u8; 32]) -> Result<ContentId> {
+    ContentId::new(bytes).map_err(|_| DirectArtifactErrorV4::ContentIdentity)
 }
 
 fn digest(bytes: &[u8]) -> [u8; 32] {
@@ -489,16 +506,25 @@ fn digest(bytes: &[u8]) -> [u8; 32] {
 mod tests {
     extern crate std;
 
-    use dclutch_capability_program_contract::v3::CAPABILITY_PROGRAM_V3_BYTES;
+    use dclutch_capability_program_contract::{
+        set_v2::{
+            encode_program_set_v2, encoded_program_set_bytes_v2, CapabilityDescriptorReferenceV2,
+            CapabilityProgramSetEntryV2, SelectorWidthV2,
+        },
+        v4::{
+            ArtifactReferenceV4, CapabilityArtifactsV4, CapabilityProgramV4,
+            CAPABILITY_PROGRAM_V4_BYTES,
+        },
+    };
     use dclutch_core_contract::ContentId;
     use std::{vec, vec::Vec};
 
     use super::*;
-    use crate::execution_v3::{DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3, encode_header_v3};
+    use crate::execution_v3::{encode_header_v3, DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3};
 
     struct Fixture {
         set: Vec<u8>,
-        descriptor: [u8; CAPABILITY_PROGRAM_V3_BYTES],
+        descriptor: [u8; CAPABILITY_PROGRAM_V4_BYTES],
         config: [u8; crate::successor::DIRECT_EXECUTION_CONFIG_BYTES_V1],
         account: Vec<u8>,
         lifecycle_policy: Vec<u8>,
@@ -510,8 +536,8 @@ mod tests {
     }
 
     impl Fixture {
-        fn artifacts(&self) -> DirectArtifactBytesV3<'_> {
-            DirectArtifactBytesV3 {
+        fn artifacts(&self) -> DirectArtifactBytesV4<'_> {
+            DirectArtifactBytesV4 {
                 program_set: &self.set,
                 descriptor: &self.descriptor,
                 config: &self.config,
@@ -524,8 +550,8 @@ mod tests {
             }
         }
 
-        fn selection(&self) -> DirectArtifactSelectionV3 {
-            DirectArtifactSelectionV3 {
+        fn selection(&self) -> DirectArtifactSelectionV4 {
+            DirectArtifactSelectionV4 {
                 program_set: digest(&self.set),
                 config: digest(&self.config),
             }
@@ -597,12 +623,12 @@ mod tests {
 
     fn lifecycle_policy() -> Vec<u8> {
         use dclutch_account_profile_contract::lifecycle_v3::{
-            ACTION_PLAN_BYTES, HEADER_BYTES, PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SEED_BYTES,
             encode::{
-                LifecycleAccountCoordinateV3, LifecycleGuardInputV3, LifecycleOperationInputV3,
-                LifecyclePlanInputV3, LifecycleRecipeInputV3, LifecycleSeedInputV3,
-                encode_lifecycle_policy_v4_atomic,
+                encode_lifecycle_policy_v4_atomic, LifecycleAccountCoordinateV3,
+                LifecycleGuardInputV3, LifecycleOperationInputV3, LifecyclePlanInputV3,
+                LifecycleRecipeInputV3, LifecycleSeedInputV3,
             },
+            ACTION_PLAN_BYTES, HEADER_BYTES, PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SEED_BYTES,
         };
         let bytes = HEADER_BYTES
             + RECIPE_BYTES
@@ -723,19 +749,21 @@ mod tests {
     }
 
     fn program_set(action: DirectExecutionActionV3, descriptor: [u8; 32]) -> Vec<u8> {
-        let mut output = vec![0_u8; 72];
-        put(&mut output, 0, b"DCLTCPS1");
-        put(&mut output, 8, &1_u16.to_le_bytes());
-        put(&mut output, 10, &1_u16.to_le_bytes());
-        put(
-            &mut output,
-            12,
-            &DIRECT_EXECUTION_REQUEST_SELECTOR_OFFSET_V3.to_le_bytes(),
+        let entry = CapabilityProgramSetEntryV2::new(
+            action as u32,
+            CapabilityDescriptorReferenceV2::new(
+                id(CAPABILITY_PROGRAM_SCHEMA_ID_V4),
+                id(descriptor),
+            ),
         );
-        *output.get_mut(16).expect("selector width") = 4;
-        put(&mut output, 18, &1_u16.to_le_bytes());
-        put(&mut output, 32, &(action as u32).to_le_bytes());
-        put(&mut output, 36, &descriptor);
+        let mut output = vec![0_u8; encoded_program_set_bytes_v2(1).expect("set width")];
+        encode_program_set_v2(
+            DIRECT_EXECUTION_REQUEST_SELECTOR_OFFSET_V3,
+            SelectorWidthV2::U32,
+            &[entry],
+            &mut output,
+        )
+        .expect("set");
         output
     }
 
@@ -766,19 +794,36 @@ mod tests {
         let config = DirectExecutionConfigV1::new(1_000, 25, [7; 32])
             .expect("config")
             .encode();
-        let descriptor = CapabilityProgramV3::new(
+        let descriptor = CapabilityProgramV4::new(
             id(DIRECT_SUCCESSOR_KIND_ID_V3),
             id(DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1),
             id(DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3),
             id(DIRECT_ROOT_SCHEMA_ID_V1),
-            id(digest(&account)),
             id(digest(&lifecycle_policy)),
             id([8; 32]),
-            id(digest(&effect)),
-            id(dclutch_request_profile_contract::SCHEMA_RELEASE_ID),
-            id(digest(&request_profile)),
-            id(EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2),
-            id(digest(&strategy)),
+            CapabilityArtifactsV4 {
+                account_profile: ArtifactReferenceV4::new(
+                    id(ACCOUNT_PROFILE_SCHEMA_ID_V2),
+                    id(digest(&account)),
+                ),
+                request_profile: ArtifactReferenceV4::new(
+                    id(dclutch_request_profile_contract::SCHEMA_RELEASE_ID),
+                    id(digest(&request_profile)),
+                ),
+                lifecycle: ArtifactReferenceV4::new(
+                    id(LIFECYCLE_SCHEMA_ID_V4),
+                    id(digest(&lifecycle_policy)),
+                ),
+                strategy: ArtifactReferenceV4::new(
+                    id(EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2),
+                    id(digest(&strategy)),
+                ),
+                transition: ArtifactReferenceV4::new(
+                    id(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID),
+                    id(digest(&transition)),
+                ),
+                effect: ArtifactReferenceV4::new(id(EFFECT_SCHEMA_ID_V4), id(digest(&effect))),
+            },
             u32::try_from(DIRECT_ROOT_STATE_BYTES_V1).expect("root width"),
         )
         .expect("descriptor")
@@ -821,7 +866,7 @@ mod tests {
             policy.action_plan_count(DirectExecutionActionV3::CloseDirectRoot as u32),
             Ok(1)
         );
-        let joined = authenticate_direct_artifacts_v3(
+        let joined = authenticate_direct_artifacts_v4(
             fixture.selection(),
             fixture.artifacts(),
             &fixture.request,
@@ -838,58 +883,58 @@ mod tests {
         let mut wrong_selection = fixture.selection();
         wrong_selection.program_set[0] ^= 1;
         assert_eq!(
-            authenticate_direct_artifacts_v3(
+            authenticate_direct_artifacts_v4(
                 wrong_selection,
                 fixture.artifacts(),
                 &fixture.request,
                 0,
             ),
-            Err(DirectArtifactErrorV3::ContentIdentity)
+            Err(DirectArtifactErrorV4::ContentIdentity)
         );
 
         let mut wrong_descriptor = fixture.descriptor;
         *wrong_descriptor.get_mut(64).expect("descriptor mutation") ^= 1;
         assert_eq!(
-            authenticate_direct_artifacts_v3(
+            authenticate_direct_artifacts_v4(
                 fixture.selection(),
-                DirectArtifactBytesV3 {
+                DirectArtifactBytesV4 {
                     descriptor: &wrong_descriptor,
                     ..fixture.artifacts()
                 },
                 &fixture.request,
                 0,
             ),
-            Err(DirectArtifactErrorV3::ContentIdentity)
+            Err(DirectArtifactErrorV4::ProgramSet)
         );
 
         let mut wrong_config = fixture.config;
         *wrong_config.get_mut(16).expect("config mutation") ^= 1;
         assert_eq!(
-            authenticate_direct_artifacts_v3(
+            authenticate_direct_artifacts_v4(
                 fixture.selection(),
-                DirectArtifactBytesV3 {
+                DirectArtifactBytesV4 {
                     config: &wrong_config,
                     ..fixture.artifacts()
                 },
                 &fixture.request,
                 0,
             ),
-            Err(DirectArtifactErrorV3::ContentIdentity)
+            Err(DirectArtifactErrorV4::ContentIdentity)
         );
 
         let mut wrong_profile = fixture.account.clone();
         *wrong_profile.get_mut(12).expect("profile mutation") ^= 1;
         assert_eq!(
-            authenticate_direct_artifacts_v3(
+            authenticate_direct_artifacts_v4(
                 fixture.selection(),
-                DirectArtifactBytesV3 {
+                DirectArtifactBytesV4 {
                     account_profile: &wrong_profile,
                     ..fixture.artifacts()
                 },
                 &fixture.request,
                 0,
             ),
-            Err(DirectArtifactErrorV3::ContentIdentity)
+            Err(DirectArtifactErrorV4::ContentIdentity)
         );
 
         let mut wrong_lifecycle = fixture.lifecycle_policy.clone();
@@ -897,31 +942,31 @@ mod tests {
             .get_mut(dclutch_account_profile_contract::lifecycle_v3::HEADER_BYTES)
             .expect("lifecycle mutation") ^= 1;
         assert_eq!(
-            authenticate_direct_artifacts_v3(
+            authenticate_direct_artifacts_v4(
                 fixture.selection(),
-                DirectArtifactBytesV3 {
+                DirectArtifactBytesV4 {
                     lifecycle_policy: &wrong_lifecycle,
                     ..fixture.artifacts()
                 },
                 &fixture.request,
                 0,
             ),
-            Err(DirectArtifactErrorV3::ContentIdentity)
+            Err(DirectArtifactErrorV4::ContentIdentity)
         );
 
         let mut wrong_strategy = fixture.strategy.clone();
         *wrong_strategy.get_mut(16).expect("strategy mutation") ^= 1;
         assert_eq!(
-            authenticate_direct_artifacts_v3(
+            authenticate_direct_artifacts_v4(
                 fixture.selection(),
-                DirectArtifactBytesV3 {
+                DirectArtifactBytesV4 {
                     strategy: &wrong_strategy,
                     ..fixture.artifacts()
                 },
                 &fixture.request,
                 0,
             ),
-            Err(DirectArtifactErrorV3::ContentIdentity)
+            Err(DirectArtifactErrorV4::ContentIdentity)
         );
     }
 
@@ -934,7 +979,7 @@ mod tests {
             12,
             &(DirectExecutionActionV3::InlineOrdinary as u32).to_le_bytes(),
         );
-        assert!(authenticate_direct_artifacts_v3(
+        assert!(authenticate_direct_artifacts_v4(
             fixture.selection(),
             fixture.artifacts(),
             &request,
@@ -946,32 +991,33 @@ mod tests {
     #[test]
     fn descriptor_cannot_restore_direct_transition_authority() {
         let fixture = fixture();
-        let accepted = CapabilityProgramV3::decode(&fixture.descriptor).expect("descriptor");
-        let stale = CapabilityProgramV3::new(
+        let accepted = CapabilityProgramV4::decode(&fixture.descriptor).expect("descriptor");
+        let stale = CapabilityProgramV4::new(
             accepted.kind(),
             accepted.config_schema(),
             accepted.request_schema(),
             accepted.root_schema(),
-            accepted.account_profile(),
             accepted.derivation_policy(),
             accepted.capacity_profile(),
-            accepted.effect_program(),
-            accepted.request_profile_schema(),
-            accepted.request_profile_program(),
-            id(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID),
-            id(digest(&fixture.transition)),
+            CapabilityArtifactsV4 {
+                strategy: ArtifactReferenceV4::new(
+                    id(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID),
+                    id(digest(&fixture.transition)),
+                ),
+                ..accepted.artifacts()
+            },
             accepted.root_state_bytes(),
         )
         .expect("structural stale descriptor")
         .encode();
         let stale_set = program_set(DirectExecutionActionV3::CloseDirectRoot, digest(&stale));
         assert_eq!(
-            authenticate_direct_artifacts_v3(
-                DirectArtifactSelectionV3 {
+            authenticate_direct_artifacts_v4(
+                DirectArtifactSelectionV4 {
                     program_set: digest(&stale_set),
                     config: digest(&fixture.config),
                 },
-                DirectArtifactBytesV3 {
+                DirectArtifactBytesV4 {
                     program_set: &stale_set,
                     descriptor: &stale,
                     ..fixture.artifacts()
@@ -979,7 +1025,7 @@ mod tests {
                 &fixture.request,
                 0,
             ),
-            Err(DirectArtifactErrorV3::Descriptor)
+            Err(DirectArtifactErrorV4::Descriptor)
         );
     }
 
@@ -1027,7 +1073,7 @@ mod tests {
                 0,
                 DirectRequestProfileV3::Signed(wrong),
             ),
-            Err(DirectArtifactErrorV3::NativeSignature)
+            Err(DirectArtifactErrorV4::NativeSignature)
         );
 
         let wrong_destination = signed_request_profile(&[
@@ -1046,7 +1092,7 @@ mod tests {
                 0,
                 DirectRequestProfileV3::Signed(wrong_destination),
             ),
-            Err(DirectArtifactErrorV3::NativeSignature)
+            Err(DirectArtifactErrorV4::NativeSignature)
         );
     }
 
