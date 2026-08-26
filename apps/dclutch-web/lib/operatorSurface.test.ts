@@ -41,5 +41,10 @@ describe('unified chain-derived operator surface', () => {
     expect(OPERATOR_WORKFLOWS.every((workflow) => workflow.exactBoundary.length > 40)).toBe(true);
     expect(OPERATOR_WORKFLOWS.filter((workflow) => workflow.status === 'constructible').every((workflow) => workflow.route !== null)).toBe(true);
     expect(OPERATOR_WORKFLOWS.some((workflow) => workflow.family === 'Dealer' && workflow.status === 'awaiting-abi')).toBe(true);
+    expect(OPERATOR_WORKFLOWS.find((workflow) => workflow.action === 'Found common Core Market')).toMatchObject({
+      status: 'awaiting-abi',
+      route: null,
+      exactBoundary: expect.stringContaining('Registry and Rent program plus ArtifactRelease identities'),
+    });
   });
 });

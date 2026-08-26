@@ -74,7 +74,7 @@ export default function MarketWorkbench({ initialStage = 'author' }: Readonly<{ 
         const chainMissing = state.kind !== 'ready';
         const marketMissing = requiresMarket(workflow) && !marketReady;
         const accepted = workflow.status === 'constructible' && workflow.route !== null && !chainMissing && !marketMissing;
-        const liveReason = chainMissing ? 'Reacquire the execution surface first.' : marketMissing ? 'Select and authenticate a Core-owned Market first.' : workflow.exactBoundary;
+        const liveReason = workflow.status === 'awaiting-abi' ? workflow.exactBoundary : chainMissing ? 'Reacquire the execution surface first.' : marketMissing ? 'Select and authenticate a Core-owned Market first.' : workflow.exactBoundary;
         return <article className={accepted ? 'ready' : ''} key={workflow.action}><div><span className={`operator-status ${accepted ? 'constructible' : workflow.status}`}>{accepted ? 'ready' : workflow.status}</span><h3>{workflow.action}</h3></div><p>{liveReason}</p>{accepted && workflow.route ? <Link href={workflow.route}>Open unsigned builder →</Link> : <button type="button" disabled>Transaction unavailable</button>}</article>;
       })}</div><footer><strong>Transaction handoff</strong><span>Every accepted builder emits unsigned bytes. Inspect dependencies and download the exact packet in the <Link href="/operate">operator console →</Link></span></footer></section></div>
   </main>;
