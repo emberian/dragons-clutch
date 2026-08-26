@@ -549,7 +549,10 @@ mod tests {
 
     fn effect(routes: &[RouteFixture]) -> (Vec<u8>, Vec<u8>) {
         let route_count = u16::try_from(routes.len()).expect("route count");
-        let route_bytes = routes.len().checked_mul(24).expect("route bytes");
+        let route_bytes = routes
+            .len()
+            .checked_mul(dclutch_effect_kernel::v3::ROUTE_BYTES)
+            .expect("route bytes");
         let header = 32_usize.checked_add(route_bytes).expect("header");
         let templates = routes.iter().try_fold(0_usize, |total, route| {
             total.checked_add(route.request.len())
@@ -565,7 +568,11 @@ mod tests {
         let mut template_offset = header;
         for (index, route) in routes.iter().enumerate() {
             let offset = 32_usize
-                .checked_add(index.checked_mul(24).expect("route offset"))
+                .checked_add(
+                    index
+                        .checked_mul(dclutch_effect_kernel::v3::ROUTE_BYTES)
+                        .expect("route offset"),
+                )
                 .expect("route offset");
             put(&mut bytes, offset, &[route.role]);
             put(&mut bytes, offset + 1, &[route.kind]);
@@ -638,7 +645,11 @@ mod tests {
         let mut family = vec![0; 480];
         family.extend_from_slice(&packet);
 
-        let mut effect = vec![0; 56];
+        let mut effect = vec![
+            0;
+            dclutch_effect_kernel::v3::HEADER_BYTES
+                + dclutch_effect_kernel::v3::ROUTE_BYTES
+        ];
         put(&mut effect, 0, b"DCE3");
         put(&mut effect, 4, &[3, 0]);
         put(&mut effect, 6, &1_u16.to_le_bytes());
