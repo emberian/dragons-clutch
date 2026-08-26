@@ -804,21 +804,71 @@ pub fn encode_account_profile_with_dynamic_fixed_span_v2_atomic(
     )
 }
 
+/// Encode profile 13 while projecting each fixed rule on demand.
+///
+/// This is byte-for-byte equivalent to
+/// [`encode_account_profile_with_dynamic_fixed_span_v2_atomic`], but it does
+/// not require callers with a large fixed account vector to materialize a
+/// parallel rule array. The projector is invoked exactly once for every
+/// coordinate in ascending order. Its error, hostile decoding failure, or any
+/// geometry refusal leaves `output` unchanged.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_account_profile_with_dynamic_fixed_span_v2_generated_atomic<F>(
+    trusted_environment: TrustedEnvironmentV2,
+    trusted_identity_environment: TrustedIdentityEnvironmentV2,
+    trusted_builtin_identity: TrustedBuiltinIdentityV2,
+    dynamic_spans: &[DynamicFixedSpanInputV2],
+    fixed_rule_count: u16,
+    fixed_rule: F,
+    span_rules: &[AccountRuleWithPrestateInputV2],
+    fixed_operations: &[AccountOperationInputV2],
+    registers: RegisterGeometryV2,
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<(), Error>
+where
+    F: FnMut(u16) -> Result<AccountRuleWithPrestateInputV2, Error>,
+{
+    encode_account_profile_atomic_with_span(
+        AccountProfileArtifactV2::DynamicFixedSpan,
+        trusted_environment,
+        trusted_identity_environment,
+        trusted_builtin_identity,
+        Some(dynamic_spans),
+        GeneratedRuleInputsV2 {
+            len: usize::from(fixed_rule_count),
+            project: fixed_rule,
+        },
+        RuleInputsV2::WithPrestate(span_rules),
+        fixed_operations,
+        &[],
+        registers,
+        scratch,
+        output,
+    )
+}
+
 #[derive(Clone, Copy)]
 enum RuleInputsV2<'a> {
     Exact(&'a [AccountRuleInputV2]),
     WithPrestate(&'a [AccountRuleWithPrestateInputV2]),
 }
 
-impl RuleInputsV2<'_> {
-    fn len(self) -> usize {
+trait RuleSourceV2 {
+    fn len(&self) -> usize;
+
+    fn get(&mut self, index: usize) -> Result<(AccountRuleInputV2, AccountPrestateV2), Error>;
+}
+
+impl RuleSourceV2 for RuleInputsV2<'_> {
+    fn len(&self) -> usize {
         match self {
             Self::Exact(values) => values.len(),
             Self::WithPrestate(values) => values.len(),
         }
     }
 
-    fn get(self, index: usize) -> Result<(AccountRuleInputV2, AccountPrestateV2), Error> {
+    fn get(&mut self, index: usize) -> Result<(AccountRuleInputV2, AccountPrestateV2), Error> {
         match self {
             Self::Exact(values) => values
                 .get(index)
@@ -830,6 +880,28 @@ impl RuleInputsV2<'_> {
                 .map(|value| (value.rule, value.prestate)),
         }
         .ok_or(Error::InvalidLength)
+    }
+}
+
+struct GeneratedRuleInputsV2<F> {
+    len: usize,
+    project: F,
+}
+
+impl<F> RuleSourceV2 for GeneratedRuleInputsV2<F>
+where
+    F: FnMut(u16) -> Result<AccountRuleWithPrestateInputV2, Error>,
+{
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    fn get(&mut self, index: usize) -> Result<(AccountRuleInputV2, AccountPrestateV2), Error> {
+        if index >= self.len {
+            return Err(Error::InvalidLength);
+        }
+        let value = (self.project)(u16::try_from(index).map_err(|_| Error::InvalidLength)?)?;
+        Ok((value.rule, value.prestate))
     }
 }
 
@@ -864,20 +936,24 @@ fn encode_account_profile_atomic(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn encode_account_profile_atomic_with_span(
+fn encode_account_profile_atomic_with_span<F, I>(
     artifact: AccountProfileArtifactV2,
     trusted_environment: TrustedEnvironmentV2,
     trusted_identity_environment: TrustedIdentityEnvironmentV2,
     trusted_builtin_identity: TrustedBuiltinIdentityV2,
     dynamic_fixed_spans: Option<&[DynamicFixedSpanInputV2]>,
-    fixed_rules: RuleInputsV2<'_>,
-    item_rules: RuleInputsV2<'_>,
+    mut fixed_rules: F,
+    mut item_rules: I,
     fixed_operations: &[AccountOperationInputV2],
     item_operations: &[AccountOperationInputV2],
     registers: RegisterGeometryV2,
     scratch: &mut [u8],
     output: &mut [u8],
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where
+    F: RuleSourceV2,
+    I: RuleSourceV2,
+{
     if trusted_environment.current_slot_destination().is_some()
         && !matches!(
             artifact,
@@ -3746,6 +3822,120 @@ mod tests {
         );
         assert_eq!(hostile_output_scalars, [77]);
         assert_eq!(hostile_output_identities, [[0x77; 32]]);
+    }
+
+    #[test]
+    fn generated_dynamic_rules_are_exact_and_failure_atomic() {
+        let exact = |data_length| AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: READONLY,
+                effect_permissions: NO_EFFECTS,
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::Exact,
+        };
+        let fixed = [exact(3), exact(5), exact(7)];
+        let span_rules = [AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: READONLY,
+                effect_permissions: NO_EFFECTS,
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length: 0,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::AuthenticatedOpaqueReadonlyData,
+        }];
+        let spans = [DynamicFixedSpanInputV2 {
+            insertion_coordinate: 2,
+            count_scalar: 0,
+            rule_start: 0,
+            rule_stride: 1,
+            minimum: 1,
+            maximum: 4,
+            step: 1,
+        }];
+        let width = DYNAMIC_FIXED_SPAN_HEADER_BYTES
+            + DYNAMIC_FIXED_SPAN_ENTRY_BYTES
+            + (fixed.len() + span_rules.len()) * RULE_BYTES;
+        let registers = RegisterGeometryV2 {
+            common_scalars: 1,
+            item_scalar_stride: 0,
+            common_identities: 0,
+            item_identity_stride: 0,
+        };
+        let mut slice_scratch = std::vec![0_u8; width];
+        let mut slice_output = std::vec![0_u8; width];
+        encode_account_profile_with_dynamic_fixed_span_v2_atomic(
+            TrustedEnvironmentV2::None,
+            TrustedIdentityEnvironmentV2::None,
+            TrustedBuiltinIdentityV2::None,
+            &spans,
+            &fixed,
+            &span_rules,
+            &[],
+            registers,
+            &mut slice_scratch,
+            &mut slice_output,
+        )
+        .expect("slice profile13");
+
+        let mut next_coordinate = 0_u16;
+        let mut generated_scratch = std::vec![0_u8; width];
+        let mut generated_output = std::vec![0_u8; width];
+        encode_account_profile_with_dynamic_fixed_span_v2_generated_atomic(
+            TrustedEnvironmentV2::None,
+            TrustedIdentityEnvironmentV2::None,
+            TrustedBuiltinIdentityV2::None,
+            &spans,
+            u16::try_from(fixed.len()).expect("bounded fixture"),
+            |coordinate| {
+                assert_eq!(coordinate, next_coordinate);
+                next_coordinate = next_coordinate.checked_add(1).expect("bounded fixture");
+                fixed
+                    .get(usize::from(coordinate))
+                    .copied()
+                    .ok_or(Error::InvalidLength)
+            },
+            &span_rules,
+            &[],
+            registers,
+            &mut generated_scratch,
+            &mut generated_output,
+        )
+        .expect("generated profile13");
+        assert_eq!(next_coordinate, 3);
+        assert_eq!(generated_output, slice_output);
+
+        let mut hostile_scratch = std::vec![0_u8; width];
+        let mut hostile_output = std::vec![0x5a_u8; width];
+        let before = hostile_output.clone();
+        assert_eq!(
+            encode_account_profile_with_dynamic_fixed_span_v2_generated_atomic(
+                TrustedEnvironmentV2::None,
+                TrustedIdentityEnvironmentV2::None,
+                TrustedBuiltinIdentityV2::None,
+                &spans,
+                u16::try_from(fixed.len()).expect("bounded fixture"),
+                |coordinate| {
+                    if coordinate == 1 {
+                        return Err(Error::InvalidLength);
+                    }
+                    fixed
+                        .get(usize::from(coordinate))
+                        .copied()
+                        .ok_or(Error::InvalidLength)
+                },
+                &span_rules,
+                &[],
+                registers,
+                &mut hostile_scratch,
+                &mut hostile_output,
+            ),
+            Err(Error::InvalidLength)
+        );
+        assert_eq!(hostile_output, before);
     }
 
     #[test]

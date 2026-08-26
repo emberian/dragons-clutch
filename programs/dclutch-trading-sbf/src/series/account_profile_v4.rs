@@ -15,7 +15,7 @@ use dclutch_account_profile_contract::v2::{
         AccountAliasInputV2, AccountCoordinateV2, AccountEffectPermissionsV2,
         AccountOperationInputV2, AccountPrivilegesV2, AccountRuleInputV2,
         AccountRuleWithPrestateInputV2, DynamicFixedSpanInputV2, IdentityCoordinateV2,
-        RegisterGeometryV2, encode_account_profile_with_dynamic_fixed_span_v2_atomic,
+        RegisterGeometryV2, encode_account_profile_with_dynamic_fixed_span_v2_generated_atomic,
     },
 };
 
@@ -76,7 +76,6 @@ pub fn encode_series_consume_account_profile_v4_atomic(
         return Err(SeriesConsumeAccountProfileErrorV4::Geometry);
     }
     validate_alias_lengths(input.fixed_data_lengths)?;
-    let fixed_rules = fixed_rules(input.fixed_data_lengths)?;
     let span_rules = [AccountRuleWithPrestateInputV2 {
         rule: AccountRuleInputV2 {
             privileges: readonly(),
@@ -91,7 +90,7 @@ pub fn encode_series_consume_account_profile_v4_atomic(
         require_current_owner(ROOT)?,
         require_current_owner(TICKET_REPLAY)?,
     ];
-    encode_account_profile_with_dynamic_fixed_span_v2_atomic(
+    encode_account_profile_with_dynamic_fixed_span_v2_generated_atomic(
         TrustedEnvironmentV2::None,
         TrustedIdentityEnvironmentV2::CurrentExecutingProgram {
             destination: CURRENT_TRADING_IDENTITY,
@@ -106,7 +105,12 @@ pub fn encode_series_consume_account_profile_v4_atomic(
             maximum: u32::from(SERIES_CONSUME_MAXIMUM_FUNDING_STATES_V3),
             step: 1,
         }],
-        &fixed_rules,
+        u16::try_from(FIXED_RULE_COUNT)
+            .map_err(|_| SeriesConsumeAccountProfileErrorV4::Geometry)?,
+        |coordinate| {
+            fixed_rule(input.fixed_data_lengths, usize::from(coordinate))
+                .map_err(|_| dclutch_account_profile_contract::v2::Error::InvalidLength)
+        },
         &span_rules,
         &operations,
         RegisterGeometryV2 {
@@ -123,30 +127,32 @@ pub fn encode_series_consume_account_profile_v4_atomic(
     Ok(())
 }
 
-fn fixed_rules(
+fn fixed_rule(
     lengths: &[u32; FIXED_RULE_COUNT],
-) -> Result<[AccountRuleWithPrestateInputV2; FIXED_RULE_COUNT], SeriesConsumeAccountProfileErrorV4>
-{
-    let mut rules = [exact(readonly(), none(), 0); FIXED_RULE_COUNT];
-    for (rule, length) in rules.iter_mut().zip(lengths.iter().copied()) {
-        rule.rule.data_length = length;
-    }
-
-    for coordinate in WRITABLE_COORDINATES {
-        rule_mut(&mut rules, *coordinate)?.rule.privileges = writable();
-    }
-    for coordinate in EXECUTABLE_COORDINATES {
-        rule_mut(&mut rules, *coordinate)?.rule.privileges = executable();
-    }
-    rule_mut(&mut rules, ROOT)?.rule.effect_permissions = write_data();
+    coordinate: usize,
+) -> Result<AccountRuleWithPrestateInputV2, SeriesConsumeAccountProfileErrorV4> {
+    let data_length = lengths
+        .get(coordinate)
+        .copied()
+        .ok_or(SeriesConsumeAccountProfileErrorV4::Geometry)?;
+    let privileges = if WRITABLE_COORDINATES.contains(&coordinate) {
+        writable()
+    } else if EXECUTABLE_COORDINATES.contains(&coordinate) {
+        executable()
+    } else {
+        readonly()
+    };
+    let effect_permissions = if coordinate == ROOT || coordinate == TICKET_REPLAY {
+        write_data()
+    } else {
+        none()
+    };
     // Ticket is readonly in both Core child frames. Profile13 converts this
     // authenticated outer WRITE_DATA grant into physical writable authority;
     // route-local child views remain readonly.
-    rule_mut(&mut rules, TICKET_REPLAY)?.rule.effect_permissions = write_data();
-
-    for (coordinate, representative) in ROUTE_ALIASES {
-        let privileges = rule(&rules, *coordinate)?.rule.privileges;
-        *rule_mut(&mut rules, *coordinate)? = AccountRuleWithPrestateInputV2 {
+    if let Some((_, representative)) = ROUTE_ALIASES.iter().find(|(alias, _)| *alias == coordinate)
+    {
+        return Ok(AccountRuleWithPrestateInputV2 {
             rule: AccountRuleInputV2 {
                 privileges,
                 effect_permissions: none(),
@@ -158,9 +164,9 @@ fn fixed_rules(
                 data_item_stride: 0,
             },
             prestate: AccountPrestateV2::AuthenticatedRouteAlias,
-        };
+        });
     }
-    Ok(rules)
+    Ok(exact(privileges, effect_permissions, data_length))
 }
 
 fn validate_alias_lengths(
@@ -220,25 +226,6 @@ const fn none() -> AccountEffectPermissionsV2 {
 
 const fn write_data() -> AccountEffectPermissionsV2 {
     AccountEffectPermissionsV2::new(false, false, true)
-}
-
-fn rule(
-    rules: &[AccountRuleWithPrestateInputV2; FIXED_RULE_COUNT],
-    coordinate: usize,
-) -> Result<AccountRuleWithPrestateInputV2, SeriesConsumeAccountProfileErrorV4> {
-    rules
-        .get(coordinate)
-        .copied()
-        .ok_or(SeriesConsumeAccountProfileErrorV4::Geometry)
-}
-
-fn rule_mut(
-    rules: &mut [AccountRuleWithPrestateInputV2; FIXED_RULE_COUNT],
-    coordinate: usize,
-) -> Result<&mut AccountRuleWithPrestateInputV2, SeriesConsumeAccountProfileErrorV4> {
-    rules
-        .get_mut(coordinate)
-        .ok_or(SeriesConsumeAccountProfileErrorV4::Geometry)
 }
 
 // Caller PDAs remain nonsigners in outer observations. The generic fixed-role
