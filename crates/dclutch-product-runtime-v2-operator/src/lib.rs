@@ -32,6 +32,8 @@ pub mod found;
 pub mod graded_basis_v3;
 /// Chain-derived lifecycle RentCredit creation, sweeping, and close evidence.
 pub mod lifecycle_rent_v2;
+/// Generic immutable-record publication and Runtime V2 Product graph publication.
+pub mod publication;
 
 /// Compiler or chain-derived instruction refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
