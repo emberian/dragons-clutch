@@ -56,7 +56,6 @@ fn open_input(action: FractionalExposureActionV2) -> FractionalExposureRequestIn
         expected_revision: 17,
         quantity: 25,
         representation_coordinate: 2,
-        terminal_product_coordinate: NO_EXPOSURE_COORDINATE_V2,
     }
 }
 
@@ -84,7 +83,6 @@ fn terminal_input(action: FractionalExposureActionV2) -> FractionalExposureReque
         } else {
             NO_EXPOSURE_COORDINATE_V2
         },
-        terminal_product_coordinate: 257,
     }
 }
 
@@ -181,16 +179,6 @@ fn request_binds_distinct_k_and_n_coordinates_to_terms() {
             .expect("shape remains canonical");
     assert_eq!(
         invalid_k.bind_terms(terms),
-        Err(FractionalExposureRequestErrorV2::InvalidCoordinate)
-    );
-
-    let mut invalid_n = terminal.input();
-    invalid_n.terminal_product_coordinate = 258;
-    let invalid_n =
-        FractionalExposureRequestV2::new(FractionalExposureActionV2::TerminalRedeem, invalid_n)
-            .expect("shape remains canonical");
-    assert_eq!(
-        invalid_n.bind_terms(terms),
         Err(FractionalExposureRequestErrorV2::InvalidCoordinate)
     );
 

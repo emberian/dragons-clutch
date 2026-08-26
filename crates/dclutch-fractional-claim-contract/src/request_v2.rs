@@ -9,11 +9,11 @@ pub const FRACTIONAL_EXPOSURE_REQUEST_BYTES_V2: usize = 416;
 /// Exact V2 family-request magic.
 pub const FRACTIONAL_EXPOSURE_REQUEST_MAGIC_V2: [u8; 8] = *b"DCFREQ02";
 /// V2 request schema preimage.
-pub const FRACTIONAL_EXPOSURE_REQUEST_SCHEMA_PREIMAGE_V2: &[u8] = b"dclutch/schema/fractional-exposure-request-v2|bytes416|terms-select-exposure|representation-coordinate|terminal-product-coordinate|no-payout-input";
+pub const FRACTIONAL_EXPOSURE_REQUEST_SCHEMA_PREIMAGE_V2: &[u8] = b"dclutch/schema/fractional-exposure-request-v2|bytes416|terms-select-exposure|representation-coordinate|terminal-record-digest|no-terminal-value-projection|no-payout-input";
 /// SHA-256 of [`FRACTIONAL_EXPOSURE_REQUEST_SCHEMA_PREIMAGE_V2`].
 pub const FRACTIONAL_EXPOSURE_REQUEST_SCHEMA_ID_V2: [u8; 32] = [
-    0x9e, 0xdf, 0x40, 0x2d, 0x73, 0x61, 0x67, 0xc3, 0xc1, 0x13, 0x5d, 0x10, 0x72, 0xe5, 0x54, 0xb2,
-    0x6c, 0xaa, 0xaa, 0xe4, 0x53, 0xf3, 0xf1, 0xaf, 0x54, 0x6a, 0x1b, 0x1b, 0x21, 0x33, 0xee, 0x98,
+    0x35, 0x7c, 0xcb, 0x60, 0x5a, 0x4c, 0x37, 0xea, 0x2f, 0x5c, 0x63, 0x36, 0x1e, 0x4d, 0x85, 0x99,
+    0x95, 0x0d, 0xc8, 0x35, 0x6a, 0x5b, 0xb9, 0xc1, 0xc6, 0x08, 0xa6, 0xfa, 0x29, 0x0e, 0x9b, 0x59,
 ];
 /// Canonical absent Product or Claims coordinate.
 pub const NO_EXPOSURE_COORDINATE_V2: u32 = u32::MAX;
@@ -35,8 +35,7 @@ const TERMINAL_DIGEST_OFFSET: usize = 336;
 const EXPECTED_REVISION_OFFSET: usize = 368;
 const QUANTITY_OFFSET: usize = 376;
 const REPRESENTATION_COORDINATE_OFFSET: usize = 384;
-const TERMINAL_PRODUCT_COORDINATE_OFFSET: usize = 388;
-const TAIL_RESERVED_OFFSET: usize = 392;
+const TAIL_RESERVED_OFFSET: usize = 388;
 
 /// Exact V2 Fractional action.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -137,8 +136,6 @@ pub struct FractionalExposureRequestInputV2 {
     pub quantity: u64,
     /// Selected Claims representation coordinate in `[0,K)`.
     pub representation_coordinate: u32,
-    /// Authenticated Product terminal coordinate in `[0,N)`.
-    pub terminal_product_coordinate: u32,
 }
 
 /// Hostile-decoded exposure-bound request.
@@ -169,7 +166,7 @@ impl FractionalExposureRequestV2 {
             return Err(FractionalExposureRequestErrorV2::InvalidHeader);
         }
         require_zero(bytes, HEADER_RESERVED_OFFSET, 5)?;
-        require_zero(bytes, TAIL_RESERVED_OFFSET, 24)?;
+        require_zero(bytes, TAIL_RESERVED_OFFSET, 28)?;
         Self::new(
             FractionalExposureActionV2::decode(byte(bytes, ACTION_OFFSET)?)?,
             FractionalExposureRequestInputV2 {
@@ -187,7 +184,6 @@ impl FractionalExposureRequestV2 {
                 expected_revision: u64_at(bytes, EXPECTED_REVISION_OFFSET)?,
                 quantity: u64_at(bytes, QUANTITY_OFFSET)?,
                 representation_coordinate: u32_at(bytes, REPRESENTATION_COORDINATE_OFFSET)?,
-                terminal_product_coordinate: u32_at(bytes, TERMINAL_PRODUCT_COORDINATE_OFFSET)?,
             },
         )
     }
@@ -233,11 +229,6 @@ impl FractionalExposureRequestV2 {
             REPRESENTATION_COORDINATE_OFFSET,
             &self.input.representation_coordinate.to_le_bytes(),
         )?;
-        put(
-            &mut output,
-            TERMINAL_PRODUCT_COORDINATE_OFFSET,
-            &self.input.terminal_product_coordinate.to_le_bytes(),
-        )?;
         Ok(output)
     }
 
@@ -266,11 +257,6 @@ impl FractionalExposureRequestV2 {
         }
         if self.action.selects_representation_coordinate()
             && input.representation_coordinate >= terms.representation_width()
-        {
-            return Err(FractionalExposureRequestErrorV2::InvalidCoordinate);
-        }
-        if self.action.requires_terminal()
-            && input.terminal_product_coordinate >= terms.product_width()
         {
             return Err(FractionalExposureRequestErrorV2::InvalidCoordinate);
         }
@@ -330,12 +316,9 @@ fn validate_shape(
     {
         return Err(FractionalExposureRequestErrorV2::InvalidCoordinate);
     }
-    let terminal_present = !is_zero(&input.terminal_digest)
-        && input.terminal_product_coordinate != NO_EXPOSURE_COORDINATE_V2;
+    let terminal_present = !is_zero(&input.terminal_digest);
     if action.requires_terminal() != terminal_present
-        || (!action.requires_terminal()
-            && (!is_zero(&input.terminal_digest)
-                || input.terminal_product_coordinate != NO_EXPOSURE_COORDINATE_V2))
+        || (!action.requires_terminal() && !is_zero(&input.terminal_digest))
     {
         return Err(FractionalExposureRequestErrorV2::InvalidTerminal);
     }
