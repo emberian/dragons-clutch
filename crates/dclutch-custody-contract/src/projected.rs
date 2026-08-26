@@ -12,13 +12,19 @@ pub const PROJECTED_CUSTODY_STATE_MAGIC_V1: [u8; 8] = *b"DCLPCS01";
 /// Projected-custody terminal receipt magic.
 pub const PROJECTED_CUSTODY_RECEIPT_MAGIC_V1: [u8; 8] = *b"DCLPCR01";
 /// Exact request width.
-pub const PROJECTED_CUSTODY_REQUEST_BYTES_V1: usize = 744;
+pub const PROJECTED_CUSTODY_REQUEST_BYTES_V1: usize = 768;
 /// Exact persisted-state width.
-pub const PROJECTED_CUSTODY_STATE_BYTES_V1: usize = 784;
+pub const PROJECTED_CUSTODY_STATE_BYTES_V1: usize = 808;
 /// Exact terminal receipt width.
 pub const PROJECTED_CUSTODY_RECEIPT_BYTES_V1: usize = 320;
+/// Exact receipt width for atomic Hoard credit plus source-vault/replay closure.
+pub const PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1: usize = 320;
+/// Domain separating the projected-Hoard replay context from its funding source.
+pub const PROJECTED_HOARD_CONTEXT_DOMAIN_V1: &[u8] = b"dclutch:projected-hoard-context:v1";
 /// PDA seed domain for the one typed Trading-capability caller.
 pub const PROJECTED_CUSTODY_CALLER_PDA_DOMAIN_V1: &[u8] = b"dclutch:projected-custody-caller:v1";
+/// Lock-and-close receipt magic.
+pub const PROJECTED_CUSTODY_LOCK_RECEIPT_MAGIC_V1: [u8; 8] = *b"DCLPCL01";
 const VERSION_V1: u16 = 1;
 
 /// Stable refusal from projected pre-founding custody.
@@ -74,6 +80,10 @@ pub enum ProjectedCustodyOperationV1 {
     RefundAndClose = 3,
     /// After exact Found, rebind the credited Hoard without moving principal.
     RealizeAndClose = 4,
+    /// After expiry, close an empty prepared Hoard and projection state.
+    AbortOpenAndClose = 5,
+    /// Credit the Hoard and atomically close the emptied source Vault/replay.
+    LockHoardAndCloseSource = 6,
 }
 
 impl ProjectedCustodyOperationV1 {
@@ -84,6 +94,8 @@ impl ProjectedCustodyOperationV1 {
             2 => Ok(Self::LockHoard),
             3 => Ok(Self::RefundAndClose),
             4 => Ok(Self::RealizeAndClose),
+            5 => Ok(Self::AbortOpenAndClose),
+            6 => Ok(Self::LockHoardAndCloseSource),
             _ => Err(ProjectedCustodyError::NonCanonical),
         }
     }
@@ -230,6 +242,12 @@ pub struct ProjectedCustodyRequestV1 {
     pub state_rent_lamports: u64,
     /// Exact chain-derived canonical Hoard-vault rent.
     pub vault_rent_lamports: u64,
+    /// Exact normal source-replay revision consumed by atomic source closure.
+    pub funding_source_replay_revision: u64,
+    /// Exact normal source-replay rent returned to RentCredit.
+    pub funding_source_state_rent_lamports: u64,
+    /// Exact source-Vault rent returned to RentCredit.
+    pub funding_source_vault_rent_lamports: u64,
 }
 
 impl ProjectedCustodyRequestV1 {
@@ -265,6 +283,10 @@ impl ProjectedCustodyRequestV1 {
         }
         if self.state_rent_lamports == 0
             || self.vault_rent_lamports == 0
+            || self.funding_source_replay_revision == 0
+            || self.funding_source_state_rent_lamports == 0
+            || self.funding_source_vault_rent_lamports == 0
+            || self.context_digest == self.funding_source_context
             || matches!(
                 self.funding_source_compartment,
                 CompartmentV1::None | CompartmentV1::External | CompartmentV1::HoardPrincipal
@@ -277,6 +299,7 @@ impl ProjectedCustodyRequestV1 {
             ProjectedCustodyOperationV1::LockHoard
                 | ProjectedCustodyOperationV1::RefundAndClose
                 | ProjectedCustodyOperationV1::RealizeAndClose
+                | ProjectedCustodyOperationV1::LockHoardAndCloseSource
         );
         if amount_active != (self.amount > 0)
             || (self.operation == ProjectedCustodyOperationV1::Initialize
@@ -304,6 +327,9 @@ impl ProjectedCustodyRequestV1 {
         put_u64(&mut output, 720, self.amount)?;
         put_u64(&mut output, 728, self.state_rent_lamports)?;
         put_u64(&mut output, 736, self.vault_rent_lamports)?;
+        put_u64(&mut output, 744, self.funding_source_replay_revision)?;
+        put_u64(&mut output, 752, self.funding_source_state_rent_lamports)?;
+        put_u64(&mut output, 760, self.funding_source_vault_rent_lamports)?;
         Ok(output)
     }
 
@@ -355,6 +381,9 @@ impl ProjectedCustodyRequestV1 {
             amount: read_u64(input, 720)?,
             state_rent_lamports: read_u64(input, 728)?,
             vault_rent_lamports: read_u64(input, 736)?,
+            funding_source_replay_revision: read_u64(input, 744)?,
+            funding_source_state_rent_lamports: read_u64(input, 752)?,
+            funding_source_vault_rent_lamports: read_u64(input, 760)?,
         };
         value.validate()?;
         Ok(value)
@@ -426,7 +455,22 @@ impl ProjectedCustodyStateV1 {
         put_u64(&mut output, 728, self.locked_amount)?;
         put_u64(&mut output, 736, self.request.state_rent_lamports)?;
         put_u64(&mut output, 744, self.request.vault_rent_lamports)?;
-        put(&mut output, 752, &self.last_request_digest)?;
+        put_u64(
+            &mut output,
+            752,
+            self.request.funding_source_replay_revision,
+        )?;
+        put_u64(
+            &mut output,
+            760,
+            self.request.funding_source_state_rent_lamports,
+        )?;
+        put_u64(
+            &mut output,
+            768,
+            self.request.funding_source_vault_rent_lamports,
+        )?;
+        put(&mut output, 776, &self.last_request_digest)?;
         Ok(output)
     }
 
@@ -496,6 +540,9 @@ impl ProjectedCustodyStateV1 {
             },
             state_rent_lamports: read_u64(input, 736)?,
             vault_rent_lamports: read_u64(input, 744)?,
+            funding_source_replay_revision: read_u64(input, 752)?,
+            funding_source_state_rent_lamports: read_u64(input, 760)?,
+            funding_source_vault_rent_lamports: read_u64(input, 768)?,
         };
         immutable.validate()?;
         Ok(Self {
@@ -503,7 +550,7 @@ impl ProjectedCustodyStateV1 {
             request: immutable,
             next_revision,
             locked_amount,
-            last_request_digest: slice(input, 752, 32)?
+            last_request_digest: slice(input, 776, 32)?
                 .try_into()
                 .map_err(|_| ProjectedCustodyError::InvalidLength)?,
             bump: read_u8(input, 11)?,
@@ -598,6 +645,70 @@ impl ProjectedCustodyStateV1 {
         Ok(self)
     }
 
+    /// Credit the projected Hoard from one fully consumed Custody source and
+    /// authorize atomic closure of that source Vault and replay to RentCredit.
+    #[allow(clippy::too_many_arguments)]
+    pub fn lock_hoard_and_close_source(
+        mut self,
+        request: ProjectedCustodyRequestV1,
+        request_digest: [u8; 32],
+        source_replay_key: [u8; 32],
+        source_replay: CustodyReplayV1,
+        source_before: u64,
+        source_after: u64,
+        hoard_before: u64,
+        hoard_after: u64,
+        source_vault_lamports: u64,
+        source_replay_lamports: u64,
+        rent_credit: [u8; 32],
+        market_vacant: bool,
+    ) -> Result<(Self, ProjectedCustodyLockReceiptV1), ProjectedCustodyError> {
+        self.authenticate_next(request, request_digest)?;
+        nonzero(source_replay_key)?;
+        if self.phase != ProjectedCustodyPhaseV1::HoardOpen
+            || request.operation != ProjectedCustodyOperationV1::LockHoardAndCloseSource
+            || source_before != request.amount
+            || source_after != 0
+            || hoard_before != 0
+            || hoard_before.checked_add(request.amount) != Some(hoard_after)
+            || source_vault_lamports != request.funding_source_vault_rent_lamports
+            || source_replay_lamports != request.funding_source_state_rent_lamports
+            || rent_credit != request.rent_credit
+            || !market_vacant
+            || source_replay.caller_role != ExecutionRoleV1::Trading
+            || source_replay.release_set != request.release_set
+            || source_replay.market != request.market
+            || source_replay.realm != request.realm
+            || source_replay.context != request.funding_source_context
+            || source_replay.caller_program != request.caller_program
+            || source_replay.rent_refund != request.rent_credit
+            || source_replay.open_vault_count != 1
+            || source_replay.next_revision != request.funding_source_replay_revision
+            || source_replay.generation != request.generation
+        {
+            return Err(ProjectedCustodyError::Balance);
+        }
+        let receipt = ProjectedCustodyLockReceiptV1 {
+            market: request.market,
+            release_set: request.release_set,
+            context_digest: request.context_digest,
+            source_vault: request.funding_source_vault,
+            source_replay: source_replay_key,
+            hoard_vault: request.hoard_vault,
+            rent_credit: request.rent_credit,
+            request_digest,
+            amount: request.amount,
+            source_vault_rent_lamports: source_vault_lamports,
+            source_replay_rent_lamports: source_replay_lamports,
+            resulting_revision: request.resulting_revision,
+        };
+        receipt.encode()?;
+        self.phase = ProjectedCustodyPhaseV1::HoardLocked;
+        self.locked_amount = request.amount;
+        self.advance(request, request_digest);
+        Ok((self, receipt))
+    }
+
     /// Authorize expiry refund and exact vault/state closure to RentCredit.
     #[allow(clippy::too_many_arguments)]
     pub fn refund_and_close(
@@ -622,7 +733,32 @@ impl ProjectedCustodyStateV1 {
         {
             return Err(ProjectedCustodyError::Expiry);
         }
-        ProjectedCustodyReceiptV1::terminal(self, request, request_digest, false, [0; 32])
+        ProjectedCustodyReceiptV1::terminal(self, request, request_digest, false, false, [0; 32])
+    }
+
+    /// Authorize expiry cleanup of an empty prepared Hoard and projection state.
+    #[allow(clippy::too_many_arguments)]
+    pub fn abort_open_and_close(
+        self,
+        request: ProjectedCustodyRequestV1,
+        request_digest: [u8; 32],
+        current_slot: u64,
+        vault_balance: u64,
+        rent_credit: [u8; 32],
+        market_vacant: bool,
+    ) -> Result<ProjectedCustodyReceiptV1, ProjectedCustodyError> {
+        self.authenticate_next(request, request_digest)?;
+        if self.phase != ProjectedCustodyPhaseV1::HoardOpen
+            || request.operation != ProjectedCustodyOperationV1::AbortOpenAndClose
+            || request.amount != 0
+            || current_slot <= self.request.expiry_slot
+            || vault_balance != 0
+            || rent_credit != self.request.rent_credit
+            || !market_vacant
+        {
+            return Err(ProjectedCustodyError::Expiry);
+        }
+        ProjectedCustodyReceiptV1::terminal(self, request, request_digest, false, true, [0; 32])
     }
 
     /// Rebind the already-credited projected Hoard to the exact newly founded
@@ -659,6 +795,7 @@ impl ProjectedCustodyStateV1 {
             request,
             request_digest,
             true,
+            false,
             market_state_digest,
         )
     }
@@ -702,6 +839,11 @@ impl ProjectedCustodyStateV1 {
             || request.expiry_slot != self.request.expiry_slot
             || request.state_rent_lamports != self.request.state_rent_lamports
             || request.vault_rent_lamports != self.request.vault_rent_lamports
+            || request.funding_source_replay_revision != self.request.funding_source_replay_revision
+            || request.funding_source_state_rent_lamports
+                != self.request.funding_source_state_rent_lamports
+            || request.funding_source_vault_rent_lamports
+                != self.request.funding_source_vault_rent_lamports
         {
             return Err(ProjectedCustodyError::Revision);
         }
@@ -714,11 +856,121 @@ impl ProjectedCustodyStateV1 {
     }
 }
 
+/// Immediate evidence that principal reached the projected Hoard and its
+/// fully consumed normal source Vault/replay were both closed to RentCredit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProjectedCustodyLockReceiptV1 {
+    /// Future Market.
+    pub market: [u8; 32],
+    /// Selected release set.
+    pub release_set: [u8; 32],
+    /// Domain-separated projected-Hoard replay context.
+    pub context_digest: [u8; 32],
+    /// Fully consumed source Vault.
+    pub source_vault: [u8; 32],
+    /// Fully consumed normal source replay.
+    pub source_replay: [u8; 32],
+    /// Credited projected Hoard Vault.
+    pub hoard_vault: [u8; 32],
+    /// Immutable RentCredit receiving both closures.
+    pub rent_credit: [u8; 32],
+    /// Exact complete projected request digest.
+    pub request_digest: [u8; 32],
+    /// Exact principal moved.
+    pub amount: u64,
+    /// Exact source-Vault rent closed.
+    pub source_vault_rent_lamports: u64,
+    /// Exact source-replay rent closed.
+    pub source_replay_rent_lamports: u64,
+    /// Projected replay revision committed.
+    pub resulting_revision: u64,
+}
+
+impl ProjectedCustodyLockReceiptV1 {
+    /// Encode exact lock-and-source-close evidence.
+    pub fn encode(
+        self,
+    ) -> Result<[u8; PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1], ProjectedCustodyError> {
+        for value in [
+            self.market,
+            self.release_set,
+            self.context_digest,
+            self.source_vault,
+            self.source_replay,
+            self.hoard_vault,
+            self.rent_credit,
+            self.request_digest,
+        ] {
+            nonzero(value)?;
+        }
+        if self.amount == 0
+            || self.source_vault_rent_lamports == 0
+            || self.source_replay_rent_lamports == 0
+            || self.resulting_revision == 0
+        {
+            return Err(ProjectedCustodyError::Receipt);
+        }
+        let mut output = [0; PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1];
+        output[..8].copy_from_slice(&PROJECTED_CUSTODY_LOCK_RECEIPT_MAGIC_V1);
+        put_u16(&mut output, 8, VERSION_V1)?;
+        write_identities(
+            &mut output,
+            32,
+            &[
+                self.market,
+                self.release_set,
+                self.context_digest,
+                self.source_vault,
+                self.source_replay,
+                self.hoard_vault,
+                self.rent_credit,
+                self.request_digest,
+            ],
+        )?;
+        put_u64(&mut output, 288, self.amount)?;
+        put_u64(&mut output, 296, self.source_vault_rent_lamports)?;
+        put_u64(&mut output, 304, self.source_replay_rent_lamports)?;
+        put_u64(&mut output, 312, self.resulting_revision)?;
+        Ok(output)
+    }
+
+    /// Hostile-decode exact lock-and-source-close evidence.
+    pub fn decode(input: &[u8]) -> Result<Self, ProjectedCustodyError> {
+        header(
+            input,
+            &PROJECTED_CUSTODY_LOCK_RECEIPT_MAGIC_V1,
+            PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1,
+        )?;
+        if any_nonzero(input, 10, 22)? {
+            return Err(ProjectedCustodyError::NonCanonical);
+        }
+        let ids = read_identities::<8>(input, 32)?;
+        let value = Self {
+            market: ids[0],
+            release_set: ids[1],
+            context_digest: ids[2],
+            source_vault: ids[3],
+            source_replay: ids[4],
+            hoard_vault: ids[5],
+            rent_credit: ids[6],
+            request_digest: ids[7],
+            amount: read_u64(input, 288)?,
+            source_vault_rent_lamports: read_u64(input, 296)?,
+            source_replay_rent_lamports: read_u64(input, 304)?,
+            resulting_revision: read_u64(input, 312)?,
+        };
+        value.encode()?;
+        Ok(value)
+    }
+}
+
 /// Typed terminal evidence for refund or no-move Hoard realization.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProjectedCustodyReceiptV1 {
     /// True only for exact newly-founded Market realization.
     pub realized: bool,
+    /// True only for expiry cleanup of an empty prepared Hoard.
+    pub aborted_open: bool,
     /// Future/newly-founded Market.
     pub market: [u8; 32],
     /// Selected release set.
@@ -751,8 +1003,9 @@ impl ProjectedCustodyReceiptV1 {
         nonzero(self.hoard_vault)?;
         nonzero(self.request_digest)?;
         nonzero(self.rent_credit)?;
-        if self.amount == 0
-            || self.resulting_revision == 0
+        if self.resulting_revision == 0
+            || (self.realized && self.aborted_open)
+            || (self.aborted_open != (self.amount == 0))
             || self.realized == self.market_state_digest.iter().all(|byte| *byte == 0)
         {
             return Err(ProjectedCustodyError::Receipt);
@@ -761,6 +1014,7 @@ impl ProjectedCustodyReceiptV1 {
         output[..8].copy_from_slice(&PROJECTED_CUSTODY_RECEIPT_MAGIC_V1);
         put_u16(&mut output, 8, VERSION_V1)?;
         put_u8(&mut output, 10, u8::from(self.realized))?;
+        put_u8(&mut output, 11, u8::from(self.aborted_open))?;
         write_identities(
             &mut output,
             32,
@@ -787,7 +1041,7 @@ impl ProjectedCustodyReceiptV1 {
             &PROJECTED_CUSTODY_RECEIPT_MAGIC_V1,
             PROJECTED_CUSTODY_RECEIPT_BYTES_V1,
         )?;
-        if any_nonzero(input, 11, 21)? || any_nonzero(input, 304, 16)? {
+        if any_nonzero(input, 12, 20)? || any_nonzero(input, 304, 16)? {
             return Err(ProjectedCustodyError::NonCanonical);
         }
         let realized = match read_u8(input, 10)? {
@@ -795,9 +1049,15 @@ impl ProjectedCustodyReceiptV1 {
             1 => true,
             _ => return Err(ProjectedCustodyError::NonCanonical),
         };
+        let aborted_open = match read_u8(input, 11)? {
+            0 => false,
+            1 => true,
+            _ => return Err(ProjectedCustodyError::NonCanonical),
+        };
         let ids = read_identities::<8>(input, 32)?;
         let value = Self {
             realized,
+            aborted_open,
             market: ids[0],
             release_set: ids[1],
             parent_capability_root: ids[2],
@@ -818,14 +1078,19 @@ impl ProjectedCustodyReceiptV1 {
         request: ProjectedCustodyRequestV1,
         request_digest: [u8; 32],
         realized: bool,
+        aborted_open: bool,
         market_state_digest: [u8; 32],
     ) -> Result<Self, ProjectedCustodyError> {
         nonzero(request_digest)?;
-        if realized == market_state_digest.iter().all(|byte| *byte == 0) {
+        if realized == market_state_digest.iter().all(|byte| *byte == 0)
+            || (realized && aborted_open)
+            || (aborted_open != (state.locked_amount == 0))
+        {
             return Err(ProjectedCustodyError::Receipt);
         }
         Ok(Self {
             realized,
+            aborted_open,
             market: state.request.market,
             release_set: state.request.release_set,
             parent_capability_root: state.request.parent_capability_root,
@@ -1050,6 +1315,26 @@ mod tests {
             amount,
             state_rent_lamports: 1_000,
             vault_rent_lamports: 2_000,
+            funding_source_replay_revision: 3,
+            funding_source_state_rent_lamports: 3_000,
+            funding_source_vault_rent_lamports: 4_000,
+        }
+    }
+
+    fn source_replay() -> CustodyReplayV1 {
+        CustodyReplayV1 {
+            caller_role: ExecutionRoleV1::Trading,
+            release_set: id(6),
+            market: id(1),
+            realm: id(2),
+            context: id(18),
+            caller_program: id(10),
+            rent_refund: id(15),
+            open_vault_count: 1,
+            next_revision: 3,
+            generation: 7,
+            last_request_digest: id(40),
+            last_poststate_commitment: id(41),
         }
     }
 
@@ -1160,6 +1445,12 @@ mod tests {
             external_source.validate(),
             Err(ProjectedCustodyError::NonCanonical)
         );
+        let mut colliding_context = init;
+        colliding_context.context_digest = colliding_context.funding_source_context;
+        assert_eq!(
+            colliding_context.validate(),
+            Err(ProjectedCustodyError::NonCanonical)
+        );
         let mut bytes = init.encode().expect("bytes");
         bytes[13] = 1;
         assert_eq!(
@@ -1217,5 +1508,142 @@ mod tests {
             ),
             Err(ProjectedCustodyError::Market)
         );
+    }
+
+    #[test]
+    fn empty_open_can_abort_only_after_expiry() {
+        let state = ProjectedCustodyStateV1::initialize(
+            request(ProjectedCustodyOperationV1::Initialize, 0, 0),
+            projection(),
+            id(12),
+            id(7),
+            id(30),
+            50,
+            true,
+            9,
+        )
+        .expect("initialize")
+        .open_hoard(
+            request(ProjectedCustodyOperationV1::OpenHoard, 1, 0),
+            id(31),
+            0,
+            true,
+        )
+        .expect("open");
+        let abort = request(ProjectedCustodyOperationV1::AbortOpenAndClose, 2, 0);
+        assert_eq!(
+            state.abort_open_and_close(abort, id(32), 100, 0, id(15), true),
+            Err(ProjectedCustodyError::Expiry)
+        );
+        assert_eq!(
+            state.abort_open_and_close(abort, id(32), 101, 1, id(15), true),
+            Err(ProjectedCustodyError::Expiry)
+        );
+        let receipt = state
+            .abort_open_and_close(abort, id(32), 101, 0, id(15), true)
+            .expect("abort");
+        assert!(!receipt.realized);
+        assert!(receipt.aborted_open);
+        assert_eq!(receipt.amount, 0);
+        let bytes = receipt.encode().expect("receipt bytes");
+        assert_eq!(ProjectedCustodyReceiptV1::decode(&bytes), Ok(receipt));
+    }
+
+    #[test]
+    fn lock_can_atomically_exhaust_and_close_exact_normal_source() {
+        let state = ProjectedCustodyStateV1::initialize(
+            request(ProjectedCustodyOperationV1::Initialize, 0, 0),
+            projection(),
+            id(12),
+            id(7),
+            id(30),
+            50,
+            true,
+            9,
+        )
+        .expect("initialize")
+        .open_hoard(
+            request(ProjectedCustodyOperationV1::OpenHoard, 1, 0),
+            id(31),
+            0,
+            true,
+        )
+        .expect("open");
+        let lock = request(ProjectedCustodyOperationV1::LockHoardAndCloseSource, 2, 500);
+        assert_eq!(
+            state.lock_hoard_and_close_source(
+                lock,
+                id(32),
+                id(42),
+                source_replay(),
+                500,
+                1,
+                0,
+                499,
+                4_000,
+                3_000,
+                id(15),
+                true,
+            ),
+            Err(ProjectedCustodyError::Balance)
+        );
+        let mut wrong_replay = source_replay();
+        wrong_replay.context = id(43);
+        assert_eq!(
+            state.lock_hoard_and_close_source(
+                lock,
+                id(32),
+                id(42),
+                wrong_replay,
+                500,
+                0,
+                0,
+                500,
+                4_000,
+                3_000,
+                id(15),
+                true,
+            ),
+            Err(ProjectedCustodyError::Balance)
+        );
+        assert_eq!(
+            state.lock_hoard_and_close_source(
+                lock,
+                id(32),
+                id(42),
+                source_replay(),
+                500,
+                0,
+                0,
+                500,
+                3_999,
+                3_000,
+                id(15),
+                true,
+            ),
+            Err(ProjectedCustodyError::Balance)
+        );
+        let (next, receipt) = state
+            .lock_hoard_and_close_source(
+                lock,
+                id(32),
+                id(42),
+                source_replay(),
+                500,
+                0,
+                0,
+                500,
+                4_000,
+                3_000,
+                id(15),
+                true,
+            )
+            .expect("lock and close source");
+        assert_eq!(next.phase, ProjectedCustodyPhaseV1::HoardLocked);
+        assert_eq!(next.locked_amount, 500);
+        assert_eq!(receipt.source_vault, id(17));
+        assert_eq!(receipt.source_replay, id(42));
+        let bytes = receipt.encode().expect("receipt bytes");
+        assert_eq!(ProjectedCustodyLockReceiptV1::decode(&bytes), Ok(receipt));
     }
 }
