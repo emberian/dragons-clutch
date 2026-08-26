@@ -340,13 +340,25 @@ pub fn admit_authenticated_records_v2(
     portfolio_bytes: &[u8],
 ) -> Result<AdmissionProjectionV2> {
     let product = ProductRecordV2::decode(product_bytes)?;
+    let domain = ResultDomainV2::decode(result_domain_bytes).map_err(map_product)?;
+    let portfolio = PortfolioV2::decode(portfolio_bytes).map_err(map_product)?;
+    admit_authenticated_views_v2(receipt, product, domain, portfolio)
+}
+
+/// Join already decoded views after an adapter independently authenticated
+/// their exact raw bodies and coordinates. Long runtime tails are therefore
+/// decoded once without changing composition authority.
+pub fn admit_authenticated_views_v2(
+    receipt: AdmissionReceiptV2,
+    product: ProductRecordV2,
+    domain: ResultDomainV2<'_>,
+    portfolio: PortfolioV2<'_>,
+) -> Result<AdmissionProjectionV2> {
     if product.result_domain_digest != receipt.result_domain.content_digest
         || product.portfolio_digest != receipt.portfolio.content_digest
     {
         return Err(Error::ProductMismatch);
     }
-    let domain = ResultDomainV2::decode(result_domain_bytes).map_err(map_product)?;
-    let portfolio = PortfolioV2::decode(portfolio_bytes).map_err(map_product)?;
     if domain.product_id() != product.product_id {
         return Err(Error::ProductMismatch);
     }

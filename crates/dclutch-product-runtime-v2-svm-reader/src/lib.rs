@@ -13,7 +13,7 @@ use dclutch_product_runtime_v2::{ContentId, PortfolioV2, ResultDomainV2};
 use dclutch_product_runtime_v2_admission::{
     AdmissionReceiptV2, FinalizedRecordCoordinateV2, PORTFOLIO_SCHEMA_ID_V2,
     PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2, RESULT_DOMAIN_SCHEMA_ID_V2,
-    admit_authenticated_records_v2,
+    admit_authenticated_views_v2,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use solana_program::{account_info::AccountInfo, hash::hash, pubkey::Pubkey, rent::Rent};
@@ -210,11 +210,10 @@ pub fn authenticate_product_runtime_v2<'accounts, 'info>(
         result_domain: result_domain_record.coordinate()?,
         portfolio: portfolio_record.coordinate()?,
     };
-    let projection =
-        admit_authenticated_records_v2(receipt, &product_data, &domain_data, &portfolio_data)
-            .map_err(|_| Error::Composition)?;
     let domain = ResultDomainV2::decode(&domain_data).map_err(|_| Error::Composition)?;
     let portfolio = PortfolioV2::decode(&portfolio_data).map_err(|_| Error::Composition)?;
+    let projection = admit_authenticated_views_v2(receipt, product, domain, portfolio)
+        .map_err(|_| Error::Composition)?;
     if projection.product_record_digest != product_record.content_digest
         || projection.portfolio_record_digest != portfolio_record.content_digest
         || projection.join.product_id != product.product_id()
