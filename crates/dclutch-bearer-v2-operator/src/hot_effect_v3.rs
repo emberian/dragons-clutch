@@ -10,6 +10,9 @@ use dclutch_effect_kernel::{
             RouteInputV3, ScalarCoordinateV3, encode_effect_program_v3_atomic,
         },
     },
+    v4::{
+        BorrowedRangePolicyV4, HEADER_BYTES_V4 as EFFECT_V4_HEADER_BYTES, encode_program_v4_atomic,
+    },
 };
 use dclutch_rational_representation_v2_contract::{
     CallerRoleV2, PHYSICAL_ABI_VERSION_V2, RATIONAL_TERMINAL_HOT_ACTION_OFFSET_V3,
@@ -75,10 +78,13 @@ const EFFECT_ROUTE_COUNT: usize = 1;
 const EFFECT_INSTRUCTION_COUNT: usize = 31;
 
 /// Exact encoded EffectProgram width for terminal Rational redemption.
-pub const RATIONAL_TERMINAL_EFFECT_BYTES_V3: usize = EFFECT_HEADER_BYTES
+const RATIONAL_TERMINAL_EFFECT_BASE_BYTES_V3: usize = EFFECT_HEADER_BYTES
     + EFFECT_ROUTE_COUNT * EFFECT_ROUTE_BYTES
     + EFFECT_INSTRUCTION_COUNT * EFFECT_OPERATION_BYTES
     + RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3;
+/// Exact encoded EffectProgram V4 width for terminal Rational redemption.
+pub const RATIONAL_TERMINAL_EFFECT_BYTES_V3: usize =
+    EFFECT_V4_HEADER_BYTES + RATIONAL_TERMINAL_EFFECT_BASE_BYTES_V3;
 
 /// Encode the one-route Claims program selected for terminal redemption.
 ///
@@ -112,17 +118,30 @@ pub fn encode_rational_terminal_effect_v3() -> Result<[u8; RATIONAL_TERMINAL_EFF
             .map_err(|_| Error::EffectArtifact(dclutch_effect_kernel::v3::Error::InvalidLength))?,
         item_identity_stride: 0,
     };
-    let mut scratch = [0_u8; RATIONAL_TERMINAL_EFFECT_BYTES_V3];
-    let mut output = [0_u8; RATIONAL_TERMINAL_EFFECT_BYTES_V3];
+    let mut scratch = [0_u8; RATIONAL_TERMINAL_EFFECT_BASE_BYTES_V3];
+    let mut base = [0_u8; RATIONAL_TERMINAL_EFFECT_BASE_BYTES_V3];
     encode_effect_program_v3_atomic(
         geometry,
         &routes,
         &instructions,
         &[],
         &mut scratch,
-        &mut output,
+        &mut base,
     )
     .map_err(Error::EffectArtifact)?;
+    let mut scratch = [0_u8; RATIONAL_TERMINAL_EFFECT_BYTES_V3];
+    let mut output = [0_u8; RATIONAL_TERMINAL_EFFECT_BYTES_V3];
+    encode_program_v4_atomic(
+        &base,
+        BorrowedRangePolicyV4::DisjointExactCoverage,
+        u32::try_from(RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3)
+            .map_err(|_| Error::ArtifactGeometry)?,
+        &[],
+        &[],
+        &mut scratch,
+        &mut output,
+    )
+    .map_err(Error::EffectArtifactV4)?;
     Ok(output)
 }
 
@@ -234,7 +253,8 @@ mod tests {
     use super::*;
     use dclutch_effect_kernel::{
         v2::{AccountInput, AccountPermission},
-        v3::{ProgramV3, ProjectionV3, project_atomic},
+        v3::{ProjectionV3, project_atomic},
+        v4::ProgramV4,
     };
     use dclutch_rational_representation_v2_contract::{
         ABSENT_REVISION, RATIONAL_TERMINAL_SCALAR_PRODUCT_OUTCOME_COUNT_V3, RepresentationRequestV2,
@@ -248,7 +268,14 @@ mod tests {
     #[test]
     fn effect_reconstructs_exact_terminal_claims_child() {
         let bytes = encode_rational_terminal_effect_v3().expect("effect");
-        let program = ProgramV3::decode(&bytes).expect("decode");
+        let successor = ProgramV4::decode(&bytes).expect("decode");
+        assert_eq!(successor.span_count(), 0);
+        assert_eq!(successor.range_count(), 0);
+        assert_eq!(
+            successor.semantic_prefix_bytes(),
+            u32::try_from(RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3).expect("request width")
+        );
+        let program = successor.base();
         assert_eq!(program.route_count(), 1);
         assert_eq!(program.account_count(258).expect("accounts"), 54);
         let route = program.route(0).expect("route");

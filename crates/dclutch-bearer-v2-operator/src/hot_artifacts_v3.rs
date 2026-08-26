@@ -1,8 +1,7 @@
 //! Typed RequestProfile and TransitionVM artifacts for terminal Bearer redemption.
 
 use dclutch_rational_representation_v2_contract::{
-    CallerRoleV2, RATIONAL_TERMINAL_HOT_ACTION_OFFSET_V3,
-    RATIONAL_TERMINAL_HOT_ACTOR_OFFSET_V3,
+    CallerRoleV2, RATIONAL_TERMINAL_HOT_ACTION_OFFSET_V3, RATIONAL_TERMINAL_HOT_ACTOR_OFFSET_V3,
     RATIONAL_TERMINAL_HOT_ASSET_ACTOR_SHARD_ACCOUNT_OFFSET_V3,
     RATIONAL_TERMINAL_HOT_ASSET_CLAIMS_CUSTODY_OWNER_OFFSET_V3,
     RATIONAL_TERMINAL_HOT_ASSET_COEFFICIENT_OFFSET_V3, RATIONAL_TERMINAL_HOT_ASSET_COUNT_OFFSET_V3,
@@ -67,7 +66,7 @@ use dclutch_transition_vm::v3::{
 use crate::{Error, Result};
 
 const REQUEST_INSTRUCTION_COUNT: usize = 39;
-const TRANSITION_INSTRUCTION_COUNT: usize = 5;
+const TRANSITION_INSTRUCTION_COUNT: usize = 4;
 
 /// Exact encoded RequestProfile V1 width for terminal Rational Hot V3.
 pub const RATIONAL_TERMINAL_REQUEST_PROFILE_BYTES_V3: usize =
@@ -261,12 +260,13 @@ pub fn encode_rational_terminal_request_profile_v3()
     Ok(output)
 }
 
-/// Encode the terminal transition which joins request width to Product state.
+/// Encode the terminal transition which checks representation-local width.
 ///
 /// Claims remains the sole economic authority. This small transition checks
-/// only family-local invariants needed before dispatch: exact Product width,
-/// selected-coordinate bounds, positive quantity/denominator, and the Bearer
-/// basis-vector coefficient relation.
+/// only family-local invariants needed before dispatch: the selected claim is
+/// bounded by representation width `K`, quantity and denominator are positive,
+/// and the Bearer basis-vector coefficient equals the denominator. Product
+/// result width `N` is independent authenticated terminal evidence.
 pub fn encode_rational_terminal_transition_v3()
 -> Result<[u8; RATIONAL_TERMINAL_TRANSITION_BYTES_V3]> {
     let s = |index: usize| {
@@ -277,13 +277,9 @@ pub fn encode_rational_terminal_transition_v3()
             })
     };
     let prelude = [
-        InstructionV3::scalar_eq(
-            s(RATIONAL_TERMINAL_SCALAR_OUTCOME_COUNT_V3)?,
-            s(RATIONAL_TERMINAL_SCALAR_PRODUCT_OUTCOME_COUNT_V3)?,
-        ),
         InstructionV3::scalar_lt(
             s(RATIONAL_TERMINAL_SCALAR_SELECTED_OUTCOME_V3)?,
-            s(RATIONAL_TERMINAL_SCALAR_PRODUCT_OUTCOME_COUNT_V3)?,
+            s(RATIONAL_TERMINAL_SCALAR_OUTCOME_COUNT_V3)?,
         ),
         InstructionV3::nonzero(s(RATIONAL_TERMINAL_SCALAR_QUANTITY_V3)?),
         InstructionV3::nonzero(s(RATIONAL_TERMINAL_SCALAR_DENOMINATOR_V3)?),
@@ -358,8 +354,7 @@ fn project_u32(offset: usize, register: usize) -> Result<RequestInstructionV1> {
 mod tests {
     use super::*;
     use dclutch_rational_representation_v2_contract::{
-        ABSENT_REVISION,
-        ASSET_BYTES_V2, AssetV2, RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3,
+        ABSENT_REVISION, ASSET_BYTES_V2, AssetV2, RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3,
         RationalTerminalHotRequestV3, RepresentationRequestHeaderV2, RepresentationRequestV2,
     };
     use dclutch_request_profile_contract::{
@@ -413,8 +408,8 @@ mod tests {
                 quantity: 2,
                 denominator: 10,
                 expected_receipt_supply: 0,
-                outcome_count: 258,
-                selected_outcome: 257,
+                outcome_count: 3,
+                selected_outcome: 2,
                 asset_count: 1,
             },
             &asset_bytes,
@@ -426,7 +421,7 @@ mod tests {
     }
 
     #[test]
-    fn typed_artifacts_project_exact_registers_and_bind_product_width() {
+    fn typed_artifacts_keep_representation_k_independent_from_product_n() {
         let profile_bytes = encode_rational_terminal_request_profile_v3().expect("profile bytes");
         let profile = RequestProfileV1::decode(&profile_bytes).expect("profile");
         let family_bytes = family_bytes();
@@ -485,7 +480,7 @@ mod tests {
         )
         .expect("transition accepts");
 
-        output_scalars[RATIONAL_TERMINAL_SCALAR_OUTCOME_COUNT_V3] = 259;
+        output_scalars[RATIONAL_TERMINAL_SCALAR_SELECTED_OUTCOME_V3] = 3;
         assert!(
             execute_fold_atomic(
                 transition,

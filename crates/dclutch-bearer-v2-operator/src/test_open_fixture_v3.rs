@@ -18,17 +18,20 @@ use dclutch_rational_representation_v2_kernel::{
     DescriptorAdmissionV2, RepresentationDescriptorV2,
 };
 use dclutch_token_svm::{
-    TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, TokenBehaviorSelectionV2,
+    TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_BYTES_V2,
+    TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, TokenBehaviorSelectionV2,
 };
 use solana_program::hash::hash;
 
 use crate::{
     RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3, RATIONAL_OPEN_STRUCTURED_FIXED_ACCOUNTS_V3,
-    RationalOpenCapabilityProgramSetInputV3, RationalOpenCapabilityProgramSetV3,
-    RationalOpenSelectedHotBundleInputV3, RationalOpenSelectedHotBundleV3,
-    RationalOpenStructuredHotBundleInputV3, RationalOpenStructuredHotBundleV3,
+    RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3, RationalOpenCapabilityProgramSetInputV3,
+    RationalOpenCapabilityProgramSetV3, RationalOpenSelectedHotBundleInputV3,
+    RationalOpenSelectedHotBundleV3, RationalOpenStructuredHotBundleInputV3,
+    RationalOpenStructuredHotBundleV3, RationalTerminalAccountProfileInputV3,
+    RationalTerminalHotBundleInputV3, RationalTerminalHotBundleV3,
     build_rational_open_capability_program_set_v3, build_rational_open_selected_hot_bundle_v3,
-    build_rational_open_structured_hot_bundle_v3,
+    build_rational_open_structured_hot_bundle_v3, build_rational_terminal_hot_bundle_v3,
 };
 
 pub(crate) struct OpenArtifactFixtureV3 {
@@ -37,6 +40,7 @@ pub(crate) struct OpenArtifactFixtureV3 {
     pub(crate) reconstitute: RationalOpenSelectedHotBundleV3,
     pub(crate) issue: RationalOpenStructuredHotBundleV3,
     pub(crate) unwrap: RationalOpenStructuredHotBundleV3,
+    pub(crate) redeem: RationalTerminalHotBundleV3,
     pub(crate) set: RationalOpenCapabilityProgramSetV3,
 }
 
@@ -57,6 +61,11 @@ pub(crate) fn open_artifact_fixture_v3(
     let mut structured_lengths = [0_u32; RATIONAL_OPEN_STRUCTURED_FIXED_ACCOUNTS_V3 as usize];
     structured_lengths[4] = u32::try_from(basis.len()).expect("basis length");
     structured_lengths[29] = u32::try_from(basis.len()).expect("basis alias length");
+    let mut terminal_lengths = [0_u32; RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3 as usize];
+    terminal_lengths[1] =
+        u32::try_from(TOKEN_BEHAVIOR_SELECTION_BYTES_V2).expect("Token selection width");
+    terminal_lengths[4] = u32::try_from(basis.len()).expect("basis length");
+    terminal_lengths[29] = u32::try_from(basis.len()).expect("basis alias length");
     let lifecycle = lifecycle_policy();
 
     let selected = |action| {
@@ -93,6 +102,19 @@ pub(crate) fn open_artifact_fixture_v3(
     let reconstitute = selected(RepresentationActionV2::Reconstitute);
     let issue = structured(RepresentationActionV2::IssueStructured);
     let unwrap = structured(RepresentationActionV2::UnwrapStructured);
+    let redeem = build_rational_terminal_hot_bundle_v3(RationalTerminalHotBundleInputV3 {
+        account_profile: RationalTerminalAccountProfileInputV3 {
+            logical_data_lengths: &terminal_lengths,
+            product_basis: &basis,
+        },
+        kind: id(10),
+        authenticated_token_behavior: token_behavior,
+        root_schema: id(11),
+        lifecycle_policy: lifecycle,
+        capacity_profile: id(13),
+        root_state_bytes: 8,
+    })
+    .expect("terminal artifact");
     let set =
         build_rational_open_capability_program_set_v3(RationalOpenCapabilityProgramSetInputV3 {
             authenticated_token_behavior: token_behavior,
@@ -100,6 +122,7 @@ pub(crate) fn open_artifact_fixture_v3(
             reconstitute: &reconstitute,
             issue_structured: &issue,
             unwrap_structured: &unwrap,
+            redeem_terminal: &redeem,
         })
         .expect("capability set");
     OpenArtifactFixtureV3 {
@@ -108,6 +131,7 @@ pub(crate) fn open_artifact_fixture_v3(
         reconstitute,
         issue,
         unwrap,
+        redeem,
         set,
     }
 }
@@ -270,20 +294,21 @@ fn put(output: &mut [u8], offset: usize, input: &[u8]) {
 }
 
 #[test]
-fn four_action_set_retains_each_distinct_descriptor() {
+fn five_action_set_retains_each_distinct_descriptor() {
     let artifacts = open_artifact_fixture_v3(id(15), id(16), 258);
     assert_ne!(
         artifacts.denominate.descriptor,
         artifacts.reconstitute.descriptor
     );
     assert_ne!(artifacts.issue.descriptor, artifacts.unwrap.descriptor);
+    assert_ne!(artifacts.unwrap.descriptor, artifacts.redeem.descriptor);
     let set = dclutch_capability_program_contract::set_v2::CapabilityProgramSetV2::decode_selected(
         artifacts.set.program_set_id,
         hash(&artifacts.set.program_set).to_bytes(),
         &artifacts.set.program_set,
     )
     .expect("program set");
-    for ordinal in 0..4 {
+    for ordinal in 0..5 {
         assert_eq!(
             set.entry(ordinal)
                 .expect("entry")

@@ -1,4 +1,4 @@
-//! Schema-bound four-action program set for open Bearer and Structured routes.
+//! Schema-bound five-action program set for Bearer and Structured routes.
 
 use dclutch_capability_program_contract::{
     set_v2::{
@@ -19,12 +19,14 @@ use dclutch_token_svm::{TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TOKEN_BEHAVIOR_SELECT
 use solana_program::hash::hash;
 
 use crate::{
-    Error, RationalOpenSelectedHotBundleV3, RationalOpenStructuredHotBundleV3, Result,
+    Error, RationalOpenSelectedHotBundleV3, RationalOpenStructuredHotBundleV3,
+    RationalTerminalHotBundleV3, Result,
     validate_rational_open_selected_hot_bundle_for_authenticated_selection_v3,
     validate_rational_open_structured_hot_bundle_for_authenticated_selection_v3,
+    validate_rational_terminal_hot_bundle_for_authenticated_selection_v3,
 };
 
-/// Four exact action descriptors sharing one admitted Token selection.
+/// Five exact action descriptors sharing one admitted Token selection.
 #[derive(Clone, Copy, Debug)]
 pub struct RationalOpenCapabilityProgramSetInputV3<'a> {
     /// Finalized descriptor/Market/config Token behavior admission.
@@ -37,9 +39,11 @@ pub struct RationalOpenCapabilityProgramSetInputV3<'a> {
     pub issue_structured: &'a RationalOpenStructuredHotBundleV3,
     /// Exact UnwrapStructured artifact bundle.
     pub unwrap_structured: &'a RationalOpenStructuredHotBundleV3,
+    /// Exact RedeemTerminal artifact bundle.
+    pub redeem_terminal: &'a RationalTerminalHotBundleV3,
 }
 
-/// Canonical config and schema-bound four-action CapabilityProgramSetV2.
+/// Canonical config and schema-bound five-action CapabilityProgramSetV2.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RationalOpenCapabilityProgramSetV3 {
     /// Exact Realm/release-selected Token behavior config bytes.
@@ -52,7 +56,7 @@ pub struct RationalOpenCapabilityProgramSetV3 {
     pub program_set_id: [u8; 32],
 }
 
-/// Build the canonical schema-bound four-action set.
+/// Build the canonical schema-bound five-action set.
 pub fn build_rational_open_capability_program_set_v3(
     input: RationalOpenCapabilityProgramSetInputV3<'_>,
 ) -> Result<RationalOpenCapabilityProgramSetV3> {
@@ -72,6 +76,10 @@ pub fn build_rational_open_capability_program_set_v3(
         input.unwrap_structured,
         input.authenticated_token_behavior,
     )?;
+    validate_rational_terminal_hot_bundle_for_authenticated_selection_v3(
+        input.redeem_terminal,
+        input.authenticated_token_behavior,
+    )?;
 
     let selection = input.authenticated_token_behavior.selection().to_bytes();
     if hash(&selection).to_bytes() != input.authenticated_token_behavior.content_digest() {
@@ -82,6 +90,7 @@ pub fn build_rational_open_capability_program_set_v3(
         input.reconstitute.token_behavior_selection.as_slice(),
         input.issue_structured.token_behavior_selection.as_slice(),
         input.unwrap_structured.token_behavior_selection.as_slice(),
+        input.redeem_terminal.token_behavior_selection.as_slice(),
     ] {
         if observed != selection {
             return Err(Error::ArtifactGeometry);
@@ -99,6 +108,7 @@ pub fn build_rational_open_capability_program_set_v3(
             input.unwrap_structured,
             RepresentationActionV2::UnwrapStructured,
         )?,
+        terminal_descriptor_entry(input.redeem_terminal)?,
     ];
     let width =
         encoded_program_set_bytes_v2(descriptors.len()).map_err(Error::CapabilityProgramSet)?;
@@ -142,6 +152,10 @@ pub fn validate_rational_open_capability_program_set_v3(
         input.unwrap_structured,
         input.authenticated_token_behavior,
     )?;
+    validate_rational_terminal_hot_bundle_for_authenticated_selection_v3(
+        input.redeem_terminal,
+        input.authenticated_token_behavior,
+    )?;
     if value.token_behavior_selection != input.authenticated_token_behavior.selection().to_bytes()
         || value.token_behavior_selection_id != input.authenticated_token_behavior.content_digest()
         || value.token_behavior_selection_id != hash(&value.token_behavior_selection).to_bytes()
@@ -166,6 +180,7 @@ pub fn validate_rational_open_capability_program_set_v3(
             input.unwrap_structured,
             RepresentationActionV2::UnwrapStructured,
         )?,
+        terminal_descriptor_entry(input.redeem_terminal)?,
     ];
     if usize::from(set.entry_count()) != expected_entries.len() {
         return Err(Error::ArtifactGeometry);
@@ -202,6 +217,16 @@ fn structured_descriptor_entry(
     expected_action: RepresentationActionV2,
 ) -> Result<CapabilityProgramSetEntryV2> {
     descriptor_entry_inner(&bundle.descriptor, &bundle.effect, expected_action)
+}
+
+fn terminal_descriptor_entry(
+    bundle: &RationalTerminalHotBundleV3,
+) -> Result<CapabilityProgramSetEntryV2> {
+    descriptor_entry_inner(
+        &bundle.descriptor,
+        &bundle.effect,
+        RepresentationActionV2::RedeemTerminal,
+    )
 }
 
 fn descriptor_entry_inner(

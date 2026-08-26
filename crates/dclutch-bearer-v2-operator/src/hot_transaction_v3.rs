@@ -8,7 +8,10 @@ use dclutch_capability_program_contract::hot_v3::{
     HOT_PRODUCT_RAW_ACCOUNT_V3, HOT_RENT_SYSVAR_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3,
     HOT_TRADING_PROGRAM_ACCOUNT_V3, HotExecutionEnvelopeV3,
 };
-use dclutch_rational_representation_v2_contract::RepresentationRequestV2;
+use dclutch_rational_representation_v2_contract::{
+    AuthenticatedTokenBehaviorV2, RationalTerminalHotRequestV3, RepresentationActionV2,
+    RepresentationRequestV2,
+};
 use dclutch_rational_representation_v2_operator::ConstructedInstructionV2;
 use solana_program::{
     hash::hash,
@@ -17,7 +20,12 @@ use solana_program::{
 };
 use solana_sdk_ids::sysvar;
 
-use crate::{ConstructedHotTerminalV3, Error, Result};
+use crate::open_capability_set_v3::require_open_program_selection_v3;
+use crate::{
+    ConstructedHotTerminalV3, Error, RationalOpenCapabilityProgramSetV3,
+    RationalTerminalHotBundleV3, Result,
+    validate_rational_terminal_hot_bundle_for_authenticated_selection_v3,
+};
 
 /// Checked-release evidence for the immutable Trading Hot outer.
 ///
@@ -80,13 +88,40 @@ pub struct RationalTerminalHotInstructionV3 {
 pub fn build_rational_terminal_hot_instruction_v3(
     state: &RationalTerminalHotStateV3<'_>,
     terminal: &ConstructedHotTerminalV3,
+    bundle: &RationalTerminalHotBundleV3,
+    capability_set: &RationalOpenCapabilityProgramSetV3,
+    authenticated_token_behavior: AuthenticatedTokenBehaviorV2,
 ) -> Result<RationalTerminalHotInstructionV3> {
-    let built = build_hot_instruction_from_claims_child_v3(
+    RationalTerminalHotRequestV3::decode(&terminal.family_request).map_err(Error::HotContract)?;
+    require_open_program_selection_v3(
+        capability_set,
+        authenticated_token_behavior,
+        &terminal.family_request,
+        &bundle.descriptor,
+    )?;
+    let child = RepresentationRequestV2::decode(&terminal.claims_child.instruction.data)
+        .map_err(Error::HotContract)?;
+    let header = child.header();
+    if header.action != RepresentationActionV2::RedeemTerminal
+        || header.asset_count != 1
+        || header.descriptor_id != authenticated_token_behavior.descriptor_id()
+        || header.release_set != authenticated_token_behavior.selection().release_set()
+        || header.release_set != state.release_set
+    {
+        return Err(Error::HotInstruction);
+    }
+    validate_rational_terminal_hot_bundle_for_authenticated_selection_v3(
+        bundle,
+        authenticated_token_behavior,
+    )?;
+    let built = build_profiled_hot_instruction_from_claims_child_v3(
         state,
         &terminal.family_request,
         terminal.family_digest,
         &terminal.claims_child,
         49,
+        &bundle.account_profile,
+        header.outcome_count,
     )?;
     Ok(RationalTerminalHotInstructionV3 {
         instruction: built.instruction,
@@ -101,23 +136,6 @@ pub(crate) struct BuiltHotInstructionV3 {
     pub(crate) instruction: Instruction,
     pub(crate) required_wallet_signers: Vec<Pubkey>,
     pub(crate) checked_manifest_digest: [u8; 32],
-}
-
-pub(crate) fn build_hot_instruction_from_claims_child_v3(
-    state: &RationalTerminalHotStateV3<'_>,
-    family_request: &[u8],
-    family_digest: [u8; 32],
-    claims_child: &ConstructedInstructionV2,
-    expected_child_accounts: usize,
-) -> Result<BuiltHotInstructionV3> {
-    build_hot_instruction_from_claims_child_inner_v3(
-        state,
-        family_request,
-        family_digest,
-        claims_child,
-        expected_child_accounts,
-        None,
-    )
 }
 
 pub(crate) fn build_profiled_hot_instruction_from_claims_child_v3(
@@ -445,6 +463,8 @@ mod tests {
     use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
     use solana_sdk_ids::system_program;
 
+    use crate::test_open_fixture_v3::{authenticated_token_behavior_v3, open_artifact_fixture_v3};
+
     fn key(value: u8) -> Pubkey {
         Pubkey::new_from_array([value; 32])
     }
@@ -487,8 +507,8 @@ mod tests {
             quantity: 2,
             denominator: 10,
             expected_receipt_supply: 0,
-            outcome_count: 258,
-            selected_outcome: 257,
+            outcome_count: 3,
+            selected_outcome: 2,
             asset_count: 1,
         };
         let child = RepresentationRequestV2::new(header, &asset).expect("child");
@@ -509,6 +529,18 @@ mod tests {
         metas.get_mut(0).expect("caller meta").is_signer = true;
         *metas.get_mut(3).expect("actor meta") = AccountMeta::new_readonly(key(6), true);
         *metas.get_mut(14).expect("Claims meta") = AccountMeta::new_readonly(claims_program, false);
+        for index in [11_usize, 12, 32, 33, 34, 43, 45, 46] {
+            metas
+                .get_mut(index)
+                .expect("writable child meta")
+                .is_writable = true;
+        }
+        *metas.get_mut(21).expect("Claims alias") =
+            AccountMeta::new_readonly(claims_program, false);
+        *metas.get_mut(23).expect("Claims alias") =
+            AccountMeta::new_readonly(claims_program, false);
+        let token_program = metas.get(22).expect("Token program").clone();
+        *metas.get_mut(48).expect("Token alias") = token_program;
         ConstructedHotTerminalV3 {
             family_request,
             family_digest,
@@ -576,14 +608,41 @@ mod tests {
         fixed
     }
 
+    fn bind_injected_aliases(terminal: &mut ConstructedHotTerminalV3, fixed: &[AccountMeta]) {
+        for (child, injected) in [
+            (24, HOT_LINKED_BASIS_RAW_ACCOUNT_V3),
+            (26, HOT_PRODUCT_RAW_ACCOUNT_V3),
+            (30, HOT_PORTFOLIO_RAW_ACCOUNT_V3),
+        ] {
+            let mut account = fixed.get(injected).expect("injected account").clone();
+            account.is_signer = false;
+            account.is_writable = false;
+            *terminal
+                .claims_child
+                .instruction
+                .accounts
+                .get_mut(child)
+                .expect("injected child alias") = account;
+        }
+    }
+
     #[test]
     fn builds_unsigned_hot38_and_preserves_only_wallet_signer() {
-        let terminal = terminal();
+        let mut terminal = terminal();
         let fixed = fixed();
+        bind_injected_aliases(&mut terminal, &fixed);
         let state = state(&fixed, &[7; 64]);
-        let report = build_rational_terminal_hot_instruction_v3(&state, &terminal).expect("hot");
+        let artifacts = open_artifact_fixture_v3(key(9).to_bytes(), key(1).to_bytes(), 258);
+        let report = build_rational_terminal_hot_instruction_v3(
+            &state,
+            &terminal,
+            &artifacts.redeem,
+            &artifacts.set,
+            artifacts.token_behavior,
+        )
+        .expect("hot");
         assert_eq!(report.instruction.program_id, key(60));
-        assert_eq!(report.instruction.accounts.len(), 38 + 49);
+        assert_eq!(report.instruction.accounts.len(), 38 + 43);
         assert!(
             !report
                 .instruction
@@ -611,10 +670,18 @@ mod tests {
     fn refuses_unchecked_release_and_noncanonical_actor_signer() {
         let mut terminal = terminal();
         let fixed = fixed();
+        bind_injected_aliases(&mut terminal, &fixed);
         let mut state = state(&fixed, &[7; 64]);
+        let artifacts = open_artifact_fixture_v3(key(9).to_bytes(), key(1).to_bytes(), 258);
         state.hot_outer = None;
         assert_eq!(
-            build_rational_terminal_hot_instruction_v3(&state, &terminal),
+            build_rational_terminal_hot_instruction_v3(
+                &state,
+                &terminal,
+                &artifacts.redeem,
+                &artifacts.set,
+                artifacts.token_behavior,
+            ),
             Err(Error::HotInstruction)
         );
         state.hot_outer = Some(CheckedRationalHotOuterReleaseV3 {
@@ -630,8 +697,31 @@ mod tests {
             .expect("actor meta")
             .is_signer = false;
         assert_eq!(
-            build_rational_terminal_hot_instruction_v3(&state, &terminal),
+            build_rational_terminal_hot_instruction_v3(
+                &state,
+                &terminal,
+                &artifacts.redeem,
+                &artifacts.set,
+                artifacts.token_behavior,
+            ),
             Err(Error::HotInstruction)
+        );
+
+        let hostile_behavior = authenticated_token_behavior_v3(
+            key(4).to_bytes(),
+            key(99).to_bytes(),
+            key(1).to_bytes(),
+            3,
+        );
+        assert_eq!(
+            build_rational_terminal_hot_instruction_v3(
+                &state,
+                &terminal,
+                &artifacts.redeem,
+                &artifacts.set,
+                hostile_behavior,
+            ),
+            Err(Error::ContentIdentity)
         );
     }
 }

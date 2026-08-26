@@ -35,7 +35,9 @@ pub use hot_artifacts_v3::{
 pub use hot_bundle_v3::{
     RATIONAL_TERMINAL_DESCRIPTOR_BYTES_V3, RATIONAL_TERMINAL_STRATEGY_BYTES_V3,
     RationalTerminalHotBundleInputV3, RationalTerminalHotBundleV3,
-    build_rational_terminal_hot_bundle_v3, validate_rational_terminal_hot_bundle_v3,
+    build_rational_terminal_hot_bundle_v3,
+    validate_rational_terminal_hot_bundle_for_authenticated_selection_v3,
+    validate_rational_terminal_hot_bundle_v3,
 };
 pub use hot_effect_v3::{
     RATIONAL_TERMINAL_CLAIMS_ACCOUNT_COUNT_V3, RATIONAL_TERMINAL_EFFECT_BYTES_V3,

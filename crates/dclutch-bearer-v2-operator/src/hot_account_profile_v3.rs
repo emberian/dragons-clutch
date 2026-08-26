@@ -1,21 +1,24 @@
 //! Exact logical AccountProfile for terminal Bearer redemption.
 
 use dclutch_account_profile_contract::v2::{
-    HEADER_BYTES as ACCOUNT_PROFILE_HEADER_BYTES, OPERATION_BYTES as ACCOUNT_OPERATION_BYTES,
-    RULE_BYTES as ACCOUNT_RULE_BYTES,
+    AccountPrestateV2, DYNAMIC_FIXED_SPAN_HEADER_BYTES, OPERATION_BYTES as ACCOUNT_OPERATION_BYTES,
+    RULE_BYTES as ACCOUNT_RULE_BYTES, TrustedBuiltinIdentityV2, TrustedEnvironmentV2,
+    TrustedIdentityEnvironmentV2,
     encode::{
         AccountAliasInputV2, AccountCoordinateV2, AccountEffectPermissionsV2,
-        AccountOperationInputV2, AccountPrivilegesV2, AccountProfileArtifactV2, AccountRuleInputV2,
-        RegisterGeometryV2, ScalarCoordinateV2, encode_account_profile_v2_atomic,
+        AccountOperationInputV2, AccountPrivilegesV2, AccountRuleInputV2,
+        AccountRuleWithPrestateInputV2, RegisterGeometryV2, ScalarCoordinateV2,
+        encode_account_profile_with_dynamic_fixed_span_v2_atomic,
     },
 };
 use dclutch_product_payoff_v2_codec::runtime_v3::{
-    BASIS_WIDTH_OFFSET_V3, BasisKindV3, ProductBasisV3,
+    BASIS_HEADER_BYTES_V3, BASIS_WIDTH_OFFSET_V3, ProductBasisV3,
 };
 use dclutch_rational_representation_v2_contract::{
     RATIONAL_TERMINAL_HOT_COMMON_IDENTITIES_V3, RATIONAL_TERMINAL_HOT_COMMON_SCALARS_V3,
     RATIONAL_TERMINAL_SCALAR_PRODUCT_OUTCOME_COUNT_V3,
 };
+use dclutch_token_svm::TOKEN_BEHAVIOR_SELECTION_BYTES_V2;
 
 use crate::{Error, RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3, Result};
 
@@ -23,7 +26,7 @@ const PROFILE_OPERATION_COUNT: usize = 1;
 const LOGICAL_ACCOUNT_COUNT: usize = RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3 as usize;
 
 /// Exact encoded AccountProfile width for terminal Bearer redemption.
-pub const RATIONAL_TERMINAL_ACCOUNT_PROFILE_BYTES_V3: usize = ACCOUNT_PROFILE_HEADER_BYTES
+pub const RATIONAL_TERMINAL_ACCOUNT_PROFILE_BYTES_V3: usize = DYNAMIC_FIXED_SPAN_HEADER_BYTES
     + LOGICAL_ACCOUNT_COUNT * ACCOUNT_RULE_BYTES
     + PROFILE_OPERATION_COUNT * ACCOUNT_OPERATION_BYTES;
 
@@ -49,8 +52,7 @@ pub fn encode_rational_terminal_account_profile_v3(
     }
     let basis =
         ProductBasisV3::decode(input.product_basis).map_err(|_| Error::AccountProfileInput)?;
-    if basis.kind() != BasisKindV3::CategoricalQ1
-        || basis.basis_width() < 2
+    if basis.basis_width() == 0
         || input
             .logical_data_lengths
             .get(4)
@@ -83,12 +85,14 @@ pub fn encode_rational_terminal_account_profile_v3(
     };
     let mut scratch = [0_u8; RATIONAL_TERMINAL_ACCOUNT_PROFILE_BYTES_V3];
     let mut output = [0_u8; RATIONAL_TERMINAL_ACCOUNT_PROFILE_BYTES_V3];
-    encode_account_profile_v2_atomic(
-        AccountProfileArtifactV2::TypedScalar,
+    encode_account_profile_with_dynamic_fixed_span_v2_atomic(
+        TrustedEnvironmentV2::None,
+        TrustedIdentityEnvironmentV2::None,
+        TrustedBuiltinIdentityV2::None,
+        &[],
         &rules,
         &[],
         &operations,
-        &[],
         geometry,
         &mut scratch,
         &mut output,
@@ -97,8 +101,7 @@ pub fn encode_rational_terminal_account_profile_v3(
     Ok(output)
 }
 
-fn rule(index: usize, lengths: &[u32]) -> Result<AccountRuleInputV2> {
-    let data_length = *lengths.get(index).ok_or(Error::AccountProfileInput)?;
+fn rule(index: usize, lengths: &[u32]) -> Result<AccountRuleWithPrestateInputV2> {
     let writable = matches!(index, 0 | 16 | 17 | 37 | 38 | 39 | 48 | 50 | 51);
     let signer = index == 8;
     let executable = matches!(index, 6 | 15 | 19 | 21 | 23 | 26 | 27 | 28 | 42 | 53);
@@ -113,12 +116,33 @@ fn rule(index: usize, lengths: &[u32]) -> Result<AccountRuleInputV2> {
         53 => AccountAliasInputV2::Fixed(27),
         _ => AccountAliasInputV2::SelfCoordinate,
     };
-    Ok(AccountRuleInputV2 {
-        privileges: AccountPrivilegesV2::new(signer, writable, executable),
-        effect_permissions: AccountEffectPermissionsV2::new(false, false, false),
-        alias,
-        data_length,
-        data_item_stride: 0,
+    let opaque = matches!(index, 6 | 7 | 19 | 20 | 21 | 23 | 24 | 25 | 27 | 38..=40 | 42..=52);
+    let prestate = if index == 4 {
+        AccountPrestateV2::AdapterAuthenticatedVariableData
+    } else if alias != AccountAliasInputV2::SelfCoordinate {
+        AccountPrestateV2::AuthenticatedRouteAlias
+    } else if opaque {
+        AccountPrestateV2::AuthenticatedOpaqueReadonlyData
+    } else {
+        AccountPrestateV2::Exact
+    };
+    let data_length = match index {
+        1 => u32::try_from(TOKEN_BEHAVIOR_SELECTION_BYTES_V2)
+            .map_err(|_| Error::AccountProfileInput)?,
+        4 => u32::try_from(BASIS_HEADER_BYTES_V3).map_err(|_| Error::AccountProfileInput)?,
+        26 | 28 | 29 | 31 | 35 | 53 => 0,
+        _ if opaque => 0,
+        _ => *lengths.get(index).ok_or(Error::AccountProfileInput)?,
+    };
+    Ok(AccountRuleWithPrestateInputV2 {
+        rule: AccountRuleInputV2 {
+            privileges: AccountPrivilegesV2::new(signer, writable, executable),
+            effect_permissions: AccountEffectPermissionsV2::new(false, false, false),
+            alias,
+            data_length,
+            data_item_stride: 0,
+        },
+        prestate,
     })
 }
 
@@ -130,7 +154,7 @@ mod tests {
         v2::{AccountProfileV2, ProjectionRegistersV2, project_tail_count_atomic},
     };
     use dclutch_product_payoff_v2_codec::runtime_v3::{
-        BASIS_HEADER_BYTES_V3, BasisInputV3, compile_basis_v3,
+        BASIS_HEADER_BYTES_V3, BasisInputV3, BasisKindV3, compile_basis_v3,
     };
 
     fn id(value: u8) -> [u8; 32] {
@@ -164,6 +188,8 @@ mod tests {
     fn profile_projects_product_basis_width_and_exact_aliases() {
         let basis = basis(258);
         let mut lengths = [0_u32; LOGICAL_ACCOUNT_COUNT];
+        *lengths.get_mut(1).expect("Token selection coordinate") =
+            u32::try_from(TOKEN_BEHAVIOR_SELECTION_BYTES_V2).expect("Token selection width");
         let basis_length = u32::try_from(basis.len()).expect("basis width");
         *lengths.get_mut(4).expect("basis logical coordinate") = basis_length;
         *lengths.get_mut(29).expect("basis child coordinate") = basis_length;
@@ -198,15 +224,36 @@ mod tests {
         }
         let observations = (0..LOGICAL_ACCOUNT_COUNT)
             .map(|index| {
-                AccountObservationV1::new(
+                let arguments = (
                     *keys.get(index).expect("logical key"),
                     id(200),
                     0,
-                    data.get(index).expect("logical data"),
+                    data.get(index).expect("logical data").as_slice(),
                     index == 8,
                     matches!(index, 0 | 16 | 17 | 37 | 38 | 39 | 48 | 50 | 51),
                     matches!(index, 6 | 15 | 19 | 21 | 23 | 26 | 27 | 28 | 42 | 53),
-                )
+                );
+                if index == 4 {
+                    AccountObservationV1::new_adapter_authenticated_variable_data(
+                        arguments.0,
+                        arguments.1,
+                        arguments.2,
+                        arguments.3,
+                        arguments.4,
+                        arguments.5,
+                        arguments.6,
+                    )
+                } else {
+                    AccountObservationV1::new(
+                        arguments.0,
+                        arguments.1,
+                        arguments.2,
+                        arguments.3,
+                        arguments.4,
+                        arguments.5,
+                        arguments.6,
+                    )
+                }
             })
             .collect::<Vec<_>>();
         let input_scalars = [0_u64; RATIONAL_TERMINAL_HOT_COMMON_SCALARS_V3];
@@ -235,6 +282,8 @@ mod tests {
     fn profile_refuses_nonbasis_bytes_and_unmatched_basis_length() {
         let basis = basis(258);
         let mut lengths = [0_u32; LOGICAL_ACCOUNT_COUNT];
+        *lengths.get_mut(1).expect("Token selection coordinate") =
+            u32::try_from(TOKEN_BEHAVIOR_SELECTION_BYTES_V2).expect("Token selection width");
         *lengths.get_mut(4).expect("basis logical coordinate") =
             u32::try_from(basis.len()).expect("basis length") - 1;
         assert_eq!(
