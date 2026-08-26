@@ -12,30 +12,31 @@ extern crate alloc;
 use alloc::{vec, vec::Vec};
 
 use dclutch_account_profile_contract::{
+    AccountObservationV1,
     lifecycle_v3::{
-        plan_lifecycle, AuthenticatedRentCreditV3, AuthenticatedRentMinimumV3, LifecycleContextV3,
-        LifecycleOperationV3, LifecycleRegistersV3, SeedValueV3, StateLifecyclePlanV3,
-        StateLifecyclePolicyV3, SCHEMA_RELEASE_ID as STATE_LIFECYCLE_POLICY_SCHEMA_ID_V3,
+        AuthenticatedRentCreditV3, AuthenticatedRentMinimumV3, LifecycleContextV3,
+        LifecycleOperationV3, LifecycleRegistersV3,
+        SCHEMA_RELEASE_ID as STATE_LIFECYCLE_POLICY_SCHEMA_ID_V3, SeedValueV3,
+        StateLifecyclePlanV3, StateLifecyclePolicyV3, plan_lifecycle,
     },
     v2::{
+        AccountProfileV2, ProjectionRegistersV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2,
         derive_effect_permissions, project_atomic as project_accounts_atomic,
-        project_tail_count_atomic, AccountProfileV2, ProjectionRegistersV2,
-        SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2,
+        project_tail_count_atomic,
     },
-    AccountObservationV1,
 };
-use dclutch_capability_contract::{CapabilityManifestV1, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1};
+use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
 use dclutch_capability_program_contract::{
+    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
     hot_v3::{
-        HotExecutionAckV3, HotExecutionEnvelopeV3, HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
-        HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3, HOT_ACTIVATION_CACHE_ACCOUNT_V3,
-        HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CONFIG_STAGING_ACCOUNT_V3, HOT_CORE_PROGRAMDATA_ACCOUNT_V3,
-        HOT_CORE_PROGRAM_ACCOUNT_V3, HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
-        HOT_DESCRIPTOR_STAGING_ACCOUNT_V3, HOT_EFFECT_RAW_ACCOUNT_V3,
-        HOT_EFFECT_STAGING_ACCOUNT_V3, HOT_EXECUTION_MAGIC_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
-        HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3, HOT_LIFECYCLE_RAW_ACCOUNT_V3,
-        HOT_LIFECYCLE_STAGING_ACCOUNT_V3, HOT_MANIFEST_RAW_ACCOUNT_V3,
-        HOT_MANIFEST_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3,
+        HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
+        HOT_ACTIVATION_CACHE_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CONFIG_STAGING_ACCOUNT_V3,
+        HOT_CORE_PROGRAM_ACCOUNT_V3, HOT_CORE_PROGRAMDATA_ACCOUNT_V3,
+        HOT_DESCRIPTOR_RAW_ACCOUNT_V3, HOT_DESCRIPTOR_STAGING_ACCOUNT_V3,
+        HOT_EFFECT_RAW_ACCOUNT_V3, HOT_EFFECT_STAGING_ACCOUNT_V3, HOT_EXECUTION_MAGIC_V3,
+        HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
+        HOT_LIFECYCLE_RAW_ACCOUNT_V3, HOT_LIFECYCLE_STAGING_ACCOUNT_V3,
+        HOT_MANIFEST_RAW_ACCOUNT_V3, HOT_MANIFEST_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3,
         HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3, HOT_PORTFOLIO_RAW_ACCOUNT_V3,
         HOT_PORTFOLIO_STAGING_ACCOUNT_V3, HOT_PRODUCT_RAW_ACCOUNT_V3,
         HOT_PRODUCT_STAGING_ACCOUNT_V3, HOT_PROGRAM_SET_RAW_ACCOUNT_V3,
@@ -44,45 +45,57 @@ use dclutch_capability_program_contract::{
         HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3, HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3,
         HOT_RESULT_DOMAIN_STAGING_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3,
         HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3, HOT_STRATEGY_RAW_ACCOUNT_V3,
-        HOT_STRATEGY_STAGING_ACCOUNT_V3, HOT_TRADING_PROGRAMDATA_ACCOUNT_V3,
-        HOT_TRADING_PROGRAM_ACCOUNT_V3, HOT_TRANSITION_RAW_ACCOUNT_V3,
-        HOT_TRANSITION_STAGING_ACCOUNT_V3,
+        HOT_STRATEGY_STAGING_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
+        HOT_TRADING_PROGRAMDATA_ACCOUNT_V3, HOT_TRANSITION_RAW_ACCOUNT_V3,
+        HOT_TRANSITION_STAGING_ACCOUNT_V3, HotExecutionAckV3, HotExecutionEnvelopeV3,
     },
-    set_v1::{CapabilityProgramSetV1, CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V1},
+    set_v1::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V1, CapabilityProgramSetV1},
     v3::{
-        CapabilityProgramV3, CAPABILITY_PROGRAM_V3_BYTES, SCHEMA_RELEASE_ID as PROGRAM_SCHEMA_ID_V3,
+        CAPABILITY_PROGRAM_V3_BYTES, CapabilityProgramV3, SCHEMA_RELEASE_ID as PROGRAM_SCHEMA_ID_V3,
     },
-    CapabilityRootHeaderV1, CAPABILITY_ROOT_HEADER_BYTES_V1,
 };
+use dclutch_core_contract::ContentId;
 use dclutch_effect_kernel::{
     v2::{AccountInput, AccountPermission, FixedRole},
     v3::{
-        project_atomic as project_effects_atomic, ProgramV3 as EffectProgramV3, ProjectionV3,
-        ResolvedEffectV3, SCHEMA_RELEASE_ID as EFFECT_SCHEMA_ID_V3,
+        ProgramV3 as EffectProgramV3, ProjectionV3, ResolvedEffectV3,
+        SCHEMA_RELEASE_ID as EFFECT_SCHEMA_ID_V3, project_atomic as project_effects_atomic,
     },
 };
-use dclutch_execution_strategy_contract::v2::{
-    ExecutionStrategyProgramV2, StrategyDispositionV2, EXECUTION_STRATEGY_PROGRAM_BYTES_V2,
+use dclutch_execution_strategy_contract::{
+    shadow_digest_v3::{
+        ShadowEffectProjectionV3, ShadowInvocationContextV3, ShadowResolvedRouteV3,
+        ShadowRouteKindV3, ShadowRouteRoleV3, ShadowRuntimeObservationV3, candidate_digest_v3,
+        effect_digest_v3, family_request_digest_v3, invocation_context_digest_v3,
+        runtime_observations_digest_v3,
+    },
+    shadow_v3::{
+        ShadowArtifactTupleV3, ShadowExecutionDigestsV3, ShadowRequestV3, ShadowRuntimeShapeV3,
+    },
+    v2::{
+        AcceleratorTransportProfileV2, EXECUTION_STRATEGY_PROGRAM_BYTES_V2,
+        ExecutionStrategyProgramV2, StrategyDispositionV2,
+    },
 };
 use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
 use dclutch_product_runtime_v2::ContentId as ProductContentId;
 use dclutch_product_runtime_v2_svm_reader::{
-    authenticate_product_runtime_v2, FinalizedRecordFrameV2 as ProductRecordFrameV2,
-    ProductRuntimeFrameV2,
+    FinalizedRecordFrameV2 as ProductRecordFrameV2, ProductRuntimeFrameV2,
+    authenticate_product_runtime_v2,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::ACTIVATION_PDA_DOMAIN_V1;
 use dclutch_registry_svm::{AuthenticatedRoleReceiptV1, RegistryInstructionV1};
 use dclutch_release_set_contract::ExecutionRoleV1;
-use dclutch_rent_contract::{RentCreditV1, RENT_CREDIT_BYTES_V1};
+use dclutch_rent_contract::{RENT_CREDIT_BYTES_V1, RentCreditV1};
 use dclutch_request_profile_contract::{
-    project_atomic as project_request_atomic,
-    v2::{NativeSignatureRegistersV1, RequestProfileV2, REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID},
     ProjectionRegistersV1, RequestProfileV1, SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1,
+    project_atomic as project_request_atomic,
+    v2::{NativeSignatureRegistersV1, REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID, RequestProfileV2},
 };
 use dclutch_transition_vm::v3::{
-    execute_fold_atomic, ProgramV3 as TransitionProgramV3, RegisterInput, RegisterOutput,
-    SCHEMA_RELEASE_ID as TRANSITION_SCHEMA_ID_V3,
+    ProgramV3 as TransitionProgramV3, RegisterInput, RegisterOutput,
+    SCHEMA_RELEASE_ID as TRANSITION_SCHEMA_ID_V3, execute_fold_atomic,
 };
 use solana_program::{
     account_info::AccountInfo,
@@ -98,30 +111,31 @@ use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign, transfer as system_transfer};
 
 use crate::{
+    TradingSbfError,
     core_composition_v3::{
-        execute_core_route_v3, preflight_core_route_v3, CoreCompositionParentV3,
+        CoreCompositionParentV3, execute_core_route_v3, preflight_core_route_v3,
     },
     dispatch::TradingFamilyContextV1,
     execution_strategy_v2::{
-        authenticate_execution_strategy_v2, ADMITTED_AOT_STRATEGY_ACCOUNT_COUNT_V2,
-        INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2, SHADOW_AOT_STRATEGY_ACCOUNT_COUNT_V2,
+        ADMITTED_AOT_STRATEGY_ACCOUNT_COUNT_V2, INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2,
+        SHADOW_AOT_STRATEGY_ACCOUNT_COUNT_V2, authenticate_execution_strategy_v2,
     },
     native_signature::{
         authenticate_and_seed_native_signatures, authenticate_current_top_level_instruction,
     },
-    TradingSbfError,
+    shadow_composition_v3::{ShadowCpiFrameV3, execute_shadow_aot_v3},
 };
 
 #[cfg(feature = "families")]
 use crate::resolution_composition_v3::{
-    execute_resolution_route_v3, preflight_resolution_route_v3, ResolutionCompositionParentV3,
+    ResolutionCompositionParentV3, execute_resolution_route_v3, preflight_resolution_route_v3,
 };
 
 #[cfg(feature = "families")]
 use crate::{
-    claims_composition_v3::{execute_claims_route_v3, ClaimsRouteReceiptV3},
+    claims_composition_v3::{ClaimsRouteReceiptV3, execute_claims_route_v3},
     custody_composition_v3::{
-        execute_custody_route_v3, preflight_custody_route_v3, CustodyCompositionParentV3,
+        CustodyCompositionParentV3, execute_custody_route_v3, preflight_custody_route_v3,
     },
 };
 #[cfg(feature = "families")]
@@ -138,6 +152,11 @@ const MAX_HOT_REQUEST_BYTES_V3: usize = 8_192;
 
 const EXECUTION_DIGEST_DOMAIN_V3: &[u8] = b"dclutch:hot-execution:v3";
 const CHILD_EXECUTION_DIGEST_DOMAIN_V3: &[u8] = b"dclutch:hot-child-execution:v3";
+
+/// Shadow caller-authority PDA after six authenticated strategy extras.
+pub const HOT_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3: usize = HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3 + 6;
+/// First profile-defined runtime account for Shadow-AOT execution.
+pub const HOT_SHADOW_RUNTIME_ACCOUNTS_START_V3: usize = HOT_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3 + 1;
 
 /// Execute one complete common V3 hot action.
 #[inline(never)]
@@ -365,11 +384,11 @@ pub fn process_hot_execution_v3(
     let strategy_extra_count = strategy_account_count
         .checked_sub(INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2)
         .ok_or(TradingSbfError::Content)?;
-    let runtime_start = HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3
+    let strategy_extras_end = HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3
         .checked_add(strategy_extra_count)
         .ok_or(TradingSbfError::Content)?;
     let strategy_extras = accounts
-        .get(HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3..runtime_start)
+        .get(HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3..strategy_extras_end)
         .ok_or(TradingSbfError::Content)?;
     let mut strategy_accounts = Vec::with_capacity(strategy_account_count);
     strategy_accounts.extend_from_slice(&[
@@ -386,8 +405,32 @@ pub fn process_hot_execution_v3(
         frame.rent,
         &strategy_accounts,
     )?;
-    if strategy.strategy().disposition() != StrategyDispositionV2::Interpreted {
+    let shadow_caller_authority = match strategy.strategy().disposition() {
+        StrategyDispositionV2::Interpreted => None,
+        StrategyDispositionV2::ShadowAot => Some(
+            accounts
+                .get(strategy_extras_end)
+                .ok_or(TradingSbfError::Content)?,
+        ),
+        StrategyDispositionV2::AdmittedAot => {
+            return Err(TradingSbfError::UnsupportedContent.into());
+        }
+    };
+    if strategy.strategy().disposition() == StrategyDispositionV2::ShadowAot
+        && (strategy_extras_end != HOT_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3
+            || strategy
+                .strategy()
+                .transport_profile()
+                .map_err(|_| TradingSbfError::Content)?
+                != AcceleratorTransportProfileV2::ShadowTranscriptV3)
+    {
         return Err(TradingSbfError::UnsupportedContent.into());
+    }
+    let runtime_start = strategy_extras_end
+        .checked_add(usize::from(shadow_caller_authority.is_some()))
+        .ok_or(TradingSbfError::Content)?;
+    if shadow_caller_authority.is_some() && runtime_start != HOT_SHADOW_RUNTIME_ACCOUNTS_START_V3 {
+        return Err(TradingSbfError::Content.into());
     }
 
     let transition_data = borrow_finalized_record(
@@ -445,9 +488,17 @@ pub fn process_hot_execution_v3(
     let observations = runtime_accounts
         .iter()
         .zip(&runtime_data)
-        .map(|(account, data)| {
-            AccountObservationV1::new(
+        .enumerate()
+        .map(|(coordinate, (account, data))| {
+            let key = logical_projection_key_v3(
+                coordinate,
                 account.key.to_bytes(),
+                context.selection().config().to_bytes(),
+                product_runtime.product_record.content_digest.to_bytes(),
+                product_runtime.portfolio_record.content_digest.to_bytes(),
+            );
+            AccountObservationV1::new(
+                key,
                 account.owner.to_bytes(),
                 account.lamports(),
                 data.as_ref(),
@@ -648,6 +699,118 @@ pub fn process_hot_execution_v3(
         selected_program.to_bytes(),
         &aliases,
     )?;
+    let shadow_execution_digest = if let Some(caller_authority) = shadow_caller_authority {
+        let accelerator_program = strategy_extras.get(4).ok_or(TradingSbfError::Content)?;
+        let accelerator_programdata = strategy_extras.get(5).ok_or(TradingSbfError::Content)?;
+        let family_digest =
+            family_request_digest_v3(family_request).map_err(|_| TradingSbfError::Content)?;
+        let runtime_transcript = observations
+            .iter()
+            .zip(&runtime_accounts)
+            .map(|(observation, account)| ShadowRuntimeObservationV3 {
+                key: observation.key(),
+                owner: observation.owner(),
+                lamports: observation.lamports(),
+                data: observation.data(),
+                signer: false,
+                writable: false,
+                executable: account.executable,
+            })
+            .collect::<Vec<_>>();
+        let runtime_digest = runtime_observations_digest_v3(&runtime_transcript)
+            .map_err(|_| TradingSbfError::Content)?;
+        let candidate_digest = candidate_digest_v3(
+            tail_count,
+            &transition_output_scalars,
+            &transition_output_identities,
+        )
+        .map_err(|_| TradingSbfError::Content)?;
+        let routes = shadow_routes_v3(
+            effect,
+            tail_count,
+            &transition_output_scalars,
+            &transition_output_identities,
+        )?;
+        let effect_digest = effect_digest_v3(ShadowEffectProjectionV3 {
+            tail_count,
+            output_lamports: &output_lamports,
+            request_bank: &output_requests,
+            routes: &routes,
+        })
+        .map_err(|_| TradingSbfError::Content)?;
+        let release_set =
+            ContentId::new(envelope.release_set()).map_err(|_| TradingSbfError::Content)?;
+        let market_id = ContentId::new(envelope.market()).map_err(|_| TradingSbfError::Content)?;
+        let root_id =
+            ContentId::new(frame.root.key.to_bytes()).map_err(|_| TradingSbfError::Content)?;
+        let root_prestate_id =
+            ContentId::new(root_prestate).map_err(|_| TradingSbfError::Content)?;
+        let invocation_context = invocation_context_digest_v3(ShadowInvocationContextV3 {
+            release_set,
+            market: market_id,
+            root: root_id,
+            capability_program: selected_program,
+            selected_action,
+            family_request_digest: family_digest,
+            root_prestate_digest: root_prestate_id,
+        })
+        .map_err(|_| TradingSbfError::Content)?;
+        let request = ShadowRequestV3 {
+            release_set,
+            market: market_id,
+            root: root_id,
+            registry_program: ContentId::new(frame.registry.key.to_bytes())
+                .map_err(|_| TradingSbfError::Content)?,
+            trading_program: ContentId::new(program_id.to_bytes())
+                .map_err(|_| TradingSbfError::Content)?,
+            accelerator_program: ContentId::new(accelerator_program.key.to_bytes())
+                .map_err(|_| TradingSbfError::Content)?,
+            artifacts: ShadowArtifactTupleV3 {
+                capability_program: selected_program,
+                account_profile: descriptor.account_profile(),
+                request_profile: descriptor.request_profile_program(),
+                transition: strategy.strategy().transition_program(),
+                effect: descriptor.effect_program(),
+                strategy: strategy.strategy_program_id(),
+                certificate: strategy
+                    .certificate_program_id()
+                    .ok_or(TradingSbfError::Content)?,
+            },
+            invocation_context,
+            digests: ShadowExecutionDigestsV3 {
+                runtime_observations: runtime_digest,
+                family_request: family_digest,
+                interpreted_candidate: candidate_digest,
+                interpreted_effect: effect_digest,
+            },
+            shape: ShadowRuntimeShapeV3 {
+                tail_count,
+                account_count: u32::try_from(runtime_accounts.len())
+                    .map_err(|_| TradingSbfError::Content)?,
+                scalar_count: u32::try_from(transition_output_scalars.len())
+                    .map_err(|_| TradingSbfError::Content)?,
+                identity_count: u32::try_from(transition_output_identities.len())
+                    .map_err(|_| TradingSbfError::Content)?,
+            },
+            family_request,
+        };
+        execute_shadow_aot_v3(
+            program_id,
+            ShadowCpiFrameV3 {
+                caller_authority,
+                activation: frame.activation_cache,
+                registry: frame.registry,
+                trading_program: frame.trading_program,
+                trading_programdata: frame.trading_programdata,
+                accelerator_program,
+                accelerator_programdata,
+            },
+            &runtime_accounts,
+            request,
+        )?
+    } else {
+        [0_u8; 32]
+    };
     drop(observations);
     drop(runtime_data);
     apply_lifecycle_creates_v3(program_id, &lifecycle_plans, &runtime_accounts)?;
@@ -712,6 +875,7 @@ pub fn process_hot_execution_v3(
         &market.identity.product_record.to_bytes(),
         &product_outcome_count.to_le_bytes(),
         &request_digest,
+        &shadow_execution_digest,
         &child_execution_digest,
         &root_poststate,
     ])
@@ -730,6 +894,21 @@ pub fn process_hot_execution_v3(
     .map_err(|_| TradingSbfError::Commit)?;
     set_return_data(&ack.to_bytes());
     Ok(())
+}
+
+fn logical_projection_key_v3(
+    coordinate: usize,
+    physical_key: [u8; 32],
+    selected_config: [u8; 32],
+    product_root: [u8; 32],
+    portfolio: [u8; 32],
+) -> [u8; 32] {
+    match coordinate {
+        1 => selected_config,
+        2 => product_root,
+        3 => portfolio,
+        _ => physical_key,
+    }
 }
 
 fn require_common_projection_bindings_v3(
@@ -1272,12 +1451,13 @@ fn preflight_child_routes_v3<'accounts, 'info>(
     let claims_composition =
         if has_active_role(effect, tail_count, scalars, identities, FixedRole::Claims)? {
             Some(
-                ClaimsCompositionV3::decode_selected(
+                ClaimsCompositionV3::decode_selected_with_witness(
                     effect,
                     tail_count,
                     scalars,
                     identities,
                     request_bank,
+                    family_request,
                     ClaimsCompositionParentV3 {
                         release_set: envelope.release_set(),
                         market: envelope.market(),
@@ -1370,7 +1550,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                         let selected = claims_program.ok_or(TradingSbfError::Release)?;
                         if invocation_index != 0
                             || !(composition.admit_route() == Some(route)
-                                || composition.affine_route() == route
+                                || composition.mutation_route() == route
                                 || composition.close_route() == Some(route))
                             || invocation_accounts_contain_program(
                                 invocation,
@@ -1472,12 +1652,13 @@ fn execute_child_routes_v3<'accounts, 'info>(
     let claims_composition =
         if has_active_role(effect, tail_count, scalars, identities, FixedRole::Claims)? {
             Some(
-                ClaimsCompositionV3::decode_selected(
+                ClaimsCompositionV3::decode_selected_with_witness(
                     effect,
                     tail_count,
                     scalars,
                     identities,
                     request_bank,
+                    family_request,
                     ClaimsCompositionParentV3 {
                         release_set: envelope.release_set(),
                         market: envelope.market(),
@@ -1578,6 +1759,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             identities,
                             effect_accounts,
                             request_bank,
+                            family_request,
                             claims_program.ok_or(TradingSbfError::Release)?,
                         )?;
                         (FixedRole::Claims, claims_receipt_digest_v3(receipt)?)
@@ -1936,6 +2118,7 @@ fn claims_receipt_digest_v3(receipt: ClaimsRouteReceiptV3) -> Result<[u8; 32], P
             .map(Vec::from)
             .map_err(|_| TradingSbfError::Transition)?,
         ClaimsRouteReceiptV3::Affine(value) => Vec::from(value.to_bytes()),
+        ClaimsRouteReceiptV3::SignedDelta(value) => Vec::from(value.to_bytes()),
         ClaimsRouteReceiptV3::Close(value) => value
             .to_bytes()
             .map(Vec::from)
@@ -2066,6 +2249,67 @@ fn project_tail_count(
         },
     )
     .map_err(|_| TradingSbfError::Content.into())
+}
+
+fn shadow_routes_v3(
+    effect: EffectProgramV3<'_>,
+    tail_count: u32,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+) -> Result<Vec<ShadowResolvedRouteV3>, ProgramError> {
+    let mut output = Vec::new();
+    let mut route = 0_u16;
+    while route < effect.route_count() {
+        let count = effect
+            .invocation_count(route, tail_count, scalars, identities)
+            .map_err(|_| TradingSbfError::Content)?;
+        let mut invocation_index = 0_u32;
+        while invocation_index < count {
+            let invocation = effect
+                .resolved_invocation(route, invocation_index, tail_count, scalars, identities)
+                .map_err(|_| TradingSbfError::Content)?;
+            let borrowed_witness = match invocation.borrowed_witness {
+                Some(witness) => Some((
+                    u32::try_from(witness.source_offset()).map_err(|_| TradingSbfError::Content)?,
+                    u32::try_from(witness.len()).map_err(|_| TradingSbfError::Content)?,
+                )),
+                None => None,
+            };
+            output.push(ShadowResolvedRouteV3 {
+                role: match invocation.role {
+                    FixedRole::Core => ShadowRouteRoleV3::Core,
+                    FixedRole::Claims => ShadowRouteRoleV3::Claims,
+                    FixedRole::Resolution => ShadowRouteRoleV3::Resolution,
+                    FixedRole::Custody => ShadowRouteRoleV3::Custody,
+                },
+                kind: match invocation.kind {
+                    dclutch_effect_kernel::v3::RouteKindV3::Once => ShadowRouteKindV3::Once,
+                    dclutch_effect_kernel::v3::RouteKindV3::AffineOnce => {
+                        ShadowRouteKindV3::AffineOnce
+                    }
+                    dclutch_effect_kernel::v3::RouteKindV3::Each => ShadowRouteKindV3::Each,
+                },
+                item: invocation.item,
+                fixed_account_start: invocation.fixed_account_start,
+                fixed_account_count: invocation.fixed_account_count,
+                item_account_start: u32::try_from(invocation.item_account_start)
+                    .map_err(|_| TradingSbfError::Content)?,
+                item_account_count: invocation.item_account_count,
+                item_account_stride: invocation.item_account_stride,
+                repeated_item_count: invocation.repeated_item_count,
+                request_offset: u32::try_from(invocation.request_offset)
+                    .map_err(|_| TradingSbfError::Content)?,
+                request_len: u32::try_from(invocation.request_len)
+                    .map_err(|_| TradingSbfError::Content)?,
+                borrowed_witness,
+            });
+            invocation_index = invocation_index
+                .checked_add(1)
+                .ok_or(TradingSbfError::Content)?;
+        }
+        route = route.checked_add(1).ok_or(TradingSbfError::Content)?;
+    }
+    Ok(output)
 }
 
 fn preflight_local_effects(
@@ -2729,6 +2973,26 @@ mod tests {
     #[test]
     fn common_projection_bindings_and_child_reservations_are_exact() {
         let id = |tag: u8| [tag; 32];
+        assert_eq!(
+            logical_projection_key_v3(0, id(1), id(2), id(3), id(4)),
+            id(1)
+        );
+        assert_eq!(
+            logical_projection_key_v3(1, id(1), id(2), id(3), id(4)),
+            id(2)
+        );
+        assert_eq!(
+            logical_projection_key_v3(2, id(1), id(2), id(3), id(4)),
+            id(3)
+        );
+        assert_eq!(
+            logical_projection_key_v3(3, id(1), id(2), id(3), id(4)),
+            id(4)
+        );
+        assert_ne!(
+            logical_projection_key_v3(1, id(1), id(2), id(3), id(4)),
+            id(1)
+        );
         assert_eq!(
             require_common_projection_bindings_v3(id(1), id(1), id(2), id(2), id(3), id(3),),
             Ok(())

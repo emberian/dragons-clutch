@@ -22,7 +22,6 @@ use solana_program::{
 /// Family-neutral EffectProgram V3 composition for canonical Claims CPIs.
 #[cfg(feature = "families")]
 pub mod claims_composition_v3;
-
 /// Family-neutral EffectProgram V3 composition for canonical Core CPIs.
 pub mod core_composition_v3;
 /// Family-neutral EffectProgram V3 composition for canonical Custody CPIs.
@@ -31,8 +30,13 @@ pub mod custody_composition_v3;
 /// Dealer family projection behind the common data-defined Trading boundary.
 #[cfg(feature = "families")]
 pub mod dealer;
+/// Direct family projection behind the common data-defined Trading boundary.
+#[cfg(feature = "families")]
+pub mod direct;
 /// Manifest-, root-, release-, and descriptor-authenticated generic dispatch.
 pub mod dispatch;
+/// V3 descriptor joins for independently finalized runtime-tail artifacts.
+pub mod dispatch_v3;
 /// Registry-authenticated family-neutral Execution Strategy V2 admission.
 pub mod execution_strategy_v2;
 /// General family projection behind the common data-defined Trading boundary.
@@ -49,6 +53,8 @@ pub mod resolution_composition_v3;
 /// Series family projection behind the common data-defined Trading boundary.
 #[cfg(feature = "families")]
 pub mod series;
+/// Family-neutral read-only Shadow-AOT comparison CPI.
+pub mod shadow_composition_v3;
 
 /// Stable refusal from the canonical Trading SBF boundary.
 #[repr(u32)]

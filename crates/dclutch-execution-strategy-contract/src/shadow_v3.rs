@@ -37,6 +37,20 @@ pub const SHADOW_PROFILE_V3: u16 = 1;
 pub const SHADOW_REQUEST_HEADER_BYTES_V3: usize = 624;
 /// Exact fixed acknowledgement width.
 pub const SHADOW_ACK_BYTES_V3: usize = 528;
+/// Caller-authority PDA in the accelerator CPI frame.
+pub const SHADOW_CALLER_AUTHORITY_ACCOUNT_V3: usize = 0;
+/// Current activated release-set cache in the accelerator CPI frame.
+pub const SHADOW_ACTIVATION_ACCOUNT_V3: usize = 1;
+/// Current Registry program in the accelerator CPI frame.
+pub const SHADOW_REGISTRY_PROGRAM_ACCOUNT_V3: usize = 2;
+/// Current release-selected Trading program in the accelerator CPI frame.
+pub const SHADOW_TRADING_PROGRAM_ACCOUNT_V3: usize = 3;
+/// Current Trading ProgramData in the accelerator CPI frame.
+pub const SHADOW_TRADING_PROGRAMDATA_ACCOUNT_V3: usize = 4;
+/// Authenticated accelerator ProgramData in the accelerator CPI frame.
+pub const SHADOW_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3: usize = 5;
+/// Fixed read-only prefix before AccountProfile-ordered runtime observations.
+pub const SHADOW_RUNTIME_ACCOUNTS_START_V3: usize = 6;
 
 const VERSION_OFFSET: usize = 8;
 const PROFILE_OFFSET: usize = 10;

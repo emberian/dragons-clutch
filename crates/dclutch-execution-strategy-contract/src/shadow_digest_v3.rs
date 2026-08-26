@@ -29,6 +29,8 @@ pub enum ShadowDigestErrorV3 {
     InvalidRouteTag,
     /// A route's optional item/witness presence grammar was noncanonical.
     InvalidRoutePresence,
+    /// A supposedly read-only accelerator observation retained caller privileges.
+    PrivilegedRuntimeObservation,
     /// SHA-256 produced the reserved all-zero content identity.
     ZeroDigest,
 }
@@ -47,9 +49,9 @@ pub struct ShadowRuntimeObservationV3<'a> {
     pub lamports: u64,
     /// Exact observed account bytes.
     pub data: &'a [u8],
-    /// Whether the top-level account is a signer.
+    /// Must be false: the accelerator receives no signer privilege for runtime state.
     pub signer: bool,
-    /// Whether the top-level account is writable.
+    /// Must be false: the accelerator receives runtime state read-only.
     pub writable: bool,
     /// Whether the top-level account is executable.
     pub executable: bool,
@@ -169,6 +171,9 @@ pub fn runtime_observations_digest_v3(
     let mut hasher = begin(RUNTIME_OBSERVATION_DIGEST_DOMAIN_V3);
     absorb_count(&mut hasher, observations.len())?;
     for observation in observations {
+        if observation.signer || observation.writable {
+            return Err(ShadowDigestErrorV3::PrivilegedRuntimeObservation);
+        }
         hasher.update(observation.key);
         hasher.update(observation.owner);
         hasher.update(observation.lamports.to_le_bytes());
@@ -294,7 +299,7 @@ mod tests {
             lamports: 10,
             data,
             signer: false,
-            writable: true,
+            writable: false,
             executable: false,
         }
     }
@@ -331,6 +336,22 @@ mod tests {
         assert_ne!(
             runtime_observations_digest_v3(&[first]).expect("runtime"),
             runtime_observations_digest_v3(&[substituted]).expect("runtime")
+        );
+    }
+
+    #[test]
+    fn runtime_transcript_refuses_any_forwarded_privilege() {
+        let mut privileged = observation(1, b"state");
+        privileged.signer = true;
+        assert_eq!(
+            runtime_observations_digest_v3(&[privileged]),
+            Err(ShadowDigestErrorV3::PrivilegedRuntimeObservation)
+        );
+        privileged.signer = false;
+        privileged.writable = true;
+        assert_eq!(
+            runtime_observations_digest_v3(&[privileged]),
+            Err(ShadowDigestErrorV3::PrivilegedRuntimeObservation)
         );
     }
 
