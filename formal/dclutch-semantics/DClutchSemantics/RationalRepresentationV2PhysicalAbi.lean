@@ -30,14 +30,15 @@ def version : Nat := 2
 /-! ## Immutable finalized descriptor -/
 
 inductive DescriptorField where
-  | magic | version | reservedHeader | graphId | rootId | market | releaseSet
+  | magic | version | reservedHeader | graphId | graphDigest | rootId | market | releaseSet
   | receiptMint | tokenProgram | representationAuthority | outcomeCount
   | reservedTail | denominator
   deriving DecidableEq, Repr
 
 def descriptorSchema : List (FieldSpec DescriptorField) := [
   ⟨.magic, .bytes 8⟩, ⟨.version, .u16⟩, ⟨.reservedHeader, .reserved 6⟩,
-  ⟨.graphId, .bytes 32⟩, ⟨.rootId, .bytes 32⟩, ⟨.market, .bytes 32⟩,
+  ⟨.graphId, .bytes 32⟩, ⟨.graphDigest, .bytes 32⟩,
+  ⟨.rootId, .bytes 32⟩, ⟨.market, .bytes 32⟩,
   ⟨.releaseSet, .bytes 32⟩, ⟨.receiptMint, .bytes 32⟩,
   ⟨.tokenProgram, .bytes 32⟩, ⟨.representationAuthority, .bytes 32⟩,
   ⟨.outcomeCount, .u32⟩, ⟨.reservedTail, .reserved 4⟩,
@@ -51,7 +52,7 @@ def descriptorCoefficientBytes : Nat := 8
 namespace DescriptorField
 
 def all : List DescriptorField := [
-  .magic, .version, .reservedHeader, .graphId, .rootId, .market, .releaseSet,
+  .magic, .version, .reservedHeader, .graphId, .graphDigest, .rootId, .market, .releaseSet,
   .receiptMint, .tokenProgram, .representationAuthority, .outcomeCount,
   .reservedTail, .denominator
 ]
@@ -61,6 +62,7 @@ def rustName : DescriptorField → String
   | .version => "DESCRIPTOR_VERSION_OFFSET"
   | .reservedHeader => "DESCRIPTOR_RESERVED_HEADER_OFFSET"
   | .graphId => "DESCRIPTOR_GRAPH_ID_OFFSET"
+  | .graphDigest => "DESCRIPTOR_GRAPH_DIGEST_OFFSET"
   | .rootId => "DESCRIPTOR_ROOT_ID_OFFSET"
   | .market => "DESCRIPTOR_MARKET_ID_OFFSET"
   | .releaseSet => "DESCRIPTOR_RELEASE_SET_ID_OFFSET"

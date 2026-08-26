@@ -327,6 +327,7 @@ supplies and holder balances, and replay revisions are deliberately absent. -/
 structure ImmutableDescriptor where
   descriptorId : Nat
   graphId : Nat
+  graphDigest : Nat
   rootId : Nat
   marketId : Nat
   releaseSetId : Nat
@@ -362,7 +363,7 @@ def coefficientPayoffsExact
 hashing remain separately named physical-adapter assumptions. -/
 def ImmutableDescriptor.validFor
     (descriptor : ImmutableDescriptor) (graph : Graph) : Bool :=
-  descriptor.descriptorId != 0 && descriptor.marketId != 0 &&
+  descriptor.descriptorId != 0 && descriptor.graphDigest != 0 && descriptor.marketId != 0 &&
   descriptor.releaseSetId != 0 && descriptor.receiptMint != 0 &&
   descriptor.tokenProgram != 0 && descriptor.representationAuthority != 0 &&
   0 < descriptor.denominator && descriptor.bindsGraph graph &&

@@ -13,11 +13,12 @@
 mod generated_descriptor;
 
 use generated_descriptor::{
-    DESCRIPTOR_AUTHORITY_OFFSET, DESCRIPTOR_DENOMINATOR_OFFSET, DESCRIPTOR_GRAPH_ID_OFFSET,
-    DESCRIPTOR_MAGIC_OFFSET, DESCRIPTOR_MARKET_ID_OFFSET, DESCRIPTOR_OUTCOME_COUNT_OFFSET,
-    DESCRIPTOR_RECEIPT_MINT_OFFSET, DESCRIPTOR_RELEASE_SET_ID_OFFSET,
-    DESCRIPTOR_RESERVED_HEADER_OFFSET, DESCRIPTOR_RESERVED_OFFSET, DESCRIPTOR_ROOT_ID_OFFSET,
-    DESCRIPTOR_TOKEN_PROGRAM_OFFSET, DESCRIPTOR_VERSION_OFFSET,
+    DESCRIPTOR_AUTHORITY_OFFSET, DESCRIPTOR_DENOMINATOR_OFFSET, DESCRIPTOR_GRAPH_DIGEST_OFFSET,
+    DESCRIPTOR_GRAPH_ID_OFFSET, DESCRIPTOR_MAGIC_OFFSET, DESCRIPTOR_MARKET_ID_OFFSET,
+    DESCRIPTOR_OUTCOME_COUNT_OFFSET, DESCRIPTOR_RECEIPT_MINT_OFFSET,
+    DESCRIPTOR_RELEASE_SET_ID_OFFSET, DESCRIPTOR_RESERVED_HEADER_OFFSET,
+    DESCRIPTOR_RESERVED_OFFSET, DESCRIPTOR_ROOT_ID_OFFSET, DESCRIPTOR_TOKEN_PROGRAM_OFFSET,
+    DESCRIPTOR_VERSION_OFFSET,
 };
 pub use generated_descriptor::{
     DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V2,
@@ -569,6 +570,7 @@ pub struct DescriptorAdmissionV2 {
 pub struct RepresentationDescriptorV2<'a> {
     descriptor_id: [u8; 32],
     graph_id: [u8; 32],
+    graph_digest: [u8; 32],
     root_id: [u8; 32],
     market_id: [u8; 32],
     release_set_id: [u8; 32],
@@ -613,6 +615,7 @@ impl<'a> RepresentationDescriptorV2<'a> {
         let descriptor = Self {
             descriptor_id: admission.selected_descriptor_id,
             graph_id: nonzero_array(input, DESCRIPTOR_GRAPH_ID_OFFSET)?,
+            graph_digest: nonzero_array(input, DESCRIPTOR_GRAPH_DIGEST_OFFSET)?,
             root_id: nonzero_array(input, DESCRIPTOR_ROOT_ID_OFFSET)?,
             market_id: nonzero_array(input, DESCRIPTOR_MARKET_ID_OFFSET)?,
             release_set_id: nonzero_array(input, DESCRIPTOR_RELEASE_SET_ID_OFFSET)?,
@@ -646,6 +649,11 @@ impl<'a> RepresentationDescriptorV2<'a> {
     /// Finalized graph selected by this descriptor.
     pub const fn graph_id(self) -> [u8; 32] {
         self.graph_id
+    }
+
+    /// SHA-256 of the exact finalized graph bytes.
+    pub const fn graph_digest(self) -> [u8; 32] {
+        self.graph_digest
     }
 
     /// Finalized graph root selected by this descriptor.
@@ -704,6 +712,7 @@ impl<'a> RepresentationDescriptorV2<'a> {
     /// coefficient has the same common-scale native payoff.
     pub fn authenticate_graph(self, graph: RepresentationGraphV2<'_>) -> Result<()> {
         if self.graph_id != graph.graph_id()
+            || self.graph_digest != graph.record_digest()
             || self.root_id != graph.root_id()
             || self.outcome_count != graph.outcome_count()
         {
@@ -763,6 +772,7 @@ pub enum GraphNodeKind {
 pub struct RepresentationGraphV2<'a> {
     input: &'a [u8],
     graph_id: [u8; 32],
+    record_digest: [u8; 32],
     root_id: [u8; 32],
     outcome_count: u32,
     node_count: u32,
@@ -842,6 +852,7 @@ impl<'a> RepresentationGraphV2<'a> {
         let graph = Self {
             input,
             graph_id,
+            record_digest: admission.finalized_graph_digest,
             root_id,
             outcome_count,
             node_count,
@@ -858,6 +869,11 @@ impl<'a> RepresentationGraphV2<'a> {
     /// Finalized graph identity.
     pub const fn graph_id(self) -> [u8; 32] {
         self.graph_id
+    }
+
+    /// SHA-256 of the exact finalized graph bytes authenticated by the adapter.
+    pub const fn record_digest(self) -> [u8; 32] {
+        self.record_digest
     }
 
     /// Selected root-node content identity.
@@ -1324,6 +1340,7 @@ mod tests {
         put(&mut bytes, 0, &DESCRIPTOR_MAGIC_V2);
         put(&mut bytes, 8, &SCHEMA_VERSION_V2.to_le_bytes());
         put(&mut bytes, DESCRIPTOR_GRAPH_ID_OFFSET, &[6; 32]);
+        put(&mut bytes, DESCRIPTOR_GRAPH_DIGEST_OFFSET, &[7; 32]);
         put(&mut bytes, DESCRIPTOR_ROOT_ID_OFFSET, &[5; 32]);
         put(&mut bytes, DESCRIPTOR_MARKET_ID_OFFSET, &[2; 32]);
         put(&mut bytes, DESCRIPTOR_RELEASE_SET_ID_OFFSET, &[9; 32]);
@@ -1606,6 +1623,7 @@ mod tests {
             .expect("exact payoff join");
         assert_eq!(descriptor.descriptor_id(), [8; 32]);
         assert_eq!(descriptor.graph_id(), [6; 32]);
+        assert_eq!(descriptor.graph_digest(), [7; 32]);
         assert_eq!(descriptor.root_id(), [5; 32]);
         assert_eq!(descriptor.market_id(), [2; 32]);
         assert_eq!(descriptor.release_set_id(), [9; 32]);

@@ -134,6 +134,7 @@ example : acceptedGraph.rootExposure? = some ⟨[30, 70]⟩ := by native_decide
 def acceptedDescriptor : ImmutableDescriptor := {
   descriptorId := 7
   graphId := 6
+  graphDigest := 13
   rootId := 5
   marketId := 8
   releaseSetId := 9

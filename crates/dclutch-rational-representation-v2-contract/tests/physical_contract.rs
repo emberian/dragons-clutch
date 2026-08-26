@@ -60,14 +60,15 @@ fn descriptor_fixture() -> Vec<u8> {
     put(&mut bytes, 0, &DESCRIPTOR_MAGIC_V2);
     put(&mut bytes, 8, &SCHEMA_VERSION_V2.to_le_bytes());
     put(&mut bytes, 16, &id(3));
-    put(&mut bytes, 48, &id(14));
-    put(&mut bytes, 80, &id(2));
-    put(&mut bytes, 112, &id(1));
-    put(&mut bytes, 144, &id(5));
-    put(&mut bytes, 176, &TOKEN_2022_PROGRAM_ID);
-    put(&mut bytes, 208, &id(9));
-    put_u32(&mut bytes, 240, 2);
-    put_u64(&mut bytes, 248, 10);
+    put(&mut bytes, 48, &id(40));
+    put(&mut bytes, 80, &id(14));
+    put(&mut bytes, 112, &id(2));
+    put(&mut bytes, 144, &id(1));
+    put(&mut bytes, 176, &id(5));
+    put(&mut bytes, 208, &TOKEN_2022_PROGRAM_ID);
+    put(&mut bytes, 240, &id(9));
+    put_u32(&mut bytes, 272, 2);
+    put_u64(&mut bytes, 280, 10);
     put_u64(&mut bytes, DESCRIPTOR_HEADER_BYTES, 3);
     put_u64(
         &mut bytes,
