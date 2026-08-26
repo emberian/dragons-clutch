@@ -28,6 +28,9 @@ solana-hash = "=4.6.0"
 solana-program = { version = "=3.0.0", default-features = false }
 solana-sdk-ids = "=3.1.0"
 
+[dev-dependencies]
+dclutch-product-runtime-v2 = { path = "../dclutch-product-runtime-v2" }
+
 [workspace]
 
 [lints.rust]

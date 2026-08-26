@@ -13,6 +13,7 @@ mod abi;
 #[allow(missing_docs)]
 mod generated_abi;
 mod projection_encode;
+mod terms_encode;
 mod transition;
 
 pub use abi::{
@@ -23,6 +24,9 @@ pub use abi::{
     FractionalTermsAdmissionV1, FractionalTermsV1, OutcomeReserveV1, Result, SCHEMA_VERSION_V1,
 };
 pub use projection_encode::{encode_fractional_projection_v1, fractional_projection_bytes_v1};
+pub use terms_encode::{
+    FractionalTermsInputV1, encode_fractional_terms_v1, fractional_terms_bytes_v1,
+};
 pub use transition::{
     ClaimShardDivisionV1, ClaimShardInstrumentV1, RetirePlanV1, TerminalizePlanV1,
     TransferObservationV1, TransferPlanV1, UnwrapPlanV1, WrapPlanV1, ZeroBurnPlanV1,
