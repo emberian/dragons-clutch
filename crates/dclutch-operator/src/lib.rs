@@ -87,6 +87,8 @@ pub mod resolution_core_v3 {
 }
 /// Chain-derived Series V3 Hot lifecycle and packet construction.
 pub mod series_hot_v3;
+/// Compact projected-Market Series Consume instruction-data construction.
+pub mod series_projected_v2;
 /// Chain-derived address-table lifecycle and versioned-message construction.
 pub mod versioned;
 /// Chain-derived unsigned Series and Dealer workflows.
