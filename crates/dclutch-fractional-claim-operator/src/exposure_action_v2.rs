@@ -1,16 +1,23 @@
-//! Exposure-bound Fractional Token effects and canonical terminal Claims candidate.
+//! Exposure-bound Fractional Token effects and canonical terminal Claims settlement.
 //!
-//! This module intentionally stops before claiming terminal settlement. The
-//! family-neutral ProductBasis terminal kernel emits the sole SignedDelta
-//! candidate and exact payout, while the still-missing Claims-owned terminal
-//! route must compose that mutation with Custody before Trading commits root.
+//! The family-neutral ProductBasis terminal kernel remains the sole evaluator
+//! and SignedDelta producer. This module binds its output to the generic Claims
+//! terminal request/receipt; it does not introduce a Fractional payout input or
+//! a second Claims/Custody wire authority.
 
 use dclutch_claims_svm::{
     CallerRole,
     product_basis_terminal_v3::{
         ProductBasisTerminalInputV3, encode_product_basis_terminal_signed_delta_v3,
     },
-    signed_delta_v3::{SignedDeltaV3, plan_bytes},
+    protocol_position_v2::ProtocolPositionSeedsV2,
+    signed_delta_v3::{
+        SIGNED_DELTA_TABLE_DIGEST_DOMAIN_V3, SignedDeltaPlanV3, SignedDeltaV3, plan_bytes,
+    },
+    terminal_settlement_v3::{
+        TerminalSettlementReceiptInputV3, TerminalSettlementReceiptV3,
+        TerminalSettlementRequestInputV3, TerminalSettlementRequestV3,
+    },
 };
 use dclutch_fractional_claim_contract::{FractionalExposureActionV2, FractionalExposureRequestV2};
 use dclutch_fractional_claim_kernel::{
@@ -631,13 +638,31 @@ pub struct FractionalExposureTerminalInputV2<'a> {
     pub fractional_root: [u8; 32],
     /// Digest of the exact finalized terminal-coordinate record.
     pub terminal_record_digest: [u8; 32],
+    /// Immutable Realm selecting collateral.
+    pub market_realm: [u8; 32],
+    /// Exact wallet collateral Token account receiving a positive payout.
+    pub recipient_token_account: [u8; 32],
+    /// Registry-selected current Claims program.
+    pub claims_program: [u8; 32],
+    /// Registry-selected current Custody program.
+    pub custody_program: [u8; 32],
+    /// Realm-selected collateral Mint.
+    pub collateral_mint: [u8; 32],
+    /// Optimistic Custody replay revision, unchanged on zero payout.
+    pub expected_custody_revision: u64,
+    /// Ordered parent effect coordinate assigned to the terminal transfer.
+    pub transfer_index: u16,
 }
 
 /// Exact terminal SignedDelta candidate awaiting canonical Claims+CPI execution.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FractionalExposureTerminalCandidateV2 {
     packet: Vec<u8>,
-    request_digest: [u8; 32],
+    settlement_request: TerminalSettlementRequestV3,
+    fractional_request_digest: [u8; 32],
+    settlement_request_digest: [u8; 32],
+    packet_digest: [u8; 32],
+    table_digest: [u8; 32],
     collateral_atoms: u64,
     division: ExposureShardDivisionV2,
 }
@@ -648,9 +673,29 @@ impl FractionalExposureTerminalCandidateV2 {
         &self.packet
     }
 
-    /// SHA-256 of the exact Fractional V2 request.
-    pub const fn request_digest(&self) -> [u8; 32] {
-        self.request_digest
+    /// Canonical family-neutral Claims terminal-settlement request.
+    pub const fn settlement_request(&self) -> TerminalSettlementRequestV3 {
+        self.settlement_request
+    }
+
+    /// SHA-256 of the exact Fractional V2 request, bound as parent context.
+    pub const fn fractional_request_digest(&self) -> [u8; 32] {
+        self.fractional_request_digest
+    }
+
+    /// SHA-256 of the exact Claims request, bound by the SignedDelta packet.
+    pub const fn settlement_request_digest(&self) -> [u8; 32] {
+        self.settlement_request_digest
+    }
+
+    /// SHA-256 of the complete canonical SignedDelta packet.
+    pub const fn packet_digest(&self) -> [u8; 32] {
+        self.packet_digest
+    }
+
+    /// Domain-separated digest of the canonical SignedDelta tables.
+    pub const fn table_digest(&self) -> [u8; 32] {
+        self.table_digest
     }
 
     /// Exact exposure-derived collateral payout; zero is explicit.
@@ -664,11 +709,38 @@ impl FractionalExposureTerminalCandidateV2 {
     }
 }
 
-/// Derive the canonical terminal SignedDelta candidate and exact payout.
+/// Chain-derived poststate commitments for one terminal Claims execution.
 ///
-/// This function does not claim settlement. The caller must pass the candidate
-/// to a Claims-owned terminal route that atomically executes SignedDelta and
-/// Custody, validates both receipts, and returns before Trading commits root.
+/// These values are recomputed from the immediate child return data and exact
+/// post-account bytes by the physical adapter; none is accepted from the
+/// wallet request or persisted as Fractional state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FractionalExposureTerminalPostObservationV2 {
+    /// Digest of Claims aggregate followed by the Position poststate.
+    pub signed_post_resource_digest: [u8; 32],
+    /// Exact Custody request digest, zero only when payout is zero.
+    pub custody_request_digest: [u8; 32],
+    /// Exact Custody receipt digest, zero only when payout is zero.
+    pub custody_receipt_digest: [u8; 32],
+    /// Digest of authenticated Custody replay poststate.
+    pub custody_replay_digest: [u8; 32],
+    /// Digest of authenticated hoard and recipient Token poststate.
+    pub custody_token_poststate_digest: [u8; 32],
+    /// Domain-separated digest of all Claims and optional Custody postresources.
+    pub post_resource_digest: [u8; 32],
+    /// Claims aggregate revision after the child returned.
+    pub post_market_revision: u64,
+    /// Fractional-root Position revision after the child returned.
+    pub post_position_revision: u64,
+    /// Custody replay revision after the child returned.
+    pub post_custody_revision: u64,
+}
+
+/// Derive the canonical Claims terminal request, SignedDelta candidate, and payout.
+///
+/// This function does not execute settlement. The caller must pass the exact
+/// typed request to the Claims-owned terminal route and validate its receipt
+/// before executing the Token burn or committing the Fractional root.
 pub fn plan_fractional_exposure_terminal_candidate_v2(
     terms: FractionalExposureTermsV2<'_>,
     request: FractionalExposureRequestV2,
@@ -712,7 +784,44 @@ pub fn plan_fractional_exposure_terminal_candidate_v2(
         divide_exposure_shards_v2(terms, input.representation_coordinate, input.quantity)
             .map_err(|_| Error::Claims)?;
     let request_bytes = request.to_bytes().map_err(|_| Error::Claims)?;
-    let request_digest: [u8; 32] = Sha256::digest(request_bytes).into();
+    let fractional_request_digest: [u8; 32] = Sha256::digest(request_bytes).into();
+    let claims_program = Pubkey::new_from_array(terminal.claims_program);
+    let position_seeds =
+        ProtocolPositionSeedsV2::new(terminal.claims.market_account, terminal.fractional_root)
+            .map_err(|_| Error::Claims)?;
+    let position = Pubkey::find_program_address(&position_seeds.as_slices(), &claims_program)
+        .0
+        .to_bytes();
+    let settlement_request = TerminalSettlementRequestV3::new(TerminalSettlementRequestInputV3 {
+        caller_role: CallerRole::Trading,
+        release_set: terms.release_set(),
+        market: terms.market(),
+        realm: terminal.market_realm,
+        parent_context: fractional_request_digest,
+        product_record_digest: terms.product_record(),
+        exposure_id: terms.exposure_id(),
+        exposure_digest: admission.graph_digest(),
+        terminal_record_digest: terminal.terminal_record_digest,
+        owner: terminal.fractional_root,
+        position,
+        recipient_owner: input.owner,
+        recipient_token_account: terminal.recipient_token_account,
+        claims_program: terminal.claims_program,
+        custody_program: terminal.custody_program,
+        collateral_mint: terminal.collateral_mint,
+        token_program: terms.token_program(),
+        semantic_basis_id: terms.representation_basis(),
+        linked_basis_record_digest: terms.product_basis(),
+        generation: terminal.claims.expected_generation,
+        expected_market_revision: terminal.claims.expected_market_revision,
+        expected_position_revision: terminal.claims.expected_position_revision,
+        expected_custody_revision: terminal.expected_custody_revision,
+        quantity: division.whole_claims,
+        claim_index: input.representation_coordinate,
+        transfer_index: terminal.transfer_index,
+    })
+    .map_err(|_| Error::Claims)?;
+    let settlement_request_digest: [u8; 32] = Sha256::digest(settlement_request.to_bytes()).into();
     let claims_width = usize::try_from(terms.representation_width()).map_err(|_| Error::Claims)?;
     let product_width = usize::try_from(terms.product_width()).map_err(|_| Error::Claims)?;
     let neutral = SignedDeltaV3::new(
@@ -727,7 +836,7 @@ pub fn plan_fractional_exposure_terminal_candidate_v2(
     let mut packet =
         vec![0_u8; plan_bytes(terms.representation_width(), 1, 1).map_err(|_| Error::Claims)?];
     let mut claims = terminal.claims;
-    claims.request_id = request_digest;
+    claims.request_id = settlement_request_digest;
     claims.claim_index = input.representation_coordinate;
     claims.quantity = division.whole_claims;
     let collateral_atoms = encode_product_basis_terminal_signed_delta_v3(
@@ -745,12 +854,289 @@ pub fn plan_fractional_exposure_terminal_candidate_v2(
     {
         return Err(Error::Claims);
     }
+    let signed_plan = SignedDeltaPlanV3::decode(&packet).map_err(|_| Error::Claims)?;
+    if signed_plan.request_id() != settlement_request_digest {
+        return Err(Error::Claims);
+    }
+    let packet_digest: [u8; 32] = Sha256::digest(&packet).into();
+    let (positions, aggregates, deltas) = signed_plan.table_bytes();
+    let table_digest = digestv(&[
+        SIGNED_DELTA_TABLE_DIGEST_DOMAIN_V3,
+        positions,
+        aggregates,
+        deltas,
+    ]);
     Ok(FractionalExposureTerminalCandidateV2 {
         packet,
-        request_digest,
+        settlement_request,
+        fractional_request_digest,
+        settlement_request_digest,
+        packet_digest,
+        table_digest,
         collateral_atoms,
         division,
     })
+}
+
+/// Validate the exact Claims terminal receipt and Fractional burn postcondition.
+///
+/// Success proves agreement between the exact-denominator Token burn, the
+/// independently evaluated Claims debit/payout, the generic terminal request,
+/// and the immediate Claims/Custody poststate commitments. Root state must
+/// still be written only after this function returns successfully.
+pub fn validate_fractional_exposure_terminal_postcondition_v2(
+    candidate: &FractionalExposureTerminalCandidateV2,
+    token: &FractionalExposureTokenPlanV2,
+    receipt_bytes: &[u8],
+    observed: FractionalExposureTerminalPostObservationV2,
+) -> Result<()> {
+    if !matches!(token.effect(), FractionalExposureTokenEffectV2::Burn(_))
+        || token.division() != Some(candidate.division)
+        || token.consumed_shards() != candidate.division.consumed.shard_atoms
+        || token.change_shards() != candidate.division.change.shard_atoms
+        || token.post_supply()
+            != token
+                .pre_supply()
+                .checked_sub(candidate.division.consumed.shard_atoms)
+                .ok_or(Error::Claims)?
+        || token.post_source()
+            != token
+                .pre_source()
+                .checked_sub(candidate.division.consumed.shard_atoms)
+                .ok_or(Error::Claims)?
+    {
+        return Err(Error::Claims);
+    }
+    let request = candidate.settlement_request;
+    let input = request.input();
+    let evidence = TerminalSettlementReceiptInputV3 {
+        request_digest: candidate.settlement_request_digest,
+        signed_packet_digest: candidate.packet_digest,
+        signed_table_digest: candidate.table_digest,
+        signed_post_resource_digest: observed.signed_post_resource_digest,
+        custody_request_digest: observed.custody_request_digest,
+        custody_receipt_digest: observed.custody_receipt_digest,
+        custody_replay_digest: observed.custody_replay_digest,
+        custody_token_poststate_digest: observed.custody_token_poststate_digest,
+        post_resource_digest: observed.post_resource_digest,
+        payout: candidate.collateral_atoms,
+        pre_market_revision: input.expected_market_revision,
+        post_market_revision: observed.post_market_revision,
+        pre_position_revision: input.expected_position_revision,
+        post_position_revision: observed.post_position_revision,
+        pre_custody_revision: input.expected_custody_revision,
+        post_custody_revision: observed.post_custody_revision,
+    };
+    TerminalSettlementReceiptV3::decode(receipt_bytes)
+        .and_then(|receipt| receipt.verify_for(request, evidence))
+        .map_err(|_| Error::Claims)
+}
+
+fn digestv(parts: &[&[u8]]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    for part in parts {
+        digest.update(part);
+    }
+    digest.finalize().into()
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod terminal_postcondition_tests {
+    use super::*;
+    use dclutch_fractional_claim_kernel::ExposureShardInstrumentV2;
+    use solana_program::instruction::Instruction;
+
+    fn id(value: u8) -> [u8; 32] {
+        [value; 32]
+    }
+
+    fn division() -> ExposureShardDivisionV2 {
+        let instrument = |shard_atoms| ExposureShardInstrumentV2 {
+            terms_id: id(1),
+            representation_coordinate: 2,
+            shard_mint: id(2),
+            shard_atoms,
+        };
+        ExposureShardDivisionV2 {
+            input: instrument(23),
+            whole_claims: 2,
+            consumed: instrument(20),
+            change: instrument(3),
+        }
+    }
+
+    fn request() -> TerminalSettlementRequestV3 {
+        TerminalSettlementRequestV3::new(TerminalSettlementRequestInputV3 {
+            caller_role: CallerRole::Trading,
+            release_set: id(3),
+            market: id(4),
+            realm: id(5),
+            parent_context: id(6),
+            product_record_digest: id(7),
+            exposure_id: id(8),
+            exposure_digest: id(9),
+            terminal_record_digest: id(10),
+            owner: id(11),
+            position: id(12),
+            recipient_owner: id(13),
+            recipient_token_account: id(14),
+            claims_program: id(15),
+            custody_program: id(16),
+            collateral_mint: id(17),
+            token_program: id(18),
+            semantic_basis_id: id(19),
+            linked_basis_record_digest: id(20),
+            generation: 4,
+            expected_market_revision: 5,
+            expected_position_revision: 6,
+            expected_custody_revision: 7,
+            quantity: 2,
+            claim_index: 2,
+            transfer_index: 1,
+        })
+        .expect("request")
+    }
+
+    fn candidate(payout: u64) -> FractionalExposureTerminalCandidateV2 {
+        let settlement_request = request();
+        let settlement_request_digest: [u8; 32] =
+            Sha256::digest(settlement_request.to_bytes()).into();
+        FractionalExposureTerminalCandidateV2 {
+            packet: vec![1, 2, 3],
+            settlement_request,
+            fractional_request_digest: id(6),
+            settlement_request_digest,
+            packet_digest: id(21),
+            table_digest: id(22),
+            collateral_atoms: payout,
+            division: division(),
+        }
+    }
+
+    fn token() -> FractionalExposureTokenPlanV2 {
+        FractionalExposureTokenPlanV2 {
+            effect: FractionalExposureTokenEffectV2::Burn(Instruction {
+                program_id: Pubkey::new_from_array(id(18)),
+                accounts: Vec::new(),
+                data: Vec::new(),
+            }),
+            division: Some(division()),
+            consumed_shards: 20,
+            change_shards: 3,
+            pre_supply: 30,
+            post_supply: 10,
+            pre_source: 23,
+            post_source: 3,
+            pre_destination: 0,
+            post_destination: 0,
+        }
+    }
+
+    fn observation(payout: u64) -> FractionalExposureTerminalPostObservationV2 {
+        FractionalExposureTerminalPostObservationV2 {
+            signed_post_resource_digest: id(23),
+            custody_request_digest: if payout == 0 { [0; 32] } else { id(24) },
+            custody_receipt_digest: if payout == 0 { [0; 32] } else { id(25) },
+            custody_replay_digest: id(26),
+            custody_token_poststate_digest: id(27),
+            post_resource_digest: id(28),
+            post_market_revision: 6,
+            post_position_revision: 7,
+            post_custody_revision: if payout == 0 { 7 } else { 8 },
+        }
+    }
+
+    fn receipt(
+        candidate: &FractionalExposureTerminalCandidateV2,
+        observed: FractionalExposureTerminalPostObservationV2,
+    ) -> [u8; dclutch_claims_svm::terminal_settlement_v3::TERMINAL_SETTLEMENT_RECEIPT_BYTES_V3]
+    {
+        TerminalSettlementReceiptV3::new(
+            candidate.settlement_request,
+            TerminalSettlementReceiptInputV3 {
+                request_digest: candidate.settlement_request_digest,
+                signed_packet_digest: candidate.packet_digest,
+                signed_table_digest: candidate.table_digest,
+                signed_post_resource_digest: observed.signed_post_resource_digest,
+                custody_request_digest: observed.custody_request_digest,
+                custody_receipt_digest: observed.custody_receipt_digest,
+                custody_replay_digest: observed.custody_replay_digest,
+                custody_token_poststate_digest: observed.custody_token_poststate_digest,
+                post_resource_digest: observed.post_resource_digest,
+                payout: candidate.collateral_atoms,
+                pre_market_revision: 5,
+                post_market_revision: observed.post_market_revision,
+                pre_position_revision: 6,
+                post_position_revision: observed.post_position_revision,
+                pre_custody_revision: 7,
+                post_custody_revision: observed.post_custody_revision,
+            },
+        )
+        .expect("receipt")
+        .to_bytes()
+    }
+
+    #[test]
+    fn positive_and_zero_terminal_receipts_bind_the_exact_burn() {
+        for payout in [0, 9] {
+            let candidate = candidate(payout);
+            let observed = observation(payout);
+            let receipt = receipt(&candidate, observed);
+            assert_eq!(
+                validate_fractional_exposure_terminal_postcondition_v2(
+                    &candidate,
+                    &token(),
+                    &receipt,
+                    observed,
+                ),
+                Ok(())
+            );
+        }
+    }
+
+    #[test]
+    fn request_custody_poststate_and_burn_substitutions_refuse() {
+        let candidate = candidate(9);
+        let observed = observation(9);
+        let receipt = receipt(&candidate, observed);
+
+        let mut changed_post = observed;
+        changed_post.custody_token_poststate_digest = id(99);
+        assert_eq!(
+            validate_fractional_exposure_terminal_postcondition_v2(
+                &candidate,
+                &token(),
+                &receipt,
+                changed_post,
+            ),
+            Err(Error::Claims)
+        );
+
+        let mut changed_receipt = receipt;
+        changed_receipt[112] ^= 1;
+        assert_eq!(
+            validate_fractional_exposure_terminal_postcondition_v2(
+                &candidate,
+                &token(),
+                &changed_receipt,
+                observed,
+            ),
+            Err(Error::Claims)
+        );
+
+        let mut changed_token = token();
+        changed_token.post_source = 4;
+        assert_eq!(
+            validate_fractional_exposure_terminal_postcondition_v2(
+                &candidate,
+                &changed_token,
+                &receipt,
+                observed,
+            ),
+            Err(Error::Claims)
+        );
+    }
 }
 
 fn checked_holder_v2<'a>(
