@@ -8,6 +8,7 @@
 use solana_account::Account;
 use solana_program::{pubkey::Pubkey, rent::Rent};
 use solana_program_test::ProgramTest;
+use solana_sdk_ids::system_program;
 
 /// One exact account installed by the shared Direct chain fixture.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -82,13 +83,18 @@ fn validate_unique_nonzero(
 ) -> Result<(), DirectHotChainErrorV5> {
     let mut keys = Vec::with_capacity(accounts.len());
     for candidate in accounts {
-        if candidate.key == Pubkey::default() || keys.contains(&candidate.key) {
+        let canonical_external_system = candidate.key == system_program::ID
+            && externally_installed.contains(&system_program::ID);
+        if (candidate.key == Pubkey::default() && !canonical_external_system)
+            || keys.contains(&candidate.key)
+        {
             return Err(DirectHotChainErrorV5::InvalidIdentity);
         }
         keys.push(candidate.key);
     }
     for external in externally_installed {
-        if *external == Pubkey::default() || !keys.contains(external) {
+        let canonical_system = *external == system_program::ID;
+        if (*external == Pubkey::default() && !canonical_system) || !keys.contains(external) {
             return Err(DirectHotChainErrorV5::UnknownExternalAccount);
         }
     }
@@ -178,5 +184,39 @@ mod tests {
             ),
             Err(DirectHotChainErrorV5::UnderfundedAccount)
         );
+    }
+
+    #[test]
+    fn canonical_external_system_program_is_the_only_zero_identity_exception() {
+        let rent = Rent::default();
+        let system = DirectHotInstallAccountV5 {
+            key: system_program::ID,
+            account: Account {
+                lamports: 1,
+                data: Vec::new(),
+                owner: system_program::ID,
+                executable: true,
+                rent_epoch: 0,
+            },
+            snapshot_for_rollback: false,
+        };
+        assert_eq!(
+            install_direct_hot_chain_accounts_v5(
+                &mut ProgramTest::default(),
+                &rent,
+                core::slice::from_ref(&system),
+                &[],
+            ),
+            Err(DirectHotChainErrorV5::InvalidIdentity)
+        );
+        let installed = install_direct_hot_chain_accounts_v5(
+            &mut ProgramTest::default(),
+            &rent,
+            &[system],
+            &[system_program::ID],
+        )
+        .expect("externally installed canonical System program");
+        assert!(installed.installed_keys.is_empty());
+        assert!(installed.rollback_snapshot_keys.is_empty());
     }
 }
