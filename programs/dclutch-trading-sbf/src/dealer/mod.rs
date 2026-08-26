@@ -64,6 +64,9 @@ pub mod v3_trade;
 pub mod v3_trade_artifacts;
 /// Selector-9 Profile13 protected physical-account geometry.
 pub mod v3_trade_profile;
+/// Schema-bound selector-9 V4 release finalization and global SetV2 migration.
+#[cfg(not(target_os = "solana"))]
+pub mod v4_scenario_release;
 
 /// Canonical Dealer capability-kind label.
 pub const DEALER_KIND_PREIMAGE_V2: &[u8] = b"dclutch/capability/dealer-v2";
