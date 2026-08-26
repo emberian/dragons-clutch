@@ -4,6 +4,7 @@
 
 //! Registry-bound Core-effect Source Resolution controller.
 
+extern crate alloc;
 extern crate std;
 
 use dclutch_capability_contract::CapabilityManifestV1;
@@ -18,6 +19,7 @@ use solana_program::{
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 
 mod core_effect;
+mod provider_instruction_v3;
 /// Current-ABI real-provider evidence composition shared by fixed Core and
 /// data-defined Trading callers.
 pub mod provider_v3;
@@ -86,6 +88,13 @@ pub fn process_instruction(
 ) -> ProgramResult {
     if core_effect::is_core_effect(instruction_data) {
         return core_effect::process_core_effect(program_id, accounts, instruction_data);
+    }
+    if provider_instruction_v3::is_provider_resolution_v3(instruction_data) {
+        return provider_instruction_v3::process_provider_resolution_v3(
+            program_id,
+            accounts,
+            instruction_data,
+        );
     }
     Err(ResolutionError::Instruction.into())
 }
@@ -583,7 +592,7 @@ fn authenticate_resolution_release(
         .map_err(|_| ResolutionError::ResolutionDeployment.into())
 }
 
-fn deployment_observation(
+pub(crate) fn deployment_observation(
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
     expected_programdata: [u8; 32],

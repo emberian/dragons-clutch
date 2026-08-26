@@ -20,6 +20,58 @@ pub const PROVIDER_EXECUTION_RECEIPT_MAGIC_V3: [u8; 8] = *b"DCLTPRC3";
 pub const PROVIDER_EXECUTION_VERSION_V3: u16 = 3;
 /// Consume one already provider-authenticated Pyth update.
 pub const PROVIDER_EXECUTION_ACTION_V3: u8 = 1;
+/// Canonical schema label for the fixed request prefix.
+pub const PROVIDER_EXECUTION_REQUEST_SCHEMA_PREIMAGE_V3: &[u8] =
+    b"dclutch/schema/provider-resolution-request-v3";
+/// SHA-256 of [`PROVIDER_EXECUTION_REQUEST_SCHEMA_PREIMAGE_V3`].
+pub const PROVIDER_EXECUTION_REQUEST_SCHEMA_ID_V3: [u8; 32] = [
+    0xcd, 0x32, 0xad, 0xc8, 0x75, 0xf9, 0x18, 0x1e, 0xe9, 0x64, 0x3b, 0x08, 0x05, 0xd3, 0xe4, 0x1f,
+    0x79, 0x03, 0x7d, 0x9d, 0xbc, 0xf3, 0xc7, 0x70, 0xde, 0x42, 0x35, 0xb6, 0x40, 0x78, 0xd2, 0xde,
+];
+
+/// Exact account count for the fixed Core caller frame.
+pub const PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3: usize = 46;
+/// Exact account count for the Trading caller frame, including its selected
+/// ProgramSet and descriptor raw/staging pairs.
+pub const PROVIDER_RESOLUTION_TRADING_ACCOUNT_COUNT_V3: usize = 50;
+/// First common account index. The order from this index is caller authority,
+/// resolver, Source state, certificate, Market, activation, infrastructure
+/// profile, Registry Program/ProgramData/artifact pair, Core Program/ProgramData,
+/// Trading Program/ProgramData, and Resolution Program/ProgramData.
+pub const PROVIDER_RESOLUTION_CALLER_AUTHORITY_ACCOUNT_V3: usize = 0;
+/// Permissionless resolver signer.
+pub const PROVIDER_RESOLUTION_RESOLVER_ACCOUNT_V3: usize = 1;
+/// Writable Source state.
+pub const PROVIDER_RESOLUTION_SOURCE_STATE_ACCOUNT_V3: usize = 2;
+/// Writable deterministic certificate destination.
+pub const PROVIDER_RESOLUTION_CERTIFICATE_ACCOUNT_V3: usize = 3;
+/// Core Market account.
+pub const PROVIDER_RESOLUTION_MARKET_ACCOUNT_V3: usize = 4;
+/// Registry-owned activated execution release set.
+pub const PROVIDER_RESOLUTION_ACTIVATION_ACCOUNT_V3: usize = 5;
+/// Core-owned immutable Registry/Rent infrastructure selection.
+pub const PROVIDER_RESOLUTION_INFRASTRUCTURE_ACCOUNT_V3: usize = 6;
+/// First Registry deployment account: Registry Program, ProgramData, artifact
+/// raw, and vacant artifact staging cursor.
+pub const PROVIDER_RESOLUTION_REGISTRY_ACCOUNTS_START_V3: usize = 7;
+/// First current role deployment account: Core, Trading, and Resolution
+/// Program/ProgramData pairs in that order.
+pub const PROVIDER_RESOLUTION_ROLE_ACCOUNTS_START_V3: usize = 11;
+/// First Source finalized-record account. Seven raw/staging pairs follow in
+/// order: material, SourceSpec, ProviderRelease, PythAdapterConfig, WindowSpec,
+/// StatisticSpec, and PythRelease.
+pub const PROVIDER_RESOLUTION_SOURCE_RECORDS_START_V3: usize = 17;
+/// First Product Runtime V2 account: Product, result-domain, and portfolio
+/// raw/staging pairs.
+pub const PROVIDER_RESOLUTION_PRODUCT_RECORDS_START_V3: usize = 31;
+/// First Trading-only account: ProgramSet and selected CapabilityProgramV3
+/// raw/staging pairs.
+pub const PROVIDER_RESOLUTION_TRADING_RECORDS_START_V3: usize = 37;
+/// Core tail start. The tail is update, Receiver Program/ProgramData/config,
+/// router Program/ProgramData, Clock, Rent, and System Program.
+pub const PROVIDER_RESOLUTION_CORE_TAIL_START_V3: usize = 37;
+/// Trading tail start after its four additional finalized-record accounts.
+pub const PROVIDER_RESOLUTION_TRADING_TAIL_START_V3: usize = 41;
 
 const GENERATION_OFFSET: usize = 16;
 const TERMINAL_SEQUENCE_OFFSET: usize = 24;

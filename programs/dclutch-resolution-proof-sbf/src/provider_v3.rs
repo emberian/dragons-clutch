@@ -90,9 +90,9 @@ pub struct ProviderResolutionPlanV3 {
 /// plan. No mutation occurs in this function.
 pub fn plan_provider_resolution_v3(
     request_bytes: &[u8],
-    source_state: SourceResolutionStateV2,
-    source_records: AuthenticatedSourceRecordsV3,
-    observation: AuthenticatedProviderObservationV3<'_>,
+    source_state: &SourceResolutionStateV2,
+    source_records: &AuthenticatedSourceRecordsV3,
+    observation: &AuthenticatedProviderObservationV3<'_>,
 ) -> Result<ProviderResolutionPlanV3, ProviderJoinErrorV3> {
     let request = ProviderExecutionRequestV3::decode(request_bytes)
         .map_err(|_| ProviderJoinErrorV3::Request)?;
@@ -201,7 +201,7 @@ pub fn plan_provider_resolution_v3(
         )
         .map_err(|_| ProviderJoinErrorV3::Provider)?;
 
-    let mut next_source = source_state;
+    let mut next_source = *source_state;
     let decision = next_source
         .resolve_primary_from_authenticated_domain(
             source_records.material_id,
@@ -226,8 +226,40 @@ pub fn plan_provider_resolution_v3(
     {
         return Err(ProviderJoinErrorV3::Product);
     }
-    let observed_at =
-        u64::try_from(update.publish_time()).map_err(|_| ProviderJoinErrorV3::Arithmetic)?;
+    finish_plan(
+        request_bytes,
+        &request,
+        next_source,
+        provider_evidence,
+        update_digest,
+        post_params_body_digest,
+        decision.selector(),
+        outcome_count,
+        normalized.atoms(),
+        update.publish_time(),
+        update.posted_slot(),
+        observation.current_slot,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn finish_plan(
+    request_bytes: &[u8],
+    request: &ProviderExecutionRequestV3,
+    next_source: SourceResolutionStateV2,
+    provider_evidence: [u8; 32],
+    update_digest: [u8; 32],
+    post_params_body_digest: [u8; 32],
+    selector: u32,
+    outcome_count: u32,
+    result_atoms: i128,
+    publish_time: i64,
+    posted_slot: u64,
+    consumed_slot: u64,
+) -> Result<ProviderResolutionPlanV3, ProviderJoinErrorV3> {
+    let observed_at = u64::try_from(publish_time).map_err(|_| ProviderJoinErrorV3::Arithmetic)?;
+    let product_record_digest = request.product_record;
     let certificate = ResolutionCertificateV2 {
         kind: ResolutionCertificateKindV2::ResolutionSuccess,
         market: request.market,
@@ -240,10 +272,10 @@ pub fn plan_provider_resolution_v3(
         generation: request.generation,
         attempt_index: 0,
         schedule_index: 0,
-        selector: decision.selector(),
+        selector,
         work_paid: 0,
         funding_remaining: 0,
-        result_numerator: normalized.atoms(),
+        result_numerator: result_atoms,
         result_denominator: 1,
         observed_at,
     };
@@ -273,13 +305,13 @@ pub fn plan_provider_resolution_v3(
         release_set: request.release_set,
         capability_program_set: request.capability_program_set,
         selected_capability_program: request.selected_capability_program,
-        selector: decision.selector(),
+        selector,
         outcome_count,
-        result_numerator: normalized.atoms(),
+        result_numerator: result_atoms,
         result_denominator: 1,
-        publish_time: update.publish_time(),
-        posted_slot: update.posted_slot(),
-        consumed_slot: observation.current_slot,
+        publish_time,
+        posted_slot,
+        consumed_slot,
     };
     receipt
         .to_bytes()
@@ -294,7 +326,7 @@ pub fn plan_provider_resolution_v3(
 fn authenticate_provider_release(
     obligation: PythProviderAdapterObligationV2,
     source_release: ProviderReleaseV1,
-    observation: AuthenticatedProviderObservationV3<'_>,
+    observation: &AuthenticatedProviderObservationV3<'_>,
 ) -> Result<(), ProviderJoinErrorV3> {
     let pyth = observation.pyth_release;
     if obligation.provider_deployment_release_id().to_bytes() != observation.pyth_release_id
@@ -332,7 +364,7 @@ mod tests {
 
     const UPDATE: &[u8] =
         include_bytes!("../../../fixtures/pyth/local-upgraded-2026-08-22/price-update.account");
-    const POST_BODY: &[u8] = include_bytes!(
+    const POST_DATA: &[u8] = include_bytes!(
         "../../../fixtures/pyth/local-upgraded-2026-08-22/receiver-post-update.data"
     );
 
@@ -366,6 +398,7 @@ mod tests {
     }
 
     fn plan(case: Case) -> Result<ProviderResolutionPlanV3, ProviderJoinErrorV3> {
+        let post_body = POST_DATA.get(8..).ok_or(ProviderJoinErrorV3::Provider)?;
         let update = FullPriceUpdateV2::parse(UPDATE).expect("captured full Pyth update");
         let coordinate_domain = source_id(1);
         let source_unit = source_id(2);
@@ -536,42 +569,39 @@ mod tests {
             capability_program_set: [0; 32],
             selected_capability_program: [0; 32],
             parent_request_digest: [57; 32],
-            post_params_body_digest: hash(POST_BODY).to_bytes(),
+            post_params_body_digest: hash(post_body).to_bytes(),
         };
         let request_bytes = request
             .to_bytes()
             .map_err(|_| ProviderJoinErrorV3::Request)?;
-        plan_provider_resolution_v3(
-            &request_bytes,
-            state,
-            AuthenticatedSourceRecordsV3 {
-                material_id,
-                material,
-                source_spec_id,
-                source,
-                provider_release_id,
-                provider_release,
-                adapter_config_id,
-                adapter_config,
-                window_spec_id,
-                window,
-                statistic_spec_id,
-                statistic,
-                failure_policy_release,
-            },
-            AuthenticatedProviderObservationV3 {
-                pyth_release_id,
-                pyth_release,
-                product_runtime,
-                result_domain_bytes: &domain_bytes,
-                result_domain: domain,
-                update_account: request.update_account,
-                update_bytes: UPDATE,
-                post_params_body: POST_BODY,
-                current_slot: update.posted_slot(),
-                current_unix_seconds: update.publish_time(),
-            },
-        )
+        let records = AuthenticatedSourceRecordsV3 {
+            material_id,
+            material,
+            source_spec_id,
+            source,
+            provider_release_id,
+            provider_release,
+            adapter_config_id,
+            adapter_config,
+            window_spec_id,
+            window,
+            statistic_spec_id,
+            statistic,
+            failure_policy_release,
+        };
+        let observation = AuthenticatedProviderObservationV3 {
+            pyth_release_id,
+            pyth_release,
+            product_runtime,
+            result_domain_bytes: &domain_bytes,
+            result_domain: domain,
+            update_account: request.update_account,
+            update_bytes: UPDATE,
+            post_params_body: post_body,
+            current_slot: update.posted_slot(),
+            current_unix_seconds: update.publish_time(),
+        };
+        plan_provider_resolution_v3(&request_bytes, &state, &records, &observation)
     }
 
     #[test]

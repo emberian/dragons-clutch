@@ -46,7 +46,13 @@ pub use generated_source_recovery_policy_v2::{
     RECOVERY_POLICY_MAX_ATTEMPTS_V2, RECOVERY_POLICY_SCHEMA_ID_V2,
     RECOVERY_POLICY_SCHEMA_PREIMAGE_V2, RECOVERY_POLICY_SCHEMA_VERSION_V2,
 };
-pub use provider_join_v2::PythProviderAdapterObligationV2;
+pub use provider_join_v2::{
+    PROVIDER_RELEASE_SCHEMA_ID_V1, PROVIDER_RELEASE_SCHEMA_PREIMAGE_V1,
+    PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_PREIMAGE_V1,
+    PythProviderAdapterObligationV2, SOURCE_SPEC_SCHEMA_ID_V1, SOURCE_SPEC_SCHEMA_PREIMAGE_V1,
+    STATISTIC_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_PREIMAGE_V1, WINDOW_SPEC_SCHEMA_ID_V1,
+    WINDOW_SPEC_SCHEMA_PREIMAGE_V1,
+};
 pub use source_material_v2::SourceMaterialV2;
 pub use source_recovery_policy_v2::{RecoveryAttemptV2, RecoveryPolicyV2};
 pub use source_resolution_v2::{
