@@ -22,6 +22,103 @@ pub const RATIONAL_LIFECYCLE_COMPACT_HOT_SCHEMA_RELEASE_ID_V4: [u8; 32] = [
     0xb8, 0x38, 0x14, 0x7c, 0x37, 0x47, 0xa7, 0x75, 0x10, 0x67, 0x56, 0xc4, 0xa6, 0x53, 0xa6, 0xc3,
     0xa8, 0x48, 0x01, 0x4c, 0xad, 0x77, 0x87, 0x60, 0xb8, 0x9a, 0x5a, 0x16, 0x95, 0xa2, 0x83, 0x74,
 ];
+/// Exact protected common identity-register width.
+pub const RATIONAL_LIFECYCLE_COMPACT_COMMON_IDENTITIES_V4: usize = 10;
+/// Exact protected common scalar-register width.
+pub const RATIONAL_LIFECYCLE_COMPACT_COMMON_SCALARS_V4: usize = 11;
+/// Exact account-derived identities per support row.
+pub const RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITIES_V4: usize = 4;
+/// Exact descriptor-derived scalars per support row.
+pub const RATIONAL_LIFECYCLE_COMPACT_ROW_SCALARS_V4: usize = 2;
+
+/// Protected common scalar holding descriptor-derived positive support width.
+pub const RATIONAL_LIFECYCLE_COMPACT_SCALAR_SUPPORT_COUNT_V4: usize = 7;
+/// Protected common scalar holding independently authenticated Product width.
+pub const RATIONAL_LIFECYCLE_COMPACT_SCALAR_PRODUCT_OUTCOME_COUNT_V4: usize = 10;
+/// Row-local identity holding the supplied shard Mint.
+pub const RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_SHARD_MINT_V4: usize = 0;
+/// Row-local identity holding the supplied Structured custody account.
+pub const RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_STRUCTURED_CUSTODY_V4: usize = 1;
+/// Row-local identity holding the supplied LBV2 Position.
+pub const RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_POSITION_V4: usize = 2;
+/// Row-local identity holding the supplied Position admission.
+pub const RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_ADMISSION_V4: usize = 3;
+/// Row-local scalar holding the descriptor outcome index.
+pub const RATIONAL_LIFECYCLE_COMPACT_ROW_SCALAR_OUTCOME_V4: usize = 0;
+/// Row-local scalar holding the exact nonzero descriptor coefficient.
+pub const RATIONAL_LIFECYCLE_COMPACT_ROW_SCALAR_COEFFICIENT_V4: usize = 1;
+
+/// Descriptor-specialized flat register geometry for compact retirement.
+///
+/// Product N remains outside this row width. Only the authenticated nonzero
+/// descriptor support K extends these banks.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RationalLifecycleCompactHotRegisterLayoutV4 {
+    support_count: usize,
+}
+
+impl RationalLifecycleCompactHotRegisterLayoutV4 {
+    /// Construct exact K-specialized flat register geometry.
+    pub const fn new(support_count: usize) -> Self {
+        Self { support_count }
+    }
+
+    /// Exact descriptor support width.
+    pub const fn support_count(self) -> usize {
+        self.support_count
+    }
+
+    /// Exact total identity-register width.
+    pub const fn identity_count(self) -> Option<usize> {
+        match self
+            .support_count
+            .checked_mul(RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITIES_V4)
+        {
+            Some(rows) => RATIONAL_LIFECYCLE_COMPACT_COMMON_IDENTITIES_V4.checked_add(rows),
+            None => None,
+        }
+    }
+
+    /// Exact total scalar-register width.
+    pub const fn scalar_count(self) -> Option<usize> {
+        match self
+            .support_count
+            .checked_mul(RATIONAL_LIFECYCLE_COMPACT_ROW_SCALARS_V4)
+        {
+            Some(rows) => RATIONAL_LIFECYCLE_COMPACT_COMMON_SCALARS_V4.checked_add(rows),
+            None => None,
+        }
+    }
+
+    /// Flat identity-register coordinate for one account-derived row field.
+    pub const fn row_identity(self, row: usize, field: usize) -> Option<usize> {
+        if row >= self.support_count || field >= RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITIES_V4 {
+            return None;
+        }
+        match row.checked_mul(RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITIES_V4) {
+            Some(start) => match RATIONAL_LIFECYCLE_COMPACT_COMMON_IDENTITIES_V4.checked_add(start)
+            {
+                Some(base) => base.checked_add(field),
+                None => None,
+            },
+            None => None,
+        }
+    }
+
+    /// Flat scalar-register coordinate for one descriptor-derived row field.
+    pub const fn row_scalar(self, row: usize, field: usize) -> Option<usize> {
+        if row >= self.support_count || field >= RATIONAL_LIFECYCLE_COMPACT_ROW_SCALARS_V4 {
+            return None;
+        }
+        match row.checked_mul(RATIONAL_LIFECYCLE_COMPACT_ROW_SCALARS_V4) {
+            Some(start) => match RATIONAL_LIFECYCLE_COMPACT_COMMON_SCALARS_V4.checked_add(start) {
+                Some(base) => base.checked_add(field),
+                None => None,
+            },
+            None => None,
+        }
+    }
+}
 
 /// Canonical field coordinates shared with the sole Claims child header.
 pub struct RationalLifecycleCompactHotLayoutV4;
@@ -278,5 +375,18 @@ mod tests {
             Sha256::digest(RATIONAL_LIFECYCLE_COMPACT_HOT_SCHEMA_PREIMAGE_V4).as_slice(),
             RATIONAL_LIFECYCLE_COMPACT_HOT_SCHEMA_RELEASE_ID_V4,
         );
+    }
+
+    #[test]
+    fn row_banks_cannot_alias_protected_common_registers() {
+        let layout = RationalLifecycleCompactHotRegisterLayoutV4::new(3);
+        assert_eq!(layout.identity_count(), Some(22));
+        assert_eq!(layout.scalar_count(), Some(17));
+        assert_eq!(layout.row_identity(0, 0), Some(10));
+        assert_eq!(layout.row_identity(2, 3), Some(21));
+        assert_eq!(layout.row_scalar(0, 0), Some(11));
+        assert_eq!(layout.row_scalar(2, 1), Some(16));
+        assert_eq!(layout.row_identity(3, 0), None);
+        assert_eq!(layout.row_scalar(0, 2), None);
     }
 }
