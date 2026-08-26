@@ -1,14 +1,12 @@
 //! Hostile and positive physical Claims/Token/Custody composition corpus.
 
-use dclutch_claims_svm::{ClaimsReceiptV1, NO_POSITION_REVISION};
-use dclutch_custody_contract::{
-    CallerRoleV1, CompartmentV1, ContextV1, CustodyReceiptV1, CustodyRequestV1, OperationV1,
-    ReceiptEvidenceV1,
-};
+use dclutch_claims_svm::affine_batch_v2::{AffineBatchReceiptV2, DeltaDirectionV2};
 use dclutch_rational_representation_v2_contract::{
-    ABSENT_REVISION, ASSET_BYTES_V2, AssetV2, CallerRoleV2, CompletionEvidenceV2, Error,
-    REQUEST_HEADER_BYTES_V2, RepresentationActionV2, RepresentationReceiptV2,
-    RepresentationRequestHeaderV2, RepresentationRequestV2, TokenEffectStyleV2, finalize, prepare,
+    ABSENT_REVISION, ASSET_BYTES_V2, AffineBatchContextV2, AssetV2, CallerRoleV2,
+    CompletionEvidenceV2, Error, RATIONAL_ASSET_ACCOUNT_COUNT_V2, RATIONAL_BASE_ACCOUNT_COUNT_V2,
+    RATIONAL_TERMINAL_ACCOUNT_COUNT_V2, REQUEST_HEADER_BYTES_V2, RepresentationActionV2,
+    RepresentationReceiptV2, RepresentationRequestHeaderV2, RepresentationRequestV2,
+    TokenEffectStyleV2, finalize, prepare,
 };
 use dclutch_rational_representation_v2_kernel::{
     ContentAdmissionV2, DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3,
@@ -406,7 +404,19 @@ fn structured_issue_is_token_only_and_exactly_conserved() {
             .style,
         TokenEffectStyleV2::MintReceipt
     );
-    assert_eq!(prepared.claims_plan(id(30), &[]), Ok(None));
+    let context = AffineBatchContextV2 {
+        product_record_digest: id(80),
+        semantic_basis_id: id(81),
+        linked_basis_record_digest: id(82),
+    };
+    assert_eq!(
+        prepared.write_affine_packet(id(30), None, &mut []),
+        Ok(None)
+    );
+    assert_eq!(
+        prepared.write_affine_packet(id(30), Some(context), &mut []),
+        Err(Error::InvalidActionShape)
+    );
     let posts = post_assets(&[(30, 6, 24), (60, 4, 56)]);
     let receipt = finalize(
         prepared,
@@ -414,8 +424,10 @@ fn structured_issue_is_token_only_and_exactly_conserved() {
             request_digest: id(30),
             representation_program: id(31),
             claims_program: id(31),
-            claims_plan_digest: [0; 32],
-            claims_receipt: None,
+            affine_packet_digest: [0; 32],
+            affine_packet: None,
+            affine_context: None,
+            affine_receipt: None,
             token_effect_digest: id(32),
             post_receipt_supply: 8,
             post_asset_observations: &posts,
@@ -435,7 +447,7 @@ fn structured_issue_is_token_only_and_exactly_conserved() {
 }
 
 #[test]
-fn denomination_emits_one_canonical_claims_plan_and_shard_mint() {
+fn denomination_emits_one_canonical_affine_packet_and_shard_mint() {
     let projection_bytes = projection_fixture(3, 30, 9);
     let projection = StructuredProjectionV2::decode(&projection_bytes).expect("projection");
     let descriptor_bytes = descriptor_fixture();
@@ -460,18 +472,47 @@ fn denomination_emits_one_canonical_claims_plan_and_shard_mint() {
         .expect("exact");
     assert_eq!(effect.style, TokenEffectStyleV2::MintShard);
     assert_eq!(effect.amount, 20);
-    let mut quantities = vec![0_u8; prepared.claims_quantity_bytes().expect("width")];
-    prepared
-        .write_claims_quantities(&mut quantities)
-        .expect("one-hot");
-    let plan = prepared
-        .claims_plan(id(30), &quantities)
-        .expect("claims plan")
+    let context = AffineBatchContextV2 {
+        product_record_digest: id(80),
+        semantic_basis_id: id(81),
+        linked_basis_record_digest: id(82),
+    };
+    let mut hostile_context_bytes =
+        vec![0_u8; prepared.affine_packet_bytes().expect("packet width")];
+    assert_eq!(
+        prepared.write_affine_packet(
+            id(30),
+            Some(AffineBatchContextV2 {
+                product_record_digest: [0; 32],
+                ..context
+            }),
+            &mut hostile_context_bytes,
+        ),
+        Err(Error::ClaimsMismatch)
+    );
+    let mut packet_bytes = vec![0_u8; prepared.affine_packet_bytes().expect("packet width")];
+    let packet = prepared
+        .write_affine_packet(id(30), Some(context), &mut packet_bytes)
+        .expect("affine packet")
         .expect("present");
-    assert_eq!(plan.quantity(0), Ok(2));
-    assert_eq!(plan.quantity(1), Ok(0));
-    let claims_receipt =
-        ClaimsReceiptV1::new(plan, id(34), id(31), 11, 21, 31, 0, id(35)).expect("claims receipt");
+    assert_eq!(packet.position_count(), 2);
+    assert_eq!(packet.row_count(), 1);
+    assert_eq!(packet.position(0).expect("actor").owner(), id(7));
+    assert_eq!(packet.position(1).expect("custody").owner(), id(53));
+    let row = packet.row(0).expect("row");
+    assert_eq!(row.outcome(), 0);
+    assert_eq!(row.source_position_index(), 0);
+    assert_eq!(row.destination_position_index(), 1);
+    assert_eq!(row.aggregate_delta().direction(), DeltaDirectionV2::Neutral);
+    assert_eq!(row.source_delta().direction(), DeltaDirectionV2::Debit);
+    assert_eq!(row.source_delta().magnitude(), 2);
+    assert_eq!(
+        row.destination_delta().direction(),
+        DeltaDirectionV2::Credit
+    );
+    assert_eq!(row.destination_delta().magnitude(), 2);
+    let affine_receipt = AffineBatchReceiptV2::new(packet, id(34), id(35), id(31), id(36), 11)
+        .expect("affine receipt");
     let posts = post_assets(&[(50, 29, 21)]);
     let receipt = finalize(
         prepared,
@@ -479,9 +520,11 @@ fn denomination_emits_one_canonical_claims_plan_and_shard_mint() {
             request_digest: id(30),
             representation_program: id(31),
             claims_program: id(31),
-            claims_plan_digest: id(34),
-            claims_receipt: Some(claims_receipt),
-            token_effect_digest: id(36),
+            affine_packet_digest: id(34),
+            affine_packet: Some(packet),
+            affine_context: Some(context),
+            affine_receipt: Some(affine_receipt),
+            token_effect_digest: id(37),
             post_receipt_supply: 7,
             post_asset_observations: &posts,
             custody_request: None,
@@ -489,11 +532,12 @@ fn denomination_emits_one_canonical_claims_plan_and_shard_mint() {
             custody_receipt: None,
             custody_receipt_digest: [0; 32],
             custody_replay_digest: [0; 32],
-            post_resource_digest: id(37),
+            post_resource_digest: id(38),
         },
     )
     .expect("finalize");
     assert_eq!(receipt.payout(), 0);
+    assert_eq!(receipt.affine_packet_digest(), id(34));
     receipt.verify_for(request, id(30)).expect("exact receipt");
 }
 
@@ -532,16 +576,21 @@ fn reconstitution_and_unwrap_are_exact_inverse_effect_shapes() {
         "shard burn authority is the observed Token holder, not the mint authority"
     );
     assert_eq!(effect.amount, 10);
-    let mut quantities = vec![0_u8; prepared.claims_quantity_bytes().expect("width")];
-    prepared
-        .write_claims_quantities(&mut quantities)
-        .expect("quantities");
-    let plan = prepared
-        .claims_plan(id(30), &quantities)
-        .expect("plan")
+    let context = AffineBatchContextV2 {
+        product_record_digest: id(80),
+        semantic_basis_id: id(81),
+        linked_basis_record_digest: id(82),
+    };
+    let mut packet_bytes = vec![0_u8; prepared.affine_packet_bytes().expect("packet width")];
+    let packet = prepared
+        .write_affine_packet(id(30), Some(context), &mut packet_bytes)
+        .expect("affine packet")
         .expect("present");
-    let claims_receipt =
-        ClaimsReceiptV1::new(plan, id(34), id(31), 11, 31, 21, 0, id(35)).expect("claims receipt");
+    let row = packet.row(0).expect("row");
+    assert_eq!(row.source_position_index(), 1);
+    assert_eq!(row.destination_position_index(), 0);
+    let affine_receipt = AffineBatchReceiptV2::new(packet, id(34), id(35), id(31), id(36), 11)
+        .expect("affine receipt");
     let posts = post_assets(&[(30, 9, 21)]);
     finalize(
         prepared,
@@ -549,9 +598,11 @@ fn reconstitution_and_unwrap_are_exact_inverse_effect_shapes() {
             request_digest: id(30),
             representation_program: id(31),
             claims_program: id(31),
-            claims_plan_digest: id(34),
-            claims_receipt: Some(claims_receipt),
-            token_effect_digest: id(36),
+            affine_packet_digest: id(34),
+            affine_packet: Some(packet),
+            affine_context: Some(context),
+            affine_receipt: Some(affine_receipt),
+            token_effect_digest: id(37),
             post_receipt_supply: 7,
             post_asset_observations: &posts,
             custody_request: None,
@@ -559,7 +610,7 @@ fn reconstitution_and_unwrap_are_exact_inverse_effect_shapes() {
             custody_receipt: None,
             custody_receipt_digest: [0; 32],
             custody_replay_digest: [0; 32],
-            post_resource_digest: id(37),
+            post_resource_digest: id(38),
         },
     )
     .expect("reconstitution finalize");
@@ -616,8 +667,10 @@ fn reconstitution_and_unwrap_are_exact_inverse_effect_shapes() {
             request_digest: id(30),
             representation_program: id(31),
             claims_program: id(31),
-            claims_plan_digest: [0; 32],
-            claims_receipt: None,
+            affine_packet_digest: [0; 32],
+            affine_packet: None,
+            affine_context: None,
+            affine_receipt: None,
             token_effect_digest: id(36),
             post_receipt_supply: 6,
             post_asset_observations: &posts,
@@ -634,7 +687,7 @@ fn reconstitution_and_unwrap_are_exact_inverse_effect_shapes() {
 }
 
 #[test]
-fn terminal_winner_burn_claims_and_custody_join_is_exact() {
+fn terminal_remains_decodable_but_completion_refuses_without_typed_lbv2_evidence() {
     let projection_bytes = projection_fixture(4, 40, 19);
     let projection = StructuredProjectionV2::decode(&projection_bytes).expect("projection");
     let descriptor_bytes = descriptor_fixture();
@@ -645,7 +698,7 @@ fn terminal_winner_burn_claims_and_custody_join_is_exact() {
     let rows = asset_bytes(&[selected]);
     let request =
         RepresentationRequestV2::new(header(RepresentationActionV2::RedeemTerminal, 0, 1), &rows)
-            .expect("request");
+            .expect("request remains decodable");
     let prepared = prepare(
         request,
         descriptor(&descriptor_bytes),
@@ -653,92 +706,35 @@ fn terminal_winner_burn_claims_and_custody_join_is_exact() {
         graph(&graph_bytes),
     )
     .expect("prepare");
-    let mut quantities = vec![0_u8; prepared.claims_quantity_bytes().expect("width")];
-    prepared
-        .write_claims_quantities(&mut quantities)
-        .expect("quantities");
-    let plan = prepared
-        .claims_plan(id(30), &quantities)
-        .expect("plan")
-        .expect("present");
-    let claims_receipt = ClaimsReceiptV1::new(
-        plan,
-        id(34),
-        id(31),
-        11,
-        31,
-        NO_POSITION_REVISION,
-        1,
-        id(35),
-    )
-    .expect("claims receipt");
-    let custody_request = CustodyRequestV1 {
-        operation: OperationV1::Transfer,
-        caller_role: CallerRoleV1::Claims,
-        source_compartment: CompartmentV1::HoardPrincipal,
-        destination_compartment: CompartmentV1::External,
-        release_set: id(1),
-        market: id(2),
-        realm: id(10),
-        context: id(6),
-        caller_program: id(31),
-        semantic: ContextV1 {
-            candidate: [0; 32],
-            source_owner: [0; 32],
-            destination_owner: id(7),
-            order: [0; 32],
-            parent_request_digest: id(30),
-            order_nonce: 0,
-            generation: 9,
-            page_index: 0,
-            execution_index: 0,
-            transfer_index: 0,
-        },
-        source: id(70),
-        destination: id(11),
-        source_vault_context: id(6),
-        destination_vault_context: [0; 32],
-        mint: id(71),
-        token_program: TOKEN_2022_PROGRAM_ID,
-        payer: [0; 32],
-        rent_refund: [0; 32],
-        expected_revision: 5,
-        resulting_revision: 6,
-        amount: 1,
-        rent_lamports: 0,
-    };
-    let custody_evidence = ReceiptEvidenceV1 {
-        source_before: 10,
-        source_after: 9,
-        destination_before: 0,
-        destination_after: 1,
-        poststate_commitment: id(72),
-        replay_state_digest: id(73),
-    };
-    let custody_receipt =
-        CustodyReceiptV1::new(custody_request, id(74), custody_evidence).expect("custody receipt");
+    assert_eq!(
+        prepared.affine_packet_bytes(),
+        Err(Error::InvalidActionShape)
+    );
     let posts = post_assets(&[(30, 9, 21)]);
-    let receipt = finalize(
-        prepared,
-        CompletionEvidenceV2 {
-            request_digest: id(30),
-            representation_program: id(31),
-            claims_program: id(31),
-            claims_plan_digest: id(34),
-            claims_receipt: Some(claims_receipt),
-            token_effect_digest: id(36),
-            post_receipt_supply: 7,
-            post_asset_observations: &posts,
-            custody_request: Some(&custody_request),
-            custody_request_digest: id(74),
-            custody_receipt: Some(&custody_receipt),
-            custody_receipt_digest: id(75),
-            custody_replay_digest: id(73),
-            post_resource_digest: id(76),
-        },
-    )
-    .expect("terminal finalize");
-    assert_eq!(receipt.payout(), 1);
+    assert_eq!(
+        finalize(
+            prepared,
+            CompletionEvidenceV2 {
+                request_digest: id(30),
+                representation_program: id(31),
+                claims_program: id(31),
+                affine_packet_digest: [0; 32],
+                affine_packet: None,
+                affine_context: None,
+                affine_receipt: None,
+                token_effect_digest: id(36),
+                post_receipt_supply: 7,
+                post_asset_observations: &posts,
+                custody_request: None,
+                custody_request_digest: [0; 32],
+                custody_receipt: None,
+                custody_receipt_digest: [0; 32],
+                custody_replay_digest: [0; 32],
+                post_resource_digest: id(37),
+            },
+        ),
+        Err(Error::InvalidActionShape)
+    );
 }
 
 #[test]
@@ -804,8 +800,10 @@ fn hostile_partial_reconstitution_replay_and_late_token_post_refuse() {
                 request_digest: id(30),
                 representation_program: id(31),
                 claims_program: id(31),
-                claims_plan_digest: [0; 32],
-                claims_receipt: None,
+                affine_packet_digest: [0; 32],
+                affine_packet: None,
+                affine_context: None,
+                affine_receipt: None,
                 token_effect_digest: id(32),
                 post_receipt_supply: 8,
                 post_asset_observations: &hostile_posts,
@@ -835,16 +833,18 @@ fn hostile_partial_reconstitution_replay_and_late_token_post_refuse() {
         graph(&graph_bytes),
     )
     .expect("prepare");
-    let mut quantities = vec![0_u8; prepared.claims_quantity_bytes().expect("width")];
-    prepared
-        .write_claims_quantities(&mut quantities)
-        .expect("quantities");
-    let substituted_plan = prepared
-        .claims_plan(id(99), &quantities)
-        .expect("substituted plan")
-        .expect("claims active");
+    let context = AffineBatchContextV2 {
+        product_record_digest: id(80),
+        semantic_basis_id: id(81),
+        linked_basis_record_digest: id(82),
+    };
+    let mut packet_bytes = vec![0_u8; prepared.affine_packet_bytes().expect("packet width")];
+    let substituted_packet = prepared
+        .write_affine_packet(id(99), Some(context), &mut packet_bytes)
+        .expect("substituted packet")
+        .expect("affine active");
     let substituted_receipt =
-        ClaimsReceiptV1::new(substituted_plan, id(34), id(31), 11, 21, 31, 0, id(35))
+        AffineBatchReceiptV2::new(substituted_packet, id(34), id(35), id(31), id(36), 11)
             .expect("well-formed substituted receipt");
     let denomination_posts = post_assets(&[(40, 19, 21)]);
     assert_eq!(
@@ -854,9 +854,11 @@ fn hostile_partial_reconstitution_replay_and_late_token_post_refuse() {
                 request_digest: id(30),
                 representation_program: id(31),
                 claims_program: id(31),
-                claims_plan_digest: id(34),
-                claims_receipt: Some(substituted_receipt),
-                token_effect_digest: id(36),
+                affine_packet_digest: id(34),
+                affine_packet: Some(substituted_packet),
+                affine_context: Some(context),
+                affine_receipt: Some(substituted_receipt),
+                token_effect_digest: id(37),
                 post_receipt_supply: 7,
                 post_asset_observations: &denomination_posts,
                 custody_request: None,
@@ -864,7 +866,45 @@ fn hostile_partial_reconstitution_replay_and_late_token_post_refuse() {
                 custody_receipt: None,
                 custody_receipt_digest: [0; 32],
                 custody_replay_digest: [0; 32],
-                post_resource_digest: id(37),
+                post_resource_digest: id(38),
+            },
+        ),
+        Err(Error::ClaimsMismatch)
+    );
+
+    let mut canonical_packet_bytes =
+        vec![0_u8; prepared.affine_packet_bytes().expect("packet width")];
+    let canonical_packet = prepared
+        .write_affine_packet(id(30), Some(context), &mut canonical_packet_bytes)
+        .expect("canonical packet")
+        .expect("affine active");
+    let canonical_receipt =
+        AffineBatchReceiptV2::new(canonical_packet, id(34), id(35), id(31), id(36), 11)
+            .expect("canonical receipt");
+    let substituted_context = AffineBatchContextV2 {
+        product_record_digest: id(83),
+        ..context
+    };
+    assert_eq!(
+        finalize(
+            prepared,
+            CompletionEvidenceV2 {
+                request_digest: id(30),
+                representation_program: id(31),
+                claims_program: id(31),
+                affine_packet_digest: id(34),
+                affine_packet: Some(canonical_packet),
+                affine_context: Some(substituted_context),
+                affine_receipt: Some(canonical_receipt),
+                token_effect_digest: id(37),
+                post_receipt_supply: 7,
+                post_asset_observations: &denomination_posts,
+                custody_request: None,
+                custody_request_digest: [0; 32],
+                custody_receipt: None,
+                custody_receipt_digest: [0; 32],
+                custody_replay_digest: [0; 32],
+                post_resource_digest: id(38),
             },
         ),
         Err(Error::ClaimsMismatch)
@@ -879,14 +919,22 @@ fn physical_account_width_is_sparse_for_selected_actions() {
         &selected_rows,
     )
     .expect("denominate");
-    assert_eq!(denominate.physical_account_count(), Ok(24 + 4));
+    assert_eq!(
+        denominate.physical_account_count(),
+        Ok(RATIONAL_BASE_ACCOUNT_COUNT_V2 + RATIONAL_ASSET_ACCOUNT_COUNT_V2)
+    );
 
     let terminal = RepresentationRequestV2::new(
         header(RepresentationActionV2::RedeemTerminal, 0, 1),
         &selected_rows,
     )
     .expect("terminal");
-    assert_eq!(terminal.physical_account_count(), Ok(24 + 4 + 11));
+    assert_eq!(
+        terminal.physical_account_count(),
+        Ok(RATIONAL_BASE_ACCOUNT_COUNT_V2
+            + RATIONAL_ASSET_ACCOUNT_COUNT_V2
+            + RATIONAL_TERMINAL_ACCOUNT_COUNT_V2)
+    );
 
     let all_rows = asset_bytes(&assets());
     let issue = RepresentationRequestV2::new(
@@ -894,5 +942,8 @@ fn physical_account_width_is_sparse_for_selected_actions() {
         &all_rows,
     )
     .expect("issue");
-    assert_eq!(issue.physical_account_count(), Ok(24 + 2 * 4));
+    assert_eq!(
+        issue.physical_account_count(),
+        Ok(RATIONAL_BASE_ACCOUNT_COUNT_V2 + 2 * RATIONAL_ASSET_ACCOUNT_COUNT_V2)
+    );
 }

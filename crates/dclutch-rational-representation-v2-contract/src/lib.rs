@@ -5,40 +5,43 @@
 //! Physical composition contract for exact rational claim representations.
 //!
 //! This crate hostile-decodes one Lean-owned request, joins it to the pure
-//! rational representation kernel, emits one canonical Claims plan and an
-//! ordered Token effect stream, and accepts a receipt only after exact Claims,
-//! Token, and (for positive terminal payout) Custody evidence joins. It owns
-//! replay revision only; Claims and Token remain the economic/supply owners.
+//! rational representation kernel, emits one canonical affine Claims packet
+//! for open transfers and an ordered Token effect stream, and accepts a receipt
+//! only after exact Claims and Token evidence joins. Terminal completion is
+//! held until typed LiabilityBasisV2 payout evidence is supplied. It owns replay
+//! revision only; Claims and Token remain the economic/supply owners.
 
 #[allow(missing_docs)]
 mod generated;
 mod plan;
-mod replay;
 mod receipt;
+mod replay;
 mod request;
+mod seeds;
 
 pub use generated::{
     ASSET_BYTES_V2, PHYSICAL_ABI_VERSION_V2, RECEIPT_BYTES_V2, RECEIPT_MAGIC_V2,
     REQUEST_HEADER_BYTES_V2, REQUEST_MAGIC_V2,
 };
 pub use plan::{
-    PreparedRepresentationV2, TokenEffectIterV2, TokenEffectStyleV2, TokenEffectV2, prepare,
+    AffineBatchContextV2, PreparedRepresentationV2, TokenEffectIterV2, TokenEffectStyleV2,
+    TokenEffectV2, prepare,
 };
+pub use receipt::{CompletionEvidenceV2, RepresentationReceiptV2, finalize};
 pub use replay::{
     RATIONAL_REPLAY_BYTES_V2, RATIONAL_REPLAY_MAGIC_V2, RATIONAL_REPLAY_VERSION_V2,
     RationalReplayV2,
 };
-pub use receipt::{CompletionEvidenceV2, RepresentationReceiptV2, finalize};
 pub use request::{
     AssetV2, CallerRoleV2, RepresentationActionV2, RepresentationRequestHeaderV2,
     RepresentationRequestV2,
 };
+pub use seeds::{RATIONAL_RECEIPT_MINT_SEED_V2, RationalReceiptMintSeedsV2};
 
 /// Exact absent revision sentinel shared with the canonical Claims ABI.
 pub const ABSENT_REVISION: u64 = dclutch_claims_svm::NO_POSITION_REVISION;
 /// Claims PDA seed for one descriptor's representation authority.
-pub const RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2: &[u8] =
-    b"dclutch:rational-authority:v2";
+pub const RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2: &[u8] = b"dclutch:rational-authority:v2";
 /// Claims PDA seed for one outcome's canonical shard Mint.
 pub const RATIONAL_SHARD_MINT_SEED_V2: &[u8] = b"dclutch:rational-shard-mint:v2";
 /// Claims PDA seed for one outcome's canonical Claims custody owner.
@@ -46,7 +49,11 @@ pub const RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2: &[u8] = b"dclutch:rational-clai
 /// Claims PDA seed for one holder's rational representation replay cursor.
 pub const RATIONAL_REPLAY_SEED_V2: &[u8] = b"dclutch:rational-replay:v2";
 /// Fixed account prefix before one four-account row per active request asset.
-pub const RATIONAL_BASE_ACCOUNT_COUNT_V2: usize = 24;
+///
+/// The suffix added in the successor frame is the independently authenticated
+/// linked basis plus Product Runtime V2 graph. These are immutable authority
+/// inputs, never duplicated Claims balances.
+pub const RATIONAL_BASE_ACCOUNT_COUNT_V2: usize = 32;
 /// Accounts in one active request asset row.
 pub const RATIONAL_ASSET_ACCOUNT_COUNT_V2: usize = 4;
 /// Positive terminal Custody account suffix width.
@@ -77,7 +84,7 @@ pub enum Error {
     InsufficientBalance,
     /// Request, graph, descriptor, Market, or Token observations did not join.
     ProjectionMismatch,
-    /// The canonical Claims plan or returned receipt differed.
+    /// The canonical affine Claims packet or returned receipt differed.
     ClaimsMismatch,
     /// An ordered Token effect or post-state observation differed.
     TokenMismatch,

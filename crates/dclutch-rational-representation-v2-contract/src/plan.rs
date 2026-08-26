@@ -1,17 +1,32 @@
 //! Pure composition of canonical Claims and ordered Token effects.
 
 use dclutch_claims_svm::{
-    CLAIM_QUANTITY_BYTES, CLAIMS_PLAN_HEADER_BYTES_V1, CallerRole, ClaimsAction, ClaimsPlanV1,
-    NO_POSITION_REVISION,
+    CallerRole,
+    affine_batch_v2::{
+        AffineBatchPlanInputV2, AffineBatchPlanV2, AffineBatchPositionV2, AffineBatchRowInputV2,
+        AffineBatchRowV2, DeltaDirectionV2, SignedMagnitudeV2, plan_bytes,
+    },
 };
 use dclutch_rational_representation_v2_kernel::{
     RepresentationDescriptorV2, RepresentationGraphV2, StructuredProjectionV2,
 };
 
 use crate::{
-    Error, Result, is_zero,
+    Error, Result,
     request::{AssetV2, CallerRoleV2, RepresentationActionV2, RepresentationRequestV2},
 };
+
+/// Finalized Product/LiabilityBasis identities authenticated by the physical
+/// adapter before it constructs the canonical affine Claims packet.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AffineBatchContextV2 {
+    /// Exact finalized Product-record digest.
+    pub product_record_digest: [u8; 32],
+    /// Exact semantic LiabilityBasisV2 identity.
+    pub semantic_basis_id: [u8; 32],
+    /// Exact finalized linked-basis raw-record digest.
+    pub linked_basis_record_digest: [u8; 32],
+}
 
 /// Canonical Token effect style. The SBF adapter refines these intents to the
 /// exact accepted Token/Token-2022 profile and proves pre/post account deltas.
@@ -66,147 +81,113 @@ impl<'a> PreparedRepresentationV2<'a> {
         self.projection
     }
 
-    /// Exact little-endian quantity-tail width for the canonical Claims plan.
-    pub fn claims_quantity_bytes(self) -> Result<usize> {
-        usize::try_from(self.request.header().outcome_count)
-            .map_err(|_| Error::InvalidWidth)?
-            .checked_mul(CLAIM_QUANTITY_BYTES)
-            .ok_or(Error::InvalidLength)
-    }
-
-    /// Fill caller-owned scratch with the exact one-hot native Claims vector.
-    /// Structured issue/unwrap has no Claims plan and refuses this projection.
-    pub fn write_claims_quantities(self, output: &mut [u8]) -> Result<()> {
-        if !self.request.header().action.uses_claims()
-            || output.len() != self.claims_quantity_bytes()?
-        {
-            return Err(Error::InvalidActionShape);
+    /// Exact byte width of the canonical affine packet. Structured actions
+    /// have no Claims effect. Terminal completion remains unavailable until its
+    /// distinct typed LiabilityBasisV2 evidence ABI is public.
+    pub fn affine_packet_bytes(self) -> Result<usize> {
+        match self.request.header().action {
+            RepresentationActionV2::Denominate | RepresentationActionV2::Reconstitute => {
+                plan_bytes(2, 1).map_err(|_| Error::ClaimsMismatch)
+            }
+            RepresentationActionV2::IssueStructured | RepresentationActionV2::UnwrapStructured => {
+                Ok(0)
+            }
+            RepresentationActionV2::RedeemTerminal => Err(Error::InvalidActionShape),
         }
-        output.fill(0);
-        let offset = usize::try_from(self.request.header().selected_outcome)
-            .map_err(|_| Error::InvalidWidth)?
-            .checked_mul(CLAIM_QUANTITY_BYTES)
-            .ok_or(Error::InvalidLength)?;
-        output
-            .get_mut(
-                offset
-                    ..offset
-                        .checked_add(CLAIM_QUANTITY_BYTES)
-                        .ok_or(Error::InvalidLength)?,
-            )
-            .ok_or(Error::InvalidLength)?
-            .copy_from_slice(&self.request.header().quantity.to_le_bytes());
-        Ok(())
     }
 
-    /// Construct the one canonical Claims plan. `request_digest` is SHA-256 of
-    /// the complete rational representation request bytes and is therefore the
-    /// immediate downstream replay coordinate.
-    pub fn claims_plan<'b>(
+    /// Write and hostile-decode the sole canonical affine Claims packet.
+    /// Context must be present exactly for Denominate/Reconstitute and absent
+    /// for Structured actions.
+    /// `request_digest` is SHA-256 of the complete rational representation
+    /// request bytes and therefore the immediate downstream replay coordinate.
+    pub fn write_affine_packet<'b>(
         self,
         request_digest: [u8; 32],
-        quantities: &'b [u8],
-    ) -> Result<Option<ClaimsPlanV1<'b>>> {
-        if is_zero(request_digest) {
-            return Err(Error::ZeroIdentity);
-        }
+        context: Option<AffineBatchContextV2>,
+        output: &'b mut [u8],
+    ) -> Result<Option<AffineBatchPlanV2<'b>>> {
         let header = self.request.header();
-        if !header.action.uses_claims() {
-            if quantities.is_empty() {
-                return Ok(None);
+        match header.action {
+            RepresentationActionV2::IssueStructured | RepresentationActionV2::UnwrapStructured => {
+                if context.is_none() && output.is_empty() {
+                    return Ok(None);
+                }
+                return Err(Error::InvalidActionShape);
             }
-            return Err(Error::InvalidActionShape);
+            RepresentationActionV2::RedeemTerminal => {
+                return Err(Error::InvalidActionShape);
+            }
+            RepresentationActionV2::Denominate | RepresentationActionV2::Reconstitute => {}
         }
-        if quantities.len() != self.claims_quantity_bytes()? {
+        if output.len() != self.affine_packet_bytes()? {
             return Err(Error::InvalidLength);
         }
-        let selected_offset = usize::try_from(header.selected_outcome)
-            .map_err(|_| Error::InvalidWidth)?
-            .checked_mul(CLAIM_QUANTITY_BYTES)
-            .ok_or(Error::InvalidLength)?;
-        let mut outcome = 0_u32;
-        while outcome < header.outcome_count {
-            let offset = usize::try_from(outcome)
-                .map_err(|_| Error::InvalidWidth)?
-                .checked_mul(CLAIM_QUANTITY_BYTES)
-                .ok_or(Error::InvalidLength)?;
-            let value = u64::from_le_bytes(
-                quantities
-                    .get(offset..offset + CLAIM_QUANTITY_BYTES)
-                    .ok_or(Error::InvalidLength)?
-                    .try_into()
-                    .map_err(|_| Error::InvalidLength)?,
-            );
-            let expected = if offset == selected_offset {
-                header.quantity
-            } else {
-                0
-            };
-            if value != expected {
-                return Err(Error::ClaimsMismatch);
-            }
-            outcome = outcome.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
-        }
+        let context = context.ok_or(Error::InvalidActionShape)?;
         let asset = self.request.asset(0)?;
-        let (action, source, destination, source_revision, destination_revision) = match header
-            .action
-        {
-            RepresentationActionV2::Denominate => (
-                ClaimsAction::Materialize,
-                header.actor,
+        let positions = [
+            AffineBatchPositionV2::new(header.actor, header.expected_actor_position_revision)
+                .map_err(|_| Error::ClaimsMismatch)?,
+            AffineBatchPositionV2::new(
                 asset.claims_custody_owner,
-                header.expected_actor_position_revision,
                 header.expected_custody_position_revision,
-            ),
-            RepresentationActionV2::Reconstitute => (
-                ClaimsAction::Dematerialize,
-                asset.claims_custody_owner,
-                header.actor,
-                header.expected_custody_position_revision,
-                header.expected_actor_position_revision,
-            ),
-            RepresentationActionV2::RedeemTerminal => (
-                ClaimsAction::RedeemMaterializedTerminal,
-                asset.claims_custody_owner,
-                [0; 32],
-                header.expected_custody_position_revision,
-                NO_POSITION_REVISION,
-            ),
-            RepresentationActionV2::IssueStructured | RepresentationActionV2::UnwrapStructured => {
+            )
+            .map_err(|_| Error::ClaimsMismatch)?,
+        ];
+        let (source_position_index, destination_position_index) = match header.action {
+            RepresentationActionV2::Denominate => (0, 1),
+            RepresentationActionV2::Reconstitute => (1, 0),
+            RepresentationActionV2::IssueStructured
+            | RepresentationActionV2::UnwrapStructured
+            | RepresentationActionV2::RedeemTerminal => {
                 return Err(Error::InvalidActionShape);
             }
         };
-        let caller = match header.caller_role {
+        let rows = [AffineBatchRowV2::new(
+            AffineBatchRowInputV2 {
+                source_present: true,
+                destination_present: true,
+                outcome: header.selected_outcome,
+                source_position_index,
+                destination_position_index,
+                aggregate_delta: SignedMagnitudeV2::new(DeltaDirectionV2::Neutral, 0)
+                    .map_err(|_| Error::ClaimsMismatch)?,
+                source_delta: SignedMagnitudeV2::new(DeltaDirectionV2::Debit, header.quantity)
+                    .map_err(|_| Error::ClaimsMismatch)?,
+                destination_delta: SignedMagnitudeV2::new(
+                    DeltaDirectionV2::Credit,
+                    header.quantity,
+                )
+                .map_err(|_| Error::ClaimsMismatch)?,
+            },
+            header.outcome_count,
+            2,
+        )
+        .map_err(|_| Error::ClaimsMismatch)?];
+        let caller_role = match header.caller_role {
             CallerRoleV2::Core => CallerRole::Core,
             CallerRoleV2::Trading => CallerRole::Trading,
         };
-        ClaimsPlanV1::new(
-            action,
-            caller,
-            header.release_set,
-            header.market,
-            request_digest,
-            source,
-            destination,
-            header.expected_claims_market_revision,
-            source_revision,
-            destination_revision,
-            header.outcome_count,
-            quantities,
+        AffineBatchPlanV2::encode_into(
+            AffineBatchPlanInputV2 {
+                caller_role,
+                release_set: header.release_set,
+                market: header.market,
+                request_id: request_digest,
+                product_record_digest: context.product_record_digest,
+                semantic_basis_id: context.semantic_basis_id,
+                linked_basis_record_digest: context.linked_basis_record_digest,
+                expected_market_revision: header.expected_claims_market_revision,
+                outcome_count: header.outcome_count,
+            },
+            &positions,
+            &rows,
+            output,
         )
-        .map(Some)
-        .map_err(|_| Error::ClaimsMismatch)
-    }
-
-    /// Exact byte width of the downstream Claims plan, or zero when inactive.
-    pub fn claims_plan_bytes(self) -> Result<usize> {
-        if self.request.header().action.uses_claims() {
-            CLAIMS_PLAN_HEADER_BYTES_V1
-                .checked_add(self.claims_quantity_bytes()?)
-                .ok_or(Error::InvalidLength)
-        } else {
-            Ok(0)
-        }
+        .map_err(|_| Error::ClaimsMismatch)?;
+        AffineBatchPlanV2::decode(output)
+            .map(Some)
+            .map_err(|_| Error::ClaimsMismatch)
     }
 
     /// Ordered allocation-free Token effect stream.

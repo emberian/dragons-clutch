@@ -1,21 +1,26 @@
 //! State-last completion and normalized composition receipt.
 
-use dclutch_claims_svm::{ClaimsAction, ClaimsReceiptV1, NO_POSITION_REVISION};
-use dclutch_custody_contract::{
-    CallerRoleV1 as CustodyCallerRole, CompartmentV1, CustodyReceiptV1, CustodyRequestV1,
-    OperationV1,
+use dclutch_claims_svm::affine_batch_v2::{
+    AffineBatchPlanV2, AffineBatchReceiptV2, DeltaDirectionV2,
 };
+use dclutch_custody_contract::{CustodyReceiptV1, CustodyRequestV1};
 
 use crate::request::{CallerRoleV2, RepresentationActionV2, RepresentationRequestV2};
 use crate::{
-    ABSENT_REVISION, Error, Result, array_at, byte_at, generated::*, is_zero,
-    plan::PreparedRepresentationV2, put, put_byte, require_nonzero, require_zero, subslice, u16_at,
-    u32_at, u64_at,
+    ABSENT_REVISION, Error, Result, array_at, byte_at,
+    generated::*,
+    is_zero,
+    plan::{AffineBatchContextV2, PreparedRepresentationV2},
+    put, put_byte, require_nonzero, require_zero, subslice, u16_at, u32_at, u64_at,
 };
 
 /// Bytes in one post-Token asset observation: Mint supply, actor balance, and
 /// Structured custody balance as three little-endian `u64` values.
 pub const POST_ASSET_OBSERVATION_BYTES_V2: usize = 24;
+
+// The normalized physical receipt width is unchanged. This field now commits
+// the canonical affine packet rather than the retired scalar Claims packet.
+const RECEIPT_AFFINE_PACKET_DIGEST_OFFSET: usize = RECEIPT_CLAIMS_PLAN_DIGEST_OFFSET;
 
 /// Exact evidence observed after all child effects and before replay state is
 /// committed. Every digest is computed by the physical adapter over exact
@@ -26,12 +31,16 @@ pub struct CompletionEvidenceV2<'a> {
     pub request_digest: [u8; 32],
     /// Registry-authenticated current Claims program which owns this adapter.
     pub representation_program: [u8; 32],
-    /// Same current Claims program selected for the economic plan.
+    /// Same current Claims program selected for the affine batch.
     pub claims_program: [u8; 32],
-    /// SHA-256 of exact Claims plan bytes, zero only when Claims is inactive.
-    pub claims_plan_digest: [u8; 32],
-    /// Exact Claims return data, absent only for Structured-only actions.
-    pub claims_receipt: Option<ClaimsReceiptV1>,
+    /// SHA-256 of exact affine packet bytes, zero for Structured actions.
+    pub affine_packet_digest: [u8; 32],
+    /// Exact affine packet, absent for Structured actions.
+    pub affine_packet: Option<AffineBatchPlanV2<'a>>,
+    /// Finalized Product/LiabilityBasis identities authenticated before CPI.
+    pub affine_context: Option<AffineBatchContextV2>,
+    /// Exact affine-batch return data, absent for Structured actions.
+    pub affine_receipt: Option<AffineBatchReceiptV2>,
     /// SHA-256 of the ordered exact Token effect transcript.
     pub token_effect_digest: [u8; 32],
     /// Exact post receipt Mint supply.
@@ -67,7 +76,7 @@ pub struct RepresentationReceiptV2 {
     representation_program: [u8; 32],
     claims_program: [u8; 32],
     token_program: [u8; 32],
-    claims_plan_digest: [u8; 32],
+    affine_packet_digest: [u8; 32],
     claims_resource_digest: [u8; 32],
     token_effect_digest: [u8; 32],
     custody_request_digest: [u8; 32],
@@ -113,7 +122,7 @@ impl RepresentationReceiptV2 {
             )?)?,
             claims_program: require_nonzero(array_at(input, RECEIPT_CLAIMS_PROGRAM_OFFSET)?)?,
             token_program: require_nonzero(array_at(input, RECEIPT_TOKEN_PROGRAM_OFFSET)?)?,
-            claims_plan_digest: array_at(input, RECEIPT_CLAIMS_PLAN_DIGEST_OFFSET)?,
+            affine_packet_digest: array_at(input, RECEIPT_AFFINE_PACKET_DIGEST_OFFSET)?,
             claims_resource_digest: array_at(input, RECEIPT_CLAIMS_RESOURCE_DIGEST_OFFSET)?,
             token_effect_digest: require_nonzero(array_at(
                 input,
@@ -177,7 +186,10 @@ impl RepresentationReceiptV2 {
             ),
             (RECEIPT_CLAIMS_PROGRAM_OFFSET, self.claims_program),
             (RECEIPT_TOKEN_PROGRAM_OFFSET, self.token_program),
-            (RECEIPT_CLAIMS_PLAN_DIGEST_OFFSET, self.claims_plan_digest),
+            (
+                RECEIPT_AFFINE_PACKET_DIGEST_OFFSET,
+                self.affine_packet_digest,
+            ),
             (
                 RECEIPT_CLAIMS_RESOURCE_DIGEST_OFFSET,
                 self.claims_resource_digest,
@@ -235,6 +247,11 @@ impl RepresentationReceiptV2 {
     /// SHA-256 of the exact parent request.
     pub const fn request_digest(self) -> [u8; 32] {
         self.request_digest
+    }
+
+    /// SHA-256 of the exact canonical affine packet, or zero for a Structured action.
+    pub const fn affine_packet_digest(self) -> [u8; 32] {
+        self.affine_packet_digest
     }
 
     /// Exact payout derived by canonical Claims economics.
@@ -303,9 +320,15 @@ impl RepresentationReceiptV2 {
         {
             return Err(Error::ReceiptMismatch);
         }
-        let claims = self.action.uses_claims();
-        if claims
-            != (!is_zero(self.claims_plan_digest)
+        if self.action == RepresentationActionV2::RedeemTerminal || self.payout != 0 {
+            return Err(Error::InvalidActionShape);
+        }
+        let affine = matches!(
+            self.action,
+            RepresentationActionV2::Denominate | RepresentationActionV2::Reconstitute
+        );
+        if affine
+            != (!is_zero(self.affine_packet_digest)
                 && !is_zero(self.claims_resource_digest)
                 && self.post_claims_market_revision != ABSENT_REVISION)
         {
@@ -330,6 +353,9 @@ pub fn finalize(
 ) -> Result<RepresentationReceiptV2> {
     let request = prepared.request();
     let header = request.header();
+    if header.action == RepresentationActionV2::RedeemTerminal {
+        return Err(Error::InvalidActionShape);
+    }
     for digest in [
         evidence.request_digest,
         evidence.representation_program,
@@ -368,9 +394,8 @@ pub fn finalize(
         post_claims_market_revision,
         post_actor_position_revision,
         post_custody_position_revision,
-        payout,
-    ) = validate_claims(prepared, evidence)?;
-    validate_custody(prepared, evidence, payout)?;
+    ) = validate_affine(prepared, evidence)?;
+    validate_no_custody(evidence)?;
     let receipt = RepresentationReceiptV2 {
         action: header.action,
         caller_role: header.caller_role,
@@ -384,7 +409,7 @@ pub fn finalize(
         representation_program: evidence.representation_program,
         claims_program: evidence.claims_program,
         token_program: header.token_program,
-        claims_plan_digest: evidence.claims_plan_digest,
+        affine_packet_digest: evidence.affine_packet_digest,
         claims_resource_digest,
         token_effect_digest: evidence.token_effect_digest,
         custody_request_digest: evidence.custody_request_digest,
@@ -396,7 +421,7 @@ pub fn finalize(
         post_actor_position_revision,
         post_custody_position_revision,
         post_receipt_supply: evidence.post_receipt_supply,
-        payout,
+        payout: 0,
         outcome_count: header.outcome_count,
     };
     receipt.validate_shape()?;
@@ -497,43 +522,50 @@ fn validate_post_assets(prepared: PreparedRepresentationV2<'_>, observations: &[
     Ok(())
 }
 
-fn validate_claims(
+fn validate_affine(
     prepared: PreparedRepresentationV2<'_>,
     evidence: CompletionEvidenceV2<'_>,
-) -> Result<([u8; 32], u64, u64, u64, u64)> {
+) -> Result<([u8; 32], u64, u64, u64)> {
     let header = prepared.request().header();
-    if !header.action.uses_claims() {
-        if evidence.claims_receipt.is_some() || !is_zero(evidence.claims_plan_digest) {
+    if matches!(
+        header.action,
+        RepresentationActionV2::IssueStructured | RepresentationActionV2::UnwrapStructured
+    ) {
+        if evidence.affine_packet.is_some()
+            || evidence.affine_context.is_some()
+            || evidence.affine_receipt.is_some()
+            || !is_zero(evidence.affine_packet_digest)
+        {
             return Err(Error::ClaimsMismatch);
         }
-        return Ok((
-            [0; 32],
-            ABSENT_REVISION,
-            ABSENT_REVISION,
-            ABSENT_REVISION,
-            0,
-        ));
+        return Ok(([0; 32], ABSENT_REVISION, ABSENT_REVISION, ABSENT_REVISION));
     }
-    require_nonzero(evidence.claims_plan_digest)?;
-    let receipt = evidence.claims_receipt.ok_or(Error::ClaimsMismatch)?;
-    let expected_action = match header.action {
-        RepresentationActionV2::Denominate => ClaimsAction::Materialize,
-        RepresentationActionV2::Reconstitute => ClaimsAction::Dematerialize,
-        RepresentationActionV2::RedeemTerminal => ClaimsAction::RedeemMaterializedTerminal,
-        RepresentationActionV2::IssueStructured | RepresentationActionV2::UnwrapStructured => {
-            return Err(Error::ClaimsMismatch);
-        }
-    };
+    if header.action == RepresentationActionV2::RedeemTerminal {
+        return Err(Error::InvalidActionShape);
+    }
+    require_nonzero(evidence.affine_packet_digest)?;
+    let packet = evidence.affine_packet.ok_or(Error::ClaimsMismatch)?;
+    let context = evidence.affine_context.ok_or(Error::ClaimsMismatch)?;
+    let receipt = evidence.affine_receipt.ok_or(Error::ClaimsMismatch)?;
+    receipt
+        .validate_plan(packet)
+        .map_err(|_| Error::ClaimsMismatch)?;
     let expected_role = match header.caller_role {
         CallerRoleV2::Core => dclutch_claims_svm::CallerRole::Core,
         CallerRoleV2::Trading => dclutch_claims_svm::CallerRole::Trading,
     };
-    if receipt.action() != expected_action
-        || receipt.caller_role() != expected_role
-        || receipt.release_set_id() != header.release_set
-        || receipt.market() != header.market
-        || receipt.request_id() != evidence.request_digest
-        || receipt.packet_digest() != evidence.claims_plan_digest
+    if packet.caller_role() != expected_role
+        || packet.release_set() != header.release_set
+        || packet.market() != header.market
+        || packet.request_id() != evidence.request_digest
+        || packet.product_record_digest() != context.product_record_digest
+        || packet.semantic_basis_id() != context.semantic_basis_id
+        || packet.linked_basis_record_digest() != context.linked_basis_record_digest
+        || packet.expected_market_revision() != header.expected_claims_market_revision
+        || packet.outcome_count() != header.outcome_count
+        || packet.position_count() != 2
+        || packet.row_count() != 1
+        || receipt.packet_digest() != evidence.affine_packet_digest
         || receipt.claims_program() != evidence.claims_program
         || receipt.pre_market_revision() != header.expected_claims_market_revision
         || receipt.post_market_revision()
@@ -544,97 +576,63 @@ fn validate_claims(
     {
         return Err(Error::ClaimsMismatch);
     }
-    let (post_actor, post_custody) = match header.action {
-        RepresentationActionV2::Denominate => (
-            receipt.post_source_revision(),
-            receipt.post_destination_revision(),
-        ),
-        RepresentationActionV2::Reconstitute => (
-            receipt.post_destination_revision(),
-            receipt.post_source_revision(),
-        ),
-        RepresentationActionV2::RedeemTerminal => {
-            if receipt.post_destination_revision() != NO_POSITION_REVISION {
-                return Err(Error::ClaimsMismatch);
-            }
-            (NO_POSITION_REVISION, receipt.post_source_revision())
-        }
+    let asset = prepared.request().asset(0)?;
+    let actor = packet.position(0).map_err(|_| Error::ClaimsMismatch)?;
+    let custody = packet.position(1).map_err(|_| Error::ClaimsMismatch)?;
+    if actor.owner() != header.actor
+        || actor.expected_revision() != header.expected_actor_position_revision
+        || custody.owner() != asset.claims_custody_owner
+        || custody.expected_revision() != header.expected_custody_position_revision
+    {
+        return Err(Error::ClaimsMismatch);
+    }
+    let row = packet.row(0).map_err(|_| Error::ClaimsMismatch)?;
+    let (source_index, destination_index) = match header.action {
+        RepresentationActionV2::Denominate => (0, 1),
+        RepresentationActionV2::Reconstitute => (1, 0),
         RepresentationActionV2::IssueStructured | RepresentationActionV2::UnwrapStructured => {
             return Err(Error::ClaimsMismatch);
         }
+        RepresentationActionV2::RedeemTerminal => return Err(Error::InvalidActionShape),
     };
-    let payout = receipt.payout();
-    if (header.action != RepresentationActionV2::RedeemTerminal && payout != 0)
-        || (header.action == RepresentationActionV2::RedeemTerminal
-            && payout != 0
-            && payout != header.quantity)
+    if !row.source_present()
+        || !row.destination_present()
+        || row.outcome() != header.selected_outcome
+        || row.source_position_index() != source_index
+        || row.destination_position_index() != destination_index
+        || row.aggregate_delta().direction() != DeltaDirectionV2::Neutral
+        || row.aggregate_delta().magnitude() != 0
+        || row.source_delta().direction() != DeltaDirectionV2::Debit
+        || row.source_delta().magnitude() != header.quantity
+        || row.destination_delta().direction() != DeltaDirectionV2::Credit
+        || row.destination_delta().magnitude() != header.quantity
     {
         return Err(Error::ClaimsMismatch);
     }
     Ok((
         receipt.post_resource_digest(),
         receipt.post_market_revision(),
-        post_actor,
-        post_custody,
-        payout,
+        header
+            .expected_actor_position_revision
+            .checked_add(1)
+            .ok_or(Error::ArithmeticOverflow)?,
+        header
+            .expected_custody_position_revision
+            .checked_add(1)
+            .ok_or(Error::ArithmeticOverflow)?,
     ))
 }
 
-fn validate_custody(
-    prepared: PreparedRepresentationV2<'_>,
-    evidence: CompletionEvidenceV2<'_>,
-    payout: u64,
-) -> Result<()> {
-    let header = prepared.request().header();
-    if payout == 0 {
-        if evidence.custody_request.is_some()
-            || evidence.custody_receipt.is_some()
-            || !is_zero(evidence.custody_request_digest)
-            || !is_zero(evidence.custody_receipt_digest)
-            || !is_zero(evidence.custody_replay_digest)
-        {
-            return Err(Error::CustodyMismatch);
-        }
-        return Ok(());
-    }
-    let request = *evidence.custody_request.ok_or(Error::CustodyMismatch)?;
-    let receipt = *evidence.custody_receipt.ok_or(Error::CustodyMismatch)?;
-    require_nonzero(evidence.custody_request_digest)?;
-    require_nonzero(evidence.custody_receipt_digest)?;
-    require_nonzero(evidence.custody_replay_digest)?;
-    if header.action != RepresentationActionV2::RedeemTerminal
-        || request.operation != OperationV1::Transfer
-        || request.caller_role != CustodyCallerRole::Claims
-        || request.source_compartment != CompartmentV1::HoardPrincipal
-        || request.destination_compartment != CompartmentV1::External
-        || request.release_set != header.release_set
-        || request.market != header.market
-        || request.realm != header.realm
-        || request.context != header.parent_context
-        || request.caller_program != evidence.claims_program
-        || request.semantic.source_owner != [0; 32]
-        || request.semantic.destination_owner != header.actor
-        || request.semantic.parent_request_digest != evidence.request_digest
-        || request.semantic.generation != header.generation
-        || request.destination != header.collateral_recipient
-        || request.expected_revision != header.expected_custody_replay_revision
-        || request.resulting_revision
-            != header
-                .expected_custody_replay_revision
-                .checked_add(1)
-                .ok_or(Error::ArithmeticOverflow)?
-        || request.amount != payout
-        || request.rent_lamports != 0
+fn validate_no_custody(evidence: CompletionEvidenceV2<'_>) -> Result<()> {
+    if evidence.custody_request.is_some()
+        || evidence.custody_receipt.is_some()
+        || !is_zero(evidence.custody_request_digest)
+        || !is_zero(evidence.custody_receipt_digest)
+        || !is_zero(evidence.custody_replay_digest)
     {
         return Err(Error::CustodyMismatch);
     }
-    receipt
-        .verify_for(
-            request,
-            evidence.custody_request_digest,
-            evidence.custody_replay_digest,
-        )
-        .map_err(|_| Error::CustodyMismatch)
+    Ok(())
 }
 
 fn decode_action(value: u8) -> Result<RepresentationActionV2> {
