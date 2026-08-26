@@ -22,12 +22,17 @@ use crate::{
 pub const DIRECT_ORDINARY_COMMON_SCALARS_V3: usize = 64;
 /// Exact common identity-bank width for inline ordinary V3.
 pub const DIRECT_ORDINARY_COMMON_IDENTITIES_V3: usize = 32;
-/// Ordinary has no Product-item scalar tail.
-pub const DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3: u16 = 0;
+/// Per-Product-item scalar stride: canonical item index plus Claims quantity.
+pub const DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3: u16 = 2;
 /// Ordinary has no Product-item identity tail.
 pub const DIRECT_ORDINARY_ITEM_IDENTITY_STRIDE_V3: u16 = 0;
+/// Exact prelude instruction count of the ordinary semantic program.
+pub const DIRECT_ORDINARY_PRELUDE_INSTRUCTIONS_V3: usize = 66;
+/// Exact per-Product-item instruction count of the ordinary semantic program.
+pub const DIRECT_ORDINARY_ITEM_INSTRUCTIONS_V3: usize = 2;
 /// Exact instruction count of the ordinary semantic program.
-pub const DIRECT_ORDINARY_TRANSITION_INSTRUCTIONS_V3: usize = 41;
+pub const DIRECT_ORDINARY_TRANSITION_INSTRUCTIONS_V3: usize =
+    DIRECT_ORDINARY_PRELUDE_INSTRUCTIONS_V3 + DIRECT_ORDINARY_ITEM_INSTRUCTIONS_V3;
 /// Exact encoded ordinary TransitionVM V3 width.
 pub const DIRECT_ORDINARY_TRANSITION_BYTES_V3: usize = dclutch_transition_vm::v3::HEADER_BYTES
     + DIRECT_ORDINARY_TRANSITION_INSTRUCTIONS_V3 * dclutch_transition_vm::v3::INSTRUCTION_BYTES;
@@ -128,18 +133,18 @@ pub const SCALAR_SELLER_NET_V3: usize = 45;
 pub const SCALAR_BUYER_DEBIT_V3: usize = 46;
 /// Derived combined seller-plus-buyer fee transfer.
 pub const SCALAR_COMBINED_FEE_V3: usize = 47;
-/// Derived conservation check scratch.
-pub const SCALAR_CONSERVATION_V3: usize = 48;
+/// Derived terminal seller-only Custody route enable bit.
+pub const SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V3: usize = 48;
 /// Reserved for the derived Claims aggregate post-revision.
 pub const SCALAR_CLAIMS_MARKET_REVISION_AFTER_V3: usize = 49;
 /// Reserved for the derived seller Position post-revision.
 pub const SCALAR_SELLER_POSITION_REVISION_AFTER_V3: usize = 50;
 /// Reserved for the derived buyer Position post-revision.
 pub const SCALAR_BUYER_POSITION_REVISION_AFTER_V3: usize = 51;
-/// Reserved for the seller-net Custody route enable bit.
-pub const SCALAR_SELLER_ROUTE_ENABLED_V3: usize = 52;
-/// Reserved for the combined-fee Custody route enable bit.
-pub const SCALAR_FEE_ROUTE_ENABLED_V3: usize = 53;
+/// Derived seller-intermediate plus fee-continuation route enable bit.
+pub const SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V3: usize = 52;
+/// Derived nonzero combined-fee bit.
+pub const SCALAR_FEE_NONZERO_V3: usize = 53;
 /// Reserved for the replay revision after seller-net.
 pub const SCALAR_CUSTODY_AFTER_SELLER_V3: usize = 54;
 /// Reserved for the replay revision after combined fee.
@@ -158,8 +163,13 @@ pub const SCALAR_DELEGATED_AFTER_ALL_V3: usize = 60;
 pub const SCALAR_FEE_DESTINATION_AFTER_V3: usize = 61;
 /// Reserved for exact Claims transfer quantity.
 pub const SCALAR_CLAIM_TRANSFER_V3: usize = 62;
-/// Reserved for a future descriptor-owned transcript coordinate.
-pub const SCALAR_TRANSCRIPT_COORDINATE_V3: usize = 63;
+/// Derived terminal fee-only Custody route enable bit.
+pub const SCALAR_FEE_SOLE_ROUTE_ENABLED_V3: usize = 63;
+
+/// Per-item scalar slot containing the canonical Product item index.
+pub const ITEM_SCALAR_INDEX_V3: u16 = 0;
+/// Per-item scalar slot containing the exact Claims transfer quantity.
+pub const ITEM_SCALAR_CLAIM_QUANTITY_V3: u16 = 1;
 
 /// Identity register: SHA-256 of the complete family request.
 pub const IDENTITY_PARENT_REQUEST_DIGEST_V3: usize = 0;
@@ -336,8 +346,14 @@ pub fn project_direct_ordinary_registers_v3(
     scalar_output: &mut [u64],
     identity_output: &mut [[u8; 32]],
 ) -> Result<()> {
-    if scalar_scratch.len() != DIRECT_ORDINARY_COMMON_SCALARS_V3
-        || scalar_output.len() != DIRECT_ORDINARY_COMMON_SCALARS_V3
+    let tail_count = usize::try_from(context.outcome_count)
+        .map_err(|_| DirectOrdinaryRegisterErrorV3::InvalidLength)?;
+    let scalar_width = tail_count
+        .checked_mul(usize::from(DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3))
+        .and_then(|tail| DIRECT_ORDINARY_COMMON_SCALARS_V3.checked_add(tail))
+        .ok_or(DirectOrdinaryRegisterErrorV3::InvalidLength)?;
+    if scalar_scratch.len() != scalar_width
+        || scalar_output.len() != scalar_width
         || identity_scratch.len() != DIRECT_ORDINARY_COMMON_IDENTITIES_V3
         || identity_output.len() != DIRECT_ORDINARY_COMMON_IDENTITIES_V3
     {
@@ -433,6 +449,20 @@ pub fn project_direct_ordinary_registers_v3(
             .get_mut(index)
             .ok_or(DirectOrdinaryRegisterErrorV3::InvalidLength)? = value;
     }
+    let mut item = 0_usize;
+    while item < tail_count {
+        let offset = item
+            .checked_mul(usize::from(DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3))
+            .and_then(|value| DIRECT_ORDINARY_COMMON_SCALARS_V3.checked_add(value))
+            .ok_or(DirectOrdinaryRegisterErrorV3::InvalidLength)?;
+        *scalar_scratch
+            .get_mut(offset + usize::from(ITEM_SCALAR_INDEX_V3))
+            .ok_or(DirectOrdinaryRegisterErrorV3::InvalidLength)? =
+            u64::try_from(item).map_err(|_| DirectOrdinaryRegisterErrorV3::InvalidLength)?;
+        item = item
+            .checked_add(1)
+            .ok_or(DirectOrdinaryRegisterErrorV3::InvalidLength)?;
+    }
     identity_scratch.copy_from_slice(&identities);
     scalar_output.copy_from_slice(scalar_scratch);
     identity_output.copy_from_slice(identity_scratch);
@@ -450,8 +480,8 @@ pub fn encode_direct_ordinary_transition_v3(scratch: &mut [u8], output: &mut [u8
                 .map_err(|_| DirectOrdinaryRegisterErrorV3::TransitionProgram)?,
             item_identity_stride: DIRECT_ORDINARY_ITEM_IDENTITY_STRIDE_V3,
         },
-        &DIRECT_ORDINARY_PROGRAM_V3,
-        &[],
+        &DIRECT_ORDINARY_PRELUDE_V3,
+        &DIRECT_ORDINARY_ITEM_V3,
         &[],
         scratch,
         output,
@@ -471,7 +501,11 @@ const fn identity(index: usize) -> IdentityRegisterV3 {
     IdentityRegisterV3::common(index as u16)
 }
 
-const DIRECT_ORDINARY_PROGRAM_V3: [InstructionV3; DIRECT_ORDINARY_TRANSITION_INSTRUCTIONS_V3] = [
+const fn item_scalar(index: u16) -> ScalarRegisterV3 {
+    ScalarRegisterV3::item(index)
+}
+
+const DIRECT_ORDINARY_PRELUDE_V3: [InstructionV3; DIRECT_ORDINARY_PRELUDE_INSTRUCTIONS_V3] = [
     InstructionV3::load_const(scalar(SCALAR_ZERO_V3), 0),
     InstructionV3::load_const(scalar(SCALAR_ONE_V3), 1),
     InstructionV3::load_const(
@@ -613,15 +647,131 @@ const DIRECT_ORDINARY_PROGRAM_V3: [InstructionV3; DIRECT_ORDINARY_TRANSITION_INS
     InstructionV3::checked_add_into(
         scalar(SCALAR_SELLER_NET_V3),
         scalar(SCALAR_COMBINED_FEE_V3),
-        scalar(SCALAR_CONSERVATION_V3),
+        scalar(SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V3),
     ),
     InstructionV3::scalar_eq(
-        scalar(SCALAR_CONSERVATION_V3),
+        scalar(SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V3),
         scalar(SCALAR_BUYER_DEBIT_V3),
+    ),
+    InstructionV3::scalar_eq(
+        scalar(SCALAR_BUYER_DELEGATED_ALLOWANCE_V3),
+        scalar(SCALAR_BUYER_DEBIT_V3),
+    ),
+    InstructionV3::increment_into(
+        scalar(SCALAR_CLAIMS_MARKET_REVISION_V3),
+        scalar(SCALAR_CLAIMS_MARKET_REVISION_AFTER_V3),
+    ),
+    InstructionV3::increment_into(
+        scalar(SCALAR_SELLER_POSITION_REVISION_V3),
+        scalar(SCALAR_SELLER_POSITION_REVISION_AFTER_V3),
+    ),
+    InstructionV3::increment_into(
+        scalar(SCALAR_BUYER_POSITION_REVISION_V3),
+        scalar(SCALAR_BUYER_POSITION_REVISION_AFTER_V3),
+    ),
+    InstructionV3::load_const(scalar(SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V3), 1),
+    InstructionV3::select_zero(
+        scalar(SCALAR_SELLER_NET_V3),
+        scalar(SCALAR_ZERO_V3),
+        scalar(SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V3),
+    ),
+    InstructionV3::load_const(scalar(SCALAR_FEE_NONZERO_V3), 1),
+    InstructionV3::select_zero(
+        scalar(SCALAR_COMBINED_FEE_V3),
+        scalar(SCALAR_ZERO_V3),
+        scalar(SCALAR_FEE_NONZERO_V3),
+    ),
+    InstructionV3::load_const(scalar(SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V3), 0),
+    InstructionV3::select_zero(
+        scalar(SCALAR_COMBINED_FEE_V3),
+        scalar(SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V3),
+        scalar(SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V3),
+    ),
+    InstructionV3::checked_add_into(
+        scalar(SCALAR_FEE_NONZERO_V3),
+        scalar(SCALAR_ZERO_V3),
+        scalar(SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V3),
+    ),
+    InstructionV3::select_zero(
+        scalar(SCALAR_SELLER_NET_V3),
+        scalar(SCALAR_ZERO_V3),
+        scalar(SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V3),
+    ),
+    InstructionV3::load_const(scalar(SCALAR_FEE_SOLE_ROUTE_ENABLED_V3), 0),
+    InstructionV3::select_zero(
+        scalar(SCALAR_SELLER_NET_V3),
+        scalar(SCALAR_FEE_NONZERO_V3),
+        scalar(SCALAR_FEE_SOLE_ROUTE_ENABLED_V3),
+    ),
+    InstructionV3::checked_add_into(
+        scalar(SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V3),
+        scalar(SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V3),
+        scalar(SCALAR_CUSTODY_AFTER_SELLER_V3),
+    ),
+    InstructionV3::checked_add_into(
+        scalar(SCALAR_CUSTODY_REVISION_V3),
+        scalar(SCALAR_CUSTODY_AFTER_SELLER_V3),
+        scalar(SCALAR_CUSTODY_AFTER_SELLER_V3),
+    ),
+    InstructionV3::checked_add_into(
+        scalar(SCALAR_CUSTODY_AFTER_SELLER_V3),
+        scalar(SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V3),
+        scalar(SCALAR_CUSTODY_AFTER_FEE_V3),
+    ),
+    InstructionV3::checked_add_into(
+        scalar(SCALAR_CUSTODY_AFTER_FEE_V3),
+        scalar(SCALAR_FEE_SOLE_ROUTE_ENABLED_V3),
+        scalar(SCALAR_CUSTODY_AFTER_FEE_V3),
+    ),
+    InstructionV3::sub_into(
+        scalar(SCALAR_BUYER_SOURCE_BALANCE_V3),
+        scalar(SCALAR_SELLER_NET_V3),
+        scalar(SCALAR_BUYER_BALANCE_AFTER_SELLER_V3),
+    ),
+    InstructionV3::sub_into(
+        scalar(SCALAR_BUYER_DELEGATED_ALLOWANCE_V3),
+        scalar(SCALAR_SELLER_NET_V3),
+        scalar(SCALAR_DELEGATED_AFTER_SELLER_V3),
+    ),
+    InstructionV3::checked_add_into(
+        scalar(SCALAR_SELLER_DESTINATION_BALANCE_V3),
+        scalar(SCALAR_SELLER_NET_V3),
+        scalar(SCALAR_SELLER_DESTINATION_AFTER_V3),
+    ),
+    InstructionV3::sub_into(
+        scalar(SCALAR_BUYER_BALANCE_AFTER_SELLER_V3),
+        scalar(SCALAR_COMBINED_FEE_V3),
+        scalar(SCALAR_BUYER_BALANCE_AFTER_ALL_V3),
+    ),
+    InstructionV3::sub_into(
+        scalar(SCALAR_DELEGATED_AFTER_SELLER_V3),
+        scalar(SCALAR_COMBINED_FEE_V3),
+        scalar(SCALAR_DELEGATED_AFTER_ALL_V3),
+    ),
+    InstructionV3::checked_add_into(
+        scalar(SCALAR_FEE_DESTINATION_BALANCE_V3),
+        scalar(SCALAR_COMBINED_FEE_V3),
+        scalar(SCALAR_FEE_DESTINATION_AFTER_V3),
+    ),
+    InstructionV3::checked_add_into(
+        scalar(SCALAR_FILL_V3),
+        scalar(SCALAR_ZERO_V3),
+        scalar(SCALAR_CLAIM_TRANSFER_V3),
+    ),
+];
+
+const DIRECT_ORDINARY_ITEM_V3: [InstructionV3; DIRECT_ORDINARY_ITEM_INSTRUCTIONS_V3] = [
+    InstructionV3::load_const(item_scalar(ITEM_SCALAR_CLAIM_QUANTITY_V3), 0),
+    InstructionV3::select_eq(
+        item_scalar(ITEM_SCALAR_INDEX_V3),
+        scalar(SCALAR_SELLER_OUTCOME_V3),
+        scalar(SCALAR_CLAIM_TRANSFER_V3),
+        item_scalar(ITEM_SCALAR_CLAIM_QUANTITY_V3),
     ),
 ];
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing)]
 mod tests {
     extern crate std;
 
@@ -702,7 +852,7 @@ mod tests {
             buyer_position_revision: 13,
             custody_revision: 14,
             buyer_source_balance: 100,
-            buyer_delegated_allowance: 100,
+            buyer_delegated_allowance: 11,
             seller_destination_balance: 5,
             fee_destination_balance: 6,
             release_set: id(31),
@@ -733,11 +883,15 @@ mod tests {
     fn execute(
         request: DirectInlineOrdinaryRequestV3,
         context: DirectOrdinaryAuthenticatedContextV3,
-        output: &mut [u64; DIRECT_ORDINARY_COMMON_SCALARS_V3],
+        output: &mut [u64],
     ) -> core::result::Result<(), dclutch_transition_vm::v3::Error> {
-        let mut scalar_input = [0_u64; DIRECT_ORDINARY_COMMON_SCALARS_V3];
+        let tail_count = context.outcome_count;
+        let scalar_width = DIRECT_ORDINARY_COMMON_SCALARS_V3
+            + usize::try_from(tail_count).expect("tail count")
+                * usize::from(DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3);
+        let mut scalar_input = std::vec![0_u64; scalar_width];
         let mut identity_input = [[0_u8; 32]; DIRECT_ORDINARY_COMMON_IDENTITIES_V3];
-        let mut projected_scalars = [0_u64; DIRECT_ORDINARY_COMMON_SCALARS_V3];
+        let mut projected_scalars = std::vec![0_u64; scalar_width];
         let mut projected_identities = [[0_u8; 32]; DIRECT_ORDINARY_COMMON_IDENTITIES_V3];
         project_direct_ordinary_registers_v3(
             request,
@@ -753,12 +907,12 @@ mod tests {
         encode_direct_ordinary_transition_v3(&mut program_scratch, &mut program_bytes)
             .expect("program emission");
         let program = ProgramV3::decode(&program_bytes).expect("program decode");
-        let mut scratch_scalars = [0_u64; DIRECT_ORDINARY_COMMON_SCALARS_V3];
+        let mut scratch_scalars = std::vec![0_u64; scalar_width];
         let mut scratch_identities = [[0_u8; 32]; DIRECT_ORDINARY_COMMON_IDENTITIES_V3];
         let mut output_identities = [[9_u8; 32]; DIRECT_ORDINARY_COMMON_IDENTITIES_V3];
         execute_fold_atomic(
             program,
-            0,
+            tail_count,
             RegisterInput {
                 scalars: &projected_scalars,
                 identities: &projected_identities,
@@ -777,9 +931,11 @@ mod tests {
     #[test]
     fn exact_program_admits_price_improved_ioc_and_conserves_two_fee_routes() {
         let config = DirectExecutionConfigV1::new(100, 1_000, id(60)).expect("config");
-        let mut output = [99_u64; DIRECT_ORDINARY_COMMON_SCALARS_V3];
+        let scalar_width = DIRECT_ORDINARY_COMMON_SCALARS_V3
+            + 4 * usize::from(DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3);
+        let mut output = std::vec![99_u64; scalar_width];
         execute(request(), context(config), &mut output).expect("ordinary transition");
-        assert_eq!(DIRECT_ORDINARY_TRANSITION_BYTES_V3, 1_016);
+        assert_eq!(DIRECT_ORDINARY_TRANSITION_BYTES_V3, 1_664);
         assert_eq!(output[SCALAR_SELLER_NONCE_AFTER_V3], 5);
         assert_eq!(output[SCALAR_BUYER_NONCE_AFTER_V3], 10);
         assert_eq!(output[SCALAR_GROSS_V3], 10);
@@ -791,6 +947,34 @@ mod tests {
             output[SCALAR_SELLER_NET_V3] + output[SCALAR_COMBINED_FEE_V3],
             output[SCALAR_BUYER_DEBIT_V3]
         );
+        assert_eq!(output[SCALAR_CLAIMS_MARKET_REVISION_AFTER_V3], 12);
+        assert_eq!(output[SCALAR_SELLER_POSITION_REVISION_AFTER_V3], 13);
+        assert_eq!(output[SCALAR_BUYER_POSITION_REVISION_AFTER_V3], 14);
+        assert_eq!(output[SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V3], 0);
+        assert_eq!(output[SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V3], 1);
+        assert_eq!(output[SCALAR_FEE_NONZERO_V3], 1);
+        assert_eq!(output[SCALAR_FEE_SOLE_ROUTE_ENABLED_V3], 0);
+        assert_eq!(output[SCALAR_CUSTODY_AFTER_SELLER_V3], 15);
+        assert_eq!(output[SCALAR_CUSTODY_AFTER_FEE_V3], 16);
+        assert_eq!(output[SCALAR_BUYER_BALANCE_AFTER_SELLER_V3], 91);
+        assert_eq!(output[SCALAR_DELEGATED_AFTER_SELLER_V3], 2);
+        assert_eq!(output[SCALAR_SELLER_DESTINATION_AFTER_V3], 14);
+        assert_eq!(output[SCALAR_BUYER_BALANCE_AFTER_ALL_V3], 89);
+        assert_eq!(output[SCALAR_DELEGATED_AFTER_ALL_V3], 0);
+        assert_eq!(output[SCALAR_FEE_DESTINATION_AFTER_V3], 8);
+        assert_eq!(output[SCALAR_CLAIM_TRANSFER_V3], 20);
+        for item in 0..4 {
+            let base = DIRECT_ORDINARY_COMMON_SCALARS_V3
+                + item * usize::from(DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3);
+            assert_eq!(
+                output[base + usize::from(ITEM_SCALAR_INDEX_V3)],
+                item as u64
+            );
+            assert_eq!(
+                output[base + usize::from(ITEM_SCALAR_CLAIM_QUANTITY_V3)],
+                if item == 2 { 20 } else { 0 }
+            );
+        }
     }
 
     #[test]
@@ -808,26 +992,42 @@ mod tests {
             (inexact, context(config)),
         ];
         for (request, context) in cases {
-            let mut output = [0x55_u64; DIRECT_ORDINARY_COMMON_SCALARS_V3];
-            let before = output;
+            let mut output = std::vec![
+                0x55_u64;
+                DIRECT_ORDINARY_COMMON_SCALARS_V3
+                    + 4 * usize::from(DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3)
+            ];
+            let before = output.clone();
             assert!(execute(request, context, &mut output).is_err());
             assert_eq!(output, before);
         }
 
         let mut hostile_token = context(config);
         hostile_token.buyer_token_account = id(90);
-        let mut output = [0x55_u64; DIRECT_ORDINARY_COMMON_SCALARS_V3];
-        let before = output;
+        let mut output = std::vec![
+            0x55_u64;
+            DIRECT_ORDINARY_COMMON_SCALARS_V3
+                + 4 * usize::from(DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3)
+        ];
+        let before = output.clone();
         assert!(execute(request(), hostile_token, &mut output).is_err());
         assert_eq!(output, before);
 
         let mut wrong_content = context(config);
         wrong_content.config_content_id[0] ^= 1;
-        let mut scalar_scratch = [0_u64; DIRECT_ORDINARY_COMMON_SCALARS_V3];
+        let mut scalar_scratch = std::vec![
+            0_u64;
+            DIRECT_ORDINARY_COMMON_SCALARS_V3
+                + 4 * usize::from(DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3)
+        ];
         let mut identity_scratch = [[0_u8; 32]; DIRECT_ORDINARY_COMMON_IDENTITIES_V3];
-        let mut scalar_output = [0x77_u64; DIRECT_ORDINARY_COMMON_SCALARS_V3];
+        let mut scalar_output = std::vec![
+            0x77_u64;
+            DIRECT_ORDINARY_COMMON_SCALARS_V3
+                + 4 * usize::from(DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3)
+        ];
         let mut identity_output = [[0x77_u8; 32]; DIRECT_ORDINARY_COMMON_IDENTITIES_V3];
-        let scalar_before = scalar_output;
+        let scalar_before = scalar_output.clone();
         let identity_before = identity_output;
         assert_eq!(
             project_direct_ordinary_registers_v3(
@@ -878,7 +1078,11 @@ mod tests {
         let mut context = context(config);
         context.seller_next_nonce = 0;
         context.buyer_next_nonce = 0;
-        let mut output = [99_u64; DIRECT_ORDINARY_COMMON_SCALARS_V3];
+        let mut output = std::vec![
+            99_u64;
+            DIRECT_ORDINARY_COMMON_SCALARS_V3
+                + 4 * usize::from(DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3)
+        ];
         execute(request, context, &mut output).expect("compiled transition accepts");
         assert_eq!(output[SCALAR_SELLER_NONCE_AFTER_V3], 1);
         assert_eq!(output[SCALAR_BUYER_NONCE_AFTER_V3], 1);
