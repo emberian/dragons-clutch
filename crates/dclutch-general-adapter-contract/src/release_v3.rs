@@ -1,12 +1,15 @@
 //! Exact seven-action General V3 release admission.
 //!
 //! A General release is not one permissive descriptor with an internal action
-//! switch.  Its authenticated [`CapabilityProgramSetV1`] contains exactly one
-//! complete `CapabilityProgramV3` identity for each canonical General action.
+//! switch. Its authenticated [`CapabilityProgramSetV2`] contains exactly one
+//! schema-bound `CapabilityProgramV4` identity for each canonical General action.
 //! This module validates that closed table without allocating and then joins
 //! every selected descriptor to its complete finalized artifact bundle.
 
-use dclutch_capability_program_contract::set_v1::{CapabilityProgramSetV1, SelectorWidthV1};
+use dclutch_capability_program_contract::{
+    set_v2::{CapabilityProgramSetV2, SelectorWidthV2},
+    v4::SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID,
+};
 use dclutch_core_contract::ContentId;
 use dclutch_general_codec::Action;
 use sha2::{Digest, Sha256};
@@ -89,15 +92,15 @@ pub fn authenticate_general_program_set_v3<'a>(
     selected_program_set: [u8; 32],
     authenticated_program_set: [u8; 32],
     bytes: &'a [u8],
-) -> Result<CapabilityProgramSetV1<'a>> {
-    let set = CapabilityProgramSetV1::decode_selected(
+) -> Result<CapabilityProgramSetV2<'a>> {
+    let set = CapabilityProgramSetV2::decode_selected(
         selected_program_set,
         authenticated_program_set,
         bytes,
     )
     .map_err(|_| GeneralReleaseErrorV3::ProgramSet)?;
     if set.selector_offset() != crate::artifacts_v3::GENERAL_CONTROLLER_ACTION_SELECTOR_OFFSET_V3
-        || set.selector_width() != SelectorWidthV1::U8
+        || set.selector_width() != SelectorWidthV2::U8
         || usize::from(set.entry_count()) != GENERAL_ACTION_PROGRAM_COUNT_V3
     {
         return Err(GeneralReleaseErrorV3::ProgramSet);
@@ -110,13 +113,17 @@ pub fn authenticate_general_program_set_v3<'a>(
         if entry.selector() != u32::from(GENERAL_ACTIONS_V3[index] as u8) {
             return Err(GeneralReleaseErrorV3::ProgramSet);
         }
+        if entry.descriptor().schema().to_bytes() != CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID {
+            return Err(GeneralReleaseErrorV3::ProgramSet);
+        }
         let mut prior = 0_usize;
         while prior < index {
             if set
                 .entry(u16::try_from(prior).map_err(|_| GeneralReleaseErrorV3::ProgramSet)?)
                 .map_err(|_| GeneralReleaseErrorV3::ProgramSet)?
+                .descriptor()
                 .program()
-                == entry.program()
+                == entry.descriptor().program()
             {
                 return Err(GeneralReleaseErrorV3::DuplicateDescriptor);
             }
@@ -176,6 +183,7 @@ pub fn authenticate_general_release_v3(
         let descriptor = set
             .entry(u16::try_from(index).map_err(|_| GeneralReleaseErrorV3::ProgramSet)?)
             .map_err(|_| GeneralReleaseErrorV3::ProgramSet)?
+            .descriptor()
             .program();
         if descriptor != content(action_artifacts.artifacts.descriptor)? {
             return Err(GeneralReleaseErrorV3::ActionMismatch);
@@ -209,39 +217,34 @@ mod tests {
 
     use super::*;
 
-    fn put(output: &mut [u8], offset: usize, value: &[u8]) {
-        output
-            .get_mut(offset..offset + value.len())
-            .expect("fixture range")
-            .copy_from_slice(value);
-    }
-
     fn exact_set() -> Vec<u8> {
-        const HEADER: usize = 32;
-        const ENTRY: usize = 40;
-        let mut output = vec![0_u8; HEADER + GENERAL_ACTION_PROGRAM_COUNT_V3 * ENTRY];
-        put(&mut output, 0, b"DCLTCPS1");
-        put(&mut output, 8, &1_u16.to_le_bytes());
-        put(&mut output, 10, &1_u16.to_le_bytes());
-        put(
+        use dclutch_capability_program_contract::set_v2::{
+            CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, encode_program_set_v2,
+            encoded_program_set_bytes_v2,
+        };
+
+        let entries = GENERAL_ACTIONS_V3.map(|action| {
+            let byte = (action as u8).checked_add(1).expect("bounded action");
+            CapabilityProgramSetEntryV2::new(
+                u32::from(action as u8),
+                CapabilityDescriptorReferenceV2::new(
+                    ContentId::new(CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID).expect("schema"),
+                    ContentId::new([byte; 32]).expect("descriptor"),
+                ),
+            )
+        });
+        let mut output = vec![
+            0_u8;
+            encoded_program_set_bytes_v2(GENERAL_ACTION_PROGRAM_COUNT_V3)
+                .expect("set width")
+        ];
+        encode_program_set_v2(
+            crate::artifacts_v3::GENERAL_CONTROLLER_ACTION_SELECTOR_OFFSET_V3,
+            SelectorWidthV2::U8,
+            &entries,
             &mut output,
-            12,
-            &crate::artifacts_v3::GENERAL_CONTROLLER_ACTION_SELECTOR_OFFSET_V3.to_le_bytes(),
-        );
-        output[16] = 1;
-        put(
-            &mut output,
-            18,
-            &u16::try_from(GENERAL_ACTION_PROGRAM_COUNT_V3)
-                .expect("seven")
-                .to_le_bytes(),
-        );
-        for (index, action) in GENERAL_ACTIONS_V3.into_iter().enumerate() {
-            let start = HEADER + index * ENTRY;
-            put(&mut output, start, &u32::from(action as u8).to_le_bytes());
-            let byte = u8::try_from(index + 1).expect("seven descriptors");
-            put(&mut output, start + 4, &[byte; 32]);
-        }
+        )
+        .expect("V2 set");
         output
     }
 
@@ -259,9 +262,12 @@ mod tests {
             let mut request = [0_u8; 64];
             request[10] = action as u8;
             assert_eq!(
-                set.select(&request).expect("selected action"),
+                set.select_descriptor(&request)
+                    .expect("selected action")
+                    .program(),
                 set.entry(u16::try_from(index).expect("seven"))
                     .expect("entry")
+                    .descriptor()
                     .program()
             );
         }
@@ -272,24 +278,42 @@ mod tests {
         let canonical = exact_set();
         let identity = digest(&canonical);
 
+        use dclutch_capability_program_contract::set_v2::{
+            CAPABILITY_PROGRAM_SET_ENTRY_BYTES_V2, CAPABILITY_PROGRAM_SET_ENTRY_COUNT_OFFSET_V2,
+            CAPABILITY_PROGRAM_SET_ENTRY_DESCRIPTOR_PROGRAM_OFFSET_V2,
+            CAPABILITY_PROGRAM_SET_ENTRY_SELECTOR_OFFSET_V2, CAPABILITY_PROGRAM_SET_HEADER_BYTES_V2,
+        };
+
         let mut missing = canonical.clone();
-        put(&mut missing, 18, &6_u16.to_le_bytes());
-        missing.truncate(32 + 6 * 40);
+        missing[CAPABILITY_PROGRAM_SET_ENTRY_COUNT_OFFSET_V2..CAPABILITY_PROGRAM_SET_ENTRY_COUNT_OFFSET_V2 + 2]
+            .copy_from_slice(&6_u16.to_le_bytes());
+        missing.truncate(
+            CAPABILITY_PROGRAM_SET_HEADER_BYTES_V2 + 6 * CAPABILITY_PROGRAM_SET_ENTRY_BYTES_V2,
+        );
         assert_eq!(
             authenticate_general_program_set_v3(digest(&missing), digest(&missing), &missing),
             Err(GeneralReleaseErrorV3::ProgramSet)
         );
 
         let mut reordered = canonical.clone();
-        put(&mut reordered, 32 + 3 * 40, &9_u32.to_le_bytes());
+        let reordered_selector = CAPABILITY_PROGRAM_SET_HEADER_BYTES_V2
+            + 3 * CAPABILITY_PROGRAM_SET_ENTRY_BYTES_V2
+            + CAPABILITY_PROGRAM_SET_ENTRY_SELECTOR_OFFSET_V2;
+        reordered[reordered_selector..reordered_selector + 4]
+            .copy_from_slice(&9_u32.to_le_bytes());
         assert_eq!(
             authenticate_general_program_set_v3(digest(&reordered), digest(&reordered), &reordered,),
             Err(GeneralReleaseErrorV3::ProgramSet)
         );
 
         let mut aliased = canonical;
-        let first = aliased[36..68].to_vec();
-        put(&mut aliased, 32 + 6 * 40 + 4, &first);
+        let first_start = CAPABILITY_PROGRAM_SET_HEADER_BYTES_V2
+            + CAPABILITY_PROGRAM_SET_ENTRY_DESCRIPTOR_PROGRAM_OFFSET_V2;
+        let first = aliased[first_start..first_start + 32].to_vec();
+        let last_start = CAPABILITY_PROGRAM_SET_HEADER_BYTES_V2
+            + 6 * CAPABILITY_PROGRAM_SET_ENTRY_BYTES_V2
+            + CAPABILITY_PROGRAM_SET_ENTRY_DESCRIPTOR_PROGRAM_OFFSET_V2;
+        aliased[last_start..last_start + 32].copy_from_slice(&first);
         assert_eq!(
             authenticate_general_program_set_v3(digest(&aliased), digest(&aliased), &aliased),
             Err(GeneralReleaseErrorV3::DuplicateDescriptor)
