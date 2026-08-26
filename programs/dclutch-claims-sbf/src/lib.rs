@@ -39,6 +39,7 @@ use solana_program::{
 use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign};
 
+pub mod liability_basis_v2;
 mod representation;
 
 entrypoint!(process_instruction);
@@ -310,6 +311,11 @@ pub fn process_instruction(
 ) -> ProgramResult {
     if instruction_data.get(..CORE_EFFECT_MAGIC_V1.len()) == Some(CORE_EFFECT_MAGIC_V1.as_slice()) {
         return process_core_effect(program_id, accounts, instruction_data);
+    }
+    if instruction_data.get(..liability_basis_v2::LIABILITY_BASIS_ACTION_MAGIC_V2.len())
+        == Some(liability_basis_v2::LIABILITY_BASIS_ACTION_MAGIC_V2.as_slice())
+    {
+        return liability_basis_v2::process(program_id, accounts, instruction_data);
     }
     if let Ok(plan) = ClaimsPlanV1::decode(instruction_data) {
         return process_generic_plan(program_id, accounts, instruction_data, plan);

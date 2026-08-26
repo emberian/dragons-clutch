@@ -1536,8 +1536,11 @@ dependencies = [
  "dclutch-core-contract",
  "dclutch-custody-contract",
  "dclutch-economic-slice-kernel",
+ "dclutch-liability-basis-v2-kernel",
  "dclutch-market-core-codec",
+ "dclutch-product-contract",
  "dclutch-realm-contract",
+ "dclutch-record-contract",
  "dclutch-registry-contract",
  "dclutch-registry-svm",
  "dclutch-release-set-contract",
@@ -1578,6 +1581,10 @@ name = "dclutch-economic-slice-kernel"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-liability-basis-v2-kernel"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-market-core-codec"
 version = "0.1.0"
 dependencies = [
@@ -1585,7 +1592,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-product-contract"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-realm-contract"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-record-contract"
 version = "0.1.0"
 
 [[package]]

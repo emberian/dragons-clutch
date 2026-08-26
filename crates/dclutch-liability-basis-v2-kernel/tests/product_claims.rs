@@ -5,8 +5,9 @@ use core::convert::TryInto;
 use dclutch_liability_basis_v2_kernel::product_claims::{
     AdmittedBasisV2, BASIS_MAGIC_V2, BasisKindV2, CAPPED_RAMP_BASIS_BYTES_V2,
     CATEGORICAL_BASIS_BYTES_V2, CappedRampBasisInputV2, CategoricalBasisInputV2, ClaimsOperationV2,
-    ContentIdV2, ProductClaimsErrorV2, TerminalResultV2, encode_capped_ramp_basis_v2,
-    encode_categorical_basis_v2,
+    ContentIdV2, LINKED_CAPPED_RAMP_BASIS_BYTES_V2, LinkedBasisRecordV2,
+    ProductClaimsErrorV2, TerminalResultV2, encode_capped_ramp_basis_v2,
+    encode_categorical_basis_v2, encode_linked_basis_record_v2,
 };
 use dclutch_liability_basis_v2_kernel::{
     AGREEMENT_CASES_V2, RAMP_COORDINATE_DENOMINATOR_OFFSET_V2, RAMP_COORDINATE_NUMERATOR_OFFSET_V2,
@@ -466,4 +467,44 @@ fn failed_claims_plans_are_atomic_under_hostile_state() {
     );
     assert_eq!(aggregate_after, [0xa5; 2]);
     assert_eq!(position_after, [0x5a; 2]);
+}
+
+#[test]
+fn semantic_basis_identity_and_finalized_product_link_are_distinct_authorities() {
+    let semantic_basis_id = id(9);
+    let mut first_basis = [0_u8; CAPPED_RAMP_BASIS_BYTES_V2];
+    let mut second_basis = [0_u8; CAPPED_RAMP_BASIS_BYTES_V2];
+    for (product_instance_id, output) in [(id(1), &mut first_basis), (id(3), &mut second_basis)] {
+        encode_capped_ramp_basis_v2(
+            CappedRampBasisInputV2 {
+                product_instance_id,
+                knot_denominator: 7,
+                left_numerator: -11,
+                right_numerator: 19,
+                scale: 101,
+            },
+            output,
+        )
+        .expect("canonical embedded basis");
+    }
+    assert_ne!(first_basis, second_basis, "Product link is present in raw bytes");
+
+    let mut first_link = [0_u8; LINKED_CAPPED_RAMP_BASIS_BYTES_V2];
+    let mut second_link = [0_u8; LINKED_CAPPED_RAMP_BASIS_BYTES_V2];
+    encode_linked_basis_record_v2(id(1), semantic_basis_id, &first_basis, &mut first_link)
+        .expect("first linked record");
+    encode_linked_basis_record_v2(id(3), semantic_basis_id, &second_basis, &mut second_link)
+        .expect("second linked record");
+    let first = LinkedBasisRecordV2::decode(&first_link).expect("first link");
+    let second = LinkedBasisRecordV2::decode(&second_link).expect("second link");
+    assert_eq!(first.semantic_basis_id(), second.semantic_basis_id());
+    assert_ne!(first.product_instance_id(), second.product_instance_id());
+    assert_ne!(first_link, second_link, "linked raw-record identities differ");
+
+    let mut refused = [0xa5_u8; LINKED_CAPPED_RAMP_BASIS_BYTES_V2];
+    assert_eq!(
+        encode_linked_basis_record_v2(id(3), semantic_basis_id, &first_basis, &mut refused),
+        Err(ProductClaimsErrorV2::IdentityMismatch)
+    );
+    assert_eq!(refused, [0xa5; LINKED_CAPPED_RAMP_BASIS_BYTES_V2]);
 }

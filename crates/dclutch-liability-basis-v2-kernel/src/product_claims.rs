@@ -18,8 +18,18 @@ pub const BASIS_HEADER_BYTES_V2: usize = 128;
 pub const CATEGORICAL_BASIS_BYTES_V2: usize = BASIS_HEADER_BYTES_V2;
 /// Exact capped-ramp/complement record width.
 pub const CAPPED_RAMP_BASIS_BYTES_V2: usize = BASIS_HEADER_BYTES_V2 + 24;
+/// Fixed header width of a finalized Product-linked basis record.
+pub const LINKED_BASIS_HEADER_BYTES_V2: usize = 96;
+/// Exact Product-linked categorical basis width.
+pub const LINKED_CATEGORICAL_BASIS_BYTES_V2: usize =
+    LINKED_BASIS_HEADER_BYTES_V2 + CATEGORICAL_BASIS_BYTES_V2;
+/// Exact Product-linked capped-ramp basis width.
+pub const LINKED_CAPPED_RAMP_BASIS_BYTES_V2: usize =
+    LINKED_BASIS_HEADER_BYTES_V2 + CAPPED_RAMP_BASIS_BYTES_V2;
 /// Canonical LiabilityBasisV2 record magic.
 pub const BASIS_MAGIC_V2: [u8; 8] = *b"DCLTLBV2";
+/// Canonical finalized Product-linked LiabilityBasisV2 record magic.
+pub const LINKED_BASIS_MAGIC_V2: [u8; 8] = *b"DCLTLNK2";
 /// Implemented LiabilityBasisV2 record schema.
 pub const BASIS_SCHEMA_V2: u16 = 2;
 /// Safe checked-integer physical profile.
@@ -70,6 +80,9 @@ const RAMP_KNOT_DENOMINATOR_OFFSET: usize = 128;
 const RAMP_BODY_RESERVED_OFFSET: usize = 132;
 const RAMP_LEFT_NUMERATOR_OFFSET: usize = 136;
 const RAMP_RIGHT_NUMERATOR_OFFSET: usize = 144;
+const LINKED_PRODUCT_INSTANCE_ID_OFFSET: usize = 16;
+const LINKED_SEMANTIC_BASIS_ID_OFFSET: usize = 48;
+const LINKED_EMBEDDED_BYTES_OFFSET: usize = 80;
 
 /// Refusal from LiabilityBasisV2 Product admission or Claims planning.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -172,6 +185,129 @@ pub struct CappedRampBasisInputV2 {
     pub right_numerator: i64,
     /// Positive exact integer payout scale `Q`.
     pub scale: u64,
+}
+
+/// Validated finalized link from a Product Instance to one semantic basis.
+///
+/// The linked record is the raw-record content preimage. Its `semantic_basis_id`
+/// is a separate authority computed over the embedded basis while omitting the
+/// embedded Product-link field. Adapters must authenticate the full linked raw
+/// record digest independently; this type never substitutes the semantic ID
+/// for raw-record finality.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LinkedBasisRecordV2<'a> {
+    product_instance_id: ContentIdV2,
+    semantic_basis_id: ContentIdV2,
+    basis_record: &'a [u8],
+}
+
+impl<'a> LinkedBasisRecordV2<'a> {
+    /// Decode one exact link and require its embedded Product identity to agree.
+    pub fn decode(bytes: &'a [u8]) -> ProductClaimsResultV2<Self> {
+        if bytes.len() != LINKED_CATEGORICAL_BASIS_BYTES_V2
+            && bytes.len() != LINKED_CAPPED_RAMP_BASIS_BYTES_V2
+        {
+            return Err(ProductClaimsErrorV2::InvalidLength);
+        }
+        if read_array::<8>(bytes, 0)? != LINKED_BASIS_MAGIC_V2 {
+            return Err(ProductClaimsErrorV2::InvalidMagic);
+        }
+        if read_u16(bytes, 8)? != BASIS_SCHEMA_V2 {
+            return Err(ProductClaimsErrorV2::UnsupportedSchema);
+        }
+        require_zero(bytes, 10, 6)?;
+        require_zero(bytes, 84, 12)?;
+        let product_instance_id =
+            ContentIdV2::new(read_array(bytes, LINKED_PRODUCT_INSTANCE_ID_OFFSET)?)?;
+        let semantic_basis_id =
+            ContentIdV2::new(read_array(bytes, LINKED_SEMANTIC_BASIS_ID_OFFSET)?)?;
+        let embedded_bytes = usize::try_from(read_u32(bytes, LINKED_EMBEDDED_BYTES_OFFSET)?)
+            .map_err(|_| ProductClaimsErrorV2::InvalidLength)?;
+        let expected = LINKED_BASIS_HEADER_BYTES_V2
+            .checked_add(embedded_bytes)
+            .ok_or(ProductClaimsErrorV2::InvalidLength)?;
+        if expected != bytes.len() {
+            return Err(ProductClaimsErrorV2::InvalidLength);
+        }
+        let basis_record = bytes
+            .get(LINKED_BASIS_HEADER_BYTES_V2..)
+            .ok_or(ProductClaimsErrorV2::InvalidLength)?;
+        let basis = decode_basis(basis_record, semantic_basis_id)?;
+        if basis.product_instance_id != product_instance_id {
+            return Err(ProductClaimsErrorV2::IdentityMismatch);
+        }
+        Ok(Self {
+            product_instance_id,
+            semantic_basis_id,
+            basis_record,
+        })
+    }
+
+    /// Return the Product Instance content identity carried by the link.
+    pub const fn product_instance_id(self) -> ContentIdV2 {
+        self.product_instance_id
+    }
+
+    /// Return the basis-semantic identity carried by the link.
+    pub const fn semantic_basis_id(self) -> ContentIdV2 {
+        self.semantic_basis_id
+    }
+
+    /// Borrow the exact canonical embedded evaluator record.
+    pub const fn basis_record(self) -> &'a [u8] {
+        self.basis_record
+    }
+}
+
+/// Encode a finalized Product-linked record without conflating semantic and raw IDs.
+///
+/// The caller supplies the adapter-derived semantic ID. The full output must
+/// subsequently be content-hashed and finalized as a distinct raw record.
+pub fn encode_linked_basis_record_v2(
+    product_instance_id: ContentIdV2,
+    semantic_basis_id: ContentIdV2,
+    basis_record: &[u8],
+    output: &mut [u8],
+) -> ProductClaimsResultV2<()> {
+    let expected = LINKED_BASIS_HEADER_BYTES_V2
+        .checked_add(basis_record.len())
+        .ok_or(ProductClaimsErrorV2::InvalidLength)?;
+    if output.len() != expected
+        || (expected != LINKED_CATEGORICAL_BASIS_BYTES_V2
+            && expected != LINKED_CAPPED_RAMP_BASIS_BYTES_V2)
+    {
+        return Err(ProductClaimsErrorV2::InvalidLength);
+    }
+    let basis = decode_basis(basis_record, semantic_basis_id)?;
+    if basis.product_instance_id != product_instance_id {
+        return Err(ProductClaimsErrorV2::IdentityMismatch);
+    }
+    let embedded_bytes =
+        u32::try_from(basis_record.len()).map_err(|_| ProductClaimsErrorV2::InvalidLength)?;
+    let mut candidate = [0_u8; LINKED_CAPPED_RAMP_BASIS_BYTES_V2];
+    let candidate = candidate
+        .get_mut(..expected)
+        .ok_or(ProductClaimsErrorV2::InvalidLength)?;
+    put(candidate, 0, &LINKED_BASIS_MAGIC_V2)?;
+    put(candidate, 8, &BASIS_SCHEMA_V2.to_le_bytes())?;
+    put(
+        candidate,
+        LINKED_PRODUCT_INSTANCE_ID_OFFSET,
+        product_instance_id.as_bytes(),
+    )?;
+    put(
+        candidate,
+        LINKED_SEMANTIC_BASIS_ID_OFFSET,
+        semantic_basis_id.as_bytes(),
+    )?;
+    put(
+        candidate,
+        LINKED_EMBEDDED_BYTES_OFFSET,
+        &embedded_bytes.to_le_bytes(),
+    )?;
+    put(candidate, LINKED_BASIS_HEADER_BYTES_V2, basis_record)?;
+    output.copy_from_slice(candidate);
+    Ok(())
 }
 
 /// Encode one canonical categorical-Q=1 basis record atomically.
