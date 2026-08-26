@@ -36,8 +36,8 @@ mod retirement_v1;
 mod series_permit;
 
 pub use capability::*;
-pub use generated::*;
 pub use generated::state_layout::CoreStateLayoutV2;
+pub use generated::*;
 pub use generated_physical::{
     CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1, CAPABILITY_FUNDING_LIST_MAGIC_V1,
     CAPABILITY_FUNDING_MAX_ENTRIES_V1, CORE_EFFECT_ACK_BYTES_V1, CORE_EFFECT_ACK_MAGIC_V1,

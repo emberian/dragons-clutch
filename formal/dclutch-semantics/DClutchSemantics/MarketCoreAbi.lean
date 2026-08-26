@@ -77,12 +77,13 @@ theorem state_fields_bounded (placed : PlacedField StateField) (member : placed 
 inductive Action where
   | found | verifyReadiness | openMarket | admitTerminal
   | split | redeem | beginRetiring | retire | activateCapability | closeCapability
+  | executeProvider
   deriving DecidableEq, Repr
 
 def Action.tag : Action → Nat
   | .found => 0 | .verifyReadiness => 1 | .openMarket => 2 | .admitTerminal => 3
   | .split => 4 | .redeem => 5 | .beginRetiring => 6 | .retire => 7
-  | .activateCapability => 8 | .closeCapability => 9
+  | .activateCapability => 8 | .closeCapability => 9 | .executeProvider => 10
 
 def phaseFoundingTag : Nat := 0
 def phaseOpenTag : Nat := 1
@@ -104,12 +105,12 @@ def representationMaterializedTag : Nat := 2
 
 theorem action_tags_fit_u8 :
     [Action.found, .verifyReadiness, .openMarket, .admitTerminal, .split, .redeem,
-      .beginRetiring, .retire, .activateCapability, .closeCapability].all
+      .beginRetiring, .retire, .activateCapability, .closeCapability, .executeProvider].all
       (fun action => action.tag < 256) = true := by native_decide
 
 theorem action_tags_unique :
     ([Action.found, .verifyReadiness, .openMarket, .admitTerminal, .split, .redeem,
-      .beginRetiring, .retire, .activateCapability, .closeCapability].map Action.tag).Nodup := by
+      .beginRetiring, .retire, .activateCapability, .closeCapability, .executeProvider].map Action.tag).Nodup := by
   native_decide
 
 inductive RequestField where

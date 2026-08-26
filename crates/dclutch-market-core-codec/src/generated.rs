@@ -12,6 +12,7 @@ pub const ACTION_BEGIN_RETIRING_TAG: u8 = 6;
 pub const ACTION_RETIRE_TAG: u8 = 7;
 pub const ACTION_ACTIVATE_CAPABILITY_TAG: u8 = 8;
 pub const ACTION_CLOSE_CAPABILITY_TAG: u8 = 9;
+pub const ACTION_EXECUTE_PROVIDER_TAG: u8 = 10;
 pub const PHASE_FOUNDING_TAG: u8 = 0;
 pub const PHASE_OPEN_TAG: u8 = 1;
 pub const PHASE_TERMINAL_TAG: u8 = 2;
@@ -473,6 +474,7 @@ pub enum Action {
     Retire,
     ActivateCapability,
     CloseCapability,
+    ExecuteProvider,
 }
 
 /// Which authenticated holder is selected.
@@ -1281,6 +1283,7 @@ fn action_tag(action: Action) -> u8 {
         Action::Retire => ACTION_RETIRE_TAG,
         Action::ActivateCapability => ACTION_ACTIVATE_CAPABILITY_TAG,
         Action::CloseCapability => ACTION_CLOSE_CAPABILITY_TAG,
+        Action::ExecuteProvider => ACTION_EXECUTE_PROVIDER_TAG,
     }
 }
 
@@ -1296,6 +1299,7 @@ fn decode_action(tag: u8) -> Result<Action, Error> {
         ACTION_RETIRE_TAG => Ok(Action::Retire),
         ACTION_ACTIVATE_CAPABILITY_TAG => Ok(Action::ActivateCapability),
         ACTION_CLOSE_CAPABILITY_TAG => Ok(Action::CloseCapability),
+        ACTION_EXECUTE_PROVIDER_TAG => Ok(Action::ExecuteProvider),
         _ => Err(Error::InvalidTag),
     }
 }

@@ -427,6 +427,7 @@ pub enum Action {
     Retire,
     ActivateCapability,
     CloseCapability,
+    ExecuteProvider,
 }
 
 /// Which authenticated holder is selected.
@@ -1235,6 +1236,7 @@ fn action_tag(action: Action) -> u8 {
         Action::Retire => ACTION_RETIRE_TAG,
         Action::ActivateCapability => ACTION_ACTIVATE_CAPABILITY_TAG,
         Action::CloseCapability => ACTION_CLOSE_CAPABILITY_TAG,
+        Action::ExecuteProvider => ACTION_EXECUTE_PROVIDER_TAG,
     }
 }
 
@@ -1250,6 +1252,7 @@ fn decode_action(tag: u8) -> Result<Action, Error> {
         ACTION_RETIRE_TAG => Ok(Action::Retire),
         ACTION_ACTIVATE_CAPABILITY_TAG => Ok(Action::ActivateCapability),
         ACTION_CLOSE_CAPABILITY_TAG => Ok(Action::CloseCapability),
+        ACTION_EXECUTE_PROVIDER_TAG => Ok(Action::ExecuteProvider),
         _ => Err(Error::InvalidTag),
     }
 }
@@ -1378,6 +1381,7 @@ def main : IO Unit := do
   IO.println s!"pub const ACTION_RETIRE_TAG: u8 = {Action.retire.tag};"
   IO.println s!"pub const ACTION_ACTIVATE_CAPABILITY_TAG: u8 = {Action.activateCapability.tag};"
   IO.println s!"pub const ACTION_CLOSE_CAPABILITY_TAG: u8 = {Action.closeCapability.tag};"
+  IO.println s!"pub const ACTION_EXECUTE_PROVIDER_TAG: u8 = {Action.executeProvider.tag};"
   IO.println s!"pub const PHASE_FOUNDING_TAG: u8 = {phaseFoundingTag};"
   IO.println s!"pub const PHASE_OPEN_TAG: u8 = {phaseOpenTag};"
   IO.println s!"pub const PHASE_TERMINAL_TAG: u8 = {phaseTerminalTag};"
