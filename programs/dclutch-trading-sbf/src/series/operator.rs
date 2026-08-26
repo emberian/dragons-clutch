@@ -7,6 +7,10 @@
 
 use dclutch_core_contract::ContentId;
 use dclutch_series_v3_kernel::plan::{SeriesReplayActionV3, evaluate_replay_v3};
+use dclutch_series_v3_kernel::terminal::{
+    SeriesLifecycleRentSinkV3, SeriesTerminalErrorV3, plan_series_root_closure_v3,
+    plan_ticket_retirement_v3,
+};
 
 use super::{
     AdmittedOccurrenceV3, AdmittedTicketV3, SeriesV3Error, TemplateV3, admit_occurrence,
@@ -31,6 +35,8 @@ pub enum SeriesOperatorErrorV3 {
     Schedule,
     /// The requested packet exceeded the mathematical u32 Merkle bound.
     Proof,
+    /// Terminal balance classification or lifecycle Rent V2 binding refused.
+    RentSink,
 }
 
 impl From<SeriesV3Error> for SeriesOperatorErrorV3 {
@@ -101,6 +107,12 @@ pub struct SeriesRetireSnapshotV3<'a> {
     pub series: SeriesStateV3,
     /// Current terminal Ticket replay state.
     pub ticket_state: TicketStateV3,
+    /// Complete current Ticket account lamports.
+    pub observed_ticket_lamports: u64,
+    /// Same-snapshot Rent minimum for the fixed Ticket state width.
+    pub exact_ticket_rent: u64,
+    /// Hostile-decoded Market+generation lifecycle Rent V2 destination.
+    pub rent_sink: SeriesLifecycleRentSinkV3,
 }
 
 /// Same-snapshot finalized Template and mutable root state for terminal close.
@@ -110,6 +122,12 @@ pub struct SeriesCloseSnapshotV3<'a> {
     pub template_bytes: &'a [u8],
     /// Current Trading-owned mutable Series tail.
     pub series: SeriesStateV3,
+    /// Complete current composite-root lamports.
+    pub observed_root_lamports: u64,
+    /// Same-snapshot Rent minimum for the complete composite root.
+    pub exact_root_rent: u64,
+    /// Hostile-decoded Market+generation lifecycle Rent V2 destination.
+    pub rent_sink: SeriesLifecycleRentSinkV3,
 }
 
 /// Construct a dust-tolerant pre-founding Ticket preparation request.
@@ -220,15 +238,18 @@ pub fn build_retire_v3(
         return Err(SeriesOperatorErrorV3::Replay);
     }
     let template = TemplateV3::decode(snapshot.template_bytes)?;
-    preflight_replay(
-        template,
+    plan_ticket_retirement_v3(
+        template.occurrence_count(),
         snapshot.series,
-        Some(snapshot.ticket_state),
-        SeriesReplayActionV3::Retire {
-            ticket_record: ticket.content_id(),
-            expected_ticket_revision: snapshot.ticket_state.revision(),
-        },
-    )?;
+        snapshot.ticket_state,
+        ticket,
+        snapshot.series.revision(),
+        snapshot.ticket_state.revision(),
+        snapshot.observed_ticket_lamports,
+        snapshot.exact_ticket_rent,
+        snapshot.rent_sink,
+    )
+    .map_err(map_terminal)?;
     build(
         SeriesActionV3::Retire,
         template_id,
@@ -246,7 +267,15 @@ pub fn build_close_v3(
 ) -> Result<UnsignedSeriesActionV3, SeriesOperatorErrorV3> {
     let template_id = template_content_id(snapshot.template_bytes)?;
     let template = TemplateV3::decode(snapshot.template_bytes)?;
-    preflight_replay(template, snapshot.series, None, SeriesReplayActionV3::Close)?;
+    plan_series_root_closure_v3(
+        template,
+        snapshot.series,
+        snapshot.series.revision(),
+        snapshot.observed_root_lamports,
+        snapshot.exact_root_rent,
+        snapshot.rent_sink,
+    )
+    .map_err(map_terminal)?;
     build(
         SeriesActionV3::Close,
         template_id,
@@ -267,6 +296,16 @@ fn require_ticket_state(
         return Err(SeriesOperatorErrorV3::Replay);
     }
     Ok(state)
+}
+
+fn map_terminal(error: SeriesTerminalErrorV3) -> SeriesOperatorErrorV3 {
+    match error {
+        SeriesTerminalErrorV3::Replay => SeriesOperatorErrorV3::Replay,
+        SeriesTerminalErrorV3::RentEncoding
+        | SeriesTerminalErrorV3::RentBinding
+        | SeriesTerminalErrorV3::Balance
+        | SeriesTerminalErrorV3::Arithmetic => SeriesOperatorErrorV3::RentSink,
+    }
 }
 
 fn preflight_replay(
@@ -365,6 +404,10 @@ fn build(
 
 #[cfg(test)]
 mod tests {
+    use dclutch_rent_contract::{
+        RefundAuthority,
+        lifecycle_v2::{LifecycleAccountIdV2, LifecycleRentCreditV2},
+    };
     use solana_program::hash::hashv;
 
     use super::*;
@@ -373,8 +416,29 @@ mod tests {
         occurrence_content_id,
         state::{TicketPhaseV3, TicketStateV3},
     };
+    use dclutch_series_v3_kernel::AccountKeyV3;
 
     const HASH_SEPARATOR: [u8; 1] = [0];
+
+    fn rent_sink(refund_wallet: AccountKeyV3) -> SeriesLifecycleRentSinkV3 {
+        let credit = LifecycleRentCreditV2::new(
+            RefundAuthority::new(refund_wallet.to_bytes()).expect("refund wallet"),
+            LifecycleAccountIdV2::new([71; 32]).expect("Market"),
+            LifecycleAccountIdV2::new([72; 32]).expect("release"),
+            3,
+            4,
+        )
+        .expect("Rent V2");
+        SeriesLifecycleRentSinkV3::admit(
+            AccountKeyV3::new([73; 32]).expect("credit"),
+            &credit.to_bytes(),
+            AccountKeyV3::new([71; 32]).expect("Market"),
+            ContentId::new([72; 32]).expect("release"),
+            3,
+            refund_wallet,
+        )
+        .expect("sink")
+    }
 
     fn put<const N: usize>(bytes: &mut [u8], offset: usize, value: &[u8; N]) {
         bytes
@@ -583,12 +647,19 @@ mod tests {
     #[test]
     fn retire_and_close_require_chain_terminal_state() {
         let fixture = Fixture::new();
+        let admitted_ticket = admit_ticket(&fixture.ticket).expect("Ticket");
+        let ticket_sink = rent_sink(admitted_ticket.ticket().refund_owner());
+        let template = TemplateV3::decode(&fixture.template).expect("Template");
+        let root_sink = rent_sink(template.refund_owner());
         assert_eq!(
             build_retire_v3(SeriesRetireSnapshotV3 {
                 template_bytes: &fixture.template,
                 ticket_bytes: &fixture.ticket,
                 series: fixture.series_at_one,
                 ticket_state: fixture.ticket_state,
+                observed_ticket_lamports: 11,
+                exact_ticket_rent: 10,
+                rent_sink: ticket_sink,
             }),
             Err(SeriesOperatorErrorV3::Replay)
         );
@@ -602,6 +673,9 @@ mod tests {
                 ticket_bytes: &fixture.ticket,
                 series: fixture.series_at_one,
                 ticket_state: terminal_ticket,
+                observed_ticket_lamports: 11,
+                exact_ticket_rent: 10,
+                rent_sink: ticket_sink,
             }),
             Err(SeriesOperatorErrorV3::Replay)
         );
@@ -611,22 +685,41 @@ mod tests {
             .expect("prepare current")
             .settle_current(fixture.series_at_one.revision() + 1, 3)
             .expect("settle current");
-        let retire = build_retire_v3(SeriesRetireSnapshotV3 {
+        let retire_snapshot = SeriesRetireSnapshotV3 {
             template_bytes: &fixture.template,
             ticket_bytes: &fixture.ticket,
             series: retire_series,
             ticket_state: terminal_ticket,
-        })
-        .expect("Retire request");
+            observed_ticket_lamports: 11,
+            exact_ticket_rent: 10,
+            rent_sink: ticket_sink,
+        };
+        let retire = build_retire_v3(retire_snapshot).expect("Retire request");
         assert_eq!(
             retire.decode().expect("Retire decode").action(),
             SeriesActionV3::Retire
+        );
+        let mut underfunded = retire_snapshot;
+        underfunded.observed_ticket_lamports = 9;
+        assert_eq!(
+            build_retire_v3(underfunded),
+            Err(SeriesOperatorErrorV3::RentSink)
+        );
+        let mut wrong_wallet = retire_snapshot;
+        wrong_wallet.rent_sink =
+            rent_sink(AccountKeyV3::new([99; 32]).expect("substituted immutable refund wallet"));
+        assert_eq!(
+            build_retire_v3(wrong_wallet),
+            Err(SeriesOperatorErrorV3::RentSink)
         );
 
         assert_eq!(
             build_close_v3(SeriesCloseSnapshotV3 {
                 template_bytes: &fixture.template,
                 series: fixture.series_at_one,
+                observed_root_lamports: 20,
+                exact_root_rent: 10,
+                rent_sink: root_sink,
             }),
             Err(SeriesOperatorErrorV3::Replay)
         );
@@ -643,6 +736,9 @@ mod tests {
         let close = build_close_v3(SeriesCloseSnapshotV3 {
             template_bytes: &fixture.template,
             series: closed,
+            observed_root_lamports: 20,
+            exact_root_rent: 10,
+            rent_sink: root_sink,
         })
         .expect("Close request");
         assert_eq!(
