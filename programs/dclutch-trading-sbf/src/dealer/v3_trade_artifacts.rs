@@ -42,8 +42,8 @@ use dclutch_effect_kernel::{
 };
 use dclutch_request_profile_contract::{
     encode::{
-        RequestCoordinateV1, RequestGeometryV1, RequestInstructionV1, ScalarRegisterV1,
-        encode_request_profile_v1_atomic,
+        IdentityRegisterV1, RequestCoordinateV1, RequestGeometryV1, RequestInstructionV1,
+        ScalarRegisterV1, encode_request_profile_v1_atomic,
     },
     v3::{
         BorrowedWitnessPolicyV3, BorrowedWitnessRoleV3, REQUEST_PROFILE_V3_HEADER_BYTES,
@@ -115,12 +115,14 @@ pub const DEALER_SCENARIO_CUSTODY_SCALAR_BASE_V4: u16 = 13;
 pub const DEALER_SCENARIO_CUSTODY_SCALAR_STRIDE_V4: u16 = 14;
 /// Exact common scalar-bank width.
 pub const DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4: u16 = 97;
-/// Parent digest precedes six exact 19-identity Custody blocks and one
-/// trusted current-Trading owner identity.
-pub const DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4: u16 = 116;
+/// Parent digest precedes six exact 19-identity Custody blocks, the trusted
+/// current-Trading owner, and the request-bound obligation key.
+pub const DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4: u16 = 117;
 /// AccountProfile-owned current Trading identity used to authenticate the
 /// sole writable obligation account independently of optional child routes.
 pub const DEALER_SCENARIO_CURRENT_TRADING_IDENTITY_V4: u16 = 115;
+/// Request-projected exact obligation key used to bind the sole local writer.
+pub const DEALER_SCENARIO_OBLIGATION_IDENTITY_V4: u16 = 116;
 
 const DEALER_SCENARIO_CUSTODY_IDENTITY_BASE_V4: u16 = 1;
 const DEALER_SCENARIO_CUSTODY_IDENTITY_STRIDE_V4: u16 = 19;
@@ -138,7 +140,7 @@ const DEALER_SCENARIO_EFFECT_OPERATION_COUNT_V4: usize = 6
     + 2 * 7
     + 2;
 
-const REQUEST_PROFILE_OPERATIONS_V4: usize = 7;
+const REQUEST_PROFILE_OPERATIONS_V4: usize = 8;
 const REQUEST_PROFILE_V1_BYTES_V4: usize = dclutch_request_profile_contract::HEADER_BYTES
     + REQUEST_PROFILE_OPERATIONS_V4 * dclutch_request_profile_contract::OPERATION_BYTES;
 /// Exact selector-9 RequestProfile V3 bytes.
@@ -226,6 +228,10 @@ pub fn encode_dealer_scenario_request_profile_v4(
         RequestInstructionV1::project_u64(
             RequestCoordinateV1::fixed(352),
             ScalarRegisterV1::common(DEALER_SCENARIO_EXPIRY_SCALAR_V4),
+        ),
+        RequestInstructionV1::project_identity(
+            RequestCoordinateV1::fixed(112),
+            IdentityRegisterV1::common(DEALER_SCENARIO_OBLIGATION_IDENTITY_V4),
         ),
         RequestInstructionV1::require_zero(RequestCoordinateV1::fixed(378), 2),
     ];
@@ -1021,6 +1027,11 @@ pub fn project_dealer_scenario_hot_registers_v4(
         &mut staged_identities,
         DEALER_SCENARIO_CURRENT_TRADING_IDENTITY_V4,
         trading_program,
+    )?;
+    set_scenario_identity(
+        &mut staged_identities,
+        DEALER_SCENARIO_OBLIGATION_IDENTITY_V4,
+        request.obligation,
     )?;
     for (slot, effect) in by_slot.iter().copied().enumerate() {
         let Some(effect) = effect else { continue };

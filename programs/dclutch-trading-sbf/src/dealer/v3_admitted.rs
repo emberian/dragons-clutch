@@ -17,7 +17,8 @@ use super::{
     },
     v3_trade_artifacts::{
         DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4, DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4,
-        DEALER_SCENARIO_CURRENT_SLOT_SCALAR_V4, DEALER_SCENARIO_EXPIRY_SCALAR_V4,
+        DEALER_SCENARIO_CURRENT_SLOT_SCALAR_V4, DEALER_SCENARIO_CURRENT_TRADING_IDENTITY_V4,
+        DEALER_SCENARIO_EXPIRY_SCALAR_V4, DEALER_SCENARIO_OBLIGATION_IDENTITY_V4,
         DEALER_SCENARIO_POSITION_COUNT_SCALAR_V4, DEALER_SCENARIO_WITNESS_BYTES_SCALAR_V4,
         project_dealer_scenario_hot_registers_v4,
     },
@@ -130,7 +131,13 @@ pub fn evaluate_dealer_scenario_admitted_v4(
     {
         return Err(DealerScenarioAdmittedErrorV4::Geometry);
     }
-    authenticate_input_bank(input_bank, scalar_count, request, trusted_current_slot)?;
+    authenticate_input_bank(
+        input_bank,
+        scalar_count,
+        request,
+        chain.trading_program,
+        trusted_current_slot,
+    )?;
 
     let plan = prepare_scenario_trade_v3(
         request,
@@ -167,6 +174,7 @@ fn authenticate_input_bank(
     input_bank: &[u8],
     scalar_count: usize,
     request: DealerScenarioTradeRequestV3<'_>,
+    trading_program: [u8; 32],
     trusted_current_slot: u64,
 ) -> Result<(), DealerScenarioAdmittedErrorV4> {
     for (index, expected) in [
@@ -185,7 +193,18 @@ fn authenticate_input_bank(
             return Err(DealerScenarioAdmittedErrorV4::Input);
         }
     }
-    if read_identity(input_bank, scalar_count, 0)? != hash(request.bytes()).to_bytes() {
+    if read_identity(input_bank, scalar_count, 0)? != hash(request.bytes()).to_bytes()
+        || read_identity(
+            input_bank,
+            scalar_count,
+            usize::from(DEALER_SCENARIO_CURRENT_TRADING_IDENTITY_V4),
+        )? != trading_program
+        || read_identity(
+            input_bank,
+            scalar_count,
+            usize::from(DEALER_SCENARIO_OBLIGATION_IDENTITY_V4),
+        )? != request.obligation
+    {
         return Err(DealerScenarioAdmittedErrorV4::Input);
     }
     Ok(())
