@@ -17,6 +17,7 @@ import {
   requestWalletTransactionSignatureV1,
 } from '@/lib/walletHandoff';
 import RationalRetireReceiptPanel from './RationalRetireReceiptPanel';
+import RationalOpenPanel from './RationalOpenPanel';
 
 type InspectionState = Readonly<{ kind: 'idle' | 'loading' | 'refused'; message: string }>
   | Readonly<{ kind: 'ready'; message: string; inspection: BearerTransferInspectionV2 }>;
@@ -132,11 +133,11 @@ export default function RationalRepresentationWorkspace() {
   return <main className="product-shell trade-v3-shell">
     <header className="product-nav"><Link className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Link><nav><Link href="/create">Create</Link><Link href="/trade">Trade</Link><Link href="/liquidity">Liquidity</Link><Link className="active" href="/redeem">Represent</Link><Link href="/release">Release</Link></nav><span className="preview-control"><i className="preview-dot" />raw-u64 economics</span></header>
 
-    <section className="trade-v3-hero"><div><p className="eyebrow">Bearer · Rational · Structured successor boundary</p><h1>Decimals are a label.<br /><em>Atoms are the economics.</em></h1><p>The executable path below is an ordinary Token-2022 transfer selected by immutable Market Realm and release state. Compact receipt retirement is now a chain-derived, packet-complete candidate whose signing remains gated on its checked EffectV4 outer.</p></div><aside><span>Executable now</span><strong>Bearer transfer</strong><p>RetireReceipt exposes exact closure evidence and packet export. Denominate, reconstitute, Structured issue/unwrap, and terminal redeem remain fail-closed until their complete CapabilityV4 outer routes are joined.</p></aside></section>
+    <section className="trade-v3-hero"><div><p className="eyebrow">Bearer · Rational · Structured successor boundary</p><h1>Decimals are a label.<br /><em>Atoms are the economics.</em></h1><p>The executable path below is an ordinary Token-2022 transfer selected by immutable Market Realm and release state. Rational open and compact receipt retirement now expose chain-derived packet candidates with signing gated on checked common-Hot release evidence.</p></div><aside><span>Executable now</span><strong>Bearer transfer</strong><p>Denominate, reconstitute, Structured issue/unwrap, and RetireReceipt expose exact chain-derived compilation and packet-fit evidence. Terminal redeem remains a checked semantic compiler while its complete live route is still pending.</p></aside></section>
 
     <section className="trade-v3-card">
       <header><span>00</span><div><h2>Successor route truth, without pretending incomplete Hot paths execute</h2><p>Transfer is the normal Token-2022 instruction. Wrap/open/redeem/retire are distinct privileged lifecycle actions; this interface will expose them only from their finalized SetV2/CapabilityV4 operators.</p></div></header>
-      <div className="trade-v3-evidence"><article><span>Bearer transfer</span><strong>transaction-complete</strong><small>exact TransferChecked · v0 + ALT</small></article><article><span>Denominate / reconstitute</span><strong>fail closed</strong><small>CapabilityV4 outer join pending</small></article><article><span>Terminal redeem</span><strong>fail closed</strong><small>zero payout is valid; common Hot evidence pending</small></article><article><span>Receipt retirement</span><strong>packet-complete</strong><small>closure only · signing release-gated</small></article></div>
+      <div className="trade-v3-evidence"><article><span>Bearer transfer</span><strong>transaction-complete</strong><small>exact TransferChecked · v0 + ALT</small></article><article><span>Rational open</span><strong>chain-derived</strong><small>four CapabilityV4 actions · packet bounded</small></article><article><span>Terminal redeem</span><strong>fail closed</strong><small>zero payout is valid; live route pending</small></article><article><span>Receipt retirement</span><strong>packet-complete</strong><small>closure only · signing release-gated</small></article></div>
     </section>
 
     <form className="trade-v3-card route-card" onSubmit={(event) => void inspect(event)}>
@@ -158,6 +159,8 @@ export default function RationalRepresentationWorkspace() {
       <div className="signing-grid"><article><span>Wallet identity</span><strong>{wallet || 'not connected'}</strong><button type="button" onClick={() => void connectWallet()}>Connect identity</button><p>{walletStatus}</p></article><article><span>Unsigned / signed packet</span><strong>{plan ? `${plan.wireBytes.length} bytes · ${plan.loadedAddresses} ALT` : 'no packet built'}</strong><button type="button" disabled={plan === null} onClick={() => void signTransaction()}>Sign sole-wallet packet</button><button type="button" disabled={plan === null} onClick={downloadPacket}>Download exact packet</button><p>No automatic submission or hidden retry.</p></article></div>
       {plan && <details className="trade-v3-bytes"><summary>Exact transfer material</summary><dl><div><dt>Instruction bytes · base64</dt><dd>{base64(plan.instructionBytes)}</dd></div><div><dt>Packet bytes · base64</dt><dd>{base64(signed?.wireBytes ?? plan.wireBytes)}</dd></div></dl></details>}
     </section>
+
+    <RationalOpenPanel />
 
     <RationalRetireReceiptPanel />
 
