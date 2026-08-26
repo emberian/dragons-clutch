@@ -10,23 +10,25 @@
 //! seed contracts, and emits the exact child instruction. The onchain Claims
 //! adapter reauthenticates every observation.
 
-use dclutch_claims_svm::{ClaimsAggregateSeedsV1, ClaimsPositionSeedsV1, NO_POSITION_REVISION};
+use dclutch_claims_svm::{
+    NO_POSITION_REVISION,
+    liability_basis_state_v2::{
+        LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
+    },
+    protocol_position_v2::ProtocolPositionSeedsV2,
+};
 use dclutch_custody_contract::{
     CUSTODY_REPLAY_BYTES_V1, CallerRoleV1 as CustodyCallerRoleV1, CompartmentV1, ContextV1,
     CustodyAuthoritySeedsV1, CustodyReplaySeedsV1, CustodyReplayV1, CustodyRequestV1,
     CustodyVaultSeedsV1, OperationV1,
 };
-use dclutch_economic_slice_kernel::{
-    Phase as EconomicPhase, market_identity, market_outcome_count, market_phase,
-    market_registry_program, market_release_set_id, market_revision, position_market_id,
-    position_owner, position_revision,
-};
 use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, Phase as CorePhase};
 use dclutch_rational_representation_v2_contract::{
     ABSENT_REVISION, ASSET_BYTES_V2, AssetV2, CallerRoleV2, RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2,
     RATIONAL_REPLAY_BYTES_V2, RATIONAL_REPLAY_SEED_V2, RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
-    RATIONAL_SHARD_MINT_SEED_V2, REQUEST_HEADER_BYTES_V2, RationalReplayV2, RepresentationActionV2,
-    RepresentationRequestHeaderV2, RepresentationRequestV2,
+    RATIONAL_SHARD_MINT_SEED_V2, RATIONAL_STRUCTURED_CUSTODY_SEED_V2, REQUEST_HEADER_BYTES_V2,
+    RationalReplayV2, RepresentationActionV2, RepresentationRequestHeaderV2,
+    RepresentationRequestV2,
 };
 use dclutch_rational_representation_v2_kernel::{
     ContentAdmissionV2, DescriptorAdmissionV2, REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
@@ -137,7 +139,7 @@ pub struct AssetObservationV2<'a> {
     pub shard_mint: ObservedAccountV2<'a>,
     /// Actor's canonical shard ATA.
     pub actor_shard_account: ObservedAccountV2<'a>,
-    /// Representation authority's canonical Structured-custody ATA.
+    /// Canonical Claims-derived Structured custody token account.
     pub structured_custody_account: ObservedAccountV2<'a>,
 }
 
@@ -239,7 +241,7 @@ pub struct DerivedAssetIdentitiesV2 {
     pub shard_mint: Pubkey,
     /// Actor shard ATA.
     pub actor_shard_account: Pubkey,
-    /// Representation-authority Structured custody ATA.
+    /// Canonical Claims-derived Structured custody token account.
     pub structured_custody_account: Pubkey,
 }
 
@@ -299,6 +301,7 @@ struct CommonV2<'a> {
     representation_authority: Pubkey,
     representation_replay: Pubkey,
     claims_aggregate: Pubkey,
+    claims_basis_id: [u8; 32],
     representation_revision: u64,
     claims_market_revision: u64,
     receipt_supply: u64,
@@ -529,34 +532,31 @@ fn authenticate_common<'a>(
     let (roles, release_set) = authenticate_activation(observation, descriptor)?;
     let core = authenticate_core(observation, descriptor, roles.core, release_set)?;
     let claims_aggregate = Pubkey::find_program_address(
-        &ClaimsAggregateSeedsV1::new(descriptor.market_id())
-            .map_err(|_| Error::InvalidClaims)?
-            .as_slices(),
+        &[
+            LIABILITY_BASIS_MARKET_SEED_V2,
+            descriptor.market_id().as_slice(),
+        ],
         &roles.claims,
     )
     .0;
+    let claims_market = LiabilityBasisMarketViewV2::decode(observation.claims_aggregate.data)
+        .map_err(|_| Error::InvalidClaims)?;
     if observation.claims_aggregate.key != claims_aggregate
         || observation.claims_aggregate.owner != roles.claims
         || observation.claims_aggregate.executable
-        || market_identity(observation.claims_aggregate.data).map_err(|_| Error::InvalidClaims)?
-            != descriptor.market_id()
-        || market_release_set_id(observation.claims_aggregate.data)
-            .map_err(|_| Error::InvalidClaims)?
-            != descriptor.release_set_id()
-        || market_registry_program(observation.claims_aggregate.data)
-            .map_err(|_| Error::InvalidClaims)?
-            != observation.registry_program.to_bytes()
-        || market_outcome_count(observation.claims_aggregate.data)
-            .map_err(|_| Error::InvalidClaims)?
-            != descriptor.outcome_count()
+        || claims_market.logical_market != descriptor.market_id()
+        || claims_market.release_set != descriptor.release_set_id()
+        || claims_market.registry_program != observation.registry_program.to_bytes()
+        || claims_market.claim_count != descriptor.outcome_count()
+        || claims_market.product_instance_id != core.identity.product_id.to_bytes()
+        || claims_market.realm_id != core.identity.realm_id.to_bytes()
+        || claims_market.generation != core.identity.generation
+        || hash(observation.product_evidence.product.raw.data).to_bytes()
+            != core.identity.product_record.to_bytes()
     {
         return Err(Error::InvalidClaims);
     }
-    let claims_market_revision =
-        market_revision(observation.claims_aggregate.data).map_err(|_| Error::InvalidClaims)?;
-    let economic_phase =
-        market_phase(observation.claims_aggregate.data).map_err(|_| Error::InvalidClaims)?;
-    if !phases_admit(action, core.phase, core.terminal_winner, economic_phase) {
+    if !phases_admit(action, core.phase) {
         return Err(Error::InvalidCoreMarket);
     }
 
@@ -595,8 +595,9 @@ fn authenticate_common<'a>(
         representation_authority,
         representation_replay,
         claims_aggregate,
+        claims_basis_id: claims_market.basis_id,
         representation_revision,
-        claims_market_revision,
+        claims_market_revision: claims_market.revision,
         receipt_supply: receipt.supply,
     })
 }
@@ -790,9 +791,12 @@ fn authenticate_assets(
         )
         .0;
         let custody_position = Pubkey::find_program_address(
-            &ClaimsPositionSeedsV1::new(common.descriptor.market_id(), custody_owner.to_bytes())
-                .map_err(|_| Error::InvalidClaims)?
-                .as_slices(),
+            &ProtocolPositionSeedsV2::new(
+                common.claims_aggregate.to_bytes(),
+                custody_owner.to_bytes(),
+            )
+            .map_err(|_| Error::InvalidClaims)?
+            .as_slices(),
             &common.roles.claims,
         )
         .0;
@@ -801,34 +805,29 @@ fn authenticate_assets(
             &shard_mint,
             &token_program,
         );
-        let structured = get_associated_token_address_with_program_id(
-            &common.representation_authority,
-            &shard_mint,
-            &token_program,
-        );
+        let structured = Pubkey::find_program_address(
+            &[
+                RATIONAL_STRUCTURED_CUSTODY_SEED_V2,
+                common.descriptor.descriptor_id().as_slice(),
+                &outcome_bytes,
+            ],
+            &common.roles.claims,
+        )
+        .0;
+        let position =
+            LiabilityBasisPositionViewV2::decode(observation.claims_custody_position.data)
+                .map_err(|_| Error::InvalidClaims)?;
         if observation.claims_custody_position.key != custody_position
             || observation.claims_custody_position.owner != common.roles.claims
             || observation.claims_custody_position.executable
-            || position_market_id(
-                observation.claims_custody_position.data,
-                common.descriptor.outcome_count(),
-            )
-            .map_err(|_| Error::InvalidClaims)?
-                != common.descriptor.market_id()
-            || position_owner(
-                observation.claims_custody_position.data,
-                common.descriptor.outcome_count(),
-            )
-            .map_err(|_| Error::InvalidClaims)?
-                != custody_owner.to_bytes()
+            || position.market_account != common.claims_aggregate.to_bytes()
+            || position.owner != custody_owner.to_bytes()
+            || position.basis_id != common.claims_basis_id
+            || position.claim_count != common.descriptor.outcome_count()
         {
             return Err(Error::InvalidClaims);
         }
-        let custody_position_revision = position_revision(
-            observation.claims_custody_position.data,
-            common.descriptor.outcome_count(),
-        )
-        .map_err(|_| Error::InvalidClaims)?;
+        let custody_position_revision = position.revision;
         let mint = authenticate_mint(
             observation.shard_mint,
             shard_mint,
@@ -877,8 +876,8 @@ fn authenticate_actor_position(common: CommonV2<'_>) -> Result<u64> {
         .actor_claims_position
         .ok_or(Error::InvalidAction)?;
     let expected = Pubkey::find_program_address(
-        &ClaimsPositionSeedsV1::new(
-            common.descriptor.market_id(),
+        &ProtocolPositionSeedsV2::new(
+            common.claims_aggregate.to_bytes(),
             common.observation.actor.to_bytes(),
         )
         .map_err(|_| Error::InvalidClaims)?
@@ -886,20 +885,19 @@ fn authenticate_actor_position(common: CommonV2<'_>) -> Result<u64> {
         &common.roles.claims,
     )
     .0;
+    let position =
+        LiabilityBasisPositionViewV2::decode(observed.data).map_err(|_| Error::InvalidClaims)?;
     if observed.key != expected
         || observed.owner != common.roles.claims
         || observed.executable
-        || position_market_id(observed.data, common.descriptor.outcome_count())
-            .map_err(|_| Error::InvalidClaims)?
-            != common.descriptor.market_id()
-        || position_owner(observed.data, common.descriptor.outcome_count())
-            .map_err(|_| Error::InvalidClaims)?
-            != common.observation.actor.to_bytes()
+        || position.market_account != common.claims_aggregate.to_bytes()
+        || position.owner != common.observation.actor.to_bytes()
+        || position.basis_id != common.claims_basis_id
+        || position.claim_count != common.descriptor.outcome_count()
     {
         return Err(Error::InvalidClaims);
     }
-    position_revision(observed.data, common.descriptor.outcome_count())
-        .map_err(|_| Error::InvalidClaims)
+    Ok(position.revision)
 }
 
 fn authenticate_actor_receipt(common: CommonV2<'_>) -> Result<()> {
@@ -1463,26 +1461,14 @@ fn finish_instruction(
     })
 }
 
-fn phases_admit(
-    action: RepresentationActionV2,
-    core: CorePhase,
-    core_winner: u32,
-    economic: EconomicPhase,
-) -> bool {
+fn phases_admit(action: RepresentationActionV2, core: CorePhase) -> bool {
     match action {
         RepresentationActionV2::Denominate
         | RepresentationActionV2::Reconstitute
         | RepresentationActionV2::IssueStructured
-        | RepresentationActionV2::UnwrapStructured => {
-            core == CorePhase::Open && economic == EconomicPhase::Open
-        }
+        | RepresentationActionV2::UnwrapStructured => core == CorePhase::Open,
         RepresentationActionV2::RedeemTerminal => {
             matches!(core, CorePhase::Terminal | CorePhase::Retiring)
-                && matches!(
-                    economic,
-                    EconomicPhase::Terminal(winner) | EconomicPhase::Retiring(winner)
-                        if winner == core_winner
-                )
         }
     }
 }

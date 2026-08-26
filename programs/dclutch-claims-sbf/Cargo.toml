@@ -17,7 +17,6 @@ custom-heap = []
 custom-panic = []
 
 [dependencies]
-dclutch-claims-representation-codec = { path = "../../crates/dclutch-claims-representation-codec" }
 dclutch-claims-svm = { path = "../../crates/dclutch-claims-svm" }
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
 dclutch-custody-contract = { path = "../../crates/dclutch-custody-contract" }

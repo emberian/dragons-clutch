@@ -4,13 +4,11 @@
 
 //! Authenticated SBF adapter for the one canonical Claims economic owner.
 
-use dclutch_claims_representation_codec::{ACTION_WIRE_BYTES_V1, ActionV1};
 use dclutch_claims_svm::{
     CallerRole, ClaimsAction, ClaimsAggregateSeedsV1, ClaimsPlanV1, ClaimsPositionSeedsV1,
     ClaimsReceiptV1, NO_POSITION_REVISION,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1;
 use dclutch_economic_slice_kernel::{
     BasketAction, BasketFrame, MARKET_HEADER_BYTES, POSITION_HEADER_BYTES, Phase as EconomicPhase,
     SCALAR_BYTES, execute_basket, initialize_market, initialize_position, market_identity,
@@ -45,7 +43,6 @@ pub mod liability_basis_v2;
 mod product_runtime_v2;
 pub mod protocol_position_v2;
 pub mod rational_representation_v2;
-mod representation;
 pub mod signed_delta_v3;
 
 entrypoint!(process_instruction);
@@ -84,79 +81,6 @@ pub const FOUNDATIONAL_RENT_ACCOUNT: usize = 13;
 pub const FOUNDATIONAL_SYSTEM_ACCOUNT: usize = 14;
 /// Exact foundational Split Claims child account count.
 pub const FOUNDATIONAL_ACCOUNT_COUNT: usize = 15;
-
-/// Unified representation state PDA seed prefix.
-pub const REPRESENTATION_STATE_SEED_V1: &[u8] = b"dclutch:representation:v1";
-/// Exact permissioned-burn representation Mint width.
-pub const REPRESENTATION_MINT_BYTES_V1: usize = 238;
-/// Unified representation account index: claimant signer.
-pub const REPRESENTATION_CLAIMANT_ACCOUNT: usize = 0;
-/// Unified representation account index: immutable descriptor.
-pub const REPRESENTATION_DESCRIPTOR_ACCOUNT: usize = 1;
-/// Unified representation account index: wrapper state/controller.
-pub const REPRESENTATION_STATE_ACCOUNT: usize = 2;
-/// Unified representation account index: aggregate Claims Market.
-pub const REPRESENTATION_MARKET_ACCOUNT: usize = 3;
-/// Unified representation account index: claimant Position.
-pub const REPRESENTATION_CLAIMANT_POSITION_ACCOUNT: usize = 4;
-/// Unified representation account index: wrapper Position.
-pub const REPRESENTATION_WRAPPER_POSITION_ACCOUNT: usize = 5;
-/// Unified representation account index: Registry activation cache.
-pub const REPRESENTATION_ACTIVATION_CACHE_ACCOUNT: usize = 6;
-/// Unified representation account index: current Claims program.
-pub const REPRESENTATION_CLAIMS_PROGRAM_ACCOUNT: usize = 7;
-/// Unified representation account index: Claims ProgramData.
-pub const REPRESENTATION_CLAIMS_PROGRAMDATA_ACCOUNT: usize = 8;
-/// Unified representation account index: Market-selected Registry program.
-pub const REPRESENTATION_REGISTRY_PROGRAM_ACCOUNT: usize = 9;
-/// Unified representation account index: permissioned-burn Token-2022 Mint.
-pub const REPRESENTATION_MINT_ACCOUNT: usize = 10;
-/// Unified representation account index: claimant holder Token-2022 account.
-pub const REPRESENTATION_HOLDER_TOKEN_ACCOUNT: usize = 11;
-/// Unified representation account index: Token-2022 program.
-pub const REPRESENTATION_TOKEN_PROGRAM_ACCOUNT: usize = 12;
-/// Unified representation account index: canonical Core Market state.
-pub const REPRESENTATION_CORE_MARKET_ACCOUNT: usize = 13;
-/// Unified representation account index: current Core program.
-pub const REPRESENTATION_CORE_PROGRAM_ACCOUNT: usize = 14;
-/// Unified representation account index: current Core ProgramData.
-pub const REPRESENTATION_CORE_PROGRAMDATA_ACCOUNT: usize = 15;
-/// Unified representation account index: finalized Product graph-root record.
-pub const REPRESENTATION_PRODUCT_RECORD_ACCOUNT: usize = 16;
-/// Unified representation account index: vacant Product graph-root staging cursor.
-pub const REPRESENTATION_PRODUCT_STAGING_ACCOUNT: usize = 17;
-/// Unified representation account index: finalized Product-selected result domain.
-pub const REPRESENTATION_RESULT_DOMAIN_RECORD_ACCOUNT: usize = 18;
-/// Unified representation account index: vacant result-domain staging cursor.
-pub const REPRESENTATION_RESULT_DOMAIN_STAGING_ACCOUNT: usize = 19;
-/// Unified representation account index: finalized Product-selected portfolio.
-pub const REPRESENTATION_PORTFOLIO_RECORD_ACCOUNT: usize = 20;
-/// Unified representation account index: vacant portfolio staging cursor.
-pub const REPRESENTATION_PORTFOLIO_STAGING_ACCOUNT: usize = 21;
-/// Exact unified representation account count before terminal Custody composition.
-pub const REPRESENTATION_ACCOUNT_COUNT: usize = 22;
-/// Terminal representation account index: Claims release-pinned Custody caller authority.
-pub const REPRESENTATION_CUSTODY_CALLER_AUTHORITY_ACCOUNT: usize = 22;
-/// Terminal representation account index: current Custody program.
-pub const REPRESENTATION_CUSTODY_PROGRAM_ACCOUNT: usize = 23;
-/// Terminal representation account index: current Custody ProgramData.
-pub const REPRESENTATION_CUSTODY_PROGRAMDATA_ACCOUNT: usize = 24;
-/// Terminal representation account index: finalized immutable Realm record.
-pub const REPRESENTATION_REALM_ACCOUNT: usize = 25;
-/// Terminal representation account index: canonical per-descriptor Custody replay.
-pub const REPRESENTATION_CUSTODY_REPLAY_ACCOUNT: usize = 26;
-/// Terminal representation account index: Realm-selected collateral Mint.
-pub const REPRESENTATION_COLLATERAL_MINT_ACCOUNT: usize = 27;
-/// Terminal representation account index: canonical Market Hoard vault.
-pub const REPRESENTATION_HOARD_VAULT_ACCOUNT: usize = 28;
-/// Terminal representation account index: claimant's external collateral account.
-pub const REPRESENTATION_COLLATERAL_RECIPIENT_ACCOUNT: usize = 29;
-/// Terminal representation account index: canonical Custody transfer authority.
-pub const REPRESENTATION_CUSTODY_TRANSFER_AUTHORITY_ACCOUNT: usize = 30;
-/// Terminal representation account index: Realm-selected collateral token program.
-pub const REPRESENTATION_COLLATERAL_TOKEN_PROGRAM_ACCOUNT: usize = 31;
-/// Exact unified representation account count with terminal Custody composition.
-pub const REPRESENTATION_TERMINAL_ACCOUNT_COUNT: usize = 32;
 
 struct GenericAccounts<'accounts, 'info> {
     authority: &'accounts AccountInfo<'info>,
@@ -219,90 +143,6 @@ impl<'accounts, 'info> GenericAccounts<'accounts, 'info> {
             core_market,
             core_program,
             core_programdata,
-        })
-    }
-}
-
-struct RepresentationAccounts<'accounts, 'info> {
-    claimant: &'accounts AccountInfo<'info>,
-    descriptor: &'accounts AccountInfo<'info>,
-    state: &'accounts AccountInfo<'info>,
-    market: &'accounts AccountInfo<'info>,
-    claimant_position: &'accounts AccountInfo<'info>,
-    wrapper_position: &'accounts AccountInfo<'info>,
-    cache: &'accounts AccountInfo<'info>,
-    claims_program: &'accounts AccountInfo<'info>,
-    claims_programdata: &'accounts AccountInfo<'info>,
-    registry: &'accounts AccountInfo<'info>,
-    mint: &'accounts AccountInfo<'info>,
-    holder_token: &'accounts AccountInfo<'info>,
-    token_program: &'accounts AccountInfo<'info>,
-    core_market: &'accounts AccountInfo<'info>,
-    core_program: &'accounts AccountInfo<'info>,
-    core_programdata: &'accounts AccountInfo<'info>,
-    product_record: &'accounts AccountInfo<'info>,
-    product_staging: &'accounts AccountInfo<'info>,
-    result_domain_record: &'accounts AccountInfo<'info>,
-    result_domain_staging: &'accounts AccountInfo<'info>,
-    portfolio_record: &'accounts AccountInfo<'info>,
-    portfolio_staging: &'accounts AccountInfo<'info>,
-}
-
-impl<'accounts, 'info> RepresentationAccounts<'accounts, 'info> {
-    fn parse(accounts: &'accounts [AccountInfo<'info>]) -> Result<Self, ProgramError> {
-        let accounts = accounts
-            .get(..REPRESENTATION_ACCOUNT_COUNT)
-            .ok_or(ClaimsSbfError::Accounts)?;
-        let [
-            claimant,
-            descriptor,
-            state,
-            market,
-            claimant_position,
-            wrapper_position,
-            cache,
-            claims_program,
-            claims_programdata,
-            registry,
-            mint,
-            holder_token,
-            token_program,
-            core_market,
-            core_program,
-            core_programdata,
-            product_record,
-            product_staging,
-            result_domain_record,
-            result_domain_staging,
-            portfolio_record,
-            portfolio_staging,
-        ] = accounts
-        else {
-            return Err(ClaimsSbfError::Accounts.into());
-        };
-        Ok(Self {
-            claimant,
-            descriptor,
-            state,
-            market,
-            claimant_position,
-            wrapper_position,
-            cache,
-            claims_program,
-            claims_programdata,
-            registry,
-            mint,
-            holder_token,
-            token_program,
-            core_market,
-            core_program,
-            core_programdata,
-            product_record,
-            product_staging,
-            result_domain_record,
-            result_domain_staging,
-            portfolio_record,
-            portfolio_staging,
         })
     }
 }
@@ -379,28 +219,16 @@ pub fn process_instruction(
     {
         return rational_representation_v2::process(program_id, accounts, instruction_data);
     }
+    // ECONOMIC_SLICE_MIGRATION_ONLY: this generic ClaimsPlanV1 route remains
+    // reachable solely for the current Trading General child-packet builder
+    // (`dclutch-general-adapter-contract/src/child_packets.rs`) and Dealer
+    // physical composers (`dclutch-trading-sbf/src/dealer/physical.rs` and
+    // `dclutch-dealer-sbf/src/lib.rs`). New families use LBV2 affine/signed
+    // plans; deleting those three consumers permits deleting this route.
     if let Ok(plan) = ClaimsPlanV1::decode(instruction_data) {
         return process_generic_plan(program_id, accounts, instruction_data, plan);
     }
-    if instruction_data.len() == ACTION_WIRE_BYTES_V1 {
-        let action = ActionV1::decode(instruction_data).map_err(|_| ClaimsSbfError::Instruction)?;
-        return representation::process(program_id, accounts, action, instruction_data, None);
-    }
-    let terminal_wire_bytes = ACTION_WIRE_BYTES_V1
-        .checked_add(CUSTODY_REQUEST_BYTES_V1)
-        .ok_or(ClaimsSbfError::Instruction)?;
-    if instruction_data.len() != terminal_wire_bytes {
-        return Err(ClaimsSbfError::Instruction.into());
-    }
-    let (action_bytes, custody_bytes) = instruction_data.split_at(ACTION_WIRE_BYTES_V1);
-    let action = ActionV1::decode(action_bytes).map_err(|_| ClaimsSbfError::Instruction)?;
-    representation::process(
-        program_id,
-        accounts,
-        action,
-        action_bytes,
-        Some(custody_bytes),
-    )
+    Err(ClaimsSbfError::Instruction.into())
 }
 
 fn process_generic_plan(
@@ -1493,6 +1321,37 @@ mod tests {
         Identity::new([byte; 32]).map_err(|_| ClaimsSbfError::Identity.into())
     }
 
+    #[test]
+    fn obsolete_action_v1_and_terminal_extension_refuse_at_dispatch() {
+        const OBSOLETE_ACTION_BYTES_V1: usize = 136;
+        const OBSOLETE_TERMINAL_BYTES_V1: usize = 808;
+
+        let program_id = Pubkey::new_from_array([9; 32]);
+        let mut action = [0_u8; OBSOLETE_ACTION_BYTES_V1];
+        action
+            .get_mut(..8)
+            .expect("old action magic")
+            .copy_from_slice(b"DCLWRPA1");
+        action
+            .get_mut(8..10)
+            .expect("old action version")
+            .copy_from_slice(&1_u16.to_le_bytes());
+        assert_eq!(
+            process_instruction(&program_id, &[], &action),
+            Err(ClaimsSbfError::Instruction.into())
+        );
+
+        let mut terminal = [0_u8; OBSOLETE_TERMINAL_BYTES_V1];
+        terminal
+            .get_mut(..OBSOLETE_ACTION_BYTES_V1)
+            .expect("old action prefix")
+            .copy_from_slice(&action);
+        assert_eq!(
+            process_instruction(&program_id, &[], &terminal),
+            Err(ClaimsSbfError::Instruction.into())
+        );
+    }
+
     fn core_state(market: Identity) -> Result<CoreState, ProgramError> {
         Ok(CoreState {
             phase: CorePhase::Open,
@@ -1516,7 +1375,7 @@ mod tests {
     }
 
     #[test]
-    fn authenticated_runtime_basket_advances_once() -> Result<(), ProgramError> {
+    fn migration_only_general_dealer_claims_plan_advances_once() -> Result<(), ProgramError> {
         let (accounts, release) = fixture()?;
         let view = GenericAccounts::parse(&accounts)?;
         let quantities = quantities(&[3, 0, 2]);

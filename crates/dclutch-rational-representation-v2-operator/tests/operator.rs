@@ -1,29 +1,35 @@
 //! Hostile chain-observation and exact-frame tests for the Rational V2 operator.
 
-use dclutch_claims_svm::{ClaimsAggregateSeedsV1, ClaimsPositionSeedsV1, NO_POSITION_REVISION};
+use dclutch_claims_svm::{
+    NO_POSITION_REVISION,
+    liability_basis_state_v2::{
+        LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
+        LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, LiabilityBasisMarketInputV2,
+        LiabilityBasisPositionInputV2, encode_liability_basis_market_into_v2,
+        encode_liability_basis_position_into_v2,
+    },
+    protocol_position_v2::ProtocolPositionSeedsV2,
+};
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
     CUSTODY_REPLAY_BYTES_V1, CallerRoleV1 as CustodyCallerRoleV1, CompartmentV1, ContextV1,
     CustodyAuthoritySeedsV1, CustodyReplaySeedsV1, CustodyReplayV1, CustodyRequestV1,
     CustodyVaultSeedsV1, OperationV1,
 };
-use dclutch_economic_slice_kernel::{
-    BasketAction, BasketFrame, MARKET_HEADER_BYTES, POSITION_HEADER_BYTES, Phase as EconomicPhase,
-    SCALAR_BYTES, execute_basket, initialize_market, initialize_position,
-};
 use dclutch_market_core_codec::{
     CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase as CorePhase, Readiness,
 };
 use dclutch_rational_representation_v2_contract::{
     ASSET_BYTES_V2, AssetV2, CallerRoleV2, RATIONAL_REPLAY_SEED_V2,
-    RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2, RATIONAL_SHARD_MINT_SEED_V2, RepresentationActionV2,
-    RepresentationRequestHeaderV2, RepresentationRequestV2,
+    RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2, RATIONAL_SHARD_MINT_SEED_V2,
+    RATIONAL_STRUCTURED_CUSTODY_SEED_V2, RepresentationActionV2, RepresentationRequestHeaderV2,
+    RepresentationRequestV2,
 };
 use dclutch_rational_representation_v2_kernel::{
     DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3, GRAPH_EDGE_BYTES,
     GRAPH_HEADER_BYTES, GRAPH_MAGIC_V2, GRAPH_NODE_BYTES,
     REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3, REPRESENTATION_GRAPH_SCHEMA_RELEASE_ID_V2,
-    SCHEMA_VERSION_V2,
+    SCALAR_BYTES, SCHEMA_VERSION_V2,
 };
 use dclutch_rational_representation_v2_operator::{
     AssetObservationV2, Error, FinalizedRecordObservationV2, ObservedAccountV2,
@@ -403,12 +409,18 @@ fn descriptor_bytes(
     output
 }
 
-fn core_market(release_set: [u8; 32], realm: [u8; 32], terminal: bool) -> (Pubkey, Vec<u8>) {
+fn core_market(
+    release_set: [u8; 32],
+    realm: [u8; 32],
+    product_record: [u8; 32],
+    product_id: [u8; 32],
+    terminal: bool,
+) -> (Pubkey, Vec<u8>) {
     let mut market_identity = MarketIdentity {
         market_id: identity([1; 32]),
         realm_id: identity(realm),
-        product_record: identity([0x60; 32]),
-        product_id: identity([0x61; 32]),
+        product_record: identity(product_record),
+        product_id: identity(product_id),
         resolution_policy: identity([0x63; 32]),
         capability_manifest: identity([0x64; 32]),
         selected_release_set: identity(release_set),
@@ -439,82 +451,60 @@ fn core_market(release_set: [u8; 32], realm: [u8; 32], terminal: bool) -> (Pubke
 
 fn economic_data(
     market: Pubkey,
+    aggregate_key: Pubkey,
     release_set: [u8; 32],
+    product_id: [u8; 32],
+    basis_id: [u8; 32],
+    realm_id: [u8; 32],
     custody_owners: [Pubkey; 2],
-    terminal: bool,
 ) -> (Vec<u8>, [Vec<u8>; 2], Vec<u8>) {
     let width = usize::try_from(OUTCOME_COUNT).expect("small width");
-    let mut aggregate = vec![0; MARKET_HEADER_BYTES + width * 3 * SCALAR_BYTES];
-    let mut bootstrap = vec![0; POSITION_HEADER_BYTES + width * 2 * SCALAR_BYTES];
+    let mut aggregate = vec![0; LIABILITY_BASIS_MARKET_HEADER_BYTES_V2 + width * 8];
     let mut custody_positions = [
-        vec![0; POSITION_HEADER_BYTES + width * 2 * SCALAR_BYTES],
-        vec![0; POSITION_HEADER_BYTES + width * 2 * SCALAR_BYTES],
+        vec![0; LIABILITY_BASIS_POSITION_HEADER_BYTES_V2 + width * 8],
+        vec![0; LIABILITY_BASIS_POSITION_HEADER_BYTES_V2 + width * 8],
     ];
-    let mut actor_position = vec![0; POSITION_HEADER_BYTES + width * 2 * SCALAR_BYTES];
-    initialize_market(
-        &mut aggregate,
-        market.to_bytes(),
-        release_set,
-        REGISTRY.to_bytes(),
-        OUTCOME_COUNT,
-        EconomicPhase::Open,
-        0,
-    )
-    .expect("Claims aggregate");
-    initialize_position(&mut bootstrap, market.to_bytes(), [0x67; 32], OUTCOME_COUNT)
-        .expect("bootstrap Position");
-    initialize_position(
-        &mut actor_position,
-        market.to_bytes(),
-        ACTOR.to_bytes(),
-        OUTCOME_COUNT,
-    )
-    .expect("actor Position");
-    for (position, owner) in custody_positions.iter_mut().zip(custody_owners) {
-        initialize_position(position, market.to_bytes(), owner.to_bytes(), OUTCOME_COUNT)
-            .expect("custody Position");
-    }
-    let complete = [7_u64, 7]
-        .into_iter()
-        .flat_map(u64::to_le_bytes)
-        .collect::<Vec<_>>();
-    execute_basket(
-        &mut aggregate,
-        None,
-        Some(&mut bootstrap),
-        BasketFrame {
-            expected_market_revision: 0,
-            expected_source_revision: None,
-            expected_destination_revision: Some(0),
-            action: BasketAction::MintCompleteSet,
-            quantities: &complete,
-            quantity_multiplier: 1,
+    let mut actor_position = vec![0; LIABILITY_BASIS_POSITION_HEADER_BYTES_V2 + width * 8];
+    encode_liability_basis_market_into_v2(
+        LiabilityBasisMarketInputV2 {
+            revision: 3,
+            logical_market: market.to_bytes(),
+            release_set,
+            registry_program: REGISTRY.to_bytes(),
+            product_instance_id: product_id,
+            basis_id,
+            realm_id,
+            custody_context: [0x69; 32],
+            generation: GENERATION,
         },
+        &[7, 7],
+        &mut aggregate,
     )
-    .expect("complete-set funding");
-    for (index, quantities) in [[3_u64, 0], [0_u64, 7]].into_iter().enumerate() {
-        let bytes = quantities
-            .into_iter()
-            .flat_map(u64::to_le_bytes)
-            .collect::<Vec<_>>();
-        execute_basket(
-            &mut aggregate,
-            Some(&mut bootstrap),
-            Some(custody_positions.get_mut(index).expect("custody Position")),
-            BasketFrame {
-                expected_market_revision: 1 + u64::try_from(index).expect("revision"),
-                expected_source_revision: Some(1 + u64::try_from(index).expect("revision")),
-                expected_destination_revision: Some(0),
-                action: BasketAction::Materialize,
-                quantities: &bytes,
-                quantity_multiplier: 1,
+    .expect("LBV2 aggregate");
+    encode_liability_basis_position_into_v2(
+        LiabilityBasisPositionInputV2 {
+            revision: 0,
+            market_account: aggregate_key.to_bytes(),
+            owner: ACTOR.to_bytes(),
+            basis_id,
+        },
+        &[0, 0],
+        &mut actor_position,
+    )
+    .expect("actor LBV2 Position");
+    for (index, (position, owner)) in custody_positions.iter_mut().zip(custody_owners).enumerate() {
+        let balances = if index == 0 { [3, 0] } else { [0, 7] };
+        encode_liability_basis_position_into_v2(
+            LiabilityBasisPositionInputV2 {
+                revision: 1,
+                market_account: aggregate_key.to_bytes(),
+                owner: owner.to_bytes(),
+                basis_id,
             },
+            &balances,
+            position,
         )
-        .expect("materialize coefficient");
-    }
-    if terminal {
-        *aggregate.get_mut(10).expect("phase byte") = 1;
-        put_u32(&mut aggregate, 20, WINNER);
+        .expect("custody LBV2 Position");
     }
     (aggregate, custody_positions, actor_position)
 }
@@ -657,7 +647,24 @@ impl Fixture {
         })
         .expect("Realm");
         let realm_record = OwnedRecord::new(REALM_SCHEMA_RELEASE_ID_V1, realm.to_bytes().to_vec());
-        let (market, core) = core_market(release_set, realm_record.digest(), terminal);
+        let linked_basis = OwnedRecord::new([0xa1; 32], vec![0xb1; 32]);
+        let product_record = OwnedRecord::new([0xa2; 32], vec![0xb2; 32]);
+        let result_domain_record = OwnedRecord::new([0xa3; 32], vec![0xb3; 32]);
+        let portfolio_record = OwnedRecord::new([0xa4; 32], vec![0xb4; 32]);
+        let product_id = [0x61; 32];
+        let basis_id = [0x62; 32];
+        let (market, core) = core_market(
+            release_set,
+            realm_record.digest(),
+            product_record.digest(),
+            product_id,
+            terminal,
+        );
+        let aggregate_key = Pubkey::find_program_address(
+            &[LIABILITY_BASIS_MARKET_SEED_V2, market.as_ref()],
+            &CLAIMS,
+        )
+        .0;
         let receipt_mint_key = Pubkey::new_from_array([0x75; 32]);
         let graph = OwnedRecord::new(
             REPRESENTATION_GRAPH_SCHEMA_RELEASE_ID_V2,
@@ -686,10 +693,6 @@ impl Fixture {
             ),
         );
         let descriptor_id = descriptor.digest();
-        let linked_basis = OwnedRecord::new([0xa1; 32], vec![0xb1; 32]);
-        let product_record = OwnedRecord::new([0xa2; 32], vec![0xb2; 32]);
-        let result_domain_record = OwnedRecord::new([0xa3; 32], vec![0xb3; 32]);
-        let portfolio_record = OwnedRecord::new([0xa4; 32], vec![0xb4; 32]);
         let representation_authority = Pubkey::find_program_address(
             &[
                 RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
@@ -718,22 +721,29 @@ impl Fixture {
                     &outcome_bytes,
                 ],
                 &CLAIMS,
-            )
-            .0;
+                )
+                .0;
                 let position_key = Pubkey::find_program_address(
-                    &ClaimsPositionSeedsV1::new(market.to_bytes(), custody_owner.to_bytes())
-                        .expect("custody Position seeds")
-                        .as_slices(),
+                    &ProtocolPositionSeedsV2::new(
+                        aggregate_key.to_bytes(),
+                        custody_owner.to_bytes(),
+                    )
+                    .expect("custody Position seeds")
+                    .as_slices(),
                     &CLAIMS,
                 )
                 .0;
                 let actor_shard =
                     get_associated_token_address_with_program_id(&ACTOR, &shard_mint, &TOKEN);
-                let structured = get_associated_token_address_with_program_id(
-                    &representation_authority,
-                    &shard_mint,
-                    &TOKEN,
-                );
+                let structured = Pubkey::find_program_address(
+                    &[
+                        RATIONAL_STRUCTURED_CUSTODY_SEED_V2,
+                        descriptor_id.as_slice(),
+                        &outcome_bytes,
+                    ],
+                    &CLAIMS,
+                )
+                .0;
                 (
                     outcome,
                     custody_owner,
@@ -746,12 +756,15 @@ impl Fixture {
         );
         let (aggregate, positions, actor_position) = economic_data(
             market,
+            aggregate_key,
             release_set,
+            product_id,
+            basis_id,
+            realm_record.digest(),
             [
                 identities.first().expect("first identity").1,
                 identities.get(1).expect("second identity").1,
             ],
-            terminal,
         );
         let assets = std::array::from_fn(|index| {
             let value = identities.get(index).copied().expect("asset identity");
@@ -779,15 +792,8 @@ impl Fixture {
                 ),
             }
         });
-        let aggregate_key = Pubkey::find_program_address(
-            &ClaimsAggregateSeedsV1::new(market.to_bytes())
-                .expect("aggregate seeds")
-                .as_slices(),
-            &CLAIMS,
-        )
-        .0;
         let actor_position_key = Pubkey::find_program_address(
-            &ClaimsPositionSeedsV1::new(market.to_bytes(), ACTOR.to_bytes())
+            &ProtocolPositionSeedsV2::new(aggregate_key.to_bytes(), ACTOR.to_bytes())
                 .expect("actor Position seeds")
                 .as_slices(),
             &CLAIMS,
@@ -1521,5 +1527,47 @@ fn hostile_chain_substitution_zero_width_replay_and_winner_refuse() {
     assert_eq!(
         canonical.instruction.accounts.get(33).expect("Mint").pubkey,
         fixture.assets.first().expect("first asset").shard_mint_key
+    );
+}
+
+#[test]
+fn obsolete_economic_slice_market_wire_and_pda_refuse() {
+    let mut legacy_wire = Fixture::new(false);
+    let mut old_market = vec![0_u8; 144 + 3 * 2 * 8];
+    put(&mut old_market, 0, b"DCLTEMK2");
+    put(&mut old_market, 8, &2_u16.to_le_bytes());
+    put_u32(&mut old_market, 16, OUTCOME_COUNT);
+    put(&mut old_market, 48, &legacy_wire.market.to_bytes());
+    put(&mut old_market, 80, &legacy_wire.release_set);
+    put(&mut old_market, 112, &REGISTRY.to_bytes());
+    legacy_wire.aggregate = old_market;
+    let assets = legacy_wire.asset_observations();
+    assert_eq!(
+        construct_denominate(
+            legacy_wire.observation(assets.get(1..2).expect("selected asset"), Mode::Selected,),
+            SelectedActionInputV2 {
+                outcome: WINNER,
+                quantity: 1,
+            },
+        ),
+        Err(Error::InvalidClaims)
+    );
+
+    let mut legacy_pda = Fixture::new(false);
+    legacy_pda.aggregate_key = Pubkey::find_program_address(
+        &[b"dclutch:claims-aggregate:v1", legacy_pda.market.as_ref()],
+        &CLAIMS,
+    )
+    .0;
+    let assets = legacy_pda.asset_observations();
+    assert_eq!(
+        construct_denominate(
+            legacy_pda.observation(assets.get(1..2).expect("selected asset"), Mode::Selected,),
+            SelectedActionInputV2 {
+                outcome: WINNER,
+                quantity: 1,
+            },
+        ),
+        Err(Error::InvalidClaims)
     );
 }

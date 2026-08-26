@@ -10,7 +10,6 @@ description = "Chain-derived unsigned instruction construction for Rational Repr
 dclutch-claims-svm = { path = "../dclutch-claims-svm" }
 dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-custody-contract = { path = "../dclutch-custody-contract" }
-dclutch-economic-slice-kernel = { path = "../dclutch-economic-slice-kernel" }
 dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
 dclutch-rational-representation-v2-contract = { path = "../dclutch-rational-representation-v2-contract" }
 dclutch-rational-representation-v2-kernel = { path = "../dclutch-rational-representation-v2-kernel" }
