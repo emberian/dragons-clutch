@@ -14,6 +14,7 @@ transaction-planning = ["dep:dclutch-versioned-message-operator", "dep:solana-ha
 
 [dependencies]
 dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
+dclutch-product-runtime-v2-admission = { path = "../dclutch-product-runtime-v2-admission" }
 dclutch-pyth-svm = { path = "../dclutch-pyth-svm" }
 dclutch-record-contract = { path = "../dclutch-record-contract" }
 dclutch-registry-contract = { path = "../dclutch-registry-contract" }
