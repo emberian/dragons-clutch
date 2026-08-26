@@ -13,7 +13,7 @@ use dclutch_account_profile_contract::lifecycle_v3::{
 };
 use dclutch_capability_program_contract::{
     set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
-    v4::CapabilityProgramV4,
+    v4::{CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V4},
 };
 use dclutch_claims_svm::founding_v5::ClaimsFoundingRequestV5;
 use dclutch_core_contract::ContentId;
@@ -358,6 +358,10 @@ fn require_source_identities(input: &SeriesShadowObservedSourceV1<'_>) -> Source
 fn authenticate_descriptor(
     input: &SeriesShadowObservedSourceV1<'_>,
 ) -> SourceOperatorResult<CapabilityProgramV4> {
+    if input.checked_release.descriptor_schema.to_bytes() != CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V4
+    {
+        return Err(SeriesShadowSourceOperatorErrorV1::Descriptor);
+    }
     require_record(
         &input.records.program_set.record,
         CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,

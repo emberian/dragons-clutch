@@ -531,6 +531,13 @@ fn child_request_and_selected_descriptor_substitution_refuse() {
         build_series_shadow_source_v1(descriptor_substitution),
         Err(SeriesShadowSourceOperatorErrorV1::Record)
     );
+
+    let mut schema_substitution = fixture.input();
+    schema_substitution.checked_release.descriptor_schema = identity(237);
+    assert_eq!(
+        build_series_shadow_source_v1(schema_substitution),
+        Err(SeriesShadowSourceOperatorErrorV1::Descriptor)
+    );
 }
 
 fn projected_request(
