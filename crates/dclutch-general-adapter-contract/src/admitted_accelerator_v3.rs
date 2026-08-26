@@ -118,6 +118,7 @@ pub fn evaluate_general_admitted_settlement_v3<'a>(
     .map_err(|_| GeneralAdmittedAcceleratorErrorV3::Settlement)?;
     let accelerated = project_general_hot_candidate_v3(
         effect_output,
+        cursor_output,
         tail_count,
         environment,
         input_bank,

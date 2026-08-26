@@ -43,7 +43,10 @@ use dclutch_execution_strategy_contract::v2::{
     ExecutionStrategyCertificateV2, ExecutionStrategyProgramV2, StrategyDispositionV2,
     validate_admitted_aot_v2,
 };
-use dclutch_general_codec::{Action, CONTROLLER_REQUEST_BYTES, ControllerRequestV1};
+use dclutch_general_codec::{
+    Action,
+    successor_request_v2::{CONTROLLER_REQUEST_BYTES_V2, ControllerRequestV2},
+};
 use dclutch_general_config_contract::{
     GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_ROOT_BYTES_V2, GENERAL_ROOT_SCHEMA_ID_V2,
     v3::{GENERAL_CONFIG_SCHEMA_ID_V3, GeneralConfigV3},
@@ -69,11 +72,11 @@ use crate::{
 pub const GENERAL_CONTROLLER_ACTION_SELECTOR_OFFSET_V3: u32 = 10;
 /// Schema preimage for the runtime-width General controller request.
 pub const GENERAL_CONTROLLER_REQUEST_SCHEMA_PREIMAGE_V3: &[u8] =
-    b"dclutch/schema/general-controller-request-v2";
+    b"dclutch/schema/general-controller-request-v4-state-bumps-v1";
 /// SHA-256 of [`GENERAL_CONTROLLER_REQUEST_SCHEMA_PREIMAGE_V3`].
 pub const GENERAL_CONTROLLER_REQUEST_SCHEMA_ID_V3: [u8; 32] = [
-    0x3d, 0x55, 0xce, 0xaf, 0x28, 0x96, 0xaa, 0x66, 0xbb, 0x07, 0xf8, 0x4b, 0x71, 0x16, 0x2f, 0xd8,
-    0x63, 0x10, 0xa9, 0xa0, 0x2c, 0x35, 0x53, 0x59, 0xe9, 0x39, 0x06, 0xc9, 0x08, 0x64, 0x82, 0x45,
+    0x90, 0x0e, 0x52, 0x03, 0xfc, 0x79, 0x9b, 0x48, 0x40, 0x82, 0x00, 0x01, 0x10, 0xe4, 0x67, 0x1f,
+    0xb6, 0xea, 0x52, 0xef, 0x80, 0x6b, 0x8c, 0x34, 0x6e, 0xb0, 0x3a, 0x13, 0x6c, 0x96, 0x18, 0x0b,
 ];
 
 /// Common scalar temporarily receiving the Product-authenticated tail width.
@@ -121,7 +124,7 @@ pub struct GeneralArtifactSelectionV3 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralArtifactBundleV3<'a> {
     /// Exact decoded family request.
-    pub request: ControllerRequestV1,
+    pub request: ControllerRequestV2,
     /// Action-selected capability descriptor.
     pub descriptor: CapabilityProgramV3,
     /// Immutable runtime-width General policy.
@@ -204,7 +207,7 @@ pub fn authenticate_general_artifacts_v3<'a>(
         return Err(GeneralArtifactErrorV3::ProgramSet);
     }
     let request =
-        ControllerRequestV1::decode(family_request).map_err(|_| GeneralArtifactErrorV3::Request)?;
+        ControllerRequestV2::decode(family_request).map_err(|_| GeneralArtifactErrorV3::Request)?;
     let selected_descriptor = set
         .select(family_request)
         .map_err(|_| GeneralArtifactErrorV3::ProgramSet)?;
@@ -425,7 +428,7 @@ fn validate_geometry(
     effect: EffectProgramV3<'_>,
 ) -> Result<()> {
     validate_hot_account_profile(account)?;
-    if request_bytes != CONTROLLER_REQUEST_BYTES
+    if request_bytes != CONTROLLER_REQUEST_BYTES_V2
         || request.item_request_bytes() != 0
         || account.common_scalar_count()
             != u16::try_from(GENERAL_HOT_COMMON_SCALARS_V3)
@@ -795,7 +798,7 @@ mod tests {
         admission: Vec<u8>,
         transition: Vec<u8>,
         effect: Vec<u8>,
-        request: [u8; CONTROLLER_REQUEST_BYTES],
+        request: [u8; CONTROLLER_REQUEST_BYTES_V2],
     }
 
     impl Fixture {
@@ -1180,12 +1183,14 @@ mod tests {
         })
         .expect("legacy config")
         .to_bytes();
-        let request = ControllerRequestV1 {
+        let request = ControllerRequestV2 {
             action: Action::Freeze,
             expected_revision: 7,
             candidate_id: None,
             page_index: 0,
             execution_index: 0,
+            state_bump: 42,
+            terminal_record_bump: 0,
         }
         .to_bytes()
         .expect("freeze request");

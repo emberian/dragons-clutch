@@ -156,7 +156,7 @@ impl RuntimeVerifierLayoutV2 {
 
     /// First runtime `u64` tail offset.
     pub const fn tails_base() -> u32 {
-        RUNTIME_VERIFIER_HEADER_BYTES_V2 as u32
+        288
     }
 
     /// Bytes per Product outcome in one verifier tail.

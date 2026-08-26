@@ -49,6 +49,16 @@ const VERIFIED_PHASE: u8 = 9;
 pub struct SettlementCursorLayoutV2;
 
 impl SettlementCursorLayoutV2 {
+    /// Cursor magic interpreted as one little-endian scalar.
+    pub const fn magic_u64() -> u64 {
+        u64::from_le_bytes(SETTLEMENT_CURSOR_MAGIC)
+    }
+
+    /// Exact cursor ABI version.
+    pub const fn version_value() -> u16 {
+        RUNTIME_WIDTH_VERSION_V2
+    }
+
     /// Cursor magic byte offset.
     pub const fn magic() -> u32 {
         0
@@ -106,7 +116,7 @@ impl SettlementCursorLayoutV2 {
 
     /// Runtime inventory-tail base offset.
     pub const fn inventory_base() -> u32 {
-        SETTLEMENT_CURSOR_HEADER_BYTES_V2 as u32
+        88
     }
 
     /// Runtime inventory-tail item stride.

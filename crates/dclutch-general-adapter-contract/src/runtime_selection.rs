@@ -32,6 +32,16 @@ const PHASE_FROZEN: u8 = 2;
 pub struct RuntimeSelectionLayoutV2;
 
 impl RuntimeSelectionLayoutV2 {
+    /// Cursor magic interpreted as one little-endian scalar.
+    pub const fn magic_u64() -> u64 {
+        u64::from_le_bytes(MAGIC)
+    }
+
+    /// Exact cursor ABI version.
+    pub const fn version_value() -> u16 {
+        VERSION
+    }
+
     /// Magic byte offset.
     pub const fn magic() -> u32 {
         0

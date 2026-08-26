@@ -37,7 +37,9 @@ pub fn general_request_profile_v1(action: Action) -> Result<RequestProfileV1<'st
 
 #[cfg(test)]
 mod tests {
-    use dclutch_general_codec::{CONTROLLER_REQUEST_BYTES, ControllerRequestV1};
+    use dclutch_general_codec::successor_request_v2::{
+        CONTROLLER_REQUEST_BYTES_V2, ControllerRequestV2,
+    };
     use dclutch_request_profile_contract::{ProjectionRegistersV1, project_atomic};
 
     use super::*;
@@ -58,7 +60,7 @@ mod tests {
         Action::Close,
     ];
 
-    fn request(action: Action) -> [u8; CONTROLLER_REQUEST_BYTES] {
+    fn request(action: Action) -> [u8; CONTROLLER_REQUEST_BYTES_V2] {
         let candidate_id = if action == Action::Freeze {
             None
         } else {
@@ -72,12 +74,14 @@ mod tests {
         } else {
             (0, 0)
         };
-        ControllerRequestV1 {
+        ControllerRequestV2 {
             action,
             expected_revision: 7,
             candidate_id,
             page_index,
             execution_index,
+            state_bump: 42,
+            terminal_record_bump: if action == Action::Close { 43 } else { 0 },
         }
         .to_bytes()
         .expect("canonical request")
@@ -120,6 +124,11 @@ mod tests {
             )
             .expect("selected profile accepts");
             assert_eq!(output_scalars.first(), Some(&7));
+            assert_eq!(output_scalars.get(69), Some(&42));
+            assert_eq!(
+                output_scalars.get(70),
+                Some(&if action == Action::Close { 43 } else { 99 })
+            );
             if action == Action::Freeze {
                 assert_eq!(identity_count, TEST_IDENTITIES);
                 assert_eq!(output_identities.first(), Some(&[0x99; 32]));

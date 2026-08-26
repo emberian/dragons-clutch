@@ -10,18 +10,23 @@
 //! authority.
 
 use dclutch_execution_strategy_contract::v2::{ExecutionCandidateV2, register_bank_bytes_v2};
+use dclutch_general_codec::Action;
 
 use crate::{
+    runtime_selection::{
+        RuntimeSelectionCursorV2, RuntimeSelectionLayoutV2, RuntimeSelectionPhaseV2,
+    },
     runtime_settlement::{RuntimeSettlementActionV2, RuntimeSettlementEffectPlanV2},
     runtime_verify::RuntimeCompleteSetMoveV2,
+    runtime_width::{SettlementCursorLayoutV2, SettlementCursorV2},
 };
 
 /// Exact common scalar-register count in the General Hot38 ABI.
-pub const GENERAL_HOT_COMMON_SCALARS_V3: u32 = 53;
-/// Outcome index, quantity, and three exact signed-magnitude fields per outcome.
-pub const GENERAL_HOT_ITEM_SCALAR_STRIDE_V3: u32 = 5;
+pub const GENERAL_HOT_COMMON_SCALARS_V3: u32 = 71;
+/// Outcome index, quantity, three claim magnitudes, and cursor inventory.
+pub const GENERAL_HOT_ITEM_SCALAR_STRIDE_V3: u32 = 6;
 /// Exact common identity-register count in the General Hot38 ABI.
-pub const GENERAL_HOT_COMMON_IDENTITIES_V3: u32 = 28;
+pub const GENERAL_HOT_COMMON_IDENTITIES_V3: u32 = 32;
 /// General has no per-outcome identity tail.
 pub const GENERAL_HOT_ITEM_IDENTITY_STRIDE_V3: u32 = 0;
 
@@ -133,6 +138,42 @@ pub mod scalar {
     pub const CUSTODY_CLOSE_REPLAY_RESULTING_REVISION: u32 = 51;
     /// Canonical zero used only by initialization child templates.
     pub const ZERO: u32 = 52;
+    /// Selection open/frozen phase.
+    pub const SELECTION_PHASE: u32 = 53;
+    /// Selection successor revision.
+    pub const SELECTION_REVISION: u32 = 54;
+    /// Number of distinct submitted candidates considered.
+    pub const SELECTION_SUBMITTED_COUNT: u32 = 55;
+    /// Best valid submitted Candidate coordinate.
+    pub const SELECTION_BEST_CANDIDATE_COORDINATE: u32 = 56;
+    /// Verification revision of the best submitted certificate.
+    pub const SELECTION_BEST_VERIFIED_REVISION: u32 = 57;
+    /// Selection comparison-domain price scale.
+    pub const SELECTION_PRICE_SCALE: u32 = 58;
+    /// Canonical Selection Cursor magic encoded as a scalar.
+    pub const SELECTION_MAGIC: u32 = 59;
+    /// Canonical runtime-width record ABI version.
+    pub const RUNTIME_WIDTH_VERSION: u32 = 60;
+    /// Settlement Cursor successor phase.
+    pub const CURSOR_PHASE: u32 = 61;
+    /// Settlement Cursor immutable verifier-emitted order count.
+    pub const CURSOR_ORDER_COUNT: u32 = 62;
+    /// Settlement Cursor next order coordinate.
+    pub const CURSOR_NEXT_ORDER: u32 = 63;
+    /// Settlement Cursor successor revision.
+    pub const CURSOR_RESULTING_REVISION: u32 = 64;
+    /// Settlement Cursor successor quote inventory.
+    pub const CURSOR_QUOTE_INVENTORY: u32 = 65;
+    /// Settlement Cursor immutable complete-set quantity.
+    pub const CURSOR_COMPLETE_SET_QUANTITY: u32 = 66;
+    /// Settlement Cursor canonical magic encoded as a scalar.
+    pub const CURSOR_MAGIC: u32 = 67;
+    /// Terminal coordinate persisted in the Settlement Cursor.
+    pub const CURSOR_TERMINAL_COORDINATE: u32 = 68;
+    /// Untrusted primary-state PDA bump witness projected from the request.
+    pub const STATE_BUMP: u32 = 69;
+    /// Untrusted Close terminal-record PDA bump witness projected from the request.
+    pub const TERMINAL_RECORD_BUMP: u32 = 70;
 }
 
 /// Scalar coordinates within each Product-outcome item bank.
@@ -147,6 +188,8 @@ pub mod item_scalar {
     pub const CLAIMS_SOURCE_MAGNITUDE: u32 = 3;
     /// Exact destination-Position signed-magnitude magnitude.
     pub const CLAIMS_DESTINATION_MAGNITUDE: u32 = 4;
+    /// Settlement Cursor successor inventory for this Product outcome.
+    pub const CURSOR_INVENTORY: u32 = 5;
 }
 
 /// Identity coordinates consumed by exact child-packet projection.
@@ -207,6 +250,14 @@ pub mod identity {
     pub const POSITION_ONE_OWNER: u32 = 26;
     /// Canonical General root identity and Custody replay namespace.
     pub const GENERAL_ROOT: u32 = 27;
+    /// Product content identity in the selection comparison domain.
+    pub const SELECTION_PRODUCT: u32 = 28;
+    /// Batch content identity in the selection comparison domain.
+    pub const SELECTION_BATCH: u32 = 29;
+    /// Immutable interpreted selection-policy content identity.
+    pub const SELECTION_POLICY: u32 = 30;
+    /// Digest of the exact best submitted VerifiedCandidate record.
+    pub const BEST_VERIFIED_DIGEST: u32 = 31;
 }
 
 /// Independently authenticated environment needed by exact Claims/Custody packets.
@@ -334,6 +385,79 @@ pub fn general_hot_candidate_bank_len_v3(outcome_count: u32) -> Result<usize> {
     usize::try_from(bytes).map_err(|_| GeneralHotCandidateErrorV3::ArithmeticOverflow)
 }
 
+/// Project one exact Consider or Freeze selection successor into a candidate bank.
+///
+/// The selection evaluator produced `selection_after` failure-atomically. This
+/// projection preserves all independently authenticated registers and writes
+/// only the canonical persisted state fields later consumed by the common
+/// EffectProgram. It owns no account and performs no CPI.
+pub fn project_general_selection_candidate_v3<'a>(
+    action: Action,
+    selection_after: &[u8],
+    outcome_count: u32,
+    authenticated_input: &[u8],
+    scratch: &mut [u8],
+    output: &'a mut [u8],
+) -> Result<ExecutionCandidateV2<'a>> {
+    if !matches!(action, Action::Consider | Action::Freeze) {
+        return Err(GeneralHotCandidateErrorV3::InvalidPlan);
+    }
+    let selection = RuntimeSelectionCursorV2::decode(selection_after)
+        .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
+    let header = selection.header();
+    let expected_phase = if action == Action::Consider {
+        RuntimeSelectionPhaseV2::Open
+    } else {
+        RuntimeSelectionPhaseV2::Frozen
+    };
+    if header.outcome_count != outcome_count || header.phase != expected_phase {
+        return Err(GeneralHotCandidateErrorV3::TailCountMismatch);
+    }
+    exact_candidate_capacities(outcome_count, authenticated_input, scratch, output)?;
+    scratch.copy_from_slice(authenticated_input);
+    for (coordinate, value) in [
+        (scalar::ACTION, u64::from(action as u8)),
+        (scalar::OUTCOME_COUNT, u64::from(outcome_count)),
+        (scalar::SELECTION_PHASE, selection_phase_tag(header.phase)),
+        (scalar::SELECTION_REVISION, header.revision),
+        (
+            scalar::SELECTION_SUBMITTED_COUNT,
+            u64::from(header.submitted_count),
+        ),
+        (
+            scalar::SELECTION_BEST_CANDIDATE_COORDINATE,
+            u64::from(header.best_candidate_coordinate),
+        ),
+        (
+            scalar::SELECTION_BEST_VERIFIED_REVISION,
+            header.best_verified_revision,
+        ),
+        (scalar::SELECTION_PRICE_SCALE, header.price_scale),
+        (
+            scalar::SELECTION_MAGIC,
+            RuntimeSelectionLayoutV2::magic_u64(),
+        ),
+        (
+            scalar::RUNTIME_WIDTH_VERSION,
+            u64::from(RuntimeSelectionLayoutV2::version_value()),
+        ),
+    ] {
+        write_scalar(scratch, coordinate, value)?;
+    }
+    let scalar_count = general_hot_scalar_count_v3(outcome_count)?;
+    for (coordinate, value) in [
+        (identity::CANDIDATE, header.best_candidate_id),
+        (identity::SELECTION_PRODUCT, header.product_id),
+        (identity::SELECTION_BATCH, header.batch_id),
+        (identity::SELECTION_POLICY, header.policy_id),
+        (identity::BEST_VERIFIED_DIGEST, header.best_verified_digest),
+    ] {
+        write_identity(scratch, scalar_count, coordinate, value)?;
+    }
+    output.copy_from_slice(scratch);
+    Ok(ExecutionCandidateV2::Accepted(output))
+}
+
 /// Project one complete General plan without discarding authenticated inputs.
 ///
 /// `authenticated_input`, `scratch`, and `output` must have the one exact
@@ -341,6 +465,7 @@ pub fn general_hot_candidate_bank_len_v3(outcome_count: u32) -> Result<usize> {
 /// output changes only after every semantic and child-ABI coordinate accepts.
 pub fn project_general_hot_candidate_v3<'a>(
     effect_plan: &[u8],
+    cursor_after: &[u8],
     outcome_count: u32,
     environment: GeneralHotEnvironmentV3,
     authenticated_input: &[u8],
@@ -349,16 +474,16 @@ pub fn project_general_hot_candidate_v3<'a>(
 ) -> Result<ExecutionCandidateV2<'a>> {
     let plan = RuntimeSettlementEffectPlanV2::decode(effect_plan)
         .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
-    if plan.header().outcome_count != outcome_count {
+    let cursor = SettlementCursorV2::decode(cursor_after)
+        .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
+    let cursor_header = cursor.header();
+    if plan.header().outcome_count != outcome_count
+        || cursor_header.outcome_count != outcome_count
+        || cursor_header.candidate_id != plan.header().candidate_id
+    {
         return Err(GeneralHotCandidateErrorV3::TailCountMismatch);
     }
-    let required = general_hot_candidate_bank_len_v3(outcome_count)?;
-    if authenticated_input.len() != required
-        || scratch.len() != required
-        || output.len() != required
-    {
-        return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
-    }
+    exact_candidate_capacities(outcome_count, authenticated_input, scratch, output)?;
     let input_scalar_count = general_hot_scalar_count_v3(outcome_count)?;
     if read_scalar(authenticated_input, scalar::OUTCOME_COUNT)? != u64::from(outcome_count)
         || read_identity(
@@ -551,6 +676,36 @@ pub fn project_general_hot_candidate_v3<'a>(
             custody_close_replay_resulting_revision,
         ),
         (scalar::ZERO, 0),
+        (
+            scalar::CURSOR_PHASE,
+            settlement_phase_tag(cursor_header.phase),
+        ),
+        (
+            scalar::CURSOR_ORDER_COUNT,
+            u64::from(cursor_header.order_count),
+        ),
+        (
+            scalar::CURSOR_NEXT_ORDER,
+            u64::from(cursor_header.next_order),
+        ),
+        (scalar::CURSOR_RESULTING_REVISION, cursor_header.revision),
+        (
+            scalar::CURSOR_QUOTE_INVENTORY,
+            cursor_header.quote_inventory,
+        ),
+        (
+            scalar::CURSOR_COMPLETE_SET_QUANTITY,
+            cursor_header.complete_set_quantity,
+        ),
+        (scalar::CURSOR_MAGIC, SettlementCursorLayoutV2::magic_u64()),
+        (
+            scalar::RUNTIME_WIDTH_VERSION,
+            u64::from(SettlementCursorLayoutV2::version_value()),
+        ),
+        (
+            scalar::CURSOR_TERMINAL_COORDINATE,
+            cursor_header.terminal_coordinate,
+        ),
     ] {
         write_scalar(scratch, coordinate, value)?;
     }
@@ -575,6 +730,14 @@ pub fn project_general_hot_candidate_v3<'a>(
             base.checked_add(item_scalar::QUANTITY)
                 .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
             quantity,
+        )?;
+        write_scalar(
+            scratch,
+            base.checked_add(item_scalar::CURSOR_INVENTORY)
+                .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
+            cursor
+                .inventory(item)
+                .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?,
         )?;
         for (coordinate, direction) in [
             (
@@ -660,6 +823,40 @@ pub fn project_general_hot_candidate_v3<'a>(
     }
     output.copy_from_slice(scratch);
     Ok(ExecutionCandidateV2::Accepted(output))
+}
+
+fn exact_candidate_capacities(
+    outcome_count: u32,
+    authenticated_input: &[u8],
+    scratch: &[u8],
+    output: &[u8],
+) -> Result<()> {
+    let required = general_hot_candidate_bank_len_v3(outcome_count)?;
+    if authenticated_input.len() != required
+        || scratch.len() != required
+        || output.len() != required
+    {
+        Err(GeneralHotCandidateErrorV3::InvalidCapacity)
+    } else {
+        Ok(())
+    }
+}
+
+const fn selection_phase_tag(phase: RuntimeSelectionPhaseV2) -> u64 {
+    match phase {
+        RuntimeSelectionPhaseV2::Open => 1,
+        RuntimeSelectionPhaseV2::Frozen => 2,
+    }
+}
+
+const fn settlement_phase_tag(phase: crate::runtime_width::SettlementPhaseV2) -> u64 {
+    match phase {
+        crate::runtime_width::SettlementPhaseV2::Collecting => 4,
+        crate::runtime_width::SettlementPhaseV2::Materializing => 5,
+        crate::runtime_width::SettlementPhaseV2::Distributing => 6,
+        crate::runtime_width::SettlementPhaseV2::ReadyToClose => 7,
+        crate::runtime_width::SettlementPhaseV2::Terminal => 8,
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1011,7 +1208,10 @@ mod tests {
     use std::{vec, vec::Vec};
 
     use super::*;
-    use crate::runtime_settlement::RUNTIME_SETTLEMENT_EFFECT_HEADER_BYTES_V2;
+    use crate::{
+        runtime_settlement::RUNTIME_SETTLEMENT_EFFECT_HEADER_BYTES_V2,
+        runtime_width::{SettlementCursorHeaderV2, SettlementPhaseV2, settlement_cursor_len},
+    };
 
     fn put_test(output: &mut [u8], offset: usize, value: &[u8]) {
         output[offset..offset + value.len()].copy_from_slice(value);
@@ -1039,6 +1239,27 @@ mod tests {
             put_test(&mut output, offset, &3_u64.to_le_bytes());
         }
         RuntimeSettlementEffectPlanV2::decode(&output).expect("canonical plan");
+        output
+    }
+
+    fn materialize_cursor(outcome_count: u32) -> Vec<u8> {
+        let mut output = vec![0; settlement_cursor_len(outcome_count).expect("cursor width")];
+        SettlementCursorV2::encode_into(
+            SettlementCursorHeaderV2 {
+                outcome_count,
+                order_count: 1,
+                next_order: 0,
+                revision: 8,
+                candidate_id: [0x31; 32],
+                quote_inventory: 0,
+                complete_set_quantity: 3,
+                terminal_coordinate: 0,
+                phase: SettlementPhaseV2::Distributing,
+            },
+            &vec![3; usize::try_from(outcome_count).expect("test width")],
+            &mut output,
+        )
+        .expect("cursor encode");
         output
     }
 
@@ -1109,6 +1330,7 @@ mod tests {
             let mut output = vec![0x55_u8; input.len()];
             let accepted = project_general_hot_candidate_v3(
                 &materialize_plan(outcome_count),
+                &materialize_cursor(outcome_count),
                 outcome_count,
                 environment,
                 &input,
@@ -1185,6 +1407,7 @@ mod tests {
             assert!(
                 project_general_hot_candidate_v3(
                     &plan,
+                    &materialize_cursor(outcome_count),
                     outcome_count,
                     environment,
                     &input,
