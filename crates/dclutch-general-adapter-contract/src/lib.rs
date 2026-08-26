@@ -16,6 +16,8 @@
 #[cfg(test)]
 extern crate std;
 
+/// Complete content-addressed General V3 artifact joins for generic Trading.
+pub mod artifacts_v3;
 /// Exact canonical Claims/Custody packet construction and receipt verification.
 pub mod child_packets;
 /// Exact funded batch, candidate, page, abort, and terminal lifecycle.

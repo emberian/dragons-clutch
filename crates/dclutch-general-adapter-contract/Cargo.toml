@@ -10,12 +10,18 @@ description = "Bounded verifier and streamed settlement contract for General cle
 path = "src/lib.rs"
 
 [dependencies]
+dclutch-account-profile-contract = { path = "../dclutch-account-profile-contract" }
+dclutch-capability-program-contract = { path = "../dclutch-capability-program-contract" }
 dclutch-claims-svm = { path = "../dclutch-claims-svm" }
+dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-custody-contract = { path = "../dclutch-custody-contract" }
+dclutch-effect-kernel = { path = "../dclutch-effect-kernel" }
 dclutch-execution-strategy-contract = { path = "../dclutch-execution-strategy-contract" }
 dclutch-general-codec = { path = "../dclutch-general-codec" }
+dclutch-general-config-contract = { path = "../dclutch-general-config-contract" }
 dclutch-request-profile-contract = { path = "../dclutch-request-profile-contract" }
 dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
+dclutch-transition-vm = { path = "../dclutch-transition-vm" }
 sha2 = { version = "=0.10.9", default-features = false }
 
 [lints]
