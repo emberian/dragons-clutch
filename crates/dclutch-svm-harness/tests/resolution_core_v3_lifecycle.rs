@@ -1,12 +1,12 @@
 //! Real-SVM evidence for the current Resolution terminal-retirement waist.
 //!
-//! The fixture loads only compiled Registry, Core, and Resolution ELFs. It
-//! starts from an authenticated provider-produced terminal Source/certificate
-//! boundary, then executes the chain-derived AdmitTerminal, permissionless
-//! BeginRetiring, and chain-derived CloseFund instructions. A deliberately
-//! stale second retirement instruction proves rollback of the preceding
-//! physical close across Core, Source, all three Funds, the closure output,
-//! and the immutable RentCredit beneficiary.
+//! The fixture loads compiled Registry, Core, Resolution, and Custody ELFs. It
+//! executes exact Resolution funding creation/readiness into canonical Custody
+//! opening, and separately starts from an authenticated provider-produced
+//! terminal Source/certificate boundary to execute chain-derived terminal
+//! admission and closure. A deliberately stale retirement instruction proves
+//! rollback of the physical close across Core, Source, all three Funds, the
+//! closure output, and the immutable RentCredit beneficiary.
 
 use std::{env, fs, path::PathBuf};
 
@@ -18,6 +18,10 @@ use dclutch_capability_contract::{
     MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
 };
 use dclutch_core_contract::ContentId as CoreContentId;
+use dclutch_custody_contract::{
+    CallerRoleV1, CompartmentV1, ContextV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1,
+    CustodyReplayV1, CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
+};
 use dclutch_market_core_codec::{
     Action, CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase,
     Readiness, Request,
@@ -31,6 +35,9 @@ use dclutch_product_runtime_v2_admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
     RESULT_DOMAIN_SCHEMA_ID_V2,
 };
+use dclutch_realm_contract::{
+    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
+};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
@@ -39,8 +46,8 @@ use dclutch_registry_contract::{
     initialize_activation_cache_v1,
 };
 use dclutch_release_set_contract::{
-    ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
-    ProgramIdentityV1,
+    ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
+    ExecutionRoleV1, ProgramIdentityV1,
 };
 use dclutch_rent_contract::{RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1};
 use dclutch_resolution_codec::{
@@ -62,6 +69,7 @@ use dclutch_source_contract::{
     SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SourceCapacityProfileV1, SourceMaterialV2,
     SourceResolutionPhaseV1, SourceResolutionStateV2,
 };
+use dclutch_token_svm::{LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES};
 use solana_account::Account;
 use solana_program::{
     clock::Clock,
@@ -70,16 +78,20 @@ use solana_program::{
     pubkey::Pubkey,
     rent::Rent,
 };
+use solana_program_option::COption;
+use solana_program_pack::Pack;
 use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
 use solana_sdk::signature::Signer;
 use solana_sdk_ids::{bpf_loader_upgradeable, native_loader, system_program, sysvar};
 use solana_system_interface::instruction::transfer;
 use solana_transaction::Transaction;
+use spl_token_interface::state::Mint as SplMint;
 
 const CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x71; 32]);
 const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x72; 32]);
 const RESOLUTION_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x73; 32]);
 const RENT_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x74; 32]);
+const CUSTODY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x75; 32]);
 const GENERATION: u64 = 7;
 const TERMINAL_SEQUENCE: u64 = 1;
 const TERMINAL_TIME: i64 = 1_787_431_680;
@@ -87,6 +99,7 @@ const BOUNTY: u64 = 7;
 
 struct Elves {
     core: Vec<u8>,
+    custody: Vec<u8>,
     registry: Vec<u8>,
     resolution: Vec<u8>,
 }
@@ -99,10 +112,18 @@ struct RecordPair {
 
 struct Fixture {
     test: Option<ProgramTest>,
+    release_set: [u8; 32],
     market: Pubkey,
     activation: Pubkey,
     core_programdata: Pubkey,
+    custody_programdata: Pubkey,
     resolution_programdata: Pubkey,
+    realm: [u8; 32],
+    realm_record: RecordPair,
+    mint: Pubkey,
+    replay: Pubkey,
+    vault: Pubkey,
+    custody_authority: Pubkey,
     source_material: RecordPair,
     capability_manifest: RecordPair,
     recovery_policy: RecordPair,
@@ -142,6 +163,7 @@ fn artifacts() -> Elves {
     let directory = PathBuf::from(env::var("SBF_OUT_DIR").expect("SBF_OUT_DIR is required"));
     Elves {
         core: fs::read(directory.join("dclutch_core_sbf.so")).expect("Core ELF"),
+        custody: fs::read(directory.join("dclutch_custody_sbf.so")).expect("Custody ELF"),
         registry: fs::read(directory.join("dclutch_registry_sbf.so")).expect("Registry ELF"),
         resolution: fs::read(directory.join("dclutch_resolution_proof_sbf.so"))
             .expect("Resolution ELF"),
@@ -223,13 +245,17 @@ fn activation_input(release: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
     )
 }
 
-fn activation(core: ArtifactReleaseV1, resolution: ArtifactReleaseV1) -> ([u8; 32], Vec<u8>) {
+fn activation(
+    core: ArtifactReleaseV1,
+    resolution: ArtifactReleaseV1,
+    custody: ArtifactReleaseV1,
+) -> ([u8; 32], Vec<u8>) {
     let release_set = ExecutionReleaseSetV1::new(
         binding(core),
         binding(core),
         binding(core),
         binding(resolution),
-        binding(core),
+        binding(custody),
     )
     .expect("execution release set");
     let release_set_id = hash(&release_set.to_bytes()).to_bytes();
@@ -241,7 +267,7 @@ fn activation(core: ArtifactReleaseV1, resolution: ArtifactReleaseV1) -> ([u8; 3
         (ExecutionRoleV1::Claims, core),
         (ExecutionRoleV1::Trading, core),
         (ExecutionRoleV1::Resolution, resolution),
-        (ExecutionRoleV1::Custody, core),
+        (ExecutionRoleV1::Custody, custody),
     ] {
         activate_execution_role_into_v1(
             &mut bytes,
@@ -264,6 +290,22 @@ fn protocol_account(owner: Pubkey, data: Vec<u8>) -> Account {
         executable: false,
         rent_epoch: 0,
     }
+}
+
+fn mint_data() -> Vec<u8> {
+    let mut bytes = vec![0; SplMint::LEN];
+    SplMint::pack(
+        SplMint {
+            mint_authority: COption::None,
+            supply: 0,
+            decimals: 6,
+            is_initialized: true,
+            freeze_authority: COption::None,
+        },
+        &mut bytes,
+    )
+    .expect("production collateral Mint");
+    bytes
 }
 
 fn add_record(test: &mut ProgramTest, schema: [u8; 32], data: Vec<u8>) -> RecordPair {
@@ -343,6 +385,77 @@ fn funding_key(
     Pubkey::find_program_address(&derivation.seed_components(), &RESOLUTION_PROGRAM_ID).0
 }
 
+fn custody_request(
+    release_set: [u8; 32],
+    market: Pubkey,
+    realm: [u8; 32],
+    mint: Pubkey,
+    payer: Pubkey,
+    rent_refund: Pubkey,
+    operation: OperationV1,
+) -> CustodyRequestV1 {
+    let core_request = Request::administrative(
+        Action::OpenMarket,
+        GENERATION,
+        CoreIdentity::new(market.to_bytes()).expect("Market"),
+    )
+    .encode()
+    .expect("Core open request");
+    let mut request = CustodyRequestV1 {
+        operation: OperationV1::InitializeReplay,
+        caller_role: CallerRoleV1::Core,
+        source_compartment: CompartmentV1::None,
+        destination_compartment: CompartmentV1::None,
+        release_set,
+        market: market.to_bytes(),
+        realm,
+        context: market.to_bytes(),
+        caller_program: CORE_PROGRAM_ID.to_bytes(),
+        semantic: ContextV1 {
+            candidate: [0; 32],
+            source_owner: [0; 32],
+            destination_owner: [0; 32],
+            order: [0; 32],
+            parent_request_digest: hash(&core_request).to_bytes(),
+            order_nonce: 0,
+            generation: GENERATION,
+            page_index: 0,
+            execution_index: 0,
+            transfer_index: 0,
+        },
+        source: [0; 32],
+        destination: [0; 32],
+        source_vault_context: [0; 32],
+        destination_vault_context: [0; 32],
+        mint: [0; 32],
+        token_program: [0; 32],
+        payer: payer.to_bytes(),
+        rent_refund: rent_refund.to_bytes(),
+        expected_revision: 0,
+        resulting_revision: 1,
+        amount: 0,
+        rent_lamports: Rent::default()
+            .minimum_balance(dclutch_custody_contract::CUSTODY_REPLAY_BYTES_V1),
+    };
+    if operation == OperationV1::OpenVault {
+        request.operation = operation;
+        request.destination_compartment = CompartmentV1::HoardPrincipal;
+        request.destination_vault_context = market.to_bytes();
+        request.mint = mint.to_bytes();
+        request.token_program = LEGACY_TOKEN_PROGRAM_ID;
+        request.expected_revision = 1;
+        request.resulting_revision = 2;
+        request.rent_lamports = Rent::default().minimum_balance(dclutch_token_svm::ACCOUNT_BYTES);
+        request.destination = Pubkey::find_program_address(
+            &CustodyVaultSeedsV1::from_request(request, false).as_slices(),
+            &CUSTODY_PROGRAM_ID,
+        )
+        .0
+        .to_bytes();
+    }
+    request
+}
+
 fn fixture(preload_terminal: bool) -> Fixture {
     let elves = artifacts();
     let mut test = ProgramTest::default();
@@ -357,6 +470,12 @@ fn fixture(preload_terminal: bool) -> Fixture {
     add_program(&mut test, "dclutch_core_sbf", CORE_PROGRAM_ID, &elves.core);
     add_program(
         &mut test,
+        "dclutch_custody_sbf",
+        CUSTODY_PROGRAM_ID,
+        &elves.custody,
+    );
+    add_program(
+        &mut test,
         "dclutch_resolution_proof_sbf",
         RESOLUTION_PROGRAM_ID,
         &elves.resolution,
@@ -368,7 +487,9 @@ fn fixture(preload_terminal: bool) -> Fixture {
         RESOLUTION_CONTROLLER_RELEASE_ID_V4,
         &elves.resolution,
     );
-    let (release_set, activation_data) = activation(core_release, resolution_release);
+    let custody_release = release(CUSTODY_PROGRAM_ID, [0x42; 32], &elves.custody);
+    let (release_set, activation_data) =
+        activation(core_release, resolution_release, custody_release);
     let activation = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, &release_set],
         &REGISTRY_PROGRAM_ID,
@@ -377,6 +498,27 @@ fn fixture(preload_terminal: bool) -> Fixture {
     test.add_account(
         activation,
         protocol_account(REGISTRY_PROGRAM_ID, activation_data),
+    );
+
+    let mint = Pubkey::new_unique();
+    let adapter = PRODUCTION_ADAPTER_RELEASES
+        .first()
+        .copied()
+        .expect("production collateral adapter");
+    let realm_value = RealmV1::new(RealmV1Input {
+        token_program: LEGACY_TOKEN_PROGRAM_ID,
+        collateral_mint: mint.to_bytes(),
+        collateral_adapter_release_id: hash(&adapter.to_bytes()).to_bytes(),
+        mint_authority_policy: MintAuthorityPolicy::RequireAbsent,
+        freeze_authority_policy: FreezeAuthorityPolicy::RequireAbsent,
+    })
+    .expect("immutable Realm");
+    let realm_bytes = realm_value.to_bytes().to_vec();
+    let realm = hash(&realm_bytes).to_bytes();
+    let realm_record = add_record(&mut test, REALM_SCHEMA_RELEASE_ID_V1, realm_bytes);
+    test.add_account(
+        mint,
+        protocol_account(Pubkey::new_from_array(LEGACY_TOKEN_PROGRAM_ID), mint_data()),
     );
 
     let coordinate_id = [0x81; 32];
@@ -550,7 +692,7 @@ fn fixture(preload_terminal: bool) -> Fixture {
 
     let mut identity = MarketIdentity {
         market_id: CoreIdentity::new([0xff; 32]).expect("placeholder Market"),
-        realm_id: CoreIdentity::new([0xb2; 32]).expect("Realm"),
+        realm_id: CoreIdentity::new(realm).expect("Realm"),
         product_record: CoreIdentity::new(product_record_id).expect("Product record"),
         product_id: CoreIdentity::new(product_identity).expect("Product"),
         resolution_policy: CoreIdentity::new(material_id).expect("Source material"),
@@ -698,13 +840,54 @@ fn fixture(preload_terminal: bool) -> Fixture {
         &RESOLUTION_PROGRAM_ID,
     )
     .0;
+    let replay_request = custody_request(
+        release_set,
+        market,
+        realm,
+        mint,
+        system_program::ID,
+        rent_credit,
+        OperationV1::InitializeReplay,
+    );
+    let replay = Pubkey::find_program_address(
+        &CustodyReplaySeedsV1::from_request(replay_request).as_slices(),
+        &CUSTODY_PROGRAM_ID,
+    )
+    .0;
+    let custody_authority = Pubkey::find_program_address(
+        &CustodyAuthoritySeedsV1::from_request(replay_request).as_slices(),
+        &CUSTODY_PROGRAM_ID,
+    )
+    .0;
+    let vault_request = custody_request(
+        release_set,
+        market,
+        realm,
+        mint,
+        system_program::ID,
+        rent_credit,
+        OperationV1::OpenVault,
+    );
+    let vault = Pubkey::find_program_address(
+        &CustodyVaultSeedsV1::from_request(vault_request, false).as_slices(),
+        &CUSTODY_PROGRAM_ID,
+    )
+    .0;
 
     Fixture {
         test: Some(test),
+        release_set,
         market,
         activation,
         core_programdata: programdata(CORE_PROGRAM_ID),
+        custody_programdata: programdata(CUSTODY_PROGRAM_ID),
         resolution_programdata: programdata(RESOLUTION_PROGRAM_ID),
+        realm,
+        realm_record,
+        mint,
+        replay,
+        vault,
+        custody_authority,
         source_material,
         capability_manifest,
         recovery_policy,
@@ -892,6 +1075,79 @@ fn begin_retiring_instruction(fixture: &Fixture) -> Instruction {
     }
 }
 
+fn open_instruction(fixture: &Fixture, payer: Pubkey, operation: OperationV1) -> Instruction {
+    let custody = custody_request(
+        fixture.release_set,
+        fixture.market,
+        fixture.realm,
+        fixture.mint,
+        payer,
+        fixture.rent_credit,
+        operation,
+    );
+    let custody_bytes = custody.to_bytes().expect("Custody request");
+    let authority = Pubkey::find_program_address(
+        &CallerAuthoritySeedsV1::new(
+            CoreContentId::new(custody.release_set).expect("release set"),
+            fixture.market.to_bytes(),
+            ExecutionRoleV1::Core,
+            fixture.market.to_bytes(),
+            hash(&custody_bytes).to_bytes(),
+        )
+        .expect("Core caller seeds")
+        .as_slices(),
+        &CORE_PROGRAM_ID,
+    )
+    .0;
+    let mut accounts = vec![
+        AccountMeta::new_readonly(authority, false),
+        AccountMeta::new(fixture.market, false),
+        AccountMeta::new_readonly(fixture.activation, false),
+        AccountMeta::new_readonly(REGISTRY_PROGRAM_ID, false),
+        AccountMeta::new_readonly(CORE_PROGRAM_ID, false),
+        AccountMeta::new_readonly(fixture.core_programdata, false),
+        AccountMeta::new_readonly(CUSTODY_PROGRAM_ID, false),
+        AccountMeta::new_readonly(fixture.custody_programdata, false),
+        AccountMeta::new_readonly(fixture.realm_record.raw, false),
+        AccountMeta::new_readonly(fixture.realm_record.staging, false),
+        AccountMeta::new(fixture.replay, false),
+    ];
+    match operation {
+        OperationV1::InitializeReplay => accounts.extend([
+            AccountMeta::new(payer, true),
+            AccountMeta::new_readonly(system_program::ID, false),
+            AccountMeta::new_readonly(sysvar::rent::ID, false),
+        ]),
+        OperationV1::OpenVault => accounts.extend([
+            AccountMeta::new_readonly(fixture.mint, false),
+            AccountMeta::new(fixture.vault, false),
+            AccountMeta::new_readonly(fixture.custody_authority, false),
+            AccountMeta::new_readonly(Pubkey::new_from_array(LEGACY_TOKEN_PROGRAM_ID), false),
+            AccountMeta::new(payer, true),
+            AccountMeta::new_readonly(system_program::ID, false),
+            AccountMeta::new_readonly(sysvar::rent::ID, false),
+        ]),
+        OperationV1::Transfer | OperationV1::CloseVault | OperationV1::CloseReplay => {
+            unreachable!("market opening uses only replay initialization and Hoard vault creation")
+        }
+    }
+    let core = Request::administrative(
+        Action::OpenMarket,
+        GENERATION,
+        CoreIdentity::new(fixture.market.to_bytes()).expect("Market"),
+    )
+    .encode()
+    .expect("Core open request");
+    let mut data = Vec::with_capacity(core.len() + custody_bytes.len());
+    data.extend_from_slice(&core);
+    data.extend_from_slice(&custody_bytes);
+    Instruction {
+        program_id: CORE_PROGRAM_ID,
+        accounts,
+        data,
+    }
+}
+
 async fn close_snapshot(
     context: &mut ProgramTestContext,
     fixture: &Fixture,
@@ -1069,6 +1325,60 @@ async fn current_resolution_creates_and_activates_exact_funding() {
         .expect("Funding state");
         assert_eq!(state.status(), FundingStatus::Active);
     }
+
+    let beneficiary_after_readiness = observed(&mut context, fixture.rent_credit)
+        .await
+        .expect("RentCredit after readiness")
+        .lamports;
+    for operation in [OperationV1::InitializeReplay, OperationV1::OpenVault] {
+        let instruction = open_instruction(&fixture, payer, operation);
+        submit(&mut context, &[instruction])
+            .await
+            .expect("Core opens canonical Custody replay and Hoard vault");
+    }
+    let open = CoreState::decode(
+        &observed(&mut context, fixture.market)
+            .await
+            .expect("open Market")
+            .data,
+    )
+    .expect("Core state");
+    assert_eq!(open.phase, Phase::Open);
+    assert_eq!(open.readiness, Readiness::Consumed);
+    let replay = CustodyReplayV1::decode(
+        &observed(&mut context, fixture.replay)
+            .await
+            .expect("Custody replay")
+            .data,
+    )
+    .expect("Custody replay state");
+    assert_eq!(replay.next_revision, 2);
+    assert_eq!(replay.open_vault_count, 1);
+    assert_eq!(replay.rent_refund, fixture.rent_credit.to_bytes());
+    assert_eq!(
+        observed(&mut context, fixture.rent_credit)
+            .await
+            .expect("RentCredit after opening")
+            .lamports,
+        beneficiary_after_readiness,
+        "the sponsor pays creation rent without debiting or rewriting the immutable beneficiary"
+    );
+    let vault = observed(&mut context, fixture.vault)
+        .await
+        .expect("Hoard vault");
+    let profile = PRODUCTION_ADAPTER_RELEASES
+        .first()
+        .expect("production collateral adapter")
+        .profile();
+    let token = profile
+        .check_custody_account(
+            LEGACY_TOKEN_PROGRAM_ID,
+            &vault.data,
+            fixture.mint.to_bytes(),
+            fixture.custody_authority.to_bytes(),
+        )
+        .expect("empty Hoard vault");
+    assert_eq!(token.amount, 0);
 }
 
 #[tokio::test]
