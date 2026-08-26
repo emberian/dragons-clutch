@@ -253,7 +253,7 @@ write_profile() {
     printf '    {"name":"pyth-receiver","program_id":"%s","elf_sha256":"c5079559864fc34dbd5fe87b4aa9fba3a1ed22690363ec490449e8660e73af64"},\n' "$RECEIVER_ID"
     printf '    {"name":"pyth-router","program_id":"%s","elf_sha256":"f9061f03a81b89db29f4603677e3b3d89b3bbf08d67827b2832f18a4e2b61acb"}\n' "$ROUTER_ID"
     printf '  ],\n'
-    printf '  "loader_time_boundary":"Registry, Claims, Trading, Resolution, Custody, and Rent use exact slot-0 immutable Loader headers. Core alone starts with the plan-pinned ephemeral authority, must initialize the profile, and must revoke to the pinned fixed-45-byte None header before immutable release recognition. Current wall clock differs from the captured provider fixture."\n'
+    printf '  "loader_time_boundary":"Registry, Claims, Trading, Resolution, Custody, and Rent use exact slot-0 immutable Loader headers. Core alone starts with the plan-pinned ephemeral authority, must initialize the profile, and must revoke to the pinned tag-None fixed-offset poststate (including Loader-retained inactive authority bytes) before immutable release recognition. Current wall clock differs from the captured provider fixture."\n'
     printf '}\n'
   } > "$ledger/$PROFILE_NAME"
 }

@@ -62,8 +62,6 @@ pub enum Error {
     InvalidLoaderVariant,
     /// Loader ProgramData named an invalid `Option<Pubkey>` tag.
     InvalidUpgradeAuthorityTag,
-    /// Immutable ProgramData padding before the fixed ELF offset was nonzero.
-    NonCanonicalProgramDataPadding,
     /// ProgramData contained no byte after its fixed metadata allocation.
     EmptyElf,
     /// A typed execution-release-set identity refused hostile bytes.
@@ -290,10 +288,11 @@ impl<'a> ProgramDataV3View<'a> {
             return Err(Error::InvalidLoaderVariant);
         }
         let upgrade_authority = match read_byte(bytes, 12)? {
-            0 => {
-                require_zero(bytes, 13, 32).map_err(|_| Error::NonCanonicalProgramDataPadding)?;
-                None
-            }
+            // Loader-v3 serializes the shorter `None` state into the existing
+            // 45-byte metadata region without clearing bytes 13..45. Those
+            // bytes may therefore retain the former authority, but tag zero
+            // makes them inactive and they must never be exposed as one.
+            0 => None,
             1 => Some(read_array(bytes, 13)?),
             _ => return Err(Error::InvalidUpgradeAuthorityTag),
         };

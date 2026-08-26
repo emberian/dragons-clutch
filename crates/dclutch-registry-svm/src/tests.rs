@@ -126,7 +126,7 @@ fn loader_program_requires_exact_variant_two_and_link() {
 }
 
 #[test]
-fn loader_programdata_uses_fixed_offset_and_canonical_immutable_padding() {
+fn loader_programdata_uses_fixed_offset_and_tag_owned_authority_semantics() {
     let elf = [0xa5_u8; 64];
     let mut immutable = [0_u8; LOADER_V3_PROGRAMDATA_METADATA_BYTES + 64];
     put(&mut immutable, 0, &3_u32.to_le_bytes());
@@ -152,12 +152,14 @@ fn loader_programdata_uses_fixed_offset_and_canonical_immutable_padding() {
     assert_eq!(view.upgrade_authority(), Some([0; 32]));
     assert_eq!(view.elf(), elf);
 
-    let mut bad_padding = immutable;
-    bad_padding[13] = 1;
-    assert_eq!(
-        ProgramDataV3View::parse(&bad_padding),
-        Err(Error::NonCanonicalProgramDataPadding)
-    );
+    let mut retained_prior_authority = immutable;
+    put(&mut retained_prior_authority, 13, &bytes(44));
+    let view = ProgramDataV3View::parse(&retained_prior_authority)
+        .expect("Loader None tag owns retained bytes as inactive storage");
+    assert_eq!(view.deployment_slot(), 77);
+    assert_eq!(view.upgrade_authority(), None);
+    assert_eq!(view.elf(), elf);
+    assert_ne!(&retained_prior_authority[13..45], &immutable[13..45]);
     let mut bad_tag = immutable;
     bad_tag[12] = 2;
     assert_eq!(

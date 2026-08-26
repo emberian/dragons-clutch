@@ -2,6 +2,35 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RunProgramInput {
+    pub(crate) program_id: String,
+    pub(crate) elf_path: String,
+    pub(crate) elf_sha256: String,
+    pub(crate) semantic_release_id: String,
+    pub(crate) attestation: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SuccessorRunSpec {
+    pub(crate) schema: String,
+    pub(crate) rpc_url: String,
+    pub(crate) launcher: String,
+    pub(crate) ledger: String,
+    pub(crate) account_dir: String,
+    pub(crate) plan: String,
+    pub(crate) output: String,
+    pub(crate) registry: RunProgramInput,
+    pub(crate) core: RunProgramInput,
+    pub(crate) claims: RunProgramInput,
+    pub(crate) trading: RunProgramInput,
+    pub(crate) resolution: RunProgramInput,
+    pub(crate) custody: RunProgramInput,
+    pub(crate) rent_credit: RunProgramInput,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct ProgramPin {
     pub(crate) program_id: String,
@@ -74,22 +103,40 @@ pub(crate) struct SuccessorPlan {
     pub(crate) genesis_accounts: BTreeMap<String, GenesisAccountPin>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-pub(crate) struct ProviderEvidenceInput {
-    pub(crate) rpc_url: String,
-    pub(crate) provider_state_initialized: bool,
-    pub(crate) captured_release_identity_claimed: bool,
-    pub(crate) price_update: String,
-    pub(crate) price_update_reclaimed: bool,
-    pub(crate) programs: Vec<ProviderProgramInput>,
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct TransactionEvidence {
+    pub(crate) label: String,
+    pub(crate) signature: String,
+    pub(crate) slot: u64,
+    pub(crate) transaction_metadata_available: bool,
+    pub(crate) fee_lamports: Option<u64>,
+    pub(crate) compute_units_consumed: Option<u64>,
+    pub(crate) error: Option<serde_json::Value>,
+    pub(crate) logs: Vec<String>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-pub(crate) struct ProviderProgramInput {
-    pub(crate) name: String,
-    pub(crate) program_id: String,
-    pub(crate) programdata_id: String,
-    pub(crate) observed_deployment_slot: u64,
-    pub(crate) observed_upgrade_authority_effectively_disabled: bool,
-    pub(crate) elf_tail_sha256: String,
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct AccountEvidence {
+    pub(crate) address: String,
+    pub(crate) owner: String,
+    pub(crate) lamports: u64,
+    pub(crate) executable: bool,
+    pub(crate) data_len: usize,
+    pub(crate) data_sha256: String,
+    pub(crate) account_sha256: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct SuccessorRunEvidence {
+    pub(crate) schema: String,
+    pub(crate) rpc_url: String,
+    pub(crate) ledger: String,
+    pub(crate) validator_log: String,
+    pub(crate) plan_sha256: String,
+    pub(crate) core_upgrade_authority_pubkey: String,
+    pub(crate) private_key_persisted: bool,
+    pub(crate) completed: Vec<String>,
+    pub(crate) transactions: Vec<TransactionEvidence>,
+    pub(crate) accounts: BTreeMap<String, AccountEvidence>,
+    pub(crate) market_specific_input_seam: String,
 }

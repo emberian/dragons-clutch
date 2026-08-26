@@ -414,11 +414,11 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
         bootstrap_order: vec![
             "Authenticate immutable Registry/Rent and remaining role Loader facts; authenticate Core ELF under its ephemeral exact upgrade authority.".into(),
             "Use that in-memory Core upgrade-authority signer to initialize the sole 144-byte ProtocolInfrastructureProfile from exact Registry and Rent artifact records.".into(),
-            "Revoke Core upgrade authority to None through Loader-v3 and verify the fixed-45-byte poststate before release recognition.".into(),
+            "Revoke Core upgrade authority to None through Loader-v3 and verify the exact tag-None fixed-offset poststate, including Loader-retained inactive authority bytes, before release recognition.".into(),
             "Activate the five-role immutable ExecutionReleaseSet through Registry, then create RentCredit and execute canonical Found31.".into(),
             "Create and fund Source through Core effects before consuming the captured signed Pyth PriceUpdate through Resolution.".into(),
         ],
-        execution_blocker: "The standalone runner does not yet own one same-process ephemeral Core authority across validator start, infrastructure init, Loader revocation, immutable release activation, and Found31; it fails closed rather than persist a key or recognize the release before revocation.".into(),
+        execution_blocker: "Infrastructure activation is executable in one supervised process. LifecycleRentCreditV2 and Found31 remain behind an explicit market-specific input bundle: finalized Realm, ProductV3 basis/result-domain, portfolio, resolution, execution-manifest, and lifecycle-policy records plus exact generation, immutable refund wallet, initial Hoard principal, and lifecycle-rent funding.".into(),
         account_dir: args.account_dir.display().to_string(),
         registry: pin(&args, ProgramKind::Registry, registry),
         core: pin(&args, ProgramKind::Core, core),
@@ -435,8 +435,10 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
                 &core_elf,
                 Some(args.core_bootstrap_upgrade_authority),
             ))),
-            post_revoke_programdata_sha256: hex(&sha256_bytes(&loader_programdata_bytes(
-                &core_elf, None,
+            post_revoke_programdata_sha256: hex(&sha256_bytes(
+                &loader_programdata_bytes_after_revoke(
+                &core_elf,
+                args.core_bootstrap_upgrade_authority,
             ))),
             release_recognition_requires_revoke: true,
         },
@@ -665,6 +667,19 @@ pub(crate) fn loader_programdata_bytes(elf: &[u8], upgrade_authority: Option<Pub
     bytes
 }
 
+/// Exact Loader-v3 ProgramData bytes after its real `SetAuthority(Some -> None)`
+/// transition. Loader bincode overwrites the 13-byte serialized None state but
+/// does not clear the former 32-byte authority region before the fixed ELF
+/// offset. Those retained bytes are non-authoritative runtime residue.
+pub(crate) fn loader_programdata_bytes_after_revoke(
+    elf: &[u8],
+    prior_authority: Pubkey,
+) -> Vec<u8> {
+    let mut bytes = loader_programdata_bytes(elf, Some(prior_authority));
+    bytes[12] = 0;
+    bytes
+}
+
 fn load_elf(label: &str, path: &Path, expected: &str) -> Result<Vec<u8>> {
     let bytes = fs::read(path)?;
     if bytes.get(..4) != Some(b"\x7fELF") {
@@ -755,15 +770,16 @@ mod tests {
     }
 
     #[test]
-    fn pre_init_core_header_and_post_revoke_header_are_distinct() {
+    fn pre_init_core_and_real_loader_revoke_differ_only_in_authority_tag() {
         let authority = Pubkey::new_unique();
         let initial = loader_programdata_bytes(b"\x7fELFbody", Some(authority));
-        let revoked = loader_programdata_bytes(b"\x7fELFbody", None);
+        let revoked = loader_programdata_bytes_after_revoke(b"\x7fELFbody", authority);
         assert_eq!(initial.len(), revoked.len());
         assert_eq!(initial[12], 1);
         assert_eq!(&initial[13..45], authority.as_ref());
         assert_eq!(revoked[12], 0);
-        assert!(revoked[13..45].iter().all(|byte| *byte == 0));
+        assert_eq!(&revoked[13..45], authority.as_ref());
+        assert_eq!(&initial[..12], &revoked[..12]);
         assert_eq!(&initial[45..], &revoked[45..]);
         assert_ne!(sha256_bytes(&initial), sha256_bytes(&revoked));
     }

@@ -251,7 +251,7 @@ fn hostile_binary_manifests_and_evidence_tampering_refuse() -> Result<()> {
 }
 
 #[test]
-fn loader_link_exact_elf_and_zero_padding_are_all_required() -> Result<()> {
+fn loader_link_exact_elf_tail_padding_and_authority_tag_are_all_required() -> Result<()> {
     let fixture = Fixture::capability()?;
 
     let mut wrong_link = Fixture::capability()?;
@@ -307,11 +307,11 @@ fn loader_link_exact_elf_and_zero_padding_are_all_required() -> Result<()> {
     let immutable = build_checked_release(none.evidence())?;
     assert_eq!(immutable.upgrade_authority(), None);
     *none.programdata.get_mut(13).ok_or(Error::InvalidLength)? = 1;
+    let immutable_with_loader_residue = build_checked_release(none.evidence())?;
+    assert_eq!(immutable_with_loader_residue.upgrade_authority(), None);
     assert_eq!(
-        build_checked_release(none.evidence()),
-        Err(Error::LoaderV3(
-            LoaderV3Error::NonCanonicalProgramDataPadding
-        ))
+        immutable_with_loader_residue.artifact_digest(),
+        immutable.artifact_digest()
     );
     Ok(())
 }

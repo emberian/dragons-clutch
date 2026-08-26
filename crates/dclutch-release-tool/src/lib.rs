@@ -812,15 +812,6 @@ pub fn build_checked_release(evidence: ReleaseEvidenceV1<'_>) -> Result<CheckedR
     if padding.iter().any(|byte| *byte != 0) {
         return Err(Error::NonZeroProgramDataPadding);
     }
-    if programdata.upgrade_authority().is_none() {
-        let reserved_authority = evidence
-            .programdata_account_data
-            .get(13..LOADER_V3_PROGRAMDATA_METADATA_BYTES)
-            .ok_or(Error::ProgramDataTooShort)?;
-        if reserved_authority.iter().any(|byte| *byte != 0) {
-            return Err(Error::NonCanonicalUpgradeAuthority);
-        }
-    }
     let semantic_preimage_len =
         u64::try_from(evidence.semantic_preimage.len()).map_err(|_| Error::ArithmeticOverflow)?;
     let elf_len = u64::try_from(evidence.elf.len()).map_err(|_| Error::ArithmeticOverflow)?;

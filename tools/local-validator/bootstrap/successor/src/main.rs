@@ -6,6 +6,7 @@ use solana_sdk::pubkey::Pubkey;
 
 mod model;
 mod plan;
+mod rpc;
 mod runtime;
 
 type Result<T> = core::result::Result<T, Error>;
@@ -67,32 +68,21 @@ fn run() -> Result<()> {
 }
 
 fn run_runtime(arguments: Vec<String>) -> Result<()> {
-    let mut rpc_url = None;
-    let mut plan = None;
-    let mut provider_evidence = None;
-    let mut output = None;
+    let mut spec = None;
     let mut iterator = arguments.into_iter();
     while let Some(argument) = iterator.next() {
         let value = iterator
             .next()
             .ok_or_else(|| Error::new(format!("{argument} requires a value")))?;
         let slot = match argument.as_str() {
-            "--rpc-url" => &mut rpc_url,
-            "--plan" => &mut plan,
-            "--provider-evidence" => &mut provider_evidence,
-            "--output" => &mut output,
+            "--spec" => &mut spec,
             _ => return Err(Error::new(format!("unknown run argument: {argument}"))),
         };
         if slot.replace(value).is_some() {
             return Err(Error::new(format!("{argument} may be supplied only once")));
         }
     }
-    runtime::execute(&runtime::RunArgs {
-        rpc_url: required(rpc_url, "--rpc-url")?,
-        plan_path: absolute(plan, "--plan")?,
-        provider_evidence_path: absolute(provider_evidence, "--provider-evidence")?,
-        output: absolute(output, "--output")?,
-    })
+    runtime::execute(&absolute(spec, "--spec")?)
 }
 
 fn run_prepare(arguments: Vec<String>) -> Result<()> {
@@ -263,6 +253,6 @@ fn parse_pubkey(value: Option<String>, label: &str) -> Result<Pubkey> {
 
 fn usage() {
     println!(
-        "Usage:\n  dclutch-local-successor-bootstrap prepare --account-dir ABSOLUTE_NEW_DIR --output ABSOLUTE_NEW_JSON --registry-program-id PUBKEY --registry-elf ABSOLUTE_ELF --registry-sha256 SHA256 --registry-semantic-release-id SHA256 --core-program-id PUBKEY --core-elf ABSOLUTE_ELF --core-sha256 SHA256 --core-semantic-release-id SHA256 --core-bootstrap-upgrade-authority PUBKEY --claims-program-id PUBKEY --claims-elf ABSOLUTE_ELF --claims-sha256 SHA256 --claims-semantic-release-id SHA256 --trading-program-id PUBKEY --trading-elf ABSOLUTE_ELF --trading-sha256 SHA256 --trading-semantic-release-id SHA256 --resolution-program-id PUBKEY --resolution-elf ABSOLUTE_ELF --resolution-sha256 SHA256 --resolution-semantic-release-id SHA256 --custody-program-id PUBKEY --custody-elf ABSOLUTE_ELF --custody-sha256 SHA256 --custody-semantic-release-id SHA256 --rent-credit-program-id PUBKEY --rent-credit-elf ABSOLUTE_ELF --rent-credit-sha256 SHA256 --rent-credit-semantic-release-id SHA256\n  dclutch-local-successor-bootstrap run --rpc-url LOOPBACK_HTTP_ORIGIN --plan ABSOLUTE_JSON --provider-evidence ABSOLUTE_JSON --output ABSOLUTE_NEW_JSON\n\nThe prepare command records the caller's in-memory ephemeral Core authority public key. The run command currently validates the complete substrate and then fails closed before any RPC call; the next joined runner must own that same key in process for init and immediate Loader revocation."
+        "Usage:\n  dclutch-local-successor-bootstrap prepare --account-dir ABSOLUTE_NEW_DIR --output ABSOLUTE_NEW_JSON --registry-program-id PUBKEY --registry-elf ABSOLUTE_ELF --registry-sha256 SHA256 --registry-semantic-release-id SHA256 --core-program-id PUBKEY --core-elf ABSOLUTE_ELF --core-sha256 SHA256 --core-semantic-release-id SHA256 --core-bootstrap-upgrade-authority PUBKEY --claims-program-id PUBKEY --claims-elf ABSOLUTE_ELF --claims-sha256 SHA256 --claims-semantic-release-id SHA256 --trading-program-id PUBKEY --trading-elf ABSOLUTE_ELF --trading-sha256 SHA256 --trading-semantic-release-id SHA256 --resolution-program-id PUBKEY --resolution-elf ABSOLUTE_ELF --resolution-sha256 SHA256 --resolution-semantic-release-id SHA256 --custody-program-id PUBKEY --custody-elf ABSOLUTE_ELF --custody-sha256 SHA256 --custody-semantic-release-id SHA256 --rent-credit-program-id PUBKEY --rent-credit-elf ABSOLUTE_ELF --rent-credit-sha256 SHA256 --rent-credit-semantic-release-id SHA256\n  dclutch-local-successor-bootstrap run --spec ABSOLUTE_JSON\n\nThe run command is the canonical same-process supervisor. It creates one ephemeral Core authority only in memory, prepares its public key into fresh genesis inputs, starts a guarded foreground localhost validator, initializes Core infrastructure, proves pre-revocation release refusal, revokes Loader-v3 authority to None, and activates the immutable release set. It never reads a wallet or CLI configuration."
     );
 }
