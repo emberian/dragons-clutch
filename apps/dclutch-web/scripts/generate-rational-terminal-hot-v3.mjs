@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = new URL('../../../', import.meta.url);
 const sources = Object.freeze({
-  child: readFileSync(new URL('crates/dclutch-rational-representation-v2-contract/src/generated.rs', root), 'utf8'),
+  child: readFileSync(new URL('crates/dclutch-rational-representation-v2-request-contract/src/generated.rs', root), 'utf8'),
   hot: readFileSync(new URL('crates/dclutch-rational-representation-v2-contract/src/generated_hot_v3.rs', root), 'utf8'),
 });
 const outputUrl = new URL('../lib/generated/rationalTerminalHotV3.ts', import.meta.url);
