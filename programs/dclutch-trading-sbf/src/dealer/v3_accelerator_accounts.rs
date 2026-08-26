@@ -25,7 +25,7 @@ use dclutch_custody_contract::{
     CustodyReplaySeedsV1, CustodyReplayV1, CustodyVaultSeedsV1,
 };
 use dclutch_dealer_codec::{
-    config_v3::{DEALER_CONFIG_SCHEMA_PREIMAGE_V3, DealerConfigV3},
+    config_v4::{DEALER_CONFIG_SCHEMA_PREIMAGE_V4, DealerConfigV4},
     scenario::ClaimsInventoryObservation,
 };
 use dclutch_realm_contract::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
@@ -247,7 +247,7 @@ fn evaluate_authenticated_candidate_v4(
     invocation: &AuthenticatedAcceleratorInvocationV4<'_, '_, '_>,
     request: DealerScenarioTradeRequestV3<'_>,
     width: usize,
-    config: DealerConfigV3,
+    config: DealerConfigV4,
     claims: &ClaimsObservationV4,
     current_obligation: DealerObligationProjectionV3<'_>,
     collateral: &CollateralObservationV4,
@@ -377,9 +377,9 @@ fn authenticate_config(
     invocation: &AuthenticatedAcceleratorInvocationV4<'_, '_, '_>,
     request: DealerScenarioTradeRequestV3<'_>,
     runtime: &[AccountInfo<'_>],
-) -> Result<DealerConfigV3, DealerScenarioAcceleratorErrorV4> {
+) -> Result<DealerConfigV4, DealerScenarioAcceleratorErrorV4> {
     let descriptor = invocation.descriptor();
-    if descriptor.config_schema().to_bytes() != hash(DEALER_CONFIG_SCHEMA_PREIMAGE_V3).to_bytes() {
+    if descriptor.config_schema().to_bytes() != hash(DEALER_CONFIG_SCHEMA_PREIMAGE_V4).to_bytes() {
         return Err(DealerScenarioAcceleratorErrorV4::SemanticJoin);
     }
     let account = runtime
@@ -391,18 +391,42 @@ fn authenticate_config(
     if hash(&data).to_bytes() != invocation.context().config.to_bytes() {
         return Err(DealerScenarioAcceleratorErrorV4::SemanticJoin);
     }
-    let config = DealerConfigV3::decode(&data)
+    let config = DealerConfigV4::decode(&data)
         .map_err(|_| DealerScenarioAcceleratorErrorV4::SemanticJoin)?;
-    if config.release_set() != request.release_set
-        || config.market() != request.market
-        || config.position_owner() != request.dealer_owner
-        || request.release_set != invocation.context().release_set.to_bytes()
-        || request.market != invocation.context().market.to_bytes()
-        || request.child_root != invocation.context().root.to_bytes()
-    {
-        return Err(DealerScenarioAcceleratorErrorV4::SemanticJoin);
-    }
+    authenticate_config_context_join(
+        config,
+        request.release_set,
+        request.market,
+        request.child_root,
+        request.dealer_owner,
+        invocation.context().release_set.to_bytes(),
+        invocation.context().market.to_bytes(),
+        invocation.context().root.to_bytes(),
+    )?;
     Ok(config)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_config_context_join(
+    config: DealerConfigV4,
+    request_release_set: [u8; 32],
+    request_market: [u8; 32],
+    request_child_root: [u8; 32],
+    request_dealer_owner: [u8; 32],
+    authenticated_release_set: [u8; 32],
+    authenticated_market: [u8; 32],
+    authenticated_root: [u8; 32],
+) -> Result<(), DealerScenarioAcceleratorErrorV4> {
+    if config.release_set() != request_release_set
+        || config.position_owner() != request_dealer_owner
+        || request_release_set != authenticated_release_set
+        || request_market != authenticated_market
+        || request_child_root != authenticated_root
+    {
+        Err(DealerScenarioAcceleratorErrorV4::SemanticJoin)
+    } else {
+        Ok(())
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -413,7 +437,7 @@ fn authenticate_claims(
     frame: DealerScenarioLogicalFrameV4,
     runtime: &[AccountInfo<'_>],
     width: usize,
-    config: DealerConfigV3,
+    config: DealerConfigV4,
 ) -> Result<Box<ClaimsObservationV4>, DealerScenarioAcceleratorErrorV4> {
     let claims_start = usize::try_from(frame.claims_fixed_start)
         .map_err(|_| DealerScenarioAcceleratorErrorV4::Arithmetic)?;
@@ -655,7 +679,7 @@ fn authenticate_collateral(
     frame: DealerScenarioLogicalFrameV4,
     spans: [u32; DEALER_SCENARIO_PROFILE_SPANS_V4],
     runtime: &[AccountInfo<'_>],
-    config: DealerConfigV3,
+    config: DealerConfigV4,
     core_market: [u8; 32],
 ) -> Result<Box<CollateralObservationV4>, DealerScenarioAcceleratorErrorV4> {
     if core_market != request.market {
@@ -919,7 +943,7 @@ fn is_canonical_internal_vault(observed: TokenObservationV4, authority: [u8; 32]
 
 fn authenticate_realm(
     invocation: &AuthenticatedAcceleratorInvocationV4<'_, '_, '_>,
-    config: DealerConfigV3,
+    config: DealerConfigV4,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
 ) -> Result<RealmV1, DealerScenarioAcceleratorErrorV4> {
@@ -963,7 +987,7 @@ fn authenticate_realm(
 fn authenticate_custody_common(
     invocation: &AuthenticatedAcceleratorInvocationV4<'_, '_, '_>,
     request: DealerScenarioTradeRequestV3<'_>,
-    config: DealerConfigV3,
+    config: DealerConfigV4,
     route: &[AccountInfo<'_>],
     representative: &[AccountInfo<'_>],
     replay: Pubkey,
@@ -1049,7 +1073,7 @@ fn vault_key(
 
 fn custody_shape_request(
     request: DealerScenarioTradeRequestV3<'_>,
-    config: DealerConfigV3,
+    config: DealerConfigV4,
     trading_program: [u8; 32],
     mint: [u8; 32],
     token_program: [u8; 32],
@@ -1139,6 +1163,10 @@ fn relative_account<'a, 'info>(
 mod tests {
     use super::*;
 
+    const fn id(tag: u8) -> [u8; 32] {
+        [tag; 32]
+    }
+
     #[test]
     fn position_span_never_becomes_a_custody_slot() {
         let spans = [14, 0, 14, 0, 2, 0, 14, 3];
@@ -1158,6 +1186,37 @@ mod tests {
         assert_eq!(
             scenario_collateral_evidence_count([14, 14, 0, 0, 14, 0], 2),
             Err(DealerScenarioAcceleratorErrorV4::Custody)
+        );
+    }
+
+    #[test]
+    fn acyclic_config_cannot_cross_market_authenticated_root_context() {
+        let config = DealerConfigV4::new(id(1), id(2), id(3), 0).expect("config");
+        assert_eq!(
+            authenticate_config_context_join(
+                config,
+                id(1),
+                id(4),
+                id(5),
+                id(3),
+                id(1),
+                id(4),
+                id(5),
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            authenticate_config_context_join(
+                config,
+                id(1),
+                id(4),
+                id(5),
+                id(3),
+                id(1),
+                id(6),
+                id(5),
+            ),
+            Err(DealerScenarioAcceleratorErrorV4::SemanticJoin)
         );
     }
 }

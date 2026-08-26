@@ -9,6 +9,7 @@ const sources = Object.freeze({
   obligation: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/v3_obligation.rs', root), 'utf8'),
   release: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/v3_release.rs', root), 'utf8'),
   dealer: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/mod.rs', root), 'utf8'),
+  config: readFileSync(new URL('crates/dclutch-dealer-codec/src/config_v4.rs', root), 'utf8'),
   delta: readFileSync(new URL('crates/dclutch-claims-svm/src/signed_delta_v3.rs', root), 'utf8'),
   deltaFrame: readFileSync(new URL('crates/dclutch-claims-svm/src/frame_spec_v1.rs', root), 'utf8'),
   strategy: readFileSync(new URL('crates/dclutch-execution-strategy-contract/src/generated_v2.rs', root), 'utf8'),
@@ -38,6 +39,12 @@ function array(name, values) {
 }
 
 const scalars = Object.freeze([
+  ['config', 'DEALER_CONFIG_VERSION_V4'],
+  ['config', 'DEALER_CONFIG_BYTES_V4'],
+  ['config', 'DEALER_CONFIG_RELEASE_SET_OFFSET_V4'],
+  ['config', 'DEALER_CONFIG_REALM_OFFSET_V4'],
+  ['config', 'DEALER_CONFIG_POSITION_OWNER_OFFSET_V4'],
+  ['config', 'DEALER_CONFIG_LOCKED_CAPITAL_FLOOR_OFFSET_V4'],
   ['request', 'DEALER_EQUITY_REQUEST_VERSION_V3'],
   ['request', 'DEALER_EQUITY_SELECTOR_OFFSET_V3'],
   ['request', 'DEALER_EQUITY_HEADER_BYTES_V3'],
@@ -116,6 +123,8 @@ let output = '// @generated from canonical Rust Dealer V3 ABIs; do not edit.\n';
 output += '// Regenerate with: npm run abi:dealer-v3\n\n';
 for (const [source, name, outputName = name] of scalars) output += `export const ${outputName} = ${scalar(source, name)} as const;\n`;
 for (const [source, name, outputName = name] of [
+  ['config', 'DEALER_CONFIG_MAGIC_V4'],
+  ['config', 'DEALER_CONFIG_SCHEMA_PREIMAGE_V4'],
   ['request', 'DEALER_EQUITY_REQUEST_MAGIC_V3'],
   ['lp', 'DEALER_LP_POSITION_MAGIC_V3'],
   ['lp', 'DEALER_LP_POSITION_PDA_DOMAIN_V3'],
@@ -125,7 +134,6 @@ for (const [source, name, outputName = name] of [
   ['strategy', 'EXECUTION_STRATEGY_PROGRAM_MAGIC_V2'],
   ['accountProfile', 'MAGIC', 'ACCOUNT_PROFILE_MAGIC_V2'],
   ['dealer', 'DEALER_KIND_PREIMAGE_V2'],
-  ['dealer', 'DEALER_CONFIG_SCHEMA_PREIMAGE_V2'],
   ['dealer', 'DEALER_ROOT_SCHEMA_PREIMAGE_V2'],
   ['release', 'DEALER_EQUITY_REQUEST_SCHEMA_PREIMAGE_V3'],
 ]) output += array(outputName, bytes(source, name));

@@ -14,7 +14,7 @@ use dclutch_capability_program_contract::{
     v3::{CAPABILITY_PROGRAM_V3_BYTES, CapabilityProgramV3},
 };
 use dclutch_core_contract::ContentId;
-use dclutch_dealer_codec::config_v3::DEALER_CONFIG_SCHEMA_PREIMAGE_V3;
+use dclutch_dealer_codec::config_v4::DEALER_CONFIG_SCHEMA_PREIMAGE_V4;
 use dclutch_execution_strategy_contract::v2::{
     EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
@@ -239,7 +239,7 @@ pub fn finalize_dealer_equity_descriptor_v3(
     };
     let descriptor = CapabilityProgramV3::new(
         content_id(hash(DEALER_KIND_PREIMAGE_V2).to_bytes())?,
-        content_id(hash(DEALER_CONFIG_SCHEMA_PREIMAGE_V3).to_bytes())?,
+        content_id(hash(DEALER_CONFIG_SCHEMA_PREIMAGE_V4).to_bytes())?,
         dealer_request_schema_v3(selector)?,
         content_id(hash(DEALER_ROOT_SCHEMA_PREIMAGE_V2).to_bytes())?,
         content_id(hash(artifacts.account_profile).to_bytes())?,
@@ -392,7 +392,7 @@ pub fn finalize_dealer_lp_descriptor_v3(
     }
     let descriptor = CapabilityProgramV3::new(
         content_id(hash(DEALER_KIND_PREIMAGE_V2).to_bytes())?,
-        content_id(hash(DEALER_CONFIG_SCHEMA_PREIMAGE_V3).to_bytes())?,
+        content_id(hash(DEALER_CONFIG_SCHEMA_PREIMAGE_V4).to_bytes())?,
         dealer_request_schema_v3(selector)?,
         content_id(hash(DEALER_ROOT_SCHEMA_PREIMAGE_V2).to_bytes())?,
         content_id(hash(artifacts.account_profile).to_bytes())?,
@@ -425,7 +425,7 @@ pub fn encode_dealer_global_program_set_v3(
     descriptors: &[[u8; CAPABILITY_PROGRAM_V3_BYTES]; DEALER_GLOBAL_SELECTOR_COUNT_V3],
 ) -> Result<[u8; DEALER_GLOBAL_PROGRAM_SET_BYTES_V3], DealerReleaseErrorV3> {
     let expected_kind = content_id(hash(DEALER_KIND_PREIMAGE_V2).to_bytes())?;
-    let expected_config = content_id(hash(DEALER_CONFIG_SCHEMA_PREIMAGE_V3).to_bytes())?;
+    let expected_config = content_id(hash(DEALER_CONFIG_SCHEMA_PREIMAGE_V4).to_bytes())?;
     let expected_root = content_id(hash(DEALER_ROOT_SCHEMA_PREIMAGE_V2).to_bytes())?;
     let mut output = [0_u8; DEALER_GLOBAL_PROGRAM_SET_BYTES_V3];
     put(&mut output, 0, &CAPABILITY_PROGRAM_SET_MAGIC_V1)?;
@@ -556,7 +556,7 @@ mod tests {
     fn descriptor(selector: u16) -> [u8; CAPABILITY_PROGRAM_V3_BYTES] {
         CapabilityProgramV3::new(
             content_id(hash(DEALER_KIND_PREIMAGE_V2).to_bytes()).expect("kind"),
-            content_id(hash(DEALER_CONFIG_SCHEMA_PREIMAGE_V3).to_bytes()).expect("config"),
+            content_id(hash(DEALER_CONFIG_SCHEMA_PREIMAGE_V4).to_bytes()).expect("config"),
             dealer_request_schema_v3(selector).expect("request schema"),
             content_id(hash(DEALER_ROOT_SCHEMA_PREIMAGE_V2).to_bytes()).expect("root"),
             id(1),

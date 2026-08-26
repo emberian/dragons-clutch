@@ -31,7 +31,7 @@ use dclutch_capability_program_contract::{
     },
 };
 use dclutch_core_contract::ContentId;
-use dclutch_dealer_codec::config_v3::DEALER_CONFIG_SCHEMA_PREIMAGE_V3;
+use dclutch_dealer_codec::config_v4::DEALER_CONFIG_SCHEMA_PREIMAGE_V4;
 use dclutch_execution_strategy_contract::v2::{
     EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
@@ -217,7 +217,7 @@ pub fn finalize_dealer_scenario_descriptor_v4(
 
     let descriptor = CapabilityProgramV4::new(
         content(digest(DEALER_KIND_PREIMAGE_V2))?,
-        content(digest(DEALER_CONFIG_SCHEMA_PREIMAGE_V3))?,
+        content(digest(DEALER_CONFIG_SCHEMA_PREIMAGE_V4))?,
         content(digest(DEALER_SCENARIO_TRADE_REQUEST_SCHEMA_PREIMAGE_V3))?,
         content(digest(DEALER_ROOT_SCHEMA_PREIMAGE_V2))?,
         content(CAPABILITY_ROOT_DERIVATION_RELEASE_ID_V1)?,
@@ -399,7 +399,7 @@ fn validate_descriptor_record(
         let descriptor = CapabilityProgramV3::decode(bytes)
             .map_err(|_| DealerScenarioReleaseErrorV4::Descriptor)?;
         if descriptor.kind() != content(digest(DEALER_KIND_PREIMAGE_V2))?
-            || descriptor.config_schema() != content(digest(DEALER_CONFIG_SCHEMA_PREIMAGE_V3))?
+            || descriptor.config_schema() != content(digest(DEALER_CONFIG_SCHEMA_PREIMAGE_V4))?
             || descriptor.request_schema()
                 != dealer_request_schema_v3(selector)
                     .map_err(|_| DealerScenarioReleaseErrorV4::Descriptor)?
@@ -425,7 +425,7 @@ fn validate_v4_semantics(
     descriptor: CapabilityProgramV4,
 ) -> Result<(), DealerScenarioReleaseErrorV4> {
     if descriptor.kind() != content(digest(DEALER_KIND_PREIMAGE_V2))?
-        || descriptor.config_schema() != content(digest(DEALER_CONFIG_SCHEMA_PREIMAGE_V3))?
+        || descriptor.config_schema() != content(digest(DEALER_CONFIG_SCHEMA_PREIMAGE_V4))?
         || descriptor.request_schema()
             != dealer_request_schema_v3(selector)
                 .map_err(|_| DealerScenarioReleaseErrorV4::Descriptor)?
@@ -492,7 +492,7 @@ mod tests {
     fn v3_descriptor(selector: u16, tag: u8) -> [u8; CAPABILITY_PROGRAM_V3_BYTES] {
         CapabilityProgramV3::new(
             content(digest(DEALER_KIND_PREIMAGE_V2)).expect("kind"),
-            content(digest(DEALER_CONFIG_SCHEMA_PREIMAGE_V3)).expect("config"),
+            content(digest(DEALER_CONFIG_SCHEMA_PREIMAGE_V4)).expect("config"),
             dealer_request_schema_v3(selector).expect("request"),
             content(digest(DEALER_ROOT_SCHEMA_PREIMAGE_V2)).expect("root"),
             byte_id(tag),
@@ -512,7 +512,7 @@ mod tests {
     fn scenario_descriptor(effect_schema: [u8; 32]) -> [u8; CAPABILITY_PROGRAM_V4_BYTES] {
         scenario_descriptor_with_config_schema(
             effect_schema,
-            digest(DEALER_CONFIG_SCHEMA_PREIMAGE_V3),
+            digest(DEALER_CONFIG_SCHEMA_PREIMAGE_V4),
         )
     }
 

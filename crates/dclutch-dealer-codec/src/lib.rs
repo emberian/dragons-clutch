@@ -12,7 +12,7 @@
 //! and atomic rollback.
 
 /// Immutable release/Market/Realm/owner/floor config for Dealer V3.
-pub mod config_v3;
+pub mod config_v4;
 
 /// Runtime-width finite-scenario collateral planning for the V2 successor.
 pub mod scenario;

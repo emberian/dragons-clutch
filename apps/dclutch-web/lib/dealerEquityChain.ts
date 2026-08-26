@@ -23,7 +23,14 @@ import {
   RESULT_DOMAIN_SCHEMA_ID_V2,
 } from './generated/coreFound';
 import {
-  DEALER_CONFIG_SCHEMA_PREIMAGE_V2,
+  DEALER_CONFIG_BYTES_V4,
+  DEALER_CONFIG_LOCKED_CAPITAL_FLOOR_OFFSET_V4,
+  DEALER_CONFIG_MAGIC_V4,
+  DEALER_CONFIG_POSITION_OWNER_OFFSET_V4,
+  DEALER_CONFIG_REALM_OFFSET_V4,
+  DEALER_CONFIG_RELEASE_SET_OFFSET_V4,
+  DEALER_CONFIG_SCHEMA_PREIMAGE_V4,
+  DEALER_CONFIG_VERSION_V4,
   DEALER_EQUITY_REQUEST_SCHEMA_PREIMAGE_V3,
   DEALER_KIND_PREIMAGE_V2,
   DEALER_LP_POSITION_BYTES_V3,
@@ -188,7 +195,7 @@ async function decodeDealerDescriptor(bytes: Uint8Array, request: DealerEquityRe
   }
   const expectedRequestProfileSchema = await sha256(request.signedPositionCount === 0 ? REQUEST_PROFILE_V1_SCHEMA_PREIMAGE : REQUEST_PROFILE_V3_SCHEMA_PREIMAGE);
   if (!same(slice(bytes, HotAbi.CAPABILITY_PROGRAM_V3_KIND_OFFSET, 32), await sha256(DEALER_KIND_PREIMAGE_V2))
-      || !same(slice(bytes, HotAbi.CAPABILITY_PROGRAM_V3_CONFIG_SCHEMA_OFFSET, 32), await sha256(DEALER_CONFIG_SCHEMA_PREIMAGE_V2))
+      || !same(slice(bytes, HotAbi.CAPABILITY_PROGRAM_V3_CONFIG_SCHEMA_OFFSET, 32), await sha256(DEALER_CONFIG_SCHEMA_PREIMAGE_V4))
       || !same(slice(bytes, HotAbi.CAPABILITY_PROGRAM_V3_REQUEST_SCHEMA_OFFSET, 32), await sha256(DEALER_EQUITY_REQUEST_SCHEMA_PREIMAGE_V3))
       || !same(slice(bytes, HotAbi.CAPABILITY_PROGRAM_V3_ROOT_SCHEMA_OFFSET, 32), await sha256(DEALER_ROOT_SCHEMA_PREIMAGE_V2))
       || !same(slice(bytes, HotAbi.CAPABILITY_PROGRAM_V3_REQUEST_PROFILE_SCHEMA_OFFSET, 32), expectedRequestProfileSchema)
@@ -203,6 +210,24 @@ async function decodeDealerDescriptor(bytes: Uint8Array, request: DealerEquityRe
     requestProfileSchema: slice(bytes, 272, 32), requestProfileProgram: slice(bytes, 304, 32),
     strategySchema: slice(bytes, 336, 32), strategyProgram: slice(bytes, 368, 32),
   });
+}
+
+function validateDealerConfigV4(bytes: Uint8Array, request: DealerEquityRequestV3): void {
+  if (bytes.length !== DEALER_CONFIG_BYTES_V4 || !same(slice(bytes, 0, 8), DEALER_CONFIG_MAGIC_V4)
+      || u16(bytes, 8) !== DEALER_CONFIG_VERSION_V4) {
+    throw new Error('Dealer config is not the exact acyclic V4 record');
+  }
+  requireZero(bytes, 10, 6, 'Dealer config header');
+  requireZero(bytes, 120, 8, 'Dealer config tail');
+  const realm = slice(bytes, DEALER_CONFIG_REALM_OFFSET_V4, 32);
+  requireNonzero(realm, 'Dealer config Realm');
+  if (!same(slice(bytes, DEALER_CONFIG_RELEASE_SET_OFFSET_V4, 32), request.releaseSet)
+      || new PublicKey(slice(bytes, DEALER_CONFIG_POSITION_OWNER_OFFSET_V4, 32)).toBase58() !== request.dealerPositionOwner) {
+    throw new Error('Dealer config release or Position owner does not join the request');
+  }
+  // Decode the exact scalar boundary even when a zero floor is selected. The
+  // evaluator, not the browser, remains the authority for scenario solvency.
+  u64(bytes, DEALER_CONFIG_LOCKED_CAPITAL_FLOOR_OFFSET_V4);
 }
 
 function validateAdmittedStrategy(bytes: Uint8Array, transition: Uint8Array): void {
@@ -301,9 +326,10 @@ export async function inspectDealerEquityRouteV3(
       || root.data.length !== HotAbi.CAPABILITY_ROOT_HEADER_BYTES_V1 + DEALER_ROOT_TAIL_BYTES_V3) {
     throw new Error('Dealer descriptor, manifest entry, or mutable root width does not join');
   }
-  await finalizedRecord(client, observation.accounts, registryProgram,
+  const configRaw = await finalizedRecord(client, observation.accounts, registryProgram,
     fixed[HotAbi.HOT_CONFIG_RAW_ACCOUNT_V3]?.address ?? '', fixed[HotAbi.HOT_CONFIG_STAGING_ACCOUNT_V3]?.address ?? '',
     descriptor.configSchema, selection.config, 'Dealer config');
+  validateDealerConfigV4(configRaw.data, request);
 
   const productDigest = slice(market.data, MARKET_PRODUCT_RECORD_OFFSET, 32);
   const productRaw = await finalizedRecord(client, observation.accounts, registryProgram,
