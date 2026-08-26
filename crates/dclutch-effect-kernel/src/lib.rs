@@ -11,6 +11,8 @@
 pub mod v2;
 /// Runtime-tail local effects and typed fixed-role request projection.
 pub mod v3;
+/// Finite scalar-selected fixed-account route spans over canonical V3 effects.
+pub mod v4;
 
 /// Canonical wire magic (`DCEF`).
 pub const MAGIC: [u8; 4] = *b"DCEF";
