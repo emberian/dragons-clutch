@@ -19,6 +19,30 @@ pub const GENERAL_CONFIG_SCHEMA_ID_V3: [u8; 32] = [
 ];
 const GENERAL_CONFIG_MAGIC_V3: [u8; 8] = *b"DCGCFG03";
 
+/// Canonical field coordinates of one [`GeneralConfigV3`].
+///
+/// Account-profile generators consume these semantic-owner coordinates rather
+/// than copying offsets from generated implementation files. The hostile
+/// decoder above remains the sole authority for accepting the complete wire.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralConfigV3Layout;
+
+impl GeneralConfigV3Layout {
+    /// Exact config byte width.
+    pub const BYTES: usize = GENERAL_CONFIG_BYTES_V3;
+    /// ClaimBasis content identity.
+    pub const CLAIM_BASIS_ID: usize = generated_v3::CONFIG_CLAIM_BASIS_ID_OFFSET_V3;
+    /// Immutable Market generation.
+    pub const GENERATION: usize = generated_v3::CONFIG_GENERATION_OFFSET_V3;
+    /// Exact simplex denominator.
+    pub const PRICE_SCALE: usize = generated_v3::CONFIG_PRICE_SCALE_OFFSET_V3;
+    /// Interpreted selection-policy content identity.
+    pub const SELECTION_POLICY_ID: usize = generated_v3::CONFIG_SELECTION_POLICY_ID_OFFSET_V3;
+    /// Immutable owner of the replaceable surplus token account.
+    pub const QUOTE_SURPLUS_BENEFICIARY: usize =
+        generated_v3::CONFIG_QUOTE_SURPLUS_BENEFICIARY_OFFSET_V3;
+}
+
 /// Stable hostile-decode or semantic refusal from GeneralConfigV3.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GeneralConfigErrorV3 {
@@ -432,6 +456,40 @@ mod tests {
         let bytes = config.to_bytes();
         assert_eq!(GeneralConfigV3::decode(&bytes), Ok(config));
         assert_eq!(bytes.len(), 232);
+        assert_eq!(GeneralConfigV3Layout::BYTES, bytes.len());
+        assert_eq!(
+            bytes.get(
+                GeneralConfigV3Layout::CLAIM_BASIS_ID
+                    ..GeneralConfigV3Layout::CLAIM_BASIS_ID + 32
+            ),
+            Some(input().claim_basis_id.as_slice())
+        );
+        assert_eq!(
+            bytes.get(
+                GeneralConfigV3Layout::GENERATION..GeneralConfigV3Layout::GENERATION + 8
+            ),
+            Some(input().generation.to_le_bytes().as_slice())
+        );
+        assert_eq!(
+            bytes.get(
+                GeneralConfigV3Layout::PRICE_SCALE..GeneralConfigV3Layout::PRICE_SCALE + 8
+            ),
+            Some(input().price_scale.to_le_bytes().as_slice())
+        );
+        assert_eq!(
+            bytes.get(
+                GeneralConfigV3Layout::SELECTION_POLICY_ID
+                    ..GeneralConfigV3Layout::SELECTION_POLICY_ID + 32
+            ),
+            Some(input().selection_policy_id.as_slice())
+        );
+        assert_eq!(
+            bytes.get(
+                GeneralConfigV3Layout::QUOTE_SURPLUS_BENEFICIARY
+                    ..GeneralConfigV3Layout::QUOTE_SURPLUS_BENEFICIARY + 32
+            ),
+            Some(input().quote_surplus_beneficiary.as_slice())
+        );
         assert_eq!(
             Sha256::digest(GENERAL_CONFIG_SCHEMA_PREIMAGE_V3).as_slice(),
             GENERAL_CONFIG_SCHEMA_ID_V3

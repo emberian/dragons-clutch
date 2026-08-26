@@ -50,6 +50,22 @@ impl LiabilityBasisMarketLayoutV2 {
     pub const CLAIM_COUNT: usize = MARKET_CLAIM_COUNT_OFFSET;
     /// Aggregate optimistic revision (`u64`, little-endian).
     pub const REVISION: usize = MARKET_REVISION_OFFSET;
+    /// Canonical logical Core Market identity.
+    pub const LOGICAL_MARKET: usize = MARKET_LOGICAL_ID_OFFSET;
+    /// Immutable selected release set.
+    pub const RELEASE_SET: usize = MARKET_RELEASE_SET_OFFSET;
+    /// Immutable selected Registry program.
+    pub const REGISTRY_PROGRAM: usize = MARKET_REGISTRY_OFFSET;
+    /// Finalized Product-instance content identity.
+    pub const PRODUCT_INSTANCE: usize = MARKET_PRODUCT_OFFSET;
+    /// Semantic LiabilityBasis identity.
+    pub const BASIS: usize = MARKET_BASIS_OFFSET;
+    /// Immutable Realm content identity.
+    pub const REALM: usize = MARKET_REALM_OFFSET;
+    /// Custody replay namespace.
+    pub const CUSTODY_CONTEXT: usize = MARKET_CUSTODY_CONTEXT_OFFSET;
+    /// Immutable Market generation.
+    pub const GENERATION: usize = MARKET_GENERATION_OFFSET;
     /// Runtime supply vector base; each entry is one little-endian `u64`.
     pub const SUPPLIES: usize = LIABILITY_BASIS_MARKET_HEADER_BYTES_V2;
     /// Runtime supply-vector element stride.
@@ -72,6 +88,12 @@ impl LiabilityBasisPositionLayoutV2 {
     pub const CLAIM_COUNT: usize = POSITION_CLAIM_COUNT_OFFSET;
     /// Position optimistic revision (`u64`, little-endian).
     pub const REVISION: usize = POSITION_REVISION_OFFSET;
+    /// Claims aggregate account identity.
+    pub const MARKET: usize = POSITION_MARKET_OFFSET;
+    /// Sole Position owner.
+    pub const OWNER: usize = POSITION_OWNER_OFFSET;
+    /// Semantic LiabilityBasis identity.
+    pub const BASIS: usize = POSITION_BASIS_OFFSET;
     /// Runtime balance vector base; each entry is one little-endian `u64`.
     pub const BALANCES: usize = LIABILITY_BASIS_POSITION_HEADER_BYTES_V2;
     /// Runtime balance-vector element stride.
@@ -582,6 +604,45 @@ mod tests {
             ),
             Some(7_u64.to_le_bytes().as_slice())
         );
+        for (offset, expected) in [
+            (
+                LiabilityBasisMarketLayoutV2::LOGICAL_MARKET,
+                market_input().logical_market,
+            ),
+            (
+                LiabilityBasisMarketLayoutV2::RELEASE_SET,
+                market_input().release_set,
+            ),
+            (
+                LiabilityBasisMarketLayoutV2::REGISTRY_PROGRAM,
+                market_input().registry_program,
+            ),
+            (
+                LiabilityBasisMarketLayoutV2::PRODUCT_INSTANCE,
+                market_input().product_instance_id,
+            ),
+            (
+                LiabilityBasisMarketLayoutV2::BASIS,
+                market_input().basis_id,
+            ),
+            (
+                LiabilityBasisMarketLayoutV2::REALM,
+                market_input().realm_id,
+            ),
+            (
+                LiabilityBasisMarketLayoutV2::CUSTODY_CONTEXT,
+                market_input().custody_context,
+            ),
+        ] {
+            assert_eq!(market.get(offset..offset + 32), Some(expected.as_slice()));
+        }
+        assert_eq!(
+            market.get(
+                LiabilityBasisMarketLayoutV2::GENERATION
+                    ..LiabilityBasisMarketLayoutV2::GENERATION + 8
+            ),
+            Some(market_input().generation.to_le_bytes().as_slice())
+        );
         assert_eq!(
             market.get(
                 LiabilityBasisMarketLayoutV2::SUPPLIES + LiabilityBasisMarketLayoutV2::SUPPLY_STRIDE
@@ -610,6 +671,13 @@ mod tests {
             ),
             Some(9_u64.to_le_bytes().as_slice())
         );
+        for (offset, expected) in [
+            (LiabilityBasisPositionLayoutV2::MARKET, input.market_account),
+            (LiabilityBasisPositionLayoutV2::OWNER, input.owner),
+            (LiabilityBasisPositionLayoutV2::BASIS, input.basis_id),
+        ] {
+            assert_eq!(position.get(offset..offset + 32), Some(expected.as_slice()));
+        }
         assert_eq!(
             position.get(
                 LiabilityBasisPositionLayoutV2::BALANCES
