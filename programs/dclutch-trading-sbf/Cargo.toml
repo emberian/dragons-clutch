@@ -15,6 +15,10 @@ default = ["families"]
 no-entrypoint = []
 custom-heap = []
 custom-panic = []
+# Link only the public read-only Shadow callback authenticator when Trading is
+# consumed by an external accelerator. The canonical Trading executable never
+# enables this feature.
+shadow-accelerator-auth-only = []
 series-family = [
     "dep:dclutch-claims-svm",
     "dep:dclutch-custody-contract",

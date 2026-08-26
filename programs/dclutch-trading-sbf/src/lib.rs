@@ -14,6 +14,9 @@
 // and SBF targets; the Solana toolchain supplies that core-compatible facade.
 extern crate std;
 
+#[cfg(feature = "shadow-accelerator-auth-only")]
+use solana_program::program_error::ProgramError;
+#[cfg(not(feature = "shadow-accelerator-auth-only"))]
 use solana_program::{
     account_info::AccountInfo, entrypoint::ProgramResult, program_error::ProgramError,
     pubkey::Pubkey,
@@ -147,10 +150,16 @@ impl From<TradingSbfError> for ProgramError {
     }
 }
 
-#[cfg(not(feature = "no-entrypoint"))]
+#[cfg(all(
+    not(feature = "no-entrypoint"),
+    not(feature = "shadow-accelerator-auth-only")
+))]
 solana_program::entrypoint_no_alloc!(program_entrypoint);
 
-#[cfg(not(feature = "no-entrypoint"))]
+#[cfg(all(
+    not(feature = "no-entrypoint"),
+    not(feature = "shadow-accelerator-auth-only")
+))]
 fn program_entrypoint(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -163,6 +172,7 @@ fn program_entrypoint(
 ///
 /// Hot actions and closure remain fail-closed until their common profile and
 /// fixed-role receipt composition land in this same authority boundary.
+#[cfg(not(feature = "shadow-accelerator-auth-only"))]
 #[inline(never)]
 pub fn process_instruction(
     program_id: &Pubkey,
