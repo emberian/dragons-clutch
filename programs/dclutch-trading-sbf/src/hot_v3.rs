@@ -833,7 +833,7 @@ pub fn process_hot_execution_v3(
     };
     drop(observations);
     drop(runtime_data);
-    commit_prepared_hot_v3(Box::new(PreparedHotCommitV3 {
+    let commit_status = commit_prepared_hot_v3(Box::new(PreparedHotCommitV3 {
         program_id,
         frame: &frame,
         request_profile,
@@ -861,7 +861,12 @@ pub fn process_hot_execution_v3(
         market: &market,
         product_runtime_v3: &product_runtime_v3,
         product_outcome_count,
-    }))
+    }));
+    if commit_status == 0 {
+        Ok(())
+    } else {
+        Err(ProgramError::from(commit_status))
+    }
 }
 
 struct PreparedHotCommitV3<'a, 'accounts, 'info, 'artifact> {
@@ -897,14 +902,27 @@ struct PreparedHotCommitV3<'a, 'accounts, 'info, 'artifact> {
 #[inline(never)]
 fn commit_prepared_hot_v3(
     prepared: Box<PreparedHotCommitV3<'_, '_, '_, '_>>,
+) -> u64 {
+    match commit_prepared_hot_result_v3(&prepared) {
+        Ok(()) => 0,
+        Err(error) => error.into(),
+    }
+}
+
+/// Keep the wide `ProgramError` return ABI inside the compact commit phase.
+/// The outer verifier frame receives one scalar status register instead of an
+/// indirect result slot that aliases its last live stack region.
+#[inline(never)]
+fn commit_prepared_hot_result_v3(
+    prepared: &PreparedHotCommitV3<'_, '_, '_, '_>,
 ) -> Result<(), ProgramError> {
     apply_lifecycle_creates_v3(
         prepared.program_id,
         prepared.lifecycle_plans,
         prepared.runtime_accounts,
     )?;
-    let child_execution_digest = execute_prepared_child_routes_v3(&prepared)?;
-    commit_prepared_post_children_v3(&prepared)?;
+    let child_execution_digest = execute_prepared_child_routes_v3(prepared)?;
+    commit_prepared_post_children_v3(prepared)?;
     let root_poststate = {
         let bytes = prepared
             .frame
@@ -918,7 +936,7 @@ fn commit_prepared_hot_v3(
         }
         hash(&bytes).to_bytes()
     };
-    finalize_hot_ack_v3(&prepared, child_execution_digest, root_poststate)
+    finalize_hot_ack_v3(prepared, child_execution_digest, root_poststate)
 }
 
 #[inline(never)]
