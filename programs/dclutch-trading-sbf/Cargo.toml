@@ -19,6 +19,8 @@ custom-panic = []
 # consumed by an external accelerator. The canonical Trading executable never
 # enables this feature.
 shadow-accelerator-auth-only = []
+# Diagnostic-only phase checkpoints for measured SBF compute profiling.
+hot-cu-profile = []
 series-family = [
     "dep:dclutch-claims-svm",
     "dep:dclutch-custody-contract",

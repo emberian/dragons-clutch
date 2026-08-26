@@ -260,6 +260,19 @@ const CHILD_EXECUTION_DIGEST_DOMAIN_V3: &[u8] = b"dclutch:hot-child-execution:v3
 const CHILD_RECEIPT_CONTEXT_DOMAIN_V4: &[u8] = b"dclutch:hot-child-receipt-context:v4";
 const CHILD_REQUEST_DIGEST_DOMAIN_V4: &[u8] = b"dclutch:hot-child-request:v4";
 
+#[cfg(feature = "hot-cu-profile")]
+macro_rules! hot_cu_checkpoint {
+    ($phase:literal) => {{
+        solana_program::msg!(concat!("dclutch-hot-cu:", $phase));
+        solana_program::log::sol_log_compute_units();
+    }};
+}
+
+#[cfg(not(feature = "hot-cu-profile"))]
+macro_rules! hot_cu_checkpoint {
+    ($phase:literal) => {};
+}
+
 /// Shadow caller-authority PDA after six authenticated strategy extras.
 pub const HOT_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3: usize = HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3 + 6;
 /// First profile-defined runtime account for Shadow-AOT execution.
@@ -1523,6 +1536,7 @@ pub fn process_hot_execution_v3(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> Result<(), ProgramError> {
+    hot_cu_checkpoint!("start");
     let (envelope, family_request) = HotExecutionEnvelopeV3::split_instruction(instruction_data)
         .map_err(|_| TradingSbfError::Content)?;
     let invocation =
@@ -1556,6 +1570,7 @@ pub fn process_hot_execution_v3(
     let product_runtime_v3 = authenticate_product_runtime_boxed_v3(&frame, &rent, &market)?;
     let product_runtime = product_runtime_v3.runtime;
     let product_outcome_count = product_runtime.outcome_count;
+    hot_cu_checkpoint!("root-product");
     let manifest_data = borrow_finalized_record(
         *frame,
         frame.manifest_raw,
@@ -1713,6 +1728,7 @@ pub fn process_hot_execution_v3(
         descriptor.effect().program().to_bytes(),
     )?;
     let effect = decode_selected_effect_v4(descriptor.effect().schema().to_bytes(), &effect_data)?;
+    hot_cu_checkpoint!("artifacts-strategy-effect");
 
     let provisional_scalar_count = effect
         .scalar_count(product_outcome_count)
@@ -1883,6 +1899,7 @@ pub fn process_hot_execution_v3(
             }
         })
         .collect::<Vec<_>>();
+    hot_cu_checkpoint!("runtime-observations");
 
     let tail_count = project_tail_count(
         account_profile,
@@ -1987,6 +2004,7 @@ pub fn process_hot_execution_v3(
         &rent,
         &aliases,
     )?;
+    hot_cu_checkpoint!("request-lifecycle-preplan");
 
     let candidate = if let Some(caller_authorities) = admitted_caller_authorities {
         execute_admitted_candidate_v3(AdmittedCandidateViewV3 {
@@ -2021,6 +2039,7 @@ pub fn process_hot_execution_v3(
             &preplanned_lifecycle.identities,
         )?
     };
+    hot_cu_checkpoint!("candidate");
     // The request-profile banks have been copied into the independently
     // prepared lifecycle batch.  End their lifetime before the candidate and
     // Effect phases so the SBF caller frame cannot retain two register-bank
@@ -2111,6 +2130,7 @@ pub fn process_hot_execution_v3(
         &transition_output_identities,
         &aliases,
     )?;
+    hot_cu_checkpoint!("effect-lifecycle-replan");
     let lifecycle_plans = revalidated_lifecycle.plans;
     let effect_accounts = downgraded_effect_accounts_v3(
         account_profile,
@@ -2159,8 +2179,10 @@ pub fn process_hot_execution_v3(
     } else {
         admitted_execution_digest
     };
+    hot_cu_checkpoint!("children-shadow");
     drop(observations);
     drop(runtime_data);
+    hot_cu_checkpoint!("before-commit");
     let commit_status = commit_prepared_hot_v3(Box::new(PreparedHotCommitV3 {
         program_id,
         frame: &frame,
@@ -2190,6 +2212,7 @@ pub fn process_hot_execution_v3(
         product_runtime_v3: &product_runtime_v3,
         product_outcome_count,
     }));
+    hot_cu_checkpoint!("after-commit");
     if commit_status == 0 {
         Ok(())
     } else {
