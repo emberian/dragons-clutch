@@ -17,6 +17,9 @@ custom-heap = []
 custom-panic = []
 
 [dependencies]
+dclutch-capability-program-contract = { path = "../../../../crates/dclutch-capability-program-contract" }
+dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
+dclutch-release-set-contract = { path = "../../../../crates/dclutch-release-set-contract" }
 solana-program = { version = "=3.0.0", default-features = false }
 
 [workspace]

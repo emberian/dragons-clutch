@@ -4,7 +4,7 @@ use std::vec::Vec;
 
 use dclutch_capability_program_contract::hot_v3::HotExecutionEnvelopeV3;
 use dclutch_core_contract::ContentId;
-use dclutch_dealer_accelerator_test_caller_sbf::DEALER_ACCELERATOR_TEST_CALLER_AUTHORITY_SEED_V1;
+use dclutch_dealer_accelerator_test_caller_sbf::dealer_accelerator_test_caller_authority_v1;
 use dclutch_execution_strategy_contract::v2::{
     ACCELERATOR_REQUEST_HEADER_BYTES_V2, AcceleratorRequestV2, RequestTransportV2,
 };
@@ -24,6 +24,7 @@ const ACCELERATOR: Pubkey = Pubkey::new_from_array([0xd1; 32]);
 const CALLER: Pubkey = Pubkey::new_from_array([0xd2; 32]);
 const REQUEST_ACCOUNT: Pubkey = Pubkey::new_from_array([0xd3; 32]);
 const OBSERVED: Pubkey = Pubkey::new_from_array([0xd4; 32]);
+const DUMMY: Pubkey = Pubkey::new_from_array([0xd5; 32]);
 
 fn content(value: u8) -> ContentId {
     ContentId::new([value; 32]).expect("nonzero fixture content")
@@ -47,11 +48,9 @@ fn malformed_frame_fixture() -> (ProgramTest, Instruction, Vec<u8>) {
     test.prefer_bpf(true);
     test.add_program("dclutch_dealer_accelerator_sbf", ACCELERATOR, None);
     test.add_program("dclutch_dealer_accelerator_test_caller_sbf", CALLER, None);
-    let (authority, _) =
-        Pubkey::find_program_address(&[DEALER_ACCELERATOR_TEST_CALLER_AUTHORITY_SEED_V1], &CALLER);
-    add_account(&mut test, authority, system_program::ID, Vec::new());
     let observed = vec![0x5a; 96];
     add_account(&mut test, OBSERVED, CALLER, observed.clone());
+    add_account(&mut test, DUMMY, system_program::ID, Vec::new());
 
     let bank = [0_u8; 8];
     let request = AcceleratorRequestV2::new(
@@ -72,7 +71,6 @@ fn malformed_frame_fixture() -> (ProgramTest, Instruction, Vec<u8>) {
     request
         .encode_into(&mut request_bytes)
         .expect("request encoding");
-    add_account(&mut test, REQUEST_ACCOUNT, CALLER, request_bytes);
 
     let family = [0_u8; 4];
     let envelope = HotExecutionEnvelopeV3::new(
@@ -85,12 +83,22 @@ fn malformed_frame_fixture() -> (ProgramTest, Instruction, Vec<u8>) {
     .expect("Hot envelope");
     let mut top_level_data = envelope.to_bytes().to_vec();
     top_level_data.extend_from_slice(&family);
+    let (authority, _, _) = dealer_accelerator_test_caller_authority_v1(
+        &CALLER,
+        &top_level_data,
+        &OBSERVED,
+        &request_bytes,
+    )
+    .expect("canonical caller authority");
+    add_account(&mut test, authority, system_program::ID, Vec::new());
+    add_account(&mut test, REQUEST_ACCOUNT, CALLER, request_bytes);
     let instruction = Instruction {
         program_id: CALLER,
         accounts: vec![
             AccountMeta::new_readonly(REQUEST_ACCOUNT, false),
             AccountMeta::new_readonly(ACCELERATOR, false),
             AccountMeta::new_readonly(authority, false),
+            AccountMeta::new_readonly(DUMMY, false),
             AccountMeta::new_readonly(OBSERVED, false),
         ],
         data: top_level_data,

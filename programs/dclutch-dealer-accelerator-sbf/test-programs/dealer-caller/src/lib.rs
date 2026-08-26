@@ -13,18 +13,18 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
+use dclutch_capability_program_contract::hot_v3::{HOT_ROOT_ACCOUNT_V3, HotExecutionEnvelopeV3};
+use dclutch_core_contract::ContentId;
+use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,
+    hash::hash,
     instruction::{AccountMeta, Instruction},
     program::{get_return_data, invoke_signed, set_return_data},
     program_error::ProgramError,
     pubkey::Pubkey,
 };
-
-/// PDA seed used only by the read-only real-SBF test caller.
-pub const DEALER_ACCELERATOR_TEST_CALLER_AUTHORITY_SEED_V1: &[u8] =
-    b"dealer-accelerator-test-caller";
 
 /// Stable refusal from the test-only caller.
 #[repr(u32)]
@@ -60,7 +60,7 @@ fn program_entrypoint(
 pub fn process_instruction(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
-    _instruction_data: &[u8],
+    instruction_data: &[u8],
 ) -> ProgramResult {
     let request_account = accounts
         .first()
@@ -74,10 +74,22 @@ pub fn process_instruction(
     let authority = frame
         .first()
         .ok_or(DealerAcceleratorTestCallerErrorV1::Frame)?;
-    let (expected_authority, bump) = Pubkey::find_program_address(
-        &[DEALER_ACCELERATOR_TEST_CALLER_AUTHORITY_SEED_V1],
+    let root = frame
+        .get(
+            1_usize
+                .checked_add(HOT_ROOT_ACCOUNT_V3)
+                .ok_or(DealerAcceleratorTestCallerErrorV1::Frame)?,
+        )
+        .ok_or(DealerAcceleratorTestCallerErrorV1::Frame)?;
+    let request = request_account
+        .try_borrow_data()
+        .map_err(|_| DealerAcceleratorTestCallerErrorV1::Frame)?;
+    let (expected_authority, seeds, bump) = dealer_accelerator_test_caller_authority_v1(
         program_id,
-    );
+        instruction_data,
+        root.key,
+        &request,
+    )?;
     if authority.key != &expected_authority
         || authority.is_signer
         || authority.is_writable
@@ -89,9 +101,6 @@ pub fn process_instruction(
     {
         return Err(DealerAcceleratorTestCallerErrorV1::Authority.into());
     }
-    let request = request_account
-        .try_borrow_data()
-        .map_err(|_| DealerAcceleratorTestCallerErrorV1::Frame)?;
     let metas = frame
         .iter()
         .enumerate()
@@ -114,10 +123,12 @@ pub fn process_instruction(
     );
     infos.extend(frame.iter().cloned());
     infos.push(accelerator.clone());
+    let bump = [bump];
+    let [domain, release, market, role, context, digest] = seeds.as_slices();
     invoke_signed(
         &instruction,
         &infos,
-        &[&[DEALER_ACCELERATOR_TEST_CALLER_AUTHORITY_SEED_V1, &[bump]]],
+        &[&[domain, release, market, role, context, digest, &bump]],
     )?;
     let (producer, bytes) =
         get_return_data().ok_or(DealerAcceleratorTestCallerErrorV1::ReturnData)?;
@@ -126,4 +137,26 @@ pub fn process_instruction(
     }
     set_return_data(&bytes);
     Ok(())
+}
+
+/// Derive the canonical Trading caller-authority PDA for one test invocation.
+pub fn dealer_accelerator_test_caller_authority_v1(
+    program_id: &Pubkey,
+    hot_instruction: &[u8],
+    root: &Pubkey,
+    request: &[u8],
+) -> Result<(Pubkey, CallerAuthoritySeedsV1, u8), ProgramError> {
+    let (envelope, _) = HotExecutionEnvelopeV3::split_instruction(hot_instruction)
+        .map_err(|_| DealerAcceleratorTestCallerErrorV1::Frame)?;
+    let seeds = CallerAuthoritySeedsV1::new(
+        ContentId::new(envelope.release_set())
+            .map_err(|_| DealerAcceleratorTestCallerErrorV1::Frame)?,
+        envelope.market(),
+        ExecutionRoleV1::Trading,
+        root.to_bytes(),
+        hash(request).to_bytes(),
+    )
+    .map_err(|_| DealerAcceleratorTestCallerErrorV1::Frame)?;
+    let (authority, bump) = Pubkey::find_program_address(&seeds.as_slices(), program_id);
+    Ok((authority, seeds, bump))
 }

@@ -272,11 +272,59 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-account-profile-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-effect-kernel",
+ "dclutch-transition-vm",
+]
+
+[[package]]
+name = "dclutch-capability-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+]
+
+[[package]]
+name = "dclutch-capability-program-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-account-profile-contract",
+ "dclutch-capability-contract",
+ "dclutch-core-contract",
+ "dclutch-release-set-contract",
+ "dclutch-transition-vm",
+]
+
+[[package]]
+name = "dclutch-core-contract"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-dealer-accelerator-test-caller-sbf"
 version = "0.1.0"
 dependencies = [
+ "dclutch-capability-program-contract",
+ "dclutch-core-contract",
+ "dclutch-release-set-contract",
  "solana-program",
 ]
+
+[[package]]
+name = "dclutch-effect-kernel"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-release-set-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+]
+
+[[package]]
+name = "dclutch-transition-vm"
+version = "0.1.0"
 
 [[package]]
 name = "der"
