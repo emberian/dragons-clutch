@@ -22,6 +22,8 @@ pub mod child_packets;
 pub mod lifecycle;
 /// Stateless, failure-atomic candidate and settlement plan evaluation.
 pub mod plan;
+/// Verifier-emitted runtime-width per-order settlement manifests.
+pub mod runtime_manifest;
 /// Streamed runtime-width candidate verification and exact selection comparison.
 pub mod runtime_verify;
 /// Runtime-width borrowed records without fixed outcome or page capacities.

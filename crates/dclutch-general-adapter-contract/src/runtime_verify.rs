@@ -10,6 +10,11 @@
 
 use dclutch_general_codec::{SelectionCriterion, SelectionPolicyV1};
 
+use crate::runtime_manifest::{
+    RuntimeManifestErrorV2, SettlementManifestHeaderV2, SettlementManifestV2,
+    SettlementOrderHeaderV2, initialize_manifest_v2, settlement_manifest_len_v2,
+    write_scaled_order_v2,
+};
 use crate::runtime_width::{
     CANDIDATE_HEADER_BYTES_V2, CandidateV2, PageV2, RuntimeWidthErrorV2, VerifiedCandidateHeaderV2,
     VerifiedCandidateV2, verified_candidate_len,
@@ -241,6 +246,14 @@ pub struct RuntimeConsiderRowBuffersV2<'a> {
     pub verified_output: &'a mut [u8],
 }
 
+/// Exact per-step manifest candidate banks for authoritative verification.
+pub struct RuntimeManifestBuffersV2<'a> {
+    /// Non-authoritative manifest scratch; may change on refusal.
+    pub manifest_scratch: &'a mut [u8],
+    /// Complete verifier-derived manifest chunk; unchanged on refusal.
+    pub manifest_output: &'a mut [u8],
+}
+
 /// Accepted summary for one runtime-width candidate row.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RuntimeConsiderRowSummaryV2 {
@@ -301,6 +314,30 @@ pub fn evaluate_runtime_consider_row_v2(
     view: RuntimeConsiderRowViewV2<'_>,
     buffers: RuntimeConsiderRowBuffersV2<'_>,
 ) -> RuntimeVerifyResultV2<RuntimeConsiderRowSummaryV2> {
+    evaluate_runtime_consider_row_inner_v2(view, buffers, None)
+}
+
+/// Evaluate one exact row and also emit every newly completed order manifest.
+///
+/// The manifest capacity must equal the exact zero-, one-, or two-row semantic
+/// result derived from the authenticated cursor and selected execution. It can
+/// never truncate the plan. Generic Trading persists these rows into its own
+/// authenticated scratch pages before later settlement actions consume them.
+#[inline(never)]
+pub fn evaluate_runtime_consider_row_with_manifest_v2(
+    view: RuntimeConsiderRowViewV2<'_>,
+    buffers: RuntimeConsiderRowBuffersV2<'_>,
+    manifest: RuntimeManifestBuffersV2<'_>,
+) -> RuntimeVerifyResultV2<RuntimeConsiderRowSummaryV2> {
+    evaluate_runtime_consider_row_inner_v2(view, buffers, Some(manifest))
+}
+
+#[inline(never)]
+fn evaluate_runtime_consider_row_inner_v2(
+    view: RuntimeConsiderRowViewV2<'_>,
+    buffers: RuntimeConsiderRowBuffersV2<'_>,
+    mut manifest_buffers: Option<RuntimeManifestBuffersV2<'_>>,
+) -> RuntimeVerifyResultV2<RuntimeConsiderRowSummaryV2> {
     let candidate = CandidateV2::decode(view.candidate).map_err(map_codec)?;
     let page = PageV2::decode(view.page).map_err(map_codec)?;
     let candidate_header = candidate.header();
@@ -357,12 +394,53 @@ pub fn evaluate_runtime_consider_row_v2(
         }
         buffers.cursor_scratch.copy_from_slice(view.cursor_before);
     }
+    let terminal_step = view.expected_page_index.checked_add(1)
+        == Some(candidate_header.page_count)
+        && view.expected_row_index.checked_add(1) == Some(page.row_count());
+    let manifest_order_count = measure_manifest_orders_v2(
+        buffers.cursor_scratch,
+        execution.header().order_id,
+        terminal_step,
+    )?;
+    let successor_revision = view
+        .expected_revision
+        .checked_add(1)
+        .ok_or(RuntimeVerifyErrorV2::ArithmeticOverflow)?;
+    let mut manifest_writer = match manifest_buffers.as_mut() {
+        Some(manifest) => {
+            let required =
+                settlement_manifest_len_v2(candidate_header.outcome_count, manifest_order_count)
+                    .map_err(map_manifest)?;
+            if manifest.manifest_scratch.len() != required
+                || manifest.manifest_output.len() != required
+            {
+                return Err(RuntimeVerifyErrorV2::InvalidLength);
+            }
+            initialize_manifest_v2(
+                SettlementManifestHeaderV2 {
+                    outcome_count: candidate_header.outcome_count,
+                    order_count: manifest_order_count,
+                    candidate_coordinate: candidate_header.candidate_coordinate,
+                    revision: successor_revision,
+                    candidate_id: candidate_header.candidate_id,
+                },
+                manifest.manifest_scratch,
+            )
+            .map_err(map_manifest)?;
+            Some(ManifestWriterV2 {
+                bytes: &mut *manifest.manifest_scratch,
+                next: 0,
+            })
+        }
+        None => None,
+    };
     buffers.verified_scratch.fill(0);
     ingest_execution(
         buffers.cursor_scratch,
         execution,
         view.authenticated_order,
         view.max_orders,
+        &mut manifest_writer,
     )?;
 
     let next_row = view
@@ -381,17 +459,13 @@ pub fn evaluate_runtime_consider_row_v2(
     } else {
         put_u32(buffers.cursor_scratch, 24, next_row)?;
     }
-    let successor_revision = view
-        .expected_revision
-        .checked_add(1)
-        .ok_or(RuntimeVerifyErrorV2::ArithmeticOverflow)?;
     put_u64(buffers.cursor_scratch, 32, successor_revision)?;
 
     let mut complete = false;
     let reached_terminal_page =
         read_u32(buffers.cursor_scratch, 20)? == candidate_header.page_count;
     if reached_terminal_page {
-        finalize_current_order(buffers.cursor_scratch)?;
+        finalize_current_order(buffers.cursor_scratch, &mut manifest_writer)?;
         let completed = RuntimeCandidateVerifierV2::decode(buffers.cursor_scratch)?;
         let balance = balance_from_cursor(completed)?;
         let header = completed.header();
@@ -430,6 +504,20 @@ pub fn evaluate_runtime_consider_row_v2(
         complete = true;
     } else {
         RuntimeCandidateVerifierV2::decode(buffers.cursor_scratch)?;
+    }
+
+    if manifest_writer
+        .as_ref()
+        .is_some_and(|writer| writer.next != manifest_order_count)
+    {
+        return Err(RuntimeVerifyErrorV2::InvalidCursor);
+    }
+    let _ = manifest_writer.take();
+    if let Some(manifest) = manifest_buffers.as_mut() {
+        SettlementManifestV2::decode(manifest.manifest_scratch).map_err(map_manifest)?;
+        manifest
+            .manifest_output
+            .copy_from_slice(manifest.manifest_scratch);
     }
 
     let accepted = RuntimeCandidateVerifierV2::decode(buffers.cursor_scratch)?;
@@ -586,11 +674,65 @@ fn require_authenticated_order(
     }
 }
 
+struct ManifestWriterV2<'a> {
+    bytes: &'a mut [u8],
+    next: u32,
+}
+
+impl ManifestWriterV2<'_> {
+    fn emit(
+        &mut self,
+        cursor: &[u8],
+        header: RuntimeVerifierHeaderV2,
+        lots: u64,
+        quote_debit: u64,
+        quote_credit: u64,
+    ) -> RuntimeVerifyResultV2<()> {
+        let claim_inputs_per_lot = tail_bytes(cursor, header.outcome_count, CURRENT_DELIVER_TAIL)?;
+        let claim_outputs_per_lot = tail_bytes(cursor, header.outcome_count, CURRENT_RECEIVE_TAIL)?;
+        write_scaled_order_v2(
+            self.bytes,
+            self.next,
+            SettlementOrderHeaderV2 {
+                outcome_count: header.outcome_count,
+                order_coordinate: header.order_count,
+                nonce: read_u64(cursor, 240)?,
+                candidate_id: header.candidate_id,
+                order_id: read_array32(cursor, 176)?,
+                owner_id: read_array32(cursor, 208)?,
+                lots,
+                quote_debit,
+                quote_credit,
+            },
+            claim_inputs_per_lot,
+            claim_outputs_per_lot,
+        )
+        .map_err(map_manifest)?;
+        self.next = self
+            .next
+            .checked_add(1)
+            .ok_or(RuntimeVerifyErrorV2::ArithmeticOverflow)?;
+        Ok(())
+    }
+}
+
+fn measure_manifest_orders_v2(
+    cursor: &[u8],
+    execution_order: [u8; 32],
+    terminal_step: bool,
+) -> RuntimeVerifyResultV2<u32> {
+    let decoded = RuntimeCandidateVerifierV2::decode(cursor)?;
+    let closes_preceding =
+        decoded.header().has_current_order && read_array32(cursor, 176)? != execution_order;
+    Ok(u32::from(closes_preceding) + u32::from(terminal_step))
+}
+
 fn ingest_execution(
     cursor: &mut [u8],
     execution: crate::runtime_width::ExecutionV2<'_>,
     order: AuthenticatedOrderTermsV2,
     max_orders: u32,
+    manifest: &mut Option<ManifestWriterV2<'_>>,
 ) -> RuntimeVerifyResultV2<()> {
     let before = RuntimeCandidateVerifierV2::decode(cursor)?;
     let header = before.header();
@@ -606,7 +748,7 @@ fn ingest_execution(
             if !le_numeric_id(&current_id, &execution_header.order_id) {
                 return Err(RuntimeVerifyErrorV2::NonCanonicalOrder);
             }
-            finalize_current_order(cursor)?;
+            finalize_current_order(cursor, manifest)?;
             start_current_order(cursor, execution, order, max_orders)?;
         }
     } else {
@@ -709,7 +851,10 @@ fn require_same_order(
     Ok(())
 }
 
-fn finalize_current_order(cursor: &mut [u8]) -> RuntimeVerifyResultV2<()> {
+fn finalize_current_order(
+    cursor: &mut [u8],
+    manifest: &mut Option<ManifestWriterV2<'_>>,
+) -> RuntimeVerifyResultV2<()> {
     let decoded = RuntimeCandidateVerifierV2::decode(cursor)?;
     let header = decoded.header();
     if !header.has_current_order {
@@ -751,6 +896,9 @@ fn finalize_current_order(cursor: &mut [u8]) -> RuntimeVerifyResultV2<()> {
     let debit_limit = multiply(read_u64(cursor, 256)?, lots)?;
     if debit > debit_limit {
         return Err(RuntimeVerifyErrorV2::QuoteLimit);
+    }
+    if let Some(writer) = manifest.as_mut() {
+        writer.emit(cursor, header, lots, debit, credit)?;
     }
     put_u64(cursor, 160, add(header.quote_debit, debit)?)?;
     put_u64(cursor, 168, add(header.quote_credit, credit)?)?;
@@ -976,6 +1124,10 @@ fn tail_is_zero(bytes: &[u8], count: u32, tail: usize) -> RuntimeVerifyResultV2<
 }
 
 fn map_codec(_: RuntimeWidthErrorV2) -> RuntimeVerifyErrorV2 {
+    RuntimeVerifyErrorV2::Codec
+}
+
+fn map_manifest(_: RuntimeManifestErrorV2) -> RuntimeVerifyErrorV2 {
     RuntimeVerifyErrorV2::Codec
 }
 
@@ -1414,6 +1566,139 @@ mod tests {
         );
         assert_eq!(cursor_output, vec![0x55; cursor_len]);
         assert_eq!(verified_output, vec![0xaa; verified_len]);
+    }
+
+    #[test]
+    fn verifier_emits_exact_order_manifests_across_group_boundaries() {
+        let width = 2;
+        let candidate = candidate(width, 1, 1);
+        let first = row(width, 1, 1, 1, 1, (&[1, 0], &[0, 0]), 1);
+        let second = row(width, 1, 2, 2, 1, (&[0, 1], &[0, 0]), 1);
+        let page = page(width, 1, 1, 11, &[&first.bytes, &second.bytes]);
+        let cursor_len = runtime_verifier_len_v2(width).expect("cursor");
+        let verified_len = verified_candidate_len(width).expect("verified");
+        let zero_cursor = vec![0; cursor_len];
+        let zero_verified = vec![0; verified_len];
+        let mut cursor_scratch = vec![0; cursor_len];
+        let mut cursor_first = vec![0; cursor_len];
+        let mut verified_scratch = vec![0; verified_len];
+        let mut verified_first = vec![0; verified_len];
+        let mut empty_manifest_scratch =
+            vec![0; settlement_manifest_len_v2(width, 0).expect("manifest")];
+        let mut empty_manifest_output = vec![0xaa; empty_manifest_scratch.len()];
+        let summary = evaluate_runtime_consider_row_with_manifest_v2(
+            RuntimeConsiderRowViewV2 {
+                candidate: &candidate,
+                page: &page,
+                cursor_before: &zero_cursor,
+                verified_before: &zero_verified,
+                authenticated_order: first.order,
+                expected_page_index: 0,
+                expected_row_index: 0,
+                expected_page_revision: 11,
+                expected_revision: 0,
+                max_orders: 10,
+            },
+            RuntimeConsiderRowBuffersV2 {
+                cursor_scratch: &mut cursor_scratch,
+                cursor_output: &mut cursor_first,
+                verified_scratch: &mut verified_scratch,
+                verified_output: &mut verified_first,
+            },
+            RuntimeManifestBuffersV2 {
+                manifest_scratch: &mut empty_manifest_scratch,
+                manifest_output: &mut empty_manifest_output,
+            },
+        )
+        .expect("first row");
+        assert!(!summary.complete);
+        assert_eq!(
+            SettlementManifestV2::decode(&empty_manifest_output)
+                .expect("empty manifest")
+                .header()
+                .order_count,
+            0
+        );
+
+        let manifest_len = settlement_manifest_len_v2(width, 2).expect("manifest");
+        let mut manifest_scratch = vec![0; manifest_len];
+        let mut manifest_output = vec![0xbb; manifest_len];
+        let mut cursor_terminal = vec![0; cursor_len];
+        let mut verified_terminal = vec![0; verified_len];
+        let summary = evaluate_runtime_consider_row_with_manifest_v2(
+            RuntimeConsiderRowViewV2 {
+                candidate: &candidate,
+                page: &page,
+                cursor_before: &cursor_first,
+                verified_before: &zero_verified,
+                authenticated_order: second.order,
+                expected_page_index: 0,
+                expected_row_index: 1,
+                expected_page_revision: 11,
+                expected_revision: 1,
+                max_orders: 10,
+            },
+            RuntimeConsiderRowBuffersV2 {
+                cursor_scratch: &mut cursor_scratch,
+                cursor_output: &mut cursor_terminal,
+                verified_scratch: &mut verified_scratch,
+                verified_output: &mut verified_terminal,
+            },
+            RuntimeManifestBuffersV2 {
+                manifest_scratch: &mut manifest_scratch,
+                manifest_output: &mut manifest_output,
+            },
+        )
+        .expect("terminal row");
+        assert!(summary.complete);
+        let manifest = SettlementManifestV2::decode(&manifest_output).expect("manifest");
+        assert_eq!(manifest.header().order_count, 2);
+        assert_eq!(
+            manifest.order(0).expect("first").header().order_coordinate,
+            1
+        );
+        assert_eq!(manifest.order(0).expect("first").claim_output(0), Ok(1));
+        assert_eq!(
+            manifest.order(1).expect("second").header().order_coordinate,
+            2
+        );
+        assert_eq!(manifest.order(1).expect("second").claim_output(1), Ok(1));
+        assert!(VerifiedCandidateV2::decode(&verified_terminal).is_ok());
+
+        let mut undersized_scratch = vec![0; manifest_len - 1];
+        let mut undersized_output = vec![0xcc; manifest_len - 1];
+        let cursor_sentinel = vec![0xdd; cursor_len];
+        let verified_sentinel = vec![0xee; verified_len];
+        let mut cursor_output = cursor_sentinel.clone();
+        let mut verified_output = verified_sentinel.clone();
+        let result = evaluate_runtime_consider_row_with_manifest_v2(
+            RuntimeConsiderRowViewV2 {
+                candidate: &candidate,
+                page: &page,
+                cursor_before: &cursor_first,
+                verified_before: &zero_verified,
+                authenticated_order: second.order,
+                expected_page_index: 0,
+                expected_row_index: 1,
+                expected_page_revision: 11,
+                expected_revision: 1,
+                max_orders: 10,
+            },
+            RuntimeConsiderRowBuffersV2 {
+                cursor_scratch: &mut cursor_scratch,
+                cursor_output: &mut cursor_output,
+                verified_scratch: &mut verified_scratch,
+                verified_output: &mut verified_output,
+            },
+            RuntimeManifestBuffersV2 {
+                manifest_scratch: &mut undersized_scratch,
+                manifest_output: &mut undersized_output,
+            },
+        );
+        assert_eq!(result, Err(RuntimeVerifyErrorV2::InvalidLength));
+        assert_eq!(cursor_output, cursor_sentinel);
+        assert_eq!(verified_output, verified_sentinel);
+        assert_eq!(undersized_output, vec![0xcc; manifest_len - 1]);
     }
 
     #[test]
