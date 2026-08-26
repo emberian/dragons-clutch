@@ -366,7 +366,7 @@ mod tests {
                 16,
             ),
             rule(
-                true,
+                false,
                 AccountAliasInputV2::Fixed(0),
                 AccountPrestateV2::AuthenticatedRouteAlias,
                 0,
@@ -417,7 +417,7 @@ mod tests {
                 .writable()
         );
         assert!(
-            profile
+            !profile
                 .route_privileges_with_dynamic_spans(0, &[1], 1)
                 .expect("route alias privileges")
                 .writable()
@@ -589,7 +589,7 @@ mod tests {
             prestate: AccountPrestateV2::LifecycleBound,
         };
         let alias = rule(
-            true,
+            false,
             AccountAliasInputV2::Fixed(0),
             AccountPrestateV2::AuthenticatedRouteAlias,
             0,

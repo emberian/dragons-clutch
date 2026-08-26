@@ -1662,7 +1662,6 @@ impl<'a> AccountProfileV2<'a> {
                 let representative = self.rule(false, rule.alias_index)?;
                 if representative.alias_kind != AliasKindV2::SelfCoordinate
                     || representative.alias_index != 0
-                    || rule.privileges & !representative.privileges != 0
                 {
                     return Err(Error::InvalidRouteAlias);
                 }
@@ -2514,22 +2513,7 @@ fn representative_privileges(
     if profile.representative(tail_count, representative)? != representative {
         return Err(Error::InvalidAlias);
     }
-    let representative_rule = expanded_rule(profile, representative)?;
-    let executable = representative_rule.privileges & 0x04;
-    let mut union = executable;
-    let logical_count = account_width(profile, tail_count)?;
-    let mut coordinate = 0_usize;
-    while coordinate < logical_count {
-        if profile.representative(tail_count, coordinate)? == representative {
-            let rule = expanded_rule(profile, coordinate)?;
-            if rule.privileges & 0x04 != executable {
-                return Err(Error::InvalidRouteAlias);
-            }
-            union |= rule.privileges & 0x03;
-        }
-        coordinate = coordinate.checked_add(1).ok_or(Error::InvalidLength)?;
-    }
-    Ok(union)
+    Ok(expanded_rule(profile, representative)?.privileges)
 }
 
 fn representative_privileges_with_dynamic_spans(
@@ -2545,25 +2529,9 @@ fn representative_privileges_with_dynamic_spans(
     }
     let representative_rule =
         expanded_rule_with_dynamic_spans(profile, tail_count, span_counts, representative)?;
-    let executable = representative_rule.privileges & 0x04;
-    let mut union = executable | (representative_rule.privileges & 0x03);
+    let mut union = representative_rule.privileges;
     if representative_rule.effect_permissions != 0 {
         union |= 0x02;
-    }
-    let logical = dynamic_account_width(profile, tail_count, span_counts)?;
-    let mut coordinate = 0_usize;
-    while coordinate < logical {
-        if profile.representative_with_dynamic_spans(tail_count, span_counts, coordinate)?
-            == representative
-        {
-            let rule =
-                expanded_rule_with_dynamic_spans(profile, tail_count, span_counts, coordinate)?;
-            if rule.privileges & 0x04 != executable {
-                return Err(Error::InvalidRouteAlias);
-            }
-            union |= rule.privileges & 0x03;
-        }
-        coordinate = coordinate.checked_add(1).ok_or(Error::InvalidLength)?;
     }
     Ok(union)
 }
@@ -3448,6 +3416,7 @@ fn validate_rule(
         && (item
             || rule.alias_kind != AliasKindV2::Fixed
             || rule.alias_index >= index
+            || rule.privileges != 0
             || rule.effect_permissions != 0
             || rule.data_length != 0
             || rule.data_item_stride != 0)

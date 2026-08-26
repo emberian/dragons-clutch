@@ -3563,10 +3563,10 @@ mod tests {
     }
 
     #[test]
-    fn authenticated_route_aliases_require_one_prior_privilege_superset() {
+    fn authenticated_route_aliases_are_zero_privilege_logical_views() {
         let representative = AccountRuleWithPrestateInputV2 {
             rule: AccountRuleInputV2 {
-                privileges: AccountPrivilegesV2::new(true, true, false),
+                privileges: WRITABLE,
                 effect_permissions: NO_EFFECTS,
                 alias: AccountAliasInputV2::SelfCoordinate,
                 data_length: 4,
@@ -3576,7 +3576,7 @@ mod tests {
         };
         let writable_alias = AccountRuleWithPrestateInputV2 {
             rule: AccountRuleInputV2 {
-                privileges: AccountPrivilegesV2::new(true, true, false),
+                privileges: READONLY,
                 effect_permissions: NO_EFFECTS,
                 alias: AccountAliasInputV2::Fixed(0),
                 data_length: 0,
@@ -3677,16 +3677,10 @@ mod tests {
                 .writable()
         );
         assert!(
-            profile
+            !profile
                 .route_privileges(0, 1)
-                .expect("write route")
+                .expect("logical alias")
                 .writable()
-        );
-        assert!(
-            profile
-                .route_privileges(0, 1)
-                .expect("signed route")
-                .signer()
         );
         assert!(
             !profile
@@ -3697,7 +3691,7 @@ mod tests {
 
         let body = [7_u8; 4];
         let representative_observation =
-            AccountObservationV1::new([1; 32], [2; 32], 9, &body, true, true, false);
+            AccountObservationV1::new([1; 32], [2; 32], 9, &body, false, true, false);
         let system_observation =
             AccountObservationV1::new([3; 32], [4; 32], 0, &[], false, false, true);
         let accounts = [
@@ -3767,7 +3761,7 @@ mod tests {
             ],
             Error::PrivilegeMismatch,
         );
-        let substituted = AccountObservationV1::new([9; 32], [2; 32], 9, &body, true, true, false);
+        let substituted = AccountObservationV1::new([9; 32], [2; 32], 9, &body, false, true, false);
         assert_refuses(
             &[
                 representative_observation,
@@ -3777,7 +3771,7 @@ mod tests {
             ],
             Error::AliasMismatch,
         );
-        let wrong_owner = AccountObservationV1::new([1; 32], [9; 32], 9, &body, true, true, false);
+        let wrong_owner = AccountObservationV1::new([1; 32], [9; 32], 9, &body, false, true, false);
         assert_refuses(
             &[
                 representative_observation,
@@ -3789,7 +3783,7 @@ mod tests {
         );
         let other_body = [8_u8; 4];
         let wrong_data =
-            AccountObservationV1::new([1; 32], [2; 32], 9, &other_body, true, true, false);
+            AccountObservationV1::new([1; 32], [2; 32], 9, &other_body, false, true, false);
         assert_refuses(
             &[
                 representative_observation,
@@ -3800,7 +3794,7 @@ mod tests {
             Error::AliasMismatch,
         );
         let wrong_lamports =
-            AccountObservationV1::new([1; 32], [2; 32], 10, &body, true, true, false);
+            AccountObservationV1::new([1; 32], [2; 32], 10, &body, false, true, false);
         assert_refuses(
             &[
                 representative_observation,
@@ -3811,50 +3805,26 @@ mod tests {
             Error::AliasMismatch,
         );
 
-        for escalation in [
+        for privileges in [
             AccountPrivilegesV2::new(true, false, false),
             AccountPrivilegesV2::new(false, true, false),
             AccountPrivilegesV2::new(false, false, true),
         ] {
-            let base = AccountRuleWithPrestateInputV2 {
-                rule: AccountRuleInputV2 {
-                    privileges: READONLY,
-                    effect_permissions: NO_EFFECTS,
-                    alias: AccountAliasInputV2::SelfCoordinate,
-                    data_length: 4,
-                    data_item_stride: 0,
-                },
-                prestate: AccountPrestateV2::Exact,
-            };
-            let alias = AccountRuleWithPrestateInputV2 {
-                rule: AccountRuleInputV2 {
-                    privileges: escalation,
-                    effect_permissions: NO_EFFECTS,
-                    alias: AccountAliasInputV2::Fixed(0),
-                    data_length: 0,
-                    data_item_stride: 0,
-                },
-                prestate: AccountPrestateV2::AuthenticatedRouteAlias,
-            };
-            let escalation_width = AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES + 2 * RULE_BYTES;
-            let mut hostile_scratch = std::vec![0_u8; escalation_width];
-            let mut hostile_output = std::vec![0x55_u8; escalation_width];
+            let mut privileged_alias_rules = rules;
+            privileged_alias_rules[1].rule.privileges = privileges;
+            let mut hostile_scratch = std::vec![0_u8; width];
+            let mut hostile_output = std::vec![0x55_u8; width];
             let before = hostile_output.clone();
             assert_eq!(
                 encode_account_profile_with_authenticated_route_alias_v2_atomic(
-                    TrustedEnvironmentV2::None,
-                    TrustedIdentityEnvironmentV2::None,
-                    TrustedBuiltinIdentityV2::None,
-                    &[base, alias],
+                    TrustedEnvironmentV2::CurrentSlot { destination: 0 },
+                    TrustedIdentityEnvironmentV2::CurrentExecutingProgram { destination: 1 },
+                    TrustedBuiltinIdentityV2::SystemProgram { destination: 2 },
+                    &privileged_alias_rules,
                     &[],
                     &[],
                     &[],
-                    RegisterGeometryV2 {
-                        common_scalars: 1,
-                        item_scalar_stride: 0,
-                        common_identities: 0,
-                        item_identity_stride: 0,
-                    },
+                    registers,
                     &mut hostile_scratch,
                     &mut hostile_output,
                 ),
