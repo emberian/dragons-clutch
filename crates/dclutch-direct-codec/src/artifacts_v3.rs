@@ -4,17 +4,24 @@
 //! `CapabilityProgramV3` by the action in [`DirectExecutionRequestV3`]. This
 //! module then joins every independently finalized artifact by its SHA-256
 //! content identity, hostile-decodes all four interpreters, and requires one
-//! coherent runtime-width register/account geometry. It does not authorize an
-//! AOT-only path: Trading still executes the selected Transition and Effect
-//! programs and commits once after fixed-role receipts.
+//! coherent runtime-width register/account geometry. The descriptor selects an
+//! ExecutionStrategy V2 record, which in turn selects the TransitionVM record;
+//! there is no parallel descriptor-to-Transition authority. This module does
+//! not authorize an AOT-only path: Trading still executes the selected
+//! Transition and Effect programs and commits once after fixed-role receipts.
 
-use dclutch_account_profile_contract::v2::AccountProfileV2;
+use dclutch_account_profile_contract::{
+    lifecycle_v3::StateLifecyclePolicyV3, v2::AccountProfileV2,
+};
 use dclutch_capability_program_contract::{
     hot_v3::HOT_FAMILY_REQUEST_OFFSET_V3,
     set_v1::{CapabilityProgramSetV1, SelectorWidthV1},
     v3::CapabilityProgramV3,
 };
 use dclutch_effect_kernel::{v2::FixedRole, v3::ProgramV3 as EffectProgramV3};
+use dclutch_execution_strategy_contract::v2::{
+    EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyProgramV2, StrategyDispositionV2,
+};
 use dclutch_request_profile_contract::{
     RequestProfileV1,
     v2::{REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID, RequestProfileV2},
@@ -28,8 +35,8 @@ use crate::{
         DIRECT_SUCCESSOR_KIND_ID_V3, DirectExecutionActionV3, DirectExecutionRequestV3,
     },
     successor::{
-        DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, DIRECT_MAKER_REPLAY_DERIVATION_ID_V1,
-        DIRECT_ROOT_SCHEMA_ID_V1, DIRECT_ROOT_STATE_BYTES_V1, DirectExecutionConfigV1,
+        DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, DIRECT_ROOT_SCHEMA_ID_V1, DIRECT_ROOT_STATE_BYTES_V1,
+        DirectExecutionConfigV1,
     },
 };
 
@@ -44,8 +51,12 @@ pub struct DirectArtifactBytesV3<'a> {
     pub config: &'a [u8],
     /// Runtime-tail account profile bytes.
     pub account_profile: &'a [u8],
+    /// Trading-owned state lifecycle policy bytes.
+    pub lifecycle_policy: &'a [u8],
     /// Exact family request profile bytes.
     pub request_profile: &'a [u8],
+    /// Descriptor-selected ExecutionStrategy V2 bytes.
+    pub strategy: &'a [u8],
     /// Runtime-tail transition program bytes.
     pub transition: &'a [u8],
     /// Fixed-role effect program bytes.
@@ -76,10 +87,14 @@ pub enum DirectArtifactErrorV3 {
     Config,
     /// AccountProfile hostile decode refused.
     AccountProfile,
+    /// State lifecycle policy hostile decode or account geometry refused.
+    LifecyclePolicy,
     /// RequestProfile hostile decode or request width refused.
     RequestProfile,
     /// Native-signature count or absolute current-instruction slices differed.
     NativeSignature,
+    /// ExecutionStrategy hostile decode, selection, or executable disposition refused.
+    Strategy,
     /// Transition hostile decode refused.
     Transition,
     /// Effect hostile decode or role admission refused.
@@ -102,8 +117,12 @@ pub struct DirectArtifactBundleV3<'a> {
     pub config: DirectExecutionConfigV1,
     /// Exact runtime-tail account interpreter.
     pub account_profile: AccountProfileV2<'a>,
+    /// Exact Trading-owned state lifecycle policy.
+    pub lifecycle_policy: StateLifecyclePolicyV3<'a>,
     /// Exact request interpreter.
     pub request_profile: DirectRequestProfileV3<'a>,
+    /// Exact acyclic execution strategy selecting the TransitionVM record.
+    pub strategy: ExecutionStrategyProgramV2,
     /// Exact transition interpreter.
     pub transition: TransitionProgramV3<'a>,
     /// Exact fixed-role effect interpreter.
@@ -167,11 +186,10 @@ pub fn authenticate_direct_artifacts_v3<'a>(
         || descriptor.config_schema().to_bytes() != DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1
         || descriptor.request_schema().to_bytes() != DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3
         || descriptor.root_schema().to_bytes() != DIRECT_ROOT_SCHEMA_ID_V1
-        || descriptor.derivation_policy().to_bytes() != DIRECT_MAKER_REPLAY_DERIVATION_ID_V1
         || descriptor.root_state_bytes()
             != u32::try_from(DIRECT_ROOT_STATE_BYTES_V1)
                 .map_err(|_| DirectArtifactErrorV3::Geometry)?
-        || descriptor.transition_schema().to_bytes() != dclutch_transition_vm::v3::SCHEMA_RELEASE_ID
+        || descriptor.transition_schema().to_bytes() != EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2
     {
         return Err(DirectArtifactErrorV3::Descriptor);
     }
@@ -190,6 +208,26 @@ pub fn authenticate_direct_artifacts_v3<'a>(
     let account_profile = AccountProfileV2::decode(artifacts.account_profile)
         .map_err(|_| DirectArtifactErrorV3::AccountProfile)?;
     require_content(
+        descriptor.derivation_policy().to_bytes(),
+        artifacts.lifecycle_policy,
+    )?;
+    let lifecycle_policy = StateLifecyclePolicyV3::decode_selected(
+        descriptor.derivation_policy().to_bytes(),
+        digest(artifacts.lifecycle_policy),
+        artifacts.lifecycle_policy,
+    )
+    .map_err(|_| DirectArtifactErrorV3::LifecyclePolicy)?;
+    lifecycle_policy
+        .validate_account_profile(account_profile)
+        .map_err(|_| DirectArtifactErrorV3::LifecyclePolicy)?;
+    if lifecycle_policy
+        .action_plan_count(semantic_request.action() as u32)
+        .map_err(|_| DirectArtifactErrorV3::LifecyclePolicy)?
+        == 0
+    {
+        return Err(DirectArtifactErrorV3::LifecyclePolicy);
+    }
+    require_content(
         descriptor.request_profile_program().to_bytes(),
         artifacts.request_profile,
     )?;
@@ -201,8 +239,23 @@ pub fn authenticate_direct_artifacts_v3<'a>(
     validate_native_signature_slices(semantic_request.action(), tail_count, request_profile)?;
     require_content(
         descriptor.transition_program().to_bytes(),
+        artifacts.strategy,
+    )?;
+    let strategy = ExecutionStrategyProgramV2::decode(artifacts.strategy)
+        .map_err(|_| DirectArtifactErrorV3::Strategy)?;
+    strategy
+        .validate_descriptor_selection(descriptor.transition_program(), descriptor)
+        .map_err(|_| DirectArtifactErrorV3::Strategy)?;
+    if strategy.disposition() != StrategyDispositionV2::Interpreted {
+        return Err(DirectArtifactErrorV3::Strategy);
+    }
+    require_content(
+        strategy.transition_program().to_bytes(),
         artifacts.transition,
     )?;
+    if strategy.transition_schema().to_bytes() != dclutch_transition_vm::v3::SCHEMA_RELEASE_ID {
+        return Err(DirectArtifactErrorV3::Transition);
+    }
     let transition = TransitionProgramV3::decode(artifacts.transition)
         .map_err(|_| DirectArtifactErrorV3::Transition)?;
     require_content(descriptor.effect_program().to_bytes(), artifacts.effect)?;
@@ -227,7 +280,9 @@ pub fn authenticate_direct_artifacts_v3<'a>(
         descriptor,
         config,
         account_profile,
+        lifecycle_policy,
         request_profile,
+        strategy,
         transition,
         effect,
     })
@@ -407,7 +462,9 @@ mod tests {
         descriptor: [u8; CAPABILITY_PROGRAM_V3_BYTES],
         config: [u8; crate::successor::DIRECT_EXECUTION_CONFIG_BYTES_V1],
         account: Vec<u8>,
+        lifecycle_policy: Vec<u8>,
         request_profile: Vec<u8>,
+        strategy: Vec<u8>,
         transition: Vec<u8>,
         effect: Vec<u8>,
         request: [u8; DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3],
@@ -420,7 +477,9 @@ mod tests {
                 descriptor: &self.descriptor,
                 config: &self.config,
                 account_profile: &self.account,
+                lifecycle_policy: &self.lifecycle_policy,
                 request_profile: &self.request_profile,
+                strategy: &self.strategy,
                 transition: &self.transition,
                 effect: &self.effect,
             }
@@ -460,6 +519,7 @@ mod tests {
         );
         put(&mut output, 12, &1_u16.to_le_bytes());
         put(&mut output, 20, &1_u16.to_le_bytes());
+        put(&mut output, 24, &1_u16.to_le_bytes());
         output
     }
 
@@ -485,6 +545,7 @@ mod tests {
         );
         put(&mut output, 20, &1_u16.to_le_bytes());
         put(&mut output, 24, &1_u16.to_le_bytes());
+        put(&mut output, 28, &1_u16.to_le_bytes());
         *output.get_mut(32).expect("request opcode") = 2;
         put(&mut output, 36, &12_u32.to_le_bytes());
         put(
@@ -492,6 +553,47 @@ mod tests {
             44,
             &(DirectExecutionActionV3::CloseDirectRoot as u64).to_le_bytes(),
         );
+        output
+    }
+
+    fn lifecycle_policy() -> Vec<u8> {
+        use dclutch_account_profile_contract::lifecycle_v3::{
+            ACTION_PLAN_BYTES, ARTIFACT_PROFILE, HEADER_BYTES, MAGIC, RECIPE_BYTES, SEED_BYTES,
+            VERSION,
+        };
+
+        let mut output = vec![0_u8; HEADER_BYTES + RECIPE_BYTES + SEED_BYTES + ACTION_PLAN_BYTES];
+        put(&mut output, 0, &MAGIC);
+        put(&mut output, 8, &VERSION.to_le_bytes());
+        put(&mut output, 10, &ARTIFACT_PROFILE.to_le_bytes());
+        put(&mut output, 12, &1_u16.to_le_bytes());
+        put(&mut output, 14, &1_u16.to_le_bytes());
+        put(&mut output, 16, &1_u16.to_le_bytes());
+
+        let recipe = HEADER_BYTES;
+        put(&mut output, recipe + 2, &0_u16.to_le_bytes());
+        put(&mut output, recipe + 4, &0_u16.to_le_bytes());
+        *output.get_mut(recipe + 6).expect("seed count") = 1;
+        put(
+            &mut output,
+            recipe + 8,
+            &u32::try_from(DIRECT_ROOT_STATE_BYTES_V1)
+                .expect("root width")
+                .to_le_bytes(),
+        );
+
+        let seed = HEADER_BYTES + RECIPE_BYTES;
+        *output.get_mut(seed).expect("seed source") = 3;
+        *output.get_mut(seed + 1).expect("seed width") = 1;
+
+        let plan = HEADER_BYTES + RECIPE_BYTES + SEED_BYTES;
+        put(
+            &mut output,
+            plan,
+            &(DirectExecutionActionV3::CloseDirectRoot as u32).to_le_bytes(),
+        );
+        *output.get_mut(plan + 4).expect("close operation") = 2;
+        *output.get_mut(plan + 8).expect("absent payer") = u8::MAX;
         output
     }
 
@@ -557,6 +659,7 @@ mod tests {
         *output.get_mut(4).expect("transition version") = dclutch_transition_vm::v3::VERSION;
         put(&mut output, 6, &1_u16.to_le_bytes());
         put(&mut output, 12, &1_u16.to_le_bytes());
+        put(&mut output, 16, &1_u16.to_le_bytes());
         output
     }
 
@@ -566,6 +669,7 @@ mod tests {
         *output.get_mut(4).expect("effect version") = dclutch_effect_kernel::v3::VERSION;
         put(&mut output, 12, &1_u16.to_le_bytes());
         put(&mut output, 16, &1_u16.to_le_bytes());
+        put(&mut output, 20, &1_u16.to_le_bytes());
         output
     }
 
@@ -588,8 +692,27 @@ mod tests {
 
     fn fixture() -> Fixture {
         let account = account_profile();
+        let lifecycle_policy = lifecycle_policy();
         let request_profile = request_profile();
         let transition = transition();
+        let strategy = ExecutionStrategyProgramV2::new(
+            StrategyDispositionV2::Interpreted,
+            id(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID),
+            id(digest(&transition)),
+            id(
+                dclutch_execution_strategy_contract::v2::EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
+            ),
+            None,
+            id(
+                dclutch_execution_strategy_contract::v2::EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2,
+            ),
+            None,
+            id(dclutch_execution_strategy_contract::v2::ACCELERATOR_REQUEST_SCHEMA_ID_V2),
+            id(dclutch_execution_strategy_contract::v2::ACCELERATOR_ACK_SCHEMA_ID_V2),
+        )
+        .expect("interpreted strategy")
+        .to_bytes()
+        .to_vec();
         let effect = effect();
         let config = DirectExecutionConfigV1::new(1_000, 25, [7; 32])
             .expect("config")
@@ -600,13 +723,13 @@ mod tests {
             id(DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3),
             id(DIRECT_ROOT_SCHEMA_ID_V1),
             id(digest(&account)),
-            id(DIRECT_MAKER_REPLAY_DERIVATION_ID_V1),
+            id(digest(&lifecycle_policy)),
             id([8; 32]),
             id(digest(&effect)),
             id(dclutch_request_profile_contract::SCHEMA_RELEASE_ID),
             id(digest(&request_profile)),
-            id(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID),
-            id(digest(&transition)),
+            id(EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2),
+            id(digest(&strategy)),
             u32::try_from(DIRECT_ROOT_STATE_BYTES_V1).expect("root width"),
         )
         .expect("descriptor")
@@ -622,7 +745,9 @@ mod tests {
             descriptor,
             config,
             account,
+            lifecycle_policy,
             request_profile,
+            strategy,
             transition,
             effect,
             request,
@@ -632,6 +757,16 @@ mod tests {
     #[test]
     fn exact_unsigned_bundle_joins_all_finalized_content() {
         let fixture = fixture();
+        let policy =
+            StateLifecyclePolicyV3::decode(&fixture.lifecycle_policy).expect("lifecycle fixture");
+        let profile = AccountProfileV2::decode(&fixture.account).expect("account fixture");
+        policy
+            .validate_account_profile(profile)
+            .expect("lifecycle geometry");
+        assert_eq!(
+            policy.action_plan_count(DirectExecutionActionV3::CloseDirectRoot as u32),
+            Ok(1)
+        );
         let joined = authenticate_direct_artifacts_v3(
             fixture.selection(),
             fixture.artifacts(),
@@ -702,6 +837,38 @@ mod tests {
             ),
             Err(DirectArtifactErrorV3::ContentIdentity)
         );
+
+        let mut wrong_lifecycle = fixture.lifecycle_policy.clone();
+        *wrong_lifecycle
+            .get_mut(dclutch_account_profile_contract::lifecycle_v3::HEADER_BYTES)
+            .expect("lifecycle mutation") ^= 1;
+        assert_eq!(
+            authenticate_direct_artifacts_v3(
+                fixture.selection(),
+                DirectArtifactBytesV3 {
+                    lifecycle_policy: &wrong_lifecycle,
+                    ..fixture.artifacts()
+                },
+                &fixture.request,
+                0,
+            ),
+            Err(DirectArtifactErrorV3::ContentIdentity)
+        );
+
+        let mut wrong_strategy = fixture.strategy.clone();
+        *wrong_strategy.get_mut(16).expect("strategy mutation") ^= 1;
+        assert_eq!(
+            authenticate_direct_artifacts_v3(
+                fixture.selection(),
+                DirectArtifactBytesV3 {
+                    strategy: &wrong_strategy,
+                    ..fixture.artifacts()
+                },
+                &fixture.request,
+                0,
+            ),
+            Err(DirectArtifactErrorV3::ContentIdentity)
+        );
     }
 
     #[test]
@@ -721,6 +888,46 @@ mod tests {
             0,
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn descriptor_cannot_restore_direct_transition_authority() {
+        let fixture = fixture();
+        let accepted = CapabilityProgramV3::decode(&fixture.descriptor).expect("descriptor");
+        let stale = CapabilityProgramV3::new(
+            accepted.kind(),
+            accepted.config_schema(),
+            accepted.request_schema(),
+            accepted.root_schema(),
+            accepted.account_profile(),
+            accepted.derivation_policy(),
+            accepted.capacity_profile(),
+            accepted.effect_program(),
+            accepted.request_profile_schema(),
+            accepted.request_profile_program(),
+            id(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID),
+            id(digest(&fixture.transition)),
+            accepted.root_state_bytes(),
+        )
+        .expect("structural stale descriptor")
+        .encode();
+        let stale_set = program_set(DirectExecutionActionV3::CloseDirectRoot, digest(&stale));
+        assert_eq!(
+            authenticate_direct_artifacts_v3(
+                DirectArtifactSelectionV3 {
+                    program_set: digest(&stale_set),
+                    config: digest(&fixture.config),
+                },
+                DirectArtifactBytesV3 {
+                    program_set: &stale_set,
+                    descriptor: &stale,
+                    ..fixture.artifacts()
+                },
+                &fixture.request,
+                0,
+            ),
+            Err(DirectArtifactErrorV3::Descriptor)
         );
     }
 
