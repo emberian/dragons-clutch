@@ -23,11 +23,20 @@ use dclutch_economic_slice_kernel::{
     market_revision, position_materialized, position_revision,
 };
 use dclutch_market_core_codec::{
-    CoreState, Identity, MarketCoreStateSeedsV1, MarketIdentity, Phase as CorePhase, Readiness,
+    CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase as CorePhase, Readiness,
+};
+use dclutch_product_runtime_v2::{
+    ContentId as ProductContentId, PortfolioInputV2, ResultDomainInputV2, compile_portfolio_v2,
+    compile_result_domain_v2, portfolio_record_bytes, result_domain_record_bytes,
+};
+use dclutch_product_runtime_v2_admission::{
+    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
+    RESULT_DOMAIN_SCHEMA_ID_V2,
 };
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_PDA_DOMAIN, RealmV1, RealmV1Input,
 };
+use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
@@ -76,7 +85,7 @@ const INITIAL_RECIPIENT_ATOMS: u64 = 5;
 const CUSTODY_EXPECTED_REVISION: u64 = 8;
 const DESCRIPTOR_HEADER_BYTES: usize = 224;
 const REPRESENTATION_MINT_BYTES: usize = 238;
-const TERMINAL_ACCOUNT_METAS: usize = 26;
+const TERMINAL_ACCOUNT_METAS: usize = 32;
 const PACKET_LIMIT: usize = 1_232;
 const TOKEN_2022_V11_ELF_DIGEST: [u8; 32] = [
     0x49, 0x5e, 0x9d, 0x76, 0x80, 0xdd, 0x55, 0x5c, 0xb1, 0x26, 0xa6, 0xa8, 0xe5, 0x46, 0x4a, 0xf5,
@@ -103,6 +112,12 @@ struct Fixture {
     claims_programdata: Pubkey,
     core_market: Pubkey,
     core_programdata: Pubkey,
+    product_record: Pubkey,
+    product_staging: Pubkey,
+    result_domain_record: Pubkey,
+    result_domain_staging: Pubkey,
+    portfolio_record: Pubkey,
+    portfolio_staging: Pubkey,
     custody_programdata: Pubkey,
     realm_key: Pubkey,
     receipt_mint: Pubkey,
@@ -215,6 +230,120 @@ fn add_account(test: &mut ProgramTest, key: Pubkey, owner: Pubkey, data: Vec<u8>
             rent_epoch: 0,
         },
     );
+}
+
+fn finalized_record_keys(schema: [u8; 32], digest: [u8; 32]) -> (Pubkey, Pubkey) {
+    let raw = Pubkey::find_program_address(
+        &[RAW_RECORD_PDA_SEED_V1, schema.as_slice(), digest.as_slice()],
+        &REGISTRY_PROGRAM_ID,
+    )
+    .0;
+    let staging = Pubkey::find_program_address(
+        &[
+            STAGING_CURSOR_PDA_SEED_V1,
+            schema.as_slice(),
+            digest.as_slice(),
+        ],
+        &REGISTRY_PROGRAM_ID,
+    )
+    .0;
+    (raw, staging)
+}
+
+fn add_finalized_record(
+    test: &mut ProgramTest,
+    schema: [u8; 32],
+    bytes: &[u8],
+) -> (Pubkey, Pubkey, [u8; 32]) {
+    let digest = hash(bytes).to_bytes();
+    let (raw, staging) = finalized_record_keys(schema, digest);
+    add_account(test, raw, REGISTRY_PROGRAM_ID, bytes.to_vec());
+    add_account(test, staging, system_program::ID, Vec::new());
+    (raw, staging, digest)
+}
+
+fn product_id(byte: u8) -> ProductContentId {
+    ProductContentId::new([byte; 32]).expect("nonzero Product fixture identity")
+}
+
+struct ProductRuntimeFixture {
+    product_id: [u8; 32],
+    product_digest: [u8; 32],
+    result_domain_digest: [u8; 32],
+    product_record: Pubkey,
+    product_staging: Pubkey,
+    result_domain_record: Pubkey,
+    result_domain_staging: Pubkey,
+    portfolio_record: Pubkey,
+    portfolio_staging: Pubkey,
+}
+
+fn add_product_runtime(test: &mut ProgramTest) -> ProductRuntimeFixture {
+    let semantic_product = product_id(0x61);
+    let liability_basis = product_id(0x65);
+    let representation_release = product_id(0x66);
+    let cuts: [i128; 0] = [];
+    let mut result_domain =
+        vec![0_u8; result_domain_record_bytes(cuts.len()).expect("result-domain width")];
+    compile_result_domain_v2(
+        ResultDomainInputV2 {
+            product_id: semantic_product,
+            coordinate_domain_id: product_id(0x63),
+            result_unit_id: product_id(0x64),
+            liability_basis_id: liability_basis,
+            representation_release_id: representation_release,
+            mapping_release_id: product_id(0x67),
+            cut_denominator: 1,
+            cuts: &cuts,
+        },
+        &mut result_domain,
+    )
+    .expect("result-domain record");
+    let (result_domain_record, result_domain_staging, result_domain_digest) =
+        add_finalized_record(test, RESULT_DOMAIN_SCHEMA_ID_V2, &result_domain);
+
+    let coefficients = [1_u64, 1];
+    let mut portfolio =
+        vec![0_u8; portfolio_record_bytes(coefficients.len()).expect("portfolio width")];
+    compile_portfolio_v2(
+        PortfolioInputV2 {
+            product_id: semantic_product,
+            result_domain_id: ProductContentId::new(result_domain_digest)
+                .expect("result-domain digest"),
+            claim_basis_id: product_id(0x68),
+            liability_basis_id: liability_basis,
+            representation_release_id: representation_release,
+            denominator: 1,
+            coefficients: &coefficients,
+        },
+        &mut portfolio,
+    )
+    .expect("portfolio record");
+    let (portfolio_record, portfolio_staging, portfolio_digest) =
+        add_finalized_record(test, PORTFOLIO_SCHEMA_ID_V2, &portfolio);
+
+    let mut product = [0_u8; PRODUCT_RECORD_BYTES_V2];
+    ProductRecordV2::new(
+        semantic_product,
+        ProductContentId::new(result_domain_digest).expect("result-domain digest"),
+        ProductContentId::new(portfolio_digest).expect("portfolio digest"),
+    )
+    .encode_into(&mut product)
+    .expect("Product graph root");
+    let (product_record, product_staging, product_digest) =
+        add_finalized_record(test, PRODUCT_RECORD_SCHEMA_ID_V2, &product);
+
+    ProductRuntimeFixture {
+        product_id: semantic_product.to_bytes(),
+        product_digest,
+        result_domain_digest,
+        product_record,
+        product_staging,
+        result_domain_record,
+        result_domain_staging,
+        portfolio_record,
+        portfolio_staging,
+    }
 }
 
 fn release(program: Pubkey, semantic_seed: u8, elf: &[u8]) -> ArtifactReleaseV1 {
@@ -470,14 +599,14 @@ fn terminal_economic_data(
 fn core_market(
     release_set: [u8; 32],
     realm: [u8; 32],
-    product: [u8; 32],
-    result_domain: [u8; 32],
+    product_record: [u8; 32],
+    product_id: [u8; 32],
 ) -> (Pubkey, Vec<u8>) {
     let mut identity = MarketIdentity {
         market_id: semantic_identity([1; 32]),
         realm_id: semantic_identity(realm),
-        product_id: semantic_identity(product),
-        result_domain: semantic_identity(result_domain),
+        product_record: semantic_identity(product_record),
+        product_id: semantic_identity(product_id),
         resolution_policy: semantic_identity([0x71; 32]),
         capability_manifest: semantic_identity([0x72; 32]),
         selected_release_set: semantic_identity(release_set),
@@ -485,7 +614,7 @@ fn core_market(
         generation: GENERATION,
     };
     let market = Pubkey::find_program_address(
-        &MarketCoreStateSeedsV1::new(identity).as_slices(),
+        &MarketCoreStateSeedsV2::new(identity).as_slices(),
         &CORE_PROGRAM_ID,
     )
     .0;
@@ -641,9 +770,13 @@ fn fixture() -> (ProgramTest, Fixture) {
     let realm_key = Pubkey::find_program_address(&[REALM_PDA_DOMAIN, &realm], &CORE_PROGRAM_ID).0;
     add_account(&mut test, realm_key, CORE_PROGRAM_ID, realm_data);
 
-    let product = [0x61; 32];
-    let result_domain = [0x62; 32];
-    let (core_market, core_data) = core_market(release_set, realm, product, result_domain);
+    let product_runtime = add_product_runtime(&mut test);
+    let (core_market, core_data) = core_market(
+        release_set,
+        realm,
+        product_runtime.product_digest,
+        product_runtime.product_id,
+    );
     add_account(&mut test, core_market, CORE_PROGRAM_ID, core_data);
     let descriptor = Pubkey::new_from_array([0xa3; 32]);
     let state = Pubkey::find_program_address(
@@ -654,8 +787,8 @@ fn fixture() -> (ProgramTest, Fixture) {
     let descriptor_data = descriptor_data(
         descriptor,
         core_market,
-        product,
-        result_domain,
+        product_runtime.product_id,
+        product_runtime.result_domain_digest,
         receipt_mint,
         release_set,
     );
@@ -776,6 +909,7 @@ fn fixture() -> (ProgramTest, Fixture) {
         context: descriptor.to_bytes(),
         caller_program: CLAIMS_PROGRAM_ID.to_bytes(),
         rent_refund: claimant.pubkey().to_bytes(),
+        open_vault_count: 1,
         next_revision: CUSTODY_EXPECTED_REVISION,
         generation: GENERATION,
         last_request_digest: [0xa1; 32],
@@ -837,6 +971,12 @@ fn fixture() -> (ProgramTest, Fixture) {
             claims_programdata: programdata_address(CLAIMS_PROGRAM_ID),
             core_market,
             core_programdata: programdata_address(CORE_PROGRAM_ID),
+            product_record: product_runtime.product_record,
+            product_staging: product_runtime.product_staging,
+            result_domain_record: product_runtime.result_domain_record,
+            result_domain_staging: product_runtime.result_domain_staging,
+            portfolio_record: product_runtime.portfolio_record,
+            portfolio_staging: product_runtime.portfolio_staging,
             custody_programdata: programdata_address(CUSTODY_PROGRAM_ID),
             realm_key,
             receipt_mint,
@@ -883,6 +1023,12 @@ fn terminal_accounts(fixture: &Fixture) -> Vec<AccountMeta> {
         AccountMeta::new_readonly(fixture.core_market, false),
         AccountMeta::new_readonly(CORE_PROGRAM_ID, false),
         AccountMeta::new_readonly(fixture.core_programdata, false),
+        AccountMeta::new_readonly(fixture.product_record, false),
+        AccountMeta::new_readonly(fixture.product_staging, false),
+        AccountMeta::new_readonly(fixture.result_domain_record, false),
+        AccountMeta::new_readonly(fixture.result_domain_staging, false),
+        AccountMeta::new_readonly(fixture.portfolio_record, false),
+        AccountMeta::new_readonly(fixture.portfolio_staging, false),
         AccountMeta::new_readonly(custody_caller_authority(fixture.custody_request), false),
         AccountMeta::new_readonly(CUSTODY_PROGRAM_ID, false),
         AccountMeta::new_readonly(fixture.custody_programdata, false),

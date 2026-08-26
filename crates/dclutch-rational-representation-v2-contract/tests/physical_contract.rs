@@ -714,8 +714,8 @@ fn terminal_requires_typed_lbv2_evidence_and_accepts_exact_zero_payout() {
     let rows = asset_bytes(&[selected]);
     let mut request_header = header(RepresentationActionV2::RedeemTerminal, 0, 1);
     request_header.expected_custody_replay_revision = ABSENT_REVISION;
-    let request = RepresentationRequestV2::new(request_header, &rows)
-        .expect("request remains decodable");
+    let request =
+        RepresentationRequestV2::new(request_header, &rows).expect("request remains decodable");
     let prepared = prepare(
         request,
         descriptor(&descriptor_bytes),
@@ -755,33 +755,31 @@ fn terminal_requires_typed_lbv2_evidence_and_accepts_exact_zero_payout() {
         ),
         Err(Error::ClaimsMismatch)
     );
-    let terminal_request = Lbv2TerminalRedeemRequestV2::new(
-        Lbv2TerminalRedeemRequestInputV2 {
-            release_set: id(1),
-            market: id(2),
-            product_record_digest: id(80),
-            semantic_product_id: id(81),
-            semantic_basis_id: id(82),
-            linked_basis_record_digest: id(83),
-            terminal_coordinate_digest: id(84),
-            owner: id(53),
-            protocol_position: id(85),
-            claims_program: id(31),
-            custody_request_digest: [0; 32],
-            candidate_digest: id(86),
-            terminal_numerator: 0,
-            terminal_denominator: 1,
-            claim_index: 0,
-            pre_market_revision: 10,
-            post_market_revision: 11,
-            pre_position_revision: 30,
-            post_position_revision: 31,
-            debit_quantity: 1,
-            evaluated_payout: 0,
-            pre_custody_revision: LBV2_TERMINAL_ABSENT_CUSTODY_REVISION_V2,
-            post_custody_revision: LBV2_TERMINAL_ABSENT_CUSTODY_REVISION_V2,
-        },
-    )
+    let terminal_request = Lbv2TerminalRedeemRequestV2::new(Lbv2TerminalRedeemRequestInputV2 {
+        release_set: id(1),
+        market: id(2),
+        product_record_digest: id(80),
+        semantic_product_id: id(81),
+        semantic_basis_id: id(82),
+        linked_basis_record_digest: id(83),
+        terminal_coordinate_digest: id(84),
+        owner: id(53),
+        protocol_position: id(85),
+        claims_program: id(31),
+        custody_request_digest: [0; 32],
+        candidate_digest: id(86),
+        terminal_numerator: 0,
+        terminal_denominator: 1,
+        claim_index: 0,
+        pre_market_revision: 10,
+        post_market_revision: 11,
+        pre_position_revision: 30,
+        post_position_revision: 31,
+        debit_quantity: 1,
+        evaluated_payout: 0,
+        pre_custody_revision: LBV2_TERMINAL_ABSENT_CUSTODY_REVISION_V2,
+        post_custody_revision: LBV2_TERMINAL_ABSENT_CUSTODY_REVISION_V2,
+    })
     .expect("typed terminal request");
     let terminal_request_digest = id(87);
     let terminal_receipt = Lbv2TerminalRedeemReceiptV2::new(
@@ -802,9 +800,9 @@ fn terminal_requires_typed_lbv2_evidence_and_accepts_exact_zero_payout() {
             affine_packet: None,
             affine_context: None,
             affine_receipt: None,
-            terminal_request: Some(terminal_request),
+            terminal_request: Some(&terminal_request),
             terminal_request_digest,
-            terminal_receipt: Some(terminal_receipt),
+            terminal_receipt: Some(&terminal_receipt),
             token_effect_digest: id(36),
             post_receipt_supply: 7,
             post_asset_observations: &posts,

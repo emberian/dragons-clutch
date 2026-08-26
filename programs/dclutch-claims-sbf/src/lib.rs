@@ -20,7 +20,7 @@ use dclutch_economic_slice_kernel::{
 use dclutch_market_core_codec::{
     CORE_EFFECT_DIGEST_DOMAIN_V1, CORE_EFFECT_ENVELOPE_BYTES_V1, CORE_EFFECT_MAGIC_V1,
     CoreEffectAckV1, CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState, Identity,
-    MarketCoreStateSeedsV1, Phase as CorePhase, Role, STATE_BYTES,
+    MarketCoreStateSeedsV2, Phase as CorePhase, Role, STATE_BYTES,
 };
 use dclutch_registry_svm::{AuthenticatedRoleReceiptV1, RegistryInstructionV1};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
@@ -41,7 +41,9 @@ use solana_system_interface::instruction::{allocate, assign};
 
 pub mod affine_batch_v2;
 pub mod liability_basis_v2;
+mod product_runtime_v2;
 pub mod protocol_position_v2;
+pub mod rational_representation_v2;
 mod representation;
 
 entrypoint!(process_instruction);
@@ -117,30 +119,42 @@ pub const REPRESENTATION_CORE_MARKET_ACCOUNT: usize = 13;
 pub const REPRESENTATION_CORE_PROGRAM_ACCOUNT: usize = 14;
 /// Unified representation account index: current Core ProgramData.
 pub const REPRESENTATION_CORE_PROGRAMDATA_ACCOUNT: usize = 15;
+/// Unified representation account index: finalized Product graph-root record.
+pub const REPRESENTATION_PRODUCT_RECORD_ACCOUNT: usize = 16;
+/// Unified representation account index: vacant Product graph-root staging cursor.
+pub const REPRESENTATION_PRODUCT_STAGING_ACCOUNT: usize = 17;
+/// Unified representation account index: finalized Product-selected result domain.
+pub const REPRESENTATION_RESULT_DOMAIN_RECORD_ACCOUNT: usize = 18;
+/// Unified representation account index: vacant result-domain staging cursor.
+pub const REPRESENTATION_RESULT_DOMAIN_STAGING_ACCOUNT: usize = 19;
+/// Unified representation account index: finalized Product-selected portfolio.
+pub const REPRESENTATION_PORTFOLIO_RECORD_ACCOUNT: usize = 20;
+/// Unified representation account index: vacant portfolio staging cursor.
+pub const REPRESENTATION_PORTFOLIO_STAGING_ACCOUNT: usize = 21;
 /// Exact unified representation account count before terminal Custody composition.
-pub const REPRESENTATION_ACCOUNT_COUNT: usize = 16;
+pub const REPRESENTATION_ACCOUNT_COUNT: usize = 22;
 /// Terminal representation account index: Claims release-pinned Custody caller authority.
-pub const REPRESENTATION_CUSTODY_CALLER_AUTHORITY_ACCOUNT: usize = 16;
+pub const REPRESENTATION_CUSTODY_CALLER_AUTHORITY_ACCOUNT: usize = 22;
 /// Terminal representation account index: current Custody program.
-pub const REPRESENTATION_CUSTODY_PROGRAM_ACCOUNT: usize = 17;
+pub const REPRESENTATION_CUSTODY_PROGRAM_ACCOUNT: usize = 23;
 /// Terminal representation account index: current Custody ProgramData.
-pub const REPRESENTATION_CUSTODY_PROGRAMDATA_ACCOUNT: usize = 18;
+pub const REPRESENTATION_CUSTODY_PROGRAMDATA_ACCOUNT: usize = 24;
 /// Terminal representation account index: finalized immutable Realm record.
-pub const REPRESENTATION_REALM_ACCOUNT: usize = 19;
+pub const REPRESENTATION_REALM_ACCOUNT: usize = 25;
 /// Terminal representation account index: canonical per-descriptor Custody replay.
-pub const REPRESENTATION_CUSTODY_REPLAY_ACCOUNT: usize = 20;
+pub const REPRESENTATION_CUSTODY_REPLAY_ACCOUNT: usize = 26;
 /// Terminal representation account index: Realm-selected collateral Mint.
-pub const REPRESENTATION_COLLATERAL_MINT_ACCOUNT: usize = 21;
+pub const REPRESENTATION_COLLATERAL_MINT_ACCOUNT: usize = 27;
 /// Terminal representation account index: canonical Market Hoard vault.
-pub const REPRESENTATION_HOARD_VAULT_ACCOUNT: usize = 22;
+pub const REPRESENTATION_HOARD_VAULT_ACCOUNT: usize = 28;
 /// Terminal representation account index: claimant's external collateral account.
-pub const REPRESENTATION_COLLATERAL_RECIPIENT_ACCOUNT: usize = 23;
+pub const REPRESENTATION_COLLATERAL_RECIPIENT_ACCOUNT: usize = 29;
 /// Terminal representation account index: canonical Custody transfer authority.
-pub const REPRESENTATION_CUSTODY_TRANSFER_AUTHORITY_ACCOUNT: usize = 24;
+pub const REPRESENTATION_CUSTODY_TRANSFER_AUTHORITY_ACCOUNT: usize = 30;
 /// Terminal representation account index: Realm-selected collateral token program.
-pub const REPRESENTATION_COLLATERAL_TOKEN_PROGRAM_ACCOUNT: usize = 25;
+pub const REPRESENTATION_COLLATERAL_TOKEN_PROGRAM_ACCOUNT: usize = 31;
 /// Exact unified representation account count with terminal Custody composition.
-pub const REPRESENTATION_TERMINAL_ACCOUNT_COUNT: usize = 26;
+pub const REPRESENTATION_TERMINAL_ACCOUNT_COUNT: usize = 32;
 
 struct GenericAccounts<'accounts, 'info> {
     authority: &'accounts AccountInfo<'info>,
@@ -224,6 +238,12 @@ struct RepresentationAccounts<'accounts, 'info> {
     core_market: &'accounts AccountInfo<'info>,
     core_program: &'accounts AccountInfo<'info>,
     core_programdata: &'accounts AccountInfo<'info>,
+    product_record: &'accounts AccountInfo<'info>,
+    product_staging: &'accounts AccountInfo<'info>,
+    result_domain_record: &'accounts AccountInfo<'info>,
+    result_domain_staging: &'accounts AccountInfo<'info>,
+    portfolio_record: &'accounts AccountInfo<'info>,
+    portfolio_staging: &'accounts AccountInfo<'info>,
 }
 
 impl<'accounts, 'info> RepresentationAccounts<'accounts, 'info> {
@@ -248,6 +268,12 @@ impl<'accounts, 'info> RepresentationAccounts<'accounts, 'info> {
             core_market,
             core_program,
             core_programdata,
+            product_record,
+            product_staging,
+            result_domain_record,
+            result_domain_staging,
+            portfolio_record,
+            portfolio_staging,
         ] = accounts
         else {
             return Err(ClaimsSbfError::Accounts.into());
@@ -269,6 +295,12 @@ impl<'accounts, 'info> RepresentationAccounts<'accounts, 'info> {
             core_market,
             core_program,
             core_programdata,
+            product_record,
+            product_staging,
+            result_domain_record,
+            result_domain_staging,
+            portfolio_record,
+            portfolio_staging,
         })
     }
 }
@@ -328,6 +360,11 @@ pub fn process_instruction(
         == Some(protocol_position_v2::PROTOCOL_POSITION_REQUEST_MAGIC_V2.as_slice())
     {
         return protocol_position_v2::process(program_id, accounts, instruction_data);
+    }
+    if instruction_data.get(..dclutch_rational_representation_v2_contract::REQUEST_MAGIC_V2.len())
+        == Some(dclutch_rational_representation_v2_contract::REQUEST_MAGIC_V2.as_slice())
+    {
+        return rational_representation_v2::process(program_id, accounts, instruction_data);
     }
     if let Ok(plan) = ClaimsPlanV1::decode(instruction_data) {
         return process_generic_plan(program_id, accounts, instruction_data, plan);
@@ -1133,7 +1170,7 @@ pub(crate) fn authenticate_core_market(
         return Err(ClaimsSbfError::Identity.into());
     }
     let state = CoreState::decode(&data).map_err(|_| ClaimsSbfError::Identity)?;
-    let seeds = MarketCoreStateSeedsV1::new(state.identity);
+    let seeds = MarketCoreStateSeedsV2::new(state.identity);
     let expected = Pubkey::find_program_address(&seeds.as_slices(), core_program.key).0;
     let aggregate_seeds =
         ClaimsAggregateSeedsV1::new(logical_market).map_err(|_| ClaimsSbfError::Identity)?;
@@ -1451,8 +1488,8 @@ mod tests {
             identity: MarketIdentity {
                 market_id: market,
                 realm_id: semantic_id(11)?,
+                product_record: semantic_id(13)?,
                 product_id: semantic_id(12)?,
-                result_domain: semantic_id(13)?,
                 resolution_policy: semantic_id(14)?,
                 capability_manifest: semantic_id(15)?,
                 selected_release_set: semantic_id(1)?,
@@ -1557,10 +1594,10 @@ mod tests {
         let core_program = Pubkey::new_from_array([10; 32]);
         let provisional_market = semantic_id(2)?;
         let provisional_state = core_state(provisional_market)?;
-        let state_seeds = MarketCoreStateSeedsV1::new(provisional_state.identity);
+        let state_seeds = MarketCoreStateSeedsV2::new(provisional_state.identity);
         let market = Pubkey::find_program_address(&state_seeds.as_slices(), &core_program).0;
         let state = core_state(identity(market.to_bytes())?)?;
-        let final_seeds = MarketCoreStateSeedsV1::new(state.identity);
+        let final_seeds = MarketCoreStateSeedsV2::new(state.identity);
         let final_market = Pubkey::find_program_address(&final_seeds.as_slices(), &core_program).0;
         if final_market != market {
             return Err(ClaimsSbfError::Identity.into());

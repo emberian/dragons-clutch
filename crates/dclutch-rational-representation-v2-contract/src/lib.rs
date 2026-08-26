@@ -56,8 +56,8 @@ pub const RATIONAL_REPLAY_SEED_V2: &[u8] = b"dclutch:rational-replay:v2";
 pub const RATIONAL_BASE_ACCOUNT_COUNT_V2: usize = 32;
 /// Accounts in one active request asset row.
 pub const RATIONAL_ASSET_ACCOUNT_COUNT_V2: usize = 4;
-/// Positive terminal Custody account suffix width.
-pub const RATIONAL_TERMINAL_ACCOUNT_COUNT_V2: usize = 11;
+/// Positive terminal Claims-coordinate plus Custody account suffix width.
+pub const RATIONAL_TERMINAL_ACCOUNT_COUNT_V2: usize = 13;
 
 /// Stable hostile-decode, composition, or postcondition refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

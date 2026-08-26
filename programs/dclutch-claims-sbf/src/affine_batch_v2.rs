@@ -197,7 +197,7 @@ pub(super) fn process(
     authenticate_privileges(program_id, &accounts)?;
     let packet_digest = hash(instruction_data).to_bytes();
     authenticate_authority(&accounts, plan, packet_digest)?;
-    let receipt = execute_authenticated(program_id, &accounts, plan, packet_digest)?;
+    let receipt = execute_authenticated(program_id, &accounts, plan, packet_digest, false)?;
     set_return_data(&receipt.to_bytes());
     Ok(())
 }
@@ -224,6 +224,7 @@ pub(crate) fn execute_parent_authenticated(
         &accounts,
         plan,
         hash(instruction_data).to_bytes(),
+        true,
     )
 }
 
@@ -232,8 +233,11 @@ fn execute_authenticated(
     accounts: &AffineBatchAccountsV2<'_, '_>,
     plan: AffineBatchPlanV2<'_>,
     packet_digest: [u8; 32],
+    parent_authenticated: bool,
 ) -> Result<AffineBatchReceiptV2, ProgramError> {
-    authenticate_releases(accounts, plan)?;
+    if !parent_authenticated {
+        authenticate_releases(accounts, plan)?;
+    }
 
     let market_before = accounts
         .market
@@ -242,7 +246,11 @@ fn execute_authenticated(
     let market =
         MarketViewV2::decode(&market_before).map_err(|_| AffineBatchSbfErrorV2::ClaimsState)?;
     authenticate_market(program_id, accounts, plan, market)?;
-    authenticate_product_and_basis(accounts, plan, market)?;
+    if !parent_authenticated {
+        authenticate_product_and_basis(accounts, plan, market)?;
+    } else {
+        authenticate_parent_product_digests(accounts, plan)?;
+    }
     let (mut market_candidate, mut position_candidates) =
         build_candidates(program_id, accounts, plan, market, &market_before)?;
     drop(market_before);
@@ -278,6 +286,33 @@ fn execute_authenticated(
     .map_err(|_| AffineBatchSbfErrorV2::Receipt)?;
     commit_candidates(accounts, &market_candidate, &position_candidates)?;
     Ok(receipt)
+}
+
+/// Rejoin the exact immutable records already authenticated by the enclosing
+/// Claims route. The parent entry point is crate-private and first rederives the
+/// same release-pinned caller authority; it may omit duplicate Registry CPIs,
+/// but it may not substitute different Product or basis bytes.
+fn authenticate_parent_product_digests(
+    accounts: &AffineBatchAccountsV2<'_, '_>,
+    plan: AffineBatchPlanV2<'_>,
+) -> Result<(), ProgramError> {
+    let product = accounts
+        .product_record
+        .try_borrow_data()
+        .map_err(|_| AffineBatchSbfErrorV2::Accounts)?;
+    let product_digest = hash(&product).to_bytes();
+    drop(product);
+    let basis = accounts
+        .basis_record
+        .try_borrow_data()
+        .map_err(|_| AffineBatchSbfErrorV2::Accounts)?;
+    let basis_digest = hash(&basis).to_bytes();
+    if product_digest != plan.product_record_digest()
+        || basis_digest != plan.linked_basis_record_digest()
+    {
+        return Err(AffineBatchSbfErrorV2::ProductBasis.into());
+    }
+    Ok(())
 }
 
 fn authenticate_privileges(
@@ -488,6 +523,7 @@ fn authenticate_product_and_basis(
         market,
         plan.product_record_digest(),
         plan.linked_basis_record_digest(),
+        CorePhase::Open,
     )
 }
 
@@ -510,6 +546,7 @@ pub(crate) fn authenticate_runtime_product_basis_core_v2(
     market: MarketViewV2,
     expected_product_record_digest: [u8; 32],
     expected_linked_basis_record_digest: [u8; 32],
+    expected_core_phase: CorePhase,
 ) -> Result<(), ProgramError> {
     let rent =
         Rent::from_account_info(rent_account).map_err(|_| AffineBatchSbfErrorV2::Accounts)?;
@@ -572,7 +609,7 @@ pub(crate) fn authenticate_runtime_product_basis_core_v2(
     )
     .0;
     if expected_core != *core_market.key
-        || core.phase != CorePhase::Open
+        || core.phase != expected_core_phase
         || core.identity.market_id.to_bytes() != market.logical_market
         || core.identity.product_record.to_bytes() != expected_product_record_digest
         || core.identity.product_id.to_bytes() != market.product_instance_id

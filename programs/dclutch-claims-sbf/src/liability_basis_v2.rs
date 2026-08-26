@@ -11,7 +11,13 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::convert::{TryFrom, TryInto};
 
-use dclutch_claims_svm::protocol_position_v2::ProtocolPositionSeedsV2;
+use dclutch_claims_svm::{
+    lbv2_terminal_v2::{
+        LBV2_TERMINAL_ABSENT_CUSTODY_REVISION_V2, Lbv2TerminalRedeemReceiptV2,
+        Lbv2TerminalRedeemRequestInputV2, Lbv2TerminalRedeemRequestV2,
+    },
+    protocol_position_v2::{ProtocolPositionClaimsCapabilitySeedsV2, ProtocolPositionSeedsV2},
+};
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
     CUSTODY_RECEIPT_BYTES_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1, ContextV1,
@@ -71,7 +77,10 @@ const MARKET_MAGIC_V2: [u8; 8] = *b"DCLLBM02";
 const POSITION_MAGIC_V2: [u8; 8] = *b"DCLLBP02";
 const RECEIPT_MAGIC_V2: [u8; 8] = *b"DCLLBR02";
 const RECEIPT_BYTES_V2: usize = 168;
-const CANDIDATE_DIGEST_DOMAIN_V2: [u8; 27] = *b"dclutch/lbv2/candidate/v2\0\0";
+/// Physical candidate commitment used by operator construction and typed
+/// Custody composition: domain || exact post-aggregate || exact post-Position.
+pub const LIABILITY_BASIS_CANDIDATE_DIGEST_DOMAIN_V2: [u8; 27] = *b"dclutch/lbv2/candidate/v2\0\0";
+const POST_RESOURCE_DIGEST_DOMAIN_V2: &[u8] = b"dclutch/lbv2/post-resources/v2";
 
 const OWNER_ACCOUNT: usize = 0;
 const MARKET_ACCOUNT: usize = 1;
@@ -103,6 +112,29 @@ const CUSTODY_AUTHORITY_ACCOUNT: usize = 26;
 const COLLATERAL_TOKEN_PROGRAM_ACCOUNT: usize = 27;
 /// Exact LiabilityBasisV2 account count.
 pub const LIABILITY_BASIS_ACCOUNT_COUNT_V2: usize = 28;
+
+/// Exact facts authenticated by the enclosing RationalRepresentationV2 route.
+///
+/// This witness is crate-private: constructing it asserts that the parent has
+/// already authenticated the descriptor, selected outcome, upstream packet,
+/// and caller context. The LBV2 executor still reauthenticates every persisted
+/// Product, basis, Core, Position, Custody, and release fact independently.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedLbv2TerminalParentV2 {
+    pub(crate) release_set: [u8; 32],
+    pub(crate) market: [u8; 32],
+    pub(crate) descriptor_id: [u8; 32],
+    pub(crate) outcome: u32,
+    pub(crate) beneficiary_actor: [u8; 32],
+    pub(crate) parent_context: [u8; 32],
+    pub(crate) parent_request_digest: [u8; 32],
+    pub(crate) custody_request_nonce: u64,
+    pub(crate) expected_market_revision: u64,
+    pub(crate) expected_position_revision: u64,
+    pub(crate) expected_custody_revision: u64,
+    pub(crate) debit_quantity: u64,
+    pub(crate) admitted_basis: AdmittedBasisV2,
+}
 
 const ACTION_KIND_OFFSET: usize = 10;
 const ACTION_CUSTODY_PRESENT_OFFSET: usize = 11;
@@ -472,8 +504,186 @@ pub(super) fn process(
     let (action_bytes, custody_bytes) = split_instruction(instruction_data)?;
     let action = LiabilityBasisActionV2::decode(action_bytes)?;
     let accounts = LiabilityBasisAccountsV2::parse(account_infos)?;
-    authenticate_privileges(program_id, &accounts, action)?;
+    authenticate_privileges(program_id, &accounts, OwnerAuthenticationV2::PublicSigner)?;
+    let executed = execute_authenticated_transition_v2(
+        program_id,
+        &accounts,
+        action,
+        custody_bytes,
+        hash(action_bytes).to_bytes(),
+        accounts.owner.key.to_bytes(),
+        None,
+    )?;
+    let receipt = LiabilityBasisReceiptV2 {
+        action: action.0.kind,
+        market_revision_before: action.0.expected_market_revision,
+        market_revision_after: executed.market_revision_after,
+        position_revision_before: action.0.expected_position_revision,
+        position_revision_after: executed.position_revision_after,
+        collateral_amount: executed.collateral_amount,
+        custody_revision_before: action.0.expected_custody_revision,
+        custody_revision_after: if action.0.custody_present {
+            action
+                .0
+                .expected_custody_revision
+                .checked_add(1)
+                .ok_or(LiabilityBasisSbfErrorV2::Postcondition)?
+        } else {
+            0
+        },
+        basis_id: executed.basis_id,
+        candidate_digest: executed.candidate_digest,
+        custody_receipt_digest: executed.custody_receipt_digest,
+    };
+    let receipt_bytes = receipt.to_bytes();
+    set_return_data(&receipt_bytes);
+    Ok(())
+}
 
+struct ExecutedTransitionV2 {
+    market_revision_after: u64,
+    position_revision_after: u64,
+    collateral_amount: u64,
+    basis_id: [u8; 32],
+    candidate_digest: [u8; 32],
+    custody_receipt_digest: [u8; 32],
+    typed_receipt: Option<Box<Lbv2TerminalRedeemReceiptV2>>,
+    typed_custody: Option<Box<AuthenticatedLbv2TerminalCustodyV2>>,
+}
+
+/// Exact Custody evidence observed by the sole LBV2 terminal writer.
+///
+/// This is returned only to an already-authenticated in-program composer. It
+/// does not create a second Custody authority path: the LBV2 executor has
+/// already constructed the request, authenticated the immediate producer and
+/// receipt, and checked the post-CPI replay digest before returning it.
+pub(crate) struct AuthenticatedLbv2TerminalCustodyV2 {
+    pub(crate) request: Box<CustodyRequestV1>,
+    pub(crate) request_digest: [u8; 32],
+    pub(crate) receipt: Box<CustodyReceiptV1>,
+    pub(crate) receipt_digest: [u8; 32],
+    pub(crate) replay_digest: [u8; 32],
+}
+
+/// Typed terminal result returned to the enclosing RationalRepresentationV2
+/// composer after the LBV2 state commit succeeds.
+pub(crate) struct AuthenticatedLbv2TerminalResultV2 {
+    pub(crate) receipt: Box<Lbv2TerminalRedeemReceiptV2>,
+    pub(crate) custody: Option<Box<AuthenticatedLbv2TerminalCustodyV2>>,
+}
+
+/// Execute the sole LBV2 terminal candidate/Custody/commit-last writer for an
+/// enclosing RationalRepresentationV2 route.
+///
+/// Account zero is the authenticated actor and Custody beneficiary. The
+/// debited Position owner is not an AccountInfo: it is the canonical
+/// ClaimsCapability PDA derived from `parent.descriptor_id` and
+/// `parent.outcome`, and both the typed request and Position state must name it.
+pub(crate) fn execute_parent_authenticated_terminal_v2(
+    program_id: &Pubkey,
+    account_infos: &[AccountInfo<'_>],
+    parent: Box<AuthenticatedLbv2TerminalParentV2>,
+) -> Result<Box<AuthenticatedLbv2TerminalResultV2>, ProgramError> {
+    if account_infos.len() != LIABILITY_BASIS_ACCOUNT_COUNT_V2
+        || parent.beneficiary_actor == [0; 32]
+        || parent.parent_context == [0; 32]
+        || parent.parent_request_digest == [0; 32]
+        || parent.debit_quantity == 0
+    {
+        return Err(LiabilityBasisSbfErrorV2::Instruction.into());
+    }
+    let owner_seeds =
+        ProtocolPositionClaimsCapabilitySeedsV2::new(parent.descriptor_id, parent.outcome)
+            .map_err(|_| LiabilityBasisSbfErrorV2::ClaimsState)?;
+    let position_owner = Pubkey::find_program_address(&owner_seeds.as_slices(), program_id)
+        .0
+        .to_bytes();
+    let action = LiabilityBasisActionV2::new(LiabilityBasisActionInputV2 {
+        kind: LiabilityBasisActionKindV2::TerminalRedeem,
+        custody_present: false,
+        expected_market_revision: parent.expected_market_revision,
+        expected_position_revision: parent.expected_position_revision,
+        quantity: parent.debit_quantity,
+        claim_index: parent.outcome,
+        expected_custody_revision: 0,
+        request_nonce: parent.custody_request_nonce,
+    })?;
+    let accounts = LiabilityBasisAccountsV2::parse(account_infos)?;
+    authenticate_privileges(
+        program_id,
+        &accounts,
+        OwnerAuthenticationV2::ParentActor {
+            beneficiary_actor: parent.beneficiary_actor,
+        },
+    )?;
+    let executed = execute_authenticated_transition_v2(
+        program_id,
+        &accounts,
+        action,
+        None,
+        parent.parent_request_digest,
+        position_owner,
+        Some(parent.as_ref()),
+    )?;
+    let receipt = executed
+        .typed_receipt
+        .ok_or(LiabilityBasisSbfErrorV2::Postcondition)?;
+    Ok(Box::new(AuthenticatedLbv2TerminalResultV2 {
+        receipt,
+        custody: executed.typed_custody,
+    }))
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn execute_authenticated_transition_v2<'info>(
+    program_id: &Pubkey,
+    accounts: &LiabilityBasisAccountsV2<'_, 'info>,
+    action: LiabilityBasisActionV2,
+    custody_bytes: Option<&[u8]>,
+    custody_parent_request_digest: [u8; 32],
+    position_owner: [u8; 32],
+    typed_terminal: Option<&AuthenticatedLbv2TerminalParentV2>,
+) -> Result<ExecutedTransitionV2, ProgramError> {
+    let planned = plan_authenticated_transition_v2(
+        program_id,
+        accounts,
+        action,
+        position_owner,
+        typed_terminal,
+    )?;
+    complete_authenticated_transition_v2(
+        program_id,
+        accounts,
+        planned.as_ref(),
+        custody_bytes,
+        custody_parent_request_digest,
+        position_owner,
+        typed_terminal,
+    )
+}
+
+struct PlannedTransitionV2 {
+    market: MarketViewV2,
+    action: LiabilityBasisActionV2,
+    terminal: Option<TerminalResultV2>,
+    token_before: TokenAmounts,
+    candidate: ClaimsCandidateV2,
+    market_revision_after: u64,
+    position_revision_after: u64,
+    market_candidate: Vec<u8>,
+    position_candidate: Vec<u8>,
+    candidate_digest: [u8; 32],
+}
+
+#[inline(never)]
+fn plan_authenticated_transition_v2(
+    program_id: &Pubkey,
+    accounts: &LiabilityBasisAccountsV2<'_, '_>,
+    action: LiabilityBasisActionV2,
+    position_owner: [u8; 32],
+    typed_terminal: Option<&AuthenticatedLbv2TerminalParentV2>,
+) -> Result<Box<PlannedTransitionV2>, ProgramError> {
     let market_data = accounts
         .market
         .try_borrow_data()
@@ -496,19 +706,40 @@ pub(super) fn process(
         position.claim_count,
     )?;
     drop(position_data);
-    authenticate_claims_state(program_id, &accounts, action, market, position)?;
-
-    authenticate_releases(&accounts, market)?;
-    let basis = authenticate_product_and_basis(&accounts, market)?;
-    let terminal = authenticate_core_and_terminal(&accounts, market, basis, action)?;
-    let token_before = token_amounts(&accounts)?;
+    authenticate_claims_state(
+        program_id,
+        accounts,
+        action,
+        market,
+        position,
+        position_owner,
+    )?;
+    if typed_terminal.is_some() {
+        authenticate_parent_custody_release(accounts, market)?;
+    } else {
+        authenticate_releases(accounts, market)?;
+    }
+    let basis = match typed_terminal {
+        Some(expected) => {
+            let admitted = expected.admitted_basis;
+            if admitted.basis_id().to_bytes() != market.basis_id
+                || admitted.product_instance_id().to_bytes() != market.product_instance_id
+                || admitted.claim_count() != market.claim_count
+            {
+                return Err(LiabilityBasisSbfErrorV2::ProductLink.into());
+            }
+            admitted
+        }
+        None => authenticate_product_and_basis(accounts, market)?,
+    };
+    let terminal = authenticate_core_and_terminal(accounts, market, basis, action)?;
+    let token_before = token_amounts(accounts)?;
     let hoard_before = match action.0.kind {
         LiabilityBasisActionKindV2::Split => token_before.destination,
         LiabilityBasisActionKindV2::Merge | LiabilityBasisActionKindV2::TerminalRedeem => {
             token_before.source
         }
     };
-
     let mut aggregate_after = alloc::vec![0_u64; aggregate_before.len()];
     let mut position_after = alloc::vec![0_u64; position_before.len()];
     let candidate = plan_candidate(
@@ -536,69 +767,379 @@ pub(super) fn process(
     let position_candidate =
         candidate_position_bytes(accounts.position, position_revision_after, &position_after)?;
     let candidate_digest = hashv(&[
-        &CANDIDATE_DIGEST_DOMAIN_V2,
+        &LIABILITY_BASIS_CANDIDATE_DIGEST_DOMAIN_V2,
         &market_candidate,
         &position_candidate,
     ])
     .to_bytes();
+    let action = match typed_terminal {
+        Some(expected) => {
+            let custody_present = candidate.collateral_out() != 0;
+            if custody_present
+                == (expected.expected_custody_revision == LBV2_TERMINAL_ABSENT_CUSTODY_REVISION_V2)
+            {
+                return Err(LiabilityBasisSbfErrorV2::CustodyRequest.into());
+            }
+            LiabilityBasisActionV2::new(LiabilityBasisActionInputV2 {
+                kind: LiabilityBasisActionKindV2::TerminalRedeem,
+                custody_present,
+                expected_market_revision: action.0.expected_market_revision,
+                expected_position_revision: action.0.expected_position_revision,
+                quantity: action.0.quantity,
+                claim_index: action.0.claim_index,
+                expected_custody_revision: if custody_present {
+                    expected.expected_custody_revision
+                } else {
+                    0
+                },
+                request_nonce: action.0.request_nonce,
+            })?
+        }
+        None => action,
+    };
+    Ok(Box::new(PlannedTransitionV2 {
+        market,
+        action,
+        terminal,
+        token_before,
+        candidate,
+        market_revision_after,
+        position_revision_after,
+        market_candidate,
+        position_candidate,
+        candidate_digest,
+    }))
+}
 
-    let custody_receipt_digest = if action.0.custody_present {
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn complete_authenticated_transition_v2(
+    program_id: &Pubkey,
+    accounts: &LiabilityBasisAccountsV2<'_, '_>,
+    planned: &PlannedTransitionV2,
+    custody_bytes: Option<&[u8]>,
+    custody_parent_request_digest: [u8; 32],
+    position_owner: [u8; 32],
+    typed_terminal: Option<&AuthenticatedLbv2TerminalParentV2>,
+) -> Result<ExecutedTransitionV2, ProgramError> {
+    let parent_custody_bytes = parent_custody_bytes_v2(
+        program_id,
+        accounts,
+        planned,
+        custody_parent_request_digest,
+        typed_terminal,
+    )?;
+    let effective_custody_bytes = parent_custody_bytes
+        .as_ref()
+        .map(|bytes| bytes.as_slice())
+        .or(custody_bytes);
+    let observed_terminal_request = observe_typed_terminal_request_v2(
+        program_id,
+        accounts,
+        planned,
+        effective_custody_bytes,
+        position_owner,
+        typed_terminal,
+    )?;
+    let custody_evidence = execute_custody_phase_v2(
+        program_id,
+        accounts,
+        planned,
+        effective_custody_bytes,
+        custody_parent_request_digest,
+    )?;
+    authenticate_physical_postconditions(
+        accounts,
+        planned.action,
+        planned.candidate,
+        planned.token_before,
+    )?;
+    let post_resource_digest = hashv(&[
+        POST_RESOURCE_DIGEST_DOMAIN_V2,
+        &planned.market_candidate,
+        &planned.position_candidate,
+        &custody_evidence.receipt_digest,
+        &custody_evidence.replay_digest,
+    ])
+    .to_bytes();
+    let typed_receipt = build_typed_terminal_receipt_v2(
+        observed_terminal_request.as_deref(),
+        custody_evidence.as_ref(),
+        post_resource_digest,
+    )?;
+    let collateral_amount = planned
+        .candidate
+        .collateral_in()
+        .checked_add(planned.candidate.collateral_out())
+        .ok_or(LiabilityBasisSbfErrorV2::Postcondition)?;
+    commit_candidates(
+        accounts.market,
+        accounts.position,
+        &planned.market_candidate,
+        &planned.position_candidate,
+    )?;
+    Ok(ExecutedTransitionV2 {
+        market_revision_after: planned.market_revision_after,
+        position_revision_after: planned.position_revision_after,
+        collateral_amount,
+        basis_id: planned.market.basis_id,
+        candidate_digest: planned.candidate_digest,
+        custody_receipt_digest: custody_evidence.receipt_digest,
+        typed_receipt,
+        typed_custody: match (
+            typed_terminal,
+            custody_evidence.request,
+            custody_evidence.receipt,
+        ) {
+            (Some(_), Some(request), Some(receipt)) => {
+                Some(Box::new(AuthenticatedLbv2TerminalCustodyV2 {
+                    request,
+                    request_digest: custody_evidence.request_digest,
+                    receipt,
+                    receipt_digest: custody_evidence.receipt_digest,
+                    replay_digest: custody_evidence.replay_digest,
+                }))
+            }
+            (Some(_), None, None) => None,
+            (None, _, _) => None,
+            _ => return Err(LiabilityBasisSbfErrorV2::Postcondition.into()),
+        },
+    })
+}
+
+#[inline(never)]
+fn parent_custody_bytes_v2(
+    program_id: &Pubkey,
+    accounts: &LiabilityBasisAccountsV2<'_, '_>,
+    planned: &PlannedTransitionV2,
+    parent_request_digest: [u8; 32],
+    typed_terminal: Option<&AuthenticatedLbv2TerminalParentV2>,
+) -> Result<Option<Box<[u8; dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1]>>, ProgramError> {
+    match typed_terminal {
+        Some(expected) if planned.action.0.custody_present => Ok(Some(Box::new(
+            expected_custody_request_v2(
+                program_id,
+                accounts,
+                planned.market,
+                planned.action,
+                planned.candidate,
+                planned.candidate_digest,
+                parent_request_digest,
+                expected.beneficiary_actor,
+            )?
+            .to_bytes()
+            .map_err(|_| LiabilityBasisSbfErrorV2::CustodyRequest)?,
+        ))),
+        _ => Ok(None),
+    }
+}
+
+#[inline(never)]
+fn observe_typed_terminal_request_v2(
+    program_id: &Pubkey,
+    accounts: &LiabilityBasisAccountsV2<'_, '_>,
+    planned: &PlannedTransitionV2,
+    custody_bytes: Option<&[u8]>,
+    position_owner: [u8; 32],
+    typed_terminal: Option<&AuthenticatedLbv2TerminalParentV2>,
+) -> Result<Option<Box<Lbv2TerminalRedeemRequestV2>>, ProgramError> {
+    match typed_terminal {
+        Some(expected) => Ok(Some(Box::new(authenticate_typed_terminal_request_v2(
+            program_id,
+            accounts,
+            planned.market,
+            planned.action,
+            planned.terminal,
+            planned.candidate,
+            planned.candidate_digest,
+            custody_bytes,
+            position_owner,
+            expected,
+        )?))),
+        None => Ok(None),
+    }
+}
+
+#[inline(never)]
+fn execute_custody_phase_v2(
+    program_id: &Pubkey,
+    accounts: &LiabilityBasisAccountsV2<'_, '_>,
+    planned: &PlannedTransitionV2,
+    custody_bytes: Option<&[u8]>,
+    parent_request_digest: [u8; 32],
+) -> Result<Box<CustodyExecutionEvidenceV2>, ProgramError> {
+    if planned.action.0.custody_present {
         let request_bytes = custody_bytes.ok_or(LiabilityBasisSbfErrorV2::Instruction)?;
         let request = authenticate_custody_request(
             program_id,
-            &accounts,
-            market,
-            action,
-            candidate,
-            candidate_digest,
-            action_bytes,
+            accounts,
+            planned.market,
+            planned.action,
+            planned.candidate,
+            planned.candidate_digest,
+            parent_request_digest,
+            accounts.owner.key.to_bytes(),
             request_bytes,
         )?;
-        invoke_custody(program_id, &accounts, request, request_bytes)?
-    } else {
-        if custody_bytes.is_some()
-            || candidate.collateral_in() != 0
-            || candidate.collateral_out() != 0
-        {
-            return Err(LiabilityBasisSbfErrorV2::CustodyRequest.into());
-        }
-        [0_u8; 32]
-    };
+        return invoke_custody(program_id, accounts, request, request_bytes).map(Box::new);
+    }
+    if custody_bytes.is_some()
+        || planned.candidate.collateral_in() != 0
+        || planned.candidate.collateral_out() != 0
+    {
+        return Err(LiabilityBasisSbfErrorV2::CustodyRequest.into());
+    }
+    Ok(Box::new(CustodyExecutionEvidenceV2 {
+        request: None,
+        request_digest: [0; 32],
+        receipt: None,
+        receipt_digest: [0; 32],
+        replay_digest: [0; 32],
+    }))
+}
 
-    authenticate_physical_postconditions(&accounts, action, candidate, token_before)?;
-    let receipt = LiabilityBasisReceiptV2 {
-        action: action.0.kind,
-        market_revision_before: action.0.expected_market_revision,
-        market_revision_after,
-        position_revision_before: action.0.expected_position_revision,
-        position_revision_after,
-        collateral_amount: candidate
-            .collateral_in()
-            .checked_add(candidate.collateral_out())
-            .ok_or(LiabilityBasisSbfErrorV2::Postcondition)?,
-        custody_revision_before: action.0.expected_custody_revision,
-        custody_revision_after: if action.0.custody_present {
+#[inline(never)]
+fn build_typed_terminal_receipt_v2(
+    request: Option<&Lbv2TerminalRedeemRequestV2>,
+    custody: &CustodyExecutionEvidenceV2,
+    post_resource_digest: [u8; 32],
+) -> Result<Option<Box<Lbv2TerminalRedeemReceiptV2>>, ProgramError> {
+    match request {
+        Some(request) => Ok(Some(Box::new(
+            Lbv2TerminalRedeemReceiptV2::new(
+                *request,
+                hash(&request.to_bytes()).to_bytes(),
+                custody.receipt_digest,
+                custody.replay_digest,
+                post_resource_digest,
+            )
+            .map_err(|_| LiabilityBasisSbfErrorV2::Postcondition)?,
+        ))),
+        None => Ok(None),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn authenticate_typed_terminal_request_v2(
+    program_id: &Pubkey,
+    accounts: &LiabilityBasisAccountsV2<'_, '_>,
+    market: MarketViewV2,
+    action: LiabilityBasisActionV2,
+    terminal: Option<TerminalResultV2>,
+    candidate: ClaimsCandidateV2,
+    candidate_digest: [u8; 32],
+    custody_bytes: Option<&[u8]>,
+    position_owner: [u8; 32],
+    expected: &AuthenticatedLbv2TerminalParentV2,
+) -> Result<Lbv2TerminalRedeemRequestV2, ProgramError> {
+    if action.0.kind != LiabilityBasisActionKindV2::TerminalRedeem
+        || expected.release_set != market.release_set
+        || expected.market != market.logical_market
+        || expected.parent_context != market.custody_context
+        || expected.beneficiary_actor != accounts.owner.key.to_bytes()
+        || expected.outcome != action.0.claim_index
+    {
+        return Err(LiabilityBasisSbfErrorV2::ProductLink.into());
+    }
+    let (terminal_numerator, terminal_denominator) = match terminal {
+        Some(TerminalResultV2::RationalCoordinate {
+            numerator,
+            denominator,
+        }) => (numerator, denominator),
+        _ => return Err(LiabilityBasisSbfErrorV2::ProductLink.into()),
+    };
+    let core_data = accounts
+        .core_market
+        .try_borrow_data()
+        .map_err(|_| LiabilityBasisSbfErrorV2::Accounts)?;
+    let core = CoreState::decode(&core_data).map_err(|_| LiabilityBasisSbfErrorV2::ProductLink)?;
+    drop(core_data);
+    let product_record_digest = hash(
+        &accounts
+            .product_record
+            .try_borrow_data()
+            .map_err(|_| LiabilityBasisSbfErrorV2::Accounts)?,
+    )
+    .to_bytes();
+    let linked_basis_record_digest = hash(
+        &accounts
+            .basis_record
+            .try_borrow_data()
+            .map_err(|_| LiabilityBasisSbfErrorV2::Accounts)?,
+    )
+    .to_bytes();
+    let core_product_record = core.identity.product_record.to_bytes();
+    let semantic_product_id = core.identity.product_id.to_bytes();
+    let terminal_coordinate_digest = core
+        .terminal_receipt
+        .ok_or(LiabilityBasisSbfErrorV2::ProductLink)?
+        .to_bytes();
+    if product_record_digest != core_product_record
+        || semantic_product_id != market.product_instance_id
+        || hash(
+            &accounts
+                .terminal_coordinate
+                .try_borrow_data()
+                .map_err(|_| LiabilityBasisSbfErrorV2::Accounts)?,
+        )
+        .to_bytes()
+            != terminal_coordinate_digest
+    {
+        return Err(LiabilityBasisSbfErrorV2::ProductLink.into());
+    }
+    let evaluated_payout = candidate.collateral_out();
+    let custody_request_digest = custody_bytes.map_or([0; 32], |bytes| hash(bytes).to_bytes());
+    let (pre_custody_revision, post_custody_revision) = if evaluated_payout == 0 {
+        (
+            LBV2_TERMINAL_ABSENT_CUSTODY_REVISION_V2,
+            LBV2_TERMINAL_ABSENT_CUSTODY_REVISION_V2,
+        )
+    } else {
+        (
+            action.0.expected_custody_revision,
             action
                 .0
                 .expected_custody_revision
                 .checked_add(1)
-                .ok_or(LiabilityBasisSbfErrorV2::Postcondition)?
-        } else {
-            0
-        },
-        basis_id: market.basis_id,
-        candidate_digest,
-        custody_receipt_digest,
+                .ok_or(LiabilityBasisSbfErrorV2::Candidate)?,
+        )
     };
-    let receipt_bytes = receipt.to_bytes();
-    commit_candidates(
-        accounts.market,
-        accounts.position,
-        &market_candidate,
-        &position_candidate,
-    )?;
-    set_return_data(&receipt_bytes);
-    Ok(())
+    let observed = Lbv2TerminalRedeemRequestV2::new(Lbv2TerminalRedeemRequestInputV2 {
+        release_set: market.release_set,
+        market: market.logical_market,
+        product_record_digest,
+        semantic_product_id,
+        semantic_basis_id: market.basis_id,
+        linked_basis_record_digest,
+        terminal_coordinate_digest,
+        owner: position_owner,
+        protocol_position: accounts.position.key.to_bytes(),
+        claims_program: program_id.to_bytes(),
+        custody_request_digest,
+        candidate_digest,
+        terminal_numerator,
+        terminal_denominator,
+        claim_index: action.0.claim_index,
+        pre_market_revision: action.0.expected_market_revision,
+        post_market_revision: action
+            .0
+            .expected_market_revision
+            .checked_add(1)
+            .ok_or(LiabilityBasisSbfErrorV2::Candidate)?,
+        pre_position_revision: action.0.expected_position_revision,
+        post_position_revision: action
+            .0
+            .expected_position_revision
+            .checked_add(1)
+            .ok_or(LiabilityBasisSbfErrorV2::Candidate)?,
+        debit_quantity: action.0.quantity,
+        evaluated_payout,
+        pre_custody_revision,
+        post_custody_revision,
+    })
+    .map_err(|_| LiabilityBasisSbfErrorV2::Postcondition)?;
+    Ok(observed)
 }
 
 fn split_instruction(
@@ -783,12 +1324,24 @@ impl PositionViewV2 {
     }
 }
 
+#[derive(Clone, Copy)]
+enum OwnerAuthenticationV2 {
+    PublicSigner,
+    ParentActor { beneficiary_actor: [u8; 32] },
+}
+
 fn authenticate_privileges(
     program_id: &Pubkey,
     accounts: &LiabilityBasisAccountsV2<'_, '_>,
-    _action: LiabilityBasisActionV2,
+    owner_authentication: OwnerAuthenticationV2,
 ) -> Result<(), ProgramError> {
-    if !accounts.owner.is_signer
+    let owner_is_authenticated = match owner_authentication {
+        OwnerAuthenticationV2::PublicSigner => accounts.owner.is_signer,
+        OwnerAuthenticationV2::ParentActor { beneficiary_actor } => {
+            accounts.owner.is_signer && accounts.owner.key.to_bytes() == beneficiary_actor
+        }
+    };
+    if !owner_is_authenticated
         || accounts.owner.is_writable
         || accounts.owner.executable
         || !accounts.market.is_writable
@@ -856,30 +1409,30 @@ fn authenticate_privileges(
     Ok(())
 }
 
+#[inline(never)]
 fn authenticate_claims_state(
     program_id: &Pubkey,
     accounts: &LiabilityBasisAccountsV2<'_, '_>,
     action: LiabilityBasisActionV2,
     market: MarketViewV2,
     position: PositionViewV2,
+    expected_position_owner: [u8; 32],
 ) -> Result<(), ProgramError> {
     let market_seeds = [
         LIABILITY_BASIS_MARKET_SEED_V2,
         market.logical_market.as_slice(),
     ];
     let expected_market = Pubkey::find_program_address(&market_seeds, program_id).0;
-    let position_seeds = ProtocolPositionSeedsV2::new(
-        accounts.market.key.to_bytes(),
-        accounts.owner.key.to_bytes(),
-    )
-    .map_err(|_| LiabilityBasisSbfErrorV2::ClaimsState)?;
+    let position_seeds =
+        ProtocolPositionSeedsV2::new(accounts.market.key.to_bytes(), expected_position_owner)
+            .map_err(|_| LiabilityBasisSbfErrorV2::ClaimsState)?;
     let expected_position = Pubkey::find_program_address(&position_seeds.as_slices(), program_id).0;
     if accounts.market.owner != program_id
         || accounts.position.owner != program_id
         || accounts.market.key != &expected_market
         || accounts.position.key != &expected_position
         || position.market_account != accounts.market.key.to_bytes()
-        || position.owner != accounts.owner.key.to_bytes()
+        || position.owner != expected_position_owner
         || position.basis_id != market.basis_id
         || position.claim_count != market.claim_count
         || market.registry_program != accounts.registry.key.to_bytes()
@@ -891,6 +1444,7 @@ fn authenticate_claims_state(
     Ok(())
 }
 
+#[inline(never)]
 fn authenticate_releases(
     accounts: &LiabilityBasisAccountsV2<'_, '_>,
     market: MarketViewV2,
@@ -927,6 +1481,31 @@ fn authenticate_releases(
     Ok(())
 }
 
+/// Authenticate the one release role not already proven by the enclosing
+/// Claims route. The typed parent path has just authenticated its caller,
+/// Claims, Core, Product, basis, and terminal Core phase against these same
+/// accounts; Custody remains an independent executable boundary and therefore
+/// still requires its own immediate Registry receipt here.
+#[inline(never)]
+fn authenticate_parent_custody_release(
+    accounts: &LiabilityBasisAccountsV2<'_, '_>,
+    market: MarketViewV2,
+) -> Result<(), ProgramError> {
+    let custody = reauthenticate(
+        accounts.registry,
+        accounts.cache,
+        ExecutionRoleV1::Custody,
+        accounts.custody_program,
+        accounts.custody_programdata,
+    )
+    .map_err(|_| LiabilityBasisSbfErrorV2::Release)?;
+    if custody.execution_release_set_id().as_bytes() != &market.release_set {
+        return Err(LiabilityBasisSbfErrorV2::Release.into());
+    }
+    Ok(())
+}
+
+#[inline(never)]
 fn authenticate_product_and_basis(
     accounts: &LiabilityBasisAccountsV2<'_, '_>,
     market: MarketViewV2,
@@ -1067,6 +1646,7 @@ fn authenticate_finalized_record(
     Ok(())
 }
 
+#[inline(never)]
 fn authenticate_core_and_terminal(
     accounts: &LiabilityBasisAccountsV2<'_, '_>,
     market: MarketViewV2,
@@ -1205,6 +1785,7 @@ fn map_candidate_error(_error: ProductClaimsErrorV2) -> ProgramError {
     LiabilityBasisSbfErrorV2::Candidate.into()
 }
 
+#[inline(never)]
 fn candidate_market_bytes(
     account: &AccountInfo<'_>,
     revision: u64,
@@ -1228,6 +1809,7 @@ fn candidate_market_bytes(
     Ok(candidate)
 }
 
+#[inline(never)]
 fn candidate_position_bytes(
     account: &AccountInfo<'_>,
     revision: u64,
@@ -1257,6 +1839,7 @@ struct TokenAmounts {
     destination: u64,
 }
 
+#[inline(never)]
 fn token_amounts(
     accounts: &LiabilityBasisAccountsV2<'_, '_>,
 ) -> Result<TokenAmounts, ProgramError> {
@@ -1292,6 +1875,7 @@ fn token_amounts(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[inline(never)]
 fn authenticate_custody_request(
     program_id: &Pubkey,
     accounts: &LiabilityBasisAccountsV2<'_, '_>,
@@ -1299,11 +1883,41 @@ fn authenticate_custody_request(
     action: LiabilityBasisActionV2,
     candidate: ClaimsCandidateV2,
     candidate_digest: [u8; 32],
-    action_bytes: &[u8],
+    parent_request_digest: [u8; 32],
+    beneficiary: [u8; 32],
     request_bytes: &[u8],
 ) -> Result<CustodyRequestV1, ProgramError> {
     let request = CustodyRequestV1::decode(request_bytes)
         .map_err(|_| LiabilityBasisSbfErrorV2::CustodyRequest)?;
+    let expected = expected_custody_request_v2(
+        program_id,
+        accounts,
+        market,
+        action,
+        candidate,
+        candidate_digest,
+        parent_request_digest,
+        beneficiary,
+    )?;
+    if request != expected {
+        return Err(LiabilityBasisSbfErrorV2::CustodyRequest.into());
+    }
+    authenticate_custody_request_accounts_v2(program_id, accounts, action, request, request_bytes)?;
+    Ok(request)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn expected_custody_request_v2(
+    program_id: &Pubkey,
+    accounts: &LiabilityBasisAccountsV2<'_, '_>,
+    market: MarketViewV2,
+    action: LiabilityBasisActionV2,
+    candidate: ClaimsCandidateV2,
+    candidate_digest: [u8; 32],
+    parent_request_digest: [u8; 32],
+    beneficiary: [u8; 32],
+) -> Result<CustodyRequestV1, ProgramError> {
     let amount = candidate
         .collateral_in()
         .checked_add(candidate.collateral_out())
@@ -1312,7 +1926,7 @@ fn authenticate_custody_request(
         return Err(LiabilityBasisSbfErrorV2::CustodyRequest.into());
     }
     let split = action.0.kind == LiabilityBasisActionKindV2::Split;
-    let expected = CustodyRequestV1 {
+    Ok(CustodyRequestV1 {
         operation: OperationV1::Transfer,
         caller_role: CallerRoleV1::Claims,
         source_compartment: if split {
@@ -1332,18 +1946,10 @@ fn authenticate_custody_request(
         caller_program: program_id.to_bytes(),
         semantic: ContextV1 {
             candidate: candidate_digest,
-            source_owner: if split {
-                accounts.owner.key.to_bytes()
-            } else {
-                [0; 32]
-            },
-            destination_owner: if split {
-                [0; 32]
-            } else {
-                accounts.owner.key.to_bytes()
-            },
+            source_owner: if split { beneficiary } else { [0; 32] },
+            destination_owner: if split { [0; 32] } else { beneficiary },
             order: [0; 32],
-            parent_request_digest: hash(action_bytes).to_bytes(),
+            parent_request_digest,
             order_nonce: action.0.request_nonce,
             generation: market.generation,
             page_index: 0,
@@ -1374,10 +1980,17 @@ fn authenticate_custody_request(
             .ok_or(LiabilityBasisSbfErrorV2::CustodyRequest)?,
         amount,
         rent_lamports: 0,
-    };
-    if request != expected {
-        return Err(LiabilityBasisSbfErrorV2::CustodyRequest.into());
-    }
+    })
+}
+
+fn authenticate_custody_request_accounts_v2(
+    program_id: &Pubkey,
+    accounts: &LiabilityBasisAccountsV2<'_, '_>,
+    action: LiabilityBasisActionV2,
+    request: CustodyRequestV1,
+    request_bytes: &[u8],
+) -> Result<(), ProgramError> {
+    let split = action.0.kind == LiabilityBasisActionKindV2::Split;
     let request_digest = hash(request_bytes).to_bytes();
     let caller_seeds = CallerAuthoritySeedsV1::new(
         ContentId::new(request.release_set)
@@ -1437,7 +2050,15 @@ fn authenticate_custody_request(
     {
         return Err(LiabilityBasisSbfErrorV2::CustodyRequest.into());
     }
-    Ok(request)
+    Ok(())
+}
+
+struct CustodyExecutionEvidenceV2 {
+    request: Option<Box<CustodyRequestV1>>,
+    request_digest: [u8; 32],
+    receipt: Option<Box<CustodyReceiptV1>>,
+    receipt_digest: [u8; 32],
+    replay_digest: [u8; 32],
 }
 
 fn invoke_custody<'info>(
@@ -1445,7 +2066,7 @@ fn invoke_custody<'info>(
     accounts: &LiabilityBasisAccountsV2<'_, 'info>,
     request: CustodyRequestV1,
     request_bytes: &[u8],
-) -> Result<[u8; 32], ProgramError> {
+) -> Result<CustodyExecutionEvidenceV2, ProgramError> {
     let instruction = Instruction {
         program_id: *accounts.custody_program.key,
         accounts: Vec::from([
@@ -1518,9 +2139,16 @@ fn invoke_custody<'info>(
     receipt
         .verify_for(request, request_digest, replay_digest)
         .map_err(|_| LiabilityBasisSbfErrorV2::Postcondition)?;
-    Ok(hash(&receipt_bytes).to_bytes())
+    Ok(CustodyExecutionEvidenceV2 {
+        request: Some(Box::new(request)),
+        request_digest,
+        receipt: Some(Box::new(receipt)),
+        receipt_digest: hash(&receipt_bytes).to_bytes(),
+        replay_digest,
+    })
 }
 
+#[inline(never)]
 fn authenticate_physical_postconditions(
     accounts: &LiabilityBasisAccountsV2<'_, '_>,
     action: LiabilityBasisActionV2,
@@ -1570,6 +2198,7 @@ fn authenticate_physical_postconditions(
     Ok(())
 }
 
+#[inline(never)]
 fn commit_candidates(
     market: &AccountInfo<'_>,
     position: &AccountInfo<'_>,

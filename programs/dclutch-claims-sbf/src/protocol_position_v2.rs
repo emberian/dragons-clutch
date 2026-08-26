@@ -22,6 +22,7 @@ pub use dclutch_claims_svm::protocol_position_v2::{
     ProtocolPositionCloseReceiptV2, ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2,
     ProtocolPositionRequestV2, ProtocolPositionSeedsV2,
 };
+use dclutch_market_core_codec::Phase as CorePhase;
 use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV2};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_rent_contract::RentCreditV1;
@@ -324,6 +325,7 @@ fn process_admit(
         market,
         product_digest,
         linked_digest,
+        CorePhase::Open,
     )
     .map_err(|_| ProtocolPositionSbfErrorV2::ProductBasis)?;
 

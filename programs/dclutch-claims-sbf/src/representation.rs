@@ -16,6 +16,7 @@ use dclutch_economic_slice_kernel::{
     market_phase, market_registry_program, market_release_set_id, market_revision,
     position_market_id, position_materialized, position_native, position_owner, position_revision,
 };
+use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV2};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_token_svm::{
     COption, ExactTransferProfileV1, MINT_BYTES, Mint, TOKEN_2022_PROGRAM_ID, TokenAccount,
@@ -27,6 +28,8 @@ use solana_program::{
     program::{get_return_data, invoke_signed, set_return_data},
     program_error::ProgramError,
     pubkey::Pubkey,
+    rent::Rent,
+    sysvar::Sysvar,
 };
 use spl_token_2022_interface::{
     extension::{ExtensionType, permissioned_burn},
@@ -41,7 +44,7 @@ use super::{
     REPRESENTATION_CUSTODY_TRANSFER_AUTHORITY_ACCOUNT, REPRESENTATION_HOARD_VAULT_ACCOUNT,
     REPRESENTATION_REALM_ACCOUNT, REPRESENTATION_STATE_SEED_V1,
     REPRESENTATION_TERMINAL_ACCOUNT_COUNT, RepresentationAccounts, authenticate_core_market,
-    phases_join, reauthenticate,
+    phases_join, product_runtime_v2::authenticate_product_runtime_v2, reauthenticate,
 };
 
 const MINT_PADDING_START: usize = MINT_BYTES;
@@ -771,8 +774,31 @@ fn authenticate_economic_state(
         descriptor.market_id(),
         descriptor.release_set_id(),
     )?;
-    if core.identity.product_id.to_bytes() != descriptor.product_id()
-        || core.identity.result_domain.to_bytes() != descriptor.result_domain_id()
+    let rent = Rent::get().map_err(|_| ClaimsSbfError::Accounts)?;
+    let product = authenticate_product_runtime_v2(
+        accounts.registry.key,
+        &rent,
+        core.identity.product_record.to_bytes(),
+        None,
+        ProductRuntimeFrameV2 {
+            product: FinalizedRecordFrameV2 {
+                raw: accounts.product_record,
+                staging: accounts.product_staging,
+            },
+            result_domain: FinalizedRecordFrameV2 {
+                raw: accounts.result_domain_record,
+                staging: accounts.result_domain_staging,
+            },
+            portfolio: FinalizedRecordFrameV2 {
+                raw: accounts.portfolio_record,
+                staging: accounts.portfolio_staging,
+            },
+        },
+    )?;
+    if core.identity.product_id.to_bytes() != product.product_id.to_bytes()
+        || product.product_id.to_bytes() != descriptor.product_id()
+        || product.result_domain_record.content_digest.to_bytes() != descriptor.result_domain_id()
+        || product.outcome_count != descriptor.outcome_count()
     {
         return Err(ClaimsSbfError::Identity.into());
     }
@@ -1223,8 +1249,8 @@ mod tests {
             identity: dclutch_market_core_codec::MarketIdentity {
                 market_id: identity(2),
                 realm_id: identity(12),
+                product_record: identity(4),
                 product_id: identity(3),
-                result_domain: identity(4),
                 resolution_policy: identity(13),
                 capability_manifest: identity(14),
                 selected_release_set: identity(6),
@@ -1375,6 +1401,12 @@ mod tests {
             core_market: &account(Pubkey::new_unique(), program, Vec::new()),
             core_program: &account(Pubkey::new_unique(), program, Vec::new()),
             core_programdata: &account(Pubkey::new_unique(), program, Vec::new()),
+            product_record: &account(Pubkey::new_unique(), program, Vec::new()),
+            product_staging: &account(Pubkey::new_unique(), program, Vec::new()),
+            result_domain_record: &account(Pubkey::new_unique(), program, Vec::new()),
+            result_domain_staging: &account(Pubkey::new_unique(), program, Vec::new()),
+            portfolio_record: &account(Pubkey::new_unique(), program, Vec::new()),
+            portfolio_staging: &account(Pubkey::new_unique(), program, Vec::new()),
         };
         authenticate_wrapper_projection(&accounts, descriptor, 0)
     }
@@ -1413,6 +1445,12 @@ mod tests {
             core_market: &placeholder,
             core_program: &placeholder,
             core_programdata: &placeholder,
+            product_record: &placeholder,
+            product_staging: &placeholder,
+            result_domain_record: &placeholder,
+            result_domain_staging: &placeholder,
+            portfolio_record: &placeholder,
+            portfolio_staging: &placeholder,
         };
         assert_eq!(
             authenticate_wrapper_projection(&accounts, descriptor, 0),
@@ -1559,6 +1597,7 @@ mod tests {
             context: request.context,
             caller_program: request.caller_program,
             rent_refund: [23; 32],
+            open_vault_count: 1,
             next_revision: request.expected_revision,
             generation: request.semantic.generation,
             last_request_digest: [24; 32],

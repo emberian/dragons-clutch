@@ -19,15 +19,17 @@ pub(crate) fn authenticate_product_runtime_v2(
     registry_program: &Pubkey,
     rent: &Rent,
     expected_product_record_digest: [u8; 32],
-    admission_receipt_bytes: &[u8],
+    admission_receipt_bytes: Option<&[u8]>,
     frame: ProductRuntimeFrameV2<'_, '_>,
 ) -> Result<AuthenticatedProductRuntimeV2, ClaimsSbfError> {
     let expected =
         ContentId::new(expected_product_record_digest).map_err(|_| ClaimsSbfError::Accounts)?;
     let authenticated = authenticate_graph(registry_program, rent, expected, frame)
         .map_err(|_| ClaimsSbfError::Accounts)?;
-    authenticated
-        .recheck_reference_receipt(admission_receipt_bytes)
-        .map_err(|_| ClaimsSbfError::Accounts)?;
+    if let Some(receipt) = admission_receipt_bytes {
+        authenticated
+            .recheck_reference_receipt(receipt)
+            .map_err(|_| ClaimsSbfError::Accounts)?;
+    }
     Ok(authenticated)
 }

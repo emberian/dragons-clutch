@@ -6,7 +6,9 @@ use dclutch_claims_svm::affine_batch_v2::{
 use dclutch_claims_svm::lbv2_terminal_v2::{
     Lbv2TerminalRedeemReceiptV2, Lbv2TerminalRedeemRequestV2,
 };
-use dclutch_custody_contract::{CustodyReceiptV1, CustodyRequestV1};
+use dclutch_custody_contract::{
+    CallerRoleV1 as CustodyCallerRoleV1, CompartmentV1, CustodyReceiptV1, CustodyRequestV1,
+};
 
 use crate::request::{CallerRoleV2, RepresentationActionV2, RepresentationRequestV2};
 use crate::{
@@ -45,11 +47,11 @@ pub struct CompletionEvidenceV2<'a> {
     /// Exact affine-batch return data, absent for Structured actions.
     pub affine_receipt: Option<AffineBatchReceiptV2>,
     /// Exact typed terminal Claims request, present only for terminal redemption.
-    pub terminal_request: Option<Lbv2TerminalRedeemRequestV2>,
+    pub terminal_request: Option<&'a Lbv2TerminalRedeemRequestV2>,
     /// SHA-256 of the exact terminal Claims request bytes.
     pub terminal_request_digest: [u8; 32],
     /// Exact typed terminal Claims receipt, present only for terminal redemption.
-    pub terminal_receipt: Option<Lbv2TerminalRedeemReceiptV2>,
+    pub terminal_receipt: Option<&'a Lbv2TerminalRedeemReceiptV2>,
     /// SHA-256 of the ordered exact Token effect transcript.
     pub token_effect_digest: [u8; 32],
     /// Exact post receipt Mint supply.
@@ -407,7 +409,7 @@ pub fn finalize(
     }
     validate_post_assets(prepared, evidence.post_asset_observations)?;
     let claims = validate_claims(prepared, evidence)?;
-    validate_custody(evidence, claims.payout)?;
+    validate_custody(prepared, evidence, claims.payout)?;
     let receipt = RepresentationReceiptV2 {
         action: header.action,
         caller_role: header.caller_role,
@@ -580,8 +582,8 @@ fn validate_claims(
         {
             return Err(Error::ClaimsMismatch);
         }
-        let request = evidence.terminal_request.ok_or(Error::ClaimsMismatch)?;
-        let receipt = evidence.terminal_receipt.ok_or(Error::ClaimsMismatch)?;
+        let request = *evidence.terminal_request.ok_or(Error::ClaimsMismatch)?;
+        let receipt = *evidence.terminal_receipt.ok_or(Error::ClaimsMismatch)?;
         require_nonzero(evidence.terminal_request_digest)?;
         receipt
             .verify_for(request, evidence.terminal_request_digest)
@@ -601,8 +603,7 @@ fn validate_claims(
             || (request.evaluated_payout() == 0
                 && header.expected_custody_replay_revision != ABSENT_REVISION)
             || (request.evaluated_payout() != 0
-                && request.pre_custody_revision()
-                    != header.expected_custody_replay_revision)
+                && request.pre_custody_revision() != header.expected_custody_replay_revision)
         {
             return Err(Error::ClaimsMismatch);
         }
@@ -703,7 +704,11 @@ fn validate_claims(
     })
 }
 
-fn validate_custody(evidence: CompletionEvidenceV2<'_>, payout: u64) -> Result<()> {
+fn validate_custody(
+    prepared: PreparedRepresentationV2<'_>,
+    evidence: CompletionEvidenceV2<'_>,
+    payout: u64,
+) -> Result<()> {
     if payout == 0 {
         if evidence.custody_request.is_some()
             || evidence.custody_receipt.is_some()
@@ -724,7 +729,17 @@ fn validate_custody(evidence: CompletionEvidenceV2<'_>, payout: u64) -> Result<(
     ] {
         require_nonzero(digest)?;
     }
-    if request.amount != payout {
+    let header = prepared.request().header();
+    if request.amount != payout
+        || request.caller_role != CustodyCallerRoleV1::Claims
+        || request.source_compartment != CompartmentV1::HoardPrincipal
+        || request.destination_compartment != CompartmentV1::External
+        || request.release_set != header.release_set
+        || request.market != header.market
+        || request.realm != header.realm
+        || request.semantic.destination_owner != header.actor
+        || request.destination != header.collateral_recipient
+    {
         return Err(Error::CustodyMismatch);
     }
     receipt
