@@ -349,6 +349,7 @@ version = "0.1.0"
 dependencies = [
  "dclutch-account-profile-contract",
  "dclutch-capability-program-contract",
+ "dclutch-claims-svm",
  "dclutch-core-contract",
  "dclutch-effect-kernel",
  "dclutch-execution-strategy-contract",
@@ -404,6 +405,7 @@ version = "0.1.0"
 dependencies = [
  "dclutch-claims-svm",
  "dclutch-fractional-claim-contract",
+ "dclutch-fractional-claim-kernel",
  "sha2",
 ]
 
@@ -412,6 +414,7 @@ name = "dclutch-market-core-codec"
 version = "0.1.0"
 dependencies = [
  "dclutch-release-set-contract",
+ "sha2",
 ]
 
 [[package]]

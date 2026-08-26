@@ -1547,6 +1547,7 @@ dependencies = [
  "dclutch-registry-svm",
  "dclutch-release-set-contract",
  "dclutch-rent-contract",
+ "dclutch-representation-composition-v3-kernel",
  "dclutch-token-svm",
  "solana-account 4.3.2",
  "solana-address-lookup-table-interface",
@@ -1573,6 +1574,8 @@ dependencies = [
  "dclutch-product-payoff-v2-codec",
  "dclutch-rational-representation-v2-kernel",
  "dclutch-rational-representation-v2-lifecycle-contract",
+ "dclutch-rational-representation-v2-request-contract",
+ "dclutch-representation-composition-v3-kernel",
 ]
 
 [[package]]
@@ -1604,6 +1607,7 @@ name = "dclutch-market-core-codec"
 version = "0.1.0"
 dependencies = [
  "dclutch-release-set-contract",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -1638,6 +1642,7 @@ dependencies = [
  "dclutch-product-runtime-v2-admission",
  "dclutch-rational-representation-v2-kernel",
  "dclutch-record-contract",
+ "dclutch-representation-composition-v3-kernel",
  "solana-program",
  "solana-sdk-ids",
 ]
@@ -1649,6 +1654,8 @@ dependencies = [
  "dclutch-claims-svm",
  "dclutch-custody-contract",
  "dclutch-rational-representation-v2-kernel",
+ "dclutch-rational-representation-v2-request-contract",
+ "dclutch-representation-composition-v3-kernel",
  "dclutch-token-svm",
 ]
 
@@ -1657,6 +1664,7 @@ name = "dclutch-rational-representation-v2-kernel"
 version = "0.1.0"
 dependencies = [
  "dclutch-product-payoff-v2-codec",
+ "dclutch-representation-composition-v3-kernel",
 ]
 
 [[package]]
@@ -1664,6 +1672,13 @@ name = "dclutch-rational-representation-v2-lifecycle-contract"
 version = "0.1.0"
 dependencies = [
  "dclutch-rational-representation-v2-kernel",
+ "dclutch-token-svm",
+]
+
+[[package]]
+name = "dclutch-rational-representation-v2-request-contract"
+version = "0.1.0"
+dependencies = [
  "dclutch-token-svm",
 ]
 
@@ -1700,6 +1715,13 @@ dependencies = [
 
 [[package]]
 name = "dclutch-rent-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-market-core-codec",
+]
+
+[[package]]
+name = "dclutch-representation-composition-v3-kernel"
 version = "0.1.0"
 
 [[package]]

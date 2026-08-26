@@ -306,6 +306,7 @@ dependencies = [
  "dclutch-rational-representation-v2-kernel",
  "dclutch-rational-representation-v2-lifecycle-contract",
  "dclutch-rational-representation-v2-request-contract",
+ "dclutch-representation-composition-v3-kernel",
 ]
 
 [[package]]
@@ -387,6 +388,7 @@ name = "dclutch-market-core-codec"
 version = "0.1.0"
 dependencies = [
  "dclutch-release-set-contract",
+ "sha2",
 ]
 
 [[package]]
@@ -413,6 +415,7 @@ name = "dclutch-rational-representation-v2-kernel"
 version = "0.1.0"
 dependencies = [
  "dclutch-product-payoff-v2-codec",
+ "dclutch-representation-composition-v3-kernel",
 ]
 
 [[package]]
@@ -436,6 +439,10 @@ version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
 ]
+
+[[package]]
+name = "dclutch-representation-composition-v3-kernel"
+version = "0.1.0"
 
 [[package]]
 name = "dclutch-request-profile-contract"

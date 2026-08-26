@@ -276,6 +276,11 @@ name = "dclutch-claims-svm"
 version = "0.1.0"
 dependencies = [
  "dclutch-effect-kernel",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-rational-representation-v2-kernel",
+ "dclutch-rational-representation-v2-lifecycle-contract",
+ "dclutch-rational-representation-v2-request-contract",
+ "dclutch-representation-composition-v3-kernel",
 ]
 
 [[package]]
@@ -286,11 +291,31 @@ version = "0.1.0"
 name = "dclutch-custody-contract"
 version = "0.1.0"
 dependencies = [
+ "dclutch-market-core-codec",
  "dclutch-release-set-contract",
 ]
 
 [[package]]
 name = "dclutch-effect-kernel"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-market-core-codec"
+version = "0.1.0"
+dependencies = [
+ "dclutch-release-set-contract",
+]
+
+[[package]]
+name = "dclutch-product-payoff-v2-codec"
+version = "0.1.0"
+dependencies = [
+ "dclutch-product-runtime-v2",
+ "sha2",
+]
+
+[[package]]
+name = "dclutch-product-runtime-v2"
 version = "0.1.0"
 
 [[package]]
@@ -300,12 +325,33 @@ dependencies = [
  "dclutch-claims-svm",
  "dclutch-custody-contract",
  "dclutch-rational-representation-v2-kernel",
+ "dclutch-rational-representation-v2-request-contract",
+ "dclutch-representation-composition-v3-kernel",
  "dclutch-token-svm",
 ]
 
 [[package]]
 name = "dclutch-rational-representation-v2-kernel"
 version = "0.1.0"
+dependencies = [
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-representation-composition-v3-kernel",
+]
+
+[[package]]
+name = "dclutch-rational-representation-v2-lifecycle-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-rational-representation-v2-kernel",
+ "dclutch-token-svm",
+]
+
+[[package]]
+name = "dclutch-rational-representation-v2-request-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-token-svm",
+]
 
 [[package]]
 name = "dclutch-rational-v2-test-caller-sbf"
@@ -323,6 +369,10 @@ version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
 ]
+
+[[package]]
+name = "dclutch-representation-composition-v3-kernel"
+version = "0.1.0"
 
 [[package]]
 name = "dclutch-token-svm"

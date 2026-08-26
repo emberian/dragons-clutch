@@ -1592,6 +1592,7 @@ name = "dclutch-market-core-codec"
 version = "0.1.0"
 dependencies = [
  "dclutch-release-set-contract",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -1755,11 +1756,15 @@ dependencies = [
  "dclutch-effect-kernel",
  "dclutch-execution-strategy-contract",
  "dclutch-market-core-codec",
+ "dclutch-product-runtime-v2-svm-reader",
+ "dclutch-record-contract",
  "dclutch-request-profile-contract",
  "dclutch-series-v3-kernel",
+ "dclutch-trading-sbf",
  "dclutch-transition-vm",
  "sha2 0.10.9",
  "solana-program",
+ "solana-sdk-ids",
 ]
 
 [[package]]

@@ -1567,6 +1567,7 @@ name = "dclutch-market-core-codec"
 version = "0.1.0"
 dependencies = [
  "dclutch-release-set-contract",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -1603,6 +1604,9 @@ dependencies = [
 [[package]]
 name = "dclutch-rent-contract"
 version = "0.1.0"
+dependencies = [
+ "dclutch-market-core-codec",
+]
 
 [[package]]
 name = "dclutch-token-svm"
