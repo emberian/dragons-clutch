@@ -20,7 +20,7 @@ use solana_program::{
     pubkey::Pubkey,
 };
 
-use crate::TradingSbfError;
+use crate::{TradingSbfError, child_receipt_v3::append_receipt_dependency_v3};
 
 const CUSTODY_EXECUTION_DIGEST_DOMAIN_V3: &[u8] = b"dclutch:hot-custody-receipt:v3";
 const CUSTODY_REPLAY_FRAME_COORDINATE_V1: usize = 8;
@@ -84,6 +84,7 @@ pub fn execute_custody_route_v3<'info>(
     identities: &[[u8; 32]],
     effect_accounts: &[AccountInfo<'info>],
     request_bank: &[u8],
+    prior_receipt: Option<&[u8]>,
     custody_program: &AccountInfo<'info>,
     parent: CustodyCompositionParentV3,
 ) -> Result<[u8; 32], ProgramError> {
@@ -110,10 +111,12 @@ pub fn execute_custody_route_v3<'info>(
             AccountMeta::new_readonly(*account.key, signer)
         });
     }
+    let mut child_data = prepared.request_bytes.to_vec();
+    append_receipt_dependency_v3(prepared.invocation, &mut child_data, prior_receipt)?;
     let instruction = Instruction {
         program_id: *custody_program.key,
         accounts: metas,
-        data: prepared.request_bytes.to_vec(),
+        data: child_data,
     };
     child_accounts.push(custody_program.clone());
     let bump_seed = [prepared.bump];

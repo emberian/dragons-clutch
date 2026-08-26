@@ -64,10 +64,10 @@ use dclutch_effect_kernel::{
 };
 use dclutch_execution_strategy_contract::{
     shadow_digest_v3::{
-        ShadowEffectProjectionV3, ShadowInvocationContextV3, ShadowResolvedRouteV3,
-        ShadowRouteKindV3, ShadowRouteRoleV3, ShadowRuntimeObservationV3, candidate_digest_v3,
-        effect_digest_v3, family_request_digest_v3, invocation_context_digest_v3,
-        runtime_observations_digest_v3,
+        ShadowEffectProjectionV3, ShadowInvocationContextV3, ShadowReceiptDependencyV3,
+        ShadowResolvedRouteV3, ShadowRouteKindV3, ShadowRouteRoleV3, ShadowRuntimeObservationV3,
+        candidate_digest_v3, effect_digest_v3, family_request_digest_v3,
+        invocation_context_digest_v3, runtime_observations_digest_v3,
     },
     shadow_v3::{
         ShadowArtifactTupleV3, ShadowExecutionDigestsV3, ShadowRequestV3, ShadowRuntimeShapeV3,
@@ -112,6 +112,7 @@ use solana_system_interface::instruction::{allocate, assign, transfer as system_
 
 use crate::{
     TradingSbfError,
+    child_receipt_v3::{ChildReceiptBankV3, require_chain_receipt_width_v3},
     core_composition_v3::{
         CoreCompositionParentV3, execute_core_route_v3, preflight_core_route_v3,
     },
@@ -1521,6 +1522,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
             let invocation = effect
                 .resolved_invocation(route, invocation_index, tail_count, scalars, identities)
                 .map_err(|_| TradingSbfError::Content)?;
+            require_chain_receipt_width_v3(invocation)?;
             require_no_common_projection_child_accounts_v3(invocation)?;
             require_child_disjoint_from_local(invocation, aliases, &locally_mutated)?;
             match invocation.role {
@@ -1713,17 +1715,38 @@ fn execute_child_routes_v3<'accounts, 'info>(
     };
 
     let mut route = 0_u16;
+    let mut receipt_bank = ChildReceiptBankV3::new();
     while route < effect.route_count() {
         let count = effect
             .invocation_count(route, tail_count, scalars, identities)
             .map_err(|_| TradingSbfError::Content)?;
         let mut invocation = 0_u32;
         while invocation < count {
-            let (role, child_digest) = match effect
-                .route(route)
-                .map_err(|_| TradingSbfError::Content)?
-                .role()
+            let resolved = effect
+                .resolved_invocation(route, invocation, tail_count, scalars, identities)
+                .map_err(|_| TradingSbfError::Content)?;
+            let dependency_program = match resolved
+                .receipt_dependency
+                .map(|dependency| dependency.producer_role)
             {
+                None => None,
+                Some(FixedRole::Core) => Some(frame.core_program),
+                #[cfg(feature = "families")]
+                Some(FixedRole::Claims) => Some(claims_program.ok_or(TradingSbfError::Release)?),
+                #[cfg(feature = "families")]
+                Some(FixedRole::Custody) => Some(custody_program.ok_or(TradingSbfError::Release)?),
+                #[cfg(feature = "families")]
+                Some(FixedRole::Resolution) => {
+                    Some(resolution_program.ok_or(TradingSbfError::Release)?)
+                }
+                #[cfg(not(feature = "families"))]
+                Some(_) => return Err(TradingSbfError::UnsupportedContent.into()),
+            };
+            let prior_receipt = receipt_bank.resolve(
+                resolved.receipt_dependency,
+                dependency_program.map(|program| program.key),
+            )?;
+            let (role, child_digest, child_program) = match resolved.role {
                 FixedRole::Core => (
                     FixedRole::Core,
                     execute_core_route_v3(
@@ -1737,6 +1760,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                         effect_accounts,
                         request_bank,
                         family_request,
+                        prior_receipt,
                         frame.core_program,
                         CoreCompositionParentV3 {
                             release_set: envelope.release_set(),
@@ -1745,6 +1769,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             trading_program: program_id.to_bytes(),
                         },
                     )?,
+                    frame.core_program,
                 ),
                 FixedRole::Claims => {
                     #[cfg(feature = "families")]
@@ -1760,9 +1785,14 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             effect_accounts,
                             request_bank,
                             family_request,
+                            prior_receipt,
                             claims_program.ok_or(TradingSbfError::Release)?,
                         )?;
-                        (FixedRole::Claims, claims_receipt_digest_v3(receipt)?)
+                        (
+                            FixedRole::Claims,
+                            claims_receipt_digest_v3(receipt)?,
+                            claims_program.ok_or(TradingSbfError::Release)?,
+                        )
                     }
                     #[cfg(not(feature = "families"))]
                     return Err(TradingSbfError::UnsupportedContent.into());
@@ -1780,6 +1810,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             identities,
                             effect_accounts,
                             request_bank,
+                            prior_receipt,
                             custody_program.ok_or(TradingSbfError::Release)?,
                             CustodyCompositionParentV3 {
                                 release_set: envelope.release_set(),
@@ -1789,7 +1820,11 @@ fn execute_child_routes_v3<'accounts, 'info>(
                                 trading_program: program_id.to_bytes(),
                             },
                         )?;
-                        (FixedRole::Custody, digest)
+                        (
+                            FixedRole::Custody,
+                            digest,
+                            custody_program.ok_or(TradingSbfError::Release)?,
+                        )
                     }
                     #[cfg(not(feature = "families"))]
                     return Err(TradingSbfError::UnsupportedContent.into());
@@ -1808,6 +1843,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             effect_accounts,
                             request_bank,
                             family_request,
+                            prior_receipt,
                             resolution_program.ok_or(TradingSbfError::Release)?,
                             ResolutionCompositionParentV3 {
                                 release_set: envelope.release_set(),
@@ -1820,18 +1856,30 @@ fn execute_child_routes_v3<'accounts, 'info>(
                                 activation_account: frame.activation_cache.key.to_bytes(),
                             },
                         )?;
-                        (FixedRole::Resolution, digest)
+                        (
+                            FixedRole::Resolution,
+                            digest,
+                            resolution_program.ok_or(TradingSbfError::Release)?,
+                        )
                     }
                     #[cfg(not(feature = "families"))]
                     return Err(TradingSbfError::UnsupportedContent.into());
                 }
             };
+            let (producer, receipt_bytes) = get_return_data().ok_or(TradingSbfError::Transition)?;
+            if producer != *child_program.key {
+                return Err(TradingSbfError::Transition.into());
+            }
+            let receipt_digest = hash(&receipt_bytes).to_bytes();
+            receipt_bank.record(role, route, invocation, producer, receipt_bytes)?;
             transcript = hashv(&[
                 CHILD_EXECUTION_DIGEST_DOMAIN_V3,
                 &transcript,
                 &[fixed_role_tag_v3(role)],
                 &route.to_le_bytes(),
                 &invocation.to_le_bytes(),
+                child_program.key.as_ref(),
+                &receipt_digest,
                 &child_digest,
             ])
             .to_bytes();
@@ -2302,6 +2350,19 @@ fn shadow_routes_v3(
                 request_len: u32::try_from(invocation.request_len)
                     .map_err(|_| TradingSbfError::Content)?,
                 borrowed_witness,
+                receipt_dependency: invocation.receipt_dependency.map(|dependency| {
+                    ShadowReceiptDependencyV3 {
+                        producer_role: match dependency.producer_role {
+                            FixedRole::Core => ShadowRouteRoleV3::Core,
+                            FixedRole::Claims => ShadowRouteRoleV3::Claims,
+                            FixedRole::Resolution => ShadowRouteRoleV3::Resolution,
+                            FixedRole::Custody => ShadowRouteRoleV3::Custody,
+                        },
+                        producer_route: dependency.producer_route,
+                        producer_invocation: dependency.producer_invocation,
+                        expected_receipt_bytes: dependency.expected_receipt_bytes,
+                    }
+                }),
             });
             invocation_index = invocation_index
                 .checked_add(1)
@@ -3023,6 +3084,7 @@ mod tests {
             request_offset: 0,
             request_len: 1,
             borrowed_witness: None,
+            receipt_dependency: None,
         };
         assert_eq!(
             require_no_common_projection_child_accounts_v3(invocation),

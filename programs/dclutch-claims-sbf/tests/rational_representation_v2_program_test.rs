@@ -40,8 +40,9 @@ use dclutch_rational_representation_v2_contract::{
     RATIONAL_BASE_ACCOUNT_COUNT_V2, RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2,
     RATIONAL_REPLAY_BYTES_V2, RATIONAL_REPLAY_MAGIC_V2, RATIONAL_REPLAY_SEED_V2,
     RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2, RATIONAL_SHARD_MINT_SEED_V2,
-    RATIONAL_TERMINAL_ACCOUNT_COUNT_V2, REQUEST_HEADER_BYTES_V2, RepresentationActionV2,
-    RepresentationRequestHeaderV2, RepresentationRequestV2,
+    RATIONAL_STRUCTURED_CUSTODY_SEED_V2, RATIONAL_TERMINAL_ACCOUNT_COUNT_V2,
+    REQUEST_HEADER_BYTES_V2, RepresentationActionV2, RepresentationRequestHeaderV2,
+    RepresentationRequestV2,
 };
 use dclutch_rational_representation_v2_kernel::{
     DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3, GRAPH_EDGE_BYTES,
@@ -125,6 +126,7 @@ struct AssetFixture {
     mint: Pubkey,
     actor_token: Pubkey,
     structured_token: Pubkey,
+    obsolete_structured_ata: Pubkey,
 }
 
 #[derive(Clone, Copy)]
@@ -191,6 +193,7 @@ struct Snapshot {
     shard_mints: [Account; 2],
     actor_shards: [Account; 2],
     structured_shards: [Account; 2],
+    obsolete_structured_shards: [Account; 2],
     custody_replay: Option<Account>,
     hoard: Option<Account>,
     recipient: Option<Account>,
@@ -1212,7 +1215,16 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
         let position =
             Pubkey::find_program_address(&position_seeds.as_slices(), &CLAIMS_PROGRAM_ID).0;
         let actor_token = Pubkey::new_from_array(if index == 0 { [0x81; 32] } else { [0x82; 32] });
-        let structured_token = get_associated_token_address_with_program_id(
+        let structured_token = Pubkey::find_program_address(
+            &[
+                RATIONAL_STRUCTURED_CUSTODY_SEED_V2,
+                &descriptor_id,
+                &outcome_bytes,
+            ],
+            &CLAIMS_PROGRAM_ID,
+        )
+        .0;
+        let obsolete_structured_ata = get_associated_token_address_with_program_id(
             &representation_authority,
             &mint,
             &TOKEN_PROGRAM_ID,
@@ -1223,6 +1235,7 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
             mint,
             actor_token,
             structured_token,
+            obsolete_structured_ata,
         }
     });
 
@@ -1307,6 +1320,18 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
                 asset.mint,
                 representation_authority,
                 *STRUCTURED_SHARDS.get(index).expect("structured shards"),
+            ),
+        );
+        add_account(
+            &mut test,
+            asset.obsolete_structured_ata,
+            TOKEN_PROGRAM_ID,
+            token_account_data(
+                asset.mint,
+                representation_authority,
+                *STRUCTURED_SHARDS
+                    .get(index)
+                    .expect("obsolete structured shards"),
             ),
         );
     }
@@ -1911,6 +1936,26 @@ async fn snapshot(context: &mut ProgramTestContext, fixture: &Fixture) -> Snapsh
             )
             .await,
         ],
+        obsolete_structured_shards: [
+            observed(
+                context,
+                fixture
+                    .assets
+                    .first()
+                    .expect("first asset")
+                    .obsolete_structured_ata,
+            )
+            .await,
+            observed(
+                context,
+                fixture
+                    .assets
+                    .get(1)
+                    .expect("second asset")
+                    .obsolete_structured_ata,
+            )
+            .await,
+        ],
         custody_replay: match fixture.terminal_accounts {
             Some(value) => Some(observed(context, value.custody_replay).await),
             None => None,
@@ -2040,6 +2085,14 @@ async fn real_sbf_open_actions_are_exact_and_conserved() {
         None,
         None,
     );
+    let mut obsolete_ata_substitution = issue.clone();
+    let first_asset = fixture.assets.first().expect("first asset");
+    let obsolete_meta = obsolete_ata_substitution
+        .accounts
+        .iter_mut()
+        .find(|meta| meta.pubkey == first_asset.structured_token)
+        .expect("canonical structured custody meta");
+    obsolete_meta.pubkey = first_asset.obsolete_structured_ata;
     assert_eq!(
         issue.accounts.len(),
         1 + RATIONAL_BASE_ACCOUNT_COUNT_V2
@@ -2059,6 +2112,7 @@ async fn real_sbf_open_actions_are_exact_and_conserved() {
             unwrap.clone(),
             denominate.clone(),
             reconstitute.clone(),
+            obsolete_ata_substitution.clone(),
         ],
     );
     let (table, lookup_cu) = create_live_lookup_table(&mut context, &addresses).await;
@@ -2082,6 +2136,22 @@ async fn real_sbf_open_actions_are_exact_and_conserved() {
         live_alt,
     );
     let before = snapshot(&mut context, &fixture).await;
+
+    let obsolete = submit_v0(
+        &mut context,
+        &fixture,
+        obsolete_ata_substitution,
+        table,
+        &addresses,
+    )
+    .await
+    .expect("obsolete ATA substitution transaction");
+    assert!(!obsolete.accepted, "obsolete Structured ATA must refuse");
+    assert_eq!(
+        snapshot(&mut context, &fixture).await,
+        before,
+        "obsolete ATA substitution must roll back every resource"
+    );
 
     let issued = submit_v0(&mut context, &fixture, issue.clone(), table, &addresses)
         .await

@@ -12,7 +12,7 @@ use super::{
     OP_WRITE_DATA_U32, OP_WRITE_DATA_U32_AFFINE, OP_WRITE_IDENTITY, OP_WRITE_IDENTITY_AFFINE,
     OP_WRITE_REQUEST_IDENTITY, OP_WRITE_REQUEST_U8, OP_WRITE_REQUEST_U16, OP_WRITE_REQUEST_U32,
     OP_WRITE_REQUEST_U64, OP_WRITE_SCALAR, OP_WRITE_SCALAR_AFFINE, OPERATION_BYTES, ProgramV3,
-    ROUTE_BYTES, RouteKindV3, VERSION,
+    ROUTE_BYTES, RouteKindV3, RouteReceiptDependencyV3, VERSION,
 };
 
 /// Fixed-prefix or per-Product-item coordinate space.
@@ -119,6 +119,8 @@ pub struct RouteInputV3<'a> {
     pub enable_common_scalar: Option<u16>,
     /// Optional first of two common scalars selecting a borrowed witness range.
     pub witness_range_common_scalar: Option<u16>,
+    /// Optional exact backward dependency on one prior route receipt.
+    pub receipt_dependency: Option<RouteReceiptDependencyV3>,
     /// First fixed-prefix account in the child frame.
     pub fixed_account_start: u16,
     /// Fixed-prefix child-account count.
@@ -530,7 +532,28 @@ fn encode_route(route: RouteInputV3<'_>, output: &mut [u8], offset: usize) -> Re
         &u32::try_from(route.item_request.len())
             .map_err(|_| Error::InvalidLength)?
             .to_le_bytes(),
-    )
+    )?;
+    if let Some(dependency) = route.receipt_dependency {
+        let role = match dependency.producer_role() {
+            FixedRole::Core => 0,
+            FixedRole::Claims => 1,
+            FixedRole::Resolution => 3,
+            FixedRole::Custody => 4,
+        };
+        write_byte(output, add(offset, 24)?, 1)?;
+        write_byte(output, add(offset, 25)?, role)?;
+        write(
+            output,
+            add(offset, 26)?,
+            &dependency.producer_route().to_le_bytes(),
+        )?;
+        write(
+            output,
+            add(offset, 28)?,
+            &dependency.expected_receipt_bytes().to_le_bytes(),
+        )?;
+    }
+    Ok(())
 }
 
 fn encode_instruction(
@@ -612,6 +635,7 @@ mod tests {
             kind: RouteKindV3::Once,
             enable_common_scalar: Some(0),
             witness_range_common_scalar: None,
+            receipt_dependency: None,
             fixed_account_start: 0,
             fixed_account_count: 1,
             item_account_start: 0,

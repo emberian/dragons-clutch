@@ -45,7 +45,6 @@ use solana_program::{
 };
 use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign};
-use spl_associated_token_account_interface::address::get_associated_token_address_with_program_id;
 use spl_token_2022_interface::instruction as token_instruction;
 
 use super::{ClaimsSbfError, reauthenticate};
@@ -64,7 +63,7 @@ use crate::{
 pub use dclutch_rational_representation_v2_contract::{
     RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2, RATIONAL_REPLAY_BYTES_V2, RATIONAL_REPLAY_MAGIC_V2,
     RATIONAL_REPLAY_SEED_V2, RATIONAL_REPLAY_VERSION_V2, RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
-    RATIONAL_SHARD_MINT_SEED_V2,
+    RATIONAL_SHARD_MINT_SEED_V2, RATIONAL_STRUCTURED_CUSTODY_SEED_V2,
 };
 const CALLER_AUTHORITY: usize = 0;
 const CALLER_PROGRAM: usize = 1;
@@ -1043,11 +1042,15 @@ fn authenticate_asset_identities(
         ProtocolPositionSeedsV2::new(base.aggregate.key.to_bytes(), custody_owner.to_bytes())
             .map_err(|_| ClaimsSbfError::Identity)?;
     let expected_position = Pubkey::find_program_address(&position_seeds.as_slices(), program_id).0;
-    let structured = get_associated_token_address_with_program_id(
-        base.representation_authority.key,
-        &mint,
-        base.token_program.key,
-    );
+    let structured = Pubkey::find_program_address(
+        &[
+            RATIONAL_STRUCTURED_CUSTODY_SEED_V2,
+            &descriptor,
+            &outcome_bytes,
+        ],
+        program_id,
+    )
+    .0;
     if accounts.position.key != &expected_position
         || accounts.position.owner != program_id
         || accounts.mint.key != &mint

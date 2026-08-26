@@ -16,22 +16,22 @@ pub mod encode;
 
 /// Canonical runtime-tail effect-program magic.
 pub const MAGIC: [u8; 4] = *b"DCE3";
-/// Finalized-record schema label for the V3 syntax successor admitting typed
-/// account-data writes. The new release prevents old decoders from silently
-/// accepting a program whose opcode vocabulary they do not own.
+/// Finalized-record schema label for the V3 syntax successor admitting exact
+/// backward child-receipt dependencies. The new release prevents old decoders
+/// from silently accepting route metadata they do not own.
 pub const SCHEMA_RELEASE_PREIMAGE: &[u8] =
-    b"dclutch/schema/effect-program-v3-typed-account-writes-v2";
+    b"dclutch/schema/effect-program-v3-receipt-dependencies-v3";
 /// SHA-256 of [`SCHEMA_RELEASE_PREIMAGE`].
 pub const SCHEMA_RELEASE_ID: [u8; 32] = [
-    0x8d, 0x79, 0x62, 0x6e, 0xbf, 0x86, 0xdb, 0xed, 0x65, 0xb9, 0x42, 0xb2, 0x4e, 0xb5, 0x43, 0xdd,
-    0x3d, 0xf3, 0x19, 0x61, 0x17, 0x6c, 0x4e, 0x94, 0xf5, 0x21, 0x83, 0x33, 0x96, 0x45, 0x30, 0x5c,
+    0xda, 0x5b, 0x8d, 0xd0, 0xed, 0x8a, 0xd0, 0xd2, 0xc8, 0xae, 0x1a, 0x11, 0x3a, 0x9e, 0x0e, 0xf5,
+    0x49, 0x8c, 0x35, 0xc0, 0xa4, 0x74, 0xfc, 0xe0, 0xe7, 0xe7, 0xed, 0x48, 0xe7, 0x61, 0xae, 0x74,
 ];
 /// Canonical runtime-tail effect-program version.
 pub const VERSION: u8 = 3;
 /// Exact V3 header width.
 pub const HEADER_BYTES: usize = 32;
 /// Exact fixed-role route width.
-pub const ROUTE_BYTES: usize = 24;
+pub const ROUTE_BYTES: usize = 32;
 /// Exact effect-operation width.
 pub const OPERATION_BYTES: usize = 24;
 
@@ -79,6 +79,8 @@ pub enum Error {
     EmptyProgram,
     /// A route role, kind, enable mode, or geometry was noncanonical.
     InvalidRoute,
+    /// A receipt dependency was forward, cross-item, disabled, or noncanonical.
+    InvalidReceiptDependency,
     /// An opcode or fixed/item mode was unsupported.
     UnknownOperation,
     /// Active and inactive operation fields were noncanonical.
@@ -136,6 +138,46 @@ pub struct RouteV3 {
     witness_range_common_scalar: u16,
     fixed_request_bytes: u32,
     item_request_bytes: u32,
+    receipt_dependency: Option<RouteReceiptDependencyV3>,
+}
+
+/// One descriptor-authenticated dependency on an exact earlier child receipt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RouteReceiptDependencyV3 {
+    producer_role: FixedRole,
+    producer_route: u16,
+    expected_receipt_bytes: u16,
+}
+
+impl RouteReceiptDependencyV3 {
+    /// Construct one dependency. Full backward/geometry checks occur when the
+    /// complete EffectProgram is hostile-decoded.
+    pub const fn new(
+        producer_role: FixedRole,
+        producer_route: u16,
+        expected_receipt_bytes: u16,
+    ) -> Self {
+        Self {
+            producer_role,
+            producer_route,
+            expected_receipt_bytes,
+        }
+    }
+
+    /// Expected producer role; the adapter resolves its current release-selected program.
+    pub const fn producer_role(self) -> FixedRole {
+        self.producer_role
+    }
+
+    /// Strictly earlier route ordinal.
+    pub const fn producer_route(self) -> u16 {
+        self.producer_route
+    }
+
+    /// Exact producer return-data width appended to the consumer request.
+    pub const fn expected_receipt_bytes(self) -> u16 {
+        self.expected_receipt_bytes
+    }
 }
 
 impl RouteV3 {
@@ -184,6 +226,11 @@ impl RouteV3 {
         self.borrows_witness
     }
 
+    /// Optional exact dependency on one prior route's immediate receipt.
+    pub const fn receipt_dependency(self) -> Option<RouteReceiptDependencyV3> {
+        self.receipt_dependency
+    }
+
     fn enabled(self, scalars: &[u64]) -> Result<bool> {
         if self.enabled_if_nonzero {
             Ok(*scalars
@@ -223,6 +270,21 @@ pub struct ResolvedInvocationV3 {
     pub request_len: usize,
     /// Optional exact top-level family-request suffix appended after the IR-owned request.
     pub borrowed_witness: Option<BorrowedWitnessV3>,
+    /// Optional exact prior receipt selected in this invocation's item scope.
+    pub receipt_dependency: Option<ResolvedReceiptDependencyV3>,
+}
+
+/// Runtime-resolved receipt dependency for one child invocation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResolvedReceiptDependencyV3 {
+    /// Expected producer role.
+    pub producer_role: FixedRole,
+    /// Strictly earlier producer route.
+    pub producer_route: u16,
+    /// Producer invocation: zero for once/affine, same item for each-item.
+    pub producer_invocation: u32,
+    /// Exact raw return-data width.
+    pub expected_receipt_bytes: u16,
 }
 
 /// Exact borrowed witness range in the authenticated top-level family request.
@@ -465,7 +527,7 @@ impl<'a> ProgramV3<'a> {
         let mut route = 0_u16;
         while route < route_count {
             let decoded = program.route(route)?;
-            decoded.validate(program)?;
+            decoded.validate(program, route)?;
             template_bytes = template_bytes
                 .checked_add(usize_from_u32(decoded.fixed_request_bytes)?)
                 .and_then(|value| {
@@ -655,6 +717,13 @@ impl<'a> ProgramV3<'a> {
         let route_request_start = self.route_request_start(route_index, tail_count)?;
         let tail_accounts_start = usize::from(self.fixed_accounts);
         let borrowed_witness = route.resolve_borrowed_witness(scalars)?;
+        let receipt_dependency = self.resolve_receipt_dependency(
+            route_index,
+            invocation_index,
+            tail_count,
+            scalars,
+            identities,
+        )?;
         match route.kind {
             RouteKindV3::Once => Ok(ResolvedInvocationV3 {
                 role: route.role,
@@ -669,6 +738,7 @@ impl<'a> ProgramV3<'a> {
                 request_offset: route_request_start,
                 request_len: usize_from_u32(route.fixed_request_bytes)?,
                 borrowed_witness,
+                receipt_dependency,
             }),
             RouteKindV3::AffineOnce => Ok(ResolvedInvocationV3 {
                 role: route.role,
@@ -685,6 +755,7 @@ impl<'a> ProgramV3<'a> {
                 request_offset: route_request_start,
                 request_len: route_expanded_request_bytes(route, tail_count)?,
                 borrowed_witness,
+                receipt_dependency,
             }),
             RouteKindV3::Each => {
                 let item_account_start = item_index(
@@ -715,9 +786,39 @@ impl<'a> ProgramV3<'a> {
                     request_offset,
                     request_len,
                     borrowed_witness,
+                    receipt_dependency,
                 })
             }
         }
+    }
+
+    fn resolve_receipt_dependency(
+        self,
+        route_index: u16,
+        invocation_index: u32,
+        tail_count: u32,
+        scalars: &[u64],
+        identities: &[[u8; 32]],
+    ) -> Result<Option<ResolvedReceiptDependencyV3>> {
+        let route = self.route(route_index)?;
+        let Some(dependency) = route.receipt_dependency else {
+            return Ok(None);
+        };
+        let producer_invocation = match route.kind {
+            RouteKindV3::Once | RouteKindV3::AffineOnce => 0,
+            RouteKindV3::Each => invocation_index,
+        };
+        let producer_count =
+            self.invocation_count(dependency.producer_route, tail_count, scalars, identities)?;
+        if producer_invocation >= producer_count {
+            return Err(Error::InvalidReceiptDependency);
+        }
+        Ok(Some(ResolvedReceiptDependencyV3 {
+            producer_role: dependency.producer_role,
+            producer_route: dependency.producer_route,
+            producer_invocation,
+            expected_receipt_bytes: dependency.expected_receipt_bytes,
+        }))
     }
 
     /// Resolve one fixed effect after exact expanded-bank validation.
@@ -877,6 +978,32 @@ impl RouteV3 {
             1 => true,
             _ => return Err(Error::InvalidRoute),
         };
+        let receipt_dependency = match byte(bytes, add(offset, 24)?)? {
+            0 => {
+                if bytes.get(add(offset, 25)?..add(offset, 32)?) != Some([0_u8; 7].as_slice()) {
+                    return Err(Error::NonCanonicalReserved);
+                }
+                None
+            }
+            1 => {
+                if bytes.get(add(offset, 30)?..add(offset, 32)?) != Some([0_u8; 2].as_slice()) {
+                    return Err(Error::NonCanonicalReserved);
+                }
+                let producer_role = match byte(bytes, add(offset, 25)?)? {
+                    0 => FixedRole::Core,
+                    1 => FixedRole::Claims,
+                    3 => FixedRole::Resolution,
+                    4 => FixedRole::Custody,
+                    _ => return Err(Error::InvalidReceiptDependency),
+                };
+                Some(RouteReceiptDependencyV3 {
+                    producer_role,
+                    producer_route: read_u16(bytes, add(offset, 26)?)?,
+                    expected_receipt_bytes: read_u16(bytes, add(offset, 28)?)?,
+                })
+            }
+            _ => return Err(Error::InvalidReceiptDependency),
+        };
         Ok(Self {
             role,
             kind,
@@ -890,10 +1017,11 @@ impl RouteV3 {
             witness_range_common_scalar: read_u16(bytes, add(offset, 14)?)?,
             fixed_request_bytes: read_u32(bytes, add(offset, 16)?)?,
             item_request_bytes: read_u32(bytes, add(offset, 20)?)?,
+            receipt_dependency,
         })
     }
 
-    fn validate(self, program: ProgramV3<'_>) -> Result<()> {
+    fn validate(self, program: ProgramV3<'_>, route_index: u16) -> Result<()> {
         let fixed_end = self
             .fixed_account_start
             .checked_add(self.fixed_account_count)
@@ -910,13 +1038,30 @@ impl RouteV3 {
         } else {
             self.witness_range_common_scalar == 0
         };
+        let dependency_valid = match self.receipt_dependency {
+            None => true,
+            Some(dependency) => {
+                dependency.expected_receipt_bytes != 0
+                    && dependency.producer_route < route_index
+                    && program
+                        .route(dependency.producer_route)
+                        .is_ok_and(|producer| {
+                            producer.role == dependency.producer_role && producer.kind == self.kind
+                        })
+            }
+        };
         if fixed_end > program.fixed_accounts
             || item_end > program.item_account_stride
             || (!self.enabled_if_nonzero && self.enable_common_scalar != 0)
             || (self.enabled_if_nonzero && self.enable_common_scalar >= program.common_scalars)
             || !witness_registers_valid
+            || !dependency_valid
         {
-            return Err(Error::InvalidRoute);
+            return Err(if dependency_valid {
+                Error::InvalidRoute
+            } else {
+                Error::InvalidReceiptDependency
+            });
         }
         match self.kind {
             RouteKindV3::Once
@@ -2181,7 +2326,7 @@ mod tests {
         put(&mut core, 14, &0_u16.to_le_bytes());
         let mut bytes = vec![0_u8; HEADER_BYTES + ROUTE_BYTES + 8];
         put(&mut bytes, 0, &MAGIC);
-        bytes[4] = VERSION;
+        *bytes.get_mut(4).expect("version") = VERSION;
         for (offset, value) in [(6, 1_u16), (12, 1), (16, 2)] {
             put(&mut bytes, offset, &value.to_le_bytes());
         }
@@ -2214,8 +2359,131 @@ mod tests {
             Err(Error::InvalidRoute)
         );
         let mut invalid_each = bytes;
-        invalid_each[HEADER_BYTES + 1] = 2;
+        *invalid_each.get_mut(HEADER_BYTES + 1).expect("route kind") = 2;
         assert_eq!(ProgramV3::decode(&invalid_each), Err(Error::InvalidRoute));
+    }
+
+    fn receipt_dependency_program(kind: u8) -> Vec<u8> {
+        let producer = route(
+            4,
+            kind,
+            0,
+            1,
+            0,
+            u16::from(kind == 2),
+            u32::from(kind != 2) * 8,
+            u32::from(kind == 2) * 8,
+        );
+        let mut consumer = route(
+            0,
+            kind,
+            0,
+            1,
+            0,
+            u16::from(kind == 2),
+            u32::from(kind != 2) * 8,
+            u32::from(kind == 2) * 8,
+        );
+        consumer[24] = 1;
+        consumer[25] = 4;
+        put(&mut consumer, 26, &0_u16.to_le_bytes());
+        put(&mut consumer, 28, &384_u16.to_le_bytes());
+        let mut bytes = vec![0_u8; HEADER_BYTES + 2 * ROUTE_BYTES + 16];
+        put(&mut bytes, 0, &MAGIC);
+        *bytes.get_mut(4).expect("version") = VERSION;
+        for (offset, value) in [(6, 2_u16), (12, 1), (14, u16::from(kind == 2)), (16, 1)] {
+            put(&mut bytes, offset, &value.to_le_bytes());
+        }
+        put(&mut bytes, HEADER_BYTES, &producer);
+        put(&mut bytes, HEADER_BYTES + ROUTE_BYTES, &consumer);
+        put(
+            &mut bytes,
+            HEADER_BYTES + 2 * ROUTE_BYTES,
+            b"PRODUCERCONSUMER",
+        );
+        bytes
+    }
+
+    #[test]
+    fn receipt_dependency_is_exact_backward_and_same_item() {
+        let bytes = receipt_dependency_program(0);
+        let program = ProgramV3::decode(&bytes).expect("dependency program");
+        assert_eq!(
+            program
+                .resolved_invocation(1, 0, 0, &[1], &[])
+                .expect("consumer")
+                .receipt_dependency,
+            Some(ResolvedReceiptDependencyV3 {
+                producer_role: FixedRole::Custody,
+                producer_route: 0,
+                producer_invocation: 0,
+                expected_receipt_bytes: 384,
+            })
+        );
+
+        let each = receipt_dependency_program(2);
+        let program = ProgramV3::decode(&each).expect("each dependency");
+        assert_eq!(
+            program
+                .resolved_invocation(1, 1, 2, &[1], &[])
+                .expect("item one")
+                .receipt_dependency
+                .expect("dependency")
+                .producer_invocation,
+            1
+        );
+    }
+
+    #[test]
+    fn receipt_dependency_refuses_forward_role_width_geometry_and_disabled_source() {
+        let canonical = receipt_dependency_program(0);
+        let consumer = HEADER_BYTES + ROUTE_BYTES;
+
+        let mut forward = canonical.clone();
+        put(&mut forward, consumer + 26, &1_u16.to_le_bytes());
+        assert_eq!(
+            ProgramV3::decode(&forward),
+            Err(Error::InvalidReceiptDependency)
+        );
+
+        let mut wrong_role = canonical.clone();
+        *wrong_role.get_mut(consumer + 25).expect("producer role") = 1;
+        assert_eq!(
+            ProgramV3::decode(&wrong_role),
+            Err(Error::InvalidReceiptDependency)
+        );
+
+        let mut zero_width = canonical.clone();
+        put(&mut zero_width, consumer + 28, &0_u16.to_le_bytes());
+        assert_eq!(
+            ProgramV3::decode(&zero_width),
+            Err(Error::InvalidReceiptDependency)
+        );
+
+        let mut cross_geometry = canonical.clone();
+        *cross_geometry.get_mut(consumer + 1).expect("consumer kind") = 2;
+        assert_eq!(
+            ProgramV3::decode(&cross_geometry),
+            Err(Error::InvalidReceiptDependency)
+        );
+
+        let mut noncanonical_absent = canonical.clone();
+        *noncanonical_absent
+            .get_mut(consumer + 24)
+            .expect("dependency presence") = 0;
+        assert_eq!(
+            ProgramV3::decode(&noncanonical_absent),
+            Err(Error::NonCanonicalReserved)
+        );
+
+        let mut disabled = canonical;
+        *disabled.get_mut(HEADER_BYTES + 2).expect("producer enable") = 1;
+        put(&mut disabled, HEADER_BYTES + 4, &0_u16.to_le_bytes());
+        let program = ProgramV3::decode(&disabled).expect("statically valid disabled producer");
+        assert_eq!(
+            program.resolved_invocation(1, 0, 0, &[0], &[]),
+            Err(Error::InvalidReceiptDependency)
+        );
     }
 
     #[test]

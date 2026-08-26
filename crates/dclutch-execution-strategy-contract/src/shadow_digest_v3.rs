@@ -110,6 +110,21 @@ pub struct ShadowResolvedRouteV3 {
     pub request_len: u32,
     /// Exact optional `(offset, length)` in the complete family request.
     pub borrowed_witness: Option<(u32, u32)>,
+    /// Optional exact resolved prior receipt appended after the request/witness.
+    pub receipt_dependency: Option<ShadowReceiptDependencyV3>,
+}
+
+/// Exact prior receipt selected for one resolved Shadow route invocation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ShadowReceiptDependencyV3 {
+    /// Expected release-selected producer role.
+    pub producer_role: ShadowRouteRoleV3,
+    /// Strictly earlier producer route ordinal.
+    pub producer_route: u16,
+    /// Producer invocation: zero for fixed/affine, same item for each-item.
+    pub producer_invocation: u32,
+    /// Exact raw producer return-data width.
+    pub expected_receipt_bytes: u16,
 }
 
 impl ShadowResolvedRouteV3 {
@@ -119,6 +134,12 @@ impl ShadowResolvedRouteV3 {
             ShadowRouteKindV3::Once | ShadowRouteKindV3::AffineOnce => self.item.is_none(),
         };
         if !item_is_canonical {
+            return Err(ShadowDigestErrorV3::InvalidRoutePresence);
+        }
+        if self
+            .receipt_dependency
+            .is_some_and(|dependency| dependency.expected_receipt_bytes == 0)
+        {
             return Err(ShadowDigestErrorV3::InvalidRoutePresence);
         }
         Ok(())
@@ -242,6 +263,16 @@ pub fn effect_digest_v3(projection: ShadowEffectProjectionV3<'_>) -> Result<Cont
             }
             None => hasher.update([0_u8; 9]),
         }
+        match route.receipt_dependency {
+            Some(dependency) => {
+                hasher.update([1_u8]);
+                hasher.update([dependency.producer_role as u8]);
+                hasher.update(dependency.producer_route.to_le_bytes());
+                hasher.update(dependency.producer_invocation.to_le_bytes());
+                hasher.update(dependency.expected_receipt_bytes.to_le_bytes());
+            }
+            None => hasher.update([0_u8; 10]),
+        }
     }
     finish(hasher)
 }
@@ -318,6 +349,12 @@ mod tests {
             request_offset: 9,
             request_len: 10,
             borrowed_witness: Some((11, 12)),
+            receipt_dependency: Some(ShadowReceiptDependencyV3 {
+                producer_role: ShadowRouteRoleV3::Claims,
+                producer_route: 0,
+                producer_invocation: 2,
+                expected_receipt_bytes: 384,
+            }),
         }
     }
 
@@ -388,6 +425,37 @@ mod tests {
                 routes: &[changed],
             })
             .expect("effect")
+        );
+        let mut changed_dependency = route();
+        changed_dependency
+            .receipt_dependency
+            .as_mut()
+            .expect("dependency")
+            .producer_invocation = 1;
+        assert_ne!(
+            canonical,
+            effect_digest_v3(ShadowEffectProjectionV3 {
+                tail_count: 3,
+                output_lamports: &[4, 5],
+                request_bank: b"request",
+                routes: &[changed_dependency],
+            })
+            .expect("changed dependency")
+        );
+        let mut zero_width = route();
+        zero_width
+            .receipt_dependency
+            .as_mut()
+            .expect("dependency")
+            .expected_receipt_bytes = 0;
+        assert_eq!(
+            effect_digest_v3(ShadowEffectProjectionV3 {
+                tail_count: 3,
+                output_lamports: &[4, 5],
+                request_bank: b"request",
+                routes: &[zero_width],
+            }),
+            Err(ShadowDigestErrorV3::InvalidRoutePresence)
         );
         changed.kind = ShadowRouteKindV3::Once;
         assert_eq!(

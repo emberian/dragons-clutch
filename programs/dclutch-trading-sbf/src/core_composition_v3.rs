@@ -29,7 +29,7 @@ use solana_program::{
     pubkey::Pubkey,
 };
 
-use crate::TradingSbfError;
+use crate::{TradingSbfError, child_receipt_v3::append_receipt_dependency_v3};
 
 const CORE_EXECUTION_DIGEST_DOMAIN_V3: &[u8] = b"dclutch:hot-core-receipt:v3";
 
@@ -92,10 +92,11 @@ pub fn execute_core_route_v3<'info>(
     effect_accounts: &[AccountInfo<'info>],
     request_bank: &[u8],
     family_request: &[u8],
+    prior_receipt: Option<&[u8]>,
     core_program: &AccountInfo<'info>,
     parent: CoreCompositionParentV3,
 ) -> Result<[u8; 32], ProgramError> {
-    let prepared = prepare(
+    let mut prepared = prepare(
         program_id,
         effect,
         route_index,
@@ -109,6 +110,7 @@ pub fn execute_core_route_v3<'info>(
         core_program,
         parent,
     )?;
+    append_receipt_dependency_v3(prepared.invocation, &mut prepared.child_data, prior_receipt)?;
     let mut child_accounts = invocation_accounts(prepared.invocation, effect_accounts)?;
     let mut metas = Vec::with_capacity(child_accounts.len());
     for (index, account) in child_accounts.iter().enumerate() {

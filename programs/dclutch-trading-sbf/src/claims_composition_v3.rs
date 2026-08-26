@@ -34,7 +34,7 @@ use solana_program::{
     pubkey::Pubkey,
 };
 
-use crate::TradingSbfError;
+use crate::{TradingSbfError, child_receipt_v3::append_receipt_dependency_v3};
 
 /// Exact receipt returned by one canonical Claims route.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -62,6 +62,7 @@ pub fn execute_claims_route_v3<'info>(
     effect_accounts: &[AccountInfo<'info>],
     request_bank: &[u8],
     family_request: &[u8],
+    prior_receipt: Option<&[u8]>,
     claims_program: &AccountInfo<'info>,
 ) -> Result<ClaimsRouteReceiptV3, ProgramError> {
     if effect
@@ -110,10 +111,12 @@ pub fn execute_claims_route_v3<'info>(
             AccountMeta::new_readonly(*account.key, signer)
         });
     }
+    let mut child_data = request.to_vec();
+    append_receipt_dependency_v3(invocation, &mut child_data, prior_receipt)?;
     let instruction = Instruction {
         program_id: *claims_program.key,
         accounts: metas,
-        data: request.to_vec(),
+        data: child_data,
     };
     child_accounts.push(claims_program.clone());
     let bump_seed = [bump];
