@@ -11,11 +11,31 @@ use dclutch_account_profile_contract::{
     lifecycle_v3::StateLifecyclePolicyV3, v2::AccountProfileV2,
 };
 use dclutch_capability_program_contract::{
+    hot_v3::{
+        HOT_RUNTIME_CONFIG_COORDINATE_V3, HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3,
+        HOT_RUNTIME_PORTFOLIO_COORDINATE_V3, HOT_RUNTIME_PRODUCT_COORDINATE_V3,
+        HOT_RUNTIME_ROOT_COORDINATE_V3,
+    },
     set_v1::{CapabilityProgramSetV1, SelectorWidthV1},
     v3::CapabilityProgramV3,
 };
+use dclutch_claims_svm::{
+    CallerRole as ClaimsCallerRole,
+    affine_batch_v2::{
+        AFFINE_BATCH_PLAN_HEADER_BYTES_V2, AFFINE_BATCH_POSITION_BYTES_V2,
+        AFFINE_BATCH_ROW_BYTES_V2, AffineBatchPlanV2,
+    },
+    protocol_position_v2::{
+        ProtocolPositionActionV2, ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2,
+        ProtocolPositionRequestV2,
+    },
+};
 use dclutch_core_contract::ContentId;
-use dclutch_effect_kernel::{v2::FixedRole, v3::ProgramV3 as EffectProgramV3};
+use dclutch_custody_contract::{CompartmentV1, CustodyRequestV1, OperationV1};
+use dclutch_effect_kernel::{
+    v2::FixedRole,
+    v3::{ProgramV3 as EffectProgramV3, RouteKindV3},
+};
 use dclutch_execution_strategy_contract::v2::{
     EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyProgramV2,
 };
@@ -24,14 +44,18 @@ use dclutch_general_config_contract::{
     GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_ROOT_BYTES_V2, GENERAL_ROOT_SCHEMA_ID_V2,
     v3::{GENERAL_CONFIG_SCHEMA_ID_V3, GeneralConfigV3},
 };
+use dclutch_product_runtime_v2::{
+    PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_COEFFICIENT_COUNT_OFFSET, PORTFOLIO_HEADER_BYTES,
+};
+use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
 use dclutch_request_profile_contract::{ProjectionRegistersV1, RequestProfileV1, project_atomic};
 use dclutch_transition_vm::v3::ProgramV3 as TransitionProgramV3;
 use sha2::{Digest, Sha256};
 
 use crate::{
-    runtime_candidate::{
-        GENERAL_SETTLEMENT_COMMON_IDENTITIES_V2, GENERAL_SETTLEMENT_COMMON_SCALARS_V2,
-        GENERAL_SETTLEMENT_ITEM_IDENTITY_STRIDE_V2, GENERAL_SETTLEMENT_ITEM_SCALAR_STRIDE_V2,
+    hot_candidate_v3::{
+        GENERAL_HOT_COMMON_IDENTITIES_V3, GENERAL_HOT_COMMON_SCALARS_V3,
+        GENERAL_HOT_ITEM_IDENTITY_STRIDE_V3, GENERAL_HOT_ITEM_SCALAR_STRIDE_V3,
     },
     specialization::general_request_profile_bytes_v1,
 };
@@ -46,6 +70,9 @@ pub const GENERAL_CONTROLLER_REQUEST_SCHEMA_ID_V3: [u8; 32] = [
     0x3d, 0x55, 0xce, 0xaf, 0x28, 0x96, 0xaa, 0x66, 0xbb, 0x07, 0xf8, 0x4b, 0x71, 0x16, 0x2f, 0xd8,
     0x63, 0x10, 0xa9, 0xa0, 0x2c, 0x35, 0x53, 0x59, 0xe9, 0x39, 0x06, 0xc9, 0x08, 0x64, 0x82, 0x45,
 ];
+
+/// Common scalar temporarily receiving the Product-authenticated tail width.
+pub const GENERAL_PRODUCT_TAIL_COUNT_SCALAR_V3: u16 = 10;
 
 /// Exact descriptor-selected finalized bytes for one General action.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -305,8 +332,8 @@ fn execute_request_profile(
     {
         return Err(GeneralArtifactErrorV3::RequestProfile);
     }
-    const MAX_TEST_SCALARS: usize = 11;
-    const MAX_TEST_IDENTITIES: usize = 4;
+    const MAX_TEST_SCALARS: usize = GENERAL_HOT_COMMON_SCALARS_V3 as usize;
+    const MAX_TEST_IDENTITIES: usize = GENERAL_HOT_COMMON_IDENTITIES_V3 as usize;
     let scalars = usize::from(profile.common_scalar_count());
     let identities = usize::from(profile.common_identity_count());
     if scalars != MAX_TEST_SCALARS || identities != MAX_TEST_IDENTITIES {
@@ -345,19 +372,20 @@ fn validate_geometry(
     transition: TransitionProgramV3<'_>,
     effect: EffectProgramV3<'_>,
 ) -> Result<()> {
+    validate_hot_account_profile(account)?;
     if request_bytes != CONTROLLER_REQUEST_BYTES
         || request.item_request_bytes() != 0
         || account.common_scalar_count()
-            != u16::try_from(GENERAL_SETTLEMENT_COMMON_SCALARS_V2)
+            != u16::try_from(GENERAL_HOT_COMMON_SCALARS_V3)
                 .map_err(|_| GeneralArtifactErrorV3::Geometry)?
         || account.item_scalar_stride()
-            != u16::try_from(GENERAL_SETTLEMENT_ITEM_SCALAR_STRIDE_V2)
+            != u16::try_from(GENERAL_HOT_ITEM_SCALAR_STRIDE_V3)
                 .map_err(|_| GeneralArtifactErrorV3::Geometry)?
         || account.common_identity_count()
-            != u16::try_from(GENERAL_SETTLEMENT_COMMON_IDENTITIES_V2)
+            != u16::try_from(GENERAL_HOT_COMMON_IDENTITIES_V3)
                 .map_err(|_| GeneralArtifactErrorV3::Geometry)?
         || account.item_identity_stride()
-            != u16::try_from(GENERAL_SETTLEMENT_ITEM_IDENTITY_STRIDE_V2)
+            != u16::try_from(GENERAL_HOT_ITEM_IDENTITY_STRIDE_V3)
                 .map_err(|_| GeneralArtifactErrorV3::Geometry)?
         || account.item_account_stride() != 0
         || request.common_scalar_count() != account.common_scalar_count()
@@ -392,27 +420,259 @@ fn validate_geometry(
     Ok(())
 }
 
-fn validate_routes(action: Action, effect: EffectProgramV3<'_>) -> Result<()> {
-    let settlement = matches!(
-        action,
-        Action::Collect | Action::Materialize | Action::Distribute | Action::Close
-    );
-    let expected = if settlement { 2 } else { 0 };
-    if effect.route_count() != expected {
-        return Err(GeneralArtifactErrorV3::Effect);
+fn validate_hot_account_profile(account: AccountProfileV2<'_>) -> Result<()> {
+    if usize::from(account.fixed_account_count()) < HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3 {
+        return Err(GeneralArtifactErrorV3::Geometry);
     }
-    for (index, role) in [(0_u16, FixedRole::Claims), (1_u16, FixedRole::Custody)] {
-        if settlement
-            && effect
-                .route(index)
-                .map_err(|_| GeneralArtifactErrorV3::Effect)?
-                .role()
-                != role
+    let expected = [
+        (
+            HOT_RUNTIME_ROOT_COORDINATE_V3,
+            0x02_u8,
+            u32::try_from(
+                dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1
+                    .checked_add(GENERAL_ROOT_BYTES_V2)
+                    .ok_or(GeneralArtifactErrorV3::Geometry)?,
+            )
+            .map_err(|_| GeneralArtifactErrorV3::Geometry)?,
+            0_u32,
+        ),
+        (
+            HOT_RUNTIME_CONFIG_COORDINATE_V3,
+            0_u8,
+            u32::try_from(dclutch_general_config_contract::v3::GENERAL_CONFIG_BYTES_V3)
+                .map_err(|_| GeneralArtifactErrorV3::Geometry)?,
+            0_u32,
+        ),
+        (
+            HOT_RUNTIME_PRODUCT_COORDINATE_V3,
+            0_u8,
+            u32::try_from(PRODUCT_RECORD_BYTES_V2).map_err(|_| GeneralArtifactErrorV3::Geometry)?,
+            0_u32,
+        ),
+        (
+            HOT_RUNTIME_PORTFOLIO_COORDINATE_V3,
+            0_u8,
+            u32::try_from(PORTFOLIO_HEADER_BYTES).map_err(|_| GeneralArtifactErrorV3::Geometry)?,
+            u32::try_from(PORTFOLIO_COEFFICIENT_BYTES)
+                .map_err(|_| GeneralArtifactErrorV3::Geometry)?,
+        ),
+    ];
+    for (coordinate, privileges, data_length, data_item_stride) in expected {
+        let rule = account
+            .rule(
+                false,
+                u16::try_from(coordinate).map_err(|_| GeneralArtifactErrorV3::Geometry)?,
+            )
+            .map_err(|_| GeneralArtifactErrorV3::AccountProfile)?;
+        if rule.privileges() != privileges
+            || rule.effect_permissions() != 0
+            || rule.alias_kind()
+                != dclutch_account_profile_contract::v2::AliasKindV2::SelfCoordinate
+            || rule.alias_index() != 0
+            || rule.data_length() != data_length
+            || rule.data_item_stride() != data_item_stride
         {
-            return Err(GeneralArtifactErrorV3::Effect);
+            return Err(GeneralArtifactErrorV3::Geometry);
         }
     }
+    let projection = account
+        .tail_count_projection()
+        .map_err(|_| GeneralArtifactErrorV3::AccountProfile)?
+        .ok_or(GeneralArtifactErrorV3::Geometry)?;
+    if usize::from(projection.account()) != HOT_RUNTIME_PORTFOLIO_COORDINATE_V3
+        || projection.register() != GENERAL_PRODUCT_TAIL_COUNT_SCALAR_V3
+        || usize::try_from(projection.data_offset())
+            .map_err(|_| GeneralArtifactErrorV3::Geometry)?
+            != PORTFOLIO_COEFFICIENT_COUNT_OFFSET
+    {
+        return Err(GeneralArtifactErrorV3::Geometry);
+    }
     Ok(())
+}
+
+fn validate_routes(action: Action, effect: EffectProgramV3<'_>) -> Result<()> {
+    match action {
+        Action::Consider | Action::Freeze | Action::InitializeSettlement => {
+            require_route_count(effect, 0)
+        }
+        Action::Collect => {
+            require_route_count(effect, 3)?;
+            require_position_route(effect, 0, ProtocolPositionActionV2::Admit)?;
+            require_affine_route(effect, 1, 2)?;
+            require_custody_transfer_route(
+                effect,
+                2,
+                CompartmentV1::External,
+                CompartmentV1::Settlement,
+            )
+        }
+        Action::Materialize => {
+            require_route_count(effect, 3)?;
+            require_position_route(effect, 0, ProtocolPositionActionV2::Admit)?;
+            require_affine_route(effect, 1, 1)?;
+            // The exact direction is selected from the authenticated
+            // complete-set move: Mint is Settlement -> Hoard, Merge is the
+            // inverse.  Both use one canonical Transfer template and the
+            // admitted EffectProgram patches the two typed compartment bytes.
+            require_custody_transfer_route_either(
+                effect,
+                2,
+                (CompartmentV1::Settlement, CompartmentV1::HoardPrincipal),
+                (CompartmentV1::HoardPrincipal, CompartmentV1::Settlement),
+            )
+        }
+        Action::Distribute => {
+            require_route_count(effect, 3)?;
+            require_affine_route(effect, 0, 2)?;
+            require_position_route(effect, 1, ProtocolPositionActionV2::Close)?;
+            require_custody_transfer_route(
+                effect,
+                2,
+                CompartmentV1::Settlement,
+                CompartmentV1::External,
+            )
+        }
+        Action::Close => {
+            require_route_count(effect, 1)?;
+            require_custody_transfer_route(
+                effect,
+                0,
+                CompartmentV1::Settlement,
+                CompartmentV1::External,
+            )
+        }
+    }
+}
+
+fn require_route_count(effect: EffectProgramV3<'_>, expected: u16) -> Result<()> {
+    if effect.route_count() == expected {
+        Ok(())
+    } else {
+        Err(GeneralArtifactErrorV3::Effect)
+    }
+}
+
+fn require_position_route(
+    effect: EffectProgramV3<'_>,
+    index: u16,
+    action: ProtocolPositionActionV2,
+) -> Result<()> {
+    let route = effect
+        .route(index)
+        .map_err(|_| GeneralArtifactErrorV3::Effect)?;
+    let (fixed, item) = effect
+        .route_template(index)
+        .map_err(|_| GeneralArtifactErrorV3::Effect)?;
+    let request =
+        ProtocolPositionRequestV2::decode(fixed).map_err(|_| GeneralArtifactErrorV3::Effect)?;
+    let presence = match action {
+        ProtocolPositionActionV2::Admit => ProtocolPositionPresenceV2::Vacant,
+        ProtocolPositionActionV2::Close => ProtocolPositionPresenceV2::Existing,
+    };
+    if route.role() != FixedRole::Claims
+        || route.kind() != RouteKindV3::Once
+        || !item.is_empty()
+        || request.action != action
+        || request.presence != presence
+        || request.owner_kind != ProtocolPositionOwnerKindV2::TradingRecord
+    {
+        return Err(GeneralArtifactErrorV3::Effect);
+    }
+    Ok(())
+}
+
+fn require_affine_route(
+    effect: EffectProgramV3<'_>,
+    index: u16,
+    position_count: u32,
+) -> Result<()> {
+    const MAX_TEMPLATE_BYTES: usize = AFFINE_BATCH_PLAN_HEADER_BYTES_V2
+        + 2 * AFFINE_BATCH_POSITION_BYTES_V2
+        + AFFINE_BATCH_ROW_BYTES_V2;
+    let route = effect
+        .route(index)
+        .map_err(|_| GeneralArtifactErrorV3::Effect)?;
+    let (fixed, item) = effect
+        .route_template(index)
+        .map_err(|_| GeneralArtifactErrorV3::Effect)?;
+    let expected_fixed = AFFINE_BATCH_PLAN_HEADER_BYTES_V2
+        .checked_add(
+            usize::try_from(position_count)
+                .map_err(|_| GeneralArtifactErrorV3::Effect)?
+                .checked_mul(AFFINE_BATCH_POSITION_BYTES_V2)
+                .ok_or(GeneralArtifactErrorV3::Effect)?,
+        )
+        .ok_or(GeneralArtifactErrorV3::Effect)?;
+    if route.role() != FixedRole::Claims
+        || route.kind() != RouteKindV3::AffineOnce
+        || fixed.len() != expected_fixed
+        || item.len() != AFFINE_BATCH_ROW_BYTES_V2
+    {
+        return Err(GeneralArtifactErrorV3::Effect);
+    }
+    // A canonical item template is one exact N=1 child request. Runtime
+    // projection changes the authenticated outcome/row counts and repeats the
+    // same exact row ABI; it cannot smuggle another child wire behind a magic
+    // prefix.
+    let total = fixed
+        .len()
+        .checked_add(item.len())
+        .ok_or(GeneralArtifactErrorV3::Effect)?;
+    let mut packet = [0_u8; MAX_TEMPLATE_BYTES];
+    packet
+        .get_mut(..fixed.len())
+        .ok_or(GeneralArtifactErrorV3::Effect)?
+        .copy_from_slice(fixed);
+    packet
+        .get_mut(fixed.len()..total)
+        .ok_or(GeneralArtifactErrorV3::Effect)?
+        .copy_from_slice(item);
+    let plan =
+        AffineBatchPlanV2::decode(packet.get(..total).ok_or(GeneralArtifactErrorV3::Effect)?)
+            .map_err(|_| GeneralArtifactErrorV3::Effect)?;
+    if plan.caller_role() != ClaimsCallerRole::Trading
+        || plan.outcome_count() != 1
+        || plan.position_count() != position_count
+        || plan.row_count() != 1
+    {
+        return Err(GeneralArtifactErrorV3::Effect);
+    }
+    Ok(())
+}
+
+fn require_custody_transfer_route(
+    effect: EffectProgramV3<'_>,
+    index: u16,
+    source: CompartmentV1,
+    destination: CompartmentV1,
+) -> Result<()> {
+    let route = effect
+        .route(index)
+        .map_err(|_| GeneralArtifactErrorV3::Effect)?;
+    let (fixed, item) = effect
+        .route_template(index)
+        .map_err(|_| GeneralArtifactErrorV3::Effect)?;
+    let request = CustodyRequestV1::decode(fixed).map_err(|_| GeneralArtifactErrorV3::Effect)?;
+    if route.role() != FixedRole::Custody
+        || route.kind() != RouteKindV3::Once
+        || !item.is_empty()
+        || request.operation != OperationV1::Transfer
+        || request.source_compartment != source
+        || request.destination_compartment != destination
+    {
+        return Err(GeneralArtifactErrorV3::Effect);
+    }
+    Ok(())
+}
+
+fn require_custody_transfer_route_either(
+    effect: EffectProgramV3<'_>,
+    index: u16,
+    first: (CompartmentV1, CompartmentV1),
+    second: (CompartmentV1, CompartmentV1),
+) -> Result<()> {
+    require_custody_transfer_route(effect, index, first.0, first.1)
+        .or_else(|_| require_custody_transfer_route(effect, index, second.0, second.1))
 }
 
 fn require_selected(selected: [u8; 32], bytes: &[u8]) -> Result<()> {
@@ -502,7 +762,14 @@ mod tests {
     }
 
     fn account_profile() -> Vec<u8> {
-        let mut output = vec![0_u8; 64];
+        use dclutch_account_profile_contract::v2::{
+            HEADER_BYTES, OPERATION_BYTES, RULE_BYTES, SELECTED_WINDOW_ARTIFACT_PROFILE,
+        };
+
+        const FIXED_ACCOUNTS: usize = HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3;
+        let operations = 1_usize;
+        let mut output =
+            vec![0_u8; HEADER_BYTES + FIXED_ACCOUNTS * RULE_BYTES + operations * OPERATION_BYTES];
         put(&mut output, 0, &dclutch_account_profile_contract::v2::MAGIC);
         put(
             &mut output,
@@ -512,41 +779,106 @@ mod tests {
         put(
             &mut output,
             10,
-            &dclutch_account_profile_contract::v2::ARTIFACT_PROFILE.to_le_bytes(),
+            &SELECTED_WINDOW_ARTIFACT_PROFILE.to_le_bytes(),
         );
-        put(&mut output, 12, &1_u16.to_le_bytes());
+        put(
+            &mut output,
+            12,
+            &u16::try_from(FIXED_ACCOUNTS)
+                .expect("fixed accounts")
+                .to_le_bytes(),
+        );
         put(&mut output, 16, &1_u16.to_le_bytes());
         put(
             &mut output,
             20,
-            &u16::try_from(GENERAL_SETTLEMENT_COMMON_SCALARS_V2)
+            &u16::try_from(GENERAL_HOT_COMMON_SCALARS_V3)
                 .expect("common scalars")
                 .to_le_bytes(),
         );
         put(
             &mut output,
             22,
-            &u16::try_from(GENERAL_SETTLEMENT_ITEM_SCALAR_STRIDE_V2)
+            &u16::try_from(GENERAL_HOT_ITEM_SCALAR_STRIDE_V3)
                 .expect("item scalars")
                 .to_le_bytes(),
         );
         put(
             &mut output,
             24,
-            &u16::try_from(GENERAL_SETTLEMENT_COMMON_IDENTITIES_V2)
+            &u16::try_from(GENERAL_HOT_COMMON_IDENTITIES_V3)
                 .expect("common identities")
                 .to_le_bytes(),
         );
-        // The one fixed Product observation owns the authenticated runtime
-        // outcome count. A nonzero affine register geometry is canonical only
-        // when exactly one tail-count projection establishes that authority.
-        put(&mut output, 40, &4_u32.to_le_bytes());
-        set_byte(&mut output, 48, 8);
-        put(&mut output, 54, &10_u16.to_le_bytes());
+        for (coordinate, privileges, base, stride) in [
+            (
+                HOT_RUNTIME_ROOT_COORDINATE_V3,
+                0x02,
+                dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1
+                    + GENERAL_ROOT_BYTES_V2,
+                0,
+            ),
+            (
+                HOT_RUNTIME_CONFIG_COORDINATE_V3,
+                0,
+                dclutch_general_config_contract::v3::GENERAL_CONFIG_BYTES_V3,
+                0,
+            ),
+            (
+                HOT_RUNTIME_PRODUCT_COORDINATE_V3,
+                0,
+                PRODUCT_RECORD_BYTES_V2,
+                0,
+            ),
+            (
+                HOT_RUNTIME_PORTFOLIO_COORDINATE_V3,
+                0,
+                PORTFOLIO_HEADER_BYTES,
+                PORTFOLIO_COEFFICIENT_BYTES,
+            ),
+        ] {
+            let rule = HEADER_BYTES + coordinate * RULE_BYTES;
+            set_byte(&mut output, rule, privileges);
+            put(
+                &mut output,
+                rule + 8,
+                &u32::try_from(base).expect("base width").to_le_bytes(),
+            );
+            put(
+                &mut output,
+                rule + 12,
+                &u32::try_from(stride).expect("stride width").to_le_bytes(),
+            );
+        }
+        let operation = HEADER_BYTES + FIXED_ACCOUNTS * RULE_BYTES;
+        set_byte(&mut output, operation, 8);
+        put(
+            &mut output,
+            operation + 2,
+            &u16::try_from(HOT_RUNTIME_PORTFOLIO_COORDINATE_V3)
+                .expect("portfolio coordinate")
+                .to_le_bytes(),
+        );
+        put(
+            &mut output,
+            operation + 6,
+            &GENERAL_PRODUCT_TAIL_COUNT_SCALAR_V3.to_le_bytes(),
+        );
+        put(
+            &mut output,
+            operation + 8,
+            &u32::try_from(PORTFOLIO_COEFFICIENT_COUNT_OFFSET)
+                .expect("portfolio count offset")
+                .to_le_bytes(),
+        );
         output
     }
 
     fn lifecycle_policy() -> Vec<u8> {
+        lifecycle_policy_for(Action::Freeze)
+    }
+
+    fn lifecycle_policy_for(action: Action) -> Vec<u8> {
         use dclutch_account_profile_contract::lifecycle_v3::{
             ACTION_PLAN_BYTES, ARTIFACT_PROFILE, HEADER_BYTES, MAGIC, RECIPE_BYTES, SEED_BYTES,
             VERSION,
@@ -572,7 +904,7 @@ mod tests {
         set_byte(&mut output, seed, 3);
         set_byte(&mut output, seed + 1, 1);
         let plan = HEADER_BYTES + RECIPE_BYTES + SEED_BYTES;
-        put(&mut output, plan, &(Action::Freeze as u32).to_le_bytes());
+        put(&mut output, plan, &(action as u32).to_le_bytes());
         set_byte(&mut output, plan + 4, 2);
         set_byte(&mut output, plan + 8, u8::MAX);
         output
@@ -583,9 +915,27 @@ mod tests {
         put(&mut output, 0, &dclutch_transition_vm::v3::MAGIC);
         set_byte(&mut output, 4, dclutch_transition_vm::v3::VERSION);
         put(&mut output, 6, &1_u16.to_le_bytes());
-        put(&mut output, 12, &11_u16.to_le_bytes());
-        put(&mut output, 14, &1_u16.to_le_bytes());
-        put(&mut output, 16, &4_u16.to_le_bytes());
+        put(
+            &mut output,
+            12,
+            &u16::try_from(GENERAL_HOT_COMMON_SCALARS_V3)
+                .expect("common scalars")
+                .to_le_bytes(),
+        );
+        put(
+            &mut output,
+            14,
+            &u16::try_from(GENERAL_HOT_ITEM_SCALAR_STRIDE_V3)
+                .expect("item scalars")
+                .to_le_bytes(),
+        );
+        put(
+            &mut output,
+            16,
+            &u16::try_from(GENERAL_HOT_COMMON_IDENTITIES_V3)
+                .expect("common identities")
+                .to_le_bytes(),
+        );
         // One canonical LoadConst into an otherwise preserved common register.
         set_byte(&mut output, dclutch_transition_vm::v3::HEADER_BYTES, 0);
         put(
@@ -597,13 +947,67 @@ mod tests {
     }
 
     fn effect() -> Vec<u8> {
+        effect_for(Action::Freeze)
+    }
+
+    fn effect_for(action: Action) -> Vec<u8> {
+        let settlement = matches!(
+            action,
+            Action::Collect | Action::Materialize | Action::Distribute | Action::Close
+        );
+        let route_count = if settlement { 2_u16 } else { 0 };
+        let route_bytes = usize::from(route_count) * dclutch_effect_kernel::v3::ROUTE_BYTES;
+        let request_bytes = usize::from(route_count);
         let mut output = vec![0_u8; dclutch_effect_kernel::v3::HEADER_BYTES];
+        output.resize(
+            dclutch_effect_kernel::v3::HEADER_BYTES + route_bytes + request_bytes,
+            0,
+        );
         put(&mut output, 0, &dclutch_effect_kernel::v3::MAGIC);
         set_byte(&mut output, 4, dclutch_effect_kernel::v3::VERSION);
-        put(&mut output, 12, &1_u16.to_le_bytes());
-        put(&mut output, 16, &11_u16.to_le_bytes());
-        put(&mut output, 18, &1_u16.to_le_bytes());
-        put(&mut output, 20, &4_u16.to_le_bytes());
+        put(&mut output, 6, &route_count.to_le_bytes());
+        put(
+            &mut output,
+            12,
+            &u16::try_from(HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3)
+                .expect("fixed account count")
+                .to_le_bytes(),
+        );
+        put(
+            &mut output,
+            16,
+            &u16::try_from(GENERAL_HOT_COMMON_SCALARS_V3)
+                .expect("common scalars")
+                .to_le_bytes(),
+        );
+        put(
+            &mut output,
+            18,
+            &u16::try_from(GENERAL_HOT_ITEM_SCALAR_STRIDE_V3)
+                .expect("item scalars")
+                .to_le_bytes(),
+        );
+        put(
+            &mut output,
+            20,
+            &u16::try_from(GENERAL_HOT_COMMON_IDENTITIES_V3)
+                .expect("common identities")
+                .to_le_bytes(),
+        );
+        if settlement {
+            for (index, role) in [1_u8, 4].into_iter().enumerate() {
+                let route = dclutch_effect_kernel::v3::HEADER_BYTES
+                    + index * dclutch_effect_kernel::v3::ROUTE_BYTES;
+                set_byte(&mut output, route, role);
+                put(
+                    &mut output,
+                    route + 6,
+                    &u16::try_from(index).expect("route account").to_le_bytes(),
+                );
+                put(&mut output, route + 8, &1_u16.to_le_bytes());
+                put(&mut output, route + 16, &1_u32.to_le_bytes());
+            }
+        }
         output
     }
 
@@ -718,7 +1122,12 @@ mod tests {
             assert_eq!(bundle.tail_count, tail_count);
             assert_eq!(
                 bundle.request_profile.scalar_count(tail_count),
-                Ok(11_usize + usize::try_from(tail_count).expect("test tail"))
+                Ok(
+                    usize::try_from(GENERAL_HOT_COMMON_SCALARS_V3).expect("common scalars")
+                        + usize::try_from(tail_count).expect("test tail")
+                            * usize::try_from(GENERAL_HOT_ITEM_SCALAR_STRIDE_V3)
+                                .expect("item stride")
+                )
             );
         }
     }
@@ -756,6 +1165,96 @@ mod tests {
                 258,
             )
             .is_err()
+        );
+
+        let mut hostile_profile = account_profile();
+        let operation = dclutch_account_profile_contract::v2::HEADER_BYTES
+            + HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3
+                * dclutch_account_profile_contract::v2::RULE_BYTES;
+        put(
+            &mut hostile_profile,
+            operation + 2,
+            &u16::try_from(HOT_RUNTIME_PRODUCT_COORDINATE_V3)
+                .expect("Product coordinate")
+                .to_le_bytes(),
+        );
+        let mut hostile = fixture.artifacts();
+        hostile.account_profile = &hostile_profile;
+        assert_eq!(
+            authenticate_general_artifacts_v3(fixture.selection(), hostile, &fixture.request, 258,),
+            Err(GeneralArtifactErrorV3::ContentIdentity)
+        );
+
+        let hostile_digest = digest(&hostile_profile);
+        let mut descriptor =
+            CapabilityProgramV3::decode(&fixture.descriptor).expect("fixture descriptor");
+        descriptor = CapabilityProgramV3::new(
+            descriptor.kind(),
+            descriptor.config_schema(),
+            descriptor.request_schema(),
+            descriptor.root_schema(),
+            id(hostile_digest),
+            descriptor.derivation_policy(),
+            descriptor.capacity_profile(),
+            descriptor.effect_program(),
+            descriptor.request_profile_schema(),
+            descriptor.request_profile_program(),
+            descriptor.transition_schema(),
+            descriptor.transition_program(),
+            descriptor.root_state_bytes(),
+        )
+        .expect("hostile descriptor");
+        let hostile_descriptor = descriptor.encode();
+        let hostile_set = program_set(digest(&hostile_descriptor));
+        let mut hostile_config = GeneralConfigV3::decode(&fixture.config).expect("config");
+        hostile_config = GeneralConfigV3::new(GeneralConfigV3Input {
+            capacity_profile_id: hostile_config.capacity_profile_id(),
+            claim_basis_id: hostile_config.claim_basis_id(),
+            program_set_id: digest(&hostile_set),
+            generation: hostile_config.generation(),
+            price_scale: hostile_config.price_scale(),
+            collection_slots: hostile_config.collection_slots(),
+            selection_slots: hostile_config.selection_slots(),
+            settlement_slots: hostile_config.settlement_slots(),
+            max_orders_per_candidate: hostile_config.max_orders_per_candidate(),
+            max_pages_per_candidate: hostile_config.max_pages_per_candidate(),
+            continuation_reward_lamports: hostile_config.continuation_reward_lamports(),
+            selection_policy_id: hostile_config.selection_policy_id(),
+            quote_surplus_beneficiary: hostile_config.quote_surplus_beneficiary(),
+        })
+        .expect("hostile config");
+        let hostile_config_bytes = hostile_config.to_bytes();
+        assert_eq!(
+            authenticate_general_artifacts_v3(
+                GeneralArtifactSelectionV3 {
+                    program_set: digest(&hostile_set),
+                    config: digest(&hostile_config_bytes),
+                },
+                GeneralArtifactBytesV3 {
+                    program_set: &hostile_set,
+                    descriptor: &hostile_descriptor,
+                    config: &hostile_config_bytes,
+                    account_profile: &hostile_profile,
+                    lifecycle_policy: &fixture.lifecycle,
+                    request_profile: &fixture.request_profile,
+                    strategy: &fixture.strategy,
+                    transition: &fixture.transition,
+                    effect: &fixture.effect,
+                },
+                &fixture.request,
+                258,
+            ),
+            Err(GeneralArtifactErrorV3::Geometry)
+        );
+    }
+
+    #[test]
+    fn role_tag_and_one_byte_child_fakes_refuse_admission() {
+        let fake = effect_for(Action::Collect);
+        let effect = EffectProgramV3::decode(&fake).expect("structurally valid fake");
+        assert_eq!(
+            validate_routes(Action::Collect, effect),
+            Err(GeneralArtifactErrorV3::Effect)
         );
     }
 }

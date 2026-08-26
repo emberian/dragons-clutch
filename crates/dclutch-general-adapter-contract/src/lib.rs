@@ -20,6 +20,8 @@ extern crate std;
 pub mod artifacts_v3;
 /// Exact canonical Claims/Custody packet construction and receipt verification.
 pub mod child_packets;
+/// Complete General Hot36 candidate register ABI for exact child packets.
+pub mod hot_candidate_v3;
 /// Exact funded batch, candidate, page, abort, and terminal lifecycle.
 pub mod lifecycle;
 /// Stateless, failure-atomic candidate and settlement plan evaluation.

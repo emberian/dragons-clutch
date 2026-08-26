@@ -19,6 +19,8 @@ dclutch-effect-kernel = { path = "../dclutch-effect-kernel" }
 dclutch-execution-strategy-contract = { path = "../dclutch-execution-strategy-contract" }
 dclutch-general-codec = { path = "../dclutch-general-codec" }
 dclutch-general-config-contract = { path = "../dclutch-general-config-contract" }
+dclutch-product-runtime-v2 = { path = "../dclutch-product-runtime-v2" }
+dclutch-product-runtime-v2-admission = { path = "../dclutch-product-runtime-v2-admission" }
 dclutch-request-profile-contract = { path = "../dclutch-request-profile-contract" }
 dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
 dclutch-transition-vm = { path = "../dclutch-transition-vm" }

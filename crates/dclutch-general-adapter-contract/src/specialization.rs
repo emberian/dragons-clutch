@@ -41,6 +41,12 @@ mod tests {
     use dclutch_request_profile_contract::{ProjectionRegistersV1, project_atomic};
 
     use super::*;
+    use crate::hot_candidate_v3::{
+        GENERAL_HOT_COMMON_IDENTITIES_V3, GENERAL_HOT_COMMON_SCALARS_V3,
+    };
+
+    const TEST_SCALARS: usize = GENERAL_HOT_COMMON_SCALARS_V3 as usize;
+    const TEST_IDENTITIES: usize = GENERAL_HOT_COMMON_IDENTITIES_V3 as usize;
 
     const ACTIONS: [Action; GENERAL_REQUEST_PROFILE_ACTION_COUNT_V1] = [
         Action::Consider,
@@ -83,12 +89,12 @@ mod tests {
             let profile = general_request_profile_v1(action).expect("generated profile");
             let scalar_count = profile.scalar_count(0).expect("scalar width");
             let identity_count = profile.identity_count(0).expect("identity width");
-            let input_scalars = [99_u64; 11];
-            let input_identities = [[0x99; 32]; 4];
-            let mut scratch_scalars = [0_u64; 11];
-            let mut scratch_identities = [[0_u8; 32]; 4];
-            let mut output_scalars = [0_u64; 11];
-            let mut output_identities = [[0_u8; 32]; 4];
+            let input_scalars = [99_u64; TEST_SCALARS];
+            let input_identities = [[0x99; 32]; TEST_IDENTITIES];
+            let mut scratch_scalars = [0_u64; TEST_SCALARS];
+            let mut scratch_identities = [[0_u8; 32]; TEST_IDENTITIES];
+            let mut output_scalars = [0_u64; TEST_SCALARS];
+            let mut output_identities = [[0_u8; 32]; TEST_IDENTITIES];
             project_atomic(
                 profile,
                 0,
@@ -115,7 +121,7 @@ mod tests {
             .expect("selected profile accepts");
             assert_eq!(output_scalars.first(), Some(&7));
             if action == Action::Freeze {
-                assert_eq!(identity_count, 4);
+                assert_eq!(identity_count, TEST_IDENTITIES);
                 assert_eq!(output_identities.first(), Some(&[0x99; 32]));
             } else {
                 assert_eq!(output_identities.first(), Some(&[0x31; 32]));
@@ -132,12 +138,12 @@ mod tests {
             let mut hostile = request(action);
             *hostile.get_mut(10).expect("action byte") =
                 u8::try_from((index + 1) % ACTIONS.len()).expect("bounded action");
-            let input_scalars = [1_u64; 11];
-            let input_identities = [[1_u8; 32]; 4];
-            let mut scratch_scalars = [0_u64; 11];
-            let mut scratch_identities = [[0_u8; 32]; 4];
-            let mut output_scalars = [0x55_u64; 11];
-            let mut output_identities = [[0x55_u8; 32]; 4];
+            let input_scalars = [1_u64; TEST_SCALARS];
+            let input_identities = [[1_u8; 32]; TEST_IDENTITIES];
+            let mut scratch_scalars = [0_u64; TEST_SCALARS];
+            let mut scratch_identities = [[0_u8; 32]; TEST_IDENTITIES];
+            let mut output_scalars = [0x55_u64; TEST_SCALARS];
+            let mut output_identities = [[0x55_u8; 32]; TEST_IDENTITIES];
             let before_scalars = output_scalars;
             let before_identities = output_identities;
             assert!(
