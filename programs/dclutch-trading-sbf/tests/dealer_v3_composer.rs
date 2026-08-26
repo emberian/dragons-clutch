@@ -1,12 +1,15 @@
 //! Hostile integration coverage for Dealer V3 scenario-fill composition.
 
-use dclutch_custody_contract::{CompartmentV1, CustodyVaultSeedsV1};
+use dclutch_custody_contract::{
+    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CompartmentV1, CustodyVaultSeedsV1,
+};
 use dclutch_dealer_codec::scenario::ClaimsInventoryObservation;
 use dclutch_trading_sbf::dealer::{
     v3_composer::{
         ScenarioCollateralFrameV3, ScenarioComposerContextV3, ScenarioFillInputV3,
         ScenarioQuoteDirectionV3, ScenarioQuoteLegV3, prepare_scenario_atomic_v3,
     },
+    v3_multi_lp::MultiLpCustodyRequestV3,
     v3_obligation::{
         DEALER_OBLIGATION_HEADER_BYTES_V3, DEALER_OBLIGATION_MAGIC_V3,
         DEALER_OBLIGATION_PDA_DOMAIN_V3, DEALER_OBLIGATION_VERSION_V3,
@@ -78,6 +81,13 @@ fn context_and_frame() -> (ScenarioComposerContextV3, ScenarioCollateralFrameV3)
         hoard_balance: 100,
         counterparty_account: [14; 32],
         counterparty_owner: [15; 32],
+        counterparty_external_delegate: Pubkey::find_program_address(
+            &[CUSTODY_AUTHORITY_PDA_DOMAIN_V1, &[1; 32], &[6; 32]],
+            &Pubkey::new_from_array(custody),
+        )
+        .0
+        .to_bytes(),
+        counterparty_external_delegated_amount: 6,
         counterparty_balance: 100,
     };
     (context, frame)
@@ -135,6 +145,27 @@ fn incoming_quote_funds_minimum_split_while_fee_stays_segregated() {
     assert_eq!(plan.hoard_after, 103);
     assert_eq!(plan.counterparty_after, 94);
     assert_eq!(plan.custody_count, 3);
+    let first = custody[0].expect("principal debit").request;
+    let second = custody[1].expect("fee debit").request;
+    assert!(matches!(
+        first,
+        MultiLpCustodyRequestV3::Delegated(request)
+            if request.starts_atomic_debit
+                && !request.terminal
+                && request.total_debit == 6
+                && request.allowance_before == 6
+                && request.allowance_after == 1
+    ));
+    assert!(matches!(
+        second,
+        MultiLpCustodyRequestV3::Delegated(request)
+            if !request.starts_atomic_debit
+                && request.terminal
+                && request.total_debit == 6
+                && request.allowance_before == 1
+                && request.allowance_after == 0
+                && request.delegate_after == [0; 32]
+    ));
 }
 
 #[test]
@@ -191,12 +222,15 @@ fn outgoing_quote_executes_after_merge_and_fee_never_becomes_capital() {
     assert_eq!(plan.custody_count, 3);
     let fee = custody[0].expect("principal-to-fee effect");
     assert_eq!(
-        fee.request.source_compartment,
+        fee.request.custody().source_compartment,
         CompartmentV1::TradingPrincipal
     );
-    assert_eq!(fee.request.destination_compartment, CompartmentV1::FeeVault);
+    assert_eq!(
+        fee.request.custody().destination_compartment,
+        CompartmentV1::FeeVault
+    );
     let payout = custody[2].expect("net counterparty payout");
-    assert_eq!(payout.request.amount, 4);
+    assert_eq!(payout.request.custody().amount, 4);
 }
 
 #[test]

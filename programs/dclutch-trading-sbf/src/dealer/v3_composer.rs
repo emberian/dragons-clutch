@@ -9,18 +9,19 @@
 //! immediate receipt before Trading commits the obligation state last.
 
 use dclutch_custody_contract::{
-    CallerRoleV1, CompartmentV1, ContextV1, CustodyReceiptV1, CustodyRequestV1,
-    CustodyVaultSeedsV1, OperationV1,
+    CallerRoleV1, CompartmentV1, ContextV1, CustodyAuthoritySeedsV1, CustodyReceiptV1,
+    CustodyRequestV1, CustodyVaultSeedsV1, DelegatedCustodyReceiptV2, DelegatedCustodyRequestV2,
+    OperationV1,
 };
 use dclutch_dealer_codec::scenario::{
-    plan_descriptor_scenario, ClaimsInventoryObservation, DescriptorScenarioInput, ScenarioPlan,
+    ClaimsInventoryObservation, DescriptorScenarioInput, ScenarioPlan, plan_descriptor_scenario,
 };
 use solana_program::{
     hash::{hash, hashv},
     pubkey::Pubkey,
 };
 
-use super::v3_obligation::DealerObligationProjectionV3;
+use super::{v3_multi_lp::MultiLpCustodyRequestV3, v3_obligation::DealerObligationProjectionV3};
 
 /// Maximum distinct Custody transfers in one scenario-solvent fill.
 pub const MAX_DEALER_SCENARIO_CUSTODY_EFFECTS_V3: usize = 4;
@@ -121,6 +122,10 @@ pub struct ScenarioCollateralFrameV3 {
     pub counterparty_account: [u8; 32],
     /// Counterparty authority and Claims Position owner.
     pub counterparty_owner: [u8; 32],
+    /// Exact current Custody delegate for external debits.
+    pub counterparty_external_delegate: [u8; 32],
+    /// Exact current delegated allowance, exhausted by an incoming quote.
+    pub counterparty_external_delegated_amount: u64,
     /// Present external token balance.
     pub counterparty_balance: u64,
 }
@@ -143,8 +148,8 @@ pub struct ScenarioFillInputV3<'a> {
 /// One exact Custody request and required two-account balances afterward.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ScenarioCustodyEffectV3 {
-    /// Exact canonical Custody request.
-    pub request: CustodyRequestV1,
+    /// Exact canonical Custody V1 or delegated V2 request.
+    pub request: MultiLpCustodyRequestV3,
     /// Required source balance immediately afterward.
     pub source_after: u64,
     /// Required destination balance immediately afterward.
@@ -371,19 +376,44 @@ pub fn prepare_scenario_atomic_v3(
             scenario.maximum_complete_sets_to_merge,
         )?,
     };
-    for transfer in transfers.iter().take(count).copied().flatten() {
-        build_custody_effect(context, frame, transfer)?;
+    let external_total =
+        if input.quote.direction == ScenarioQuoteDirectionV3::CounterpartyPaysDealer {
+            input
+                .quote
+                .principal
+                .checked_add(input.quote.realized_fee)
+                .ok_or(ScenarioComposerErrorV3::Arithmetic)?
+        } else {
+            0
+        };
+    if external_total != 0 && frame.counterparty_external_delegated_amount != external_total {
+        return Err(ScenarioComposerErrorV3::Custody);
     }
+    let mut external_remaining = external_total;
     custody_output.fill(None);
     for (destination, transfer) in custody_output
         .iter_mut()
         .zip(transfers.iter().take(count).copied())
     {
+        let transfer = transfer.ok_or(ScenarioComposerErrorV3::Arithmetic)?;
         *destination = Some(build_custody_effect(
             context,
             frame,
-            transfer.ok_or(ScenarioComposerErrorV3::Arithmetic)?,
+            transfer,
+            external_total,
+            external_remaining,
         )?);
+        if matches!(
+            transfer.kind,
+            TransferKindV3::CounterpartyToPrincipal | TransferKindV3::CounterpartyToFee
+        ) {
+            external_remaining = external_remaining
+                .checked_sub(transfer.amount)
+                .ok_or(ScenarioComposerErrorV3::Arithmetic)?;
+        }
+    }
+    if external_remaining != 0 {
+        return Err(ScenarioComposerErrorV3::Custody);
     }
     Ok(ScenarioAtomicPlanV3 {
         scenario,
@@ -404,22 +434,56 @@ pub fn verify_scenario_custody_receipt_v3(
     receipt_bytes: &[u8],
     poststate_commitment: [u8; 32],
 ) -> ScenarioComposerResultV3<()> {
-    let request_bytes = effect
-        .request
-        .to_bytes()
-        .map_err(|_| ScenarioComposerErrorV3::Custody)?;
-    let receipt =
-        CustodyReceiptV1::decode(receipt_bytes).map_err(|_| ScenarioComposerErrorV3::Custody)?;
-    receipt
-        .verify_for(
-            effect.request,
-            hash(&request_bytes).to_bytes(),
-            poststate_commitment,
-        )
-        .map_err(|_| ScenarioComposerErrorV3::Custody)?;
-    if receipt.evidence.source_after != effect.source_after
-        || receipt.evidence.destination_after != effect.destination_after
-    {
+    let (source_after, destination_after) = match effect.request {
+        MultiLpCustodyRequestV3::Canonical(request) => {
+            let request_bytes = request
+                .to_bytes()
+                .map_err(|_| ScenarioComposerErrorV3::Custody)?;
+            let receipt = CustodyReceiptV1::decode(receipt_bytes)
+                .map_err(|_| ScenarioComposerErrorV3::Custody)?;
+            receipt
+                .verify_for(
+                    request,
+                    hash(&request_bytes).to_bytes(),
+                    poststate_commitment,
+                )
+                .map_err(|_| ScenarioComposerErrorV3::Custody)?;
+            (
+                receipt.evidence.source_after,
+                receipt.evidence.destination_after,
+            )
+        }
+        MultiLpCustodyRequestV3::Delegated(request) => {
+            let request_bytes = request
+                .encode()
+                .map_err(|_| ScenarioComposerErrorV3::Custody)?;
+            let delegated = DelegatedCustodyReceiptV2::decode(receipt_bytes)
+                .map_err(|_| ScenarioComposerErrorV3::Custody)?;
+            delegated
+                .custody
+                .verify_for(
+                    request.custody,
+                    hash(&request_bytes).to_bytes(),
+                    poststate_commitment,
+                )
+                .map_err(|_| ScenarioComposerErrorV3::Custody)?;
+            if delegated.starts_atomic_debit != request.starts_atomic_debit
+                || delegated.terminal != request.terminal
+                || delegated.delegate_before != request.delegate_before
+                || delegated.delegate_after != request.delegate_after
+                || delegated.total_debit != request.total_debit
+                || delegated.allowance_before != request.allowance_before
+                || delegated.allowance_after != request.allowance_after
+            {
+                return Err(ScenarioComposerErrorV3::Postcondition);
+            }
+            (
+                delegated.custody.evidence.source_after,
+                delegated.custody.evidence.destination_after,
+            )
+        }
+    };
+    if source_after != effect.source_after || destination_after != effect.destination_after {
         return Err(ScenarioComposerErrorV3::Postcondition);
     }
     Ok(())
@@ -640,6 +704,8 @@ fn build_custody_effect(
     context: ScenarioComposerContextV3,
     frame: ScenarioCollateralFrameV3,
     transfer: StagedTransferV3,
+    external_total: u64,
+    external_allowance_before: u64,
 ) -> ScenarioComposerResultV3<ScenarioCustodyEffectV3> {
     let (
         source,
@@ -755,6 +821,49 @@ fn build_custody_effect(
     };
     request
         .validate()
+        .map_err(|_| ScenarioComposerErrorV3::Custody)?;
+    let request = if matches!(
+        transfer.kind,
+        TransferKindV3::CounterpartyToPrincipal | TransferKindV3::CounterpartyToFee
+    ) {
+        let authority = Pubkey::find_program_address(
+            &CustodyAuthoritySeedsV1::from_request(request).as_slices(),
+            &Pubkey::new_from_array(context.custody_program),
+        )
+        .0
+        .to_bytes();
+        let allowance_after = external_allowance_before
+            .checked_sub(transfer.amount)
+            .ok_or(ScenarioComposerErrorV3::Arithmetic)?;
+        if frame.counterparty_external_delegate != authority
+            || frame.counterparty_external_delegated_amount != external_total
+        {
+            return Err(ScenarioComposerErrorV3::Custody);
+        }
+        MultiLpCustodyRequestV3::Delegated(DelegatedCustodyRequestV2 {
+            custody: request,
+            starts_atomic_debit: external_allowance_before == external_total,
+            terminal: allowance_after == 0,
+            delegate_before: authority,
+            delegate_after: if allowance_after == 0 {
+                [0; 32]
+            } else {
+                authority
+            },
+            total_debit: external_total,
+            allowance_before: external_allowance_before,
+            allowance_after,
+        })
+    } else {
+        MultiLpCustodyRequestV3::Canonical(request)
+    };
+    let mut request_bytes = [0_u8; dclutch_custody_contract::DELEGATED_CUSTODY_REQUEST_BYTES_V2];
+    request
+        .encode_into(
+            request_bytes
+                .get_mut(..request.encoded_len())
+                .ok_or(ScenarioComposerErrorV3::Custody)?,
+        )
         .map_err(|_| ScenarioComposerErrorV3::Custody)?;
     Ok(ScenarioCustodyEffectV3 {
         request,

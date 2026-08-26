@@ -63,14 +63,14 @@ impl DealerCustodySequenceV3 {
             return Err(DealerRouteErrorV3::InvalidSequence);
         }
         for (index, destination) in requests.iter_mut().take(count).enumerate() {
-            *destination = Some(MultiLpCustodyRequestV3::Canonical(
+            *destination = Some(
                 effects
                     .get(index)
                     .copied()
                     .flatten()
                     .ok_or(DealerRouteErrorV3::InvalidSequence)?
                     .request,
-            ));
+            );
         }
         if effects.iter().skip(count).any(Option::is_some) {
             return Err(DealerRouteErrorV3::InvalidSequence);
