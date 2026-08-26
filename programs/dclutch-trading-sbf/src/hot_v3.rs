@@ -21,7 +21,7 @@ use dclutch_account_profile_contract::{
     },
     v2::{
         AccountProfileV2, ProjectionRegistersV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2,
-        derive_effect_permissions, project_atomic as project_accounts_atomic,
+        TrustedEnvironmentV2, derive_effect_permissions, project_atomic as project_accounts_atomic,
         project_tail_count_atomic,
     },
 };
@@ -101,13 +101,14 @@ use dclutch_transition_vm::v3::{
 };
 use solana_program::{
     account_info::AccountInfo,
+    clock::Clock,
     hash::{hash, hashv},
     instruction::{AccountMeta, Instruction},
     program::{get_return_data, invoke, invoke_signed, set_return_data},
     program_error::ProgramError,
     pubkey::Pubkey,
     rent::Rent,
-    sysvar::SysvarSerialize,
+    sysvar::{Sysvar, SysvarSerialize},
 };
 use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign, transfer as system_transfer};
@@ -532,7 +533,13 @@ pub fn process_hot_execution_v3(
         })
         .collect::<Vec<_>>();
 
-    let tail_count = project_tail_count(account_profile, &observations, request_digest)?;
+    let trusted_environment = observe_trusted_environment_v3(account_profile)?;
+    let tail_count = project_tail_count(
+        account_profile,
+        &observations,
+        request_digest,
+        trusted_environment,
+    )?;
     require_tail_count_agreement_v3(product_outcome_count, tail_count)?;
     require_geometry(
         account_profile,
@@ -559,7 +566,8 @@ pub fn process_hot_execution_v3(
         return Err(TradingSbfError::UnsupportedContent.into());
     }
 
-    let input_scalars = vec![0_u64; scalar_count];
+    let mut input_scalars = vec![0_u64; scalar_count];
+    seed_trusted_environment_v3(trusted_environment, &mut input_scalars)?;
     let mut input_identities = vec![[0_u8; 32]; identity_count];
     *input_identities
         .get_mut(HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3)
@@ -582,6 +590,7 @@ pub fn process_hot_execution_v3(
         },
     )
     .map_err(|_| TradingSbfError::Content)?;
+    require_trusted_environment_v3(trusted_environment, &account_output_scalars)?;
 
     let mut signed_identities = account_output_identities.clone();
     if let RequestProfileKindV3::Signed(profile) = request_profile {
@@ -619,6 +628,7 @@ pub fn process_hot_execution_v3(
         },
     )
     .map_err(|_| TradingSbfError::Content)?;
+    require_trusted_environment_v3(trusted_environment, &request_output_scalars)?;
 
     let mut transition_scratch_scalars = request_output_scalars.clone();
     let mut transition_scratch_identities = request_output_identities.clone();
@@ -2422,6 +2432,7 @@ fn project_tail_count(
     profile: AccountProfileV2<'_>,
     observations: &[AccountObservationV1<'_>],
     request_digest: [u8; 32],
+    trusted_environment: Option<TrustedEnvironmentObservationV3>,
 ) -> Result<u32, ProgramError> {
     if profile
         .tail_count_projection()
@@ -2439,7 +2450,8 @@ fn project_tail_count(
     if scalar_count > MAX_HOT_SCALARS_V3 || identity_count > MAX_HOT_IDENTITIES_V3 {
         return Err(TradingSbfError::UnsupportedContent.into());
     }
-    let input_scalars = vec![0_u64; scalar_count];
+    let mut input_scalars = vec![0_u64; scalar_count];
+    seed_trusted_environment_v3(trusted_environment, &mut input_scalars)?;
     let mut input_identities = vec![[0_u8; 32]; identity_count];
     *input_identities
         .get_mut(HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3)
@@ -2448,7 +2460,7 @@ fn project_tail_count(
     let mut scratch_identities = input_identities.clone();
     let mut output_scalars = input_scalars.clone();
     let mut output_identities = input_identities.clone();
-    project_tail_count_atomic(
+    let tail_count = project_tail_count_atomic(
         profile,
         fixed,
         ProjectionRegistersV2 {
@@ -2460,7 +2472,57 @@ fn project_tail_count(
             output_identities: &mut output_identities,
         },
     )
-    .map_err(|_| TradingSbfError::Content.into())
+    .map_err(|_| TradingSbfError::Content)?;
+    require_trusted_environment_v3(trusted_environment, &output_scalars)?;
+    Ok(tail_count)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TrustedEnvironmentObservationV3 {
+    destination: usize,
+    current_slot: u64,
+}
+
+fn observe_trusted_environment_v3(
+    profile: AccountProfileV2<'_>,
+) -> Result<Option<TrustedEnvironmentObservationV3>, ProgramError> {
+    match profile.trusted_environment() {
+        TrustedEnvironmentV2::None => Ok(None),
+        TrustedEnvironmentV2::CurrentSlot { destination } => {
+            let current_slot = Clock::get().map_err(|_| TradingSbfError::Content)?.slot;
+            Ok(Some(TrustedEnvironmentObservationV3 {
+                destination: usize::from(destination),
+                current_slot,
+            }))
+        }
+    }
+}
+
+fn seed_trusted_environment_v3(
+    observation: Option<TrustedEnvironmentObservationV3>,
+    scalars: &mut [u64],
+) -> Result<(), ProgramError> {
+    let Some(observation) = observation else {
+        return Ok(());
+    };
+    *scalars
+        .get_mut(observation.destination)
+        .ok_or(TradingSbfError::Content)? = observation.current_slot;
+    Ok(())
+}
+
+fn require_trusted_environment_v3(
+    observation: Option<TrustedEnvironmentObservationV3>,
+    scalars: &[u64],
+) -> Result<(), ProgramError> {
+    let Some(observation) = observation else {
+        return Ok(());
+    };
+    if scalars.get(observation.destination) == Some(&observation.current_slot) {
+        Ok(())
+    } else {
+        Err(TradingSbfError::Content.into())
+    }
 }
 
 fn shadow_routes_v3(
@@ -3066,12 +3128,77 @@ mod tests {
 
     use super::*;
     use dclutch_account_profile_contract::lifecycle_v3::CreateStatePlanV3;
+    use dclutch_transition_vm::v3::{
+        HEADER_BYTES as TRANSITION_HEADER_BYTES_V3,
+        INSTRUCTION_BYTES as TRANSITION_INSTRUCTION_BYTES_V3, InstructionV3, ProgramGeometryV3,
+        ScalarRegisterV3, encode_program_atomic,
+    };
 
     #[test]
     fn selector_is_exact_and_does_not_shadow_activation() {
         assert!(is_hot_execution_v3(b"DCLTHOT3"));
         assert!(!is_hot_execution_v3(b"DCLTHOT2"));
         assert!(!is_hot_execution_v3(b"DCLTHOT"));
+    }
+
+    #[test]
+    fn trusted_current_slot_survives_projection_boundary_and_reaches_transition() {
+        let observation = Some(TrustedEnvironmentObservationV3 {
+            destination: 1,
+            current_slot: 42,
+        });
+        let mut projected = [0_u64; 3];
+        seed_trusted_environment_v3(observation, &mut projected).expect("trusted seed");
+        require_trusted_environment_v3(observation, &projected).expect("seed preserved");
+
+        let mut hostile = projected;
+        hostile[1] = 41;
+        assert_eq!(
+            require_trusted_environment_v3(observation, &hostile),
+            Err(TradingSbfError::Content.into())
+        );
+
+        let width = TRANSITION_HEADER_BYTES_V3 + TRANSITION_INSTRUCTION_BYTES_V3;
+        let mut program_scratch = vec![0_u8; width];
+        let mut program_bytes = vec![0_u8; width];
+        encode_program_atomic(
+            ProgramGeometryV3 {
+                common_scalars: 3,
+                item_scalar_stride: 0,
+                common_identities: 0,
+                item_identity_stride: 0,
+            },
+            &[InstructionV3::copy_scalar(
+                ScalarRegisterV3::common(1),
+                ScalarRegisterV3::common(2),
+            )],
+            &[],
+            &[],
+            &mut program_scratch,
+            &mut program_bytes,
+        )
+        .expect("transition program");
+        let program = TransitionProgramV3::decode(&program_bytes).expect("transition decode");
+        let mut transition_scratch = [0_u64; 3];
+        let mut transition_output = [0_u64; 3];
+        execute_fold_atomic(
+            program,
+            0,
+            RegisterInput {
+                scalars: &projected,
+                identities: &[],
+            },
+            RegisterOutput {
+                scalars: &mut transition_scratch,
+                identities: &mut [],
+            },
+            RegisterOutput {
+                scalars: &mut transition_output,
+                identities: &mut [],
+            },
+        )
+        .expect("transition sees trusted slot");
+        assert_eq!(transition_output, [0, 42, 42]);
     }
 
     #[test]
