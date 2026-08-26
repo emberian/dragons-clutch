@@ -11,9 +11,12 @@ Product result-domain, capability funding, provider release, observation, and
 Clock truth remain in authenticated accounts and are not copied into requests
 as caller-selected policy.
 
-The successful output is exactly the 312-byte certificate schema already
-owned by `SourceResolutionAbi`.  This module adds no second receipt layout; it
-only exposes the existing cursor-derived coordinates to the Rust generator.
+Each successful funded transition persists the 312-byte certificate schema
+already owned by `SourceResolutionAbi` and returns one caller-verifiable
+receipt.  The receipt is observational: it binds the Registry-selected
+Resolution producer, exact request, committed Source and Funding poststate,
+worker payout, and replay coordinate.  It does not introduce another state
+machine or mutation authority.
 -/
 
 namespace DClutch.SourceResolution.ControllerAbi
@@ -460,6 +463,317 @@ theorem funded_failure_requires_exhaustion_and_product_selector
     plan.certificate.selector = config.productDomain.failureSelector ∧
     plan.sourcePost.phase = .failureCommitted := by
   exact ⟨failure_commit_requires_exhaustion h, failure_commit_uses_product_selector h⟩
+
+/-! ## Caller-verifiable funded transition receipt -/
+
+def fundedReceiptMagic : List UInt8 :=
+  [0x44, 0x43, 0x53, 0x52, 0x46, 0x52, 0x30, 0x31] -- `DCSRFR01`
+
+def fundedReceiptVersion : Nat := 1
+
+inductive FundedReceiptPhase where
+  | recovery | exhausted | failureCommitted
+  deriving DecidableEq, Repr
+
+def FundedReceiptPhase.tag : FundedReceiptPhase → UInt8
+  | .recovery => 1
+  | .exhausted => 2
+  | .failureCommitted => 3
+
+def decodeFundedReceiptPhase : UInt8 → Option FundedReceiptPhase
+  | 1 => some .recovery
+  | 2 => some .exhausted
+  | 3 => some .failureCommitted
+  | _ => none
+
+/-- This is a projection of the canonical Source phase, not a second refund
+state machine.  Only failure commitment makes the terminal Source eligible
+for the separately authenticated Core close/refund effect. -/
+inductive FundedTerminalRefundPhase where
+  | continuing | awaitingFailure | terminalRefundPending
+  deriving DecidableEq, Repr
+
+def FundedTerminalRefundPhase.tag : FundedTerminalRefundPhase → UInt8
+  | .continuing => 1
+  | .awaitingFailure => 2
+  | .terminalRefundPending => 3
+
+def decodeFundedTerminalRefundPhase : UInt8 → Option FundedTerminalRefundPhase
+  | 1 => some .continuing
+  | 2 => some .awaitingFailure
+  | 3 => some .terminalRefundPending
+  | _ => none
+
+def decodeFundedCertificateKind : UInt8 → Option CertificateKind
+  | 1 => some .resolutionSuccess
+  | 2 => some .recoveryAdvanced
+  | 3 => some .exhausted
+  | 4 => some .resolutionFailure
+  | _ => none
+
+inductive FundedReceiptField where
+  | magic | version | action | postPhase | certificateKind
+  | terminalRefundPhase | reservedHeader
+  | producerProgram | producerRelease | requestDigest
+  | sourceState | fundingState | worker | certificate
+  | preSourceDigest | postSourceDigest | fundingPostDigest
+  | generation | replaySequence | workPaid | fundingRemaining
+  | selector | reservedBody
+  deriving DecidableEq, Repr
+
+def fundedReceiptSchema : List (FieldSpec FundedReceiptField) := [
+  ⟨.magic, .bytes 8⟩, ⟨.version, .u16⟩, ⟨.action, .u8⟩,
+  ⟨.postPhase, .u8⟩, ⟨.certificateKind, .u8⟩,
+  ⟨.terminalRefundPhase, .u8⟩, ⟨.reservedHeader, .reserved 2⟩,
+  ⟨.producerProgram, .bytes 32⟩, ⟨.producerRelease, .bytes 32⟩,
+  ⟨.requestDigest, .bytes 32⟩, ⟨.sourceState, .bytes 32⟩,
+  ⟨.fundingState, .bytes 32⟩, ⟨.worker, .bytes 32⟩,
+  ⟨.certificate, .bytes 32⟩, ⟨.preSourceDigest, .bytes 32⟩,
+  ⟨.postSourceDigest, .bytes 32⟩, ⟨.fundingPostDigest, .bytes 32⟩,
+  ⟨.generation, .u64⟩, ⟨.replaySequence, .u64⟩,
+  ⟨.workPaid, .u64⟩, ⟨.fundingRemaining, .u64⟩,
+  ⟨.selector, .u32⟩, ⟨.reservedBody, .reserved 4⟩
+]
+
+def fundedReceiptLayout : List (PlacedField FundedReceiptField) :=
+  DClutch.AbiSchema.specialize fundedReceiptSchema
+def fundedReceiptBytes : Nat := schemaWidth fundedReceiptSchema
+
+namespace FundedReceiptField
+
+def all : List FundedReceiptField := [
+  .magic, .version, .action, .postPhase, .certificateKind,
+  .terminalRefundPhase, .reservedHeader, .producerProgram, .producerRelease,
+  .requestDigest, .sourceState, .fundingState, .worker, .certificate,
+  .preSourceDigest, .postSourceDigest, .fundingPostDigest, .generation,
+  .replaySequence, .workPaid, .fundingRemaining, .selector, .reservedBody
+]
+
+def coordinate (field : FundedReceiptField) : Nat × Nat :=
+  (coordinate? field fundedReceiptLayout).getD (0, 0)
+def offset (field : FundedReceiptField) : Nat := (coordinate field).1
+
+def rustName : FundedReceiptField → String
+  | .magic => "FUNDED_RECEIPT_MAGIC_OFFSET"
+  | .version => "FUNDED_RECEIPT_VERSION_OFFSET"
+  | .action => "FUNDED_RECEIPT_ACTION_OFFSET"
+  | .postPhase => "FUNDED_RECEIPT_POST_PHASE_OFFSET"
+  | .certificateKind => "FUNDED_RECEIPT_CERTIFICATE_KIND_OFFSET"
+  | .terminalRefundPhase => "FUNDED_RECEIPT_TERMINAL_REFUND_PHASE_OFFSET"
+  | .reservedHeader => "FUNDED_RECEIPT_RESERVED_HEADER_OFFSET"
+  | .producerProgram => "FUNDED_RECEIPT_PRODUCER_PROGRAM_OFFSET"
+  | .producerRelease => "FUNDED_RECEIPT_PRODUCER_RELEASE_OFFSET"
+  | .requestDigest => "FUNDED_RECEIPT_REQUEST_DIGEST_OFFSET"
+  | .sourceState => "FUNDED_RECEIPT_SOURCE_STATE_OFFSET"
+  | .fundingState => "FUNDED_RECEIPT_FUNDING_STATE_OFFSET"
+  | .worker => "FUNDED_RECEIPT_WORKER_OFFSET"
+  | .certificate => "FUNDED_RECEIPT_CERTIFICATE_OFFSET"
+  | .preSourceDigest => "FUNDED_RECEIPT_PRE_SOURCE_DIGEST_OFFSET"
+  | .postSourceDigest => "FUNDED_RECEIPT_POST_SOURCE_DIGEST_OFFSET"
+  | .fundingPostDigest => "FUNDED_RECEIPT_FUNDING_POST_DIGEST_OFFSET"
+  | .generation => "FUNDED_RECEIPT_GENERATION_OFFSET"
+  | .replaySequence => "FUNDED_RECEIPT_REPLAY_SEQUENCE_OFFSET"
+  | .workPaid => "FUNDED_RECEIPT_WORK_PAID_OFFSET"
+  | .fundingRemaining => "FUNDED_RECEIPT_FUNDING_REMAINING_OFFSET"
+  | .selector => "FUNDED_RECEIPT_SELECTOR_OFFSET"
+  | .reservedBody => "FUNDED_RECEIPT_RESERVED_BODY_OFFSET"
+
+theorem all_fields_are_schema_order :
+    fundedReceiptSchema.map (fun field => field.name) = all := by native_decide
+theorem rust_names_are_unique : (all.map rustName).Nodup := by native_decide
+
+end FundedReceiptField
+
+theorem funded_receipt_width : fundedReceiptBytes = 376 := by native_decide
+theorem funded_receipt_fields_disjoint : fundedReceiptLayout.Pairwise Before := by
+  exact specializeFrom_pairwise 0 fundedReceiptSchema
+
+theorem funded_receipt_coordinates_are_canonical :
+    coordinates fundedReceiptLayout = [
+      (.magic, 0, 8), (.version, 8, 2), (.action, 10, 1),
+      (.postPhase, 11, 1), (.certificateKind, 12, 1),
+      (.terminalRefundPhase, 13, 1), (.reservedHeader, 14, 2),
+      (.producerProgram, 16, 32), (.producerRelease, 48, 32),
+      (.requestDigest, 80, 32), (.sourceState, 112, 32),
+      (.fundingState, 144, 32), (.worker, 176, 32),
+      (.certificate, 208, 32), (.preSourceDigest, 240, 32),
+      (.postSourceDigest, 272, 32), (.fundingPostDigest, 304, 32),
+      (.generation, 336, 8), (.replaySequence, 344, 8),
+      (.workPaid, 352, 8), (.fundingRemaining, 360, 8),
+      (.selector, 368, 4), (.reservedBody, 372, 4)
+    ] := by native_decide
+
+structure FundedTransitionReceiptV1 where
+  action : FundedAction
+  postPhase : FundedReceiptPhase
+  certificateKind : CertificateKind
+  terminalRefundPhase : FundedTerminalRefundPhase
+  producerProgram : Nat
+  producerRelease : Nat
+  requestDigest : Nat
+  sourceState : Nat
+  fundingState : Nat
+  worker : Nat
+  certificate : Nat
+  preSourceDigest : Nat
+  postSourceDigest : Nat
+  fundingPostDigest : Nat
+  generation : Nat
+  replaySequence : Nat
+  workPaid : Nat
+  fundingRemaining : Nat
+  selector : Nat
+  deriving DecidableEq, Repr
+
+def FundedTransitionReceiptV1.partitionValid
+    (receipt : FundedTransitionReceiptV1) : Bool :=
+  match receipt.action, receipt.postPhase, receipt.certificateKind,
+      receipt.terminalRefundPhase with
+  | .failNext, .recovery, .recoveryAdvanced, .continuing =>
+      receipt.selector == 0
+  | .exhaust, .exhausted, .exhausted, .awaitingFailure =>
+      receipt.selector == 0
+  | .commitFailure, .failureCommitted, .resolutionFailure,
+      .terminalRefundPending => receipt.selector < 256
+  | _, _, _, _ => false
+
+def FundedTransitionReceiptV1.shapeValid
+    (receipt : FundedTransitionReceiptV1) : Bool :=
+  receipt.partitionValid && receipt.producerProgram != 0 &&
+  receipt.producerRelease != 0 && receipt.requestDigest != 0 &&
+  receipt.sourceState != 0 && receipt.fundingState != 0 &&
+  receipt.worker != 0 && receipt.certificate != 0 &&
+  receipt.preSourceDigest != 0 && receipt.postSourceDigest != 0 &&
+  receipt.fundingPostDigest != 0 && receipt.generation != 0 &&
+  receipt.replaySequence != 0 && receipt.workPaid != 0
+
+def encodeFundedReceipt (receipt : FundedTransitionReceiptV1) : List UInt8 :=
+  fundedReceiptMagic ++ Codec.encodeLE 2 fundedReceiptVersion ++
+  [receipt.action.tag, receipt.postPhase.tag,
+    UInt8.ofNat receipt.certificateKind.tag,
+    receipt.terminalRefundPhase.tag] ++ List.replicate 2 0 ++
+  Codec.encodeLE 32 receipt.producerProgram ++
+  Codec.encodeLE 32 receipt.producerRelease ++
+  Codec.encodeLE 32 receipt.requestDigest ++ Codec.encodeLE 32 receipt.sourceState ++
+  Codec.encodeLE 32 receipt.fundingState ++ Codec.encodeLE 32 receipt.worker ++
+  Codec.encodeLE 32 receipt.certificate ++
+  Codec.encodeLE 32 receipt.preSourceDigest ++
+  Codec.encodeLE 32 receipt.postSourceDigest ++
+  Codec.encodeLE 32 receipt.fundingPostDigest ++
+  Codec.encodeLE 8 receipt.generation ++ Codec.encodeLE 8 receipt.replaySequence ++
+  Codec.encodeLE 8 receipt.workPaid ++ Codec.encodeLE 8 receipt.fundingRemaining ++
+  Codec.encodeLE 4 receipt.selector ++ List.replicate 4 0
+
+def decodeFundedReceipt (input : List UInt8) : Option FundedTransitionReceiptV1 := do
+  if input.length != fundedReceiptBytes then none else
+  if input.take (FundedReceiptField.offset .version) != fundedReceiptMagic then none else
+  if Codec.decodeLE ((input.drop (FundedReceiptField.offset .version)).take 2) !=
+      fundedReceiptVersion then none else
+  let action ← decodeFundedAction ((input[FundedReceiptField.offset .action]?).getD 0)
+  let postPhase ← decodeFundedReceiptPhase
+    ((input[FundedReceiptField.offset .postPhase]?).getD 0)
+  let certificateKind ← decodeFundedCertificateKind
+    ((input[FundedReceiptField.offset .certificateKind]?).getD 0)
+  let terminalRefundPhase ← decodeFundedTerminalRefundPhase
+    ((input[FundedReceiptField.offset .terminalRefundPhase]?).getD 0)
+  if (input.drop (FundedReceiptField.offset .reservedHeader)).take 2 !=
+      List.replicate 2 0 then none else
+  if (input.drop (FundedReceiptField.offset .reservedBody)).take 4 !=
+      List.replicate 4 0 then none else
+  let receipt : FundedTransitionReceiptV1 := {
+    action, postPhase, certificateKind, terminalRefundPhase
+    producerProgram := Codec.decodeLE
+      ((input.drop (FundedReceiptField.offset .producerProgram)).take 32)
+    producerRelease := Codec.decodeLE
+      ((input.drop (FundedReceiptField.offset .producerRelease)).take 32)
+    requestDigest := Codec.decodeLE
+      ((input.drop (FundedReceiptField.offset .requestDigest)).take 32)
+    sourceState := Codec.decodeLE
+      ((input.drop (FundedReceiptField.offset .sourceState)).take 32)
+    fundingState := Codec.decodeLE
+      ((input.drop (FundedReceiptField.offset .fundingState)).take 32)
+    worker := Codec.decodeLE ((input.drop (FundedReceiptField.offset .worker)).take 32)
+    certificate := Codec.decodeLE
+      ((input.drop (FundedReceiptField.offset .certificate)).take 32)
+    preSourceDigest := Codec.decodeLE
+      ((input.drop (FundedReceiptField.offset .preSourceDigest)).take 32)
+    postSourceDigest := Codec.decodeLE
+      ((input.drop (FundedReceiptField.offset .postSourceDigest)).take 32)
+    fundingPostDigest := Codec.decodeLE
+      ((input.drop (FundedReceiptField.offset .fundingPostDigest)).take 32)
+    generation := Codec.decodeLE
+      ((input.drop (FundedReceiptField.offset .generation)).take 8)
+    replaySequence := Codec.decodeLE
+      ((input.drop (FundedReceiptField.offset .replaySequence)).take 8)
+    workPaid := Codec.decodeLE ((input.drop (FundedReceiptField.offset .workPaid)).take 8)
+    fundingRemaining := Codec.decodeLE
+      ((input.drop (FundedReceiptField.offset .fundingRemaining)).take 8)
+    selector := Codec.decodeLE ((input.drop (FundedReceiptField.offset .selector)).take 4)
+  }
+  if receipt.shapeValid then some receipt else none
+
+def exampleFundedReceipt : FundedTransitionReceiptV1 := {
+  action := .failNext
+  postPhase := .recovery
+  certificateKind := .recoveryAdvanced
+  terminalRefundPhase := .continuing
+  producerProgram := 1
+  producerRelease := 2
+  requestDigest := 3
+  sourceState := 4
+  fundingState := 5
+  worker := 6
+  certificate := 7
+  preSourceDigest := 8
+  postSourceDigest := 9
+  fundingPostDigest := 10
+  generation := 11
+  replaySequence := 12
+  workPaid := 13
+  fundingRemaining := 14
+  selector := 0
+}
+
+theorem encode_funded_receipt_length (receipt : FundedTransitionReceiptV1) :
+    (encodeFundedReceipt receipt).length = fundedReceiptBytes := by
+  simp [encodeFundedReceipt, fundedReceiptMagic, fundedReceiptBytes,
+    fundedReceiptSchema, Codec.encodeLE_length]
+  native_decide
+
+theorem example_funded_receipt_round_trip :
+    decodeFundedReceipt (encodeFundedReceipt exampleFundedReceipt) =
+      some exampleFundedReceipt := by native_decide
+
+theorem hostile_funded_receipt_examples_refuse :
+    decodeFundedReceipt [] = none ∧
+    decodeFundedReceipt (encodeFundedReceipt exampleFundedReceipt |>.drop 1) = none ∧
+    decodeFundedReceipt (List.set (encodeFundedReceipt exampleFundedReceipt)
+      (FundedReceiptField.offset .action) 0xff) = none ∧
+    decodeFundedReceipt (List.set (encodeFundedReceipt exampleFundedReceipt)
+      (FundedReceiptField.offset .postPhase) FundedReceiptPhase.exhausted.tag) = none ∧
+    decodeFundedReceipt (List.set (encodeFundedReceipt exampleFundedReceipt)
+      (FundedReceiptField.offset .reservedBody) 1) = none ∧
+    decodeFundedReceipt (encodeFundedReceipt
+      ({ exampleFundedReceipt with workPaid := 0 })) = none := by native_decide
+
+theorem funded_receipt_action_partition_is_exact
+    (receipt : FundedTransitionReceiptV1) (h : receipt.partitionValid = true) :
+    (receipt.action = .failNext ∧ receipt.postPhase = .recovery ∧
+      receipt.certificateKind = .recoveryAdvanced ∧
+      receipt.terminalRefundPhase = .continuing) ∨
+    (receipt.action = .exhaust ∧ receipt.postPhase = .exhausted ∧
+      receipt.certificateKind = .exhausted ∧
+      receipt.terminalRefundPhase = .awaitingFailure) ∨
+    (receipt.action = .commitFailure ∧ receipt.postPhase = .failureCommitted ∧
+      receipt.certificateKind = .resolutionFailure ∧
+      receipt.terminalRefundPhase = .terminalRefundPending) := by
+  rcases receipt with ⟨action, postPhase, certificateKind, terminalRefundPhase,
+    producerProgram, producerRelease, requestDigest, sourceState, fundingState,
+    worker, certificate, preSourceDigest, postSourceDigest, fundingPostDigest,
+    generation, replaySequence, workPaid, fundingRemaining, selector⟩
+  cases action <;> cases postPhase <;>
+    cases certificateKind <;> cases terminalRefundPhase <;>
+    simp [FundedTransitionReceiptV1.partitionValid] at h ⊢
 
 /-! ## Canonical Market-Core effect request and Source closure receipt -/
 

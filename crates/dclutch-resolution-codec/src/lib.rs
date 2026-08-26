@@ -16,6 +16,9 @@ pub const ACCEPT_PYTH_REQUEST_BYTES: usize = generated_source_resolution::REQUES
 /// Bytes in one fixed funded recovery/failure request.
 pub const FUNDED_TRANSITION_REQUEST_BYTES: usize =
     generated_source_resolution::FUNDED_REQUEST_BYTES_VALUE;
+/// Bytes in one caller-verifiable funded-transition return receipt.
+pub const FUNDED_TRANSITION_RECEIPT_BYTES: usize =
+    generated_source_resolution::FUNDED_RECEIPT_BYTES_VALUE;
 /// Bytes in one canonical Source Resolution certificate.
 pub const RESOLUTION_CERTIFICATE_BYTES: usize =
     generated_source_resolution::CERTIFICATE_BYTES_VALUE;
@@ -33,6 +36,10 @@ pub const PRIMARY_CERTIFICATE_SEQUENCE_V3: u64 =
     generated_source_resolution::PRIMARY_CERTIFICATE_SEQUENCE_VALUE;
 /// Domain separating the content identity of an authenticated Pyth update.
 pub const PYTH_EVIDENCE_CONTENT_DOMAIN_V1: &[u8] = b"dclutch/pyth-evidence/v1";
+/// Domain for the exact FundingState bytes and lamport custody in a funded receipt.
+pub const FUNDED_POSTSTATE_DIGEST_DOMAIN_V1: &[u8] = b"dclutch/funded-poststate/v1";
+/// Domain for the exact ordered Source/Core effect poststate digest.
+pub const RESOLUTION_POSTSTATE_DIGEST_DOMAIN_V1: &[u8] = b"dclutch/resolution-poststate/v1";
 /// Closed semantic release preimage for the sequential funded controller profile.
 pub const RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V3: &[u8] =
     b"dclutch/release/source-resolution-controller-deterministic-prepaid-cert-funded-recovery-exhaustion-failure-v3";
@@ -338,6 +345,384 @@ impl FundedTransitionRequestV3 {
             || is_zero(&self.expected_funding_allocation_id)
         {
             return Err(Error::ZeroCoordinate);
+        }
+        Ok(())
+    }
+}
+
+/// Canonical Source phase committed by a funded transition receipt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FundedReceiptPostPhaseV1 {
+    /// One ordered recovery route is now active.
+    Recovery,
+    /// All ordered recovery routes have been exhausted.
+    Exhausted,
+    /// Product's explicit failure result has been committed.
+    FailureCommitted,
+}
+
+impl FundedReceiptPostPhaseV1 {
+    fn decode(value: u8) -> Result<Self> {
+        match value {
+            generated_source_resolution::FUNDED_RECEIPT_RECOVERY_PHASE => Ok(Self::Recovery),
+            generated_source_resolution::FUNDED_RECEIPT_EXHAUSTED_PHASE => Ok(Self::Exhausted),
+            generated_source_resolution::FUNDED_RECEIPT_FAILURE_COMMITTED_PHASE => {
+                Ok(Self::FailureCommitted)
+            }
+            _ => Err(Error::InvalidReceiptShape),
+        }
+    }
+
+    const fn byte(self) -> u8 {
+        match self {
+            Self::Recovery => generated_source_resolution::FUNDED_RECEIPT_RECOVERY_PHASE,
+            Self::Exhausted => generated_source_resolution::FUNDED_RECEIPT_EXHAUSTED_PHASE,
+            Self::FailureCommitted => {
+                generated_source_resolution::FUNDED_RECEIPT_FAILURE_COMMITTED_PHASE
+            }
+        }
+    }
+}
+
+/// Projection of terminal/refund eligibility from the canonical Source phase.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FundedTerminalRefundPhaseV1 {
+    /// Recovery remains live; terminal admission and refund are unavailable.
+    Continuing,
+    /// Recovery is exhausted but explicit Product failure is not committed.
+    AwaitingFailure,
+    /// Failure is terminal and awaits the separately authenticated close/refund effect.
+    TerminalRefundPending,
+}
+
+impl FundedTerminalRefundPhaseV1 {
+    fn decode(value: u8) -> Result<Self> {
+        match value {
+            generated_source_resolution::FUNDED_RECEIPT_CONTINUING_PHASE => Ok(Self::Continuing),
+            generated_source_resolution::FUNDED_RECEIPT_AWAITING_FAILURE_PHASE => {
+                Ok(Self::AwaitingFailure)
+            }
+            generated_source_resolution::FUNDED_RECEIPT_TERMINAL_REFUND_PENDING_PHASE => {
+                Ok(Self::TerminalRefundPending)
+            }
+            _ => Err(Error::InvalidReceiptShape),
+        }
+    }
+
+    const fn byte(self) -> u8 {
+        match self {
+            Self::Continuing => generated_source_resolution::FUNDED_RECEIPT_CONTINUING_PHASE,
+            Self::AwaitingFailure => {
+                generated_source_resolution::FUNDED_RECEIPT_AWAITING_FAILURE_PHASE
+            }
+            Self::TerminalRefundPending => {
+                generated_source_resolution::FUNDED_RECEIPT_TERMINAL_REFUND_PENDING_PHASE
+            }
+        }
+    }
+}
+
+/// Caller-verifiable evidence of one atomically committed funded Source transition.
+///
+/// This receipt is returned by the selected Resolution program. It is not a
+/// replacement for the persisted Source, FundingState, or certificate facts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FundedTransitionReceiptV1 {
+    /// Exact funded action whose request bytes are committed below.
+    pub action: FundedTransitionActionV3,
+    /// Canonical post-transition Source phase.
+    pub post_phase: FundedReceiptPostPhaseV1,
+    /// Exact replay certificate kind.
+    pub certificate_kind: ResolutionCertificateKindV1,
+    /// Projection of terminal and refund eligibility.
+    pub terminal_refund_phase: FundedTerminalRefundPhaseV1,
+    /// Exact executing Resolution program selected by Registry authority.
+    pub producer_program: [u8; 32],
+    /// Exact Registry-selected Resolution semantic release identity.
+    pub producer_release: [u8; 32],
+    /// SHA-256 of the exact funded-transition request bytes.
+    pub request_digest: [u8; 32],
+    /// Canonical Source state account identity.
+    pub source_state: [u8; 32],
+    /// Exact action-specific FundingState account identity.
+    pub funding_state: [u8; 32],
+    /// Permissionless worker credited by this transition.
+    pub worker: [u8; 32],
+    /// Deterministic replay certificate account identity.
+    pub certificate: [u8; 32],
+    /// SHA-256 of the exact authenticated Source prestate bytes.
+    pub pre_source_digest: [u8; 32],
+    /// SHA-256 of the exact committed Source poststate bytes.
+    pub post_source_digest: [u8; 32],
+    /// Digest of exact FundingState post bytes and post-account lamports.
+    pub funding_post_digest: [u8; 32],
+    /// Immutable Market generation.
+    pub generation: u64,
+    /// State-derived deterministic certificate sequence.
+    pub replay_sequence: u64,
+    /// Exact native-lamport bounty credited to `worker`.
+    pub work_paid: u64,
+    /// Exact semantic bounty funding remaining after the transition.
+    pub funding_remaining: u64,
+    /// Product-owned explicit failure selector; zero for recovery/exhaustion.
+    pub selector: u32,
+}
+
+impl FundedTransitionReceiptV1 {
+    /// Decode one exact Lean-generated funded-transition receipt.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        exact_width(input, FUNDED_TRANSITION_RECEIPT_BYTES)?;
+        exact(
+            input,
+            generated_source_resolution::FUNDED_RECEIPT_MAGIC_OFFSET,
+            &generated_source_resolution::FUNDED_RECEIPT_MAGIC_BYTES,
+            Error::InvalidMagic,
+        )?;
+        if u16_at(
+            input,
+            generated_source_resolution::FUNDED_RECEIPT_VERSION_OFFSET,
+        )? != generated_source_resolution::FUNDED_RECEIPT_ABI_VERSION
+        {
+            return Err(Error::UnsupportedVersion);
+        }
+        require_zero(
+            input,
+            generated_source_resolution::FUNDED_RECEIPT_RESERVED_HEADER_OFFSET,
+            2,
+        )?;
+        require_zero(
+            input,
+            generated_source_resolution::FUNDED_RECEIPT_RESERVED_BODY_OFFSET,
+            4,
+        )?;
+        let value = Self {
+            action: FundedTransitionActionV3::decode(byte_at(
+                input,
+                generated_source_resolution::FUNDED_RECEIPT_ACTION_OFFSET,
+            )?)?,
+            post_phase: FundedReceiptPostPhaseV1::decode(byte_at(
+                input,
+                generated_source_resolution::FUNDED_RECEIPT_POST_PHASE_OFFSET,
+            )?)?,
+            certificate_kind: ResolutionCertificateKindV1::decode(byte_at(
+                input,
+                generated_source_resolution::FUNDED_RECEIPT_CERTIFICATE_KIND_OFFSET,
+            )?)?,
+            terminal_refund_phase: FundedTerminalRefundPhaseV1::decode(byte_at(
+                input,
+                generated_source_resolution::FUNDED_RECEIPT_TERMINAL_REFUND_PHASE_OFFSET,
+            )?)?,
+            producer_program: array_at(
+                input,
+                generated_source_resolution::FUNDED_RECEIPT_PRODUCER_PROGRAM_OFFSET,
+            )?,
+            producer_release: array_at(
+                input,
+                generated_source_resolution::FUNDED_RECEIPT_PRODUCER_RELEASE_OFFSET,
+            )?,
+            request_digest: array_at(
+                input,
+                generated_source_resolution::FUNDED_RECEIPT_REQUEST_DIGEST_OFFSET,
+            )?,
+            source_state: array_at(
+                input,
+                generated_source_resolution::FUNDED_RECEIPT_SOURCE_STATE_OFFSET,
+            )?,
+            funding_state: array_at(
+                input,
+                generated_source_resolution::FUNDED_RECEIPT_FUNDING_STATE_OFFSET,
+            )?,
+            worker: array_at(
+                input,
+                generated_source_resolution::FUNDED_RECEIPT_WORKER_OFFSET,
+            )?,
+            certificate: array_at(
+                input,
+                generated_source_resolution::FUNDED_RECEIPT_CERTIFICATE_OFFSET,
+            )?,
+            pre_source_digest: array_at(
+                input,
+                generated_source_resolution::FUNDED_RECEIPT_PRE_SOURCE_DIGEST_OFFSET,
+            )?,
+            post_source_digest: array_at(
+                input,
+                generated_source_resolution::FUNDED_RECEIPT_POST_SOURCE_DIGEST_OFFSET,
+            )?,
+            funding_post_digest: array_at(
+                input,
+                generated_source_resolution::FUNDED_RECEIPT_FUNDING_POST_DIGEST_OFFSET,
+            )?,
+            generation: u64_at(
+                input,
+                generated_source_resolution::FUNDED_RECEIPT_GENERATION_OFFSET,
+            )?,
+            replay_sequence: u64_at(
+                input,
+                generated_source_resolution::FUNDED_RECEIPT_REPLAY_SEQUENCE_OFFSET,
+            )?,
+            work_paid: u64_at(
+                input,
+                generated_source_resolution::FUNDED_RECEIPT_WORK_PAID_OFFSET,
+            )?,
+            funding_remaining: u64_at(
+                input,
+                generated_source_resolution::FUNDED_RECEIPT_FUNDING_REMAINING_OFFSET,
+            )?,
+            selector: u32_at(
+                input,
+                generated_source_resolution::FUNDED_RECEIPT_SELECTOR_OFFSET,
+            )?,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Encode one exact Lean-generated funded-transition receipt.
+    pub fn to_bytes(self) -> Result<[u8; FUNDED_TRANSITION_RECEIPT_BYTES]> {
+        self.validate()?;
+        let mut output = [0_u8; FUNDED_TRANSITION_RECEIPT_BYTES];
+        put(
+            &mut output,
+            generated_source_resolution::FUNDED_RECEIPT_MAGIC_OFFSET,
+            &generated_source_resolution::FUNDED_RECEIPT_MAGIC_BYTES,
+        )?;
+        put(
+            &mut output,
+            generated_source_resolution::FUNDED_RECEIPT_VERSION_OFFSET,
+            &generated_source_resolution::FUNDED_RECEIPT_ABI_VERSION.to_le_bytes(),
+        )?;
+        for (offset, value) in [
+            (
+                generated_source_resolution::FUNDED_RECEIPT_ACTION_OFFSET,
+                self.action.byte(),
+            ),
+            (
+                generated_source_resolution::FUNDED_RECEIPT_POST_PHASE_OFFSET,
+                self.post_phase.byte(),
+            ),
+            (
+                generated_source_resolution::FUNDED_RECEIPT_CERTIFICATE_KIND_OFFSET,
+                self.certificate_kind.byte(),
+            ),
+            (
+                generated_source_resolution::FUNDED_RECEIPT_TERMINAL_REFUND_PHASE_OFFSET,
+                self.terminal_refund_phase.byte(),
+            ),
+        ] {
+            put(&mut output, offset, &[value])?;
+        }
+        for (offset, value) in [
+            (
+                generated_source_resolution::FUNDED_RECEIPT_PRODUCER_PROGRAM_OFFSET,
+                &self.producer_program,
+            ),
+            (
+                generated_source_resolution::FUNDED_RECEIPT_PRODUCER_RELEASE_OFFSET,
+                &self.producer_release,
+            ),
+            (
+                generated_source_resolution::FUNDED_RECEIPT_REQUEST_DIGEST_OFFSET,
+                &self.request_digest,
+            ),
+            (
+                generated_source_resolution::FUNDED_RECEIPT_SOURCE_STATE_OFFSET,
+                &self.source_state,
+            ),
+            (
+                generated_source_resolution::FUNDED_RECEIPT_FUNDING_STATE_OFFSET,
+                &self.funding_state,
+            ),
+            (
+                generated_source_resolution::FUNDED_RECEIPT_WORKER_OFFSET,
+                &self.worker,
+            ),
+            (
+                generated_source_resolution::FUNDED_RECEIPT_CERTIFICATE_OFFSET,
+                &self.certificate,
+            ),
+            (
+                generated_source_resolution::FUNDED_RECEIPT_PRE_SOURCE_DIGEST_OFFSET,
+                &self.pre_source_digest,
+            ),
+            (
+                generated_source_resolution::FUNDED_RECEIPT_POST_SOURCE_DIGEST_OFFSET,
+                &self.post_source_digest,
+            ),
+            (
+                generated_source_resolution::FUNDED_RECEIPT_FUNDING_POST_DIGEST_OFFSET,
+                &self.funding_post_digest,
+            ),
+        ] {
+            put(&mut output, offset, value)?;
+        }
+        for (offset, value) in [
+            (
+                generated_source_resolution::FUNDED_RECEIPT_GENERATION_OFFSET,
+                self.generation,
+            ),
+            (
+                generated_source_resolution::FUNDED_RECEIPT_REPLAY_SEQUENCE_OFFSET,
+                self.replay_sequence,
+            ),
+            (
+                generated_source_resolution::FUNDED_RECEIPT_WORK_PAID_OFFSET,
+                self.work_paid,
+            ),
+            (
+                generated_source_resolution::FUNDED_RECEIPT_FUNDING_REMAINING_OFFSET,
+                self.funding_remaining,
+            ),
+        ] {
+            put(&mut output, offset, &value.to_le_bytes())?;
+        }
+        put(
+            &mut output,
+            generated_source_resolution::FUNDED_RECEIPT_SELECTOR_OFFSET,
+            &self.selector.to_le_bytes(),
+        )?;
+        Ok(output)
+    }
+
+    fn validate(self) -> Result<()> {
+        if is_zero(&self.producer_program)
+            || is_zero(&self.producer_release)
+            || is_zero(&self.request_digest)
+            || is_zero(&self.source_state)
+            || is_zero(&self.funding_state)
+            || is_zero(&self.worker)
+            || is_zero(&self.certificate)
+            || is_zero(&self.pre_source_digest)
+            || is_zero(&self.post_source_digest)
+            || is_zero(&self.funding_post_digest)
+            || self.generation == 0
+            || self.replay_sequence == 0
+            || self.work_paid == 0
+        {
+            return Err(Error::ZeroCoordinate);
+        }
+        let partition_is_valid = match self.action {
+            FundedTransitionActionV3::FailNext => {
+                self.post_phase == FundedReceiptPostPhaseV1::Recovery
+                    && self.certificate_kind == ResolutionCertificateKindV1::RecoveryAdvanced
+                    && self.terminal_refund_phase == FundedTerminalRefundPhaseV1::Continuing
+                    && self.selector == 0
+            }
+            FundedTransitionActionV3::Exhaust => {
+                self.post_phase == FundedReceiptPostPhaseV1::Exhausted
+                    && self.certificate_kind == ResolutionCertificateKindV1::Exhausted
+                    && self.terminal_refund_phase == FundedTerminalRefundPhaseV1::AwaitingFailure
+                    && self.selector == 0
+            }
+            FundedTransitionActionV3::CommitFailure => {
+                self.post_phase == FundedReceiptPostPhaseV1::FailureCommitted
+                    && self.certificate_kind == ResolutionCertificateKindV1::ResolutionFailure
+                    && self.terminal_refund_phase
+                        == FundedTerminalRefundPhaseV1::TerminalRefundPending
+                    && u8::try_from(self.selector).is_ok()
+            }
+        };
+        if !partition_is_valid {
+            return Err(Error::InvalidReceiptShape);
         }
         Ok(())
     }
@@ -1435,6 +1820,30 @@ mod tests {
         }
     }
 
+    fn funded_receipt() -> FundedTransitionReceiptV1 {
+        FundedTransitionReceiptV1 {
+            action: FundedTransitionActionV3::FailNext,
+            post_phase: FundedReceiptPostPhaseV1::Recovery,
+            certificate_kind: ResolutionCertificateKindV1::RecoveryAdvanced,
+            terminal_refund_phase: FundedTerminalRefundPhaseV1::Continuing,
+            producer_program: id(1),
+            producer_release: id(2),
+            request_digest: id(3),
+            source_state: id(4),
+            funding_state: id(5),
+            worker: id(6),
+            certificate: id(7),
+            pre_source_digest: id(8),
+            post_source_digest: id(9),
+            funding_post_digest: id(10),
+            generation: 11,
+            replay_sequence: 12,
+            work_paid: 13,
+            funding_remaining: 14,
+            selector: 0,
+        }
+    }
+
     fn core_request() -> ResolutionRoleRequestV1 {
         ResolutionRoleRequestV1 {
             action: ResolutionCoreActionV1::CloseFund,
@@ -1575,6 +1984,82 @@ mod tests {
                 Ok(request)
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn generated_funded_receipt_partition_and_hostile_bytes_match() -> Result<()> {
+        let value = funded_receipt();
+        let encoded = value.to_bytes()?;
+        assert_eq!(encoded, generated_source_resolution::FUNDED_RECEIPT_EXAMPLE);
+        assert_eq!(FundedTransitionReceiptV1::decode(&encoded), Ok(value));
+        for length in 0..FUNDED_TRANSITION_RECEIPT_BYTES {
+            assert_eq!(
+                FundedTransitionReceiptV1::decode(
+                    encoded.get(..length).ok_or(Error::InvalidLength)?,
+                ),
+                Err(Error::InvalidLength)
+            );
+        }
+
+        for (offset, expected) in [
+            (
+                generated_source_resolution::FUNDED_RECEIPT_POST_PHASE_OFFSET,
+                Error::InvalidReceiptShape,
+            ),
+            (
+                generated_source_resolution::FUNDED_RECEIPT_CERTIFICATE_KIND_OFFSET,
+                Error::UnknownAction,
+            ),
+            (
+                generated_source_resolution::FUNDED_RECEIPT_TERMINAL_REFUND_PHASE_OFFSET,
+                Error::InvalidReceiptShape,
+            ),
+        ] {
+            let mut hostile = encoded;
+            hostile[offset] = 0xff;
+            assert_eq!(FundedTransitionReceiptV1::decode(&hostile), Err(expected));
+        }
+        let mut hostile = encoded;
+        hostile[generated_source_resolution::FUNDED_RECEIPT_RESERVED_BODY_OFFSET] = 1;
+        assert_eq!(
+            FundedTransitionReceiptV1::decode(&hostile),
+            Err(Error::NonCanonicalReserved)
+        );
+
+        let exhausted = FundedTransitionReceiptV1 {
+            action: FundedTransitionActionV3::Exhaust,
+            post_phase: FundedReceiptPostPhaseV1::Exhausted,
+            certificate_kind: ResolutionCertificateKindV1::Exhausted,
+            terminal_refund_phase: FundedTerminalRefundPhaseV1::AwaitingFailure,
+            ..value
+        };
+        assert_eq!(
+            FundedTransitionReceiptV1::decode(&exhausted.to_bytes()?),
+            Ok(exhausted)
+        );
+        let failure = FundedTransitionReceiptV1 {
+            action: FundedTransitionActionV3::CommitFailure,
+            post_phase: FundedReceiptPostPhaseV1::FailureCommitted,
+            certificate_kind: ResolutionCertificateKindV1::ResolutionFailure,
+            terminal_refund_phase: FundedTerminalRefundPhaseV1::TerminalRefundPending,
+            selector: u32::from(u8::MAX),
+            ..value
+        };
+        assert_eq!(
+            FundedTransitionReceiptV1::decode(&failure.to_bytes()?),
+            Ok(failure)
+        );
+        let wrong_phase = FundedTransitionReceiptV1 {
+            post_phase: FundedReceiptPostPhaseV1::Exhausted,
+            ..value
+        };
+        assert_eq!(wrong_phase.to_bytes(), Err(Error::InvalidReceiptShape));
+        let missing_payout = FundedTransitionReceiptV1 {
+            work_paid: 0,
+            ..value
+        };
+        assert_eq!(missing_payout.to_bytes(), Err(Error::ZeroCoordinate));
         Ok(())
     }
 

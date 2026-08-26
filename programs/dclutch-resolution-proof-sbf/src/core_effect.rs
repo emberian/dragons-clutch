@@ -21,9 +21,9 @@ use dclutch_release_set_contract::ExecutionRoleV1;
 use dclutch_resolution_codec::{
     RESOLUTION_CERTIFICATE_BYTES, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
     RESOLUTION_CONTROLLER_RELEASE_ID_V4, RESOLUTION_CORE_ROLE_REQUEST_BYTES,
-    ResolutionCertificateKindV1, ResolutionCertificateV1, ResolutionCoreActionV1,
-    ResolutionCoreReceiptKindV1, ResolutionRoleRequestV1, SOURCE_CLOSURE_RECEIPT_BYTES,
-    SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V1, SourceClosureReceiptV1,
+    RESOLUTION_POSTSTATE_DIGEST_DOMAIN_V1, ResolutionCertificateKindV1, ResolutionCertificateV1,
+    ResolutionCoreActionV1, ResolutionCoreReceiptKindV1, ResolutionRoleRequestV1,
+    SOURCE_CLOSURE_RECEIPT_BYTES, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V1, SourceClosureReceiptV1,
 };
 use dclutch_source_contract::{
     SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1, SOURCE_RESOLUTION_STATE_BYTES, SourceMaterialViewV1,
@@ -61,7 +61,6 @@ pub(crate) const ADMIT_TERMINAL_ACCOUNT_COUNT: usize = 18;
 pub(crate) const CLOSE_FUND_ACCOUNT_COUNT: usize = 22;
 
 const SOURCE_FUNDING_SET_DIGEST_DOMAIN_V1: &[u8] = b"dclutch/source-funding-set/v1";
-const RESOLUTION_POSTSTATE_DIGEST_DOMAIN_V1: &[u8] = b"dclutch/resolution-poststate/v1";
 const RESOLUTION_FUNDING_COUNT: u8 = 3;
 
 #[derive(Clone, Copy)]
@@ -1980,13 +1979,16 @@ fn next<'a, 'info>(
 mod tests {
     use dclutch_market_core_codec::{
         CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1, CapabilityFundingHeaderV1, CoreEffectAckV1,
-        CoreEffectEnvelopeV1, Identity, Role,
+        CoreEffectActionV1, CoreEffectEnvelopeV1, Identity, Role,
     };
     use dclutch_resolution_codec::{
-        RESOLUTION_CORE_ROLE_REQUEST_BYTES, ResolutionCoreActionV1, ResolutionCoreReceiptKindV1,
-        ResolutionRoleRequestV1,
+        RESOLUTION_CORE_ROLE_REQUEST_BYTES, RESOLUTION_POSTSTATE_DIGEST_DOMAIN_V1,
+        ResolutionCoreActionV1, ResolutionCoreReceiptKindV1, ResolutionRoleRequestV1,
     };
-    use solana_program::{hash::hash, pubkey::Pubkey};
+    use solana_program::{
+        hash::{hash, hashv},
+        pubkey::Pubkey,
+    };
 
     use super::{
         CORE_EFFECT_INSTRUCTION_BYTES, action_byte, authenticate_action,
@@ -2209,6 +2211,21 @@ mod tests {
         .expect("digest");
         assert_ne!(exact, reordered);
         assert_ne!(exact, no_certificate);
+        let action = [CoreEffectActionV1::AdmitTerminal as u8];
+        let core_derived = Identity::new(
+            hashv(&[
+                RESOLUTION_POSTSTATE_DIGEST_DOMAIN_V1,
+                &action,
+                &[1],
+                &[2],
+                &[3],
+                &[4],
+                &[5],
+            ])
+            .to_bytes(),
+        )
+        .expect("Core-derived poststate digest");
+        assert_eq!(exact, core_derived);
     }
 
     #[test]

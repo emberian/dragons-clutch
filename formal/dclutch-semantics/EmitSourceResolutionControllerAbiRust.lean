@@ -33,6 +33,18 @@ def main : IO Unit := do
   IO.println s!"pub(crate) const FUNDED_REQUEST_EXHAUST_ACTION: u8 = {FundedAction.exhaust.tag.toNat};"
   IO.println s!"pub(crate) const FUNDED_REQUEST_COMMIT_FAILURE_ACTION: u8 = {FundedAction.commitFailure.tag.toNat};"
   IO.println ""
+  IO.println s!"pub(crate) const FUNDED_RECEIPT_BYTES_VALUE: usize = {fundedReceiptBytes};"
+  IO.println s!"pub(crate) const FUNDED_RECEIPT_ABI_VERSION: u16 = {fundedReceiptVersion};"
+  emitRustBytes "pub(crate)" "FUNDED_RECEIPT_MAGIC_BYTES" fundedReceiptMagic
+  for field in FundedReceiptField.all do
+    IO.println s!"pub(crate) const {FundedReceiptField.rustName field}: usize = {FundedReceiptField.offset field};"
+  IO.println s!"pub(crate) const FUNDED_RECEIPT_RECOVERY_PHASE: u8 = {FundedReceiptPhase.recovery.tag.toNat};"
+  IO.println s!"pub(crate) const FUNDED_RECEIPT_EXHAUSTED_PHASE: u8 = {FundedReceiptPhase.exhausted.tag.toNat};"
+  IO.println s!"pub(crate) const FUNDED_RECEIPT_FAILURE_COMMITTED_PHASE: u8 = {FundedReceiptPhase.failureCommitted.tag.toNat};"
+  IO.println s!"pub(crate) const FUNDED_RECEIPT_CONTINUING_PHASE: u8 = {FundedTerminalRefundPhase.continuing.tag.toNat};"
+  IO.println s!"pub(crate) const FUNDED_RECEIPT_AWAITING_FAILURE_PHASE: u8 = {FundedTerminalRefundPhase.awaitingFailure.tag.toNat};"
+  IO.println s!"pub(crate) const FUNDED_RECEIPT_TERMINAL_REFUND_PENDING_PHASE: u8 = {FundedTerminalRefundPhase.terminalRefundPending.tag.toNat};"
+  IO.println ""
   IO.println s!"pub(crate) const CORE_REQUEST_BYTES_VALUE: usize = {coreRequestBytes};"
   IO.println s!"pub(crate) const CORE_REQUEST_ABI_VERSION: u16 = {coreRequestVersion};"
   emitRustBytes "pub(crate)" "CORE_REQUEST_MAGIC_BYTES" coreRequestMagic
@@ -68,6 +80,8 @@ def main : IO Unit := do
   emitRustBytes "pub(crate)" "REQUEST_EXAMPLE" (encodeRequest exampleRequest)
   IO.println "#[cfg(test)]"
   emitRustBytes "pub(crate)" "FUNDED_REQUEST_EXAMPLE" (encodeFundedRequest exampleFundedRequest)
+  IO.println "#[cfg(test)]"
+  emitRustBytes "pub(crate)" "FUNDED_RECEIPT_EXAMPLE" (encodeFundedReceipt exampleFundedReceipt)
   IO.println "#[cfg(test)]"
   emitRustBytes "pub(crate)" "CORE_REQUEST_EXAMPLE" (encodeCoreRequest exampleCoreRequest)
   IO.println "#[cfg(test)]"

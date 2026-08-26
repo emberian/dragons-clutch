@@ -31,7 +31,15 @@ is accepted. The recovery allocation is the exact next Source attempt's
 funding ID, exhaustion uses the immutable recovery-policy ID, and failure uses
 the occurrence Source-material ID as its manifest config/allocation identity.
 Funding ledger, custody lamports, worker lamports, Source state, and the typed
-312-byte certificate commit together.
+312-byte certificate commit together. Only after those writes succeed, the
+direct funded route returns a Lean-owned 376-byte
+`FundedTransitionReceiptV1`. It binds the exact executing Resolution program,
+Registry-selected V4 semantic release, SHA-256 of the complete 96-byte request,
+Source/Funding/worker/certificate keys, Source pre/post digests, exact
+FundingState bytes plus post-custody lamports, generation, certificate
+kind/sequence, bounty payout, remaining bounty funding, Product selector, and
+the projected terminal/refund phase. Recovery, exhaustion, and explicit
+failure form an exact receipt partition; malformed cross-phase receipts refuse.
 
 The V4 controller also consumes the sole canonical Market-Core effect wire.
 Each instruction is exactly a 280-byte `CoreEffectEnvelopeV1` followed by 304
@@ -65,6 +73,8 @@ closure receipt, classifies every remaining native lamport and donation through
 the funding contract, and atomically discharges Source plus all three funding
 accounts to the same persisted RentCredit. Resolution returns only the canonical
 240-byte `CoreEffectAckV1`; it does not define a private effect receipt.
+The direct funded receipt is not returned on this Core route and cannot replace
+the Core acknowledgment or any persisted Source/funding fact.
 
 Certificates use Lean's exact success/recovery/exhaustion/failure tags and a
 typed ordered V3 PDA namespace. Primary success is the state-derived first
@@ -72,7 +82,10 @@ sequence, so a client can construct its one exact PDA before execution.
 Resolution accepts a system-owned, zero-data PDA prepaid with at least exact
 rent, tolerates surplus dust, and allocates/assigns it only at the final output
 gate. A refusal or replay therefore rolls back certificate creation together
-with Source, funding, and worker mutation under SVM transaction semantics.
+with Source, funding, worker mutation, and return data under SVM transaction
+semantics. Callers must read return data immediately, require the Resolution
+program as producer, decode the exact receipt, and compare its bound request
+and state observations before lending it authority.
 
 This slice does **not** perform recovery-provider CPI or make the external
 provider runtime a semantic authority. Primary Pyth remains an authenticated,

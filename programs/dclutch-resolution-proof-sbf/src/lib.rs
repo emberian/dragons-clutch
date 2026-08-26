@@ -117,8 +117,11 @@ pub(crate) struct MarketAuthority {
 #[cfg(not(feature = "no-entrypoint"))]
 solana_program::entrypoint_no_alloc!(process_instruction);
 
-/// Authenticate one exact primary-Pyth frame and atomically persist its Source
-/// successor state and certificate.
+/// Authenticate one exact Resolution frame and atomically persist its outputs.
+///
+/// Direct funded transitions return the canonical funded-transition receipt
+/// only after Source, certificate, FundingState, and worker payout commit.
+/// Core-effect routes retain their sole canonical Core acknowledgment wire.
 #[inline(never)]
 pub fn process_instruction(
     program_id: &Pubkey,

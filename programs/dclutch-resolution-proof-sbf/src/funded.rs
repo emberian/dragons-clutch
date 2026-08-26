@@ -9,17 +9,20 @@ use dclutch_capability_contract::{
 };
 use dclutch_product_contract::result_domain::FINITE_RESULT_DOMAIN_RELEASE_ID_V1;
 use dclutch_resolution_codec::{
-    FUNDED_TRANSITION_REQUEST_BYTES, FundedTransitionActionV3, FundedTransitionRequestV3,
-    RESOLUTION_CERTIFICATE_BYTES, ResolutionCertificateKindV1, ResolutionCertificateV1,
+    FUNDED_POSTSTATE_DIGEST_DOMAIN_V1, FUNDED_TRANSITION_REQUEST_BYTES, FundedReceiptPostPhaseV1,
+    FundedTerminalRefundPhaseV1, FundedTransitionActionV3, FundedTransitionReceiptV1,
+    FundedTransitionRequestV3, RESOLUTION_CERTIFICATE_BYTES, RESOLUTION_CONTROLLER_RELEASE_ID_V4,
+    ResolutionCertificateKindV1, ResolutionCertificateV1,
 };
 use dclutch_source_contract::{
     ContentId, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1, SOURCE_RESOLUTION_STATE_BYTES,
-    SourceMaterialViewV1, SourceResolutionStateV1,
+    SourceMaterialViewV1, SourceResolutionPhaseV1, SourceResolutionStateV1,
 };
 use solana_program::{
     account_info::{AccountInfo, next_account_info},
     entrypoint::ProgramResult,
-    hash::hash,
+    hash::{hash, hashv},
+    program::set_return_data,
     program_error::ProgramError,
     pubkey::Pubkey,
     rent::Rent,
@@ -95,6 +98,7 @@ pub(crate) fn process_funded_transition(
         .map_err(|_| ResolutionError::OutputState)?;
     let prior_state = SourceResolutionStateV1::decode(&source_state_data)
         .map_err(|_| ResolutionError::OutputState)?;
+    let pre_source_digest = hash(&source_state_data).to_bytes();
     authenticate_state_account(program_id, source_state, prior_state)?;
     let authority = authenticate_market_and_resolution_release(
         program_id,
@@ -227,7 +231,6 @@ pub(crate) fn process_funded_transition(
         .lamports()
         .checked_add(work_paid)
         .ok_or(ResolutionError::Arithmetic)?;
-
     let exact_funding_rent = rent.minimum_balance(FUNDING_STATE_BYTES);
     let manifest_data = capability_manifest
         .try_borrow_data()
@@ -250,22 +253,127 @@ pub(crate) fn process_funded_transition(
     drop(domain_data);
     drop(material_data);
     drop(source_state_data);
+    commit_funded_transition_and_emit_receipt(
+        program_id,
+        instruction_data,
+        source_state,
+        funding_state,
+        worker,
+        certificate,
+        pre_source_digest,
+        &next_state_bytes,
+        &certificate_bytes,
+        &next_funding_bytes,
+        request,
+        &source_plan,
+        work_paid,
+        funding_remaining,
+        funding_lamports_after,
+        worker_lamports_after,
+        system,
+        &rent,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn commit_funded_transition_and_emit_receipt<'info>(
+    program_id: &Pubkey,
+    instruction_data: &[u8],
+    source_state: &AccountInfo<'info>,
+    funding_state: &AccountInfo<'info>,
+    worker: &AccountInfo<'info>,
+    certificate: &AccountInfo<'info>,
+    pre_source_digest: [u8; 32],
+    next_state: &[u8; SOURCE_RESOLUTION_STATE_BYTES],
+    next_certificate: &[u8; RESOLUTION_CERTIFICATE_BYTES],
+    next_funding: &[u8; FUNDING_STATE_BYTES],
+    request: FundedTransitionRequestV3,
+    source_plan: &SourceTransitionPlan,
+    work_paid: u64,
+    funding_remaining: u64,
+    funding_lamports_after: u64,
+    worker_lamports_after: u64,
+    system: &AccountInfo<'info>,
+    rent: &Rent,
+) -> ProgramResult {
+    let funding_lamports_after_bytes = funding_lamports_after.to_le_bytes();
+    let receipt = FundedTransitionReceiptV1 {
+        action: request.action,
+        post_phase: receipt_post_phase(request.action, source_plan.next_state.phase())?,
+        certificate_kind: source_plan.kind,
+        terminal_refund_phase: receipt_terminal_refund_phase(request.action),
+        producer_program: program_id.to_bytes(),
+        producer_release: RESOLUTION_CONTROLLER_RELEASE_ID_V4,
+        request_digest: hash(instruction_data).to_bytes(),
+        source_state: source_state.key.to_bytes(),
+        funding_state: funding_state.key.to_bytes(),
+        worker: worker.key.to_bytes(),
+        certificate: certificate.key.to_bytes(),
+        pre_source_digest,
+        post_source_digest: hash(next_state).to_bytes(),
+        funding_post_digest: hashv(&[
+            FUNDED_POSTSTATE_DIGEST_DOMAIN_V1,
+            next_funding,
+            &funding_lamports_after_bytes,
+        ])
+        .to_bytes(),
+        generation: request.expected_generation,
+        replay_sequence: source_plan.certificate_sequence,
+        work_paid,
+        funding_remaining,
+        selector: source_plan.selector,
+    }
+    .to_bytes()
+    .map_err(|_| ResolutionError::OutputState)?;
     commit_funded_outputs(
         program_id,
         source_state,
         certificate,
         funding_state,
         worker,
-        &next_state_bytes,
-        &certificate_bytes,
-        &next_funding_bytes,
+        next_state,
+        next_certificate,
+        next_funding,
         source_plan.kind,
         source_plan.certificate_sequence,
         funding_lamports_after,
         worker_lamports_after,
         system,
-        &rent,
-    )
+        rent,
+    )?;
+    set_return_data(&receipt);
+    Ok(())
+}
+
+fn receipt_post_phase(
+    action: FundedTransitionActionV3,
+    post_phase: SourceResolutionPhaseV1,
+) -> Result<FundedReceiptPostPhaseV1, ProgramError> {
+    match (action, post_phase) {
+        (FundedTransitionActionV3::FailNext, SourceResolutionPhaseV1::Recovery) => {
+            Ok(FundedReceiptPostPhaseV1::Recovery)
+        }
+        (FundedTransitionActionV3::Exhaust, SourceResolutionPhaseV1::Exhausted) => {
+            Ok(FundedReceiptPostPhaseV1::Exhausted)
+        }
+        (FundedTransitionActionV3::CommitFailure, SourceResolutionPhaseV1::FailureCommitted) => {
+            Ok(FundedReceiptPostPhaseV1::FailureCommitted)
+        }
+        _ => Err(ResolutionError::Transition.into()),
+    }
+}
+
+const fn receipt_terminal_refund_phase(
+    action: FundedTransitionActionV3,
+) -> FundedTerminalRefundPhaseV1 {
+    match action {
+        FundedTransitionActionV3::FailNext => FundedTerminalRefundPhaseV1::Continuing,
+        FundedTransitionActionV3::Exhaust => FundedTerminalRefundPhaseV1::AwaitingFailure,
+        FundedTransitionActionV3::CommitFailure => {
+            FundedTerminalRefundPhaseV1::TerminalRefundPending
+        }
+    }
 }
 
 fn plan_source_transition(
