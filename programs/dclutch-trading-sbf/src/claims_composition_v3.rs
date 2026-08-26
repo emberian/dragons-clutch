@@ -8,11 +8,15 @@
 
 extern crate alloc;
 
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 
 use dclutch_claims_svm::{
     affine_batch_v2::{AFFINE_BATCH_PLAN_MAGIC_V2, AffineBatchPlanV2, AffineBatchReceiptV2},
     composition_v3::ClaimsCompositionV3,
+    founding_v5::{
+        CLAIMS_FOUNDING_POST_RESOURCE_DIGEST_DOMAIN_V5, CLAIMS_FOUNDING_REQUEST_MAGIC_V5,
+        ClaimsFoundingReceiptV5, ClaimsFoundingRequestV5,
+    },
     protocol_position_v2::{
         PROTOCOL_POSITION_REQUEST_MAGIC_V2, ProtocolPositionActionV2, ProtocolPositionAdmissionV2,
         ProtocolPositionCloseReceiptV2, ProtocolPositionRequestV2,
@@ -40,7 +44,7 @@ use solana_program::{
 use crate::{TradingSbfError, child_receipt_v3::append_receipt_dependency_v3};
 
 /// Exact receipt returned by one canonical Claims route.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ClaimsRouteReceiptV3 {
     /// Vacant canonical Position and admission record were admitted.
     Admit(ProtocolPositionAdmissionV2),
@@ -50,6 +54,8 @@ pub enum ClaimsRouteReceiptV3 {
     SignedDelta(SignedDeltaReceiptV3),
     /// Canonical O(1) native-claim transfer committed.
     SparseNativeTransfer(SparseNativeTransferReceiptV1),
+    /// Permit-authorized aggregate, founder Position, and admission were created.
+    Founding(Box<ClaimsFoundingReceiptV5>),
     /// Zero canonical Position and admission record were reclaimed.
     Close(ProtocolPositionCloseReceiptV2),
 }
@@ -131,17 +137,22 @@ pub fn execute_claims_route_v3<'info>(
     if producer != *claims_program.key {
         return Err(TradingSbfError::Transition.into());
     }
-    let post_resource_digest = match receipt_kind {
-        ReceiptKindV3::SignedDelta => Some(signed_delta_post_resource_digest(
-            &child_accounts,
-            SignedDeltaPlanV3::decode(request)
-                .map_err(|_| TradingSbfError::Content)?
-                .position_count(),
-        )?),
-        ReceiptKindV3::SparseNativeTransfer => {
-            Some(sparse_native_post_resource_digest(&child_accounts)?)
+    let post_resources = match receipt_kind {
+        ReceiptKindV3::SignedDelta => {
+            PostResourceEvidenceV3::Single(signed_delta_post_resource_digest(
+                &child_accounts,
+                SignedDeltaPlanV3::decode(request)
+                    .map_err(|_| TradingSbfError::Content)?
+                    .position_count(),
+            )?)
         }
-        _ => None,
+        ReceiptKindV3::SparseNativeTransfer => {
+            PostResourceEvidenceV3::Single(sparse_native_post_resource_digest(&child_accounts)?)
+        }
+        ReceiptKindV3::Founding => {
+            PostResourceEvidenceV3::Founding(founding_post_resource_digests(&child_accounts)?)
+        }
+        _ => PostResourceEvidenceV3::None,
     };
     verify_route_receipt(
         receipt_kind,
@@ -149,7 +160,7 @@ pub fn execute_claims_route_v3<'info>(
         &receipt,
         claims_program.key.to_bytes(),
         program_id.to_bytes(),
-        post_resource_digest,
+        post_resources,
     )
 }
 
@@ -168,7 +179,23 @@ enum ReceiptKindV3 {
     Affine,
     SignedDelta,
     SparseNativeTransfer,
+    Founding,
     Close,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FoundingPostResourceDigestsV5 {
+    aggregate: [u8; 32],
+    position: [u8; 32],
+    admission: [u8; 32],
+    combined: [u8; 32],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PostResourceEvidenceV3 {
+    None,
+    Single([u8; 32]),
+    Founding(FoundingPostResourceDigestsV5),
 }
 
 fn composition_owns_route(composition: ClaimsCompositionV3<'_>, route: u16) -> bool {
@@ -316,6 +343,21 @@ fn route_authority(
         )
         .map_err(|_| TradingSbfError::Content)?;
         Ok((seeds, ReceiptKindV3::SparseNativeTransfer))
+    } else if request.get(..8) == Some(CLAIMS_FOUNDING_REQUEST_MAGIC_V5.as_slice()) {
+        if kind != RouteKindV3::Once {
+            return Err(TradingSbfError::Content.into());
+        }
+        let request =
+            ClaimsFoundingRequestV5::decode(request).map_err(|_| TradingSbfError::Content)?;
+        let seeds = CallerAuthoritySeedsV1::new(
+            ContentId::new(request.release_set()).map_err(|_| TradingSbfError::Content)?,
+            request.market(),
+            ExecutionRoleV1::Trading,
+            request.founding_intent_digest(),
+            packet_digest,
+        )
+        .map_err(|_| TradingSbfError::Content)?;
+        Ok((seeds, ReceiptKindV3::Founding))
     } else {
         Err(TradingSbfError::Content.into())
     }
@@ -327,7 +369,7 @@ fn verify_route_receipt(
     receipt: &[u8],
     claims_program: [u8; 32],
     trading_program: [u8; 32],
-    expected_post_resource_digest: Option<[u8; 32]>,
+    expected_post_resources: PostResourceEvidenceV3,
 ) -> Result<ClaimsRouteReceiptV3, ProgramError> {
     let request_digest = hash(request).to_bytes();
     match kind {
@@ -346,19 +388,65 @@ fn verify_route_receipt(
             receipt,
             request_digest,
             claims_program,
-            expected_post_resource_digest,
+            match expected_post_resources {
+                PostResourceEvidenceV3::Single(value) => Some(value),
+                _ => None,
+            },
         ),
         ReceiptKindV3::SparseNativeTransfer => verify_sparse_native_receipt(
             request,
             receipt,
             request_digest,
             claims_program,
-            expected_post_resource_digest,
+            match expected_post_resources {
+                PostResourceEvidenceV3::Single(value) => Some(value),
+                _ => None,
+            },
+        ),
+        ReceiptKindV3::Founding => verify_founding_receipt(
+            request,
+            receipt,
+            request_digest,
+            claims_program,
+            trading_program,
+            match expected_post_resources {
+                PostResourceEvidenceV3::Founding(value) => Some(value),
+                _ => None,
+            },
         ),
         ReceiptKindV3::Close => {
             verify_close_receipt(request, receipt, request_digest, claims_program)
         }
     }
+}
+
+#[inline(never)]
+fn verify_founding_receipt(
+    request: &[u8],
+    receipt: &[u8],
+    request_digest: [u8; 32],
+    claims_program: [u8; 32],
+    trading_program: [u8; 32],
+    expected: Option<FoundingPostResourceDigestsV5>,
+) -> Result<ClaimsRouteReceiptV3, ProgramError> {
+    let request = ClaimsFoundingRequestV5::decode(request).map_err(|_| TradingSbfError::Content)?;
+    let receipt = Box::new(
+        ClaimsFoundingReceiptV5::decode(receipt).map_err(|_| TradingSbfError::Transition)?,
+    );
+    receipt
+        .verify_for(&request, request_digest)
+        .map_err(|_| TradingSbfError::Transition)?;
+    let expected = expected.ok_or(TradingSbfError::Transition)?;
+    if request.claims_program() != claims_program
+        || request.trading_program() != trading_program
+        || receipt.aggregate_digest() != expected.aggregate
+        || receipt.position_digest() != expected.position
+        || receipt.admission_digest() != expected.admission
+        || receipt.post_resource_digest() != expected.combined
+    {
+        return Err(TradingSbfError::Transition.into());
+    }
+    Ok(ClaimsRouteReceiptV3::Founding(receipt))
 }
 
 #[inline(never)]
@@ -521,6 +609,43 @@ fn sparse_native_post_resource_digest(
     Ok(hash(&preimage).to_bytes())
 }
 
+fn founding_post_resource_digests(
+    child_accounts: &[AccountInfo<'_>],
+) -> Result<FoundingPostResourceDigestsV5, ProgramError> {
+    // The exact FoundingV5 frame is 32 accounts; the CPI program account is
+    // appended once by this adapter for invoke_signed.
+    if child_accounts.len() != 33 {
+        return Err(TradingSbfError::Content.into());
+    }
+    let aggregate_data = child_accounts
+        .get(2)
+        .ok_or(TradingSbfError::Content)?
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Transition)?;
+    let position_data = child_accounts
+        .get(3)
+        .ok_or(TradingSbfError::Content)?
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Transition)?;
+    let admission_data = child_accounts
+        .get(4)
+        .ok_or(TradingSbfError::Content)?
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Transition)?;
+    Ok(FoundingPostResourceDigestsV5 {
+        aggregate: hash(&aggregate_data).to_bytes(),
+        position: hash(&position_data).to_bytes(),
+        admission: hash(&admission_data).to_bytes(),
+        combined: hashv(&[
+            CLAIMS_FOUNDING_POST_RESOURCE_DIGEST_DOMAIN_V5,
+            &aggregate_data,
+            &position_data,
+            &admission_data,
+        ])
+        .to_bytes(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::boxed::Box;
@@ -531,6 +656,7 @@ mod tests {
             AffineBatchPlanInputV2, AffineBatchPositionV2, AffineBatchRowInputV2, AffineBatchRowV2,
             DeltaDirectionV2, SignedMagnitudeV2, plan_bytes,
         },
+        founding_v5::{ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5},
         protocol_position_v2::{
             ProtocolPositionAdmissionEvidenceV2, ProtocolPositionCloseEvidenceV2,
             ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2,
@@ -723,6 +849,52 @@ mod tests {
         .expect("sparse request")
     }
 
+    fn founding(claims: [u8; 32], trading: [u8; 32]) -> ClaimsFoundingRequestV5 {
+        ClaimsFoundingRequestV5::new(ClaimsFoundingRequestInputV5 {
+            release_set: id(1),
+            market: id(2),
+            product_record_digest: id(30),
+            product_instance_id: id(31),
+            linked_basis_record_digest: id(32),
+            semantic_basis_id: id(33),
+            founder: id(34),
+            founding_intent_digest: id(35),
+            aggregate: id(36),
+            position: id(37),
+            admission: id(38),
+            funding_source: id(39),
+            hoard: id(40),
+            custody_replay: id(41),
+            rent_credit: id(42),
+            rent_program: id(43),
+            claims_program: claims,
+            trading_program: trading,
+            custody_request_digest: id(46),
+            custody_receipt_digest: id(47),
+            generation: 7,
+            claim_count: 2,
+            quantity: 2,
+            basis_scale: 5,
+            pre_source_amount: 10,
+            post_source_amount: 0,
+            pre_hoard_amount: 7,
+            post_hoard_amount: 17,
+            pre_custody_revision: 0,
+            post_custody_revision: 1,
+            aggregate_rent_principal: 100,
+            position_rent_principal: 101,
+            admission_rent_principal: 102,
+            observed_aggregate_lamports: 100,
+            observed_position_lamports: 101,
+            observed_admission_lamports: 102,
+            pre_aggregate_revision: 0,
+            post_aggregate_revision: 1,
+            pre_position_revision: 0,
+            post_position_revision: 1,
+        })
+        .expect("founding request")
+    }
+
     #[test]
     fn verifies_each_exact_claims_receipt_and_refuses_producer_substitution() {
         let claims = id(20);
@@ -751,7 +923,7 @@ mod tests {
                 &admission.to_receipt_bytes().expect("receipt"),
                 claims,
                 trading,
-                None,
+                PostResourceEvidenceV3::None,
             ),
             Ok(ClaimsRouteReceiptV3::Admit(_))
         ));
@@ -762,7 +934,7 @@ mod tests {
                 &admission.to_receipt_bytes().expect("receipt"),
                 id(99),
                 trading,
-                None,
+                PostResourceEvidenceV3::None,
             )
             .is_err()
         );
@@ -786,7 +958,7 @@ mod tests {
                 &affine_receipt,
                 claims,
                 trading,
-                None,
+                PostResourceEvidenceV3::None,
             ),
             Ok(ClaimsRouteReceiptV3::Affine(_))
         ));
@@ -814,7 +986,7 @@ mod tests {
                 &close_receipt,
                 claims,
                 trading,
-                None,
+                PostResourceEvidenceV3::None,
             ),
             Ok(ClaimsRouteReceiptV3::Close(_))
         ));
@@ -839,6 +1011,72 @@ mod tests {
         );
         assert!(route_authority(&admit, RouteKindV3::AffineOnce).is_err());
         assert!(route_authority(&affine, RouteKindV3::Once).is_err());
+    }
+
+    #[test]
+    fn verifies_founding_authority_and_exact_post_resources() {
+        let claims = id(20);
+        let trading = id(21);
+        let request = founding(claims, trading);
+        let request_bytes = request.to_bytes();
+        let mut accounts: Vec<_> = (0..33).map(|_| account_info(false, false)).collect();
+        accounts[2] = account_info(false, true);
+        accounts[3] = account_info(false, true);
+        accounts[4] = account_info(false, true);
+        let post = founding_post_resource_digests(&accounts).expect("post resources");
+        let receipt = ClaimsFoundingReceiptV5::new(
+            request,
+            hash(&request_bytes).to_bytes(),
+            post.aggregate,
+            post.position,
+            post.admission,
+            post.combined,
+        )
+        .expect("founding receipt")
+        .to_bytes();
+
+        assert!(matches!(
+            verify_route_receipt(
+                ReceiptKindV3::Founding,
+                &request_bytes,
+                &receipt,
+                claims,
+                trading,
+                PostResourceEvidenceV3::Founding(post),
+            ),
+            Ok(ClaimsRouteReceiptV3::Founding(_))
+        ));
+        for (producer, selected_trading, evidence) in [
+            (id(99), trading, PostResourceEvidenceV3::Founding(post)),
+            (claims, id(99), PostResourceEvidenceV3::Founding(post)),
+            (
+                claims,
+                trading,
+                PostResourceEvidenceV3::Founding(FoundingPostResourceDigestsV5 {
+                    combined: id(99),
+                    ..post
+                }),
+            ),
+        ] {
+            assert!(
+                verify_route_receipt(
+                    ReceiptKindV3::Founding,
+                    &request_bytes,
+                    &receipt,
+                    producer,
+                    selected_trading,
+                    evidence,
+                )
+                .is_err()
+            );
+        }
+
+        let (seeds, kind) =
+            route_authority(&request_bytes, RouteKindV3::Once).expect("founding authority");
+        assert_eq!(kind, ReceiptKindV3::Founding);
+        assert_eq!(seeds.context(), request.founding_intent_digest());
+        assert!(route_authority(&request_bytes, RouteKindV3::AffineOnce).is_err());
+        assert!(founding_post_resource_digests(&accounts[..32]).is_err());
     }
 
     #[test]
@@ -872,7 +1110,7 @@ mod tests {
                 &receipt,
                 claims,
                 id(30),
-                Some(post_resources),
+                PostResourceEvidenceV3::Single(post_resources),
             ),
             Ok(ClaimsRouteReceiptV3::SignedDelta(_))
         ));
@@ -883,7 +1121,7 @@ mod tests {
                 &receipt,
                 claims,
                 id(30),
-                Some(id(99)),
+                PostResourceEvidenceV3::Single(id(99)),
             )
             .is_err()
         );
@@ -914,7 +1152,7 @@ mod tests {
                 &receipt,
                 claims,
                 id(30),
-                Some(post_resources),
+                PostResourceEvidenceV3::Single(post_resources),
             ),
             Ok(ClaimsRouteReceiptV3::SparseNativeTransfer(_))
         ));
@@ -925,7 +1163,7 @@ mod tests {
                 &receipt[..receipt.len() - 1],
                 claims,
                 id(30),
-                Some(post_resources),
+                PostResourceEvidenceV3::Single(post_resources),
             )
             .is_err()
         );
@@ -937,7 +1175,7 @@ mod tests {
                     &receipt,
                     producer,
                     id(30),
-                    Some(poststate),
+                    PostResourceEvidenceV3::Single(poststate),
                 )
                 .is_err()
             );

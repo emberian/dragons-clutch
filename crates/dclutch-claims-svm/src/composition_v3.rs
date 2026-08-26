@@ -2,10 +2,10 @@
 //!
 //! The selected EffectProgram owns route enablement, request templates, and
 //! account geometry. This module adds only the cross-route economic join that
-//! no individual child request can prove: an optional canonical Position admit
-//! precedes exactly one affine batch, and an optional zero-Position close
-//! follows it. It introduces no balance mutation, family tag, seed rule, or
-//! parallel request DTO.
+//! no individual child request can prove: exactly one canonical Claims
+//! mutation, optionally surrounded by the Position admit/close pair admitted
+//! for affine mutation. It introduces no balance mutation, family tag, seed
+//! rule, or parallel request DTO.
 
 use dclutch_effect_kernel::v2::FixedRole;
 use dclutch_effect_kernel::v3::{ProgramV3, RouteKindV3};
@@ -13,6 +13,7 @@ use dclutch_effect_kernel::v3::{ProgramV3, RouteKindV3};
 use crate::{
     CallerRole,
     affine_batch_v2::{AFFINE_BATCH_PLAN_MAGIC_V2, AffineBatchPlanV2},
+    founding_v5::{CLAIMS_FOUNDING_REQUEST_MAGIC_V5, ClaimsFoundingRequestV5},
     protocol_position_v2::{
         PROTOCOL_POSITION_REQUEST_MAGIC_V2, ProtocolPositionActionV2, ProtocolPositionPresenceV2,
         ProtocolPositionRequestV2,
@@ -25,6 +26,8 @@ use crate::{
 pub const SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3: u16 = 20;
 /// Exact fixed sparse native-transfer account frame.
 pub const SPARSE_NATIVE_TRANSFER_FIXED_ACCOUNT_COUNT_V1: u16 = 22;
+/// Exact fixed Claims FoundingV5 account frame.
+pub const CLAIMS_FOUNDING_FIXED_ACCOUNT_COUNT_V5: u16 = 32;
 
 /// Stable cross-route composition refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -33,7 +36,7 @@ pub enum ClaimsCompositionErrorV3 {
     EffectProgram,
     /// An active Claims route used unsupported geometry or packet bytes.
     Route,
-    /// The active Claims lifecycle order was not Admit? → Affine → Close?.
+    /// The active Claims lifecycle order was invalid for the selected mutation.
     Order,
     /// Release, Market, generation, or parent-request identity differed.
     ParentBinding,
@@ -78,6 +81,7 @@ pub struct ClaimsCompositionV3<'a> {
     affine: Option<AffineBatchPlanV2<'a>>,
     signed_delta: Option<SignedDeltaPlanV3<'a>>,
     sparse_native_transfer: Option<SparseNativeTransferV1>,
+    founding: Option<ClaimsFoundingRequestV5>,
     close: Option<ProtocolPositionRequestV2>,
     admit_route: Option<u16>,
     mutation_route: u16,
@@ -129,6 +133,7 @@ impl<'a> ClaimsCompositionV3<'a> {
         let mut affine = None;
         let mut signed_delta = None;
         let mut sparse_native_transfer = None;
+        let mut founding = None;
         let mut close = None;
         let mut admit_route = None;
         let mut mutation_route = None;
@@ -237,6 +242,23 @@ impl<'a> ClaimsCompositionV3<'a> {
                     sparse_native_transfer = Some(decoded);
                     mutation_route = Some(route_index);
                     state = CompositionStateV3::Affined;
+                } else if request.get(..8) == Some(CLAIMS_FOUNDING_REQUEST_MAGIC_V5.as_slice()) {
+                    if route.kind() != RouteKindV3::Once || state != CompositionStateV3::Start {
+                        return Err(ClaimsCompositionErrorV3::Order);
+                    }
+                    let decoded = ClaimsFoundingRequestV5::decode(request)
+                        .map_err(|_| ClaimsCompositionErrorV3::Route)?;
+                    require_founding_parent(decoded, parent)?;
+                    if invocation.fixed_account_count != CLAIMS_FOUNDING_FIXED_ACCOUNT_COUNT_V5
+                        || invocation.item_account_count != 0
+                        || invocation.repeated_item_count != 0
+                        || invocation.borrowed_witness.is_some()
+                    {
+                        return Err(ClaimsCompositionErrorV3::Route);
+                    }
+                    founding = Some(decoded);
+                    mutation_route = Some(route_index);
+                    state = CompositionStateV3::Affined;
                 } else {
                     return Err(ClaimsCompositionErrorV3::Route);
                 }
@@ -249,6 +271,7 @@ impl<'a> ClaimsCompositionV3<'a> {
         let mutation_count = u8::from(affine.is_some())
             .checked_add(u8::from(signed_delta.is_some()))
             .and_then(|count| count.checked_add(u8::from(sparse_native_transfer.is_some())))
+            .and_then(|count| count.checked_add(u8::from(founding.is_some())))
             .ok_or(ClaimsCompositionErrorV3::MissingAffine)?;
         if mutation_count != 1 {
             return Err(ClaimsCompositionErrorV3::MissingAffine);
@@ -268,6 +291,7 @@ impl<'a> ClaimsCompositionV3<'a> {
             affine,
             signed_delta,
             sparse_native_transfer,
+            founding,
             close,
             admit_route,
             mutation_route,
@@ -295,6 +319,11 @@ impl<'a> ClaimsCompositionV3<'a> {
         self.sparse_native_transfer
     }
 
+    /// Sole canonical permit-authorized founding mutation, when selected.
+    pub const fn founding(self) -> Option<ClaimsFoundingRequestV5> {
+        self.founding
+    }
+
     /// Optional canonical zero-Position close request.
     pub const fn close(self) -> Option<ProtocolPositionRequestV2> {
         self.close
@@ -305,7 +334,9 @@ impl<'a> ClaimsCompositionV3<'a> {
         self.admit_route
     }
 
-    /// EffectProgram route selecting the affine mutation.
+    /// EffectProgram route selecting the sole Claims mutation.
+    ///
+    /// Retained as the source-compatible name for existing affine callers.
     pub const fn affine_route(self) -> u16 {
         self.mutation_route
     }
@@ -411,6 +442,23 @@ fn require_sparse_native_parent(
     }
 }
 
+fn require_founding_parent(
+    request: ClaimsFoundingRequestV5,
+    parent: ClaimsCompositionParentV3,
+) -> Result<(), ClaimsCompositionErrorV3> {
+    // The founding-intent digest is Core-owned and authenticated by the
+    // one-shot permit inside Claims. It is intentionally not a second copy of
+    // the outer Trading request digest.
+    if request.release_set() != parent.release_set
+        || request.market() != parent.market
+        || request.generation() != parent.generation
+    {
+        Err(ClaimsCompositionErrorV3::ParentBinding)
+    } else {
+        Ok(())
+    }
+}
+
 fn require_admission_join(
     request: ProtocolPositionRequestV2,
     affine: AffineBatchPlanV2<'_>,
@@ -471,6 +519,7 @@ mod tests {
             AffineBatchPlanInputV2, AffineBatchPositionV2, AffineBatchRowInputV2, AffineBatchRowV2,
             DeltaDirectionV2, SignedMagnitudeV2, plan_bytes,
         },
+        founding_v5::{ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5},
         protocol_position_v2::ProtocolPositionOwnerKindV2,
         signed_delta_v3::{
             DeltaDirectionV3, PositionDeltaInputV3, PositionDeltaV3, SignedDeltaPlanInputV3,
@@ -955,6 +1004,52 @@ mod tests {
         .expect("sparse request")
     }
 
+    fn founding_request() -> ClaimsFoundingRequestV5 {
+        ClaimsFoundingRequestV5::new(ClaimsFoundingRequestInputV5 {
+            release_set: parent().release_set,
+            market: parent().market,
+            product_record_digest: id(30),
+            product_instance_id: id(31),
+            linked_basis_record_digest: id(32),
+            semantic_basis_id: id(33),
+            founder: id(34),
+            founding_intent_digest: id(35),
+            aggregate: id(36),
+            position: id(37),
+            admission: id(38),
+            funding_source: id(39),
+            hoard: id(40),
+            custody_replay: id(41),
+            rent_credit: id(42),
+            rent_program: id(43),
+            claims_program: id(44),
+            trading_program: id(45),
+            custody_request_digest: id(46),
+            custody_receipt_digest: id(47),
+            generation: parent().generation,
+            claim_count: 3,
+            quantity: 2,
+            basis_scale: 5,
+            pre_source_amount: 10,
+            post_source_amount: 0,
+            pre_hoard_amount: 7,
+            post_hoard_amount: 17,
+            pre_custody_revision: 0,
+            post_custody_revision: 1,
+            aggregate_rent_principal: 100,
+            position_rent_principal: 101,
+            admission_rent_principal: 102,
+            observed_aggregate_lamports: 100,
+            observed_position_lamports: 101,
+            observed_admission_lamports: 102,
+            pre_aggregate_revision: 0,
+            post_aggregate_revision: 1,
+            pre_position_revision: 0,
+            post_position_revision: 1,
+        })
+        .expect("founding request")
+    }
+
     #[test]
     fn composes_one_exact_sparse_native_transfer_and_refuses_geometry_or_parent_substitution() {
         let sparse = sparse_request().to_bytes().to_vec();
@@ -1009,5 +1104,69 @@ mod tests {
             ),
             Err(ClaimsCompositionErrorV3::ParentBinding)
         );
+    }
+
+    #[test]
+    fn composes_one_exact_founding_and_refuses_geometry_or_parent_substitution() {
+        let canonical_route = RouteFixture {
+            role: 1,
+            kind: 0,
+            enabled: false,
+            fixed_account_count: CLAIMS_FOUNDING_FIXED_ACCOUNT_COUNT_V5,
+            request: founding_request().to_bytes().to_vec(),
+        };
+        let (effect_bytes, request_bank) = effect(core::slice::from_ref(&canonical_route));
+        let composition = ClaimsCompositionV3::decode_selected(
+            ProgramV3::decode(&effect_bytes).expect("founding EffectProgram"),
+            TAIL_COUNT,
+            &[1],
+            &[id(40)],
+            &request_bank,
+            parent(),
+        )
+        .expect("founding composition");
+        assert_eq!(composition.mutation_route(), 0);
+        assert_eq!(composition.founding(), Some(founding_request()));
+        assert!(composition.affine().is_none());
+        assert!(composition.signed_delta().is_none());
+        assert!(composition.sparse_native_transfer().is_none());
+
+        let mut wrong_geometry = canonical_route.clone();
+        wrong_geometry.fixed_account_count = CLAIMS_FOUNDING_FIXED_ACCOUNT_COUNT_V5 - 1;
+        let (wrong_effect, wrong_bank) = effect(&[wrong_geometry]);
+        assert_eq!(
+            ClaimsCompositionV3::decode_selected(
+                ProgramV3::decode(&wrong_effect).expect("structural EffectProgram"),
+                TAIL_COUNT,
+                &[1],
+                &[id(40)],
+                &wrong_bank,
+                parent(),
+            ),
+            Err(ClaimsCompositionErrorV3::Route)
+        );
+
+        for hostile_parent in [
+            ClaimsCompositionParentV3 {
+                release_set: id(99),
+                ..parent()
+            },
+            ClaimsCompositionParentV3 {
+                generation: parent().generation + 1,
+                ..parent()
+            },
+        ] {
+            assert_eq!(
+                ClaimsCompositionV3::decode_selected(
+                    ProgramV3::decode(&effect_bytes).expect("structural EffectProgram"),
+                    TAIL_COUNT,
+                    &[1],
+                    &[id(40)],
+                    &request_bank,
+                    hostile_parent,
+                ),
+                Err(ClaimsCompositionErrorV3::ParentBinding)
+            );
+        }
     }
 }
