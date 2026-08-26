@@ -240,15 +240,48 @@ fn authenticate_request_join(
         || !claims_program.executable
         || !custody.executable
         || trading.key != program_id
-        || lock.operation != ProjectedCustodyOperationV1::LockHoardAndCloseSource
+    {
+        return Err(TradingSbfError::Release.into());
+    }
+    authenticate_request_coordinates(
+        program_id,
+        core.key,
+        claims_program.key,
+        found,
+        lock,
+        realize,
+        claims,
+        lock_raw,
+    )
+}
+
+/// Authenticate the four selected requests against one another.
+///
+/// This is the whole cross-request join and it reads no account memory, so the
+/// coordinate authentication can be exercised adversarially without a frame.
+/// The caller still owns every account flag, executability, and ownership
+/// check before this runs.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn authenticate_request_coordinates(
+    program_id: &Pubkey,
+    core_program: &Pubkey,
+    claims_program: &Pubkey,
+    found: &GenericFoundingRequestV1,
+    lock: &ProjectedCustodyRequestV1,
+    realize: &ProjectedCustodyRequestV1,
+    claims: &ClaimsFoundingRequestV5,
+    lock_raw: &[u8],
+) -> Result<(), ProgramError> {
+    if lock.operation != ProjectedCustodyOperationV1::LockHoardAndCloseSource
         || realize.operation != ProjectedCustodyOperationV1::RealizeAndClose
         || lock.caller_role != ProjectedCallerRoleV1::TradingCapability
         || realize.caller_role != ProjectedCallerRoleV1::TradingCapability
         || lock.caller_program != program_id.to_bytes()
         || realize.caller_program != program_id.to_bytes()
-        || lock.core_program != core.key.to_bytes()
-        || realize.core_program != core.key.to_bytes()
-        || claims.claims_program() != claims_program.key.to_bytes()
+        || lock.core_program != core_program.to_bytes()
+        || realize.core_program != core_program.to_bytes()
+        || claims.claims_program() != claims_program.to_bytes()
         || claims.trading_program() != program_id.to_bytes()
     {
         return Err(TradingSbfError::Release.into());
@@ -871,6 +904,225 @@ mod tests {
                 .expect("open")
                 .encode()
                 .expect("open bytes")
+        );
+    }
+
+    fn trading() -> Pubkey {
+        Pubkey::new_from_array([21; 32])
+    }
+
+    fn core() -> Pubkey {
+        Pubkey::new_from_array([22; 32])
+    }
+
+    fn claims_program() -> Pubkey {
+        Pubkey::new_from_array([23; 32])
+    }
+
+    fn lock_request() -> ProjectedCustodyRequestV1 {
+        let found = found();
+        ProjectedCustodyRequestV1 {
+            operation: ProjectedCustodyOperationV1::LockHoardAndCloseSource,
+            caller_role: ProjectedCallerRoleV1::TradingCapability,
+            market: found.market().to_bytes(),
+            generation: found.generation(),
+            realm: [0x31; 32],
+            product_record: [0x32; 32],
+            product: [0x33; 32],
+            source: [0x34; 32],
+            release_set: found.release_set().to_bytes(),
+            projection_receipt_digest: [0x35; 32],
+            parent_capability_root: found.capability_root().to_bytes(),
+            context_digest: hashv(&[
+                PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
+                found.context().to_bytes().as_slice(),
+            ])
+            .to_bytes(),
+            caller_program: trading().to_bytes(),
+            payer: [0x36; 32],
+            core_program: core().to_bytes(),
+            rent_program: [0x37; 32],
+            refund_owner: found.beneficiary().to_bytes(),
+            rent_credit: [0x38; 32],
+            hoard_vault: found.hoard().to_bytes(),
+            funding_source_vault: found.funding_source().to_bytes(),
+            funding_source_context: found.context().to_bytes(),
+            funding_source_compartment: dclutch_custody_contract::CompartmentV1::SeriesEscrow,
+            mint: [0x39; 32],
+            token_program: [0x3a; 32],
+            collateral_release: [0x3b; 32],
+            expiry_slot: found.expiry_slot(),
+            expected_revision: 2,
+            resulting_revision: 3,
+            amount: found.hoard_principal().expect("principal"),
+            state_rent_lamports: 41,
+            vault_rent_lamports: 42,
+            funding_source_replay_revision: 43,
+            funding_source_state_rent_lamports: 44,
+            funding_source_vault_rent_lamports: 45,
+        }
+    }
+
+    fn realize_request(lock: &ProjectedCustodyRequestV1) -> ProjectedCustodyRequestV1 {
+        let mut realize = *lock;
+        realize.operation = ProjectedCustodyOperationV1::RealizeAndClose;
+        realize.expected_revision = lock.resulting_revision;
+        realize.resulting_revision = lock.resulting_revision + 1;
+        realize
+    }
+
+    fn claims_request(
+        lock: &ProjectedCustodyRequestV1,
+        lock_raw: &[u8],
+    ) -> ClaimsFoundingRequestV5 {
+        use dclutch_claims_svm::founding_v5::ClaimsFoundingRequestInputV5;
+        let found = found();
+        let collateral = found.hoard_principal().expect("principal");
+        ClaimsFoundingRequestV5::new(ClaimsFoundingRequestInputV5 {
+            release_set: found.release_set().to_bytes(),
+            market: found.market().to_bytes(),
+            product_record_digest: [0x51; 32],
+            product_instance_id: [0x52; 32],
+            linked_basis_record_digest: [0x53; 32],
+            semantic_basis_id: [0x54; 32],
+            founder: found.founder().to_bytes(),
+            founding_intent_digest: [0x55; 32],
+            aggregate: [0x56; 32],
+            position: [0x57; 32],
+            admission: [0x58; 32],
+            hoard: found.hoard().to_bytes(),
+            rent_credit: lock.rent_credit,
+            rent_program: lock.rent_program,
+            claims_program: claims_program().to_bytes(),
+            trading_program: trading().to_bytes(),
+            funding_source: found.funding_source().to_bytes(),
+            custody_replay: found.projected_replay().to_bytes(),
+            custody_request_digest: hash(lock_raw).to_bytes(),
+            custody_receipt_digest: [0x59; 32],
+            generation: found.generation(),
+            claim_count: 4,
+            quantity: found.quantity(),
+            basis_scale: found.basis_scale(),
+            pre_source_amount: collateral,
+            post_source_amount: 0,
+            pre_hoard_amount: 0,
+            post_hoard_amount: collateral,
+            pre_custody_revision: 3,
+            post_custody_revision: 4,
+            aggregate_rent_principal: 61,
+            position_rent_principal: 62,
+            admission_rent_principal: 63,
+            observed_aggregate_lamports: 61,
+            observed_position_lamports: 62,
+            observed_admission_lamports: 63,
+            pre_aggregate_revision: 0,
+            post_aggregate_revision: 1,
+            pre_position_revision: 0,
+            post_position_revision: 1,
+        })
+        .expect("claims request")
+    }
+
+    #[test]
+    fn request_join_binds_every_claims_coordinate_to_the_selected_found_and_lock() {
+        let found = found();
+        let lock = lock_request();
+        let lock_raw = lock.encode().expect("lock bytes");
+        let realize = realize_request(&lock);
+        let claims = claims_request(&lock, &lock_raw);
+        let join = |claims: &ClaimsFoundingRequestV5| {
+            authenticate_request_coordinates(
+                &trading(),
+                &core(),
+                &claims_program(),
+                &found,
+                &lock,
+                &realize,
+                claims,
+                &lock_raw,
+            )
+        };
+        assert_eq!(join(&claims), Ok(()));
+
+        // A substituted Claims request account is the outer's sharpest hostile
+        // input: it is readonly, unsigned, and byte-identical in width. Every
+        // coordinate it could move must refuse before the first CPI.
+        let substituted = |mutate: &dyn Fn(&mut ClaimsFoundingRequestInputV5)| {
+            let mut input = claims.input();
+            mutate(&mut input);
+            ClaimsFoundingRequestV5::new(input).expect("substituted claims request")
+        };
+        use dclutch_claims_svm::founding_v5::ClaimsFoundingRequestInputV5;
+        for mutate in [
+            &|input: &mut ClaimsFoundingRequestInputV5| input.market = [0x71; 32],
+            &|input: &mut ClaimsFoundingRequestInputV5| input.founder = [0x72; 32],
+            &|input: &mut ClaimsFoundingRequestInputV5| input.hoard = [0x73; 32],
+            &|input: &mut ClaimsFoundingRequestInputV5| input.funding_source = [0x74; 32],
+            &|input: &mut ClaimsFoundingRequestInputV5| input.custody_replay = [0x75; 32],
+            &|input: &mut ClaimsFoundingRequestInputV5| input.rent_credit = [0x76; 32],
+            &|input: &mut ClaimsFoundingRequestInputV5| input.release_set = [0x77; 32],
+            &|input: &mut ClaimsFoundingRequestInputV5| input.custody_request_digest = [0x78; 32],
+            &|input: &mut ClaimsFoundingRequestInputV5| input.generation += 1,
+        ] as [&dyn Fn(&mut ClaimsFoundingRequestInputV5); 9]
+        {
+            assert_eq!(
+                join(&substituted(mutate)),
+                Err(TradingSbfError::Content.into())
+            );
+        }
+
+        // A Claims request naming a different Claims or Trading program refuses
+        // at the release boundary rather than the content boundary.
+        for mutate in [
+            &|input: &mut ClaimsFoundingRequestInputV5| input.claims_program = [0x79; 32],
+            &|input: &mut ClaimsFoundingRequestInputV5| input.trading_program = [0x7a; 32],
+        ] as [&dyn Fn(&mut ClaimsFoundingRequestInputV5); 2]
+        {
+            assert_eq!(
+                join(&substituted(mutate)),
+                Err(TradingSbfError::Release.into())
+            );
+        }
+    }
+
+    #[test]
+    fn request_join_refuses_a_broken_projected_sequence() {
+        let found = found();
+        let lock = lock_request();
+        let lock_raw = lock.encode().expect("lock bytes");
+        let claims = claims_request(&lock, &lock_raw);
+        let mut realize = realize_request(&lock);
+        realize.resulting_revision += 1;
+        realize.expected_revision += 1;
+        assert_eq!(
+            authenticate_request_coordinates(
+                &trading(),
+                &core(),
+                &claims_program(),
+                &found,
+                &lock,
+                &realize,
+                &claims,
+                &lock_raw,
+            ),
+            Err(TradingSbfError::Content.into())
+        );
+
+        let mut hostile_lock = lock;
+        hostile_lock.amount += 1;
+        let hostile_raw = hostile_lock.encode().expect("hostile lock bytes");
+        assert_eq!(
+            authenticate_request_coordinates(
+                &trading(),
+                &core(),
+                &claims_program(),
+                &found,
+                &hostile_lock,
+                &realize_request(&hostile_lock),
+                &claims,
+                &hostile_raw,
+            ),
+            Err(TradingSbfError::Content.into())
         );
     }
 
