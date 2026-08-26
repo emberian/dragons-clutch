@@ -350,7 +350,6 @@ pub fn authenticate_product_runtime_v3<'accounts, 'info>(
     expected_product_digest: ContentId,
     frame: ProductRuntimeFrameV3<'accounts, 'info>,
 ) -> Result<AuthenticatedProductRuntimeV3<'accounts, 'info>> {
-    require_distinct_v3(frame)?;
     let runtime = authenticate_product_runtime_v2(
         registry_program,
         rent,
@@ -361,8 +360,25 @@ pub fn authenticate_product_runtime_v3<'accounts, 'info>(
             portfolio: frame.portfolio,
         },
     )?;
-    let basis_data = frame
-        .linked_basis
+    authenticate_product_basis_v3(registry_program, rent, runtime, frame.linked_basis)
+}
+
+/// Authenticate only the finalized ProductBasisV3 selected by an already
+/// authenticated Product Runtime V2 projection.
+///
+/// This is the canonical continuation after a caller has authenticated the
+/// Product/domain/portfolio graph in the same instruction. It does not decode
+/// or hash those runtime-width tails a second time. The fixed basis schema,
+/// content-addressed raw/staging coordinate, and every semantic Product join
+/// are still independently checked here.
+pub fn authenticate_product_basis_v3<'accounts, 'info>(
+    registry_program: &Pubkey,
+    rent: &Rent,
+    runtime: AuthenticatedProductRuntimeV2,
+    linked_basis: FinalizedRecordFrameV2<'accounts, 'info>,
+) -> Result<AuthenticatedProductRuntimeV3<'accounts, 'info>> {
+    require_basis_distinct(runtime, linked_basis)?;
+    let basis_data = linked_basis
         .raw
         .try_borrow_data()
         .map_err(|_| Error::Borrow)?;
@@ -371,13 +387,12 @@ pub fn authenticate_product_runtime_v3<'accounts, 'info>(
     let linked_basis_record = authenticate_record(
         registry_program,
         rent,
-        frame.linked_basis,
+        linked_basis,
         GRADED_BASIS_RECORD_SCHEMA_ID_V3,
         basis_digest,
         Error::LinkedBasisRecord,
     )?;
-    let basis_data = frame
-        .linked_basis
+    let basis_data = linked_basis
         .raw
         .try_borrow_data()
         .map_err(|_| Error::Borrow)?;
@@ -405,8 +420,8 @@ pub fn authenticate_product_runtime_v3<'accounts, 'info>(
     Ok(AuthenticatedProductRuntimeV3 {
         runtime,
         linked_basis_record,
-        linked_basis_raw: frame.linked_basis.raw,
-        linked_basis_staging: frame.linked_basis.staging,
+        linked_basis_raw: linked_basis.raw,
+        linked_basis_staging: linked_basis.staging,
         semantic_basis_id,
         basis_kind: basis.kind(),
         basis_width: basis.basis_width(),
@@ -488,25 +503,24 @@ fn require_distinct(frame: ProductRuntimeFrameV2<'_, '_>) -> Result<()> {
     Ok(())
 }
 
-fn require_distinct_v3(frame: ProductRuntimeFrameV3<'_, '_>) -> Result<()> {
-    let accounts = [
-        frame.product.raw,
-        frame.product.staging,
-        frame.result_domain.raw,
-        frame.result_domain.staging,
-        frame.portfolio.raw,
-        frame.portfolio.staging,
-        frame.linked_basis.raw,
-        frame.linked_basis.staging,
+fn require_basis_distinct(
+    runtime: AuthenticatedProductRuntimeV2,
+    linked_basis: FinalizedRecordFrameV2<'_, '_>,
+) -> Result<()> {
+    let existing = [
+        runtime.product_record.raw_account,
+        runtime.product_record.staging_account,
+        runtime.result_domain_record.raw_account,
+        runtime.result_domain_record.staging_account,
+        runtime.portfolio_record.raw_account,
+        runtime.portfolio_record.staging_account,
     ];
-    for (left_index, left) in accounts.iter().enumerate() {
-        if accounts
+    if linked_basis.raw.key == linked_basis.staging.key
+        || existing
             .iter()
-            .skip(left_index.saturating_add(1))
-            .any(|right| left.key == right.key)
-        {
-            return Err(Error::AccountFrame);
-        }
+            .any(|key| linked_basis.raw.key == key || linked_basis.staging.key == key)
+    {
+        return Err(Error::AccountFrame);
     }
     Ok(())
 }

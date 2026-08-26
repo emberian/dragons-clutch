@@ -544,6 +544,66 @@ fn authenticate_v3(runtime: &mut RuntimeV3Backing) -> Result<RuntimeV3Snapshot> 
     })
 }
 
+fn authenticate_v3_continuation(runtime: &mut RuntimeV3Backing) -> Result<RuntimeV3Snapshot> {
+    let product_raw = runtime.product.raw.info();
+    let product_staging = runtime.product.staging.info();
+    let domain_raw = runtime.domain.raw.info();
+    let domain_staging = runtime.domain.staging.info();
+    let portfolio_raw = runtime.portfolio.raw.info();
+    let portfolio_staging = runtime.portfolio.staging.info();
+    let basis_raw = runtime.basis.raw.info();
+    let basis_staging = runtime.basis.staging.info();
+    let authenticated_v2 = authenticate_product_runtime_v2(
+        &REGISTRY,
+        &Rent::default(),
+        runtime.product.coordinate.content_digest,
+        ProductRuntimeFrameV2 {
+            product: FinalizedRecordFrameV2 {
+                raw: &product_raw,
+                staging: &product_staging,
+            },
+            result_domain: FinalizedRecordFrameV2 {
+                raw: &domain_raw,
+                staging: &domain_staging,
+            },
+            portfolio: FinalizedRecordFrameV2 {
+                raw: &portfolio_raw,
+                staging: &portfolio_staging,
+            },
+        },
+    )?;
+    let authenticated = authenticate_product_basis_v3(
+        &REGISTRY,
+        &Rent::default(),
+        authenticated_v2,
+        FinalizedRecordFrameV2 {
+            raw: &basis_raw,
+            staging: &basis_staging,
+        },
+    )?;
+    let linked_basis_body_digest = content_id(
+        hash(
+            &authenticated
+                .linked_basis_raw
+                .try_borrow_data()
+                .map_err(|_| Error::Borrow)?,
+        )
+        .to_bytes(),
+    );
+    Ok(RuntimeV3Snapshot {
+        runtime: authenticated.runtime,
+        linked_basis_record: authenticated.linked_basis_record,
+        semantic_basis_id: authenticated.semantic_basis_id,
+        basis_kind: authenticated.basis_kind,
+        basis_width: authenticated.basis_width,
+        payout_scale: authenticated.payout_scale,
+        evaluator_release_id: authenticated.evaluator_release_id,
+        linked_basis_raw_writable: authenticated.linked_basis_raw.is_writable,
+        linked_basis_staging_writable: authenticated.linked_basis_staging.is_writable,
+        linked_basis_body_digest,
+    })
+}
+
 fn content_id(bytes: [u8; 32]) -> ContentId {
     ContentId::new(bytes).expect("nonzero digest")
 }
@@ -622,6 +682,31 @@ fn v3_authenticates_both_canonical_basis_kinds_and_exposes_read_only_coordinate(
         assert_eq!(
             authenticated.linked_basis_body_digest,
             expected_basis_digest
+        );
+    }
+}
+
+#[test]
+fn v3_basis_only_continuation_matches_full_graph_without_redecoding_runtime() {
+    for kind in [
+        BasisKindV3::CategoricalQ1,
+        BasisKindV3::GradedExactComplement,
+    ] {
+        let mut full = compiled_runtime_v3(kind, 0x29);
+        let mut continued = compiled_runtime_v3(kind, 0x29);
+        let full = authenticate_v3(&mut full).expect("full V3 graph");
+        let continued =
+            authenticate_v3_continuation(&mut continued).expect("basis-only continuation");
+        assert_eq!(continued.runtime, full.runtime);
+        assert_eq!(continued.linked_basis_record, full.linked_basis_record);
+        assert_eq!(continued.semantic_basis_id, full.semantic_basis_id);
+        assert_eq!(continued.basis_kind, full.basis_kind);
+        assert_eq!(continued.basis_width, full.basis_width);
+        assert_eq!(continued.payout_scale, full.payout_scale);
+        assert_eq!(continued.evaluator_release_id, full.evaluator_release_id);
+        assert_eq!(
+            continued.linked_basis_body_digest,
+            full.linked_basis_body_digest
         );
     }
 }
