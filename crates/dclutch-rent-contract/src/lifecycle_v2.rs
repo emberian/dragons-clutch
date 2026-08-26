@@ -22,13 +22,19 @@ pub const CREATE_LIFECYCLE_RENT_CREDIT_BYTES_V2: usize = 128;
 pub const SWEEP_LIFECYCLE_RENT_CREDIT_BYTES_V2: usize = 24;
 /// Exact width of a Close request carrying one canonical Core receipt.
 pub const CLOSE_LIFECYCLE_RENT_CREDIT_BYTES_V2: usize = 528;
+/// Exact width of the immediate Rent close receipt.
+pub const LIFECYCLE_RENT_CLOSE_RECEIPT_BYTES_V2: usize = 192;
 
 /// PDA domain for one lifecycle-scoped credit per Market generation.
 pub const LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2: &[u8] = b"dclutch/rent-market/v2";
+/// Current Core caller-authority domain for an atomic retirement close.
+pub const LIFECYCLE_RENT_CORE_CLOSE_AUTHORITY_DOMAIN_V2: &[u8] = b"dclutch/rent-core-close/v2";
 /// Canonical persistent-account magic.
 pub const LIFECYCLE_RENT_CREDIT_MAGIC_V2: [u8; 8] = *b"DCLRNTL2";
 /// Canonical V2 instruction magic.
 pub const LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2: [u8; 8] = *b"DCLRNCI2";
+/// Canonical immediate close-receipt magic.
+pub const LIFECYCLE_RENT_CLOSE_RECEIPT_MAGIC_V2: [u8; 8] = *b"DCLRNCR2";
 /// Implemented V2 schema version.
 pub const LIFECYCLE_RENT_SCHEMA_VERSION_V2: u16 = 2;
 
@@ -52,6 +58,15 @@ const CREATE_BUMP_OFFSET: usize = 120;
 const CREATE_RESERVED_OFFSET: usize = 121;
 const SWEEP_AMOUNT_OFFSET: usize = 16;
 const CLOSE_RECEIPT_OFFSET: usize = 16;
+const RECEIPT_KIND_OFFSET: usize = 10;
+const RECEIPT_RESERVED_HEADER_OFFSET: usize = 11;
+const RECEIPT_CREDIT_OFFSET: usize = 16;
+const RECEIPT_REFUND_WALLET_OFFSET: usize = 48;
+const RECEIPT_MARKET_OFFSET: usize = 80;
+const RECEIPT_RELEASE_SET_OFFSET: usize = 112;
+const RECEIPT_POST_RESOURCE_DIGEST_OFFSET: usize = 144;
+const RECEIPT_GENERATION_OFFSET: usize = 176;
+const RECEIPT_CLOSED_LAMPORTS_OFFSET: usize = 184;
 
 /// Stable hostile-decode, binding, or exact-balance refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -229,6 +244,44 @@ pub struct LifecycleRentCreditPdaSeedsV2 {
     market: LifecycleAccountIdV2,
     generation: [u8; 8],
     bump: u8,
+}
+
+/// Exact current-Core signer seed projection for closing one lifecycle credit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LifecycleRentCoreCloseAuthoritySeedsV2 {
+    credit: LifecycleAccountIdV2,
+    post_resource_digest: [u8; 32],
+}
+
+impl LifecycleRentCoreCloseAuthoritySeedsV2 {
+    /// Construct seeds bound to one credit and complete producer-subtree digest.
+    pub fn new(
+        credit: LifecycleAccountIdV2,
+        post_resource_digest: [u8; 32],
+    ) -> LifecycleRentResultV2<Self> {
+        if post_resource_digest.iter().all(|byte| *byte == 0) {
+            return Err(LifecycleRentErrorV2::ZeroIdentity);
+        }
+        Ok(Self {
+            credit,
+            post_resource_digest,
+        })
+    }
+
+    /// Return the fixed authority domain.
+    pub const fn domain(self) -> &'static [u8] {
+        LIFECYCLE_RENT_CORE_CLOSE_AUTHORITY_DOMAIN_V2
+    }
+
+    /// Return the exact lifecycle-credit seed.
+    pub const fn credit(self) -> LifecycleAccountIdV2 {
+        self.credit
+    }
+
+    /// Return the complete producer-subtree digest seed.
+    pub const fn post_resource_digest(self) -> [u8; 32] {
+        self.post_resource_digest
+    }
 }
 
 impl LifecycleRentCreditPdaSeedsV2 {
@@ -538,6 +591,138 @@ impl LifecycleClosePlanV2 {
     pub const fn post_resource_digest(self) -> [u8; 32] {
         self.post_resource_digest
     }
+
+    /// Materialize the canonical immediate Rent close receipt.
+    pub fn receipt(
+        self,
+        state: LifecycleRentCreditV2,
+        credit: LifecycleAccountIdV2,
+    ) -> LifecycleRentResultV2<LifecycleRentCloseReceiptV2> {
+        LifecycleRentCloseReceiptV2::new(LifecycleRentCloseReceiptInputV2 {
+            credit,
+            refund_wallet: state.refund_wallet(),
+            market: state.market(),
+            release_set: state.release_set(),
+            post_resource_digest: self.post_resource_digest,
+            generation: state.generation(),
+            closed_lamports: self.closed_lamports,
+        })
+    }
+}
+
+/// Construction input for one immediate lifecycle-credit close receipt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LifecycleRentCloseReceiptInputV2 {
+    /// Closed lifecycle-credit account.
+    pub credit: LifecycleAccountIdV2,
+    /// Sole immutable refund wallet.
+    pub refund_wallet: RefundAuthority,
+    /// Retired Market.
+    pub market: LifecycleAccountIdV2,
+    /// Immutable release set.
+    pub release_set: LifecycleAccountIdV2,
+    /// Complete producer-subtree closure commitment.
+    pub post_resource_digest: [u8; 32],
+    /// Retired Market generation.
+    pub generation: u64,
+    /// Full lifecycle-credit balance transferred to the wallet.
+    pub closed_lamports: u64,
+}
+
+/// Immediate producer-bound Rent close acknowledgement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LifecycleRentCloseReceiptV2(LifecycleRentCloseReceiptInputV2);
+
+impl LifecycleRentCloseReceiptV2 {
+    /// Construct and validate an immediate close receipt.
+    pub fn new(input: LifecycleRentCloseReceiptInputV2) -> LifecycleRentResultV2<Self> {
+        if input.post_resource_digest.iter().all(|byte| *byte == 0)
+            || input.generation == 0
+            || input.closed_lamports == 0
+        {
+            return Err(LifecycleRentErrorV2::ZeroIdentity);
+        }
+        if input.credit.to_bytes() == input.refund_wallet.to_bytes()
+            || input.credit == input.market
+            || input.credit == input.release_set
+        {
+            return Err(LifecycleRentErrorV2::AccountAlias);
+        }
+        Ok(Self(input))
+    }
+
+    /// Hostile-decode one exact immediate close receipt.
+    pub fn decode(input: &[u8]) -> LifecycleRentResultV2<Self> {
+        require_header(
+            input,
+            &LIFECYCLE_RENT_CLOSE_RECEIPT_MAGIC_V2,
+            LIFECYCLE_RENT_CLOSE_RECEIPT_BYTES_V2,
+            INSTRUCTION_VERSION_OFFSET,
+        )?;
+        if byte(input, RECEIPT_KIND_OFFSET)? != LifecycleRentActionV2::Close as u8 {
+            return Err(LifecycleRentErrorV2::UnknownAction);
+        }
+        require_zero(input, RECEIPT_RESERVED_HEADER_OFFSET, 5)?;
+        Self::new(LifecycleRentCloseReceiptInputV2 {
+            credit: LifecycleAccountIdV2::new(array(input, RECEIPT_CREDIT_OFFSET)?)?,
+            refund_wallet: RefundAuthority::new(array(input, RECEIPT_REFUND_WALLET_OFFSET)?)
+                .map_err(|_| LifecycleRentErrorV2::ZeroIdentity)?,
+            market: LifecycleAccountIdV2::new(array(input, RECEIPT_MARKET_OFFSET)?)?,
+            release_set: LifecycleAccountIdV2::new(array(input, RECEIPT_RELEASE_SET_OFFSET)?)?,
+            post_resource_digest: array(input, RECEIPT_POST_RESOURCE_DIGEST_OFFSET)?,
+            generation: u64_at(input, RECEIPT_GENERATION_OFFSET)?,
+            closed_lamports: u64_at(input, RECEIPT_CLOSED_LAMPORTS_OFFSET)?,
+        })
+    }
+
+    /// Encode canonical immediate receipt bytes.
+    pub fn to_bytes(self) -> [u8; LIFECYCLE_RENT_CLOSE_RECEIPT_BYTES_V2] {
+        let mut output = [0; LIFECYCLE_RENT_CLOSE_RECEIPT_BYTES_V2];
+        put(&mut output, 0, &LIFECYCLE_RENT_CLOSE_RECEIPT_MAGIC_V2);
+        put_u16(
+            &mut output,
+            INSTRUCTION_VERSION_OFFSET,
+            LIFECYCLE_RENT_SCHEMA_VERSION_V2,
+        );
+        output[RECEIPT_KIND_OFFSET] = LifecycleRentActionV2::Close as u8;
+        put(
+            &mut output,
+            RECEIPT_CREDIT_OFFSET,
+            &self.0.credit.to_bytes(),
+        );
+        put(
+            &mut output,
+            RECEIPT_REFUND_WALLET_OFFSET,
+            &self.0.refund_wallet.to_bytes(),
+        );
+        put(
+            &mut output,
+            RECEIPT_MARKET_OFFSET,
+            &self.0.market.to_bytes(),
+        );
+        put(
+            &mut output,
+            RECEIPT_RELEASE_SET_OFFSET,
+            &self.0.release_set.to_bytes(),
+        );
+        put(
+            &mut output,
+            RECEIPT_POST_RESOURCE_DIGEST_OFFSET,
+            &self.0.post_resource_digest,
+        );
+        put_u64(&mut output, RECEIPT_GENERATION_OFFSET, self.0.generation);
+        put_u64(
+            &mut output,
+            RECEIPT_CLOSED_LAMPORTS_OFFSET,
+            self.0.closed_lamports,
+        );
+        output
+    }
+
+    /// Borrow all validated receipt coordinates.
+    pub const fn input(self) -> LifecycleRentCloseReceiptInputV2 {
+        self.0
+    }
 }
 
 /// Minimal account facts used by SDK-owning adapters.
@@ -831,6 +1016,12 @@ mod tests {
             .expect("complete retirement");
         assert_eq!((plan.closed_lamports(), plan.wallet_after()), (99, 100));
         assert_eq!(plan.post_resource_digest(), [12; 32]);
+        let rent_receipt = plan.receipt(state(), credit).expect("rent receipt");
+        assert_eq!(
+            LifecycleRentCloseReceiptV2::decode(&rent_receipt.to_bytes()),
+            Ok(rent_receipt)
+        );
+        assert_eq!(rent_receipt.input().closed_lamports, 99);
         assert_eq!(
             LifecycleClosePlanV2::new(state(), credit, id(4), false, 99, 1, request),
             Err(LifecycleRentErrorV2::UnauthenticatedCore)
