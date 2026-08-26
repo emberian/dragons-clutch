@@ -348,8 +348,14 @@ fn runtime_width_equity_request_is_chain_derived_and_rejoins_physical_intent() {
     let mut scalars = vec![0; dealer_equity_scalar_count_v3(physical.action).expect("scalars")];
     let mut identities =
         vec![[0; 32]; dealer_equity_identity_count_v3(physical.action).expect("identities")];
-    project_dealer_equity_hot_registers_v3(request, physical, &mut scalars, &mut identities)
-        .expect("chain-derived Hot registers");
+    project_dealer_equity_hot_registers_v3(
+        request,
+        physical,
+        chain.now,
+        &mut scalars,
+        &mut identities,
+    )
+    .expect("chain-derived Hot registers");
     let effect_bytes = equity_effect(cash, merge, 2);
     let effect = EffectProgramV3::decode(&effect_bytes).expect("Dealer Hot effect");
     let composition = authenticate_dealer_equity_routes_v3(

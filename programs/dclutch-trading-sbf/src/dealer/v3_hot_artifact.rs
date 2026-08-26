@@ -215,6 +215,19 @@ pub fn dealer_external_delegate_identity_register_v3(action: MultiLpActionV3) ->
         .and_then(|width| CUSTODY_IDENTITY_BASE_V3.checked_add(width))
 }
 
+/// AccountProfile5 destination for the trusted current slot.
+pub fn dealer_current_slot_scalar_register_v3(action: MultiLpActionV3) -> Option<u16> {
+    u16::try_from(custody_slot_count(action))
+        .ok()
+        .and_then(|slots| slots.checked_mul(CUSTODY_SCALAR_STRIDE_V3))
+        .and_then(|width| CUSTODY_SCALAR_BASE_V3.checked_add(width))
+}
+
+/// RequestProfile destination for the request expiry coordinate.
+pub fn dealer_expiry_scalar_register_v3(action: MultiLpActionV3) -> Option<u16> {
+    dealer_current_slot_scalar_register_v3(action).and_then(|index| index.checked_add(1))
+}
+
 /// Exact scalar register count selected by one equity action.
 pub fn dealer_equity_scalar_count_v3(
     action: MultiLpActionV3,
@@ -239,6 +252,7 @@ pub fn dealer_equity_identity_count_v3(
 pub fn project_dealer_equity_hot_registers_v3(
     request: DealerEquityRequestV3<'_>,
     plan: MultiLpPlanV3,
+    trusted_current_slot: u64,
     scalars: &mut [u64],
     identities: &mut [[u8; 32]],
 ) -> Result<(), DealerEquityArtifactErrorV3> {
@@ -250,6 +264,7 @@ pub fn project_dealer_equity_hot_registers_v3(
         || request.shares != plan.share_delta
         || (plan.action == MultiLpActionV3::Add && request.collateral != plan.collateral_in)
         || (plan.action == MultiLpActionV3::Remove && request.collateral != 0)
+        || trusted_current_slot > request.expires_at
     {
         return Err(DealerEquityArtifactErrorV3::Projection);
     }
@@ -333,6 +348,12 @@ pub fn project_dealer_equity_hot_registers_v3(
     staged_scalars[usize::from(DEALER_EQUITY_WITNESS_BYTES_SCALAR_V3)] =
         u64::try_from(request.claims_packet().len())
             .map_err(|_| DealerEquityArtifactErrorV3::Arithmetic)?;
+    let current_slot = dealer_current_slot_scalar_register_v3(plan.action)
+        .ok_or(DealerEquityArtifactErrorV3::Arithmetic)?;
+    let expiry = dealer_expiry_scalar_register_v3(plan.action)
+        .ok_or(DealerEquityArtifactErrorV3::Arithmetic)?;
+    staged_scalars[usize::from(current_slot)] = trusted_current_slot;
+    staged_scalars[usize::from(expiry)] = request.expires_at;
     staged_identities[usize::from(DEALER_EQUITY_PARENT_REQUEST_DIGEST_IDENTITY_V3)] =
         parent_request_digest;
     for (slot, child) in by_slot
@@ -852,6 +873,7 @@ fn scalar_count(action: MultiLpActionV3) -> Result<u16, DealerEquityArtifactErro
         .ok()
         .and_then(|slots| slots.checked_mul(CUSTODY_SCALAR_STRIDE_V3))
         .and_then(|width| CUSTODY_SCALAR_BASE_V3.checked_add(width))
+        .and_then(|width| width.checked_add(2))
         .ok_or(DealerEquityArtifactErrorV3::Arithmetic)
 }
 
@@ -1045,7 +1067,7 @@ mod tests {
         let program = ProgramV3::decode(&output).expect("hostile decode");
         assert_eq!(program.route_count(), 3);
         assert_eq!(program.fixed_account_count(), 57);
-        assert_eq!(program.common_scalar_count(), 24);
+        assert_eq!(program.common_scalar_count(), 26);
         assert_eq!(program.common_identity_count(), 36);
         assert_eq!(program.fixed_operation_count(), 61);
         assert_eq!(program.item_operation_count(), 0);
@@ -1119,7 +1141,7 @@ mod tests {
         let program = ProgramV3::decode(&output).expect("hostile decode");
         assert_eq!(program.route_count(), 4);
         assert_eq!(program.fixed_account_count(), 69);
-        assert_eq!(program.common_scalar_count(), 33);
+        assert_eq!(program.common_scalar_count(), 35);
         assert_eq!(program.common_identity_count(), 52);
         assert_eq!(program.fixed_operation_count(), 85);
         assert_eq!(program.route(0).expect("split").fixed_account_start(), 5);
