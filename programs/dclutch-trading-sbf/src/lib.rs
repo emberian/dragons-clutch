@@ -23,9 +23,11 @@ use solana_program::{
 };
 
 /// Ephemeral exact prior-child receipt retention for the common Hot executor.
+#[cfg(not(feature = "shadow-accelerator-auth-only"))]
 mod child_receipt_v3;
 
 /// Family-neutral authoritative admitted-AOT candidate CPI.
+#[cfg(not(feature = "shadow-accelerator-auth-only"))]
 pub mod admitted_composition_v3;
 
 /// Family-neutral EffectProgram V3 composition for canonical Claims CPIs.
@@ -36,6 +38,7 @@ pub mod admitted_composition_v3;
 ))]
 pub mod claims_composition_v3;
 /// Family-neutral EffectProgram V3 composition for canonical Core CPIs.
+#[cfg(not(feature = "shadow-accelerator-auth-only"))]
 pub mod core_composition_v3;
 /// Family-neutral EffectProgram V3 composition for canonical Custody CPIs.
 #[cfg(any(
@@ -53,8 +56,10 @@ pub mod direct;
 /// Manifest-, root-, release-, and descriptor-authenticated generic dispatch.
 pub mod dispatch;
 /// V3 descriptor joins for independently finalized runtime-tail artifacts.
+#[cfg(not(feature = "shadow-accelerator-auth-only"))]
 pub mod dispatch_v3;
 /// Profile13 physical representative expansion shared by prefix and continuation.
+#[cfg(not(feature = "shadow-accelerator-auth-only"))]
 mod dynamic_accounts_v4;
 /// Registry-authenticated family-neutral Execution Strategy V2 admission.
 pub mod execution_strategy_v2;
@@ -62,10 +67,13 @@ pub mod execution_strategy_v2;
 #[cfg(feature = "families")]
 pub mod general;
 /// Family-neutral authenticated V3 hot execution outer.
+#[cfg(not(feature = "shadow-accelerator-auth-only"))]
 pub mod hot_v3;
 /// Family-neutral native-signature evidence authentication and register seeding.
+#[cfg(not(feature = "shadow-accelerator-auth-only"))]
 pub mod native_signature;
 /// Family-neutral executable Core-to-Trading boundary.
+#[cfg(not(feature = "shadow-accelerator-auth-only"))]
 pub mod outer;
 /// Exact Claims Founding route and ordered projected-receipt join.
 #[cfg(any(
@@ -115,6 +123,7 @@ mod projected_open_composition_v4;
 #[allow(dead_code)]
 mod projected_realize_composition_v4;
 /// Family-neutral EffectProgram V3 composition for canonical Resolution CPIs.
+#[cfg(not(feature = "shadow-accelerator-auth-only"))]
 pub mod resolution_composition_v3;
 /// Series family projection behind the common data-defined Trading boundary.
 #[cfg(any(feature = "families", feature = "series-family"))]
@@ -122,6 +131,7 @@ pub mod series;
 /// Small authenticated boundary for external Shadow accelerator callbacks.
 pub mod shadow_accelerator_auth_v4;
 /// Family-neutral read-only Shadow-AOT comparison CPI.
+#[cfg(not(feature = "shadow-accelerator-auth-only"))]
 pub mod shadow_composition_v3;
 
 /// Stable refusal from the canonical Trading SBF boundary.
