@@ -11,6 +11,7 @@ extern crate alloc;
 use alloc::{vec, vec::Vec};
 use core::convert::TryFrom;
 
+use dclutch_claims_svm::frame_spec_v1::ClaimsFrameSpecV1;
 pub use dclutch_claims_svm::protocol_position_v2::{
     PROTOCOL_POSITION_ADMISSION_BYTES_V2, PROTOCOL_POSITION_ADMISSION_MAGIC_V2,
     PROTOCOL_POSITION_ADMISSION_SEED_V2, PROTOCOL_POSITION_CLOSE_RECEIPT_BYTES_V2,
@@ -47,9 +48,11 @@ use crate::liability_basis_v2::{
 };
 
 /// Exact admission account count.
-pub const PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V2: usize = 26;
+pub const PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V2: usize =
+    dclutch_claims_svm::frame_spec_v1::PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V1 as usize;
 /// Exact close account count.
-pub const PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V2: usize = 15;
+pub const PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V2: usize =
+    dclutch_claims_svm::frame_spec_v1::PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V1 as usize;
 
 const AUTHORITY: usize = 0;
 const MARKET: usize = 1;
@@ -187,6 +190,10 @@ pub fn process(
 ) -> Result<(), ProgramError> {
     let request = ProtocolPositionRequestV2::decode(instruction_data)
         .map_err(|_| ProtocolPositionSbfErrorV2::Instruction)?;
+    authenticate_frame_spec(
+        ClaimsFrameSpecV1::protocol_position(request.action),
+        account_infos,
+    )?;
     match request.action {
         ProtocolPositionActionV2::Admit => process_admit(
             program_id,
@@ -509,46 +516,12 @@ fn authenticate_admit_privileges(
     accounts: AdmitAccounts<'_, '_>,
 ) -> Result<(), ProgramError> {
     authenticate_common(program_id, accounts.common)?;
-    if accounts.common.market.is_writable
-        || !accounts.common.position.is_writable
-        || !accounts.common.admission.is_writable
-        || accounts.rent_credit.is_writable
-        || accounts.rent.key != &sysvar::rent::ID
+    if accounts.rent.key != &sysvar::rent::ID
         || accounts.system.key != &system_program::ID
-        || !accounts.system.executable
-        || !accounts.registry.executable
-        || !accounts.trading_program.executable
         || accounts.claims_program.key != program_id
-        || !accounts.claims_program.executable
-        || !accounts.core_program.executable
-        || !accounts.rent_program.executable
     {
         return Err(ProtocolPositionSbfErrorV2::Accounts.into());
     }
-    require_readonly(&[
-        accounts.basis_record,
-        accounts.basis_staging,
-        accounts.product_record,
-        accounts.product_staging,
-        accounts.result_record,
-        accounts.result_staging,
-        accounts.portfolio_record,
-        accounts.portfolio_staging,
-        accounts.rent,
-        accounts.system,
-        accounts.core_market,
-        accounts.cache,
-        accounts.registry,
-        accounts.trading_program,
-        accounts.trading_programdata,
-        accounts.claims_program,
-        accounts.claims_programdata,
-        accounts.core_program,
-        accounts.core_programdata,
-        accounts.owner_identity,
-        accounts.rent_credit,
-        accounts.rent_program,
-    ])?;
     require_distinct(&[
         accounts.common.authority,
         accounts.common.market,
@@ -568,33 +541,12 @@ fn authenticate_close_privileges(
     accounts: CloseAccounts<'_, '_>,
 ) -> Result<(), ProgramError> {
     authenticate_common(program_id, accounts.common)?;
-    if accounts.common.market.is_writable
-        || !accounts.common.position.is_writable
-        || !accounts.common.admission.is_writable
-        || !accounts.rent_credit.is_writable
-        || accounts.rent.key != &sysvar::rent::ID
+    if accounts.rent.key != &sysvar::rent::ID
         || accounts.system.key != &system_program::ID
-        || !accounts.system.executable
-        || !accounts.registry.executable
-        || !accounts.trading_program.executable
         || accounts.claims_program.key != program_id
-        || !accounts.claims_program.executable
-        || !accounts.rent_program.executable
     {
         return Err(ProtocolPositionSbfErrorV2::Accounts.into());
     }
-    require_readonly(&[
-        accounts.rent,
-        accounts.system,
-        accounts.cache,
-        accounts.registry,
-        accounts.trading_program,
-        accounts.trading_programdata,
-        accounts.claims_program,
-        accounts.claims_programdata,
-        accounts.owner_identity,
-        accounts.rent_program,
-    ])?;
     require_distinct(&[
         accounts.common.authority,
         accounts.common.market,
@@ -612,21 +564,39 @@ fn authenticate_common(
     program_id: &Pubkey,
     accounts: CommonAccounts<'_, '_>,
 ) -> Result<(), ProgramError> {
-    if !accounts.authority.is_signer
-        || accounts.authority.is_writable
-        || accounts.authority.executable
-        || accounts.market.is_signer
-        || accounts.market.executable
-        || accounts.position.is_signer
-        || accounts.position.executable
-        || accounts.admission.is_signer
-        || accounts.admission.executable
-        || accounts.position.key == accounts.admission.key
+    if accounts.position.key == accounts.admission.key
         || accounts.market.key == accounts.position.key
         || accounts.market.key == accounts.admission.key
         || accounts.market.owner != program_id
     {
         return Err(ProtocolPositionSbfErrorV2::Accounts.into());
+    }
+    Ok(())
+}
+
+fn authenticate_frame_spec(
+    spec: ClaimsFrameSpecV1,
+    accounts: &[AccountInfo<'_>],
+) -> Result<(), ProgramError> {
+    let count = usize::from(
+        spec.account_count()
+            .map_err(|_| ProtocolPositionSbfErrorV2::Accounts)?,
+    );
+    if accounts.len() != count {
+        return Err(ProtocolPositionSbfErrorV2::Accounts.into());
+    }
+    for (index, observed) in accounts.iter().enumerate() {
+        let coordinate = u16::try_from(index).map_err(|_| ProtocolPositionSbfErrorV2::Accounts)?;
+        let expected = spec
+            .account(coordinate)
+            .map_err(|_| ProtocolPositionSbfErrorV2::Accounts)?
+            .privileges();
+        if observed.is_signer != expected.signer()
+            || observed.is_writable != expected.writable()
+            || observed.executable != expected.executable()
+        {
+            return Err(ProtocolPositionSbfErrorV2::Accounts.into());
+        }
     }
     Ok(())
 }
@@ -1039,16 +1009,6 @@ fn close_pair(accounts: CloseAccounts<'_, '_>, rent_after: u64) -> Result<(), Pr
         || accounts.rent_credit.lamports() != rent_after
     {
         return Err(ProtocolPositionSbfErrorV2::Commit.into());
-    }
-    Ok(())
-}
-
-fn require_readonly(accounts: &[&AccountInfo<'_>]) -> Result<(), ProgramError> {
-    if accounts
-        .iter()
-        .any(|account| account.is_signer || account.is_writable)
-    {
-        return Err(ProtocolPositionSbfErrorV2::Accounts.into());
     }
     Ok(())
 }

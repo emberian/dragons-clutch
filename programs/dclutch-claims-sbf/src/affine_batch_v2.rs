@@ -19,6 +19,7 @@ use dclutch_claims_svm::{
     affine_batch_v2::{
         AffineBatchPlanV2, AffineBatchReceiptV2, DeltaDirectionV2, SignedMagnitudeV2,
     },
+    frame_spec_v1::ClaimsFrameSpecV1,
     protocol_position_v2::ProtocolPositionSeedsV2,
 };
 use dclutch_core_contract::ContentId;
@@ -49,7 +50,8 @@ use crate::liability_basis_v2::{
 };
 
 /// Exact fixed affine-batch account count before the runtime Position tail.
-pub const AFFINE_BATCH_FIXED_ACCOUNT_COUNT_V2: usize = 20;
+pub const AFFINE_BATCH_FIXED_ACCOUNT_COUNT_V2: usize =
+    dclutch_claims_svm::frame_spec_v1::AFFINE_FIXED_ACCOUNT_COUNT_V1 as usize;
 
 /// Exact already-authenticated parent request joined to one nested affine plan.
 ///
@@ -193,6 +195,11 @@ pub(super) fn process(
 ) -> Result<(), ProgramError> {
     let plan = AffineBatchPlanV2::decode(instruction_data)
         .map_err(|_| AffineBatchSbfErrorV2::Instruction)?;
+    authenticate_frame_spec(
+        ClaimsFrameSpecV1::affine(plan.position_count())
+            .map_err(|_| AffineBatchSbfErrorV2::Accounts)?,
+        account_infos,
+    )?;
     let accounts = AffineBatchAccountsV2::parse(account_infos, plan.position_count())?;
     authenticate_privileges(program_id, &accounts)?;
     let packet_digest = hash(instruction_data).to_bytes();
@@ -216,6 +223,11 @@ pub(crate) fn execute_parent_authenticated(
 ) -> Result<AffineBatchReceiptV2, ProgramError> {
     let plan = AffineBatchPlanV2::decode(instruction_data)
         .map_err(|_| AffineBatchSbfErrorV2::Instruction)?;
+    authenticate_frame_spec(
+        ClaimsFrameSpecV1::affine(plan.position_count())
+            .map_err(|_| AffineBatchSbfErrorV2::Accounts)?,
+        account_infos,
+    )?;
     let accounts = AffineBatchAccountsV2::parse(account_infos, plan.position_count())?;
     authenticate_privileges(program_id, &accounts)?;
     authenticate_parent_authority(&accounts, plan, parent)?;
@@ -319,59 +331,43 @@ fn authenticate_privileges(
     program_id: &Pubkey,
     accounts: &AffineBatchAccountsV2<'_, '_>,
 ) -> Result<(), ProgramError> {
-    if !accounts.authority.is_signer
-        || accounts.authority.is_writable
-        || accounts.authority.executable
-        || !accounts.market.is_writable
-        || accounts.market.is_signer
-        || accounts.market.executable
-        || accounts.claims_program.key != program_id
-        || !accounts.claims_program.executable
-        || accounts.claims_program.is_signer
-        || accounts.claims_program.is_writable
-        || !accounts.registry.executable
-        || accounts.registry.is_signer
-        || accounts.registry.is_writable
-        || !accounts.caller_program.executable
-        || accounts.caller_program.is_signer
-        || accounts.caller_program.is_writable
-        || !accounts.core_program.executable
-        || accounts.core_program.is_signer
-        || accounts.core_program.is_writable
-        || accounts.rent.key != &sysvar::rent::ID
-    {
+    if accounts.claims_program.key != program_id || accounts.rent.key != &sysvar::rent::ID {
         return Err(AffineBatchSbfErrorV2::Accounts.into());
     }
-    for account in [
-        accounts.basis_record,
-        accounts.basis_staging,
-        accounts.product_record,
-        accounts.product_staging,
-        accounts.result_domain_record,
-        accounts.result_domain_staging,
-        accounts.portfolio_record,
-        accounts.portfolio_staging,
-        accounts.rent,
-        accounts.core_market,
-        accounts.cache,
-        accounts.caller_programdata,
-        accounts.claims_programdata,
-        accounts.core_programdata,
-    ] {
-        if account.is_signer || account.is_writable || account.executable {
-            return Err(AffineBatchSbfErrorV2::Accounts.into());
-        }
-    }
     for (left, position) in accounts.positions.iter().enumerate() {
-        if !position.is_writable
-            || position.is_signer
-            || position.executable
-            || position.key == accounts.market.key
+        if position.key == accounts.market.key
             || accounts
                 .positions
                 .iter()
                 .skip(left.saturating_add(1))
                 .any(|right| right.key == position.key)
+        {
+            return Err(AffineBatchSbfErrorV2::Accounts.into());
+        }
+    }
+    Ok(())
+}
+
+fn authenticate_frame_spec(
+    spec: ClaimsFrameSpecV1,
+    accounts: &[AccountInfo<'_>],
+) -> Result<(), ProgramError> {
+    let count = usize::from(
+        spec.account_count()
+            .map_err(|_| AffineBatchSbfErrorV2::Accounts)?,
+    );
+    if accounts.len() != count {
+        return Err(AffineBatchSbfErrorV2::Accounts.into());
+    }
+    for (index, observed) in accounts.iter().enumerate() {
+        let coordinate = u16::try_from(index).map_err(|_| AffineBatchSbfErrorV2::Accounts)?;
+        let expected = spec
+            .account(coordinate)
+            .map_err(|_| AffineBatchSbfErrorV2::Accounts)?
+            .privileges();
+        if observed.is_signer != expected.signer()
+            || observed.is_writable != expected.writable()
+            || observed.executable != expected.executable()
         {
             return Err(AffineBatchSbfErrorV2::Accounts.into());
         }
