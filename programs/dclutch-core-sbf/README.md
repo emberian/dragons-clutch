@@ -12,6 +12,8 @@ The current executable slice routes:
   request for replay initialization or Hoard-vault creation;
 - fixed-role Resolution effects for `CreateFund`, `VerifyFundReady`,
   `AdmitTerminal`, and `CloseFund`;
+- release-selected recurring-Series `Consume` admission through the exact
+  Claims-founding child boundary;
 - `ActivateCapability` and `CloseCapability`, using the compact generic
   Trading-capability route.
 
@@ -93,6 +95,43 @@ Product-record content digest. Core requires that digest to equal the root of
 the independently authenticated Product/domain/portfolio graph; neither the
 Source record nor the Found request may supply stable Product, result-domain,
 portfolio, basis, release, or outcome-width facts.
+
+## Series Consume frame
+
+Instruction data is the exact 336-byte `SeriesCoreRequestV1` followed by the
+untrusted occurrence-proof siblings. Core accepts only `Consume`; every other
+historical Series action tag refuses. The caller PDA is the universal Trading
+role authority over the release set, future Market, Ticket content identity,
+and SHA-256 of the exact 336-byte request. Proof bytes do not participate in a
+second authority: Core reruns the ordered Merkle admission against the
+finalized Template and requires exact consumption with no leftovers.
+
+Accounts 0 through 30 are the exact Found31 frame, except account 0 is the
+Trading caller-authority signer and already-prepaid Market rent means it is not
+debited. The fixed Series suffix is:
+
+```text
+31 Trading program
+32 Trading ProgramData
+33 composite Series root
+34 mutable Ticket state
+35..40 Template, occurrence, and Ticket raw/staging pairs
+41 Clock
+42..42+n ordered Trading-owned FundingStates
+then the future Claims-founding suffix
+```
+
+Core authenticates the immutable infrastructure and prepares Found exactly
+once, then joins the current Trading release, finalized Series records,
+Runtime Product V2 projection, future `MarketCoreStateSeedsV2`, root/Ticket
+revisions, schedule, and the exact manifest-backed FundingState list. The list
+has no caller-supplied count: Core admits the unique nonempty prefix whose
+ordered-key digest equals the Ticket commitment. It then applies the
+transactional Found prewrite. Until the canonical Claims SBF founding action
+and account frame are available, the route returns `ChildCpi`; the transaction
+must restore the vacant Market and every root, Ticket, FundingState, and caller
+account byte-for-byte. No private Series authority or legacy Claims
+`EconomicSlice` route is exposed.
 
 ## OpenMarket frame
 
@@ -218,10 +257,12 @@ Unit tests cover hostile instruction truncation, noncanonical funding headers,
 outer-account aliases, Registry substitution, and the exact v0 envelope. The
 optimized SBF build is checked separately for verifier stack diagnostics.
 `run-open-market-program-test.sh` executes real Registry, Rent, Core, and
-Custody ELFs. It proves exact-authority one-time profile initialization,
+Custody ELFs plus a release-selected Trading caller. It proves exact-authority one-time profile initialization,
 mutable-infrastructure refusal, a 258-outcome Found31, Registry/Rent
-substitution and mutable-Core rollback without a Market write, then replay and
-Vault creation with the commit-last Core transition.
+substitution and mutable-Core rollback without a Market write, a late
+Series-Claims refusal that returns exact `ChildCpi` after Found and rolls every
+observed account back, then replay and Vault creation with the commit-last Core
+transition.
 Additional real multi-program campaigns remain required for every Resolution
 action and for late Resolution-child rollback before that adapter is release
 evidence.

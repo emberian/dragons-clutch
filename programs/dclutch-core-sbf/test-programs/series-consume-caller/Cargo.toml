@@ -1,0 +1,26 @@
+[package]
+name = "dclutch-series-consume-caller-sbf"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[features]
+default = []
+no-entrypoint = []
+
+[dependencies]
+dclutch-market-core-codec = { path = "../../../../crates/dclutch-market-core-codec" }
+dclutch-release-set-contract = { path = "../../../../crates/dclutch-release-set-contract" }
+dclutch-series-v3-kernel = { path = "../../../../crates/dclutch-series-v3-kernel" }
+solana-program = { version = "=3.0.0", default-features = false }
+
+[workspace]
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(target_os, values("solana"))'] }

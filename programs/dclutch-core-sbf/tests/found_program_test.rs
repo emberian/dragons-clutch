@@ -2,10 +2,20 @@
 
 use std::{env, fs, path::PathBuf, vec, vec::Vec};
 
-use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, EMPTY_MANIFEST_BYTES};
+use dclutch_capability_contract::{
+    ActivationPolicy, CAPABILITY_ENTRY_BYTES, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+    CapabilityEntryV1, CapabilityFundingDerivationV1, CapabilityManifestV1, CompartmentFundingV1,
+    ContentId as CapabilityContentId, FUNDING_STATE_BYTES, FundingAmountsV1,
+    FundingCustodyObservationV1, FundingQuoteV1, FundingStateV1, MANIFEST_HEADER_BYTES,
+    MAX_DEPENDENCIES_PER_CAPABILITY,
+};
+use dclutch_capability_program_contract::{
+    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
+};
 use dclutch_core_contract::ContentId as CoreContentId;
 use dclutch_market_core_codec::{
     Action, CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness, Request,
+    STATE_BYTES,
 };
 use dclutch_product_runtime_v2::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
 use dclutch_product_runtime_v2_admission::{FinalizedRecordCoordinateV2, PRODUCT_RECORD_BYTES_V2};
@@ -21,11 +31,40 @@ use dclutch_registry_contract::{
     initialize_activation_cache_v1,
 };
 use dclutch_release_set_contract::{
-    ArtifactReleaseIdV1, EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1, ExecutionReleaseSetV1,
-    ExecutionRoleBindingV1, ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
-    ProgramIdentityV1, ProtocolInfrastructureProfileV1,
+    ArtifactReleaseIdV1, CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1,
+    EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
+    ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, ProgramIdentityV1,
+    ProtocolInfrastructureProfileV1,
 };
 use dclutch_rent_contract::{RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1};
+use dclutch_series_v3_kernel::{
+    AccountKeyV3, AuthenticatedProductProjectionV2, SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3,
+    SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3, SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
+    admit_occurrence_bytes, admit_ticket, funding_list_id, future_market_projection,
+    generated::{
+        SERIES_EXAMPLE_OCCURRENCE_V3, SERIES_EXAMPLE_TEMPLATE_V3, SERIES_EXAMPLE_TICKET_V3,
+        SERIES_OCCURRENCE_CAPABILITY_MANIFEST_OFFSET_V3,
+        SERIES_OCCURRENCE_CAPABILITY_NATIVE_OFFSET_V3, SERIES_OCCURRENCE_FOUNDING_WORK_OFFSET_V3,
+        SERIES_OCCURRENCE_FUNDING_LIST_OFFSET_V3, SERIES_OCCURRENCE_HOARD_PRINCIPAL_OFFSET_V3,
+        SERIES_OCCURRENCE_INDEX_OFFSET_V3, SERIES_OCCURRENCE_MARKET_OFFSET_V3,
+        SERIES_OCCURRENCE_MARKET_RENT_OFFSET_V3, SERIES_OCCURRENCE_PRODUCT_RECORD_OFFSET_V3,
+        SERIES_OCCURRENCE_RATIONAL_REPRESENTATION_OFFSET_V3,
+        SERIES_OCCURRENCE_RESOLUTION_POLICY_OFFSET_V3, SERIES_OCCURRENCE_SCHEDULED_SLOT_OFFSET_V3,
+        SERIES_TEMPLATE_CLOSE_RENT_OFFSET_V3, SERIES_TEMPLATE_FIRST_SLOT_OFFSET_V3,
+        SERIES_TEMPLATE_OCCURRENCE_COUNT_OFFSET_V3, SERIES_TEMPLATE_PERIOD_SLOTS_OFFSET_V3,
+        SERIES_TEMPLATE_PROJECTION_ROOT_OFFSET_V3, SERIES_TEMPLATE_REALM_OFFSET_V3,
+        SERIES_TEMPLATE_REFUND_OWNER_OFFSET_V3, SERIES_TEMPLATE_RELEASE_SET_OFFSET_V3,
+        SERIES_TEMPLATE_RETRY_WINDOW_OFFSET_V3, SERIES_TICKET_CAPABILITY_NATIVE_OFFSET_V3,
+        SERIES_TICKET_FOUNDER_OFFSET_V3, SERIES_TICKET_FOUNDING_WORK_OFFSET_V3,
+        SERIES_TICKET_FUNDING_LIST_OFFSET_V3, SERIES_TICKET_HOARD_PRINCIPAL_OFFSET_V3,
+        SERIES_TICKET_INDEX_OFFSET_V3, SERIES_TICKET_MARKET_OFFSET_V3,
+        SERIES_TICKET_MARKET_RENT_OFFSET_V3, SERIES_TICKET_OCCURRENCE_ID_OFFSET_V3,
+        SERIES_TICKET_REFUND_OWNER_OFFSET_V3, SERIES_TICKET_TEMPLATE_OFFSET_V3,
+    },
+    occurrence_content_id,
+    replay::{SeriesStateV3, TicketStateSeedsV3, TicketStateV3},
+    series_core_consume_request, template_content_id, ticket_content_id,
+};
 use dclutch_source_contract::{
     ContentId as SourceContentId, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2, SourceMaterialV2,
 };
@@ -44,12 +83,14 @@ use solana_transaction::Transaction;
 const CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc1; 32]);
 const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc2; 32]);
 const RENT_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc3; 32]);
-const GENERATION: u64 = 41;
+const TRADING_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc4; 32]);
+const GENERATION: u64 = 1;
 
 struct Artifacts {
     core: Vec<u8>,
     registry: Vec<u8>,
     rent: Vec<u8>,
+    trading: Vec<u8>,
 }
 
 #[derive(Clone)]
@@ -74,6 +115,7 @@ struct Fixture {
     release_set: Record,
     cache: Pubkey,
     core_programdata: Pubkey,
+    trading_programdata: Pubkey,
     registry_programdata: Pubkey,
     rent_programdata: Pubkey,
     profile: Pubkey,
@@ -82,12 +124,30 @@ struct Fixture {
     outcome_count: u32,
 }
 
+struct SeriesFixture {
+    base: Fixture,
+    caller_authority: Pubkey,
+    root: Pubkey,
+    root_data: Vec<u8>,
+    ticket_state: Pubkey,
+    ticket_state_data: Vec<u8>,
+    template: Record,
+    occurrence: Record,
+    ticket: Record,
+    funding: Pubkey,
+    funding_data: Vec<u8>,
+    funding_lamports: u64,
+    request: [u8; dclutch_market_core_codec::SERIES_CORE_REQUEST_BYTES_V1],
+}
+
 fn artifacts() -> Artifacts {
     let directory = PathBuf::from(env::var("SBF_OUT_DIR").expect("SBF_OUT_DIR is required"));
     Artifacts {
         core: fs::read(directory.join("dclutch_core_sbf.so")).expect("Core ELF"),
         registry: fs::read(directory.join("dclutch_registry_sbf.so")).expect("Registry ELF"),
         rent: fs::read(directory.join("dclutch_rent_sbf.so")).expect("Rent ELF"),
+        trading: fs::read(directory.join("dclutch_series_consume_caller_sbf.so"))
+            .expect("Trading caller ELF"),
     }
 }
 
@@ -267,6 +327,42 @@ impl Record {
     }
 }
 
+fn capability_id(byte: u8) -> CapabilityContentId {
+    CapabilityContentId::new([byte; 32]).expect("capability identity")
+}
+
+fn funded_manifest_record() -> Record {
+    let none = CompartmentFundingV1::not_applicable();
+    let amounts = FundingAmountsV1::new(
+        none,
+        none,
+        CompartmentFundingV1::native_lamports(1_000).expect("work funding"),
+        none,
+        none,
+        none,
+        none,
+    )
+    .expect("funding amounts");
+    let quote = FundingQuoteV1::new(amounts, None).expect("native quote");
+    let entry = CapabilityEntryV1::new(
+        capability_id(0x91),
+        capability_id(0x92),
+        capability_id(0x93),
+        capability_id(0x94),
+        capability_id(0x95),
+        capability_id(0x96),
+        ActivationPolicy::RequiredAtFounding,
+        0,
+        0,
+        [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+        quote,
+    )
+    .expect("manifest entry");
+    let mut bytes = vec![0; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
+    CapabilityManifestV1::encode_into(&[entry], &mut bytes).expect("funded manifest");
+    Record::new(CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, bytes)
+}
+
 fn product_graph() -> (Record, Record, Record, u32, [u8; 32]) {
     let cuts: Vec<i128> = (-128_i128..128).collect();
     let coefficients = vec![7_u64; cuts.len() + 2];
@@ -303,6 +399,333 @@ fn product_graph() -> (Record, Record, Record, u32, [u8; 32]) {
     )
 }
 
+fn put(target: &mut [u8], offset: usize, source: &[u8]) {
+    target
+        .get_mut(offset..offset + source.len())
+        .expect("fixture field")
+        .copy_from_slice(source);
+}
+
+fn series_fixture() -> SeriesFixture {
+    let mut base = fixture(false);
+    let test = base.test.as_mut().expect("ProgramTest");
+    let rent = Rent::default();
+    let manifest = CapabilityManifestV1::decode(&base.manifest.data).expect("manifest");
+    let manifest_id = CapabilityContentId::new(base.manifest.digest).expect("manifest ID");
+    let funding_rent = rent.minimum_balance(FUNDING_STATE_BYTES);
+    let funding_lamports = funding_rent.checked_add(1_000).expect("funding lamports");
+    let custody = FundingCustodyObservationV1::native_only(funding_lamports, funding_rent)
+        .expect("funding custody");
+    let funding_state =
+        FundingStateV1::new(manifest_id, manifest, 0, custody).expect("pending FundingState");
+    let derivation = CapabilityFundingDerivationV1::new(
+        base.market.to_bytes(),
+        GENERATION,
+        manifest_id,
+        manifest,
+        funding_state,
+    )
+    .expect("funding derivation");
+    let funding =
+        Pubkey::find_program_address(&derivation.seed_components(), &TRADING_PROGRAM_ID).0;
+    let funding_key = AccountKeyV3::new(funding.to_bytes()).expect("funding key");
+    let funding_list = funding_list_id(&[funding_key]).expect("funding list");
+
+    let market_rent = rent.minimum_balance(STATE_BYTES);
+    let capability_native = funding_lamports;
+    let founding_work = 777_u64;
+    let hoard_principal = 5_000_u64;
+    let mut occurrence_bytes = SERIES_EXAMPLE_OCCURRENCE_V3;
+    put(
+        &mut occurrence_bytes,
+        SERIES_OCCURRENCE_INDEX_OFFSET_V3,
+        &0_u32.to_le_bytes(),
+    );
+    put(
+        &mut occurrence_bytes,
+        SERIES_OCCURRENCE_SCHEDULED_SLOT_OFFSET_V3,
+        &0_u64.to_le_bytes(),
+    );
+    put(
+        &mut occurrence_bytes,
+        SERIES_OCCURRENCE_PRODUCT_RECORD_OFFSET_V3,
+        &base.product.digest,
+    );
+    put(
+        &mut occurrence_bytes,
+        SERIES_OCCURRENCE_RESOLUTION_POLICY_OFFSET_V3,
+        &base.source.digest,
+    );
+    put(
+        &mut occurrence_bytes,
+        SERIES_OCCURRENCE_RATIONAL_REPRESENTATION_OFFSET_V3,
+        &[0x82; 32],
+    );
+    put(
+        &mut occurrence_bytes,
+        SERIES_OCCURRENCE_CAPABILITY_MANIFEST_OFFSET_V3,
+        &base.manifest.digest,
+    );
+    put(
+        &mut occurrence_bytes,
+        SERIES_OCCURRENCE_FUNDING_LIST_OFFSET_V3,
+        &funding_list.to_bytes(),
+    );
+    put(
+        &mut occurrence_bytes,
+        SERIES_OCCURRENCE_MARKET_OFFSET_V3,
+        base.market.as_ref(),
+    );
+    for (offset, value) in [
+        (SERIES_OCCURRENCE_HOARD_PRINCIPAL_OFFSET_V3, hoard_principal),
+        (SERIES_OCCURRENCE_MARKET_RENT_OFFSET_V3, market_rent),
+        (
+            SERIES_OCCURRENCE_CAPABILITY_NATIVE_OFFSET_V3,
+            capability_native,
+        ),
+        (SERIES_OCCURRENCE_FOUNDING_WORK_OFFSET_V3, founding_work),
+    ] {
+        put(&mut occurrence_bytes, offset, &value.to_le_bytes());
+    }
+    let occurrence_id = occurrence_content_id(&occurrence_bytes).expect("occurrence ID");
+
+    let mut template_bytes = SERIES_EXAMPLE_TEMPLATE_V3;
+    put(
+        &mut template_bytes,
+        SERIES_TEMPLATE_OCCURRENCE_COUNT_OFFSET_V3,
+        &1_u32.to_le_bytes(),
+    );
+    for (offset, value) in [
+        (SERIES_TEMPLATE_FIRST_SLOT_OFFSET_V3, 0_u64),
+        (SERIES_TEMPLATE_PERIOD_SLOTS_OFFSET_V3, 1_u64),
+        (SERIES_TEMPLATE_RETRY_WINDOW_OFFSET_V3, 10_000_u64),
+        (SERIES_TEMPLATE_CLOSE_RENT_OFFSET_V3, 10_u64),
+    ] {
+        put(&mut template_bytes, offset, &value.to_le_bytes());
+    }
+    put(
+        &mut template_bytes,
+        SERIES_TEMPLATE_REALM_OFFSET_V3,
+        &base.realm.digest,
+    );
+    put(
+        &mut template_bytes,
+        SERIES_TEMPLATE_RELEASE_SET_OFFSET_V3,
+        &base.release_set.digest,
+    );
+    put(
+        &mut template_bytes,
+        SERIES_TEMPLATE_PROJECTION_ROOT_OFFSET_V3,
+        &occurrence_id.to_bytes(),
+    );
+    put(
+        &mut template_bytes,
+        SERIES_TEMPLATE_REFUND_OWNER_OFFSET_V3,
+        base.payer.pubkey().as_ref(),
+    );
+    let template_id = template_content_id(&template_bytes).expect("Template ID");
+
+    let mut ticket_bytes = SERIES_EXAMPLE_TICKET_V3;
+    put(
+        &mut ticket_bytes,
+        SERIES_TICKET_INDEX_OFFSET_V3,
+        &0_u32.to_le_bytes(),
+    );
+    put(
+        &mut ticket_bytes,
+        SERIES_TICKET_TEMPLATE_OFFSET_V3,
+        &template_id.to_bytes(),
+    );
+    put(
+        &mut ticket_bytes,
+        SERIES_TICKET_OCCURRENCE_ID_OFFSET_V3,
+        &occurrence_id.to_bytes(),
+    );
+    put(
+        &mut ticket_bytes,
+        SERIES_TICKET_MARKET_OFFSET_V3,
+        base.market.as_ref(),
+    );
+    put(
+        &mut ticket_bytes,
+        SERIES_TICKET_FUNDING_LIST_OFFSET_V3,
+        &funding_list.to_bytes(),
+    );
+    put(
+        &mut ticket_bytes,
+        SERIES_TICKET_FOUNDER_OFFSET_V3,
+        base.payer.pubkey().as_ref(),
+    );
+    put(
+        &mut ticket_bytes,
+        SERIES_TICKET_REFUND_OWNER_OFFSET_V3,
+        base.payer.pubkey().as_ref(),
+    );
+    for (offset, value) in [
+        (SERIES_TICKET_HOARD_PRINCIPAL_OFFSET_V3, hoard_principal),
+        (SERIES_TICKET_MARKET_RENT_OFFSET_V3, market_rent),
+        (SERIES_TICKET_CAPABILITY_NATIVE_OFFSET_V3, capability_native),
+        (SERIES_TICKET_FOUNDING_WORK_OFFSET_V3, founding_work),
+    ] {
+        put(&mut ticket_bytes, offset, &value.to_le_bytes());
+    }
+
+    let admitted = admit_occurrence_bytes(&template_bytes, &occurrence_bytes, &[])
+        .expect("admitted occurrence");
+    let admitted_ticket = admit_ticket(&ticket_bytes).expect("admitted Ticket");
+    admitted
+        .require_ticket(admitted_ticket.ticket())
+        .expect("Ticket join");
+    let product_projection = AuthenticatedProductProjectionV2::new(
+        CoreContentId::new(base.product.digest).expect("Product record"),
+        CoreContentId::new(product_id(1).to_bytes()).expect("stable Product"),
+        CoreContentId::new(base.domain.digest).expect("result domain"),
+    );
+    let future = future_market_projection(
+        admitted,
+        product_projection,
+        AccountKeyV3::new(REGISTRY_PROGRAM_ID.to_bytes()).expect("Registry"),
+    )
+    .expect("future Market");
+    assert_eq!(
+        future.committed_address().to_bytes(),
+        base.market.to_bytes()
+    );
+    assert_eq!(
+        Pubkey::find_program_address(&future.seeds().as_slices(), &CORE_PROGRAM_ID).0,
+        base.market
+    );
+
+    let selection = CapabilityExecutionSelectionV1::from_bytes(
+        0,
+        base.manifest.digest,
+        [0x97; 32],
+        [0x98; 32],
+        template_id.to_bytes(),
+    )
+    .expect("root selection");
+    let header = CapabilityRootHeaderV1::new(
+        CoreContentId::new(base.release_set.digest).expect("release set"),
+        base.market.to_bytes(),
+        GENERATION,
+        selection,
+    )
+    .expect("root header");
+    let root = Pubkey::find_program_address(&header.seeds().as_slices(), &TRADING_PROGRAM_ID).0;
+    let series_state = SeriesStateV3::new(10)
+        .prepare_ticket(0)
+        .expect("prepared Series")
+        .encode(1)
+        .expect("Series bytes");
+    let mut root_data = vec![0; CAPABILITY_ROOT_HEADER_BYTES_V1 + series_state.len()];
+    root_data
+        .get_mut(..CAPABILITY_ROOT_HEADER_BYTES_V1)
+        .expect("root header")
+        .copy_from_slice(&header.to_bytes());
+    root_data
+        .get_mut(CAPABILITY_ROOT_HEADER_BYTES_V1..)
+        .expect("Series tail")
+        .copy_from_slice(&series_state);
+    test.add_account(
+        root,
+        Account {
+            lamports: rent.minimum_balance(root_data.len()),
+            data: root_data.clone(),
+            owner: TRADING_PROGRAM_ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+
+    let ticket_id = ticket_content_id(&ticket_bytes).expect("Ticket ID");
+    let ticket_seeds = TicketStateSeedsV3::new(root.to_bytes(), ticket_id);
+    let ticket_state =
+        Pubkey::find_program_address(&ticket_seeds.as_slices(), &TRADING_PROGRAM_ID).0;
+    let ticket_state_data = TicketStateV3::prepared(ticket_id).encode().to_vec();
+    test.add_account(
+        ticket_state,
+        Account {
+            lamports: rent.minimum_balance(ticket_state_data.len()),
+            data: ticket_state_data.clone(),
+            owner: TRADING_PROGRAM_ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+
+    let request = series_core_consume_request(
+        admitted,
+        admitted_ticket,
+        product_projection,
+        AccountKeyV3::new(ticket_state.to_bytes()).expect("Ticket state"),
+        1,
+        0,
+    )
+    .expect("Series Core request")
+    .encode()
+    .expect("Series Core request bytes");
+    let caller_seeds = CallerAuthoritySeedsV1::from_bytes(
+        base.release_set.digest,
+        base.market.to_bytes(),
+        ExecutionRoleV1::Trading,
+        ticket_id.to_bytes(),
+        hash(&request).to_bytes(),
+    )
+    .expect("Trading caller seeds");
+    let caller_authority =
+        Pubkey::find_program_address(&caller_seeds.as_slices(), &TRADING_PROGRAM_ID).0;
+    test.add_account(
+        caller_authority,
+        Account {
+            lamports: 1,
+            data: Vec::new(),
+            owner: system_program::ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+
+    let template = Record::new(
+        SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
+        template_bytes.to_vec(),
+    );
+    let occurrence = Record::new(
+        SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3,
+        occurrence_bytes.to_vec(),
+    );
+    let ticket = Record::new(SERIES_TICKET_SCHEMA_RELEASE_ID_V3, ticket_bytes.to_vec());
+    for record in [&template, &occurrence, &ticket] {
+        record.add(test);
+    }
+    let funding_data = funding_state.to_bytes().to_vec();
+    test.add_account(
+        funding,
+        Account {
+            lamports: funding_lamports,
+            data: funding_data.clone(),
+            owner: TRADING_PROGRAM_ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+
+    SeriesFixture {
+        base,
+        caller_authority,
+        root,
+        root_data,
+        ticket_state,
+        ticket_state_data,
+        template,
+        occurrence,
+        ticket,
+        funding,
+        funding_data,
+        funding_lamports,
+        request,
+    }
+}
+
 fn fixture(core_mutable: bool) -> Fixture {
     let artifacts = artifacts();
     let mutable_authority = core_mutable.then(|| Pubkey::new_from_array([0xd1; 32]));
@@ -330,14 +753,22 @@ fn fixture(core_mutable: bool) -> Fixture {
         &artifacts.rent,
         None,
     );
+    add_program(
+        &mut test,
+        "dclutch_series_consume_caller_sbf",
+        TRADING_PROGRAM_ID,
+        &artifacts.trading,
+        None,
+    );
     let core_release = release(CORE_PROGRAM_ID, &artifacts.core, 0xa0, mutable_authority);
     let registry_release = release(REGISTRY_PROGRAM_ID, &artifacts.registry, 0xa1, None);
     let rent_release = release(RENT_PROGRAM_ID, &artifacts.rent, 0xa2, None);
+    let trading_release = release(TRADING_PROGRAM_ID, &artifacts.trading, 0xa3, None);
     let core_binding = binding(core_release);
     let release_set_value = ExecutionReleaseSetV1::new(
         core_binding,
         core_binding,
-        core_binding,
+        binding(trading_release),
         core_binding,
         core_binding,
     )
@@ -346,19 +777,19 @@ fn fixture(core_mutable: bool) -> Fixture {
         CoreContentId::new(hash(&release_set_value.to_bytes()).to_bytes()).expect("release set ID");
     let mut cache_data = vec![0; ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1];
     initialize_activation_cache_v1(&mut cache_data, release_set_id).expect("cache");
-    for role in [
-        ExecutionRoleV1::Core,
-        ExecutionRoleV1::Claims,
-        ExecutionRoleV1::Trading,
-        ExecutionRoleV1::Resolution,
-        ExecutionRoleV1::Custody,
+    for (role, selected_release) in [
+        (ExecutionRoleV1::Core, core_release),
+        (ExecutionRoleV1::Claims, core_release),
+        (ExecutionRoleV1::Trading, trading_release),
+        (ExecutionRoleV1::Resolution, core_release),
+        (ExecutionRoleV1::Custody, core_release),
     ] {
         activate_execution_role_into_v1(
             &mut cache_data,
             release_set_id,
             &release_set_value,
             role,
-            &activation_input(core_release),
+            &activation_input(selected_release),
         )
         .expect("activate");
     }
@@ -400,10 +831,7 @@ fn fixture(core_mutable: bool) -> Fixture {
         SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
         source_value.to_bytes().to_vec(),
     );
-    let manifest = Record::new(
-        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
-        EMPTY_MANIFEST_BYTES.to_vec(),
-    );
+    let manifest = funded_manifest_record();
     let release_set = Record::new(
         EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1,
         release_set_value.to_bytes().to_vec(),
@@ -477,7 +905,7 @@ fn fixture(core_mutable: bool) -> Fixture {
     test.add_account(
         market,
         Account {
-            lamports: 1,
+            lamports: Rent::default().minimum_balance(STATE_BYTES),
             data: Vec::new(),
             owner: system_program::ID,
             executable: false,
@@ -517,6 +945,7 @@ fn fixture(core_mutable: bool) -> Fixture {
         release_set,
         cache,
         core_programdata: programdata_address(CORE_PROGRAM_ID),
+        trading_programdata: programdata_address(TRADING_PROGRAM_ID),
         registry_programdata: programdata_address(REGISTRY_PROGRAM_ID),
         rent_programdata: programdata_address(RENT_PROGRAM_ID),
         profile,
@@ -613,6 +1042,59 @@ async fn execute(
     (fixture, context, accepted)
 }
 
+fn series_instruction(fixture: &SeriesFixture) -> Instruction {
+    let mut accounts = found_instruction(&fixture.base, false).accounts;
+    *accounts.first_mut().expect("caller meta") = AccountMeta::new(fixture.caller_authority, false);
+    accounts.extend_from_slice(&[
+        AccountMeta::new_readonly(TRADING_PROGRAM_ID, false),
+        AccountMeta::new_readonly(fixture.base.trading_programdata, false),
+        AccountMeta::new_readonly(fixture.root, false),
+        AccountMeta::new_readonly(fixture.ticket_state, false),
+        AccountMeta::new_readonly(fixture.template.raw, false),
+        AccountMeta::new_readonly(fixture.template.staging, false),
+        AccountMeta::new_readonly(fixture.occurrence.raw, false),
+        AccountMeta::new_readonly(fixture.occurrence.staging, false),
+        AccountMeta::new_readonly(fixture.ticket.raw, false),
+        AccountMeta::new_readonly(fixture.ticket.staging, false),
+        AccountMeta::new_readonly(sysvar::clock::ID, false),
+        AccountMeta::new_readonly(fixture.funding, false),
+    ]);
+    Instruction {
+        program_id: TRADING_PROGRAM_ID,
+        accounts,
+        data: fixture.request.to_vec(),
+    }
+}
+
+async fn execute_series(
+    mut fixture: SeriesFixture,
+) -> (
+    SeriesFixture,
+    solana_program_test::ProgramTestContext,
+    Option<String>,
+) {
+    let test = fixture.base.test.take().expect("ProgramTest");
+    let context = test.start_with_context().await;
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    let transaction = Transaction::new_signed_with_payer(
+        &[series_instruction(&fixture)],
+        Some(&context.payer.pubkey()),
+        &[&context.payer],
+        blockhash,
+    );
+    let failure = context
+        .banks_client
+        .process_transaction(transaction)
+        .await
+        .err()
+        .map(|error| format!("{error:?}"));
+    (fixture, context, failure)
+}
+
 #[tokio::test]
 async fn real_found31_accepts_258_outcomes_after_immutable_infrastructure_auth() {
     let fixture = fixture(false);
@@ -654,7 +1136,10 @@ async fn swapped_registry_and_rent_artifacts_refuse_without_market_write() {
         .expect("vacant Market");
     assert_eq!(market.owner, system_program::ID);
     assert!(market.data.is_empty());
-    assert_eq!(market.lamports, 1);
+    assert_eq!(
+        market.lamports,
+        Rent::default().minimum_balance(STATE_BYTES)
+    );
 }
 
 #[tokio::test]
@@ -671,5 +1156,70 @@ async fn mutable_core_release_refuses_after_profile_init_without_market_write() 
         .expect("vacant Market");
     assert_eq!(market.owner, system_program::ID);
     assert!(market.data.is_empty());
-    assert_eq!(market.lamports, 1);
+    assert_eq!(
+        market.lamports,
+        Rent::default().minimum_balance(STATE_BYTES)
+    );
+}
+
+#[tokio::test]
+async fn series_consume_late_claims_refusal_rolls_back_found_and_all_replay_state() {
+    let fixture = series_fixture();
+    let (fixture, context, failure) = execute_series(fixture).await;
+    let failure = failure.expect("Claims founding physical seam must refuse");
+    assert!(
+        failure.contains("Custom(10)"),
+        "late refusal must be CoreSbfError::ChildCpi, got {failure}"
+    );
+
+    let market = context
+        .banks_client
+        .get_account(fixture.base.market)
+        .await
+        .expect("Market query")
+        .expect("vacant Market");
+    assert_eq!(market.owner, system_program::ID);
+    assert!(market.data.is_empty());
+    assert_eq!(
+        market.lamports,
+        Rent::default().minimum_balance(STATE_BYTES)
+    );
+
+    let root = context
+        .banks_client
+        .get_account(fixture.root)
+        .await
+        .expect("root query")
+        .expect("root");
+    assert_eq!(root.owner, TRADING_PROGRAM_ID);
+    assert_eq!(root.data, fixture.root_data);
+
+    let ticket = context
+        .banks_client
+        .get_account(fixture.ticket_state)
+        .await
+        .expect("Ticket query")
+        .expect("Ticket state");
+    assert_eq!(ticket.owner, TRADING_PROGRAM_ID);
+    assert_eq!(ticket.data, fixture.ticket_state_data);
+
+    let funding = context
+        .banks_client
+        .get_account(fixture.funding)
+        .await
+        .expect("Funding query")
+        .expect("FundingState");
+    assert_eq!(funding.owner, TRADING_PROGRAM_ID);
+    assert_eq!(funding.lamports, fixture.funding_lamports);
+    assert_eq!(funding.data, fixture.funding_data);
+
+    let caller = context
+        .banks_client
+        .get_account(fixture.caller_authority)
+        .await
+        .expect("caller query")
+        .expect("caller PDA");
+    assert_eq!(caller.owner, system_program::ID);
+    assert_eq!(caller.lamports, 1);
+    assert!(caller.data.is_empty());
 }

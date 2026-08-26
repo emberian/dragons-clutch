@@ -1531,6 +1531,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-capability-program-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-contract",
+ "dclutch-core-contract",
+ "dclutch-release-set-contract",
+ "dclutch-transition-vm",
+]
+
+[[package]]
 name = "dclutch-core-contract"
 version = "0.1.0"
 
@@ -1539,6 +1549,7 @@ name = "dclutch-core-sbf"
 version = "0.1.0"
 dependencies = [
  "dclutch-capability-contract",
+ "dclutch-capability-program-contract",
  "dclutch-core-contract",
  "dclutch-custody-contract",
  "dclutch-market-core-codec",
@@ -1554,6 +1565,7 @@ dependencies = [
  "dclutch-release-set-contract",
  "dclutch-rent-contract",
  "dclutch-resolution-codec",
+ "dclutch-series-v3-kernel",
  "dclutch-source-contract",
  "dclutch-token-svm",
  "solana-account 4.3.2",
@@ -1611,6 +1623,7 @@ dependencies = [
  "dclutch-realm-contract",
  "dclutch-record-contract",
  "dclutch-registry-contract",
+ "dclutch-registry-svm",
  "dclutch-release-set-contract",
  "dclutch-rent-contract",
  "dclutch-source-contract",
@@ -1669,6 +1682,15 @@ name = "dclutch-resolution-codec"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-series-v3-kernel"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-market-core-codec",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "dclutch-source-contract"
 version = "0.1.0"
 dependencies = [
@@ -1678,6 +1700,10 @@ dependencies = [
 
 [[package]]
 name = "dclutch-token-svm"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-transition-vm"
 version = "0.1.0"
 
 [[package]]

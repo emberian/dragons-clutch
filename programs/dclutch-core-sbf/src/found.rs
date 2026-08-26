@@ -54,6 +54,20 @@ struct CreationPlan {
     rent_top_up: u64,
 }
 
+/// One fully authenticated Found31 projection and its unapplied creation plan.
+///
+/// Series may join additional immutable child facts against these coordinates
+/// without reauthenticating the Product graph or Registry records. The Market
+/// remains vacant until [`apply_prepared`] is called.
+pub(crate) struct PreparedFound {
+    creation: CreationPlan,
+    pub(crate) realm_id: [u8; 32],
+    pub(crate) product: Product,
+    pub(crate) resolution_policy_id: [u8; 32],
+    pub(crate) manifest_id: [u8; 32],
+    pub(crate) release_set_id: [u8; 32],
+}
+
 #[inline(never)]
 pub(crate) fn process(
     program_id: &Pubkey,
@@ -84,6 +98,19 @@ fn authenticate_plan_and_apply(
     request: Request,
     rent: &Rent,
 ) -> Result<(), solana_program::program_error::ProgramError> {
+    let prepared = prepare(program_id, frame, request, rent)?;
+    apply_prepared(program_id, frame, prepared)
+}
+
+/// Authenticate the complete Found31 authority graph and plan the unique
+/// Market creation without mutating the vacant Market.
+#[inline(never)]
+pub(crate) fn prepare(
+    program_id: &Pubkey,
+    frame: &FoundAccounts<'_, '_>,
+    request: Request,
+    rent: &Rent,
+) -> Result<PreparedFound, solana_program::program_error::ProgramError> {
     authenticate_found(program_id, frame, rent)?;
     // The release-set bytes are observed only to address the immutable Registry cache.
     // They are not accepted as a finalized record until after the current Core release
@@ -102,7 +129,25 @@ fn authenticate_plan_and_apply(
         Role::Core,
     )?;
     authenticate_release_record(frame, rent, references.release_set_id, admission.selected)?;
-    let plan = plan_found(program_id, frame, request, references, admission, rent)?;
+    let projection = PreparedFound {
+        realm_id: references.realm_id,
+        product: references.product,
+        resolution_policy_id: references.resolution_policy_id,
+        manifest_id: references.manifest_id,
+        release_set_id: references.release_set_id,
+        creation: plan_found(program_id, frame, request, references, admission, rent)?,
+    };
+    Ok(projection)
+}
+
+/// Apply one already-authenticated Market creation plan exactly once.
+#[inline(never)]
+pub(crate) fn apply_prepared(
+    program_id: &Pubkey,
+    frame: &FoundAccounts<'_, '_>,
+    prepared: PreparedFound,
+) -> Result<(), solana_program::program_error::ProgramError> {
+    let plan = prepared.creation;
     apply_creation(
         program_id,
         frame,
