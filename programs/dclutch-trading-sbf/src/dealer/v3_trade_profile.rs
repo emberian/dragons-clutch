@@ -34,10 +34,11 @@ use dclutch_custody_contract::{CustodyFrameSpecV1, OperationV1};
 #[cfg(not(target_os = "solana"))]
 use dclutch_product_runtime_v2_svm_reader::BASIS_WIDTH_OFFSET_V3;
 
-use super::v3_hot_artifact::DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3;
+use super::v3_hot_artifact::{
+    DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3, DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3,
+};
 #[cfg(not(target_os = "solana"))]
 use super::{
-    v3_hot_artifact::DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3,
     v3_obligation::DEALER_OBLIGATION_HEADER_BYTES_V3,
     v3_trade_artifacts::{
         DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4, DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4,
@@ -81,6 +82,101 @@ pub enum DealerScenarioAccountProfileErrorV4 {
     Geometry,
     /// The generic profile encoder or hostile decoder refused.
     Profile,
+}
+
+/// Expanded logical coordinates selected by one exact seven-span row.
+///
+/// The external admitted evaluator consumes this map after the common Hot
+/// helper authenticates Profile13 and its protected span counts. No caller
+/// provides a parallel Claims or Custody account index.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DealerScenarioLogicalFrameV4 {
+    /// First logical coordinate for each of the six optional Custody frames.
+    pub custody_starts: [u32; 6],
+    /// First logical coordinate of the canonical fixed20 Claims frame.
+    pub claims_fixed_start: u32,
+    /// First logical coordinate of the one-or-two Claims Position tail.
+    pub claims_positions_start: u32,
+    /// Sole writable Trading obligation logical coordinate.
+    pub obligation: u32,
+    /// Complete expanded logical-account count.
+    pub logical_account_count: u32,
+}
+
+/// Derive selector 9's expanded logical frame from authenticated span counts.
+pub fn dealer_scenario_logical_frame_v4(
+    span_counts: [u32; DEALER_SCENARIO_PROFILE_SPANS_V4],
+) -> Result<DealerScenarioLogicalFrameV4, DealerScenarioAccountProfileErrorV4> {
+    let custody_width = u32::from(DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3);
+    if span_counts
+        .get(..4)
+        .ok_or(DealerScenarioAccountProfileErrorV4::Geometry)?
+        .iter()
+        .any(|width| !matches!(*width, 0) && *width != custody_width)
+        || !matches!(span_counts.get(4), Some(1 | 2))
+        || span_counts
+            .get(5..)
+            .ok_or(DealerScenarioAccountProfileErrorV4::Geometry)?
+            .iter()
+            .any(|width| !matches!(*width, 0) && *width != custody_width)
+    {
+        return Err(DealerScenarioAccountProfileErrorV4::Geometry);
+    }
+    let mut custody_starts = [0_u32; 6];
+    let mut cursor = u32::from(DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3);
+    for (destination, width) in custody_starts
+        .get_mut(..4)
+        .ok_or(DealerScenarioAccountProfileErrorV4::Geometry)?
+        .iter_mut()
+        .zip(
+            span_counts
+                .get(..4)
+                .ok_or(DealerScenarioAccountProfileErrorV4::Geometry)?,
+        )
+    {
+        *destination = cursor;
+        cursor = cursor
+            .checked_add(*width)
+            .ok_or(DealerScenarioAccountProfileErrorV4::Geometry)?;
+    }
+    let claims_fixed_start = cursor;
+    cursor = cursor
+        .checked_add(u32::from(SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3))
+        .ok_or(DealerScenarioAccountProfileErrorV4::Geometry)?;
+    let claims_positions_start = cursor;
+    cursor = cursor
+        .checked_add(
+            *span_counts
+                .get(4)
+                .ok_or(DealerScenarioAccountProfileErrorV4::Geometry)?,
+        )
+        .ok_or(DealerScenarioAccountProfileErrorV4::Geometry)?;
+    for (destination, width) in custody_starts
+        .get_mut(4..)
+        .ok_or(DealerScenarioAccountProfileErrorV4::Geometry)?
+        .iter_mut()
+        .zip(
+            span_counts
+                .get(5..)
+                .ok_or(DealerScenarioAccountProfileErrorV4::Geometry)?,
+        )
+    {
+        *destination = cursor;
+        cursor = cursor
+            .checked_add(*width)
+            .ok_or(DealerScenarioAccountProfileErrorV4::Geometry)?;
+    }
+    let obligation = cursor;
+    let logical_account_count = obligation
+        .checked_add(1)
+        .ok_or(DealerScenarioAccountProfileErrorV4::Geometry)?;
+    Ok(DealerScenarioLogicalFrameV4 {
+        custody_starts,
+        claims_fixed_start,
+        claims_positions_start,
+        obligation,
+        logical_account_count,
+    })
 }
 
 /// Encode the sole selector-9 AccountProfile13 atomically.
@@ -513,5 +609,48 @@ mod tests {
                 & 1,
             0
         );
+    }
+
+    #[test]
+    fn logical_frame_map_tracks_every_optional_span_at_n_boundaries() {
+        let sparse = dealer_scenario_logical_frame_v4([0, 0, 0, 0, 1, 0, 0]).expect("sparse frame");
+        assert_eq!(sparse.custody_starts, [5, 5, 5, 5, 26, 26]);
+        assert_eq!(sparse.claims_fixed_start, 5);
+        assert_eq!(sparse.claims_positions_start, 25);
+        assert_eq!(sparse.obligation, 26);
+        assert_eq!(sparse.logical_account_count, 27);
+
+        let dense =
+            dealer_scenario_logical_frame_v4([14, 14, 14, 14, 2, 14, 14]).expect("dense frame");
+        assert_eq!(dense.custody_starts, [5, 19, 33, 47, 83, 97]);
+        assert_eq!(dense.claims_fixed_start, 61);
+        assert_eq!(dense.claims_positions_start, 81);
+        assert_eq!(dense.obligation, 111);
+        assert_eq!(dense.logical_account_count, 112);
+
+        let bytes = profile();
+        let profile = AccountProfileV2::decode(&bytes).expect("decode");
+        for width in [1, 16] {
+            assert_eq!(
+                profile
+                    .logical_account_count_with_dynamic_spans(width, &[14, 14, 14, 14, 2, 14, 14],),
+                Ok(usize::try_from(dense.logical_account_count).expect("logical width"))
+            );
+        }
+    }
+
+    #[test]
+    fn logical_frame_map_refuses_caller_invented_span_shapes() {
+        for hostile in [
+            [1, 0, 0, 0, 1, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 3, 0, 0],
+            [0, 0, 0, 0, 1, 7, 0],
+        ] {
+            assert_eq!(
+                dealer_scenario_logical_frame_v4(hostile),
+                Err(DealerScenarioAccountProfileErrorV4::Geometry)
+            );
+        }
     }
 }
