@@ -3773,6 +3773,61 @@ struct PreparedLifecycleBatchV4 {
     identities: Vec<[u8; 32]>,
 }
 
+/// Rewrite one candidate observation's lamport balance in place.
+///
+/// Only the balance moves while a lifecycle batch is planned, so the candidate
+/// bank is built once and its two touched entries are rewritten, rather than
+/// materialising a whole new 90-coordinate bank per invocation on an allocator
+/// that never frees.
+fn set_candidate_lamports_v3<'data>(
+    index: usize,
+    value: u64,
+    observations: &[AccountObservationV1<'data>],
+    accounts: &[&AccountInfo<'_>],
+    candidate_lamports: &mut [u64],
+    candidate_observations: &mut [AccountObservationV1<'data>],
+) -> Result<(), ProgramError> {
+    *candidate_lamports
+        .get_mut(index)
+        .ok_or(TradingSbfError::Content)? = value;
+    let observation = observations.get(index).ok_or(TradingSbfError::Content)?;
+    let account = accounts.get(index).ok_or(TradingSbfError::Content)?;
+    *candidate_observations
+        .get_mut(index)
+        .ok_or(TradingSbfError::Content)? =
+        candidate_observation_v3(*observation, account, value);
+    Ok(())
+}
+
+/// One candidate observation: the authenticated observation at a planned balance.
+fn candidate_observation_v3<'data>(
+    observation: AccountObservationV1<'data>,
+    account: &AccountInfo<'_>,
+    lamports: u64,
+) -> AccountObservationV1<'data> {
+    if observation.adapter_authenticated_variable_data() {
+        AccountObservationV1::new_adapter_authenticated_variable_data(
+            observation.key(),
+            observation.owner(),
+            lamports,
+            observation.data(),
+            account.is_signer,
+            account.is_writable,
+            account.executable,
+        )
+    } else {
+        AccountObservationV1::new(
+            observation.key(),
+            observation.owner(),
+            lamports,
+            observation.data(),
+            account.is_signer,
+            account.is_writable,
+            account.executable,
+        )
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 fn prepare_lifecycle_v4<'a>(
@@ -3800,6 +3855,22 @@ fn prepare_lifecycle_v4<'a>(
         .iter()
         .map(|observation| observation.lamports())
         .collect::<Vec<_>>();
+    // The candidate bank and the three lifecycle register banks are allocated
+    // once for the whole batch. The SBF allocator never frees, so materialising
+    // them per invocation charged a fresh 90-coordinate observation bank and
+    // four register pairs against total-ever-allocated for every planned state.
+    let mut candidate_observations = Vec::with_capacity(observations.len());
+    for (observation, account) in observations.iter().zip(accounts) {
+        candidate_observations.push(candidate_observation_v3(
+            *observation,
+            account,
+            observation.lamports(),
+        ));
+    }
+    let mut scalar_scratch = vec![0_u64; scalars.len()];
+    let mut identity_scratch = vec![[0_u8; 32]; identities.len()];
+    let mut next_scalars = vec![0_u64; scalars.len()];
+    let mut next_identities = vec![[0_u8; 32]; identities.len()];
     let mut used_states = vec![false; accounts.len()];
     let mut output = Vec::new();
     let plan_count = policy
@@ -3883,34 +3954,6 @@ fn prepare_lifecycle_v4<'a>(
             {
                 return Err(TradingSbfError::Content.into());
             }
-            let candidate_observations = observations
-                .iter()
-                .zip(accounts)
-                .zip(&candidate_lamports)
-                .map(|((observation, account), lamports)| {
-                    if observation.adapter_authenticated_variable_data() {
-                        AccountObservationV1::new_adapter_authenticated_variable_data(
-                            observation.key(),
-                            observation.owner(),
-                            *lamports,
-                            observation.data(),
-                            account.is_signer,
-                            account.is_writable,
-                            account.executable,
-                        )
-                    } else {
-                        AccountObservationV1::new(
-                            observation.key(),
-                            observation.owner(),
-                            *lamports,
-                            observation.data(),
-                            account.is_signer,
-                            account.is_writable,
-                            account.executable,
-                        )
-                    }
-                })
-                .collect::<Vec<_>>();
             let authenticated_credit = rent_credit
                 .map(|index| {
                     authenticate_lifecycle_credit_v3(
@@ -3942,12 +3985,10 @@ fn prepare_lifecycle_v4<'a>(
             } else {
                 None
             };
-            let input_scalars = output_scalars.clone();
-            let input_identities = output_identities.clone();
-            let mut scalar_scratch = input_scalars.clone();
-            let mut identity_scratch = input_identities.clone();
-            let mut next_scalars = input_scalars.clone();
-            let mut next_identities = input_identities.clone();
+            scalar_scratch.copy_from_slice(&output_scalars);
+            identity_scratch.copy_from_slice(&output_identities);
+            next_scalars.copy_from_slice(&output_scalars);
+            next_identities.copy_from_slice(&output_identities);
             let plan = plan_lifecycle_with_protected_outputs_atomic(
                 selected,
                 LifecycleContextV3 {
@@ -3956,8 +3997,8 @@ fn prepare_lifecycle_v4<'a>(
                     item_index: item,
                     accounts: &candidate_observations,
                     registers: LifecycleRegistersV3 {
-                        scalars: &input_scalars,
-                        identities: &input_identities,
+                        scalars: &output_scalars,
+                        identities: &output_identities,
                     },
                     trading_program: program_id.to_bytes(),
                     system_program: system_program::ID.to_bytes(),
@@ -3983,20 +4024,37 @@ fn prepare_lifecycle_v4<'a>(
             match plan {
                 StateLifecyclePlanV3::Authenticate(_) => {}
                 StateLifecyclePlanV3::Create(value) => {
-                    *candidate_lamports
-                        .get_mut(state)
-                        .ok_or(TradingSbfError::Content)? = value.state_after;
-                    *candidate_lamports
-                        .get_mut(payer.ok_or(TradingSbfError::Content)?)
-                        .ok_or(TradingSbfError::Content)? = value.payer_after;
+                    for (index, balance) in [
+                        (state, value.state_after),
+                        (payer.ok_or(TradingSbfError::Content)?, value.payer_after),
+                    ] {
+                        set_candidate_lamports_v3(
+                            index,
+                            balance,
+                            observations,
+                            accounts,
+                            &mut candidate_lamports,
+                            &mut candidate_observations,
+                        )?;
+                    }
                 }
                 StateLifecyclePlanV3::Close(value) => {
-                    *candidate_lamports
-                        .get_mut(state)
-                        .ok_or(TradingSbfError::Content)? = value.source_after;
-                    *candidate_lamports
-                        .get_mut(rent_credit.ok_or(TradingSbfError::Content)?)
-                        .ok_or(TradingSbfError::Content)? = value.rent_credit_after;
+                    for (index, balance) in [
+                        (state, value.source_after),
+                        (
+                            rent_credit.ok_or(TradingSbfError::Content)?,
+                            value.rent_credit_after,
+                        ),
+                    ] {
+                        set_candidate_lamports_v3(
+                            index,
+                            balance,
+                            observations,
+                            accounts,
+                            &mut candidate_lamports,
+                            &mut candidate_observations,
+                        )?;
+                    }
                 }
             }
             output.push(PreparedLifecycleInvocationV3 {
@@ -4007,8 +4065,8 @@ fn prepare_lifecycle_v4<'a>(
                 seeds,
                 immutable_identity_bindings,
             });
-            output_scalars = next_scalars;
-            output_identities = next_identities;
+            core::mem::swap(&mut output_scalars, &mut next_scalars);
+            core::mem::swap(&mut output_identities, &mut next_identities);
             invocation = invocation.checked_add(1).ok_or(TradingSbfError::Content)?;
         }
         ordinal = ordinal.checked_add(1).ok_or(TradingSbfError::Content)?;
