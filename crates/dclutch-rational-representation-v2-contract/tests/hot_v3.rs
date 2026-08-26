@@ -87,14 +87,19 @@ fn terminal_hot_specializes_exact_child_without_fixed_point() {
     assert_eq!(specialized.asset(0).expect("asset").shard_mint, id(20));
 
     let registers = family
-        .project_registers(family_digest)
+        .project_registers(family_digest, 258)
         .expect("canonical register projection");
     assert_eq!(registers.identity(0), Ok(family_digest));
     assert_eq!(registers.identity(11), Ok(id(20)));
     assert_eq!(registers.scalar(9), Ok(258));
     assert_eq!(registers.scalar(10), Ok(257));
     assert_eq!(registers.identity(15), Err(Error::InvalidWidth));
-    assert_eq!(registers.scalar(16), Err(Error::InvalidWidth));
+    assert_eq!(registers.scalar(16), Ok(258));
+    assert_eq!(registers.scalar(17), Err(Error::InvalidWidth));
+    assert_eq!(
+        family.project_registers(family_digest, 1),
+        Err(Error::InvalidWidth)
+    );
 }
 
 #[test]

@@ -25,9 +25,10 @@ pub struct RationalTerminalHotRequestV3<'a> {
 /// Exact RequestProfile/Transition register contract for terminal redemption.
 ///
 /// Identity zero is reserved for the authenticated Hot family digest. Every
-/// remaining coordinate is projected from the exact family request; there is
-/// no caller-authored register DTO. Scalars preserve full `u64` values and
-/// widen the runtime `u32` Product coordinates without truncation.
+/// remaining request coordinate is projected from the exact family request;
+/// the final scalar is the independently authenticated Product tail count.
+/// There is no caller-authored register DTO. Scalars preserve full `u64`
+/// values and widen runtime `u32` Product coordinates without truncation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RationalTerminalHotRegistersV3 {
     identities: [[u8; 32]; RATIONAL_TERMINAL_HOT_COMMON_IDENTITIES_V3],
@@ -37,7 +38,7 @@ pub struct RationalTerminalHotRegistersV3 {
 /// Exact common identity-bank width for terminal Rational Hot V3.
 pub const RATIONAL_TERMINAL_HOT_COMMON_IDENTITIES_V3: usize = 15;
 /// Exact common scalar-bank width for terminal Rational Hot V3.
-pub const RATIONAL_TERMINAL_HOT_COMMON_SCALARS_V3: usize = 16;
+pub const RATIONAL_TERMINAL_HOT_COMMON_SCALARS_V3: usize = 17;
 
 /// Identity register containing SHA-256 of the exact family request.
 pub const RATIONAL_TERMINAL_IDENTITY_PARENT_DIGEST_V3: usize = 0;
@@ -102,6 +103,8 @@ pub const RATIONAL_TERMINAL_SCALAR_SHARD_SUPPLY_V3: usize = 13;
 pub const RATIONAL_TERMINAL_SCALAR_ACTOR_SHARDS_V3: usize = 14;
 /// Scalar register containing the inactive Structured custody balance.
 pub const RATIONAL_TERMINAL_SCALAR_STRUCTURED_SHARDS_V3: usize = 15;
+/// Scalar register containing the independently authenticated Product tail count.
+pub const RATIONAL_TERMINAL_SCALAR_PRODUCT_OUTCOME_COUNT_V3: usize = 16;
 
 impl RationalTerminalHotRegistersV3 {
     /// Read one exact common identity register.
@@ -269,7 +272,11 @@ impl<'a> RationalTerminalHotRequestV3<'a> {
     pub fn project_registers(
         self,
         family_digest: [u8; 32],
+        product_outcome_count: u32,
     ) -> Result<RationalTerminalHotRegistersV3> {
+        if product_outcome_count < 2 {
+            return Err(Error::InvalidWidth);
+        }
         let mut child_bytes = [0_u8; RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3];
         let child = self.specialize_child_into(family_digest, &mut child_bytes)?;
         let header = child.header();
@@ -316,6 +323,8 @@ impl<'a> RationalTerminalHotRequestV3<'a> {
         scalars[RATIONAL_TERMINAL_SCALAR_SHARD_SUPPLY_V3] = asset.expected_shard_supply;
         scalars[RATIONAL_TERMINAL_SCALAR_ACTOR_SHARDS_V3] = asset.expected_actor_shards;
         scalars[RATIONAL_TERMINAL_SCALAR_STRUCTURED_SHARDS_V3] = asset.expected_structured_shards;
+        scalars[RATIONAL_TERMINAL_SCALAR_PRODUCT_OUTCOME_COUNT_V3] =
+            u64::from(product_outcome_count);
         Ok(RationalTerminalHotRegistersV3 {
             identities,
             scalars,
