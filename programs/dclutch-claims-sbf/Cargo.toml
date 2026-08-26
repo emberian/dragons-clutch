@@ -28,6 +28,7 @@ dclutch-product-runtime-v2 = { path = "../../crates/dclutch-product-runtime-v2" 
 dclutch-product-runtime-v2-svm-reader = { path = "../../crates/dclutch-product-runtime-v2-svm-reader" }
 dclutch-rational-representation-v2-contract = { path = "../../crates/dclutch-rational-representation-v2-contract" }
 dclutch-rational-representation-v2-kernel = { path = "../../crates/dclutch-rational-representation-v2-kernel" }
+dclutch-rational-representation-v2-lifecycle-contract = { path = "../../crates/dclutch-rational-representation-v2-lifecycle-contract" }
 dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }
 dclutch-registry-svm = { path = "../../crates/dclutch-registry-svm" }
 dclutch-rent-contract = { path = "../../crates/dclutch-rent-contract" }

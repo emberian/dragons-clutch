@@ -42,8 +42,10 @@ pub mod founding_v5;
 pub mod liability_basis_v2;
 mod product_runtime_v2;
 pub mod protocol_position_v2;
+pub mod rational_lifecycle_v2;
 pub mod rational_representation_v2;
 pub mod signed_delta_v3;
+pub mod sparse_native_transfer_v1;
 
 entrypoint!(process_instruction);
 
@@ -204,6 +206,15 @@ pub fn process_instruction(
         return signed_delta_v3::process(program_id, accounts, instruction_data);
     }
     if instruction_data
+        .get(..dclutch_claims_svm::sparse_native_transfer_v1::SPARSE_NATIVE_TRANSFER_MAGIC_V1.len())
+        == Some(
+            dclutch_claims_svm::sparse_native_transfer_v1::SPARSE_NATIVE_TRANSFER_MAGIC_V1
+                .as_slice(),
+        )
+    {
+        return sparse_native_transfer_v1::process(program_id, accounts, instruction_data);
+    }
+    if instruction_data
         .get(..dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_REQUEST_MAGIC_V5.len())
         == Some(dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_REQUEST_MAGIC_V5.as_slice())
     {
@@ -218,6 +229,14 @@ pub fn process_instruction(
         == Some(dclutch_rational_representation_v2_contract::REQUEST_MAGIC_V2.as_slice())
     {
         return rational_representation_v2::process(program_id, accounts, instruction_data);
+    }
+    if instruction_data.get(
+        ..dclutch_rational_representation_v2_lifecycle_contract::LIFECYCLE_REQUEST_MAGIC_V2.len(),
+    ) == Some(
+        dclutch_rational_representation_v2_lifecycle_contract::LIFECYCLE_REQUEST_MAGIC_V2
+            .as_slice(),
+    ) {
+        return rational_lifecycle_v2::process(program_id, accounts, instruction_data);
     }
     // ECONOMIC_SLICE_MIGRATION_ONLY: this generic ClaimsPlanV1 route remains
     // reachable solely for the current Trading General child-packet builder
