@@ -407,6 +407,133 @@ fn compartment_total_overflow_refuses_without_reclassification() {
 }
 
 #[test]
+fn collateral_principal_is_never_added_to_native_lamports() {
+    let fixture = Fixture::new();
+    let mut occurrence = fixture.occurrence;
+    put(
+        &mut occurrence,
+        generated::SERIES_OCCURRENCE_HOARD_PRINCIPAL_OFFSET_V2,
+        &u64::MAX.to_le_bytes(),
+    );
+    let value = OccurrenceV2::decode(&occurrence).expect("collateral is a separate asset");
+    assert_eq!(value.funds().hoard_principal(), u64::MAX);
+    assert_eq!(value.funds().checked_native_total(), Ok(90));
+
+    put(
+        &mut occurrence,
+        generated::SERIES_OCCURRENCE_MARKET_RENT_OFFSET_V2,
+        &u64::MAX.to_le_bytes(),
+    );
+    assert_eq!(
+        OccurrenceV2::decode(&occurrence),
+        Err(SeriesV2Error::Funding)
+    );
+}
+
+#[test]
+fn prepare_expire_and_ack_commit_are_atomic_and_replay_safe() {
+    let fixture = Fixture::new();
+    let admitted = fixture.admit();
+    let admitted_ticket = admit_ticket(&fixture.ticket).expect("Ticket identity");
+    let initial = state::SeriesStateV2::new(admitted.template().close_rent());
+    let occurrence_zero = initial
+        .prepare_ticket(0)
+        .expect("synthetic occurrence zero");
+    let occurrence_zero = occurrence_zero
+        .settle_current(1, admitted.template().occurrence_count())
+        .expect("settle zero");
+    let series = occurrence_zero
+        .retire_ticket(2)
+        .expect("retire zero replay");
+    assert_eq!(series.next_occurrence(), admitted.occurrence().occurrence());
+
+    let ticket_state_key = key(72);
+    let (prepare, top_up, dust_refund) = lifecycle::plan_prepare(
+        admitted,
+        admitted_ticket,
+        ticket_state_key,
+        series,
+        3,
+        admitted.occurrence().scheduled_slot() - 1,
+        3,
+        5,
+    )
+    .expect("prepare candidate");
+    assert_eq!(top_up, 92);
+    assert_eq!(dust_refund, 0);
+    assert_eq!(prepare.series_after().revision(), 4);
+    assert_eq!(prepare.ticket_after().revision(), 0);
+
+    let expire = lifecycle::plan_expire(
+        admitted,
+        admitted_ticket,
+        ticket_state_key,
+        prepare.series_after(),
+        prepare.ticket_after(),
+        4,
+        0,
+        admitted
+            .template()
+            .retry_through(admitted.occurrence().occurrence())
+            .expect("retry")
+            + 1,
+    )
+    .expect("expiry candidate");
+    assert_eq!(expire.native_from_ticket(), 90);
+    assert_eq!(
+        lifecycle::plan_expire(
+            admitted,
+            admitted_ticket,
+            ticket_state_key,
+            expire.series_after(),
+            expire.ticket_after(),
+            5,
+            1,
+            u64::MAX,
+        ),
+        Err(lifecycle::LifecycleErrorV2::Replay)
+    );
+
+    let request = expire.request();
+    let request_bytes = request.encode().expect("request bytes");
+    let request_digest = core_identity(
+        ContentId::new(solana_program::hash::hash(&request_bytes).to_bytes())
+            .expect("request digest"),
+    )
+    .expect("Core digest");
+    let post_digest =
+        core_identity(ContentId::new([88; 32]).expect("post digest")).expect("Core post digest");
+    let core_program = core_pubkey_identity(fixture.core_program).expect("Core program");
+    let ack = dclutch_market_core_codec::SeriesCoreAckV1::new(
+        request,
+        core_program,
+        request_digest,
+        post_digest,
+    );
+    let (series_bytes, ticket_bytes) = expire
+        .commit_after_ack(ack, core_program, request_digest, post_digest)
+        .expect("commit only after exact ack");
+    assert_eq!(
+        state::SeriesStateV2::decode(&series_bytes, admitted.template().occurrence_count())
+            .expect("Series candidate"),
+        expire.series_after()
+    );
+    assert_eq!(
+        state::TicketStateV2::decode(&ticket_bytes).expect("Ticket candidate"),
+        expire.ticket_after()
+    );
+    assert_eq!(
+        expire.commit_after_ack(
+            ack,
+            core_pubkey_identity(key(99)).expect("hostile Core"),
+            request_digest,
+            post_digest,
+        ),
+        Err(lifecycle::LifecycleErrorV2::CoreAck)
+    );
+}
+
+#[test]
 fn core_request_uses_exact_v2_ticket_and_compartments() {
     let fixture = Fixture::new();
     let admitted = fixture.admit();

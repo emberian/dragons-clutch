@@ -70,12 +70,14 @@ structure FoundingFunds where
   foundingWorkLamports : Nat
   deriving DecidableEq, Repr
 
-def FoundingFunds.total (funds : FoundingFunds) : Nat :=
-  funds.hoardPrincipal + funds.marketRentLamports +
-    funds.capabilityNativeLamports + funds.foundingWorkLamports
+/-! Hoard principal is in Realm-collateral atomic units.  The other three
+fields are lamports, so there is intentionally no cross-asset total. -/
+def FoundingFunds.nativeLamports (funds : FoundingFunds) : Nat :=
+  funds.marketRentLamports + funds.capabilityNativeLamports +
+    funds.foundingWorkLamports
 
 def FoundingFunds.valid (lamportLimit : Nat) (funds : FoundingFunds) : Bool :=
-  0 < funds.hoardPrincipal && funds.total < lamportLimit
+  0 < funds.hoardPrincipal && funds.nativeLamports < lamportLimit
 
 /-- One exact scheduled realization.  Basis and representation are opaque
 content identities; this structure contains no categorical, width, scale, or

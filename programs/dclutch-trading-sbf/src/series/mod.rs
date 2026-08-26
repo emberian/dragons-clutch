@@ -16,6 +16,13 @@ use solana_program::{hash::hashv, pubkey::Pubkey};
 #[allow(dead_code, missing_docs)]
 mod generated;
 
+/// Solana account authentication and commit-last physical persistence.
+pub mod accounts;
+/// Total commit-last lifecycle planning for recurring Series V2.
+pub mod lifecycle;
+/// Fixed-layout mutable replay state owned by the selected Trading program.
+pub mod state;
+
 pub use generated::{
     SERIES_MAXIMUM_MERKLE_HEIGHT_V2, SERIES_OCCURRENCE_BYTES_V2, SERIES_TEMPLATE_BYTES_V2,
     SERIES_TICKET_BYTES_V2,
@@ -59,11 +66,13 @@ pub struct FoundingFundsV2 {
 }
 
 impl FoundingFundsV2 {
-    /// Return the checked sum without reclassifying any compartment.
-    pub fn checked_total(self) -> Result<u64, SeriesV2Error> {
-        self.hoard_principal
-            .checked_add(self.market_rent)
-            .and_then(|total| total.checked_add(self.capability_native))
+    /// Return the checked native-lamport total.
+    ///
+    /// Hoard principal is denominated in the Realm-selected collateral asset
+    /// and is deliberately excluded. It is never added to lamports.
+    pub fn checked_native_total(self) -> Result<u64, SeriesV2Error> {
+        self.market_rent
+            .checked_add(self.capability_native)
             .and_then(|total| total.checked_add(self.founding_work))
             .ok_or(SeriesV2Error::Funding)
     }
@@ -316,7 +325,7 @@ impl OccurrenceV2 {
         if funds.hoard_principal == 0 {
             return Err(SeriesV2Error::Funding);
         }
-        funds.checked_total()?;
+        funds.checked_native_total()?;
         Ok(Self {
             occurrence: read_u32(bytes, generated::SERIES_OCCURRENCE_INDEX_OFFSET_V2)?,
             scheduled_slot: read_u64(bytes, generated::SERIES_OCCURRENCE_SCHEDULED_SLOT_OFFSET_V2)?,
@@ -419,6 +428,25 @@ pub struct TicketV2 {
     funds: FoundingFundsV2,
 }
 
+/// One hostile-decoded Ticket paired with its exact content identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AdmittedTicketV2 {
+    ticket: TicketV2,
+    content_id: ContentId,
+}
+
+impl AdmittedTicketV2 {
+    /// Return the exact immutable Ticket record.
+    pub const fn ticket(self) -> TicketV2 {
+        self.ticket
+    }
+
+    /// Return its domain-separated content identity.
+    pub const fn content_id(self) -> ContentId {
+        self.content_id
+    }
+}
+
 impl TicketV2 {
     /// Decode one exact Lean-owned 256-byte Ticket commitment.
     pub fn decode(bytes: &[u8]) -> Result<Self, SeriesV2Error> {
@@ -444,7 +472,7 @@ impl TicketV2 {
         if funds.hoard_principal == 0 {
             return Err(SeriesV2Error::Funding);
         }
-        funds.checked_total()?;
+        funds.checked_native_total()?;
         Ok(Self {
             occurrence: read_u32(bytes, generated::SERIES_TICKET_INDEX_OFFSET_V2)?,
             template: read_content_id(bytes, generated::SERIES_TICKET_TEMPLATE_OFFSET_V2)?,
@@ -707,6 +735,20 @@ pub fn funding_list_id(funding_states: &[Pubkey]) -> Result<ContentId, SeriesV2E
         &generated::SERIES_FUNDING_LIST_DOMAIN_V2,
         preimage.get(..used).ok_or(SeriesV2Error::Funding)?,
     )
+}
+
+/// Compute the immutable identity of one exact canonical Ticket V2 record.
+pub fn ticket_content_id(ticket_bytes: &[u8]) -> Result<ContentId, SeriesV2Error> {
+    TicketV2::decode(ticket_bytes)?;
+    content_id(&generated::SERIES_TICKET_CONTENT_DOMAIN_V2, ticket_bytes)
+}
+
+/// Hostile-decode one Ticket and bind the exact bytes to their identity.
+pub fn admit_ticket(ticket_bytes: &[u8]) -> Result<AdmittedTicketV2, SeriesV2Error> {
+    Ok(AdmittedTicketV2 {
+        ticket: TicketV2::decode(ticket_bytes)?,
+        content_id: ticket_content_id(ticket_bytes)?,
+    })
 }
 
 /// Require actual ordered FundingState accounts to match the occurrence ID.
