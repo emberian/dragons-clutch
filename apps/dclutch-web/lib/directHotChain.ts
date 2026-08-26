@@ -22,6 +22,8 @@ import {
   CAPABILITY_PROGRAM_V3_BYTES,
   DESCRIPTORCONTRACT_SCHEMA_RELEASE_ID,
   DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3,
+  DIRECT_ORDINARY_COMMON_IDENTITIES_V3,
+  DIRECT_ORDINARY_COMMON_SCALARS_V3,
   DIRECT_SUCCESSOR_KIND_ID_V3,
   EFFECT_SCHEMA_RELEASE_ID,
   EXECUTION_STRATEGY_ARTIFACT_PROFILE_V2,
@@ -64,6 +66,8 @@ import {
   HOT_TRADING_PROGRAMDATA_ACCOUNT_V3,
   HOT_TRANSITION_RAW_ACCOUNT_V3,
   HOT_TRANSITION_STAGING_ACCOUNT_V3,
+  IDENTITY_BUYER_NATIVE_SIGNER_V3,
+  IDENTITY_SELLER_NATIVE_SIGNER_V3,
   LIFECYCLE_SCHEMA_RELEASE_ID,
   REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID,
   STRATEGY_DISPOSITION_OFFSET_V2,
@@ -400,7 +404,8 @@ export function validateDirectSignedRequestProfileV2(bytes: Uint8Array): void {
   if (fixedRequestBytes !== DirectAbi.DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3
       || itemRequestBytes !== 0 || fixedOperations === 0 || itemOperations !== 0
       || itemScalarStride !== 0 || itemIdentityStride !== 0
-      || (commonScalars === 0 && commonIdentities === 0)
+      || commonScalars !== DIRECT_ORDINARY_COMMON_SCALARS_V3
+      || commonIdentities !== DIRECT_ORDINARY_COMMON_IDENTITIES_V3
       || embedded.length !== DirectAbi.REQUEST_PROFILE_HEADER_BYTES_V1
         + fixedOperations * DirectAbi.REQUEST_PROFILE_OPERATION_BYTES_V1) {
     throw new Error('embedded RequestProfile does not select the exact fixed-width InlineOrdinary request');
@@ -447,6 +452,10 @@ export function validateDirectSignedRequestProfileV2(bytes: Uint8Array): void {
     const destination = readU32(bytes, offset + 4);
     if (destination >= commonIdentities || destinations.has(destination)) throw new Error('InlineOrdinary signature requirements select an invalid or aliased identity register');
     destinations.add(destination);
+  }
+  if (!destinations.has(IDENTITY_SELLER_NATIVE_SIGNER_V3)
+      || !destinations.has(IDENTITY_BUYER_NATIVE_SIGNER_V3)) {
+    throw new Error('InlineOrdinary signature requirements do not target the canonical seller/buyer signer registers');
   }
 }
 

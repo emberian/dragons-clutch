@@ -95,7 +95,8 @@ function signedRequestProfileFixture(): Uint8Array {
   putU16(bytes, embedded + Abi.REQUEST_PROFILE_ARTIFACT_OFFSET, Abi.REQUEST_PROFILE_ARTIFACT_PROFILE_V1);
   putU32(bytes, embedded + Abi.REQUEST_PROFILE_FIXED_REQUEST_BYTES_OFFSET, Abi.DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3);
   putU16(bytes, embedded + Abi.REQUEST_PROFILE_FIXED_OPERATIONS_OFFSET, 1);
-  putU16(bytes, embedded + Abi.REQUEST_PROFILE_COMMON_IDENTITIES_OFFSET, 2);
+  putU16(bytes, embedded + Abi.REQUEST_PROFILE_COMMON_SCALARS_OFFSET, Abi.DIRECT_ORDINARY_COMMON_SCALARS_V3);
+  putU16(bytes, embedded + Abi.REQUEST_PROFILE_COMMON_IDENTITIES_OFFSET, Abi.DIRECT_ORDINARY_COMMON_IDENTITIES_V3);
   const operation = embedded + Abi.REQUEST_PROFILE_HEADER_BYTES_V1;
   bytes[operation + Abi.REQUEST_OPERATION_OPCODE_OFFSET] = 2;
   putU32(bytes, operation + Abi.REQUEST_OPERATION_REQUEST_OFFSET_OFFSET, 12);
@@ -103,10 +104,10 @@ function signedRequestProfileFixture(): Uint8Array {
   const requirements = embedded + embeddedBytes;
   putU16(bytes, requirements, 192);
   putU16(bytes, requirements + 2, 172);
-  putU32(bytes, requirements + 4, 0);
+  putU32(bytes, requirements + 4, Abi.IDENTITY_SELLER_NATIVE_SIGNER_V3);
   putU16(bytes, requirements + Abi.NATIVE_SIGNATURE_REQUIREMENT_BYTES_V1, 396);
   putU16(bytes, requirements + Abi.NATIVE_SIGNATURE_REQUIREMENT_BYTES_V1 + 2, 172);
-  putU32(bytes, requirements + Abi.NATIVE_SIGNATURE_REQUIREMENT_BYTES_V1 + 4, 1);
+  putU32(bytes, requirements + Abi.NATIVE_SIGNATURE_REQUIREMENT_BYTES_V1 + 4, Abi.IDENTITY_BUYER_NATIVE_SIGNER_V3);
   return bytes;
 }
 
@@ -144,7 +145,7 @@ describe('Direct V3 chain-selected artifacts', () => {
     expect(() => validateDirectSignedRequestProfileV2(offset)).toThrow(/current-instruction message/);
 
     const alias = signedRequestProfileFixture();
-    putU32(alias, requirements + Abi.NATIVE_SIGNATURE_REQUIREMENT_BYTES_V1 + 4, 0);
+    putU32(alias, requirements + Abi.NATIVE_SIGNATURE_REQUIREMENT_BYTES_V1 + 4, Abi.IDENTITY_SELLER_NATIVE_SIGNER_V3);
     expect(() => validateDirectSignedRequestProfileV2(alias)).toThrow(/invalid or aliased/);
 
     const reserved = signedRequestProfileFixture();
