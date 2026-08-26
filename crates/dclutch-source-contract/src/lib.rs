@@ -30,6 +30,7 @@ mod generated_source_material_v2;
 mod generated_source_recovery_policy_v2;
 #[allow(missing_docs)]
 mod generated_source_resolution_state_v2;
+mod provider_join_v2;
 mod source_material_v2;
 mod source_recovery_policy_v2;
 mod source_resolution_v2;
@@ -45,6 +46,7 @@ pub use generated_source_recovery_policy_v2::{
     RECOVERY_POLICY_MAX_ATTEMPTS_V2, RECOVERY_POLICY_SCHEMA_ID_V2,
     RECOVERY_POLICY_SCHEMA_PREIMAGE_V2, RECOVERY_POLICY_SCHEMA_VERSION_V2,
 };
+pub use provider_join_v2::PythProviderAdapterObligationV2;
 pub use source_material_v2::SourceMaterialV2;
 pub use source_recovery_policy_v2::{RecoveryAttemptV2, RecoveryPolicyV2};
 pub use source_resolution_v2::{

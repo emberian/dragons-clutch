@@ -13,6 +13,7 @@ mod generated_source_resolution;
 #[allow(missing_docs)]
 #[rustfmt::skip]
 mod generated_v2;
+mod provider_v3;
 mod v2;
 
 pub use generated_v2::{
@@ -20,6 +21,10 @@ pub use generated_v2::{
     ACCEPT_PYTH_V2_VERSION, RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_MAGIC_V2,
     RESOLUTION_CERTIFICATE_VERSION_V2, SOURCE_CLOSURE_RECEIPT_BYTES_V2,
     SOURCE_CLOSURE_RECEIPT_MAGIC_V2, SOURCE_CLOSURE_RECEIPT_VERSION_V2,
+};
+pub use provider_v3::{
+    PROVIDER_EXECUTION_RECEIPT_BYTES_V3, PROVIDER_EXECUTION_REQUEST_BYTES_V3, ProviderCallerV3,
+    ProviderExecutionReceiptV3, ProviderExecutionRequestV3,
 };
 pub use v2::{
     AcceptPythRequestV2, ResolutionCertificateKindV2, ResolutionCertificateV2,

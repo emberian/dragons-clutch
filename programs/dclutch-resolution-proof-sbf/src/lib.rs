@@ -18,6 +18,9 @@ use solana_program::{
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 
 mod core_effect;
+/// Current-ABI real-provider evidence composition shared by fixed Core and
+/// data-defined Trading callers.
+pub mod provider_v3;
 
 /// Stable Resolution controller refusal.
 #[repr(u32)]
