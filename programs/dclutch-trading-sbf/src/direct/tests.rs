@@ -1,9 +1,14 @@
-use super::{buy_escrow::*, complementary::*, physical::*};
+use super::{buy_escrow::*, complementary::*, physical::*, sell_escrow::*};
 use dclutch_claims_svm::{
-    CallerRole as ClaimsCallerRole, ClaimsPlanV1, ClaimsReceiptV1,
+    CallerRole as ClaimsCallerRole,
     affine_batch_v2::{
         AffineBatchPlanInputV2, AffineBatchPlanV2, AffineBatchPositionV2, AffineBatchReceiptV2,
         AffineBatchRowInputV2, AffineBatchRowV2, DeltaDirectionV2, SignedMagnitudeV2,
+    },
+    protocol_position_v2::{
+        ProtocolPositionAdmissionEvidenceV2, ProtocolPositionAdmissionSeedsV2,
+        ProtocolPositionAdmissionV2, ProtocolPositionCloseEvidenceV2,
+        ProtocolPositionCloseReceiptV2, ProtocolPositionOwnerKindV2, ProtocolPositionSeedsV2,
     },
 };
 use dclutch_custody_contract::{
@@ -180,7 +185,7 @@ fn register_canonical(
     register(root, maker, signed, selected, bump)
 }
 
-fn fixture(fee_basis_points: u16) -> (RegisteredOrdinaryInputV2, DirectOrdinaryClaimsContextV2) {
+fn ordinary_fixture(fee_basis_points: u16) -> RegisteredOrdinaryInputV2 {
     let selected = config(fee_basis_points, id(6));
     let seller = register(
         DirectRootStateV1::new(),
@@ -196,123 +201,35 @@ fn fixture(fee_basis_points: u16) -> (RegisteredOrdinaryInputV2, DirectOrdinaryC
         selected,
         3,
     );
-    (
-        RegisteredOrdinaryInputV2 {
-            root: buyer.root,
-            seller: RegisteredParticipantV2 {
-                maker_root: seller.maker_root,
-                record: seller.record,
-                observed_record_lamports: 100,
-            },
-            buyer: RegisteredParticipantV2 {
-                maker_root: buyer.maker_root,
-                record: buyer.record,
-                observed_record_lamports: 100,
-            },
-            execution: RegisteredExecutionV2 {
-                config: selected,
-                outcome_count: 3,
-                slot: 5,
-                fill: 20,
-                execution_price: 50,
-            },
+    RegisteredOrdinaryInputV2 {
+        root: buyer.root,
+        seller: RegisteredParticipantV2 {
+            maker_root: seller.maker_root,
+            record: seller.record,
+            observed_record_lamports: 100,
         },
-        DirectOrdinaryClaimsContextV2 {
-            core_market: core_market_view(3),
-            trading_program: id(10),
-            claims_program: id(11),
-            parent_request_digest: id(17),
-            claims_market_revision: 7,
-            seller_position_revision: 8,
-            buyer_position_revision: 9,
+        buyer: RegisteredParticipantV2 {
+            maker_root: buyer.maker_root,
+            record: buyer.record,
+            observed_record_lamports: 100,
         },
-    )
-}
-
-fn prepare(
-    input: RegisteredOrdinaryInputV2,
-    context: DirectOrdinaryClaimsContextV2,
-) -> (DirectOrdinaryClaimsPlanV2, [u8; 232]) {
-    let mut quantities = [0_u8; 24];
-    let mut scratch = [0_u8; 232];
-    let mut output = [0xa5_u8; 232];
-    let plan = prepare_registered_ordinary_claims_v2(
-        input,
-        context,
-        &mut quantities,
-        &mut scratch,
-        &mut output,
-    )
-    .expect("physical plan");
-    (plan, output)
-}
-
-#[test]
-fn ordinary_claims_projection_binds_runtime_width_and_settlement() {
-    let (input, context) = fixture(1_000);
-    let (plan, claims_bytes) = prepare(input, context);
-    assert_eq!(plan.settlement.gross_collateral, 10);
-    assert_eq!(plan.settlement.seller_net_collateral_credit, 9);
-    assert_eq!(plan.settlement.total_fee_transfer, 2);
-    assert_eq!(plan.settlement.buyer_collateral_debit, 11);
-    let claims = ClaimsPlanV1::decode(&claims_bytes).expect("Claims plan");
-    assert_eq!(claims.source_owner(), id(2));
-    assert_eq!(claims.destination_owner(), id(3));
-    assert_eq!(claims.quantity(0), Ok(0));
-    assert_eq!(claims.quantity(1), Ok(20));
-    assert_eq!(claims.quantity(2), Ok(0));
-}
-
-#[test]
-fn hostile_core_width_and_output_refuse_atomically() {
-    let (input, context) = fixture(1_000);
-    let mut quantities = [0_u8; 24];
-    let mut scratch = [0_u8; 232];
-    let mut output = [0xa5_u8; 232];
-    let before = output;
-    assert_eq!(
-        prepare_registered_ordinary_claims_v2(
-            input,
-            context,
-            &mut quantities[..16],
-            &mut scratch,
-            &mut output,
-        ),
-        Err(DirectPhysicalError::Width)
-    );
-    assert_eq!(output, before);
-}
-
-#[test]
-fn exact_child_receipts_accept_and_substitutions_refuse() {
-    let (input, context) = fixture(1_000);
-    let (_plan, claims_bytes) = prepare(input, context);
-    let claims_plan = ClaimsPlanV1::decode(&claims_bytes).expect("Claims plan");
-    let claims_receipt = ClaimsReceiptV1::new(
-        claims_plan,
-        hash(&claims_bytes).to_bytes(),
-        context.claims_program,
-        context.claims_market_revision + 1,
-        context.seller_position_revision + 1,
-        context.buyer_position_revision + 1,
-        0,
-        id(70),
-    )
-    .expect("Claims receipt")
-    .to_bytes();
-    verify_direct_claims_receipt_v2(context, &claims_bytes, &claims_receipt)
-        .expect("Claims acknowledgement");
-    let mut hostile_claims = claims_receipt;
-    *hostile_claims.get_mut(80).expect("hostile digest byte") ^= 1;
-    assert!(verify_direct_claims_receipt_v2(context, &claims_bytes, &hostile_claims).is_err());
+        execution: RegisteredExecutionV2 {
+            config: selected,
+            outcome_count: 3,
+            slot: 5,
+            fill: 20,
+            execution_price: 50,
+        },
+    }
 }
 
 #[test]
 fn state_candidate_is_commit_last_for_partial_and_terminal_records() {
-    let (input, context) = fixture(1_000);
+    let input = ordinary_fixture(1_000);
     let selected = input.execution.config;
     let width = input.execution.outcome_count;
-    let (partial, _) = prepare(input, context);
+    let partial = dclutch_direct_codec::successor::settle_registered_ordinary_v2(input)
+        .expect("partial ordinary settlement");
     let mut seller_maker = [0xa5; DIRECT_MAKER_REPLAY_BYTES_V1];
     let mut buyer_maker = [0xa5; DIRECT_MAKER_REPLAY_BYTES_V1];
     let mut seller_scratch = [0; DIRECT_REGISTERED_RECORD_BYTES_V2];
@@ -320,7 +237,7 @@ fn state_candidate_is_commit_last_for_partial_and_terminal_records() {
     let mut seller_record = [0xa5; DIRECT_REGISTERED_RECORD_BYTES_V2];
     let mut buyer_record = [0xa5; DIRECT_REGISTERED_RECORD_BYTES_V2];
     let candidate = encode_registered_ordinary_state_candidate_v2(
-        partial.settlement,
+        partial,
         selected,
         width,
         DirectOrdinaryStateBuffersV2 {
@@ -337,15 +254,15 @@ fn state_candidate_is_commit_last_for_partial_and_terminal_records() {
     assert_eq!(candidate.buyer_record, DirectRecordCommitV2::WriteLive);
     assert_eq!(
         MakerReplayRootV1::decode(&seller_maker),
-        Ok(partial.settlement.seller.maker_root)
+        Ok(partial.seller.maker_root)
     );
     assert_eq!(
         MakerReplayRootV1::decode(&buyer_maker),
-        Ok(partial.settlement.buyer.maker_root)
+        Ok(partial.buyer.maker_root)
     );
     assert_eq!(
         DirectRegisteredIntentV2::decode_selected(selected, width, &seller_record),
-        match partial.settlement.seller.record {
+        match partial.seller.record {
             RegisteredRecordAfterFillV2::Live(record) => Ok(record),
             RegisteredRecordAfterFillV2::Closed(_) => panic!("partial seller must remain live"),
         }
@@ -358,7 +275,8 @@ fn state_candidate_is_commit_last_for_partial_and_terminal_records() {
         },
         ..input
     };
-    let (terminal, _) = prepare(terminal_input, context);
+    let terminal = dclutch_direct_codec::successor::settle_registered_ordinary_v2(terminal_input)
+        .expect("terminal ordinary settlement");
     let mut terminal_seller_maker = [0xa5; DIRECT_MAKER_REPLAY_BYTES_V1];
     let mut terminal_buyer_maker = [0xa5; DIRECT_MAKER_REPLAY_BYTES_V1];
     let mut terminal_seller_scratch = [0; DIRECT_REGISTERED_RECORD_BYTES_V2];
@@ -367,7 +285,7 @@ fn state_candidate_is_commit_last_for_partial_and_terminal_records() {
     let mut terminal_buyer_record = [0xa5; DIRECT_REGISTERED_RECORD_BYTES_V2];
     let closed_record_before = terminal_seller_record;
     let terminal_candidate = encode_registered_ordinary_state_candidate_v2(
-        terminal.settlement,
+        terminal,
         selected,
         width,
         DirectOrdinaryStateBuffersV2 {
@@ -397,7 +315,7 @@ fn state_candidate_is_commit_last_for_partial_and_terminal_records() {
     let buyer_record_before = terminal_buyer_record;
     assert_eq!(
         encode_registered_ordinary_state_candidate_v2(
-            terminal.settlement,
+            terminal,
             selected,
             width,
             DirectOrdinaryStateBuffersV2 {
@@ -773,6 +691,7 @@ fn claims_context(fill: u64) -> DirectComplementaryClaimsContextV2 {
     DirectComplementaryClaimsContextV2 {
         core_market: core_market_view(3),
         claims_program: id(11),
+        trading_program: id(10),
         parent_request_digest: id(17),
         linked_basis_record_digest: id(39),
         claims_market_revision: 7,
@@ -873,6 +792,12 @@ fn complementary_claims_batch_binds_every_runtime_row_and_receipt() {
             DirectComplementaryClaimsParticipantV2 {
                 record_before: *records.get(slot).expect("record"),
                 candidate: *candidates.get(slot).expect("candidate"),
+                record: derive_pda(
+                    id(10),
+                    &RegisteredIntentSeedsV2::from_record(*records.get(slot).expect("record"))
+                        .as_slices(),
+                )
+                .0,
                 expected_position_revision: *revisions.get(slot).expect("revision"),
             },
         )
@@ -925,6 +850,8 @@ fn complementary_claims_substitution_and_wrong_action_refuse() {
     let plan =
         validate_complementary_claims_plan_v2(ComplementaryActionV2::Split, context, &packet)
             .expect("split plan");
+    let record = *records.get(1).expect("record");
+    let candidate = *candidates.get(1).expect("candidate");
     assert_eq!(
         validate_complementary_claims_item_v2(
             ComplementaryActionV2::Split,
@@ -932,8 +859,13 @@ fn complementary_claims_substitution_and_wrong_action_refuse() {
             plan,
             1,
             DirectComplementaryClaimsParticipantV2 {
-                record_before: records[1],
-                candidate: candidates[1],
+                record_before: record,
+                candidate,
+                record: derive_pda(
+                    id(10),
+                    &RegisteredIntentSeedsV2::from_record(record).as_slices(),
+                )
+                .0,
                 expected_position_revision: 99,
             },
         ),
@@ -951,6 +883,411 @@ fn complementary_claims_substitution_and_wrong_action_refuse() {
             &packet,
         ),
         Err(DirectPhysicalError::Binding)
+    );
+}
+
+#[test]
+fn complementary_merge_claims_debits_record_positions_not_makers() {
+    let context = claims_context(100);
+    let (_roots, records, candidates) = complementary_candidates(0);
+    let record_keys = core::array::from_fn(|index| {
+        let record = *records.get(index).expect("record");
+        derive_pda(
+            context.trading_program,
+            &RegisteredIntentSeedsV2::from_record(record).as_slices(),
+        )
+        .0
+    });
+    let revisions = [30_u64, 31, 32];
+    let packet = complementary_claims_packet(
+        ComplementaryActionV2::Merge,
+        context,
+        record_keys,
+        revisions,
+    );
+    let plan =
+        validate_complementary_claims_plan_v2(ComplementaryActionV2::Merge, context, &packet)
+            .expect("merge plan");
+    for outcome in 0..3_u32 {
+        let slot = usize::try_from(outcome).expect("slot");
+        validate_complementary_claims_item_v2(
+            ComplementaryActionV2::Merge,
+            context,
+            plan,
+            outcome,
+            DirectComplementaryClaimsParticipantV2 {
+                record_before: *records.get(slot).expect("record"),
+                candidate: *candidates.get(slot).expect("candidate"),
+                record: *record_keys.get(slot).expect("record key"),
+                expected_position_revision: *revisions.get(slot).expect("revision"),
+            },
+        )
+        .expect("record Position merge debit");
+    }
+
+    let maker_owners = core::array::from_fn(|index| records.get(index).expect("record").maker());
+    let hostile = complementary_claims_packet(
+        ComplementaryActionV2::Merge,
+        context,
+        maker_owners,
+        revisions,
+    );
+    let hostile_plan =
+        validate_complementary_claims_plan_v2(ComplementaryActionV2::Merge, context, &hostile)
+            .expect("structurally valid hostile merge");
+    assert_eq!(
+        validate_complementary_claims_item_v2(
+            ComplementaryActionV2::Merge,
+            context,
+            hostile_plan,
+            0,
+            DirectComplementaryClaimsParticipantV2 {
+                record_before: *records.first().expect("record"),
+                candidate: *candidates.first().expect("candidate"),
+                record: *record_keys.first().expect("record key"),
+                expected_position_revision: revisions[0],
+            },
+        ),
+        Err(DirectPhysicalError::Binding)
+    );
+}
+
+fn sell_escrow_fixture() -> (
+    RegisteredIntentCreationV2,
+    DirectSellPositionAccountsV2,
+    DirectPositionFundingV2,
+    DirectSellEscrowContextV2,
+) {
+    let creation = register_canonical(
+        DirectRootStateV1::new(),
+        id(2),
+        intent(0, 0, id(20), 1_000),
+        config(1_000, id(6)),
+    );
+    let record_seeds = RegisteredIntentSeedsV2::from_record(creation.record);
+    let (record, bump) = derive_pda(id(10), &record_seeds.as_slices());
+    assert_eq!(bump, creation.record.bump());
+    let aggregate = core_market_view(3).claims_aggregate().to_bytes();
+    let position_seeds = ProtocolPositionSeedsV2::new(aggregate, record).expect("Position seeds");
+    let admission_seeds =
+        ProtocolPositionAdmissionSeedsV2::new(aggregate, record).expect("admission seeds");
+    let (position, _) = derive_pda(id(11), &position_seeds.as_slices());
+    let (admission, _) = derive_pda(id(11), &admission_seeds.as_slices());
+    (
+        creation,
+        DirectSellPositionAccountsV2 {
+            record,
+            position,
+            admission,
+        },
+        DirectPositionFundingV2 {
+            position_lamports: 105,
+            admission_lamports: 57,
+            position_rent_principal: 100,
+            admission_rent_principal: 50,
+        },
+        DirectSellEscrowContextV2 {
+            core_market: core_market_view(3),
+            trading_program: id(10),
+            claims_program: id(11),
+            rent_program: id(81),
+            parent_request_digest: id(17),
+            linked_basis_record_digest: id(39),
+            claims_market_revision: 7,
+        },
+    )
+}
+
+fn sell_affine_packet(
+    context: DirectSellEscrowContextV2,
+    source: [u8; 32],
+    source_revision: u64,
+    destination: [u8; 32],
+    destination_revision: u64,
+    outcome: u32,
+    quantity: u64,
+) -> [u8; 384] {
+    let positions = [
+        AffineBatchPositionV2::new(source, source_revision).expect("source Position"),
+        AffineBatchPositionV2::new(destination, destination_revision)
+            .expect("destination Position"),
+    ];
+    let rows = [AffineBatchRowV2::new(
+        AffineBatchRowInputV2 {
+            source_present: true,
+            destination_present: true,
+            outcome,
+            source_position_index: 0,
+            destination_position_index: 1,
+            aggregate_delta: signed(DeltaDirectionV2::Neutral, 0),
+            source_delta: signed(DeltaDirectionV2::Debit, quantity),
+            destination_delta: signed(DeltaDirectionV2::Credit, quantity),
+        },
+        context.core_market.product().outcome_count,
+        2,
+    )
+    .expect("affine row")];
+    let mut output = [0; 384];
+    AffineBatchPlanV2::encode_into(
+        AffineBatchPlanInputV2 {
+            caller_role: ClaimsCallerRole::Trading,
+            release_set: context.core_market.release_set().release_set_id.to_bytes(),
+            market: context.core_market.market().to_bytes(),
+            request_id: context.parent_request_digest,
+            product_record_digest: context.core_market.product().product_record.to_bytes(),
+            semantic_basis_id: context.core_market.product().liability_basis.to_bytes(),
+            linked_basis_record_digest: context.linked_basis_record_digest,
+            expected_market_revision: context.claims_market_revision,
+            outcome_count: context.core_market.product().outcome_count,
+        },
+        &positions,
+        &rows,
+        &mut output,
+    )
+    .expect("affine packet");
+    output
+}
+
+fn sell_admission(
+    request: dclutch_claims_svm::protocol_position_v2::ProtocolPositionRequestV2,
+    context: DirectSellEscrowContextV2,
+) -> ProtocolPositionAdmissionV2 {
+    let request_bytes = request.to_bytes().expect("request bytes");
+    ProtocolPositionAdmissionV2::new(
+        request,
+        ProtocolPositionAdmissionEvidenceV2 {
+            product_record_digest: context.core_market.product().product_record.to_bytes(),
+            semantic_basis_id: context.core_market.product().liability_basis.to_bytes(),
+            linked_basis_record_digest: context.linked_basis_record_digest,
+            request_digest: hash(&request_bytes).to_bytes(),
+            claims_program: context.claims_program,
+            trading_program: context.trading_program,
+            capability_descriptor: [0; 32],
+            capability_outcome: 0,
+            outcome_count: context.core_market.product().outcome_count,
+        },
+    )
+    .expect("admission")
+}
+
+#[test]
+fn sell_registration_admits_record_position_and_reserves_exact_claims() {
+    let (creation, accounts, funding, context) = sell_escrow_fixture();
+    let plan = prepare_sell_registration_v2(creation, accounts, funding, context)
+        .expect("Sell registration");
+    assert_eq!(plan.admission.position_owner, accounts.record);
+    assert_eq!(plan.admission.rent_credit, creation.record.rent_owner());
+    assert_eq!(plan.reserved_claims, 100);
+    let receipt = sell_admission(plan.admission, context)
+        .to_receipt_bytes()
+        .expect("admission receipt");
+    verify_sell_admission_receipt_v2(plan.admission, context, &receipt)
+        .expect("exact admission receipt");
+
+    let packet = sell_affine_packet(
+        context,
+        creation.record.maker(),
+        4,
+        accounts.record,
+        0,
+        creation.record.intent().outcome,
+        plan.reserved_claims,
+    );
+    let expectation = DirectSellAffineExpectationV2 {
+        action: DirectSellAffineActionV2::Register,
+        record_before: creation.record,
+        record: accounts.record,
+        user: creation.record.maker(),
+        record_position_revision: 0,
+        user_position_revision: 4,
+        quantity: plan.reserved_claims,
+    };
+    validate_sell_affine_plan_v2(expectation, context, &packet).expect("maker-to-record reserve");
+
+    let hostile_accounts = DirectSellPositionAccountsV2 {
+        position: id(99),
+        ..accounts
+    };
+    assert_eq!(
+        prepare_sell_registration_v2(creation, hostile_accounts, funding, context),
+        Err(DirectPhysicalError::Binding)
+    );
+}
+
+#[test]
+fn sell_partial_fill_releases_only_from_record_position() {
+    let (creation, accounts, funding, context) = sell_escrow_fixture();
+    let buyer = id(77);
+    let aggregate = context.core_market.claims_aggregate().to_bytes();
+    let buyer_position = ProtocolPositionSeedsV2::new(aggregate, buyer).expect("buyer Position");
+    let buyer_admission =
+        ProtocolPositionAdmissionSeedsV2::new(aggregate, buyer).expect("buyer admission");
+    let buyer_accounts = DirectUserPositionAccountsV2 {
+        owner: buyer,
+        position: derive_pda(context.claims_program, &buyer_position.as_slices()).0,
+        admission: derive_pda(context.claims_program, &buyer_admission.as_slices()).0,
+    };
+    let admission = prepare_sell_user_admission_v2(buyer_accounts, id(82), funding, context)
+        .expect("vacant buyer admission");
+    assert_eq!(admission.owner_kind, ProtocolPositionOwnerKindV2::User);
+    assert_eq!(admission.position_owner, buyer);
+    assert_eq!(admission.rent_credit, id(82));
+    assert_eq!(
+        prepare_sell_user_admission_v2(
+            DirectUserPositionAccountsV2 {
+                position: id(99),
+                ..buyer_accounts
+            },
+            id(82),
+            funding,
+            context,
+        ),
+        Err(DirectPhysicalError::Binding)
+    );
+    let candidate = preview_registered_fill_v2(RegisteredFillInputV2 {
+        root: creation.root,
+        participant: RegisteredParticipantV2 {
+            maker_root: creation.maker_root,
+            record: creation.record,
+            observed_record_lamports: 100,
+        },
+        execution: RegisteredExecutionV2 {
+            config: config(1_000, id(6)),
+            outcome_count: 3,
+            slot: 5,
+            fill: 20,
+            execution_price: 50,
+        },
+    })
+    .expect("partial Sell fill");
+    let expectation =
+        sell_fill_expectation_v2(creation.record, accounts.record, candidate, buyer, 1, 3)
+            .expect("Sell affine expectation");
+    let packet = sell_affine_packet(
+        context,
+        accounts.record,
+        1,
+        buyer,
+        3,
+        creation.record.intent().outcome,
+        20,
+    );
+    let plan =
+        validate_sell_affine_plan_v2(expectation, context, &packet).expect("record-to-buyer fill");
+    let (positions, rows) = plan.table_bytes();
+    let receipt = AffineBatchReceiptV2::new(
+        plan,
+        hash(&packet).to_bytes(),
+        hashv(&[positions, rows]).to_bytes(),
+        context.claims_program,
+        id(93),
+        8,
+    )
+    .expect("affine receipt")
+    .to_bytes();
+    verify_sell_affine_receipt_v2(expectation, context, &packet, &receipt, id(93))
+        .expect("fill receipt");
+
+    let hostile = sell_affine_packet(
+        context,
+        creation.record.maker(),
+        1,
+        buyer,
+        3,
+        creation.record.intent().outcome,
+        20,
+    );
+    assert_eq!(
+        validate_sell_affine_plan_v2(expectation, context, &hostile),
+        Err(DirectPhysicalError::Binding)
+    );
+}
+
+#[test]
+fn sell_unwind_refunds_residual_then_closes_to_persisted_rent_credit() {
+    let (creation, accounts, funding, context) = sell_escrow_fixture();
+    let registration = prepare_sell_registration_v2(creation, accounts, funding, context)
+        .expect("Sell registration");
+    let admission = sell_admission(registration.admission, context);
+    let terminal = terminate_registered_intent_v2(
+        creation.root,
+        creation.maker_root,
+        creation.record,
+        config(1_000, id(6)),
+        3,
+        RegisteredTerminalEvidenceV2::Cancel(
+            AuthenticatedCompactIntentV2::from_adjacent_ed25519(
+                creation.record.maker(),
+                creation.record.intent(),
+            )
+            .expect("cancel signature"),
+        ),
+        100,
+    )
+    .expect("cancel");
+    assert_eq!(terminal.close.claim_refund, 100);
+    let refund_expectation = DirectSellAffineExpectationV2 {
+        action: DirectSellAffineActionV2::Unwind,
+        record_before: creation.record,
+        record: accounts.record,
+        user: creation.record.maker(),
+        record_position_revision: 1,
+        user_position_revision: 5,
+        quantity: terminal.close.claim_refund,
+    };
+    let refund = sell_affine_packet(
+        context,
+        accounts.record,
+        1,
+        creation.record.maker(),
+        5,
+        creation.record.intent().outcome,
+        100,
+    );
+    validate_sell_affine_plan_v2(refund_expectation, context, &refund)
+        .expect("record-to-maker refund");
+
+    let close = prepare_sell_close_v2(
+        creation.record,
+        terminal.close,
+        accounts,
+        admission,
+        2,
+        funding,
+        context,
+    )
+    .expect("zero Position close");
+    let admission_state = admission.to_state_bytes().expect("admission state");
+    let close_bytes = close.to_bytes().expect("close bytes");
+    let receipt = ProtocolPositionCloseReceiptV2::new(
+        close,
+        ProtocolPositionCloseEvidenceV2 {
+            request_digest: hash(&close_bytes).to_bytes(),
+            admission_digest: hash(&admission_state).to_bytes(),
+            claims_program: context.claims_program,
+            post_resource_digest: id(94),
+            rent_credit_before: 1_000,
+            rent_credit_after: 1_162,
+        },
+    )
+    .expect("close receipt")
+    .to_bytes()
+    .expect("close receipt bytes");
+    verify_sell_close_receipt_v2(close, context, 1_000, id(94), &admission_state, &receipt)
+        .expect("close receipt verification");
+
+    let mut hostile_receipt = receipt;
+    *hostile_receipt.get_mut(304).expect("resource digest") ^= 1;
+    assert_eq!(
+        verify_sell_close_receipt_v2(
+            close,
+            context,
+            1_000,
+            id(94),
+            &admission_state,
+            &hostile_receipt,
+        ),
+        Err(DirectPhysicalError::Postcondition)
     );
 }
 

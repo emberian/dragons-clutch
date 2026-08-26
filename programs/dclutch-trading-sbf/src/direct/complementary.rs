@@ -16,10 +16,14 @@ use dclutch_custody_contract::{
 };
 use dclutch_direct_codec::successor::{
     ComplementaryActionV2, ComplementarySettlementV2, DirectExecutionConfigV1,
-    DirectRegisteredIntentV2, RegisteredFillCandidateV2, RegisteredRecordAfterFillV2,
+    DirectRegisteredIntentV2, RegisteredFillCandidateV2, RegisteredIntentSeedsV2,
+    RegisteredRecordAfterFillV2,
 };
 use dclutch_market_core_codec::{CoreMarketViewV1, Phase};
-use solana_program::hash::{hash, hashv};
+use solana_program::{
+    hash::{hash, hashv},
+    pubkey::Pubkey,
+};
 
 use super::{
     buy_escrow::{
@@ -211,6 +215,8 @@ pub struct DirectComplementaryClaimsContextV2 {
     pub core_market: CoreMarketViewV1,
     /// Current Registry-selected Claims program.
     pub claims_program: [u8; 32],
+    /// Current Registry-selected Trading program.
+    pub trading_program: [u8; 32],
     /// SHA-256 of the complete canonical parent Trading request.
     pub parent_request_digest: [u8; 32],
     /// Finalized linked-LiabilityBasis record digest authenticated by Claims.
@@ -225,11 +231,13 @@ impl DirectComplementaryClaimsContextV2 {
     fn validate(self) -> Result<()> {
         let release_set = self.core_market.release_set();
         if self.claims_program == [0; 32]
+            || self.trading_program == [0; 32]
             || self.parent_request_digest == [0; 32]
             || self.linked_basis_record_digest == [0; 32]
             || self.fill == 0
             || self.core_market.phase() != Phase::Open
             || release_set.bindings[1].program.to_bytes() != self.claims_program
+            || release_set.bindings[2].program.to_bytes() != self.trading_program
         {
             return Err(DirectPhysicalError::Binding);
         }
@@ -248,6 +256,8 @@ pub struct DirectComplementaryClaimsParticipantV2 {
     pub record_before: DirectRegisteredIntentV2,
     /// Sole checked Direct candidate for this outcome.
     pub candidate: RegisteredFillCandidateV2,
+    /// Exact Trading-owned registered-record PDA.
+    pub record: [u8; 32],
     /// Authenticated existing Claims Position revision.
     pub expected_position_revision: u64,
 }
@@ -351,6 +361,7 @@ pub fn validate_complementary_claims_item_v2(
         || participant.record_before.intent().market != plan.market()
         || participant.record_before.intent().generation != context.core_market.generation()
         || participant.record_before.intent().outcome != outcome
+        || participant.record == [0; 32]
         || participant.candidate.maker_root.market() != plan.market()
         || participant.candidate.maker_root.generation() != context.core_market.generation()
         || participant.candidate.maker_root.maker() != participant.record_before.maker()
@@ -358,6 +369,15 @@ pub fn validate_complementary_claims_item_v2(
         return Err(DirectPhysicalError::Binding);
     }
     validate_candidate_record(participant.record_before, participant.candidate)?;
+    let seeds = RegisteredIntentSeedsV2::from_record(participant.record_before);
+    let (expected_record, bump) = Pubkey::find_program_address(
+        &seeds.as_slices(),
+        &Pubkey::new_from_array(context.trading_program),
+    );
+    if expected_record.to_bytes() != participant.record || bump != participant.record_before.bump()
+    {
+        return Err(DirectPhysicalError::Binding);
+    }
     validate_candidate_claims_effect(action, context.fill, participant)?;
 
     let row = plan.row(outcome).map_err(|_| DirectPhysicalError::Claims)?;
@@ -368,7 +388,11 @@ pub fn validate_complementary_claims_item_v2(
     let position: AffineBatchPositionV2 = plan
         .position(position_index)
         .map_err(|_| DirectPhysicalError::Claims)?;
-    if position.owner() != participant.record_before.maker()
+    let expected_owner = match action {
+        ComplementaryActionV2::Split => participant.record_before.maker(),
+        ComplementaryActionV2::Merge => participant.record,
+    };
+    if position.owner() != expected_owner
         || position.expected_revision() != participant.expected_position_revision
     {
         return Err(DirectPhysicalError::Binding);
