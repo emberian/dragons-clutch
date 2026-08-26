@@ -11,7 +11,7 @@
 
 use dclutch_dealer_codec::scenario::ScenarioSolvencyDescriptor;
 use solana_program::{
-    hash::{Hasher, hash},
+    hash::{hash, hashv},
     pubkey::Pubkey,
 };
 
@@ -453,9 +453,13 @@ pub fn stage_scenario_obligation_replacement_v3(
 /// identical to the state produced by [`stage_scenario_obligation_replacement_v3`].
 pub fn scenario_obligation_replacement_digest_v3(
     current: DealerObligationProjectionV3<'_>,
-    candidate_obligations: &[u64],
+    candidate_obligations: &[u8],
 ) -> ObligationResultV3<[u8; 32]> {
-    if usize::try_from(current.width).ok() != Some(candidate_obligations.len()) {
+    let candidate_bytes = usize::try_from(current.width)
+        .ok()
+        .and_then(|width| width.checked_mul(8))
+        .ok_or(ObligationErrorV3::InvalidBytes)?;
+    if candidate_obligations.len() != candidate_bytes {
         return Err(ObligationErrorV3::InvalidBytes);
     }
     let next_revision = current
@@ -470,14 +474,13 @@ pub fn scenario_obligation_replacement_digest_v3(
         .bytes
         .get(24..DEALER_OBLIGATION_HEADER_BYTES_V3)
         .ok_or(ObligationErrorV3::InvalidBytes)?;
-    let mut hasher = Hasher::default();
-    hasher.hash(prefix);
-    hasher.hash(&next_revision.to_le_bytes());
-    hasher.hash(immutable);
-    for obligation in candidate_obligations {
-        hasher.hash(&obligation.to_le_bytes());
-    }
-    Ok(hasher.result().to_bytes())
+    Ok(hashv(&[
+        prefix,
+        &next_revision.to_le_bytes(),
+        immutable,
+        candidate_obligations,
+    ])
+    .to_bytes())
 }
 
 /// Allocation-free iterator over exact obligation values.
@@ -658,8 +661,12 @@ mod tests {
         stage_scenario_obligation_replacement_v3(current, &[7, 19, 3], &mut candidate)
             .expect("candidate");
         let projected = DealerObligationProjectionV3::decode(&candidate).expect("projection");
+        let encoded = [7_u64, 19, 3]
+            .into_iter()
+            .flat_map(u64::to_le_bytes)
+            .collect::<std::vec::Vec<_>>();
         assert_eq!(
-            scenario_obligation_replacement_digest_v3(current, &[7, 19, 3]),
+            scenario_obligation_replacement_digest_v3(current, &encoded),
             Ok(projected.state_digest())
         );
         assert_eq!(projected.revision(), 8);

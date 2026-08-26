@@ -725,9 +725,11 @@ pub fn authenticate_scenario_trade_request_v3<'a>(
         return Err(ScenarioTradeErrorV3::WidthMismatch);
     }
     request.decode_candidate_obligations(candidate_obligations)?;
-    let candidate_digest =
-        scenario_obligation_replacement_digest_v3(chain.current_obligation, candidate_obligations)
-            .map_err(|_| ScenarioTradeErrorV3::InvalidProjection)?;
+    let candidate_digest = scenario_obligation_replacement_digest_v3(
+        chain.current_obligation,
+        request.candidate_obligations_bytes(),
+    )
+    .map_err(|_| ScenarioTradeErrorV3::InvalidProjection)?;
     if candidate_digest != request.candidate_obligation_digest {
         return Err(ScenarioTradeErrorV3::InvalidProjection);
     }
