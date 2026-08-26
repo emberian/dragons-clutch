@@ -1,0 +1,257 @@
+//! Stateless SeriesEscrow effect planning.
+//!
+//! These values are semantic expectations, not a Custody wire or state
+//! machine. The current Registry-selected Trading interpreter must project
+//! them into the canonical Custody request, and Custody alone authenticates
+//! accounts, persists replay, moves tokens, and returns receipts.
+
+use crate::{AccountKeyV3, PrefoundingSeriesEscrowV3};
+
+/// One exact edge in the pre-founding SeriesEscrow lifecycle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SeriesEscrowEffectKindV3 {
+    /// Bind a fresh Custody replay context to this Ticket and refund owner.
+    InitializeReplay,
+    /// Lock exact founder collateral into the canonical SeriesEscrow.
+    Lock,
+    /// After atomic Core Found, move SeriesEscrow collateral into Hoard.
+    ConsumeIntoHoard,
+    /// After the retry deadline, return SeriesEscrow collateral to refund owner.
+    RefundExpired,
+}
+
+/// One semantic effect derived entirely from authenticated Series content.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SeriesEscrowEffectV3 {
+    kind: SeriesEscrowEffectKindV3,
+    escrow: PrefoundingSeriesEscrowV3,
+}
+
+impl SeriesEscrowEffectV3 {
+    /// Exact semantic effect kind.
+    pub const fn kind(self) -> SeriesEscrowEffectKindV3 {
+        self.kind
+    }
+
+    /// Complete content-authenticated SeriesEscrow projection.
+    pub const fn escrow(self) -> PrefoundingSeriesEscrowV3 {
+        self.escrow
+    }
+
+    /// Required replay revision before this effect.
+    pub const fn expected_revision(self) -> u64 {
+        match self.kind {
+            SeriesEscrowEffectKindV3::InitializeReplay => 0,
+            SeriesEscrowEffectKindV3::Lock => 1,
+            SeriesEscrowEffectKindV3::ConsumeIntoHoard
+            | SeriesEscrowEffectKindV3::RefundExpired => 2,
+        }
+    }
+
+    /// Required replay revision after this effect.
+    pub const fn resulting_revision(self) -> u64 {
+        self.expected_revision() + 1
+    }
+
+    /// Exact Realm-collateral atoms moved; zero only for replay initialization.
+    pub const fn amount(self) -> u64 {
+        match self.kind {
+            SeriesEscrowEffectKindV3::InitializeReplay => 0,
+            SeriesEscrowEffectKindV3::Lock
+            | SeriesEscrowEffectKindV3::ConsumeIntoHoard
+            | SeriesEscrowEffectKindV3::RefundExpired => self.escrow.hoard_principal(),
+        }
+    }
+
+    /// External token owner required on the source side, when any.
+    pub const fn external_source_owner(self) -> Option<AccountKeyV3> {
+        match self.kind {
+            SeriesEscrowEffectKindV3::Lock => Some(self.escrow.founder()),
+            SeriesEscrowEffectKindV3::InitializeReplay
+            | SeriesEscrowEffectKindV3::ConsumeIntoHoard
+            | SeriesEscrowEffectKindV3::RefundExpired => None,
+        }
+    }
+
+    /// External token owner required on the destination side, when any.
+    pub const fn external_destination_owner(self) -> Option<AccountKeyV3> {
+        match self.kind {
+            SeriesEscrowEffectKindV3::RefundExpired => Some(self.escrow.refund_owner()),
+            SeriesEscrowEffectKindV3::InitializeReplay
+            | SeriesEscrowEffectKindV3::Lock
+            | SeriesEscrowEffectKindV3::ConsumeIntoHoard => None,
+        }
+    }
+
+    /// Whether the canonical SeriesEscrow is the token source.
+    pub const fn series_escrow_is_source(self) -> bool {
+        matches!(
+            self.kind,
+            SeriesEscrowEffectKindV3::ConsumeIntoHoard | SeriesEscrowEffectKindV3::RefundExpired
+        )
+    }
+
+    /// Whether the canonical SeriesEscrow is the token destination.
+    pub const fn series_escrow_is_destination(self) -> bool {
+        matches!(self.kind, SeriesEscrowEffectKindV3::Lock)
+    }
+
+    /// Whether canonical Hoard principal is the token destination.
+    pub const fn hoard_is_destination(self) -> bool {
+        matches!(self.kind, SeriesEscrowEffectKindV3::ConsumeIntoHoard)
+    }
+}
+
+/// Exact two-effect Prepare plan: initialize replay, then lock collateral.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PrepareSeriesEscrowPlanV3 {
+    effects: [SeriesEscrowEffectV3; 2],
+}
+
+impl PrepareSeriesEscrowPlanV3 {
+    /// Canonical ordered effects.
+    pub const fn effects(self) -> [SeriesEscrowEffectV3; 2] {
+        self.effects
+    }
+}
+
+/// Construct the canonical pre-founding replay initialization and lock plan.
+pub const fn prepare_series_escrow_v3(
+    escrow: PrefoundingSeriesEscrowV3,
+) -> PrepareSeriesEscrowPlanV3 {
+    PrepareSeriesEscrowPlanV3 {
+        effects: [
+            SeriesEscrowEffectV3 {
+                kind: SeriesEscrowEffectKindV3::InitializeReplay,
+                escrow,
+            },
+            SeriesEscrowEffectV3 {
+                kind: SeriesEscrowEffectKindV3::Lock,
+                escrow,
+            },
+        ],
+    }
+}
+
+/// Construct the exact post-Found SeriesEscrow-to-Hoard effect.
+pub const fn consume_series_escrow_v3(escrow: PrefoundingSeriesEscrowV3) -> SeriesEscrowEffectV3 {
+    SeriesEscrowEffectV3 {
+        kind: SeriesEscrowEffectKindV3::ConsumeIntoHoard,
+        escrow,
+    }
+}
+
+/// Construct the exact post-deadline SeriesEscrow refund effect.
+pub const fn expire_series_escrow_v3(escrow: PrefoundingSeriesEscrowV3) -> SeriesEscrowEffectV3 {
+    SeriesEscrowEffectV3 {
+        kind: SeriesEscrowEffectKindV3::RefundExpired,
+        escrow,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use dclutch_core_contract::ContentId;
+
+    use super::*;
+    use crate::{
+        AuthenticatedProductProjectionV2, SERIES_OCCURRENCE_BYTES_V3, SERIES_TEMPLATE_BYTES_V3,
+        SERIES_TICKET_BYTES_V3, admit_occurrence, admit_ticket, generated, occurrence_content_id,
+        pre_founding_series_escrow, template_content_id,
+    };
+    use sha2::{Digest, Sha256};
+
+    const HASH_SEPARATOR: [u8; 1] = [0];
+
+    fn key(byte: u8) -> AccountKeyV3 {
+        AccountKeyV3::new([byte; 32]).expect("nonzero key")
+    }
+
+    fn put<const N: usize>(target: &mut [u8], offset: usize, value: &[u8; N]) {
+        target
+            .get_mut(offset..offset + N)
+            .expect("fixture field")
+            .copy_from_slice(value);
+    }
+
+    fn node(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(generated::SERIES_PROJECTION_NODE_DOMAIN_V3);
+        hasher.update(HASH_SEPARATOR);
+        hasher.update(left);
+        hasher.update(right);
+        hasher.finalize().into()
+    }
+
+    fn projection() -> PrefoundingSeriesEscrowV3 {
+        let mut template: [u8; SERIES_TEMPLATE_BYTES_V3] = generated::SERIES_EXAMPLE_TEMPLATE_V3;
+        let occurrence: [u8; SERIES_OCCURRENCE_BYTES_V3] = generated::SERIES_EXAMPLE_OCCURRENCE_V3;
+        let mut ticket: [u8; SERIES_TICKET_BYTES_V3] = generated::SERIES_EXAMPLE_TICKET_V3;
+        let occurrence_id = occurrence_content_id(&occurrence).expect("occurrence ID");
+        let siblings = [[90; 32], [91; 32]];
+        let root = node(&node(&siblings[0], &occurrence_id.to_bytes()), &siblings[1]);
+        put(
+            &mut template,
+            generated::SERIES_TEMPLATE_PROJECTION_ROOT_OFFSET_V3,
+            &root,
+        );
+        let template_id = template_content_id(&template).expect("Template ID");
+        put(
+            &mut ticket,
+            generated::SERIES_TICKET_TEMPLATE_OFFSET_V3,
+            &template_id.to_bytes(),
+        );
+        put(
+            &mut ticket,
+            generated::SERIES_TICKET_OCCURRENCE_ID_OFFSET_V3,
+            &occurrence_id.to_bytes(),
+        );
+        let admitted = admit_occurrence(&template, &occurrence, &siblings).expect("occurrence");
+        let product = AuthenticatedProductProjectionV2::new(
+            admitted.occurrence().product_record(),
+            ContentId::new([61; 32]).expect("stable Product"),
+            ContentId::new([62; 32]).expect("result domain"),
+        );
+        pre_founding_series_escrow(
+            admitted,
+            admit_ticket(&ticket).expect("Ticket"),
+            product,
+            key(59),
+        )
+        .expect("SeriesEscrow projection")
+    }
+
+    #[test]
+    fn prepare_and_mutually_exclusive_terminals_share_one_replay_edge() {
+        let escrow = projection();
+        let prepare = prepare_series_escrow_v3(escrow).effects();
+        assert_eq!(
+            prepare[0].kind(),
+            SeriesEscrowEffectKindV3::InitializeReplay
+        );
+        assert_eq!(prepare[0].expected_revision(), 0);
+        assert_eq!(prepare[0].resulting_revision(), 1);
+        assert_eq!(prepare[0].amount(), 0);
+        assert_eq!(prepare[1].kind(), SeriesEscrowEffectKindV3::Lock);
+        assert_eq!(prepare[1].expected_revision(), 1);
+        assert_eq!(prepare[1].resulting_revision(), 2);
+        assert_eq!(prepare[1].amount(), escrow.hoard_principal());
+        assert_eq!(prepare[1].external_source_owner(), Some(escrow.founder()));
+        assert!(prepare[1].series_escrow_is_destination());
+
+        let consume = consume_series_escrow_v3(escrow);
+        let expire = expire_series_escrow_v3(escrow);
+        assert_eq!(consume.expected_revision(), 2);
+        assert_eq!(expire.expected_revision(), 2);
+        assert_eq!(consume.resulting_revision(), 3);
+        assert_eq!(expire.resulting_revision(), 3);
+        assert_eq!(consume.amount(), expire.amount());
+        assert_eq!(consume.escrow().ticket_id(), expire.escrow().ticket_id());
+        assert!(consume.series_escrow_is_source());
+        assert!(consume.hoard_is_destination());
+        assert_eq!(
+            expire.external_destination_owner(),
+            Some(escrow.refund_owner())
+        );
+    }
+}

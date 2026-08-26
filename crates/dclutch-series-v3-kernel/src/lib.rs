@@ -17,6 +17,8 @@ use dclutch_market_core_codec::{
 };
 use sha2::{Digest, Sha256};
 
+/// Stateless pre-founding SeriesEscrow effect sequence.
+pub mod escrow;
 /// Lean-generated Series V3 widths, offsets, domains, and hostile examples.
 #[allow(dead_code, missing_docs)]
 #[doc(hidden)]
