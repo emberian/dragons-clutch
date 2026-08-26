@@ -272,6 +272,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-account-profile-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-effect-kernel",
+ "dclutch-transition-vm",
+]
+
+[[package]]
 name = "dclutch-bearer-v2-contract"
 version = "0.1.0"
 dependencies = [
@@ -283,9 +291,13 @@ dependencies = [
 name = "dclutch-bearer-v2-operator"
 version = "0.1.0"
 dependencies = [
+ "dclutch-account-profile-contract",
  "dclutch-bearer-v2-contract",
  "dclutch-capability-program-contract",
+ "dclutch-core-contract",
  "dclutch-effect-kernel",
+ "dclutch-execution-strategy-contract",
+ "dclutch-product-payoff-v2-codec",
  "dclutch-rational-representation-v2-contract",
  "dclutch-rational-representation-v2-kernel",
  "dclutch-rational-representation-v2-operator",
@@ -340,11 +352,33 @@ name = "dclutch-effect-kernel"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-execution-strategy-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-program-contract",
+ "dclutch-core-contract",
+ "dclutch-release-set-contract",
+ "sha2",
+]
+
+[[package]]
 name = "dclutch-market-core-codec"
 version = "0.1.0"
 dependencies = [
  "dclutch-release-set-contract",
 ]
+
+[[package]]
+name = "dclutch-product-payoff-v2-codec"
+version = "0.1.0"
+dependencies = [
+ "dclutch-product-runtime-v2",
+ "sha2",
+]
+
+[[package]]
+name = "dclutch-product-runtime-v2"
+version = "0.1.0"
 
 [[package]]
 name = "dclutch-rational-representation-v2-contract"

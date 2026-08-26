@@ -7,9 +7,13 @@ rust-version = "1.89"
 description = "Chain-derived Rational Representation V2 specialization gate for Bearer claims"
 
 [dependencies]
+dclutch-account-profile-contract = { path = "../dclutch-account-profile-contract" }
 dclutch-bearer-v2-contract = { path = "../dclutch-bearer-v2-contract" }
 dclutch-capability-program-contract = { path = "../dclutch-capability-program-contract" }
+dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-effect-kernel = { path = "../dclutch-effect-kernel" }
+dclutch-execution-strategy-contract = { path = "../dclutch-execution-strategy-contract" }
+dclutch-product-payoff-v2-codec = { path = "../dclutch-product-payoff-v2-codec" }
 dclutch-rational-representation-v2-contract = { path = "../dclutch-rational-representation-v2-contract" }
 dclutch-rational-representation-v2-kernel = { path = "../dclutch-rational-representation-v2-kernel" }
 dclutch-rational-representation-v2-operator = { path = "../dclutch-rational-representation-v2-operator" }

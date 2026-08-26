@@ -10,14 +10,25 @@
 //! descriptor and graph select one runtime outcome with coefficient equal to
 //! the exact denominator.
 
+mod hot_account_profile_v3;
 mod hot_artifacts_v3;
+mod hot_bundle_v3;
 mod hot_effect_v3;
 mod hot_terminal_v3;
 mod hot_transaction_v3;
 
+pub use hot_account_profile_v3::{
+    RATIONAL_TERMINAL_ACCOUNT_PROFILE_BYTES_V3, RationalTerminalAccountProfileInputV3,
+    encode_rational_terminal_account_profile_v3,
+};
 pub use hot_artifacts_v3::{
     RATIONAL_TERMINAL_REQUEST_PROFILE_BYTES_V3, RATIONAL_TERMINAL_TRANSITION_BYTES_V3,
     encode_rational_terminal_request_profile_v3, encode_rational_terminal_transition_v3,
+};
+pub use hot_bundle_v3::{
+    RATIONAL_TERMINAL_DESCRIPTOR_BYTES_V3, RATIONAL_TERMINAL_STRATEGY_BYTES_V3,
+    RationalTerminalHotBundleInputV3, RationalTerminalHotBundleV3,
+    build_rational_terminal_hot_bundle_v3, validate_rational_terminal_hot_bundle_v3,
 };
 pub use hot_effect_v3::{
     RATIONAL_TERMINAL_CLAIMS_ACCOUNT_COUNT_V3, RATIONAL_TERMINAL_EFFECT_BYTES_V3,
@@ -56,6 +67,18 @@ pub enum Error {
     TransitionArtifact(dclutch_transition_vm::v3::Error),
     /// Typed terminal EffectProgram artifact encoding refused.
     EffectArtifact(dclutch_effect_kernel::v3::Error),
+    /// Typed terminal AccountProfile artifact encoding refused.
+    AccountProfileArtifact(dclutch_account_profile_contract::v2::Error),
+    /// ProductBasisV3 bytes or logical account observations differed.
+    AccountProfileInput,
+    /// A semantic coordinate or computed artifact digest was zero.
+    ContentIdentity,
+    /// Exact interpreted ExecutionStrategy construction or join refused.
+    ExecutionStrategy(dclutch_execution_strategy_contract::v2::Error),
+    /// CapabilityProgramV3 construction or hostile decoding refused.
+    CapabilityDescriptor(dclutch_capability_program_contract::Error),
+    /// Independently decoded artifact banks did not have one exact geometry.
+    ArtifactGeometry,
     /// Checked Hot envelope or exact physical account construction refused.
     HotInstruction,
     /// Finalized descriptor/graph bytes were not the selected Bearer basis vector.
