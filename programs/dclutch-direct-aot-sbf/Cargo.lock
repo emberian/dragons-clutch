@@ -1524,6 +1524,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 
 [[package]]
+name = "dclutch-account-profile-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-effect-kernel",
+ "dclutch-transition-vm",
+]
+
+[[package]]
 name = "dclutch-capability-contract"
 version = "0.1.0"
 dependencies = [
@@ -1534,6 +1542,7 @@ dependencies = [
 name = "dclutch-capability-program-contract"
 version = "0.1.0"
 dependencies = [
+ "dclutch-account-profile-contract",
  "dclutch-capability-contract",
  "dclutch-core-contract",
  "dclutch-release-set-contract",
@@ -1565,12 +1574,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-effect-kernel"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-execution-strategy-contract"
 version = "0.1.0"
 dependencies = [
  "dclutch-capability-program-contract",
  "dclutch-core-contract",
  "dclutch-release-set-contract",
+ "sha2 0.10.9",
 ]
 
 [[package]]
