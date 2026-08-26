@@ -25,6 +25,8 @@ pub const BASIS_MAGIC_V3: [u8; 8] = *b"DCLTPAY3";
 pub const BASIS_SCHEMA_V3: u16 = 3;
 /// Fixed header before all runtime tails.
 pub const BASIS_HEADER_BYTES_V3: usize = 256;
+/// Canonical byte offset of the little-endian runtime basis width.
+pub const BASIS_WIDTH_OFFSET_V3: usize = 20;
 /// Width of one exact knot numerator.
 pub const KNOT_BYTES_V3: usize = 16;
 /// Width of one canonical graded term.
@@ -43,7 +45,6 @@ const RECORD_BYTES_OFFSET: usize = 12;
 const KIND_OFFSET: usize = 16;
 const ROUNDING_OFFSET: usize = 17;
 const HEADER_RESERVED_OFFSET: usize = 18;
-const BASIS_WIDTH_OFFSET: usize = 20;
 const KNOT_COUNT_OFFSET: usize = 24;
 const TERM_COUNT_OFFSET: usize = 28;
 const PRODUCT_ID_OFFSET: usize = 32;
@@ -260,7 +261,7 @@ impl<'a> ProductBasisV3<'a> {
             coordinate_domain_id: read_nonzero_id(bytes, COORDINATE_DOMAIN_ID_OFFSET)?,
             result_unit_id: read_nonzero_id(bytes, RESULT_UNIT_ID_OFFSET)?,
             evaluator_release_id: read_nonzero_id(bytes, EVALUATOR_RELEASE_ID_OFFSET)?,
-            basis_width: read_u32(bytes, BASIS_WIDTH_OFFSET)?,
+            basis_width: read_u32(bytes, BASIS_WIDTH_OFFSET_V3)?,
             payout_scale: read_u64(bytes, PAYOUT_SCALE_OFFSET)?,
             knot_denominator: read_u64(bytes, KNOT_DENOMINATOR_OFFSET)?,
             knot_count: read_u32(bytes, KNOT_COUNT_OFFSET)?,
@@ -662,7 +663,11 @@ pub fn compile_basis_v3(input: BasisInputV3<'_>, output: &mut [u8]) -> Result<()
         BasisKindV3::GradedExactComplement => TERM_FLOOR_EXACT_COMPLEMENT_BOUNDARY_V3,
     };
     put(output, ROUNDING_OFFSET, &[rounding])?;
-    put(output, BASIS_WIDTH_OFFSET, &input.basis_width.to_le_bytes())?;
+    put(
+        output,
+        BASIS_WIDTH_OFFSET_V3,
+        &input.basis_width.to_le_bytes(),
+    )?;
     put(output, KNOT_COUNT_OFFSET, &knot_count.to_le_bytes())?;
     put(output, TERM_COUNT_OFFSET, &term_count.to_le_bytes())?;
     put(output, PRODUCT_ID_OFFSET, &input.product_id)?;
@@ -1309,7 +1314,12 @@ mod tests {
         };
         let bytes = compile(input);
         assert_eq!(bytes.len(), BASIS_HEADER_BYTES_V3);
+        assert_eq!(
+            bytes.get(BASIS_WIDTH_OFFSET_V3..BASIS_WIDTH_OFFSET_V3 + 4),
+            Some(258_u32.to_le_bytes().as_slice())
+        );
         let basis = ProductBasisV3::decode(&bytes).expect("basis");
+        assert_eq!(basis.basis_width(), 258);
         let mut output = vec![9; 258];
         basis
             .evaluate_categorical(257, &mut output)
