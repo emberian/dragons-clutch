@@ -9,8 +9,9 @@ use dclutch_market_core_codec::{
     Identity as CoreIdentity, SeriesCoreActionV1, SeriesCoreRequestV1,
 };
 use dclutch_series_v3_kernel::{
-    AccountKeyV3, AdmittedOccurrenceV3, AuthenticatedProductProjectionV2, OccurrenceV3,
-    SeriesV3Error, TicketV3, funding_list_id as kernel_funding_list_id, future_market_projection,
+    AccountKeyV3, AdmittedOccurrenceV3, AdmittedTicketV3, AuthenticatedProductProjectionV2,
+    OccurrenceV3, SeriesV3Error, funding_list_id as kernel_funding_list_id,
+    future_market_projection, series_core_consume_request,
 };
 use solana_program::pubkey::Pubkey;
 
@@ -71,7 +72,7 @@ pub fn core_request(
     admitted: AdmittedOccurrenceV3,
     product: AuthenticatedProductProjectionV2,
     action: SeriesCoreActionV1,
-    ticket: TicketV3,
+    ticket: AdmittedTicketV3,
     ticket_account: Pubkey,
     expected_series_revision: u64,
     expected_ticket_revision: u64,
@@ -79,32 +80,14 @@ pub fn core_request(
     if action != SeriesCoreActionV1::Consume || ticket_account == Pubkey::default() {
         return Err(SeriesV3Error::Action);
     }
-    admitted.require_ticket(ticket)?;
-    let template = admitted.template();
-    let occurrence = admitted.occurrence();
-    if occurrence.product_record() != product.product_record() {
-        return Err(SeriesV3Error::Commitment);
-    }
-    let funds = occurrence.funds();
-    SeriesCoreRequestV1::occurrence(
-        action,
-        core_content_identity(template.release_set())?,
-        core_content_identity(admitted.template_id())?,
-        core_account_identity(account_key(ticket_account)?)?,
-        core_account_identity(occurrence.market())?,
-        core_content_identity(template.realm())?,
-        core_content_identity(product.product_record())?,
-        core_account_identity(ticket.refund_owner())?,
-        core_account_identity(ticket.founder())?,
-        occurrence.occurrence(),
+    series_core_consume_request(
+        admitted,
+        ticket,
+        product,
+        account_key(ticket_account)?,
         expected_series_revision,
         expected_ticket_revision,
-        funds.market_rent(),
-        funds.capability_native(),
-        funds.founding_work(),
-        funds.hoard_principal(),
     )
-    .map_err(|_| SeriesV3Error::Commitment)
 }
 
 /// Convert one SDK-free account identity at the explicit adapter boundary.
@@ -123,10 +106,6 @@ pub(crate) fn core_identity(value: ContentId) -> Result<CoreIdentity, SeriesV3Er
 #[cfg(test)]
 pub(crate) fn core_pubkey_identity(value: Pubkey) -> Result<CoreIdentity, SeriesV3Error> {
     core_account_identity(account_key(value)?)
-}
-
-fn core_content_identity(value: ContentId) -> Result<CoreIdentity, SeriesV3Error> {
-    core_identity(value)
 }
 
 fn core_account_identity(value: AccountKeyV3) -> Result<CoreIdentity, SeriesV3Error> {

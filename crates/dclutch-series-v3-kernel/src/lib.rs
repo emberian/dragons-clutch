@@ -11,7 +11,10 @@
 //! derivation, CPI, token movement, or mutation; those are adapter boundaries.
 
 use dclutch_core_contract::ContentId;
-use dclutch_market_core_codec::{Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity};
+use dclutch_market_core_codec::{
+    Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, SeriesCoreActionV1,
+    SeriesCoreRequestV1,
+};
 use sha2::{Digest, Sha256};
 
 /// Lean-generated Series V3 widths, offsets, domains, and hostile examples.
@@ -906,6 +909,51 @@ pub fn pre_founding_series_escrow(
         hoard_principal: occurrence.funds.hoard_principal,
         future_market: future_market_projection(admitted, product, registry_program)?,
     })
+}
+
+/// Project one admitted Ticket consumption into the canonical Core request.
+///
+/// This function is SDK-free and stateless. It binds the Product record root,
+/// every immutable occurrence coordinate, all four disjoint founding
+/// compartments, and both optimistic replay revisions. Core must still
+/// authenticate Product Runtime V2, Found inputs, the current Trading caller,
+/// and every child effect before returning its acknowledgement.
+#[allow(clippy::too_many_arguments)]
+pub fn series_core_consume_request(
+    admitted: AdmittedOccurrenceV3,
+    admitted_ticket: AdmittedTicketV3,
+    product: AuthenticatedProductProjectionV2,
+    ticket_state_account: AccountKeyV3,
+    expected_series_revision: u64,
+    expected_ticket_revision: u64,
+) -> Result<SeriesCoreRequestV1, SeriesV3Error> {
+    let ticket = admitted_ticket.ticket;
+    admitted.require_ticket(ticket)?;
+    let template = admitted.template;
+    let occurrence = admitted.occurrence;
+    if occurrence.product_record != product.product_record {
+        return Err(SeriesV3Error::Commitment);
+    }
+    let funds = occurrence.funds;
+    SeriesCoreRequestV1::occurrence(
+        SeriesCoreActionV1::Consume,
+        core_content_identity(template.release_set)?,
+        core_content_identity(admitted.template_id)?,
+        core_account_identity(ticket_state_account)?,
+        core_account_identity(occurrence.market)?,
+        core_content_identity(template.realm)?,
+        core_content_identity(product.product_record)?,
+        core_account_identity(ticket.refund_owner)?,
+        core_account_identity(ticket.founder)?,
+        occurrence.occurrence,
+        expected_series_revision,
+        expected_ticket_revision,
+        funds.market_rent,
+        funds.capability_native,
+        funds.founding_work,
+        funds.hoard_principal,
+    )
+    .map_err(|_| SeriesV3Error::Commitment)
 }
 
 /// Hash an exact ordered, nonempty, alias-free FundingState key list.

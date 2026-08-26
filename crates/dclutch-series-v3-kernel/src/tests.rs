@@ -247,6 +247,57 @@ fn pre_founding_escrow_uses_ticket_replay_and_exact_collateral() {
 }
 
 #[test]
+fn consume_core_request_is_one_sdk_free_occurrence_projection() {
+    let fixture = Fixture::new();
+    let admitted = fixture.admit();
+    let ticket = admit_ticket(&fixture.ticket).expect("admitted Ticket");
+    let request = series_core_consume_request(admitted, ticket, fixture.product, key(72), 8, 11)
+        .expect("canonical Consume request");
+    assert_eq!(request.action(), SeriesCoreActionV1::Consume);
+    assert_eq!(
+        request.template().to_bytes(),
+        admitted.template_id().to_bytes()
+    );
+    assert_eq!(
+        request.ticket().expect("Ticket state").to_bytes(),
+        key(72).to_bytes()
+    );
+    assert_eq!(
+        request.product().expect("Product record").to_bytes(),
+        fixture.product.product_record().to_bytes()
+    );
+    assert_eq!(request.market_generation(), Some(2));
+    assert_eq!(request.expected_series_revision(), 8);
+    assert_eq!(request.expected_ticket_revision(), 11);
+    assert_eq!(
+        request.market_rent(),
+        admitted.occurrence().funds().market_rent()
+    );
+    assert_eq!(
+        request.capability_rent(),
+        admitted.occurrence().funds().capability_native()
+    );
+    assert_eq!(
+        request.work(),
+        admitted.occurrence().funds().founding_work()
+    );
+    assert_eq!(
+        request.hoard_principal(),
+        admitted.occurrence().funds().hoard_principal()
+    );
+
+    let substituted = AuthenticatedProductProjectionV2::new(
+        ContentId::new([99; 32]).expect("substituted Product record"),
+        fixture.product.stable_product_id(),
+        fixture.product.result_domain(),
+    );
+    assert_eq!(
+        series_core_consume_request(admitted, ticket, substituted, key(72), 8, 11),
+        Err(SeriesV3Error::Commitment)
+    );
+}
+
+#[test]
 fn product_record_join_refuses_substituted_runtime_projection() {
     let fixture = Fixture::new();
     let substituted = AuthenticatedProductProjectionV2::new(

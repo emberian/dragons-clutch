@@ -529,7 +529,7 @@ fn prepare_and_expire_commit_under_controller_without_fabricating_core() {
         admitted,
         fixture.product,
         SeriesCoreActionV1::Consume,
-        admitted_ticket.ticket(),
+        admitted_ticket,
         ticket_state_key,
         4,
         0,
@@ -560,7 +560,7 @@ fn prepare_and_expire_commit_under_controller_without_fabricating_core() {
 fn core_request_uses_exact_v3_ticket_and_compartments() {
     let fixture = Fixture::new();
     let admitted = fixture.admit();
-    let ticket = TicketV3::decode(&fixture.ticket).expect("ticket");
+    let ticket = admit_ticket(&fixture.ticket).expect("ticket");
     let request = core_request(
         admitted,
         fixture.product,

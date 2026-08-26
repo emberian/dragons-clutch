@@ -437,7 +437,7 @@ fn common_terminal_plan(
             admitted,
             product.ok_or(LifecycleErrorV3::Content)?,
             action,
-            ticket,
+            admitted_ticket,
             ticket_state_key,
             expected_series_revision,
             expected_ticket_revision,
