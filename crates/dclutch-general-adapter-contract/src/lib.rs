@@ -24,6 +24,8 @@ pub mod lifecycle;
 pub mod plan;
 /// Verifier-emitted runtime-width per-order settlement manifests.
 pub mod runtime_manifest;
+/// Permissionless runtime-width settlement over verifier-emitted order manifests.
+pub mod runtime_settlement;
 /// Streamed runtime-width candidate verification and exact selection comparison.
 pub mod runtime_verify;
 /// Runtime-width borrowed records without fixed outcome or page capacities.
