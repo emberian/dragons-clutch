@@ -23,8 +23,26 @@ fn id(byte: u8) -> ContentId {
     ContentId::new([byte; 32]).expect("nonzero fixture identity")
 }
 
+const fn key_table() -> [[u8; 32]; 256] {
+    let mut table = [[0_u8; 32]; 256];
+    let mut byte = 0_usize;
+    while byte < 256 {
+        table[byte] = [byte as u8; 32];
+        byte += 1;
+    }
+    table
+}
+
+/// Borrowed test identities: `AccountObservationV1` holds its key and owner by
+/// reference, so a fixture identity has to outlive the observation bank.
+static KEYS: [[u8; 32]; 256] = key_table();
+
 fn key(byte: u8) -> [u8; 32] {
-    [byte; 32]
+    KEYS[byte as usize]
+}
+
+fn key_ref(byte: u8) -> &'static [u8; 32] {
+    &KEYS[byte as usize]
 }
 
 fn put<const N: usize>(target: &mut [u8], offset: usize, value: &[u8; N]) {
@@ -68,6 +86,11 @@ struct SemanticFixture {
     product: AuthenticatedProductProjectionV2,
     template_id: ContentId,
     market: [u8; 32],
+    root_bytes: [u8; 32],
+    template_id_bytes: [u8; 32],
+    product_record_bytes: [u8; 32],
+    registry_program_bytes: [u8; 32],
+    trading_program_bytes: [u8; 32],
 }
 
 impl SemanticFixture {
@@ -149,6 +172,11 @@ impl SemanticFixture {
             product: AuthenticatedProductProjectionV2::new(product_record, id(61), id(62)),
             template_id,
             market,
+            root_bytes: id(10).to_bytes(),
+            template_id_bytes: template_id.to_bytes(),
+            product_record_bytes: product_record.to_bytes(),
+            registry_program_bytes: id(59).to_bytes(),
+            trading_program_bytes: id(60).to_bytes(),
         }
     }
 
@@ -191,14 +219,13 @@ impl SemanticFixture {
         series_state: &'a [u8],
         ticket_state: &'a [u8],
         ticket: &'a [u8],
-        root_key: [u8; 32],
+        root_key: &'a [u8; 32],
     ) -> Vec<AccountObservationV1<'a>> {
         let mut observations =
             vec![
-                AccountObservationV1::new(key(200), key(201), 1, &[], false, false, false);
+                AccountObservationV1::new(key_ref(200), key_ref(201), 1, &[], false, false, false);
                 SERIES_CLOCK_COORDINATE_V4 + 1
             ];
-        let trading = self.shadow().trading_program.to_bytes();
         let mut set = |coordinate, value| {
             *observations
                 .get_mut(coordinate)
@@ -206,13 +233,21 @@ impl SemanticFixture {
         };
         set(
             SERIES_ROOT_COORDINATE_V4,
-            AccountObservationV1::new(root_key, trading, 1, series_state, false, true, false),
+            AccountObservationV1::new(
+                root_key,
+                &self.trading_program_bytes,
+                1,
+                series_state,
+                false,
+                true,
+                false,
+            ),
         );
         set(
             SERIES_CONFIG_COORDINATE_V4,
             AccountObservationV1::new(
-                self.template_id.to_bytes(),
-                key(201),
+                &self.template_id_bytes,
+                key_ref(201),
                 1,
                 &self.template,
                 false,
@@ -223,8 +258,8 @@ impl SemanticFixture {
         set(
             SERIES_PRODUCT_COORDINATE_V4,
             AccountObservationV1::new(
-                self.product.product_record().to_bytes(),
-                key(201),
+                &self.product_record_bytes,
+                key_ref(201),
                 1,
                 &[],
                 false,
@@ -235,8 +270,8 @@ impl SemanticFixture {
         set(
             SERIES_REGISTRY_COORDINATE_V4,
             AccountObservationV1::new(
-                self.shadow().registry_program.to_bytes(),
-                key(202),
+                &self.registry_program_bytes,
+                key_ref(202),
                 1,
                 &[],
                 false,
@@ -246,21 +281,37 @@ impl SemanticFixture {
         );
         set(
             SERIES_TRADING_COORDINATE_V4,
-            AccountObservationV1::new(trading, key(202), 1, &[], false, false, true),
+            AccountObservationV1::new(
+                &self.trading_program_bytes,
+                key_ref(202),
+                1,
+                &[],
+                false,
+                false,
+                true,
+            ),
         );
         set(
             SERIES_MARKET_COORDINATE_V4,
-            AccountObservationV1::new(self.market, key(203), 1, &[], false, true, false),
+            AccountObservationV1::new(&self.market, key_ref(203), 1, &[], false, true, false),
         );
         set(
             SERIES_TICKET_STATE_COORDINATE_V4,
-            AccountObservationV1::new(key(72), trading, 1, ticket_state, false, true, false),
+            AccountObservationV1::new(
+                key_ref(72),
+                &self.trading_program_bytes,
+                1,
+                ticket_state,
+                false,
+                true,
+                false,
+            ),
         );
         set(
             SERIES_TEMPLATE_RAW_COORDINATE_V4,
             AccountObservationV1::new(
-                self.template_id.to_bytes(),
-                key(201),
+                &self.template_id_bytes,
+                key_ref(201),
                 1,
                 &self.template,
                 false,
@@ -270,15 +321,15 @@ impl SemanticFixture {
         );
         set(
             SERIES_OCCURRENCE_RAW_COORDINATE_V4,
-            AccountObservationV1::new(key(73), key(201), 1, &self.occurrence, false, false, false),
+            AccountObservationV1::new(key_ref(73), key_ref(201), 1, &self.occurrence, false, false, false),
         );
         set(
             SERIES_TICKET_RAW_COORDINATE_V4,
-            AccountObservationV1::new(key(74), key(201), 1, ticket, false, false, false),
+            AccountObservationV1::new(key_ref(74), key_ref(201), 1, ticket, false, false, false),
         );
         set(
             SERIES_CLOCK_COORDINATE_V4,
-            AccountObservationV1::new(key(75), key(202), 1, &self.clock, false, false, false),
+            AccountObservationV1::new(key_ref(75), key_ref(202), 1, &self.clock, false, false, false),
         );
         observations
     }
@@ -304,7 +355,7 @@ fn semantic_input_is_derived_from_the_authenticated_runtime_vector() {
         &fixture.series_state,
         &fixture.ticket_state,
         &fixture.ticket,
-        fixture.shadow().root.to_bytes(),
+        &fixture.root_bytes,
     );
     let expected = evaluate_semantic_core_request(fixture.shadow(), &observations, fixture.facts())
         .expect("exact semantic Core request");
@@ -329,7 +380,7 @@ fn replay_root_ticket_product_and_account_substitution_refuse() {
         &stale_root,
         &fixture.ticket_state,
         &fixture.ticket,
-        shadow.root.to_bytes(),
+        &fixture.root_bytes,
     );
     assert_eq!(
         evaluate_semantic_core_request(shadow, &observations, fixture.facts()),
@@ -341,7 +392,7 @@ fn replay_root_ticket_product_and_account_substitution_refuse() {
         &fixture.series_state,
         &substituted_ticket_state,
         &fixture.ticket,
-        shadow.root.to_bytes(),
+        &fixture.root_bytes,
     );
     assert_eq!(
         evaluate_semantic_core_request(shadow, &observations, fixture.facts()),
@@ -354,7 +405,7 @@ fn replay_root_ticket_product_and_account_substitution_refuse() {
         &fixture.series_state,
         &fixture.ticket_state,
         &substituted_ticket,
-        shadow.root.to_bytes(),
+        &fixture.root_bytes,
     );
     assert_eq!(
         evaluate_semantic_core_request(shadow, &observations, fixture.facts()),
@@ -365,7 +416,7 @@ fn replay_root_ticket_product_and_account_substitution_refuse() {
         &fixture.series_state,
         &fixture.ticket_state,
         &fixture.ticket,
-        shadow.root.to_bytes(),
+        &fixture.root_bytes,
     );
     let hostile_product = SeriesShadowAuthenticatedFactsV4 {
         product: AuthenticatedProductProjectionV2::new(
@@ -384,7 +435,7 @@ fn replay_root_ticket_product_and_account_substitution_refuse() {
         &fixture.series_state,
         &fixture.ticket_state,
         &fixture.ticket,
-        key(97),
+        key_ref(97),
     );
     assert_eq!(
         evaluate_semantic_core_request(shadow, &observations, fixture.facts()),

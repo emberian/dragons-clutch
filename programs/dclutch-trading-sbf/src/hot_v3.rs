@@ -1332,6 +1332,12 @@ fn accelerator_runtime_observations_digest_v4(
     portfolio: [u8; 32],
     linked_basis: [u8; 32],
 ) -> Result<ContentId, ProgramError> {
+    let projected = LogicalProjectionKeysV3 {
+        selected_config,
+        product_root,
+        portfolio,
+        linked_basis,
+    };
     // Exact capacity, not `collect::<Result<Vec<_>, _>>()`. A fallible collect
     // reports a zero lower bound, so the SBF bump allocator - which never frees
     // - is walked through the whole doubling ladder and charges several times
@@ -1349,14 +1355,7 @@ fn accelerator_runtime_observations_digest_v4(
         .zip(&runtime_data)
         .enumerate()
         .map(|(coordinate, (account, data))| ShadowRuntimeObservationV3 {
-            key: logical_projection_key_v3(
-                coordinate,
-                account.key.to_bytes(),
-                selected_config,
-                product_root,
-                portfolio,
-                linked_basis,
-            ),
+            key: *logical_projection_key_v3(coordinate, account.key, &projected),
             owner: account.owner.to_bytes(),
             lamports: account.lamports(),
             data: data.as_ref(),
@@ -1901,6 +1900,15 @@ pub fn process_hot_execution_v3(
         &dynamic_spans.widths,
         runtime_accounts.len(),
     )?;
+    let projected_keys = Box::new(LogicalProjectionKeysV3 {
+        selected_config: context.selection().config().to_bytes(),
+        product_root: product_runtime.product_record.content_digest.to_bytes(),
+        portfolio: product_runtime.portfolio_record.content_digest.to_bytes(),
+        linked_basis: product_runtime_v3
+            .linked_basis_record
+            .content_digest
+            .to_bytes(),
+    });
     let selected_config_coordinate = u16::try_from(HOT_SELECTED_CONFIG_LOGICAL_ACCOUNT_V3)
         .map_err(|_| TradingSbfError::Content)?;
     let selected_config_is_variable = account_profile
@@ -1915,14 +1923,8 @@ pub fn process_hot_execution_v3(
         .map(|(coordinate, (account, data))| {
             let key = logical_projection_key_v3(
                 *aliases.get(coordinate).unwrap_or(&coordinate),
-                account.key.to_bytes(),
-                context.selection().config().to_bytes(),
-                product_runtime.product_record.content_digest.to_bytes(),
-                product_runtime.portfolio_record.content_digest.to_bytes(),
-                product_runtime_v3
-                    .linked_basis_record
-                    .content_digest
-                    .to_bytes(),
+                account.key,
+                &projected_keys,
             );
             if coordinate == HOT_LINKED_BASIS_LOGICAL_ACCOUNT_V3
                 || (coordinate == HOT_SELECTED_CONFIG_LOGICAL_ACCOUNT_V3
@@ -1934,7 +1936,7 @@ pub fn process_hot_execution_v3(
                 // this observation is constructed.
                 AccountObservationV1::new_adapter_authenticated_variable_data(
                     key,
-                    account.owner.to_bytes(),
+                    account.owner.as_array(),
                     account.lamports(),
                     data.as_ref(),
                     account.is_signer,
@@ -1944,7 +1946,7 @@ pub fn process_hot_execution_v3(
             } else {
                 AccountObservationV1::new(
                     key,
-                    account.owner.to_bytes(),
+                    account.owner.as_array(),
                     account.lamports(),
                     data.as_ref(),
                     account.is_signer,
@@ -3086,20 +3088,30 @@ fn execute_shadow_candidate_v3(
     )
 }
 
-fn logical_projection_key_v3(
-    coordinate: usize,
-    physical_key: [u8; 32],
+/// The four authenticated record identities the common Hot frame substitutes
+/// for a physical address when it observes a logical coordinate.
+///
+/// Borrowed, not copied, into each observation: a fixed topology aliases many
+/// logical coordinates onto few physical accounts, and the SBF bump allocator
+/// never frees, so a 90-entry bank pays for every by-value identity twice.
+struct LogicalProjectionKeysV3 {
     selected_config: [u8; 32],
     product_root: [u8; 32],
     portfolio: [u8; 32],
     linked_basis: [u8; 32],
-) -> [u8; 32] {
+}
+
+fn logical_projection_key_v3<'a>(
+    coordinate: usize,
+    physical_key: &'a Pubkey,
+    projected: &'a LogicalProjectionKeysV3,
+) -> &'a [u8; 32] {
     match coordinate {
-        1 => selected_config,
-        2 => product_root,
-        3 => portfolio,
-        4 => linked_basis,
-        _ => physical_key,
+        1 => &projected.selected_config,
+        2 => &projected.product_root,
+        3 => &projected.portfolio,
+        4 => &projected.linked_basis,
+        _ => physical_key.as_array(),
     }
 }
 
@@ -3826,8 +3838,8 @@ fn candidate_observation_v3<'data>(
 ) -> AccountObservationV1<'data> {
     if observation.adapter_authenticated_variable_data() {
         AccountObservationV1::new_adapter_authenticated_variable_data(
-            observation.key(),
-            observation.owner(),
+            observation.key_bytes(),
+            observation.owner_bytes(),
             lamports,
             observation.data(),
             account.is_signer,
@@ -3836,8 +3848,8 @@ fn candidate_observation_v3<'data>(
         )
     } else {
         AccountObservationV1::new(
-            observation.key(),
-            observation.owner(),
+            observation.key_bytes(),
+            observation.owner_bytes(),
             lamports,
             observation.data(),
             account.is_signer,
@@ -8096,28 +8108,28 @@ mod tests {
     #[test]
     fn common_projection_bindings_and_child_reservations_are_exact() {
         let id = |tag: u8| [tag; 32];
-        assert_eq!(
-            logical_projection_key_v3(0, id(1), id(2), id(3), id(4), id(5)),
-            id(1)
-        );
-        assert_eq!(
-            logical_projection_key_v3(1, id(1), id(2), id(3), id(4), id(5)),
-            id(2)
-        );
-        assert_eq!(
-            logical_projection_key_v3(2, id(1), id(2), id(3), id(4), id(5)),
-            id(3)
-        );
-        assert_eq!(
-            logical_projection_key_v3(3, id(1), id(2), id(3), id(4), id(5)),
-            id(4)
-        );
-        assert_eq!(
-            logical_projection_key_v3(4, id(1), id(2), id(3), id(4), id(5)),
-            id(5)
-        );
+        let physical = Pubkey::new_from_array(id(1));
+        let projected = LogicalProjectionKeysV3 {
+            selected_config: id(2),
+            product_root: id(3),
+            portfolio: id(4),
+            linked_basis: id(5),
+        };
+        for (coordinate, expected) in [
+            (0_usize, id(1)),
+            (1, id(2)),
+            (2, id(3)),
+            (3, id(4)),
+            (4, id(5)),
+            (5, id(1)),
+        ] {
+            assert_eq!(
+                *logical_projection_key_v3(coordinate, &physical, &projected),
+                expected
+            );
+        }
         assert_ne!(
-            logical_projection_key_v3(1, id(1), id(2), id(3), id(4), id(5)),
+            *logical_projection_key_v3(1, &physical, &projected),
             id(1)
         );
         let canonical = CommonProjectionBindingsV3 {

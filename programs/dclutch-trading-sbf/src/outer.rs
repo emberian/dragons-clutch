@@ -609,8 +609,8 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
             .zip(data.iter())
             .map(|(account, bytes)| {
                 AccountObservationV1::new(
-                    account.key.to_bytes(),
-                    account.owner.to_bytes(),
+                    account.key.as_array(),
+                    account.owner.as_array(),
                     account.lamports(),
                     bytes.as_ref(),
                     account.is_signer,

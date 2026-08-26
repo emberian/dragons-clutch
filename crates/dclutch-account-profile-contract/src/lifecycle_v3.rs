@@ -2452,7 +2452,7 @@ fn plan_lifecycle_with_values(
         .accounts
         .get(state_index)
         .ok_or(Error::RuntimeWidth)?;
-    if state.key != context.adapter_derived_pda || !state.writable || state.executable {
+    if *state.key != context.adapter_derived_pda || !state.writable || state.executable {
         return Err(Error::IdentityMismatch);
     }
     let bump_operation = policy.seed(
@@ -2479,13 +2479,13 @@ fn plan_lifecycle_with_values(
         LifecycleOperationV3::Authenticate => {
             if context.rent_credit.is_some()
                 || context.current_rent_minimum.is_some()
-                || state.owner != context.trading_program
+                || *state.owner != context.trading_program
                 || state.data.len() != usize::try_from(data_bytes).map_err(|_| Error::Arithmetic)?
             {
                 return Err(Error::InvalidState);
             }
             StateLifecyclePlanV3::Authenticate(AuthenticateStatePlanV3 {
-                state: state.key,
+                state: *state.key,
                 data_bytes,
                 lamports: state.lamports,
                 bump,
@@ -2498,16 +2498,16 @@ fn plan_lifecycle_with_values(
             plan_close(selected, recipe, state, data_bytes, bump, context)?
         }
         LifecycleOperationV3::AuthenticateOrCreate => {
-            if state.owner == context.trading_program
+            if *state.owner == context.trading_program
                 && state.data.len() == usize::try_from(data_bytes).map_err(|_| Error::Arithmetic)?
             {
                 StateLifecyclePlanV3::Authenticate(AuthenticateStatePlanV3 {
-                    state: state.key,
+                    state: *state.key,
                     data_bytes,
                     lamports: state.lamports,
                     bump,
                 })
-            } else if state.owner == context.system_program && state.data.is_empty() {
+            } else if *state.owner == context.system_program && state.data.is_empty() {
                 plan_create(
                     selected,
                     recipe,
@@ -2589,7 +2589,7 @@ fn plan_create(
     context: LifecycleContextV3<'_>,
     lifecycle_owns_values: bool,
 ) -> Result<StateLifecyclePlanV3> {
-    if state.owner != context.system_program || !state.data.is_empty() {
+    if *state.owner != context.system_program || !state.data.is_empty() {
         return Err(Error::InvalidState);
     }
     let payer_coordinate = selected.payer.ok_or(Error::InvalidFunding)?;
@@ -2644,8 +2644,8 @@ fn plan_create(
         .checked_sub(payer_debit)
         .ok_or(Error::InvalidFunding)?;
     Ok(StateLifecyclePlanV3::Create(CreateStatePlanV3 {
-        state: state.key,
-        payer: payer.key,
+        state: *state.key,
+        payer: *payer.key,
         rent_credit: credit.key,
         beneficiary: credit.beneficiary,
         target_data_bytes: data_bytes,
@@ -2666,7 +2666,7 @@ fn plan_close(
     bump: u8,
     context: LifecycleContextV3<'_>,
 ) -> Result<StateLifecyclePlanV3> {
-    if state.owner != context.trading_program
+    if *state.owner != context.trading_program
         || context.current_rent_minimum.is_some()
         || state.data.len() != usize::try_from(data_bytes).map_err(|_| Error::Arithmetic)?
     {
@@ -2703,7 +2703,7 @@ fn plan_close(
         .checked_add(state.lamports)
         .ok_or(Error::Arithmetic)?;
     Ok(StateLifecyclePlanV3::Close(CloseStatePlanV3 {
-        state: state.key,
+        state: *state.key,
         rent_credit: credit.key,
         beneficiary: credit.beneficiary,
         source_data_bytes: data_bytes,
@@ -2741,7 +2741,7 @@ fn authenticate_credit_account(
 ) -> Result<AuthenticatedRentCreditV3> {
     let credit = context.rent_credit.ok_or(Error::InvalidFunding)?;
     if credit.beneficiary == [0; 32]
-        || credit.key != account.key
+        || credit.key != *account.key
         || credit.lamports != account.lamports
     {
         return Err(Error::InvalidRent);
@@ -2816,7 +2816,7 @@ fn validate_protected_values(
         bump: u64::from(bump),
         historical_rent_principal: principal,
         beneficiary,
-        state: state.key,
+        state: *state.key,
         owner: context.trading_program,
     })
 }
@@ -3520,16 +3520,16 @@ mod tests {
         let plan = |state_owner: [u8; 32], state_data: &[u8], state_key: [u8; 32]| {
             let accounts = [
                 AccountObservationV1::new(
-                    state_key,
-                    state_owner,
+                    &state_key,
+                    &state_owner,
                     5,
                     state_data,
                     false,
                     true,
                     false,
                 ),
-                AccountObservationV1::new(payer, payer_owner, 100, &[], true, true, false),
-                AccountObservationV1::new(credit, [7; 32], 50, &[], false, false, false),
+                AccountObservationV1::new(&payer, &payer_owner, 100, &[], true, true, false),
+                AccountObservationV1::new(&credit, &[7; 32], 50, &[], false, false, false),
             ];
             plan_lifecycle(
                 selected,
@@ -3573,8 +3573,8 @@ mod tests {
         assert_eq!(plan(SYSTEM, &[], [0x55; 32]), Err(Error::IdentityMismatch));
 
         let observations = [AccountObservationV1::new(
-            state,
-            SYSTEM,
+            &state,
+            &SYSTEM,
             5,
             &[],
             false,
@@ -3815,16 +3815,16 @@ mod tests {
                         identity_output: &mut [[u8; 32]; 5]| {
             let accounts = [
                 AccountObservationV1::new(
-                    state,
-                    state_owner,
+                    &state,
+                    &state_owner,
                     state_lamports,
                     state_data,
                     false,
                     true,
                     false,
                 ),
-                AccountObservationV1::new(payer, payer_owner, 1_000, &[], true, true, false),
-                AccountObservationV1::new(credit, credit_owner, 7, &[], false, false, false),
+                AccountObservationV1::new(&payer, &payer_owner, 1_000, &[], true, true, false),
+                AccountObservationV1::new(&credit, &credit_owner, 7, &[], false, false, false),
             ];
             let mut projected_scalars = [9_u64; 5];
             let mut projected_identities = [[9_u8; 32]; 5];
@@ -4291,13 +4291,13 @@ mod tests {
 
     fn create_accounts() -> [AccountObservationV1<'static>; 7] {
         [
-            AccountObservationV1::new([1; 32], [7; 32], 1, &PRODUCT_DATA, false, false, false),
-            AccountObservationV1::new([0x41; 32], SYSTEM, 5, &[], false, true, false),
-            AccountObservationV1::new([0x42; 32], SYSTEM, 1_000, &[], true, true, false),
-            AccountObservationV1::new([0x43; 32], [7; 32], 7, &[], false, true, false),
-            AccountObservationV1::new([0x50; 32], SYSTEM, 0, &[], false, true, false),
-            AccountObservationV1::new([0x51; 32], SYSTEM, 0, &[], false, true, false),
-            AccountObservationV1::new([0x52; 32], SYSTEM, 20, &[], false, true, false),
+            AccountObservationV1::new(&[1; 32], &[7; 32], 1, &PRODUCT_DATA, false, false, false),
+            AccountObservationV1::new(&[0x41; 32], &SYSTEM, 5, &[], false, true, false),
+            AccountObservationV1::new(&[0x42; 32], &SYSTEM, 1_000, &[], true, true, false),
+            AccountObservationV1::new(&[0x43; 32], &[7; 32], 7, &[], false, true, false),
+            AccountObservationV1::new(&[0x50; 32], &SYSTEM, 0, &[], false, true, false),
+            AccountObservationV1::new(&[0x51; 32], &SYSTEM, 0, &[], false, true, false),
+            AccountObservationV1::new(&[0x52; 32], &SYSTEM, 20, &[], false, true, false),
         ]
     }
 
@@ -4451,8 +4451,8 @@ mod tests {
         let (scalars, identities) = registers();
         let mut accounts = create_accounts();
         accounts[6] = AccountObservationV1::new(
-            [0x52; 32],
-            TRADING,
+            &[0x52; 32],
+            &TRADING,
             135,
             &CLOSED_STATE_DATA,
             false,
@@ -4646,11 +4646,11 @@ mod tests {
         let count_data = 3_u32.to_le_bytes();
         let project = |state_data: &[u8]| {
             let accounts = [
-                AccountObservationV1::new([0x10; 32], TRADING, 1, state_data, false, true, false),
-                AccountObservationV1::new([0x11; 32], payer_owner, 1, &[], true, true, false),
+                AccountObservationV1::new(&[0x10; 32], &TRADING, 1, state_data, false, true, false),
+                AccountObservationV1::new(&[0x11; 32], &payer_owner, 1, &[], true, true, false),
                 AccountObservationV1::new(
-                    [0x12; 32],
-                    [0x44; 32],
+                    &[0x12; 32],
+                    &[0x44; 32],
                     1,
                     &count_data,
                     false,
@@ -4658,8 +4658,8 @@ mod tests {
                     false,
                 ),
                 AccountObservationV1::new(
-                    [0x13; 32],
-                    [0x55; 32],
+                    &[0x13; 32],
+                    &[0x55; 32],
                     1,
                     &opaque_data,
                     false,
@@ -4748,7 +4748,7 @@ mod tests {
         );
         let mut bad_accounts = create_accounts();
         bad_accounts[6] =
-            AccountObservationV1::new([0x52; 32], SYSTEM, 20, &[], false, true, false);
+            AccountObservationV1::new(&[0x52; 32], &SYSTEM, 20, &[], false, true, false);
         let bad_credit = LifecycleContextV3 {
             accounts: &bad_accounts,
             adapter_derived_pda: [0x52; 32],

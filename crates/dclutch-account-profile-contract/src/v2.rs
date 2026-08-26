@@ -4198,17 +4198,19 @@ mod tests {
     }
 
     fn observations(duplicate_across_items: bool) -> Vec<AccountObservationV1<'static>> {
-        let second = if duplicate_across_items {
-            [0x21; 32]
+        const DUPLICATE: [u8; 32] = [0x21; 32];
+        const DISTINCT: [u8; 32] = [0x31; 32];
+        let second: &'static [u8; 32] = if duplicate_across_items {
+            &DUPLICATE
         } else {
-            [0x31; 32]
+            &DISTINCT
         };
         vec![
-            AccountObservationV1::new([0x11; 32], [1; 32], 1, &PRODUCT_COUNT, false, false, false),
-            AccountObservationV1::new([0x21; 32], [1; 32], 2, &[], false, false, false),
-            AccountObservationV1::new([0x22; 32], [1; 32], 3, &[], false, false, false),
-            AccountObservationV1::new(second, [1; 32], 4, &[], false, false, false),
-            AccountObservationV1::new([0x32; 32], [1; 32], 5, &[], false, false, false),
+            AccountObservationV1::new(&[0x11; 32], &[1; 32], 1, &PRODUCT_COUNT, false, false, false),
+            AccountObservationV1::new(&[0x21; 32], &[1; 32], 2, &[], false, false, false),
+            AccountObservationV1::new(&[0x22; 32], &[1; 32], 3, &[], false, false, false),
+            AccountObservationV1::new(second, &[1; 32], 4, &[], false, false, false),
+            AccountObservationV1::new(&[0x32; 32], &[1; 32], 5, &[], false, false, false),
         ]
     }
 
@@ -4267,7 +4269,7 @@ mod tests {
         let profile = AccountProfileV2::decode(&bytes).expect("typed profile");
         let data = [0x55, 0x34, 0x12, 0xaa];
         let accounts = [AccountObservationV1::new(
-            [1; 32], [2; 32], 0, &data, false, false, false,
+            &[1; 32], &[2; 32], 0, &data, false, false, false,
         )];
         let mut scratch_scalars = [0_u64];
         let mut output_scalars = [9_u64];
@@ -4327,8 +4329,8 @@ mod tests {
 
         let product_count = 513_u32.to_le_bytes();
         let accounts = [AccountObservationV1::new(
-            [1; 32],
-            [2; 32],
+            &[1; 32],
+            &[2; 32],
             0,
             &product_count,
             false,
@@ -4456,7 +4458,7 @@ mod tests {
         let profile = AccountProfileV2::decode(&bytes).expect("affine profile");
         let data = affine_data(2);
         let accounts = [AccountObservationV1::new(
-            [0x11; 32], [1; 32], 1, &data, false, false, false,
+            &[0x11; 32], &[1; 32], 1, &data, false, false, false,
         )];
         let input_scalars = [0_u64; 5];
         let input_identities = [[0x11_u8; 32], [0; 32], [0; 32]];
@@ -4483,8 +4485,8 @@ mod tests {
 
         let hostile_data = affine_data(3);
         let hostile_accounts = [AccountObservationV1::new(
-            [0x11; 32],
-            [1; 32],
+            &[0x11; 32],
+            &[1; 32],
             1,
             &hostile_data,
             false,
@@ -4539,9 +4541,9 @@ mod tests {
         let selector = 1_u32.to_le_bytes();
         let page = selected_window_data();
         let accounts = [
-            AccountObservationV1::new([0x11; 32], [1; 32], 1, &PRODUCT_COUNT, false, false, false),
-            AccountObservationV1::new([0x12; 32], [1; 32], 1, &selector, false, false, false),
-            AccountObservationV1::new([0x13; 32], [1; 32], 1, &page, false, false, false),
+            AccountObservationV1::new(&[0x11; 32], &[1; 32], 1, &PRODUCT_COUNT, false, false, false),
+            AccountObservationV1::new(&[0x12; 32], &[1; 32], 1, &selector, false, false, false),
+            AccountObservationV1::new(&[0x13; 32], &[1; 32], 1, &page, false, false, false),
         ];
         let input_scalars = [0_u64; 7];
         let input_identities = [[0x11_u8; 32], [0; 32]];
@@ -4600,17 +4602,17 @@ mod tests {
         let hostile_selector = 2_u32.to_le_bytes();
         let page = selected_window_data();
         let accounts = [
-            AccountObservationV1::new([0x11; 32], [1; 32], 1, &PRODUCT_COUNT, false, false, false),
+            AccountObservationV1::new(&[0x11; 32], &[1; 32], 1, &PRODUCT_COUNT, false, false, false),
             AccountObservationV1::new(
-                [0x12; 32],
-                [1; 32],
+                &[0x12; 32],
+                &[1; 32],
                 1,
                 &hostile_selector,
                 false,
                 false,
                 false,
             ),
-            AccountObservationV1::new([0x13; 32], [1; 32], 1, &page, false, false, false),
+            AccountObservationV1::new(&[0x13; 32], &[1; 32], 1, &page, false, false, false),
         ];
         let mut scratch_scalars = [0_u64; 7];
         let mut scratch_identities = [[0_u8; 32]; 2];

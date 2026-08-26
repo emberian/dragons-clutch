@@ -1904,7 +1904,7 @@ mod tests {
 
         let data = [0x55, 0x34, 0x12, 0xaa];
         let accounts = [AccountObservationV1::new(
-            [1; 32], [2; 32], 0, &data, false, false, false,
+            &[1; 32], &[2; 32], 0, &data, false, false, false,
         )];
         let mut input_scalars = [0_u64; 64];
         *input_scalars.get_mut(1).expect("slot scalar") = 77_777;
@@ -2007,7 +2007,7 @@ mod tests {
         let project =
             |data: &[u8], output_scalars: &mut [u64; 2], output_ids: &mut [[u8; 32]; 1]| {
                 let accounts = [AccountObservationV1::new(
-                    [1; 32], [2; 32], 7, data, false, true, false,
+                    &[1; 32], &[2; 32], 7, data, false, true, false,
                 )];
                 let input_scalars = [9_u64, 77_777];
                 let mut scalar_scratch = [0_u64; 2];
@@ -2161,7 +2161,7 @@ mod tests {
          -> crate::v2::Result<()> {
             let accounts = [
                 variable,
-                AccountObservationV1::new([3; 32], [4; 32], 9, &live_lifecycle, false, true, false),
+                AccountObservationV1::new(&[3; 32], &[4; 32], 9, &live_lifecycle, false, true, false),
             ];
             let input = [0_u64, 77_777, 0];
             let mut scratch = [0_u64; 3];
@@ -2181,8 +2181,8 @@ mod tests {
         };
 
         let trusted = AccountObservationV1::new_adapter_authenticated_variable_data(
-            [1; 32],
-            [2; 32],
+            &[1; 32],
+            &[2; 32],
             7,
             &variable_data,
             false,
@@ -2195,7 +2195,7 @@ mod tests {
         assert_eq!(projected, [0x4433_2211, 77_777, 0]);
 
         let ordinary =
-            AccountObservationV1::new([1; 32], [2; 32], 7, &variable_data, false, false, false);
+            AccountObservationV1::new(&[1; 32], &[2; 32], 7, &variable_data, false, false, false);
         assert!(!ordinary.adapter_authenticated_variable_data());
         let mut refused = [9_u64; 3];
         let before = refused;
@@ -2206,8 +2206,8 @@ mod tests {
         assert_eq!(refused, before);
 
         let short = AccountObservationV1::new_adapter_authenticated_variable_data(
-            [1; 32],
-            [2; 32],
+            &[1; 32],
+            &[2; 32],
             7,
             &variable_data[..260],
             false,
@@ -2539,7 +2539,7 @@ mod tests {
 
         let data = 0x4433_2211_u32.to_le_bytes();
         let account = AccountObservationV1::new_adapter_authenticated_variable_data(
-            [4; 32], [5; 32], 9, &data, false, false, false,
+            &[4; 32], &[5; 32], 9, &data, false, false, false,
         );
         let input_scalars = [0_u64, 77];
         let input_identities = [[0; 32], [0; 32], [8; 32]];
@@ -2724,17 +2724,27 @@ mod tests {
         let mut state = [0_u8; 12];
         *state.get_mut(11).expect("bump") = 0xa5;
         let basis = [0x44_u8; 64];
+        let coordinate_keys: std::vec::Vec<[u8; 32]> =
+            (0_u8..15).map(|value| [value; 32]).collect();
         let mut accounts = std::vec::Vec::with_capacity(15);
         for coordinate in 0_u8..15 {
             let observation = match coordinate {
-                0 => AccountObservationV1::new([200; 32], [2; 32], 7, &state, false, false, false),
+                0 => AccountObservationV1::new(&[200; 32], &[2; 32], 7, &state, false, false, false),
                 4 => AccountObservationV1::new_adapter_authenticated_variable_data(
-                    [4; 32], [5; 32], 9, &basis, false, false, false,
+                    &[4; 32], &[5; 32], 9, &basis, false, false, false,
                 ),
-                14 => AccountObservationV1::new([4; 32], [5; 32], 9, &basis, false, false, false),
-                value => {
-                    AccountObservationV1::new([value; 32], [2; 32], 0, &[], false, false, false)
-                }
+                14 => AccountObservationV1::new(&[4; 32], &[5; 32], 9, &basis, false, false, false),
+                value => AccountObservationV1::new(
+                    coordinate_keys
+                        .get(usize::from(value))
+                        .expect("coordinate key"),
+                    &[2; 32],
+                    0,
+                    &[],
+                    false,
+                    false,
+                    false,
+                ),
             };
             accounts.push(observation);
         }
@@ -2782,31 +2792,31 @@ mod tests {
         let mut asserted_alias = accounts.clone();
         *asserted_alias.get_mut(14).expect("alias") =
             AccountObservationV1::new_adapter_authenticated_variable_data(
-                [4; 32], [5; 32], 9, &basis, false, false, false,
+                &[4; 32], &[5; 32], 9, &basis, false, false, false,
             );
         assert_atomic_refusal(&asserted_alias, Error::InvalidVariableDataPrestate);
 
         let mut substituted_alias = accounts.clone();
         *substituted_alias.get_mut(14).expect("alias") =
-            AccountObservationV1::new([6; 32], [5; 32], 9, &basis, false, false, false);
+            AccountObservationV1::new(&[6; 32], &[5; 32], 9, &basis, false, false, false);
         assert_atomic_refusal(&substituted_alias, Error::AliasMismatch);
 
         let mut wrong_owner = accounts.clone();
         *wrong_owner.get_mut(14).expect("alias") =
-            AccountObservationV1::new([4; 32], [6; 32], 9, &basis, false, false, false);
+            AccountObservationV1::new(&[4; 32], &[6; 32], 9, &basis, false, false, false);
         assert_atomic_refusal(&wrong_owner, Error::AliasMismatch);
 
         let short_basis = [0x44_u8; 63];
         let mut partial_body = accounts.clone();
         *partial_body.get_mut(14).expect("alias") =
-            AccountObservationV1::new([4; 32], [5; 32], 9, &short_basis, false, false, false);
+            AccountObservationV1::new(&[4; 32], &[5; 32], 9, &short_basis, false, false, false);
         assert_atomic_refusal(&partial_body, Error::AliasMismatch);
 
         let mut unauthenticated_representative = accounts.clone();
         *unauthenticated_representative
             .get_mut(4)
             .expect("representative") =
-            AccountObservationV1::new([4; 32], [5; 32], 9, &basis, false, false, false);
+            AccountObservationV1::new(&[4; 32], &[5; 32], 9, &basis, false, false, false);
         assert_atomic_refusal(
             &unauthenticated_representative,
             Error::InvalidVariableDataPrestate,
@@ -3021,10 +3031,10 @@ mod tests {
         }
         let project = |descriptor_data: &[u8], output: &mut [u64; 8]| {
             let observations = [
-                AccountObservationV1::new([1; 32], [2; 32], 1, &product, false, false, false),
+                AccountObservationV1::new(&[1; 32], &[2; 32], 1, &product, false, false, false),
                 AccountObservationV1::new_adapter_authenticated_variable_data(
-                    [3; 32],
-                    [4; 32],
+                    &[3; 32],
+                    &[4; 32],
                     1,
                     descriptor_data,
                     false,
@@ -3087,10 +3097,10 @@ mod tests {
         let zero_product = 0_u32.to_le_bytes();
         let zero_descriptor = std::vec![0_u8; usize::try_from(TAIL_OFFSET).expect("offset")];
         let zero_observations = [
-            AccountObservationV1::new([1; 32], [2; 32], 1, &zero_product, false, false, false),
+            AccountObservationV1::new(&[1; 32], &[2; 32], 1, &zero_product, false, false, false),
             AccountObservationV1::new_adapter_authenticated_variable_data(
-                [3; 32],
-                [4; 32],
+                &[3; 32],
+                &[4; 32],
                 1,
                 &zero_descriptor,
                 false,
@@ -3296,10 +3306,10 @@ mod tests {
         let project =
             |selected_profile: AccountProfileV2<'_>, descriptor_data: &[u8], output: &mut [u64]| {
                 let observations = [
-                    AccountObservationV1::new([1; 32], [2; 32], 1, &product, false, false, false),
+                    AccountObservationV1::new(&[1; 32], &[2; 32], 1, &product, false, false, false),
                     AccountObservationV1::new_adapter_authenticated_variable_data(
-                        [3; 32],
-                        [4; 32],
+                        &[3; 32],
+                        &[4; 32],
                         1,
                         descriptor_data,
                         false,
@@ -3691,9 +3701,9 @@ mod tests {
 
         let body = [7_u8; 4];
         let representative_observation =
-            AccountObservationV1::new([1; 32], [2; 32], 9, &body, false, true, false);
+            AccountObservationV1::new(&[1; 32], &[2; 32], 9, &body, false, true, false);
         let system_observation =
-            AccountObservationV1::new([3; 32], [4; 32], 0, &[], false, false, true);
+            AccountObservationV1::new(&[3; 32], &[4; 32], 0, &[], false, false, true);
         let accounts = [
             representative_observation,
             representative_observation,
@@ -3751,7 +3761,7 @@ mod tests {
         };
 
         let readonly_physical =
-            AccountObservationV1::new([1; 32], [2; 32], 9, &body, false, false, false);
+            AccountObservationV1::new(&[1; 32], &[2; 32], 9, &body, false, false, false);
         assert_refuses(
             &[
                 readonly_physical,
@@ -3761,7 +3771,7 @@ mod tests {
             ],
             Error::PrivilegeMismatch,
         );
-        let substituted = AccountObservationV1::new([9; 32], [2; 32], 9, &body, false, true, false);
+        let substituted = AccountObservationV1::new(&[9; 32], &[2; 32], 9, &body, false, true, false);
         assert_refuses(
             &[
                 representative_observation,
@@ -3771,7 +3781,7 @@ mod tests {
             ],
             Error::AliasMismatch,
         );
-        let wrong_owner = AccountObservationV1::new([1; 32], [9; 32], 9, &body, false, true, false);
+        let wrong_owner = AccountObservationV1::new(&[1; 32], &[9; 32], 9, &body, false, true, false);
         assert_refuses(
             &[
                 representative_observation,
@@ -3783,7 +3793,7 @@ mod tests {
         );
         let other_body = [8_u8; 4];
         let wrong_data =
-            AccountObservationV1::new([1; 32], [2; 32], 9, &other_body, false, true, false);
+            AccountObservationV1::new(&[1; 32], &[2; 32], 9, &other_body, false, true, false);
         assert_refuses(
             &[
                 representative_observation,
@@ -3794,7 +3804,7 @@ mod tests {
             Error::AliasMismatch,
         );
         let wrong_lamports =
-            AccountObservationV1::new([1; 32], [2; 32], 10, &body, false, true, false);
+            AccountObservationV1::new(&[1; 32], &[2; 32], 10, &body, false, true, false);
         assert_refuses(
             &[
                 representative_observation,
@@ -4025,12 +4035,12 @@ mod tests {
         let ticket_data = [1, 2, 3, 4];
         let opaque_data = [8, 9, 10];
         let accounts = [
-            AccountObservationV1::new([1; 32], owner, 1, &[], false, false, false),
-            AccountObservationV1::new([2; 32], owner, 2, &[], false, false, false),
-            AccountObservationV1::new([3; 32], owner, 3, &[], false, false, false),
-            AccountObservationV1::new([4; 32], owner, 4, &opaque_data, false, false, false),
-            AccountObservationV1::new(ticket_key, owner, 5, &ticket_data, false, true, false),
-            AccountObservationV1::new(ticket_key, owner, 5, &ticket_data, false, true, false),
+            AccountObservationV1::new(&[1; 32], &owner, 1, &[], false, false, false),
+            AccountObservationV1::new(&[2; 32], &owner, 2, &[], false, false, false),
+            AccountObservationV1::new(&[3; 32], &owner, 3, &[], false, false, false),
+            AccountObservationV1::new(&[4; 32], &owner, 4, &opaque_data, false, false, false),
+            AccountObservationV1::new(&ticket_key, &owner, 5, &ticket_data, false, true, false),
+            AccountObservationV1::new(&ticket_key, &owner, 5, &ticket_data, false, true, false),
         ];
         let input_scalars = [2_u64];
         let input_identities = [owner];
@@ -4174,9 +4184,9 @@ mod tests {
         let count_data = 3_u32.to_le_bytes();
         let project = |state_data: &[u8], output: &mut [u64; 2]| {
             let accounts = [
-                AccountObservationV1::new([3; 32], owner, 1, &count_data, false, false, false),
-                AccountObservationV1::new([1; 32], owner, 9, state_data, false, true, false),
-                AccountObservationV1::new([2; 32], owner, 1, &opaque_data, false, false, false),
+                AccountObservationV1::new(&[3; 32], &owner, 1, &count_data, false, false, false),
+                AccountObservationV1::new(&[1; 32], &owner, 9, state_data, false, true, false),
+                AccountObservationV1::new(&[2; 32], &owner, 1, &opaque_data, false, false, false),
             ];
             let input = [7_u64, 1];
             let mut scratch_scalars = [0_u64; 2];
@@ -4431,8 +4441,8 @@ mod tests {
         let profile = AccountProfileV2::decode(&output).expect("Profile13");
         let tail_count_bytes = 2_u32.to_le_bytes();
         let accounts = [
-            AccountObservationV1::new([1; 32], [2; 32], 1, &tail_count_bytes, false, false, false),
-            AccountObservationV1::new([3; 32], [4; 32], 1, &[], false, false, false),
+            AccountObservationV1::new(&[1; 32], &[2; 32], 1, &tail_count_bytes, false, false, false),
+            AccountObservationV1::new(&[3; 32], &[4; 32], 1, &[], false, false, false),
         ];
         let input_scalars = [1_u64, 0, 99, 99];
         let input_identities = [[5_u8; 32]; 3];

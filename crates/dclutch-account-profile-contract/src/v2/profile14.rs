@@ -433,9 +433,9 @@ mod tests {
         let mut data = [0_u8; 16];
         data[..8].copy_from_slice(&0x0032_5041_544c_4344_u64.to_le_bytes());
         let accounts = [
-            AccountObservationV1::new([1; 32], [9; 32], 7, &data, false, true, false),
-            AccountObservationV1::new([1; 32], [9; 32], 7, &data, false, true, false),
-            AccountObservationV1::new([2; 32], [9; 32], 0, &[], false, false, false),
+            AccountObservationV1::new(&[1; 32], &[9; 32], 7, &data, false, true, false),
+            AccountObservationV1::new(&[1; 32], &[9; 32], 7, &data, false, true, false),
+            AccountObservationV1::new(&[2; 32], &[9; 32], 0, &[], false, false, false),
         ];
         let input_scalars = [1_u64];
         let input_identities = [[7_u8; 32]];
@@ -464,8 +464,8 @@ mod tests {
         let mut hostile_data = data;
         hostile_data[15] = 1;
         let hostile = [
-            AccountObservationV1::new([1; 32], [9; 32], 7, &hostile_data, false, true, false),
-            AccountObservationV1::new([1; 32], [9; 32], 7, &hostile_data, false, true, false),
+            AccountObservationV1::new(&[1; 32], &[9; 32], 7, &hostile_data, false, true, false),
+            AccountObservationV1::new(&[1; 32], &[9; 32], 7, &hostile_data, false, true, false),
             accounts[2],
         ];
         output_scalars = [0xaa];
@@ -605,9 +605,9 @@ mod tests {
         .expect("encode lifecycle Profile14");
         let profile = AccountProfileV2::decode(&encoded).expect("decode lifecycle Profile14");
         let vacant = [
-            AccountObservationV1::new([1; 32], [9; 32], 7, &[], false, true, false),
-            AccountObservationV1::new([1; 32], [9; 32], 7, &[], false, true, false),
-            AccountObservationV1::new([2; 32], [9; 32], 0, &[], false, false, false),
+            AccountObservationV1::new(&[1; 32], &[9; 32], 7, &[], false, true, false),
+            AccountObservationV1::new(&[1; 32], &[9; 32], 7, &[], false, true, false),
+            AccountObservationV1::new(&[2; 32], &[9; 32], 0, &[], false, false, false),
         ];
         let input_scalars = [1_u64];
         let input_identities = [[7_u8; 32]];
@@ -633,8 +633,8 @@ mod tests {
 
         let live = [0_u8; 16];
         let hostile_live = [
-            AccountObservationV1::new([1; 32], [9; 32], 7, &live, false, true, false),
-            AccountObservationV1::new([1; 32], [9; 32], 7, &live, false, true, false),
+            AccountObservationV1::new(&[1; 32], &[9; 32], 7, &live, false, true, false),
+            AccountObservationV1::new(&[1; 32], &[9; 32], 7, &live, false, true, false),
             vacant[2],
         ];
         assert_eq!(

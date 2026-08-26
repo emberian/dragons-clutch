@@ -239,13 +239,13 @@ fn evaluate_authenticated_invocation(
         if privileges.executable() != current.executable {
             return Err(SeriesShadowSbfErrorV4::Runtime);
         }
-        let key = logical_projection_key(coordinate, current.key.to_bytes(), projections);
+        let key = logical_projection_key(coordinate, current.key, &projections);
         let profile_observation = if coordinate == LINKED_BASIS_RAW_COORDINATE
             || (coordinate == CONFIG_COORDINATE && config_is_variable)
         {
             AccountObservationV1::new_adapter_authenticated_variable_data(
                 key,
-                current.owner.to_bytes(),
+                current.owner.as_array(),
                 current.lamports(),
                 data.as_ref(),
                 privileges.signer(),
@@ -255,7 +255,7 @@ fn evaluate_authenticated_invocation(
         } else {
             AccountObservationV1::new(
                 key,
-                current.owner.to_bytes(),
+                current.owner.as_array(),
                 current.lamports(),
                 data.as_ref(),
                 privileges.signer(),
@@ -265,7 +265,7 @@ fn evaluate_authenticated_invocation(
         };
         profile_observations.push(profile_observation);
         transcript_observations.push(ShadowRuntimeObservationV3 {
-            key,
+            key: *key,
             owner: current.owner.to_bytes(),
             lamports: current.lamports(),
             data: data.as_ref(),
@@ -295,17 +295,20 @@ struct LogicalProjectionKeysV4 {
     linked_basis: [u8; 32],
 }
 
-const fn logical_projection_key(
+/// Borrowed, not copied: the observation bank holds one entry per logical
+/// coordinate and the SBF allocator never frees, so a by-value identity is
+/// paid for twice in every alias.
+const fn logical_projection_key<'a>(
     coordinate: usize,
-    physical: [u8; 32],
-    projections: LogicalProjectionKeysV4,
-) -> [u8; 32] {
+    physical: &'a Pubkey,
+    projections: &'a LogicalProjectionKeysV4,
+) -> &'a [u8; 32] {
     match coordinate {
-        CONFIG_COORDINATE => projections.config,
-        PRODUCT_RAW_COORDINATE => projections.product,
-        PORTFOLIO_RAW_COORDINATE => projections.portfolio,
-        LINKED_BASIS_RAW_COORDINATE => projections.linked_basis,
-        _ => physical,
+        CONFIG_COORDINATE => &projections.config,
+        PRODUCT_RAW_COORDINATE => &projections.product,
+        PORTFOLIO_RAW_COORDINATE => &projections.portfolio,
+        LINKED_BASIS_RAW_COORDINATE => &projections.linked_basis,
+        _ => physical.as_array(),
     }
 }
 
@@ -466,24 +469,20 @@ mod tests {
             portfolio: [4; 32],
             linked_basis: [5; 32],
         };
-        assert_eq!(logical_projection_key(0, [1; 32], projections), [1; 32]);
-        assert_eq!(
-            logical_projection_key(CONFIG_COORDINATE, [1; 32], projections),
-            [2; 32]
-        );
-        assert_eq!(
-            logical_projection_key(PRODUCT_RAW_COORDINATE, [1; 32], projections),
-            [3; 32]
-        );
-        assert_eq!(
-            logical_projection_key(PORTFOLIO_RAW_COORDINATE, [1; 32], projections),
-            [4; 32]
-        );
-        assert_eq!(
-            logical_projection_key(LINKED_BASIS_RAW_COORDINATE, [1; 32], projections),
-            [5; 32]
-        );
-        assert_eq!(logical_projection_key(5, [1; 32], projections), [1; 32]);
+        let physical = Pubkey::new_from_array([1; 32]);
+        for (coordinate, expected) in [
+            (0_usize, [1_u8; 32]),
+            (CONFIG_COORDINATE, [2; 32]),
+            (PRODUCT_RAW_COORDINATE, [3; 32]),
+            (PORTFOLIO_RAW_COORDINATE, [4; 32]),
+            (LINKED_BASIS_RAW_COORDINATE, [5; 32]),
+            (5, [1; 32]),
+        ] {
+            assert_eq!(
+                *logical_projection_key(coordinate, &physical, &projections),
+                expected
+            );
+        }
     }
 
     #[test]

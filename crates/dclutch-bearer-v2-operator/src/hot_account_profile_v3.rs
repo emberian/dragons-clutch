@@ -222,11 +222,12 @@ mod tests {
             let source_key = *keys.get(source).expect("alias source");
             *keys.get_mut(target).expect("alias target") = source_key;
         }
+        let common_owner = id(200);
         let observations = (0..LOGICAL_ACCOUNT_COUNT)
             .map(|index| {
                 let arguments = (
-                    *keys.get(index).expect("logical key"),
-                    id(200),
+                    keys.get(index).expect("logical key"),
+                    &common_owner,
                     0,
                     data.get(index).expect("logical data").as_slice(),
                     index == 8,
