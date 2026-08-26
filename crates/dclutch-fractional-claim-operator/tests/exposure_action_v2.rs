@@ -12,11 +12,17 @@ use dclutch_fractional_claim_kernel::{
     fractional_exposure_terms_bytes_v2,
 };
 use dclutch_fractional_claim_operator::{
-    Error, FractionalExposureMintSnapshotV2, FractionalExposureRetirementContextV2,
-    FractionalExposureTokenEffectV2, FractionalExposureTokenObservationV2,
-    FractionalTokenAccountSnapshotV1, FractionalTokenBehaviorRecordAdmissionV2,
-    authenticate_fractional_token_behavior_v2, plan_fractional_exposure_retirement_v2,
+    Error, FractionalExposureMintSnapshotV2, FractionalExposureRentCloseObservationV2,
+    FractionalExposureRetirementContextV2, FractionalExposureTokenEffectV2,
+    FractionalExposureTokenObservationV2, FractionalTokenAccountSnapshotV1,
+    FractionalTokenBehaviorRecordAdmissionV2, authenticate_fractional_token_behavior_v2,
+    plan_fractional_exposure_rent_close_v2, plan_fractional_exposure_retirement_v2,
     plan_fractional_exposure_token_effect_v2,
+};
+use dclutch_market_core_codec::{RetirementReceiptInputV1, RetirementReceiptV1};
+use dclutch_rent_contract::{
+    RefundAuthority,
+    lifecycle_v2::{LifecycleAccountIdV2, LifecycleRentCreditV2},
 };
 use dclutch_token_svm::{
     TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, TokenBehaviorSelectionV2,
@@ -439,5 +445,62 @@ fn retirement_closes_all_k_mints_in_terms_order_only_at_zero_supply() {
             &hostile,
         ),
         Err(Error::Token)
+    );
+
+    let credit = LifecycleRentCreditV2::new(
+        RefundAuthority::new([71; 32]).expect("refund wallet"),
+        LifecycleAccountIdV2::new(MARKET).expect("Market"),
+        LifecycleAccountIdV2::new(RELEASE).expect("release"),
+        7,
+        9,
+    )
+    .expect("lifecycle credit");
+    let core_receipt = RetirementReceiptV1::new(RetirementReceiptInputV1 {
+        core_program: context.current_core_program.to_bytes(),
+        market: MARKET,
+        release_set: RELEASE,
+        rent_credit: rent_credit.to_bytes(),
+        bundle_digest: [72; 32],
+        source_receipt_digest: [73; 32],
+        claims_receipt_digest: [74; 32],
+        custody_close_vault_receipt_digest: [75; 32],
+        custody_close_replay_receipt_digest: [76; 32],
+        pre_state_digest: [77; 32],
+        retired_candidate_digest: [78; 32],
+        post_resource_digest: [79; 32],
+        generation: 7,
+        source_closure_revision: 1,
+        claims_post_revision: 2,
+        custody_post_revision: 3,
+        core_refund_lamports: 4,
+        claims_refund_lamports: 5,
+        custody_refund_lamports: 6,
+    })
+    .expect("Core retirement receipt");
+    let observed = FractionalExposureRentCloseObservationV2 {
+        credit_key: rent_credit,
+        credit_bytes: &credit.to_bytes(),
+        credit_lamports: 1_000,
+        wallet_lamports: 2_000,
+        core_receipt_bytes: &core_receipt.to_bytes(),
+        current_core_authenticated: true,
+    };
+    let rent =
+        plan_fractional_exposure_rent_close_v2(&plan, observed).expect("canonical lifecycle close");
+    assert_eq!(rent.plan.closed_lamports(), 1_000);
+    assert_eq!(rent.plan.wallet_after(), 3_000);
+    assert_eq!(rent.plan.post_resource_digest(), [79; 32]);
+
+    let mut substituted_receipt = core_receipt.to_bytes();
+    substituted_receipt[80] ^= 1;
+    assert_eq!(
+        plan_fractional_exposure_rent_close_v2(
+            &plan,
+            FractionalExposureRentCloseObservationV2 {
+                core_receipt_bytes: &substituted_receipt,
+                ..observed
+            },
+        ),
+        Err(Error::Rent)
     );
 }
