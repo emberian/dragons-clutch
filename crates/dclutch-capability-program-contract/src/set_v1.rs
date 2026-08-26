@@ -256,6 +256,16 @@ impl<'a> CapabilityProgramSetV1<'a> {
     /// This does not validate the family request. The selected RequestProfile
     /// must independently require the same action before execution.
     pub fn select(self, request: &[u8]) -> ProgramSetResultV1<ContentId> {
+        self.select_entry(request)
+            .map(CapabilityProgramSetEntryV1::program)
+    }
+
+    /// Select the exact action entry and its full CapabilityProgramV3 bundle.
+    ///
+    /// Lifecycle policies consume the same authenticated selector value; this
+    /// accessor prevents an adapter from reparsing or duplicating set endian
+    /// and width rules.
+    pub fn select_entry(self, request: &[u8]) -> ProgramSetResultV1<CapabilityProgramSetEntryV1> {
         let start = usize::try_from(self.selector_offset)
             .map_err(|_| ProgramSetErrorV1::SelectorOutOfBounds)?;
         let width = usize::from(self.selector_width.bytes());
@@ -289,7 +299,7 @@ impl<'a> CapabilityProgramSetV1<'a> {
         while index < self.entry_count {
             let entry = self.entry(index)?;
             if entry.selector == selector {
-                return Ok(entry.program);
+                return Ok(entry);
             }
             if entry.selector > selector {
                 break;
@@ -435,5 +445,8 @@ mod tests {
             set.select(&request),
             Ok(ContentId::new([0x11; 32]).expect("id"))
         );
+        let selected = set.select_entry(&request).expect("exact selected entry");
+        assert_eq!(selected.selector(), 1);
+        assert_eq!(selected.program(), ContentId::new([0x11; 32]).expect("id"));
     }
 }
