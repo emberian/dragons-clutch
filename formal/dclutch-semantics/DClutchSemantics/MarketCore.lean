@@ -200,6 +200,176 @@ def foundingAccepts (frame : FoundingFrame) : Bool :=
   frame.accounts.market.address != frame.accounts.rentCreditId &&
   plan.payerDebit <= frame.accounts.payerLamports
 
+/-! ## Recurring-Series one-shot founding capability -/
+
+/-- Immutable semantic body of the Core-owned permit consumed by Claims V5.
+The two Claims digests are stored in the body rather than the PDA seeds, which
+keeps the address acyclic while binding the exact future request. -/
+structure SeriesFoundingPermit where
+  releaseSetId : Identity
+  marketId : Identity
+  productRecordId : Identity
+  sourceId : Identity
+  founderId : Identity
+  ticketContextId : Identity
+  parentRootId : Identity
+  projectedReplayId : Identity
+  fundingSourceId : Identity
+  hoardId : Identity
+  projectedRequestDigest : Identity
+  projectedReceiptDigest : Identity
+  claimsIntentDigest : Identity
+  claimsRequestDigest : Identity
+  tradingProgramId : Identity
+  claimsProgramId : Identity
+  rentCreditId : Identity
+  generation : Nat
+  quantity : Nat
+  basisScale : Nat
+  expirySlot : Nat
+  projectedResultingRevision : Nat
+  normalReplayRevision : Nat
+  deriving DecidableEq, Repr
+
+def SeriesFoundingPermit.valid (permit : SeriesFoundingPermit) : Bool :=
+  [permit.releaseSetId, permit.marketId, permit.productRecordId, permit.sourceId,
+    permit.founderId, permit.ticketContextId, permit.parentRootId,
+    permit.projectedReplayId, permit.fundingSourceId, permit.hoardId,
+    permit.projectedRequestDigest, permit.projectedReceiptDigest,
+    permit.claimsIntentDigest, permit.claimsRequestDigest,
+    permit.tradingProgramId, permit.claimsProgramId, permit.rentCreditId].all (· != 0) &&
+  permit.marketId != permit.fundingSourceId && permit.marketId != permit.hoardId &&
+  permit.marketId != permit.projectedReplayId &&
+  permit.fundingSourceId != permit.hoardId && permit.projectedReplayId != permit.hoardId &&
+  permit.tradingProgramId != permit.claimsProgramId &&
+  permit.claimsIntentDigest != permit.claimsRequestDigest &&
+  0 < permit.generation && 0 < permit.quantity && 0 < permit.basisScale &&
+  0 < permit.expirySlot && 0 < permit.projectedResultingRevision &&
+  permit.normalReplayRevision = 1
+
+/-- Chain observations for the exact permit PDA prepaid during Trading Prepare.
+The current Rent minimum is debited from one selected `capability_native`
+FundingState. Pre-existing lamports remain an explicit donation and never
+become semantic capability funding. -/
+structure SeriesPermitFundingObservation where
+  account : VacantAccount
+  canonicalPdaAuthenticated : Bool
+  typedCapabilityNativeEntryAuthenticated : Bool
+  tradingPreparedCommitAuthenticated : Bool
+  preexistingLamports : Nat
+  fundingDebit : Nat
+  currentRentMinimum : Nat
+  currentSlot : Nat
+  deriving DecidableEq, Repr
+
+def seriesPermitFundingAccepts
+    (permit : SeriesFoundingPermit) (funding : SeriesPermitFundingObservation) : Bool :=
+  permit.valid && funding.account.valid && funding.canonicalPdaAuthenticated &&
+  funding.typedCapabilityNativeEntryAuthenticated &&
+  funding.tradingPreparedCommitAuthenticated &&
+  0 < funding.currentRentMinimum && funding.fundingDebit = funding.currentRentMinimum &&
+  funding.account.lamports = funding.preexistingLamports + funding.fundingDebit &&
+  funding.currentRentMinimum ≤ funding.account.lamports &&
+  funding.currentSlot ≤ permit.expirySlot
+
+/-- Allocation/assignment never debits Core or Trading during Consume: Prepare
+has already prefunded the canonical still-System-owned zero-data PDA. -/
+def seriesPermitCreationPlan
+    (funding : SeriesPermitFundingObservation) : AccountCreation :=
+  planAccountCreation funding.account funding.currentRentMinimum 0
+
+theorem accepted_series_permit_needs_no_consume_topup
+    (permit : SeriesFoundingPermit) (funding : SeriesPermitFundingObservation)
+    (_accepted : seriesPermitFundingAccepts permit funding = true)
+    (prefunded : funding.currentRentMinimum ≤ funding.account.lamports) :
+    (seriesPermitCreationPlan funding).rentTopUp = 0 := by
+  simp [seriesPermitCreationPlan, planAccountCreation, rentTopUp,
+    Nat.sub_eq_zero_of_le prefunded]
+
+/-- Exact Found-time join. Core allocates and writes the permit only after the
+ordinary Market Found plan and the immediate projected Lock receipt both
+authenticate. -/
+structure SeriesPermitIssueFrame where
+  found : FoundingFrame
+  permit : SeriesFoundingPermit
+  funding : SeriesPermitFundingObservation
+  lockReceiptAuthenticated : Bool
+  intentDigestAuthenticated : Bool
+  claimsRequestDigestAuthenticated : Bool
+  deriving DecidableEq, Repr
+
+def seriesPermitIssueAccepts (frame : SeriesPermitIssueFrame) : Bool :=
+  foundingAccepts frame.found && seriesPermitFundingAccepts frame.permit frame.funding &&
+  frame.permit.releaseSetId == frame.found.identity.executionReleaseSetId &&
+  frame.permit.marketId == frame.found.identity.marketId &&
+  frame.permit.productRecordId == frame.found.identity.productRecordId &&
+  frame.permit.sourceId == frame.found.identity.resolutionPolicyId &&
+  frame.permit.generation == frame.found.identity.generation &&
+  frame.permit.rentCreditId == frame.found.accounts.rentCreditId &&
+  frame.permit.tradingProgramId == frame.found.coreAdmission.selected.trading.program &&
+  frame.permit.claimsProgramId == frame.found.coreAdmission.selected.claims.program &&
+  frame.funding.account.address != frame.found.identity.marketId &&
+  frame.funding.account.address != frame.found.accounts.rentCreditId &&
+  frame.lockReceiptAuthenticated && frame.intentDigestAuthenticated &&
+  frame.claimsRequestDigestAuthenticated
+
+theorem substituted_series_claims_program_refuses
+    (frame : SeriesPermitIssueFrame)
+    (substituted : frame.permit.claimsProgramId ≠ frame.found.coreAdmission.selected.claims.program) :
+    seriesPermitIssueAccepts frame = false := by
+  simp [seriesPermitIssueAccepts, substituted]
+
+/-- Final Open evidence consumes the live Claims state and permit exactly once,
+then returns every permit lamport (including donation) to immutable RentCredit. -/
+structure SeriesPermitConsumeObservation where
+  ownerCoreAuthenticated : Bool
+  exactBodyAuthenticated : Bool
+  claimsIntentAuthenticated : Bool
+  claimsRequestAuthenticated : Bool
+  claimsReceiptAuthenticated : Bool
+  claimsPoststateAuthenticated : Bool
+  normalReplayAuthenticated : Bool
+  permitLamports : Nat
+  rentCreditAuthenticated : Bool
+  currentSlot : Nat
+  deriving DecidableEq, Repr
+
+def seriesPermitConsumeAccepts
+    (permit : SeriesFoundingPermit) (observation : SeriesPermitConsumeObservation) : Bool :=
+  permit.valid && observation.ownerCoreAuthenticated && observation.exactBodyAuthenticated &&
+  observation.claimsIntentAuthenticated && observation.claimsRequestAuthenticated &&
+  observation.claimsReceiptAuthenticated && observation.claimsPoststateAuthenticated &&
+  observation.normalReplayAuthenticated && observation.rentCreditAuthenticated &&
+  0 < observation.permitLamports && observation.currentSlot ≤ permit.expirySlot
+
+def seriesPermitCloseRefund (observation : SeriesPermitConsumeObservation) : Nat :=
+  observation.permitLamports
+
+/-- Permissionless expiry cleans up only the still-unallocated canonical PDA
+after an authenticated expired Ticket candidate. -/
+structure SeriesPermitExpiryObservation where
+  account : VacantAccount
+  canonicalPdaAuthenticated : Bool
+  expiredTicketCandidateAuthenticated : Bool
+  rentCreditAuthenticated : Bool
+  currentSlot : Nat
+  deriving DecidableEq, Repr
+
+def seriesPermitExpiryAccepts
+    (permit : SeriesFoundingPermit) (observation : SeriesPermitExpiryObservation) : Bool :=
+  permit.valid && observation.account.valid && observation.canonicalPdaAuthenticated &&
+  observation.expiredTicketCandidateAuthenticated && observation.rentCreditAuthenticated &&
+  permit.expirySlot < observation.currentSlot
+
+def seriesPermitExpiryRefund (observation : SeriesPermitExpiryObservation) : Nat :=
+  observation.account.lamports
+
+theorem unexpired_series_permit_refund_refuses
+    (permit : SeriesFoundingPermit) (observation : SeriesPermitExpiryObservation)
+    (unexpired : observation.currentSlot ≤ permit.expirySlot) :
+    seriesPermitExpiryAccepts permit observation = false := by
+  simp [seriesPermitExpiryAccepts, Nat.not_lt_of_ge unexpired]
+
 /-! ## Persistent Core state -/
 
 inductive Phase where
