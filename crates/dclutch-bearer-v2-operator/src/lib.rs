@@ -13,6 +13,7 @@
 mod hot_artifacts_v3;
 mod hot_effect_v3;
 mod hot_terminal_v3;
+mod hot_transaction_v3;
 
 pub use hot_artifacts_v3::{
     RATIONAL_TERMINAL_REQUEST_PROFILE_BYTES_V3, RATIONAL_TERMINAL_TRANSITION_BYTES_V3,
@@ -24,6 +25,10 @@ pub use hot_effect_v3::{
     encode_rational_terminal_effect_v3,
 };
 pub use hot_terminal_v3::{ConstructedHotTerminalV3, construct_chain_hot_redeem_terminal_v3};
+pub use hot_transaction_v3::{
+    CheckedRationalHotOuterReleaseV3, RationalTerminalHotInstructionV3, RationalTerminalHotStateV3,
+    build_rational_terminal_hot_instruction_v3,
+};
 
 use dclutch_bearer_v2_contract::BearerDescriptorV2;
 use dclutch_rational_representation_v2_kernel::{
@@ -51,6 +56,8 @@ pub enum Error {
     TransitionArtifact(dclutch_transition_vm::v3::Error),
     /// Typed terminal EffectProgram artifact encoding refused.
     EffectArtifact(dclutch_effect_kernel::v3::Error),
+    /// Checked Hot envelope or exact physical account construction refused.
+    HotInstruction,
     /// Finalized descriptor/graph bytes were not the selected Bearer basis vector.
     NotBearer,
 }

@@ -284,6 +284,7 @@ name = "dclutch-bearer-v2-operator"
 version = "0.1.0"
 dependencies = [
  "dclutch-bearer-v2-contract",
+ "dclutch-capability-program-contract",
  "dclutch-effect-kernel",
  "dclutch-rational-representation-v2-contract",
  "dclutch-rational-representation-v2-kernel",
@@ -292,6 +293,24 @@ dependencies = [
  "dclutch-token-svm",
  "dclutch-transition-vm",
  "solana-program",
+ "solana-sdk-ids",
+]
+
+[[package]]
+name = "dclutch-capability-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+]
+
+[[package]]
+name = "dclutch-capability-program-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-contract",
+ "dclutch-core-contract",
+ "dclutch-release-set-contract",
+ "dclutch-transition-vm",
 ]
 
 [[package]]
