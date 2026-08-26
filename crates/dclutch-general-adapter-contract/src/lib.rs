@@ -49,6 +49,8 @@ pub mod runtime_width;
 pub mod shadow_accelerator_v3;
 /// Lean-owned action-specific request projections for generic Trading.
 pub mod specialization;
+/// Action-selected nonroot state lifecycle artifacts.
+pub mod state_artifacts_v3;
 
 use dclutch_general_codec::{
     CandidateV1, ExecutionV1, MAX_EXECUTIONS_PER_PAGE, MAX_OUTCOMES, MAX_PAGES_PER_CANDIDATE,
