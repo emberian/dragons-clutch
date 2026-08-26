@@ -57,6 +57,14 @@ use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 const IDENTITY_BYTES: usize = 32;
 const ZERO_IDENTITY: [u8; IDENTITY_BYTES] = [0; IDENTITY_BYTES];
 
+/// Domain for the atomic Series Found post-resource commitment.
+///
+/// Core hashes this domain followed by the exact live Market bytes and exact
+/// founding-permit bytes. The caller independently recomputes the same value
+/// before accepting a [`SeriesCoreFoundAckV2`].
+pub const SERIES_FOUND_POST_RESOURCE_DIGEST_DOMAIN_V1: &[u8] =
+    b"dclutch/core-series-found-permit/v1";
+
 /// Canonical cross-program effect selected by Market Core.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]

@@ -36,7 +36,8 @@ use dclutch_custody_contract::{
 };
 use dclutch_market_core_codec::{
     Action, FoundingIntentV5, Request, Role, SERIES_FOUNDING_PERMIT_BYTES_V1, SeriesCoreActionV1,
-    SeriesCoreFoundAckV2, SeriesCoreRequestV1, SeriesFoundingPermitSeedsV1, SeriesFoundingPermitV1,
+    SERIES_FOUND_POST_RESOURCE_DIGEST_DOMAIN_V1, SeriesCoreFoundAckV2, SeriesCoreRequestV1,
+    SeriesFoundingPermitSeedsV1, SeriesFoundingPermitV1,
 };
 use dclutch_product_runtime_v2_svm_reader::{
     FinalizedRecordFrameV2, authenticate_product_basis_v3,
@@ -78,9 +79,6 @@ use crate::{
 pub const SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V1: usize = FOUND_ACCOUNT_COUNT_V2 + 11;
 /// Exact evidence suffix after the ordered FundingState accounts for Found.
 pub const SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V1: usize = 15;
-/// Domain binding the Found-stage Market and one-shot permit bytes together.
-pub const SERIES_CONSUME_FOUND_WITH_PERMIT_DIGEST_DOMAIN_V1: &[u8] =
-    b"dclutch/core-series-found-permit/v1";
 const MAXIMUM_FUNDING_STATES_V1: usize = 16;
 
 struct SeriesConsumeAccounts<'accounts, 'info> {
@@ -358,7 +356,7 @@ pub(crate) fn process(
         .try_borrow_data()
         .map_err(|_| CoreSbfError::Commit)?;
     let post_resource_digest = hashv(&[
-        SERIES_CONSUME_FOUND_WITH_PERMIT_DIGEST_DOMAIN_V1,
+        SERIES_FOUND_POST_RESOURCE_DIGEST_DOMAIN_V1,
         &market_bytes,
         &permit_bytes,
     ])
