@@ -4,7 +4,7 @@
 //! that path from the exact SignedDelta-bearing family request, derives the
 //! complete candidate register bank, and lets the canonical Profile13 artifact
 //! select all eight variable account spans. Callers cannot supply a Position
-//! count, conditional Dealer evidence account, Custody-route bitmap, or packed
+//! count, readonly evidence width, Custody-route bitmap, or packed
 //! account width separately.
 //!
 //! Common Hot finalized-record and accelerator authentication remains owned by
@@ -84,12 +84,13 @@ pub struct DealerScenarioHotMetaReportV4 {
     /// Canonical scenario-solvent plan re-derived from the request.
     pub semantic_plan: ScenarioAtomicPlanV3,
     /// Six `{0,14}` Custody spans, the Claims `{1,2}` span, and the trailing
-    /// Dealer evidence `{1,0}` span in canonical Profile13 table order.
+    /// Readonly missing-collateral/Dealer evidence `{0..3}` span in canonical
+    /// Profile13 table order.
     pub dynamic_span_counts: [u32; DEALER_SCENARIO_PROFILE_SPANS_V4],
     /// Exact packed physical AccountProfile account count, including the five
     /// common injected accounts.
     pub runtime_physical_account_count: usize,
-    /// Exact admitted-AOT caller-authority page count for `99 + N` scalars and
+    /// Exact admitted-AOT caller-authority page count for `101 + N` scalars and
     /// 117 identities.
     pub caller_authority_count: usize,
     /// Canonical transaction metas in `Hot38 || strategy || packed suffix`
@@ -402,6 +403,7 @@ fn account_meta(value: &ObservedAccountMetaV3) -> AccountMeta {
 mod tests {
     use super::*;
     use crate::ObservedAccount;
+    use dclutch_trading_sbf::dealer::v3_trade_profile::dealer_scenario_logical_frame_v4;
     use dclutch_trading_sbf::dealer::v3_trade_profile::{
         DealerScenarioAccountProfileInputV4, encode_dealer_scenario_account_profile_v4_atomic,
     };
@@ -505,7 +507,7 @@ mod tests {
 
     #[test]
     fn profile13_packs_sparse_and_dense_selector_nine_frames() {
-        for spans in [[0, 0, 0, 0, 1, 0, 0, 1], [14, 14, 14, 14, 2, 14, 14, 0]] {
+        for spans in [[0, 0, 0, 0, 1, 0, 0, 3], [14, 14, 14, 14, 2, 14, 14, 0]] {
             let (fixed_accounts, suffix) = runtime_fixture(4, spans);
             let state = DealerScenarioHotMetaStateV4 {
                 fixed_accounts: &fixed_accounts,
@@ -521,7 +523,7 @@ mod tests {
 
     #[test]
     fn packed_frame_refuses_privilege_and_exact_data_substitution() {
-        let spans = [0, 0, 0, 0, 1, 0, 0, 1];
+        let spans = [0, 0, 0, 0, 1, 0, 0, 3];
         let (fixed_accounts, mut suffix) = runtime_fixture(4, spans);
         let profile_bytes = canonical_profile([32, 160, 48, 56, 64]);
         let profile = AccountProfileV2::decode(&profile_bytes).expect("canonical profile");
@@ -533,7 +535,21 @@ mod tests {
         assert!(authenticate_account_profile(state).is_ok());
         assert!(validate_runtime_accounts(state, profile, 4, &spans, observation()).is_ok());
 
-        suffix.last_mut().expect("obligation").is_writable = false;
+        let logical = dealer_scenario_logical_frame_v4(spans).expect("logical frame");
+        let obligation_ordinal = profile
+            .physical_account_ordinal_with_dynamic_spans(
+                4,
+                &spans,
+                usize::try_from(logical.obligation).expect("obligation coordinate"),
+            )
+            .expect("obligation ordinal");
+        let obligation_suffix = obligation_ordinal
+            .checked_sub(DEALER_HOT_INJECTED_ACCOUNTS_V4)
+            .expect("obligation after injected prefix");
+        suffix
+            .get_mut(obligation_suffix)
+            .expect("obligation")
+            .is_writable = false;
         let substituted = DealerScenarioHotMetaStateV4 {
             fixed_accounts: &fixed_accounts,
             strategy_accounts: &[],
@@ -543,8 +559,9 @@ mod tests {
             validate_runtime_accounts(substituted, profile, 4, &spans, observation()),
             Err(DealerScenarioHotMetaErrorV4::AccountGeometry)
         );
-        suffix.last_mut().expect("obligation").is_writable = true;
-        suffix.last_mut().expect("obligation").account.data.pop();
+        let obligation = suffix.get_mut(obligation_suffix).expect("obligation");
+        obligation.is_writable = true;
+        obligation.account.data.pop();
         let substituted = DealerScenarioHotMetaStateV4 {
             fixed_accounts: &fixed_accounts,
             strategy_accounts: &[],

@@ -3,9 +3,10 @@
 //! One fixed base contains the five common Hot coordinates, the canonical
 //! twenty-account Claims frame, and the sole Trading-owned obligation. Eight
 //! protected spans insert six optional Custody transfer frames, the exact
-//! one-or-two Position tail, and (only for P1) one trailing readonly Dealer
-//! Position evidence account. Child data remains opaque to Trading; only the
-//! obligation carries local write authority.
+//! one-or-two Position tail, and a trailing zero-to-three-account readonly
+//! evidence row for otherwise absent Fee/Hoard balances and the P1 Dealer
+//! Position. Child data remains opaque to Trading; only the obligation carries
+//! local write authority.
 
 #[cfg(not(target_os = "solana"))]
 extern crate alloc;
@@ -46,7 +47,7 @@ use super::{
     v3_trade_artifacts::{
         DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4, DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4,
         DEALER_SCENARIO_CURRENT_SLOT_SCALAR_V4, DEALER_SCENARIO_CURRENT_TRADING_IDENTITY_V4,
-        DEALER_SCENARIO_DEALER_EVIDENCE_COUNT_SCALAR_V4, DEALER_SCENARIO_ITEM_IDENTITY_STRIDE_V4,
+        DEALER_SCENARIO_EVIDENCE_SPAN_COUNT_SCALAR_V4, DEALER_SCENARIO_ITEM_IDENTITY_STRIDE_V4,
         DEALER_SCENARIO_ITEM_SCALAR_STRIDE_V4, DEALER_SCENARIO_OBLIGATION_IDENTITY_V4,
         DEALER_SCENARIO_POSITION_COUNT_SCALAR_V4, DEALER_SCENARIO_ROUTE_SPAN_SCALAR_BASE_V4,
     },
@@ -57,7 +58,7 @@ pub const DEALER_SCENARIO_PROFILE_FIXED_RULES_V4: usize = 26;
 /// Number of canonical protected span entries.
 pub const DEALER_SCENARIO_PROFILE_SPANS_V4: usize = 8;
 /// Fourteen rules for each of six Custody frames, one Claims Position rule,
-/// and one trailing readonly Dealer Position evidence rule.
+/// and one homogeneous rule cycled across trailing readonly evidence.
 pub const DEALER_SCENARIO_PROFILE_SPAN_RULES_V4: usize = 86;
 /// Exact selector-9 Profile13 artifact width.
 pub const DEALER_SCENARIO_ACCOUNT_PROFILE_BYTES_V4: usize = DYNAMIC_FIXED_SPAN_HEADER_BYTES
@@ -103,9 +104,10 @@ pub struct DealerScenarioLogicalFrameV4 {
     pub claims_positions_start: u32,
     /// Sole writable Trading obligation logical coordinate.
     pub obligation: u32,
-    /// Conditional trailing readonly Dealer Position evidence coordinate.
-    /// This is present exactly for a P1 SignedDelta frame.
-    pub dealer_position_evidence: Option<u32>,
+    /// First trailing readonly evidence coordinate after the obligation.
+    pub evidence_start: u32,
+    /// Exact request-projected trailing evidence width, zero through three.
+    pub evidence_count: u32,
     /// Complete expanded logical-account count.
     pub logical_account_count: u32,
 }
@@ -126,11 +128,7 @@ pub fn dealer_scenario_logical_frame_v4(
             .ok_or(DealerScenarioAccountProfileErrorV4::Geometry)?
             .iter()
             .any(|width| !matches!(*width, 0) && *width != custody_width)
-        || span_counts.get(7).copied()
-            != span_counts
-                .get(4)
-                .copied()
-                .and_then(|positions| 2_u32.checked_sub(positions))
+        || !matches!(span_counts.get(7), Some(0..=3))
     {
         return Err(DealerScenarioAccountProfileErrorV4::Geometry);
     }
@@ -182,28 +180,22 @@ pub fn dealer_scenario_logical_frame_v4(
     cursor = obligation
         .checked_add(1)
         .ok_or(DealerScenarioAccountProfileErrorV4::Geometry)?;
-    let dealer_position_evidence = match span_counts
+    let evidence_start = cursor;
+    let evidence_count = span_counts
         .get(7)
         .copied()
-        .ok_or(DealerScenarioAccountProfileErrorV4::Geometry)?
-    {
-        0 => None,
-        1 => {
-            let evidence = cursor;
-            cursor = cursor
-                .checked_add(1)
-                .ok_or(DealerScenarioAccountProfileErrorV4::Geometry)?;
-            Some(evidence)
-        }
-        _ => return Err(DealerScenarioAccountProfileErrorV4::Geometry),
-    };
+        .ok_or(DealerScenarioAccountProfileErrorV4::Geometry)?;
+    cursor = cursor
+        .checked_add(evidence_count)
+        .ok_or(DealerScenarioAccountProfileErrorV4::Geometry)?;
     let logical_account_count = cursor;
     Ok(DealerScenarioLogicalFrameV4 {
         custody_starts,
         claims_fixed_start,
         claims_positions_start,
         obligation,
-        dealer_position_evidence,
+        evidence_start,
+        evidence_count,
         logical_account_count,
     })
 }
@@ -409,11 +401,11 @@ const fn dynamic_spans() -> [DynamicFixedSpanInputV2; DEALER_SCENARIO_PROFILE_SP
         ),
         span(
             26,
-            DEALER_SCENARIO_DEALER_EVIDENCE_COUNT_SCALAR_V4,
+            DEALER_SCENARIO_EVIDENCE_SPAN_COUNT_SCALAR_V4,
             85,
             1,
             0,
-            1,
+            3,
             1,
         ),
     ]
@@ -593,14 +585,14 @@ mod tests {
     fn exact_widths_shift_claims_and_obligation_without_placeholders() {
         let bytes = profile();
         let profile = AccountProfileV2::decode(&bytes).expect("decode");
-        let sparse = [14_u32, 0, 0, 0, 1, 0, 14, 1];
+        let sparse = [14_u32, 0, 0, 0, 1, 0, 14, 3];
         assert_eq!(
             profile.logical_account_count_with_dynamic_spans(16, &sparse),
-            Ok(56)
+            Ok(58)
         );
         assert_eq!(
             profile.physical_account_count_with_dynamic_spans(16, &sparse),
-            Ok(53)
+            Ok(55)
         );
         let full = [14_u32, 14, 14, 14, 2, 14, 14, 0];
         assert_eq!(
@@ -626,12 +618,12 @@ mod tests {
         let profile = AccountProfileV2::decode(&bytes).expect("decode");
         assert!(
             profile
-                .logical_account_count_with_dynamic_spans(8, &[1, 0, 0, 0, 1, 0, 0, 1])
+                .logical_account_count_with_dynamic_spans(8, &[1, 0, 0, 0, 1, 0, 0, 3])
                 .is_err()
         );
         assert!(
             profile
-                .logical_account_count_with_dynamic_spans(8, &[0, 0, 0, 0, 0, 0, 0, 2])
+                .logical_account_count_with_dynamic_spans(8, &[0, 0, 0, 0, 0, 0, 0, 4])
                 .is_err()
         );
     }
@@ -674,13 +666,14 @@ mod tests {
     #[test]
     fn logical_frame_map_tracks_every_optional_span_at_n_boundaries() {
         let sparse =
-            dealer_scenario_logical_frame_v4([0, 0, 0, 0, 1, 0, 0, 1]).expect("sparse frame");
+            dealer_scenario_logical_frame_v4([0, 0, 0, 0, 1, 0, 0, 3]).expect("sparse frame");
         assert_eq!(sparse.custody_starts, [5, 5, 5, 5, 26, 26]);
         assert_eq!(sparse.claims_fixed_start, 5);
         assert_eq!(sparse.claims_positions_start, 25);
         assert_eq!(sparse.obligation, 26);
-        assert_eq!(sparse.dealer_position_evidence, Some(27));
-        assert_eq!(sparse.logical_account_count, 28);
+        assert_eq!(sparse.evidence_start, 27);
+        assert_eq!(sparse.evidence_count, 3);
+        assert_eq!(sparse.logical_account_count, 30);
 
         let dense =
             dealer_scenario_logical_frame_v4([14, 14, 14, 14, 2, 14, 14, 0]).expect("dense frame");
@@ -688,7 +681,8 @@ mod tests {
         assert_eq!(dense.claims_fixed_start, 61);
         assert_eq!(dense.claims_positions_start, 81);
         assert_eq!(dense.obligation, 111);
-        assert_eq!(dense.dealer_position_evidence, None);
+        assert_eq!(dense.evidence_start, 112);
+        assert_eq!(dense.evidence_count, 0);
         assert_eq!(dense.logical_account_count, 112);
 
         let bytes = profile();
@@ -707,12 +701,11 @@ mod tests {
     #[test]
     fn logical_frame_map_refuses_caller_invented_span_shapes() {
         for hostile in [
-            [1, 0, 0, 0, 1, 0, 0, 1],
-            [0, 0, 0, 0, 0, 0, 0, 2],
+            [1, 0, 0, 0, 1, 0, 0, 3],
+            [0, 0, 0, 0, 0, 0, 0, 4],
             [0, 0, 0, 0, 3, 0, 0, 0],
             [0, 0, 0, 0, 1, 7, 0, 1],
-            [0, 0, 0, 0, 1, 0, 0, 0],
-            [0, 0, 0, 0, 2, 0, 0, 1],
+            [0, 0, 0, 0, 0, 0, 0, 0],
         ] {
             assert_eq!(
                 dealer_scenario_logical_frame_v4(hostile),

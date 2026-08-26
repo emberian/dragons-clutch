@@ -45,8 +45,8 @@ use super::v3_equity_claims::encode_equity_claims_packet_v3;
 /// Canonical exact-fill request magic.
 pub const DEALER_SCENARIO_TRADE_MAGIC_V3: [u8; 8] = *b"DCLDST03";
 /// Successor exact-fill request version carrying one canonical Claims packet
-/// and its exact conditional Dealer-Position evidence geometry.
-pub const DEALER_SCENARIO_TRADE_VERSION_V3: u16 = 3;
+/// and the exact readonly evidence width required before admitted evaluation.
+pub const DEALER_SCENARIO_TRADE_VERSION_V3: u16 = 4;
 /// Family-neutral CapabilityProgramSet selector offset.
 pub const DEALER_SCENARIO_TRADE_SELECTOR_OFFSET_V3: u32 = 10;
 /// Exact fixed header before the `u64[N]` candidate and SignedDeltaV3 witness.
@@ -59,6 +59,13 @@ pub const DEALER_SCENARIO_TRADE_POSITION_COUNT_OFFSET_V3: usize = 377;
 /// Fixed-header routing coordinate for the conditional Dealer Position
 /// evidence account. It is exactly one for P1 and zero for P2.
 pub const DEALER_SCENARIO_TRADE_DEALER_EVIDENCE_COUNT_OFFSET_V3: usize = 378;
+/// Fixed-header projected width of the trailing readonly evidence span.
+///
+/// The span contains an absent FeeVault observation, an absent HoardVault
+/// observation, and the conditional Dealer Position observation, in that
+/// canonical order. Accounts already present in an active Custody frame are
+/// never duplicated.
+pub const DEALER_SCENARIO_TRADE_EVIDENCE_SPAN_COUNT_OFFSET_V3: usize = 379;
 /// Fixed-header exact borrowed witness width.
 pub const DEALER_SCENARIO_TRADE_CLAIMS_PACKET_BYTES_OFFSET_V3: usize = 380;
 /// Sole exact-fill action in the global Dealer selector space.
@@ -144,6 +151,8 @@ pub struct DealerScenarioTradeRequestV3<'a> {
     pub claims_position_count: u8,
     /// Exact trailing Dealer Position evidence count, `2 - P`.
     pub dealer_evidence_count: u8,
+    /// Exact pre-AOT trailing readonly evidence width, zero through three.
+    pub evidence_span_count: u8,
     /// Exact borrowed SignedDeltaV3 packet width.
     pub claims_packet_bytes: u32,
 }
@@ -155,7 +164,6 @@ impl<'a> DealerScenarioTradeRequestV3<'a> {
             || bytes.get(..8) != Some(DEALER_SCENARIO_TRADE_MAGIC_V3.as_slice())
             || read_u16(bytes, 8)? != DEALER_SCENARIO_TRADE_VERSION_V3
             || read_u16(bytes, 10)? != DEALER_SCENARIO_TRADE_ACTION_V3
-            || byte(bytes, 379)? != 0
         {
             return Err(ScenarioTradeErrorV3::InvalidRequest);
         }
@@ -163,12 +171,15 @@ impl<'a> DealerScenarioTradeRequestV3<'a> {
         let claims_position_count = byte(bytes, DEALER_SCENARIO_TRADE_POSITION_COUNT_OFFSET_V3)?;
         let dealer_evidence_count =
             byte(bytes, DEALER_SCENARIO_TRADE_DEALER_EVIDENCE_COUNT_OFFSET_V3)?;
+        let evidence_span_count = byte(bytes, DEALER_SCENARIO_TRADE_EVIDENCE_SPAN_COUNT_OFFSET_V3)?;
         let claims_packet_bytes =
             read_u32(bytes, DEALER_SCENARIO_TRADE_CLAIMS_PACKET_BYTES_OFFSET_V3)?;
         let expected = scenario_trade_request_bytes_v3(width, claims_packet_bytes)?;
         if width == 0
             || !matches!(claims_position_count, 1 | 2)
             || u16::from(claims_position_count) + u16::from(dealer_evidence_count) != 2
+            || evidence_span_count > 3
+            || evidence_span_count < dealer_evidence_count
             || claims_packet_bytes == 0
             || bytes.len() != expected
         {
@@ -203,6 +214,7 @@ impl<'a> DealerScenarioTradeRequestV3<'a> {
             direction,
             claims_position_count,
             dealer_evidence_count,
+            evidence_span_count,
             claims_packet_bytes,
         };
         if value.dealer_owner == value.counterparty_owner
@@ -657,6 +669,18 @@ pub fn build_scenario_trade_request_v3(
                 .map_err(|_| ScenarioTradeErrorV3::InvalidRequest)?,
         )
         .ok_or(ScenarioTradeErrorV3::InvalidRequest)?;
+    *output
+        .get_mut(DEALER_SCENARIO_TRADE_EVIDENCE_SPAN_COUNT_OFFSET_V3)
+        .ok_or(ScenarioTradeErrorV3::InvalidRequest)? = scenario_evidence_span_count_v3(
+        2_u8.checked_sub(
+            u8::try_from(geometry.position_count)
+                .map_err(|_| ScenarioTradeErrorV3::InvalidRequest)?,
+        )
+        .ok_or(ScenarioTradeErrorV3::InvalidRequest)?,
+        intent.realized_fee,
+        scenario.minimum_complete_sets_to_split,
+        scenario.maximum_complete_sets_to_merge,
+    )?;
     write_bytes(
         output,
         DEALER_SCENARIO_TRADE_CLAIMS_PACKET_BYTES_OFFSET_V3,
@@ -870,10 +894,40 @@ pub fn prepare_scenario_trade_v3<'a>(
     if geometry.position_count != u32::from(request.claims_position_count) {
         return Err(ScenarioTradeErrorV3::Composition);
     }
+    let expected_evidence = scenario_evidence_span_count_v3(
+        request.dealer_evidence_count,
+        request.realized_fee,
+        plan.scenario.minimum_complete_sets_to_split,
+        plan.scenario.maximum_complete_sets_to_merge,
+    )?;
+    if request.evidence_span_count != expected_evidence {
+        return Err(ScenarioTradeErrorV3::Composition);
+    }
     Ok(PreparedScenarioTradeV3 {
         plan,
         candidate_obligation: candidate,
     })
+}
+
+/// Derive the one pre-AOT trailing evidence width from accepted semantics.
+///
+/// Fee and Hoard token accounts already present in active Custody frames are
+/// deliberately omitted, avoiding duplicate account aliases. The conditional
+/// Dealer Position is appended after those missing collateral observations.
+pub fn scenario_evidence_span_count_v3(
+    dealer_evidence_count: u8,
+    realized_fee: u64,
+    split: u64,
+    merge: u64,
+) -> Result<u8, ScenarioTradeErrorV3> {
+    if dealer_evidence_count > 1 || (split != 0 && merge != 0) {
+        return Err(ScenarioTradeErrorV3::Composition);
+    }
+    u8::from(realized_fee == 0)
+        .checked_add(u8::from(split == 0 && merge == 0))
+        .and_then(|value| value.checked_add(dealer_evidence_count))
+        .filter(|value| *value <= 3)
+        .ok_or(ScenarioTradeErrorV3::Composition)
 }
 
 fn claims_context(
@@ -1172,6 +1226,7 @@ mod tests {
         let accepted = output[..unsigned.request_bytes].to_vec();
         assert_eq!(request.width, 3);
         assert!(matches!(request.claims_position_count, 1 | 2));
+        assert!(request.evidence_span_count <= 3);
         assert_eq!(request.acquired(2), Ok(4));
         assert_eq!(request.delivered(1), Ok(1));
         assert_eq!(request.candidate_obligation(0), Ok(10));
@@ -1226,10 +1281,10 @@ mod tests {
             DealerScenarioTradeRequestV3::decode(&substituted_evidence),
             Err(ScenarioTradeErrorV3::InvalidRequest)
         );
-        let mut nonzero_reserved = accepted.clone();
-        nonzero_reserved[379] = 1;
+        let mut oversized_evidence = accepted.clone();
+        oversized_evidence[DEALER_SCENARIO_TRADE_EVIDENCE_SPAN_COUNT_OFFSET_V3] = 4;
         assert_eq!(
-            DealerScenarioTradeRequestV3::decode(&nonzero_reserved),
+            DealerScenarioTradeRequestV3::decode(&oversized_evidence),
             Err(ScenarioTradeErrorV3::InvalidRequest)
         );
         let mut legacy_version = accepted.clone();

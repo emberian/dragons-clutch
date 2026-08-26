@@ -62,7 +62,9 @@ use super::{
     },
     v3_multi_lp::MultiLpCustodyRequestV3,
     v3_obligation::{DEALER_OBLIGATION_HEADER_BYTES_V3, DealerObligationProjectionV3},
-    v3_trade::{DealerScenarioTradeRequestV3, ScenarioTradeDirectionV3},
+    v3_trade::{
+        DealerScenarioTradeRequestV3, ScenarioTradeDirectionV3, scenario_evidence_span_count_v3,
+    },
 };
 use super::{
     v3_hot_artifact::{
@@ -73,9 +75,9 @@ use super::{
     v3_trade::{
         DEALER_SCENARIO_TRADE_ACTION_V3, DEALER_SCENARIO_TRADE_CLAIMS_PACKET_BYTES_OFFSET_V3,
         DEALER_SCENARIO_TRADE_DEALER_EVIDENCE_COUNT_OFFSET_V3,
-        DEALER_SCENARIO_TRADE_HEADER_BYTES_V3, DEALER_SCENARIO_TRADE_MAGIC_V3,
-        DEALER_SCENARIO_TRADE_POSITION_COUNT_OFFSET_V3, DEALER_SCENARIO_TRADE_SELECTOR_OFFSET_V3,
-        DEALER_SCENARIO_TRADE_VERSION_V3,
+        DEALER_SCENARIO_TRADE_EVIDENCE_SPAN_COUNT_OFFSET_V3, DEALER_SCENARIO_TRADE_HEADER_BYTES_V3,
+        DEALER_SCENARIO_TRADE_MAGIC_V3, DEALER_SCENARIO_TRADE_POSITION_COUNT_OFFSET_V3,
+        DEALER_SCENARIO_TRADE_SELECTOR_OFFSET_V3, DEALER_SCENARIO_TRADE_VERSION_V3,
     },
 };
 
@@ -118,8 +120,12 @@ pub const DEALER_SCENARIO_CUSTODY_SCALAR_STRIDE_V4: u16 = 14;
 pub const DEALER_SCENARIO_DEALER_EVIDENCE_COUNT_SCALAR_V4: u16 = 97;
 /// Transition scratch proving `P + dealer_evidence_count == 2`.
 pub const DEALER_SCENARIO_POSITION_GEOMETRY_SUM_SCALAR_V4: u16 = 98;
+/// Request-projected total trailing readonly evidence width, zero through three.
+pub const DEALER_SCENARIO_EVIDENCE_SPAN_COUNT_SCALAR_V4: u16 = 99;
+/// Transition-owned finite maximum for the trailing evidence span.
+pub const DEALER_SCENARIO_MAX_EVIDENCE_SPAN_COUNT_SCALAR_V4: u16 = 100;
 /// Exact common scalar-bank width.
-pub const DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4: u16 = 99;
+pub const DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4: u16 = 101;
 /// Parent digest precedes six exact 19-identity Custody blocks, the trusted
 /// current-Trading owner, and the request-bound obligation key.
 pub const DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4: u16 = 117;
@@ -151,7 +157,7 @@ const REQUEST_PROFILE_V1_BYTES_V4: usize = dclutch_request_profile_contract::HEA
 /// Exact selector-9 RequestProfile V3 bytes.
 pub const DEALER_SCENARIO_REQUEST_PROFILE_BYTES_V4: usize =
     REQUEST_PROFILE_V3_HEADER_BYTES + REQUEST_PROFILE_V1_BYTES_V4;
-const TRANSITION_OPERATIONS_V4: usize = 8;
+const TRANSITION_OPERATIONS_V4: usize = 10;
 /// Exact selector-9 TransitionVM bytes.
 pub const DEALER_SCENARIO_TRANSITION_BYTES_V4: usize = dclutch_transition_vm::v3::HEADER_BYTES
     + TRANSITION_OPERATIONS_V4 * dclutch_transition_vm::v3::INSTRUCTION_BYTES;
@@ -230,6 +236,13 @@ pub fn encode_dealer_scenario_request_profile_v4(
             ),
             ScalarRegisterV1::common(DEALER_SCENARIO_DEALER_EVIDENCE_COUNT_SCALAR_V4),
         ),
+        RequestInstructionV1::project_u8(
+            RequestCoordinateV1::fixed(
+                u32::try_from(DEALER_SCENARIO_TRADE_EVIDENCE_SPAN_COUNT_OFFSET_V3)
+                    .map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic)?,
+            ),
+            ScalarRegisterV1::common(DEALER_SCENARIO_EVIDENCE_SPAN_COUNT_SCALAR_V4),
+        ),
         RequestInstructionV1::project_u32(
             RequestCoordinateV1::fixed(
                 u32::try_from(DEALER_SCENARIO_TRADE_CLAIMS_PACKET_BYTES_OFFSET_V3)
@@ -245,7 +258,6 @@ pub fn encode_dealer_scenario_request_profile_v4(
             RequestCoordinateV1::fixed(112),
             IdentityRegisterV1::common(DEALER_SCENARIO_OBLIGATION_IDENTITY_V4),
         ),
-        RequestInstructionV1::require_zero(RequestCoordinateV1::fixed(379), 1),
     ];
     let item_instructions = [RequestInstructionV1::project_u64(
         RequestCoordinateV1::item(0),
@@ -324,6 +336,14 @@ pub fn encode_dealer_scenario_transition_v4(
         InstructionV3::scalar_eq(
             ScalarRegisterV3::common(DEALER_SCENARIO_POSITION_GEOMETRY_SUM_SCALAR_V4),
             ScalarRegisterV3::common(DEALER_SCENARIO_MAX_POSITION_COUNT_SCALAR_V4),
+        ),
+        InstructionV3::load_const(
+            ScalarRegisterV3::common(DEALER_SCENARIO_MAX_EVIDENCE_SPAN_COUNT_SCALAR_V4),
+            3,
+        ),
+        InstructionV3::scalar_le(
+            ScalarRegisterV3::common(DEALER_SCENARIO_EVIDENCE_SPAN_COUNT_SCALAR_V4),
+            ScalarRegisterV3::common(DEALER_SCENARIO_MAX_EVIDENCE_SPAN_COUNT_SCALAR_V4),
         ),
         InstructionV3::nonzero(ScalarRegisterV3::common(
             DEALER_SCENARIO_WITNESS_BYTES_SCALAR_V4,
@@ -991,6 +1011,14 @@ fn validate_scenario_projection_header_v4(
         || plan.claims.dealer_revision_before != request.dealer_position_revision
         || plan.claims.counterparty_revision_before != request.counterparty_position_revision
         || plan.claims.claims_revision_before != request.claims_revision
+        || scenario_evidence_span_count_v3(
+            request.dealer_evidence_count,
+            request.realized_fee,
+            plan.scenario.minimum_complete_sets_to_split,
+            plan.scenario.maximum_complete_sets_to_merge,
+        )
+        .ok()
+            != Some(request.evidence_span_count)
     {
         return Err(DealerScenarioArtifactsErrorV4::Projection);
     }
@@ -1102,6 +1130,16 @@ fn seed_scenario_projection_header_v4(
         u64::from(request.claims_position_count)
             .checked_add(u64::from(request.dealer_evidence_count))
             .ok_or(DealerScenarioArtifactsErrorV4::Arithmetic)?,
+    )?;
+    set_scenario_scalar(
+        staged_scalars,
+        DEALER_SCENARIO_EVIDENCE_SPAN_COUNT_SCALAR_V4,
+        u64::from(request.evidence_span_count),
+    )?;
+    set_scenario_scalar(
+        staged_scalars,
+        DEALER_SCENARIO_MAX_EVIDENCE_SPAN_COUNT_SCALAR_V4,
+        3,
     )?;
     set_scenario_scalar(
         staged_scalars,
@@ -1526,6 +1564,14 @@ pub fn authenticate_dealer_scenario_artifacts_v4<'a>(
         .get_mut(usize::from(DEALER_SCENARIO_POSITION_GEOMETRY_SUM_SCALAR_V4))
         .ok_or(DealerScenarioArtifactsErrorV4::Effect)? = 2;
     *scalars
+        .get_mut(usize::from(DEALER_SCENARIO_EVIDENCE_SPAN_COUNT_SCALAR_V4))
+        .ok_or(DealerScenarioArtifactsErrorV4::Effect)? = 3;
+    *scalars
+        .get_mut(usize::from(
+            DEALER_SCENARIO_MAX_EVIDENCE_SPAN_COUNT_SCALAR_V4,
+        ))
+        .ok_or(DealerScenarioArtifactsErrorV4::Effect)? = 3;
+    *scalars
         .get_mut(usize::from(DEALER_SCENARIO_WITNESS_BYTES_SCALAR_V4))
         .ok_or(DealerScenarioArtifactsErrorV4::Effect)? =
         u64::from(dealer_scenario_witness_bounds_v4()?.0);
@@ -1945,6 +1991,7 @@ mod tests {
         family_request[10..12].copy_from_slice(&DEALER_SCENARIO_TRADE_ACTION_V3.to_le_bytes());
         family_request[377] = 1;
         family_request[378] = 1;
+        family_request[379] = 3;
         family_request[380..384]
             .copy_from_slice(&u32::try_from(witness).expect("bounded").to_le_bytes());
         family_request[352..360].copy_from_slice(&99_u64.to_le_bytes());
@@ -2017,6 +2064,12 @@ mod tests {
                 .get(usize::from(DEALER_SCENARIO_POSITION_GEOMETRY_SUM_SCALAR_V4))
                 .copied(),
             Some(2)
+        );
+        assert_eq!(
+            executed_scalars
+                .get(usize::from(DEALER_SCENARIO_EVIDENCE_SPAN_COUNT_SCALAR_V4))
+                .copied(),
+            Some(3)
         );
         let mut hostile_scalars = output_scalars.clone();
         hostile_scalars[usize::from(DEALER_SCENARIO_DEALER_EVIDENCE_COUNT_SCALAR_V4)] = 0;
