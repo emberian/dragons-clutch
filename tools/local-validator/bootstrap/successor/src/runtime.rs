@@ -25,10 +25,9 @@ use crate::{
     model::{
         AccountEvidence, ExecutionEvidence, LoaderProgramEvidence, ProviderEvidenceInput,
         ProviderProgramInput, RecordPair, ReplayEvidence, RollbackEvidence, SourceCase,
-        SuccessorPlan,
-        TransactionEvidence,
+        SuccessorPlan, TransactionEvidence,
     },
-    plan::{GENERATION, hex, hex32, pubkey},
+    plan::{GENERATION, hex, hex32, pubkey, validate_program_ids},
     rpc::{Rpc, RpcAccount, account_evidence, validate_loopback_url},
 };
 
@@ -143,6 +142,10 @@ pub(crate) fn execute(args: &RunArgs) -> Result<ExecutionEvidence> {
             "custody".into(),
             authenticate_local_program(&mut runtime.rpc, "Custody", &plan.custody)?,
         ),
+        (
+            "rent_credit".into(),
+            authenticate_local_program(&mut runtime.rpc, "RentCredit", &plan.rent_credit)?,
+        ),
     ]);
     authenticate_provider(&mut runtime.rpc, &provider)?;
     authenticate_genesis(&mut runtime.rpc, &plan)?;
@@ -214,6 +217,7 @@ pub(crate) fn execute(args: &RunArgs) -> Result<ExecutionEvidence> {
         claims_reauthenticated: true,
         trading_reauthenticated: true,
         custody_reauthenticated: true,
+        rent_credit_executable_authenticated: true,
         registry_reauthenticated: true,
         real_pyth_price_update_consumed: true,
         primary_resolution_executed: true,
@@ -698,17 +702,17 @@ fn validate_inputs(
     let trading = pubkey(&plan.trading.program_id)?;
     let resolution = pubkey(&plan.resolution.program_id)?;
     let custody = pubkey(&plan.custody.program_id)?;
-    let programs = [registry, core, claims, trading, resolution, custody];
-    if programs.iter().enumerate().any(|(index, program)| {
-        programs
-            .iter()
-            .skip(index.saturating_add(1))
-            .any(|other| other == program)
-    }) {
-        return Err(Error::new(
-            "Registry and all five role Program IDs must be pairwise distinct",
-        ));
-    }
+    let rent_credit = pubkey(&plan.rent_credit.program_id)?;
+    let programs = [
+        registry,
+        core,
+        claims,
+        trading,
+        resolution,
+        custody,
+        rent_credit,
+    ];
+    validate_program_ids(&programs)?;
     validate_material_partition(plan)?;
     Ok(())
 }
@@ -1005,6 +1009,7 @@ mod tests {
             trading: dummy_pin([4; 32]),
             resolution: dummy_pin([5; 32]),
             custody: dummy_pin([6; 32]),
+            rent_credit: dummy_pin([7; 32]),
             activation: Pubkey::new_unique().to_string(),
             release_set_id: "11".repeat(32),
             records: BTreeMap::new(),

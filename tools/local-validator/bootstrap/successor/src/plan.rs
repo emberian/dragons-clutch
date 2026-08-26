@@ -93,6 +93,10 @@ pub(crate) struct PrepareArgs {
     pub(crate) custody_elf: PathBuf,
     pub(crate) custody_sha256: String,
     pub(crate) custody_semantic_release_id: String,
+    pub(crate) rent_credit_program: Pubkey,
+    pub(crate) rent_credit_elf: PathBuf,
+    pub(crate) rent_credit_sha256: String,
+    pub(crate) rent_credit_semantic_release_id: String,
 }
 
 #[derive(Serialize)]
@@ -283,24 +287,15 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
     let trading_elf = fs::read(&args.trading_elf)?;
     let resolution_elf = fs::read(&args.resolution_elf)?;
     let custody_elf = fs::read(&args.custody_elf)?;
+    let rent_credit_elf = fs::read(&args.rent_credit_elf)?;
     require_elf(
         "Registry",
         &registry_elf,
         &args.registry_sha256,
         &args.registry_elf,
     )?;
-    require_elf(
-        "Core",
-        &core_elf,
-        &args.core_sha256,
-        &args.core_elf,
-    )?;
-    require_elf(
-        "Claims",
-        &claims_elf,
-        &args.claims_sha256,
-        &args.claims_elf,
-    )?;
+    require_elf("Core", &core_elf, &args.core_sha256, &args.core_elf)?;
+    require_elf("Claims", &claims_elf, &args.claims_sha256, &args.claims_elf)?;
     require_elf(
         "Trading",
         &trading_elf,
@@ -319,6 +314,12 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
         &args.custody_sha256,
         &args.custody_elf,
     )?;
+    require_elf(
+        "RentCredit",
+        &rent_credit_elf,
+        &args.rent_credit_sha256,
+        &args.rent_credit_elf,
+    )?;
 
     let registry_programdata = programdata(args.registry_program);
     let core_programdata = programdata(args.core_program);
@@ -326,6 +327,7 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
     let trading_programdata = programdata(args.trading_program);
     let resolution_programdata = programdata(args.resolution_program);
     let custody_programdata = programdata(args.custody_program);
+    let rent_credit_programdata = programdata(args.rent_credit_program);
     let registry_semantic = sha256_bytes(b"dclutch/local-validator/registry-successor-v1");
     let registry_release = artifact(
         args.registry_program,
@@ -367,31 +369,24 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
         custody_semantic,
         hex32(&args.custody_sha256)?,
     )?;
+    let rent_credit_semantic = hex32(&args.rent_credit_semantic_release_id)?;
     let core_artifact_id = artifact_id(core_release)?;
     let claims_artifact_id = artifact_id(claims_release)?;
     let trading_artifact_id = artifact_id(trading_release)?;
     let resolution_artifact_id = artifact_id(resolution_release)?;
     let custody_artifact_id = artifact_id(custody_release)?;
-    let core_binding = ExecutionRoleBindingV1::new(
-        program_identity(args.core_program)?,
-        core_artifact_id,
-    );
-    let claims_binding = ExecutionRoleBindingV1::new(
-        program_identity(args.claims_program)?,
-        claims_artifact_id,
-    );
-    let trading_binding = ExecutionRoleBindingV1::new(
-        program_identity(args.trading_program)?,
-        trading_artifact_id,
-    );
+    let core_binding =
+        ExecutionRoleBindingV1::new(program_identity(args.core_program)?, core_artifact_id);
+    let claims_binding =
+        ExecutionRoleBindingV1::new(program_identity(args.claims_program)?, claims_artifact_id);
+    let trading_binding =
+        ExecutionRoleBindingV1::new(program_identity(args.trading_program)?, trading_artifact_id);
     let resolution_binding = ExecutionRoleBindingV1::new(
         program_identity(args.resolution_program)?,
         resolution_artifact_id,
     );
-    let custody_binding = ExecutionRoleBindingV1::new(
-        program_identity(args.custody_program)?,
-        custody_artifact_id,
-    );
+    let custody_binding =
+        ExecutionRoleBindingV1::new(program_identity(args.custody_program)?, custody_artifact_id);
     let release_set = ExecutionReleaseSetV1::new(
         core_binding,
         claims_binding,
@@ -639,12 +634,7 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
         registry_programdata,
         &registry_elf,
     )?;
-    writer.immutable_upgradeable_program(
-        "core",
-        args.core_program,
-        core_programdata,
-        &core_elf,
-    )?;
+    writer.immutable_upgradeable_program("core", args.core_program, core_programdata, &core_elf)?;
     writer.immutable_upgradeable_program(
         "claims",
         args.claims_program,
@@ -668,6 +658,12 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
         args.custody_program,
         custody_programdata,
         &custody_elf,
+    )?;
+    writer.immutable_upgradeable_program(
+        "rent-credit",
+        args.rent_credit_program,
+        rent_credit_programdata,
+        &rent_credit_elf,
     )?;
     let mut records = BTreeMap::new();
     add_record(
@@ -869,6 +865,13 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
             args.custody_sha256,
             custody_semantic,
         ),
+        rent_credit: pin(
+            args.rent_credit_program,
+            rent_credit_programdata,
+            &args.rent_credit_elf,
+            args.rent_credit_sha256,
+            rent_credit_semantic,
+        ),
         activation: activation.to_string(),
         release_set_id: hex(&release_set_id),
         records,
@@ -906,19 +909,9 @@ fn validate_prepare(args: &PrepareArgs) -> Result<()> {
         args.trading_program,
         args.resolution_program,
         args.custody_program,
+        args.rent_credit_program,
     ];
-    if programs.contains(&system_program::ID)
-        || programs.iter().enumerate().any(|(index, program)| {
-            programs
-                .iter()
-                .skip(index.saturating_add(1))
-                .any(|other| other == program)
-        })
-    {
-        return Err(Error::new(
-            "Registry and all five role Program IDs must be pairwise-distinct non-System IDs",
-        ));
-    }
+    validate_program_ids(&programs)?;
     for (label, path) in [
         ("Registry ELF", &args.registry_elf),
         ("Core ELF", &args.core_elf),
@@ -926,6 +919,7 @@ fn validate_prepare(args: &PrepareArgs) -> Result<()> {
         ("Trading ELF", &args.trading_elf),
         ("Resolution ELF", &args.resolution_elf),
         ("Custody ELF", &args.custody_elf),
+        ("RentCredit ELF", &args.rent_credit_elf),
     ] {
         if !path.is_absolute() || !path.is_file() {
             return Err(Error::new(format!(
@@ -940,6 +934,7 @@ fn validate_prepare(args: &PrepareArgs) -> Result<()> {
         ("Trading SHA-256", &args.trading_sha256),
         ("Resolution SHA-256", &args.resolution_sha256),
         ("Custody SHA-256", &args.custody_sha256),
+        ("RentCredit SHA-256", &args.rent_credit_sha256),
         ("Core semantic release ID", &args.core_semantic_release_id),
         (
             "Claims semantic release ID",
@@ -953,6 +948,10 @@ fn validate_prepare(args: &PrepareArgs) -> Result<()> {
             "Custody semantic release ID",
             &args.custody_semantic_release_id,
         ),
+        (
+            "RentCredit semantic release ID",
+            &args.rent_credit_semantic_release_id,
+        ),
     ] {
         if value.len() != 64
             || !value
@@ -963,6 +962,22 @@ fn validate_prepare(args: &PrepareArgs) -> Result<()> {
                 "{label} must be 64 lowercase hex characters"
             )));
         }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_program_ids(programs: &[Pubkey]) -> Result<()> {
+    if programs.contains(&system_program::ID)
+        || programs.iter().enumerate().any(|(index, program)| {
+            programs
+                .iter()
+                .skip(index.saturating_add(1))
+                .any(|other| other == program)
+        })
+    {
+        return Err(Error::new(
+            "Registry, all five role programs, and RentCredit must be pairwise-distinct non-System IDs",
+        ));
     }
     Ok(())
 }
@@ -1368,5 +1383,25 @@ mod tests {
         assert_eq!(hex32(&input).expect("hex"), [0xab; 32]);
         assert!(hex32(&"AB".repeat(32)).is_err());
         assert!(hex32("00").is_err());
+    }
+
+    #[test]
+    fn successor_and_rent_credit_programs_are_distinct_non_system_ids() {
+        let mut programs = [
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+        ];
+        assert!(validate_program_ids(&programs).is_ok());
+
+        programs[6] = programs[0];
+        assert!(validate_program_ids(&programs).is_err());
+
+        programs[6] = system_program::ID;
+        assert!(validate_program_ids(&programs).is_err());
     }
 }

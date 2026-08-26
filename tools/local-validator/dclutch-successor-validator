@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fresh localhost Registry + Resolution + real-Pyth successor profile.
+# Fresh localhost successor release set + RentCredit + real-Pyth profile.
 set -euo pipefail
 
 readonly LAUNCHER_VERSION="1"
@@ -37,6 +37,8 @@ Usage:
     --resolution-sha256 SHA256 --resolution-attestation ABSOLUTE_JSON \
     --custody-program-id PUBKEY --custody-elf ABSOLUTE_ELF \
     --custody-sha256 SHA256 --custody-attestation ABSOLUTE_JSON \
+    --rent-credit-program-id PUBKEY --rent-credit-elf ABSOLUTE_ELF \
+    --rent-credit-sha256 SHA256 --rent-credit-attestation ABSOLUTE_JSON \
     [--foreground]
   dclutch-successor-validator status --ledger ABSOLUTE_DIR
   dclutch-successor-validator stop --ledger ABSOLUTE_DIR
@@ -131,7 +133,7 @@ validate_attestation() {
 }
 
 validate_plan() {
-  local plan=$1 account_dir=$2 registry_id=$3 registry_elf=$4 registry_hash=$5 core_id=$6 core_elf=$7 core_hash=$8 claims_id=$9 claims_elf=${10} claims_hash=${11} trading_id=${12} trading_elf=${13} trading_hash=${14} resolution_id=${15} resolution_elf=${16} resolution_hash=${17} custody_id=${18} custody_elf=${19} custody_hash=${20}
+  local plan=$1 account_dir=$2 registry_id=$3 registry_elf=$4 registry_hash=$5 core_id=$6 core_elf=$7 core_hash=$8 claims_id=$9 claims_elf=${10} claims_hash=${11} trading_id=${12} trading_elf=${13} trading_hash=${14} resolution_id=${15} resolution_elf=${16} resolution_hash=${17} custody_id=${18} custody_elf=${19} custody_hash=${20} rent_credit_id=${21} rent_credit_elf=${22} rent_credit_hash=${23}
   jq -e \
     --arg account_dir "$account_dir" \
     --arg registry_id "$registry_id" \
@@ -152,6 +154,9 @@ validate_plan() {
     --arg custody_id "$custody_id" \
     --arg custody_elf "$custody_elf" \
     --arg custody_hash "$custody_hash" \
+    --arg rent_credit_id "$rent_credit_id" \
+    --arg rent_credit_elf "$rent_credit_elf" \
+    --arg rent_credit_hash "$rent_credit_hash" \
     '.schema == "dclutch-local-successor-genesis-plan-v1" and
      .account_dir == $account_dir and
      .registry.program_id == $registry_id and
@@ -184,6 +189,11 @@ validate_plan() {
      .custody.elf_sha256 == $custody_hash and
      .genesis_accounts["loader.custody.program"].address == $custody_id and
      .genesis_accounts["loader.custody.programdata"].address == .custody.programdata_id and
+     .rent_credit.program_id == $rent_credit_id and
+     .rent_credit.elf_path == $rent_credit_elf and
+     .rent_credit.elf_sha256 == $rent_credit_hash and
+     .genesis_accounts["loader.rent-credit.program"].address == $rent_credit_id and
+     .genesis_accounts["loader.rent-credit.programdata"].address == .rent_credit.programdata_id and
      (.genesis_boundary | length == 4) and
      (.genesis_accounts | length > 0)' \
     "$plan" >/dev/null || die "successor plan does not match exact account/artifact pins or hides its genesis boundary"
@@ -208,7 +218,7 @@ validate_account_dir() {
 }
 
 write_profile() {
-  local ledger=$1 account_dir=$2 plan=$3 registry_id=$4 registry_elf=$5 registry_hash=$6 registry_attestation=$7 core_id=$8 core_elf=$9 core_hash=${10} core_attestation=${11} claims_id=${12} claims_elf=${13} claims_hash=${14} claims_attestation=${15} trading_id=${16} trading_elf=${17} trading_hash=${18} trading_attestation=${19} resolution_id=${20} resolution_elf=${21} resolution_hash=${22} resolution_attestation=${23} custody_id=${24} custody_elf=${25} custody_hash=${26} custody_attestation=${27} validator=${28} version=${29}
+  local ledger=$1 account_dir=$2 plan=$3 registry_id=$4 registry_elf=$5 registry_hash=$6 registry_attestation=$7 core_id=$8 core_elf=$9 core_hash=${10} core_attestation=${11} claims_id=${12} claims_elf=${13} claims_hash=${14} claims_attestation=${15} trading_id=${16} trading_elf=${17} trading_hash=${18} trading_attestation=${19} resolution_id=${20} resolution_elf=${21} resolution_hash=${22} resolution_attestation=${23} custody_id=${24} custody_elf=${25} custody_hash=${26} custody_attestation=${27} rent_credit_id=${28} rent_credit_elf=${29} rent_credit_hash=${30} rent_credit_attestation=${31} validator=${32} version=${33}
   {
     printf '{\n'
     printf '  "schema":"dclutch-successor-local-validator-profile-v1",\n'
@@ -227,16 +237,17 @@ write_profile() {
     printf '    {"name":"trading","program_id":"%s","elf_path":' "$trading_id"; json_string "$trading_elf"; printf ',"elf_sha256":"%s","attestation":' "$trading_hash"; json_string "$trading_attestation"; printf '},\n'
     printf '    {"name":"resolution","program_id":"%s","elf_path":' "$resolution_id"; json_string "$resolution_elf"; printf ',"elf_sha256":"%s","attestation":' "$resolution_hash"; json_string "$resolution_attestation"; printf '},\n'
     printf '    {"name":"custody","program_id":"%s","elf_path":' "$custody_id"; json_string "$custody_elf"; printf ',"elf_sha256":"%s","attestation":' "$custody_hash"; json_string "$custody_attestation"; printf '},\n'
+    printf '    {"name":"rent-credit","program_id":"%s","elf_path":' "$rent_credit_id"; json_string "$rent_credit_elf"; printf ',"elf_sha256":"%s","attestation":' "$rent_credit_hash"; json_string "$rent_credit_attestation"; printf '},\n'
     printf '    {"name":"pyth-receiver","program_id":"%s","elf_sha256":"c5079559864fc34dbd5fe87b4aa9fba3a1ed22690363ec490449e8660e73af64"},\n' "$RECEIVER_ID"
     printf '    {"name":"pyth-router","program_id":"%s","elf_sha256":"f9061f03a81b89db29f4603677e3b3d89b3bbf08d67827b2832f18a4e2b61acb"}\n' "$ROUTER_ID"
     printf '  ],\n'
-    printf '  "loader_time_boundary":"Registry and all five role programs use exact slot-0 immutable genesis Loader headers with canonical zero padding before the fixed 45-byte ELF boundary. Current wall clock differs from the captured provider fixture, and evidence makes no captured-release or production-release claim."\n'
+    printf '  "loader_time_boundary":"Registry, all five role programs, and RentCredit use exact slot-0 immutable genesis Loader headers with canonical zero padding before the fixed 45-byte ELF boundary. Current wall clock differs from the captured provider fixture, and evidence makes no captured-release or production-release claim."\n'
     printf '}\n'
   } > "$ledger/$PROFILE_NAME"
 }
 
 start() {
-  local ledger_arg='' account_dir_arg='' plan_arg='' registry_id='' registry_elf_arg='' registry_hash='' registry_attestation_arg='' core_id='' core_elf_arg='' core_hash='' core_attestation_arg='' claims_id='' claims_elf_arg='' claims_hash='' claims_attestation_arg='' trading_id='' trading_elf_arg='' trading_hash='' trading_attestation_arg='' resolution_id='' resolution_elf_arg='' resolution_hash='' resolution_attestation_arg='' custody_id='' custody_elf_arg='' custody_hash='' custody_attestation_arg='' foreground=0
+  local ledger_arg='' account_dir_arg='' plan_arg='' registry_id='' registry_elf_arg='' registry_hash='' registry_attestation_arg='' core_id='' core_elf_arg='' core_hash='' core_attestation_arg='' claims_id='' claims_elf_arg='' claims_hash='' claims_attestation_arg='' trading_id='' trading_elf_arg='' trading_hash='' trading_attestation_arg='' resolution_id='' resolution_elf_arg='' resolution_hash='' resolution_attestation_arg='' custody_id='' custody_elf_arg='' custody_hash='' custody_attestation_arg='' rent_credit_id='' rent_credit_elf_arg='' rent_credit_hash='' rent_credit_attestation_arg='' foreground=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --ledger) ledger_arg=${2-}; shift 2 ;;
@@ -266,21 +277,26 @@ start() {
       --custody-elf) custody_elf_arg=${2-}; shift 2 ;;
       --custody-sha256) custody_hash=${2-}; shift 2 ;;
       --custody-attestation) custody_attestation_arg=${2-}; shift 2 ;;
+      --rent-credit-program-id) rent_credit_id=${2-}; shift 2 ;;
+      --rent-credit-elf) rent_credit_elf_arg=${2-}; shift 2 ;;
+      --rent-credit-sha256) rent_credit_hash=${2-}; shift 2 ;;
+      --rent-credit-attestation) rent_credit_attestation_arg=${2-}; shift 2 ;;
       --foreground) foreground=1; shift ;;
       *) die "unknown start option: $1" ;;
     esac
   done
-  [[ -n "$ledger_arg" && -n "$account_dir_arg" && -n "$plan_arg" && -n "$registry_id" && -n "$registry_elf_arg" && -n "$registry_hash" && -n "$registry_attestation_arg" && -n "$core_id" && -n "$core_elf_arg" && -n "$core_hash" && -n "$core_attestation_arg" && -n "$claims_id" && -n "$claims_elf_arg" && -n "$claims_hash" && -n "$claims_attestation_arg" && -n "$trading_id" && -n "$trading_elf_arg" && -n "$trading_hash" && -n "$trading_attestation_arg" && -n "$resolution_id" && -n "$resolution_elf_arg" && -n "$resolution_hash" && -n "$resolution_attestation_arg" && -n "$custody_id" && -n "$custody_elf_arg" && -n "$custody_hash" && -n "$custody_attestation_arg" ]] || die "start requires every plan and artifact pin"
+  [[ -n "$ledger_arg" && -n "$account_dir_arg" && -n "$plan_arg" && -n "$registry_id" && -n "$registry_elf_arg" && -n "$registry_hash" && -n "$registry_attestation_arg" && -n "$core_id" && -n "$core_elf_arg" && -n "$core_hash" && -n "$core_attestation_arg" && -n "$claims_id" && -n "$claims_elf_arg" && -n "$claims_hash" && -n "$claims_attestation_arg" && -n "$trading_id" && -n "$trading_elf_arg" && -n "$trading_hash" && -n "$trading_attestation_arg" && -n "$resolution_id" && -n "$resolution_elf_arg" && -n "$resolution_hash" && -n "$resolution_attestation_arg" && -n "$custody_id" && -n "$custody_elf_arg" && -n "$custody_hash" && -n "$custody_attestation_arg" && -n "$rent_credit_id" && -n "$rent_credit_elf_arg" && -n "$rent_credit_hash" && -n "$rent_credit_attestation_arg" ]] || die "start requires every plan and artifact pin"
   is_pubkey "$registry_id" || die "invalid Registry program ID"
   is_pubkey "$core_id" || die "invalid Core program ID"
   is_pubkey "$claims_id" || die "invalid Claims program ID"
   is_pubkey "$trading_id" || die "invalid Trading program ID"
   is_pubkey "$resolution_id" || die "invalid Resolution program ID"
   is_pubkey "$custody_id" || die "invalid Custody program ID"
-  local ids=("$registry_id" "$core_id" "$claims_id" "$trading_id" "$resolution_id" "$custody_id") left right
+  is_pubkey "$rent_credit_id" || die "invalid RentCredit program ID"
+  local ids=("$registry_id" "$core_id" "$claims_id" "$trading_id" "$resolution_id" "$custody_id" "$rent_credit_id") left right
   for ((left=0; left<${#ids[@]}; left++)); do
     for ((right=left+1; right<${#ids[@]}; right++)); do
-      [[ "${ids[$left]}" != "${ids[$right]}" ]] || die "Registry and all five role Program IDs must be pairwise distinct"
+      [[ "${ids[$left]}" != "${ids[$right]}" ]] || die "Registry, all five role Program IDs, and RentCredit must be pairwise distinct"
     done
   done
   is_sha256 "$registry_hash" || die "invalid Registry SHA-256"
@@ -289,13 +305,14 @@ start() {
   is_sha256 "$trading_hash" || die "invalid Trading SHA-256"
   is_sha256 "$resolution_hash" || die "invalid Resolution SHA-256"
   is_sha256 "$custody_hash" || die "invalid Custody SHA-256"
+  is_sha256 "$rent_credit_hash" || die "invalid RentCredit SHA-256"
   require_command shasum
   require_command jq
   require_command curl
   require_command solana-test-validator
   "$SCRIPT_DIR/dclutch-local-validator" verify-fixtures >/dev/null
 
-  local ledger account_dir plan registry_elf registry_attestation core_elf core_attestation claims_elf claims_attestation trading_elf trading_attestation resolution_elf resolution_attestation custody_elf custody_attestation validator version
+  local ledger account_dir plan registry_elf registry_attestation core_elf core_attestation claims_elf claims_attestation trading_elf trading_attestation resolution_elf resolution_attestation custody_elf custody_attestation rent_credit_elf rent_credit_attestation validator version
   ledger=$(canonical_new_ledger "$ledger_arg")
   account_dir=$(canonical_directory "$account_dir_arg")
   plan=$(canonical_file "$plan_arg")
@@ -311,25 +328,30 @@ start() {
   resolution_attestation=$(canonical_file "$resolution_attestation_arg")
   custody_elf=$(canonical_file "$custody_elf_arg")
   custody_attestation=$(canonical_file "$custody_attestation_arg")
+  rent_credit_elf=$(canonical_file "$rent_credit_elf_arg")
+  rent_credit_attestation=$(canonical_file "$rent_credit_attestation_arg")
   [[ "$(sha256 "$registry_elf")" = "$registry_hash" ]] || die "Registry ELF hash mismatch"
   [[ "$(sha256 "$core_elf")" = "$core_hash" ]] || die "Core ELF hash mismatch"
   [[ "$(sha256 "$claims_elf")" = "$claims_hash" ]] || die "Claims ELF hash mismatch"
   [[ "$(sha256 "$trading_elf")" = "$trading_hash" ]] || die "Trading ELF hash mismatch"
   [[ "$(sha256 "$resolution_elf")" = "$resolution_hash" ]] || die "Resolution ELF hash mismatch"
   [[ "$(sha256 "$custody_elf")" = "$custody_hash" ]] || die "Custody ELF hash mismatch"
+  [[ "$(sha256 "$rent_credit_elf")" = "$rent_credit_hash" ]] || die "RentCredit ELF hash mismatch"
   [[ "$(od -An -tx1 -N4 "$registry_elf" | tr -d '[:space:]')" = "7f454c46" ]] || die "Registry input is not ELF"
   [[ "$(od -An -tx1 -N4 "$core_elf" | tr -d '[:space:]')" = "7f454c46" ]] || die "Core input is not ELF"
   [[ "$(od -An -tx1 -N4 "$claims_elf" | tr -d '[:space:]')" = "7f454c46" ]] || die "Claims input is not ELF"
   [[ "$(od -An -tx1 -N4 "$trading_elf" | tr -d '[:space:]')" = "7f454c46" ]] || die "Trading input is not ELF"
   [[ "$(od -An -tx1 -N4 "$resolution_elf" | tr -d '[:space:]')" = "7f454c46" ]] || die "Resolution input is not ELF"
   [[ "$(od -An -tx1 -N4 "$custody_elf" | tr -d '[:space:]')" = "7f454c46" ]] || die "Custody input is not ELF"
+  [[ "$(od -An -tx1 -N4 "$rent_credit_elf" | tr -d '[:space:]')" = "7f454c46" ]] || die "RentCredit input is not ELF"
   validate_attestation "$registry_attestation" "$registry_elf" "$registry_hash" "$registry_id"
   validate_attestation "$core_attestation" "$core_elf" "$core_hash" "$core_id"
   validate_attestation "$claims_attestation" "$claims_elf" "$claims_hash" "$claims_id"
   validate_attestation "$trading_attestation" "$trading_elf" "$trading_hash" "$trading_id"
   validate_attestation "$resolution_attestation" "$resolution_elf" "$resolution_hash" "$resolution_id"
   validate_attestation "$custody_attestation" "$custody_elf" "$custody_hash" "$custody_id"
-  validate_plan "$plan" "$account_dir" "$registry_id" "$registry_elf" "$registry_hash" "$core_id" "$core_elf" "$core_hash" "$claims_id" "$claims_elf" "$claims_hash" "$trading_id" "$trading_elf" "$trading_hash" "$resolution_id" "$resolution_elf" "$resolution_hash" "$custody_id" "$custody_elf" "$custody_hash"
+  validate_attestation "$rent_credit_attestation" "$rent_credit_elf" "$rent_credit_hash" "$rent_credit_id"
+  validate_plan "$plan" "$account_dir" "$registry_id" "$registry_elf" "$registry_hash" "$core_id" "$core_elf" "$core_hash" "$claims_id" "$claims_elf" "$claims_hash" "$trading_id" "$trading_elf" "$trading_hash" "$resolution_id" "$resolution_elf" "$resolution_hash" "$custody_id" "$custody_elf" "$custody_hash" "$rent_credit_id" "$rent_credit_elf" "$rent_credit_hash"
   validate_account_dir "$plan" "$account_dir"
   validator=$(canonical_file "$(command -v solana-test-validator)")
   version=$("$validator" --version 2>&1 | head -n 1)
@@ -337,7 +359,7 @@ start() {
 
   mkdir -- "$ledger"
   printf 'dclutch-successor-validator-ledger-v1\n' > "$ledger/$SENTINEL_NAME"
-  write_profile "$ledger" "$account_dir" "$plan" "$registry_id" "$registry_elf" "$registry_hash" "$registry_attestation" "$core_id" "$core_elf" "$core_hash" "$core_attestation" "$claims_id" "$claims_elf" "$claims_hash" "$claims_attestation" "$trading_id" "$trading_elf" "$trading_hash" "$trading_attestation" "$resolution_id" "$resolution_elf" "$resolution_hash" "$resolution_attestation" "$custody_id" "$custody_elf" "$custody_hash" "$custody_attestation" "$validator" "$version"
+  write_profile "$ledger" "$account_dir" "$plan" "$registry_id" "$registry_elf" "$registry_hash" "$registry_attestation" "$core_id" "$core_elf" "$core_hash" "$core_attestation" "$claims_id" "$claims_elf" "$claims_hash" "$claims_attestation" "$trading_id" "$trading_elf" "$trading_hash" "$trading_attestation" "$resolution_id" "$resolution_elf" "$resolution_hash" "$resolution_attestation" "$custody_id" "$custody_elf" "$custody_hash" "$custody_attestation" "$rent_credit_id" "$rent_credit_elf" "$rent_credit_hash" "$rent_credit_attestation" "$validator" "$version"
   local validator_args=(
     --config /dev/null \
     --ledger "$ledger" \

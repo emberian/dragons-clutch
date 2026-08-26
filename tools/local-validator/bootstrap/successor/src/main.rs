@@ -103,6 +103,7 @@ fn run_runtime(arguments: Vec<String>) -> Result<()> {
         "claims_reauthenticated": evidence.claims_reauthenticated,
         "trading_reauthenticated": evidence.trading_reauthenticated,
         "custody_reauthenticated": evidence.custody_reauthenticated,
+        "rent_credit_executable_authenticated": evidence.rent_credit_executable_authenticated,
         "primary_resolution_executed": evidence.primary_resolution_executed,
         "primary_replay_refused": evidence.primary_replay_refused,
         "sequential_recovery_exhaustion_failure_executed": evidence.sequential_recovery_exhaustion_failure_executed,
@@ -139,6 +140,10 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
     let mut custody_elf = None;
     let mut custody_sha256 = None;
     let mut custody_semantic_release = None;
+    let mut rent_credit_program = None;
+    let mut rent_credit_elf = None;
+    let mut rent_credit_sha256 = None;
+    let mut rent_credit_semantic_release = None;
     let mut iterator = arguments.into_iter();
     while let Some(argument) = iterator.next() {
         let value = iterator
@@ -169,6 +174,10 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
             "--custody-elf" => &mut custody_elf,
             "--custody-sha256" => &mut custody_sha256,
             "--custody-semantic-release-id" => &mut custody_semantic_release,
+            "--rent-credit-program-id" => &mut rent_credit_program,
+            "--rent-credit-elf" => &mut rent_credit_elf,
+            "--rent-credit-sha256" => &mut rent_credit_sha256,
+            "--rent-credit-semantic-release-id" => &mut rent_credit_semantic_release,
             _ => return Err(Error::new(format!("unknown prepare argument: {argument}"))),
         };
         if slot.replace(value).is_some() {
@@ -184,10 +193,7 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
         core_program: parse_pubkey(core_program, "--core-program-id")?,
         core_elf: absolute(core_elf, "--core-elf")?,
         core_sha256: required(core_sha256, "--core-sha256")?,
-        core_semantic_release_id: required(
-            core_semantic_release,
-            "--core-semantic-release-id",
-        )?,
+        core_semantic_release_id: required(core_semantic_release, "--core-semantic-release-id")?,
         claims_program: parse_pubkey(claims_program, "--claims-program-id")?,
         claims_elf: absolute(claims_elf, "--claims-elf")?,
         claims_sha256: required(claims_sha256, "--claims-sha256")?,
@@ -212,6 +218,13 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
             custody_semantic_release,
             "--custody-semantic-release-id",
         )?,
+        rent_credit_program: parse_pubkey(rent_credit_program, "--rent-credit-program-id")?,
+        rent_credit_elf: absolute(rent_credit_elf, "--rent-credit-elf")?,
+        rent_credit_sha256: required(rent_credit_sha256, "--rent-credit-sha256")?,
+        rent_credit_semantic_release_id: required(
+            rent_credit_semantic_release,
+            "--rent-credit-semantic-release-id",
+        )?,
     };
     let path = args.plan_path.clone();
     let prepared = plan::prepare(args)?;
@@ -225,6 +238,7 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
         "trading_program_id": prepared.trading.program_id,
         "resolution_program_id": prepared.resolution.program_id,
         "custody_program_id": prepared.custody.program_id,
+        "rent_credit_program_id": prepared.rent_credit.program_id,
         "genesis_account_count": prepared.genesis_accounts.len(),
     });
     let mut stdout = std::io::stdout();
@@ -251,7 +265,7 @@ fn parse_pubkey(value: Option<String>, label: &str) -> Result<Pubkey> {
 
 fn usage() {
     println!(
-        "Usage:\n  dclutch-local-successor-bootstrap prepare --account-dir ABSOLUTE_NEW_DIR --output ABSOLUTE_NEW_JSON --registry-program-id PUBKEY --registry-elf ABSOLUTE_ELF --registry-sha256 SHA256 --core-program-id PUBKEY --core-elf ABSOLUTE_ELF --core-sha256 SHA256 --core-semantic-release-id SHA256 --claims-program-id PUBKEY --claims-elf ABSOLUTE_ELF --claims-sha256 SHA256 --claims-semantic-release-id SHA256 --trading-program-id PUBKEY --trading-elf ABSOLUTE_ELF --trading-sha256 SHA256 --trading-semantic-release-id SHA256 --resolution-program-id PUBKEY --resolution-elf ABSOLUTE_ELF --resolution-sha256 SHA256 --custody-program-id PUBKEY --custody-elf ABSOLUTE_ELF --custody-sha256 SHA256 --custody-semantic-release-id SHA256\n  dclutch-local-successor-bootstrap run --rpc-url LOOPBACK_HTTP_ORIGIN --plan ABSOLUTE_JSON --provider-evidence ABSOLUTE_JSON --output ABSOLUTE_NEW_JSON"
+        "Usage:\n  dclutch-local-successor-bootstrap prepare --account-dir ABSOLUTE_NEW_DIR --output ABSOLUTE_NEW_JSON --registry-program-id PUBKEY --registry-elf ABSOLUTE_ELF --registry-sha256 SHA256 --core-program-id PUBKEY --core-elf ABSOLUTE_ELF --core-sha256 SHA256 --core-semantic-release-id SHA256 --claims-program-id PUBKEY --claims-elf ABSOLUTE_ELF --claims-sha256 SHA256 --claims-semantic-release-id SHA256 --trading-program-id PUBKEY --trading-elf ABSOLUTE_ELF --trading-sha256 SHA256 --trading-semantic-release-id SHA256 --resolution-program-id PUBKEY --resolution-elf ABSOLUTE_ELF --resolution-sha256 SHA256 --custody-program-id PUBKEY --custody-elf ABSOLUTE_ELF --custody-sha256 SHA256 --custody-semantic-release-id SHA256 --rent-credit-program-id PUBKEY --rent-credit-elf ABSOLUTE_ELF --rent-credit-sha256 SHA256 --rent-credit-semantic-release-id SHA256\n  dclutch-local-successor-bootstrap run --rpc-url LOOPBACK_HTTP_ORIGIN --plan ABSOLUTE_JSON --provider-evidence ABSOLUTE_JSON --output ABSOLUTE_NEW_JSON"
     );
 }
 
