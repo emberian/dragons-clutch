@@ -344,70 +344,122 @@ pub fn evaluate_settlement_v2(
         second_effect_output,
     } = buffers;
     cursor_scratch.copy_from_slice(view.cursor_before);
-    first_effect_scratch.fill(0);
-    second_effect_scratch.fill(0);
-    let mut recorder = EffectRecorderV2 {
-        first: first_effect_scratch,
-        second: second_effect_scratch,
+    let mut measurement = EffectRecorderV2 {
+        first: None,
+        second: None,
         lengths: [0; 2],
         count: 0,
         surplus_route: view.surplus_route,
         error: None,
     };
-    let result = match view.action {
-        Action::Collect => collect_execution_row(
-            cursor_scratch,
-            SettlementRowInputV1 {
-                context: view.context,
-                verified: &verified,
-                page_bytes: view.page.ok_or(PlanErrorV2::CoordinateMismatch)?,
-                expected_revision: view.expected_revision,
-            },
-            &mut recorder,
-        ),
-        Action::Materialize => materialize(
-            cursor_scratch,
-            view.context,
-            &verified,
-            view.expected_revision,
-            &mut recorder,
-        ),
-        Action::Distribute => distribute_execution_row(
-            cursor_scratch,
-            SettlementRowInputV1 {
-                context: view.context,
-                verified: &verified,
-                page_bytes: view.page.ok_or(PlanErrorV2::CoordinateMismatch)?,
-                expected_revision: view.expected_revision,
-            },
-            &mut recorder,
-        ),
-        Action::Close => close(
-            cursor_scratch,
-            view.context,
-            &verified,
-            view.expected_revision,
-            &mut recorder,
-        ),
-        _ => return Err(PlanErrorV2::CoordinateMismatch),
+    let measured =
+        execute_settlement_transition_v2(&view, &verified, cursor_scratch, &mut measurement);
+    if let Some(error) = measurement.error {
+        return Err(error);
+    }
+    measured?;
+    require_effect_capacities(
+        &measurement,
+        first_effect_scratch.len(),
+        second_effect_scratch.len(),
+    )?;
+
+    cursor_scratch.copy_from_slice(view.cursor_before);
+    first_effect_scratch.fill(0);
+    second_effect_scratch.fill(0);
+    let mut recorder = EffectRecorderV2 {
+        first: Some(first_effect_scratch),
+        second: Some(second_effect_scratch),
+        lengths: [0; 2],
+        count: 0,
+        surplus_route: view.surplus_route,
+        error: None,
     };
+    let emitted = execute_settlement_transition_v2(&view, &verified, cursor_scratch, &mut recorder);
     if let Some(error) = recorder.error {
         return Err(error);
     }
-    result.map_err(|_| PlanErrorV2::Transition)?;
-    if (recorder.count < 1 && !recorder.first.is_empty())
-        || (recorder.count < 2 && !recorder.second.is_empty())
-    {
-        return Err(PlanErrorV2::EffectCapacity);
+    emitted?;
+    if recorder.count != measurement.count || recorder.lengths != measurement.lengths {
+        return Err(PlanErrorV2::Transition);
     }
     let summary = SettlementPlanSummaryV2 {
         first_effect_bytes: recorder.lengths[0],
         second_effect_bytes: recorder.lengths[1],
     };
     cursor_output.copy_from_slice(cursor_scratch);
-    first_effect_output.copy_from_slice(first_effect_scratch);
-    second_effect_output.copy_from_slice(second_effect_scratch);
+    first_effect_output.copy_from_slice(recorder.first.as_deref().ok_or(PlanErrorV2::Transition)?);
+    second_effect_output
+        .copy_from_slice(recorder.second.as_deref().ok_or(PlanErrorV2::Transition)?);
     Ok(summary)
+}
+
+fn execute_settlement_transition_v2(
+    view: &SettlementPlanViewV2<'_>,
+    verified: &VerifiedCandidateV1,
+    cursor: &mut [u8],
+    children: &mut impl SettlementChildrenV1,
+) -> PlanResultV2<()> {
+    let result = match view.action {
+        Action::Collect => collect_execution_row(
+            cursor,
+            SettlementRowInputV1 {
+                context: view.context,
+                verified,
+                page_bytes: view.page.ok_or(PlanErrorV2::CoordinateMismatch)?,
+                expected_revision: view.expected_revision,
+            },
+            children,
+        ),
+        Action::Materialize => materialize(
+            cursor,
+            view.context,
+            verified,
+            view.expected_revision,
+            children,
+        ),
+        Action::Distribute => distribute_execution_row(
+            cursor,
+            SettlementRowInputV1 {
+                context: view.context,
+                verified,
+                page_bytes: view.page.ok_or(PlanErrorV2::CoordinateMismatch)?,
+                expected_revision: view.expected_revision,
+            },
+            children,
+        ),
+        Action::Close => close(
+            cursor,
+            view.context,
+            verified,
+            view.expected_revision,
+            children,
+        ),
+        _ => return Err(PlanErrorV2::CoordinateMismatch),
+    };
+    result.map_err(|_| PlanErrorV2::Transition)
+}
+
+fn require_effect_capacities(
+    measurement: &EffectRecorderV2<'_>,
+    first_capacity: usize,
+    second_capacity: usize,
+) -> PlanResultV2<()> {
+    let first_required = if measurement.count > 0 {
+        usize::try_from(measurement.lengths[0]).map_err(|_| PlanErrorV2::EffectCapacity)?
+    } else {
+        0
+    };
+    let second_required = if measurement.count > 1 {
+        usize::try_from(measurement.lengths[1]).map_err(|_| PlanErrorV2::EffectCapacity)?
+    } else {
+        0
+    };
+    if first_capacity != first_required || second_capacity != second_required {
+        Err(PlanErrorV2::EffectCapacity)
+    } else {
+        Ok(())
+    }
 }
 
 fn require_consider_widths(
@@ -510,8 +562,8 @@ fn require_settlement_widths(
 }
 
 struct EffectRecorderV2<'a> {
-    first: &'a mut [u8],
-    second: &'a mut [u8],
+    first: Option<&'a mut [u8]>,
+    second: Option<&'a mut [u8]>,
     lengths: [u32; 2],
     count: u8,
     surplus_route: Option<QuoteSurplusRouteV2>,
@@ -532,15 +584,17 @@ impl EffectRecorderV2<'_> {
             Err(_) => return self.refuse(PlanErrorV2::Transition),
         };
         let target = match self.count {
-            0 => &mut *self.first,
-            1 => &mut *self.second,
+            0 => self.first.as_deref_mut(),
+            1 => self.second.as_deref_mut(),
             _ => return self.refuse(PlanErrorV2::EffectCapacity),
         };
-        if length != target.len() {
-            return self.refuse(PlanErrorV2::EffectCapacity);
-        }
-        if plan.encode_into(target).is_err() {
-            return self.refuse(PlanErrorV2::Transition);
+        if let Some(target) = target {
+            if length != target.len() {
+                return self.refuse(PlanErrorV2::EffectCapacity);
+            }
+            if plan.encode_into(target).is_err() {
+                return self.refuse(PlanErrorV2::Transition);
+            }
         }
         self.lengths[usize::from(self.count)] =
             u32::try_from(length).map_err(|_| ChildExecutionError::Refused)?;
