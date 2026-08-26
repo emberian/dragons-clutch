@@ -313,7 +313,7 @@ pub fn process_hot_execution_v3(
     let market = authenticate_market_boxed_v3(&frame, envelope)?;
     let root = authenticate_root_boxed_v3(program_id, &frame, envelope, &market)?;
     let context = &root.context;
-    let immutable_root_header = root.immutable_header;
+    let immutable_root_header = &root.immutable_header;
 
     let rent = Rent::from_account_info(frame.rent).map_err(|_| TradingSbfError::Content)?;
     let product_runtime_v3 = authenticate_product_runtime_boxed_v3(&frame, &rent, &market)?;
@@ -888,7 +888,7 @@ struct PreparedHotCommitV3<'a, 'accounts, 'info, 'artifact> {
     aliases: &'a [usize],
     output_lamports: &'a [u64],
     rent: &'a Rent,
-    immutable_root_header: [u8; CAPABILITY_ROOT_HEADER_BYTES_V1],
+    immutable_root_header: &'a [u8; CAPABILITY_ROOT_HEADER_BYTES_V1],
     root_prestate: [u8; 32],
     strategy_execution_digest: [u8; 32],
     descriptor: &'a CapabilityProgramV4,
