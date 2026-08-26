@@ -63,6 +63,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-claims-svm"
+version = "0.1.0"
+dependencies = [
+ "dclutch-effect-kernel",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-rational-representation-v2-kernel",
+ "dclutch-rational-representation-v2-lifecycle-contract",
+ "dclutch-rational-representation-v2-request-contract",
+ "dclutch-representation-composition-v3-kernel",
+]
+
+[[package]]
 name = "dclutch-core-contract"
 version = "0.1.0"
 
@@ -86,6 +98,7 @@ version = "0.1.0"
 dependencies = [
  "dclutch-account-profile-contract",
  "dclutch-capability-program-contract",
+ "dclutch-claims-svm",
  "dclutch-core-contract",
  "dclutch-effect-kernel",
  "dclutch-execution-strategy-contract",
@@ -101,6 +114,41 @@ name = "dclutch-fractional-claim-kernel"
 version = "0.1.0"
 dependencies = [
  "dclutch-representation-composition-v3-kernel",
+]
+
+[[package]]
+name = "dclutch-product-payoff-v2-codec"
+version = "0.1.0"
+dependencies = [
+ "dclutch-product-runtime-v2",
+ "sha2",
+]
+
+[[package]]
+name = "dclutch-product-runtime-v2"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-rational-representation-v2-kernel"
+version = "0.1.0"
+dependencies = [
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-representation-composition-v3-kernel",
+]
+
+[[package]]
+name = "dclutch-rational-representation-v2-lifecycle-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-rational-representation-v2-kernel",
+ "dclutch-token-svm",
+]
+
+[[package]]
+name = "dclutch-rational-representation-v2-request-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-token-svm",
 ]
 
 [[package]]

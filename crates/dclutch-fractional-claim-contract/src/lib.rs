@@ -10,6 +10,7 @@
 //! family request/root wire formats used by a future thin SBF adapter.
 
 mod artifacts;
+mod hot_v2;
 mod request;
 mod request_v2;
 mod root;
@@ -19,6 +20,13 @@ pub use artifacts::{
     FractionalArtifactBytesV1, FractionalArtifactErrorV1, FractionalArtifactSelectionV1,
     FractionalChildProgramsV1, Result as ArtifactResult,
     authenticate_fractional_artifact_bundle_v1,
+};
+pub use hot_v2::{
+    FRACTIONAL_HOT_MAX_TOKEN_EFFECTS_V2, FRACTIONAL_HOT_NO_ROUTE_ACCOUNTS_V2,
+    FractionalHotAccountRefV2, FractionalHotCandidateInputV2, FractionalHotCandidateV2,
+    FractionalHotClaimsEffectV2, FractionalHotErrorV2, FractionalHotRentCloseV2,
+    FractionalHotTokenEffectV2, FractionalHotTokenKindV2, FractionalHotTokenPostV2,
+    Result as FractionalHotResultV2,
 };
 pub use request::{
     FRACTIONAL_FAMILY_REQUEST_BYTES_V1, FRACTIONAL_FAMILY_REQUEST_MAGIC_V1,
