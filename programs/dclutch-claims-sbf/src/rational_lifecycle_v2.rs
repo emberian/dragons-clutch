@@ -1212,12 +1212,12 @@ fn authenticate_complete_vacancy(
         let position = account(accounts, base + VACANCY_POSITION)?;
         let admission = account(accounts, base + VACANCY_ADMISSION)?;
         let outcome = coordinate.outcome.to_le_bytes();
-        let owner_seeds = ProtocolPositionClaimsCapabilitySeedsV2::new(
+        let owner = authenticate_vacancy_custody_owner(
+            program_id,
             request.header().descriptor_id,
             coordinate.outcome,
-        )
-        .map_err(|_| RationalLifecycleSbfErrorV2::Descriptor)?;
-        let owner = Pubkey::find_program_address(&owner_seeds.as_slices(), program_id).0;
+            coordinate.claims_custody_owner,
+        )?;
         let position_seeds =
             ProtocolPositionSeedsV2::new(common.aggregate.key.to_bytes(), owner.to_bytes())
                 .map_err(|_| RationalLifecycleSbfErrorV2::Position)?;
@@ -1265,6 +1265,21 @@ fn authenticate_complete_vacancy(
         }
     }
     Ok(())
+}
+
+fn authenticate_vacancy_custody_owner(
+    program_id: &Pubkey,
+    descriptor_id: [u8; 32],
+    outcome: u32,
+    observed_owner: [u8; 32],
+) -> Result<Pubkey, ProgramError> {
+    let owner_seeds = ProtocolPositionClaimsCapabilitySeedsV2::new(descriptor_id, outcome)
+        .map_err(|_| RationalLifecycleSbfErrorV2::Descriptor)?;
+    let expected = Pubkey::find_program_address(&owner_seeds.as_slices(), program_id).0;
+    if observed_owner != expected.to_bytes() {
+        return Err(RationalLifecycleSbfErrorV2::Position.into());
+    }
+    Ok(expected)
 }
 
 fn post_resource_digest(
@@ -1401,6 +1416,25 @@ mod tests {
             canonical_seeds
                 .authenticate_address(canonical.to_bytes(), substituted.to_bytes())
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn complete_vacancy_refuses_custody_owner_substitution() {
+        let program = Pubkey::new_from_array([0xb1; 32]);
+        let descriptor = [0xb2; 32];
+        let outcome = 7;
+        let seeds =
+            ProtocolPositionClaimsCapabilitySeedsV2::new(descriptor, outcome).expect("owner seeds");
+        let expected = Pubkey::find_program_address(&seeds.as_slices(), &program).0;
+        assert_eq!(
+            authenticate_vacancy_custody_owner(&program, descriptor, outcome, expected.to_bytes(),)
+                .expect("canonical owner"),
+            expected,
+        );
+        assert_eq!(
+            authenticate_vacancy_custody_owner(&program, descriptor, outcome, [0xb3; 32]),
+            Err(ProgramError::from(RationalLifecycleSbfErrorV2::Position)),
         );
     }
 }
