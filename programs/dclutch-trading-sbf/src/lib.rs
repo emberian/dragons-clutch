@@ -68,7 +68,7 @@ pub mod outer;
     feature = "series-family",
     feature = "dealer-family"
 ))]
-pub mod projected_market_v1;
+pub mod projected_market_v2;
 /// Family-neutral EffectProgram V3 composition for canonical Resolution CPIs.
 pub mod resolution_composition_v3;
 /// Series family projection behind the common data-defined Trading boundary.

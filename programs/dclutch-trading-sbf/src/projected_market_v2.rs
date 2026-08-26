@@ -1,44 +1,41 @@
 //! Compact family-neutral projected-Market execution coordinates.
 //!
-//! The outer instruction carries one fixed Core request and one contiguous
-//! family request.  It never carries the already-persisted ProjectFound
-//! receipt, projected Custody request, or an intermediate child receipt.
-//! Those values are reconstructed from the authenticated projected-Custody
-//! state and retained only for the duration of the instruction.
+//! The outer instruction carries only one contiguous family request. It never
+//! carries a caller-authored Core request, the already-persisted ProjectFound
+//! receipt, a projected Custody request, or an intermediate child receipt.
+//! The authenticated program graph derives both prefix child requests; the
+//! projected values are cross-checked against the authenticated Custody state
+//! and retained only for the duration of the instruction.
 
 use dclutch_custody_contract::{
     ProjectedCustodyOperationV1, ProjectedCustodyPhaseV1, ProjectedCustodyRequestV1,
     ProjectedCustodyStateV1,
 };
-use dclutch_market_core_codec::{
-    Action, Identity, ProjectFoundReceiptV1, Request, SERIES_CORE_REQUEST_BYTES_V1,
-};
+use dclutch_market_core_codec::{Action, Identity, ProjectFoundReceiptV1, Request};
 use solana_program::hash::hash;
 
 /// Compact projected-execution instruction magic.
-pub const PROJECTED_MARKET_EXECUTION_MAGIC_V1: [u8; 8] = *b"DCLTPX01";
+pub const PROJECTED_MARKET_EXECUTION_MAGIC_V2: [u8; 8] = *b"DCLTPX02";
 /// Exact compact preamble width.
-pub const PROJECTED_MARKET_EXECUTION_PREAMBLE_BYTES_V1: usize = 16;
+pub const PROJECTED_MARKET_EXECUTION_PREAMBLE_BYTES_V2: usize = 16;
 /// Exact semantic family-header width before its word-aligned witness.
-pub const PROJECTED_MARKET_FAMILY_HEADER_BYTES_V1: usize = 128;
+pub const PROJECTED_MARKET_FAMILY_HEADER_BYTES_V2: usize = 128;
 /// Exact bytes in one projected witness word.
-pub const PROJECTED_MARKET_WITNESS_WORD_BYTES_V1: usize = 32;
+pub const PROJECTED_MARKET_WITNESS_WORD_BYTES_V2: usize = 32;
 /// Largest admitted affine child span for the initial physical profile.
-pub const PROJECTED_MARKET_MAX_AFFINE_COUNT_V1: u8 = 16;
+pub const PROJECTED_MARKET_MAX_AFFINE_COUNT_V2: u8 = 16;
 /// Fixed bytes before the witness words.
-pub const PROJECTED_MARKET_EXECUTION_FIXED_BYTES_V1: usize =
-    PROJECTED_MARKET_EXECUTION_PREAMBLE_BYTES_V1
-        + SERIES_CORE_REQUEST_BYTES_V1
-        + PROJECTED_MARKET_FAMILY_HEADER_BYTES_V1;
+pub const PROJECTED_MARKET_EXECUTION_FIXED_BYTES_V2: usize =
+    PROJECTED_MARKET_EXECUTION_PREAMBLE_BYTES_V2 + PROJECTED_MARKET_FAMILY_HEADER_BYTES_V2;
 
-const VERSION_V1: u16 = 1;
+const VERSION_V2: u16 = 2;
 const WITNESS_WORDS_OFFSET: usize = 10;
 const AFFINE_COUNT_OFFSET: usize = 11;
 const RESERVED_OFFSET: usize = 12;
 
 /// Stable refusal from compact projected execution or deterministic replay.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ProjectedMarketExecutionErrorV1 {
+pub enum ProjectedMarketExecutionErrorV2 {
     /// The byte slice did not have its exact count-derived width.
     InvalidLength,
     /// Magic or version selected another schema.
@@ -55,56 +52,51 @@ pub enum ProjectedMarketExecutionErrorV1 {
 
 /// Borrowed exact compact instruction partition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ProjectedMarketExecutionV1<'a> {
+pub struct ProjectedMarketExecutionV2<'a> {
     witness_words: u8,
     affine_count: u8,
-    core_request: &'a [u8],
     family_request: &'a [u8],
 }
 
-impl<'a> ProjectedMarketExecutionV1<'a> {
+impl<'a> ProjectedMarketExecutionV2<'a> {
     /// Hostile-decode the sole compact wire.
-    pub fn decode(input: &'a [u8]) -> Result<Self, ProjectedMarketExecutionErrorV1> {
-        if input.len() < PROJECTED_MARKET_EXECUTION_FIXED_BYTES_V1
-            || input.get(..8) != Some(PROJECTED_MARKET_EXECUTION_MAGIC_V1.as_slice())
-            || read_u16(input, 8)? != VERSION_V1
+    pub fn decode(input: &'a [u8]) -> Result<Self, ProjectedMarketExecutionErrorV2> {
+        if input.len() < PROJECTED_MARKET_EXECUTION_FIXED_BYTES_V2
+            || input.get(..8) != Some(PROJECTED_MARKET_EXECUTION_MAGIC_V2.as_slice())
+            || read_u16(input, 8)? != VERSION_V2
         {
-            return Err(ProjectedMarketExecutionErrorV1::InvalidHeader);
+            return Err(ProjectedMarketExecutionErrorV2::InvalidHeader);
         }
         if input
-            .get(RESERVED_OFFSET..PROJECTED_MARKET_EXECUTION_PREAMBLE_BYTES_V1)
-            .ok_or(ProjectedMarketExecutionErrorV1::InvalidLength)?
+            .get(RESERVED_OFFSET..PROJECTED_MARKET_EXECUTION_PREAMBLE_BYTES_V2)
+            .ok_or(ProjectedMarketExecutionErrorV2::InvalidLength)?
             .iter()
             .any(|byte| *byte != 0)
         {
-            return Err(ProjectedMarketExecutionErrorV1::NonCanonical);
+            return Err(ProjectedMarketExecutionErrorV2::NonCanonical);
         }
         let witness_words = read_u8(input, WITNESS_WORDS_OFFSET)?;
         let affine_count = read_u8(input, AFFINE_COUNT_OFFSET)?;
-        if affine_count == 0 || affine_count > PROJECTED_MARKET_MAX_AFFINE_COUNT_V1 {
-            return Err(ProjectedMarketExecutionErrorV1::NonCanonical);
+        if affine_count == 0 || affine_count > PROJECTED_MARKET_MAX_AFFINE_COUNT_V2 {
+            return Err(ProjectedMarketExecutionErrorV2::NonCanonical);
         }
-        let expected = PROJECTED_MARKET_EXECUTION_FIXED_BYTES_V1
+        let expected = PROJECTED_MARKET_EXECUTION_FIXED_BYTES_V2
             .checked_add(
                 usize::from(witness_words)
-                    .checked_mul(PROJECTED_MARKET_WITNESS_WORD_BYTES_V1)
-                    .ok_or(ProjectedMarketExecutionErrorV1::InvalidLength)?,
+                    .checked_mul(PROJECTED_MARKET_WITNESS_WORD_BYTES_V2)
+                    .ok_or(ProjectedMarketExecutionErrorV2::InvalidLength)?,
             )
-            .ok_or(ProjectedMarketExecutionErrorV1::InvalidLength)?;
+            .ok_or(ProjectedMarketExecutionErrorV2::InvalidLength)?;
         if input.len() != expected {
-            return Err(ProjectedMarketExecutionErrorV1::InvalidLength);
+            return Err(ProjectedMarketExecutionErrorV2::InvalidLength);
         }
-        let core_start = PROJECTED_MARKET_EXECUTION_PREAMBLE_BYTES_V1;
-        let family_start = core_start
-            .checked_add(SERIES_CORE_REQUEST_BYTES_V1)
-            .ok_or(ProjectedMarketExecutionErrorV1::InvalidLength)?;
+        let family_start = PROJECTED_MARKET_EXECUTION_PREAMBLE_BYTES_V2;
         Ok(Self {
             witness_words,
             affine_count,
-            core_request: slice(input, core_start, SERIES_CORE_REQUEST_BYTES_V1)?,
             family_request: input
                 .get(family_start..)
-                .ok_or(ProjectedMarketExecutionErrorV1::InvalidLength)?,
+                .ok_or(ProjectedMarketExecutionErrorV2::InvalidLength)?,
         })
     }
 
@@ -118,11 +110,6 @@ impl<'a> ProjectedMarketExecutionV1<'a> {
         self.affine_count
     }
 
-    /// Exact fixed Core request bytes.
-    pub const fn core_request(self) -> &'a [u8] {
-        self.core_request
-    }
-
     /// Contiguous semantic family header and witness, with no duplicate proof.
     pub const fn family_request(self) -> &'a [u8] {
         self.family_request
@@ -131,52 +118,47 @@ impl<'a> ProjectedMarketExecutionV1<'a> {
     /// Exact witness suffix following the fixed family header.
     pub fn witness(self) -> &'a [u8] {
         self.family_request
-            .get(PROJECTED_MARKET_FAMILY_HEADER_BYTES_V1..)
+            .get(PROJECTED_MARKET_FAMILY_HEADER_BYTES_V2..)
             .unwrap_or(&[])
     }
 }
 
 /// Encode the compact projected instruction into exact caller-owned storage.
-pub fn encode_projected_market_execution_v1(
+pub fn encode_projected_market_execution_v2(
     output: &mut [u8],
-    core_request: &[u8; SERIES_CORE_REQUEST_BYTES_V1],
-    family_header: &[u8; PROJECTED_MARKET_FAMILY_HEADER_BYTES_V1],
+    family_header: &[u8; PROJECTED_MARKET_FAMILY_HEADER_BYTES_V2],
     witness: &[u8],
     affine_count: u8,
-) -> Result<(), ProjectedMarketExecutionErrorV1> {
+) -> Result<(), ProjectedMarketExecutionErrorV2> {
     if !witness
         .len()
-        .is_multiple_of(PROJECTED_MARKET_WITNESS_WORD_BYTES_V1)
+        .is_multiple_of(PROJECTED_MARKET_WITNESS_WORD_BYTES_V2)
         || affine_count == 0
-        || affine_count > PROJECTED_MARKET_MAX_AFFINE_COUNT_V1
+        || affine_count > PROJECTED_MARKET_MAX_AFFINE_COUNT_V2
     {
-        return Err(ProjectedMarketExecutionErrorV1::NonCanonical);
+        return Err(ProjectedMarketExecutionErrorV2::NonCanonical);
     }
-    let witness_words = witness.len() / PROJECTED_MARKET_WITNESS_WORD_BYTES_V1;
+    let witness_words = witness.len() / PROJECTED_MARKET_WITNESS_WORD_BYTES_V2;
     let witness_words =
-        u8::try_from(witness_words).map_err(|_| ProjectedMarketExecutionErrorV1::InvalidLength)?;
-    let expected = PROJECTED_MARKET_EXECUTION_FIXED_BYTES_V1
+        u8::try_from(witness_words).map_err(|_| ProjectedMarketExecutionErrorV2::InvalidLength)?;
+    let expected = PROJECTED_MARKET_EXECUTION_FIXED_BYTES_V2
         .checked_add(witness.len())
-        .ok_or(ProjectedMarketExecutionErrorV1::InvalidLength)?;
+        .ok_or(ProjectedMarketExecutionErrorV2::InvalidLength)?;
     if output.len() != expected {
-        return Err(ProjectedMarketExecutionErrorV1::InvalidLength);
+        return Err(ProjectedMarketExecutionErrorV2::InvalidLength);
     }
     output.fill(0);
-    put(output, 0, &PROJECTED_MARKET_EXECUTION_MAGIC_V1)?;
-    put(output, 8, &VERSION_V1.to_le_bytes())?;
+    put(output, 0, &PROJECTED_MARKET_EXECUTION_MAGIC_V2)?;
+    put(output, 8, &VERSION_V2.to_le_bytes())?;
     put_u8(output, WITNESS_WORDS_OFFSET, witness_words)?;
     put_u8(output, AFFINE_COUNT_OFFSET, affine_count)?;
-    let core_start = PROJECTED_MARKET_EXECUTION_PREAMBLE_BYTES_V1;
-    put(output, core_start, core_request)?;
-    let family_start = core_start
-        .checked_add(SERIES_CORE_REQUEST_BYTES_V1)
-        .ok_or(ProjectedMarketExecutionErrorV1::InvalidLength)?;
+    let family_start = PROJECTED_MARKET_EXECUTION_PREAMBLE_BYTES_V2;
     put(output, family_start, family_header)?;
     put(
         output,
         family_start
-            .checked_add(PROJECTED_MARKET_FAMILY_HEADER_BYTES_V1)
-            .ok_or(ProjectedMarketExecutionErrorV1::InvalidLength)?,
+            .checked_add(PROJECTED_MARKET_FAMILY_HEADER_BYTES_V2)
+            .ok_or(ProjectedMarketExecutionErrorV2::InvalidLength)?,
         witness,
     )?;
     Ok(())
@@ -189,14 +171,14 @@ pub fn encode_projected_market_execution_v1(
 /// commitment already stored by Custody.
 pub fn reconstruct_project_found_v1(
     state: ProjectedCustodyStateV1,
-) -> Result<ProjectFoundReceiptV1, ProjectedMarketExecutionErrorV1> {
+) -> Result<ProjectFoundReceiptV1, ProjectedMarketExecutionErrorV2> {
     require_open_projected_state(state)?;
     let market = Identity::new(state.request.market)
-        .map_err(|_| ProjectedMarketExecutionErrorV1::Projection)?;
+        .map_err(|_| ProjectedMarketExecutionErrorV2::Projection)?;
     let found = Request::administrative(Action::Found, state.request.generation, market);
     let found_bytes = found
         .encode()
-        .map_err(|_| ProjectedMarketExecutionErrorV1::Projection)?;
+        .map_err(|_| ProjectedMarketExecutionErrorV2::Projection)?;
     let receipt = ProjectFoundReceiptV1::new(
         market,
         state.request.generation,
@@ -211,12 +193,12 @@ pub fn reconstruct_project_found_v1(
         identity(state.request.rent_program)?,
         hash(&found_bytes).to_bytes(),
     )
-    .map_err(|_| ProjectedMarketExecutionErrorV1::Projection)?;
+    .map_err(|_| ProjectedMarketExecutionErrorV2::Projection)?;
     let receipt_bytes = receipt
         .encode()
-        .map_err(|_| ProjectedMarketExecutionErrorV1::Projection)?;
+        .map_err(|_| ProjectedMarketExecutionErrorV2::Projection)?;
     if hash(&receipt_bytes).to_bytes() != state.request.projection_receipt_digest {
-        return Err(ProjectedMarketExecutionErrorV1::Projection);
+        return Err(ProjectedMarketExecutionErrorV2::Projection);
     }
     Ok(receipt)
 }
@@ -226,12 +208,12 @@ pub fn reconstruct_project_found_v1(
 pub fn reconstruct_projected_lock_v1(
     state: ProjectedCustodyStateV1,
     amount: u64,
-) -> Result<ProjectedCustodyRequestV1, ProjectedMarketExecutionErrorV1> {
+) -> Result<ProjectedCustodyRequestV1, ProjectedMarketExecutionErrorV2> {
     require_open_projected_state(state)?;
     let resulting_revision = state
         .next_revision
         .checked_add(1)
-        .ok_or(ProjectedMarketExecutionErrorV1::LockRequest)?;
+        .ok_or(ProjectedMarketExecutionErrorV2::LockRequest)?;
     let request = ProjectedCustodyRequestV1 {
         operation: ProjectedCustodyOperationV1::LockHoardAndCloseSource,
         expected_revision: state.next_revision,
@@ -241,40 +223,40 @@ pub fn reconstruct_projected_lock_v1(
     };
     request
         .validate()
-        .map_err(|_| ProjectedMarketExecutionErrorV1::LockRequest)?;
+        .map_err(|_| ProjectedMarketExecutionErrorV2::LockRequest)?;
     Ok(request)
 }
 
 fn require_open_projected_state(
     state: ProjectedCustodyStateV1,
-) -> Result<(), ProjectedMarketExecutionErrorV1> {
+) -> Result<(), ProjectedMarketExecutionErrorV2> {
     if state.phase != ProjectedCustodyPhaseV1::HoardOpen
         || state.locked_amount != 0
         || state.request.operation != ProjectedCustodyOperationV1::OpenHoard
         || state.request.amount != 0
         || state.next_revision == 0
     {
-        return Err(ProjectedMarketExecutionErrorV1::ProjectedState);
+        return Err(ProjectedMarketExecutionErrorV2::ProjectedState);
     }
     Ok(())
 }
 
-fn identity(value: [u8; 32]) -> Result<Identity, ProjectedMarketExecutionErrorV1> {
-    Identity::new(value).map_err(|_| ProjectedMarketExecutionErrorV1::Projection)
+fn identity(value: [u8; 32]) -> Result<Identity, ProjectedMarketExecutionErrorV2> {
+    Identity::new(value).map_err(|_| ProjectedMarketExecutionErrorV2::Projection)
 }
 
-fn read_u8(input: &[u8], offset: usize) -> Result<u8, ProjectedMarketExecutionErrorV1> {
+fn read_u8(input: &[u8], offset: usize) -> Result<u8, ProjectedMarketExecutionErrorV2> {
     input
         .get(offset)
         .copied()
-        .ok_or(ProjectedMarketExecutionErrorV1::InvalidLength)
+        .ok_or(ProjectedMarketExecutionErrorV2::InvalidLength)
 }
 
-fn read_u16(input: &[u8], offset: usize) -> Result<u16, ProjectedMarketExecutionErrorV1> {
+fn read_u16(input: &[u8], offset: usize) -> Result<u16, ProjectedMarketExecutionErrorV2> {
     Ok(u16::from_le_bytes(
         slice(input, offset, 2)?
             .try_into()
-            .map_err(|_| ProjectedMarketExecutionErrorV1::InvalidLength)?,
+            .map_err(|_| ProjectedMarketExecutionErrorV2::InvalidLength)?,
     ))
 }
 
@@ -282,28 +264,28 @@ fn slice(
     input: &[u8],
     offset: usize,
     width: usize,
-) -> Result<&[u8], ProjectedMarketExecutionErrorV1> {
+) -> Result<&[u8], ProjectedMarketExecutionErrorV2> {
     input
         .get(
             offset
                 ..offset
                     .checked_add(width)
-                    .ok_or(ProjectedMarketExecutionErrorV1::InvalidLength)?,
+                    .ok_or(ProjectedMarketExecutionErrorV2::InvalidLength)?,
         )
-        .ok_or(ProjectedMarketExecutionErrorV1::InvalidLength)
+        .ok_or(ProjectedMarketExecutionErrorV2::InvalidLength)
 }
 
 fn put(
     output: &mut [u8],
     offset: usize,
     value: &[u8],
-) -> Result<(), ProjectedMarketExecutionErrorV1> {
+) -> Result<(), ProjectedMarketExecutionErrorV2> {
     let end = offset
         .checked_add(value.len())
-        .ok_or(ProjectedMarketExecutionErrorV1::InvalidLength)?;
+        .ok_or(ProjectedMarketExecutionErrorV2::InvalidLength)?;
     let destination = output
         .get_mut(offset..end)
-        .ok_or(ProjectedMarketExecutionErrorV1::InvalidLength)?;
+        .ok_or(ProjectedMarketExecutionErrorV2::InvalidLength)?;
     destination.copy_from_slice(value);
     Ok(())
 }
@@ -312,10 +294,10 @@ fn put_u8(
     output: &mut [u8],
     offset: usize,
     value: u8,
-) -> Result<(), ProjectedMarketExecutionErrorV1> {
+) -> Result<(), ProjectedMarketExecutionErrorV2> {
     *output
         .get_mut(offset)
-        .ok_or(ProjectedMarketExecutionErrorV1::InvalidLength)? = value;
+        .ok_or(ProjectedMarketExecutionErrorV2::InvalidLength)? = value;
     Ok(())
 }
 
@@ -405,17 +387,14 @@ mod tests {
 
     #[test]
     fn compact_wire_keeps_one_contiguous_family_request() {
-        let core = [0x33; SERIES_CORE_REQUEST_BYTES_V1];
-        let header = [0x44; PROJECTED_MARKET_FAMILY_HEADER_BYTES_V1];
-        let witness = [0x55; 9 * PROJECTED_MARKET_WITNESS_WORD_BYTES_V1];
-        let mut output = vec![0_u8; PROJECTED_MARKET_EXECUTION_FIXED_BYTES_V1 + witness.len()];
-        encode_projected_market_execution_v1(&mut output, &core, &header, &witness, 5)
-            .expect("encode");
-        let decoded = ProjectedMarketExecutionV1::decode(&output).expect("decode");
-        assert_eq!(output.len(), 768);
+        let header = [0x44; PROJECTED_MARKET_FAMILY_HEADER_BYTES_V2];
+        let witness = [0x55; 9 * PROJECTED_MARKET_WITNESS_WORD_BYTES_V2];
+        let mut output = vec![0_u8; PROJECTED_MARKET_EXECUTION_FIXED_BYTES_V2 + witness.len()];
+        encode_projected_market_execution_v2(&mut output, &header, &witness, 5).expect("encode");
+        let decoded = ProjectedMarketExecutionV2::decode(&output).expect("decode");
+        assert_eq!(output.len(), 432);
         assert_eq!(decoded.witness_words(), 9);
         assert_eq!(decoded.affine_count(), 5);
-        assert_eq!(decoded.core_request(), core);
         assert_eq!(
             decoded.family_request(),
             [&header[..], &witness[..]].concat()
@@ -425,40 +404,38 @@ mod tests {
 
     #[test]
     fn compact_wire_refuses_reserved_width_and_affine_substitution() {
-        let core = [0x33; SERIES_CORE_REQUEST_BYTES_V1];
-        let header = [0x44; PROJECTED_MARKET_FAMILY_HEADER_BYTES_V1];
-        let witness = [0x55; PROJECTED_MARKET_WITNESS_WORD_BYTES_V1];
-        let mut output = vec![0_u8; PROJECTED_MARKET_EXECUTION_FIXED_BYTES_V1 + witness.len()];
-        encode_projected_market_execution_v1(&mut output, &core, &header, &witness, 1)
-            .expect("encode");
+        let header = [0x44; PROJECTED_MARKET_FAMILY_HEADER_BYTES_V2];
+        let witness = [0x55; PROJECTED_MARKET_WITNESS_WORD_BYTES_V2];
+        let mut output = vec![0_u8; PROJECTED_MARKET_EXECUTION_FIXED_BYTES_V2 + witness.len()];
+        encode_projected_market_execution_v2(&mut output, &header, &witness, 1).expect("encode");
 
         let mut changed = output.clone();
         *changed.get_mut(RESERVED_OFFSET).expect("reserved byte") = 1;
         assert_eq!(
-            ProjectedMarketExecutionV1::decode(&changed),
-            Err(ProjectedMarketExecutionErrorV1::NonCanonical)
+            ProjectedMarketExecutionV2::decode(&changed),
+            Err(ProjectedMarketExecutionErrorV2::NonCanonical)
         );
         changed = output.clone();
         *changed.get_mut(AFFINE_COUNT_OFFSET).expect("affine count") = 0;
         assert_eq!(
-            ProjectedMarketExecutionV1::decode(&changed),
-            Err(ProjectedMarketExecutionErrorV1::NonCanonical)
+            ProjectedMarketExecutionV2::decode(&changed),
+            Err(ProjectedMarketExecutionErrorV2::NonCanonical)
         );
         changed = output.clone();
         *changed
             .get_mut(WITNESS_WORDS_OFFSET)
             .expect("witness words") = 2;
         assert_eq!(
-            ProjectedMarketExecutionV1::decode(&changed),
-            Err(ProjectedMarketExecutionErrorV1::InvalidLength)
+            ProjectedMarketExecutionV2::decode(&changed),
+            Err(ProjectedMarketExecutionErrorV2::InvalidLength)
         );
         assert_eq!(
-            ProjectedMarketExecutionV1::decode(
+            ProjectedMarketExecutionV2::decode(
                 output
                     .get(..output.len() - 1)
                     .expect("one-byte-short fixture"),
             ),
-            Err(ProjectedMarketExecutionErrorV1::InvalidLength)
+            Err(ProjectedMarketExecutionErrorV2::InvalidLength)
         );
     }
 
@@ -490,18 +467,18 @@ mod tests {
         changed.request.projection_receipt_digest = id(31);
         assert_eq!(
             reconstruct_project_found_v1(changed),
-            Err(ProjectedMarketExecutionErrorV1::Projection)
+            Err(ProjectedMarketExecutionErrorV2::Projection)
         );
 
         changed = state;
         changed.phase = ProjectedCustodyPhaseV1::Initialized;
         assert_eq!(
             reconstruct_projected_lock_v1(changed, 88),
-            Err(ProjectedMarketExecutionErrorV1::ProjectedState)
+            Err(ProjectedMarketExecutionErrorV2::ProjectedState)
         );
         assert_eq!(
             reconstruct_projected_lock_v1(state, 0),
-            Err(ProjectedMarketExecutionErrorV1::LockRequest)
+            Err(ProjectedMarketExecutionErrorV2::LockRequest)
         );
     }
 }
