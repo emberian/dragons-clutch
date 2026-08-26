@@ -32,6 +32,10 @@ dependency, and this crate contains no Solana SDK type.
   `4566daf8b06ff2e7b975bed3e631ef4ab9591a95ddabd4117300ca1f639a59d2`
 - `src/instruction.rs` SHA-256:
   `672b3890cb58e5700a67f202491069ed44dffcbfa0e7d0b83a0cfbbb05b3a287`
+- `src/extension/mod.rs` SHA-256:
+  `502b8309d3243f81d3bb7b2ff5f9e412c48d4d68f354b8994792389fc904defd`
+- `src/extension/mint_close_authority.rs` SHA-256:
+  `d68a5cc324c217e5e18a86dab363f9f67c19e14e828f942f534ff6e9db441a3b`
 
 The archive digests were computed directly from
 `~/.cargo/registry/cache/index.crates.io-1949cf8c6b5b557f/*.crate`; source-file
@@ -43,6 +47,11 @@ digests were computed from the corresponding extracted registry directories on
 - Mint base length 82 and field partition `36/8/1/1/36`;
 - Account base length 165 and field partition `32/32/8/36/1/12/8/36`;
 - four-byte little-endian `COption` tags in state;
+- Token-2022 extended-Mint layout: base Mint bytes through offset 82, zero
+  padding to the 165-byte base-account boundary, Mint account-type byte `1`,
+  then type/length/value TLV entries;
+- `MintCloseAuthority` extension tag `3`, length `32`, with the official
+  `MaybeNull<Address>` all-zero absence encoding;
 - instruction tags and bodies: `CloseAccount = 9`,
   `TransferChecked = 12 || amount:u64le || decimals:u8`, and
   `InitializeAccount3 = 18 || owner:[u8;32]`;
@@ -57,6 +66,13 @@ packer rather than inventing a stronger canonical encoding.
 The Token-2022 zero-extension profile accepts only exact 82-byte Mints and
 165-byte Accounts. It does not parse account-type or TLV storage. Any longer
 state, including padding plus a zero/unknown/known extension, is refused.
+
+The separately named closeable-Mint V2 profile accepts exactly 202 bytes: one
+initialized base Mint, canonical zero padding, the Mint account type, and one
+`MintCloseAuthority` entry. It refuses spare TLV capacity, unknown or duplicate
+extensions, noncanonical padding, and trailing bytes. This narrow exception is
+for lifecycle-created protocol Mints whose zero supply must permit exact rent
+reclamation; it does not broaden the ordinary transfer profile.
 
 The fixed builders cover the single-authority/PDA forms needed by dClutch.
 Multisignature signer expansion is not claimed by this profile.

@@ -11,13 +11,16 @@
 //! account owners, signer/writable/executable privileges, PDA authority,
 //! rent, CPI success, and exact pre/post token and lamport deltas.
 //!
-//! Token-2022 state is accepted only at the exact legacy base widths. That is
-//! the `Token2022ZeroExtensionExactTransferV1` profile: every account-type or
-//! TLV extension representation is refused by length, not partially decoded.
+//! Ordinary Token-2022 transfer state is accepted only at the exact legacy
+//! base widths. The separately named closeable-Mint lifecycle profile admits
+//! one additional exact representation: the sole `MintCloseAuthority`
+//! extension, with no unparsed storage or other extension.
 
 #[cfg(test)]
 extern crate std;
 
+/// Exact Token-2022 closeable-Mint lifecycle profile.
+pub mod closeable_mint;
 /// Fixed instruction specifications and exact borrowed instruction-data views.
 pub mod instruction;
 /// Exact-transfer program profiles and cross-account checks.
@@ -27,6 +30,10 @@ pub mod release;
 /// Exact Mint and base Account state parsers.
 pub mod state;
 
+pub use closeable_mint::{
+    TOKEN_2022_CLOSEABLE_MINT_BYTES_V2, Token2022CloseableMintFactsV2,
+    Token2022CloseableMintProfileV2,
+};
 pub use instruction::{
     AccountMeta, CloseAccountInstruction, CloseAccountView, InitializeAccount3Instruction,
     InitializeAccount3View, InstructionDataView, InstructionSpec, RevokeInstruction, RevokeView,
@@ -116,6 +123,12 @@ pub enum Error {
     MintMismatch,
     /// The instruction decimals did not equal the authenticated Mint decimals.
     DecimalsMismatch,
+    /// Token-2022 padding, account type, TLV tag, length, or tail was not exact.
+    InvalidExtensionLayout,
+    /// A closeable Mint retained a freeze authority.
+    FreezeAuthorityPresent,
+    /// A Mint supply did not equal the chain-observed lifecycle value.
+    MintSupplyMismatch,
     /// A native/wrapped-SOL Account was outside the token-only profile.
     NativeAccount,
     /// A custody account retained a delegate or delegated amount.
