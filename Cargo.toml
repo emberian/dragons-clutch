@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "crates/dclutch-account-profile-contract",
-    "crates/dclutch-bearer-contract",
     "crates/dclutch-bearer-v2-contract",
     "crates/dclutch-bearer-v2-operator",
     "crates/dclutch-capability-contract",
@@ -67,7 +66,6 @@ members = [
     "crates/dclutch-series-contract",
     "crates/dclutch-series-v3-kernel",
     "crates/dclutch-source-contract",
-    "crates/dclutch-structured-contract",
     "crates/dclutch-terminal-contract",
     "crates/dclutch-token-svm",
     "crates/dclutch-transition-vm",

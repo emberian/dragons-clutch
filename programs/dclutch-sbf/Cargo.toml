@@ -17,7 +17,6 @@ custom-panic = []
 non-production-real-pyth-lab = ["dclutch-pyth-svm/synthetic-local-fixture"]
 
 [dependencies]
-dclutch-bearer-contract = { path = "../../crates/dclutch-bearer-contract" }
 dclutch-capability-contract = { path = "../../crates/dclutch-capability-contract" }
 dclutch-collateral-contract = { path = "../../crates/dclutch-collateral-contract" }
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
@@ -34,7 +33,6 @@ dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }
 dclutch-rent-contract = { path = "../../crates/dclutch-rent-contract" }
 dclutch-series-contract = { path = "../../crates/dclutch-series-contract" }
 dclutch-source-contract = { path = "../../crates/dclutch-source-contract" }
-dclutch-structured-contract = { path = "../../crates/dclutch-structured-contract" }
 dclutch-terminal-contract = { path = "../../crates/dclutch-terminal-contract" }
 dclutch-token-svm = { path = "../../crates/dclutch-token-svm" }
 solana-program = { version = "=3.0.0", default-features = false }

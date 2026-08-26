@@ -31,7 +31,6 @@ use dclutch_rent_contract::RENT_CREDIT_INSTRUCTION_MAGIC_V1;
 use solana_program::{account_info::AccountInfo, entrypoint::ProgramResult, pubkey::Pubkey};
 
 mod authenticate;
-mod bearer;
 mod close_fund;
 mod dealer;
 mod direct;
@@ -68,11 +67,6 @@ pub fn process_instruction(
         == Some(&GENERAL_INSTRUCTION_MAGIC_V1)
     {
         return general::dispatch(program_id, accounts, instruction_data);
-    }
-    if instruction_data.get(..dclutch_bearer_contract::instruction::BEARER_INSTRUCTION_MAGIC.len())
-        == Some(&dclutch_bearer_contract::instruction::BEARER_INSTRUCTION_MAGIC)
-    {
-        return bearer::dispatch(program_id, accounts, instruction_data);
     }
     if instruction_data.get(..dclutch_source_contract::SOURCE_INSTRUCTION_MAGIC.len())
         == Some(&dclutch_source_contract::SOURCE_INSTRUCTION_MAGIC)
