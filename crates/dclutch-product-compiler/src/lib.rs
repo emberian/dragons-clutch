@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-//! Deterministic construction of categorical dClutch Product recipes.
+//! Deterministic construction of categorical and noncategorical Product recipes.
 //!
 //! This host compiler emits an exhaustive ordered partition, the elementary
 //! [`CategoricalUnitV1`] liability basis over its cells, and one exact-width
@@ -14,6 +14,11 @@
 //! [`graded`] exposes a separately named midpoint-projection boundary that can
 //! compile those shapes into honest categorical portfolios without changing
 //! the native basis or Market accounting.
+//!
+//! [`noncategorical_v3`] is the runtime-width successor. It joins an exact
+//! graded/complement basis to Product Runtime V2 and emits an explicitly
+//! bounded categorical approximation certificate. It does not consume the
+//! legacy EconomicSlice representation.
 
 use core::fmt;
 
@@ -33,6 +38,8 @@ use sha2::{Digest, Sha256};
 
 /// Explicit categorical projection of graded user payoffs.
 pub mod graded;
+/// Runtime-width noncategorical Product basis compilation and certification.
+pub mod noncategorical_v3;
 
 const CERTIFICATE_VERSION: u16 = 1;
 
@@ -186,7 +193,6 @@ impl CanonicalPartition {
             .checked_add(1)
             .ok_or(CompileError::CountOverflow)
     }
-
 }
 
 /// Certificate binding one source request and every emitted preimage.
@@ -314,13 +320,12 @@ pub fn compile<const N: usize>(
         derived.partition.cuts(),
     )?;
     let result_domain_bytes = result_domain.to_bytes();
-    let result_domain_id = content_id(FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1, &result_domain_bytes)?;
-    let partition_evidence_id = content_id(
-        b"dclutch.result-domain-evidence.v1",
-        &result_domain_bytes,
-    )?;
-    let partition_size = u32::try_from(result_domain_bytes.len())
-        .map_err(|_| CompileError::CountOverflow)?;
+    let result_domain_id =
+        content_id(FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1, &result_domain_bytes)?;
+    let partition_evidence_id =
+        content_id(b"dclutch.result-domain-evidence.v1", &result_domain_bytes)?;
+    let partition_size =
+        u32::try_from(result_domain_bytes.len()).map_err(|_| CompileError::CountOverflow)?;
     let outcome_count = u32::from(result_domain.outcome_count());
     let terms = TermsV1::new(
         TermsV1Input {
@@ -384,8 +389,10 @@ pub fn compile<const N: usize>(
     )?;
     let mut portfolio_template_bytes = vec![0; PortfolioTemplateV1::<N>::encoded_len()?];
     portfolio_template.encode(&mut portfolio_template_bytes)?;
-    let portfolio_template_id =
-        content_id(PORTFOLIO_TEMPLATE_CONTENT_DOMAIN_V1, &portfolio_template_bytes)?;
+    let portfolio_template_id = content_id(
+        PORTFOLIO_TEMPLATE_CONTENT_DOMAIN_V1,
+        &portfolio_template_bytes,
+    )?;
     let certificate = CompilerCertificate {
         version: CERTIFICATE_VERSION,
         shape_commitment: shape_commitment(&request.domain, &request.shape)?,
@@ -456,8 +463,8 @@ pub fn recheck<const N: usize>(
         b"dclutch.result-domain-evidence.v1",
         &output.result_domain_bytes,
     )?;
-    let partition_size = u32::try_from(output.result_domain_bytes.len())
-        .map_err(|_| CompileError::CountOverflow)?;
+    let partition_size =
+        u32::try_from(output.result_domain_bytes.len()).map_err(|_| CompileError::CountOverflow)?;
     let partition_pages = pages(
         partition_size,
         request.context.capacity_profile.page_payload_bytes(),
@@ -870,7 +877,10 @@ mod tests {
         });
         let compiled = compile::<3>(&request).expect("compile binary");
         assert_eq!(compiled.partition.cuts(), &[60]);
-        assert_eq!(compiled.result_domain_bytes.len(), FINITE_RESULT_DOMAIN_BYTES);
+        assert_eq!(
+            compiled.result_domain_bytes.len(),
+            FINITE_RESULT_DOMAIN_BYTES
+        );
         assert_eq!(compiled.result_domain.region_count(), 2);
         assert_eq!(compiled.result_domain.failure_selector(), 2);
         assert_eq!(compiled.claim_basis.outcome_count(), 3);
@@ -1089,13 +1099,9 @@ mod tests {
         );
 
         let mut changed = compile::<3>(&request).expect("compile");
-        changed.portfolio_template = PortfolioTemplateV1::new(
-            id(88),
-            changed.instance.result_domain_id(),
-            [0, 7, 0],
-            3,
-        )
-        .expect("foreign template");
+        changed.portfolio_template =
+            PortfolioTemplateV1::new(id(88), changed.instance.result_domain_id(), [0, 7, 0], 3)
+                .expect("foreign template");
         changed
             .portfolio_template
             .encode(&mut changed.portfolio_template_bytes)

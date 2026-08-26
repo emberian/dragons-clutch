@@ -2,6 +2,8 @@
 //!
 //! One record owns the ordered source-result partition. Source adapters
 //! consume this record; they do not define a parallel outcome order.
+//! This file preserves the V1 fixed-layout profile; Product Runtime V2 is the
+//! data-defined successor and does not inherit V1's provisional width ceiling.
 
 use core::convert::TryFrom;
 
@@ -9,7 +11,7 @@ use crate::{ContentId, Error, Result, array, byte, content_id, put, require_zero
 
 /// Mathematical minimum: one ordinary region and one distinct failure outcome.
 pub const MIN_RESULT_OUTCOMES: usize = 2;
-/// Provisional fixed-layout maximum, lifted by a larger or paged domain release.
+/// Provisional V1 fixed-layout maximum, already lifted by Product Runtime V2.
 pub const MAX_RESULT_OUTCOMES: usize = 16;
 /// Maximum ordinary regions in this fixed-layout release.
 pub const MAX_RESULT_REGIONS: usize = MAX_RESULT_OUTCOMES - 1;
@@ -351,8 +353,8 @@ mod tests {
 
     #[test]
     fn exact_domain_round_trips_and_maps_edges_upward() {
-        let domain = FiniteResultDomainV1::new(id(1), id(2), 10, &[-10, 0, 25])
-            .expect("canonical domain");
+        let domain =
+            FiniteResultDomainV1::new(id(1), id(2), 10, &[-10, 0, 25]).expect("canonical domain");
         assert_eq!(domain.region_count(), 4);
         assert_eq!(domain.outcome_count(), 5);
         assert_eq!(domain.failure_selector(), 4);
@@ -364,8 +366,7 @@ mod tests {
 
     #[test]
     fn failure_and_selectors_are_derived_without_wire_aliases() {
-        let domain = FiniteResultDomainV1::new(id(1), id(2), 1, &[0])
-            .expect("canonical domain");
+        let domain = FiniteResultDomainV1::new(id(1), id(2), 1, &[0]).expect("canonical domain");
         assert_eq!(domain.selector(0), Ok(0));
         assert_eq!(domain.selector(1), Ok(1));
         assert_eq!(domain.failure_selector(), 2);
@@ -380,8 +381,7 @@ mod tests {
 
     #[test]
     fn inactive_cuts_and_reserved_bytes_are_canonical_zero() {
-        let domain = FiniteResultDomainV1::new(id(1), id(2), 1, &[0])
-            .expect("canonical domain");
+        let domain = FiniteResultDomainV1::new(id(1), id(2), 1, &[0]).expect("canonical domain");
         let mut dirty_cut = domain.to_bytes();
         dirty_cut[CUTS_OFFSET + 16] = 1;
         assert_eq!(
@@ -404,18 +404,16 @@ mod tests {
 
     #[test]
     fn same_width_substitution_changes_authority_bytes() {
-        let left = FiniteResultDomainV1::new(id(1), id(2), 1, &[0])
-            .expect("left domain");
-        let right = FiniteResultDomainV1::new(id(1), id(2), 1, &[1])
-            .expect("right domain");
+        let left = FiniteResultDomainV1::new(id(1), id(2), 1, &[0]).expect("left domain");
+        let right = FiniteResultDomainV1::new(id(1), id(2), 1, &[1]).expect("right domain");
         assert_eq!(left.outcome_count(), right.outcome_count());
         assert_ne!(left.to_bytes(), right.to_bytes());
     }
 
     #[test]
     fn exact_comparison_is_total_at_signed_extremes() {
-        let domain = FiniteResultDomainV1::new(id(1), id(2), u64::MAX, &[-1, 0, 1])
-            .expect("extreme domain");
+        let domain =
+            FiniteResultDomainV1::new(id(1), id(2), u64::MAX, &[-1, 0, 1]).expect("extreme domain");
         assert_eq!(domain.map(i128::MIN, 1), Ok(0));
         assert_eq!(domain.map(-1, u64::MAX), Ok(1));
         assert_eq!(domain.map(0, u64::MAX), Ok(2));

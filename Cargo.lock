@@ -587,6 +587,8 @@ name = "dclutch-product-compiler"
 version = "0.1.0"
 dependencies = [
  "dclutch-product-contract",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-product-runtime-v2",
  "sha2",
 ]
 

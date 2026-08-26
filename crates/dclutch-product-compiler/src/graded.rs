@@ -133,8 +133,8 @@ pub fn project_to_categorical_v1<const N: usize>(
 ) -> Result<ProjectedCategoricalShapeV1<N>, CompileError> {
     let partition = CanonicalPartition::new(domain, cut_points)?;
     let price_region_count = partition.cell_count()?;
-    let price_regions = usize::try_from(price_region_count)
-        .map_err(|_| CompileError::CountOverflow)?;
+    let price_regions =
+        usize::try_from(price_region_count).map_err(|_| CompileError::CountOverflow)?;
     super::require_outcome_width::<N>(price_region_count)?;
     validate_shape(&partition, shape)?;
     validate_amount(failure_payout)?;

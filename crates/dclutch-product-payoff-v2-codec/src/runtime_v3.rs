@@ -4,8 +4,10 @@
 //! record defines either the categorical `Q = 1` basis or a runtime-width set
 //! of nonnegative rational graded curves followed by one exact complement.
 //! Every graded term is evaluated with the parent module's exact signed-rational
-//! arithmetic and sole final-floor boundary. The conservative sum of all term
-//! amplitudes may not exceed `Q`, so the final claim is always `Q - sum(primary)`.
+//! arithmetic and sole final-floor boundary. A checked cell-by-cell envelope
+//! over every Product-owned knot bounds simultaneous primary payouts by `Q`,
+//! so the final claim is always `Q - sum(primary)`. Disjoint curves may each
+//! use the full scale; they are not rejected by a global amplitude surrogate.
 //!
 //! Product and result-domain links are authenticated by the full raw-record
 //! digest. They are deliberately omitted from [`semantic_basis_preimage_v3`]
@@ -15,7 +17,7 @@
 
 use core::convert::{TryFrom, TryInto};
 
-use super::{ShapeV2, interpolation_floor, rational_compare};
+use super::{interpolation_floor, rational_compare};
 
 /// Canonical runtime basis magic.
 pub const BASIS_MAGIC_V3: [u8; 8] = *b"DCLTPAY3";
@@ -123,13 +125,43 @@ impl BasisKindV3 {
     }
 }
 
+/// One exact runtime graded shape with `u32` Product-owned knot indices.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BasisShapeV3 {
+    /// Constant payout over the full signed-rational line.
+    Constant,
+    /// Increasing ramp with exact clamped tails.
+    RampUp {
+        /// Left Product-owned knot index.
+        left: u32,
+        /// Right Product-owned knot index.
+        right: u32,
+    },
+    /// Decreasing ramp with exact clamped tails.
+    RampDown {
+        /// Left Product-owned knot index.
+        left: u32,
+        /// Right Product-owned knot index.
+        right: u32,
+    },
+    /// Tent with zero outer tails and one exact peak.
+    Tent {
+        /// Left Product-owned knot index.
+        left: u32,
+        /// Peak Product-owned knot index.
+        peak: u32,
+        /// Right Product-owned knot index.
+        right: u32,
+    },
+}
+
 /// One canonical runtime graded term assigned to a primary basis claim.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BasisTermV3 {
     /// Zero-based claim index. The final complement claim is not term-defined.
     pub claim_index: u32,
     /// Exact nonnegative term shape.
-    pub shape: ShapeV2,
+    pub shape: BasisShapeV3,
     /// Positive amplitude in payout-scale atoms.
     pub amplitude: u64,
 }
@@ -297,8 +329,7 @@ impl<'a> ProductBasisV3<'a> {
     fn validate_terms(self) -> Result<()> {
         let primary_count = self.basis_width.checked_sub(1).ok_or(Error::InvalidCount)?;
         let mut prior = None;
-        let mut seen_claim = 0_u32;
-        let mut amplitude_sum = 0_u64;
+        let mut last_claim = None;
         for term in self.terms() {
             if term.claim_index >= primary_count {
                 return Err(Error::InvalidTerm);
@@ -311,21 +342,61 @@ impl<'a> ProductBasisV3<'a> {
             if prior.is_some_and(|value| key <= value) {
                 return Err(Error::NonCanonicalTermOrder);
             }
-            if term.claim_index > seen_claim {
-                if term.claim_index != seen_claim.checked_add(1).ok_or(Error::InvalidCount)? {
+            if let Some(claim) = last_claim {
+                if term.claim_index != claim
+                    && term.claim_index != claim.checked_add(1).ok_or(Error::InvalidCount)?
+                {
                     return Err(Error::InvalidTerm);
                 }
-                seen_claim = term.claim_index;
+            } else if term.claim_index != 0 {
+                return Err(Error::InvalidTerm);
             }
-            amplitude_sum = amplitude_sum
-                .checked_add(term.amplitude)
-                .ok_or(Error::ArithmeticOverflow)?;
+            last_claim = Some(term.claim_index);
             prior = Some(key);
         }
-        if seen_claim.checked_add(1).ok_or(Error::InvalidCount)? != primary_count {
+        if last_claim
+            .and_then(|claim| claim.checked_add(1))
+            .ok_or(Error::InvalidTerm)?
+            != primary_count
+        {
             return Err(Error::InvalidTerm);
         }
-        if amplitude_sum > self.payout_scale {
+        self.validate_envelope()
+    }
+
+    fn validate_envelope(self) -> Result<()> {
+        let mut knots = self.knots();
+        let Some(mut left) = knots.next() else {
+            return self.validate_envelope_cell(0, 1, 0, 1);
+        };
+        let mut had_cell = false;
+        for right in knots {
+            self.validate_envelope_cell(left, self.knot_denominator, right, self.knot_denominator)?;
+            left = right;
+            had_cell = true;
+        }
+        if !had_cell {
+            self.validate_envelope_cell(left, self.knot_denominator, left, self.knot_denominator)?;
+        }
+        Ok(())
+    }
+
+    fn validate_envelope_cell(
+        self,
+        left_numerator: i128,
+        left_denominator: u64,
+        right_numerator: i128,
+        right_denominator: u64,
+    ) -> Result<()> {
+        let mut bound = 0_u64;
+        for term in self.terms() {
+            let left = evaluate_term(self, term, left_numerator, left_denominator)?;
+            let right = evaluate_term(self, term, right_numerator, right_denominator)?;
+            bound = bound
+                .checked_add(left.max(right))
+                .ok_or(Error::ArithmeticOverflow)?;
+        }
+        if bound > self.payout_scale {
             return Err(Error::NonPartition);
         }
         Ok(())
@@ -384,6 +455,31 @@ impl<'a> ProductBasisV3<'a> {
     /// Runtime term count.
     pub const fn term_count(self) -> u32 {
         self.term_count
+    }
+
+    /// Evaluate one canonical primary-claim term at an exact rational coordinate.
+    ///
+    /// This narrow projection lets offline compilers derive independently
+    /// checkable categorical error bounds without reimplementing evaluator
+    /// arithmetic. It never evaluates or allocates the complement claim.
+    pub fn evaluate_term_rational(
+        self,
+        term_index: u32,
+        numerator: i128,
+        denominator: u64,
+    ) -> Result<(u32, u64)> {
+        if self.kind != BasisKindV3::GradedExactComplement {
+            return Err(Error::UnsupportedCoordinate);
+        }
+        if denominator == 0 {
+            return Err(Error::ZeroDenominator);
+        }
+        let index = usize::try_from(term_index).map_err(|_| Error::InvalidTerm)?;
+        let term = self.terms().nth(index).ok_or(Error::InvalidTerm)?;
+        Ok((
+            term.claim_index,
+            evaluate_term(self, term, numerator, denominator)?,
+        ))
     }
 
     /// Borrow all exact Product-owned knot numerators.
@@ -445,12 +541,8 @@ impl<'a> ProductBasisV3<'a> {
             let payout = evaluate_term(self, term, numerator, denominator)?;
             let index = usize::try_from(term.claim_index).map_err(|_| Error::InvalidTerm)?;
             let claim = output.get_mut(index).ok_or(Error::InvalidTerm)?;
-            *claim = claim
-                .checked_add(payout)
-                .ok_or(Error::ArithmeticOverflow)?;
-            total = total
-                .checked_add(payout)
-                .ok_or(Error::ArithmeticOverflow)?;
+            *claim = claim.checked_add(payout).ok_or(Error::ArithmeticOverflow)?;
+            total = total.checked_add(payout).ok_or(Error::ArithmeticOverflow)?;
         }
         let complement = self
             .payout_scale
@@ -489,9 +581,7 @@ impl<'a> ProductBasisV3<'a> {
     }
 
     fn require_output(self, output: &[u64]) -> Result<()> {
-        if output.len()
-            != usize::try_from(self.basis_width).map_err(|_| Error::InvalidLength)?
-        {
+        if output.len() != usize::try_from(self.basis_width).map_err(|_| Error::InvalidLength)? {
             return Err(Error::InvalidLength);
         }
         Ok(())
@@ -577,9 +667,17 @@ pub fn compile_basis_v3(input: BasisInputV3<'_>, output: &mut [u8]) -> Result<()
     put(output, TERM_COUNT_OFFSET, &term_count.to_le_bytes())?;
     put(output, PRODUCT_ID_OFFSET, &input.product_id)?;
     put(output, RESULT_DOMAIN_ID_OFFSET, &input.result_domain_id)?;
-    put(output, COORDINATE_DOMAIN_ID_OFFSET, &input.coordinate_domain_id)?;
+    put(
+        output,
+        COORDINATE_DOMAIN_ID_OFFSET,
+        &input.coordinate_domain_id,
+    )?;
     put(output, RESULT_UNIT_ID_OFFSET, &input.result_unit_id)?;
-    put(output, PAYOUT_SCALE_OFFSET, &input.payout_scale.to_le_bytes())?;
+    put(
+        output,
+        PAYOUT_SCALE_OFFSET,
+        &input.payout_scale.to_le_bytes(),
+    )?;
     put(
         output,
         KNOT_DENOMINATOR_OFFSET,
@@ -667,11 +765,13 @@ fn validate_input(input: BasisInputV3<'_>) -> Result<()> {
                 }
                 prior_knot = Some(*knot);
             }
-            let primary_count = input.basis_width.checked_sub(1).ok_or(Error::InvalidCount)?;
+            let primary_count = input
+                .basis_width
+                .checked_sub(1)
+                .ok_or(Error::InvalidCount)?;
             let knot_count = u32::try_from(input.knots.len()).map_err(|_| Error::InvalidCount)?;
             let mut prior_term = None;
-            let mut seen_claim = 0_u32;
-            let mut amplitude_sum = 0_u64;
+            let mut last_claim = None;
             for term in input.terms {
                 if term.claim_index >= primary_count || term.amplitude == 0 {
                     return Err(Error::InvalidTerm);
@@ -681,23 +781,26 @@ fn validate_input(input: BasisInputV3<'_>) -> Result<()> {
                 if prior_term.is_some_and(|prior| key <= prior) {
                     return Err(Error::NonCanonicalTermOrder);
                 }
-                if term.claim_index > seen_claim {
-                    if term.claim_index != seen_claim.checked_add(1).ok_or(Error::InvalidCount)? {
+                if let Some(claim) = last_claim {
+                    if term.claim_index != claim
+                        && term.claim_index != claim.checked_add(1).ok_or(Error::InvalidCount)?
+                    {
                         return Err(Error::InvalidTerm);
                     }
-                    seen_claim = term.claim_index;
+                } else if term.claim_index != 0 {
+                    return Err(Error::InvalidTerm);
                 }
-                amplitude_sum = amplitude_sum
-                    .checked_add(term.amplitude)
-                    .ok_or(Error::ArithmeticOverflow)?;
+                last_claim = Some(term.claim_index);
                 prior_term = Some(key);
             }
-            if seen_claim.checked_add(1).ok_or(Error::InvalidCount)? != primary_count {
+            if last_claim
+                .and_then(|claim| claim.checked_add(1))
+                .ok_or(Error::InvalidTerm)?
+                != primary_count
+            {
                 return Err(Error::InvalidTerm);
             }
-            if amplitude_sum > input.payout_scale {
-                return Err(Error::NonPartition);
-            }
+            validate_input_envelope(input)?;
             validate_partition(input.failure_payouts.iter().copied(), input.payout_scale)?;
         }
     }
@@ -712,11 +815,59 @@ fn validate_partition(payouts: impl Iterator<Item = u64>, scale: u64) -> Result<
         if payout > scale {
             return Err(Error::NonPartition);
         }
-        total = total
-            .checked_add(payout)
-            .ok_or(Error::ArithmeticOverflow)?;
+        total = total.checked_add(payout).ok_or(Error::ArithmeticOverflow)?;
     }
     if count == 0 || total != scale {
+        return Err(Error::NonPartition);
+    }
+    Ok(())
+}
+
+fn validate_input_envelope(input: BasisInputV3<'_>) -> Result<()> {
+    let mut knots = input.knots.iter().copied();
+    let Some(mut left) = knots.next() else {
+        return validate_input_envelope_cell(input, 0, 1, 0, 1);
+    };
+    let mut had_cell = false;
+    for right in knots {
+        validate_input_envelope_cell(
+            input,
+            left,
+            input.knot_denominator,
+            right,
+            input.knot_denominator,
+        )?;
+        left = right;
+        had_cell = true;
+    }
+    if !had_cell {
+        validate_input_envelope_cell(
+            input,
+            left,
+            input.knot_denominator,
+            left,
+            input.knot_denominator,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_input_envelope_cell(
+    input: BasisInputV3<'_>,
+    left_numerator: i128,
+    left_denominator: u64,
+    right_numerator: i128,
+    right_denominator: u64,
+) -> Result<()> {
+    let mut bound = 0_u64;
+    for term in input.terms {
+        let left = evaluate_input_term(input, *term, left_numerator, left_denominator)?;
+        let right = evaluate_input_term(input, *term, right_numerator, right_denominator)?;
+        bound = bound
+            .checked_add(left.max(right))
+            .ok_or(Error::ArithmeticOverflow)?;
+    }
+    if bound > input.payout_scale {
         return Err(Error::NonPartition);
     }
     Ok(())
@@ -728,38 +879,74 @@ fn evaluate_term(
     numerator: i128,
     denominator: u64,
 ) -> Result<u64> {
-    let knot = |index: u8| -> Result<i128> {
-        basis
-            .knots()
-            .nth(usize::from(index))
-            .ok_or(Error::InvalidTerm)
-    };
+    evaluate_term_with_knots(
+        term,
+        numerator,
+        denominator,
+        basis.knot_denominator,
+        |index| {
+            basis
+                .knots()
+                .nth(usize::try_from(index).map_err(|_| Error::InvalidTerm)?)
+                .ok_or(Error::InvalidTerm)
+        },
+    )
+}
+
+fn evaluate_input_term(
+    input: BasisInputV3<'_>,
+    term: BasisTermV3,
+    numerator: i128,
+    denominator: u64,
+) -> Result<u64> {
+    evaluate_term_with_knots(
+        term,
+        numerator,
+        denominator,
+        input.knot_denominator,
+        |index| {
+            input
+                .knots
+                .get(usize::try_from(index).map_err(|_| Error::InvalidTerm)?)
+                .copied()
+                .ok_or(Error::InvalidTerm)
+        },
+    )
+}
+
+fn evaluate_term_with_knots(
+    term: BasisTermV3,
+    numerator: i128,
+    denominator: u64,
+    knot_denominator: u64,
+    mut knot: impl FnMut(u32) -> Result<i128>,
+) -> Result<u64> {
     match term.shape {
-        ShapeV2::Constant => Ok(term.amplitude),
-        ShapeV2::RampUp { left, right } => ramp(
+        BasisShapeV3::Constant => Ok(term.amplitude),
+        BasisShapeV3::RampUp { left, right } => ramp(
             term.amplitude,
             knot(left)?,
             knot(right)?,
-            basis.knot_denominator,
+            knot_denominator,
             numerator,
             denominator,
             true,
         ),
-        ShapeV2::RampDown { left, right } => ramp(
+        BasisShapeV3::RampDown { left, right } => ramp(
             term.amplitude,
             knot(left)?,
             knot(right)?,
-            basis.knot_denominator,
+            knot_denominator,
             numerator,
             denominator,
             false,
         ),
-        ShapeV2::Tent { left, peak, right } => {
+        BasisShapeV3::Tent { left, peak, right } => {
             let rising = ramp(
                 term.amplitude,
                 knot(left)?,
                 knot(peak)?,
-                basis.knot_denominator,
+                knot_denominator,
                 numerator,
                 denominator,
                 true,
@@ -768,7 +955,7 @@ fn evaluate_term(
                 term.amplitude,
                 knot(peak)?,
                 knot(right)?,
-                basis.knot_denominator,
+                knot_denominator,
                 numerator,
                 denominator,
                 false,
@@ -827,16 +1014,16 @@ fn ramp(
     }
 }
 
-fn validate_shape(shape: ShapeV2, knot_count: u32) -> Result<()> {
+fn validate_shape(shape: BasisShapeV3, knot_count: u32) -> Result<()> {
     match shape {
-        ShapeV2::Constant => Ok(()),
-        ShapeV2::RampUp { left, right } | ShapeV2::RampDown { left, right }
-            if left < right && u32::from(right) < knot_count =>
+        BasisShapeV3::Constant => Ok(()),
+        BasisShapeV3::RampUp { left, right } | BasisShapeV3::RampDown { left, right }
+            if left < right && right < knot_count =>
         {
             Ok(())
         }
-        ShapeV2::Tent { left, peak, right }
-            if left < peak && peak < right && u32::from(right) < knot_count =>
+        BasisShapeV3::Tent { left, peak, right }
+            if left < peak && peak < right && right < knot_count =>
         {
             Ok(())
         }
@@ -844,29 +1031,43 @@ fn validate_shape(shape: ShapeV2, knot_count: u32) -> Result<()> {
     }
 }
 
-fn shape_key(shape: ShapeV2) -> u64 {
+fn shape_key(shape: BasisShapeV3) -> (u8, u32, u32, u32) {
     match shape {
-        ShapeV2::Constant => 0,
-        ShapeV2::RampUp { left, right } => 1_u64 << 56 | u64::from(left) << 8 | u64::from(right),
-        ShapeV2::RampDown { left, right } => 2_u64 << 56 | u64::from(left) << 8 | u64::from(right),
-        ShapeV2::Tent { left, peak, right } => {
-            3_u64 << 56 | u64::from(left) << 16 | u64::from(peak) << 8 | u64::from(right)
-        }
+        BasisShapeV3::Constant => (0, 0, 0, 0),
+        BasisShapeV3::RampUp { left, right } => (1, left, 0, right),
+        BasisShapeV3::RampDown { left, right } => (2, left, 0, right),
+        BasisShapeV3::Tent { left, peak, right } => (3, left, peak, right),
     }
 }
 
 fn encode_term(output: &mut [u8], offset: usize, term: BasisTermV3) -> Result<()> {
     put(output, offset, &term.claim_index.to_le_bytes())?;
     let (tag, left, peak, right) = match term.shape {
-        ShapeV2::Constant => (0, 0, 0, 0),
-        ShapeV2::RampUp { left, right } => (1, left, 0, right),
-        ShapeV2::RampDown { left, right } => (2, left, 0, right),
-        ShapeV2::Tent { left, peak, right } => (3, left, peak, right),
+        BasisShapeV3::Constant => (0, 0, 0, 0),
+        BasisShapeV3::RampUp { left, right } => (1, left, 0, right),
+        BasisShapeV3::RampDown { left, right } => (2, left, 0, right),
+        BasisShapeV3::Tent { left, peak, right } => (3, left, peak, right),
     };
-    put(output, offset.checked_add(4).ok_or(Error::InvalidLength)?, &[tag])?;
-    put(output, offset.checked_add(5).ok_or(Error::InvalidLength)?, &[left])?;
-    put(output, offset.checked_add(6).ok_or(Error::InvalidLength)?, &[peak])?;
-    put(output, offset.checked_add(7).ok_or(Error::InvalidLength)?, &[right])?;
+    put(
+        output,
+        offset.checked_add(4).ok_or(Error::InvalidLength)?,
+        &[tag],
+    )?;
+    put(
+        output,
+        offset.checked_add(8).ok_or(Error::InvalidLength)?,
+        &left.to_le_bytes(),
+    )?;
+    put(
+        output,
+        offset.checked_add(12).ok_or(Error::InvalidLength)?,
+        &peak.to_le_bytes(),
+    )?;
+    put(
+        output,
+        offset.checked_add(16).ok_or(Error::InvalidLength)?,
+        &right.to_le_bytes(),
+    )?;
     put(
         output,
         offset.checked_add(24).ok_or(Error::InvalidLength)?,
@@ -875,17 +1076,22 @@ fn encode_term(output: &mut [u8], offset: usize, term: BasisTermV3) -> Result<()
 }
 
 fn decode_term(input: &[u8], offset: usize) -> Result<BasisTermV3> {
-    require_zero(input, offset.checked_add(8).ok_or(Error::InvalidLength)?, 16)?;
+    require_zero(input, offset.checked_add(5).ok_or(Error::InvalidLength)?, 3)?;
+    require_zero(
+        input,
+        offset.checked_add(20).ok_or(Error::InvalidLength)?,
+        4,
+    )?;
     let claim_index = read_u32(input, offset)?;
     let tag = read_byte(input, offset.checked_add(4).ok_or(Error::InvalidLength)?)?;
-    let left = read_byte(input, offset.checked_add(5).ok_or(Error::InvalidLength)?)?;
-    let peak = read_byte(input, offset.checked_add(6).ok_or(Error::InvalidLength)?)?;
-    let right = read_byte(input, offset.checked_add(7).ok_or(Error::InvalidLength)?)?;
+    let left = read_u32(input, offset.checked_add(8).ok_or(Error::InvalidLength)?)?;
+    let peak = read_u32(input, offset.checked_add(12).ok_or(Error::InvalidLength)?)?;
+    let right = read_u32(input, offset.checked_add(16).ok_or(Error::InvalidLength)?)?;
     let shape = match tag {
-        0 if left == 0 && peak == 0 && right == 0 => ShapeV2::Constant,
-        1 if peak == 0 => ShapeV2::RampUp { left, right },
-        2 if peak == 0 => ShapeV2::RampDown { left, right },
-        3 => ShapeV2::Tent { left, peak, right },
+        0 if left == 0 && peak == 0 && right == 0 => BasisShapeV3::Constant,
+        1 if peak == 0 => BasisShapeV3::RampUp { left, right },
+        2 if peak == 0 => BasisShapeV3::RampDown { left, right },
+        3 => BasisShapeV3::Tent { left, peak, right },
         _ => return Err(Error::InvalidTerm),
     };
     Ok(BasisTermV3 {
@@ -1118,12 +1324,12 @@ mod tests {
         let terms = [
             BasisTermV3 {
                 claim_index: 0,
-                shape: ShapeV2::RampUp { left: 0, right: 2 },
+                shape: BasisShapeV3::RampUp { left: 0, right: 2 },
                 amplitude: 40,
             },
             BasisTermV3 {
                 claim_index: 1,
-                shape: ShapeV2::Tent {
+                shape: BasisShapeV3::Tent {
                     left: 1,
                     peak: 2,
                     right: 3,
@@ -1152,13 +1358,13 @@ mod tests {
 
     #[test]
     fn runtime_tails_lift_sixteen_item_prototype_caps() {
-        let knots: Vec<i128> = (-20..=20).map(i128::from).collect();
+        let knots: Vec<i128> = (-150..=150).map(i128::from).collect();
         let terms: Vec<BasisTermV3> = (0_u32..32)
             .map(|claim_index| BasisTermV3 {
                 claim_index,
-                shape: ShapeV2::RampUp {
-                    left: u8::try_from(claim_index).expect("left"),
-                    right: u8::try_from(claim_index + 1).expect("right"),
+                shape: BasisShapeV3::RampUp {
+                    left: claim_index + 260,
+                    right: claim_index + 261,
                 },
                 amplitude: 1,
             })
@@ -1176,7 +1382,7 @@ mod tests {
         };
         let bytes = compile(input);
         let basis = ProductBasisV3::decode(&bytes).expect("basis");
-        assert_eq!(basis.knot_count(), 41);
+        assert_eq!(basis.knot_count(), 301);
         assert_eq!(basis.term_count(), 32);
         let mut output = vec![0; 33];
         basis
@@ -1190,7 +1396,7 @@ mod tests {
         let knots = [0, 10];
         let terms = [BasisTermV3 {
             claim_index: 0,
-            shape: ShapeV2::RampUp { left: 0, right: 1 },
+            shape: BasisShapeV3::RampUp { left: 0, right: 1 },
             amplitude: 100,
         }];
         let input = BasisInputV3 {
@@ -1230,7 +1436,7 @@ mod tests {
         let knots = [0, 10];
         let terms = [BasisTermV3 {
             claim_index: 0,
-            shape: ShapeV2::RampUp { left: 0, right: 1 },
+            shape: BasisShapeV3::RampUp { left: 0, right: 1 },
             amplitude: 60,
         }];
         let input = BasisInputV3 {
@@ -1268,7 +1474,7 @@ mod tests {
         let knots = [0, 10];
         let excessive = [BasisTermV3 {
             claim_index: 0,
-            shape: ShapeV2::RampUp { left: 0, right: 1 },
+            shape: BasisShapeV3::RampUp { left: 0, right: 1 },
             amplitude: 101,
         }];
         let input = BasisInputV3 {
@@ -1277,7 +1483,10 @@ mod tests {
         };
         let width = basis_record_bytes_v3(input.kind, 2, 2, 1).expect("width");
         let mut output = vec![0xa5; width];
-        assert_eq!(compile_basis_v3(input, &mut output), Err(Error::NonPartition));
+        assert_eq!(
+            compile_basis_v3(input, &mut output),
+            Err(Error::NonPartition)
+        );
         assert!(output.iter().all(|byte| *byte == 0xa5));
 
         let valid_term = [BasisTermV3 {
@@ -1294,5 +1503,67 @@ mod tests {
             Err(Error::NonPartition)
         );
         assert!(output.iter().all(|byte| *byte == 0xa5));
+    }
+
+    #[test]
+    fn exact_cell_envelope_accepts_disjoint_full_scale_curves_and_refuses_claim_gaps() {
+        let knots = [0, 10, 20, 30, 40, 50];
+        let disjoint = [
+            BasisTermV3 {
+                claim_index: 0,
+                shape: BasisShapeV3::Tent {
+                    left: 0,
+                    peak: 1,
+                    right: 2,
+                },
+                amplitude: 100,
+            },
+            BasisTermV3 {
+                claim_index: 0,
+                shape: BasisShapeV3::Tent {
+                    left: 3,
+                    peak: 4,
+                    right: 5,
+                },
+                amplitude: 100,
+            },
+        ];
+        let input = BasisInputV3 {
+            basis_width: 2,
+            knot_denominator: 1,
+            knots: &knots,
+            terms: &disjoint,
+            failure_payouts: &[0, 100],
+            ..graded_input(&[], &[], &[])
+        };
+        let bytes = compile(input);
+        let basis = ProductBasisV3::decode(&bytes).expect("disjoint full-scale curves");
+        for coordinate in [-1, 5, 10, 15, 25, 35, 40, 45, 60] {
+            let mut payout = [0; 2];
+            basis
+                .evaluate_rational(coordinate, 1, &mut payout)
+                .expect("partition");
+            assert_eq!(payout.iter().sum::<u64>(), 100);
+        }
+
+        let missing_claim_zero = [BasisTermV3 {
+            claim_index: 1,
+            shape: BasisShapeV3::Constant,
+            amplitude: 1,
+        }];
+        let hostile = BasisInputV3 {
+            basis_width: 3,
+            knots: &[],
+            terms: &missing_claim_zero,
+            failure_payouts: &[0, 0, 100],
+            ..graded_input(&[], &[], &[])
+        };
+        let width = basis_record_bytes_v3(hostile.kind, 3, 0, 1).expect("width");
+        let mut output = vec![0x5a; width];
+        assert_eq!(
+            compile_basis_v3(hostile, &mut output),
+            Err(Error::InvalidTerm)
+        );
+        assert!(output.iter().all(|byte| *byte == 0x5a));
     }
 }
