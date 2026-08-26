@@ -425,7 +425,7 @@ mod tests {
         let view = GuardianSetV1::parse(&account).expect("captured GuardianSet");
         assert_eq!(view.index(), 0);
         assert_eq!(view.guardian_count(), 19);
-        assert_eq!(view.creation_time(), 1_787_748_953);
+        assert_eq!(view.creation_time(), 1_787_431_680);
         assert_eq!(view.expiration_time(), 0);
     }
 

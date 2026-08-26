@@ -16,6 +16,7 @@ use solana_program::{
 use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
 use solana_sdk::signature::{Keypair, Signer};
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
+use solana_system_interface::instruction::transfer;
 use solana_transaction::Transaction;
 
 /// Captured provider publication time.
@@ -45,6 +46,10 @@ const RECEIVER_INITIALIZE: &[u8] =
 /// Captured Receiver Config account bytes.
 pub const RECEIVER_CONFIG: &[u8] =
     include_bytes!("../../../../fixtures/pyth/local-upgraded-2026-08-22/receiver-config.account");
+/// Captured lowercase-hex GuardianSet zero account produced by the real router.
+pub const GUARDIAN_SET_0_ACCOUNT_HEX: &[u8] = include_bytes!(
+    "../../../../fixtures/pyth/local-upgraded-2026-08-22/guardian-set-0.account.hex"
+);
 const SIGNED_VAA: &[u8] =
     include_bytes!("../../../../fixtures/pyth/local-upgraded-2026-08-22/signed.vaa");
 /// Captured Receiver PostUpdate instruction bytes.
@@ -126,13 +131,33 @@ fn assert_sha256(label: &str, bytes: &[u8], expected: &str) {
     );
 }
 
+fn decode_lower_hex(value: &[u8]) -> Vec<u8> {
+    let value = value.strip_suffix(b"\n").unwrap_or(value);
+    assert_eq!(value.len() % 2, 0, "hex fixture has complete bytes");
+    value
+        .chunks_exact(2)
+        .map(|pair| {
+            (hex_nibble(*pair.first().expect("high nibble")) << 4)
+                | hex_nibble(*pair.get(1).expect("low nibble"))
+        })
+        .collect()
+}
+
+fn hex_nibble(value: u8) -> u8 {
+    match value {
+        b'0'..=b'9' => value - b'0',
+        b'a'..=b'f' => value - b'a' + 10,
+        _ => panic!("fixture is not lowercase hexadecimal"),
+    }
+}
+
 /// Recheck every accepted fixture digest before a campaign starts.
 pub fn assert_all_fixture_hashes() {
     for (label, bytes, digest) in [
         (
             "PROVENANCE.md",
             FIXTURE_PROVENANCE,
-            "636e590b02585c98e55ad8603bf06d03c7df2426a1816958f8eae2dffca2fd87",
+            "2ac2344d5c5a2b0470349fcce305a23218ece64343277ae83f5d8c897481c874",
         ),
         (
             "UPSTREAM_LICENSE",
@@ -153,6 +178,11 @@ pub fn assert_all_fixture_hashes() {
             "router-initialize.data",
             ROUTER_INITIALIZE,
             "3667940a4428a8f2411a0ff11157ecc4ba1076c3c61273a108da6405c51e0b0b",
+        ),
+        (
+            "guardian-set-0.account.hex",
+            GUARDIAN_SET_0_ACCOUNT_HEX,
+            "f1b139a3e279943758a39da80a64a0115a5c7d11640bc8579eee9256f77ec146",
         ),
         (
             "receiver-initialize.data",
@@ -453,6 +483,13 @@ pub async fn initialize_real_providers(
     context
         .warp_to_slot(PROVIDER_EXECUTION_SLOT)
         .expect("execute strictly after both captured ProgramData deployment slots");
+    let mut initialization_clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("provider initialization Clock");
+    initialization_clock.unix_timestamp = PUBLISH_TIME;
+    context.set_sysvar(&initialization_clock);
     let payer = context.payer.pubkey();
     let bridge = Pubkey::find_program_address(&[b"Bridge"], &provider.router).0;
     let fee_collector = Pubkey::find_program_address(&[b"fee_collector"], &provider.router).0;
@@ -475,6 +512,11 @@ pub async fn initialize_real_providers(
     )
     .await
     .expect("captured router ELF accepts the pinned 19-guardian initialization");
+    let guardians = observed(context, provider.guardian_set)
+        .await
+        .expect("router GuardianSet zero exists");
+    assert_eq!(guardians.owner, provider.router);
+    assert_eq!(guardians.data, decode_lower_hex(GUARDIAN_SET_0_ACCOUNT_HEX));
     submit(
         context,
         &[Instruction {
@@ -495,6 +537,26 @@ pub async fn initialize_real_providers(
         .expect("receiver Config exists");
     assert_eq!(config.owner, provider.receiver);
     assert_eq!(config.data, RECEIVER_CONFIG);
+    let treasury_rent = context
+        .banks_client
+        .get_rent()
+        .await
+        .expect("provider treasury Rent")
+        .minimum_balance(0);
+    submit(
+        context,
+        &[transfer(&payer, &provider.treasury, treasury_rent)],
+        &[],
+    )
+    .await
+    .expect("capitalize the canonical zero-data Receiver treasury");
+    let treasury = observed(context, provider.treasury)
+        .await
+        .expect("Receiver treasury exists");
+    assert_eq!(treasury.owner, system_program::ID);
+    assert!(!treasury.executable);
+    assert!(treasury.data.is_empty());
+    assert_eq!(treasury.lamports, treasury_rent);
 
     let encoded = Keypair::new();
     let encoded_size = ENCODED_VAA_HEADER_BYTES + SIGNED_VAA.len();
