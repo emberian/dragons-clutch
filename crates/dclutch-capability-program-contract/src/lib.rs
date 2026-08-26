@@ -29,6 +29,8 @@ pub use generated::*;
 pub mod hot_v3;
 /// Action-selected sets of exact Capability Program V3 bundles.
 pub mod set_v1;
+/// Schema-bound action selection for exact capability descriptors.
+pub mod set_v2;
 /// Fixed descriptor selecting independently finalized runtime-tail artifacts.
 pub mod v3;
 /// Successor descriptor with explicit schema/content pairs for every executable artifact.
