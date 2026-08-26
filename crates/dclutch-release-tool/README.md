@@ -93,6 +93,48 @@ authority. The builder performs no RPC, signing, submission, deployment, or
 account mutation; execution by the Registry is still what creates the
 authoritative cache.
 
+## Capability execution evidence
+
+Shadow and admitted capability strategies execute in separately deployed SBF
+accelerators, so their executable identity is not covered merely by checking
+the five-role release set. `CheckedCapabilityExecutionV1` joins one exact
+`CapabilityProgramV4`, `ExecutionStrategyV2`, `AotCertificateV4`, optional
+`AotAdmissionV4`, immutable accelerator `ArtifactReleaseV1`, and the complete
+checked release manifest for that accelerator.
+
+```text
+dclutch-release-tool create-capability-execution \
+  --descriptor <capability-v4.bin> \
+  --strategy <strategy-v2.bin> \
+  --certificate <certificate-v4.bin> \
+  [--admission <admission-v4.bin>] \
+  --accelerator <accelerator.checked> \
+  --out <capability-execution.checked> \
+  [--text-out <capability-execution.txt>]
+
+dclutch-release-tool verify-capability-execution \
+  --manifest <capability-execution.checked> \
+  --accelerator <accelerator.checked> \
+  [--text-out <capability-execution.txt>]
+
+dclutch-release-tool inspect-capability-execution \
+  --manifest <capability-execution.checked> \
+  [--text-out <capability-execution.txt>]
+```
+
+Construction independently derives the interpreter tuple from the descriptor,
+requires the strategy and certificate to select that exact tuple, and applies
+the complete admitted-AOT validator when an admission is present. Shadow
+evidence must have an all-zero admission slot. Interpreted strategies are
+refused because they have no external accelerator ELF to check, and upgradeable
+accelerators are refused because their executable bytes are not immutable.
+
+This evidence does not prove the accelerator implements the declared
+semantics. It binds the semantic declaration, certificate and admission to one
+immutable executable artifact without adding a second runtime authority. The
+translation-validation or proof obligation for that exact artifact remains a
+separately named boundary.
+
 ## Metadata V1
 
 The metadata input is canonical UTF-8 text. Lines must occur in this exact

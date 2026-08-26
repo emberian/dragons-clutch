@@ -14,12 +14,14 @@ use std::{
 
 use dclutch_release_set_contract::ExecutionReleaseSetV1;
 use dclutch_release_tool::{
-    BuildMetadataV1, CheckedExecutionReleaseSetV1, CheckedReleaseV1, ReleaseEvidenceV1,
+    BuildMetadataV1, CheckedCapabilityExecutionV1, CheckedExecutionReleaseSetV1, CheckedReleaseV1,
+    ReleaseEvidenceV1, build_checked_capability_execution_from_bytes_v1,
     build_checked_execution_release_set, build_checked_release,
-    verify_checked_execution_release_set, verify_checked_release,
+    verify_checked_capability_execution_v1, verify_checked_execution_release_set,
+    verify_checked_release,
 };
 
-const USAGE: &str = "usage:\n  dclutch-release-tool create --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify --manifest PATH --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH [--text-out PATH]\n  dclutch-release-tool inspect --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-set --release-set PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-set --manifest PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH [--text-out PATH]\n  dclutch-release-tool inspect-set --manifest PATH [--text-out PATH]";
+const USAGE: &str = "usage:\n  dclutch-release-tool create --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify --manifest PATH --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH [--text-out PATH]\n  dclutch-release-tool inspect --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-set --release-set PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-set --manifest PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH [--text-out PATH]\n  dclutch-release-tool inspect-set --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-capability-execution --descriptor PATH --strategy PATH --certificate PATH [--admission PATH] --accelerator PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-capability-execution --manifest PATH --accelerator PATH [--text-out PATH]\n  dclutch-release-tool inspect-capability-execution --manifest PATH [--text-out PATH]";
 
 fn main() -> ExitCode {
     match run() {
@@ -50,7 +52,66 @@ fn run() -> Result<(), String> {
         "create-set" => create_set(&mut flags),
         "verify-set" => verify_set(&mut flags),
         "inspect-set" => inspect_set(&mut flags),
+        "create-capability-execution" => create_capability_execution(&mut flags),
+        "verify-capability-execution" => verify_capability_execution(&mut flags),
+        "inspect-capability-execution" => inspect_capability_execution(&mut flags),
         _ => Err(format!("unknown command: {command}")),
+    }
+}
+
+fn create_capability_execution(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), String> {
+    let output = required(flags, "--out")?;
+    let text_output = flags.remove("--text-out");
+    let descriptor = read_bytes(required(flags, "--descriptor")?)?;
+    let strategy = read_bytes(required(flags, "--strategy")?)?;
+    let certificate = read_bytes(required(flags, "--certificate")?)?;
+    let admission = flags.remove("--admission").map(read_bytes).transpose()?;
+    let accelerator = read_bytes(required(flags, "--accelerator")?)?;
+    require_no_flags(flags)?;
+    let result = build_checked_capability_execution_from_bytes_v1(
+        &descriptor,
+        &strategy,
+        &certificate,
+        admission.as_deref(),
+        &accelerator,
+    )
+    .map_err(format_release_error)?;
+    fs::write(&output, result.encode())
+        .map_err(|error| format!("failed writing {}: {error}", output.display()))?;
+    emit_capability_execution_text(result, text_output)
+}
+
+fn verify_capability_execution(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), String> {
+    let manifest = read_bytes(required(flags, "--manifest")?)?;
+    let accelerator = read_bytes(required(flags, "--accelerator")?)?;
+    let text_output = flags.remove("--text-out");
+    require_no_flags(flags)?;
+    let result = verify_checked_capability_execution_v1(&manifest, &accelerator)
+        .map_err(format_release_error)?;
+    emit_capability_execution_text(result, text_output)
+}
+
+fn inspect_capability_execution(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), String> {
+    let manifest = read_bytes(required(flags, "--manifest")?)?;
+    let text_output = flags.remove("--text-out");
+    require_no_flags(flags)?;
+    let result = CheckedCapabilityExecutionV1::decode(&manifest).map_err(format_release_error)?;
+    emit_capability_execution_text(result, text_output)
+}
+
+fn emit_capability_execution_text(
+    execution: CheckedCapabilityExecutionV1,
+    output: Option<PathBuf>,
+) -> Result<(), String> {
+    let text = execution.render_text().map_err(format_release_error)?;
+    if let Some(path) = output {
+        fs::write(&path, text)
+            .map_err(|error| format!("failed writing {}: {error}", path.display()))
+    } else {
+        io::stdout()
+            .lock()
+            .write_all(text.as_bytes())
+            .map_err(|error| format!("failed writing stdout: {error}"))
     }
 }
 

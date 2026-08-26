@@ -15,10 +15,12 @@ use dclutch_pyth_svm::{
 };
 use sha2::{Digest, Sha256};
 
+mod capability_execution;
 mod infrastructure;
 mod multiprogram;
 mod translation;
 
+pub use capability_execution::*;
 pub use infrastructure::*;
 pub use multiprogram::*;
 pub use translation::*;
@@ -151,6 +153,13 @@ pub enum Error {
     InvalidInfrastructureManifest,
     /// Supplied checked manifests rebuilt to different infrastructure evidence.
     CheckedInfrastructureManifestMismatch,
+    /// A checked capability-execution bundle did not join its V4 descriptor,
+    /// Strategy, Certificate, optional Admission, and exact accelerator artifact.
+    InvalidCapabilityExecutionManifest,
+    /// Supplied checked-release evidence rebuilt to another capability execution bundle.
+    CheckedCapabilityExecutionManifestMismatch,
+    /// Checked external accelerators must have no Loader upgrade authority.
+    CapabilityAcceleratorMustBeImmutable,
     /// Core, Registry, and Rent infrastructure must all be immutable.
     InfrastructureMustBeImmutable,
     /// A translation-validation evidence input or manifest was malformed.

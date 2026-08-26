@@ -14,7 +14,9 @@ name = "dclutch-release-tool"
 path = "src/main.rs"
 
 [dependencies]
+dclutch-capability-program-contract = { path = "../dclutch-capability-program-contract" }
 dclutch-core-contract = { path = "../dclutch-core-contract" }
+dclutch-execution-strategy-contract = { path = "../dclutch-execution-strategy-contract" }
 dclutch-pyth-svm = { path = "../dclutch-pyth-svm" }
 dclutch-registry-contract = { path = "../dclutch-registry-contract" }
 dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
