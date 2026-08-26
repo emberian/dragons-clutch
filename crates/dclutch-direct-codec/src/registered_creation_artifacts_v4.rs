@@ -103,6 +103,10 @@ pub const REGISTERED_IDENTITY_CUSTODY_AUTHORITY_V4: usize = 26;
 pub const REGISTERED_IDENTITY_CUSTODY_VAULT_V4: usize = 27;
 /// Registration payer selected by the authenticated account profile.
 pub const REGISTERED_IDENTITY_PAYER_V4: usize = 28;
+/// Maker RentCredit beneficiary observed from a live replay state.
+pub const REGISTERED_IDENTITY_MAKER_BENEFICIARY_OBSERVATION_V4: usize = 29;
+/// Record RentCredit beneficiary observed from a live registered record.
+pub const REGISTERED_IDENTITY_RECORD_BENEFICIARY_OBSERVATION_V4: usize = 30;
 
 /// Root phase.
 pub const REGISTERED_SCALAR_ROOT_PHASE_V4: usize = 0;

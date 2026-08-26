@@ -21,8 +21,10 @@ use crate::{
     execution_v3::DirectExecutionActionV3,
     generated_intent_v2 as intent,
     registered_creation_artifacts_v4::{
+        REGISTERED_IDENTITY_MAKER_BENEFICIARY_OBSERVATION_V4,
         REGISTERED_IDENTITY_MAKER_BENEFICIARY_V4, REGISTERED_IDENTITY_MAKER_STATE_OWNER_V4,
         REGISTERED_IDENTITY_MAKER_STATE_V4, REGISTERED_IDENTITY_MARKET_V4,
+        REGISTERED_IDENTITY_RECORD_BENEFICIARY_OBSERVATION_V4,
         REGISTERED_IDENTITY_RECORD_BENEFICIARY_V4, REGISTERED_IDENTITY_RECORD_STATE_OWNER_V4,
         REGISTERED_IDENTITY_RECORD_STATE_V4, REGISTERED_IDENTITY_REQUEST_MAKER_V4,
         REGISTERED_SCALAR_GENERATION_V4, REGISTERED_SCALAR_MAKER_BUMP_OBSERVATION_V4,
@@ -48,6 +50,8 @@ pub const DIRECT_REGISTERED_PAYER_ACCOUNT_V4: u16 = 6;
 pub const DIRECT_REGISTERED_MAKER_RENT_CREDIT_ACCOUNT_V4: u16 = 7;
 /// Registered record state coordinate.
 pub const DIRECT_REGISTERED_RECORD_ACCOUNT_V4: u16 = 8;
+/// Registered-record creation payer alias coordinate.
+pub const DIRECT_REGISTERED_RECORD_PAYER_ACCOUNT_V4: u16 = 9;
 /// Registered record RentCredit coordinate.
 pub const DIRECT_REGISTERED_RECORD_RENT_CREDIT_ACCOUNT_V4: u16 = 10;
 
@@ -136,16 +140,18 @@ pub fn encode_direct_registered_creation_lifecycle_v5_atomic(
         plan(
             action,
             0,
+            DIRECT_REGISTERED_PAYER_ACCOUNT_V4,
             DIRECT_REGISTERED_MAKER_RENT_CREDIT_ACCOUNT_V4,
             REGISTERED_SCALAR_MAKER_PRINCIPAL_OBSERVATION_V4,
-            REGISTERED_IDENTITY_MAKER_BENEFICIARY_V4,
+            REGISTERED_IDENTITY_MAKER_BENEFICIARY_OBSERVATION_V4,
         )?,
         plan(
             action,
             1,
+            DIRECT_REGISTERED_RECORD_PAYER_ACCOUNT_V4,
             DIRECT_REGISTERED_RECORD_RENT_CREDIT_ACCOUNT_V4,
             REGISTERED_SCALAR_RECORD_PRINCIPAL_OBSERVATION_V4,
-            REGISTERED_IDENTITY_RECORD_BENEFICIARY_V4,
+            REGISTERED_IDENTITY_RECORD_BENEFICIARY_OBSERVATION_V4,
         )?,
     ];
     let protected = [
@@ -235,6 +241,7 @@ const fn recipe(
 fn plan(
     action: DirectExecutionActionV3,
     recipe: u16,
+    payer: u16,
     rent_credit: u16,
     principal_observation: usize,
     beneficiary_observation: usize,
@@ -243,9 +250,7 @@ fn plan(
         action: action as u32,
         operation: LifecycleOperationInputV3::AuthenticateOrCreate,
         recipe,
-        payer: Some(LifecycleAccountCoordinateV3::fixed(
-            DIRECT_REGISTERED_PAYER_ACCOUNT_V4,
-        )),
+        payer: Some(LifecycleAccountCoordinateV3::fixed(payer)),
         rent_credit: Some(LifecycleAccountCoordinateV3::fixed(rent_credit)),
         principal: Some(LifecycleRegisterCoordinateV3::common(scalar(
             principal_observation,
