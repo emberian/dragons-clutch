@@ -35,6 +35,14 @@ pub const SUCCESSOR_SCHEMA_RELEASE_ID: [u8; 32] = [
     0x3a, 0x15, 0x1e, 0xd5, 0x08, 0x0b, 0x68, 0xd7, 0xc9, 0xe3, 0xbd, 0x2c, 0x5d, 0xf5, 0x17, 0x20,
     0xe4, 0x31, 0x48, 0x4d, 0x92, 0xee, 0x64, 0xdc, 0xfb, 0x87, 0x2a, 0x1e, 0x6f, 0x09, 0x38, 0x6a,
 ];
+/// V5 schema label with adapter-authenticated current-Rent quote projection.
+pub const CURRENT_RENT_QUOTE_SCHEMA_RELEASE_PREIMAGE_V5: &[u8] =
+    b"dclutch/schema/state-lifecycle-policy-v5-current-rent-quotes-v1";
+/// SHA-256 of [`CURRENT_RENT_QUOTE_SCHEMA_RELEASE_PREIMAGE_V5`].
+pub const CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5: [u8; 32] = [
+    0x10, 0xfb, 0xed, 0x6c, 0x13, 0x26, 0x12, 0x7c, 0xf7, 0xe5, 0x47, 0x83, 0xb1, 0xa5, 0x97, 0xd7,
+    0x7c, 0xa3, 0xe7, 0x6b, 0x53, 0xde, 0x97, 0xc0, 0x8f, 0x27, 0x3f, 0x5e, 0x67, 0xe3, 0x98, 0x3b,
+];
 /// Canonical schema version.
 pub const VERSION: u16 = 3;
 /// Canonical physical artifact profile.
@@ -43,6 +51,8 @@ pub const ARTIFACT_PROFILE: u16 = 1;
 pub const PROTECTED_OUTPUT_ARTIFACT_PROFILE: u16 = 2;
 /// Successor artifact profile with immutable identity-field bindings.
 pub const SUCCESSOR_ARTIFACT_PROFILE: u16 = 3;
+/// V5 artifact profile with bounded protected current-Rent quote declarations.
+pub const CURRENT_RENT_QUOTE_ARTIFACT_PROFILE_V5: u16 = 4;
 /// Exact header width.
 pub const HEADER_BYTES: usize = 40;
 /// Exact derivation-recipe width.
@@ -55,6 +65,10 @@ pub const ACTION_PLAN_BYTES: usize = 40;
 pub const PROTECTED_OUTPUT_BYTES: usize = 16;
 /// Exact immutable identity-binding width for the successor profile.
 pub const IMMUTABLE_IDENTITY_BINDING_BYTES: usize = 16;
+/// Exact width of one V5 `(exact_data_len, scalar_destination)` declaration.
+pub const CURRENT_RENT_QUOTE_BYTES_V5: usize = 16;
+/// Maximum quote declarations in this executable lifecycle capacity profile.
+pub const MAX_CURRENT_RENT_QUOTES_V5: u16 = 16;
 /// Solana's chain-derived maximum number of seeds per PDA.
 pub const MAX_SEEDS: u8 = 16;
 /// Solana's chain-derived maximum width of one seed.
@@ -120,6 +134,8 @@ pub enum Error {
     InvalidFunding,
     /// Historical rent principal or immutable beneficiary was invalid.
     InvalidRent,
+    /// A current-Rent quote declaration or authenticated adapter input was invalid.
+    InvalidRentQuote,
     /// Checked lamport or affine-width arithmetic refused.
     Arithmetic,
 }
@@ -188,6 +204,29 @@ pub struct LifecycleProtectedOutputsV3 {
 pub struct LifecycleImmutableIdentityBindingV4 {
     data_offset: u32,
     canonical: LifecycleRegisterTargetV3,
+}
+
+/// One protected current-Rent quote declaration from a finalized V5 policy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LifecycleCurrentRentQuoteV5 {
+    exact_data_len: u32,
+    scalar_destination: u16,
+}
+
+impl LifecycleCurrentRentQuoteV5 {
+    /// Exact state width supplied to the current Rent calculation.
+    pub const fn exact_data_len(self) -> u32 {
+        self.exact_data_len
+    }
+
+    /// Lifecycle-protected common scalar receiving the authenticated minimum.
+    pub const fn scalar_destination(self) -> LifecycleRegisterTargetV3 {
+        LifecycleRegisterTargetV3 {
+            kind: LifecycleRegisterKindV3::Scalar,
+            scope: CoordinateScopeV3::Fixed,
+            index: self.scalar_destination,
+        }
+    }
 }
 
 impl LifecycleImmutableIdentityBindingV4 {
@@ -680,6 +719,7 @@ pub struct StateLifecyclePolicyV3<'a> {
     plans: u16,
     protected_outputs: u16,
     immutable_identity_bindings: u16,
+    current_rent_quotes: u16,
     bytes: &'a [u8],
 }
 
@@ -724,6 +764,181 @@ impl<'a> StateLifecyclePolicyV4<'a> {
     }
 }
 
+/// Successor-only lifecycle policy with protected current-Rent quote projection.
+///
+/// V4 remains decodable for migration, but this wrapper admits only artifact
+/// profile 4 selected under [`CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StateLifecyclePolicyV5<'a>(StateLifecyclePolicyV3<'a>);
+
+impl<'a> StateLifecyclePolicyV5<'a> {
+    /// Decode exact V5 bytes after finalized content selection/authentication.
+    pub fn decode_selected(
+        selected_id: [u8; 32],
+        authenticated_id: [u8; 32],
+        bytes: &'a [u8],
+    ) -> Result<Self> {
+        let policy = StateLifecyclePolicyV3::decode_selected(selected_id, authenticated_id, bytes)?;
+        if policy.artifact_profile != CURRENT_RENT_QUOTE_ARTIFACT_PROFILE_V5 {
+            return Err(Error::UnsupportedProfile);
+        }
+        Ok(Self(policy))
+    }
+
+    /// Exact canonical V5 bytes.
+    pub const fn bytes(self) -> &'a [u8] {
+        self.0.bytes()
+    }
+
+    /// Whether every lifecycle and quote table is canonically empty.
+    pub const fn is_empty(self) -> bool {
+        self.0.recipes == 0
+            && self.0.seeds == 0
+            && self.0.plans == 0
+            && self.0.protected_outputs == 0
+            && self.0.immutable_identity_bindings == 0
+            && self.0.current_rent_quotes == 0
+    }
+
+    /// Number of plans selected by one action.
+    pub fn action_plan_count(self, action: u32) -> Result<u16> {
+        self.0.action_plan_count(action)
+    }
+
+    /// Select one canonical action plan.
+    pub fn action_plan(self, action: u32, ordinal: u16) -> Result<SelectedLifecycleV3<'a>> {
+        self.0.action_plan(action, ordinal)
+    }
+
+    /// Exact bounded current-Rent quote declaration count.
+    pub const fn current_rent_quote_count(self) -> u16 {
+        self.0.current_rent_quotes
+    }
+
+    /// Decode one canonical current-Rent quote declaration.
+    pub fn current_rent_quote(self, ordinal: u16) -> Result<LifecycleCurrentRentQuoteV5> {
+        self.0.current_rent_quote(ordinal)
+    }
+
+    /// Join every lifecycle and quote coordinate to the authenticated AccountProfile.
+    pub fn validate_account_profile(self, profile: AccountProfileV2<'_>) -> Result<()> {
+        self.0.validate_account_profile(profile)
+    }
+
+    /// Seed adapter-authenticated current Rent minima into protected scalars atomically.
+    ///
+    /// `input_scalars`, scratch, and output are the exact complete runtime scalar
+    /// bank for `tail_count`. Quote destinations must be zero before projection;
+    /// AccountProfile writes and lifecycle protected outputs are statically
+    /// forbidden from targeting them. The Hot adapter must additionally forbid
+    /// RequestProfile and Transition writes before and after execution.
+    pub fn project_authenticated_current_rent_quotes_atomic(
+        self,
+        profile: AccountProfileV2<'_>,
+        tail_count: u32,
+        input_scalars: &[u64],
+        quotes: &[AuthenticatedRentQuoteV5],
+        buffers: LifecycleRentQuoteBuffersV5<'_>,
+    ) -> Result<()> {
+        self.validate_account_profile(profile)?;
+        let expected_width = affine_width(
+            profile.common_scalar_count(),
+            profile.item_scalar_stride(),
+            tail_count,
+        )?;
+        if quotes.len() != usize::from(self.0.current_rent_quotes) {
+            return Err(Error::InvalidRentQuote);
+        }
+        if input_scalars.len() != expected_width
+            || buffers.scalar_scratch.len() != expected_width
+            || buffers.output_scalars.len() != expected_width
+        {
+            return Err(Error::RuntimeWidth);
+        }
+        buffers.scalar_scratch.copy_from_slice(input_scalars);
+        let mut ordinal = 0_u16;
+        while ordinal < self.0.current_rent_quotes {
+            let declaration = self.0.current_rent_quote(ordinal)?;
+            let quote = quotes
+                .get(usize::from(ordinal))
+                .copied()
+                .ok_or(Error::InvalidRentQuote)?;
+            validate_authenticated_rent_quote(declaration, quote)?;
+            let destination = usize::from(declaration.scalar_destination);
+            let target = buffers
+                .scalar_scratch
+                .get_mut(destination)
+                .ok_or(Error::RuntimeWidth)?;
+            if *target != 0 {
+                return Err(Error::ProfileMismatch);
+            }
+            *target = quote.current_minimum;
+            ordinal = ordinal.checked_add(1).ok_or(Error::Arithmetic)?;
+        }
+        buffers
+            .output_scalars
+            .copy_from_slice(buffers.scalar_scratch);
+        Ok(())
+    }
+
+    /// Revalidate protected current-Rent quote scalars after Request/Transition execution.
+    ///
+    /// This closes the protected-output boundary without trusting request or
+    /// configuration bytes: every destination must still equal the same
+    /// adapter-authenticated current minimum used during projection.
+    pub fn validate_projected_current_rent_quotes(
+        self,
+        profile: AccountProfileV2<'_>,
+        tail_count: u32,
+        projected_scalars: &[u64],
+        quotes: &[AuthenticatedRentQuoteV5],
+    ) -> Result<()> {
+        self.validate_account_profile(profile)?;
+        if quotes.len() != usize::from(self.0.current_rent_quotes)
+            || projected_scalars.len()
+                != affine_width(
+                    profile.common_scalar_count(),
+                    profile.item_scalar_stride(),
+                    tail_count,
+                )?
+        {
+            return Err(Error::InvalidRentQuote);
+        }
+        let mut ordinal = 0_u16;
+        while ordinal < self.0.current_rent_quotes {
+            let declaration = self.0.current_rent_quote(ordinal)?;
+            let quote = quotes
+                .get(usize::from(ordinal))
+                .copied()
+                .ok_or(Error::InvalidRentQuote)?;
+            validate_authenticated_rent_quote(declaration, quote)?;
+            if projected_scalars
+                .get(usize::from(declaration.scalar_destination))
+                .copied()
+                != Some(quote.current_minimum)
+            {
+                return Err(Error::InvalidRentQuote);
+            }
+            ordinal = ordinal.checked_add(1).ok_or(Error::Arithmetic)?;
+        }
+        Ok(())
+    }
+}
+
+fn validate_authenticated_rent_quote(
+    declaration: LifecycleCurrentRentQuoteV5,
+    quote: AuthenticatedRentQuoteV5,
+) -> Result<()> {
+    if quote.exact_data_len != declaration.exact_data_len
+        || quote.scalar_destination != declaration.scalar_destination
+        || quote.current_minimum == 0
+    {
+        Err(Error::InvalidRentQuote)
+    } else {
+        Ok(())
+    }
+}
+
 impl<'a> StateLifecyclePolicyV3<'a> {
     /// Decode canonical bytes after exact content authentication.
     pub fn decode_selected(
@@ -750,24 +965,32 @@ impl<'a> StateLifecyclePolicyV3<'a> {
             return Err(Error::UnsupportedProfile);
         }
         let artifact_profile = read_u16(bytes, 10)?;
-        let (protected_outputs, immutable_identity_bindings) = match artifact_profile {
-            ARTIFACT_PROFILE => {
-                require_zero(bytes, 18, 22)?;
-                (0, 0)
-            }
-            PROTECTED_OUTPUT_ARTIFACT_PROFILE => {
-                let count = read_u16(bytes, 18)?;
-                require_zero(bytes, 20, 20)?;
-                (count, 0)
-            }
-            SUCCESSOR_ARTIFACT_PROFILE => {
-                let protected = read_u16(bytes, 18)?;
-                let bindings = read_u16(bytes, 20)?;
-                require_zero(bytes, 22, 18)?;
-                (protected, bindings)
-            }
-            _ => return Err(Error::UnsupportedProfile),
-        };
+        let (protected_outputs, immutable_identity_bindings, current_rent_quotes) =
+            match artifact_profile {
+                ARTIFACT_PROFILE => {
+                    require_zero(bytes, 18, 22)?;
+                    (0, 0, 0)
+                }
+                PROTECTED_OUTPUT_ARTIFACT_PROFILE => {
+                    let count = read_u16(bytes, 18)?;
+                    require_zero(bytes, 20, 20)?;
+                    (count, 0, 0)
+                }
+                SUCCESSOR_ARTIFACT_PROFILE => {
+                    let protected = read_u16(bytes, 18)?;
+                    let bindings = read_u16(bytes, 20)?;
+                    require_zero(bytes, 22, 18)?;
+                    (protected, bindings, 0)
+                }
+                CURRENT_RENT_QUOTE_ARTIFACT_PROFILE_V5 => {
+                    let protected = read_u16(bytes, 18)?;
+                    let bindings = read_u16(bytes, 20)?;
+                    let quotes = read_u16(bytes, 22)?;
+                    require_zero(bytes, 24, 16)?;
+                    (protected, bindings, quotes)
+                }
+                _ => return Err(Error::UnsupportedProfile),
+            };
         let value = Self {
             artifact_profile,
             recipes: read_u16(bytes, 12)?,
@@ -775,17 +998,31 @@ impl<'a> StateLifecyclePolicyV3<'a> {
             plans: read_u16(bytes, 16)?,
             protected_outputs,
             immutable_identity_bindings,
+            current_rent_quotes,
             bytes,
         };
-        if value.recipes == 0 || value.seeds == 0 || value.plans == 0 {
+        let empty = value.recipes == 0
+            && value.seeds == 0
+            && value.plans == 0
+            && value.protected_outputs == 0
+            && value.immutable_identity_bindings == 0
+            && value.current_rent_quotes == 0;
+        if (value.recipes == 0 || value.seeds == 0 || value.plans == 0)
+            && !(value.artifact_profile == CURRENT_RENT_QUOTE_ARTIFACT_PROFILE_V5 && empty)
+        {
             return Err(Error::EmptyPolicy);
         }
         if matches!(
             value.artifact_profile,
-            PROTECTED_OUTPUT_ARTIFACT_PROFILE | SUCCESSOR_ARTIFACT_PROFILE
+            PROTECTED_OUTPUT_ARTIFACT_PROFILE
+                | SUCCESSOR_ARTIFACT_PROFILE
+                | CURRENT_RENT_QUOTE_ARTIFACT_PROFILE_V5
         ) && value.protected_outputs != value.plans
         {
             return Err(Error::InvalidLength);
+        }
+        if value.current_rent_quotes > MAX_CURRENT_RENT_QUOTES_V5 {
+            return Err(Error::InvalidRentQuote);
         }
         let expected = usize::from(value.recipes)
             .checked_mul(RECIPE_BYTES)
@@ -808,6 +1045,11 @@ impl<'a> StateLifecyclePolicyV3<'a> {
                 usize::from(value.immutable_identity_bindings)
                     .checked_mul(IMMUTABLE_IDENTITY_BINDING_BYTES)
                     .and_then(|bindings| width.checked_add(bindings))
+            })
+            .and_then(|width| {
+                usize::from(value.current_rent_quotes)
+                    .checked_mul(CURRENT_RENT_QUOTE_BYTES_V5)
+                    .and_then(|quotes| width.checked_add(quotes))
             })
             .and_then(|body| HEADER_BYTES.checked_add(body))
             .ok_or(Error::InvalidLength)?;
@@ -915,7 +1157,42 @@ impl<'a> StateLifecyclePolicyV3<'a> {
             validate_invocation_source(recipe.account.scope, register_source(binding.canonical))?;
             binding_index = binding_index.checked_add(1).ok_or(Error::Arithmetic)?;
         }
+        self.validate_current_rent_quotes_against_profile(profile)?;
         self.validate_lifecycle_prestates(profile)
+    }
+
+    fn validate_current_rent_quotes_against_profile(
+        self,
+        profile: AccountProfileV2<'_>,
+    ) -> Result<()> {
+        let mut quote_index = 0_u16;
+        while quote_index < self.current_rent_quotes {
+            let quote = self.current_rent_quote(quote_index)?;
+            let target = quote.scalar_destination();
+            validate_lifecycle_target(profile, target)?;
+            if profile
+                .writes_register(profile_target(target))
+                .map_err(|_| Error::ProfileMismatch)?
+            {
+                return Err(Error::ProfileMismatch);
+            }
+            let mut plan_index = 0_u16;
+            while plan_index < self.plans {
+                if let Some(outputs) = self.protected_outputs(plan_index)? {
+                    let scalar_outputs = [
+                        outputs.created(),
+                        outputs.bump(),
+                        outputs.historical_rent_principal(),
+                    ];
+                    if scalar_outputs.contains(&target) {
+                        return Err(Error::ProfileMismatch);
+                    }
+                }
+                plan_index = plan_index.checked_add(1).ok_or(Error::Arithmetic)?;
+            }
+            quote_index = quote_index.checked_add(1).ok_or(Error::Arithmetic)?;
+        }
+        Ok(())
     }
 
     fn validate_protected_output_uniqueness(self) -> Result<()> {
@@ -1190,7 +1467,9 @@ impl<'a> StateLifecyclePolicyV3<'a> {
                     bump.source,
                     SeedSourceV3::CommonScalar | SeedSourceV3::ItemScalar
                 ),
-                PROTECTED_OUTPUT_ARTIFACT_PROFILE | SUCCESSOR_ARTIFACT_PROFILE => {
+                PROTECTED_OUTPUT_ARTIFACT_PROFILE
+                | SUCCESSOR_ARTIFACT_PROFILE
+                | CURRENT_RENT_QUOTE_ARTIFACT_PROFILE_V5 => {
                     bump.source == SeedSourceV3::CanonicalBump
                 }
                 _ => false,
@@ -1218,7 +1497,9 @@ impl<'a> StateLifecyclePolicyV3<'a> {
             if (plan.operation == LifecycleOperationV3::AuthenticateOrCreate) != protected.is_some()
                 && matches!(
                     self.artifact_profile,
-                    PROTECTED_OUTPUT_ARTIFACT_PROFILE | SUCCESSOR_ARTIFACT_PROFILE
+                    PROTECTED_OUTPUT_ARTIFACT_PROFILE
+                        | SUCCESSOR_ARTIFACT_PROFILE
+                        | CURRENT_RENT_QUOTE_ARTIFACT_PROFILE_V5
                 )
             {
                 return Err(Error::NonCanonicalReserved);
@@ -1232,8 +1513,10 @@ impl<'a> StateLifecyclePolicyV3<'a> {
             let (bound_plan, binding) = self.immutable_identity_binding(binding_index)?;
             let plan = self.plan(bound_plan)?;
             let recipe = self.recipe(plan.recipe)?;
-            if self.artifact_profile != SUCCESSOR_ARTIFACT_PROFILE
-                || plan.operation != LifecycleOperationV3::AuthenticateOrCreate
+            if !matches!(
+                self.artifact_profile,
+                SUCCESSOR_ARTIFACT_PROFILE | CURRENT_RENT_QUOTE_ARTIFACT_PROFILE_V5
+            ) || plan.operation != LifecycleOperationV3::AuthenticateOrCreate
                 || self.protected_outputs(bound_plan)?.is_none()
                 || binding
                     .data_offset
@@ -1255,6 +1538,16 @@ impl<'a> StateLifecyclePolicyV3<'a> {
             }
             previous_binding = Some(order);
             binding_index = binding_index.checked_add(1).ok_or(Error::Arithmetic)?;
+        }
+        let mut previous_destination = None;
+        let mut quote_index = 0_u16;
+        while quote_index < self.current_rent_quotes {
+            let quote = self.current_rent_quote(quote_index)?;
+            if previous_destination.is_some_and(|previous| previous >= quote.scalar_destination) {
+                return Err(Error::InvalidRentQuote);
+            }
+            previous_destination = Some(quote.scalar_destination);
+            quote_index = quote_index.checked_add(1).ok_or(Error::Arithmetic)?;
         }
         Ok(())
     }
@@ -1558,6 +1851,55 @@ impl<'a> StateLifecyclePolicyV3<'a> {
         ))
     }
 
+    fn current_rent_quote(self, index: u16) -> Result<LifecycleCurrentRentQuoteV5> {
+        if self.artifact_profile != CURRENT_RENT_QUOTE_ARTIFACT_PROFILE_V5
+            || index >= self.current_rent_quotes
+        {
+            return Err(Error::InvalidCoordinate);
+        }
+        let offset = HEADER_BYTES
+            .checked_add(
+                usize::from(self.recipes)
+                    .checked_mul(RECIPE_BYTES)
+                    .ok_or(Error::InvalidLength)?,
+            )
+            .and_then(|base| {
+                usize::from(self.seeds)
+                    .checked_mul(SEED_BYTES)
+                    .and_then(|width| base.checked_add(width))
+            })
+            .and_then(|base| {
+                usize::from(self.plans)
+                    .checked_mul(ACTION_PLAN_BYTES)
+                    .and_then(|width| base.checked_add(width))
+            })
+            .and_then(|base| {
+                usize::from(self.protected_outputs)
+                    .checked_mul(PROTECTED_OUTPUT_BYTES)
+                    .and_then(|width| base.checked_add(width))
+            })
+            .and_then(|base| {
+                usize::from(self.immutable_identity_bindings)
+                    .checked_mul(IMMUTABLE_IDENTITY_BINDING_BYTES)
+                    .and_then(|width| base.checked_add(width))
+            })
+            .and_then(|base| {
+                usize::from(index)
+                    .checked_mul(CURRENT_RENT_QUOTE_BYTES_V5)
+                    .and_then(|width| base.checked_add(width))
+            })
+            .ok_or(Error::InvalidLength)?;
+        let declaration = LifecycleCurrentRentQuoteV5 {
+            exact_data_len: read_u32(self.bytes, offset)?,
+            scalar_destination: read_u16(self.bytes, offset + 4)?,
+        };
+        require_zero(self.bytes, offset + 6, 10)?;
+        if declaration.exact_data_len == 0 {
+            return Err(Error::InvalidRentQuote);
+        }
+        Ok(declaration)
+    }
+
     fn validate_seed_against_profile(
         self,
         seed: SeedOperationV3<'_>,
@@ -1803,6 +2145,29 @@ pub struct AuthenticatedRentMinimumV3 {
     pub data_bytes: u32,
     /// Current exact rent-exempt minimum for that width.
     pub lamports: u64,
+}
+
+/// Adapter-authenticated current Rent result for one V5 declaration.
+///
+/// The separately named runtime adapter obtains `current_minimum` from the
+/// authenticated current Rent sysvar using exactly `exact_data_len`. Neither a
+/// family request nor a projected account is a quote source.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedRentQuoteV5 {
+    /// Exact declaration width passed to the current Rent calculation.
+    pub exact_data_len: u32,
+    /// Exact protected common scalar destination, repeated to prove ordering.
+    pub scalar_destination: u16,
+    /// Current exact rent-exempt minimum returned by the adapter.
+    pub current_minimum: u64,
+}
+
+/// Failure-atomic scalar buffers for V5 current-Rent quote projection.
+pub struct LifecycleRentQuoteBuffersV5<'a> {
+    /// Full runtime scalar scratch bank.
+    pub scalar_scratch: &'a mut [u64],
+    /// Full runtime scalar output committed only after every quote validates.
+    pub output_scalars: &'a mut [u64],
 }
 
 /// Runtime context supplied only after AccountProfile projection succeeds.

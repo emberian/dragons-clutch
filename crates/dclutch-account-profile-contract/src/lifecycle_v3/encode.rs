@@ -6,7 +6,8 @@
 //! success.
 
 use super::{
-    ACTION_PLAN_BYTES, ARTIFACT_PROFILE, Error, GUARD_ALWAYS, GUARD_SCALAR_EQ, HEADER_BYTES,
+    ACTION_PLAN_BYTES, ARTIFACT_PROFILE, CURRENT_RENT_QUOTE_ARTIFACT_PROFILE_V5,
+    CURRENT_RENT_QUOTE_BYTES_V5, Error, GUARD_ALWAYS, GUARD_SCALAR_EQ, HEADER_BYTES,
     IMMUTABLE_IDENTITY_BINDING_BYTES, MAGIC, MAX_SEED_BYTES, PLAN_AUTHENTICATE,
     PLAN_AUTHENTICATE_OR_CREATE, PLAN_CLOSE, PLAN_CREATE, PROTECTED_OUTPUT_ARTIFACT_PROFILE,
     PROTECTED_OUTPUT_AUTHENTICATE_OR_CREATE, PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SCOPE_FIXED,
@@ -211,6 +212,15 @@ pub struct LifecycleImmutableIdentityBindingInputV4 {
     pub canonical: LifecycleRegisterCoordinateV3,
 }
 
+/// One V5 protected current-Rent quote declaration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LifecycleCurrentRentQuoteInputV5 {
+    /// Exact positive data width passed to the current Rent calculation.
+    pub exact_data_len: u32,
+    /// Protected common scalar receiving the adapter-authenticated minimum.
+    pub scalar_destination: u16,
+}
+
 /// Encode one complete StateLifecyclePolicy V3 atomically.
 pub fn encode_lifecycle_policy_v3_atomic(
     recipes: &[LifecycleRecipeInputV3],
@@ -224,6 +234,7 @@ pub fn encode_lifecycle_policy_v3_atomic(
         recipes,
         seeds,
         plans,
+        &[],
         &[],
         &[],
         scratch,
@@ -253,6 +264,7 @@ pub fn encode_lifecycle_policy_with_protected_outputs_v3_atomic(
         plans,
         protected_outputs,
         &[],
+        &[],
         scratch,
         output,
     )
@@ -278,6 +290,39 @@ pub fn encode_lifecycle_policy_v4_atomic(
         plans,
         protected_outputs,
         immutable_identity_bindings,
+        &[],
+        scratch,
+        output,
+    )
+}
+
+/// Encode one V5 lifecycle policy with bounded current-Rent quote declarations.
+///
+/// The canonical empty policy is encoded only when every supplied table is
+/// empty. Nonempty policies retain V4 protected-output and immutable-binding
+/// semantics. Quote declarations must be strictly ordered by destination.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_lifecycle_policy_v5_atomic(
+    recipes: &[LifecycleRecipeInputV3],
+    seeds: &[LifecycleSeedInputV3<'_>],
+    plans: &[LifecyclePlanInputV3],
+    protected_outputs: &[Option<LifecycleProtectedOutputsInputV3>],
+    immutable_identity_bindings: &[LifecycleImmutableIdentityBindingInputV4],
+    current_rent_quotes: &[LifecycleCurrentRentQuoteInputV5],
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<(), Error> {
+    if protected_outputs.len() != plans.len() {
+        return Err(Error::InvalidLength);
+    }
+    encode_lifecycle_policy_inner_v3_atomic(
+        CURRENT_RENT_QUOTE_ARTIFACT_PROFILE_V5,
+        recipes,
+        seeds,
+        plans,
+        protected_outputs,
+        immutable_identity_bindings,
+        current_rent_quotes,
         scratch,
         output,
     )
@@ -291,6 +336,7 @@ fn encode_lifecycle_policy_inner_v3_atomic(
     plans: &[LifecyclePlanInputV3],
     protected_outputs: &[Option<LifecycleProtectedOutputsInputV3>],
     immutable_identity_bindings: &[LifecycleImmutableIdentityBindingInputV4],
+    current_rent_quotes: &[LifecycleCurrentRentQuoteInputV5],
     scratch: &mut [u8],
     output: &mut [u8],
 ) -> Result<(), Error> {
@@ -324,6 +370,12 @@ fn encode_lifecycle_policy_inner_v3_atomic(
                 .checked_mul(PROTECTED_OUTPUT_BYTES)
                 .and_then(|protected_width| width.checked_add(protected_width))
         })
+        .and_then(|width| {
+            current_rent_quotes
+                .len()
+                .checked_mul(CURRENT_RENT_QUOTE_BYTES_V5)
+                .and_then(|quote_width| width.checked_add(quote_width))
+        })
         .and_then(|body| HEADER_BYTES.checked_add(body))
         .ok_or(Error::InvalidLength)?;
     if scratch.len() != expected || output.len() != expected {
@@ -338,14 +390,24 @@ fn encode_lifecycle_policy_inner_v3_atomic(
     }
     if matches!(
         artifact_profile,
-        PROTECTED_OUTPUT_ARTIFACT_PROFILE | SUCCESSOR_ARTIFACT_PROFILE
+        PROTECTED_OUTPUT_ARTIFACT_PROFILE
+            | SUCCESSOR_ARTIFACT_PROFILE
+            | CURRENT_RENT_QUOTE_ARTIFACT_PROFILE_V5
     ) {
         write(scratch, 18, &plan_count.to_le_bytes())?;
     }
-    if artifact_profile == SUCCESSOR_ARTIFACT_PROFILE {
+    if matches!(
+        artifact_profile,
+        SUCCESSOR_ARTIFACT_PROFILE | CURRENT_RENT_QUOTE_ARTIFACT_PROFILE_V5
+    ) {
         let binding_count =
             u16::try_from(immutable_identity_bindings.len()).map_err(|_| Error::InvalidLength)?;
         write(scratch, 20, &binding_count.to_le_bytes())?;
+    }
+    if artifact_profile == CURRENT_RENT_QUOTE_ARTIFACT_PROFILE_V5 {
+        let quote_count =
+            u16::try_from(current_rent_quotes.len()).map_err(|_| Error::InvalidLength)?;
+        write(scratch, 22, &quote_count.to_le_bytes())?;
     }
     let mut cursor = HEADER_BYTES;
     for recipe in recipes {
@@ -368,12 +430,29 @@ fn encode_lifecycle_policy_inner_v3_atomic(
         encode_immutable_identity_binding(*binding, scratch, cursor)?;
         cursor = add(cursor, IMMUTABLE_IDENTITY_BINDING_BYTES)?;
     }
+    for quote in current_rent_quotes {
+        encode_current_rent_quote(*quote, scratch, cursor)?;
+        cursor = add(cursor, CURRENT_RENT_QUOTE_BYTES_V5)?;
+    }
     if cursor != expected {
         return Err(Error::InvalidLength);
     }
     StateLifecyclePolicyV3::decode(scratch)?;
     output.copy_from_slice(scratch);
     Ok(())
+}
+
+fn encode_current_rent_quote(
+    quote: LifecycleCurrentRentQuoteInputV5,
+    output: &mut [u8],
+    offset: usize,
+) -> Result<(), Error> {
+    write(output, offset, &quote.exact_data_len.to_le_bytes())?;
+    write(
+        output,
+        add(offset, 4)?,
+        &quote.scalar_destination.to_le_bytes(),
+    )
 }
 
 fn encode_immutable_identity_binding(
