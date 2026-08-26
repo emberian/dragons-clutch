@@ -435,7 +435,6 @@ fn authenticate_runtime_accounts(state: FoundProjectionStateV2<'_>) -> Result<()
         || state.system_program.key != system_program::ID
         || state.system_program.owner != native_loader::ID
         || !state.system_program.executable
-        || !state.system_program.data.is_empty()
     {
         return Err(Error::AccountAuthority);
     }

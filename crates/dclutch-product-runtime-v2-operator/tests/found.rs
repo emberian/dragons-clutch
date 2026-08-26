@@ -12,7 +12,9 @@ use dclutch_product_runtime_v2_operator::{
         FOUND_ACCOUNT_COUNT_V2, FinalizedReferenceObservationV2, FoundStateV2,
         build_found_instruction_v2, project_found_v2,
     },
-    lifecycle_rent_v2::{LifecycleRentCreateStateV2, build_lifecycle_rent_create_v2},
+    lifecycle_rent_v2::{
+        LifecycleRentCreateStateV2, LifecycleRentOperatorErrorV2, build_lifecycle_rent_create_v2,
+    },
 };
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
@@ -41,6 +43,11 @@ use dclutch_source_contract::{
 use solana_program::sysvar::SysvarSerialize;
 use solana_program::{account_info::AccountInfo, hash::hash, pubkey::Pubkey, rent::Rent};
 use solana_sdk_ids::{bpf_loader_upgradeable, native_loader, system_program, sysvar};
+
+// Agave 4.0.2 exposes this exact immutable NativeLoader metadata on the
+// built-in System Program account. A real finalized observation is never the
+// empty vacant-account body, so every host projection must accept it.
+const AGAVE_4_0_2_SYSTEM_PROGRAM_DATA: &[u8; 14] = b"system_program";
 
 const SLOT: u64 = 919;
 const GENERATION: u64 = 41;
@@ -480,7 +487,13 @@ impl Fixture {
                 &self.registry_program_data,
             ),
             rent: account(sysvar::rent::ID, sysvar::ID, 1, false, &self.rent_data),
-            system_program: account(system_program::ID, native_loader::ID, 1, true, &[]),
+            system_program: account(
+                system_program::ID,
+                native_loader::ID,
+                1,
+                true,
+                AGAVE_4_0_2_SYSTEM_PROGRAM_DATA,
+            ),
             infrastructure_profile: account(
                 self.infrastructure_profile,
                 CORE,
@@ -506,6 +519,100 @@ impl Fixture {
             ),
         }
     }
+}
+
+#[test]
+fn found_and_credit_accept_real_system_metadata_and_refuse_substitution() {
+    let fixture = Fixture::new();
+    let canonical = fixture.state();
+    assert_eq!(
+        canonical.system_program.data,
+        AGAVE_4_0_2_SYSTEM_PROGRAM_DATA.as_slice()
+    );
+    let found = project_found_v2(GENERATION, canonical.projection_state())
+        .expect("real Agave System Program metadata is accepted");
+    build_lifecycle_rent_create_v2(
+        &found,
+        LifecycleRentCreateStateV2 {
+            payer: account(PAYER, system_program::ID, 10_000_000_000, false, &[]),
+            credit_destination: account(fixture.rent_credit, system_program::ID, 0, false, &[]),
+            refund_wallet: account(PAYER, system_program::ID, 10_000_000_000, false, &[]),
+            rent_program: canonical.rent_program,
+            system_program: canonical.system_program,
+            rent: canonical.rent,
+        },
+    )
+    .expect("RentV2 create accepts real System Program metadata");
+
+    let owner_substituted = {
+        let mut state = fixture.state();
+        state.system_program = account(
+            system_program::ID,
+            bpf_loader_upgradeable::ID,
+            1,
+            true,
+            AGAVE_4_0_2_SYSTEM_PROGRAM_DATA,
+        );
+        state
+    };
+    assert_eq!(
+        project_found_v2(GENERATION, owner_substituted.projection_state()),
+        Err(Error::AccountAuthority)
+    );
+
+    let key_substituted = {
+        let mut state = fixture.state();
+        state.system_program = account(
+            Pubkey::new_from_array([0xdd; 32]),
+            native_loader::ID,
+            1,
+            true,
+            AGAVE_4_0_2_SYSTEM_PROGRAM_DATA,
+        );
+        state
+    };
+    assert_eq!(
+        project_found_v2(GENERATION, key_substituted.projection_state()),
+        Err(Error::AccountAuthority)
+    );
+
+    let not_executable = {
+        let mut state = fixture.state();
+        state.system_program = account(
+            system_program::ID,
+            native_loader::ID,
+            1,
+            false,
+            AGAVE_4_0_2_SYSTEM_PROGRAM_DATA,
+        );
+        state
+    };
+    assert_eq!(
+        project_found_v2(GENERATION, not_executable.projection_state()),
+        Err(Error::AccountAuthority)
+    );
+
+    let credit_owner_substituted = build_lifecycle_rent_create_v2(
+        &found,
+        LifecycleRentCreateStateV2 {
+            payer: account(PAYER, system_program::ID, 10_000_000_000, false, &[]),
+            credit_destination: account(fixture.rent_credit, system_program::ID, 0, false, &[]),
+            refund_wallet: account(PAYER, system_program::ID, 10_000_000_000, false, &[]),
+            rent_program: canonical.rent_program,
+            system_program: account(
+                system_program::ID,
+                bpf_loader_upgradeable::ID,
+                1,
+                true,
+                AGAVE_4_0_2_SYSTEM_PROGRAM_DATA,
+            ),
+            rent: canonical.rent,
+        },
+    );
+    assert_eq!(
+        credit_owner_substituted,
+        Err(LifecycleRentOperatorErrorV2::AccountAuthority)
+    );
 }
 
 #[test]
@@ -603,7 +710,7 @@ fn lifecycle_credit_creation_is_derived_from_the_found_projection() {
             rent: fixture.state().rent,
         },
     );
-    assert_eq!(hostile, Err(dclutch_product_runtime_v2_operator::lifecycle_rent_v2::LifecycleRentOperatorErrorV2::InvalidCredit));
+    assert_eq!(hostile, Err(LifecycleRentOperatorErrorV2::InvalidCredit));
 }
 
 #[test]
