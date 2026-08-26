@@ -11,6 +11,10 @@
 
 #[allow(missing_docs)]
 mod generated_descriptor;
+#[allow(missing_docs)]
+mod generated_product_v3;
+/// ProductRuntimeV3 admission and exact representation-custody solvency.
+pub mod product_v3;
 
 pub use generated_descriptor::{
     DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3,

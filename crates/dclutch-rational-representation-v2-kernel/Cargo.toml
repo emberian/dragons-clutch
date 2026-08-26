@@ -7,6 +7,7 @@ rust-version = "1.89"
 description = "Exact no-allocation shard, remainder, and representation-DAG kernel"
 
 [dependencies]
+dclutch-product-payoff-v2-codec = { path = "../dclutch-product-payoff-v2-codec" }
 
 [lints]
 workspace = true
