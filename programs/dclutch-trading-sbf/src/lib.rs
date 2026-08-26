@@ -72,6 +72,14 @@ pub mod outer;
 ))]
 #[allow(dead_code)]
 mod projected_custody_composition_v4;
+/// Exact current-Core Found route and acknowledgment join for projected Markets.
+#[cfg(any(
+    feature = "families",
+    feature = "series-family",
+    feature = "dealer-family"
+))]
+#[allow(dead_code)]
+mod projected_core_composition_v4;
 /// Compact projected-Market execution and persisted-state reconstruction.
 #[cfg(any(
     feature = "families",
