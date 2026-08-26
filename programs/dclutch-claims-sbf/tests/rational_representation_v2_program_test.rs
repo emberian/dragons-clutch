@@ -1,9 +1,11 @@
 //! Real-ELF ProgramTest evidence for RationalRepresentationV2 composition.
 //!
 //! The campaign executes immutable Registry records, Claims economics, real
-//! Token-2022 v11, and canonical Custody. A test-only SBF caller deliberately
-//! refuses after the complete child graph returns to prove transaction-level
-//! rollback across every mutable semantic owner.
+//! Token-2022 v11 with the selected V2 behavior profile, and canonical Custody.
+//! Claim Mints use distinct nonzero/full-domain display decimals while every
+//! conservation assertion remains in raw `u64` base units. A test-only SBF
+//! caller deliberately refuses after the complete child graph returns to prove
+//! transaction-level rollback across every mutable semantic owner.
 
 use std::{env, fs, path::PathBuf, vec::Vec};
 
@@ -99,8 +101,10 @@ const DENOMINATOR: u64 = 10;
 const RECEIPT_SUPPLY: u64 = 7;
 const COEFFICIENTS: [u64; 2] = [3, 7];
 const SHARD_SUPPLIES: [u64; 2] = [30, 70];
-const ACTOR_SHARDS: [u64; 2] = [9, 21];
-const STRUCTURED_SHARDS: [u64; 2] = [21, 49];
+const SHARD_DECIMALS: [u8; 2] = [6, u8::MAX];
+const RECEIPT_DECIMALS: u8 = 19;
+const ACTOR_SHARDS: [u64; 2] = [10, 21];
+const STRUCTURED_SHARDS: [u64; 2] = [20, 49];
 const CUSTODY_EXPECTED_REVISION: u64 = 8;
 const INITIAL_RECIPIENT_ATOMS: u64 = 5;
 const INITIAL_HOARD_ATOMS: u64 = 9;
@@ -779,6 +783,41 @@ fn mint_data(authority: COption<Pubkey>, supply: u64, decimals: u8) -> Vec<u8> {
     bytes
 }
 
+fn claim_mint_data(authority: Pubkey, supply: u64, decimals: u8) -> Vec<u8> {
+    const BASE_ACCOUNT_BYTES: usize = 165;
+    const ACCOUNT_TYPE_OFFSET: usize = BASE_ACCOUNT_BYTES;
+    const TLV_START_OFFSET: usize = 166;
+    const MINT_CLOSE_AUTHORITY_EXTENSION: u16 = 3;
+    const PERMISSIONED_BURN_EXTENSION: u16 = 28;
+
+    let mut bytes = vec![0; TLV_START_OFFSET];
+    SplMint::pack(
+        SplMint {
+            mint_authority: COption::Some(authority),
+            supply,
+            decimals,
+            is_initialized: true,
+            freeze_authority: COption::None,
+        },
+        bytes.get_mut(..SplMint::LEN).expect("base Mint width"),
+    )
+    .expect("pack claim Mint");
+    put(
+        &mut bytes,
+        ACCOUNT_TYPE_OFFSET,
+        &[spl_token_2022_interface::extension::AccountType::Mint as u8],
+    );
+    append_mint_authority_extension(&mut bytes, MINT_CLOSE_AUTHORITY_EXTENSION, authority);
+    append_mint_authority_extension(&mut bytes, PERMISSIONED_BURN_EXTENSION, authority);
+    bytes
+}
+
+fn append_mint_authority_extension(output: &mut Vec<u8>, extension: u16, authority: Pubkey) {
+    output.extend_from_slice(&extension.to_le_bytes());
+    output.extend_from_slice(&32_u16.to_le_bytes());
+    output.extend_from_slice(authority.as_ref());
+}
+
 fn token_account_data(mint: Pubkey, owner: Pubkey, amount: u64) -> Vec<u8> {
     let mut bytes = vec![0; SplAccount::LEN];
     SplAccount::pack(
@@ -817,6 +856,7 @@ fn request_bytes_from(
     actor_balances: [u64; 2],
     structured_balances: [u64; 2],
     assets: [AssetFixture; 2],
+    selected_outcome: u32,
 ) -> Vec<u8> {
     let structured = matches!(
         action,
@@ -824,11 +864,20 @@ fn request_bytes_from(
     );
     let terminal = action == RepresentationActionV2::RedeemTerminal;
     let selected_action = action.selected_outcome();
-    let selected = if selected_action { WINNER } else { u32::MAX };
+    let selected = if selected_action {
+        selected_outcome
+    } else {
+        u32::MAX
+    };
     let asset_count = if selected_action { 1 } else { OUTCOME_COUNT };
     let mut rows = vec![0; usize::try_from(asset_count).expect("asset width") * ASSET_BYTES_V2];
     let requested = if selected_action {
-        vec![(WINNER, *assets.get(1).expect("terminal outcome asset"))]
+        vec![(
+            selected_outcome,
+            *assets
+                .get(usize::try_from(selected_outcome).expect("selected outcome index"))
+                .expect("selected outcome asset"),
+        )]
     } else {
         vec![
             (0, *assets.first().expect("first asset")),
@@ -908,7 +957,7 @@ fn request_bytes_from(
                 RepresentationActionV2::IssueStructured
                 | RepresentationActionV2::UnwrapStructured => ABSENT_REVISION,
             },
-            expected_custody_replay_revision: if terminal {
+            expected_custody_replay_revision: if terminal && selected_outcome == WINNER {
                 CUSTODY_EXPECTED_REVISION
             } else {
                 ABSENT_REVISION
@@ -936,6 +985,15 @@ fn request_bytes(
     action: RepresentationActionV2,
     representation_revision: u64,
 ) -> Vec<u8> {
+    request_bytes_for_selected(fixture, action, representation_revision, WINNER)
+}
+
+fn request_bytes_for_selected(
+    fixture: &Fixture,
+    action: RepresentationActionV2,
+    representation_revision: u64,
+    selected_outcome: u32,
+) -> Vec<u8> {
     let issued = representation_revision == 1 && action == RepresentationActionV2::UnwrapStructured;
     let denominated = action == RepresentationActionV2::Reconstitute;
     request_bytes_from(
@@ -958,14 +1016,25 @@ fn request_bytes(
             RECEIPT_SUPPLY
         },
         if issued {
-            [6, 14]
+            [
+                ACTOR_SHARDS[0] - COEFFICIENTS[0],
+                ACTOR_SHARDS[1] - COEFFICIENTS[1],
+            ]
         } else if denominated {
-            [9, 31]
+            [ACTOR_SHARDS[0], ACTOR_SHARDS[1] + DENOMINATOR]
         } else {
             ACTOR_SHARDS
         },
-        if issued { [24, 56] } else { STRUCTURED_SHARDS },
+        if issued {
+            [
+                STRUCTURED_SHARDS[0] + COEFFICIENTS[0],
+                STRUCTURED_SHARDS[1] + COEFFICIENTS[1],
+            ]
+        } else {
+            STRUCTURED_SHARDS
+        },
         fixture.assets,
+        selected_outcome,
     )
 }
 
@@ -1296,10 +1365,10 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
             &mut test,
             asset.mint,
             TOKEN_PROGRAM_ID,
-            mint_data(
-                COption::Some(representation_authority),
+            claim_mint_data(
+                representation_authority,
                 *SHARD_SUPPLIES.get(index).expect("shard supply"),
-                0,
+                *SHARD_DECIMALS.get(index).expect("shard decimals"),
             ),
         );
         add_account(
@@ -1339,7 +1408,7 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
         &mut test,
         receipt_mint,
         TOKEN_PROGRAM_ID,
-        mint_data(COption::Some(representation_authority), RECEIPT_SUPPLY, 0),
+        claim_mint_data(representation_authority, RECEIPT_SUPPLY, RECEIPT_DECIMALS),
     );
     add_account(
         &mut test,
@@ -1419,6 +1488,7 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
             ACTOR_SHARDS,
             STRUCTURED_SHARDS,
             fixture.assets,
+            WINNER,
         );
         let (custody_request, custody_caller, custody_replay, hoard, custody_authority) =
             terminal_custody(
@@ -1525,6 +1595,11 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
         );
         let outer = outer_caller_authority(&terminal_request, fixture.market, fixture.release_set);
         add_account(&mut test, outer, system_program::ID, Vec::new());
+        let losing_request =
+            request_bytes_for_selected(&fixture, RepresentationActionV2::RedeemTerminal, 0, 0);
+        let losing_outer =
+            outer_caller_authority(&losing_request, fixture.market, fixture.release_set);
+        add_account(&mut test, losing_outer, system_program::ID, Vec::new());
     } else {
         for (action, revision) in [
             (RepresentationActionV2::IssueStructured, 0),
@@ -1540,14 +1615,16 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
     (test, fixture)
 }
 
-fn claims_accounts(
+fn claims_accounts_for_selected(
     fixture: &Fixture,
     action: RepresentationActionV2,
     representation_revision: u64,
+    selected_outcome: u32,
     descriptor_records: Option<(Pubkey, Pubkey)>,
     graph_records: Option<(Pubkey, Pubkey)>,
 ) -> Vec<AccountMeta> {
-    let request = request_bytes(fixture, action, representation_revision);
+    let request =
+        request_bytes_for_selected(fixture, action, representation_revision, selected_outcome);
     let decoded_request =
         RepresentationRequestV2::decode(&request).expect("canonical fixture request");
     let caller = outer_caller_authority(&request, fixture.market, fixture.release_set);
@@ -1691,12 +1768,35 @@ fn wrapper_instruction(
     descriptor_records: Option<(Pubkey, Pubkey)>,
     graph_records: Option<(Pubkey, Pubkey)>,
 ) -> Instruction {
-    let request = request_bytes(fixture, action, representation_revision);
-    let mut accounts = vec![AccountMeta::new_readonly(CLAIMS_PROGRAM_ID, false)];
-    accounts.extend(claims_accounts(
+    wrapper_instruction_for_selected(
         fixture,
         action,
         representation_revision,
+        WINNER,
+        fail_after,
+        descriptor_records,
+        graph_records,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn wrapper_instruction_for_selected(
+    fixture: &Fixture,
+    action: RepresentationActionV2,
+    representation_revision: u64,
+    selected_outcome: u32,
+    fail_after: bool,
+    descriptor_records: Option<(Pubkey, Pubkey)>,
+    graph_records: Option<(Pubkey, Pubkey)>,
+) -> Instruction {
+    let request =
+        request_bytes_for_selected(fixture, action, representation_revision, selected_outcome);
+    let mut accounts = vec![AccountMeta::new_readonly(CLAIMS_PROGRAM_ID, false)];
+    accounts.extend(claims_accounts_for_selected(
+        fixture,
+        action,
+        representation_revision,
+        selected_outcome,
         descriptor_records,
         graph_records,
     ));
@@ -1978,7 +2078,15 @@ fn token_amount(account: &Account) -> u64 {
 }
 
 fn mint_supply(account: &Account) -> u64 {
-    SplMint::unpack(&account.data).expect("Mint").supply
+    SplMint::unpack_from_slice(account.data.get(..SplMint::LEN).expect("base Mint bytes"))
+        .expect("Mint")
+        .supply
+}
+
+fn mint_decimals(account: &Account) -> u8 {
+    SplMint::unpack_from_slice(account.data.get(..SplMint::LEN).expect("base Mint bytes"))
+        .expect("Mint")
+        .decimals
 }
 
 fn assert_account_content_eq(actual: &Account, expected: &Account) {
@@ -2136,6 +2244,10 @@ async fn real_sbf_open_actions_are_exact_and_conserved() {
         live_alt,
     );
     let before = snapshot(&mut context, &fixture).await;
+    assert_eq!(mint_decimals(&before.receipt_mint), RECEIPT_DECIMALS);
+    for (actual, expected) in before.shard_mints.iter().zip(SHARD_DECIMALS) {
+        assert_eq!(mint_decimals(actual), expected);
+    }
 
     let obsolete = submit_v0(
         &mut context,
@@ -2175,7 +2287,7 @@ async fn real_sbf_open_actions_are_exact_and_conserved() {
     assert_eq!(replay_revision(&after_issue.replay), 1);
     assert_eq!(mint_supply(&after_issue.receipt_mint), RECEIPT_SUPPLY + 1);
     assert_eq!(token_amount(&after_issue.actor_receipt), 1);
-    for (index, (actor, structured)) in [(6_u64, 24_u64), (14, 56)].into_iter().enumerate() {
+    for (index, (actor, structured)) in [(7_u64, 23_u64), (14, 56)].into_iter().enumerate() {
         let supply = mint_supply(after_issue.shard_mints.get(index).expect("shard Mint"));
         assert_eq!(
             supply,
@@ -2518,5 +2630,101 @@ async fn real_sbf_terminal_hostile_joins_and_late_child_failure_are_atomic() {
         accepted.compute_units,
         late_result.wire_bytes,
         late_result.compute_units,
+    );
+}
+
+#[tokio::test]
+async fn real_sbf_losing_terminal_burns_raw_shards_without_custody_payout() {
+    let (test, fixture) = fixture(true);
+    let mut context = test.start_with_context().await;
+    let losing = wrapper_instruction_for_selected(
+        &fixture,
+        RepresentationActionV2::RedeemTerminal,
+        0,
+        0,
+        false,
+        None,
+        None,
+    );
+    let payer = context.payer.pubkey();
+    let addresses = lookup_addresses(payer, fixture.actor.pubkey(), std::slice::from_ref(&losing));
+    let (table, lookup_cu) = create_live_lookup_table(&mut context, &addresses).await;
+    let before = snapshot(&mut context, &fixture).await;
+
+    let accepted = submit_v0(&mut context, &fixture, losing.clone(), table, &addresses)
+        .await
+        .expect("zero-payout terminal transaction");
+    if !accepted.accepted {
+        eprintln!(
+            "Zero-payout terminal refusal logs:\n{}",
+            accepted.logs.join("\n")
+        );
+    }
+    assert!(accepted.accepted, "zero-payout terminal must commit");
+    assert!(
+        accepted.wire_bytes <= PACKET_LIMIT,
+        "zero-payout packet overflow"
+    );
+    assert!(
+        accepted
+            .logs
+            .iter()
+            .any(|log| log == &format!("Program {TOKEN_PROGRAM_ID} success")),
+        "real Token-2022 permissioned burn must execute"
+    );
+    assert!(
+        !accepted
+            .logs
+            .iter()
+            .any(|log| log == &format!("Program {CUSTODY_PROGRAM_ID} success")),
+        "zero payout must not invoke Custody"
+    );
+
+    let after = snapshot(&mut context, &fixture).await;
+    assert_eq!(replay_revision(&after.replay), 1);
+    assert_eq!(lbv2_revision(&after.aggregate.data), 1);
+    assert_eq!(lbv2_revision(&after.positions[0].data), 1);
+    assert_eq!(lbv2_position_quantity(&after.positions[0].data, 0), 2);
+    assert_account_content_eq(&after.positions[1], &before.positions[1]);
+    assert_eq!(
+        mint_supply(&after.shard_mints[0]),
+        SHARD_SUPPLIES[0] - DENOMINATOR
+    );
+    assert_eq!(
+        token_amount(&after.actor_shards[0]),
+        ACTOR_SHARDS[0] - DENOMINATOR
+    );
+    assert_eq!(
+        token_amount(&after.structured_shards[0]),
+        STRUCTURED_SHARDS[0]
+    );
+    assert_eq!(
+        token_amount(&after.actor_shards[0]) + token_amount(&after.structured_shards[0]),
+        mint_supply(&after.shard_mints[0]),
+        "zero-payout burn must conserve the raw-unit shard remainder exactly"
+    );
+    assert_account_content_eq(&after.shard_mints[1], &before.shard_mints[1]);
+    assert_account_content_eq(&after.actor_shards[1], &before.actor_shards[1]);
+    assert_account_content_eq(&after.structured_shards[1], &before.structured_shards[1]);
+    assert_account_content_eq(&after.receipt_mint, &before.receipt_mint);
+    assert_account_content_eq(&after.actor_receipt, &before.actor_receipt);
+    assert_account_content_eq(
+        after.custody_replay.as_ref().expect("Custody replay"),
+        before.custody_replay.as_ref().expect("pre Custody replay"),
+    );
+    assert_account_content_eq(
+        after.hoard.as_ref().expect("Hoard"),
+        before.hoard.as_ref().expect("pre Hoard"),
+    );
+    assert_account_content_eq(
+        after.recipient.as_ref().expect("recipient"),
+        before.recipient.as_ref().expect("pre recipient"),
+    );
+    eprintln!(
+        "Rational V2 zero terminal: selected=0, request={}, outer-metas={}, v0={}, CU={}, ALT-CU={lookup_cu:?}",
+        REQUEST_HEADER_BYTES_V2 + ASSET_BYTES_V2,
+        losing.accounts.len(),
+        accepted.wire_bytes,
+        accepted.compute_units,
     );
 }

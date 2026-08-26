@@ -26,7 +26,8 @@ use dclutch_rational_representation_v2_kernel::{
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_token_svm::{
-    ACCOUNT_BYTES, AccountState, COption, MINT_BYTES, Mint, TokenAccount, TokenProgram,
+    TOKEN_2022_PROGRAM_ID, Token2022BehaviorAccountFactsV2, Token2022BehaviorMintFactsV2,
+    Token2022BehaviorProfileV2,
 };
 use solana_program::{
     account_info::AccountInfo,
@@ -39,6 +40,7 @@ use solana_program::{
 };
 use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign};
+use spl_token_2022_interface::extension::permissioned_burn::instruction as permissioned_burn_instruction;
 use spl_token_2022_interface::instruction as token_instruction;
 
 use super::{ClaimsSbfError, reauthenticate};
@@ -388,7 +390,7 @@ fn finalize_execution(
 ) -> Result<(), ProgramError> {
     let request = prepared.request();
     let (post_asset_observations, post_receipt_supply) =
-        post_token_observations(account_infos, base, request)?;
+        post_token_observations(account_infos, base, prepared)?;
     let post_resource_digest = post_resource_digest(account_infos, base, request, custody)?;
     let affine_packet = if matches!(
         request.header().action,
@@ -540,7 +542,7 @@ fn authenticate_base(
         || base.token_program.is_writable
         || base.token_program.is_signer
         || base.token_program.key.to_bytes() != header.token_program
-        || TokenProgram::parse(header.token_program).is_err()
+        || header.token_program != TOKEN_2022_PROGRAM_ID
     {
         return Err(ClaimsSbfError::Accounts.into());
     }
@@ -750,29 +752,29 @@ fn build_projection(
     descriptor: RepresentationDescriptorV2<'_>,
 ) -> Result<Vec<u8>, ProgramError> {
     let header = request.header();
-    let receipt = parse_mint(base.receipt_mint, base.token_program, header.receipt_mint)?;
-    if receipt.supply != header.expected_receipt_supply
-        || receipt.mint_authority != COption::Some(header.representation_authority)
-        || receipt.decimals != 0
-        || receipt.freeze_authority != COption::None
-    {
-        return Err(ClaimsSbfError::Token.into());
-    }
+    let receipt = parse_behavior_mint(
+        base.receipt_mint,
+        base.token_program,
+        header.receipt_mint,
+        header.representation_authority,
+        header.expected_receipt_supply,
+    )?
+    .mint();
     if matches!(
         header.action,
         RepresentationActionV2::IssueStructured | RepresentationActionV2::UnwrapStructured
     ) {
-        let actor_receipt = parse_token_account(
+        parse_behavior_token_account(
             base.actor_receipt,
             base.token_program,
             header.receipt_mint,
             header.actor,
+            if header.action == RepresentationActionV2::UnwrapStructured {
+                header.quantity
+            } else {
+                0
+            },
         )?;
-        if header.action == RepresentationActionV2::UnwrapStructured
-            && actor_receipt.amount < header.quantity
-        {
-            return Err(ClaimsSbfError::Token.into());
-        }
     }
     let projection_width = usize::try_from(header.outcome_count)
         .ok()
@@ -848,25 +850,30 @@ fn build_projection(
             return Err(ClaimsSbfError::Identity.into());
         }
         drop(position);
-        let mint = parse_mint(accounts.mint, base.token_program, identities.shard_mint)?;
-        let actor = parse_token_account(
+        let mint = parse_behavior_mint(
+            accounts.mint,
+            base.token_program,
+            identities.shard_mint,
+            header.representation_authority,
+            requested.expected_shard_supply,
+        )?
+        .mint();
+        let actor = parse_behavior_token_account(
             accounts.actor_token,
             base.token_program,
             identities.shard_mint,
             header.actor,
-        )?;
-        let structured = parse_token_account(
+            requested.expected_actor_shards,
+        )?
+        .account();
+        let structured = parse_behavior_token_account(
             accounts.structured_token,
             base.token_program,
             identities.shard_mint,
             header.representation_authority,
-        )?;
-        if mint.mint_authority != COption::Some(header.representation_authority)
-            || mint.decimals != 0
-            || mint.freeze_authority != COption::None
-        {
-            return Err(ClaimsSbfError::Token.into());
-        }
+            requested.expected_structured_shards,
+        )?
+        .account();
         if requested.expected_shard_supply != mint.supply
             || requested.expected_actor_shards != actor.amount
             || requested.expected_structured_shards != structured.amount
@@ -1011,6 +1018,70 @@ fn token_effect_digest(prepared: PreparedRepresentationV2<'_>) -> Result<[u8; 32
     Ok(hashv(&[b"dclutch:rational-token-effects:v2", &transcript]).to_bytes())
 }
 
+fn pre_effect_mint_facts(
+    base: BaseAccounts<'_, '_>,
+    request: RepresentationRequestV2<'_>,
+    mint: &AccountInfo<'_>,
+) -> Result<Token2022BehaviorMintFactsV2, ProgramError> {
+    parse_behavior_mint(
+        mint,
+        base.token_program,
+        mint.key.to_bytes(),
+        request.header().representation_authority,
+        expected_pre_mint_supply(request, mint.key.to_bytes())?,
+    )
+}
+
+fn expected_pre_mint_supply(
+    request: RepresentationRequestV2<'_>,
+    mint: [u8; 32],
+) -> Result<u64, ProgramError> {
+    let header = request.header();
+    let mut expected = if mint == header.receipt_mint {
+        Some(header.expected_receipt_supply)
+    } else {
+        None
+    };
+    let mut row = 0_u32;
+    while row < header.asset_count {
+        let asset = request
+            .asset(row)
+            .map_err(|_| ClaimsSbfError::Instruction)?;
+        if asset.shard_mint == mint {
+            if expected.is_some() {
+                return Err(ClaimsSbfError::Token.into());
+            }
+            expected = Some(asset.expected_shard_supply);
+        }
+        row = row.checked_add(1).ok_or(ClaimsSbfError::Token)?;
+    }
+    expected.ok_or_else(|| ClaimsSbfError::Token.into())
+}
+
+fn expected_post_mint_supply(
+    prepared: PreparedRepresentationV2<'_>,
+    mint: [u8; 32],
+) -> Result<u64, ProgramError> {
+    let mut expected = expected_pre_mint_supply(prepared.request(), mint)?;
+    for effect in prepared.token_effects() {
+        let effect = effect.map_err(|_| ClaimsSbfError::Representation)?;
+        if effect.mint != mint {
+            continue;
+        }
+        expected = match effect.style {
+            TokenEffectStyleV2::MintReceipt | TokenEffectStyleV2::MintShard => expected
+                .checked_add(effect.amount)
+                .ok_or(ClaimsSbfError::Token)?,
+            TokenEffectStyleV2::BurnReceipt | TokenEffectStyleV2::BurnShard => expected
+                .checked_sub(effect.amount)
+                .ok_or(ClaimsSbfError::Token)?,
+            TokenEffectStyleV2::TransferShardToStructured
+            | TokenEffectStyleV2::TransferShardFromStructured => expected,
+        };
+    }
+    Ok(expected)
+}
+
 fn execute_token_effects<'accounts, 'info>(
     program_id: &Pubkey,
     account_infos: &'accounts [AccountInfo<'info>],
@@ -1045,6 +1116,8 @@ fn execute_token_effects<'accounts, 'info>(
                     accounts.structured_token,
                     base.actor,
                 )?;
+                let decimals =
+                    pre_effect_mint_facts(base, request, accounts.mint)?.display_decimals();
                 let instruction = token_instruction::transfer_checked(
                     base.token_program.key,
                     accounts.actor_token.key,
@@ -1053,7 +1126,7 @@ fn execute_token_effects<'accounts, 'info>(
                     base.actor.key,
                     &[],
                     effect.amount,
-                    0,
+                    decimals,
                 )
                 .map_err(|_| ClaimsSbfError::Token)?;
                 invoke(
@@ -1079,6 +1152,8 @@ fn execute_token_effects<'accounts, 'info>(
                     accounts.actor_token,
                     base.representation_authority,
                 )?;
+                let decimals =
+                    pre_effect_mint_facts(base, request, accounts.mint)?.display_decimals();
                 let instruction = token_instruction::transfer_checked(
                     base.token_program.key,
                     accounts.structured_token.key,
@@ -1087,7 +1162,7 @@ fn execute_token_effects<'accounts, 'info>(
                     base.representation_authority.key,
                     &[],
                     effect.amount,
-                    0,
+                    decimals,
                 )
                 .map_err(|_| ClaimsSbfError::Token)?;
                 invoke_signed(
@@ -1111,6 +1186,8 @@ fn execute_token_effects<'accounts, 'info>(
                     base.actor_receipt,
                     base.representation_authority,
                 )?;
+                let decimals =
+                    pre_effect_mint_facts(base, request, base.receipt_mint)?.display_decimals();
                 let instruction = token_instruction::mint_to_checked(
                     base.token_program.key,
                     base.receipt_mint.key,
@@ -1118,7 +1195,7 @@ fn execute_token_effects<'accounts, 'info>(
                     base.representation_authority.key,
                     &[],
                     effect.amount,
-                    0,
+                    decimals,
                 )
                 .map_err(|_| ClaimsSbfError::Token)?;
                 invoke_signed(
@@ -1141,8 +1218,15 @@ fn execute_token_effects<'accounts, 'info>(
                     base.claims_program,
                     base.actor,
                 )?;
+                let decimals =
+                    pre_effect_mint_facts(base, request, base.receipt_mint)?.display_decimals();
                 burn(
-                    base,
+                    PermissionedBurnContextV2 {
+                        program_id: *program_id,
+                        base,
+                        descriptor: header.descriptor_id,
+                        decimals,
+                    },
                     base.actor_receipt,
                     base.receipt_mint,
                     base.actor,
@@ -1158,8 +1242,15 @@ fn execute_token_effects<'accounts, 'info>(
                     base.claims_program,
                     base.actor,
                 )?;
+                let decimals =
+                    pre_effect_mint_facts(base, request, accounts.mint)?.display_decimals();
                 burn(
-                    base,
+                    PermissionedBurnContextV2 {
+                        program_id: *program_id,
+                        base,
+                        descriptor: header.descriptor_id,
+                        decimals,
+                    },
                     accounts.actor_token,
                     accounts.mint,
                     base.actor,
@@ -1175,6 +1266,8 @@ fn execute_token_effects<'accounts, 'info>(
                     accounts.actor_token,
                     base.representation_authority,
                 )?;
+                let decimals =
+                    pre_effect_mint_facts(base, request, accounts.mint)?.display_decimals();
                 let instruction = token_instruction::mint_to_checked(
                     base.token_program.key,
                     accounts.mint.key,
@@ -1182,7 +1275,7 @@ fn execute_token_effects<'accounts, 'info>(
                     base.representation_authority.key,
                     &[],
                     effect.amount,
-                    0,
+                    decimals,
                 )
                 .map_err(|_| ClaimsSbfError::Token)?;
                 invoke_signed(
@@ -1202,31 +1295,56 @@ fn execute_token_effects<'accounts, 'info>(
     Ok(())
 }
 
-fn burn<'accounts, 'info>(
+#[derive(Clone, Copy)]
+struct PermissionedBurnContextV2<'accounts, 'info> {
+    program_id: Pubkey,
     base: BaseAccounts<'accounts, 'info>,
+    descriptor: [u8; 32],
+    decimals: u8,
+}
+
+fn burn<'accounts, 'info>(
+    context: PermissionedBurnContextV2<'accounts, 'info>,
     source: &AccountInfo<'info>,
     mint: &AccountInfo<'info>,
     authority: &AccountInfo<'info>,
     amount: u64,
 ) -> Result<(), ProgramError> {
-    let instruction = token_instruction::burn_checked(
+    let base = context.base;
+    let instruction = permissioned_burn_instruction::burn_checked(
         base.token_program.key,
         source.key,
         mint.key,
+        base.representation_authority.key,
         authority.key,
         &[],
         amount,
-        0,
+        context.decimals,
     )
     .map_err(|_| ClaimsSbfError::Token)?;
-    invoke(
+    let (_, bump) = Pubkey::find_program_address(
+        &[
+            RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
+            &context.descriptor,
+        ],
+        &context.program_id,
+    );
+    let bump_seed = [bump];
+    let signer = [
+        RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
+        context.descriptor.as_slice(),
+        bump_seed.as_slice(),
+    ];
+    invoke_signed(
         &instruction,
         &[
             source.clone(),
             mint.clone(),
+            base.representation_authority.clone(),
             authority.clone(),
             base.token_program.clone(),
         ],
+        &[&signer],
     )
     .map_err(|_| ClaimsSbfError::Token.into())
 }
@@ -1511,10 +1629,18 @@ fn authenticate_terminal_privileges(
 fn post_token_observations(
     account_infos: &[AccountInfo<'_>],
     base: BaseAccounts<'_, '_>,
-    request: RepresentationRequestV2<'_>,
+    prepared: PreparedRepresentationV2<'_>,
 ) -> Result<(Vec<u8>, u64), ProgramError> {
+    let request = prepared.request();
     let header = request.header();
-    let receipt = parse_mint(base.receipt_mint, base.token_program, header.receipt_mint)?;
+    let receipt = parse_behavior_mint(
+        base.receipt_mint,
+        base.token_program,
+        header.receipt_mint,
+        header.representation_authority,
+        expected_post_mint_supply(prepared, header.receipt_mint)?,
+    )?
+    .mint();
     let capacity = usize::try_from(header.asset_count)
         .map_err(|_| ClaimsSbfError::Token)?
         .checked_mul(24)
@@ -1526,19 +1652,30 @@ fn post_token_observations(
             .asset(row)
             .map_err(|_| ClaimsSbfError::Instruction)?;
         let accounts = asset_accounts(account_infos, row)?;
-        let mint = parse_mint(accounts.mint, base.token_program, requested.shard_mint)?;
-        let actor = parse_token_account(
+        let mint = parse_behavior_mint(
+            accounts.mint,
+            base.token_program,
+            requested.shard_mint,
+            header.representation_authority,
+            expected_post_mint_supply(prepared, requested.shard_mint)?,
+        )?
+        .mint();
+        let actor = parse_behavior_token_account(
             accounts.actor_token,
             base.token_program,
             requested.shard_mint,
             header.actor,
-        )?;
-        let structured = parse_token_account(
+            0,
+        )?
+        .account();
+        let structured = parse_behavior_token_account(
             accounts.structured_token,
             base.token_program,
             requested.shard_mint,
             header.representation_authority,
-        )?;
+            0,
+        )?
+        .account();
         output.extend_from_slice(&mint.supply.to_le_bytes());
         output.extend_from_slice(&actor.amount.to_le_bytes());
         output.extend_from_slice(&structured.amount.to_le_bytes());
@@ -1625,54 +1762,50 @@ fn commit_replay(
     Ok(())
 }
 
-fn parse_mint(
+fn parse_behavior_mint(
     account: &AccountInfo<'_>,
     token_program: &AccountInfo<'_>,
     expected: [u8; 32],
-) -> Result<Mint, ProgramError> {
+    expected_controller: [u8; 32],
+    expected_base_supply: u64,
+) -> Result<Token2022BehaviorMintFactsV2, ProgramError> {
     if account.key.to_bytes() != expected || account.owner != token_program.key {
         return Err(ClaimsSbfError::Token.into());
     }
     let data = account
         .try_borrow_data()
         .map_err(|_| ClaimsSbfError::Accounts)?;
-    if data.len() != MINT_BYTES {
-        return Err(ClaimsSbfError::Token.into());
-    }
-    let mint = Mint::parse(&data).map_err(|_| ClaimsSbfError::Token)?;
-    if !mint.is_initialized {
-        return Err(ClaimsSbfError::Token.into());
-    }
-    Ok(mint)
+    Token2022BehaviorProfileV2::check_mint(
+        token_program.key.to_bytes(),
+        account.key.to_bytes(),
+        &data,
+        expected_controller,
+        expected_base_supply,
+    )
+    .map_err(|_| ClaimsSbfError::Token.into())
 }
 
-fn parse_token_account(
+fn parse_behavior_token_account(
     account: &AccountInfo<'_>,
     token_program: &AccountInfo<'_>,
     mint: [u8; 32],
     owner: [u8; 32],
-) -> Result<TokenAccount, ProgramError> {
+    minimum_base_amount: u64,
+) -> Result<Token2022BehaviorAccountFactsV2, ProgramError> {
     if account.owner != token_program.key {
         return Err(ClaimsSbfError::Token.into());
     }
     let data = account
         .try_borrow_data()
         .map_err(|_| ClaimsSbfError::Accounts)?;
-    if data.len() != ACCOUNT_BYTES {
-        return Err(ClaimsSbfError::Token.into());
-    }
-    let token = TokenAccount::parse(&data).map_err(|_| ClaimsSbfError::Token)?;
-    if token.mint != mint
-        || token.owner != owner
-        || token.state != AccountState::Initialized
-        || token.native_reserve != COption::None
-        || token.delegate != COption::None
-        || token.delegated_amount != 0
-        || token.close_authority != COption::None
-    {
-        return Err(ClaimsSbfError::Token.into());
-    }
-    Ok(token)
+    Token2022BehaviorProfileV2::check_account(
+        token_program.key.to_bytes(),
+        &data,
+        mint,
+        owner,
+        minimum_base_amount,
+    )
+    .map_err(|_| ClaimsSbfError::Token.into())
 }
 
 fn require_effect_accounts(
