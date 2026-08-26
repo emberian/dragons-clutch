@@ -8,7 +8,7 @@
 //! physical executor and writer.
 
 use dclutch_account_profile_contract::{
-    lifecycle_v3::StateLifecyclePolicyV3, v2::AccountProfileV2,
+    lifecycle_v3::StateLifecyclePolicyV4, v2::AccountProfileV2,
 };
 use dclutch_capability_program_contract::{
     hot_v3::{
@@ -58,7 +58,7 @@ use dclutch_product_runtime_v2::{
 };
 use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
 use dclutch_release_set_contract::ArtifactReleaseIdV1;
-use dclutch_request_profile_contract::{ProjectionRegistersV1, RequestProfileV1, project_atomic};
+use dclutch_request_profile_contract::{RequestProfileV1, validate_request};
 use dclutch_transition_vm::v3::ProgramV3 as TransitionProgramV3;
 use sha2::{Digest, Sha256};
 
@@ -134,7 +134,7 @@ pub struct GeneralArtifactBundleV3<'a> {
     /// Runtime-width account projection.
     pub account_profile: AccountProfileV2<'a>,
     /// Trading-owned lifecycle policy.
-    pub lifecycle_policy: StateLifecyclePolicyV3<'a>,
+    pub lifecycle_policy: StateLifecyclePolicyV4<'a>,
     /// Exact action-specific request program.
     pub request_profile: RequestProfileV1<'a>,
     /// Exact execution strategy.
@@ -240,7 +240,7 @@ pub fn authenticate_general_artifacts_v3<'a>(
         descriptor.derivation_policy().to_bytes(),
         artifacts.lifecycle_policy,
     )?;
-    let lifecycle_policy = StateLifecyclePolicyV3::decode_selected(
+    let lifecycle_policy = StateLifecyclePolicyV4::decode_selected(
         descriptor.derivation_policy().to_bytes(),
         digest(artifacts.lifecycle_policy),
         artifacts.lifecycle_policy,
@@ -389,36 +389,18 @@ fn execute_request_profile(
     {
         return Err(GeneralArtifactErrorV3::RequestProfile);
     }
-    const MAX_TEST_SCALARS: usize = GENERAL_HOT_COMMON_SCALARS_V3 as usize;
-    const MAX_TEST_IDENTITIES: usize = GENERAL_HOT_COMMON_IDENTITIES_V3 as usize;
     let scalars = usize::from(profile.common_scalar_count());
     let identities = usize::from(profile.common_identity_count());
-    if scalars != MAX_TEST_SCALARS || identities != MAX_TEST_IDENTITIES {
+    if scalars != GENERAL_HOT_COMMON_SCALARS_V3 as usize
+        || identities != GENERAL_HOT_COMMON_IDENTITIES_V3 as usize
+    {
         return Err(GeneralArtifactErrorV3::Geometry);
     }
-    // RequestProfile has no item operations, so the affine item bank is
-    // preserved without allocating it here. Generic Trading executes the full
-    // runtime bank after AccountProfile establishes the authenticated width.
-    let input_scalars = [0_u64; MAX_TEST_SCALARS];
-    let input_identities = [[0_u8; 32]; MAX_TEST_IDENTITIES];
-    let mut scratch_scalars = input_scalars;
-    let mut scratch_identities = input_identities;
-    let mut output_scalars = input_scalars;
-    let mut output_identities = input_identities;
-    project_atomic(
-        profile,
-        0,
-        request,
-        ProjectionRegistersV1 {
-            input_scalars: &input_scalars,
-            input_identities: &input_identities,
-            scratch_scalars: &mut scratch_scalars,
-            scratch_identities: &mut scratch_identities,
-            output_scalars: &mut output_scalars,
-            output_identities: &mut output_identities,
-        },
-    )
-    .map_err(|_| GeneralArtifactErrorV3::RequestProfile)
+    // Artifact admission consumes no projected bank. The semantic owner walks
+    // every selected Require operation and every Project read without building
+    // three redundant copies of the 1.9KiB General register prefix. Generic
+    // Trading still performs the failure-atomic projection before execution.
+    validate_request(profile, 0, request).map_err(|_| GeneralArtifactErrorV3::RequestProfile)
 }
 
 fn validate_geometry(
@@ -572,10 +554,11 @@ fn validate_routes(action: Action, effect: EffectProgramV3<'_>) -> Result<()> {
     match action {
         Action::Consider | Action::Freeze => require_route_count(effect, 0),
         Action::InitializeSettlement => {
-            require_route_count(effect, 2)?;
+            require_route_count(effect, 3)?;
+            require_position_route(effect, 0, ProtocolPositionActionV2::Admit)?;
             require_custody_route(
                 effect,
-                0,
+                1,
                 OperationV1::InitializeReplay,
                 CompartmentV1::None,
                 CompartmentV1::None,
@@ -583,61 +566,59 @@ fn validate_routes(action: Action, effect: EffectProgramV3<'_>) -> Result<()> {
             )?;
             require_custody_route(
                 effect,
-                1,
+                2,
                 OperationV1::OpenVault,
                 CompartmentV1::None,
                 CompartmentV1::Settlement,
-                Some((FixedRole::Custody, 0)),
+                Some((FixedRole::Custody, 1)),
             )
         }
         Action::Collect => {
-            require_route_count(effect, 3)?;
-            require_position_route(effect, 0, ProtocolPositionActionV2::Admit)?;
-            require_affine_route(effect, 1, 2)?;
+            require_route_count(effect, 2)?;
+            require_affine_route(effect, 0, 2)?;
             require_custody_transfer_route(
                 effect,
-                2,
+                1,
                 CompartmentV1::External,
                 CompartmentV1::Settlement,
             )
         }
         Action::Materialize => {
-            require_route_count(effect, 3)?;
-            require_position_route(effect, 0, ProtocolPositionActionV2::Admit)?;
-            require_affine_route(effect, 1, 1)?;
+            require_route_count(effect, 2)?;
+            require_affine_route(effect, 0, 1)?;
             // The exact direction is selected from the authenticated
             // complete-set move: Mint is Settlement -> Hoard, Merge is the
             // inverse.  Both use one canonical Transfer template and the
             // admitted EffectProgram patches the two typed compartment bytes.
             require_custody_transfer_route_either(
                 effect,
-                2,
+                1,
                 (CompartmentV1::Settlement, CompartmentV1::HoardPrincipal),
                 (CompartmentV1::HoardPrincipal, CompartmentV1::Settlement),
             )
         }
         Action::Distribute => {
-            require_route_count(effect, 3)?;
+            require_route_count(effect, 2)?;
             require_affine_route(effect, 0, 2)?;
-            require_position_route(effect, 1, ProtocolPositionActionV2::Close)?;
             require_custody_transfer_route(
                 effect,
-                2,
+                1,
                 CompartmentV1::Settlement,
                 CompartmentV1::External,
             )
         }
         Action::Close => {
-            require_route_count(effect, 3)?;
+            require_route_count(effect, 4)?;
             require_custody_transfer_route(
                 effect,
                 0,
                 CompartmentV1::Settlement,
                 CompartmentV1::External,
             )?;
+            require_position_route(effect, 1, ProtocolPositionActionV2::Close)?;
             require_custody_route(
                 effect,
-                1,
+                2,
                 OperationV1::CloseVault,
                 CompartmentV1::Settlement,
                 CompartmentV1::None,
@@ -645,11 +626,11 @@ fn validate_routes(action: Action, effect: EffectProgramV3<'_>) -> Result<()> {
             )?;
             require_custody_route(
                 effect,
-                2,
+                3,
                 OperationV1::CloseReplay,
                 CompartmentV1::None,
                 CompartmentV1::None,
-                Some((FixedRole::Custody, 1)),
+                Some((FixedRole::Custody, 2)),
             )
         }
     }
@@ -904,115 +885,158 @@ mod tests {
 
     fn account_profile() -> Vec<u8> {
         use dclutch_account_profile_contract::v2::{
-            HEADER_BYTES, OPERATION_BYTES, RULE_BYTES, SELECTED_WINDOW_ARTIFACT_PROFILE,
+            AccountPrestateV2, TrustedEnvironmentV2,
+            encode::{
+                AccountAliasInputV2, AccountCoordinateV2, AccountEffectPermissionsV2,
+                AccountOperationInputV2, AccountPrivilegesV2, AccountRuleInputV2,
+                AccountRuleWithPrestateInputV2, IdentityCoordinateV2, RegisterGeometryV2,
+                ScalarCoordinateV2,
+                encode_account_profile_with_adapter_authenticated_variable_data_v2_atomic,
+            },
         };
 
-        const FIXED_ACCOUNTS: usize = HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3;
-        let operations = 1_usize;
-        let mut output =
-            vec![0_u8; HEADER_BYTES + FIXED_ACCOUNTS * RULE_BYTES + operations * OPERATION_BYTES];
-        put(&mut output, 0, &dclutch_account_profile_contract::v2::MAGIC);
-        put(
-            &mut output,
-            8,
-            &dclutch_account_profile_contract::v2::VERSION.to_le_bytes(),
-        );
-        put(
-            &mut output,
-            10,
-            &SELECTED_WINDOW_ARTIFACT_PROFILE.to_le_bytes(),
-        );
-        put(
-            &mut output,
-            12,
-            &u16::try_from(FIXED_ACCOUNTS)
-                .expect("fixed accounts")
-                .to_le_bytes(),
-        );
-        put(&mut output, 16, &1_u16.to_le_bytes());
-        put(
-            &mut output,
-            20,
-            &u16::try_from(GENERAL_HOT_COMMON_SCALARS_V3)
-                .expect("common scalars")
-                .to_le_bytes(),
-        );
-        put(
-            &mut output,
-            22,
-            &u16::try_from(GENERAL_HOT_ITEM_SCALAR_STRIDE_V3)
-                .expect("item scalars")
-                .to_le_bytes(),
-        );
-        put(
-            &mut output,
-            24,
-            &u16::try_from(GENERAL_HOT_COMMON_IDENTITIES_V3)
-                .expect("common identities")
-                .to_le_bytes(),
-        );
-        for (coordinate, privileges, base, stride) in [
-            (
-                HOT_RUNTIME_ROOT_COORDINATE_V3,
-                0x02,
-                dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1
-                    + GENERAL_ROOT_BYTES_V2,
+        const FIXED_ACCOUNTS: usize = 8;
+        let readonly = AccountPrivilegesV2::new(false, false, false);
+        let writable = AccountPrivilegesV2::new(false, true, false);
+        let signer_writable = AccountPrivilegesV2::new(true, true, false);
+        let none = AccountEffectPermissionsV2::new(false, false, false);
+        let state_effects = AccountEffectPermissionsV2::new(false, true, true);
+        let exact =
+            |privileges, effects, data_length, data_item_stride| AccountRuleWithPrestateInputV2 {
+                rule: AccountRuleInputV2 {
+                    privileges,
+                    effect_permissions: effects,
+                    alias: AccountAliasInputV2::SelfCoordinate,
+                    data_length,
+                    data_item_stride,
+                },
+                prestate: AccountPrestateV2::Exact,
+            };
+        let rules = [
+            exact(
+                writable,
+                none,
+                u32::try_from(
+                    dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1
+                        + GENERAL_ROOT_BYTES_V2,
+                )
+                .expect("root width"),
                 0,
             ),
-            (
-                HOT_RUNTIME_CONFIG_COORDINATE_V3,
-                0,
-                dclutch_general_config_contract::v3::GENERAL_CONFIG_BYTES_V3,
-                0,
-            ),
-            (
-                HOT_RUNTIME_PRODUCT_COORDINATE_V3,
-                0,
-                PRODUCT_RECORD_BYTES_V2,
+            exact(
+                readonly,
+                none,
+                u32::try_from(dclutch_general_config_contract::v3::GENERAL_CONFIG_BYTES_V3)
+                    .expect("config width"),
                 0,
             ),
-            (
-                HOT_RUNTIME_PORTFOLIO_COORDINATE_V3,
+            exact(
+                readonly,
+                none,
+                u32::try_from(PRODUCT_RECORD_BYTES_V2).expect("Product width"),
                 0,
-                PORTFOLIO_HEADER_BYTES,
-                PORTFOLIO_COEFFICIENT_BYTES,
             ),
-            (HOT_RUNTIME_LINKED_BASIS_COORDINATE_V3, 0, 256, 0),
-        ] {
-            let rule = HEADER_BYTES + coordinate * RULE_BYTES;
-            set_byte(&mut output, rule, privileges);
-            put(
-                &mut output,
-                rule + 8,
-                &u32::try_from(base).expect("base width").to_le_bytes(),
-            );
-            put(
-                &mut output,
-                rule + 12,
-                &u32::try_from(stride).expect("stride width").to_le_bytes(),
-            );
-        }
-        let operation = HEADER_BYTES + FIXED_ACCOUNTS * RULE_BYTES;
-        set_byte(&mut output, operation, 8);
-        put(
+            exact(
+                readonly,
+                none,
+                u32::try_from(PORTFOLIO_HEADER_BYTES).expect("portfolio width"),
+                u32::try_from(PORTFOLIO_COEFFICIENT_BYTES).expect("coefficient width"),
+            ),
+            AccountRuleWithPrestateInputV2 {
+                rule: AccountRuleInputV2 {
+                    privileges: readonly,
+                    effect_permissions: none,
+                    alias: AccountAliasInputV2::SelfCoordinate,
+                    data_length: 256,
+                    data_item_stride: 0,
+                },
+                prestate: AccountPrestateV2::AdapterAuthenticatedVariableData,
+            },
+            AccountRuleWithPrestateInputV2 {
+                rule: AccountRuleInputV2 {
+                    privileges: writable,
+                    effect_permissions: state_effects,
+                    alias: AccountAliasInputV2::SelfCoordinate,
+                    data_length: u32::try_from(
+                        crate::local_state_v3::GENERAL_LOCAL_STATE_HEADER_BYTES_V3
+                            + crate::runtime_selection::RUNTIME_SELECTION_CURSOR_BYTES_V2,
+                    )
+                    .expect("selection state width"),
+                    data_item_stride: 0,
+                },
+                prestate: AccountPrestateV2::LifecycleBound,
+            },
+            exact(signer_writable, none, 0, 0),
+            exact(readonly, none, 0, 0),
+        ];
+        assert_eq!(rules.len(), FIXED_ACCOUNTS);
+        let operations = [
+            AccountOperationInputV2::ProjectTailCountU32 {
+                account: AccountCoordinateV2::fixed(
+                    u16::try_from(HOT_RUNTIME_PORTFOLIO_COORDINATE_V3)
+                        .expect("portfolio coordinate"),
+                ),
+                destination: ScalarCoordinateV2::common(GENERAL_PRODUCT_TAIL_COUNT_SCALAR_V3),
+                data_offset: u32::try_from(PORTFOLIO_COEFFICIENT_COUNT_OFFSET)
+                    .expect("portfolio count offset"),
+            },
+            AccountOperationInputV2::ProjectDataU8 {
+                account: AccountCoordinateV2::fixed(
+                    crate::state_artifacts_v3::GENERAL_PRIMARY_STATE_ACCOUNT_V3,
+                ),
+                destination: ScalarCoordinateV2::common(
+                    u16::try_from(crate::hot_candidate_v3::scalar::PRIMARY_BUMP_OBSERVATION)
+                        .expect("bump observation"),
+                ),
+                data_offset: crate::local_state_v3::GeneralLocalStateLayoutV3::bump(),
+            },
+            AccountOperationInputV2::ProjectDataU64 {
+                account: AccountCoordinateV2::fixed(
+                    crate::state_artifacts_v3::GENERAL_PRIMARY_STATE_ACCOUNT_V3,
+                ),
+                destination: ScalarCoordinateV2::common(
+                    u16::try_from(crate::hot_candidate_v3::scalar::PRIMARY_PRINCIPAL_OBSERVATION)
+                        .expect("principal observation"),
+                ),
+                data_offset: crate::local_state_v3::GeneralLocalStateLayoutV3::rent_principal(),
+            },
+            AccountOperationInputV2::ProjectDataIdentity {
+                account: AccountCoordinateV2::fixed(
+                    crate::state_artifacts_v3::GENERAL_PRIMARY_STATE_ACCOUNT_V3,
+                ),
+                destination: IdentityCoordinateV2::common(
+                    u16::try_from(
+                        crate::hot_candidate_v3::identity::PRIMARY_BENEFICIARY_OBSERVATION,
+                    )
+                    .expect("beneficiary observation"),
+                ),
+                data_offset: crate::local_state_v3::GeneralLocalStateLayoutV3::beneficiary(),
+            },
+        ];
+        let bytes = dclutch_account_profile_contract::v2::HEADER_BYTES
+            + rules.len() * dclutch_account_profile_contract::v2::RULE_BYTES
+            + operations.len() * dclutch_account_profile_contract::v2::OPERATION_BYTES;
+        let mut scratch = vec![0_u8; bytes];
+        let mut output = vec![0x55_u8; bytes];
+        encode_account_profile_with_adapter_authenticated_variable_data_v2_atomic(
+            TrustedEnvironmentV2::None,
+            &rules,
+            &[],
+            &operations,
+            &[],
+            RegisterGeometryV2 {
+                common_scalars: u16::try_from(GENERAL_HOT_COMMON_SCALARS_V3)
+                    .expect("common scalars"),
+                item_scalar_stride: u16::try_from(GENERAL_HOT_ITEM_SCALAR_STRIDE_V3)
+                    .expect("item scalars"),
+                common_identities: u16::try_from(GENERAL_HOT_COMMON_IDENTITIES_V3)
+                    .expect("common identities"),
+                item_identity_stride: 0,
+            },
+            &mut scratch,
             &mut output,
-            operation + 2,
-            &u16::try_from(HOT_RUNTIME_PORTFOLIO_COORDINATE_V3)
-                .expect("portfolio coordinate")
-                .to_le_bytes(),
-        );
-        put(
-            &mut output,
-            operation + 6,
-            &GENERAL_PRODUCT_TAIL_COUNT_SCALAR_V3.to_le_bytes(),
-        );
-        put(
-            &mut output,
-            operation + 8,
-            &u32::try_from(PORTFOLIO_COEFFICIENT_COUNT_OFFSET)
-                .expect("portfolio count offset")
-                .to_le_bytes(),
-        );
+        )
+        .expect("Profile7 account artifact");
         output
     }
 
@@ -1021,34 +1045,16 @@ mod tests {
     }
 
     fn lifecycle_policy_for(action: Action) -> Vec<u8> {
-        use dclutch_account_profile_contract::lifecycle_v3::{
-            ACTION_PLAN_BYTES, ARTIFACT_PROFILE, HEADER_BYTES, MAGIC, RECIPE_BYTES, SEED_BYTES,
-            VERSION,
-        };
-
-        let mut output = vec![0_u8; HEADER_BYTES + RECIPE_BYTES + SEED_BYTES + ACTION_PLAN_BYTES];
-        put(&mut output, 0, &MAGIC);
-        put(&mut output, 8, &VERSION.to_le_bytes());
-        put(&mut output, 10, &ARTIFACT_PROFILE.to_le_bytes());
-        put(&mut output, 12, &1_u16.to_le_bytes());
-        put(&mut output, 14, &1_u16.to_le_bytes());
-        put(&mut output, 16, &1_u16.to_le_bytes());
-        let recipe = HEADER_BYTES;
-        set_byte(&mut output, recipe + 6, 1);
-        put(
+        let bytes = crate::state_artifacts_v3::general_state_lifecycle_bytes_v3(action)
+            .expect("lifecycle width");
+        let mut scratch = vec![0_u8; bytes];
+        let mut output = vec![0x55_u8; bytes];
+        crate::state_artifacts_v3::encode_general_state_lifecycle_v3_atomic(
+            action,
+            &mut scratch,
             &mut output,
-            recipe + 8,
-            &u32::try_from(GENERAL_ROOT_BYTES_V2)
-                .expect("root bytes")
-                .to_le_bytes(),
-        );
-        let seed = HEADER_BYTES + RECIPE_BYTES;
-        set_byte(&mut output, seed, 3);
-        set_byte(&mut output, seed + 1, 1);
-        let plan = HEADER_BYTES + RECIPE_BYTES + SEED_BYTES;
-        put(&mut output, plan, &(action as u32).to_le_bytes());
-        set_byte(&mut output, plan + 4, 2);
-        set_byte(&mut output, plan + 8, u8::MAX);
+        )
+        .expect("successor lifecycle");
         output
     }
 
@@ -1093,63 +1099,26 @@ mod tests {
     }
 
     fn effect_for(action: Action) -> Vec<u8> {
-        let settlement = matches!(
+        use crate::effect_artifacts_v3::{
+            GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3, encode_general_effect_program_v3_atomic,
+            general_effect_instruction_count_v3, general_effect_program_bytes_v3,
+            general_effect_template_bytes_v3,
+        };
+
+        let (fixed, item) = general_effect_instruction_count_v3(action);
+        let mut instructions = vec![GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3; fixed + item];
+        let mut templates = vec![0_u8; general_effect_template_bytes_v3(action)];
+        let bytes = general_effect_program_bytes_v3(action).expect("effect width");
+        let mut scratch = vec![0_u8; bytes];
+        let mut output = vec![0x55_u8; bytes];
+        encode_general_effect_program_v3_atomic(
             action,
-            Action::Collect | Action::Materialize | Action::Distribute | Action::Close
-        );
-        let route_count = if settlement { 2_u16 } else { 0 };
-        let route_bytes = usize::from(route_count) * dclutch_effect_kernel::v3::ROUTE_BYTES;
-        let request_bytes = usize::from(route_count);
-        let mut output = vec![0_u8; dclutch_effect_kernel::v3::HEADER_BYTES];
-        output.resize(
-            dclutch_effect_kernel::v3::HEADER_BYTES + route_bytes + request_bytes,
-            0,
-        );
-        put(&mut output, 0, &dclutch_effect_kernel::v3::MAGIC);
-        set_byte(&mut output, 4, dclutch_effect_kernel::v3::VERSION);
-        put(&mut output, 6, &route_count.to_le_bytes());
-        put(
+            &mut instructions,
+            &mut templates,
+            &mut scratch,
             &mut output,
-            12,
-            &u16::try_from(HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3)
-                .expect("fixed account count")
-                .to_le_bytes(),
-        );
-        put(
-            &mut output,
-            16,
-            &u16::try_from(GENERAL_HOT_COMMON_SCALARS_V3)
-                .expect("common scalars")
-                .to_le_bytes(),
-        );
-        put(
-            &mut output,
-            18,
-            &u16::try_from(GENERAL_HOT_ITEM_SCALAR_STRIDE_V3)
-                .expect("item scalars")
-                .to_le_bytes(),
-        );
-        put(
-            &mut output,
-            20,
-            &u16::try_from(GENERAL_HOT_COMMON_IDENTITIES_V3)
-                .expect("common identities")
-                .to_le_bytes(),
-        );
-        if settlement {
-            for (index, role) in [1_u8, 4].into_iter().enumerate() {
-                let route = dclutch_effect_kernel::v3::HEADER_BYTES
-                    + index * dclutch_effect_kernel::v3::ROUTE_BYTES;
-                set_byte(&mut output, route, role);
-                put(
-                    &mut output,
-                    route + 6,
-                    &u16::try_from(index).expect("route account").to_le_bytes(),
-                );
-                put(&mut output, route + 8, &1_u16.to_le_bytes());
-                put(&mut output, route + 16, &1_u32.to_le_bytes());
-            }
-        }
+        )
+        .expect("successor effect");
         output
     }
 
@@ -1331,9 +1300,13 @@ mod tests {
         );
 
         let mut hostile_profile = account_profile();
+        let fixed_accounts = usize::from(
+            AccountProfileV2::decode(&hostile_profile)
+                .expect("fixture profile")
+                .fixed_account_count(),
+        );
         let operation = dclutch_account_profile_contract::v2::HEADER_BYTES
-            + HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3
-                * dclutch_account_profile_contract::v2::RULE_BYTES;
+            + fixed_accounts * dclutch_account_profile_contract::v2::RULE_BYTES;
         put(
             &mut hostile_profile,
             operation + 2,
@@ -1416,7 +1389,14 @@ mod tests {
 
     #[test]
     fn role_tag_and_one_byte_child_fakes_refuse_admission() {
-        let fake = effect_for(Action::Collect);
+        let mut fake = effect_for(Action::Collect);
+        let request_offset = fake
+            .windows(dclutch_claims_svm::affine_batch_v2::AFFINE_BATCH_PLAN_MAGIC_V2.len())
+            .position(|window| {
+                window == dclutch_claims_svm::affine_batch_v2::AFFINE_BATCH_PLAN_MAGIC_V2
+            })
+            .expect("canonical affine child request");
+        *fake.get_mut(request_offset).expect("one-byte child fake") ^= 1;
         let effect = EffectProgramV3::decode(&fake).expect("structurally valid fake");
         assert_eq!(
             validate_routes(Action::Collect, effect),
