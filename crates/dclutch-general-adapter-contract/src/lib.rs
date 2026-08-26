@@ -51,6 +51,8 @@ pub mod shadow_accelerator_v3;
 pub mod specialization;
 /// Action-selected nonroot state lifecycle artifacts.
 pub mod state_artifacts_v3;
+/// Action-selected TransitionVM programs for admitted General execution.
+pub mod transition_artifacts_v3;
 
 use dclutch_general_codec::{
     CandidateV1, ExecutionV1, MAX_EXECUTIONS_PER_PAGE, MAX_OUTCOMES, MAX_PAGES_PER_CANDIDATE,

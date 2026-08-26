@@ -61,7 +61,12 @@ use dclutch_release_set_contract::{
     ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, ProgramIdentityV1,
     ProtocolInfrastructureProfileV1,
 };
-use dclutch_rent_contract::{RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1};
+use dclutch_rent_contract::{
+    RefundAuthority,
+    lifecycle_v2::{
+        LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
+    },
+};
 use dclutch_series_v3_kernel::{
     AccountKeyV3, AuthenticatedProductProjectionV2, SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3,
     SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3, SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
@@ -1183,23 +1188,6 @@ fn fixture(core_mutable: bool) -> Fixture {
             rent_epoch: 0,
         },
     );
-    let refund = RefundAuthority::new(payer.pubkey().to_bytes()).expect("refund");
-    let (rent_credit, rent_bump) = Pubkey::find_program_address(
-        &[RENT_CREDIT_PDA_DOMAIN_V1, &refund.to_bytes()],
-        &RENT_PROGRAM_ID,
-    );
-    let rent_credit_data = RentCreditV1::new(refund, rent_bump).to_bytes().to_vec();
-    test.add_account(
-        rent_credit,
-        Account {
-            lamports: Rent::default().minimum_balance(rent_credit_data.len()),
-            data: rent_credit_data,
-            owner: RENT_PROGRAM_ID,
-            executable: false,
-            rent_epoch: 0,
-        },
-    );
-
     let market_identity = MarketIdentity {
         market_id: identity([0xff; 32]),
         realm_id: identity(realm.digest),
@@ -1216,6 +1204,35 @@ fn fixture(core_mutable: bool) -> Fixture {
         &CORE_PROGRAM_ID,
     )
     .0;
+    let refund = RefundAuthority::new(payer.pubkey().to_bytes()).expect("refund");
+    let (rent_credit, rent_bump) = Pubkey::find_program_address(
+        &[
+            LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+            market.as_ref(),
+            &GENERATION.to_le_bytes(),
+        ],
+        &RENT_PROGRAM_ID,
+    );
+    let rent_credit_data = LifecycleRentCreditV2::new(
+        refund,
+        LifecycleAccountIdV2::new(market.to_bytes()).expect("Market"),
+        LifecycleAccountIdV2::new(release_set.digest).expect("release set"),
+        GENERATION,
+        rent_bump,
+    )
+    .expect("lifecycle RentCredit")
+    .to_bytes()
+    .to_vec();
+    test.add_account(
+        rent_credit,
+        Account {
+            lamports: Rent::default().minimum_balance(rent_credit_data.len()),
+            data: rent_credit_data,
+            owner: RENT_PROGRAM_ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
     test.add_account(
         market,
         Account {

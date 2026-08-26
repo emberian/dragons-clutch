@@ -1059,38 +1059,24 @@ mod tests {
     }
 
     fn transition() -> Vec<u8> {
-        let mut output = vec![0_u8; 56];
-        put(&mut output, 0, &dclutch_transition_vm::v3::MAGIC);
-        set_byte(&mut output, 4, dclutch_transition_vm::v3::VERSION);
-        put(&mut output, 6, &1_u16.to_le_bytes());
-        put(
+        let action = Action::Freeze;
+        let (prelude, item, epilogue) =
+            crate::transition_artifacts_v3::general_transition_instruction_count_v3(action);
+        let mut instructions = vec![
+            crate::transition_artifacts_v3::GENERAL_TRANSITION_INSTRUCTION_PLACEHOLDER_V3;
+            prelude + item + epilogue
+        ];
+        let bytes = crate::transition_artifacts_v3::general_transition_program_bytes_v3(action)
+            .expect("transition width");
+        let mut scratch = vec![0_u8; bytes];
+        let mut output = vec![0x55_u8; bytes];
+        crate::transition_artifacts_v3::encode_general_transition_program_v3_atomic(
+            action,
+            &mut instructions,
+            &mut scratch,
             &mut output,
-            12,
-            &u16::try_from(GENERAL_HOT_COMMON_SCALARS_V3)
-                .expect("common scalars")
-                .to_le_bytes(),
-        );
-        put(
-            &mut output,
-            14,
-            &u16::try_from(GENERAL_HOT_ITEM_SCALAR_STRIDE_V3)
-                .expect("item scalars")
-                .to_le_bytes(),
-        );
-        put(
-            &mut output,
-            16,
-            &u16::try_from(GENERAL_HOT_COMMON_IDENTITIES_V3)
-                .expect("common identities")
-                .to_le_bytes(),
-        );
-        // One canonical LoadConst into an otherwise preserved common register.
-        set_byte(&mut output, dclutch_transition_vm::v3::HEADER_BYTES, 0);
-        put(
-            &mut output,
-            dclutch_transition_vm::v3::HEADER_BYTES + 2,
-            &10_u16.to_le_bytes(),
-        );
+        )
+        .expect("successor transition");
         output
     }
 

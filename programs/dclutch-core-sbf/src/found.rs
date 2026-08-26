@@ -14,7 +14,9 @@ use dclutch_release_set_contract::{
     EXECUTION_RELEASE_SET_BYTES_V1, EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1,
     ExecutionReleaseSetV1, ExecutionRoleV1,
 };
-use dclutch_rent_contract::{RENT_CREDIT_PDA_DOMAIN_V1, RentCreditV1};
+use dclutch_rent_contract::lifecycle_v2::{
+    LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleRentCreditV2,
+};
 use dclutch_source_contract::{
     ContentId as SourceContentId, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2, SOURCE_MATERIAL_V2_BYTES,
     SourceMaterialV2,
@@ -174,6 +176,7 @@ pub(crate) fn prepare(
     rent: &Rent,
 ) -> Result<PreparedFound, solana_program::program_error::ProgramError> {
     let (references, runtime) = authenticate_prepare_context(program_id, frame, rent)?;
+    authenticate_rent_credit(frame, request.generation, references.release_set_id)?;
     let admission = authenticate_role(
         frame.activation_cache,
         frame.registry_program,
@@ -199,6 +202,7 @@ pub(crate) fn prepare_with_admission(
     admission: Admission,
 ) -> Result<PreparedFound, solana_program::program_error::ProgramError> {
     let (references, runtime) = authenticate_prepare_context(program_id, frame, rent)?;
+    authenticate_rent_credit(frame, request.generation, references.release_set_id)?;
     finish_prepare(
         program_id, frame, request, rent, references, runtime, admission,
     )
@@ -220,7 +224,6 @@ fn authenticate_prepare_context(
     let release_set_id = observe_release_set_id(frame)?;
     authenticate_immutable_core_release(frame, release_set_id)?;
     let (references, runtime) = authenticate_references(frame, rent, release_set_id)?;
-    authenticate_rent_credit(frame)?;
     Ok((references, runtime))
 }
 
@@ -512,7 +515,11 @@ fn authenticate_release_record(
 }
 
 #[inline(never)]
-fn authenticate_rent_credit(frame: &FoundAccounts<'_, '_>) -> Result<(), CoreSbfError> {
+fn authenticate_rent_credit(
+    frame: &FoundAccounts<'_, '_>,
+    generation: u64,
+    release_set: [u8; 32],
+) -> Result<(), CoreSbfError> {
     if frame.rent_credit.owner != frame.rent_program.key {
         return Err(CoreSbfError::RentCredit);
     }
@@ -520,11 +527,23 @@ fn authenticate_rent_credit(frame: &FoundAccounts<'_, '_>) -> Result<(), CoreSbf
         .rent_credit
         .try_borrow_data()
         .map_err(|_| CoreSbfError::RentCredit)?;
-    let credit = RentCreditV1::decode(&bytes).map_err(|_| CoreSbfError::RentCredit)?;
-    let authority = credit.refund_authority().to_bytes();
+    let credit = LifecycleRentCreditV2::decode(&bytes).map_err(|_| CoreSbfError::RentCredit)?;
+    if credit.market().to_bytes() != frame.market.key.to_bytes()
+        || credit.release_set().to_bytes() != release_set
+        || credit.generation() != generation
+    {
+        return Err(CoreSbfError::RentCredit);
+    }
+    let market = credit.market().to_bytes();
+    let generation_bytes = credit.generation().to_le_bytes();
     let bump = [credit.pda_bump()];
     let expected = Pubkey::create_program_address(
-        &[RENT_CREDIT_PDA_DOMAIN_V1, &authority, &bump],
+        &[
+            LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+            &market,
+            &generation_bytes,
+            &bump,
+        ],
         frame.rent_program.key,
     )
     .map_err(|_| CoreSbfError::RentCredit)?;

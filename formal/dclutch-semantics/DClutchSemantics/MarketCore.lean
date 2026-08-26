@@ -584,11 +584,27 @@ structure RedemptionFrame where
   custody : Option ChildEffectObservation
   deriving DecidableEq, Repr
 
-structure RetirementFrame where
+/-! Retirement uses one coherent release-set observation.  Physical adapters
+may authenticate its four required roles serially, but they cannot substitute
+role-specific copies of the selected ReleaseSet. -/
+structure RetirementAdmissions where
   coreAdmission : ExecutionRelease.Admission
   claimsAdmission : ExecutionRelease.Admission
   resolutionAdmission : ExecutionRelease.Admission
   custodyAdmission : ExecutionRelease.Admission
+  deriving DecidableEq, Repr
+
+def RetirementAdmissions.valid (state : State) (admissions : RetirementAdmissions) : Bool :=
+  admissionMatches state admissions.coreAdmission .core &&
+  admissionMatches state admissions.claimsAdmission .claims &&
+  admissionMatches state admissions.resolutionAdmission .resolution &&
+  admissionMatches state admissions.custodyAdmission .custody &&
+  admissions.coreAdmission.selected == admissions.claimsAdmission.selected &&
+  admissions.coreAdmission.selected == admissions.resolutionAdmission.selected &&
+  admissions.coreAdmission.selected == admissions.custodyAdmission.selected
+
+structure RetirementFrame where
+  admissions : RetirementAdmissions
   claims : ClaimsEffectObservation
   source : ChildEffectObservation
   custody : ChildEffectObservation
@@ -795,10 +811,7 @@ def closeCapabilityCandidate
 
 def retireCandidate
     (state : State) (frame : RetirementFrame) : Except Refusal (Candidate state) := do
-  if !admissionMatches state frame.coreAdmission .core ||
-      !admissionMatches state frame.claimsAdmission .claims ||
-      !admissionMatches state frame.resolutionAdmission .resolution ||
-      !admissionMatches state frame.custodyAdmission .custody then throw .wrongRelease
+  if !frame.admissions.valid state then throw .wrongRelease
   match state.phase with
   | .retiring _ => pure ()
   | _ => throw .wrongPhase

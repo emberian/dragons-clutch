@@ -24,7 +24,9 @@ use dclutch_release_set_contract::{
     ExecutionRoleBindingV1, ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, ProtocolInfrastructureProfileV1,
 };
-use dclutch_rent_contract::{RENT_CREDIT_PDA_DOMAIN_V1, RentCreditV1};
+use dclutch_rent_contract::lifecycle_v2::{
+    LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleRentCreditV2,
+};
 use dclutch_source_contract::{
     ContentId as SourceContentId, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2, SourceMaterialV2,
 };
@@ -61,7 +63,7 @@ pub struct FoundStateV2<'a> {
     pub payer: AccountObservationV2<'a>,
     /// System-owned empty exact Market PDA destination.
     pub market: AccountObservationV2<'a>,
-    /// Existing permanent RentCredit account.
+    /// Existing lifecycle RentCredit bound to this Market generation.
     pub rent_credit: AccountObservationV2<'a>,
     /// Exact executable Rent program selected by the immutable profile.
     pub rent_program: AccountObservationV2<'a>,
@@ -209,7 +211,7 @@ fn prepare_found_instruction_v2(
     }
     authenticate_activation(state, release_set_digest.to_bytes(), release_set)?;
     authenticate_infrastructure(state, &rent)?;
-    authenticate_rent_credit(state)?;
+    authenticate_rent_credit(state, generation, release_set_digest.to_bytes())?;
 
     let mut market_identity = MarketIdentity {
         market_id: identity(state.market.key.to_bytes())?,
@@ -510,15 +512,32 @@ fn authenticate_current_deployment(
         .map_err(|_| Error::CrossRecordMismatch)
 }
 
-fn authenticate_rent_credit(state: FoundStateV2<'_>) -> Result<()> {
+fn authenticate_rent_credit(
+    state: FoundStateV2<'_>,
+    generation: u64,
+    release_set: [u8; 32],
+) -> Result<()> {
     if state.rent_credit.owner != state.rent_program.key || state.rent_credit.executable {
         return Err(Error::AccountAuthority);
     }
-    let credit = RentCreditV1::decode(state.rent_credit.data).map_err(|_| Error::InvalidRecord)?;
-    let authority = credit.refund_authority().to_bytes();
+    let credit =
+        LifecycleRentCreditV2::decode(state.rent_credit.data).map_err(|_| Error::InvalidRecord)?;
+    if credit.market().to_bytes() != state.market.key.to_bytes()
+        || credit.release_set().to_bytes() != release_set
+        || credit.generation() != generation
+    {
+        return Err(Error::CrossRecordMismatch);
+    }
+    let market = credit.market().to_bytes();
+    let generation_bytes = credit.generation().to_le_bytes();
     let bump = [credit.pda_bump()];
     let expected = Pubkey::create_program_address(
-        &[RENT_CREDIT_PDA_DOMAIN_V1, &authority, &bump],
+        &[
+            LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+            &market,
+            &generation_bytes,
+            &bump,
+        ],
         &state.rent_program.key,
     )
     .map_err(|_| Error::AccountAuthority)?;

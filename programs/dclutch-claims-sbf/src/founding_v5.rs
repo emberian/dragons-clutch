@@ -34,7 +34,7 @@ use dclutch_market_core_codec::{
 };
 use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV2};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_rent_contract::RentCreditV1;
+use dclutch_rent_contract::lifecycle_v2::LifecycleRentCreditV2;
 use dclutch_token_svm::{AccountState, TokenAccount, TokenProgram};
 use solana_program::{
     account_info::AccountInfo,
@@ -849,20 +849,27 @@ fn authenticate_rent_credit(
         .rent_credit
         .try_borrow_data()
         .map_err(|_| ClaimsFoundingSbfErrorV5::Accounts)?;
-    let credit = RentCreditV1::decode(&credit_data).map_err(|_| ClaimsFoundingSbfErrorV5::Rent)?;
+    let credit =
+        LifecycleRentCreditV2::decode(&credit_data).map_err(|_| ClaimsFoundingSbfErrorV5::Rent)?;
     let seeds = credit.pda_seeds();
+    let market_seed = seeds.market().to_bytes();
+    let generation_seed = seeds.generation();
     let bump = [seeds.bump()];
     let expected = Pubkey::create_program_address(
         &[
             seeds.domain(),
-            seeds.refund_authority().to_bytes().as_slice(),
+            market_seed.as_slice(),
+            generation_seed.as_slice(),
             &bump,
         ],
         accounts.rent_program.key,
     )
     .map_err(|_| ClaimsFoundingSbfErrorV5::Rent)?;
     if expected != *accounts.rent_credit.key
-        || credit.refund_authority().to_bytes() != core.rent_beneficiary.to_bytes()
+        || accounts.rent_credit.key.to_bytes() != core.rent_beneficiary.to_bytes()
+        || credit.market().to_bytes() != market.logical_market
+        || credit.release_set().to_bytes() != market.release_set
+        || credit.generation() != core.identity.generation
         || core.identity.market_id.to_bytes() != market.logical_market
     {
         return Err(ClaimsFoundingSbfErrorV5::Rent.into());

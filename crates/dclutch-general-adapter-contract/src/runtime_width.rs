@@ -184,7 +184,8 @@ impl SettlementPhaseV2 {
         }
     }
 
-    fn tag(self) -> u8 {
+    /// Canonical persisted phase tag.
+    pub const fn tag(self) -> u8 {
         match self {
             Self::Collecting => 4,
             Self::Materializing => 5,

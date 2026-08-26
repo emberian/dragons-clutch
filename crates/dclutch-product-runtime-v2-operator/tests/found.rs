@@ -12,6 +12,7 @@ use dclutch_product_runtime_v2_operator::{
         FOUND_ACCOUNT_COUNT_V2, FinalizedReferenceObservationV2, FoundStateV2,
         build_found_instruction_v2,
     },
+    lifecycle_rent_v2::{LifecycleRentCreateStateV2, build_lifecycle_rent_create_v2},
 };
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
@@ -28,7 +29,12 @@ use dclutch_release_set_contract::{
     ExecutionRoleBindingV1, ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
     ProgramIdentityV1, ProtocolInfrastructureProfileV1,
 };
-use dclutch_rent_contract::{RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1};
+use dclutch_rent_contract::{
+    RefundAuthority,
+    lifecycle_v2::{
+        LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
+    },
+};
 use dclutch_source_contract::{
     ContentId as SourceContentId, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2, SourceMaterialV2,
 };
@@ -357,12 +363,6 @@ impl Fixture {
         .expect("infrastructure profile");
         let infrastructure_profile =
             Pubkey::find_program_address(&[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1], &CORE).0;
-        let authority = RefundAuthority::new(PAYER.to_bytes()).expect("refund authority");
-        let (rent_credit, bump) = Pubkey::find_program_address(
-            &[RENT_CREDIT_PDA_DOMAIN_V1, &authority.to_bytes()],
-            &RENT_PROGRAM,
-        );
-        let rent_credit_data = RentCreditV1::new(authority, bump).to_bytes().to_vec();
         let market_identity = MarketIdentity {
             market_id: identity([0xff; 32]),
             realm_id: identity(realm.digest),
@@ -379,6 +379,25 @@ impl Fixture {
             &CORE,
         )
         .0;
+        let authority = RefundAuthority::new(PAYER.to_bytes()).expect("refund authority");
+        let (rent_credit, bump) = Pubkey::find_program_address(
+            &[
+                LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+                market.as_ref(),
+                &GENERATION.to_le_bytes(),
+            ],
+            &RENT_PROGRAM,
+        );
+        let rent_credit_data = LifecycleRentCreditV2::new(
+            authority,
+            LifecycleAccountIdV2::new(market.to_bytes()).expect("market"),
+            LifecycleAccountIdV2::new(release_set.digest).expect("release set"),
+            GENERATION,
+            bump,
+        )
+        .expect("lifecycle credit")
+        .to_bytes()
+        .to_vec();
         Self {
             graph,
             realm,
@@ -543,6 +562,47 @@ fn valid_found31_exports_runtime_width_instruction() {
             .pubkey,
         fixture.rent_programdata
     );
+}
+
+#[test]
+fn lifecycle_credit_creation_is_derived_from_the_found_projection() {
+    let fixture = Fixture::new();
+    let found = build_found_instruction_v2(GENERATION, fixture.state()).expect("Found plan");
+    let plan = build_lifecycle_rent_create_v2(
+        &found,
+        LifecycleRentCreateStateV2 {
+            payer: account(PAYER, system_program::ID, 10_000_000_000, false, &[]),
+            credit_destination: account(fixture.rent_credit, system_program::ID, 0, false, &[]),
+            refund_wallet: account(PAYER, system_program::ID, 10_000_000_000, false, &[]),
+            rent_program: fixture.state().rent_program,
+            system_program: fixture.state().system_program,
+            rent: fixture.state().rent,
+        },
+    )
+    .expect("lifecycle credit create");
+    assert_eq!(plan.credit, fixture.rent_credit);
+    assert_eq!(plan.state.market().to_bytes(), fixture.market.to_bytes());
+    assert_eq!(plan.state.generation(), GENERATION);
+    assert_eq!(plan.instruction.accounts.len(), 4);
+
+    let hostile = build_lifecycle_rent_create_v2(
+        &found,
+        LifecycleRentCreateStateV2 {
+            payer: account(PAYER, system_program::ID, 10_000_000_000, false, &[]),
+            credit_destination: account(
+                Pubkey::new_from_array([0xee; 32]),
+                system_program::ID,
+                0,
+                false,
+                &[],
+            ),
+            refund_wallet: account(PAYER, system_program::ID, 10_000_000_000, false, &[]),
+            rent_program: fixture.state().rent_program,
+            system_program: fixture.state().system_program,
+            rent: fixture.state().rent,
+        },
+    );
+    assert_eq!(hostile, Err(dclutch_product_runtime_v2_operator::lifecycle_rent_v2::LifecycleRentOperatorErrorV2::InvalidCredit));
 }
 
 #[test]

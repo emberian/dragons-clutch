@@ -196,10 +196,12 @@ def terminal : State := advance capabilityClosed (.admitTerminal {
 def retiring : State := advance terminal (.beginRetiring (admission .core))
 
 def retired : State := advance retiring (.retire {
-  coreAdmission := admission .core
-  claimsAdmission := admission .claims
-  resolutionAdmission := admission .resolution
-  custodyAdmission := admission .custody
+  admissions := {
+    coreAdmission := admission .core
+    claimsAdmission := admission .claims
+    resolutionAdmission := admission .resolution
+    custodyAdmission := admission .custody
+  }
   claims := emptyClaims
   source := child
   custody := child
@@ -291,10 +293,12 @@ def retiringWithCapability : State :=
   advance terminalWithCapability (.beginRetiring (admission .core))
 
 example : refusedWith .childEffectRefusal (step? retiringWithCapability (.retire {
-  coreAdmission := admission .core
-  claimsAdmission := admission .claims
-  resolutionAdmission := admission .resolution
-  custodyAdmission := admission .custody
+  admissions := {
+    coreAdmission := admission .core
+    claimsAdmission := admission .claims
+    resolutionAdmission := admission .resolution
+    custodyAdmission := admission .custody
+  }
   claims := emptyClaims
   source := child
   custody := child

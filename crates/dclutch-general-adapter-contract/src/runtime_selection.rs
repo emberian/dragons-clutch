@@ -123,7 +123,8 @@ pub enum RuntimeSelectionPhaseV2 {
 }
 
 impl RuntimeSelectionPhaseV2 {
-    const fn tag(self) -> u8 {
+    /// Canonical persisted phase tag.
+    pub const fn tag(self) -> u8 {
         match self {
             Self::Open => PHASE_OPEN,
             Self::Frozen => PHASE_FROZEN,

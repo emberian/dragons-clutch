@@ -188,6 +188,103 @@ fn admission_valid(admission: Admission, role: Role) -> bool {
         && admission.receipt.current_deployment_reauthenticated
 }
 
+const RETIREMENT_REQUIRED_ROLE_MASK: u8 =
+    (1 << Role::Core as u8)
+        | (1 << Role::Claims as u8)
+        | (1 << Role::Resolution as u8)
+        | (1 << Role::Custody as u8);
+
+/// One shared ReleaseSet authenticated serially for every retirement role.
+///
+/// Fields are private so adapters cannot author the completion mask.  This is
+/// the fixed-memory lowering of Lean `RetirementAdmissions.valid` and avoids
+/// retaining four duplicate ReleaseSet values on the SBF stack.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RetirementAdmissions {
+    market_registry_program: Identity,
+    market_release_set_id: Identity,
+    selected: ReleaseSet,
+    authenticated_mask: u8,
+}
+
+impl RetirementAdmissions {
+    /// Lower one adapter-authenticated ordered role batch into the shared
+    /// semantic retirement observation.  `roles` is adapter-derived from the
+    /// Registry receipt and is never instruction data.
+    #[inline(never)]
+    pub fn from_authenticated_batch(
+        state: CoreState,
+        market_registry_program: Identity,
+        market_release_set_id: Identity,
+        selected: ReleaseSet,
+        roles: [Role; 4],
+    ) -> Result<Self, Error> {
+        if roles != [Role::Core, Role::Claims, Role::Resolution, Role::Custody]
+            || market_registry_program != state.identity.registry_program
+            || market_release_set_id != state.identity.selected_release_set
+            || selected.release_set_id != state.identity.selected_release_set
+            || !selected.valid()
+        {
+            return Err(Error::InvalidRelease);
+        }
+        Ok(Self {
+            market_registry_program,
+            market_release_set_id,
+            selected,
+            authenticated_mask: RETIREMENT_REQUIRED_ROLE_MASK,
+        })
+    }
+
+    /// Begin with the exact current Core admission.
+    #[inline(never)]
+    pub fn core(state: CoreState, admission: Admission) -> Result<Self, Error> {
+        require_admission(state, admission, Role::Core)?;
+        Ok(Self {
+            market_registry_program: admission.market_registry_program,
+            market_release_set_id: admission.market_release_set_id,
+            selected: admission.selected,
+            authenticated_mask: 1 << Role::Core as u8,
+        })
+    }
+
+    /// Add exactly one current Claims, Resolution, or Custody admission.
+    #[inline(never)]
+    pub fn admit(
+        &mut self,
+        state: CoreState,
+        admission: Admission,
+        role: Role,
+    ) -> Result<(), Error> {
+        let bit = match role {
+            Role::Claims | Role::Resolution | Role::Custody => 1 << role as u8,
+            Role::Core | Role::Trading => return Err(Error::InvalidRelease),
+        };
+        if self.authenticated_mask & bit != 0 {
+            return Err(Error::InvalidRelease);
+        }
+        require_admission(state, admission, role)?;
+        if admission.market_registry_program != self.market_registry_program
+            || admission.market_release_set_id != self.market_release_set_id
+            || admission.selected != self.selected
+        {
+            return Err(Error::InvalidRelease);
+        }
+        self.authenticated_mask |= bit;
+        Ok(())
+    }
+
+    fn require_complete(self, state: CoreState) -> Result<(), Error> {
+        if self.authenticated_mask != RETIREMENT_REQUIRED_ROLE_MASK
+            || self.market_registry_program != state.identity.registry_program
+            || self.market_release_set_id != state.identity.selected_release_set
+            || self.selected.release_set_id != state.identity.selected_release_set
+        {
+            return Err(Error::InvalidRelease);
+        }
+        Ok(())
+    }
+}
+
 /// Immutable Realm collateral coordinates.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Realm {
@@ -1048,13 +1145,11 @@ pub fn redeem_terminal(
 /// Close terminal Core accounts and return every remaining classified and
 /// unclassified lamport to the immutable RentCredit.
 #[allow(clippy::too_many_arguments)]
+#[inline(never)]
 pub fn retire(
     request: Request,
     state: &mut CoreState,
-    core_admission: Admission,
-    claims_admission: Admission,
-    resolution_admission: Admission,
-    custody_admission: Admission,
+    admissions: RetirementAdmissions,
     claims: ClaimsEffectObservation,
     source: ChildEffectObservation,
     custody: ChildEffectObservation,
@@ -1063,10 +1158,7 @@ pub fn retire(
     rent_credit_authenticated: bool,
 ) -> Result<u64, Error> {
     require_request(request, Action::Retire, state.identity.market_id, state.identity.generation)?;
-    require_admission(*state, core_admission, Role::Core)?;
-    require_admission(*state, claims_admission, Role::Claims)?;
-    require_admission(*state, resolution_admission, Role::Resolution)?;
-    require_admission(*state, custody_admission, Role::Custody)?;
+    admissions.require_complete(*state)?;
     if state.phase != Phase::Retiring {
         return Err(Error::InvalidPhase);
     }

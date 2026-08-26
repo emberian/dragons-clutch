@@ -30,6 +30,8 @@ use solana_sdk_ids::{system_program, sysvar};
 pub mod found;
 /// Chain-derived Registry records for Product V3 graded-basis admission.
 pub mod graded_basis_v3;
+/// Chain-derived lifecycle RentCredit creation, sweeping, and close evidence.
+pub mod lifecycle_rent_v2;
 
 /// Compiler or chain-derived instruction refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

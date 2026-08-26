@@ -6,7 +6,7 @@ use dclutch_market_core_codec::{
     ChildEffectObservation, ClaimsEffectObservation, CollateralObservation, CoreState, Error,
     FoundingAccounts, FoundingFrame, FoundingQuote, Holder, Identity, MarketIdentity, Phase,
     Product, REQUEST_BYTES, Readiness, Realm, ReleaseReceipt, ReleaseSet, Representation, Request,
-    Role, STATE_BYTES, SeriesOpenObservation, TerminalReceipt, VacantAccount,
+    RetirementAdmissions, Role, STATE_BYTES, SeriesOpenObservation, TerminalReceipt, VacantAccount,
     activate_capability_child, admit_terminal, begin_retiring, close_capability_child, found,
     open_market, open_series_market, redeem_terminal, retire, split_complete_set, verify_readiness,
 };
@@ -62,6 +62,21 @@ fn admission(role: Role) -> Admission {
             current_deployment_reauthenticated: true,
         },
     }
+}
+
+fn retirement_admissions(state: CoreState) -> RetirementAdmissions {
+    let mut value =
+        RetirementAdmissions::core(state, admission(Role::Core)).expect("current Core admission");
+    value
+        .admit(state, admission(Role::Claims), Role::Claims)
+        .expect("current Claims admission");
+    value
+        .admit(state, admission(Role::Resolution), Role::Resolution)
+        .expect("current Resolution admission");
+    value
+        .admit(state, admission(Role::Custody), Role::Custody)
+        .expect("current Custody admission");
+    value
 }
 
 fn realm() -> Realm {
@@ -703,16 +718,27 @@ fn retirement_requires_all_child_closures_and_returns_only_core_lamports() {
         admission(Role::Core),
     )
     .expect("begin retiring");
+    let mut substituted_claims = admission(Role::Claims);
+    *substituted_claims
+        .selected
+        .bindings
+        .get_mut(Role::Claims as usize)
+        .expect("Claims binding") = binding(99);
+    substituted_claims.receipt.observed = binding(99);
+    let mut partial =
+        RetirementAdmissions::core(state, admission(Role::Core)).expect("current Core admission");
+    assert_eq!(
+        partial.admit(state, substituted_claims, Role::Claims),
+        Err(Error::InvalidRelease)
+    );
     state.outstanding_capabilities = 1;
     let before = state;
+    let admissions = retirement_admissions(state);
     assert_eq!(
         retire(
             admin(Action::Retire, state),
             &mut state,
-            admission(Role::Core),
-            admission(Role::Claims),
-            admission(Role::Resolution),
-            admission(Role::Custody),
+            admissions,
             claims(0, true),
             child(),
             child(),
@@ -726,14 +752,12 @@ fn retirement_requires_all_child_closures_and_returns_only_core_lamports() {
 
     state.outstanding_capabilities = 0;
     let before = state;
+    let admissions = retirement_admissions(state);
     assert_eq!(
         retire(
             admin(Action::Retire, state),
             &mut state,
-            admission(Role::Core),
-            admission(Role::Claims),
-            admission(Role::Resolution),
-            admission(Role::Custody),
+            admissions,
             claims(0, true),
             child(),
             child(),
@@ -745,14 +769,12 @@ fn retirement_requires_all_child_closures_and_returns_only_core_lamports() {
     );
     assert_eq!(state, before);
 
+    let admissions = retirement_admissions(state);
     assert_eq!(
         retire(
             admin(Action::Retire, state),
             &mut state,
-            admission(Role::Core),
-            admission(Role::Claims),
-            admission(Role::Resolution),
-            admission(Role::Custody),
+            admissions,
             claims(0, true),
             child(),
             child(),
