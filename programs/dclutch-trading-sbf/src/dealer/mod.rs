@@ -42,6 +42,8 @@ pub mod v3_multi_lp;
 pub mod v3_obligation;
 /// Chain-derived unsigned requests for every Dealer V3 multi-LP action.
 pub mod v3_operator;
+/// EffectProgram V3 admission for exact Dealer Custody request sequences.
+pub mod v3_route;
 
 /// Canonical Dealer capability-kind label.
 pub const DEALER_KIND_PREIMAGE_V2: &[u8] = b"dclutch/capability/dealer-v2";
