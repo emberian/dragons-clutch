@@ -12,6 +12,11 @@
 #[allow(missing_docs)]
 mod generated {
     include!("generated.rs");
+
+    /// Narrow public byte coordinate for the sparse Market Core state.
+    pub mod state_layout {
+        include!("state_layout.rs");
+    }
 }
 
 #[allow(missing_docs)]
@@ -26,6 +31,7 @@ mod series_permit;
 
 pub use capability::*;
 pub use generated::*;
+pub use generated::state_layout::CoreStateLayoutV2;
 pub use generated_physical::{
     CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1, CAPABILITY_FUNDING_LIST_MAGIC_V1,
     CAPABILITY_FUNDING_MAX_ENTRIES_V1, CORE_EFFECT_ACK_BYTES_V1, CORE_EFFECT_ACK_MAGIC_V1,
