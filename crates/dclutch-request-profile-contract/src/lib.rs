@@ -12,6 +12,9 @@
 
 use core::convert::TryInto;
 
+/// Descriptor-selected RequestProfile V2 with generic native-signature evidence.
+pub mod v2;
+
 #[rustfmt::skip]
 #[allow(missing_docs)]
 mod generated;

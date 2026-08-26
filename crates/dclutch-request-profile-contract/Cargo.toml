@@ -10,6 +10,9 @@ description = "Total no-alloc request-byte projector for data-driven Trading"
 [lib]
 path = "src/lib.rs"
 
+[dev-dependencies]
+solana-ed25519-program = "=3.0.0"
+
 [lints.rust]
 missing_docs = "deny"
 unsafe_code = "forbid"
