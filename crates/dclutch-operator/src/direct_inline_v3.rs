@@ -45,8 +45,8 @@ use dclutch_direct_codec::{
         authenticate_direct_artifacts_v4,
     },
     execution_v3::{
-        DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3, DIRECT_SIGNED_PARTICIPANT_BYTES_V3,
-        DirectExecutionActionV3, DirectExecutionRequestV3, encode_header_v3,
+        DIRECT_SIGNED_PARTICIPANT_BYTES_V3, DirectExecutionActionV3, DirectExecutionRequestV3,
+        encode_header_v3,
     },
     intent_v2::{COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2, CompactIntentV2},
 };
@@ -64,9 +64,7 @@ use solana_sdk_ids::{ed25519_program, sysvar};
 
 use crate::versioned::{VersionedMessagePlanV0, compile_v0_message};
 
-/// Exact Direct V3 InlineOrdinary family-request width.
-pub const DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3: usize =
-    DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3 + 2 * DIRECT_SIGNED_PARTICIPANT_BYTES_V3 + 16;
+pub use dclutch_direct_codec::execution_v3::DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3;
 
 const ED25519_DESCRIPTOR_BYTES: usize = 14;
 const ED25519_SIGNATURES: usize = 2;

@@ -13,8 +13,9 @@ use dclutch_capability_program_contract::v4::{
     ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4, CapabilityProgramV4,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_effect_kernel::v3::{
-    ProgramV3 as EffectProgramV3, SCHEMA_RELEASE_ID as EFFECT_SCHEMA_ID_V4,
+use dclutch_effect_kernel::{
+    v3::ProgramV3 as EffectProgramV3,
+    v4::{ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4},
 };
 use dclutch_execution_strategy_contract::v2::{
     EXECUTION_STRATEGY_PROGRAM_BYTES_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
@@ -73,8 +74,8 @@ pub const DIRECT_INLINE_ORDINARY_LIFECYCLE_ID_V4: [u8; 32] = [
 ];
 /// SHA-256 identity of the exact ordered EffectProgramV4.
 pub const DIRECT_INLINE_ORDINARY_EFFECT_ID_V4: [u8; 32] = [
-    0xee, 0xc9, 0xbb, 0xfd, 0x76, 0x7d, 0x60, 0x01, 0x10, 0x98, 0x1d, 0xc8, 0x79, 0x46, 0x47, 0x41,
-    0x82, 0xb0, 0xd6, 0x40, 0xf8, 0x40, 0xea, 0xda, 0x65, 0x6a, 0x68, 0x58, 0xd3, 0x42, 0x59, 0xa6,
+    0x55, 0xc6, 0x70, 0x7d, 0xcf, 0x1e, 0x23, 0xff, 0x88, 0x5e, 0xa1, 0xed, 0x22, 0xe7, 0xc0, 0x47,
+    0xb2, 0x6c, 0x77, 0xaf, 0xbe, 0xca, 0x28, 0x61, 0x47, 0xaf, 0x36, 0x2c, 0xd4, 0xd3, 0xd5, 0x2d,
 ];
 
 /// Chain-selected facts that are not owned by the Direct artifact family.
@@ -289,14 +290,17 @@ pub fn validate_direct_inline_ordinary_hot_bundle_v4(
     {
         return Err(DirectInlineOrdinaryHotBundleErrorV4::Strategy);
     }
-    let effect_id = digest(&bundle.effect);
-    let effect = EffectProgramV3::decode_selected(
-        descriptor.effect().program().to_bytes(),
-        effect_id,
-        &bundle.effect,
-    )
-    .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Effect)?;
-    validate_geometry(account, request, transition, effect)
+    let effect = EffectProgramV4::decode(&bundle.effect)
+        .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Effect)?;
+    if effect.span_count() != 0
+        || effect.range_count() != 0
+        || effect.semantic_prefix_bytes()
+            != u32::try_from(crate::execution_v3::DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3)
+                .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::Geometry)?
+    {
+        return Err(DirectInlineOrdinaryHotBundleErrorV4::Effect);
+    }
+    validate_geometry(account, request, transition, effect.base())
 }
 
 fn validate_geometry(

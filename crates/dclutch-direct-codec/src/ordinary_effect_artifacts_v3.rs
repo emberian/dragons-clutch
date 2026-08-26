@@ -31,9 +31,11 @@ use dclutch_effect_kernel::{
             RequestSpaceV3, RouteInputV3, ScalarCoordinateV3, encode_effect_program_v4_atomic,
         },
     },
+    v4::{BorrowedRangePolicyV4, HEADER_BYTES_V4, ProgramV4, encode_program_v4_atomic},
 };
 
 use crate::{
+    execution_v3::DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3,
     ordinary_v3::{
         DIRECT_ORDINARY_COMMON_IDENTITIES_V3, DIRECT_ORDINARY_COMMON_SCALARS_V3,
         DIRECT_ORDINARY_ITEM_IDENTITY_STRIDE_V3, DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3,
@@ -78,12 +80,14 @@ const FIXED_INSTRUCTION_COUNT: usize = 131;
 const REQUEST_BANK_BYTES: usize =
     SPARSE_NATIVE_TRANSFER_BYTES_V1 + 4 * DELEGATED_CUSTODY_REQUEST_BYTES_V2;
 
-/// Exact encoded EffectProgram V4 width.
-pub const DIRECT_INLINE_ORDINARY_EFFECT_BYTES_V4: usize = HEADER_BYTES
+const DIRECT_INLINE_ORDINARY_EFFECT_BASE_BYTES_V4: usize = HEADER_BYTES
     + ROUTE_COUNT * ROUTE_BYTES
     + DEPENDENCY_COUNT * RECEIPT_DEPENDENCY_BYTES
     + FIXED_INSTRUCTION_COUNT * OPERATION_BYTES
     + REQUEST_BANK_BYTES;
+/// Exact zero-extension EffectProgram V4 envelope width.
+pub const DIRECT_INLINE_ORDINARY_EFFECT_BYTES_V4: usize =
+    HEADER_BYTES_V4 + DIRECT_INLINE_ORDINARY_EFFECT_BASE_BYTES_V4;
 
 /// Stable no-allocation Effect artifact refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -103,6 +107,33 @@ pub fn encode_direct_inline_ordinary_effect_v4_atomic(
 ) -> Result<(), DirectOrdinaryEffectArtifactErrorV3> {
     if scratch.len() != DIRECT_INLINE_ORDINARY_EFFECT_BYTES_V4
         || output.len() != DIRECT_INLINE_ORDINARY_EFFECT_BYTES_V4
+    {
+        return Err(DirectOrdinaryEffectArtifactErrorV3::Coordinate);
+    }
+    let mut base_scratch = [0_u8; DIRECT_INLINE_ORDINARY_EFFECT_BASE_BYTES_V4];
+    let mut base = [0_u8; DIRECT_INLINE_ORDINARY_EFFECT_BASE_BYTES_V4];
+    encode_direct_inline_ordinary_effect_base_v4_atomic(&mut base_scratch, &mut base)?;
+    encode_program_v4_atomic(
+        &base,
+        BorrowedRangePolicyV4::DisjointExactCoverage,
+        u32::try_from(DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3)
+            .map_err(|_| DirectOrdinaryEffectArtifactErrorV3::Coordinate)?,
+        &[],
+        &[],
+        scratch,
+        output,
+    )
+    .map_err(|_| DirectOrdinaryEffectArtifactErrorV3::Effect)?;
+    ProgramV4::decode(output).map_err(|_| DirectOrdinaryEffectArtifactErrorV3::Effect)?;
+    Ok(())
+}
+
+fn encode_direct_inline_ordinary_effect_base_v4_atomic(
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<(), DirectOrdinaryEffectArtifactErrorV3> {
+    if scratch.len() != DIRECT_INLINE_ORDINARY_EFFECT_BASE_BYTES_V4
+        || output.len() != DIRECT_INLINE_ORDINARY_EFFECT_BASE_BYTES_V4
     {
         return Err(DirectOrdinaryEffectArtifactErrorV3::Coordinate);
     }
@@ -770,7 +801,14 @@ mod tests {
         let mut scratch = [0_u8; DIRECT_INLINE_ORDINARY_EFFECT_BYTES_V4];
         let mut output = [0x55_u8; DIRECT_INLINE_ORDINARY_EFFECT_BYTES_V4];
         encode_direct_inline_ordinary_effect_v4_atomic(&mut scratch, &mut output).expect("effect");
-        let effect = ProgramV3::decode(&output).expect("decode");
+        let effect = ProgramV4::decode(&output).expect("decode");
+        assert_eq!(effect.span_count(), 0);
+        assert_eq!(effect.range_count(), 0);
+        assert_eq!(
+            effect.semantic_prefix_bytes(),
+            u32::try_from(DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3).expect("request width")
+        );
+        let effect = effect.base();
         assert_eq!(effect.route_count(), 5);
         assert_eq!(effect.fixed_account_count(), 90);
         assert_eq!(effect.common_scalar_count(), 64);

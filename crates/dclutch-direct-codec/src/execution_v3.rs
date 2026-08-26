@@ -22,6 +22,9 @@ pub const DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3: usize = 32;
 pub const DIRECT_EXECUTION_REQUEST_SELECTOR_OFFSET_V3: u32 = 12;
 /// Width of one runtime complementary signed participant.
 pub const DIRECT_SIGNED_PARTICIPANT_BYTES_V3: usize = 32 + COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2;
+/// Exact fixed width of an inline ordinary Direct request.
+pub const DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3: usize =
+    DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3 + 2 * DIRECT_SIGNED_PARTICIPANT_BYTES_V3 + 16;
 /// Finalized-record schema label for [`DirectExecutionRequestV3`].
 pub const DIRECT_EXECUTION_REQUEST_SCHEMA_PREIMAGE_V3: &[u8] =
     b"dclutch/schema/direct-execution-request-v3";

@@ -22,7 +22,8 @@ use dclutch_capability_program_contract::{
 use dclutch_core_contract::ContentId;
 use dclutch_effect_kernel::{
     v2::FixedRole,
-    v3::{ProgramV3 as EffectProgramV3, SCHEMA_RELEASE_ID as EFFECT_SCHEMA_ID_V4},
+    v3::ProgramV3 as EffectProgramV3,
+    v4::{ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4},
 };
 use dclutch_execution_strategy_contract::v2::{
     EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyProgramV2, StrategyDispositionV2,
@@ -132,7 +133,7 @@ pub struct DirectArtifactBundleV4<'a> {
     /// Exact transition interpreter.
     pub transition: TransitionProgramV3<'a>,
     /// Exact fixed-role effect interpreter.
-    pub effect: EffectProgramV3<'a>,
+    pub effect: EffectProgramV4<'a>,
 }
 
 /// Action-checked request projection and signature-evidence profile.
@@ -272,12 +273,16 @@ pub fn authenticate_direct_artifacts_v4<'a>(
     let transition = TransitionProgramV3::decode(artifacts.transition)
         .map_err(|_| DirectArtifactErrorV4::Transition)?;
     require_content(descriptor.effect().program().to_bytes(), artifacts.effect)?;
-    let effect = EffectProgramV3::decode_selected(
-        descriptor.effect().program().to_bytes(),
-        digest(artifacts.effect),
-        artifacts.effect,
-    )
-    .map_err(|_| DirectArtifactErrorV4::Effect)?;
+    let effect =
+        EffectProgramV4::decode(artifacts.effect).map_err(|_| DirectArtifactErrorV4::Effect)?;
+    if effect.span_count() == 0
+        && effect.range_count() == 0
+        && usize::try_from(effect.semantic_prefix_bytes())
+            .map_err(|_| DirectArtifactErrorV4::Geometry)?
+            != request.len()
+    {
+        return Err(DirectArtifactErrorV4::Effect);
+    }
 
     validate_geometry(
         semantic_request.action(),
@@ -286,7 +291,7 @@ pub fn authenticate_direct_artifacts_v4<'a>(
         account_profile,
         request_profile.request_profile(),
         transition,
-        effect,
+        effect.base(),
     )?;
     Ok(DirectArtifactBundleV4 {
         action: semantic_request.action(),
@@ -739,12 +744,25 @@ mod tests {
     }
 
     fn effect() -> Vec<u8> {
-        let mut output = vec![0_u8; 32];
-        put(&mut output, 0, &dclutch_effect_kernel::v3::MAGIC);
-        *output.get_mut(4).expect("effect version") = dclutch_effect_kernel::v3::VERSION;
-        put(&mut output, 12, &1_u16.to_le_bytes());
-        put(&mut output, 16, &1_u16.to_le_bytes());
-        put(&mut output, 20, &1_u16.to_le_bytes());
+        let mut base = vec![0_u8; 32];
+        put(&mut base, 0, &dclutch_effect_kernel::v3::MAGIC);
+        *base.get_mut(4).expect("effect version") = dclutch_effect_kernel::v3::VERSION;
+        put(&mut base, 12, &1_u16.to_le_bytes());
+        put(&mut base, 16, &1_u16.to_le_bytes());
+        put(&mut base, 20, &1_u16.to_le_bytes());
+        let bytes = dclutch_effect_kernel::v4::HEADER_BYTES_V4 + base.len();
+        let mut scratch = vec![0_u8; bytes];
+        let mut output = vec![0_u8; bytes];
+        dclutch_effect_kernel::v4::encode_program_v4_atomic(
+            &base,
+            dclutch_effect_kernel::v4::BorrowedRangePolicyV4::DisjointExactCoverage,
+            u32::try_from(DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3).expect("request width"),
+            &[],
+            &[],
+            &mut scratch,
+            &mut output,
+        )
+        .expect("effect envelope");
         output
     }
 
