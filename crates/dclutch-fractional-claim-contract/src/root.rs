@@ -10,9 +10,8 @@ pub const FRACTIONAL_ROOT_MAGIC_V1: [u8; 8] = *b"DCLTFR01";
 pub const FRACTIONAL_ROOT_SCHEMA_PREIMAGE_V1: &[u8] = b"dclutch/schema/fractional-root-v1";
 /// SHA-256 identity of [`FRACTIONAL_ROOT_SCHEMA_PREIMAGE_V1`].
 pub const FRACTIONAL_ROOT_SCHEMA_ID_V1: [u8; 32] = [
-    0x0c, 0x30, 0xc4, 0xe8, 0xbb, 0x2a, 0xbc, 0x61, 0xf7, 0xd7, 0x6a, 0x86, 0x5a, 0x55, 0x60,
-    0xa1, 0xe5, 0x67, 0x80, 0xca, 0x6a, 0xb5, 0x5b, 0xab, 0x07, 0x0f, 0x4a, 0x1b, 0x0f, 0xd6,
-    0xe6, 0x1a,
+    0x0c, 0x30, 0xc4, 0xe8, 0xbb, 0x2a, 0xbc, 0x61, 0xf7, 0xd7, 0x6a, 0x86, 0x5a, 0x55, 0x60, 0xa1,
+    0xe5, 0x67, 0x80, 0xca, 0x6a, 0xb5, 0x5b, 0xab, 0x07, 0x0f, 0x4a, 0x1b, 0x0f, 0xd6, 0xe6, 0x1a,
 ];
 
 const VERSION: u16 = 1;
@@ -21,6 +20,17 @@ const MARKET_OFFSET: usize = 48;
 const BENEFICIARY_OFFSET: usize = 80;
 const REVISION_OFFSET: usize = 112;
 const RENT_PRINCIPAL_OFFSET: usize = 120;
+
+/// Persisted immutable terms identity offset.
+pub const FRACTIONAL_ROOT_TERMS_OFFSET_V1: usize = TERMS_OFFSET;
+/// Persisted logical Market identity offset.
+pub const FRACTIONAL_ROOT_MARKET_OFFSET_V1: usize = MARKET_OFFSET;
+/// Persisted permanent RentCredit beneficiary offset.
+pub const FRACTIONAL_ROOT_RENT_BENEFICIARY_OFFSET_V1: usize = BENEFICIARY_OFFSET;
+/// Persisted replay revision offset.
+pub const FRACTIONAL_ROOT_REVISION_OFFSET_V1: usize = REVISION_OFFSET;
+/// Persisted historical rent-principal offset.
+pub const FRACTIONAL_ROOT_RENT_PRINCIPAL_OFFSET_V1: usize = RENT_PRINCIPAL_OFFSET;
 
 /// Canonical root fields.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

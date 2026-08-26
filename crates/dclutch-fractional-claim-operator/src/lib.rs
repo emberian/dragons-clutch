@@ -9,6 +9,7 @@
 //! projection. Parsed Claims/Token balances are an explicitly named adapter
 //! input and are rechecked by the onchain child route.
 
+mod artifacts;
 mod records;
 
 use dclutch_fractional_claim_contract::{
@@ -31,6 +32,11 @@ use solana_program::{
     pubkey::Pubkey,
 };
 
+pub use artifacts::{
+    FRACTIONAL_COMMON_IDENTITIES_V1, FRACTIONAL_COMMON_SCALARS_V1,
+    FractionalArtifactCompilerErrorV1, FractionalClaimsAccountRuleV1,
+    FractionalFinalizedArtifactBundleV1, build_fractional_finalized_artifact_bundle_v1,
+};
 pub use records::{
     CheckedFractionalReleaseInputV1, CheckedFractionalReleaseV1, FinalizedArtifactRecordV1,
     FractionalArtifactRecordSnapshotV1, FractionalChainArtifactSnapshotV1,

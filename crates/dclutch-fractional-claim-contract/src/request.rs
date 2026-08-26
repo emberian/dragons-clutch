@@ -11,9 +11,8 @@ pub const FRACTIONAL_FAMILY_REQUEST_SCHEMA_PREIMAGE_V1: &[u8] =
     b"dclutch/schema/fractional-family-request-v1";
 /// SHA-256 identity of [`FRACTIONAL_FAMILY_REQUEST_SCHEMA_PREIMAGE_V1`].
 pub const FRACTIONAL_FAMILY_REQUEST_SCHEMA_ID_V1: [u8; 32] = [
-    0xbc, 0xcc, 0x63, 0x63, 0x34, 0xef, 0x8e, 0xdf, 0xc5, 0xf6, 0xe6, 0xc6, 0xb6, 0x0d, 0xa6,
-    0xb0, 0xdf, 0x8b, 0x14, 0x7d, 0xb8, 0x09, 0xbf, 0x41, 0x81, 0x73, 0x5b, 0x68, 0xb4, 0x28,
-    0xdc, 0x6a,
+    0xbc, 0xcc, 0x63, 0x63, 0x34, 0xef, 0x8e, 0xdf, 0xc5, 0xf6, 0xe6, 0xc6, 0xb6, 0x0d, 0xa6, 0xb0,
+    0xdf, 0x8b, 0x14, 0x7d, 0xb8, 0x09, 0xbf, 0x41, 0x81, 0x73, 0x5b, 0x68, 0xb4, 0x28, 0xdc, 0x6a,
 ];
 /// Current request wire version.
 pub const FRACTIONAL_FAMILY_REQUEST_VERSION_V1: u16 = 1;
@@ -37,6 +36,45 @@ const QUANTITY_OFFSET: usize = 344;
 const OUTCOME_OFFSET: usize = 352;
 const TERMINAL_OUTCOME_OFFSET: usize = 356;
 const TAIL_RESERVED_OFFSET: usize = 360;
+
+/// Action discriminator byte offset in the exact family request.
+pub const FRACTIONAL_REQUEST_ACTION_OFFSET_V1: usize = ACTION_OFFSET;
+/// First reserved-header byte offset.
+pub const FRACTIONAL_REQUEST_HEADER_RESERVED_OFFSET_V1: usize = HEADER_RESERVED_OFFSET;
+/// Reserved-header byte width.
+pub const FRACTIONAL_REQUEST_HEADER_RESERVED_BYTES_V1: usize = 5;
+/// Release-set identity offset.
+pub const FRACTIONAL_REQUEST_RELEASE_SET_OFFSET_V1: usize = RELEASE_SET_OFFSET;
+/// Logical Market identity offset.
+pub const FRACTIONAL_REQUEST_MARKET_OFFSET_V1: usize = MARKET_OFFSET;
+/// Finalized Product-record digest offset.
+pub const FRACTIONAL_REQUEST_PRODUCT_RECORD_OFFSET_V1: usize = PRODUCT_RECORD_OFFSET;
+/// Product-owned ResultDomain digest offset.
+pub const FRACTIONAL_REQUEST_RESULT_DOMAIN_OFFSET_V1: usize = RESULT_DOMAIN_OFFSET;
+/// Fractional terms digest offset.
+pub const FRACTIONAL_REQUEST_TERMS_OFFSET_V1: usize = TERMS_OFFSET;
+/// Selected TokenBehaviorV2 digest offset.
+pub const FRACTIONAL_REQUEST_TOKEN_BEHAVIOR_OFFSET_V1: usize = TOKEN_BEHAVIOR_OFFSET;
+/// Actor owner identity offset.
+pub const FRACTIONAL_REQUEST_OWNER_OFFSET_V1: usize = OWNER_OFFSET;
+/// Source Token-account identity offset.
+pub const FRACTIONAL_REQUEST_SOURCE_TOKEN_OFFSET_V1: usize = SOURCE_TOKEN_OFFSET;
+/// Destination Token-account identity offset.
+pub const FRACTIONAL_REQUEST_DESTINATION_TOKEN_OFFSET_V1: usize = DESTINATION_TOKEN_OFFSET;
+/// Finalized terminal-coordinate digest offset.
+pub const FRACTIONAL_REQUEST_TERMINAL_DIGEST_OFFSET_V1: usize = TERMINAL_DIGEST_OFFSET;
+/// Expected replay revision offset.
+pub const FRACTIONAL_REQUEST_EXPECTED_REVISION_OFFSET_V1: usize = EXPECTED_REVISION_OFFSET;
+/// Exact action quantity offset.
+pub const FRACTIONAL_REQUEST_QUANTITY_OFFSET_V1: usize = QUANTITY_OFFSET;
+/// Selected Product outcome offset.
+pub const FRACTIONAL_REQUEST_OUTCOME_OFFSET_V1: usize = OUTCOME_OFFSET;
+/// Authenticated terminal outcome offset.
+pub const FRACTIONAL_REQUEST_TERMINAL_OUTCOME_OFFSET_V1: usize = TERMINAL_OUTCOME_OFFSET;
+/// First reserved-tail byte offset.
+pub const FRACTIONAL_REQUEST_TAIL_RESERVED_OFFSET_V1: usize = TAIL_RESERVED_OFFSET;
+/// Reserved-tail byte width.
+pub const FRACTIONAL_REQUEST_TAIL_RESERVED_BYTES_V1: usize = 24;
 
 /// Exact Fractional physical action.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -80,10 +118,7 @@ impl FractionalActionV1 {
     pub const fn requires_terminal(self) -> bool {
         matches!(
             self,
-            Self::WinningRedeem
-                | Self::LosingZeroBurn
-                | Self::Terminalize
-                | Self::ZeroSupplyRetire
+            Self::WinningRedeem | Self::LosingZeroBurn | Self::Terminalize | Self::ZeroSupplyRetire
         )
     }
 
@@ -285,8 +320,10 @@ fn validate(action: FractionalActionV1, input: FractionalFamilyRequestInputV1) -
     let terminal_outcome_present = input.terminal_outcome != NO_TERMINAL_OUTCOME_V1;
     if terminal_present != terminal_outcome_present
         || (action.requires_terminal() && !terminal_present)
-        || matches!(action, FractionalActionV1::Wrap | FractionalActionV1::WholeUnwrap)
-            && terminal_present
+        || matches!(
+            action,
+            FractionalActionV1::Wrap | FractionalActionV1::WholeUnwrap
+        ) && terminal_present
     {
         return Err(FractionalRequestErrorV1::InvalidTerminal);
     }
