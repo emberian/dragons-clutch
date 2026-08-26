@@ -202,18 +202,18 @@ for (const [source, name] of [
   ['effect', 'SCHEMA_RELEASE_ID'], ['lifecycle', 'SCHEMA_RELEASE_ID'],
   ['strategy', 'EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2'],
   ['strategyGenerated', 'EXECUTION_STRATEGY_PROGRAM_MAGIC_V2'],
-  ['lifecycle', 'SUCCESSOR_SCHEMA_RELEASE_ID'],
+  ['lifecycle', 'CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5'],
   ['ordinaryArtifacts', 'DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_ID_V3'],
   ['ordinaryArtifacts', 'DIRECT_INLINE_ORDINARY_TRANSITION_ID_V3'],
   ['ordinaryArtifacts', 'DIRECT_INLINE_ORDINARY_STRATEGY_ID_V3'],
   ['ordinaryBundle', 'DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_ID_V3'],
-  ['ordinaryBundle', 'DIRECT_INLINE_ORDINARY_LIFECYCLE_ID_V4'],
+  ['ordinaryBundle', 'DIRECT_INLINE_ORDINARY_LIFECYCLE_ID_V5'],
   ['ordinaryBundle', 'DIRECT_INLINE_ORDINARY_EFFECT_ID_V4'],
 ]) {
   const alias = source === 'descriptorContractV4' && name === 'SCHEMA_RELEASE_ID'
     ? 'CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID'
-    : source === 'lifecycle' && name === 'SUCCESSOR_SCHEMA_RELEASE_ID'
-      ? 'LIFECYCLE_SUCCESSOR_SCHEMA_RELEASE_ID'
+    : source === 'lifecycle' && name === 'CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5'
+      ? 'SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5'
       : name === 'SCHEMA_RELEASE_ID'
         ? `${source.toUpperCase()}_SCHEMA_RELEASE_ID`
         : name;
