@@ -1283,8 +1283,7 @@ fn prepare_lifecycle_v3<'a>(
                 seed = seed.checked_add(1).ok_or(TradingSbfError::Content)?;
             }
             let seed_slices = seeds.iter().map(SeedValueV3::as_slice).collect::<Vec<_>>();
-            let derived = Pubkey::create_program_address(&seed_slices, program_id)
-                .map_err(|_| TradingSbfError::Content)?;
+            let derived = require_canonical_lifecycle_pda_v3(program_id, &seed_slices)?;
             if accounts
                 .get(state)
                 .is_none_or(|account| account.key != &derived)
@@ -1379,6 +1378,24 @@ fn prepare_lifecycle_v3<'a>(
         ordinal = ordinal.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
     Ok(output)
+}
+
+/// Recompute one policy-projected PDA and require the request-projected final
+/// bump witness to be Solana's canonical bump. A merely valid alternative bump
+/// is never signer or lifecycle authority.
+fn require_canonical_lifecycle_pda_v3(
+    program_id: &Pubkey,
+    seed_slices: &[&[u8]],
+) -> Result<Pubkey, ProgramError> {
+    let (bump_seed, canonical_seeds) = seed_slices.split_last().ok_or(TradingSbfError::Content)?;
+    let [supplied_bump] = bump_seed else {
+        return Err(TradingSbfError::Content.into());
+    };
+    let (derived, canonical_bump) = Pubkey::find_program_address(canonical_seeds, program_id);
+    if *supplied_bump != canonical_bump {
+        return Err(TradingSbfError::Content.into());
+    }
+    Ok(derived)
 }
 
 fn representative_v3(index: usize, aliases: &[usize]) -> Result<usize, ProgramError> {
@@ -3698,6 +3715,37 @@ mod tests {
             reserve_lifecycle_state_v3(1, &mut used),
             Err(TradingSbfError::Content.into())
         );
+    }
+
+    #[test]
+    fn lifecycle_pda_requires_canonical_bump_not_merely_valid_bump() {
+        let program_id = Pubkey::new_from_array([0x71; 32]);
+        let identity = [0x42; 32];
+        let prefix = [b"general-state".as_slice(), identity.as_slice()];
+        let (canonical_key, canonical_bump) = Pubkey::find_program_address(&prefix, &program_id);
+        let canonical_seed = [canonical_bump];
+        let canonical = [prefix[0], prefix[1], canonical_seed.as_slice()];
+        assert_eq!(
+            require_canonical_lifecycle_pda_v3(&program_id, &canonical),
+            Ok(canonical_key)
+        );
+
+        let alternate = (0_u8..=u8::MAX)
+            .find(|bump| {
+                if *bump == canonical_bump {
+                    return false;
+                }
+                let bump_seed = [*bump];
+                Pubkey::create_program_address(
+                    &[prefix[0], prefix[1], bump_seed.as_slice()],
+                    &program_id,
+                )
+                .is_ok()
+            })
+            .expect("at least one noncanonical valid bump");
+        let alternate_seed = [alternate];
+        let hostile = [prefix[0], prefix[1], alternate_seed.as_slice()];
+        assert!(require_canonical_lifecycle_pda_v3(&program_id, &hostile).is_err());
     }
 
     #[test]
