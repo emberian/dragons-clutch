@@ -44,7 +44,7 @@ use solana_program::{
     pubkey::Pubkey,
     rent::Rent,
 };
-use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
+use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
 use solana_system_interface::instruction::{allocate, assign, transfer};
 
 use crate::{
@@ -448,9 +448,7 @@ fn authenticate_infrastructure<'info>(
     }
     let profile = ProtocolInfrastructureProfileV1::decode(&profile_data)
         .map_err(|_| ResolutionError::ResolutionRelease)?;
-    if profile.registry().program().to_bytes() != registry.key.to_bytes()
-        || profile.rent().program().to_bytes() != sysvar::rent::ID.to_bytes()
-    {
+    if profile.registry().program().to_bytes() != registry.key.to_bytes() {
         return Err(ResolutionError::ResolutionRelease.into());
     }
     drop(profile_data);

@@ -63,7 +63,7 @@ use solana_program::{
     pubkey::Pubkey,
     rent::Rent,
 };
-use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
+use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
 use solana_system_interface::instruction::{allocate, assign};
 
 use crate::{
@@ -529,9 +529,7 @@ fn authenticate_market_and_infrastructure(
     let profile = ProtocolInfrastructureProfileV1::decode(&infrastructure_data)
         .map_err(|_| ResolutionError::ResolutionRelease)?;
     drop(infrastructure_data);
-    if profile.registry().program().to_bytes() != frame.registry_program().key.to_bytes()
-        || profile.rent().program().to_bytes() != sysvar::rent::ID.to_bytes()
-    {
+    if profile.registry().program().to_bytes() != frame.registry_program().key.to_bytes() {
         return Err(ResolutionError::ResolutionRelease.into());
     }
     let artifact_data = frame
@@ -626,11 +624,13 @@ fn authenticate_activation_and_caller(
         {
             return Err(ResolutionError::ResolutionRelease.into());
         }
-        let observation =
-            deployment_observation(program, programdata, activated.release().programdata())?;
-        activated
-            .authenticate_current_deployment(observation)
-            .map_err(|_| ResolutionError::ResolutionDeployment)?;
+        if caller_executes_role(request.caller, role) {
+            let observation =
+                deployment_observation(program, programdata, activated.release().programdata())?;
+            activated
+                .authenticate_current_deployment(observation)
+                .map_err(|_| ResolutionError::ResolutionDeployment)?;
+        }
     }
     let caller_role = match request.caller {
         ProviderCallerV3::Core => ExecutionRoleV1::Core,
@@ -706,6 +706,15 @@ fn authenticate_activation_and_caller(
         }
     }
     Ok(())
+}
+
+const fn caller_executes_role(caller: ProviderCallerV3, role: ExecutionRoleV1) -> bool {
+    matches!(role, ExecutionRoleV1::Resolution)
+        || matches!(
+            (caller, role),
+            (ProviderCallerV3::Core, ExecutionRoleV1::Core)
+                | (ProviderCallerV3::Trading, ExecutionRoleV1::Trading)
+        )
 }
 
 fn authenticate_source_records(
@@ -1126,6 +1135,28 @@ mod tests {
                 - PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3,
             4,
         );
+    }
+
+    #[test]
+    fn only_the_resolution_and_active_caller_deployments_execute() {
+        for (caller, active, inactive) in [
+            (
+                ProviderCallerV3::Core,
+                ExecutionRoleV1::Core,
+                ExecutionRoleV1::Trading,
+            ),
+            (
+                ProviderCallerV3::Trading,
+                ExecutionRoleV1::Trading,
+                ExecutionRoleV1::Core,
+            ),
+        ] {
+            assert!(caller_executes_role(caller, ExecutionRoleV1::Resolution));
+            assert!(caller_executes_role(caller, active));
+            assert!(!caller_executes_role(caller, inactive));
+            assert!(!caller_executes_role(caller, ExecutionRoleV1::Claims));
+            assert!(!caller_executes_role(caller, ExecutionRoleV1::Custody));
+        }
     }
 
     #[test]
