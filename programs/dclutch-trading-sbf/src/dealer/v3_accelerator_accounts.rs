@@ -8,7 +8,7 @@
 
 extern crate alloc;
 
-use alloc::{vec, vec::Vec};
+use alloc::{boxed::Box, vec, vec::Vec};
 
 use dclutch_claims_svm::{
     frame_spec_v1::{
@@ -43,7 +43,7 @@ use super::{
     },
     v3_composer::{
         MAX_DEALER_SCENARIO_CUSTODY_EFFECTS_V3, ScenarioAtomicPlanV3, ScenarioCollateralFrameV3,
-        ScenarioComposerContextV3,
+        ScenarioComposerContextV3, ScenarioCustodyEffectV3,
     },
     v3_hot_artifact::DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3,
     v3_obligation::{
@@ -142,11 +142,35 @@ pub fn evaluate_authenticated_dealer_scenario_v4(
         return Err(DealerScenarioAcceleratorErrorV4::Invocation);
     }
 
+    authenticate_and_evaluate_dealer_scenario_v4(
+        invocation,
+        request,
+        width,
+        runtime,
+        spans,
+        frame,
+        candidate_bank,
+    )
+}
+
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn authenticate_and_evaluate_dealer_scenario_v4(
+    invocation: &AuthenticatedAcceleratorInvocationV4<'_, '_, '_>,
+    request: DealerScenarioTradeRequestV3<'_>,
+    width: usize,
+    runtime: &[AccountInfo<'_>],
+    spans: [u32; DEALER_SCENARIO_PROFILE_SPANS_V4],
+    frame: DealerScenarioLogicalFrameV4,
+    candidate_bank: &mut [u8],
+) -> Result<ScenarioAtomicPlanV3, DealerScenarioAcceleratorErrorV4> {
     let config = authenticate_config(invocation, request, runtime)?;
-    let claims = authenticate_claims(invocation, request, frame, runtime, width, config)?;
+    let claims = Box::new(authenticate_claims(
+        invocation, request, frame, runtime, width, config,
+    )?);
     let current_obligation = DealerObligationProjectionV3::decode(&claims.obligation_bytes)
         .map_err(|_| DealerScenarioAcceleratorErrorV4::Claims)?;
-    let collateral = authenticate_collateral(
+    let collateral = Box::new(authenticate_collateral(
         invocation,
         request,
         frame,
@@ -154,34 +178,95 @@ pub fn evaluate_authenticated_dealer_scenario_v4(
         runtime,
         config,
         claims.core_market,
-    )?;
+    )?);
     let current_slot = invocation
         .scalars()
         .get(usize::from(DEALER_SCENARIO_CURRENT_SLOT_SCALAR_V4))
         .copied()
         .ok_or(DealerScenarioAcceleratorErrorV4::Invocation)?;
 
+    evaluate_authenticated_candidate_v4(
+        invocation,
+        request,
+        width,
+        config,
+        &claims,
+        current_obligation,
+        &collateral,
+        current_slot,
+        candidate_bank,
+    )
+}
+
+struct DealerScenarioEvaluationScratchV4 {
+    acquired: Vec<u64>,
+    delivered: Vec<u64>,
+    obligations_before: Vec<u64>,
+    obligations_after: Vec<u64>,
+    candidate_obligation_state: Vec<u8>,
+    post_inventory: Vec<u64>,
+    post_counterparty_inventory: Vec<u64>,
+    post_equity: Vec<i128>,
+    custody_effects: [Option<ScenarioCustodyEffectV3>; MAX_DEALER_SCENARIO_CUSTODY_EFFECTS_V3],
+    candidate_scalars: Vec<u64>,
+    candidate_identities: Vec<[u8; 32]>,
+    bank_scratch: Vec<u8>,
+}
+
+impl DealerScenarioEvaluationScratchV4 {
+    fn new(
+        width: usize,
+        request_width: u32,
+        scalar_count: usize,
+        identity_count: usize,
+        bank_bytes: usize,
+    ) -> Result<Box<Self>, DealerScenarioAcceleratorErrorV4> {
+        Ok(Box::new(Self {
+            acquired: vec![0_u64; width],
+            delivered: vec![0_u64; width],
+            obligations_before: vec![0_u64; width],
+            obligations_after: vec![0_u64; width],
+            candidate_obligation_state: vec![
+                0_u8;
+                obligation_account_bytes_v3(request_width).map_err(
+                    |_| DealerScenarioAcceleratorErrorV4::Arithmetic
+                )?
+            ],
+            post_inventory: vec![0_u64; width],
+            post_counterparty_inventory: vec![0_u64; width],
+            post_equity: vec![0_i128; width],
+            custody_effects: [None; MAX_DEALER_SCENARIO_CUSTODY_EFFECTS_V3],
+            candidate_scalars: vec![0_u64; scalar_count],
+            candidate_identities: vec![[0_u8; 32]; identity_count],
+            bank_scratch: vec![0_u8; bank_bytes],
+        }))
+    }
+}
+
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn evaluate_authenticated_candidate_v4(
+    invocation: &AuthenticatedAcceleratorInvocationV4<'_, '_, '_>,
+    request: DealerScenarioTradeRequestV3<'_>,
+    width: usize,
+    config: DealerConfigV3,
+    claims: &ClaimsObservationV4,
+    current_obligation: DealerObligationProjectionV3<'_>,
+    collateral: &CollateralObservationV4,
+    current_slot: u64,
+    candidate_bank: &mut [u8],
+) -> Result<ScenarioAtomicPlanV3, DealerScenarioAcceleratorErrorV4> {
     let scalar_count = usize::from(DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4)
         .checked_add(width)
         .ok_or(DealerScenarioAcceleratorErrorV4::Arithmetic)?;
     let identity_count = usize::from(DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4);
-    let mut acquired = vec![0_u64; width];
-    let mut delivered = vec![0_u64; width];
-    let mut obligations_before = vec![0_u64; width];
-    let mut obligations_after = vec![0_u64; width];
-    let mut candidate_obligation_state = vec![
-        0_u8;
-        obligation_account_bytes_v3(request.width).map_err(
-            |_| DealerScenarioAcceleratorErrorV4::Arithmetic
-        )?
-    ];
-    let mut post_inventory = vec![0_u64; width];
-    let mut post_counterparty_inventory = vec![0_u64; width];
-    let mut post_equity = vec![0_i128; width];
-    let mut custody_effects = [None; MAX_DEALER_SCENARIO_CUSTODY_EFFECTS_V3];
-    let mut candidate_scalars = vec![0_u64; scalar_count];
-    let mut candidate_identities = vec![[0_u8; 32]; identity_count];
-    let mut bank_scratch = vec![0_u8; candidate_bank.len()];
+    let mut scratch = DealerScenarioEvaluationScratchV4::new(
+        width,
+        request.width,
+        scalar_count,
+        identity_count,
+        candidate_bank.len(),
+    )?;
 
     let context = invocation.context();
     evaluate_dealer_scenario_admitted_v4(
@@ -262,18 +347,18 @@ pub fn evaluate_authenticated_dealer_scenario_v4(
         },
         current_slot,
         DealerScenarioAdmittedBuffersV4 {
-            acquired: &mut acquired,
-            delivered: &mut delivered,
-            obligations_before: &mut obligations_before,
-            obligations_after: &mut obligations_after,
-            candidate_obligation_state: &mut candidate_obligation_state,
-            post_inventory: &mut post_inventory,
-            post_counterparty_inventory: &mut post_counterparty_inventory,
-            post_equity: &mut post_equity,
-            custody_effects: &mut custody_effects,
-            candidate_scalars: &mut candidate_scalars,
-            candidate_identities: &mut candidate_identities,
-            bank_scratch: &mut bank_scratch,
+            acquired: &mut scratch.acquired,
+            delivered: &mut scratch.delivered,
+            obligations_before: &mut scratch.obligations_before,
+            obligations_after: &mut scratch.obligations_after,
+            candidate_obligation_state: &mut scratch.candidate_obligation_state,
+            post_inventory: &mut scratch.post_inventory,
+            post_counterparty_inventory: &mut scratch.post_counterparty_inventory,
+            post_equity: &mut scratch.post_equity,
+            custody_effects: &mut scratch.custody_effects,
+            candidate_scalars: &mut scratch.candidate_scalars,
+            candidate_identities: &mut scratch.candidate_identities,
+            bank_scratch: &mut scratch.bank_scratch,
             candidate_bank,
         },
     )
