@@ -516,6 +516,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         family_context.selection().manifest().to_bytes(),
     )?;
     let entry = authenticate_manifest_entry_boxed_v3(&manifest_data, &family_context)?;
+    drop(manifest_data);
     let program_set_data = borrow_finalized_record(
         frame,
         frame.program_set_raw,
@@ -533,7 +534,9 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     let selected_entry = program_set
         .select_entry(family_request)
         .map_err(|_| TradingSbfError::Content)?;
+    let selected_action = selected_entry.selector();
     let selected_descriptor = selected_entry.descriptor();
+    drop(program_set_data);
     if selected_descriptor.schema().to_bytes() != PROGRAM_SCHEMA_ID_V4
         || selected_descriptor.program() != request.capability_program()
     {
@@ -548,7 +551,9 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         selected_descriptor.program().to_bytes(),
     )?;
     let descriptor = decode_capability_program_boxed_v3(&descriptor_data)?;
+    drop(descriptor_data);
     authenticate_descriptor_root_selection(&descriptor, &family_context, &entry)?;
+    drop(entry);
 
     let config_data = borrow_finalized_record(
         frame,
@@ -578,6 +583,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
             .content_digest
             .to_bytes(),
     })?;
+    drop(market);
     let (strategy, strategy_end) = authenticate_strategy_boxed_v3(
         &frame,
         strategy_evidence,
@@ -713,7 +719,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         frame,
         envelope,
         family_context,
-        selected_entry.selector(),
+        selected_action,
         &descriptor,
         &strategy,
         &product_runtime,
@@ -735,7 +741,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         envelope,
         hot_instruction,
         strategy,
-        selected_action: selected_entry.selector(),
+        selected_action,
         context,
         product_runtime,
         claims_program,
