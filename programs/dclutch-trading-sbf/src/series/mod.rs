@@ -18,8 +18,12 @@ mod generated;
 
 /// Solana account authentication and commit-last physical persistence.
 pub mod accounts;
+/// Exact sparse family request consumed by the canonical Trading hot outer.
+pub mod instruction;
 /// Total commit-last lifecycle planning for recurring Series V2.
 pub mod lifecycle;
+/// Exact content/replay projector behind the canonical Trading hot outer.
+pub mod projector;
 /// Fixed-layout mutable replay state owned by the selected Trading program.
 pub mod state;
 
