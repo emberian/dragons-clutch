@@ -28,6 +28,7 @@ import DClutchSemantics.SourceResolutionStateV2Abi
 import DClutchSemantics.SourceResolutionTerminalV2Abi
 import DClutchSemantics.GeneralClearing
 import DClutchSemantics.GeneralClearingExamples
+import DClutchSemantics.GeneralV5Assurance
 import DClutchSemantics.GeneralControllerAbi
 import DClutchSemantics.GeneralConfigAbi
 import DClutchSemantics.GeneralConfigV3Abi
