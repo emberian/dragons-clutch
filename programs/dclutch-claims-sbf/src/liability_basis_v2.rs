@@ -73,9 +73,9 @@ const POSITION_MAGIC_V2: [u8; 8] = *b"DCLLBP02";
 const RECEIPT_MAGIC_V2: [u8; 8] = *b"DCLLBR02";
 const RECEIPT_BYTES_V2: usize = 168;
 const CANDIDATE_DIGEST_DOMAIN_V2: [u8; 27] = *b"dclutch/lbv2/candidate/v2\0\0";
-const BASIS_SEMANTIC_ID_DOMAIN_V2: &[u8] = b"dclutch/lbv2/semantic-id/v2";
-const BASIS_PRODUCT_LINK_OFFSET_V2: usize = 32;
-const BASIS_PRODUCT_LINK_END_V2: usize = 64;
+pub(crate) const BASIS_SEMANTIC_ID_DOMAIN_V2: &[u8] = b"dclutch/lbv2/semantic-id/v2";
+pub(crate) const BASIS_PRODUCT_LINK_OFFSET_V2: usize = 32;
+pub(crate) const BASIS_PRODUCT_LINK_END_V2: usize = 64;
 
 const OWNER_ACCOUNT: usize = 0;
 const MARKET_ACCOUNT: usize = 1;
@@ -702,21 +702,21 @@ impl<'accounts, 'info> LiabilityBasisAccountsV2<'accounts, 'info> {
 }
 
 #[derive(Clone, Copy)]
-struct MarketViewV2 {
-    claim_count: u32,
-    revision: u64,
-    logical_market: [u8; 32],
-    release_set: [u8; 32],
-    registry_program: [u8; 32],
-    product_instance_id: [u8; 32],
-    basis_id: [u8; 32],
-    realm_id: [u8; 32],
-    custody_context: [u8; 32],
-    generation: u64,
+pub(crate) struct MarketViewV2 {
+    pub(crate) claim_count: u32,
+    pub(crate) revision: u64,
+    pub(crate) logical_market: [u8; 32],
+    pub(crate) release_set: [u8; 32],
+    pub(crate) registry_program: [u8; 32],
+    pub(crate) product_instance_id: [u8; 32],
+    pub(crate) basis_id: [u8; 32],
+    pub(crate) realm_id: [u8; 32],
+    pub(crate) custody_context: [u8; 32],
+    pub(crate) generation: u64,
 }
 
 impl MarketViewV2 {
-    fn decode(bytes: &[u8]) -> Result<Self, LiabilityBasisSbfErrorV2> {
+    pub(crate) fn decode(bytes: &[u8]) -> Result<Self, LiabilityBasisSbfErrorV2> {
         if read_array::<8>(bytes, 0)? != MARKET_MAGIC_V2 || read_u16(bytes, 8)? != ABI_VERSION_V2 {
             return Err(LiabilityBasisSbfErrorV2::ClaimsState);
         }
@@ -753,16 +753,16 @@ impl MarketViewV2 {
 }
 
 #[derive(Clone, Copy)]
-struct PositionViewV2 {
-    claim_count: u32,
-    revision: u64,
-    market_account: [u8; 32],
-    owner: [u8; 32],
-    basis_id: [u8; 32],
+pub(crate) struct PositionViewV2 {
+    pub(crate) claim_count: u32,
+    pub(crate) revision: u64,
+    pub(crate) market_account: [u8; 32],
+    pub(crate) owner: [u8; 32],
+    pub(crate) basis_id: [u8; 32],
 }
 
 impl PositionViewV2 {
-    fn decode(bytes: &[u8]) -> Result<Self, LiabilityBasisSbfErrorV2> {
+    pub(crate) fn decode(bytes: &[u8]) -> Result<Self, LiabilityBasisSbfErrorV2> {
         if read_array::<8>(bytes, 0)? != POSITION_MAGIC_V2 || read_u16(bytes, 8)? != ABI_VERSION_V2
         {
             return Err(LiabilityBasisSbfErrorV2::ClaimsState);
@@ -935,14 +935,35 @@ fn authenticate_product_and_basis(
     accounts: &LiabilityBasisAccountsV2<'_, '_>,
     market: MarketViewV2,
 ) -> Result<AdmittedBasisV2, ProgramError> {
-    authenticate_self_finalized_record(
-        accounts,
+    authenticate_product_and_basis_records(
         accounts.basis_record,
         accounts.basis_staging,
+        accounts.product_record,
+        accounts.product_staging,
+        accounts.rent,
+        accounts.core_program,
+        market,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_product_and_basis_records(
+    basis_record: &AccountInfo<'_>,
+    basis_staging: &AccountInfo<'_>,
+    product_record: &AccountInfo<'_>,
+    product_staging: &AccountInfo<'_>,
+    rent: &AccountInfo<'_>,
+    core_program: &AccountInfo<'_>,
+    market: MarketViewV2,
+) -> Result<AdmittedBasisV2, ProgramError> {
+    authenticate_self_finalized_record(
+        core_program,
+        rent,
+        basis_record,
+        basis_staging,
         LIABILITY_BASIS_SCHEMA_RELEASE_ID_V2,
     )?;
-    let basis_data = accounts
-        .basis_record
+    let basis_data = basis_record
         .try_borrow_data()
         .map_err(|_| LiabilityBasisSbfErrorV2::Accounts)?;
     let linked = LinkedBasisRecordV2::decode(&basis_data)
@@ -965,14 +986,14 @@ fn authenticate_product_and_basis(
         return Err(LiabilityBasisSbfErrorV2::ProductLink.into());
     }
     authenticate_finalized_record(
-        accounts,
-        accounts.product_record,
-        accounts.product_staging,
+        core_program,
+        rent,
+        product_record,
+        product_staging,
         PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1,
         market.product_instance_id,
     )?;
-    let product_data = accounts
-        .product_record
+    let product_data = product_record
         .try_borrow_data()
         .map_err(|_| LiabilityBasisSbfErrorV2::Accounts)?;
     let product =
@@ -988,8 +1009,9 @@ fn authenticate_product_and_basis(
         .map_err(|_| LiabilityBasisSbfErrorV2::ProductLink.into())
 }
 
-fn authenticate_self_finalized_record(
-    accounts: &LiabilityBasisAccountsV2<'_, '_>,
+pub(crate) fn authenticate_self_finalized_record(
+    core_program: &AccountInfo<'_>,
+    rent: &AccountInfo<'_>,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
     schema_release: [u8; 32],
@@ -999,23 +1021,24 @@ fn authenticate_self_finalized_record(
         .map_err(|_| LiabilityBasisSbfErrorV2::Accounts)?;
     let digest = hash(&data).to_bytes();
     drop(data);
-    authenticate_finalized_record(accounts, raw, staging, schema_release, digest)
+    authenticate_finalized_record(core_program, rent, raw, staging, schema_release, digest)
 }
 
 fn authenticate_finalized_record(
-    accounts: &LiabilityBasisAccountsV2<'_, '_>,
+    core_program: &AccountInfo<'_>,
+    rent_account: &AccountInfo<'_>,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
     schema_release: [u8; 32],
     expected_digest: [u8; 32],
 ) -> Result<(), ProgramError> {
-    if raw.owner != accounts.core_program.key
+    if raw.owner != core_program.key
         || raw.executable
         || staging.owner != &system_program::ID
         || staging.data_len() != 0
         || staging.executable
-        || accounts.rent.key != &sysvar::rent::ID
-        || accounts.rent.executable
+        || rent_account.key != &sysvar::rent::ID
+        || rent_account.executable
         || hash(
             &raw.try_borrow_data()
                 .map_err(|_| LiabilityBasisSbfErrorV2::Accounts)?,
@@ -1035,12 +1058,12 @@ fn authenticate_finalized_record(
         schema_release.as_slice(),
         expected_digest.as_slice(),
     ];
-    if raw.key != &Pubkey::find_program_address(&raw_seeds, accounts.core_program.key).0
-        || staging.key != &Pubkey::find_program_address(&staging_seeds, accounts.core_program.key).0
+    if raw.key != &Pubkey::find_program_address(&raw_seeds, core_program.key).0
+        || staging.key != &Pubkey::find_program_address(&staging_seeds, core_program.key).0
     {
         return Err(LiabilityBasisSbfErrorV2::FinalizedRecord.into());
     }
-    let rent = Rent::from_account_info(accounts.rent)
+    let rent = Rent::from_account_info(rent_account)
         .map_err(|_| LiabilityBasisSbfErrorV2::FinalizedRecord)?;
     if raw.lamports() < rent.minimum_balance(raw.data_len()) {
         return Err(LiabilityBasisSbfErrorV2::FinalizedRecord.into());
@@ -1106,7 +1129,8 @@ fn authenticate_core_and_terminal(
                         .ok_or(LiabilityBasisSbfErrorV2::ProductLink)?
                         .to_bytes();
                     authenticate_finalized_record(
-                        accounts,
+                        accounts.core_program,
+                        accounts.rent,
                         accounts.terminal_coordinate,
                         accounts.terminal_coordinate_staging,
                         TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2,
@@ -1634,7 +1658,10 @@ fn require_nonzero_ids(values: &[[u8; 32]]) -> Result<(), LiabilityBasisSbfError
     Ok(())
 }
 
-fn vector_width(header: usize, claim_count: u32) -> Result<usize, LiabilityBasisSbfErrorV2> {
+pub(crate) fn vector_width(
+    header: usize,
+    claim_count: u32,
+) -> Result<usize, LiabilityBasisSbfErrorV2> {
     usize::try_from(claim_count)
         .ok()
         .and_then(|count| count.checked_mul(8))
@@ -1642,7 +1669,7 @@ fn vector_width(header: usize, claim_count: u32) -> Result<usize, LiabilityBasis
         .ok_or(LiabilityBasisSbfErrorV2::ClaimsState)
 }
 
-fn read_vector(
+pub(crate) fn read_vector(
     bytes: &[u8],
     offset: usize,
     claim_count: u32,
@@ -1659,7 +1686,7 @@ fn read_vector(
     Ok(output)
 }
 
-fn write_vector(
+pub(crate) fn write_vector(
     bytes: &mut [u8],
     offset: usize,
     values: &[u64],
