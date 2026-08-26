@@ -83,7 +83,7 @@ pub fn encode_rational_lifecycle_selected_account_profile_v5(
         );
         let opaque = matches!(
             index,
-            6 | 7 | 8 | 9 | 10 | 13 | 17 | 18 | 20 | 23 | 24 | 26 | 27
+            6 | 7 | 8 | 9 | 10 | 13 | 17 | 18 | 20 | 23 | 24 | 28 | 29
         );
         let prestate = match (index, alias, opaque) {
             (4, _, _) => {

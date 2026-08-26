@@ -383,6 +383,7 @@ mod tests {
     use dclutch_account_profile_contract::lifecycle_v3::{
         HEADER_BYTES as LIFECYCLE_HEADER_BYTES, encode::encode_lifecycle_policy_v5_atomic,
     };
+    use dclutch_account_profile_contract::v2::AccountPrestateV2;
     use dclutch_product_payoff_v2_codec::runtime_v3::{
         BASIS_HEADER_BYTES_V3, BasisInputV3, BasisKindV3, compile_basis_v3,
     };
@@ -560,6 +561,27 @@ mod tests {
                 DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
             );
             assert_eq!(account.dynamic_fixed_span_count(), 0);
+            if action != LifecycleActionV2::ActivateReceipt {
+                assert_eq!(
+                    account.rule(false, 26).expect("Position rule").prestate(),
+                    AccountPrestateV2::Exact
+                );
+                assert_eq!(
+                    account.rule(false, 27).expect("admission rule").prestate(),
+                    AccountPrestateV2::Exact
+                );
+                assert_eq!(
+                    account.rule(false, 28).expect("shard Mint rule").prestate(),
+                    AccountPrestateV2::AuthenticatedOpaqueReadonlyData
+                );
+                assert_eq!(
+                    account
+                        .rule(false, 29)
+                        .expect("structured Token account rule")
+                        .prestate(),
+                    AccountPrestateV2::AuthenticatedOpaqueReadonlyData
+                );
+            }
 
             let mut substituted = bundle.clone();
             substituted.representation_descriptor_id = id(52);
