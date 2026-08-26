@@ -1,5 +1,13 @@
 //! Chain-observation, K/N separation, hostile refusal, and packet corpus.
 
+use dclutch_account_profile_contract::lifecycle_v3::{
+    HEADER_BYTES as LIFECYCLE_POLICY_BYTES_V5, encode::encode_lifecycle_policy_v5_atomic,
+};
+use dclutch_capability_program_contract::hot_v3::{
+    HOT_CONFIG_RAW_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
+    HOT_MARKET_ACCOUNT_V3, HOT_RENT_SYSVAR_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3,
+    HOT_TRADING_PROGRAM_ACCOUNT_V3,
+};
 use dclutch_product_payoff_v2_codec::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
     runtime_v3::{
@@ -13,6 +21,15 @@ use dclutch_product_runtime_v2_admission::{
     RESULT_DOMAIN_SCHEMA_ID_V2,
 };
 use dclutch_product_runtime_v2_operator::{ProductCompilationInputV2, compile_product_records_v2};
+use dclutch_rational_lifecycle_hot_v3::{
+    CheckedRationalLifecycleHotOuterV3, RationalLifecycleHotStateV3,
+    RationalLifecycleSelectedAccountProfileInputV5, RationalLifecycleSelectedBundleInputV5,
+    RationalLifecycleSelectedSelectionV5, build_rational_lifecycle_selected_bundle_v5,
+    lifecycle_logical_account_count_v3,
+};
+use dclutch_rational_representation_v2_contract::{
+    AuthenticatedTokenBehaviorV2, TokenBehaviorRecordAdmissionV2, authenticate_token_behavior_v2,
+};
 use dclutch_rational_representation_v2_kernel::{
     RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2, REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
     descriptor_v3::{
@@ -42,10 +59,18 @@ use dclutch_representation_composition_v3_operator::{
     ProductCompositionObservationV3, PublicationContextV3, PublicationTargetV3,
     RepresentationCompositionObservationV3, authenticate_composition_v3,
     build_claims_lifecycle_plan_v3, build_composition_admission_plan_v3, build_publication_plan_v3,
-    compile_unsigned_packet_v0, validate_publication_candidates_v3,
+    compile_unsigned_packet_v0, hot_v3::build_composition_lifecycle_hot_plan_v3,
+    validate_publication_candidates_v3,
 };
-use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
+use dclutch_token_svm::{
+    TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_BYTES_V2,
+    TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, TokenBehaviorSelectionV2,
+};
 use dclutch_versioned_message_operator::{Finality, Observation, ObservedAccount};
+use solana_address_lookup_table_interface::{
+    program as address_lookup_program,
+    state::{AddressLookupTable, LookupTableMeta},
+};
 use solana_hash::Hash;
 use solana_program::{
     hash::{hash, hashv},
@@ -53,6 +78,7 @@ use solana_program::{
     pubkey::Pubkey,
 };
 use solana_sdk_ids::system_program;
+use std::borrow::Cow;
 
 const SLOT: u64 = 91;
 const RENT: u64 = 1_000_000;
@@ -524,6 +550,151 @@ impl ChainFixture {
     }
 }
 
+fn selected_token_behavior(
+    descriptor: dclutch_rational_representation_v2_kernel::RepresentationDescriptorV2<'_>,
+) -> AuthenticatedTokenBehaviorV2 {
+    let realm = id(94);
+    let bytes = TokenBehaviorSelectionV2::new(realm, descriptor.release_set_id())
+        .expect("Token behavior selection")
+        .to_bytes();
+    let digest = hash(&bytes).to_bytes();
+    authenticate_token_behavior_v2(
+        descriptor,
+        realm,
+        &bytes,
+        TokenBehaviorRecordAdmissionV2 {
+            selected_schema_id: TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
+            finalized_schema_id: TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
+            selected_content_digest: digest,
+            finalized_content_digest: digest,
+            recomputed_content_digest: digest,
+            record_authenticated: true,
+            market_realm_authenticated: true,
+        },
+    )
+    .expect("authenticated Token behavior")
+}
+
+fn selected_lifecycle_bundle(
+    fixture: &ChainFixture,
+    admitted: dclutch_representation_composition_v3_operator::AdmittedCompositionV3<'_>,
+    behavior: AuthenticatedTokenBehaviorV2,
+) -> dclutch_rational_lifecycle_hot_v3::RationalLifecycleSelectedBundleV5 {
+    let action = LifecycleActionV2::ActivateReceipt;
+    let logical = usize::from(
+        lifecycle_logical_account_count_v3(action, 0).expect("ActivateReceipt logical accounts"),
+    );
+    let mut lengths = vec![0_u32; logical];
+    *lengths.get_mut(1).expect("Token selection coordinate") =
+        u32::try_from(TOKEN_BEHAVIOR_SELECTION_BYTES_V2).expect("Token selection width");
+    *lengths.get_mut(4).expect("ProductBasis coordinate") =
+        u32::try_from(fixture.basis.raw.data.len()).expect("ProductBasis width");
+    *lengths.get_mut(14).expect("descriptor coordinate") =
+        u32::try_from(fixture.execution_descriptor.raw.data.len()).expect("descriptor width");
+    let mut lifecycle_scratch = vec![0; LIFECYCLE_POLICY_BYTES_V5];
+    let mut lifecycle = vec![0; LIFECYCLE_POLICY_BYTES_V5];
+    encode_lifecycle_policy_v5_atomic(
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &mut lifecycle_scratch,
+        &mut lifecycle,
+    )
+    .expect("LifecycleV5");
+    build_rational_lifecycle_selected_bundle_v5(RationalLifecycleSelectedBundleInputV5 {
+        action,
+        account_profile: RationalLifecycleSelectedAccountProfileInputV5 {
+            logical_data_lengths: &lengths,
+            product_basis: &fixture.basis.raw.data,
+        },
+        representation_descriptor: admitted.execution_descriptor(),
+        authenticated_token_behavior: behavior,
+        kind: id(95),
+        root_schema: id(96),
+        lifecycle_policy: &lifecycle,
+        capacity_profile: id(97),
+        root_state_bytes: 64,
+    })
+    .expect("selected lifecycle bundle")
+}
+
+fn hot_fixed_accounts(
+    market: Pubkey,
+    trading: Pubkey,
+    selected_config: Pubkey,
+) -> Vec<AccountMeta> {
+    let mut fixed: Vec<AccountMeta> = (0..HOT_FIXED_ACCOUNT_COUNT_V3)
+        .map(|_| AccountMeta::new_readonly(Pubkey::new_unique(), false))
+        .collect();
+    fixed
+        .get_mut(HOT_ROOT_ACCOUNT_V3)
+        .expect("root")
+        .is_writable = true;
+    fixed.get_mut(HOT_MARKET_ACCOUNT_V3).expect("Market").pubkey = market;
+    fixed
+        .get_mut(HOT_CONFIG_RAW_ACCOUNT_V3)
+        .expect("selected config")
+        .pubkey = selected_config;
+    fixed
+        .get_mut(HOT_TRADING_PROGRAM_ACCOUNT_V3)
+        .expect("Trading")
+        .pubkey = trading;
+    fixed
+        .get_mut(HOT_RENT_SYSVAR_ACCOUNT_V3)
+        .expect("Rent")
+        .pubkey = solana_sdk_ids::sysvar::rent::ID;
+    fixed
+        .get_mut(HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3)
+        .expect("Instructions")
+        .pubkey = solana_sdk_ids::sysvar::instructions::ID;
+    fixed
+}
+
+fn claims_activate_receipt_accounts(fixture: &ChainFixture, trading: Pubkey) -> Vec<AccountMeta> {
+    let mut accounts: Vec<AccountMeta> = (0..LIFECYCLE_COMMON_ACCOUNT_COUNT_V2)
+        .map(|_| AccountMeta::new_readonly(Pubkey::new_unique(), false))
+        .collect();
+    accounts.get_mut(0).expect("caller").is_signer = true;
+    accounts.get_mut(1).expect("Trading").pubkey = trading;
+    accounts.get_mut(3).expect("Claims").pubkey = fixture.claims.key;
+    accounts.get_mut(9).expect("descriptor").pubkey = fixture.execution_descriptor.raw.key;
+    accounts.get_mut(10).expect("descriptor cursor").pubkey =
+        fixture.execution_descriptor.staging.key;
+    accounts.get_mut(12).expect("receipt Mint").pubkey = Pubkey::new_from_array(id(75));
+    accounts.get_mut(12).expect("receipt Mint").is_writable = true;
+    accounts.get_mut(13).expect("Token program").pubkey =
+        Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
+    accounts
+}
+
+fn observed_lookup_table(instruction: &Instruction, payer: Pubkey) -> ObservedAccount {
+    let mut addresses = Vec::new();
+    for meta in &instruction.accounts {
+        if meta.pubkey != payer && !addresses.contains(&meta.pubkey) {
+            addresses.push(meta.pubkey);
+        }
+    }
+    let table = AddressLookupTable {
+        meta: LookupTableMeta {
+            authority: Some(Pubkey::new_from_array(id(98))),
+            last_extended_slot: SLOT - 1,
+            ..LookupTableMeta::default()
+        },
+        addresses: Cow::Owned(addresses),
+    };
+    ObservedAccount {
+        observation: observation(),
+        key: Pubkey::new_from_array(id(99)),
+        owner: address_lookup_program::id(),
+        lamports: RENT,
+        executable: false,
+        data: table.serialize_for_tests().expect("ALT bytes"),
+    }
+}
+
 #[test]
 fn k3_n1_publication_and_k3_n258_full_chain_admit() {
     let n1 = candidate(1, id(1), id(2));
@@ -562,6 +733,131 @@ fn k3_n1_publication_and_k3_n258_full_chain_admit() {
         .translate_product_payouts(&payouts, &mut scratch, &mut output)
         .expect("K3/N258 exact translation");
     assert_eq!(output, [3, 5, 8]);
+}
+
+#[test]
+fn k3_n258_composition_admission_builds_packet_safe_selected_hot() {
+    let fixture = ChainFixture::n258();
+    let admission =
+        build_composition_admission_plan_v3(fixture.observed()).expect("K3/N258 admission");
+    let admitted = admission.admitted();
+    let behavior = selected_token_behavior(admitted.execution_descriptor());
+    let bundle = selected_lifecycle_bundle(&fixture, admitted, behavior);
+    let trading = Pubkey::new_from_array(id(100));
+    let fixed = hot_fixed_accounts(
+        Pubkey::new_from_array(id(40)),
+        trading,
+        fixture.execution_descriptor.raw.key,
+    );
+    let root_data = [0_u8; 64];
+    let state = RationalLifecycleHotStateV3 {
+        fixed_accounts: &fixed,
+        strategy_accounts: &[],
+        root_data: &root_data,
+        release_set: id(41),
+        market: Pubkey::new_from_array(id(40)),
+        generation: 1,
+        finalized_slot: SLOT,
+        hot_outer: Some(CheckedRationalLifecycleHotOuterV3 {
+            trading_program: trading,
+            artifact_release: id(101),
+            checked_manifest_digest: id(102),
+        }),
+    };
+    let claims_accounts = claims_activate_receipt_accounts(&fixture, trading);
+    let descriptor = admitted.execution_descriptor();
+    let header = LifecycleHeaderV2 {
+        action: LifecycleActionV2::ActivateReceipt,
+        release_set: descriptor.release_set_id(),
+        market: descriptor.market_id(),
+        graph_id: descriptor.graph_id(),
+        descriptor_id: descriptor.descriptor_id(),
+        parent_context: [0; 32],
+        representation_authority: descriptor.representation_authority(),
+        receipt_mint: descriptor.receipt_mint(),
+        token_program: descriptor.token_program(),
+        rent_credit: id(104),
+        rent_program: id(105),
+        generation: 1,
+        expected_claims_market_revision: 2,
+        observed_receipt_lamports: 100,
+        receipt_rent_principal: 100,
+        expected_receipt_supply: 0,
+        outcome_count: descriptor.outcome_count(),
+        coordinate_count: 0,
+        rent_credit_before: 200,
+        rent_credit_after: 200,
+    };
+    let plan = build_composition_lifecycle_hot_plan_v3(
+        admission,
+        &state,
+        header,
+        &[],
+        fixture.claims.key,
+        &claims_accounts,
+        RationalLifecycleSelectedSelectionV5 {
+            bundle: &bundle,
+            authenticated_token_behavior: behavior,
+        },
+    )
+    .expect("selected compact Hot");
+    assert_eq!((plan.representation_width, plan.product_width), (3, 258));
+    assert_eq!(plan.lifecycle.request.len(), 400);
+    assert_eq!(plan.hot.instruction.data.len(), 528);
+    assert!(plan.hot.required_wallet_signers.is_empty());
+    let payer = Pubkey::new_from_array(id(106));
+    let table = observed_lookup_table(&plan.hot.instruction, payer);
+    let packet = compile_unsigned_packet_v0(
+        payer,
+        core::slice::from_ref(&plan.hot.instruction),
+        Hash::new_from_array(id(107)),
+        observation(),
+        core::slice::from_ref(&table),
+        1_400_000,
+        1,
+    )
+    .expect("complete compact Hot packet");
+    assert_eq!(packet.wire_bytes, 899);
+    assert_eq!(packet.loaded_addresses, 55);
+    assert_eq!(packet.required_signatures, 1);
+    assert_eq!(1_232 - packet.wire_bytes, 333);
+
+    assert_eq!(
+        build_composition_lifecycle_hot_plan_v3(
+            admission,
+            &state,
+            header,
+            &[],
+            Pubkey::new_from_array(id(108)),
+            &claims_accounts,
+            RationalLifecycleSelectedSelectionV5 {
+                bundle: &bundle,
+                authenticated_token_behavior: behavior,
+            },
+        )
+        .err(),
+        Some(Error::HotAdapter)
+    );
+    let stale_state = RationalLifecycleHotStateV3 {
+        finalized_slot: SLOT + 1,
+        ..state
+    };
+    assert_eq!(
+        build_composition_lifecycle_hot_plan_v3(
+            admission,
+            &stale_state,
+            header,
+            &[],
+            fixture.claims.key,
+            &claims_accounts,
+            RationalLifecycleSelectedSelectionV5 {
+                bundle: &bundle,
+                authenticated_token_behavior: behavior,
+            },
+        )
+        .err(),
+        Some(Error::HotAdapter)
+    );
 }
 
 #[test]

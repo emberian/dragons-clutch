@@ -11,6 +11,9 @@
 //!
 //! This crate performs no RPC, signing, submission, or account mutation.
 
+/// Canonical composition-admitted compact Trading Hot construction.
+pub mod hot_v3;
+
 use dclutch_product_payoff_v2_codec::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
     runtime_v3::{ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, semantic_basis_preimage_v3},
@@ -76,6 +79,8 @@ pub enum Error {
     ClaimsLifecycle,
     /// Unsigned v0 packet compilation or exact packet limit refused.
     Packet,
+    /// Composition admission did not join the selected compact Trading/Claims path.
+    HotAdapter,
     /// Checked size, offset, slot, or count arithmetic overflowed.
     Arithmetic,
 }
@@ -168,6 +173,7 @@ pub struct AdmittedCompositionV3<'a> {
     execution_descriptor_record: FinalizedCoordinateV3,
     descriptor_record: FinalizedCoordinateV3,
     exposure_record: FinalizedCoordinateV3,
+    claims_program: Pubkey,
 }
 
 /// Stateless admission plan over exact finalized semantic-owner records.
@@ -251,6 +257,11 @@ impl<'a> AdmittedCompositionV3<'a> {
     /// Finalized exposure coordinate.
     pub const fn exposure_record(self) -> FinalizedCoordinateV3 {
         self.exposure_record
+    }
+
+    /// Same-finalized executable Claims program used for PDA derivation.
+    pub const fn claims_program(self) -> Pubkey {
+        self.claims_program
     }
 }
 
@@ -402,6 +413,7 @@ pub fn authenticate_composition_v3(
         execution_descriptor_record: execution_descriptor_record.coordinate,
         descriptor_record: descriptor_record.coordinate,
         exposure_record: exposure_record.coordinate,
+        claims_program: observed.claims_program.key,
     })
 }
 
