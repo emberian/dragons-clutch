@@ -6,20 +6,20 @@
 //! RPC, signs maker material, signs a transaction, or submits one.
 
 use crate::{
-    foundation::{authenticate_finalized_record, decode_rent, FinalizedRecordProof},
-    product_graph_observation_v3::{
-        authenticate_product_graph_observation_v3, AuthenticatedProductGraphObservationV3,
-        FinalizedProductGraphAccountsV3,
-    },
     Finality, Observation, ObservedAccount,
+    foundation::{FinalizedRecordProof, authenticate_finalized_record, decode_rent},
+    product_graph_observation_v3::{
+        AuthenticatedProductGraphObservationV3, FinalizedProductGraphAccountsV3,
+        authenticate_product_graph_observation_v3,
+    },
 };
 use dclutch_account_profile_contract::v2::PhysicalAccountDataGeometryV2;
-use dclutch_capability_contract::{CapabilityManifestV1, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1};
+use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
 use dclutch_capability_program_contract::{
+    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
     hot_v3::{
-        HotExecutionEnvelopeV3, HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
-        HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3,
-        HOT_CONFIG_STAGING_ACCOUNT_V3, HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
+        HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
+        HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CONFIG_STAGING_ACCOUNT_V3, HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
         HOT_DESCRIPTOR_STAGING_ACCOUNT_V3, HOT_EFFECT_RAW_ACCOUNT_V3,
         HOT_EFFECT_STAGING_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
         HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3, HOT_LIFECYCLE_RAW_ACCOUNT_V3,
@@ -31,25 +31,28 @@ use dclutch_capability_program_contract::{
         HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3, HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3,
         HOT_ROOT_ACCOUNT_V3, HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3, HOT_STRATEGY_RAW_ACCOUNT_V3,
         HOT_STRATEGY_STAGING_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
-        HOT_TRANSITION_RAW_ACCOUNT_V3, HOT_TRANSITION_STAGING_ACCOUNT_V3,
+        HOT_TRANSITION_RAW_ACCOUNT_V3, HOT_TRANSITION_STAGING_ACCOUNT_V3, HotExecutionEnvelopeV3,
     },
-    set_v2::{CapabilityProgramSetV2, CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2},
+    set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
     v4::{
         ArtifactReferenceV4, CapabilityProgramV4,
         SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
     },
-    CapabilityRootHeaderV1, CAPABILITY_ROOT_HEADER_BYTES_V1,
 };
 use dclutch_direct_codec::{
     artifacts_v4::{
-        authenticate_direct_artifacts_v4, DirectArtifactBundleV4, DirectArtifactBytesV4,
-        DirectArtifactSelectionV4,
+        DirectArtifactBundleV4, DirectArtifactBytesV4, DirectArtifactSelectionV4,
+        authenticate_direct_artifacts_v4,
     },
     execution_v3::{
-        encode_header_v3, DirectExecutionActionV3, DirectExecutionRequestV3,
-        DIRECT_SIGNED_PARTICIPANT_BYTES_V3,
+        DIRECT_SIGNED_PARTICIPANT_BYTES_V3, DirectExecutionActionV3, DirectExecutionRequestV3,
+        encode_header_v3,
     },
-    intent_v2::{CompactIntentV2, COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2},
+    intent_v2::CompactIntentV2,
+    native_evidence_v3::{
+        DIRECT_NATIVE_EVIDENCE_BYTES_V3, DirectNativeEvidenceContainerV3,
+        encode_direct_native_evidence_v3_atomic,
+    },
 };
 use dclutch_release_set_contract::ExecutionRoleV1;
 use solana_address_lookup_table_interface::{
@@ -63,14 +66,9 @@ use solana_program::{
 };
 use solana_sdk_ids::{ed25519_program, sysvar};
 
-use crate::versioned::{compile_v0_message, VersionedMessagePlanV0};
+use crate::versioned::{VersionedMessagePlanV0, compile_v0_message};
 
 pub use dclutch_direct_codec::execution_v3::DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3;
-
-const ED25519_DESCRIPTOR_BYTES: usize = 14;
-const ED25519_SIGNATURES: usize = 2;
-const ED25519_HEADER_BYTES: usize = 2 + ED25519_SIGNATURES * ED25519_DESCRIPTOR_BYTES;
-const ED25519_PARTICIPANT_BYTES: usize = 32 + 64 + COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2;
 
 /// One exact detached maker signature and its canonical signed intent.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -387,7 +385,12 @@ pub fn build_direct_inline_hot_v4(
         accounts,
         data: hot_instruction_data.clone(),
     };
-    let native = native_ed25519_instruction([seller, buyer])?;
+    let native = native_ed25519_instruction(
+        DirectNativeEvidenceContainerV3::TradingHot,
+        1,
+        &hot_instruction_data,
+        [seller.signature, buyer.signature],
+    )?;
     Ok(DirectInlineHotReportV3 {
         instructions: [native, trading],
         hot_instruction_data,
@@ -924,49 +927,43 @@ fn preview_economics(
     })
 }
 
+/// Append packet-safe native evidence immediately before an outer Registry
+/// continuation, deriving the Registry instruction index from the complete
+/// top-level prefix. Message offsets are fixed by the authenticated Registry
+/// container and cannot be supplied by callers.
+pub fn append_direct_registry_native_evidence_v5(
+    top_level: &mut Vec<Instruction>,
+    registry: Instruction,
+    signatures: [[u8; 64]; 2],
+) -> Result<(), Error> {
+    let registry_index = u16::try_from(top_level.len().checked_add(1).ok_or(Error::Arithmetic)?)
+        .map_err(|_| Error::Arithmetic)?;
+    let native = native_ed25519_instruction(
+        DirectNativeEvidenceContainerV3::RegistryContinuation,
+        registry_index,
+        &registry.data,
+        signatures,
+    )?;
+    top_level.push(native);
+    top_level.push(registry);
+    Ok(())
+}
+
 fn native_ed25519_instruction(
-    participants: [SignedDirectIntentV3; ED25519_SIGNATURES],
+    container: DirectNativeEvidenceContainerV3,
+    current_instruction_index: u16,
+    current_instruction_data: &[u8],
+    signatures: [[u8; 64]; 2],
 ) -> Result<Instruction, Error> {
-    let payload_bytes = ED25519_SIGNATURES
-        .checked_mul(ED25519_PARTICIPANT_BYTES)
-        .and_then(|value| ED25519_HEADER_BYTES.checked_add(value))
-        .ok_or(Error::Arithmetic)?;
-    let mut data = vec![0_u8; payload_bytes];
-    *data.first_mut().ok_or(Error::Arithmetic)? =
-        u8::try_from(ED25519_SIGNATURES).map_err(|_| Error::Arithmetic)?;
-    for (index, participant) in participants.iter().enumerate() {
-        let descriptor = 2 + index * ED25519_DESCRIPTOR_BYTES;
-        let public_key = ED25519_HEADER_BYTES + index * ED25519_PARTICIPANT_BYTES;
-        let signature = public_key + 32;
-        let message = signature.checked_add(64).ok_or(Error::Arithmetic)?;
-        for (offset, value) in [
-            (descriptor, signature),
-            (descriptor + 2, usize::from(u16::MAX)),
-            (descriptor + 4, public_key),
-            (descriptor + 6, usize::from(u16::MAX)),
-            (descriptor + 8, message),
-            (descriptor + 10, COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2),
-            (descriptor + 12, usize::from(u16::MAX)),
-        ] {
-            put(
-                &mut data,
-                offset,
-                &u16::try_from(value)
-                    .map_err(|_| Error::Arithmetic)?
-                    .to_le_bytes(),
-            )?;
-        }
-        put(&mut data, public_key, participant.maker.as_ref())?;
-        put(&mut data, signature, &participant.signature)?;
-        put(
-            &mut data,
-            message,
-            &participant
-                .intent
-                .signed_preimage()
-                .map_err(|_| Error::EconomicMismatch)?,
-        )?;
-    }
+    let mut data = vec![0_u8; DIRECT_NATIVE_EVIDENCE_BYTES_V3];
+    encode_direct_native_evidence_v3_atomic(
+        container,
+        current_instruction_index,
+        current_instruction_data,
+        signatures,
+        &mut data,
+    )
+    .map_err(|_| Error::ArtifactMismatch)?;
     Ok(Instruction {
         program_id: ed25519_program::ID,
         accounts: Vec::new(),
@@ -1002,24 +999,23 @@ mod tests {
 
     use super::*;
     use dclutch_capability_contract::{
-        ActivationPolicy, CapabilityEntryV1, CompartmentFundingV1, FundingAmountsV1,
-        FundingQuoteV1, CAPABILITY_ENTRY_BYTES, MANIFEST_HEADER_BYTES,
-        MAX_DEPENDENCIES_PER_CAPABILITY,
+        ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1,
+        FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
     };
     use dclutch_capability_program_contract::set_v2::{
-        encode_program_set_v2, encoded_program_set_bytes_v2, CapabilityDescriptorReferenceV2,
-        CapabilityProgramSetEntryV2, SelectorWidthV2,
+        CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, SelectorWidthV2,
+        encode_program_set_v2, encoded_program_set_bytes_v2,
     };
     use dclutch_custody_contract::CustodyReplayLayoutV1;
     use dclutch_direct_codec::{
         ordinary_account_artifacts_v3::DirectInlineOrdinaryAccountProfileInputV3,
         ordinary_bundle_v4::{
-            build_direct_inline_ordinary_hot_bundle_v4, DirectInlineOrdinaryHotBundleInputV4,
+            DirectInlineOrdinaryHotBundleInputV4, build_direct_inline_ordinary_hot_bundle_v4,
         },
         ordinary_effect_artifacts_v3::DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3,
         successor::{
-            DirectExecutionConfigV1, DirectRootStateV1, DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1,
-            DIRECT_MAKER_REPLAY_BYTES_V1, DIRECT_ROOT_SCHEMA_ID_V1,
+            DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, DIRECT_MAKER_REPLAY_BYTES_V1,
+            DIRECT_ROOT_SCHEMA_ID_V1, DirectExecutionConfigV1, DirectRootStateV1,
         },
     };
     use dclutch_product_runtime_v2::{
@@ -1672,39 +1668,62 @@ mod tests {
     }
 
     #[test]
-    fn adjacent_ed25519_is_self_contained_for_registry_continuation() {
+    fn adjacent_ed25519_references_exact_current_direct_or_registry_instruction() {
         let seller = intent(0, 1);
         let buyer = intent(1, 2);
-        let instruction = native_ed25519_instruction([seller, buyer]).expect("native evidence");
-        assert_eq!(instruction.program_id, ed25519_program::ID);
-        assert_eq!(instruction.data.first().copied(), Some(2));
-        assert_eq!(instruction.data.len(), 566);
-        for (descriptor, expected_message, participant) in
-            [(2_usize, 126_u16, seller), (16, 394, buyer)]
-        {
+        let request =
+            compile_direct_inline_request_v3(seller, buyer, 1_000, 500_000).expect("request");
+        let envelope =
+            HotExecutionEnvelopeV3::new(456, [1; 32], [7; 32], 9, [2; 32]).expect("envelope");
+        let mut hot = envelope.to_bytes().to_vec();
+        hot.extend_from_slice(&request);
+        let direct = native_ed25519_instruction(
+            DirectNativeEvidenceContainerV3::TradingHot,
+            1,
+            &hot,
+            [seller.signature, buyer.signature],
+        )
+        .expect("direct native evidence");
+        assert_eq!(direct.program_id, ed25519_program::ID);
+        assert_eq!(direct.data.first().copied(), Some(2));
+        assert_eq!(direct.data.len(), 222);
+        for (descriptor, expected_message) in [(2_usize, 192_u16), (16, 396)] {
             assert_eq!(
-                read_test_u16(&instruction.data, descriptor + 8),
+                read_test_u16(&direct.data, descriptor + 8),
                 expected_message
             );
-            assert_eq!(read_test_u16(&instruction.data, descriptor + 10), 172);
-            for index_offset in [2_usize, 6, 12] {
-                assert_eq!(
-                    read_test_u16(&instruction.data, descriptor + index_offset),
-                    u16::MAX
-                );
-            }
-            let start = usize::from(expected_message);
-            let end = start + COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2;
+            assert_eq!(read_test_u16(&direct.data, descriptor + 10), 172);
+            assert_eq!(read_test_u16(&direct.data, descriptor + 2), u16::MAX);
+            assert_eq!(read_test_u16(&direct.data, descriptor + 6), u16::MAX);
+            assert_eq!(read_test_u16(&direct.data, descriptor + 12), 1);
+        }
+
+        let mut registry_data = vec![0_u8; 128];
+        registry_data.extend_from_slice(&hot);
+        let registry = Instruction {
+            program_id: key(199),
+            accounts: Vec::new(),
+            data: registry_data,
+        };
+        let mut sequence = vec![Instruction {
+            program_id: key(198),
+            accounts: Vec::new(),
+            data: Vec::new(),
+        }];
+        append_direct_registry_native_evidence_v5(
+            &mut sequence,
+            registry,
+            [seller.signature, buyer.signature],
+        )
+        .expect("Registry evidence");
+        assert_eq!(sequence.len(), 3);
+        let native = sequence.get(1).expect("native evidence");
+        for (descriptor, expected_message) in [(2_usize, 320_u16), (16, 524)] {
             assert_eq!(
-                instruction.data.get(start..end),
-                Some(
-                    participant
-                        .intent
-                        .signed_preimage()
-                        .expect("signed preimage")
-                        .as_slice()
-                )
+                read_test_u16(&native.data, descriptor + 8),
+                expected_message
             );
+            assert_eq!(read_test_u16(&native.data, descriptor + 12), 2);
         }
     }
 
