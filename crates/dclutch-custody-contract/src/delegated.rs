@@ -27,6 +27,34 @@ const RECEIPT_TOTAL_OFFSET: usize = RECEIPT_DELEGATE_AFTER_OFFSET + 32;
 const RECEIPT_ALLOWANCE_BEFORE_OFFSET: usize = RECEIPT_TOTAL_OFFSET + 8;
 const RECEIPT_ALLOWANCE_AFTER_OFFSET: usize = RECEIPT_ALLOWANCE_BEFORE_OFFSET + 8;
 
+/// Canonical patchable coordinates of a [`DelegatedCustodyRequestV2`] wire.
+///
+/// Effect encoders use these coordinates together with
+/// [`crate::CustodyRequestLayoutV1`] for fields inside [`Self::BASE`]. This
+/// keeps the successor wrapper's byte geometry owned by this contract rather
+/// than repeated in each composing venue.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DelegatedCustodyRequestLayoutV2;
+
+impl DelegatedCustodyRequestLayoutV2 {
+    /// Start of the nested exact [`CustodyRequestV1`] wire.
+    pub const BASE: usize = BASE_OFFSET;
+    /// `starts_atomic_debit` as a canonical `0` or `1` byte.
+    pub const STARTS_ATOMIC_DEBIT: usize = 10;
+    /// `terminal` as a canonical `0` or `1` byte.
+    pub const TERMINAL: usize = 11;
+    /// Exact pre-transfer delegate identity.
+    pub const DELEGATE_BEFORE: usize = REQUEST_DELEGATE_BEFORE_OFFSET;
+    /// Exact post-transfer delegate identity; zero means revoked.
+    pub const DELEGATE_AFTER: usize = REQUEST_DELEGATE_AFTER_OFFSET;
+    /// Exact total atomic debit as little-endian `u64`.
+    pub const TOTAL_DEBIT: usize = REQUEST_TOTAL_OFFSET;
+    /// Exact pre-transfer delegated allowance as little-endian `u64`.
+    pub const ALLOWANCE_BEFORE: usize = REQUEST_ALLOWANCE_BEFORE_OFFSET;
+    /// Exact post-transfer delegated allowance as little-endian `u64`.
+    pub const ALLOWANCE_AFTER: usize = REQUEST_ALLOWANCE_AFTER_OFFSET;
+}
+
 /// Stable refusal from the delegated-allowance successor contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DelegatedCustodyErrorV2 {
@@ -484,6 +512,62 @@ mod tests {
             DelegatedCustodyReceiptV2::decode(&receipt_bytes),
             Ok(receipt)
         );
+    }
+
+    #[test]
+    fn public_request_layout_tracks_successor_encoder() {
+        let request = first();
+        let bytes = request.encode().expect("request bytes");
+        let base = request.custody.to_bytes().expect("base request bytes");
+
+        assert_eq!(
+            slice(
+                &bytes,
+                DelegatedCustodyRequestLayoutV2::BASE,
+                CUSTODY_REQUEST_BYTES_V1,
+            )
+            .expect("base request"),
+            base.as_slice()
+        );
+        assert_eq!(
+            bytes[DelegatedCustodyRequestLayoutV2::STARTS_ATOMIC_DEBIT],
+            1
+        );
+        assert_eq!(bytes[DelegatedCustodyRequestLayoutV2::TERMINAL], 0);
+        assert_eq!(
+            slice(&bytes, DelegatedCustodyRequestLayoutV2::DELEGATE_BEFORE, 32,)
+                .expect("delegate before"),
+            request.delegate_before.as_slice()
+        );
+        assert_eq!(
+            slice(&bytes, DelegatedCustodyRequestLayoutV2::DELEGATE_AFTER, 32,)
+                .expect("delegate after"),
+            request.delegate_after.as_slice()
+        );
+        for (offset, expected) in [
+            (
+                DelegatedCustodyRequestLayoutV2::TOTAL_DEBIT,
+                request.total_debit,
+            ),
+            (
+                DelegatedCustodyRequestLayoutV2::ALLOWANCE_BEFORE,
+                request.allowance_before,
+            ),
+            (
+                DelegatedCustodyRequestLayoutV2::ALLOWANCE_AFTER,
+                request.allowance_after,
+            ),
+        ] {
+            assert_eq!(
+                slice(&bytes, offset, 8).expect("integer field"),
+                expected.to_le_bytes().as_slice()
+            );
+        }
+        assert_eq!(
+            DelegatedCustodyRequestLayoutV2::ALLOWANCE_AFTER + 8,
+            DELEGATED_CUSTODY_REQUEST_BYTES_V2
+        );
+        assert_eq!(DelegatedCustodyRequestV2::decode(&bytes), Ok(request));
     }
 
     #[test]
