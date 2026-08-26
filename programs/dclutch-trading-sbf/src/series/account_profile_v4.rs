@@ -139,6 +139,26 @@ fn fixed_rule(
         .get(coordinate)
         .copied()
         .ok_or(SeriesConsumeAccountProfileErrorV4::Geometry)?;
+    if let Some((_, representative)) = ROUTE_ALIASES.iter().find(|(alias, _)| *alias == coordinate)
+    {
+        return Ok(AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                // Route aliases own no privilege truth. The self
+                // representative carries the top-level physical union, while
+                // each child FrameSpec independently supplies and downgrades
+                // its exact CPI privileges.
+                privileges: readonly(),
+                effect_permissions: none(),
+                alias: AccountAliasInputV2::Fixed(
+                    u16::try_from(*representative)
+                        .map_err(|_| SeriesConsumeAccountProfileErrorV4::Geometry)?,
+                ),
+                data_length: 0,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::AuthenticatedRouteAlias,
+        });
+    }
     let privileges = if WRITABLE_COORDINATES.contains(&coordinate) {
         writable()
     } else if EXECUTABLE_COORDINATES.contains(&coordinate) {
@@ -154,22 +174,6 @@ fn fixed_rule(
     // Ticket is readonly in both Core child frames. Profile13 converts this
     // authenticated outer WRITE_DATA grant into physical writable authority;
     // route-local child views remain readonly.
-    if let Some((_, representative)) = ROUTE_ALIASES.iter().find(|(alias, _)| *alias == coordinate)
-    {
-        return Ok(AccountRuleWithPrestateInputV2 {
-            rule: AccountRuleInputV2 {
-                privileges,
-                effect_permissions: none(),
-                alias: AccountAliasInputV2::Fixed(
-                    u16::try_from(*representative)
-                        .map_err(|_| SeriesConsumeAccountProfileErrorV4::Geometry)?,
-                ),
-                data_length: 0,
-                data_item_stride: 0,
-            },
-            prestate: AccountPrestateV2::AuthenticatedRouteAlias,
-        });
-    }
     Ok(exact(privileges, effect_permissions, data_length))
 }
 
@@ -238,18 +242,13 @@ const fn write_data() -> AccountEffectPermissionsV2 {
 const WRITABLE_COORDINATES: &[usize] = &[
     0, // Series root, outer commit-last.
     6, 11, 12, 13, 17, // Projected Lock.
-    19, 20, 61, // Core Found payer, Market, permit.
-    77, // Projected Realize replay rewrite.
-    90, 91, 92, // Claims aggregate, Position, admission creation.
-    121, 122, 123, // Core Open Market, permit close, RentCredit.
+    18, 19, 61, // Shared Market representative, Core payer, permit.
+    72, 73, 74, // Claims aggregate, Position, admission representatives.
 ];
 
 const EXECUTABLE_COORDINATES: &[usize] = &[
     8, 9, 16, // Lock Registry, Trading, Token.
-    22, 38, 40, 42, 50, 68, 70, // Found Rent/Core/Registry/System/roles.
-    79, 80, 87, // Realize Registry, Trading, Token.
-    105, 108, 109, 111, 113, 115, 119, // Claims programs.
-    124, 126, 127, 129, 131, 133, // Open Rent/Registry/roles/Core.
+    22, 38, 42, 68, 70, // Found Rent/Core/System and shared role programs.
 ];
 
 // Base coordinates exclude the inserted FundingState span. Every target is an
@@ -447,6 +446,34 @@ mod tests {
             .expect("Open Ticket");
         assert!(!found_ticket.writable());
         assert!(!open_ticket.writable());
+    }
+
+    #[test]
+    fn aliases_are_zero_privilege_and_representatives_own_outer_union() {
+        let bytes = encoded_profile();
+        let profile = AccountProfileV2::decode(&bytes).expect("profile");
+        for (alias, _) in ROUTE_ALIASES {
+            let alias = u16::try_from(*alias).expect("bounded alias coordinate");
+            let rule = profile.rule(false, alias).expect("alias rule");
+            assert_eq!(rule.privileges(), 0);
+            assert_eq!(rule.effect_permissions(), 0);
+        }
+
+        let market_alias = profile
+            .route_privileges_with_dynamic_spans(0, &[7], 20)
+            .expect("Core Found Market alias");
+        assert!(!market_alias.signer());
+        assert!(!market_alias.writable());
+        assert!(!market_alias.executable());
+
+        let market_ordinal = profile
+            .physical_account_ordinal_with_dynamic_spans(0, &[7], 18)
+            .expect("Market representative ordinal");
+        let market = profile
+            .physical_account_geometry_with_dynamic_spans(0, &[7], market_ordinal)
+            .expect("Market representative geometry");
+        assert_eq!(market.logical_representative(), 18);
+        assert!(market.privileges().writable());
     }
 
     #[test]

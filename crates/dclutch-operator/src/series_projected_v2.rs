@@ -8,12 +8,18 @@
 //! current Core promotes that hint only through `SeriesCoreFoundAckV2`.
 
 use dclutch_account_profile_contract::v2::{AccountProfileV2, PhysicalAccountDataGeometryV2};
+use dclutch_capability_program_contract::hot_v3::{
+    HOT_CONFIG_RAW_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
+    HOT_MARKET_ACCOUNT_V3, HOT_PORTFOLIO_RAW_ACCOUNT_V3, HOT_PRODUCT_RAW_ACCOUNT_V3,
+    HOT_ROOT_ACCOUNT_V3,
+};
 use dclutch_core_contract::ContentId;
 use dclutch_effect_kernel::v2::FixedRole;
 use dclutch_series_v3_kernel::request::{
     SERIES_ACTION_HEADER_BYTES_V3, SeriesActionRequestV3, SeriesActionV3,
 };
 use dclutch_trading_sbf::{
+    hot_v3::{HOT_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3, HOT_SHADOW_RUNTIME_ACCOUNTS_START_V3},
     projected_market_v2::{
         PROJECTED_MARKET_EXECUTION_FIXED_BYTES_V2, ProjectedMarketExecutionV2,
         encode_projected_market_execution_v2,
@@ -30,6 +36,15 @@ use solana_program::{
 
 /// Maximum ordered receipt dependencies on one canonical Series Consume route.
 pub const SERIES_PROJECTED_MAX_RECEIPT_DEPENDENCIES_V2: usize = 2;
+/// Exact fixed Hot, Shadow-evidence, and caller-authority prefix before runtime.
+pub const SERIES_PROJECTED_HOT_PREFIX_ACCOUNT_COUNT_V2: usize =
+    HOT_SHADOW_RUNTIME_ACCOUNTS_START_V3;
+/// Number of authenticated fixed Hot accounts injected into Profile13 runtime.
+pub const SERIES_PROJECTED_INJECTED_RUNTIME_ACCOUNT_COUNT_V2: usize = 5;
+
+const _: () = assert!(HOT_FIXED_ACCOUNT_COUNT_V3 == 38);
+const _: () = assert!(HOT_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3 == 44);
+const _: () = assert!(SERIES_PROJECTED_HOT_PREFIX_ACCOUNT_COUNT_V2 == 45);
 
 /// Stable refusal from compact projected-Series data construction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -52,6 +67,8 @@ pub enum SeriesProjectedOperatorErrorV2 {
     AliasSubstitution,
     /// A physical representative differed from its authenticated data geometry.
     AccountData,
+    /// Fixed Hot, Shadow evidence, caller authority, or injected aliases differed.
+    HotPrefix,
 }
 
 /// One chain observation at one expanded logical Profile13 coordinate.
@@ -67,6 +84,20 @@ pub struct SeriesProjectedLogicalAccountV2 {
     pub key: Pubkey,
     /// Exact observed pre-execution account-data width.
     pub data_len: usize,
+}
+
+/// Complete pre-runtime account observations for one Shadow-selected Hot call.
+///
+/// Coordinates `0..38` are the canonical common Hot prefix, `38..44` are the
+/// six additional Shadow certificate/artifact/deployment observations, and
+/// coordinate `44` is the nonsigner Trading caller-authority PDA. Privileges
+/// are never supplied here: the operator derives them from the frozen common
+/// layout and Profile13.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SeriesProjectedHotPrefixV2<'a> {
+    /// Same-snapshot key and data-width observations in exact canonical order.
+    pub accounts:
+        &'a [SeriesProjectedLogicalAccountV2; SERIES_PROJECTED_HOT_PREFIX_ACCOUNT_COUNT_V2],
 }
 
 /// Static ordered receipt expectation owned by the authenticated Effect.
@@ -197,7 +228,7 @@ pub fn build_series_projected_consume_v2(
     })
 }
 
-/// Build the packed Profile13 runtime frame from one fully authenticated plan.
+/// Build the complete projected Hot frame from one fully authenticated plan.
 ///
 /// The artifact bundle has already joined the finalized ProgramSet,
 /// CapabilityProgramV4, LifecycleV5, AccountProfile, request/transition
@@ -208,6 +239,7 @@ pub fn build_series_projected_execution_v2(
     trading_program: Pubkey,
     family_request: &[u8],
     artifacts: SeriesConsumeArtifactBundleV4<'_>,
+    hot_prefix: SeriesProjectedHotPrefixV2<'_>,
     logical_accounts: &[SeriesProjectedLogicalAccountV2],
 ) -> Result<UnsignedSeriesProjectedExecutionV2, SeriesProjectedOperatorErrorV2> {
     require_request_slices(family_request, artifacts)?;
@@ -224,7 +256,8 @@ pub fn build_series_projected_execution_v2(
     {
         return Err(SeriesProjectedOperatorErrorV2::Observation);
     }
-    let accounts = pack_profile13_accounts(
+    let accounts = pack_projected_hot_accounts(
+        hot_prefix,
         artifacts.account_profile,
         u32::from(funding_count),
         logical_accounts,
@@ -245,6 +278,82 @@ pub fn build_series_projected_execution_v2(
         effect_digest: hash(artifacts.effect.program().bytes()).to_bytes(),
         routes,
     })
+}
+
+fn pack_projected_hot_accounts(
+    prefix: SeriesProjectedHotPrefixV2<'_>,
+    profile: AccountProfileV2<'_>,
+    funding_count: u32,
+    logical_accounts: &[SeriesProjectedLogicalAccountV2],
+) -> Result<Vec<AccountMeta>, SeriesProjectedOperatorErrorV2> {
+    let observation = logical_accounts
+        .first()
+        .map(|account| account.observation)
+        .ok_or(SeriesProjectedOperatorErrorV2::Observation)?;
+    if prefix
+        .accounts
+        .iter()
+        .any(|account| account.observation != observation)
+        || prefix.accounts.iter().enumerate().any(|(index, account)| {
+            account.key == Pubkey::default()
+                || prefix
+                    .accounts
+                    .get(..index)
+                    .is_some_and(|prior| prior.iter().any(|other| other.key == account.key))
+        })
+    {
+        return Err(SeriesProjectedOperatorErrorV2::HotPrefix);
+    }
+    for (logical, fixed) in [
+        (0, HOT_ROOT_ACCOUNT_V3),
+        (1, HOT_CONFIG_RAW_ACCOUNT_V3),
+        (2, HOT_PRODUCT_RAW_ACCOUNT_V3),
+        (3, HOT_PORTFOLIO_RAW_ACCOUNT_V3),
+        (4, HOT_LINKED_BASIS_RAW_ACCOUNT_V3),
+    ] {
+        if logical_accounts.get(logical) != prefix.accounts.get(fixed) {
+            return Err(SeriesProjectedOperatorErrorV2::HotPrefix);
+        }
+    }
+    let caller = prefix
+        .accounts
+        .get(HOT_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3)
+        .ok_or(SeriesProjectedOperatorErrorV2::HotPrefix)?;
+    if caller.data_len != 0
+        || logical_accounts
+            .iter()
+            .any(|runtime| runtime.key == caller.key)
+    {
+        return Err(SeriesProjectedOperatorErrorV2::HotPrefix);
+    }
+
+    let runtime = pack_profile13_accounts(profile, funding_count, logical_accounts)?;
+    if runtime.len() < SERIES_PROJECTED_INJECTED_RUNTIME_ACCOUNT_COUNT_V2 {
+        return Err(SeriesProjectedOperatorErrorV2::AccountGeometry);
+    }
+    let capacity = SERIES_PROJECTED_HOT_PREFIX_ACCOUNT_COUNT_V2
+        .checked_add(runtime.len())
+        .and_then(|width| width.checked_sub(SERIES_PROJECTED_INJECTED_RUNTIME_ACCOUNT_COUNT_V2))
+        .ok_or(SeriesProjectedOperatorErrorV2::AccountGeometry)?;
+    let mut accounts = Vec::with_capacity(capacity);
+    for (index, account) in prefix.accounts.iter().enumerate() {
+        accounts.push(
+            if index == HOT_MARKET_ACCOUNT_V3 || index == HOT_ROOT_ACCOUNT_V3 {
+                AccountMeta::new(account.key, false)
+            } else {
+                AccountMeta::new_readonly(account.key, false)
+            },
+        );
+    }
+    accounts.extend(
+        runtime
+            .into_iter()
+            .skip(SERIES_PROJECTED_INJECTED_RUNTIME_ACCOUNT_COUNT_V2),
+    );
+    if accounts.len() != capacity {
+        return Err(SeriesProjectedOperatorErrorV2::HotPrefix);
+    }
+    Ok(accounts)
 }
 
 fn require_request_slices(
@@ -559,6 +668,30 @@ mod tests {
             .collect()
     }
 
+    fn hot_prefix(
+        logical: &[SeriesProjectedLogicalAccountV2],
+    ) -> [SeriesProjectedLogicalAccountV2; SERIES_PROJECTED_HOT_PREFIX_ACCOUNT_COUNT_V2] {
+        let observation = id(240);
+        let mut prefix = core::array::from_fn(|index| SeriesProjectedLogicalAccountV2 {
+            observation,
+            key: Pubkey::new_from_array(
+                [u8::try_from(index + 180).expect("bounded Hot prefix index"); 32],
+            ),
+            data_len: 64,
+        });
+        for (runtime, fixed) in [
+            (0, HOT_ROOT_ACCOUNT_V3),
+            (1, HOT_CONFIG_RAW_ACCOUNT_V3),
+            (2, HOT_PRODUCT_RAW_ACCOUNT_V3),
+            (3, HOT_PORTFOLIO_RAW_ACCOUNT_V3),
+            (4, HOT_LINKED_BASIS_RAW_ACCOUNT_V3),
+        ] {
+            prefix[fixed] = logical[runtime];
+        }
+        prefix[HOT_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3].data_len = 0;
+        prefix
+    }
+
     fn effect_bytes() -> Vec<u8> {
         let lock = [0x11; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3];
         let core = [0x22; SERIES_CONSUME_CORE_REQUEST_BYTES_V3];
@@ -637,6 +770,84 @@ mod tests {
             assert_eq!(meta.is_signer, geometry.privileges().signer());
             assert_eq!(meta.is_writable, geometry.privileges().writable());
         }
+    }
+
+    #[test]
+    fn complete_projected_hot_frame_owns_prefix_and_skips_injected_aliases() {
+        const FUNDING_COUNT: u32 = 7;
+        let profile_bytes = profile();
+        let profile = AccountProfileV2::decode(&profile_bytes).expect("Profile13");
+        let logical = logical_accounts(profile, FUNDING_COUNT);
+        let prefix = hot_prefix(&logical);
+        let packed = pack_projected_hot_accounts(
+            SeriesProjectedHotPrefixV2 { accounts: &prefix },
+            profile,
+            FUNDING_COUNT,
+            &logical,
+        )
+        .expect("complete projected Hot frame");
+        assert_eq!(
+            packed.len(),
+            104 + usize::try_from(FUNDING_COUNT).expect("count")
+        );
+        assert!(packed[HOT_MARKET_ACCOUNT_V3].is_writable);
+        assert!(packed[HOT_ROOT_ACCOUNT_V3].is_writable);
+        assert!(!packed[HOT_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3].is_signer);
+        assert!(!packed[HOT_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3].is_writable);
+        assert_eq!(packed[0].pubkey, prefix[0].key);
+        assert_eq!(packed[44].pubkey, prefix[44].key);
+        assert!(packed.get(45).is_some());
+    }
+
+    #[test]
+    fn complete_projected_hot_frame_refuses_prefix_and_caller_substitution() {
+        const FUNDING_COUNT: u32 = 7;
+        let profile_bytes = profile();
+        let profile = AccountProfileV2::decode(&profile_bytes).expect("Profile13");
+        let logical = logical_accounts(profile, FUNDING_COUNT);
+        let prefix = hot_prefix(&logical);
+
+        let mut wrong_injected = prefix;
+        wrong_injected[HOT_ROOT_ACCOUNT_V3].key = Pubkey::new_from_array([249; 32]);
+        assert_eq!(
+            pack_projected_hot_accounts(
+                SeriesProjectedHotPrefixV2 {
+                    accounts: &wrong_injected,
+                },
+                profile,
+                FUNDING_COUNT,
+                &logical,
+            ),
+            Err(SeriesProjectedOperatorErrorV2::HotPrefix)
+        );
+
+        let mut duplicate = prefix;
+        duplicate[2].key = duplicate[3].key;
+        assert_eq!(
+            pack_projected_hot_accounts(
+                SeriesProjectedHotPrefixV2 {
+                    accounts: &duplicate,
+                },
+                profile,
+                FUNDING_COUNT,
+                &logical,
+            ),
+            Err(SeriesProjectedOperatorErrorV2::HotPrefix)
+        );
+
+        let mut caller_data = prefix;
+        caller_data[HOT_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3].data_len = 1;
+        assert_eq!(
+            pack_projected_hot_accounts(
+                SeriesProjectedHotPrefixV2 {
+                    accounts: &caller_data,
+                },
+                profile,
+                FUNDING_COUNT,
+                &logical,
+            ),
+            Err(SeriesProjectedOperatorErrorV2::HotPrefix)
+        );
     }
 
     #[test]

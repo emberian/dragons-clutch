@@ -6,9 +6,11 @@
 //! same complete account-slot geometry rather than understating the packet.
 
 use dclutch_core_contract::ContentId;
-use dclutch_operator::series_projected_v2::build_series_projected_consume_v2;
+use dclutch_operator::series_projected_v2::{
+    SERIES_PROJECTED_HOT_PREFIX_ACCOUNT_COUNT_V2,
+    SERIES_PROJECTED_INJECTED_RUNTIME_ACCOUNT_COUNT_V2, build_series_projected_consume_v2,
+};
 use dclutch_series_v3_kernel::request::{SeriesActionV3, encode_series_action_header_v3};
-use dclutch_trading_sbf::hot_v3::HOT_SHADOW_RUNTIME_ACCOUNTS_START_V3;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_hash::Hash;
 use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
@@ -20,7 +22,6 @@ use solana_program::{
 const MAXIMUM_FUNDING_COUNT: usize = 16;
 const MAXIMUM_PROOF_WORDS: u8 = 9;
 const PROFILE13_PHYSICAL_ACCOUNT_BASE: usize = 64;
-const PROFILE13_INJECTED_ACCOUNT_COUNT: usize = 5;
 const SOLANA_PACKET_BYTES: usize = 1_232;
 const REQUIRED_PACKET_MARGIN: usize = 128;
 
@@ -54,9 +55,9 @@ fn maximum_complete_outer_frame_fits_v0_with_compute_budget_and_alt() {
     assert_eq!(projected.data().len(), 432);
 
     let runtime_physical = PROFILE13_PHYSICAL_ACCOUNT_BASE + MAXIMUM_FUNDING_COUNT;
-    let runtime_suffix = runtime_physical - PROFILE13_INJECTED_ACCOUNT_COUNT;
-    let complete_frame = HOT_SHADOW_RUNTIME_ACCOUNTS_START_V3 + runtime_suffix;
-    assert_eq!(HOT_SHADOW_RUNTIME_ACCOUNTS_START_V3, 45);
+    let runtime_suffix = runtime_physical - SERIES_PROJECTED_INJECTED_RUNTIME_ACCOUNT_COUNT_V2;
+    let complete_frame = SERIES_PROJECTED_HOT_PREFIX_ACCOUNT_COUNT_V2 + runtime_suffix;
+    assert_eq!(SERIES_PROJECTED_HOT_PREFIX_ACCOUNT_COUNT_V2, 45);
     assert_eq!(runtime_physical, 80);
     assert_eq!(complete_frame, 120);
 
