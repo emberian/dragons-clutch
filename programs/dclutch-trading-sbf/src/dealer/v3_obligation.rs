@@ -10,7 +10,10 @@
 //! Realized fees have no field in this account.
 
 use dclutch_dealer_codec::scenario::ScenarioSolvencyDescriptor;
-use solana_program::{hash::hash, pubkey::Pubkey};
+use solana_program::{
+    hash::{Hasher, hash},
+    pubkey::Pubkey,
+};
 
 /// PDA domain for the one Dealer V3 obligation account beneath a Trading root.
 pub const DEALER_OBLIGATION_PDA_DOMAIN_V3: &[u8] = b"dclutch:dealer-obligation:v3";
@@ -410,6 +413,73 @@ pub fn stage_equity_share_supply_v3(
     DealerObligationProjectionV3::decode(output).map(|_| ())
 }
 
+/// Materialize one exact signed scenario-obligation replacement.
+///
+/// The current authenticated account remains the sole prestate authority.
+/// Only the optimistic revision and runtime obligation vector may change;
+/// immutable coordinates and junior equity-share supply are copied exactly.
+/// `output` remains byte-for-byte unchanged on every refusal.
+pub fn stage_scenario_obligation_replacement_v3(
+    current: DealerObligationProjectionV3<'_>,
+    candidate_obligations: &[u64],
+    output: &mut [u8],
+) -> ObligationResultV3<()> {
+    if output.len() != current.bytes.len()
+        || usize::try_from(current.width).ok() != Some(candidate_obligations.len())
+    {
+        return Err(ObligationErrorV3::InvalidBytes);
+    }
+    let next_revision = current
+        .revision
+        .checked_add(1)
+        .ok_or(ObligationErrorV3::Arithmetic)?;
+
+    output.copy_from_slice(current.bytes);
+    write_u64(output, 16, next_revision)?;
+    for (index, obligation) in candidate_obligations.iter().copied().enumerate() {
+        let offset = index
+            .checked_mul(8)
+            .and_then(|relative| DEALER_OBLIGATION_HEADER_BYTES_V3.checked_add(relative))
+            .ok_or(ObligationErrorV3::Arithmetic)?;
+        write_u64(output, offset, obligation)?;
+    }
+    DealerObligationProjectionV3::decode(output).map(|_| ())
+}
+
+/// Compute the exact candidate-state digest without materializing or mutating it.
+///
+/// This permits the adapter to authenticate the signed candidate digest before
+/// touching caller-owned staging bytes. The hash transcript is byte-for-byte
+/// identical to the state produced by [`stage_scenario_obligation_replacement_v3`].
+pub fn scenario_obligation_replacement_digest_v3(
+    current: DealerObligationProjectionV3<'_>,
+    candidate_obligations: &[u64],
+) -> ObligationResultV3<[u8; 32]> {
+    if usize::try_from(current.width).ok() != Some(candidate_obligations.len()) {
+        return Err(ObligationErrorV3::InvalidBytes);
+    }
+    let next_revision = current
+        .revision
+        .checked_add(1)
+        .ok_or(ObligationErrorV3::Arithmetic)?;
+    let prefix = current
+        .bytes
+        .get(..16)
+        .ok_or(ObligationErrorV3::InvalidBytes)?;
+    let immutable = current
+        .bytes
+        .get(24..DEALER_OBLIGATION_HEADER_BYTES_V3)
+        .ok_or(ObligationErrorV3::InvalidBytes)?;
+    let mut hasher = Hasher::default();
+    hasher.hash(prefix);
+    hasher.hash(&next_revision.to_le_bytes());
+    hasher.hash(immutable);
+    for obligation in candidate_obligations {
+        hasher.hash(&obligation.to_le_bytes());
+    }
+    Ok(hasher.result().to_bytes())
+}
+
 /// Allocation-free iterator over exact obligation values.
 pub struct ObligationIterV3<'a> {
     bytes: &'a [u8],
@@ -498,7 +568,11 @@ mod tests {
         let mut bytes = std::vec![0; DEALER_OBLIGATION_HEADER_BYTES_V3 + obligations.len() * 8];
         bytes[..8].copy_from_slice(&DEALER_OBLIGATION_MAGIC_V3);
         bytes[8..10].copy_from_slice(&DEALER_OBLIGATION_VERSION_V3.to_le_bytes());
-        bytes[12..16].copy_from_slice(&(obligations.len() as u32).to_le_bytes());
+        bytes[12..16].copy_from_slice(
+            &u32::try_from(obligations.len())
+                .expect("bounded test width")
+                .to_le_bytes(),
+        );
         bytes[16..24].copy_from_slice(&7_u64.to_le_bytes());
         for (offset, value) in [
             (24, [1; 32]),
@@ -572,6 +646,34 @@ mod tests {
         assert_eq!(
             stage_equity_share_supply_v3(current, EquityShareDeltaV3::Burn(9), &mut untouched),
             Err(ObligationErrorV3::InvalidShareSupply),
+        );
+        assert!(untouched.iter().all(|byte| *byte == 0xa5));
+    }
+
+    #[test]
+    fn signed_scenario_replacement_changes_only_revision_and_obligations() {
+        let data = bytes(&[10, 11, 12], 8);
+        let current = DealerObligationProjectionV3::decode(&data).expect("state");
+        let mut candidate = std::vec![0; data.len()];
+        stage_scenario_obligation_replacement_v3(current, &[7, 19, 3], &mut candidate)
+            .expect("candidate");
+        let projected = DealerObligationProjectionV3::decode(&candidate).expect("projection");
+        assert_eq!(
+            scenario_obligation_replacement_digest_v3(current, &[7, 19, 3]),
+            Ok(projected.state_digest())
+        );
+        assert_eq!(projected.revision(), 8);
+        assert_eq!(projected.total_equity_shares(), 8);
+        assert_eq!(
+            projected.obligations().collect::<std::vec::Vec<_>>(),
+            [7, 19, 3]
+        );
+        assert_eq!(&candidate[24..192], &data[24..192]);
+
+        let mut untouched = std::vec![0xa5; data.len()];
+        assert_eq!(
+            stage_scenario_obligation_replacement_v3(current, &[1, 2], &mut untouched),
+            Err(ObligationErrorV3::InvalidBytes)
         );
         assert!(untouched.iter().all(|byte| *byte == 0xa5));
     }

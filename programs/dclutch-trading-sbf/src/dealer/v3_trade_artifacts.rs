@@ -5,8 +5,8 @@
 //! registers; Effect V4 selects the Claims extension from `{1,2}`. Six typed
 //! possible Custody routes independently select `{0,14}` accounts, so disabled
 //! physical legs cost no placeholder account. The SignedDelta packet is the
-//! sole borrowed request range and covers every byte after the 384-byte
-//! semantic header.
+//! the sole borrowed child witness. A Product-affine semantic range owns the
+//! signed `u64[N]` obligation vector between the fixed header and that witness.
 
 extern crate alloc;
 
@@ -37,7 +37,7 @@ use dclutch_effect_kernel::{
     v4::{
         BORROWED_RANGE_BYTES_V4, BorrowedRangePolicyV4, BorrowedRangeV4, DYNAMIC_SPAN_BYTES_V4,
         DynamicFixedSpanV4, HEADER_BYTES_V4, ProgramV4 as EffectProgramV4, RequestCoordinateV4,
-        encode_program_v4_atomic,
+        SEMANTIC_RANGE_ROUTE_V4, encode_program_v4_atomic,
     },
 };
 use dclutch_request_profile_contract::{
@@ -140,7 +140,7 @@ const DEALER_SCENARIO_EFFECT_OPERATION_COUNT_V4: usize = 6
     + 2 * 7
     + 2;
 
-const REQUEST_PROFILE_OPERATIONS_V4: usize = 8;
+const REQUEST_PROFILE_OPERATIONS_V4: usize = 9;
 const REQUEST_PROFILE_V1_BYTES_V4: usize = dclutch_request_profile_contract::HEADER_BYTES
     + REQUEST_PROFILE_OPERATIONS_V4 * dclutch_request_profile_contract::OPERATION_BYTES;
 /// Exact selector-9 RequestProfile V3 bytes.
@@ -151,7 +151,7 @@ const TRANSITION_OPERATIONS_V4: usize = 6;
 pub const DEALER_SCENARIO_TRANSITION_BYTES_V4: usize = dclutch_transition_vm::v3::HEADER_BYTES
     + TRANSITION_OPERATIONS_V4 * dclutch_transition_vm::v3::INSTRUCTION_BYTES;
 const DYNAMIC_SPAN_COUNT_V4: usize = DEALER_SCENARIO_CUSTODY_ROUTE_COUNT_V4 + 1;
-const BORROWED_RANGE_COUNT_V4: usize = 1;
+const BORROWED_RANGE_COUNT_V4: usize = 2;
 
 /// Stable artifact construction or join refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -235,20 +235,24 @@ pub fn encode_dealer_scenario_request_profile_v4(
         ),
         RequestInstructionV1::require_zero(RequestCoordinateV1::fixed(378), 2),
     ];
+    let item_instructions = [RequestInstructionV1::project_u64(
+        RequestCoordinateV1::item(0),
+        ScalarRegisterV1::item(0),
+    )];
     let mut embedded_scratch = [0_u8; REQUEST_PROFILE_V1_BYTES_V4];
     let mut embedded = [0_u8; REQUEST_PROFILE_V1_BYTES_V4];
     encode_request_profile_v1_atomic(
         RequestGeometryV1::new(
             u32::try_from(DEALER_SCENARIO_TRADE_HEADER_BYTES_V3)
                 .map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic)?,
-            0,
+            8,
             DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4,
             DEALER_SCENARIO_ITEM_SCALAR_STRIDE_V4,
             DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4,
             DEALER_SCENARIO_ITEM_IDENTITY_STRIDE_V4,
         ),
         &instructions,
-        &[],
+        &item_instructions,
         &mut embedded_scratch,
         &mut embedded,
     )
@@ -1388,14 +1392,25 @@ pub fn encode_dealer_scenario_effect_program_v4(
         optional_span(optional_routes[4], 4)?,
         optional_span(optional_routes[5], 5)?,
     ];
-    let ranges = [BorrowedRangeV4::new(
-        DEALER_SCENARIO_CLAIMS_ROUTE_V4,
-        RequestCoordinateV4::Fixed(
-            u32::try_from(DEALER_SCENARIO_TRADE_HEADER_BYTES_V3)
-                .map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic)?,
+    let ranges = [
+        BorrowedRangeV4::new(
+            SEMANTIC_RANGE_ROUTE_V4,
+            RequestCoordinateV4::Fixed(
+                u32::try_from(DEALER_SCENARIO_TRADE_HEADER_BYTES_V3)
+                    .map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic)?,
+            ),
+            RequestCoordinateV4::ProductTailAffine { base: 0, stride: 8 },
         ),
-        RequestCoordinateV4::CommonScalar(DEALER_SCENARIO_WITNESS_BYTES_SCALAR_V4),
-    )];
+        BorrowedRangeV4::new(
+            DEALER_SCENARIO_CLAIMS_ROUTE_V4,
+            RequestCoordinateV4::ProductTailAffine {
+                base: u16::try_from(DEALER_SCENARIO_TRADE_HEADER_BYTES_V3)
+                    .map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic)?,
+                stride: 8,
+            },
+            RequestCoordinateV4::CommonScalar(DEALER_SCENARIO_WITNESS_BYTES_SCALAR_V4),
+        ),
+    ];
     encode_program_v4_atomic(
         base_program,
         BorrowedRangePolicyV4::DisjointExactCoverage,
@@ -1449,7 +1464,11 @@ pub fn authenticate_dealer_scenario_artifacts_v4<'a>(
     let effect = EffectProgramV4::decode(effect_bytes)
         .map_err(|_| DealerScenarioArtifactsErrorV4::Effect)?;
     validate_base_effect(effect.base().bytes())?;
-    if request.request_profile().common_scalar_count() != DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4
+    if request.request_profile().fixed_request_bytes()
+        != u32::try_from(DEALER_SCENARIO_TRADE_HEADER_BYTES_V3)
+            .map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic)?
+        || request.request_profile().item_request_bytes() != 8
+        || request.request_profile().common_scalar_count() != DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4
         || request.request_profile().item_scalar_stride() != DEALER_SCENARIO_ITEM_SCALAR_STRIDE_V4
         || request.request_profile().common_identity_count()
             != DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4
@@ -1476,9 +1495,16 @@ pub fn authenticate_dealer_scenario_artifacts_v4<'a>(
         .ok_or(DealerScenarioArtifactsErrorV4::Effect)? =
         u64::try_from(DEALER_SCENARIO_TRADE_HEADER_BYTES_V3)
             .map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic)?;
+    let mut coverage_scalars = vec![0_u64; scalars.len() + 1];
+    coverage_scalars
+        .get_mut(..scalars.len())
+        .ok_or(DealerScenarioArtifactsErrorV4::Effect)?
+        .copy_from_slice(scalars);
     effect
         .validate_request_coverage(
             DEALER_SCENARIO_TRADE_HEADER_BYTES_V3
+                .checked_add(8)
+                .ok_or(DealerScenarioArtifactsErrorV4::Arithmetic)?
                 .checked_add(
                     usize::try_from(
                         *scalars
@@ -1488,8 +1514,8 @@ pub fn authenticate_dealer_scenario_artifacts_v4<'a>(
                     .map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic)?,
                 )
                 .ok_or(DealerScenarioArtifactsErrorV4::Arithmetic)?,
-            0,
-            scalars,
+            1,
+            &coverage_scalars,
             identities,
         )
         .map_err(|_| DealerScenarioArtifactsErrorV4::Effect)?;
@@ -1558,6 +1584,7 @@ mod tests {
         RouteReceiptDependencyV3,
         encode::{EffectGeometryV3, RouteInputV3, encode_effect_program_v3_atomic},
     };
+    use dclutch_request_profile_contract::ProjectionRegistersV1;
     use std::vec;
     use std::vec::Vec;
 
@@ -1575,7 +1602,7 @@ mod tests {
                 CompartmentV1::TradingPrincipal,
             ),
             5 => (CompartmentV1::TradingPrincipal, CompartmentV1::External),
-            _ => panic!("slot"),
+            _ => (CompartmentV1::External, CompartmentV1::External),
         };
         let external_source = source_compartment == CompartmentV1::External;
         let external_destination = destination_compartment == CompartmentV1::External;
@@ -1745,9 +1772,13 @@ mod tests {
         encode_dealer_scenario_effect_program_v4(&base, &mut scratch, &mut output)
             .expect("effect v4");
         let program = EffectProgramV4::decode(&output).expect("decode");
-        for positions in [1_u64, 2] {
+        for (positions, tail_count) in [(1_u64, 1_u32), (2, 16)] {
             let witness = u64::from(dealer_scenario_witness_bounds_v4().expect("bounds").0);
-            let mut scalars = vec![0; usize::from(DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4)];
+            let mut scalars = vec![
+                0;
+                usize::from(DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4)
+                    + usize::try_from(tail_count).expect("bounded")
+            ];
             let identities = vec![[1; 32]; usize::from(DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4)];
             scalars[usize::from(DEALER_SCENARIO_POSITION_COUNT_SCALAR_V4)] = positions;
             scalars[usize::from(DEALER_SCENARIO_WITNESS_BYTES_SCALAR_V4)] = witness;
@@ -1756,9 +1787,15 @@ mod tests {
             let expected = usize::from(DEALER_SCENARIO_BASE_FIXED_ACCOUNTS_V4)
                 + usize::try_from(positions).expect("small")
                 + 28;
-            assert_eq!(program.account_count(0, &scalars), Ok(expected));
+            assert_eq!(program.account_count(tail_count, &scalars), Ok(expected));
             let claims = program
-                .resolved_invocation(DEALER_SCENARIO_CLAIMS_ROUTE_V4, 0, 0, &scalars, &identities)
+                .resolved_invocation(
+                    DEALER_SCENARIO_CLAIMS_ROUTE_V4,
+                    0,
+                    tail_count,
+                    &scalars,
+                    &identities,
+                )
                 .expect("Claims invocation");
             assert_eq!(claims.invocation.fixed_account_start, 19);
             assert_eq!(
@@ -1769,8 +1806,9 @@ mod tests {
             assert_eq!(
                 program.validate_request_coverage(
                     DEALER_SCENARIO_TRADE_HEADER_BYTES_V3
+                        + usize::try_from(tail_count).expect("bounded") * 8
                         + usize::try_from(witness).expect("bounded"),
-                    0,
+                    tail_count,
                     &scalars,
                     &identities,
                 ),
@@ -1857,6 +1895,48 @@ mod tests {
             BorrowedWitnessRoleV3::Claims
         );
         assert_eq!(decoded.request_profile().fixed_request_bytes(), 384);
+        assert_eq!(decoded.request_profile().item_request_bytes(), 8);
+
+        let witness = usize::try_from(dealer_scenario_witness_bounds_v4().expect("bounds").0)
+            .expect("bounded");
+        let mut family_request = vec![0_u8; 384 + 2 * 8 + witness];
+        family_request[..8].copy_from_slice(&DEALER_SCENARIO_TRADE_MAGIC_V3);
+        family_request[8..10].copy_from_slice(&DEALER_SCENARIO_TRADE_VERSION_V3.to_le_bytes());
+        family_request[10..12].copy_from_slice(&DEALER_SCENARIO_TRADE_ACTION_V3.to_le_bytes());
+        family_request[377] = 1;
+        family_request[380..384]
+            .copy_from_slice(&u32::try_from(witness).expect("bounded").to_le_bytes());
+        family_request[352..360].copy_from_slice(&99_u64.to_le_bytes());
+        family_request[112..144].copy_from_slice(&[7; 32]);
+        family_request[384..392].copy_from_slice(&11_u64.to_le_bytes());
+        family_request[392..400].copy_from_slice(&29_u64.to_le_bytes());
+        family_request[400..408].copy_from_slice(&SIGNED_DELTA_PLAN_MAGIC_V3);
+        let scalar_count = usize::from(DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4) + 2;
+        let identity_count = usize::from(DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4);
+        let input_scalars = vec![0_u64; scalar_count];
+        let mut scratch_scalars = vec![0_u64; scalar_count];
+        let mut output_scalars = vec![0_u64; scalar_count];
+        let input_identities = vec![[0_u8; 32]; identity_count];
+        let mut scratch_identities = vec![[0_u8; 32]; identity_count];
+        let mut output_identities = vec![[0_u8; 32]; identity_count];
+        decoded
+            .project_prefix_atomic(
+                2,
+                &family_request,
+                ProjectionRegistersV1 {
+                    input_scalars: &input_scalars,
+                    input_identities: &input_identities,
+                    scratch_scalars: &mut scratch_scalars,
+                    scratch_identities: &mut scratch_identities,
+                    output_scalars: &mut output_scalars,
+                    output_identities: &mut output_identities,
+                },
+            )
+            .expect("project candidate obligations");
+        assert_eq!(
+            &output_scalars[usize::from(DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4)..],
+            &[11, 29]
+        );
 
         let mut transition_scratch = [0; DEALER_SCENARIO_TRANSITION_BYTES_V4];
         let mut transition = [0; DEALER_SCENARIO_TRANSITION_BYTES_V4];

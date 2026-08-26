@@ -52,6 +52,8 @@ pub struct DealerScenarioAdmittedBuffersV4<'a> {
     pub obligations_before: &'a mut [u64],
     /// Candidate obligation vector scratch.
     pub obligations_after: &'a mut [u64],
+    /// Exact request-derived next obligation account bytes.
+    pub candidate_obligation_state: &'a mut [u8],
     /// Candidate Dealer Claims inventory.
     pub post_inventory: &'a mut [u64],
     /// Candidate counterparty Claims inventory.
@@ -102,6 +104,7 @@ pub fn evaluate_dealer_scenario_admitted_v4(
         delivered,
         obligations_before,
         obligations_after,
+        candidate_obligation_state,
         post_inventory,
         post_counterparty_inventory,
         post_equity,
@@ -139,13 +142,14 @@ pub fn evaluate_dealer_scenario_admitted_v4(
         trusted_current_slot,
     )?;
 
-    let plan = prepare_scenario_trade_v3(
+    let prepared = prepare_scenario_trade_v3(
         request,
         chain,
         context,
         collateral,
         acquired,
         delivered,
+        candidate_obligation_state,
         obligations_before,
         obligations_after,
         post_inventory,
@@ -156,8 +160,8 @@ pub fn evaluate_dealer_scenario_admitted_v4(
     .map_err(|_| DealerScenarioAdmittedErrorV4::Semantics)?;
     project_dealer_scenario_hot_registers_v4(
         request,
-        &plan,
-        chain.candidate_obligation,
+        &prepared.plan,
+        prepared.candidate_obligation,
         custody_effects,
         chain.trading_program,
         trusted_current_slot,
@@ -167,7 +171,7 @@ pub fn evaluate_dealer_scenario_admitted_v4(
     .map_err(|_| DealerScenarioAdmittedErrorV4::Candidate)?;
     encode_register_bank(candidate_scalars, candidate_identities, bank_scratch)?;
     candidate_bank.copy_from_slice(bank_scratch);
-    Ok(plan)
+    Ok(prepared.plan)
 }
 
 fn authenticate_input_bank(
@@ -190,6 +194,19 @@ fn authenticate_input_bank(
         (DEALER_SCENARIO_EXPIRY_SCALAR_V4, request.expires_at),
     ] {
         if read_scalar(input_bank, index)? != expected {
+            return Err(DealerScenarioAdmittedErrorV4::Input);
+        }
+    }
+    for index in 0..request.width {
+        let item = usize::from(DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4)
+            .checked_add(
+                usize::try_from(index).map_err(|_| DealerScenarioAdmittedErrorV4::Arithmetic)?,
+            )
+            .ok_or(DealerScenarioAdmittedErrorV4::Arithmetic)?;
+        let expected = request
+            .candidate_obligation(index)
+            .map_err(|_| DealerScenarioAdmittedErrorV4::Input)?;
+        if read_scalar_at(input_bank, item)? != expected {
             return Err(DealerScenarioAdmittedErrorV4::Input);
         }
     }
@@ -236,6 +253,16 @@ fn read_scalar(bank: &[u8], index: u16) -> Result<u64, DealerScenarioAdmittedErr
             .try_into()
             .map_err(|_| DealerScenarioAdmittedErrorV4::Input)?,
     ))
+}
+
+fn read_scalar_at(bank: &[u8], index: usize) -> Result<u64, DealerScenarioAdmittedErrorV4> {
+    let offset = index
+        .checked_mul(8)
+        .ok_or(DealerScenarioAdmittedErrorV4::Arithmetic)?;
+    bank.get(offset..offset + 8)
+        .and_then(|bytes| bytes.try_into().ok())
+        .map(u64::from_le_bytes)
+        .ok_or(DealerScenarioAdmittedErrorV4::Input)
 }
 
 fn read_identity(

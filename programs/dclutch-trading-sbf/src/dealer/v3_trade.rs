@@ -33,7 +33,10 @@ use super::{
         EquityClaimsContextV3, EquityClaimsTransitionV3, equity_claims_geometry_v3,
         validate_equity_claims_packet_v3,
     },
-    v3_obligation::{DEALER_OBLIGATION_PDA_DOMAIN_V3, DealerObligationProjectionV3},
+    v3_obligation::{
+        DEALER_OBLIGATION_PDA_DOMAIN_V3, DealerObligationProjectionV3, obligation_account_bytes_v3,
+        scenario_obligation_replacement_digest_v3, stage_scenario_obligation_replacement_v3,
+    },
 };
 
 #[cfg(not(target_os = "solana"))]
@@ -45,8 +48,11 @@ pub const DEALER_SCENARIO_TRADE_MAGIC_V3: [u8; 8] = *b"DCLDST03";
 pub const DEALER_SCENARIO_TRADE_VERSION_V3: u16 = 2;
 /// Family-neutral CapabilityProgramSet selector offset.
 pub const DEALER_SCENARIO_TRADE_SELECTOR_OFFSET_V3: u32 = 10;
-/// Exact fixed header before the sole borrowed SignedDeltaV3 witness.
+/// Exact fixed header before the `u64[N]` candidate and SignedDeltaV3 witness.
 pub const DEALER_SCENARIO_TRADE_HEADER_BYTES_V3: usize = 384;
+/// First exact candidate-obligation `u64` after the fixed header.
+pub const DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3: usize =
+    DEALER_SCENARIO_TRADE_HEADER_BYTES_V3;
 /// Fixed-header routing coordinate for the Claims Position-table width.
 pub const DEALER_SCENARIO_TRADE_POSITION_COUNT_OFFSET_V3: usize = 377;
 /// Fixed-header exact borrowed witness width.
@@ -151,7 +157,7 @@ impl<'a> DealerScenarioTradeRequestV3<'a> {
         let claims_position_count = byte(bytes, DEALER_SCENARIO_TRADE_POSITION_COUNT_OFFSET_V3)?;
         let claims_packet_bytes =
             read_u32(bytes, DEALER_SCENARIO_TRADE_CLAIMS_PACKET_BYTES_OFFSET_V3)?;
-        let expected = scenario_trade_request_bytes_v3(claims_packet_bytes)?;
+        let expected = scenario_trade_request_bytes_v3(width, claims_packet_bytes)?;
         if width == 0
             || !matches!(claims_position_count, 1 | 2)
             || claims_packet_bytes == 0
@@ -234,9 +240,44 @@ impl<'a> DealerScenarioTradeRequestV3<'a> {
 
     /// Borrow the complete sole SignedDeltaV3 witness.
     pub fn claims_packet(self) -> &'a [u8] {
+        let start = scenario_trade_claims_packet_offset_v3(self.width).unwrap_or(usize::MAX);
+        self.bytes.get(start..).unwrap_or(&[])
+    }
+
+    /// Borrow the exact signed candidate-obligation vector.
+    pub fn candidate_obligations_bytes(self) -> &'a [u8] {
+        let end = scenario_trade_claims_packet_offset_v3(self.width).unwrap_or(0);
         self.bytes
-            .get(DEALER_SCENARIO_TRADE_HEADER_BYTES_V3..)
+            .get(DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3..end)
             .unwrap_or(&[])
+    }
+
+    /// Decode one signed candidate terminal obligation.
+    pub fn candidate_obligation(self, index: u32) -> Result<u64, ScenarioTradeErrorV3> {
+        if index >= self.width {
+            return Err(ScenarioTradeErrorV3::InvalidRequest);
+        }
+        let relative = usize::try_from(index)
+            .ok()
+            .and_then(|value| value.checked_mul(8))
+            .ok_or(ScenarioTradeErrorV3::InvalidRequest)?;
+        read_u64(self.candidate_obligations_bytes(), relative)
+    }
+
+    /// Decode every signed candidate obligation into exact caller scratch.
+    pub fn decode_candidate_obligations(
+        self,
+        output: &mut [u64],
+    ) -> Result<(), ScenarioTradeErrorV3> {
+        if usize::try_from(self.width).ok() != Some(output.len()) {
+            return Err(ScenarioTradeErrorV3::WidthMismatch);
+        }
+        for (index, destination) in output.iter_mut().enumerate() {
+            *destination = self.candidate_obligation(
+                u32::try_from(index).map_err(|_| ScenarioTradeErrorV3::WidthMismatch)?,
+            )?;
+        }
+        Ok(())
     }
 
     /// Hostile-decode the complete child packet.
@@ -351,8 +392,6 @@ pub struct ScenarioTradeChainProjectionV3<'a> {
     pub obligation_address: [u8; 32],
     /// Current authenticated obligation state.
     pub current_obligation: DealerObligationProjectionV3<'a>,
-    /// Exact candidate obligation state proposed for write-last replacement.
-    pub candidate_obligation: DealerObligationProjectionV3<'a>,
     /// Canonical Dealer Claims Position.
     pub dealer_position: ClaimsInventoryObservation<'a>,
     /// Canonical counterparty Claims Position.
@@ -392,6 +431,8 @@ pub struct ScenarioTradeIntentV3<'a> {
     pub acquired: &'a [u64],
     /// Claims transferred from Dealer to counterparty.
     pub delivered: &'a [u64],
+    /// Exact candidate terminal-obligation vector committed by the request.
+    pub candidate_obligations: &'a [u64],
 }
 
 /// Metadata for one caller-buffer-backed unsigned request.
@@ -403,12 +444,36 @@ pub struct UnsignedScenarioTradeRequestV3 {
     pub selected_program: ContentId,
 }
 
+/// Fully authenticated scenario preparation with its request-derived write candidate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedScenarioTradeV3<'a> {
+    /// Canonical scenario, Claims, and Custody composition.
+    pub plan: ScenarioAtomicPlanV3,
+    /// Exact next obligation state reconstructed from current state and signed bytes.
+    pub candidate_obligation: DealerObligationProjectionV3<'a>,
+}
+
 /// Exact request width from the canonical SignedDeltaV3 packet width.
 pub fn scenario_trade_request_bytes_v3(
+    width: u32,
     claims_packet_bytes: u32,
 ) -> Result<usize, ScenarioTradeErrorV3> {
-    usize::try_from(claims_packet_bytes)
+    scenario_trade_claims_packet_offset_v3(width)?
+        .checked_add(
+            usize::try_from(claims_packet_bytes)
+                .map_err(|_| ScenarioTradeErrorV3::InvalidRequest)?,
+        )
+        .ok_or(ScenarioTradeErrorV3::InvalidRequest)
+}
+
+/// Exact SignedDelta start after the runtime candidate-obligation vector.
+pub fn scenario_trade_claims_packet_offset_v3(width: u32) -> Result<usize, ScenarioTradeErrorV3> {
+    if width == 0 {
+        return Err(ScenarioTradeErrorV3::InvalidRequest);
+    }
+    usize::try_from(width)
         .ok()
+        .and_then(|value| value.checked_mul(8))
         .and_then(|value| DEALER_SCENARIO_TRADE_HEADER_BYTES_V3.checked_add(value))
         .ok_or(ScenarioTradeErrorV3::InvalidRequest)
 }
@@ -424,9 +489,10 @@ pub fn scenario_trade_max_request_bytes_v3(width: u32) -> Result<usize, Scenario
         .ok_or(ScenarioTradeErrorV3::InvalidRequest)?;
     let packet_bytes =
         plan_bytes(width, 2, maximum_rows).map_err(|_| ScenarioTradeErrorV3::InvalidRequest)?;
-    DEALER_SCENARIO_TRADE_HEADER_BYTES_V3
-        .checked_add(packet_bytes)
-        .ok_or(ScenarioTradeErrorV3::InvalidRequest)
+    scenario_trade_request_bytes_v3(
+        width,
+        u32::try_from(packet_bytes).map_err(|_| ScenarioTradeErrorV3::InvalidRequest)?,
+    )
 }
 
 /// Build a chain-derived unsigned exact-fill request into caller-owned bytes.
@@ -453,6 +519,17 @@ pub fn build_scenario_trade_request_v3(
         .map_err(|_| ScenarioTradeErrorV3::ProgramSelection)?;
 
     let width_usize = intent.acquired.len();
+    let candidate_state_bytes =
+        obligation_account_bytes_v3(width).map_err(|_| ScenarioTradeErrorV3::InvalidProjection)?;
+    let mut candidate_state = vec![0_u8; candidate_state_bytes];
+    stage_scenario_obligation_replacement_v3(
+        chain.current_obligation,
+        intent.candidate_obligations,
+        &mut candidate_state,
+    )
+    .map_err(|_| ScenarioTradeErrorV3::InvalidIntent)?;
+    let candidate = DealerObligationProjectionV3::decode(&candidate_state)
+        .map_err(|_| ScenarioTradeErrorV3::InvalidIntent)?;
     let mut obligations_before = vec![0_u64; width_usize];
     let mut obligations_after = vec![0_u64; width_usize];
     let mut dealer_after = vec![0_u64; width_usize];
@@ -463,10 +540,7 @@ pub fn build_scenario_trade_request_v3(
     {
         *destination = value;
     }
-    for (destination, value) in obligations_after
-        .iter_mut()
-        .zip(chain.candidate_obligation.obligations())
-    {
+    for (destination, value) in obligations_after.iter_mut().zip(candidate.obligations()) {
         *destination = value;
     }
     let adjusted_principal = match intent.direction {
@@ -517,7 +591,7 @@ pub fn build_scenario_trade_request_v3(
     }
     let packet_bytes =
         u32::try_from(geometry.packet_bytes).map_err(|_| ScenarioTradeErrorV3::InvalidRequest)?;
-    let expected = scenario_trade_request_bytes_v3(packet_bytes)?;
+    let expected = scenario_trade_request_bytes_v3(width, packet_bytes)?;
     if output.len() < expected {
         return Err(ScenarioTradeErrorV3::WidthMismatch);
     }
@@ -535,7 +609,7 @@ pub fn build_scenario_trade_request_v3(
         (80, chain.child_root),
         (112, chain.obligation_address),
         (144, chain.current_obligation.state_digest()),
-        (176, chain.candidate_obligation.state_digest()),
+        (176, candidate.state_digest()),
         (208, chain.dealer_position.position_owner),
         (240, chain.counterparty_position.position_owner),
         (272, chain.counterparty_account),
@@ -544,7 +618,7 @@ pub fn build_scenario_trade_request_v3(
     }
     for (offset, value) in [
         (304, chain.current_obligation.revision()),
-        (312, chain.candidate_obligation.revision()),
+        (312, candidate.revision()),
         (320, chain.dealer_position.revision),
         (328, chain.counterparty_position.revision),
         (336, chain.claims_revision),
@@ -570,6 +644,13 @@ pub fn build_scenario_trade_request_v3(
         DEALER_SCENARIO_TRADE_CLAIMS_PACKET_BYTES_OFFSET_V3,
         &packet_bytes.to_le_bytes(),
     )?;
+    for (index, obligation) in intent.candidate_obligations.iter().copied().enumerate() {
+        let offset = index
+            .checked_mul(8)
+            .and_then(|relative| DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3.checked_add(relative))
+            .ok_or(ScenarioTradeErrorV3::InvalidRequest)?;
+        write_bytes(output, offset, &obligation.to_le_bytes())?;
+    }
     let request_id = hash(
         output
             .get(..DEALER_SCENARIO_TRADE_HEADER_BYTES_V3)
@@ -580,7 +661,7 @@ pub fn build_scenario_trade_request_v3(
         claims_context(request_id, chain),
         transition,
         output
-            .get_mut(DEALER_SCENARIO_TRADE_HEADER_BYTES_V3..expected)
+            .get_mut(scenario_trade_claims_packet_offset_v3(width)?..expected)
             .ok_or(ScenarioTradeErrorV3::WidthMismatch)?,
     )
     .map_err(|_| ScenarioTradeErrorV3::Composition)?;
@@ -589,7 +670,14 @@ pub fn build_scenario_trade_request_v3(
             .get(..expected)
             .ok_or(ScenarioTradeErrorV3::WidthMismatch)?,
     )?;
-    authenticate_scenario_trade_request_v3(request, chain)?;
+    let mut authenticated_obligations = vec![0_u64; width_usize];
+    let mut authenticated_state = vec![0_u8; candidate_state_bytes];
+    authenticate_scenario_trade_request_v3(
+        request,
+        chain,
+        &mut authenticated_obligations,
+        &mut authenticated_state,
+    )?;
     Ok(UnsignedScenarioTradeRequestV3 {
         request_bytes: expected,
         selected_program,
@@ -597,10 +685,12 @@ pub fn build_scenario_trade_request_v3(
 }
 
 /// Rejoin one exact request to current authenticated chain projections.
-pub fn authenticate_scenario_trade_request_v3(
+pub fn authenticate_scenario_trade_request_v3<'a>(
     request: DealerScenarioTradeRequestV3<'_>,
     chain: ScenarioTradeChainProjectionV3<'_>,
-) -> Result<(), ScenarioTradeErrorV3> {
+    candidate_obligations: &mut [u64],
+    candidate_state: &'a mut [u8],
+) -> Result<DealerObligationProjectionV3<'a>, ScenarioTradeErrorV3> {
     validate_projection(chain)?;
     if chain.terminal
         || chain.now > request.expires_at
@@ -610,9 +700,13 @@ pub fn authenticate_scenario_trade_request_v3(
         || request.child_root != chain.child_root
         || request.obligation != chain.obligation_address
         || request.current_obligation_digest != chain.current_obligation.state_digest()
-        || request.candidate_obligation_digest != chain.candidate_obligation.state_digest()
         || request.current_obligation_revision != chain.current_obligation.revision()
-        || request.candidate_obligation_revision != chain.candidate_obligation.revision()
+        || request.candidate_obligation_revision
+            != chain
+                .current_obligation
+                .revision()
+                .checked_add(1)
+                .unwrap_or(0)
         || request.dealer_owner != chain.dealer_position.position_owner
         || request.counterparty_owner != chain.counterparty_position.position_owner
         || request.counterparty_account != chain.counterparty_account
@@ -622,6 +716,19 @@ pub fn authenticate_scenario_trade_request_v3(
         || request.generation != chain.generation
         || usize::try_from(request.width).ok() != Some(chain.dealer_position.inventory.len())
     {
+        return Err(ScenarioTradeErrorV3::InvalidProjection);
+    }
+    if candidate_state.len()
+        != obligation_account_bytes_v3(request.width)
+            .map_err(|_| ScenarioTradeErrorV3::WidthMismatch)?
+    {
+        return Err(ScenarioTradeErrorV3::WidthMismatch);
+    }
+    request.decode_candidate_obligations(candidate_obligations)?;
+    let candidate_digest =
+        scenario_obligation_replacement_digest_v3(chain.current_obligation, candidate_obligations)
+            .map_err(|_| ScenarioTradeErrorV3::InvalidProjection)?;
+    if candidate_digest != request.candidate_obligation_digest {
         return Err(ScenarioTradeErrorV3::InvalidProjection);
     }
     let plan = request.claims_plan()?;
@@ -646,26 +753,35 @@ pub fn authenticate_scenario_trade_request_v3(
             return Err(ScenarioTradeErrorV3::InvalidProjection);
         }
     }
-    Ok(())
+    stage_scenario_obligation_replacement_v3(
+        chain.current_obligation,
+        candidate_obligations,
+        candidate_state,
+    )
+    .map_err(|_| ScenarioTradeErrorV3::InvalidProjection)?;
+    DealerObligationProjectionV3::decode(candidate_state)
+        .map_err(|_| ScenarioTradeErrorV3::InvalidProjection)
 }
 
 /// Authenticate, materialize runtime legs, and invoke the sole physical composer.
 #[allow(clippy::too_many_arguments)]
-pub fn prepare_scenario_trade_v3(
+pub fn prepare_scenario_trade_v3<'a>(
     request: DealerScenarioTradeRequestV3<'_>,
     chain: ScenarioTradeChainProjectionV3<'_>,
     context: ScenarioComposerContextV3,
     frame: ScenarioCollateralFrameV3,
     acquired: &mut [u64],
     delivered: &mut [u64],
+    candidate_state: &'a mut [u8],
     obligations_before: &mut [u64],
     obligations_after: &mut [u64],
     post_inventory: &mut [u64],
     post_counterparty_inventory: &mut [u64],
     post_equity: &mut [i128],
     custody_output: &mut [Option<super::v3_composer::ScenarioCustodyEffectV3>],
-) -> Result<ScenarioAtomicPlanV3, ScenarioTradeErrorV3> {
-    authenticate_scenario_trade_request_v3(request, chain)?;
+) -> Result<PreparedScenarioTradeV3<'a>, ScenarioTradeErrorV3> {
+    let candidate =
+        authenticate_scenario_trade_request_v3(request, chain, obligations_after, candidate_state)?;
     if context.trading_program != chain.trading_program
         || context.release_set != request.release_set
         || context.market != request.market
@@ -691,7 +807,7 @@ pub fn prepare_scenario_trade_v3(
         context,
         frame,
         chain.current_obligation,
-        chain.candidate_obligation,
+        candidate,
         request.candidate_obligation_digest,
         chain.claims_revision,
         ScenarioFillInputV3 {
@@ -734,7 +850,10 @@ pub fn prepare_scenario_trade_v3(
     if geometry.position_count != u32::from(request.claims_position_count) {
         return Err(ScenarioTradeErrorV3::Composition);
     }
-    Ok(plan)
+    Ok(PreparedScenarioTradeV3 {
+        plan,
+        candidate_obligation: candidate,
+    })
 }
 
 fn claims_context(
@@ -800,7 +919,6 @@ fn validate_projection(
         }
     }
     let current = chain.current_obligation;
-    let candidate = chain.candidate_obligation;
     let dealer = chain.dealer_position;
     let counterparty = chain.counterparty_position;
     let expected_obligation = Pubkey::find_program_address(
@@ -814,11 +932,6 @@ fn validate_projection(
         || chain.generation == 0
         || chain.obligation_address != expected_obligation
         || current.child_root() != chain.child_root
-        || candidate.child_root() != chain.child_root
-        || current.descriptor(0) != candidate.descriptor(0)
-        || current.revision().checked_add(1) != Some(candidate.revision())
-        || current.width() != candidate.width()
-        || current.total_equity_shares() != candidate.total_equity_shares()
         || current.position_owner() != dealer.position_owner
         || dealer.position_owner == counterparty.position_owner
         || dealer.market_id != chain.market
@@ -845,6 +958,7 @@ fn validate_intent(
     if intent.principal == 0
         || intent.acquired.len() != width
         || intent.delivered.len() != width
+        || intent.candidate_obligations.len() != width
         || (intent.direction == ScenarioTradeDirectionV3::DealerPaysCounterparty
             && intent.realized_fee > intent.principal)
     {
@@ -932,7 +1046,11 @@ mod tests {
         let mut bytes = std::vec![0; DEALER_OBLIGATION_HEADER_BYTES_V3 + obligations.len() * 8];
         bytes[..8].copy_from_slice(&DEALER_OBLIGATION_MAGIC_V3);
         bytes[8..10].copy_from_slice(&DEALER_OBLIGATION_VERSION_V3.to_le_bytes());
-        bytes[12..16].copy_from_slice(&(obligations.len() as u32).to_le_bytes());
+        bytes[12..16].copy_from_slice(
+            &u32::try_from(obligations.len())
+                .expect("bounded test width")
+                .to_le_bytes(),
+        );
         bytes[16..24].copy_from_slice(&revision.to_le_bytes());
         for (offset, identity) in [
             (24, [2; 32]),
@@ -971,9 +1089,7 @@ mod tests {
         let dealer_inventory = [2, 10, 0];
         let counterparty_inventory = [20, 5, 9];
         let current_bytes = obligation_bytes(child_root, 7, &[12, 20, 10]);
-        let candidate_bytes = obligation_bytes(child_root, 8, &[10, 19, 13]);
         let current = DealerObligationProjectionV3::decode(&current_bytes).expect("current");
-        let candidate = DealerObligationProjectionV3::decode(&candidate_bytes).expect("candidate");
         let obligation_address = Pubkey::find_program_address(
             &[DEALER_OBLIGATION_PDA_DOMAIN_V3, &child_root],
             &Pubkey::new_from_array(trading_program),
@@ -987,7 +1103,6 @@ mod tests {
             child_root,
             obligation_address,
             current_obligation: current,
-            candidate_obligation: candidate,
             dealer_position: ClaimsInventoryObservation {
                 market_id: [2; 32],
                 product_id: [3; 32],
@@ -1021,6 +1136,7 @@ mod tests {
             realized_fee: 1,
             acquired: &[3, 0, 4],
             delivered: &[0, 1, 0],
+            candidate_obligations: &[10, 19, 13],
         };
         let set_bytes = program_set();
         let set = CapabilityProgramSetV1::decode(&set_bytes).expect("set");
@@ -1033,19 +1149,104 @@ mod tests {
             output.get(..unsigned.request_bytes).expect("initialized"),
         )
         .expect("decode");
+        let accepted = output[..unsigned.request_bytes].to_vec();
         assert_eq!(request.width, 3);
         assert!(matches!(request.claims_position_count, 1 | 2));
         assert_eq!(request.acquired(2), Ok(4));
         assert_eq!(request.delivered(1), Ok(1));
+        assert_eq!(request.candidate_obligation(0), Ok(10));
+        assert_eq!(request.candidate_obligation(2), Ok(13));
+        let mut candidate_values = [0_u64; 3];
+        let mut candidate_state = std::vec![0_u8; current_bytes.len()];
         assert_eq!(
-            authenticate_scenario_trade_request_v3(request, chain),
-            Ok(())
+            authenticate_scenario_trade_request_v3(
+                request,
+                chain,
+                &mut candidate_values,
+                &mut candidate_state,
+            )
+            .map(|candidate| (candidate.revision(), candidate.state_digest())),
+            Ok((8, request.candidate_obligation_digest))
         );
 
         let mut substituted = request;
         substituted.candidate_obligation_digest[0] ^= 1;
+        let mut untouched = std::vec![0xa5; current_bytes.len()];
         assert_eq!(
-            authenticate_scenario_trade_request_v3(substituted, chain),
+            authenticate_scenario_trade_request_v3(
+                substituted,
+                chain,
+                &mut candidate_values,
+                &mut untouched,
+            )
+            .map(|_| ()),
+            Err(ScenarioTradeErrorV3::InvalidProjection)
+        );
+
+        assert_eq!(
+            DealerScenarioTradeRequestV3::decode(&accepted[..accepted.len() - 1]),
+            Err(ScenarioTradeErrorV3::InvalidRequest)
+        );
+        let mut extra = accepted.clone();
+        extra.push(0);
+        assert_eq!(
+            DealerScenarioTradeRequestV3::decode(&extra),
+            Err(ScenarioTradeErrorV3::InvalidRequest)
+        );
+        let mut swapped_width = accepted.clone();
+        swapped_width[12..16].copy_from_slice(&2_u32.to_le_bytes());
+        assert_eq!(
+            DealerScenarioTradeRequestV3::decode(&swapped_width),
+            Err(ScenarioTradeErrorV3::InvalidRequest)
+        );
+        let claims_start = scenario_trade_claims_packet_offset_v3(3).expect("offset");
+        let mut omitted_vector = accepted[..DEALER_SCENARIO_TRADE_HEADER_BYTES_V3].to_vec();
+        omitted_vector.extend_from_slice(&accepted[claims_start..]);
+        assert_eq!(
+            DealerScenarioTradeRequestV3::decode(&omitted_vector),
+            Err(ScenarioTradeErrorV3::InvalidRequest)
+        );
+        let mut swapped_vector = accepted;
+        let first = swapped_vector[DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3
+            ..DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3 + 8]
+            .to_vec();
+        let second = swapped_vector[DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3 + 8
+            ..DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3 + 16]
+            .to_vec();
+        swapped_vector[DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3
+            ..DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3 + 8]
+            .copy_from_slice(&second);
+        swapped_vector[DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3 + 8
+            ..DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3 + 16]
+            .copy_from_slice(&first);
+        let swapped_vector =
+            DealerScenarioTradeRequestV3::decode(&swapped_vector).expect("structurally valid");
+        assert_eq!(
+            authenticate_scenario_trade_request_v3(
+                swapped_vector,
+                chain,
+                &mut candidate_values,
+                &mut untouched,
+            )
+            .map(|_| ()),
+            Err(ScenarioTradeErrorV3::InvalidProjection)
+        );
+        assert!(untouched.iter().all(|byte| *byte == 0xa5));
+
+        let candidate_offset = DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3;
+        output[candidate_offset] ^= 1;
+        let substituted = DealerScenarioTradeRequestV3::decode(
+            output.get(..unsigned.request_bytes).expect("initialized"),
+        )
+        .expect("structurally valid");
+        assert_eq!(
+            authenticate_scenario_trade_request_v3(
+                substituted,
+                chain,
+                &mut candidate_values,
+                &mut untouched,
+            )
+            .map(|_| ()),
             Err(ScenarioTradeErrorV3::InvalidProjection)
         );
     }

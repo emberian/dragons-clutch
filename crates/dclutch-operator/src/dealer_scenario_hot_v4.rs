@@ -26,6 +26,7 @@ use dclutch_trading_sbf::{
             MAX_DEALER_SCENARIO_CUSTODY_EFFECTS_V3, ScenarioAtomicPlanV3,
             ScenarioCollateralFrameV3, ScenarioComposerContextV3, ScenarioCustodyEffectV3,
         },
+        v3_obligation::obligation_account_bytes_v3,
         v3_trade::{
             DealerScenarioTradeRequestV3, ScenarioTradeChainProjectionV3, prepare_scenario_trade_v3,
         },
@@ -66,7 +67,7 @@ pub struct DealerScenarioHotMetaStateV4<'a> {
 /// Semantic inputs authenticated from the same chain observation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DealerScenarioSemanticStateV4<'a> {
-    /// Current and candidate obligation, Claims Positions, and Market joins.
+    /// Current obligation, Claims Positions, and Market joins.
     pub chain: ScenarioTradeChainProjectionV3<'a>,
     /// Current Registry/Realm/Custody composition coordinates.
     pub context: ScenarioComposerContextV3,
@@ -135,18 +136,25 @@ pub fn project_dealer_scenario_hot_metas_v4(
     let mut delivered = vec![0_u64; width];
     let mut obligations_before = vec![0_u64; width];
     let mut obligations_after = vec![0_u64; width];
+    let mut candidate_obligation_state = vec![
+        0_u8;
+        obligation_account_bytes_v3(request.width).map_err(
+            |_| DealerScenarioHotMetaErrorV4::Arithmetic
+        )?
+    ];
     let mut post_inventory = vec![0_u64; width];
     let mut post_counterparty_inventory = vec![0_u64; width];
     let mut post_equity = vec![0_i128; width];
     let mut custody_effects =
         [None::<ScenarioCustodyEffectV3>; MAX_DEALER_SCENARIO_CUSTODY_EFFECTS_V3];
-    let semantic_plan = prepare_scenario_trade_v3(
+    let prepared = prepare_scenario_trade_v3(
         request,
         semantic.chain,
         semantic.context,
         semantic.collateral,
         &mut acquired,
         &mut delivered,
+        &mut candidate_obligation_state,
         &mut obligations_before,
         &mut obligations_after,
         &mut post_inventory,
@@ -159,8 +167,8 @@ pub fn project_dealer_scenario_hot_metas_v4(
     let mut identities = vec![[0_u8; 32]; identity_count];
     project_dealer_scenario_hot_registers_v4(
         request,
-        &semantic_plan,
-        semantic.chain.candidate_obligation,
+        &prepared.plan,
+        prepared.candidate_obligation,
         &custody_effects,
         semantic.chain.trading_program,
         semantic.chain.now,
@@ -219,7 +227,7 @@ pub fn project_dealer_scenario_hot_metas_v4(
     instruction_accounts.extend(state.runtime_suffix_accounts.iter().map(account_meta));
     Ok(DealerScenarioHotMetaReportV4 {
         observation,
-        semantic_plan,
+        semantic_plan: prepared.plan,
         dynamic_span_counts,
         runtime_physical_account_count,
         caller_authority_count,
