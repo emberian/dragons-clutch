@@ -331,81 +331,141 @@ fn verify_route_receipt(
 ) -> Result<ClaimsRouteReceiptV3, ProgramError> {
     let request_digest = hash(request).to_bytes();
     match kind {
-        ReceiptKindV3::Admit => {
-            let request =
-                ProtocolPositionRequestV2::decode(request).map_err(|_| TradingSbfError::Content)?;
-            let receipt = ProtocolPositionAdmissionV2::decode_receipt(receipt)
-                .map_err(|_| TradingSbfError::Transition)?;
-            receipt
-                .validate_request(request, request_digest, claims_program, trading_program)
-                .map_err(|_| TradingSbfError::Transition)?;
-            Ok(ClaimsRouteReceiptV3::Admit(receipt))
-        }
+        ReceiptKindV3::Admit => verify_admit_receipt(
+            request,
+            receipt,
+            request_digest,
+            claims_program,
+            trading_program,
+        ),
         ReceiptKindV3::Affine => {
-            let plan = AffineBatchPlanV2::decode(request).map_err(|_| TradingSbfError::Content)?;
-            let receipt =
-                AffineBatchReceiptV2::decode(receipt).map_err(|_| TradingSbfError::Transition)?;
-            receipt
-                .validate_plan(plan)
-                .map_err(|_| TradingSbfError::Transition)?;
-            if receipt.packet_digest() != request_digest
-                || receipt.claims_program() != claims_program
-            {
-                return Err(TradingSbfError::Transition.into());
-            }
-            Ok(ClaimsRouteReceiptV3::Affine(receipt))
+            verify_affine_receipt(request, receipt, request_digest, claims_program)
         }
-        ReceiptKindV3::SignedDelta => {
-            let plan = SignedDeltaPlanV3::decode(request).map_err(|_| TradingSbfError::Content)?;
-            let receipt =
-                SignedDeltaReceiptV3::decode(receipt).map_err(|_| TradingSbfError::Transition)?;
-            receipt
-                .validate_plan(plan)
-                .map_err(|_| TradingSbfError::Transition)?;
-            let (positions, aggregates, deltas) = plan.table_bytes();
-            let table_digest = hashv(&[
-                b"dclutch/claims/signed-delta-table/v3",
-                positions,
-                aggregates,
-                deltas,
-            ])
-            .to_bytes();
-            if receipt.packet_digest() != request_digest
-                || receipt.table_digest() != table_digest
-                || receipt.claims_program() != claims_program
-                || Some(receipt.post_resource_digest()) != expected_post_resource_digest
-            {
-                return Err(TradingSbfError::Transition.into());
-            }
-            Ok(ClaimsRouteReceiptV3::SignedDelta(receipt))
-        }
-        ReceiptKindV3::SparseNativeTransfer => {
-            let request =
-                SparseNativeTransferV1::decode(request).map_err(|_| TradingSbfError::Content)?;
-            let receipt = SparseNativeTransferReceiptV1::decode(receipt)
-                .map_err(|_| TradingSbfError::Transition)?;
-            receipt
-                .validate_request(request)
-                .map_err(|_| TradingSbfError::Transition)?;
-            if receipt.packet_digest() != request_digest
-                || receipt.claims_program() != claims_program
-                || Some(receipt.post_resource_digest()) != expected_post_resource_digest
-            {
-                return Err(TradingSbfError::Transition.into());
-            }
-            Ok(ClaimsRouteReceiptV3::SparseNativeTransfer(receipt))
-        }
+        ReceiptKindV3::SignedDelta => verify_signed_delta_receipt(
+            request,
+            receipt,
+            request_digest,
+            claims_program,
+            expected_post_resource_digest,
+        ),
+        ReceiptKindV3::SparseNativeTransfer => verify_sparse_native_receipt(
+            request,
+            receipt,
+            request_digest,
+            claims_program,
+            expected_post_resource_digest,
+        ),
         ReceiptKindV3::Close => {
-            let request =
-                ProtocolPositionRequestV2::decode(request).map_err(|_| TradingSbfError::Content)?;
-            let receipt = ProtocolPositionCloseReceiptV2::decode(receipt)
-                .map_err(|_| TradingSbfError::Transition)?;
-            receipt
-                .validate_request(request, request_digest, claims_program)
-                .map_err(|_| TradingSbfError::Transition)?;
-            Ok(ClaimsRouteReceiptV3::Close(receipt))
+            verify_close_receipt(request, receipt, request_digest, claims_program)
         }
     }
+}
+
+#[inline(never)]
+fn verify_admit_receipt(
+    request: &[u8],
+    receipt: &[u8],
+    request_digest: [u8; 32],
+    claims_program: [u8; 32],
+    trading_program: [u8; 32],
+) -> Result<ClaimsRouteReceiptV3, ProgramError> {
+    let request =
+        ProtocolPositionRequestV2::decode(request).map_err(|_| TradingSbfError::Content)?;
+    let receipt = ProtocolPositionAdmissionV2::decode_receipt(receipt)
+        .map_err(|_| TradingSbfError::Transition)?;
+    receipt
+        .validate_request(request, request_digest, claims_program, trading_program)
+        .map_err(|_| TradingSbfError::Transition)?;
+    Ok(ClaimsRouteReceiptV3::Admit(receipt))
+}
+
+#[inline(never)]
+fn verify_affine_receipt(
+    request: &[u8],
+    receipt: &[u8],
+    request_digest: [u8; 32],
+    claims_program: [u8; 32],
+) -> Result<ClaimsRouteReceiptV3, ProgramError> {
+    let plan = AffineBatchPlanV2::decode(request).map_err(|_| TradingSbfError::Content)?;
+    let receipt = AffineBatchReceiptV2::decode(receipt).map_err(|_| TradingSbfError::Transition)?;
+    receipt
+        .validate_plan(plan)
+        .map_err(|_| TradingSbfError::Transition)?;
+    if receipt.packet_digest() != request_digest || receipt.claims_program() != claims_program {
+        return Err(TradingSbfError::Transition.into());
+    }
+    Ok(ClaimsRouteReceiptV3::Affine(receipt))
+}
+
+#[inline(never)]
+fn verify_signed_delta_receipt(
+    request: &[u8],
+    receipt: &[u8],
+    request_digest: [u8; 32],
+    claims_program: [u8; 32],
+    expected_post_resource_digest: Option<[u8; 32]>,
+) -> Result<ClaimsRouteReceiptV3, ProgramError> {
+    let plan = SignedDeltaPlanV3::decode(request).map_err(|_| TradingSbfError::Content)?;
+    let receipt = SignedDeltaReceiptV3::decode(receipt).map_err(|_| TradingSbfError::Transition)?;
+    receipt
+        .validate_plan(plan)
+        .map_err(|_| TradingSbfError::Transition)?;
+    let (positions, aggregates, deltas) = plan.table_bytes();
+    let table_digest = hashv(&[
+        b"dclutch/claims/signed-delta-table/v3",
+        positions,
+        aggregates,
+        deltas,
+    ])
+    .to_bytes();
+    if receipt.packet_digest() != request_digest
+        || receipt.table_digest() != table_digest
+        || receipt.claims_program() != claims_program
+        || Some(receipt.post_resource_digest()) != expected_post_resource_digest
+    {
+        return Err(TradingSbfError::Transition.into());
+    }
+    Ok(ClaimsRouteReceiptV3::SignedDelta(receipt))
+}
+
+#[inline(never)]
+fn verify_sparse_native_receipt(
+    request: &[u8],
+    receipt: &[u8],
+    request_digest: [u8; 32],
+    claims_program: [u8; 32],
+    expected_post_resource_digest: Option<[u8; 32]>,
+) -> Result<ClaimsRouteReceiptV3, ProgramError> {
+    let request = SparseNativeTransferV1::decode(request).map_err(|_| TradingSbfError::Content)?;
+    let receipt =
+        SparseNativeTransferReceiptV1::decode(receipt).map_err(|_| TradingSbfError::Transition)?;
+    receipt
+        .validate_request(request)
+        .map_err(|_| TradingSbfError::Transition)?;
+    if receipt.packet_digest() != request_digest
+        || receipt.claims_program() != claims_program
+        || Some(receipt.post_resource_digest()) != expected_post_resource_digest
+    {
+        return Err(TradingSbfError::Transition.into());
+    }
+    Ok(ClaimsRouteReceiptV3::SparseNativeTransfer(receipt))
+}
+
+#[inline(never)]
+fn verify_close_receipt(
+    request: &[u8],
+    receipt: &[u8],
+    request_digest: [u8; 32],
+    claims_program: [u8; 32],
+) -> Result<ClaimsRouteReceiptV3, ProgramError> {
+    let request =
+        ProtocolPositionRequestV2::decode(request).map_err(|_| TradingSbfError::Content)?;
+    let receipt =
+        ProtocolPositionCloseReceiptV2::decode(receipt).map_err(|_| TradingSbfError::Transition)?;
+    receipt
+        .validate_request(request, request_digest, claims_program)
+        .map_err(|_| TradingSbfError::Transition)?;
+    Ok(ClaimsRouteReceiptV3::Close(receipt))
 }
 
 fn signed_delta_post_resource_digest(
