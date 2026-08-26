@@ -16,6 +16,8 @@ use core::convert::TryInto;
 pub mod encode;
 /// Descriptor-selected RequestProfile V2 with generic native-signature evidence.
 pub mod v2;
+/// Descriptor-selected RequestProfile V3 with one exact borrowed child witness.
+pub mod v3;
 
 #[rustfmt::skip]
 #[allow(missing_docs)]
