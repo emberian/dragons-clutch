@@ -10,10 +10,9 @@ use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
 };
 use dclutch_market_core_codec::{
-    Role, SERIES_FOUNDING_PERMIT_BYTES_V1, SeriesFoundingPermitV1,
-    SeriesPermitExpiryRequestV1,
+    Role, SERIES_FOUNDING_PERMIT_BYTES_V1, SeriesFoundingPermitV1, SeriesPermitExpiryRequestV1,
 };
-use dclutch_rent_contract::{RENT_CREDIT_BYTES_V1, RentCreditV1};
+use dclutch_rent_contract::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
 use dclutch_series_v3_kernel::{
     SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3, SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
     SERIES_TICKET_SCHEMA_RELEASE_ID_V3, admit_occurrence_bytes, admit_ticket,
@@ -23,13 +22,8 @@ use dclutch_series_v3_kernel::{
     },
 };
 use solana_program::{
-    account_info::AccountInfo,
-    clock::Clock,
-    hash::hash,
-    program::invoke_signed,
-    pubkey::Pubkey,
-    rent::Rent,
-    sysvar::SysvarSerialize,
+    account_info::AccountInfo, clock::Clock, hash::hash, program::invoke_signed, pubkey::Pubkey,
+    rent::Rent, sysvar::SysvarSerialize,
 };
 use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::transfer;
@@ -320,8 +314,7 @@ fn authenticate_replay(
         .map_err(|_| CoreSbfError::Reference)?;
     let state = TicketStateV3::decode(&ticket_state_data).map_err(|_| CoreSbfError::Reference)?;
     let seeds = TicketStateSeedsV3::new(frame.root.key.to_bytes(), ticket.content_id());
-    let expected =
-        Pubkey::find_program_address(&seeds.as_slices(), frame.trading_program.key).0;
+    let expected = Pubkey::find_program_address(&seeds.as_slices(), frame.trading_program.key).0;
     if frame.ticket_state.key != &expected
         || state.ticket_record_id() != ticket.content_id()
         || state.phase() != TicketPhaseV3::Expired
@@ -380,26 +373,33 @@ fn authenticate_unallocated_permit(
         .rent_credit
         .try_borrow_data()
         .map_err(|_| CoreSbfError::RentCredit)?;
-    let credit = RentCreditV1::decode(&credit_data).map_err(|_| CoreSbfError::RentCredit)?;
-    if credit.refund_authority().to_bytes() != expected_refund_owner {
+    let credit =
+        LifecycleRentCreditV2::decode(&credit_data).map_err(|_| CoreSbfError::RentCredit)?;
+    if credit.refund_wallet().to_bytes() != expected_refund_owner
+        || credit.market().to_bytes() != intent.market().to_bytes()
+        || credit.release_set().to_bytes() != intent.release_set().to_bytes()
+        || credit.generation() != intent.generation()
+    {
         return Err(CoreSbfError::RentCredit);
     }
     let credit_seeds = credit.pda_seeds();
     let credit_bump = [credit_seeds.bump()];
-    let refund_authority = credit_seeds.refund_authority().to_bytes();
+    let market = credit_seeds.market().to_bytes();
+    let generation = credit_seeds.generation();
     let expected_credit = Pubkey::create_program_address(
         &[
             credit_seeds.domain(),
-            &refund_authority,
+            &market,
+            &generation,
             credit_bump.as_slice(),
         ],
         frame.rent_program.key,
     )
     .map_err(|_| CoreSbfError::RentCredit)?;
     if frame.rent_credit.owner != frame.rent_program.key
-        || frame.rent_credit.data_len() != RENT_CREDIT_BYTES_V1
+        || frame.rent_credit.data_len() != LIFECYCLE_RENT_CREDIT_BYTES_V2
         || frame.rent_credit.key != &expected_credit
-        || !rent.is_exempt(frame.rent_credit.lamports(), RENT_CREDIT_BYTES_V1)
+        || !rent.is_exempt(frame.rent_credit.lamports(), LIFECYCLE_RENT_CREDIT_BYTES_V2)
     {
         return Err(CoreSbfError::RentCredit);
     }
@@ -463,13 +463,7 @@ mod tests {
     #[test]
     fn caller_supplied_expiry_cannot_replace_the_recomputed_retry_deadline() {
         assert_eq!(require_expired(101, 100, 100), Ok(()));
-        assert_eq!(
-            require_expired(101, 100, 99),
-            Err(CoreSbfError::Reference)
-        );
-        assert_eq!(
-            require_expired(100, 100, 100),
-            Err(CoreSbfError::Reference)
-        );
+        assert_eq!(require_expired(101, 100, 99), Err(CoreSbfError::Reference));
+        assert_eq!(require_expired(100, 100, 100), Err(CoreSbfError::Reference));
     }
 }

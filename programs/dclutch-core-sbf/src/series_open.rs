@@ -9,8 +9,7 @@ use dclutch_claims_svm::founding_v5::{
     CLAIMS_FOUNDING_POST_RESOURCE_DIGEST_DOMAIN_V5, ClaimsFoundingReceiptV5,
 };
 use dclutch_custody_contract::{
-    CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CustodyReplayV1,
-    PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
+    CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CustodyReplayV1, PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
 };
 use dclutch_market_core_codec::{
     Action, Admission, ChildEffectObservation, CoreState, MarketCoreStateSeedsV2, Readiness,
@@ -22,7 +21,7 @@ use dclutch_product_runtime_v2_svm_reader::{
     FinalizedRecordFrameV2, ProductRuntimeFrameV2, authenticate_product_runtime_v2,
 };
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_rent_contract::{RENT_CREDIT_BYTES_V1, RentCreditV1};
+use dclutch_rent_contract::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
 use dclutch_series_v3_kernel::{
     AccountKeyV3, AuthenticatedProductProjectionV2, SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3,
     SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3, SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
@@ -55,8 +54,7 @@ use crate::{
 /// Exact final-Series-Open account count.
 pub const SERIES_OPEN_ACCOUNT_COUNT_V1: usize = 37;
 /// Domain binding the exact Open Market and Trading replay candidates.
-pub const SERIES_OPEN_POST_RESOURCE_DIGEST_DOMAIN_V1: &[u8] =
-    b"dclutch/core-series-open-post/v1";
+pub const SERIES_OPEN_POST_RESOURCE_DIGEST_DOMAIN_V1: &[u8] = b"dclutch/core-series-open-post/v1";
 
 struct SeriesOpenAccounts<'accounts, 'info> {
     caller: &'accounts AccountInfo<'info>,
@@ -245,13 +243,8 @@ pub(crate) fn process(
     let rent = Rent::from_account_info(frame.rent).map_err(|_| CoreSbfError::Creation)?;
     let clock = Clock::from_account_info(frame.clock).map_err(|_| CoreSbfError::Creation)?;
     let mut state = authenticate_market_and_roles(program_id, &frame, request)?;
-    let (ticket_context, replay_candidates) = authenticate_series(
-        &frame,
-        request,
-        proof_bytes,
-        &rent,
-        *state,
-    )?;
+    let (ticket_context, replay_candidates) =
+        authenticate_series(&frame, request, proof_bytes, &rent, *state)?;
     authenticate_caller(&frame, request, request_bytes, ticket_context)?;
     let permit = authenticate_permit(
         program_id,
@@ -264,13 +257,7 @@ pub(crate) fn process(
     )?;
     authenticate_rent_credit(&frame, request, &rent)?;
     let claims_receipt = decode_claims_receipt(claims_receipt_bytes)?;
-    authenticate_claims_receipt(
-        &frame,
-        request,
-        &permit,
-        &claims_receipt,
-        *state,
-    )?;
+    authenticate_claims_receipt(&frame, request, &permit, &claims_receipt, *state)?;
     authenticate_roles_and_apply(&frame, request, &claims_receipt, &mut state)?;
     commit_and_ack(
         program_id,
@@ -386,7 +373,10 @@ fn authenticate_market_and_roles(
                 .market_generation()
                 .ok_or(CoreSbfError::Instruction)?
         || state.identity.product_record.to_bytes()
-            != request.product().ok_or(CoreSbfError::Instruction)?.to_bytes()
+            != request
+                .product()
+                .ok_or(CoreSbfError::Instruction)?
+                .to_bytes()
         || state.rent_beneficiary.to_bytes() != frame.rent_credit.key.to_bytes()
         || !matches!(state.phase, dclutch_market_core_codec::Phase::Founding)
         || state.readiness != Readiness::Prepaid
@@ -395,7 +385,11 @@ fn authenticate_market_and_roles(
     }
     for (role, role_program, role_programdata) in [
         (Role::Core, frame.core_program, frame.core_programdata),
-        (Role::Trading, frame.trading_program, frame.trading_programdata),
+        (
+            Role::Trading,
+            frame.trading_program,
+            frame.trading_programdata,
+        ),
     ] {
         authenticate_role(
             frame.activation_cache,
@@ -473,7 +467,10 @@ fn authenticate_series(
         .map_err(|_| CoreSbfError::Reference)?
         .to_bytes()
         != request.template().to_bytes()
-        || request.ticket().ok_or(CoreSbfError::Instruction)?.to_bytes()
+        || request
+            .ticket()
+            .ok_or(CoreSbfError::Instruction)?
+            .to_bytes()
             != frame.ticket_state.key.to_bytes()
     {
         return Err(CoreSbfError::Reference);
@@ -507,8 +504,10 @@ fn authenticate_series(
             .map_err(|_| CoreSbfError::Reference)?,
         dclutch_core_contract::ContentId::new(product.product_id.to_bytes())
             .map_err(|_| CoreSbfError::Reference)?,
-        dclutch_core_contract::ContentId::new(product.result_domain_record.content_digest.to_bytes())
-            .map_err(|_| CoreSbfError::Reference)?,
+        dclutch_core_contract::ContentId::new(
+            product.result_domain_record.content_digest.to_bytes(),
+        )
+        .map_err(|_| CoreSbfError::Reference)?,
     );
     let future = future_market_projection(
         occurrence,
@@ -530,7 +529,10 @@ fn authenticate_series(
         || occurrence.occurrence().capability_manifest().to_bytes()
             != state.identity.capability_manifest.to_bytes()
         || ticket.ticket().founder().to_bytes()
-            != request.founder().ok_or(CoreSbfError::Instruction)?.to_bytes()
+            != request
+                .founder()
+                .ok_or(CoreSbfError::Instruction)?
+                .to_bytes()
         || ticket.ticket().refund_owner().to_bytes() != request.beneficiary().to_bytes()
         || ticket.ticket().funds().hoard_principal() != request.hoard_principal()
         || occurrence.occurrence().occurrence() != request.occurrence_index()
@@ -591,12 +593,11 @@ fn authenticate_replay_candidates(
         .map_err(|_| CoreSbfError::Reference)?;
     let mut root_candidate = [0_u8; CAPABILITY_ROOT_HEADER_BYTES_V1 + SERIES_STATE_BYTES_V3];
     root_candidate.copy_from_slice(&root_data);
-    root_candidate[CAPABILITY_ROOT_HEADER_BYTES_V1..]
-        .copy_from_slice(
-            &next_root
-                .encode(occurrence.template().occurrence_count())
-                .map_err(|_| CoreSbfError::Reference)?,
-        );
+    root_candidate[CAPABILITY_ROOT_HEADER_BYTES_V1..].copy_from_slice(
+        &next_root
+            .encode(occurrence.template().occurrence_count())
+            .map_err(|_| CoreSbfError::Reference)?,
+    );
     drop(root_data);
 
     let ticket_data = frame
@@ -629,7 +630,10 @@ fn authenticate_caller(
 ) -> Result<(), CoreSbfError> {
     let seeds = CallerAuthoritySeedsV1::from_bytes(
         request.release_set().to_bytes(),
-        request.market().ok_or(CoreSbfError::Instruction)?.to_bytes(),
+        request
+            .market()
+            .ok_or(CoreSbfError::Instruction)?
+            .to_bytes(),
         ExecutionRoleV1::Trading,
         ticket_context,
         hash(request_bytes).to_bytes(),
@@ -663,8 +667,8 @@ fn authenticate_permit(
         .permit
         .try_borrow_data()
         .map_err(|_| CoreSbfError::Reference)?;
-    let permit = SeriesFoundingPermitV1::decode(&permit_data)
-        .map_err(|_| CoreSbfError::Reference)?;
+    let permit =
+        SeriesFoundingPermitV1::decode(&permit_data).map_err(|_| CoreSbfError::Reference)?;
     drop(permit_data);
     let intent = permit.intent();
     let permit_seeds = permit.seeds();
@@ -678,7 +682,10 @@ fn authenticate_permit(
         || intent.product_record().to_bytes() != state.identity.product_record.to_bytes()
         || intent.source().to_bytes() != state.identity.resolution_policy.to_bytes()
         || intent.founder().to_bytes()
-            != request.founder().ok_or(CoreSbfError::Instruction)?.to_bytes()
+            != request
+                .founder()
+                .ok_or(CoreSbfError::Instruction)?
+                .to_bytes()
         || intent.parent_root().to_bytes() != frame.root.key.to_bytes()
         || intent.projected_replay().to_bytes() != frame.custody_replay.key.to_bytes()
         || intent.funding_source().to_bytes() != frame.funding_source.key.to_bytes()
@@ -714,10 +721,7 @@ fn authenticate_claims_receipt(
     let intent = permit.intent();
     let claims_request = receipt.request();
     receipt
-        .verify_for(
-            &claims_request,
-            permit.claims_request_digest().to_bytes(),
-        )
+        .verify_for(&claims_request, permit.claims_request_digest().to_bytes())
         .map_err(|_| CoreSbfError::ChildAck)?;
     let intent_bytes = intent.encode().map_err(|_| CoreSbfError::ChildAck)?;
     let intent_digest = hash(&intent_bytes).to_bytes();
@@ -809,8 +813,8 @@ fn authenticate_rent_credit(
     rent: &Rent,
 ) -> Result<(), CoreSbfError> {
     if frame.rent_credit.owner != frame.rent_program.key
-        || frame.rent_credit.data_len() != RENT_CREDIT_BYTES_V1
-        || !rent.is_exempt(frame.rent_credit.lamports(), RENT_CREDIT_BYTES_V1)
+        || frame.rent_credit.data_len() != LIFECYCLE_RENT_CREDIT_BYTES_V2
+        || !rent.is_exempt(frame.rent_credit.lamports(), LIFECYCLE_RENT_CREDIT_BYTES_V2)
     {
         return Err(CoreSbfError::RentCredit);
     }
@@ -818,15 +822,27 @@ fn authenticate_rent_credit(
         .rent_credit
         .try_borrow_data()
         .map_err(|_| CoreSbfError::RentCredit)?;
-    let credit = RentCreditV1::decode(&data).map_err(|_| CoreSbfError::RentCredit)?;
-    if credit.refund_authority().to_bytes() != request.beneficiary().to_bytes() {
+    let credit = LifecycleRentCreditV2::decode(&data).map_err(|_| CoreSbfError::RentCredit)?;
+    if credit.refund_wallet().to_bytes() != request.beneficiary().to_bytes()
+        || credit.market().to_bytes()
+            != request
+                .market()
+                .ok_or(CoreSbfError::Instruction)?
+                .to_bytes()
+        || credit.release_set().to_bytes() != request.release_set().to_bytes()
+        || credit.generation()
+            != request
+                .market_generation()
+                .ok_or(CoreSbfError::Instruction)?
+    {
         return Err(CoreSbfError::RentCredit);
     }
     let seeds = credit.pda_seeds();
-    let authority = seeds.refund_authority().to_bytes();
+    let market = seeds.market().to_bytes();
+    let generation = seeds.generation();
     let bump = [seeds.bump()];
     let expected = Pubkey::create_program_address(
-        &[seeds.domain(), &authority, bump.as_slice()],
+        &[seeds.domain(), &market, &generation, bump.as_slice()],
         frame.rent_program.key,
     )
     .map_err(|_| CoreSbfError::RentCredit)?;
@@ -842,9 +858,21 @@ fn authenticate_claims_poststate(
 ) -> Result<(), CoreSbfError> {
     let request = receipt.request();
     for (account, expected, digest) in [
-        (frame.aggregate, request.aggregate(), receipt.aggregate_digest()),
-        (frame.position, request.position(), receipt.position_digest()),
-        (frame.admission, request.admission(), receipt.admission_digest()),
+        (
+            frame.aggregate,
+            request.aggregate(),
+            receipt.aggregate_digest(),
+        ),
+        (
+            frame.position,
+            request.position(),
+            receipt.position_digest(),
+        ),
+        (
+            frame.admission,
+            request.admission(),
+            receipt.admission_digest(),
+        ),
     ] {
         if account.owner != frame.claims_program.key || account.key.to_bytes() != expected {
             return Err(CoreSbfError::ChildAck);
@@ -893,7 +921,8 @@ fn authenticate_custody_poststate(
         || !frame.funding_source.data_is_empty()
         || frame.custody_replay.owner != frame.custody_program.key
         || frame.custody_replay.data_len() != CUSTODY_REPLAY_BYTES_V1
-        || TokenProgram::parse(frame.hoard.owner.to_bytes()).map_err(|_| CoreSbfError::ChildAck)?
+        || TokenProgram::parse(frame.hoard.owner.to_bytes())
+            .map_err(|_| CoreSbfError::ChildAck)?
             .program_id()
             != frame.hoard.owner.to_bytes()
     {
@@ -918,11 +947,8 @@ fn authenticate_custody_poststate(
         .try_borrow_data()
         .map_err(|_| CoreSbfError::ChildAck)?;
     let replay = CustodyReplayV1::decode(&replay_data).map_err(|_| CoreSbfError::ChildAck)?;
-    let projected_context = hashv(&[
-        PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
-        ticket_context.as_slice(),
-    ])
-    .to_bytes();
+    let projected_context =
+        hashv(&[PROJECTED_HOARD_CONTEXT_DOMAIN_V1, ticket_context.as_slice()]).to_bytes();
     let replay_expected = Pubkey::find_program_address(
         &[
             dclutch_custody_contract::CUSTODY_REPLAY_PDA_DOMAIN_V1,
@@ -960,9 +986,7 @@ fn commit_market(
         .try_borrow_mut_data()
         .map_err(|_| CoreSbfError::Commit)?
         .copy_from_slice(&encoded);
-    let data = market
-        .try_borrow_data()
-        .map_err(|_| CoreSbfError::Commit)?;
+    let data = market.try_borrow_data().map_err(|_| CoreSbfError::Commit)?;
     if market.owner != program_id || CoreState::decode(&data) != Ok(state) {
         return Err(CoreSbfError::Commit);
     }

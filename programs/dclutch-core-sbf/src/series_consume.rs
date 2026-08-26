@@ -42,7 +42,7 @@ use dclutch_product_runtime_v2_svm_reader::{
     FinalizedRecordFrameV2, authenticate_product_basis_v3,
 };
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_rent_contract::RentCreditV1;
+use dclutch_rent_contract::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
 use dclutch_series_v3_kernel::{
     AccountKeyV3, AuthenticatedProductProjectionV2, SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3,
     SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3, SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
@@ -855,11 +855,23 @@ fn authenticate_found_coordinates(
         .rent_credit
         .try_borrow_data()
         .map_err(|_| CoreSbfError::RentCredit)?;
-    let credit = RentCreditV1::decode(&credit_data).map_err(|_| CoreSbfError::RentCredit)?;
-    if credit.refund_authority().to_bytes() != request.beneficiary().to_bytes()
+    let credit =
+        LifecycleRentCreditV2::decode(&credit_data).map_err(|_| CoreSbfError::RentCredit)?;
+    if credit.refund_wallet().to_bytes() != request.beneficiary().to_bytes()
+        || credit.market().to_bytes()
+            != request
+                .market()
+                .ok_or(CoreSbfError::Instruction)?
+                .to_bytes()
+        || credit.release_set().to_bytes() != request.release_set().to_bytes()
+        || credit.generation()
+            != request
+                .market_generation()
+                .ok_or(CoreSbfError::Instruction)?
+        || frame.found.rent_credit.data_len() != LIFECYCLE_RENT_CREDIT_BYTES_V2
         || !rent.is_exempt(
             frame.found.rent_credit.lamports(),
-            frame.found.rent_credit.data_len(),
+            LIFECYCLE_RENT_CREDIT_BYTES_V2,
         )
     {
         return Err(CoreSbfError::RentCredit);
