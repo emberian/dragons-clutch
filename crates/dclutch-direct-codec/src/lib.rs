@@ -24,6 +24,8 @@ pub mod ordinary_bundle_v4;
 #[cfg(not(target_os = "solana"))]
 pub mod ordinary_effect_artifacts_v3;
 pub mod ordinary_v3;
+#[cfg(not(target_os = "solana"))]
+pub mod program_set_v4;
 pub mod registered_account_artifacts_v4;
 pub mod registered_bundle_v4;
 pub mod registered_creation_artifacts_v4;
