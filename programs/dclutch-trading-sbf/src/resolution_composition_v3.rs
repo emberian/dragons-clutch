@@ -18,7 +18,10 @@ use dclutch_effect_kernel::{
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_resolution_codec::{
     PROVIDER_EXECUTION_REQUEST_BYTES_V3, PROVIDER_RESOLUTION_TRADING_ACCOUNT_COUNT_V3,
-    ProviderCallerV3, ProviderExecutionReceiptV3, ProviderExecutionRequestV3,
+    PROVIDER_RESOLUTION_TRADING_TAIL_START_V3, PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3,
+    PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3, ProviderCallerV3,
+    ProviderExecutionReceiptV3, ProviderExecutionRequestV3, ProviderUpdateLifecycleV3,
+    ProviderUpdateStatusV3,
 };
 use solana_program::{
     account_info::AccountInfo,
@@ -40,6 +43,8 @@ const MARKET_ACCOUNT_V3: usize = 4;
 const ACTIVATION_ACCOUNT_V3: usize = 5;
 const TRADING_PROGRAM_ACCOUNT_V3: usize = 13;
 const RESOLUTION_PROGRAM_ACCOUNT_V3: usize = 15;
+const LIFECYCLE_ACCOUNT_V3: usize = PROVIDER_RESOLUTION_TRADING_TAIL_START_V3 - 1;
+const UPDATE_ACCOUNT_V3: usize = PROVIDER_RESOLUTION_TRADING_TAIL_START_V3;
 
 /// Immutable parent facts every projected provider request must reproduce.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -156,6 +161,17 @@ pub fn execute_resolution_route_v3<'info>(
     let receipt = ProviderExecutionReceiptV3::decode(&receipt_bytes)
         .map_err(|_| TradingSbfError::Transition)?;
     verify_receipt(prepared.request, prepared.request_digest, receipt)?;
+    let lifecycle = decode_lifecycle(
+        child_accounts
+            .get(LIFECYCLE_ACCOUNT_V3)
+            .ok_or(TradingSbfError::Transition)?,
+    )?;
+    verify_consumed_lifecycle(prepared.request, receipt, lifecycle)?;
+    let lifecycle_digest = account_data_digest(
+        child_accounts
+            .get(LIFECYCLE_ACCOUNT_V3)
+            .ok_or(TradingSbfError::Transition)?,
+    )?;
     let source_digest = account_data_digest(
         child_accounts
             .get(SOURCE_STATE_ACCOUNT_V3)
@@ -173,6 +189,8 @@ pub fn execute_resolution_route_v3<'info>(
         &prepared.request_digest,
         &prepared.post_body_digest,
         &receipt_bytes,
+        &prepared.lifecycle_pre_digest,
+        &lifecycle_digest,
         &source_digest,
         &certificate_digest,
     ])
@@ -185,6 +203,7 @@ struct PreparedResolutionInvocationV3 {
     child_data: Vec<u8>,
     request_digest: [u8; 32],
     post_body_digest: [u8; 32],
+    lifecycle_pre_digest: [u8; 32],
     authority_seeds: CallerAuthoritySeedsV1,
     bump: u8,
 }
@@ -288,12 +307,62 @@ fn prepare(
             .get(RESOLUTION_PROGRAM_ACCOUNT_V3)
             .is_none_or(|account| account.key != resolution_program.key)
         || child_accounts
+            .get(UPDATE_ACCOUNT_V3)
+            .is_none_or(|account| account.key.to_bytes() != request.update_account)
+        || child_accounts
             .iter()
             .filter(|account| account.key == resolution_program.key)
             .count()
             != 1
     {
         return Err(TradingSbfError::Release.into());
+    }
+    let lifecycle_account = child_accounts
+        .get(LIFECYCLE_ACCOUNT_V3)
+        .ok_or(TradingSbfError::Content)?;
+    let (expected_lifecycle, lifecycle_bump) = Pubkey::find_program_address(
+        &[
+            PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
+            &request.update_account,
+        ],
+        resolution_program.key,
+    );
+    let lifecycle = decode_lifecycle(lifecycle_account)?;
+    let (expected_update_authority, _) = Pubkey::find_program_address(
+        &[
+            PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3,
+            &request.market,
+            &request.source_state,
+            &request.update_account,
+        ],
+        resolution_program.key,
+    );
+    if lifecycle_account.key != &expected_lifecycle
+        || lifecycle_account.owner != resolution_program.key
+        || lifecycle_account.is_signer
+        || !lifecycle_account.is_writable
+        || lifecycle_account.executable
+        || lifecycle.status != ProviderUpdateStatusV3::Submitted
+        || lifecycle.bump != lifecycle_bump
+        || lifecycle.generation != request.generation
+        || lifecycle.market != request.market
+        || lifecycle.source_state != request.source_state
+        || lifecycle.source_material != request.source_material
+        || lifecycle.provider_release != request.provider_release
+        || lifecycle.update_account != request.update_account
+        || lifecycle.update_digest != request.expected_update_digest
+        || lifecycle.post_body_digest != request.post_params_body_digest
+        || lifecycle.provider_submitter != request.provider_submitter
+        || lifecycle.release_set != request.release_set
+        || lifecycle.registry_program
+            != child_accounts
+                .get(7)
+                .ok_or(TradingSbfError::Content)?
+                .key
+                .to_bytes()
+        || lifecycle.update_authority != expected_update_authority.to_bytes()
+    {
+        return Err(TradingSbfError::Content.into());
     }
     let authority_seeds = CallerAuthoritySeedsV1::new(
         ContentId::new(request.release_set).map_err(|_| TradingSbfError::Content)?,
@@ -317,9 +386,46 @@ fn prepare(
         child_data,
         request_digest: hash(request_bytes).to_bytes(),
         post_body_digest: hash(post_body).to_bytes(),
+        lifecycle_pre_digest: account_data_digest(lifecycle_account)?,
         authority_seeds,
         bump,
     })
+}
+
+fn decode_lifecycle(account: &AccountInfo<'_>) -> Result<ProviderUpdateLifecycleV3, ProgramError> {
+    if account.data_len() != PROVIDER_UPDATE_LIFECYCLE_BYTES_V3 {
+        return Err(TradingSbfError::Transition.into());
+    }
+    let bytes = account
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Transition)?;
+    ProviderUpdateLifecycleV3::decode(&bytes).map_err(|_| TradingSbfError::Transition.into())
+}
+
+fn verify_consumed_lifecycle(
+    request: ProviderExecutionRequestV3,
+    receipt: ProviderExecutionReceiptV3,
+    lifecycle: ProviderUpdateLifecycleV3,
+) -> Result<(), ProgramError> {
+    if lifecycle.status != ProviderUpdateStatusV3::Consumed
+        || lifecycle.generation != request.generation
+        || lifecycle.terminal_sequence != request.terminal_sequence
+        || lifecycle.market != request.market
+        || lifecycle.source_state != request.source_state
+        || lifecycle.source_material != request.source_material
+        || lifecycle.provider_release != request.provider_release
+        || lifecycle.update_account != request.update_account
+        || lifecycle.update_digest != request.expected_update_digest
+        || lifecycle.post_body_digest != request.post_params_body_digest
+        || lifecycle.provider_submitter != request.provider_submitter
+        || lifecycle.release_set != request.release_set
+        || lifecycle.provider_evidence != receipt.provider_evidence
+        || lifecycle.certificate != request.certificate_account
+    {
+        Err(TradingSbfError::Transition.into())
+    } else {
+        Ok(())
+    }
 }
 
 fn validate_parent(
@@ -419,6 +525,7 @@ fn invocation_accounts<'info>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dclutch_resolution_codec::ProviderSubmitRequestV3;
 
     fn id(tag: u8) -> [u8; 32] {
         [tag; 32]
@@ -486,6 +593,36 @@ mod tests {
         }
     }
 
+    fn submitted_lifecycle(request: ProviderExecutionRequestV3) -> ProviderUpdateLifecycleV3 {
+        ProviderUpdateLifecycleV3::submitted(
+            ProviderSubmitRequestV3 {
+                generation: request.generation,
+                reclaim_after_unix_seconds: 2,
+                market: request.market,
+                source_state: request.source_state,
+                lifecycle: id(22),
+                source_material: request.source_material,
+                provider_release: request.provider_release,
+                update_account: request.update_account,
+                provider_submitter: request.provider_submitter,
+                refund_recipient: id(23),
+                release_set: request.release_set,
+                registry_program: id(24),
+                encoded_vaa: id(25),
+                post_body_digest: request.post_params_body_digest,
+            },
+            1,
+            id(26),
+            id(24),
+            request.expected_update_digest,
+            1,
+            1,
+            1,
+            0,
+        )
+        .expect("submitted lifecycle")
+    }
+
     #[test]
     fn receipt_binds_the_complete_provider_request() {
         let request = request();
@@ -497,6 +634,34 @@ mod tests {
         hostile.request_digest = id(21);
         assert_eq!(
             verify_receipt(request, digest, hostile),
+            Err(TradingSbfError::Transition.into())
+        );
+    }
+
+    #[test]
+    fn terminal_receipt_requires_the_exact_consumed_lifecycle() {
+        let request = request();
+        let receipt = receipt(request, id(20));
+        let submitted = submitted_lifecycle(request);
+        assert_eq!(
+            verify_consumed_lifecycle(request, receipt, submitted),
+            Err(TradingSbfError::Transition.into())
+        );
+        let mut consumed = submitted;
+        consumed
+            .consume(
+                request.terminal_sequence,
+                receipt.provider_evidence,
+                request.certificate_account,
+            )
+            .expect("consume lifecycle");
+        assert_eq!(
+            verify_consumed_lifecycle(request, receipt, consumed),
+            Ok(())
+        );
+        consumed.provider_evidence = id(27);
+        assert_eq!(
+            verify_consumed_lifecycle(request, receipt, consumed),
             Err(TradingSbfError::Transition.into())
         );
     }
