@@ -45,6 +45,7 @@ use solana_system_interface::instruction::create_account;
 
 mod batch_v2;
 mod continuation_v1;
+mod hot_continuation_v2;
 mod record_v1;
 
 /// Exact account count for permissionless release-set activation.
@@ -108,6 +109,11 @@ pub fn process_instruction(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
+    if instruction_data.get(..8)
+        == Some(dclutch_capability_program_contract::hot_v3::HOT_EXECUTION_MAGIC_V3.as_slice())
+    {
+        return hot_continuation_v2::process(program_id, accounts, instruction_data);
+    }
     if instruction_data.get(..8)
         == Some(dclutch_record_contract::RECORD_INSTRUCTION_MAGIC_V1.as_slice())
         && (instruction_data
