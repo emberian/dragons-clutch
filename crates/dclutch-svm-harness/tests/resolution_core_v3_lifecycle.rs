@@ -2021,6 +2021,52 @@ async fn current_resolution_creates_and_activates_exact_funding() {
         after_success.rent_credit,
         before_late_substitution.rent_credit
     );
+
+    submit(&mut context, &[begin_retiring_instruction(&fixture)])
+        .await
+        .expect("the same provider-resolved Market begins authenticated retirement");
+    let retiring_market = CoreState::decode(
+        &observed(&mut context, fixture.market)
+            .await
+            .expect("retiring Market")
+            .data,
+    )
+    .expect("retiring Core state");
+    assert_eq!(retiring_market.phase, Phase::Retiring);
+
+    let closure_rent = context
+        .banks_client
+        .get_rent()
+        .await
+        .expect("chain Rent")
+        .minimum_balance(SOURCE_CLOSURE_RECEIPT_BYTES_V2);
+    submit(
+        &mut context,
+        &[transfer(&payer, &fixture.closure, closure_rent)],
+    )
+    .await
+    .expect("prepay the same-lineage closure receipt");
+    let close = build_resolution_close_fund_v3(&close_snapshot(&mut context, &fixture).await)
+        .expect("chain-derived same-lineage CloseFund");
+    validate_resolution_close_fund_report_v3(&close).expect("exact CloseFund report");
+    submit(&mut context, &[close.instruction])
+        .await
+        .expect("close all three provider-resolution funding compartments");
+
+    assert!(observed(&mut context, fixture.source).await.is_none());
+    for funding in fixture.funding {
+        assert!(observed(&mut context, funding).await.is_none());
+    }
+    let closure = SourceClosureReceiptV2::decode(
+        &observed(&mut context, fixture.closure)
+            .await
+            .expect("same-lineage Source closure receipt")
+            .data,
+    )
+    .expect("Source closure receipt");
+    assert_eq!(closure.market, fixture.market.to_bytes());
+    assert_eq!(closure.terminal_certificate, fixture.certificate.to_bytes());
+    assert_eq!(closure.beneficiary, fixture.rent_credit.to_bytes());
 }
 
 #[tokio::test]
