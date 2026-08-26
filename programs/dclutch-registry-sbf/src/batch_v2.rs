@@ -3,16 +3,21 @@
 use std::vec::Vec;
 
 use dclutch_core_contract::ContentId;
-use dclutch_registry_contract::{ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1};
+use dclutch_registry_contract::{
+    ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1, ArtifactUpgradePolicyV1,
+    DeploymentObservationV1,
+};
 use dclutch_registry_svm::batch_v2::{
     ROLE_BATCH_RECEIPT_BYTES_V2, RoleBatchReceiptInputV2, RoleBatchRequestV2,
     RoleDeploymentObservationV2, encode_role_batch_receipt_v2,
 };
+use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_release_set_contract::{ExecutionRoleV1, ProgramIdentityV1};
 use solana_program::{
     account_info::AccountInfo, entrypoint::ProgramResult, hash::hash, program::set_return_data,
     program_error::ProgramError, pubkey::Pubkey,
 };
+use solana_sdk_ids::bpf_loader_upgradeable;
 
 use super::{RegistryError, authenticate_cache_identity, deployment_observation};
 
@@ -104,11 +109,75 @@ fn authenticate_role(
         .role(role)
         .map_err(|_| RegistryError::ActivationCache)?;
     let release = activated_role.release();
-    let observation = deployment_observation(program, programdata, release)?;
+    // Activation already hashed the complete ELF before persisting this
+    // release. For immutable Loader ProgramData, exact identity/link/owner,
+    // slot, and the absent upgrade authority make that admitted ELF
+    // unchangeable, so recurring authentication need not hash it again. An
+    // upgradeable release retains the full current-ELF hash path.
+    let observation = match release.upgrade_policy() {
+        ArtifactUpgradePolicyV1::Immutable => {
+            immutable_deployment_observation(program, programdata, release)?
+        }
+        ArtifactUpgradePolicyV1::ExactAuthority => {
+            deployment_observation(program, programdata, release)?
+        }
+    };
     activated_role
         .authenticate_current_deployment(observation)
         .map_err(|_| RegistryError::Deployment)?;
     encode_observation(role, release, activated_role.artifact_release_id())
+}
+
+#[inline(never)]
+fn immutable_deployment_observation(
+    program: &AccountInfo<'_>,
+    programdata: &AccountInfo<'_>,
+    release: ArtifactReleaseV1,
+) -> Result<DeploymentObservationV1, ProgramError> {
+    if release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
+        || release.upgrade_authority().is_some()
+        || program.key.to_bytes() != release.program().to_bytes()
+        || programdata.key.to_bytes() != release.programdata()
+        || program.owner != &bpf_loader_upgradeable::ID
+        || programdata.owner != &bpf_loader_upgradeable::ID
+        || !program.executable
+        || programdata.executable
+    {
+        return Err(RegistryError::Deployment.into());
+    }
+    let program_bytes = program
+        .try_borrow_data()
+        .map_err(|_| RegistryError::Borrow)?;
+    let program_view =
+        ProgramV3View::parse(&program_bytes).map_err(|_| RegistryError::Deployment)?;
+    let derived =
+        Pubkey::find_program_address(&[program.key.as_ref()], &bpf_loader_upgradeable::ID).0;
+    if program_view.programdata() != release.programdata() || programdata.key != &derived {
+        return Err(RegistryError::Deployment.into());
+    }
+    drop(program_bytes);
+    let programdata_bytes = programdata
+        .try_borrow_data()
+        .map_err(|_| RegistryError::Borrow)?;
+    let programdata_view =
+        ProgramDataV3View::parse(&programdata_bytes).map_err(|_| RegistryError::Deployment)?;
+    if programdata_view.upgrade_authority().is_some() {
+        return Err(RegistryError::Deployment.into());
+    }
+    DeploymentObservationV1::new(
+        program.key.to_bytes(),
+        program.owner.to_bytes(),
+        program.executable,
+        programdata.key.to_bytes(),
+        programdata.owner.to_bytes(),
+        programdata.executable,
+        program_view.programdata(),
+        bpf_loader_upgradeable::ID.to_bytes(),
+        programdata_view.deployment_slot(),
+        release.elf_digest(),
+        None,
+    )
+    .map_err(|_| RegistryError::Deployment.into())
 }
 
 fn encode_observation(
