@@ -105,8 +105,64 @@ pub struct FoundInstructionPlanV2 {
     pub market_rent_top_up: u64,
 }
 
+/// Exact reason a fully authenticated Found snapshot cannot export a transaction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FoundUnavailableV2 {
+    /// Core does not yet authenticate a Registry/release-selected Rent program.
+    RentProgramAuthorityAbsent,
+}
+
+/// Chain-derived Found projection safe to display without exporting a transaction.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FoundInspectionV2 {
+    /// Sole derived Market address.
+    pub market_address: Pubkey,
+    /// Immutable Market identity reconstructed from authenticated records.
+    pub market_identity: MarketIdentity,
+    /// Ephemeral Product graph projection reconstructed from raw truth.
+    pub product: AdmissionProjectionV2,
+    /// Runtime native outcome width, including explicit failure.
+    pub outcome_count: u32,
+    /// Shared finalized observation slot.
+    pub observation_slot: u64,
+    /// Exact Market rent top-up required from the payer.
+    pub market_rent_top_up: u64,
+    /// Frozen outer account count the unavailable successor would require.
+    pub account_count: usize,
+    /// Exact missing onchain authority that prevents transaction export.
+    pub unavailable: FoundUnavailableV2,
+}
+
+/// Reauthenticate one finalized Runtime V2 snapshot and report exact Found availability.
+pub fn inspect_found_v2(generation: u64, state: FoundStateV2<'_>) -> Result<FoundInspectionV2> {
+    let prepared = prepare_found_instruction_v2(generation, state)?;
+    Ok(FoundInspectionV2 {
+        market_address: prepared.market_address,
+        market_identity: prepared.market_identity,
+        product: prepared.product,
+        outcome_count: prepared.outcome_count,
+        observation_slot: prepared.observation_slot,
+        market_rent_top_up: prepared.market_rent_top_up,
+        account_count: prepared.instruction.accounts.len(),
+        unavailable: FoundUnavailableV2::RentProgramAuthorityAbsent,
+    })
+}
+
 /// Reauthenticate one finalized Runtime V2 snapshot and construct Core Found.
+///
+/// This deliberately refuses until Core authenticates an onchain-selected
+/// Rent program. Use [`inspect_found_v2`] to obtain the complete chain-derived
+/// display projection and exact unavailable reason without exporting a
+/// transaction payload.
 pub fn build_found_instruction_v2(
+    generation: u64,
+    state: FoundStateV2<'_>,
+) -> Result<FoundInstructionPlanV2> {
+    let _prepared = prepare_found_instruction_v2(generation, state)?;
+    Err(Error::UnselectedRentProgram)
+}
+
+fn prepare_found_instruction_v2(
     generation: u64,
     state: FoundStateV2<'_>,
 ) -> Result<FoundInstructionPlanV2> {
@@ -221,7 +277,6 @@ pub fn build_found_instruction_v2(
     if accounts.len() != FOUND_ACCOUNT_COUNT_V2 {
         return Err(Error::AccountAuthority);
     }
-    authenticate_selected_rent_program_v2(state)?;
     Ok(FoundInstructionPlanV2 {
         instruction: Instruction {
             program_id: state.core_program.key,
@@ -235,15 +290,6 @@ pub fn build_found_instruction_v2(
         observation_slot: slot,
         market_rent_top_up,
     })
-}
-
-fn authenticate_selected_rent_program_v2(_state: FoundStateV2<'_>) -> Result<()> {
-    // Core Found currently proves only that the supplied executable program
-    // owns a byte-valid RentCredit PDA. No Registry record, release set, Realm,
-    // or Market coordinate selects that program. Until the onchain ABI adds
-    // such an authority, exporting an instruction would turn a founder-chosen
-    // program into client-side truth.
-    Err(Error::UnselectedRentProgram)
 }
 
 fn require_one_slot(state: FoundStateV2<'_>) -> Result<u64> {

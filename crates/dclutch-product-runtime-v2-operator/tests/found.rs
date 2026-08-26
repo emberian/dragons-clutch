@@ -9,8 +9,8 @@ use dclutch_product_runtime_v2_operator::{
     AccountObservationV2, CompiledProductRecordsV2, Error, FinalizedRecordObservationV2,
     ProductCompilationInputV2, compile_product_records_v2,
     found::{
-        FOUND_ACCOUNT_COUNT_V2, FinalizedReferenceObservationV2, FoundStateV2,
-        build_found_instruction_v2,
+        FOUND_ACCOUNT_COUNT_V2, FinalizedReferenceObservationV2, FoundStateV2, FoundUnavailableV2,
+        build_found_instruction_v2, inspect_found_v2,
     },
 };
 use dclutch_realm_contract::{
@@ -379,6 +379,18 @@ fn valid_found24_is_explicitly_unavailable_without_rent_authority() {
     let fixture = Fixture::new();
     assert_eq!(fixture.graph.report.outcome_count, 258);
     assert_eq!(FOUND_ACCOUNT_COUNT_V2, 24);
+    let inspection = inspect_found_v2(GENERATION, fixture.state()).expect("Found inspection");
+    assert_eq!(inspection.outcome_count, 258);
+    assert_eq!(inspection.account_count, 24);
+    assert_eq!(inspection.market_address, fixture.market);
+    assert_eq!(
+        inspection.product.product_record_digest.to_bytes(),
+        fixture.graph.product.digest
+    );
+    assert_eq!(
+        inspection.unavailable,
+        FoundUnavailableV2::RentProgramAuthorityAbsent
+    );
     assert_eq!(
         build_found_instruction_v2(GENERATION, fixture.state()),
         Err(Error::UnselectedRentProgram)
