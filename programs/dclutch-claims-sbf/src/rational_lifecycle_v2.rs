@@ -32,7 +32,7 @@ use dclutch_rational_representation_v2_lifecycle_contract::{
     LifecycleCoordinateV2, LifecycleRequestV2, finalize, prepare,
 };
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_rent_contract::RentCreditV1;
+use dclutch_rent_contract::lifecycle_v2::LifecycleRentCreditV2;
 use dclutch_token_svm::{
     ACCOUNT_BYTES, AccountState, TOKEN_2022_CLOSEABLE_MINT_BYTES_V2, TOKEN_2022_PROGRAM_ID,
     Token2022CloseableMintProfileV2, TokenAccount,
@@ -599,18 +599,32 @@ fn authenticate_rent_credit(
         .rent_credit
         .try_borrow_data()
         .map_err(|_| RationalLifecycleSbfErrorV2::Accounts)?;
-    let credit = RentCreditV1::decode(&data).map_err(|_| RationalLifecycleSbfErrorV2::Rent)?;
+    let credit =
+        LifecycleRentCreditV2::decode(&data).map_err(|_| RationalLifecycleSbfErrorV2::Rent)?;
+    let header = request.header();
+    if credit.market().to_bytes() != header.market
+        || credit.release_set().to_bytes() != header.release_set
+        || credit.generation() != header.generation
+    {
+        return Err(RationalLifecycleSbfErrorV2::Rent.into());
+    }
     let seeds = credit.pda_seeds();
     let bump = [seeds.bump()];
-    let authority = seeds.refund_authority().to_bytes();
+    let market = seeds.market().to_bytes();
+    let generation = seeds.generation();
     let expected = Pubkey::create_program_address(
-        &[seeds.domain(), authority.as_slice(), &bump],
+        &[
+            seeds.domain(),
+            market.as_slice(),
+            generation.as_slice(),
+            &bump,
+        ],
         common.rent_program.key,
     )
     .map_err(|_| RationalLifecycleSbfErrorV2::Rent)?;
     if common.rent_credit.owner != common.rent_program.key
         || common.rent_credit.key != &expected
-        || request.header().rent_credit != expected.to_bytes()
+        || header.rent_credit != expected.to_bytes()
     {
         return Err(RationalLifecycleSbfErrorV2::Rent.into());
     }

@@ -26,7 +26,7 @@ pub use dclutch_claims_svm::protocol_position_v2::{
 use dclutch_market_core_codec::Phase as CorePhase;
 use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV2};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_rent_contract::RentCreditV1;
+use dclutch_rent_contract::lifecycle_v2::LifecycleRentCreditV2;
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
@@ -768,12 +768,25 @@ fn authenticate_rent_credit(
     let data = rent_credit
         .try_borrow_data()
         .map_err(|_| ProtocolPositionSbfErrorV2::Accounts)?;
-    let credit = RentCreditV1::decode(&data).map_err(|_| ProtocolPositionSbfErrorV2::Rent)?;
+    let credit =
+        LifecycleRentCreditV2::decode(&data).map_err(|_| ProtocolPositionSbfErrorV2::Rent)?;
+    if credit.market().to_bytes() != request.market
+        || credit.release_set().to_bytes() != request.release_set
+        || credit.generation() != request.generation
+    {
+        return Err(ProtocolPositionSbfErrorV2::Rent.into());
+    }
     let seeds = credit.pda_seeds();
     let bump = [seeds.bump()];
-    let authority = seeds.refund_authority().to_bytes();
+    let market = seeds.market().to_bytes();
+    let generation = seeds.generation();
     let expected = Pubkey::create_program_address(
-        &[seeds.domain(), authority.as_slice(), &bump],
+        &[
+            seeds.domain(),
+            market.as_slice(),
+            generation.as_slice(),
+            &bump,
+        ],
         rent_program.key,
     )
     .map_err(|_| ProtocolPositionSbfErrorV2::Rent)?;

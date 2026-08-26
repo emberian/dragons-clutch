@@ -23,7 +23,12 @@ use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
     ExecutionRoleV1, ProgramIdentityV1,
 };
-use dclutch_rent_contract::{RefundAuthority, RentCreditV1};
+use dclutch_rent_contract::{
+    RefundAuthority,
+    lifecycle_v2::{
+        LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
+    },
+};
 use solana_account::Account;
 use solana_address_lookup_table_interface::instruction::{
     create_lookup_table, extend_lookup_table,
@@ -307,18 +312,23 @@ fn fixture() -> (ProgramTest, Fixture) {
     let refund = RefundAuthority::new([0x71; 32]).expect("refund authority");
     let (rent_credit, bump) = Pubkey::find_program_address(
         &[
-            dclutch_rent_contract::RENT_CREDIT_PDA_DOMAIN_V1,
-            &refund.to_bytes(),
+            LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+            graph.core_market.as_ref(),
+            &GENERATION.to_le_bytes(),
         ],
         &RENT_PROGRAM,
     );
-    add_account(
-        &mut test,
-        rent_credit,
-        RENT_PROGRAM,
-        RentCreditV1::new(refund, bump).to_bytes().to_vec(),
-        1,
-    );
+    let rent_credit_data = LifecycleRentCreditV2::new(
+        refund,
+        LifecycleAccountIdV2::new(graph.core_market.to_bytes()).expect("Market"),
+        LifecycleAccountIdV2::new(release).expect("release set"),
+        GENERATION,
+        bump,
+    )
+    .expect("lifecycle RentCredit")
+    .to_bytes()
+    .to_vec();
+    add_account(&mut test, rent_credit, RENT_PROGRAM, rent_credit_data, 1);
     (
         test,
         Fixture {

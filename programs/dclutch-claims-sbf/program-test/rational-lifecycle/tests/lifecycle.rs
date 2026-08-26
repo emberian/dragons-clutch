@@ -43,7 +43,12 @@ use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
     ExecutionRoleV1, ProgramIdentityV1,
 };
-use dclutch_rent_contract::{RefundAuthority, RentCreditV1};
+use dclutch_rent_contract::{
+    RefundAuthority,
+    lifecycle_v2::{
+        LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
+    },
+};
 use dclutch_token_svm::{
     ACCOUNT_BYTES, TOKEN_2022_CLOSEABLE_MINT_BYTES_V2, TOKEN_2022_PROGRAM_ID,
     Token2022CloseableMintProfileV2, TokenAccount,
@@ -358,19 +363,8 @@ fn fixture() -> (ProgramTest, Fixture) {
     let cache = Pubkey::find_program_address(&[ACTIVATION_PDA_DOMAIN_V1, &release], &REGISTRY).0;
     add_rent_exempt(&mut test, cache, REGISTRY, cache_data);
 
-    let refund = RefundAuthority::new([0xe1; 32]).expect("refund authority");
-    let (rent_credit, rent_bump) = Pubkey::find_program_address(
-        &[
-            dclutch_rent_contract::RENT_CREDIT_PDA_DOMAIN_V1,
-            &refund.to_bytes(),
-        ],
-        &RENT_PROGRAM,
-    );
-    let rent_credit_data = RentCreditV1::new(refund, rent_bump).to_bytes().to_vec();
-    let rent_credit_initial =
-        add_rent_exempt(&mut test, rent_credit, RENT_PROGRAM, rent_credit_data);
-
-    let graph = compile_product_lbv2_fixture_v2(ProductLbv2FixtureInputV2 {
+    let provisional_source_owner = Pubkey::new_from_array([0xe0; 32]);
+    let graph_input = ProductLbv2FixtureInputV2 {
         registry_program: REGISTRY,
         core_program: CORE,
         claims_program: CLAIMS,
@@ -378,10 +372,38 @@ fn fixture() -> (ProgramTest, Fixture) {
         realm_id: [0xe2; 32],
         custody_context: [0xe3; 32],
         generation: GENERATION,
-        source_owner: rent_credit,
+        source_owner: provisional_source_owner,
         destination_owner: Pubkey::new_from_array([0xe4; 32]),
+    };
+    let projected_graph = compile_product_lbv2_fixture_v2(graph_input)
+        .expect("project lifecycle Market before RentCredit creation");
+    let refund = RefundAuthority::new([0xe1; 32]).expect("refund authority");
+    let (rent_credit, rent_bump) = Pubkey::find_program_address(
+        &[
+            LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+            projected_graph.core_market.as_ref(),
+            &GENERATION.to_le_bytes(),
+        ],
+        &RENT_PROGRAM,
+    );
+    let graph = compile_product_lbv2_fixture_v2(ProductLbv2FixtureInputV2 {
+        source_owner: rent_credit,
+        ..graph_input
     })
-    .expect("Product/LBV2 fixture");
+    .expect("Product/LBV2 fixture with lifecycle RentCredit");
+    assert_eq!(graph.core_market, projected_graph.core_market);
+    let rent_credit_data = LifecycleRentCreditV2::new(
+        refund,
+        LifecycleAccountIdV2::new(graph.core_market.to_bytes()).expect("Market"),
+        LifecycleAccountIdV2::new(release).expect("release set"),
+        GENERATION,
+        rent_bump,
+    )
+    .expect("lifecycle RentCredit")
+    .to_bytes()
+    .to_vec();
+    let rent_credit_initial =
+        add_rent_exempt(&mut test, rent_credit, RENT_PROGRAM, rent_credit_data);
     for record in [
         &graph.product,
         &graph.result_domain,
