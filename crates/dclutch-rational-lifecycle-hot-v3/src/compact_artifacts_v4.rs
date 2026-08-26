@@ -6,17 +6,25 @@
 //! immutable effect artifact synthesizes the sole runtime-width
 //! `DCRRLC02` Claims child; no wallet-supplied coordinate DTO survives.
 
-use dclutch_account_profile_contract::v2::{
-    AccountPrestateV2, AccountProfileV2, NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE,
-    OPERATION_BYTES as ACCOUNT_OPERATION_BYTES, RULE_BYTES as ACCOUNT_RULE_BYTES,
-    TRUSTED_EXECUTING_PROGRAM_HEADER_BYTES, TrustedEnvironmentV2, TrustedIdentityEnvironmentV2,
-    encode::{
-        AccountCoordinateV2, AccountOperationInputV2, AccountRuleWithPrestateInputV2,
-        IdentityCoordinateV2, RegisterGeometryV2, ScalarCoordinateV2,
-        encode_account_profile_with_nonzero_u64_tail_rows_v2_atomic,
+use dclutch_account_profile_contract::{
+    lifecycle_v3::{
+        CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5 as LIFECYCLE_SCHEMA_ID_V5, StateLifecyclePolicyV5,
+    },
+    v2::{
+        AccountPrestateV2, AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE,
+        DYNAMIC_FIXED_SPAN_HEADER_BYTES, OPERATION_BYTES as ACCOUNT_OPERATION_BYTES,
+        RULE_BYTES as ACCOUNT_RULE_BYTES, TrustedBuiltinIdentityV2, TrustedEnvironmentV2,
+        TrustedIdentityEnvironmentV2,
+        encode::{
+            AccountAliasInputV2, AccountCoordinateV2, AccountOperationInputV2,
+            AccountRuleWithPrestateInputV2, IdentityCoordinateV2, RegisterGeometryV2,
+            ScalarCoordinateV2, encode_account_profile_with_dynamic_fixed_span_v2_atomic,
+        },
     },
 };
-use dclutch_capability_program_contract::v3::{CAPABILITY_PROGRAM_V3_BYTES, CapabilityProgramV3};
+use dclutch_capability_program_contract::v4::{
+    ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4, CapabilityProgramV4,
+};
 use dclutch_core_contract::ContentId;
 use dclutch_effect_kernel::{
     v2::FixedRole,
@@ -24,6 +32,11 @@ use dclutch_effect_kernel::{
         HEADER_BYTES as EFFECT_HEADER_BYTES, OPERATION_BYTES as EFFECT_OPERATION_BYTES,
         ROUTE_BYTES as EFFECT_ROUTE_BYTES, RouteKindV3,
         encode::{EffectGeometryV3, RouteInputV3, encode_effect_program_v3_atomic},
+    },
+    v4::{
+        BorrowedRangePolicyV4, HEADER_BYTES_V4 as EFFECT_V4_HEADER_BYTES,
+        ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4,
+        encode_program_v4_atomic,
     },
 };
 use dclutch_execution_strategy_contract::v2::{
@@ -33,7 +46,9 @@ use dclutch_execution_strategy_contract::v2::{
     ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
 use dclutch_product_payoff_v2_codec::runtime_v3::{BASIS_WIDTH_OFFSET_V3, ProductBasisV3};
-use dclutch_rational_representation_v2_contract::RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2;
+use dclutch_rational_representation_v2_contract::{
+    AuthenticatedTokenBehaviorV2, RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2,
+};
 use dclutch_rational_representation_v2_kernel::{
     DESCRIPTOR_HEADER_BYTES, RepresentationDescriptorV2,
 };
@@ -77,6 +92,10 @@ use dclutch_request_profile_contract::{
         ScalarRegisterV1, encode_request_profile_v1_atomic,
     },
 };
+use dclutch_token_svm::{
+    TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
+    TokenBehaviorSelectionV2,
+};
 use dclutch_transition_vm::v3::{
     HEADER_BYTES as TRANSITION_HEADER_BYTES, INSTRUCTION_BYTES as TRANSITION_INSTRUCTION_BYTES,
     InstructionV3, ProgramGeometryV3, ScalarRegisterV3, encode_program_atomic,
@@ -88,7 +107,7 @@ use crate::{
     account_profile::rule,
     effect::{
         RATIONAL_LIFECYCLE_HOT_INJECTED_ACCOUNT_COUNT_V3, append_header_instructions, narrow_u16,
-        narrow_u32, put, write_identity, write_u32, write_u64,
+        narrow_u32, put, write_identity, write_u64,
     },
 };
 
@@ -96,7 +115,7 @@ const BASE_REQUEST_OPERATIONS: usize = 24;
 /// Exact interpreted strategy width for compact retirement.
 pub const RATIONAL_LIFECYCLE_COMPACT_STRATEGY_BYTES_V4: usize = EXECUTION_STRATEGY_PROGRAM_BYTES_V2;
 /// Exact CapabilityProgram descriptor width for compact retirement.
-pub const RATIONAL_LIFECYCLE_COMPACT_DESCRIPTOR_BYTES_V4: usize = CAPABILITY_PROGRAM_V3_BYTES;
+pub const RATIONAL_LIFECYCLE_COMPACT_DESCRIPTOR_BYTES_V4: usize = CAPABILITY_PROGRAM_V4_BYTES;
 const VACANCY_LOGICAL_ACCOUNT_START: usize =
     RATIONAL_LIFECYCLE_HOT_INJECTED_ACCOUNT_COUNT_V3 as usize + LIFECYCLE_COMMON_ACCOUNT_COUNT_V2;
 
@@ -135,10 +154,12 @@ pub struct RationalLifecycleCompactBundleInputV4<'a> {
     pub artifacts: RationalLifecycleCompactArtifactInputV4<'a>,
     /// Manifest-selected Rational lifecycle capability kind.
     pub kind: [u8; 32],
+    /// Finalized descriptor/Market/config Token behavior admission.
+    pub authenticated_token_behavior: AuthenticatedTokenBehaviorV2,
     /// Manifest-selected mutable root-tail schema.
     pub root_schema: [u8; 32],
-    /// Finalized StateLifecyclePolicy content identity.
-    pub derivation_policy: [u8; 32],
+    /// Exact finalized successor lifecycle policy bytes.
+    pub lifecycle_policy: &'a [u8],
     /// Manifest-selected physical capacity profile.
     pub capacity_profile: [u8; 32],
     /// Exact mutable root-tail byte width.
@@ -150,12 +171,16 @@ pub struct RationalLifecycleCompactBundleInputV4<'a> {
 pub struct RationalLifecycleCompactBundleV4 {
     /// Descriptor-derived positive support width.
     pub support_count: u32,
+    /// Exact Realm/release-selected Token behavior config bytes.
+    pub token_behavior_selection: [u8; TOKEN_BEHAVIOR_SELECTION_BYTES_V2],
     /// Exact logical account interpreter.
     pub account_profile: Vec<u8>,
     /// Exact fixed family request interpreter.
     pub request_profile: Vec<u8>,
     /// Exact economic transition interpreter.
     pub transition: Vec<u8>,
+    /// Exact successor lifecycle policy.
+    pub lifecycle_policy: Vec<u8>,
     /// Interpreted strategy selecting `transition`.
     pub strategy: [u8; RATIONAL_LIFECYCLE_COMPACT_STRATEGY_BYTES_V4],
     /// Sole Claims effect interpreter.
@@ -176,7 +201,7 @@ pub fn encode_rational_lifecycle_compact_artifacts_v4(
         support_count,
         account_profile: encode_account_profile(input, layout)?,
         request_profile: encode_request_profile(layout)?,
-        transition: encode_transition(layout)?,
+        transition: encode_transition(layout, &rows)?,
         effect: encode_effect(input, layout, &rows)?,
     })
 }
@@ -185,7 +210,21 @@ pub fn encode_rational_lifecycle_compact_artifacts_v4(
 pub fn build_rational_lifecycle_compact_bundle_v4(
     input: RationalLifecycleCompactBundleInputV4<'_>,
 ) -> Result<RationalLifecycleCompactBundleV4> {
+    if input.artifacts.descriptor.descriptor_id()
+        != input.authenticated_token_behavior.descriptor_id()
+        || input.artifacts.descriptor.release_set_id()
+            != input.authenticated_token_behavior.selection().release_set()
+        || input.artifacts.descriptor.token_program()
+            != input
+                .authenticated_token_behavior
+                .selection()
+                .token_program()
+    {
+        return Err(Error::ArtifactGeometry);
+    }
     let artifacts = encode_rational_lifecycle_compact_artifacts_v4(input.artifacts)?;
+    let lifecycle_policy = Vec::from(input.lifecycle_policy);
+    let lifecycle_id = digest(&lifecycle_policy)?;
     let strategy_value = ExecutionStrategyProgramV2::new(
         StrategyDispositionV2::Interpreted,
         content(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID)?,
@@ -199,34 +238,57 @@ pub fn build_rational_lifecycle_compact_bundle_v4(
     )
     .map_err(Error::Strategy)?;
     let strategy = strategy_value.to_bytes();
-    let descriptor_value = CapabilityProgramV3::new(
+    let token_behavior_selection = input.authenticated_token_behavior.selection().to_bytes();
+    if hash(&token_behavior_selection).to_bytes()
+        != input.authenticated_token_behavior.content_digest()
+    {
+        return Err(Error::ContentIdentity);
+    }
+    let descriptor_value = CapabilityProgramV4::new(
         content(input.kind)?,
-        content(
-            dclutch_rational_representation_v2_kernel::REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
-        )?,
+        content(TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2)?,
         content(RATIONAL_LIFECYCLE_COMPACT_HOT_SCHEMA_RELEASE_ID_V4)?,
         content(input.root_schema)?,
-        digest(&artifacts.account_profile)?,
-        content(input.derivation_policy)?,
+        lifecycle_id,
         content(input.capacity_profile)?,
-        digest(&artifacts.effect)?,
-        content(dclutch_request_profile_contract::SCHEMA_RELEASE_ID)?,
-        digest(&artifacts.request_profile)?,
-        content(EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2)?,
-        digest(&strategy)?,
+        CapabilityArtifactsV4 {
+            account_profile: artifact(
+                dclutch_account_profile_contract::v2::SCHEMA_RELEASE_ID,
+                digest(&artifacts.account_profile)?.to_bytes(),
+            )?,
+            request_profile: artifact(
+                dclutch_request_profile_contract::SCHEMA_RELEASE_ID,
+                digest(&artifacts.request_profile)?.to_bytes(),
+            )?,
+            lifecycle: artifact(LIFECYCLE_SCHEMA_ID_V5, lifecycle_id.to_bytes())?,
+            strategy: artifact(
+                EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
+                digest(&strategy)?.to_bytes(),
+            )?,
+            transition: artifact(
+                dclutch_transition_vm::v3::SCHEMA_RELEASE_ID,
+                digest(&artifacts.transition)?.to_bytes(),
+            )?,
+            effect: artifact(EFFECT_SCHEMA_ID_V4, digest(&artifacts.effect)?.to_bytes())?,
+        },
         input.root_state_bytes,
     )
     .map_err(Error::Descriptor)?;
     let bundle = RationalLifecycleCompactBundleV4 {
         support_count: artifacts.support_count,
+        token_behavior_selection,
         account_profile: artifacts.account_profile,
         request_profile: artifacts.request_profile,
         transition: artifacts.transition,
+        lifecycle_policy,
         strategy,
         effect: artifacts.effect,
         descriptor: descriptor_value.encode(),
     };
-    validate_rational_lifecycle_compact_bundle_v4(&bundle)?;
+    validate_rational_lifecycle_compact_bundle_for_authenticated_selection_v4(
+        &bundle,
+        input.authenticated_token_behavior,
+    )?;
     Ok(bundle)
 }
 
@@ -239,11 +301,13 @@ pub fn validate_rational_lifecycle_compact_bundle_v4(
         return Err(Error::ArtifactGeometry);
     }
     let layout = RationalLifecycleCompactHotRegisterLayoutV4::new(support);
-    let descriptor = CapabilityProgramV3::decode(&bundle.descriptor).map_err(Error::Descriptor)?;
+    let descriptor = CapabilityProgramV4::decode(&bundle.descriptor).map_err(Error::Descriptor)?;
+    TokenBehaviorSelectionV2::decode(&bundle.token_behavior_selection)
+        .map_err(Error::TokenBehavior)?;
     let account =
         AccountProfileV2::decode(&bundle.account_profile).map_err(Error::AccountProfile)?;
     let request = RequestProfileV1::decode_selected(
-        descriptor.request_profile_program().to_bytes(),
+        descriptor.request_profile().program().to_bytes(),
         hash(&bundle.request_profile).to_bytes(),
         &bundle.request_profile,
     )
@@ -251,15 +315,18 @@ pub fn validate_rational_lifecycle_compact_bundle_v4(
     let transition = dclutch_transition_vm::v3::ProgramV3::decode(&bundle.transition)
         .map_err(Error::Transition)?;
     let strategy = ExecutionStrategyProgramV2::decode(&bundle.strategy).map_err(Error::Strategy)?;
-    let effect = dclutch_effect_kernel::v3::ProgramV3::decode_selected(
-        descriptor.effect_program().to_bytes(),
-        hash(&bundle.effect).to_bytes(),
-        &bundle.effect,
+    let lifecycle_id = digest(&bundle.lifecycle_policy)?;
+    let lifecycle = StateLifecyclePolicyV5::decode_selected(
+        descriptor.lifecycle().program().to_bytes(),
+        lifecycle_id.to_bytes(),
+        &bundle.lifecycle_policy,
     )
-    .map_err(Error::Effect)?;
-    strategy
-        .validate_descriptor_selection(digest(&bundle.strategy)?, descriptor)
-        .map_err(Error::Strategy)?;
+    .map_err(Error::LifecycleArtifact)?;
+    lifecycle
+        .validate_account_profile(account)
+        .map_err(Error::LifecycleArtifact)?;
+    let effect = EffectProgramV4::decode(&bundle.effect).map_err(Error::EffectV4)?;
+    let effect_base = effect.base();
     let common_scalars = narrow_u16(layout.scalar_count().ok_or(Error::InvalidLength)?)?;
     let common_identities = narrow_u16(layout.identity_count().ok_or(Error::InvalidLength)?)?;
     let claims_accounts = support
@@ -273,52 +340,61 @@ pub fn validate_rational_lifecycle_compact_bundle_v4(
         .checked_mul(LIFECYCLE_COORDINATE_BYTES_V2)
         .and_then(|tail| LIFECYCLE_HEADER_BYTES_V2.checked_add(tail))
         .ok_or(Error::InvalidLength)?;
-    let support_projection = account
-        .nonzero_u64_tail_rows_projection()
-        .map_err(Error::AccountProfile)?
-        .ok_or(Error::ArtifactGeometry)?;
-    if descriptor.config_schema().to_bytes()
-        != dclutch_rational_representation_v2_kernel::REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3
+    if descriptor.config_schema().to_bytes() != TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2
         || descriptor.request_schema().to_bytes()
             != RATIONAL_LIFECYCLE_COMPACT_HOT_SCHEMA_RELEASE_ID_V4
-        || descriptor.account_profile() != digest(&bundle.account_profile)?
-        || descriptor.request_profile_schema().to_bytes()
-            != dclutch_request_profile_contract::SCHEMA_RELEASE_ID
-        || descriptor.request_profile_program() != digest(&bundle.request_profile)?
-        || descriptor.transition_schema().to_bytes() != EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2
-        || descriptor.transition_program() != digest(&bundle.strategy)?
-        || descriptor.effect_program() != digest(&bundle.effect)?
+        || descriptor.derivation_policy() != lifecycle_id
+        || descriptor.account_profile()
+            != artifact(
+                dclutch_account_profile_contract::v2::SCHEMA_RELEASE_ID,
+                digest(&bundle.account_profile)?.to_bytes(),
+            )?
+        || descriptor.request_profile()
+            != artifact(
+                dclutch_request_profile_contract::SCHEMA_RELEASE_ID,
+                digest(&bundle.request_profile)?.to_bytes(),
+            )?
+        || descriptor.lifecycle() != artifact(LIFECYCLE_SCHEMA_ID_V5, lifecycle_id.to_bytes())?
+        || descriptor.strategy()
+            != artifact(
+                EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
+                digest(&bundle.strategy)?.to_bytes(),
+            )?
+        || descriptor.transition()
+            != artifact(
+                dclutch_transition_vm::v3::SCHEMA_RELEASE_ID,
+                digest(&bundle.transition)?.to_bytes(),
+            )?
+        || descriptor.effect() != artifact(EFFECT_SCHEMA_ID_V4, digest(&bundle.effect)?.to_bytes())?
         || strategy.disposition() != StrategyDispositionV2::Interpreted
-        || strategy.transition_schema().to_bytes() != dclutch_transition_vm::v3::SCHEMA_RELEASE_ID
-        || strategy.transition_program() != digest(&bundle.transition)?
-        || account.artifact_profile() != NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
+        || strategy.transition_schema() != descriptor.transition().schema()
+        || strategy.transition_program() != descriptor.transition().program()
+        || account.artifact_profile() != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+        || account.dynamic_fixed_span_count() != 0
         || usize::from(account.fixed_account_count()) != logical_accounts
-        || support_projection.account() != 1
-        || usize::from(support_projection.count_destination())
-            != RATIONAL_LIFECYCLE_COMPACT_SCALAR_SUPPORT_COUNT_V4
-        || usize::from(support_projection.rows_destination())
-            != layout.row_scalar(0, 0).ok_or(Error::InvalidLength)?
-        || usize::try_from(support_projection.tail_offset()).ok() != Some(DESCRIPTOR_HEADER_BYTES)
-        || support_projection.row_scalar_stride() != 2
         || request.fixed_request_bytes()
             != u32::try_from(RATIONAL_LIFECYCLE_COMPACT_HOT_REQUEST_BYTES_V4)
                 .map_err(|_| Error::InvalidLength)?
         || request.item_request_bytes() != 0
-        || usize::from(effect.fixed_account_count()) != logical_accounts
+        || effect.span_count() != 0
+        || effect.range_count() != 0
+        || usize::try_from(effect.semantic_prefix_bytes()).ok()
+            != Some(RATIONAL_LIFECYCLE_COMPACT_HOT_REQUEST_BYTES_V4)
+        || usize::from(effect_base.fixed_account_count()) != logical_accounts
         || !geometry_matches(
             account,
             request,
             transition,
-            effect,
+            effect_base,
             common_scalars,
             common_identities,
         )
     {
         return Err(Error::ArtifactGeometry);
     }
-    let route = effect.route(0).map_err(Error::Effect)?;
-    if effect.route_count() != 1
-        || effect.receipt_dependency_count() != 0
+    let route = effect_base.route(0).map_err(Error::Effect)?;
+    if effect_base.route_count() != 1
+        || effect_base.receipt_dependency_count() != 0
         || route.role() != FixedRole::Claims
         || route.kind() != RouteKindV3::Once
         || route.fixed_account_start() != RATIONAL_LIFECYCLE_HOT_INJECTED_ACCOUNT_COUNT_V3
@@ -329,6 +405,21 @@ pub fn validate_rational_lifecycle_compact_bundle_v4(
         || route.receipt_dependency_count() != 0
     {
         return Err(Error::ArtifactGeometry);
+    }
+    Ok(())
+}
+
+/// Validate the complete compact bundle and bind its Token behavior selection
+/// to independently authenticated descriptor, Realm, and release identities.
+pub fn validate_rational_lifecycle_compact_bundle_for_authenticated_selection_v4(
+    bundle: &RationalLifecycleCompactBundleV4,
+    authenticated: AuthenticatedTokenBehaviorV2,
+) -> Result<()> {
+    validate_rational_lifecycle_compact_bundle_v4(bundle)?;
+    if bundle.token_behavior_selection != authenticated.selection().to_bytes()
+        || hash(&bundle.token_behavior_selection).to_bytes() != authenticated.content_digest()
+    {
+        return Err(Error::ContentIdentity);
     }
     Ok(())
 }
@@ -367,6 +458,13 @@ fn content(bytes: [u8; 32]) -> Result<ContentId> {
     ContentId::new(bytes).map_err(|_| Error::ContentIdentity)
 }
 
+fn artifact(schema: [u8; 32], program: [u8; 32]) -> Result<ArtifactReferenceV4> {
+    Ok(ArtifactReferenceV4::new(
+        content(schema)?,
+        content(program)?,
+    ))
+}
+
 fn validate_inputs(input: RationalLifecycleCompactArtifactInputV4<'_>, rows: usize) -> Result<()> {
     let basis =
         ProductBasisV3::decode(input.product_basis).map_err(|_| Error::AccountObservation)?;
@@ -376,25 +474,23 @@ fn validate_inputs(input: RationalLifecycleCompactArtifactInputV4<'_>, rows: usi
                 .ok_or(Error::InvalidLength)?,
         )
         .ok_or(Error::InvalidLength)?;
+    let descriptor_bytes = DESCRIPTOR_HEADER_BYTES
+        .checked_add(
+            usize::try_from(input.descriptor.outcome_count())
+                .map_err(|_| Error::InvalidLength)?
+                .checked_mul(8)
+                .ok_or(Error::InvalidLength)?,
+        )
+        .ok_or(Error::InvalidLength)?;
     if input.claims_program == Pubkey::default()
         || rows == 0
-        || basis.basis_width() != input.descriptor.outcome_count()
+        || basis.basis_width() == 0
         || input.logical_data_lengths.len() != expected_accounts
         || input.logical_data_lengths.get(4).copied()
             != u32::try_from(input.product_basis.len()).ok()
         || input.logical_data_lengths.get(1).copied()
-            != u32::try_from(
-                DESCRIPTOR_HEADER_BYTES
-                    .checked_add(
-                        usize::try_from(input.descriptor.outcome_count())
-                            .ok()
-                            .and_then(|width| width.checked_mul(8))
-                            .ok_or(Error::InvalidLength)?,
-                    )
-                    .ok_or(Error::InvalidLength)?,
-            )
-            .ok()
-        || input.logical_data_lengths.get(14) != input.logical_data_lengths.get(1)
+            != u32::try_from(TOKEN_BEHAVIOR_SELECTION_BYTES_V2).ok()
+        || input.logical_data_lengths.get(14).copied() != u32::try_from(descriptor_bytes).ok()
     {
         return Err(Error::AccountObservation);
     }
@@ -428,16 +524,35 @@ fn encode_account_profile(
             index,
             input.logical_data_lengths,
         )?;
+        // Compact V5 selects Token behavior at injected config coordinate one;
+        // the Claims descriptor is therefore an independent authenticated
+        // child coordinate rather than an alias of config.
+        value.alias = AccountAliasInputV2::SelfCoordinate;
+        let vacancy_field = index
+            .checked_sub(VACANCY_LOGICAL_ACCOUNT_START)
+            .map(|relative| relative % LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2);
+        let opaque = matches!(index, 6 | 7 | 8 | 9 | 10 | 13 | 17 | 18 | 20 | 23 | 24)
+            || matches!(vacancy_field, Some(0 | 1));
         let prestate = match index {
-            1 => {
-                value.data_length = narrow_u32(DESCRIPTOR_HEADER_BYTES)?;
+            4 => {
+                value.data_length =
+                    narrow_u32(dclutch_product_payoff_v2_codec::runtime_v3::BASIS_HEADER_BYTES_V3)?;
                 AccountPrestateV2::AdapterAuthenticatedVariableData
             }
             14 => {
-                value.data_length = 0;
-                AccountPrestateV2::AdapterAuthenticatedVariableDataAlias
+                value.data_length = narrow_u32(DESCRIPTOR_HEADER_BYTES)?;
+                AccountPrestateV2::AdapterAuthenticatedVariableData
             }
-            _ => AccountPrestateV2::Exact,
+            _ if opaque => {
+                value.data_length = 0;
+                AccountPrestateV2::AuthenticatedOpaqueReadonlyData
+            }
+            _ => {
+                if index == 1 {
+                    value.data_length = narrow_u32(TOKEN_BEHAVIOR_SELECTION_BYTES_V2)?;
+                }
+                AccountPrestateV2::Exact
+            }
         };
         rules.push(AccountRuleWithPrestateInputV2 {
             rule: value,
@@ -447,8 +562,8 @@ fn encode_account_profile(
     let mut operations = Vec::with_capacity(
         layout
             .support_count()
-            .checked_mul(4)
-            .and_then(|count| count.checked_add(2))
+            .checked_mul(5)
+            .and_then(|count| count.checked_add(1))
             .ok_or(Error::InvalidLength)?,
     );
     operations.push(AccountOperationInputV2::ProjectTailCountU32 {
@@ -458,18 +573,26 @@ fn encode_account_profile(
         )?),
         data_offset: narrow_u32(BASIS_WIDTH_OFFSET_V3)?,
     });
-    operations.push(AccountOperationInputV2::ProjectNonzeroU64TailRows {
-        account: AccountCoordinateV2::fixed(1),
-        count_destination: ScalarCoordinateV2::common(narrow_u16(
-            RATIONAL_LIFECYCLE_COMPACT_SCALAR_SUPPORT_COUNT_V4,
-        )?),
-        rows_destination: ScalarCoordinateV2::common(narrow_u16(
-            layout.row_scalar(0, 0).ok_or(Error::InvalidLength)?,
-        )?),
-        tail_offset: narrow_u32(DESCRIPTOR_HEADER_BYTES)?,
-        row_scalar_stride: 2,
-    });
-    for row in 0..layout.support_count() {
+    let rows = support_rows(input.descriptor)?;
+    for (row, (outcome, _)) in rows.iter().copied().enumerate() {
+        operations.push(AccountOperationInputV2::ProjectDataU64 {
+            account: AccountCoordinateV2::fixed(14),
+            destination: ScalarCoordinateV2::common(narrow_u16(
+                layout
+                    .row_scalar(row, RATIONAL_LIFECYCLE_COMPACT_ROW_SCALAR_COEFFICIENT_V4)
+                    .ok_or(Error::InvalidLength)?,
+            )?),
+            data_offset: narrow_u32(
+                DESCRIPTOR_HEADER_BYTES
+                    .checked_add(
+                        usize::try_from(outcome)
+                            .map_err(|_| Error::InvalidLength)?
+                            .checked_mul(8)
+                            .ok_or(Error::InvalidLength)?,
+                    )
+                    .ok_or(Error::InvalidLength)?,
+            )?,
+        });
         let account_start = VACANCY_LOGICAL_ACCOUNT_START
             .checked_add(
                 row.checked_mul(LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2)
@@ -497,7 +620,7 @@ fn encode_account_profile(
         common_identities: narrow_u16(layout.identity_count().ok_or(Error::InvalidLength)?)?,
         item_identity_stride: 0,
     };
-    let bytes = TRUSTED_EXECUTING_PROGRAM_HEADER_BYTES
+    let bytes = DYNAMIC_FIXED_SPAN_HEADER_BYTES
         .checked_add(
             rules
                 .len()
@@ -513,13 +636,14 @@ fn encode_account_profile(
         .ok_or(Error::InvalidLength)?;
     let mut scratch = vec![0_u8; bytes];
     let mut output = vec![0_u8; bytes];
-    encode_account_profile_with_nonzero_u64_tail_rows_v2_atomic(
+    encode_account_profile_with_dynamic_fixed_span_v2_atomic(
         TrustedEnvironmentV2::None,
         TrustedIdentityEnvironmentV2::None,
+        TrustedBuiltinIdentityV2::None,
+        &[],
         &rules,
         &[],
         &operations,
-        &[],
         geometry,
         &mut scratch,
         &mut output,
@@ -553,20 +677,36 @@ fn encode_request_profile(layout: RationalLifecycleCompactHotRegisterLayoutV4) -
     Ok(output)
 }
 
-fn encode_transition(layout: RationalLifecycleCompactHotRegisterLayoutV4) -> Result<Vec<u8>> {
+fn encode_transition(
+    layout: RationalLifecycleCompactHotRegisterLayoutV4,
+    rows: &[(u32, u64)],
+) -> Result<Vec<u8>> {
+    if rows.len() != layout.support_count() {
+        return Err(Error::InvalidLength);
+    }
     let mut instructions = Vec::with_capacity(
         layout
             .support_count()
             .checked_mul(2)
+            .and_then(|count| count.checked_add(1))
             .ok_or(Error::InvalidLength)?,
     );
-    for row in 0..layout.support_count() {
+    instructions.push(InstructionV3::load_const(
+        scalar_v3(RATIONAL_LIFECYCLE_COMPACT_SCALAR_SUPPORT_COUNT_V4)?,
+        u64::try_from(rows.len()).map_err(|_| Error::InvalidLength)?,
+    ));
+    for (row, (outcome, _)) in rows.iter().copied().enumerate() {
+        let outcome_register = scalar_v3(
+            layout
+                .row_scalar(row, RATIONAL_LIFECYCLE_COMPACT_ROW_SCALAR_OUTCOME_V4)
+                .ok_or(Error::InvalidLength)?,
+        )?;
+        instructions.push(InstructionV3::load_const(
+            outcome_register,
+            u64::from(outcome),
+        ));
         instructions.push(InstructionV3::scalar_lt(
-            scalar_v3(
-                layout
-                    .row_scalar(row, RATIONAL_LIFECYCLE_COMPACT_ROW_SCALAR_OUTCOME_V4)
-                    .ok_or(Error::InvalidLength)?,
-            )?,
+            outcome_register,
             scalar_v3(RATIONAL_LIFECYCLE_SCALAR_OUTCOME_COUNT_V3)?,
         ));
         instructions.push(InstructionV3::nonzero(scalar_v3(
@@ -627,7 +767,7 @@ fn encode_effect(
     }];
     let mut instructions = Vec::with_capacity(
         rows.len()
-            .checked_mul(6)
+            .checked_mul(5)
             .and_then(|count| count.checked_add(18))
             .ok_or(Error::InvalidLength)?,
     );
@@ -641,12 +781,6 @@ fn encode_effect(
             .ok_or(Error::InvalidLength)?;
         let at = |field: usize| base.checked_add(field).ok_or(Error::InvalidLength);
         instructions.extend([
-            write_u32(
-                at(RationalLifecycleHotLayoutV3::ITEM_OUTCOME)?,
-                layout
-                    .row_scalar(row, RATIONAL_LIFECYCLE_COMPACT_ROW_SCALAR_OUTCOME_V4)
-                    .ok_or(Error::InvalidLength)?,
-            )?,
             write_u64(
                 at(RationalLifecycleHotLayoutV3::ITEM_COEFFICIENT)?,
                 layout
@@ -701,16 +835,31 @@ fn encode_effect(
         .and_then(|prefix| prefix.checked_add(template.len()))
         .ok_or(Error::InvalidLength)?;
     let mut scratch = vec![0_u8; bytes];
-    let mut output = vec![0_u8; bytes];
+    let mut base = vec![0_u8; bytes];
     encode_effect_program_v3_atomic(
         geometry,
         &routes,
         &instructions,
         &[],
         &mut scratch,
-        &mut output,
+        &mut base,
     )
     .map_err(Error::Effect)?;
+    let successor_bytes = EFFECT_V4_HEADER_BYTES
+        .checked_add(base.len())
+        .ok_or(Error::InvalidLength)?;
+    let mut scratch = vec![0_u8; successor_bytes];
+    let mut output = vec![0_u8; successor_bytes];
+    encode_program_v4_atomic(
+        &base,
+        BorrowedRangePolicyV4::DisjointExactCoverage,
+        narrow_u32(RATIONAL_LIFECYCLE_COMPACT_HOT_REQUEST_BYTES_V4)?,
+        &[],
+        &[],
+        &mut scratch,
+        &mut output,
+    )
+    .map_err(Error::EffectV4)?;
     Ok(output)
 }
 
@@ -754,6 +903,12 @@ fn child_template(
             &input.claims_program,
         )
         .0;
+        put(
+            &mut output,
+            base.checked_add(RationalLifecycleHotLayoutV3::ITEM_OUTCOME)
+                .ok_or(Error::InvalidLength)?,
+            &outcome.to_le_bytes(),
+        )?;
         put(
             &mut output,
             base.checked_add(RationalLifecycleHotLayoutV3::ITEM_CUSTODY_OWNER)
@@ -929,12 +1084,18 @@ fn project_u64(offset: usize, register: usize) -> Result<RequestInstructionV1> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_account_profile_contract::v2::{
-        AccountProfileV2, NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE,
+    use dclutch_account_profile_contract::{
+        lifecycle_v3::{
+            HEADER_BYTES as LIFECYCLE_HEADER_BYTES, encode::encode_lifecycle_policy_v5_atomic,
+        },
+        v2::{AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE},
     };
-    use dclutch_effect_kernel::v3::ProgramV3 as EffectProgramV3;
+    use dclutch_effect_kernel::v4::ProgramV4 as EffectProgramV4;
     use dclutch_product_payoff_v2_codec::runtime_v3::{
         BASIS_HEADER_BYTES_V3, BasisInputV3, BasisKindV3, compile_basis_v3,
+    };
+    use dclutch_rational_representation_v2_contract::{
+        TokenBehaviorRecordAdmissionV2, authenticate_token_behavior_v2,
     };
     use dclutch_rational_representation_v2_kernel::{
         DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_MAGIC_V3, DESCRIPTOR_SCHEMA_VERSION_V3,
@@ -1016,11 +1177,44 @@ mod tests {
         .expect("descriptor")
     }
 
+    fn token_behavior(
+        descriptor: RepresentationDescriptorV2<'_>,
+        realm: [u8; 32],
+    ) -> AuthenticatedTokenBehaviorV2 {
+        let selection = TokenBehaviorSelectionV2::new(realm, descriptor.release_set_id())
+            .expect("Token selection")
+            .to_bytes();
+        let digest = hash(&selection).to_bytes();
+        authenticate_token_behavior_v2(
+            descriptor,
+            realm,
+            &selection,
+            TokenBehaviorRecordAdmissionV2 {
+                selected_schema_id: TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
+                finalized_schema_id: TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
+                selected_content_digest: digest,
+                finalized_content_digest: digest,
+                recomputed_content_digest: digest,
+                record_authenticated: true,
+                market_realm_authenticated: true,
+            },
+        )
+        .expect("Token behavior")
+    }
+
+    fn lifecycle_policy() -> Vec<u8> {
+        let mut scratch = vec![0_u8; LIFECYCLE_HEADER_BYTES];
+        let mut output = vec![0_u8; LIFECYCLE_HEADER_BYTES];
+        encode_lifecycle_policy_v5_atomic(&[], &[], &[], &[], &[], &[], &mut scratch, &mut output)
+            .expect("empty lifecycle V5");
+        output
+    }
+
     fn lengths(product_bytes: usize, descriptor_bytes: usize, support: usize) -> Vec<u32> {
         let count = VACANCY_LOGICAL_ACCOUNT_START + support * LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2;
         let mut output = vec![0_u32; count];
-        *output.get_mut(1).expect("descriptor") =
-            u32::try_from(descriptor_bytes).expect("descriptor width");
+        *output.get_mut(1).expect("Token selection") =
+            u32::try_from(TOKEN_BEHAVIOR_SELECTION_BYTES_V2).expect("Token selection width");
         *output.get_mut(4).expect("Product") = u32::try_from(product_bytes).expect("Product width");
         *output.get_mut(14).expect("descriptor alias") =
             u32::try_from(descriptor_bytes).expect("descriptor width");
@@ -1033,7 +1227,11 @@ mod tests {
         outcomes: [u64; 3],
     ) -> dclutch_transition_vm::v3::Result<()> {
         let layout = RationalLifecycleCompactHotRegisterLayoutV4::new(3);
-        let bytes = encode_transition(layout).expect("compact transition");
+        let rows = outcomes
+            .into_iter()
+            .map(|outcome| (u32::try_from(outcome).expect("outcome coordinate"), 1_u64))
+            .collect::<Vec<_>>();
+        let bytes = encode_transition(layout, &rows).expect("compact transition");
         let program = TransitionProgramV3::decode(&bytes).expect("decode transition");
         let mut input = vec![0_u64; layout.scalar_count().expect("scalar width")];
         *input
@@ -1042,14 +1240,7 @@ mod tests {
         *input
             .get_mut(RATIONAL_LIFECYCLE_COMPACT_SCALAR_PRODUCT_OUTCOME_COUNT_V4)
             .expect("Product width register") = product_width;
-        for (row, outcome) in outcomes.into_iter().enumerate() {
-            *input
-                .get_mut(
-                    layout
-                        .row_scalar(row, RATIONAL_LIFECYCLE_COMPACT_ROW_SCALAR_OUTCOME_V4)
-                        .expect("outcome register"),
-                )
-                .expect("outcome scalar") = outcome;
+        for row in 0..rows.len() {
             *input
                 .get_mut(
                     layout
@@ -1099,20 +1290,22 @@ mod tests {
         let account = AccountProfileV2::decode(&artifacts.account_profile).expect("account");
         let request = RequestProfileV1::decode(&artifacts.request_profile).expect("request");
         let transition = TransitionProgramV3::decode(&artifacts.transition).expect("transition");
-        let effect = EffectProgramV3::decode(&artifacts.effect).expect("effect");
+        let effect = EffectProgramV4::decode(&artifacts.effect).expect("effect");
+        let effect_base = effect.base();
         let layout = RationalLifecycleCompactHotRegisterLayoutV4::new(3);
         assert_eq!(
             account.artifact_profile(),
-            NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
+            DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
         );
+        assert_eq!(account.dynamic_fixed_span_count(), 0);
         assert_eq!(request.fixed_request_bytes(), 400);
         assert_eq!(request.item_request_bytes(), 0);
         assert_eq!(account.common_scalar_count(), 17);
         assert_eq!(account.common_identity_count(), 22);
         assert_eq!(transition.common_scalar_count(), 17);
-        assert_eq!(effect.common_identity_count(), 22);
+        assert_eq!(effect_base.common_identity_count(), 22);
         assert_eq!(layout.scalar_count(), Some(17));
-        let route = effect.route(0).expect("route");
+        let route = effect_base.route(0).expect("route");
         assert_eq!(route.role(), FixedRole::Claims);
         assert_eq!(route.kind(), RouteKindV3::Once);
         assert_eq!(route.fixed_account_start(), 5);
@@ -1120,18 +1313,32 @@ mod tests {
         assert_eq!(route.fixed_request_bytes(), 1_216);
         assert_eq!(route.item_request_bytes(), 0);
 
+        let authenticated_token_behavior = token_behavior(input.descriptor, id(51));
+        let lifecycle = lifecycle_policy();
         let bundle =
             build_rational_lifecycle_compact_bundle_v4(RationalLifecycleCompactBundleInputV4 {
                 artifacts: input,
                 kind: id(41),
+                authenticated_token_behavior,
                 root_schema: id(42),
-                derivation_policy: id(43),
+                lifecycle_policy: &lifecycle,
                 capacity_profile: id(44),
                 root_state_bytes: 64,
             })
             .expect("content-addressed compact bundle");
         assert_eq!(bundle.support_count, 3);
-        validate_rational_lifecycle_compact_bundle_v4(&bundle).expect("joined bundle");
+        validate_rational_lifecycle_compact_bundle_for_authenticated_selection_v4(
+            &bundle,
+            authenticated_token_behavior,
+        )
+        .expect("joined bundle");
+        assert_eq!(
+            validate_rational_lifecycle_compact_bundle_for_authenticated_selection_v4(
+                &bundle,
+                token_behavior(input.descriptor, id(52)),
+            ),
+            Err(Error::ContentIdentity)
+        );
         let mut substituted = bundle;
         assert!(
             substituted

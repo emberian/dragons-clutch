@@ -1,13 +1,14 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-//! Descriptor-specialized CapabilityProgram V3 artifacts and unsigned Hot
+//! Descriptor-specialized CapabilityProgram V4 artifacts and unsigned Hot
 //! operator construction for Rational lifecycle actions.
 //!
-//! The V3 path owns the three selected-coordinate actions. Complete receipt
-//! retirement is reachable only through the compact V4 path, which derives
-//! ordered nonzero support from the authenticated immutable descriptor. Claims
-//! remains the sole physical mutation and typed receipt authority.
+//! The legacy V3 path remains fail-closed for caller-carried receipt
+//! retirement. Complete receipt retirement is selected only through the
+//! compact CapabilityV4/LifecycleV5/Profile13 path, which derives ordered
+//! nonzero support from the authenticated immutable descriptor. Claims remains
+//! the sole physical mutation and typed receipt authority.
 
 mod account_profile;
 mod artifacts;
@@ -32,6 +33,7 @@ pub use compact_artifacts_v4::{
     RationalLifecycleCompactArtifactInputV4, RationalLifecycleCompactArtifactsV4,
     RationalLifecycleCompactBundleInputV4, RationalLifecycleCompactBundleV4,
     build_rational_lifecycle_compact_bundle_v4, encode_rational_lifecycle_compact_artifacts_v4,
+    validate_rational_lifecycle_compact_bundle_for_authenticated_selection_v4,
     validate_rational_lifecycle_compact_bundle_v4,
 };
 pub use compact_operator_v4::{
@@ -67,12 +69,18 @@ pub enum Error {
     AccountObservation,
     /// Typed EffectProgram encoding or hostile decoding refused.
     Effect(dclutch_effect_kernel::v3::Error),
+    /// Typed EffectProgram successor encoding or hostile decoding refused.
+    EffectV4(dclutch_effect_kernel::v4::ErrorV4),
     /// A content-addressed semantic coordinate was zero.
     ContentIdentity,
     /// Interpreted execution-strategy construction or join refused.
     Strategy(dclutch_execution_strategy_contract::v2::Error),
     /// CapabilityProgram construction or hostile decoding refused.
     Descriptor(dclutch_capability_program_contract::Error),
+    /// Successor lifecycle artifact decoding or AccountProfile join refused.
+    LifecycleArtifact(dclutch_account_profile_contract::lifecycle_v3::Error),
+    /// Canonical Token behavior selection failed hostile decoding.
+    TokenBehavior(dclutch_token_svm::Error),
     /// Finalized bundle parts did not share one exact geometry.
     ArtifactGeometry,
     /// Exact family/Claims child specialization or receipt contract refused.
