@@ -634,84 +634,24 @@ pub fn process_hot_execution_v3(
         return Err(TradingSbfError::UnsupportedContent.into());
     }
 
-    let mut input_scalars = vec![0_u64; scalar_count];
-    let mut input_identities = vec![[0_u8; 32]; identity_count];
-    *input_identities
-        .get_mut(HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3)
-        .ok_or(TradingSbfError::Content)? = request_digest;
-    seed_trusted_environment_v3(
-        trusted_environment,
-        &mut input_scalars,
-        &mut input_identities,
-    )?;
-    let mut account_scratch_scalars = input_scalars.clone();
-    let mut account_scratch_identities = input_identities.clone();
-    let mut account_output_scalars = input_scalars.clone();
-    let mut account_output_identities = input_identities.clone();
-    project_accounts_atomic(
+    let projected_request = project_account_and_request_registers_v3(
+        program_id,
+        accounts,
+        instruction_data,
+        *frame,
         account_profile,
+        request_profile,
         tail_count,
         &observations,
-        ProjectionRegistersV2 {
-            input_scalars: &input_scalars,
-            input_identities: &input_identities,
-            scratch_scalars: &mut account_scratch_scalars,
-            scratch_identities: &mut account_scratch_identities,
-            output_scalars: &mut account_output_scalars,
-            output_identities: &mut account_output_identities,
-        },
-    )
-    .map_err(|_| TradingSbfError::Content)?;
-    require_projected_tail_count_agreement_v3(
-        account_profile,
-        product_outcome_count,
-        &account_output_scalars,
-    )?;
-    require_trusted_environment_v3(
-        trusted_environment,
-        &account_output_scalars,
-        &account_output_identities,
-    )?;
-
-    let mut signed_identities = account_output_identities.clone();
-    if let RequestProfileKindV3::Signed(profile) = request_profile {
-        let mut signature_scratch = account_output_identities.clone();
-        authenticate_and_seed_native_signatures(
-            program_id,
-            accounts,
-            instruction_data,
-            frame.instructions,
-            profile,
-            tail_count,
-            NativeSignatureRegistersV1 {
-                input_identities: &account_output_identities,
-                scratch_identities: &mut signature_scratch,
-                output_identities: &mut signed_identities,
-            },
-        )?;
-    }
-
-    let mut request_scratch_scalars = account_output_scalars.clone();
-    let mut request_scratch_identities = signed_identities.clone();
-    let mut request_output_scalars = account_output_scalars.clone();
-    let mut request_output_identities = signed_identities.clone();
-    request_profile.project_atomic(
-        tail_count,
         family_request,
-        ProjectionRegistersV1 {
-            input_scalars: &account_output_scalars,
-            input_identities: &signed_identities,
-            scratch_scalars: &mut request_scratch_scalars,
-            scratch_identities: &mut request_scratch_identities,
-            output_scalars: &mut request_output_scalars,
-            output_identities: &mut request_output_identities,
-        },
-    )?;
-    require_trusted_environment_v3(
+        request_digest,
         trusted_environment,
-        &request_output_scalars,
-        &request_output_identities,
+        product_outcome_count,
+        scalar_count,
+        identity_count,
     )?;
+    let request_output_scalars = projected_request.scalars;
+    let request_output_identities = projected_request.identities;
     require_trusted_environment_register_ownership_v3(
         account_profile,
         request_profile,
@@ -1019,7 +959,22 @@ fn commit_prepared_hot_v3(
 fn execute_prepared_child_routes_v3(
     prepared: &PreparedHotCommitV3<'_, '_, '_, '_>,
 ) -> Result<[u8; 32], ProgramError> {
-    execute_child_routes_v3(prepared)
+    execute_child_routes_v3(
+        prepared.program_id,
+        *prepared.frame,
+        prepared.request_profile,
+        prepared.effect,
+        prepared.tail_count,
+        prepared.scalars,
+        prepared.identities,
+        prepared.effect_accounts,
+        prepared.request_bank,
+        prepared.family_request,
+        prepared.request_digest,
+        prepared.envelope,
+        prepared.capability_program_set,
+        prepared.selected_program.to_bytes(),
+    )
 }
 
 #[inline(never)]
@@ -2931,29 +2886,46 @@ fn preflight_child_routes_v3<'accounts, 'info>(
     Ok(())
 }
 
+struct ChildExecutionStateV3 {
+    transcript: [u8; 32],
+    receipt_bank: ChildReceiptBankV3,
+    prior_receipt_bytes: Vec<u8>,
+    route: u16,
+}
+
+// The sole additional allocation introduced by the verifier-frame split is
+// this bounded 88-byte header. Receipt payloads already lived in Vec-backed
+// storage before this split; no authenticated fact or commit authority moves
+// from account data into the heap.
+const _: [(); 88] = [(); core::mem::size_of::<ChildExecutionStateV3>()];
+
 #[allow(clippy::too_many_arguments)]
-fn execute_child_routes_v3(
-    prepared: &PreparedHotCommitV3<'_, '_, '_, '_>,
+fn execute_child_routes_v3<'accounts, 'info>(
+    program_id: &Pubkey,
+    frame: HotFrameV3<'accounts, 'info>,
+    request_profile: RequestProfileKindV3<'_>,
+    effect: SelectedEffectProgramV4<'_>,
+    tail_count: u32,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+    effect_accounts: &[AccountInfo<'info>],
+    request_bank: &[u8],
+    family_request: &[u8],
+    request_digest: [u8; 32],
+    envelope: HotExecutionEnvelopeV3,
+    capability_program_set: [u8; 32],
+    selected_capability_program: [u8; 32],
 ) -> Result<[u8; 32], ProgramError> {
-    let program_id = prepared.program_id;
-    let frame = *prepared.frame;
-    let request_profile = prepared.request_profile;
-    let effect = prepared.effect;
-    let tail_count = prepared.tail_count;
-    let scalars = prepared.scalars;
-    let identities = prepared.identities;
-    let effect_accounts = prepared.effect_accounts;
-    let request_bank = prepared.request_bank;
-    let family_request = prepared.family_request;
-    let request_digest = prepared.request_digest;
-    let envelope = prepared.envelope;
-    let capability_program_set = prepared.capability_program_set;
-    let selected_capability_program = prepared.selected_program.to_bytes();
     #[cfg(not(feature = "families"))]
     let _ = (capability_program_set, selected_capability_program);
-    let mut transcript = hashv(&[CHILD_EXECUTION_DIGEST_DOMAIN_V3, &request_digest]).to_bytes();
+    let mut execution = Box::new(ChildExecutionStateV3 {
+        transcript: hashv(&[CHILD_EXECUTION_DIGEST_DOMAIN_V3, &request_digest]).to_bytes(),
+        receipt_bank: ChildReceiptBankV3::new(),
+        prior_receipt_bytes: Vec::new(),
+        route: 0,
+    });
     if effect.route_count() == 0 {
-        return Ok(transcript);
+        return Ok(execution.transcript);
     }
     #[cfg(any(
         feature = "families",
@@ -3028,9 +3000,8 @@ fn execute_child_routes_v3(
         None
     };
 
-    let mut route = 0_u16;
-    let mut receipt_bank = ChildReceiptBankV3::new();
-    while route < effect.route_count() {
+    while execution.route < effect.route_count() {
+        let route = execution.route;
         let count = effect
             .invocation_count(route, tail_count, scalars, identities)
             .map_err(|_| TradingSbfError::Content)?;
@@ -3039,7 +3010,7 @@ fn execute_child_routes_v3(
             let resolved = effect
                 .resolved_invocation(route, invocation, tail_count, scalars, identities)
                 .map_err(|_| TradingSbfError::Content)?;
-            let mut prior_receipt_bytes = Vec::new();
+            execution.prior_receipt_bytes.clear();
             let mut dependency_index = 0_u16;
             while dependency_index < resolved.receipt_dependencies.len() {
                 let dependency = effect
@@ -3086,25 +3057,27 @@ fn execute_child_routes_v3(
                     request_bank,
                     family_request,
                 )?;
-                let receipt = receipt_bank
+                let receipt = execution
+                    .receipt_bank
                     .resolve(
                         Some(dependency),
                         Some(dependency_program.key),
                         Some(expected_provenance),
                     )?
                     .ok_or(TradingSbfError::Transition)?;
-                prior_receipt_bytes
+                execution
+                    .prior_receipt_bytes
                     .try_reserve(receipt.len())
                     .map_err(|_| TradingSbfError::Content)?;
-                prior_receipt_bytes.extend_from_slice(receipt);
+                execution.prior_receipt_bytes.extend_from_slice(receipt);
                 dependency_index = dependency_index
                     .checked_add(1)
                     .ok_or(TradingSbfError::Content)?;
             }
-            let prior_receipt = if prior_receipt_bytes.is_empty() {
+            let prior_receipt = if execution.prior_receipt_bytes.is_empty() {
                 None
             } else {
-                Some(prior_receipt_bytes.as_slice())
+                Some(execution.prior_receipt_bytes.as_slice())
             };
             let (role, child_digest, child_program) = match resolved.role {
                 FixedRole::Core => (
@@ -3269,7 +3242,7 @@ fn execute_child_routes_v3(
                 .try_into()
                 .map_err(|_| TradingSbfError::Transition)?;
             let receipt_digest = hash(&receipt_bytes).to_bytes();
-            receipt_bank.record_exact(
+            execution.receipt_bank.record_exact(
                 role,
                 route,
                 invocation,
@@ -3280,9 +3253,9 @@ fn execute_child_routes_v3(
                 receipt_kind,
                 receipt_bytes,
             )?;
-            transcript = hashv(&[
+            execution.transcript = hashv(&[
                 CHILD_EXECUTION_DIGEST_DOMAIN_V3,
-                &transcript,
+                &execution.transcript,
                 &[fixed_role_tag_v3(role)],
                 &route.to_le_bytes(),
                 &invocation.to_le_bytes(),
@@ -3293,9 +3266,9 @@ fn execute_child_routes_v3(
             .to_bytes();
             invocation = invocation.checked_add(1).ok_or(TradingSbfError::Content)?;
         }
-        route = route.checked_add(1).ok_or(TradingSbfError::Content)?;
+        execution.route = route.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
-    Ok(transcript)
+    Ok(execution.transcript)
 }
 
 fn fixed_role_tag_v3(role: FixedRole) -> u8 {
@@ -4061,6 +4034,116 @@ fn require_projected_tail_count_agreement_v3(
         return Err(TradingSbfError::Content.into());
     }
     Ok(())
+}
+
+struct ProjectedRequestRegistersV3 {
+    scalars: Vec<u64>,
+    identities: Vec<[u8; 32]>,
+}
+
+/// Keep the transient Account/Request projection banks in one noinline phase.
+/// Only the final candidate registers cross the boundary; scratch banks never
+/// remain live across child CPI or commit-last execution.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
+    program_id: &Pubkey,
+    accounts: &'accounts [AccountInfo<'info>],
+    instruction_data: &'artifact [u8],
+    frame: HotFrameV3<'accounts, 'info>,
+    account_profile: AccountProfileV2<'artifact>,
+    request_profile: RequestProfileKindV3<'artifact>,
+    tail_count: u32,
+    observations: &[AccountObservationV1<'_>],
+    family_request: &'artifact [u8],
+    request_digest: [u8; 32],
+    trusted_environment: TrustedEnvironmentObservationV3,
+    authenticated_product_tail_count: u32,
+    scalar_count: usize,
+    identity_count: usize,
+) -> Result<ProjectedRequestRegistersV3, ProgramError> {
+    let mut input_scalars = vec![0_u64; scalar_count];
+    let mut input_identities = vec![[0_u8; 32]; identity_count];
+    *input_identities
+        .get_mut(HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3)
+        .ok_or(TradingSbfError::Content)? = request_digest;
+    seed_trusted_environment_v3(
+        trusted_environment,
+        &mut input_scalars,
+        &mut input_identities,
+    )?;
+    let mut account_scratch_scalars = input_scalars.clone();
+    let mut account_scratch_identities = input_identities.clone();
+    let mut account_output_scalars = input_scalars.clone();
+    let mut account_output_identities = input_identities.clone();
+    project_accounts_atomic(
+        account_profile,
+        tail_count,
+        observations,
+        ProjectionRegistersV2 {
+            input_scalars: &input_scalars,
+            input_identities: &input_identities,
+            scratch_scalars: &mut account_scratch_scalars,
+            scratch_identities: &mut account_scratch_identities,
+            output_scalars: &mut account_output_scalars,
+            output_identities: &mut account_output_identities,
+        },
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    require_projected_tail_count_agreement_v3(
+        account_profile,
+        authenticated_product_tail_count,
+        &account_output_scalars,
+    )?;
+    require_trusted_environment_v3(
+        trusted_environment,
+        &account_output_scalars,
+        &account_output_identities,
+    )?;
+
+    let mut signed_identities = account_output_identities.clone();
+    if let RequestProfileKindV3::Signed(profile) = request_profile {
+        let mut signature_scratch = account_output_identities.clone();
+        authenticate_and_seed_native_signatures(
+            program_id,
+            accounts,
+            instruction_data,
+            frame.instructions,
+            profile,
+            tail_count,
+            NativeSignatureRegistersV1 {
+                input_identities: &account_output_identities,
+                scratch_identities: &mut signature_scratch,
+                output_identities: &mut signed_identities,
+            },
+        )?;
+    }
+
+    let mut request_scratch_scalars = account_output_scalars.clone();
+    let mut request_scratch_identities = signed_identities.clone();
+    let mut request_output_scalars = account_output_scalars.clone();
+    let mut request_output_identities = signed_identities.clone();
+    request_profile.project_atomic(
+        tail_count,
+        family_request,
+        ProjectionRegistersV1 {
+            input_scalars: &account_output_scalars,
+            input_identities: &signed_identities,
+            scratch_scalars: &mut request_scratch_scalars,
+            scratch_identities: &mut request_scratch_identities,
+            output_scalars: &mut request_output_scalars,
+            output_identities: &mut request_output_identities,
+        },
+    )?;
+    require_trusted_environment_v3(
+        trusted_environment,
+        &request_output_scalars,
+        &request_output_identities,
+    )?;
+    Ok(ProjectedRequestRegistersV3 {
+        scalars: request_output_scalars,
+        identities: request_output_identities,
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
