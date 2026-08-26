@@ -27,7 +27,7 @@ pub const DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3: u16 = 2;
 /// Ordinary has no Product-item identity tail.
 pub const DIRECT_ORDINARY_ITEM_IDENTITY_STRIDE_V3: u16 = 0;
 /// Exact prelude instruction count of the ordinary semantic program.
-pub const DIRECT_ORDINARY_PRELUDE_INSTRUCTIONS_V3: usize = 66;
+pub const DIRECT_ORDINARY_PRELUDE_INSTRUCTIONS_V3: usize = 62;
 /// Exact per-Product-item instruction count of the ordinary semantic program.
 pub const DIRECT_ORDINARY_ITEM_INSTRUCTIONS_V3: usize = 2;
 /// Exact instruction count of the ordinary semantic program.
@@ -105,14 +105,14 @@ pub const SCALAR_SELLER_POSITION_REVISION_V3: usize = 31;
 pub const SCALAR_BUYER_POSITION_REVISION_V3: usize = 32;
 /// Scalar register: Custody replay pre-revision.
 pub const SCALAR_CUSTODY_REVISION_V3: usize = 33;
-/// Scalar register: buyer source token balance observation.
-pub const SCALAR_BUYER_SOURCE_BALANCE_V3: usize = 34;
-/// Scalar register: buyer delegated allowance observation.
-pub const SCALAR_BUYER_DELEGATED_ALLOWANCE_V3: usize = 35;
-/// Scalar register: seller destination token balance observation.
-pub const SCALAR_SELLER_DESTINATION_BALANCE_V3: usize = 36;
-/// Scalar register: fee destination token balance observation.
-pub const SCALAR_FEE_DESTINATION_BALANCE_V3: usize = 37;
+/// Scalar register: exact pre-transition open-maker-root count.
+pub const SCALAR_ROOT_OPEN_COUNT_V3: usize = 34;
+/// Scalar register: exact post-transition open-maker-root count.
+pub const SCALAR_ROOT_OPEN_COUNT_AFTER_V3: usize = 35;
+/// Scalar register: lifecycle-owned seller first-use bit.
+pub const SCALAR_SELLER_CREATED_V3: usize = 36;
+/// Scalar register: seller persisted bump observation.
+pub const SCALAR_SELLER_BUMP_OBSERVATION_V3: usize = 37;
 /// Program-owned zero constant.
 pub const SCALAR_ZERO_V3: usize = 38;
 /// Program-owned one constant.
@@ -135,12 +135,12 @@ pub const SCALAR_BUYER_DEBIT_V3: usize = 46;
 pub const SCALAR_COMBINED_FEE_V3: usize = 47;
 /// Derived terminal seller-only Custody route enable bit.
 pub const SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V3: usize = 48;
-/// Reserved for the derived Claims aggregate post-revision.
-pub const SCALAR_CLAIMS_MARKET_REVISION_AFTER_V3: usize = 49;
-/// Reserved for the derived seller Position post-revision.
-pub const SCALAR_SELLER_POSITION_REVISION_AFTER_V3: usize = 50;
-/// Reserved for the derived buyer Position post-revision.
-pub const SCALAR_BUYER_POSITION_REVISION_AFTER_V3: usize = 51;
+/// Buyer persisted historical-rent-principal observation.
+pub const SCALAR_BUYER_RENT_PRINCIPAL_OBSERVATION_V3: usize = 49;
+/// Lifecycle-owned buyer historical rent principal.
+pub const SCALAR_BUYER_RENT_PRINCIPAL_V3: usize = 50;
+/// Reserved transition scratch coordinate.
+pub const SCALAR_LIFECYCLE_SCRATCH_V3: usize = 51;
 /// Derived seller-intermediate plus fee-continuation route enable bit.
 pub const SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V3: usize = 52;
 /// Derived nonzero combined-fee bit.
@@ -149,18 +149,18 @@ pub const SCALAR_FEE_NONZERO_V3: usize = 53;
 pub const SCALAR_CUSTODY_AFTER_SELLER_V3: usize = 54;
 /// Reserved for the replay revision after combined fee.
 pub const SCALAR_CUSTODY_AFTER_FEE_V3: usize = 55;
-/// Reserved for buyer balance after seller-net.
-pub const SCALAR_BUYER_BALANCE_AFTER_SELLER_V3: usize = 56;
-/// Reserved for delegated allowance after seller-net.
-pub const SCALAR_DELEGATED_AFTER_SELLER_V3: usize = 57;
-/// Reserved for seller destination after seller-net.
-pub const SCALAR_SELLER_DESTINATION_AFTER_V3: usize = 58;
-/// Reserved for buyer balance after all collateral routes.
-pub const SCALAR_BUYER_BALANCE_AFTER_ALL_V3: usize = 59;
-/// Reserved for delegated allowance after all collateral routes.
-pub const SCALAR_DELEGATED_AFTER_ALL_V3: usize = 60;
-/// Reserved for fee destination after combined fee.
-pub const SCALAR_FEE_DESTINATION_AFTER_V3: usize = 61;
+/// Lifecycle-owned seller canonical bump.
+pub const SCALAR_SELLER_BUMP_V3: usize = 56;
+/// Seller persisted historical-rent-principal observation.
+pub const SCALAR_SELLER_RENT_PRINCIPAL_OBSERVATION_V3: usize = 57;
+/// Lifecycle-owned seller historical rent principal.
+pub const SCALAR_SELLER_RENT_PRINCIPAL_V3: usize = 58;
+/// Scalar register: lifecycle-owned buyer first-use bit.
+pub const SCALAR_BUYER_CREATED_V3: usize = 59;
+/// Scalar register: buyer persisted bump observation.
+pub const SCALAR_BUYER_BUMP_OBSERVATION_V3: usize = 60;
+/// Lifecycle-owned buyer canonical bump.
+pub const SCALAR_BUYER_BUMP_V3: usize = 61;
 /// Reserved for exact Claims transfer quantity.
 pub const SCALAR_CLAIM_TRANSFER_V3: usize = 62;
 /// Derived terminal fee-only Custody route enable bit.
@@ -173,8 +173,8 @@ pub const ITEM_SCALAR_CLAIM_QUANTITY_V3: u16 = 1;
 
 /// Identity register: SHA-256 of the complete family request.
 pub const IDENTITY_PARENT_REQUEST_DIGEST_V3: usize = 0;
-/// Identity register: finalized immutable config content ID.
-pub const IDENTITY_CONFIG_CONTENT_ID_V3: usize = 1;
+/// Lifecycle-owned seller immutable rent beneficiary.
+pub const IDENTITY_SELLER_RENT_BENEFICIARY_V3: usize = 1;
 /// Identity register: immutable config fee recipient.
 pub const IDENTITY_FEE_RECIPIENT_V3: usize = 2;
 /// Identity register: authenticated logical Core Market.
@@ -201,30 +201,30 @@ pub const IDENTITY_SEMANTIC_BASIS_V3: usize = 12;
 pub const IDENTITY_LINKED_BASIS_RECORD_V3: usize = 13;
 /// Identity register: current Registry-selected Trading program.
 pub const IDENTITY_TRADING_PROGRAM_V3: usize = 14;
-/// Identity register: current Registry-selected Claims program.
-pub const IDENTITY_CLAIMS_PROGRAM_V3: usize = 15;
-/// Identity register: current Registry-selected Custody program.
-pub const IDENTITY_CUSTODY_PROGRAM_V3: usize = 16;
+/// Lifecycle-owned seller state owner, equal to current Trading.
+pub const IDENTITY_SELLER_STATE_OWNER_V3: usize = 15;
+/// Lifecycle-owned buyer state owner, equal to current Trading.
+pub const IDENTITY_BUYER_STATE_OWNER_V3: usize = 16;
 /// Identity register: immutable Realm record identity.
 pub const IDENTITY_REALM_V3: usize = 17;
 /// Identity register: Realm-selected collateral mint.
 pub const IDENTITY_MINT_V3: usize = 18;
 /// Identity register: Realm-selected token program.
 pub const IDENTITY_TOKEN_PROGRAM_V3: usize = 19;
-/// Identity register: Trading-owned Direct root.
-pub const IDENTITY_DIRECT_ROOT_V3: usize = 20;
-/// Identity register: seller maker replay root.
+/// Lifecycle-owned buyer immutable rent beneficiary.
+pub const IDENTITY_BUYER_RENT_BENEFICIARY_V3: usize = 20;
+/// Lifecycle-owned seller maker replay root.
 pub const IDENTITY_SELLER_MAKER_ROOT_V3: usize = 21;
-/// Identity register: buyer maker replay root and Custody context.
+/// Lifecycle-owned buyer maker replay root and Custody context.
 pub const IDENTITY_BUYER_MAKER_ROOT_V3: usize = 22;
 /// Identity register: canonical Custody replay account.
 pub const IDENTITY_CUSTODY_REPLAY_V3: usize = 23;
 /// Identity register: canonical Custody transfer authority.
 pub const IDENTITY_CUSTODY_AUTHORITY_V3: usize = 24;
-/// Identity register: canonical seller Claims Position.
-pub const IDENTITY_SELLER_POSITION_V3: usize = 25;
-/// Identity register: canonical buyer Claims Position.
-pub const IDENTITY_BUYER_POSITION_V3: usize = 26;
+/// Seller persisted rent-beneficiary observation.
+pub const IDENTITY_SELLER_RENT_BENEFICIARY_OBSERVATION_V3: usize = 25;
+/// Buyer persisted rent-beneficiary observation.
+pub const IDENTITY_BUYER_RENT_BENEFICIARY_OBSERVATION_V3: usize = 26;
 /// Identity register: fee recipient's exact collateral token account.
 pub const IDENTITY_FEE_TOKEN_ACCOUNT_V3: usize = 27;
 /// Identity register: seller-signed collateral token account.
@@ -275,6 +275,28 @@ pub struct DirectOrdinaryAuthenticatedContextV3 {
     pub seller_next_nonce: u64,
     /// Buyer maker replay next nonce.
     pub buyer_next_nonce: u64,
+    /// Exact pre-transition count of live maker replay roots.
+    pub root_open_maker_count: u64,
+    /// Lifecycle-owned seller first-use bit.
+    pub seller_created: bool,
+    /// Seller live-state bump observation (zero when vacant).
+    pub seller_bump_observation: u8,
+    /// Lifecycle-owned canonical seller bump.
+    pub seller_bump: u8,
+    /// Seller live-state historical rent observation (zero when vacant).
+    pub seller_rent_principal_observation: u64,
+    /// Lifecycle-owned seller historical rent principal.
+    pub seller_rent_principal: u64,
+    /// Lifecycle-owned buyer first-use bit.
+    pub buyer_created: bool,
+    /// Buyer live-state bump observation (zero when vacant).
+    pub buyer_bump_observation: u8,
+    /// Lifecycle-owned canonical buyer bump.
+    pub buyer_bump: u8,
+    /// Buyer live-state historical rent observation (zero when vacant).
+    pub buyer_rent_principal_observation: u64,
+    /// Lifecycle-owned buyer historical rent principal.
+    pub buyer_rent_principal: u64,
     /// Claims aggregate pre-revision.
     pub claims_market_revision: u64,
     /// Seller Position pre-revision.
@@ -283,14 +305,6 @@ pub struct DirectOrdinaryAuthenticatedContextV3 {
     pub buyer_position_revision: u64,
     /// Custody replay pre-revision.
     pub custody_revision: u64,
-    /// Buyer source token balance.
-    pub buyer_source_balance: u64,
-    /// Buyer delegated allowance to canonical Custody authority.
-    pub buyer_delegated_allowance: u64,
-    /// Seller destination token balance.
-    pub seller_destination_balance: u64,
-    /// Fee destination token balance.
-    pub fee_destination_balance: u64,
     /// Current release-set identity.
     pub release_set: [u8; 32],
     /// Finalized Product record digest.
@@ -301,18 +315,12 @@ pub struct DirectOrdinaryAuthenticatedContextV3 {
     pub linked_basis_record_digest: [u8; 32],
     /// Registry-selected Trading program.
     pub trading_program: [u8; 32],
-    /// Registry-selected Claims program.
-    pub claims_program: [u8; 32],
-    /// Registry-selected Custody program.
-    pub custody_program: [u8; 32],
     /// Immutable Realm identity.
     pub realm: [u8; 32],
     /// Realm-selected collateral mint.
     pub mint: [u8; 32],
     /// Realm-selected token program.
     pub token_program: [u8; 32],
-    /// Trading-owned Direct root.
-    pub direct_root: [u8; 32],
     /// Seller maker replay root.
     pub seller_maker_root: [u8; 32],
     /// Buyer maker replay root and Custody context.
@@ -321,10 +329,14 @@ pub struct DirectOrdinaryAuthenticatedContextV3 {
     pub custody_replay: [u8; 32],
     /// Canonical Custody authority.
     pub custody_authority: [u8; 32],
-    /// Canonical seller Claims Position.
-    pub seller_position: [u8; 32],
-    /// Canonical buyer Claims Position.
-    pub buyer_position: [u8; 32],
+    /// Lifecycle-owned seller immutable rent beneficiary.
+    pub seller_rent_beneficiary: [u8; 32],
+    /// Seller live-state rent-beneficiary observation (zero when vacant).
+    pub seller_rent_beneficiary_observation: [u8; 32],
+    /// Lifecycle-owned buyer immutable rent beneficiary.
+    pub buyer_rent_beneficiary: [u8; 32],
+    /// Buyer live-state rent-beneficiary observation (zero when vacant).
+    pub buyer_rent_beneficiary_observation: [u8; 32],
     /// Exact fee collateral token account.
     pub fee_token_account: [u8; 32],
     /// Authenticated seller destination token account.
@@ -366,7 +378,7 @@ pub fn project_direct_ordinary_registers_v3(
     }
     let identities = [
         context.parent_request_digest,
-        context.config_content_id,
+        context.seller_rent_beneficiary,
         context.config.fee_recipient(),
         context.market,
         context.seller_native_signer,
@@ -380,25 +392,29 @@ pub fn project_direct_ordinary_registers_v3(
         context.semantic_basis,
         context.linked_basis_record_digest,
         context.trading_program,
-        context.claims_program,
-        context.custody_program,
+        context.trading_program,
+        context.trading_program,
         context.realm,
         context.mint,
         context.token_program,
-        context.direct_root,
+        context.buyer_rent_beneficiary,
         context.seller_maker_root,
         context.buyer_maker_root,
         context.custody_replay,
         context.custody_authority,
-        context.seller_position,
-        context.buyer_position,
+        context.seller_rent_beneficiary_observation,
+        context.buyer_rent_beneficiary_observation,
         context.fee_token_account,
         request.seller.intent.collateral_account,
         request.buyer.intent.collateral_account,
         context.seller_token_account,
         context.buyer_token_account,
     ];
-    if identities.contains(&[0; 32]) {
+    if identities
+        .iter()
+        .enumerate()
+        .any(|(index, value)| *value == [0; 32] && index != 25 && index != 26)
+    {
         return Err(DirectOrdinaryRegisterErrorV3::ZeroIdentity);
     }
     scalar_scratch.fill(0);
@@ -437,14 +453,40 @@ pub fn project_direct_ordinary_registers_v3(
         context.seller_position_revision,
         context.buyer_position_revision,
         context.custody_revision,
-        context.buyer_source_balance,
-        context.buyer_delegated_allowance,
-        context.seller_destination_balance,
-        context.fee_destination_balance,
+        context.root_open_maker_count,
+        0,
+        u64::from(context.seller_created),
+        u64::from(context.seller_bump_observation),
     ]
     .into_iter()
     .enumerate()
     {
+        *scalar_scratch
+            .get_mut(index)
+            .ok_or(DirectOrdinaryRegisterErrorV3::InvalidLength)? = value;
+    }
+    for (index, value) in [
+        (
+            SCALAR_BUYER_RENT_PRINCIPAL_OBSERVATION_V3,
+            context.buyer_rent_principal_observation,
+        ),
+        (SCALAR_BUYER_RENT_PRINCIPAL_V3, context.buyer_rent_principal),
+        (SCALAR_SELLER_BUMP_V3, u64::from(context.seller_bump)),
+        (
+            SCALAR_SELLER_RENT_PRINCIPAL_OBSERVATION_V3,
+            context.seller_rent_principal_observation,
+        ),
+        (
+            SCALAR_SELLER_RENT_PRINCIPAL_V3,
+            context.seller_rent_principal,
+        ),
+        (SCALAR_BUYER_CREATED_V3, u64::from(context.buyer_created)),
+        (
+            SCALAR_BUYER_BUMP_OBSERVATION_V3,
+            u64::from(context.buyer_bump_observation),
+        ),
+        (SCALAR_BUYER_BUMP_V3, u64::from(context.buyer_bump)),
+    ] {
         *scalar_scratch
             .get_mut(index)
             .ok_or(DirectOrdinaryRegisterErrorV3::InvalidLength)? = value;
@@ -653,21 +695,25 @@ const DIRECT_ORDINARY_PRELUDE_V3: [InstructionV3; DIRECT_ORDINARY_PRELUDE_INSTRU
         scalar(SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V3),
         scalar(SCALAR_BUYER_DEBIT_V3),
     ),
-    InstructionV3::scalar_eq(
-        scalar(SCALAR_BUYER_DELEGATED_ALLOWANCE_V3),
-        scalar(SCALAR_BUYER_DEBIT_V3),
+    InstructionV3::scalar_le(scalar(SCALAR_SELLER_CREATED_V3), scalar(SCALAR_ONE_V3)),
+    InstructionV3::scalar_le(scalar(SCALAR_BUYER_CREATED_V3), scalar(SCALAR_ONE_V3)),
+    InstructionV3::checked_add_into(
+        scalar(SCALAR_ROOT_OPEN_COUNT_V3),
+        scalar(SCALAR_SELLER_CREATED_V3),
+        scalar(SCALAR_ROOT_OPEN_COUNT_AFTER_V3),
     ),
-    InstructionV3::increment_into(
-        scalar(SCALAR_CLAIMS_MARKET_REVISION_V3),
-        scalar(SCALAR_CLAIMS_MARKET_REVISION_AFTER_V3),
+    InstructionV3::checked_add_into(
+        scalar(SCALAR_ROOT_OPEN_COUNT_AFTER_V3),
+        scalar(SCALAR_BUYER_CREATED_V3),
+        scalar(SCALAR_ROOT_OPEN_COUNT_AFTER_V3),
     ),
-    InstructionV3::increment_into(
-        scalar(SCALAR_SELLER_POSITION_REVISION_V3),
-        scalar(SCALAR_SELLER_POSITION_REVISION_AFTER_V3),
+    InstructionV3::identity_eq(
+        identity(IDENTITY_SELLER_STATE_OWNER_V3),
+        identity(IDENTITY_TRADING_PROGRAM_V3),
     ),
-    InstructionV3::increment_into(
-        scalar(SCALAR_BUYER_POSITION_REVISION_V3),
-        scalar(SCALAR_BUYER_POSITION_REVISION_AFTER_V3),
+    InstructionV3::identity_eq(
+        identity(IDENTITY_BUYER_STATE_OWNER_V3),
+        identity(IDENTITY_TRADING_PROGRAM_V3),
     ),
     InstructionV3::load_const(scalar(SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V3), 1),
     InstructionV3::select_zero(
@@ -722,36 +768,6 @@ const DIRECT_ORDINARY_PRELUDE_V3: [InstructionV3; DIRECT_ORDINARY_PRELUDE_INSTRU
         scalar(SCALAR_CUSTODY_AFTER_FEE_V3),
         scalar(SCALAR_FEE_SOLE_ROUTE_ENABLED_V3),
         scalar(SCALAR_CUSTODY_AFTER_FEE_V3),
-    ),
-    InstructionV3::sub_into(
-        scalar(SCALAR_BUYER_SOURCE_BALANCE_V3),
-        scalar(SCALAR_SELLER_NET_V3),
-        scalar(SCALAR_BUYER_BALANCE_AFTER_SELLER_V3),
-    ),
-    InstructionV3::sub_into(
-        scalar(SCALAR_BUYER_DELEGATED_ALLOWANCE_V3),
-        scalar(SCALAR_SELLER_NET_V3),
-        scalar(SCALAR_DELEGATED_AFTER_SELLER_V3),
-    ),
-    InstructionV3::checked_add_into(
-        scalar(SCALAR_SELLER_DESTINATION_BALANCE_V3),
-        scalar(SCALAR_SELLER_NET_V3),
-        scalar(SCALAR_SELLER_DESTINATION_AFTER_V3),
-    ),
-    InstructionV3::sub_into(
-        scalar(SCALAR_BUYER_BALANCE_AFTER_SELLER_V3),
-        scalar(SCALAR_COMBINED_FEE_V3),
-        scalar(SCALAR_BUYER_BALANCE_AFTER_ALL_V3),
-    ),
-    InstructionV3::sub_into(
-        scalar(SCALAR_DELEGATED_AFTER_SELLER_V3),
-        scalar(SCALAR_COMBINED_FEE_V3),
-        scalar(SCALAR_DELEGATED_AFTER_ALL_V3),
-    ),
-    InstructionV3::checked_add_into(
-        scalar(SCALAR_FEE_DESTINATION_BALANCE_V3),
-        scalar(SCALAR_COMBINED_FEE_V3),
-        scalar(SCALAR_FEE_DESTINATION_AFTER_V3),
     ),
     InstructionV3::checked_add_into(
         scalar(SCALAR_FILL_V3),
@@ -847,31 +863,37 @@ mod tests {
             root_phase: 0,
             seller_next_nonce: 4,
             buyer_next_nonce: 9,
+            root_open_maker_count: 2,
+            seller_created: false,
+            seller_bump_observation: 1,
+            seller_bump: 1,
+            seller_rent_principal_observation: 100,
+            seller_rent_principal: 100,
+            buyer_created: false,
+            buyer_bump_observation: 2,
+            buyer_bump: 2,
+            buyer_rent_principal_observation: 100,
+            buyer_rent_principal: 100,
             claims_market_revision: 11,
             seller_position_revision: 12,
             buyer_position_revision: 13,
             custody_revision: 14,
-            buyer_source_balance: 100,
-            buyer_delegated_allowance: 11,
-            seller_destination_balance: 5,
-            fee_destination_balance: 6,
             release_set: id(31),
             product_record_digest: id(32),
             semantic_basis: id(33),
             linked_basis_record_digest: id(34),
             trading_program: id(35),
-            claims_program: id(36),
-            custody_program: id(37),
             realm: id(38),
             mint: id(39),
             token_program: id(40),
-            direct_root: id(41),
             seller_maker_root: id(42),
             buyer_maker_root: id(43),
             custody_replay: id(44),
             custody_authority: id(45),
-            seller_position: id(46),
-            buyer_position: id(47),
+            seller_rent_beneficiary: id(71),
+            seller_rent_beneficiary_observation: id(71),
+            buyer_rent_beneficiary: id(72),
+            buyer_rent_beneficiary_observation: id(72),
             fee_token_account: id(48),
             seller_token_account: id(20),
             buyer_token_account: id(21),
@@ -935,7 +957,7 @@ mod tests {
             + 4 * usize::from(DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3);
         let mut output = std::vec![99_u64; scalar_width];
         execute(request(), context(config), &mut output).expect("ordinary transition");
-        assert_eq!(DIRECT_ORDINARY_TRANSITION_BYTES_V3, 1_664);
+        assert_eq!(DIRECT_ORDINARY_TRANSITION_BYTES_V3, 1_568);
         assert_eq!(output[SCALAR_SELLER_NONCE_AFTER_V3], 5);
         assert_eq!(output[SCALAR_BUYER_NONCE_AFTER_V3], 10);
         assert_eq!(output[SCALAR_GROSS_V3], 10);
@@ -947,21 +969,13 @@ mod tests {
             output[SCALAR_SELLER_NET_V3] + output[SCALAR_COMBINED_FEE_V3],
             output[SCALAR_BUYER_DEBIT_V3]
         );
-        assert_eq!(output[SCALAR_CLAIMS_MARKET_REVISION_AFTER_V3], 12);
-        assert_eq!(output[SCALAR_SELLER_POSITION_REVISION_AFTER_V3], 13);
-        assert_eq!(output[SCALAR_BUYER_POSITION_REVISION_AFTER_V3], 14);
+        assert_eq!(output[SCALAR_ROOT_OPEN_COUNT_AFTER_V3], 2);
         assert_eq!(output[SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V3], 0);
         assert_eq!(output[SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V3], 1);
         assert_eq!(output[SCALAR_FEE_NONZERO_V3], 1);
         assert_eq!(output[SCALAR_FEE_SOLE_ROUTE_ENABLED_V3], 0);
         assert_eq!(output[SCALAR_CUSTODY_AFTER_SELLER_V3], 15);
         assert_eq!(output[SCALAR_CUSTODY_AFTER_FEE_V3], 16);
-        assert_eq!(output[SCALAR_BUYER_BALANCE_AFTER_SELLER_V3], 91);
-        assert_eq!(output[SCALAR_DELEGATED_AFTER_SELLER_V3], 2);
-        assert_eq!(output[SCALAR_SELLER_DESTINATION_AFTER_V3], 14);
-        assert_eq!(output[SCALAR_BUYER_BALANCE_AFTER_ALL_V3], 89);
-        assert_eq!(output[SCALAR_DELEGATED_AFTER_ALL_V3], 0);
-        assert_eq!(output[SCALAR_FEE_DESTINATION_AFTER_V3], 8);
         assert_eq!(output[SCALAR_CLAIM_TRANSFER_V3], 20);
         for item in 0..4 {
             let base = DIRECT_ORDINARY_COMMON_SCALARS_V3
@@ -1078,6 +1092,15 @@ mod tests {
         let mut context = context(config);
         context.seller_next_nonce = 0;
         context.buyer_next_nonce = 0;
+        context.root_open_maker_count = 0;
+        context.seller_created = true;
+        context.seller_bump_observation = 0;
+        context.seller_rent_principal_observation = 0;
+        context.seller_rent_beneficiary_observation = [0; 32];
+        context.buyer_created = true;
+        context.buyer_bump_observation = 0;
+        context.buyer_rent_principal_observation = 0;
+        context.buyer_rent_beneficiary_observation = [0; 32];
         let mut output = std::vec![
             99_u64;
             DIRECT_ORDINARY_COMMON_SCALARS_V3
@@ -1086,6 +1109,7 @@ mod tests {
         execute(request, context, &mut output).expect("compiled transition accepts");
         assert_eq!(output[SCALAR_SELLER_NONCE_AFTER_V3], 1);
         assert_eq!(output[SCALAR_BUYER_NONCE_AFTER_V3], 1);
+        assert_eq!(output[SCALAR_ROOT_OPEN_COUNT_AFTER_V3], 2);
         assert_eq!(output[SCALAR_GROSS_V3], semantic.effects.gross_collateral);
         assert_eq!(
             output[SCALAR_SELLER_NET_V3],

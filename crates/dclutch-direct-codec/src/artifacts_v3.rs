@@ -11,7 +11,7 @@
 //! Transition and Effect programs and commits once after fixed-role receipts.
 
 use dclutch_account_profile_contract::{
-    lifecycle_v3::StateLifecyclePolicyV3, v2::AccountProfileV2,
+    lifecycle_v3::StateLifecyclePolicyV4, v2::AccountProfileV2,
 };
 use dclutch_capability_program_contract::{
     hot_v3::HOT_FAMILY_REQUEST_OFFSET_V3,
@@ -119,7 +119,7 @@ pub struct DirectArtifactBundleV3<'a> {
     /// Exact runtime-tail account interpreter.
     pub account_profile: AccountProfileV2<'a>,
     /// Exact Trading-owned state lifecycle policy.
-    pub lifecycle_policy: StateLifecyclePolicyV3<'a>,
+    pub lifecycle_policy: StateLifecyclePolicyV4<'a>,
     /// Exact request interpreter.
     pub request_profile: DirectRequestProfileV3<'a>,
     /// Exact acyclic execution strategy selecting the TransitionVM record.
@@ -212,7 +212,7 @@ pub fn authenticate_direct_artifacts_v3<'a>(
         descriptor.derivation_policy().to_bytes(),
         artifacts.lifecycle_policy,
     )?;
-    let lifecycle_policy = StateLifecyclePolicyV3::decode_selected(
+    let lifecycle_policy = StateLifecyclePolicyV4::decode_selected(
         descriptor.derivation_policy().to_bytes(),
         digest(artifacts.lifecycle_policy),
         artifacts.lifecycle_policy,
@@ -597,42 +597,52 @@ mod tests {
 
     fn lifecycle_policy() -> Vec<u8> {
         use dclutch_account_profile_contract::lifecycle_v3::{
-            ACTION_PLAN_BYTES, ARTIFACT_PROFILE, HEADER_BYTES, MAGIC, RECIPE_BYTES, SEED_BYTES,
-            VERSION,
+            ACTION_PLAN_BYTES, HEADER_BYTES, PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SEED_BYTES,
+            encode::{
+                LifecycleAccountCoordinateV3, LifecycleGuardInputV3, LifecycleOperationInputV3,
+                LifecyclePlanInputV3, LifecycleRecipeInputV3, LifecycleSeedInputV3,
+                encode_lifecycle_policy_v4_atomic,
+            },
         };
-
-        let mut output = vec![0_u8; HEADER_BYTES + RECIPE_BYTES + SEED_BYTES + ACTION_PLAN_BYTES];
-        put(&mut output, 0, &MAGIC);
-        put(&mut output, 8, &VERSION.to_le_bytes());
-        put(&mut output, 10, &ARTIFACT_PROFILE.to_le_bytes());
-        put(&mut output, 12, &1_u16.to_le_bytes());
-        put(&mut output, 14, &1_u16.to_le_bytes());
-        put(&mut output, 16, &1_u16.to_le_bytes());
-
-        let recipe = HEADER_BYTES;
-        put(&mut output, recipe + 2, &0_u16.to_le_bytes());
-        put(&mut output, recipe + 4, &0_u16.to_le_bytes());
-        *output.get_mut(recipe + 6).expect("seed count") = 1;
-        put(
+        let bytes = HEADER_BYTES
+            + RECIPE_BYTES
+            + 2 * SEED_BYTES
+            + ACTION_PLAN_BYTES
+            + PROTECTED_OUTPUT_BYTES;
+        let mut scratch = vec![0_u8; bytes];
+        let mut output = vec![0_u8; bytes];
+        let recipes = [LifecycleRecipeInputV3 {
+            state: LifecycleAccountCoordinateV3::fixed(0),
+            seed_start: 0,
+            seed_count: 2,
+            bump_offset: 1,
+            data_base: u32::try_from(DIRECT_ROOT_STATE_BYTES_V1).expect("root width"),
+            data_stride: 0,
+        }];
+        let seeds = [
+            LifecycleSeedInputV3::CommonScalar { index: 0, width: 1 },
+            LifecycleSeedInputV3::CanonicalBump,
+        ];
+        let plans = [LifecyclePlanInputV3 {
+            action: DirectExecutionActionV3::CloseDirectRoot as u32,
+            operation: LifecycleOperationInputV3::Authenticate,
+            recipe: 0,
+            payer: None,
+            rent_credit: None,
+            principal: None,
+            beneficiary: None,
+            guard: LifecycleGuardInputV3::Always,
+        }];
+        encode_lifecycle_policy_v4_atomic(
+            &recipes,
+            &seeds,
+            &plans,
+            &[None],
+            &[],
+            &mut scratch,
             &mut output,
-            recipe + 8,
-            &u32::try_from(DIRECT_ROOT_STATE_BYTES_V1)
-                .expect("root width")
-                .to_le_bytes(),
-        );
-
-        let seed = HEADER_BYTES + RECIPE_BYTES;
-        *output.get_mut(seed).expect("seed source") = 3;
-        *output.get_mut(seed + 1).expect("seed width") = 1;
-
-        let plan = HEADER_BYTES + RECIPE_BYTES + SEED_BYTES;
-        put(
-            &mut output,
-            plan,
-            &(DirectExecutionActionV3::CloseDirectRoot as u32).to_le_bytes(),
-        );
-        *output.get_mut(plan + 4).expect("close operation") = 2;
-        *output.get_mut(plan + 8).expect("absent payer") = u8::MAX;
+        )
+        .expect("lifecycle fixture");
         output
     }
 
@@ -796,8 +806,13 @@ mod tests {
     #[test]
     fn exact_unsigned_bundle_joins_all_finalized_content() {
         let fixture = fixture();
-        let policy =
-            StateLifecyclePolicyV3::decode(&fixture.lifecycle_policy).expect("lifecycle fixture");
+        let lifecycle_digest = digest(&fixture.lifecycle_policy);
+        let policy = StateLifecyclePolicyV4::decode_selected(
+            lifecycle_digest,
+            lifecycle_digest,
+            &fixture.lifecycle_policy,
+        )
+        .expect("lifecycle fixture");
         let profile = AccountProfileV2::decode(&fixture.account).expect("account fixture");
         policy
             .validate_account_profile(profile)
@@ -919,15 +934,13 @@ mod tests {
             12,
             &(DirectExecutionActionV3::InlineOrdinary as u32).to_le_bytes(),
         );
-        assert!(
-            authenticate_direct_artifacts_v3(
-                fixture.selection(),
-                fixture.artifacts(),
-                &request,
-                0,
-            )
-            .is_err()
-        );
+        assert!(authenticate_direct_artifacts_v3(
+            fixture.selection(),
+            fixture.artifacts(),
+            &request,
+            0,
+        )
+        .is_err());
     }
 
     #[test]
