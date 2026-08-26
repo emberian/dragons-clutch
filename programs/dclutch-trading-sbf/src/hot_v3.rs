@@ -98,10 +98,7 @@ use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1
 use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use dclutch_registry_svm::{
     AuthenticatedRoleReceiptV1, RegistryInstructionV1,
-    continuation_v1::{
-        REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationAdmissionSeedsV1,
-        RegistryContinuationRequestV1,
-    },
+    continuation_v1::{RegistryContinuationAdmissionSeedsV1, RegistryContinuationRequestV1},
 };
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_rent_contract::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
@@ -1149,122 +1146,111 @@ fn authenticate_accelerator_top_level_v4(
     request: AcceleratorRequestV2<'_>,
 ) -> Result<Vec<u8>, ProgramError> {
     let (_, observed) = load_current_top_level_instruction(frame.instructions)?;
-    let (hot_instruction, fixed_start, strategy_start, caller_start, registry_mode) =
-        if observed.program_id == *frame.trading_program.key {
-            (
-                observed.data.clone(),
-                0_usize,
-                HOT_FIXED_ACCOUNT_COUNT_V3,
-                HOT_FIXED_ACCOUNT_COUNT_V3
-                    .checked_add(ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4)
-                    .ok_or(TradingSbfError::Content)?,
-                false,
-            )
-        } else if observed.program_id == *frame.registry.key {
-            let header = observed
-                .data
-                .get(..REGISTRY_CONTINUATION_REQUEST_BYTES_V1)
-                .ok_or(TradingSbfError::NativeSignature)?;
-            let nested = observed
-                .data
-                .get(REGISTRY_CONTINUATION_REQUEST_BYTES_V1..)
-                .ok_or(TradingSbfError::NativeSignature)?;
-            let (envelope, _) = HotExecutionEnvelopeV3::split_instruction(nested)
-                .map_err(|_| TradingSbfError::NativeSignature)?;
-            let continuation = RegistryContinuationRequestV1::decode(header)
-                .map_err(|_| TradingSbfError::NativeSignature)?;
-            let activation_digest = {
-                let data = frame
-                    .activation_cache
-                    .try_borrow_data()
-                    .map_err(|_| TradingSbfError::NativeSignature)?;
-                ContentId::new(hash(&data).to_bytes())
-                    .map_err(|_| TradingSbfError::NativeSignature)?
-            };
-            continuation
-                .verify_core_trading_hot(
-                    ContentId::new(envelope.release_set())
-                        .map_err(|_| TradingSbfError::NativeSignature)?,
-                    activation_digest,
-                    ContentId::new(hash(nested).to_bytes())
-                        .map_err(|_| TradingSbfError::NativeSignature)?,
-                    u32::try_from(nested.len()).map_err(|_| TradingSbfError::NativeSignature)?,
-                )
-                .map_err(|_| TradingSbfError::NativeSignature)?;
-            let outer = observed
-                .accounts
-                .get(..REGISTRY_CONTINUATION_OUTER_PREFIX_ACCOUNTS_V1)
-                .ok_or(TradingSbfError::NativeSignature)?;
-            let expected_outer = [
-                frame.activation_cache.key,
-                frame.core_program.key,
-                frame.core_programdata.key,
-                frame.trading_program.key,
-                frame.trading_programdata.key,
-            ];
-            if outer
-                .iter()
-                .take(expected_outer.len())
-                .zip(expected_outer)
-                .any(|(meta, key)| meta.pubkey != *key || meta.is_signer || meta.is_writable)
-            {
-                return Err(TradingSbfError::NativeSignature.into());
-            }
-            let batch = continuation
-                .role_batch_request()
-                .map_err(|_| TradingSbfError::NativeSignature)?;
-            let batch_digest = ContentId::new(hash(&batch.to_bytes()).to_bytes())
-                .map_err(|_| TradingSbfError::NativeSignature)?;
-            let seeds = RegistryContinuationAdmissionSeedsV1::new(
-                continuation,
-                frame.activation_cache.key.to_bytes(),
-                batch_digest,
-            )
-            .map_err(|_| TradingSbfError::NativeSignature)?;
-            let release = seeds.release_set();
-            let cache = seeds.activation_cache();
-            let batch = seeds.batch_request_digest();
-            let mask = seeds.role_mask();
-            let role = seeds.continuation_role();
-            let digest = seeds.continuation_digest();
-            let expected_admission = Pubkey::find_program_address(
-                &[
-                    seeds.domain(),
-                    release.as_slice(),
-                    cache.as_slice(),
-                    batch.as_slice(),
-                    mask.as_slice(),
-                    role.as_slice(),
-                    digest.as_slice(),
-                ],
-                frame.registry.key,
-            )
-            .0;
-            let admission_meta = outer.get(5).ok_or(TradingSbfError::NativeSignature)?;
-            if admission_meta.pubkey != expected_admission
-                || admission_meta.is_signer
-                || admission_meta.is_writable
-            {
-                return Err(TradingSbfError::NativeSignature.into());
-            }
-            let fixed_start = REGISTRY_CONTINUATION_OUTER_PREFIX_ACCOUNTS_V1;
-            let strategy_start = fixed_start
-                .checked_add(HOT_FIXED_ACCOUNT_COUNT_V3)
-                .and_then(|value| value.checked_add(1))
-                .ok_or(TradingSbfError::Content)?;
-            let caller_start = strategy_start
+    let (hot_instruction, fixed_start, strategy_start, caller_start, registry_mode) = if observed
+        .program_id
+        == *frame.trading_program.key
+    {
+        (
+            observed.data.clone(),
+            0_usize,
+            HOT_FIXED_ACCOUNT_COUNT_V3,
+            HOT_FIXED_ACCOUNT_COUNT_V3
                 .checked_add(ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4)
-                .ok_or(TradingSbfError::Content)?;
-            (
-                nested.to_vec(),
-                fixed_start,
-                strategy_start,
-                caller_start,
-                true,
-            )
-        } else {
-            return Err(TradingSbfError::NativeSignature.into());
+                .ok_or(TradingSbfError::Content)?,
+            false,
+        )
+    } else if observed.program_id == *frame.registry.key {
+        let (envelope, _) = HotExecutionEnvelopeV3::split_instruction(&observed.data)
+            .map_err(|_| TradingSbfError::NativeSignature)?;
+        let activation_digest = {
+            let data = frame
+                .activation_cache
+                .try_borrow_data()
+                .map_err(|_| TradingSbfError::NativeSignature)?;
+            ContentId::new(hash(&data).to_bytes()).map_err(|_| TradingSbfError::NativeSignature)?
         };
+        let continuation = RegistryContinuationRequestV1::new_core_trading_hot(
+            ContentId::new(envelope.release_set()).map_err(|_| TradingSbfError::NativeSignature)?,
+            activation_digest,
+            ContentId::new(hash(&observed.data).to_bytes())
+                .map_err(|_| TradingSbfError::NativeSignature)?,
+            u32::try_from(observed.data.len()).map_err(|_| TradingSbfError::NativeSignature)?,
+        )
+        .map_err(|_| TradingSbfError::NativeSignature)?;
+        let outer = observed
+            .accounts
+            .get(..REGISTRY_CONTINUATION_OUTER_PREFIX_ACCOUNTS_V1)
+            .ok_or(TradingSbfError::NativeSignature)?;
+        let expected_outer = [
+            frame.activation_cache.key,
+            frame.core_program.key,
+            frame.core_programdata.key,
+            frame.trading_program.key,
+            frame.trading_programdata.key,
+        ];
+        if outer
+            .iter()
+            .take(expected_outer.len())
+            .zip(expected_outer)
+            .any(|(meta, key)| meta.pubkey != *key || meta.is_signer || meta.is_writable)
+        {
+            return Err(TradingSbfError::NativeSignature.into());
+        }
+        let batch = continuation
+            .role_batch_request()
+            .map_err(|_| TradingSbfError::NativeSignature)?;
+        let batch_digest = ContentId::new(hash(&batch.to_bytes()).to_bytes())
+            .map_err(|_| TradingSbfError::NativeSignature)?;
+        let seeds = RegistryContinuationAdmissionSeedsV1::new(
+            continuation,
+            frame.activation_cache.key.to_bytes(),
+            batch_digest,
+        )
+        .map_err(|_| TradingSbfError::NativeSignature)?;
+        let release = seeds.release_set();
+        let cache = seeds.activation_cache();
+        let batch = seeds.batch_request_digest();
+        let mask = seeds.role_mask();
+        let role = seeds.continuation_role();
+        let digest = seeds.continuation_digest();
+        let expected_admission = Pubkey::find_program_address(
+            &[
+                seeds.domain(),
+                release.as_slice(),
+                cache.as_slice(),
+                batch.as_slice(),
+                mask.as_slice(),
+                role.as_slice(),
+                digest.as_slice(),
+            ],
+            frame.registry.key,
+        )
+        .0;
+        let admission_meta = outer.get(5).ok_or(TradingSbfError::NativeSignature)?;
+        if admission_meta.pubkey != expected_admission
+            || admission_meta.is_signer
+            || admission_meta.is_writable
+        {
+            return Err(TradingSbfError::NativeSignature.into());
+        }
+        let fixed_start = REGISTRY_CONTINUATION_OUTER_PREFIX_ACCOUNTS_V1;
+        let strategy_start = fixed_start
+            .checked_add(HOT_FIXED_ACCOUNT_COUNT_V3)
+            .and_then(|value| value.checked_add(1))
+            .ok_or(TradingSbfError::Content)?;
+        let caller_start = strategy_start
+            .checked_add(ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4)
+            .ok_or(TradingSbfError::Content)?;
+        (
+            observed.data.clone(),
+            fixed_start,
+            strategy_start,
+            caller_start,
+            true,
+        )
+    } else {
+        return Err(TradingSbfError::NativeSignature.into());
+    };
     let (envelope, _) = HotExecutionEnvelopeV3::split_instruction(&hot_instruction)
         .map_err(|_| TradingSbfError::NativeSignature)?;
     let fixed_metas = observed
@@ -1655,19 +1641,9 @@ fn authenticate_hot_invocation_v3(
     if observed.program_id != *registry.key {
         return Err(TradingSbfError::NativeSignature.into());
     }
-    let header = observed
-        .data
-        .get(..REGISTRY_CONTINUATION_REQUEST_BYTES_V1)
-        .ok_or(TradingSbfError::NativeSignature)?;
-    let nested = observed
-        .data
-        .get(REGISTRY_CONTINUATION_REQUEST_BYTES_V1..)
-        .ok_or(TradingSbfError::NativeSignature)?;
-    if nested != instruction_data {
+    if observed.data.as_slice() != instruction_data {
         return Err(TradingSbfError::NativeSignature.into());
     }
-    let request = RegistryContinuationRequestV1::decode(header)
-        .map_err(|_| TradingSbfError::NativeSignature)?;
     let activation = account(accounts, HOT_ACTIVATION_CACHE_ACCOUNT_V3)?;
     let activation_digest = {
         let bytes = activation
@@ -1677,14 +1653,13 @@ fn authenticate_hot_invocation_v3(
     };
     let hot_digest =
         ContentId::new(hash(instruction_data).to_bytes()).map_err(|_| TradingSbfError::Content)?;
-    request
-        .verify_core_trading_hot(
-            ContentId::new(envelope.release_set()).map_err(|_| TradingSbfError::Content)?,
-            activation_digest,
-            hot_digest,
-            u32::try_from(instruction_data.len()).map_err(|_| TradingSbfError::Content)?,
-        )
-        .map_err(|_| TradingSbfError::NativeSignature)?;
+    let request = RegistryContinuationRequestV1::new_core_trading_hot(
+        ContentId::new(envelope.release_set()).map_err(|_| TradingSbfError::Content)?,
+        activation_digest,
+        hot_digest,
+        u32::try_from(instruction_data.len()).map_err(|_| TradingSbfError::Content)?,
+    )
+    .map_err(|_| TradingSbfError::NativeSignature)?;
 
     let admission = account(accounts, HOT_FIXED_ACCOUNT_COUNT_V3)?;
     if !admission.is_signer
@@ -1774,8 +1749,7 @@ fn authenticate_hot_invocation_v3(
     }
     Ok(AuthenticatedHotInvocationV3 {
         current_instruction,
-        native_message_offset_bias: u16::try_from(REGISTRY_CONTINUATION_REQUEST_BYTES_V1)
-            .map_err(|_| TradingSbfError::NativeSignature)?,
+        native_message_offset_bias: 0,
         strategy_extras_start: HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3
             .checked_add(1)
             .ok_or(TradingSbfError::Content)?,
@@ -7423,8 +7397,7 @@ mod tests {
         )
         .0;
 
-        let mut top_data = continuation.to_bytes().to_vec();
-        top_data.extend_from_slice(&hot_bytes);
+        let top_data = hot_bytes.clone();
         let outer_keys = [
             keys[HOT_ACTIVATION_CACHE_ACCOUNT_V3],
             keys[HOT_CORE_PROGRAM_ACCOUNT_V3],
@@ -7433,26 +7406,29 @@ mod tests {
             keys[HOT_TRADING_PROGRAMDATA_ACCOUNT_V3],
             keys[HOT_FIXED_ACCOUNT_COUNT_V3],
         ];
-        let mut metas = outer_keys
-            .iter()
-            .map(|key| BorrowedAccountMeta {
-                pubkey: key,
-                is_signer: false,
-                is_writable: false,
-            })
-            .collect::<Vec<_>>();
-        metas.extend(
-            keys.iter()
-                .enumerate()
-                .map(|(index, key)| BorrowedAccountMeta {
+        let build_metas = || {
+            let mut metas = outer_keys
+                .iter()
+                .map(|key| BorrowedAccountMeta {
                     pubkey: key,
                     is_signer: false,
-                    is_writable: index == HOT_MARKET_ACCOUNT_V3 || index == HOT_ROOT_ACCOUNT_V3,
-                }),
-        );
+                    is_writable: false,
+                })
+                .collect::<Vec<_>>();
+            metas.extend(
+                keys.iter()
+                    .enumerate()
+                    .map(|(index, key)| BorrowedAccountMeta {
+                        pubkey: key,
+                        is_signer: false,
+                        is_writable: index == HOT_MARKET_ACCOUNT_V3 || index == HOT_ROOT_ACCOUNT_V3,
+                    }),
+            );
+            metas
+        };
         let borrowed = [BorrowedInstruction {
             program_id: &registry,
-            accounts: metas,
+            accounts: build_metas(),
             data: &top_data,
         }];
         let mut instructions_data = construct_instructions_data(&borrowed);
@@ -7497,9 +7473,35 @@ mod tests {
             authenticated.strategy_extras_start,
             HOT_FIXED_ACCOUNT_COUNT_V3 + 1
         );
+        assert_eq!(authenticated.native_message_offset_bias, 0);
         assert!(authenticated.permits_fixed_market_union);
         assert!(HotFrameV3::parse(&program_id, &accounts, false).is_err());
         assert!(HotFrameV3::parse(&program_id, &accounts, true).is_ok());
+
+        let mut substituted_data = top_data.clone();
+        *substituted_data.last_mut().expect("family byte") ^= 1;
+        let substituted = [BorrowedInstruction {
+            program_id: &registry,
+            accounts: build_metas(),
+            data: &substituted_data,
+        }];
+        let mut substituted_instructions = construct_instructions_data(&substituted);
+        let substituted_end = substituted_instructions.len();
+        substituted_instructions
+            .get_mut(substituted_end - 2..)
+            .expect("substituted current instruction")
+            .copy_from_slice(&0_u16.to_le_bytes());
+        accounts[HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3]
+            .try_borrow_mut_data()
+            .expect("instructions data")
+            .copy_from_slice(&substituted_instructions);
+        assert!(
+            authenticate_hot_invocation_v3(&program_id, &accounts, &hot_bytes, envelope).is_err()
+        );
+        accounts[HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3]
+            .try_borrow_mut_data()
+            .expect("instructions restore")
+            .copy_from_slice(&instructions_data);
 
         accounts[HOT_FIXED_ACCOUNT_COUNT_V3].is_signer = false;
         assert!(
