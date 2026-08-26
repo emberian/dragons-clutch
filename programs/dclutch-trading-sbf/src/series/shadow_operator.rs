@@ -352,7 +352,7 @@ mod tests {
             lamports: 27,
             data: b"exact runtime bytes",
             signer: false,
-            writable: true,
+            writable: false,
             executable: false,
         }];
         let scalars = [28_u64];
