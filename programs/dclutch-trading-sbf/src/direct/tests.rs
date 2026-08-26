@@ -1,4 +1,4 @@
-use super::{complementary::*, physical::*};
+use super::{buy_escrow::*, complementary::*, physical::*};
 use dclutch_claims_svm::{
     CallerRole as ClaimsCallerRole, ClaimsPlanV1, ClaimsReceiptV1,
     affine_batch_v2::{
@@ -6,7 +6,10 @@ use dclutch_claims_svm::{
         AffineBatchRowInputV2, AffineBatchRowV2, DeltaDirectionV2, SignedMagnitudeV2,
     },
 };
-use dclutch_custody_contract::{CustodyReceiptV1, ReceiptEvidenceV1};
+use dclutch_custody_contract::{
+    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_PDA_DOMAIN_V1, CUSTODY_VAULT_PDA_DOMAIN_V1,
+    CompartmentV1, CustodyReplayV1, OperationV1,
+};
 use dclutch_direct_codec::{
     intent_v2::CompactIntentV2,
     successor::{
@@ -15,9 +18,10 @@ use dclutch_direct_codec::{
         DIRECT_REGISTERED_RECORD_BYTES_V2, DirectExecutionConfigV1, DirectRegisteredIntentV2,
         DirectRootStateV1, MakerReplayFirstUseV1, MakerReplayObservationV1, MakerReplayRootV1,
         MakerReplayVacancyV1, RegisteredExecutionV2, RegisteredFillCandidateV2,
-        RegisteredFillInputV2, RegisteredIntentCreationV2, RegisteredOrdinaryInputV2,
-        RegisteredParticipantV2, RegisteredRecordAfterFillV2, RegisteredRecordFirstUseV2,
-        preview_registered_fill_v2, register_intent_v2, settle_registered_complementary_v2,
+        RegisteredFillInputV2, RegisteredIntentCreationV2, RegisteredIntentSeedsV2,
+        RegisteredOrdinaryInputV2, RegisteredParticipantV2, RegisteredRecordAfterFillV2,
+        RegisteredRecordFirstUseV2, RegisteredTerminalEvidenceV2, preview_registered_fill_v2,
+        register_intent_v2, settle_registered_complementary_v2, terminate_registered_intent_v2,
     },
 };
 use dclutch_market_core_codec::{
@@ -25,6 +29,7 @@ use dclutch_market_core_codec::{
     Phase, Product, Readiness, Realm, ReleaseSet,
 };
 use solana_program::hash::{hash, hashv};
+use solana_program::pubkey::Pubkey;
 
 fn id(byte: u8) -> [u8; 32] {
     [byte; 32]
@@ -162,13 +167,7 @@ fn register(
     .expect("registration")
 }
 
-fn fixture(
-    fee_basis_points: u16,
-) -> (
-    RegisteredOrdinaryInputV2,
-    DirectOrdinaryPhysicalContextV2,
-    DirectOrdinaryCollateralFrameV2,
-) {
+fn fixture(fee_basis_points: u16) -> (RegisteredOrdinaryInputV2, DirectOrdinaryClaimsContextV2) {
     let selected = config(fee_basis_points, id(6));
     let seller = register(
         DirectRootStateV1::new(),
@@ -205,59 +204,28 @@ fn fixture(
                 execution_price: 50,
             },
         },
-        DirectOrdinaryPhysicalContextV2 {
+        DirectOrdinaryClaimsContextV2 {
+            core_market: core_market_view(3),
             trading_program: id(10),
             claims_program: id(11),
-            custody_program: id(12),
-            custody_authority: id(23),
-            release_set: id(13),
-            market: id(1),
-            realm: id(14),
-            mint: id(15),
-            token_program: id(16),
             parent_request_digest: id(17),
-            buyer_maker_root: id(18),
-            buyer_record: id(19),
-            generation: 4,
             claims_market_revision: 7,
             seller_position_revision: 8,
             buyer_position_revision: 9,
-            custody_replay_revision: 5,
-        },
-        DirectOrdinaryCollateralFrameV2 {
-            buyer_source: DirectExternalDebitV2 {
-                account: id(21),
-                owner: id(3),
-                delegate: id(23),
-                delegated_amount: buyer.record.reserved_collateral(),
-                balance: 100,
-            },
-            seller_destination: DirectExternalCollateralV2 {
-                account: id(20),
-                owner: id(2),
-                balance: 30,
-            },
-            fee_destination: DirectExternalCollateralV2 {
-                account: id(22),
-                owner: id(6),
-                balance: 40,
-            },
         },
     )
 }
 
 fn prepare(
     input: RegisteredOrdinaryInputV2,
-    context: DirectOrdinaryPhysicalContextV2,
-    collateral: DirectOrdinaryCollateralFrameV2,
-) -> (DirectOrdinaryPhysicalPlanV2, [u8; 232]) {
+    context: DirectOrdinaryClaimsContextV2,
+) -> (DirectOrdinaryClaimsPlanV2, [u8; 232]) {
     let mut quantities = [0_u8; 24];
     let mut scratch = [0_u8; 232];
     let mut output = [0xa5_u8; 232];
-    let plan = prepare_registered_ordinary_physical_v2(
+    let plan = prepare_registered_ordinary_claims_v2(
         input,
         context,
-        collateral,
         &mut quantities,
         &mut scratch,
         &mut output,
@@ -266,49 +234,14 @@ fn prepare(
     (plan, output)
 }
 
-fn custody_effect(plan: DirectOrdinaryPhysicalPlanV2, index: usize) -> DirectCustodyEffectV2 {
-    plan.custody
-        .get(index)
-        .copied()
-        .flatten()
-        .expect("positive canonical Custody effect")
-}
-
 #[test]
-fn ordinary_projection_conserves_quote_and_orders_net_before_combined_fee() {
-    let (input, context, collateral) = fixture(1_000);
-    let (plan, claims_bytes) = prepare(input, context, collateral);
+fn ordinary_claims_projection_binds_runtime_width_and_settlement() {
+    let (input, context) = fixture(1_000);
+    let (plan, claims_bytes) = prepare(input, context);
     assert_eq!(plan.settlement.gross_collateral, 10);
     assert_eq!(plan.settlement.seller_net_collateral_credit, 9);
     assert_eq!(plan.settlement.total_fee_transfer, 2);
     assert_eq!(plan.settlement.buyer_collateral_debit, 11);
-    assert_eq!(plan.custody_count, 2);
-    assert_eq!(plan.buyer_source_after, 89);
-    assert_eq!(plan.buyer_delegated_after, 55);
-    assert_eq!(plan.seller_destination_after, 39);
-    assert_eq!(plan.fee_destination_after, 42);
-
-    let net = custody_effect(plan, 0);
-    assert_eq!(net.request.amount, 9);
-    assert_eq!(net.request.semantic.transfer_index, 0);
-    assert_eq!(net.request.expected_revision, 5);
-    assert_eq!(net.request.resulting_revision, 6);
-    assert_eq!(net.request.source, collateral.buyer_source.account);
-    assert_eq!(
-        net.request.destination,
-        collateral.seller_destination.account
-    );
-    assert_eq!(net.request.semantic.source_owner, id(3));
-    assert_eq!(net.request.semantic.destination_owner, id(2));
-
-    let fee = custody_effect(plan, 1);
-    assert_eq!(fee.request.amount, 2);
-    assert_eq!(fee.request.semantic.transfer_index, 1);
-    assert_eq!(fee.request.expected_revision, 6);
-    assert_eq!(fee.request.resulting_revision, 7);
-    assert_eq!(fee.request.destination, collateral.fee_destination.account);
-    assert_eq!(fee.request.semantic.destination_owner, id(6));
-
     let claims = ClaimsPlanV1::decode(&claims_bytes).expect("Claims plan");
     assert_eq!(claims.source_owner(), id(2));
     assert_eq!(claims.destination_owner(), id(3));
@@ -318,121 +251,16 @@ fn ordinary_projection_conserves_quote_and_orders_net_before_combined_fee() {
 }
 
 #[test]
-fn zero_and_full_fee_profiles_emit_only_the_positive_canonical_transfer() {
-    let (input, context, collateral) = fixture(0);
-    let (zero_fee, _) = prepare(input, context, collateral);
-    assert_eq!(zero_fee.custody_count, 1);
-    assert_eq!(custody_effect(zero_fee, 0).request.amount, 10);
-    assert_eq!(zero_fee.custody.get(1), Some(&None));
-
-    let (input, context, collateral) = fixture(10_000);
-    let (full_fee, _) = prepare(input, context, collateral);
-    assert_eq!(full_fee.settlement.seller_net_collateral_credit, 0);
-    assert_eq!(full_fee.settlement.total_fee_transfer, 20);
-    assert_eq!(full_fee.custody_count, 1);
-    let fee = custody_effect(full_fee, 0);
-    assert_eq!(fee.request.amount, 20);
-    assert_eq!(fee.request.semantic.transfer_index, 0);
-    assert_eq!(fee.request.destination, collateral.fee_destination.account);
-    assert_eq!(full_fee.custody.get(1), Some(&None));
-}
-
-#[test]
-fn hostile_endpoint_owner_balance_width_and_output_refuse_atomically() {
-    let (input, context, collateral) = fixture(1_000);
+fn hostile_core_width_and_output_refuse_atomically() {
+    let (input, context) = fixture(1_000);
     let mut quantities = [0_u8; 24];
     let mut scratch = [0_u8; 232];
     let mut output = [0xa5_u8; 232];
     let before = output;
-    let wrong_owner = DirectOrdinaryCollateralFrameV2 {
-        buyer_source: DirectExternalDebitV2 {
-            owner: id(99),
-            ..collateral.buyer_source
-        },
-        ..collateral
-    };
     assert_eq!(
-        prepare_registered_ordinary_physical_v2(
+        prepare_registered_ordinary_claims_v2(
             input,
             context,
-            wrong_owner,
-            &mut quantities,
-            &mut scratch,
-            &mut output,
-        ),
-        Err(DirectPhysicalError::Binding)
-    );
-    assert_eq!(output, before);
-
-    let wrong_delegate = DirectOrdinaryCollateralFrameV2 {
-        buyer_source: DirectExternalDebitV2 {
-            delegate: id(98),
-            ..collateral.buyer_source
-        },
-        ..collateral
-    };
-    assert_eq!(
-        prepare_registered_ordinary_physical_v2(
-            input,
-            context,
-            wrong_delegate,
-            &mut quantities,
-            &mut scratch,
-            &mut output,
-        ),
-        Err(DirectPhysicalError::Binding)
-    );
-    assert_eq!(output, before);
-
-    let allowance_substitution = DirectOrdinaryCollateralFrameV2 {
-        buyer_source: DirectExternalDebitV2 {
-            delegated_amount: collateral
-                .buyer_source
-                .delegated_amount
-                .checked_add(1)
-                .expect("hostile allowance"),
-            ..collateral.buyer_source
-        },
-        ..collateral
-    };
-    assert_eq!(
-        prepare_registered_ordinary_physical_v2(
-            input,
-            context,
-            allowance_substitution,
-            &mut quantities,
-            &mut scratch,
-            &mut output,
-        ),
-        Err(DirectPhysicalError::Binding)
-    );
-    assert_eq!(output, before);
-
-    let underfunded = DirectOrdinaryCollateralFrameV2 {
-        buyer_source: DirectExternalDebitV2 {
-            balance: 10,
-            ..collateral.buyer_source
-        },
-        ..collateral
-    };
-    assert_eq!(
-        prepare_registered_ordinary_physical_v2(
-            input,
-            context,
-            underfunded,
-            &mut quantities,
-            &mut scratch,
-            &mut output,
-        ),
-        Err(DirectPhysicalError::Arithmetic)
-    );
-    assert_eq!(output, before);
-
-    assert_eq!(
-        prepare_registered_ordinary_physical_v2(
-            input,
-            context,
-            collateral,
             &mut quantities[..16],
             &mut scratch,
             &mut output,
@@ -444,8 +272,8 @@ fn hostile_endpoint_owner_balance_width_and_output_refuse_atomically() {
 
 #[test]
 fn exact_child_receipts_accept_and_substitutions_refuse() {
-    let (input, context, collateral) = fixture(1_000);
-    let (plan, claims_bytes) = prepare(input, context, collateral);
+    let (input, context) = fixture(1_000);
+    let (_plan, claims_bytes) = prepare(input, context);
     let claims_plan = ClaimsPlanV1::decode(&claims_bytes).expect("Claims plan");
     let claims_receipt = ClaimsReceiptV1::new(
         claims_plan,
@@ -464,46 +292,14 @@ fn exact_child_receipts_accept_and_substitutions_refuse() {
     let mut hostile_claims = claims_receipt;
     *hostile_claims.get_mut(80).expect("hostile digest byte") ^= 1;
     assert!(verify_direct_claims_receipt_v2(context, &claims_bytes, &hostile_claims).is_err());
-
-    for effect in plan.custody.into_iter().flatten() {
-        let request_bytes = effect.request.to_bytes().expect("Custody request");
-        let poststate = id(71);
-        let receipt = CustodyReceiptV1::new(
-            effect.request,
-            hash(&request_bytes).to_bytes(),
-            ReceiptEvidenceV1 {
-                source_before: effect
-                    .source_after
-                    .checked_add(effect.request.amount)
-                    .expect("source before"),
-                source_after: effect.source_after,
-                destination_before: effect
-                    .destination_after
-                    .checked_sub(effect.request.amount)
-                    .expect("destination before"),
-                destination_after: effect.destination_after,
-                poststate_commitment: id(72),
-                replay_state_digest: poststate,
-            },
-        )
-        .expect("Custody receipt")
-        .to_bytes()
-        .expect("Custody receipt bytes");
-        verify_direct_custody_receipt_v2(effect, &receipt, poststate)
-            .expect("Custody acknowledgement");
-        assert_eq!(
-            verify_direct_custody_receipt_v2(effect, &receipt, id(99)),
-            Err(DirectPhysicalError::Custody)
-        );
-    }
 }
 
 #[test]
 fn state_candidate_is_commit_last_for_partial_and_terminal_records() {
-    let (input, context, collateral) = fixture(1_000);
+    let (input, context) = fixture(1_000);
     let selected = input.execution.config;
     let width = input.execution.outcome_count;
-    let (partial, _) = prepare(input, context, collateral);
+    let (partial, _) = prepare(input, context);
     let mut seller_maker = [0xa5; DIRECT_MAKER_REPLAY_BYTES_V1];
     let mut buyer_maker = [0xa5; DIRECT_MAKER_REPLAY_BYTES_V1];
     let mut seller_scratch = [0; DIRECT_REGISTERED_RECORD_BYTES_V2];
@@ -549,8 +345,7 @@ fn state_candidate_is_commit_last_for_partial_and_terminal_records() {
         },
         ..input
     };
-    let (terminal, _) = prepare(terminal_input, context, collateral);
-    assert_eq!(terminal.buyer_delegated_after, 11);
+    let (terminal, _) = prepare(terminal_input, context);
     let mut terminal_seller_maker = [0xa5; DIRECT_MAKER_REPLAY_BYTES_V1];
     let mut terminal_buyer_maker = [0xa5; DIRECT_MAKER_REPLAY_BYTES_V1];
     let mut terminal_seller_scratch = [0; DIRECT_REGISTERED_RECORD_BYTES_V2];
@@ -609,48 +404,6 @@ fn state_candidate_is_commit_last_for_partial_and_terminal_records() {
     assert_eq!(terminal_buyer_maker, buyer_before);
     assert_eq!(terminal_seller_record, seller_record_before);
     assert_eq!(terminal_buyer_record, buyer_record_before);
-}
-
-#[test]
-fn consistent_seller_fee_alias_accumulates_both_ordered_credits() {
-    let (input, context, collateral) = fixture(1_000);
-    let aliased = DirectOrdinaryCollateralFrameV2 {
-        seller_destination: DirectExternalCollateralV2 {
-            account: id(22),
-            owner: id(6),
-            balance: 40,
-        },
-        fee_destination: DirectExternalCollateralV2 {
-            account: id(22),
-            owner: id(6),
-            balance: 40,
-        },
-        ..collateral
-    };
-    let seller_intent = CompactIntentV2 {
-        collateral_account: id(22),
-        ..input.seller.record.intent()
-    };
-    let selected = input.execution.config;
-    let seller = register(DirectRootStateV1::new(), id(6), seller_intent, selected, 4);
-    let buyer = register(seller.root, id(3), input.buyer.record.intent(), selected, 5);
-    let aliased_input = RegisteredOrdinaryInputV2 {
-        root: buyer.root,
-        seller: RegisteredParticipantV2 {
-            maker_root: seller.maker_root,
-            record: seller.record,
-            observed_record_lamports: 100,
-        },
-        buyer: RegisteredParticipantV2 {
-            maker_root: buyer.maker_root,
-            record: buyer.record,
-            observed_record_lamports: 100,
-        },
-        ..input
-    };
-    let (plan, _) = prepare(aliased_input, context, aliased);
-    assert_eq!(plan.seller_destination_after, 51);
-    assert_eq!(plan.fee_destination_after, 51);
 }
 
 fn complementary_context() -> DirectComplementaryPhysicalContextV2 {
@@ -1107,5 +860,408 @@ fn complementary_claims_substitution_and_wrong_action_refuse() {
             &packet,
         ),
         Err(DirectPhysicalError::Binding)
+    );
+}
+
+fn derive_pda(program: [u8; 32], seeds: &[&[u8]]) -> ([u8; 32], u8) {
+    let (address, bump) = Pubkey::find_program_address(seeds, &Pubkey::new_from_array(program));
+    (address.to_bytes(), bump)
+}
+
+fn buy_escrow_fixture() -> (
+    RegisteredIntentCreationV2,
+    DirectBuyEscrowContextV2,
+    DirectBuyEscrowAccountsV2,
+    DirectExternalDebitV2,
+) {
+    let selected = config(1_000, id(6));
+    let maker = id(3);
+    let signed = intent(1, 0, id(21), 1_000);
+    let authenticated = AuthenticatedCompactIntentV2::from_adjacent_ed25519(maker, signed)
+        .expect("authenticated Buy");
+    let record_seeds = RegisteredIntentSeedsV2::new(authenticated).expect("record seeds");
+    let (record, record_bump) = derive_pda(id(10), &record_seeds.as_slices());
+    let creation = register(
+        DirectRootStateV1::new(),
+        maker,
+        signed,
+        selected,
+        record_bump,
+    );
+    let market = id(1);
+    let release_set = id(13);
+    let custody_program = id(20);
+    let (custody_authority, _) = derive_pda(
+        custody_program,
+        &[CUSTODY_AUTHORITY_PDA_DOMAIN_V1, &market, &release_set],
+    );
+    let (replay, _) = derive_pda(
+        custody_program,
+        &[CUSTODY_REPLAY_PDA_DOMAIN_V1, &market, &release_set, &record],
+    );
+    let compartment = [CompartmentV1::TradingPrincipal.tag()];
+    let (vault, _) = derive_pda(
+        custody_program,
+        &[
+            CUSTODY_VAULT_PDA_DOMAIN_V1,
+            &market,
+            &release_set,
+            &record,
+            &compartment,
+        ],
+    );
+    let accounts = DirectBuyEscrowAccountsV2 {
+        record,
+        replay,
+        vault,
+        custody_authority,
+    };
+    let source = DirectExternalDebitV2 {
+        account: signed.collateral_account,
+        owner: maker,
+        delegate: custody_authority,
+        delegated_amount: creation.record.reserved_collateral(),
+        balance: 100,
+    };
+    (
+        creation,
+        DirectBuyEscrowContextV2 {
+            core_market: core_market_view(3),
+            trading_program: id(10),
+            parent_request_digest: id(17),
+        },
+        accounts,
+        source,
+    )
+}
+
+fn live_buy_replay(
+    creation: RegisteredIntentCreationV2,
+    context: DirectBuyEscrowContextV2,
+    accounts: DirectBuyEscrowAccountsV2,
+) -> CustodyReplayV1 {
+    CustodyReplayV1 {
+        caller_role: dclutch_custody_contract::CallerRoleV1::Trading,
+        release_set: context.core_market.release_set().release_set_id.to_bytes(),
+        market: context.core_market.market().to_bytes(),
+        realm: context.core_market.realm().realm_id.to_bytes(),
+        context: accounts.record,
+        caller_program: context.trading_program,
+        rent_refund: creation.record.rent_owner(),
+        open_vault_count: 1,
+        next_revision: 3,
+        generation: creation.record.intent().generation,
+        last_request_digest: id(70),
+        last_poststate_commitment: id(71),
+    }
+}
+
+#[test]
+fn registered_buy_deposits_exact_reserve_into_record_keyed_custody() {
+    let (creation, context, accounts, source) = buy_escrow_fixture();
+    let plan = prepare_buy_escrow_registration_v2(DirectBuyEscrowRegistrationInputV2 {
+        creation,
+        accounts,
+        source,
+        funding: DirectBuyEscrowCreationFundingV2 {
+            payer: id(80),
+            replay_rent_lamports: 20,
+            vault_rent_lamports: 30,
+        },
+        context,
+    })
+    .expect("funded Buy registration");
+    assert_eq!(plan.requests[0].operation, OperationV1::InitializeReplay);
+    assert_eq!(plan.requests[1].operation, OperationV1::OpenVault);
+    assert_eq!(plan.requests[2].operation, OperationV1::Transfer);
+    assert_eq!(plan.requests[0].context, accounts.record);
+    assert_eq!(plan.requests[1].destination, accounts.vault);
+    assert_eq!(plan.requests[1].destination_vault_context, accounts.record);
+    assert_eq!(plan.requests[2].source, source.account);
+    assert_eq!(plan.requests[2].destination, accounts.vault);
+    assert_eq!(
+        plan.requests[2].amount,
+        creation.record.reserved_collateral()
+    );
+    assert_eq!(plan.delegated_after, 0);
+    assert_eq!(plan.vault_after, creation.record.reserved_collateral());
+
+    let hostile_accounts = DirectBuyEscrowAccountsV2 {
+        vault: id(99),
+        ..accounts
+    };
+    assert_eq!(
+        prepare_buy_escrow_registration_v2(DirectBuyEscrowRegistrationInputV2 {
+            accounts: hostile_accounts,
+            creation,
+            source,
+            funding: DirectBuyEscrowCreationFundingV2 {
+                payer: id(80),
+                replay_rent_lamports: 20,
+                vault_rent_lamports: 30,
+            },
+            context,
+        }),
+        Err(DirectPhysicalError::Binding)
+    );
+}
+
+#[test]
+fn buy_cancel_refunds_then_closes_vault_and_replay() {
+    let (creation, context, accounts, _source) = buy_escrow_fixture();
+    let terminal = terminate_registered_intent_v2(
+        creation.root,
+        creation.maker_root,
+        creation.record,
+        config(1_000, id(6)),
+        3,
+        RegisteredTerminalEvidenceV2::Cancel(
+            AuthenticatedCompactIntentV2::from_adjacent_ed25519(
+                creation.record.maker(),
+                creation.record.intent(),
+            )
+            .expect("cancel signature"),
+        ),
+        100,
+    )
+    .expect("cancel");
+    let plan = prepare_buy_escrow_unwind_v2(
+        DirectBuyEscrowTerminalObservationV2 {
+            record_before: creation.record,
+            accounts,
+            replay: live_buy_replay(creation, context, accounts),
+            vault_balance: creation.record.reserved_collateral(),
+            refund_destination: DirectExternalCollateralV2 {
+                account: creation.record.intent().collateral_account,
+                owner: creation.record.maker(),
+                balance: 10,
+            },
+            vault_rent_lamports: 30,
+            replay_rent_lamports: 20,
+            context,
+        },
+        terminal,
+    )
+    .expect("terminal escrow plan");
+    assert_eq!(plan.request_count, 3);
+    let refund = plan.requests[0].expect("refund");
+    assert_eq!(refund.operation, OperationV1::Transfer);
+    assert_eq!(refund.source, accounts.vault);
+    assert_eq!(refund.amount, creation.record.reserved_collateral());
+    assert_eq!(
+        plan.requests[1].expect("close Vault").operation,
+        OperationV1::CloseVault
+    );
+    assert_eq!(
+        plan.requests[2].expect("close replay").operation,
+        OperationV1::CloseReplay
+    );
+    assert_eq!(plan.refund_destination_after, 76);
+
+    let expired = terminate_registered_intent_v2(
+        creation.root,
+        creation.maker_root,
+        creation.record,
+        config(1_000, id(6)),
+        3,
+        RegisteredTerminalEvidenceV2::Expire { slot: 21 },
+        100,
+    )
+    .expect("strictly post-interval expiry");
+    let expired_plan = prepare_buy_escrow_unwind_v2(
+        DirectBuyEscrowTerminalObservationV2 {
+            record_before: creation.record,
+            accounts,
+            replay: live_buy_replay(creation, context, accounts),
+            vault_balance: creation.record.reserved_collateral(),
+            refund_destination: DirectExternalCollateralV2 {
+                account: creation.record.intent().collateral_account,
+                owner: creation.record.maker(),
+                balance: 10,
+            },
+            vault_rent_lamports: 30,
+            replay_rent_lamports: 20,
+            context,
+        },
+        expired,
+    )
+    .expect("expiry escrow plan");
+    assert_eq!(expired_plan.requests, plan.requests);
+}
+
+#[test]
+fn full_buy_fill_with_zero_residual_closes_without_refund_transfer() {
+    let (creation, context, accounts, _source) = buy_escrow_fixture();
+    let candidate = preview_registered_fill_v2(RegisteredFillInputV2 {
+        root: creation.root,
+        participant: RegisteredParticipantV2 {
+            maker_root: creation.maker_root,
+            record: creation.record,
+            observed_record_lamports: 100,
+        },
+        execution: RegisteredExecutionV2 {
+            config: config(1_000, id(6)),
+            outcome_count: 3,
+            slot: 5,
+            fill: 100,
+            execution_price: 60,
+        },
+    })
+    .expect("full Buy fill");
+    match candidate.record {
+        RegisteredRecordAfterFillV2::Closed(close) => {
+            assert_eq!(close.collateral_refund, 0);
+            assert_eq!(close.claim_refund, 0);
+        }
+        RegisteredRecordAfterFillV2::Live(_) => panic!("full fill must close"),
+    }
+    let plan = prepare_buy_escrow_full_fill_v2(
+        DirectBuyEscrowTerminalObservationV2 {
+            record_before: creation.record,
+            accounts,
+            replay: live_buy_replay(creation, context, accounts),
+            vault_balance: 0,
+            refund_destination: DirectExternalCollateralV2 {
+                account: creation.record.intent().collateral_account,
+                owner: creation.record.maker(),
+                balance: 10,
+            },
+            vault_rent_lamports: 30,
+            replay_rent_lamports: 20,
+            context,
+        },
+        candidate,
+    )
+    .expect("full-fill close");
+    assert_eq!(plan.request_count, 2);
+    assert_eq!(
+        plan.requests[0].expect("close Vault").operation,
+        OperationV1::CloseVault
+    );
+    assert_eq!(
+        plan.requests[1].expect("close replay").operation,
+        OperationV1::CloseReplay
+    );
+    assert_eq!(plan.requests[2], None);
+
+    assert_eq!(plan.refund_destination_after, 10);
+}
+
+fn ordinary_buy_escrow_input(fill: u64, execution_price: u64) -> DirectBuyEscrowFillInputV2 {
+    let (buyer, context, accounts, source) = buy_escrow_fixture();
+    let seller = register(
+        buyer.root,
+        id(2),
+        intent(0, 0, id(20), 1_000),
+        config(1_000, id(6)),
+        7,
+    );
+    DirectBuyEscrowFillInputV2 {
+        direct: RegisteredOrdinaryInputV2 {
+            root: seller.root,
+            seller: RegisteredParticipantV2 {
+                maker_root: seller.maker_root,
+                record: seller.record,
+                observed_record_lamports: 100,
+            },
+            buyer: RegisteredParticipantV2 {
+                maker_root: buyer.maker_root,
+                record: buyer.record,
+                observed_record_lamports: 100,
+            },
+            execution: RegisteredExecutionV2 {
+                config: config(1_000, id(6)),
+                outcome_count: 3,
+                slot: 5,
+                fill,
+                execution_price,
+            },
+        },
+        accounts,
+        replay: live_buy_replay(buyer, context, accounts),
+        vault_balance: buyer.record.reserved_collateral(),
+        seller_destination: DirectExternalCollateralV2 {
+            account: seller.record.intent().collateral_account,
+            owner: seller.record.maker(),
+            balance: 30,
+        },
+        fee_destination: DirectExternalCollateralV2 {
+            account: id(22),
+            owner: id(6),
+            balance: 40,
+        },
+        buyer_refund_destination: DirectExternalCollateralV2 {
+            account: source.account,
+            owner: source.owner,
+            balance: source
+                .balance
+                .checked_sub(buyer.record.reserved_collateral())
+                .expect("post-registration source"),
+        },
+        vault_rent_lamports: 30,
+        replay_rent_lamports: 20,
+        context,
+    }
+}
+
+#[test]
+fn partial_buy_fill_spends_record_vault_and_keeps_lifecycle_live() {
+    let input = ordinary_buy_escrow_input(20, 50);
+    let plan = prepare_buy_escrow_fill_v2(input).expect("partial escrow fill");
+    assert_eq!(plan.request_count, 2);
+    assert!(!plan.closes_escrow);
+    assert_eq!(plan.vault_after, 55);
+    assert_eq!(plan.seller_destination_after, 39);
+    assert_eq!(plan.fee_destination_after, 42);
+    assert_eq!(plan.buyer_refund_destination_after, 34);
+    let net = plan.requests[0].expect("seller net");
+    assert_eq!(net.operation, OperationV1::Transfer);
+    assert_eq!(net.source_compartment, CompartmentV1::TradingPrincipal);
+    assert_eq!(net.source, input.accounts.vault);
+    assert_eq!(net.amount, 9);
+    assert_eq!(net.expected_revision, 3);
+    let fee = plan.requests[1].expect("combined fee");
+    assert_eq!(fee.amount, 2);
+    assert_eq!(fee.expected_revision, 4);
+    assert_eq!(plan.requests[2], None);
+
+    let mut high_revision = input;
+    high_revision.replay.next_revision = 70_000;
+    let high_revision_plan =
+        prepare_buy_escrow_fill_v2(high_revision).expect("u64 Custody replay revision");
+    let high_net = high_revision_plan.requests[0].expect("high-revision net");
+    assert_eq!(high_net.expected_revision, 70_000);
+    assert_eq!(high_net.semantic.transfer_index, 0);
+
+    let underfunded = DirectBuyEscrowFillInputV2 {
+        vault_balance: input.vault_balance - 1,
+        ..input
+    };
+    assert_eq!(
+        prepare_buy_escrow_fill_v2(underfunded),
+        Err(DirectPhysicalError::Binding)
+    );
+}
+
+#[test]
+fn terminal_price_improved_buy_fill_refunds_and_closes_after_transfers() {
+    let input = ordinary_buy_escrow_input(100, 50);
+    let plan = prepare_buy_escrow_fill_v2(input).expect("terminal escrow fill");
+    assert_eq!(plan.request_count, 5);
+    assert!(plan.closes_escrow);
+    assert_eq!(plan.vault_after, 0);
+    assert_eq!(plan.seller_destination_after, 75);
+    assert_eq!(plan.fee_destination_after, 50);
+    assert_eq!(plan.buyer_refund_destination_after, 45);
+    assert_eq!(plan.requests[0].expect("net").amount, 45);
+    assert_eq!(plan.requests[1].expect("fees").amount, 10);
+    assert_eq!(plan.requests[2].expect("residual").amount, 11);
+    assert_eq!(
+        plan.requests[3].expect("close Vault").operation,
+        OperationV1::CloseVault
+    );
+    assert_eq!(
+        plan.requests[4].expect("close replay").operation,
+        OperationV1::CloseReplay
     );
 }

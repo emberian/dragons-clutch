@@ -969,6 +969,19 @@ impl RegisteredIntentSeedsV2 {
         })
     }
 
+    /// Project the same unique coordinate from an already authenticated live record.
+    ///
+    /// This is the physical adapter path after record decode; it does not mint a
+    /// second signature authority or reconstruct an authenticated intent wrapper.
+    pub const fn from_record(record: DirectRegisteredIntentV2) -> Self {
+        Self {
+            market: record.intent.market,
+            generation: record.intent.generation.to_le_bytes(),
+            maker: record.maker,
+            nonce: record.intent.nonce.to_le_bytes(),
+        }
+    }
+
     /// Borrow ordered seeds excluding the bump.
     pub fn as_slices(&self) -> [&[u8]; 5] {
         [
