@@ -7,15 +7,21 @@
 //! protected values.
 
 use dclutch_account_profile_contract::lifecycle_v3::{
-    ACTION_PLAN_BYTES, HEADER_BYTES, IMMUTABLE_IDENTITY_BINDING_BYTES, PROTECTED_OUTPUT_BYTES,
-    RECIPE_BYTES, SEED_BYTES, StateLifecyclePolicyV4,
+    ACTION_PLAN_BYTES, CURRENT_RENT_QUOTE_BYTES_V5, HEADER_BYTES, IMMUTABLE_IDENTITY_BINDING_BYTES,
+    PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SEED_BYTES, StateLifecyclePolicyV4,
+    StateLifecyclePolicyV5,
     encode::{
-        LifecycleAccountCoordinateV3, LifecycleGuardInputV3,
+        LifecycleAccountCoordinateV3, LifecycleCurrentRentQuoteInputV5, LifecycleGuardInputV3,
         LifecycleImmutableIdentityBindingInputV4, LifecycleOperationInputV3, LifecyclePlanInputV3,
         LifecycleProtectedOutputsInputV3, LifecycleRecipeInputV3, LifecycleRegisterCoordinateV3,
-        LifecycleSeedInputV3, encode_lifecycle_policy_v4_atomic,
+        LifecycleSeedInputV3, encode_lifecycle_policy_v4_atomic, encode_lifecycle_policy_v5_atomic,
     },
 };
+use dclutch_claims_svm::{
+    liability_basis_state_v2::LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+    protocol_position_v2::PROTOCOL_POSITION_ADMISSION_BYTES_V2,
+};
+use dclutch_custody_contract::CUSTODY_REPLAY_BYTES_V1;
 use dclutch_general_codec::Action;
 
 use crate::{
@@ -78,11 +84,50 @@ pub enum GeneralStateArtifactErrorV3 {
     Lifecycle(dclutch_account_profile_contract::lifecycle_v3::Error),
 }
 
+/// Product/release-authenticated child widths needed by Initialize rent quotes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralChildRentWidthsV5 {
+    /// Exact LiabilityBasis Position bytes, including the Product-N balance tail.
+    pub position: u32,
+    /// Exact selected Token or Token-2022 vault-account bytes.
+    pub custody_vault: u32,
+}
+
+impl GeneralChildRentWidthsV5 {
+    /// Derive the exact Position width from Product N and join the selected vault width.
+    pub fn new(outcome_count: u32, custody_vault: u32) -> Result<Self> {
+        let position = u32::try_from(LIABILITY_BASIS_POSITION_HEADER_BYTES_V2)
+            .map_err(|_| GeneralStateArtifactErrorV3::Geometry)?
+            .checked_add(
+                outcome_count
+                    .checked_mul(8)
+                    .ok_or(GeneralStateArtifactErrorV3::Geometry)?,
+            )
+            .ok_or(GeneralStateArtifactErrorV3::Geometry)?;
+        if outcome_count == 0 || custody_vault == 0 {
+            return Err(GeneralStateArtifactErrorV3::Geometry);
+        }
+        Ok(Self {
+            position,
+            custody_vault,
+        })
+    }
+}
+
 /// Result alias for General state artifacts.
 pub type Result<T> = core::result::Result<T, GeneralStateArtifactErrorV3>;
 
 /// Exact lifecycle artifact width for one General action.
 pub fn general_state_lifecycle_bytes_v3(action: Action) -> Result<usize> {
+    general_state_lifecycle_bytes(action, false)
+}
+
+/// Exact Lifecycle V5 artifact width for one successor General action.
+pub fn general_state_lifecycle_bytes_v5(action: Action) -> Result<usize> {
+    general_state_lifecycle_bytes(action, true)
+}
+
+fn general_state_lifecycle_bytes(action: Action, current_rent_v5: bool) -> Result<usize> {
     let (recipes, seeds, plans) = lifecycle_counts(action);
     recipes
         .checked_mul(RECIPE_BYTES)
@@ -92,6 +137,16 @@ pub fn general_state_lifecycle_bytes_v3(action: Action) -> Result<usize> {
         .and_then(|value| {
             value.checked_add(
                 lifecycle_binding_count(action).checked_mul(IMMUTABLE_IDENTITY_BINDING_BYTES)?,
+            )
+        })
+        .and_then(|value| {
+            value.checked_add(
+                if current_rent_v5 {
+                    lifecycle_current_rent_quote_count(action)
+                } else {
+                    0
+                }
+                .checked_mul(CURRENT_RENT_QUOTE_BYTES_V5)?,
             )
         })
         .and_then(|value| HEADER_BYTES.checked_add(value))
@@ -164,13 +219,42 @@ pub fn encode_general_state_lifecycle_v3_atomic(
         return Err(GeneralStateArtifactErrorV3::Geometry);
     }
     if action == Action::Close {
-        encode_close(action, scratch, output)
+        encode_close(action, None, scratch, output)
     } else {
-        encode_primary(action, scratch, output)
+        encode_primary(action, None, scratch, output)
     }
 }
 
-fn encode_primary(action: Action, scratch: &mut [u8], output: &mut [u8]) -> Result<()> {
+/// Generate one complete General Lifecycle V5 policy with current-Rent quotes.
+///
+/// Only Initialize declares child-creation quotes. Other actions still select
+/// the V5 schema with an empty quote table, preventing a V4 fallback in the
+/// successor artifact chain.
+pub fn encode_general_state_lifecycle_v5_atomic(
+    action: Action,
+    child_widths: GeneralChildRentWidthsV5,
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<()> {
+    let expected = general_state_lifecycle_bytes_v5(action)?;
+    if scratch.len() != expected || output.len() != expected {
+        return Err(GeneralStateArtifactErrorV3::Geometry);
+    }
+    let quotes = general_current_rent_quotes_v5(action, child_widths)?;
+    let selected = quotes.as_slice(action);
+    if action == Action::Close {
+        encode_close(action, Some(selected), scratch, output)
+    } else {
+        encode_primary(action, Some(selected), scratch, output)
+    }
+}
+
+fn encode_primary(
+    action: Action,
+    current_rent_quotes: Option<&[LifecycleCurrentRentQuoteInputV5]>,
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<()> {
     let selection = matches!(action, Action::Consider | Action::Freeze);
     let data_base = if selection {
         u32::try_from(
@@ -232,26 +316,48 @@ fn encode_primary(action: Action, scratch: &mut [u8], output: &mut [u8]) -> Resu
     }];
     let protected = [Some(primary_protected()?)];
     let bindings = selection_or_settlement_bindings(action)?;
-    encode_lifecycle_policy_v4_atomic(
-        &recipe,
-        if selection {
-            &selection_seeds
-        } else {
-            &settlement_seeds
-        },
-        &plan,
-        &protected,
-        bindings.as_slice(),
-        scratch,
-        output,
-    )
-    .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
-    StateLifecyclePolicyV4::decode_selected([1; 32], [1; 32], output)
+    let seeds = if selection {
+        &selection_seeds[..]
+    } else {
+        &settlement_seeds[..]
+    };
+    if let Some(quotes) = current_rent_quotes {
+        encode_lifecycle_policy_v5_atomic(
+            &recipe,
+            seeds,
+            &plan,
+            &protected,
+            bindings.as_slice(),
+            quotes,
+            scratch,
+            output,
+        )
         .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
+        StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], output)
+            .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
+    } else {
+        encode_lifecycle_policy_v4_atomic(
+            &recipe,
+            seeds,
+            &plan,
+            &protected,
+            bindings.as_slice(),
+            scratch,
+            output,
+        )
+        .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
+        StateLifecyclePolicyV4::decode_selected([1; 32], [1; 32], output)
+            .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
+    }
     Ok(())
 }
 
-fn encode_close(action: Action, scratch: &mut [u8], output: &mut [u8]) -> Result<()> {
+fn encode_close(
+    action: Action,
+    current_rent_quotes: Option<&[LifecycleCurrentRentQuoteInputV5]>,
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<()> {
     let settlement_base = u32::try_from(
         GENERAL_LOCAL_STATE_HEADER_BYTES_V3
             .checked_add(SETTLEMENT_CURSOR_HEADER_BYTES_V2)
@@ -333,13 +439,76 @@ fn encode_close(action: Action, scratch: &mut [u8], output: &mut [u8]) -> Result
     ];
     let protected = [None, Some(terminal_protected()?)];
     let bindings = close_bindings()?;
-    encode_lifecycle_policy_v4_atomic(
-        &recipes, &seeds, &plans, &protected, &bindings, scratch, output,
-    )
-    .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
-    StateLifecyclePolicyV4::decode_selected([1; 32], [1; 32], output)
+    if let Some(quotes) = current_rent_quotes {
+        encode_lifecycle_policy_v5_atomic(
+            &recipes, &seeds, &plans, &protected, &bindings, quotes, scratch, output,
+        )
         .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
+        StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], output)
+            .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
+    } else {
+        encode_lifecycle_policy_v4_atomic(
+            &recipes, &seeds, &plans, &protected, &bindings, scratch, output,
+        )
+        .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
+        StateLifecyclePolicyV4::decode_selected([1; 32], [1; 32], output)
+            .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
+    }
     Ok(())
+}
+
+struct CurrentRentQuoteBufferV5 {
+    values: [LifecycleCurrentRentQuoteInputV5; 4],
+}
+
+impl CurrentRentQuoteBufferV5 {
+    fn as_slice(&self, action: Action) -> &[LifecycleCurrentRentQuoteInputV5] {
+        if action == Action::InitializeSettlement {
+            &self.values
+        } else {
+            &[]
+        }
+    }
+}
+
+fn general_current_rent_quotes_v5(
+    action: Action,
+    child_widths: GeneralChildRentWidthsV5,
+) -> Result<CurrentRentQuoteBufferV5> {
+    if action == Action::InitializeSettlement
+        && (child_widths.position == 0 || child_widths.custody_vault == 0)
+    {
+        return Err(GeneralStateArtifactErrorV3::Geometry);
+    }
+    Ok(CurrentRentQuoteBufferV5 {
+        values: [
+            LifecycleCurrentRentQuoteInputV5 {
+                exact_data_len: child_widths.position,
+                scalar_destination: scalar_u16(scalar::POSITION_RENT_PRINCIPAL)?,
+            },
+            LifecycleCurrentRentQuoteInputV5 {
+                exact_data_len: u32::try_from(PROTOCOL_POSITION_ADMISSION_BYTES_V2)
+                    .map_err(|_| GeneralStateArtifactErrorV3::Geometry)?,
+                scalar_destination: scalar_u16(scalar::ADMISSION_RENT_PRINCIPAL)?,
+            },
+            LifecycleCurrentRentQuoteInputV5 {
+                exact_data_len: u32::try_from(CUSTODY_REPLAY_BYTES_V1)
+                    .map_err(|_| GeneralStateArtifactErrorV3::Geometry)?,
+                scalar_destination: scalar_u16(scalar::CUSTODY_REPLAY_RENT_LAMPORTS)?,
+            },
+            LifecycleCurrentRentQuoteInputV5 {
+                exact_data_len: child_widths.custody_vault,
+                scalar_destination: scalar_u16(scalar::CUSTODY_VAULT_RENT_LAMPORTS)?,
+            },
+        ],
+    })
+}
+
+const fn lifecycle_current_rent_quote_count(action: Action) -> usize {
+    match action {
+        Action::InitializeSettlement => 4,
+        _ => 0,
+    }
 }
 
 fn primary_protected() -> Result<LifecycleProtectedOutputsInputV3> {
@@ -517,6 +686,61 @@ mod tests {
                 Ok(true)
             );
         }
+    }
+
+    #[test]
+    fn v5_binds_exact_initialize_child_rent_widths_at_n_one_and_258() {
+        for outcome_count in [1_u32, 258] {
+            let widths = GeneralChildRentWidthsV5::new(outcome_count, 165)
+                .expect("authenticated child widths");
+            for action in ACTIONS {
+                let width = general_state_lifecycle_bytes_v5(action).expect("V5 width");
+                let mut scratch = vec![0_u8; width];
+                let mut output = vec![0x55_u8; width];
+                encode_general_state_lifecycle_v5_atomic(action, widths, &mut scratch, &mut output)
+                    .expect("V5 lifecycle artifact");
+                let policy = StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], &output)
+                    .expect("V5 decode");
+                let expected_count = if action == Action::InitializeSettlement {
+                    4
+                } else {
+                    0
+                };
+                assert_eq!(policy.current_rent_quote_count(), expected_count);
+                if action == Action::InitializeSettlement {
+                    for (ordinal, (data_len, destination)) in [
+                        (widths.position, scalar::POSITION_RENT_PRINCIPAL),
+                        (
+                            u32::try_from(PROTOCOL_POSITION_ADMISSION_BYTES_V2)
+                                .expect("admission width"),
+                            scalar::ADMISSION_RENT_PRINCIPAL,
+                        ),
+                        (
+                            u32::try_from(CUSTODY_REPLAY_BYTES_V1).expect("replay width"),
+                            scalar::CUSTODY_REPLAY_RENT_LAMPORTS,
+                        ),
+                        (widths.custody_vault, scalar::CUSTODY_VAULT_RENT_LAMPORTS),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        let quote = policy
+                            .current_rent_quote(u16::try_from(ordinal).expect("ordinal"))
+                            .expect("quote");
+                        assert_eq!(quote.exact_data_len(), data_len);
+                        assert_eq!(quote.scalar_destination().index(), destination as u16);
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            GeneralChildRentWidthsV5::new(0, 165),
+            Err(GeneralStateArtifactErrorV3::Geometry)
+        );
+        assert_eq!(
+            GeneralChildRentWidthsV5::new(1, 0),
+            Err(GeneralStateArtifactErrorV3::Geometry)
+        );
     }
 
     #[test]
