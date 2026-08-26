@@ -17,9 +17,11 @@ use sha2::{Digest, Sha256};
 
 mod infrastructure;
 mod multiprogram;
+mod translation;
 
 pub use infrastructure::*;
 pub use multiprogram::*;
+pub use translation::*;
 
 /// Canonical checked-release magic.
 pub const CHECKED_RELEASE_MAGIC_V1: [u8; 8] = *b"DCLTREL1";
@@ -151,6 +153,10 @@ pub enum Error {
     CheckedInfrastructureManifestMismatch,
     /// Core, Registry, and Rent infrastructure must all be immutable.
     InfrastructureMustBeImmutable,
+    /// A translation-validation evidence input or manifest was malformed.
+    InvalidTranslationValidation,
+    /// Supplied translation-validation inputs rebuilt to another manifest.
+    CheckedTranslationValidationMismatch,
 }
 
 impl fmt::Display for Error {
