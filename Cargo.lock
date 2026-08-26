@@ -452,10 +452,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-execution-strategy-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-program-contract",
+ "dclutch-core-contract",
+ "dclutch-release-set-contract",
+]
+
+[[package]]
 name = "dclutch-general-adapter-contract"
 version = "0.1.0"
 dependencies = [
+ "dclutch-claims-svm",
+ "dclutch-custody-contract",
  "dclutch-general-codec",
+ "dclutch-release-set-contract",
  "sha2",
 ]
 
@@ -512,13 +524,17 @@ version = "0.1.0"
 dependencies = [
  "dclutch-bearer-contract",
  "dclutch-capability-contract",
+ "dclutch-capability-program-contract",
  "dclutch-collateral-contract",
  "dclutch-core-contract",
+ "dclutch-custody-contract",
  "dclutch-dealer-contract",
  "dclutch-direct-codec",
  "dclutch-direct-contract",
+ "dclutch-economic-slice-kernel",
  "dclutch-general-adapter-contract",
  "dclutch-general-codec",
+ "dclutch-general-config-contract",
  "dclutch-general-contract",
  "dclutch-kernel",
  "dclutch-market-contract",
@@ -625,6 +641,43 @@ name = "dclutch-product-runtime-v2"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-product-runtime-v2-admission"
+version = "0.1.0"
+dependencies = [
+ "dclutch-product-runtime-v2",
+]
+
+[[package]]
+name = "dclutch-product-runtime-v2-operator"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-contract",
+ "dclutch-core-contract",
+ "dclutch-market-core-codec",
+ "dclutch-product-runtime-v2",
+ "dclutch-product-runtime-v2-admission",
+ "dclutch-realm-contract",
+ "dclutch-record-contract",
+ "dclutch-registry-contract",
+ "dclutch-release-set-contract",
+ "dclutch-rent-contract",
+ "dclutch-source-contract",
+ "solana-program",
+ "solana-sdk-ids",
+]
+
+[[package]]
+name = "dclutch-product-runtime-v2-svm-reader"
+version = "0.1.0"
+dependencies = [
+ "dclutch-product-runtime-v2",
+ "dclutch-product-runtime-v2-admission",
+ "dclutch-record-contract",
+ "solana-program",
+ "solana-sdk-ids",
+]
+
+[[package]]
 name = "dclutch-pyth-contract"
 version = "0.1.0"
 dependencies = [
@@ -637,6 +690,44 @@ name = "dclutch-pyth-svm"
 version = "0.1.0"
 dependencies = [
  "dclutch-registry-svm",
+]
+
+[[package]]
+name = "dclutch-rational-representation-v2-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-claims-svm",
+ "dclutch-custody-contract",
+ "dclutch-rational-representation-v2-kernel",
+ "dclutch-token-svm",
+]
+
+[[package]]
+name = "dclutch-rational-representation-v2-kernel"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-rational-representation-v2-operator"
+version = "0.1.0"
+dependencies = [
+ "dclutch-claims-svm",
+ "dclutch-core-contract",
+ "dclutch-custody-contract",
+ "dclutch-economic-slice-kernel",
+ "dclutch-market-core-codec",
+ "dclutch-rational-representation-v2-contract",
+ "dclutch-rational-representation-v2-kernel",
+ "dclutch-realm-contract",
+ "dclutch-record-contract",
+ "dclutch-registry-contract",
+ "dclutch-release-set-contract",
+ "dclutch-token-svm",
+ "solana-program",
+ "solana-program-option",
+ "solana-program-pack",
+ "solana-sdk-ids",
+ "spl-associated-token-account-interface",
+ "spl-token-interface",
 ]
 
 [[package]]
@@ -714,6 +805,8 @@ dependencies = [
  "dclutch-market-contract",
  "dclutch-market-core-codec",
  "dclutch-product-contract",
+ "dclutch-product-runtime-v2",
+ "dclutch-product-runtime-v2-svm-reader",
  "dclutch-pyth-svm",
  "dclutch-record-contract",
  "dclutch-registry-contract",
@@ -768,7 +861,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-series-v2-kernel"
+name = "dclutch-series-v3-kernel"
 version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
@@ -824,6 +917,7 @@ dependencies = [
  "dclutch-core-contract",
  "dclutch-custody-contract",
  "dclutch-dealer-codec",
+ "dclutch-direct-codec",
  "dclutch-economic-slice-kernel",
  "dclutch-effect-kernel",
  "dclutch-general-adapter-contract",
@@ -834,7 +928,7 @@ dependencies = [
  "dclutch-registry-contract",
  "dclutch-registry-svm",
  "dclutch-release-set-contract",
- "dclutch-series-v2-kernel",
+ "dclutch-series-v3-kernel",
  "dclutch-token-svm",
  "dclutch-transition-vm",
  "solana-hash 4.6.0",
@@ -1189,6 +1283,7 @@ version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "680998035259dcfcafe653688bf2aa6d3e2dc05e98be6ab46afb089dc84f1df8"
 dependencies = [
+ "proc-macro-crate",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -2188,6 +2283,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "spl-associated-token-account-interface"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6433917b60441d68d99a17e121d9db0ea15a9a69c0e5afa34649cf5ba12612f"
+dependencies = [
+ "solana-instruction",
+ "solana-pubkey 3.0.0",
+]
+
+[[package]]
 name = "spl-discriminator"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2289,6 +2394,26 @@ dependencies = [
  "solana-program-error",
  "solana-zero-copy",
  "spl-discriminator",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "spl-token-interface"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7143c4e676984047a400e2fbd7ac29a1659f2b1b52b897cfde19316b562e4589"
+dependencies = [
+ "arrayref",
+ "bytemuck",
+ "num-derive",
+ "num-traits",
+ "num_enum",
+ "solana-instruction",
+ "solana-program-error",
+ "solana-program-option",
+ "solana-program-pack",
+ "solana-pubkey 3.0.0",
+ "solana-sdk-ids",
  "thiserror 2.0.20",
 ]
 

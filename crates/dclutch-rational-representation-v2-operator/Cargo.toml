@@ -20,7 +20,7 @@ dclutch-registry-contract = { path = "../dclutch-registry-contract" }
 dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
 dclutch-token-svm = { path = "../dclutch-token-svm" }
 solana-program = { version = "=3.0.0", default-features = false }
-solana-sdk-ids = { version = "=3.0.0", default-features = false }
+solana-sdk-ids = { version = "=3.1.0", default-features = false }
 spl-associated-token-account-interface = { version = "=2.0.0", default-features = false }
 
 [dev-dependencies]
@@ -28,17 +28,5 @@ solana-program-option = "=3.1.0"
 solana-program-pack = "=3.1.0"
 spl-token-interface = "=3.0.0"
 
-[workspace]
-
-[lints.rust]
-missing_docs = "deny"
-unsafe_code = "forbid"
-
-[lints.clippy]
-cast_possible_truncation = "deny"
-cast_sign_loss = "deny"
-checked_conversions = "deny"
-float_arithmetic = "deny"
-indexing_slicing = "deny"
-panic = "deny"
-unwrap_used = "deny"
+[lints]
+workspace = true
