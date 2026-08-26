@@ -236,6 +236,9 @@ export async function authenticateFinalizedRationalHotRecordV4(
 
 export type RationalHotCoreViewV2 = Readonly<{
   phase: number;
+  readiness: number;
+  terminalWinner: number;
+  terminalReceipt: Uint8Array;
   realm: Uint8Array;
   productRecord: Uint8Array;
   productId: Uint8Array;
@@ -252,7 +255,8 @@ export function decodeRationalHotCoreV2(address: string, account: RpcAccount, co
     throw new Error('Market is not exact nonexecutable CoreStateV2 under the selected Core program');
   }
   const phase = account.data[10] ?? 255;
-  if (phase > 4 || account.data[11] > 2) throw new Error('CoreStateV2 phase/readiness tag is undefined');
+  const readiness = account.data[11] ?? 255;
+  if (phase > 4 || readiness > 2) throw new Error('CoreStateV2 phase/readiness tag is undefined');
   const market = key(address, 'Market');
   if (!same(slice(account.data, 16, 32), market.toBytes())) throw new Error('CoreStateV2 Market identity differs from its account address');
   const identities = [48, 80, 112, 144, 176, 208, 240, 288, 320].map((offset) => slice(account.data, offset, 32));
@@ -260,7 +264,8 @@ export function decodeRationalHotCoreV2(address: string, account: RpcAccount, co
   const generation = u64(account.data, 272);
   if (generation === 0n) throw new Error('CoreStateV2 generation is zero');
   return Object.freeze({
-    phase, realm: identities[0], productRecord: identities[1], productId: identities[2], manifest: identities[4],
+    phase, readiness, terminalWinner: u32(account.data, 12), terminalReceipt: identities[8],
+    realm: identities[0], productRecord: identities[1], productId: identities[2], manifest: identities[4],
     releaseSet: identities[5], registry: new PublicKey(identities[6]).toBase58(), generation,
     rentCredit: new PublicKey(identities[7]).toBase58(),
   });
