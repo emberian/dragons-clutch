@@ -2435,6 +2435,29 @@ mod tests {
     }
 
     #[test]
+    fn legacy_24_byte_route_profile_is_not_accepted() {
+        const LEGACY_ROUTE_BYTES: usize = 24;
+
+        let legacy_route = route(0, 0, 0, 1, 0, 0, 8, 0);
+        let mut bytes = vec![0_u8; HEADER_BYTES + LEGACY_ROUTE_BYTES + 8];
+        put(&mut bytes, 0, &MAGIC);
+        *bytes.get_mut(4).expect("version") = VERSION;
+        for (offset, value) in [(6, 1_u16), (12, 1), (16, 1)] {
+            put(&mut bytes, offset, &value.to_le_bytes());
+        }
+        put(
+            &mut bytes,
+            HEADER_BYTES,
+            legacy_route
+                .get(..LEGACY_ROUTE_BYTES)
+                .expect("legacy route"),
+        );
+        put(&mut bytes, HEADER_BYTES + LEGACY_ROUTE_BYTES, b"CORE_REQ");
+
+        assert!(ProgramV3::decode(&bytes).is_err());
+    }
+
+    #[test]
     fn receipt_dependency_refuses_forward_role_width_geometry_and_disabled_source() {
         let canonical = receipt_dependency_program(0);
         let consumer = HEADER_BYTES + ROUTE_BYTES;
