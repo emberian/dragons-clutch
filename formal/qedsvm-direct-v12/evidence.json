@@ -1,0 +1,162 @@
+{
+  "schema": "dclutch.qedsvm.direct_exact_elf_trace.v1",
+  "captured_on": "2026-08-26",
+  "status": "runtime_paths_captured__lean_lift_refused",
+  "formal_verification_claim": false,
+  "lean_output": {
+    "generated": false,
+    "reason": "qedlift refused both traces at an unsupported two-seed create_pda model before theorem emission"
+  },
+  "capture_source": {
+    "dclutch_head_observed": "b7a385ac5936a6c51f9b04100a6c15b9e33e2ccd",
+    "source_derivation_claimed_for_elf": false,
+    "note": "The exact artifact bytes are the authority for this trace capture; the observed worktree was concurrently dirty and the HEAD is not claimed as a complete source derivation manifest."
+  },
+  "artifacts": {
+    "controller": {
+      "path": "target/deploy/dclutch_controller_proof_sbf.so",
+      "program_id": "5XZobBCgcyuBM4m1E1rZVei7Me6V8FzwSLexuU194KcN",
+      "bytes": 172984,
+      "sha256": "e0371f3595232e8a430574fc784cd90685139265105ccadf23da5828475b4515",
+      "text_bytes": 158288,
+      "text_sha256": "20158370b6f4660f8064568c999a1811cb6a531dee2906fc7dacfc4c7c6335bc"
+    },
+    "claims": {
+      "path": "target/deploy/dclutch_claims_proof_sbf.so",
+      "program_id": "6URwbPipuA4MJLG7LCRRZuWnms3JZ9cRG3z9indXWz8G",
+      "bytes": 22584,
+      "sha256": "75f2ef597f8e6e5466a5c9537fe30612cc496629082211558369aa86634423bb",
+      "text_bytes": 21192,
+      "text_sha256": "668cabd7d656719c332d61c98cd08111a7a704b214fb46b02018d5f14460a4a0"
+    }
+  },
+  "fixture": {
+    "source": "dclutch_direct_mollusk_trace.rs",
+    "source_sha256": "457120d154099b214d06188542fbccd46c0fb9ff01297b626114d466d871e170",
+    "pc_converter": "dclutch_trace_to_pcs.rs",
+    "pc_converter_sha256": "5b87a5e228eeb7d4dbb0d8caaf6e81cbe1efdc845933948d9381e1c2f1b5e137",
+    "controller_pda": "2s9WcBPM6dATy5L7w2yc9uitw1D2Pe8f99bfgxWGGWLx",
+    "registration_pda": "6fxdFbYtGVVRoVUh5GSoMBtrrz94z63HsQpnRa5qi1bY",
+    "registration_prestate_bytes": 232,
+    "registration_prestate_sha256": "e1d26271bb2a5b4dac1c89fd6d3fcc2db84e71d348cf648ae2d79b2113c61f13",
+    "market_byte": 62,
+    "maker_byte": 61,
+    "collateral_byte": 63,
+    "generation": 3,
+    "nonce": 0,
+    "outcome": 1,
+    "lifecycle": 2,
+    "maximum_fill": 2000,
+    "remaining_pre": 2000,
+    "sequence_pre": 0,
+    "top_level_account_order": [
+      "controller_pda:readonly",
+      "registration:writable",
+      "maker:readonly+signer",
+      "claims_program:readonly+executable"
+    ]
+  },
+  "paths": {
+    "accepted_cancel": {
+      "expected_sequence": 0,
+      "request_bytes": 24,
+      "request_sha256": "d92c6a3403166f180afdcfa10149f2f0a732261e2aab5d1fbb0546ff0b687139",
+      "runtime": "mollusk_svm",
+      "result": "Success",
+      "controller_compute_units": 6181,
+      "claims_cpi_observed": true,
+      "claims_compute_units": 284,
+      "registration_post": {
+        "phase": 2,
+        "remaining": 2000,
+        "sequence": 1
+      },
+      "raw_controller_regs_bytes": 179616,
+      "raw_controller_regs_sha256": "600d2d87bd58d58f6b3f5910a19f03863bf7ff5289f9e7a2ec59e9be0b000262",
+      "raw_claims_regs_sha256": "ce38ebab2cccc6c7b4706b3eb9d2b1a0e4fcd456f5b85223412cdd39cbaf1671",
+      "logical_trace": "direct-success.pcs",
+      "logical_trace_lines": 1871,
+      "logical_trace_bytes": 10180,
+      "logical_trace_sha256": "3e4d9c9b5a43c09c5f1104bb6d9c7fbd5ff63f40c6b4406bb0b8eaa55fa7e028",
+      "qedlift_exit": 1,
+      "qedlift_error_kind": "UnsupportedConstruct",
+      "qedlift_error": "create_pda at pc 2806: only the single-seed (n_seeds = 1) shape is modelled so far, got 2"
+    },
+    "refused_stale_sequence": {
+      "expected_sequence": 1,
+      "request_bytes": 24,
+      "request_sha256": "30f3db2844750ffca1e62e7d41cb8408bfb59022f408626d1f268644a38492da",
+      "runtime": "mollusk_svm",
+      "result": "Failure(Custom(11))",
+      "controller_compute_units": 2678,
+      "claims_cpi_observed": false,
+      "registration_post_equals_prestate": true,
+      "rollback_fields_asserted": [
+        "data",
+        "lamports",
+        "owner",
+        "executable",
+        "rent_epoch"
+      ],
+      "raw_controller_regs_bytes": 106368,
+      "raw_controller_regs_sha256": "2d175cafbd9912ac2b278cd6dfdcdac39df2b4917f0e6df17e74d146f65f9f35",
+      "logical_trace": "direct-stale-sequence.pcs",
+      "logical_trace_lines": 1108,
+      "logical_trace_bytes": 6164,
+      "logical_trace_sha256": "5edcc2d149982588a93592f695714efc014998acfd2afd714458423f91c14599",
+      "qedlift_exit": 1,
+      "qedlift_error_kind": "UnsupportedConstruct",
+      "qedlift_error": "create_pda at pc 2806: only the single-seed (n_seeds = 1) shape is modelled so far, got 2"
+    }
+  },
+  "tools": {
+    "qedsvm": {
+      "tag": "v0.12.0",
+      "commit": "99bd5ede85374adc7fc5c835c2432ecf4e123fd1",
+      "tree": "6cb10570a567dfe64fbc68ecc3fdd46f97de9500",
+      "source_archive_sha256": "5bf6646da0e29d545b1ad1ccfa9504ba83afa09a531cc1b8798347bf00da9a5b",
+      "qedlift_binary_sha256": "406f753b5a68e7e67b72a488727ef4c98ca44fbcde0e863065bb4c4d10a6b113",
+      "lean_decoder_source_sha256": "c81938feba65ad0c5172f7039cf7f2485d23204c69998b65c174502902c2b0ac"
+    },
+    "mollusk_svm": {
+      "version": "0.12.1-agave-4.0",
+      "cargo_checksum": "2463c0d920535dc1a43a0e0ab8100f0dba5699e687f5593bad543440362574d5",
+      "features": [
+        "register-tracing",
+        "all-builtins"
+      ]
+    },
+    "solana_sbpf": {
+      "version": "0.14.4",
+      "cargo_checksum": "733b3657a0fab205102b799dbe17f85d3972cf984232c1b0b108fa6ba438e382"
+    },
+    "rustc": "1.97.1 (8bab26f4f 2026-07-14), LLVM 22.1.6, aarch64-apple-darwin",
+    "cargo": "1.97.1 (c980f4866 2026-06-30)",
+    "lean": "4.33.1, commit 819816b2e0a3bf405af45ae5c7af2491d8f5bee6",
+    "lake": "5.0.0-src+819816b",
+    "llvm_objcopy_sha256": "1d8b8f2e312e12a06a8f508f705dad795b2752d554978755f6508885c40309f2"
+  },
+  "lean_runner_decode_boundary": {
+    "elf_header_parsed": true,
+    "text_found": true,
+    "relocations_resolvable": true,
+    "function_registry_entries": 398,
+    "function_registry_collision_free": true,
+    "program_decoded": false,
+    "text_byte_offset": 118680,
+    "text_slot": 14835,
+    "elf_address_hex": "0x1d0b8",
+    "instruction_hex": "dc01000040000000",
+    "instruction_name": "be64 r1",
+    "reason": "opcode 0xdc is absent from the qedsvm v0.12 Lean decoder"
+  },
+  "assumptions_and_unproved_boundaries": [
+    "Mollusk/Agave loads and executes the pinned ELF bytes according to the deployed Solana runtime.",
+    "Mollusk register tracing records r11 as the executed raw instruction slot before each instruction.",
+    "qed_analysis::PcMap correctly converts those slots to qedsvm logical PCs for the pinned exact ELF.",
+    "Agave account serialization, loader, compute metering, memory, SHA/PDA syscalls, CPI, and atomic rollback are trusted runtime observations, not Lean-proved here.",
+    "The Claims child poststate is observed from the pinned Claims ELF and is not composed with a separate path theorem.",
+    "These two traces do not establish whole-CFG or semantic-case coverage.",
+    "No deployed ProgramData or upgrade-authority identity is asserted by this local fixture."
+  ]
+}
