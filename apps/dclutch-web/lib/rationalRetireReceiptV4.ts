@@ -8,6 +8,7 @@ import {
 } from '@solana/web3.js';
 
 import { ascii, hex, isZero, requireNonzero, requireZero, sha256, slice, u16, u64 } from './bytes';
+import { decodeCapabilityManifestV1 } from './capabilityManifest';
 import { decodeCoreFoundProductGraphV2 } from './coreFound';
 import {
   CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
@@ -361,50 +362,13 @@ export type RationalHotManifestEntryV4 = Readonly<{ capacity: Uint8Array; rootSc
 type ManifestEntry = RationalHotManifestEntryV4;
 
 export function selectRationalHotManifestEntryV4(bytes: Uint8Array, selection: RootSelection): ManifestEntry {
-  if (bytes.length < 16 || ascii(bytes, 0, 8) !== 'DCLTCAP1' || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 1) {
-    throw new Error('capability manifest has the wrong exact header');
+  const entries = decodeCapabilityManifestV1(bytes);
+  if (selection.entryIndex >= entries.length) throw new Error('capability manifest width or selected index is invalid');
+  const entry = entries[selection.entryIndex];
+  if (!same(entry.kind, selection.kind) || !same(entry.programSet, selection.programSet) || !same(entry.config, selection.config)) {
+    throw new Error('selected manifest entry differs from the immutable capability-root selection');
   }
-  requireZero(bytes, 14, 2, 'capability manifest header');
-  const count = u16(bytes, 12);
-  if (count === 0 || count > 16 || selection.entryIndex >= count || bytes.length !== 16 + 528 * count) {
-    throw new Error('capability manifest width or selected index is invalid');
-  }
-  let priorKind: Uint8Array | null = null;
-  let selected: ManifestEntry | null = null;
-  for (let index = 0; index < count; index += 1) {
-    const offset = 16 + 528 * index;
-    const identities = [0, 32, 64, 96, 128, 160].map((relative) => slice(bytes, offset + relative, 32));
-    identities.forEach((identity, coordinate) => requireNonzero(identity, `capability manifest entry ${index} identity ${coordinate}`));
-    if (priorKind !== null) {
-      let order = 0;
-      while (order < 32 && priorKind[order] === identities[0][order]) order += 1;
-      if (order === 32 || (priorKind[order] ?? 0) > (identities[0][order] ?? 0)) throw new Error('capability manifest kinds are not strictly ordered');
-    }
-    priorKind = identities[0];
-    requireZero(bytes, offset + 194, 6, `capability manifest entry ${index}`);
-    const policy = bytes[offset + 192]; const deadline = u64(bytes, offset + 200);
-    if ((policy !== 0 && policy !== 1) || (policy === 0 && deadline !== 0n) || (policy === 1 && deadline === 0n)) {
-      throw new Error('capability manifest activation policy is noncanonical');
-    }
-    const dependencyCount = bytes[offset + 193] ?? 0;
-    if (dependencyCount > 16) throw new Error('capability manifest dependency count exceeds its bound');
-    let priorDependency = -1;
-    for (let position = 0; position < 16; position += 1) {
-      const dependency = bytes[offset + 208 + position] ?? 0;
-      if (position < dependencyCount) {
-        if (dependency >= count || dependency === index || dependency <= priorDependency) throw new Error('capability manifest dependency list is noncanonical');
-        priorDependency = dependency;
-      } else if (dependency !== 0) throw new Error('capability manifest inactive dependency is nonzero');
-    }
-    if (index === selection.entryIndex) {
-      if (!same(identities[0], selection.kind) || !same(identities[1], selection.programSet) || !same(identities[2], selection.config)) {
-        throw new Error('selected manifest entry differs from the immutable capability-root selection');
-      }
-      selected = Object.freeze({ capacity: identities[3], rootSchema: identities[4], derivation: identities[5] });
-    }
-  }
-  if (selected === null) throw new Error('capability manifest did not contain its selected entry');
-  return selected;
+  return Object.freeze({ capacity: entry.capacity, rootSchema: entry.rootSchema, derivation: entry.derivation });
 }
 
 export function selectRationalHotCapabilityV4(set: Uint8Array, selector: number): Readonly<{ schema: Uint8Array; digest: Uint8Array }> {
