@@ -16,6 +16,7 @@ mod hot_bundle_v3;
 mod hot_effect_v3;
 mod hot_terminal_v3;
 mod hot_transaction_v3;
+mod open_selected_transaction_v3;
 mod open_selected_v3;
 
 pub use hot_account_profile_v3::{
@@ -40,6 +41,11 @@ pub use hot_terminal_v3::{ConstructedHotTerminalV3, construct_chain_hot_redeem_t
 pub use hot_transaction_v3::{
     CheckedRationalHotOuterReleaseV3, RationalTerminalHotInstructionV3, RationalTerminalHotStateV3,
     build_rational_terminal_hot_instruction_v3,
+};
+pub use open_selected_transaction_v3::{
+    ConstructedHotOpenSelectedV3, RationalOpenSelectedHotInstructionV3,
+    RationalOpenSelectedHotStateV3, build_rational_open_selected_hot_instruction_v3,
+    construct_chain_hot_denominate_v3, construct_chain_hot_reconstitute_v3,
 };
 pub use open_selected_v3::{
     RATIONAL_OPEN_SELECTED_CHILD_ACCOUNTS_V3, RATIONAL_OPEN_SELECTED_COMMON_IDENTITIES_V3,

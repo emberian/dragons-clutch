@@ -6,9 +6,8 @@ use dclutch_capability_program_contract::hot_v3::{
     HOT_RENT_SYSVAR_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
     HotExecutionEnvelopeV3,
 };
-use dclutch_rational_representation_v2_contract::{
-    RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3, RepresentationRequestV2,
-};
+use dclutch_rational_representation_v2_contract::RepresentationRequestV2;
+use dclutch_rational_representation_v2_operator::ConstructedInstructionV2;
 use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},
@@ -80,28 +79,61 @@ pub fn build_rational_terminal_hot_instruction_v3(
     state: &RationalTerminalHotStateV3<'_>,
     terminal: &ConstructedHotTerminalV3,
 ) -> Result<RationalTerminalHotInstructionV3> {
+    let built = build_hot_instruction_from_claims_child_v3(
+        state,
+        &terminal.family_request,
+        terminal.family_digest,
+        &terminal.claims_child,
+        49,
+    )?;
+    Ok(RationalTerminalHotInstructionV3 {
+        instruction: built.instruction,
+        required_wallet_signers: built.required_wallet_signers,
+        family_digest: terminal.family_digest,
+        checked_manifest_digest: built.checked_manifest_digest,
+        finalized_slot: state.finalized_slot,
+    })
+}
+
+pub(crate) struct BuiltHotInstructionV3 {
+    pub(crate) instruction: Instruction,
+    pub(crate) required_wallet_signers: Vec<Pubkey>,
+    pub(crate) checked_manifest_digest: [u8; 32],
+}
+
+pub(crate) fn build_hot_instruction_from_claims_child_v3(
+    state: &RationalTerminalHotStateV3<'_>,
+    family_request: &[u8],
+    family_digest: [u8; 32],
+    claims_child: &ConstructedInstructionV2,
+    expected_child_accounts: usize,
+) -> Result<BuiltHotInstructionV3> {
     let checked = state.hot_outer.ok_or(Error::HotInstruction)?;
     validate_fixed_frame(state, checked)?;
     if state.finalized_slot == 0
         || state.release_set == [0; 32]
         || checked.artifact_release == [0; 32]
         || checked.checked_manifest_digest == [0; 32]
+        || family_digest == [0; 32]
+        || hash(family_request).to_bytes() != family_digest
     {
         return Err(Error::HotInstruction);
     }
 
-    let child = RepresentationRequestV2::decode(&terminal.claims_child.instruction.data)
+    let child = RepresentationRequestV2::decode(&claims_child.instruction.data)
         .map_err(|_| Error::HotInstruction)?;
     let header = child.header();
     if header.release_set != state.release_set
         || header.market != state.market.to_bytes()
         || header.generation != state.generation
-        || terminal.claims_child.instruction.accounts.len() != 49
-        || terminal.claims_child.instruction.program_id == Pubkey::default()
+        || header.parent_context != family_digest
+        || claims_child.request_digest != hash(&claims_child.instruction.data).to_bytes()
+        || claims_child.instruction.accounts.len() != expected_child_accounts
+        || claims_child.instruction.program_id == Pubkey::default()
     {
         return Err(Error::HotInstruction);
     }
-    let child_accounts = &terminal.claims_child.instruction.accounts;
+    let child_accounts = &claims_child.instruction.accounts;
     if child_accounts
         .first()
         .is_none_or(|account| !account.is_signer)
@@ -114,13 +146,13 @@ pub fn build_rational_terminal_hot_instruction_v3(
             .any(|(index, account)| index != 0 && index != 3 && account.is_signer)
         || child_accounts
             .get(14)
-            .is_none_or(|account| account.pubkey != terminal.claims_child.instruction.program_id)
+            .is_none_or(|account| account.pubkey != claims_child.instruction.program_id)
     {
         return Err(Error::HotInstruction);
     }
 
     let envelope = HotExecutionEnvelopeV3::new(
-        u32::try_from(RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3).map_err(|_| Error::HotInstruction)?,
+        u32::try_from(family_request.len()).map_err(|_| Error::HotInstruction)?,
         state.release_set,
         state.market.to_bytes(),
         state.generation,
@@ -129,11 +161,11 @@ pub fn build_rational_terminal_hot_instruction_v3(
     .map_err(|_| Error::HotInstruction)?;
     let mut data = Vec::with_capacity(
         HOT_FAMILY_REQUEST_OFFSET_V3
-            .checked_add(RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3)
+            .checked_add(family_request.len())
             .ok_or(Error::HotInstruction)?,
     );
     data.extend_from_slice(&envelope.to_bytes());
-    data.extend_from_slice(&terminal.family_request);
+    data.extend_from_slice(family_request);
 
     let mut accounts = Vec::with_capacity(
         state
@@ -152,16 +184,14 @@ pub fn build_rational_terminal_hot_instruction_v3(
         }
         accounts.push(outer);
     }
-    Ok(RationalTerminalHotInstructionV3 {
+    Ok(BuiltHotInstructionV3 {
         instruction: Instruction {
             program_id: checked.trading_program,
             accounts,
             data,
         },
         required_wallet_signers: vec![child_accounts.get(3).ok_or(Error::HotInstruction)?.pubkey],
-        family_digest: terminal.family_digest,
         checked_manifest_digest: checked.checked_manifest_digest,
-        finalized_slot: state.finalized_slot,
     })
 }
 
