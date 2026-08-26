@@ -1019,22 +1019,7 @@ fn commit_prepared_hot_v3(
 fn execute_prepared_child_routes_v3(
     prepared: &PreparedHotCommitV3<'_, '_, '_, '_>,
 ) -> Result<[u8; 32], ProgramError> {
-    execute_child_routes_v3(
-        prepared.program_id,
-        *prepared.frame,
-        prepared.request_profile,
-        prepared.effect,
-        prepared.tail_count,
-        prepared.scalars,
-        prepared.identities,
-        prepared.effect_accounts,
-        prepared.request_bank,
-        prepared.family_request,
-        prepared.request_digest,
-        prepared.envelope,
-        prepared.capability_program_set,
-        prepared.selected_program.to_bytes(),
-    )
+    execute_child_routes_v3(prepared)
 }
 
 #[inline(never)]
@@ -2947,22 +2932,23 @@ fn preflight_child_routes_v3<'accounts, 'info>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn execute_child_routes_v3<'accounts, 'info>(
-    program_id: &Pubkey,
-    frame: HotFrameV3<'accounts, 'info>,
-    request_profile: RequestProfileKindV3<'_>,
-    effect: SelectedEffectProgramV4<'_>,
-    tail_count: u32,
-    scalars: &[u64],
-    identities: &[[u8; 32]],
-    effect_accounts: &[AccountInfo<'info>],
-    request_bank: &[u8],
-    family_request: &[u8],
-    request_digest: [u8; 32],
-    envelope: HotExecutionEnvelopeV3,
-    capability_program_set: [u8; 32],
-    selected_capability_program: [u8; 32],
+fn execute_child_routes_v3(
+    prepared: &PreparedHotCommitV3<'_, '_, '_, '_>,
 ) -> Result<[u8; 32], ProgramError> {
+    let program_id = prepared.program_id;
+    let frame = *prepared.frame;
+    let request_profile = prepared.request_profile;
+    let effect = prepared.effect;
+    let tail_count = prepared.tail_count;
+    let scalars = prepared.scalars;
+    let identities = prepared.identities;
+    let effect_accounts = prepared.effect_accounts;
+    let request_bank = prepared.request_bank;
+    let family_request = prepared.family_request;
+    let request_digest = prepared.request_digest;
+    let envelope = prepared.envelope;
+    let capability_program_set = prepared.capability_program_set;
+    let selected_capability_program = prepared.selected_program.to_bytes();
     #[cfg(not(feature = "families"))]
     let _ = (capability_program_set, selected_capability_program);
     let mut transcript = hashv(&[CHILD_EXECUTION_DIGEST_DOMAIN_V3, &request_digest]).to_bytes();
