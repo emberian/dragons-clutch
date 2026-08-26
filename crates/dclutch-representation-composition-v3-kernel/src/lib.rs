@@ -46,9 +46,9 @@ pub use exposure::{
 };
 pub use graph::{
     COMPOSITION_EDGE_BYTES_V3, COMPOSITION_NODE_BYTES_V3, COMPOSITION_TERM_BYTES_V3,
-    CompositionEdgeInputV3, CompositionGraphInputV3, CompositionGraphV3, CompositionNodeInputV3,
-    CompositionNodeKindV3, EdgeLayoutV3, GraphLayoutV3, NodeLayoutV3, SparseTermV3, TermLayoutV3,
-    composition_graph_bytes_v3, encode_composition_graph_v3_atomic,
+    CompositionEdgeInputV3, CompositionGraphInputV3, CompositionGraphNodeV3, CompositionGraphV3,
+    CompositionNodeInputV3, CompositionNodeKindV3, EdgeLayoutV3, GraphLayoutV3, NodeLayoutV3,
+    SparseTermV3, TermLayoutV3, composition_graph_bytes_v3, encode_composition_graph_v3_atomic,
 };
 pub use translation::{
     CanonicalTranslationInputV3, CanonicalTranslationV3, CompositionBundleV3, TranslationLayoutV3,

@@ -182,8 +182,9 @@ pub struct CompositionGraphInputV3<'a> {
     pub terms: &'a [SparseTermV3],
 }
 
-#[derive(Clone, Copy)]
-struct NodeV3 {
+/// One hostile-decoded canonical DAG node.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompositionGraphNodeV3 {
     id: [u8; 32],
     rank: u32,
     first_edge: u32,
@@ -194,6 +195,28 @@ struct NodeV3 {
     native_outcome: u32,
     recipe_divisor: u64,
     flattened_denominator: u64,
+}
+
+impl CompositionGraphNodeV3 {
+    /// Stable node content identity.
+    pub const fn id(self) -> [u8; 32] {
+        self.id
+    }
+
+    /// Exact topological rank from a native leaf.
+    pub const fn rank(self) -> u32 {
+        self.rank
+    }
+
+    /// Canonical node kind.
+    pub const fn kind(self) -> CompositionNodeKindV3 {
+        self.kind
+    }
+
+    /// Native coordinate for a native node; zero for composed nodes.
+    pub const fn native_outcome(self) -> u32 {
+        self.native_outcome
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -390,7 +413,7 @@ impl<'a> CompositionGraphV3<'a> {
         self.validate_root_reachability()
     }
 
-    fn validate_node_order(self, index: u32, node: NodeV3) -> Result<()> {
+    fn validate_node_order(self, index: u32, node: CompositionGraphNodeV3) -> Result<()> {
         if index == 0 {
             return Ok(());
         }
@@ -410,7 +433,7 @@ impl<'a> CompositionGraphV3<'a> {
         Ok(())
     }
 
-    fn validate_node(self, index: u32, node: NodeV3) -> Result<()> {
+    fn validate_node(self, index: u32, node: CompositionGraphNodeV3) -> Result<()> {
         if node.term_count == 0 || node.flattened_denominator == 0 || node.recipe_divisor == 0 {
             return Err(Error::InvalidNode);
         }
@@ -421,7 +444,7 @@ impl<'a> CompositionGraphV3<'a> {
         }
     }
 
-    fn validate_sparse_terms(self, node: NodeV3) -> Result<()> {
+    fn validate_sparse_terms(self, node: CompositionGraphNodeV3) -> Result<()> {
         let mut index = 0_u32;
         let mut prior_outcome = None;
         let mut normalization = u128::from(node.flattened_denominator);
@@ -447,7 +470,7 @@ impl<'a> CompositionGraphV3<'a> {
         Ok(())
     }
 
-    fn validate_native(self, index: u32, node: NodeV3) -> Result<()> {
+    fn validate_native(self, index: u32, node: CompositionGraphNodeV3) -> Result<()> {
         if node.rank != 0
             || node.edge_count != 0
             || node.term_count != 1
@@ -476,7 +499,7 @@ impl<'a> CompositionGraphV3<'a> {
         Ok(())
     }
 
-    fn validate_composed(self, index: u32, node: NodeV3) -> Result<()> {
+    fn validate_composed(self, index: u32, node: CompositionGraphNodeV3) -> Result<()> {
         if node.rank == 0 || node.edge_count == 0 || node.native_outcome != 0 {
             return Err(Error::InvalidNode);
         }
@@ -563,7 +586,12 @@ impl<'a> CompositionGraphV3<'a> {
         Ok(())
     }
 
-    fn direct_numerator(self, node: NodeV3, outcome: u32, lcm: u128) -> Result<u128> {
+    fn direct_numerator(
+        self,
+        node: CompositionGraphNodeV3,
+        outcome: u32,
+        lcm: u128,
+    ) -> Result<u128> {
         let mut sum = 0_u128;
         let mut edge_index = 0_u32;
         while edge_index < node.edge_count {
@@ -589,7 +617,7 @@ impl<'a> CompositionGraphV3<'a> {
         Ok(sum)
     }
 
-    fn node_numerator(self, node: NodeV3, outcome: u32) -> Result<u128> {
+    fn node_numerator(self, node: CompositionGraphNodeV3, outcome: u32) -> Result<u128> {
         let mut index = 0_u32;
         while index < node.term_count {
             let term = self.term(
@@ -629,17 +657,18 @@ impl<'a> CompositionGraphV3<'a> {
         Ok(())
     }
 
-    fn root(self) -> Result<NodeV3> {
+    fn root(self) -> Result<CompositionGraphNodeV3> {
         self.node(self.root_index)
     }
 
-    fn node(self, index: u32) -> Result<NodeV3> {
+    /// Read one canonical DAG node by table index.
+    pub fn node(self, index: u32) -> Result<CompositionGraphNodeV3> {
         if index >= self.node_count {
             return Err(Error::InvalidNode);
         }
         let offset = self.node_offset(index)?;
         let bytes = slice(self.bytes, offset, COMPOSITION_NODE_BYTES_V3)?;
-        Ok(NodeV3 {
+        Ok(CompositionGraphNodeV3 {
             id: nonzero_array(bytes, NodeLayoutV3::ID)?,
             rank: u32_at(bytes, NodeLayoutV3::RANK)?,
             first_edge: u32_at(bytes, NodeLayoutV3::FIRST_EDGE)?,

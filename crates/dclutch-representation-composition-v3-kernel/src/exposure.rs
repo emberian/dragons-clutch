@@ -10,6 +10,7 @@ use crate::abi::{
     Error, RecordAdmissionV3, Result, array_at, gcd_u64, nonzero_array, put, require_zero, slice,
     u16_at, u32_at, u64_at, validate_record_admission,
 };
+use crate::{CompositionGraphV3, CompositionNodeKindV3};
 
 /// Exposure-bundle schema version.
 pub const COMPOSITION_EXPOSURE_VERSION_V3: u16 = 3;
@@ -209,6 +210,7 @@ impl CompositionExposureRowV3 {
 pub struct CompositionExposureBundleV3<'a> {
     bytes: &'a [u8],
     bundle_id: [u8; 32],
+    bundle_digest: [u8; 32],
     market: [u8; 32],
     result_domain: [u8; 32],
     release_set: [u8; 32],
@@ -245,6 +247,7 @@ impl<'a> CompositionExposureBundleV3<'a> {
         let value = Self {
             bytes: input,
             bundle_id: admission.selected_id,
+            bundle_digest: admission.finalized_digest,
             market: nonzero_array(input, CompositionExposureLayoutV3::MARKET)?,
             result_domain: nonzero_array(input, CompositionExposureLayoutV3::RESULT_DOMAIN)?,
             release_set: nonzero_array(input, CompositionExposureLayoutV3::RELEASE_SET)?,
@@ -272,6 +275,10 @@ impl<'a> CompositionExposureBundleV3<'a> {
     /// Finalized bundle content identity.
     pub const fn bundle_id(self) -> [u8; 32] {
         self.bundle_id
+    }
+    /// Finalized digest of the exact authenticated bundle bytes.
+    pub const fn bundle_digest(self) -> [u8; 32] {
+        self.bundle_digest
     }
     /// Logical Market.
     pub const fn market(self) -> [u8; 32] {
@@ -341,6 +348,42 @@ impl<'a> CompositionExposureBundleV3<'a> {
             || self.representation_width != expected.representation_width
         {
             return Err(Error::InvalidOutcome);
+        }
+        Ok(self)
+    }
+
+    /// Join every ordered exposure root to the canonical native DAG basis.
+    ///
+    /// The composition graph owns the exhaustive `K` native basis. Every
+    /// exposure row must name the graph's unique rank-zero native node at the
+    /// same coordinate. Product coordinates remain confined to the exposure's
+    /// independently authenticated `N` and cannot be reinterpreted as graph
+    /// coordinates.
+    pub fn verify_composition_graph(self, graph: CompositionGraphV3<'_>) -> Result<Self> {
+        if self.graph_id != graph.graph_id() || self.representation_width != graph.outcome_count() {
+            return Err(Error::CompositionMismatch);
+        }
+        let mut coordinate = 0_u32;
+        while coordinate < self.representation_width {
+            let row = self.row(coordinate)?;
+            let mut matches = 0_u32;
+            let mut node_index = 0_u32;
+            while node_index < graph.node_count() {
+                let node = graph.node(node_index)?;
+                if node.kind() == CompositionNodeKindV3::Native
+                    && node.native_outcome() == coordinate
+                {
+                    if node.rank() != 0 || node.id() != row.node_id {
+                        return Err(Error::CompositionMismatch);
+                    }
+                    matches = matches.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+                }
+                node_index = node_index.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+            }
+            if matches != 1 {
+                return Err(Error::CompositionMismatch);
+            }
+            coordinate = coordinate.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
         }
         Ok(self)
     }

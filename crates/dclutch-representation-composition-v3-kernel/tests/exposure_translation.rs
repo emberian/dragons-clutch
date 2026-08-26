@@ -1,11 +1,15 @@
 //! Hostile translation corpus for Product-to-Claims exposure bundles.
 
 use dclutch_representation_composition_v3_kernel::{
-    COMPOSITION_EXPOSURE_HEADER_BYTES_V3, COMPOSITION_EXPOSURE_ROW_BYTES_V3,
-    CompositionExposureBundleV3, CompositionExposureExpectedV3, CompositionExposureInputV3,
-    CompositionExposureLayoutV3, CompositionExposureRowInputV3, CompositionExposureRowLayoutV3,
-    CompositionExposureTermV3, Error, RecordAdmissionV3, composition_exposure_bytes_v3,
-    encode_composition_exposure_v3_atomic,
+    COMPOSITION_DESCRIPTOR_BYTES_V3, COMPOSITION_EXPOSURE_HEADER_BYTES_V3,
+    COMPOSITION_EXPOSURE_ROW_BYTES_V3, CompositionDescriptorInputV3, CompositionDescriptorV3,
+    CompositionEdgeInputV3, CompositionExposureBundleV3, CompositionExposureExpectedV3,
+    CompositionExposureInputV3, CompositionExposureLayoutV3, CompositionExposureRowInputV3,
+    CompositionExposureRowLayoutV3, CompositionExposureTermV3, CompositionGraphInputV3,
+    CompositionGraphV3, CompositionNodeInputV3, CompositionNodeKindV3, Error, RecordAdmissionV3,
+    SparseTermV3, composition_exposure_bytes_v3, composition_graph_bytes_v3,
+    encode_composition_descriptor_v3_atomic, encode_composition_exposure_v3_atomic,
+    encode_composition_graph_v3_atomic,
 };
 
 const MARKET: [u8; 32] = [1; 32];
@@ -63,6 +67,157 @@ fn encode(product_width: u32, rows: &[CompositionExposureRowInputV3<'_>]) -> Vec
     )
     .expect("canonical exposure bundle");
     output
+}
+
+fn admitted(selected_id: [u8; 32], digest: [u8; 32]) -> RecordAdmissionV3 {
+    RecordAdmissionV3 {
+        selected_id,
+        finalized_id: selected_id,
+        recomputed_digest: digest,
+        finalized_digest: digest,
+        record_authenticated: true,
+    }
+}
+
+fn composition_graph() -> (Vec<u8>, CompositionDescriptorV3) {
+    const GRAPH_DIGEST: [u8; 32] = [71; 32];
+    const ROOT: [u8; 32] = [20; 32];
+    let nodes = [
+        CompositionNodeInputV3 {
+            id: [10; 32],
+            rank: 0,
+            first_edge: 0,
+            edge_count: 0,
+            first_term: 0,
+            term_count: 1,
+            kind: CompositionNodeKindV3::Native,
+            native_outcome: 0,
+            recipe_divisor: 1,
+            flattened_denominator: 1,
+        },
+        CompositionNodeInputV3 {
+            id: [11; 32],
+            rank: 0,
+            first_edge: 0,
+            edge_count: 0,
+            first_term: 1,
+            term_count: 1,
+            kind: CompositionNodeKindV3::Native,
+            native_outcome: 1,
+            recipe_divisor: 1,
+            flattened_denominator: 1,
+        },
+        CompositionNodeInputV3 {
+            id: [12; 32],
+            rank: 0,
+            first_edge: 0,
+            edge_count: 0,
+            first_term: 2,
+            term_count: 1,
+            kind: CompositionNodeKindV3::Native,
+            native_outcome: 2,
+            recipe_divisor: 1,
+            flattened_denominator: 1,
+        },
+        CompositionNodeInputV3 {
+            id: ROOT,
+            rank: 1,
+            first_edge: 0,
+            edge_count: 3,
+            first_term: 3,
+            term_count: 3,
+            kind: CompositionNodeKindV3::Compose,
+            native_outcome: 0,
+            recipe_divisor: 1,
+            flattened_denominator: 1,
+        },
+    ];
+    let edges = [
+        CompositionEdgeInputV3 {
+            child_id: [10; 32],
+            child_index: 0,
+            coefficient: 1,
+        },
+        CompositionEdgeInputV3 {
+            child_id: [11; 32],
+            child_index: 1,
+            coefficient: 1,
+        },
+        CompositionEdgeInputV3 {
+            child_id: [12; 32],
+            child_index: 2,
+            coefficient: 1,
+        },
+    ];
+    let terms = [
+        SparseTermV3 {
+            outcome: 0,
+            numerator: 1,
+        },
+        SparseTermV3 {
+            outcome: 1,
+            numerator: 1,
+        },
+        SparseTermV3 {
+            outcome: 2,
+            numerator: 1,
+        },
+        SparseTermV3 {
+            outcome: 0,
+            numerator: 1,
+        },
+        SparseTermV3 {
+            outcome: 1,
+            numerator: 1,
+        },
+        SparseTermV3 {
+            outcome: 2,
+            numerator: 1,
+        },
+    ];
+    let mut descriptor_scratch = [0_u8; COMPOSITION_DESCRIPTOR_BYTES_V3];
+    let mut descriptor_bytes = [0_u8; COMPOSITION_DESCRIPTOR_BYTES_V3];
+    encode_composition_descriptor_v3_atomic(
+        CompositionDescriptorInputV3 {
+            market: MARKET,
+            result_domain: DOMAIN,
+            release_set: RELEASE,
+            native_basis: REPRESENTATION_BASIS,
+            graph_id: GRAPH,
+            graph_digest: GRAPH_DIGEST,
+            root_id: ROOT,
+            translation_id: [72; 32],
+            translation_digest: [73; 32],
+            outcome_count: 3,
+            node_count: 4,
+            edge_count: 3,
+            term_count: 6,
+            root_denominator: 1,
+        },
+        &mut descriptor_scratch,
+        &mut descriptor_bytes,
+    )
+    .expect("composition descriptor");
+    let descriptor =
+        CompositionDescriptorV3::decode(&descriptor_bytes, admitted([70; 32], [74; 32]))
+            .expect("admitted descriptor");
+    let length = composition_graph_bytes_v3(4, 3, 6).expect("graph width");
+    let mut graph_scratch = vec![0_u8; length];
+    let mut graph_bytes = vec![0_u8; length];
+    encode_composition_graph_v3_atomic(
+        CompositionGraphInputV3 {
+            graph_id: GRAPH,
+            root_id: ROOT,
+            outcome_count: 3,
+            nodes: &nodes,
+            edges: &edges,
+            terms: &terms,
+        },
+        &mut graph_scratch,
+        &mut graph_bytes,
+    )
+    .expect("composition graph");
+    (graph_bytes, descriptor)
 }
 
 #[test]
@@ -317,3 +472,31 @@ fn encoding_is_byte_canonical_and_admission_is_mandatory() {
         Some(Error::ContentAdmission)
     );
 }
+
+#[test]
+fn exposure_rows_join_the_unique_native_dag_basis() {
+    let (graph_bytes, descriptor) = composition_graph();
+    let graph = CompositionGraphV3::decode(&graph_bytes, descriptor, admitted(GRAPH, [71; 32]))
+        .expect("admitted composition graph");
+    let exposure = CompositionExposureBundleV3::decode(
+        &crate_generated::COMPOSITION_EXPOSURE_K3_N1_WITNESS_V3,
+        admission(),
+    )
+    .expect("admitted exposure");
+    assert!(exposure.verify_composition_graph(graph).is_ok());
+
+    let mut substituted = crate_generated::COMPOSITION_EXPOSURE_K3_N1_WITNESS_V3;
+    *substituted
+        .get_mut(COMPOSITION_EXPOSURE_HEADER_BYTES_V3)
+        .expect("first exposure node") = 13;
+    let substituted =
+        CompositionExposureBundleV3::decode(&substituted, admission()).expect("valid substitution");
+    assert_eq!(
+        substituted.verify_composition_graph(graph).err(),
+        Some(Error::CompositionMismatch)
+    );
+}
+
+#[allow(dead_code, missing_docs)]
+#[path = "../src/generated_exposure_abi.rs"]
+mod crate_generated;
