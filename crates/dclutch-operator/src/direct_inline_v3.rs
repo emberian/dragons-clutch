@@ -51,6 +51,7 @@ use dclutch_direct_codec::{
     intent_v2::CompactIntentV2,
     native_evidence_v3::{
         DIRECT_NATIVE_EVIDENCE_BYTES_V3, DirectNativeEvidenceContainerV3,
+        direct_native_evidence_bytes_v3, encode_direct_native_evidence_many_v3_atomic,
         encode_direct_native_evidence_v3_atomic,
     },
 };
@@ -144,6 +145,13 @@ pub struct DirectInlineHotStateV3 {
     pub hot_outer: Option<CheckedHotOuterReleaseV3>,
 }
 
+/// Action-neutral Hot state selected from one finalized Direct capability.
+///
+/// The existing inline name remains source-compatible, but the state itself
+/// has never carried inline-only account authority: its exact AccountProfile
+/// and CapabilityProgramSet select the action-specific runtime geometry.
+pub type DirectHotStateV4 = DirectInlineHotStateV3;
+
 /// Exact economic preview derived from immutable Direct config and the request.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DirectInlineEconomicPreviewV3 {
@@ -186,6 +194,33 @@ pub struct DirectInlineHotReportV3 {
     pub preview: DirectInlineEconomicPreviewV3,
 }
 
+/// Complete unsigned generic-Hot material for one selected Direct action.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectHotReportV4 {
+    /// Native Ed25519 followed by Trading for signed actions, or Trading alone.
+    pub instructions: Vec<Instruction>,
+    /// Complete exact HotExecutionEnvelopeV3 plus action request bytes.
+    pub hot_instruction_data: Vec<u8>,
+    /// Same finalized observation selecting every physical account.
+    pub observation: Observation,
+    /// Exact selected Direct action.
+    pub action: DirectExecutionActionV3,
+    /// CapabilityProgramV4 schema selected by the finalized SetV2.
+    pub selected_program_schema: [u8; 32],
+    /// Exact selected CapabilityProgramV4 digest.
+    pub selected_program: [u8; 32],
+    /// Product-authenticated runtime outcome count.
+    pub outcome_count: u32,
+    /// Authenticated Product graph-root content digest.
+    pub product_record: [u8; 32],
+    /// Exact immutable Trading ArtifactRelease identity.
+    pub trading_artifact_release: [u8; 32],
+    /// Digest of the checked multiprogram manifest.
+    pub checked_manifest_digest: [u8; 32],
+    /// Wallet keys which the Trading instruction itself requires to sign.
+    pub required_instruction_signers: Vec<Pubkey>,
+}
+
 /// Exact unsigned Direct v0 transaction and its signer/provenance report.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectInlineHotTransactionPlanV3 {
@@ -202,6 +237,27 @@ pub struct DirectInlineHotTransactionPlanV3 {
     /// Exact immutable Trading ArtifactRelease identity.
     pub trading_artifact_release: [u8; 32],
     /// Digest of the user-supplied checked multiprogram manifest.
+    pub checked_manifest_digest: [u8; 32],
+}
+
+/// Exact unsigned action-neutral Direct transaction and provenance report.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectHotTransactionPlanV4 {
+    /// Packet-safe v0 message compiled through the sole canonical LUT.
+    pub message: VersionedMessagePlanV0,
+    /// Exact eventual wallet signer order, beginning with the fee payer.
+    pub required_signers: Vec<Pubkey>,
+    /// Capability-selected Direct action.
+    pub action: DirectExecutionActionV3,
+    /// Product-authenticated runtime outcome count.
+    pub outcome_count: u32,
+    /// Schema of the selected CapabilityProgramV4 descriptor.
+    pub selected_program_schema: [u8; 32],
+    /// Selected CapabilityProgramV4 content digest.
+    pub selected_program: [u8; 32],
+    /// Exact immutable Trading ArtifactRelease identity.
+    pub trading_artifact_release: [u8; 32],
+    /// Digest of the checked multiprogram manifest.
     pub checked_manifest_digest: [u8; 32],
 }
 
@@ -408,6 +464,109 @@ pub fn build_direct_inline_hot_v4(
         checked_manifest_digest: checked.checked_manifest_digest,
         required_instruction_signers,
         preview,
+    })
+}
+
+/// Build one action-selected Direct request through the family-neutral Hot
+/// authority without signing or submitting it.
+///
+/// The request is first decoded at the Product-authenticated width, then the
+/// finalized SetV2/CapabilityV4 and all six artifacts are reauthenticated from
+/// `state`. Signed actions use the sole packet-safe current-instruction
+/// evidence encoder; unsigned matcher/permissionless actions cannot smuggle a
+/// native evidence instruction.
+pub fn build_direct_hot_request_v4(
+    state: &DirectHotStateV4,
+    request: &[u8],
+    signatures: &[[u8; 64]],
+) -> Result<DirectHotReportV4, Error> {
+    let checked = state.hot_outer.ok_or(Error::HotOuterUnavailable)?;
+    if checked.artifact_release == [0; 32]
+        || checked.checked_manifest_digest == [0; 32]
+        || state.release_set == [0; 32]
+    {
+        return Err(Error::ZeroIdentity);
+    }
+    let observation = validate_frame(state, checked)?;
+    let product = authenticate_product_graph(state)?;
+    let decoded = DirectExecutionRequestV3::decode(request, product.outcome_count)
+        .map_err(|_| Error::EconomicMismatch)?;
+    let bundle = authenticate_chain_artifacts_v4(state, request, product.outcome_count)?;
+    if bundle.action != decoded.action()
+        || bundle.request_profile.requires_native_signature() != !signatures.is_empty()
+    {
+        return Err(Error::ArtifactMismatch);
+    }
+    if !state.strategy_accounts.is_empty() {
+        return Err(Error::StrategyGeometry);
+    }
+    validate_runtime_profile(state, bundle, product.outcome_count)?;
+
+    let market = fixed_account(state, HOT_MARKET_ACCOUNT_V3)?.account.key;
+    let root = &fixed_account(state, HOT_ROOT_ACCOUNT_V3)?.account;
+    let envelope = HotExecutionEnvelopeV3::new(
+        u32::try_from(request.len()).map_err(|_| Error::Arithmetic)?,
+        state.release_set,
+        market.to_bytes(),
+        state.generation,
+        hash(&root.data).to_bytes(),
+    )
+    .map_err(|_| Error::FixedFrameMismatch)?;
+    let mut hot_instruction_data = Vec::with_capacity(HOT_FAMILY_REQUEST_OFFSET_V3 + request.len());
+    hot_instruction_data.extend_from_slice(&envelope.to_bytes());
+    hot_instruction_data.extend_from_slice(request);
+
+    let mut accounts = Vec::new();
+    accounts.extend(state.fixed_accounts.iter().map(ObservedAccountMetaV3::meta));
+    accounts.extend(
+        state
+            .strategy_accounts
+            .iter()
+            .map(ObservedAccountMetaV3::meta),
+    );
+    accounts.extend(
+        state
+            .runtime_accounts
+            .iter()
+            .skip(HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3)
+            .map(ObservedAccountMetaV3::meta),
+    );
+    let required_instruction_signers = signer_keys(&accounts)?;
+    let trading = Instruction {
+        program_id: checked.trading_program,
+        accounts,
+        data: hot_instruction_data.clone(),
+    };
+    let mut instructions = Vec::with_capacity(usize::from(!signatures.is_empty()) + 1);
+    if !signatures.is_empty() {
+        instructions.push(native_ed25519_instruction_many(
+            DirectNativeEvidenceContainerV3::TradingHot,
+            1,
+            &hot_instruction_data,
+            decoded.action(),
+            product.outcome_count,
+            signatures,
+        )?);
+    }
+    instructions.push(trading);
+
+    Ok(DirectHotReportV4 {
+        instructions,
+        hot_instruction_data,
+        observation,
+        action: decoded.action(),
+        selected_program_schema: CAPABILITY_PROGRAM_SCHEMA_ID_V4,
+        selected_program: hash(
+            &fixed_account(state, HOT_DESCRIPTOR_RAW_ACCOUNT_V3)?
+                .account
+                .data,
+        )
+        .to_bytes(),
+        outcome_count: product.outcome_count,
+        product_record: product.product_record,
+        trading_artifact_release: checked.artifact_release,
+        checked_manifest_digest: checked.checked_manifest_digest,
+        required_instruction_signers,
     })
 }
 
@@ -637,6 +796,72 @@ fn fixed_account(
         .ok_or(Error::FixedFrameMismatch)
 }
 
+/// Compile one action-neutral Direct Hot report through the sole finalized LUT.
+pub fn compile_direct_hot_v0(
+    report: &DirectHotReportV4,
+    payer: Pubkey,
+    recent_blockhash: Hash,
+    lookup_table: &ObservedAccount,
+) -> Result<DirectHotTransactionPlanV4, DirectInlineTransactionErrorV3> {
+    if payer == Pubkey::default()
+        || report.observation.finality != Finality::Finalized
+        || report.observation.slot == 0
+        || report.selected_program_schema != CAPABILITY_PROGRAM_SCHEMA_ID_V4
+        || report.trading_artifact_release == [0; 32]
+        || report.checked_manifest_digest == [0; 32]
+        || lookup_table.observation != report.observation
+        || lookup_table.owner != lookup_table_program::id()
+        || lookup_table.executable
+    {
+        return Err(DirectInlineTransactionErrorV3::Snapshot);
+    }
+    let expected = canonical_direct_hot_lookup_addresses_v4(report, payer)?;
+    let table = AddressLookupTable::deserialize(&lookup_table.data)
+        .map_err(|_| DirectInlineTransactionErrorV3::LookupTable)?;
+    if table.addresses.as_ref() != expected.as_slice() {
+        return Err(DirectInlineTransactionErrorV3::LookupTable);
+    }
+    let message = compile_v0_message(
+        payer,
+        &report.instructions,
+        recent_blockhash,
+        report.observation,
+        core::slice::from_ref(lookup_table),
+    )
+    .map_err(DirectInlineTransactionErrorV3::Routing)?;
+    let mut required_signers = vec![payer];
+    for signer in &report.required_instruction_signers {
+        if !required_signers.contains(signer) {
+            required_signers.push(*signer);
+        }
+    }
+    if usize::from(message.required_signatures) != required_signers.len() {
+        return Err(DirectInlineTransactionErrorV3::Signer);
+    }
+    Ok(DirectHotTransactionPlanV4 {
+        message,
+        required_signers,
+        action: report.action,
+        outcome_count: report.outcome_count,
+        selected_program_schema: report.selected_program_schema,
+        selected_program: report.selected_program,
+        trading_artifact_release: report.trading_artifact_release,
+        checked_manifest_digest: report.checked_manifest_digest,
+    })
+}
+
+/// Return the sole sorted, duplicate-free LUT address sequence for generic Direct.
+pub fn canonical_direct_hot_lookup_addresses_v4(
+    report: &DirectHotReportV4,
+    payer: Pubkey,
+) -> Result<Vec<Pubkey>, DirectInlineTransactionErrorV3> {
+    canonical_lookup_addresses(
+        &report.instructions,
+        &report.required_instruction_signers,
+        payer,
+    )
+}
+
 /// Compile the exact adjacent pair through one canonical finalized LUT.
 pub fn compile_direct_inline_hot_v0(
     report: &DirectInlineHotReportV3,
@@ -695,11 +920,23 @@ pub fn canonical_direct_inline_lookup_addresses_v3(
     report: &DirectInlineHotReportV3,
     payer: Pubkey,
 ) -> Result<Vec<Pubkey>, DirectInlineTransactionErrorV3> {
+    canonical_lookup_addresses(
+        &report.instructions,
+        &report.required_instruction_signers,
+        payer,
+    )
+}
+
+fn canonical_lookup_addresses(
+    instructions: &[Instruction],
+    instruction_signers: &[Pubkey],
+    payer: Pubkey,
+) -> Result<Vec<Pubkey>, DirectInlineTransactionErrorV3> {
     if payer == Pubkey::default() {
         return Err(DirectInlineTransactionErrorV3::Snapshot);
     }
     let mut signers = vec![payer];
-    for signer in &report.required_instruction_signers {
+    for signer in instruction_signers {
         if *signer == Pubkey::default() {
             return Err(DirectInlineTransactionErrorV3::Signer);
         }
@@ -707,13 +944,11 @@ pub fn canonical_direct_inline_lookup_addresses_v3(
             signers.push(*signer);
         }
     }
-    let program_ids = report
-        .instructions
+    let program_ids = instructions
         .iter()
         .map(|instruction| instruction.program_id)
         .collect::<Vec<_>>();
-    let mut addresses = report
-        .instructions
+    let mut addresses = instructions
         .iter()
         .flat_map(|instruction| &instruction.accounts)
         .filter(|account| {
@@ -936,12 +1171,36 @@ pub fn append_direct_registry_native_evidence_v5(
     registry: Instruction,
     signatures: [[u8; 64]; 2],
 ) -> Result<(), Error> {
+    append_direct_registry_native_evidence_many_v5(
+        top_level,
+        registry,
+        DirectExecutionActionV3::InlineOrdinary,
+        u32::MAX,
+        &signatures,
+    )
+}
+
+/// Append packet-safe action-selected evidence immediately before Registry.
+///
+/// The current Registry instruction index is derived from `top_level`; the
+/// codec independently rechecks the nested Hot request, signature count, and
+/// exact Registry bias. Unsigned actions must omit this pair and append their
+/// Registry instruction directly.
+pub fn append_direct_registry_native_evidence_many_v5(
+    top_level: &mut Vec<Instruction>,
+    registry: Instruction,
+    action: DirectExecutionActionV3,
+    tail_count: u32,
+    signatures: &[[u8; 64]],
+) -> Result<(), Error> {
     let registry_index = u16::try_from(top_level.len().checked_add(1).ok_or(Error::Arithmetic)?)
         .map_err(|_| Error::Arithmetic)?;
-    let native = native_ed25519_instruction(
+    let native = native_ed25519_instruction_many(
         DirectNativeEvidenceContainerV3::RegistryContinuation,
         registry_index,
         &registry.data,
+        action,
+        tail_count,
         signatures,
     )?;
     top_level.push(native);
@@ -961,6 +1220,35 @@ fn native_ed25519_instruction(
         current_instruction_index,
         current_instruction_data,
         signatures,
+        &mut data,
+    )
+    .map_err(|_| Error::ArtifactMismatch)?;
+    Ok(Instruction {
+        program_id: ed25519_program::ID,
+        accounts: Vec::new(),
+        data,
+    })
+}
+
+fn native_ed25519_instruction_many(
+    container: DirectNativeEvidenceContainerV3,
+    current_instruction_index: u16,
+    current_instruction_data: &[u8],
+    action: DirectExecutionActionV3,
+    tail_count: u32,
+    signatures: &[[u8; 64]],
+) -> Result<Instruction, Error> {
+    let bytes =
+        direct_native_evidence_bytes_v3(action, tail_count).map_err(|_| Error::ArtifactMismatch)?;
+    let mut scratch = vec![0_u8; bytes];
+    let mut data = vec![0_u8; bytes];
+    encode_direct_native_evidence_many_v3_atomic(
+        container,
+        current_instruction_index,
+        current_instruction_data,
+        tail_count,
+        signatures,
+        &mut scratch,
         &mut data,
     )
     .map_err(|_| Error::ArtifactMismatch)?;
@@ -1008,11 +1296,16 @@ mod tests {
     };
     use dclutch_custody_contract::CustodyReplayLayoutV1;
     use dclutch_direct_codec::{
+        execution_v3::{
+            DIRECT_REGISTRATION_REQUEST_BYTES_V3, DirectRegistrationRequestV3,
+            DirectSignedParticipantV3,
+        },
         ordinary_account_artifacts_v3::DirectInlineOrdinaryAccountProfileInputV3,
         ordinary_bundle_v4::{
             DirectInlineOrdinaryHotBundleInputV4, build_direct_inline_ordinary_hot_bundle_v4,
         },
         ordinary_effect_artifacts_v3::DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3,
+        registered_requests_v4::encode_direct_registration_request_v3_atomic,
         successor::{
             DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, DIRECT_MAKER_REPLAY_BYTES_V1,
             DIRECT_ROOT_SCHEMA_ID_V1, DirectExecutionConfigV1, DirectRootStateV1,
@@ -1220,7 +1513,7 @@ mod tests {
         *output.get_mut(16).expect("Product alias") =
             u32::try_from(PRODUCT_RECORD_BYTES_V2).expect("Product width");
         *output.get_mut(18).expect("domain") =
-            u32::try_from(DOMAIN_HEADER_BYTES - DOMAIN_CUT_BYTES + 3 * DOMAIN_CUT_BYTES)
+            u32::try_from(DOMAIN_HEADER_BYTES - 2 * DOMAIN_CUT_BYTES + 3 * DOMAIN_CUT_BYTES)
                 .expect("domain width");
         *output.get_mut(20).expect("portfolio alias") = *output.get(3).expect("portfolio");
         *output.get_mut(22).expect("Registry") = 17;
@@ -1725,6 +2018,73 @@ mod tests {
             );
             assert_eq!(read_test_u16(&native.data, descriptor + 12), 2);
         }
+
+        let mut registered_intent = seller.intent;
+        registered_intent.lifecycle = 2;
+        let registration = DirectRegistrationRequestV3 {
+            participant: DirectSignedParticipantV3 {
+                maker: seller.maker.to_bytes(),
+                intent: registered_intent,
+            },
+            maker_rent_credit: [31; 32],
+            record_rent_credit: [32; 32],
+            maker_rent_principal: 10_000,
+            record_rent_principal: 20_000,
+        };
+        let mut registered_request = [0_u8; DIRECT_REGISTRATION_REQUEST_BYTES_V3];
+        encode_direct_registration_request_v3_atomic(
+            DirectExecutionActionV3::RegisterSell,
+            registration,
+            &mut registered_request,
+        )
+        .expect("registered request");
+        let registered_envelope = HotExecutionEnvelopeV3::new(
+            u32::try_from(registered_request.len()).expect("request width"),
+            [1; 32],
+            [7; 32],
+            9,
+            [2; 32],
+        )
+        .expect("registered envelope");
+        let mut registered_hot = registered_envelope.to_bytes().to_vec();
+        registered_hot.extend_from_slice(&registered_request);
+        let registered = Instruction {
+            program_id: key(199),
+            accounts: Vec::new(),
+            data: {
+                let mut data = vec![0_u8; 128];
+                data.extend_from_slice(&registered_hot);
+                data
+            },
+        };
+        let mut registered_sequence = Vec::new();
+        append_direct_registry_native_evidence_many_v5(
+            &mut registered_sequence,
+            registered,
+            DirectExecutionActionV3::RegisterSell,
+            70_001,
+            core::slice::from_ref(&seller.signature),
+        )
+        .expect("registered Registry evidence");
+        let registered_native = registered_sequence.first().expect("native evidence");
+        assert_eq!(registered_native.data.first().copied(), Some(1));
+        assert_eq!(registered_native.data.len(), 112);
+        assert_eq!(read_test_u16(&registered_native.data, 2 + 8), 320);
+        assert_eq!(read_test_u16(&registered_native.data, 2 + 10), 172);
+        assert_eq!(read_test_u16(&registered_native.data, 2 + 12), 1);
+
+        let unchanged = registered_sequence.clone();
+        assert_eq!(
+            append_direct_registry_native_evidence_many_v5(
+                &mut registered_sequence,
+                unchanged.last().expect("Registry").clone(),
+                DirectExecutionActionV3::RegisterSell,
+                70_001,
+                &[],
+            ),
+            Err(Error::ArtifactMismatch)
+        );
+        assert_eq!(registered_sequence, unchanged);
     }
 
     fn read_test_u16(bytes: &[u8], offset: usize) -> u16 {
