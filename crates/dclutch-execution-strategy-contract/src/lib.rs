@@ -2,7 +2,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-//! Strategy-independent AOT certificate and shadow-comparison wire.
+//! Strategy-independent execution selection and stateless AOT transport.
 //!
 //! This crate performs no hashing, finalized-record authentication, Registry
 //! CPI, Loader inspection, account projection, or state/effect mutation. An
@@ -20,6 +20,9 @@
 use dclutch_capability_program_contract::CapabilityProgramV1;
 use dclutch_core_contract::ContentId;
 use dclutch_release_set_contract::ArtifactReleaseIdV1;
+
+/// V3 semantic-waist strategy records, certificates, admission, and transport.
+pub mod v2;
 
 /// Schema label for [`ExecutionStrategyCertificateV1`].
 pub const EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_PREIMAGE_V1: &[u8] =
