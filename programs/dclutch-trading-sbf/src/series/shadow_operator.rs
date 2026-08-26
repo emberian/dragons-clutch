@@ -302,10 +302,10 @@ fn content_id(bytes: &[u8]) -> Result<ContentId> {
     ContentId::new(hash(bytes).to_bytes()).map_err(|_| SeriesShadowOperatorErrorV3::Identity)
 }
 
-const _: () = assert!(SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3 == 36);
-const _: () = assert!(SERIES_SHADOW_ACCELERATOR_PROGRAM_ACCOUNT_V3 == 44);
-const _: () = assert!(SERIES_SHADOW_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3 == 45);
-const _: () = assert!(SERIES_SHADOW_FIXED_ACCOUNT_COUNT_V3 == 46);
+const _: () = assert!(SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3 == 38);
+const _: () = assert!(SERIES_SHADOW_ACCELERATOR_PROGRAM_ACCOUNT_V3 == 46);
+const _: () = assert!(SERIES_SHADOW_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3 == 47);
+const _: () = assert!(SERIES_SHADOW_FIXED_ACCOUNT_COUNT_V3 == 48);
 
 #[cfg(test)]
 mod tests {
