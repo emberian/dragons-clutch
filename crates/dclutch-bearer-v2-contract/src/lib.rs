@@ -16,10 +16,10 @@ use dclutch_rational_representation_v2_contract::{
     RepresentationRequestV2, prepare as prepare_representation,
 };
 use dclutch_rational_representation_v2_kernel::{
-    Coalescing, Error as KernelError, RepresentationDescriptorV2, RepresentationGraphV2,
-    ShardCoordinateSuccessor, StructuredProjectionV2, coalesce, prepare_denominate,
-    prepare_reconstitute,
+    Coalescing, Error as KernelError, RepresentationDescriptorV2, ShardCoordinateSuccessor,
+    StructuredProjectionV2, coalesce, prepare_denominate, prepare_reconstitute,
 };
+use dclutch_representation_composition_v3_kernel::CompositionExposureBundleV3;
 
 /// Exact immutable identities against which one finalized descriptor is used.
 ///
@@ -28,10 +28,10 @@ use dclutch_rational_representation_v2_kernel::{
 pub struct BearerBindingV2 {
     /// Finalized descriptor content identity.
     pub descriptor_id: [u8; 32],
-    /// Finalized payoff graph content identity.
-    pub graph_id: [u8; 32],
-    /// Digest of the exact finalized graph bytes.
-    pub graph_digest: [u8; 32],
+    /// Finalized Product-to-Claims exposure-bundle content identity.
+    pub exposure_id: [u8; 32],
+    /// Digest of the exact finalized exposure-bundle bytes.
+    pub exposure_digest: [u8; 32],
     /// Selected graph root.
     pub root_id: [u8; 32],
     /// Logical Core Market.
@@ -44,8 +44,8 @@ pub struct BearerBindingV2 {
     pub token_program: [u8; 32],
     /// Claims-owned representation authority.
     pub representation_authority: [u8; 32],
-    /// Product-owned runtime outcome width.
-    pub outcome_count: u32,
+    /// Claims-owned representation width `K`.
+    pub representation_width: u32,
     /// Shard atoms in one native claim atom.
     pub denominator: u64,
     /// The sole nonzero outcome coordinate.
@@ -107,38 +107,38 @@ pub type Result<T> = core::result::Result<T, Error>;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BearerDescriptorV2<'a> {
     descriptor: RepresentationDescriptorV2<'a>,
-    graph: RepresentationGraphV2<'a>,
+    exposure: CompositionExposureBundleV3<'a>,
     selected_outcome: u32,
 }
 
 impl<'a> BearerDescriptorV2<'a> {
-    /// Authenticate every immutable descriptor/graph binding and require one
+    /// Authenticate every immutable descriptor/exposure binding and require one
     /// exact basis vector: `denominator` at `selected_outcome`, zero elsewhere.
     pub fn authenticate(
         descriptor: RepresentationDescriptorV2<'a>,
-        graph: RepresentationGraphV2<'a>,
+        exposure: CompositionExposureBundleV3<'a>,
         binding: BearerBindingV2,
     ) -> Result<Self> {
         if descriptor.descriptor_id() != binding.descriptor_id
-            || descriptor.graph_id() != binding.graph_id
-            || descriptor.graph_digest() != binding.graph_digest
+            || descriptor.graph_id() != binding.exposure_id
+            || descriptor.graph_digest() != binding.exposure_digest
             || descriptor.root_id() != binding.root_id
             || descriptor.market_id() != binding.market
             || descriptor.release_set_id() != binding.release_set
             || descriptor.receipt_mint() != binding.receipt_mint
             || descriptor.token_program() != binding.token_program
             || descriptor.representation_authority() != binding.representation_authority
-            || descriptor.outcome_count() != binding.outcome_count
+            || descriptor.outcome_count() != binding.representation_width
             || descriptor.denominator() != binding.denominator
-            || binding.selected_outcome >= binding.outcome_count
+            || binding.selected_outcome >= binding.representation_width
         {
             return Err(Error::BindingMismatch);
         }
         descriptor
-            .authenticate_graph(graph)
+            .authenticate_exposure(exposure)
             .map_err(|_| Error::GraphMismatch)?;
         let mut outcome = 0_u32;
-        while outcome < binding.outcome_count {
+        while outcome < binding.representation_width {
             let expected = if outcome == binding.selected_outcome {
                 binding.denominator
             } else {
@@ -151,7 +151,7 @@ impl<'a> BearerDescriptorV2<'a> {
         }
         Ok(Self {
             descriptor,
-            graph,
+            exposure,
             selected_outcome: binding.selected_outcome,
         })
     }
@@ -161,9 +161,9 @@ impl<'a> BearerDescriptorV2<'a> {
         self.descriptor
     }
 
-    /// Authenticated finalized payoff graph.
-    pub const fn graph(self) -> RepresentationGraphV2<'a> {
-        self.graph
+    /// Authenticated finalized Product-to-Claims exposure bundle.
+    pub const fn exposure(self) -> CompositionExposureBundleV3<'a> {
+        self.exposure
     }
 
     /// Sole Bearer outcome coordinate.
@@ -267,7 +267,7 @@ pub fn prepare<'a>(
             }
         }
     }
-    prepare_representation(request, bearer.descriptor, projection, bearer.graph)
+    prepare_representation(request, bearer.descriptor, projection, bearer.exposure)
         .map_err(Error::Representation)
 }
 

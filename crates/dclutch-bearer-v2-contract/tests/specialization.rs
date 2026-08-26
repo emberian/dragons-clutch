@@ -9,11 +9,14 @@ use dclutch_rational_representation_v2_contract::{
     RepresentationRequestV2, TokenEffectStyleV2,
 };
 use dclutch_rational_representation_v2_kernel::{
-    ContentAdmissionV2, CoordinateObservation, DESCRIPTOR_COEFFICIENT_BYTES,
-    DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3, DescriptorAdmissionV2, GRAPH_EDGE_BYTES,
-    GRAPH_HEADER_BYTES, GRAPH_MAGIC_V2, GRAPH_NODE_BYTES, RepresentationDescriptorV2,
-    RepresentationGraphV2, SCHEMA_VERSION_V2, STRUCTURED_HEADER_BYTES,
-    StructuredProjectionHeaderV2, StructuredProjectionV2,
+    CoordinateObservation, DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES,
+    DESCRIPTOR_MAGIC_V3, DescriptorAdmissionV2, RepresentationDescriptorV2,
+    STRUCTURED_HEADER_BYTES, StructuredProjectionHeaderV2, StructuredProjectionV2,
+};
+use dclutch_representation_composition_v3_kernel::{
+    CompositionExposureBundleV3, CompositionExposureInputV3, CompositionExposureRowInputV3,
+    CompositionExposureTermV3, RecordAdmissionV3, composition_exposure_bytes_v3,
+    encode_composition_exposure_v3_atomic,
 };
 use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
 
@@ -85,169 +88,89 @@ fn descriptor(bytes: &[u8]) -> RepresentationDescriptorV2<'_> {
     .expect("descriptor")
 }
 
-#[derive(Clone, Copy)]
-struct Node {
-    id: [u8; 32],
-    rank: u32,
-    first_edge: u32,
-    edge_count: u32,
-    kind: u8,
-    parameter: u64,
-    exposure: [u64; WIDTH as usize],
-}
-
-#[derive(Clone, Copy)]
-struct Edge {
-    child: [u8; 32],
-    child_index: u32,
-    multiplicity: u64,
-}
-
-fn graph_fixture(graph_id: [u8; 32], root: [u8; 32], nodes: &[Node], edges: &[Edge]) -> Vec<u8> {
-    let mut bytes = vec![
-        0_u8;
-        GRAPH_HEADER_BYTES
-            + nodes.len() * GRAPH_NODE_BYTES
-            + edges.len() * GRAPH_EDGE_BYTES
-            + nodes.len() * WIDTH as usize * 8
+fn exposure_fixture() -> Vec<u8> {
+    let terms = [
+        [CompositionExposureTermV3 {
+            product_coordinate: 0,
+            numerator: 1,
+        }],
+        [CompositionExposureTermV3 {
+            product_coordinate: 1,
+            numerator: 1,
+        }],
+        [CompositionExposureTermV3 {
+            product_coordinate: 2,
+            numerator: 1,
+        }],
     ];
-    put(&mut bytes, 0, &GRAPH_MAGIC_V2);
-    put(&mut bytes, 8, &SCHEMA_VERSION_V2.to_le_bytes());
-    put(&mut bytes, 16, &graph_id);
-    put(&mut bytes, 48, &root);
-    put_u32(&mut bytes, 80, WIDTH);
-    put_u32(
+    let rows = [
+        CompositionExposureRowInputV3 {
+            node_id: id(10),
+            denominator: 1,
+            terms: &terms[0],
+        },
+        CompositionExposureRowInputV3 {
+            node_id: id(11),
+            denominator: 1,
+            terms: &terms[1],
+        },
+        CompositionExposureRowInputV3 {
+            node_id: id(12),
+            denominator: 1,
+            terms: &terms[2],
+        },
+    ];
+    let width = composition_exposure_bytes_v3(WIDTH, WIDTH).expect("width");
+    let mut scratch = vec![0_u8; width];
+    let mut bytes = vec![0_u8; width];
+    encode_composition_exposure_v3_atomic(
+        CompositionExposureInputV3 {
+            market: id(2),
+            result_domain: id(30),
+            release_set: id(3),
+            product_basis: id(31),
+            representation_basis: id(32),
+            graph_id: id(33),
+            product_width: WIDTH,
+            rows: &rows,
+        },
+        &mut scratch,
         &mut bytes,
-        84,
-        u32::try_from(nodes.len()).expect("node width"),
-    );
-    put_u32(
-        &mut bytes,
-        88,
-        u32::try_from(edges.len()).expect("edge width"),
-    );
-    put_u64(&mut bytes, 96, 100);
-    for (index, node) in nodes.iter().enumerate() {
-        let offset = GRAPH_HEADER_BYTES + index * GRAPH_NODE_BYTES;
-        put(&mut bytes, offset, &node.id);
-        put_u32(&mut bytes, offset + 32, node.rank);
-        put_u32(&mut bytes, offset + 36, node.first_edge);
-        put_u32(&mut bytes, offset + 40, node.edge_count);
-        *bytes.get_mut(offset + 44).expect("node kind") = node.kind;
-        put_u64(&mut bytes, offset + 48, node.parameter);
-    }
-    let edge_start = GRAPH_HEADER_BYTES + nodes.len() * GRAPH_NODE_BYTES;
-    for (index, edge) in edges.iter().enumerate() {
-        let offset = edge_start + index * GRAPH_EDGE_BYTES;
-        put(&mut bytes, offset, &edge.child);
-        put_u32(&mut bytes, offset + 32, edge.child_index);
-        put_u64(&mut bytes, offset + 40, edge.multiplicity);
-    }
-    let exposure_start = edge_start + edges.len() * GRAPH_EDGE_BYTES;
-    for (node_index, node) in nodes.iter().enumerate() {
-        for (outcome, exposure) in node.exposure.iter().enumerate() {
-            put_u64(
-                &mut bytes,
-                exposure_start + (node_index * WIDTH as usize + outcome) * 8,
-                *exposure,
-            );
-        }
-    }
+    )
+    .expect("exposure fixture");
     bytes
 }
 
-fn basis_graph_fixture(graph_id: [u8; 32], root: [u8; 32]) -> Vec<u8> {
-    graph_fixture(
-        graph_id,
-        root,
-        &[Node {
-            id: root,
-            rank: 0,
-            first_edge: 0,
-            edge_count: 0,
-            kind: 0,
-            parameter: u64::from(SELECTED),
-            exposure: [0, 100, 0],
-        }],
-        &[],
-    )
-}
-
-fn non_basis_graph_fixture() -> Vec<u8> {
-    let nodes = [
-        Node {
-            id: id(10),
-            rank: 0,
-            first_edge: 0,
-            edge_count: 0,
-            kind: 0,
-            parameter: 0,
-            exposure: [100, 0, 0],
-        },
-        Node {
-            id: id(11),
-            rank: 0,
-            first_edge: 0,
-            edge_count: 0,
-            kind: 0,
-            parameter: 1,
-            exposure: [0, 100, 0],
-        },
-        Node {
-            id: id(14),
-            rank: 1,
-            first_edge: 0,
-            edge_count: 2,
-            kind: 2,
-            parameter: 0,
-            exposure: [100, 100, 0],
-        },
-    ];
-    let edges = [
-        Edge {
-            child: id(10),
-            child_index: 0,
-            multiplicity: 1,
-        },
-        Edge {
-            child: id(11),
-            child_index: 1,
-            multiplicity: 1,
-        },
-    ];
-    graph_fixture(id(20), id(14), &nodes, &edges)
-}
-
-fn graph<'a>(
+fn exposure<'a>(
     bytes: &'a [u8],
-    graph_id: [u8; 32],
-    graph_digest: [u8; 32],
-) -> RepresentationGraphV2<'a> {
-    RepresentationGraphV2::decode(
+    exposure_id: [u8; 32],
+    exposure_digest: [u8; 32],
+) -> CompositionExposureBundleV3<'a> {
+    CompositionExposureBundleV3::decode(
         bytes,
-        ContentAdmissionV2 {
-            selected_graph_id: graph_id,
-            finalized_graph_id: graph_id,
-            recomputed_graph_digest: graph_digest,
-            finalized_graph_digest: graph_digest,
+        RecordAdmissionV3 {
+            selected_id: exposure_id,
+            finalized_id: exposure_id,
+            recomputed_digest: exposure_digest,
+            finalized_digest: exposure_digest,
             record_authenticated: true,
         },
     )
-    .expect("graph")
+    .expect("exposure")
 }
 
-fn binding(graph_id: [u8; 32], graph_digest: [u8; 32], root: [u8; 32]) -> BearerBindingV2 {
+fn binding(exposure_id: [u8; 32], exposure_digest: [u8; 32], root: [u8; 32]) -> BearerBindingV2 {
     BearerBindingV2 {
         descriptor_id: id(1),
-        graph_id,
-        graph_digest,
+        exposure_id,
+        exposure_digest,
         root_id: root,
         market: id(2),
         release_set: id(3),
         receipt_mint: id(4),
         token_program: TOKEN_2022_PROGRAM_ID,
         representation_authority: id(5),
-        outcome_count: WIDTH,
+        representation_width: WIDTH,
         denominator: DENOMINATOR,
         selected_outcome: SELECTED,
     }
@@ -366,10 +289,13 @@ fn request_header(
     }
 }
 
-fn authenticated<'a>(descriptor_bytes: &'a [u8], graph_bytes: &'a [u8]) -> BearerDescriptorV2<'a> {
+fn authenticated<'a>(
+    descriptor_bytes: &'a [u8],
+    exposure_bytes: &'a [u8],
+) -> BearerDescriptorV2<'a> {
     BearerDescriptorV2::authenticate(
         descriptor(descriptor_bytes),
-        graph(graph_bytes, id(20), id(21)),
+        exposure(exposure_bytes, id(20), id(21)),
         binding(id(20), id(21), id(14)),
     )
     .expect("basis descriptor")
@@ -377,11 +303,11 @@ fn authenticated<'a>(descriptor_bytes: &'a [u8], graph_bytes: &'a [u8]) -> Beare
 
 #[test]
 fn basis_vector_actions_conserve_exactly_without_hidden_remainder() {
-    let graph_bytes = basis_graph_fixture(id(20), id(14));
+    let exposure_bytes = exposure_fixture();
     let descriptor_bytes = descriptor_fixture(id(20), id(21), id(14), [0, 10, 0]);
     let projection_bytes = projection_fixture(9);
     let projection = StructuredProjectionV2::decode(&projection_bytes).expect("projection");
-    let bearer = authenticated(&descriptor_bytes, &graph_bytes);
+    let bearer = authenticated(&descriptor_bytes, &exposure_bytes);
 
     let denominate = bearer
         .denominate_successor(projection, 2)
@@ -408,11 +334,11 @@ fn basis_vector_actions_conserve_exactly_without_hidden_remainder() {
 
 #[test]
 fn all_three_actions_use_the_shared_request_and_transferable_holder_identity() {
-    let graph_bytes = basis_graph_fixture(id(20), id(14));
+    let exposure_bytes = exposure_fixture();
     let descriptor_bytes = descriptor_fixture(id(20), id(21), id(14), [0, 10, 0]);
     let projection_bytes = projection_fixture(9);
     let projection = StructuredProjectionV2::decode(&projection_bytes).expect("projection");
-    let bearer = authenticated(&descriptor_bytes, &graph_bytes);
+    let bearer = authenticated(&descriptor_bytes, &exposure_bytes);
 
     for (actor, actor_account) in [(id(40), id(41)), (id(42), id(43))] {
         for action in [
@@ -486,26 +412,24 @@ fn all_three_actions_use_the_shared_request_and_transferable_holder_identity() {
 }
 
 #[test]
-fn same_width_recipe_graph_digest_and_root_substitutions_refuse() {
-    let graph_bytes = basis_graph_fixture(id(20), id(14));
+fn same_width_exposure_identity_digest_and_root_substitutions_refuse() {
+    let exposure_bytes = exposure_fixture();
     let descriptor_bytes = descriptor_fixture(id(20), id(21), id(14), [0, 10, 0]);
 
-    let non_basis_graph = non_basis_graph_fixture();
     let non_basis_descriptor = descriptor_fixture(id(20), id(21), id(14), [10, 10, 0]);
     assert_eq!(
         BearerDescriptorV2::authenticate(
             descriptor(&non_basis_descriptor),
-            graph(&non_basis_graph, id(20), id(21)),
+            exposure(&exposure_bytes, id(20), id(21)),
             binding(id(20), id(21), id(14)),
         ),
         Err(Error::NotBasisVector)
     );
 
-    let substituted_id_graph = basis_graph_fixture(id(22), id(14));
     assert_eq!(
         BearerDescriptorV2::authenticate(
             descriptor(&descriptor_bytes),
-            graph(&substituted_id_graph, id(22), id(21)),
+            exposure(&exposure_bytes, id(22), id(21)),
             binding(id(20), id(21), id(14)),
         ),
         Err(Error::GraphMismatch)
@@ -513,29 +437,29 @@ fn same_width_recipe_graph_digest_and_root_substitutions_refuse() {
     assert_eq!(
         BearerDescriptorV2::authenticate(
             descriptor(&descriptor_bytes),
-            graph(&graph_bytes, id(20), id(23)),
+            exposure(&exposure_bytes, id(20), id(23)),
             binding(id(20), id(21), id(14)),
         ),
         Err(Error::GraphMismatch)
     );
-    let substituted_root_graph = basis_graph_fixture(id(20), id(15));
+    let substituted_root_descriptor = descriptor_fixture(id(20), id(21), id(15), [0, 10, 0]);
     assert_eq!(
         BearerDescriptorV2::authenticate(
-            descriptor(&descriptor_bytes),
-            graph(&substituted_root_graph, id(20), id(21)),
+            descriptor(&substituted_root_descriptor),
+            exposure(&exposure_bytes, id(20), id(21)),
             binding(id(20), id(21), id(14)),
         ),
-        Err(Error::GraphMismatch)
+        Err(Error::BindingMismatch)
     );
 }
 
 #[test]
 fn terminal_resolution_replay_release_and_asset_substitutions_are_exact() {
-    let graph_bytes = basis_graph_fixture(id(20), id(14));
+    let exposure_bytes = exposure_fixture();
     let descriptor_bytes = descriptor_fixture(id(20), id(21), id(14), [0, 10, 0]);
     let projection_bytes = projection_fixture(9);
     let projection = StructuredProjectionV2::decode(&projection_bytes).expect("projection");
-    let bearer = authenticated(&descriptor_bytes, &graph_bytes);
+    let bearer = authenticated(&descriptor_bytes, &exposure_bytes);
     let rows = asset_bytes(asset(id(41)));
     let terminal = RepresentationRequestV2::new(
         request_header(RepresentationActionV2::RedeemTerminal, id(40)),
@@ -616,7 +540,7 @@ fn terminal_resolution_replay_release_and_asset_substitutions_are_exact() {
     assert_eq!(
         BearerDescriptorV2::authenticate(
             descriptor(&descriptor_bytes),
-            graph(&graph_bytes, id(20), id(21)),
+            exposure(&exposure_bytes, id(20), id(21)),
             release_binding,
         ),
         Err(Error::BindingMismatch)

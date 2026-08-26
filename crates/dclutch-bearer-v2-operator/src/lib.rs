@@ -84,10 +84,13 @@ pub use open_structured_v3::{
 
 use dclutch_bearer_v2_contract::BearerDescriptorV2;
 use dclutch_rational_representation_v2_kernel::{
-    ContentAdmissionV2, DescriptorAdmissionV2, RepresentationDescriptorV2, RepresentationGraphV2,
+    DescriptorAdmissionV2, RepresentationDescriptorV2,
 };
 use dclutch_rational_representation_v2_operator::{
     ConstructedInstructionV2, RationalObservationV2, SelectedActionInputV2, TerminalObservationV2,
+};
+use dclutch_representation_composition_v3_kernel::{
+    CompositionExposureBundleV3, RecordAdmissionV3,
 };
 use solana_program::{hash::hash, pubkey::Pubkey};
 
@@ -217,31 +220,31 @@ fn authenticate_basis_bytes(
         },
     )
     .map_err(|_| Error::NotBearer)?;
-    let graph = RepresentationGraphV2::decode(
+    let exposure = CompositionExposureBundleV3::decode(
         graph_bytes,
-        ContentAdmissionV2 {
-            selected_graph_id: descriptor.graph_id(),
-            finalized_graph_id: descriptor.graph_id(),
-            recomputed_graph_digest: graph_digest,
-            finalized_graph_digest: graph_digest,
+        RecordAdmissionV3 {
+            selected_id: descriptor.graph_id(),
+            finalized_id: descriptor.graph_id(),
+            recomputed_digest: graph_digest,
+            finalized_digest: graph_digest,
             record_authenticated: true,
         },
     )
     .map_err(|_| Error::NotBearer)?;
     BearerDescriptorV2::authenticate(
         descriptor,
-        graph,
+        exposure,
         dclutch_bearer_v2_contract::BearerBindingV2 {
             descriptor_id: descriptor.descriptor_id(),
-            graph_id: descriptor.graph_id(),
-            graph_digest: descriptor.graph_digest(),
+            exposure_id: descriptor.graph_id(),
+            exposure_digest: descriptor.graph_digest(),
             root_id: descriptor.root_id(),
             market: descriptor.market_id(),
             release_set: descriptor.release_set_id(),
             receipt_mint: descriptor.receipt_mint(),
             token_program: descriptor.token_program(),
             representation_authority: descriptor.representation_authority(),
-            outcome_count: descriptor.outcome_count(),
+            representation_width: descriptor.outcome_count(),
             denominator: descriptor.denominator(),
             selected_outcome,
         },
@@ -256,7 +259,10 @@ mod tests {
     use dclutch_rational_representation_v2_contract::RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2;
     use dclutch_rational_representation_v2_kernel::{
         DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3,
-        GRAPH_HEADER_BYTES, GRAPH_MAGIC_V2, GRAPH_NODE_BYTES, SCHEMA_VERSION_V2,
+    };
+    use dclutch_representation_composition_v3_kernel::{
+        CompositionExposureInputV3, CompositionExposureRowInputV3, CompositionExposureTermV3,
+        composition_exposure_bytes_v3, encode_composition_exposure_v3_atomic,
     };
     use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
 
@@ -283,23 +289,56 @@ mod tests {
         put(output, offset, &value.to_le_bytes());
     }
 
-    fn graph_fixture() -> Vec<u8> {
-        let mut bytes = vec![0_u8; GRAPH_HEADER_BYTES + GRAPH_NODE_BYTES + WIDTH as usize * 8];
-        put(&mut bytes, 0, &GRAPH_MAGIC_V2);
-        put(&mut bytes, 8, &SCHEMA_VERSION_V2.to_le_bytes());
-        put(&mut bytes, 16, &id(20));
-        put(&mut bytes, 48, &id(14));
-        put_u32(&mut bytes, 80, WIDTH);
-        put_u32(&mut bytes, 84, 1);
-        put_u32(&mut bytes, 88, 0);
-        put_u64(&mut bytes, 96, 100);
-        put(&mut bytes, GRAPH_HEADER_BYTES, &id(14));
-        *bytes.get_mut(GRAPH_HEADER_BYTES + 44).expect("kind") = 0;
-        put_u64(&mut bytes, GRAPH_HEADER_BYTES + 48, u64::from(SELECTED));
-        let exposure = GRAPH_HEADER_BYTES + GRAPH_NODE_BYTES;
-        put_u64(&mut bytes, exposure, 0);
-        put_u64(&mut bytes, exposure + 8, 100);
-        put_u64(&mut bytes, exposure + 16, 0);
+    fn exposure_fixture() -> Vec<u8> {
+        let terms = [
+            [CompositionExposureTermV3 {
+                product_coordinate: 0,
+                numerator: 1,
+            }],
+            [CompositionExposureTermV3 {
+                product_coordinate: 1,
+                numerator: 1,
+            }],
+            [CompositionExposureTermV3 {
+                product_coordinate: 2,
+                numerator: 1,
+            }],
+        ];
+        let rows = [
+            CompositionExposureRowInputV3 {
+                node_id: id(10),
+                denominator: 1,
+                terms: &terms[0],
+            },
+            CompositionExposureRowInputV3 {
+                node_id: id(11),
+                denominator: 1,
+                terms: &terms[1],
+            },
+            CompositionExposureRowInputV3 {
+                node_id: id(12),
+                denominator: 1,
+                terms: &terms[2],
+            },
+        ];
+        let width = composition_exposure_bytes_v3(WIDTH, WIDTH).expect("width");
+        let mut scratch = vec![0_u8; width];
+        let mut bytes = vec![0_u8; width];
+        encode_composition_exposure_v3_atomic(
+            CompositionExposureInputV3 {
+                market: id(2),
+                result_domain: id(30),
+                release_set: id(3),
+                product_basis: id(31),
+                representation_basis: id(32),
+                graph_id: id(33),
+                product_width: WIDTH,
+                rows: &rows,
+            },
+            &mut scratch,
+            &mut bytes,
+        )
+        .expect("exposure");
         bytes
     }
 
@@ -327,7 +366,7 @@ mod tests {
 
     #[test]
     fn chain_gate_refuses_non_basis_and_selected_outcome_substitution() {
-        let graph_bytes = graph_fixture();
+        let graph_bytes = exposure_fixture();
         let mut descriptor_bytes = descriptor_fixture();
         put(&mut descriptor_bytes, 48, &hash(&graph_bytes).to_bytes());
         let claims_program = id(60);

@@ -18,6 +18,7 @@ dclutch-rational-representation-v2-contract = { path = "../dclutch-rational-repr
 dclutch-rational-representation-v2-kernel = { path = "../dclutch-rational-representation-v2-kernel" }
 dclutch-rational-representation-v2-operator = { path = "../dclutch-rational-representation-v2-operator" }
 dclutch-rational-representation-v2-request-contract = { path = "../dclutch-rational-representation-v2-request-contract" }
+dclutch-representation-composition-v3-kernel = { path = "../dclutch-representation-composition-v3-kernel" }
 dclutch-request-profile-contract = { path = "../dclutch-request-profile-contract" }
 dclutch-transition-vm = { path = "../dclutch-transition-vm" }
 dclutch-token-svm = { path = "../dclutch-token-svm" }
