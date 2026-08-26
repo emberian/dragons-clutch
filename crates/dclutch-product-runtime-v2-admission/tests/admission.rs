@@ -69,7 +69,7 @@ fn receipt_contains_only_record_coordinates_and_admission_joins_exact_ids() {
     assert_eq!(projection.join.outcome_count, 262);
     assert_eq!(projection.join.liability_basis_id, id(4));
     assert_eq!(projection.product_record_digest, id(10));
-    assert_eq!(projection.representation_record_digest, id(9));
+    assert_eq!(projection.portfolio_record_digest, id(9));
 }
 
 #[test]

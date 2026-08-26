@@ -70,7 +70,6 @@ fn compiler_derives_every_child_digest_and_runtime_width() {
 fn finalized_observations_build_one_unsigned_admission_frame() {
     let registry_key = Pubkey::new_from_array([70; 32]);
     let admission_program = Pubkey::new_from_array([71; 32]);
-    let receipt_key = Pubkey::new_from_array([72; 32]);
     let cuts = [0_i128];
     let coefficients = [1_u64, 1, 1];
     let mut product = [0_u8; PRODUCT_RECORD_BYTES_V2];
@@ -96,6 +95,7 @@ fn finalized_observations_build_one_unsigned_admission_frame() {
         &mut portfolio,
     )
     .expect("compile");
+    let receipt_key = derive_admission_receipt_v2(admission_program, report.request);
     let receipt_data = [0_u8; ADMISSION_RECEIPT_BYTES_V2];
     let empty: [u8; 0] = [];
     let slot = 99;

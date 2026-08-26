@@ -61,6 +61,8 @@ pub const ADMISSION_REQUEST_MAGIC_V2: [u8; 8] = *b"DCLTPRQ2";
 pub const ADMISSION_VERSION_V2: u16 = 2;
 /// Number of finalized records in one complete admission.
 pub const ADMISSION_RECORD_COUNT_V2: u8 = 3;
+/// Admission-program PDA domain for one exact reference-only receipt.
+pub const ADMISSION_RECEIPT_PDA_DOMAIN_V2: &[u8] = b"dclutch/product-v2/admission";
 
 const PRODUCT_ID_OFFSET: usize = 16;
 const PRODUCT_DOMAIN_DIGEST_OFFSET: usize = 48;
@@ -322,8 +324,8 @@ pub struct AdmissionProjectionV2 {
     pub join: ProductJoinV2,
     /// Product record digest, distinct from stable Product identity.
     pub product_record_digest: ContentId,
-    /// Representation record digest, distinct from semantic release/basis IDs.
-    pub representation_record_digest: ContentId,
+    /// Portfolio record digest, distinct from semantic release/basis IDs.
+    pub portfolio_record_digest: ContentId,
 }
 
 /// Decode and join three already Registry-authenticated exact record bodies.
@@ -358,7 +360,7 @@ pub fn admit_authenticated_records_v2(
     Ok(AdmissionProjectionV2 {
         join,
         product_record_digest: receipt.product.content_digest,
-        representation_record_digest: receipt.portfolio.content_digest,
+        portfolio_record_digest: receipt.portfolio.content_digest,
     })
 }
 

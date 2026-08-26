@@ -13,9 +13,10 @@ use dclutch_product_runtime_v2::{
     compile_result_domain_v2,
 };
 use dclutch_product_runtime_v2_admission::{
-    ADMISSION_RECEIPT_BYTES_V2, ADMISSION_REQUEST_BYTES_V2, AdmissionReceiptV2, AdmissionRequestV2,
-    FinalizedRecordCoordinateV2, PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2,
-    PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2, RESULT_DOMAIN_SCHEMA_ID_V2,
+    ADMISSION_RECEIPT_BYTES_V2, ADMISSION_RECEIPT_PDA_DOMAIN_V2, ADMISSION_REQUEST_BYTES_V2,
+    AdmissionReceiptV2, AdmissionRequestV2, FinalizedRecordCoordinateV2, PORTFOLIO_SCHEMA_ID_V2,
+    PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
+    RESULT_DOMAIN_SCHEMA_ID_V2,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use solana_program::{
@@ -217,6 +218,25 @@ pub struct AdmissionInstructionPlanV2 {
     pub observation_slot: u64,
 }
 
+/// Derive the sole receipt account for one exact Product/domain/portfolio
+/// admission request. The receipt address is content-addressed and therefore
+/// cannot be reused for another Product graph.
+pub fn derive_admission_receipt_v2(
+    admission_program: Pubkey,
+    request: AdmissionRequestV2,
+) -> Pubkey {
+    Pubkey::find_program_address(
+        &[
+            ADMISSION_RECEIPT_PDA_DOMAIN_V2,
+            &request.product_digest.to_bytes(),
+            &request.result_domain_digest.to_bytes(),
+            &request.portfolio_digest.to_bytes(),
+        ],
+        &admission_program,
+    )
+    .0
+}
+
 /// Recheck finalized state and build one exact unsigned admission instruction.
 pub fn build_admission_instruction_v2(
     admission_program: Pubkey,
@@ -242,6 +262,8 @@ pub fn build_admission_instruction_v2(
     }
     if !state.registry.executable
         || state.receipt_output.owner != admission_program
+        || state.receipt_output.key
+            != derive_admission_receipt_v2(admission_program, compiled.request)
         || state.receipt_output.executable
         || state.receipt_output.data.len() != ADMISSION_RECEIPT_BYTES_V2
         || state.receipt_output.data.iter().any(|byte| *byte != 0)
