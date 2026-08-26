@@ -11,7 +11,8 @@ describe('Rational CapabilityV4 open workbench', () => {
     expect(html).toContain('Reconstitute native claim');
     expect(html).toContain('Issue Structured receipt');
     expect(html).toContain('Unwrap Structured receipt');
-    expect(html).toContain('32 + 4N');
+    expect(html).toContain('32 + 4K');
+    expect(html).toContain('one representation coordinate');
     expect(html).toContain('zero coefficients remain zero-delta rows');
     expect(html).toContain('Build bounded unsigned v0 + ALT candidate');
     expect(html).toContain('Wallet signing blocked by checked-release gate');

@@ -19,9 +19,9 @@ describe('Rational representation successor workbench', () => {
     expect(html).toContain('zero is valid');
     expect(html).toContain('Rust-emitter gated');
     expect(html).toContain('closure only; not a payout route');
-    expect(html).toContain('Product N / support K');
+    expect(html).toContain('S is ordered nonzero support within representation K');
     expect(html).toContain('Wallet signing blocked by checked-release gate');
-    expect(html).toContain('20 + 4K');
+    expect(html).toContain('20 + 4S');
     expect(html).not.toContain('Submit');
     expect(html).not.toContain('sample token balance');
     expect(html).not.toContain('Convert to atoms');
