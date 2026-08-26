@@ -29,6 +29,8 @@ pub mod generated;
 pub mod plan;
 /// Total fixed-layout Series/Ticket replay evaluator.
 pub mod replay;
+/// Exact Series action request and occurrence-proof wire.
+pub mod request;
 
 pub use generated::{
     SERIES_MAXIMUM_MERKLE_HEIGHT_V3, SERIES_OCCURRENCE_BYTES_V3,

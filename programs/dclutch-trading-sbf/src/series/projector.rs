@@ -6,21 +6,21 @@
 //! bytes and exposes only action-matched lifecycle planners.
 
 use dclutch_core_contract::ContentId;
+use dclutch_series_v3_kernel::request::{AdmittedSeriesActionV3, admit_series_action_v3};
 use solana_program::pubkey::Pubkey;
 
 use super::{
     AccountKeyV3, AdmittedOccurrenceV3, AdmittedTicketV3, AuthenticatedProductProjectionV2,
     PrepareSeriesEscrowPlanV3, SeriesConsumeCompositionErrorV3, SeriesConsumeCompositionV3,
-    SeriesV3Error, TemplateV3, TerminalSeriesEscrowPlanV3, admit_occurrence_bytes, admit_ticket,
-    compose_series_consume_v3, consume_series_escrow_v3, expire_series_escrow_v3,
-    instruction::{SeriesActionRequestV3, SeriesActionV3},
+    SeriesV3Error, TemplateV3, TerminalSeriesEscrowPlanV3, compose_series_consume_v3,
+    consume_series_escrow_v3, expire_series_escrow_v3,
+    instruction::{SeriesActionRequestV3, SeriesActionV3, SeriesInstructionErrorV3},
     lifecycle::{
         ClosePlanV3, LifecycleErrorV3, OccurrenceCommitPlanV3, PendingFundingPlanV3, RetirePlanV3,
         plan_close, plan_consume, plan_expire, plan_prepare, plan_retire,
     },
     pre_founding_series_escrow, prepare_series_escrow_v3,
     state::{SeriesStateV3, TicketStateV3},
-    template_content_id,
 };
 
 /// Refusal from the Series hot content/projector boundary.
@@ -57,33 +57,29 @@ impl From<SeriesConsumeCompositionErrorV3> for SeriesProjectorErrorV3 {
 /// Exact content join selected by one decoded family request.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuthenticatedSeriesActionV3<'a> {
-    request: SeriesActionRequestV3<'a>,
-    template: TemplateV3,
-    template_id: ContentId,
-    occurrence: Option<AdmittedOccurrenceV3>,
-    ticket: Option<AdmittedTicketV3>,
+    admitted: AdmittedSeriesActionV3<'a>,
 }
 
 impl<'a> AuthenticatedSeriesActionV3<'a> {
     /// Selected Series action.
     pub const fn action(self) -> SeriesActionV3 {
-        self.request.action()
+        self.admitted.action()
     }
     /// Exact finalized Template/config.
     pub const fn template(self) -> TemplateV3 {
-        self.template
+        self.admitted.template()
     }
     /// Exact domain-separated Template identity.
     pub const fn template_id(self) -> ContentId {
-        self.template_id
+        self.admitted.template_id()
     }
     /// Exact occurrence admission, present only on occurrence actions.
     pub const fn occurrence(self) -> Option<AdmittedOccurrenceV3> {
-        self.occurrence
+        self.admitted.occurrence()
     }
     /// Exact Ticket admission, absent only on root Close.
     pub const fn ticket(self) -> Option<AdmittedTicketV3> {
-        self.ticket
+        self.admitted.ticket()
     }
 
     /// Plan one dust-tolerant replay-account preparation.
@@ -101,7 +97,7 @@ impl<'a> AuthenticatedSeriesActionV3<'a> {
             self.required_occurrence()?,
             self.required_ticket()?,
             series,
-            self.request.expected_series_revision(),
+            self.admitted.request().expected_series_revision(),
             now_slot,
             current_ticket_lamports,
             ticket_state_rent,
@@ -147,8 +143,8 @@ impl<'a> AuthenticatedSeriesActionV3<'a> {
             ticket_state_key,
             series,
             ticket_state,
-            self.request.expected_series_revision(),
-            self.request.expected_ticket_revision(),
+            self.admitted.request().expected_series_revision(),
+            self.admitted.request().expected_ticket_revision(),
             now_slot,
             funding,
         )?)
@@ -177,8 +173,8 @@ impl<'a> AuthenticatedSeriesActionV3<'a> {
             series_bytes,
             ticket_state_bytes,
             now_slot,
-            self.request.expected_series_revision(),
-            self.request.expected_ticket_revision(),
+            self.admitted.request().expected_series_revision(),
+            self.admitted.request().expected_ticket_revision(),
         )?)
     }
 
@@ -217,8 +213,8 @@ impl<'a> AuthenticatedSeriesActionV3<'a> {
             ticket_state_key,
             series,
             ticket_state,
-            self.request.expected_series_revision(),
-            self.request.expected_ticket_revision(),
+            self.admitted.request().expected_series_revision(),
+            self.admitted.request().expected_ticket_revision(),
             now_slot,
         )?)
     }
@@ -252,12 +248,12 @@ impl<'a> AuthenticatedSeriesActionV3<'a> {
             return Err(SeriesProjectorErrorV3::Frame);
         }
         Ok(plan_retire(
-            self.template.occurrence_count(),
+            self.admitted.template().occurrence_count(),
             series,
             ticket_state,
             self.required_ticket()?,
-            self.request.expected_series_revision(),
-            self.request.expected_ticket_revision(),
+            self.admitted.request().expected_series_revision(),
+            self.admitted.request().expected_ticket_revision(),
             observed_ticket_lamports,
         )?)
     }
@@ -273,20 +269,24 @@ impl<'a> AuthenticatedSeriesActionV3<'a> {
             return Err(SeriesProjectorErrorV3::Frame);
         }
         Ok(plan_close(
-            self.template,
+            self.admitted.template(),
             series,
-            self.request.expected_series_revision(),
+            self.admitted.request().expected_series_revision(),
             observed_root_lamports,
             exact_root_rent,
         )?)
     }
 
     fn required_occurrence(self) -> Result<AdmittedOccurrenceV3, SeriesProjectorErrorV3> {
-        self.occurrence.ok_or(SeriesProjectorErrorV3::Frame)
+        self.admitted
+            .required_occurrence()
+            .map_err(|_| SeriesProjectorErrorV3::Frame)
     }
 
     fn required_ticket(self) -> Result<AdmittedTicketV3, SeriesProjectorErrorV3> {
-        self.ticket.ok_or(SeriesProjectorErrorV3::Frame)
+        self.admitted
+            .required_ticket()
+            .map_err(|_| SeriesProjectorErrorV3::Frame)
     }
 }
 
@@ -302,58 +302,30 @@ pub fn authenticate_action_content_v3<'a>(
     occurrence_bytes: Option<&[u8]>,
     ticket_bytes: Option<&[u8]>,
 ) -> Result<AuthenticatedSeriesActionV3<'a>, SeriesProjectorErrorV3> {
-    let template = TemplateV3::decode(template_bytes)?;
-    let template_id = template_content_id(template_bytes)?;
-    if template_id != request.template() {
+    let admitted = admit_series_action_v3(
+        request.bytes(),
+        template_bytes,
+        occurrence_bytes,
+        ticket_bytes,
+    )
+    .map_err(|error| match error {
+        SeriesInstructionErrorV3::Action => SeriesProjectorErrorV3::Frame,
+        SeriesInstructionErrorV3::Encoding
+        | SeriesInstructionErrorV3::Identity
+        | SeriesInstructionErrorV3::Proof
+        | SeriesInstructionErrorV3::ImmutableContent => SeriesProjectorErrorV3::Content,
+    })?;
+    if admitted.request() != request {
         return Err(SeriesProjectorErrorV3::Content);
     }
-    let (occurrence, ticket) = match request.action() {
-        SeriesActionV3::Prepare | SeriesActionV3::Consume | SeriesActionV3::Expire => {
-            let occurrence_bytes = occurrence_bytes.ok_or(SeriesProjectorErrorV3::Frame)?;
-            let ticket_bytes = ticket_bytes.ok_or(SeriesProjectorErrorV3::Frame)?;
-            let occurrence =
-                admit_occurrence_bytes(template_bytes, occurrence_bytes, request.proof_bytes())?;
-            let ticket = admit_ticket(ticket_bytes)?;
-            if request.occurrence() != Some(occurrence.occurrence_id())
-                || request.ticket() != Some(ticket.content_id())
-            {
-                return Err(SeriesProjectorErrorV3::Content);
-            }
-            occurrence.require_ticket(ticket.ticket())?;
-            (Some(occurrence), Some(ticket))
-        }
-        SeriesActionV3::Retire => {
-            if occurrence_bytes.is_some() {
-                return Err(SeriesProjectorErrorV3::Frame);
-            }
-            let ticket = admit_ticket(ticket_bytes.ok_or(SeriesProjectorErrorV3::Frame)?)?;
-            if request.ticket() != Some(ticket.content_id())
-                || ticket.ticket().template() != template_id
-            {
-                return Err(SeriesProjectorErrorV3::Content);
-            }
-            (None, Some(ticket))
-        }
-        SeriesActionV3::Close => {
-            if occurrence_bytes.is_some() || ticket_bytes.is_some() {
-                return Err(SeriesProjectorErrorV3::Frame);
-            }
-            (None, None)
-        }
-    };
-    Ok(AuthenticatedSeriesActionV3 {
-        request,
-        template,
-        template_id,
-        occurrence,
-        ticket,
-    })
+    Ok(AuthenticatedSeriesActionV3 { admitted })
 }
 
 #[cfg(test)]
 mod tests {
     extern crate std;
 
+    use dclutch_series_v3_kernel::{admit_ticket, template_content_id};
     use std::vec::Vec;
 
     use super::*;
