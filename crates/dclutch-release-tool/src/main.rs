@@ -12,16 +12,16 @@ use std::{
     process::ExitCode,
 };
 
-use dclutch_release_set_contract::ExecutionReleaseSetV1;
+use dclutch_release_set_contract::{ExecutionReleaseSetV1, ProtocolInfrastructureProfileV1};
 use dclutch_release_tool::{
-    BuildMetadataV1, CheckedCapabilityExecutionV1, CheckedExecutionReleaseSetV1, CheckedReleaseV1,
-    ReleaseEvidenceV1, build_checked_capability_execution_from_bytes_v1,
-    build_checked_execution_release_set, build_checked_release,
-    verify_checked_capability_execution_v1, verify_checked_execution_release_set,
-    verify_checked_release,
+    BuildMetadataV1, CheckedCapabilityExecutionV1, CheckedExecutionReleaseSetV1,
+    CheckedInfrastructureV1, CheckedReleaseV1, ReleaseEvidenceV1,
+    build_checked_capability_execution_from_bytes_v1, build_checked_execution_release_set,
+    build_checked_infrastructure_v1, build_checked_release, verify_checked_capability_execution_v1,
+    verify_checked_execution_release_set, verify_checked_infrastructure_v1, verify_checked_release,
 };
 
-const USAGE: &str = "usage:\n  dclutch-release-tool create --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify --manifest PATH --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH [--text-out PATH]\n  dclutch-release-tool inspect --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-set --release-set PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-set --manifest PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH [--text-out PATH]\n  dclutch-release-tool inspect-set --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-capability-execution --descriptor PATH --strategy PATH --certificate PATH [--admission PATH] --accelerator PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-capability-execution --manifest PATH --accelerator PATH [--text-out PATH]\n  dclutch-release-tool inspect-capability-execution --manifest PATH [--text-out PATH]";
+const USAGE: &str = "usage:\n  dclutch-release-tool create --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify --manifest PATH --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH [--text-out PATH]\n  dclutch-release-tool inspect --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-set --release-set PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-set --manifest PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH [--text-out PATH]\n  dclutch-release-tool inspect-set --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-infrastructure --execution PATH --profile PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-infrastructure --manifest PATH --execution PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH [--text-out PATH]\n  dclutch-release-tool inspect-infrastructure --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-capability-execution --descriptor PATH --strategy PATH --certificate PATH [--admission PATH] --accelerator PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-capability-execution --manifest PATH --accelerator PATH [--text-out PATH]\n  dclutch-release-tool inspect-capability-execution --manifest PATH [--text-out PATH]";
 
 fn main() -> ExitCode {
     match run() {
@@ -52,10 +52,74 @@ fn run() -> Result<(), String> {
         "create-set" => create_set(&mut flags),
         "verify-set" => verify_set(&mut flags),
         "inspect-set" => inspect_set(&mut flags),
+        "create-infrastructure" => create_infrastructure(&mut flags),
+        "verify-infrastructure" => verify_infrastructure(&mut flags),
+        "inspect-infrastructure" => inspect_infrastructure(&mut flags),
         "create-capability-execution" => create_capability_execution(&mut flags),
         "verify-capability-execution" => verify_capability_execution(&mut flags),
         "inspect-capability-execution" => inspect_capability_execution(&mut flags),
         _ => Err(format!("unknown command: {command}")),
+    }
+}
+
+fn create_infrastructure(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), String> {
+    let output = required(flags, "--out")?;
+    let text_output = flags.remove("--text-out");
+    let execution_manifest = read_bytes(required(flags, "--execution")?)?;
+    let profile_bytes = read_bytes(required(flags, "--profile")?)?;
+    let manifests = CheckedManifestFiles::load(flags)?;
+    let registry = load_checked_release(required(flags, "--registry")?)?;
+    let rent = load_checked_release(required(flags, "--rent")?)?;
+    require_no_flags(flags)?;
+
+    let execution = verify_checked_execution_release_set(&execution_manifest, manifests.refs())
+        .map_err(format_release_error)?;
+    let profile = ProtocolInfrastructureProfileV1::decode(&profile_bytes)
+        .map_err(|error| format!("infrastructure profile refused: {error:?}"))?;
+    let checked = manifests.decode()?;
+    let result = build_checked_infrastructure_v1(execution, profile, &checked[0], &registry, &rent)
+        .map_err(format_release_error)?;
+    fs::write(&output, result.encode())
+        .map_err(|error| format!("failed writing {}: {error}", output.display()))?;
+    emit_infrastructure_text(result, text_output)
+}
+
+fn verify_infrastructure(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), String> {
+    let manifest = read_bytes(required(flags, "--manifest")?)?;
+    let execution = read_bytes(required(flags, "--execution")?)?;
+    let text_output = flags.remove("--text-out");
+    let manifests = CheckedManifestFiles::load(flags)?;
+    let registry = read_bytes(required(flags, "--registry")?)?;
+    let rent = read_bytes(required(flags, "--rent")?)?;
+    require_no_flags(flags)?;
+
+    let result =
+        verify_checked_infrastructure_v1(&manifest, &execution, manifests.refs(), &registry, &rent)
+            .map_err(format_release_error)?;
+    emit_infrastructure_text(result, text_output)
+}
+
+fn inspect_infrastructure(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), String> {
+    let manifest = read_bytes(required(flags, "--manifest")?)?;
+    let text_output = flags.remove("--text-out");
+    require_no_flags(flags)?;
+    let result = CheckedInfrastructureV1::decode(&manifest).map_err(format_release_error)?;
+    emit_infrastructure_text(result, text_output)
+}
+
+fn emit_infrastructure_text(
+    infrastructure: CheckedInfrastructureV1,
+    output: Option<PathBuf>,
+) -> Result<(), String> {
+    let text = infrastructure.render_text().map_err(format_release_error)?;
+    if let Some(path) = output {
+        fs::write(&path, text)
+            .map_err(|error| format!("failed writing {}: {error}", path.display()))
+    } else {
+        io::stdout()
+            .lock()
+            .write_all(text.as_bytes())
+            .map_err(|error| format!("failed writing stdout: {error}"))
     }
 }
 
@@ -309,6 +373,10 @@ fn load_release_set(path: PathBuf) -> Result<ExecutionReleaseSetV1, String> {
     let bytes = read_bytes(path)?;
     ExecutionReleaseSetV1::decode(&bytes)
         .map_err(|error| format!("execution release set refused: {error:?}"))
+}
+
+fn load_checked_release(path: PathBuf) -> Result<CheckedReleaseV1, String> {
+    CheckedReleaseV1::decode(&read_bytes(path)?).map_err(format_release_error)
 }
 
 impl EvidenceFiles {

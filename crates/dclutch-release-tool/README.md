@@ -75,6 +75,40 @@ and requires the entire set to rebuild byte-for-byte. The manifest is offline
 reproducibility evidence: the Registry activation cache remains the sole
 runtime authority, and this is neither deployment nor public-network evidence.
 
+### Immutable infrastructure join
+
+The five-role execution set is not sufficient by itself: Core selects one
+immutable Registry and Rent pair through `ProtocolInfrastructureProfileV1`.
+The infrastructure commands verify all five role releases again, require the
+Core release in that exact set, bind the exact profile to independently checked
+Registry and Rent artifacts, derive the profile PDA, and refuse any upgradeable
+component.
+
+```text
+dclutch-release-tool create-infrastructure \
+  --execution <multiprogram.checked> \
+  --profile <infrastructure-profile.bin> \
+  --core <core.checked> --claims <claims.checked> \
+  --trading <trading.checked> --resolution <resolution.checked> \
+  --custody <custody.checked> \
+  --registry <registry.checked> --rent <rent.checked> \
+  --out <infrastructure.checked> \
+  [--text-out <infrastructure.txt>]
+
+dclutch-release-tool verify-infrastructure \
+  --manifest <infrastructure.checked> \
+  --execution <multiprogram.checked> \
+  --core <core.checked> --claims <claims.checked> \
+  --trading <trading.checked> --resolution <resolution.checked> \
+  --custody <custody.checked> \
+  --registry <registry.checked> --rent <rent.checked> \
+  [--text-out <infrastructure.txt>]
+
+dclutch-release-tool inspect-infrastructure \
+  --manifest <infrastructure.checked> \
+  [--text-out <infrastructure.txt>]
+```
+
 ### From checked evidence to Registry activation
 
 The host-only operator join accepts the verified
