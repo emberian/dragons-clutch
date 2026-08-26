@@ -16,7 +16,7 @@ use dclutch_market_core_codec::{
     SERIES_FOUNDING_PERMIT_BYTES_V1, SeriesCoreActionV1, SeriesCoreRequestV1,
 };
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_series_v3_kernel::{AccountKeyV3, funding_list_id};
+use dclutch_series_v3_kernel::{AccountKeyV3, funding_list_id, ticket_content_id};
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
@@ -50,6 +50,7 @@ const FOUND_INVOCATION_V4: u32 = 0;
 const CALLER: usize = 0;
 const MARKET: usize = 1;
 const CURRENT_CORE: usize = 19;
+const TICKET_RAW: usize = 39;
 const FUNDING_START: usize = 42;
 const FOUND_SUFFIX_ACCOUNT_COUNT: usize = 15;
 const _: () = assert!(SERIES_CONSUME_CORE_FOUND_PREFIX_ACCOUNT_COUNT_V4 == 42);
@@ -311,7 +312,12 @@ fn prepare(
         Some(lock_prefix.raw_receipt()),
     )?;
     let request_digest = hash(request_bytes).to_bytes();
-    let ticket = request.ticket().ok_or(TradingSbfError::Content)?.to_bytes();
+    let child_accounts = invocation_accounts(resolved.invocation, effect_accounts)?;
+    let ticket = ticket_context_from_account(
+        child_accounts
+            .get(TICKET_RAW)
+            .ok_or(TradingSbfError::Content)?,
+    )?;
     let market = request.market().ok_or(TradingSbfError::Content)?.to_bytes();
     let authority_seeds = CallerAuthoritySeedsV1::new(
         ContentId::new(request.release_set().to_bytes()).map_err(|_| TradingSbfError::Content)?,
@@ -323,7 +329,6 @@ fn prepare(
     .map_err(|_| TradingSbfError::Content)?;
     let (expected_authority, authority_bump) =
         Pubkey::find_program_address(&authority_seeds.as_slices(), program_id);
-    let child_accounts = invocation_accounts(resolved.invocation, effect_accounts)?;
     if child_accounts
         .get(CALLER)
         .is_none_or(|account| account.key != &expected_authority || !account.is_writable)
@@ -343,6 +348,15 @@ fn prepare(
         authority_bump,
         funding_count,
     })
+}
+
+fn ticket_context_from_account(account: &AccountInfo<'_>) -> Result<[u8; 32], ProgramError> {
+    let ticket_raw = account
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
+    ticket_content_id(&ticket_raw)
+        .map(|content| content.to_bytes())
+        .map_err(|_| TradingSbfError::Content.into())
 }
 
 fn validate_found_invocation(
@@ -473,6 +487,7 @@ mod tests {
     use alloc::{boxed::Box, vec};
 
     use dclutch_market_core_codec::{Identity, SeriesCoreFoundAckV2};
+    use dclutch_series_v3_kernel::generated;
 
     use super::*;
 
@@ -525,6 +540,32 @@ mod tests {
             Box::leak(Box::new(owner)),
             false,
         )
+    }
+
+    #[test]
+    fn caller_context_follows_ticket_content_not_ticket_account_key() {
+        let first_key = Pubkey::new_unique();
+        let second_key = Pubkey::new_unique();
+        let exact = generated::SERIES_EXAMPLE_TICKET_V3.to_vec();
+        let first = account(first_key, Pubkey::new_unique(), exact.clone());
+        let second = account(second_key, Pubkey::new_unique(), exact);
+        let exact_context = ticket_context_from_account(&first).expect("ticket context");
+        assert_eq!(
+            ticket_context_from_account(&second),
+            Ok(exact_context),
+            "the finalized-record account key is not the semantic Ticket identity"
+        );
+
+        let mut substituted = generated::SERIES_EXAMPLE_TICKET_V3.to_vec();
+        *substituted
+            .get_mut(generated::SERIES_TICKET_REFUND_OWNER_OFFSET_V3)
+            .expect("refund-owner byte") ^= 1;
+        let same_key = account(first_key, Pubkey::new_unique(), substituted);
+        assert_ne!(
+            ticket_context_from_account(&same_key),
+            Ok(exact_context),
+            "reusing the finalized-record account key cannot preserve caller authority after content substitution"
+        );
     }
 
     fn found_fixture(
