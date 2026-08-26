@@ -47,6 +47,8 @@ pub mod capability_program_set_v2;
 pub mod compiled_direct;
 /// Chain-derived unsigned Dealer junior-equity Hot execution construction.
 pub mod dealer_equity_hot_v3;
+/// Chain-derived Dealer scenario exact-fill physical-account projection.
+pub mod dealer_scenario_hot_v4;
 /// Exact delegated-allowance Custody successor CPI construction.
 pub mod delegated_custody;
 /// Chain-derived action-selected Direct V3 inline execution construction.
