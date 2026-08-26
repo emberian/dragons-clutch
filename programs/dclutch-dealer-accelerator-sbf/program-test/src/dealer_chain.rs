@@ -5,6 +5,11 @@
 //! capability, strategy, and physical-account fact that is owned by selector
 //! 9.  Its output is one ordinary Trading Hot instruction; the real Trading
 //! ELF must authenticate the frame and CPI the real Dealer accelerator ELF.
+#![expect(
+    dead_code,
+    unused_imports,
+    reason = "staged for the joined dealer chain campaign"
+)]
 
 use std::vec::Vec;
 
