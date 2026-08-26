@@ -526,6 +526,11 @@ fn reconstitution_and_unwrap_are_exact_inverse_effect_shapes() {
         .expect("burn")
         .expect("exact burn");
     assert_eq!(effect.style, TokenEffectStyleV2::BurnShard);
+    assert_eq!(
+        effect.authority,
+        id(7),
+        "shard burn authority is the observed Token holder, not the mint authority"
+    );
     assert_eq!(effect.amount, 10);
     let mut quantities = vec![0_u8; prepared.claims_quantity_bytes().expect("width")];
     prepared
@@ -584,6 +589,16 @@ fn reconstitution_and_unwrap_are_exact_inverse_effect_shapes() {
             .expect("effect")
             .style,
         TokenEffectStyleV2::BurnReceipt
+    );
+    assert_eq!(
+        effects
+            .first()
+            .expect("receipt burn")
+            .as_ref()
+            .expect("effect")
+            .authority,
+        id(7),
+        "receipt burn authority is the observed Token holder, not the mint authority"
     );
     assert_eq!(
         effects
@@ -714,9 +729,9 @@ fn terminal_winner_burn_claims_and_custody_join_is_exact() {
             token_effect_digest: id(36),
             post_receipt_supply: 7,
             post_asset_observations: &posts,
-            custody_request: Some(custody_request),
+            custody_request: Some(&custody_request),
             custody_request_digest: id(74),
-            custody_receipt: Some(custody_receipt),
+            custody_receipt: Some(&custody_receipt),
             custody_receipt_digest: id(75),
             custody_replay_digest: id(73),
             post_resource_digest: id(76),

@@ -362,7 +362,7 @@ impl Iterator for TokenEffectIterV2<'_> {
                         mint: header.receipt_mint,
                         source: header.receipt_account,
                         destination: [0; 32],
-                        authority: header.representation_authority,
+                        authority: header.actor,
                         amount: header.quantity,
                     })
                 } else if self.cursor <= header.asset_count {
@@ -401,7 +401,11 @@ impl TokenEffectIterV2<'_> {
             } else {
                 [0; 32]
             },
-            authority: header.representation_authority,
+            authority: if minting {
+                header.representation_authority
+            } else {
+                header.actor
+            },
             amount,
         })
     }

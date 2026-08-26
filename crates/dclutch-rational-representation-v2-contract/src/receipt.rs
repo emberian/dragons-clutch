@@ -39,11 +39,11 @@ pub struct CompletionEvidenceV2<'a> {
     /// Repeated `(shard_supply, actor_shards, structured_shards)` observations.
     pub post_asset_observations: &'a [u8],
     /// Custody request for positive terminal payout only.
-    pub custody_request: Option<CustodyRequestV1>,
+    pub custody_request: Option<&'a CustodyRequestV1>,
     /// SHA-256 of Custody request bytes, zero when inactive.
     pub custody_request_digest: [u8; 32],
     /// Custody return receipt for positive terminal payout only.
-    pub custody_receipt: Option<CustodyReceiptV1>,
+    pub custody_receipt: Option<&'a CustodyReceiptV1>,
     /// SHA-256 of exact Custody receipt bytes, zero when inactive.
     pub custody_receipt_digest: [u8; 32],
     /// SHA-256 of exact post Custody replay bytes, zero when inactive.
@@ -597,8 +597,8 @@ fn validate_custody(
         }
         return Ok(());
     }
-    let request = evidence.custody_request.ok_or(Error::CustodyMismatch)?;
-    let receipt = evidence.custody_receipt.ok_or(Error::CustodyMismatch)?;
+    let request = *evidence.custody_request.ok_or(Error::CustodyMismatch)?;
+    let receipt = *evidence.custody_receipt.ok_or(Error::CustodyMismatch)?;
     require_nonzero(evidence.custody_request_digest)?;
     require_nonzero(evidence.custody_receipt_digest)?;
     require_nonzero(evidence.custody_replay_digest)?;
