@@ -140,6 +140,15 @@ pub(crate) struct RollbackEvidence {
 }
 
 #[derive(Debug, Serialize)]
+pub(crate) struct ReplayEvidence {
+    pub(crate) transaction: TransactionEvidence,
+    pub(crate) state_unchanged: bool,
+    pub(crate) certificate_unchanged: bool,
+    pub(crate) before: BTreeMap<String, AccountEvidence>,
+    pub(crate) after: BTreeMap<String, AccountEvidence>,
+}
+
+#[derive(Debug, Serialize)]
 #[allow(clippy::struct_excessive_bools)]
 pub(crate) struct ExecutionEvidence {
     pub(crate) schema: &'static str,
@@ -163,10 +172,12 @@ pub(crate) struct ExecutionEvidence {
     pub(crate) registry_reauthenticated: bool,
     pub(crate) real_pyth_price_update_consumed: bool,
     pub(crate) primary_resolution_executed: bool,
+    pub(crate) primary_replay_refused: bool,
     pub(crate) sequential_recovery_exhaustion_failure_executed: bool,
     pub(crate) rollback_proved: bool,
     pub(crate) programs: BTreeMap<String, LoaderProgramEvidence>,
     pub(crate) accounts: BTreeMap<String, AccountEvidence>,
     pub(crate) transactions: Vec<TransactionEvidence>,
+    pub(crate) primary_replay: ReplayEvidence,
     pub(crate) rollback: RollbackEvidence,
 }

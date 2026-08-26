@@ -24,7 +24,8 @@ use crate::{
     Error, Result,
     model::{
         AccountEvidence, ExecutionEvidence, LoaderProgramEvidence, ProviderEvidenceInput,
-        ProviderProgramInput, RecordPair, RollbackEvidence, SourceCase, SuccessorPlan,
+        ProviderProgramInput, RecordPair, ReplayEvidence, RollbackEvidence, SourceCase,
+        SuccessorPlan,
         TransactionEvidence,
     },
     plan::{GENERATION, hex, hex32, pubkey},
@@ -153,6 +154,7 @@ pub(crate) fn execute(args: &RunArgs) -> Result<ExecutionEvidence> {
     runtime.reauthenticate_resolution()?;
     runtime.reauthenticate_custody()?;
     runtime.accept_primary()?;
+    let primary_replay = runtime.prove_primary_replay()?;
     runtime.run_funded_lifecycle(&plan.lifecycle, "lifecycle")?;
     runtime.run_funded_prefix(&plan.rollback, "rollback")?;
     let rollback = runtime.prove_rollback()?;
@@ -215,6 +217,8 @@ pub(crate) fn execute(args: &RunArgs) -> Result<ExecutionEvidence> {
         registry_reauthenticated: true,
         real_pyth_price_update_consumed: true,
         primary_resolution_executed: true,
+        primary_replay_refused: primary_replay.state_unchanged
+            && primary_replay.certificate_unchanged,
         sequential_recovery_exhaustion_failure_executed: true,
         rollback_proved: rollback.state_unchanged
             && rollback.certificate_unchanged
@@ -223,8 +227,14 @@ pub(crate) fn execute(args: &RunArgs) -> Result<ExecutionEvidence> {
         programs,
         accounts,
         transactions: runtime.transactions,
+        primary_replay,
         rollback,
     };
+    if !evidence.primary_replay_refused {
+        return Err(Error::new(
+            "primary replay refusal changed the Source state or certificate",
+        ));
+    }
     if !evidence.rollback_proved {
         return Err(Error::new(
             "hostile transaction did not roll back all four outputs",
@@ -402,6 +412,21 @@ impl Runtime<'_> {
     }
 
     fn accept_primary(&mut self) -> Result<()> {
+        let instruction = self.primary_instruction()?;
+        let transaction = self.rpc.send(
+            "resolution_accept_real_pyth_primary",
+            &[instruction],
+            &self.payer,
+        )?;
+        self.transactions.push(transaction);
+        let certificate = self.account(
+            case_key(&self.plan.primary, "success", true)?,
+            "success certificate",
+        )?;
+        authenticate_certificate(&certificate, self.resolution)
+    }
+
+    fn primary_instruction(&self) -> Result<Instruction> {
         let provider_release = hex32(&self.plan.provider_release_id)?;
         let result_domain = hex32(&self.plan.result_domain_id)?;
         let request = AcceptPythRequestV1 {
@@ -417,23 +442,20 @@ impl Runtime<'_> {
         let local = local_validator_release_v1()
             .map_err(|error| Error::new(format!("local provider release: {error:?}")))?;
         let release = local.release();
-        let authority = record(self.plan, "execution_authority_manifest")?;
         let material = record(self.plan, "source_material")?;
-        let domain = record(self.plan, "result_domain")?;
+        let product = record(self.plan, "product_instance")?;
         let pyth = record(self.plan, "pyth_release")?;
         let accounts = vec![
             AccountMeta::new(pubkey(&self.plan.primary.state)?, false),
             AccountMeta::new(case_key(&self.plan.primary, "success", true)?, false),
             AccountMeta::new_readonly(pubkey(&self.plan.primary.market)?, false),
-            AccountMeta::new_readonly(pubkey(&authority.raw)?, false),
-            AccountMeta::new_readonly(pubkey(&authority.staging)?, false),
             AccountMeta::new_readonly(pubkey(&self.plan.activation)?, false),
             AccountMeta::new_readonly(self.resolution, false),
             AccountMeta::new_readonly(self.resolution_programdata, false),
             AccountMeta::new_readonly(pubkey(&material.raw)?, false),
             AccountMeta::new_readonly(pubkey(&material.staging)?, false),
-            AccountMeta::new_readonly(pubkey(&domain.raw)?, false),
-            AccountMeta::new_readonly(pubkey(&domain.staging)?, false),
+            AccountMeta::new_readonly(pubkey(&product.raw)?, false),
+            AccountMeta::new_readonly(pubkey(&product.staging)?, false),
             AccountMeta::new_readonly(pubkey(&pyth.raw)?, false),
             AccountMeta::new_readonly(pubkey(&pyth.staging)?, false),
             AccountMeta::new_readonly(update, false),
@@ -446,22 +468,47 @@ impl Runtime<'_> {
             AccountMeta::new_readonly(sysvar::rent::ID, false),
             AccountMeta::new_readonly(system_program::ID, false),
         ];
-        let transaction = self.rpc.send(
-            "resolution_accept_real_pyth_primary",
-            &[Instruction {
-                program_id: self.resolution,
-                accounts,
-                data: request.to_vec(),
-            }],
+        if accounts.len() != 21 {
+            return Err(Error::new("Resolution primary account count is not 21"));
+        }
+        Ok(Instruction {
+            program_id: self.resolution,
+            accounts,
+            data: request.to_vec(),
+        })
+    }
+
+    fn prove_primary_replay(&mut self) -> Result<ReplayEvidence> {
+        let before = self.primary_snapshot()?;
+        let transaction = self.rpc.send_expected_failure(
+            "resolution_accept_real_pyth_primary_replay_refusal",
+            &[self.primary_instruction()?],
             &self.payer,
         )?;
-        self.transactions.push(transaction);
-        let certificate = self.account(
-            case_key(&self.plan.primary, "success", true)?,
-            "success certificate",
-        )?;
-        authenticate_certificate(&certificate, self.resolution)?;
-        Ok(())
+        let after = self.primary_snapshot()?;
+        Ok(ReplayEvidence {
+            transaction,
+            state_unchanged: same(&before, &after, "state"),
+            certificate_unchanged: same(&before, &after, "certificate"),
+            before,
+            after,
+        })
+    }
+
+    fn primary_snapshot(&mut self) -> Result<BTreeMap<String, AccountEvidence>> {
+        let entries = [
+            ("state", pubkey(&self.plan.primary.state)?),
+            (
+                "certificate",
+                case_key(&self.plan.primary, "success", true)?,
+            ),
+        ];
+        let mut output = BTreeMap::new();
+        for (label, key) in entries {
+            let account = self.account(key, label)?;
+            output.insert(label.into(), account_evidence(key, &account));
+        }
+        Ok(output)
     }
 
     fn run_funded_lifecycle(&mut self, case: &SourceCase, prefix: &str) -> Result<()> {
@@ -555,9 +602,8 @@ impl Runtime<'_> {
         }
         .to_bytes()
         .map_err(|error| Error::new(format!("funded request: {error:?}")))?;
-        let authority = record(self.plan, "execution_authority_manifest")?;
         let material = record(self.plan, "funded_source_material")?;
-        let domain = record(self.plan, "result_domain")?;
+        let product = record(self.plan, "product_instance")?;
         let manifest = record(self.plan, "capability_manifest")?;
         let accounts = vec![
             AccountMeta::new(pubkey(&case.state)?, false),
@@ -565,21 +611,22 @@ impl Runtime<'_> {
             AccountMeta::new(case_key(case, step, false)?, false),
             AccountMeta::new(self.worker.pubkey(), false),
             AccountMeta::new_readonly(pubkey(&case.market)?, false),
-            AccountMeta::new_readonly(pubkey(&authority.raw)?, false),
-            AccountMeta::new_readonly(pubkey(&authority.staging)?, false),
             AccountMeta::new_readonly(pubkey(&self.plan.activation)?, false),
             AccountMeta::new_readonly(self.resolution, false),
             AccountMeta::new_readonly(self.resolution_programdata, false),
             AccountMeta::new_readonly(pubkey(&material.raw)?, false),
             AccountMeta::new_readonly(pubkey(&material.staging)?, false),
-            AccountMeta::new_readonly(pubkey(&domain.raw)?, false),
-            AccountMeta::new_readonly(pubkey(&domain.staging)?, false),
+            AccountMeta::new_readonly(pubkey(&product.raw)?, false),
+            AccountMeta::new_readonly(pubkey(&product.staging)?, false),
             AccountMeta::new_readonly(pubkey(&manifest.raw)?, false),
             AccountMeta::new_readonly(pubkey(&manifest.staging)?, false),
             AccountMeta::new_readonly(sysvar::clock::ID, false),
             AccountMeta::new_readonly(sysvar::rent::ID, false),
             AccountMeta::new_readonly(system_program::ID, false),
         ];
+        if accounts.len() != 17 {
+            return Err(Error::new("Resolution funded account count is not 17"));
+        }
         let instruction = Instruction {
             program_id: self.resolution,
             accounts,

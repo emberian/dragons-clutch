@@ -104,6 +104,7 @@ fn run_runtime(arguments: Vec<String>) -> Result<()> {
         "trading_reauthenticated": evidence.trading_reauthenticated,
         "custody_reauthenticated": evidence.custody_reauthenticated,
         "primary_resolution_executed": evidence.primary_resolution_executed,
+        "primary_replay_refused": evidence.primary_replay_refused,
         "sequential_recovery_exhaustion_failure_executed": evidence.sequential_recovery_exhaustion_failure_executed,
         "rollback_proved": evidence.rollback_proved,
     });

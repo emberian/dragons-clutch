@@ -19,7 +19,7 @@ use dclutch_market_contract::market::{CategoricalMarketV1, CategoricalSettlement
 use dclutch_product_contract::{
     ContentId as ProductContentId,
     capacity::CapacityProfileId,
-    product::{InstanceV1, InstanceV1Input},
+    product::{InstanceV1, InstanceV1Input, PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1},
     result_domain::{
         FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1, FINITE_RESULT_DOMAIN_RELEASE_ID_V1,
         FiniteResultDomainV1,
@@ -757,6 +757,14 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
         args.registry_program,
         FINITE_RESULT_DOMAIN_RELEASE_ID_V1,
         &domain_bytes,
+    )?;
+    add_record(
+        &mut writer,
+        &mut records,
+        "product_instance",
+        args.registry_program,
+        PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1,
+        &product_instance.to_bytes(),
     )?;
     add_record(
         &mut writer,
