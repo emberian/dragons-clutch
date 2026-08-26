@@ -96,6 +96,22 @@ pub(crate) struct RationalTerminalCustodyEvidenceV3 {
     pub(crate) replay_digest: [u8; 32],
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct TerminalCustodyInputV3 {
+    pub(crate) release_set: [u8; 32],
+    pub(crate) market: [u8; 32],
+    pub(crate) realm: [u8; 32],
+    pub(crate) parent_request_digest: [u8; 32],
+    pub(crate) recipient_owner: [u8; 32],
+    pub(crate) generation: u64,
+    pub(crate) order_nonce: u64,
+    pub(crate) transfer_index: u16,
+    pub(crate) expected_custody_revision: u64,
+    pub(crate) payout: u64,
+    pub(crate) candidate_digest: [u8; 32],
+    pub(crate) custody_context: [u8; 32],
+}
+
 pub(crate) struct RationalTerminalExecutionV3 {
     pub(crate) packet: Vec<u8>,
     pub(crate) packet_digest: [u8; 32],
@@ -232,14 +248,23 @@ pub(crate) fn execute_rational_terminal_v3<'accounts, 'info>(
         &authenticated.core.terminal_winner.to_le_bytes(),
     ])
     .to_bytes();
-    let custody = execute_custody(
+    let custody = execute_terminal_custody_v3(
         program_id,
         &frame,
-        request,
-        request_digest,
-        payout,
-        candidate_digest,
-        authenticated.market.custody_context,
+        TerminalCustodyInputV3 {
+            release_set: header.release_set,
+            market: header.market,
+            realm: header.realm,
+            parent_request_digest: request_digest,
+            recipient_owner: header.actor,
+            generation: header.generation,
+            order_nonce: header.expected_representation_revision,
+            transfer_index: 0,
+            expected_custody_revision: header.expected_custody_replay_revision,
+            payout,
+            candidate_digest,
+            custody_context: authenticated.market.custody_context,
+        },
     )?;
     Ok(Box::new(RationalTerminalExecutionV3 {
         packet,
@@ -279,23 +304,15 @@ fn signed_delta_accounts<'accounts, 'info>(
 
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
-fn execute_custody(
+pub(crate) fn execute_terminal_custody_v3(
     program_id: &Pubkey,
     frame: &RationalTerminalFrameV3<'_, '_>,
-    request: RepresentationRequestV2<'_>,
-    parent_request_digest: [u8; 32],
-    payout: u64,
-    candidate_digest: [u8; 32],
-    custody_context: [u8; 32],
+    input: TerminalCustodyInputV3,
 ) -> Result<Option<Box<RationalTerminalCustodyEvidenceV3>>, ProgramError> {
-    let header = request.header();
-    if payout == 0 {
-        if header.expected_custody_replay_revision != ABSENT_REVISION {
-            return Err(ClaimsSbfError::Economic.into());
-        }
+    if input.payout == 0 {
         return Ok(None);
     }
-    if header.expected_custody_replay_revision == ABSENT_REVISION {
+    if input.expected_custody_revision == ABSENT_REVISION {
         return Err(ClaimsSbfError::Economic.into());
     }
     let custody_request = Box::new(CustodyRequestV1 {
@@ -303,37 +320,37 @@ fn execute_custody(
         caller_role: CallerRoleV1::Claims,
         source_compartment: CompartmentV1::HoardPrincipal,
         destination_compartment: CompartmentV1::External,
-        release_set: header.release_set,
-        market: header.market,
-        realm: header.realm,
-        context: custody_context,
+        release_set: input.release_set,
+        market: input.market,
+        realm: input.realm,
+        context: input.custody_context,
         caller_program: program_id.to_bytes(),
         semantic: ContextV1 {
-            candidate: candidate_digest,
+            candidate: input.candidate_digest,
             source_owner: [0; 32],
-            destination_owner: header.actor,
+            destination_owner: input.recipient_owner,
             order: [0; 32],
-            parent_request_digest,
-            order_nonce: header.expected_representation_revision,
-            generation: header.generation,
+            parent_request_digest: input.parent_request_digest,
+            order_nonce: input.order_nonce,
+            generation: input.generation,
             page_index: 0,
             execution_index: 0,
-            transfer_index: 0,
+            transfer_index: input.transfer_index,
         },
         source: frame.hoard.key.to_bytes(),
         destination: frame.recipient.key.to_bytes(),
-        source_vault_context: header.market,
+        source_vault_context: input.market,
         destination_vault_context: [0; 32],
         mint: frame.collateral_mint.key.to_bytes(),
         token_program: frame.token_program.key.to_bytes(),
         payer: [0; 32],
         rent_refund: [0; 32],
-        expected_revision: header.expected_custody_replay_revision,
-        resulting_revision: header
-            .expected_custody_replay_revision
+        expected_revision: input.expected_custody_revision,
+        resulting_revision: input
+            .expected_custody_revision
             .checked_add(1)
             .ok_or(ClaimsSbfError::Economic)?,
-        amount: payout,
+        amount: input.payout,
         rent_lamports: 0,
     });
     let request_bytes = Box::new(
@@ -357,7 +374,7 @@ fn execute_custody(
         frame.recipient,
         frame.token_program,
         custody_request.mint,
-        header.actor,
+        input.recipient_owner,
     )?;
     let invoked = invoke_custody(
         program_id,
@@ -375,10 +392,10 @@ fn execute_custody(
         frame.recipient,
         frame.token_program,
         custody_request.mint,
-        header.actor,
+        input.recipient_owner,
     )?;
-    if source_before.checked_sub(payout) != Some(source_after)
-        || recipient_before.checked_add(payout) != Some(recipient_after)
+    if source_before.checked_sub(input.payout) != Some(source_after)
+        || recipient_before.checked_add(input.payout) != Some(recipient_after)
     {
         return Err(ClaimsSbfError::Receipt.into());
     }

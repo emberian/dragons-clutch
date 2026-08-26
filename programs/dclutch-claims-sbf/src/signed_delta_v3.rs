@@ -234,6 +234,24 @@ pub(crate) fn execute_parent_authenticated(
     )
 }
 
+/// Authenticate the current release/deployment chain for an enclosing Claims
+/// route before it invokes [`execute_parent_authenticated`].
+///
+/// The enclosing route still owns the parent request digest and caller PDA;
+/// this helper only prevents that parent-authenticated execution mode from
+/// bypassing the canonical Registry observations.
+pub(crate) fn authenticate_parent_releases(
+    program_id: &Pubkey,
+    account_infos: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+) -> Result<(), ProgramError> {
+    let plan = SignedDeltaPlanV3::decode(instruction_data)
+        .map_err(|_| SignedDeltaSbfErrorV3::Instruction)?;
+    let accounts = SignedDeltaAccountsV3::parse(account_infos, plan.position_count())?;
+    authenticate_privileges(program_id, &accounts)?;
+    authenticate_releases(&accounts, plan)
+}
+
 fn execute_authenticated(
     program_id: &Pubkey,
     accounts: &SignedDeltaAccountsV3<'_, '_>,

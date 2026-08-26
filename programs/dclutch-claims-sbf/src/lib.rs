@@ -49,6 +49,7 @@ pub mod rational_representation_v2;
 mod rational_terminal_v3;
 pub mod signed_delta_v3;
 pub mod sparse_native_transfer_v1;
+mod terminal_settlement_v3;
 
 entrypoint!(process_instruction);
 
@@ -216,6 +217,13 @@ pub fn process_instruction(
         == Some(dclutch_claims_svm::signed_delta_v3::SIGNED_DELTA_PLAN_MAGIC_V3.as_slice())
     {
         return signed_delta_v3::process(program_id, accounts, instruction_data);
+    }
+    if instruction_data.get(
+        ..dclutch_claims_svm::terminal_settlement_v3::TERMINAL_SETTLEMENT_REQUEST_MAGIC_V3.len(),
+    ) == Some(
+        dclutch_claims_svm::terminal_settlement_v3::TERMINAL_SETTLEMENT_REQUEST_MAGIC_V3.as_slice(),
+    ) {
+        return terminal_settlement_v3::process(program_id, accounts, instruction_data);
     }
     if instruction_data
         .get(..dclutch_claims_svm::sparse_native_transfer_v1::SPARSE_NATIVE_TRANSFER_MAGIC_V1.len())

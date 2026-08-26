@@ -18,6 +18,47 @@ pub const TERMINAL_SETTLEMENT_REQUEST_MAGIC_V3: [u8; 8] = *b"DCLTSQ03";
 pub const TERMINAL_SETTLEMENT_RECEIPT_MAGIC_V3: [u8; 8] = *b"DCLTSA03";
 /// Implemented wire version.
 pub const TERMINAL_SETTLEMENT_VERSION_V3: u16 = 3;
+/// Exact account count of the family-neutral Claims terminal child.
+pub const TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3: usize = 35;
+/// Exact canonical SignedDeltaV3 prefix for one Position.
+pub const TERMINAL_SETTLEMENT_SIGNED_DELTA_ACCOUNTS_V3: usize = 21;
+/// Finalized exposure raw-record account index.
+pub const TERMINAL_SETTLEMENT_EXPOSURE_RAW_ACCOUNT_V3: usize = 21;
+/// Vacant finalized-exposure staging account index.
+pub const TERMINAL_SETTLEMENT_EXPOSURE_STAGING_ACCOUNT_V3: usize = 22;
+/// Claims-derived Custody caller PDA account index.
+pub const TERMINAL_SETTLEMENT_CUSTODY_CALLER_ACCOUNT_V3: usize = 23;
+/// Registry-selected Custody program account index.
+pub const TERMINAL_SETTLEMENT_CUSTODY_PROGRAM_ACCOUNT_V3: usize = 24;
+/// Optional finalized rational terminal-coordinate raw account index.
+pub const TERMINAL_SETTLEMENT_COORDINATE_ACCOUNT_V3: usize = 25;
+/// Optional terminal-coordinate staging account index.
+pub const TERMINAL_SETTLEMENT_COORDINATE_STAGING_ACCOUNT_V3: usize = 26;
+/// Finalized Realm raw-record account index.
+pub const TERMINAL_SETTLEMENT_REALM_ACCOUNT_V3: usize = 27;
+/// Vacant Realm staging account index.
+pub const TERMINAL_SETTLEMENT_REALM_STAGING_ACCOUNT_V3: usize = 28;
+/// Canonical Custody replay account index.
+pub const TERMINAL_SETTLEMENT_CUSTODY_REPLAY_ACCOUNT_V3: usize = 29;
+/// Realm collateral Mint account index.
+pub const TERMINAL_SETTLEMENT_COLLATERAL_MINT_ACCOUNT_V3: usize = 30;
+/// Canonical Custody Hoard account index.
+pub const TERMINAL_SETTLEMENT_HOARD_ACCOUNT_V3: usize = 31;
+/// External recipient token account index.
+pub const TERMINAL_SETTLEMENT_RECIPIENT_ACCOUNT_V3: usize = 32;
+/// Canonical Custody transfer authority account index.
+pub const TERMINAL_SETTLEMENT_CUSTODY_AUTHORITY_ACCOUNT_V3: usize = 33;
+/// Realm-selected Token program account index.
+pub const TERMINAL_SETTLEMENT_TOKEN_PROGRAM_ACCOUNT_V3: usize = 34;
+/// Domain separating a terminal Custody candidate from all caller candidates.
+pub const TERMINAL_SETTLEMENT_CANDIDATE_DOMAIN_V3: &[u8] =
+    b"dclutch/claims-terminal-custody-candidate/v3";
+/// Domain committing the exact post-CPI hoard and recipient Token bytes.
+pub const TERMINAL_SETTLEMENT_TOKEN_POSTSTATE_DOMAIN_V3: &[u8] =
+    b"dclutch/claims-terminal-token-poststate/v3";
+/// Domain committing all Claims and optional Custody postresources.
+pub const TERMINAL_SETTLEMENT_POST_RESOURCE_DOMAIN_V3: &[u8] =
+    b"dclutch/claims-terminal-postresources/v3";
 
 const ROLE_OFFSET: usize = 10;
 const RELEASE_OFFSET: usize = 16;
