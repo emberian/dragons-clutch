@@ -5,11 +5,17 @@
 //! verifies the supplied vacancy groups in that order, and relies on the
 //! content-addressed effect artifact to synthesize the full Claims child.
 
+use dclutch_account_profile_contract::v2::{
+    AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE,
+};
 use dclutch_capability_program_contract::hot_v3::{
-    HOT_FAMILY_REQUEST_OFFSET_V3, HotExecutionEnvelopeV3,
+    HOT_CONFIG_RAW_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
+    HOT_PORTFOLIO_RAW_ACCOUNT_V3, HOT_PRODUCT_RAW_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3,
+    HotExecutionEnvelopeV3,
 };
 use dclutch_rational_representation_v2_contract::{
-    RATIONAL_SHARD_MINT_SEED_V2, RATIONAL_STRUCTURED_CUSTODY_SEED_V2,
+    AuthenticatedTokenBehaviorV2, RATIONAL_SHARD_MINT_SEED_V2,
+    RATIONAL_STRUCTURED_CUSTODY_SEED_V2,
 };
 use dclutch_rational_representation_v2_kernel::RepresentationDescriptorV2;
 use dclutch_rational_representation_v2_lifecycle_contract::{
@@ -25,7 +31,9 @@ use solana_program::{
 };
 
 use crate::{
-    Error, RationalLifecycleHotInstructionV3, RationalLifecycleHotStateV3, Result,
+    Error, RationalLifecycleCompactBundleV4, RationalLifecycleHotInstructionV3,
+    RationalLifecycleHotStateV3, Result,
+    validate_rational_lifecycle_compact_bundle_for_authenticated_selection_v4,
     operator::{MAX_SOLANA_PACKET_BYTES, validate_child_frame, validate_fixed_frame},
 };
 
@@ -42,6 +50,17 @@ pub struct RationalLifecycleVacancyAccountsV4 {
     pub admission: AccountMeta,
 }
 
+/// Same-finalized selected semantic authority for compact retirement.
+#[derive(Clone, Copy, Debug)]
+pub struct RationalLifecycleCompactSelectionV4<'descriptor, 'bundle> {
+    /// Finalized immutable representation descriptor owning width `K` and support.
+    pub descriptor: RepresentationDescriptorV2<'descriptor>,
+    /// Exact CapabilityV4/LifecycleV5/Profile13 artifact bundle.
+    pub bundle: &'bundle RationalLifecycleCompactBundleV4,
+    /// Independently authenticated Realm/release Token behavior selection.
+    pub authenticated_token_behavior: AuthenticatedTokenBehaviorV2,
+}
+
 /// Build one complete unsigned compact RetireReceipt Hot instruction.
 ///
 /// `claims_common_accounts` is the exact 20-account DCRRLC02 common frame.
@@ -51,13 +70,22 @@ pub struct RationalLifecycleVacancyAccountsV4 {
 pub fn build_rational_lifecycle_compact_hot_instruction_v4(
     state: &RationalLifecycleHotStateV3<'_>,
     header: LifecycleHeaderV2,
-    descriptor: RepresentationDescriptorV2<'_>,
+    selection: RationalLifecycleCompactSelectionV4<'_, '_>,
     claims_program: Pubkey,
     claims_common_accounts: &[AccountMeta],
     vacancy_accounts: &[RationalLifecycleVacancyAccountsV4],
 ) -> Result<RationalLifecycleHotInstructionV3> {
+    let RationalLifecycleCompactSelectionV4 {
+        descriptor,
+        bundle,
+        authenticated_token_behavior,
+    } = selection;
     let checked = state.hot_outer.ok_or(Error::Operator)?;
     validate_fixed_frame(state, checked)?;
+    validate_rational_lifecycle_compact_bundle_for_authenticated_selection_v4(
+        bundle,
+        authenticated_token_behavior,
+    )?;
     if state.finalized_slot == 0
         || claims_program == Pubkey::default()
         || claims_common_accounts.len() != LIFECYCLE_COMMON_ACCOUNT_COUNT_V2
@@ -74,12 +102,20 @@ pub fn build_rational_lifecycle_compact_hot_instruction_v4(
         || header.receipt_mint != descriptor.receipt_mint()
         || header.token_program != descriptor.token_program()
         || header.outcome_count != descriptor.outcome_count()
+        || descriptor.descriptor_id() != authenticated_token_behavior.descriptor_id()
+        || descriptor.release_set_id()
+            != authenticated_token_behavior.selection().release_set()
+        || descriptor.token_program()
+            != authenticated_token_behavior.selection().token_program()
     {
         return Err(Error::Operator);
     }
 
     let support = support_outcomes(descriptor)?;
     if support.len() != vacancy_accounts.len() {
+        return Err(Error::Operator);
+    }
+    if bundle.support_count != u32::try_from(support.len()).map_err(|_| Error::Operator)? {
         return Err(Error::Operator);
     }
     let mut claims_accounts = Vec::with_capacity(
@@ -142,23 +178,24 @@ pub fn build_rational_lifecycle_compact_hot_instruction_v4(
         return Err(Error::Operator);
     }
 
+    let profile =
+        AccountProfileV2::decode(&bundle.account_profile).map_err(Error::AccountProfile)?;
+    let physical_claims_accounts = compact_profile13_claims_accounts_v4(
+        state,
+        &claims_accounts,
+        profile,
+    )?;
     let mut accounts = Vec::with_capacity(
         state
             .fixed_accounts
             .len()
             .checked_add(state.strategy_accounts.len())
-            .and_then(|count| count.checked_add(claims_accounts.len()))
+            .and_then(|count| count.checked_add(physical_claims_accounts.len()))
             .ok_or(Error::Operator)?,
     );
     accounts.extend_from_slice(state.fixed_accounts);
     accounts.extend_from_slice(state.strategy_accounts);
-    for (index, account) in claims_accounts.into_iter().enumerate() {
-        let mut outer = account;
-        if index == 0 {
-            outer.is_signer = false;
-        }
-        accounts.push(outer);
-    }
+    accounts.extend(physical_claims_accounts);
     Ok(RationalLifecycleHotInstructionV3 {
         instruction: Instruction {
             program_id: checked.trading_program,
@@ -171,6 +208,131 @@ pub fn build_rational_lifecycle_compact_hot_instruction_v4(
         finalized_slot: state.finalized_slot,
         requires_v0_address_lookup: true,
     })
+}
+
+fn compact_profile13_claims_accounts_v4(
+    state: &RationalLifecycleHotStateV3<'_>,
+    claims_accounts: &[AccountMeta],
+    profile: AccountProfileV2<'_>,
+) -> Result<Vec<AccountMeta>> {
+    const INJECTED: usize = 5;
+    const TAIL_COUNT: u32 = 0;
+    let expected_logical = INJECTED
+        .checked_add(claims_accounts.len())
+        .ok_or(Error::Operator)?;
+    if profile.artifact_profile() != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+        || profile.dynamic_fixed_span_count() != 0
+        || profile
+            .logical_account_count_with_dynamic_spans(TAIL_COUNT, &[])
+            .map_err(Error::AccountProfile)?
+            != expected_logical
+    {
+        return Err(Error::Operator);
+    }
+    let physical = profile
+        .physical_account_count_with_dynamic_spans(TAIL_COUNT, &[])
+        .map_err(Error::AccountProfile)?;
+    if physical < INJECTED {
+        return Err(Error::Operator);
+    }
+    for coordinate in 0..INJECTED {
+        if profile
+            .representative_with_dynamic_spans(TAIL_COUNT, &[], coordinate)
+            .map_err(Error::AccountProfile)?
+            != coordinate
+        {
+            return Err(Error::Operator);
+        }
+        let expected = injected_meta_v4(state, coordinate)?;
+        let (signer, writable) = physical_privileges_v4(profile, coordinate)?;
+        if expected.is_signer != signer || expected.is_writable != writable {
+            return Err(Error::Operator);
+        }
+    }
+
+    let mut output = Vec::with_capacity(physical - INJECTED);
+    for (child_index, account) in claims_accounts.iter().enumerate() {
+        let logical = INJECTED
+            .checked_add(child_index)
+            .ok_or(Error::Operator)?;
+        let route = profile
+            .route_privileges_with_dynamic_spans(TAIL_COUNT, &[], logical)
+            .map_err(Error::AccountProfile)?;
+        if account.is_writable != route.writable()
+            || (child_index != 0 && account.is_signer != route.signer())
+            || (child_index == 0 && !account.is_signer)
+        {
+            return Err(Error::Operator);
+        }
+        let representative = profile
+            .representative_with_dynamic_spans(TAIL_COUNT, &[], logical)
+            .map_err(Error::AccountProfile)?;
+        let representative_meta = if representative < INJECTED {
+            injected_meta_v4(state, representative)?
+        } else {
+            claims_accounts
+                .get(representative.checked_sub(INJECTED).ok_or(Error::Operator)?)
+                .ok_or(Error::Operator)?
+        };
+        if representative_meta.pubkey != account.pubkey {
+            return Err(Error::Operator);
+        }
+        if representative == logical {
+            let (signer, writable) = physical_privileges_v4(profile, representative)?;
+            let mut outer = account.clone();
+            outer.is_signer = signer;
+            outer.is_writable = writable;
+            output.push(outer);
+        }
+    }
+    if output.len() != physical - INJECTED {
+        return Err(Error::Operator);
+    }
+    Ok(output)
+}
+
+fn physical_privileges_v4(
+    profile: AccountProfileV2<'_>,
+    representative: usize,
+) -> Result<(bool, bool)> {
+    const TAIL_COUNT: u32 = 0;
+    let logical = profile
+        .logical_account_count_with_dynamic_spans(TAIL_COUNT, &[])
+        .map_err(Error::AccountProfile)?;
+    let mut signer = false;
+    let mut writable = false;
+    for coordinate in 0..logical {
+        if profile
+            .representative_with_dynamic_spans(TAIL_COUNT, &[], coordinate)
+            .map_err(Error::AccountProfile)?
+            == representative
+        {
+            let route = profile
+                .route_privileges_with_dynamic_spans(TAIL_COUNT, &[], coordinate)
+                .map_err(Error::AccountProfile)?;
+            signer |= route.signer();
+            writable |= route.writable();
+        }
+    }
+    Ok((signer, writable))
+}
+
+fn injected_meta_v4<'a>(
+    state: &'a RationalLifecycleHotStateV3<'_>,
+    logical_coordinate: usize,
+) -> Result<&'a AccountMeta> {
+    let physical_coordinate = match logical_coordinate {
+        0 => HOT_ROOT_ACCOUNT_V3,
+        1 => HOT_CONFIG_RAW_ACCOUNT_V3,
+        2 => HOT_PRODUCT_RAW_ACCOUNT_V3,
+        3 => HOT_PORTFOLIO_RAW_ACCOUNT_V3,
+        4 => HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
+        _ => return Err(Error::Operator),
+    };
+    state
+        .fixed_accounts
+        .get(physical_coordinate)
+        .ok_or(Error::Operator)
 }
 
 fn support_outcomes(descriptor: RepresentationDescriptorV2<'_>) -> Result<Vec<(u32, u64)>> {
@@ -231,16 +393,28 @@ fn validate_vacancy_group(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dclutch_account_profile_contract::lifecycle_v3::{
+        HEADER_BYTES as LIFECYCLE_HEADER_BYTES, encode::encode_lifecycle_policy_v5_atomic,
+    };
     use dclutch_capability_program_contract::hot_v3::{
         HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
         HOT_LINKED_BASIS_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3, HOT_RENT_SYSVAR_ACCOUNT_V3,
         HOT_ROOT_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
     };
+    use dclutch_product_payoff_v2_codec::runtime_v3::{
+        BASIS_HEADER_BYTES_V3, BasisInputV3, BasisKindV3, compile_basis_v3,
+    };
+    use dclutch_rational_representation_v2_contract::{
+        TokenBehaviorRecordAdmissionV2, authenticate_token_behavior_v2,
+    };
     use dclutch_rational_representation_v2_kernel::{
         DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3,
         DESCRIPTOR_SCHEMA_VERSION_V3, DescriptorAdmissionV2,
     };
-    use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
+    use dclutch_token_svm::{
+        TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_BYTES_V2,
+        TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, TokenBehaviorSelectionV2,
+    };
     use solana_sdk_ids::{system_program, sysvar};
 
     fn key(value: u8) -> Pubkey {
@@ -295,6 +469,102 @@ mod tests {
             },
         )
         .expect("descriptor")
+    }
+
+    fn basis() -> [u8; BASIS_HEADER_BYTES_V3] {
+        let mut output = [0_u8; BASIS_HEADER_BYTES_V3];
+        compile_basis_v3(
+            BasisInputV3 {
+                kind: BasisKindV3::CategoricalQ1,
+                product_id: key(1).to_bytes(),
+                result_domain_id: key(2).to_bytes(),
+                coordinate_domain_id: key(3).to_bytes(),
+                result_unit_id: key(4).to_bytes(),
+                evaluator_release_id: key(5).to_bytes(),
+                basis_width: 258,
+                payout_scale: 1,
+                knot_denominator: 1,
+                knots: &[],
+                terms: &[],
+                failure_payouts: &[],
+            },
+            &mut output,
+        )
+        .expect("basis");
+        output
+    }
+
+    fn token_behavior(
+        descriptor: RepresentationDescriptorV2<'_>,
+        realm: [u8; 32],
+    ) -> AuthenticatedTokenBehaviorV2 {
+        let selection = TokenBehaviorSelectionV2::new(realm, descriptor.release_set_id())
+            .expect("Token selection")
+            .to_bytes();
+        let digest = hash(&selection).to_bytes();
+        authenticate_token_behavior_v2(
+            descriptor,
+            realm,
+            &selection,
+            TokenBehaviorRecordAdmissionV2 {
+                selected_schema_id: TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
+                finalized_schema_id: TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
+                selected_content_digest: digest,
+                finalized_content_digest: digest,
+                recomputed_content_digest: digest,
+                record_authenticated: true,
+                market_realm_authenticated: true,
+            },
+        )
+        .expect("Token behavior")
+    }
+
+    fn lifecycle_policy() -> Vec<u8> {
+        let mut scratch = vec![0_u8; LIFECYCLE_HEADER_BYTES];
+        let mut output = vec![0_u8; LIFECYCLE_HEADER_BYTES];
+        encode_lifecycle_policy_v5_atomic(&[], &[], &[], &[], &[], &[], &mut scratch, &mut output)
+            .expect("empty lifecycle V5");
+        output
+    }
+
+    fn compact_bundle<'a>(
+        descriptor: RepresentationDescriptorV2<'a>,
+        claims: Pubkey,
+        logical_accounts: usize,
+    ) -> (RationalLifecycleCompactBundleV4, AuthenticatedTokenBehaviorV2) {
+        let basis = basis();
+        let mut lengths = vec![0_u32; logical_accounts];
+        *lengths.get_mut(1).expect("Token selection") =
+            u32::try_from(TOKEN_BEHAVIOR_SELECTION_BYTES_V2).expect("selection width");
+        *lengths.get_mut(4).expect("basis") =
+            u32::try_from(basis.len()).expect("basis width");
+        *lengths.get_mut(14).expect("descriptor") =
+            u32::try_from(
+                DESCRIPTOR_HEADER_BYTES
+                    + usize::try_from(descriptor.outcome_count()).expect("K")
+                        * DESCRIPTOR_COEFFICIENT_BYTES,
+            )
+            .expect("descriptor width");
+        let authenticated = token_behavior(descriptor, key(51).to_bytes());
+        let lifecycle = lifecycle_policy();
+        let bundle = crate::build_rational_lifecycle_compact_bundle_v4(
+            crate::RationalLifecycleCompactBundleInputV4 {
+                artifacts: crate::RationalLifecycleCompactArtifactInputV4 {
+                    logical_data_lengths: &lengths,
+                    product_basis: &basis,
+                    descriptor,
+                    claims_program: claims,
+                },
+                kind: key(41).to_bytes(),
+                authenticated_token_behavior: authenticated,
+                root_schema: key(42).to_bytes(),
+                lifecycle_policy: &lifecycle,
+                capacity_profile: key(44).to_bytes(),
+                root_state_bytes: 64,
+            },
+        )
+        .expect("compact bundle");
+        (bundle, authenticated)
     }
 
     fn header() -> LifecycleHeaderV2 {
@@ -436,10 +706,19 @@ mod tests {
         let claims = key(31);
         let common = common(claims);
         let vacancies = vacancies(claims);
+        let (bundle, authenticated) = compact_bundle(
+            descriptor(&descriptor_bytes),
+            claims,
+            5 + common.len() + vacancies.len() * 4,
+        );
         let instruction = build_rational_lifecycle_compact_hot_instruction_v4(
             &state(&fixed),
             header(),
-            descriptor(&descriptor_bytes),
+            RationalLifecycleCompactSelectionV4 {
+                descriptor: descriptor(&descriptor_bytes),
+                bundle: &bundle,
+                authenticated_token_behavior: authenticated,
+            },
             claims,
             &common,
             &vacancies,
@@ -460,7 +739,11 @@ mod tests {
             build_rational_lifecycle_compact_hot_instruction_v4(
                 &state(&fixed),
                 header(),
-                descriptor(&descriptor_bytes),
+                RationalLifecycleCompactSelectionV4 {
+                    descriptor: descriptor(&descriptor_bytes),
+                    bundle: &bundle,
+                    authenticated_token_behavior: authenticated,
+                },
                 claims,
                 &common,
                 &reordered,
@@ -471,12 +754,35 @@ mod tests {
             build_rational_lifecycle_compact_hot_instruction_v4(
                 &state(&fixed),
                 header(),
-                descriptor(&descriptor_bytes),
+                RationalLifecycleCompactSelectionV4 {
+                    descriptor: descriptor(&descriptor_bytes),
+                    bundle: &bundle,
+                    authenticated_token_behavior: authenticated,
+                },
                 claims,
                 &common,
                 vacancies.get(..2).expect("omitted tail"),
             ),
             Err(Error::Operator)
+        );
+
+        assert_eq!(
+            build_rational_lifecycle_compact_hot_instruction_v4(
+                &state(&fixed),
+                header(),
+                RationalLifecycleCompactSelectionV4 {
+                    descriptor: descriptor(&descriptor_bytes),
+                    bundle: &bundle,
+                    authenticated_token_behavior: token_behavior(
+                        descriptor(&descriptor_bytes),
+                        key(52).to_bytes(),
+                    ),
+                },
+                claims,
+                &common,
+                &vacancies,
+            ),
+            Err(Error::ContentIdentity)
         );
     }
 }
