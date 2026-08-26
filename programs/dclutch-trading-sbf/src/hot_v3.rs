@@ -714,6 +714,12 @@ pub fn process_hot_execution_v3(
             &preplanned_lifecycle.identities,
         )?
     };
+    // The request-profile banks have been copied into the independently
+    // prepared lifecycle batch.  End their lifetime before the candidate and
+    // Effect phases so the SBF caller frame cannot retain two register-bank
+    // owners across the next noinline semantic boundary.
+    drop(request_output_scalars);
+    drop(request_output_identities);
     let transition_output_scalars = candidate.scalars;
     let transition_output_identities = candidate.identities;
     let admitted_execution_digest = candidate.transcript_digest;
