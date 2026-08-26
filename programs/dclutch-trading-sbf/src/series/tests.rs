@@ -1,6 +1,10 @@
 use super::*;
 use dclutch_core_contract::ContentId;
 use dclutch_market_core_codec::{MarketCoreStateSeedsV2, MarketIdentity, SeriesCoreActionV1};
+use dclutch_rent_contract::{
+    RefundAuthority,
+    lifecycle_v2::{LifecycleAccountIdV2, LifecycleRentCreditV2},
+};
 use solana_program::{hash::hashv, pubkey::Pubkey};
 
 const HASH_SEPARATOR: [u8; 1] = [0];
@@ -9,6 +13,28 @@ fn key(tag: u8) -> Pubkey {
     let mut bytes = [0_u8; 32];
     *bytes.first_mut().expect("fixed-width key") = tag;
     Pubkey::new_from_array(bytes)
+}
+
+fn rent_sink(refund_owner: AccountKeyV3) -> lifecycle::SeriesLifecycleRentSinkV3 {
+    let market = [81; 32];
+    let release = [82; 32];
+    let credit = LifecycleRentCreditV2::new(
+        RefundAuthority::new(refund_owner.to_bytes()).expect("refund owner"),
+        LifecycleAccountIdV2::new(market).expect("Market"),
+        LifecycleAccountIdV2::new(release).expect("release"),
+        3,
+        4,
+    )
+    .expect("Rent V2");
+    lifecycle::SeriesLifecycleRentSinkV3::admit(
+        AccountKeyV3::new([83; 32]).expect("credit"),
+        &credit.to_bytes(),
+        AccountKeyV3::new(market).expect("Market"),
+        ContentId::new(release).expect("release"),
+        3,
+        refund_owner,
+    )
+    .expect("sink")
 }
 
 fn put<const N: usize>(bytes: &mut [u8], offset: usize, value: &[u8; N]) {
@@ -506,9 +532,27 @@ fn prepare_and_expire_commit_under_controller_without_fabricating_core() {
             .retry_through(admitted.occurrence().occurrence())
             .expect("retry")
             + 1,
+        rent_sink(admitted_ticket.ticket().refund_owner()),
     )
     .expect("expiry candidate");
     assert_eq!(expire.native_from_ticket(), 90);
+    assert_eq!(
+        expire.native_remainders().market_rent(),
+        admitted.occurrence().funds().market_rent()
+    );
+    assert_eq!(
+        expire.native_remainders().capability_native(),
+        admitted.occurrence().funds().capability_native()
+    );
+    assert_eq!(
+        expire.native_remainders().founding_work(),
+        admitted.occurrence().funds().founding_work()
+    );
+    assert_eq!(
+        expire.native_remainders().total(),
+        Ok(expire.native_from_ticket())
+    );
+    assert!(expire.terminal_rent_sink().is_some());
     assert_eq!(expire.core_request(), None);
     assert_eq!(
         lifecycle::plan_expire(
@@ -520,6 +564,7 @@ fn prepare_and_expire_commit_under_controller_without_fabricating_core() {
             5,
             1,
             u64::MAX,
+            rent_sink(admitted_ticket.ticket().refund_owner()),
         ),
         Err(lifecycle::LifecycleErrorV3::Replay)
     );

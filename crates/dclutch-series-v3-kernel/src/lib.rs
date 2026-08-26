@@ -33,6 +33,8 @@ pub mod replay;
 pub mod request;
 /// Stateless complete semantic plan for Shadow-AOT and differential execution.
 pub mod shadow;
+/// Terminal Ticket/root retirement into the lifecycle-scoped Rent V2 sink.
+pub mod terminal;
 
 pub use generated::{
     SERIES_MAXIMUM_MERKLE_HEIGHT_V3, SERIES_OCCURRENCE_BYTES_V3,

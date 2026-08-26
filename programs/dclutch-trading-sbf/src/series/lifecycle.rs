@@ -16,11 +16,18 @@ use dclutch_market_core_codec::{
 use dclutch_series_v3_kernel::plan::{
     ReplayCandidateV3, SeriesReplayActionV3, SeriesReplayWitnessV3, evaluate_replay_v3,
 };
+pub use dclutch_series_v3_kernel::terminal::{
+    SeriesLifecycleRentSinkV3, SeriesRootClosurePlanV3 as ClosePlanV3, TicketNativeRemaindersV3,
+    TicketRetirementPlanV3 as RetirePlanV3,
+};
+use dclutch_series_v3_kernel::terminal::{
+    SeriesTerminalErrorV3, plan_series_root_closure_v3, plan_ticket_retirement_v3,
+};
 use solana_program::pubkey::Pubkey;
 
 use super::{
     AdmittedOccurrenceV3, AdmittedTicketV3, AuthenticatedProductProjectionV2, OccurrenceV3,
-    SeriesV3Error, TemplateV3, core_request, funding_list_id, pubkey,
+    SeriesV3Error, TemplateV3, core_request, funding_list_id,
     state::{SeriesStateError, SeriesStateV3, TicketStateV3},
 };
 
@@ -52,6 +59,19 @@ impl From<SeriesV3Error> for LifecycleErrorV3 {
 impl From<SeriesStateError> for LifecycleErrorV3 {
     fn from(_: SeriesStateError) -> Self {
         Self::Replay
+    }
+}
+
+impl From<SeriesTerminalErrorV3> for LifecycleErrorV3 {
+    fn from(value: SeriesTerminalErrorV3) -> Self {
+        match value {
+            SeriesTerminalErrorV3::RentEncoding | SeriesTerminalErrorV3::RentBinding => {
+                Self::Funding
+            }
+            SeriesTerminalErrorV3::Replay => Self::Replay,
+            SeriesTerminalErrorV3::Balance => Self::Funding,
+            SeriesTerminalErrorV3::Arithmetic => Self::Arithmetic,
+        }
     }
 }
 
@@ -219,6 +239,8 @@ pub struct OccurrenceCommitPlanV3 {
     ticket_after: TicketStateV3,
     occurrence_count: u32,
     native_from_ticket: u64,
+    native_remainders: TicketNativeRemaindersV3,
+    terminal_rent_sink: Option<SeriesLifecycleRentSinkV3>,
     funding: Option<PendingFundingPlanV3>,
 }
 
@@ -238,6 +260,14 @@ impl OccurrenceCommitPlanV3 {
     /// Exact native lamports drained from Ticket custody on success.
     pub const fn native_from_ticket(self) -> u64 {
         self.native_from_ticket
+    }
+    /// Exact native compartment classification; Hoard collateral is excluded.
+    pub const fn native_remainders(self) -> TicketNativeRemaindersV3 {
+        self.native_remainders
+    }
+    /// Lifecycle Rent V2 destination for unused native funds on Expire.
+    pub const fn terminal_rent_sink(self) -> Option<SeriesLifecycleRentSinkV3> {
+        self.terminal_rent_sink
     }
     /// Exact FundingState distribution, present only for consumption.
     pub const fn funding(self) -> Option<PendingFundingPlanV3> {
@@ -332,6 +362,8 @@ pub fn plan_prepare(
             ticket_after,
             occurrence_count: template.occurrence_count(),
             native_from_ticket: 0,
+            native_remainders: TicketNativeRemaindersV3::from_founding_funds(occurrence.funds()),
+            terminal_rent_sink: None,
             funding: None,
         },
         top_up,
@@ -365,6 +397,7 @@ pub fn plan_consume(
         now_slot,
         SeriesCoreActionV1::Consume,
         Some(funding),
+        None,
     )
 }
 
@@ -379,7 +412,11 @@ pub fn plan_expire(
     expected_series_revision: u64,
     expected_ticket_revision: u64,
     now_slot: u64,
+    rent_sink: SeriesLifecycleRentSinkV3,
 ) -> Result<OccurrenceCommitPlanV3, LifecycleErrorV3> {
+    rent_sink
+        .admit_refund_owner(admitted_ticket.ticket().refund_owner())
+        .map_err(LifecycleErrorV3::from)?;
     common_terminal_plan(
         admitted,
         admitted_ticket,
@@ -392,6 +429,7 @@ pub fn plan_expire(
         now_slot,
         SeriesCoreActionV1::Expire,
         None,
+        Some(rent_sink),
     )
 }
 
@@ -408,6 +446,7 @@ fn common_terminal_plan(
     now_slot: u64,
     action: SeriesCoreActionV1,
     funding: Option<PendingFundingPlanV3>,
+    terminal_rent_sink: Option<SeriesLifecycleRentSinkV3>,
 ) -> Result<OccurrenceCommitPlanV3, LifecycleErrorV3> {
     let ticket = admitted_ticket.ticket();
     let ticket_record_id = admitted_ticket.content_id();
@@ -477,34 +516,14 @@ fn common_terminal_plan(
         ticket_after,
         occurrence_count: template.occurrence_count(),
         native_from_ticket: occurrence.funds().checked_native_total()?,
+        native_remainders: TicketNativeRemaindersV3::from_founding_funds(occurrence.funds()),
+        terminal_rent_sink,
         funding,
     })
 }
 
-/// Pure ticket-retirement result after a terminal occurrence.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RetirePlanV3 {
-    series_after: SeriesStateV3,
-    refund_owner: Pubkey,
-    lamports_to_refund_owner: u64,
-}
-
-impl RetirePlanV3 {
-    /// Candidate root state written only after the ticket account closes.
-    pub const fn series_after(self) -> SeriesStateV3 {
-        self.series_after
-    }
-    /// Immutable Ticket-record beneficiary.
-    pub const fn refund_owner(self) -> Pubkey {
-        self.refund_owner
-    }
-    /// Ticket Rent and explicitly classified unsolicited lamport donation.
-    pub const fn lamports_to_refund_owner(self) -> u64 {
-        self.lamports_to_refund_owner
-    }
-}
-
 /// Plan deletion of one non-replayable ticket account.
+#[allow(clippy::too_many_arguments)]
 pub fn plan_retire(
     occurrence_count: u32,
     series: SeriesStateV3,
@@ -513,59 +532,21 @@ pub fn plan_retire(
     expected_series_revision: u64,
     expected_ticket_revision: u64,
     observed_ticket_lamports: u64,
+    exact_ticket_rent: u64,
+    rent_sink: SeriesLifecycleRentSinkV3,
 ) -> Result<RetirePlanV3, LifecycleErrorV3> {
-    let witness = evaluate_joint_replay(
-        SeriesReplayActionV3::Retire {
-            ticket_record: admitted_ticket.content_id(),
-            expected_ticket_revision,
-        },
+    plan_ticket_retirement_v3(
         occurrence_count,
-        expected_series_revision,
         series,
-        Some(ticket_state),
-    )?;
-    let series_after = match witness.series() {
-        ReplayCandidateV3::Replace(bytes) => SeriesStateV3::decode(&bytes, occurrence_count)?,
-        ReplayCandidateV3::Unchanged | ReplayCandidateV3::Delete => {
-            return Err(LifecycleErrorV3::Replay);
-        }
-    };
-    if witness.ticket() != ReplayCandidateV3::Delete {
-        return Err(LifecycleErrorV3::Replay);
-    }
-    Ok(RetirePlanV3 {
-        series_after,
-        refund_owner: pubkey(admitted_ticket.ticket().refund_owner()),
-        lamports_to_refund_owner: observed_ticket_lamports,
-    })
-}
-
-/// Root-close classification; Hoard principal is never in these lamport fields.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ClosePlanV3 {
-    beneficiary: Pubkey,
-    close_rent: u64,
-    root_rent: u64,
-    donation: u64,
-}
-
-impl ClosePlanV3 {
-    /// Finalized Template beneficiary receiving classified native refunds.
-    pub const fn beneficiary(self) -> Pubkey {
-        self.beneficiary
-    }
-    /// Separately classified close-rent principal returned to the Template owner.
-    pub const fn close_rent(self) -> u64 {
-        self.close_rent
-    }
-    /// Exact composite-root Rent reserve returned on deletion.
-    pub const fn root_rent(self) -> u64 {
-        self.root_rent
-    }
-    /// Unsolicited root lamports, classified only as a refund gift.
-    pub const fn donation(self) -> u64 {
-        self.donation
-    }
+        ticket_state,
+        admitted_ticket,
+        expected_series_revision,
+        expected_ticket_revision,
+        observed_ticket_lamports,
+        exact_ticket_rent,
+        rent_sink,
+    )
+    .map_err(Into::into)
 }
 
 /// Plan terminal close after every replay account has been retired.
@@ -575,31 +556,17 @@ pub fn plan_close(
     expected_series_revision: u64,
     observed_root_lamports: u64,
     exact_root_rent: u64,
+    rent_sink: SeriesLifecycleRentSinkV3,
 ) -> Result<ClosePlanV3, LifecycleErrorV3> {
-    let witness = evaluate_joint_replay(
-        SeriesReplayActionV3::Close,
-        template.occurrence_count(),
-        expected_series_revision,
+    plan_series_root_closure_v3(
+        template,
         series,
-        None,
-    )?;
-    if witness.series() != ReplayCandidateV3::Delete
-        || witness.ticket() != ReplayCandidateV3::Unchanged
-    {
-        return Err(LifecycleErrorV3::Replay);
-    }
-    let classified = exact_root_rent
-        .checked_add(series.close_rent_remaining())
-        .ok_or(LifecycleErrorV3::Arithmetic)?;
-    let donation = observed_root_lamports
-        .checked_sub(classified)
-        .ok_or(LifecycleErrorV3::Funding)?;
-    Ok(ClosePlanV3 {
-        beneficiary: pubkey(template.refund_owner()),
-        close_rent: series.close_rent_remaining(),
-        root_rent: exact_root_rent,
-        donation,
-    })
+        expected_series_revision,
+        observed_root_lamports,
+        exact_root_rent,
+        rent_sink,
+    )
+    .map_err(Into::into)
 }
 
 fn evaluate_joint_replay(

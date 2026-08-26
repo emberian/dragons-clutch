@@ -338,14 +338,32 @@ pub fn stage_pending_funding<'info>(
     )
 }
 
-/// Transfer one classified native compartment out of Trading-owned custody.
-pub fn transfer_ticket_lamports(
+/// Credit every unused expired-Ticket native compartment to lifecycle Rent V2.
+///
+/// This deliberately exposes no arbitrary destination/amount capability.
+/// Hoard collateral is absent from the native remainder plan and is returned
+/// only through the authenticated Custody expiration routes.
+pub fn credit_expired_ticket_remainders(
     program_id: &Pubkey,
     ticket: &AccountInfo<'_>,
-    destination: &AccountInfo<'_>,
-    amount: u64,
+    rent_credit: &AccountInfo<'_>,
+    plan: OccurrenceCommitPlanV3,
 ) -> Result<(), ProgramError> {
-    transfer_owned(program_id, ticket, destination, amount)
+    let sink = plan
+        .terminal_rent_sink()
+        .ok_or(SeriesAccountErrorV3::Funding)?;
+    let amount = plan.native_from_ticket();
+    if rent_credit.key.to_bytes() != sink.credit_account().to_bytes()
+        || plan.core_request().is_some()
+        || plan
+            .native_remainders()
+            .total()
+            .map_err(|_| SeriesAccountErrorV3::Funding)?
+            != amount
+    {
+        return Err(SeriesAccountErrorV3::Funding.into());
+    }
+    transfer_owned(program_id, ticket, rent_credit, amount)
 }
 
 /// Validate exact Core return data, then persist Ticket and root candidates.
@@ -420,7 +438,7 @@ fn write_occurrence_candidates(
     Ok(())
 }
 
-/// Retire one terminal Ticket and persist its root replay decrement last.
+/// Retire one terminal Ticket into Rent V2 and persist its root decrement last.
 ///
 /// The caller supplies only a plan produced from the authenticated immutable
 /// Ticket and mutable prestates. The runtime rolls back the Ticket deletion and
@@ -429,7 +447,7 @@ pub fn commit_retire_ticket(
     program_id: &Pubkey,
     root: &AccountInfo<'_>,
     ticket: &AccountInfo<'_>,
-    refund_owner: &AccountInfo<'_>,
+    rent_credit: &AccountInfo<'_>,
     occurrence_count: u32,
     plan: RetirePlanV3,
 ) -> Result<(), ProgramError> {
@@ -443,13 +461,16 @@ pub fn commit_retire_ticket(
         || ticket.is_signer
         || !ticket.is_writable
         || ticket.executable
-        || !refund_owner.is_writable
-        || refund_owner.executable
-        || refund_owner.key != &plan.refund_owner()
-        || ticket.lamports() != plan.lamports_to_refund_owner()
+        || !rent_credit.is_writable
+        || rent_credit.executable
+        || rent_credit.key.to_bytes() != plan.rent_sink().credit_account().to_bytes()
+        || ticket.lamports()
+            != plan
+                .total_credit()
+                .map_err(|_| SeriesAccountErrorV3::Funding)?
         || root.key == ticket.key
-        || root.key == refund_owner.key
-        || ticket.key == refund_owner.key
+        || root.key == rent_credit.key
+        || ticket.key == rent_credit.key
     {
         return Err(SeriesAccountErrorV3::Frame.into());
     }
@@ -460,8 +481,9 @@ pub fn commit_retire_ticket(
     transfer_owned(
         program_id,
         ticket,
-        refund_owner,
-        plan.lamports_to_refund_owner(),
+        rent_credit,
+        plan.total_credit()
+            .map_err(|_| SeriesAccountErrorV3::Funding)?,
     )?;
     ticket
         .try_borrow_mut_data()
@@ -476,35 +498,33 @@ pub fn commit_retire_ticket(
     Ok(())
 }
 
-/// Delete a terminal Series root and refund every classified native lamport.
+/// Delete a terminal Series root and credit every typed lamport to Rent V2.
 ///
 /// Root Rent, prepaid close Rent, and unsolicited donations remain separately
 /// classified in `plan`; Hoard collateral is never part of this account path.
 pub fn commit_close_root(
     program_id: &Pubkey,
     root: &AccountInfo<'_>,
-    beneficiary: &AccountInfo<'_>,
+    rent_credit: &AccountInfo<'_>,
     plan: ClosePlanV3,
 ) -> Result<(), ProgramError> {
     let total = plan
-        .root_rent()
-        .checked_add(plan.close_rent())
-        .and_then(|value| value.checked_add(plan.donation()))
-        .ok_or(SeriesAccountErrorV3::Funding)?;
+        .total_credit()
+        .map_err(|_| SeriesAccountErrorV3::Funding)?;
     if root.owner != program_id
         || root.data_len() != SERIES_ROOT_ACCOUNT_BYTES_V3
         || root.is_signer
         || !root.is_writable
         || root.executable
-        || !beneficiary.is_writable
-        || beneficiary.executable
-        || beneficiary.key != &plan.beneficiary()
-        || root.key == beneficiary.key
+        || !rent_credit.is_writable
+        || rent_credit.executable
+        || rent_credit.key.to_bytes() != plan.rent_sink().credit_account().to_bytes()
+        || root.key == rent_credit.key
         || root.lamports() != total
     {
         return Err(SeriesAccountErrorV3::Frame.into());
     }
-    transfer_owned(program_id, root, beneficiary, total)?;
+    transfer_owned(program_id, root, rent_credit, total)?;
     root.try_borrow_mut_data()
         .map_err(|_| SeriesAccountErrorV3::Commit)?
         .fill(0);
@@ -574,7 +594,12 @@ mod tests {
 
     use std::{boxed::Box, vec};
 
-    use dclutch_series_v3_kernel::{TemplateV3, admit_ticket};
+    use dclutch_core_contract::ContentId;
+    use dclutch_rent_contract::{
+        RefundAuthority,
+        lifecycle_v2::{LifecycleAccountIdV2, LifecycleRentCreditV2},
+    };
+    use dclutch_series_v3_kernel::{AccountKeyV3, TemplateV3, admit_ticket};
 
     use super::*;
     use crate::series::{
@@ -644,13 +669,37 @@ mod tests {
         state
     }
 
+    fn rent_sink(
+        credit: Pubkey,
+        refund_wallet: AccountKeyV3,
+    ) -> crate::series::lifecycle::SeriesLifecycleRentSinkV3 {
+        let state = LifecycleRentCreditV2::new(
+            RefundAuthority::new(refund_wallet.to_bytes()).expect("refund wallet"),
+            LifecycleAccountIdV2::new([91; 32]).expect("Market"),
+            LifecycleAccountIdV2::new([92; 32]).expect("release"),
+            3,
+            4,
+        )
+        .expect("Rent V2");
+        crate::series::lifecycle::SeriesLifecycleRentSinkV3::admit(
+            AccountKeyV3::new(credit.to_bytes()).expect("credit"),
+            &state.to_bytes(),
+            AccountKeyV3::new([91; 32]).expect("Market"),
+            ContentId::new([92; 32]).expect("release"),
+            3,
+            refund_wallet,
+        )
+        .expect("sink")
+    }
+
     #[test]
-    fn retire_refunds_exact_ticket_and_commits_root_decrement_last() {
+    fn retire_credits_exact_ticket_balance_and_commits_root_decrement_last() {
         let program_id = Pubkey::new_from_array([41; 32]);
         let root_key = Pubkey::new_from_array([42; 32]);
         let ticket_key = Pubkey::new_from_array([43; 32]);
         let admitted_ticket = admit_ticket(&generated::SERIES_EXAMPLE_TICKET_V3).expect("Ticket");
-        let refund_key = Pubkey::new_from_array(admitted_ticket.ticket().refund_owner().to_bytes());
+        let credit_key = Pubkey::new_from_array([44; 32]);
+        let sink = rent_sink(credit_key, admitted_ticket.ticket().refund_owner());
         let before = SeriesStateV3::new(7)
             .prepare_ticket(0)
             .expect("prepare")
@@ -659,8 +708,8 @@ mod tests {
         let ticket_state = TicketStateV3::prepared(admitted_ticket.content_id())
             .settle(0, TicketPhaseV3::Consumed)
             .expect("terminal Ticket");
-        let plan =
-            plan_retire(1, before, ticket_state, admitted_ticket, 2, 1, 11).expect("retire plan");
+        let plan = plan_retire(1, before, ticket_state, admitted_ticket, 2, 1, 11, 10, sink)
+            .expect("retire plan");
         let mut root_data = vec![0_u8; SERIES_ROOT_ACCOUNT_BYTES_V3];
         root_data
             .get_mut(CAPABILITY_ROOT_HEADER_BYTES_V1..)
@@ -668,14 +717,14 @@ mod tests {
             .copy_from_slice(&before.encode(1).expect("root before"));
         let root = runtime_account(root_key, program_id, true, 19, &root_data);
         let ticket = runtime_account(ticket_key, program_id, true, 11, &ticket_state.encode());
-        let refund = runtime_account(refund_key, system_program::ID, true, 5, &[]);
+        let credit = runtime_account(credit_key, system_program::ID, true, 5, &[]);
 
-        commit_retire_ticket(&program_id, &root, &ticket, &refund, 1, plan).expect("commit retire");
+        commit_retire_ticket(&program_id, &root, &ticket, &credit, 1, plan).expect("commit retire");
 
         assert_eq!(ticket.lamports(), 0);
         assert_eq!(ticket.owner, &system_program::ID);
         assert!(ticket.data_is_empty());
-        assert_eq!(refund.lamports(), 16);
+        assert_eq!(credit.lamports(), 16);
         let root_bytes = root.try_borrow_data().expect("root data");
         assert_eq!(
             SeriesStateV3::decode(
@@ -689,7 +738,7 @@ mod tests {
     }
 
     #[test]
-    fn retire_refuses_wrong_beneficiary_and_amount_before_mutation() {
+    fn retire_refuses_stale_revision_or_substituted_credit_before_mutation() {
         let program_id = Pubkey::new_from_array([51; 32]);
         let admitted_ticket = admit_ticket(&generated::SERIES_EXAMPLE_TICKET_V3).expect("Ticket");
         let before = SeriesStateV3::new(7)
@@ -700,12 +749,14 @@ mod tests {
         let ticket_state = TicketStateV3::prepared(admitted_ticket.content_id())
             .settle(0, TicketPhaseV3::Expired)
             .expect("terminal Ticket");
+        let credit_key = Pubkey::new_from_array([55; 32]);
+        let sink = rent_sink(credit_key, admitted_ticket.ticket().refund_owner());
         assert_eq!(
-            plan_retire(1, before, ticket_state, admitted_ticket, 2, 0, 11),
+            plan_retire(1, before, ticket_state, admitted_ticket, 2, 0, 11, 10, sink),
             Err(crate::series::lifecycle::LifecycleErrorV3::Replay)
         );
-        let plan =
-            plan_retire(1, before, ticket_state, admitted_ticket, 2, 1, 11).expect("retire plan");
+        let plan = plan_retire(1, before, ticket_state, admitted_ticket, 2, 1, 11, 10, sink)
+            .expect("retire plan");
         let root = runtime_account(
             Pubkey::new_from_array([52; 32]),
             program_id,
@@ -720,7 +771,7 @@ mod tests {
             12,
             &ticket_state.encode(),
         );
-        let wrong_refund = runtime_account(
+        let wrong_credit = runtime_account(
             Pubkey::new_from_array([54; 32]),
             system_program::ID,
             true,
@@ -729,25 +780,26 @@ mod tests {
         );
 
         assert_eq!(
-            commit_retire_ticket(&program_id, &root, &ticket, &wrong_refund, 1, plan),
+            commit_retire_ticket(&program_id, &root, &ticket, &wrong_credit, 1, plan),
             Err(SeriesAccountErrorV3::Frame.into())
         );
         assert_eq!(ticket.lamports(), 12);
-        assert_eq!(wrong_refund.lamports(), 5);
+        assert_eq!(wrong_credit.lamports(), 5);
         assert_eq!(ticket.owner, &program_id);
     }
 
     #[test]
-    fn terminal_close_refunds_exact_classifications_and_deletes_root() {
+    fn terminal_close_credits_exact_classifications_and_deletes_root() {
         let program_id = Pubkey::new_from_array([61; 32]);
         let template =
             TemplateV3::decode(&generated::SERIES_EXAMPLE_TEMPLATE_V3).expect("Template");
         let state = terminal_series(template.close_rent(), template.occurrence_count());
-        let plan = plan_close(template, state, state.revision(), 20, 10).expect("close plan");
+        let credit_key = Pubkey::new_from_array([63; 32]);
+        let sink = rent_sink(credit_key, template.refund_owner());
+        let plan = plan_close(template, state, state.revision(), 20, 10, sink).expect("close plan");
         assert_eq!(plan.close_rent(), 7);
         assert_eq!(plan.root_rent(), 10);
         assert_eq!(plan.donation(), 3);
-        let beneficiary_key = Pubkey::new_from_array(template.refund_owner().to_bytes());
         let root = runtime_account(
             Pubkey::new_from_array([62; 32]),
             program_id,
@@ -755,14 +807,14 @@ mod tests {
             20,
             &vec![0_u8; SERIES_ROOT_ACCOUNT_BYTES_V3],
         );
-        let beneficiary = runtime_account(beneficiary_key, system_program::ID, true, 4, &[]);
+        let credit = runtime_account(credit_key, system_program::ID, true, 4, &[]);
 
-        commit_close_root(&program_id, &root, &beneficiary, plan).expect("close root");
+        commit_close_root(&program_id, &root, &credit, plan).expect("close root");
 
         assert_eq!(root.lamports(), 0);
         assert!(root.data_is_empty());
         assert_eq!(root.owner, &system_program::ID);
-        assert_eq!(beneficiary.lamports(), 24);
+        assert_eq!(credit.lamports(), 24);
     }
 
     #[test]
@@ -771,7 +823,9 @@ mod tests {
         let template =
             TemplateV3::decode(&generated::SERIES_EXAMPLE_TEMPLATE_V3).expect("Template");
         let state = terminal_series(template.close_rent(), template.occurrence_count());
-        let plan = plan_close(template, state, state.revision(), 20, 10).expect("close plan");
+        let credit_key = Pubkey::new_from_array([73; 32]);
+        let sink = rent_sink(credit_key, template.refund_owner());
+        let plan = plan_close(template, state, state.revision(), 20, 10, sink).expect("close plan");
         let root = runtime_account(
             Pubkey::new_from_array([72; 32]),
             program_id,
@@ -779,20 +833,14 @@ mod tests {
             21,
             &vec![0_u8; SERIES_ROOT_ACCOUNT_BYTES_V3],
         );
-        let beneficiary = runtime_account(
-            Pubkey::new_from_array(template.refund_owner().to_bytes()),
-            system_program::ID,
-            true,
-            4,
-            &[],
-        );
+        let credit = runtime_account(credit_key, system_program::ID, true, 4, &[]);
 
         assert_eq!(
-            commit_close_root(&program_id, &root, &beneficiary, plan),
+            commit_close_root(&program_id, &root, &credit, plan),
             Err(SeriesAccountErrorV3::Frame.into())
         );
         assert_eq!(root.lamports(), 21);
-        assert_eq!(beneficiary.lamports(), 4);
+        assert_eq!(credit.lamports(), 4);
         assert_eq!(root.owner, &program_id);
     }
 }

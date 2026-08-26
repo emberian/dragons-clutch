@@ -28,7 +28,10 @@ use super::{
     },
 };
 
-const FIXED_RULE_COUNT: usize = SERIES_CONSUME_LOGICAL_ACCOUNT_BASE_V4 as usize;
+/// Exact fixed logical account count before the dynamic FundingState span.
+pub const SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4: usize =
+    SERIES_CONSUME_LOGICAL_ACCOUNT_BASE_V4 as usize;
+const FIXED_RULE_COUNT: usize = SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4;
 const SPAN_RULE_COUNT: usize = 1;
 const OPERATION_COUNT: usize = 2;
 const CURRENT_TRADING_IDENTITY: u16 = 0;

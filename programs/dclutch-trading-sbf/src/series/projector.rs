@@ -203,6 +203,7 @@ impl<'a> AuthenticatedSeriesActionV3<'a> {
         series: SeriesStateV3,
         ticket_state: TicketStateV3,
         now_slot: u64,
+        rent_sink: super::lifecycle::SeriesLifecycleRentSinkV3,
     ) -> Result<OccurrenceCommitPlanV3, SeriesProjectorErrorV3> {
         if self.action() != SeriesActionV3::Expire {
             return Err(SeriesProjectorErrorV3::Frame);
@@ -216,6 +217,7 @@ impl<'a> AuthenticatedSeriesActionV3<'a> {
             self.admitted.request().expected_series_revision(),
             self.admitted.request().expected_ticket_revision(),
             now_slot,
+            rent_sink,
         )?)
     }
 
@@ -243,6 +245,8 @@ impl<'a> AuthenticatedSeriesActionV3<'a> {
         series: SeriesStateV3,
         ticket_state: TicketStateV3,
         observed_ticket_lamports: u64,
+        exact_ticket_rent: u64,
+        rent_sink: super::lifecycle::SeriesLifecycleRentSinkV3,
     ) -> Result<RetirePlanV3, SeriesProjectorErrorV3> {
         if self.action() != SeriesActionV3::Retire {
             return Err(SeriesProjectorErrorV3::Frame);
@@ -255,6 +259,8 @@ impl<'a> AuthenticatedSeriesActionV3<'a> {
             self.admitted.request().expected_series_revision(),
             self.admitted.request().expected_ticket_revision(),
             observed_ticket_lamports,
+            exact_ticket_rent,
+            rent_sink,
         )?)
     }
 
@@ -264,6 +270,7 @@ impl<'a> AuthenticatedSeriesActionV3<'a> {
         series: SeriesStateV3,
         observed_root_lamports: u64,
         exact_root_rent: u64,
+        rent_sink: super::lifecycle::SeriesLifecycleRentSinkV3,
     ) -> Result<ClosePlanV3, SeriesProjectorErrorV3> {
         if self.action() != SeriesActionV3::Close {
             return Err(SeriesProjectorErrorV3::Frame);
@@ -274,6 +281,7 @@ impl<'a> AuthenticatedSeriesActionV3<'a> {
             self.admitted.request().expected_series_revision(),
             observed_root_lamports,
             exact_root_rent,
+            rent_sink,
         )?)
     }
 

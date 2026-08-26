@@ -12,6 +12,7 @@ path = "src/lib.rs"
 [dependencies]
 dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
+dclutch-rent-contract = { path = "../dclutch-rent-contract" }
 sha2 = { version = "=0.10.9", default-features = false }
 
 [lints]

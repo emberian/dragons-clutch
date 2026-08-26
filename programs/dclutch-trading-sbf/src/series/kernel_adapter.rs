@@ -90,11 +90,6 @@ pub fn core_request(
     )
 }
 
-/// Convert one SDK-free account identity at the explicit adapter boundary.
-pub(crate) fn pubkey(value: AccountKeyV3) -> Pubkey {
-    Pubkey::new_from_array(value.to_bytes())
-}
-
 fn account_key(value: Pubkey) -> Result<AccountKeyV3, SeriesV3Error> {
     AccountKeyV3::new(value.to_bytes())
 }

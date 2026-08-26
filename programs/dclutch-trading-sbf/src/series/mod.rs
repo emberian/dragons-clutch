@@ -60,9 +60,9 @@ pub use dclutch_series_v3_kernel::{
     admit_occurrence_bytes, admit_ticket, future_market_projection, occurrence_content_id,
     pre_founding_series_escrow, template_content_id, ticket_content_id,
 };
+pub(crate) use kernel_adapter::core_request;
 #[cfg(test)]
 pub(crate) use kernel_adapter::{core_identity, core_pubkey_identity};
-pub(crate) use kernel_adapter::{core_request, pubkey};
 pub use kernel_adapter::{funding_list_id, require_funding_list, require_market_pda};
 
 #[cfg(test)]
