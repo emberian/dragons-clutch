@@ -16,6 +16,8 @@ use dclutch_market_core_codec::{
     CapabilityFundingHeaderV1, CoreEffectEnvelopeV1, REQUEST_BYTES, Request,
     PROJECT_FOUND_REQUEST_BYTES_V1, PROJECT_FOUND_REQUEST_MAGIC_V1, ProjectFoundRequestV1,
     SERIES_CORE_REQUEST_BYTES_V1, SERIES_CORE_REQUEST_MAGIC_V1, SeriesCoreRequestV1,
+    SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1, SERIES_PERMIT_EXPIRY_REQUEST_MAGIC_V1,
+    SeriesPermitExpiryRequestV1,
 };
 use dclutch_release_set_contract::{
     CAPABILITY_EXECUTION_SELECTION_BYTES_V1, CapabilityExecutionSelectionV1,
@@ -37,9 +39,11 @@ mod records;
 mod release;
 mod resolution;
 mod series_consume;
+mod series_permit_expiry;
 
 pub use frame::{FOUND_ACCOUNT_COUNT_V2, INITIALIZE_INFRASTRUCTURE_ACCOUNT_COUNT_V1};
 pub use series_consume::SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V1;
+pub use series_permit_expiry::SERIES_PERMIT_EXPIRY_ACCOUNT_COUNT_V1;
 
 /// Exact instruction prefix shared by all Core actions.
 pub const CORE_REQUEST_PREFIX_BYTES_V1: usize = REQUEST_BYTES;
@@ -107,6 +111,20 @@ pub fn process_instruction(
         InitializeProtocolInfrastructureV1::decode(instruction_data)
             .map_err(|_| CoreSbfError::Instruction)?;
         return infrastructure::process_initialize(program_id, accounts);
+    }
+    if instruction_data.len() >= SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1
+        && instruction_data.get(..SERIES_PERMIT_EXPIRY_REQUEST_MAGIC_V1.len())
+            == Some(SERIES_PERMIT_EXPIRY_REQUEST_MAGIC_V1.as_slice())
+    {
+        let request_bytes = instruction_data
+            .get(..SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1)
+            .ok_or(CoreSbfError::Instruction)?;
+        let proof_bytes = instruction_data
+            .get(SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1..)
+            .ok_or(CoreSbfError::Instruction)?;
+        let request = SeriesPermitExpiryRequestV1::decode(request_bytes)
+            .map_err(|_| CoreSbfError::Instruction)?;
+        return series_permit_expiry::process(program_id, accounts, request, proof_bytes);
     }
     if instruction_data.len() >= SERIES_CORE_REQUEST_BYTES_V1
         && instruction_data.get(..SERIES_CORE_REQUEST_MAGIC_V1.len())

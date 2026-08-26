@@ -75,53 +75,86 @@ pub(crate) fn authenticate_found(
     frame: &FoundAccounts<'_, '_>,
     rent: &Rent,
 ) -> Result<(), CoreSbfError> {
+    authenticate_profile(
+        program_id,
+        frame.infrastructure_profile,
+        frame.registry_artifact_raw,
+        frame.registry_artifact_staging,
+        frame.registry_program,
+        frame.registry_programdata,
+        frame.rent_artifact_raw,
+        frame.rent_artifact_staging,
+        frame.rent_program,
+        frame.rent_programdata,
+        rent,
+    )?;
+    Ok(())
+}
+
+/// Authenticate the immutable infrastructure profile from a non-Found frame.
+///
+/// The profile is the noncyclic authority root for both programs. Callers may
+/// use Registry records only after this observation succeeds.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_profile(
+    program_id: &Pubkey,
+    infrastructure_profile: &AccountInfo<'_>,
+    registry_artifact_raw: &AccountInfo<'_>,
+    registry_artifact_staging: &AccountInfo<'_>,
+    registry_program: &AccountInfo<'_>,
+    registry_programdata: &AccountInfo<'_>,
+    rent_artifact_raw: &AccountInfo<'_>,
+    rent_artifact_staging: &AccountInfo<'_>,
+    rent_program: &AccountInfo<'_>,
+    rent_programdata: &AccountInfo<'_>,
+    rent: &Rent,
+) -> Result<ProtocolInfrastructureProfileV1, CoreSbfError> {
     let expected =
         Pubkey::find_program_address(&[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1], program_id)
             .0;
-    if frame.infrastructure_profile.key != &expected
-        || frame.infrastructure_profile.owner != program_id
-        || frame.infrastructure_profile.data_len() != PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1
-        || frame.infrastructure_profile.executable
+    if infrastructure_profile.key != &expected
+        || infrastructure_profile.owner != program_id
+        || infrastructure_profile.data_len() != PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1
+        || infrastructure_profile.executable
         || !rent.is_exempt(
-            frame.infrastructure_profile.lamports(),
+            infrastructure_profile.lamports(),
             PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1,
         )
     {
         return Err(CoreSbfError::Infrastructure);
     }
-    let bytes = frame
-        .infrastructure_profile
+    let bytes = infrastructure_profile
         .try_borrow_data()
         .map_err(|_| CoreSbfError::Infrastructure)?;
     let profile = ProtocolInfrastructureProfileV1::decode(&bytes)
         .map_err(|_| CoreSbfError::Infrastructure)?;
-    if profile.registry().program().to_bytes() != frame.registry_program.key.to_bytes()
-        || profile.rent().program().to_bytes() != frame.rent_program.key.to_bytes()
+    if profile.registry().program().to_bytes() != registry_program.key.to_bytes()
+        || profile.rent().program().to_bytes() != rent_program.key.to_bytes()
     {
         return Err(CoreSbfError::Infrastructure);
     }
     let registry = authenticate_artifact(
-        frame.registry_program.key,
-        frame.registry_artifact_raw,
-        frame.registry_artifact_staging,
-        frame.registry_program,
-        frame.registry_programdata,
+        registry_program.key,
+        registry_artifact_raw,
+        registry_artifact_staging,
+        registry_program,
+        registry_programdata,
         rent,
         true,
     )?;
     let rent_binding = authenticate_artifact(
-        frame.registry_program.key,
-        frame.rent_artifact_raw,
-        frame.rent_artifact_staging,
-        frame.rent_program,
-        frame.rent_programdata,
+        registry_program.key,
+        rent_artifact_raw,
+        rent_artifact_staging,
+        rent_program,
+        rent_programdata,
         rent,
         true,
     )?;
     if registry != profile.registry() || rent_binding != profile.rent() {
         return Err(CoreSbfError::Infrastructure);
     }
-    Ok(())
+    Ok(profile)
 }
 
 /// Require the Registry-selected current Core artifact to be immutable too.
