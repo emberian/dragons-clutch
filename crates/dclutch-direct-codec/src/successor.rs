@@ -76,10 +76,21 @@ impl DirectExecutionConfigLayoutV1 {
 pub struct DirectRootStateLayoutV1;
 
 impl DirectRootStateLayoutV1 {
+    /// Domain-separated root-tail magic (`u64` bytes).
+    pub const MAGIC: usize = generated::DIRECT_ROOT_MAGIC_OFFSET_V1;
+    /// Root-tail ABI version (`u16`, little-endian).
+    pub const VERSION: usize = generated::DIRECT_ROOT_VERSION_OFFSET_V1;
     /// Root phase (`u8`).
     pub const PHASE: usize = generated::DIRECT_ROOT_PHASE_OFFSET_V1;
+    /// Canonical zero padding after phase (five bytes).
+    pub const RESERVED: usize = generated::DIRECT_ROOT_RESERVED_OFFSET_V1;
     /// Exact number of live maker replay roots (`u64`, little-endian).
     pub const OPEN_MAKER_ROOT_COUNT: usize = generated::DIRECT_ROOT_OPEN_MAKER_COUNT_OFFSET_V1;
+
+    /// Exact encoded root-tail magic word used by typed profile validation.
+    pub const MAGIC_WORD: u64 = u64::from_le_bytes(generated::DIRECT_ROOT_MAGIC_V1);
+    /// Exact encoded root-tail ABI version used by typed profile validation.
+    pub const ABI_VERSION: u16 = generated::DIRECT_SUCCESSOR_ABI_VERSION_V1;
 }
 
 /// Canonical projection/write coordinates of [`MakerReplayRootV1`].
@@ -93,6 +104,8 @@ impl DirectMakerReplayLayoutV1 {
     pub const VERSION: usize = generated::DIRECT_MAKER_VERSION_OFFSET_V1;
     /// Canonical PDA bump (`u8`).
     pub const BUMP: usize = generated::DIRECT_MAKER_BUMP_OFFSET_V1;
+    /// Canonical zero padding after the bump (five bytes).
+    pub const RESERVED: usize = generated::DIRECT_MAKER_RESERVED_OFFSET_V1;
     /// Immutable Core Market identity.
     pub const MARKET: usize = generated::DIRECT_MAKER_MARKET_OFFSET_V1;
     /// Immutable Market generation (`u64`, little-endian).
@@ -3622,8 +3635,25 @@ mod tests {
         let root = DirectRootStateV1::new();
         let root_bytes = root.encode();
         assert_eq!(
+            root_bytes.get(DirectRootStateLayoutV1::MAGIC..DirectRootStateLayoutV1::MAGIC + 8),
+            Some(DirectRootStateLayoutV1::MAGIC_WORD.to_le_bytes().as_slice())
+        );
+        assert_eq!(
+            root_bytes.get(DirectRootStateLayoutV1::VERSION..DirectRootStateLayoutV1::VERSION + 2),
+            Some(
+                DirectRootStateLayoutV1::ABI_VERSION
+                    .to_le_bytes()
+                    .as_slice()
+            )
+        );
+        assert_eq!(
             root_bytes.get(DirectRootStateLayoutV1::PHASE),
             Some(&(root.phase().byte()))
+        );
+        assert_eq!(
+            root_bytes
+                .get(DirectRootStateLayoutV1::RESERVED..DirectRootStateLayoutV1::RESERVED + 5),
+            Some([0_u8; 5].as_slice())
         );
         assert_eq!(
             root_bytes.get(
@@ -3690,6 +3720,11 @@ mod tests {
         assert_eq!(
             maker_bytes.get(DirectMakerReplayLayoutV1::BUMP),
             Some(&maker.bump())
+        );
+        assert_eq!(
+            maker_bytes
+                .get(DirectMakerReplayLayoutV1::RESERVED..DirectMakerReplayLayoutV1::RESERVED + 5),
+            Some([0_u8; 5].as_slice())
         );
     }
 
