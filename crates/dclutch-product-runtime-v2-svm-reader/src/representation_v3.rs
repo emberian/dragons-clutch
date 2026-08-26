@@ -149,6 +149,30 @@ pub fn authenticate_product_representation_v3<'accounts, 'info>(
         finalized_graph_digest: graph_record.content_digest.to_bytes(),
         record_authenticated: true,
     };
+    let admission = admit_authenticated_representation_v3(
+        product,
+        context,
+        frame,
+        descriptor_admission,
+        graph_admission,
+    )?;
+    Ok(AuthenticatedRepresentationRuntimeV3 {
+        product,
+        descriptor_record,
+        graph_record,
+        representation_authority,
+        admission,
+    })
+}
+
+#[inline(never)]
+fn admit_authenticated_representation_v3(
+    product: AuthenticatedProductRuntimeV3<'_, '_>,
+    context: RepresentationRuntimeContextV3,
+    frame: RepresentationRuntimeFrameV3<'_, '_>,
+    descriptor_admission: DescriptorAdmissionV2,
+    graph_admission: ContentAdmissionV2,
+) -> Result<RepresentationAdmissionV3> {
     let basis_data = frame
         .product
         .linked_basis
@@ -165,7 +189,7 @@ pub fn authenticate_product_representation_v3<'accounts, 'info>(
         .raw
         .try_borrow_data()
         .map_err(|_| Error::Borrow)?;
-    let admitted = admit_product_representation_v3(ProductRepresentationInputV3 {
+    admit_product_representation_v3(ProductRepresentationInputV3 {
         product_basis_bytes: &basis_data,
         product: ProductRuntimeProjectionV3 {
             product_id: product.runtime.product_id.to_bytes(),
@@ -193,17 +217,11 @@ pub fn authenticate_product_representation_v3<'accounts, 'info>(
             claims_width: context.claims_width,
             receipt_mint: context.receipt_mint.to_bytes(),
             token_program: context.token_program.to_bytes(),
-            representation_authority: representation_authority.to_bytes(),
+            representation_authority: descriptor_admission.derived_representation_authority,
         },
     })
-    .map_err(|_| Error::RepresentationComposition)?;
-    Ok(AuthenticatedRepresentationRuntimeV3 {
-        product,
-        descriptor_record,
-        graph_record,
-        representation_authority,
-        admission: admitted.admission(),
-    })
+    .map(|admitted| admitted.admission())
+    .map_err(|_| Error::RepresentationComposition)
 }
 
 fn require_distinct(frame: RepresentationRuntimeFrameV3<'_, '_>) -> Result<()> {
