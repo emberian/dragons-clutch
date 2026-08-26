@@ -130,6 +130,7 @@ fn fixture() -> Fixture {
         obligation_account,
         equity_shares: 20,
         generation: 2,
+        rent_principal: 50,
     }
     .encode_into(&mut lp)
     .expect("LP state");

@@ -32,7 +32,7 @@ pub const DEALER_LP_POSITION_BYTES_V3: usize = 256;
 /// Exact LP position wire magic.
 pub const DEALER_LP_POSITION_MAGIC_V3: [u8; 8] = *b"DCLDLP03";
 /// Current LP position wire version.
-pub const DEALER_LP_POSITION_VERSION_V3: u16 = 2;
+pub const DEALER_LP_POSITION_VERSION_V3: u16 = 3;
 
 const _: () = assert!(DEALER_LP_POSITION_PDA_DOMAIN_V3.len() <= 32);
 
@@ -99,6 +99,8 @@ pub struct DealerLpPositionV3 {
     pub equity_shares: u64,
     /// Core Market generation.
     pub generation: u64,
+    /// Historical rent principal funded at creation; dust is distinct.
+    pub rent_principal: u64,
 }
 
 impl DealerLpPositionV3 {
@@ -109,7 +111,7 @@ impl DealerLpPositionV3 {
             || read_u16(bytes, 8)? != DEALER_LP_POSITION_VERSION_V3
             || bytes.get(10..16).is_none_or(|reserved| reserved != [0; 6])
             || bytes
-                .get(232..)
+                .get(240..)
                 .is_none_or(|reserved| reserved.iter().any(|byte| *byte != 0))
         {
             return Err(MultiLpErrorV3::InvalidState);
@@ -124,8 +126,9 @@ impl DealerLpPositionV3 {
             obligation_account: read_identity(bytes, 184)?,
             equity_shares: read_u64(bytes, 216)?,
             generation: read_u64(bytes, 224)?,
+            rent_principal: read_u64(bytes, 232)?,
         };
-        if value.revision == 0 {
+        if value.revision == 0 || value.rent_principal == 0 {
             return Err(MultiLpErrorV3::InvalidState);
         }
         Ok(value)
@@ -173,6 +176,7 @@ impl DealerLpPositionV3 {
         }
         write_u64(output, 216, self.equity_shares)?;
         write_u64(output, 224, self.generation)?;
+        write_u64(output, 232, self.rent_principal)?;
         Self::decode(output).map(|_| ())
     }
 }
@@ -197,15 +201,21 @@ pub struct DealerLpOpenPlanV3 {
     pub payer: [u8; 32],
     /// Immutable refund recipient persisted in the new Position.
     pub rent_refund: [u8; 32],
-    /// Exact rent-exempt lamports required for the fixed Position width.
+    /// Historical rent principal required for the fixed Position width.
     pub rent_lamports: u64,
+    /// Dust or partial principal already present before allocation.
+    pub prepaid_lamports: u64,
+    /// Exact payer debit needed to reach the historical principal.
+    pub payer_debit: u64,
+    /// Post-allocation state lamports, preserving any excess dust.
+    pub state_lamports_after: u64,
     /// Initial canonical Position bytes committed after System CPI.
     pub initial_state: [u8; DEALER_LP_POSITION_BYTES_V3],
     /// Digest of the exact initial state.
     pub initial_state_digest: [u8; 32],
 }
 
-/// Prepare allocation/assignment of one wholly vacant prepaid LP Position.
+/// Prepare allocation/assignment of one vacant, dust-tolerant LP Position.
 ///
 /// The common Trading outer performs System allocate/assign with the PDA,
 /// verifies owner/lamports/data length, and commits `initial_state` last.
@@ -247,7 +257,6 @@ pub fn prepare_lp_open_v3(
     .to_bytes();
     if vacant_address != expected_address
         || vacant_owner != solana_system_interface::program::ID.to_bytes()
-        || vacant_lamports != required_rent_lamports
         || required_rent_lamports == 0
         || !vacant_data.is_empty()
     {
@@ -264,13 +273,19 @@ pub fn prepare_lp_open_v3(
         obligation_account: context.obligation_account,
         equity_shares: 0,
         generation: context.generation,
+        rent_principal: required_rent_lamports,
     }
     .encode_into(&mut initial_state)?;
+    let payer_debit = required_rent_lamports.saturating_sub(vacant_lamports);
+    let state_lamports_after = core::cmp::max(vacant_lamports, required_rent_lamports);
     Ok(DealerLpOpenPlanV3 {
         position: vacant_address,
         payer,
         rent_refund,
         rent_lamports: required_rent_lamports,
+        prepaid_lamports: vacant_lamports,
+        payer_debit,
+        state_lamports_after,
         initial_state_digest: hash(&initial_state).to_bytes(),
         initial_state,
     })
@@ -285,6 +300,8 @@ pub struct DealerLpClosePlanV3 {
     pub rent_refund: [u8; 32],
     /// Exact lamports returned from the Position.
     pub rent_lamports: u64,
+    /// Historical principal distinguished from recoverable dust.
+    pub rent_principal: u64,
     /// Digest of the exact zero-share prestate.
     pub prestate_digest: [u8; 32],
     /// Final optimistic revision being retired.
@@ -305,7 +322,7 @@ pub fn prepare_lp_close_v3(
         || hash(observation.data).to_bytes() != expected_digest
         || lp.revision != expected_revision
         || lp.equity_shares != 0
-        || position_lamports == 0
+        || position_lamports < lp.rent_principal
     {
         return Err(MultiLpErrorV3::PositionMismatch);
     }
@@ -313,6 +330,7 @@ pub fn prepare_lp_close_v3(
         position: observation.address,
         rent_refund: lp.rent_refund,
         rent_lamports: position_lamports,
+        rent_principal: lp.rent_principal,
         prestate_digest: expected_digest,
         terminal_revision: lp.revision,
     })
@@ -1317,6 +1335,7 @@ mod tests {
             obligation_account: obligation,
             equity_shares: shares,
             generation: 2,
+            rent_principal: 50,
         }
         .encode_into(&mut bytes)
         .expect("lp");
@@ -1598,5 +1617,72 @@ mod tests {
         assert_eq!(result, Err(MultiLpErrorV3::Arithmetic));
         assert!(post_obligation.iter().all(|byte| *byte == 0xa5));
         assert_eq!(post_lp, [0xa5; DEALER_LP_POSITION_BYTES_V3]);
+    }
+
+    #[test]
+    fn lp_lifecycle_preserves_dust_and_historical_rent_principal() {
+        let trading = [9; 32];
+        let context = context(trading, [13; 32]);
+        let lp_owner = [8; 32];
+        let address = Pubkey::find_program_address(
+            &[
+                DEALER_LP_POSITION_PDA_DOMAIN_V3,
+                &context.child_root,
+                &lp_owner,
+            ],
+            &Pubkey::new_from_array(trading),
+        )
+        .0
+        .to_bytes();
+        let open = prepare_lp_open_v3(
+            context,
+            lp_owner,
+            [14; 32],
+            [15; 32],
+            address,
+            solana_system_interface::program::ID.to_bytes(),
+            7,
+            &[],
+            50,
+        )
+        .expect("dust-tolerant open");
+        assert_eq!(open.prepaid_lamports, 7);
+        assert_eq!(open.payer_debit, 43);
+        assert_eq!(open.state_lamports_after, 50);
+        assert_eq!(
+            DealerLpPositionV3::decode(&open.initial_state)
+                .expect("initial state")
+                .rent_principal,
+            50
+        );
+
+        let dusty = prepare_lp_open_v3(
+            context,
+            lp_owner,
+            [14; 32],
+            [15; 32],
+            address,
+            solana_system_interface::program::ID.to_bytes(),
+            80,
+            &[],
+            50,
+        )
+        .expect("excess dust survives");
+        assert_eq!(dusty.payer_debit, 0);
+        assert_eq!(dusty.state_lamports_after, 80);
+        let digest = hash(&dusty.initial_state).to_bytes();
+        let observation = DealerLpAccountObservationV3 {
+            address,
+            owner: trading,
+            data: &dusty.initial_state,
+        };
+        let close = prepare_lp_close_v3(context, observation, lp_owner, 1, digest, 80)
+            .expect("dusty close");
+        assert_eq!(close.rent_principal, 50);
+        assert_eq!(close.rent_lamports, 80);
+        assert_eq!(
+            prepare_lp_close_v3(context, observation, lp_owner, 1, digest, 49),
+            Err(MultiLpErrorV3::PositionMismatch)
+        );
     }
 }

@@ -485,6 +485,7 @@ mod tests {
             obligation_account: obligation,
             equity_shares: shares,
             generation: 11,
+            rent_principal: 50,
         }
         .encode_into(&mut bytes)
         .expect("LP state");
