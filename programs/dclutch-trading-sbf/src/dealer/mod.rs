@@ -28,15 +28,6 @@ use solana_program::{hash::hash, pubkey::Pubkey};
 
 use crate::dispatch::TradingFamilyContextV1;
 
-/// Legacy V2 Custody lifecycle, retained only for host migration tests.
-#[cfg(not(target_os = "solana"))]
-pub mod lifecycle;
-/// Legacy V2 unsigned construction, retained only for host migration tests.
-#[cfg(not(target_os = "solana"))]
-pub mod operator;
-/// Legacy V2 child packets, retained only for host migration tests.
-#[cfg(not(target_os = "solana"))]
-pub mod physical;
 /// Atomic scenario-solvent Claims/Custody portfolio-fill composition.
 pub mod v3_composer;
 /// Exact scenario-residual junior pool-equity kernel.
@@ -413,21 +404,6 @@ impl DealerTransitionProjectionV2 {
         self.post_inventory
             .get(..usize::from(self.outcome_count))
             .unwrap_or(&[])
-    }
-
-    #[cfg(test)]
-    fn for_physical_test(
-        post_tail: RootTail,
-        plan: Plan,
-        outcome_count: u8,
-        post_inventory: [u64; MAX_OUTCOMES],
-    ) -> Self {
-        Self {
-            post_tail,
-            plan,
-            outcome_count,
-            post_inventory,
-        }
     }
 }
 
