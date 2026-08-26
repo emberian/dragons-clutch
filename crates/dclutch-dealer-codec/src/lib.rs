@@ -760,106 +760,108 @@ impl State {
     /// Encode one structurally canonical state.
     pub fn to_bytes(self) -> Result<[u8; STATE_BYTES]> {
         let mut output = [0_u8; STATE_BYTES];
+        self.encode_into(&mut output)?;
+        Ok(output)
+    }
+
+    /// Encode one structurally canonical state into exact caller-owned storage.
+    ///
+    /// The borrowed form lets an SBF adapter write directly into an already
+    /// authenticated State account without placing a second 840-byte State
+    /// image in its bounded stack frame.
+    pub fn encode_into(self, output: &mut [u8]) -> Result<()> {
+        if output.len() != STATE_BYTES {
+            return Err(Error::InvalidLength);
+        }
+        output.fill(0);
         put_header(
-            &mut output,
+            output,
             &generated::STATE_MAGIC,
             generated::STATE_VERSION_OFFSET,
         )?;
-        put_byte(&mut output, generated::STATE_PHASE_OFFSET, self.phase.tag())?;
+        put_byte(output, generated::STATE_PHASE_OFFSET, self.phase.tag())?;
         put_byte(
-            &mut output,
+            output,
             generated::STATE_OUTCOME_COUNT_OFFSET,
             self.outcome_count,
         )?;
         put_byte(
-            &mut output,
+            output,
             generated::STATE_HAS_PENDING_OFFSET,
             u8::from(!is_zero(&self.pending_candidate_id)),
         )?;
-        put_byte(&mut output, generated::STATE_WINNER_OFFSET, self.winner)?;
+        put_byte(output, generated::STATE_WINNER_OFFSET, self.winner)?;
         put(
-            &mut output,
+            output,
             generated::STATE_ACTIVE_CANDIDATE_ID_OFFSET,
             &self.active_candidate_id,
         )?;
         put(
-            &mut output,
+            output,
             generated::STATE_PENDING_CANDIDATE_ID_OFFSET,
             &self.pending_candidate_id,
         )?;
         put(
-            &mut output,
+            output,
             generated::STATE_RELEASE_SET_ID_OFFSET,
             &self.release_set_id,
         )?;
         put_u64(
-            &mut output,
+            output,
             generated::STATE_ACTIVE_REVISION_OFFSET,
             self.active_revision,
         )?;
         put_u64(
-            &mut output,
+            output,
             generated::STATE_PENDING_REVISION_OFFSET,
             self.pending_revision,
         )?;
         put_u64(
-            &mut output,
+            output,
             generated::STATE_STATE_REVISION_OFFSET,
             self.state_revision,
         )?;
+        put_u64_array(output, generated::STATE_INVENTORY_OFFSET, &self.inventory)?;
+        put_u64_array(output, generated::STATE_BUY_USED_OFFSET, &self.buy_used)?;
+        put_u64_array(output, generated::STATE_SELL_USED_OFFSET, &self.sell_used)?;
         put_u64_array(
-            &mut output,
-            generated::STATE_INVENTORY_OFFSET,
-            &self.inventory,
-        )?;
-        put_u64_array(
-            &mut output,
-            generated::STATE_BUY_USED_OFFSET,
-            &self.buy_used,
-        )?;
-        put_u64_array(
-            &mut output,
-            generated::STATE_SELL_USED_OFFSET,
-            &self.sell_used,
-        )?;
-        put_u64_array(
-            &mut output,
+            output,
             generated::STATE_BUY_QUOTE_PAID_OFFSET,
             &self.buy_quote_paid,
         )?;
         put_u64_array(
-            &mut output,
+            output,
             generated::STATE_SELL_QUOTE_PAID_OFFSET,
             &self.sell_quote_paid,
         )?;
-        put_u64(&mut output, generated::STATE_FEE_BASE_OFFSET, self.fee_base)?;
-        put_u64(&mut output, generated::STATE_FEE_PAID_OFFSET, self.fee_paid)?;
+        put_u64(output, generated::STATE_FEE_BASE_OFFSET, self.fee_base)?;
+        put_u64(output, generated::STATE_FEE_PAID_OFFSET, self.fee_paid)?;
         put_u64(
-            &mut output,
+            output,
             generated::STATE_QUOTE_CUSTODY_OFFSET,
             self.quote_custody,
         )?;
         put_u64(
-            &mut output,
+            output,
             generated::STATE_FEE_CUSTODY_OFFSET,
             self.fee_custody,
         )?;
         put_u64(
-            &mut output,
+            output,
             generated::STATE_LIVENESS_CUSTODY_OFFSET,
             self.liveness_custody,
         )?;
         put_u64(
-            &mut output,
+            output,
             generated::STATE_ACTIVE_WORK_REMAINING_OFFSET,
             self.active_work_remaining,
         )?;
         put_u64(
-            &mut output,
+            output,
             generated::STATE_PENDING_WORK_FUNDING_OFFSET,
             self.pending_work_funding,
         )?;
-        Ok(output)
+        Ok(())
     }
 }
 
@@ -981,6 +983,10 @@ pub enum Action {
     Unwind,
     /// Close all custody after inventory reaches zero.
     Retire,
+    /// Add Dealer-owned quote principal or one native-claim coordinate.
+    AddLiquidity,
+    /// Remove Dealer-owned quote principal or one native-claim coordinate.
+    RemoveLiquidity,
 }
 
 impl Action {
@@ -992,6 +998,8 @@ impl Action {
             generated::ACTION_ENTER_TERMINAL => Ok(Self::EnterTerminal),
             generated::ACTION_UNWIND => Ok(Self::Unwind),
             generated::ACTION_RETIRE => Ok(Self::Retire),
+            generated::ACTION_ADD_LIQUIDITY => Ok(Self::AddLiquidity),
+            generated::ACTION_REMOVE_LIQUIDITY => Ok(Self::RemoveLiquidity),
             _ => Err(Error::UnknownTag),
         }
     }
@@ -1004,6 +1012,8 @@ impl Action {
             Self::EnterTerminal => generated::ACTION_ENTER_TERMINAL,
             Self::Unwind => generated::ACTION_UNWIND,
             Self::Retire => generated::ACTION_RETIRE,
+            Self::AddLiquidity => generated::ACTION_ADD_LIQUIDITY,
+            Self::RemoveLiquidity => generated::ACTION_REMOVE_LIQUIDITY,
         }
     }
 }
@@ -1041,7 +1051,8 @@ pub struct Request {
     pub action: Action,
     /// Fill direction; canonical buy tag for non-fill actions.
     pub side: Side,
-    /// Fill/unwind outcome or terminal winner.
+    /// Fill/unwind outcome, terminal winner, or liquidity asset coordinate.
+    /// For liquidity changes, `outcome_count` is the quote-principal sentinel.
     pub outcome: u8,
     /// Exact expected state revision.
     pub expected_state_revision: u64,
@@ -1210,6 +1221,16 @@ impl Request {
                     return Err(Error::NonCanonicalPadding);
                 }
             }
+            Action::AddLiquidity | Action::RemoveLiquidity => {
+                if !canonical_non_fill_side
+                    || self.now != 0
+                    || self.quantity == 0
+                    || zero_actor
+                    || !zero_replacement
+                {
+                    return Err(Error::NonCanonicalPadding);
+                }
+            }
         }
         Ok(())
     }
@@ -1237,6 +1258,16 @@ pub enum ClaimAction {
         quantity: u64,
         /// Exact categorical payout to Dealer quote custody.
         payout: u64,
+    },
+    /// Move one native-claim coordinate between the Dealer owner and the
+    /// Trading child-root Position without mirroring either balance.
+    AdjustLiquidity {
+        /// `true` moves owner to child root; `false` moves child root to owner.
+        add: bool,
+        /// Product outcome.
+        outcome: u8,
+        /// Exact claim quantity.
+        quantity: u64,
     },
 }
 
@@ -1400,6 +1431,8 @@ pub fn interpret_projected(
         Action::EnterTerminal => enter_terminal(policy, active, state, request),
         Action::Unwind => unwind(policy, active, state, request),
         Action::Retire => retire(policy, active, state),
+        Action::AddLiquidity => adjust_liquidity(policy, active, pending, state, request, true),
+        Action::RemoveLiquidity => adjust_liquidity(policy, active, pending, state, request, false),
     }?;
     Ok(transition)
 }
@@ -1848,6 +1881,73 @@ fn retire(policy: Policy, active: CandidateView<'_>, mut state: State) -> Result
     state.active_work_remaining = 0;
     bump_revision(&mut state)?;
     validate_state(policy, active, None, state)?;
+    Ok(Transition { post: state, plan })
+}
+
+fn adjust_liquidity(
+    policy: Policy,
+    active: CandidateView<'_>,
+    pending: Option<CandidateView<'_>>,
+    mut state: State,
+    request: Request,
+    add: bool,
+) -> Result<Transition> {
+    if state.phase != Phase::Open || request.actor_id != policy.dealer_id {
+        return Err(Error::InvalidPhase);
+    }
+    let outcome = usize::from(request.outcome);
+    let count = usize::from(policy.outcome_count);
+    let mut plan = Plan::empty();
+    if outcome == count {
+        if add {
+            state.quote_custody = state
+                .quote_custody
+                .checked_add(request.quantity)
+                .ok_or(Error::ArithmeticOverflow)?;
+            plan.push(
+                CustodyRole::DealerOwner,
+                CustodyRole::DealerQuote,
+                request.quantity,
+            )?;
+        } else {
+            state.quote_custody = state
+                .quote_custody
+                .checked_sub(request.quantity)
+                .ok_or(Error::Underfunded)?;
+            if state.quote_custody < active.quote_reserve_floor {
+                return Err(Error::Underfunded);
+            }
+            plan.push(
+                CustodyRole::DealerQuote,
+                CustodyRole::DealerOwner,
+                request.quantity,
+            )?;
+        }
+    } else if outcome < count {
+        let current = state.inventory[outcome];
+        let post = if add {
+            current
+                .checked_add(request.quantity)
+                .ok_or(Error::ArithmeticOverflow)?
+        } else {
+            current
+                .checked_sub(request.quantity)
+                .ok_or(Error::InventoryRisk)?
+        };
+        if post < active.minimum_inventory(outcome)? || post > active.maximum_inventory(outcome)? {
+            return Err(Error::InventoryRisk);
+        }
+        state.inventory[outcome] = post;
+        plan.claim = ClaimAction::AdjustLiquidity {
+            add,
+            outcome: request.outcome,
+            quantity: request.quantity,
+        };
+    } else {
+        return Err(Error::InvalidCurve);
+    }
+    bump_revision(&mut state)?;
+    validate_state(policy, active, pending, state)?;
     Ok(Transition { post: state, plan })
 }
 

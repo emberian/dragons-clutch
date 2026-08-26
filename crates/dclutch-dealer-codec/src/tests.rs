@@ -252,6 +252,134 @@ fn buy_fill_executes_exact_claim_custody_fee_and_work_plan() {
 }
 
 #[test]
+fn owner_can_add_and_remove_quote_or_claim_liquidity_without_touching_fees() {
+    let active = candidate(id(11), 1, 0);
+    let initial = initial_state();
+    let add_quote = execute(
+        initial,
+        Request {
+            action: Action::AddLiquidity,
+            outcome: policy().outcome_count,
+            now: 0,
+            quantity: 250,
+            actor_id: policy().dealer_id,
+            ..base_request(Action::AddLiquidity, initial)
+        },
+        &active,
+        None,
+        None,
+    )
+    .expect("add quote principal");
+    assert_eq!(add_quote.post.quote_custody, 1_250);
+    assert_eq!(add_quote.post.fee_custody, 0);
+    assert_eq!(
+        add_quote.plan.custody[0],
+        Some(CustodyTransfer {
+            source: CustodyRole::DealerOwner,
+            destination: CustodyRole::DealerQuote,
+            amount: 250,
+        })
+    );
+
+    let add_claim = execute(
+        add_quote.post,
+        Request {
+            action: Action::AddLiquidity,
+            outcome: 1,
+            now: 0,
+            quantity: 25,
+            actor_id: policy().dealer_id,
+            ..base_request(Action::AddLiquidity, add_quote.post)
+        },
+        &active,
+        None,
+        None,
+    )
+    .expect("add claim inventory");
+    assert_eq!(add_claim.post.inventory[..2], [50, 75]);
+    assert_eq!(
+        add_claim.plan.claim,
+        ClaimAction::AdjustLiquidity {
+            add: true,
+            outcome: 1,
+            quantity: 25,
+        }
+    );
+
+    let remove_claim = execute(
+        add_claim.post,
+        Request {
+            action: Action::RemoveLiquidity,
+            outcome: 1,
+            now: 0,
+            quantity: 10,
+            actor_id: policy().dealer_id,
+            ..base_request(Action::RemoveLiquidity, add_claim.post)
+        },
+        &active,
+        None,
+        None,
+    )
+    .expect("remove claim inventory");
+    assert_eq!(remove_claim.post.inventory[..2], [50, 65]);
+
+    let remove_quote = execute(
+        remove_claim.post,
+        Request {
+            action: Action::RemoveLiquidity,
+            outcome: policy().outcome_count,
+            now: 0,
+            quantity: 1_150,
+            actor_id: policy().dealer_id,
+            ..base_request(Action::RemoveLiquidity, remove_claim.post)
+        },
+        &active,
+        None,
+        None,
+    )
+    .expect("remove quote down to exact floor");
+    assert_eq!(remove_quote.post.quote_custody, 100);
+    assert_eq!(
+        (remove_quote.post.fee_base, remove_quote.post.fee_paid),
+        (0, 0)
+    );
+}
+
+#[test]
+fn liquidity_changes_refuse_foreign_owner_risk_escape_and_quote_floor() {
+    let active = candidate(id(11), 1, 0);
+    let initial = initial_state();
+    for request in [
+        Request {
+            action: Action::AddLiquidity,
+            outcome: 0,
+            now: 0,
+            quantity: 1,
+            actor_id: id(99),
+            ..base_request(Action::AddLiquidity, initial)
+        },
+        Request {
+            action: Action::AddLiquidity,
+            outcome: 0,
+            now: 0,
+            quantity: 51,
+            actor_id: policy().dealer_id,
+            ..base_request(Action::AddLiquidity, initial)
+        },
+        Request {
+            action: Action::RemoveLiquidity,
+            outcome: policy().outcome_count,
+            now: 0,
+            quantity: 901,
+            actor_id: policy().dealer_id,
+            ..base_request(Action::RemoveLiquidity, initial)
+        },
+    ] {
+        assert!(execute(initial, request, &active, None, None).is_err());
+    }
+}
+
+#[test]
 fn fill_fragmentation_cannot_change_quote_or_fee_totals() {
     let active = candidate(id(11), 1, 0);
     let initial = initial_state();

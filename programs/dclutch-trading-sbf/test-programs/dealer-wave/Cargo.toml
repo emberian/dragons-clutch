@@ -1,0 +1,27 @@
+[workspace]
+
+[package]
+name = "dclutch-trading-dealer-wave-fixture"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "lib"]
+path = "src/lib.rs"
+
+[features]
+default = []
+no-entrypoint = []
+custom-heap = []
+custom-panic = []
+
+[dependencies]
+dclutch-dealer-codec = { path = "../../../../crates/dclutch-dealer-codec" }
+solana-program = { version = "=3.0.0", default-features = false }
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(target_os, values("solana"))'] }

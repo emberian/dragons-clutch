@@ -202,11 +202,13 @@ def fieldOffset [DecidableEq α] (layout : List (PlacedField α)) (name : α) : 
 
 inductive Action where
   | scheduleReplacement | activateReplacement | fill | enterTerminal | unwind | retire
+  | addLiquidity | removeLiquidity
   deriving DecidableEq, Repr
 
 def Action.tag : Action → UInt8
   | .scheduleReplacement => 0 | .activateReplacement => 1 | .fill => 2
   | .enterTerminal => 3 | .unwind => 4 | .retire => 5
+  | .addLiquidity => 6 | .removeLiquidity => 7
 
 def phaseOpen : UInt8 := 0
 def phaseTerminal : UInt8 := 1

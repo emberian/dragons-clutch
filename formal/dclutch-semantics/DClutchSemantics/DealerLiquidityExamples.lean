@@ -46,6 +46,7 @@ def selectedRelease : DClutch.ExecutionRelease.ReleaseSet := {
 }
 
 def tradingAdmission : DClutch.ExecutionRelease.Admission := {
+  marketRegistryProgram := 1
   marketReleaseSetId := 13
   selected := selectedRelease
   receipt := {

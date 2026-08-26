@@ -350,6 +350,15 @@ structure Unwind where
   economic : DClutch.Economic.Frame
   deriving DecidableEq, Repr
 
+/-- Owner-authorized capital adjustment. `outcome = none` selects quote
+principal; a present outcome selects one native-claim coordinate. -/
+structure LiquidityChange where
+  authenticatedDealerId : Nat
+  outcome : Option Nat
+  quantity : Nat
+  economic : Option DClutch.Economic.Frame
+  deriving DecidableEq, Repr
+
 inductive Command where
   | scheduleReplacement (replacement : Replacement)
   | activateReplacement (activation : Activation)
@@ -357,6 +366,8 @@ inductive Command where
   | enterTerminal (resolution : Resolution)
   | unwind (unwind : Unwind)
   | retire
+  | addLiquidity (change : LiquidityChange)
+  | removeLiquidity (change : LiquidityChange)
   deriving DecidableEq, Repr
 
 /-- One current Registry/Core observation around a semantic command.  The
@@ -521,6 +532,43 @@ def unwindAccepts (policy : Policy) (state : State) (unwind : Unwind) : Bool :=
         unwind.outcome unwind.quantity < policy.scalarLimit &&
     unwindEconomicAccepts policy state unwind
 
+def liquiditySide (add : Bool) : Side :=
+  if add then .takerSells else .takerBuys
+
+def liquidityInventoryAfter (add : Bool) (state : State)
+    (outcome quantity : Nat) : List Nat :=
+  inventoryAfter (liquiditySide add) state.inventory outcome quantity
+
+def liquidityEconomicAccepts (policy : Policy) (state : State) (add : Bool)
+    (outcome quantity : Nat) : Option DClutch.Economic.Frame → Bool
+  | none => false
+  | some economic =>
+      economic.outcomeCount = policy.outcomeCount &&
+        economic.scalarLimit = policy.scalarLimit &&
+        economic.bindings = economicBindings (liquiditySide add) &&
+        economic.command =
+          DClutch.Economic.Command.transferClaim .native outcome quantity &&
+        dealerClaims (liquiditySide add) economic.pre = state.inventory &&
+        DClutch.Economic.accepts economic &&
+        dealerClaims (liquiditySide add) (DClutch.Economic.postState economic) =
+          liquidityInventoryAfter add state outcome quantity
+
+def liquidityChangeAccepts (policy : Policy) (state : State) (add : Bool)
+    (change : LiquidityChange) : Bool :=
+  state.phase = .open && change.authenticatedDealerId = policy.dealerId &&
+    0 < change.quantity && match change.outcome with
+    | none =>
+        change.economic.isNone && if add then
+          state.quoteCustody + change.quantity < policy.scalarLimit
+        else
+          change.quantity ≤ state.quoteCustody &&
+            state.active.quoteReserveFloor ≤ state.quoteCustody - change.quantity
+    | some outcome =>
+        outcome < policy.outcomeCount &&
+          inventoryWithin state.active
+            (liquidityInventoryAfter add state outcome change.quantity) &&
+          liquidityEconomicAccepts policy state add outcome change.quantity change.economic
+
 def commandAccepts (policy : Policy) (state : State) : Command → Bool
   | .scheduleReplacement replacement => replacementAccepts policy state replacement
   | .activateReplacement activation => activationAccepts policy state activation
@@ -530,6 +578,8 @@ def commandAccepts (policy : Policy) (state : State) : Command → Bool
   | .retire =>
       (match state.phase with | .terminal _ => true | _ => false) &&
       state.pending.isNone && state.inventory.all (fun quantity => quantity = 0)
+  | .addLiquidity change => liquidityChangeAccepts policy state true change
+  | .removeLiquidity change => liquidityChangeAccepts policy state false change
 
 def releaseAccepts (policy : Policy) (invocation : Invocation) : Bool :=
   invocation.release.marketReleaseSetId = policy.releaseSetId &&
@@ -617,6 +667,13 @@ def retirePost (state : State) : State :=
     livenessCustody := 0
     activeWorkRemaining := 0 }
 
+def liquidityPost (state : State) (add : Bool) (change : LiquidityChange) : State :=
+  match change.outcome with
+  | none => if add then { state with quoteCustody := state.quoteCustody + change.quantity }
+      else { state with quoteCustody := state.quoteCustody - change.quantity }
+  | some outcome =>
+      { state with inventory := liquidityInventoryAfter add state outcome change.quantity }
+
 def postState (policy : Policy) (state : State) : Command → State
   | .scheduleReplacement replacement => schedulePost state replacement
   | .activateReplacement _ => activatePost policy state
@@ -624,6 +681,8 @@ def postState (policy : Policy) (state : State) : Command → State
   | .enterTerminal resolution => terminalPost state resolution.winner
   | .unwind unwind => unwindPost state unwind
   | .retire => retirePost state
+  | .addLiquidity change => liquidityPost state true change
+  | .removeLiquidity change => liquidityPost state false change
 
 def rawCustodyPlan (policy : Policy) (state : State) : Command → List CustodyTransfer
   | .scheduleReplacement replacement =>
@@ -653,6 +712,12 @@ def rawCustodyPlan (policy : Policy) (state : State) : Command → List CustodyT
       custodyMove .dealerQuote .unwindRecipient state.quoteCustody,
       custodyMove .feeVault .feeRecipient state.feeCustody,
       custodyMove .livenessVault .dealerOwner state.activeWorkRemaining]
+  | .addLiquidity change => match change.outcome with
+      | none => [custodyMove .dealerOwner .dealerQuote change.quantity]
+      | some _ => []
+  | .removeLiquidity change => match change.outcome with
+      | none => [custodyMove .dealerQuote .dealerOwner change.quantity]
+      | some _ => []
 
 /-- Zero-value token CPIs are not part of the semantic plan. -/
 def custodyPlan (policy : Policy) (state : State) (command : Command) :
@@ -663,6 +728,8 @@ def physicalPlan (policy : Policy) (state : State) (command : Command) : Physica
   economic := match command with
     | .fill fill => some (DClutch.Economic.compile fill.economic)
     | .unwind unwind => some (DClutch.Economic.compile unwind.economic)
+    | .addLiquidity change | .removeLiquidity change =>
+        change.economic.map DClutch.Economic.compile
     | _ => none
   custody := custodyPlan policy state command
 }
@@ -765,5 +832,14 @@ theorem retirement_empties_distinct_custodies
     post.quoteCustody = 0 ∧ post.feeCustody = 0 ∧
       post.livenessCustody = 0 := by
   simp [postState, retirePost]
+
+/-- Realized fees are not reclassified as liquidity principal by either
+capital-adjustment route. -/
+theorem liquidity_change_preserves_realized_fees
+    (state : State) (add : Bool) (change : LiquidityChange) :
+    (liquidityPost state add change).feeCustody = state.feeCustody ∧
+      (liquidityPost state add change).feeBase = state.feeBase := by
+  rcases change with ⟨authenticatedDealerId, outcome, quantity, economic⟩
+  cases outcome <;> cases add <;> simp [liquidityPost]
 
 end DClutch.Dealer

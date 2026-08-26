@@ -28,6 +28,13 @@ use solana_program::{hash::hash, pubkey::Pubkey};
 
 use crate::dispatch::TradingFamilyContextV1;
 
+/// Prepaid Custody activation and quiescent closure plans.
+pub mod lifecycle;
+/// Chain-derived unsigned construction for every Dealer action.
+pub mod operator;
+/// Exact Claims/Custody child packets and receipt postconditions.
+pub mod physical;
+
 /// Canonical Dealer capability-kind label.
 pub const DEALER_KIND_PREIMAGE_V2: &[u8] = b"dclutch/capability/dealer-v2";
 /// Canonical immutable Dealer Policy config schema.
@@ -229,7 +236,11 @@ impl DealerPositionProjectionV2 {
             return Err(DealerProfileError::Position);
         }
         let market = profile.context.market();
-        let holder = profile.policy.dealer_id;
+        // The internal inventory Position is owned by the immutable Trading
+        // child root. `policy.dealer_id` is the external capital owner and is
+        // never reused as protocol custody. This makes add/remove and fills
+        // real Claims transfers between distinct canonical Positions.
+        let holder = profile.context.child_root_key();
         let seeds =
             ClaimsPositionSeedsV1::new(market, holder).map_err(|_| DealerProfileError::Position)?;
         let expected = Pubkey::find_program_address(&seeds.as_slices(), current_claims_program).0;
@@ -378,6 +389,21 @@ impl DealerTransitionProjectionV2 {
             .get(..usize::from(self.outcome_count))
             .unwrap_or(&[])
     }
+
+    #[cfg(test)]
+    fn for_physical_test(
+        post_tail: RootTail,
+        plan: Plan,
+        outcome_count: u8,
+        post_inventory: [u64; MAX_OUTCOMES],
+    ) -> Self {
+        Self {
+            post_tail,
+            plan,
+            outcome_count,
+            post_inventory,
+        }
+    }
 }
 
 /// Transaction-local inputs for one Dealer transition.
@@ -399,6 +425,30 @@ pub struct DealerInterpretationInputV2<'a> {
     pub terminal_winner: Option<u8>,
     /// Exact authenticated Dealer hot request.
     pub request: TradingRequest,
+}
+
+/// Authenticate the complete initial economic state before creating a Dealer root.
+///
+/// Activation requires present principal, work funding, and every native-claim
+/// coordinate to already satisfy the immutable active Candidate. It therefore
+/// cannot create an underfunded root and hope that a later transaction repairs
+/// it. Claims and Custody remain the sole balance owners.
+pub fn initialize_projected_v2(
+    profile: DealerProfileV2,
+    active: CandidateView<'_>,
+    position: DealerPositionProjectionV2,
+    vaults: DealerVaultProjectionV2,
+) -> Result<RootTail, DealerProfileError> {
+    if position.revision() != 0
+        || vaults.fee_vault != 0
+        || vaults.liveness_vault != active.work_funding
+        || vaults.trading_principal < active.quote_reserve_floor
+    {
+        return Err(DealerProfileError::Tail);
+    }
+    let tail = RootTail::initialize(active);
+    profile.materialize_state(tail, active, None, position, vaults, None)?;
+    Ok(tail)
 }
 
 /// Interpret one request after every sole-owner projection is authenticated.

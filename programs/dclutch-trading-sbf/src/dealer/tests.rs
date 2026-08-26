@@ -201,17 +201,12 @@ fn token(owner: Pubkey, mint: Pubkey, amount: u64) -> TokenAccount {
 }
 
 fn position(profile: DealerProfileV2, claims_program: &Pubkey) -> (Pubkey, Vec<u8>) {
-    let seeds = ClaimsPositionSeedsV1::new(profile.context().market(), profile.policy().dealer_id)
-        .expect("position seeds");
+    let holder = profile.context().child_root_key();
+    let seeds =
+        ClaimsPositionSeedsV1::new(profile.context().market(), holder).expect("position seeds");
     let key = Pubkey::find_program_address(&seeds.as_slices(), claims_program).0;
     let mut bytes = vec![0_u8; POSITION_HEADER_BYTES + 2 * SCALAR_BYTES * 2];
-    initialize_position(
-        &mut bytes,
-        profile.context().market(),
-        profile.policy().dealer_id,
-        2,
-    )
-    .expect("position");
+    initialize_position(&mut bytes, profile.context().market(), holder, 2).expect("position");
     (key, bytes)
 }
 
@@ -513,4 +508,65 @@ fn total_machine_emits_child_plan_but_only_inventory_free_tail_is_persistable() 
     assert_eq!(transition.post_tail().state_revision, 2);
     assert_eq!(transition.post_tail().sell_used[0], 10);
     assert_eq!(transition.post_tail().to_bytes().expect("tail").len(), 384);
+}
+
+#[test]
+fn activation_requires_present_candidate_safe_claims_principal_and_work_funding() {
+    let (profile, _descriptor, _config, child_root) = fixture();
+    let candidate_bytes = candidate_bytes();
+    let candidate_view = CandidateView::decode(&candidate_bytes).expect("candidate");
+    let trading_program = Pubkey::new_from_array(profile.context().program_id());
+    let candidate_key = Pubkey::find_program_address(
+        &[
+            DEALER_CANDIDATE_PDA_DOMAIN_V2,
+            &child_root.to_bytes(),
+            &candidate_view.candidate_id,
+        ],
+        &trading_program,
+    )
+    .0;
+    let active = profile
+        .candidate(&candidate_key, &trading_program, &candidate_bytes)
+        .expect("candidate");
+    let claims_program = Pubkey::new_from_array([17; 32]);
+    let (position_key, position_bytes) = position(profile, &claims_program);
+    let position = DealerPositionProjectionV2::authenticate(
+        profile,
+        &claims_program,
+        &position_key,
+        &claims_program,
+        &position_bytes,
+        0,
+    )
+    .expect("position");
+    let custody_program = Pubkey::new_from_array([18; 32]);
+    let token_program = Pubkey::new_from_array([19; 32]);
+    let mint = Pubkey::new_from_array([20; 32]);
+    let observations = vaults(profile, &custody_program, token_program, mint);
+    let projected = DealerVaultProjectionV2::authenticate(
+        profile,
+        &custody_program,
+        &token_program,
+        &mint,
+        observations,
+    )
+    .expect("vaults");
+    assert_eq!(
+        initialize_projected_v2(profile, active, position, projected),
+        Ok(RootTail::initialize(active))
+    );
+    let mut underfunded = observations;
+    underfunded[2].token.amount -= 1;
+    let underfunded = DealerVaultProjectionV2::authenticate(
+        profile,
+        &custody_program,
+        &token_program,
+        &mint,
+        underfunded,
+    )
+    .expect("shape still authentic");
+    assert_eq!(
+        initialize_projected_v2(profile, active, position, underfunded),
+        Err(DealerProfileError::Tail)
+    );
 }

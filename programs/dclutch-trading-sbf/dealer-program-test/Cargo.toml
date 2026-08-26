@@ -1,0 +1,22 @@
+[workspace]
+
+[package]
+name = "dclutch-trading-dealer-program-test"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+publish = false
+
+[dependencies]
+dclutch-dealer-codec = { path = "../../../crates/dclutch-dealer-codec" }
+solana-account = "=4.3.2"
+solana-instruction = "=3.4.1"
+solana-keypair = "=3.1.2"
+solana-program-test = { version = "=4.2.1", features = ["agave-unstable-api"] }
+solana-pubkey = "=3.0.0"
+solana-signer = "=3.0.1"
+solana-transaction = "=4.1.6"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[lints.rust]
+unsafe_code = "forbid"
