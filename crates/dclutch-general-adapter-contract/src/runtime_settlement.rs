@@ -241,13 +241,60 @@ pub fn initialize_runtime_settlement_v2(
     cursor_scratch: &mut [u8],
     cursor_output: &mut [u8],
 ) -> RuntimeSettlementResultV2<()> {
+    let header = initial_settlement_header_v2(verifier_bytes, verified_bytes, expected_revision)?;
+    let count = inventory_len(header.outcome_count)?;
+    if inventory_scratch.len() != count
+        || cursor_scratch.len()
+            != settlement_cursor_len(header.outcome_count)
+                .map_err(|_| RuntimeSettlementErrorV2::Codec)?
+        || cursor_output.len() != cursor_scratch.len()
+        || cursor_output.iter().any(|byte| *byte != 0)
+    {
+        return Err(RuntimeSettlementErrorV2::CoordinateMismatch);
+    }
+    inventory_scratch.fill(0);
+    SettlementCursorV2::encode_le_inventory_into(header, inventory_scratch, cursor_scratch)
+        .map_err(|_| RuntimeSettlementErrorV2::Codec)?;
+    cursor_output.copy_from_slice(cursor_scratch);
+    Ok(())
+}
+
+/// Initialize directly into one exact zeroed cursor candidate.
+///
+/// This is semantically identical to [`initialize_runtime_settlement_v2`] but
+/// avoids two additional runtime-width scratch banks. It is intended for
+/// readonly SBF accelerators, where the output remains non-authoritative until
+/// common Trading accepts the whole candidate digest.
+#[inline(never)]
+pub fn initialize_runtime_settlement_in_place_v2(
+    verifier_bytes: &[u8],
+    verified_bytes: &[u8],
+    expected_revision: u64,
+    cursor_output: &mut [u8],
+) -> RuntimeSettlementResultV2<()> {
+    let header = initial_settlement_header_v2(verifier_bytes, verified_bytes, expected_revision)?;
+    if cursor_output.len()
+        != settlement_cursor_len(header.outcome_count)
+            .map_err(|_| RuntimeSettlementErrorV2::Codec)?
+        || cursor_output.iter().any(|byte| *byte != 0)
+    {
+        return Err(RuntimeSettlementErrorV2::CoordinateMismatch);
+    }
+    SettlementCursorV2::encode_zero_inventory_into(header, cursor_output)
+        .map_err(|_| RuntimeSettlementErrorV2::Codec)
+}
+
+fn initial_settlement_header_v2(
+    verifier_bytes: &[u8],
+    verified_bytes: &[u8],
+    expected_revision: u64,
+) -> RuntimeSettlementResultV2<SettlementCursorHeaderV2> {
     let verifier = RuntimeCandidateVerifierV2::decode(verifier_bytes)
         .map_err(|_| RuntimeSettlementErrorV2::Codec)?;
     let verified =
         VerifiedCandidateV2::decode(verified_bytes).map_err(|_| RuntimeSettlementErrorV2::Codec)?;
     let verifier_header = verifier.header();
     let verified_header = verified.header();
-    let count = inventory_len(verified_header.outcome_count)?;
     if expected_revision != 0
         || !verifier.is_complete()
         || verifier_header.has_current_order
@@ -258,36 +305,22 @@ pub fn initialize_runtime_settlement_v2(
         || verifier_header.product_id != verified_header.product_id
         || verifier_header.batch_id != verified_header.batch_id
         || verifier_header.revision != verified_header.revision
-        || inventory_scratch.len() != count
-        || cursor_scratch.len()
-            != settlement_cursor_len(verified_header.outcome_count)
-                .map_err(|_| RuntimeSettlementErrorV2::Codec)?
-        || cursor_output.len() != cursor_scratch.len()
-        || cursor_output.iter().any(|byte| *byte != 0)
     {
         return Err(RuntimeSettlementErrorV2::CoordinateMismatch);
     }
     let balance =
         runtime_verified_balance_v2(verified_bytes).map_err(|_| RuntimeSettlementErrorV2::Codec)?;
-    inventory_scratch.fill(0);
-    SettlementCursorV2::encode_le_inventory_into(
-        SettlementCursorHeaderV2 {
-            outcome_count: verified_header.outcome_count,
-            order_count: verifier_header.order_count,
-            next_order: 0,
-            revision: 1,
-            candidate_id: verified_header.candidate_id,
-            quote_inventory: 0,
-            complete_set_quantity: balance.complete_set_quantity,
-            terminal_coordinate: 0,
-            phase: SettlementPhaseV2::Collecting,
-        },
-        inventory_scratch,
-        cursor_scratch,
-    )
-    .map_err(|_| RuntimeSettlementErrorV2::Codec)?;
-    cursor_output.copy_from_slice(cursor_scratch);
-    Ok(())
+    Ok(SettlementCursorHeaderV2 {
+        outcome_count: verified_header.outcome_count,
+        order_count: verifier_header.order_count,
+        next_order: 0,
+        revision: 1,
+        candidate_id: verified_header.candidate_id,
+        quote_inventory: 0,
+        complete_set_quantity: balance.complete_set_quantity,
+        terminal_coordinate: 0,
+        phase: SettlementPhaseV2::Collecting,
+    })
 }
 
 /// Evaluate one complete runtime settlement action failure-atomically.
@@ -1167,6 +1200,23 @@ mod tests {
         )
         .expect("initialize settlement");
         cursor_output
+    }
+
+    #[test]
+    fn in_place_initialization_matches_three_bank_contract_at_runtime_widths() {
+        for width in [1_u32, 258] {
+            let fixture = terminal_fixture(width);
+            let expected = initialized_cursor(&fixture);
+            let mut output = vec![0_u8; expected.len()];
+            initialize_runtime_settlement_in_place_v2(
+                &fixture.verifier,
+                &fixture.verified,
+                0,
+                &mut output,
+            )
+            .expect("in-place initialization");
+            assert_eq!(output, expected);
+        }
     }
 
     fn settle(

@@ -43,7 +43,7 @@ use dclutch_general_adapter_contract::{
     },
     runtime_settlement::{
         RuntimeSettlementActionV2, RuntimeSettlementBuffersV2, RuntimeSettlementViewV2,
-        evaluate_runtime_settlement_v2, initialize_runtime_settlement_v2,
+        evaluate_runtime_settlement_v2, initialize_runtime_settlement_in_place_v2,
         runtime_settlement_effect_len_v2,
     },
     runtime_width::{VerifiedCandidateV2, settlement_cursor_len},
@@ -470,19 +470,11 @@ fn evaluate_initialize(
     .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
     let cursor_bytes = settlement_cursor_len(outcome_count)
         .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
-    let inventory_bytes = usize::try_from(outcome_count)
-        .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?
-        .checked_mul(8)
-        .ok_or(GeneralAcceleratorSemanticErrorV3::State)?;
-    let mut inventory = vec![0_u8; inventory_bytes];
-    let mut cursor_scratch = vec![0_u8; cursor_bytes];
     let mut cursor_output = vec![0_u8; cursor_bytes];
-    initialize_runtime_settlement_v2(
+    initialize_runtime_settlement_in_place_v2(
         &verifier,
         &verified,
         request.expected_revision,
-        &mut inventory,
-        &mut cursor_scratch,
         &mut cursor_output,
     )
     .map_err(|_| GeneralAcceleratorSemanticErrorV3::Transition)?;

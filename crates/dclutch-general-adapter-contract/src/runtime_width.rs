@@ -649,17 +649,7 @@ impl<'a> SettlementCursorV2<'a> {
         }
         exact_width(output, settlement_cursor_len(header_value.outcome_count)?)?;
         output.fill(0);
-        put(output, 0, &SETTLEMENT_CURSOR_MAGIC)?;
-        put_u16(output, 8, RUNTIME_WIDTH_VERSION_V2)?;
-        put_byte(output, 10, header_value.phase.tag())?;
-        put_u32(output, 12, header_value.outcome_count)?;
-        put_u32(output, 16, header_value.order_count)?;
-        put_u32(output, 20, header_value.next_order)?;
-        put_u64(output, 24, header_value.revision)?;
-        put(output, 32, &header_value.candidate_id)?;
-        put_u64(output, 64, header_value.quote_inventory)?;
-        put_u64(output, 72, header_value.complete_set_quantity)?;
-        put_u64(output, 80, header_value.terminal_coordinate)?;
+        encode_settlement_cursor_header(header_value, output)?;
         for (index, value) in inventory.iter().enumerate() {
             put_u64(
                 output,
@@ -685,18 +675,23 @@ impl<'a> SettlementCursorV2<'a> {
         exact_width(inventory_le, inventory_bytes)?;
         exact_width(output, settlement_cursor_len(header_value.outcome_count)?)?;
         output.fill(0);
-        put(output, 0, &SETTLEMENT_CURSOR_MAGIC)?;
-        put_u16(output, 8, RUNTIME_WIDTH_VERSION_V2)?;
-        put_byte(output, 10, header_value.phase.tag())?;
-        put_u32(output, 12, header_value.outcome_count)?;
-        put_u32(output, 16, header_value.order_count)?;
-        put_u32(output, 20, header_value.next_order)?;
-        put_u64(output, 24, header_value.revision)?;
-        put(output, 32, &header_value.candidate_id)?;
-        put_u64(output, 64, header_value.quote_inventory)?;
-        put_u64(output, 72, header_value.complete_set_quantity)?;
-        put_u64(output, 80, header_value.terminal_coordinate)?;
+        encode_settlement_cursor_header(header_value, output)?;
         put(output, SETTLEMENT_CURSOR_HEADER_BYTES_V2, inventory_le)
+    }
+
+    /// Encode a canonical cursor whose complete runtime-width inventory is zero.
+    ///
+    /// Initialization uses this allocation-free form because a freshly opened
+    /// settlement has no inventory. The exact Product-derived output width is
+    /// still checked and every tail byte is canonically zeroed.
+    pub fn encode_zero_inventory_into(
+        header_value: SettlementCursorHeaderV2,
+        output: &mut [u8],
+    ) -> RuntimeWidthResultV2<()> {
+        validate_settlement_cursor_header(header_value)?;
+        exact_width(output, settlement_cursor_len(header_value.outcome_count)?)?;
+        output.fill(0);
+        encode_settlement_cursor_header(header_value, output)
     }
 
     /// Return fixed Settlement Cursor coordinates.
@@ -717,6 +712,23 @@ impl<'a> SettlementCursorV2<'a> {
     pub const fn as_bytes(self) -> &'a [u8] {
         self.bytes
     }
+}
+
+fn encode_settlement_cursor_header(
+    header: SettlementCursorHeaderV2,
+    output: &mut [u8],
+) -> RuntimeWidthResultV2<()> {
+    put(output, 0, &SETTLEMENT_CURSOR_MAGIC)?;
+    put_u16(output, 8, RUNTIME_WIDTH_VERSION_V2)?;
+    put_byte(output, 10, header.phase.tag())?;
+    put_u32(output, 12, header.outcome_count)?;
+    put_u32(output, 16, header.order_count)?;
+    put_u32(output, 20, header.next_order)?;
+    put_u64(output, 24, header.revision)?;
+    put(output, 32, &header.candidate_id)?;
+    put_u64(output, 64, header.quote_inventory)?;
+    put_u64(output, 72, header.complete_set_quantity)?;
+    put_u64(output, 80, header.terminal_coordinate)
 }
 
 /// Caller-owned Verified Candidate fields before two runtime aggregate tails.
