@@ -21,10 +21,11 @@ import { CHECKED_INFRASTRUCTURE_BYTES_V1 } from '@/lib/infrastructure';
 import { SolanaRpcClient } from '@/lib/rpc';
 import {
   type WalletSignedTransactionV1,
-  requestReadonlyWalletIdentityV1,
   requestWalletMessageSignatureV1,
   requestWalletTransactionSignatureV1,
 } from '@/lib/walletHandoff';
+
+import WalletDirectory, { useWalletDirectoryV1 } from './WalletDirectory';
 
 const MAX_U64 = 18_446_744_073_709_551_615n;
 const FIXED_ROLES = Object.freeze([
@@ -190,6 +191,7 @@ export default function DirectTradeWorkspace() {
   const [plan, setPlan] = useState<DirectInlineTransactionPlanV3 | null>(null);
   const [wallet, setWallet] = useState('');
   const [walletStatus, setWalletStatus] = useState('No wallet identity has been requested.');
+  const wallets = useWalletDirectoryV1();
   const [signed, setSigned] = useState<WalletSignedTransactionV1 | null>(null);
 
   const inspection = routeState.kind === 'ready' ? routeState.inspection : null;
@@ -247,18 +249,15 @@ export default function DirectTradeWorkspace() {
     } catch (error) { setTradeStatus(`Refused: ${errorMessage(error)}`); }
   }
 
-  async function connectWallet() {
-    try {
-      const identity = await requestReadonlyWalletIdentityV1(window.solana);
-      setWallet(identity.address); setWalletStatus(`${identity.address} · no signature requested yet`);
-    } catch (error) { setWalletStatus(`Refused: ${errorMessage(error)}`); }
+  function adoptIdentity(address: string) {
+    setWallet(address); setWalletStatus(`${address} · no signature requested yet`);
   }
 
   async function signMaker(side: 'seller' | 'buyer') {
     if (inspection === null) return;
     try {
       const intent = compactIntent(form[side], side === 'seller' ? 0 : 1, form, inspection);
-      const next = await requestWalletMessageSignatureV1(window.solana, form[side].maker, encodeCompactIntentSigningMessageV2(intent));
+      const next = await requestWalletMessageSignatureV1(wallets.handoff(endpoint), form[side].maker, encodeCompactIntentSigningMessageV2(intent));
       updateParticipant(side, 'signature', hex(next));
       setWalletStatus(`${side} intent signed by the connected maker after explicit request.`);
     } catch (error) { setWalletStatus(`Refused: ${errorMessage(error)}`); }
@@ -267,7 +266,7 @@ export default function DirectTradeWorkspace() {
   async function signTransaction() {
     if (plan === null || inspection === null) return;
     try {
-      const next = await requestWalletTransactionSignatureV1(window.solana, plan.transaction, inspection.route.payer);
+      const next = await requestWalletTransactionSignatureV1(wallets.handoff(endpoint), plan.transaction, inspection.route.payer);
       setSigned(next); setWalletStatus(next.complete ? 'Transaction payer signature complete. Nothing has been submitted.' : 'Wallet added one authorized signature; more signatures remain.');
     } catch (error) { setWalletStatus(`Refused: ${errorMessage(error)}`); }
   }
@@ -308,7 +307,8 @@ export default function DirectTradeWorkspace() {
 
     <section className="trade-v3-card signing-card">
       <header><span>03</span><div><h2>Wallet handoff and exact packet export</h2><p>Connecting reads only identity. Maker and transaction signing are separate explicit wallet requests. Submission is deliberately outside this workbench.</p></div></header>
-      <div className="signing-grid"><article><span>Wallet identity</span><strong>{wallet || 'not connected'}</strong><button type="button" onClick={() => void connectWallet()}>Connect identity</button><p>{walletStatus}</p></article><article><span>Unsigned / signed packet</span><strong>{plan ? `${plan.wireBytes.length} bytes · ${plan.loadedAddresses} ALT · evidence ${plan.nativeEvidenceInstructionIndex} → Trading ${plan.tradingInstructionIndex}` : 'no transaction built'}</strong><button type="button" disabled={plan === null} onClick={() => void signTransaction()}>Sign as transaction payer</button><button type="button" disabled={plan === null} onClick={downloadPacket}>Download exact packet</button><p>{signed ? `${signed.complete ? 'Complete' : 'Partial'} signature set · ${signed.wireBytes.length} bytes. Export it for an external submitter.` : 'No transaction signature requested.'}</p></article></div>
+      <WalletDirectory directory={wallets} purpose="payer / maker identity" onConnected={adoptIdentity} />
+      <div className="signing-grid"><article><span>Wallet identity</span><strong>{wallet || 'not connected'}</strong><p>{walletStatus}</p></article><article><span>Unsigned / signed packet</span><strong>{plan ? `${plan.wireBytes.length} bytes · ${plan.loadedAddresses} ALT · evidence ${plan.nativeEvidenceInstructionIndex} → Trading ${plan.tradingInstructionIndex}` : 'no transaction built'}</strong><button type="button" disabled={plan === null} onClick={() => void signTransaction()}>Sign as transaction payer</button><button type="button" disabled={plan === null} onClick={downloadPacket}>Download exact packet</button><p>{signed ? `${signed.complete ? 'Complete' : 'Partial'} signature set · ${signed.wireBytes.length} bytes. Export it for an external submitter.` : 'No transaction signature requested.'}</p></article></div>
       {plan && <details className="trade-v3-bytes"><summary>Exact transaction material</summary><dl><div><dt>Required signer</dt><dd>{plan.requiredSigners.join(', ')}</dd></div><div><dt>Wire bytes</dt><dd>{signed ? base64(signed.wireBytes) : base64(plan.wireBytes)}</dd></div><div><dt>Native evidence bytes</dt><dd>{hex(plan.nativeEvidenceBytes)}</dd></div><div><dt>Trading message references</dt><dd>instruction {plan.tradingInstructionIndex} · offsets {plan.nativeMessageOffsets.join(', ')} · 172 bytes each</dd></div><div><dt>Request bytes</dt><dd>{hex(plan.requestBytes)}</dd></div></dl></details>}
     </section>
 

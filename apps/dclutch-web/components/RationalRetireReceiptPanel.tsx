@@ -10,7 +10,8 @@ import {
   inspectRationalRetireReceiptV4,
 } from '@/lib/rationalRetireReceiptV4';
 import { SolanaRpcClient } from '@/lib/rpc';
-import { requestReadonlyWalletIdentityV1 } from '@/lib/walletHandoff';
+
+import WalletDirectory, { useWalletDirectoryV1 } from './WalletDirectory';
 
 type State = Readonly<{ kind: 'idle' | 'loading' | 'refused'; message: string }>
   | Readonly<{ kind: 'ready'; message: string; inspection: RationalRetireReceiptInspectionV4 }>;
@@ -39,18 +40,16 @@ export default function RationalRetireReceiptPanel() {
   const [lookupTable, setLookupTable] = useState('');
   const [fixed, setFixed] = useState('');
   const [walletStatus, setWalletStatus] = useState('No wallet identity has been requested.');
+  const wallets = useWalletDirectoryV1();
   const [state, setState] = useState<State>({ kind: 'idle', message: 'No compact lifecycle state has been read.' });
   const [candidate, setCandidate] = useState<RationalRetireReceiptCandidateV4 | null>(null);
   const [buildStatus, setBuildStatus] = useState('Authenticate one finalized fixed38 route first.');
   const inspection = state.kind === 'ready' ? state.inspection : null;
   const summary = inspection === null ? null : compactRetireReceiptSummaryV4(inspection);
 
-  async function connectWallet() {
-    try {
-      const identity = await requestReadonlyWalletIdentityV1(window.solana);
-      setPayer(identity.address);
-      setWalletStatus(`${identity.address} · identity only; signing remains release-gated`);
-    } catch (error) { setWalletStatus(`Refused: ${errorMessage(error)}`); }
+  function adoptIdentity(address: string) {
+    setPayer(address);
+    setWalletStatus(`${address} · identity only; signing remains release-gated`);
   }
 
   async function inspect(event: FormEvent<HTMLFormElement>) {
@@ -94,7 +93,8 @@ export default function RationalRetireReceiptPanel() {
       <header><span>05</span><div><h2>Reacquire one exact compact route</h2><p>The 38 lines are account transport for the universal Hot frame, not caller-authored authority. Their root selection, ProgramSet, CapabilityV4, finalized artifacts, Product graph, and activated programs are hostile-decoded before any candidate exists.</p></div></header>
       <div className="direct-form-grid"><label><span>Finalized RPC endpoint</span><input type="url" required value={endpoint} onChange={(event) => setEndpoint(event.target.value.trim())} /></label><label><span>Transaction payer</span><input required value={payer} onChange={(event) => setPayer(event.target.value.trim())} /></label><label><span>Canonical address lookup table</span><input required value={lookupTable} onChange={(event) => setLookupTable(event.target.value.trim())} /></label></div>
       <label><span>Hot fixed38 addresses · one canonical base58 address per line</span><textarea required rows={12} value={fixed} onChange={(event) => setFixed(event.target.value)} /></label>
-      <div className="direct-actions"><button type="button" onClick={() => void connectWallet()}>Connect payer identity</button><button disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading finalized lifecycle…' : 'Authenticate compact RetireReceipt'}</button></div>
+      <WalletDirectory directory={wallets} purpose="payer identity" onConnected={adoptIdentity} />
+      <div className="direct-actions"><button disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading finalized lifecycle…' : 'Authenticate compact RetireReceipt'}</button></div>
       <p className="direct-status">{walletStatus}</p><p className="direct-status" aria-live="polite">{state.message}</p>
       {inspection && summary && <div className="trade-v3-evidence"><article><span>Representation K / result N / support S</span><strong>{inspection.representationWidth} / {inspection.resultOutcomeCount} / {inspection.support.length}</strong><small>support outcomes {inspection.support.map((row) => row.outcome).join(', ')}</small></article><article><span>Claims frame</span><strong>{summary.frame}</strong><small>{inspection.claimsAccounts.length} exact child metas</small></article><article><span>Descriptor</span><strong>{summary.descriptorId.slice(0, 16)}…</strong><small>receipt {short(inspection.receiptMint)}</small></article><article><span>Rent credit</span><strong>{inspection.rentCreditBefore.toString()} lamports</strong><small>+ {inspection.receiptLamports.toString()} receipt lamports on close</small></article></div>}
     </form>

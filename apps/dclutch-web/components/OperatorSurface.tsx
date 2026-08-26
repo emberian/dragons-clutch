@@ -18,10 +18,11 @@ import { SolanaRpcClient } from '@/lib/rpc';
 import {
   acquireUnsignedTransactionDependenciesV1,
   inspectUnsignedTransactionV1,
-  requestReadonlyWalletIdentityV1,
   type UnsignedTransactionChainReportV1,
   type UnsignedTransactionInspectionV1,
 } from '@/lib/walletHandoff';
+
+import WalletDirectory, { useWalletDirectoryV1 } from './WalletDirectory';
 
 type Discovery = Readonly<{ kind: 'idle' | 'loading' | 'error'; message: string }> | Readonly<{ kind: 'ready'; snapshot: OperatorSurfaceSnapshotV1 }>;
 type Packet = Readonly<{ inspection: UnsignedTransactionInspectionV1; report: UnsignedTransactionChainReportV1 }>;
@@ -33,10 +34,6 @@ function familyGroups(): ReadonlyArray<Readonly<{ family: CapabilityFamily; acti
   return order.map((family) => Object.freeze({ family, actions: CAPABILITY_ACTIONS_V1.filter((workflow) => workflow.family === family) }));
 }
 
-declare global {
-  interface Window { solana?: unknown }
-}
-
 export default function OperatorSurface() {
   const [endpoint, setEndpoint] = useState('http://127.0.0.1:8899');
   const [coordinates, setCoordinates] = useState<Record<string, string>>(() => Object.fromEntries([...OPERATOR_ROLES, 'realm', 'market'].map((role) => [role, ''])));
@@ -46,6 +43,7 @@ export default function OperatorSurface() {
   const [packetStatus, setPacketStatus] = useState('Paste an unsigned transaction emitted by one accepted workflow.');
   const [wallet, setWallet] = useState('');
   const [walletStatus, setWalletStatus] = useState('Wallet identity is optional; signing and submission are absent from this surface.');
+  const wallets = useWalletDirectoryV1();
   const groups = useMemo(() => familyGroups(), []);
   const counts = useMemo(() => ({
     constructible: CAPABILITY_ACTIONS_V1.filter((workflow) => workflow.implementation === 'browser-unsigned').length,
@@ -86,11 +84,8 @@ export default function OperatorSurface() {
     URL.revokeObjectURL(link.href);
   }
 
-  async function connectIdentity() {
-    try {
-      const identity = await requestReadonlyWalletIdentityV1(window.solana);
-      setWallet(identity.address); setWalletStatus(identity.label);
-    } catch (error) { setWalletStatus(`Refused: ${reason(error)}`); }
+  function adoptIdentity(address: string) {
+    setWallet(address); setWalletStatus(`${address} · connected identity only; no signature requested`);
   }
 
   return <main className="product-shell operator-shell">
@@ -106,6 +101,6 @@ export default function OperatorSurface() {
 
     <section className="operator-wave"><header><span>02</span><div><h2>The executable workflow wave</h2><p>“Browser unsigned” means an exact browser constructor exists but must still pass its own release preflight. “Rust unsigned” is production operator logic not yet duplicated into TypeScript. “Awaiting production” names a missing executable join.</p></div></header><div className="operator-family-grid">{groups.map((group) => <article key={group.family}><h3>{group.family}</h3>{group.actions.map((workflow) => <div className="operator-action" key={workflow.id}><span className={`operator-status ${workflow.implementation}`}>{workflow.implementation.replaceAll('-', ' ')}</span><strong>{workflow.action}</strong><p>{workflow.exactBoundary}</p>{workflow.workspace && <Link href={workflow.workspace}>{workflow.implementation === 'browser-unsigned' ? 'Open exact preflight' : 'Inspect current boundary'} →</Link>}</div>)}</article>)}</div></section>
 
-    <section className="operator-handoff"><header><span>03</span><div><h2>Inspect and export an unsigned transaction</h2><p>Paste bytes built by an accepted workspace. The console rejects signed or oversized packets, resolves active lookup tables, and reacquires every message account before export.</p></div></header><div className="operator-handoff-grid"><form onSubmit={inspectPacket}><label><span>Unsigned versioned transaction · base64</span><textarea required value={unsignedText} onChange={(event) => setUnsignedText(event.target.value.trim())} /></label><button type="submit">Reacquire packet dependencies</button><p className="direct-status" aria-live="polite">{packetStatus}</p></form><aside><span className="panel-label">External identity boundary</span><h3>{wallet ? compact(wallet) : 'No wallet identity read'}</h3><button type="button" onClick={() => void connectIdentity()}>Connect identity only</button><p>{walletStatus}</p>{packet && <><dl><div><dt>SHA-256</dt><dd>{packet.inspection.digestHex.slice(0, 24)}…</dd></div><div><dt>Wire / instructions</dt><dd>{packet.inspection.wireBytes} B / {packet.inspection.instructionCount}</dd></div><div><dt>Signatures required</dt><dd>{packet.inspection.requiredSignatures}</dd></div><div><dt>Resolved accounts</dt><dd>{packet.report.dependencies.length}</dd></div><div><dt>Lookup tables</dt><dd>{packet.inspection.lookupTables.length}</dd></div></dl><button type="button" disabled={packet.report.missing.length > 0 || packet.report.nonExecutablePrograms.length > 0} onClick={downloadPacket}>Download exact unsigned bytes</button></>}</aside></div></section>
+    <section className="operator-handoff"><header><span>03</span><div><h2>Inspect and export an unsigned transaction</h2><p>Paste bytes built by an accepted workspace. The console rejects signed or oversized packets, resolves active lookup tables, and reacquires every message account before export.</p></div></header><div className="operator-handoff-grid"><form onSubmit={inspectPacket}><label><span>Unsigned versioned transaction · base64</span><textarea required value={unsignedText} onChange={(event) => setUnsignedText(event.target.value.trim())} /></label><button type="submit">Reacquire packet dependencies</button><p className="direct-status" aria-live="polite">{packetStatus}</p></form><aside><span className="panel-label">External identity boundary</span><h3>{wallet ? compact(wallet) : 'No wallet identity read'}</h3><WalletDirectory directory={wallets} purpose="identity only" onConnected={adoptIdentity} /><p>{walletStatus}</p>{packet && <><dl><div><dt>SHA-256</dt><dd>{packet.inspection.digestHex.slice(0, 24)}…</dd></div><div><dt>Wire / instructions</dt><dd>{packet.inspection.wireBytes} B / {packet.inspection.instructionCount}</dd></div><div><dt>Signatures required</dt><dd>{packet.inspection.requiredSignatures}</dd></div><div><dt>Resolved accounts</dt><dd>{packet.report.dependencies.length}</dd></div><div><dt>Lookup tables</dt><dd>{packet.inspection.lookupTables.length}</dd></div></dl><button type="button" disabled={packet.report.missing.length > 0 || packet.report.nonExecutablePrograms.length > 0} onClick={downloadPacket}>Download exact unsigned bytes</button></>}</aside></div></section>
   </main>;
 }

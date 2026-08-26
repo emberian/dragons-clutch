@@ -11,7 +11,8 @@ import {
 } from '@/lib/rationalOpenChainV4';
 import { type RationalOpenActionV3 } from '@/lib/rationalOpenHotV3';
 import { SolanaRpcClient } from '@/lib/rpc';
-import { requestReadonlyWalletIdentityV1 } from '@/lib/walletHandoff';
+
+import WalletDirectory, { useWalletDirectoryV1 } from './WalletDirectory';
 
 type State = Readonly<{ kind: 'idle' | 'loading' | 'refused'; message: string }>
   | Readonly<{ kind: 'ready'; message: string; inspection: RationalOpenChainInspectionV4 }>;
@@ -58,6 +59,7 @@ export default function RationalOpenPanel() {
   const [quantity, setQuantity] = useState('');
   const [selected, setSelected] = useState('0');
   const [walletStatus, setWalletStatus] = useState('No wallet identity has been requested.');
+  const wallets = useWalletDirectoryV1();
   const [state, setState] = useState<State>({ kind: 'idle', message: 'No Rational open route has been read.' });
   const [candidate, setCandidate] = useState<RationalOpenCandidateV4 | null>(null);
   const [buildStatus, setBuildStatus] = useState('Authenticate one finalized CapabilityV4 route first.');
@@ -65,13 +67,10 @@ export default function RationalOpenPanel() {
   const summary = inspection === null ? null : rationalOpenChainSummaryV4(inspection);
   const isStructured = action === 'issue-structured' || action === 'unwrap-structured';
 
-  async function connectWallet() {
-    try {
-      const identity = await requestReadonlyWalletIdentityV1(window.solana);
-      if (payer === '') setPayer(identity.address);
-      if (actor === '') setActor(identity.address);
-      setWalletStatus(`${identity.address} · identity only; no signing request`);
-    } catch (error) { setWalletStatus(`Refused: ${errorMessage(error)}`); }
+  function adoptIdentity(address: string) {
+    if (payer === '') setPayer(address);
+    if (actor === '') setActor(address);
+    setWalletStatus(`${address} · identity only; no signing request`);
   }
 
   async function inspect(event: FormEvent<HTMLFormElement>) {
@@ -116,7 +115,8 @@ export default function RationalOpenPanel() {
       <header><span>05</span><div><h2>Hostile-decode one exact CapabilityV4 open route</h2><p>The descriptor digest and action are discovery coordinates, not economic authority. SetV2 selects the 600-byte CapabilityV4; that record selects TokenBehaviorV2 and all six finalized artifacts before Product and Claims state can enter the request.</p></div></header>
       <div className="direct-form-grid"><label><span>Finalized RPC endpoint</span><input type="url" required value={endpoint} onChange={(event) => setEndpoint(event.target.value.trim())} /></label><label><span>Transaction payer</span><input required value={payer} onChange={(event) => setPayer(event.target.value.trim())} /></label><label><span>Representation actor</span><input required value={actor} onChange={(event) => setActor(event.target.value.trim())} /></label><label><span>Action</span><select value={action} onChange={(event) => { setAction(event.target.value as RationalOpenActionV3); setCandidate(null); }}><option value="denominate">Denominate native claim</option><option value="reconstitute">Reconstitute native claim</option><option value="issue-structured">Issue Structured receipt</option><option value="unwrap-structured">Unwrap Structured receipt</option></select></label><label><span>Raw u64 quantity · atoms</span><input inputMode="numeric" required value={quantity} onChange={(event) => setQuantity(event.target.value.trim())} /></label>{!isStructured && <label><span>Selected representation outcome · zero based</span><input inputMode="numeric" required value={selected} onChange={(event) => setSelected(event.target.value.trim())} /></label>}<label><span>Representation descriptor digest · 64 hex</span><input required value={descriptor} onChange={(event) => setDescriptor(event.target.value.trim().toLowerCase())} /></label><label><span>Address lookup table</span><input required value={lookupTable} onChange={(event) => setLookupTable(event.target.value.trim())} /></label></div>
       <label><span>Hot fixed38 addresses · one canonical base58 address per line</span><textarea required rows={12} value={fixed} onChange={(event) => setFixed(event.target.value)} /></label>
-      <div className="direct-actions"><button type="button" onClick={() => void connectWallet()}>Connect payer / actor identity</button><button disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading finalized open state…' : 'Authenticate exact open route'}</button></div>
+      <WalletDirectory directory={wallets} purpose="payer / actor identity" onConnected={adoptIdentity} />
+      <div className="direct-actions"><button disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading finalized open state…' : 'Authenticate exact open route'}</button></div>
       <p className="direct-status">{walletStatus}</p><p className="direct-status" aria-live="polite">{state.message}</p>
       {inspection && summary && <div className="trade-v3-evidence"><article><span>Action / widths</span><strong>{inspection.action} · K={inspection.representationWidth} / N={inspection.resultOutcomeCount}</strong><small>{summary.quantity}</small></article><article><span>Claims geometry</span><strong>{summary.claims}</strong><small>Profile11 canonical representatives</small></article><article><span>Display metadata</span><strong>{summary.decimals}</strong><small>no exponentiation or rounding</small></article><article><span>Descriptor</span><strong>{summary.descriptor.slice(0, 16)}…</strong><small>Capability {summary.capability.slice(0, 16)}…</small></article></div>}
     </form>

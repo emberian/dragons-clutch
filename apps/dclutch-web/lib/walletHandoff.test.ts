@@ -5,7 +5,6 @@ import { type RpcAccount, type SolanaRpcClient } from './rpc';
 import {
   acquireUnsignedTransactionDependenciesV1,
   inspectUnsignedTransactionV1,
-  requestReadonlyWalletIdentityV1,
   requestWalletMessageSignatureV1,
   requestWalletTransactionSignatureV1,
   submitSignedTransactionV1,
@@ -54,17 +53,6 @@ describe('unsigned wallet handoff', () => {
     const transaction = unsignedFixture();
     transaction.signatures[0] = new Uint8Array(64).fill(1);
     await expect(inspectUnsignedTransactionV1(base64(transaction.serialize()))).rejects.toThrow(/already contains/);
-  });
-
-  it('requests only a wallet public identity', async () => {
-    let connected = false;
-    const identity = await requestReadonlyWalletIdentityV1({
-      publicKey: { toBase58: () => key(88).toBase58() },
-      connect: async () => { connected = true; },
-    });
-    expect(connected).toBe(true);
-    expect(identity.address).toBe(key(88).toBase58());
-    expect(identity.label).toContain('no signature');
   });
 
   it('requests exact maker and transaction signatures only after the explicit call', async () => {

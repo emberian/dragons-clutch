@@ -16,9 +16,10 @@ import { CHECKED_INFRASTRUCTURE_BYTES_V1 } from '@/lib/infrastructure';
 import { SolanaRpcClient } from '@/lib/rpc';
 import {
   type WalletSignedTransactionV1,
-  requestReadonlyWalletIdentityV1,
   requestWalletTransactionSignatureV1,
 } from '@/lib/walletHandoff';
+
+import WalletDirectory, { useWalletDirectoryV1 } from './WalletDirectory';
 
 const FIXED_ROLES = Object.freeze([
   'Market', 'Dealer root', 'Manifest raw', 'Manifest staging', 'ProgramSet raw', 'ProgramSet staging',
@@ -101,6 +102,7 @@ export default function DealerLiquidityWorkspace() {
   const [buildStatus, setBuildStatus] = useState('Authenticate one exact action-selected route before transaction construction.');
   const [wallet, setWallet] = useState('');
   const [walletStatus, setWalletStatus] = useState('No wallet identity has been requested.');
+  const wallets = useWalletDirectoryV1();
   const [signed, setSigned] = useState<WalletSignedTransactionV1 | null>(null);
   const inspection = routeState.kind === 'ready' ? routeState.inspection : null;
 
@@ -129,17 +131,14 @@ export default function DealerLiquidityWorkspace() {
     } catch (error) { setBuildStatus(`Refused: ${errorMessage(error)}`); }
   }
 
-  async function connectWallet() {
-    try {
-      const identity = await requestReadonlyWalletIdentityV1(window.solana);
-      setWallet(identity.address); setWalletStatus(`${identity.address} · no signature requested yet`);
-    } catch (error) { setWalletStatus(`Refused: ${errorMessage(error)}`); }
+  function adoptIdentity(address: string) {
+    setWallet(address); setWalletStatus(`${address} · no signature requested yet`);
   }
 
   async function signTransaction() {
     if (plan === null || inspection === null) return;
     try {
-      const next = await requestWalletTransactionSignatureV1(window.solana, plan.transaction, inspection.route.payer);
+      const next = await requestWalletTransactionSignatureV1(wallets.handoff(endpoint), plan.transaction, inspection.route.payer);
       setSigned(next); setWalletStatus(next.complete ? 'Fee-payer signature complete. Nothing has been submitted.' : 'Wallet added its authorized signature; more signatures remain.');
     } catch (error) { setWalletStatus(`Refused: ${errorMessage(error)}`); }
   }
@@ -174,7 +173,8 @@ export default function DealerLiquidityWorkspace() {
 
     <section className="trade-v3-card signing-card">
       <header><span>03</span><div><h2>Wallet handoff and packet export</h2><p>Connecting reads identity only. Signing is an explicit separate action, the wallet may not rewrite the message, and submission remains outside this workbench.</p></div></header>
-      <div className="signing-grid"><article><span>Wallet identity</span><strong>{wallet || 'not connected'}</strong><button type="button" onClick={() => void connectWallet()}>Connect identity</button><p>{walletStatus}</p></article><article><span>Unsigned / signed packet</span><strong>{plan ? `${plan.wireBytes.length} bytes · ${plan.loadedAddresses} ALT` : 'no transaction built'}</strong><button type="button" disabled={plan === null} onClick={() => void signTransaction()}>Sign as transaction payer</button><button type="button" disabled={plan === null} onClick={downloadPacket}>Download exact packet</button><p>{signed ? `${signed.complete ? 'Complete' : 'Partial'} signature set · ${signed.wireBytes.length} bytes. Export it to an external submitter.` : 'No transaction signature requested.'}</p></article></div>
+      <WalletDirectory directory={wallets} purpose="transaction payer" onConnected={adoptIdentity} />
+      <div className="signing-grid"><article><span>Wallet identity</span><strong>{wallet || 'not connected'}</strong><p>{walletStatus}</p></article><article><span>Unsigned / signed packet</span><strong>{plan ? `${plan.wireBytes.length} bytes · ${plan.loadedAddresses} ALT` : 'no transaction built'}</strong><button type="button" disabled={plan === null} onClick={() => void signTransaction()}>Sign as transaction payer</button><button type="button" disabled={plan === null} onClick={downloadPacket}>Download exact packet</button><p>{signed ? `${signed.complete ? 'Complete' : 'Partial'} signature set · ${signed.wireBytes.length} bytes. Export it to an external submitter.` : 'No transaction signature requested.'}</p></article></div>
       {plan && <details className="trade-v3-bytes"><summary>Exact transaction material</summary><dl><div><dt>Required signer</dt><dd>{plan.requiredSigners.join(', ')}</dd></div><div><dt>Wire bytes · base64</dt><dd>{base64(signed?.wireBytes ?? plan.wireBytes)}</dd></div><div><dt>Request bytes · base64</dt><dd>{base64(plan.request.bytes)}</dd></div></dl></details>}
     </section>
 

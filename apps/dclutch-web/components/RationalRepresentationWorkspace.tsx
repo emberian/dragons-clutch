@@ -13,9 +13,10 @@ import {
 import { SolanaRpcClient } from '@/lib/rpc';
 import {
   type WalletSignedTransactionV1,
-  requestReadonlyWalletIdentityV1,
   requestWalletTransactionSignatureV1,
 } from '@/lib/walletHandoff';
+
+import WalletDirectory, { useWalletDirectoryV1 } from './WalletDirectory';
 import RationalRetireReceiptPanel from './RationalRetireReceiptPanel';
 import RationalOpenPanel from './RationalOpenPanel';
 import RationalTerminalPanel from './RationalTerminalPanel';
@@ -60,6 +61,7 @@ export default function RationalRepresentationWorkspace() {
   const [buildStatus, setBuildStatus] = useState('Authenticate one finalized TokenBehaviorSelectionV2 route first.');
   const [wallet, setWallet] = useState('');
   const [walletStatus, setWalletStatus] = useState('No wallet identity has been requested.');
+  const wallets = useWalletDirectoryV1();
   const [signed, setSigned] = useState<WalletSignedTransactionV1 | null>(null);
   const inspection = state.kind === 'ready' ? state.inspection : null;
   const summary = inspection === null ? null : tokenBehaviorSummaryV2(inspection);
@@ -94,16 +96,11 @@ export default function RationalRepresentationWorkspace() {
     }
   }
 
-  async function connectWallet() {
-    try {
-      const identity = await requestReadonlyWalletIdentityV1(window.solana);
-      setWallet(identity.address);
-      if (payer === '') setPayer(identity.address);
-      if (authority === '') setAuthority(identity.address);
-      setWalletStatus(`${identity.address} · identity only; no signature requested`);
-    } catch (error) {
-      setWalletStatus(`Refused: ${errorMessage(error)}`);
-    }
+  function adoptIdentity(address: string) {
+    setWallet(address);
+    if (payer === '') setPayer(address);
+    if (authority === '') setAuthority(address);
+    setWalletStatus(`${address} · identity only; no signature requested`);
   }
 
   async function signTransaction() {
@@ -113,7 +110,7 @@ export default function RationalRepresentationWorkspace() {
       return;
     }
     try {
-      const next = await requestWalletTransactionSignatureV1(window.solana, plan.transaction, authority);
+      const next = await requestWalletTransactionSignatureV1(wallets.handoff(endpoint), plan.transaction, authority);
       setSigned(next);
       setWalletStatus(next.complete ? 'The sole required signature is complete. Nothing has been submitted.' : 'Wallet signed its authorized slot; more signatures remain.');
     } catch (error) {
@@ -157,7 +154,8 @@ export default function RationalRepresentationWorkspace() {
 
     <section className="trade-v3-card signing-card">
       <header><span>03</span><div><h2>Wallet handoff and exact packet export</h2><p>Connecting reads identity only. Signing is a separate explicit action. Distinct payer/authority packets remain valid but are exported for multisigner coordination; nothing is submitted here.</p></div></header>
-      <div className="signing-grid"><article><span>Wallet identity</span><strong>{wallet || 'not connected'}</strong><button type="button" onClick={() => void connectWallet()}>Connect identity</button><p>{walletStatus}</p></article><article><span>Unsigned / signed packet</span><strong>{plan ? `${plan.wireBytes.length} bytes · ${plan.loadedAddresses} ALT` : 'no packet built'}</strong><button type="button" disabled={plan === null} onClick={() => void signTransaction()}>Sign sole-wallet packet</button><button type="button" disabled={plan === null} onClick={downloadPacket}>Download exact packet</button><p>No automatic submission or hidden retry.</p></article></div>
+      <WalletDirectory directory={wallets} purpose="payer / transfer authority" onConnected={adoptIdentity} />
+      <div className="signing-grid"><article><span>Wallet identity</span><strong>{wallet || 'not connected'}</strong><p>{walletStatus}</p></article><article><span>Unsigned / signed packet</span><strong>{plan ? `${plan.wireBytes.length} bytes · ${plan.loadedAddresses} ALT` : 'no packet built'}</strong><button type="button" disabled={plan === null} onClick={() => void signTransaction()}>Sign sole-wallet packet</button><button type="button" disabled={plan === null} onClick={downloadPacket}>Download exact packet</button><p>No automatic submission or hidden retry.</p></article></div>
       {plan && <details className="trade-v3-bytes"><summary>Exact transfer material</summary><dl><div><dt>Instruction bytes · base64</dt><dd>{base64(plan.instructionBytes)}</dd></div><div><dt>Packet bytes · base64</dt><dd>{base64(signed?.wireBytes ?? plan.wireBytes)}</dd></div></dl></details>}
     </section>
 

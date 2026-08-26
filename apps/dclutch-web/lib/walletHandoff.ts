@@ -168,7 +168,6 @@ export async function acquireUnsignedTransactionDependenciesV1(
   });
 }
 
-export type ReadonlyWalletIdentityV1 = Readonly<{ address: string; label: string }>;
 export type WalletSignedTransactionV1 = Readonly<{
   transaction: VersionedTransaction;
   wireBytes: Uint8Array;
@@ -176,21 +175,28 @@ export type WalletSignedTransactionV1 = Readonly<{
   complete: boolean;
 }>;
 
-type InjectedWallet = Readonly<{
+/**
+ * The handoff a caller supplies for one explicit signature request.
+ *
+ * `walletStandard` builds this from a Wallet Standard wallet the user chose and
+ * connected; the checks below never trust it, they re-derive the signer and
+ * compare the exact message bytes the wallet was handed.
+ */
+type HandoffWallet = Readonly<{
   publicKey?: Readonly<{ toBase58(): string }>;
-  connect(input?: Readonly<{ onlyIfTrusted?: boolean }>): Promise<unknown>;
+  connect(): Promise<unknown>;
   signTransaction?(transaction: VersionedTransaction): Promise<VersionedTransaction>;
   signMessage?(message: Uint8Array): Promise<Uint8Array>;
 }>;
 
-function injected(candidate: unknown): InjectedWallet {
+function handoff(candidate: unknown): HandoffWallet {
   if (candidate === null || typeof candidate !== 'object' || !('connect' in candidate) || typeof candidate.connect !== 'function') {
-    throw new Error('no compatible injected Solana wallet adapter is available');
+    throw new Error('no connected browser wallet handoff was supplied');
   }
-  return candidate as InjectedWallet;
+  return candidate as HandoffWallet;
 }
 
-function walletAddress(wallet: InjectedWallet): string {
+function walletAddress(wallet: HandoffWallet): string {
   const address = wallet.publicKey?.toBase58();
   if (address === undefined || new PublicKey(address).toBase58() !== address) throw new Error('wallet did not expose one canonical public identity');
   return address;
@@ -200,20 +206,13 @@ function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
-export async function requestReadonlyWalletIdentityV1(candidate: unknown): Promise<ReadonlyWalletIdentityV1> {
-  const wallet = injected(candidate);
-  await wallet.connect();
-  const address = walletAddress(wallet);
-  return Object.freeze({ address, label: 'connected identity only · no signature requested' });
-}
-
 /** Request one detached maker signature after a user-triggered wallet action. */
 export async function requestWalletMessageSignatureV1(
   candidate: unknown,
   expectedMaker: string,
   message: Uint8Array,
 ): Promise<Uint8Array> {
-  const wallet = injected(candidate);
+  const wallet = handoff(candidate);
   if (typeof wallet.signMessage !== 'function') throw new Error('wallet does not expose signMessage');
   const canonicalMaker = new PublicKey(expectedMaker).toBase58();
   if (canonicalMaker !== expectedMaker || walletAddress(wallet) !== canonicalMaker) throw new Error('connected wallet is not the expected maker');
@@ -229,7 +228,7 @@ export async function requestWalletTransactionSignatureV1(
   transaction: VersionedTransaction,
   expectedSigner: string,
 ): Promise<WalletSignedTransactionV1> {
-  const wallet = injected(candidate);
+  const wallet = handoff(candidate);
   if (typeof wallet.signTransaction !== 'function') throw new Error('wallet does not expose signTransaction');
   const canonicalSigner = new PublicKey(expectedSigner).toBase58();
   if (canonicalSigner !== expectedSigner || walletAddress(wallet) !== canonicalSigner) throw new Error('connected wallet is not the expected transaction signer');
