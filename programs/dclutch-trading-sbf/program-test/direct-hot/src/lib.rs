@@ -7,6 +7,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod chain;
+
 use dclutch_capability_program_contract::{
     set_v2::{
         CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, SelectorWidthV2,

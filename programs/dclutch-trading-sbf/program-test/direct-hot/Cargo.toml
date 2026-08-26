@@ -22,6 +22,9 @@ dclutch-registry-contract = { path = "../../../../crates/dclutch-registry-contra
 dclutch-registry-svm = { path = "../../../../crates/dclutch-registry-svm" }
 dclutch-rent-contract = { path = "../../../../crates/dclutch-rent-contract" }
 sha2 = { version = "=0.10.9", default-features = false }
+solana-account = "=4.3.2"
+solana-program = { version = "=3.0.0", default-features = false }
+solana-program-test = { version = "=4.2.1", features = ["agave-unstable-api"] }
 
 [lints.rust]
 unsafe_code = "forbid"
