@@ -69,7 +69,7 @@ use solana_system_interface::instruction::{allocate, assign};
 use crate::{
     ResolutionError, authenticate_clock, authenticate_rent, deployment_observation,
     provider_v3::{
-        AuthenticatedProviderObservationV3, AuthenticatedSourceRecordsV3,
+        AuthenticatedProviderObservationV3, AuthenticatedSourceRecordsV3, ProviderJoinErrorV3,
         plan_provider_resolution_v3,
     },
 };
@@ -167,11 +167,22 @@ pub(crate) fn process_provider_resolution_v3(
         clock,
     )?;
     let plan = plan_provider_resolution_v3(request_bytes, &source, &source_records, &observation)
-        .map_err(|_| ResolutionError::Transition)?;
+        .map_err(map_provider_join_error)?;
     drop(source_data);
     drop(result_domain_data);
     drop(update_data);
     commit_plan(program_id, &request, frame, &rent, &lifecycle, &plan)
+}
+
+const fn map_provider_join_error(error: ProviderJoinErrorV3) -> ResolutionError {
+    match error {
+        ProviderJoinErrorV3::Request => ResolutionError::Instruction,
+        ProviderJoinErrorV3::Source => ResolutionError::SourceMaterial,
+        ProviderJoinErrorV3::Product => ResolutionError::ProductDomain,
+        ProviderJoinErrorV3::Provider => ResolutionError::ProviderObservation,
+        ProviderJoinErrorV3::Transition => ResolutionError::Transition,
+        ProviderJoinErrorV3::Arithmetic => ResolutionError::Arithmetic,
+    }
 }
 
 fn boxed_source_records(

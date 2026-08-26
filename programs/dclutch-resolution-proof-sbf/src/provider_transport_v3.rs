@@ -695,7 +695,9 @@ fn authenticate_submission_provider(
     let expected_treasury =
         Pubkey::find_program_address(&[b"treasury", &[0]], frame.account(27).key).0;
     if frame.account(34).key != &expected_treasury
-        || frame.account(34).owner != frame.account(27).key
+        || frame.account(34).owner != &system_program::ID
+        || frame.account(34).executable
+        || !frame.account(34).data_is_empty()
     {
         return Err(ResolutionError::ProviderRelease.into());
     }
