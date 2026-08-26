@@ -4,9 +4,8 @@ use std::{env, fs, path::PathBuf, vec::Vec};
 
 use dclutch_claims_sbf::liability_basis_v2::{
     LIABILITY_BASIS_ACCOUNT_COUNT_V2, LIABILITY_BASIS_MARKET_SEED_V2,
-    LIABILITY_BASIS_POSITION_SEED_V2, LIABILITY_BASIS_SCHEMA_RELEASE_ID_V2,
-    LiabilityBasisActionInputV2, LiabilityBasisActionKindV2, LiabilityBasisActionV2,
-    LiabilityBasisMarketInputV2, LiabilityBasisPositionInputV2,
+    LIABILITY_BASIS_SCHEMA_RELEASE_ID_V2, LiabilityBasisActionInputV2, LiabilityBasisActionKindV2,
+    LiabilityBasisActionV2, LiabilityBasisMarketInputV2, LiabilityBasisPositionInputV2,
     TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2, encode_liability_basis_market_v2,
     encode_liability_basis_position_v2, encode_terminal_coordinate_v2,
 };
@@ -14,7 +13,7 @@ use dclutch_claims_sbf::protocol_position_v2::{
     PROTOCOL_POSITION_ADMISSION_BYTES_V2, PROTOCOL_POSITION_ADMISSION_SEED_V2,
     PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V2, ProtocolPositionActionV2,
     ProtocolPositionAdmissionV2, ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2,
-    ProtocolPositionRequestV2,
+    ProtocolPositionRequestV2, ProtocolPositionSeedsV2,
 };
 use dclutch_claims_svm::{ClaimsAggregateSeedsV1, ClaimsPositionSeedsV1};
 use dclutch_core_contract::ContentId;
@@ -692,15 +691,9 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture, StateModel) {
         &CLAIMS_PROGRAM_ID,
     )
     .0;
-    let position = Pubkey::find_program_address(
-        &[
-            LIABILITY_BASIS_POSITION_SEED_V2,
-            market.as_ref(),
-            owner.pubkey().as_ref(),
-        ],
-        &CLAIMS_PROGRAM_ID,
-    )
-    .0;
+    let position_seeds = ProtocolPositionSeedsV2::new(market.to_bytes(), owner.pubkey().to_bytes())
+        .expect("LBV2 Position seeds");
+    let position = Pubkey::find_program_address(&position_seeds.as_slices(), &CLAIMS_PROGRAM_ID).0;
     let context_id = if terminal { [0x82; 32] } else { [0x81; 32] };
     let market_input = LiabilityBasisMarketInputV2 {
         revision: 0,
