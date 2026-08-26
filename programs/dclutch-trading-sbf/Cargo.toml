@@ -15,9 +15,12 @@ default = ["families"]
 no-entrypoint = []
 custom-heap = []
 custom-panic = []
-families = [
+series-family = [
     "dep:dclutch-claims-svm",
     "dep:dclutch-custody-contract",
+]
+families = [
+    "series-family",
     "dep:dclutch-dealer-codec",
     "dep:dclutch-direct-codec",
     "dep:dclutch-economic-slice-kernel",

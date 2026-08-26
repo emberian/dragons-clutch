@@ -57,7 +57,7 @@ pub mod outer;
 /// Family-neutral EffectProgram V3 composition for canonical Resolution CPIs.
 pub mod resolution_composition_v3;
 /// Series family projection behind the common data-defined Trading boundary.
-#[cfg(feature = "families")]
+#[cfg(any(feature = "families", feature = "series-family"))]
 pub mod series;
 /// Family-neutral read-only Shadow-AOT comparison CPI.
 pub mod shadow_composition_v3;
