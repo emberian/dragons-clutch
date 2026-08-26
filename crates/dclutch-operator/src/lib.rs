@@ -40,6 +40,8 @@ use solana_program::{
 };
 use solana_sdk_ids::system_program;
 
+pub use dclutch_resolution_core_v3_operator::{Finality, Observation, ObservedAccount};
+
 /// Chain-derived compiled Direct transaction construction.
 pub mod compiled_direct;
 /// Chain-derived unsigned Dealer junior-equity Hot execution construction.
@@ -58,7 +60,12 @@ pub mod general_hot_v3;
 pub mod general_physical;
 /// Chain-derived inspection of immutable Core/Registry/Rent infrastructure.
 pub mod infrastructure;
-mod product_graph_observation_v3;
+mod product_graph_observation_v3 {
+    pub(crate) use dclutch_resolution_core_v3_operator::product_graph_observation_v3::{
+        AuthenticatedProductGraphObservationV3, FinalizedProductGraphAccountsV3,
+        authenticate_product_graph_observation_v3,
+    };
+}
 /// Chain-derived real-provider submission and permissionless reclaim.
 pub mod provider_transport_v3;
 /// Packet-safe unsigned Rational terminal Bearer redemption construction.
@@ -69,8 +76,10 @@ pub mod registered_direct;
 pub mod registry;
 /// Checked-release admission into unsigned Registry activation workflows.
 pub mod release_activation;
-/// Chain-derived Core admission of one terminal Resolution result.
-pub mod resolution_core_v3;
+/// Chain-derived Core effects for the complete funded Resolution lifecycle.
+pub mod resolution_core_v3 {
+    pub use dclutch_resolution_core_v3_operator::*;
+}
 /// Chain-derived Series V3 Hot lifecycle and packet construction.
 pub mod series_hot_v3;
 /// Chain-derived address-table lifecycle and versioned-message construction.
@@ -88,45 +97,6 @@ pub const PRICE_FRAME_ACCOUNTS: usize =
 /// The exact number of accounts in a permissionless failure-resolution frame.
 pub const FAILURE_FRAME_ACCOUNTS: usize =
     dclutch_pyth_contract::frame::FAILURE_RESOLUTION_FRAME_V1.len();
-
-/// An immutable finality label supplied with an observation report.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Finality {
-    /// Observed at processed commitment.
-    Processed,
-    /// Observed at confirmed commitment.
-    Confirmed,
-    /// Observed at finalized commitment.
-    Finalized,
-}
-
-/// Slot, wall-clock time, and finality attached to an account observation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Observation {
-    /// Observed slot.
-    pub slot: u64,
-    /// Observed Unix time.
-    pub unix_timestamp: i64,
-    /// Commitment/finality label.
-    pub finality: Finality,
-}
-
-/// Host-observed account metadata and exact bytes.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ObservedAccount {
-    /// Observation provenance.
-    pub observation: Observation,
-    /// Account address.
-    pub key: Pubkey,
-    /// Program owner.
-    pub owner: Pubkey,
-    /// Observed lamports.
-    pub lamports: u64,
-    /// Observed executable bit.
-    pub executable: bool,
-    /// Exact account bytes.
-    pub data: Vec<u8>,
-}
 
 /// Same-finalized account observations required by resolution.
 ///

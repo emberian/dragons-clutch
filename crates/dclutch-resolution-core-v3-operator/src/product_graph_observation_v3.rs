@@ -10,30 +10,45 @@ use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1
 use solana_program::{hash::hash, pubkey::Pubkey};
 use solana_sdk_ids::system_program;
 
+/// Product facts reauthenticated from one finalized Runtime V2 graph.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct AuthenticatedProductGraphObservationV3 {
-    pub(crate) outcome_count: u32,
-    pub(crate) product_record: [u8; 32],
+pub struct AuthenticatedProductGraphObservationV3 {
+    /// Exact Product-owned outcome count, including explicit failure.
+    pub outcome_count: u32,
+    /// SHA-256 identity of the authenticated Product root record.
+    pub product_record: [u8; 32],
 }
 
+/// Same-snapshot finalized Product, ResultDomain, and Portfolio coordinates.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct FinalizedProductGraphAccountsV3<'a> {
-    pub(crate) registry_program: Pubkey,
-    pub(crate) product_raw: &'a ObservedAccount,
-    pub(crate) product_staging: &'a ObservedAccount,
-    pub(crate) domain_raw: &'a ObservedAccount,
-    pub(crate) domain_staging: &'a ObservedAccount,
-    pub(crate) portfolio_raw: &'a ObservedAccount,
-    pub(crate) portfolio_staging: &'a ObservedAccount,
+pub struct FinalizedProductGraphAccountsV3<'a> {
+    /// Registry program owning every finalized raw record.
+    pub registry_program: Pubkey,
+    /// Finalized Product root bytes.
+    pub product_raw: &'a ObservedAccount,
+    /// Vacant Product staging cursor.
+    pub product_staging: &'a ObservedAccount,
+    /// Finalized ResultDomain bytes.
+    pub domain_raw: &'a ObservedAccount,
+    /// Vacant ResultDomain staging cursor.
+    pub domain_staging: &'a ObservedAccount,
+    /// Finalized Portfolio bytes.
+    pub portfolio_raw: &'a ObservedAccount,
+    /// Vacant Portfolio staging cursor.
+    pub portfolio_staging: &'a ObservedAccount,
 }
 
+/// Refusal from a malformed finalized coordinate or inconsistent Product graph.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ProductGraphObservationErrorV3 {
+pub enum ProductGraphObservationErrorV3 {
+    /// At least one raw/staging coordinate was not finalized and canonical.
     InvalidRecord,
+    /// The three independently authenticated records did not form one graph.
     InvalidGraph,
 }
 
-pub(crate) fn authenticate_product_graph_observation_v3(
+/// Reauthenticate one exact finalized Product graph without trusting a client DTO.
+pub fn authenticate_product_graph_observation_v3(
     accounts: FinalizedProductGraphAccountsV3<'_>,
 ) -> Result<AuthenticatedProductGraphObservationV3, ProductGraphObservationErrorV3> {
     let product = finalized_coordinate(

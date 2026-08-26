@@ -44,6 +44,7 @@ dclutch-registry-contract = { path = "../dclutch-registry-contract" }
 dclutch-registry-svm = { path = "../dclutch-registry-svm" }
 dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
 dclutch-resolution-codec = { path = "../dclutch-resolution-codec" }
+dclutch-resolution-core-v3-operator = { path = "../dclutch-resolution-core-v3-operator" }
 dclutch-release-tool = { path = "../dclutch-release-tool" }
 dclutch-rent-contract = { path = "../dclutch-rent-contract" }
 dclutch-series-contract = { path = "../dclutch-series-contract" }

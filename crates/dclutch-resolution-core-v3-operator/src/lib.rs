@@ -5,6 +5,12 @@
 //! physical funding custody, and terminal certificate as authorities. They
 //! emit only unsigned permissionless instructions.
 
+#![forbid(unsafe_code)]
+#![deny(missing_docs)]
+
+/// Shared finalized Product-graph authentication used by successor operators.
+pub mod product_graph_observation_v3;
+
 use dclutch_capability_contract::{
     CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingDerivationV1, CapabilityManifestV1,
     ContentId as CapabilityContentId, FUNDING_STATE_BYTES, FundingCustodyObservationV1,
@@ -35,18 +41,58 @@ use dclutch_source_contract::{
     SourceResolutionStateV2,
 };
 use solana_program::{
+    account_info::AccountInfo,
+    clock::Clock,
     hash::{hash, hashv},
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
+    rent::Rent,
+    sysvar::SysvarSerialize,
 };
-use solana_sdk_ids::{bpf_loader_upgradeable, native_loader, system_program};
+use solana_sdk_ids::{bpf_loader_upgradeable, native_loader, system_program, sysvar};
 
-use crate::{
-    Finality, Observation, ObservedAccount, foundation,
-    product_graph_observation_v3::{
-        FinalizedProductGraphAccountsV3, authenticate_product_graph_observation_v3,
-    },
+use product_graph_observation_v3::{
+    FinalizedProductGraphAccountsV3, authenticate_product_graph_observation_v3,
 };
+
+/// An immutable finality label supplied with an observation report.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Finality {
+    /// Observed at processed commitment.
+    Processed,
+    /// Observed at confirmed commitment.
+    Confirmed,
+    /// Observed at finalized commitment.
+    Finalized,
+}
+
+/// Slot, wall-clock time, and finality attached to an account observation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Observation {
+    /// Observed slot.
+    pub slot: u64,
+    /// Observed Unix time.
+    pub unix_timestamp: i64,
+    /// Commitment/finality label.
+    pub finality: Finality,
+}
+
+/// Host-observed account metadata and exact bytes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ObservedAccount {
+    /// Observation provenance.
+    pub observation: Observation,
+    /// Account address.
+    pub key: Pubkey,
+    /// Program owner.
+    pub owner: Pubkey,
+    /// Observed lamports.
+    pub lamports: u64,
+    /// Observed executable bit.
+    pub executable: bool,
+    /// Exact account bytes.
+    pub data: Vec<u8>,
+}
 
 /// Exact account count consumed by Core and Resolution for terminal admission.
 pub const RESOLUTION_ADMIT_TERMINAL_ACCOUNT_COUNT_V3: usize = 24;
@@ -417,8 +463,8 @@ pub fn build_resolution_create_fund_v3(
         &snapshot.resolution_programdata,
         market,
     )?;
-    let rent = foundation::decode_rent(&snapshot.rent_sysvar)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+    let rent =
+        decode_rent(&snapshot.rent_sysvar).map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
     authenticate_system(&snapshot.system_program)?;
     let (material, recovery_policy, entries) = authenticate_founding_records(
         snapshot.registry_program.key,
@@ -553,10 +599,10 @@ pub fn build_resolution_verify_fund_ready_v3(
         &snapshot.resolution_programdata,
         market,
     )?;
-    let rent = foundation::decode_rent(&snapshot.rent_sysvar)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
-    let clock = crate::verticals::decode_clock(&snapshot.clock_sysvar)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+    let rent =
+        decode_rent(&snapshot.rent_sysvar).map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+    let clock =
+        decode_clock(&snapshot.clock_sysvar).map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
     if clock.slot == 0
         || snapshot.beneficiary.key.to_bytes() != market.rent_beneficiary.to_bytes()
         || snapshot.beneficiary.executable
@@ -694,8 +740,8 @@ pub fn build_resolution_admit_terminal_v3(
         return Err(ResolutionCoreOperatorErrorV3::Market);
     }
     authenticate_release_graph(snapshot, market)?;
-    let rent = foundation::decode_rent(&snapshot.rent_sysvar)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+    let rent =
+        decode_rent(&snapshot.rent_sysvar).map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
     authenticate_finalized_record(
         snapshot.registry_program.key,
         &snapshot.source_material,
@@ -889,10 +935,10 @@ pub fn build_resolution_close_fund_v3(
         return Err(ResolutionCoreOperatorErrorV3::Market);
     }
     authenticate_close_release_graph(snapshot, market)?;
-    let rent = foundation::decode_rent(&snapshot.rent_sysvar)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
-    let clock = crate::verticals::decode_clock(&snapshot.clock_sysvar)
-        .map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+    let rent =
+        decode_rent(&snapshot.rent_sysvar).map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+    let clock =
+        decode_clock(&snapshot.clock_sysvar).map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
     if clock.unix_timestamp <= 0
         || snapshot.system_program.key != system_program::ID
         || snapshot.system_program.owner != native_loader::ID
@@ -1164,8 +1210,7 @@ pub fn authenticate_resolution_retirement_receipt_v3(
     {
         return Err(ResolutionCoreOperatorErrorV3::Snapshot);
     }
-    let rent =
-        foundation::decode_rent(rent_sysvar).map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
+    let rent = decode_rent(rent_sysvar).map_err(|_| ResolutionCoreOperatorErrorV3::Record)?;
     if !rent.is_exempt(receipt.lamports, receipt.data.len()) {
         return Err(ResolutionCoreOperatorErrorV3::Funding);
     }
@@ -2480,6 +2525,50 @@ fn exact_close_frame(
         }
     }
     true
+}
+
+fn decode_rent(account: &ObservedAccount) -> Result<Rent, ()> {
+    if account.key != sysvar::rent::ID
+        || account.owner != sysvar::ID
+        || account.executable
+        || account.data.len() != Rent::size_of()
+    {
+        return Err(());
+    }
+    let mut lamports = account.lamports;
+    let mut data = account.data.clone();
+    let info = AccountInfo::new(
+        &account.key,
+        false,
+        false,
+        &mut lamports,
+        &mut data,
+        &account.owner,
+        false,
+    );
+    Rent::from_account_info(&info).map_err(|_| ())
+}
+
+fn decode_clock(account: &ObservedAccount) -> Result<Clock, ()> {
+    if account.key != sysvar::clock::ID
+        || account.owner != sysvar::ID
+        || account.executable
+        || account.data.len() != Clock::size_of()
+    {
+        return Err(());
+    }
+    let mut lamports = account.lamports;
+    let mut data = account.data.clone();
+    let info = AccountInfo::new(
+        &account.key,
+        false,
+        false,
+        &mut lamports,
+        &mut data,
+        &account.owner,
+        false,
+    );
+    Clock::from_account_info(&info).map_err(|_| ())
 }
 
 fn identity(bytes: [u8; 32]) -> Result<Identity, ResolutionCoreOperatorErrorV3> {
