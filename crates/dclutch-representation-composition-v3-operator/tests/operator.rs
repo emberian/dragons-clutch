@@ -13,6 +13,13 @@ use dclutch_product_runtime_v2_admission::{
     RESULT_DOMAIN_SCHEMA_ID_V2,
 };
 use dclutch_product_runtime_v2_operator::{ProductCompilationInputV2, compile_product_records_v2};
+use dclutch_rational_representation_v2_kernel::{
+    RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2, REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
+    descriptor_v3::{
+        RepresentationDescriptorInputV3, encode_representation_descriptor_v3_atomic,
+        representation_descriptor_bytes_v3,
+    },
+};
 use dclutch_rational_representation_v2_lifecycle_contract::{
     LIFECYCLE_COMMON_ACCOUNT_COUNT_V2, LifecycleActionV2, LifecycleHeaderV2,
 };
@@ -120,6 +127,7 @@ struct Candidate {
     graph: Vec<u8>,
     translation: Vec<u8>,
     exposure: Vec<u8>,
+    execution_descriptor: Vec<u8>,
 }
 
 fn categorical_basis(width: u32, product_id: [u8; 32], result_domain: [u8; 32]) -> Vec<u8> {
@@ -364,17 +372,39 @@ fn candidate(width: u32, product_id: [u8; 32], result_domain: [u8; 32]) -> Candi
         &mut exposure,
     )
     .expect("composition exposure");
+    let execution_width = representation_descriptor_bytes_v3(K as usize)
+        .expect("rational execution descriptor width");
+    let mut execution_scratch = vec![0; execution_width];
+    let mut execution_descriptor = vec![0; execution_width];
+    encode_representation_descriptor_v3_atomic(
+        RepresentationDescriptorInputV3 {
+            exposure_id: hash(&exposure).to_bytes(),
+            exposure_digest: hash(&exposure).to_bytes(),
+            root_id,
+            market: id(40),
+            release_set: id(41),
+            receipt_mint: id(75),
+            token_program: TOKEN_2022_PROGRAM_ID,
+            denominator: 1,
+            coefficients: &[1, 1, 1],
+        },
+        &mut execution_scratch,
+        &mut execution_descriptor,
+    )
+    .expect("rational execution descriptor");
     Candidate {
         basis,
         descriptor: descriptor.to_vec(),
         graph,
         translation,
         exposure,
+        execution_descriptor,
     }
 }
 
 struct ChainFixture {
     registry: ObservedAccount,
+    claims: ObservedAccount,
     product: Record,
     domain: Record,
     portfolio: Record,
@@ -383,6 +413,7 @@ struct ChainFixture {
     graph: Record,
     translation: Record,
     exposure: Record,
+    execution_descriptor: Record,
 }
 
 impl ChainFixture {
@@ -428,6 +459,14 @@ impl ChainFixture {
                 executable: true,
                 data: Vec::new(),
             },
+            claims: ObservedAccount {
+                observation: observation(),
+                key: Pubkey::new_from_array(id(92)),
+                owner: Pubkey::new_from_array(id(93)),
+                lamports: RENT,
+                executable: true,
+                data: Vec::new(),
+            },
             product: Record::new(registry_key, PRODUCT_RECORD_SCHEMA_ID_V2, product.to_vec()),
             domain: Record::new(registry_key, RESULT_DOMAIN_SCHEMA_ID_V2, domain),
             portfolio: Record::new(registry_key, PORTFOLIO_SCHEMA_ID_V2, portfolio),
@@ -456,12 +495,18 @@ impl ChainFixture {
                 COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
                 candidate.exposure,
             ),
+            execution_descriptor: Record::new(
+                registry_key,
+                REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
+                candidate.execution_descriptor,
+            ),
         }
     }
 
     fn observed(&self) -> CompositionChainObservationV3<'_> {
         CompositionChainObservationV3 {
             registry_program: &self.registry,
+            claims_program: &self.claims,
             product: ProductCompositionObservationV3 {
                 product: self.product.observed(),
                 result_domain: self.domain.observed(),
@@ -469,6 +514,7 @@ impl ChainFixture {
                 product_basis: self.basis.observed(),
             },
             representation: RepresentationCompositionObservationV3 {
+                execution_descriptor: self.execution_descriptor.observed(),
                 descriptor: self.descriptor.observed(),
                 graph: self.graph.observed(),
                 translation: self.translation.observed(),
@@ -665,10 +711,18 @@ fn publication_lifecycle_and_packet_geometry_are_exact() {
             action: LifecycleActionV2::ActivateReceipt,
             release_set: id(41),
             market: id(40),
-            graph_id: id(30),
-            descriptor_id: hash(&fixture.descriptor.raw.data).to_bytes(),
+            graph_id: hash(&fixture.exposure.raw.data).to_bytes(),
+            descriptor_id: hash(&fixture.execution_descriptor.raw.data).to_bytes(),
             parent_context: id(73),
-            representation_authority: id(74),
+            representation_authority: Pubkey::find_program_address(
+                &[
+                    RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
+                    &hash(&fixture.execution_descriptor.raw.data).to_bytes(),
+                ],
+                &fixture.claims.key,
+            )
+            .0
+            .to_bytes(),
             receipt_mint: id(75),
             token_program: TOKEN_2022_PROGRAM_ID,
             rent_credit: id(76),

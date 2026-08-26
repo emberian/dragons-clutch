@@ -12,6 +12,7 @@ dclutch-product-payoff-v2-codec = { path = "../dclutch-product-payoff-v2-codec" 
 dclutch-product-runtime-v2 = { path = "../dclutch-product-runtime-v2" }
 dclutch-product-runtime-v2-admission = { path = "../dclutch-product-runtime-v2-admission" }
 dclutch-rational-representation-v2-lifecycle-contract = { path = "../dclutch-rational-representation-v2-lifecycle-contract" }
+dclutch-rational-representation-v2-kernel = { path = "../dclutch-rational-representation-v2-kernel" }
 dclutch-record-contract = { path = "../dclutch-record-contract" }
 dclutch-representation-composition-v3-kernel = { path = "../dclutch-representation-composition-v3-kernel" }
 dclutch-versioned-message-operator = { path = "../dclutch-versioned-message-operator" }

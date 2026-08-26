@@ -20,10 +20,14 @@ use dclutch_product_runtime_v2_admission::{
     AdmissionProjectionV2, AdmissionReceiptV2, FinalizedRecordCoordinateV2, PORTFOLIO_SCHEMA_ID_V2,
     PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2, admit_authenticated_records_v2,
 };
+use dclutch_rational_representation_v2_kernel::{
+    DescriptorAdmissionV2, RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
+    REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3, RepresentationDescriptorV2,
+};
 use dclutch_rational_representation_v2_lifecycle_contract::{
     LIFECYCLE_COMMON_ACCOUNT_COUNT_V2, LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2,
     LIFECYCLE_COORDINATE_BYTES_V2, LIFECYCLE_HEADER_BYTES_V2, LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2,
-    LifecycleActionV2, LifecycleCoordinateV2, LifecycleHeaderV2, LifecycleRequestV2,
+    LifecycleActionV2, LifecycleCoordinateV2, LifecycleHeaderV2, LifecycleRequestV2, prepare,
 };
 use dclutch_record_contract::{
     APPEND_PAGE_HEADER_BYTES_V1, AppendPageV1, BeginRecordV1,
@@ -108,6 +112,8 @@ pub struct ProductCompositionObservationV3<'a> {
 /// Representation DAG, canonical translation, and Product exposure records.
 #[derive(Clone, Copy, Debug)]
 pub struct RepresentationCompositionObservationV3<'a> {
+    /// Rational execution descriptor selecting the finalized exposure record.
+    pub execution_descriptor: FinalizedRecordObservationV3<'a>,
     /// Composition descriptor owning Market, release, basis, and `K`.
     pub descriptor: FinalizedRecordObservationV3<'a>,
     /// Exact acyclic representation DAG.
@@ -123,6 +129,8 @@ pub struct RepresentationCompositionObservationV3<'a> {
 pub struct CompositionChainObservationV3<'a> {
     /// Current executable Registry/record program.
     pub registry_program: &'a ObservedAccount,
+    /// Current executable Claims program used only for canonical PDA derivation.
+    pub claims_program: &'a ObservedAccount,
     /// Product records and ProductBasisV3.
     pub product: ProductCompositionObservationV3<'a>,
     /// Representation composition and exposure records.
@@ -156,6 +164,8 @@ pub struct AdmittedCompositionV3<'a> {
     product_basis: ProductBasisV3<'a>,
     composition: CompositionBundleV3<'a>,
     exposure: CompositionExposureBundleV3<'a>,
+    execution_descriptor: RepresentationDescriptorV2<'a>,
+    execution_descriptor_record: FinalizedCoordinateV3,
     descriptor_record: FinalizedCoordinateV3,
     exposure_record: FinalizedCoordinateV3,
 }
@@ -211,6 +221,16 @@ impl<'a> AdmittedCompositionV3<'a> {
     /// Exact admitted sparse Product-to-Claims exposure.
     pub const fn exposure(self) -> CompositionExposureBundleV3<'a> {
         self.exposure
+    }
+
+    /// Rational execution descriptor selecting the exact exposure record.
+    pub const fn execution_descriptor(self) -> RepresentationDescriptorV2<'a> {
+        self.execution_descriptor
+    }
+
+    /// Finalized rational execution-descriptor coordinate.
+    pub const fn execution_descriptor_record(self) -> FinalizedCoordinateV3 {
+        self.execution_descriptor_record
     }
 
     /// Runtime Claims/representation width `K`.
@@ -337,12 +357,49 @@ pub fn authenticate_composition_v3(
         composition,
         semantic_basis,
     )?;
+    let execution_descriptor_record = authenticate_record(
+        registry,
+        observed.representation.execution_descriptor,
+        REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
+    )?;
+    let representation_authority = Pubkey::find_program_address(
+        &[
+            RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
+            &execution_descriptor_record.coordinate.content_digest,
+        ],
+        &observed.claims_program.key,
+    )
+    .0;
+    let execution_descriptor = RepresentationDescriptorV2::decode(
+        execution_descriptor_record.bytes,
+        DescriptorAdmissionV2 {
+            selected_descriptor_id: execution_descriptor_record.coordinate.content_digest,
+            finalized_descriptor_id: execution_descriptor_record.coordinate.content_digest,
+            recomputed_descriptor_digest: execution_descriptor_record.coordinate.content_digest,
+            finalized_descriptor_digest: execution_descriptor_record.coordinate.content_digest,
+            record_authenticated: true,
+            derived_representation_authority: representation_authority.to_bytes(),
+            authority_derivation_authenticated: true,
+        },
+    )
+    .map_err(|_| Error::Composition)?;
+    execution_descriptor
+        .authenticate_exposure(exposure)
+        .map_err(|_| Error::CrossRecord)?;
+    if execution_descriptor.market_id() != descriptor.market()
+        || execution_descriptor.release_set_id() != descriptor.release_set()
+        || execution_descriptor.outcome_count() != descriptor.outcome_count()
+    {
+        return Err(Error::CrossRecord);
+    }
     Ok(AdmittedCompositionV3 {
         observation,
         product,
         product_basis,
         composition,
         exposure,
+        execution_descriptor,
+        execution_descriptor_record: execution_descriptor_record.coordinate,
         descriptor_record: descriptor_record.coordinate,
         exposure_record: exposure_record.coordinate,
     })
@@ -611,11 +668,14 @@ pub fn build_claims_lifecycle_plan_v3(
     header: LifecycleHeaderV2,
     coordinates: &[LifecycleCoordinateV2],
 ) -> Result<ClaimsLifecyclePlanV3> {
-    let descriptor = admitted.composition.descriptor();
-    if header.release_set != descriptor.release_set()
-        || header.market != descriptor.market()
+    let descriptor = admitted.execution_descriptor;
+    if header.release_set != descriptor.release_set_id()
+        || header.market != descriptor.market_id()
         || header.graph_id != descriptor.graph_id()
-        || header.descriptor_id != admitted.descriptor_record.content_digest
+        || header.descriptor_id != descriptor.descriptor_id()
+        || header.representation_authority != descriptor.representation_authority()
+        || header.receipt_mint != descriptor.receipt_mint()
+        || header.token_program != descriptor.token_program()
         || header.outcome_count != descriptor.outcome_count()
         || usize::try_from(header.coordinate_count).map_err(|_| Error::Arithmetic)?
             != coordinates.len()
@@ -643,7 +703,8 @@ pub fn build_claims_lifecycle_plan_v3(
     request
         .encode_into(&mut wire)
         .map_err(|_| Error::ClaimsLifecycle)?;
-    LifecycleRequestV2::decode(&wire).map_err(|_| Error::ClaimsLifecycle)?;
+    let decoded = LifecycleRequestV2::decode(&wire).map_err(|_| Error::ClaimsLifecycle)?;
+    prepare(decoded, descriptor).map_err(|_| Error::ClaimsLifecycle)?;
     let account_count = match header.action {
         LifecycleActionV2::ActivateReceipt => LIFECYCLE_COMMON_ACCOUNT_COUNT_V2,
         LifecycleActionV2::ActivateCoordinate | LifecycleActionV2::RetireCoordinate => {
@@ -706,6 +767,9 @@ fn common_observation(observed: CompositionChainObservationV3<'_>) -> Result<Obs
         || expected.finality != Finality::Finalized
         || !observed.registry_program.executable
         || observed.registry_program.key == Pubkey::default()
+        || observed.claims_program.observation != expected
+        || !observed.claims_program.executable
+        || observed.claims_program.key == Pubkey::default()
     {
         return Err(Error::Registry);
     }
@@ -719,12 +783,13 @@ fn common_observation(observed: CompositionChainObservationV3<'_>) -> Result<Obs
 
 fn all_records(
     observed: CompositionChainObservationV3<'_>,
-) -> [FinalizedRecordObservationV3<'_>; 8] {
+) -> [FinalizedRecordObservationV3<'_>; 9] {
     [
         observed.product.product,
         observed.product.result_domain,
         observed.product.portfolio,
         observed.product.product_basis,
+        observed.representation.execution_descriptor,
         observed.representation.descriptor,
         observed.representation.graph,
         observed.representation.translation,

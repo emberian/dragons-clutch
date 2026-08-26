@@ -9,6 +9,8 @@
 //! native/materialized economic owner, and finalized representation records
 //! remain the sole recipe owner. No mutable representation ledger exists here.
 
+/// Checked atomic encoder for the immutable V3 execution descriptor.
+pub mod descriptor_v3;
 #[allow(missing_docs)]
 mod generated_descriptor;
 #[allow(missing_docs)]
