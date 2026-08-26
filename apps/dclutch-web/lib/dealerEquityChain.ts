@@ -12,7 +12,8 @@ import {
   type DealerEquityRequestV3,
   decodeDealerEquityRequestV3,
 } from './dealerEquityV3';
-import { validateRuntimeAccountProfileV2, type CheckedHotOuterEvidenceV3, type DirectHotAccountMetaV3 } from './directInlineV3';
+import { validateDealerAccountProfileV3 } from './dealerAccountProfileV3';
+import { type CheckedHotOuterEvidenceV3, type DirectHotAccountMetaV3 } from './directInlineV3';
 import * as HotAbi from './generated/directInlineV3';
 import {
   CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
@@ -349,7 +350,18 @@ export async function inspectDealerEquityRouteV3(
     fixed[HotAbi.HOT_ROOT_ACCOUNT_V3], fixed[HotAbi.HOT_CONFIG_RAW_ACCOUNT_V3], fixed[HotAbi.HOT_PRODUCT_RAW_ACCOUNT_V3],
     fixed[HotAbi.HOT_PORTFOLIO_RAW_ACCOUNT_V3], fixed[HotAbi.HOT_LINKED_BASIS_RAW_ACCOUNT_V3], ...runtime,
   ].filter((value): value is DirectHotAccountMetaV3 => value !== undefined);
-  validateRuntimeAccountProfileV2(profileRaw.data, request.width, logicalMetas);
+  const logicalData = [
+    fixed[HotAbi.HOT_ROOT_ACCOUNT_V3], fixed[HotAbi.HOT_CONFIG_RAW_ACCOUNT_V3], fixed[HotAbi.HOT_PRODUCT_RAW_ACCOUNT_V3],
+    fixed[HotAbi.HOT_PORTFOLIO_RAW_ACCOUNT_V3], fixed[HotAbi.HOT_LINKED_BASIS_RAW_ACCOUNT_V3], ...runtime,
+  ].filter((value): value is DirectHotAccountMetaV3 => value !== undefined)
+    .map((value, index) => required(observation.accounts, value.address, `Dealer logical account ${index}`).data);
+  validateDealerAccountProfileV3(
+    profileRaw.data,
+    { kind: 'equity', selector: request.selector },
+    request.width,
+    logicalMetas,
+    logicalData,
+  );
   await validateDealerState(request, observation.accounts, tradingProgram, graph.productId, slice(domainRaw.data, 96, 32));
 
   let checkedOuter: CheckedHotOuterEvidenceV3 = Object.freeze({ status: 'unavailable', reason: 'no checked infrastructure manifest recognizes this Trading release' });

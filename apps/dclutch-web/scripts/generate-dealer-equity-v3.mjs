@@ -10,7 +10,13 @@ const sources = Object.freeze({
   release: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/v3_release.rs', root), 'utf8'),
   dealer: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/mod.rs', root), 'utf8'),
   delta: readFileSync(new URL('crates/dclutch-claims-svm/src/signed_delta_v3.rs', root), 'utf8'),
+  deltaFrame: readFileSync(new URL('crates/dclutch-claims-svm/src/frame_spec_v1.rs', root), 'utf8'),
   strategy: readFileSync(new URL('crates/dclutch-execution-strategy-contract/src/generated_v2.rs', root), 'utf8'),
+  accountProfile: readFileSync(new URL('crates/dclutch-account-profile-contract/src/v2.rs', root), 'utf8'),
+  lpProfile: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/v3_lp_artifacts.rs', root), 'utf8'),
+  scenarioProfile: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/v3_trade_profile.rs', root), 'utf8'),
+  scenarioArtifacts: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/v3_trade_artifacts.rs', root), 'utf8'),
+  basis: readFileSync(new URL('crates/dclutch-product-payoff-v2-codec/src/runtime_v3.rs', root), 'utf8'),
 });
 const outputUrl = new URL('../lib/generated/dealerEquityV3.ts', import.meta.url);
 
@@ -44,8 +50,12 @@ const scalars = Object.freeze([
   ['request', 'DEALER_EQUITY_REDEEM_P2_SELECTOR_V3'],
   ['hot', 'DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3'],
   ['hot', 'DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3'],
-  ['hot', 'DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3'],
+  ['deltaFrame', 'SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3', 'DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3'],
   ['hot', 'DEALER_EQUITY_LOCAL_ACCOUNT_COUNT_V3'],
+  ['hot', 'CUSTODY_SCALAR_BASE_V3'],
+  ['hot', 'CUSTODY_SCALAR_STRIDE_V3'],
+  ['hot', 'CUSTODY_IDENTITY_BASE_V3'],
+  ['hot', 'CUSTODY_IDENTITY_STRIDE_V3'],
   ['lp', 'DEALER_LP_POSITION_BYTES_V3'],
   ['lp', 'DEALER_LP_POSITION_VERSION_V3'],
   ['obligation', 'DEALER_OBLIGATION_HEADER_BYTES_V3'],
@@ -59,12 +69,53 @@ const scalars = Object.freeze([
   ['strategy', 'EXECUTION_STRATEGY_SCHEMA_VERSION_V2'],
   ['strategy', 'EXECUTION_STRATEGY_ARTIFACT_PROFILE_V2'],
   ['strategy', 'STRATEGY_DISPOSITION_OFFSET_V2'],
+  ['accountProfile', 'VERSION', 'ACCOUNT_PROFILE_VERSION_V2'],
+  ['accountProfile', 'TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE'],
+  ['accountProfile', 'LIFECYCLE_PRESTATE_ARTIFACT_PROFILE'],
+  ['accountProfile', 'DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE'],
+  ['accountProfile', 'HEADER_BYTES', 'ACCOUNT_PROFILE_HEADER_BYTES_V2'],
+  ['accountProfile', 'DYNAMIC_FIXED_SPAN_HEADER_BYTES'],
+  ['accountProfile', 'DYNAMIC_FIXED_SPAN_COUNT_OFFSET'],
+  ['accountProfile', 'DYNAMIC_FIXED_SPAN_RESERVED_OFFSET'],
+  ['accountProfile', 'DYNAMIC_FIXED_SPAN_ENTRY_BYTES'],
+  ['accountProfile', 'DYNAMIC_FIXED_SPAN_ENTRY_INSERTION_OFFSET'],
+  ['accountProfile', 'DYNAMIC_FIXED_SPAN_ENTRY_COUNT_SCALAR_OFFSET'],
+  ['accountProfile', 'DYNAMIC_FIXED_SPAN_ENTRY_RULE_START_OFFSET'],
+  ['accountProfile', 'DYNAMIC_FIXED_SPAN_ENTRY_RULE_STRIDE_OFFSET'],
+  ['accountProfile', 'DYNAMIC_FIXED_SPAN_ENTRY_MIN_OFFSET'],
+  ['accountProfile', 'DYNAMIC_FIXED_SPAN_ENTRY_MAX_OFFSET'],
+  ['accountProfile', 'DYNAMIC_FIXED_SPAN_ENTRY_STEP_OFFSET'],
+  ['accountProfile', 'RULE_BYTES', 'ACCOUNT_PROFILE_RULE_BYTES_V2'],
+  ['accountProfile', 'OPERATION_BYTES', 'ACCOUNT_PROFILE_OPERATION_BYTES_V2'],
+  ['accountProfile', 'TRUSTED_ENVIRONMENT_SCALAR_OFFSET'],
+  ['accountProfile', 'TRUSTED_ENVIRONMENT_KIND_OFFSET'],
+  ['accountProfile', 'TRUSTED_ENVIRONMENT_RESERVED_OFFSET'],
+  ['accountProfile', 'TRUSTED_EXECUTING_PROGRAM_IDENTITY_OFFSET'],
+  ['accountProfile', 'TRUSTED_EXECUTING_PROGRAM_KIND_OFFSET'],
+  ['accountProfile', 'TRUSTED_EXECUTING_PROGRAM_RESERVED_OFFSET'],
+  ['lpProfile', 'DEALER_LP_OPEN_ACCOUNT_COUNT_V3'],
+  ['lpProfile', 'DEALER_LP_CLOSE_ACCOUNT_COUNT_V3'],
+  ['lpProfile', 'DEALER_LP_STATE_ACCOUNT_V3'],
+  ['lpProfile', 'DEALER_LP_SCALAR_COUNT_V3'],
+  ['lpProfile', 'DEALER_LP_IDENTITY_COUNT_V3'],
+  ['scenarioProfile', 'DEALER_SCENARIO_PROFILE_FIXED_RULES_V4'],
+  ['scenarioProfile', 'DEALER_SCENARIO_PROFILE_SPANS_V4'],
+  ['scenarioProfile', 'DEALER_SCENARIO_PROFILE_SPAN_RULES_V4'],
+  ['scenarioArtifacts', 'DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4'],
+  ['scenarioArtifacts', 'DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4'],
+  ['scenarioArtifacts', 'DEALER_SCENARIO_ITEM_SCALAR_STRIDE_V4'],
+  ['scenarioArtifacts', 'DEALER_SCENARIO_ITEM_IDENTITY_STRIDE_V4'],
+  ['scenarioArtifacts', 'DEALER_SCENARIO_CURRENT_SLOT_SCALAR_V4'],
+  ['scenarioArtifacts', 'DEALER_SCENARIO_MAX_POSITION_COUNT_SCALAR_V4'],
+  ['scenarioArtifacts', 'DEALER_SCENARIO_CURRENT_TRADING_IDENTITY_V4'],
+  ['scenarioArtifacts', 'DEALER_SCENARIO_OBLIGATION_IDENTITY_V4'],
+  ['basis', 'BASIS_WIDTH_OFFSET_V3'],
 ]);
 
 let output = '// @generated from canonical Rust Dealer V3 ABIs; do not edit.\n';
 output += '// Regenerate with: npm run abi:dealer-v3\n\n';
-for (const [source, name] of scalars) output += `export const ${name} = ${scalar(source, name)} as const;\n`;
-for (const [source, name] of [
+for (const [source, name, outputName = name] of scalars) output += `export const ${outputName} = ${scalar(source, name)} as const;\n`;
+for (const [source, name, outputName = name] of [
   ['request', 'DEALER_EQUITY_REQUEST_MAGIC_V3'],
   ['lp', 'DEALER_LP_POSITION_MAGIC_V3'],
   ['lp', 'DEALER_LP_POSITION_PDA_DOMAIN_V3'],
@@ -72,11 +123,12 @@ for (const [source, name] of [
   ['obligation', 'DEALER_OBLIGATION_PDA_DOMAIN_V3'],
   ['delta', 'SIGNED_DELTA_PLAN_MAGIC_V3'],
   ['strategy', 'EXECUTION_STRATEGY_PROGRAM_MAGIC_V2'],
+  ['accountProfile', 'MAGIC', 'ACCOUNT_PROFILE_MAGIC_V2'],
   ['dealer', 'DEALER_KIND_PREIMAGE_V2'],
   ['dealer', 'DEALER_CONFIG_SCHEMA_PREIMAGE_V2'],
   ['dealer', 'DEALER_ROOT_SCHEMA_PREIMAGE_V2'],
   ['release', 'DEALER_EQUITY_REQUEST_SCHEMA_PREIMAGE_V3'],
-]) output += array(name, bytes(source, name));
+]) output += array(outputName, bytes(source, name));
 
 const destination = fileURLToPath(outputUrl);
 const check = process.argv.includes('--check');
