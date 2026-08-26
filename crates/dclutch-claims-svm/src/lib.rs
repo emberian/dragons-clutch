@@ -15,7 +15,10 @@ pub mod founding_v5;
 pub mod lbv2_terminal_v2;
 pub mod liability_basis_state_v2;
 pub mod protocol_position_v2;
+mod request_layout;
 pub mod signed_delta_v3;
+
+pub use request_layout::ClaimsPlanLayoutV1;
 
 /// Bytes before the runtime-width `u64` quantity vector.
 pub const CLAIMS_PLAN_HEADER_BYTES_V1: usize = 208;
