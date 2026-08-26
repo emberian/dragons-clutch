@@ -7,7 +7,6 @@ use dclutch_claims_svm::liability_basis_state_v2::{
     LiabilityBasisMarketInputV2, encode_liability_basis_market_into_v2,
     liability_basis_vector_width_v2,
 };
-use dclutch_custody_contract::CUSTODY_REPLAY_BYTES_V1;
 use dclutch_market_retirement_v1_operator::{
     MarketRetirementOperatorErrorV1, MarketRetirementSnapshotV1, build_market_retirement_v1,
 };
@@ -18,14 +17,12 @@ use dclutch_registry_svm::continuation_v1::{
 use dclutch_rent_contract::lifecycle_v2::{
     LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
 };
-use dclutch_token_svm::ACCOUNT_BYTES as TOKEN_ACCOUNT_BYTES;
-use spl_token_interface::state::{Account as SplAccount, AccountState};
+use spl_token_interface::state::Account as SplAccount;
 
 const CLAIMS_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x76; 32]);
 const TRADING_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x77; 32]);
-const CUSTODY_CONTEXT: [u8; 32] = [0xc7; 32];
 const CLAIMS_REVISION: u64 = 11;
-const CUSTODY_REVISION: u64 = 17;
+const CUSTODY_REVISION: u64 = 2;
 
 struct JoinedFixture {
     base: Fixture,
@@ -89,59 +86,8 @@ fn joined_activation(
     (release_set_id, bytes)
 }
 
-fn token_account_data(mint: Pubkey, owner: Pubkey) -> Vec<u8> {
-    let mut bytes = vec![0; SplAccount::LEN];
-    SplAccount::pack(
-        SplAccount {
-            mint,
-            owner,
-            amount: 0,
-            delegate: COption::None,
-            state: AccountState::Initialized,
-            is_native: COption::None,
-            delegated_amount: 0,
-            close_authority: COption::None,
-        },
-        &mut bytes,
-    )
-    .expect("empty Hoard vault");
-    bytes
-}
-
 fn set_account(context: &mut ProgramTestContext, key: Pubkey, account: Account) {
     context.set_account(&key, &AccountSharedData::from(account));
-}
-
-fn active_funding_account(
-    market: Pubkey,
-    manifest_id: CapabilityContentId,
-    manifest: CapabilityManifestV1<'_>,
-    entry_index: u16,
-) -> (Pubkey, Account) {
-    let rent = Rent::default().minimum_balance(FUNDING_STATE_BYTES);
-    let custody = FundingCustodyObservationV1::native_only(
-        rent.checked_mul(2)
-            .and_then(|value| value.checked_add(BOUNTY))
-            .expect("bounded funding custody"),
-        rent,
-    )
-    .expect("funding custody");
-    let mut state = FundingStateV1::new(manifest_id, manifest, entry_index, custody)
-        .expect("pending funding state");
-    state
-        .activate(manifest_id, manifest, custody, 1)
-        .expect("active funding state");
-    let key = funding_key(market, manifest_id, manifest, entry_index);
-    (
-        key,
-        Account {
-            lamports: rent + BOUNTY,
-            data: state.to_bytes().to_vec(),
-            owner: RESOLUTION_PROGRAM_ID,
-            executable: false,
-            rent_epoch: 0,
-        },
-    )
 }
 
 async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
@@ -251,8 +197,8 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
     )
     .expect("lifecycle RentCredit");
     let state = CoreState {
-        phase: Phase::Open,
-        readiness: Readiness::Consumed,
+        phase: Phase::Founding,
+        readiness: Readiness::Prepaid,
         terminal_winner: 0,
         identity,
         outstanding_capabilities: 0,
@@ -284,33 +230,13 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
         protocol_account(RENT_PROGRAM_ID, rent_credit_value.to_bytes().to_vec()),
     );
 
-    let material_account = observed(&mut context, base.source_material.raw)
-        .await
-        .expect("Source material");
-    let material_id = hash(&material_account.data).to_bytes();
-    let (source, source_bump) = Pubkey::find_program_address(
+    let (source, _) = Pubkey::find_program_address(
         &[
             SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
             market.as_ref(),
             &GENERATION.to_le_bytes(),
         ],
         &RESOLUTION_PROGRAM_ID,
-    );
-    let source_value = SourceResolutionStateV2::fresh(
-        market.to_bytes(),
-        GENERATION,
-        source_id(material_id),
-        rent_credit.to_bytes(),
-        source_bump,
-        0,
-        0,
-    )
-    .expect("fresh Source")
-    .state();
-    set_account(
-        &mut context,
-        source,
-        protocol_account(RESOLUTION_PROGRAM_ID, source_value.to_bytes().to_vec()),
     );
     let certificate = Pubkey::find_program_address(
         &[
@@ -337,23 +263,16 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
     let manifest_id = CapabilityContentId::new(hash(&manifest_account.data).to_bytes())
         .expect("manifest identity");
     let manifest = CapabilityManifestV1::decode(&manifest_account.data).expect("manifest");
-    let mut funding = [Pubkey::default(); 3];
-    for (slot, entry) in funding.iter_mut().zip([0_u16, 1, 2]) {
-        let (key, account) = active_funding_account(market, manifest_id, manifest, entry);
-        *slot = key;
-        set_account(&mut context, key, account);
-    }
+    let funding = [0_u16, 1, 2].map(|entry| funding_key(market, manifest_id, manifest, entry));
 
-    let replay_request = joined_custody_request(
+    let replay_request = custody_request(
         release_set,
         market,
         base.realm,
         base.mint,
+        context.payer.pubkey(),
         rent_credit,
-        OperationV1::CloseVault,
-        [0; 32],
-        CUSTODY_REVISION,
-        0,
+        OperationV1::InitializeReplay,
     );
     let replay = Pubkey::find_program_address(
         &CustodyReplaySeedsV1::from_request(replay_request).as_slices(),
@@ -369,44 +288,13 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
         &CustodyVaultSeedsV1::new(
             market.to_bytes(),
             release_set,
-            CUSTODY_CONTEXT,
+            market.to_bytes(),
             CompartmentV1::HoardPrincipal,
         )
         .as_slices(),
         &CUSTODY_PROGRAM_ID,
     )
     .0;
-    let replay_value = CustodyReplayV1 {
-        caller_role: CallerRoleV1::Core,
-        release_set,
-        market: market.to_bytes(),
-        realm: base.realm,
-        context: CUSTODY_CONTEXT,
-        caller_program: CORE_PROGRAM_ID.to_bytes(),
-        rent_refund: rent_credit.to_bytes(),
-        open_vault_count: 1,
-        next_revision: CUSTODY_REVISION,
-        generation: GENERATION,
-        last_request_digest: [0xe1; 32],
-        last_poststate_commitment: [0xe2; 32],
-    };
-    set_account(
-        &mut context,
-        replay,
-        protocol_account(
-            CUSTODY_PROGRAM_ID,
-            replay_value.to_bytes().expect("replay").to_vec(),
-        ),
-    );
-    set_account(
-        &mut context,
-        vault,
-        protocol_account(
-            Pubkey::new_from_array(LEGACY_TOKEN_PROGRAM_ID),
-            token_account_data(base.mint, custody_authority),
-        ),
-    );
-
     let claims_aggregate = Pubkey::find_program_address(
         &[LIABILITY_BASIS_MARKET_SEED_V2, market.as_ref()],
         &CLAIMS_PROGRAM_ID,
@@ -430,7 +318,7 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
             product_instance_id: identity.product_record.to_bytes(),
             basis_id: [0xd2; 32],
             realm_id: base.realm,
-            custody_context: CUSTODY_CONTEXT,
+            custody_context: market.to_bytes(),
             generation: GENERATION,
         },
         &[0, 0, 0, 0, 0],
@@ -470,91 +358,6 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
         },
         context,
     )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn joined_custody_request(
-    release_set: [u8; 32],
-    market: Pubkey,
-    realm: [u8; 32],
-    mint: Pubkey,
-    rent_credit: Pubkey,
-    operation: OperationV1,
-    parent_request_digest: [u8; 32],
-    expected_revision: u64,
-    transfer_index: u16,
-) -> CustodyRequestV1 {
-    let close_vault = operation == OperationV1::CloseVault;
-    let vault = Pubkey::find_program_address(
-        &CustodyVaultSeedsV1::new(
-            market.to_bytes(),
-            release_set,
-            CUSTODY_CONTEXT,
-            CompartmentV1::HoardPrincipal,
-        )
-        .as_slices(),
-        &CUSTODY_PROGRAM_ID,
-    )
-    .0;
-    CustodyRequestV1 {
-        operation,
-        caller_role: CallerRoleV1::Core,
-        source_compartment: if close_vault {
-            CompartmentV1::HoardPrincipal
-        } else {
-            CompartmentV1::None
-        },
-        destination_compartment: CompartmentV1::None,
-        release_set,
-        market: market.to_bytes(),
-        realm,
-        context: CUSTODY_CONTEXT,
-        caller_program: CORE_PROGRAM_ID.to_bytes(),
-        semantic: ContextV1 {
-            candidate: [0xd3; 32],
-            source_owner: [0; 32],
-            destination_owner: [0; 32],
-            order: [0xd4; 32],
-            parent_request_digest,
-            order_nonce: 9,
-            generation: GENERATION,
-            page_index: 2,
-            execution_index: 3,
-            transfer_index,
-        },
-        source: if close_vault {
-            vault.to_bytes()
-        } else {
-            [0; 32]
-        },
-        destination: [0; 32],
-        source_vault_context: if close_vault {
-            CUSTODY_CONTEXT
-        } else {
-            [0; 32]
-        },
-        destination_vault_context: [0; 32],
-        mint: if close_vault {
-            mint.to_bytes()
-        } else {
-            [0; 32]
-        },
-        token_program: if close_vault {
-            LEGACY_TOKEN_PROGRAM_ID
-        } else {
-            [0; 32]
-        },
-        payer: [0; 32],
-        rent_refund: rent_credit.to_bytes(),
-        expected_revision,
-        resulting_revision: expected_revision + 1,
-        amount: 0,
-        rent_lamports: if close_vault {
-            Rent::default().minimum_balance(TOKEN_ACCOUNT_BYTES)
-        } else {
-            Rent::default().minimum_balance(CUSTODY_REPLAY_BYTES_V1)
-        },
-    }
 }
 
 struct RetirementPlan {
@@ -714,10 +517,131 @@ async fn joined_snapshot(
     }
 }
 
+async fn execute_same_lineage_funding_and_open(
+    context: &mut ProgramTestContext,
+    fixture: &JoinedFixture,
+) {
+    let payer = context.payer.pubkey();
+    let before_create = open_rollback_snapshot(context, &fixture.base).await;
+    let create = build_resolution_create_fund_v3(&create_snapshot(context, &fixture.base).await)
+        .expect("chain-derived same-Market CreateFund");
+    validate_resolution_create_fund_report_v3(&create).expect("exact same-Market CreateFund");
+    let mut create_instructions = Vec::with_capacity(5);
+    create_instructions.push(transfer(
+        &payer,
+        &fixture.base.source,
+        create.source_top_up_lamports,
+    ));
+    for (funding, top_up) in fixture
+        .base
+        .funding
+        .into_iter()
+        .zip(create.funding_top_up_lamports)
+    {
+        create_instructions.push(transfer(&payer, &funding, top_up));
+    }
+    create_instructions.push(create.instruction.clone());
+    let mut substituted_system = create_instructions.clone();
+    substituted_system
+        .last_mut()
+        .expect("CreateFund instruction")
+        .accounts[17]
+        .pubkey = sysvar::rent::ID;
+    assert!(
+        submit(context, &substituted_system).await.is_err(),
+        "a substituted System program must refuse after all four top-ups"
+    );
+    assert_eq!(
+        open_rollback_snapshot(context, &fixture.base).await,
+        before_create,
+        "late CreateFund refusal rolls the Market, Source, three Funds, Custody, and RentCredit back"
+    );
+    submit(context, &create_instructions)
+        .await
+        .expect("create exact same-Market Source and three pending Funds");
+    for funding in fixture.base.funding {
+        assert_eq!(
+            FundingStateV1::decode(
+                &observed(context, funding)
+                    .await
+                    .expect("created same-Market Funding")
+                    .data,
+            )
+            .expect("Funding state")
+            .status(),
+            FundingStatus::Pending,
+        );
+    }
+
+    let verify =
+        build_resolution_verify_fund_ready_v3(&verify_snapshot(context, &fixture.base).await)
+            .expect("chain-derived same-Market VerifyFundReady");
+    validate_resolution_verify_fund_ready_report_v3(&verify)
+        .expect("exact same-Market VerifyFundReady");
+    let before_verify = open_rollback_snapshot(context, &fixture.base).await;
+    let mut read_only_beneficiary = verify.instruction.clone();
+    read_only_beneficiary.accounts[16].is_writable = false;
+    assert!(
+        submit(context, &[read_only_beneficiary]).await.is_err(),
+        "a read-only immutable beneficiary must refuse"
+    );
+    assert_eq!(
+        open_rollback_snapshot(context, &fixture.base).await,
+        before_verify,
+        "VerifyFundReady privilege refusal rolls every funding ledger back"
+    );
+    submit(context, &[verify.instruction])
+        .await
+        .expect("activate exact same-Market three-ledger funding");
+
+    let before_open = open_rollback_snapshot(context, &fixture.base).await;
+    let mut substituted_admission =
+        open_instruction(context, &fixture.base, payer, OperationV1::InitializeReplay).await;
+    substituted_admission
+        .accounts
+        .last_mut()
+        .expect("Registry continuation admission")
+        .pubkey = Pubkey::new_unique();
+    assert!(
+        submit(context, &[substituted_admission]).await.is_err(),
+        "a substituted Registry continuation admission must refuse"
+    );
+    assert_eq!(
+        open_rollback_snapshot(context, &fixture.base).await,
+        before_open,
+        "late Registry refusal rolls Market and all Custody creation back"
+    );
+    for operation in [OperationV1::InitializeReplay, OperationV1::OpenVault] {
+        let instruction = open_instruction(context, &fixture.base, payer, operation).await;
+        submit(context, &[instruction])
+            .await
+            .expect("transaction-produce the same-Market Custody replay and Hoard vault");
+    }
+    let market = CoreState::decode(
+        &observed(context, fixture.base.market)
+            .await
+            .expect("opened same-Market")
+            .data,
+    )
+    .expect("Core Market state");
+    assert_eq!(market.phase, Phase::Open);
+    assert_eq!(market.readiness, Readiness::Consumed);
+    let replay = CustodyReplayV1::decode(
+        &observed(context, fixture.base.replay)
+            .await
+            .expect("transaction-created Custody replay")
+            .data,
+    )
+    .expect("Custody replay state");
+    assert_eq!(replay.next_revision, CUSTODY_REVISION);
+    assert_eq!(replay.open_vault_count, 1);
+}
+
 async fn execute_same_lineage_real_provider(
     context: &mut ProgramTestContext,
     fixture: &JoinedFixture,
 ) {
+    execute_same_lineage_funding_and_open(context, fixture).await;
     let encoded_vaa =
         pyth_provider::initialize_real_providers(context, fixture.base.provider).await;
     let mut clock = context
