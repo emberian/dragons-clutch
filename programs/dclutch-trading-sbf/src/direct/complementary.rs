@@ -12,7 +12,7 @@ use dclutch_claims_svm::{
     },
 };
 use dclutch_custody_contract::{
-    CallerRoleV1, CompartmentV1, ContextV1, CustodyRequestV1, OperationV1,
+    CallerRoleV1, CompartmentV1, ContextV1, CustodyReplayV1, CustodyRequestV1, OperationV1,
 };
 use dclutch_direct_codec::successor::{
     ComplementaryActionV2, ComplementarySettlementV2, DirectExecutionConfigV1,
@@ -21,8 +21,13 @@ use dclutch_direct_codec::successor::{
 use dclutch_market_core_codec::{CoreMarketViewV1, Phase};
 use solana_program::hash::{hash, hashv};
 
-use super::physical::{
-    DirectExternalCollateralV2, DirectExternalDebitV2, DirectPhysicalError, Result,
+use super::{
+    buy_escrow::{
+        DirectBuyEscrowAccountsV2, DirectBuyEscrowContextV2, OperationShapeV2,
+        request as buy_escrow_request, validate_accounts as validate_buy_escrow_accounts,
+        validate_replay as validate_buy_escrow_replay,
+    },
+    physical::{DirectExternalCollateralV2, DirectPhysicalError, Result},
 };
 
 /// Canonical route order for every complementary participant.
@@ -32,6 +37,12 @@ pub enum DirectComplementaryCustodyRouteV2 {
     PrincipalOrNet,
     /// Charge the participant's cumulative-difference fee.
     Fee,
+    /// Return a terminal price-improvement residual to the signed Buy source.
+    Residual,
+    /// Close the zero-balance record-keyed Buy Vault.
+    CloseBuyVault,
+    /// Close the quiescent record-keyed Buy replay cursor.
+    CloseBuyReplay,
 }
 
 /// Exact fixed-role facts common to every complementary Custody effect.
@@ -117,29 +128,46 @@ impl DirectComplementaryPhysicalContextV2 {
 
 /// Side-specific authenticated participant collateral endpoint.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DirectComplementaryCollateralV2 {
-    /// Registered Buy external source with exact Custody delegation.
-    BuySource(DirectExternalDebitV2),
+pub enum DirectComplementaryCollateralV2<'a> {
+    /// Registered Buy reserve held in exact record-keyed Custody.
+    BuyEscrow(&'a DirectComplementaryBuyEscrowV2),
     /// Registered Sell external destination.
     SellDestination(DirectExternalCollateralV2),
 }
 
+/// Authenticated record-keyed Custody state for one registered Buy participant.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectComplementaryBuyEscrowV2 {
+    /// Canonical record/replay/Vault/authority coordinates.
+    pub accounts: DirectBuyEscrowAccountsV2,
+    /// Current exact Custody replay state.
+    pub replay: CustodyReplayV1,
+    /// Current exact `TradingPrincipal` Vault balance.
+    pub vault_balance: u64,
+    /// Signed Buy source receiving any terminal reserve residual.
+    pub refund_destination: DirectExternalCollateralV2,
+    /// Exact Vault lamports recovered on terminal close.
+    pub vault_rent_lamports: u64,
+    /// Exact replay lamports recovered on terminal close.
+    pub replay_rent_lamports: u64,
+}
+
 /// Authenticated physical coordinates for one canonical outcome participant.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DirectComplementaryParticipantV2 {
+pub struct DirectComplementaryParticipantV2<'a> {
     /// Exact Direct maker-root account and Custody replay context.
     pub maker_root: [u8; 32],
     /// Exact live registered-record account.
     pub record: [u8; 32],
     /// Side-specific collateral account observation.
-    pub collateral: DirectComplementaryCollateralV2,
+    pub collateral: DirectComplementaryCollateralV2<'a>,
     /// Per-maker Custody replay revision before this participant's first effect.
     pub custody_replay_revision: u64,
 }
 
 /// Complete semantic input for one route and one canonical Product outcome.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DirectComplementaryProjectionInputV2 {
+pub struct DirectComplementaryProjectionInputV2<'a> {
     /// Split or merge.
     pub action: ComplementaryActionV2,
     /// Principal/net or fee route.
@@ -151,7 +179,7 @@ pub struct DirectComplementaryProjectionInputV2 {
     /// Sole checked Direct participant candidate.
     pub candidate: RegisteredFillCandidateV2,
     /// Authenticated account/token observations.
-    pub participant: DirectComplementaryParticipantV2,
+    pub participant: DirectComplementaryParticipantV2<'a>,
     /// Immutable selected Direct economics.
     pub config: DirectExecutionConfigV1,
     /// Fixed-role Market/Realm/Custody facts.
@@ -163,8 +191,8 @@ pub struct DirectComplementaryProjectionInputV2 {
 pub struct DirectComplementaryCustodyEffectV2 {
     /// Canonical Custody request.
     pub request: CustodyRequestV1,
-    /// Participant delegate allowance after both routes, for Buy only.
-    pub terminal_delegated_amount: Option<u64>,
+    /// Record-keyed Buy Vault balance after this route, absent for Sell routes.
+    pub buy_vault_after: Option<u64>,
 }
 
 /// Aggregate token poststate checked before the first complementary CPI.
@@ -415,22 +443,27 @@ pub fn validate_complementary_custody_aggregate_v2(
 /// maker's replay indices remain consecutive even though the two affine routes
 /// are globally separated.
 pub fn project_complementary_custody_effect_v2(
-    input: DirectComplementaryProjectionInputV2,
+    input: DirectComplementaryProjectionInputV2<'_>,
 ) -> Result<Option<DirectComplementaryCustodyEffectV2>> {
     input.context.validate(input.config)?;
     authenticate_coordinate(input)?;
+    if let DirectComplementaryCollateralV2::BuyEscrow(escrow) = input.participant.collateral {
+        return project_buy_escrow_effect(input, *escrow);
+    }
     let shape = effect_shape(input)?;
     if shape.amount == 0 {
         return Ok(None);
     }
-    let principal_positive = match input.action {
-        ComplementaryActionV2::Split => input.candidate.effects.gross_collateral_debit != 0,
-        ComplementaryActionV2::Merge => input.candidate.effects.net_collateral_credit != 0,
-    };
+    let principal_positive = input.candidate.effects.net_collateral_credit != 0;
     let transfer_index = match input.route {
         DirectComplementaryCustodyRouteV2::PrincipalOrNet => 0,
         DirectComplementaryCustodyRouteV2::Fee if principal_positive => 1,
         DirectComplementaryCustodyRouteV2::Fee => 0,
+        DirectComplementaryCustodyRouteV2::Residual
+        | DirectComplementaryCustodyRouteV2::CloseBuyVault
+        | DirectComplementaryCustodyRouteV2::CloseBuyReplay => {
+            return Err(DirectPhysicalError::Binding);
+        }
     };
     let expected_revision = input
         .participant
@@ -479,19 +512,158 @@ pub fn project_complementary_custody_effect_v2(
     request
         .validate()
         .map_err(|_| DirectPhysicalError::Custody)?;
-    let terminal_delegated_amount = match input.participant.collateral {
-        DirectComplementaryCollateralV2::BuySource(source) => Some(
-            source
-                .delegated_amount
-                .checked_sub(input.candidate.effects.gross_collateral_debit)
-                .and_then(|value| value.checked_sub(input.candidate.effects.fee_transfer))
-                .ok_or(DirectPhysicalError::Arithmetic)?,
-        ),
-        DirectComplementaryCollateralV2::SellDestination(_) => None,
-    };
     Ok(Some(DirectComplementaryCustodyEffectV2 {
         request,
-        terminal_delegated_amount,
+        buy_vault_after: None,
+    }))
+}
+
+fn project_buy_escrow_effect(
+    input: DirectComplementaryProjectionInputV2<'_>,
+    escrow: DirectComplementaryBuyEscrowV2,
+) -> Result<Option<DirectComplementaryCustodyEffectV2>> {
+    if input.action != ComplementaryActionV2::Split
+        || input.record_before.intent().side != 1
+        || input.participant.record != escrow.accounts.record
+        || input.participant.custody_replay_revision != escrow.replay.next_revision
+        || escrow.accounts.custody_authority != input.context.custody_authority
+        || escrow.vault_balance != input.record_before.reserved_collateral()
+        || escrow.refund_destination.account != input.record_before.intent().collateral_account
+        || escrow.refund_destination.owner != input.record_before.maker()
+    {
+        return Err(DirectPhysicalError::Binding);
+    }
+    let context = DirectBuyEscrowContextV2 {
+        core_market: input.context.core_market,
+        trading_program: input.context.trading_program,
+        parent_request_digest: input.context.parent_request_digest,
+    };
+    validate_buy_escrow_accounts(context, input.record_before, escrow.accounts)?;
+    validate_buy_escrow_replay(
+        context,
+        input.record_before,
+        escrow.accounts,
+        escrow.replay,
+        1,
+    )?;
+
+    let principal = input.candidate.effects.gross_collateral_debit;
+    let fee = input.candidate.effects.fee_transfer;
+    let (residual, closed) = match input.candidate.record {
+        RegisteredRecordAfterFillV2::Live(record) => (record.reserved_collateral(), false),
+        RegisteredRecordAfterFillV2::Closed(close) => (close.collateral_refund, true),
+    };
+    if principal
+        .checked_add(fee)
+        .and_then(|spent| spent.checked_add(residual))
+        != Some(escrow.vault_balance)
+    {
+        return Err(DirectPhysicalError::Postcondition);
+    }
+    if closed && (escrow.vault_rent_lamports == 0 || escrow.replay_rent_lamports == 0) {
+        return Err(DirectPhysicalError::Binding);
+    }
+
+    let principal_count = u64::from(principal != 0);
+    let fee_count = u64::from(fee != 0);
+    let residual_count = u64::from(closed && residual != 0);
+    let (amount, offset, shape, vault_after) = match input.route {
+        DirectComplementaryCustodyRouteV2::PrincipalOrNet => (
+            principal,
+            0,
+            OperationShapeV2::Withdraw {
+                destination: input.context.hoard_token_account,
+                destination_owner: [0; 32],
+                destination_compartment: CompartmentV1::HoardPrincipal,
+                destination_vault_context: input.context.claims_aggregate(),
+                amount: principal,
+            },
+            escrow
+                .vault_balance
+                .checked_sub(principal)
+                .ok_or(DirectPhysicalError::Arithmetic)?,
+        ),
+        DirectComplementaryCustodyRouteV2::Fee => (
+            fee,
+            principal_count,
+            OperationShapeV2::Withdraw {
+                destination: input.context.fee_destination.account,
+                destination_owner: input.context.fee_destination.owner,
+                destination_compartment: CompartmentV1::External,
+                destination_vault_context: [0; 32],
+                amount: fee,
+            },
+            escrow
+                .vault_balance
+                .checked_sub(principal)
+                .and_then(|value| value.checked_sub(fee))
+                .ok_or(DirectPhysicalError::Arithmetic)?,
+        ),
+        DirectComplementaryCustodyRouteV2::Residual if closed => (
+            residual,
+            principal_count
+                .checked_add(fee_count)
+                .ok_or(DirectPhysicalError::Arithmetic)?,
+            OperationShapeV2::Withdraw {
+                destination: escrow.refund_destination.account,
+                destination_owner: escrow.refund_destination.owner,
+                destination_compartment: CompartmentV1::External,
+                destination_vault_context: [0; 32],
+                amount: residual,
+            },
+            0,
+        ),
+        DirectComplementaryCustodyRouteV2::CloseBuyVault if closed => (
+            1,
+            principal_count
+                .checked_add(fee_count)
+                .and_then(|value| value.checked_add(residual_count))
+                .ok_or(DirectPhysicalError::Arithmetic)?,
+            OperationShapeV2::CloseVault {
+                rent_refund: input.record_before.rent_owner(),
+                rent_lamports: escrow.vault_rent_lamports,
+            },
+            0,
+        ),
+        DirectComplementaryCustodyRouteV2::CloseBuyReplay if closed => (
+            1,
+            principal_count
+                .checked_add(fee_count)
+                .and_then(|value| value.checked_add(residual_count))
+                .and_then(|value| value.checked_add(1))
+                .ok_or(DirectPhysicalError::Arithmetic)?,
+            OperationShapeV2::CloseReplay {
+                rent_refund: input.record_before.rent_owner(),
+                rent_lamports: escrow.replay_rent_lamports,
+            },
+            0,
+        ),
+        DirectComplementaryCustodyRouteV2::Residual
+        | DirectComplementaryCustodyRouteV2::CloseBuyVault
+        | DirectComplementaryCustodyRouteV2::CloseBuyReplay => {
+            return Ok(None);
+        }
+    };
+    if amount == 0 {
+        return Ok(None);
+    }
+    let expected_revision = escrow
+        .replay
+        .next_revision
+        .checked_add(offset)
+        .ok_or(DirectPhysicalError::Arithmetic)?;
+    let transfer_index = u16::try_from(offset).map_err(|_| DirectPhysicalError::Arithmetic)?;
+    let request = buy_escrow_request(
+        context,
+        input.record_before,
+        escrow.accounts,
+        shape,
+        expected_revision,
+        transfer_index,
+    )?;
+    Ok(Some(DirectComplementaryCustodyEffectV2 {
+        request,
+        buy_vault_after: Some(vault_after),
     }))
 }
 
@@ -509,7 +681,7 @@ pub fn validate_complementary_custody_request_v2(
     Ok(())
 }
 
-fn authenticate_coordinate(input: DirectComplementaryProjectionInputV2) -> Result<()> {
+fn authenticate_coordinate(input: DirectComplementaryProjectionInputV2<'_>) -> Result<()> {
     let intent = input.record_before.intent();
     let candidate_nonce = match input.candidate.record {
         RegisteredRecordAfterFillV2::Live(record) => {
@@ -597,36 +769,8 @@ struct CustodyShapeV2 {
     amount: u64,
 }
 
-fn effect_shape(input: DirectComplementaryProjectionInputV2) -> Result<CustodyShapeV2> {
+fn effect_shape(input: DirectComplementaryProjectionInputV2<'_>) -> Result<CustodyShapeV2> {
     match (input.action, input.route, input.participant.collateral) {
-        (
-            ComplementaryActionV2::Split,
-            DirectComplementaryCustodyRouteV2::PrincipalOrNet,
-            DirectComplementaryCollateralV2::BuySource(source),
-        ) => {
-            authenticate_buy(input, source)?;
-            Ok(CustodyShapeV2 {
-                source: source.account,
-                destination: input.context.hoard_token_account,
-                source_compartment: CompartmentV1::External,
-                destination_compartment: CompartmentV1::HoardPrincipal,
-                amount: input.candidate.effects.gross_collateral_debit,
-            })
-        }
-        (
-            ComplementaryActionV2::Split,
-            DirectComplementaryCustodyRouteV2::Fee,
-            DirectComplementaryCollateralV2::BuySource(source),
-        ) => {
-            authenticate_buy(input, source)?;
-            Ok(CustodyShapeV2 {
-                source: source.account,
-                destination: input.context.fee_destination.account,
-                source_compartment: CompartmentV1::External,
-                destination_compartment: CompartmentV1::External,
-                amount: input.candidate.effects.fee_transfer,
-            })
-        }
         (
             ComplementaryActionV2::Merge,
             DirectComplementaryCustodyRouteV2::PrincipalOrNet,
@@ -660,23 +804,10 @@ fn effect_shape(input: DirectComplementaryProjectionInputV2) -> Result<CustodySh
 }
 
 fn owner_and_vault_shape(
-    input: DirectComplementaryProjectionInputV2,
+    input: DirectComplementaryProjectionInputV2<'_>,
 ) -> ([u8; 32], [u8; 32], [u8; 32], [u8; 32]) {
     match input.participant.collateral {
-        DirectComplementaryCollateralV2::BuySource(source) => (
-            source.owner,
-            if input.route == DirectComplementaryCustodyRouteV2::Fee {
-                input.context.fee_destination.owner
-            } else {
-                [0; 32]
-            },
-            [0; 32],
-            if input.route == DirectComplementaryCustodyRouteV2::PrincipalOrNet {
-                input.context.claims_aggregate()
-            } else {
-                [0; 32]
-            },
-        ),
+        DirectComplementaryCollateralV2::BuyEscrow(_) => ([0; 32], [0; 32], [0; 32], [0; 32]),
         DirectComplementaryCollateralV2::SellDestination(destination) => (
             [0; 32],
             if input.route == DirectComplementaryCustodyRouteV2::Fee {
@@ -690,38 +821,8 @@ fn owner_and_vault_shape(
     }
 }
 
-fn authenticate_buy(
-    input: DirectComplementaryProjectionInputV2,
-    source: DirectExternalDebitV2,
-) -> Result<()> {
-    let spent = input
-        .candidate
-        .effects
-        .gross_collateral_debit
-        .checked_add(input.candidate.effects.fee_transfer)
-        .ok_or(DirectPhysicalError::Arithmetic)?;
-    let residual = match input.candidate.record {
-        RegisteredRecordAfterFillV2::Live(record) => record.reserved_collateral(),
-        RegisteredRecordAfterFillV2::Closed(close) => close.collateral_refund,
-    };
-    if source.account == [0; 32]
-        || source.owner == [0; 32]
-        || source.delegate != input.context.custody_authority
-        || source.owner != input.record_before.maker()
-        || source.account != input.record_before.intent().collateral_account
-        || source.delegated_amount
-            != residual
-                .checked_add(spent)
-                .ok_or(DirectPhysicalError::Arithmetic)?
-        || source.balance < spent
-    {
-        return Err(DirectPhysicalError::Binding);
-    }
-    Ok(())
-}
-
 fn authenticate_sell(
-    input: DirectComplementaryProjectionInputV2,
+    input: DirectComplementaryProjectionInputV2<'_>,
     destination: DirectExternalCollateralV2,
 ) -> Result<()> {
     if destination.account == [0; 32]

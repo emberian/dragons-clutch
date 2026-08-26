@@ -167,6 +167,19 @@ fn register(
     .expect("registration")
 }
 
+fn register_canonical(
+    root: DirectRootStateV1,
+    maker: [u8; 32],
+    signed: CompactIntentV2,
+    selected: DirectExecutionConfigV1,
+) -> RegisteredIntentCreationV2 {
+    let authenticated = AuthenticatedCompactIntentV2::from_adjacent_ed25519(maker, signed)
+        .expect("authenticated canonical registration");
+    let seeds = RegisteredIntentSeedsV2::new(authenticated).expect("record seeds");
+    let (_, bump) = derive_pda(id(10), &seeds.as_slices());
+    register(root, maker, signed, selected, bump)
+}
+
 fn fixture(fee_basis_points: u16) -> (RegisteredOrdinaryInputV2, DirectOrdinaryClaimsContextV2) {
     let selected = config(fee_basis_points, id(6));
     let seller = register(
@@ -407,10 +420,12 @@ fn state_candidate_is_commit_last_for_partial_and_terminal_records() {
 }
 
 fn complementary_context() -> DirectComplementaryPhysicalContextV2 {
+    let (custody_authority, _) =
+        derive_pda(id(20), &[CUSTODY_AUTHORITY_PDA_DOMAIN_V1, &id(1), &id(13)]);
     DirectComplementaryPhysicalContextV2 {
         trading_program: id(10),
         core_market: core_market_view(3),
-        custody_authority: id(23),
+        custody_authority,
         parent_request_digest: id(17),
         hoard_token_account: id(41),
         hoard_balance: 500,
@@ -430,7 +445,7 @@ fn complementary_candidates(
     [RegisteredFillCandidateV2; 3],
 ) {
     let prices = [20_u64, 30, 50];
-    let seed = register(
+    let seed = register_canonical(
         DirectRootStateV1::new(),
         id(70),
         CompactIntentV2 {
@@ -448,7 +463,6 @@ fn complementary_candidates(
             collateral_account: id(30),
         },
         config(1_000, id(6)),
-        1,
     );
     let mut roots = [seed.maker_root; 3];
     let mut records = [seed.record; 3];
@@ -456,7 +470,7 @@ fn complementary_candidates(
     for (index, price) in prices.iter().copied().enumerate() {
         let maker = id(u8::try_from(index + 2).expect("maker"));
         let outcome = u32::try_from(index).expect("outcome");
-        let created = register(
+        let created = register_canonical(
             root,
             maker,
             CompactIntentV2 {
@@ -474,7 +488,6 @@ fn complementary_candidates(
                 collateral_account: id(u8::try_from(index + 30).expect("collateral")),
             },
             config(1_000, id(6)),
-            u8::try_from(index + 2).expect("bump"),
         );
         root = created.root;
         *roots.get_mut(index).expect("root slot") = created.maker_root;
@@ -537,17 +550,66 @@ fn complementary_custody_routes_are_affine_ordered_and_hostile_bound() {
     let (_buy_roots, buy_records, buy_candidates) = complementary_candidates(1);
     let buy_record = *buy_records.get(1).expect("buy record");
     let buy_candidate = *buy_candidates.get(1).expect("buy candidate");
-    let buy_source = DirectExternalDebitV2 {
-        account: buy_record.intent().collateral_account,
-        owner: buy_record.maker(),
-        delegate: id(23),
-        delegated_amount: buy_record.reserved_collateral(),
-        balance: 100,
+    let record_seeds = RegisteredIntentSeedsV2::from_record(buy_record);
+    let (record, bump) = derive_pda(id(10), &record_seeds.as_slices());
+    assert_eq!(bump, buy_record.bump());
+    let market = id(1);
+    let release_set = id(13);
+    let custody_program = id(20);
+    let (custody_authority, _) = derive_pda(
+        custody_program,
+        &[CUSTODY_AUTHORITY_PDA_DOMAIN_V1, &market, &release_set],
+    );
+    let (replay, _) = derive_pda(
+        custody_program,
+        &[CUSTODY_REPLAY_PDA_DOMAIN_V1, &market, &release_set, &record],
+    );
+    let compartment = [CompartmentV1::TradingPrincipal.tag()];
+    let (vault, _) = derive_pda(
+        custody_program,
+        &[
+            CUSTODY_VAULT_PDA_DOMAIN_V1,
+            &market,
+            &release_set,
+            &record,
+            &compartment,
+        ],
+    );
+    let accounts = DirectBuyEscrowAccountsV2 {
+        record,
+        replay,
+        vault,
+        custody_authority,
+    };
+    let escrow = DirectComplementaryBuyEscrowV2 {
+        accounts,
+        replay: CustodyReplayV1 {
+            caller_role: dclutch_custody_contract::CallerRoleV1::Trading,
+            release_set,
+            market,
+            realm: id(14),
+            context: record,
+            caller_program: id(10),
+            rent_refund: buy_record.rent_owner(),
+            open_vault_count: 1,
+            next_revision: 10,
+            generation: 4,
+            last_request_digest: id(70),
+            last_poststate_commitment: id(71),
+        },
+        vault_balance: buy_record.reserved_collateral(),
+        refund_destination: DirectExternalCollateralV2 {
+            account: buy_record.intent().collateral_account,
+            owner: buy_record.maker(),
+            balance: 50,
+        },
+        vault_rent_lamports: 30,
+        replay_rent_lamports: 20,
     };
     let participant = DirectComplementaryParticipantV2 {
         maker_root: id(51),
-        record: id(61),
-        collateral: DirectComplementaryCollateralV2::BuySource(buy_source),
+        record,
+        collateral: DirectComplementaryCollateralV2::BuyEscrow(&escrow),
         custody_replay_revision: 10,
     };
     let projection = |route, participant| DirectComplementaryProjectionInputV2 {
@@ -567,13 +629,13 @@ fn complementary_custody_routes_are_affine_ordered_and_hostile_bound() {
     .expect("split principal")
     .expect("positive split principal");
     assert_eq!(principal.request.amount, 30);
-    assert_eq!(principal.request.source, buy_source.account);
+    assert_eq!(principal.request.source, vault);
     assert_eq!(principal.request.destination, id(41));
     assert_eq!(principal.request.destination_vault_context, id(40));
     assert_ne!(principal.request.destination_vault_context, id(1));
     assert_eq!(principal.request.semantic.transfer_index, 0);
     assert_eq!(principal.request.expected_revision, 10);
-    assert_eq!(principal.terminal_delegated_amount, Some(0));
+    assert_eq!(principal.buy_vault_after, Some(3));
     let mut market_as_hoard_context = principal.request;
     market_as_hoard_context.destination_vault_context = id(1);
     assert_eq!(
@@ -590,12 +652,41 @@ fn complementary_custody_routes_are_affine_ordered_and_hostile_bound() {
     assert_eq!(fee.request.destination, id(22));
     assert_eq!(fee.request.semantic.transfer_index, 1);
     assert_eq!(fee.request.expected_revision, 11);
+    assert_eq!(fee.buy_vault_after, Some(0));
 
+    assert_eq!(
+        project_complementary_custody_effect_v2(projection(
+            DirectComplementaryCustodyRouteV2::Residual,
+            participant,
+        )),
+        Ok(None)
+    );
+    let close_vault = project_complementary_custody_effect_v2(projection(
+        DirectComplementaryCustodyRouteV2::CloseBuyVault,
+        participant,
+    ))
+    .expect("close projection")
+    .expect("terminal Vault close");
+    assert_eq!(close_vault.request.operation, OperationV1::CloseVault);
+    assert_eq!(close_vault.request.expected_revision, 12);
+    let close_replay = project_complementary_custody_effect_v2(projection(
+        DirectComplementaryCustodyRouteV2::CloseBuyReplay,
+        participant,
+    ))
+    .expect("close projection")
+    .expect("terminal replay close");
+    assert_eq!(close_replay.request.operation, OperationV1::CloseReplay);
+    assert_eq!(close_replay.request.expected_revision, 13);
+
+    let hostile_escrow = DirectComplementaryBuyEscrowV2 {
+        accounts: DirectBuyEscrowAccountsV2 {
+            vault: id(99),
+            ..accounts
+        },
+        ..escrow
+    };
     let hostile = DirectComplementaryParticipantV2 {
-        collateral: DirectComplementaryCollateralV2::BuySource(DirectExternalDebitV2 {
-            delegate: id(99),
-            ..buy_source
-        }),
+        collateral: DirectComplementaryCollateralV2::BuyEscrow(&hostile_escrow),
         ..participant
     };
     assert_eq!(

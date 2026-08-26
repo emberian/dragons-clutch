@@ -292,9 +292,11 @@ pub fn prepare_buy_escrow_fill_v2(
             input.context,
             buyer_before,
             input.accounts,
-            OperationShapeV2::Refund {
+            OperationShapeV2::Withdraw {
                 destination: input.seller_destination.account,
                 destination_owner: input.seller_destination.owner,
+                destination_compartment: CompartmentV1::External,
+                destination_vault_context: [0; 32],
                 amount: settlement.seller_net_collateral_credit,
             },
             revision,
@@ -318,9 +320,11 @@ pub fn prepare_buy_escrow_fill_v2(
             input.context,
             buyer_before,
             input.accounts,
-            OperationShapeV2::Refund {
+            OperationShapeV2::Withdraw {
                 destination: input.fee_destination.account,
                 destination_owner: input.fee_destination.owner,
+                destination_compartment: CompartmentV1::External,
+                destination_vault_context: [0; 32],
                 amount: settlement.total_fee_transfer,
             },
             revision,
@@ -353,9 +357,11 @@ pub fn prepare_buy_escrow_fill_v2(
                 input.context,
                 buyer_before,
                 input.accounts,
-                OperationShapeV2::Refund {
+                OperationShapeV2::Withdraw {
                     destination: input.buyer_refund_destination.account,
                     destination_owner: input.buyer_refund_destination.owner,
+                    destination_compartment: CompartmentV1::External,
+                    destination_vault_context: [0; 32],
                     amount: close.collateral_refund,
                 },
                 revision,
@@ -510,9 +516,11 @@ fn prepare_buy_escrow_terminal(
             input.context,
             input.record_before,
             input.accounts,
-            OperationShapeV2::Refund {
+            OperationShapeV2::Withdraw {
                 destination: input.refund_destination.account,
                 destination_owner: input.refund_destination.owner,
+                destination_compartment: CompartmentV1::External,
+                destination_vault_context: [0; 32],
                 amount: close.collateral_refund,
             },
             revision,
@@ -568,7 +576,7 @@ fn prepare_buy_escrow_terminal(
     })
 }
 
-enum OperationShapeV2 {
+pub(super) enum OperationShapeV2 {
     InitializeReplay {
         payer: [u8; 32],
         rent_refund: [u8; 32],
@@ -584,9 +592,11 @@ enum OperationShapeV2 {
         source_owner: [u8; 32],
         amount: u64,
     },
-    Refund {
+    Withdraw {
         destination: [u8; 32],
         destination_owner: [u8; 32],
+        destination_compartment: CompartmentV1,
+        destination_vault_context: [u8; 32],
         amount: u64,
     },
     CloseVault {
@@ -599,7 +609,7 @@ enum OperationShapeV2 {
     },
 }
 
-fn request(
+pub(super) fn request(
     context: DirectBuyEscrowContextV2,
     record: DirectRegisteredIntentV2,
     accounts: DirectBuyEscrowAccountsV2,
@@ -686,18 +696,21 @@ fn request(
             value.token_program = realm.token_program.to_bytes();
             value.amount = amount;
         }
-        OperationShapeV2::Refund {
+        OperationShapeV2::Withdraw {
             destination,
             destination_owner,
+            destination_compartment,
+            destination_vault_context,
             amount,
         } => {
             value.operation = OperationV1::Transfer;
             value.source_compartment = CompartmentV1::TradingPrincipal;
-            value.destination_compartment = CompartmentV1::External;
+            value.destination_compartment = destination_compartment;
             value.semantic.destination_owner = destination_owner;
             value.source = accounts.vault;
             value.destination = destination;
             value.source_vault_context = accounts.record;
+            value.destination_vault_context = destination_vault_context;
             value.mint = realm.collateral_mint.to_bytes();
             value.token_program = realm.token_program.to_bytes();
             value.amount = amount;
@@ -742,7 +755,7 @@ fn validate_buy_record(
     Ok(())
 }
 
-fn validate_accounts(
+pub(super) fn validate_accounts(
     context: DirectBuyEscrowContextV2,
     record: DirectRegisteredIntentV2,
     accounts: DirectBuyEscrowAccountsV2,
@@ -795,7 +808,7 @@ fn validate_accounts(
     Ok(())
 }
 
-fn validate_replay(
+pub(super) fn validate_replay(
     context: DirectBuyEscrowContextV2,
     record: DirectRegisteredIntentV2,
     accounts: DirectBuyEscrowAccountsV2,
