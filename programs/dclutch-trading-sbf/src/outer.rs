@@ -29,7 +29,7 @@ use dclutch_effect_kernel::v2::{
 use dclutch_market_core_codec::{
     CORE_EFFECT_ACK_BYTES_V1, CORE_EFFECT_DIGEST_DOMAIN_V1, CORE_EFFECT_ENVELOPE_BYTES_V1,
     CoreEffectAckV1, CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState, Identity,
-    MarketCoreStateSeedsV1, Role, STATE_BYTES,
+    MarketCoreStateSeedsV2, Role, STATE_BYTES,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::ACTIVATION_PDA_DOMAIN_V1;
@@ -420,7 +420,7 @@ fn authenticate_market_and_caller(
         .map_err(|_| TradingSbfError::Content)?;
     let state = CoreState::decode(&bytes).map_err(|_| TradingSbfError::Content)?;
     let canonical = state.encode().map_err(|_| TradingSbfError::Content)?;
-    let seeds = MarketCoreStateSeedsV1::new(state.identity);
+    let seeds = MarketCoreStateSeedsV2::new(state.identity);
     let expected_market =
         Pubkey::find_program_address(&seeds.as_slices(), suffix.core_program.key).0;
     if canonical.as_slice() != bytes.as_ref()
