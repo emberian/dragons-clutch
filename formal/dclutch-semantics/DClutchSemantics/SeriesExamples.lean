@@ -55,11 +55,14 @@ def releaseSet : ExecutionRelease.ReleaseSet := {
   custody := custodyBinding
 }
 
+def marketRegistryProgram : ExecutionRelease.Identity := 106
+
 def releaseAdmission : ExecutionRelease.Admission := {
+  marketRegistryProgram
   marketReleaseSetId := 77
   selected := releaseSet
   receipt := {
-    registryProgram := coreBinding.program
+    registryProgram := marketRegistryProgram
     releaseSetId := 77
     role := .core
     observed := coreBinding
@@ -67,6 +70,14 @@ def releaseAdmission : ExecutionRelease.Admission := {
     currentDeploymentReauthenticated := true
   }
 }
+
+theorem registry_ownership_is_distinct_and_exactly_joined :
+    marketRegistryProgram ≠ coreBinding.program /\
+    releaseAdmission.marketRegistryProgram = marketRegistryProgram /\
+    releaseAdmission.receipt.registryProgram = marketRegistryProgram /\
+    releaseAdmission.marketReleaseSetId = releaseSet.releaseSetId /\
+    ExecutionRelease.admits releaseAdmission .core = true := by
+  native_decide
 
 def template : Template := {
   templateId := 11

@@ -31,11 +31,14 @@ def release : ReleaseSet := {
   custody := binding 14 15 16
 }
 
+def marketRegistryProgram : Identity := 17
+
 def admission : ExecutionRelease.Admission := {
+  marketRegistryProgram
   marketReleaseSetId := release.releaseSetId
   selected := release
   receipt := {
-    registryProgram := release.core.program
+    registryProgram := marketRegistryProgram
     releaseSetId := release.releaseSetId
     role := .claims
     observed := release.claims
@@ -43,6 +46,14 @@ def admission : ExecutionRelease.Admission := {
     currentDeploymentReauthenticated := true
   }
 }
+
+theorem registry_ownership_and_release_selection_are_exact :
+    marketRegistryProgram ≠ release.core.program /\
+    admission.marketRegistryProgram = marketRegistryProgram /\
+    admission.receipt.registryProgram = marketRegistryProgram /\
+    admission.marketReleaseSetId = release.releaseSetId /\
+    ExecutionRelease.admits admission .claims = true := by
+  native_decide
 
 def parties : Parties := {
   claimant := .seller
