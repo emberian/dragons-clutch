@@ -43,6 +43,7 @@ members = [
     "crates/dclutch-realm-contract",
     "crates/dclutch-rent-contract",
     "crates/dclutch-series-contract",
+    "crates/dclutch-series-v2-kernel",
     "crates/dclutch-source-contract",
     "crates/dclutch-structured-contract",
     "crates/dclutch-terminal-contract",

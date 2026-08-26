@@ -10,14 +10,14 @@ use solana_program::pubkey::Pubkey;
 
 use super::{
     AdmittedOccurrenceV2, AdmittedTicketV2, SeriesV2Error, TemplateV2, admit_occurrence,
-    admit_ticket, content_id,
-    generated::SERIES_TEMPLATE_CONTENT_DOMAIN_V2,
+    admit_ticket,
     instruction::{SeriesActionRequestV2, SeriesActionV2},
     lifecycle::{
         ClosePlanV2, LifecycleErrorV2, OccurrenceCommitPlanV2, PendingFundingPlanV2, RetirePlanV2,
         plan_close, plan_consume, plan_expire, plan_prepare, plan_retire,
     },
     state::{SeriesStateV2, TicketStateV2},
+    template_content_id,
 };
 
 /// Refusal from the Series hot content/projector boundary.
@@ -206,7 +206,7 @@ pub fn authenticate_action_content_v2<'a>(
     ticket_bytes: Option<&[u8]>,
 ) -> Result<AuthenticatedSeriesActionV2<'a>, SeriesProjectorErrorV2> {
     let template = TemplateV2::decode(template_bytes)?;
-    let template_id = content_id(&SERIES_TEMPLATE_CONTENT_DOMAIN_V2, template_bytes)?;
+    let template_id = template_content_id(template_bytes)?;
     if template_id != request.template() {
         return Err(SeriesProjectorErrorV2::Content);
     }
@@ -266,6 +266,7 @@ mod tests {
     use crate::series::{
         generated,
         instruction::{SeriesActionV2, encode_series_action_header_v2},
+        occurrence_content_id,
     };
 
     fn put(output: &mut [u8], offset: usize, value: &[u8]) {
@@ -287,9 +288,7 @@ mod tests {
             generated::SERIES_OCCURRENCE_SCHEDULED_SLOT_OFFSET_V2,
             &100_u64.to_le_bytes(),
         );
-        let occurrence_id =
-            content_id(&generated::SERIES_OCCURRENCE_CONTENT_DOMAIN_V2, &occurrence)
-                .expect("occurrence ID");
+        let occurrence_id = occurrence_content_id(&occurrence).expect("occurrence ID");
 
         let mut template = generated::SERIES_EXAMPLE_TEMPLATE_V2;
         put(
@@ -302,8 +301,7 @@ mod tests {
             generated::SERIES_TEMPLATE_PROJECTION_ROOT_OFFSET_V2,
             &occurrence_id.to_bytes(),
         );
-        let template_id = content_id(&generated::SERIES_TEMPLATE_CONTENT_DOMAIN_V2, &template)
-            .expect("Template ID");
+        let template_id = template_content_id(&template).expect("Template ID");
 
         let mut ticket = generated::SERIES_EXAMPLE_TICKET_V2;
         put(
@@ -365,8 +363,7 @@ mod tests {
     #[test]
     fn close_refuses_extraneous_occurrence_or_ticket_content() {
         let (_, template, occurrence, ticket) = occurrence_fixture();
-        let template_id = content_id(&generated::SERIES_TEMPLATE_CONTENT_DOMAIN_V2, &template)
-            .expect("Template ID");
+        let template_id = template_content_id(&template).expect("Template ID");
         let close =
             encode_series_action_header_v2(SeriesActionV2::Close, template_id, None, None, 8, 0, 0)
                 .expect("close");

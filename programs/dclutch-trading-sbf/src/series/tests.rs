@@ -1,4 +1,9 @@
 use super::*;
+use dclutch_core_contract::ContentId;
+use dclutch_market_core_codec::{MarketCoreStateSeedsV1, MarketIdentity, SeriesCoreActionV1};
+use solana_program::{hash::hashv, pubkey::Pubkey};
+
+const HASH_SEPARATOR: [u8; 1] = [0];
 
 fn key(tag: u8) -> Pubkey {
     let mut bytes = [0_u8; 32];
@@ -70,16 +75,16 @@ impl Fixture {
         let template_value = TemplateV2::decode(&template).expect("template before root");
         let identity = MarketIdentity {
             market_id: core_pubkey_identity(key(61)).expect("temporary market"),
-            realm_id: core_identity(template_value.realm).expect("realm"),
-            product_id: core_identity(occurrence_value.product).expect("product"),
-            result_domain: core_identity(occurrence_value.result_domain).expect("domain"),
-            resolution_policy: core_identity(occurrence_value.resolution_policy)
+            realm_id: core_identity(template_value.realm()).expect("realm"),
+            product_id: core_identity(occurrence_value.product()).expect("product"),
+            result_domain: core_identity(occurrence_value.result_domain()).expect("domain"),
+            resolution_policy: core_identity(occurrence_value.resolution_policy())
                 .expect("resolution"),
-            capability_manifest: core_identity(occurrence_value.capability_manifest)
+            capability_manifest: core_identity(occurrence_value.capability_manifest())
                 .expect("manifest"),
-            selected_release_set: core_identity(template_value.release_set).expect("release"),
+            selected_release_set: core_identity(template_value.release_set()).expect("release"),
             registry_program: core_pubkey_identity(registry_program).expect("Registry"),
-            generation: u64::from(occurrence_value.occurrence) + 1,
+            generation: u64::from(occurrence_value.occurrence()) + 1,
         };
         let seeds = MarketCoreStateSeedsV1::new(identity);
         let market = Pubkey::find_program_address(&seeds.as_slices(), &core_program).0;
@@ -89,17 +94,14 @@ impl Fixture {
             &market.to_bytes(),
         );
 
-        let occurrence_id =
-            content_id(&generated::SERIES_OCCURRENCE_CONTENT_DOMAIN_V2, &occurrence)
-                .expect("occurrence id");
+        let occurrence_id = occurrence_content_id(&occurrence).expect("occurrence id");
         let root = projection_root(occurrence_id, 1, &siblings);
         put(
             &mut template,
             generated::SERIES_TEMPLATE_PROJECTION_ROOT_OFFSET_V2,
             &root,
         );
-        let template_id = content_id(&generated::SERIES_TEMPLATE_CONTENT_DOMAIN_V2, &template)
-            .expect("template id");
+        let template_id = template_content_id(&template).expect("template id");
         put(
             &mut ticket,
             generated::SERIES_TICKET_TEMPLATE_OFFSET_V2,
@@ -132,23 +134,15 @@ impl Fixture {
     }
 
     fn recommit_occurrence(&mut self) {
-        let occurrence_id = content_id(
-            &generated::SERIES_OCCURRENCE_CONTENT_DOMAIN_V2,
-            &self.occurrence,
-        )
-        .expect("occurrence id");
+        let occurrence_id = occurrence_content_id(&self.occurrence).expect("occurrence id");
         let occurrence = OccurrenceV2::decode(&self.occurrence).expect("occurrence");
-        let root = projection_root(occurrence_id, occurrence.occurrence, &self.siblings);
+        let root = projection_root(occurrence_id, occurrence.occurrence(), &self.siblings);
         put(
             &mut self.template,
             generated::SERIES_TEMPLATE_PROJECTION_ROOT_OFFSET_V2,
             &root,
         );
-        let template_id = content_id(
-            &generated::SERIES_TEMPLATE_CONTENT_DOMAIN_V2,
-            &self.template,
-        )
-        .expect("template id");
+        let template_id = template_content_id(&self.template).expect("template id");
         put(
             &mut self.ticket,
             generated::SERIES_TICKET_TEMPLATE_OFFSET_V2,
@@ -162,7 +156,7 @@ impl Fixture {
         put(
             &mut self.ticket,
             generated::SERIES_TICKET_MARKET_OFFSET_V2,
-            &occurrence.market.to_bytes(),
+            &occurrence.market().to_bytes(),
         );
     }
 
@@ -431,7 +425,7 @@ fn collateral_principal_is_never_added_to_native_lamports() {
 }
 
 #[test]
-fn prepare_expire_and_ack_commit_are_atomic_and_replay_safe() {
+fn prepare_and_expire_commit_under_controller_without_fabricating_core() {
     let fixture = Fixture::new();
     let admitted = fixture.admit();
     let admitted_ticket = admit_ticket(&fixture.ticket).expect("Ticket identity");
@@ -451,7 +445,6 @@ fn prepare_expire_and_ack_commit_are_atomic_and_replay_safe() {
     let (prepare, top_up, dust_refund) = lifecycle::plan_prepare(
         admitted,
         admitted_ticket,
-        ticket_state_key,
         series,
         3,
         admitted.occurrence().scheduled_slot() - 1,
@@ -463,6 +456,7 @@ fn prepare_expire_and_ack_commit_are_atomic_and_replay_safe() {
     assert_eq!(dust_refund, 0);
     assert_eq!(prepare.series_after().revision(), 4);
     assert_eq!(prepare.ticket_after().revision(), 0);
+    assert_eq!(prepare.core_request(), None);
 
     let expire = lifecycle::plan_expire(
         admitted,
@@ -480,6 +474,7 @@ fn prepare_expire_and_ack_commit_are_atomic_and_replay_safe() {
     )
     .expect("expiry candidate");
     assert_eq!(expire.native_from_ticket(), 90);
+    assert_eq!(expire.core_request(), None);
     assert_eq!(
         lifecycle::plan_expire(
             admitted,
@@ -494,7 +489,28 @@ fn prepare_expire_and_ack_commit_are_atomic_and_replay_safe() {
         Err(lifecycle::LifecycleErrorV2::Replay)
     );
 
-    let request = expire.request();
+    let (series_bytes, ticket_bytes) = expire
+        .commit_controller()
+        .expect("controller commit after direct effects");
+    assert_eq!(
+        state::SeriesStateV2::decode(&series_bytes, admitted.template().occurrence_count())
+            .expect("Series candidate"),
+        expire.series_after()
+    );
+    assert_eq!(
+        state::TicketStateV2::decode(&ticket_bytes).expect("Ticket candidate"),
+        expire.ticket_after()
+    );
+
+    let request = core_request(
+        admitted,
+        SeriesCoreActionV1::Consume,
+        admitted_ticket.ticket(),
+        ticket_state_key,
+        4,
+        0,
+    )
+    .expect("hostile unrelated Core request");
     let request_bytes = request.encode().expect("request bytes");
     let request_digest = core_identity(
         ContentId::new(solana_program::hash::hash(&request_bytes).to_bytes())
@@ -510,25 +526,8 @@ fn prepare_expire_and_ack_commit_are_atomic_and_replay_safe() {
         request_digest,
         post_digest,
     );
-    let (series_bytes, ticket_bytes) = expire
-        .commit_after_ack(ack, core_program, request_digest, post_digest)
-        .expect("commit only after exact ack");
     assert_eq!(
-        state::SeriesStateV2::decode(&series_bytes, admitted.template().occurrence_count())
-            .expect("Series candidate"),
-        expire.series_after()
-    );
-    assert_eq!(
-        state::TicketStateV2::decode(&ticket_bytes).expect("Ticket candidate"),
-        expire.ticket_after()
-    );
-    assert_eq!(
-        expire.commit_after_ack(
-            ack,
-            core_pubkey_identity(key(99)).expect("hostile Core"),
-            request_digest,
-            post_digest,
-        ),
+        expire.commit_after_ack(ack, core_program, request_digest, post_digest),
         Err(lifecycle::LifecycleErrorV2::CoreAck)
     );
 }
@@ -538,9 +537,15 @@ fn core_request_uses_exact_v2_ticket_and_compartments() {
     let fixture = Fixture::new();
     let admitted = fixture.admit();
     let ticket = TicketV2::decode(&fixture.ticket).expect("ticket");
-    let request = admitted
-        .core_request(SeriesCoreActionV1::Consume, ticket, key(72), 8, 11)
-        .expect("Core request");
+    let request = core_request(
+        admitted,
+        SeriesCoreActionV1::Consume,
+        ticket,
+        key(72),
+        8,
+        11,
+    )
+    .expect("Core request");
     assert_eq!(
         request.release_set().to_bytes(),
         admitted.template().release_set().to_bytes()
@@ -578,7 +583,18 @@ fn core_request_uses_exact_v2_ticket_and_compartments() {
         admitted.occurrence().funds().hoard_principal()
     );
     assert_eq!(
-        admitted.core_request(SeriesCoreActionV1::Close, ticket, key(72), 8, 11),
+        core_request(admitted, SeriesCoreActionV1::Close, ticket, key(72), 8, 11,),
+        Err(SeriesV2Error::Action)
+    );
+    assert_eq!(
+        core_request(
+            admitted,
+            SeriesCoreActionV1::Prepare,
+            ticket,
+            key(72),
+            8,
+            11,
+        ),
         Err(SeriesV2Error::Action)
     );
 }
@@ -607,7 +623,8 @@ fn checked_in_series_v2_constants_are_exact_lean_output() {
         "Series V2 generator failed: {}",
         std::string::String::from_utf8_lossy(&output.stderr)
     );
-    let checked_in = std::fs::read(manifest.join("src/series/generated.rs"))
-        .expect("read checked-in Series V2 constants");
+    let checked_in =
+        std::fs::read(manifest.join("../../crates/dclutch-series-v2-kernel/src/generated.rs"))
+            .expect("read checked-in Series V2 constants");
     assert_eq!(output.stdout, checked_in, "regenerate Series V2 constants");
 }

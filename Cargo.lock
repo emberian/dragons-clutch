@@ -764,6 +764,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-series-v2-kernel"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-market-core-codec",
+ "sha2",
+]
+
+[[package]]
 name = "dclutch-source-contract"
 version = "0.1.0"
 dependencies = [
@@ -820,6 +829,7 @@ dependencies = [
  "dclutch-registry-contract",
  "dclutch-registry-svm",
  "dclutch-release-set-contract",
+ "dclutch-series-v2-kernel",
  "dclutch-token-svm",
  "dclutch-transition-vm",
  "solana-hash 4.6.0",

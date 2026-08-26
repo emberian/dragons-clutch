@@ -368,6 +368,31 @@ pub fn commit_occurrence_after_ack(
             observed_post_resource_digest,
         )
         .map_err(|_| SeriesAccountErrorV2::Commit)?;
+    write_occurrence_candidates(root, ticket, &root_tail, &ticket_bytes)
+}
+
+/// Persist a Prepare or Expire candidate after direct controller effects.
+///
+/// The canonical hot outer calls this only after finalized controller
+/// authentication and any selected Custody CPI/receipt postchecks. Consume
+/// cannot use this function because its plan requires a Core acknowledgment.
+pub fn commit_controller_occurrence(
+    root: &AccountInfo<'_>,
+    ticket: &AccountInfo<'_>,
+    plan: OccurrenceCommitPlanV2,
+) -> Result<(), ProgramError> {
+    let (root_tail, ticket_bytes) = plan
+        .commit_controller()
+        .map_err(|_| SeriesAccountErrorV2::Commit)?;
+    write_occurrence_candidates(root, ticket, &root_tail, &ticket_bytes)
+}
+
+fn write_occurrence_candidates(
+    root: &AccountInfo<'_>,
+    ticket: &AccountInfo<'_>,
+    root_tail: &[u8; SERIES_STATE_BYTES_V2],
+    ticket_bytes: &[u8; SERIES_TICKET_STATE_BYTES_V2],
+) -> Result<(), ProgramError> {
     {
         let mut data = ticket
             .try_borrow_mut_data()
@@ -375,7 +400,7 @@ pub fn commit_occurrence_after_ack(
         if data.len() != SERIES_TICKET_STATE_BYTES_V2 {
             return Err(SeriesAccountErrorV2::Commit.into());
         }
-        data.copy_from_slice(&ticket_bytes);
+        data.copy_from_slice(ticket_bytes);
     }
     {
         let mut data = root
@@ -387,7 +412,7 @@ pub fn commit_occurrence_after_ack(
         if tail.len() != SERIES_STATE_BYTES_V2 {
             return Err(SeriesAccountErrorV2::Commit.into());
         }
-        tail.copy_from_slice(&root_tail);
+        tail.copy_from_slice(root_tail);
     }
     Ok(())
 }

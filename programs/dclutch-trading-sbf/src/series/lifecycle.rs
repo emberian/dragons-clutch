@@ -16,8 +16,8 @@ use dclutch_market_core_codec::{
 use solana_program::pubkey::Pubkey;
 
 use super::{
-    AdmittedOccurrenceV2, AdmittedTicketV2, OccurrenceV2, SeriesV2Error, TemplateV2,
-    core_pubkey_identity, funding_list_id,
+    AdmittedOccurrenceV2, AdmittedTicketV2, OccurrenceV2, SeriesV2Error, TemplateV2, core_request,
+    funding_list_id, pubkey,
     state::{SeriesStateError, SeriesStateV2, TicketPhaseV2, TicketStateV2},
 };
 
@@ -211,7 +211,7 @@ pub fn plan_pending_funding(
 /// Candidate bytes and Core request for one commit-last occurrence transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OccurrenceCommitPlanV2 {
-    request: SeriesCoreRequestV1,
+    core_request: Option<SeriesCoreRequestV1>,
     series_after: SeriesStateV2,
     ticket_after: TicketStateV2,
     occurrence_count: u32,
@@ -220,9 +220,9 @@ pub struct OccurrenceCommitPlanV2 {
 }
 
 impl OccurrenceCommitPlanV2 {
-    /// Exact 336-byte Core request semantic value.
-    pub const fn request(self) -> SeriesCoreRequestV1 {
-        self.request
+    /// Exact 336-byte Core request, present only for atomic Consume/Found.
+    pub const fn core_request(self) -> Option<SeriesCoreRequestV1> {
+        self.core_request
     }
     /// Candidate Series state; not persisted before Core acknowledgement.
     pub const fn series_after(self) -> SeriesStateV2 {
@@ -249,13 +249,29 @@ impl OccurrenceCommitPlanV2 {
         request_digest: CoreIdentity,
         observed_post_resource_digest: CoreIdentity,
     ) -> Result<([u8; 64], [u8; 64]), LifecycleErrorV2> {
+        let request = self.core_request.ok_or(LifecycleErrorV2::CoreAck)?;
         ack.validate_for(
-            self.request,
+            request,
             expected_core_program,
             request_digest,
             observed_post_resource_digest,
         )
         .map_err(|_| LifecycleErrorV2::CoreAck)?;
+        Ok((
+            self.series_after.encode(self.occurrence_count)?,
+            self.ticket_after.encode(),
+        ))
+    }
+
+    /// Expose controller-owned candidate bytes for Prepare or Expire.
+    ///
+    /// The physical outer calls this only after every direct Trading-owned
+    /// account operation and any current-Custody receipt have authenticated.
+    /// Consume cannot bypass its Core acknowledgement through this route.
+    pub fn commit_controller(self) -> Result<([u8; 64], [u8; 64]), LifecycleErrorV2> {
+        if self.core_request.is_some() {
+            return Err(LifecycleErrorV2::CoreAck);
+        }
         Ok((
             self.series_after.encode(self.occurrence_count)?,
             self.ticket_after.encode(),
@@ -268,7 +284,6 @@ impl OccurrenceCommitPlanV2 {
 pub fn plan_prepare(
     admitted: AdmittedOccurrenceV2,
     admitted_ticket: AdmittedTicketV2,
-    ticket_state_key: Pubkey,
     series: SeriesStateV2,
     expected_series_revision: u64,
     now_slot: u64,
@@ -290,16 +305,9 @@ pub fn plan_prepare(
         .checked_add(native)
         .ok_or(LifecycleErrorV2::Arithmetic)?;
     let (top_up, dust_refund) = dust_tolerant_exact(current_ticket_lamports, required);
-    let request = admitted.core_request(
-        SeriesCoreActionV1::Prepare,
-        ticket,
-        ticket_state_key,
-        expected_series_revision,
-        0,
-    )?;
     Ok((
         OccurrenceCommitPlanV2 {
-            request,
+            core_request: None,
             series_after: series.prepare_ticket(expected_series_revision)?,
             ticket_after: TicketStateV2::prepared(ticket_record_id),
             occurrence_count: template.occurrence_count(),
@@ -410,15 +418,20 @@ fn common_terminal_plan(
         SeriesCoreActionV1::Expire => {}
         _ => return Err(LifecycleErrorV2::Content),
     }
-    let request = admitted.core_request(
-        action,
-        ticket,
-        ticket_state_key,
-        expected_series_revision,
-        expected_ticket_revision,
-    )?;
+    let core_request = if action == SeriesCoreActionV1::Consume {
+        Some(core_request(
+            admitted,
+            action,
+            ticket,
+            ticket_state_key,
+            expected_series_revision,
+            expected_ticket_revision,
+        )?)
+    } else {
+        None
+    };
     Ok(OccurrenceCommitPlanV2 {
-        request,
+        core_request,
         series_after: series
             .settle_current(expected_series_revision, template.occurrence_count())?,
         ticket_after: ticket_state.settle(expected_ticket_revision, terminal)?,
@@ -466,7 +479,7 @@ pub fn plan_retire(
     }
     Ok(RetirePlanV2 {
         series_after: series.retire_ticket(expected_series_revision)?,
-        refund_owner: admitted_ticket.ticket().refund_owner(),
+        refund_owner: pubkey(admitted_ticket.ticket().refund_owner()),
         lamports_to_refund_owner: observed_ticket_lamports,
     })
 }
@@ -474,16 +487,16 @@ pub fn plan_retire(
 /// Root-close classification; Hoard principal is never in these lamport fields.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ClosePlanV2 {
-    request: SeriesCoreRequestV1,
+    beneficiary: Pubkey,
     close_rent: u64,
     root_rent: u64,
     donation: u64,
 }
 
 impl ClosePlanV2 {
-    /// Exact terminal Core request.
-    pub const fn request(self) -> SeriesCoreRequestV1 {
-        self.request
+    /// Finalized Template beneficiary receiving classified native refunds.
+    pub const fn beneficiary(self) -> Pubkey {
+        self.beneficiary
     }
     /// Separately classified close-rent principal returned to the Template owner.
     pub const fn close_rent(self) -> u64 {
@@ -502,7 +515,6 @@ impl ClosePlanV2 {
 /// Plan terminal close after every replay account has been retired.
 pub fn plan_close(
     template: TemplateV2,
-    template_id: ContentId,
     series: SeriesStateV2,
     expected_series_revision: u64,
     observed_root_lamports: u64,
@@ -515,17 +527,8 @@ pub fn plan_close(
     let donation = observed_root_lamports
         .checked_sub(classified)
         .ok_or(LifecycleErrorV2::Funding)?;
-    let request = SeriesCoreRequestV1::close(
-        CoreIdentity::new(template.release_set().to_bytes())
-            .map_err(|_| LifecycleErrorV2::Content)?,
-        CoreIdentity::new(template_id.to_bytes()).map_err(|_| LifecycleErrorV2::Content)?,
-        core_pubkey_identity(template.refund_owner())?,
-        expected_series_revision,
-        series.close_rent_remaining(),
-    )
-    .map_err(|_| LifecycleErrorV2::Content)?;
     Ok(ClosePlanV2 {
-        request,
+        beneficiary: pubkey(template.refund_owner()),
         close_rent: series.close_rent_remaining(),
         root_rent: exact_root_rent,
         donation,
