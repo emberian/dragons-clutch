@@ -66,6 +66,78 @@ const RECEIPT_POSITION_COUNT_OFFSET: usize = 356;
 const RECEIPT_ROW_COUNT_OFFSET: usize = 360;
 const RECEIPT_RESERVED_OFFSET: usize = 364;
 
+/// Canonical patchable byte coordinates of `AffineBatchPlanV2`.
+///
+/// The fixed request template contains the header and Position table, while
+/// the item template contains exactly one affine row. Generic EffectProgram
+/// encoders use these coordinates without becoming a second ABI authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AffineBatchRequestLayoutV2;
+
+impl AffineBatchRequestLayoutV2 {
+    /// Selected execution release-set identity in the fixed header.
+    pub const RELEASE_SET: usize = RELEASE_SET_OFFSET;
+    /// Logical Core Market identity in the fixed header.
+    pub const MARKET: usize = MARKET_OFFSET;
+    /// Complete parent-request digest in the fixed header.
+    pub const REQUEST_DIGEST: usize = REQUEST_OFFSET;
+    /// Exact Product record identity in the fixed header.
+    pub const PRODUCT_RECORD: usize = PRODUCT_OFFSET;
+    /// Exact semantic basis identity in the fixed header.
+    pub const SEMANTIC_BASIS: usize = BASIS_OFFSET;
+    /// Exact linked basis-record identity in the fixed header.
+    pub const LINKED_BASIS_RECORD: usize = LINKED_BASIS_RECORD_OFFSET;
+    /// Claims aggregate pre-revision as little-endian `u64`.
+    pub const EXPECTED_MARKET_REVISION: usize = MARKET_REVISION_OFFSET;
+    /// Product-authenticated outcome count as little-endian `u32`.
+    pub const OUTCOME_COUNT: usize = OUTCOME_COUNT_OFFSET;
+    /// Runtime row count as little-endian `u32`.
+    pub const ROW_COUNT: usize = ROW_COUNT_OFFSET;
+    /// Start of the fixed Position table.
+    pub const POSITION_TABLE: usize = AFFINE_BATCH_PLAN_HEADER_BYTES_V2;
+    /// Width of one fixed Position-table entry.
+    pub const POSITION_STRIDE: usize = AFFINE_BATCH_POSITION_BYTES_V2;
+    /// Owner identity within one Position-table entry.
+    pub const POSITION_OWNER: usize = POSITION_OWNER_OFFSET;
+    /// Pre-revision within one Position-table entry.
+    pub const POSITION_REVISION: usize = POSITION_REVISION_OFFSET;
+    /// Source-presence byte within the repeated row template.
+    pub const ROW_SOURCE_PRESENT: usize = ROW_SOURCE_PRESENT_OFFSET;
+    /// Destination-presence byte within the repeated row template.
+    pub const ROW_DESTINATION_PRESENT: usize = ROW_DESTINATION_PRESENT_OFFSET;
+    /// Outcome coordinate within the repeated row template.
+    pub const ROW_OUTCOME: usize = ROW_OUTCOME_OFFSET;
+    /// Source Position-table index within the repeated row template.
+    pub const ROW_SOURCE_INDEX: usize = ROW_SOURCE_INDEX_OFFSET;
+    /// Destination Position-table index within the repeated row template.
+    pub const ROW_DESTINATION_INDEX: usize = ROW_DESTINATION_INDEX_OFFSET;
+    /// Aggregate direction tag within the repeated row template.
+    pub const ROW_AGGREGATE_DIRECTION: usize = ROW_AGGREGATE_DELTA_OFFSET + DELTA_DIRECTION_OFFSET;
+    /// Aggregate magnitude within the repeated row template.
+    pub const ROW_AGGREGATE_MAGNITUDE: usize = ROW_AGGREGATE_DELTA_OFFSET + DELTA_MAGNITUDE_OFFSET;
+    /// Source direction tag within the repeated row template.
+    pub const ROW_SOURCE_DIRECTION: usize = ROW_SOURCE_DELTA_OFFSET + DELTA_DIRECTION_OFFSET;
+    /// Source magnitude within the repeated row template.
+    pub const ROW_SOURCE_MAGNITUDE: usize = ROW_SOURCE_DELTA_OFFSET + DELTA_MAGNITUDE_OFFSET;
+    /// Destination direction tag within the repeated row template.
+    pub const ROW_DESTINATION_DIRECTION: usize =
+        ROW_DESTINATION_DELTA_OFFSET + DELTA_DIRECTION_OFFSET;
+    /// Destination magnitude within the repeated row template.
+    pub const ROW_DESTINATION_MAGNITUDE: usize =
+        ROW_DESTINATION_DELTA_OFFSET + DELTA_MAGNITUDE_OFFSET;
+
+    /// Return one Position field's checked absolute offset in the fixed template.
+    pub const fn position_field(position: u32, field: usize) -> Option<usize> {
+        match (position as usize).checked_mul(Self::POSITION_STRIDE) {
+            Some(item) => match Self::POSITION_TABLE.checked_add(item) {
+                Some(base) => base.checked_add(field),
+                None => None,
+            },
+            None => None,
+        }
+    }
+}
+
 /// Stable affine-batch ABI refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AffineBatchErrorV2 {
@@ -1125,6 +1197,92 @@ mod tests {
             u64::MAX
         );
         assert_eq!(bytes.len(), 240 + 258 * 40 + 258 * 64);
+    }
+
+    #[test]
+    fn public_request_layout_tracks_header_position_and_row_encoders() {
+        let header = header(1);
+        let position = AffineBatchPositionV2::new([8; 32], 9).expect("Position");
+        let row = split_row(0, 0, 10, 1);
+        let mut bytes = vec![0_u8; plan_bytes(1, 1).expect("width")];
+        AffineBatchPlanV2::encode_into(header, &[position], &[row], &mut bytes).expect("encode");
+        for (offset, expected) in [
+            (AffineBatchRequestLayoutV2::RELEASE_SET, header.release_set),
+            (AffineBatchRequestLayoutV2::MARKET, header.market),
+            (
+                AffineBatchRequestLayoutV2::REQUEST_DIGEST,
+                header.request_id,
+            ),
+            (
+                AffineBatchRequestLayoutV2::PRODUCT_RECORD,
+                header.product_record_digest,
+            ),
+            (
+                AffineBatchRequestLayoutV2::SEMANTIC_BASIS,
+                header.semantic_basis_id,
+            ),
+            (
+                AffineBatchRequestLayoutV2::LINKED_BASIS_RECORD,
+                header.linked_basis_record_digest,
+            ),
+        ] {
+            assert_eq!(bytes.get(offset..offset + 32), Some(expected.as_slice()));
+        }
+        assert_eq!(
+            bytes.get(
+                AffineBatchRequestLayoutV2::EXPECTED_MARKET_REVISION
+                    ..AffineBatchRequestLayoutV2::EXPECTED_MARKET_REVISION + 8
+            ),
+            Some(header.expected_market_revision.to_le_bytes().as_slice())
+        );
+        assert_eq!(
+            bytes.get(
+                AffineBatchRequestLayoutV2::OUTCOME_COUNT
+                    ..AffineBatchRequestLayoutV2::OUTCOME_COUNT + 4
+            ),
+            Some(header.outcome_count.to_le_bytes().as_slice())
+        );
+        assert_eq!(
+            bytes.get(
+                AffineBatchRequestLayoutV2::ROW_COUNT..AffineBatchRequestLayoutV2::ROW_COUNT + 4
+            ),
+            Some(1_u32.to_le_bytes().as_slice())
+        );
+        let owner = AffineBatchRequestLayoutV2::position_field(
+            0,
+            AffineBatchRequestLayoutV2::POSITION_OWNER,
+        )
+        .expect("owner offset");
+        let revision = AffineBatchRequestLayoutV2::position_field(
+            0,
+            AffineBatchRequestLayoutV2::POSITION_REVISION,
+        )
+        .expect("revision offset");
+        assert_eq!(
+            bytes.get(owner..owner + 32),
+            Some(position.owner().as_slice())
+        );
+        assert_eq!(
+            bytes.get(revision..revision + 8),
+            Some(position.expected_revision().to_le_bytes().as_slice())
+        );
+        let row_base = AffineBatchRequestLayoutV2::POSITION_TABLE
+            + AffineBatchRequestLayoutV2::POSITION_STRIDE;
+        assert_eq!(
+            bytes.get(
+                row_base + AffineBatchRequestLayoutV2::ROW_OUTCOME
+                    ..row_base + AffineBatchRequestLayoutV2::ROW_OUTCOME + 4
+            ),
+            Some(row.outcome().to_le_bytes().as_slice())
+        );
+        assert_eq!(
+            bytes.get(
+                row_base + AffineBatchRequestLayoutV2::ROW_DESTINATION_MAGNITUDE
+                    ..row_base + AffineBatchRequestLayoutV2::ROW_DESTINATION_MAGNITUDE + 8
+            ),
+            Some(row.destination_delta().magnitude().to_le_bytes().as_slice())
+        );
+        assert!(AffineBatchPlanV2::decode(&bytes).is_ok());
     }
 
     #[test]

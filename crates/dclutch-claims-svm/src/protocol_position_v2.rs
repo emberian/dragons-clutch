@@ -94,6 +94,43 @@ const CLOSE_MARKET_REVISION_OFFSET: usize = 384;
 const CLOSE_GENERATION_OFFSET: usize = 392;
 const CLOSE_RESERVED_OFFSET: usize = 400;
 
+/// Canonical byte coordinates of patchable `ProtocolPositionRequestV2` fields.
+///
+/// Effect-program encoders consume these semantic-owner coordinates instead of
+/// duplicating the fixed wire layout. Static tag and reserved-byte authority
+/// remains exclusively in [`ProtocolPositionRequestV2::to_bytes`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProtocolPositionRequestLayoutV2;
+
+impl ProtocolPositionRequestLayoutV2 {
+    /// Selected execution release-set identity.
+    pub const RELEASE_SET: usize = RELEASE_SET_OFFSET;
+    /// Logical Core Market identity.
+    pub const MARKET: usize = MARKET_OFFSET;
+    /// Exact protocol Position owner.
+    pub const POSITION_OWNER: usize = POSITION_OWNER_OFFSET;
+    /// Complete parent-request digest.
+    pub const PARENT_REQUEST_DIGEST: usize = PARENT_REQUEST_OFFSET;
+    /// Permanent RentCredit account.
+    pub const RENT_CREDIT: usize = RENT_CREDIT_OFFSET;
+    /// Exact Rent program.
+    pub const RENT_PROGRAM: usize = RENT_PROGRAM_OFFSET;
+    /// Market generation as little-endian `u64`.
+    pub const GENERATION: usize = GENERATION_OFFSET;
+    /// Claims aggregate pre-revision as little-endian `u64`.
+    pub const EXPECTED_MARKET_REVISION: usize = EXPECTED_MARKET_REVISION_OFFSET;
+    /// Position pre-revision as little-endian `u64`.
+    pub const EXPECTED_POSITION_REVISION: usize = EXPECTED_POSITION_REVISION_OFFSET;
+    /// Observed Position lamports as little-endian `u64`.
+    pub const OBSERVED_POSITION_LAMPORTS: usize = OBSERVED_POSITION_LAMPORTS_OFFSET;
+    /// Observed admission-record lamports as little-endian `u64`.
+    pub const OBSERVED_ADMISSION_LAMPORTS: usize = OBSERVED_ADMISSION_LAMPORTS_OFFSET;
+    /// Position rent principal as little-endian `u64`.
+    pub const POSITION_RENT_PRINCIPAL: usize = POSITION_RENT_PRINCIPAL_OFFSET;
+    /// Admission-record rent principal as little-endian `u64`.
+    pub const ADMISSION_RENT_PRINCIPAL: usize = ADMISSION_RENT_PRINCIPAL_OFFSET;
+}
+
 /// Stable hostile-decode or lifecycle refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProtocolPositionErrorV2 {
@@ -1215,6 +1252,73 @@ mod tests {
             zero.to_bytes(),
             Err(ProtocolPositionErrorV2::InvalidIdentity)
         );
+    }
+
+    #[test]
+    fn public_request_layout_tracks_the_canonical_encoder() {
+        let request = request(ProtocolPositionActionV2::Close);
+        let bytes = request.to_bytes().expect("bytes");
+        for (offset, expected) in [
+            (
+                ProtocolPositionRequestLayoutV2::RELEASE_SET,
+                request.release_set,
+            ),
+            (ProtocolPositionRequestLayoutV2::MARKET, request.market),
+            (
+                ProtocolPositionRequestLayoutV2::POSITION_OWNER,
+                request.position_owner,
+            ),
+            (
+                ProtocolPositionRequestLayoutV2::PARENT_REQUEST_DIGEST,
+                request.parent_request_digest,
+            ),
+            (
+                ProtocolPositionRequestLayoutV2::RENT_CREDIT,
+                request.rent_credit,
+            ),
+            (
+                ProtocolPositionRequestLayoutV2::RENT_PROGRAM,
+                request.rent_program,
+            ),
+        ] {
+            assert_eq!(bytes.get(offset..offset + 32), Some(expected.as_slice()));
+        }
+        for (offset, expected) in [
+            (
+                ProtocolPositionRequestLayoutV2::GENERATION,
+                request.generation,
+            ),
+            (
+                ProtocolPositionRequestLayoutV2::EXPECTED_MARKET_REVISION,
+                request.expected_market_revision,
+            ),
+            (
+                ProtocolPositionRequestLayoutV2::EXPECTED_POSITION_REVISION,
+                request.expected_position_revision,
+            ),
+            (
+                ProtocolPositionRequestLayoutV2::OBSERVED_POSITION_LAMPORTS,
+                request.observed_position_lamports,
+            ),
+            (
+                ProtocolPositionRequestLayoutV2::OBSERVED_ADMISSION_LAMPORTS,
+                request.observed_admission_lamports,
+            ),
+            (
+                ProtocolPositionRequestLayoutV2::POSITION_RENT_PRINCIPAL,
+                request.position_rent_principal,
+            ),
+            (
+                ProtocolPositionRequestLayoutV2::ADMISSION_RENT_PRINCIPAL,
+                request.admission_rent_principal,
+            ),
+        ] {
+            assert_eq!(
+                bytes.get(offset..offset + 8),
+                Some(expected.to_le_bytes().as_slice())
+            );
+        }
+        assert_eq!(ProtocolPositionRequestV2::decode(&bytes), Ok(request));
     }
 
     #[test]
