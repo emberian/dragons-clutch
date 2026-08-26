@@ -298,28 +298,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-claims-svm"
-version = "0.1.0"
-dependencies = [
- "dclutch-effect-kernel",
- "dclutch-product-payoff-v2-codec",
- "dclutch-rational-representation-v2-kernel",
- "dclutch-rational-representation-v2-lifecycle-contract",
- "dclutch-rational-representation-v2-request-contract",
- "dclutch-representation-composition-v3-kernel",
-]
-
-[[package]]
 name = "dclutch-core-contract"
 version = "0.1.0"
-
-[[package]]
-name = "dclutch-custody-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-market-core-codec",
- "dclutch-release-set-contract",
-]
 
 [[package]]
 name = "dclutch-effect-kernel"
@@ -340,6 +320,7 @@ name = "dclutch-market-core-codec"
 version = "0.1.0"
 dependencies = [
  "dclutch-release-set-contract",
+ "sha2",
 ]
 
 [[package]]
@@ -376,38 +357,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-rational-representation-v2-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-claims-svm",
- "dclutch-custody-contract",
- "dclutch-rational-representation-v2-kernel",
- "dclutch-rational-representation-v2-request-contract",
- "dclutch-representation-composition-v3-kernel",
- "dclutch-token-svm",
-]
-
-[[package]]
 name = "dclutch-rational-representation-v2-kernel"
 version = "0.1.0"
 dependencies = [
  "dclutch-product-payoff-v2-codec",
  "dclutch-representation-composition-v3-kernel",
-]
-
-[[package]]
-name = "dclutch-rational-representation-v2-lifecycle-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-rational-representation-v2-kernel",
- "dclutch-token-svm",
-]
-
-[[package]]
-name = "dclutch-rational-representation-v2-request-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-token-svm",
 ]
 
 [[package]]
@@ -488,26 +442,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-token-svm"
-version = "0.1.0"
-
-[[package]]
 name = "dclutch-trading-sbf"
 version = "0.1.0"
 dependencies = [
  "dclutch-account-profile-contract",
  "dclutch-capability-contract",
  "dclutch-capability-program-contract",
- "dclutch-claims-svm",
  "dclutch-core-contract",
- "dclutch-custody-contract",
  "dclutch-effect-kernel",
  "dclutch-execution-strategy-contract",
  "dclutch-market-core-codec",
  "dclutch-product-runtime-v2",
  "dclutch-product-runtime-v2-svm-reader",
- "dclutch-rational-representation-v2-contract",
- "dclutch-rational-representation-v2-lifecycle-contract",
  "dclutch-record-contract",
  "dclutch-registry-contract",
  "dclutch-registry-svm",
@@ -516,7 +462,6 @@ dependencies = [
  "dclutch-request-profile-contract",
  "dclutch-resolution-codec",
  "dclutch-series-v3-kernel",
- "dclutch-token-svm",
  "dclutch-transition-vm",
  "solana-instructions-sysvar",
  "solana-program",
