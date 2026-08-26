@@ -56,7 +56,7 @@ use solana_program::{
 };
 use solana_sdk_ids::{bpf_loader_upgradeable, native_loader, system_program, sysvar};
 
-use super::{ResolutionError, process_instruction};
+use super::{RecordKind, ResolutionError, authenticate_finalized_record, process_instruction};
 
 const GENERATION: u64 = 1;
 const NOW: i64 = 100;
@@ -1039,6 +1039,101 @@ fn assert_refusal_atomic(fixture: &Fixture, expected: ResolutionError) {
         Err(ProgramError::Custom(expected as u32))
     );
     assert_eq!(output_snapshot(fixture), before);
+}
+
+#[test]
+fn registry_owned_records_refuse_digest_keys_core_owner_and_substituted_registry() {
+    let fixture = fixture();
+    let rent = Rent::default();
+    let registry_program = key(0xd1);
+    let substituted_registry = key(0xd2);
+    let core_program = *fixture.accounts[2].owner;
+    let manifest_data = fixture
+        .capability_manifest
+        .try_borrow_data()
+        .expect("capability manifest bytes")
+        .to_vec();
+    let manifest_digest = hash(&manifest_data).to_bytes();
+    let (registry_raw, registry_staging) = record_pair(
+        registry_program,
+        &rent,
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        manifest_digest,
+        manifest_data.clone(),
+    );
+    authenticate_finalized_record(
+        registry_program,
+        &registry_raw,
+        &registry_staging,
+        &rent,
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        manifest_digest,
+        &manifest_data,
+        RecordKind::CapabilityManifest,
+    )
+    .expect("Registry-owned content-addressed record");
+
+    let digest_as_key = account(
+        Pubkey::new_from_array(manifest_digest),
+        false,
+        rent.minimum_balance(manifest_data.len()),
+        manifest_data.clone(),
+        registry_program,
+        false,
+    );
+    assert_eq!(
+        authenticate_finalized_record(
+            registry_program,
+            &digest_as_key,
+            &registry_staging,
+            &rent,
+            CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+            manifest_digest,
+            &manifest_data,
+            RecordKind::CapabilityManifest,
+        ),
+        Err(ProgramError::Custom(
+            ResolutionError::FinalizedRecord as u32
+        ))
+    );
+
+    let (core_raw, core_staging) = record_pair(
+        core_program,
+        &rent,
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        manifest_digest,
+        manifest_data.clone(),
+    );
+    assert_eq!(
+        authenticate_finalized_record(
+            registry_program,
+            &core_raw,
+            &core_staging,
+            &rent,
+            CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+            manifest_digest,
+            &manifest_data,
+            RecordKind::CapabilityManifest,
+        ),
+        Err(ProgramError::Custom(
+            ResolutionError::FinalizedRecord as u32
+        ))
+    );
+    assert_eq!(
+        authenticate_finalized_record(
+            substituted_registry,
+            &registry_raw,
+            &registry_staging,
+            &rent,
+            CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+            manifest_digest,
+            &manifest_data,
+            RecordKind::CapabilityManifest,
+        ),
+        Err(ProgramError::Custom(
+            ResolutionError::FinalizedRecord as u32
+        ))
+    );
 }
 
 #[test]

@@ -274,8 +274,6 @@ fn authenticate_common_frame(
         || common.core_programdata.executable
         || common.resolution_programdata.executable
         || common.source_state.key.to_bytes() != request.source_state
-        || common.source_material.key.to_bytes() != request.source_material
-        || common.capability_manifest.key.to_bytes() != request.capability_manifest
         || common.recovery_funding.key.to_bytes() != request.recovery_funding
         || common.exhaustion_funding.key.to_bytes() != request.exhaustion_funding
         || common.failure_funding.key.to_bytes() != request.failure_funding
@@ -375,6 +373,7 @@ fn authenticate_core(
         .map_err(|_| ResolutionError::MarketAuthority)?;
     if envelope.parent_state_digest() != state_digest
         || state.identity.market_id.to_bytes() != common.market.key.to_bytes()
+        || state.identity.registry_program.to_bytes() != common.registry_program.key.to_bytes()
         || state.identity.resolution_policy.to_bytes() != request.source_material
         || state.identity.capability_manifest.to_bytes() != request.capability_manifest
         || state.identity.selected_release_set.to_bytes() != envelope.release_set().to_bytes()
@@ -503,7 +502,7 @@ fn authenticate_source_records(
         .try_borrow_data()
         .map_err(|_| ResolutionError::FinalizedRecord)?;
     authenticate_finalized_record(
-        *common.core_program.key,
+        *common.registry_program.key,
         common.source_material,
         common.source_material_staging,
         rent,
@@ -529,7 +528,7 @@ fn authenticate_source_records(
         .try_borrow_data()
         .map_err(|_| ResolutionError::FinalizedRecord)?;
     authenticate_finalized_record(
-        *common.core_program.key,
+        *common.registry_program.key,
         common.capability_manifest,
         common.capability_manifest_staging,
         rent,
