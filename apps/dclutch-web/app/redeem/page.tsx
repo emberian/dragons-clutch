@@ -1,5 +1,5 @@
-import MarketWorkbench from '@/components/MarketWorkbench';
+import RationalRepresentationWorkspace from '@/components/RationalRepresentationWorkspace';
 
 export default function RedeemPage() {
-  return <MarketWorkbench initialStage="claim" />;
+  return <RationalRepresentationWorkspace />;
 }
