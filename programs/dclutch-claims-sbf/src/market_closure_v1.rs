@@ -14,7 +14,13 @@ use dclutch_claims_svm::{
         ClaimsMarketClosureReceiptV1, ClaimsMarketClosureRequestV1,
     },
 };
+use dclutch_core_contract::ContentId;
 use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, Phase, STATE_BYTES};
+use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
+use dclutch_registry_svm::continuation_v1::{
+    REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationAdmissionSeedsV1,
+    RegistryContinuationRequestV1,
+};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_rent_contract::lifecycle_v2::LifecycleRentCreditV2;
 use solana_program::{
@@ -53,6 +59,8 @@ pub const CORE_MARKET_ACCOUNT_V1: usize = 9;
 pub const RENT_PROGRAM_ACCOUNT_V1: usize = 10;
 /// Exact Claims market-closure frame width.
 pub const MARKET_CLOSURE_ACCOUNT_COUNT_V1: usize = 11;
+/// Exact continuation-authorized Claims market-closure frame width.
+pub const MARKET_CLOSURE_CONTINUATION_ACCOUNT_COUNT_V1: usize = 12;
 
 /// Stable physical closure refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -91,10 +99,21 @@ struct ClosureAccounts<'accounts, 'info> {
     core_programdata: &'accounts AccountInfo<'info>,
     core_market: &'accounts AccountInfo<'info>,
     rent_program: &'accounts AccountInfo<'info>,
+    registry_admission: Option<&'accounts AccountInfo<'info>>,
 }
 
 impl<'accounts, 'info> ClosureAccounts<'accounts, 'info> {
-    fn parse(accounts: &'accounts [AccountInfo<'info>]) -> Result<Self, ProgramError> {
+    fn parse(
+        accounts: &'accounts [AccountInfo<'info>],
+        continuation: bool,
+    ) -> Result<Self, ProgramError> {
+        let base = if continuation {
+            accounts
+                .get(..MARKET_CLOSURE_ACCOUNT_COUNT_V1)
+                .ok_or(ClaimsMarketClosureSbfErrorV1::Accounts)?
+        } else {
+            accounts
+        };
         let [
             authority,
             aggregate,
@@ -107,7 +126,7 @@ impl<'accounts, 'info> ClosureAccounts<'accounts, 'info> {
             core_programdata,
             core_market,
             rent_program,
-        ] = accounts
+        ] = base
         else {
             return Err(ClaimsMarketClosureSbfErrorV1::Accounts.into());
         };
@@ -123,8 +142,34 @@ impl<'accounts, 'info> ClosureAccounts<'accounts, 'info> {
             core_programdata,
             core_market,
             rent_program,
+            registry_admission: if continuation {
+                accounts.get(MARKET_CLOSURE_ACCOUNT_COUNT_V1)
+            } else {
+                None
+            },
         })
     }
+}
+
+fn split_continuation(
+    instruction_data: &[u8],
+) -> Result<(&[u8], Option<RegistryContinuationRequestV1>), ProgramError> {
+    if instruction_data.len()
+        == dclutch_claims_svm::market_closure_v1::CLAIMS_MARKET_CLOSURE_REQUEST_BYTES_V1
+    {
+        return Ok((instruction_data, None));
+    }
+    let expected = dclutch_claims_svm::market_closure_v1::CLAIMS_MARKET_CLOSURE_REQUEST_BYTES_V1
+        .checked_add(REGISTRY_CONTINUATION_REQUEST_BYTES_V1)
+        .ok_or(ClaimsMarketClosureSbfErrorV1::Accounts)?;
+    if instruction_data.len() != expected {
+        return Err(ClaimsMarketClosureSbfErrorV1::Accounts.into());
+    }
+    let (request, continuation) = instruction_data
+        .split_at(dclutch_claims_svm::market_closure_v1::CLAIMS_MARKET_CLOSURE_REQUEST_BYTES_V1);
+    let continuation = RegistryContinuationRequestV1::decode(continuation)
+        .map_err(|_| ClaimsMarketClosureSbfErrorV1::Authority)?;
+    Ok((request, Some(continuation)))
 }
 
 /// Close one exact empty Claims aggregate and return its typed receipt.
@@ -134,14 +179,15 @@ pub fn process(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
-    let request = ClaimsMarketClosureRequestV1::decode(instruction_data)
+    let (request_bytes, continuation) = split_continuation(instruction_data)?;
+    let request = ClaimsMarketClosureRequestV1::decode(request_bytes)
         .map_err(|_| ClaimsSbfError::Instruction)?;
     let request_input = request.input();
-    let request_digest = hash(instruction_data).to_bytes();
-    let accounts = ClosureAccounts::parse(accounts)?;
+    let request_digest = hash(request_bytes).to_bytes();
+    let accounts = ClosureAccounts::parse(accounts, continuation.is_some())?;
     authenticate_privileges(program_id, accounts)?;
     authenticate_authority(accounts, request_input, request_digest)?;
-    authenticate_releases(accounts, request_input.release_set)?;
+    authenticate_releases(accounts, request_input.release_set, continuation)?;
     let core = authenticate_core(accounts, request_input)?;
     authenticate_rent_credit(accounts, core)?;
     let (pre_digest, refund_lamports) = authenticate_empty_aggregate(accounts, request_input)?;
@@ -235,7 +281,33 @@ fn authenticate_privileges(
         accounts.core_programdata,
         accounts.core_market,
         accounts.rent_program,
-    ])
+    ])?;
+    if let Some(admission) = accounts.registry_admission
+        && (!admission.is_signer
+            || admission.is_writable
+            || admission.executable
+            || admission.owner != &system_program::ID
+            || !admission.data_is_empty()
+            || admission.lamports() != 0
+            || [
+                accounts.authority,
+                accounts.aggregate,
+                accounts.rent_credit,
+                accounts.cache,
+                accounts.registry,
+                accounts.claims_program,
+                accounts.claims_programdata,
+                accounts.core_program,
+                accounts.core_programdata,
+                accounts.core_market,
+                accounts.rent_program,
+            ]
+            .iter()
+            .any(|account| account.key == admission.key))
+    {
+        return Err(ClaimsMarketClosureSbfErrorV1::Accounts.into());
+    }
+    Ok(())
 }
 
 #[inline(never)]
@@ -263,7 +335,11 @@ fn authenticate_authority(
 fn authenticate_releases(
     accounts: ClosureAccounts<'_, '_>,
     release_set: [u8; 32],
+    continuation: Option<RegistryContinuationRequestV1>,
 ) -> ProgramResult {
+    if let Some(continuation) = continuation {
+        return authenticate_continuation_releases(accounts, release_set, continuation);
+    }
     for (role, program, programdata) in [
         (
             ExecutionRoleV1::Claims,
@@ -288,6 +364,119 @@ fn authenticate_releases(
         }
     }
     Ok(())
+}
+
+#[inline(never)]
+fn authenticate_continuation_releases(
+    accounts: ClosureAccounts<'_, '_>,
+    release_set: [u8; 32],
+    continuation: RegistryContinuationRequestV1,
+) -> ProgramResult {
+    let admission = accounts
+        .registry_admission
+        .ok_or(ClaimsMarketClosureSbfErrorV1::Authority)?;
+    let expected_roles = [
+        ExecutionRoleV1::Core,
+        ExecutionRoleV1::Claims,
+        ExecutionRoleV1::Resolution,
+        ExecutionRoleV1::Custody,
+    ];
+    if continuation.release_set_id().to_bytes() != release_set
+        || continuation.continuation_role() != ExecutionRoleV1::Core
+        || usize::from(continuation.role_count()) != expected_roles.len()
+        || expected_roles
+            .iter()
+            .enumerate()
+            .any(|(index, role)| continuation.role(index) != Some(*role))
+    {
+        return Err(ClaimsMarketClosureSbfErrorV1::Authority.into());
+    }
+    let expected_cache = Pubkey::find_program_address(
+        &[ACTIVATION_PDA_DOMAIN_V1, release_set.as_slice()],
+        accounts.registry.key,
+    )
+    .0;
+    if expected_cache != *accounts.cache.key || accounts.cache.owner != accounts.registry.key {
+        return Err(ClaimsMarketClosureSbfErrorV1::Authority.into());
+    }
+    let cache_bytes = accounts
+        .cache
+        .try_borrow_data()
+        .map_err(|_| ClaimsMarketClosureSbfErrorV1::Accounts)?;
+    if hash(&cache_bytes).to_bytes() != continuation.activation_cache_digest().to_bytes() {
+        return Err(ClaimsMarketClosureSbfErrorV1::Authority.into());
+    }
+    let cache = ActivatedExecutionReleaseSetViewV1::decode(&cache_bytes)
+        .map_err(|_| ClaimsMarketClosureSbfErrorV1::Authority)?;
+    if cache
+        .execution_release_set_id()
+        .map_err(|_| ClaimsMarketClosureSbfErrorV1::Authority)?
+        .to_bytes()
+        != release_set
+        || !selected_program_matches(
+            cache,
+            ExecutionRoleV1::Claims,
+            accounts.claims_program,
+            accounts.claims_programdata,
+        )?
+        || !selected_program_matches(
+            cache,
+            ExecutionRoleV1::Core,
+            accounts.core_program,
+            accounts.core_programdata,
+        )?
+    {
+        return Err(ClaimsMarketClosureSbfErrorV1::Authority.into());
+    }
+    drop(cache_bytes);
+    let batch = continuation
+        .role_batch_request()
+        .map_err(|_| ClaimsMarketClosureSbfErrorV1::Authority)?;
+    let batch_digest = ContentId::new(hash(&batch.to_bytes()).to_bytes())
+        .map_err(|_| ClaimsMarketClosureSbfErrorV1::Authority)?;
+    let seeds = RegistryContinuationAdmissionSeedsV1::new(
+        continuation,
+        accounts.cache.key.to_bytes(),
+        batch_digest,
+    )
+    .map_err(|_| ClaimsMarketClosureSbfErrorV1::Authority)?;
+    let release = seeds.release_set();
+    let cache_key = seeds.activation_cache();
+    let request_digest = seeds.batch_request_digest();
+    let mask = seeds.role_mask();
+    let role = seeds.continuation_role();
+    let continuation_digest = seeds.continuation_digest();
+    let expected = Pubkey::find_program_address(
+        &[
+            seeds.domain(),
+            release.as_slice(),
+            cache_key.as_slice(),
+            request_digest.as_slice(),
+            mask.as_slice(),
+            role.as_slice(),
+            continuation_digest.as_slice(),
+        ],
+        accounts.registry.key,
+    )
+    .0;
+    if expected != *admission.key {
+        return Err(ClaimsMarketClosureSbfErrorV1::Authority.into());
+    }
+    Ok(())
+}
+
+fn selected_program_matches(
+    cache: ActivatedExecutionReleaseSetViewV1<'_>,
+    role: ExecutionRoleV1,
+    program: &AccountInfo<'_>,
+    programdata: &AccountInfo<'_>,
+) -> Result<bool, ProgramError> {
+    let release = cache
+        .role(role)
+        .map_err(|_| ClaimsMarketClosureSbfErrorV1::Authority)?
+        .release();
+    Ok(release.program().to_bytes() == program.key.to_bytes()
+        && release.programdata() == programdata.key.to_bytes())
 }
 
 #[inline(never)]

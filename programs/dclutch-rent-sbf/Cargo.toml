@@ -18,6 +18,8 @@ custom-panic = []
 
 [dependencies]
 dclutch-rent-contract = { path = "../../crates/dclutch-rent-contract" }
+dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
+dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }
 dclutch-registry-svm = { path = "../../crates/dclutch-registry-svm" }
 dclutch-release-set-contract = { path = "../../crates/dclutch-release-set-contract" }
 solana-program = { version = "=3.0.0", default-features = false }

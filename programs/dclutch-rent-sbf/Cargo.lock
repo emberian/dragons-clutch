@@ -1535,6 +1535,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-registry-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-release-set-contract",
+]
+
+[[package]]
 name = "dclutch-registry-svm"
 version = "0.1.0"
 dependencies = [
@@ -1560,6 +1568,8 @@ dependencies = [
 name = "dclutch-rent-sbf"
 version = "0.1.0"
 dependencies = [
+ "dclutch-core-contract",
+ "dclutch-registry-contract",
  "dclutch-registry-svm",
  "dclutch-release-set-contract",
  "dclutch-rent-contract",

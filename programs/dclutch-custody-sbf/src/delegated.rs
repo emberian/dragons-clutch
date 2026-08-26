@@ -19,9 +19,9 @@ pub(super) fn process(
     let request = DelegatedCustodyRequestV2::decode(instruction_data)
         .map_err(|_| CustodySbfError::Instruction)?;
     let custody = request.custody;
-    require_account_count(accounts, custody.operation)?;
+    require_account_count(accounts, custody.operation, false)?;
     let request_digest = hash(instruction_data).to_bytes();
-    let market = authenticate_common_frame(program_id, accounts, custody, request_digest)?;
+    let market = authenticate_common_frame(program_id, accounts, custody, request_digest, None)?;
     let realm = authenticate_realm(program_id, accounts, custody, market)?;
     execute_transfer(program_id, accounts, request, request_digest, realm)
 }

@@ -10,6 +10,7 @@ use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionRele
 use dclutch_registry_svm::{
     AuthenticatedRoleReceiptV1, RegistryInstructionV1,
     batch_v2::{AuthenticatedRoleBatchReceiptV2, RoleBatchRequestV2},
+    continuation_v1::{RegistryContinuationAdmissionSeedsV1, RegistryContinuationRequestV1},
 };
 use dclutch_release_set_contract::ExecutionRoleV1;
 use solana_program::{
@@ -19,6 +20,7 @@ use solana_program::{
     program::{get_return_data, invoke},
     pubkey::Pubkey,
 };
+use solana_sdk_ids::system_program;
 
 use crate::CoreSbfError;
 
@@ -205,6 +207,126 @@ pub(crate) fn authenticate_roles<'accounts, 'info>(
         selected,
         authenticated_mask: request.role_mask(),
     })
+}
+
+/// Consume one invocation-scoped Registry admission instead of recursively
+/// calling Registry for the same current role batch.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_continuation_roles<'accounts, 'info>(
+    cache: &'accounts AccountInfo<'info>,
+    registry: &'accounts AccountInfo<'info>,
+    admission: &'accounts AccountInfo<'info>,
+    expected_registry: Identity,
+    release_set_id: [u8; 32],
+    requested: &[RoleDeploymentAccounts<'accounts, 'info>],
+    continuation_digest: ContentId,
+    continuation_len: u32,
+) -> Result<(RoleBatchAdmissions, RegistryContinuationRequestV1), CoreSbfError> {
+    require_expected_registry(registry.key, expected_registry)?;
+    if registry.is_signer || registry.is_writable || !registry.executable {
+        return Err(CoreSbfError::AccountFrame);
+    }
+    if !admission.is_signer
+        || admission.is_writable
+        || admission.executable
+        || admission.owner != &system_program::ID
+        || !admission.data_is_empty()
+        || admission.lamports() != 0
+    {
+        return Err(CoreSbfError::CallerAuthority);
+    }
+    let (selected, cache_digest) = {
+        let bytes = cache.try_borrow_data().map_err(|_| CoreSbfError::Release)?;
+        let view = ActivatedExecutionReleaseSetViewV1::decode(&bytes)
+            .map_err(|_| CoreSbfError::Release)?;
+        let expected_cache = Pubkey::find_program_address(
+            &[ACTIVATION_PDA_DOMAIN_V1, &release_set_id],
+            registry.key,
+        )
+        .0;
+        if cache.key != &expected_cache
+            || cache.owner != registry.key
+            || cache.is_signer
+            || cache.is_writable
+            || cache.executable
+            || view
+                .execution_release_set_id()
+                .map_err(|_| CoreSbfError::Release)?
+                .to_bytes()
+                != release_set_id
+        {
+            return Err(CoreSbfError::Release);
+        }
+        for entry in requested {
+            validate_release_accounts(cache, registry, entry.program, entry.programdata)?;
+            let release = view
+                .role(registry_role(entry.role))
+                .map_err(|_| CoreSbfError::Release)?
+                .release();
+            if release.program().to_bytes() != entry.program.key.to_bytes()
+                || release.programdata() != entry.programdata.key.to_bytes()
+            {
+                return Err(CoreSbfError::Release);
+            }
+        }
+        (
+            release_projection(view)?,
+            ContentId::new(hash(&bytes).to_bytes()).map_err(|_| CoreSbfError::Release)?,
+        )
+    };
+    let registry_roles = requested
+        .iter()
+        .map(|entry| registry_role(entry.role))
+        .collect::<Vec<_>>();
+    let continuation = RegistryContinuationRequestV1::new(
+        ContentId::new(release_set_id).map_err(|_| CoreSbfError::Release)?,
+        cache_digest,
+        continuation_digest,
+        continuation_len,
+        ExecutionRoleV1::Core,
+        &registry_roles,
+    )
+    .map_err(|_| CoreSbfError::Release)?;
+    let batch_request = continuation
+        .role_batch_request()
+        .map_err(|_| CoreSbfError::Release)?;
+    let batch_digest = ContentId::new(hash(&batch_request.to_bytes()).to_bytes())
+        .map_err(|_| CoreSbfError::Release)?;
+    let seeds =
+        RegistryContinuationAdmissionSeedsV1::new(continuation, cache.key.to_bytes(), batch_digest)
+            .map_err(|_| CoreSbfError::Release)?;
+    let release = seeds.release_set();
+    let cache_key = seeds.activation_cache();
+    let batch_request_digest = seeds.batch_request_digest();
+    let role_mask = seeds.role_mask();
+    let continuation_role = seeds.continuation_role();
+    let digest = seeds.continuation_digest();
+    let expected = Pubkey::find_program_address(
+        &[
+            seeds.domain(),
+            release.as_slice(),
+            cache_key.as_slice(),
+            batch_request_digest.as_slice(),
+            role_mask.as_slice(),
+            continuation_role.as_slice(),
+            digest.as_slice(),
+        ],
+        registry.key,
+    )
+    .0;
+    if expected != *admission.key {
+        return Err(CoreSbfError::CallerAuthority);
+    }
+    Ok((
+        RoleBatchAdmissions {
+            registry: expected_registry,
+            release_set_id: identity(release_set_id)?,
+            selected,
+            authenticated_mask: continuation.role_mask(),
+        },
+        continuation,
+    ))
 }
 
 #[inline(never)]

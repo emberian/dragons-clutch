@@ -15,7 +15,15 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::convert::TryFrom;
 
-use dclutch_registry_svm::{AuthenticatedRoleReceiptV1, RegistryInstructionV1};
+use dclutch_core_contract::ContentId;
+use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
+use dclutch_registry_svm::{
+    AuthenticatedRoleReceiptV1, RegistryInstructionV1,
+    continuation_v1::{
+        REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationAdmissionSeedsV1,
+        RegistryContinuationRequestV1,
+    },
+};
 use dclutch_release_set_contract::ExecutionRoleV1;
 use dclutch_rent_contract::{
     AccountMetaV1, CreateBalancePlanV1, CreateRentCreditFrameV1, CreateRentCreditV1,
@@ -23,17 +31,18 @@ use dclutch_rent_contract::{
     RentCreditInstructionV1, RentCreditV1, SystemWalletFactsV1, WithdrawBalancePlanV1,
     WithdrawRentCreditFrameV1, WithdrawRentCreditV1,
     lifecycle_v2::{
-        CloseLifecycleRentCreditV2, CreateLifecycleRentCreditV2,
-        LIFECYCLE_RENT_CORE_CLOSE_AUTHORITY_DOMAIN_V2, LIFECYCLE_RENT_CREDIT_BYTES_V2,
-        LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2, LifecycleAccountIdV2, LifecycleAccountMetaV2,
-        LifecycleClosePlanV2, LifecycleRentCreditV2, LifecycleRentInstructionV2,
-        LifecycleRetiredMarketObservationV2, LifecycleSweepPlanV2, SweepLifecycleRentCreditV2,
-        validate_refund_wallet_v2, validate_sweep_frame_v2,
+        CLOSE_LIFECYCLE_RENT_CREDIT_BYTES_V2, CloseLifecycleRentCreditV2,
+        CreateLifecycleRentCreditV2, LIFECYCLE_RENT_CORE_CLOSE_AUTHORITY_DOMAIN_V2,
+        LIFECYCLE_RENT_CREDIT_BYTES_V2, LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2, LifecycleAccountIdV2,
+        LifecycleAccountMetaV2, LifecycleClosePlanV2, LifecycleRentCreditV2,
+        LifecycleRentInstructionV2, LifecycleRetiredMarketObservationV2, LifecycleSweepPlanV2,
+        SweepLifecycleRentCreditV2, validate_refund_wallet_v2, validate_sweep_frame_v2,
     },
 };
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,
+    hash::hash,
     instruction::{AccountMeta, Instruction},
     program::{get_return_data, invoke, invoke_signed, set_return_data},
     program_error::ProgramError,
@@ -92,26 +101,25 @@ pub fn process_instruction(
     instruction_data: &[u8],
 ) -> ProgramResult {
     if instruction_data.get(..8) == Some(LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2.as_slice()) {
-        return match LifecycleRentInstructionV2::decode(instruction_data)
+        let (base, continuation) = split_close_continuation(instruction_data)?;
+        return match LifecycleRentInstructionV2::decode(base)
             .map_err(|_| RentSbfError::Instruction)?
         {
             LifecycleRentInstructionV2::Create => process_create_v2(
                 program_id,
                 accounts,
-                CreateLifecycleRentCreditV2::decode(instruction_data)
-                    .map_err(|_| RentSbfError::Instruction)?,
+                CreateLifecycleRentCreditV2::decode(base).map_err(|_| RentSbfError::Instruction)?,
             ),
             LifecycleRentInstructionV2::Sweep => process_sweep_v2(
                 program_id,
                 accounts,
-                SweepLifecycleRentCreditV2::decode(instruction_data)
-                    .map_err(|_| RentSbfError::Instruction)?,
+                SweepLifecycleRentCreditV2::decode(base).map_err(|_| RentSbfError::Instruction)?,
             ),
             LifecycleRentInstructionV2::Close => process_close_v2(
                 program_id,
                 accounts,
-                CloseLifecycleRentCreditV2::decode(instruction_data)
-                    .map_err(|_| RentSbfError::Instruction)?,
+                CloseLifecycleRentCreditV2::decode(base).map_err(|_| RentSbfError::Instruction)?,
+                continuation,
             ),
         };
     }
@@ -123,6 +131,26 @@ pub fn process_instruction(
             process_withdraw(program_id, accounts, request)
         }
     }
+}
+
+fn split_close_continuation(
+    instruction_data: &[u8],
+) -> Result<(&[u8], Option<RegistryContinuationRequestV1>), ProgramError> {
+    let continuation_width = CLOSE_LIFECYCLE_RENT_CREDIT_BYTES_V2
+        .checked_add(REGISTRY_CONTINUATION_REQUEST_BYTES_V1)
+        .ok_or(RentSbfError::Instruction)?;
+    if instruction_data.len() != continuation_width {
+        return Ok((instruction_data, None));
+    }
+    let base = instruction_data
+        .get(..CLOSE_LIFECYCLE_RENT_CREDIT_BYTES_V2)
+        .ok_or(RentSbfError::Instruction)?;
+    let header = instruction_data
+        .get(CLOSE_LIFECYCLE_RENT_CREDIT_BYTES_V2..)
+        .ok_or(RentSbfError::Instruction)?;
+    let continuation =
+        RegistryContinuationRequestV1::decode(header).map_err(|_| RentSbfError::Instruction)?;
+    Ok((base, Some(continuation)))
 }
 
 struct CreateAccounts<'a, 'info> {
@@ -399,6 +427,7 @@ fn prepare_withdraw(
 
 const SWEEP_ACCOUNT_COUNT_V2: usize = 3;
 const CLOSE_ACCOUNT_COUNT_V2: usize = 8;
+const CLOSE_CONTINUATION_ACCOUNT_COUNT_V2: usize = 9;
 
 #[derive(Clone, Copy)]
 struct CreatePlanV2 {
@@ -621,11 +650,17 @@ struct CloseAccountsV2<'a, 'info> {
     core_programdata: &'a AccountInfo<'info>,
     core_caller: &'a AccountInfo<'info>,
     retired_market: &'a AccountInfo<'info>,
+    registry_admission: Option<&'a AccountInfo<'info>>,
 }
 
 impl<'a, 'info> CloseAccountsV2<'a, 'info> {
-    fn parse(accounts: &'a [AccountInfo<'info>]) -> Result<Self, ProgramError> {
-        if accounts.len() != CLOSE_ACCOUNT_COUNT_V2 {
+    fn parse(accounts: &'a [AccountInfo<'info>], continuation: bool) -> Result<Self, ProgramError> {
+        let expected_count = if continuation {
+            CLOSE_CONTINUATION_ACCOUNT_COUNT_V2
+        } else {
+            CLOSE_ACCOUNT_COUNT_V2
+        };
+        if accounts.len() != expected_count {
             return Err(RentSbfError::AccountFrame.into());
         }
         let value = Self {
@@ -637,6 +672,11 @@ impl<'a, 'info> CloseAccountsV2<'a, 'info> {
             core_programdata: account(accounts, 5)?,
             core_caller: account(accounts, 6)?,
             retired_market: account(accounts, 7)?,
+            registry_admission: if continuation {
+                Some(account(accounts, 8)?)
+            } else {
+                None
+            },
         };
         if !value.credit.is_writable
             || value.credit.is_signer
@@ -661,6 +701,14 @@ impl<'a, 'info> CloseAccountsV2<'a, 'info> {
             || value.retired_market.is_signer
             || value.retired_market.is_writable
             || value.retired_market.executable
+            || value.registry_admission.is_some_and(|admission| {
+                !admission.is_signer
+                    || admission.is_writable
+                    || admission.executable
+                    || admission.owner != &system_program::ID
+                    || !admission.data_is_empty()
+                    || admission.lamports() != 0
+            })
         {
             return Err(RentSbfError::AccountFrame.into());
         }
@@ -679,6 +727,12 @@ impl<'a, 'info> CloseAccountsV2<'a, 'info> {
                 return Err(RentSbfError::AccountFrame.into());
             }
         }
+        if value
+            .registry_admission
+            .is_some_and(|admission| keys.contains(&admission.key))
+        {
+            return Err(RentSbfError::AccountFrame.into());
+        }
         Ok(value)
     }
 }
@@ -689,8 +743,9 @@ fn process_close_v2(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     request: CloseLifecycleRentCreditV2,
+    continuation: Option<RegistryContinuationRequestV1>,
 ) -> ProgramResult {
-    let accounts = CloseAccountsV2::parse(accounts)?;
+    let accounts = CloseAccountsV2::parse(accounts, continuation.is_some())?;
     let state = authenticate_lifecycle_credit_v2(program_id, accounts.credit)?;
     let receipt_market = LifecycleAccountIdV2::new(request.receipt().input().market)
         .map_err(|_| RentSbfError::Closure)?;
@@ -714,7 +769,11 @@ fn process_close_v2(
     if accounts.wallet.key.to_bytes() != state.refund_wallet().to_bytes() {
         return Err(RentSbfError::AccountFrame.into());
     }
-    authenticate_current_core_v2(&accounts, state)?;
+    if let Some(continuation) = continuation {
+        authenticate_registry_continuation_v2(&accounts, state, continuation)?;
+    } else {
+        authenticate_current_core_v2(&accounts, state)?;
+    }
     let credit_id = LifecycleAccountIdV2::new(accounts.credit.key.to_bytes())
         .map_err(|_| RentSbfError::Closure)?;
     let core_id = LifecycleAccountIdV2::new(accounts.core_program.key.to_bytes())
@@ -852,6 +911,101 @@ fn authenticate_current_core_v2(
         || receipt.program().as_bytes() != &accounts.core_program.key.to_bytes()
         || receipt.execution_release_set_id().as_bytes() != &state.release_set().to_bytes()
     {
+        return Err(RentSbfError::Release.into());
+    }
+    Ok(())
+}
+
+#[inline(never)]
+fn authenticate_registry_continuation_v2(
+    accounts: &CloseAccountsV2<'_, '_>,
+    state: LifecycleRentCreditV2,
+    continuation: RegistryContinuationRequestV1,
+) -> ProgramResult {
+    let admission = accounts.registry_admission.ok_or(RentSbfError::Release)?;
+    let roles = [
+        ExecutionRoleV1::Core,
+        ExecutionRoleV1::Claims,
+        ExecutionRoleV1::Resolution,
+        ExecutionRoleV1::Custody,
+    ];
+    if continuation.release_set_id().to_bytes() != state.release_set().to_bytes()
+        || continuation.continuation_role() != ExecutionRoleV1::Core
+        || usize::from(continuation.role_count()) != roles.len()
+        || roles
+            .iter()
+            .enumerate()
+            .any(|(index, role)| continuation.role(index) != Some(*role))
+    {
+        return Err(RentSbfError::Release.into());
+    }
+    let release_set = state.release_set().to_bytes();
+    let expected_cache = Pubkey::find_program_address(
+        &[ACTIVATION_PDA_DOMAIN_V1, release_set.as_slice()],
+        accounts.registry_program.key,
+    )
+    .0;
+    if expected_cache != *accounts.activation_cache.key
+        || accounts.activation_cache.owner != accounts.registry_program.key
+    {
+        return Err(RentSbfError::Release.into());
+    }
+    let cache_bytes = accounts
+        .activation_cache
+        .try_borrow_data()
+        .map_err(|_| RentSbfError::Borrow)?;
+    if hash(&cache_bytes).to_bytes() != continuation.activation_cache_digest().to_bytes() {
+        return Err(RentSbfError::Release.into());
+    }
+    let cache = ActivatedExecutionReleaseSetViewV1::decode(&cache_bytes)
+        .map_err(|_| RentSbfError::Release)?;
+    let core = cache
+        .role(ExecutionRoleV1::Core)
+        .map_err(|_| RentSbfError::Release)?
+        .release();
+    if cache
+        .execution_release_set_id()
+        .map_err(|_| RentSbfError::Release)?
+        .to_bytes()
+        != release_set
+        || core.program().to_bytes() != accounts.core_program.key.to_bytes()
+        || core.programdata() != accounts.core_programdata.key.to_bytes()
+    {
+        return Err(RentSbfError::Release.into());
+    }
+    drop(cache_bytes);
+
+    let batch = continuation
+        .role_batch_request()
+        .map_err(|_| RentSbfError::Release)?;
+    let batch_digest =
+        ContentId::new(hash(&batch.to_bytes()).to_bytes()).map_err(|_| RentSbfError::Release)?;
+    let seeds = RegistryContinuationAdmissionSeedsV1::new(
+        continuation,
+        accounts.activation_cache.key.to_bytes(),
+        batch_digest,
+    )
+    .map_err(|_| RentSbfError::Release)?;
+    let release = seeds.release_set();
+    let cache_key = seeds.activation_cache();
+    let request_digest = seeds.batch_request_digest();
+    let mask = seeds.role_mask();
+    let role = seeds.continuation_role();
+    let continuation_digest = seeds.continuation_digest();
+    let expected_admission = Pubkey::find_program_address(
+        &[
+            seeds.domain(),
+            release.as_slice(),
+            cache_key.as_slice(),
+            request_digest.as_slice(),
+            mask.as_slice(),
+            role.as_slice(),
+            continuation_digest.as_slice(),
+        ],
+        accounts.registry_program.key,
+    )
+    .0;
+    if expected_admission != *admission.key {
         return Err(RentSbfError::Release.into());
     }
     Ok(())
