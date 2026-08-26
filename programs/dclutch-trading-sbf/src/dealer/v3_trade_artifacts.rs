@@ -40,6 +40,7 @@ use dclutch_effect_kernel::{
         SEMANTIC_RANGE_ROUTE_V4, encode_program_v4_atomic,
     },
 };
+use dclutch_execution_strategy_contract::v2::{BankTransportV2, classify_bank_transport_v2};
 use dclutch_request_profile_contract::{
     encode::{
         IdentityRegisterV1, RequestCoordinateV1, RequestGeometryV1, RequestInstructionV1,
@@ -124,8 +125,12 @@ pub const DEALER_SCENARIO_POSITION_GEOMETRY_SUM_SCALAR_V4: u16 = 98;
 pub const DEALER_SCENARIO_EVIDENCE_SPAN_COUNT_SCALAR_V4: u16 = 99;
 /// Transition-owned finite maximum for the trailing evidence span.
 pub const DEALER_SCENARIO_MAX_EVIDENCE_SPAN_COUNT_SCALAR_V4: u16 = 100;
+/// Hot-owned authenticated input scratch-page count. Request and Effect do not
+/// write this coordinate; common admitted execution derives it from the exact
+/// scalar/identity bank geometry before account expansion.
+pub const DEALER_SCENARIO_SCRATCH_PAGE_COUNT_SCALAR_V4: u16 = 101;
 /// Exact common scalar-bank width.
-pub const DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4: u16 = 101;
+pub const DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4: u16 = 102;
 /// Parent digest precedes six exact 19-identity Custody blocks, the trusted
 /// current-Trading owner, and the request-bound obligation key.
 pub const DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4: u16 = 117;
@@ -1172,6 +1177,11 @@ fn seed_scenario_projection_header_v4(
         DEALER_SCENARIO_OBLIGATION_REVISION_SCALAR_V4,
         plan.obligation_revision_after,
     )?;
+    set_scenario_scalar(
+        staged_scalars,
+        DEALER_SCENARIO_SCRATCH_PAGE_COUNT_SCALAR_V4,
+        u64::from(dealer_scenario_scratch_page_count_v4(request.width)?),
+    )?;
     *staged_identities
         .get_mut(0)
         .ok_or(DealerScenarioArtifactsErrorV4::Projection)? = parent_digest;
@@ -1186,6 +1196,32 @@ fn seed_scenario_projection_header_v4(
         request.obligation,
     )?;
     Ok(())
+}
+
+/// Derive selector 9's canonical authenticated input-page width from the exact
+/// runtime bank. This deliberately refuses inline transport or geometry drift:
+/// Profile13's ninth span is the sole physical carrier of this admitted bank.
+pub fn dealer_scenario_scratch_page_count_v4(
+    width: u32,
+) -> Result<u32, DealerScenarioArtifactsErrorV4> {
+    if width == 0
+        || usize::try_from(width).map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic)?
+            > MAX_OUTCOMES
+    {
+        return Err(DealerScenarioArtifactsErrorV4::Projection);
+    }
+    let scalar_count = u32::from(DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4)
+        .checked_add(width)
+        .ok_or(DealerScenarioArtifactsErrorV4::Arithmetic)?;
+    match classify_bank_transport_v2(
+        scalar_count,
+        u32::from(DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4),
+    )
+    .map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic)?
+    {
+        BankTransportV2::AuthenticatedScratchPages { page_count: 6, .. } => Ok(6),
+        _ => Err(DealerScenarioArtifactsErrorV4::Projection),
+    }
 }
 
 #[inline(never)]
@@ -2122,6 +2158,27 @@ mod tests {
                 &mut identities,
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn admitted_bank_transport_is_exact_at_product_width_boundaries() {
+        assert_eq!(dealer_scenario_scratch_page_count_v4(1), Ok(6));
+        assert_eq!(
+            dealer_scenario_scratch_page_count_v4(
+                u32::try_from(MAX_OUTCOMES).expect("bounded Product width"),
+            ),
+            Ok(6)
+        );
+        assert_eq!(
+            dealer_scenario_scratch_page_count_v4(0),
+            Err(DealerScenarioArtifactsErrorV4::Projection)
+        );
+        assert_eq!(
+            dealer_scenario_scratch_page_count_v4(
+                u32::try_from(MAX_OUTCOMES + 1).expect("bounded hostile width"),
+            ),
+            Err(DealerScenarioArtifactsErrorV4::Projection)
         );
     }
 }

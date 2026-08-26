@@ -1,12 +1,13 @@
 //! Exact Profile13 physical account program for Dealer scenario execution.
 //!
 //! One fixed base contains the five common Hot coordinates, the canonical
-//! twenty-account Claims frame, and the sole Trading-owned obligation. Eight
+//! twenty-account Claims frame, and the sole Trading-owned obligation. Nine
 //! protected spans insert six optional Custody transfer frames, the exact
 //! one-or-two Position tail, and a trailing zero-to-three-account readonly
 //! evidence row for otherwise absent Fee/Hoard balances and the P1 Dealer
-//! Position. Child data remains opaque to Trading; only the obligation carries
-//! local write authority.
+//! Position. The final exact-six-account readonly span carries the authenticated
+//! admitted input bank. Child data remains opaque to Trading; only the
+//! obligation carries local write authority.
 
 #[cfg(not(target_os = "solana"))]
 extern crate alloc;
@@ -50,16 +51,18 @@ use super::{
         DEALER_SCENARIO_EVIDENCE_SPAN_COUNT_SCALAR_V4, DEALER_SCENARIO_ITEM_IDENTITY_STRIDE_V4,
         DEALER_SCENARIO_ITEM_SCALAR_STRIDE_V4, DEALER_SCENARIO_OBLIGATION_IDENTITY_V4,
         DEALER_SCENARIO_POSITION_COUNT_SCALAR_V4, DEALER_SCENARIO_ROUTE_SPAN_SCALAR_BASE_V4,
+        DEALER_SCENARIO_SCRATCH_PAGE_COUNT_SCALAR_V4,
     },
 };
 
 /// Number of fixed base rules before protected spans are inserted.
 pub const DEALER_SCENARIO_PROFILE_FIXED_RULES_V4: usize = 26;
 /// Number of canonical protected span entries.
-pub const DEALER_SCENARIO_PROFILE_SPANS_V4: usize = 8;
+pub const DEALER_SCENARIO_PROFILE_SPANS_V4: usize = 9;
 /// Fourteen rules for each of six Custody frames, one Claims Position rule,
-/// and one homogeneous rule cycled across trailing readonly evidence.
-pub const DEALER_SCENARIO_PROFILE_SPAN_RULES_V4: usize = 86;
+/// plus homogeneous rules cycled across trailing readonly evidence and scratch
+/// transport pages.
+pub const DEALER_SCENARIO_PROFILE_SPAN_RULES_V4: usize = 87;
 /// Exact selector-9 Profile13 artifact width.
 pub const DEALER_SCENARIO_ACCOUNT_PROFILE_BYTES_V4: usize = DYNAMIC_FIXED_SPAN_HEADER_BYTES
     + DEALER_SCENARIO_PROFILE_SPANS_V4 * DYNAMIC_FIXED_SPAN_ENTRY_BYTES
@@ -89,7 +92,7 @@ pub enum DealerScenarioAccountProfileErrorV4 {
     Profile,
 }
 
-/// Expanded logical coordinates selected by one exact seven-span row.
+/// Expanded logical coordinates selected by one exact nine-span row.
 ///
 /// The external admitted evaluator consumes this map after the common Hot
 /// helper authenticates Profile13 and its protected span counts. No caller
@@ -108,6 +111,10 @@ pub struct DealerScenarioLogicalFrameV4 {
     pub evidence_start: u32,
     /// Exact request-projected trailing evidence width, zero through three.
     pub evidence_count: u32,
+    /// First Hot-owned authenticated input scratch-page coordinate.
+    pub scratch_start: u32,
+    /// Exact authenticated input scratch-page width.
+    pub scratch_count: u32,
     /// Complete expanded logical-account count.
     pub logical_account_count: u32,
 }
@@ -129,6 +136,7 @@ pub fn dealer_scenario_logical_frame_v4(
             .iter()
             .any(|width| !matches!(*width, 0) && *width != custody_width)
         || !matches!(span_counts.get(7), Some(0..=3))
+        || span_counts.get(8) != Some(&6)
     {
         return Err(DealerScenarioAccountProfileErrorV4::Geometry);
     }
@@ -188,6 +196,14 @@ pub fn dealer_scenario_logical_frame_v4(
     cursor = cursor
         .checked_add(evidence_count)
         .ok_or(DealerScenarioAccountProfileErrorV4::Geometry)?;
+    let scratch_start = cursor;
+    let scratch_count = span_counts
+        .get(8)
+        .copied()
+        .ok_or(DealerScenarioAccountProfileErrorV4::Geometry)?;
+    cursor = cursor
+        .checked_add(scratch_count)
+        .ok_or(DealerScenarioAccountProfileErrorV4::Geometry)?;
     let logical_account_count = cursor;
     Ok(DealerScenarioLogicalFrameV4 {
         custody_starts,
@@ -196,6 +212,8 @@ pub fn dealer_scenario_logical_frame_v4(
         obligation,
         evidence_start,
         evidence_count,
+        scratch_start,
+        scratch_count,
         logical_account_count,
     })
 }
@@ -338,6 +356,7 @@ fn span_rules() -> Result<
     }
     *rule_mut(&mut rules, 56)? = opaque(claims_position_privileges()?);
     *rule_mut(&mut rules, 85)? = opaque(readonly());
+    *rule_mut(&mut rules, 86)? = opaque(readonly());
     Ok(rules)
 }
 
@@ -406,6 +425,15 @@ const fn dynamic_spans() -> [DynamicFixedSpanInputV2; DEALER_SCENARIO_PROFILE_SP
             1,
             0,
             3,
+            1,
+        ),
+        span(
+            26,
+            DEALER_SCENARIO_SCRATCH_PAGE_COUNT_SCALAR_V4,
+            86,
+            1,
+            6,
+            6,
             1,
         ),
     ]
@@ -552,7 +580,7 @@ mod tests {
     }
 
     #[test]
-    fn selector_nine_profile_owns_all_eight_spans() {
+    fn selector_nine_profile_owns_all_nine_spans() {
         let bytes = profile();
         let profile = AccountProfileV2::decode(&bytes).expect("decode");
         assert_eq!(
@@ -585,23 +613,23 @@ mod tests {
     fn exact_widths_shift_claims_and_obligation_without_placeholders() {
         let bytes = profile();
         let profile = AccountProfileV2::decode(&bytes).expect("decode");
-        let sparse = [14_u32, 0, 0, 0, 1, 0, 14, 3];
+        let sparse = [14_u32, 0, 0, 0, 1, 0, 14, 3, 6];
         assert_eq!(
             profile.logical_account_count_with_dynamic_spans(16, &sparse),
-            Ok(58)
+            Ok(64)
         );
         assert_eq!(
             profile.physical_account_count_with_dynamic_spans(16, &sparse),
-            Ok(55)
+            Ok(61)
         );
-        let full = [14_u32, 14, 14, 14, 2, 14, 14, 0];
+        let full = [14_u32, 14, 14, 14, 2, 14, 14, 0, 6];
         assert_eq!(
             profile.logical_account_count_with_dynamic_spans(16, &full),
-            Ok(112)
+            Ok(118)
         );
         assert_eq!(
             profile.physical_account_count_with_dynamic_spans(16, &full),
-            Ok(109)
+            Ok(115)
         );
         let obligation = profile.rule(false, OBLIGATION_V4).expect("obligation");
         assert_eq!(
@@ -618,12 +646,12 @@ mod tests {
         let profile = AccountProfileV2::decode(&bytes).expect("decode");
         assert!(
             profile
-                .logical_account_count_with_dynamic_spans(8, &[1, 0, 0, 0, 1, 0, 0, 3])
+                .logical_account_count_with_dynamic_spans(8, &[1, 0, 0, 0, 1, 0, 0, 3, 6])
                 .is_err()
         );
         assert!(
             profile
-                .logical_account_count_with_dynamic_spans(8, &[0, 0, 0, 0, 0, 0, 0, 4])
+                .logical_account_count_with_dynamic_spans(8, &[0, 0, 0, 0, 0, 0, 0, 4, 6])
                 .is_err()
         );
     }
@@ -666,24 +694,28 @@ mod tests {
     #[test]
     fn logical_frame_map_tracks_every_optional_span_at_n_boundaries() {
         let sparse =
-            dealer_scenario_logical_frame_v4([0, 0, 0, 0, 1, 0, 0, 3]).expect("sparse frame");
+            dealer_scenario_logical_frame_v4([0, 0, 0, 0, 1, 0, 0, 3, 6]).expect("sparse frame");
         assert_eq!(sparse.custody_starts, [5, 5, 5, 5, 26, 26]);
         assert_eq!(sparse.claims_fixed_start, 5);
         assert_eq!(sparse.claims_positions_start, 25);
         assert_eq!(sparse.obligation, 26);
         assert_eq!(sparse.evidence_start, 27);
         assert_eq!(sparse.evidence_count, 3);
-        assert_eq!(sparse.logical_account_count, 30);
+        assert_eq!(sparse.scratch_start, 30);
+        assert_eq!(sparse.scratch_count, 6);
+        assert_eq!(sparse.logical_account_count, 36);
 
-        let dense =
-            dealer_scenario_logical_frame_v4([14, 14, 14, 14, 2, 14, 14, 0]).expect("dense frame");
+        let dense = dealer_scenario_logical_frame_v4([14, 14, 14, 14, 2, 14, 14, 0, 6])
+            .expect("dense frame");
         assert_eq!(dense.custody_starts, [5, 19, 33, 47, 83, 97]);
         assert_eq!(dense.claims_fixed_start, 61);
         assert_eq!(dense.claims_positions_start, 81);
         assert_eq!(dense.obligation, 111);
         assert_eq!(dense.evidence_start, 112);
         assert_eq!(dense.evidence_count, 0);
-        assert_eq!(dense.logical_account_count, 112);
+        assert_eq!(dense.scratch_start, 112);
+        assert_eq!(dense.scratch_count, 6);
+        assert_eq!(dense.logical_account_count, 118);
 
         let bytes = profile();
         let profile = AccountProfileV2::decode(&bytes).expect("decode");
@@ -691,7 +723,7 @@ mod tests {
             assert_eq!(
                 profile.logical_account_count_with_dynamic_spans(
                     width,
-                    &[14, 14, 14, 14, 2, 14, 14, 0],
+                    &[14, 14, 14, 14, 2, 14, 14, 0, 6],
                 ),
                 Ok(usize::try_from(dense.logical_account_count).expect("logical width"))
             );
@@ -701,11 +733,11 @@ mod tests {
     #[test]
     fn logical_frame_map_refuses_caller_invented_span_shapes() {
         for hostile in [
-            [1, 0, 0, 0, 1, 0, 0, 3],
-            [0, 0, 0, 0, 0, 0, 0, 4],
-            [0, 0, 0, 0, 3, 0, 0, 0],
-            [0, 0, 0, 0, 1, 7, 0, 1],
-            [0, 0, 0, 0, 0, 0, 0, 0],
+            [1, 0, 0, 0, 1, 0, 0, 3, 6],
+            [0, 0, 0, 0, 0, 0, 0, 4, 6],
+            [0, 0, 0, 0, 3, 0, 0, 0, 6],
+            [0, 0, 0, 0, 1, 7, 0, 1, 6],
+            [0, 0, 0, 0, 1, 0, 0, 0, 5],
         ] {
             assert_eq!(
                 dealer_scenario_logical_frame_v4(hostile),

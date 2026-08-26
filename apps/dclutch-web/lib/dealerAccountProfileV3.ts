@@ -25,6 +25,7 @@ import {
   DEALER_SCENARIO_PROFILE_FIXED_RULES_V4,
   DEALER_SCENARIO_PROFILE_SPANS_V4,
   DEALER_SCENARIO_PROFILE_SPAN_RULES_V4,
+  DEALER_SCENARIO_SCRATCH_PAGE_COUNT_SCALAR_V4,
   DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE,
   DYNAMIC_FIXED_SPAN_COUNT_OFFSET,
   DYNAMIC_FIXED_SPAN_ENTRY_BYTES,
@@ -60,7 +61,7 @@ export type DealerAccountProfileRouteV3 =
   | Readonly<{ kind: 'lp-close' }>
   | Readonly<{
     kind: 'scenario';
-    spanCounts: readonly [number, number, number, number, number, number, number, number];
+    spanCounts: readonly [number, number, number, number, number, number, number, number, number];
   }>;
 
 type Rule = Readonly<{
@@ -107,6 +108,7 @@ const EXPECTED_SCENARIO_SPANS = Object.freeze([
   [25, 11, 57, 14, 0, 14, 14],
   [25, 12, 71, 14, 0, 14, 14],
   [26, 99, 85, 1, 0, 3, 1],
+  [26, DEALER_SCENARIO_SCRATCH_PAGE_COUNT_SCALAR_V4, 86, 1, 6, 6, 1],
 ] as const);
 
 function same(left: Uint8Array, right: Uint8Array): boolean {

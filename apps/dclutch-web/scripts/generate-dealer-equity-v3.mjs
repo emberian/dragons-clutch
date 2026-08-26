@@ -114,6 +114,7 @@ const scalars = Object.freeze([
   ['scenarioArtifacts', 'DEALER_SCENARIO_ITEM_IDENTITY_STRIDE_V4'],
   ['scenarioArtifacts', 'DEALER_SCENARIO_CURRENT_SLOT_SCALAR_V4'],
   ['scenarioArtifacts', 'DEALER_SCENARIO_MAX_POSITION_COUNT_SCALAR_V4'],
+  ['scenarioArtifacts', 'DEALER_SCENARIO_SCRATCH_PAGE_COUNT_SCALAR_V4'],
   ['scenarioArtifacts', 'DEALER_SCENARIO_CURRENT_TRADING_IDENTITY_V4'],
   ['scenarioArtifacts', 'DEALER_SCENARIO_OBLIGATION_IDENTITY_V4'],
   ['basis', 'BASIS_WIDTH_OFFSET_V3'],

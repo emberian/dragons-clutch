@@ -128,6 +128,7 @@ pub fn evaluate_authenticated_dealer_scenario_v4(
                 .map_err(|_| DealerScenarioAcceleratorErrorV4::Arithmetic)?
         || spans.get(4).copied() != Some(u32::from(request.claims_position_count))
         || spans.get(7).copied() != Some(u32::from(request.evidence_span_count))
+        || spans.get(8).copied() != Some(frame.scratch_count)
         || invocation.input_bank().len() != candidate_bank.len()
         || invocation.request().scalar_count()
             != u32::from(DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4)
@@ -889,7 +890,7 @@ fn authenticate_collateral(
         .checked_add(usize::from(request.dealer_evidence_count))
         .ok_or(DealerScenarioAcceleratorErrorV4::Arithmetic)?;
     if evidence_cursor
-        != usize::try_from(frame.logical_account_count)
+        != usize::try_from(frame.scratch_start)
             .map_err(|_| DealerScenarioAcceleratorErrorV4::Arithmetic)?
     {
         return Err(DealerScenarioAcceleratorErrorV4::Custody);
@@ -1169,7 +1170,7 @@ mod tests {
 
     #[test]
     fn position_span_never_becomes_a_custody_slot() {
-        let spans = [14, 0, 14, 0, 2, 0, 14, 3];
+        let spans = [14, 0, 14, 0, 2, 0, 14, 3, 6];
         assert_eq!(scenario_custody_span_widths(spans), [14, 0, 14, 0, 0, 14]);
     }
 

@@ -507,7 +507,10 @@ mod tests {
 
     #[test]
     fn profile13_packs_sparse_and_dense_selector_nine_frames() {
-        for spans in [[0, 0, 0, 0, 1, 0, 0, 3], [14, 14, 14, 14, 2, 14, 14, 0]] {
+        for spans in [
+            [0, 0, 0, 0, 1, 0, 0, 3, 6],
+            [14, 14, 14, 14, 2, 14, 14, 0, 6],
+        ] {
             let (fixed_accounts, suffix) = runtime_fixture(4, spans);
             let state = DealerScenarioHotMetaStateV4 {
                 fixed_accounts: &fixed_accounts,
@@ -523,7 +526,7 @@ mod tests {
 
     #[test]
     fn packed_frame_refuses_privilege_and_exact_data_substitution() {
-        let spans = [0, 0, 0, 0, 1, 0, 0, 3];
+        let spans = [0, 0, 0, 0, 1, 0, 0, 3, 6];
         let (fixed_accounts, mut suffix) = runtime_fixture(4, spans);
         let profile_bytes = canonical_profile([32, 128, 48, 56, 64]);
         let profile = AccountProfileV2::decode(&profile_bytes).expect("canonical profile");
@@ -575,7 +578,7 @@ mod tests {
 
     #[test]
     fn profile_bytes_are_bound_to_observed_common_widths() {
-        let spans = [0, 0, 0, 0, 1, 0, 0, 1];
+        let spans = [0, 0, 0, 0, 1, 0, 0, 1, 6];
         let (mut fixed_accounts, suffix) = runtime_fixture(4, spans);
         let state = DealerScenarioHotMetaStateV4 {
             fixed_accounts: &fixed_accounts,
