@@ -95,6 +95,10 @@ use dclutch_request_profile_contract::{
     ProjectionRegistersV1, RequestProfileV1, SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1,
     project_atomic as project_request_atomic,
     v2::{NativeSignatureRegistersV1, REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID, RequestProfileV2},
+    v3::{
+        BorrowedWitnessPolicyV3, BorrowedWitnessRoleV3, REQUEST_PROFILE_V3_SCHEMA_RELEASE_ID,
+        RequestProfileV3,
+    },
 };
 use dclutch_transition_vm::v3::{
     ProgramV3 as TransitionProgramV3, RegisterInput, RegisterOutput,
@@ -602,11 +606,11 @@ pub fn process_hot_execution_v3(
     require_tail_count_agreement_v3(product_outcome_count, tail_count)?;
     require_geometry(
         account_profile,
-        request_profile.v1(),
+        request_profile,
         transition,
         effect,
         tail_count,
-        family_request.len(),
+        family_request,
         runtime_accounts.len(),
     )?;
     let scalar_count = effect
@@ -673,8 +677,7 @@ pub fn process_hot_execution_v3(
     let mut request_scratch_identities = signed_identities.clone();
     let mut request_output_scalars = account_output_scalars.clone();
     let mut request_output_identities = signed_identities.clone();
-    project_request_atomic(
-        request_profile.v1(),
+    request_profile.project_atomic(
         tail_count,
         family_request,
         ProjectionRegistersV1 {
@@ -685,8 +688,7 @@ pub fn process_hot_execution_v3(
             output_scalars: &mut request_output_scalars,
             output_identities: &mut request_output_identities,
         },
-    )
-    .map_err(|_| TradingSbfError::Content)?;
+    )?;
     require_trusted_environment_v3(trusted_environment, &request_output_scalars)?;
 
     let (transition_output_scalars, transition_output_identities, admitted_execution_digest) =
@@ -828,6 +830,15 @@ pub fn process_hot_execution_v3(
                 [0_u8; 32],
             )
         };
+
+    require_borrowed_witness_coverage_v3(
+        request_profile,
+        effect,
+        tail_count,
+        &transition_output_scalars,
+        &transition_output_identities,
+        family_request,
+    )?;
 
     let aliases = (0..runtime_accounts.len())
         .map(|coordinate| {
@@ -1027,6 +1038,7 @@ pub fn process_hot_execution_v3(
     let child_execution_digest = execute_child_routes_v3(
         program_id,
         frame,
+        request_profile,
         effect,
         tail_count,
         &transition_output_scalars,
@@ -1860,6 +1872,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
 fn execute_child_routes_v3<'accounts, 'info>(
     program_id: &Pubkey,
     frame: HotFrameV3<'accounts, 'info>,
+    request_profile: RequestProfileKindV3<'_>,
     effect: EffectProgramV3<'_>,
     tail_count: u32,
     scalars: &[u64],
@@ -2136,6 +2149,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
             if producer != *child_program.key {
                 return Err(TradingSbfError::Transition.into());
             }
+            require_borrowed_witness_receipt_v3(request_profile, resolved, role, &receipt_bytes)?;
             let provenance = child_receipt_provenance_v4(
                 resolved,
                 role,
@@ -2214,20 +2228,30 @@ fn child_receipt_provenance_v4(
     let child_request = request_bank
         .get(invocation.request_offset..request_end)
         .ok_or(TradingSbfError::Content)?;
-    let request_kind = child_request
+    let borrowed_request = invocation
+        .borrowed_witness
+        .map(|witness| {
+            witness
+                .slice(family_request)
+                .map_err(|_| TradingSbfError::Content)
+        })
+        .transpose()?;
+    let request_kind_source = if child_request.len() >= 8 {
+        child_request
+    } else if child_request.is_empty() {
+        borrowed_request.ok_or(TradingSbfError::Content)?
+    } else {
+        return Err(TradingSbfError::Content.into());
+    };
+    let request_kind = request_kind_source
         .get(..8)
         .ok_or(TradingSbfError::Content)?
         .try_into()
         .map_err(|_| TradingSbfError::Content)?;
-    let request_digest = match invocation.borrowed_witness {
-        Some(witness) => hashv(&[
-            CHILD_REQUEST_DIGEST_DOMAIN_V4,
-            child_request,
-            witness
-                .slice(family_request)
-                .map_err(|_| TradingSbfError::Content)?,
-        ])
-        .to_bytes(),
+    let request_digest = match borrowed_request {
+        Some(witness) => {
+            hashv(&[CHILD_REQUEST_DIGEST_DOMAIN_V4, child_request, witness]).to_bytes()
+        }
         None => hashv(&[CHILD_REQUEST_DIGEST_DOMAIN_V4, child_request]).to_bytes(),
     };
     let context_digest = hashv(&[
@@ -2518,6 +2542,7 @@ fn claims_receipt_digest_v3(receipt: ClaimsRouteReceiptV3) -> Result<[u8; 32], P
             .map_err(|_| TradingSbfError::Transition)?,
         ClaimsRouteReceiptV3::Affine(value) => Vec::from(value.to_bytes()),
         ClaimsRouteReceiptV3::SignedDelta(value) => Vec::from(value.to_bytes()),
+        ClaimsRouteReceiptV3::SparseNativeTransfer(value) => Vec::from(value.to_bytes()),
         ClaimsRouteReceiptV3::Close(value) => value
             .to_bytes()
             .map(Vec::from)
@@ -2530,6 +2555,7 @@ fn claims_receipt_digest_v3(receipt: ClaimsRouteReceiptV3) -> Result<[u8; 32], P
 enum RequestProfileKindV3<'a> {
     Unsigned(RequestProfileV1<'a>),
     Signed(RequestProfileV2<'a>),
+    Borrowed(RequestProfileV3<'a>),
 }
 
 impl<'a> RequestProfileKindV3<'a> {
@@ -2537,6 +2563,56 @@ impl<'a> RequestProfileKindV3<'a> {
         match self {
             Self::Unsigned(profile) => profile,
             Self::Signed(profile) => profile.request_profile(),
+            Self::Borrowed(profile) => profile.request_profile(),
+        }
+    }
+
+    fn project_atomic(
+        self,
+        tail_count: u32,
+        family_request: &'a [u8],
+        registers: ProjectionRegistersV1<'_>,
+    ) -> Result<(), ProgramError> {
+        match self {
+            Self::Unsigned(profile) => {
+                project_request_atomic(profile, tail_count, family_request, registers)
+                    .map_err(|_| TradingSbfError::Content.into())
+            }
+            Self::Signed(profile) => project_request_atomic(
+                profile.request_profile(),
+                tail_count,
+                family_request,
+                registers,
+            )
+            .map_err(|_| TradingSbfError::Content.into()),
+            Self::Borrowed(profile) => profile
+                .project_prefix_atomic(tail_count, family_request, registers)
+                .map_err(|_| TradingSbfError::Content.into()),
+        }
+    }
+
+    fn require_request_shape(
+        self,
+        tail_count: u32,
+        family_request: &'a [u8],
+    ) -> Result<(), ProgramError> {
+        match self {
+            Self::Borrowed(profile) => profile
+                .split_request(tail_count, family_request)
+                .map(|_| ())
+                .map_err(|_| TradingSbfError::Content.into()),
+            Self::Unsigned(_) | Self::Signed(_) => {
+                if self
+                    .v1()
+                    .request_bytes(tail_count)
+                    .map_err(|_| TradingSbfError::Content)?
+                    == family_request.len()
+                {
+                    Ok(())
+                } else {
+                    Err(TradingSbfError::Content.into())
+                }
+            }
         }
     }
 }
@@ -2556,6 +2632,11 @@ fn decode_request_profile<'a>(
         RequestProfileV2::decode_selected(selected, authenticated, bytes)
             .map(RequestProfileKindV3::Signed)
             .map_err(|_| TradingSbfError::Content.into())
+    } else if descriptor.request_profile_schema().to_bytes() == REQUEST_PROFILE_V3_SCHEMA_RELEASE_ID
+    {
+        RequestProfileV3::decode_selected(selected, authenticated, bytes)
+            .map(RequestProfileKindV3::Borrowed)
+            .map_err(|_| TradingSbfError::Content.into())
     } else {
         Err(TradingSbfError::UnsupportedContent.into())
     }
@@ -2564,13 +2645,15 @@ fn decode_request_profile<'a>(
 #[allow(clippy::too_many_arguments)]
 fn require_geometry(
     account: AccountProfileV2<'_>,
-    request: RequestProfileV1<'_>,
+    request: RequestProfileKindV3<'_>,
     transition: TransitionProgramV3<'_>,
     effect: EffectProgramV3<'_>,
     tail_count: u32,
-    request_bytes: usize,
+    family_request: &[u8],
     runtime_accounts: usize,
 ) -> Result<(), ProgramError> {
+    request.require_request_shape(tail_count, family_request)?;
+    let request_v1 = request.v1();
     let expected_accounts = usize::from(account.fixed_account_count())
         .checked_add(
             usize::try_from(tail_count)
@@ -2579,17 +2662,13 @@ fn require_geometry(
                 .ok_or(TradingSbfError::Content)?,
         )
         .ok_or(TradingSbfError::Content)?;
-    if request
-        .request_bytes(tail_count)
-        .map_err(|_| TradingSbfError::Content)?
-        != request_bytes
-        || expected_accounts != runtime_accounts
+    if expected_accounts != runtime_accounts
         || account.fixed_account_count() != effect.fixed_account_count()
         || account.item_account_stride() != effect.item_account_stride()
-        || account.common_scalar_count() != request.common_scalar_count()
-        || account.item_scalar_stride() != request.item_scalar_stride()
-        || account.common_identity_count() != request.common_identity_count()
-        || account.item_identity_stride() != request.item_identity_stride()
+        || account.common_scalar_count() != request_v1.common_scalar_count()
+        || account.item_scalar_stride() != request_v1.item_scalar_stride()
+        || account.common_identity_count() != request_v1.common_identity_count()
+        || account.item_identity_stride() != request_v1.item_identity_stride()
         || account.common_scalar_count() != transition.common_scalar_count()
         || account.item_scalar_stride() != transition.item_scalar_stride()
         || account.common_identity_count() != transition.common_identity_count()
@@ -2600,6 +2679,100 @@ fn require_geometry(
         || account.item_identity_stride() != effect.item_identity_stride()
     {
         Err(TradingSbfError::Content.into())
+    } else {
+        Ok(())
+    }
+}
+
+fn require_borrowed_witness_coverage_v3<'a>(
+    request_profile: RequestProfileKindV3<'a>,
+    effect: EffectProgramV3<'_>,
+    tail_count: u32,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+    family_request: &'a [u8],
+) -> Result<(), ProgramError> {
+    let RequestProfileKindV3::Borrowed(profile) = request_profile else {
+        return Ok(());
+    };
+    let (_, declared_witness) = profile
+        .split_request(tail_count, family_request)
+        .map_err(|_| TradingSbfError::Content)?;
+    let policy = profile.witness_policy();
+    let expected_role = borrowed_witness_role_v3(policy.consumer_role);
+    let mut borrower_count = 0_u16;
+    let mut route_index = 0_u16;
+    while route_index < effect.route_count() {
+        let route = effect
+            .route(route_index)
+            .map_err(|_| TradingSbfError::Content)?;
+        if route.borrows_witness() {
+            borrower_count = borrower_count
+                .checked_add(1)
+                .ok_or(TradingSbfError::Content)?;
+            if route.role() != expected_role
+                || route.kind() != dclutch_effect_kernel::v3::RouteKindV3::Once
+                || route.fixed_request_bytes() != 0
+                || route.item_request_bytes() != 0
+                || effect
+                    .invocation_count(route_index, tail_count, scalars, identities)
+                    .map_err(|_| TradingSbfError::Content)?
+                    != 1
+            {
+                return Err(TradingSbfError::Content.into());
+            }
+            let invocation = effect
+                .resolved_invocation(route_index, 0, tail_count, scalars, identities)
+                .map_err(|_| TradingSbfError::Content)?;
+            let witness = invocation
+                .borrowed_witness
+                .ok_or(TradingSbfError::Content)?;
+            if invocation.request_len != 0
+                || witness
+                    .slice(family_request)
+                    .map_err(|_| TradingSbfError::Content)?
+                    != declared_witness
+            {
+                return Err(TradingSbfError::Content.into());
+            }
+        }
+        route_index = route_index.checked_add(1).ok_or(TradingSbfError::Content)?;
+    }
+    if borrower_count != 1 {
+        Err(TradingSbfError::Content.into())
+    } else {
+        Ok(())
+    }
+}
+
+const fn borrowed_witness_role_v3(role: BorrowedWitnessRoleV3) -> FixedRole {
+    match role {
+        BorrowedWitnessRoleV3::Core => FixedRole::Core,
+        BorrowedWitnessRoleV3::Claims => FixedRole::Claims,
+        BorrowedWitnessRoleV3::Resolution => FixedRole::Resolution,
+        BorrowedWitnessRoleV3::Custody => FixedRole::Custody,
+    }
+}
+
+fn require_borrowed_witness_receipt_v3(
+    request_profile: RequestProfileKindV3<'_>,
+    invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
+    role: FixedRole,
+    receipt: &[u8],
+) -> Result<(), ProgramError> {
+    let RequestProfileKindV3::Borrowed(profile) = request_profile else {
+        return Ok(());
+    };
+    if invocation.borrowed_witness.is_none() {
+        return Ok(());
+    }
+    let policy: BorrowedWitnessPolicyV3 = profile.witness_policy();
+    if role != borrowed_witness_role_v3(policy.consumer_role)
+        || receipt.len()
+            != usize::try_from(policy.child_receipt_bytes).map_err(|_| TradingSbfError::Content)?
+        || receipt.get(..8) != Some(policy.child_receipt_magic.as_slice())
+    {
+        Err(TradingSbfError::Transition.into())
     } else {
         Ok(())
     }
