@@ -13,12 +13,15 @@ use super::v2::{AccountInput, AccountPermission, FixedRole};
 
 /// Canonical runtime-tail effect-program magic.
 pub const MAGIC: [u8; 4] = *b"DCE3";
-/// Finalized-record schema label for runtime-tail effect programs.
-pub const SCHEMA_RELEASE_PREIMAGE: &[u8] = b"dclutch/schema/effect-program-v3";
+/// Finalized-record schema label for the V3 syntax successor admitting typed
+/// account-data writes. The new release prevents old decoders from silently
+/// accepting a program whose opcode vocabulary they do not own.
+pub const SCHEMA_RELEASE_PREIMAGE: &[u8] =
+    b"dclutch/schema/effect-program-v3-typed-account-writes-v2";
 /// SHA-256 of [`SCHEMA_RELEASE_PREIMAGE`].
 pub const SCHEMA_RELEASE_ID: [u8; 32] = [
-    0x94, 0x74, 0xe6, 0x61, 0xc4, 0xa0, 0x03, 0x2e, 0xd4, 0x5c, 0x36, 0xd0, 0x08, 0x7e, 0xb0, 0x7a,
-    0xb4, 0x30, 0xa9, 0xc4, 0xc9, 0xa2, 0xd2, 0x2f, 0xba, 0xcd, 0xd0, 0x99, 0x5e, 0x58, 0x96, 0x03,
+    0x8d, 0x79, 0x62, 0x6e, 0xbf, 0x86, 0xdb, 0xed, 0x65, 0xb9, 0x42, 0xb2, 0x4e, 0xb5, 0x43, 0xdd,
+    0x3d, 0xf3, 0x19, 0x61, 0x17, 0x6c, 0x4e, 0x94, 0xf5, 0x21, 0x83, 0x33, 0x96, 0x45, 0x30, 0x5c,
 ];
 /// Canonical runtime-tail effect-program version.
 pub const VERSION: u8 = 3;
@@ -40,6 +43,12 @@ const OP_WRITE_REQUEST_U64: u8 = 7;
 const OP_WRITE_REQUEST_IDENTITY: u8 = 8;
 const OP_WRITE_SCALAR_AFFINE: u8 = 9;
 const OP_WRITE_IDENTITY_AFFINE: u8 = 10;
+const OP_WRITE_DATA_U8: u8 = 11;
+const OP_WRITE_DATA_U16: u8 = 12;
+const OP_WRITE_DATA_U32: u8 = 13;
+const OP_WRITE_DATA_U8_AFFINE: u8 = 14;
+const OP_WRITE_DATA_U16_AFFINE: u8 = 15;
+const OP_WRITE_DATA_U32_AFFINE: u8 = 16;
 
 const MODE_ACCOUNT_A_ITEM: u8 = 1 << 0;
 const MODE_ACCOUNT_B_ITEM: u8 = 1 << 1;
@@ -286,6 +295,33 @@ pub enum ResolvedEffectV3 {
         offset: u32,
         /// Exact identity.
         value: [u8; 32],
+    },
+    /// Write one scalar narrowed to an exact byte into authenticated account data.
+    WriteU8 {
+        /// Expanded account coordinate.
+        account: usize,
+        /// Byte offset.
+        offset: u32,
+        /// Exact narrowed value.
+        value: u8,
+    },
+    /// Write one scalar narrowed to an exact little-endian `u16`.
+    WriteU16 {
+        /// Expanded account coordinate.
+        account: usize,
+        /// Byte offset.
+        offset: u32,
+        /// Exact narrowed value.
+        value: u16,
+    },
+    /// Write one scalar narrowed to an exact little-endian `u32`.
+    WriteU32 {
+        /// Expanded account coordinate.
+        account: usize,
+        /// Byte offset.
+        offset: u32,
+        /// Exact narrowed value.
+        value: u32,
     },
     /// Require one projected lamport balance exactly.
     RequireLamportsEq {
@@ -957,6 +993,12 @@ impl Operation {
             OP_TRANSFER_LAMPORTS
                 | OP_WRITE_SCALAR
                 | OP_WRITE_SCALAR_AFFINE
+                | OP_WRITE_DATA_U8
+                | OP_WRITE_DATA_U16
+                | OP_WRITE_DATA_U32
+                | OP_WRITE_DATA_U8_AFFINE
+                | OP_WRITE_DATA_U16_AFFINE
+                | OP_WRITE_DATA_U32_AFFINE
                 | OP_REQUIRE_LAMPORTS_EQ
                 | OP_WRITE_REQUEST_U8
                 | OP_WRITE_REQUEST_U16
@@ -1038,14 +1080,27 @@ impl Operation {
     fn is_data_write(self) -> bool {
         matches!(
             self.opcode,
-            OP_WRITE_SCALAR | OP_WRITE_IDENTITY | OP_WRITE_SCALAR_AFFINE | OP_WRITE_IDENTITY_AFFINE
+            OP_WRITE_SCALAR
+                | OP_WRITE_IDENTITY
+                | OP_WRITE_SCALAR_AFFINE
+                | OP_WRITE_IDENTITY_AFFINE
+                | OP_WRITE_DATA_U8
+                | OP_WRITE_DATA_U16
+                | OP_WRITE_DATA_U32
+                | OP_WRITE_DATA_U8_AFFINE
+                | OP_WRITE_DATA_U16_AFFINE
+                | OP_WRITE_DATA_U32_AFFINE
         )
     }
 
     fn is_affine_data_write(self) -> bool {
         matches!(
             self.opcode,
-            OP_WRITE_SCALAR_AFFINE | OP_WRITE_IDENTITY_AFFINE
+            OP_WRITE_SCALAR_AFFINE
+                | OP_WRITE_IDENTITY_AFFINE
+                | OP_WRITE_DATA_U8_AFFINE
+                | OP_WRITE_DATA_U16_AFFINE
+                | OP_WRITE_DATA_U32_AFFINE
         )
     }
 
@@ -1062,9 +1117,9 @@ impl Operation {
 
     const fn write_width(self) -> u32 {
         match self.opcode {
-            OP_WRITE_REQUEST_U8 => 1,
-            OP_WRITE_REQUEST_U16 => 2,
-            OP_WRITE_REQUEST_U32 => 4,
+            OP_WRITE_REQUEST_U8 | OP_WRITE_DATA_U8 | OP_WRITE_DATA_U8_AFFINE => 1,
+            OP_WRITE_REQUEST_U16 | OP_WRITE_DATA_U16 | OP_WRITE_DATA_U16_AFFINE => 2,
+            OP_WRITE_REQUEST_U32 | OP_WRITE_DATA_U32 | OP_WRITE_DATA_U32_AFFINE => 4,
             OP_WRITE_SCALAR | OP_WRITE_SCALAR_AFFINE | OP_WRITE_REQUEST_U64 => 8,
             OP_WRITE_IDENTITY | OP_WRITE_IDENTITY_AFFINE | OP_WRITE_REQUEST_IDENTITY => 32,
             _ => 0,
@@ -1156,6 +1211,33 @@ impl Operation {
                 account: account_a,
                 offset: self.affine_data_offset(item)?,
                 value: identity()?,
+            }),
+            OP_WRITE_DATA_U8 | OP_WRITE_DATA_U8_AFFINE => Ok(ResolvedEffectV3::WriteU8 {
+                account: account_a,
+                offset: if self.is_affine_data_write() {
+                    self.affine_data_offset(item)?
+                } else {
+                    self.data_offset
+                },
+                value: u8::try_from(scalar()?).map_err(|_| Error::NarrowingOverflow)?,
+            }),
+            OP_WRITE_DATA_U16 | OP_WRITE_DATA_U16_AFFINE => Ok(ResolvedEffectV3::WriteU16 {
+                account: account_a,
+                offset: if self.is_affine_data_write() {
+                    self.affine_data_offset(item)?
+                } else {
+                    self.data_offset
+                },
+                value: u16::try_from(scalar()?).map_err(|_| Error::NarrowingOverflow)?,
+            }),
+            OP_WRITE_DATA_U32 | OP_WRITE_DATA_U32_AFFINE => Ok(ResolvedEffectV3::WriteU32 {
+                account: account_a,
+                offset: if self.is_affine_data_write() {
+                    self.affine_data_offset(item)?
+                } else {
+                    self.data_offset
+                },
+                value: u32::try_from(scalar()?).map_err(|_| Error::NarrowingOverflow)?,
             }),
             OP_REQUIRE_LAMPORTS_EQ => Ok(ResolvedEffectV3::RequireLamportsEq {
                 account: account_a,
@@ -1440,6 +1522,15 @@ fn project_effect(effect: ResolvedEffectV3, projection: &mut ProjectionV3<'_>) -
         ResolvedEffectV3::WriteIdentity {
             account, offset, ..
         } => validate_data_write(account, offset, 32, projection),
+        ResolvedEffectV3::WriteU8 {
+            account, offset, ..
+        } => validate_data_write(account, offset, 1, projection),
+        ResolvedEffectV3::WriteU16 {
+            account, offset, ..
+        } => validate_data_write(account, offset, 2, projection),
+        ResolvedEffectV3::WriteU32 {
+            account, offset, ..
+        } => validate_data_write(account, offset, 4, projection),
         ResolvedEffectV3::RequireLamportsEq { account, value } => {
             let account = representative(projection.aliases, account)?;
             if projection.scratch_lamports.get(account).copied() == Some(value) {
@@ -1636,6 +1727,15 @@ fn resolved_data_range(
         ResolvedEffectV3::WriteIdentity {
             account, offset, ..
         } => Ok(Some((representative(aliases, account)?, offset, 32))),
+        ResolvedEffectV3::WriteU8 {
+            account, offset, ..
+        } => Ok(Some((representative(aliases, account)?, offset, 1))),
+        ResolvedEffectV3::WriteU16 {
+            account, offset, ..
+        } => Ok(Some((representative(aliases, account)?, offset, 2))),
+        ResolvedEffectV3::WriteU32 {
+            account, offset, ..
+        } => Ok(Some((representative(aliases, account)?, offset, 4))),
         _ => Ok(None),
     }
 }
@@ -2329,5 +2429,191 @@ mod tests {
             Err(Error::DataOutOfBounds)
         );
         assert_eq!(output_lamports, before_output);
+    }
+
+    fn typed_data_program(operations: &[[u8; OPERATION_BYTES]], accounts: u16) -> Vec<u8> {
+        let mut output = vec![0_u8; HEADER_BYTES + operations.len() * OPERATION_BYTES];
+        put(&mut output, 0, &MAGIC);
+        *output.get_mut(4).expect("version") = VERSION;
+        put(
+            &mut output,
+            8,
+            &u16::try_from(operations.len())
+                .expect("operation count")
+                .to_le_bytes(),
+        );
+        put(&mut output, 12, &accounts.to_le_bytes());
+        put(&mut output, 16, &3_u16.to_le_bytes());
+        let mut cursor = HEADER_BYTES;
+        for operation in operations {
+            put(&mut output, cursor, operation);
+            cursor += OPERATION_BYTES;
+        }
+        output
+    }
+
+    #[test]
+    fn typed_account_writes_narrow_and_resolve_exact_widths() {
+        let operations = [
+            operation(OP_WRITE_DATA_U8, 0, 0, 0, 0, 1, 0),
+            operation(OP_WRITE_DATA_U16, 0, 0, 0, 1, 2, 0),
+            operation(OP_WRITE_DATA_U32, 0, 0, 0, 2, 4, 0),
+        ];
+        let bytes = typed_data_program(&operations, 1);
+        let program = ProgramV3::decode(&bytes).expect("typed data program");
+        let scalars = [u64::from(u8::MAX), u64::from(u16::MAX), u64::from(u32::MAX)];
+        assert_eq!(
+            program.resolved_fixed_effect(0, 0, &scalars, &[]),
+            Ok(ResolvedEffectV3::WriteU8 {
+                account: 0,
+                offset: 1,
+                value: u8::MAX,
+            })
+        );
+        assert_eq!(
+            program.resolved_fixed_effect(1, 0, &scalars, &[]),
+            Ok(ResolvedEffectV3::WriteU16 {
+                account: 0,
+                offset: 2,
+                value: u16::MAX,
+            })
+        );
+        assert_eq!(
+            program.resolved_fixed_effect(2, 0, &scalars, &[]),
+            Ok(ResolvedEffectV3::WriteU32 {
+                account: 0,
+                offset: 4,
+                value: u32::MAX,
+            })
+        );
+        let accounts = [AccountInput {
+            lamports: 17,
+            data_len: 8,
+        }];
+        let permissions = [AccountPermission::new(false, false, true)];
+        let aliases = [0_usize];
+        let mut scratch_lamports = [0_u64];
+        let mut output_lamports = [99_u64];
+        project_atomic(
+            program,
+            0,
+            ProjectionV3 {
+                scalars: &scalars,
+                identities: &[],
+                aliases: &aliases,
+                accounts: &accounts,
+                permissions: &permissions,
+                scratch_lamports: &mut scratch_lamports,
+                output_lamports: &mut output_lamports,
+                scratch_requests: &mut [],
+                output_requests: &mut [],
+            },
+        )
+        .expect("typed writes preflight");
+        assert_eq!(output_lamports, [17]);
+    }
+
+    #[test]
+    fn typed_account_writes_refuse_narrowing_overlap_permissions_and_bounds_atomically() {
+        let narrowing = typed_data_program(&[operation(OP_WRITE_DATA_U8, 0, 0, 0, 0, 0, 0)], 1);
+        let program = ProgramV3::decode(&narrowing).expect("narrowing program");
+        assert_eq!(
+            program.resolved_fixed_effect(0, 0, &[u64::from(u8::MAX) + 1, 0, 0], &[]),
+            Err(Error::NarrowingOverflow)
+        );
+
+        let overlap = typed_data_program(
+            &[
+                operation(OP_WRITE_DATA_U8, 0, 0, 0, 0, 0, 0),
+                operation(OP_WRITE_DATA_U16, 0, 0, 0, 1, 0, 0),
+            ],
+            1,
+        );
+        assert_eq!(ProgramV3::decode(&overlap), Err(Error::OverlappingWrites));
+
+        let aliased = typed_data_program(
+            &[
+                operation(OP_WRITE_DATA_U8, 0, 0, 0, 0, 0, 0),
+                operation(OP_WRITE_DATA_U16, 0, 1, 0, 1, 0, 0),
+            ],
+            2,
+        );
+        let program = ProgramV3::decode(&aliased).expect("structurally disjoint accounts");
+        let accounts = [
+            AccountInput {
+                lamports: 7,
+                data_len: 4,
+            },
+            AccountInput {
+                lamports: 7,
+                data_len: 4,
+            },
+        ];
+        let writable = [
+            AccountPermission::new(false, false, true),
+            AccountPermission::new(false, false, true),
+        ];
+        let aliases = [0_usize, 0];
+        let mut scratch = [0_u64; 2];
+        let mut output = [91_u64; 2];
+        let before = output;
+        assert_eq!(
+            project_atomic(
+                program,
+                0,
+                ProjectionV3 {
+                    scalars: &[1, 2, 0],
+                    identities: &[],
+                    aliases: &aliases,
+                    accounts: &accounts,
+                    permissions: &writable,
+                    scratch_lamports: &mut scratch,
+                    output_lamports: &mut output,
+                    scratch_requests: &mut [],
+                    output_requests: &mut [],
+                },
+            ),
+            Err(Error::OverlappingWrites)
+        );
+        assert_eq!(output, before);
+
+        for (permission, data_len, expected) in [
+            (AccountPermission::read_only(), 4, Error::PermissionDenied),
+            (
+                AccountPermission::new(false, false, true),
+                0,
+                Error::DataOutOfBounds,
+            ),
+        ] {
+            let program = ProgramV3::decode(&narrowing).expect("typed program");
+            let accounts = [AccountInput {
+                lamports: 7,
+                data_len,
+            }];
+            let permissions = [permission];
+            let aliases = [0_usize];
+            let mut scratch = [0_u64];
+            let mut output = [99_u64];
+            let before = output;
+            assert_eq!(
+                project_atomic(
+                    program,
+                    0,
+                    ProjectionV3 {
+                        scalars: &[1, 0, 0],
+                        identities: &[],
+                        aliases: &aliases,
+                        accounts: &accounts,
+                        permissions: &permissions,
+                        scratch_lamports: &mut scratch,
+                        output_lamports: &mut output,
+                        scratch_requests: &mut [],
+                        output_requests: &mut [],
+                    },
+                ),
+                Err(expected)
+            );
+            assert_eq!(output, before);
+        }
     }
 }
