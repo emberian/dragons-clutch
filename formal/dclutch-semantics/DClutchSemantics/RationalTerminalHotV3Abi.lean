@@ -24,6 +24,14 @@ def familyMagic : List UInt8 :=
 def version : Nat := 3
 def fixedAssetCount : Nat := 1
 def requestBytes : Nat := requestHeaderBytes + fixedAssetCount * assetBytes
+def requestSchemaPreimage : List UInt8 :=
+  "dclutch/schema/rational-terminal-hot-request-v3".toUTF8.toList
+def requestSchemaId : List UInt8 := [
+  0x8b, 0xab, 0xcd, 0x90, 0x65, 0xc6, 0x52, 0x25,
+  0x32, 0xe2, 0x6c, 0x60, 0x63, 0x61, 0x56, 0x72,
+  0x4f, 0x7f, 0x6c, 0xfc, 0xfb, 0xa2, 0x60, 0x82,
+  0x75, 0x86, 0x27, 0xc4, 0x9c, 0xdc, 0x80, 0x3b
+]
 
 def childMagicOffset : Nat := RequestField.offset .magic
 def childVersionOffset : Nat := RequestField.offset .version
@@ -46,6 +54,8 @@ theorem request_bytes_exact : requestBytes = 648 := by decide
 theorem parent_context_is_digest_coordinate : parentContextOffset = 144 := by decide
 theorem specialization_preserves_width :
     requestBytes = requestHeaderBytes + assetBytes := by decide
+theorem request_schema_coordinates_are_exact :
+    requestSchemaPreimage.length = 47 ∧ requestSchemaId.length = 32 := by native_decide
 theorem request_profile_coordinates_exact :
     requestOffset .releaseSet = 16 ∧
     requestOffset .expectedRepresentationRevision = 400 ∧
