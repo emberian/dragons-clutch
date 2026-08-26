@@ -125,6 +125,7 @@ pub struct AccountObservationV1<'a> {
     signer: bool,
     writable: bool,
     executable: bool,
+    adapter_authenticated_variable_data: bool,
 }
 
 impl<'a> AccountObservationV1<'a> {
@@ -148,6 +149,36 @@ impl<'a> AccountObservationV1<'a> {
             signer,
             writable,
             executable,
+            adapter_authenticated_variable_data: false,
+        }
+    }
+
+    /// Construct an observation whose variable-width data was independently
+    /// authenticated by the runtime adapter.
+    ///
+    /// This opt-in is intentionally separate from [`Self::new`]. A selected
+    /// account profile still decides whether the observation may be consumed;
+    /// the bit alone grants no projection or effect authority.
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub const fn new_adapter_authenticated_variable_data(
+        key: [u8; 32],
+        owner: [u8; 32],
+        lamports: u64,
+        data: &'a [u8],
+        signer: bool,
+        writable: bool,
+        executable: bool,
+    ) -> Self {
+        Self {
+            key,
+            owner,
+            lamports,
+            data,
+            signer,
+            writable,
+            executable,
+            adapter_authenticated_variable_data: true,
         }
     }
 
@@ -173,6 +204,13 @@ impl<'a> AccountObservationV1<'a> {
     #[must_use]
     pub const fn data(self) -> &'a [u8] {
         self.data
+    }
+
+    /// Whether the adapter independently authenticated this variable-width
+    /// record's Registry finality, schema, and exact content digest.
+    #[must_use]
+    pub const fn adapter_authenticated_variable_data(self) -> bool {
+        self.adapter_authenticated_variable_data
     }
 
     fn privileges(self) -> u8 {

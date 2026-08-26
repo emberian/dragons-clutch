@@ -6,9 +6,9 @@
 //! output.
 
 use super::{
-    ARTIFACT_PROFILE, AccountPrestateV2, AccountProfileV2, Error, HEADER_BYTES,
-    LIFECYCLE_PRESTATE_ARTIFACT_PROFILE, MAGIC, OP_PROJECT_DATA_IDENTITY,
-    OP_PROJECT_DATA_IDENTITY_AFFINE, OP_PROJECT_DATA_IDENTITY_SELECTED,
+    ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE, ARTIFACT_PROFILE, AccountPrestateV2,
+    AccountProfileV2, Error, HEADER_BYTES, LIFECYCLE_PRESTATE_ARTIFACT_PROFILE, MAGIC,
+    OP_PROJECT_DATA_IDENTITY, OP_PROJECT_DATA_IDENTITY_AFFINE, OP_PROJECT_DATA_IDENTITY_SELECTED,
     OP_PROJECT_DATA_IDENTITY_SELECTED_AFFINE, OP_PROJECT_DATA_U16, OP_PROJECT_DATA_U32,
     OP_PROJECT_DATA_U64, OP_PROJECT_DATA_U64_AFFINE, OP_PROJECT_DATA_U64_SELECTED,
     OP_PROJECT_DATA_U64_SELECTED_AFFINE, OP_PROJECT_KEY, OP_PROJECT_LAMPORTS, OP_PROJECT_OWNER,
@@ -36,6 +36,9 @@ pub enum AccountProfileArtifactV2 {
     TrustedEnvironment,
     /// Trusted-environment profile with lifecycle-bound alternative prestates.
     LifecyclePrestate,
+    /// Lifecycle-prestate profile with explicitly adapter-authenticated,
+    /// variable-width readonly fixed-prefix records.
+    AdapterAuthenticatedVariableData,
 }
 
 impl AccountProfileArtifactV2 {
@@ -46,6 +49,9 @@ impl AccountProfileArtifactV2 {
             Self::TypedScalar => TYPED_SCALAR_ARTIFACT_PROFILE,
             Self::TrustedEnvironment => TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE,
             Self::LifecyclePrestate => LIFECYCLE_PRESTATE_ARTIFACT_PROFILE,
+            Self::AdapterAuthenticatedVariableData => {
+                ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE
+            }
         }
     }
 }
@@ -458,6 +464,36 @@ pub fn encode_account_profile_with_lifecycle_v2_atomic(
     )
 }
 
+/// Encode profile 7 with lifecycle-bound and adapter-authenticated
+/// variable-width prestates.
+///
+/// At least one variable-width rule is required. The hostile decoder enforces
+/// that every such rule is a self-representative readonly fixed-prefix record
+/// with a nonzero checked prefix and no effect permissions.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_account_profile_with_adapter_authenticated_variable_data_v2_atomic(
+    trusted_environment: TrustedEnvironmentV2,
+    fixed_rules: &[AccountRuleWithPrestateInputV2],
+    item_rules: &[AccountRuleWithPrestateInputV2],
+    fixed_operations: &[AccountOperationInputV2],
+    item_operations: &[AccountOperationInputV2],
+    registers: RegisterGeometryV2,
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<(), Error> {
+    encode_account_profile_atomic(
+        AccountProfileArtifactV2::AdapterAuthenticatedVariableData,
+        trusted_environment,
+        RuleInputsV2::WithPrestate(fixed_rules),
+        RuleInputsV2::WithPrestate(item_rules),
+        fixed_operations,
+        item_operations,
+        registers,
+        scratch,
+        output,
+    )
+}
+
 #[derive(Clone, Copy)]
 enum RuleInputsV2<'a> {
     Exact(&'a [AccountRuleInputV2]),
@@ -504,6 +540,7 @@ fn encode_account_profile_atomic(
             artifact,
             AccountProfileArtifactV2::TrustedEnvironment
                 | AccountProfileArtifactV2::LifecyclePrestate
+                | AccountProfileArtifactV2::AdapterAuthenticatedVariableData
         )
     {
         return Err(Error::InvalidTrustedEnvironment);
@@ -605,6 +642,7 @@ fn encode_rule(
         match prestate {
             AccountPrestateV2::Exact => 0,
             AccountPrestateV2::LifecycleBound => 1,
+            AccountPrestateV2::AdapterAuthenticatedVariableData => 2,
         },
     )?;
     write(output, add(offset, 4)?, &alias_index.to_le_bytes())?;
@@ -1199,6 +1237,282 @@ mod tests {
             Err(Error::InvalidLifecyclePrestate)
         );
         assert_eq!(hostile_output, before);
+    }
+
+    #[test]
+    fn adapter_authenticated_variable_data_is_explicit_bounded_and_readonly() {
+        let variable_rule = AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: READONLY,
+                effect_permissions: NO_EFFECTS,
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length: 16,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::AdapterAuthenticatedVariableData,
+        };
+        let lifecycle_rule = AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: WRITABLE,
+                effect_permissions: AccountEffectPermissionsV2::new(false, true, true),
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length: 152,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::LifecycleBound,
+        };
+        let rules = [variable_rule, lifecycle_rule];
+        let operations = [
+            AccountOperationInputV2::ProjectDataU32 {
+                account: AccountCoordinateV2::fixed(0),
+                destination: ScalarCoordinateV2::common(0),
+                data_offset: 260,
+            },
+            AccountOperationInputV2::ProjectDataU64 {
+                account: AccountCoordinateV2::fixed(1),
+                destination: ScalarCoordinateV2::common(2),
+                data_offset: 8,
+            },
+        ];
+        let width = HEADER_BYTES + rules.len() * RULE_BYTES + operations.len() * OPERATION_BYTES;
+        let mut encode_scratch = std::vec![0_u8; width];
+        let mut encoded = std::vec![0_u8; width];
+        let registers = RegisterGeometryV2 {
+            common_scalars: 3,
+            item_scalar_stride: 0,
+            common_identities: 0,
+            item_identity_stride: 0,
+        };
+        encode_account_profile_with_adapter_authenticated_variable_data_v2_atomic(
+            TrustedEnvironmentV2::CurrentSlot { destination: 1 },
+            &rules,
+            &[],
+            &operations,
+            &[],
+            registers,
+            &mut encode_scratch,
+            &mut encoded,
+        )
+        .expect("variable-data successor profile");
+        let profile = AccountProfileV2::decode(&encoded).expect("decode successor profile");
+        assert_eq!(
+            profile.artifact_profile(),
+            ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE
+        );
+        assert_eq!(
+            profile.rule(false, 0).expect("variable rule").prestate(),
+            AccountPrestateV2::AdapterAuthenticatedVariableData
+        );
+
+        let mut variable_data = [0_u8; 264];
+        variable_data
+            .get_mut(260..264)
+            .expect("projected field")
+            .copy_from_slice(&0x4433_2211_u32.to_le_bytes());
+        let live_lifecycle = [0_u8; 152];
+        let project = |variable: AccountObservationV1<'_>,
+                       output: &mut [u64; 3]|
+         -> crate::v2::Result<()> {
+            let accounts = [
+                variable,
+                AccountObservationV1::new([3; 32], [4; 32], 9, &live_lifecycle, false, true, false),
+            ];
+            let input = [0_u64, 77_777, 0];
+            let mut scratch = [0_u64; 3];
+            project_atomic(
+                profile,
+                0,
+                &accounts,
+                ProjectionRegistersV2 {
+                    input_scalars: &input,
+                    input_identities: &[],
+                    scratch_scalars: &mut scratch,
+                    scratch_identities: &mut [],
+                    output_scalars: output,
+                    output_identities: &mut [],
+                },
+            )
+        };
+
+        let trusted = AccountObservationV1::new_adapter_authenticated_variable_data(
+            [1; 32],
+            [2; 32],
+            7,
+            &variable_data,
+            false,
+            false,
+            false,
+        );
+        assert!(trusted.adapter_authenticated_variable_data());
+        let mut projected = [9_u64; 3];
+        project(trusted, &mut projected).expect("project actual variable width");
+        assert_eq!(projected, [0x4433_2211, 77_777, 0]);
+
+        let ordinary =
+            AccountObservationV1::new([1; 32], [2; 32], 7, &variable_data, false, false, false);
+        assert!(!ordinary.adapter_authenticated_variable_data());
+        let mut refused = [9_u64; 3];
+        let before = refused;
+        assert_eq!(
+            project(ordinary, &mut refused),
+            Err(Error::InvalidVariableDataPrestate)
+        );
+        assert_eq!(refused, before);
+
+        let short = AccountObservationV1::new_adapter_authenticated_variable_data(
+            [1; 32],
+            [2; 32],
+            7,
+            &variable_data[..260],
+            false,
+            false,
+            false,
+        );
+        assert_eq!(project(short, &mut refused), Err(Error::DataOutOfBounds));
+        assert_eq!(refused, before);
+
+        let exact_rule = AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                data_length: 264,
+                ..variable_rule.rule
+            },
+            prestate: AccountPrestateV2::Exact,
+        };
+        let mut exact_scratch = std::vec![0_u8; width];
+        let mut exact_output = std::vec![0x55_u8; width];
+        let exact_before = exact_output.clone();
+        assert_eq!(
+            encode_account_profile_with_adapter_authenticated_variable_data_v2_atomic(
+                TrustedEnvironmentV2::CurrentSlot { destination: 1 },
+                &[exact_rule, lifecycle_rule],
+                &[],
+                &operations,
+                &[],
+                registers,
+                &mut exact_scratch,
+                &mut exact_output,
+            ),
+            Err(Error::InvalidVariableDataPrestate)
+        );
+        assert_eq!(exact_output, exact_before);
+
+        let mut wrong_profile = encoded.clone();
+        wrong_profile
+            .get_mut(10..12)
+            .expect("artifact profile")
+            .copy_from_slice(&LIFECYCLE_PRESTATE_ARTIFACT_PROFILE.to_le_bytes());
+        assert_eq!(
+            AccountProfileV2::decode(&wrong_profile),
+            Err(Error::InvalidLifecyclePrestate)
+        );
+
+        let exact_rules = [AccountRuleInputV2 {
+            data_length: 264,
+            ..variable_rule.rule
+        }];
+        let exact_width = HEADER_BYTES + RULE_BYTES + OPERATION_BYTES;
+        let mut exact_scratch = std::vec![0_u8; exact_width];
+        let mut exact_encoded = std::vec![0_u8; exact_width];
+        encode_account_profile_with_environment_v2_atomic(
+            AccountProfileArtifactV2::TrustedEnvironment,
+            TrustedEnvironmentV2::None,
+            &exact_rules,
+            &[],
+            &operations[..1],
+            &[],
+            RegisterGeometryV2 {
+                common_scalars: 1,
+                item_scalar_stride: 0,
+                common_identities: 0,
+                item_identity_stride: 0,
+            },
+            &mut exact_scratch,
+            &mut exact_encoded,
+        )
+        .expect("exact profile");
+        let exact_profile = AccountProfileV2::decode(&exact_encoded).expect("exact decode");
+        let exact_accounts = [trusted];
+        let input_scalars = [0_u64];
+        let mut scratch_scalars = [0_u64];
+        let mut output_scalars = [9_u64];
+        assert_eq!(
+            project_atomic(
+                exact_profile,
+                0,
+                &exact_accounts,
+                ProjectionRegistersV2 {
+                    input_scalars: &input_scalars,
+                    input_identities: &[],
+                    scratch_scalars: &mut scratch_scalars,
+                    scratch_identities: &mut [],
+                    output_scalars: &mut output_scalars,
+                    output_identities: &mut [],
+                },
+            ),
+            Err(Error::InvalidVariableDataPrestate)
+        );
+        assert_eq!(output_scalars, [9]);
+
+        for (hostile, expected) in [
+            (
+                AccountRuleWithPrestateInputV2 {
+                    rule: AccountRuleInputV2 {
+                        privileges: WRITABLE,
+                        ..variable_rule.rule
+                    },
+                    ..variable_rule
+                },
+                Error::InvalidVariableDataPrestate,
+            ),
+            (
+                AccountRuleWithPrestateInputV2 {
+                    rule: AccountRuleInputV2 {
+                        effect_permissions: AccountEffectPermissionsV2::new(false, true, false),
+                        ..variable_rule.rule
+                    },
+                    ..variable_rule
+                },
+                Error::InvalidEffectPermissions,
+            ),
+            (
+                AccountRuleWithPrestateInputV2 {
+                    rule: AccountRuleInputV2 {
+                        data_length: 0,
+                        ..variable_rule.rule
+                    },
+                    ..variable_rule
+                },
+                Error::InvalidVariableDataPrestate,
+            ),
+            (
+                AccountRuleWithPrestateInputV2 {
+                    rule: AccountRuleInputV2 {
+                        data_item_stride: 1,
+                        ..variable_rule.rule
+                    },
+                    ..variable_rule
+                },
+                Error::InvalidVariableDataPrestate,
+            ),
+        ] {
+            let mut hostile_scratch = std::vec![0_u8; width];
+            let mut hostile_output = std::vec![0x55_u8; width];
+            let hostile_before = hostile_output.clone();
+            assert_eq!(
+                encode_account_profile_with_adapter_authenticated_variable_data_v2_atomic(
+                    TrustedEnvironmentV2::CurrentSlot { destination: 1 },
+                    &[hostile, lifecycle_rule],
+                    &[],
+                    &operations,
+                    &[],
+                    registers,
+                    &mut hostile_scratch,
+                    &mut hostile_output,
+                ),
+                Err(expected)
+            );
+            assert_eq!(hostile_output, hostile_before);
+        }
     }
 
     #[test]

@@ -40,6 +40,9 @@ pub const TYPED_SCALAR_ARTIFACT_PROFILE: u16 = 4;
 pub const TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE: u16 = 5;
 /// Trusted-environment profile with lifecycle-bound alternative account prestates.
 pub const LIFECYCLE_PRESTATE_ARTIFACT_PROFILE: u16 = 6;
+/// Lifecycle-prestate profile admitting explicit adapter-authenticated
+/// variable-width, readonly fixed-prefix records.
+pub const ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE: u16 = 7;
 /// Exact V2 header width.
 pub const HEADER_BYTES: usize = 32;
 /// Exact account-rule width.
@@ -156,6 +159,8 @@ pub enum Error {
     TrustedEnvironmentOverwrite,
     /// A lifecycle-bound alternative prestate was malformed or used outside profile 6.
     InvalidLifecyclePrestate,
+    /// A variable-width prestate was malformed, unauthenticated, or used outside profile 7.
+    InvalidVariableDataPrestate,
 }
 
 /// Result alias for runtime-tail profiles.
@@ -233,6 +238,9 @@ pub enum AccountPrestateV2 {
     Exact,
     /// The lifecycle policy admits either vacant data or the declared live width.
     LifecycleBound,
+    /// The runtime adapter authenticated the exact nonempty record body and
+    /// the profile declares a checked fixed prefix rather than its full width.
+    AdapterAuthenticatedVariableData,
 }
 
 /// Hostile-decoded account rule template.
@@ -351,13 +359,16 @@ impl<'a> AccountProfileV2<'a> {
                     | TYPED_SCALAR_ARTIFACT_PROFILE
                     | TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE
                     | LIFECYCLE_PRESTATE_ARTIFACT_PROFILE
+                    | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE
             )
         {
             return Err(Error::UnsupportedProfile);
         }
         if !matches!(
             artifact_profile,
-            TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE | LIFECYCLE_PRESTATE_ARTIFACT_PROFILE
+            TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE
+                | LIFECYCLE_PRESTATE_ARTIFACT_PROFILE
+                | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE
         ) && read_u32(bytes, 28)? != 0
         {
             return Err(Error::NonCanonicalReserved);
@@ -609,6 +620,7 @@ impl<'a> AccountProfileV2<'a> {
 
     fn validate_rules(self) -> Result<()> {
         let mut lifecycle_bound = false;
+        let mut adapter_authenticated_variable_data = false;
         let mut fixed = 0_u16;
         while fixed < self.fixed_accounts {
             let rule = self.rule(false, fixed)?;
@@ -618,6 +630,8 @@ impl<'a> AccountProfileV2<'a> {
             validate_rule(rule, false, fixed, self.fixed_accounts)?;
             self.require_owner_anchor(false, fixed, rule)?;
             lifecycle_bound |= rule.prestate == AccountPrestateV2::LifecycleBound;
+            adapter_authenticated_variable_data |=
+                rule.prestate == AccountPrestateV2::AdapterAuthenticatedVariableData;
             fixed = fixed.checked_add(1).ok_or(Error::InvalidLength)?;
         }
         let mut item = 0_u16;
@@ -629,12 +643,28 @@ impl<'a> AccountProfileV2<'a> {
             validate_rule(rule, true, item, self.fixed_accounts)?;
             self.require_owner_anchor(true, item, rule)?;
             lifecycle_bound |= rule.prestate == AccountPrestateV2::LifecycleBound;
+            adapter_authenticated_variable_data |=
+                rule.prestate == AccountPrestateV2::AdapterAuthenticatedVariableData;
             item = item.checked_add(1).ok_or(Error::InvalidLength)?;
         }
-        if lifecycle_bound == (self.artifact_profile == LIFECYCLE_PRESTATE_ARTIFACT_PROFILE) {
-            Ok(())
-        } else {
-            Err(Error::InvalidLifecyclePrestate)
+        match self.artifact_profile {
+            LIFECYCLE_PRESTATE_ARTIFACT_PROFILE
+                if lifecycle_bound && !adapter_authenticated_variable_data =>
+            {
+                Ok(())
+            }
+            ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE
+                if adapter_authenticated_variable_data =>
+            {
+                Ok(())
+            }
+            LIFECYCLE_PRESTATE_ARTIFACT_PROFILE => Err(Error::InvalidLifecyclePrestate),
+            ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE => {
+                Err(Error::InvalidVariableDataPrestate)
+            }
+            _ if !lifecycle_bound && !adapter_authenticated_variable_data => Ok(()),
+            _ if lifecycle_bound => Err(Error::InvalidLifecyclePrestate),
+            _ => Err(Error::InvalidVariableDataPrestate),
         }
     }
 
@@ -811,7 +841,9 @@ impl<'a> AccountProfileV2<'a> {
 fn decode_trusted_environment(bytes: &[u8], artifact_profile: u16) -> Result<TrustedEnvironmentV2> {
     if !matches!(
         artifact_profile,
-        TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE | LIFECYCLE_PRESTATE_ARTIFACT_PROFILE
+        TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE
+            | LIFECYCLE_PRESTATE_ARTIFACT_PROFILE
+            | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE
     ) {
         return Ok(TrustedEnvironmentV2::None);
     }
@@ -981,11 +1013,29 @@ fn validate_accounts(
         if account.privileges() != rule.privileges {
             return Err(Error::PrivilegeMismatch);
         }
-        let exact_data_length = exact_rule_data_length(rule, tail_count)?;
-        if account.data().len() != exact_data_length
-            && !(rule.prestate == AccountPrestateV2::LifecycleBound && account.data().is_empty())
+        if account.adapter_authenticated_variable_data()
+            != (rule.prestate == AccountPrestateV2::AdapterAuthenticatedVariableData)
         {
-            return Err(Error::DataLengthMismatch);
+            return Err(Error::InvalidVariableDataPrestate);
+        }
+        let exact_data_length = exact_rule_data_length(rule, tail_count)?;
+        match rule.prestate {
+            AccountPrestateV2::Exact if account.data().len() != exact_data_length => {
+                return Err(Error::DataLengthMismatch);
+            }
+            AccountPrestateV2::LifecycleBound
+                if !account.data().is_empty() && account.data().len() != exact_data_length =>
+            {
+                return Err(Error::DataLengthMismatch);
+            }
+            AccountPrestateV2::AdapterAuthenticatedVariableData
+                if account.data().is_empty()
+                    || account.data().len() < exact_data_length
+                    || !account.adapter_authenticated_variable_data() =>
+            {
+                return Err(Error::InvalidVariableDataPrestate);
+            }
+            _ => {}
         }
         let representative = profile.representative(tail_count, coordinate)?;
         let canonical = accounts
@@ -997,6 +1047,8 @@ fn validate_accounts(
             || account.lamports() != canonical.lamports()
             || account.data() != canonical.data()
             || account.privileges() != canonical.privileges()
+            || account.adapter_authenticated_variable_data()
+                != canonical.adapter_authenticated_variable_data()
         {
             return Err(Error::AliasMismatch);
         }
@@ -1169,6 +1221,7 @@ impl Operation {
                         TYPED_SCALAR_ARTIFACT_PROFILE
                             | TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE
                             | LIFECYCLE_PRESTATE_ARTIFACT_PROFILE
+                            | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE
                     )
                 {
                     return Err(Error::NonCanonicalOperation);
@@ -1215,6 +1268,7 @@ impl Operation {
                         | TYPED_SCALAR_ARTIFACT_PROFILE
                         | TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE
                         | LIFECYCLE_PRESTATE_ARTIFACT_PROFILE
+                        | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE
                 ) || item_body
                     || self.account_item
                     || self.register_item
@@ -1588,6 +1642,17 @@ fn validate_rule(rule: AccountRuleV2, item: bool, index: u16, fixed_count: u16) 
     {
         return Err(Error::InvalidLifecyclePrestate);
     }
+    if rule.prestate == AccountPrestateV2::AdapterAuthenticatedVariableData
+        && (item
+            || rule.alias_kind != AliasKindV2::SelfCoordinate
+            || rule.alias_index != 0
+            || rule.privileges != 0
+            || rule.effect_permissions != 0
+            || rule.data_length == 0
+            || rule.data_item_stride != 0)
+    {
+        return Err(Error::InvalidVariableDataPrestate);
+    }
     match rule.alias_kind {
         AliasKindV2::SelfCoordinate if rule.alias_index == 0 => Ok(()),
         AliasKindV2::Fixed
@@ -1614,6 +1679,13 @@ fn decode_rule(bytes: &[u8], offset: usize, artifact_profile: u16) -> Result<Acc
             0 => AccountPrestateV2::Exact,
             1 => AccountPrestateV2::LifecycleBound,
             _ => return Err(Error::InvalidLifecyclePrestate),
+        }
+    } else if artifact_profile == ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE {
+        match prestate_tag {
+            0 => AccountPrestateV2::Exact,
+            1 => AccountPrestateV2::LifecycleBound,
+            2 => AccountPrestateV2::AdapterAuthenticatedVariableData,
+            _ => return Err(Error::InvalidVariableDataPrestate),
         }
     } else if prestate_tag == 0 {
         AccountPrestateV2::Exact
