@@ -924,83 +924,15 @@ fn lock_hoard_and_close_source(
     {
         return Err(CustodySbfError::AccountFrame.into());
     }
-
-    let profile = collateral_profile(request)?;
-    let mint_data = mint
-        .try_borrow_data()
-        .map_err(|_| CustodySbfError::TokenState)?;
-    let source_data = source
-        .try_borrow_data()
-        .map_err(|_| CustodySbfError::TokenState)?;
-    let hoard_data = hoard
-        .try_borrow_data()
-        .map_err(|_| CustodySbfError::TokenState)?;
-    let mint_facts = profile
-        .check_mint(request.token_program, &mint_data)
-        .map_err(|_| CustodySbfError::TokenState)?;
-    let facts = profile
-        .check_transfer(ExactTransferInput {
-            program_id: request.token_program,
-            mint_address: request.mint,
-            mint_data: &mint_data,
-            source_data: &source_data,
-            destination_data: &hoard_data,
-            authority: authority.key.to_bytes(),
-            amount: request.amount,
-            decimals: mint_facts.decimals,
-        })
-        .map_err(|_| CustodySbfError::TokenState)?;
-    if facts.source().owner != authority.key.to_bytes()
-        || facts.destination().owner != authority.key.to_bytes()
-        || facts.source().amount != request.amount
-        || facts.destination().amount != 0
-    {
-        return Err(CustodySbfError::TokenState.into());
-    }
-    drop(hoard_data);
-    drop(source_data);
-    drop(mint_data);
-
-    let spec = transfer_checked(
-        request.token_program,
-        request.funding_source_vault,
-        request.mint,
-        request.hoard_vault,
-        authority.key.to_bytes(),
-        request.amount,
-        mint_facts.decimals,
-    )
-    .map_err(|_| CustodySbfError::TokenState)?;
-    let authority_bump = Pubkey::find_program_address(
-        &[
-            CUSTODY_AUTHORITY_PDA_DOMAIN_V1,
-            &request.market,
-            &request.release_set,
-        ],
+    let (source_after, hoard_after) = transfer_source_into_hoard(
         program_id,
-    )
-    .1;
-    let authority_bump_seed = [authority_bump];
-    invoke_signed(
-        &token_instruction(&spec),
-        &[
-            source.clone(),
-            mint.clone(),
-            hoard.clone(),
-            authority.clone(),
-            token_program.clone(),
-        ],
-        &[&[
-            CUSTODY_AUTHORITY_PDA_DOMAIN_V1,
-            &request.market,
-            &request.release_set,
-            &authority_bump_seed,
-        ]],
-    )
-    .map_err(|_| CustodySbfError::TokenCpi)?;
-
-    let source_after = read_vault_amount(source, authority, request)?;
-    let hoard_after = read_vault_amount(hoard, authority, request)?;
+        source,
+        hoard,
+        authority,
+        mint,
+        token_program,
+        request,
+    )?;
     let source_replay_state = read_source_replay(source_replay)?;
     let state = read_state(account(accounts, STATE)?)?;
     let (next, receipt) = state
@@ -1039,6 +971,95 @@ fn lock_hoard_and_close_source(
     }
     commit_state(account(accounts, STATE)?, next)?;
     return_lock_receipt(receipt)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn transfer_source_into_hoard<'info>(
+    program_id: &Pubkey,
+    source: &AccountInfo<'info>,
+    hoard: &AccountInfo<'info>,
+    authority: &AccountInfo<'info>,
+    mint: &AccountInfo<'info>,
+    token_program: &AccountInfo<'info>,
+    request: ProjectedCustodyRequestV1,
+) -> Result<(u64, u64), ProgramError> {
+    let profile = collateral_profile(request)?;
+    let mint_data = mint
+        .try_borrow_data()
+        .map_err(|_| CustodySbfError::TokenState)?;
+    let source_data = source
+        .try_borrow_data()
+        .map_err(|_| CustodySbfError::TokenState)?;
+    let hoard_data = hoard
+        .try_borrow_data()
+        .map_err(|_| CustodySbfError::TokenState)?;
+    let mint_facts = profile
+        .check_mint(request.token_program, &mint_data)
+        .map_err(|_| CustodySbfError::TokenState)?;
+    let facts = profile
+        .check_transfer(ExactTransferInput {
+            program_id: request.token_program,
+            mint_address: request.mint,
+            mint_data: &mint_data,
+            source_data: &source_data,
+            destination_data: &hoard_data,
+            authority: authority.key.to_bytes(),
+            amount: request.amount,
+            decimals: mint_facts.decimals,
+        })
+        .map_err(|_| CustodySbfError::TokenState)?;
+    if facts.source().owner != authority.key.to_bytes()
+        || facts.destination().owner != authority.key.to_bytes()
+        || facts.source().amount != request.amount
+        || facts.destination().amount != 0
+    {
+        return Err(CustodySbfError::TokenState.into());
+    }
+    drop(hoard_data);
+    drop(source_data);
+    drop(mint_data);
+    let spec = transfer_checked(
+        request.token_program,
+        request.funding_source_vault,
+        request.mint,
+        request.hoard_vault,
+        authority.key.to_bytes(),
+        request.amount,
+        mint_facts.decimals,
+    )
+    .map_err(|_| CustodySbfError::TokenState)?;
+    let authority_bump = Pubkey::find_program_address(
+        &[
+            CUSTODY_AUTHORITY_PDA_DOMAIN_V1,
+            &request.market,
+            &request.release_set,
+        ],
+        program_id,
+    )
+    .1;
+    let authority_bump_seed = [authority_bump];
+    invoke_signed(
+        &token_instruction(&spec),
+        &[
+            source.clone(),
+            mint.clone(),
+            hoard.clone(),
+            authority.clone(),
+            token_program.clone(),
+        ],
+        &[&[
+            CUSTODY_AUTHORITY_PDA_DOMAIN_V1,
+            &request.market,
+            &request.release_set,
+            &authority_bump_seed,
+        ]],
+    )
+    .map_err(|_| CustodySbfError::TokenCpi)?;
+    Ok((
+        read_vault_amount(source, authority, request)?,
+        read_vault_amount(hoard, authority, request)?,
+    ))
 }
 
 fn authenticate_token_frame(
