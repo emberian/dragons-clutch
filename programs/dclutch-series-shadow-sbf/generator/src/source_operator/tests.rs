@@ -492,6 +492,20 @@ fn chain_derived_source_is_byte_identical_and_emits_exact_build_inputs() {
             .windows(b"SERIES_SHADOW_LIFECYCLE_V5".len())
             .any(|window| window == b"SERIES_SHADOW_LIFECYCLE_V5")
     );
+    if let Some(directory) = std::env::var_os("DCLUTCH_SERIES_SHADOW_EPHEMERAL_OUT_DIR") {
+        let directory = std::path::PathBuf::from(directory);
+        std::fs::create_dir_all(&directory).expect("create ephemeral Shadow evidence directory");
+        std::fs::write(
+            directory.join("series_shadow_generated.rs"),
+            &first.generated_include,
+        )
+        .expect("write ephemeral generated include");
+        std::fs::write(
+            directory.join("series_shadow_source_manifest.bin"),
+            &first.manifest,
+        )
+        .expect("write ephemeral source manifest");
+    }
 }
 
 #[test]
