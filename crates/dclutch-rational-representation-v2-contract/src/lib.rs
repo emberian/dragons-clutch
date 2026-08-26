@@ -13,6 +13,7 @@
 #[allow(missing_docs)]
 mod generated;
 mod plan;
+mod replay;
 mod receipt;
 mod request;
 
@@ -22,6 +23,10 @@ pub use generated::{
 };
 pub use plan::{
     PreparedRepresentationV2, TokenEffectIterV2, TokenEffectStyleV2, TokenEffectV2, prepare,
+};
+pub use replay::{
+    RATIONAL_REPLAY_BYTES_V2, RATIONAL_REPLAY_MAGIC_V2, RATIONAL_REPLAY_VERSION_V2,
+    RationalReplayV2,
 };
 pub use receipt::{CompletionEvidenceV2, RepresentationReceiptV2, finalize};
 pub use request::{
