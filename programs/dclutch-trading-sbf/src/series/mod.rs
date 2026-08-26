@@ -13,6 +13,8 @@ pub mod artifacts_v3;
 /// Complete Core/Custody/replay physical plans behind authenticated actions.
 /// Canonical SeriesEscrow projection into the sole Custody writer.
 pub mod custody_v3;
+/// Global five-route Consume Effect V4 topology and route-window admission.
+pub mod effect_v4;
 /// Exact Core-to-Custody call staging behind the common Hot V3 outer.
 pub mod execute_v3;
 /// Exact sparse family request consumed by the canonical Trading hot outer.
