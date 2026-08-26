@@ -24,6 +24,8 @@ use core::convert::TryInto;
 use dclutch_rational_representation_v2_kernel::RepresentationDescriptorV2;
 use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
 
+/// Compact support-derived Hot successor for complete receipt retirement.
+pub mod compact_hot_v4;
 /// Hot V3 family specialization for the sole lifecycle request/receipt ABI.
 pub mod hot_v3;
 
