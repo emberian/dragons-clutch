@@ -1,0 +1,35 @@
+[package]
+name = "dclutch-fractional-claim-contract"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+rust-version = "1.89"
+description = "Finalized artifact and family-request contract for exact fractional claims"
+publish = false
+
+[dependencies]
+dclutch-account-profile-contract = { path = "../dclutch-account-profile-contract" }
+dclutch-capability-program-contract = { path = "../dclutch-capability-program-contract" }
+dclutch-core-contract = { path = "../dclutch-core-contract" }
+dclutch-effect-kernel = { path = "../dclutch-effect-kernel" }
+dclutch-execution-strategy-contract = { path = "../dclutch-execution-strategy-contract" }
+dclutch-fractional-claim-kernel = { path = "../dclutch-fractional-claim-kernel" }
+dclutch-request-profile-contract = { path = "../dclutch-request-profile-contract" }
+dclutch-token-svm = { path = "../dclutch-token-svm" }
+dclutch-transition-vm = { path = "../dclutch-transition-vm" }
+sha2 = { version = "=0.10.9", default-features = false }
+
+[workspace]
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"
+
+[lints.clippy]
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+checked_conversions = "deny"
+float_arithmetic = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+unwrap_used = "deny"
