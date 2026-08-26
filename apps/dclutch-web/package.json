@@ -13,6 +13,8 @@
     "test": "vitest run --config vitest.config.ts",
     "abi:registered": "node scripts/generate-registered-direct.mjs",
     "abi:registered:verify": "node scripts/generate-registered-direct.mjs --check",
+    "abi:infrastructure": "node scripts/generate-protocol-infrastructure.mjs",
+    "abi:infrastructure:verify": "node scripts/generate-protocol-infrastructure.mjs --check",
     "fixtures:verify": "node scripts/verify-fixtures.mjs"
   },
   "dependencies": {

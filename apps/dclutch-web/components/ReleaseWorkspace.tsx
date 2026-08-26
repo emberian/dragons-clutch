@@ -13,6 +13,11 @@ import {
   type RegistryReauthenticationPlanV1,
   type RegistryRole,
 } from '@/lib/releaseRegistry';
+import {
+  CHECKED_INFRASTRUCTURE_BYTES_V1,
+  inspectProtocolInfrastructureV1,
+  type ProtocolInfrastructureInspectionV1,
+} from '@/lib/infrastructure';
 import { SolanaRpcClient } from '@/lib/rpc';
 
 const LOCAL_RPC = 'http://127.0.0.1:8899';
@@ -61,11 +66,35 @@ function ReauthenticationResult({ plan }: Readonly<{ plan: RegistryReauthenticat
     <p className="direct-refusal"><strong>No signing or submission occurred.</strong> Reauthentication is read-only onchain; the fee-payer signature remains external.</p></div>;
 }
 
+function InfrastructureResult({ report }: Readonly<{ report: ProtocolInfrastructureInspectionV1 }>) {
+  const recognized = report.recognition.kind === 'supplied-manifest-match';
+  return <div className="direct-output release-output" data-testid="infrastructure-result">
+    <dl>
+      <div><dt>Finalized observation</dt><dd>slot {report.observedSlot}</dd></div>
+      <div><dt>Recognition</dt><dd>{recognized ? 'supplied manifest matches' : 'internally consistent / unrecognized'}</dd></div>
+      <div><dt>Execution release set</dt><dd>{report.executionReleaseSetId}</dd></div>
+      <div><dt>Core-owned profile</dt><dd>{report.profilePda}</dd></div>
+      <div><dt>Profile SHA-256</dt><dd>{report.profileDigest}</dd></div>
+      {recognized && <div><dt>Checked infrastructure</dt><dd>{report.recognition.checkedInfrastructureId}</dd></div>}
+    </dl>
+    <div className="registered-state-grid release-role-grid">
+      {(['core', 'registry', 'rent'] as const).map((role) => <article className="registered-state-card" key={role}>
+        <span className="eyebrow">{role} · immutable</span><h3>{compact(report[role].program)}</h3>
+        <p>artifact {compact(report[role].artifactReleaseId)} · semantic {compact(report[role].semanticReleaseId)}</p>
+        <p>ProgramData {compact(report[role].programData)} · slot {report[role].deploymentSlot}</p>
+        <p>ELF {compact(report[role].elfDigest)}</p>
+      </article>)}
+    </div>
+    <p className="direct-refusal"><strong>{recognized ? 'Recognized only by the exact manifest supplied in this inspection.' : 'No checked manifest was supplied, so this chain is not recognized.'}</strong> Internal consistency is not an official-deployment claim.</p>
+  </div>;
+}
+
 export default function ReleaseWorkspace() {
   const [endpoint, setEndpoint] = useState(LOCAL_RPC); const [registry, setRegistry] = useState(''); const [payer, setPayer] = useState('');
   const [multiprogram, setMultiprogram] = useState(''); const [manifests, setManifests] = useState(blankManifests);
   const [activationCompute, setActivationCompute] = useState(String(REGISTRY_MAX_COMPUTE_UNITS)); const [activationStatus, setActivationStatus] = useState('No manifest or chain request has been made.'); const [activation, setActivation] = useState<RegistryActivationPlanV1 | null>(null);
   const [cache, setCache] = useState(''); const [role, setRole] = useState<RegistryRole>('trading'); const [reauthCompute, setReauthCompute] = useState('80000'); const [reauthStatus, setReauthStatus] = useState('No cache has been reacquired.'); const [reauth, setReauth] = useState<RegistryReauthenticationPlanV1 | null>(null);
+  const [infrastructureManifest, setInfrastructureManifest] = useState(''); const [infrastructureStatus, setInfrastructureStatus] = useState('No infrastructure snapshot has been reacquired.'); const [infrastructure, setInfrastructure] = useState<ProtocolInfrastructureInspectionV1 | null>(null);
 
   async function buildActivation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setActivation(null); setActivationStatus('Decoding all six evidence files and reacquiring the exact finalized record, Loader, runtime, cache, rent, and payer state…');
@@ -84,10 +113,20 @@ export default function ReleaseWorkspace() {
     } catch (error) { setReauthStatus(`Refused: ${message(error)}`); }
   }
 
+  async function inspectInfrastructure(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setInfrastructure(null); setInfrastructureStatus('Reacquiring the activation cache, deriving Core and its immutable profile, then authenticating current Registry/Rent records and Loader state…');
+    try {
+      const checkedManifest = infrastructureManifest.length === 0 ? undefined : decodeManifestBase64(infrastructureManifest, 'checked infrastructure');
+      const report = await inspectProtocolInfrastructureV1(new SolanaRpcClient(endpoint), { registryProgram: registry, activationCache: cache, checkedManifest });
+      setInfrastructure(report);
+      setInfrastructureStatus(report.recognition.kind === 'supplied-manifest-match' ? 'Recognized: every observed infrastructure fact matches the supplied checked manifest.' : 'Internally consistent / unrecognized: no checked manifest was supplied.');
+    } catch (error) { setInfrastructureStatus(`Refused: ${message(error)}`); }
+  }
+
   return <main className="product-shell direct-workspace release-workspace">
     <header className="product-nav"><Link className="brand" href="/">dClutch</Link><nav><Link href="/direct">Direct</Link><Link href="/economic">Economic</Link><Link href="/general">General</Link><Link className="active" href="/release">Release</Link><Link href="/explorer">Explorer</Link></nav><span className="preview-control"><i className="preview-dot" />finalized only</span></header>
     <section className="market-heading"><div><div className="market-kicker"><span>five exact roles</span><span>Loader v3</span><span>unsigned packets</span></div><h1>Make executable authority inspectable.</h1><p>Join complete checked-build evidence to finalized Registry records and the code actually loaded by Solana. Construct activation or role reauthentication only when every content identity, PDA, Loader link, account digest, deployment slot, authority, and packet boundary agrees.</p></div></section>
-    <section className="direct-card"><div className="direct-card-heading"><span>01</span><div><h2>Shared local boundary</h2><p>The workspace defaults to the local validator. It never reads a wallet; the payer is an explicit public key whose signature remains outside this application.</p></div></div><div className="direct-form-grid"><label><span>Finalized RPC endpoint</span><input value={endpoint} onChange={(event) => setEndpoint(event.target.value.trim())} /></label><label><span>Registry / Core program</span><input required value={registry} onChange={(event) => setRegistry(event.target.value.trim())} /></label><label><span>External fee payer public key</span><input required value={payer} onChange={(event) => setPayer(event.target.value.trim())} /></label></div></section>
+    <section className="direct-card"><div className="direct-card-heading"><span>01</span><div><h2>Shared local boundary</h2><p>The workspace defaults to the local validator. It never reads a wallet; the payer is an explicit public key whose signature remains outside this application.</p></div></div><div className="direct-form-grid"><label><span>Finalized RPC endpoint</span><input value={endpoint} onChange={(event) => setEndpoint(event.target.value.trim())} /></label><label><span>Registry program</span><input required value={registry} onChange={(event) => setRegistry(event.target.value.trim())} /></label><label><span>External fee payer public key</span><input required value={payer} onChange={(event) => setPayer(event.target.value.trim())} /></label></div></section>
     <form className="direct-card" onSubmit={buildActivation}><div className="direct-card-heading"><span>02</span><div><h2>Activate a checked five-role release</h2><p>Supply the canonical fixed-width multiprogram evidence and all five complete checked-release manifests. The frontend rebuilds the compact artifact authorities, derives finalized record/staging/cache PDAs, and checks current Program and ProgramData bytes before constructing the exact 26-account action.</p></div></div>
       <label><span>1,592-byte checked multiprogram · base64</span><textarea required value={multiprogram} onChange={(event) => setMultiprogram(event.target.value.trim())} /></label>
       <div className="release-manifest-grid">{REGISTRY_ROLES.map((name) => <label key={name}><span>{name} complete checked release · base64</span><textarea required value={manifests[name]} onChange={(event) => setManifests((current) => ({ ...current, [name]: event.target.value.trim() }))} /></label>)}</div>
@@ -97,6 +136,11 @@ export default function ReleaseWorkspace() {
     <form className="direct-card" onSubmit={buildReauthentication}><div className="direct-card-heading"><span>03</span><div><h2>Reauthenticate one active role</h2><p>The Registry-owned cache selects the role and artifact. The workspace reacquires that cache, the Registry executable, and the role&apos;s current Program/ProgramData before constructing the exact read-only three-account action.</p></div></div>
       <div className="direct-form-grid"><label><span>Activation cache PDA</span><input required value={cache} onChange={(event) => setCache(event.target.value.trim())} /></label><label><span>Execution role</span><select value={role} onChange={(event) => setRole(event.target.value as RegistryRole)}>{REGISTRY_ROLES.map((name) => <option value={name} key={name}>{name}</option>)}</select></label><label><span>Reauthentication compute-unit limit</span><input inputMode="numeric" value={reauthCompute} onChange={(event) => setReauthCompute(event.target.value.trim())} /></label></div>
       <button type="submit">Reacquire current deployment &amp; build reauthentication</button><p className="direct-status" aria-live="polite">{reauthStatus}</p>{reauth && <ReauthenticationResult plan={reauth} />}
+    </form>
+    <form className="direct-card" onSubmit={inspectInfrastructure}><div className="direct-card-heading"><span>04</span><div><h2>Inspect immutable protocol infrastructure</h2><p>The activation cache selects Core. Core derives one immutable 144-byte profile selecting exact Registry and Rent programs and artifact releases. This read-only pass reacquires all three current Loader deployments and refuses mutable, stale, substituted, or partially joined state.</p></div></div>
+      <div className="direct-form-grid"><label><span>Market-selected activation cache PDA</span><input required value={cache} onChange={(event) => setCache(event.target.value.trim())} /></label></div>
+      <label><span>Optional {CHECKED_INFRASTRUCTURE_BYTES_V1.toLocaleString()}-byte checked infrastructure manifest · base64</span><textarea value={infrastructureManifest} onChange={(event) => setInfrastructureManifest(event.target.value.trim())} /></label>
+      <button type="submit">Reacquire &amp; inspect immutable chain</button><p className="direct-status" aria-live="polite">{infrastructureStatus}</p>{infrastructure && <InfrastructureResult report={infrastructure} />}
     </form>
     <footer className="product-footer"><span>Chain state and checked files are hostile inputs</span><span>No wallet connector · no submit path</span></footer>
   </main>;
