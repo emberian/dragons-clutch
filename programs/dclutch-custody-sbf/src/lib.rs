@@ -17,6 +17,8 @@ use dclutch_custody_contract::{
     PROJECTED_CUSTODY_REQUEST_BYTES_V1, PROJECTED_CUSTODY_REQUEST_MAGIC_V1,
     ProjectedCustodyRequestV1,
 };
+
+mod projected;
 use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV1, STATE_BYTES};
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1,
