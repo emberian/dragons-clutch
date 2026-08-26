@@ -20,5 +20,5 @@ done
 SBF_OUT_DIR="$sbf_out" cargo test \
   --locked \
   --manifest-path programs/dclutch-general-accelerator-sbf/program-test/Cargo.toml \
-  --test freeze \
+  --tests \
   -- --nocapture

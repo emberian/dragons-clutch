@@ -1596,6 +1596,7 @@ dependencies = [
  "dclutch-general-accelerator-test-caller-sbf",
  "dclutch-general-adapter-contract",
  "dclutch-general-codec",
+ "dclutch-general-config-contract",
  "solana-account 4.3.2",
  "solana-program",
  "solana-program-test",

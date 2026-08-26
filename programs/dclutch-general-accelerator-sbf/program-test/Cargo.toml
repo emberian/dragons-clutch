@@ -12,6 +12,7 @@ dclutch-execution-strategy-contract = { path = "../../../crates/dclutch-executio
 dclutch-general-accelerator-test-caller-sbf = { path = "../test-programs/general-caller", features = ["no-entrypoint"] }
 dclutch-general-adapter-contract = { path = "../../../crates/dclutch-general-adapter-contract" }
 dclutch-general-codec = { path = "../../../crates/dclutch-general-codec" }
+dclutch-general-config-contract = { path = "../../../crates/dclutch-general-config-contract" }
 solana-account = "=4.3.2"
 solana-program = "=3.0.0"
 solana-program-test = { version = "=4.2.1", features = ["agave-unstable-api"] }
