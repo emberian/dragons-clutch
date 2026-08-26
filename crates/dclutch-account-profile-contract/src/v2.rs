@@ -1027,10 +1027,14 @@ impl<'a> AccountProfileV2<'a> {
                 Err(Error::InvalidDynamicSpan)
             };
         }
-        if self.dynamic_fixed_span_count == 0
-            || self.item_account_stride == 0
-            || self.item_operations != 0
-        {
+        if self.dynamic_fixed_span_count == 0 {
+            return if self.item_account_stride == 0 && self.item_operations == 0 {
+                Ok(())
+            } else {
+                Err(Error::InvalidDynamicSpan)
+            };
+        }
+        if self.item_account_stride == 0 || self.item_operations != 0 {
             return Err(Error::InvalidDynamicSpan);
         }
         let mut prior_insertion = None;
@@ -2015,12 +2019,7 @@ fn decode_dynamic_fixed_span_count(bytes: &[u8], artifact_profile: u16) -> Resul
     {
         return Err(Error::InvalidDynamicSpan);
     }
-    let count = read_u16(bytes, DYNAMIC_FIXED_SPAN_COUNT_OFFSET)?;
-    if count == 0 {
-        Err(Error::InvalidDynamicSpan)
-    } else {
-        Ok(count)
-    }
+    read_u16(bytes, DYNAMIC_FIXED_SPAN_COUNT_OFFSET)
 }
 
 /// Caller-owned flat banks for failure-atomic V2 projection.

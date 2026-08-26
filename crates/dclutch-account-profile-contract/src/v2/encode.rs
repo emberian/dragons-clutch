@@ -767,14 +767,15 @@ pub fn encode_account_profile_with_authenticated_route_alias_v2_atomic(
     )
 }
 
-/// Encode profile 13 with one checked dynamic account span inserted into a
-/// fixed logical sequence.
+/// Encode profile 13 with zero or more checked dynamic account spans inserted
+/// into a fixed logical sequence.
 ///
-/// The span count is read only from the declared common scalar and must remain
-/// within the exact inclusive range. Fixed rules and operations retain base
-/// coordinates; the decoder shifts every suffix coordinate and alias target
-/// at runtime. Opaque-data rules authenticate account facts without granting
-/// local data projection or effect authority.
+/// Each span count is read only from its declared common scalar and must remain
+/// within the exact inclusive range. An empty span table is the canonical
+/// fixed-topology form and requires an empty span-rule template. Fixed rules
+/// and operations retain base coordinates; the decoder shifts every suffix
+/// coordinate and alias target at runtime. Opaque-data rules authenticate
+/// account facts without granting local data projection or effect authority.
 #[allow(clippy::too_many_arguments)]
 pub fn encode_account_profile_with_dynamic_fixed_span_v2_atomic(
     trusted_environment: TrustedEnvironmentV2,
@@ -4188,6 +4189,95 @@ mod tests {
                 &count_overwrite,
                 RegisterGeometryV2 {
                     common_scalars: 2,
+                    item_scalar_stride: 0,
+                    common_identities: 1,
+                    item_identity_stride: 0,
+                },
+                &mut hostile_scratch,
+                &mut hostile_output,
+            ),
+            Err(Error::InvalidDynamicSpan)
+        );
+        assert_eq!(hostile_output, before);
+    }
+
+    #[test]
+    fn dynamic_span_profile_admits_canonical_fixed_topology() {
+        let fixed = [
+            AccountRuleWithPrestateInputV2 {
+                rule: AccountRuleInputV2 {
+                    privileges: READONLY,
+                    effect_permissions: NO_EFFECTS,
+                    alias: AccountAliasInputV2::SelfCoordinate,
+                    data_length: 0,
+                    data_item_stride: 0,
+                },
+                prestate: AccountPrestateV2::AuthenticatedOpaqueReadonlyData,
+            },
+            AccountRuleWithPrestateInputV2 {
+                rule: AccountRuleInputV2 {
+                    privileges: READONLY,
+                    effect_permissions: NO_EFFECTS,
+                    alias: AccountAliasInputV2::SelfCoordinate,
+                    data_length: 32,
+                    data_item_stride: 0,
+                },
+                prestate: AccountPrestateV2::Exact,
+            },
+        ];
+        let width = DYNAMIC_FIXED_SPAN_HEADER_BYTES + fixed.len() * RULE_BYTES;
+        let mut scratch = std::vec![0_u8; width];
+        let mut output = std::vec![0_u8; width];
+        encode_account_profile_with_dynamic_fixed_span_v2_atomic(
+            TrustedEnvironmentV2::None,
+            TrustedIdentityEnvironmentV2::None,
+            TrustedBuiltinIdentityV2::None,
+            &[],
+            &fixed,
+            &[],
+            &[],
+            RegisterGeometryV2 {
+                common_scalars: 1,
+                item_scalar_stride: 0,
+                common_identities: 1,
+                item_identity_stride: 0,
+            },
+            &mut scratch,
+            &mut output,
+        )
+        .expect("fixed-topology profile13");
+        let profile = AccountProfileV2::decode(&output).expect("decode fixed profile13");
+        assert_eq!(profile.dynamic_fixed_span_count(), 0);
+        assert_eq!(
+            profile.logical_account_count_with_dynamic_spans(99, &[]),
+            Ok(2)
+        );
+        assert_eq!(
+            profile.physical_account_count_with_dynamic_spans(99, &[]),
+            Ok(2)
+        );
+        assert_eq!(
+            profile
+                .physical_account_geometry_with_dynamic_spans(99, &[], 0)
+                .expect("opaque geometry")
+                .data(),
+            PhysicalAccountDataGeometryV2::Opaque
+        );
+
+        let mut hostile_scratch = std::vec![0_u8; width + RULE_BYTES];
+        let mut hostile_output = std::vec![0x91_u8; width + RULE_BYTES];
+        let before = hostile_output.clone();
+        assert_eq!(
+            encode_account_profile_with_dynamic_fixed_span_v2_atomic(
+                TrustedEnvironmentV2::None,
+                TrustedIdentityEnvironmentV2::None,
+                TrustedBuiltinIdentityV2::None,
+                &[],
+                &fixed,
+                &fixed[..1],
+                &[],
+                RegisterGeometryV2 {
+                    common_scalars: 1,
                     item_scalar_stride: 0,
                     common_identities: 1,
                     item_identity_stride: 0,
