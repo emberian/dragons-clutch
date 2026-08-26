@@ -385,6 +385,7 @@ fn decode_rent(account: AccountObservationV2<'_>) -> Result<Rent, LifecycleRentO
 
 #[cfg(test)]
 mod tests {
+    use dclutch_rent_contract::lifecycle_v2::LifecycleRentCloseReceiptInputV2;
     use solana_program::rent::Rent;
 
     use super::*;
@@ -465,6 +466,80 @@ mod tests {
         assert_eq!(
             substituted,
             Err(LifecycleRentOperatorErrorV2::AccountAuthority)
+        );
+    }
+
+    #[test]
+    fn close_ack_requires_the_exact_lifecycle_and_wallet_delta() {
+        let rent_program = id(30);
+        let market = LifecycleAccountIdV2::new(id(31).to_bytes()).expect("market");
+        let release = LifecycleAccountIdV2::new(id(32).to_bytes()).expect("release");
+        let refund = RefundAuthority::new(id(33).to_bytes()).expect("refund");
+        let generation = 9_u64;
+        let (credit_key, bump) = Pubkey::find_program_address(
+            &[
+                LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+                id(31).as_ref(),
+                &generation.to_le_bytes(),
+            ],
+            &rent_program,
+        );
+        let state =
+            LifecycleRentCreditV2::new(refund, market, release, generation, bump).expect("credit");
+        let state_bytes = state.to_bytes();
+        let credit_lamports = 777_u64;
+        let wallet_before = 11_u64;
+        let expectation = lifecycle_rent_close_expectation_v2(
+            observation(rent_program, native_loader::ID, 1, true, &[]),
+            observation(
+                credit_key,
+                rent_program,
+                credit_lamports,
+                false,
+                &state_bytes,
+            ),
+            observation(id(33), system_program::ID, wallet_before, false, &[]),
+        )
+        .expect("expectation");
+        let receipt = LifecycleRentCloseReceiptV2::new(LifecycleRentCloseReceiptInputV2 {
+            credit: LifecycleAccountIdV2::new(credit_key.to_bytes()).expect("credit ID"),
+            refund_wallet: refund,
+            market,
+            release_set: release,
+            post_resource_digest: [34; 32],
+            generation,
+            closed_lamports: credit_lamports,
+        })
+        .expect("receipt");
+        assert_eq!(
+            validate_lifecycle_rent_close_receipt_v2(
+                expectation,
+                rent_program,
+                rent_program,
+                &receipt.to_bytes(),
+                wallet_before + credit_lamports,
+            ),
+            Ok(receipt)
+        );
+        assert_eq!(
+            validate_lifecycle_rent_close_receipt_v2(
+                expectation,
+                rent_program,
+                rent_program,
+                &receipt.to_bytes(),
+                wallet_before + credit_lamports - 1,
+            ),
+            Err(LifecycleRentOperatorErrorV2::InvalidCloseReceipt)
+        );
+        assert_eq!(
+            validate_lifecycle_rent_close_receipt_v2(
+                expectation,
+                rent_program,
+                id(35),
+                &receipt.to_bytes(),
+                wallet_before + credit_lamports,
+            ),
+            Err(LifecycleRentOperatorErrorV2::InvalidCloseReceipt)
         );
     }
 }
