@@ -11,6 +11,9 @@
 //! held until typed LiabilityBasisV2 payout evidence is supplied. It owns replay
 //! revision only; Claims and Token remain the economic/supply owners.
 
+#[cfg(test)]
+extern crate std;
+
 #[allow(missing_docs)]
 pub(crate) mod generated {
     pub(crate) use dclutch_rational_representation_v2_request_contract::generated::*;
@@ -27,6 +30,7 @@ mod plan;
 mod receipt;
 mod replay;
 mod seeds;
+mod token_behavior_v2;
 
 pub use dclutch_rational_representation_v2_kernel::RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2;
 pub use dclutch_rational_representation_v2_request_contract::{
@@ -109,6 +113,10 @@ pub use replay::{
     RationalReplayV2,
 };
 pub use seeds::{RATIONAL_RECEIPT_MINT_SEED_V2, RationalReceiptMintSeedsV2};
+pub use token_behavior_v2::{
+    AuthenticatedTokenBehaviorV2, TokenBehaviorAdmissionErrorV2, TokenBehaviorAdmissionResultV2,
+    TokenBehaviorRecordAdmissionV2, authenticate_token_behavior_v2,
+};
 
 /// Claims PDA seed for one outcome's canonical shard Mint.
 pub const RATIONAL_SHARD_MINT_SEED_V2: &[u8] = b"dclutch:rational-shard-mint:v2";
