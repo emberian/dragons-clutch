@@ -559,6 +559,31 @@ impl<'a> ProgramV3<'a> {
         RouteV3::decode(self.bytes, offset)
     }
 
+    /// Borrow the exact fixed and repeated-item request templates owned by one route.
+    ///
+    /// These are authenticated program bytes, before register projection.  The
+    /// accessor deliberately exposes no mutable view: admission layers may
+    /// hostile-decode the child ABI skeleton while [`project_atomic`] remains
+    /// the sole operation which patches runtime fields.
+    pub fn route_template(self, index: u16) -> Result<(&'a [u8], &'a [u8])> {
+        let route = self.route(index)?;
+        let start = self.route_template_start(index)?;
+        let fixed_len = usize_from_u32(route.fixed_request_bytes)?;
+        let item_len = usize_from_u32(route.item_request_bytes)?;
+        let fixed_end = start.checked_add(fixed_len).ok_or(Error::InvalidLength)?;
+        let item_end = fixed_end
+            .checked_add(item_len)
+            .ok_or(Error::InvalidLength)?;
+        Ok((
+            self.bytes
+                .get(start..fixed_end)
+                .ok_or(Error::InvalidLength)?,
+            self.bytes
+                .get(fixed_end..item_end)
+                .ok_or(Error::InvalidLength)?,
+        ))
+    }
+
     /// Exact expanded account-vector width.
     pub fn account_count(self, tail_count: u32) -> Result<usize> {
         affine_width(self.fixed_accounts, self.item_account_stride, tail_count)
@@ -2064,6 +2089,15 @@ mod tests {
     fn affine_and_each_requests_project_atomically() {
         let bytes = canonical();
         let program = ProgramV3::decode(&bytes).expect("program");
+        assert_eq!(
+            program.route_template(0),
+            Ok((b"CLAIMFIX".as_slice(), b"CLAIMITM".as_slice()))
+        );
+        assert_eq!(
+            program.route_template(1),
+            Ok((&[][..], b"CUSTITEM".as_slice()))
+        );
+        assert_eq!(program.route_template(2), Err(Error::InvalidCoordinate));
         let scalars = [9_u64, 0, 3, 1, 4];
         let identities = [[0_u8; 32]; 3];
         let accounts = [
