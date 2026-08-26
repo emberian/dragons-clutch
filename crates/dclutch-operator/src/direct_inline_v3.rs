@@ -5,11 +5,20 @@
 //! the adjacent native-Ed25519 plus Trading instruction pair. It never performs
 //! RPC, signs maker material, signs a transaction, or submits one.
 
-use crate::{Finality, Observation, ObservedAccount};
+use crate::{
+    Finality, Observation, ObservedAccount,
+    product_graph_observation_v3::{
+        AuthenticatedProductGraphObservationV3, FinalizedProductGraphAccountsV3,
+        authenticate_product_graph_observation_v3,
+    },
+};
+use dclutch_account_profile_contract::v2::AccountPrestateV2;
 use dclutch_capability_program_contract::hot_v3::{
-    HOT_FAMILY_REQUEST_OFFSET_V3, HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
-    HOT_MARKET_ACCOUNT_V3, HOT_RENT_SYSVAR_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3,
-    HOT_TRADING_PROGRAM_ACCOUNT_V3, HotExecutionEnvelopeV3,
+    HOT_CONFIG_RAW_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
+    HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3,
+    HOT_PORTFOLIO_RAW_ACCOUNT_V3, HOT_PRODUCT_RAW_ACCOUNT_V3, HOT_REGISTRY_PROGRAM_ACCOUNT_V3,
+    HOT_RENT_SYSVAR_ACCOUNT_V3, HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3,
+    HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3, HotExecutionEnvelopeV3,
 };
 use dclutch_direct_codec::{
     artifacts_v3::{
@@ -20,6 +29,9 @@ use dclutch_direct_codec::{
         DirectExecutionActionV3, DirectExecutionRequestV3, encode_header_v3,
     },
     intent_v2::{COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2, CompactIntentV2},
+};
+use solana_address_lookup_table_interface::{
+    program as lookup_table_program, state::AddressLookupTable,
 };
 use solana_hash::Hash;
 use solana_program::{
@@ -93,21 +105,22 @@ pub struct CheckedHotOuterReleaseV3 {
 /// Direct instruction.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectInlineHotStateV3 {
-    /// Exact 30-account family-neutral prefix in canonical ABI order.
+    /// Exact 38-account family-neutral prefix in canonical ABI order.
     pub fixed_accounts: Vec<ObservedAccountMetaV3>,
     /// Exact disposition-selected ExecutionStrategy account suffix.
     pub strategy_accounts: Vec<ObservedAccountMetaV3>,
     /// Expanded AccountProfile physical address space, including the capability
-    /// root at runtime coordinate zero. Coordinate zero is not appended twice.
+    /// root/config/Product/portfolio/linked-basis logical prefix. Those five
+    /// injected coordinates are not appended a second time.
     pub runtime_accounts: Vec<ObservedAccountMetaV3>,
     /// Immutable execution release-set content identity selected by Market.
     pub release_set: [u8; 32],
     /// Immutable Market generation.
     pub generation: u64,
-    /// Product-authenticated runtime outcome count.
-    pub outcome_count: u32,
     /// Trusted Clock slot used for an exact economic preview.
     pub clock_slot: u64,
+    /// Lowest finalized slot accepted for this construction attempt.
+    pub minimum_finalized_slot: u64,
     /// Checked current hot outer, absent while the common entrypoint is not an
     /// accepted immutable release.
     pub hot_outer: Option<CheckedHotOuterReleaseV3>,
@@ -139,8 +152,48 @@ pub struct DirectInlineHotReportV3 {
     pub observation: Observation,
     /// Action-selected CapabilityProgramV3 content digest.
     pub selected_program: [u8; 32],
+    /// Product-authenticated runtime outcome count.
+    pub outcome_count: u32,
+    /// Authenticated Product graph-root content digest.
+    pub product_record: [u8; 32],
+    /// Exact immutable Trading ArtifactRelease identity.
+    pub trading_artifact_release: [u8; 32],
+    /// Digest of the user-supplied checked multiprogram manifest.
+    pub checked_manifest_digest: [u8; 32],
+    /// Wallet keys which the Trading instruction requires to sign.
+    pub required_instruction_signers: Vec<Pubkey>,
     /// Exact economic preview; onchain execution remains authoritative.
     pub preview: DirectInlineEconomicPreviewV3,
+}
+
+/// Exact unsigned Direct v0 transaction and its signer/provenance report.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectInlineHotTransactionPlanV3 {
+    /// Packet-safe v0 message compiled through the sole canonical LUT.
+    pub message: VersionedMessagePlanV0,
+    /// Exact eventual wallet signer order, beginning with the fee payer.
+    pub required_signers: Vec<Pubkey>,
+    /// Product-authenticated runtime outcome count.
+    pub outcome_count: u32,
+    /// Action-selected CapabilityProgramV3 content digest.
+    pub selected_program: [u8; 32],
+    /// Exact immutable Trading ArtifactRelease identity.
+    pub trading_artifact_release: [u8; 32],
+    /// Digest of the user-supplied checked multiprogram manifest.
+    pub checked_manifest_digest: [u8; 32],
+}
+
+/// Stable refusal from canonical Direct transaction routing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectInlineTransactionErrorV3 {
+    /// Payer, report, or LUT did not share one finalized observation.
+    Snapshot,
+    /// LUT bytes were not the one exact canonical address sequence.
+    LookupTable,
+    /// Instruction signer reporting differed from the compiled message.
+    Signer,
+    /// Lookup-table activation, message compilation, or packet sizing refused.
+    Routing(crate::versioned::Error),
 }
 
 /// Stable refusal from stale authority, malformed signatures, artifact joins,
@@ -159,6 +212,10 @@ pub enum Error {
     ArtifactMismatch,
     /// Runtime AccountProfile width or privileges differed.
     RuntimeProfileMismatch,
+    /// The finalized Product/domain/portfolio graph refused.
+    ProductGraphMismatch,
+    /// Interpreted execution carried a nonempty accelerator transport suffix.
+    StrategyGeometry,
     /// Intent, slot, price, fee, or quantity facts were incompatible.
     EconomicMismatch,
     /// Checked arithmetic or instruction encoding failed.
@@ -234,17 +291,17 @@ pub fn build_direct_inline_hot_v3(
     if checked.artifact_release == [0; 32]
         || checked.checked_manifest_digest == [0; 32]
         || state.release_set == [0; 32]
-        || state.outcome_count == 0
     {
         return Err(Error::ZeroIdentity);
     }
     let observation = validate_frame(state, checked)?;
+    let product = authenticate_product_graph(state)?;
     let request = compile_direct_inline_request_v3(seller, buyer, fill, execution_price)?;
     let bundle = authenticate_direct_artifacts_v3(
         artifact_selection,
         artifact_bytes,
         &request,
-        state.outcome_count,
+        product.outcome_count,
     )
     .map_err(|_| Error::ArtifactMismatch)?;
     if bundle.action != DirectExecutionActionV3::InlineOrdinary
@@ -252,7 +309,10 @@ pub fn build_direct_inline_hot_v3(
     {
         return Err(Error::ArtifactMismatch);
     }
-    validate_runtime_profile(state, bundle)?;
+    if !state.strategy_accounts.is_empty() {
+        return Err(Error::StrategyGeometry);
+    }
+    validate_runtime_profile(state, bundle, product.outcome_count)?;
     let market = state
         .fixed_accounts
         .get(HOT_MARKET_ACCOUNT_V3)
@@ -272,6 +332,7 @@ pub fn build_direct_inline_hot_v3(
         buyer,
         fill,
         execution_price,
+        product.outcome_count,
     )?;
     let envelope = HotExecutionEnvelopeV3::new(
         u32::try_from(request.len()).map_err(|_| Error::Arithmetic)?,
@@ -297,9 +358,10 @@ pub fn build_direct_inline_hot_v3(
         state
             .runtime_accounts
             .iter()
-            .skip(1)
+            .skip(HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3)
             .map(ObservedAccountMetaV3::meta),
     );
+    let required_instruction_signers = signer_keys(&accounts)?;
     let trading = Instruction {
         program_id: checked.trading_program,
         accounts,
@@ -311,44 +373,118 @@ pub fn build_direct_inline_hot_v3(
         hot_instruction_data,
         observation,
         selected_program: hash(artifact_bytes.descriptor).to_bytes(),
+        outcome_count: product.outcome_count,
+        product_record: product.product_record,
+        trading_artifact_release: checked.artifact_release,
+        checked_manifest_digest: checked.checked_manifest_digest,
+        required_instruction_signers,
         preview,
     })
 }
 
-/// Compile the exact adjacent pair into an unsigned packet-safe v0 message.
+/// Compile the exact adjacent pair through one canonical finalized LUT.
 pub fn compile_direct_inline_hot_v0(
     report: &DirectInlineHotReportV3,
     payer: Pubkey,
     recent_blockhash: Hash,
-    lookup_tables: &[ObservedAccount],
-) -> Result<VersionedMessagePlanV0, crate::versioned::Error> {
-    compile_v0_message(
+    lookup_table: &ObservedAccount,
+) -> Result<DirectInlineHotTransactionPlanV3, DirectInlineTransactionErrorV3> {
+    if payer == Pubkey::default()
+        || report.observation.finality != Finality::Finalized
+        || report.observation.slot == 0
+        || report.trading_artifact_release == [0; 32]
+        || report.checked_manifest_digest == [0; 32]
+        || lookup_table.observation != report.observation
+        || lookup_table.owner != lookup_table_program::id()
+        || lookup_table.executable
+    {
+        return Err(DirectInlineTransactionErrorV3::Snapshot);
+    }
+    let expected = canonical_direct_inline_lookup_addresses_v3(report, payer)?;
+    let table = AddressLookupTable::deserialize(&lookup_table.data)
+        .map_err(|_| DirectInlineTransactionErrorV3::LookupTable)?;
+    if table.addresses.as_ref() != expected.as_slice() {
+        return Err(DirectInlineTransactionErrorV3::LookupTable);
+    }
+    let message = compile_v0_message(
         payer,
         &report.instructions,
         recent_blockhash,
         report.observation,
-        lookup_tables,
+        core::slice::from_ref(lookup_table),
     )
+    .map_err(DirectInlineTransactionErrorV3::Routing)?;
+    let mut required_signers = vec![payer];
+    for signer in &report.required_instruction_signers {
+        if !required_signers.contains(signer) {
+            required_signers.push(*signer);
+        }
+    }
+    if usize::from(message.required_signatures) != required_signers.len() {
+        return Err(DirectInlineTransactionErrorV3::Signer);
+    }
+    Ok(DirectInlineHotTransactionPlanV3 {
+        message,
+        required_signers,
+        outcome_count: report.outcome_count,
+        selected_program: report.selected_program,
+        trading_artifact_release: report.trading_artifact_release,
+        checked_manifest_digest: report.checked_manifest_digest,
+    })
+}
+
+/// Return the sole sorted, duplicate-free LUT address sequence for Direct.
+pub fn canonical_direct_inline_lookup_addresses_v3(
+    report: &DirectInlineHotReportV3,
+    payer: Pubkey,
+) -> Result<Vec<Pubkey>, DirectInlineTransactionErrorV3> {
+    if payer == Pubkey::default() {
+        return Err(DirectInlineTransactionErrorV3::Snapshot);
+    }
+    let mut signers = vec![payer];
+    for signer in &report.required_instruction_signers {
+        if *signer == Pubkey::default() {
+            return Err(DirectInlineTransactionErrorV3::Signer);
+        }
+        if !signers.contains(signer) {
+            signers.push(*signer);
+        }
+    }
+    let program_ids = report
+        .instructions
+        .iter()
+        .map(|instruction| instruction.program_id)
+        .collect::<Vec<_>>();
+    let mut addresses = report
+        .instructions
+        .iter()
+        .flat_map(|instruction| &instruction.accounts)
+        .filter(|account| {
+            !signers.contains(&account.pubkey) && !program_ids.contains(&account.pubkey)
+        })
+        .map(|account| account.pubkey)
+        .collect::<Vec<_>>();
+    addresses.sort_unstable_by_key(Pubkey::to_bytes);
+    addresses.dedup();
+    if addresses.is_empty() || addresses.len() > 256 {
+        return Err(DirectInlineTransactionErrorV3::LookupTable);
+    }
+    Ok(addresses)
 }
 
 fn validate_frame(
     state: &DirectInlineHotStateV3,
     checked: CheckedHotOuterReleaseV3,
 ) -> Result<Observation, Error> {
-    if state.fixed_accounts.len() != HOT_FIXED_ACCOUNT_COUNT_V3 {
+    if state.fixed_accounts.len() != HOT_FIXED_ACCOUNT_COUNT_V3
+        || state.minimum_finalized_slot == 0
+        || state.runtime_accounts.len() < HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3
+    {
         return Err(Error::FixedFrameMismatch);
     }
     let market = state
         .fixed_accounts
         .get(HOT_MARKET_ACCOUNT_V3)
-        .ok_or(Error::FixedFrameMismatch)?;
-    let root = state
-        .fixed_accounts
-        .get(HOT_ROOT_ACCOUNT_V3)
-        .ok_or(Error::FixedFrameMismatch)?;
-    let runtime_root = state
-        .runtime_accounts
-        .first()
         .ok_or(Error::FixedFrameMismatch)?;
     let trading = state
         .fixed_accounts
@@ -362,19 +498,35 @@ fn validate_frame(
         .fixed_accounts
         .get(HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3)
         .ok_or(Error::FixedFrameMismatch)?;
-    if root.account.key != runtime_root.account.key
-        || trading.account.key != checked.trading_program
+    let registry = state
+        .fixed_accounts
+        .get(HOT_REGISTRY_PROGRAM_ACCOUNT_V3)
+        .ok_or(Error::FixedFrameMismatch)?;
+    if trading.account.key != checked.trading_program
         || !trading.account.executable
+        || !registry.account.executable
         || rent.account.key != sysvar::rent::ID
         || instructions.account.key != sysvar::instructions::ID
     {
         return Err(Error::FixedFrameMismatch);
     }
     let observation = market.account.observation;
+    if observation.finality != Finality::Finalized
+        || observation.slot < state.minimum_finalized_slot
+    {
+        return Err(Error::ObservationMismatch);
+    }
+    for (index, value) in state.fixed_accounts.iter().enumerate() {
+        if value.account.observation != observation
+            || value.is_signer
+            || value.is_writable != (index == HOT_ROOT_ACCOUNT_V3)
+        {
+            return Err(Error::FixedFrameMismatch);
+        }
+    }
     for value in state
-        .fixed_accounts
+        .strategy_accounts
         .iter()
-        .chain(&state.strategy_accounts)
         .chain(&state.runtime_accounts)
     {
         if value.account.observation.finality != Finality::Finalized
@@ -383,22 +535,56 @@ fn validate_frame(
             return Err(Error::ObservationMismatch);
         }
     }
+    for (runtime, physical) in [
+        (0, HOT_ROOT_ACCOUNT_V3),
+        (1, HOT_CONFIG_RAW_ACCOUNT_V3),
+        (2, HOT_PRODUCT_RAW_ACCOUNT_V3),
+        (3, HOT_PORTFOLIO_RAW_ACCOUNT_V3),
+        (4, HOT_LINKED_BASIS_RAW_ACCOUNT_V3),
+    ] {
+        if state.runtime_accounts.get(runtime) != state.fixed_accounts.get(physical) {
+            return Err(Error::RuntimeProfileMismatch);
+        }
+    }
     Ok(observation)
+}
+
+fn authenticate_product_graph(
+    state: &DirectInlineHotStateV3,
+) -> Result<AuthenticatedProductGraphObservationV3, Error> {
+    let account = |index: usize| {
+        state
+            .fixed_accounts
+            .get(index)
+            .map(|value| &value.account)
+            .ok_or(Error::ProductGraphMismatch)
+    };
+    authenticate_product_graph_observation_v3(FinalizedProductGraphAccountsV3 {
+        registry_program: account(HOT_REGISTRY_PROGRAM_ACCOUNT_V3)?.key,
+        product_raw: account(HOT_PRODUCT_RAW_ACCOUNT_V3)?,
+        product_staging: account(HOT_PRODUCT_RAW_ACCOUNT_V3 + 1)?,
+        domain_raw: account(HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3)?,
+        domain_staging: account(HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3 + 1)?,
+        portfolio_raw: account(HOT_PORTFOLIO_RAW_ACCOUNT_V3)?,
+        portfolio_staging: account(HOT_PORTFOLIO_RAW_ACCOUNT_V3 + 1)?,
+    })
+    .map_err(|_| Error::ProductGraphMismatch)
 }
 
 fn validate_runtime_profile(
     state: &DirectInlineHotStateV3,
     bundle: dclutch_direct_codec::artifacts_v3::DirectArtifactBundleV3<'_>,
+    outcome_count: u32,
 ) -> Result<(), Error> {
     let profile = bundle.account_profile;
     let fixed = usize::from(profile.fixed_account_count());
     let stride = usize::from(profile.item_account_stride());
-    let tail = usize::try_from(state.outcome_count).map_err(|_| Error::Arithmetic)?;
+    let tail = usize::try_from(outcome_count).map_err(|_| Error::Arithmetic)?;
     let expected = stride
         .checked_mul(tail)
         .and_then(|value| fixed.checked_add(value))
         .ok_or(Error::Arithmetic)?;
-    if state.runtime_accounts.len() != expected {
+    if fixed < HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3 || state.runtime_accounts.len() != expected {
         return Err(Error::RuntimeProfileMismatch);
     }
     for (coordinate, account) in state.runtime_accounts.iter().enumerate() {
@@ -414,9 +600,23 @@ fn validate_runtime_profile(
             .rule(item, u16::try_from(index).map_err(|_| Error::Arithmetic)?)
             .map_err(|_| Error::RuntimeProfileMismatch)?;
         let privileges = rule.privileges();
+        let expected_data = usize::try_from(rule.data_length()).map_err(|_| Error::Arithmetic)?;
         if account.is_signer != (privileges & 1 != 0)
             || account.is_writable != (privileges & 2 != 0)
             || account.account.executable != (privileges & 4 != 0)
+            || (account.account.data.len() != expected_data
+                && !(rule.prestate() == AccountPrestateV2::LifecycleBound
+                    && account.account.data.is_empty()))
+        {
+            return Err(Error::RuntimeProfileMismatch);
+        }
+        let representative = profile
+            .representative(outcome_count, coordinate)
+            .map_err(|_| Error::RuntimeProfileMismatch)?;
+        if state
+            .runtime_accounts
+            .get(representative)
+            .is_none_or(|canonical| canonical.account.key != account.account.key)
         {
             return Err(Error::RuntimeProfileMismatch);
         }
@@ -433,6 +633,7 @@ fn preview_economics(
     buyer: SignedDirectIntentV3,
     fill: u64,
     execution_price: u64,
+    outcome_count: u32,
 ) -> Result<DirectInlineEconomicPreviewV3, Error> {
     for (participant, side) in [(seller, 0_u8), (buyer, 1_u8)] {
         let intent = participant.intent;
@@ -440,7 +641,7 @@ fn preview_economics(
             || intent.lifecycle > 1
             || intent.market != market.to_bytes()
             || intent.generation != state.generation
-            || intent.outcome >= state.outcome_count
+            || intent.outcome >= outcome_count
             || intent.maximum_fill < fill
             || intent.fee_basis_points != config.fee_basis_points()
             || state.clock_slot < intent.valid_from
@@ -528,6 +729,19 @@ fn native_ed25519_instruction(
     })
 }
 
+fn signer_keys(accounts: &[AccountMeta]) -> Result<Vec<Pubkey>, Error> {
+    let mut signers = Vec::new();
+    for account in accounts.iter().filter(|account| account.is_signer) {
+        if account.pubkey == Pubkey::default() {
+            return Err(Error::ZeroIdentity);
+        }
+        if !signers.contains(&account.pubkey) {
+            signers.push(account.pubkey);
+        }
+    }
+    Ok(signers)
+}
+
 fn put(output: &mut [u8], offset: usize, value: &[u8]) -> Result<(), Error> {
     let end = offset.checked_add(value.len()).ok_or(Error::Arithmetic)?;
     output
@@ -539,7 +753,22 @@ fn put(output: &mut [u8], offset: usize, value: &[u8]) -> Result<(), Error> {
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+
     use super::*;
+    use solana_address_lookup_table_interface::state::LookupTableMeta;
+
+    fn key(value: u8) -> Pubkey {
+        Pubkey::new_from_array([value; 32])
+    }
+
+    fn observation() -> Observation {
+        Observation {
+            slot: 500,
+            unix_timestamp: 1_800_000_000,
+            finality: Finality::Finalized,
+        }
+    }
 
     fn intent(side: u8, maker_byte: u8) -> SignedDirectIntentV3 {
         SignedDirectIntentV3 {
@@ -560,6 +789,133 @@ mod tests {
                 collateral_account: [maker_byte + 10; 32],
             },
         }
+    }
+
+    fn transaction_report(data_bytes: usize) -> DirectInlineHotReportV3 {
+        let actor = key(1);
+        let mut accounts = vec![AccountMeta::new_readonly(actor, true)];
+        accounts.extend((2_u8..92).map(|value| AccountMeta::new(key(value), false)));
+        DirectInlineHotReportV3 {
+            instructions: [
+                Instruction {
+                    program_id: ed25519_program::ID,
+                    accounts: Vec::new(),
+                    data: vec![3; 32],
+                },
+                Instruction {
+                    program_id: key(200),
+                    accounts,
+                    data: vec![7; data_bytes],
+                },
+            ],
+            hot_instruction_data: vec![7; data_bytes],
+            observation: observation(),
+            selected_program: [8; 32],
+            outcome_count: 258,
+            product_record: [9; 32],
+            trading_artifact_release: [10; 32],
+            checked_manifest_digest: [11; 32],
+            required_instruction_signers: vec![actor],
+            preview: DirectInlineEconomicPreviewV3 {
+                claim_transfer: 10,
+                gross_collateral: 5,
+                seller_net_collateral_credit: 4,
+                buyer_collateral_debit: 6,
+                total_fee_transfer: 2,
+            },
+        }
+    }
+
+    fn lookup(report: &DirectInlineHotReportV3, payer: Pubkey) -> ObservedAccount {
+        let addresses = canonical_direct_inline_lookup_addresses_v3(report, payer)
+            .expect("canonical addresses");
+        let table = AddressLookupTable {
+            meta: LookupTableMeta {
+                authority: Some(key(201)),
+                last_extended_slot: observation().slot - 1,
+                deactivation_slot: u64::MAX,
+                ..LookupTableMeta::default()
+            },
+            addresses: Cow::Owned(addresses),
+        };
+        ObservedAccount {
+            observation: observation(),
+            key: key(202),
+            owner: lookup_table_program::id(),
+            lamports: 1_000_000,
+            executable: false,
+            data: table.serialize_for_tests().expect("lookup bytes"),
+        }
+    }
+
+    fn hot38_state() -> (DirectInlineHotStateV3, CheckedHotOuterReleaseV3) {
+        let checked = CheckedHotOuterReleaseV3 {
+            trading_program: key(200),
+            artifact_release: [20; 32],
+            checked_manifest_digest: [21; 32],
+        };
+        let mut fixed_accounts = (0..HOT_FIXED_ACCOUNT_COUNT_V3)
+            .map(|index| ObservedAccountMetaV3 {
+                account: ObservedAccount {
+                    observation: observation(),
+                    key: key(u8::try_from(index + 100).expect("test key")),
+                    owner: key(220),
+                    lamports: 1,
+                    executable: false,
+                    data: vec![0],
+                },
+                is_signer: false,
+                is_writable: index == HOT_ROOT_ACCOUNT_V3,
+            })
+            .collect::<Vec<_>>();
+        let trading = fixed_accounts
+            .get_mut(HOT_TRADING_PROGRAM_ACCOUNT_V3)
+            .expect("Trading coordinate");
+        trading.account.key = checked.trading_program;
+        trading.account.executable = true;
+        fixed_accounts
+            .get_mut(HOT_REGISTRY_PROGRAM_ACCOUNT_V3)
+            .expect("Registry coordinate")
+            .account
+            .executable = true;
+        fixed_accounts
+            .get_mut(HOT_RENT_SYSVAR_ACCOUNT_V3)
+            .expect("Rent coordinate")
+            .account
+            .key = sysvar::rent::ID;
+        fixed_accounts
+            .get_mut(HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3)
+            .expect("Instructions coordinate")
+            .account
+            .key = sysvar::instructions::ID;
+        let runtime_accounts = [
+            HOT_ROOT_ACCOUNT_V3,
+            HOT_CONFIG_RAW_ACCOUNT_V3,
+            HOT_PRODUCT_RAW_ACCOUNT_V3,
+            HOT_PORTFOLIO_RAW_ACCOUNT_V3,
+            HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
+        ]
+        .map(|index| {
+            fixed_accounts
+                .get(index)
+                .expect("injected coordinate")
+                .clone()
+        })
+        .into_iter()
+        .collect();
+        (
+            DirectInlineHotStateV3 {
+                fixed_accounts,
+                strategy_accounts: Vec::new(),
+                runtime_accounts,
+                release_set: [22; 32],
+                generation: 1,
+                clock_slot: observation().slot,
+                minimum_finalized_slot: observation().slot,
+                hot_outer: Some(checked),
+            },
+            checked,
+        )
     }
 
     #[test]
@@ -624,6 +980,92 @@ mod tests {
         assert_eq!(
             compile_direct_inline_request_v3(seller, buyer, 1, 1),
             Err(Error::ZeroIdentity)
+        );
+    }
+
+    #[test]
+    fn hot38_requires_all_five_injected_runtime_coordinates() {
+        let (state, checked) = hot38_state();
+        assert_eq!(validate_frame(&state, checked), Ok(observation()));
+
+        let mut substituted = state.clone();
+        let root = substituted
+            .runtime_accounts
+            .first()
+            .expect("runtime root")
+            .clone();
+        *substituted
+            .runtime_accounts
+            .get_mut(1)
+            .expect("runtime config") = root;
+        assert_eq!(
+            validate_frame(&substituted, checked),
+            Err(Error::RuntimeProfileMismatch)
+        );
+
+        let mut stale_prefix = state;
+        stale_prefix.fixed_accounts.truncate(30);
+        assert_eq!(
+            validate_frame(&stale_prefix, checked),
+            Err(Error::FixedFrameMismatch)
+        );
+    }
+
+    #[test]
+    fn canonical_lut_compiles_packet_and_reports_payer_then_actor() {
+        let report = transaction_report(192);
+        let payer = key(250);
+        let lookup = lookup(&report, payer);
+        let plan =
+            compile_direct_inline_hot_v0(&report, payer, Hash::new_from_array([16; 32]), &lookup)
+                .expect("packet-safe Direct action");
+        assert_eq!(plan.required_signers, vec![payer, key(1)]);
+        assert_eq!(plan.message.required_signatures, 2);
+        assert!(plan.message.loaded_addresses >= 90);
+        assert!(plan.message.wire_bytes <= crate::versioned::PACKET_DATA_BYTES);
+        assert_eq!(plan.outcome_count, 258);
+        assert_eq!(plan.selected_program, [8; 32]);
+    }
+
+    #[test]
+    fn stale_extra_lookup_and_oversized_packet_refuse() {
+        let payer = key(250);
+        let report = transaction_report(192);
+        let mut stale = lookup(&report, payer);
+        stale.observation.slot += 1;
+        assert_eq!(
+            compile_direct_inline_hot_v0(&report, payer, Hash::new_from_array([16; 32]), &stale,),
+            Err(DirectInlineTransactionErrorV3::Snapshot)
+        );
+
+        let mut extra = lookup(&report, payer);
+        let decoded = AddressLookupTable::deserialize(&extra.data).expect("table");
+        let mut addresses = decoded.addresses.into_owned();
+        addresses.push(key(249));
+        addresses.sort_unstable_by_key(Pubkey::to_bytes);
+        extra.data = AddressLookupTable {
+            meta: decoded.meta,
+            addresses: Cow::Owned(addresses),
+        }
+        .serialize_for_tests()
+        .expect("extra table");
+        assert_eq!(
+            compile_direct_inline_hot_v0(&report, payer, Hash::new_from_array([16; 32]), &extra,),
+            Err(DirectInlineTransactionErrorV3::LookupTable)
+        );
+
+        let oversized = transaction_report(2_000);
+        let lookup = lookup(&oversized, payer);
+        assert_eq!(
+            compile_direct_inline_hot_v0(
+                &oversized,
+                payer,
+                Hash::new_from_array([16; 32]),
+                &lookup,
+            ),
+            Err(DirectInlineTransactionErrorV3::Routing(
+                crate::versioned::Error::PacketTooLarge
+            ))
         );
     }
 }

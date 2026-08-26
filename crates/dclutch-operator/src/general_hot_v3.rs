@@ -10,8 +10,8 @@ use dclutch_capability_program_contract::hot_v3::{
     HOT_CONFIG_RAW_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
     HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3,
     HOT_PORTFOLIO_RAW_ACCOUNT_V3, HOT_PRODUCT_RAW_ACCOUNT_V3, HOT_REGISTRY_PROGRAM_ACCOUNT_V3,
-    HOT_RENT_SYSVAR_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
-    HotExecutionEnvelopeV3,
+    HOT_RENT_SYSVAR_ACCOUNT_V3, HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3,
+    HOT_TRADING_PROGRAM_ACCOUNT_V3, HotExecutionEnvelopeV3,
 };
 use dclutch_execution_strategy_contract::v2::{BankTransportV2, classify_bank_transport_v2};
 use dclutch_general_adapter_contract::artifacts_v3::{
@@ -21,12 +21,6 @@ use dclutch_general_codec::{
     Action,
     successor_request_v2::{CONTROLLER_REQUEST_BYTES_V2, ControllerRequestV2},
 };
-use dclutch_product_runtime_v2::ContentId;
-use dclutch_product_runtime_v2_admission::{
-    AdmissionReceiptV2, FinalizedRecordCoordinateV2, PORTFOLIO_SCHEMA_ID_V2,
-    PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2, admit_authenticated_records_v2,
-};
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use solana_address_lookup_table_interface::{
     program as lookup_table_program, state::AddressLookupTable,
 };
@@ -36,10 +30,14 @@ use solana_program::{
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
 };
-use solana_sdk_ids::{system_program, sysvar};
+use solana_sdk_ids::sysvar;
 
 use crate::{
     Finality, Observation, ObservedAccount,
+    product_graph_observation_v3::{
+        AuthenticatedProductGraphObservationV3, FinalizedProductGraphAccountsV3,
+        authenticate_product_graph_observation_v3,
+    },
     versioned::{VersionedMessagePlanV0, compile_v0_message},
 };
 
@@ -371,12 +369,6 @@ pub fn canonical_general_lookup_addresses_v3(
     Ok(addresses)
 }
 
-#[derive(Clone, Copy)]
-struct AuthenticatedProductWidthV3 {
-    outcome_count: u32,
-    product_record: [u8; 32],
-}
-
 fn validate_release(
     checked: CheckedGeneralHotReleaseV3,
     selection: GeneralArtifactSelectionV3,
@@ -463,117 +455,30 @@ fn validate_fixed_frame(
 
 fn authenticate_product_graph(
     state: &GeneralHotStateV3,
-) -> Result<AuthenticatedProductWidthV3, GeneralHotOperatorErrorV3> {
+) -> Result<AuthenticatedProductGraphObservationV3, GeneralHotOperatorErrorV3> {
     let registry = state
         .fixed_accounts
         .get(HOT_REGISTRY_PROGRAM_ACCOUNT_V3)
         .ok_or(GeneralHotOperatorErrorV3::Product)?
         .account
         .key;
-    let product = finalized_coordinate(
-        state,
-        HOT_PRODUCT_RAW_ACCOUNT_V3,
-        HOT_PRODUCT_RAW_ACCOUNT_V3 + 1,
-        registry,
-        PRODUCT_RECORD_SCHEMA_ID_V2,
-    )?;
-    let domain = finalized_coordinate(
-        state,
-        HOT_PRODUCT_RAW_ACCOUNT_V3 + 2,
-        HOT_PRODUCT_RAW_ACCOUNT_V3 + 3,
-        registry,
-        RESULT_DOMAIN_SCHEMA_ID_V2,
-    )?;
-    let portfolio = finalized_coordinate(
-        state,
-        HOT_PORTFOLIO_RAW_ACCOUNT_V3,
-        HOT_PORTFOLIO_RAW_ACCOUNT_V3 + 1,
-        registry,
-        PORTFOLIO_SCHEMA_ID_V2,
-    )?;
-    let product_bytes = &state
-        .fixed_accounts
-        .get(HOT_PRODUCT_RAW_ACCOUNT_V3)
-        .ok_or(GeneralHotOperatorErrorV3::Product)?
-        .account
-        .data;
-    let domain_bytes = &state
-        .fixed_accounts
-        .get(HOT_PRODUCT_RAW_ACCOUNT_V3 + 2)
-        .ok_or(GeneralHotOperatorErrorV3::Product)?
-        .account
-        .data;
-    let portfolio_bytes = &state
-        .fixed_accounts
-        .get(HOT_PORTFOLIO_RAW_ACCOUNT_V3)
-        .ok_or(GeneralHotOperatorErrorV3::Product)?
-        .account
-        .data;
-    let admitted = admit_authenticated_records_v2(
-        AdmissionReceiptV2 {
-            product,
-            result_domain: domain,
-            portfolio,
-        },
-        product_bytes,
-        domain_bytes,
-        portfolio_bytes,
-    )
-    .map_err(|_| GeneralHotOperatorErrorV3::Product)?;
-    Ok(AuthenticatedProductWidthV3 {
-        outcome_count: admitted.join.outcome_count,
-        product_record: admitted.product_record_digest.to_bytes(),
+    let account = |index: usize| {
+        state
+            .fixed_accounts
+            .get(index)
+            .map(|value| &value.account)
+            .ok_or(GeneralHotOperatorErrorV3::Product)
+    };
+    authenticate_product_graph_observation_v3(FinalizedProductGraphAccountsV3 {
+        registry_program: registry,
+        product_raw: account(HOT_PRODUCT_RAW_ACCOUNT_V3)?,
+        product_staging: account(HOT_PRODUCT_RAW_ACCOUNT_V3 + 1)?,
+        domain_raw: account(HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3)?,
+        domain_staging: account(HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3 + 1)?,
+        portfolio_raw: account(HOT_PORTFOLIO_RAW_ACCOUNT_V3)?,
+        portfolio_staging: account(HOT_PORTFOLIO_RAW_ACCOUNT_V3 + 1)?,
     })
-}
-
-fn finalized_coordinate(
-    state: &GeneralHotStateV3,
-    raw_index: usize,
-    staging_index: usize,
-    registry: Pubkey,
-    schema: [u8; 32],
-) -> Result<FinalizedRecordCoordinateV2, GeneralHotOperatorErrorV3> {
-    let raw = state
-        .fixed_accounts
-        .get(raw_index)
-        .ok_or(GeneralHotOperatorErrorV3::Product)?;
-    let staging = state
-        .fixed_accounts
-        .get(staging_index)
-        .ok_or(GeneralHotOperatorErrorV3::Product)?;
-    let digest = ContentId::new(hash(&raw.account.data).to_bytes())
-        .map_err(|_| GeneralHotOperatorErrorV3::Product)?;
-    let (expected_raw, _) = Pubkey::find_program_address(
-        &[RAW_RECORD_PDA_SEED_V1, &schema, &digest.to_bytes()],
-        &registry,
-    );
-    let (expected_staging, _) = Pubkey::find_program_address(
-        &[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest.to_bytes()],
-        &registry,
-    );
-    if raw.account.key != expected_raw
-        || raw.account.owner != registry
-        || raw.account.executable
-        || raw.account.data.is_empty()
-        || raw.is_signer
-        || raw.is_writable
-        || staging.account.key != expected_staging
-        || staging.account.owner != system_program::ID
-        || staging.account.executable
-        || !staging.account.data.is_empty()
-        || staging.is_signer
-        || staging.is_writable
-    {
-        return Err(GeneralHotOperatorErrorV3::Product);
-    }
-    Ok(FinalizedRecordCoordinateV2 {
-        schema_id: ContentId::new(schema).map_err(|_| GeneralHotOperatorErrorV3::Product)?,
-        content_digest: digest,
-        raw_account: ContentId::new(expected_raw.to_bytes())
-            .map_err(|_| GeneralHotOperatorErrorV3::Product)?,
-        staging_account: ContentId::new(expected_staging.to_bytes())
-            .map_err(|_| GeneralHotOperatorErrorV3::Product)?,
-    })
+    .map_err(|_| GeneralHotOperatorErrorV3::Product)
 }
 
 fn validate_strategy_geometry(

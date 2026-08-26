@@ -58,6 +58,7 @@ pub mod general_hot_v3;
 pub mod general_physical;
 /// Chain-derived inspection of immutable Core/Registry/Rent infrastructure.
 pub mod infrastructure;
+mod product_graph_observation_v3;
 /// Chain-derived real-provider submission and permissionless reclaim.
 pub mod provider_transport_v3;
 /// Packet-safe unsigned Rational terminal Bearer redemption construction.
