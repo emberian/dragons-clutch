@@ -34,8 +34,11 @@ type PositionSemantics = Readonly<{
 
 type RentCreditSemantics = Readonly<{
   kind: 'RentCredit';
-  refundAuthority: string;
-  refundAuthorityBytes: Uint8Array;
+  refundWallet: string;
+  market: string;
+  marketBytes: Uint8Array;
+  releaseSet: string;
+  generation: string;
   bump: number;
 }>;
 
@@ -45,7 +48,7 @@ export type DecodedProjection = Readonly<{
   address: string;
   lamports: string;
   observedSlot: string;
-  schema: 'v1';
+  schema: 'v1' | 'v2';
   details: ReadonlyArray<Readonly<{ label: string; value: string }>>;
   bindings: ReadonlyArray<BindingCheck>;
   semantics: MarketSemantics | RealmSemantics | PositionSemantics | RentCreditSemantics;
@@ -76,7 +79,7 @@ const MAGIC = Object.freeze({
   DCLTCAT1: 'Market',
   DCLTRLM1: 'Realm',
   DCLTPOS1: 'Position',
-  DCLTRNT1: 'RentCredit',
+  DCLRNTL2: 'RentCredit',
 } satisfies Record<string, CoreKind>);
 
 const PHASES = Object.freeze(['Founding', 'Open', 'Resolved', 'Retiring', 'Retired']);
@@ -84,10 +87,14 @@ const RESOLUTION_KINDS = Object.freeze(['Occurrence', 'Failure', 'Recovery']);
 const MARKET_SEED = new TextEncoder().encode('dclutch/market-root/v1');
 const REALM_SEED = new TextEncoder().encode('dclutch/realm/v1');
 const POSITION_SEED = new TextEncoder().encode('dclutch/position/v1');
-const RENT_CREDIT_SEED = new TextEncoder().encode('dclutch/rent-credit/v1');
+const RENT_CREDIT_SEED = new TextEncoder().encode('dclutch/rent-market/v2');
 
 function detail(label: string, value: string | number | bigint): Readonly<{ label: string; value: string }> {
   return Object.freeze({ label, value: String(value) });
+}
+
+function sameIdentity(left: Uint8Array, right: Uint8Array): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function kindFromMagic(data: Uint8Array): CoreKind | null {
@@ -136,10 +143,10 @@ function refused(observation: FullAccountObservation, kind: 'Unknown' | CoreKind
   });
 }
 
-function commonHeader(bytes: Uint8Array, magic: string, exactLength: number): void {
+function commonHeader(bytes: Uint8Array, magic: string, exactLength: number, version = 1): void {
   if (bytes.length !== exactLength) throw new Error(`expected exactly ${exactLength} bytes, observed ${bytes.length}`);
   if (ascii(bytes, 0, 8) !== magic) throw new Error(`magic is not ${magic}`);
-  if (u16(bytes, 8) !== 1) throw new Error(`schema version ${u16(bytes, 8)} is unsupported`);
+  if (u16(bytes, 8) !== version) throw new Error(`schema version ${u16(bytes, 8)} is unsupported`);
 }
 
 function decodeMarket(observation: FullAccountObservation): DecodedProjection {
@@ -277,16 +284,26 @@ function decodePosition(observation: FullAccountObservation): DecodedProjection 
 
 function decodeRentCredit(observation: FullAccountObservation): DecodedProjection {
   const bytes = observation.data;
-  commonHeader(bytes, 'DCLTRNT1', 48);
+  commonHeader(bytes, 'DCLRNTL2', 128, 2);
   requireZero(bytes, 11, 5, 'RentCredit header');
-  const authorityBytes = slice(bytes, 16, 32);
-  const authority = pubkey(authorityBytes, 'RentCredit refund authority');
+  requireZero(bytes, 120, 8, 'RentCredit body');
+  const refundWallet = pubkey(slice(bytes, 16, 32), 'RentCredit refund wallet');
+  const marketBytes = slice(bytes, 48, 32);
+  const market = pubkey(marketBytes, 'RentCredit Market');
+  const releaseSet = hex(slice(bytes, 80, 32));
+  requireNonzero(slice(bytes, 80, 32), 'RentCredit release set');
+  const generation = u64(bytes, 112);
+  if (generation === 0n) throw new Error('RentCredit generation is zero');
+  if (refundWallet === market || sameIdentity(slice(bytes, 16, 32), slice(bytes, 80, 32)) || sameIdentity(marketBytes, slice(bytes, 80, 32))) throw new Error('RentCredit lifecycle identities alias');
   const bump = bytes[10];
   return Object.freeze({
     status: 'decoded', kind: 'RentCredit', address: observation.address, lamports: observation.lamports,
-    observedSlot: observation.observedSlot, schema: 'v1', bindings: Object.freeze([]),
-    details: Object.freeze([detail('Refund authority', authority), detail('Persisted PDA bump', bump), detail('Observed lamports', observation.lamports)]),
-    semantics: Object.freeze({ kind: 'RentCredit', refundAuthority: authority, refundAuthorityBytes: authorityBytes, bump }),
+    observedSlot: observation.observedSlot, schema: 'v2', bindings: Object.freeze([]),
+    details: Object.freeze([
+      detail('Refund wallet', refundWallet), detail('Market', market), detail('Generation', generation),
+      detail('Execution release set', releaseSet), detail('Persisted PDA bump', bump), detail('Observed lamports', observation.lamports),
+    ]),
+    semantics: Object.freeze({ kind: 'RentCredit', refundWallet, market, marketBytes, releaseSet, generation: generation.toString(), bump }),
   });
 }
 
@@ -307,8 +324,11 @@ export async function verifyLocalBindings(projection: DecodedProjection, program
     const [derived] = PublicKey.findProgramAddressSync([POSITION_SEED, new PublicKey(semantics.market).toBytes(), new PublicKey(semantics.owner).toBytes()], program);
     checks.push(Object.freeze({ label: 'Position PDA', ok: derived.toBase58() === projection.address, detail: `Market + owner → ${derived.toBase58()}` }));
   } else {
-    const [derived, bump] = PublicKey.findProgramAddressSync([RENT_CREDIT_SEED, semantics.refundAuthorityBytes], program);
-    checks.push(Object.freeze({ label: 'RentCredit PDA', ok: derived.toBase58() === projection.address && bump === semantics.bump, detail: `authority → ${derived.toBase58()}, bump ${bump}` }));
+    const generation = BigInt(semantics.generation);
+    const generationBytes = new Uint8Array(8);
+    new DataView(generationBytes.buffer).setBigUint64(0, generation, true);
+    const [derived, bump] = PublicKey.findProgramAddressSync([RENT_CREDIT_SEED, semantics.marketBytes, generationBytes], program);
+    checks.push(Object.freeze({ label: 'RentCredit PDA', ok: derived.toBase58() === projection.address && bump === semantics.bump, detail: `Market + generation → ${derived.toBase58()}, bump ${bump}` }));
   }
   return Object.freeze({ ...projection, bindings: Object.freeze(checks), semantics });
 }
@@ -327,6 +347,10 @@ export function crossCheckBindings(projections: ReadonlyArray<AccountProjection>
       const market = markets.get(projection.semantics.market);
       const generation = market?.semantics.kind === 'Market' ? market.semantics.generation : null;
       checks.push(Object.freeze({ label: 'Position → Market generation', ok: generation === projection.semantics.generation, detail: market ? `Position ${projection.semantics.generation}; Market ${generation}` : 'named Market was not decoded in this finalized scan' }));
+    } else if (projection.semantics.kind === 'RentCredit') {
+      const market = markets.get(projection.semantics.market);
+      const generation = market?.semantics.kind === 'Market' ? market.semantics.generation : null;
+      checks.push(Object.freeze({ label: 'RentCredit → Market lifecycle', ok: generation === projection.semantics.generation, detail: market ? `RentCredit ${projection.semantics.generation}; Market ${generation}` : 'bound Market was not decoded in this finalized scan' }));
     }
     return Object.freeze({ ...projection, bindings: Object.freeze(checks) });
   });

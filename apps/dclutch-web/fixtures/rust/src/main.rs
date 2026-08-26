@@ -5,7 +5,12 @@ use dclutch_realm_contract::{
     RealmV1, RealmV1Input,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_rent_contract::{RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1};
+use dclutch_rent_contract::{
+    RefundAuthority,
+    lifecycle_v2::{
+        LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
+    },
+};
 use solana_program::{hash::hash, pubkey::Pubkey};
 
 const MARKET_PDA_DOMAIN: &[u8] = b"dclutch/market-root/v1";
@@ -35,7 +40,8 @@ fn main() {
     .expect("fixture Realm input is canonical");
     let realm_bytes = realm.to_bytes();
     let realm_digest = hash(&realm_bytes).to_bytes();
-    let realm_address = Pubkey::find_program_address(&[REALM_PDA_DOMAIN, &realm_digest], &program).0;
+    let realm_address =
+        Pubkey::find_program_address(&[REALM_PDA_DOMAIN, &realm_digest], &program).0;
 
     let identity = MarketIdentity::new(
         ContentId::new(realm_digest).expect("Realm digest is nonzero"),
@@ -46,17 +52,17 @@ fn main() {
         7,
     );
     let identity_digest = hash(&identity.to_bytes()).to_bytes();
-    let market_address = Pubkey::find_program_address(&[MARKET_PDA_DOMAIN, &identity_digest], &program).0;
+    let market_address =
+        Pubkey::find_program_address(&[MARKET_PDA_DOMAIN, &identity_digest], &program).0;
     let root = MarketRoot::founding(identity, fill(8)).expect("fixture founding root is canonical");
-    let market = CategoricalMarketV1::<3>::new(
-        root,
-        0,
-        [0, 0, 0],
-        CategoricalSettlementSummaryV1::empty(),
-    )
-    .expect("fixture Market is canonical");
-    let mut market_bytes = vec![0; CategoricalMarketV1::<3>::encoded_len().expect("supported width")];
-    market.encode(&mut market_bytes).expect("fixture Market output has exact width");
+    let market =
+        CategoricalMarketV1::<3>::new(root, 0, [0, 0, 0], CategoricalSettlementSummaryV1::empty())
+            .expect("fixture Market is canonical");
+    let mut market_bytes =
+        vec![0; CategoricalMarketV1::<3>::encoded_len().expect("supported width")];
+    market
+        .encode(&mut market_bytes)
+        .expect("fixture Market output has exact width");
 
     let owner = fill(22);
     let position = PositionV1::<3>::new(market_address.to_bytes(), owner, 7, [5, 0, 12])
@@ -67,17 +73,29 @@ fn main() {
     )
     .0;
     let mut position_bytes = vec![0; PositionV1::<3>::encoded_len().expect("supported width")];
-    position.encode(&mut position_bytes).expect("fixture Position output has exact width");
+    position
+        .encode(&mut position_bytes)
+        .expect("fixture Position output has exact width");
 
-    let refund_authority = fill(31);
+    let refund_wallet = fill(31);
+    let release_set = fill(32);
+    let generation = 7_u64;
     let (rent_credit_address, rent_credit_bump) = Pubkey::find_program_address(
-        &[RENT_CREDIT_PDA_DOMAIN_V1, &refund_authority],
+        &[
+            LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+            market_address.as_ref(),
+            &generation.to_le_bytes(),
+        ],
         &program,
     );
-    let rent_credit = RentCreditV1::new(
-        RefundAuthority::new(refund_authority).expect("fixture authority is nonzero"),
+    let rent_credit = LifecycleRentCreditV2::new(
+        RefundAuthority::new(refund_wallet).expect("fixture refund wallet is nonzero"),
+        LifecycleAccountIdV2::new(market_address.to_bytes()).expect("fixture Market is nonzero"),
+        LifecycleAccountIdV2::new(release_set).expect("fixture release set is nonzero"),
+        generation,
         rent_credit_bump,
-    );
+    )
+    .expect("fixture lifecycle identities are distinct");
     let rent_credit_bytes = rent_credit.to_bytes();
 
     let raw_record_content = b"dClutch canonical browser fixture\n";
@@ -89,7 +107,11 @@ fn main() {
     )
     .0;
     let staging_address = Pubkey::find_program_address(
-        &[STAGING_CURSOR_PDA_SEED_V1, &schema_release_id, &content_digest],
+        &[
+            STAGING_CURSOR_PDA_SEED_V1,
+            &schema_release_id,
+            &content_digest,
+        ],
         &program,
     )
     .0;
