@@ -10,13 +10,13 @@
 use dclutch_product_runtime_v2::ContentId;
 use dclutch_rational_representation_v2_kernel::{
     ContentAdmissionV2, DescriptorAdmissionV2, RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
-    REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3, REPRESENTATION_GRAPH_SCHEMA_RELEASE_ID_V2,
-    RepresentationDescriptorV2,
+    REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3, RepresentationDescriptorV2,
     product_v3::{
         ProductRepresentationInputV3, ProductRuntimeProjectionV3, RepresentationAdmissionV3,
         RepresentationContextV3, admit_product_representation_v3,
     },
 };
+use dclutch_representation_composition_v3_kernel::COMPOSITION_EXPOSURE_SCHEMA_ID_V3;
 use solana_program::{account_info::AccountInfo, pubkey::Pubkey, rent::Rent};
 
 use super::{
@@ -31,7 +31,7 @@ pub struct RepresentationRuntimeFrameV3<'accounts, 'info> {
     pub product: ProductRuntimeFrameV3<'accounts, 'info>,
     /// Finalized representation descriptor.
     pub descriptor: FinalizedRecordFrameV2<'accounts, 'info>,
-    /// Finalized representation graph selected by the descriptor.
+    /// Finalized Product-to-Claims exposure bundle selected by the descriptor.
     pub graph: FinalizedRecordFrameV2<'accounts, 'info>,
 }
 
@@ -76,10 +76,10 @@ pub struct AuthenticatedRepresentationRuntimeV3<'accounts, 'info> {
 }
 
 /// Authenticate one ProductRuntimeV3 graph, one selected representation
-/// descriptor, and the graph selected inside that descriptor.
+/// descriptor, and the exposure bundle selected inside that descriptor.
 ///
 /// `expected_descriptor_digest` is the sole representation record selector.
-/// The graph identity and digest come from the authenticated descriptor body.
+/// The exposure identity and digest come from the authenticated descriptor body.
 /// All twelve Registry accounts must be distinct and read-only.
 pub fn authenticate_product_representation_v3<'accounts, 'info>(
     registry_program: &Pubkey,
@@ -136,7 +136,7 @@ pub fn authenticate_product_representation_v3<'accounts, 'info>(
         registry_program,
         rent,
         frame.graph,
-        REPRESENTATION_GRAPH_SCHEMA_RELEASE_ID_V2,
+        COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
         graph_digest,
         Error::RepresentationGraphRecord,
     )?;

@@ -46,14 +46,17 @@ use dclutch_rational_representation_v2_contract::{
     RepresentationRequestV2,
 };
 use dclutch_rational_representation_v2_kernel::{
-    ContentAdmissionV2, DescriptorAdmissionV2, REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
-    REPRESENTATION_GRAPH_SCHEMA_RELEASE_ID_V2, RepresentationDescriptorV2, RepresentationGraphV2,
+    DescriptorAdmissionV2, REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
+    RepresentationDescriptorV2,
     product_v3::{RepresentationAdmissionV3, TerminalScenarioV3},
 };
 use dclutch_realm_contract::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_representation_composition_v3_kernel::{
+    CompositionExposureBundleV3, CompositionExposureExecutionExpectedV3, RecordAdmissionV3,
+};
 use dclutch_token_svm::{AccountState, COption, Mint, TokenAccount, TokenProgram};
 use solana_program::{
     account_info::AccountInfo,
@@ -556,23 +559,23 @@ fn authenticate_common<'a>(
     authenticate_record(
         observation.graph,
         observation.registry_program,
-        REPRESENTATION_GRAPH_SCHEMA_RELEASE_ID_V2,
+        dclutch_representation_composition_v3_kernel::COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
         descriptor.graph_digest(),
         observation.rent,
     )?;
-    let graph = RepresentationGraphV2::decode(
+    let exposure = CompositionExposureBundleV3::decode(
         observation.graph.raw.data,
-        ContentAdmissionV2 {
-            selected_graph_id: descriptor.graph_id(),
-            finalized_graph_id: descriptor.graph_id(),
-            recomputed_graph_digest: descriptor.graph_digest(),
-            finalized_graph_digest: descriptor.graph_digest(),
+        RecordAdmissionV3 {
+            selected_id: descriptor.graph_id(),
+            finalized_id: descriptor.graph_id(),
+            recomputed_digest: descriptor.graph_digest(),
+            finalized_digest: descriptor.graph_digest(),
             record_authenticated: true,
         },
     )
     .map_err(|_| Error::InvalidRepresentation)?;
     descriptor
-        .authenticate_graph(graph)
+        .authenticate_exposure(exposure)
         .map_err(|_| Error::InvalidRepresentation)?;
     for record in [
         observation.product_evidence.linked_basis,
@@ -1455,29 +1458,67 @@ fn evaluate_terminal_payout(
 ) -> Result<u64> {
     let basis = ProductBasisV3::decode(common.observation.product_evidence.linked_basis.raw.data)
         .map_err(|_| Error::InvalidRepresentation)?;
-    let width = usize::try_from(basis.basis_width()).map_err(|_| Error::InvalidWidth)?;
-    if basis.basis_width() != common.representation_admission.basis_width() {
-        return Err(Error::InvalidWidth);
-    }
-    let mut payouts = vec![0_u64; width];
+    let product_width = usize::try_from(basis.basis_width()).map_err(|_| Error::InvalidWidth)?;
+    let claims_width = usize::try_from(common.representation_admission.basis_width())
+        .map_err(|_| Error::InvalidWidth)?;
+    let mut product_payouts = vec![0_u64; product_width];
     match scenario {
         TerminalScenarioV3::Categorical(selector) => {
-            basis.evaluate_categorical(selector, &mut payouts)
+            basis.evaluate_categorical(selector, &mut product_payouts)
         }
         TerminalScenarioV3::Rational {
             numerator,
             denominator,
-        } => basis.evaluate_rational(numerator, denominator, &mut payouts),
-        TerminalScenarioV3::Failure => basis.evaluate_failure(&mut payouts),
+        } => basis.evaluate_rational(numerator, denominator, &mut product_payouts),
+        TerminalScenarioV3::Failure => basis.evaluate_failure(&mut product_payouts),
     }
     .map_err(|_| Error::InvalidTerminal)?;
+    let exposure = authenticate_operator_exposure(common, basis.basis_width())?;
+    let mut translation_scratch = vec![0_u64; claims_width];
+    let mut claims_payouts = vec![0_u64; claims_width];
+    exposure
+        .translate_product_payouts(
+            &product_payouts,
+            &mut translation_scratch,
+            &mut claims_payouts,
+        )
+        .map_err(|_| Error::InvalidRepresentation)?;
     let selected = usize::try_from(outcome).map_err(|_| Error::InvalidWidth)?;
-    payouts
+    claims_payouts
         .get(selected)
         .copied()
         .ok_or(Error::InvalidWidth)?
         .checked_mul(quantity)
         .ok_or(Error::ArithmeticOverflow)
+}
+
+fn authenticate_operator_exposure<'a>(
+    common: CommonV2<'a>,
+    product_width: u32,
+) -> Result<CompositionExposureBundleV3<'a>> {
+    let admission = common.representation_admission;
+    CompositionExposureBundleV3::decode(
+        common.observation.graph.raw.data,
+        RecordAdmissionV3 {
+            selected_id: admission.graph_id(),
+            finalized_id: admission.graph_id(),
+            recomputed_digest: hash(common.observation.graph.raw.data).to_bytes(),
+            finalized_digest: admission.graph_digest(),
+            record_authenticated: true,
+        },
+    )
+    .and_then(|bundle| {
+        bundle.verify_execution_for(CompositionExposureExecutionExpectedV3 {
+            market: admission.market_id(),
+            result_domain: admission.result_domain_id(),
+            release_set: admission.release_set_id(),
+            product_basis: admission.linked_basis_record_digest(),
+            representation_basis: admission.semantic_basis_id(),
+            product_width,
+            representation_width: admission.basis_width(),
+        })
+    })
+    .map_err(|_| Error::InvalidRepresentation)
 }
 
 fn authenticate_positive_custody_replay(
@@ -1515,15 +1556,28 @@ fn derive_terminal_after_request(
 ) -> Result<DerivedTerminalIdentitiesV2> {
     let request_digest = hash(request_data).to_bytes();
     let width = common.representation_admission.basis_width();
+    let product_width =
+        usize::try_from(common.result_outcome_count).map_err(|_| Error::InvalidWidth)?;
+    let claims_width = usize::try_from(width).map_err(|_| Error::InvalidWidth)?;
     let neutral =
         SignedDeltaV3::new(DeltaDirectionV3::Neutral, 0).map_err(|_| Error::InvalidTerminal)?;
-    let mut payout_scratch = vec![0_u64; usize::try_from(width).map_err(|_| Error::InvalidWidth)?];
-    let mut aggregate_scratch = vec![neutral; payout_scratch.len()];
+    let mut product_payout_scratch = vec![0_u64; product_width];
+    let mut translation_scratch = vec![0_u64; claims_width];
+    let mut claims_payout_scratch = vec![0_u64; claims_width];
+    let mut aggregate_scratch = vec![neutral; claims_width];
     let mut packet = vec![0_u8; plan_bytes(width, 1, 1).map_err(|_| Error::InvalidTerminal)?];
     let planner_payout = encode_product_basis_terminal_signed_delta_v3(
         ProductBasisTerminalInputV3 {
             product_basis_bytes: common.observation.product_evidence.linked_basis.raw.data,
             representation: common.representation_admission,
+            composition_exposure_bytes: common.observation.graph.raw.data,
+            composition_exposure_admission: RecordAdmissionV3 {
+                selected_id: common.representation_admission.graph_id(),
+                finalized_id: common.representation_admission.graph_id(),
+                recomputed_digest: hash(common.observation.graph.raw.data).to_bytes(),
+                finalized_digest: common.representation_admission.graph_digest(),
+                record_authenticated: true,
+            },
             product_record_digest: common.product_record_digest,
             market_account: common.claims_aggregate.to_bytes(),
             market_bytes: common.observation.claims_aggregate.data,
@@ -1548,7 +1602,9 @@ fn derive_terminal_after_request(
             expected_position_revision: selected.custody_position_revision,
             hoard_before: context.hoard_before,
         },
-        &mut payout_scratch,
+        &mut product_payout_scratch,
+        &mut translation_scratch,
+        &mut claims_payout_scratch,
         &mut aggregate_scratch,
         &mut packet,
     )

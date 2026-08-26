@@ -40,10 +40,8 @@ use dclutch_rational_representation_v2_contract::{
     RATIONAL_STRUCTURED_CUSTODY_SEED_V2, RepresentationActionV2, RepresentationRequestV2,
 };
 use dclutch_rational_representation_v2_kernel::{
-    DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3, GRAPH_EDGE_BYTES,
-    GRAPH_HEADER_BYTES, GRAPH_MAGIC_V2, GRAPH_NODE_BYTES,
-    REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3, REPRESENTATION_GRAPH_SCHEMA_RELEASE_ID_V2,
-    SCALAR_BYTES, SCHEMA_VERSION_V2,
+    DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3,
+    REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
 };
 use dclutch_rational_representation_v2_operator::{
     AssetObservationV2, Error, FinalizedRecordObservationV2, ObservedAccountV2,
@@ -64,6 +62,11 @@ use dclutch_registry_contract::{
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
     ProgramIdentityV1,
+};
+use dclutch_representation_composition_v3_kernel::{
+    COMPOSITION_EXPOSURE_SCHEMA_ID_V3, CompositionExposureInputV3, CompositionExposureRowInputV3,
+    CompositionExposureTermV3, composition_exposure_bytes_v3,
+    encode_composition_exposure_v3_atomic,
 };
 use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
 use solana_program::{
@@ -256,146 +259,55 @@ impl OwnedRecord {
     }
 }
 
-#[derive(Clone, Copy)]
-struct GraphNode {
-    id: [u8; 32],
-    rank: u32,
-    first_edge: u32,
-    edge_count: u32,
-    kind: u8,
-    parameter: u64,
-    exposure: [u64; 2],
-}
-
-#[derive(Clone, Copy)]
-struct GraphEdge {
-    child_id: [u8; 32],
-    child_index: u32,
-    multiplicity: u64,
-}
-
-fn graph_bytes(changed: bool) -> Vec<u8> {
-    let multiplicities = if changed { [4, 6] } else { COEFFICIENTS };
-    let first = *multiplicities.first().expect("first multiplicity");
-    let second = *multiplicities.get(1).expect("second multiplicity");
-    let nodes = [
-        GraphNode {
-            id: [0x41; 32],
-            rank: 0,
-            first_edge: 0,
-            edge_count: 0,
-            kind: 0,
-            parameter: 0,
-            exposure: [100, 0],
+fn graph_bytes(
+    changed: bool,
+    market: Pubkey,
+    release_set: [u8; 32],
+    result_domain: [u8; 32],
+    product_basis: [u8; 32],
+    representation_basis: [u8; 32],
+) -> Vec<u8> {
+    let terms = [
+        [CompositionExposureTermV3 {
+            product_coordinate: 0,
+            numerator: if changed { 2 } else { 1 },
+        }],
+        [CompositionExposureTermV3 {
+            product_coordinate: 1,
+            numerator: 1,
+        }],
+    ];
+    let rows = [
+        CompositionExposureRowInputV3 {
+            node_id: [0x41; 32],
+            denominator: 1,
+            terms: &terms[0],
         },
-        GraphNode {
-            id: [0x42; 32],
-            rank: 0,
-            first_edge: 0,
-            edge_count: 0,
-            kind: 0,
-            parameter: 1,
-            exposure: [0, 100],
-        },
-        GraphNode {
-            id: [0x43; 32],
-            rank: 1,
-            first_edge: 0,
-            edge_count: 1,
-            kind: 1,
-            parameter: DENOMINATOR,
-            exposure: [10, 0],
-        },
-        GraphNode {
-            id: [0x44; 32],
-            rank: 1,
-            first_edge: 1,
-            edge_count: 1,
-            kind: 1,
-            parameter: DENOMINATOR,
-            exposure: [0, 10],
-        },
-        GraphNode {
-            id: [0x45; 32],
-            rank: 2,
-            first_edge: 2,
-            edge_count: 2,
-            kind: 2,
-            parameter: 0,
-            exposure: [first * 10, second * 10],
+        CompositionExposureRowInputV3 {
+            node_id: [0x42; 32],
+            denominator: 1,
+            terms: &terms[1],
         },
     ];
-    let edges = [
-        GraphEdge {
-            child_id: [0x41; 32],
-            child_index: 0,
-            multiplicity: 1,
+    let length =
+        composition_exposure_bytes_v3(OUTCOME_COUNT, OUTCOME_COUNT).expect("exposure record width");
+    let mut scratch = vec![0_u8; length];
+    let mut output = vec![0_u8; length];
+    encode_composition_exposure_v3_atomic(
+        CompositionExposureInputV3 {
+            market: market.to_bytes(),
+            result_domain,
+            release_set,
+            product_basis,
+            representation_basis,
+            graph_id: [0x31; 32],
+            product_width: OUTCOME_COUNT,
+            rows: &rows,
         },
-        GraphEdge {
-            child_id: [0x42; 32],
-            child_index: 1,
-            multiplicity: 1,
-        },
-        GraphEdge {
-            child_id: [0x43; 32],
-            child_index: 2,
-            multiplicity: first,
-        },
-        GraphEdge {
-            child_id: [0x44; 32],
-            child_index: 3,
-            multiplicity: second,
-        },
-    ];
-    let mut output = vec![
-        0;
-        GRAPH_HEADER_BYTES
-            + nodes.len() * GRAPH_NODE_BYTES
-            + edges.len() * GRAPH_EDGE_BYTES
-            + nodes.len() * 2 * SCALAR_BYTES
-    ];
-    put(&mut output, 0, &GRAPH_MAGIC_V2);
-    put(&mut output, 8, &SCHEMA_VERSION_V2.to_le_bytes());
-    put(&mut output, 16, &[0x31; 32]);
-    put(&mut output, 48, &[0x45; 32]);
-    put_u32(&mut output, 80, OUTCOME_COUNT);
-    put_u32(
+        &mut scratch,
         &mut output,
-        84,
-        u32::try_from(nodes.len()).expect("node width"),
-    );
-    put_u32(
-        &mut output,
-        88,
-        u32::try_from(edges.len()).expect("edge width"),
-    );
-    put_u64(&mut output, 96, 100);
-    for (index, node) in nodes.iter().enumerate() {
-        let offset = GRAPH_HEADER_BYTES + index * GRAPH_NODE_BYTES;
-        put(&mut output, offset, &node.id);
-        put_u32(&mut output, offset + 32, node.rank);
-        put_u32(&mut output, offset + 36, node.first_edge);
-        put_u32(&mut output, offset + 40, node.edge_count);
-        *output.get_mut(offset + 44).expect("node kind") = node.kind;
-        put_u64(&mut output, offset + 48, node.parameter);
-    }
-    let edge_start = GRAPH_HEADER_BYTES + nodes.len() * GRAPH_NODE_BYTES;
-    for (index, edge) in edges.iter().enumerate() {
-        let offset = edge_start + index * GRAPH_EDGE_BYTES;
-        put(&mut output, offset, &edge.child_id);
-        put_u32(&mut output, offset + 32, edge.child_index);
-        put_u64(&mut output, offset + 40, edge.multiplicity);
-    }
-    let exposure_start = edge_start + edges.len() * GRAPH_EDGE_BYTES;
-    for (node_index, node) in nodes.iter().enumerate() {
-        for (outcome, amount) in node.exposure.iter().enumerate() {
-            put_u64(
-                &mut output,
-                exposure_start + (node_index * 2 + outcome) * SCALAR_BYTES,
-                *amount,
-            );
-        }
-    }
+    )
+    .expect("canonical exposure record");
     output
 }
 
@@ -796,11 +708,27 @@ impl Fixture {
         .0;
         let receipt_mint_key = Pubkey::new_from_array([0x75; 32]);
         let graph = OwnedRecord::new(
-            REPRESENTATION_GRAPH_SCHEMA_RELEASE_ID_V2,
-            graph_bytes(false),
+            COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
+            graph_bytes(
+                false,
+                market,
+                release_set,
+                result_domain_record.digest(),
+                linked_basis.digest(),
+                basis_id,
+            ),
         );
-        let alternate_graph =
-            OwnedRecord::new(REPRESENTATION_GRAPH_SCHEMA_RELEASE_ID_V2, graph_bytes(true));
+        let alternate_graph = OwnedRecord::new(
+            COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
+            graph_bytes(
+                true,
+                market,
+                release_set,
+                result_domain_record.digest(),
+                linked_basis.digest(),
+                basis_id,
+            ),
+        );
         let descriptor = OwnedRecord::new(
             REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
             descriptor_bytes(

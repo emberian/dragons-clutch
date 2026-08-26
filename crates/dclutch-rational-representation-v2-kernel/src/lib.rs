@@ -887,6 +887,24 @@ impl<'a> RepresentationDescriptorV2<'a> {
         }
         Ok(())
     }
+
+    /// Join this descriptor to its exact finalized Product-to-Claims exposure.
+    ///
+    /// The exposure bundle supersedes the legacy graph as the selected live
+    /// record. Its admission binds the exact record identity and digest while
+    /// its ordered row count is the descriptor's Claims width `K`.
+    pub fn authenticate_exposure(
+        self,
+        exposure: dclutch_representation_composition_v3_kernel::CompositionExposureBundleV3<'_>,
+    ) -> Result<()> {
+        if self.graph_id != exposure.bundle_id()
+            || self.graph_digest != exposure.bundle_digest()
+            || self.outcome_count != exposure.representation_width()
+        {
+            return Err(Error::DescriptorMismatch);
+        }
+        Ok(())
+    }
 }
 
 /// Finalized-record authentication observed by the physical adapter.

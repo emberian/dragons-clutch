@@ -8,6 +8,7 @@ description = "Exact no-allocation shard, remainder, and representation-DAG kern
 
 [dependencies]
 dclutch-product-payoff-v2-codec = { path = "../dclutch-product-payoff-v2-codec" }
+dclutch-representation-composition-v3-kernel = { path = "../dclutch-representation-composition-v3-kernel" }
 
 [lints]
 workspace = true

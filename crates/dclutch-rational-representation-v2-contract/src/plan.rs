@@ -8,8 +8,9 @@ use dclutch_claims_svm::{
     },
 };
 use dclutch_rational_representation_v2_kernel::{
-    RepresentationDescriptorV2, RepresentationGraphV2, StructuredProjectionV2,
+    RepresentationDescriptorV2, StructuredProjectionV2,
 };
+use dclutch_representation_composition_v3_kernel::CompositionExposureBundleV3;
 
 use crate::{
     Error, Result,
@@ -199,17 +200,17 @@ impl<'a> PreparedRepresentationV2<'a> {
     }
 }
 
-/// Join one exact request to the accepted graph and ephemeral Token/Claims
+/// Join one exact request to the accepted exposure and ephemeral Token/Claims
 /// projection. No balance is copied into a protocol-owned state.
 pub fn prepare<'a>(
     request: RepresentationRequestV2<'a>,
     descriptor: RepresentationDescriptorV2<'_>,
     projection: StructuredProjectionV2<'a>,
-    graph: RepresentationGraphV2<'a>,
+    exposure: CompositionExposureBundleV3<'a>,
 ) -> Result<PreparedRepresentationV2<'a>> {
     let header = request.header();
     descriptor
-        .authenticate_graph(graph)
+        .authenticate_exposure(exposure)
         .map_err(|_| Error::ProjectionMismatch)?;
     if descriptor.descriptor_id() != header.descriptor_id
         || descriptor.graph_id() != header.graph_id
@@ -220,8 +221,8 @@ pub fn prepare<'a>(
         || descriptor.representation_authority() != header.representation_authority
         || descriptor.outcome_count() != header.outcome_count
         || descriptor.denominator() != header.denominator
-        || graph.graph_id() != header.graph_id
-        || graph.outcome_count() != header.outcome_count
+        || exposure.bundle_id() != header.graph_id
+        || exposure.representation_width() != header.outcome_count
         || projection.descriptor_id() != header.descriptor_id
         || projection.market_id() != header.market
         || projection.receipt_mint() != header.receipt_mint

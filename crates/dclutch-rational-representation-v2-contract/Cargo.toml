@@ -11,6 +11,7 @@ dclutch-claims-svm = { path = "../dclutch-claims-svm" }
 dclutch-custody-contract = { path = "../dclutch-custody-contract" }
 dclutch-rational-representation-v2-kernel = { path = "../dclutch-rational-representation-v2-kernel" }
 dclutch-rational-representation-v2-request-contract = { path = "../dclutch-rational-representation-v2-request-contract" }
+dclutch-representation-composition-v3-kernel = { path = "../dclutch-representation-composition-v3-kernel" }
 dclutch-token-svm = { path = "../dclutch-token-svm" }
 
 [lints]

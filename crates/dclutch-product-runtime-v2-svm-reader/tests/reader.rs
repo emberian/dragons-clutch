@@ -22,11 +22,15 @@ use dclutch_product_runtime_v2_svm_reader::representation_v3::{
 };
 use dclutch_product_runtime_v2_svm_reader::*;
 use dclutch_rational_representation_v2_kernel::{
-    DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3, GRAPH_HEADER_BYTES,
-    GRAPH_MAGIC_V2, GRAPH_NODE_BYTES, REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
-    REPRESENTATION_GRAPH_SCHEMA_RELEASE_ID_V2, SCALAR_BYTES, SCHEMA_VERSION_V2,
+    DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3,
+    REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_representation_composition_v3_kernel::{
+    COMPOSITION_EXPOSURE_SCHEMA_ID_V3, CompositionExposureInputV3, CompositionExposureRowInputV3,
+    CompositionExposureTermV3, composition_exposure_bytes_v3,
+    encode_composition_exposure_v3_atomic,
+};
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
@@ -325,27 +329,70 @@ fn put_u64(output: &mut [u8], offset: usize, value: u64) {
     put(output, offset, &value.to_le_bytes());
 }
 
-fn representation_graph_v3() -> Vec<u8> {
+fn representation_graph_v3(
+    context: RepresentationRuntimeContextV3,
+    result_domain: [u8; 32],
+    product_basis: [u8; 32],
+) -> Vec<u8> {
     const WIDTH: u32 = 4;
-    let width = usize::try_from(WIDTH).expect("fixture width");
-    let mut output = vec![0_u8; GRAPH_HEADER_BYTES + GRAPH_NODE_BYTES + width * SCALAR_BYTES];
-    put(&mut output, 0, &GRAPH_MAGIC_V2);
-    put(&mut output, 8, &SCHEMA_VERSION_V2.to_le_bytes());
-    put(&mut output, 16, &[0x71; 32]);
-    put(&mut output, 48, &[0x72; 32]);
-    put_u32(&mut output, 80, WIDTH);
-    put_u32(&mut output, 84, 1);
-    put_u32(&mut output, 88, 0);
-    put_u64(&mut output, 96, 1);
-    put(&mut output, GRAPH_HEADER_BYTES, &[0x72; 32]);
-    put_u32(&mut output, GRAPH_HEADER_BYTES + 32, 0);
-    put_u32(&mut output, GRAPH_HEADER_BYTES + 36, 0);
-    put_u32(&mut output, GRAPH_HEADER_BYTES + 40, 0);
-    *output
-        .get_mut(GRAPH_HEADER_BYTES + 44)
-        .expect("node-kind byte") = 0;
-    put_u64(&mut output, GRAPH_HEADER_BYTES + 48, 0);
-    put_u64(&mut output, GRAPH_HEADER_BYTES + GRAPH_NODE_BYTES, 1);
+    let terms = [
+        [CompositionExposureTermV3 {
+            product_coordinate: 0,
+            numerator: 1,
+        }],
+        [CompositionExposureTermV3 {
+            product_coordinate: 1,
+            numerator: 1,
+        }],
+        [CompositionExposureTermV3 {
+            product_coordinate: 2,
+            numerator: 1,
+        }],
+        [CompositionExposureTermV3 {
+            product_coordinate: 3,
+            numerator: 1,
+        }],
+    ];
+    let rows = [
+        CompositionExposureRowInputV3 {
+            node_id: [0x72; 32],
+            denominator: 1,
+            terms: &terms[0],
+        },
+        CompositionExposureRowInputV3 {
+            node_id: [0x73; 32],
+            denominator: 1,
+            terms: &terms[1],
+        },
+        CompositionExposureRowInputV3 {
+            node_id: [0x74; 32],
+            denominator: 1,
+            terms: &terms[2],
+        },
+        CompositionExposureRowInputV3 {
+            node_id: [0x75; 32],
+            denominator: 1,
+            terms: &terms[3],
+        },
+    ];
+    let length = composition_exposure_bytes_v3(WIDTH, WIDTH).expect("exposure width");
+    let mut scratch = vec![0_u8; length];
+    let mut output = vec![0_u8; length];
+    encode_composition_exposure_v3_atomic(
+        CompositionExposureInputV3 {
+            market: context.market.to_bytes(),
+            result_domain,
+            release_set: context.release_set.to_bytes(),
+            product_basis,
+            representation_basis: context.claims_basis_id.to_bytes(),
+            graph_id: [0x71; 32],
+            product_width: WIDTH,
+            rows: &rows,
+        },
+        &mut scratch,
+        &mut output,
+    )
+    .expect("canonical exposure");
     output
 }
 
@@ -382,7 +429,11 @@ fn compiled_representation_v3() -> RepresentationV3Backing {
         receipt_mint: Pubkey::new_from_array([0x84; 32]),
         token_program: Pubkey::new_from_array([0x85; 32]),
     };
-    let graph_bytes = representation_graph_v3();
+    let graph_bytes = representation_graph_v3(
+        context,
+        runtime.domain.coordinate.content_digest.to_bytes(),
+        runtime.basis.coordinate.content_digest.to_bytes(),
+    );
     let graph_digest = hash(&graph_bytes).to_bytes();
     let descriptor_bytes = representation_descriptor_v3(graph_digest, context);
     RepresentationV3Backing {
@@ -391,7 +442,7 @@ fn compiled_representation_v3() -> RepresentationV3Backing {
             REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
             descriptor_bytes,
         ),
-        graph: record(REPRESENTATION_GRAPH_SCHEMA_RELEASE_ID_V2, graph_bytes),
+        graph: record(COMPOSITION_EXPOSURE_SCHEMA_ID_V3, graph_bytes),
         context,
     }
 }

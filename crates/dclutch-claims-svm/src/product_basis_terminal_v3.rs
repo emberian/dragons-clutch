@@ -16,6 +16,9 @@ use dclutch_product_payoff_v2_codec::runtime_v3::{BasisKindV3, ProductBasisV3};
 use dclutch_rational_representation_v2_kernel::product_v3::{
     RepresentationAdmissionV3, TerminalScenarioV3,
 };
+use dclutch_representation_composition_v3_kernel::{
+    CompositionExposureBundleV3, CompositionExposureExecutionExpectedV3, RecordAdmissionV3,
+};
 
 use crate::{
     CallerRole,
@@ -46,6 +49,8 @@ pub enum Error {
     ProductBasis,
     /// An independently authenticated Product/representation identity differed.
     Representation,
+    /// The finalized Product-to-Claims exposure bundle refused.
+    Composition,
     /// Canonical LBV2 Market bytes refused.
     MarketState,
     /// Canonical LBV2 Position bytes refused.
@@ -82,6 +87,10 @@ pub struct ProductBasisTerminalInputV3<'a> {
     pub product_basis_bytes: &'a [u8],
     /// Exact Product/descriptor/DAG admission from the SVM reader.
     pub representation: RepresentationAdmissionV3,
+    /// Exact finalized Product-to-Claims exposure-bundle bytes.
+    pub composition_exposure_bytes: &'a [u8],
+    /// Adapter-authenticated finalized exposure record evidence.
+    pub composition_exposure_admission: RecordAdmissionV3,
     /// Exact finalized Product graph-root digest from that same reader.
     pub product_record_digest: [u8; 32],
     /// Canonical Claims aggregate account identity authenticated by the adapter.
@@ -115,15 +124,17 @@ pub struct ProductBasisTerminalInputV3<'a> {
 /// Evaluate one authenticated ProductBasisV3 terminal result and encode its
 /// sole Position debit through the canonical SignedDeltaV3 waist.
 ///
-/// `payout_scratch` and `aggregate_delta_scratch` must have the exact runtime
-/// basis width. The returned scalar is the exact collateral payout in Product
-/// payout atoms: `quantity * payout[claim_index]`. No division or additional
-/// rounding occurs here. Categorical ProductBasisV3 uses its exact Q=1
-/// boundary; graded ProductBasisV3 uses its canonical per-term final-floor and
-/// exact-complement boundary before this function performs integer accounting.
+/// `product_payout_scratch` has exact Product width `N`. `translation_scratch`,
+/// `claims_payout_scratch`, and `aggregate_delta_scratch` have exact Claims
+/// width `K`. The returned scalar is the exact collateral payout in Product
+/// payout atoms: `quantity * translated_payout[claim_index]`. The only
+/// translation is the authenticated canonical exposure bundle; no caller
+/// matrix or additional rounding boundary exists here.
 pub fn encode_product_basis_terminal_signed_delta_v3(
     input: ProductBasisTerminalInputV3<'_>,
-    payout_scratch: &mut [u64],
+    product_payout_scratch: &mut [u64],
+    translation_scratch: &mut [u64],
+    claims_payout_scratch: &mut [u64],
     aggregate_delta_scratch: &mut [SignedDeltaV3],
     output: &mut [u8],
 ) -> Result<u64> {
@@ -135,16 +146,29 @@ pub fn encode_product_basis_terminal_signed_delta_v3(
     let position = LiabilityBasisPositionViewV2::decode(input.position_bytes)
         .map_err(|_| Error::PositionState)?;
     validate_joins(input, basis, market, position)?;
-    let width = usize::try_from(basis.basis_width()).map_err(|_| Error::WidthMismatch)?;
-    if payout_scratch.len() != width || aggregate_delta_scratch.len() != width {
+    let exposure = decode_exposure(input, basis, market)?;
+    let product_width = usize::try_from(basis.basis_width()).map_err(|_| Error::WidthMismatch)?;
+    let claims_width = usize::try_from(market.claim_count).map_err(|_| Error::WidthMismatch)?;
+    if product_payout_scratch.len() != product_width
+        || translation_scratch.len() != claims_width
+        || claims_payout_scratch.len() != claims_width
+        || aggregate_delta_scratch.len() != claims_width
+    {
         return Err(Error::WidthMismatch);
     }
-    let expected_output = plan_bytes(basis.basis_width(), 1, 1).map_err(|_| Error::SignedDelta)?;
+    let expected_output = plan_bytes(market.claim_count, 1, 1).map_err(|_| Error::SignedDelta)?;
     if output.len() != expected_output {
         return Err(Error::SignedDelta);
     }
-    evaluate(basis, input.terminal, payout_scratch)?;
-    validate_partition(payout_scratch, basis.payout_scale())?;
+    evaluate(basis, input.terminal, product_payout_scratch)?;
+    validate_partition(product_payout_scratch, basis.payout_scale())?;
+    exposure
+        .translate_product_payouts(
+            product_payout_scratch,
+            translation_scratch,
+            claims_payout_scratch,
+        )
+        .map_err(|_| Error::Composition)?;
     let selected = usize::try_from(input.claim_index).map_err(|_| Error::InvalidDebit)?;
     let mut liability_before = 0_u128;
     let mut outcome = 0_u32;
@@ -159,7 +183,9 @@ pub fn encode_product_basis_terminal_signed_delta_v3(
             return Err(Error::PositionExceedsSupply);
         }
         let index = usize::try_from(outcome).map_err(|_| Error::WidthMismatch)?;
-        let payout = *payout_scratch.get(index).ok_or(Error::WidthMismatch)?;
+        let payout = *claims_payout_scratch
+            .get(index)
+            .ok_or(Error::WidthMismatch)?;
         liability_before = liability_before
             .checked_add(
                 u128::from(supply)
@@ -178,7 +204,9 @@ pub fn encode_product_basis_terminal_signed_delta_v3(
     if selected_supply < input.quantity || selected_balance < input.quantity {
         return Err(Error::InsufficientBalance);
     }
-    let payout_per_claim = *payout_scratch.get(selected).ok_or(Error::InvalidDebit)?;
+    let payout_per_claim = *claims_payout_scratch
+        .get(selected)
+        .ok_or(Error::InvalidDebit)?;
     let collateral_out_u128 = u128::from(input.quantity)
         .checked_mul(u128::from(payout_per_claim))
         .ok_or(Error::ArithmeticOverflow)?;
@@ -216,7 +244,7 @@ pub fn encode_product_basis_terminal_signed_delta_v3(
             delta: debit,
         },
         1,
-        basis.basis_width(),
+        market.claim_count,
     )
     .map_err(|_| Error::SignedDelta)?];
     SignedDeltaPlanV3::encode_into(
@@ -284,8 +312,7 @@ fn validate_joins(
     {
         return Err(Error::IdentityMismatch);
     }
-    if basis.basis_width() != admission.basis_width()
-        || market.claim_count != admission.basis_width()
+    if market.claim_count != admission.basis_width()
         || position.claim_count != admission.basis_width()
         || input.claim_index >= admission.basis_width()
     {
@@ -298,6 +325,35 @@ fn validate_joins(
         return Err(Error::RevisionMismatch);
     }
     Ok(())
+}
+
+fn decode_exposure<'a>(
+    input: ProductBasisTerminalInputV3<'a>,
+    basis: ProductBasisV3<'_>,
+    market: LiabilityBasisMarketViewV2,
+) -> Result<CompositionExposureBundleV3<'a>> {
+    let exposure = CompositionExposureBundleV3::decode(
+        input.composition_exposure_bytes,
+        input.composition_exposure_admission,
+    )
+    .map_err(|_| Error::Composition)?
+    .verify_execution_for(CompositionExposureExecutionExpectedV3 {
+        market: market.logical_market,
+        result_domain: input.representation.result_domain_id(),
+        release_set: market.release_set,
+        product_basis: input.representation.linked_basis_record_digest(),
+        representation_basis: market.basis_id,
+        product_width: basis.basis_width(),
+        representation_width: market.claim_count,
+    })
+    .map_err(|_| Error::Composition)?;
+    if exposure.bundle_id() != input.representation.graph_id()
+        || input.composition_exposure_admission.finalized_digest
+            != input.representation.graph_digest()
+    {
+        return Err(Error::Composition);
+    }
+    Ok(exposure)
 }
 
 fn evaluate(
@@ -357,12 +413,15 @@ mod tests {
     };
     use dclutch_rational_representation_v2_kernel::{
         ContentAdmissionV2, DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES,
-        DESCRIPTOR_MAGIC_V3, DescriptorAdmissionV2, GRAPH_HEADER_BYTES, GRAPH_MAGIC_V2,
-        GRAPH_NODE_BYTES, SCALAR_BYTES, SCHEMA_VERSION_V2,
+        DESCRIPTOR_MAGIC_V3, DescriptorAdmissionV2,
         product_v3::{
             ProductRepresentationInputV3, ProductRuntimeProjectionV3, RepresentationContextV3,
             admit_product_representation_v3,
         },
+    };
+    use dclutch_representation_composition_v3_kernel::{
+        CompositionExposureInputV3, CompositionExposureRowInputV3, CompositionExposureTermV3,
+        composition_exposure_bytes_v3, encode_composition_exposure_v3_atomic,
     };
     use std::{vec, vec::Vec};
 
@@ -465,21 +524,52 @@ mod tests {
         output
     }
 
-    fn graph(width: u32) -> Vec<u8> {
-        let width = usize::try_from(width).expect("graph width");
-        let mut output = vec![0_u8; GRAPH_HEADER_BYTES + GRAPH_NODE_BYTES + width * SCALAR_BYTES];
-        put(&mut output, 0, &GRAPH_MAGIC_V2);
-        put(&mut output, 8, &SCHEMA_VERSION_V2.to_le_bytes());
-        put(&mut output, 16, &id(71));
-        put(&mut output, 48, &id(72));
-        put_u32(&mut output, 80, u32::try_from(width).expect("graph width"));
-        put_u32(&mut output, 84, 1);
-        put_u32(&mut output, 88, 0);
-        put_u64(&mut output, 96, 1);
-        put(&mut output, GRAPH_HEADER_BYTES, &id(72));
-        *output.get_mut(GRAPH_HEADER_BYTES + 44).expect("node kind") = 0;
-        put_u64(&mut output, GRAPH_HEADER_BYTES + 48, 0);
-        put_u64(&mut output, GRAPH_HEADER_BYTES + GRAPH_NODE_BYTES, 1);
+    fn graph(product_width: u32, claims_width: u32) -> Vec<u8> {
+        let claims_width_usize = usize::try_from(claims_width).expect("graph width");
+        let mut term_rows = Vec::with_capacity(claims_width_usize);
+        for coordinate in 0..claims_width {
+            let product_coordinate = if product_width == claims_width {
+                coordinate
+            } else if product_width == 1 || claims_width == 1 {
+                0
+            } else {
+                coordinate
+                    .checked_mul(product_width - 1)
+                    .expect("fixture coordinate")
+                    / (claims_width - 1)
+            };
+            term_rows.push([CompositionExposureTermV3 {
+                product_coordinate,
+                numerator: 1,
+            }]);
+        }
+        let mut rows = Vec::with_capacity(claims_width_usize);
+        for (coordinate, terms) in term_rows.iter().enumerate() {
+            rows.push(CompositionExposureRowInputV3 {
+                node_id: id(u8::try_from(coordinate + 100).expect("test node id")),
+                denominator: 1,
+                terms,
+            });
+        }
+        let length =
+            composition_exposure_bytes_v3(claims_width, claims_width).expect("exposure width");
+        let mut scratch = vec![0_u8; length];
+        let mut output = vec![0_u8; length];
+        encode_composition_exposure_v3_atomic(
+            CompositionExposureInputV3 {
+                market: MARKET,
+                result_domain: RESULT_DOMAIN,
+                release_set: RELEASE_SET,
+                product_basis: LINKED_BASIS,
+                representation_basis: SEMANTIC_BASIS,
+                graph_id: id(72),
+                product_width,
+                rows: &rows,
+            },
+            &mut scratch,
+            &mut output,
+        )
+        .expect("exposure bundle");
         output
     }
 
@@ -502,10 +592,15 @@ mod tests {
         output
     }
 
-    fn admission(basis: &[u8], width: u32, scale: u64) -> RepresentationAdmissionV3 {
-        let descriptor = descriptor(width);
-        let graph = graph(width);
-        admit_product_representation_v3(ProductRepresentationInputV3 {
+    fn admission(
+        basis: &[u8],
+        product_width: u32,
+        claims_width: u32,
+        scale: u64,
+    ) -> (RepresentationAdmissionV3, Vec<u8>) {
+        let descriptor = descriptor(claims_width);
+        let graph = graph(product_width, claims_width);
+        let admission = admit_product_representation_v3(ProductRepresentationInputV3 {
             product_basis_bytes: basis,
             product: ProductRuntimeProjectionV3 {
                 product_id: PRODUCT,
@@ -515,7 +610,7 @@ mod tests {
                 semantic_basis_id: SEMANTIC_BASIS,
                 linked_basis_record_digest: LINKED_BASIS,
                 evaluator_release_id: EVALUATOR,
-                basis_width: width,
+                basis_width: product_width,
                 payout_scale: scale,
             },
             descriptor_bytes: &descriptor,
@@ -540,14 +635,15 @@ mod tests {
                 market_id: MARKET,
                 release_set_id: RELEASE_SET,
                 claims_basis_id: SEMANTIC_BASIS,
-                claims_width: width,
+                claims_width,
                 receipt_mint: id(73),
                 token_program: id(74),
                 representation_authority: id(70),
             },
         })
         .expect("representation admission")
-        .admission()
+        .admission();
+        (admission, graph)
     }
 
     struct State {
@@ -602,6 +698,7 @@ mod tests {
     fn input<'a>(
         basis: &'a [u8],
         representation: RepresentationAdmissionV3,
+        exposure: &'a [u8],
         state: &'a State,
         terminal: TerminalScenarioV3,
         claim_index: u32,
@@ -611,6 +708,14 @@ mod tests {
         ProductBasisTerminalInputV3 {
             product_basis_bytes: basis,
             representation,
+            composition_exposure_bytes: exposure,
+            composition_exposure_admission: RecordAdmissionV3 {
+                selected_id: id(71),
+                finalized_id: id(71),
+                recomputed_digest: id(91),
+                finalized_digest: id(91),
+                record_authenticated: true,
+            },
             product_record_digest: id(92),
             market_account: MARKET_ACCOUNT,
             market_bytes: &state.market,
@@ -635,15 +740,18 @@ mod tests {
     #[test]
     fn categorical_terminal_emits_one_exact_signed_debit_without_rounding() {
         let basis = categorical_basis(4);
-        let admission = admission(&basis, 4, 1);
+        let (admission, exposure) = admission(&basis, 4, 4, 1);
         let state = state(&[5, 7, 3, 4], &[2, 4, 1, 0], SEMANTIC_BASIS);
         let mut payouts = [0_u64; 4];
+        let mut translation = [0_u64; 4];
+        let mut claims_payouts = [0_u64; 4];
         let mut deltas = neutral(4);
         let mut packet = vec![0_u8; plan_bytes(4, 1, 1).expect("packet bytes")];
         let collateral = encode_product_basis_terminal_signed_delta_v3(
             input(
                 &basis,
                 admission,
+                &exposure,
                 &state,
                 TerminalScenarioV3::Categorical(1),
                 1,
@@ -651,12 +759,15 @@ mod tests {
                 7,
             ),
             &mut payouts,
+            &mut translation,
+            &mut claims_payouts,
             &mut deltas,
             &mut packet,
         )
         .expect("categorical terminal");
         assert_eq!(collateral, 2);
         assert_eq!(payouts, [0, 1, 0, 0]);
+        assert_eq!(claims_payouts, payouts);
         let plan = SignedDeltaPlanV3::decode(&packet).expect("signed delta");
         assert_eq!(plan.claim_count(), 4);
         assert_eq!(plan.semantic_basis_id(), SEMANTIC_BASIS);
@@ -673,7 +784,7 @@ mod tests {
     #[test]
     fn graded_rational_and_failure_results_use_the_product_partition() {
         let basis = graded_basis();
-        let admission = admission(&basis, 3, 10);
+        let (admission, exposure) = admission(&basis, 3, 3, 10);
         let state = state(&[5, 6, 7], &[2, 3, 4], SEMANTIC_BASIS);
         for (terminal, expected_payouts, collateral, hoard) in [
             (
@@ -688,30 +799,80 @@ mod tests {
             (TerminalScenarioV3::Failure, [0, 0, 10], 20, 70),
         ] {
             let mut payouts = [0_u64; 3];
+            let mut translation = [0_u64; 3];
+            let mut claims_payouts = [0_u64; 3];
             let mut deltas = neutral(3);
             let mut packet = vec![0_u8; plan_bytes(3, 1, 1).expect("packet bytes")];
             assert_eq!(
                 encode_product_basis_terminal_signed_delta_v3(
-                    input(&basis, admission, &state, terminal, 2, 2, hoard),
+                    input(&basis, admission, &exposure, &state, terminal, 2, 2, hoard),
                     &mut payouts,
+                    &mut translation,
+                    &mut claims_payouts,
                     &mut deltas,
                     &mut packet,
                 ),
                 Ok(collateral)
             );
             assert_eq!(payouts, expected_payouts);
+            assert_eq!(claims_payouts, expected_payouts);
             assert!(SignedDeltaPlanV3::decode(&packet).is_ok());
+        }
+    }
+
+    #[test]
+    fn k3_claims_translate_n1_and_n258_product_partitions() {
+        for (product_width, selector, expected_claims, hoard) in [
+            (1_u32, 0_u32, [1_u64, 1, 1], 3_u64),
+            (258_u32, 257_u32, [0_u64, 0, 1], 1_u64),
+        ] {
+            let basis = categorical_basis(product_width);
+            let (admission, exposure) = admission(&basis, product_width, 3, 1);
+            assert_eq!(admission.basis_width(), 3);
+            let state = state(&[1, 1, 1], &[0, 0, 1], SEMANTIC_BASIS);
+            let mut product_payouts =
+                vec![0_u64; usize::try_from(product_width).expect("Product width")];
+            let mut translation = [0_u64; 3];
+            let mut claims_payouts = [0_u64; 3];
+            let mut deltas = neutral(3);
+            let mut packet = vec![0_u8; plan_bytes(3, 1, 1).expect("packet bytes")];
+            assert_eq!(
+                encode_product_basis_terminal_signed_delta_v3(
+                    input(
+                        &basis,
+                        admission,
+                        &exposure,
+                        &state,
+                        TerminalScenarioV3::Categorical(selector),
+                        2,
+                        1,
+                        hoard,
+                    ),
+                    &mut product_payouts,
+                    &mut translation,
+                    &mut claims_payouts,
+                    &mut deltas,
+                    &mut packet,
+                ),
+                Ok(1)
+            );
+            assert_eq!(claims_payouts, expected_claims);
+            let plan = SignedDeltaPlanV3::decode(&packet).expect("K3 signed delta");
+            assert_eq!(plan.claim_count(), 3);
+            assert_eq!(plan.position_delta(0).expect("debit").outcome(), 2);
         }
     }
 
     #[test]
     fn terminal_refuses_substitution_width_balance_and_insolvency() {
         let basis = categorical_basis(4);
-        let admission = admission(&basis, 4, 1);
+        let (admission, exposure) = admission(&basis, 4, 4, 1);
         let valid = state(&[5, 7, 3, 4], &[2, 4, 1, 0], SEMANTIC_BASIS);
         let wrong_basis = state(&[5, 7, 3, 4], &[2, 4, 1, 0], id(99));
         let overdrawn = state(&[5, 2, 3, 4], &[2, 4, 1, 0], SEMANTIC_BASIS);
         let mut payouts = [0_u64; 4];
+        let mut translation = [0_u64; 4];
+        let mut claims_payouts = [0_u64; 4];
         let mut deltas = neutral(4);
         let mut packet = vec![0xa5; plan_bytes(4, 1, 1).expect("packet bytes")];
         assert_eq!(
@@ -719,6 +880,7 @@ mod tests {
                 input(
                     &basis,
                     admission,
+                    &exposure,
                     &wrong_basis,
                     TerminalScenarioV3::Categorical(1),
                     1,
@@ -726,6 +888,8 @@ mod tests {
                     7,
                 ),
                 &mut payouts,
+                &mut translation,
+                &mut claims_payouts,
                 &mut deltas,
                 &mut packet,
             ),
@@ -737,6 +901,7 @@ mod tests {
                 input(
                     &basis,
                     admission,
+                    &exposure,
                     &overdrawn,
                     TerminalScenarioV3::Categorical(1),
                     1,
@@ -744,6 +909,8 @@ mod tests {
                     7,
                 ),
                 &mut payouts,
+                &mut translation,
+                &mut claims_payouts,
                 &mut deltas,
                 &mut packet,
             ),
@@ -754,6 +921,7 @@ mod tests {
                 input(
                     &basis,
                     admission,
+                    &exposure,
                     &valid,
                     TerminalScenarioV3::Categorical(1),
                     1,
@@ -761,6 +929,8 @@ mod tests {
                     6,
                 ),
                 &mut payouts,
+                &mut translation,
+                &mut claims_payouts,
                 &mut deltas,
                 &mut packet,
             ),
@@ -772,6 +942,7 @@ mod tests {
                 input(
                     &basis,
                     admission,
+                    &exposure,
                     &valid,
                     TerminalScenarioV3::Categorical(1),
                     1,
@@ -779,6 +950,8 @@ mod tests {
                     7,
                 ),
                 &mut payouts,
+                &mut translation,
+                &mut claims_payouts,
                 &mut short,
                 &mut packet,
             ),

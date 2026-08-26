@@ -14,10 +14,13 @@
 use dclutch_product_payoff_v2_codec::runtime_v3::{
     BasisKindV3, Error as ProductBasisError, ProductBasisV3,
 };
+use dclutch_representation_composition_v3_kernel::{
+    CompositionExposureBundleV3, CompositionExposureExecutionExpectedV3, RecordAdmissionV3,
+};
 
 use crate::{
     ContentAdmissionV2, DescriptorAdmissionV2, Error as RepresentationError,
-    RepresentationDescriptorV2, RepresentationGraphV2, StructuredProjectionV2,
+    RepresentationDescriptorV2, StructuredProjectionV2,
     generated_product_v3::{
         ADMISSION_BASIS_KIND_OFFSET_V3, ADMISSION_BASIS_WIDTH_OFFSET_V3,
         ADMISSION_COORDINATE_DOMAIN_ID_OFFSET_V3, ADMISSION_DENOMINATOR_OFFSET_V3,
@@ -47,6 +50,8 @@ pub enum Error {
     ProductBasis(ProductBasisError),
     /// The representation descriptor, graph, or custody kernel refused.
     Representation(RepresentationError),
+    /// The authenticated Product-to-Claims composition exposure refused.
+    Composition(dclutch_representation_composition_v3_kernel::Error),
     /// A Product, Claims, Market, release, descriptor, or Token identity differed.
     IdentityMismatch,
     /// Product, Claims, descriptor, graph, or custody runtime widths differed.
@@ -86,7 +91,7 @@ pub struct ProductRuntimeProjectionV3 {
     pub linked_basis_record_digest: [u8; 32],
     /// Immutable ProductBasisV3 evaluator release.
     pub evaluator_release_id: [u8; 32],
-    /// Runtime native Claims width.
+    /// Product terminal-result width `N`.
     pub basis_width: u32,
     /// Positive exact Product payout scale.
     pub payout_scale: u64,
@@ -122,9 +127,9 @@ pub struct ProductRepresentationInputV3<'a> {
     pub descriptor_bytes: &'a [u8],
     /// Adapter-authenticated descriptor coordinate and Claims PDA derivation.
     pub descriptor_admission: DescriptorAdmissionV2,
-    /// Exact finalized rational representation DAG body.
+    /// Exact finalized Product-to-Claims composition exposure bundle.
     pub graph_bytes: &'a [u8],
-    /// Adapter-authenticated graph coordinate.
+    /// Adapter-authenticated exposure-bundle coordinate selected by the descriptor.
     pub graph_admission: ContentAdmissionV2,
     /// Independently authenticated Market/Claims/Token facts.
     pub context: RepresentationContextV3,
@@ -369,6 +374,7 @@ impl RepresentationAdmissionV3 {
 pub struct AdmittedProductRepresentationV3<'a> {
     basis: ProductBasisV3<'a>,
     descriptor: RepresentationDescriptorV2<'a>,
+    exposure: CompositionExposureBundleV3<'a>,
     admission: RepresentationAdmissionV3,
 }
 
@@ -428,19 +434,12 @@ pub fn admit_product_representation_v3(
     {
         return Err(Error::IdentityMismatch);
     }
-    if basis.basis_width() != input.product.basis_width
-        || basis.basis_width() != input.context.claims_width
-    {
+    if basis.basis_width() != input.product.basis_width {
         return Err(Error::WidthMismatch);
     }
     let descriptor =
         RepresentationDescriptorV2::decode(input.descriptor_bytes, input.descriptor_admission)
             .map_err(Error::Representation)?;
-    let graph = RepresentationGraphV2::decode(input.graph_bytes, input.graph_admission)
-        .map_err(Error::Representation)?;
-    descriptor
-        .authenticate_graph(graph)
-        .map_err(Error::Representation)?;
     if descriptor.market_id() != input.context.market_id
         || descriptor.release_set_id() != input.context.release_set_id
         || descriptor.receipt_mint() != input.context.receipt_mint
@@ -449,8 +448,34 @@ pub fn admit_product_representation_v3(
     {
         return Err(Error::IdentityMismatch);
     }
-    if descriptor.outcome_count() != basis.basis_width() {
+    if descriptor.outcome_count() != input.context.claims_width {
         return Err(Error::WidthMismatch);
+    }
+    let exposure = CompositionExposureBundleV3::decode(
+        input.graph_bytes,
+        RecordAdmissionV3 {
+            selected_id: input.graph_admission.selected_graph_id,
+            finalized_id: input.graph_admission.finalized_graph_id,
+            recomputed_digest: input.graph_admission.recomputed_graph_digest,
+            finalized_digest: input.graph_admission.finalized_graph_digest,
+            record_authenticated: input.graph_admission.record_authenticated,
+        },
+    )
+    .map_err(Error::Composition)?
+    .verify_execution_for(CompositionExposureExecutionExpectedV3 {
+        market: input.context.market_id,
+        result_domain: input.product.result_domain_id,
+        release_set: input.context.release_set_id,
+        product_basis: input.product.linked_basis_record_digest,
+        representation_basis: input.context.claims_basis_id,
+        product_width: basis.basis_width(),
+        representation_width: input.context.claims_width,
+    })
+    .map_err(Error::Composition)?;
+    if exposure.bundle_id() != descriptor.graph_id()
+        || input.graph_admission.finalized_graph_digest != descriptor.graph_digest()
+    {
+        return Err(Error::IdentityMismatch);
     }
     let admission = RepresentationAdmissionV3 {
         basis_kind: basis.kind(),
@@ -469,14 +494,15 @@ pub fn admit_product_representation_v3(
         token_program: input.context.token_program,
         representation_authority: input.context.representation_authority,
         evaluator_release_id: input.product.evaluator_release_id,
-        basis_width: basis.basis_width(),
+        basis_width: input.context.claims_width,
         payout_scale: basis.payout_scale(),
         denominator: descriptor.denominator(),
-        graph_scale: graph.scale(),
+        graph_scale: exposure.common_denominator().map_err(Error::Composition)?,
     };
     Ok(AdmittedProductRepresentationV3 {
         basis,
         descriptor,
+        exposure,
         admission,
     })
 }
@@ -530,36 +556,47 @@ impl<'a> AdmittedProductRepresentationV3<'a> {
 impl AdmittedRepresentationCustodyV3<'_> {
     /// Evaluate an admitted Product scenario and prove exact receipt backing.
     ///
-    /// `payout_scratch` must have the exact runtime basis width. It changes only
-    /// after ProductBasisV3 has preflighted the selected scenario.
+    /// `product_payout_scratch` has exact Product width `N`.
+    /// `translation_scratch` and `claims_payouts` have exact Claims width `K`.
+    /// `claims_payouts` changes only after the Product partition and every
+    /// exact exposure-row division have succeeded.
     pub fn prove_scenario_solvency(
         self,
         scenario: TerminalScenarioV3,
-        payout_scratch: &mut [u64],
+        product_payout_scratch: &mut [u64],
+        translation_scratch: &mut [u64],
+        claims_payouts: &mut [u64],
     ) -> Result<ScenarioSolvencyV3> {
         let basis = self.representation.basis;
         match scenario {
             TerminalScenarioV3::Categorical(selector) => basis
-                .evaluate_categorical(selector, payout_scratch)
+                .evaluate_categorical(selector, product_payout_scratch)
                 .map_err(Error::ProductBasis)?,
             TerminalScenarioV3::Rational {
                 numerator,
                 denominator,
             } => basis
-                .evaluate_rational(numerator, denominator, payout_scratch)
+                .evaluate_rational(numerator, denominator, product_payout_scratch)
                 .map_err(Error::ProductBasis)?,
             TerminalScenarioV3::Failure => basis
-                .evaluate_failure(payout_scratch)
+                .evaluate_failure(product_payout_scratch)
                 .map_err(Error::ProductBasis)?,
         }
-        validate_partition(payout_scratch, self.representation.admission.payout_scale)?;
+        validate_partition(
+            product_payout_scratch,
+            self.representation.admission.payout_scale,
+        )?;
+        self.representation
+            .exposure
+            .translate_product_payouts(product_payout_scratch, translation_scratch, claims_payouts)
+            .map_err(Error::Composition)?;
         let receipt_supply = self.custody.receipt_supply();
         let mut receipt_unit_numerator = 0_u128;
         let mut custody_value_numerator = 0_u128;
         let mut outcome = 0_u32;
         while outcome < self.representation.admission.basis_width {
             let index = usize::try_from(outcome).map_err(|_| Error::WidthMismatch)?;
-            let payout = u128::from(*payout_scratch.get(index).ok_or(Error::WidthMismatch)?);
+            let payout = u128::from(*claims_payouts.get(index).ok_or(Error::WidthMismatch)?);
             let coordinate = self
                 .custody
                 .coordinate(outcome)
@@ -711,9 +748,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        CoordinateObservation, GRAPH_EDGE_BYTES, GRAPH_HEADER_BYTES, GRAPH_MAGIC_V2,
-        GRAPH_NODE_BYTES, SCALAR_BYTES, SCHEMA_VERSION_V2, STRUCTURED_HEADER_BYTES,
-        STRUCTURED_VECTOR_COUNT, StructuredProjectionHeaderV2,
+        CoordinateObservation, SCALAR_BYTES, STRUCTURED_HEADER_BYTES, STRUCTURED_VECTOR_COUNT,
+        StructuredProjectionHeaderV2,
         generated_descriptor::{
             DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_DENOMINATOR_OFFSET,
             DESCRIPTOR_GRAPH_DIGEST_OFFSET, DESCRIPTOR_GRAPH_ID_OFFSET, DESCRIPTOR_HEADER_BYTES,
@@ -727,11 +763,14 @@ mod tests {
     use dclutch_product_payoff_v2_codec::runtime_v3::{
         BasisInputV3, BasisShapeV3, BasisTermV3, basis_record_bytes_v3, compile_basis_v3,
     };
+    use dclutch_representation_composition_v3_kernel::{
+        CompositionExposureInputV3, CompositionExposureRowInputV3, CompositionExposureTermV3,
+        composition_exposure_bytes_v3, encode_composition_exposure_v3_atomic,
+    };
     use std::{vec, vec::Vec};
 
     const WIDTH: u32 = 3;
     const SHARD_DENOMINATOR: u64 = 10;
-    const GRAPH_SCALE: u64 = 10;
     const COEFFICIENTS: [u64; 3] = [20, 30, 10];
 
     fn id(value: u8) -> [u8; 32] {
@@ -849,66 +888,55 @@ mod tests {
     }
 
     fn graph() -> Vec<u8> {
-        let nodes = 4_usize;
-        let edges = 3_usize;
-        let width = WIDTH as usize;
-        let edge_offset = GRAPH_HEADER_BYTES + nodes * GRAPH_NODE_BYTES;
-        let exposure_offset = edge_offset + edges * GRAPH_EDGE_BYTES;
-        let mut output = vec![0_u8; exposure_offset + nodes * width * SCALAR_BYTES];
-        fixture_put(&mut output, 0, &GRAPH_MAGIC_V2);
-        fixture_put(&mut output, 8, &SCHEMA_VERSION_V2.to_le_bytes());
-        fixture_put(&mut output, 16, &id(21));
-        fixture_put(&mut output, 48, &id(20));
-        put_u32(&mut output, 80, WIDTH);
-        put_u32(&mut output, 84, 4);
-        put_u32(&mut output, 88, 3);
-        put_u64(&mut output, 96, GRAPH_SCALE);
-
-        for (index, node_id, selected) in [
-            (0_usize, 10_u8, 0_u64),
-            (1_usize, 11_u8, 1_u64),
-            (2_usize, 12_u8, 2_u64),
-        ] {
-            let offset = GRAPH_HEADER_BYTES + index * GRAPH_NODE_BYTES;
-            fixture_put(&mut output, offset, &id(node_id));
-            put_u32(&mut output, offset + 32, 0);
-            put_u32(&mut output, offset + 36, 0);
-            put_u32(&mut output, offset + 40, 0);
-            *output.get_mut(offset + 44).expect("native kind") = 0;
-            put_u64(&mut output, offset + 48, selected);
-        }
-        let root = GRAPH_HEADER_BYTES + 3 * GRAPH_NODE_BYTES;
-        fixture_put(&mut output, root, &id(20));
-        put_u32(&mut output, root + 32, 1);
-        put_u32(&mut output, root + 36, 0);
-        put_u32(&mut output, root + 40, 3);
-        *output.get_mut(root + 44).expect("basket kind") = 2;
-
-        for (index, child_id, child_index, multiplicity) in [
-            (0_usize, 10_u8, 0_u32, 2_u64),
-            (1_usize, 11_u8, 1_u32, 3_u64),
-            (2_usize, 12_u8, 2_u32, 1_u64),
-        ] {
-            let offset = edge_offset + index * GRAPH_EDGE_BYTES;
-            fixture_put(&mut output, offset, &id(child_id));
-            put_u32(&mut output, offset + 32, child_index);
-            put_u64(&mut output, offset + 40, multiplicity);
-        }
-        let exposures = [
-            [10_u64, 0, 0],
-            [0_u64, 10, 0],
-            [0_u64, 0, 10],
-            [20_u64, 30, 10],
+        let terms = [
+            [CompositionExposureTermV3 {
+                product_coordinate: 0,
+                numerator: 1,
+            }],
+            [CompositionExposureTermV3 {
+                product_coordinate: 1,
+                numerator: 1,
+            }],
+            [CompositionExposureTermV3 {
+                product_coordinate: 2,
+                numerator: 1,
+            }],
         ];
-        for (node, values) in exposures.iter().enumerate() {
-            for (outcome, value) in values.iter().copied().enumerate() {
-                put_u64(
-                    &mut output,
-                    exposure_offset + (node * width + outcome) * SCALAR_BYTES,
-                    value,
-                );
-            }
-        }
+        let rows = [
+            CompositionExposureRowInputV3 {
+                node_id: id(10),
+                denominator: 1,
+                terms: &terms[0],
+            },
+            CompositionExposureRowInputV3 {
+                node_id: id(11),
+                denominator: 1,
+                terms: &terms[1],
+            },
+            CompositionExposureRowInputV3 {
+                node_id: id(12),
+                denominator: 1,
+                terms: &terms[2],
+            },
+        ];
+        let length = composition_exposure_bytes_v3(WIDTH, WIDTH).expect("exposure width");
+        let mut scratch = vec![0_u8; length];
+        let mut output = vec![0_u8; length];
+        encode_composition_exposure_v3_atomic(
+            CompositionExposureInputV3 {
+                market: id(30),
+                result_domain: id(41),
+                release_set: id(31),
+                product_basis: id(45),
+                representation_basis: id(50),
+                graph_id: id(22),
+                product_width: WIDTH,
+                rows: &rows,
+            },
+            &mut scratch,
+            &mut output,
+        )
+        .expect("canonical exposure");
         output
     }
 
@@ -1026,23 +1054,34 @@ mod tests {
         assert_eq!(receipt.semantic_basis_id(), id(50));
         let custody = custody();
         let joined = admitted.admit_custody(&custody).expect("exact custody");
-        let mut payouts = [0_u64; 3];
+        let mut product_payouts = [0_u64; 3];
+        let mut translation_scratch = [0_u64; 3];
+        let mut claims_payouts = [0_u64; 3];
         let rational = joined
             .prove_scenario_solvency(
                 TerminalScenarioV3::Rational {
                     numerator: 5,
                     denominator: 1,
                 },
-                &mut payouts,
+                &mut product_payouts,
+                &mut translation_scratch,
+                &mut claims_payouts,
             )
             .expect("rational solvency");
-        assert_eq!(payouts, [2, 1, 7]);
+        assert_eq!(product_payouts, [2, 1, 7]);
+        assert_eq!(claims_payouts, [2, 1, 7]);
         assert_eq!(rational.receipt_liability_numerator, 280);
         assert_eq!(rational.custody_value_numerator, 280);
         let failure = joined
-            .prove_scenario_solvency(TerminalScenarioV3::Failure, &mut payouts)
+            .prove_scenario_solvency(
+                TerminalScenarioV3::Failure,
+                &mut product_payouts,
+                &mut translation_scratch,
+                &mut claims_payouts,
+            )
             .expect("failure solvency");
-        assert_eq!(payouts, [0, 0, 10]);
+        assert_eq!(product_payouts, [0, 0, 10]);
+        assert_eq!(claims_payouts, [0, 0, 10]);
         assert_eq!(failure.receipt_liability_numerator, 200);
         assert_eq!(failure.custody_value_numerator, 200);
     }
@@ -1057,11 +1096,19 @@ mod tests {
                 .expect("categorical admission");
         let custody = custody();
         let joined = admitted.admit_custody(&custody).expect("exact custody");
-        let mut payouts = [9_u64; 3];
+        let mut product_payouts = [9_u64; 3];
+        let mut translation_scratch = [9_u64; 3];
+        let mut claims_payouts = [9_u64; 3];
         let proof = joined
-            .prove_scenario_solvency(TerminalScenarioV3::Categorical(1), &mut payouts)
+            .prove_scenario_solvency(
+                TerminalScenarioV3::Categorical(1),
+                &mut product_payouts,
+                &mut translation_scratch,
+                &mut claims_payouts,
+            )
             .expect("categorical solvency");
-        assert_eq!(payouts, [0, 1, 0]);
+        assert_eq!(product_payouts, [0, 1, 0]);
+        assert_eq!(claims_payouts, [0, 1, 0]);
         assert_eq!(proof.receipt_liability_numerator, 60);
         assert_eq!(proof.custody_value_numerator, 60);
     }
@@ -1080,16 +1127,17 @@ mod tests {
 
         let mut coefficient_substitution = descriptor.clone();
         put_u64(&mut coefficient_substitution, DESCRIPTOR_HEADER_BYTES, 21);
+        let substituted = admit_product_representation_v3(representation_input(
+            &basis,
+            &coefficient_substitution,
+            &graph,
+            10,
+        ))
+        .expect("descriptor coefficient is joined at custody");
+        let canonical_custody = custody();
         assert!(matches!(
-            admit_product_representation_v3(representation_input(
-                &basis,
-                &coefficient_substitution,
-                &graph,
-                10,
-            )),
-            Err(Error::Representation(
-                RepresentationError::DescriptorMismatch
-            ))
+            substituted.admit_custody(&canonical_custody),
+            Err(Error::IdentityMismatch)
         ));
 
         let admitted =
