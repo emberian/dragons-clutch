@@ -45,15 +45,18 @@ pub struct DealerCustodySequenceV3 {
 
 impl DealerCustodySequenceV3 {
     /// Project the exact ordered sequence from a scenario-fill plan.
-    pub fn from_scenario(plan: ScenarioAtomicPlanV3) -> DealerRouteResultV3<Self> {
+    pub fn from_scenario(
+        plan: ScenarioAtomicPlanV3,
+        effects: &[Option<super::v3_composer::ScenarioCustodyEffectV3>],
+    ) -> DealerRouteResultV3<Self> {
         let mut requests = [None; MAX_DEALER_CUSTODY_ROUTES_V3];
         let count = usize::from(plan.custody_count);
-        if count > requests.len() {
+        if count > requests.len() || effects.len() != requests.len() {
             return Err(DealerRouteErrorV3::InvalidSequence);
         }
         for (index, destination) in requests.iter_mut().take(count).enumerate() {
             *destination = Some(
-                plan.custody
+                effects
                     .get(index)
                     .copied()
                     .flatten()
@@ -61,7 +64,7 @@ impl DealerCustodySequenceV3 {
                     .request,
             );
         }
-        if plan.custody.iter().skip(count).any(Option::is_some) {
+        if effects.iter().skip(count).any(Option::is_some) {
             return Err(DealerRouteErrorV3::InvalidSequence);
         }
         Ok(Self {

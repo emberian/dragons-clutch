@@ -94,6 +94,7 @@ fn incoming_quote_funds_minimum_split_while_fee_stays_segregated() {
     let mut after = [0; 3];
     let mut inventory = [0; 3];
     let mut equity = [0; 3];
+    let mut custody = [None; 4];
     let plan = prepare_scenario_atomic_v3(
         context,
         frame,
@@ -123,6 +124,7 @@ fn incoming_quote_funds_minimum_split_while_fee_stays_segregated() {
         &mut after,
         &mut inventory,
         &mut equity,
+        &mut custody,
     )
     .expect("atomic plan");
     assert_eq!(plan.scenario.minimum_complete_sets_to_split, 3);
@@ -146,6 +148,7 @@ fn outgoing_quote_executes_after_merge_and_fee_never_becomes_capital() {
     let mut after = [0; 3];
     let mut inventory = [0; 3];
     let mut equity = [0; 3];
+    let mut custody = [None; 4];
     let plan = prepare_scenario_atomic_v3(
         context,
         frame,
@@ -175,6 +178,7 @@ fn outgoing_quote_executes_after_merge_and_fee_never_becomes_capital() {
         &mut after,
         &mut inventory,
         &mut equity,
+        &mut custody,
     )
     .expect("atomic plan");
     assert_eq!(plan.scenario.minimum_complete_sets_to_split, 0);
@@ -185,13 +189,13 @@ fn outgoing_quote_executes_after_merge_and_fee_never_becomes_capital() {
     assert_eq!(plan.hoard_after, 96);
     assert_eq!(plan.counterparty_after, 104);
     assert_eq!(plan.custody_count, 3);
-    let fee = plan.custody[0].expect("principal-to-fee effect");
+    let fee = custody[0].expect("principal-to-fee effect");
     assert_eq!(
         fee.request.source_compartment,
         CompartmentV1::TradingPrincipal
     );
     assert_eq!(fee.request.destination_compartment, CompartmentV1::FeeVault);
-    let payout = plan.custody[2].expect("net counterparty payout");
+    let payout = custody[2].expect("net counterparty payout");
     assert_eq!(payout.request.amount, 4);
 }
 
@@ -206,6 +210,7 @@ fn substituted_candidate_digest_refuses_without_claims_outputs() {
     let mut after = [77; 3];
     let mut inventory = [77; 3];
     let mut equity = [77; 3];
+    let mut custody = [None; 4];
     let result = prepare_scenario_atomic_v3(
         context,
         frame,
@@ -235,6 +240,7 @@ fn substituted_candidate_digest_refuses_without_claims_outputs() {
         &mut after,
         &mut inventory,
         &mut equity,
+        &mut custody,
     );
     assert!(result.is_err());
     assert_eq!(inventory, [77; 3]);

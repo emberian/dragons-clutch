@@ -44,6 +44,8 @@ pub mod v3_obligation;
 pub mod v3_operator;
 /// EffectProgram V3 admission for exact Dealer Custody request sequences.
 pub mod v3_route;
+/// Runtime-width exact trade requests and scenario-solvent physical composition.
+pub mod v3_trade;
 
 /// Canonical Dealer capability-kind label.
 pub const DEALER_KIND_PREIMAGE_V2: &[u8] = b"dclutch/capability/dealer-v2";

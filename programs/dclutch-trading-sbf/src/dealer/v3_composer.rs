@@ -187,8 +187,6 @@ pub struct ScenarioAtomicPlanV3 {
     pub scenario: ScenarioPlan,
     /// Expected family-neutral Claims V3 semantics.
     pub claims: ScenarioClaimsDeltaExpectationV3,
-    /// Ordered Custody requests; inactive capacity is `None`.
-    pub custody: [Option<ScenarioCustodyEffectV3>; MAX_DEALER_SCENARIO_CUSTODY_EFFECTS_V3],
     /// Active Custody request count.
     pub custody_count: u8,
     /// Required final TradingPrincipal balance.
@@ -223,6 +221,7 @@ pub fn prepare_scenario_atomic_v3(
     obligations_after: &mut [u64],
     post_inventory: &mut [u64],
     post_equity: &mut [i128],
+    custody_output: &mut [Option<ScenarioCustodyEffectV3>],
 ) -> ScenarioComposerResultV3<ScenarioAtomicPlanV3> {
     validate_coordinates(
         context,
@@ -245,6 +244,9 @@ pub fn prepare_scenario_atomic_v3(
         if observed != width {
             return Err(ScenarioComposerErrorV3::WidthMismatch);
         }
+    }
+    if custody_output.len() != MAX_DEALER_SCENARIO_CUSTODY_EFFECTS_V3 {
+        return Err(ScenarioComposerErrorV3::WidthMismatch);
     }
     for (output, value) in obligations_before
         .iter_mut()
@@ -290,14 +292,12 @@ pub fn prepare_scenario_atomic_v3(
         hoard: frame.hoard_balance,
         counterparty: frame.counterparty_balance,
     };
-    let mut custody = [None; MAX_DEALER_SCENARIO_CUSTODY_EFFECTS_V3];
+    let mut transfers = [None; MAX_DEALER_SCENARIO_CUSTODY_EFFECTS_V3];
     let mut count = 0_usize;
     if input.quote.direction == ScenarioQuoteDirectionV3::CounterpartyPaysDealer {
-        push_transfer(
-            &mut custody,
+        stage_transfer(
+            &mut transfers,
             &mut count,
-            context,
-            frame,
             TransferKindV3::CounterpartyToPrincipal,
             input.quote.principal,
             &mut balances,
@@ -307,29 +307,23 @@ pub fn prepare_scenario_atomic_v3(
         ScenarioQuoteDirectionV3::CounterpartyPaysDealer => TransferKindV3::CounterpartyToFee,
         ScenarioQuoteDirectionV3::DealerPaysCounterparty => TransferKindV3::PrincipalToFee,
     };
-    push_transfer(
-        &mut custody,
+    stage_transfer(
+        &mut transfers,
         &mut count,
-        context,
-        frame,
         fee_kind,
         input.quote.realized_fee,
         &mut balances,
     )?;
-    push_transfer(
-        &mut custody,
+    stage_transfer(
+        &mut transfers,
         &mut count,
-        context,
-        frame,
         TransferKindV3::PrincipalToHoard,
         scenario.minimum_complete_sets_to_split,
         &mut balances,
     )?;
-    push_transfer(
-        &mut custody,
+    stage_transfer(
+        &mut transfers,
         &mut count,
-        context,
-        frame,
         TransferKindV3::HoardToPrincipal,
         scenario.maximum_complete_sets_to_merge,
         &mut balances,
@@ -340,11 +334,9 @@ pub fn prepare_scenario_atomic_v3(
             .principal
             .checked_sub(input.quote.realized_fee)
             .ok_or(ScenarioComposerErrorV3::Arithmetic)?;
-        push_transfer(
-            &mut custody,
+        stage_transfer(
+            &mut transfers,
             &mut count,
-            context,
-            frame,
             TransferKindV3::PrincipalToCounterparty,
             counterparty_proceeds,
             &mut balances,
@@ -379,10 +371,23 @@ pub fn prepare_scenario_atomic_v3(
             scenario.maximum_complete_sets_to_merge,
         )?,
     };
+    for transfer in transfers.iter().take(count).copied().flatten() {
+        build_custody_effect(context, frame, transfer)?;
+    }
+    custody_output.fill(None);
+    for (destination, transfer) in custody_output
+        .iter_mut()
+        .zip(transfers.iter().take(count).copied())
+    {
+        *destination = Some(build_custody_effect(
+            context,
+            frame,
+            transfer.ok_or(ScenarioComposerErrorV3::Arithmetic)?,
+        )?);
+    }
     Ok(ScenarioAtomicPlanV3 {
         scenario,
         claims,
-        custody,
         custody_count: u8::try_from(count).map_err(|_| ScenarioComposerErrorV3::Arithmetic)?,
         principal_after: balances.principal,
         fee_after: balances.fee,
@@ -552,12 +557,19 @@ struct ComposerBalancesV3 {
     counterparty: u64,
 }
 
+#[derive(Clone, Copy)]
+struct StagedTransferV3 {
+    kind: TransferKindV3,
+    amount: u64,
+    ordinal: u16,
+    source_after: u64,
+    destination_after: u64,
+}
+
 #[allow(clippy::too_many_arguments)]
-fn push_transfer(
-    output: &mut [Option<ScenarioCustodyEffectV3>; MAX_DEALER_SCENARIO_CUSTODY_EFFECTS_V3],
+fn stage_transfer(
+    output: &mut [Option<StagedTransferV3>; MAX_DEALER_SCENARIO_CUSTODY_EFFECTS_V3],
     count: &mut usize,
-    context: ScenarioComposerContextV3,
-    frame: ScenarioCollateralFrameV3,
     kind: TransferKindV3,
     amount: u64,
     balances: &mut ComposerBalancesV3,
@@ -568,90 +580,13 @@ fn push_transfer(
     if *count >= output.len() {
         return Err(ScenarioComposerErrorV3::Arithmetic);
     }
-    let (
-        source,
-        destination,
-        source_compartment,
-        destination_compartment,
-        source_owner,
-        destination_owner,
-        source_context,
-        destination_context,
-        source_before,
-        destination_before,
-    ) = match kind {
-        TransferKindV3::CounterpartyToPrincipal => (
-            frame.counterparty_account,
-            frame.principal_vault,
-            CompartmentV1::External,
-            CompartmentV1::TradingPrincipal,
-            frame.counterparty_owner,
-            [0; 32],
-            [0; 32],
-            context.child_root,
-            balances.counterparty,
-            balances.principal,
-        ),
-        TransferKindV3::PrincipalToCounterparty => (
-            frame.principal_vault,
-            frame.counterparty_account,
-            CompartmentV1::TradingPrincipal,
-            CompartmentV1::External,
-            [0; 32],
-            frame.counterparty_owner,
-            context.child_root,
-            [0; 32],
-            balances.principal,
-            balances.counterparty,
-        ),
-        TransferKindV3::CounterpartyToFee => (
-            frame.counterparty_account,
-            frame.fee_vault,
-            CompartmentV1::External,
-            CompartmentV1::FeeVault,
-            frame.counterparty_owner,
-            [0; 32],
-            [0; 32],
-            context.child_root,
-            balances.counterparty,
-            balances.fee,
-        ),
-        TransferKindV3::PrincipalToFee => (
-            frame.principal_vault,
-            frame.fee_vault,
-            CompartmentV1::TradingPrincipal,
-            CompartmentV1::FeeVault,
-            [0; 32],
-            [0; 32],
-            context.child_root,
-            context.child_root,
-            balances.principal,
-            balances.fee,
-        ),
-        TransferKindV3::PrincipalToHoard => (
-            frame.principal_vault,
-            frame.hoard_vault,
-            CompartmentV1::TradingPrincipal,
-            CompartmentV1::HoardPrincipal,
-            [0; 32],
-            [0; 32],
-            context.child_root,
-            context.market,
-            balances.principal,
-            balances.hoard,
-        ),
-        TransferKindV3::HoardToPrincipal => (
-            frame.hoard_vault,
-            frame.principal_vault,
-            CompartmentV1::HoardPrincipal,
-            CompartmentV1::TradingPrincipal,
-            [0; 32],
-            [0; 32],
-            context.market,
-            context.child_root,
-            balances.hoard,
-            balances.principal,
-        ),
+    let (source_before, destination_before) = match kind {
+        TransferKindV3::CounterpartyToPrincipal => (balances.counterparty, balances.principal),
+        TransferKindV3::PrincipalToCounterparty => (balances.principal, balances.counterparty),
+        TransferKindV3::CounterpartyToFee => (balances.counterparty, balances.fee),
+        TransferKindV3::PrincipalToFee => (balances.principal, balances.fee),
+        TransferKindV3::PrincipalToHoard => (balances.principal, balances.hoard),
+        TransferKindV3::HoardToPrincipal => (balances.hoard, balances.principal),
     };
     let source_after = source_before
         .checked_sub(amount)
@@ -659,53 +594,10 @@ fn push_transfer(
     let destination_after = destination_before
         .checked_add(amount)
         .ok_or(ScenarioComposerErrorV3::Arithmetic)?;
-    let expected_revision = context
-        .custody_replay_revision
-        .checked_add(u64::try_from(*count).map_err(|_| ScenarioComposerErrorV3::Arithmetic)?)
-        .ok_or(ScenarioComposerErrorV3::Arithmetic)?;
-    let request = CustodyRequestV1 {
-        operation: OperationV1::Transfer,
-        caller_role: CallerRoleV1::Trading,
-        source_compartment,
-        destination_compartment,
-        release_set: context.release_set,
-        market: context.market,
-        realm: context.realm,
-        context: context.child_root,
-        caller_program: context.trading_program,
-        semantic: ContextV1 {
-            candidate: context.obligation_account,
-            source_owner,
-            destination_owner,
-            order: frame.counterparty_owner,
-            parent_request_digest: context.parent_request_digest,
-            order_nonce: context.custody_replay_revision,
-            generation: context.generation,
-            page_index: 0,
-            execution_index: 0,
-            transfer_index: u16::try_from(*count)
-                .map_err(|_| ScenarioComposerErrorV3::Arithmetic)?,
-        },
-        source,
-        destination,
-        source_vault_context: source_context,
-        destination_vault_context: destination_context,
-        mint: context.mint,
-        token_program: context.token_program,
-        payer: [0; 32],
-        rent_refund: [0; 32],
-        expected_revision,
-        resulting_revision: expected_revision
-            .checked_add(1)
-            .ok_or(ScenarioComposerErrorV3::Arithmetic)?,
+    output[*count] = Some(StagedTransferV3 {
+        kind,
         amount,
-        rent_lamports: 0,
-    };
-    request
-        .validate()
-        .map_err(|_| ScenarioComposerErrorV3::Custody)?;
-    output[*count] = Some(ScenarioCustodyEffectV3 {
-        request,
+        ordinal: u16::try_from(*count).map_err(|_| ScenarioComposerErrorV3::Arithmetic)?,
         source_after,
         destination_after,
     });
@@ -739,6 +631,134 @@ fn push_transfer(
         .checked_add(1)
         .ok_or(ScenarioComposerErrorV3::Arithmetic)?;
     Ok(())
+}
+
+#[inline(never)]
+fn build_custody_effect(
+    context: ScenarioComposerContextV3,
+    frame: ScenarioCollateralFrameV3,
+    transfer: StagedTransferV3,
+) -> ScenarioComposerResultV3<ScenarioCustodyEffectV3> {
+    let (
+        source,
+        destination,
+        source_compartment,
+        destination_compartment,
+        source_owner,
+        destination_owner,
+        source_context,
+        destination_context,
+    ) = match transfer.kind {
+        TransferKindV3::CounterpartyToPrincipal => (
+            frame.counterparty_account,
+            frame.principal_vault,
+            CompartmentV1::External,
+            CompartmentV1::TradingPrincipal,
+            frame.counterparty_owner,
+            [0; 32],
+            [0; 32],
+            context.child_root,
+        ),
+        TransferKindV3::PrincipalToCounterparty => (
+            frame.principal_vault,
+            frame.counterparty_account,
+            CompartmentV1::TradingPrincipal,
+            CompartmentV1::External,
+            [0; 32],
+            frame.counterparty_owner,
+            context.child_root,
+            [0; 32],
+        ),
+        TransferKindV3::CounterpartyToFee => (
+            frame.counterparty_account,
+            frame.fee_vault,
+            CompartmentV1::External,
+            CompartmentV1::FeeVault,
+            frame.counterparty_owner,
+            [0; 32],
+            [0; 32],
+            context.child_root,
+        ),
+        TransferKindV3::PrincipalToFee => (
+            frame.principal_vault,
+            frame.fee_vault,
+            CompartmentV1::TradingPrincipal,
+            CompartmentV1::FeeVault,
+            [0; 32],
+            [0; 32],
+            context.child_root,
+            context.child_root,
+        ),
+        TransferKindV3::PrincipalToHoard => (
+            frame.principal_vault,
+            frame.hoard_vault,
+            CompartmentV1::TradingPrincipal,
+            CompartmentV1::HoardPrincipal,
+            [0; 32],
+            [0; 32],
+            context.child_root,
+            context.market,
+        ),
+        TransferKindV3::HoardToPrincipal => (
+            frame.hoard_vault,
+            frame.principal_vault,
+            CompartmentV1::HoardPrincipal,
+            CompartmentV1::TradingPrincipal,
+            [0; 32],
+            [0; 32],
+            context.market,
+            context.child_root,
+        ),
+    };
+    let expected_revision = context
+        .custody_replay_revision
+        .checked_add(u64::from(transfer.ordinal))
+        .ok_or(ScenarioComposerErrorV3::Arithmetic)?;
+    let request = CustodyRequestV1 {
+        operation: OperationV1::Transfer,
+        caller_role: CallerRoleV1::Trading,
+        source_compartment,
+        destination_compartment,
+        release_set: context.release_set,
+        market: context.market,
+        realm: context.realm,
+        context: context.child_root,
+        caller_program: context.trading_program,
+        semantic: ContextV1 {
+            candidate: context.obligation_account,
+            source_owner,
+            destination_owner,
+            order: frame.counterparty_owner,
+            parent_request_digest: context.parent_request_digest,
+            order_nonce: context.custody_replay_revision,
+            generation: context.generation,
+            page_index: 0,
+            execution_index: 0,
+            transfer_index: transfer.ordinal,
+        },
+        source,
+        destination,
+        source_vault_context: source_context,
+        destination_vault_context: destination_context,
+        mint: context.mint,
+        token_program: context.token_program,
+        payer: [0; 32],
+        rent_refund: [0; 32],
+        expected_revision,
+        resulting_revision: expected_revision
+            .checked_add(1)
+            .ok_or(ScenarioComposerErrorV3::Arithmetic)?,
+        amount: transfer.amount,
+        rent_lamports: 0,
+    };
+    request
+        .validate()
+        .map_err(|_| ScenarioComposerErrorV3::Custody)?;
+    Ok(ScenarioCustodyEffectV3 {
+        request,
+        source_after: transfer.source_after,
+        destination_after: transfer.destination_after,
+    })
 }
 
 fn claims_delta_digest(
