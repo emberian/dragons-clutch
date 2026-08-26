@@ -177,7 +177,11 @@ pub fn encode_rational_lifecycle_account_profile_v3(
     Ok(output)
 }
 
-fn rule(action: LifecycleActionV2, index: usize, lengths: &[u32]) -> Result<AccountRuleInputV2> {
+pub(crate) fn rule(
+    action: LifecycleActionV2,
+    index: usize,
+    lengths: &[u32],
+) -> Result<AccountRuleInputV2> {
     let data_length = *lengths.get(index).ok_or(Error::AccountObservation)?;
     let receipt_writable = matches!(
         action,

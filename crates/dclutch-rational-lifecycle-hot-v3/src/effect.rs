@@ -175,7 +175,7 @@ fn child_template(
     Ok(output)
 }
 
-fn append_header_instructions(output: &mut Vec<EffectInstructionV3>) -> Result<()> {
+pub(crate) fn append_header_instructions(output: &mut Vec<EffectInstructionV3>) -> Result<()> {
     output.extend([
         write_identity(
             RationalLifecycleHotLayoutV3::RELEASE_SET,
@@ -352,7 +352,7 @@ fn append_row_instructions(
     Ok(())
 }
 
-fn write_identity(offset: usize, register: usize) -> Result<EffectInstructionV3> {
+pub(crate) fn write_identity(offset: usize, register: usize) -> Result<EffectInstructionV3> {
     Ok(EffectInstructionV3::write_request_identity(
         0,
         RequestSpaceV3::Fixed,
@@ -361,7 +361,7 @@ fn write_identity(offset: usize, register: usize) -> Result<EffectInstructionV3>
     ))
 }
 
-fn write_u64(offset: usize, register: usize) -> Result<EffectInstructionV3> {
+pub(crate) fn write_u64(offset: usize, register: usize) -> Result<EffectInstructionV3> {
     Ok(EffectInstructionV3::write_request_u64(
         0,
         RequestSpaceV3::Fixed,
@@ -370,7 +370,7 @@ fn write_u64(offset: usize, register: usize) -> Result<EffectInstructionV3> {
     ))
 }
 
-fn write_u32(offset: usize, register: usize) -> Result<EffectInstructionV3> {
+pub(crate) fn write_u32(offset: usize, register: usize) -> Result<EffectInstructionV3> {
     Ok(EffectInstructionV3::write_request_u32(
         0,
         RequestSpaceV3::Fixed,
@@ -379,7 +379,7 @@ fn write_u32(offset: usize, register: usize) -> Result<EffectInstructionV3> {
     ))
 }
 
-fn put(output: &mut [u8], offset: usize, value: &[u8]) -> Result<()> {
+pub(crate) fn put(output: &mut [u8], offset: usize, value: &[u8]) -> Result<()> {
     let end = offset
         .checked_add(value.len())
         .ok_or(Error::InvalidLength)?;
@@ -390,10 +390,10 @@ fn put(output: &mut [u8], offset: usize, value: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn narrow_u16(value: usize) -> Result<u16> {
+pub(crate) fn narrow_u16(value: usize) -> Result<u16> {
     u16::try_from(value).map_err(|_| Error::InvalidLength)
 }
 
-fn narrow_u32(value: usize) -> Result<u32> {
+pub(crate) fn narrow_u32(value: usize) -> Result<u32> {
     u32::try_from(value).map_err(|_| Error::InvalidLength)
 }
