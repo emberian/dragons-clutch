@@ -47,6 +47,21 @@ const EXECUTION_BODY_BYTES: usize = 16;
 const SIGNED_TERMINAL_BODY_BYTES: usize = 32 + COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2;
 const CANCEL_THROUGH_BODY_BYTES: usize = 32 + CANCEL_THROUGH_SIGNED_PREIMAGE_BYTES_V2;
 
+/// Exact fixed width of a signed registered Sell or Buy admission request.
+pub const DIRECT_REGISTRATION_REQUEST_BYTES_V3: usize =
+    DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3 + REGISTRATION_BODY_BYTES;
+/// Exact fixed width of an ordinary registered matcher fill request.
+pub const DIRECT_REGISTERED_FILL_REQUEST_BYTES_V3: usize =
+    DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3 + EXECUTION_BODY_BYTES;
+/// Exact fixed width of one maker-signed registered cancellation request.
+pub const DIRECT_REGISTERED_CANCEL_REQUEST_BYTES_V3: usize =
+    DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3 + SIGNED_TERMINAL_BODY_BYTES;
+/// Exact fixed width of one maker-signed replay invalidation request.
+pub const DIRECT_CANCEL_THROUGH_REQUEST_BYTES_V3: usize =
+    DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3 + CANCEL_THROUGH_BODY_BYTES;
+/// Exact width of a permissionless expiry, invalidated close, or root close.
+pub const DIRECT_EMPTY_ACTION_REQUEST_BYTES_V3: usize = DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3;
+
 /// Descriptor selector values in strictly ascending canonical order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
