@@ -36,12 +36,23 @@ pub const ARTIFACT_PROFILE: u16 = 2;
 pub const SELECTED_WINDOW_ARTIFACT_PROFILE: u16 = 3;
 /// Selected-window profile with checked narrow integer projections into `u64` scalars.
 pub const TYPED_SCALAR_ARTIFACT_PROFILE: u16 = 4;
+/// Typed-scalar profile with an optional trusted current-slot environment scalar.
+pub const TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE: u16 = 5;
 /// Exact V2 header width.
 pub const HEADER_BYTES: usize = 32;
 /// Exact account-rule width.
 pub const RULE_BYTES: usize = 16;
 /// Exact projection-operation width.
 pub const OPERATION_BYTES: usize = 16;
+/// Little-endian trusted-environment scalar-coordinate offset.
+pub const TRUSTED_ENVIRONMENT_SCALAR_OFFSET: usize = 28;
+/// Trusted-environment kind-tag offset.
+pub const TRUSTED_ENVIRONMENT_KIND_OFFSET: usize = 30;
+/// Trusted-environment reserved-byte offset.
+pub const TRUSTED_ENVIRONMENT_RESERVED_OFFSET: usize = 31;
+
+const TRUSTED_ENVIRONMENT_NONE: u8 = 0;
+const TRUSTED_ENVIRONMENT_CURRENT_SLOT: u8 = 1;
 
 const OP_REQUIRE_KEY: u8 = 0;
 const OP_REQUIRE_OWNER: u8 = 1;
@@ -63,9 +74,10 @@ const OP_PROJECT_DATA_U16: u8 = 16;
 
 /// Encode one fixed-account `u16` data projection into a common `u64` scalar.
 ///
-/// This operation is admitted only by [`TYPED_SCALAR_ARTIFACT_PROFILE`]. The
-/// destination scalar receives the zero-extended little-endian value. All
-/// arguments are validated before `output` is mutated.
+/// This operation is admitted by [`TYPED_SCALAR_ARTIFACT_PROFILE`] and its
+/// [`TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE`] successor. The destination scalar
+/// receives the zero-extended little-endian value. All arguments are validated
+/// before `output` is mutated.
 pub fn encode_project_data_u16_operation_v2(
     output: &mut [u8],
     account: u16,
@@ -136,10 +148,39 @@ pub enum Error {
     DataOutOfBounds,
     /// Two profile operations targeted the same output register.
     DuplicateProjection,
+    /// Trusted-environment tag, reserved byte, or scalar coordinate was invalid.
+    InvalidTrustedEnvironment,
+    /// A projection attempted to overwrite a trusted-environment scalar.
+    TrustedEnvironmentOverwrite,
 }
 
 /// Result alias for runtime-tail profiles.
 pub type Result<T> = core::result::Result<T, Error>;
+
+/// Trusted runtime environment supplied outside account/request projection.
+///
+/// The neutral kernel names only the semantic observation and its destination.
+/// It does not name an SVM sysvar or accept a caller-supplied Clock account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TrustedEnvironmentV2 {
+    /// No trusted-environment scalar is declared.
+    None,
+    /// Current trusted runtime slot, seeded by the outer before projection.
+    CurrentSlot {
+        /// Common scalar coordinate receiving the trusted slot.
+        destination: u16,
+    },
+}
+
+impl TrustedEnvironmentV2 {
+    /// Current-slot destination, when selected.
+    pub const fn current_slot_destination(self) -> Option<u16> {
+        match self {
+            Self::None => None,
+            Self::CurrentSlot { destination } => Some(destination),
+        }
+    }
+}
 
 /// Canonical account-alias space.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -240,6 +281,7 @@ pub struct AccountProfileV2<'a> {
     item_scalar_stride: u16,
     common_identities: u16,
     item_identity_stride: u16,
+    trusted_environment: TrustedEnvironmentV2,
     bytes: &'a [u8],
 }
 
@@ -256,12 +298,15 @@ impl<'a> AccountProfileV2<'a> {
         if read_u16(bytes, 8)? != VERSION
             || !matches!(
                 artifact_profile,
-                ARTIFACT_PROFILE | SELECTED_WINDOW_ARTIFACT_PROFILE | TYPED_SCALAR_ARTIFACT_PROFILE
+                ARTIFACT_PROFILE
+                    | SELECTED_WINDOW_ARTIFACT_PROFILE
+                    | TYPED_SCALAR_ARTIFACT_PROFILE
+                    | TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE
             )
         {
             return Err(Error::UnsupportedProfile);
         }
-        if read_u32(bytes, 28)? != 0 {
+        if artifact_profile != TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE && read_u32(bytes, 28)? != 0 {
             return Err(Error::NonCanonicalReserved);
         }
         let value = Self {
@@ -274,6 +319,7 @@ impl<'a> AccountProfileV2<'a> {
             item_scalar_stride: read_u16(bytes, 22)?,
             common_identities: read_u16(bytes, 24)?,
             item_identity_stride: read_u16(bytes, 26)?,
+            trusted_environment: decode_trusted_environment(bytes, artifact_profile)?,
             bytes,
         };
         if value.fixed_accounts == 0
@@ -284,6 +330,13 @@ impl<'a> AccountProfileV2<'a> {
             || (value.item_account_stride != 0 && value.item_scalar_stride == 0)
         {
             return Err(Error::EmptyProfile);
+        }
+        if value
+            .trusted_environment
+            .current_slot_destination()
+            .is_some_and(|destination| destination >= value.common_scalars)
+        {
+            return Err(Error::InvalidTrustedEnvironment);
         }
         let rules = usize::from(value.fixed_accounts)
             .checked_add(usize::from(value.item_account_stride))
@@ -342,6 +395,16 @@ impl<'a> AccountProfileV2<'a> {
     /// Per-item identity-bank stride.
     pub const fn item_identity_stride(self) -> u16 {
         self.item_identity_stride
+    }
+
+    /// Trusted runtime observation and its common-scalar destination.
+    pub const fn trusted_environment(self) -> TrustedEnvironmentV2 {
+        self.trusted_environment
+    }
+
+    /// Common scalar that the outer must seed from its trusted current slot.
+    pub const fn trusted_current_slot_scalar(self) -> Option<u16> {
+        self.trusted_environment.current_slot_destination()
     }
 
     /// Borrow complete canonical profile bytes.
@@ -605,6 +668,12 @@ impl<'a> AccountProfileV2<'a> {
         let Some(target) = operation.projection_target()? else {
             return Ok(());
         };
+        if self
+            .trusted_current_slot_scalar()
+            .is_some_and(|destination| target == (false, false, destination))
+        {
+            return Err(Error::TrustedEnvironmentOverwrite);
+        }
         if item && !operation.register_item {
             return Err(Error::DuplicateProjection);
         }
@@ -621,6 +690,22 @@ impl<'a> AccountProfileV2<'a> {
             prior = prior.checked_add(1).ok_or(Error::InvalidLength)?;
         }
         Ok(())
+    }
+}
+
+fn decode_trusted_environment(bytes: &[u8], artifact_profile: u16) -> Result<TrustedEnvironmentV2> {
+    if artifact_profile != TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE {
+        return Ok(TrustedEnvironmentV2::None);
+    }
+    let destination = read_u16(bytes, TRUSTED_ENVIRONMENT_SCALAR_OFFSET)?;
+    let kind = byte(bytes, TRUSTED_ENVIRONMENT_KIND_OFFSET)?;
+    if byte(bytes, TRUSTED_ENVIRONMENT_RESERVED_OFFSET)? != 0 {
+        return Err(Error::InvalidTrustedEnvironment);
+    }
+    match kind {
+        TRUSTED_ENVIRONMENT_NONE if destination == 0 => Ok(TrustedEnvironmentV2::None),
+        TRUSTED_ENVIRONMENT_CURRENT_SLOT => Ok(TrustedEnvironmentV2::CurrentSlot { destination }),
+        _ => Err(Error::InvalidTrustedEnvironment),
     }
 }
 
@@ -953,7 +1038,10 @@ impl Operation {
                     return Err(Error::NonCanonicalOperation);
                 }
                 if self.opcode == OP_PROJECT_DATA_U16
-                    && profile.artifact_profile != TYPED_SCALAR_ARTIFACT_PROFILE
+                    && !matches!(
+                        profile.artifact_profile,
+                        TYPED_SCALAR_ARTIFACT_PROFILE | TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE
+                    )
                 {
                     return Err(Error::NonCanonicalOperation);
                 }
@@ -995,7 +1083,9 @@ impl Operation {
             OP_SELECT_DATA_WINDOW => {
                 if !matches!(
                     profile.artifact_profile,
-                    SELECTED_WINDOW_ARTIFACT_PROFILE | TYPED_SCALAR_ARTIFACT_PROFILE
+                    SELECTED_WINDOW_ARTIFACT_PROFILE
+                        | TYPED_SCALAR_ARTIFACT_PROFILE
+                        | TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE
                 ) || item_body
                     || self.account_item
                     || self.register_item
@@ -1030,7 +1120,9 @@ impl Operation {
                 };
                 if !matches!(
                     profile.artifact_profile,
-                    SELECTED_WINDOW_ARTIFACT_PROFILE | TYPED_SCALAR_ARTIFACT_PROFILE
+                    SELECTED_WINDOW_ARTIFACT_PROFILE
+                        | TYPED_SCALAR_ARTIFACT_PROFILE
+                        | TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE
                 ) || item_body
                     || self.account_item
                     || self.register_item
@@ -1904,20 +1996,22 @@ mod tests {
                 } else {
                     accounts.get(..4).expect("short accounts")
                 };
-            assert!(project_atomic(
-                profile,
-                2,
-                used,
-                ProjectionRegistersV2 {
-                    input_scalars: &input_scalars,
-                    input_identities: &input_identities,
-                    scratch_scalars: &mut scratch_scalars,
-                    scratch_identities: &mut scratch_identities,
-                    output_scalars: &mut output_scalars,
-                    output_identities: &mut output_identities,
-                }
-            )
-            .is_err());
+            assert!(
+                project_atomic(
+                    profile,
+                    2,
+                    used,
+                    ProjectionRegistersV2 {
+                        input_scalars: &input_scalars,
+                        input_identities: &input_identities,
+                        scratch_scalars: &mut scratch_scalars,
+                        scratch_identities: &mut scratch_identities,
+                        output_scalars: &mut output_scalars,
+                        output_identities: &mut output_identities,
+                    }
+                )
+                .is_err()
+            );
             assert_eq!(output_scalars, before_scalars);
             assert_eq!(output_identities, before_identities);
         }

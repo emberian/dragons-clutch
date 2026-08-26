@@ -12,8 +12,10 @@ use super::{
     OP_PROJECT_DATA_U64, OP_PROJECT_DATA_U64_AFFINE, OP_PROJECT_DATA_U64_SELECTED,
     OP_PROJECT_DATA_U64_SELECTED_AFFINE, OP_PROJECT_KEY, OP_PROJECT_LAMPORTS, OP_PROJECT_OWNER,
     OP_PROJECT_TAIL_COUNT_U32, OP_REQUIRE_KEY, OP_REQUIRE_OWNER, OP_SELECT_DATA_WINDOW,
-    OPERATION_BYTES, RULE_BYTES, SELECTED_WINDOW_ARTIFACT_PROFILE, TYPED_SCALAR_ARTIFACT_PROFILE,
-    VERSION,
+    OPERATION_BYTES, RULE_BYTES, SELECTED_WINDOW_ARTIFACT_PROFILE,
+    TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE, TRUSTED_ENVIRONMENT_CURRENT_SLOT,
+    TRUSTED_ENVIRONMENT_KIND_OFFSET, TRUSTED_ENVIRONMENT_SCALAR_OFFSET,
+    TYPED_SCALAR_ARTIFACT_PROFILE, TrustedEnvironmentV2, VERSION,
 };
 use crate::{
     EFFECT_PERMISSION_CREDIT_LAMPORTS, EFFECT_PERMISSION_DEBIT_LAMPORTS,
@@ -29,6 +31,8 @@ pub enum AccountProfileArtifactV2 {
     SelectedWindow,
     /// Selected-window profile with checked narrow integer projection.
     TypedScalar,
+    /// Typed-scalar profile with an optional trusted runtime environment scalar.
+    TrustedEnvironment,
 }
 
 impl AccountProfileArtifactV2 {
@@ -37,6 +41,7 @@ impl AccountProfileArtifactV2 {
             Self::RuntimeTail => ARTIFACT_PROFILE,
             Self::SelectedWindow => SELECTED_WINDOW_ARTIFACT_PROFILE,
             Self::TypedScalar => TYPED_SCALAR_ARTIFACT_PROFILE,
+            Self::TrustedEnvironment => TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE,
         }
     }
 }
@@ -367,6 +372,42 @@ pub fn encode_account_profile_v2_atomic(
     scratch: &mut [u8],
     output: &mut [u8],
 ) -> Result<(), Error> {
+    encode_account_profile_with_environment_v2_atomic(
+        artifact,
+        TrustedEnvironmentV2::None,
+        fixed_rules,
+        item_rules,
+        fixed_operations,
+        item_operations,
+        registers,
+        scratch,
+        output,
+    )
+}
+
+/// Encode one complete AccountProfile V2 with a typed trusted environment.
+///
+/// A current-slot declaration is accepted only by
+/// [`AccountProfileArtifactV2::TrustedEnvironment`]. The complete candidate is
+/// hostile-decoded before `output` changes, including environment-coordinate
+/// bounds and projection-collision checks.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_account_profile_with_environment_v2_atomic(
+    artifact: AccountProfileArtifactV2,
+    trusted_environment: TrustedEnvironmentV2,
+    fixed_rules: &[AccountRuleInputV2],
+    item_rules: &[AccountRuleInputV2],
+    fixed_operations: &[AccountOperationInputV2],
+    item_operations: &[AccountOperationInputV2],
+    registers: RegisterGeometryV2,
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<(), Error> {
+    if trusted_environment.current_slot_destination().is_some()
+        && artifact != AccountProfileArtifactV2::TrustedEnvironment
+    {
+        return Err(Error::InvalidTrustedEnvironment);
+    }
     let fixed_account_count = u16::try_from(fixed_rules.len()).map_err(|_| Error::InvalidLength)?;
     let item_account_stride = u16::try_from(item_rules.len()).map_err(|_| Error::InvalidLength)?;
     let fixed_operation_count =
@@ -404,6 +445,18 @@ pub fn encode_account_profile_v2_atomic(
         (26, registers.item_identity_stride),
     ] {
         write(scratch, offset, &value.to_le_bytes())?;
+    }
+    if let TrustedEnvironmentV2::CurrentSlot { destination } = trusted_environment {
+        write(
+            scratch,
+            TRUSTED_ENVIRONMENT_SCALAR_OFFSET,
+            &destination.to_le_bytes(),
+        )?;
+        write_byte(
+            scratch,
+            TRUSTED_ENVIRONMENT_KIND_OFFSET,
+            TRUSTED_ENVIRONMENT_CURRENT_SLOT,
+        )?;
     }
     let mut cursor = HEADER_BYTES;
     for rule in fixed_rules.iter().chain(item_rules) {
@@ -666,6 +719,8 @@ mod tests {
     extern crate std;
 
     use super::*;
+    use crate::AccountObservationV1;
+    use crate::v2::{ProjectionRegistersV2, TRUSTED_ENVIRONMENT_RESERVED_OFFSET, project_atomic};
 
     const READONLY: AccountPrivilegesV2 = AccountPrivilegesV2::new(false, false, false);
     const WRITABLE: AccountPrivilegesV2 = AccountPrivilegesV2::new(false, true, false);
@@ -763,5 +818,211 @@ mod tests {
             Err(Error::DuplicateProjection)
         );
         assert_eq!(hostile_output, before);
+    }
+
+    #[test]
+    fn trusted_current_slot_round_trips_and_cannot_be_projected_over() {
+        let rules = [AccountRuleInputV2 {
+            privileges: READONLY,
+            effect_permissions: NO_EFFECTS,
+            alias: AccountAliasInputV2::SelfCoordinate,
+            data_length: 4,
+            data_item_stride: 0,
+        }];
+        let projected = [AccountOperationInputV2::ProjectDataU16 {
+            account: AccountCoordinateV2::fixed(0),
+            destination: ScalarCoordinateV2::common(0),
+            data_offset: 1,
+        }];
+        let registers = RegisterGeometryV2 {
+            common_scalars: 64,
+            item_scalar_stride: 0,
+            common_identities: 0,
+            item_identity_stride: 0,
+        };
+        let width = HEADER_BYTES + RULE_BYTES + OPERATION_BYTES;
+        let mut scratch = std::vec![0_u8; width];
+        let mut output = std::vec![9_u8; width];
+        encode_account_profile_with_environment_v2_atomic(
+            AccountProfileArtifactV2::TrustedEnvironment,
+            TrustedEnvironmentV2::CurrentSlot { destination: 1 },
+            &rules,
+            &[],
+            &projected,
+            &[],
+            registers,
+            &mut scratch,
+            &mut output,
+        )
+        .expect("trusted environment profile");
+        assert_eq!(
+            output.get(TRUSTED_ENVIRONMENT_SCALAR_OFFSET..TRUSTED_ENVIRONMENT_KIND_OFFSET),
+            Some(1_u16.to_le_bytes().as_slice())
+        );
+        assert_eq!(
+            output.get(TRUSTED_ENVIRONMENT_KIND_OFFSET),
+            Some(&TRUSTED_ENVIRONMENT_CURRENT_SLOT)
+        );
+        assert_eq!(output.get(TRUSTED_ENVIRONMENT_RESERVED_OFFSET), Some(&0));
+        let profile = AccountProfileV2::decode(&output).expect("decode trusted environment");
+        assert_eq!(
+            profile.trusted_environment(),
+            TrustedEnvironmentV2::CurrentSlot { destination: 1 }
+        );
+        assert_eq!(profile.trusted_current_slot_scalar(), Some(1));
+
+        let data = [0x55, 0x34, 0x12, 0xaa];
+        let accounts = [AccountObservationV1::new(
+            [1; 32], [2; 32], 0, &data, false, false, false,
+        )];
+        let mut input_scalars = [0_u64; 64];
+        *input_scalars.get_mut(1).expect("slot scalar") = 77_777;
+        let mut scratch_scalars = [0_u64; 64];
+        let mut output_scalars = [9_u64; 64];
+        project_atomic(
+            profile,
+            0,
+            &accounts,
+            ProjectionRegistersV2 {
+                input_scalars: &input_scalars,
+                input_identities: &[],
+                scratch_scalars: &mut scratch_scalars,
+                scratch_identities: &mut [],
+                output_scalars: &mut output_scalars,
+                output_identities: &mut [],
+            },
+        )
+        .expect("preserve trusted slot");
+        assert_eq!(output_scalars.first(), Some(&0x1234));
+        assert_eq!(output_scalars.get(1), Some(&77_777));
+
+        let collision = [AccountOperationInputV2::ProjectDataU16 {
+            account: AccountCoordinateV2::fixed(0),
+            destination: ScalarCoordinateV2::common(1),
+            data_offset: 1,
+        }];
+        let mut collision_output = std::vec![7_u8; width];
+        let before = collision_output.clone();
+        assert_eq!(
+            encode_account_profile_with_environment_v2_atomic(
+                AccountProfileArtifactV2::TrustedEnvironment,
+                TrustedEnvironmentV2::CurrentSlot { destination: 1 },
+                &rules,
+                &[],
+                &collision,
+                &[],
+                registers,
+                &mut scratch,
+                &mut collision_output,
+            ),
+            Err(Error::TrustedEnvironmentOverwrite)
+        );
+        assert_eq!(collision_output, before);
+    }
+
+    #[test]
+    fn trusted_environment_hostile_headers_and_bounds_refuse_atomically() {
+        let rules = [AccountRuleInputV2 {
+            privileges: READONLY,
+            effect_permissions: NO_EFFECTS,
+            alias: AccountAliasInputV2::SelfCoordinate,
+            data_length: 0,
+            data_item_stride: 0,
+        }];
+        let registers = RegisterGeometryV2 {
+            common_scalars: 2,
+            item_scalar_stride: 0,
+            common_identities: 0,
+            item_identity_stride: 0,
+        };
+        let width = HEADER_BYTES + RULE_BYTES;
+        let mut scratch = std::vec![0_u8; width];
+        let mut output = std::vec![0_u8; width];
+        encode_account_profile_with_environment_v2_atomic(
+            AccountProfileArtifactV2::TrustedEnvironment,
+            TrustedEnvironmentV2::CurrentSlot { destination: 1 },
+            &rules,
+            &[],
+            &[],
+            &[],
+            registers,
+            &mut scratch,
+            &mut output,
+        )
+        .expect("canonical environment");
+
+        for (offset, value, expected) in [
+            (
+                TRUSTED_ENVIRONMENT_SCALAR_OFFSET,
+                2,
+                Error::InvalidTrustedEnvironment,
+            ),
+            (
+                TRUSTED_ENVIRONMENT_KIND_OFFSET,
+                2,
+                Error::InvalidTrustedEnvironment,
+            ),
+            (
+                TRUSTED_ENVIRONMENT_RESERVED_OFFSET,
+                1,
+                Error::InvalidTrustedEnvironment,
+            ),
+        ] {
+            let mut hostile = output.clone();
+            *hostile.get_mut(offset).expect("hostile header") = value;
+            assert_eq!(AccountProfileV2::decode(&hostile), Err(expected));
+        }
+        let mut noncanonical_none = output.clone();
+        *noncanonical_none
+            .get_mut(TRUSTED_ENVIRONMENT_KIND_OFFSET)
+            .expect("kind") = 0;
+        assert_eq!(
+            AccountProfileV2::decode(&noncanonical_none),
+            Err(Error::InvalidTrustedEnvironment)
+        );
+
+        let mut old_profile = output.clone();
+        old_profile
+            .get_mut(10..12)
+            .expect("artifact profile")
+            .copy_from_slice(&TYPED_SCALAR_ARTIFACT_PROFILE.to_le_bytes());
+        assert_eq!(
+            AccountProfileV2::decode(&old_profile),
+            Err(Error::NonCanonicalReserved)
+        );
+
+        let mut refused_output = std::vec![7_u8; width];
+        let before = refused_output.clone();
+        assert_eq!(
+            encode_account_profile_with_environment_v2_atomic(
+                AccountProfileArtifactV2::TrustedEnvironment,
+                TrustedEnvironmentV2::CurrentSlot { destination: 2 },
+                &rules,
+                &[],
+                &[],
+                &[],
+                registers,
+                &mut scratch,
+                &mut refused_output,
+            ),
+            Err(Error::InvalidTrustedEnvironment)
+        );
+        assert_eq!(refused_output, before);
+
+        assert_eq!(
+            encode_account_profile_with_environment_v2_atomic(
+                AccountProfileArtifactV2::TypedScalar,
+                TrustedEnvironmentV2::CurrentSlot { destination: 1 },
+                &rules,
+                &[],
+                &[],
+                &[],
+                registers,
+                &mut scratch,
+                &mut refused_output,
+            ),
+            Err(Error::InvalidTrustedEnvironment)
+        );
+        assert_eq!(refused_output, before);
     }
 }
