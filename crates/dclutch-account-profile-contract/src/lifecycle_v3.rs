@@ -12,6 +12,9 @@ use super::{
     EFFECT_PERMISSION_WRITE_DATA, v2::AccountProfileV2,
 };
 
+/// Safe, allocation-free typed StateLifecyclePolicy V3 artifact encoder.
+pub mod encode;
+
 /// Canonical V3 lifecycle-policy magic.
 pub const MAGIC: [u8; 8] = *b"DCLTDP03";
 /// Finalized-record schema label for lifecycle policies.
