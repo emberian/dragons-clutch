@@ -72,7 +72,8 @@ const POSITION_SEED = new TextEncoder().encode('dclutch:lbv2:position');
 const ADMISSION_SEED = new TextEncoder().encode('dclutch:protocol-position:v2');
 const ACTIVATION_SEED = new TextEncoder().encode('dclutch:release-activation:v1');
 
-type AccountMetaV4 = Readonly<{ address: string; isSigner: boolean; isWritable: boolean }>;
+export type RationalHotAccountMetaV4 = Readonly<{ address: string; isSigner: boolean; isWritable: boolean }>;
+type AccountMetaV4 = RationalHotAccountMetaV4;
 export type CompactSupportRowV4 = Readonly<{
   outcome: number;
   coefficient: bigint;
@@ -128,10 +129,11 @@ export type RationalRetireReceiptCandidateV4 = Readonly<{
   refusal: string;
 }>;
 
-type RetireRpc = Pick<
+export type RationalHotRpcV4 = Pick<
   SolanaRpcClient,
   'finalizedSlot' | 'multipleAccounts' | 'minimumBalanceForRentExemption'
 >;
+type RetireRpc = RationalHotRpcV4;
 
 function same(left: Uint8Array, right: Uint8Array): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
@@ -173,7 +175,7 @@ function chunks<T>(values: ReadonlyArray<T>, width: number): T[][] {
   return output;
 }
 
-async function acquire(
+export async function acquireRationalHotAccountsV4(
   client: Pick<SolanaRpcClient, 'finalizedSlot' | 'multipleAccounts'>,
   addresses: ReadonlyArray<string>,
   minimumSlot?: string,
@@ -198,7 +200,7 @@ function vacant(account: RpcAccount | null | undefined, field: string): void {
   }
 }
 
-function decodeLookupTable(address: string, account: RpcAccount): AddressLookupTableAccount {
+export function decodeRationalHotLookupTableV4(address: string, account: RpcAccount): AddressLookupTableAccount {
   if (account.owner !== AddressLookupTableProgram.programId.toBase58() || account.executable) {
     throw new Error('address lookup table has the wrong owner or executable bit');
   }
@@ -209,7 +211,7 @@ function decodeLookupTable(address: string, account: RpcAccount): AddressLookupT
   return table;
 }
 
-async function finalizedRecord(
+export async function authenticateFinalizedRationalHotRecordV4(
   client: Pick<SolanaRpcClient, 'minimumBalanceForRentExemption'>,
   accounts: ReadonlyMap<string, RpcAccount | null>,
   registry: string,
@@ -232,7 +234,8 @@ async function finalizedRecord(
   return raw;
 }
 
-type CoreView = Readonly<{
+export type RationalHotCoreViewV2 = Readonly<{
+  phase: number;
   realm: Uint8Array;
   productRecord: Uint8Array;
   productId: Uint8Array;
@@ -243,14 +246,13 @@ type CoreView = Readonly<{
   rentCredit: string;
 }>;
 
-function decodeRetiringCore(address: string, account: RpcAccount, coreProgram: string): CoreView {
+export function decodeRationalHotCoreV2(address: string, account: RpcAccount, coreProgram: string): RationalHotCoreViewV2 {
   if (account.owner !== coreProgram || account.executable || account.data.length !== CORE_STATE_BYTES
       || ascii(account.data, 0, 8) !== 'DCLTCOR2' || u16(account.data, 8) !== 2) {
     throw new Error('Market is not exact nonexecutable CoreStateV2 under the selected Core program');
   }
-  if (account.data[10] !== 3 || account.data[11] !== 2 || isZero(slice(account.data, 320, 32))) {
-    throw new Error('receipt retirement requires a Retiring, readiness-consumed Core Market with terminal receipt');
-  }
+  const phase = account.data[10] ?? 255;
+  if (phase > 4 || account.data[11] > 2) throw new Error('CoreStateV2 phase/readiness tag is undefined');
   const market = key(address, 'Market');
   if (!same(slice(account.data, 16, 32), market.toBytes())) throw new Error('CoreStateV2 Market identity differs from its account address');
   const identities = [48, 80, 112, 144, 176, 208, 240, 288, 320].map((offset) => slice(account.data, offset, 32));
@@ -258,15 +260,16 @@ function decodeRetiringCore(address: string, account: RpcAccount, coreProgram: s
   const generation = u64(account.data, 272);
   if (generation === 0n) throw new Error('CoreStateV2 generation is zero');
   return Object.freeze({
-    realm: identities[0], productRecord: identities[1], productId: identities[2], manifest: identities[4],
+    phase, realm: identities[0], productRecord: identities[1], productId: identities[2], manifest: identities[4],
     releaseSet: identities[5], registry: new PublicKey(identities[6]).toBase58(), generation,
     rentCredit: new PublicKey(identities[7]).toBase58(),
   });
 }
 
-type RootSelection = Readonly<{ entryIndex: number; manifest: Uint8Array; kind: Uint8Array; programSet: Uint8Array; config: Uint8Array }>;
+export type RationalHotRootSelectionV4 = Readonly<{ entryIndex: number; manifest: Uint8Array; kind: Uint8Array; programSet: Uint8Array; config: Uint8Array }>;
+type RootSelection = RationalHotRootSelectionV4;
 
-function decodeRoot(bytes: Uint8Array, releaseSet: Uint8Array, market: string, generation: bigint): RootSelection {
+export function decodeRationalHotRootV4(bytes: Uint8Array, releaseSet: Uint8Array, market: string, generation: bigint): RootSelection {
   if (bytes.length <= CAPABILITY_ROOT_HEADER_BYTES || ascii(bytes, 0, 8) !== 'DCLTCRT1' || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 1) {
     throw new Error('capability root has the wrong exact V1 header or no mutable state');
   }
@@ -283,9 +286,10 @@ function decodeRoot(bytes: Uint8Array, releaseSet: Uint8Array, market: string, g
   return Object.freeze({ entryIndex: u16(bytes, 100), manifest: coordinates[0], kind: coordinates[1], programSet: coordinates[2], config: coordinates[3] });
 }
 
-type ManifestEntry = Readonly<{ capacity: Uint8Array; rootSchema: Uint8Array; derivation: Uint8Array }>;
+export type RationalHotManifestEntryV4 = Readonly<{ capacity: Uint8Array; rootSchema: Uint8Array; derivation: Uint8Array }>;
+type ManifestEntry = RationalHotManifestEntryV4;
 
-function selectedManifestEntry(bytes: Uint8Array, selection: RootSelection): ManifestEntry {
+export function selectRationalHotManifestEntryV4(bytes: Uint8Array, selection: RootSelection): ManifestEntry {
   if (bytes.length < 16 || ascii(bytes, 0, 8) !== 'DCLTCAP1' || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 1) {
     throw new Error('capability manifest has the wrong exact header');
   }
@@ -332,7 +336,7 @@ function selectedManifestEntry(bytes: Uint8Array, selection: RootSelection): Man
   return selected;
 }
 
-function selectCapabilityV4(set: Uint8Array, selector: number): Readonly<{ schema: Uint8Array; digest: Uint8Array }> {
+export function selectRationalHotCapabilityV4(set: Uint8Array, selector: number): Readonly<{ schema: Uint8Array; digest: Uint8Array }> {
   if (set.length < CAPABILITY_SET_HEADER_BYTES || ascii(set, 0, 8) !== 'DCLTCPS2' || u16(set, 8) !== 2 || u16(set, 10) !== 2) {
     throw new Error('compact retirement does not select CapabilityProgramSetV2');
   }
@@ -364,7 +368,7 @@ function selectCapabilityV4(set: Uint8Array, selector: number): Readonly<{ schem
   return selected;
 }
 
-type CapabilityV4 = Readonly<{
+export type RationalHotCapabilityV4 = Readonly<{
   kind: Uint8Array;
   configSchema: Uint8Array;
   requestSchema: Uint8Array;
@@ -375,7 +379,7 @@ type CapabilityV4 = Readonly<{
   rootStateBytes: number;
 }>;
 
-function decodeCapabilityV4(bytes: Uint8Array): CapabilityV4 {
+export function decodeRationalHotCapabilityV4(bytes: Uint8Array): RationalHotCapabilityV4 {
   if (bytes.length !== CAPABILITY_PROGRAM_V4_BYTES || ascii(bytes, 0, 8) !== 'DCLTCPR4' || u16(bytes, 8) !== 4 || u16(bytes, 10) !== 4) {
     throw new Error('selected descriptor is not the exact CapabilityProgramV4 ABI');
   }
@@ -399,6 +403,7 @@ export type RationalRepresentationDescriptorViewV3 = Readonly<{
   id: Uint8Array;
   graphId: Uint8Array;
   graphDigest: Uint8Array;
+  rootId: Uint8Array;
   market: string;
   releaseSet: Uint8Array;
   receiptMint: string;
@@ -429,7 +434,7 @@ export function decodeRationalRepresentationDescriptorV3(bytes: Uint8Array, id: 
   }
   if (support.length === 0) throw new Error('representation descriptor has empty support');
   return Object.freeze({
-    id, graphId: identities[0], graphDigest: identities[1], market: new PublicKey(identities[3]).toBase58(),
+    id, graphId: identities[0], graphDigest: identities[1], rootId: identities[2], market: new PublicKey(identities[3]).toBase58(),
     releaseSet: identities[4], receiptMint: new PublicKey(identities[5]).toBase58(),
     tokenProgram: new PublicKey(identities[6]).toBase58(), outcomeCount, denominator,
     support: Object.freeze(support),
@@ -563,14 +568,14 @@ export async function deriveRationalRetireReceiptChildDigestV4(family: Uint8Arra
   return sha256(child);
 }
 
-function fixedMetas(addresses: ReadonlyArray<string>): ReadonlyArray<AccountMetaV4> {
+export function rationalHotFixedMetasV4(addresses: ReadonlyArray<string>): ReadonlyArray<AccountMetaV4> {
   if (addresses.length !== Hot.HOT_FIXED_ACCOUNT_COUNT_V3) throw new Error(`Hot fixed frame must contain exactly ${Hot.HOT_FIXED_ACCOUNT_COUNT_V3} addresses`);
   const canonical = addresses.map((address, index) => key(address, `Hot fixed account ${index}`).toBase58());
   if (new Set(canonical).size !== canonical.length) throw new Error('Hot fixed frame aliases two physical roles');
   return Object.freeze(canonical.map((address, index) => Object.freeze({ address, isSigner: false, isWritable: index === Hot.HOT_ROOT_ACCOUNT_V3 })));
 }
 
-async function parseActivationClaims(
+export async function authenticateRationalHotActivationV4(
   cache: RpcAccount,
   cacheAddress: string,
   registry: string,
@@ -579,7 +584,12 @@ async function parseActivationClaims(
   coreProgramData: string,
   trading: string,
   tradingProgramData: string,
-): Promise<Readonly<{ claims: string; claimsProgramData: string }>> {
+): Promise<Readonly<{
+  core: string; coreProgramData: string;
+  claims: string; claimsProgramData: string;
+  trading: string; tradingProgramData: string;
+  custody: string; custodyProgramData: string;
+}>> {
   if (cache.owner !== registry || cache.executable || cache.data.length !== ACTIVATION_CACHE_BYTES || ascii(cache.data, 0, 8) !== 'DCLTACT1' || u16(cache.data, 8) !== 1 || u16(cache.data, 10) !== 1) {
     throw new Error('activation cache has the wrong Registry owner or exact ABI');
   }
@@ -604,7 +614,12 @@ async function parseActivationClaims(
       || artifacts[2].program !== trading || artifacts[2].programData !== tradingProgramData) {
     throw new Error('activation cache Core/Trading deployments differ from Hot fixed programs');
   }
-  return Object.freeze({ claims: artifacts[1].program, claimsProgramData: artifacts[1].programData });
+  return Object.freeze({
+    core: artifacts[0].program, coreProgramData: artifacts[0].programData,
+    claims: artifacts[1].program, claimsProgramData: artifacts[1].programData,
+    trading: artifacts[2].program, tradingProgramData: artifacts[2].programData,
+    custody: artifacts[3].program, custodyProgramData: artifacts[3].programData,
+  });
 }
 
 async function authenticateSelectedArtifacts(
@@ -613,16 +628,16 @@ async function authenticateSelectedArtifacts(
   fixed: ReadonlyArray<AccountMetaV4>,
   registry: string,
   selection: RootSelection,
-): Promise<Readonly<{ descriptor: RationalRepresentationDescriptorViewV3; capability: CapabilityV4 }>> {
-  const manifestRaw = await finalizedRecord(client, accounts, registry, fixed[2].address, fixed[3].address,
+): Promise<Readonly<{ descriptor: RationalRepresentationDescriptorViewV3; capability: RationalHotCapabilityV4 }>> {
+  const manifestRaw = await authenticateFinalizedRationalHotRecordV4(client, accounts, registry, fixed[2].address, fixed[3].address,
     CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, selection.manifest, 'capability manifest');
-  const manifest = selectedManifestEntry(manifestRaw.data, selection);
-  const set = await finalizedRecord(client, accounts, registry, fixed[4].address, fixed[5].address,
+  const manifest = selectRationalHotManifestEntryV4(manifestRaw.data, selection);
+  const set = await authenticateFinalizedRationalHotRecordV4(client, accounts, registry, fixed[4].address, fixed[5].address,
     Uint8Array.from([0x37,0xdf,0x09,0xe7,0xde,0xeb,0xdd,0x0a,0xd0,0xd1,0x25,0x13,0xa7,0x8d,0xd4,0x4c,0x97,0x24,0x30,0x37,0x99,0xb7,0x54,0x4d,0xc9,0x1b,0x3b,0x6a,0x2e,0x6d,0x62,0x96]),
     selection.programSet, 'CapabilityProgramSetV2');
-  const selected = selectCapabilityV4(set.data, 3);
-  const capabilityRaw = await finalizedRecord(client, accounts, registry, fixed[6].address, fixed[7].address, selected.schema, selected.digest, 'compact CapabilityProgramV4');
-  const capability = decodeCapabilityV4(capabilityRaw.data);
+  const selected = selectRationalHotCapabilityV4(set.data, 3);
+  const capabilityRaw = await authenticateFinalizedRationalHotRecordV4(client, accounts, registry, fixed[6].address, fixed[7].address, selected.schema, selected.digest, 'compact CapabilityProgramV4');
+  const capability = decodeRationalHotCapabilityV4(capabilityRaw.data);
   if (!same(capability.kind, selection.kind) || !same(capability.configSchema, RATIONAL_REPRESENTATION_DESCRIPTOR_SCHEMA_V3)
       || !same(capability.requestSchema, RATIONAL_LIFECYCLE_COMPACT_REQUEST_SCHEMA_V4)) {
     throw new Error('CapabilityProgramV4 does not select the persisted kind, Rational descriptor, and compact V4 request schema');
@@ -631,13 +646,13 @@ async function authenticateSelectedArtifacts(
       || !same(capability.derivation, manifest.derivation)) {
     throw new Error('CapabilityProgramV4 capacity, root schema, or lifecycle differs from the selected manifest entry');
   }
-  const descriptorRaw = await finalizedRecord(client, accounts, registry, fixed[8].address, fixed[9].address,
+  const descriptorRaw = await authenticateFinalizedRationalHotRecordV4(client, accounts, registry, fixed[8].address, fixed[9].address,
     capability.configSchema, selection.config, 'Rational representation descriptor');
   const descriptor = decodeRationalRepresentationDescriptorV3(descriptorRaw.data, selection.config);
   const rawIndexes = [10, 12, 18, 20, 14, 16];
   for (let index = 0; index < capability.artifacts.length; index += 1) {
     const raw = rawIndexes[index]; const artifact = capability.artifacts[index];
-    await finalizedRecord(client, accounts, registry, fixed[raw].address, fixed[raw + 1].address, artifact.schema, artifact.digest, `compact artifact ${index}`);
+    await authenticateFinalizedRationalHotRecordV4(client, accounts, registry, fixed[raw].address, fixed[raw + 1].address, artifact.schema, artifact.digest, `compact artifact ${index}`);
   }
   return Object.freeze({ descriptor, capability });
 }
@@ -647,22 +662,26 @@ export async function inspectRationalRetireReceiptV4(
   input: Readonly<{ payer: string; fixedAccounts: ReadonlyArray<string>; lookupTable: string }>,
 ): Promise<RationalRetireReceiptInspectionV4> {
   const payer = key(input.payer, 'payer').toBase58();
-  const fixed = fixedMetas(input.fixedAccounts);
-  const first = await acquire(client, [...fixed.map((meta) => meta.address), payer, input.lookupTable]);
+  const fixed = rationalHotFixedMetasV4(input.fixedAccounts);
+  const first = await acquireRationalHotAccountsV4(client, [...fixed.map((meta) => meta.address), payer, input.lookupTable]);
   const marketAddress = fixed[Hot.HOT_MARKET_ACCOUNT_V3].address;
   const coreProgram = fixed[Hot.HOT_CORE_PROGRAM_ACCOUNT_V3].address;
   const tradingProgram = fixed[Hot.HOT_TRADING_PROGRAM_ACCOUNT_V3].address;
   const registry = fixed[Hot.HOT_REGISTRY_PROGRAM_ACCOUNT_V3].address;
-  const market = decodeRetiringCore(marketAddress, required(first.accounts, marketAddress, 'Market'), coreProgram);
+  const market = decodeRationalHotCoreV2(marketAddress, required(first.accounts, marketAddress, 'Market'), coreProgram);
+  if (market.phase !== 3 || required(first.accounts, marketAddress, 'Market').data[11] !== 2
+      || isZero(slice(required(first.accounts, marketAddress, 'Market').data, 320, 32))) {
+    throw new Error('receipt retirement requires a Retiring, readiness-consumed Core Market with terminal receipt');
+  }
   if (market.registry !== registry) throw new Error('CoreStateV2 selects another Registry program');
   if (fixed[Hot.HOT_RENT_SYSVAR_ACCOUNT_V3].address !== RENT_SYSVAR_ID || fixed[Hot.HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3].address !== SYSTEM_INSTRUCTIONS_SYSVAR) {
     throw new Error('Hot fixed frame substitutes a runtime sysvar');
   }
   const rootAccount = required(first.accounts, fixed[Hot.HOT_ROOT_ACCOUNT_V3].address, 'capability root');
   if (rootAccount.owner !== tradingProgram || rootAccount.executable) throw new Error('capability root is not Trading-owned nonexecutable state');
-  const selection = decodeRoot(rootAccount.data, market.releaseSet, marketAddress, market.generation);
+  const selection = decodeRationalHotRootV4(rootAccount.data, market.releaseSet, marketAddress, market.generation);
   if (!same(selection.manifest, market.manifest)) throw new Error('capability root and Core select different manifests');
-  const activation = await parseActivationClaims(
+  const activation = await authenticateRationalHotActivationV4(
     required(first.accounts, fixed[Hot.HOT_ACTIVATION_CACHE_ACCOUNT_V3].address, 'activation cache'),
     fixed[Hot.HOT_ACTIVATION_CACHE_ACCOUNT_V3].address, registry, market.releaseSet,
     coreProgram, fixed[Hot.HOT_CORE_PROGRAMDATA_ACCOUNT_V3].address,
@@ -684,7 +703,7 @@ export async function inspectRationalRetireReceiptV4(
   const dynamic = [activation.claims, activation.claimsProgramData, aggregate, market.rentCredit, descriptor.receiptMint,
     TOKEN_2022_PROGRAM_ID, SYSTEM_PROGRAM_ID,
     ...support.flatMap((row) => [row.shardMint, row.structuredCustody, row.position, row.admission])];
-  const second = await acquire(client, dynamic, first.slot);
+  const second = await acquireRationalHotAccountsV4(client, dynamic, first.slot);
   const accounts = new Map([...first.accounts, ...second.accounts]);
   const payerAccount = required(accounts, payer, 'payer');
   if (payerAccount.owner !== SYSTEM_PROGRAM_ID || payerAccount.executable || payerAccount.data.length !== 0) throw new Error('payer is not a System-owned data-free wallet');
@@ -695,10 +714,10 @@ export async function inspectRationalRetireReceiptV4(
       || claimsProgramData.owner !== UPGRADEABLE_LOADER_ID || claimsProgramData.executable) {
     throw new Error('activated Claims program and ProgramData do not form one exact Loader-v3 deployment');
   }
-  const productRaw = await finalizedRecord(client, accounts, registry, fixed[30].address, fixed[31].address, PRODUCT_RECORD_SCHEMA_ID_V2, market.productRecord, 'Product Runtime V2 root');
+  const productRaw = await authenticateFinalizedRationalHotRecordV4(client, accounts, registry, fixed[30].address, fixed[31].address, PRODUCT_RECORD_SCHEMA_ID_V2, market.productRecord, 'Product Runtime V2 root');
   const domainDigest = slice(productRaw.data, 48, 32); const portfolioDigest = slice(productRaw.data, 80, 32);
-  const domainRaw = await finalizedRecord(client, accounts, registry, fixed[32].address, fixed[33].address, RESULT_DOMAIN_SCHEMA_ID_V2, domainDigest, 'Product result domain');
-  const portfolioRaw = await finalizedRecord(client, accounts, registry, fixed[34].address, fixed[35].address, PORTFOLIO_SCHEMA_ID_V2, portfolioDigest, 'Product portfolio');
+  const domainRaw = await authenticateFinalizedRationalHotRecordV4(client, accounts, registry, fixed[32].address, fixed[33].address, RESULT_DOMAIN_SCHEMA_ID_V2, domainDigest, 'Product result domain');
+  const portfolioRaw = await authenticateFinalizedRationalHotRecordV4(client, accounts, registry, fixed[34].address, fixed[35].address, PORTFOLIO_SCHEMA_ID_V2, portfolioDigest, 'Product portfolio');
   const product = decodeCoreFoundProductGraphV2(productRaw.data, domainRaw.data, portfolioRaw.data, domainDigest, portfolioDigest);
   if (!same(product.productId, market.productId) || product.outcomeCount !== descriptor.outcomeCount) throw new Error('Product-owned N differs from the representation descriptor outcome width');
   const aggregateAccount = required(accounts, aggregate, 'Claims aggregate');
@@ -708,7 +727,7 @@ export async function inspectRationalRetireReceiptV4(
   const credit = decodeLifecycleRentCredit(market.rentCredit, creditAccount, marketAddress, market.releaseSet, market.generation);
   const creditRent = BigInt((await client.minimumBalanceForRentExemption(LIFECYCLE_RENT_CREDIT_BYTES_V2)).lamports);
   if (credit.balance < creditRent) throw new Error('LifecycleRentCreditV2 is below its current exact rent minimum');
-  const rentObservation = await acquire(client, [credit.program], second.slot);
+  const rentObservation = await acquireRationalHotAccountsV4(client, [credit.program], second.slot);
   const rentProgramAccount = required(rentObservation.accounts, credit.program, 'Rent program');
   if (!rentProgramAccount.executable) throw new Error('LifecycleRentCreditV2 owner is not an executable Rent program');
   const tokenProgramAccount = required(accounts, TOKEN_2022_PROGRAM_ID, 'Token-2022 program');
@@ -764,7 +783,7 @@ export async function inspectRationalRetireReceiptV4(
       { address: row.admission, isSigner: false, isWritable: false },
     ]),
   ];
-  const lookupTable = decodeLookupTable(input.lookupTable, required(accounts, input.lookupTable, 'address lookup table'));
+  const lookupTable = decodeRationalHotLookupTableV4(input.lookupTable, required(accounts, input.lookupTable, 'address lookup table'));
   return Object.freeze({
     observedSlot: rentObservation.slot, payer, fixedAccounts: fixed, claimsAccounts: Object.freeze(claimsAccounts), support,
     lookupTable, market: marketAddress, generation: market.generation, releaseSet: market.releaseSet,

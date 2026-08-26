@@ -157,7 +157,9 @@ function validateShape(input: RationalOpenHotInputV3): Readonly<{
 function assetDeltas(input: RationalOpenHotInputV3): Readonly<{ receipt: bigint; shards: ReadonlyArray<bigint> }> {
   const deltas = input.assets.map((asset, index) => {
     const coefficient = u64(asset.coefficient, `asset ${index} coefficient`);
-    if (coefficient === 0n) throw new Error(`asset ${index} coefficient is zero`);
+    if (!structured(input.action) && coefficient === 0n) {
+      throw new Error(`selected asset ${index} coefficient is zero`);
+    }
     const amount = exactProduct(coefficient, input.quantity, `asset ${index} raw shard delta`);
     if ((input.action === 'reconstitute' || input.action === 'issue-structured') && asset.expectedActorShards < amount) {
       throw new Error(`asset ${index} actor balance cannot fund the exact raw shard debit`);

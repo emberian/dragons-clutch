@@ -63,6 +63,19 @@ describe('Rational open Hot V3 / CapabilityV4 compiler', () => {
     expect(new DataView(compiled.familyBytes.buffer).getUint32(476, true)).toBe(0xffff_ffff);
   });
 
+  it('keeps zero-coefficient Structured coordinates in exact Product-N order as zero raw deltas', async () => {
+    const compiled = await compileRationalOpenHotV3({
+      ...base(), action: 'unwrap-structured', receiptAccount: key(9), selectedOutcome: null,
+      expectedClaimsMarketRevision: RATIONAL_OPEN_ABSENT_REVISION_V3,
+      expectedActorPositionRevision: RATIONAL_OPEN_ABSENT_REVISION_V3,
+      expectedCustodyPositionRevision: RATIONAL_OPEN_ABSENT_REVISION_V3,
+      assets: [asset(11), { ...asset(12), coefficient: 0n }, asset(13)],
+    });
+    expect(compiled.assetCount).toBe(3);
+    expect(compiled.claimsAccountCount).toBe(44);
+    expect(compiled.rawShardDeltas).toEqual([22n, 0n, 26n]);
+  });
+
   it('refuses shape substitution, aliases, unfunded raw debits, and u64 overflow', () => {
     const selected: RationalOpenHotInputV3 = {
       ...base(), action: 'denominate', receiptAccount: null, selectedOutcome: 1,
@@ -71,6 +84,7 @@ describe('Rational open Hot V3 / CapabilityV4 compiler', () => {
     };
     expect(() => encodeRationalOpenHotRequestV3({ ...selected, receiptAccount: key(9) })).toThrow(/selected open/);
     expect(() => encodeRationalOpenHotRequestV3({ ...selected, assets: [{ ...asset(14), actorShardAccount: key(14) }] })).toThrow(/aliases/);
+    expect(() => encodeRationalOpenHotRequestV3({ ...selected, assets: [{ ...asset(14), coefficient: 0n }] })).toThrow(/coefficient is zero/);
     expect(() => encodeRationalOpenHotRequestV3({ ...selected, action: 'reconstitute', assets: [asset(14, 27n)] })).toThrow(/cannot fund/);
     expect(() => encodeRationalOpenHotRequestV3({ ...selected, quantity: 18_446_744_073_709_551_615n })).toThrow(/outside canonical u64/);
   });
