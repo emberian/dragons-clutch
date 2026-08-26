@@ -24,6 +24,18 @@ use dclutch_product_contract::{
     result_domain::{FINITE_RESULT_DOMAIN_BYTES, FiniteResultDomainV1},
 };
 
+#[allow(missing_docs)]
+mod generated_source_material_v2;
+mod source_material_v2;
+
+pub use generated_source_material_v2::{
+    SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SOURCE_FAILURE_POLICY_RELEASE_PREIMAGE_V2,
+    SOURCE_MATERIAL_DERIVATION_RELEASE_ID_V2, SOURCE_MATERIAL_DERIVATION_RELEASE_PREIMAGE_V2,
+    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2, SOURCE_MATERIAL_SCHEMA_RELEASE_PREIMAGE_V2,
+    SOURCE_MATERIAL_V2_BYTES, SOURCE_MATERIAL_V2_MAGIC, SOURCE_MATERIAL_V2_SCHEMA_VERSION,
+};
+pub use source_material_v2::SourceMaterialV2;
+
 /// Exact width of an opaque nonzero content identity.
 pub const CONTENT_ID_BYTES: usize = 32;
 /// Exact width of a provider-release preimage.

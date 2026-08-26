@@ -60,3 +60,7 @@ root = "EmitLiabilityBasisV2Rust"
 [[lean_exe]]
 name = "emit-transition-vm-v2-rust"
 root = "EmitTransitionVMV2Rust"
+
+[[lean_exe]]
+name = "emit-source-material-v2-abi-rust"
+root = "EmitSourceMaterialV2AbiRust"
