@@ -75,6 +75,138 @@ pub struct ObligationAccountObservationV3<'a> {
     pub data: &'a [u8],
 }
 
+/// Immutable coordinates for first creation of the Dealer obligation PDA.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ObligationOpenInputV3 {
+    /// Logical Core Market.
+    pub market: [u8; 32],
+    /// Stable semantic Product identity.
+    pub product: [u8; 32],
+    /// Stable semantic LiabilityBasis identity.
+    pub liability_basis: [u8; 32],
+    /// Canonical Dealer Claims Position owner, normally the Trading child root.
+    pub position_owner: [u8; 32],
+    /// Immutable Trading child root.
+    pub child_root: [u8; 32],
+    /// Runtime Product outcome width.
+    pub width: u32,
+}
+
+/// Exact write-last candidate for one vacant obligation PDA.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ObligationOpenPlanV3 {
+    /// Canonical Trading PDA allocated by the common lifecycle executor.
+    pub obligation: [u8; 32],
+    /// Exact count-derived account data width.
+    pub data_bytes: usize,
+    /// Digest of the exact initial all-zero-obligation state.
+    pub initial_digest: [u8; 32],
+    /// Initial optimistic revision.
+    pub initial_revision: u64,
+}
+
+/// Exact quiescent reclamation candidate for the obligation PDA.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ObligationClosePlanV3 {
+    /// Canonical Trading PDA reclaimed by the common lifecycle executor.
+    pub obligation: [u8; 32],
+    /// Digest of the exact terminal zero-obligation prestate.
+    pub prestate_digest: [u8; 32],
+    /// Final optimistic revision.
+    pub terminal_revision: u64,
+    /// Exact count-derived data width being reclaimed.
+    pub data_bytes: usize,
+}
+
+/// Exact count-derived obligation account width.
+pub fn obligation_account_bytes_v3(width: u32) -> ObligationResultV3<usize> {
+    if width == 0 {
+        return Err(ObligationErrorV3::InvalidBytes);
+    }
+    usize::try_from(width)
+        .ok()
+        .and_then(|width| width.checked_mul(8))
+        .and_then(|body| DEALER_OBLIGATION_HEADER_BYTES_V3.checked_add(body))
+        .ok_or(ObligationErrorV3::InvalidBytes)
+}
+
+/// Prepare the exact initial state of one vacant obligation PDA.
+///
+/// Allocation, assignment, prepaid-rent validation, and immutable refund
+/// selection remain owned by the common state-lifecycle executor. This
+/// family adapter owns only the PDA identity and semantic bytes committed last.
+pub fn prepare_obligation_open_v3(
+    trading_program: [u8; 32],
+    observed: ObligationAccountObservationV3<'_>,
+    input: ObligationOpenInputV3,
+    output: &mut [u8],
+) -> ObligationResultV3<ObligationOpenPlanV3> {
+    require_identity(trading_program)?;
+    for identity in [
+        input.market,
+        input.product,
+        input.liability_basis,
+        input.position_owner,
+        input.child_root,
+    ] {
+        require_identity(identity)?;
+    }
+    let bytes = obligation_account_bytes_v3(input.width)?;
+    let expected_address = Pubkey::find_program_address(
+        &[DEALER_OBLIGATION_PDA_DOMAIN_V3, &input.child_root],
+        &Pubkey::new_from_array(trading_program),
+    )
+    .0
+    .to_bytes();
+    if observed.address != expected_address
+        || observed.owner != solana_system_interface::program::ID.to_bytes()
+        || !observed.data.is_empty()
+        || output.len() != bytes
+    {
+        return Err(ObligationErrorV3::AccountMismatch);
+    }
+    output.fill(0);
+    output[..8].copy_from_slice(&DEALER_OBLIGATION_MAGIC_V3);
+    output[8..10].copy_from_slice(&DEALER_OBLIGATION_VERSION_V3.to_le_bytes());
+    output[12..16].copy_from_slice(&input.width.to_le_bytes());
+    write_u64(output, 16, 1)?;
+    for (offset, identity) in [
+        (24, input.market),
+        (56, input.product),
+        (88, input.liability_basis),
+        (120, input.position_owner),
+        (152, input.child_root),
+    ] {
+        output[offset..offset + 32].copy_from_slice(&identity);
+    }
+    DealerObligationProjectionV3::decode(output)?;
+    Ok(ObligationOpenPlanV3 {
+        obligation: expected_address,
+        data_bytes: bytes,
+        initial_digest: hash(output).to_bytes(),
+        initial_revision: 1,
+    })
+}
+
+/// Admit reclamation only after all LP principal and scenario obligations are zero.
+pub fn prepare_obligation_close_v3(
+    trading_program: [u8; 32],
+    observed: ObligationAccountObservationV3<'_>,
+    expected: ObligationExpectationV3,
+) -> ObligationResultV3<ObligationClosePlanV3> {
+    let projection =
+        DealerObligationProjectionV3::authenticate(trading_program, observed, expected)?;
+    if projection.lp_principal() != 0 || projection.obligations().any(|value| value != 0) {
+        return Err(ObligationErrorV3::LpPrincipalUncovered);
+    }
+    Ok(ObligationClosePlanV3 {
+        obligation: observed.address,
+        prestate_digest: projection.state_digest(),
+        terminal_revision: projection.revision(),
+        data_bytes: observed.data.len(),
+    })
+}
+
 /// Authenticated borrowed canonical obligation state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DealerObligationProjectionV3<'a> {

@@ -39,6 +39,8 @@ pub mod operator;
 pub mod physical;
 /// Atomic scenario-solvent Claims/Custody portfolio-fill composition.
 pub mod v3_composer;
+/// Canonical Claims Position plus Trading obligation activation and retirement.
+pub mod v3_lifecycle;
 /// Scenario-solvent, custody-backed multi-LP capital under canonical Trading.
 pub mod v3_multi_lp;
 /// Trading-owned runtime-width terminal obligations for scenario-solvent Dealer V3.

@@ -164,7 +164,6 @@ impl<'a> DealerScenarioTradeRequestV3<'a> {
                     .unwrap_or(0)
             || value.dealer_position_revision == 0
             || value.counterparty_position_revision == 0
-            || value.claims_revision == 0
             || value.generation == 0
             || value.principal == 0
             || (direction == ScenarioTradeDirectionV3::DealerPaysCounterparty
@@ -506,7 +505,6 @@ fn validate_projection(
     .to_bytes();
     if chain.terminal
         || chain.now > chain.expires_at
-        || chain.claims_revision == 0
         || chain.generation == 0
         || chain.obligation_address != expected_obligation
         || current.child_root() != chain.child_root
@@ -690,7 +688,7 @@ mod tests {
                 inventory: &counterparty_inventory,
             },
             counterparty_account: [9; 32],
-            claims_revision: 13,
+            claims_revision: 0,
             generation: 17,
             now: 20,
             expires_at: 25,
