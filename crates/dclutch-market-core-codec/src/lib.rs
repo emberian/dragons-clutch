@@ -24,9 +24,15 @@ mod generated_physical {
     include!("generated_physical.rs");
 }
 
+#[allow(missing_docs)]
+mod generated_retirement_v1 {
+    include!("generated_retirement_v1.rs");
+}
+
 mod capability;
 mod physical;
 mod project_found;
+mod retirement_v1;
 mod series_permit;
 
 pub use capability::*;
@@ -45,4 +51,5 @@ pub use generated_physical::{
 };
 pub use physical::*;
 pub use project_found::*;
+pub use retirement_v1::*;
 pub use series_permit::*;

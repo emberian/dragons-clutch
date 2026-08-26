@@ -15,6 +15,7 @@ pub mod founding_v5;
 pub mod frame_spec_v1;
 pub mod lbv2_terminal_v2;
 pub mod liability_basis_state_v2;
+pub mod market_closure_v1;
 pub mod product_basis_terminal_v3;
 pub mod protocol_position_v2;
 mod request_layout;

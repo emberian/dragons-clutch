@@ -46,6 +46,7 @@ import DClutchSemantics.Series
 import DClutchSemantics.SeriesExamples
 import DClutchSemantics.MarketCore
 import DClutchSemantics.MarketCoreExamples
+import DClutchSemantics.MarketRetirementV1Abi
 import DClutchSemantics.CapabilityProgramV3Abi
 import DClutchSemantics.RequestProfileAbi
 
