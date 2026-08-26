@@ -14,6 +14,8 @@
 
 use core::{cmp::Ordering, convert::TryInto};
 
+/// Registry-finalized graded-basis and projection-certificate admission.
+pub mod registry_v3;
 /// Data-defined runtime-width categorical and graded liability bases.
 pub mod runtime_v3;
 

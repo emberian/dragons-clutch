@@ -643,6 +643,10 @@ version = "0.1.0"
 [[package]]
 name = "dclutch-product-payoff-v2-codec"
 version = "0.1.0"
+dependencies = [
+ "dclutch-product-runtime-v2",
+ "sha2",
+]
 
 [[package]]
 name = "dclutch-product-payoff-v2-svm"

@@ -7,8 +7,13 @@
 //! integer error bound. It is an approximation certificate, never an assertion
 //! that the categorical matrix is the native continuous payoff.
 
-use core::convert::{TryFrom, TryInto};
+use core::convert::TryFrom;
 
+pub use dclutch_product_payoff_v2_codec::registry_v3::{
+    APPROXIMATION_CERTIFICATE_BYTES_V3, APPROXIMATION_CERTIFICATE_MAGIC_V3,
+    APPROXIMATION_CERTIFICATE_SCHEMA_V3,
+    CategoricalApproximationCertificateV3, CategoricalProjectionBoundaryV3,
+};
 use dclutch_product_payoff_v2_codec::runtime_v3::{
     BasisKindV3, LINKED_BASIS_CONTENT_DOMAIN_V3, ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
     semantic_basis_preimage_v3,
@@ -16,29 +21,9 @@ use dclutch_product_payoff_v2_codec::runtime_v3::{
 use dclutch_product_runtime_v2::{ContentId, RESULT_DOMAIN_CONTENT_DOMAIN_V2, ResultDomainV2};
 use sha2::{Digest, Sha256};
 
-/// Exact compiler-certificate width.
-pub const APPROXIMATION_CERTIFICATE_BYTES_V3: usize = 256;
-/// Canonical compiler-certificate magic.
-pub const APPROXIMATION_CERTIFICATE_MAGIC_V3: [u8; 8] = *b"DCLTAPX3";
-/// Canonical compiler-certificate schema.
-pub const APPROXIMATION_CERTIFICATE_SCHEMA_V3: u16 = 3;
 /// Projection matrix content-hash domain.
 pub const PROJECTION_MATRIX_CONTENT_DOMAIN_V3: &[u8] =
     b"dclutch/product/categorical-approximation-matrix/v3";
-
-const BOUNDARY_OFFSET: usize = 10;
-const RESERVED_OFFSET: usize = 11;
-const BASIS_WIDTH_OFFSET: usize = 16;
-const OUTCOME_COUNT_OFFSET: usize = 20;
-const PAYOUT_SCALE_OFFSET: usize = 24;
-const MAX_ERROR_OFFSET: usize = 32;
-const PRODUCT_ID_OFFSET: usize = 40;
-const RESULT_DOMAIN_ID_OFFSET: usize = 72;
-const SEMANTIC_BASIS_ID_OFFSET: usize = 104;
-const LINKED_BASIS_ID_OFFSET: usize = 136;
-const EVALUATOR_RELEASE_ID_OFFSET: usize = 168;
-const PROJECTION_DIGEST_OFFSET: usize = 200;
-const RESERVED_TAIL_OFFSET: usize = 232;
 
 /// Refusal from exact Product joins or categorical certification.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -65,149 +50,6 @@ pub enum Error {
 
 /// Result alias for the runtime noncategorical compiler.
 pub type Result<T> = core::result::Result<T, Error>;
-
-/// Sole categorical projection boundary for this successor.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CategoricalProjectionBoundaryV3 {
-    /// Sample finite regions at their exact left cut and clamp both outer tails.
-    ///
-    /// All Product-owned curve knots must be explicit cuts. Every term is then
-    /// monotone or constant inside a cell. Endpoint variation gives an exact,
-    /// conservative integer error certificate without midpoint overflow or
-    /// coordinate quantization.
-    LeftCutClampedTails,
-}
-
-impl CategoricalProjectionBoundaryV3 {
-    const fn tag(self) -> u8 {
-        match self {
-            Self::LeftCutClampedTails => 1,
-        }
-    }
-
-    fn decode(tag: u8) -> Result<Self> {
-        match tag {
-            1 => Ok(Self::LeftCutClampedTails),
-            _ => Err(Error::UnsupportedCertificate),
-        }
-    }
-}
-
-/// Fixed-width independently recheckable approximation certificate.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CategoricalApproximationCertificateV3 {
-    /// Sole named sampling boundary.
-    pub boundary: CategoricalProjectionBoundaryV3,
-    /// Runtime noncategorical basis width.
-    pub basis_width: u32,
-    /// Runtime categorical terminal width, including explicit failure.
-    pub outcome_count: u32,
-    /// Exact native basis payout scale `Q`.
-    pub payout_scale: u64,
-    /// Conservative L-infinity component error in collateral atoms.
-    pub max_component_error_atoms: u64,
-    /// Stable Product semantic identity.
-    pub product_id: [u8; 32],
-    /// Exact Product-owned result-domain raw-record identity.
-    pub result_domain_id: [u8; 32],
-    /// Acyclic semantic basis identity selected by Product.
-    pub semantic_basis_id: [u8; 32],
-    /// Full linked basis raw-record identity.
-    pub linked_basis_record_id: [u8; 32],
-    /// Exact native evaluator semantic release.
-    pub evaluator_release_id: [u8; 32],
-    /// Hash of ordered payouts followed by ordered component error bounds.
-    pub projection_digest: [u8; 32],
-}
-
-impl CategoricalApproximationCertificateV3 {
-    /// Hostile-decode the sole exact canonical certificate representation.
-    pub fn decode(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() != APPROXIMATION_CERTIFICATE_BYTES_V3 {
-            return Err(Error::WidthMismatch);
-        }
-        if array::<8>(bytes, 0)? != APPROXIMATION_CERTIFICATE_MAGIC_V3 {
-            return Err(Error::UnsupportedCertificate);
-        }
-        if read_u16(bytes, 8)? != APPROXIMATION_CERTIFICATE_SCHEMA_V3 {
-            return Err(Error::UnsupportedCertificate);
-        }
-        require_zero(bytes, RESERVED_OFFSET, 5)?;
-        require_zero(bytes, RESERVED_TAIL_OFFSET, 24)?;
-        let value = Self {
-            boundary: CategoricalProjectionBoundaryV3::decode(byte(bytes, BOUNDARY_OFFSET)?)?,
-            basis_width: read_u32(bytes, BASIS_WIDTH_OFFSET)?,
-            outcome_count: read_u32(bytes, OUTCOME_COUNT_OFFSET)?,
-            payout_scale: read_u64(bytes, PAYOUT_SCALE_OFFSET)?,
-            max_component_error_atoms: read_u64(bytes, MAX_ERROR_OFFSET)?,
-            product_id: nonzero_id(bytes, PRODUCT_ID_OFFSET)?,
-            result_domain_id: nonzero_id(bytes, RESULT_DOMAIN_ID_OFFSET)?,
-            semantic_basis_id: nonzero_id(bytes, SEMANTIC_BASIS_ID_OFFSET)?,
-            linked_basis_record_id: nonzero_id(bytes, LINKED_BASIS_ID_OFFSET)?,
-            evaluator_release_id: nonzero_id(bytes, EVALUATOR_RELEASE_ID_OFFSET)?,
-            projection_digest: nonzero_id(bytes, PROJECTION_DIGEST_OFFSET)?,
-        };
-        if value.basis_width < 2 || value.outcome_count < 2 || value.payout_scale == 0 {
-            return Err(Error::NonCanonicalCertificate);
-        }
-        Ok(value)
-    }
-
-    /// Encode the sole exact canonical certificate representation.
-    pub fn to_bytes(self) -> [u8; APPROXIMATION_CERTIFICATE_BYTES_V3] {
-        let mut output = [0_u8; APPROXIMATION_CERTIFICATE_BYTES_V3];
-        put(&mut output, 0, &APPROXIMATION_CERTIFICATE_MAGIC_V3);
-        put(
-            &mut output,
-            8,
-            &APPROXIMATION_CERTIFICATE_SCHEMA_V3.to_le_bytes(),
-        );
-        put(&mut output, BOUNDARY_OFFSET, &[self.boundary.tag()]);
-        put(
-            &mut output,
-            BASIS_WIDTH_OFFSET,
-            &self.basis_width.to_le_bytes(),
-        );
-        put(
-            &mut output,
-            OUTCOME_COUNT_OFFSET,
-            &self.outcome_count.to_le_bytes(),
-        );
-        put(
-            &mut output,
-            PAYOUT_SCALE_OFFSET,
-            &self.payout_scale.to_le_bytes(),
-        );
-        put(
-            &mut output,
-            MAX_ERROR_OFFSET,
-            &self.max_component_error_atoms.to_le_bytes(),
-        );
-        put(&mut output, PRODUCT_ID_OFFSET, &self.product_id);
-        put(&mut output, RESULT_DOMAIN_ID_OFFSET, &self.result_domain_id);
-        put(
-            &mut output,
-            SEMANTIC_BASIS_ID_OFFSET,
-            &self.semantic_basis_id,
-        );
-        put(
-            &mut output,
-            LINKED_BASIS_ID_OFFSET,
-            &self.linked_basis_record_id,
-        );
-        put(
-            &mut output,
-            EVALUATOR_RELEASE_ID_OFFSET,
-            &self.evaluator_release_id,
-        );
-        put(
-            &mut output,
-            PROJECTION_DIGEST_OFFSET,
-            &self.projection_digest,
-        );
-        output
-    }
-}
 
 /// Complete claim-major categorical matrix and its componentwise error evidence.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -384,7 +226,8 @@ pub fn certify_categorical_approximation_v3(
         evaluator_release_id: basis.evaluator_release_id(),
         projection_digest,
     };
-    let _ = CategoricalApproximationCertificateV3::decode(&certificate.to_bytes())?;
+    let _ = CategoricalApproximationCertificateV3::decode(&certificate.to_bytes())
+        .map_err(|_| Error::UnsupportedCertificate)?;
     Ok(CertifiedCategoricalApproximationV3 {
         payouts,
         component_error_bounds,
@@ -400,7 +243,8 @@ pub fn recheck_categorical_approximation_v3(
     payouts: &[u64],
     component_error_bounds: &[u64],
 ) -> Result<()> {
-    let expected = CategoricalApproximationCertificateV3::decode(certificate_bytes)?;
+    let expected = CategoricalApproximationCertificateV3::decode(certificate_bytes)
+        .map_err(|_| Error::UnsupportedCertificate)?;
     let recomputed = certify_categorical_approximation_v3(
         result_domain_bytes,
         linked_basis_record_bytes,
@@ -522,60 +366,6 @@ fn nonzero_digest(value: [u8; 32]) -> Result<[u8; 32]> {
     ContentId::new(value)
         .map(|identity| identity.to_bytes())
         .map_err(|_| Error::ZeroIdentifier)
-}
-
-fn nonzero_id(bytes: &[u8], offset: usize) -> Result<[u8; 32]> {
-    let value = array(bytes, offset)?;
-    if value.iter().all(|byte| *byte == 0) {
-        return Err(Error::ZeroIdentifier);
-    }
-    Ok(value)
-}
-
-fn byte(bytes: &[u8], offset: usize) -> Result<u8> {
-    bytes.get(offset).copied().ok_or(Error::WidthMismatch)
-}
-
-fn read_u16(bytes: &[u8], offset: usize) -> Result<u16> {
-    Ok(u16::from_le_bytes(array(bytes, offset)?))
-}
-
-fn read_u32(bytes: &[u8], offset: usize) -> Result<u32> {
-    Ok(u32::from_le_bytes(array(bytes, offset)?))
-}
-
-fn read_u64(bytes: &[u8], offset: usize) -> Result<u64> {
-    Ok(u64::from_le_bytes(array(bytes, offset)?))
-}
-
-fn array<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N]> {
-    let end = offset.checked_add(N).ok_or(Error::WidthMismatch)?;
-    bytes
-        .get(offset..end)
-        .ok_or(Error::WidthMismatch)?
-        .try_into()
-        .map_err(|_| Error::WidthMismatch)
-}
-
-fn require_zero(bytes: &[u8], offset: usize, width: usize) -> Result<()> {
-    let end = offset.checked_add(width).ok_or(Error::WidthMismatch)?;
-    if bytes
-        .get(offset..end)
-        .ok_or(Error::WidthMismatch)?
-        .iter()
-        .any(|byte| *byte != 0)
-    {
-        return Err(Error::NonCanonicalCertificate);
-    }
-    Ok(())
-}
-
-fn put(output: &mut [u8], offset: usize, value: &[u8]) {
-    if let Some(end) = offset.checked_add(value.len())
-        && let Some(destination) = output.get_mut(offset..end)
-    {
-        destination.copy_from_slice(value);
-    }
 }
 
 #[cfg(test)]
