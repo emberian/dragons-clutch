@@ -40,8 +40,11 @@ import {
   HOT_EXECUTION_PROFILE_V3,
   HOT_EXECUTION_VERSION_V3,
   HOT_FIXED_ACCOUNT_COUNT_V3,
+  HOT_CONFIG_RAW_ACCOUNT_V3,
   HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
   HOT_MARKET_ACCOUNT_V3,
+  HOT_PORTFOLIO_RAW_ACCOUNT_V3,
+  HOT_PRODUCT_RAW_ACCOUNT_V3,
   HOT_RENT_SYSVAR_ACCOUNT_V3,
   HOT_ROOT_ACCOUNT_V3,
   HOT_TRADING_PROGRAM_ACCOUNT_V3,
@@ -255,9 +258,6 @@ function validateFixedFrame(route: DirectInlineHotRouteV3): void {
       || route.fixedAccounts[HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3]?.address !== SYSVAR_INSTRUCTIONS_PUBKEY.toBase58()) {
     throw new Error('hot fixed-account roles differ from the canonical V3 ABI');
   }
-  if (route.runtimeAccounts.length === 0 || route.runtimeAccounts[0]?.address !== route.fixedAccounts[HOT_ROOT_ACCOUNT_V3]?.address) {
-    throw new Error('AccountProfile runtime coordinate zero is not the already-present capability root');
-  }
   if (new Set(route.fixedAccounts.map((account) => account.address)).size !== route.fixedAccounts.length) {
     throw new Error('hot fixed-account frame aliases two semantic roles');
   }
@@ -349,7 +349,13 @@ export function compileDirectInlineTransactionV3(input: Readonly<{
   exactIdentity(input.route.releaseSet, 'execution release set');
   exactIdentity(input.route.rootPrestateDigest, 'root prestate digest');
   validateFixedFrame(input.route);
-  validateRuntimeAccountProfileV2(input.route.accountProfile, input.route.outcomeCount, input.route.runtimeAccounts);
+  validateRuntimeAccountProfileV2(input.route.accountProfile, input.route.outcomeCount, [
+    input.route.fixedAccounts[HOT_ROOT_ACCOUNT_V3],
+    input.route.fixedAccounts[HOT_CONFIG_RAW_ACCOUNT_V3],
+    input.route.fixedAccounts[HOT_PRODUCT_RAW_ACCOUNT_V3],
+    input.route.fixedAccounts[HOT_PORTFOLIO_RAW_ACCOUNT_V3],
+    ...input.route.runtimeAccounts,
+  ]);
   const preview = previewDirectInlineV3(input.route, input.seller, input.buyer, input.fill, input.executionPrice, input.clockSlot);
   const requestBytes = encodeDirectInlineOrdinaryRequestV3(input.seller, input.buyer, input.fill, input.executionPrice);
   const hotInstructionBytes = new Uint8Array(HOT_EXECUTION_ENVELOPE_BYTES_V3 + requestBytes.length);
@@ -369,7 +375,7 @@ export function compileDirectInlineTransactionV3(input: Readonly<{
     keys: [
       ...input.route.fixedAccounts.map(toMeta),
       ...input.route.strategyAccounts.map(toMeta),
-      ...input.route.runtimeAccounts.slice(1).map(toMeta),
+      ...input.route.runtimeAccounts.map(toMeta),
     ],
     data: hotInstructionBytes as Buffer,
   });

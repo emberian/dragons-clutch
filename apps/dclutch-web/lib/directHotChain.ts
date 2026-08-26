@@ -5,7 +5,14 @@ import {
 } from '@solana/web3.js';
 
 import { ascii, hex, requireNonzero, requireZero, sha256, slice, u16, u64 } from './bytes';
-import { CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CORE_STATE_BYTES } from './generated/coreFound';
+import {
+  CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+  CORE_STATE_BYTES,
+  PORTFOLIO_SCHEMA_ID_V2,
+  PRODUCT_RECORD_SCHEMA_ID_V2,
+  RESULT_DOMAIN_SCHEMA_ID_V2,
+} from './generated/coreFound';
+import { decodeCoreFoundProductGraphV2 } from './coreFound';
 import * as DirectAbi from './generated/directInlineV3';
 import {
   ACCOUNT_SCHEMA_RELEASE_ID,
@@ -41,6 +48,12 @@ import {
   HOT_MARKET_ACCOUNT_V3,
   HOT_PROGRAM_SET_RAW_ACCOUNT_V3,
   HOT_PROGRAM_SET_STAGING_ACCOUNT_V3,
+  HOT_PRODUCT_RAW_ACCOUNT_V3,
+  HOT_PRODUCT_STAGING_ACCOUNT_V3,
+  HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3,
+  HOT_RESULT_DOMAIN_STAGING_ACCOUNT_V3,
+  HOT_PORTFOLIO_RAW_ACCOUNT_V3,
+  HOT_PORTFOLIO_STAGING_ACCOUNT_V3,
   HOT_REGISTRY_PROGRAM_ACCOUNT_V3,
   HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3,
   HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3,
@@ -77,6 +90,7 @@ const MARKET_RELEASE_SET_OFFSET = 208;
 const MARKET_REGISTRY_OFFSET = 240;
 const MARKET_GENERATION_OFFSET = 272;
 const MARKET_MANIFEST_OFFSET = 176;
+const MARKET_PRODUCT_RECORD_OFFSET = 80;
 const ACCOUNT_PROFILE_OPERATION_BYTES = 16;
 const ACCOUNT_PROFILE_TAIL_COUNT_OPCODE = 8;
 const ACTIVATION_CACHE_TRADING_OFFSET = 48 + 2 * (32 + ARTIFACT_RELEASE_BYTES);
@@ -555,6 +569,25 @@ export async function inspectDirectHotRouteV3(
   const feeBasisPoints = u16(configRaw.data, DirectAbi.DIRECT_CONFIG_FEE_BPS_OFFSET_V1);
   if (priceScale === 0n || feeBasisPoints > 10_000) throw new Error('Direct config price scale or fee rate is invalid');
 
+  const productDigest = slice(market.data, MARKET_PRODUCT_RECORD_OFFSET, 32);
+  const productRaw = await finalizedRecord(client, observation.accounts, registryProgram,
+    fixed[HOT_PRODUCT_RAW_ACCOUNT_V3].address, fixed[HOT_PRODUCT_STAGING_ACCOUNT_V3].address,
+    PRODUCT_RECORD_SCHEMA_ID_V2, productDigest, 'Product Runtime V2 root');
+  if (productRaw.data.length !== 112 || ascii(productRaw.data, 0, 8) !== 'DCLTPRM2' || u16(productRaw.data, 8) !== 2) {
+    throw new Error('Product Runtime V2 root has the wrong exact ABI');
+  }
+  const resultDomainDigest = slice(productRaw.data, 48, 32);
+  const portfolioDigest = slice(productRaw.data, 80, 32);
+  const resultDomainRaw = await finalizedRecord(client, observation.accounts, registryProgram,
+    fixed[HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3].address, fixed[HOT_RESULT_DOMAIN_STAGING_ACCOUNT_V3].address,
+    RESULT_DOMAIN_SCHEMA_ID_V2, resultDomainDigest, 'Product result domain');
+  const portfolioRaw = await finalizedRecord(client, observation.accounts, registryProgram,
+    fixed[HOT_PORTFOLIO_RAW_ACCOUNT_V3].address, fixed[HOT_PORTFOLIO_STAGING_ACCOUNT_V3].address,
+    PORTFOLIO_SCHEMA_ID_V2, portfolioDigest, 'Product portfolio');
+  const productGraph = decodeCoreFoundProductGraphV2(
+    productRaw.data, resultDomainRaw.data, portfolioRaw.data, resultDomainDigest, portfolioDigest,
+  );
+
   const profileRaw = await finalizedRecord(client, observation.accounts, registryProgram,
     fixed[HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3].address, fixed[HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3].address,
     ACCOUNT_SCHEMA_RELEASE_ID, descriptor.accountProfile, 'AccountProfile V2');
@@ -578,8 +611,23 @@ export async function inspectDirectHotRouteV3(
     fixed[HOT_EFFECT_RAW_ACCOUNT_V3].address, fixed[HOT_EFFECT_STAGING_ACCOUNT_V3].address,
     EFFECT_SCHEMA_RELEASE_ID, descriptor.effect, 'EffectProgram V3');
   const runtimeAccounts = manifest.runtimeAccounts.map((coordinate, index) => required(observation.accounts, coordinate.address, `runtime account ${index}`));
-  const outcomeCount = tailCountFromProfile(profileRaw.data, runtimeAccounts);
-  validateRuntimeAccountProfileV2(profileRaw.data, outcomeCount, runtimeMetas);
+  const logicalRuntimeAccounts = [
+    required(observation.accounts, fixed[HOT_ROOT_ACCOUNT_V3].address, 'logical capability root'),
+    configRaw,
+    productRaw,
+    portfolioRaw,
+    ...runtimeAccounts,
+  ];
+  const logicalRuntimeMetas = [
+    fixed[HOT_ROOT_ACCOUNT_V3],
+    fixed[HOT_CONFIG_RAW_ACCOUNT_V3],
+    fixed[HOT_PRODUCT_RAW_ACCOUNT_V3],
+    fixed[HOT_PORTFOLIO_RAW_ACCOUNT_V3],
+    ...runtimeMetas,
+  ];
+  const outcomeCount = tailCountFromProfile(profileRaw.data, logicalRuntimeAccounts);
+  if (outcomeCount !== productGraph.outcomeCount) throw new Error('AccountProfile runtime width differs from Product-owned outcome count');
+  validateRuntimeAccountProfileV2(profileRaw.data, outcomeCount, logicalRuntimeMetas);
 
   let checkedOuter: CheckedHotOuterEvidenceV3 = Object.freeze({ status: 'unavailable', reason: 'no user-supplied checked infrastructure manifest recognizes this Trading release' });
   if (manifest.checkedInfrastructure !== null) {

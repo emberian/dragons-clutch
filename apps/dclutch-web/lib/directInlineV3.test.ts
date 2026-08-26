@@ -63,12 +63,12 @@ function participants(market: string): Readonly<{ seller: SignedDirectIntentV3; 
 }
 
 function runtimeProfile(): Uint8Array {
-  const output = new Uint8Array(48);
+  const output = new Uint8Array(96);
   output.set(new TextEncoder().encode('DCLTAP02'), 0);
   const view = new DataView(output.buffer);
   view.setUint16(8, 2, true);
   view.setUint16(10, 2, true);
-  view.setUint16(12, 1, true);
+  view.setUint16(12, 4, true);
   view.setUint16(20, 1, true);
   output[32] = 2;
   return output;
@@ -109,7 +109,7 @@ function route(checked = true): DirectInlineHotRouteV3 {
     accountProfile: runtimeProfile(),
     fixedAccounts: Object.freeze(fixed),
     strategyAccounts: Object.freeze([]),
-    runtimeAccounts: Object.freeze([account(key(11), true)]),
+    runtimeAccounts: Object.freeze([]),
     recentBlockhash: key(92),
     lookupTables: Object.freeze([lookupTable]),
     outerEvidence: checked
@@ -161,7 +161,9 @@ describe('Direct V3 inline transaction construction', () => {
 
   it('refuses AccountProfile privilege substitution and intent over-width coordinates', () => {
     const candidate = route();
-    expect(() => validateRuntimeAccountProfileV2(candidate.accountProfile, candidate.outcomeCount, [account(key(11), false)])).toThrow(/privilege/);
+    expect(() => validateRuntimeAccountProfileV2(candidate.accountProfile, candidate.outcomeCount, [
+      account(key(11), false), account(key(12)), account(key(13)), account(key(14)),
+    ])).toThrow(/privilege/);
     const { seller, buyer } = participants(candidate.market);
     expect(() => previewDirectInlineV3({ ...candidate, outcomeCount: 70_000 }, seller, buyer, 2_000n, 500_000n, 1_000n)).toThrow(/seller intent/);
   });
