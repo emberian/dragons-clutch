@@ -31,6 +31,15 @@ pub use request::{
 
 /// Exact absent revision sentinel shared with the canonical Claims ABI.
 pub const ABSENT_REVISION: u64 = dclutch_claims_svm::NO_POSITION_REVISION;
+/// Claims PDA seed for one descriptor's representation authority.
+pub const RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2: &[u8] =
+    b"dclutch:rational-authority:v2";
+/// Claims PDA seed for one outcome's canonical shard Mint.
+pub const RATIONAL_SHARD_MINT_SEED_V2: &[u8] = b"dclutch:rational-shard-mint:v2";
+/// Claims PDA seed for one outcome's canonical Claims custody owner.
+pub const RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2: &[u8] = b"dclutch:rational-claims:v2";
+/// Claims PDA seed for one holder's rational representation replay cursor.
+pub const RATIONAL_REPLAY_SEED_V2: &[u8] = b"dclutch:rational-replay:v2";
 
 /// Stable hostile-decode, composition, or postcondition refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

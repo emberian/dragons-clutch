@@ -48,6 +48,14 @@ pub const REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V2: [u8; 32] = [
     0x78, 0x05, 0x26, 0x58, 0xd7, 0x7f, 0x62, 0xdb, 0xe0, 0x3a, 0x14, 0x24, 0xca, 0x0c, 0x28, 0x5c,
     0x82, 0x22, 0x22, 0xf1, 0xac, 0x99, 0x3c, 0xf2, 0x22, 0xbb, 0x1c, 0xbd, 0x37, 0xd2, 0x3d, 0x28,
 ];
+/// Canonical finalized-record schema label for [`RepresentationGraphV2`].
+pub const REPRESENTATION_GRAPH_SCHEMA_RELEASE_PREIMAGE_V2: &[u8] =
+    b"dclutch/schema/rational-representation-graph-v2";
+/// SHA-256 identity of [`REPRESENTATION_GRAPH_SCHEMA_RELEASE_PREIMAGE_V2`].
+pub const REPRESENTATION_GRAPH_SCHEMA_RELEASE_ID_V2: [u8; 32] = [
+    0xbe, 0x69, 0x36, 0xbb, 0xa2, 0x4e, 0xa0, 0xd2, 0xd1, 0x78, 0xfa, 0x65, 0x92, 0x74, 0x8e, 0xa5,
+    0xf5, 0xdc, 0x95, 0xdf, 0x9a, 0x72, 0xbb, 0xa8, 0x58, 0x84, 0xa9, 0x27, 0xe2, 0x89, 0xd5, 0x97,
+];
 /// Implemented schema version.
 pub const SCHEMA_VERSION_V2: u16 = 2;
 
@@ -153,6 +161,28 @@ pub struct CoordinateObservation {
     pub explicit_free_shards: u64,
 }
 
+/// Scalar header for one adapter-owned ephemeral Structured projection.
+///
+/// The physical adapter writes this header and exact Token/Claims observations
+/// into caller-owned scratch. No field is persisted by this kernel.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StructuredProjectionHeaderV2 {
+    /// Immutable representation descriptor identity.
+    pub descriptor_id: [u8; 32],
+    /// Logical Core Market identity.
+    pub market_id: [u8; 32],
+    /// Token-owned Structured receipt Mint.
+    pub receipt_mint: [u8; 32],
+    /// Product-owned runtime outcome width.
+    pub outcome_count: u32,
+    /// Exact shard denominator.
+    pub denominator: u64,
+    /// Observed Token-owned receipt supply.
+    pub receipt_supply: u64,
+    /// Exact adapter replay revision.
+    pub revision: u64,
+}
+
 /// Borrowed runtime-width Structured accounting projection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StructuredProjectionV2<'a> {
@@ -167,6 +197,112 @@ pub struct StructuredProjectionV2<'a> {
 }
 
 impl<'a> StructuredProjectionV2<'a> {
+    /// Initialize exact caller-owned scratch for an ephemeral projection.
+    pub fn write_header(output: &mut [u8], header: StructuredProjectionHeaderV2) -> Result<()> {
+        if is_zero(&header.descriptor_id)
+            || is_zero(&header.market_id)
+            || is_zero(&header.receipt_mint)
+        {
+            return Err(Error::ZeroIdentity);
+        }
+        if header.outcome_count == 0 {
+            return Err(Error::InvalidWidth);
+        }
+        if header.denominator == 0 {
+            return Err(Error::ZeroDenominator);
+        }
+        let width = usize::try_from(header.outcome_count).map_err(|_| Error::InvalidWidth)?;
+        let tail = width
+            .checked_mul(STRUCTURED_VECTOR_COUNT)
+            .and_then(|value| value.checked_mul(SCALAR_BYTES))
+            .ok_or(Error::InvalidLength)?;
+        if output.len()
+            != STRUCTURED_HEADER_BYTES
+                .checked_add(tail)
+                .ok_or(Error::InvalidLength)?
+        {
+            return Err(Error::InvalidLength);
+        }
+        output.fill(0);
+        output
+            .get_mut(..8)
+            .ok_or(Error::InvalidLength)?
+            .copy_from_slice(&STRUCTURED_MAGIC_V2);
+        output
+            .get_mut(8..10)
+            .ok_or(Error::InvalidLength)?
+            .copy_from_slice(&SCHEMA_VERSION_V2.to_le_bytes());
+        for (offset, value) in [
+            (STRUCTURED_DESCRIPTOR_ID_OFFSET, header.descriptor_id),
+            (STRUCTURED_MARKET_ID_OFFSET, header.market_id),
+            (STRUCTURED_RECEIPT_MINT_OFFSET, header.receipt_mint),
+        ] {
+            output
+                .get_mut(offset..offset + value.len())
+                .ok_or(Error::InvalidLength)?
+                .copy_from_slice(&value);
+        }
+        output
+            .get_mut(STRUCTURED_OUTCOME_COUNT_OFFSET..STRUCTURED_OUTCOME_COUNT_OFFSET + 4)
+            .ok_or(Error::InvalidLength)?
+            .copy_from_slice(&header.outcome_count.to_le_bytes());
+        for (offset, value) in [
+            (STRUCTURED_DENOMINATOR_OFFSET, header.denominator),
+            (STRUCTURED_RECEIPT_SUPPLY_OFFSET, header.receipt_supply),
+            (STRUCTURED_REVISION_OFFSET, header.revision),
+        ] {
+            output
+                .get_mut(offset..offset + SCALAR_BYTES)
+                .ok_or(Error::InvalidLength)?
+                .copy_from_slice(&value.to_le_bytes());
+        }
+        Ok(())
+    }
+
+    /// Write one exact observed coordinate into initialized scratch.
+    pub fn write_coordinate(
+        output: &mut [u8],
+        outcome_count: u32,
+        outcome: u32,
+        coordinate: CoordinateObservation,
+    ) -> Result<()> {
+        if outcome >= outcome_count {
+            return Err(Error::InvalidWidth);
+        }
+        let width = usize::try_from(outcome_count).map_err(|_| Error::InvalidWidth)?;
+        let index = usize::try_from(outcome).map_err(|_| Error::InvalidWidth)?;
+        let exact = STRUCTURED_HEADER_BYTES
+            .checked_add(
+                width
+                    .checked_mul(STRUCTURED_VECTOR_COUNT)
+                    .and_then(|value| value.checked_mul(SCALAR_BYTES))
+                    .ok_or(Error::InvalidLength)?,
+            )
+            .ok_or(Error::InvalidLength)?;
+        if output.len() != exact {
+            return Err(Error::InvalidLength);
+        }
+        for (vector, value) in [
+            (0_usize, coordinate.coefficient),
+            (1_usize, coordinate.native_locked),
+            (2_usize, coordinate.shard_supply),
+            (3_usize, coordinate.structured_custody),
+            (4_usize, coordinate.explicit_free_shards),
+        ] {
+            let scalar = vector
+                .checked_mul(width)
+                .and_then(|base| base.checked_add(index))
+                .and_then(|value| value.checked_mul(SCALAR_BYTES))
+                .and_then(|value| STRUCTURED_HEADER_BYTES.checked_add(value))
+                .ok_or(Error::InvalidLength)?;
+            output
+                .get_mut(scalar..scalar + SCALAR_BYTES)
+                .ok_or(Error::InvalidLength)?
+                .copy_from_slice(&value.to_le_bytes());
+        }
+        Ok(())
+    }
+
     /// Hostile-decode and completely validate one exact borrowed projection.
     pub fn decode(input: &'a [u8]) -> Result<Self> {
         if input.len() < STRUCTURED_HEADER_BYTES {
@@ -1313,6 +1449,62 @@ mod tests {
             put_u64(&mut bytes, tail + index * 8, *value);
         }
         bytes
+    }
+
+    #[test]
+    fn adapter_projection_writer_roundtrips_exact_observations() {
+        let mut bytes = vec![0_u8; STRUCTURED_HEADER_BYTES + 2 * 5 * SCALAR_BYTES];
+        StructuredProjectionV2::write_header(
+            &mut bytes,
+            StructuredProjectionHeaderV2 {
+                descriptor_id: [1; 32],
+                market_id: [2; 32],
+                receipt_mint: [3; 32],
+                outcome_count: 2,
+                denominator: 10,
+                receipt_supply: 7,
+                revision: 4,
+            },
+        )
+        .expect("write exact header");
+        for (outcome, coordinate) in [
+            CoordinateObservation {
+                coefficient: 3,
+                native_locked: 3,
+                shard_supply: 30,
+                structured_custody: 21,
+                explicit_free_shards: 9,
+            },
+            CoordinateObservation {
+                coefficient: 7,
+                native_locked: 6,
+                shard_supply: 60,
+                structured_custody: 49,
+                explicit_free_shards: 11,
+            },
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            StructuredProjectionV2::write_coordinate(
+                &mut bytes,
+                2,
+                u32::try_from(outcome).expect("fixture outcome"),
+                coordinate,
+            )
+            .expect("write coordinate");
+        }
+        let projection = StructuredProjectionV2::decode(&bytes).expect("roundtrip projection");
+        assert_eq!(
+            projection.coordinate(1),
+            Ok(CoordinateObservation {
+                coefficient: 7,
+                native_locked: 6,
+                shard_supply: 60,
+                structured_custody: 49,
+                explicit_free_shards: 11,
+            })
+        );
     }
 
     fn admission() -> ContentAdmissionV2 {
