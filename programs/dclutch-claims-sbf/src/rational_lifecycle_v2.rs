@@ -436,7 +436,27 @@ fn authenticate_common(
     {
         return Err(RationalLifecycleSbfErrorV2::Accounts.into());
     }
-    authenticate_releases(common, header.release_set)?;
+    // Coordinate actions execute the canonical ProtocolPosition lifecycle in
+    // this same Claims invocation.  That sole state writer independently
+    // reauthenticates Trading and Claims; Admit also reauthenticates Core.
+    // Repeating those Registry CPIs here would add no authority fact and can
+    // make the runtime-width positive route exceed the SVM transaction budget.
+    // Close does not consume Core, so retirement retains the one missing Core
+    // selection check here.  Receipt-wide actions have no ProtocolPosition
+    // child and therefore authenticate all three roles here.
+    match header.action {
+        LifecycleActionV2::ActivateCoordinate => {}
+        LifecycleActionV2::RetireCoordinate => authenticate_release(
+            common,
+            header.release_set,
+            ExecutionRoleV1::Core,
+            common.core_program,
+            common.core_programdata,
+        )?,
+        LifecycleActionV2::ActivateReceipt | LifecycleActionV2::RetireReceipt => {
+            authenticate_releases(common, header.release_set)?;
+        }
+    }
     authenticate_market(program_id, common, request)?;
     authenticate_rent_credit(common, request)?;
     if common.rent_credit.lamports() != header.rent_credit_before {
@@ -492,11 +512,22 @@ fn authenticate_releases(
             common.core_programdata,
         ),
     ] {
-        let receipt = reauthenticate(common.registry, common.cache, role, program, programdata)
-            .map_err(|_| RationalLifecycleSbfErrorV2::Release)?;
-        if receipt.execution_release_set_id().as_bytes() != &release_set {
-            return Err(RationalLifecycleSbfErrorV2::Release.into());
-        }
+        authenticate_release(common, release_set, role, program, programdata)?;
+    }
+    Ok(())
+}
+
+fn authenticate_release<'accounts, 'info>(
+    common: CommonAccounts<'accounts, 'info>,
+    release_set: [u8; 32],
+    role: ExecutionRoleV1,
+    program: &'accounts AccountInfo<'info>,
+    programdata: &'accounts AccountInfo<'info>,
+) -> Result<(), ProgramError> {
+    let receipt = reauthenticate(common.registry, common.cache, role, program, programdata)
+        .map_err(|_| RationalLifecycleSbfErrorV2::Release)?;
+    if receipt.execution_release_set_id().as_bytes() != &release_set {
+        return Err(RationalLifecycleSbfErrorV2::Release.into());
     }
     Ok(())
 }
