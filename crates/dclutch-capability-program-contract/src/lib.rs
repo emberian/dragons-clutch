@@ -24,6 +24,8 @@ mod generated;
 
 pub use generated::*;
 
+/// Action-selected sets of exact Capability Program V3 bundles.
+pub mod set_v1;
 /// Fixed descriptor selecting independently finalized runtime-tail artifacts.
 pub mod v3;
 
