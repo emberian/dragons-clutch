@@ -26,6 +26,8 @@ pub mod lifecycle;
 pub mod operator;
 /// Exact content/replay projector behind the canonical Trading hot outer.
 pub mod projector;
+/// Chain-derived Shadow-AOT release selection and generic request construction.
+pub mod shadow_operator;
 /// Fixed-layout mutable replay state owned by the selected Trading program.
 pub mod state;
 /// Terminal Ticket-retire/root-close differential execution oracle.
