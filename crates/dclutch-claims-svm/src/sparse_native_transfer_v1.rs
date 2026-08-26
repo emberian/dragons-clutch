@@ -427,6 +427,11 @@ impl SparseNativeTransferReceiptV1 {
         Ok(())
     }
 
+    /// Return the exact request whose successful transition this receipt binds.
+    pub const fn request(self) -> SparseNativeTransferV1 {
+        self.request
+    }
+
     /// Exact request packet digest.
     pub const fn packet_digest(self) -> [u8; 32] {
         self.packet_digest

@@ -23,6 +23,12 @@ pub use dclutch_claims_svm::protocol_position_v2::{
     ProtocolPositionCloseReceiptV2, ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2,
     ProtocolPositionRequestV2, ProtocolPositionSeedsV2,
 };
+use dclutch_claims_svm::{
+    composition_v3::validate_sparse_close_receipt_v3,
+    sparse_native_transfer_v1::{
+        SPARSE_NATIVE_TRANSFER_RECEIPT_BYTES_V1, SparseNativeTransferReceiptV1,
+    },
+};
 use dclutch_market_core_codec::Phase as CorePhase;
 use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV2};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
@@ -188,8 +194,12 @@ pub fn process(
     account_infos: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> Result<(), ProgramError> {
-    let request = ProtocolPositionRequestV2::decode(instruction_data)
+    let request_bytes = instruction_data
+        .get(..PROTOCOL_POSITION_REQUEST_BYTES_V2)
+        .ok_or(ProtocolPositionSbfErrorV2::Instruction)?;
+    let request = ProtocolPositionRequestV2::decode(request_bytes)
         .map_err(|_| ProtocolPositionSbfErrorV2::Instruction)?;
+    let sparse_receipt = split_sparse_receipt(request.action, instruction_data)?;
     authenticate_frame_spec(
         ClaimsFrameSpecV1::protocol_position(request.action),
         account_infos,
@@ -198,15 +208,41 @@ pub fn process(
         ProtocolPositionActionV2::Admit => process_admit(
             program_id,
             AdmitAccounts::parse(account_infos)?,
-            instruction_data,
+            request_bytes,
             request,
         ),
         ProtocolPositionActionV2::Close => process_close(
             program_id,
             CloseAccounts::parse(account_infos)?,
-            instruction_data,
+            request_bytes,
             request,
+            sparse_receipt,
         ),
+    }
+}
+
+fn split_sparse_receipt(
+    action: ProtocolPositionActionV2,
+    instruction_data: &[u8],
+) -> Result<Option<SparseNativeTransferReceiptV1>, ProgramError> {
+    let suffix = instruction_data
+        .get(PROTOCOL_POSITION_REQUEST_BYTES_V2..)
+        .ok_or(ProtocolPositionSbfErrorV2::Instruction)?;
+    match (action, suffix.is_empty()) {
+        (_, true) => Ok(None),
+        (ProtocolPositionActionV2::Admit, false) => {
+            Err(ProtocolPositionSbfErrorV2::Instruction.into())
+        }
+        (ProtocolPositionActionV2::Close, false)
+            if suffix.len() == SPARSE_NATIVE_TRANSFER_RECEIPT_BYTES_V1 =>
+        {
+            SparseNativeTransferReceiptV1::decode(suffix)
+                .map(Some)
+                .map_err(|_| ProtocolPositionSbfErrorV2::Instruction.into())
+        }
+        (ProtocolPositionActionV2::Close, false) => {
+            Err(ProtocolPositionSbfErrorV2::Instruction.into())
+        }
     }
 }
 
@@ -399,6 +435,7 @@ fn process_close(
     accounts: CloseAccounts<'_, '_>,
     instruction_data: &[u8],
     request: ProtocolPositionRequestV2,
+    sparse_receipt: Option<SparseNativeTransferReceiptV1>,
 ) -> Result<(), ProgramError> {
     authenticate_close_privileges(program_id, accounts)?;
     let request_digest = hash(instruction_data).to_bytes();
@@ -433,6 +470,14 @@ fn process_close(
     let admission = ProtocolPositionAdmissionV2::decode(&admission_data)
         .map_err(|_| ProtocolPositionSbfErrorV2::Admission)?;
     authenticate_admission(program_id, accounts, request, market, admission)?;
+    if let Some(receipt) = sparse_receipt {
+        validate_sparse_close_receipt_v3(receipt, request, admission, program_id.to_bytes())
+            .map_err(|_| ProtocolPositionSbfErrorV2::Admission)?;
+        let packet = receipt.request().to_bytes();
+        if receipt.packet_digest() != hash(&packet).to_bytes() {
+            return Err(ProtocolPositionSbfErrorV2::Admission.into());
+        }
+    }
     drop(admission_data);
 
     let position_data = accounts

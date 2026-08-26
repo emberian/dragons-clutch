@@ -9,14 +9,19 @@ extern crate alloc;
 
 use dclutch_claims_svm::{
     CallerRole,
+    composition_v3::validate_sparse_admission_receipt_v3,
     frame_spec_v1::SparseNativeTransferFrameSpecV1,
     liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
         LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, LiabilityBasisMarketViewV2,
         LiabilityBasisPositionViewV2,
     },
-    protocol_position_v2::ProtocolPositionSeedsV2,
-    sparse_native_transfer_v1::{SparseNativeTransferReceiptV1, SparseNativeTransferV1},
+    protocol_position_v2::{
+        PROTOCOL_POSITION_ADMISSION_BYTES_V2, ProtocolPositionAdmissionV2, ProtocolPositionSeedsV2,
+    },
+    sparse_native_transfer_v1::{
+        SPARSE_NATIVE_TRANSFER_BYTES_V1, SparseNativeTransferReceiptV1, SparseNativeTransferV1,
+    },
 };
 use dclutch_core_contract::ContentId as CoreContentId;
 use dclutch_market_core_codec::{
@@ -163,13 +168,23 @@ pub(super) fn process(
     account_infos: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> Result<(), ProgramError> {
-    let request = SparseNativeTransferV1::decode(instruction_data)
+    let (request_bytes, admission) = split_instruction(instruction_data)?;
+    let request = SparseNativeTransferV1::decode(request_bytes)
         .map_err(|_| SparseNativeTransferSbfErrorV1::Instruction)?;
     let accounts = Accounts::parse(account_infos)?;
     authenticate_privileges(program_id, account_infos, accounts)?;
-    let packet_digest = hash(instruction_data).to_bytes();
+    let packet_digest = hash(request_bytes).to_bytes();
     authenticate_authority(accounts, request, packet_digest)?;
     authenticate_releases(accounts, request)?;
+    if let Some(admission) = admission {
+        validate_sparse_admission_receipt_v3(
+            admission,
+            request,
+            program_id.to_bytes(),
+            accounts.caller_program.key.to_bytes(),
+        )
+        .map_err(|_| SparseNativeTransferSbfErrorV1::ClaimsState)?;
+    }
 
     let market_before = accounts
         .market
@@ -260,6 +275,28 @@ pub(super) fn process(
     )?;
     set_return_data(&receipt.to_bytes());
     Ok(())
+}
+
+fn split_instruction(
+    instruction_data: &[u8],
+) -> Result<(&[u8], Option<ProtocolPositionAdmissionV2>), ProgramError> {
+    let request = instruction_data
+        .get(..SPARSE_NATIVE_TRANSFER_BYTES_V1)
+        .ok_or(SparseNativeTransferSbfErrorV1::Instruction)?;
+    let suffix = instruction_data
+        .get(SPARSE_NATIVE_TRANSFER_BYTES_V1..)
+        .ok_or(SparseNativeTransferSbfErrorV1::Instruction)?;
+    let admission = if suffix.is_empty() {
+        None
+    } else if suffix.len() == PROTOCOL_POSITION_ADMISSION_BYTES_V2 {
+        Some(
+            ProtocolPositionAdmissionV2::decode_receipt(suffix)
+                .map_err(|_| SparseNativeTransferSbfErrorV1::Instruction)?,
+        )
+    } else {
+        return Err(SparseNativeTransferSbfErrorV1::Instruction.into());
+    };
+    Ok((request, admission))
 }
 
 fn authenticate_privileges(

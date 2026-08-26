@@ -3,9 +3,10 @@
 //! The selected EffectProgram owns route enablement, request templates, and
 //! account geometry. This module adds only the cross-route economic join that
 //! no individual child request can prove: exactly one canonical Claims
-//! mutation, optionally surrounded by the Position admit/close pair admitted
-//! for affine mutation. It introduces no balance mutation, family tag, seed
-//! rule, or parallel request DTO.
+//! mutation. Affine mutation retains its existing lifecycle joins; a sparse
+//! transfer may additionally admit its destination and close its zero source
+//! only through exact backward typed-receipt dependencies. It introduces no
+//! balance mutation, family tag, seed rule, or parallel request DTO.
 
 use dclutch_effect_kernel::v2::FixedRole;
 use dclutch_effect_kernel::v3::{ProgramV3, RouteKindV3};
@@ -24,12 +25,19 @@ use crate::{
     CallerRole,
     affine_batch_v2::{AFFINE_BATCH_PLAN_MAGIC_V2, AffineBatchPlanV2},
     founding_v5::{CLAIMS_FOUNDING_REQUEST_MAGIC_V5, ClaimsFoundingRequestV5},
+    frame_spec_v1::{
+        PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V1, PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V1,
+    },
     protocol_position_v2::{
-        PROTOCOL_POSITION_REQUEST_MAGIC_V2, ProtocolPositionActionV2, ProtocolPositionPresenceV2,
-        ProtocolPositionRequestV2,
+        PROTOCOL_POSITION_ADMISSION_BYTES_V2, PROTOCOL_POSITION_REQUEST_MAGIC_V2,
+        ProtocolPositionActionV2, ProtocolPositionAdmissionV2, ProtocolPositionOwnerKindV2,
+        ProtocolPositionPresenceV2, ProtocolPositionRequestV2,
     },
     signed_delta_v3::{SIGNED_DELTA_PLAN_MAGIC_V3, SignedDeltaPlanV3},
-    sparse_native_transfer_v1::{SPARSE_NATIVE_TRANSFER_MAGIC_V1, SparseNativeTransferV1},
+    sparse_native_transfer_v1::{
+        SPARSE_NATIVE_TRANSFER_MAGIC_V1, SPARSE_NATIVE_TRANSFER_RECEIPT_BYTES_V1,
+        SparseNativeTransferReceiptV1, SparseNativeTransferV1,
+    },
 };
 
 /// Exact fixed SignedDeltaV3 account frame before its canonical Position tail.
@@ -50,9 +58,9 @@ pub enum ClaimsCompositionErrorV3 {
     Order,
     /// Release, Market, generation, or parent-request identity differed.
     ParentBinding,
-    /// Admission did not create one affine Position at revision zero.
+    /// Admission did not create the selected destination Position at revision zero.
     AdmissionJoin,
-    /// Close did not consume one affine Position at its exact post revision.
+    /// Close did not consume the selected source Position at its exact post revision.
     CloseJoin,
     /// No sole canonical Claims mutation was selected.
     MissingAffine,
@@ -175,6 +183,17 @@ impl<'a> ClaimsCompositionV3<'a> {
                     }
                     let decoded = ProtocolPositionRequestV2::decode(request)
                         .map_err(|_| ClaimsCompositionErrorV3::Route)?;
+                    let expected_accounts = match decoded.action {
+                        ProtocolPositionActionV2::Admit => PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V1,
+                        ProtocolPositionActionV2::Close => PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V1,
+                    };
+                    if invocation.fixed_account_count != expected_accounts
+                        || invocation.item_account_count != 0
+                        || invocation.repeated_item_count != 0
+                        || invocation.borrowed_witness.is_some()
+                    {
+                        return Err(ClaimsCompositionErrorV3::Route);
+                    }
                     require_position_parent(decoded, parent)?;
                     match decoded.action {
                         ProtocolPositionActionV2::Admit => {
@@ -240,7 +259,12 @@ impl<'a> ClaimsCompositionV3<'a> {
                     mutation_route = Some(route_index);
                     state = CompositionStateV3::Affined;
                 } else if request.get(..8) == Some(SPARSE_NATIVE_TRANSFER_MAGIC_V1.as_slice()) {
-                    if route.kind() != RouteKindV3::Once || state != CompositionStateV3::Start {
+                    if route.kind() != RouteKindV3::Once
+                        || !matches!(
+                            state,
+                            CompositionStateV3::Start | CompositionStateV3::Admitted
+                        )
+                    {
                         return Err(ClaimsCompositionErrorV3::Order);
                     }
                     let decoded = SparseNativeTransferV1::decode(request)
@@ -309,6 +333,16 @@ impl<'a> ClaimsCompositionV3<'a> {
             if let Some(request) = close {
                 require_close_join(request, affine)?;
             }
+        } else if let Some(ref sparse) = sparse_native_transfer {
+            validate_sparse_lifecycle_composition(
+                effect,
+                admit.as_ref(),
+                admit_route,
+                sparse,
+                mutation_route,
+                close.as_ref(),
+                close_route,
+            )?;
         } else if admit.is_some() || close.is_some() {
             return Err(ClaimsCompositionErrorV3::Order);
         }
@@ -648,6 +682,190 @@ fn require_close_join(
     }
 }
 
+#[inline(never)]
+fn validate_sparse_lifecycle_composition(
+    effect: ProgramV3<'_>,
+    admit: Option<&ProtocolPositionRequestV2>,
+    admit_route: Option<u16>,
+    sparse: &SparseNativeTransferV1,
+    mutation_route: u16,
+    close: Option<&ProtocolPositionRequestV2>,
+    close_route: Option<u16>,
+) -> Result<(), ClaimsCompositionErrorV3> {
+    if let Some(request) = admit {
+        require_sparse_admission_join(request, sparse)?;
+        require_exact_receipt_dependency(
+            effect,
+            mutation_route,
+            admit_route.ok_or(ClaimsCompositionErrorV3::AdmissionJoin)?,
+            u16::try_from(PROTOCOL_POSITION_ADMISSION_BYTES_V2)
+                .map_err(|_| ClaimsCompositionErrorV3::Route)?,
+        )?;
+    } else {
+        require_no_receipt_dependency(effect, mutation_route)?;
+    }
+    if let Some(request) = close {
+        require_sparse_close_join(request, sparse)?;
+        require_exact_receipt_dependency(
+            effect,
+            close_route.ok_or(ClaimsCompositionErrorV3::CloseJoin)?,
+            mutation_route,
+            u16::try_from(SPARSE_NATIVE_TRANSFER_RECEIPT_BYTES_V1)
+                .map_err(|_| ClaimsCompositionErrorV3::Route)?,
+        )?;
+    }
+    Ok(())
+}
+
+fn require_sparse_admission_join(
+    request: &ProtocolPositionRequestV2,
+    sparse: &SparseNativeTransferV1,
+) -> Result<(), ClaimsCompositionErrorV3> {
+    let input = sparse.input();
+    if !matches!(
+        request.owner_kind,
+        ProtocolPositionOwnerKindV2::TradingRecord | ProtocolPositionOwnerKindV2::User
+    ) || request.position_owner != input.destination_owner
+        || request.expected_market_revision != input.expected_market_revision
+        || request.expected_position_revision != 0
+        || input.expected_destination_revision != 0
+    {
+        Err(ClaimsCompositionErrorV3::AdmissionJoin)
+    } else {
+        Ok(())
+    }
+}
+
+fn require_sparse_close_join(
+    request: &ProtocolPositionRequestV2,
+    sparse: &SparseNativeTransferV1,
+) -> Result<(), ClaimsCompositionErrorV3> {
+    let input = sparse.input();
+    let post_market_revision = input
+        .expected_market_revision
+        .checked_add(1)
+        .ok_or(ClaimsCompositionErrorV3::CloseJoin)?;
+    let post_source_revision = input
+        .expected_source_revision
+        .checked_add(1)
+        .ok_or(ClaimsCompositionErrorV3::CloseJoin)?;
+    if request.owner_kind != ProtocolPositionOwnerKindV2::TradingRecord
+        || request.position_owner != input.source_owner
+        || request.expected_market_revision != post_market_revision
+        || request.expected_position_revision != post_source_revision
+    {
+        Err(ClaimsCompositionErrorV3::CloseJoin)
+    } else {
+        Ok(())
+    }
+}
+
+fn require_no_receipt_dependency(
+    effect: ProgramV3<'_>,
+    route_index: u16,
+) -> Result<(), ClaimsCompositionErrorV3> {
+    if effect
+        .route(route_index)
+        .map_err(|_| ClaimsCompositionErrorV3::EffectProgram)?
+        .receipt_dependency_count()
+        == 0
+    {
+        Ok(())
+    } else {
+        Err(ClaimsCompositionErrorV3::Order)
+    }
+}
+
+fn require_exact_receipt_dependency(
+    effect: ProgramV3<'_>,
+    consumer_route: u16,
+    producer_route: u16,
+    expected_receipt_bytes: u16,
+) -> Result<(), ClaimsCompositionErrorV3> {
+    let route = effect
+        .route(consumer_route)
+        .map_err(|_| ClaimsCompositionErrorV3::EffectProgram)?;
+    let dependency = effect
+        .route_receipt_dependency(consumer_route, 0)
+        .map_err(|_| ClaimsCompositionErrorV3::Order)?;
+    if route.receipt_dependency_count() != 1
+        || dependency.producer_role() != FixedRole::Claims
+        || dependency.producer_route() != producer_route
+        || dependency.expected_receipt_bytes() != expected_receipt_bytes
+    {
+        Err(ClaimsCompositionErrorV3::Order)
+    } else {
+        Ok(())
+    }
+}
+
+/// Validate the typed admission receipt appended to an admitted sparse transfer.
+///
+/// This binds the Product and basis facts that are authenticated by admission
+/// but deliberately absent from the lifecycle request itself.
+pub fn validate_sparse_admission_receipt_v3(
+    admission: ProtocolPositionAdmissionV2,
+    sparse: SparseNativeTransferV1,
+    claims_program: [u8; 32],
+    trading_program: [u8; 32],
+) -> Result<(), ClaimsCompositionErrorV3> {
+    let input = sparse.input();
+    if !matches!(
+        admission.owner_kind(),
+        ProtocolPositionOwnerKindV2::TradingRecord | ProtocolPositionOwnerKindV2::User
+    ) || admission.release_set() != input.release_set
+        || admission.market() != input.market
+        || admission.generation() != input.generation
+        || admission.parent_request_digest() != input.request_id
+        || admission.position_owner() != input.destination_owner
+        || admission.product_record_digest() != input.product_record_digest
+        || admission.semantic_basis_id() != input.semantic_basis_id
+        || admission.linked_basis_record_digest() != input.linked_basis_record_digest
+        || admission.outcome_count() != input.claim_count
+        || admission.market_revision() != input.expected_market_revision
+        || input.expected_destination_revision != 0
+        || admission.claims_program() != claims_program
+        || admission.trading_program() != trading_program
+    {
+        Err(ClaimsCompositionErrorV3::AdmissionJoin)
+    } else {
+        Ok(())
+    }
+}
+
+/// Validate the typed sparse receipt appended to a source Position close.
+pub fn validate_sparse_close_receipt_v3(
+    receipt: SparseNativeTransferReceiptV1,
+    close: ProtocolPositionRequestV2,
+    admission: ProtocolPositionAdmissionV2,
+    claims_program: [u8; 32],
+) -> Result<(), ClaimsCompositionErrorV3> {
+    let input = receipt.request().input();
+    if close.owner_kind != ProtocolPositionOwnerKindV2::TradingRecord
+        || close.position_owner != input.source_owner
+        || close.release_set != input.release_set
+        || close.market != input.market
+        || close.generation != input.generation
+        || close.parent_request_digest != input.request_id
+        || close.expected_market_revision != receipt.post_market_revision()
+        || close.expected_position_revision != receipt.post_source_revision()
+        || admission.owner_kind() != close.owner_kind
+        || admission.position_owner() != close.position_owner
+        || admission.release_set() != input.release_set
+        || admission.market() != input.market
+        || admission.generation() != input.generation
+        || admission.product_record_digest() != input.product_record_digest
+        || admission.semantic_basis_id() != input.semantic_basis_id
+        || admission.linked_basis_record_digest() != input.linked_basis_record_digest
+        || admission.outcome_count() != input.claim_count
+        || receipt.claims_program() != claims_program
+    {
+        Err(ClaimsCompositionErrorV3::CloseJoin)
+    } else {
+        Ok(())
+    }
+}
+
 fn position_revision(plan: AffineBatchPlanV2<'_>, owner: [u8; 32]) -> Option<u64> {
     let mut index = 0_u32;
     while index < plan.position_count() {
@@ -667,8 +885,12 @@ mod tests {
     use std::vec;
     use std::vec::Vec;
 
-    use dclutch_effect_kernel::v3::encode::{
-        EffectGeometryV3, RouteInputV3, encode_effect_program_v3_atomic,
+    use dclutch_effect_kernel::v3::{
+        RouteReceiptDependencyV3,
+        encode::{
+            EffectGeometryV3, RouteInputV3, encode_effect_program_v3_atomic,
+            encode_effect_program_v4_atomic,
+        },
     };
     use dclutch_rational_representation_v2_lifecycle_contract::{
         LIFECYCLE_COORDINATE_BYTES_V2, LIFECYCLE_HEADER_BYTES_V2, LifecycleCoordinateV2,
@@ -686,7 +908,10 @@ mod tests {
             DeltaDirectionV2, SignedMagnitudeV2, plan_bytes,
         },
         founding_v5::{ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5},
-        protocol_position_v2::ProtocolPositionOwnerKindV2,
+        protocol_position_v2::{
+            ProtocolPositionAdmissionEvidenceV2, ProtocolPositionAdmissionV2,
+            ProtocolPositionOwnerKindV2,
+        },
         signed_delta_v3::{
             DeltaDirectionV3, PositionDeltaInputV3, PositionDeltaV3, SignedDeltaPlanInputV3,
             SignedDeltaPlanV3, SignedDeltaPositionV3, SignedDeltaV3,
@@ -805,11 +1030,17 @@ mod tests {
     }
 
     fn route(kind: u8, request: Vec<u8>) -> RouteFixture {
+        let fixed_account_count = ProtocolPositionRequestV2::decode(&request)
+            .map(|request| match request.action {
+                ProtocolPositionActionV2::Admit => PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V1,
+                ProtocolPositionActionV2::Close => PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V1,
+            })
+            .unwrap_or(1);
         RouteFixture {
             role: 1,
             kind,
             enabled: false,
-            fixed_account_count: 1,
+            fixed_account_count,
             request,
         }
     }
@@ -866,6 +1097,70 @@ mod tests {
             .flat_map(|route| route.request.iter().copied())
             .collect();
         (bytes, request_bank)
+    }
+
+    fn effect_with_dependencies(
+        routes: &[RouteFixture],
+        dependencies: &[&[RouteReceiptDependencyV3]],
+    ) -> (Vec<u8>, Vec<u8>) {
+        assert!(routes.iter().all(|route| matches!(route.kind, 0 | 1)));
+        let inputs: Vec<_> = routes
+            .iter()
+            .map(|route| RouteInputV3 {
+                role: FixedRole::Claims,
+                kind: if route.kind == 0 {
+                    RouteKindV3::Once
+                } else {
+                    RouteKindV3::AffineOnce
+                },
+                enable_common_scalar: route.enabled.then_some(0),
+                witness_range_common_scalar: None,
+                receipt_dependency: None,
+                fixed_account_start: 0,
+                fixed_account_count: route.fixed_account_count,
+                item_account_start: 0,
+                item_account_count: 0,
+                fixed_request: &route.request,
+                item_request: &[],
+            })
+            .collect();
+        let request_bank: Vec<_> = routes
+            .iter()
+            .flat_map(|route| route.request.iter().copied())
+            .collect();
+        let width = dclutch_effect_kernel::v3::HEADER_BYTES
+            + routes.len() * dclutch_effect_kernel::v3::ROUTE_BYTES
+            + dependencies
+                .iter()
+                .map(|entries| entries.len())
+                .sum::<usize>()
+                * dclutch_effect_kernel::v3::RECEIPT_DEPENDENCY_BYTES
+            + request_bank.len();
+        let fixed_accounts = routes
+            .iter()
+            .map(|route| route.fixed_account_count)
+            .max()
+            .unwrap_or(1);
+        let mut scratch = vec![0_u8; width];
+        let mut output = vec![0_u8; width];
+        encode_effect_program_v4_atomic(
+            EffectGeometryV3 {
+                fixed_accounts,
+                item_account_stride: 0,
+                common_scalars: 1,
+                item_scalar_stride: 0,
+                common_identities: 1,
+                item_identity_stride: 0,
+            },
+            &inputs,
+            dependencies,
+            &[],
+            &[],
+            &mut scratch,
+            &mut output,
+        )
+        .expect("dependent EffectProgram");
+        (output, request_bank)
     }
 
     fn signed_family() -> (Vec<u8>, Vec<u8>) {
@@ -1168,6 +1463,46 @@ mod tests {
             quantity: 9,
         })
         .expect("sparse request")
+    }
+
+    fn sparse_request_for(
+        source_owner: [u8; 32],
+        destination_owner: [u8; 32],
+        source_revision: u64,
+        destination_revision: u64,
+    ) -> SparseNativeTransferV1 {
+        SparseNativeTransferV1::new(SparseNativeTransferInputV1 {
+            source_owner,
+            destination_owner,
+            expected_source_revision: source_revision,
+            expected_destination_revision: destination_revision,
+            ..sparse_request().input()
+        })
+        .expect("sparse request variant")
+    }
+
+    fn admission_receipt(
+        request: ProtocolPositionRequestV2,
+        sparse: SparseNativeTransferV1,
+        claims_program: [u8; 32],
+        trading_program: [u8; 32],
+    ) -> ProtocolPositionAdmissionV2 {
+        let input = sparse.input();
+        ProtocolPositionAdmissionV2::new(
+            request,
+            ProtocolPositionAdmissionEvidenceV2 {
+                product_record_digest: input.product_record_digest,
+                semantic_basis_id: input.semantic_basis_id,
+                linked_basis_record_digest: input.linked_basis_record_digest,
+                request_digest: id(40),
+                claims_program,
+                trading_program,
+                capability_descriptor: [0; 32],
+                capability_outcome: 0,
+                outcome_count: input.claim_count,
+            },
+        )
+        .expect("admission receipt")
     }
 
     fn founding_request() -> ClaimsFoundingRequestV5 {
@@ -1506,6 +1841,197 @@ mod tests {
                 hostile_parent,
             ),
             Err(ClaimsCompositionErrorV3::ParentBinding)
+        );
+    }
+
+    #[test]
+    fn composes_admit_sparse_close_with_exact_backward_receipts_and_joins() {
+        let source = id(10);
+        let destination = id(11);
+        let sparse = sparse_request_for(source, destination, 7, 0);
+        let admit = position_request(
+            ProtocolPositionActionV2::Admit,
+            destination,
+            MARKET_REVISION,
+            0,
+        );
+        let close = position_request(
+            ProtocolPositionActionV2::Close,
+            source,
+            MARKET_REVISION + 1,
+            8,
+        );
+        let routes = [
+            RouteFixture {
+                role: 1,
+                kind: 0,
+                enabled: false,
+                fixed_account_count: 26,
+                request: admit.to_bytes().expect("admit bytes").to_vec(),
+            },
+            RouteFixture {
+                role: 1,
+                kind: 0,
+                enabled: false,
+                fixed_account_count: SPARSE_NATIVE_TRANSFER_FIXED_ACCOUNT_COUNT_V1,
+                request: sparse.to_bytes().to_vec(),
+            },
+            RouteFixture {
+                role: 1,
+                kind: 0,
+                enabled: false,
+                fixed_account_count: 15,
+                request: close.to_bytes().expect("close bytes").to_vec(),
+            },
+        ];
+        let sparse_dependencies = [RouteReceiptDependencyV3::new(
+            FixedRole::Claims,
+            0,
+            u16::try_from(PROTOCOL_POSITION_ADMISSION_BYTES_V2).expect("admission width"),
+        )];
+        let close_dependencies = [RouteReceiptDependencyV3::new(
+            FixedRole::Claims,
+            1,
+            u16::try_from(SPARSE_NATIVE_TRANSFER_RECEIPT_BYTES_V1).expect("sparse width"),
+        )];
+        let dependency_lists: [&[RouteReceiptDependencyV3]; 3] =
+            [&[], &sparse_dependencies, &close_dependencies];
+        let (effect_bytes, request_bank) = effect_with_dependencies(&routes, &dependency_lists);
+        let composition = ClaimsCompositionV3::decode_selected(
+            ProgramV3::decode(&effect_bytes).expect("dependent EffectProgram"),
+            TAIL_COUNT,
+            &[1],
+            &[id(40)],
+            &request_bank,
+            parent(),
+        )
+        .expect("admit sparse close");
+        assert_eq!(composition.admit_route(), Some(0));
+        assert_eq!(composition.mutation_route(), 1);
+        assert_eq!(composition.close_route(), Some(2));
+        assert_eq!(composition.sparse_native_transfer(), Some(sparse));
+
+        let no_dependencies: [&[RouteReceiptDependencyV3]; 3] = [&[], &[], &[]];
+        let (effect_bytes, request_bank) = effect_with_dependencies(&routes, &no_dependencies);
+        assert_eq!(
+            ClaimsCompositionV3::decode_selected(
+                ProgramV3::decode(&effect_bytes).expect("structural EffectProgram"),
+                TAIL_COUNT,
+                &[1],
+                &[id(40)],
+                &request_bank,
+                parent(),
+            ),
+            Err(ClaimsCompositionErrorV3::Order)
+        );
+
+        for hostile_sparse in [
+            sparse_request_for(source, id(12), 7, 0),
+            sparse_request_for(source, destination, 7, 1),
+        ] {
+            let mut hostile_routes = routes.clone();
+            hostile_routes[1].request = hostile_sparse.to_bytes().to_vec();
+            let (effect_bytes, request_bank) =
+                effect_with_dependencies(&hostile_routes, &dependency_lists);
+            assert_eq!(
+                ClaimsCompositionV3::decode_selected(
+                    ProgramV3::decode(&effect_bytes).expect("hostile EffectProgram"),
+                    TAIL_COUNT,
+                    &[1],
+                    &[id(40)],
+                    &request_bank,
+                    parent(),
+                ),
+                Err(ClaimsCompositionErrorV3::AdmissionJoin)
+            );
+        }
+
+        let mut wrong_close = close;
+        wrong_close.expected_position_revision = 7;
+        let mut hostile_routes = routes.clone();
+        hostile_routes[2].request = wrong_close.to_bytes().expect("hostile close").to_vec();
+        let (effect_bytes, request_bank) =
+            effect_with_dependencies(&hostile_routes, &dependency_lists);
+        assert_eq!(
+            ClaimsCompositionV3::decode_selected(
+                ProgramV3::decode(&effect_bytes).expect("hostile EffectProgram"),
+                TAIL_COUNT,
+                &[1],
+                &[id(40)],
+                &request_bank,
+                parent(),
+            ),
+            Err(ClaimsCompositionErrorV3::CloseJoin)
+        );
+    }
+
+    #[test]
+    fn typed_sparse_receipt_joins_refuse_product_basis_and_revision_substitution() {
+        let claims = id(41);
+        let trading = id(42);
+        let source = id(10);
+        let destination = id(11);
+        let sparse = sparse_request_for(source, destination, 7, 0);
+        let admit = position_request(
+            ProtocolPositionActionV2::Admit,
+            destination,
+            MARKET_REVISION,
+            0,
+        );
+        let admission = admission_receipt(admit, sparse, claims, trading);
+        assert_eq!(
+            validate_sparse_admission_receipt_v3(admission, sparse, claims, trading),
+            Ok(())
+        );
+        let hostile_sparse = SparseNativeTransferV1::new(SparseNativeTransferInputV1 {
+            product_record_digest: id(99),
+            ..sparse.input()
+        })
+        .expect("hostile Product");
+        assert_eq!(
+            validate_sparse_admission_receipt_v3(admission, hostile_sparse, claims, trading),
+            Err(ClaimsCompositionErrorV3::AdmissionJoin)
+        );
+        let hostile_sparse = SparseNativeTransferV1::new(SparseNativeTransferInputV1 {
+            linked_basis_record_digest: id(98),
+            ..sparse.input()
+        })
+        .expect("hostile basis");
+        assert_eq!(
+            validate_sparse_admission_receipt_v3(admission, hostile_sparse, claims, trading),
+            Err(ClaimsCompositionErrorV3::AdmissionJoin)
+        );
+
+        let mut source_admit =
+            position_request(ProtocolPositionActionV2::Admit, source, MARKET_REVISION, 0);
+        // The source may have been admitted by an earlier registration parent.
+        source_admit.parent_request_digest = id(77);
+        let source_admission = admission_receipt(source_admit, sparse, claims, trading);
+        let receipt = SparseNativeTransferReceiptV1::new(
+            sparse,
+            id(50),
+            claims,
+            id(51),
+            MARKET_REVISION + 1,
+            8,
+            1,
+        )
+        .expect("sparse receipt");
+        let close = position_request(
+            ProtocolPositionActionV2::Close,
+            source,
+            MARKET_REVISION + 1,
+            8,
+        );
+        assert_eq!(
+            validate_sparse_close_receipt_v3(receipt, close, source_admission, claims),
+            Ok(())
+        );
+        let mut wrong_revision = close;
+        wrong_revision.expected_market_revision = MARKET_REVISION;
+        assert_eq!(
+            validate_sparse_close_receipt_v3(receipt, wrong_revision, source_admission, claims,),
+            Err(ClaimsCompositionErrorV3::CloseJoin)
         );
     }
 
