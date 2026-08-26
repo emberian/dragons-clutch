@@ -104,12 +104,7 @@ pub fn execute_claims_route_v3<'info>(
 
     let mut metas = Vec::with_capacity(child_accounts.len());
     for (index, account) in child_accounts.iter().enumerate() {
-        let signer = index == 0;
-        metas.push(if account.is_writable {
-            AccountMeta::new(*account.key, signer)
-        } else {
-            AccountMeta::new_readonly(*account.key, signer)
-        });
+        metas.push(child_account_meta_v3(index, account));
     }
     let mut child_data = request.to_vec();
     append_receipt_dependency_v3(invocation, &mut child_data, prior_receipt)?;
@@ -148,6 +143,15 @@ pub fn execute_claims_route_v3<'info>(
         program_id.to_bytes(),
         post_resource_digest,
     )
+}
+
+fn child_account_meta_v3(index: usize, account: &AccountInfo<'_>) -> AccountMeta {
+    let signer = index == 0 || account.is_signer;
+    if account.is_writable {
+        AccountMeta::new(*account.key, signer)
+    } else {
+        AccountMeta::new_readonly(*account.key, signer)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -396,6 +400,8 @@ fn signed_delta_post_resource_digest(
 
 #[cfg(test)]
 mod tests {
+    use alloc::boxed::Box;
+
     use dclutch_claims_svm::{
         CallerRole,
         affine_batch_v2::{
@@ -416,6 +422,26 @@ mod tests {
 
     fn id(value: u8) -> [u8; 32] {
         [value; 32]
+    }
+
+    fn account_info(signer: bool, writable: bool) -> AccountInfo<'static> {
+        let key = Box::leak(Box::new(Pubkey::new_unique()));
+        let owner = Box::leak(Box::new(Pubkey::new_unique()));
+        let lamports = Box::leak(Box::new(0_u64));
+        let data = Box::leak(Vec::<u8>::new().into_boxed_slice());
+        AccountInfo::new(key, signer, writable, lamports, data, owner, false)
+    }
+
+    #[test]
+    fn authority_signing_is_added_and_existing_actor_signer_is_preserved() {
+        let authority = account_info(false, false);
+        let ordinary = account_info(false, true);
+        let actor = account_info(true, false);
+
+        assert!(child_account_meta_v3(0, &authority).is_signer);
+        assert!(!child_account_meta_v3(1, &ordinary).is_signer);
+        assert!(child_account_meta_v3(3, &actor).is_signer);
+        assert!(!child_account_meta_v3(3, &ordinary).is_signer);
     }
 
     fn position(action: ProtocolPositionActionV2) -> ProtocolPositionRequestV2 {
