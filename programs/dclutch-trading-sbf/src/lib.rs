@@ -33,6 +33,8 @@ pub mod execution_strategy_v2;
 /// General family projection behind the common data-defined Trading boundary.
 #[cfg(feature = "families")]
 pub mod general;
+/// Family-neutral native-signature evidence authentication and register seeding.
+pub mod native_signature;
 /// Family-neutral executable Core-to-Trading boundary.
 pub mod outer;
 /// Series family projection behind the common data-defined Trading boundary.
@@ -55,6 +57,8 @@ pub enum TradingSbfError {
     Transition = 4,
     /// A projected physical mutation or account write could not commit.
     Commit = 5,
+    /// Instructions-sysvar or native-signature evidence was not exact.
+    NativeSignature = 6,
 }
 
 impl From<TradingSbfError> for ProgramError {

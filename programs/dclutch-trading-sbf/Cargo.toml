@@ -47,11 +47,13 @@ dclutch-market-core-codec = { path = "../../crates/dclutch-market-core-codec" }
 dclutch-registry-svm = { path = "../../crates/dclutch-registry-svm" }
 dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }
 dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }
+dclutch-request-profile-contract = { path = "../../crates/dclutch-request-profile-contract" }
 dclutch-release-set-contract = { path = "../../crates/dclutch-release-set-contract" }
 dclutch-series-v3-kernel = { path = "../../crates/dclutch-series-v3-kernel" }
 dclutch-transition-vm = { path = "../../crates/dclutch-transition-vm" }
 dclutch-token-svm = { path = "../../crates/dclutch-token-svm", optional = true }
 solana-program = { version = "=3.0.0", default-features = false }
+solana-instructions-sysvar = "=3.0.1"
 solana-sdk-ids = "=3.1.0"
 solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
 
