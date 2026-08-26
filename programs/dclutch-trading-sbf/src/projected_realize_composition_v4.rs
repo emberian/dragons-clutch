@@ -287,13 +287,17 @@ fn prepare(
         request_digest,
         &child_accounts,
     )?;
-    let state_data = child_accounts[STATE]
+    let state_account = account_at(&child_accounts, STATE)?;
+    let rent_credit_account = account_at(&child_accounts, RENT_CREDIT)?;
+    let hoard_account = account_at(&child_accounts, HOARD)?;
+    let market_account = account_at(&child_accounts, MARKET)?;
+    let state_data = state_account
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Content)?;
     let state =
         ProjectedCustodyStateV1::decode(&state_data).map_err(|_| TradingSbfError::Content)?;
     drop(state_data);
-    let market_data = child_accounts[MARKET]
+    let market_data = market_account
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Content)?;
     let market_state = CoreState::decode(&market_data).map_err(|_| TradingSbfError::Content)?;
@@ -306,7 +310,7 @@ fn prepare(
             market_state,
             market_digest,
             request.amount,
-            child_accounts[RENT_CREDIT].key.to_bytes(),
+            rent_credit_account.key.to_bytes(),
         )
         .map_err(|_| TradingSbfError::Content)?;
     let expected_receipt_bytes = expected_receipt
@@ -318,7 +322,7 @@ fn prepare(
         hash(&expected_receipt_bytes).to_bytes(),
     )
     .map_err(|_| TradingSbfError::Content)?;
-    let hoard_data = child_accounts[HOARD]
+    let hoard_data = hoard_account
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Content)?;
     let hoard_digest = hash(&hoard_data).to_bytes();
@@ -334,11 +338,11 @@ fn prepare(
         expected_replay,
         authority_seeds,
         authority_bump,
-        state_lamports: child_accounts[STATE].lamports(),
-        rent_credit_lamports: child_accounts[RENT_CREDIT].lamports(),
+        state_lamports: state_account.lamports(),
+        rent_credit_lamports: rent_credit_account.lamports(),
         market_digest,
         hoard_digest,
-        hoard_lamports: child_accounts[HOARD].lamports(),
+        hoard_lamports: hoard_account.lamports(),
     })
 }
 
@@ -420,6 +424,8 @@ fn authenticate_frame(
     request_digest: [u8; 32],
     accounts: &[AccountInfo<'_>],
 ) -> Result<(), ProgramError> {
+    let state_account = account_at(accounts, STATE)?;
+    let market_account = account_at(accounts, MARKET)?;
     let state = Pubkey::find_program_address(
         &ProjectedCustodyStateSeedsV1::from_request(request).as_slices(),
         custody_program.key,
@@ -462,10 +468,10 @@ fn authenticate_frame(
             .zip(expected)
             .any(|(account, key)| key.is_some_and(|key| account.key != &key))
         || !exact_privileges(accounts)
-        || accounts[STATE].owner != custody_program.key
-        || accounts[STATE].data_len() != PROJECTED_CUSTODY_STATE_BYTES_V1
-        || accounts[MARKET].owner.to_bytes() != request.core_program
-        || accounts[MARKET].data_len() != STATE_BYTES
+        || state_account.owner != custody_program.key
+        || state_account.data_len() != PROJECTED_CUSTODY_STATE_BYTES_V1
+        || market_account.owner.to_bytes() != request.core_program
+        || market_account.data_len() != STATE_BYTES
     {
         return Err(TradingSbfError::Content.into());
     }
@@ -497,9 +503,13 @@ fn authenticate_result(
     custody_program: Pubkey,
     raw_receipt: [u8; PROJECTED_CUSTODY_RECEIPT_BYTES_V1],
 ) -> Result<(), ProgramError> {
+    let state_account = account_at(accounts, STATE)?;
+    let rent_credit_account = account_at(accounts, RENT_CREDIT)?;
+    let hoard_account = account_at(accounts, HOARD)?;
+    let market_account = account_at(accounts, MARKET)?;
     let receipt =
         ProjectedCustodyReceiptV1::decode(&raw_receipt).map_err(|_| TradingSbfError::Transition)?;
-    let state_data = accounts[STATE]
+    let state_data = state_account
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Transition)?;
     let replay = CustodyReplayV1::decode(&state_data).map_err(|_| TradingSbfError::Transition)?;
@@ -507,11 +517,11 @@ fn authenticate_result(
         .expected_replay
         .to_bytes()
         .map_err(|_| TradingSbfError::Transition)?;
-    let market_data = accounts[MARKET]
+    let market_data = market_account
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Transition)?;
     let market_digest = hash(&market_data).to_bytes();
-    let hoard_data = accounts[HOARD]
+    let hoard_data = hoard_account
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Transition)?;
     let hoard_digest = hash(&hoard_data).to_bytes();
@@ -524,17 +534,24 @@ fn authenticate_result(
             != raw_receipt
         || replay != prepared.expected_replay
         || state_data.as_ref() != replay_bytes
-        || accounts[STATE].owner != &custody_program
-        || accounts[STATE].data_len() != CUSTODY_REPLAY_BYTES_V1
-        || accounts[STATE].lamports() != prepared.state_lamports
-        || accounts[RENT_CREDIT].lamports() != prepared.rent_credit_lamports
+        || state_account.owner != &custody_program
+        || state_account.data_len() != CUSTODY_REPLAY_BYTES_V1
+        || state_account.lamports() != prepared.state_lamports
+        || rent_credit_account.lamports() != prepared.rent_credit_lamports
         || market_digest != prepared.market_digest
-        || accounts[HOARD].lamports() != prepared.hoard_lamports
+        || hoard_account.lamports() != prepared.hoard_lamports
         || hoard_digest != prepared.hoard_digest
     {
         return Err(TradingSbfError::Transition.into());
     }
     Ok(())
+}
+
+fn account_at<'accounts, 'info>(
+    accounts: &'accounts [AccountInfo<'info>],
+    index: usize,
+) -> Result<&'accounts AccountInfo<'info>, ProgramError> {
+    accounts.get(index).ok_or(TradingSbfError::Content.into())
 }
 
 #[cfg(test)]
