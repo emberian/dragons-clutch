@@ -8,10 +8,10 @@
 
 use dclutch_capability_program_contract::set_v1::CapabilityProgramSetV1;
 use dclutch_core_contract::ContentId;
-use solana_program::hash::hash;
+use solana_program::{hash::hash, pubkey::Pubkey};
 
-use super::v3_multi_lp::DealerLpPositionV3;
-use super::v3_obligation::DealerObligationProjectionV3;
+use super::v3_multi_lp::{DEALER_LP_POSITION_PDA_DOMAIN_V3, DealerLpPositionV3};
+use super::v3_obligation::{DEALER_OBLIGATION_PDA_DOMAIN_V3, DealerObligationProjectionV3};
 
 /// Exact unsigned multi-LP request width.
 pub const DEALER_MULTI_LP_REQUEST_BYTES_V3: usize = 320;
@@ -39,6 +39,8 @@ pub enum MultiLpRequestActionV3 {
 /// Stable refusal from unsigned request construction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MultiLpOperatorErrorV3 {
+    /// Exact request bytes, reserved fields, or action invariants refused.
+    InvalidRequest,
     /// The authenticated chain projection was internally inconsistent.
     InvalidProjection,
     /// The economic choice was not admitted in the current lifecycle state.
@@ -50,6 +52,8 @@ pub enum MultiLpOperatorErrorV3 {
 /// Authenticated chain snapshot for one request-construction batch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MultiLpChainProjectionV3<'a> {
+    /// Current Registry-selected Trading program which owns both Dealer PDAs.
+    pub trading_program: [u8; 32],
     /// Immutable execution release set.
     pub release_set: [u8; 32],
     /// Logical Core Market.
@@ -83,6 +87,148 @@ pub struct UnsignedMultiLpRequestV3 {
     selected_program: ContentId,
 }
 
+/// Hostile-decoded canonical multi-LP request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DealerMultiLpRequestV3 {
+    /// Requested lifecycle action.
+    pub action: MultiLpRequestActionV3,
+    /// Immutable release set.
+    pub release_set: [u8; 32],
+    /// Logical Core Market.
+    pub market: [u8; 32],
+    /// Immutable Trading child root.
+    pub child_root: [u8; 32],
+    /// Canonical Trading-owned LP Position PDA.
+    pub lp_position: [u8; 32],
+    /// LP authority and external capital owner.
+    pub lp_owner: [u8; 32],
+    /// Canonical Trading-owned obligation PDA.
+    pub obligation: [u8; 32],
+    /// Optimistic digest of the exact obligation prestate.
+    pub obligation_digest: [u8; 32],
+    /// Optimistic digest of the exact LP Position prestate; zero only for Open.
+    pub lp_digest: [u8; 32],
+    /// Exact present collateral/share quantity; zero only for Open and Close.
+    pub amount: u64,
+    /// Optimistic obligation revision.
+    pub obligation_revision: u64,
+    /// Optimistic LP Position revision; zero only for Open.
+    pub lp_revision: u64,
+    /// Current Core Market generation.
+    pub generation: u64,
+    /// Last admitted slot/time coordinate.
+    pub expires_at: u64,
+}
+
+impl DealerMultiLpRequestV3 {
+    /// Hostile-decode one exact request and enforce action-dependent canonicality.
+    pub fn decode(bytes: &[u8]) -> Result<Self, MultiLpOperatorErrorV3> {
+        if bytes.len() != DEALER_MULTI_LP_REQUEST_BYTES_V3
+            || bytes.get(..8) != Some(DEALER_MULTI_LP_REQUEST_MAGIC_V3.as_slice())
+            || read_u16(bytes, 8)? != DEALER_MULTI_LP_REQUEST_VERSION_V3
+            || bytes.get(12..16).is_none_or(|value| value != [0; 4])
+            || bytes
+                .get(312..320)
+                .is_none_or(|value| value.iter().any(|byte| *byte != 0))
+        {
+            return Err(MultiLpOperatorErrorV3::InvalidRequest);
+        }
+        let action = match read_u16(bytes, 10)? {
+            1 => MultiLpRequestActionV3::Open,
+            2 => MultiLpRequestActionV3::Add,
+            3 => MultiLpRequestActionV3::Remove,
+            4 => MultiLpRequestActionV3::Close,
+            _ => return Err(MultiLpOperatorErrorV3::InvalidRequest),
+        };
+        let value = Self {
+            action,
+            release_set: read_identity(bytes, 16)?,
+            market: read_identity(bytes, 48)?,
+            child_root: read_identity(bytes, 80)?,
+            lp_position: read_identity(bytes, 112)?,
+            lp_owner: read_identity(bytes, 144)?,
+            obligation: read_identity(bytes, 176)?,
+            obligation_digest: read_identity(bytes, 208)?,
+            lp_digest: read_identity_or_zero(bytes, 240)?,
+            amount: read_u64(bytes, 272)?,
+            obligation_revision: read_u64(bytes, 280)?,
+            lp_revision: read_u64(bytes, 288)?,
+            generation: read_u64(bytes, 296)?,
+            expires_at: read_u64(bytes, 304)?,
+        };
+        if value.obligation_revision == 0 || value.generation == 0 {
+            return Err(MultiLpOperatorErrorV3::InvalidRequest);
+        }
+        let action_is_canonical = match action {
+            MultiLpRequestActionV3::Open => {
+                value.amount == 0 && value.lp_revision == 0 && value.lp_digest == [0; 32]
+            }
+            MultiLpRequestActionV3::Add | MultiLpRequestActionV3::Remove => {
+                value.amount != 0 && value.lp_revision != 0 && value.lp_digest != [0; 32]
+            }
+            MultiLpRequestActionV3::Close => {
+                value.amount == 0 && value.lp_revision != 0 && value.lp_digest != [0; 32]
+            }
+        };
+        if !action_is_canonical {
+            return Err(MultiLpOperatorErrorV3::InvalidRequest);
+        }
+        Ok(value)
+    }
+}
+
+/// Rejoin decoded request bytes to a current authenticated chain projection.
+///
+/// This is the physical adapter boundary used before any account creation,
+/// Custody route, or Trading-owned write. It independently derives both PDAs,
+/// rechecks every optimistic digest/revision, and applies the current expiry
+/// and terminal lifecycle rules.
+pub fn authenticate_multi_lp_request_v3(
+    request: DealerMultiLpRequestV3,
+    chain: MultiLpChainProjectionV3<'_>,
+) -> Result<(), MultiLpOperatorErrorV3> {
+    validate_projection(chain, request.lp_owner)?;
+    if request.release_set != chain.release_set
+        || request.market != chain.market
+        || request.child_root != chain.child_root
+        || request.lp_position != chain.lp_position_address
+        || request.obligation != chain.obligation_address
+        || request.obligation_digest != chain.obligation.state_digest()
+        || request.obligation_revision != chain.obligation.revision()
+        || request.generation != chain.generation
+        || request.expires_at != chain.expires_at
+        || chain.now > request.expires_at
+    {
+        return Err(MultiLpOperatorErrorV3::InvalidProjection);
+    }
+    match request.action {
+        MultiLpRequestActionV3::Open => {
+            if chain.terminal || chain.lp_position.is_some() || chain.lp_position_bytes.is_some() {
+                return Err(MultiLpOperatorErrorV3::InvalidChoice);
+            }
+        }
+        MultiLpRequestActionV3::Add => {
+            if chain.terminal {
+                return Err(MultiLpOperatorErrorV3::InvalidChoice);
+            }
+            authenticate_current_lp(request, chain)?;
+        }
+        MultiLpRequestActionV3::Remove => {
+            let lp = authenticate_current_lp(request, chain)?;
+            if request.amount > lp.principal_shares {
+                return Err(MultiLpOperatorErrorV3::InvalidChoice);
+            }
+        }
+        MultiLpRequestActionV3::Close => {
+            let lp = authenticate_current_lp(request, chain)?;
+            if lp.principal_shares != 0 {
+                return Err(MultiLpOperatorErrorV3::InvalidChoice);
+            }
+        }
+    }
+    Ok(())
+}
+
 impl UnsignedMultiLpRequestV3 {
     /// Borrow the exact request bytes for wallet signing.
     pub const fn as_bytes(&self) -> &[u8; DEALER_MULTI_LP_REQUEST_BYTES_V3] {
@@ -101,7 +247,11 @@ pub fn build_open_lp_v3(
     lp_owner: [u8; 32],
     set: CapabilityProgramSetV1<'_>,
 ) -> Result<UnsignedMultiLpRequestV3, MultiLpOperatorErrorV3> {
-    if chain.lp_position.is_some() || chain.lp_position_bytes.is_some() || lp_owner == [0; 32] {
+    if chain.terminal
+        || chain.lp_position.is_some()
+        || chain.lp_position_bytes.is_some()
+        || lp_owner == [0; 32]
+    {
         return Err(MultiLpOperatorErrorV3::InvalidChoice);
     }
     build(chain, lp_owner, MultiLpRequestActionV3::Open, 0, set)
@@ -173,24 +323,7 @@ fn build(
     amount: u64,
     set: CapabilityProgramSetV1<'_>,
 ) -> Result<UnsignedMultiLpRequestV3, MultiLpOperatorErrorV3> {
-    for identity in [
-        chain.release_set,
-        chain.market,
-        chain.child_root,
-        chain.lp_position_address,
-        lp_owner,
-        chain.obligation_address,
-    ] {
-        if identity == [0; 32] {
-            return Err(MultiLpOperatorErrorV3::InvalidProjection);
-        }
-    }
-    if chain.expires_at < chain.now
-        || chain.obligation.child_root() != chain.child_root
-        || chain.generation == 0
-    {
-        return Err(MultiLpOperatorErrorV3::InvalidProjection);
-    }
+    validate_projection(chain, lp_owner)?;
     let (lp_revision, lp_digest) = match chain.lp_position_bytes {
         Some(bytes) => (
             chain
@@ -230,8 +363,311 @@ fn build(
     let selected_program = set
         .select(&bytes)
         .map_err(|_| MultiLpOperatorErrorV3::ProgramSelection)?;
+    let request = DealerMultiLpRequestV3::decode(&bytes)?;
+    authenticate_multi_lp_request_v3(request, chain)?;
     Ok(UnsignedMultiLpRequestV3 {
         bytes,
         selected_program,
     })
+}
+
+fn validate_projection(
+    chain: MultiLpChainProjectionV3<'_>,
+    lp_owner: [u8; 32],
+) -> Result<(), MultiLpOperatorErrorV3> {
+    for identity in [
+        chain.trading_program,
+        chain.release_set,
+        chain.market,
+        chain.child_root,
+        chain.lp_position_address,
+        lp_owner,
+        chain.obligation_address,
+    ] {
+        if identity == [0; 32] {
+            return Err(MultiLpOperatorErrorV3::InvalidProjection);
+        }
+    }
+    if chain.expires_at < chain.now
+        || chain.obligation.child_root() != chain.child_root
+        || chain.generation == 0
+    {
+        return Err(MultiLpOperatorErrorV3::InvalidProjection);
+    }
+    let trading = Pubkey::new_from_array(chain.trading_program);
+    let expected_obligation = Pubkey::find_program_address(
+        &[DEALER_OBLIGATION_PDA_DOMAIN_V3, &chain.child_root],
+        &trading,
+    )
+    .0
+    .to_bytes();
+    let expected_lp = Pubkey::find_program_address(
+        &[
+            DEALER_LP_POSITION_PDA_DOMAIN_V3,
+            &chain.child_root,
+            &lp_owner,
+        ],
+        &trading,
+    )
+    .0
+    .to_bytes();
+    if chain.obligation_address != expected_obligation || chain.lp_position_address != expected_lp {
+        return Err(MultiLpOperatorErrorV3::InvalidProjection);
+    }
+    Ok(())
+}
+
+fn authenticate_current_lp(
+    request: DealerMultiLpRequestV3,
+    chain: MultiLpChainProjectionV3<'_>,
+) -> Result<DealerLpPositionV3, MultiLpOperatorErrorV3> {
+    let lp = current_lp(chain)?;
+    let bytes = chain
+        .lp_position_bytes
+        .ok_or(MultiLpOperatorErrorV3::InvalidProjection)?;
+    if lp.lp_owner != request.lp_owner
+        || lp.revision != request.lp_revision
+        || hash(bytes).to_bytes() != request.lp_digest
+    {
+        return Err(MultiLpOperatorErrorV3::InvalidProjection);
+    }
+    Ok(lp)
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, MultiLpOperatorErrorV3> {
+    bytes
+        .get(offset..offset + 2)
+        .and_then(|value| value.try_into().ok())
+        .map(u16::from_le_bytes)
+        .ok_or(MultiLpOperatorErrorV3::InvalidRequest)
+}
+
+fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, MultiLpOperatorErrorV3> {
+    bytes
+        .get(offset..offset + 8)
+        .and_then(|value| value.try_into().ok())
+        .map(u64::from_le_bytes)
+        .ok_or(MultiLpOperatorErrorV3::InvalidRequest)
+}
+
+fn read_identity(bytes: &[u8], offset: usize) -> Result<[u8; 32], MultiLpOperatorErrorV3> {
+    let value = read_identity_or_zero(bytes, offset)?;
+    if value == [0; 32] {
+        Err(MultiLpOperatorErrorV3::InvalidRequest)
+    } else {
+        Ok(value)
+    }
+}
+
+fn read_identity_or_zero(bytes: &[u8], offset: usize) -> Result<[u8; 32], MultiLpOperatorErrorV3> {
+    bytes
+        .get(offset..offset + 32)
+        .and_then(|value| value.try_into().ok())
+        .ok_or(MultiLpOperatorErrorV3::InvalidRequest)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dealer::{
+        v3_multi_lp::DEALER_LP_POSITION_BYTES_V3,
+        v3_obligation::{
+            DEALER_OBLIGATION_HEADER_BYTES_V3, DEALER_OBLIGATION_MAGIC_V3,
+            DEALER_OBLIGATION_VERSION_V3,
+        },
+    };
+
+    fn program_set(action: MultiLpRequestActionV3) -> std::vec::Vec<u8> {
+        let mut bytes = std::vec![0; 72];
+        bytes[..8].copy_from_slice(b"DCLTCPS1");
+        bytes[8..10].copy_from_slice(&1_u16.to_le_bytes());
+        bytes[10..12].copy_from_slice(&1_u16.to_le_bytes());
+        bytes[12..16].copy_from_slice(&DEALER_MULTI_LP_ACTION_SELECTOR_OFFSET_V3.to_le_bytes());
+        bytes[16] = 2;
+        bytes[18..20].copy_from_slice(&1_u16.to_le_bytes());
+        bytes[32..36].copy_from_slice(&(action as u32).to_le_bytes());
+        bytes[36..68].copy_from_slice(&[42; 32]);
+        bytes
+    }
+
+    fn obligation_bytes(child_root: [u8; 32]) -> std::vec::Vec<u8> {
+        let mut bytes = std::vec![0; DEALER_OBLIGATION_HEADER_BYTES_V3 + 16];
+        bytes[..8].copy_from_slice(&DEALER_OBLIGATION_MAGIC_V3);
+        bytes[8..10].copy_from_slice(&DEALER_OBLIGATION_VERSION_V3.to_le_bytes());
+        bytes[12..16].copy_from_slice(&2_u32.to_le_bytes());
+        bytes[16..24].copy_from_slice(&7_u64.to_le_bytes());
+        for (offset, identity) in [
+            (24, [2; 32]),
+            (56, [3; 32]),
+            (88, [4; 32]),
+            (120, [5; 32]),
+            (152, child_root),
+        ] {
+            bytes[offset..offset + 32].copy_from_slice(&identity);
+        }
+        bytes[184..192].copy_from_slice(&10_u64.to_le_bytes());
+        bytes[192..200].copy_from_slice(&20_u64.to_le_bytes());
+        bytes[200..208].copy_from_slice(&21_u64.to_le_bytes());
+        bytes
+    }
+
+    fn lp_bytes(
+        release_set: [u8; 32],
+        market: [u8; 32],
+        child_root: [u8; 32],
+        owner: [u8; 32],
+        obligation: [u8; 32],
+        shares: u64,
+    ) -> [u8; DEALER_LP_POSITION_BYTES_V3] {
+        let mut bytes = [0; DEALER_LP_POSITION_BYTES_V3];
+        DealerLpPositionV3 {
+            revision: 3,
+            release_set,
+            market,
+            child_root,
+            lp_owner: owner,
+            rent_refund: [9; 32],
+            obligation_account: obligation,
+            principal_shares: shares,
+            generation: 11,
+        }
+        .encode_into(&mut bytes)
+        .expect("LP state");
+        bytes
+    }
+
+    #[test]
+    fn open_is_chain_derived_and_hostile_bytes_refuse() {
+        let trading_program = [1; 32];
+        let release_set = [6; 32];
+        let market = [2; 32];
+        let child_root = [7; 32];
+        let lp_owner = [8; 32];
+        let trading = Pubkey::new_from_array(trading_program);
+        let obligation_address =
+            Pubkey::find_program_address(&[DEALER_OBLIGATION_PDA_DOMAIN_V3, &child_root], &trading)
+                .0
+                .to_bytes();
+        let lp_position_address = Pubkey::find_program_address(
+            &[DEALER_LP_POSITION_PDA_DOMAIN_V3, &child_root, &lp_owner],
+            &trading,
+        )
+        .0
+        .to_bytes();
+        let obligation_bytes = obligation_bytes(child_root);
+        let obligation =
+            DealerObligationProjectionV3::decode(&obligation_bytes).expect("obligation");
+        let chain = MultiLpChainProjectionV3 {
+            trading_program,
+            release_set,
+            market,
+            child_root,
+            lp_position_address,
+            lp_position: None,
+            lp_position_bytes: None,
+            obligation,
+            obligation_address,
+            generation: 11,
+            now: 20,
+            expires_at: 25,
+            terminal: false,
+        };
+        let set_bytes = program_set(MultiLpRequestActionV3::Open);
+        let set = CapabilityProgramSetV1::decode(&set_bytes).expect("set");
+        let unsigned = build_open_lp_v3(chain, lp_owner, set).expect("open");
+        let request = DealerMultiLpRequestV3::decode(unsigned.as_bytes()).expect("request");
+        assert_eq!(request.action, MultiLpRequestActionV3::Open);
+        assert_eq!(request.lp_position, lp_position_address);
+        assert_eq!(request.obligation, obligation_address);
+        assert_eq!(unsigned.selected_program().to_bytes(), [42; 32]);
+
+        for index in [0, 8, 12, 312] {
+            let mut hostile = *unsigned.as_bytes();
+            hostile[index] ^= 1;
+            assert!(DealerMultiLpRequestV3::decode(&hostile).is_err());
+        }
+        for substitute in [
+            |value: &mut DealerMultiLpRequestV3| value.lp_position[0] ^= 1,
+            |value: &mut DealerMultiLpRequestV3| value.obligation_digest[0] ^= 1,
+        ] {
+            let mut substituted = request;
+            substitute(&mut substituted);
+            assert_eq!(
+                authenticate_multi_lp_request_v3(substituted, chain),
+                Err(MultiLpOperatorErrorV3::InvalidProjection)
+            );
+        }
+    }
+
+    #[test]
+    fn add_remove_and_terminal_rules_bind_current_lp() {
+        let trading_program = [1; 32];
+        let release_set = [6; 32];
+        let market = [2; 32];
+        let child_root = [7; 32];
+        let lp_owner = [8; 32];
+        let trading = Pubkey::new_from_array(trading_program);
+        let obligation_address =
+            Pubkey::find_program_address(&[DEALER_OBLIGATION_PDA_DOMAIN_V3, &child_root], &trading)
+                .0
+                .to_bytes();
+        let lp_position_address = Pubkey::find_program_address(
+            &[DEALER_LP_POSITION_PDA_DOMAIN_V3, &child_root, &lp_owner],
+            &trading,
+        )
+        .0
+        .to_bytes();
+        let obligation_bytes = obligation_bytes(child_root);
+        let obligation =
+            DealerObligationProjectionV3::decode(&obligation_bytes).expect("obligation");
+        let lp_bytes = lp_bytes(
+            release_set,
+            market,
+            child_root,
+            lp_owner,
+            obligation_address,
+            10,
+        );
+        let lp = DealerLpPositionV3::decode(&lp_bytes).expect("LP");
+        let chain = MultiLpChainProjectionV3 {
+            trading_program,
+            release_set,
+            market,
+            child_root,
+            lp_position_address,
+            lp_position: Some(lp),
+            lp_position_bytes: Some(&lp_bytes),
+            obligation,
+            obligation_address,
+            generation: 11,
+            now: 20,
+            expires_at: 25,
+            terminal: false,
+        };
+        let add_set_bytes = program_set(MultiLpRequestActionV3::Add);
+        let add_set = CapabilityProgramSetV1::decode(&add_set_bytes).expect("set");
+        let add = build_add_lp_v3(chain, 4, add_set).expect("add");
+        assert_eq!(
+            DealerMultiLpRequestV3::decode(add.as_bytes())
+                .expect("request")
+                .amount,
+            4
+        );
+
+        let remove_set_bytes = program_set(MultiLpRequestActionV3::Remove);
+        let remove_set = CapabilityProgramSetV1::decode(&remove_set_bytes).expect("set");
+        assert!(build_remove_lp_v3(chain, 10, remove_set).is_ok());
+        assert_eq!(
+            build_remove_lp_v3(chain, 11, remove_set),
+            Err(MultiLpOperatorErrorV3::InvalidChoice)
+        );
+
+        let mut terminal = chain;
+        terminal.terminal = true;
+        assert_eq!(
+            build_add_lp_v3(terminal, 1, add_set),
+            Err(MultiLpOperatorErrorV3::InvalidChoice)
+        );
+        assert!(build_remove_lp_v3(terminal, 1, remove_set).is_ok());
+    }
 }
