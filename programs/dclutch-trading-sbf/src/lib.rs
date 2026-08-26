@@ -22,6 +22,9 @@ use solana_program::{
 /// Ephemeral exact prior-child receipt retention for the common Hot executor.
 mod child_receipt_v3;
 
+/// Family-neutral authoritative admitted-AOT candidate CPI.
+pub mod admitted_composition_v3;
+
 /// Family-neutral EffectProgram V3 composition for canonical Claims CPIs.
 #[cfg(feature = "families")]
 pub mod claims_composition_v3;
