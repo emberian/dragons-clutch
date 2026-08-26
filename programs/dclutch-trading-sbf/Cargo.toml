@@ -39,6 +39,7 @@ dclutch-custody-contract = { path = "../../crates/dclutch-custody-contract", opt
 dclutch-dealer-codec = { path = "../../crates/dclutch-dealer-codec", optional = true }
 dclutch-economic-slice-kernel = { path = "../../crates/dclutch-economic-slice-kernel", optional = true }
 dclutch-effect-kernel = { path = "../../crates/dclutch-effect-kernel" }
+dclutch-execution-strategy-contract = { path = "../../crates/dclutch-execution-strategy-contract" }
 dclutch-general-adapter-contract = { path = "../../crates/dclutch-general-adapter-contract", optional = true }
 dclutch-general-codec = { path = "../../crates/dclutch-general-codec", optional = true }
 dclutch-general-config-contract = { path = "../../crates/dclutch-general-config-contract", optional = true }

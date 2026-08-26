@@ -28,6 +28,8 @@ pub mod claims_composition_v3;
 pub mod dealer;
 /// Manifest-, root-, release-, and descriptor-authenticated generic dispatch.
 pub mod dispatch;
+/// Registry-authenticated family-neutral Execution Strategy V2 admission.
+pub mod execution_strategy_v2;
 /// General family projection behind the common data-defined Trading boundary.
 #[cfg(feature = "families")]
 pub mod general;

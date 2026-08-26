@@ -935,6 +935,7 @@ dependencies = [
  "dclutch-direct-codec",
  "dclutch-economic-slice-kernel",
  "dclutch-effect-kernel",
+ "dclutch-execution-strategy-contract",
  "dclutch-general-adapter-contract",
  "dclutch-general-codec",
  "dclutch-general-config-contract",
