@@ -2689,6 +2689,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-structured-v2-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-fractional-claim-kernel",
+ "dclutch-structured-v2-kernel",
+ "sha2 0.10.9",
+]
+
+[[package]]
+name = "dclutch-structured-v2-kernel"
+version = "0.1.0"
+dependencies = [
+ "dclutch-fractional-claim-kernel",
+ "sha2 0.10.9",
+]
+
+[[package]]
+name = "dclutch-structured-v2-operator"
+version = "0.1.0"
+dependencies = [
+ "dclutch-fractional-claim-kernel",
+ "dclutch-structured-v2-contract",
+ "dclutch-structured-v2-kernel",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "dclutch-terminal-contract"
 version = "0.1.0"
 dependencies = [
