@@ -14,10 +14,12 @@ use alloc::{boxed::Box, vec, vec::Vec};
 use dclutch_account_profile_contract::{
     AccountObservationV1,
     lifecycle_v3::{
-        AuthenticatedRentCreditV3, AuthenticatedRentMinimumV3, LifecycleContextV3,
-        LifecycleOperationV3, LifecycleRegistersV3,
-        SCHEMA_RELEASE_ID as STATE_LIFECYCLE_POLICY_SCHEMA_ID_V3, SeedValueV3,
-        StateLifecyclePlanV3, StateLifecyclePolicyV3, plan_lifecycle,
+        AuthenticatedRentCreditV3, AuthenticatedRentMinimumV3, CoordinateScopeV3,
+        LifecycleContextV3, LifecycleOperationV3, LifecycleProtectedRegisterBuffersV3,
+        LifecycleRegisterKindV3, LifecycleRegisterTargetV3, LifecycleRegistersV3,
+        LifecycleSeedInputValueV3,
+        SUCCESSOR_SCHEMA_RELEASE_ID as STATE_LIFECYCLE_POLICY_SCHEMA_ID_V4, StateLifecyclePlanV3,
+        StateLifecyclePolicyV4, plan_lifecycle_with_protected_outputs_atomic,
     },
     v2::{
         AccountProfileV2, ProjectionRegistersV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2,
@@ -92,7 +94,8 @@ use dclutch_registry_svm::{AuthenticatedRoleReceiptV1, RegistryInstructionV1};
 use dclutch_release_set_contract::ExecutionRoleV1;
 use dclutch_rent_contract::{RENT_CREDIT_BYTES_V1, RentCreditV1};
 use dclutch_request_profile_contract::{
-    ProjectionRegistersV1, RequestProfileV1, SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1,
+    ProjectionRegisterKindV1, ProjectionRegisterSpaceV1, ProjectionRegistersV1, ProjectionTargetV1,
+    RequestProfileV1, SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1,
     project_atomic as project_request_atomic,
     v2::{NativeSignatureRegistersV1, REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID, RequestProfileV2},
     v3::{
@@ -101,8 +104,9 @@ use dclutch_request_profile_contract::{
     },
 };
 use dclutch_transition_vm::v3::{
-    ProgramV3 as TransitionProgramV3, RegisterInput, RegisterOutput,
-    SCHEMA_RELEASE_ID as TRANSITION_SCHEMA_ID_V3, execute_fold_atomic,
+    ProgramV3 as TransitionProgramV3, RegisterInput, RegisterKindV3, RegisterOutput,
+    RegisterSpaceV3, RegisterWriteTargetV3, SCHEMA_RELEASE_ID as TRANSITION_SCHEMA_ID_V3,
+    execute_fold_atomic,
 };
 use solana_program::{
     account_info::AccountInfo,
@@ -176,6 +180,7 @@ const MAX_HOT_RUNTIME_ACCOUNTS_V3: usize = 256;
 const MAX_HOT_SCALARS_V3: usize = 512;
 const MAX_HOT_IDENTITIES_V3: usize = 128;
 const MAX_HOT_REQUEST_BYTES_V3: usize = 8_192;
+const HOT_LINKED_BASIS_LOGICAL_ACCOUNT_V3: usize = 4;
 
 const EXECUTION_DIGEST_DOMAIN_V3: &[u8] = b"dclutch:hot-execution:v3";
 const CHILD_EXECUTION_DIGEST_DOMAIN_V3: &[u8] = b"dclutch:hot-child-execution:v3";
@@ -317,10 +322,10 @@ pub fn process_hot_execution_v3(
         frame.lifecycle_raw,
         frame.lifecycle_staging,
         &rent,
-        STATE_LIFECYCLE_POLICY_SCHEMA_ID_V3,
+        STATE_LIFECYCLE_POLICY_SCHEMA_ID_V4,
         descriptor.derivation_policy().to_bytes(),
     )?;
-    let lifecycle = StateLifecyclePolicyV3::decode_selected(
+    let lifecycle = StateLifecyclePolicyV4::decode_selected(
         descriptor.derivation_policy().to_bytes(),
         hash(&lifecycle_data).to_bytes(),
         &lifecycle_data,
@@ -470,19 +475,34 @@ pub fn process_hot_execution_v3(
                     .content_digest
                     .to_bytes(),
             );
-            AccountObservationV1::new(
-                key,
-                account.owner.to_bytes(),
-                account.lamports(),
-                data.as_ref(),
-                account.is_signer,
-                account.is_writable,
-                account.executable,
-            )
+            if coordinate == HOT_LINKED_BASIS_LOGICAL_ACCOUNT_V3 {
+                // The Product-runtime reader above authenticated Registry
+                // finality, schema, content digest, and the Product-owned
+                // semantic basis before this observation is constructed.
+                AccountObservationV1::new_adapter_authenticated_variable_data(
+                    key,
+                    account.owner.to_bytes(),
+                    account.lamports(),
+                    data.as_ref(),
+                    account.is_signer,
+                    account.is_writable,
+                    account.executable,
+                )
+            } else {
+                AccountObservationV1::new(
+                    key,
+                    account.owner.to_bytes(),
+                    account.lamports(),
+                    data.as_ref(),
+                    account.is_signer,
+                    account.is_writable,
+                    account.executable,
+                )
+            }
         })
         .collect::<Vec<_>>();
 
-    let trusted_environment = observe_trusted_environment_v3(account_profile)?;
+    let trusted_environment = observe_trusted_environment_v3(account_profile, program_id)?;
     let tail_count = project_tail_count(
         account_profile,
         &observations,
@@ -516,11 +536,15 @@ pub fn process_hot_execution_v3(
     }
 
     let mut input_scalars = vec![0_u64; scalar_count];
-    seed_trusted_environment_v3(trusted_environment, &mut input_scalars)?;
     let mut input_identities = vec![[0_u8; 32]; identity_count];
     *input_identities
         .get_mut(HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3)
         .ok_or(TradingSbfError::Content)? = request_digest;
+    seed_trusted_environment_v3(
+        trusted_environment,
+        &mut input_scalars,
+        &mut input_identities,
+    )?;
     let mut account_scratch_scalars = input_scalars.clone();
     let mut account_scratch_identities = input_identities.clone();
     let mut account_output_scalars = input_scalars.clone();
@@ -539,7 +563,11 @@ pub fn process_hot_execution_v3(
         },
     )
     .map_err(|_| TradingSbfError::Content)?;
-    require_trusted_environment_v3(trusted_environment, &account_output_scalars)?;
+    require_trusted_environment_v3(
+        trusted_environment,
+        &account_output_scalars,
+        &account_output_identities,
+    )?;
 
     let mut signed_identities = account_output_identities.clone();
     if let RequestProfileKindV3::Signed(profile) = request_profile {
@@ -575,7 +603,43 @@ pub fn process_hot_execution_v3(
             output_identities: &mut request_output_identities,
         },
     )?;
-    require_trusted_environment_v3(trusted_environment, &request_output_scalars)?;
+    require_trusted_environment_v3(
+        trusted_environment,
+        &request_output_scalars,
+        &request_output_identities,
+    )?;
+    require_trusted_environment_register_ownership_v3(
+        account_profile,
+        request_profile,
+        transition,
+    )?;
+
+    require_lifecycle_register_ownership_v4(
+        lifecycle,
+        selected_action,
+        request_profile,
+        transition,
+    )?;
+    let aliases = (0..runtime_accounts.len())
+        .map(|coordinate| {
+            account_profile
+                .representative(tail_count, coordinate)
+                .map_err(|_| TradingSbfError::Content)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let preplanned_lifecycle = prepare_lifecycle_v4(
+        program_id,
+        lifecycle,
+        selected_action,
+        account_profile,
+        tail_count,
+        &observations,
+        &runtime_accounts,
+        &request_output_scalars,
+        &request_output_identities,
+        &rent,
+        &aliases,
+    )?;
 
     let candidate = if let Some(caller_authorities) = admitted_caller_authorities {
         execute_admitted_candidate_v3(AdmittedCandidateViewV3 {
@@ -595,20 +659,20 @@ pub fn process_hot_execution_v3(
             selected_program,
             selected_action,
             tail_count,
-            scalars: &request_output_scalars,
-            identities: &request_output_identities,
+            scalars: &preplanned_lifecycle.scalars,
+            identities: &preplanned_lifecycle.identities,
         })?
     } else {
-        let mut transition_scratch_scalars = request_output_scalars.clone();
-        let mut transition_scratch_identities = request_output_identities.clone();
-        let mut transition_output_scalars = request_output_scalars.clone();
-        let mut transition_output_identities = request_output_identities.clone();
+        let mut transition_scratch_scalars = preplanned_lifecycle.scalars.clone();
+        let mut transition_scratch_identities = preplanned_lifecycle.identities.clone();
+        let mut transition_output_scalars = preplanned_lifecycle.scalars.clone();
+        let mut transition_output_identities = preplanned_lifecycle.identities.clone();
         execute_fold_atomic(
             transition,
             tail_count,
             RegisterInput {
-                scalars: &request_output_scalars,
-                identities: &request_output_identities,
+                scalars: &preplanned_lifecycle.scalars,
+                identities: &preplanned_lifecycle.identities,
             },
             RegisterOutput {
                 scalars: &mut transition_scratch_scalars,
@@ -629,6 +693,11 @@ pub fn process_hot_execution_v3(
     let transition_output_scalars = candidate.scalars;
     let transition_output_identities = candidate.identities;
     let admitted_execution_digest = candidate.transcript_digest;
+    require_trusted_environment_v3(
+        trusted_environment,
+        &transition_output_scalars,
+        &transition_output_identities,
+    )?;
 
     require_borrowed_witness_coverage_v3(
         request_profile,
@@ -639,26 +708,6 @@ pub fn process_hot_execution_v3(
         family_request,
     )?;
 
-    let aliases = (0..runtime_accounts.len())
-        .map(|coordinate| {
-            account_profile
-                .representative(tail_count, coordinate)
-                .map_err(|_| TradingSbfError::Content)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let lifecycle_plans = prepare_lifecycle_v3(
-        program_id,
-        lifecycle,
-        selected_action,
-        account_profile,
-        tail_count,
-        &observations,
-        &runtime_accounts,
-        &transition_output_scalars,
-        &transition_output_identities,
-        &rent,
-        &aliases,
-    )?;
     let mut account_inputs = observations
         .iter()
         .map(|observation| AccountInput {
@@ -666,7 +715,7 @@ pub fn process_hot_execution_v3(
             data_len: observation.data().len(),
         })
         .collect::<Vec<_>>();
-    apply_lifecycle_candidates_v3(&lifecycle_plans, &aliases, &mut account_inputs)?;
+    apply_lifecycle_candidates_v3(&preplanned_lifecycle.plans, &aliases, &mut account_inputs)?;
     let mut permissions = vec![AccountPermission::read_only(); runtime_accounts.len()];
     derive_effect_permissions(account_profile, tail_count, &mut permissions)
         .map_err(|_| TradingSbfError::Content)?;
@@ -699,6 +748,34 @@ pub fn process_hot_execution_v3(
         &transition_output_identities,
         &aliases,
     )?;
+    let revalidated_lifecycle = prepare_lifecycle_v4(
+        program_id,
+        lifecycle,
+        selected_action,
+        account_profile,
+        tail_count,
+        &observations,
+        &runtime_accounts,
+        &transition_output_scalars,
+        &transition_output_identities,
+        &rent,
+        &aliases,
+    )?;
+    require_lifecycle_replan_agreement_v4(
+        &preplanned_lifecycle,
+        &revalidated_lifecycle,
+        &transition_output_scalars,
+        &transition_output_identities,
+    )?;
+    require_lifecycle_effect_bindings_v4(
+        &revalidated_lifecycle.plans,
+        effect,
+        tail_count,
+        &transition_output_scalars,
+        &transition_output_identities,
+        &aliases,
+    )?;
+    let lifecycle_plans = revalidated_lifecycle.plans;
     let effect_accounts = runtime_accounts
         .iter()
         .map(|account| (*account).clone())
@@ -1519,18 +1596,174 @@ fn require_common_projection_permissions_v3(
     }
 }
 
+fn lifecycle_request_target_v4(target: LifecycleRegisterTargetV3) -> ProjectionTargetV1 {
+    ProjectionTargetV1 {
+        kind: match target.kind() {
+            LifecycleRegisterKindV3::Scalar => ProjectionRegisterKindV1::Scalar,
+            LifecycleRegisterKindV3::Identity => ProjectionRegisterKindV1::Identity,
+        },
+        space: match target.scope() {
+            CoordinateScopeV3::Fixed => ProjectionRegisterSpaceV1::Common,
+            CoordinateScopeV3::Item => ProjectionRegisterSpaceV1::Item,
+        },
+        index: target.index(),
+    }
+}
+
+fn lifecycle_transition_target_v4(target: LifecycleRegisterTargetV3) -> RegisterWriteTargetV3 {
+    RegisterWriteTargetV3 {
+        kind: match target.kind() {
+            LifecycleRegisterKindV3::Scalar => RegisterKindV3::Scalar,
+            LifecycleRegisterKindV3::Identity => RegisterKindV3::Identity,
+        },
+        space: match target.scope() {
+            CoordinateScopeV3::Fixed => RegisterSpaceV3::Common,
+            CoordinateScopeV3::Item => RegisterSpaceV3::Item,
+        },
+        index: target.index(),
+    }
+}
+
+fn require_lifecycle_register_ownership_v4(
+    policy: StateLifecyclePolicyV4<'_>,
+    action: u32,
+    request: RequestProfileKindV3<'_>,
+    transition: TransitionProgramV3<'_>,
+) -> Result<(), ProgramError> {
+    let count = policy
+        .action_plan_count(action)
+        .map_err(|_| TradingSbfError::Content)?;
+    let mut ordinal = 0_u16;
+    while ordinal < count {
+        let selected = policy
+            .action_plan(action, ordinal)
+            .map_err(|_| TradingSbfError::Content)?;
+        if selected.operation() != LifecycleOperationV3::AuthenticateOrCreate
+            || selected
+                .protected_output_count()
+                .map_err(|_| TradingSbfError::Content)?
+                != 6
+        {
+            return Err(TradingSbfError::Content.into());
+        }
+        let mut observation = 0_u8;
+        while observation
+            < selected
+                .protected_observation_count()
+                .map_err(|_| TradingSbfError::Content)?
+        {
+            require_lifecycle_target_unwritten_v4(
+                selected
+                    .protected_observation_target(observation)
+                    .map_err(|_| TradingSbfError::Content)?,
+                request,
+                transition,
+                true,
+            )?;
+            observation = observation.checked_add(1).ok_or(TradingSbfError::Content)?;
+        }
+        let mut output = 0_u8;
+        while output
+            < selected
+                .protected_output_count()
+                .map_err(|_| TradingSbfError::Content)?
+        {
+            require_lifecycle_target_unwritten_v4(
+                selected
+                    .protected_output_target(output)
+                    .map_err(|_| TradingSbfError::Content)?,
+                request,
+                transition,
+                true,
+            )?;
+            output = output.checked_add(1).ok_or(TradingSbfError::Content)?;
+        }
+        let mut seed = 0_u8;
+        while seed
+            < selected
+                .seed_count()
+                .map_err(|_| TradingSbfError::Content)?
+        {
+            if let Some(target) = selected
+                .seed_register_target(seed)
+                .map_err(|_| TradingSbfError::Content)?
+            {
+                require_lifecycle_target_unwritten_v4(target, request, transition, false)?;
+            }
+            seed = seed.checked_add(1).ok_or(TradingSbfError::Content)?;
+        }
+        let mut binding = 0_u16;
+        while binding
+            < selected
+                .immutable_identity_binding_count()
+                .map_err(|_| TradingSbfError::Content)?
+        {
+            let target = selected
+                .immutable_identity_binding(binding)
+                .map_err(|_| TradingSbfError::Content)?
+                .canonical();
+            if transition
+                .writes_register(lifecycle_transition_target_v4(target))
+                .map_err(|_| TradingSbfError::Content)?
+            {
+                return Err(TradingSbfError::Content.into());
+            }
+            binding = binding.checked_add(1).ok_or(TradingSbfError::Content)?;
+        }
+        ordinal = ordinal.checked_add(1).ok_or(TradingSbfError::Content)?;
+    }
+    Ok(())
+}
+
+fn require_lifecycle_target_unwritten_v4(
+    target: LifecycleRegisterTargetV3,
+    request: RequestProfileKindV3<'_>,
+    transition: TransitionProgramV3<'_>,
+    forbid_request: bool,
+) -> Result<(), ProgramError> {
+    if (forbid_request
+        && request
+            .v1()
+            .writes_register(lifecycle_request_target_v4(target))
+            .map_err(|_| TradingSbfError::Content)?)
+        || transition
+            .writes_register(lifecycle_transition_target_v4(target))
+            .map_err(|_| TradingSbfError::Content)?
+    {
+        Err(TradingSbfError::Content.into())
+    } else {
+        Ok(())
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct PreparedImmutableIdentityBindingV4 {
+    data_offset: u32,
+    canonical: [u8; 32],
+}
+
+#[derive(Debug, Eq, PartialEq)]
 struct PreparedLifecycleInvocationV3 {
     plan: StateLifecyclePlanV3,
     state: usize,
     payer: Option<usize>,
     rent_credit: Option<usize>,
-    seeds: Vec<SeedValueV3>,
+    seeds: Vec<Vec<u8>>,
+    immutable_identity_bindings: Vec<PreparedImmutableIdentityBindingV4>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct PreparedLifecycleBatchV4 {
+    plans: Vec<PreparedLifecycleInvocationV3>,
+    scalars: Vec<u64>,
+    identities: Vec<[u8; 32]>,
 }
 
 #[allow(clippy::too_many_arguments)]
-fn prepare_lifecycle_v3<'a>(
+#[inline(never)]
+fn prepare_lifecycle_v4<'a>(
     program_id: &Pubkey,
-    policy: StateLifecyclePolicyV3<'_>,
+    policy: StateLifecyclePolicyV4<'_>,
     action: u32,
     account_profile: AccountProfileV2<'_>,
     tail_count: u32,
@@ -1540,14 +1773,12 @@ fn prepare_lifecycle_v3<'a>(
     identities: &[[u8; 32]],
     rent: &Rent,
     aliases: &[usize],
-) -> Result<Vec<PreparedLifecycleInvocationV3>, ProgramError> {
+) -> Result<PreparedLifecycleBatchV4, ProgramError> {
     if observations.len() != accounts.len() || aliases.len() != accounts.len() {
         return Err(TradingSbfError::Content.into());
     }
-    let registers = LifecycleRegistersV3 {
-        scalars,
-        identities,
-    };
+    let mut output_scalars = scalars.to_vec();
+    let mut output_identities = identities.to_vec();
     let mut candidate_lamports = observations
         .iter()
         .map(|observation| observation.lamports())
@@ -1570,12 +1801,15 @@ fn prepare_lifecycle_v3<'a>(
             let item = selected
                 .invocation_item(tail_count, invocation)
                 .map_err(|_| TradingSbfError::Content)?;
+            let registers = LifecycleRegistersV3 {
+                scalars: &output_scalars,
+                identities: &output_identities,
+            };
             if !selected
                 .is_enabled(account_profile, tail_count, item, registers)
                 .map_err(|_| TradingSbfError::Content)?
             {
-                invocation = invocation.checked_add(1).ok_or(TradingSbfError::Content)?;
-                continue;
+                return Err(TradingSbfError::Content.into());
             }
             let indices = selected
                 .project_account_indices(account_profile, tail_count, item)
@@ -1595,17 +1829,37 @@ fn prepare_lifecycle_v3<'a>(
                 .seed_count()
                 .map_err(|_| TradingSbfError::Content)?;
             let mut seeds = Vec::with_capacity(usize::from(seed_count));
+            let mut derived = None;
+            let mut canonical_bump = None;
             let mut seed = 0_u8;
             while seed < seed_count {
-                seeds.push(
-                    selected
-                        .materialize_seed(account_profile, tail_count, item, registers, seed)
-                        .map_err(|_| TradingSbfError::Content)?,
-                );
+                match selected
+                    .materialize_seed_input(account_profile, tail_count, item, registers, seed)
+                    .map_err(|_| TradingSbfError::Content)?
+                {
+                    LifecycleSeedInputValueV3::Bytes(value) => {
+                        if canonical_bump.is_some() {
+                            return Err(TradingSbfError::Content.into());
+                        }
+                        seeds.push(value.as_slice().to_vec());
+                    }
+                    LifecycleSeedInputValueV3::CanonicalBump => {
+                        if seed.checked_add(1) != Some(seed_count) || canonical_bump.is_some() {
+                            return Err(TradingSbfError::Content.into());
+                        }
+                        let seed_slices = seeds.iter().map(Vec::as_slice).collect::<Vec<_>>();
+                        let (address, bump) =
+                            Pubkey::try_find_program_address(seed_slices.as_slice(), program_id)
+                                .ok_or(TradingSbfError::Content)?;
+                        seeds.push(vec![bump]);
+                        derived = Some(address);
+                        canonical_bump = Some(bump);
+                    }
+                }
                 seed = seed.checked_add(1).ok_or(TradingSbfError::Content)?;
             }
-            let seed_slices = seeds.iter().map(SeedValueV3::as_slice).collect::<Vec<_>>();
-            let derived = require_canonical_lifecycle_pda_v3(program_id, &seed_slices)?;
+            let derived = derived.ok_or(TradingSbfError::Content)?;
+            let canonical_bump = canonical_bump.ok_or(TradingSbfError::Content)?;
             if accounts
                 .get(state)
                 .is_none_or(|account| account.key != &derived)
@@ -1617,15 +1871,27 @@ fn prepare_lifecycle_v3<'a>(
                 .zip(accounts)
                 .zip(&candidate_lamports)
                 .map(|((observation, account), lamports)| {
-                    AccountObservationV1::new(
-                        observation.key(),
-                        observation.owner(),
-                        *lamports,
-                        observation.data(),
-                        account.is_signer,
-                        account.is_writable,
-                        account.executable,
-                    )
+                    if observation.adapter_authenticated_variable_data() {
+                        AccountObservationV1::new_adapter_authenticated_variable_data(
+                            observation.key(),
+                            observation.owner(),
+                            *lamports,
+                            observation.data(),
+                            account.is_signer,
+                            account.is_writable,
+                            account.executable,
+                        )
+                    } else {
+                        AccountObservationV1::new(
+                            observation.key(),
+                            observation.owner(),
+                            *lamports,
+                            observation.data(),
+                            account.is_signer,
+                            account.is_writable,
+                            account.executable,
+                        )
+                    }
                 })
                 .collect::<Vec<_>>();
             let authenticated_credit = rent_credit
@@ -1640,7 +1906,10 @@ fn prepare_lifecycle_v3<'a>(
                     )
                 })
                 .transpose()?;
-            let current_rent_minimum = if selected.operation() == LifecycleOperationV3::Create {
+            let current_rent_minimum = if matches!(
+                selected.operation(),
+                LifecycleOperationV3::Create | LifecycleOperationV3::AuthenticateOrCreate
+            ) {
                 let data_bytes = selected
                     .target_data_bytes(tail_count)
                     .map_err(|_| TradingSbfError::Content)?;
@@ -1653,22 +1922,44 @@ fn prepare_lifecycle_v3<'a>(
             } else {
                 None
             };
-            let plan = plan_lifecycle(
+            let input_scalars = output_scalars.clone();
+            let input_identities = output_identities.clone();
+            let mut scalar_scratch = input_scalars.clone();
+            let mut identity_scratch = input_identities.clone();
+            let mut next_scalars = input_scalars.clone();
+            let mut next_identities = input_identities.clone();
+            let plan = plan_lifecycle_with_protected_outputs_atomic(
                 selected,
                 LifecycleContextV3 {
                     account_profile,
                     tail_count,
                     item_index: item,
                     accounts: &candidate_observations,
-                    registers,
+                    registers: LifecycleRegistersV3 {
+                        scalars: &input_scalars,
+                        identities: &input_identities,
+                    },
                     trading_program: program_id.to_bytes(),
                     system_program: system_program::ID.to_bytes(),
                     adapter_derived_pda: derived.to_bytes(),
                     rent_credit: authenticated_credit,
                     current_rent_minimum,
                 },
+                canonical_bump,
+                LifecycleProtectedRegisterBuffersV3 {
+                    scalar_scratch: &mut scalar_scratch,
+                    identity_scratch: &mut identity_scratch,
+                    output_scalars: &mut next_scalars,
+                    output_identities: &mut next_identities,
+                },
             )
             .map_err(|_| TradingSbfError::Content)?;
+            let immutable_identity_bindings = prepare_immutable_identity_bindings_v4(
+                selected,
+                account_profile,
+                item,
+                &next_identities,
+            )?;
             match plan {
                 StateLifecyclePlanV3::Authenticate(_) => {}
                 StateLifecyclePlanV3::Create(value) => {
@@ -1694,17 +1985,186 @@ fn prepare_lifecycle_v3<'a>(
                 payer,
                 rent_credit,
                 seeds,
+                immutable_identity_bindings,
             });
+            output_scalars = next_scalars;
+            output_identities = next_identities;
             invocation = invocation.checked_add(1).ok_or(TradingSbfError::Content)?;
         }
+        ordinal = ordinal.checked_add(1).ok_or(TradingSbfError::Content)?;
+    }
+    Ok(PreparedLifecycleBatchV4 {
+        plans: output,
+        scalars: output_scalars,
+        identities: output_identities,
+    })
+}
+
+fn prepare_immutable_identity_bindings_v4(
+    selected: dclutch_account_profile_contract::lifecycle_v3::SelectedLifecycleV3<'_>,
+    profile: AccountProfileV2<'_>,
+    item: Option<u32>,
+    identities: &[[u8; 32]],
+) -> Result<Vec<PreparedImmutableIdentityBindingV4>, ProgramError> {
+    let count = selected
+        .immutable_identity_binding_count()
+        .map_err(|_| TradingSbfError::Content)?;
+    let mut output = Vec::with_capacity(usize::from(count));
+    let mut ordinal = 0_u16;
+    while ordinal < count {
+        let binding = selected
+            .immutable_identity_binding(ordinal)
+            .map_err(|_| TradingSbfError::Content)?;
+        let target = binding.canonical();
+        if target.kind() != LifecycleRegisterKindV3::Identity {
+            return Err(TradingSbfError::Content.into());
+        }
+        let index = match target.scope() {
+            CoordinateScopeV3::Fixed => usize::from(target.index()),
+            CoordinateScopeV3::Item => usize::from(profile.common_identity_count())
+                .checked_add(
+                    usize::try_from(item.ok_or(TradingSbfError::Content)?)
+                        .map_err(|_| TradingSbfError::Content)?
+                        .checked_mul(usize::from(profile.item_identity_stride()))
+                        .ok_or(TradingSbfError::Content)?,
+                )
+                .and_then(|base| base.checked_add(usize::from(target.index())))
+                .ok_or(TradingSbfError::Content)?,
+        };
+        let canonical = *identities.get(index).ok_or(TradingSbfError::Content)?;
+        if canonical == [0; 32] {
+            return Err(TradingSbfError::Content.into());
+        }
+        output.push(PreparedImmutableIdentityBindingV4 {
+            data_offset: binding.data_offset(),
+            canonical,
+        });
         ordinal = ordinal.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
     Ok(output)
 }
 
-/// Recompute one policy-projected PDA and require the request-projected final
-/// bump witness to be Solana's canonical bump. A merely valid alternative bump
-/// is never signer or lifecycle authority.
+fn require_lifecycle_replan_agreement_v4(
+    preplanned: &PreparedLifecycleBatchV4,
+    revalidated: &PreparedLifecycleBatchV4,
+    transition_scalars: &[u64],
+    transition_identities: &[[u8; 32]],
+) -> Result<(), ProgramError> {
+    if preplanned.plans != revalidated.plans
+        || revalidated.scalars != transition_scalars
+        || revalidated.identities != transition_identities
+    {
+        Err(TradingSbfError::Transition.into())
+    } else {
+        Ok(())
+    }
+}
+
+fn require_lifecycle_effect_bindings_v4(
+    plans: &[PreparedLifecycleInvocationV3],
+    effect: EffectProgramV3<'_>,
+    tail_count: u32,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+    aliases: &[usize],
+) -> Result<(), ProgramError> {
+    for prepared in plans {
+        for binding in &prepared.immutable_identity_bindings {
+            let mut exact_write = false;
+            let mut fixed = 0_u16;
+            while fixed < effect.fixed_operation_count() {
+                exact_write |= inspect_lifecycle_binding_effect_v4(
+                    prepared.state,
+                    binding,
+                    effect
+                        .resolved_fixed_effect(fixed, tail_count, scalars, identities)
+                        .map_err(|_| TradingSbfError::Transition)?,
+                    aliases,
+                )?;
+                fixed = fixed.checked_add(1).ok_or(TradingSbfError::Transition)?;
+            }
+            let mut item = 0_u32;
+            while item < tail_count {
+                let mut operation = 0_u16;
+                while operation < effect.item_operation_count() {
+                    exact_write |= inspect_lifecycle_binding_effect_v4(
+                        prepared.state,
+                        binding,
+                        effect
+                            .resolved_item_effect(item, operation, tail_count, scalars, identities)
+                            .map_err(|_| TradingSbfError::Transition)?,
+                        aliases,
+                    )?;
+                    operation = operation
+                        .checked_add(1)
+                        .ok_or(TradingSbfError::Transition)?;
+                }
+                item = item.checked_add(1).ok_or(TradingSbfError::Transition)?;
+            }
+            if matches!(prepared.plan, StateLifecyclePlanV3::Create(_)) && !exact_write {
+                return Err(TradingSbfError::Transition.into());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn inspect_lifecycle_binding_effect_v4(
+    state: usize,
+    binding: &PreparedImmutableIdentityBindingV4,
+    effect: ResolvedEffectV3,
+    aliases: &[usize],
+) -> Result<bool, ProgramError> {
+    let (account, offset, width, identity) = match effect {
+        ResolvedEffectV3::WriteScalar {
+            account, offset, ..
+        } => (account, offset, 8_u32, None),
+        ResolvedEffectV3::WriteIdentity {
+            account,
+            offset,
+            value,
+        } => (account, offset, 32_u32, Some(value)),
+        ResolvedEffectV3::WriteU8 {
+            account, offset, ..
+        } => (account, offset, 1_u32, None),
+        ResolvedEffectV3::WriteU16 {
+            account, offset, ..
+        } => (account, offset, 2_u32, None),
+        ResolvedEffectV3::WriteU32 {
+            account, offset, ..
+        } => (account, offset, 4_u32, None),
+        ResolvedEffectV3::TransferLamports { .. }
+        | ResolvedEffectV3::RequireLamportsEq { .. }
+        | ResolvedEffectV3::WriteRequest { .. } => return Ok(false),
+    };
+    if representative_v3(account, aliases)? != state
+        || !ranges_overlap_v4(offset, width, binding.data_offset, 32)?
+    {
+        return Ok(false);
+    }
+    if offset == binding.data_offset && identity == Some(binding.canonical) {
+        Ok(true)
+    } else {
+        Err(TradingSbfError::Transition.into())
+    }
+}
+
+fn ranges_overlap_v4(
+    left_start: u32,
+    left_width: u32,
+    right_start: u32,
+    right_width: u32,
+) -> Result<bool, ProgramError> {
+    let left_end = left_start
+        .checked_add(left_width)
+        .ok_or(TradingSbfError::Transition)?;
+    let right_end = right_start
+        .checked_add(right_width)
+        .ok_or(TradingSbfError::Transition)?;
+    Ok(left_start < right_end && right_start < left_end)
+}
+
+#[cfg(test)]
 fn require_canonical_lifecycle_pda_v3(
     program_id: &Pubkey,
     seed_slices: &[&[u8]],
@@ -1713,7 +2173,8 @@ fn require_canonical_lifecycle_pda_v3(
     let [supplied_bump] = bump_seed else {
         return Err(TradingSbfError::Content.into());
     };
-    let (derived, canonical_bump) = Pubkey::find_program_address(canonical_seeds, program_id);
+    let (derived, canonical_bump) = Pubkey::try_find_program_address(canonical_seeds, program_id)
+        .ok_or(TradingSbfError::Content)?;
     if *supplied_bump != canonical_bump {
         return Err(TradingSbfError::Content.into());
     }
@@ -1908,11 +2369,7 @@ fn apply_lifecycle_creates_v3(
             )
             .map_err(|_| TradingSbfError::Commit)?;
         }
-        let seed_slices = prepared
-            .seeds
-            .iter()
-            .map(SeedValueV3::as_slice)
-            .collect::<Vec<_>>();
+        let seed_slices = prepared.seeds.iter().map(Vec::as_slice).collect::<Vec<_>>();
         invoke_signed(
             &allocate(state.key, u64::from(plan.target_data_bytes)),
             &[state.clone(), system.clone()],
@@ -2991,6 +3448,10 @@ fn claims_receipt_digest_v3(receipt: ClaimsRouteReceiptV3) -> Result<[u8; 32], P
         ClaimsRouteReceiptV3::SignedDelta(value) => Vec::from(value.to_bytes()),
         ClaimsRouteReceiptV3::SparseNativeTransfer(value) => Vec::from(value.to_bytes()),
         ClaimsRouteReceiptV3::Founding(value) => Vec::from(value.to_bytes()),
+        ClaimsRouteReceiptV3::RationalLifecycle(value) => value
+            .to_bytes()
+            .map(Vec::from)
+            .map_err(|_| TradingSbfError::Transition)?,
         ClaimsRouteReceiptV3::Close(value) => value
             .to_bytes()
             .map(Vec::from)
@@ -3230,7 +3691,7 @@ fn project_tail_count(
     profile: AccountProfileV2<'_>,
     observations: &[AccountObservationV1<'_>],
     request_digest: [u8; 32],
-    trusted_environment: Option<TrustedEnvironmentObservationV3>,
+    trusted_environment: TrustedEnvironmentObservationV3,
 ) -> Result<u32, ProgramError> {
     if profile
         .tail_count_projection()
@@ -3249,11 +3710,15 @@ fn project_tail_count(
         return Err(TradingSbfError::UnsupportedContent.into());
     }
     let mut input_scalars = vec![0_u64; scalar_count];
-    seed_trusted_environment_v3(trusted_environment, &mut input_scalars)?;
     let mut input_identities = vec![[0_u8; 32]; identity_count];
     *input_identities
         .get_mut(HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3)
         .ok_or(TradingSbfError::Content)? = request_digest;
+    seed_trusted_environment_v3(
+        trusted_environment,
+        &mut input_scalars,
+        &mut input_identities,
+    )?;
     let mut scratch_scalars = input_scalars.clone();
     let mut scratch_identities = input_identities.clone();
     let mut output_scalars = input_scalars.clone();
@@ -3271,56 +3736,121 @@ fn project_tail_count(
         },
     )
     .map_err(|_| TradingSbfError::Content)?;
-    require_trusted_environment_v3(trusted_environment, &output_scalars)?;
+    require_trusted_environment_v3(trusted_environment, &output_scalars, &output_identities)?;
     Ok(tail_count)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct TrustedEnvironmentObservationV3 {
-    destination: usize,
-    current_slot: u64,
+    current_slot: Option<(usize, u64)>,
+    current_executing_program: Option<(usize, [u8; 32])>,
 }
 
 fn observe_trusted_environment_v3(
     profile: AccountProfileV2<'_>,
-) -> Result<Option<TrustedEnvironmentObservationV3>, ProgramError> {
-    match profile.trusted_environment() {
-        TrustedEnvironmentV2::None => Ok(None),
+    program_id: &Pubkey,
+) -> Result<TrustedEnvironmentObservationV3, ProgramError> {
+    let current_slot = match profile.trusted_environment() {
+        TrustedEnvironmentV2::None => None,
         TrustedEnvironmentV2::CurrentSlot { destination } => {
             let current_slot = Clock::get().map_err(|_| TradingSbfError::Content)?.slot;
-            Ok(Some(TrustedEnvironmentObservationV3 {
-                destination: usize::from(destination),
-                current_slot,
-            }))
+            Some((usize::from(destination), current_slot))
         }
-    }
+    };
+    Ok(TrustedEnvironmentObservationV3 {
+        current_slot,
+        current_executing_program: profile
+            .trusted_current_executing_program_identity()
+            .map(|destination| (usize::from(destination), program_id.to_bytes())),
+    })
 }
 
 fn seed_trusted_environment_v3(
-    observation: Option<TrustedEnvironmentObservationV3>,
+    observation: TrustedEnvironmentObservationV3,
     scalars: &mut [u64],
+    identities: &mut [[u8; 32]],
 ) -> Result<(), ProgramError> {
-    let Some(observation) = observation else {
-        return Ok(());
-    };
-    *scalars
-        .get_mut(observation.destination)
-        .ok_or(TradingSbfError::Content)? = observation.current_slot;
+    if let Some((destination, current_slot)) = observation.current_slot {
+        *scalars
+            .get_mut(destination)
+            .ok_or(TradingSbfError::Content)? = current_slot;
+    }
+    if let Some((destination, current_program)) = observation.current_executing_program {
+        *identities
+            .get_mut(destination)
+            .ok_or(TradingSbfError::Content)? = current_program;
+    }
     Ok(())
 }
 
 fn require_trusted_environment_v3(
-    observation: Option<TrustedEnvironmentObservationV3>,
+    observation: TrustedEnvironmentObservationV3,
     scalars: &[u64],
+    identities: &[[u8; 32]],
 ) -> Result<(), ProgramError> {
-    let Some(observation) = observation else {
-        return Ok(());
-    };
-    if scalars.get(observation.destination) == Some(&observation.current_slot) {
-        Ok(())
-    } else {
+    if observation
+        .current_slot
+        .is_some_and(|(destination, current_slot)| scalars.get(destination) != Some(&current_slot))
+        || observation
+            .current_executing_program
+            .is_some_and(|(destination, current_program)| {
+                identities.get(destination) != Some(&current_program)
+            })
+    {
         Err(TradingSbfError::Content.into())
+    } else {
+        Ok(())
     }
+}
+
+fn require_trusted_environment_register_ownership_v3(
+    profile: AccountProfileV2<'_>,
+    request: RequestProfileKindV3<'_>,
+    transition: TransitionProgramV3<'_>,
+) -> Result<(), ProgramError> {
+    let scalar = profile.trusted_current_slot_scalar().map(|index| {
+        (
+            ProjectionTargetV1 {
+                kind: ProjectionRegisterKindV1::Scalar,
+                space: ProjectionRegisterSpaceV1::Common,
+                index,
+            },
+            RegisterWriteTargetV3 {
+                kind: RegisterKindV3::Scalar,
+                space: RegisterSpaceV3::Common,
+                index,
+            },
+        )
+    });
+    let identity = profile
+        .trusted_current_executing_program_identity()
+        .map(|index| {
+            (
+                ProjectionTargetV1 {
+                    kind: ProjectionRegisterKindV1::Identity,
+                    space: ProjectionRegisterSpaceV1::Common,
+                    index,
+                },
+                RegisterWriteTargetV3 {
+                    kind: RegisterKindV3::Identity,
+                    space: RegisterSpaceV3::Common,
+                    index,
+                },
+            )
+        });
+    for (request_target, transition_target) in scalar.into_iter().chain(identity) {
+        if request
+            .v1()
+            .writes_register(request_target)
+            .map_err(|_| TradingSbfError::Content)?
+            || transition
+                .writes_register(transition_target)
+                .map_err(|_| TradingSbfError::Content)?
+        {
+            return Err(TradingSbfError::Content.into());
+        }
+    }
+    Ok(())
 }
 
 fn shadow_routes_v3(
@@ -3956,18 +4486,27 @@ mod tests {
 
     #[test]
     fn trusted_current_slot_survives_projection_boundary_and_reaches_transition() {
-        let observation = Some(TrustedEnvironmentObservationV3 {
-            destination: 1,
-            current_slot: 42,
-        });
+        let observation = TrustedEnvironmentObservationV3 {
+            current_slot: Some((1, 42)),
+            current_executing_program: Some((2, [0x91; 32])),
+        };
         let mut projected = [0_u64; 3];
-        seed_trusted_environment_v3(observation, &mut projected).expect("trusted seed");
-        require_trusted_environment_v3(observation, &projected).expect("seed preserved");
+        let mut projected_identities = [[0_u8; 32]; 3];
+        seed_trusted_environment_v3(observation, &mut projected, &mut projected_identities)
+            .expect("trusted seed");
+        require_trusted_environment_v3(observation, &projected, &projected_identities)
+            .expect("seed preserved");
 
         let mut hostile = projected;
         hostile[1] = 41;
         assert_eq!(
-            require_trusted_environment_v3(observation, &hostile),
+            require_trusted_environment_v3(observation, &hostile, &projected_identities),
+            Err(TradingSbfError::Content.into())
+        );
+        let mut hostile_identities = projected_identities;
+        hostile_identities[2] = [0x92; 32];
+        assert_eq!(
+            require_trusted_environment_v3(observation, &projected, &hostile_identities),
             Err(TradingSbfError::Content.into())
         );
 
@@ -4107,7 +4646,7 @@ mod tests {
             commit_data_effect(effect, &accounts, &aliases, false).expect("typed write");
         }
         let data = state.try_borrow_data().expect("state data");
-        assert_eq!(data.get(0), Some(&0xa1));
+        assert_eq!(data.first(), Some(&0xa1));
         assert_eq!(data.get(1..3), Some(0xb2c3_u16.to_le_bytes().as_slice()));
         assert_eq!(
             data.get(3..7),
@@ -4136,6 +4675,7 @@ mod tests {
             payer: Some(2),
             rent_credit: Some(4),
             seeds: Vec::new(),
+            immutable_identity_bindings: Vec::new(),
         };
         let aliases = [0, 1, 2, 1, 4];
         let mut accounts = vec![
@@ -4146,10 +4686,11 @@ mod tests {
             aliases.len()
         ];
         apply_lifecycle_candidates_v3(&[plan], &aliases, &mut accounts).expect("candidate applies");
-        assert_eq!(accounts[1].lamports, 30);
-        assert_eq!(accounts[1].data_len, 144);
-        assert_eq!(accounts[3], accounts[1]);
-        assert_eq!(accounts[2].lamports, 75);
+        let state_after = accounts.get(1).expect("state candidate");
+        assert_eq!(state_after.lamports, 30);
+        assert_eq!(state_after.data_len, 144);
+        assert_eq!(accounts.get(3), Some(state_after));
+        assert_eq!(accounts.get(2).map(|account| account.lamports), Some(75));
 
         let mut used = [false; 3];
         assert_eq!(
@@ -4160,6 +4701,67 @@ mod tests {
         assert_eq!(
             reserve_lifecycle_state_v3(1, &mut used),
             Err(TradingSbfError::Content.into())
+        );
+    }
+
+    #[test]
+    fn lifecycle_immutable_binding_requires_one_exact_typed_write() {
+        let binding = PreparedImmutableIdentityBindingV4 {
+            data_offset: 16,
+            canonical: [0x63; 32],
+        };
+        let aliases = [0, 1, 1];
+        assert_eq!(
+            inspect_lifecycle_binding_effect_v4(
+                1,
+                &binding,
+                ResolvedEffectV3::WriteIdentity {
+                    account: 2,
+                    offset: 16,
+                    value: binding.canonical,
+                },
+                &aliases,
+            ),
+            Ok(true)
+        );
+        assert_eq!(
+            inspect_lifecycle_binding_effect_v4(
+                1,
+                &binding,
+                ResolvedEffectV3::WriteIdentity {
+                    account: 1,
+                    offset: 16,
+                    value: [0x64; 32],
+                },
+                &aliases,
+            ),
+            Err(TradingSbfError::Transition.into())
+        );
+        assert_eq!(
+            inspect_lifecycle_binding_effect_v4(
+                1,
+                &binding,
+                ResolvedEffectV3::WriteU32 {
+                    account: 1,
+                    offset: 44,
+                    value: 0,
+                },
+                &aliases,
+            ),
+            Err(TradingSbfError::Transition.into())
+        );
+        assert_eq!(
+            inspect_lifecycle_binding_effect_v4(
+                1,
+                &binding,
+                ResolvedEffectV3::WriteIdentity {
+                    account: 0,
+                    offset: 16,
+                    value: binding.canonical,
+                },
+                &aliases,
+            ),
+            Ok(false)
         );
     }
 

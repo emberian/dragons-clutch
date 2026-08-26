@@ -3413,6 +3413,18 @@ mod tests {
             Ok(LifecycleSeedInputValueV3::CanonicalBump)
         );
 
+        let mut guarded_policy = policy_bytes.clone();
+        let plan_offset = HEADER_BYTES + RECIPE_BYTES + 3 * SEED_BYTES;
+        *guarded_policy.get_mut(plan_offset + 24).expect("guard tag") = GUARD_SCALAR_EQ;
+        guarded_policy
+            .get_mut(plan_offset + 28..plan_offset + 36)
+            .expect("guard expected")
+            .copy_from_slice(&1_u64.to_le_bytes());
+        assert_eq!(
+            StateLifecyclePolicyV4::decode_selected(POLICY_ID, POLICY_ID, &guarded_policy),
+            Err(Error::InvalidFunding)
+        );
+
         let state = [0x41; 32];
         let payer = [0x42; 32];
         let credit = [0x43; 32];
