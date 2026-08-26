@@ -11,6 +11,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::convert::{TryFrom, TryInto};
 
+use dclutch_claims_svm::protocol_position_v2::ProtocolPositionSeedsV2;
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
     CUSTODY_RECEIPT_BYTES_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1, ContextV1,
@@ -54,8 +55,6 @@ pub const TERMINAL_COORDINATE_BYTES_V2: usize = 32;
 pub const TERMINAL_COORDINATE_MAGIC_V2: [u8; 8] = *b"DCLTRC02";
 /// LiabilityBasisV2 aggregate PDA seed domain.
 pub const LIABILITY_BASIS_MARKET_SEED_V2: &[u8] = b"dclutch:lbv2:market";
-/// LiabilityBasisV2 Position PDA seed domain.
-pub const LIABILITY_BASIS_POSITION_SEED_V2: &[u8] = b"dclutch:lbv2:position";
 /// LiabilityBasisV2 schema-release identity used by finalized raw records.
 pub const LIABILITY_BASIS_SCHEMA_RELEASE_ID_V2: [u8; 32] = [
     0x5c, 0x84, 0x2a, 0xe9, 0xe9, 0x15, 0x51, 0xd1, 0xaf, 0x99, 0xcf, 0x99, 0xfd, 0x53, 0x7f, 0x64,
@@ -872,12 +871,12 @@ fn authenticate_claims_state(
         market.logical_market.as_slice(),
     ];
     let expected_market = Pubkey::find_program_address(&market_seeds, program_id).0;
-    let position_seeds = [
-        LIABILITY_BASIS_POSITION_SEED_V2,
-        accounts.market.key.as_ref(),
-        accounts.owner.key.as_ref(),
-    ];
-    let expected_position = Pubkey::find_program_address(&position_seeds, program_id).0;
+    let position_seeds = ProtocolPositionSeedsV2::new(
+        accounts.market.key.to_bytes(),
+        accounts.owner.key.to_bytes(),
+    )
+    .map_err(|_| LiabilityBasisSbfErrorV2::ClaimsState)?;
+    let expected_position = Pubkey::find_program_address(&position_seeds.as_slices(), program_id).0;
     if accounts.market.owner != program_id
         || accounts.position.owner != program_id
         || accounts.market.key != &expected_market

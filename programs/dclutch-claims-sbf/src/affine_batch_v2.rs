@@ -19,6 +19,7 @@ use dclutch_claims_svm::{
     affine_batch_v2::{
         AffineBatchPlanV2, AffineBatchReceiptV2, DeltaDirectionV2, SignedMagnitudeV2,
     },
+    protocol_position_v2::ProtocolPositionSeedsV2,
 };
 use dclutch_core_contract::ContentId;
 use dclutch_liability_basis_v2_kernel::product_claims::LinkedBasisRecordV2;
@@ -42,9 +43,8 @@ use super::{product_runtime_v2::authenticate_product_runtime_v2, reauthenticate}
 use crate::liability_basis_v2::{
     BASIS_PRODUCT_LINK_END_V2, BASIS_PRODUCT_LINK_OFFSET_V2, BASIS_SEMANTIC_ID_DOMAIN_V2,
     LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
-    LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_SEED_V2,
-    LIABILITY_BASIS_SCHEMA_RELEASE_ID_V2, MarketViewV2, PositionViewV2,
-    authenticate_self_finalized_record,
+    LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, LIABILITY_BASIS_SCHEMA_RELEASE_ID_V2, MarketViewV2,
+    PositionViewV2, authenticate_self_finalized_record,
 };
 
 /// Exact fixed affine-batch account count before the runtime Position tail.
@@ -521,15 +521,10 @@ fn build_candidates(
         let expected = plan
             .position(table_index)
             .map_err(|_| AffineBatchSbfErrorV2::Instruction)?;
-        let expected_key = Pubkey::find_program_address(
-            &[
-                LIABILITY_BASIS_POSITION_SEED_V2,
-                accounts.market.key.as_ref(),
-                expected.owner().as_slice(),
-            ],
-            program_id,
-        )
-        .0;
+        let position_seeds =
+            ProtocolPositionSeedsV2::new(accounts.market.key.to_bytes(), expected.owner())
+                .map_err(|_| AffineBatchSbfErrorV2::ClaimsState)?;
+        let expected_key = Pubkey::find_program_address(&position_seeds.as_slices(), program_id).0;
         let data = account
             .try_borrow_data()
             .map_err(|_| AffineBatchSbfErrorV2::Accounts)?;
