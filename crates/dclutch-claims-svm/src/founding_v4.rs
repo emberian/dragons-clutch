@@ -365,7 +365,7 @@ impl ClaimsFoundingRequestV4 {
     }
 
     /// Encode the exact canonical request bytes.
-    pub fn to_bytes(self) -> [u8; CLAIMS_FOUNDING_REQUEST_BYTES_V4] {
+    pub fn to_bytes(&self) -> [u8; CLAIMS_FOUNDING_REQUEST_BYTES_V4] {
         let mut output = [0_u8; CLAIMS_FOUNDING_REQUEST_BYTES_V4];
         put_infallible(&mut output, 0, &CLAIMS_FOUNDING_REQUEST_MAGIC_V4);
         put_infallible(
@@ -450,181 +450,181 @@ impl ClaimsFoundingRequestV4 {
     }
 
     /// Return the complete validated input value.
-    pub const fn input(self) -> ClaimsFoundingRequestInputV4 {
+    pub const fn input(&self) -> ClaimsFoundingRequestInputV4 {
         self.0
     }
 
     /// Return the exact collateral moved from source into Hoard.
-    pub const fn collateral_transferred(self) -> u64 {
+    pub const fn collateral_transferred(&self) -> u64 {
         self.0.quantity * self.0.basis_scale
     }
 
     /// Return the immutable current release set.
-    pub const fn release_set(self) -> [u8; 32] {
+    pub const fn release_set(&self) -> [u8; 32] {
         self.0.release_set
     }
     /// Return the logical Core Market identity.
-    pub const fn market(self) -> [u8; 32] {
+    pub const fn market(&self) -> [u8; 32] {
         self.0.market
     }
     /// Return the Product Runtime V2 record digest.
-    pub const fn product_record_digest(self) -> [u8; 32] {
+    pub const fn product_record_digest(&self) -> [u8; 32] {
         self.0.product_record_digest
     }
     /// Return the Product instance identity.
-    pub const fn product_instance_id(self) -> [u8; 32] {
+    pub const fn product_instance_id(&self) -> [u8; 32] {
         self.0.product_instance_id
     }
     /// Return the linked-basis record digest.
-    pub const fn linked_basis_record_digest(self) -> [u8; 32] {
+    pub const fn linked_basis_record_digest(&self) -> [u8; 32] {
         self.0.linked_basis_record_digest
     }
     /// Return the semantic basis identity.
-    pub const fn semantic_basis_id(self) -> [u8; 32] {
+    pub const fn semantic_basis_id(&self) -> [u8; 32] {
         self.0.semantic_basis_id
     }
     /// Return the founding User owner identity.
-    pub const fn founder(self) -> [u8; 32] {
+    pub const fn founder(&self) -> [u8; 32] {
         self.0.founder
     }
     /// Return the exact Core-authorized parent request digest.
-    pub const fn parent_request_digest(self) -> [u8; 32] {
+    pub const fn parent_request_digest(&self) -> [u8; 32] {
         self.0.parent_request_digest
     }
     /// Return the canonical aggregate account.
-    pub const fn aggregate(self) -> [u8; 32] {
+    pub const fn aggregate(&self) -> [u8; 32] {
         self.0.aggregate
     }
     /// Return the canonical founder Position account.
-    pub const fn position(self) -> [u8; 32] {
+    pub const fn position(&self) -> [u8; 32] {
         self.0.position
     }
     /// Return the canonical Position admission account.
-    pub const fn admission(self) -> [u8; 32] {
+    pub const fn admission(&self) -> [u8; 32] {
         self.0.admission
     }
     /// Return the generic Custody funding source account.
-    pub const fn funding_source(self) -> [u8; 32] {
+    pub const fn funding_source(&self) -> [u8; 32] {
         self.0.funding_source
     }
     /// Return the observed Custody-owned Hoard account.
-    pub const fn hoard(self) -> [u8; 32] {
+    pub const fn hoard(&self) -> [u8; 32] {
         self.0.hoard
     }
     /// Return the exact Custody replay account advanced by funding.
-    pub const fn custody_replay(self) -> [u8; 32] {
+    pub const fn custody_replay(&self) -> [u8; 32] {
         self.0.custody_replay
     }
     /// Return the prepaid RentCredit account.
-    pub const fn rent_credit(self) -> [u8; 32] {
+    pub const fn rent_credit(&self) -> [u8; 32] {
         self.0.rent_credit
     }
     /// Return the selected Rent program.
-    pub const fn rent_program(self) -> [u8; 32] {
+    pub const fn rent_program(&self) -> [u8; 32] {
         self.0.rent_program
     }
     /// Return the sole Claims writer program.
-    pub const fn claims_program(self) -> [u8; 32] {
+    pub const fn claims_program(&self) -> [u8; 32] {
         self.0.claims_program
     }
     /// Return the authorizing Core program.
-    pub const fn core_program(self) -> [u8; 32] {
+    pub const fn core_program(&self) -> [u8; 32] {
         self.0.core_program
     }
     /// Return the digest of the exact accepted Custody request.
-    pub const fn custody_request_digest(self) -> [u8; 32] {
+    pub const fn custody_request_digest(&self) -> [u8; 32] {
         self.0.custody_request_digest
     }
     /// Return the digest of the exact producer-authenticated Custody receipt.
-    pub const fn custody_receipt_digest(self) -> [u8; 32] {
+    pub const fn custody_receipt_digest(&self) -> [u8; 32] {
         self.0.custody_receipt_digest
     }
     /// Return the immutable Market generation.
-    pub const fn generation(self) -> u64 {
+    pub const fn generation(&self) -> u64 {
         self.0.generation
     }
     /// Return the runtime claim-vector width.
-    pub const fn claim_count(self) -> u32 {
+    pub const fn claim_count(&self) -> u32 {
         self.0.claim_count
     }
     /// Return the equal quantity minted at every claim coordinate.
-    pub const fn quantity(self) -> u64 {
+    pub const fn quantity(&self) -> u64 {
         self.0.quantity
     }
     /// Return the positive Hoard-principal scale per complete set.
-    pub const fn basis_scale(self) -> u64 {
+    pub const fn basis_scale(&self) -> u64 {
         self.0.basis_scale
     }
 
     /// Return the exact funding-source amount before transfer.
-    pub const fn pre_source_amount(self) -> u64 {
+    pub const fn pre_source_amount(&self) -> u64 {
         self.0.pre_source_amount
     }
     /// Return the exact funding-source amount after transfer.
-    pub const fn post_source_amount(self) -> u64 {
+    pub const fn post_source_amount(&self) -> u64 {
         self.0.post_source_amount
     }
     /// Return the exact Hoard amount before transfer.
-    pub const fn pre_hoard_amount(self) -> u64 {
+    pub const fn pre_hoard_amount(&self) -> u64 {
         self.0.pre_hoard_amount
     }
     /// Return the exact Hoard amount after transfer.
-    pub const fn post_hoard_amount(self) -> u64 {
+    pub const fn post_hoard_amount(&self) -> u64 {
         self.0.post_hoard_amount
     }
     /// Return the exact Custody replay revision before transfer.
-    pub const fn pre_custody_revision(self) -> u64 {
+    pub const fn pre_custody_revision(&self) -> u64 {
         self.0.pre_custody_revision
     }
     /// Return the exact Custody replay revision after transfer.
-    pub const fn post_custody_revision(self) -> u64 {
+    pub const fn post_custody_revision(&self) -> u64 {
         self.0.post_custody_revision
     }
 
     /// Return the exact aggregate RentCredit consumption.
-    pub const fn aggregate_rent_principal(self) -> u64 {
+    pub const fn aggregate_rent_principal(&self) -> u64 {
         self.0.aggregate_rent_principal
     }
 
     /// Return the exact Position RentCredit consumption.
-    pub const fn position_rent_principal(self) -> u64 {
+    pub const fn position_rent_principal(&self) -> u64 {
         self.0.position_rent_principal
     }
 
     /// Return the exact admission RentCredit consumption.
-    pub const fn admission_rent_principal(self) -> u64 {
+    pub const fn admission_rent_principal(&self) -> u64 {
         self.0.admission_rent_principal
     }
     /// Return the observed dust-tolerant aggregate lamports.
-    pub const fn observed_aggregate_lamports(self) -> u64 {
+    pub const fn observed_aggregate_lamports(&self) -> u64 {
         self.0.observed_aggregate_lamports
     }
     /// Return the observed dust-tolerant Position lamports.
-    pub const fn observed_position_lamports(self) -> u64 {
+    pub const fn observed_position_lamports(&self) -> u64 {
         self.0.observed_position_lamports
     }
     /// Return the observed dust-tolerant admission lamports.
-    pub const fn observed_admission_lamports(self) -> u64 {
+    pub const fn observed_admission_lamports(&self) -> u64 {
         self.0.observed_admission_lamports
     }
 
     /// Return the vacant aggregate pre-revision.
-    pub const fn pre_aggregate_revision(self) -> u64 {
+    pub const fn pre_aggregate_revision(&self) -> u64 {
         self.0.pre_aggregate_revision
     }
 
     /// Return the live aggregate post-revision.
-    pub const fn post_aggregate_revision(self) -> u64 {
+    pub const fn post_aggregate_revision(&self) -> u64 {
         self.0.post_aggregate_revision
     }
 
     /// Return the vacant Position pre-revision.
-    pub const fn pre_position_revision(self) -> u64 {
+    pub const fn pre_position_revision(&self) -> u64 {
         self.0.pre_position_revision
     }
 
     /// Return the live Position post-revision.
-    pub const fn post_position_revision(self) -> u64 {
+    pub const fn post_position_revision(&self) -> u64 {
         self.0.post_position_revision
     }
 }
@@ -696,7 +696,7 @@ impl ClaimsFoundingReceiptV4 {
     }
 
     /// Encode the exact canonical receipt bytes.
-    pub fn to_bytes(self) -> [u8; CLAIMS_FOUNDING_RECEIPT_BYTES_V4] {
+    pub fn to_bytes(&self) -> [u8; CLAIMS_FOUNDING_RECEIPT_BYTES_V4] {
         let mut output = [0_u8; CLAIMS_FOUNDING_RECEIPT_BYTES_V4];
         put_infallible(&mut output, 0, &CLAIMS_FOUNDING_RECEIPT_MAGIC_V4);
         put_infallible(
@@ -726,38 +726,38 @@ impl ClaimsFoundingReceiptV4 {
 
     /// Require this receipt to bind the exact accepted request and request digest.
     pub fn verify_for(
-        self,
-        request: ClaimsFoundingRequestV4,
+        &self,
+        request: &ClaimsFoundingRequestV4,
         request_digest: [u8; 32],
     ) -> Result<()> {
-        if self.request != request || self.request_digest != request_digest {
+        if &self.request != request || self.request_digest != request_digest {
             return Err(ClaimsFoundingErrorV4::ReceiptMismatch);
         }
         Ok(())
     }
 
     /// Return the exact embedded request.
-    pub const fn request(self) -> ClaimsFoundingRequestV4 {
+    pub const fn request(&self) -> ClaimsFoundingRequestV4 {
         self.request
     }
     /// Return the digest of exact request bytes.
-    pub const fn request_digest(self) -> [u8; 32] {
+    pub const fn request_digest(&self) -> [u8; 32] {
         self.request_digest
     }
     /// Return the digest of exact post aggregate bytes.
-    pub const fn aggregate_digest(self) -> [u8; 32] {
+    pub const fn aggregate_digest(&self) -> [u8; 32] {
         self.aggregate_digest
     }
     /// Return the digest of exact post Position bytes.
-    pub const fn position_digest(self) -> [u8; 32] {
+    pub const fn position_digest(&self) -> [u8; 32] {
         self.position_digest
     }
     /// Return the digest of exact post admission bytes.
-    pub const fn admission_digest(self) -> [u8; 32] {
+    pub const fn admission_digest(&self) -> [u8; 32] {
         self.admission_digest
     }
     /// Return the ordered aggregate+Position+admission post-resource digest.
-    pub const fn post_resource_digest(self) -> [u8; 32] {
+    pub const fn post_resource_digest(&self) -> [u8; 32] {
         self.post_resource_digest
     }
 }
@@ -978,7 +978,7 @@ mod tests {
             ClaimsFoundingReceiptV4::decode(&receipt.to_bytes()),
             Ok(receipt)
         );
-        receipt.verify_for(request, id(40)).expect("join");
+        receipt.verify_for(&request, id(40)).expect("join");
         assert_eq!(receipt.request(), request);
         assert_eq!(
             (receipt.request_digest(), receipt.aggregate_digest()),
@@ -1115,7 +1115,7 @@ mod tests {
         let receipt = ClaimsFoundingReceiptV4::new(request, id(20), id(21), id(22), id(23), id(24))
             .expect("receipt");
         assert_eq!(
-            receipt.verify_for(request, id(99)),
+            receipt.verify_for(&request, id(99)),
             Err(ClaimsFoundingErrorV4::ReceiptMismatch)
         );
         let mut bytes = receipt.to_bytes();

@@ -1583,6 +1583,7 @@ version = "0.1.0"
 name = "dclutch-custody-contract"
 version = "0.1.0"
 dependencies = [
+ "dclutch-market-core-codec",
  "dclutch-release-set-contract",
 ]
 
