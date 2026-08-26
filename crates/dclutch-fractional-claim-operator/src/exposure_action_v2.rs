@@ -17,6 +17,11 @@ use dclutch_fractional_claim_kernel::{
     ExposureShardDivisionV2, FractionalExposureTermsV2, check_fractional_exposure_bundle_v2,
     divide_exposure_shards_v2,
 };
+use dclutch_market_core_codec::RetirementReceiptV1;
+use dclutch_rent_contract::lifecycle_v2::{
+    CloseLifecycleRentCreditV2, LifecycleAccountIdV2, LifecycleClosePlanV2,
+    LifecycleRentCloseReceiptV2, LifecycleRentCreditV2,
+};
 use dclutch_representation_composition_v3_kernel::{
     CompositionExposureBundleV3, RecordAdmissionV3,
 };
@@ -150,6 +155,92 @@ pub struct FractionalExposureTokenPlanV2 {
     post_source: u64,
     pre_destination: u64,
     post_destination: u64,
+}
+
+/// One K-ordered shard Mint observed for zero-supply retirement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FractionalExposureMintSnapshotV2<'a> {
+    /// Claims representation coordinate in strict `[0,K)` order.
+    pub representation_coordinate: u32,
+    /// Exact terms-selected Token-2022 Mint account.
+    pub mint: FractionalTokenAccountSnapshotV1<'a>,
+}
+
+/// Chain-derived authorities for closing the Fractional producer subtree.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FractionalExposureRetirementContextV2 {
+    /// Fractional root PDA controlling all K Mints.
+    pub root_controller: Pubkey,
+    /// Root-bound lifecycle RentCredit receiving Mint lamports.
+    pub rent_credit: Pubkey,
+    /// Registry-selected current Core program for producer-subtree retirement.
+    pub current_core_program: Pubkey,
+}
+
+/// Ordered zero-supply Mint closures before canonical lifecycle-Rent closure.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FractionalExposureRetirementPlanV2 {
+    instructions: Vec<Instruction>,
+    market: [u8; 32],
+    release_set: [u8; 32],
+    rent_credit: Pubkey,
+    current_core_program: Pubkey,
+    post_revision: u64,
+}
+
+impl FractionalExposureRetirementPlanV2 {
+    /// One exact Token-2022 CloseAccount instruction per K-ordered Mint.
+    pub fn instructions(&self) -> &[Instruction] {
+        &self.instructions
+    }
+
+    /// Logical Market whose producer subtree is retiring.
+    pub const fn market(&self) -> [u8; 32] {
+        self.market
+    }
+
+    /// Immutable selected release set.
+    pub const fn release_set(&self) -> [u8; 32] {
+        self.release_set
+    }
+
+    /// Root-bound lifecycle RentCredit receiving every Mint's lamports.
+    pub const fn rent_credit(&self) -> Pubkey {
+        self.rent_credit
+    }
+
+    /// Exact root revision after retirement.
+    pub const fn post_revision(&self) -> u64 {
+        self.post_revision
+    }
+}
+
+/// Chain-observed lifecycle-Rent state for final producer-subtree closure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FractionalExposureRentCloseObservationV2<'a> {
+    /// Exact lifecycle RentCredit account.
+    pub credit_key: Pubkey,
+    /// Exact current lifecycle RentCredit bytes.
+    pub credit_bytes: &'a [u8],
+    /// Full lamport balance transferred on close.
+    pub credit_lamports: u64,
+    /// Wallet lamports before refund.
+    pub wallet_lamports: u64,
+    /// Exact canonical Core producer-subtree retirement receipt.
+    pub core_receipt_bytes: &'a [u8],
+    /// Current Core program/deployment authentication completed.
+    pub current_core_authenticated: bool,
+}
+
+/// Canonical lifecycle-Rent request, plan, and immediate receipt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FractionalExposureRentClosePlanV2 {
+    /// Exact request carrying the hostile-decoded Core retirement receipt.
+    pub request: CloseLifecycleRentCreditV2,
+    /// Canonical full-balance close plan.
+    pub plan: LifecycleClosePlanV2,
+    /// Canonical immediate Rent receipt.
+    pub receipt: LifecycleRentCloseReceiptV2,
 }
 
 impl FractionalExposureTokenPlanV2 {
@@ -425,6 +516,109 @@ pub fn plan_fractional_exposure_token_effect_v2(
         post_source,
         pre_destination: observed.pre_destination,
         post_destination,
+    })
+}
+
+/// Close every terms-selected K Mint only after exact zero-supply checks.
+pub fn plan_fractional_exposure_retirement_v2(
+    terms: FractionalExposureTermsV2<'_>,
+    request: FractionalExposureRequestV2,
+    behavior: CheckedFractionalTokenBehaviorV2,
+    context: FractionalExposureRetirementContextV2,
+    mints: &[FractionalExposureMintSnapshotV2<'_>],
+) -> Result<FractionalExposureRetirementPlanV2> {
+    let request = request.bind_terms(terms).map_err(|_| Error::Token)?;
+    if request.action() != FractionalExposureActionV2::ZeroSupplyRetire
+        || behavior.content_digest() != terms.token_behavior()
+        || behavior.selection().token_program() != terms.token_program()
+        || context.root_controller == Pubkey::default()
+        || context.rent_credit == Pubkey::default()
+        || context.current_core_program == Pubkey::default()
+        || context.root_controller == context.rent_credit
+        || mints.len() != usize::try_from(terms.representation_width()).map_err(|_| Error::Token)?
+    {
+        return Err(Error::Token);
+    }
+    let token_program = Pubkey::new_from_array(terms.token_program());
+    let mut instructions = Vec::with_capacity(mints.len());
+    for (index, observed) in mints.iter().enumerate() {
+        let coordinate = u32::try_from(index).map_err(|_| Error::Token)?;
+        let expected_mint = terms.shard_mint(coordinate).map_err(|_| Error::Token)?;
+        if observed.representation_coordinate != coordinate
+            || observed.mint.key.to_bytes() != expected_mint
+            || observed.mint.program_owner != token_program
+        {
+            return Err(Error::Token);
+        }
+        Token2022BehaviorProfileV2::check_mint(
+            terms.token_program(),
+            expected_mint,
+            observed.mint.data,
+            context.root_controller.to_bytes(),
+            0,
+        )
+        .map_err(|_| Error::Token)?;
+        instructions.push(
+            token_instruction::close_account(
+                &token_program,
+                &observed.mint.key,
+                &context.rent_credit,
+                &context.root_controller,
+                &[],
+            )
+            .map_err(|_| Error::Token)?,
+        );
+    }
+    Ok(FractionalExposureRetirementPlanV2 {
+        instructions,
+        market: terms.market(),
+        release_set: terms.release_set(),
+        rent_credit: context.rent_credit,
+        current_core_program: context.current_core_program,
+        post_revision: request
+            .input()
+            .expected_revision
+            .checked_add(1)
+            .ok_or(Error::Rent)?,
+    })
+}
+
+/// Consume canonical Core retirement and derive the sole lifecycle-Rent close.
+pub fn plan_fractional_exposure_rent_close_v2(
+    retirement: &FractionalExposureRetirementPlanV2,
+    observed: FractionalExposureRentCloseObservationV2<'_>,
+) -> Result<FractionalExposureRentClosePlanV2> {
+    if observed.credit_key != retirement.rent_credit || retirement.instructions.is_empty() {
+        return Err(Error::Rent);
+    }
+    let credit = LifecycleRentCreditV2::decode(observed.credit_bytes).map_err(|_| Error::Rent)?;
+    if credit.market().to_bytes() != retirement.market
+        || credit.release_set().to_bytes() != retirement.release_set
+    {
+        return Err(Error::Rent);
+    }
+    let core_receipt =
+        RetirementReceiptV1::decode(observed.core_receipt_bytes).map_err(|_| Error::Rent)?;
+    let request = CloseLifecycleRentCreditV2::new(core_receipt);
+    let credit_id =
+        LifecycleAccountIdV2::new(observed.credit_key.to_bytes()).map_err(|_| Error::Rent)?;
+    let core_id = LifecycleAccountIdV2::new(retirement.current_core_program.to_bytes())
+        .map_err(|_| Error::Rent)?;
+    let plan = LifecycleClosePlanV2::new(
+        credit,
+        credit_id,
+        core_id,
+        observed.current_core_authenticated,
+        observed.credit_lamports,
+        observed.wallet_lamports,
+        request,
+    )
+    .map_err(|_| Error::Rent)?;
+    let receipt = plan.receipt(credit, credit_id).map_err(|_| Error::Rent)?;
+    Ok(FractionalExposureRentClosePlanV2 {
+        request,
+        plan,
+        receipt,
     })
 }
 

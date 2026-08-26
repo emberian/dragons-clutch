@@ -12,9 +12,11 @@ use dclutch_fractional_claim_kernel::{
     fractional_exposure_terms_bytes_v2,
 };
 use dclutch_fractional_claim_operator::{
-    Error, FractionalExposureTokenEffectV2, FractionalExposureTokenObservationV2,
+    Error, FractionalExposureMintSnapshotV2, FractionalExposureRetirementContextV2,
+    FractionalExposureTokenEffectV2, FractionalExposureTokenObservationV2,
     FractionalTokenAccountSnapshotV1, FractionalTokenBehaviorRecordAdmissionV2,
-    authenticate_fractional_token_behavior_v2, plan_fractional_exposure_token_effect_v2,
+    authenticate_fractional_token_behavior_v2, plan_fractional_exposure_retirement_v2,
+    plan_fractional_exposure_token_effect_v2,
 };
 use dclutch_token_svm::{
     TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, TokenBehaviorSelectionV2,
@@ -351,6 +353,90 @@ fn terminal_burn_is_exact_but_settlement_remains_a_separate_claims_gate() {
                 pre_source: 23,
                 pre_destination: 0,
             },
+        ),
+        Err(Error::Token)
+    );
+}
+
+#[test]
+fn retirement_closes_all_k_mints_in_terms_order_only_at_zero_supply() {
+    let encoded_terms = terms_bytes();
+    let terms = terms(&encoded_terms);
+    let selection = TokenBehaviorSelectionV2::new(REALM, RELEASE)
+        .expect("selection")
+        .to_bytes();
+    let behavior =
+        authenticate_fractional_token_behavior_v2(terms, REALM, &selection, behavior_admission())
+            .expect("behavior");
+    let root = Pubkey::new_from_array(ROOT);
+    let rent_credit = Pubkey::new_from_array([61; 32]);
+    let context = FractionalExposureRetirementContextV2 {
+        root_controller: root,
+        rent_credit,
+        current_core_program: Pubkey::new_from_array([62; 32]),
+    };
+    let mint_data = [
+        behavior_mint(root, 0, 0),
+        behavior_mint(root, 0, 1),
+        behavior_mint(root, 0, 2),
+    ];
+    let mints = [
+        FractionalExposureMintSnapshotV2 {
+            representation_coordinate: 0,
+            mint: snapshot(MINTS[0], &mint_data[0]),
+        },
+        FractionalExposureMintSnapshotV2 {
+            representation_coordinate: 1,
+            mint: snapshot(MINTS[1], &mint_data[1]),
+        },
+        FractionalExposureMintSnapshotV2 {
+            representation_coordinate: 2,
+            mint: snapshot(MINTS[2], &mint_data[2]),
+        },
+    ];
+    let plan = plan_fractional_exposure_retirement_v2(
+        terms,
+        request(FractionalExposureActionV2::ZeroSupplyRetire, 0),
+        behavior,
+        context,
+        &mints,
+    )
+    .expect("zero-supply retirement");
+    assert_eq!(plan.instructions().len(), 3);
+    assert_eq!(plan.post_revision(), 8);
+    for (instruction, expected_mint) in plan.instructions().iter().zip(MINTS) {
+        assert_eq!(instruction.program_id.to_bytes(), TOKEN_2022_PROGRAM_ID);
+        assert_eq!(instruction.accounts[0].pubkey.to_bytes(), expected_mint);
+        assert_eq!(instruction.accounts[1].pubkey, rent_credit);
+        assert_eq!(instruction.accounts[2].pubkey, root);
+    }
+
+    let hostile_data = [
+        behavior_mint(root, 0, 0),
+        behavior_mint(root, 1, 1),
+        behavior_mint(root, 0, 2),
+    ];
+    let hostile = [
+        FractionalExposureMintSnapshotV2 {
+            representation_coordinate: 0,
+            mint: snapshot(MINTS[0], &hostile_data[0]),
+        },
+        FractionalExposureMintSnapshotV2 {
+            representation_coordinate: 1,
+            mint: snapshot(MINTS[1], &hostile_data[1]),
+        },
+        FractionalExposureMintSnapshotV2 {
+            representation_coordinate: 2,
+            mint: snapshot(MINTS[2], &hostile_data[2]),
+        },
+    ];
+    assert_eq!(
+        plan_fractional_exposure_retirement_v2(
+            terms,
+            request(FractionalExposureActionV2::ZeroSupplyRetire, 0),
+            behavior,
+            context,
+            &hostile,
         ),
         Err(Error::Token)
     );

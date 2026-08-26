@@ -53,12 +53,15 @@ pub use composition::{
     decode_and_check_fractional_exposure_v3,
 };
 pub use exposure_action_v2::{
-    CheckedFractionalTokenBehaviorV2, FractionalExposureTerminalCandidateV2,
-    FractionalExposureTerminalInputV2, FractionalExposureTokenEffectV2,
-    FractionalExposureTokenObservationV2, FractionalExposureTokenPlanV2,
-    FractionalTokenBehaviorRecordAdmissionV2, authenticate_fractional_token_behavior_v2,
-    fractional_exposure_record_admission_v2, plan_fractional_exposure_terminal_candidate_v2,
-    plan_fractional_exposure_token_effect_v2,
+    CheckedFractionalTokenBehaviorV2, FractionalExposureMintSnapshotV2,
+    FractionalExposureRentCloseObservationV2, FractionalExposureRentClosePlanV2,
+    FractionalExposureRetirementContextV2, FractionalExposureRetirementPlanV2,
+    FractionalExposureTerminalCandidateV2, FractionalExposureTerminalInputV2,
+    FractionalExposureTokenEffectV2, FractionalExposureTokenObservationV2,
+    FractionalExposureTokenPlanV2, FractionalTokenBehaviorRecordAdmissionV2,
+    authenticate_fractional_token_behavior_v2, fractional_exposure_record_admission_v2,
+    plan_fractional_exposure_rent_close_v2, plan_fractional_exposure_retirement_v2,
+    plan_fractional_exposure_terminal_candidate_v2, plan_fractional_exposure_token_effect_v2,
 };
 pub use records::{
     CheckedFractionalReleaseInputV1, CheckedFractionalReleaseV1, FinalizedArtifactRecordV1,
