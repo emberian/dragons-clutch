@@ -180,6 +180,7 @@ fn authenticate_open(
     }
     let expected_parent = hash(request_bytes).to_bytes();
     let expected_beneficiary = state.rent_beneficiary.to_bytes();
+    let payer = account(accounts, payer_index(custody.operation))?;
     let inactive_semantic = custody.semantic.candidate == [0; 32]
         && custody.semantic.source_owner == [0; 32]
         && custody.semantic.destination_owner == [0; 32]
@@ -196,7 +197,7 @@ fn authenticate_open(
         || custody.context != frame.market().key.to_bytes()
         || custody.semantic.parent_request_digest != expected_parent
         || custody.semantic.generation != state.identity.generation
-        || custody.payer != expected_beneficiary
+        || custody.payer != payer.key.to_bytes()
         || custody.rent_refund != expected_beneficiary
         || !inactive_semantic
     {
