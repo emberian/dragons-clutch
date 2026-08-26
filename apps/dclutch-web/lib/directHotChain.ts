@@ -672,14 +672,24 @@ function decodeInterpretedStrategy(bytes: Uint8Array): Readonly<{ transitionSche
 }
 
 function tailCountFromProfile(profile: Uint8Array, runtime: ReadonlyArray<RpcAccount>): number {
+  if (profile.length < DirectAbi.FIXED_DATA_PREDICATE_HEADER_BYTES) throw new Error('Direct AccountProfile is shorter than Profile14');
   const view = new DataView(profile.buffer, profile.byteOffset, profile.byteLength);
+  if (view.getUint16(10, true) !== DirectAbi.FIXED_DATA_PREDICATE_ARTIFACT_PROFILE
+      || view.getUint16(DirectAbi.FIXED_DATA_PREDICATE_DYNAMIC_SPAN_COUNT_OFFSET, true) !== 0) {
+    throw new Error('Direct AccountProfile is not the fixed-topology Profile14 successor');
+  }
   const fixed = view.getUint16(12, true);
   const stride = view.getUint16(14, true);
   const fixedOperations = view.getUint16(16, true);
   const rules = fixed + stride;
+  const predicateCount = view.getUint16(DirectAbi.FIXED_DATA_PREDICATE_COUNT_OFFSET, true);
+  const operationBase = DirectAbi.FIXED_DATA_PREDICATE_HEADER_BYTES
+    + predicateCount * DirectAbi.FIXED_DATA_PREDICATE_BYTES
+    + rules * DirectAbi.RULE_BYTES;
   let found: number | null = null;
   for (let index = 0; index < fixedOperations; index += 1) {
-    const offset = 32 + rules * 16 + index * ACCOUNT_PROFILE_OPERATION_BYTES;
+    const offset = operationBase + index * ACCOUNT_PROFILE_OPERATION_BYTES;
+    if (offset + ACCOUNT_PROFILE_OPERATION_BYTES > profile.length) throw new Error('Direct AccountProfile operation body is truncated');
     if (profile[offset] !== ACCOUNT_PROFILE_TAIL_COUNT_OPCODE) continue;
     if (found !== null || profile[offset + 1] !== 0) throw new Error('AccountProfile has ambiguous tail-count authority');
     const account = new DataView(profile.buffer, profile.byteOffset + offset + 2, 2).getUint16(0, true);
@@ -849,7 +859,12 @@ export async function inspectDirectHotRouteV3(
   ];
   const outcomeCount = tailCountFromProfile(profileRaw.data, logicalRuntimeAccounts);
   if (outcomeCount !== basisWidth) throw new Error('AccountProfile runtime width differs from Product-owned basis width');
-  validateRuntimeAccountProfileV2(profileRaw.data, outcomeCount, logicalRuntimeMetas);
+  validateRuntimeAccountProfileV2(
+    profileRaw.data,
+    outcomeCount,
+    logicalRuntimeMetas,
+    logicalRuntimeAccounts.map((account) => account.data),
+  );
 
   let checkedOuter: CheckedHotOuterEvidenceV3 = Object.freeze({ status: 'unavailable', reason: 'no user-supplied checked infrastructure manifest recognizes this Trading release' });
   if (manifest.checkedInfrastructure !== null) {

@@ -45,6 +45,22 @@ import {
   DIRECT_NATIVE_EVIDENCE_SELLER_MESSAGE_OFFSET_V3,
   DIRECT_NATIVE_EVIDENCE_SIGNATURE_COUNT_V3,
   DIRECT_SIGNED_PARTICIPANT_BYTES_V3,
+  FIXED_DATA_PREDICATE_ACCOUNT_OFFSET_V2,
+  FIXED_DATA_PREDICATE_ARTIFACT_PROFILE,
+  FIXED_DATA_PREDICATE_BYTES,
+  FIXED_DATA_PREDICATE_COUNT_OFFSET,
+  FIXED_DATA_PREDICATE_DATA_OFFSET_V2,
+  FIXED_DATA_PREDICATE_DYNAMIC_SPAN_COUNT_OFFSET,
+  FIXED_DATA_PREDICATE_HEADER_BYTES,
+  FIXED_DATA_PREDICATE_HEADER_RESERVED_OFFSET,
+  FIXED_DATA_PREDICATE_OPCODE_OFFSET_V2,
+  FIXED_DATA_PREDICATE_PAYLOAD_OFFSET_V2,
+  FIXED_DATA_PREDICATE_REQUIRE_U16,
+  FIXED_DATA_PREDICATE_REQUIRE_U32,
+  FIXED_DATA_PREDICATE_REQUIRE_U64,
+  FIXED_DATA_PREDICATE_REQUIRE_U8,
+  FIXED_DATA_PREDICATE_REQUIRE_ZERO_RANGE,
+  FIXED_DATA_PREDICATE_RESERVED_OFFSET_V2,
   HEADER_BYTES,
   HOT_EXECUTION_ENVELOPE_BYTES_V3,
   HOT_EXECUTION_MAGIC_V3,
@@ -53,6 +69,7 @@ import {
   HOT_FIXED_ACCOUNT_COUNT_V3,
   HOT_CONFIG_RAW_ACCOUNT_V3,
   HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
+  HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
   HOT_MARKET_ACCOUNT_V3,
   HOT_PORTFOLIO_RAW_ACCOUNT_V3,
   HOT_PRODUCT_RAW_ACCOUNT_V3,
@@ -444,21 +461,37 @@ export function validateRuntimeAccountProfileV2(
   profile: Uint8Array,
   outcomeCount: number,
   accounts: ReadonlyArray<DirectHotAccountMetaV3>,
+  accountData?: ReadonlyArray<Uint8Array>,
 ): void {
   if (profile.length < HEADER_BYTES || new TextDecoder('ascii', { fatal: true }).decode(profile.slice(0, 8)) !== 'DCLTAP02') throw new Error('AccountProfile has the wrong V2 magic/width');
   const view = new DataView(profile.buffer, profile.byteOffset, profile.byteLength);
-  if (view.getUint16(8, true) !== 2 || ![2, 3].includes(view.getUint16(10, true)) || view.getUint32(28, true) !== 0) throw new Error('AccountProfile header is unsupported or noncanonical');
+  const artifactProfile = view.getUint16(10, true);
+  if (view.getUint16(8, true) !== 2 || ![2, 3, FIXED_DATA_PREDICATE_ARTIFACT_PROFILE].includes(artifactProfile)) throw new Error('AccountProfile header is unsupported or noncanonical');
   if (!Number.isInteger(outcomeCount) || outcomeCount <= 0 || outcomeCount > 0xffff_ffff) throw new Error('outcome count is outside runtime u32');
   const fixed = view.getUint16(12, true);
   const stride = view.getUint16(14, true);
   const fixedOperations = view.getUint16(16, true);
   const itemOperations = view.getUint16(18, true);
-  const expectedProfile = HEADER_BYTES + (fixed + stride) * RULE_BYTES + (fixedOperations + itemOperations) * 16;
+  let profileHeader = HEADER_BYTES;
+  let predicateCount = 0;
+  if (artifactProfile === FIXED_DATA_PREDICATE_ARTIFACT_PROFILE) {
+    if (profile.length < FIXED_DATA_PREDICATE_HEADER_BYTES
+        || view.getUint16(FIXED_DATA_PREDICATE_DYNAMIC_SPAN_COUNT_OFFSET, true) !== 0
+        || profile.slice(FIXED_DATA_PREDICATE_HEADER_RESERVED_OFFSET, FIXED_DATA_PREDICATE_HEADER_BYTES).some((value) => value !== 0)) {
+      throw new Error('Profile14 has dynamic spans or noncanonical header bytes');
+    }
+    predicateCount = view.getUint16(FIXED_DATA_PREDICATE_COUNT_OFFSET, true);
+    if (predicateCount === 0) throw new Error('Profile14 has no fixed-data prestate predicates');
+    profileHeader = FIXED_DATA_PREDICATE_HEADER_BYTES + predicateCount * FIXED_DATA_PREDICATE_BYTES;
+  } else if (view.getUint32(28, true) !== 0) {
+    throw new Error('AccountProfile header is unsupported or noncanonical');
+  }
+  const expectedProfile = profileHeader + (fixed + stride) * RULE_BYTES + (fixedOperations + itemOperations) * 16;
   const expectedAccounts = fixed + stride * outcomeCount;
-  if (profile.length !== expectedProfile || accounts.length !== expectedAccounts) throw new Error('AccountProfile or expanded runtime account width differs');
+  if (profile.length !== expectedProfile || accounts.length !== expectedAccounts || (accountData !== undefined && accountData.length !== accounts.length)) throw new Error('AccountProfile or expanded runtime account width differs');
   for (let coordinate = 0; coordinate < accounts.length; coordinate += 1) {
     const rule = coordinate < fixed ? coordinate : fixed + ((coordinate - fixed) % stride);
-    const privileges = profile[HEADER_BYTES + rule * RULE_BYTES];
+    const privileges = profile[profileHeader + rule * RULE_BYTES];
     if ((privileges & ~7) !== 0
         || accounts[coordinate].isSigner !== ((privileges & 1) !== 0)
         || accounts[coordinate].isWritable !== ((privileges & 2) !== 0)
@@ -466,6 +499,58 @@ export function validateRuntimeAccountProfileV2(
       throw new Error(`runtime account ${coordinate} differs from its authenticated AccountProfile privilege rule`);
     }
     exactKey(accounts[coordinate].address, `runtime account ${coordinate}`);
+  }
+  let priorAccount = -1;
+  let priorOffset = -1;
+  let priorEnd = -1;
+  for (let index = 0; index < predicateCount; index += 1) {
+    const predicate = FIXED_DATA_PREDICATE_HEADER_BYTES + index * FIXED_DATA_PREDICATE_BYTES;
+    const opcode = profile[predicate + FIXED_DATA_PREDICATE_OPCODE_OFFSET_V2] ?? 0;
+    const reserved = profile[predicate + FIXED_DATA_PREDICATE_RESERVED_OFFSET_V2] ?? 1;
+    const account = view.getUint16(predicate + FIXED_DATA_PREDICATE_ACCOUNT_OFFSET_V2, true);
+    const dataOffset = view.getUint32(predicate + FIXED_DATA_PREDICATE_DATA_OFFSET_V2, true);
+    const payload = predicate + FIXED_DATA_PREDICATE_PAYLOAD_OFFSET_V2;
+    let width: number;
+    let expected: Uint8Array | null;
+    if (opcode === FIXED_DATA_PREDICATE_REQUIRE_U8) {
+      width = 1; expected = profile.slice(payload, payload + width);
+      if (profile.slice(payload + width, payload + 8).some((value) => value !== 0)) throw new Error('Profile14 u8 predicate has nonzero inactive payload bytes');
+    } else if (opcode === FIXED_DATA_PREDICATE_REQUIRE_U16) {
+      width = 2; expected = profile.slice(payload, payload + width);
+      if (profile.slice(payload + width, payload + 8).some((value) => value !== 0)) throw new Error('Profile14 u16 predicate has nonzero inactive payload bytes');
+    } else if (opcode === FIXED_DATA_PREDICATE_REQUIRE_U32) {
+      width = 4; expected = profile.slice(payload, payload + width);
+      if (profile.slice(payload + width, payload + 8).some((value) => value !== 0)) throw new Error('Profile14 u32 predicate has nonzero inactive payload bytes');
+    } else if (opcode === FIXED_DATA_PREDICATE_REQUIRE_U64) {
+      width = 8; expected = profile.slice(payload, payload + width);
+    } else if (opcode === FIXED_DATA_PREDICATE_REQUIRE_ZERO_RANGE) {
+      width = view.getUint32(payload, true); expected = null;
+      if (width === 0 || profile.slice(payload + 4, payload + 8).some((value) => value !== 0)) throw new Error('Profile14 zero-range predicate has a noncanonical width');
+    } else {
+      throw new Error('Profile14 fixed-data predicate has an unsupported opcode');
+    }
+    const end = dataOffset + width;
+    const ruleOffset = profileHeader + account * RULE_BYTES;
+    const ruleDataLength = account < fixed ? view.getUint32(ruleOffset + 8, true) : 0;
+    const prestate = profile[ruleOffset + 3] ?? 0xff;
+    if (reserved !== 0 || account >= fixed || (prestate !== 0 && prestate !== 1)
+        || profile[ruleOffset + 2] !== 0 || view.getUint16(ruleOffset + 4, true) !== 0
+        || view.getUint16(ruleOffset + 6, true) !== 0 || view.getUint32(ruleOffset + 12, true) !== 0
+        || end > ruleDataLength || end > 0xffff_ffff
+        || account < priorAccount || (account === priorAccount && (dataOffset <= priorOffset || dataOffset < priorEnd))) {
+      throw new Error('Profile14 fixed-data predicate is not canonical for its exact fixed-account rule');
+    }
+    const observed = accountData?.[account];
+    if (observed !== undefined && !(observed.length === 0 && prestate === 1)) {
+      const actual = observed.slice(dataOffset, end);
+      const accepted = actual.length === width && (expected === null
+        ? actual.every((value) => value === 0)
+        : actual.every((value, offset) => value === expected[offset]));
+      if (!accepted) throw new Error(`runtime account ${account} violates its authenticated Profile14 data prestate`);
+    }
+    priorAccount = account;
+    priorOffset = dataOffset;
+    priorEnd = end;
   }
 }
 
@@ -525,6 +610,10 @@ export function compileDirectInlineTransactionV3(input: Readonly<{
     throw new Error('Direct InlineOrdinary route does not select CapabilityProgramV4');
   }
   exactIdentity(input.route.selectedProgram, 'selected CapabilityProgramV4 content');
+  if (input.route.accountProfile.length < FIXED_DATA_PREDICATE_HEADER_BYTES
+      || new DataView(input.route.accountProfile.buffer, input.route.accountProfile.byteOffset, input.route.accountProfile.byteLength).getUint16(10, true) !== FIXED_DATA_PREDICATE_ARTIFACT_PROFILE) {
+    throw new Error('Direct InlineOrdinary requires canonical fixed-data-prestate Profile14');
+  }
   validateFixedFrame(input.route);
   validateCanonicalLookupTableV3(input.route);
   validateRuntimeAccountProfileV2(input.route.accountProfile, input.route.outcomeCount, [
@@ -532,6 +621,7 @@ export function compileDirectInlineTransactionV3(input: Readonly<{
     input.route.fixedAccounts[HOT_CONFIG_RAW_ACCOUNT_V3],
     input.route.fixedAccounts[HOT_PRODUCT_RAW_ACCOUNT_V3],
     input.route.fixedAccounts[HOT_PORTFOLIO_RAW_ACCOUNT_V3],
+    input.route.fixedAccounts[HOT_LINKED_BASIS_RAW_ACCOUNT_V3],
     ...input.route.runtimeAccounts,
   ]);
   const preview = previewDirectInlineV3(input.route, input.seller, input.buyer, input.fill, input.executionPrice, input.clockSlot);

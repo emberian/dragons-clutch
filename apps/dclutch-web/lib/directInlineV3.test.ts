@@ -72,14 +72,23 @@ function participants(market: string): Readonly<{ seller: SignedDirectIntentV3; 
 }
 
 function runtimeProfile(): Uint8Array {
-  const output = new Uint8Array(96);
+  const fixedAccounts = 5;
+  const predicateBytes = 16;
+  const profileHeader = 48 + predicateBytes;
+  const output = new Uint8Array(profileHeader + fixedAccounts * 16);
   output.set(new TextEncoder().encode('DCLTAP02'), 0);
   const view = new DataView(output.buffer);
   view.setUint16(8, 2, true);
-  view.setUint16(10, 2, true);
-  view.setUint16(12, 4, true);
+  view.setUint16(10, 14, true);
+  view.setUint16(12, fixedAccounts, true);
   view.setUint16(20, 1, true);
-  output[32] = 2;
+  view.setUint16(42, 1, true);
+  output[48] = 1;
+  output[56] = 0x41;
+  output[profileHeader] = 2;
+  for (let accountIndex = 0; accountIndex < fixedAccounts; accountIndex += 1) {
+    view.setUint32(profileHeader + accountIndex * 16 + 8, 1, true);
+  }
   return output;
 }
 
@@ -257,8 +266,11 @@ describe('Direct V3 inline transaction construction', () => {
   it('refuses AccountProfile privilege substitution and intent over-width coordinates', () => {
     const candidate = route();
     expect(() => validateRuntimeAccountProfileV2(candidate.accountProfile, candidate.outcomeCount, [
-      account(key(11), false), account(key(12)), account(key(13)), account(key(14)),
+      account(key(11), false), account(key(12)), account(key(13)), account(key(14)), account(key(15)),
     ])).toThrow(/privilege/);
+    expect(() => validateRuntimeAccountProfileV2(candidate.accountProfile, candidate.outcomeCount, [
+      account(key(11), true), account(key(12)), account(key(13)), account(key(14)), account(key(15)),
+    ], [new Uint8Array([0x42]), new Uint8Array(1), new Uint8Array(1), new Uint8Array(1), new Uint8Array(1)])).toThrow(/data prestate/);
     const { seller, buyer } = participants(candidate.market);
     expect(() => previewDirectInlineV3({ ...candidate, outcomeCount: 70_000 }, seller, buyer, 2_000n, 500_000n, 1_000n)).toThrow(/seller intent/);
   });

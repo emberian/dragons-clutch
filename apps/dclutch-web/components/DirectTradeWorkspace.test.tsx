@@ -8,7 +8,7 @@ describe('Direct V3 trade workbench', () => {
     const html = renderToStaticMarkup(<DirectTradeWorkspace />);
     expect(html).toContain('One signed price.');
     expect(html).toContain('ProgramSetV2 → CapabilityProgramV4');
-    expect(html).toContain('Profile13/LifecycleV5');
+    expect(html).toContain('Profile14/LifecycleV5');
     expect(html).toContain('Exact Hot38 + strategy/runtime-suffix + one canonical LUT route manifest');
     expect(html).toContain('2,280-byte checked V4-capable infrastructure');
     expect(html).toContain('runtime-u32 outcome coordinates');
