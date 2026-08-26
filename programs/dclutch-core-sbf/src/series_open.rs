@@ -15,7 +15,7 @@ use dclutch_market_core_codec::{
     Action, Admission, ChildEffectObservation, CoreState, MarketCoreStateSeedsV2, Readiness,
     Request, Role, SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES, SeriesCoreAckV1,
     SeriesCoreActionV1, SeriesCoreRequestV1, SeriesFoundingPermitV1, SeriesOpenObservation,
-    open_series_market,
+    SERIES_OPEN_POST_RESOURCE_DIGEST_DOMAIN_V1, open_series_market,
 };
 use dclutch_product_runtime_v2_svm_reader::{
     FinalizedRecordFrameV2, ProductRuntimeFrameV2, authenticate_product_runtime_v2,
@@ -53,9 +53,6 @@ use crate::{
 
 /// Exact final-Series-Open account count.
 pub const SERIES_OPEN_ACCOUNT_COUNT_V1: usize = 37;
-/// Domain binding the exact Open Market and Trading replay candidates.
-pub const SERIES_OPEN_POST_RESOURCE_DIGEST_DOMAIN_V1: &[u8] = b"dclutch/core-series-open-post/v1";
-
 struct SeriesOpenAccounts<'accounts, 'info> {
     caller: &'accounts AccountInfo<'info>,
     market: &'accounts AccountInfo<'info>,
