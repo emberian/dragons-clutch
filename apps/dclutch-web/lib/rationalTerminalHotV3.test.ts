@@ -2,7 +2,7 @@ import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
 import * as Abi from './generated/rationalTerminalHotV3';
-import { encodeRationalTerminalHotRequestV3, specializeRationalTerminalChildV2 } from './rationalTerminalHotV3';
+import { compileRationalTerminalHotV3, encodeRationalTerminalHotRequestV3, specializeRationalTerminalChildV2 } from './rationalTerminalHotV3';
 
 function key(seed: number): string { return new PublicKey(new Uint8Array(32).fill(seed)).toBase58(); }
 function id(seed: number): Uint8Array { return new Uint8Array(32).fill(seed); }
@@ -37,5 +37,16 @@ describe('Rational terminal Hot V3 codec', () => {
     expect(() => encodeRationalTerminalHotRequestV3({ ...input(), asset: { ...input().asset, expectedActorShards: 19n } })).toThrow(/cannot fund/);
     expect(() => encodeRationalTerminalHotRequestV3({ ...input(), selectedOutcome: 258 })).toThrow(/runtime u32/);
     expect(() => encodeRationalTerminalHotRequestV3({ ...input(), asset: { ...input().asset, actorShardAccount: input().asset.shardMint } })).toThrow(/aliases/);
+    expect(() => encodeRationalTerminalHotRequestV3({ ...input(), quantity: 18_446_744_073_709_551_615n })).toThrow(/outside canonical u64/);
+  });
+
+  it('keeps payout Product-derived and explicitly permits the losing zero-payout route', async () => {
+    const compiled = await compileRationalTerminalHotV3({
+      ...input(), expectedCustodyReplayRevision: 18_446_744_073_709_551_615n,
+    });
+    expect(compiled.claimsAccountCount).toBe(49);
+    expect(compiled.rawShardBurn).toBe(20n);
+    expect(compiled.payoutPolicy).toBe('product-derived-including-zero');
+    expect(compiled.childRequest.slice(144, 176)).toEqual(compiled.familyDigest);
   });
 });

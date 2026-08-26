@@ -40,6 +40,17 @@ export type RationalTerminalHotInputV3 = Readonly<{
   asset: RationalTerminalAssetV3;
 }>;
 
+export type RationalTerminalCompiledV3 = Readonly<{
+  familyBytes: Uint8Array;
+  familyDigest: Uint8Array;
+  childRequest: Uint8Array;
+  childDigest: Uint8Array;
+  claimsAccountCount: 49;
+  rawQuantity: bigint;
+  rawShardBurn: bigint;
+  payoutPolicy: 'product-derived-including-zero';
+}>;
+
 function identity(value: Uint8Array, field: string): Uint8Array {
   if (value.length !== 32 || isZero(value)) throw new Error(`${field} must be one nonzero 32-byte identity`);
   return value;
@@ -79,9 +90,12 @@ export function encodeRationalTerminalHotRequestV3(input: RationalTerminalHotInp
       || input.selectedOutcome >= input.outcomeCount) {
     throw new Error('Product outcome width or selected outcome is outside runtime u32');
   }
-  if (input.quantity === 0n || input.denominator === 0n || input.expectedRepresentationRevision === MAX_U64) {
+  if (input.quantity === 0n || input.denominator === 0n || input.generation === 0n
+      || input.expectedRepresentationRevision === MAX_U64) {
     throw new Error('terminal quantity, denominator, and next replay revision must be executable');
   }
+  const rawShardBurn = unsigned(input.denominator, 'terminal denominator') * unsigned(input.quantity, 'terminal quantity');
+  unsigned(rawShardBurn, 'terminal raw shard burn');
   const output = new Uint8Array(Abi.RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3);
   output.set(Abi.RATIONAL_TERMINAL_HOT_MAGIC_V3, Abi.RATIONAL_TERMINAL_HOT_MAGIC_OFFSET_V3);
   putU16(output, Abi.RATIONAL_TERMINAL_HOT_VERSION_OFFSET_V3, Abi.RATIONAL_TERMINAL_HOT_VERSION_V3);
@@ -131,7 +145,7 @@ export function encodeRationalTerminalHotRequestV3(input: RationalTerminalHotInp
     [Abi.ASSET_EXPECTED_ACTOR_SHARDS_OFFSET, input.asset.expectedActorShards],
     [Abi.ASSET_EXPECTED_STRUCTURED_SHARDS_OFFSET, input.asset.expectedStructuredShards],
   ] as const) putU64(output, assetOffset + offset, value);
-  if (input.asset.expectedActorShards < input.denominator * input.quantity) {
+  if (input.asset.expectedActorShards < rawShardBurn) {
     throw new Error('actor shard balance cannot fund exact terminal burn');
   }
   return output;
@@ -152,4 +166,24 @@ export async function specializeRationalTerminalChildV2(family: Uint8Array): Pro
   putU16(childRequest, Abi.REQUEST_VERSION_OFFSET, Abi.PHYSICAL_ABI_VERSION_V2);
   childRequest.set(familyDigest, Abi.REQUEST_PARENT_CONTEXT_OFFSET);
   return Object.freeze({ familyDigest, childRequest });
+}
+
+/**
+ * Compile the fixed terminal family and exact Claims child without guessing a
+ * payout. The ProductV3 evaluator owns payout and explicitly admits zero.
+ */
+export async function compileRationalTerminalHotV3(input: RationalTerminalHotInputV3): Promise<RationalTerminalCompiledV3> {
+  const familyBytes = encodeRationalTerminalHotRequestV3(input);
+  const specialized = await specializeRationalTerminalChildV2(familyBytes);
+  const childDigest = await sha256(specialized.childRequest);
+  return Object.freeze({
+    familyBytes,
+    familyDigest: specialized.familyDigest,
+    childRequest: specialized.childRequest,
+    childDigest,
+    claimsAccountCount: 49,
+    rawQuantity: input.quantity,
+    rawShardBurn: input.denominator * input.quantity,
+    payoutPolicy: 'product-derived-including-zero',
+  });
 }
