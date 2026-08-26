@@ -16,8 +16,13 @@ mod hot_bundle_v3;
 mod hot_effect_v3;
 mod hot_terminal_v3;
 mod hot_transaction_v3;
+mod open_capability_set_v3;
 mod open_selected_transaction_v3;
 mod open_selected_v3;
+mod open_structured_transaction_v3;
+mod open_structured_v3;
+#[cfg(test)]
+mod test_open_fixture_v3;
 
 pub use hot_account_profile_v3::{
     RATIONAL_TERMINAL_ACCOUNT_PROFILE_BYTES_V3, RationalTerminalAccountProfileInputV3,
@@ -42,6 +47,11 @@ pub use hot_transaction_v3::{
     CheckedRationalHotOuterReleaseV3, RationalTerminalHotInstructionV3, RationalTerminalHotStateV3,
     build_rational_terminal_hot_instruction_v3,
 };
+pub use open_capability_set_v3::{
+    RationalOpenCapabilityProgramSetInputV3, RationalOpenCapabilityProgramSetV3,
+    build_rational_open_capability_program_set_v3,
+    validate_rational_open_capability_program_set_v3,
+};
 pub use open_selected_transaction_v3::{
     ConstructedHotOpenSelectedV3, RationalOpenSelectedHotInstructionV3,
     RationalOpenSelectedHotStateV3, build_rational_open_selected_hot_instruction_v3,
@@ -51,7 +61,23 @@ pub use open_selected_v3::{
     RATIONAL_OPEN_SELECTED_CHILD_ACCOUNTS_V3, RATIONAL_OPEN_SELECTED_COMMON_IDENTITIES_V3,
     RATIONAL_OPEN_SELECTED_COMMON_SCALARS_V3, RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3,
     RationalOpenSelectedHotBundleInputV3, RationalOpenSelectedHotBundleV3,
-    build_rational_open_selected_hot_bundle_v3, validate_rational_open_selected_hot_bundle_v3,
+    build_rational_open_selected_hot_bundle_v3,
+    validate_rational_open_selected_hot_bundle_for_authenticated_selection_v3,
+    validate_rational_open_selected_hot_bundle_v3,
+};
+pub use open_structured_transaction_v3::{
+    ConstructedHotOpenStructuredV3, RationalOpenStructuredHotInstructionV3,
+    RationalOpenStructuredHotStateV3, build_rational_open_structured_hot_instruction_v3,
+    construct_chain_hot_issue_structured_v3, construct_chain_hot_unwrap_structured_v3,
+};
+pub use open_structured_v3::{
+    RATIONAL_OPEN_STRUCTURED_COMMON_IDENTITIES_V3, RATIONAL_OPEN_STRUCTURED_COMMON_SCALARS_V3,
+    RATIONAL_OPEN_STRUCTURED_FIXED_ACCOUNTS_V3, RATIONAL_OPEN_STRUCTURED_ITEM_ACCOUNTS_V3,
+    RATIONAL_OPEN_STRUCTURED_ITEM_IDENTITIES_V3, RATIONAL_OPEN_STRUCTURED_ITEM_SCALARS_V3,
+    RationalOpenStructuredHotBundleInputV3, RationalOpenStructuredHotBundleV3,
+    build_rational_open_structured_hot_bundle_v3,
+    validate_rational_open_structured_hot_bundle_for_authenticated_selection_v3,
+    validate_rational_open_structured_hot_bundle_v3,
 };
 
 use dclutch_bearer_v2_contract::BearerDescriptorV2;
@@ -84,12 +110,16 @@ pub enum Error {
     AccountProfileArtifact(dclutch_account_profile_contract::v2::Error),
     /// ProductBasisV3 bytes or logical account observations differed.
     AccountProfileInput,
+    /// The canonical Token-2022 behavior selection was not exact.
+    TokenBehavior(dclutch_token_svm::Error),
     /// A semantic coordinate or computed artifact digest was zero.
     ContentIdentity,
     /// Exact interpreted ExecutionStrategy construction or join refused.
     ExecutionStrategy(dclutch_execution_strategy_contract::v2::Error),
     /// CapabilityProgramV3 construction or hostile decoding refused.
     CapabilityDescriptor(dclutch_capability_program_contract::Error),
+    /// Schema-bound CapabilityProgramSetV2 construction or selection refused.
+    CapabilityProgramSet(dclutch_capability_program_contract::set_v2::ProgramSetErrorV2),
     /// Independently decoded artifact banks did not have one exact geometry.
     ArtifactGeometry,
     /// Checked Hot envelope or exact physical account construction refused.

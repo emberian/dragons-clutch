@@ -1,14 +1,15 @@
 //! Data-defined Hot artifacts for selected open Bearer split and merge.
 
 use dclutch_account_profile_contract::v2::{
-    ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE, AccountPrestateV2,
-    AccountProfileV2, OPERATION_BYTES as ACCOUNT_OPERATION_BYTES, RULE_BYTES as ACCOUNT_RULE_BYTES,
-    TRUSTED_EXECUTING_PROGRAM_HEADER_BYTES, TrustedEnvironmentV2, TrustedIdentityEnvironmentV2,
+    AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE, AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES,
+    AccountPrestateV2, AccountProfileV2, OPERATION_BYTES as ACCOUNT_OPERATION_BYTES,
+    RULE_BYTES as ACCOUNT_RULE_BYTES, TrustedBuiltinIdentityV2, TrustedEnvironmentV2,
+    TrustedIdentityEnvironmentV2,
     encode::{
         AccountAliasInputV2, AccountCoordinateV2, AccountEffectPermissionsV2,
         AccountOperationInputV2, AccountPrivilegesV2, AccountRuleInputV2,
         AccountRuleWithPrestateInputV2, RegisterGeometryV2, ScalarCoordinateV2,
-        encode_account_profile_with_adapter_authenticated_variable_data_alias_v2_atomic,
+        encode_account_profile_with_authenticated_route_alias_v2_atomic,
     },
 };
 use dclutch_capability_program_contract::v3::{CAPABILITY_PROGRAM_V3_BYTES, CapabilityProgramV3};
@@ -34,9 +35,9 @@ use dclutch_product_payoff_v2_codec::runtime_v3::{
     BASIS_HEADER_BYTES_V3, BASIS_WIDTH_OFFSET_V3, BasisKindV3, ProductBasisV3,
 };
 use dclutch_rational_representation_v2_contract::{
-    CallerRoleV2, OPEN_REPRESENTATION_HOT_MAGIC_V3, OPEN_REPRESENTATION_HOT_REQUEST_SCHEMA_ID_V3,
-    OPEN_REPRESENTATION_HOT_VERSION_V3, PHYSICAL_ABI_VERSION_V2, REQUEST_HEADER_BYTES_V2,
-    REQUEST_MAGIC_V2, RepresentationActionV2,
+    AuthenticatedTokenBehaviorV2, CallerRoleV2, OPEN_REPRESENTATION_HOT_MAGIC_V3,
+    OPEN_REPRESENTATION_HOT_REQUEST_SCHEMA_ID_V3, OPEN_REPRESENTATION_HOT_VERSION_V3,
+    PHYSICAL_ABI_VERSION_V2, REQUEST_HEADER_BYTES_V2, REQUEST_MAGIC_V2, RepresentationActionV2,
 };
 use dclutch_rational_representation_v2_request_contract::generated as wire;
 use dclutch_request_profile_contract::{
@@ -46,6 +47,10 @@ use dclutch_request_profile_contract::{
         IdentityRegisterV1, RequestCoordinateV1, RequestGeometryV1, RequestInstructionV1,
         ScalarRegisterV1, encode_request_profile_v1_atomic,
     },
+};
+use dclutch_token_svm::{
+    TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
+    TokenBehaviorSelectionV2,
 };
 use dclutch_transition_vm::v3::{
     HEADER_BYTES as TRANSITION_HEADER_BYTES, INSTRUCTION_BYTES as TRANSITION_INSTRUCTION_BYTES,
@@ -118,8 +123,8 @@ pub struct RationalOpenSelectedHotBundleInputV3<'a> {
     pub product_basis: &'a [u8],
     /// Manifest-selected capability kind.
     pub kind: [u8; 32],
-    /// Manifest-selected immutable config schema.
-    pub config_schema: [u8; 32],
+    /// Finalized descriptor/Market/config Token behavior admission.
+    pub authenticated_token_behavior: AuthenticatedTokenBehaviorV2,
     /// Manifest-selected root-tail schema.
     pub root_schema: [u8; 32],
     /// Manifest-selected derivation policy.
@@ -133,7 +138,9 @@ pub struct RationalOpenSelectedHotBundleInputV3<'a> {
 /// Exact finalized artifact bodies for one selected open action.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RationalOpenSelectedHotBundleV3 {
-    /// Profile9 logical account interpreter.
+    /// Exact config record body selected alongside the descriptor.
+    pub token_behavior_selection: [u8; TOKEN_BEHAVIOR_SELECTION_BYTES_V2],
+    /// Profile11 logical account interpreter with compact physical aliases.
     pub account_profile: Vec<u8>,
     /// Exact open-family RequestProfile.
     pub request_profile: Vec<u8>,
@@ -174,9 +181,15 @@ pub fn build_rational_open_selected_hot_bundle_v3(
     )
     .map_err(Error::ExecutionStrategy)?;
     let strategy = strategy_value.to_bytes();
+    let token_behavior_selection = input.authenticated_token_behavior.selection().to_bytes();
+    if hash(&token_behavior_selection).to_bytes()
+        != input.authenticated_token_behavior.content_digest()
+    {
+        return Err(Error::ContentIdentity);
+    }
     let descriptor = CapabilityProgramV3::new(
         content(input.kind)?,
-        content(input.config_schema)?,
+        content(TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2)?,
         content(OPEN_REPRESENTATION_HOT_REQUEST_SCHEMA_ID_V3)?,
         content(input.root_schema)?,
         digest(&account_profile)?,
@@ -192,6 +205,7 @@ pub fn build_rational_open_selected_hot_bundle_v3(
     .map_err(Error::CapabilityDescriptor)?
     .encode();
     let bundle = RationalOpenSelectedHotBundleV3 {
+        token_behavior_selection,
         account_profile,
         request_profile,
         transition,
@@ -199,7 +213,10 @@ pub fn build_rational_open_selected_hot_bundle_v3(
         effect,
         descriptor,
     };
-    validate_rational_open_selected_hot_bundle_v3(&bundle)?;
+    validate_rational_open_selected_hot_bundle_for_authenticated_selection_v3(
+        &bundle,
+        input.authenticated_token_behavior,
+    )?;
     Ok(bundle)
 }
 
@@ -209,6 +226,8 @@ pub fn validate_rational_open_selected_hot_bundle_v3(
 ) -> Result<()> {
     let descriptor =
         CapabilityProgramV3::decode(&bundle.descriptor).map_err(Error::CapabilityDescriptor)?;
+    TokenBehaviorSelectionV2::decode(&bundle.token_behavior_selection)
+        .map_err(Error::TokenBehavior)?;
     let account =
         AccountProfileV2::decode(&bundle.account_profile).map_err(Error::AccountProfileArtifact)?;
     let request = RequestProfileV1::decode_selected(
@@ -232,10 +251,11 @@ pub fn validate_rational_open_selected_hot_bundle_v3(
         .map_err(Error::ExecutionStrategy)?;
     let route = effect.route(0).map_err(Error::EffectArtifact)?;
     if descriptor.request_schema().to_bytes() != OPEN_REPRESENTATION_HOT_REQUEST_SCHEMA_ID_V3
+        || descriptor.config_schema().to_bytes() != TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2
         || descriptor.account_profile() != digest(&bundle.account_profile)?
         || strategy.disposition() != StrategyDispositionV2::Interpreted
         || strategy.transition_program() != digest(&bundle.transition)?
-        || account.artifact_profile() != ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
+        || account.artifact_profile() != AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
         || account.fixed_account_count() != RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3
         || account.item_account_stride() != 0
         || account.common_scalar_count() != narrow_u16(RATIONAL_OPEN_SELECTED_COMMON_SCALARS_V3)?
@@ -271,6 +291,21 @@ pub fn validate_rational_open_selected_hot_bundle_v3(
     Ok(())
 }
 
+/// Validate the complete bundle and bind its selected Token behavior to
+/// independently authenticated Realm and release-set identities.
+pub fn validate_rational_open_selected_hot_bundle_for_authenticated_selection_v3(
+    bundle: &RationalOpenSelectedHotBundleV3,
+    authenticated: AuthenticatedTokenBehaviorV2,
+) -> Result<()> {
+    validate_rational_open_selected_hot_bundle_v3(bundle)?;
+    if bundle.token_behavior_selection != authenticated.selection().to_bytes()
+        || hash(&bundle.token_behavior_selection).to_bytes() != authenticated.content_digest()
+    {
+        return Err(Error::ContentIdentity);
+    }
+    Ok(())
+}
+
 fn encode_account_profile(input: RationalOpenSelectedHotBundleInputV3<'_>) -> Result<Vec<u8>> {
     if input.logical_data_lengths.len() != usize::from(RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3) {
         return Err(Error::AccountProfileInput);
@@ -292,14 +327,17 @@ fn encode_account_profile(input: RationalOpenSelectedHotBundleInputV3<'_>) -> Re
             35 => AccountAliasInputV2::Fixed(3),
             _ => AccountAliasInputV2::SelfCoordinate,
         };
-        let prestate = match index {
-            4 => AccountPrestateV2::AdapterAuthenticatedVariableData,
-            29 => AccountPrestateV2::AdapterAuthenticatedVariableDataAlias,
-            _ => AccountPrestateV2::Exact,
+        let prestate = if index == 4 {
+            AccountPrestateV2::AdapterAuthenticatedVariableData
+        } else if alias != AccountAliasInputV2::SelfCoordinate {
+            AccountPrestateV2::AuthenticatedRouteAlias
+        } else {
+            AccountPrestateV2::Exact
         };
         let data_length = match index {
+            1 => narrow_u32(TOKEN_BEHAVIOR_SELECTION_BYTES_V2)?,
             4 => u32::try_from(BASIS_HEADER_BYTES_V3).map_err(|_| Error::AccountProfileInput)?,
-            29 => 0,
+            26 | 29 | 31 | 35 => 0,
             _ => *input
                 .logical_data_lengths
                 .get(index)
@@ -321,18 +359,19 @@ fn encode_account_profile(input: RationalOpenSelectedHotBundleInputV3<'_>) -> Re
         destination: ScalarCoordinateV2::common(narrow_u16(SCALAR_PRODUCT_OUTCOME_COUNT)?),
         data_offset: narrow_u32(BASIS_WIDTH_OFFSET_V3)?,
     }];
-    let width = TRUSTED_EXECUTING_PROGRAM_HEADER_BYTES
+    let width = AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES
         + rules.len() * ACCOUNT_RULE_BYTES
         + ACCOUNT_OPERATION_BYTES;
     let mut scratch = vec![0_u8; width];
     let mut output = vec![0_u8; width];
-    encode_account_profile_with_adapter_authenticated_variable_data_alias_v2_atomic(
+    encode_account_profile_with_authenticated_route_alias_v2_atomic(
         TrustedEnvironmentV2::CurrentSlot {
             destination: narrow_u16(SCALAR_CURRENT_SLOT)?,
         },
         TrustedIdentityEnvironmentV2::CurrentExecutingProgram {
             destination: narrow_u16(ID_CURRENT_TRADING)?,
         },
+        TrustedBuiltinIdentityV2::None,
         &rules,
         &[],
         &operations,
@@ -771,7 +810,13 @@ mod tests {
             logical_data_lengths: lengths,
             product_basis: basis,
             kind: id(10),
-            config_schema: id(11),
+            authenticated_token_behavior:
+                crate::test_open_fixture_v3::authenticated_token_behavior_v3(
+                    id(4),
+                    id(15),
+                    id(16),
+                    ProductBasisV3::decode(basis).expect("basis").basis_width(),
+                ),
             root_schema: id(12),
             derivation_policy: id(13),
             capacity_profile: id(14),
@@ -780,7 +825,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_actions_build_one_profile9_once_route() {
+    fn selected_actions_build_one_profile11_once_route() {
         let basis = basis(258, 1);
         let lengths = lengths(&basis);
         for action in [
@@ -791,6 +836,11 @@ mod tests {
                 build_rational_open_selected_hot_bundle_v3(input(action, &basis, &lengths))
                     .expect("selected artifact bundle");
             validate_rational_open_selected_hot_bundle_v3(&bundle).expect("complete join");
+            validate_rational_open_selected_hot_bundle_for_authenticated_selection_v3(
+                &bundle,
+                input(action, &basis, &lengths).authenticated_token_behavior,
+            )
+            .expect("Realm/release join");
 
             let account = AccountProfileV2::decode(&bundle.account_profile).expect("profile");
             assert_eq!(
@@ -798,12 +848,11 @@ mod tests {
                 AccountPrestateV2::AdapterAuthenticatedVariableData
             );
             let alias = account.rule(false, 29).expect("basis child alias");
-            assert_eq!(
-                alias.prestate(),
-                AccountPrestateV2::AdapterAuthenticatedVariableDataAlias
-            );
+            assert_eq!(alias.prestate(), AccountPrestateV2::AuthenticatedRouteAlias);
             assert_eq!(alias.alias_index(), 4);
             assert_eq!(alias.effect_permissions(), 0);
+            assert_eq!(account.logical_account_count(0), Ok(41));
+            assert_eq!(account.physical_account_count(0), Ok(37));
 
             let effect = EffectProgramV3::decode_selected(
                 CapabilityProgramV3::decode(&bundle.descriptor)
@@ -852,6 +901,31 @@ mod tests {
             .get_mut(0)
             .expect("account profile byte") ^= 1;
         assert!(validate_rational_open_selected_hot_bundle_v3(&substituted).is_err());
+
+        let mut substituted = canonical.clone();
+        *substituted
+            .token_behavior_selection
+            .get_mut(80)
+            .expect("behavior profile") ^= 1;
+        assert_eq!(
+            validate_rational_open_selected_hot_bundle_v3(&substituted),
+            Err(Error::TokenBehavior(
+                dclutch_token_svm::Error::InvalidAdapterRelease
+            ))
+        );
+
+        assert_eq!(
+            validate_rational_open_selected_hot_bundle_for_authenticated_selection_v3(
+                &canonical,
+                crate::test_open_fixture_v3::authenticated_token_behavior_v3(
+                    id(4),
+                    id(17),
+                    id(16),
+                    258,
+                ),
+            ),
+            Err(Error::ContentIdentity)
+        );
 
         let other_basis = basis(258, 9);
         let other_lengths = lengths(&other_basis);

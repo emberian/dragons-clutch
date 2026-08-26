@@ -1,10 +1,14 @@
 //! Unsigned chain-derived Hot instruction construction for terminal redemption.
 
+use dclutch_account_profile_contract::v2::{
+    AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE, AccountProfileV2,
+};
 use dclutch_capability_program_contract::hot_v3::{
-    HOT_FAMILY_REQUEST_OFFSET_V3, HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
-    HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_LINKED_BASIS_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3,
-    HOT_RENT_SYSVAR_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
-    HotExecutionEnvelopeV3,
+    HOT_CONFIG_RAW_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
+    HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
+    HOT_LINKED_BASIS_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3, HOT_PORTFOLIO_RAW_ACCOUNT_V3,
+    HOT_PRODUCT_RAW_ACCOUNT_V3, HOT_RENT_SYSVAR_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3,
+    HOT_TRADING_PROGRAM_ACCOUNT_V3, HotExecutionEnvelopeV3,
 };
 use dclutch_rational_representation_v2_contract::RepresentationRequestV2;
 use dclutch_rational_representation_v2_operator::ConstructedInstructionV2;
@@ -108,6 +112,45 @@ pub(crate) fn build_hot_instruction_from_claims_child_v3(
     claims_child: &ConstructedInstructionV2,
     expected_child_accounts: usize,
 ) -> Result<BuiltHotInstructionV3> {
+    build_hot_instruction_from_claims_child_inner_v3(
+        state,
+        family_request,
+        family_digest,
+        claims_child,
+        expected_child_accounts,
+        None,
+    )
+}
+
+pub(crate) fn build_profiled_hot_instruction_from_claims_child_v3(
+    state: &RationalTerminalHotStateV3<'_>,
+    family_request: &[u8],
+    family_digest: [u8; 32],
+    claims_child: &ConstructedInstructionV2,
+    expected_child_accounts: usize,
+    account_profile_bytes: &[u8],
+    tail_count: u32,
+) -> Result<BuiltHotInstructionV3> {
+    let profile =
+        AccountProfileV2::decode(account_profile_bytes).map_err(Error::AccountProfileArtifact)?;
+    build_hot_instruction_from_claims_child_inner_v3(
+        state,
+        family_request,
+        family_digest,
+        claims_child,
+        expected_child_accounts,
+        Some((profile, tail_count)),
+    )
+}
+
+fn build_hot_instruction_from_claims_child_inner_v3(
+    state: &RationalTerminalHotStateV3<'_>,
+    family_request: &[u8],
+    family_digest: [u8; 32],
+    claims_child: &ConstructedInstructionV2,
+    expected_child_accounts: usize,
+    profile: Option<(AccountProfileV2<'_>, u32)>,
+) -> Result<BuiltHotInstructionV3> {
     let checked = state.hot_outer.ok_or(Error::HotInstruction)?;
     validate_fixed_frame(state, checked)?;
     if state.finalized_slot == 0
@@ -167,23 +210,37 @@ pub(crate) fn build_hot_instruction_from_claims_child_v3(
     data.extend_from_slice(&envelope.to_bytes());
     data.extend_from_slice(family_request);
 
+    let physical_child_accounts = match profile {
+        Some((profile, tail_count)) => compact_profile11_child_accounts_v3(
+            state,
+            child_accounts,
+            expected_child_accounts,
+            profile,
+            tail_count,
+        )?,
+        None => child_accounts
+            .iter()
+            .enumerate()
+            .map(|(index, account)| {
+                let mut outer = account.clone();
+                if index == 0 {
+                    outer.is_signer = false;
+                }
+                outer
+            })
+            .collect(),
+    };
     let mut accounts = Vec::with_capacity(
         state
             .fixed_accounts
             .len()
             .checked_add(state.strategy_accounts.len())
-            .and_then(|count| count.checked_add(child_accounts.len()))
+            .and_then(|count| count.checked_add(physical_child_accounts.len()))
             .ok_or(Error::HotInstruction)?,
     );
     accounts.extend_from_slice(state.fixed_accounts);
     accounts.extend_from_slice(state.strategy_accounts);
-    for (index, account) in child_accounts.iter().enumerate() {
-        let mut outer = account.clone();
-        if index == 0 {
-            outer.is_signer = false;
-        }
-        accounts.push(outer);
-    }
+    accounts.extend(physical_child_accounts);
     Ok(BuiltHotInstructionV3 {
         instruction: Instruction {
             program_id: checked.trading_program,
@@ -193,6 +250,136 @@ pub(crate) fn build_hot_instruction_from_claims_child_v3(
         required_wallet_signers: vec![child_accounts.get(3).ok_or(Error::HotInstruction)?.pubkey],
         checked_manifest_digest: checked.checked_manifest_digest,
     })
+}
+
+fn compact_profile11_child_accounts_v3(
+    state: &RationalTerminalHotStateV3<'_>,
+    child_accounts: &[AccountMeta],
+    expected_child_accounts: usize,
+    profile: AccountProfileV2<'_>,
+    tail_count: u32,
+) -> Result<Vec<AccountMeta>> {
+    const INJECTED: usize = 5;
+    let expected_logical = INJECTED
+        .checked_add(expected_child_accounts)
+        .ok_or(Error::HotInstruction)?;
+    if profile.artifact_profile() != AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
+        || profile
+            .logical_account_count(tail_count)
+            .map_err(Error::AccountProfileArtifact)?
+            != expected_logical
+        || child_accounts.len() != expected_child_accounts
+    {
+        return Err(Error::HotInstruction);
+    }
+    let physical = profile
+        .physical_account_count(tail_count)
+        .map_err(Error::AccountProfileArtifact)?;
+    if physical < INJECTED {
+        return Err(Error::HotInstruction);
+    }
+    for coordinate in 0..INJECTED {
+        if profile
+            .representative(tail_count, coordinate)
+            .map_err(Error::AccountProfileArtifact)?
+            != coordinate
+        {
+            return Err(Error::HotInstruction);
+        }
+        let expected = injected_meta_v3(state, coordinate)?;
+        let (signer, writable) = physical_privileges_v3(profile, tail_count, coordinate)?;
+        if expected.is_signer != signer || expected.is_writable != writable {
+            return Err(Error::HotInstruction);
+        }
+    }
+
+    let mut output = Vec::with_capacity(physical - INJECTED);
+    for (child_index, account) in child_accounts.iter().enumerate() {
+        let logical = INJECTED
+            .checked_add(child_index)
+            .ok_or(Error::HotInstruction)?;
+        let route = profile
+            .route_privileges(tail_count, logical)
+            .map_err(Error::AccountProfileArtifact)?;
+        if account.is_writable != route.writable()
+            || (child_index != 0 && account.is_signer != route.signer())
+            || (child_index == 0 && !account.is_signer)
+        {
+            return Err(Error::HotInstruction);
+        }
+        let representative = profile
+            .representative(tail_count, logical)
+            .map_err(Error::AccountProfileArtifact)?;
+        let representative_meta = if representative < INJECTED {
+            injected_meta_v3(state, representative)?
+        } else {
+            child_accounts
+                .get(
+                    representative
+                        .checked_sub(INJECTED)
+                        .ok_or(Error::HotInstruction)?,
+                )
+                .ok_or(Error::HotInstruction)?
+        };
+        if representative_meta.pubkey != account.pubkey {
+            return Err(Error::HotInstruction);
+        }
+        if representative == logical {
+            let (signer, writable) = physical_privileges_v3(profile, tail_count, representative)?;
+            let mut outer = account.clone();
+            outer.is_signer = signer;
+            outer.is_writable = writable;
+            output.push(outer);
+        }
+    }
+    if output.len() != physical - INJECTED {
+        return Err(Error::HotInstruction);
+    }
+    Ok(output)
+}
+
+fn physical_privileges_v3(
+    profile: AccountProfileV2<'_>,
+    tail_count: u32,
+    representative: usize,
+) -> Result<(bool, bool)> {
+    let logical = profile
+        .logical_account_count(tail_count)
+        .map_err(Error::AccountProfileArtifact)?;
+    let mut signer = false;
+    let mut writable = false;
+    for coordinate in 0..logical {
+        if profile
+            .representative(tail_count, coordinate)
+            .map_err(Error::AccountProfileArtifact)?
+            == representative
+        {
+            let route = profile
+                .route_privileges(tail_count, coordinate)
+                .map_err(Error::AccountProfileArtifact)?;
+            signer |= route.signer();
+            writable |= route.writable();
+        }
+    }
+    Ok((signer, writable))
+}
+
+fn injected_meta_v3<'a>(
+    state: &'a RationalTerminalHotStateV3<'_>,
+    logical_coordinate: usize,
+) -> Result<&'a AccountMeta> {
+    let physical_coordinate = match logical_coordinate {
+        0 => HOT_ROOT_ACCOUNT_V3,
+        1 => HOT_CONFIG_RAW_ACCOUNT_V3,
+        2 => HOT_PRODUCT_RAW_ACCOUNT_V3,
+        3 => HOT_PORTFOLIO_RAW_ACCOUNT_V3,
+        4 => HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
+        _ => return Err(Error::HotInstruction),
+    };
+    state
+        .fixed_accounts
+        .get(physical_coordinate)
+        .ok_or(Error::HotInstruction)
 }
 
 fn validate_fixed_frame(
