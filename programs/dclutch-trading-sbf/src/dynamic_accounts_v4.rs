@@ -104,7 +104,26 @@ pub(crate) fn downgrade_dynamic_child_accounts_v4<'info>(
         let privileges = profile
             .route_privileges_with_dynamic_spans(tail_count, span_counts, coordinate)
             .map_err(|_| TradingSbfError::Content)?;
-        if physical.executable != privileges.executable() {
+        // An authenticated route alias declares zero privileges of its own
+        // (the Profile13 producer emits it privilege-free, per the shared
+        // AccountProfile validator's route-alias contract): the representative
+        // coordinate is the sole owner of the physical executable fact. Resolve
+        // to the representative before checking executability so an alias of
+        // an executable representative is not mistaken for a non-executable
+        // account; signer/writable stay route-local (they are legitimately
+        // downgraded per child).
+        let representative = profile
+            .representative_with_dynamic_spans(tail_count, span_counts, coordinate)
+            .map_err(|_| TradingSbfError::Content)?;
+        let representative_executable = if representative == coordinate {
+            privileges.executable()
+        } else {
+            profile
+                .route_privileges_with_dynamic_spans(tail_count, span_counts, representative)
+                .map_err(|_| TradingSbfError::Content)?
+                .executable()
+        };
+        if physical.executable != representative_executable {
             return Err(TradingSbfError::Content.into());
         }
         let mut logical = (*physical).clone();
@@ -195,8 +214,11 @@ mod tests {
 
         let child = downgrade_dynamic_child_accounts_v4(profile, 0, &span_counts, &logical)
             .expect("child views");
-        assert!(!child[18].is_writable);
-        assert!(child[20].is_writable);
+        // 18 is the Shared Market representative and owns the writable
+        // union; its alias 20 is an authenticated route alias and is
+        // privilege-free, so the child view stays readonly.
+        assert!(child[18].is_writable);
+        assert!(!child[20].is_writable);
         assert!(!child[53].is_writable);
         assert!(!child[137].is_writable);
         assert_eq!(child[18].key, child[20].key);
