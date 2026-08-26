@@ -504,10 +504,10 @@ impl<'a> PageV2<'a> {
 pub struct SettlementCursorHeaderV2 {
     /// Declared runtime outcome width.
     pub outcome_count: u32,
-    /// Total authenticated Page count.
-    pub page_count: u32,
-    /// Exact next Page cursor for the current phase.
-    pub next_page: u32,
+    /// Total verifier-emitted per-order settlement rows.
+    pub order_count: u32,
+    /// Exact next order coordinate for the current phase.
+    pub next_order: u32,
     /// Nonzero optimistic cursor revision.
     pub revision: u64,
     /// Candidate content identity.
@@ -538,8 +538,8 @@ impl<'a> SettlementCursorV2<'a> {
         require_zero(bytes, 11, 1)?;
         let header = SettlementCursorHeaderV2 {
             outcome_count: u32_at(bytes, 12)?,
-            page_count: u32_at(bytes, 16)?,
-            next_page: u32_at(bytes, 20)?,
+            order_count: u32_at(bytes, 16)?,
+            next_order: u32_at(bytes, 20)?,
             revision: u64_at(bytes, 24)?,
             candidate_id: array32_at(bytes, 32)?,
             quote_inventory: u64_at(bytes, 64)?,
@@ -568,8 +568,8 @@ impl<'a> SettlementCursorV2<'a> {
         put_u16(output, 8, RUNTIME_WIDTH_VERSION_V2)?;
         put_byte(output, 10, header_value.phase.tag())?;
         put_u32(output, 12, header_value.outcome_count)?;
-        put_u32(output, 16, header_value.page_count)?;
-        put_u32(output, 20, header_value.next_page)?;
+        put_u32(output, 16, header_value.order_count)?;
+        put_u32(output, 20, header_value.next_order)?;
         put_u64(output, 24, header_value.revision)?;
         put(output, 32, &header_value.candidate_id)?;
         put_u64(output, 64, header_value.quote_inventory)?;
@@ -583,6 +583,35 @@ impl<'a> SettlementCursorV2<'a> {
             )?;
         }
         Ok(())
+    }
+
+    /// Encode a canonical cursor from an exact little-endian `u64[N]` inventory.
+    ///
+    /// This is the no-allocation settlement path: the caller derives the full
+    /// successor inventory in non-authoritative scratch, then this method
+    /// validates its exact width and commits the complete canonical record.
+    pub fn encode_le_inventory_into(
+        header_value: SettlementCursorHeaderV2,
+        inventory_le: &[u8],
+        output: &mut [u8],
+    ) -> RuntimeWidthResultV2<()> {
+        validate_settlement_cursor_header(header_value)?;
+        let inventory_bytes = derived_len(0, header_value.outcome_count, 8)?;
+        exact_width(inventory_le, inventory_bytes)?;
+        exact_width(output, settlement_cursor_len(header_value.outcome_count)?)?;
+        output.fill(0);
+        put(output, 0, &SETTLEMENT_CURSOR_MAGIC)?;
+        put_u16(output, 8, RUNTIME_WIDTH_VERSION_V2)?;
+        put_byte(output, 10, header_value.phase.tag())?;
+        put_u32(output, 12, header_value.outcome_count)?;
+        put_u32(output, 16, header_value.order_count)?;
+        put_u32(output, 20, header_value.next_order)?;
+        put_u64(output, 24, header_value.revision)?;
+        put(output, 32, &header_value.candidate_id)?;
+        put_u64(output, 64, header_value.quote_inventory)?;
+        put_u64(output, 72, header_value.complete_set_quantity)?;
+        put_u64(output, 80, header_value.terminal_coordinate)?;
+        put(output, SETTLEMENT_CURSOR_HEADER_BYTES_V2, inventory_le)
     }
 
     /// Return fixed Settlement Cursor coordinates.
@@ -862,7 +891,7 @@ fn validate_page_header(value: PageHeaderV2) -> RuntimeWidthResultV2<()> {
 
 fn validate_settlement_cursor_header(value: SettlementCursorHeaderV2) -> RuntimeWidthResultV2<()> {
     if value.outcome_count == 0
-        || value.page_count == 0
+        || value.order_count == 0
         || value.revision == 0
         || zero(&value.candidate_id)
     {
@@ -871,11 +900,11 @@ fn validate_settlement_cursor_header(value: SettlementCursorHeaderV2) -> Runtime
     let terminal = value.phase == SettlementPhaseV2::Terminal;
     let cursor_is_canonical = match value.phase {
         SettlementPhaseV2::Collecting | SettlementPhaseV2::Distributing => {
-            value.next_page < value.page_count
+            value.next_order < value.order_count
         }
         SettlementPhaseV2::Materializing
         | SettlementPhaseV2::ReadyToClose
-        | SettlementPhaseV2::Terminal => value.next_page == value.page_count,
+        | SettlementPhaseV2::Terminal => value.next_order == value.order_count,
     };
     if !cursor_is_canonical {
         return Err(RuntimeWidthErrorV2::InvalidCursor);
@@ -1198,8 +1227,8 @@ mod tests {
             SettlementCursorV2::encode_into(
                 SettlementCursorHeaderV2 {
                     outcome_count: width,
-                    page_count: 3,
-                    next_page: 0,
+                    order_count: 3,
+                    next_order: 0,
                     revision: 1,
                     candidate_id: CANDIDATE,
                     quote_inventory: 0,
@@ -1333,8 +1362,8 @@ mod tests {
             SettlementCursorV2::encode_into(
                 SettlementCursorHeaderV2 {
                     outcome_count: 1,
-                    page_count: 1,
-                    next_page: 1,
+                    order_count: 1,
+                    next_order: 1,
                     revision: 1,
                     candidate_id: CANDIDATE,
                     quote_inventory: 0,
