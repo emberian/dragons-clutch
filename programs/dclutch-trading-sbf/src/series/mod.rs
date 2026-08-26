@@ -14,6 +14,8 @@ pub mod accounts;
 pub mod artifacts_v3;
 /// Schema-bound V4 descriptor and global DCE5 Consume artifact admission.
 pub mod artifacts_v4;
+/// Canonical typed emitters for the occurrence-specific Consume artifacts.
+pub mod consume_artifacts_v4;
 /// Complete Core/Custody/replay physical plans behind authenticated actions.
 /// Canonical SeriesEscrow projection into the sole Custody writer.
 pub mod custody_v3;
