@@ -129,6 +129,30 @@ RUSTC_VERSION="$SBF_RUSTC (solana $PLATFORM_TOOLS)"
 # refuse by default, because an artifact the toolchain says may execute as
 # undefined behavior has no business entering a release unnoticed.
 DIAGNOSTIC_PATTERN='overwrites values in the frame'
+
+# Packages excluded from the root workspace resolve against their own lockfile,
+# so they must not share a target directory with the workspace builds: a warm
+# rebuild otherwise puts two units of one path dependency in the same graph and
+# the excluded package stops compiling ("one version of crate ... used here").
+# Observed on dclutch-series-shadow-sbf, whose isolated build is clean.
+target_dir_for() {
+    if printf '%s\n' "$WORKSPACE_MEMBERS" | grep -qx "programs/$1"; then
+        printf '%s\n' "$BUILD_TARGET"
+    else
+        printf '%s\n' "$BUILD_TARGET-$1"
+    fi
+}
+
+WORKSPACE_MEMBERS="$(awk '
+    /^ *members *= *\[/ { inside = 1; next }
+    inside && /^ *\]/ { inside = 0; next }
+    inside { gsub(/[",]/, ""); gsub(/^ +| +$/, ""); if (length($0) > 0) print $0 }
+' "$SOURCE/Cargo.toml")"
+if [ -z "$WORKSPACE_MEMBERS" ]; then
+    echo "could not read the root workspace member list" >&2
+    exit 1
+fi
+
 if [ "$KEEP_ELF" != "true" ]; then
     : > "$BUILD_LOG"
     : > "$WORK/build-diagnostics.txt"
@@ -137,9 +161,10 @@ if [ "$KEEP_ELF" != "true" ]; then
         package="${rest%%:*}"; stem="${rest#*:}"
         echo "build: $role ($package)"
         role_log="$WORK/build-$role.log"
+        role_target="$(target_dir_for "$package")"
         (
             cd "$SOURCE"
-            CARGO_TARGET_DIR="$BUILD_TARGET" \
+            CARGO_TARGET_DIR="$role_target" \
                 cargo build-sbf --manifest-path "programs/$package/Cargo.toml"
         ) >"$role_log" 2>&1
         cat "$role_log" >> "$BUILD_LOG"
@@ -149,7 +174,7 @@ if [ "$KEEP_ELF" != "true" ]; then
             echo "BUILD DIAGNOSTIC: $role emitted $count SBF stack-frame overwrite reports" >&2
             grep "$DIAGNOSTIC_PATTERN" "$role_log" | sort -u >&2
         fi
-        cp "$BUILD_TARGET/deploy/$stem.so" "$ELF_DIR/$role.so"
+        cp "$role_target/deploy/$stem.so" "$ELF_DIR/$role.so"
     done
 fi
 
