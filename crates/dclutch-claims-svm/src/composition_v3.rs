@@ -11,13 +11,17 @@ use dclutch_effect_kernel::v2::FixedRole;
 use dclutch_effect_kernel::v3::{ProgramV3, RouteKindV3};
 
 use crate::{
-    affine_batch_v2::{AffineBatchPlanV2, AFFINE_BATCH_PLAN_MAGIC_V2},
-    protocol_position_v2::{
-        ProtocolPositionActionV2, ProtocolPositionPresenceV2, ProtocolPositionRequestV2,
-        PROTOCOL_POSITION_REQUEST_MAGIC_V2,
-    },
     CallerRole,
+    affine_batch_v2::{AFFINE_BATCH_PLAN_MAGIC_V2, AffineBatchPlanV2},
+    protocol_position_v2::{
+        PROTOCOL_POSITION_REQUEST_MAGIC_V2, ProtocolPositionActionV2, ProtocolPositionPresenceV2,
+        ProtocolPositionRequestV2,
+    },
+    signed_delta_v3::{SIGNED_DELTA_PLAN_MAGIC_V3, SignedDeltaPlanV3},
 };
+
+/// Exact fixed SignedDeltaV3 account frame before its canonical Position tail.
+pub const SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3: u16 = 20;
 
 /// Stable cross-route composition refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -68,10 +72,11 @@ impl ClaimsCompositionParentV3 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ClaimsCompositionV3<'a> {
     admit: Option<ProtocolPositionRequestV2>,
-    affine: AffineBatchPlanV2<'a>,
+    affine: Option<AffineBatchPlanV2<'a>>,
+    signed_delta: Option<SignedDeltaPlanV3<'a>>,
     close: Option<ProtocolPositionRequestV2>,
     admit_route: Option<u16>,
-    affine_route: u16,
+    mutation_route: u16,
     close_route: Option<u16>,
 }
 
@@ -85,6 +90,29 @@ impl<'a> ClaimsCompositionV3<'a> {
         request_bank: &'a [u8],
         parent: ClaimsCompositionParentV3,
     ) -> Result<Self, ClaimsCompositionErrorV3> {
+        Self::decode_selected_with_witness(
+            effect,
+            tail_count,
+            scalars,
+            identities,
+            request_bank,
+            &[],
+            parent,
+        )
+    }
+
+    /// Decode Claims routes whose sole mutation may borrow an authenticated
+    /// trailing family-request witness.
+    #[allow(clippy::too_many_arguments)]
+    pub fn decode_selected_with_witness(
+        effect: ProgramV3<'_>,
+        tail_count: u32,
+        scalars: &[u64],
+        identities: &[[u8; 32]],
+        request_bank: &'a [u8],
+        family_request: &'a [u8],
+        parent: ClaimsCompositionParentV3,
+    ) -> Result<Self, ClaimsCompositionErrorV3> {
         parent.validate()?;
         if effect
             .request_bytes(tail_count)
@@ -95,9 +123,10 @@ impl<'a> ClaimsCompositionV3<'a> {
         }
         let mut admit = None;
         let mut affine = None;
+        let mut signed_delta = None;
         let mut close = None;
         let mut admit_route = None;
-        let mut affine_route = None;
+        let mut mutation_route = None;
         let mut close_route = None;
         let mut state = CompositionStateV3::Start;
         let mut route_index = 0_u16;
@@ -115,13 +144,7 @@ impl<'a> ClaimsCompositionV3<'a> {
                 let invocation = effect
                     .resolved_invocation(route_index, 0, tail_count, scalars, identities)
                     .map_err(|_| ClaimsCompositionErrorV3::EffectProgram)?;
-                let end = invocation
-                    .request_offset
-                    .checked_add(invocation.request_len)
-                    .ok_or(ClaimsCompositionErrorV3::EffectProgram)?;
-                let request = request_bank
-                    .get(invocation.request_offset..end)
-                    .ok_or(ClaimsCompositionErrorV3::EffectProgram)?;
+                let request = claims_request(invocation, request_bank, family_request)?;
                 if request.get(..8) == Some(PROTOCOL_POSITION_REQUEST_MAGIC_V2.as_slice()) {
                     if route.kind() != RouteKindV3::Once {
                         return Err(ClaimsCompositionErrorV3::Route);
@@ -164,7 +187,33 @@ impl<'a> ClaimsCompositionV3<'a> {
                         .map_err(|_| ClaimsCompositionErrorV3::Route)?;
                     require_affine_parent(decoded, parent)?;
                     affine = Some(decoded);
-                    affine_route = Some(route_index);
+                    mutation_route = Some(route_index);
+                    state = CompositionStateV3::Affined;
+                } else if request.get(..8) == Some(SIGNED_DELTA_PLAN_MAGIC_V3.as_slice()) {
+                    if route.kind() != RouteKindV3::Once
+                        || state != CompositionStateV3::Start
+                        || invocation.request_len != 0
+                        || invocation.borrowed_witness.is_none()
+                    {
+                        return Err(ClaimsCompositionErrorV3::Order);
+                    }
+                    let decoded = SignedDeltaPlanV3::decode(request)
+                        .map_err(|_| ClaimsCompositionErrorV3::Route)?;
+                    require_signed_delta_parent(decoded, parent)?;
+                    let expected_accounts = SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3
+                        .checked_add(
+                            u16::try_from(decoded.position_count())
+                                .map_err(|_| ClaimsCompositionErrorV3::Route)?,
+                        )
+                        .ok_or(ClaimsCompositionErrorV3::Route)?;
+                    if invocation.fixed_account_count != expected_accounts
+                        || invocation.item_account_count != 0
+                        || invocation.repeated_item_count != 0
+                    {
+                        return Err(ClaimsCompositionErrorV3::Route);
+                    }
+                    signed_delta = Some(decoded);
+                    mutation_route = Some(route_index);
                     state = CompositionStateV3::Affined;
                 } else {
                     return Err(ClaimsCompositionErrorV3::Route);
@@ -174,20 +223,27 @@ impl<'a> ClaimsCompositionV3<'a> {
                 .checked_add(1)
                 .ok_or(ClaimsCompositionErrorV3::EffectProgram)?;
         }
-        let affine = affine.ok_or(ClaimsCompositionErrorV3::MissingAffine)?;
-        let affine_route = affine_route.ok_or(ClaimsCompositionErrorV3::MissingAffine)?;
-        if let Some(request) = admit {
-            require_admission_join(request, affine)?;
+        let mutation_route = mutation_route.ok_or(ClaimsCompositionErrorV3::MissingAffine)?;
+        if affine.is_none() == signed_delta.is_none() {
+            return Err(ClaimsCompositionErrorV3::MissingAffine);
         }
-        if let Some(request) = close {
-            require_close_join(request, affine)?;
+        if let Some(affine) = affine {
+            if let Some(request) = admit {
+                require_admission_join(request, affine)?;
+            }
+            if let Some(request) = close {
+                require_close_join(request, affine)?;
+            }
+        } else if admit.is_some() || close.is_some() {
+            return Err(ClaimsCompositionErrorV3::Order);
         }
         Ok(Self {
             admit,
             affine,
+            signed_delta,
             close,
             admit_route,
-            affine_route,
+            mutation_route,
             close_route,
         })
     }
@@ -198,8 +254,13 @@ impl<'a> ClaimsCompositionV3<'a> {
     }
 
     /// Sole canonical affine balance-mutation plan.
-    pub const fn affine(self) -> AffineBatchPlanV2<'a> {
+    pub const fn affine(self) -> Option<AffineBatchPlanV2<'a>> {
         self.affine
+    }
+
+    /// Sole canonical signed-delta mutation, when selected.
+    pub const fn signed_delta(self) -> Option<SignedDeltaPlanV3<'a>> {
+        self.signed_delta
     }
 
     /// Optional canonical zero-Position close request.
@@ -214,7 +275,12 @@ impl<'a> ClaimsCompositionV3<'a> {
 
     /// EffectProgram route selecting the affine mutation.
     pub const fn affine_route(self) -> u16 {
-        self.affine_route
+        self.mutation_route
+    }
+
+    /// EffectProgram route selecting the sole Claims mutation.
+    pub const fn mutation_route(self) -> u16 {
+        self.mutation_route
     }
 
     /// EffectProgram route selecting close, when present.
@@ -229,6 +295,27 @@ enum CompositionStateV3 {
     Admitted,
     Affined,
     Closed,
+}
+
+fn claims_request<'a>(
+    invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
+    request_bank: &'a [u8],
+    family_request: &'a [u8],
+) -> Result<&'a [u8], ClaimsCompositionErrorV3> {
+    let end = invocation
+        .request_offset
+        .checked_add(invocation.request_len)
+        .ok_or(ClaimsCompositionErrorV3::EffectProgram)?;
+    let fixed = request_bank
+        .get(invocation.request_offset..end)
+        .ok_or(ClaimsCompositionErrorV3::EffectProgram)?;
+    match invocation.borrowed_witness {
+        None => Ok(fixed),
+        Some(witness) if fixed.is_empty() => witness
+            .slice(family_request)
+            .map_err(|_| ClaimsCompositionErrorV3::EffectProgram),
+        Some(_) => Err(ClaimsCompositionErrorV3::Route),
+    }
 }
 
 fn require_position_parent(
@@ -254,6 +341,20 @@ fn require_affine_parent(
         || plan.release_set() != parent.release_set
         || plan.market() != parent.market
         || plan.request_id() != parent.parent_request_digest
+    {
+        Err(ClaimsCompositionErrorV3::ParentBinding)
+    } else {
+        Ok(())
+    }
+}
+
+fn require_signed_delta_parent(
+    plan: SignedDeltaPlanV3<'_>,
+    parent: ClaimsCompositionParentV3,
+) -> Result<(), ClaimsCompositionErrorV3> {
+    if plan.caller_role() != CallerRole::Trading
+        || plan.release_set() != parent.release_set
+        || plan.market() != parent.market
     {
         Err(ClaimsCompositionErrorV3::ParentBinding)
     } else {
@@ -318,10 +419,15 @@ mod tests {
 
     use crate::{
         affine_batch_v2::{
-            plan_bytes, AffineBatchPlanInputV2, AffineBatchPositionV2, AffineBatchRowInputV2,
-            AffineBatchRowV2, DeltaDirectionV2, SignedMagnitudeV2,
+            AffineBatchPlanInputV2, AffineBatchPositionV2, AffineBatchRowInputV2, AffineBatchRowV2,
+            DeltaDirectionV2, SignedMagnitudeV2, plan_bytes,
         },
         protocol_position_v2::ProtocolPositionOwnerKindV2,
+        signed_delta_v3::{
+            DeltaDirectionV3, PositionDeltaInputV3, PositionDeltaV3, SignedDeltaPlanInputV3,
+            SignedDeltaPlanV3, SignedDeltaPositionV3, SignedDeltaV3,
+            plan_bytes as signed_plan_bytes,
+        },
     };
 
     use super::*;
@@ -479,6 +585,74 @@ mod tests {
         (bytes, request_bank)
     }
 
+    fn signed_family() -> (Vec<u8>, Vec<u8>) {
+        let positions = [
+            SignedDeltaPositionV3::new(id(10), 4).expect("dealer"),
+            SignedDeltaPositionV3::new(id(11), 5).expect("LP"),
+        ];
+        let aggregates = [
+            SignedDeltaV3::new(DeltaDirectionV3::Neutral, 0).expect("zero"),
+            SignedDeltaV3::new(DeltaDirectionV3::Neutral, 0).expect("zero"),
+        ];
+        let rows = [
+            PositionDeltaV3::new(
+                PositionDeltaInputV3 {
+                    position_index: 0,
+                    outcome: 1,
+                    delta: SignedDeltaV3::new(DeltaDirectionV3::Credit, 5).expect("credit"),
+                },
+                2,
+                2,
+            )
+            .expect("dealer row"),
+            PositionDeltaV3::new(
+                PositionDeltaInputV3 {
+                    position_index: 1,
+                    outcome: 1,
+                    delta: SignedDeltaV3::new(DeltaDirectionV3::Debit, 5).expect("debit"),
+                },
+                2,
+                2,
+            )
+            .expect("LP row"),
+        ];
+        let mut packet = vec![0; signed_plan_bytes(2, 2, 2).expect("packet bytes")];
+        SignedDeltaPlanV3::encode_into(
+            SignedDeltaPlanInputV3 {
+                caller_role: CallerRole::Trading,
+                release_set: parent().release_set,
+                market: parent().market,
+                request_id: id(40),
+                product_record_digest: id(41),
+                semantic_basis_id: id(42),
+                linked_basis_record_digest: id(43),
+                expected_market_revision: MARKET_REVISION,
+                claim_count: 2,
+            },
+            &positions,
+            &aggregates,
+            &rows,
+            &mut packet,
+        )
+        .expect("signed packet");
+        let mut family = vec![0; 480];
+        family.extend_from_slice(&packet);
+
+        let mut effect = vec![0; 56];
+        put(&mut effect, 0, b"DCE3");
+        put(&mut effect, 4, &[3, 0]);
+        put(&mut effect, 6, &1_u16.to_le_bytes());
+        put(&mut effect, 12, &22_u16.to_le_bytes());
+        put(&mut effect, 16, &3_u16.to_le_bytes());
+        put(&mut effect, 20, &1_u16.to_le_bytes());
+        put(&mut effect, 32, &[1, 0, 1, 1]);
+        put(&mut effect, 36, &0_u16.to_le_bytes());
+        put(&mut effect, 38, &0_u16.to_le_bytes());
+        put(&mut effect, 40, &22_u16.to_le_bytes());
+        put(&mut effect, 46, &1_u16.to_le_bytes());
+        (effect, family)
+    }
+
     fn put(output: &mut [u8], offset: usize, value: &[u8]) {
         let end = offset.checked_add(value.len()).expect("field end");
         output
@@ -522,7 +696,44 @@ mod tests {
         assert_eq!(composition.admit_route(), Some(0));
         assert_eq!(composition.affine_route(), 1);
         assert_eq!(composition.close_route(), Some(2));
-        assert_eq!(composition.affine().position_count(), 2);
+        assert_eq!(composition.affine().expect("affine").position_count(), 2);
+    }
+
+    #[test]
+    fn composes_one_borrowed_signed_delta_with_exact_position_frame() {
+        let (effect_bytes, family) = signed_family();
+        let effect = ProgramV3::decode(&effect_bytes).expect("signed EffectProgram");
+        let composition = ClaimsCompositionV3::decode_selected_with_witness(
+            effect,
+            0,
+            &[1, 480, u64::try_from(family.len() - 480).expect("witness")],
+            &[id(50)],
+            &[],
+            &family,
+            parent(),
+        )
+        .expect("signed composition");
+        assert!(composition.affine().is_none());
+        assert_eq!(composition.mutation_route(), 0);
+        assert_eq!(
+            composition.signed_delta().expect("signed").position_count(),
+            2
+        );
+
+        let mut wrong_frame = effect_bytes;
+        put(&mut wrong_frame, 40, &21_u16.to_le_bytes());
+        assert_eq!(
+            ClaimsCompositionV3::decode_selected_with_witness(
+                ProgramV3::decode(&wrong_frame).expect("structural effect"),
+                0,
+                &[1, 480, u64::try_from(family.len() - 480).expect("witness")],
+                &[id(50)],
+                &[],
+                &family,
+                parent(),
+            ),
+            Err(ClaimsCompositionErrorV3::Route)
+        );
     }
 
     #[test]

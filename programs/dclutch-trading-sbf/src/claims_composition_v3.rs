@@ -11,12 +11,13 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use dclutch_claims_svm::{
-    affine_batch_v2::{AffineBatchPlanV2, AffineBatchReceiptV2, AFFINE_BATCH_PLAN_MAGIC_V2},
+    affine_batch_v2::{AFFINE_BATCH_PLAN_MAGIC_V2, AffineBatchPlanV2, AffineBatchReceiptV2},
     composition_v3::ClaimsCompositionV3,
     protocol_position_v2::{
-        ProtocolPositionActionV2, ProtocolPositionAdmissionV2, ProtocolPositionCloseReceiptV2,
-        ProtocolPositionRequestV2, PROTOCOL_POSITION_REQUEST_MAGIC_V2,
+        PROTOCOL_POSITION_REQUEST_MAGIC_V2, ProtocolPositionActionV2, ProtocolPositionAdmissionV2,
+        ProtocolPositionCloseReceiptV2, ProtocolPositionRequestV2,
     },
+    signed_delta_v3::{SIGNED_DELTA_PLAN_MAGIC_V3, SignedDeltaPlanV3, SignedDeltaReceiptV3},
 };
 use dclutch_core_contract::ContentId;
 use dclutch_effect_kernel::{
@@ -26,7 +27,7 @@ use dclutch_effect_kernel::{
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
-    hash::hash,
+    hash::{Hasher, hash, hashv},
     instruction::{AccountMeta, Instruction},
     program::{get_return_data, invoke_signed},
     program_error::ProgramError,
@@ -42,6 +43,8 @@ pub enum ClaimsRouteReceiptV3 {
     Admit(ProtocolPositionAdmissionV2),
     /// Sole affine Claims mutation committed.
     Affine(AffineBatchReceiptV2),
+    /// Canonical runtime-width unique signed-delta batch committed.
+    SignedDelta(SignedDeltaReceiptV3),
     /// Zero canonical Position and admission record were reclaimed.
     Close(ProtocolPositionCloseReceiptV2),
 }
@@ -58,6 +61,7 @@ pub fn execute_claims_route_v3<'info>(
     identities: &[[u8; 32]],
     effect_accounts: &[AccountInfo<'info>],
     request_bank: &[u8],
+    family_request: &[u8],
     claims_program: &AccountInfo<'info>,
 ) -> Result<ClaimsRouteReceiptV3, ProgramError> {
     if effect
@@ -76,7 +80,7 @@ pub fn execute_claims_route_v3<'info>(
     if invocation.role != FixedRole::Claims || !composition_owns_route(composition, route_index) {
         return Err(TradingSbfError::Content.into());
     }
-    let request = invocation_request(invocation, request_bank)?;
+    let request = invocation_request(invocation, request_bank, family_request)?;
     let mut child_accounts = invocation_accounts(invocation, effect_accounts)?;
     if child_accounts.is_empty()
         || child_accounts
@@ -124,12 +128,22 @@ pub fn execute_claims_route_v3<'info>(
     if producer != *claims_program.key {
         return Err(TradingSbfError::Transition.into());
     }
+    let post_resource_digest = match receipt_kind {
+        ReceiptKindV3::SignedDelta => Some(signed_delta_post_resource_digest(
+            &child_accounts,
+            SignedDeltaPlanV3::decode(request)
+                .map_err(|_| TradingSbfError::Content)?
+                .position_count(),
+        )?),
+        _ => None,
+    };
     verify_route_receipt(
         receipt_kind,
         request,
         &receipt,
         claims_program.key.to_bytes(),
         program_id.to_bytes(),
+        post_resource_digest,
     )
 }
 
@@ -137,26 +151,48 @@ pub fn execute_claims_route_v3<'info>(
 enum ReceiptKindV3 {
     Admit,
     Affine,
+    SignedDelta,
     Close,
 }
 
 fn composition_owns_route(composition: ClaimsCompositionV3<'_>, route: u16) -> bool {
     composition.admit_route() == Some(route)
-        || composition.affine_route() == route
+        || composition.mutation_route() == route
         || composition.close_route() == Some(route)
 }
 
 fn invocation_request<'a>(
     invocation: ResolvedInvocationV3,
     request_bank: &'a [u8],
+    family_request: &'a [u8],
 ) -> Result<&'a [u8], ProgramError> {
     let end = invocation
         .request_offset
         .checked_add(invocation.request_len)
         .ok_or(TradingSbfError::Content)?;
-    request_bank
+    let fixed = request_bank
         .get(invocation.request_offset..end)
-        .ok_or_else(|| TradingSbfError::Content.into())
+        .ok_or(TradingSbfError::Content)?;
+    match invocation.borrowed_witness {
+        None => Ok(fixed),
+        Some(witness) if fixed.is_empty() => {
+            let request = witness
+                .slice(family_request)
+                .map_err(|_| TradingSbfError::Content)?;
+            if request.get(..8) == Some(SIGNED_DELTA_PLAN_MAGIC_V3.as_slice()) {
+                let plan =
+                    SignedDeltaPlanV3::decode(request).map_err(|_| TradingSbfError::Content)?;
+                let parent = family_request
+                    .get(..witness.source_offset())
+                    .ok_or(TradingSbfError::Content)?;
+                if hash(parent).to_bytes() != plan.request_id() {
+                    return Err(TradingSbfError::Content.into());
+                }
+            }
+            Ok(request)
+        }
+        Some(_) => Err(TradingSbfError::Content.into()),
+    }
 }
 
 fn invocation_accounts<'accounts, 'info>(
@@ -231,6 +267,20 @@ fn route_authority(
         )
         .map_err(|_| TradingSbfError::Content)?;
         Ok((seeds, ReceiptKindV3::Affine))
+    } else if request.get(..8) == Some(SIGNED_DELTA_PLAN_MAGIC_V3.as_slice()) {
+        if kind != RouteKindV3::Once {
+            return Err(TradingSbfError::Content.into());
+        }
+        let plan = SignedDeltaPlanV3::decode(request).map_err(|_| TradingSbfError::Content)?;
+        let seeds = CallerAuthoritySeedsV1::new(
+            ContentId::new(plan.release_set()).map_err(|_| TradingSbfError::Content)?,
+            plan.market(),
+            ExecutionRoleV1::Trading,
+            plan.request_id(),
+            packet_digest,
+        )
+        .map_err(|_| TradingSbfError::Content)?;
+        Ok((seeds, ReceiptKindV3::SignedDelta))
     } else {
         Err(TradingSbfError::Content.into())
     }
@@ -242,6 +292,7 @@ fn verify_route_receipt(
     receipt: &[u8],
     claims_program: [u8; 32],
     trading_program: [u8; 32],
+    expected_post_resource_digest: Option<[u8; 32]>,
 ) -> Result<ClaimsRouteReceiptV3, ProgramError> {
     let request_digest = hash(request).to_bytes();
     match kind {
@@ -269,6 +320,30 @@ fn verify_route_receipt(
             }
             Ok(ClaimsRouteReceiptV3::Affine(receipt))
         }
+        ReceiptKindV3::SignedDelta => {
+            let plan = SignedDeltaPlanV3::decode(request).map_err(|_| TradingSbfError::Content)?;
+            let receipt =
+                SignedDeltaReceiptV3::decode(receipt).map_err(|_| TradingSbfError::Transition)?;
+            receipt
+                .validate_plan(plan)
+                .map_err(|_| TradingSbfError::Transition)?;
+            let (positions, aggregates, deltas) = plan.table_bytes();
+            let table_digest = hashv(&[
+                b"dclutch/claims/signed-delta-table/v3",
+                positions,
+                aggregates,
+                deltas,
+            ])
+            .to_bytes();
+            if receipt.packet_digest() != request_digest
+                || receipt.table_digest() != table_digest
+                || receipt.claims_program() != claims_program
+                || Some(receipt.post_resource_digest()) != expected_post_resource_digest
+            {
+                return Err(TradingSbfError::Transition.into());
+            }
+            Ok(ClaimsRouteReceiptV3::SignedDelta(receipt))
+        }
         ReceiptKindV3::Close => {
             let request =
                 ProtocolPositionRequestV2::decode(request).map_err(|_| TradingSbfError::Content)?;
@@ -282,18 +357,56 @@ fn verify_route_receipt(
     }
 }
 
+fn signed_delta_post_resource_digest(
+    child_accounts: &[AccountInfo<'_>],
+    position_count: u32,
+) -> Result<[u8; 32], ProgramError> {
+    let positions = usize::try_from(position_count).map_err(|_| TradingSbfError::Content)?;
+    let expected = 21_usize
+        .checked_add(positions)
+        .ok_or(TradingSbfError::Content)?;
+    if child_accounts.len() != expected {
+        return Err(TradingSbfError::Content.into());
+    }
+    let mut hasher = Hasher::default();
+    hasher.hash(b"dclutch/claims/signed-delta-post-resources/v3");
+    let market = child_accounts
+        .get(1)
+        .ok_or(TradingSbfError::Content)?
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Transition)?;
+    hasher.hash(&market);
+    let end = 20_usize
+        .checked_add(positions)
+        .ok_or(TradingSbfError::Content)?;
+    for account in child_accounts
+        .get(20..end)
+        .ok_or(TradingSbfError::Content)?
+    {
+        let data = account
+            .try_borrow_data()
+            .map_err(|_| TradingSbfError::Transition)?;
+        hasher.hash(&data);
+    }
+    Ok(hasher.result().to_bytes())
+}
+
 #[cfg(test)]
 mod tests {
     use dclutch_claims_svm::{
+        CallerRole,
         affine_batch_v2::{
-            plan_bytes, AffineBatchPlanInputV2, AffineBatchPositionV2, AffineBatchRowInputV2,
-            AffineBatchRowV2, DeltaDirectionV2, SignedMagnitudeV2,
+            AffineBatchPlanInputV2, AffineBatchPositionV2, AffineBatchRowInputV2, AffineBatchRowV2,
+            DeltaDirectionV2, SignedMagnitudeV2, plan_bytes,
         },
         protocol_position_v2::{
             ProtocolPositionAdmissionEvidenceV2, ProtocolPositionCloseEvidenceV2,
             ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2,
         },
-        CallerRole,
+        signed_delta_v3::{
+            DeltaDirectionV3, PositionDeltaInputV3, PositionDeltaV3, SignedDeltaPlanInputV3,
+            SignedDeltaPositionV3, SignedDeltaV3, plan_bytes as signed_plan_bytes,
+        },
     };
 
     use super::*;
@@ -379,6 +492,59 @@ mod tests {
         bytes
     }
 
+    fn signed_bytes() -> Vec<u8> {
+        let positions = [
+            SignedDeltaPositionV3::new(id(3), 8).expect("source"),
+            SignedDeltaPositionV3::new(id(9), 4).expect("destination"),
+        ];
+        let aggregates = [
+            SignedDeltaV3::new(DeltaDirectionV3::Neutral, 0).expect("zero"),
+            SignedDeltaV3::new(DeltaDirectionV3::Neutral, 0).expect("zero"),
+        ];
+        let rows = [
+            PositionDeltaV3::new(
+                PositionDeltaInputV3 {
+                    position_index: 0,
+                    outcome: 1,
+                    delta: SignedDeltaV3::new(DeltaDirectionV3::Debit, 5).expect("debit"),
+                },
+                2,
+                2,
+            )
+            .expect("source row"),
+            PositionDeltaV3::new(
+                PositionDeltaInputV3 {
+                    position_index: 1,
+                    outcome: 1,
+                    delta: SignedDeltaV3::new(DeltaDirectionV3::Credit, 5).expect("credit"),
+                },
+                2,
+                2,
+            )
+            .expect("destination row"),
+        ];
+        let mut bytes = alloc::vec![0; signed_plan_bytes(2, 2, 2).expect("width")];
+        SignedDeltaPlanV3::encode_into(
+            SignedDeltaPlanInputV3 {
+                caller_role: CallerRole::Trading,
+                release_set: id(1),
+                market: id(2),
+                request_id: id(4),
+                product_record_digest: id(10),
+                semantic_basis_id: id(11),
+                linked_basis_record_digest: id(12),
+                expected_market_revision: 8,
+                claim_count: 2,
+            },
+            &positions,
+            &aggregates,
+            &rows,
+            &mut bytes,
+        )
+        .expect("signed");
+        bytes
+    }
+
     #[test]
     fn verifies_each_exact_claims_receipt_and_refuses_producer_substitution() {
         let claims = id(20);
@@ -407,17 +573,21 @@ mod tests {
                 &admission.to_receipt_bytes().expect("receipt"),
                 claims,
                 trading,
+                None,
             ),
             Ok(ClaimsRouteReceiptV3::Admit(_))
         ));
-        assert!(verify_route_receipt(
-            ReceiptKindV3::Admit,
-            &admit_bytes,
-            &admission.to_receipt_bytes().expect("receipt"),
-            id(99),
-            trading,
-        )
-        .is_err());
+        assert!(
+            verify_route_receipt(
+                ReceiptKindV3::Admit,
+                &admit_bytes,
+                &admission.to_receipt_bytes().expect("receipt"),
+                id(99),
+                trading,
+                None,
+            )
+            .is_err()
+        );
 
         let affine_bytes = affine_bytes();
         let affine = AffineBatchPlanV2::decode(&affine_bytes).expect("plan");
@@ -438,6 +608,7 @@ mod tests {
                 &affine_receipt,
                 claims,
                 trading,
+                None,
             ),
             Ok(ClaimsRouteReceiptV3::Affine(_))
         ));
@@ -465,6 +636,7 @@ mod tests {
                 &close_receipt,
                 claims,
                 trading,
+                None,
             ),
             Ok(ClaimsRouteReceiptV3::Close(_))
         ));
@@ -489,5 +661,53 @@ mod tests {
         );
         assert!(route_authority(&admit, RouteKindV3::AffineOnce).is_err());
         assert!(route_authority(&affine, RouteKindV3::Once).is_err());
+    }
+
+    #[test]
+    fn verifies_signed_delta_table_producer_and_post_resources() {
+        let request = signed_bytes();
+        let plan = SignedDeltaPlanV3::decode(&request).expect("plan");
+        let (positions, aggregates, deltas) = plan.table_bytes();
+        let table_digest = hashv(&[
+            b"dclutch/claims/signed-delta-table/v3",
+            positions,
+            aggregates,
+            deltas,
+        ])
+        .to_bytes();
+        let claims = id(20);
+        let post_resources = id(21);
+        let receipt = SignedDeltaReceiptV3::new(
+            plan,
+            hash(&request).to_bytes(),
+            table_digest,
+            claims,
+            post_resources,
+            9,
+        )
+        .expect("receipt")
+        .to_bytes();
+        assert!(matches!(
+            verify_route_receipt(
+                ReceiptKindV3::SignedDelta,
+                &request,
+                &receipt,
+                claims,
+                id(30),
+                Some(post_resources),
+            ),
+            Ok(ClaimsRouteReceiptV3::SignedDelta(_))
+        ));
+        assert!(
+            verify_route_receipt(
+                ReceiptKindV3::SignedDelta,
+                &request,
+                &receipt,
+                claims,
+                id(30),
+                Some(id(99)),
+            )
+            .is_err()
+        );
     }
 }
