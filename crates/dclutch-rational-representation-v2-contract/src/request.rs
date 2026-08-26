@@ -431,6 +431,27 @@ impl<'a> RepresentationRequestV2<'a> {
         self.assets
     }
 
+    /// Return the exact Claims adapter account-frame width for this request.
+    ///
+    /// Selected actions carry one physical asset row regardless of Product
+    /// width. Structured issue and unwrap carry their full `N` rows. Positive
+    /// terminal redemption appends the canonical Custody suffix.
+    pub fn physical_account_count(self) -> Result<usize> {
+        let assets = usize::try_from(self.header.asset_count)
+            .map_err(|_| Error::InvalidWidth)?
+            .checked_mul(crate::RATIONAL_ASSET_ACCOUNT_COUNT_V2)
+            .ok_or(Error::InvalidLength)?;
+        let terminal = if self.header.action == RepresentationActionV2::RedeemTerminal {
+            crate::RATIONAL_TERMINAL_ACCOUNT_COUNT_V2
+        } else {
+            0
+        };
+        crate::RATIONAL_BASE_ACCOUNT_COUNT_V2
+            .checked_add(assets)
+            .and_then(|width| width.checked_add(terminal))
+            .ok_or(Error::InvalidLength)
+    }
+
     fn validate(self) -> Result<()> {
         for identity in [
             self.header.release_set,

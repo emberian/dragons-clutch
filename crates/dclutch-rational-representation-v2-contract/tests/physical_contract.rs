@@ -870,3 +870,29 @@ fn hostile_partial_reconstitution_replay_and_late_token_post_refuse() {
         Err(Error::ClaimsMismatch)
     );
 }
+
+#[test]
+fn physical_account_width_is_sparse_for_selected_actions() {
+    let selected_rows = asset_bytes(&[assets()[0]]);
+    let denominate = RepresentationRequestV2::new(
+        header(RepresentationActionV2::Denominate, 0, 1),
+        &selected_rows,
+    )
+    .expect("denominate");
+    assert_eq!(denominate.physical_account_count(), Ok(24 + 4));
+
+    let terminal = RepresentationRequestV2::new(
+        header(RepresentationActionV2::RedeemTerminal, 0, 1),
+        &selected_rows,
+    )
+    .expect("terminal");
+    assert_eq!(terminal.physical_account_count(), Ok(24 + 4 + 11));
+
+    let all_rows = asset_bytes(&assets());
+    let issue = RepresentationRequestV2::new(
+        header(RepresentationActionV2::IssueStructured, u32::MAX, 2),
+        &all_rows,
+    )
+    .expect("issue");
+    assert_eq!(issue.physical_account_count(), Ok(24 + 2 * 4));
+}
