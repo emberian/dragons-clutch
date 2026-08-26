@@ -121,6 +121,44 @@ impl LifecycleAccountIdV2 {
     }
 }
 
+/// Exact runtime observation of the already-closed Market supplied to the
+/// final lifecycle-credit close.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LifecycleRetiredMarketObservationV2 {
+    /// Observed Market account identity.
+    pub market: LifecycleAccountIdV2,
+    /// Current account owner after Core closure.
+    pub owner: [u8; PUBKEY_BYTES],
+    /// Current account data length.
+    pub data_len: u64,
+    /// Current account lamports.
+    pub lamports: u64,
+    /// Child-frame signer privilege.
+    pub signer: bool,
+    /// Child-frame writable privilege.
+    pub writable: bool,
+    /// Executable flag.
+    pub executable: bool,
+}
+
+impl LifecycleRetiredMarketObservationV2 {
+    /// Require the exact immutable, empty System account produced by Core
+    /// before Rent closes the lifecycle credit.
+    pub fn validate(self, expected_market: LifecycleAccountIdV2) -> LifecycleRentResultV2<()> {
+        if self.market != expected_market
+            || self.owner != SYSTEM_PROGRAM_ID
+            || self.data_len != 0
+            || self.lamports != 0
+            || self.signer
+            || self.writable
+            || self.executable
+        {
+            return Err(LifecycleRentErrorV2::InvalidFrame);
+        }
+        Ok(())
+    }
+}
+
 /// Immutable lifecycle-scoped credit state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LifecycleRentCreditV2 {
@@ -1030,5 +1068,57 @@ mod tests {
             LifecycleClosePlanV2::new(state(), id(21), id(4), true, 99, 1, request),
             Err(LifecycleRentErrorV2::RetirementMismatch)
         );
+    }
+
+    #[test]
+    fn close_observes_the_exact_already_retired_market() {
+        let expected = state().market();
+        let observation = LifecycleRetiredMarketObservationV2 {
+            market: expected,
+            owner: SYSTEM_PROGRAM_ID,
+            data_len: 0,
+            lamports: 0,
+            signer: false,
+            writable: false,
+            executable: false,
+        };
+        assert_eq!(observation.validate(expected), Ok(()));
+
+        let hostile = [
+            LifecycleRetiredMarketObservationV2 {
+                market: id(21),
+                ..observation
+            },
+            LifecycleRetiredMarketObservationV2 {
+                owner: [9; 32],
+                ..observation
+            },
+            LifecycleRetiredMarketObservationV2 {
+                data_len: 1,
+                ..observation
+            },
+            LifecycleRetiredMarketObservationV2 {
+                lamports: 1,
+                ..observation
+            },
+            LifecycleRetiredMarketObservationV2 {
+                signer: true,
+                ..observation
+            },
+            LifecycleRetiredMarketObservationV2 {
+                writable: true,
+                ..observation
+            },
+            LifecycleRetiredMarketObservationV2 {
+                executable: true,
+                ..observation
+            },
+        ];
+        for candidate in hostile {
+            assert_eq!(
+                candidate.validate(expected),
+                Err(LifecycleRentErrorV2::InvalidFrame)
+            );
+        }
     }
 }

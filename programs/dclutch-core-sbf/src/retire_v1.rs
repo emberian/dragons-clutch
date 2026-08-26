@@ -1142,6 +1142,7 @@ fn close_lifecycle_credit(
             AccountMeta::new_readonly(*frame.core_program.key, false),
             AccountMeta::new_readonly(*frame.core_programdata.key, false),
             AccountMeta::new_readonly(*frame.rent_close_authority.key, true),
+            AccountMeta::new_readonly(*frame.market.key, false),
         ]),
         data: request_bytes.to_vec(),
     };
@@ -1156,6 +1157,7 @@ fn close_lifecycle_credit(
             frame.core_program.clone(),
             frame.core_programdata.clone(),
             frame.rent_close_authority.clone(),
+            frame.market.clone(),
             frame.rent_program.clone(),
         ],
         &[&[

@@ -27,8 +27,8 @@ use dclutch_rent_contract::{
         LIFECYCLE_RENT_CORE_CLOSE_AUTHORITY_DOMAIN_V2, LIFECYCLE_RENT_CREDIT_BYTES_V2,
         LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2, LifecycleAccountIdV2, LifecycleAccountMetaV2,
         LifecycleClosePlanV2, LifecycleRentCreditV2, LifecycleRentInstructionV2,
-        LifecycleSweepPlanV2, SweepLifecycleRentCreditV2, validate_refund_wallet_v2,
-        validate_sweep_frame_v2,
+        LifecycleRetiredMarketObservationV2, LifecycleSweepPlanV2, SweepLifecycleRentCreditV2,
+        validate_refund_wallet_v2, validate_sweep_frame_v2,
     },
 };
 use solana_program::{
@@ -398,7 +398,7 @@ fn prepare_withdraw(
 }
 
 const SWEEP_ACCOUNT_COUNT_V2: usize = 3;
-const CLOSE_ACCOUNT_COUNT_V2: usize = 7;
+const CLOSE_ACCOUNT_COUNT_V2: usize = 8;
 
 #[derive(Clone, Copy)]
 struct CreatePlanV2 {
@@ -620,6 +620,7 @@ struct CloseAccountsV2<'a, 'info> {
     core_program: &'a AccountInfo<'info>,
     core_programdata: &'a AccountInfo<'info>,
     core_caller: &'a AccountInfo<'info>,
+    retired_market: &'a AccountInfo<'info>,
 }
 
 impl<'a, 'info> CloseAccountsV2<'a, 'info> {
@@ -635,6 +636,7 @@ impl<'a, 'info> CloseAccountsV2<'a, 'info> {
             core_program: account(accounts, 4)?,
             core_programdata: account(accounts, 5)?,
             core_caller: account(accounts, 6)?,
+            retired_market: account(accounts, 7)?,
         };
         if !value.credit.is_writable
             || value.credit.is_signer
@@ -656,6 +658,9 @@ impl<'a, 'info> CloseAccountsV2<'a, 'info> {
             || !value.core_caller.is_signer
             || value.core_caller.is_writable
             || value.core_caller.executable
+            || value.retired_market.is_signer
+            || value.retired_market.is_writable
+            || value.retired_market.executable
         {
             return Err(RentSbfError::AccountFrame.into());
         }
@@ -667,6 +672,7 @@ impl<'a, 'info> CloseAccountsV2<'a, 'info> {
             value.core_program.key,
             value.core_programdata.key,
             value.core_caller.key,
+            value.retired_market.key,
         ];
         for (index, key) in keys.iter().enumerate() {
             if keys.get(index + 1..).is_some_and(|tail| tail.contains(key)) {
@@ -686,6 +692,21 @@ fn process_close_v2(
 ) -> ProgramResult {
     let accounts = CloseAccountsV2::parse(accounts)?;
     let state = authenticate_lifecycle_credit_v2(program_id, accounts.credit)?;
+    let receipt_market = LifecycleAccountIdV2::new(request.receipt().input().market)
+        .map_err(|_| RentSbfError::Closure)?;
+    LifecycleRetiredMarketObservationV2 {
+        market: LifecycleAccountIdV2::new(accounts.retired_market.key.to_bytes())
+            .map_err(|_| RentSbfError::AccountFrame)?,
+        owner: accounts.retired_market.owner.to_bytes(),
+        data_len: u64::try_from(accounts.retired_market.data_len())
+            .map_err(|_| RentSbfError::AccountFrame)?,
+        lamports: accounts.retired_market.lamports(),
+        signer: accounts.retired_market.is_signer,
+        writable: accounts.retired_market.is_writable,
+        executable: accounts.retired_market.executable,
+    }
+    .validate(receipt_market)
+    .map_err(|_| RentSbfError::AccountFrame)?;
     let wallet_data_len =
         u64::try_from(accounts.wallet.data_len()).map_err(|_| RentSbfError::AccountFrame)?;
     validate_refund_wallet_v2(accounts.wallet.owner.to_bytes(), wallet_data_len)
