@@ -9,6 +9,7 @@ import { PACKET_DATA_SIZE } from './directTransaction';
 import {
   CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
   ARTIFACT_RELEASE_SCHEMA_ID_V1,
+  CREATE_LIFECYCLE_RENT_CREDIT_BYTES_V2,
   CORE_ACTION_FOUND_TAG,
   CORE_FOUND_ACCOUNT_COUNT_V2,
   CORE_REQUEST_BYTES,
@@ -16,11 +17,14 @@ import {
   CORE_STATE_BYTES,
   CORE_VERSION,
   EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1,
+  LIFECYCLE_RENT_CREDIT_BYTES_V2,
+  LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+  LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2,
+  LIFECYCLE_RENT_SCHEMA_VERSION_V2,
   MARKET_CORE_STATE_PDA_DOMAIN_V2,
   PORTFOLIO_SCHEMA_ID_V2,
   PRODUCT_RECORD_SCHEMA_ID_V2,
   REALM_SCHEMA_RELEASE_ID_V1,
-  RENT_CREDIT_PDA_DOMAIN_V1,
   RESULT_DOMAIN_SCHEMA_ID_V2,
   SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
 } from './generated/coreFound';
@@ -43,14 +47,13 @@ const SOURCE_MATERIAL_BYTES = 208;
 const REALM_BYTES = 112;
 const MANIFEST_HEADER_BYTES = 16;
 const MANIFEST_ENTRY_BYTES = 528;
-const RENT_CREDIT_BYTES = 48;
 const MAX_U32 = 0xffff_ffff;
 
 export type CoreFoundInputV2 = Readonly<{
   payer: string;
   registryProgram: string;
   activationCache: string;
-  rentCredit: string;
+  refundWallet: string;
   realmRecord: string;
   productRecord: string;
   resultDomainRecord: string;
@@ -64,6 +67,7 @@ export type CoreFoundInputV2 = Readonly<{
 export type CoreFoundPlanV2 = Readonly<{
   observedSlot: string;
   market: string;
+  rentCredit: string;
   coreProgram: string;
   registryProgram: string;
   rentProgram: string;
@@ -74,15 +78,27 @@ export type CoreFoundPlanV2 = Readonly<{
   infrastructureProfile: string;
   infrastructureRecognition: ProtocolInfrastructureInspectionV1['recognition'];
   marketRentTopUp: string;
+  rentCreditRentDebit: string;
   lastValidBlockHeight: string;
   accountAddresses: ReadonlyArray<string>;
   requiredSigners: ReadonlyArray<string>;
   requestBytes: Uint8Array;
+  rentCreateRequestBytes: Uint8Array;
+  rentCreateTransaction: VersionedTransaction;
+  rentCreateWireBytes: Uint8Array;
   transaction: VersionedTransaction;
   wireBytes: Uint8Array;
 }>;
 
 export type CompiledCoreFoundTransactionV2 = Readonly<{
+  requestBytes: Uint8Array;
+  transaction: VersionedTransaction;
+  wireBytes: Uint8Array;
+  requiredSigners: ReadonlyArray<string>;
+}>;
+
+export type CompiledLifecycleRentCreateTransactionV2 = Readonly<{
+  rentCredit: string;
   requestBytes: Uint8Array;
   transaction: VersionedTransaction;
   wireBytes: Uint8Array;
@@ -300,13 +316,85 @@ export function decodeCoreFoundProductGraphV2(product: Uint8Array, domain: Uint8
   return Object.freeze({ productId, outcomeCount });
 }
 
-function validateRentCredit(account: RpcAccount, address: string, rentProgram: string): void {
-  if (account.owner !== rentProgram || account.executable || account.data.length !== RENT_CREDIT_BYTES || ascii(account.data, 0, 8) !== 'DCLTRNT1' || u16(account.data, 8) !== 1) throw new Error('RentCredit has the wrong owner or exact ABI');
-  requireZero(account.data, 11, 5, 'RentCredit header');
-  const authority = slice(account.data, 16, 32);
-  requireNonzero(authority, 'RentCredit refund authority');
-  const expected = PublicKey.createProgramAddressSync([RENT_CREDIT_PDA_DOMAIN_V1, authority, Uint8Array.of(account.data[10])], key(rentProgram, 'Rent program')).toBase58();
-  if (expected !== address) throw new Error('RentCredit is not the exact persisted-bump PDA');
+function generationBytes(generation: bigint): Uint8Array {
+  if (generation <= 0n || generation > 0xffff_ffff_ffff_ffffn) throw new Error('Market generation is outside lifecycle u64');
+  const bytes = new Uint8Array(8);
+  putU64(bytes, 0, generation);
+  return bytes;
+}
+
+function lifecycleRentCreateRequest(input: Readonly<{
+  refundWallet: PublicKey;
+  market: PublicKey;
+  releaseSet: Uint8Array;
+  generation: bigint;
+  bump: number;
+}>): Uint8Array {
+  if (input.releaseSet.length !== 32 || isZero(input.releaseSet)) throw new Error('execution release set is not one nonzero 32-byte identity');
+  if (same(input.refundWallet.toBytes(), input.market.toBytes())
+      || same(input.refundWallet.toBytes(), input.releaseSet)
+      || same(input.market.toBytes(), input.releaseSet)) {
+    throw new Error('lifecycle Rent identities alias');
+  }
+  const output = new Uint8Array(CREATE_LIFECYCLE_RENT_CREDIT_BYTES_V2);
+  output.set(LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2, 0);
+  putU16(output, 8, LIFECYCLE_RENT_SCHEMA_VERSION_V2);
+  output[10] = 0;
+  output.set(input.refundWallet.toBytes(), 16);
+  output.set(input.market.toBytes(), 48);
+  output.set(input.releaseSet, 80);
+  output.set(generationBytes(input.generation), 112);
+  output[120] = input.bump;
+  return output;
+}
+
+export function compileLifecycleRentCreateTransactionV2(input: Readonly<{
+  payer: string;
+  refundWallet: string;
+  market: string;
+  releaseSet: Uint8Array;
+  generation: bigint;
+  rentProgram: string;
+  recentBlockhash: string;
+}>): CompiledLifecycleRentCreateTransactionV2 {
+  const payer = key(input.payer, 'payer');
+  const refundWallet = key(input.refundWallet, 'refund wallet');
+  const market = key(input.market, 'Market');
+  const rentProgram = key(input.rentProgram, 'Rent program');
+  const generation = generationBytes(input.generation);
+  const [rentCredit, bump] = PublicKey.findProgramAddressSync(
+    [LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, market.toBytes(), generation],
+    rentProgram,
+  );
+  const requestBytes = lifecycleRentCreateRequest({
+    refundWallet,
+    market,
+    releaseSet: input.releaseSet,
+    generation: input.generation,
+    bump,
+  });
+  const instruction = new TransactionInstruction({
+    programId: rentProgram,
+    keys: [
+      { pubkey: payer, isSigner: true, isWritable: true },
+      { pubkey: rentCredit, isSigner: false, isWritable: true },
+      { pubkey: key(SYSTEM_PROGRAM_ID, 'System program'), isSigner: false, isWritable: false },
+      { pubkey: key(RENT_SYSVAR_ID, 'Rent sysvar'), isSigner: false, isWritable: false },
+    ],
+    data: requestBytes as Buffer,
+  });
+  const transaction = new VersionedTransaction(new TransactionMessage({
+    payerKey: payer,
+    recentBlockhash: key(input.recentBlockhash, 'recent blockhash').toBase58(),
+    instructions: [instruction],
+  }).compileToV0Message());
+  const wireBytes = transaction.serialize();
+  if (wireBytes.length > PACKET_DATA_SIZE) throw new Error('lifecycle Rent Create exceeds the packet bound');
+  const requiredSigners = Object.freeze(transaction.message.staticAccountKeys
+    .slice(0, transaction.message.header.numRequiredSignatures)
+    .map((value) => value.toBase58()));
+  if (requiredSigners.length !== 1 || requiredSigners[0] !== input.payer) throw new Error('lifecycle Rent Create requires an unexpected signer');
+  return Object.freeze({ rentCredit: rentCredit.toBase58(), requestBytes, transaction, wireBytes, requiredSigners });
 }
 
 function foundRequest(generation: bigint, market: PublicKey): Uint8Array {
@@ -382,14 +470,14 @@ function infrastructureEqual(left: ProtocolInfrastructureInspectionV1, right: Pr
 }
 
 export async function prepareCoreFoundV2(client: SolanaRpcClient, input: CoreFoundInputV2): Promise<CoreFoundPlanV2> {
-  if (input.generation < 0n || input.generation > 0xffff_ffff_ffff_ffffn) throw new Error('Market generation is outside u64');
+  generationBytes(input.generation);
   key(input.payer, 'payer');
   const registry = key(input.registryProgram, 'Registry program');
   key(input.activationCache, 'activation cache');
-  key(input.rentCredit, 'RentCredit');
+  key(input.refundWallet, 'refund wallet');
   const rawAddresses = [input.realmRecord, input.productRecord, input.resultDomainRecord, input.portfolioRecord, input.sourceMaterialRecord, input.capabilityManifestRecord, input.executionReleaseSetRecord];
   rawAddresses.forEach((address, index) => key(address, `finalized raw record ${index}`));
-  if (new Set([input.payer, input.registryProgram, input.activationCache, input.rentCredit, ...rawAddresses]).size !== 11) throw new Error('Found authority inputs alias named roles');
+  if (new Set([input.registryProgram, input.activationCache, input.refundWallet, ...rawAddresses]).size !== 10) throw new Error('Found authority inputs alias named roles');
 
   const infrastructure = await inspectProtocolInfrastructureV1(client, { registryProgram: registry.toBase58(), activationCache: input.activationCache });
   const initial = await client.multipleAccounts(rawAddresses, infrastructure.observedSlot);
@@ -423,12 +511,17 @@ export async function prepareCoreFoundV2(client: SolanaRpcClient, input: CoreFou
     manifest.digest,
     releaseSetAuthority.digest,
     registry.toBytes(),
-    (() => { const bytes = new Uint8Array(8); putU64(bytes, 0, input.generation); return bytes; })(),
+    generationBytes(input.generation),
   ], key(infrastructure.core.program, 'Core program'))[0];
+  const [rentCredit] = PublicKey.findProgramAddressSync([
+    LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+    market.toBytes(),
+    generationBytes(input.generation),
+  ], key(infrastructure.rent.program, 'Rent program'));
   const registryArtifact = deriveFinalizedRecordAddressesV1(input.registryProgram, ARTIFACT_RELEASE_SCHEMA_ID_V1, Uint8Array.from(infrastructure.registry.artifactReleaseId.match(/../g) ?? [], (value) => Number.parseInt(value, 16)));
   const rentArtifact = deriveFinalizedRecordAddressesV1(input.registryProgram, ARTIFACT_RELEASE_SCHEMA_ID_V1, Uint8Array.from(infrastructure.rent.artifactReleaseId.match(/../g) ?? [], (value) => Number.parseInt(value, 16)));
   const accountAddresses = [
-    input.payer, market.toBase58(), input.rentCredit, infrastructure.rent.program,
+    input.payer, market.toBase58(), rentCredit.toBase58(), infrastructure.rent.program,
     realm.raw, realm.staging, product.raw, product.staging, domain.raw, domain.staging, portfolio.raw, portfolio.staging,
     source.raw, source.staging, manifest.raw, manifest.staging, releaseSetAuthority.raw, releaseSetAuthority.staging,
     input.activationCache, infrastructure.core.program, infrastructure.core.programData, input.registryProgram, RENT_SYSVAR_ID, SYSTEM_PROGRAM_ID,
@@ -436,13 +529,17 @@ export async function prepareCoreFoundV2(client: SolanaRpcClient, input: CoreFou
     rentArtifact.record, rentArtifact.staging, infrastructure.rent.programData,
   ];
   if (accountAddresses.length !== CORE_FOUND_ACCOUNT_COUNT_V2 || new Set(accountAddresses).size !== CORE_FOUND_ACCOUNT_COUNT_V2) throw new Error('Found31 account projection aliases named roles');
-  const finalObservation = await client.multipleAccounts(accountAddresses, initial.slot);
+  const observationAddresses = input.refundWallet === input.payer ? accountAddresses : [...accountAddresses, input.refundWallet];
+  const finalObservation = await client.multipleAccounts(observationAddresses, initial.slot);
   const finalAccounts = accountMap(finalObservation);
   const payerAccount = required(finalAccounts, input.payer, 'payer');
   if (payerAccount.owner !== SYSTEM_PROGRAM_ID || payerAccount.executable || payerAccount.data.length !== 0) throw new Error('payer is not a System-owned data-free wallet');
   vacant(finalAccounts.get(market.toBase58()), 'Market destination');
-  const rentCredit = required(finalAccounts, input.rentCredit, 'RentCredit');
-  validateRentCredit(rentCredit, input.rentCredit, infrastructure.rent.program);
+  const refundWallet = required(finalAccounts, input.refundWallet, 'refund wallet');
+  if (refundWallet.owner !== SYSTEM_PROGRAM_ID || refundWallet.executable || refundWallet.data.length !== 0) throw new Error('refund wallet is not a System-owned data-free wallet');
+  const creditDestination = finalAccounts.get(rentCredit.toBase58());
+  vacant(creditDestination, 'lifecycle RentCredit destination');
+  if ((creditDestination?.lamports ?? '0') !== '0') throw new Error('lifecycle RentCredit destination is prefunded');
   for (const authority of [...authorities, releaseSetAuthority]) {
     const raw = required(finalAccounts, authority.raw, 'finalized raw record');
     if (raw.owner !== input.registryProgram || raw.executable || BigInt(raw.lamports) < authority.rentMinimum || !same(raw.data, authority.bytes) || !same(await sha256(raw.data), authority.digest)) throw new Error('finalized raw record changed or lost Registry/rent authority');
@@ -452,12 +549,24 @@ export async function prepareCoreFoundV2(client: SolanaRpcClient, input: CoreFou
   const system = required(finalAccounts, SYSTEM_PROGRAM_ID, 'System Program');
   if (rentSysvar.owner !== SYSVAR_OWNER_ID || rentSysvar.executable || rentSysvar.data.length !== 17 || system.owner !== NATIVE_LOADER_ID || !system.executable || system.data.length !== 0) throw new Error('Rent or System runtime account is not canonical');
   const marketRent = await client.minimumBalanceForRentExemption(CORE_STATE_BYTES);
+  const creditRent = await client.minimumBalanceForRentExemption(LIFECYCLE_RENT_CREDIT_BYTES_V2);
   const marketLamports = finalAccounts.get(market.toBase58())?.lamports ?? '0';
   const marketRentTopUp = BigInt(marketRent.lamports) > BigInt(marketLamports) ? BigInt(marketRent.lamports) - BigInt(marketLamports) : 0n;
-  if (BigInt(payerAccount.lamports) < marketRentTopUp) throw new Error('payer cannot cover the exact current Market rent top-up');
+  const totalRentDebit = marketRentTopUp + BigInt(creditRent.lamports);
+  if (BigInt(payerAccount.lamports) < totalRentDebit) throw new Error('payer cannot cover the exact current Market and lifecycle-credit rent debit');
   const confirmedInfrastructure = await inspectProtocolInfrastructureV1(client, { registryProgram: input.registryProgram, activationCache: input.activationCache });
   if (!infrastructureEqual(infrastructure, confirmedInfrastructure)) throw new Error('immutable infrastructure projection changed during Found construction');
   const blockhash = await client.latestBlockhash(confirmedInfrastructure.observedSlot);
+  const rentCreation = compileLifecycleRentCreateTransactionV2({
+    payer: input.payer,
+    refundWallet: input.refundWallet,
+    market: market.toBase58(),
+    releaseSet: releaseSetAuthority.digest,
+    generation: input.generation,
+    rentProgram: infrastructure.rent.program,
+    recentBlockhash: blockhash.blockhash,
+  });
+  if (rentCreation.rentCredit !== rentCredit.toBase58()) throw new Error('lifecycle RentCredit derivation changed during compilation');
   const compiled = compileCoreFoundTransactionV2({
     payer: input.payer,
     coreProgram: infrastructure.core.program,
@@ -469,6 +578,7 @@ export async function prepareCoreFoundV2(client: SolanaRpcClient, input: CoreFou
   return Object.freeze({
     observedSlot: finalObservation.slot,
     market: market.toBase58(),
+    rentCredit: rentCredit.toBase58(),
     coreProgram: infrastructure.core.program,
     registryProgram: input.registryProgram,
     rentProgram: infrastructure.rent.program,
@@ -479,10 +589,14 @@ export async function prepareCoreFoundV2(client: SolanaRpcClient, input: CoreFou
     infrastructureProfile: infrastructure.profilePda,
     infrastructureRecognition: infrastructure.recognition,
     marketRentTopUp: marketRentTopUp.toString(),
+    rentCreditRentDebit: creditRent.lamports,
     lastValidBlockHeight: blockhash.lastValidBlockHeight,
     accountAddresses: Object.freeze(accountAddresses),
     requiredSigners: compiled.requiredSigners,
     requestBytes: compiled.requestBytes,
+    rentCreateRequestBytes: rentCreation.requestBytes,
+    rentCreateTransaction: rentCreation.transaction,
+    rentCreateWireBytes: rentCreation.wireBytes,
     transaction: compiled.transaction,
     wireBytes: compiled.wireBytes,
   });

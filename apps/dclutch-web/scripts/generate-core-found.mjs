@@ -12,6 +12,7 @@ const sources = Object.freeze({
   releaseSet: readFileSync(new URL('crates/dclutch-release-set-contract/src/lib.rs', root), 'utf8'),
   registry: readFileSync(new URL('crates/dclutch-registry-contract/src/artifact.rs', root), 'utf8'),
   rent: readFileSync(new URL('crates/dclutch-rent-contract/src/lib.rs', root), 'utf8'),
+  lifecycleRent: readFileSync(new URL('crates/dclutch-rent-contract/src/lifecycle_v2.rs', root), 'utf8'),
   operator: readFileSync(new URL('crates/dclutch-product-runtime-v2-operator/src/found.rs', root), 'utf8'),
 });
 const outputUrl = new URL('../lib/generated/coreFound.ts', import.meta.url);
@@ -69,6 +70,11 @@ output += '// Regenerate with: npm run abi:found\n\n';
 for (const [source, name] of [
   ['core', 'VERSION'], ['core', 'REQUEST_BYTES'], ['core', 'STATE_BYTES'], ['core', 'ACTION_FOUND_TAG'],
 ]) output += `export const CORE_${name} = ${scalar(source, name)} as const;\n`;
+for (const name of [
+  'LIFECYCLE_RENT_CREDIT_BYTES_V2',
+  'CREATE_LIFECYCLE_RENT_CREDIT_BYTES_V2',
+  'LIFECYCLE_RENT_SCHEMA_VERSION_V2',
+]) output += `export const ${name} = ${scalar('lifecycleRent', name)} as const;\n`;
 output += `export const CORE_FOUND_ACCOUNT_COUNT_V2 = ${scalar('operator', 'FOUND_ACCOUNT_COUNT_V2')} as const;\n`;
 const accountLabels = foundAccountLabels();
 if (accountLabels.length !== scalar('operator', 'FOUND_ACCOUNT_COUNT_V2')) throw new Error('Found account count and projection differ');
@@ -82,7 +88,8 @@ for (const [source, name] of [
   ['releaseSet', 'EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1'],
   ['registry', 'ARTIFACT_RELEASE_SCHEMA_ID_V1'],
 ]) output += array(name, bytes(source, name));
-output += `export const RENT_CREDIT_PDA_DOMAIN_V1 = new TextEncoder().encode('${byteString('rent', 'RENT_CREDIT_PDA_DOMAIN_V1')}');\n`;
+output += `export const LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2 = new TextEncoder().encode('${byteString('lifecycleRent', 'LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2')}');\n`;
+output += array('LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2', bytes('lifecycleRent', 'LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2'));
 
 if (process.argv.includes('--check')) {
   if (readFileSync(outputUrl, 'utf8') !== output) {

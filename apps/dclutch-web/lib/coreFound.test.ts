@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { sha256 } from './bytes';
 import {
+  compileLifecycleRentCreateTransactionV2,
   compileCoreFoundTransactionV2,
   decodeCoreFoundProductGraphV2,
   prepareCoreFoundV2,
@@ -82,8 +83,8 @@ describe('Core Found31 browser kernel', () => {
     expect(() => validateCoreFoundCapabilityManifestV1(manifest)).toThrow(/reserved/);
     const client = { finalizedSlot: async () => { throw new Error('RPC must not run'); } } as unknown as SolanaRpcClient;
     await expect(prepareCoreFoundV2(client, {
-      payer: '', registryProgram: '', activationCache: '', rentCredit: '', realmRecord: '', productRecord: '', resultDomainRecord: '', portfolioRecord: '', sourceMaterialRecord: '', capabilityManifestRecord: '', executionReleaseSetRecord: '', generation: 1n << 64n,
-    })).rejects.toThrow(/outside u64/);
+      payer: '', registryProgram: '', activationCache: '', refundWallet: '', realmRecord: '', productRecord: '', resultDomainRecord: '', portfolioRecord: '', sourceMaterialRecord: '', capabilityManifestRecord: '', executionReleaseSetRecord: '', generation: 1n << 64n,
+    })).rejects.toThrow(/outside lifecycle u64/);
   });
 
   it('compiles the exact 31-account Found v0 packet with payer as the sole signer', () => {
@@ -101,6 +102,50 @@ describe('Core Found31 browser kernel', () => {
     expect(compiled.requiredSigners).toEqual([accounts[0]]);
     expect(compiled.transaction.message.compiledInstructions).toHaveLength(1);
     expect(compiled.transaction.message.compiledInstructions[0].accountKeyIndexes).toHaveLength(31);
+  });
+
+  it('derives a Market-generation lifecycle credit and binds its sole refund wallet and release set', () => {
+    const payer = new PublicKey(id(1)).toBase58();
+    const refundWallet = new PublicKey(id(2)).toBase58();
+    const market = new PublicKey(id(3)).toBase58();
+    const rentProgram = new PublicKey(id(4)).toBase58();
+    const compiled = compileLifecycleRentCreateTransactionV2({
+      payer,
+      refundWallet,
+      market,
+      releaseSet: id(5),
+      generation: 7n,
+      rentProgram,
+      recentBlockhash: new PublicKey(id(99)).toBase58(),
+    });
+    expect(compiled.requestBytes).toHaveLength(128);
+    expect(new TextDecoder().decode(compiled.requestBytes.slice(0, 8))).toBe('DCLRNCI2');
+    expect(compiled.requestBytes.slice(16, 48)).toEqual(new PublicKey(refundWallet).toBytes());
+    expect(compiled.requestBytes.slice(48, 80)).toEqual(new PublicKey(market).toBytes());
+    expect(compiled.requestBytes.slice(80, 112)).toEqual(id(5));
+    expect(compiled.requiredSigners).toEqual([payer]);
+    expect(compiled.transaction.message.compiledInstructions).toHaveLength(1);
+    expect(compiled.wireBytes.length).toBeLessThanOrEqual(1_232);
+
+    const next = compileLifecycleRentCreateTransactionV2({
+      payer, refundWallet, market, releaseSet: id(5), generation: 8n, rentProgram,
+      recentBlockhash: new PublicKey(id(99)).toBase58(),
+    });
+    expect(next.rentCredit).not.toBe(compiled.rentCredit);
+  });
+
+  it('refuses zero generations and aliasing a refund wallet with lifecycle identity', () => {
+    const payer = new PublicKey(id(1)).toBase58();
+    const market = new PublicKey(id(3)).toBase58();
+    const common = {
+      payer,
+      market,
+      releaseSet: id(5),
+      rentProgram: new PublicKey(id(4)).toBase58(),
+      recentBlockhash: new PublicKey(id(99)).toBase58(),
+    };
+    expect(() => compileLifecycleRentCreateTransactionV2({ ...common, refundWallet: payer, generation: 0n })).toThrow(/lifecycle u64/);
+    expect(() => compileLifecycleRentCreateTransactionV2({ ...common, refundWallet: market, generation: 7n })).toThrow(/alias/);
   });
 
   it('refuses account-index drift and aliasing before transaction construction', () => {
