@@ -116,8 +116,10 @@ pub enum Error {
     ContentIdentity,
     /// Exact interpreted ExecutionStrategy construction or join refused.
     ExecutionStrategy(dclutch_execution_strategy_contract::v2::Error),
-    /// CapabilityProgramV3 construction or hostile decoding refused.
+    /// CapabilityProgramV4 construction or hostile decoding refused.
     CapabilityDescriptor(dclutch_capability_program_contract::Error),
+    /// Successor lifecycle artifact decoding or AccountProfile join refused.
+    LifecycleArtifact(dclutch_account_profile_contract::lifecycle_v3::Error),
     /// Schema-bound CapabilityProgramSetV2 construction or selection refused.
     CapabilityProgramSet(dclutch_capability_program_contract::set_v2::ProgramSetErrorV2),
     /// Independently decoded artifact banks did not have one exact geometry.

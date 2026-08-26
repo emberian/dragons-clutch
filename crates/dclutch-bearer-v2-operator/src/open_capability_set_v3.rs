@@ -5,7 +5,7 @@ use dclutch_capability_program_contract::{
         CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, CapabilityProgramSetV2,
         SelectorWidthV2, encode_program_set_v2, encoded_program_set_bytes_v2,
     },
-    v3::{CapabilityProgramV3, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V3},
+    v4::{CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4},
 };
 use dclutch_core_contract::ContentId;
 use dclutch_effect_kernel::v3::ProgramV3 as EffectProgramV3;
@@ -208,12 +208,12 @@ fn descriptor_entry_inner(
     expected_action: RepresentationActionV2,
 ) -> Result<CapabilityProgramSetEntryV2> {
     let descriptor =
-        CapabilityProgramV3::decode(descriptor_bytes).map_err(Error::CapabilityDescriptor)?;
+        CapabilityProgramV4::decode(descriptor_bytes).map_err(Error::CapabilityDescriptor)?;
     if descriptor.config_schema().to_bytes() != TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2 {
         return Err(Error::ArtifactGeometry);
     }
     let effect = EffectProgramV3::decode_selected(
-        descriptor.effect_program().to_bytes(),
+        descriptor.effect().program().to_bytes(),
         hash(effect_bytes).to_bytes(),
         effect_bytes,
     )
@@ -225,7 +225,7 @@ fn descriptor_entry_inner(
     Ok(CapabilityProgramSetEntryV2::new(
         expected_action as u32,
         CapabilityDescriptorReferenceV2::new(
-            content(CAPABILITY_PROGRAM_SCHEMA_ID_V3)?,
+            content(CAPABILITY_PROGRAM_SCHEMA_ID_V4)?,
             content(hash(descriptor_bytes).to_bytes())?,
         ),
     ))
@@ -249,7 +249,7 @@ pub(crate) fn require_open_program_selection_v3(
         return Err(Error::ContentIdentity);
     }
     let descriptor =
-        CapabilityProgramV3::decode(descriptor_bytes).map_err(Error::CapabilityDescriptor)?;
+        CapabilityProgramV4::decode(descriptor_bytes).map_err(Error::CapabilityDescriptor)?;
     if descriptor.config_schema().to_bytes() != TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2 {
         return Err(Error::ArtifactGeometry);
     }
@@ -261,7 +261,7 @@ pub(crate) fn require_open_program_selection_v3(
     .map_err(Error::CapabilityProgramSet)?;
     set.require_descriptor(
         family_request,
-        content(CAPABILITY_PROGRAM_SCHEMA_ID_V3)?,
+        content(CAPABILITY_PROGRAM_SCHEMA_ID_V4)?,
         content(hash(descriptor_bytes).to_bytes())?,
     )
     .map_err(Error::CapabilityProgramSet)?;

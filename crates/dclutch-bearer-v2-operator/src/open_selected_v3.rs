@@ -1,5 +1,8 @@
 //! Data-defined Hot artifacts for selected open Bearer split and merge.
 
+use dclutch_account_profile_contract::lifecycle_v3::{
+    SUCCESSOR_SCHEMA_RELEASE_ID as LIFECYCLE_SCHEMA_ID_V4, StateLifecyclePolicyV4,
+};
 use dclutch_account_profile_contract::v2::{
     AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE, AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES,
     AccountPrestateV2, AccountProfileV2, OPERATION_BYTES as ACCOUNT_OPERATION_BYTES,
@@ -12,7 +15,9 @@ use dclutch_account_profile_contract::v2::{
         encode_account_profile_with_authenticated_route_alias_v2_atomic,
     },
 };
-use dclutch_capability_program_contract::v3::{CAPABILITY_PROGRAM_V3_BYTES, CapabilityProgramV3};
+use dclutch_capability_program_contract::v4::{
+    ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4, CapabilityProgramV4,
+};
 use dclutch_core_contract::ContentId;
 use dclutch_effect_kernel::{
     v2::FixedRole,
@@ -127,8 +132,8 @@ pub struct RationalOpenSelectedHotBundleInputV3<'a> {
     pub authenticated_token_behavior: AuthenticatedTokenBehaviorV2,
     /// Manifest-selected root-tail schema.
     pub root_schema: [u8; 32],
-    /// Manifest-selected derivation policy.
-    pub derivation_policy: [u8; 32],
+    /// Exact finalized successor lifecycle policy bytes.
+    pub lifecycle_policy: &'a [u8],
     /// Manifest-selected capacity profile.
     pub capacity_profile: [u8; 32],
     /// Exact root-tail data width.
@@ -144,6 +149,8 @@ pub struct RationalOpenSelectedHotBundleV3 {
     pub account_profile: Vec<u8>,
     /// Exact open-family RequestProfile.
     pub request_profile: Vec<u8>,
+    /// Exact successor lifecycle policy.
+    pub lifecycle_policy: Vec<u8>,
     /// Bearer selected-coordinate transition.
     pub transition: Vec<u8>,
     /// Interpreted ExecutionStrategy.
@@ -151,7 +158,7 @@ pub struct RationalOpenSelectedHotBundleV3 {
     /// One-route Claims effect.
     pub effect: Vec<u8>,
     /// Capability descriptor selecting every artifact.
-    pub descriptor: [u8; CAPABILITY_PROGRAM_V3_BYTES],
+    pub descriptor: [u8; CAPABILITY_PROGRAM_V4_BYTES],
 }
 
 /// Build one complete immutable selected-action artifact bundle.
@@ -165,6 +172,7 @@ pub fn build_rational_open_selected_hot_bundle_v3(
         return Err(Error::ArtifactGeometry);
     }
     let account_profile = encode_account_profile(input)?;
+    let lifecycle_policy = Vec::from(input.lifecycle_policy);
     let request_profile = encode_request_profile(input.action)?;
     let transition = encode_transition()?;
     let effect = encode_effect(input.action)?;
@@ -187,19 +195,37 @@ pub fn build_rational_open_selected_hot_bundle_v3(
     {
         return Err(Error::ContentIdentity);
     }
-    let descriptor = CapabilityProgramV3::new(
+    let lifecycle_id = digest(&lifecycle_policy)?;
+    let descriptor = CapabilityProgramV4::new(
         content(input.kind)?,
         content(TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2)?,
         content(OPEN_REPRESENTATION_HOT_REQUEST_SCHEMA_ID_V3)?,
         content(input.root_schema)?,
-        digest(&account_profile)?,
-        content(input.derivation_policy)?,
+        lifecycle_id,
         content(input.capacity_profile)?,
-        digest(&effect)?,
-        content(dclutch_request_profile_contract::SCHEMA_RELEASE_ID)?,
-        digest(&request_profile)?,
-        content(EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2)?,
-        digest(&strategy)?,
+        CapabilityArtifactsV4 {
+            account_profile: artifact(
+                dclutch_account_profile_contract::v2::SCHEMA_RELEASE_ID,
+                digest(&account_profile)?.to_bytes(),
+            )?,
+            request_profile: artifact(
+                dclutch_request_profile_contract::SCHEMA_RELEASE_ID,
+                digest(&request_profile)?.to_bytes(),
+            )?,
+            lifecycle: artifact(LIFECYCLE_SCHEMA_ID_V4, lifecycle_id.to_bytes())?,
+            strategy: artifact(
+                EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
+                digest(&strategy)?.to_bytes(),
+            )?,
+            transition: artifact(
+                dclutch_transition_vm::v3::SCHEMA_RELEASE_ID,
+                digest(&transition)?.to_bytes(),
+            )?,
+            effect: artifact(
+                dclutch_effect_kernel::v3::SCHEMA_RELEASE_ID,
+                digest(&effect)?.to_bytes(),
+            )?,
+        },
         input.root_state_bytes,
     )
     .map_err(Error::CapabilityDescriptor)?
@@ -208,6 +234,7 @@ pub fn build_rational_open_selected_hot_bundle_v3(
         token_behavior_selection,
         account_profile,
         request_profile,
+        lifecycle_policy,
         transition,
         strategy,
         effect,
@@ -225,13 +252,23 @@ pub fn validate_rational_open_selected_hot_bundle_v3(
     bundle: &RationalOpenSelectedHotBundleV3,
 ) -> Result<()> {
     let descriptor =
-        CapabilityProgramV3::decode(&bundle.descriptor).map_err(Error::CapabilityDescriptor)?;
+        CapabilityProgramV4::decode(&bundle.descriptor).map_err(Error::CapabilityDescriptor)?;
     TokenBehaviorSelectionV2::decode(&bundle.token_behavior_selection)
         .map_err(Error::TokenBehavior)?;
     let account =
         AccountProfileV2::decode(&bundle.account_profile).map_err(Error::AccountProfileArtifact)?;
+    let lifecycle_id = digest(&bundle.lifecycle_policy)?;
+    let lifecycle = StateLifecyclePolicyV4::decode_selected(
+        descriptor.lifecycle().program().to_bytes(),
+        lifecycle_id.to_bytes(),
+        &bundle.lifecycle_policy,
+    )
+    .map_err(Error::LifecycleArtifact)?;
+    lifecycle
+        .validate_account_profile(account)
+        .map_err(Error::LifecycleArtifact)?;
     let request = RequestProfileV1::decode_selected(
-        descriptor.request_profile_program().to_bytes(),
+        descriptor.request_profile().program().to_bytes(),
         hash(&bundle.request_profile).to_bytes(),
         &bundle.request_profile,
     )
@@ -241,20 +278,44 @@ pub fn validate_rational_open_selected_hot_bundle_v3(
     let strategy =
         ExecutionStrategyProgramV2::decode(&bundle.strategy).map_err(Error::ExecutionStrategy)?;
     let effect = EffectProgramV3::decode_selected(
-        descriptor.effect_program().to_bytes(),
+        descriptor.effect().program().to_bytes(),
         hash(&bundle.effect).to_bytes(),
         &bundle.effect,
     )
     .map_err(Error::EffectArtifact)?;
-    strategy
-        .validate_descriptor_selection(digest(&bundle.strategy)?, descriptor)
-        .map_err(Error::ExecutionStrategy)?;
     let route = effect.route(0).map_err(Error::EffectArtifact)?;
     if descriptor.request_schema().to_bytes() != OPEN_REPRESENTATION_HOT_REQUEST_SCHEMA_ID_V3
         || descriptor.config_schema().to_bytes() != TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2
-        || descriptor.account_profile() != digest(&bundle.account_profile)?
+        || descriptor.derivation_policy() != lifecycle_id
+        || descriptor.account_profile()
+            != artifact(
+                dclutch_account_profile_contract::v2::SCHEMA_RELEASE_ID,
+                digest(&bundle.account_profile)?.to_bytes(),
+            )?
+        || descriptor.request_profile()
+            != artifact(
+                dclutch_request_profile_contract::SCHEMA_RELEASE_ID,
+                digest(&bundle.request_profile)?.to_bytes(),
+            )?
+        || descriptor.lifecycle() != artifact(LIFECYCLE_SCHEMA_ID_V4, lifecycle_id.to_bytes())?
+        || descriptor.strategy()
+            != artifact(
+                EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
+                digest(&bundle.strategy)?.to_bytes(),
+            )?
+        || descriptor.transition()
+            != artifact(
+                dclutch_transition_vm::v3::SCHEMA_RELEASE_ID,
+                digest(&bundle.transition)?.to_bytes(),
+            )?
+        || descriptor.effect()
+            != artifact(
+                dclutch_effect_kernel::v3::SCHEMA_RELEASE_ID,
+                digest(&bundle.effect)?.to_bytes(),
+            )?
         || strategy.disposition() != StrategyDispositionV2::Interpreted
-        || strategy.transition_program() != digest(&bundle.transition)?
+        || strategy.transition_schema() != descriptor.transition().schema()
+        || strategy.transition_program() != descriptor.transition().program()
         || account.artifact_profile() != AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
         || account.fixed_account_count() != RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3
         || account.item_account_stride() != 0
@@ -760,6 +821,13 @@ fn content(bytes: [u8; 32]) -> Result<ContentId> {
     ContentId::new(bytes).map_err(|_| Error::ContentIdentity)
 }
 
+fn artifact(schema: [u8; 32], program: [u8; 32]) -> Result<ArtifactReferenceV4> {
+    Ok(ArtifactReferenceV4::new(
+        content(schema)?,
+        content(program)?,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -818,7 +886,7 @@ mod tests {
                     ProductBasisV3::decode(basis).expect("basis").basis_width(),
                 ),
             root_schema: id(12),
-            derivation_policy: id(13),
+            lifecycle_policy: crate::test_open_fixture_v3::lifecycle_policy(),
             capacity_profile: id(14),
             root_state_bytes: 8,
         }
@@ -855,9 +923,10 @@ mod tests {
             assert_eq!(account.physical_account_count(0), Ok(37));
 
             let effect = EffectProgramV3::decode_selected(
-                CapabilityProgramV3::decode(&bundle.descriptor)
+                CapabilityProgramV4::decode(&bundle.descriptor)
                     .expect("descriptor")
-                    .effect_program()
+                    .effect()
+                    .program()
                     .to_bytes(),
                 hash(&bundle.effect).to_bytes(),
                 &bundle.effect,
@@ -901,6 +970,22 @@ mod tests {
             .get_mut(0)
             .expect("account profile byte") ^= 1;
         assert!(validate_rational_open_selected_hot_bundle_v3(&substituted).is_err());
+
+        let mut substituted = canonical.clone();
+        *substituted
+            .lifecycle_policy
+            .get_mut(0)
+            .expect("lifecycle byte") ^= 1;
+        assert!(matches!(
+            validate_rational_open_selected_hot_bundle_v3(&substituted),
+            Err(Error::LifecycleArtifact(_))
+        ));
+        assert!(
+            dclutch_capability_program_contract::v3::CapabilityProgramV3::decode(
+                &canonical.descriptor
+            )
+            .is_err()
+        );
 
         let mut substituted = canonical.clone();
         *substituted

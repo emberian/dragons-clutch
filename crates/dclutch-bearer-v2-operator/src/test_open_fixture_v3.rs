@@ -1,3 +1,11 @@
+use dclutch_account_profile_contract::lifecycle_v3::{
+    ACTION_PLAN_BYTES, HEADER_BYTES, PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SEED_BYTES,
+    encode::{
+        LifecycleAccountCoordinateV3, LifecycleGuardInputV3, LifecycleOperationInputV3,
+        LifecyclePlanInputV3, LifecycleRecipeInputV3, LifecycleSeedInputV3,
+        encode_lifecycle_policy_v4_atomic,
+    },
+};
 use dclutch_product_payoff_v2_codec::runtime_v3::{
     BASIS_HEADER_BYTES_V3, BasisInputV3, BasisKindV3, compile_basis_v3,
 };
@@ -45,6 +53,7 @@ pub(crate) fn open_artifact_fixture_v3(
     let mut structured_lengths = [0_u32; RATIONAL_OPEN_STRUCTURED_FIXED_ACCOUNTS_V3 as usize];
     structured_lengths[4] = u32::try_from(basis.len()).expect("basis length");
     structured_lengths[29] = u32::try_from(basis.len()).expect("basis alias length");
+    let lifecycle = lifecycle_policy();
 
     let selected = |action| {
         build_rational_open_selected_hot_bundle_v3(RationalOpenSelectedHotBundleInputV3 {
@@ -54,7 +63,7 @@ pub(crate) fn open_artifact_fixture_v3(
             kind: id(10),
             authenticated_token_behavior: token_behavior,
             root_schema: id(11),
-            derivation_policy: id(12),
+            lifecycle_policy: lifecycle,
             capacity_profile: id(13),
             root_state_bytes: 8,
         })
@@ -69,7 +78,7 @@ pub(crate) fn open_artifact_fixture_v3(
             kind: id(10),
             authenticated_token_behavior: token_behavior,
             root_schema: id(11),
-            derivation_policy: id(12),
+            lifecycle_policy: lifecycle,
             capacity_profile: id(13),
             root_state_bytes: 8,
         })
@@ -96,6 +105,56 @@ pub(crate) fn open_artifact_fixture_v3(
         unwrap,
         set,
     }
+}
+
+pub(crate) fn lifecycle_policy() -> &'static [u8] {
+    use std::sync::OnceLock;
+
+    static POLICY: OnceLock<Vec<u8>> = OnceLock::new();
+    POLICY.get_or_init(|| encode_lifecycle_fixture(8)).as_slice()
+}
+
+fn encode_lifecycle_fixture(root_data_bytes: u32) -> Vec<u8> {
+    let recipes = [LifecycleRecipeInputV3 {
+        state: LifecycleAccountCoordinateV3::fixed(0),
+        seed_start: 0,
+        seed_count: 2,
+        bump_offset: 1,
+        data_base: root_data_bytes,
+        data_stride: 0,
+    }];
+    let seeds = [
+        LifecycleSeedInputV3::Literal(b"dclutch/rational-open/dormant/v4"),
+        LifecycleSeedInputV3::CanonicalBump,
+    ];
+    let plans = [LifecyclePlanInputV3 {
+        action: u32::MAX,
+        operation: LifecycleOperationInputV3::Authenticate,
+        recipe: 0,
+        payer: None,
+        rent_credit: None,
+        principal: None,
+        beneficiary: None,
+        guard: LifecycleGuardInputV3::Always,
+    }];
+    let width = HEADER_BYTES
+        + RECIPE_BYTES
+        + 2 * SEED_BYTES
+        + ACTION_PLAN_BYTES
+        + PROTECTED_OUTPUT_BYTES;
+    let mut scratch = vec![0_u8; width];
+    let mut output = vec![0_u8; width];
+    encode_lifecycle_policy_v4_atomic(
+        &recipes,
+        &seeds,
+        &plans,
+        &[None],
+        &[],
+        &mut scratch,
+        &mut output,
+    )
+    .expect("lifecycle fixture");
+    output
 }
 
 pub(crate) fn authenticated_token_behavior_v3(
@@ -205,4 +264,20 @@ fn four_action_set_retains_each_distinct_descriptor() {
         artifacts.reconstitute.descriptor
     );
     assert_ne!(artifacts.issue.descriptor, artifacts.unwrap.descriptor);
+    let set = dclutch_capability_program_contract::set_v2::CapabilityProgramSetV2::decode_selected(
+        artifacts.set.program_set_id,
+        hash(&artifacts.set.program_set).to_bytes(),
+        &artifacts.set.program_set,
+    )
+    .expect("program set");
+    for ordinal in 0..4 {
+        assert_eq!(
+            set.entry(ordinal)
+                .expect("entry")
+                .descriptor()
+                .schema()
+                .to_bytes(),
+            dclutch_capability_program_contract::v4::SCHEMA_RELEASE_ID
+        );
+    }
 }
