@@ -8,9 +8,10 @@
 use super::{
     ACTION_PLAN_BYTES, ARTIFACT_PROFILE, Error, GUARD_ALWAYS, GUARD_SCALAR_EQ, HEADER_BYTES, MAGIC,
     MAX_SEED_BYTES, PLAN_AUTHENTICATE, PLAN_AUTHENTICATE_OR_CREATE, PLAN_CLOSE, PLAN_CREATE,
-    RECIPE_BYTES, SCOPE_FIXED, SCOPE_ITEM, SEED_BYTES, SEED_COMMON_IDENTITY, SEED_COMMON_SCALAR_LE,
-    SEED_ITEM_IDENTITY, SEED_ITEM_INDEX_LE, SEED_ITEM_SCALAR_LE, SEED_LITERAL,
-    StateLifecyclePolicyV3, VERSION,
+    PROTECTED_OUTPUT_ARTIFACT_PROFILE, PROTECTED_OUTPUT_AUTHENTICATE_OR_CREATE,
+    PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SCOPE_FIXED, SCOPE_ITEM, SEED_BYTES, SEED_CANONICAL_BUMP,
+    SEED_COMMON_IDENTITY, SEED_COMMON_SCALAR_LE, SEED_ITEM_IDENTITY, SEED_ITEM_INDEX_LE,
+    SEED_ITEM_SCALAR_LE, SEED_LITERAL, StateLifecyclePolicyV3, VERSION,
 };
 
 /// Fixed-prefix or per-Product-item lifecycle coordinate.
@@ -123,6 +124,8 @@ pub enum LifecycleSeedInputV3<'a> {
     },
     /// Canonical Product item index encoded as 1, 2, or 4 bytes.
     ItemIndex(u8),
+    /// Sole final seed derived by the trusted PDA adapter.
+    CanonicalBump,
 }
 
 /// Generic lifecycle operation selected by a family action.
@@ -173,11 +176,81 @@ pub struct LifecyclePlanInputV3 {
     pub guard: LifecycleGuardInputV3,
 }
 
+/// Lifecycle-owned output destinations for one AuthenticateOrCreate plan.
+///
+/// All coordinates use the selected recipe's common or item register space.
+/// The AccountProfile owns the persisted bump/principal/beneficiary
+/// observations; lifecycle alone owns these six output destinations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LifecycleProtectedOutputsInputV3 {
+    /// Zero for authenticated live state, one for newly created state.
+    pub created: u16,
+    /// Persisted bump observation projected from the live state body.
+    pub bump_observation: u16,
+    /// Canonical derived bump output.
+    pub bump: u16,
+    /// Historical rent-principal output.
+    pub historical_rent_principal: u16,
+    /// Immutable RentCredit-beneficiary output.
+    pub beneficiary: u16,
+    /// Exact derived state-key output.
+    pub state: u16,
+    /// Current Trading-program owner output.
+    pub owner: u16,
+}
+
 /// Encode one complete StateLifecyclePolicy V3 atomically.
 pub fn encode_lifecycle_policy_v3_atomic(
     recipes: &[LifecycleRecipeInputV3],
     seeds: &[LifecycleSeedInputV3<'_>],
     plans: &[LifecyclePlanInputV3],
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<(), Error> {
+    encode_lifecycle_policy_inner_v3_atomic(
+        ARTIFACT_PROFILE,
+        recipes,
+        seeds,
+        plans,
+        &[],
+        scratch,
+        output,
+    )
+}
+
+/// Encode one complete protected-output StateLifecyclePolicy V3 atomically.
+///
+/// `protected_outputs` is exactly parallel to `plans`. AuthenticateOrCreate
+/// plans require `Some`; all other operations require `None`.
+pub fn encode_lifecycle_policy_with_protected_outputs_v3_atomic(
+    recipes: &[LifecycleRecipeInputV3],
+    seeds: &[LifecycleSeedInputV3<'_>],
+    plans: &[LifecyclePlanInputV3],
+    protected_outputs: &[Option<LifecycleProtectedOutputsInputV3>],
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<(), Error> {
+    if protected_outputs.len() != plans.len() {
+        return Err(Error::InvalidLength);
+    }
+    encode_lifecycle_policy_inner_v3_atomic(
+        PROTECTED_OUTPUT_ARTIFACT_PROFILE,
+        recipes,
+        seeds,
+        plans,
+        protected_outputs,
+        scratch,
+        output,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_lifecycle_policy_inner_v3_atomic(
+    artifact_profile: u16,
+    recipes: &[LifecycleRecipeInputV3],
+    seeds: &[LifecycleSeedInputV3<'_>],
+    plans: &[LifecyclePlanInputV3],
+    protected_outputs: &[Option<LifecycleProtectedOutputsInputV3>],
     scratch: &mut [u8],
     output: &mut [u8],
 ) -> Result<(), Error> {
@@ -199,6 +272,12 @@ pub fn encode_lifecycle_policy_v3_atomic(
                 .checked_mul(ACTION_PLAN_BYTES)
                 .and_then(|plan_width| width.checked_add(plan_width))
         })
+        .and_then(|width| {
+            protected_outputs
+                .len()
+                .checked_mul(PROTECTED_OUTPUT_BYTES)
+                .and_then(|protected_width| width.checked_add(protected_width))
+        })
         .and_then(|body| HEADER_BYTES.checked_add(body))
         .ok_or(Error::InvalidLength)?;
     if scratch.len() != expected || output.len() != expected {
@@ -207,9 +286,12 @@ pub fn encode_lifecycle_policy_v3_atomic(
     scratch.fill(0);
     write(scratch, 0, &MAGIC)?;
     write(scratch, 8, &VERSION.to_le_bytes())?;
-    write(scratch, 10, &ARTIFACT_PROFILE.to_le_bytes())?;
+    write(scratch, 10, &artifact_profile.to_le_bytes())?;
     for (offset, value) in [(12, recipe_count), (14, seed_count), (16, plan_count)] {
         write(scratch, offset, &value.to_le_bytes())?;
+    }
+    if artifact_profile == PROTECTED_OUTPUT_ARTIFACT_PROFILE {
+        write(scratch, 18, &plan_count.to_le_bytes())?;
     }
     let mut cursor = HEADER_BYTES;
     for recipe in recipes {
@@ -224,11 +306,38 @@ pub fn encode_lifecycle_policy_v3_atomic(
         encode_plan(*plan, scratch, cursor)?;
         cursor = add(cursor, ACTION_PLAN_BYTES)?;
     }
+    for protected in protected_outputs {
+        encode_protected_outputs(*protected, scratch, cursor)?;
+        cursor = add(cursor, PROTECTED_OUTPUT_BYTES)?;
+    }
     if cursor != expected {
         return Err(Error::InvalidLength);
     }
     StateLifecyclePolicyV3::decode(scratch)?;
     output.copy_from_slice(scratch);
+    Ok(())
+}
+
+fn encode_protected_outputs(
+    protected: Option<LifecycleProtectedOutputsInputV3>,
+    output: &mut [u8],
+    offset: usize,
+) -> Result<(), Error> {
+    let Some(protected) = protected else {
+        return Ok(());
+    };
+    write_byte(output, offset, PROTECTED_OUTPUT_AUTHENTICATE_OR_CREATE)?;
+    for (field_offset, value) in [
+        (2, protected.created),
+        (4, protected.bump_observation),
+        (6, protected.bump),
+        (8, protected.historical_rent_principal),
+        (10, protected.beneficiary),
+        (12, protected.state),
+        (14, protected.owner),
+    ] {
+        write(output, add(offset, field_offset)?, &value.to_le_bytes())?;
+    }
     Ok(())
 }
 
@@ -267,6 +376,7 @@ fn encode_seed(
             (SEED_ITEM_SCALAR_LE, width, index, None)
         }
         LifecycleSeedInputV3::ItemIndex(width) => (SEED_ITEM_INDEX_LE, width, 0, None),
+        LifecycleSeedInputV3::CanonicalBump => (SEED_CANONICAL_BUMP, 1, 0, None),
     };
     if width == 0 || width > MAX_SEED_BYTES {
         return Err(Error::InvalidSeed);
@@ -408,5 +518,80 @@ mod tests {
             Err(Error::InvalidFunding)
         );
         assert_eq!(hostile_output, before);
+    }
+
+    #[test]
+    fn protected_output_encoder_is_exact_and_failure_atomic() {
+        let recipes = [LifecycleRecipeInputV3 {
+            state: LifecycleAccountCoordinateV3::fixed(0),
+            seed_start: 0,
+            seed_count: 2,
+            bump_offset: 1,
+            data_base: 152,
+            data_stride: 0,
+        }];
+        let seeds = [
+            LifecycleSeedInputV3::Literal(b"maker"),
+            LifecycleSeedInputV3::CanonicalBump,
+        ];
+        let plans = [LifecyclePlanInputV3 {
+            action: 1,
+            operation: LifecycleOperationInputV3::AuthenticateOrCreate,
+            recipe: 0,
+            payer: Some(LifecycleAccountCoordinateV3::fixed(1)),
+            rent_credit: Some(LifecycleAccountCoordinateV3::fixed(2)),
+            principal: Some(LifecycleRegisterCoordinateV3::common(1)),
+            beneficiary: Some(LifecycleRegisterCoordinateV3::common(0)),
+            guard: LifecycleGuardInputV3::Always,
+        }];
+        let protected = [Some(LifecycleProtectedOutputsInputV3 {
+            created: 2,
+            bump_observation: 0,
+            bump: 3,
+            historical_rent_principal: 4,
+            beneficiary: 1,
+            state: 2,
+            owner: 3,
+        })];
+        let width = HEADER_BYTES
+            + RECIPE_BYTES
+            + 2 * SEED_BYTES
+            + ACTION_PLAN_BYTES
+            + PROTECTED_OUTPUT_BYTES;
+        let mut scratch = std::vec![0; width];
+        let mut output = std::vec![9; width];
+        encode_lifecycle_policy_with_protected_outputs_v3_atomic(
+            &recipes,
+            &seeds,
+            &plans,
+            &protected,
+            &mut scratch,
+            &mut output,
+        )
+        .expect("protected encode");
+        StateLifecyclePolicyV3::decode(&output).expect("protected decode");
+
+        let mut hostile_scratch = std::vec![0; width];
+        let mut hostile_output = std::vec![7; width];
+        let before = hostile_output.clone();
+        assert_eq!(
+            encode_lifecycle_policy_with_protected_outputs_v3_atomic(
+                &recipes,
+                &seeds,
+                &plans,
+                &[],
+                &mut hostile_scratch,
+                &mut hostile_output,
+            ),
+            Err(Error::InvalidLength)
+        );
+        assert_eq!(hostile_output, before);
+
+        let protected_offset = width - PROTECTED_OUTPUT_BYTES;
+        *output.get_mut(protected_offset).expect("tag") = 9;
+        assert_eq!(
+            StateLifecyclePolicyV3::decode(&output),
+            Err(Error::UnknownTag)
+        );
     }
 }
