@@ -6,6 +6,12 @@
 //! semantics then require those signers to equal the request-carried makers.
 
 use dclutch_capability_program_contract::hot_v3::HOT_FAMILY_REQUEST_OFFSET_V3;
+use dclutch_core_contract::ContentId;
+use dclutch_execution_strategy_contract::v2::{
+    ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
+    EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
+    EXECUTION_STRATEGY_PROGRAM_BYTES_V2, ExecutionStrategyProgramV2, StrategyDispositionV2,
+};
 use dclutch_request_profile_contract::{
     encode::{
         IdentityRegisterV1, RequestCoordinateV1, RequestGeometryV1, RequestInstructionV1,
@@ -56,6 +62,16 @@ pub const DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_ID_V3: [u8; 32] = [
     0xcc, 0xf3, 0x13, 0xc3, 0x38, 0xfd, 0xe9, 0xef, 0x78, 0xf2, 0xee, 0x58, 0x9a, 0x03, 0x12, 0x66,
     0x77, 0xb5, 0xc0, 0xee, 0x25, 0x99, 0x05, 0xda, 0x7b, 0x8d, 0xb1, 0x1a, 0x24, 0x50, 0x3c, 0xf7,
 ];
+/// SHA-256 content identity of the exact ordinary TransitionVM V3 program.
+pub const DIRECT_INLINE_ORDINARY_TRANSITION_ID_V3: [u8; 32] = [
+    0xec, 0xfd, 0x2c, 0x2f, 0x94, 0xa9, 0xea, 0x6c, 0x8f, 0xd0, 0xce, 0xde, 0xac, 0x16, 0x26, 0xda,
+    0x6f, 0xd5, 0xb6, 0xdd, 0x04, 0xc6, 0xae, 0x8e, 0xb2, 0x46, 0x0c, 0xc7, 0x18, 0x20, 0x27, 0x93,
+];
+/// SHA-256 content identity of the interpreted Strategy V2 selecting that transition.
+pub const DIRECT_INLINE_ORDINARY_STRATEGY_ID_V3: [u8; 32] = [
+    0x7c, 0xb7, 0xfa, 0x2a, 0xe0, 0xec, 0xbe, 0x43, 0xd7, 0x30, 0xd0, 0x7e, 0x4d, 0x73, 0xb7, 0xe5,
+    0xde, 0x2e, 0xfb, 0x1d, 0x69, 0xd5, 0xdd, 0x6b, 0x7b, 0xda, 0x91, 0x3e, 0x7e, 0xdf, 0x95, 0x67,
+];
 
 /// Stable typed Direct artifact-emission refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -66,6 +82,28 @@ pub enum DirectOrdinaryArtifactErrorV3 {
     RequestProfileV1,
     /// Signed RequestProfile V2 hostile encoding refused.
     RequestProfileV2,
+    /// Exact interpreted ExecutionStrategy construction refused.
+    Strategy,
+}
+
+/// Construct the exact interpreted Strategy V2 selecting the ordinary transition.
+pub fn direct_inline_ordinary_strategy_v3()
+-> Result<[u8; EXECUTION_STRATEGY_PROGRAM_BYTES_V2], DirectOrdinaryArtifactErrorV3> {
+    let content =
+        |value| ContentId::new(value).map_err(|_| DirectOrdinaryArtifactErrorV3::Strategy);
+    ExecutionStrategyProgramV2::new(
+        StrategyDispositionV2::Interpreted,
+        content(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID)?,
+        content(DIRECT_INLINE_ORDINARY_TRANSITION_ID_V3)?,
+        content(EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2)?,
+        None,
+        content(EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2)?,
+        None,
+        content(ACCELERATOR_REQUEST_SCHEMA_ID_V2)?,
+        content(ACCELERATOR_ACK_SCHEMA_ID_V2)?,
+    )
+    .map(ExecutionStrategyProgramV2::to_bytes)
+    .map_err(|_| DirectOrdinaryArtifactErrorV3::Strategy)
 }
 
 /// Emit the exact signed inline-ordinary RequestProfile V2 atomically.
@@ -417,10 +455,10 @@ mod tests {
         execution_v3::{DirectExecutionRequestV3, encode_header_v3},
         intent_v2::CompactIntentV2,
         ordinary_v3::{
-            IDENTITY_BUYER_COLLATERAL_REQUEST_V3, IDENTITY_BUYER_REQUEST_MAKER_V3,
-            IDENTITY_SELLER_COLLATERAL_REQUEST_V3, IDENTITY_SELLER_REQUEST_MAKER_V3,
-            SCALAR_BUYER_OUTCOME_V3, SCALAR_EXECUTION_PRICE_V3, SCALAR_FILL_V3,
-            SCALAR_SELLER_OUTCOME_V3,
+            DIRECT_ORDINARY_TRANSITION_BYTES_V3, IDENTITY_BUYER_COLLATERAL_REQUEST_V3,
+            IDENTITY_BUYER_REQUEST_MAKER_V3, IDENTITY_SELLER_COLLATERAL_REQUEST_V3,
+            IDENTITY_SELLER_REQUEST_MAKER_V3, SCALAR_BUYER_OUTCOME_V3, SCALAR_EXECUTION_PRICE_V3,
+            SCALAR_FILL_V3, SCALAR_SELLER_OUTCOME_V3, encode_direct_ordinary_transition_v3,
         },
     };
     use dclutch_request_profile_contract::{ProjectionRegistersV1, v2::RequestProfileV2};
@@ -548,6 +586,23 @@ mod tests {
         assert_eq!(
             identity_output[IDENTITY_BUYER_COLLATERAL_REQUEST_V3],
             id(31)
+        );
+    }
+
+    #[test]
+    fn transition_and_interpreted_strategy_content_ids_are_fresh() {
+        let mut transition_scratch = [0_u8; DIRECT_ORDINARY_TRANSITION_BYTES_V3];
+        let mut transition = [0_u8; DIRECT_ORDINARY_TRANSITION_BYTES_V3];
+        encode_direct_ordinary_transition_v3(&mut transition_scratch, &mut transition)
+            .expect("transition");
+        assert_eq!(
+            <[u8; 32]>::from(Sha256::digest(transition)),
+            DIRECT_INLINE_ORDINARY_TRANSITION_ID_V3
+        );
+        let strategy = direct_inline_ordinary_strategy_v3().expect("strategy");
+        assert_eq!(
+            <[u8; 32]>::from(Sha256::digest(strategy)),
+            DIRECT_INLINE_ORDINARY_STRATEGY_ID_V3
         );
     }
 
