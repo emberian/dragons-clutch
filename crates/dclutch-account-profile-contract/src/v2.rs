@@ -58,6 +58,9 @@ pub const AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE: u16 = 11;
 /// Successor profile deriving an exact ordered sparse `u64` support into a
 /// descriptor-specialized flat common scalar row bank.
 pub const NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE: u16 = 12;
+/// Route-alias successor with one checked dynamic account span inserted into
+/// an otherwise fixed logical account sequence.
+pub const DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE: u16 = 13;
 /// Exact V2 header width.
 pub const HEADER_BYTES: usize = 32;
 /// Exact profile-8 header width including the trusted role-identity declaration.
@@ -86,6 +89,28 @@ pub const TRUSTED_BUILTIN_IDENTITY_OFFSET: usize = 36;
 pub const TRUSTED_BUILTIN_KIND_OFFSET: usize = 38;
 /// Trusted builtin reserved-byte offset.
 pub const TRUSTED_BUILTIN_RESERVED_OFFSET: usize = 39;
+/// Exact profile-13 fixed header width before the canonical span table.
+pub const DYNAMIC_FIXED_SPAN_HEADER_BYTES: usize = 48;
+/// Number of canonical dynamic-span table entries.
+pub const DYNAMIC_FIXED_SPAN_COUNT_OFFSET: usize = 40;
+/// Reserved zero bytes after the span-table count.
+pub const DYNAMIC_FIXED_SPAN_RESERVED_OFFSET: usize = 42;
+/// Exact width of one dynamic-span table entry.
+pub const DYNAMIC_FIXED_SPAN_ENTRY_BYTES: usize = 20;
+/// Base-logical insertion coordinate within one span entry.
+pub const DYNAMIC_FIXED_SPAN_ENTRY_INSERTION_OFFSET: usize = 0;
+/// Common scalar selecting one span count.
+pub const DYNAMIC_FIXED_SPAN_ENTRY_COUNT_SCALAR_OFFSET: usize = 2;
+/// First rule template owned by one span entry.
+pub const DYNAMIC_FIXED_SPAN_ENTRY_RULE_START_OFFSET: usize = 4;
+/// Number of account rules repeated per selected span item.
+pub const DYNAMIC_FIXED_SPAN_ENTRY_RULE_STRIDE_OFFSET: usize = 6;
+/// Inclusive minimum admitted span count.
+pub const DYNAMIC_FIXED_SPAN_ENTRY_MIN_OFFSET: usize = 8;
+/// Inclusive maximum admitted span count.
+pub const DYNAMIC_FIXED_SPAN_ENTRY_MAX_OFFSET: usize = 12;
+/// Positive congruence step for admitted counts.
+pub const DYNAMIC_FIXED_SPAN_ENTRY_STEP_OFFSET: usize = 16;
 
 const TRUSTED_ENVIRONMENT_NONE: u8 = 0;
 const TRUSTED_ENVIRONMENT_CURRENT_SLOT: u8 = 1;
@@ -244,6 +269,10 @@ pub enum Error {
     TrustedBuiltinOverwrite,
     /// Derived sparse support did not exactly fill the artifact-owned row bank.
     SupportRowCountMismatch,
+    /// Dynamic fixed-span geometry or its authenticated count was invalid.
+    InvalidDynamicSpan,
+    /// An opaque-data observation asserted local data authority.
+    InvalidOpaqueDataPrestate,
 }
 
 /// Result alias for runtime-tail profiles.
@@ -408,6 +437,87 @@ pub enum AccountPrestateV2 {
     /// earlier physical representative while declaring only its own child-route
     /// privilege subset.
     AuthenticatedRouteAlias,
+    /// Key, owner, lamports, and privileges are authenticated, while account
+    /// data is semantically opaque to this profile and receives no projection
+    /// or local effect authority.
+    AuthenticatedOpaqueReadonlyData,
+}
+
+/// One descriptor-owned dynamic account span inserted into a fixed sequence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DynamicFixedSpanV2 {
+    insertion_coordinate: u16,
+    count_scalar: u16,
+    rule_start: u16,
+    rule_stride: u16,
+    minimum: u32,
+    maximum: u32,
+    step: u32,
+}
+
+impl DynamicFixedSpanV2 {
+    /// Base logical coordinate at which expanded span items begin.
+    pub const fn insertion_coordinate(self) -> u16 {
+        self.insertion_coordinate
+    }
+
+    /// Common scalar that supplies the selected account width.
+    pub const fn count_scalar(self) -> u16 {
+        self.count_scalar
+    }
+
+    /// First account-rule template owned by this entry.
+    pub const fn rule_start(self) -> u16 {
+        self.rule_start
+    }
+
+    /// Width of the account-rule template cycled across the selected span.
+    pub const fn rule_stride(self) -> u16 {
+        self.rule_stride
+    }
+
+    /// Inclusive minimum admitted account width.
+    pub const fn minimum(self) -> u32 {
+        self.minimum
+    }
+
+    /// Inclusive maximum admitted account width.
+    pub const fn maximum(self) -> u32 {
+        self.maximum
+    }
+
+    /// Positive finite-congruence step.
+    pub const fn step(self) -> u32 {
+        self.step
+    }
+
+    /// Require one selected width to lie in the descriptor's exact finite
+    /// congruence and contain a whole number of rule templates.
+    pub fn validate_count(self, count: u32) -> Result<()> {
+        if self.step == 0
+            || count < self.minimum
+            || count > self.maximum
+            || !(count - self.minimum).is_multiple_of(self.step)
+            || !count.is_multiple_of(u32::from(self.rule_stride))
+        {
+            Err(Error::InvalidDynamicSpan)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Read and validate the declared common scalar without accepting the
+    /// supplied account-vector length as width authority.
+    pub fn count_from_scalars(self, scalars: &[u64]) -> Result<u32> {
+        let count = u32::try_from(
+            *scalars
+                .get(usize::from(self.count_scalar))
+                .ok_or(Error::InvalidCoordinate)?,
+        )
+        .map_err(|_| Error::InvalidDynamicSpan)?;
+        self.validate_count(count)?;
+        Ok(count)
+    }
 }
 
 /// Hostile-decoded account rule template.
@@ -578,6 +688,7 @@ pub struct AccountProfileV2<'a> {
     trusted_environment: TrustedEnvironmentV2,
     trusted_identity_environment: TrustedIdentityEnvironmentV2,
     trusted_builtin_identity: TrustedBuiltinIdentityV2,
+    dynamic_fixed_span_count: u16,
     bytes: &'a [u8],
 }
 
@@ -605,6 +716,7 @@ impl<'a> AccountProfileV2<'a> {
                     | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
                     | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
                     | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
+                    | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
             )
         {
             return Err(Error::UnsupportedProfile);
@@ -619,6 +731,7 @@ impl<'a> AccountProfileV2<'a> {
                 | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
                 | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
                 | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
+                | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
         ) && read_u32(bytes, 28)? != 0
         {
             return Err(Error::NonCanonicalReserved);
@@ -639,6 +752,7 @@ impl<'a> AccountProfileV2<'a> {
                 artifact_profile,
             )?,
             trusted_builtin_identity: decode_trusted_builtin_identity(bytes, artifact_profile)?,
+            dynamic_fixed_span_count: decode_dynamic_fixed_span_count(bytes, artifact_profile)?,
             bytes,
         };
         if value.fixed_accounts == 0
@@ -646,7 +760,9 @@ impl<'a> AccountProfileV2<'a> {
                 && value.item_scalar_stride == 0
                 && value.common_identities == 0
                 && value.item_identity_stride == 0)
-            || (value.item_account_stride != 0 && value.item_scalar_stride == 0)
+            || (value.item_account_stride != 0
+                && value.item_scalar_stride == 0
+                && value.artifact_profile != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE)
         {
             return Err(Error::EmptyProfile);
         }
@@ -680,6 +796,7 @@ impl<'a> AccountProfileV2<'a> {
         {
             return Err(Error::InvalidTrustedBuiltin);
         }
+        value.validate_dynamic_fixed_spans()?;
         let rules = usize::from(value.fixed_accounts)
             .checked_add(usize::from(value.item_account_stride))
             .ok_or(Error::InvalidLength)?;
@@ -770,6 +887,154 @@ impl<'a> AccountProfileV2<'a> {
         self.trusted_builtin_identity.system_program_destination()
     }
 
+    /// Descriptor-owned dynamic account span, when selected by profile 13.
+    pub const fn dynamic_fixed_span_count(self) -> u16 {
+        self.dynamic_fixed_span_count
+    }
+
+    /// Decode one canonical dynamic-span table entry.
+    pub fn dynamic_fixed_span(self, index: u16) -> Result<DynamicFixedSpanV2> {
+        if self.artifact_profile != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+            || index >= self.dynamic_fixed_span_count
+        {
+            return Err(Error::InvalidDynamicSpan);
+        }
+        let offset = usize::from(index)
+            .checked_mul(DYNAMIC_FIXED_SPAN_ENTRY_BYTES)
+            .and_then(|body| DYNAMIC_FIXED_SPAN_HEADER_BYTES.checked_add(body))
+            .ok_or(Error::InvalidLength)?;
+        Ok(DynamicFixedSpanV2 {
+            insertion_coordinate: read_u16(
+                self.bytes,
+                add(offset, DYNAMIC_FIXED_SPAN_ENTRY_INSERTION_OFFSET)?,
+            )?,
+            count_scalar: read_u16(
+                self.bytes,
+                add(offset, DYNAMIC_FIXED_SPAN_ENTRY_COUNT_SCALAR_OFFSET)?,
+            )?,
+            rule_start: read_u16(
+                self.bytes,
+                add(offset, DYNAMIC_FIXED_SPAN_ENTRY_RULE_START_OFFSET)?,
+            )?,
+            rule_stride: read_u16(
+                self.bytes,
+                add(offset, DYNAMIC_FIXED_SPAN_ENTRY_RULE_STRIDE_OFFSET)?,
+            )?,
+            minimum: read_u32(
+                self.bytes,
+                add(offset, DYNAMIC_FIXED_SPAN_ENTRY_MIN_OFFSET)?,
+            )?,
+            maximum: read_u32(
+                self.bytes,
+                add(offset, DYNAMIC_FIXED_SPAN_ENTRY_MAX_OFFSET)?,
+            )?,
+            step: read_u32(
+                self.bytes,
+                add(offset, DYNAMIC_FIXED_SPAN_ENTRY_STEP_OFFSET)?,
+            )?,
+        })
+    }
+
+    /// Project every selected span width from its declared common scalar.
+    ///
+    /// The caller-owned output changes only after every scalar, range,
+    /// congruence, and rule-template divisibility check succeeds.
+    pub fn dynamic_span_widths_from_scalars(
+        self,
+        scalars: &[u64],
+        output: &mut [u32],
+    ) -> Result<()> {
+        if output.len() != usize::from(self.dynamic_fixed_span_count) {
+            return Err(Error::WidthMismatch);
+        }
+        let mut index = 0_u16;
+        while index < self.dynamic_fixed_span_count {
+            self.dynamic_fixed_span(index)?
+                .count_from_scalars(scalars)?;
+            index = index.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        index = 0;
+        while index < self.dynamic_fixed_span_count {
+            let width = self
+                .dynamic_fixed_span(index)?
+                .count_from_scalars(scalars)?;
+            *output
+                .get_mut(usize::from(index))
+                .ok_or(Error::WidthMismatch)? = width;
+            index = index.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        Ok(())
+    }
+
+    fn validate_dynamic_fixed_spans(self) -> Result<()> {
+        if self.artifact_profile != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
+            return if self.dynamic_fixed_span_count == 0 {
+                Ok(())
+            } else {
+                Err(Error::InvalidDynamicSpan)
+            };
+        }
+        if self.dynamic_fixed_span_count == 0
+            || self.item_account_stride == 0
+            || self.item_operations != 0
+            || self.item_scalar_stride != 0
+            || self.item_identity_stride != 0
+        {
+            return Err(Error::InvalidDynamicSpan);
+        }
+        let mut prior_insertion = None;
+        let mut expected_rule_start = 0_u16;
+        let mut index = 0_u16;
+        while index < self.dynamic_fixed_span_count {
+            let span = self.dynamic_fixed_span(index)?;
+            let rule_end = span
+                .rule_start
+                .checked_add(span.rule_stride)
+                .ok_or(Error::InvalidDynamicSpan)?;
+            if span.insertion_coordinate > self.fixed_accounts
+                || prior_insertion.is_some_and(|prior| prior > span.insertion_coordinate)
+                || span.count_scalar >= self.common_scalars
+                || span.rule_start != expected_rule_start
+                || span.rule_stride == 0
+                || rule_end > self.item_account_stride
+                || span.minimum > span.maximum
+                || span.step == 0
+            {
+                return Err(Error::InvalidDynamicSpan);
+            }
+            let mut prior = 0_u16;
+            while prior < index {
+                if self.dynamic_fixed_span(prior)?.count_scalar == span.count_scalar {
+                    return Err(Error::InvalidDynamicSpan);
+                }
+                prior = prior.checked_add(1).ok_or(Error::InvalidLength)?;
+            }
+            prior_insertion = Some(span.insertion_coordinate);
+            expected_rule_start = rule_end;
+            index = index.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        if expected_rule_start != self.item_account_stride {
+            return Err(Error::InvalidDynamicSpan);
+        }
+        Ok(())
+    }
+
+    fn dynamic_span_for_rule_template(self, rule_index: u16) -> Result<DynamicFixedSpanV2> {
+        let mut index = 0_u16;
+        while index < self.dynamic_fixed_span_count {
+            let span = self.dynamic_fixed_span(index)?;
+            let end = span
+                .rule_start
+                .checked_add(span.rule_stride)
+                .ok_or(Error::InvalidDynamicSpan)?;
+            if rule_index >= span.rule_start && rule_index < end {
+                return Ok(span);
+            }
+            index = index.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        Err(Error::InvalidDynamicSpan)
+    }
+
     /// Whether any account projection or trusted-environment seed writes `target`.
     ///
     /// This is a static artifact inspection. It does not execute projections or
@@ -823,7 +1088,7 @@ impl<'a> AccountProfileV2<'a> {
         self.bytes
     }
 
-    const fn header_bytes(self) -> usize {
+    fn header_bytes(self) -> usize {
         if matches!(
             self.artifact_profile,
             TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
@@ -831,8 +1096,12 @@ impl<'a> AccountProfileV2<'a> {
                 | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
                 | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
                 | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
+                | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
         ) {
-            if self.artifact_profile == AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE {
+            if self.artifact_profile == DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
+                DYNAMIC_FIXED_SPAN_HEADER_BYTES
+                    + usize::from(self.dynamic_fixed_span_count) * DYNAMIC_FIXED_SPAN_ENTRY_BYTES
+            } else if self.artifact_profile == AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE {
                 AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES
             } else {
                 TRUSTED_EXECUTING_PROGRAM_HEADER_BYTES
@@ -868,6 +1137,9 @@ impl<'a> AccountProfileV2<'a> {
 
     /// Resolve one expanded physical account to its representative coordinate.
     pub fn representative(self, tail_count: u32, coordinate: usize) -> Result<usize> {
+        if self.dynamic_fixed_span_count != 0 {
+            return Err(Error::InvalidDynamicSpan);
+        }
         let width = account_width(self, tail_count)?;
         if coordinate >= width {
             return Err(Error::InvalidCoordinate);
@@ -904,6 +1176,25 @@ impl<'a> AccountProfileV2<'a> {
         account_width(self, tail_count)
     }
 
+    /// Number of logical coordinates after expanding every canonical profile-13 span.
+    pub fn logical_account_count_with_dynamic_spans(
+        self,
+        tail_count: u32,
+        span_counts: &[u32],
+    ) -> Result<usize> {
+        dynamic_account_width(self, tail_count, span_counts)
+    }
+
+    /// Resolve one profile-13 logical coordinate to its physical representative.
+    pub fn representative_with_dynamic_spans(
+        self,
+        tail_count: u32,
+        span_counts: &[u32],
+        coordinate: usize,
+    ) -> Result<usize> {
+        dynamic_representative(self, tail_count, span_counts, coordinate)
+    }
+
     /// Number of unique physical representatives in canonical logical order.
     ///
     /// Profile 11 permits the outer to supply one `AccountInfo` per returned
@@ -925,6 +1216,26 @@ impl<'a> AccountProfileV2<'a> {
         Ok(count)
     }
 
+    /// Number of unique physical representatives for profile 13.
+    pub fn physical_account_count_with_dynamic_spans(
+        self,
+        tail_count: u32,
+        span_counts: &[u32],
+    ) -> Result<usize> {
+        let logical = dynamic_account_width(self, tail_count, span_counts)?;
+        let mut count = 0_usize;
+        let mut coordinate = 0_usize;
+        while coordinate < logical {
+            if self.representative_with_dynamic_spans(tail_count, span_counts, coordinate)?
+                == coordinate
+            {
+                count = count.checked_add(1).ok_or(Error::InvalidLength)?;
+            }
+            coordinate = coordinate.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        Ok(count)
+    }
+
     /// Canonical physical representative ordinal for one logical coordinate.
     pub fn physical_account_ordinal(
         self,
@@ -939,6 +1250,28 @@ impl<'a> AccountProfileV2<'a> {
         let mut coordinate = 0_usize;
         while coordinate < representative {
             if self.representative(tail_count, coordinate)? == coordinate {
+                ordinal = ordinal.checked_add(1).ok_or(Error::InvalidLength)?;
+            }
+            coordinate = coordinate.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        Ok(ordinal)
+    }
+
+    /// Canonical physical ordinal for one expanded profile-13 coordinate.
+    pub fn physical_account_ordinal_with_dynamic_spans(
+        self,
+        tail_count: u32,
+        span_counts: &[u32],
+        logical_coordinate: usize,
+    ) -> Result<usize> {
+        let representative =
+            self.representative_with_dynamic_spans(tail_count, span_counts, logical_coordinate)?;
+        let mut ordinal = 0_usize;
+        let mut coordinate = 0_usize;
+        while coordinate < representative {
+            if self.representative_with_dynamic_spans(tail_count, span_counts, coordinate)?
+                == coordinate
+            {
                 ordinal = ordinal.checked_add(1).ok_or(Error::InvalidLength)?;
             }
             coordinate = coordinate.checked_add(1).ok_or(Error::InvalidLength)?;
@@ -973,6 +1306,35 @@ impl<'a> AccountProfileV2<'a> {
         Err(Error::InvalidCoordinate)
     }
 
+    /// Logical self-representative coordinate for one profile-13 physical ordinal.
+    pub fn physical_representative_coordinate_with_dynamic_spans(
+        self,
+        tail_count: u32,
+        span_counts: &[u32],
+        physical_ordinal: usize,
+    ) -> Result<usize> {
+        if physical_ordinal
+            >= self.physical_account_count_with_dynamic_spans(tail_count, span_counts)?
+        {
+            return Err(Error::InvalidCoordinate);
+        }
+        let logical = dynamic_account_width(self, tail_count, span_counts)?;
+        let mut ordinal = 0_usize;
+        let mut coordinate = 0_usize;
+        while coordinate < logical {
+            if self.representative_with_dynamic_spans(tail_count, span_counts, coordinate)?
+                == coordinate
+            {
+                if ordinal == physical_ordinal {
+                    return Ok(coordinate);
+                }
+                ordinal = ordinal.checked_add(1).ok_or(Error::InvalidLength)?;
+            }
+            coordinate = coordinate.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        Err(Error::InvalidCoordinate)
+    }
+
     /// Route-local privilege subset for one expanded logical coordinate.
     pub fn route_privileges(
         self,
@@ -983,6 +1345,19 @@ impl<'a> AccountProfileV2<'a> {
             return Err(Error::InvalidCoordinate);
         }
         Ok(expanded_rule(self, logical_coordinate)?.route_privileges())
+    }
+
+    /// Route-local privilege subset for one profile-13 logical coordinate.
+    pub fn route_privileges_with_dynamic_spans(
+        self,
+        tail_count: u32,
+        span_counts: &[u32],
+        logical_coordinate: usize,
+    ) -> Result<RouteAccountPrivilegesV2> {
+        Ok(
+            expanded_rule_with_dynamic_spans(self, tail_count, span_counts, logical_coordinate)?
+                .route_privileges(),
+        )
     }
 
     /// Return the unique fixed-prefix Product tail-count projection, if affine.
@@ -1098,9 +1473,17 @@ impl<'a> AccountProfileV2<'a> {
             if self.artifact_profile == ARTIFACT_PROFILE && rule.data_item_stride != 0 {
                 return Err(Error::NonCanonicalReserved);
             }
-            validate_rule(rule, false, fixed, self.fixed_accounts)?;
-            if self.artifact_profile == AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
-                && rule.alias_kind != AliasKindV2::SelfCoordinate
+            validate_rule(
+                rule,
+                false,
+                fixed,
+                self.fixed_accounts,
+                self.artifact_profile,
+            )?;
+            if matches!(
+                self.artifact_profile,
+                AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+            ) && rule.alias_kind != AliasKindV2::SelfCoordinate
                 && !matches!(
                     rule.prestate,
                     AccountPrestateV2::AdapterAuthenticatedVariableDataAlias
@@ -1142,9 +1525,19 @@ impl<'a> AccountProfileV2<'a> {
             if self.artifact_profile == ARTIFACT_PROFILE && rule.data_item_stride != 0 {
                 return Err(Error::NonCanonicalReserved);
             }
-            validate_rule(rule, true, item, self.fixed_accounts)?;
-            if self.artifact_profile == AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
-                && rule.alias_kind != AliasKindV2::SelfCoordinate
+            validate_rule(rule, true, item, self.fixed_accounts, self.artifact_profile)?;
+            if self.artifact_profile == DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
+                let span = self.dynamic_span_for_rule_template(item)?;
+                if rule.alias_kind == AliasKindV2::Fixed
+                    && rule.alias_index >= span.insertion_coordinate
+                {
+                    return Err(Error::InvalidAlias);
+                }
+            }
+            if matches!(
+                self.artifact_profile,
+                AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+            ) && rule.alias_kind != AliasKindV2::SelfCoordinate
             {
                 return Err(Error::InvalidRouteAlias);
             }
@@ -1181,6 +1574,7 @@ impl<'a> AccountProfileV2<'a> {
             }
             NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE if adapter_authenticated_variable_data => Ok(()),
             AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE if authenticated_route_alias => Ok(()),
+            DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE => Ok(()),
             LIFECYCLE_PRESTATE_ARTIFACT_PROFILE => Err(Error::InvalidLifecyclePrestate),
             ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE => {
                 Err(Error::InvalidVariableDataPrestate)
@@ -1237,6 +1631,7 @@ impl<'a> AccountProfileV2<'a> {
         while fixed < self.fixed_operations {
             let operation = self.operation(false, fixed)?;
             operation.validate(self, false, fixed)?;
+            self.require_dynamic_span_count_not_overwritten(operation)?;
             self.validate_lifecycle_operation(operation)?;
             self.require_unique_projection(false, fixed, operation)?;
             fixed = fixed.checked_add(1).ok_or(Error::InvalidLength)?;
@@ -1245,6 +1640,7 @@ impl<'a> AccountProfileV2<'a> {
         while item < self.item_operations {
             let operation = self.operation(true, item)?;
             operation.validate(self, true, item)?;
+            self.require_dynamic_span_count_not_overwritten(operation)?;
             self.validate_lifecycle_operation(operation)?;
             self.require_unique_projection(true, item, operation)?;
             item = item.checked_add(1).ok_or(Error::InvalidLength)?;
@@ -1258,6 +1654,18 @@ impl<'a> AccountProfileV2<'a> {
             && self.nonzero_u64_tail_rows_projection()?.is_none()
         {
             return Err(Error::NonCanonicalOperation);
+        }
+        Ok(())
+    }
+
+    fn require_dynamic_span_count_not_overwritten(self, operation: Operation) -> Result<()> {
+        let mut index = 0_u16;
+        while index < self.dynamic_fixed_span_count {
+            let destination = self.dynamic_fixed_span(index)?.count_scalar;
+            if operation.writes_target(self, (false, false, destination))? {
+                return Err(Error::InvalidDynamicSpan);
+            }
+            index = index.checked_add(1).ok_or(Error::InvalidLength)?;
         }
         Ok(())
     }
@@ -1323,7 +1731,8 @@ impl<'a> AccountProfileV2<'a> {
     }
 
     fn validate_tail_count_projection(self) -> Result<()> {
-        let affine = self.item_account_stride != 0
+        let affine = (self.item_account_stride != 0
+            && self.artifact_profile != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE)
             || self.item_operations != 0
             || self.item_scalar_stride != 0
             || self.item_identity_stride != 0
@@ -1425,6 +1834,7 @@ fn decode_trusted_environment(bytes: &[u8], artifact_profile: u16) -> Result<Tru
             | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
             | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
             | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
+            | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
     ) {
         return Ok(TrustedEnvironmentV2::None);
     }
@@ -1451,6 +1861,7 @@ fn decode_trusted_identity_environment(
             | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
             | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
             | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
+            | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
     ) {
         return Ok(TrustedIdentityEnvironmentV2::None);
     }
@@ -1474,7 +1885,10 @@ fn decode_trusted_builtin_identity(
     bytes: &[u8],
     artifact_profile: u16,
 ) -> Result<TrustedBuiltinIdentityV2> {
-    if artifact_profile != AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE {
+    if !matches!(
+        artifact_profile,
+        AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+    ) {
         return Ok(TrustedBuiltinIdentityV2::None);
     }
     let destination = read_u16(bytes, TRUSTED_BUILTIN_IDENTITY_OFFSET)?;
@@ -1488,6 +1902,26 @@ fn decode_trusted_builtin_identity(
             Ok(TrustedBuiltinIdentityV2::SystemProgram { destination })
         }
         _ => Err(Error::InvalidTrustedBuiltin),
+    }
+}
+
+fn decode_dynamic_fixed_span_count(bytes: &[u8], artifact_profile: u16) -> Result<u16> {
+    if artifact_profile != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
+        return Ok(0);
+    }
+    if bytes
+        .get(DYNAMIC_FIXED_SPAN_RESERVED_OFFSET..DYNAMIC_FIXED_SPAN_HEADER_BYTES)
+        .ok_or(Error::InvalidLength)?
+        .iter()
+        .any(|byte| *byte != 0)
+    {
+        return Err(Error::InvalidDynamicSpan);
+    }
+    let count = read_u16(bytes, DYNAMIC_FIXED_SPAN_COUNT_OFFSET)?;
+    if count == 0 {
+        Err(Error::InvalidDynamicSpan)
+    } else {
+        Ok(count)
     }
 }
 
@@ -1546,6 +1980,78 @@ pub fn project_atomic(
     apply_operations(
         profile,
         tail_count,
+        accounts,
+        registers.input_identities,
+        registers.scratch_scalars,
+        registers.scratch_identities,
+    )?;
+    registers
+        .output_scalars
+        .copy_from_slice(registers.scratch_scalars);
+    registers
+        .output_identities
+        .copy_from_slice(registers.scratch_identities);
+    Ok(())
+}
+
+/// Validate and project profile 13 using an exact descriptor-ordered span-width bank.
+///
+/// Each width must already be present in its declared protected common scalar;
+/// account-vector length is never accepted as width authority. Fixed operation
+/// coordinates are shifted by the checked cumulative widths before projection.
+pub fn project_dynamic_fixed_spans_atomic(
+    profile: AccountProfileV2<'_>,
+    tail_count: u32,
+    span_counts: &[u32],
+    accounts: &[AccountObservationV1<'_>],
+    registers: ProjectionRegistersV2<'_>,
+) -> Result<()> {
+    require_dynamic_span_counts(profile, span_counts)?;
+    let account_count = dynamic_account_width(profile, tail_count, span_counts)?;
+    let scalar_count = affine_width(
+        profile.common_scalars,
+        profile.item_scalar_stride,
+        tail_count,
+    )?;
+    let identity_count = affine_width(
+        profile.common_identities,
+        profile.item_identity_stride,
+        tail_count,
+    )?;
+    if accounts.len() != account_count
+        || registers.input_scalars.len() != scalar_count
+        || registers.scratch_scalars.len() != scalar_count
+        || registers.output_scalars.len() != scalar_count
+        || registers.input_identities.len() != identity_count
+        || registers.scratch_identities.len() != identity_count
+        || registers.output_identities.len() != identity_count
+    {
+        return Err(Error::WidthMismatch);
+    }
+    let mut index = 0_u16;
+    while index < profile.dynamic_fixed_span_count {
+        let span = profile.dynamic_fixed_span(index)?;
+        if span.count_from_scalars(registers.input_scalars)?
+            != *span_counts
+                .get(usize::from(index))
+                .ok_or(Error::InvalidDynamicSpan)?
+        {
+            return Err(Error::InvalidDynamicSpan);
+        }
+        index = index.checked_add(1).ok_or(Error::InvalidLength)?;
+    }
+    validate_accounts_with_dynamic_spans(profile, tail_count, span_counts, accounts)?;
+    registers
+        .scratch_scalars
+        .copy_from_slice(registers.input_scalars);
+    registers
+        .scratch_identities
+        .copy_from_slice(registers.input_identities);
+    inject_indices(profile, tail_count, registers.scratch_scalars)?;
+    apply_operations_with_dynamic_spans(
+        profile,
+        tail_count,
+        span_counts,
         accounts,
         registers.input_identities,
         registers.scratch_scalars,
@@ -1622,6 +2128,34 @@ pub fn derive_effect_permissions(
         };
         let rule = expanded_rule(profile, authority_coordinate)?;
         *permission = rule.permission();
+    }
+    Ok(())
+}
+
+/// Expand exact effect permissions for profile 13 after dynamic-span insertion.
+pub fn derive_effect_permissions_with_dynamic_spans(
+    profile: AccountProfileV2<'_>,
+    tail_count: u32,
+    span_counts: &[u32],
+    output: &mut [AccountPermission],
+) -> Result<()> {
+    if output.len() != dynamic_account_width(profile, tail_count, span_counts)? {
+        return Err(Error::WidthMismatch);
+    }
+    for (coordinate, permission) in output.iter_mut().enumerate() {
+        let rule = expanded_rule_with_dynamic_spans(profile, tail_count, span_counts, coordinate)?;
+        let authority_coordinate = if rule.prestate == AccountPrestateV2::AuthenticatedRouteAlias {
+            profile.representative_with_dynamic_spans(tail_count, span_counts, coordinate)?
+        } else {
+            coordinate
+        };
+        *permission = expanded_rule_with_dynamic_spans(
+            profile,
+            tail_count,
+            span_counts,
+            authority_coordinate,
+        )?
+        .permission();
     }
     Ok(())
 }
@@ -1717,6 +2251,104 @@ fn validate_accounts(
     Ok(())
 }
 
+fn validate_accounts_with_dynamic_spans(
+    profile: AccountProfileV2<'_>,
+    tail_count: u32,
+    span_counts: &[u32],
+    accounts: &[AccountObservationV1<'_>],
+) -> Result<()> {
+    if accounts.len() != dynamic_account_width(profile, tail_count, span_counts)? {
+        return Err(Error::WidthMismatch);
+    }
+    for (coordinate, account) in accounts.iter().copied().enumerate() {
+        let rule = expanded_rule_with_dynamic_spans(profile, tail_count, span_counts, coordinate)?;
+        let representative =
+            profile.representative_with_dynamic_spans(tail_count, span_counts, coordinate)?;
+        let expected_privileges = representative_privileges_with_dynamic_spans(
+            profile,
+            tail_count,
+            span_counts,
+            representative,
+        )?;
+        if account.privileges() != expected_privileges {
+            return Err(Error::PrivilegeMismatch);
+        }
+        let variable_representative =
+            rule.prestate == AccountPrestateV2::AdapterAuthenticatedVariableData;
+        let variable_alias =
+            rule.prestate == AccountPrestateV2::AdapterAuthenticatedVariableDataAlias;
+        let route_alias = rule.prestate == AccountPrestateV2::AuthenticatedRouteAlias;
+        if (variable_representative && !account.adapter_authenticated_variable_data())
+            || ((variable_alias || route_alias) && account.adapter_authenticated_variable_data())
+            || (!variable_representative
+                && !variable_alias
+                && !route_alias
+                && account.adapter_authenticated_variable_data())
+        {
+            return Err(Error::InvalidVariableDataPrestate);
+        }
+        let exact_data_length = exact_rule_data_length(rule, tail_count)?;
+        match rule.prestate {
+            AccountPrestateV2::Exact if account.data().len() != exact_data_length => {
+                return Err(Error::DataLengthMismatch);
+            }
+            AccountPrestateV2::LifecycleBound
+                if !account.data().is_empty() && account.data().len() != exact_data_length =>
+            {
+                return Err(Error::DataLengthMismatch);
+            }
+            AccountPrestateV2::AdapterAuthenticatedVariableData
+                if account.data().is_empty()
+                    || account.data().len() < exact_data_length
+                    || !account.adapter_authenticated_variable_data() =>
+            {
+                return Err(Error::InvalidVariableDataPrestate);
+            }
+            AccountPrestateV2::AdapterAuthenticatedVariableDataAlias
+                if account.data().is_empty() || account.adapter_authenticated_variable_data() =>
+            {
+                return Err(Error::InvalidVariableDataPrestate);
+            }
+            AccountPrestateV2::AuthenticatedRouteAlias
+            | AccountPrestateV2::AuthenticatedOpaqueReadonlyData => {}
+            _ => {}
+        }
+        let canonical = accounts
+            .get(representative)
+            .copied()
+            .ok_or(Error::InvalidCoordinate)?;
+        let canonical_rule =
+            expanded_rule_with_dynamic_spans(profile, tail_count, span_counts, representative)?;
+        if account.key() != canonical.key()
+            || account.owner() != canonical.owner()
+            || account.lamports() != canonical.lamports()
+            || account.data() != canonical.data()
+            || account.privileges() != canonical.privileges()
+            || (variable_alias
+                && (canonical_rule.prestate != AccountPrestateV2::AdapterAuthenticatedVariableData
+                    || !canonical.adapter_authenticated_variable_data()))
+            || (!(variable_alias || route_alias)
+                && account.adapter_authenticated_variable_data()
+                    != canonical.adapter_authenticated_variable_data())
+        {
+            return Err(Error::AliasMismatch);
+        }
+        if representative == coordinate {
+            let mut prior = 0_usize;
+            while prior < coordinate {
+                if profile.representative_with_dynamic_spans(tail_count, span_counts, prior)?
+                    == prior
+                    && accounts.get(prior).ok_or(Error::InvalidCoordinate)?.key() == account.key()
+                {
+                    return Err(Error::CrossItemAlias);
+                }
+                prior = prior.checked_add(1).ok_or(Error::InvalidLength)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn representative_privileges(
     profile: AccountProfileV2<'_>,
     tail_count: u32,
@@ -1733,6 +2365,42 @@ fn representative_privileges(
     while coordinate < logical_count {
         if profile.representative(tail_count, coordinate)? == representative {
             let rule = expanded_rule(profile, coordinate)?;
+            if rule.privileges & 0x04 != executable {
+                return Err(Error::InvalidRouteAlias);
+            }
+            union |= rule.privileges & 0x03;
+        }
+        coordinate = coordinate.checked_add(1).ok_or(Error::InvalidLength)?;
+    }
+    Ok(union)
+}
+
+fn representative_privileges_with_dynamic_spans(
+    profile: AccountProfileV2<'_>,
+    tail_count: u32,
+    span_counts: &[u32],
+    representative: usize,
+) -> Result<u8> {
+    if profile.representative_with_dynamic_spans(tail_count, span_counts, representative)?
+        != representative
+    {
+        return Err(Error::InvalidAlias);
+    }
+    let representative_rule =
+        expanded_rule_with_dynamic_spans(profile, tail_count, span_counts, representative)?;
+    let executable = representative_rule.privileges & 0x04;
+    let mut union = executable | (representative_rule.privileges & 0x03);
+    if representative_rule.effect_permissions != 0 {
+        union |= 0x02;
+    }
+    let logical = dynamic_account_width(profile, tail_count, span_counts)?;
+    let mut coordinate = 0_usize;
+    while coordinate < logical {
+        if profile.representative_with_dynamic_spans(tail_count, span_counts, coordinate)?
+            == representative
+        {
+            let rule =
+                expanded_rule_with_dynamic_spans(profile, tail_count, span_counts, coordinate)?;
             if rule.privileges & 0x04 != executable {
                 return Err(Error::InvalidRouteAlias);
             }
@@ -1779,6 +2447,7 @@ fn apply_operations(
             profile,
             None,
             tail_count,
+            None,
             accounts,
             input_identities,
             scalars,
@@ -1794,6 +2463,7 @@ fn apply_operations(
                 profile,
                 Some(item),
                 tail_count,
+                None,
                 accounts,
                 input_identities,
                 scalars,
@@ -1802,6 +2472,37 @@ fn apply_operations(
             operation = operation.checked_add(1).ok_or(Error::InvalidLength)?;
         }
         item = item.checked_add(1).ok_or(Error::InvalidLength)?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_operations_with_dynamic_spans(
+    profile: AccountProfileV2<'_>,
+    tail_count: u32,
+    span_counts: &[u32],
+    accounts: &[AccountObservationV1<'_>],
+    input_identities: &[[u8; 32]],
+    scalars: &mut [u64],
+    identities: &mut [[u8; 32]],
+) -> Result<()> {
+    require_dynamic_span_counts(profile, span_counts)?;
+    let mut fixed = 0_u16;
+    while fixed < profile.fixed_operations {
+        let operation = profile.operation(false, fixed)?;
+        let account_index =
+            dynamic_runtime_coordinate_for_base(profile, span_counts, operation.account)?;
+        operation.apply(
+            profile,
+            None,
+            tail_count,
+            Some((account_index, profile.rule(false, operation.account)?)),
+            accounts,
+            input_identities,
+            scalars,
+            identities,
+        )?;
+        fixed = fixed.checked_add(1).ok_or(Error::InvalidLength)?;
     }
     Ok(())
 }
@@ -1871,6 +2572,18 @@ impl Operation {
             // cannot project or require through a second logical authority.
             return Err(Error::InvalidVariableDataPrestate);
         }
+        if account_rule.prestate == AccountPrestateV2::AuthenticatedOpaqueReadonlyData
+            && !matches!(
+                self.opcode,
+                OP_REQUIRE_KEY
+                    | OP_REQUIRE_OWNER
+                    | OP_PROJECT_KEY
+                    | OP_PROJECT_OWNER
+                    | OP_PROJECT_LAMPORTS
+            )
+        {
+            return Err(Error::InvalidOpaqueDataPrestate);
+        }
         let identity = matches!(
             self.opcode,
             OP_REQUIRE_KEY
@@ -1929,6 +2642,7 @@ impl Operation {
                             | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
                             | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
                             | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
+                            | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
                     )
                 {
                     return Err(Error::NonCanonicalOperation);
@@ -1981,6 +2695,7 @@ impl Operation {
                         | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
                         | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
                         | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
+                        | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
                 ) || item_body
                     || self.account_item
                     || self.register_item
@@ -2024,6 +2739,7 @@ impl Operation {
                         | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
                         | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
                         | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
+                        | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
                 ) || item_body
                     || self.account_item
                     || self.register_item
@@ -2193,21 +2909,26 @@ impl Operation {
         profile: AccountProfileV2<'_>,
         item: Option<u32>,
         tail_count: u32,
+        resolved_account: Option<(usize, AccountRuleV2)>,
         accounts: &[AccountObservationV1<'_>],
         input_identities: &[[u8; 32]],
         scalars: &mut [u64],
         identities: &mut [[u8; 32]],
     ) -> Result<()> {
-        let account_index = if self.account_item {
-            item_account_index(profile, item.ok_or(Error::InvalidCoordinate)?, self.account)?
+        let (account_index, rule) = if let Some(resolved) = resolved_account {
+            resolved
         } else {
-            usize::from(self.account)
+            let account_index = if self.account_item {
+                item_account_index(profile, item.ok_or(Error::InvalidCoordinate)?, self.account)?
+            } else {
+                usize::from(self.account)
+            };
+            (account_index, expanded_rule(profile, account_index)?)
         };
         let account = accounts
             .get(account_index)
             .copied()
             .ok_or(Error::InvalidCoordinate)?;
-        let rule = expanded_rule(profile, account_index)?;
         let scalar = || {
             register_index(
                 profile.common_scalars,
@@ -2502,7 +3223,13 @@ fn selected_data_offset(
         .ok_or(Error::DataOutOfBounds)
 }
 
-fn validate_rule(rule: AccountRuleV2, item: bool, index: u16, fixed_count: u16) -> Result<()> {
+fn validate_rule(
+    rule: AccountRuleV2,
+    item: bool,
+    index: u16,
+    fixed_count: u16,
+    artifact_profile: u16,
+) -> Result<()> {
     if rule.privileges & !0x07 != 0 {
         return Err(Error::InvalidPrivileges);
     }
@@ -2511,7 +3238,12 @@ fn validate_rule(rule: AccountRuleV2, item: bool, index: u16, fixed_count: u16) 
             | EFFECT_PERMISSION_CREDIT_LAMPORTS
             | EFFECT_PERMISSION_WRITE_DATA)
         != 0
-        || (rule.effect_permissions != 0 && rule.privileges & 0x02 == 0)
+        || (rule.effect_permissions != 0
+            && rule.privileges & 0x02 == 0
+            && !(artifact_profile == DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+                && !item
+                && rule.alias_kind == AliasKindV2::SelfCoordinate
+                && rule.alias_index == 0))
     {
         return Err(Error::InvalidEffectPermissions);
     }
@@ -2559,6 +3291,15 @@ fn validate_rule(rule: AccountRuleV2, item: bool, index: u16, fixed_count: u16) 
     {
         return Err(Error::InvalidRouteAlias);
     }
+    if rule.prestate == AccountPrestateV2::AuthenticatedOpaqueReadonlyData
+        && (rule.alias_kind != AliasKindV2::SelfCoordinate
+            || rule.alias_index != 0
+            || rule.effect_permissions != 0
+            || rule.data_length != 0
+            || rule.data_item_stride != 0)
+    {
+        return Err(Error::InvalidOpaqueDataPrestate);
+    }
     match rule.alias_kind {
         AliasKindV2::SelfCoordinate if rule.alias_index == 0 => Ok(()),
         AliasKindV2::Fixed
@@ -2594,6 +3335,7 @@ fn decode_rule(bytes: &[u8], offset: usize, artifact_profile: u16) -> Result<Acc
             | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
             | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
             | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
+            | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
     ) {
         match prestate_tag {
             0 => AccountPrestateV2::Exact,
@@ -2609,8 +3351,15 @@ fn decode_rule(bytes: &[u8], offset: usize, artifact_profile: u16) -> Result<Acc
             {
                 AccountPrestateV2::AdapterAuthenticatedVariableDataAlias
             }
-            4 if artifact_profile == AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE => {
+            4 if matches!(
+                artifact_profile,
+                AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+            ) =>
+            {
                 AccountPrestateV2::AuthenticatedRouteAlias
+            }
+            5 if artifact_profile == DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE => {
+                AccountPrestateV2::AuthenticatedOpaqueReadonlyData
             }
             _ => return Err(Error::InvalidVariableDataPrestate),
         }
@@ -2685,6 +3434,174 @@ fn expanded_rule(profile: AccountProfileV2<'_>, coordinate: usize) -> Result<Acc
     }
 }
 
+#[derive(Clone, Copy)]
+struct DynamicRuleLocationV2 {
+    rule: AccountRuleV2,
+    item_start: Option<usize>,
+}
+
+fn expanded_rule_with_dynamic_spans(
+    profile: AccountProfileV2<'_>,
+    tail_count: u32,
+    span_counts: &[u32],
+    coordinate: usize,
+) -> Result<AccountRuleV2> {
+    Ok(dynamic_rule_location(profile, tail_count, span_counts, coordinate)?.rule)
+}
+
+fn require_dynamic_span_counts(profile: AccountProfileV2<'_>, span_counts: &[u32]) -> Result<()> {
+    if profile.artifact_profile != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+        || span_counts.len() != usize::from(profile.dynamic_fixed_span_count)
+    {
+        return Err(Error::InvalidDynamicSpan);
+    }
+    let mut index = 0_u16;
+    while index < profile.dynamic_fixed_span_count {
+        profile.dynamic_fixed_span(index)?.validate_count(
+            *span_counts
+                .get(usize::from(index))
+                .ok_or(Error::InvalidDynamicSpan)?,
+        )?;
+        index = index.checked_add(1).ok_or(Error::InvalidLength)?;
+    }
+    Ok(())
+}
+
+fn dynamic_rule_location(
+    profile: AccountProfileV2<'_>,
+    tail_count: u32,
+    span_counts: &[u32],
+    coordinate: usize,
+) -> Result<DynamicRuleLocationV2> {
+    require_dynamic_span_counts(profile, span_counts)?;
+    if coordinate >= dynamic_account_width(profile, tail_count, span_counts)? {
+        return Err(Error::InvalidCoordinate);
+    }
+    let mut base_cursor = 0_usize;
+    let mut runtime_cursor = 0_usize;
+    let mut index = 0_u16;
+    while index < profile.dynamic_fixed_span_count {
+        let span = profile.dynamic_fixed_span(index)?;
+        let insertion = usize::from(span.insertion_coordinate);
+        let fixed_width = insertion
+            .checked_sub(base_cursor)
+            .ok_or(Error::InvalidDynamicSpan)?;
+        let fixed_end = runtime_cursor
+            .checked_add(fixed_width)
+            .ok_or(Error::InvalidDynamicSpan)?;
+        if coordinate < fixed_end {
+            let base = base_cursor
+                .checked_add(
+                    coordinate
+                        .checked_sub(runtime_cursor)
+                        .ok_or(Error::InvalidCoordinate)?,
+                )
+                .ok_or(Error::InvalidCoordinate)?;
+            return Ok(DynamicRuleLocationV2 {
+                rule: profile.rule(
+                    false,
+                    u16::try_from(base).map_err(|_| Error::InvalidCoordinate)?,
+                )?,
+                item_start: None,
+            });
+        }
+        runtime_cursor = fixed_end;
+        base_cursor = insertion;
+        let count = *span_counts
+            .get(usize::from(index))
+            .ok_or(Error::InvalidDynamicSpan)?;
+        let stride = usize::from(span.rule_stride);
+        let span_width = usize::try_from(count).map_err(|_| Error::InvalidDynamicSpan)?;
+        let span_end = runtime_cursor
+            .checked_add(span_width)
+            .ok_or(Error::InvalidDynamicSpan)?;
+        if coordinate < span_end {
+            let relative = coordinate
+                .checked_sub(runtime_cursor)
+                .ok_or(Error::InvalidCoordinate)?;
+            let item_start = runtime_cursor
+                .checked_add(
+                    (relative / stride)
+                        .checked_mul(stride)
+                        .ok_or(Error::InvalidCoordinate)?,
+                )
+                .ok_or(Error::InvalidCoordinate)?;
+            let local = u16::try_from(relative % stride).map_err(|_| Error::InvalidCoordinate)?;
+            let template = span
+                .rule_start
+                .checked_add(local)
+                .ok_or(Error::InvalidCoordinate)?;
+            return Ok(DynamicRuleLocationV2 {
+                rule: profile.rule(true, template)?,
+                item_start: Some(item_start),
+            });
+        }
+        runtime_cursor = span_end;
+        index = index.checked_add(1).ok_or(Error::InvalidLength)?;
+    }
+    let base = base_cursor
+        .checked_add(
+            coordinate
+                .checked_sub(runtime_cursor)
+                .ok_or(Error::InvalidCoordinate)?,
+        )
+        .ok_or(Error::InvalidCoordinate)?;
+    Ok(DynamicRuleLocationV2 {
+        rule: profile.rule(
+            false,
+            u16::try_from(base).map_err(|_| Error::InvalidCoordinate)?,
+        )?,
+        item_start: None,
+    })
+}
+
+fn dynamic_runtime_coordinate_for_base(
+    profile: AccountProfileV2<'_>,
+    span_counts: &[u32],
+    base_coordinate: u16,
+) -> Result<usize> {
+    require_dynamic_span_counts(profile, span_counts)?;
+    if base_coordinate >= profile.fixed_accounts {
+        return Err(Error::InvalidCoordinate);
+    }
+    let mut runtime = usize::from(base_coordinate);
+    let mut index = 0_u16;
+    while index < profile.dynamic_fixed_span_count {
+        let span = profile.dynamic_fixed_span(index)?;
+        if span.insertion_coordinate <= base_coordinate {
+            let count = *span_counts
+                .get(usize::from(index))
+                .ok_or(Error::InvalidDynamicSpan)?;
+            runtime = runtime
+                .checked_add(usize::try_from(count).map_err(|_| Error::InvalidDynamicSpan)?)
+                .ok_or(Error::InvalidDynamicSpan)?;
+        }
+        index = index.checked_add(1).ok_or(Error::InvalidLength)?;
+    }
+    Ok(runtime)
+}
+
+fn dynamic_representative(
+    profile: AccountProfileV2<'_>,
+    tail_count: u32,
+    span_counts: &[u32],
+    coordinate: usize,
+) -> Result<usize> {
+    let location = dynamic_rule_location(profile, tail_count, span_counts, coordinate)?;
+    match location.rule.alias_kind {
+        AliasKindV2::SelfCoordinate => Ok(coordinate),
+        AliasKindV2::Fixed => {
+            dynamic_runtime_coordinate_for_base(profile, span_counts, location.rule.alias_index)
+        }
+        AliasKindV2::SameItem => {
+            let item_start = location.item_start.ok_or(Error::InvalidAlias)?;
+            item_start
+                .checked_add(usize::from(location.rule.alias_index))
+                .ok_or(Error::InvalidCoordinate)
+        }
+    }
+}
+
 fn representative_from_rule(
     rule: AccountRuleV2,
     coordinate: usize,
@@ -2700,7 +3617,30 @@ fn representative_from_rule(
 }
 
 fn account_width(profile: AccountProfileV2<'_>, count: u32) -> Result<usize> {
+    if profile.dynamic_fixed_span_count != 0 {
+        return Err(Error::InvalidDynamicSpan);
+    }
     affine_width(profile.fixed_accounts, profile.item_account_stride, count)
+}
+
+fn dynamic_account_width(
+    profile: AccountProfileV2<'_>,
+    _tail_count: u32,
+    span_counts: &[u32],
+) -> Result<usize> {
+    require_dynamic_span_counts(profile, span_counts)?;
+    let mut width = usize::from(profile.fixed_accounts);
+    let mut index = 0_u16;
+    while index < profile.dynamic_fixed_span_count {
+        let count = *span_counts
+            .get(usize::from(index))
+            .ok_or(Error::InvalidDynamicSpan)?;
+        width = width
+            .checked_add(usize::try_from(count).map_err(|_| Error::InvalidDynamicSpan)?)
+            .ok_or(Error::InvalidDynamicSpan)?;
+        index = index.checked_add(1).ok_or(Error::InvalidLength)?;
+    }
+    Ok(width)
 }
 
 fn affine_width(common: u16, stride: u16, count: u32) -> Result<usize> {

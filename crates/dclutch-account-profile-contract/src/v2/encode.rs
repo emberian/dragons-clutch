@@ -9,9 +9,15 @@ use super::{
     ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE,
     ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE, ARTIFACT_PROFILE,
     AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE, AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES,
-    AccountPrestateV2, AccountProfileV2, Error, HEADER_BYTES, LIFECYCLE_PRESTATE_ARTIFACT_PROFILE,
-    MAGIC, NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE, NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE,
-    OP_PROJECT_DATA_IDENTITY, OP_PROJECT_DATA_IDENTITY_AFFINE, OP_PROJECT_DATA_IDENTITY_SELECTED,
+    AccountPrestateV2, AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE,
+    DYNAMIC_FIXED_SPAN_COUNT_OFFSET, DYNAMIC_FIXED_SPAN_ENTRY_BYTES,
+    DYNAMIC_FIXED_SPAN_ENTRY_COUNT_SCALAR_OFFSET, DYNAMIC_FIXED_SPAN_ENTRY_INSERTION_OFFSET,
+    DYNAMIC_FIXED_SPAN_ENTRY_MAX_OFFSET, DYNAMIC_FIXED_SPAN_ENTRY_MIN_OFFSET,
+    DYNAMIC_FIXED_SPAN_ENTRY_RULE_START_OFFSET, DYNAMIC_FIXED_SPAN_ENTRY_RULE_STRIDE_OFFSET,
+    DYNAMIC_FIXED_SPAN_ENTRY_STEP_OFFSET, DYNAMIC_FIXED_SPAN_HEADER_BYTES, Error, HEADER_BYTES,
+    LIFECYCLE_PRESTATE_ARTIFACT_PROFILE, MAGIC, NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE,
+    NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE, OP_PROJECT_DATA_IDENTITY,
+    OP_PROJECT_DATA_IDENTITY_AFFINE, OP_PROJECT_DATA_IDENTITY_SELECTED,
     OP_PROJECT_DATA_IDENTITY_SELECTED_AFFINE, OP_PROJECT_DATA_U8, OP_PROJECT_DATA_U16,
     OP_PROJECT_DATA_U32, OP_PROJECT_DATA_U64, OP_PROJECT_DATA_U64_AFFINE,
     OP_PROJECT_DATA_U64_SELECTED, OP_PROJECT_DATA_U64_SELECTED_AFFINE, OP_PROJECT_KEY,
@@ -59,6 +65,8 @@ pub enum AccountProfileArtifactV2 {
     AuthenticatedRouteAlias,
     /// Ordered sparse rows derived from one authenticated immutable `u64` tail.
     NonzeroU64TailRows,
+    /// One checked account span inserted into a fixed logical sequence.
+    DynamicFixedSpan,
 }
 
 impl AccountProfileArtifactV2 {
@@ -79,6 +87,7 @@ impl AccountProfileArtifactV2 {
             Self::NonzeroU64TailCount => NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE,
             Self::AuthenticatedRouteAlias => AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE,
             Self::NonzeroU64TailRows => NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE,
+            Self::DynamicFixedSpan => DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE,
         }
     }
 
@@ -89,9 +98,29 @@ impl AccountProfileArtifactV2 {
             | Self::NonzeroU64TailCount
             | Self::NonzeroU64TailRows => TRUSTED_EXECUTING_PROGRAM_HEADER_BYTES,
             Self::AuthenticatedRouteAlias => AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES,
+            Self::DynamicFixedSpan => DYNAMIC_FIXED_SPAN_HEADER_BYTES,
             _ => HEADER_BYTES,
         }
     }
+}
+
+/// Descriptor-owned dynamic account-span geometry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DynamicFixedSpanInputV2 {
+    /// Base fixed-rule coordinate at which repeated span rules are inserted.
+    pub insertion_coordinate: u16,
+    /// Common scalar containing the authenticated runtime span count.
+    pub count_scalar: u16,
+    /// First span-rule template owned by this entry.
+    pub rule_start: u16,
+    /// Number of account rules repeated for each selected item.
+    pub rule_stride: u16,
+    /// Inclusive minimum admitted count.
+    pub minimum: u32,
+    /// Inclusive maximum admitted count.
+    pub maximum: u32,
+    /// Positive congruence step within the inclusive range.
+    pub step: u32,
 }
 
 /// Caller-declared register geometry owned by the encoded profile.
@@ -738,6 +767,43 @@ pub fn encode_account_profile_with_authenticated_route_alias_v2_atomic(
     )
 }
 
+/// Encode profile 13 with one checked dynamic account span inserted into a
+/// fixed logical sequence.
+///
+/// The span count is read only from the declared common scalar and must remain
+/// within the exact inclusive range. Fixed rules and operations retain base
+/// coordinates; the decoder shifts every suffix coordinate and alias target
+/// at runtime. Opaque-data rules authenticate account facts without granting
+/// local data projection or effect authority.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_account_profile_with_dynamic_fixed_span_v2_atomic(
+    trusted_environment: TrustedEnvironmentV2,
+    trusted_identity_environment: TrustedIdentityEnvironmentV2,
+    trusted_builtin_identity: TrustedBuiltinIdentityV2,
+    dynamic_spans: &[DynamicFixedSpanInputV2],
+    fixed_rules: &[AccountRuleWithPrestateInputV2],
+    span_rules: &[AccountRuleWithPrestateInputV2],
+    fixed_operations: &[AccountOperationInputV2],
+    registers: RegisterGeometryV2,
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<(), Error> {
+    encode_account_profile_atomic_with_span(
+        AccountProfileArtifactV2::DynamicFixedSpan,
+        trusted_environment,
+        trusted_identity_environment,
+        trusted_builtin_identity,
+        Some(dynamic_spans),
+        RuleInputsV2::WithPrestate(fixed_rules),
+        RuleInputsV2::WithPrestate(span_rules),
+        fixed_operations,
+        &[],
+        registers,
+        scratch,
+        output,
+    )
+}
+
 #[derive(Clone, Copy)]
 enum RuleInputsV2<'a> {
     Exact(&'a [AccountRuleInputV2]),
@@ -781,6 +847,37 @@ fn encode_account_profile_atomic(
     scratch: &mut [u8],
     output: &mut [u8],
 ) -> Result<(), Error> {
+    encode_account_profile_atomic_with_span(
+        artifact,
+        trusted_environment,
+        trusted_identity_environment,
+        trusted_builtin_identity,
+        None,
+        fixed_rules,
+        item_rules,
+        fixed_operations,
+        item_operations,
+        registers,
+        scratch,
+        output,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_account_profile_atomic_with_span(
+    artifact: AccountProfileArtifactV2,
+    trusted_environment: TrustedEnvironmentV2,
+    trusted_identity_environment: TrustedIdentityEnvironmentV2,
+    trusted_builtin_identity: TrustedBuiltinIdentityV2,
+    dynamic_fixed_spans: Option<&[DynamicFixedSpanInputV2]>,
+    fixed_rules: RuleInputsV2<'_>,
+    item_rules: RuleInputsV2<'_>,
+    fixed_operations: &[AccountOperationInputV2],
+    item_operations: &[AccountOperationInputV2],
+    registers: RegisterGeometryV2,
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<(), Error> {
     if trusted_environment.current_slot_destination().is_some()
         && !matches!(
             artifact,
@@ -792,6 +889,7 @@ fn encode_account_profile_atomic(
                 | AccountProfileArtifactV2::NonzeroU64TailCount
                 | AccountProfileArtifactV2::AuthenticatedRouteAlias
                 | AccountProfileArtifactV2::NonzeroU64TailRows
+                | AccountProfileArtifactV2::DynamicFixedSpan
         )
     {
         return Err(Error::InvalidTrustedEnvironment);
@@ -806,6 +904,7 @@ fn encode_account_profile_atomic(
                 | AccountProfileArtifactV2::NonzeroU64TailCount
                 | AccountProfileArtifactV2::AuthenticatedRouteAlias
                 | AccountProfileArtifactV2::NonzeroU64TailRows
+                | AccountProfileArtifactV2::DynamicFixedSpan
         )
     {
         return Err(Error::InvalidTrustedExecutingProgram);
@@ -813,7 +912,11 @@ fn encode_account_profile_atomic(
     if trusted_builtin_identity
         .system_program_destination()
         .is_some()
-        && artifact != AccountProfileArtifactV2::AuthenticatedRouteAlias
+        && !matches!(
+            artifact,
+            AccountProfileArtifactV2::AuthenticatedRouteAlias
+                | AccountProfileArtifactV2::DynamicFixedSpan
+        )
     {
         return Err(Error::InvalidTrustedBuiltin);
     }
@@ -823,6 +926,13 @@ fn encode_account_profile_atomic(
         u16::try_from(fixed_operations.len()).map_err(|_| Error::InvalidLength)?;
     let item_operation_count =
         u16::try_from(item_operations.len()).map_err(|_| Error::InvalidLength)?;
+    let dynamic_table_bytes = match dynamic_fixed_spans {
+        Some(spans) => spans
+            .len()
+            .checked_mul(DYNAMIC_FIXED_SPAN_ENTRY_BYTES)
+            .ok_or(Error::InvalidLength)?,
+        None => 0,
+    };
     let expected = fixed_rules
         .len()
         .checked_add(item_rules.len())
@@ -834,7 +944,12 @@ fn encode_account_profile_atomic(
                 .and_then(|count| count.checked_mul(OPERATION_BYTES))
                 .and_then(|operations| rules.checked_add(operations))
         })
-        .and_then(|body| artifact.header_bytes().checked_add(body))
+        .and_then(|body| {
+            artifact
+                .header_bytes()
+                .checked_add(dynamic_table_bytes)
+                .and_then(|header| header.checked_add(body))
+        })
         .ok_or(Error::InvalidLength)?;
     if scratch.len() != expected || output.len() != expected {
         return Err(Error::InvalidLength);
@@ -893,7 +1008,60 @@ fn encode_account_profile_atomic(
             TRUSTED_BUILTIN_SYSTEM_PROGRAM,
         )?;
     }
-    let mut cursor = artifact.header_bytes();
+    if let Some(spans) = dynamic_fixed_spans {
+        write(
+            scratch,
+            DYNAMIC_FIXED_SPAN_COUNT_OFFSET,
+            &u16::try_from(spans.len())
+                .map_err(|_| Error::InvalidLength)?
+                .to_le_bytes(),
+        )?;
+        let mut index = 0_usize;
+        while index < spans.len() {
+            let span = *spans.get(index).ok_or(Error::InvalidLength)?;
+            let offset = index
+                .checked_mul(DYNAMIC_FIXED_SPAN_ENTRY_BYTES)
+                .and_then(|body| DYNAMIC_FIXED_SPAN_HEADER_BYTES.checked_add(body))
+                .ok_or(Error::InvalidLength)?;
+            for (relative, value) in [
+                (
+                    DYNAMIC_FIXED_SPAN_ENTRY_INSERTION_OFFSET,
+                    span.insertion_coordinate,
+                ),
+                (
+                    DYNAMIC_FIXED_SPAN_ENTRY_COUNT_SCALAR_OFFSET,
+                    span.count_scalar,
+                ),
+                (DYNAMIC_FIXED_SPAN_ENTRY_RULE_START_OFFSET, span.rule_start),
+                (
+                    DYNAMIC_FIXED_SPAN_ENTRY_RULE_STRIDE_OFFSET,
+                    span.rule_stride,
+                ),
+            ] {
+                write(scratch, add(offset, relative)?, &value.to_le_bytes())?;
+            }
+            write(
+                scratch,
+                add(offset, DYNAMIC_FIXED_SPAN_ENTRY_MIN_OFFSET)?,
+                &span.minimum.to_le_bytes(),
+            )?;
+            write(
+                scratch,
+                add(offset, DYNAMIC_FIXED_SPAN_ENTRY_MAX_OFFSET)?,
+                &span.maximum.to_le_bytes(),
+            )?;
+            write(
+                scratch,
+                add(offset, DYNAMIC_FIXED_SPAN_ENTRY_STEP_OFFSET)?,
+                &span.step.to_le_bytes(),
+            )?;
+            index = index.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+    }
+    let mut cursor = artifact
+        .header_bytes()
+        .checked_add(dynamic_table_bytes)
+        .ok_or(Error::InvalidLength)?;
     let mut rule_index = 0_usize;
     while rule_index < fixed_rules.len() {
         let (rule, prestate) = fixed_rules.get(rule_index)?;
@@ -943,6 +1111,7 @@ fn encode_rule(
             AccountPrestateV2::AdapterAuthenticatedVariableData => 2,
             AccountPrestateV2::AdapterAuthenticatedVariableDataAlias => 3,
             AccountPrestateV2::AuthenticatedRouteAlias => 4,
+            AccountPrestateV2::AuthenticatedOpaqueReadonlyData => 5,
         },
     )?;
     write(output, add(offset, 4)?, &alias_index.to_le_bytes())?;
@@ -1218,7 +1387,11 @@ mod tests {
 
     use super::*;
     use crate::AccountObservationV1;
-    use crate::v2::{ProjectionRegistersV2, TRUSTED_ENVIRONMENT_RESERVED_OFFSET, project_atomic};
+    use crate::v2::{
+        ProjectionRegistersV2, TRUSTED_ENVIRONMENT_RESERVED_OFFSET,
+        derive_effect_permissions_with_dynamic_spans, project_atomic,
+        project_dynamic_fixed_spans_atomic,
+    };
 
     const READONLY: AccountPrivilegesV2 = AccountPrivilegesV2::new(false, false, false);
     const WRITABLE: AccountPrivilegesV2 = AccountPrivilegesV2::new(false, true, false);
@@ -3360,5 +3533,352 @@ mod tests {
             );
             assert_eq!(hostile_output, before);
         }
+    }
+
+    #[test]
+    fn dynamic_spans_shift_aliases_protect_widths_and_admit_opaque_data() {
+        let writable_data = AccountEffectPermissionsV2::new(false, false, true);
+        let exact = |data_length| AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: READONLY,
+                effect_permissions: NO_EFFECTS,
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::Exact,
+        };
+        let fixed_rules = [
+            exact(0),
+            exact(0),
+            AccountRuleWithPrestateInputV2 {
+                rule: AccountRuleInputV2 {
+                    privileges: READONLY,
+                    effect_permissions: writable_data,
+                    alias: AccountAliasInputV2::SelfCoordinate,
+                    data_length: 4,
+                    data_item_stride: 0,
+                },
+                prestate: AccountPrestateV2::Exact,
+            },
+            AccountRuleWithPrestateInputV2 {
+                rule: AccountRuleInputV2 {
+                    privileges: READONLY,
+                    effect_permissions: NO_EFFECTS,
+                    alias: AccountAliasInputV2::Fixed(2),
+                    data_length: 0,
+                    data_item_stride: 0,
+                },
+                prestate: AccountPrestateV2::AuthenticatedRouteAlias,
+            },
+        ];
+        let opaque = AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: READONLY,
+                effect_permissions: NO_EFFECTS,
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length: 0,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::AuthenticatedOpaqueReadonlyData,
+        };
+        let operations = [AccountOperationInputV2::RequireOwner {
+            account: AccountCoordinateV2::fixed(2),
+            expected: IdentityCoordinateV2::common(0),
+        }];
+        let spans = [DynamicFixedSpanInputV2 {
+            insertion_coordinate: 2,
+            count_scalar: 0,
+            rule_start: 0,
+            rule_stride: 1,
+            minimum: 1,
+            maximum: 3,
+            step: 1,
+        }];
+        let width = DYNAMIC_FIXED_SPAN_HEADER_BYTES
+            + DYNAMIC_FIXED_SPAN_ENTRY_BYTES
+            + (fixed_rules.len() + 1) * RULE_BYTES
+            + operations.len() * OPERATION_BYTES;
+        let mut scratch = std::vec![0_u8; width];
+        let mut encoded = std::vec![0_u8; width];
+        encode_account_profile_with_dynamic_fixed_span_v2_atomic(
+            TrustedEnvironmentV2::None,
+            TrustedIdentityEnvironmentV2::None,
+            TrustedBuiltinIdentityV2::None,
+            &spans,
+            &fixed_rules,
+            &[opaque],
+            &operations,
+            RegisterGeometryV2 {
+                common_scalars: 1,
+                item_scalar_stride: 0,
+                common_identities: 1,
+                item_identity_stride: 0,
+            },
+            &mut scratch,
+            &mut encoded,
+        )
+        .expect("profile13");
+        let profile = AccountProfileV2::decode(&encoded).expect("decode profile13");
+        assert_eq!(profile.dynamic_fixed_span_count(), 1);
+        assert_eq!(
+            profile.logical_account_count_with_dynamic_spans(9, &[2]),
+            Ok(6)
+        );
+        assert_eq!(profile.representative_with_dynamic_spans(9, &[2], 5), Ok(4));
+        assert_eq!(
+            profile.physical_account_count_with_dynamic_spans(9, &[2]),
+            Ok(5)
+        );
+        assert_eq!(
+            profile.physical_account_ordinal_with_dynamic_spans(9, &[2], 5),
+            Ok(4)
+        );
+        assert!(
+            !profile
+                .route_privileges_with_dynamic_spans(9, &[2], 4)
+                .expect("ticket route")
+                .writable()
+        );
+
+        let owner = [0x44; 32];
+        let ticket_key = [0x55; 32];
+        let ticket_data = [1, 2, 3, 4];
+        let opaque_data = [8, 9, 10];
+        let accounts = [
+            AccountObservationV1::new([1; 32], owner, 1, &[], false, false, false),
+            AccountObservationV1::new([2; 32], owner, 2, &[], false, false, false),
+            AccountObservationV1::new([3; 32], owner, 3, &[], false, false, false),
+            AccountObservationV1::new([4; 32], owner, 4, &opaque_data, false, false, false),
+            AccountObservationV1::new(ticket_key, owner, 5, &ticket_data, false, true, false),
+            AccountObservationV1::new(ticket_key, owner, 5, &ticket_data, false, true, false),
+        ];
+        let input_scalars = [2_u64];
+        let input_identities = [owner];
+        let mut scratch_scalars = [0_u64];
+        let mut output_scalars = [0_u64];
+        let mut scratch_identities = [[0_u8; 32]];
+        let mut output_identities = [[0_u8; 32]];
+        project_dynamic_fixed_spans_atomic(
+            profile,
+            9,
+            &[2],
+            &accounts,
+            ProjectionRegistersV2 {
+                input_scalars: &input_scalars,
+                input_identities: &input_identities,
+                scratch_scalars: &mut scratch_scalars,
+                scratch_identities: &mut scratch_identities,
+                output_scalars: &mut output_scalars,
+                output_identities: &mut output_identities,
+            },
+        )
+        .expect("dynamic projection");
+        assert_eq!(output_scalars, input_scalars);
+        assert_eq!(output_identities, input_identities);
+        let mut permissions = [dclutch_effect_kernel::v2::AccountPermission::read_only(); 6];
+        derive_effect_permissions_with_dynamic_spans(profile, 9, &[2], &mut permissions)
+            .expect("permissions");
+        assert!(permissions[4].may_write_data());
+        assert!(permissions[5].may_write_data());
+
+        let mut widths = [0xaaaa_aaaa_u32];
+        assert_eq!(
+            profile.dynamic_span_widths_from_scalars(&[4], &mut widths),
+            Err(Error::InvalidDynamicSpan)
+        );
+        assert_eq!(widths, [0xaaaa_aaaa]);
+        let mut hostile_output_scalars = [77_u64];
+        let mut hostile_output_identities = [[0x77_u8; 32]];
+        assert_eq!(
+            project_dynamic_fixed_spans_atomic(
+                profile,
+                9,
+                &[1],
+                &accounts,
+                ProjectionRegistersV2 {
+                    input_scalars: &input_scalars,
+                    input_identities: &input_identities,
+                    scratch_scalars: &mut scratch_scalars,
+                    scratch_identities: &mut scratch_identities,
+                    output_scalars: &mut hostile_output_scalars,
+                    output_identities: &mut hostile_output_identities,
+                },
+            ),
+            Err(Error::WidthMismatch)
+        );
+        assert_eq!(hostile_output_scalars, [77]);
+        assert_eq!(hostile_output_identities, [[0x77; 32]]);
+    }
+
+    #[test]
+    fn dynamic_span_table_is_stable_congruent_and_failure_atomic() {
+        let fixed = [AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: READONLY,
+                effect_permissions: NO_EFFECTS,
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length: 0,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::Exact,
+        }; 2];
+        let opaque = AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: READONLY,
+                effect_permissions: NO_EFFECTS,
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length: 0,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::AuthenticatedOpaqueReadonlyData,
+        };
+        let span_rules = [opaque; 15];
+        let spans = [
+            DynamicFixedSpanInputV2 {
+                insertion_coordinate: 1,
+                count_scalar: 0,
+                rule_start: 0,
+                rule_stride: 14,
+                minimum: 0,
+                maximum: 14,
+                step: 14,
+            },
+            DynamicFixedSpanInputV2 {
+                insertion_coordinate: 1,
+                count_scalar: 1,
+                rule_start: 14,
+                rule_stride: 1,
+                minimum: 1,
+                maximum: 2,
+                step: 1,
+            },
+        ];
+        let width = DYNAMIC_FIXED_SPAN_HEADER_BYTES
+            + spans.len() * DYNAMIC_FIXED_SPAN_ENTRY_BYTES
+            + (fixed.len() + span_rules.len()) * RULE_BYTES;
+        let mut scratch = std::vec![0_u8; width];
+        let mut output = std::vec![0_u8; width];
+        encode_account_profile_with_dynamic_fixed_span_v2_atomic(
+            TrustedEnvironmentV2::None,
+            TrustedIdentityEnvironmentV2::None,
+            TrustedBuiltinIdentityV2::None,
+            &spans,
+            &fixed,
+            &span_rules,
+            &[],
+            RegisterGeometryV2 {
+                common_scalars: 2,
+                item_scalar_stride: 0,
+                common_identities: 1,
+                item_identity_stride: 0,
+            },
+            &mut scratch,
+            &mut output,
+        )
+        .expect("equal insertions preserve declaration order");
+        let profile = AccountProfileV2::decode(&output).expect("decode multi-span");
+        let mut selected = [99_u32; 2];
+        assert_eq!(
+            profile.dynamic_span_widths_from_scalars(&[7, 1], &mut selected),
+            Err(Error::InvalidDynamicSpan)
+        );
+        assert_eq!(selected, [99, 99]);
+        profile
+            .dynamic_span_widths_from_scalars(&[14, 2], &mut selected)
+            .expect("finite congruence");
+        assert_eq!(selected, [14, 2]);
+        assert_eq!(
+            profile.logical_account_count_with_dynamic_spans(0, &selected),
+            Ok(18)
+        );
+
+        let mut unsorted = spans;
+        unsorted[0].insertion_coordinate = 2;
+        let mut hostile_scratch = std::vec![0_u8; width];
+        let mut hostile_output = std::vec![0x66_u8; width];
+        let before = hostile_output.clone();
+        assert_eq!(
+            encode_account_profile_with_dynamic_fixed_span_v2_atomic(
+                TrustedEnvironmentV2::None,
+                TrustedIdentityEnvironmentV2::None,
+                TrustedBuiltinIdentityV2::None,
+                &unsorted,
+                &fixed,
+                &span_rules,
+                &[],
+                RegisterGeometryV2 {
+                    common_scalars: 2,
+                    item_scalar_stride: 0,
+                    common_identities: 1,
+                    item_identity_stride: 0,
+                },
+                &mut hostile_scratch,
+                &mut hostile_output,
+            ),
+            Err(Error::InvalidDynamicSpan)
+        );
+        assert_eq!(hostile_output, before);
+
+        let opaque_fixed = [opaque, fixed[1]];
+        let data_projection = [AccountOperationInputV2::ProjectDataU8 {
+            account: AccountCoordinateV2::fixed(0),
+            destination: ScalarCoordinateV2::common(2),
+            data_offset: 0,
+        }];
+        let operation_width = width + OPERATION_BYTES;
+        let mut hostile_scratch = std::vec![0_u8; operation_width];
+        let mut hostile_output = std::vec![0x77_u8; operation_width];
+        let before = hostile_output.clone();
+        assert_eq!(
+            encode_account_profile_with_dynamic_fixed_span_v2_atomic(
+                TrustedEnvironmentV2::None,
+                TrustedIdentityEnvironmentV2::None,
+                TrustedBuiltinIdentityV2::None,
+                &spans,
+                &opaque_fixed,
+                &span_rules,
+                &data_projection,
+                RegisterGeometryV2 {
+                    common_scalars: 3,
+                    item_scalar_stride: 0,
+                    common_identities: 1,
+                    item_identity_stride: 0,
+                },
+                &mut hostile_scratch,
+                &mut hostile_output,
+            ),
+            Err(Error::InvalidOpaqueDataPrestate)
+        );
+        assert_eq!(hostile_output, before);
+
+        let count_overwrite = [AccountOperationInputV2::ProjectLamports {
+            account: AccountCoordinateV2::fixed(0),
+            destination: ScalarCoordinateV2::common(0),
+        }];
+        let mut hostile_scratch = std::vec![0_u8; operation_width];
+        let mut hostile_output = std::vec![0x88_u8; operation_width];
+        let before = hostile_output.clone();
+        assert_eq!(
+            encode_account_profile_with_dynamic_fixed_span_v2_atomic(
+                TrustedEnvironmentV2::None,
+                TrustedIdentityEnvironmentV2::None,
+                TrustedBuiltinIdentityV2::None,
+                &spans,
+                &fixed,
+                &span_rules,
+                &count_overwrite,
+                RegisterGeometryV2 {
+                    common_scalars: 2,
+                    item_scalar_stride: 0,
+                    common_identities: 1,
+                    item_identity_stride: 0,
+                },
+                &mut hostile_scratch,
+                &mut hostile_output,
+            ),
+            Err(Error::InvalidDynamicSpan)
+        );
+        assert_eq!(hostile_output, before);
     }
 }
