@@ -132,13 +132,13 @@ pub fn execute_admitted_aot_v3<'info>(
     frame: AdmittedCpiFrameV3<'_, 'info>,
     runtime_accounts: &[&AccountInfo<'info>],
     input_scratch_pages: &[&AccountInfo<'info>],
-    context: AdmittedInvocationContextV3,
+    context: &AdmittedInvocationContextV3,
     authenticated: AuthenticatedExecutionStrategyV2,
     input_scalars: &[u64],
     input_identities: &[[u8; 32]],
 ) -> Result<AdmittedExecutionV3, ProgramError> {
     let invocation_context =
-        admitted_invocation_context_digest_v3(context).map_err(|_| TradingSbfError::Content)?;
+        admitted_invocation_context_digest_v3(*context).map_err(|_| TradingSbfError::Content)?;
     validate_authenticated_frame(program_id, frame, runtime_accounts, context, authenticated)?;
     let scalar_count = u32::try_from(input_scalars.len()).map_err(|_| TradingSbfError::Content)?;
     let identity_count =
@@ -320,7 +320,7 @@ fn invoke_admitted_chunk<'info>(
     frame: AdmittedCpiFrameV3<'_, 'info>,
     runtime_accounts: &[&AccountInfo<'info>],
     caller_authority: &AccountInfo<'info>,
-    context: AdmittedInvocationContextV3,
+    context: &AdmittedInvocationContextV3,
     request: AcceleratorRequestV2<'_>,
 ) -> Result<(Vec<u8>, ContentId), ProgramError> {
     let request_len = ACCELERATOR_REQUEST_HEADER_BYTES_V2
@@ -433,7 +433,7 @@ fn validate_authenticated_frame(
     program_id: &Pubkey,
     frame: AdmittedCpiFrameV3<'_, '_>,
     runtime_accounts: &[&AccountInfo<'_>],
-    context: AdmittedInvocationContextV3,
+    context: &AdmittedInvocationContextV3,
     authenticated: AuthenticatedExecutionStrategyV2,
 ) -> Result<(), ProgramError> {
     let descriptor = authenticated.capability_program();
@@ -463,8 +463,12 @@ fn validate_authenticated_frame(
             != authenticated
                 .artifact_release_id()
                 .ok_or(TradingSbfError::Content)?
-        || artifact.program().to_bytes() != frame.accelerator_program.key.to_bytes()
-        || artifact.programdata() != frame.accelerator_programdata.key.to_bytes()
+        || !exact_deployment_keys_v3(
+            artifact.program().to_bytes(),
+            artifact.programdata(),
+            frame.accelerator_program.key.to_bytes(),
+            frame.accelerator_programdata.key.to_bytes(),
+        )
         || usize::try_from(context.account_count).map_err(|_| TradingSbfError::Content)?
             != runtime_accounts.len()
         || !frame.registry.executable
@@ -549,6 +553,15 @@ fn validate_authenticated_frame(
         &ARTIFACT_RELEASE_SCHEMA_ID_V1,
     )?;
     Ok(())
+}
+
+fn exact_deployment_keys_v3(
+    admitted_program: [u8; 32],
+    admitted_programdata: [u8; 32],
+    observed_program: [u8; 32],
+    observed_programdata: [u8; 32],
+) -> bool {
+    admitted_program == observed_program && admitted_programdata == observed_programdata
 }
 
 fn require_record_key(
@@ -705,5 +718,34 @@ mod tests {
         assert_eq!(admitted_caller_authority_count_v3(1, 1), Ok(1));
         assert!(admitted_caller_authority_count_v3(0, 0).is_err());
         assert!(admitted_caller_authority_count_v3(120, 2).expect("multi chunk") > 1);
+    }
+
+    #[test]
+    fn program_programdata_and_finalized_record_substitution_refuse() {
+        assert!(exact_deployment_keys_v3([1; 32], [2; 32], [1; 32], [2; 32]));
+        assert!(!exact_deployment_keys_v3(
+            [1; 32], [2; 32], [3; 32], [2; 32]
+        ));
+        assert!(!exact_deployment_keys_v3(
+            [1; 32], [2; 32], [1; 32], [3; 32]
+        ));
+
+        let registry = Pubkey::new_unique();
+        let identity = [9_u8; 32];
+        let (canonical, _) =
+            Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &identity], &registry);
+        assert_eq!(
+            require_record_key(&registry, &canonical, RAW_RECORD_PDA_SEED_V1, &identity,),
+            Ok(())
+        );
+        assert!(
+            require_record_key(
+                &registry,
+                &Pubkey::new_unique(),
+                RAW_RECORD_PDA_SEED_V1,
+                &identity,
+            )
+            .is_err()
+        );
     }
 }
