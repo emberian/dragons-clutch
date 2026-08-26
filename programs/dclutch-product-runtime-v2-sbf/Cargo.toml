@@ -25,13 +25,12 @@ solana-sdk-ids = "=3.1.0"
 
 [dev-dependencies]
 dclutch-product-runtime-v2-operator = { path = "../../crates/dclutch-product-runtime-v2-operator" }
-solana-account = "=4.3.2"
-solana-program-test = { version = "=4.2.1", features = ["agave-unstable-api"] }
+solana-account = "=4.6.0"
+solana-program-test = { version = "=4.3.0-beta.2", features = ["agave-unstable-api"] }
 solana-sdk = "=3.0.0"
-solana-transaction = "=4.1.6"
+solana-transaction = "=4.2.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
-[workspace]
 
 [lints.rust]
 missing_docs = "deny"

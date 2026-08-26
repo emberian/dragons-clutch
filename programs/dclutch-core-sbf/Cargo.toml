@@ -45,18 +45,17 @@ dclutch-product-payoff-v2-codec = { path = "../../crates/dclutch-product-payoff-
 dclutch-product-runtime-v2-admission = { path = "../../crates/dclutch-product-runtime-v2-admission" }
 dclutch-product-runtime-v2 = { path = "../../crates/dclutch-product-runtime-v2" }
 dclutch-product-runtime-v2-operator = { path = "../../crates/dclutch-product-runtime-v2-operator" }
-solana-account = "=4.3.2"
-solana-hash = "=4.5.0"
+solana-account = "=4.6.0"
+solana-hash = "=4.6.0"
 solana-message = { version = "=3.1.0", features = ["bincode"] }
 solana-program-option = "=3.1.0"
 solana-program-pack = "=3.1.0"
-solana-program-test = { version = "=4.2.1", features = ["agave-unstable-api"] }
+solana-program-test = { version = "=4.3.0-beta.2", features = ["agave-unstable-api"] }
 solana-sdk = "=3.0.0"
-solana-transaction = "=4.1.6"
+solana-transaction = "=4.2.0"
 spl-token-interface = "=3.0.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
-[workspace]
 
 [lints.rust]
 missing_docs = "deny"

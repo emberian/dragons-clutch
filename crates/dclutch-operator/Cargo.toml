@@ -58,7 +58,7 @@ dclutch-versioned-message-operator = { path = "../dclutch-versioned-message-oper
 dclutch-trading-sbf = { path = "../../programs/dclutch-trading-sbf", default-features = false, features = ["dealer-family", "no-entrypoint", "series-family"] }
 solana-program = { version = "=3.0.0", default-features = false }
 solana-address-lookup-table-interface = { version = "=3.2.0", features = ["bincode", "bytemuck"] }
-solana-compute-budget-interface = "=3.0.0"
+solana-compute-budget-interface = "=3.1.0"
 solana-hash = "=4.6.0"
 solana-message = { version = "=3.1.0", features = ["bincode"] }
 solana-sdk-ids = "=3.1.0"

@@ -17,7 +17,7 @@ dclutch-rational-lifecycle-hot-v3 = { path = "../dclutch-rational-lifecycle-hot-
 dclutch-record-contract = { path = "../dclutch-record-contract" }
 dclutch-representation-composition-v3-kernel = { path = "../dclutch-representation-composition-v3-kernel" }
 dclutch-versioned-message-operator = { path = "../dclutch-versioned-message-operator" }
-solana-compute-budget-interface = "=3.0.0"
+solana-compute-budget-interface = "=3.1.0"
 solana-hash = "=4.6.0"
 solana-program = { version = "=3.0.0", default-features = false }
 solana-sdk-ids = "=3.1.0"

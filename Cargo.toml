@@ -72,6 +72,12 @@ members = [
     "crates/dclutch-versioned-message-operator",
     "programs/dclutch-effect-sbf",
     "programs/dclutch-controller-proof-sbf",
+    "programs/dclutch-rent-sbf",
+    "programs/dclutch-product-runtime-v2-sbf",
+    "programs/dclutch-direct-aot-sbf",
+    "programs/dclutch-custody-sbf",
+    "programs/dclutch-core-sbf",
+    "programs/dclutch-claims-sbf",
     "programs/dclutch-claims-proof-sbf",
     "programs/dclutch-custody-proof-sbf",
     "programs/dclutch-economic-sbf",
@@ -110,21 +116,6 @@ exclude = [
     # lane territory (hot_v3.rs itself is on this task's do-not-touch list)
     # -- left for that lane's owner rather than guessed at here.
     "programs/dclutch-series-shadow-sbf",
-    # blocked: dev-dependency solana-program-test "=4.2.1" hard-caps
-    # solana-address at <2.7.0, but dclutch-token-svm (already a root
-    # member, depended on by e.g. dclutch-controller-proof-sbf) pins
-    # solana-address "=2.7.0" exactly. Cargo's workspace-wide version
-    # unification makes this an unconditional global conflict: only the
-    # solana-program-test 4.3.0-beta.2 pre-release supports solana-address
-    # 2.7.0, and no stable release does. Bumping the whole workspace's
-    # test-SDK pin to a beta, or downgrading dclutch-token-svm's pin, is a
-    # protocol/test-infra decision outside this lane's mandate.
-    "programs/dclutch-claims-sbf",
-    "programs/dclutch-core-sbf",
-    "programs/dclutch-custody-sbf",
-    "programs/dclutch-direct-aot-sbf",
-    "programs/dclutch-product-runtime-v2-sbf",
-    "programs/dclutch-rent-sbf",
 ]
 resolver = "2"
 
