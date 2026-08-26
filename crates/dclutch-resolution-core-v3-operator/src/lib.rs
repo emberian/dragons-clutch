@@ -1274,11 +1274,7 @@ fn authenticate_founding_market(
 }
 
 fn authenticate_system(system: &ObservedAccount) -> Result<(), ResolutionCoreOperatorErrorV3> {
-    if system.key != system_program::ID
-        || system.owner != native_loader::ID
-        || !system.executable
-        || !system.data.is_empty()
-    {
+    if system.key != system_program::ID || system.owner != native_loader::ID || !system.executable {
         return Err(ResolutionCoreOperatorErrorV3::Frame);
     }
     Ok(())
@@ -3379,6 +3375,54 @@ mod tests {
         );
         assert!(distinct_funding_entries([3, 1, 2]));
         assert!(!distinct_funding_entries([3, 1, 3]));
+    }
+
+    #[test]
+    fn system_authentication_accepts_native_marker_data_and_refuses_substitution() {
+        let exact = ObservedAccount {
+            observation: Observation {
+                slot: 1,
+                unix_timestamp: 1,
+                finality: Finality::Finalized,
+            },
+            key: system_program::ID,
+            owner: native_loader::ID,
+            lamports: 1,
+            executable: true,
+            data: b"solana system program".to_vec(),
+        };
+        assert_eq!(authenticate_system(&exact), Ok(()));
+
+        let mut wrong_key = exact.clone();
+        wrong_key.key = key(99);
+        assert_eq!(
+            authenticate_system(&wrong_key),
+            Err(ResolutionCoreOperatorErrorV3::Frame)
+        );
+        let mut wrong_owner = exact.clone();
+        wrong_owner.owner = key(98);
+        assert_eq!(
+            authenticate_system(&wrong_owner),
+            Err(ResolutionCoreOperatorErrorV3::Frame)
+        );
+        let mut non_executable = exact;
+        non_executable.executable = false;
+        assert_eq!(
+            authenticate_system(&non_executable),
+            Err(ResolutionCoreOperatorErrorV3::Frame)
+        );
+
+        let mut privilege = create_report();
+        privilege
+            .instruction
+            .accounts
+            .get_mut(17)
+            .expect("System Program account")
+            .is_writable = true;
+        assert_eq!(
+            validate_resolution_create_fund_report_v3(&privilege),
+            Err(ResolutionCoreOperatorErrorV3::Frame)
+        );
     }
 
     #[test]
