@@ -382,7 +382,7 @@ fn build_initialize<'a>(
         open_bytes,
         &[],
     );
-    append_position_patches(instructions, fixed, 0, ProtocolPositionActionV2::Admit)?;
+    append_position_patches(instructions, fixed, 0)?;
     append_custody_initialize_patches(instructions, fixed, 1, false)?;
     append_custody_initialize_patches(instructions, fixed, 2, true)?;
     Ok(3)
@@ -541,7 +541,7 @@ fn build_close<'a>(
         &[],
     );
     append_custody_transfer_patches(instructions, fixed, 0, false)?;
-    append_position_patches(instructions, fixed, 1, ProtocolPositionActionV2::Close)?;
+    append_position_patches(instructions, fixed, 1)?;
     append_custody_close_patches(instructions, fixed, 2, false)?;
     append_custody_close_patches(instructions, fixed, 3, true)?;
     Ok(4)
@@ -844,7 +844,6 @@ fn append_position_patches(
     output: &mut [EffectInstructionV3],
     cursor: &mut usize,
     route: u16,
-    action: ProtocolPositionActionV2,
 ) -> Result<()> {
     for (offset, coordinate) in [
         (
@@ -880,16 +879,6 @@ fn append_position_patches(
             ),
         )?;
     }
-    let expected_market = if action == ProtocolPositionActionV2::Close {
-        scalar::CLAIMS_POST_MARKET_REVISION
-    } else {
-        scalar::CLAIMS_MARKET_REVISION
-    };
-    let expected_position = if action == ProtocolPositionActionV2::Close {
-        scalar::SETTLEMENT_POST_POSITION_REVISION
-    } else {
-        scalar::SETTLEMENT_POSITION_REVISION
-    };
     for (offset, coordinate) in [
         (
             ProtocolPositionRequestLayoutV2::GENERATION,
@@ -897,11 +886,11 @@ fn append_position_patches(
         ),
         (
             ProtocolPositionRequestLayoutV2::EXPECTED_MARKET_REVISION,
-            expected_market,
+            scalar::CLAIMS_MARKET_REVISION,
         ),
         (
             ProtocolPositionRequestLayoutV2::EXPECTED_POSITION_REVISION,
-            expected_position,
+            scalar::SETTLEMENT_POSITION_REVISION,
         ),
         (
             ProtocolPositionRequestLayoutV2::OBSERVED_POSITION_LAMPORTS,

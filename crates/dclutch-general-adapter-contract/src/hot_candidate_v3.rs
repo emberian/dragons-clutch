@@ -81,9 +81,9 @@ pub mod scalar {
     pub const CLAIMS_POSITION_COUNT: u32 = 22;
     /// Exact AffineBatch row count, equal to Product N when active.
     pub const CLAIMS_ROW_COUNT: u32 = 23;
-    /// Whether a vacant settlement Position must be admitted.
+    /// Reserved zero: successor rows never admit a Position.
     pub const CLAIMS_ADMIT_ACTIVE: u32 = 24;
-    /// Whether a zero settlement Position must be closed after affine mutation.
+    /// Reserved zero: successor rows never close a Position.
     pub const CLAIMS_CLOSE_ACTIVE: u32 = 25;
     /// Canonical Custody operation tag (`Transfer`).
     pub const CUSTODY_OPERATION: u32 = 26;
@@ -524,6 +524,16 @@ pub fn project_general_initialize_candidate_v3<'a>(
         || environment.custody_expected_revision != 0
         || environment.custody_replay_rent_principal == 0
         || environment.custody_vault_rent_principal == 0
+        || environment.claims_market_revision == u64::MAX
+        || environment.settlement_position_present
+        || environment.settlement_position_revision != 0
+        || environment.settlement_position_owner == [0; 32]
+        || environment.rent_credit == [0; 32]
+        || environment.rent_program == [0; 32]
+        || environment.position_rent_principal == 0
+        || environment.admission_rent_principal == 0
+        || environment.observed_position_lamports < environment.position_rent_principal
+        || environment.observed_admission_lamports < environment.admission_rent_principal
     {
         return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
     }
@@ -564,6 +574,30 @@ pub fn project_general_initialize_candidate_v3<'a>(
         ),
         (scalar::OUTCOME_COUNT, u64::from(outcome_count)),
         (scalar::GENERATION, environment.generation),
+        (
+            scalar::CLAIMS_MARKET_REVISION,
+            environment.claims_market_revision,
+        ),
+        (
+            scalar::SETTLEMENT_POSITION_REVISION,
+            environment.settlement_position_revision,
+        ),
+        (
+            scalar::OBSERVED_POSITION_LAMPORTS,
+            environment.observed_position_lamports,
+        ),
+        (
+            scalar::OBSERVED_ADMISSION_LAMPORTS,
+            environment.observed_admission_lamports,
+        ),
+        (
+            scalar::POSITION_RENT_PRINCIPAL,
+            environment.position_rent_principal,
+        ),
+        (
+            scalar::ADMISSION_RENT_PRINCIPAL,
+            environment.admission_rent_principal,
+        ),
         (
             scalar::CUSTODY_REPLAY_RENT_LAMPORTS,
             environment.custody_replay_rent_principal,
@@ -626,6 +660,12 @@ pub fn project_general_initialize_candidate_v3<'a>(
         (identity::MARKET, environment.market),
         (identity::REALM, environment.realm),
         (identity::TRADING_PROGRAM, environment.trading_program),
+        (
+            identity::SETTLEMENT_POSITION_OWNER,
+            environment.settlement_position_owner,
+        ),
+        (identity::RENT_CREDIT, environment.rent_credit),
+        (identity::RENT_PROGRAM, environment.rent_program),
         (
             identity::CUSTODY_DESTINATION,
             environment.custody_destination,
@@ -782,8 +822,8 @@ pub fn project_general_hot_candidate_v3<'a>(
                 0
             },
         ),
-        (scalar::CLAIMS_ADMIT_ACTIVE, u64::from(position.admit)),
-        (scalar::CLAIMS_CLOSE_ACTIVE, u64::from(position.close)),
+        (scalar::CLAIMS_ADMIT_ACTIVE, 0),
+        (scalar::CLAIMS_CLOSE_ACTIVE, 0),
         (scalar::CUSTODY_OPERATION, 2),
         (scalar::CUSTODY_SOURCE_COMPARTMENT, custody.source),
         (scalar::CUSTODY_DESTINATION_COMPARTMENT, custody.destination),
@@ -1062,8 +1102,6 @@ struct PositionGeometryV3 {
     one_owner: [u8; 32],
     zero_revision: u64,
     one_revision: u64,
-    admit: bool,
-    close: bool,
 }
 
 fn position_geometry(
@@ -1086,13 +1124,13 @@ fn position_geometry(
             one_owner: [0; 32],
             zero_revision: 0,
             one_revision: 0,
-            admit: false,
-            close: false,
         });
     }
     match action {
         RuntimeSettlementActionV2::Collect | RuntimeSettlementActionV2::Distribute => {
-            if header.owner_id == environment.settlement_position_owner {
+            if !environment.settlement_position_present
+                || header.owner_id == environment.settlement_position_owner
+            {
                 return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
             }
             let collect = action == RuntimeSettlementActionV2::Collect;
@@ -1143,11 +1181,12 @@ fn position_geometry(
                 one_owner,
                 zero_revision,
                 one_revision,
-                admit: collect && !environment.settlement_position_present,
-                close: !collect && environment.close_settlement_position,
             })
         }
         RuntimeSettlementActionV2::Materialize => {
+            if !environment.settlement_position_present {
+                return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
+            }
             let (source_present, destination_present, aggregate, source, destination) =
                 match header.complete_set_move {
                     RuntimeCompleteSetMoveV2::Mint => (false, true, 1, 0, 1),
@@ -1156,14 +1195,6 @@ fn position_geometry(
                         return Err(GeneralHotCandidateErrorV3::InvalidPlan);
                     }
                 };
-            let position_revision = if environment.settlement_position_present {
-                environment.settlement_position_revision
-            } else {
-                if environment.settlement_position_revision != 0 {
-                    return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
-                }
-                0
-            };
             Ok(PositionGeometryV3 {
                 count: 1,
                 source_present,
@@ -1175,10 +1206,8 @@ fn position_geometry(
                 destination_direction: destination,
                 zero_owner: environment.settlement_position_owner,
                 one_owner: [0; 32],
-                zero_revision: position_revision,
+                zero_revision: environment.settlement_position_revision,
                 one_revision: 0,
-                admit: !environment.settlement_position_present,
-                close: false,
             })
         }
         RuntimeSettlementActionV2::Close => Err(GeneralHotCandidateErrorV3::InvalidPlan),
@@ -1251,6 +1280,9 @@ fn validate_environment(
         || environment.observed_admission_lamports < environment.admission_rent_principal
         || environment.payer != [0; 32]
         || (action == RuntimeSettlementActionV2::Close && environment.rent_refund == [0; 32])
+        || (action == RuntimeSettlementActionV2::Close
+            && (!environment.settlement_position_present || !environment.close_settlement_position))
+        || (action != RuntimeSettlementActionV2::Close && !environment.settlement_position_present)
     {
         return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
     }
@@ -1551,7 +1583,11 @@ mod tests {
     #[test]
     fn runtime_width_one_and_two_fifty_eight_emit_complete_child_facts() {
         for outcome_count in [1_u32, 258] {
-            let environment = environment();
+            let environment = GeneralHotEnvironmentV3 {
+                settlement_position_revision: 12,
+                settlement_position_present: true,
+                ..environment()
+            };
             let input = authenticated_input(outcome_count, environment);
             let mut scratch = vec![0_u8; input.len()];
             let mut output = vec![0x55_u8; input.len()];
@@ -1566,7 +1602,7 @@ mod tests {
             )
             .expect("complete candidate");
             assert!(matches!(accepted, ExecutionCandidateV2::Accepted(_)));
-            assert_eq!(read_scalar(&output, scalar::CLAIMS_ADMIT_ACTIVE), Ok(1));
+            assert_eq!(read_scalar(&output, scalar::CLAIMS_ADMIT_ACTIVE), Ok(0));
             assert_eq!(read_scalar(&output, scalar::CLAIMS_POSITION_COUNT), Ok(1));
             assert_eq!(
                 read_scalar(&output, scalar::CLAIMS_ROW_COUNT),

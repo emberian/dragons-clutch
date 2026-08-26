@@ -7,21 +7,21 @@
 //! protected values.
 
 use dclutch_account_profile_contract::lifecycle_v3::{
-    ACTION_PLAN_BYTES, HEADER_BYTES, PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SEED_BYTES,
-    StateLifecyclePolicyV3,
+    ACTION_PLAN_BYTES, HEADER_BYTES, IMMUTABLE_IDENTITY_BINDING_BYTES, PROTECTED_OUTPUT_BYTES,
+    RECIPE_BYTES, SEED_BYTES, StateLifecyclePolicyV4,
     encode::{
-        LifecycleAccountCoordinateV3, LifecycleGuardInputV3, LifecycleOperationInputV3,
-        LifecyclePlanInputV3, LifecycleProtectedOutputsInputV3, LifecycleRecipeInputV3,
-        LifecycleRegisterCoordinateV3, LifecycleSeedInputV3,
-        encode_lifecycle_policy_with_protected_outputs_v3_atomic,
+        LifecycleAccountCoordinateV3, LifecycleGuardInputV3,
+        LifecycleImmutableIdentityBindingInputV4, LifecycleOperationInputV3, LifecyclePlanInputV3,
+        LifecycleProtectedOutputsInputV3, LifecycleRecipeInputV3, LifecycleRegisterCoordinateV3,
+        LifecycleSeedInputV3, encode_lifecycle_policy_v4_atomic,
     },
 };
 use dclutch_general_codec::Action;
 
 use crate::{
     hot_candidate_v3::{identity, scalar},
-    local_state_v3::GENERAL_LOCAL_STATE_HEADER_BYTES_V3,
-    runtime_selection::RUNTIME_SELECTION_CURSOR_BYTES_V2,
+    local_state_v3::{GENERAL_LOCAL_STATE_HEADER_BYTES_V3, GeneralLocalStateLayoutV3},
+    runtime_selection::{RUNTIME_SELECTION_CURSOR_BYTES_V2, RuntimeSelectionLayoutV2},
     runtime_width::{SETTLEMENT_CURSOR_HEADER_BYTES_V2, SettlementCursorLayoutV2},
 };
 
@@ -63,6 +63,11 @@ pub fn general_state_lifecycle_bytes_v3(action: Action) -> Result<usize> {
         .and_then(|value| value.checked_add(seeds.checked_mul(SEED_BYTES)?))
         .and_then(|value| value.checked_add(plans.checked_mul(ACTION_PLAN_BYTES)?))
         .and_then(|value| value.checked_add(plans.checked_mul(PROTECTED_OUTPUT_BYTES)?))
+        .and_then(|value| {
+            value.checked_add(
+                lifecycle_binding_count(action).checked_mul(IMMUTABLE_IDENTITY_BINDING_BYTES)?,
+            )
+        })
         .and_then(|value| HEADER_BYTES.checked_add(value))
         .ok_or(GeneralStateArtifactErrorV3::Geometry)
 }
@@ -157,7 +162,8 @@ fn encode_primary(action: Action, scratch: &mut [u8], output: &mut [u8]) -> Resu
         guard: LifecycleGuardInputV3::Always,
     }];
     let protected = [Some(primary_protected()?)];
-    encode_lifecycle_policy_with_protected_outputs_v3_atomic(
+    let bindings = selection_or_settlement_bindings(action)?;
+    encode_lifecycle_policy_v4_atomic(
         &recipe,
         if selection {
             &selection_seeds
@@ -166,11 +172,13 @@ fn encode_primary(action: Action, scratch: &mut [u8], output: &mut [u8]) -> Resu
         },
         &plan,
         &protected,
+        bindings.as_slice(),
         scratch,
         output,
     )
     .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
-    StateLifecyclePolicyV3::decode(output).map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
+    StateLifecyclePolicyV4::decode_selected([1; 32], [1; 32], output)
+        .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
     Ok(())
 }
 
@@ -255,11 +263,13 @@ fn encode_close(action: Action, scratch: &mut [u8], output: &mut [u8]) -> Result
         },
     ];
     let protected = [None, Some(terminal_protected()?)];
-    encode_lifecycle_policy_with_protected_outputs_v3_atomic(
-        &recipes, &seeds, &plans, &protected, scratch, output,
+    let bindings = close_bindings()?;
+    encode_lifecycle_policy_v4_atomic(
+        &recipes, &seeds, &plans, &protected, &bindings, scratch, output,
     )
     .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
-    StateLifecyclePolicyV3::decode(output).map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
+    StateLifecyclePolicyV4::decode_selected([1; 32], [1; 32], output)
+        .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
     Ok(())
 }
 
@@ -287,6 +297,87 @@ fn terminal_protected() -> Result<LifecycleProtectedOutputsInputV3> {
     })
 }
 
+struct BindingBufferV4 {
+    values: [LifecycleImmutableIdentityBindingInputV4; 5],
+    len: usize,
+}
+
+impl BindingBufferV4 {
+    fn as_slice(&self) -> &[LifecycleImmutableIdentityBindingInputV4] {
+        self.values.get(..self.len).unwrap_or(&[])
+    }
+}
+
+fn selection_or_settlement_bindings(action: Action) -> Result<BindingBufferV4> {
+    let empty = LifecycleImmutableIdentityBindingInputV4 {
+        plan: 0,
+        data_offset: 0,
+        canonical: LifecycleRegisterCoordinateV3::common(0),
+    };
+    let mut output = BindingBufferV4 {
+        values: [empty; 5],
+        len: lifecycle_binding_count(action),
+    };
+    if matches!(action, Action::Consider | Action::Freeze) {
+        for (slot, (body_offset, canonical)) in [
+            (
+                RuntimeSelectionLayoutV2::product_id(),
+                identity::SELECTION_PRODUCT,
+            ),
+            (
+                RuntimeSelectionLayoutV2::batch_id(),
+                identity::SELECTION_BATCH,
+            ),
+            (
+                RuntimeSelectionLayoutV2::policy_id(),
+                identity::SELECTION_POLICY,
+            ),
+            (
+                RuntimeSelectionLayoutV2::best_candidate_id(),
+                identity::CANDIDATE,
+            ),
+            (
+                RuntimeSelectionLayoutV2::best_verified_digest(),
+                identity::BEST_VERIFIED_DIGEST,
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            output.values[slot] = binding(0, body_offset, canonical)?;
+        }
+    } else {
+        output.values[0] = binding(
+            0,
+            SettlementCursorLayoutV2::candidate_id(),
+            identity::CANDIDATE,
+        )?;
+    }
+    Ok(output)
+}
+
+fn close_bindings() -> Result<[LifecycleImmutableIdentityBindingInputV4; 1]> {
+    Ok([binding(
+        1,
+        SettlementCursorLayoutV2::candidate_id(),
+        identity::CANDIDATE,
+    )?])
+}
+
+fn binding(
+    plan: u16,
+    body_offset: u32,
+    canonical: u32,
+) -> Result<LifecycleImmutableIdentityBindingInputV4> {
+    Ok(LifecycleImmutableIdentityBindingInputV4 {
+        plan,
+        data_offset: GeneralLocalStateLayoutV3::body()
+            .checked_add(body_offset)
+            .ok_or(GeneralStateArtifactErrorV3::Geometry)?,
+        canonical: LifecycleRegisterCoordinateV3::common(identity_u16(canonical)?),
+    })
+}
+
 const fn lifecycle_counts(action: Action) -> (usize, usize, usize) {
     match action {
         Action::Consider | Action::Freeze => (1, 4, 1),
@@ -295,6 +386,17 @@ const fn lifecycle_counts(action: Action) -> (usize, usize, usize) {
         | Action::Materialize
         | Action::Distribute => (1, 5, 1),
         Action::Close => (2, 11, 2),
+    }
+}
+
+const fn lifecycle_binding_count(action: Action) -> usize {
+    match action {
+        Action::Consider | Action::Freeze => 5,
+        Action::InitializeSettlement
+        | Action::Collect
+        | Action::Materialize
+        | Action::Distribute => 1,
+        Action::Close => 1,
     }
 }
 
@@ -332,7 +434,8 @@ mod tests {
             let mut output = vec![0x55_u8; width];
             encode_general_state_lifecycle_v3_atomic(action, &mut scratch, &mut output)
                 .expect("lifecycle artifact");
-            let policy = StateLifecyclePolicyV3::decode(&output).expect("decode");
+            let policy =
+                StateLifecyclePolicyV4::decode_selected([1; 32], [1; 32], &output).expect("decode");
             assert_eq!(
                 policy.action_plan_count(action as u32),
                 Ok(if action == Action::Close { 2 } else { 1 })
