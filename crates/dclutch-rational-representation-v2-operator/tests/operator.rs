@@ -27,9 +27,10 @@ use dclutch_rational_representation_v2_kernel::{
 };
 use dclutch_rational_representation_v2_operator::{
     AssetObservationV2, Error, FinalizedRecordObservationV2, ObservedAccountV2,
-    RationalObservationV2, ReplayObservationV2, SelectedActionInputV2, StructuredActionInputV2,
-    TerminalObservationV2, construct_denominate, construct_issue_structured,
-    construct_reconstitute, construct_redeem_terminal, construct_unwrap_structured,
+    ProductEvidenceObservationV2, RationalObservationV2, ReplayObservationV2,
+    SelectedActionInputV2, StructuredActionInputV2, TerminalObservationV2, construct_denominate,
+    construct_issue_structured, construct_reconstitute, construct_redeem_terminal,
+    construct_unwrap_structured,
 };
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
@@ -174,6 +175,7 @@ fn activation_cache() -> ([u8; 32], Vec<u8>) {
 
 #[derive(Clone)]
 struct OwnedRecord {
+    schema: [u8; 32],
     raw: Pubkey,
     staging: Pubkey,
     bytes: Vec<u8>,
@@ -197,6 +199,7 @@ impl OwnedRecord {
         )
         .0;
         Self {
+            schema,
             raw,
             staging,
             bytes,
@@ -209,6 +212,7 @@ impl OwnedRecord {
 
     fn observe(&self, rent: &Rent) -> FinalizedRecordObservationV2<'_> {
         FinalizedRecordObservationV2 {
+            schema_id: self.schema,
             raw: ObservedAccountV2 {
                 key: self.raw,
                 owner: REGISTRY,
@@ -581,6 +585,7 @@ impl OwnedAsset {
 
 #[derive(Clone)]
 struct OwnedTerminal {
+    terminal_coordinate: OwnedRecord,
     realm: OwnedRecord,
     collateral_mint_key: Pubkey,
     collateral_mint: Vec<u8>,
@@ -610,6 +615,10 @@ struct Fixture {
     alternate_graph: OwnedRecord,
     descriptor: OwnedRecord,
     alternate_descriptor: OwnedRecord,
+    linked_basis: OwnedRecord,
+    product_record: OwnedRecord,
+    result_domain_record: OwnedRecord,
+    portfolio_record: OwnedRecord,
     descriptor_id: [u8; 32],
     representation_authority: Pubkey,
     replay_key: Pubkey,
@@ -677,6 +686,10 @@ impl Fixture {
             ),
         );
         let descriptor_id = descriptor.digest();
+        let linked_basis = OwnedRecord::new([0xa1; 32], vec![0xb1; 32]);
+        let product_record = OwnedRecord::new([0xa2; 32], vec![0xb2; 32]);
+        let result_domain_record = OwnedRecord::new([0xa3; 32], vec![0xb3; 32]);
+        let portfolio_record = OwnedRecord::new([0xa4; 32], vec![0xb4; 32]);
         let representation_authority = Pubkey::find_program_address(
             &[
                 RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
@@ -814,6 +827,10 @@ impl Fixture {
             alternate_graph,
             descriptor,
             alternate_descriptor,
+            linked_basis,
+            product_record,
+            result_domain_record,
+            portfolio_record,
             descriptor_id,
             representation_authority,
             replay_key,
@@ -846,6 +863,12 @@ impl Fixture {
             activation_cache: observed(self.activation_cache_key, REGISTRY, &self.activation_cache),
             descriptor: self.descriptor.observe(&self.rent),
             graph: self.graph.observe(&self.rent),
+            product_evidence: ProductEvidenceObservationV2 {
+                linked_basis: self.linked_basis.observe(&self.rent),
+                product: self.product_record.observe(&self.rent),
+                result_domain: self.result_domain_record.observe(&self.rent),
+                portfolio: self.portfolio_record.observe(&self.rent),
+            },
             core_market: observed(self.market, CORE, &self.core),
             claims_aggregate: observed(self.aggregate_key, CLAIMS, &self.aggregate),
             replay: ReplayObservationV2 {
@@ -948,6 +971,7 @@ impl Fixture {
         let replay_bytes = replay.to_bytes().expect("Custody replay").to_vec();
         assert_eq!(replay_bytes.len(), CUSTODY_REPLAY_BYTES_V1);
         OwnedTerminal {
+            terminal_coordinate: OwnedRecord::new([0xa5; 32], vec![0xb5; 32]),
             realm,
             collateral_mint_key,
             collateral_mint: mint_data(COption::None, 6, 6),
@@ -1032,6 +1056,7 @@ impl Fixture {
             outcome: WINNER,
             quantity: 1,
             realm: terminal.realm.observe(&self.rent),
+            terminal_coordinate: terminal.terminal_coordinate.observe(&self.rent),
             custody_replay: observed(
                 terminal.custody_replay_key,
                 CUSTODY,
@@ -1108,12 +1133,12 @@ fn all_five_requests_roundtrip_with_exact_sparse_or_full_frames() {
             &denominate,
             RepresentationActionV2::Denominate,
             1_u32,
-            28_usize,
+            36_usize,
         ),
-        (&reconstitute, RepresentationActionV2::Reconstitute, 1, 28),
-        (&issue, RepresentationActionV2::IssueStructured, 2, 32),
-        (&unwrap, RepresentationActionV2::UnwrapStructured, 2, 32),
-        (&redeem, RepresentationActionV2::RedeemTerminal, 1, 39),
+        (&reconstitute, RepresentationActionV2::Reconstitute, 1, 36),
+        (&issue, RepresentationActionV2::IssueStructured, 2, 40),
+        (&unwrap, RepresentationActionV2::UnwrapStructured, 2, 40),
+        (&redeem, RepresentationActionV2::RedeemTerminal, 1, 49),
     ] {
         let request = RepresentationRequestV2::decode(&built.instruction.data)
             .expect("operator request roundtrip");
@@ -1197,8 +1222,27 @@ fn account_order_signers_writability_and_sentinels_are_exact() {
         false,
         false,
     );
+    for (offset, record) in [
+        (24, &fixture.linked_basis),
+        (26, &fixture.product_record),
+        (28, &fixture.result_domain_record),
+        (30, &fixture.portfolio_record),
+    ] {
+        assert_meta(
+            metas.get(offset).expect("immutable raw record"),
+            record.raw,
+            false,
+            false,
+        );
+        assert_meta(
+            metas.get(offset + 1).expect("immutable staging cursor"),
+            record.staging,
+            false,
+            false,
+        );
+    }
     for (row, asset) in fixture.assets.iter().enumerate() {
-        let offset = 24 + row * 4;
+        let offset = 32 + row * 4;
         assert_meta(
             metas.get(offset).expect("custody Position"),
             asset.custody_position_key,
@@ -1254,25 +1298,25 @@ fn account_order_signers_writability_and_sentinels_are_exact() {
     );
     let asset = fixture.assets.get(1).expect("winner asset");
     assert_meta(
-        selected_metas.get(24).expect("custody Position"),
+        selected_metas.get(32).expect("custody Position"),
         asset.custody_position_key,
         false,
         true,
     );
     assert_meta(
-        selected_metas.get(25).expect("shard Mint"),
+        selected_metas.get(33).expect("shard Mint"),
         asset.shard_mint_key,
         false,
         true,
     );
     assert_meta(
-        selected_metas.get(26).expect("actor shard"),
+        selected_metas.get(34).expect("actor shard"),
         asset.actor_shard_key,
         false,
         true,
     );
     assert_meta(
-        selected_metas.get(27).expect("structured shard"),
+        selected_metas.get(35).expect("structured shard"),
         asset.structured_key,
         false,
         false,
@@ -1300,17 +1344,19 @@ fn account_order_signers_writability_and_sentinels_are_exact() {
         .as_ref()
         .expect("terminal fixture");
     for (offset, key, writable) in [
-        (28, terminal.custody_caller, false),
-        (29, CUSTODY, false),
-        (30, programdata(CUSTODY), false),
-        (31, terminal.realm.raw, false),
-        (32, terminal.realm.staging, false),
-        (33, terminal.custody_replay_key, true),
-        (34, terminal.collateral_mint_key, false),
-        (35, terminal.hoard_key, true),
-        (36, terminal.recipient_key, true),
-        (37, terminal.custody_authority, false),
-        (38, TOKEN, false),
+        (36, terminal.custody_caller, false),
+        (37, CUSTODY, false),
+        (38, programdata(CUSTODY), false),
+        (39, terminal.terminal_coordinate.raw, false),
+        (40, terminal.terminal_coordinate.staging, false),
+        (41, terminal.realm.raw, false),
+        (42, terminal.realm.staging, false),
+        (43, terminal.custody_replay_key, true),
+        (44, terminal.collateral_mint_key, false),
+        (45, terminal.hoard_key, true),
+        (46, terminal.recipient_key, true),
+        (47, terminal.custody_authority, false),
+        (48, TOKEN, false),
     ] {
         assert_meta(
             terminal_metas.get(offset).expect("terminal meta"),
@@ -1457,13 +1503,13 @@ fn hostile_chain_substitution_zero_width_replay_and_winner_refuse() {
     )
     .expect("canonical order");
     let mut reordered = canonical.instruction.accounts.clone();
-    reordered.swap(24, 25);
+    reordered.swap(32, 33);
     assert_ne!(reordered, canonical.instruction.accounts);
     assert_eq!(
         canonical
             .instruction
             .accounts
-            .get(24)
+            .get(32)
             .expect("Position")
             .pubkey,
         fixture
@@ -1473,7 +1519,7 @@ fn hostile_chain_substitution_zero_width_replay_and_winner_refuse() {
             .custody_position_key
     );
     assert_eq!(
-        canonical.instruction.accounts.get(25).expect("Mint").pubkey,
+        canonical.instruction.accounts.get(33).expect("Mint").pubkey,
         fixture.assets.first().expect("first asset").shard_mint_key
     );
 }

@@ -4,9 +4,9 @@ use dclutch_bearer_v2_contract::{
     BearerAssetIdentityV2, BearerBindingV2, BearerDescriptorV2, BearerResolutionV2, Error, prepare,
 };
 use dclutch_rational_representation_v2_contract::{
-    ABSENT_REVISION, ASSET_BYTES_V2, AssetV2, CallerRoleV2, Error as RepresentationError,
-    RepresentationActionV2, RepresentationRequestHeaderV2, RepresentationRequestV2,
-    TokenEffectStyleV2,
+    ABSENT_REVISION, ASSET_BYTES_V2, AffineBatchContextV2, AssetV2, CallerRoleV2,
+    Error as RepresentationError, RepresentationActionV2, RepresentationRequestHeaderV2,
+    RepresentationRequestV2, TokenEffectStyleV2,
 };
 use dclutch_rational_representation_v2_kernel::{
     ContentAdmissionV2, CoordinateObservation, DESCRIPTOR_COEFFICIENT_BYTES,
@@ -450,27 +450,35 @@ fn all_three_actions_use_the_shared_request_and_transferable_holder_identity() {
             assert_eq!(effect.style, expected_style);
             assert_eq!(effect.amount, request.header().quantity * DENOMINATOR);
             assert!(prepared.token_effects().nth(1).is_none());
-            let mut quantities =
-                vec![0_u8; prepared.claims_quantity_bytes().expect("Claims width")];
-            prepared
-                .write_claims_quantities(&mut quantities)
-                .expect("one-hot Claims vector");
-            for outcome in 0..WIDTH {
-                let offset = usize::try_from(outcome).expect("outcome") * 8;
-                let quantity = u64::from_le_bytes(
-                    quantities
-                        .get(offset..offset + 8)
-                        .expect("quantity")
-                        .try_into()
-                        .expect("quantity width"),
-                );
+            if action == RepresentationActionV2::RedeemTerminal {
                 assert_eq!(
-                    quantity,
-                    if outcome == SELECTED {
-                        request.header().quantity
-                    } else {
-                        0
-                    }
+                    prepared.affine_packet_bytes(),
+                    Err(RepresentationError::InvalidActionShape)
+                );
+            } else {
+                let mut packet =
+                    vec![0_u8; prepared.affine_packet_bytes().expect("affine packet width")];
+                let plan = prepared
+                    .write_affine_packet(
+                        id(50),
+                        Some(AffineBatchContextV2 {
+                            product_record_digest: id(51),
+                            semantic_basis_id: id(52),
+                            linked_basis_record_digest: id(53),
+                        }),
+                        &mut packet,
+                    )
+                    .expect("canonical affine packet")
+                    .expect("open Bearer action has Claims effect");
+                assert_eq!(plan.outcome_count(), WIDTH);
+                assert_eq!(plan.position_count(), 2);
+                assert_eq!(plan.row_count(), 1);
+                let row = plan.row(0).expect("selected affine row");
+                assert_eq!(row.outcome(), SELECTED);
+                assert_eq!(row.source_delta().magnitude(), request.header().quantity);
+                assert_eq!(
+                    row.destination_delta().magnitude(),
+                    request.header().quantity
                 );
             }
         }

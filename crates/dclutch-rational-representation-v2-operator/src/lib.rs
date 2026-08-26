@@ -101,10 +101,29 @@ pub struct ObservedAccountV2<'a> {
 /// Finalized raw record plus its exact vacant staging cursor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FinalizedRecordObservationV2<'a> {
+    /// Exact canonical schema identity selecting the Registry PDA domain.
+    pub schema_id: [u8; 32],
     /// Registry-owned content-addressed raw record.
     pub raw: ObservedAccountV2<'a>,
     /// System-owned vacant staging cursor.
     pub staging: ObservedAccountV2<'a>,
+}
+
+/// Exact immutable records required by the Claims economic/Product join.
+///
+/// These remain Registry-owned facts. The operator authenticates their
+/// content-addressed coordinates and the Claims adapter repeats full semantic
+/// Product/LiabilityBasis composition before any effect commits.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProductEvidenceObservationV2<'a> {
+    /// Product-linked LiabilityBasisV2 record selected by Claims.
+    pub linked_basis: FinalizedRecordObservationV2<'a>,
+    /// Product Runtime V2 graph-root record.
+    pub product: FinalizedRecordObservationV2<'a>,
+    /// Product-selected runtime result-domain record.
+    pub result_domain: FinalizedRecordObservationV2<'a>,
+    /// Product-selected exact rational portfolio record.
+    pub portfolio: FinalizedRecordObservationV2<'a>,
 }
 
 /// One physical runtime coordinate observed from Claims and Token state.
@@ -145,6 +164,8 @@ pub struct RationalObservationV2<'a> {
     pub descriptor: FinalizedRecordObservationV2<'a>,
     /// Finalized graph selected by the descriptor.
     pub graph: FinalizedRecordObservationV2<'a>,
+    /// Exact immutable Product/LiabilityBasis evidence consumed by Claims.
+    pub product_evidence: ProductEvidenceObservationV2<'a>,
     /// Current canonical Core Market.
     pub core_market: ObservedAccountV2<'a>,
     /// Current Claims aggregate.
@@ -193,6 +214,8 @@ pub struct TerminalObservationV2<'a> {
     pub quantity: u64,
     /// Finalized immutable Realm selected by Core.
     pub realm: FinalizedRecordObservationV2<'a>,
+    /// Finalized terminal coordinate selected by the LBV2 payout route.
+    pub terminal_coordinate: FinalizedRecordObservationV2<'a>,
     /// Current Custody replay account.
     pub custody_replay: ObservedAccountV2<'a>,
     /// Realm-selected collateral Mint.
@@ -494,6 +517,14 @@ fn authenticate_common<'a>(
     descriptor
         .authenticate_graph(graph)
         .map_err(|_| Error::InvalidRepresentation)?;
+    for record in [
+        observation.product_evidence.linked_basis,
+        observation.product_evidence.product,
+        observation.product_evidence.result_domain,
+        observation.product_evidence.portfolio,
+    ] {
+        authenticate_observed_record(record, observation.registry_program, observation.rent)?;
+    }
 
     let (roles, release_set) = authenticate_activation(observation, descriptor)?;
     let core = authenticate_core(observation, descriptor, roles.core, release_set)?;
@@ -679,20 +710,37 @@ fn authenticate_record(
     digest: [u8; 32],
     rent: &Rent,
 ) -> Result<()> {
+    if observation.schema_id != schema {
+        return Err(Error::InvalidFinalizedRecord);
+    }
+    authenticate_observed_record(observation, registry_program, rent)?;
+    if hash(observation.raw.data).to_bytes() != digest {
+        return Err(Error::InvalidFinalizedRecord);
+    }
+    Ok(())
+}
+
+fn authenticate_observed_record(
+    observation: FinalizedRecordObservationV2<'_>,
+    registry_program: Pubkey,
+    rent: &Rent,
+) -> Result<()> {
+    require_nonzero(observation.schema_id)?;
+    let digest = hash(observation.raw.data).to_bytes();
     let raw = Pubkey::find_program_address(
-        &[RAW_RECORD_PDA_SEED_V1, &schema, &digest],
+        &[RAW_RECORD_PDA_SEED_V1, &observation.schema_id, &digest],
         &registry_program,
     )
     .0;
     let staging = Pubkey::find_program_address(
-        &[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest],
+        &[STAGING_CURSOR_PDA_SEED_V1, &observation.schema_id, &digest],
         &registry_program,
     )
     .0;
     if observation.raw.key != raw
         || observation.raw.owner != registry_program
         || observation.raw.executable
-        || hash(observation.raw.data).to_bytes() != digest
+        || observation.raw.data.is_empty()
         || !rent.is_exempt(observation.raw.lamports, observation.raw.data.len())
         || observation.staging.key != staging
         || observation.staging.owner != system_program::ID
@@ -1072,6 +1120,11 @@ fn authenticate_terminal_context(
         realm_digest,
         common.observation.rent,
     )?;
+    authenticate_observed_record(
+        terminal.terminal_coordinate,
+        common.observation.registry_program,
+        common.observation.rent,
+    )?;
     if common.core.identity.realm_id.to_bytes() != realm_digest {
         return Err(Error::InvalidTerminal);
     }
@@ -1315,6 +1368,37 @@ fn finish_instruction(
         } else {
             AccountMeta::new_readonly(common.roles.claims, false)
         },
+        AccountMeta::new_readonly(
+            common.observation.product_evidence.linked_basis.raw.key,
+            false,
+        ),
+        AccountMeta::new_readonly(
+            common.observation.product_evidence.linked_basis.staging.key,
+            false,
+        ),
+        AccountMeta::new_readonly(common.observation.product_evidence.product.raw.key, false),
+        AccountMeta::new_readonly(
+            common.observation.product_evidence.product.staging.key,
+            false,
+        ),
+        AccountMeta::new_readonly(
+            common.observation.product_evidence.result_domain.raw.key,
+            false,
+        ),
+        AccountMeta::new_readonly(
+            common
+                .observation
+                .product_evidence
+                .result_domain
+                .staging
+                .key,
+            false,
+        ),
+        AccountMeta::new_readonly(common.observation.product_evidence.portfolio.raw.key, false),
+        AccountMeta::new_readonly(
+            common.observation.product_evidence.portfolio.staging.key,
+            false,
+        ),
     ]);
     for asset in &assets {
         let selected = header.action.selected_outcome();
@@ -1342,6 +1426,8 @@ fn finish_instruction(
             AccountMeta::new_readonly(frame.derived.custody_caller_authority, false),
             AccountMeta::new_readonly(common.roles.custody, false),
             AccountMeta::new_readonly(common.roles.custody_programdata, false),
+            AccountMeta::new_readonly(frame.observation.terminal_coordinate.raw.key, false),
+            AccountMeta::new_readonly(frame.observation.terminal_coordinate.staging.key, false),
             AccountMeta::new_readonly(frame.observation.realm.raw.key, false),
             AccountMeta::new_readonly(frame.observation.realm.staging.key, false),
             AccountMeta::new(frame.derived.custody_replay, false),
