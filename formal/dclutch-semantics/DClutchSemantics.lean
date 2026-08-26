@@ -51,6 +51,7 @@ import DClutchSemantics.CapabilityProgramV3Abi
 import DClutchSemantics.CapabilityProgramV4Abi
 import DClutchSemantics.RequestProfileAbi
 import DClutchSemantics.RequestProfileV4Abi
+import DClutchSemantics.StateLifecyclePolicyV5Abi
 
 /-!
 Fresh Lean-owned semantics for dClutch's compact protocol specializer.
