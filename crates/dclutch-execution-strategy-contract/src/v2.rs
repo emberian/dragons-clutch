@@ -6,6 +6,8 @@ use dclutch_capability_program_contract::{v3 as capability_v3, v3::CapabilityPro
 use dclutch_core_contract::ContentId;
 use dclutch_release_set_contract::ArtifactReleaseIdV1;
 
+use crate::shadow_v3::{SHADOW_ACK_SCHEMA_ID_V3, SHADOW_REQUEST_SCHEMA_ID_V3};
+
 #[rustfmt::skip]
 #[allow(missing_docs)]
 #[path = "generated_v2.rs"]
@@ -123,6 +125,20 @@ pub enum StrategyDispositionV2 {
     AdmittedAot,
 }
 
+/// Exact paired accelerator transport selected by a Strategy record.
+///
+/// The pair is semantic authority: request and acknowledgement schemas may
+/// never be mixed across profiles. Interpreted and admitted-AOT retain the
+/// chunked candidate-bank V2 transport, while Shadow-AOT uses the read-only
+/// transcript/digest V3 transport.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AcceleratorTransportProfileV2 {
+    /// Chunked candidate-bank request and acknowledgement used by admitted AOT.
+    ChunkedBankV2,
+    /// Complete read-only runtime/candidate/effect comparison used by Shadow AOT.
+    ShadowTranscriptV3,
+}
+
 impl StrategyDispositionV2 {
     const fn tag(self) -> u8 {
         match self {
@@ -172,9 +188,19 @@ impl ExecutionStrategyProgramV2 {
     ) -> Result<Self> {
         if certificate_schema != schema_id(EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2)?
             || admission_schema != schema_id(EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2)?
-            || request_schema != schema_id(ACCELERATOR_REQUEST_SCHEMA_ID_V2)?
-            || ack_schema != schema_id(ACCELERATOR_ACK_SCHEMA_ID_V2)?
         {
+            return Err(Error::UnsupportedSchema);
+        }
+        let transport = transport_profile(request_schema, ack_schema)?;
+        let transport_matches_disposition = match disposition {
+            StrategyDispositionV2::ShadowAot => {
+                transport == AcceleratorTransportProfileV2::ShadowTranscriptV3
+            }
+            StrategyDispositionV2::Interpreted | StrategyDispositionV2::AdmittedAot => {
+                transport == AcceleratorTransportProfileV2::ChunkedBankV2
+            }
+        };
+        if !transport_matches_disposition {
             return Err(Error::UnsupportedSchema);
         }
         let presence_is_canonical = match disposition {
@@ -326,6 +352,30 @@ impl ExecutionStrategyProgramV2 {
     /// Exact generic accelerator-acknowledgement schema identity.
     pub const fn ack_schema(self) -> ContentId {
         self.ack_schema
+    }
+
+    /// Exact paired accelerator transport selected by this accepted record.
+    pub fn transport_profile(self) -> Result<AcceleratorTransportProfileV2> {
+        transport_profile(self.request_schema, self.ack_schema)
+    }
+}
+
+fn transport_profile(
+    request_schema: ContentId,
+    ack_schema: ContentId,
+) -> Result<AcceleratorTransportProfileV2> {
+    let request_v2 = schema_id(ACCELERATOR_REQUEST_SCHEMA_ID_V2)?;
+    let ack_v2 = schema_id(ACCELERATOR_ACK_SCHEMA_ID_V2)?;
+    let request_v3 = schema_id(SHADOW_REQUEST_SCHEMA_ID_V3)?;
+    let ack_v3 = schema_id(SHADOW_ACK_SCHEMA_ID_V3)?;
+    match (request_schema, ack_schema) {
+        (request, ack) if request == request_v2 && ack == ack_v2 => {
+            Ok(AcceleratorTransportProfileV2::ChunkedBankV2)
+        }
+        (request, ack) if request == request_v3 && ack == ack_v3 => {
+            Ok(AcceleratorTransportProfileV2::ShadowTranscriptV3)
+        }
+        _ => Err(Error::UnsupportedSchema),
     }
 }
 
@@ -1702,6 +1752,16 @@ mod tests {
             StrategyDispositionV2::AdmittedAot => Some(id(4)),
             StrategyDispositionV2::Interpreted | StrategyDispositionV2::ShadowAot => None,
         };
+        let (request_schema, ack_schema) = match disposition {
+            StrategyDispositionV2::ShadowAot => (
+                schema_id(SHADOW_REQUEST_SCHEMA_ID_V3).expect("Shadow request schema"),
+                schema_id(SHADOW_ACK_SCHEMA_ID_V3).expect("Shadow ack schema"),
+            ),
+            StrategyDispositionV2::Interpreted | StrategyDispositionV2::AdmittedAot => (
+                schema_id(ACCELERATOR_REQUEST_SCHEMA_ID_V2).expect("request schema"),
+                schema_id(ACCELERATOR_ACK_SCHEMA_ID_V2).expect("ack schema"),
+            ),
+        };
         ExecutionStrategyProgramV2::new(
             disposition,
             id(1),
@@ -1710,8 +1770,8 @@ mod tests {
             certificate,
             schema_id(EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2).expect("schema"),
             admission,
-            schema_id(ACCELERATOR_REQUEST_SCHEMA_ID_V2).expect("schema"),
-            schema_id(ACCELERATOR_ACK_SCHEMA_ID_V2).expect("schema"),
+            request_schema,
+            ack_schema,
         )
         .expect("strategy")
     }
@@ -1771,6 +1831,17 @@ mod tests {
             let strategy = strategy(disposition);
             let bytes = strategy.to_bytes();
             assert_eq!(ExecutionStrategyProgramV2::decode(&bytes), Ok(strategy));
+            assert_eq!(
+                strategy.transport_profile(),
+                Ok(match disposition {
+                    StrategyDispositionV2::ShadowAot => {
+                        AcceleratorTransportProfileV2::ShadowTranscriptV3
+                    }
+                    StrategyDispositionV2::Interpreted | StrategyDispositionV2::AdmittedAot => {
+                        AcceleratorTransportProfileV2::ChunkedBankV2
+                    }
+                })
+            );
         }
         let mut hostile = strategy(StrategyDispositionV2::Interpreted).to_bytes();
         *hostile
@@ -1794,6 +1865,46 @@ mod tests {
         assert_eq!(
             ExecutionStrategyProgramV2::decode(&inactive),
             Err(Error::NonCanonicalReservedBytes)
+        );
+
+        for (request_schema, ack_schema) in [
+            (
+                schema_id(SHADOW_REQUEST_SCHEMA_ID_V3).expect("Shadow request"),
+                schema_id(ACCELERATOR_ACK_SCHEMA_ID_V2).expect("V2 ack"),
+            ),
+            (
+                schema_id(ACCELERATOR_REQUEST_SCHEMA_ID_V2).expect("V2 request"),
+                schema_id(SHADOW_ACK_SCHEMA_ID_V3).expect("Shadow ack"),
+            ),
+        ] {
+            assert_eq!(
+                ExecutionStrategyProgramV2::new(
+                    StrategyDispositionV2::ShadowAot,
+                    id(1),
+                    id(2),
+                    schema_id(EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2).expect("schema"),
+                    Some(id(3)),
+                    schema_id(EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2).expect("schema"),
+                    None,
+                    request_schema,
+                    ack_schema,
+                ),
+                Err(Error::UnsupportedSchema)
+            );
+        }
+        assert_eq!(
+            ExecutionStrategyProgramV2::new(
+                StrategyDispositionV2::ShadowAot,
+                id(1),
+                id(2),
+                schema_id(EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2).expect("schema"),
+                Some(id(3)),
+                schema_id(EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2).expect("schema"),
+                None,
+                schema_id(ACCELERATOR_REQUEST_SCHEMA_ID_V2).expect("V2 request"),
+                schema_id(ACCELERATOR_ACK_SCHEMA_ID_V2).expect("V2 ack"),
+            ),
+            Err(Error::UnsupportedSchema)
         );
     }
 

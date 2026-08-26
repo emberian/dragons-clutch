@@ -4,6 +4,9 @@ use std::{boxed::Box, vec, vec::Vec};
 
 use dclutch_capability_program_contract::{CapabilityRootHeaderV1, v3::CapabilityProgramV3};
 use dclutch_core_contract::ContentId;
+use dclutch_execution_strategy_contract::shadow_v3::{
+    SHADOW_ACK_SCHEMA_ID_V3, SHADOW_REQUEST_SCHEMA_ID_V3,
+};
 use dclutch_execution_strategy_contract::v2::{
     ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
@@ -222,6 +225,16 @@ impl Fixture {
                 (Some(certificate_program_id), Some(admission_program_id))
             }
         };
+        let (request_schema, ack_schema) = match disposition {
+            StrategyDispositionV2::ShadowAot => (
+                schema(SHADOW_REQUEST_SCHEMA_ID_V3),
+                schema(SHADOW_ACK_SCHEMA_ID_V3),
+            ),
+            StrategyDispositionV2::Interpreted | StrategyDispositionV2::AdmittedAot => (
+                schema(ACCELERATOR_REQUEST_SCHEMA_ID_V2),
+                schema(ACCELERATOR_ACK_SCHEMA_ID_V2),
+            ),
+        };
         let strategy = ExecutionStrategyProgramV2::new(
             disposition,
             id(11),
@@ -230,8 +243,8 @@ impl Fixture {
             certificate_selection,
             schema(EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2),
             admission_selection,
-            schema(ACCELERATOR_REQUEST_SCHEMA_ID_V2),
-            schema(ACCELERATOR_ACK_SCHEMA_ID_V2),
+            request_schema,
+            ack_schema,
         )
         .expect("strategy");
         let strategy_bytes = strategy.to_bytes();
