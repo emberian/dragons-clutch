@@ -36,6 +36,7 @@ pub const GENERIC_FOUNDING_MAX_FUNDING_STATES_V1: usize = 16;
 
 const VERSION_V1: u16 = 1;
 const REQUEST_IDENTITIES_OFFSET: usize = 16;
+const REQUEST_CAPABILITY_ROOT_OFFSET: usize = REQUEST_IDENTITIES_OFFSET + 2 * 32;
 const REQUEST_GENERATION_OFFSET: usize = 336;
 const ACK_IDENTITIES_OFFSET: usize = 16;
 const ACK_GENERATION_OFFSET: usize = 240;
@@ -339,6 +340,33 @@ impl GenericFoundingRequestV1 {
         self.quantity
             .checked_mul(self.basis_scale)
             .ok_or(Error::InvalidCoordinates)
+    }
+
+    /// Encode the canonical root-free capability-selection preimage.
+    ///
+    /// The Trading capability-root PDA commits to the selected capability
+    /// config identity, and the selected config identity is the digest of this
+    /// preimage. A preimage that carried the root address back would therefore
+    /// demand a SHA-256 fixed point and no honest founder could ever produce
+    /// one. This projection pins the Found-and-permit stage and clears only the
+    /// capability-root identity; every other artifact coordinate stays bound
+    /// byte-for-byte, so the root address still commits to the exact Market,
+    /// generation, release set, context, vaults, funding list, widths, rents,
+    /// and revision.
+    pub fn selection_preimage(self) -> Result<[u8; GENERIC_FOUNDING_REQUEST_BYTES_V1], Error> {
+        let mut bytes = self
+            .with_stage(GenericFoundingStageV1::FoundAndPermit)?
+            .encode()?;
+        put(&mut bytes, REQUEST_CAPABILITY_ROOT_OFFSET, &[0; 32])?;
+        Ok(bytes)
+    }
+
+    /// Return the exact selected capability config identity for this request.
+    ///
+    /// This is the sole value a Trading capability root may carry as its
+    /// selection config when the root authorizes atomic generic founding.
+    pub fn selection_config_id(self) -> Result<Identity, Error> {
+        Identity::new(Sha256::digest(self.selection_preimage()?).into())
     }
 
     /// Return the same artifact coordinates for the other atomic stage.
@@ -715,6 +743,73 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn selection_preimage_is_root_free_stage_free_and_coordinate_bound() {
+        let found = request(GenericFoundingStageV1::FoundAndPermit);
+        let open = request(GenericFoundingStageV1::Open);
+        assert_eq!(
+            found.selection_preimage().expect("found preimage"),
+            open.selection_preimage().expect("open preimage")
+        );
+        assert_eq!(
+            found.selection_config_id().expect("found config"),
+            open.selection_config_id().expect("open config")
+        );
+
+        let mut rerooted = found;
+        rerooted.capability_root = id(0x5a);
+        assert_ne!(rerooted, found);
+        assert_eq!(
+            rerooted.selection_config_id().expect("rerooted config"),
+            found.selection_config_id().expect("found config")
+        );
+
+        let preimage = found.selection_preimage().expect("preimage");
+        assert_eq!(
+            preimage
+                .get(REQUEST_CAPABILITY_ROOT_OFFSET..REQUEST_CAPABILITY_ROOT_OFFSET + 32)
+                .expect("root span"),
+            [0; 32].as_slice()
+        );
+        assert_ne!(preimage, found.encode().expect("encoded request"));
+
+        for mutated in [
+            GenericFoundingRequestV1 {
+                market: id(0x5b),
+                ..found
+            },
+            GenericFoundingRequestV1 {
+                context: id(0x5c),
+                ..found
+            },
+            GenericFoundingRequestV1 {
+                hoard: id(0x5d),
+                ..found
+            },
+            GenericFoundingRequestV1 {
+                generation: 12,
+                ..found
+            },
+            GenericFoundingRequestV1 {
+                quantity: 13,
+                ..found
+            },
+            GenericFoundingRequestV1 {
+                expiry_slot: 15,
+                ..found
+            },
+            GenericFoundingRequestV1 {
+                projected_resulting_revision: 3,
+                ..found
+            },
+        ] {
+            assert_ne!(
+                mutated.selection_config_id().expect("mutated config"),
+                found.selection_config_id().expect("found config")
+            );
+        }
     }
 
     #[test]

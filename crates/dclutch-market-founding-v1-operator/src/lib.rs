@@ -9,11 +9,13 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+use dclutch_capability_program_contract::CapabilityRootHeaderV1;
 use dclutch_core_contract::ContentId;
 use dclutch_market_core_codec::{
     GENERIC_FOUNDING_REQUEST_BYTES_V1, GenericFoundingRequestV1, GenericFoundingStageV1, Identity,
     SeriesFoundingPermitSeedsV1, generic_founding_funding_list_id_v1,
 };
+use dclutch_release_set_contract::CapabilityExecutionSelectionV1;
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{hash::hash, pubkey::Pubkey};
 
@@ -26,6 +28,8 @@ pub enum GenericMarketFoundingOperatorErrorV1 {
     ArtifactEncoding,
     /// A derived digest, signer seed, or PDA coordinate refused.
     Derivation,
+    /// The supplied capability selection coordinates refused.
+    Selection,
 }
 
 /// Authenticated artifact whose private fields cannot be caller-authored.
@@ -72,6 +76,101 @@ pub struct GenericMarketFoundingPlanV1 {
     pub permit: Pubkey,
     /// Exact selected artifact identity retained for Hot provenance.
     pub artifact_id: ContentId,
+}
+
+/// Deterministic Trading capability-root selection for one founding request.
+///
+/// The root address commits to the selected capability config identity, and
+/// that identity is the digest of the request's root-free selection preimage.
+/// Deriving in this order is the only acyclic construction: hashing the whole
+/// request would require the request to carry the address of a PDA whose seeds
+/// already contain that hash.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GenericFoundingRootSelectionV1 {
+    /// Exact request the Trading outer and Core will authenticate, carrying
+    /// the derived capability root.
+    pub request: GenericFoundingRequestV1,
+    /// Manifest-derived selection persisted in the Trading root header.
+    pub selection: CapabilityExecutionSelectionV1,
+    /// Immutable Trading root header committing to the selection.
+    pub header: CapabilityRootHeaderV1,
+    /// Sole Trading-owned capability-root PDA.
+    pub capability_root: Pubkey,
+    /// Selected capability config identity, equal to the preimage digest.
+    pub config: ContentId,
+}
+
+/// Derive the acyclic capability-root selection for one founding request.
+///
+/// `template` supplies every artifact coordinate except the capability root;
+/// its own `capability_root` field is a placeholder and is discarded. The
+/// returned `request` is the finalized artifact.
+pub fn construct_generic_founding_root_selection_v1(
+    trading_program: Pubkey,
+    template: GenericFoundingRequestV1,
+    manifest: [u8; 32],
+    entry_index: u16,
+    kind: [u8; 32],
+    capability_release: [u8; 32],
+) -> Result<GenericFoundingRootSelectionV1, GenericMarketFoundingOperatorErrorV1> {
+    let config = template
+        .selection_config_id()
+        .map_err(|_| GenericMarketFoundingOperatorErrorV1::ArtifactEncoding)?;
+    let selection = CapabilityExecutionSelectionV1::from_bytes(
+        entry_index,
+        manifest,
+        kind,
+        capability_release,
+        config.to_bytes(),
+    )
+    .map_err(|_| GenericMarketFoundingOperatorErrorV1::Selection)?;
+    let header = CapabilityRootHeaderV1::new(
+        content(template.release_set().to_bytes())?,
+        template.market().to_bytes(),
+        template.generation(),
+        selection,
+    )
+    .map_err(|_| GenericMarketFoundingOperatorErrorV1::Selection)?;
+    let capability_root =
+        Pubkey::find_program_address(&header.seeds().as_slices(), &trading_program).0;
+    let root_identity = Identity::new(capability_root.to_bytes())
+        .map_err(|_| GenericMarketFoundingOperatorErrorV1::Derivation)?;
+    let request = GenericFoundingRequestV1::new(
+        GenericFoundingStageV1::FoundAndPermit,
+        template.funding_count(),
+        template.release_set(),
+        template.market(),
+        root_identity,
+        template.context(),
+        template.founder(),
+        template.beneficiary(),
+        template.funding_source(),
+        template.hoard(),
+        template.projected_replay(),
+        template.funding_list_id(),
+        template.generation(),
+        template.quantity(),
+        template.basis_scale(),
+        template.expiry_slot(),
+        template.market_rent(),
+        template.permit_rent(),
+        template.projected_resulting_revision(),
+    )
+    .map_err(|_| GenericMarketFoundingOperatorErrorV1::ArtifactEncoding)?;
+    if request
+        .selection_config_id()
+        .map_err(|_| GenericMarketFoundingOperatorErrorV1::ArtifactEncoding)?
+        != config
+    {
+        return Err(GenericMarketFoundingOperatorErrorV1::Derivation);
+    }
+    Ok(GenericFoundingRootSelectionV1 {
+        request,
+        selection,
+        header,
+        capability_root,
+        config: content(config.to_bytes())?,
+    })
 }
 
 /// Authenticate exact selected artifact bytes.
@@ -234,6 +333,94 @@ mod tests {
             open.with_stage(GenericFoundingStageV1::FoundAndPermit)
                 .expect("found"),
             selected.request()
+        );
+    }
+
+    #[test]
+    fn capability_root_selection_is_acyclic_and_satisfies_core_authentication() {
+        let trading = Pubkey::new_from_array([21; 32]);
+        let template = GenericFoundingRequestV1::decode(&artifact()).expect("template");
+        let selected = construct_generic_founding_root_selection_v1(
+            trading, template, [0x71; 32], 3, [0x72; 32], [0x73; 32],
+        )
+        .expect("acyclic root selection");
+
+        // Exactly the conjunction Core's authenticate_root evaluates.
+        let header = selected.header;
+        assert_eq!(
+            Pubkey::find_program_address(&header.seeds().as_slices(), &trading).0,
+            selected.capability_root
+        );
+        assert_eq!(
+            selected.request.capability_root().to_bytes(),
+            selected.capability_root.to_bytes()
+        );
+        assert_eq!(
+            header.release_set().to_bytes(),
+            selected.request.release_set().to_bytes()
+        );
+        assert_eq!(header.market(), selected.request.market().to_bytes());
+        assert_eq!(header.generation(), selected.request.generation());
+        assert_eq!(
+            header.selection().config().to_bytes(),
+            hash(
+                &selected
+                    .request
+                    .selection_preimage()
+                    .expect("found preimage")
+            )
+            .to_bytes()
+        );
+
+        // The commit-last Open stage reuses the same root without a second
+        // activation, because the preimage fixes the Found-and-permit stage.
+        let open = selected
+            .request
+            .with_stage(GenericFoundingStageV1::Open)
+            .expect("open stage");
+        assert_eq!(
+            header.selection().config().to_bytes(),
+            hash(&open.selection_preimage().expect("open preimage")).to_bytes()
+        );
+
+        // Hashing the whole finalized request instead is the cycle this
+        // construction exists to break: it can never equal the selected config.
+        assert_ne!(
+            header.selection().config().to_bytes(),
+            hash(&selected.request.encode().expect("request bytes")).to_bytes()
+        );
+
+        // Any other substituted coordinate moves the root, so a hostile
+        // artifact cannot reuse an activated capability root.
+        let hostile = GenericFoundingRequestV1::new(
+            GenericFoundingStageV1::FoundAndPermit,
+            selected.request.funding_count(),
+            selected.request.release_set(),
+            selected.request.market(),
+            selected.request.capability_root(),
+            selected.request.context(),
+            selected.request.founder(),
+            selected.request.beneficiary(),
+            selected.request.funding_source(),
+            selected.request.hoard(),
+            selected.request.projected_replay(),
+            selected.request.funding_list_id(),
+            selected.request.generation(),
+            selected.request.quantity(),
+            selected.request.basis_scale(),
+            selected.request.expiry_slot(),
+            selected.request.market_rent(),
+            selected.request.permit_rent(),
+            selected
+                .request
+                .projected_resulting_revision()
+                .checked_add(1)
+                .expect("revision"),
+        )
+        .expect("hostile request");
+        assert_ne!(
+            header.selection().config().to_bytes(),
+            hash(&hostile.selection_preimage().expect("hostile preimage")).to_bytes()
         );
     }
 

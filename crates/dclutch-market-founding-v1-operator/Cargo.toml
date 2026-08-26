@@ -9,6 +9,7 @@ rust-version.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+dclutch-capability-program-contract = { path = "../dclutch-capability-program-contract" }
 dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
 dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }

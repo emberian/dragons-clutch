@@ -696,10 +696,12 @@ fn authenticate_root(
             .ok_or(CoreSbfError::Reference)?,
     )
     .map_err(|_| CoreSbfError::Reference)?;
+    // The root PDA commits to the selected config identity, so the selected
+    // config identity may not commit back to the root address. The codec owns
+    // the sole root-free selection preimage; hashing the whole request here
+    // would demand a SHA-256 fixed point and refuse every honest founder.
     let selected = request
-        .with_stage(GenericFoundingStageV1::FoundAndPermit)
-        .map_err(|_| CoreSbfError::Instruction)?
-        .encode()
+        .selection_preimage()
         .map_err(|_| CoreSbfError::Instruction)?;
     if Pubkey::find_program_address(&header.seeds().as_slices(), trading_program.key).0 != *root.key
         || header.release_set().to_bytes() != request.release_set().to_bytes()
