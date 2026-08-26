@@ -443,6 +443,59 @@ pub enum AccountPrestateV2 {
     AuthenticatedOpaqueReadonlyData,
 }
 
+/// Exact data-shape contract for one unique physical representative.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PhysicalAccountDataGeometryV2 {
+    /// The account body has exactly `bytes` bytes.
+    Exact {
+        /// Exact account-data byte width.
+        bytes: usize,
+    },
+    /// Lifecycle policy admits either vacant data or exactly `live_bytes`.
+    VacantOrExact {
+        /// Exact byte width after lifecycle creation or authentication.
+        live_bytes: usize,
+    },
+    /// The adapter authenticates a variable body with this checked minimum.
+    AdapterAuthenticatedVariable {
+        /// Checked fixed-prefix byte width.
+        minimum_bytes: usize,
+    },
+    /// The profile authenticates no account-data semantics for this identity.
+    Opaque,
+}
+
+/// Kernel-owned geometry for one packed physical account representative.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PhysicalAccountGeometryV2 {
+    logical_representative: usize,
+    privileges: RouteAccountPrivilegesV2,
+    rule: AccountRuleV2,
+    data: PhysicalAccountDataGeometryV2,
+}
+
+impl PhysicalAccountGeometryV2 {
+    /// Canonical logical self-coordinate represented by this physical account.
+    pub const fn logical_representative(self) -> usize {
+        self.logical_representative
+    }
+
+    /// Exact physical signer/writable/executable privilege union.
+    pub const fn privileges(self) -> RouteAccountPrivilegesV2 {
+        self.privileges
+    }
+
+    /// Semantic-owner rule for this unique representative.
+    pub const fn rule(self) -> AccountRuleV2 {
+        self.rule
+    }
+
+    /// Exact, lifecycle, variable-prefix, or opaque data geometry.
+    pub const fn data(self) -> PhysicalAccountDataGeometryV2 {
+        self.data
+    }
+}
+
 /// One descriptor-owned dynamic account span inserted into a fixed sequence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DynamicFixedSpanV2 {
@@ -1331,6 +1384,53 @@ impl<'a> AccountProfileV2<'a> {
             coordinate = coordinate.checked_add(1).ok_or(Error::InvalidLength)?;
         }
         Err(Error::InvalidCoordinate)
+    }
+
+    /// Kernel-owned packed-account geometry for one physical ordinal.
+    pub fn physical_account_geometry(
+        self,
+        tail_count: u32,
+        physical_ordinal: usize,
+    ) -> Result<PhysicalAccountGeometryV2> {
+        let representative =
+            self.physical_representative_coordinate(tail_count, physical_ordinal)?;
+        let rule = expanded_rule(self, representative)?;
+        Ok(PhysicalAccountGeometryV2 {
+            logical_representative: representative,
+            privileges: RouteAccountPrivilegesV2 {
+                bits: representative_privileges(self, tail_count, representative)?,
+            },
+            rule,
+            data: physical_data_geometry(rule, tail_count)?,
+        })
+    }
+
+    /// Kernel-owned packed-account geometry for one expanded profile-13 ordinal.
+    pub fn physical_account_geometry_with_dynamic_spans(
+        self,
+        tail_count: u32,
+        span_counts: &[u32],
+        physical_ordinal: usize,
+    ) -> Result<PhysicalAccountGeometryV2> {
+        let representative = self.physical_representative_coordinate_with_dynamic_spans(
+            tail_count,
+            span_counts,
+            physical_ordinal,
+        )?;
+        let rule = expanded_rule_with_dynamic_spans(self, tail_count, span_counts, representative)?;
+        Ok(PhysicalAccountGeometryV2 {
+            logical_representative: representative,
+            privileges: RouteAccountPrivilegesV2 {
+                bits: representative_privileges_with_dynamic_spans(
+                    self,
+                    tail_count,
+                    span_counts,
+                    representative,
+                )?,
+            },
+            rule,
+            data: physical_data_geometry(rule, tail_count)?,
+        })
     }
 
     /// Route-local privilege subset for one expanded logical coordinate.
@@ -3386,6 +3486,29 @@ fn exact_rule_data_length(rule: AccountRuleV2, tail_count: u32) -> Result<usize>
         .and_then(|tail| u64::from(rule.data_length).checked_add(tail))
         .ok_or(Error::DataLengthMismatch)?;
     usize::try_from(width).map_err(|_| Error::DataLengthMismatch)
+}
+
+fn physical_data_geometry(
+    rule: AccountRuleV2,
+    tail_count: u32,
+) -> Result<PhysicalAccountDataGeometryV2> {
+    let bytes = exact_rule_data_length(rule, tail_count)?;
+    match rule.prestate {
+        AccountPrestateV2::Exact => Ok(PhysicalAccountDataGeometryV2::Exact { bytes }),
+        AccountPrestateV2::LifecycleBound => {
+            Ok(PhysicalAccountDataGeometryV2::VacantOrExact { live_bytes: bytes })
+        }
+        AccountPrestateV2::AdapterAuthenticatedVariableData => Ok(
+            PhysicalAccountDataGeometryV2::AdapterAuthenticatedVariable {
+                minimum_bytes: bytes,
+            },
+        ),
+        AccountPrestateV2::AuthenticatedOpaqueReadonlyData => {
+            Ok(PhysicalAccountDataGeometryV2::Opaque)
+        }
+        AccountPrestateV2::AdapterAuthenticatedVariableDataAlias
+        | AccountPrestateV2::AuthenticatedRouteAlias => Err(Error::InvalidAlias),
+    }
 }
 
 fn projected_data_field(

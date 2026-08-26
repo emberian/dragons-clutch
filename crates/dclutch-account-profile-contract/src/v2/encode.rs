@@ -1388,7 +1388,7 @@ mod tests {
     use super::*;
     use crate::AccountObservationV1;
     use crate::v2::{
-        ProjectionRegistersV2, TRUSTED_ENVIRONMENT_RESERVED_OFFSET,
+        PhysicalAccountDataGeometryV2, ProjectionRegistersV2, TRUSTED_ENVIRONMENT_RESERVED_OFFSET,
         derive_effect_permissions_with_dynamic_spans, project_atomic,
         project_dynamic_fixed_spans_atomic,
     };
@@ -3314,6 +3314,26 @@ mod tests {
             profile.physical_representative_coordinate(0, 2),
             Err(Error::InvalidCoordinate)
         );
+        let representative_geometry = profile
+            .physical_account_geometry(0, 0)
+            .expect("physical representative geometry");
+        assert_eq!(representative_geometry.logical_representative(), 0);
+        assert!(representative_geometry.privileges().writable());
+        assert_eq!(
+            representative_geometry.data(),
+            PhysicalAccountDataGeometryV2::Exact { bytes: 4 }
+        );
+        assert_eq!(
+            profile
+                .physical_account_geometry(0, 1)
+                .expect("system geometry")
+                .data(),
+            PhysicalAccountDataGeometryV2::Exact { bytes: 0 }
+        );
+        assert_eq!(
+            profile.physical_account_geometry(0, 2),
+            Err(Error::InvalidCoordinate)
+        );
         assert!(
             !profile
                 .route_privileges(0, 0)
@@ -3633,6 +3653,23 @@ mod tests {
         assert_eq!(
             profile.physical_account_ordinal_with_dynamic_spans(9, &[2], 5),
             Ok(4)
+        );
+        let opaque_geometry = profile
+            .physical_account_geometry_with_dynamic_spans(9, &[2], 3)
+            .expect("opaque physical geometry");
+        assert_eq!(opaque_geometry.logical_representative(), 3);
+        assert_eq!(
+            opaque_geometry.data(),
+            PhysicalAccountDataGeometryV2::Opaque
+        );
+        let ticket_geometry = profile
+            .physical_account_geometry_with_dynamic_spans(9, &[2], 4)
+            .expect("outer-writable physical geometry");
+        assert_eq!(ticket_geometry.logical_representative(), 4);
+        assert!(ticket_geometry.privileges().writable());
+        assert_eq!(
+            ticket_geometry.data(),
+            PhysicalAccountDataGeometryV2::Exact { bytes: 4 }
         );
         assert!(
             !profile
