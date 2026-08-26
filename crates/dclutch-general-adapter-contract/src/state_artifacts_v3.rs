@@ -232,7 +232,7 @@ pub fn encode_general_state_lifecycle_v3_atomic(
 /// successor artifact chain.
 pub fn encode_general_state_lifecycle_v5_atomic(
     action: Action,
-    child_widths: GeneralChildRentWidthsV5,
+    child_widths: Option<GeneralChildRentWidthsV5>,
     scratch: &mut [u8],
     output: &mut [u8],
 ) -> Result<()> {
@@ -473,13 +473,24 @@ impl CurrentRentQuoteBufferV5 {
 
 fn general_current_rent_quotes_v5(
     action: Action,
-    child_widths: GeneralChildRentWidthsV5,
+    child_widths: Option<GeneralChildRentWidthsV5>,
 ) -> Result<CurrentRentQuoteBufferV5> {
-    if action == Action::InitializeSettlement
-        && (child_widths.position == 0 || child_widths.custody_vault == 0)
-    {
-        return Err(GeneralStateArtifactErrorV3::Geometry);
-    }
+    let child_widths = match (action, child_widths) {
+        (Action::InitializeSettlement, Some(widths))
+            if widths.position != 0 && widths.custody_vault != 0 =>
+        {
+            widths
+        }
+        (Action::InitializeSettlement, _) | (_, Some(_)) => {
+            return Err(GeneralStateArtifactErrorV3::Geometry);
+        }
+        (_, None) => GeneralChildRentWidthsV5 {
+            // These inactive values are never serialized because every other
+            // action has an empty V5 quote table.
+            position: 0,
+            custody_vault: 0,
+        },
+    };
     Ok(CurrentRentQuoteBufferV5 {
         values: [
             LifecycleCurrentRentQuoteInputV5 {
@@ -697,8 +708,13 @@ mod tests {
                 let width = general_state_lifecycle_bytes_v5(action).expect("V5 width");
                 let mut scratch = vec![0_u8; width];
                 let mut output = vec![0x55_u8; width];
-                encode_general_state_lifecycle_v5_atomic(action, widths, &mut scratch, &mut output)
-                    .expect("V5 lifecycle artifact");
+                encode_general_state_lifecycle_v5_atomic(
+                    action,
+                    (action == Action::InitializeSettlement).then_some(widths),
+                    &mut scratch,
+                    &mut output,
+                )
+                .expect("V5 lifecycle artifact");
                 let policy = StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], &output)
                     .expect("V5 decode");
                 let expected_count = if action == Action::InitializeSettlement {
@@ -728,7 +744,10 @@ mod tests {
                             .current_rent_quote(u16::try_from(ordinal).expect("ordinal"))
                             .expect("quote");
                         assert_eq!(quote.exact_data_len(), data_len);
-                        assert_eq!(quote.scalar_destination().index(), destination as u16);
+                        assert_eq!(
+                            quote.scalar_destination().index(),
+                            u16::try_from(destination).expect("bounded destination")
+                        );
                     }
                 }
             }
@@ -741,6 +760,32 @@ mod tests {
             GeneralChildRentWidthsV5::new(1, 0),
             Err(GeneralStateArtifactErrorV3::Geometry)
         );
+    }
+
+    #[test]
+    fn v5_refuses_absent_initialize_or_extraneous_noninitialize_widths() {
+        for (action, widths) in [
+            (Action::InitializeSettlement, None),
+            (
+                Action::Freeze,
+                Some(GeneralChildRentWidthsV5::new(1, 165).expect("widths")),
+            ),
+        ] {
+            let width = general_state_lifecycle_bytes_v5(action).expect("width");
+            let mut scratch = vec![0_u8; width];
+            let mut output = vec![0x55_u8; width];
+            let before = output.clone();
+            assert_eq!(
+                encode_general_state_lifecycle_v5_atomic(
+                    action,
+                    widths,
+                    &mut scratch,
+                    &mut output,
+                ),
+                Err(GeneralStateArtifactErrorV3::Geometry)
+            );
+            assert_eq!(output, before);
+        }
     }
 
     #[test]

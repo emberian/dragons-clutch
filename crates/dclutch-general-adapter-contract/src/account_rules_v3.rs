@@ -801,7 +801,10 @@ mod tests {
             );
             let span = general_scratch_page_span_v3(action).expect("span");
             assert_eq!(span.insertion_coordinate, count);
-            assert_eq!(span.count_scalar, scalar::INPUT_SCRATCH_PAGE_COUNT as u16);
+            assert_eq!(
+                span.count_scalar,
+                u16::try_from(scalar::INPUT_SCRATCH_PAGE_COUNT).expect("bounded scalar")
+            );
             assert_eq!(span.minimum, 1);
             assert_eq!(span.maximum, u32::MAX);
         }

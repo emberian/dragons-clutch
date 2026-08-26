@@ -380,10 +380,10 @@ fn validate_descriptor(descriptor: CapabilityProgramV4) -> Result<()> {
             != dclutch_account_profile_contract::v2::SCHEMA_RELEASE_ID
         || descriptor.request_profile().schema().to_bytes()
             != dclutch_request_profile_contract::SCHEMA_RELEASE_ID
-        || descriptor.lifecycle().schema().to_bytes()
-            != SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5
+        || descriptor.lifecycle().schema().to_bytes() != SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5
         || descriptor.strategy().schema().to_bytes() != EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2
-        || descriptor.transition().schema().to_bytes() != dclutch_transition_vm::v3::SCHEMA_RELEASE_ID
+        || descriptor.transition().schema().to_bytes()
+            != dclutch_transition_vm::v3::SCHEMA_RELEASE_ID
         || descriptor.effect().schema().to_bytes() != dclutch_effect_kernel::v3::SCHEMA_RELEASE_ID
         || usize::try_from(descriptor.root_state_bytes())
             .map_err(|_| GeneralArtifactErrorV3::Geometry)?
@@ -924,6 +924,10 @@ mod tests {
     }
 
     fn account_profile() -> Vec<u8> {
+        use crate::account_rules_v3::{
+            GeneralExternalAccountWidthsV3, general_account_profile_rule_v3,
+            general_scratch_page_rule_v3, general_scratch_page_span_v3,
+        };
         use dclutch_account_profile_contract::v2::{
             TrustedBuiltinIdentityV2, TrustedEnvironmentV2, TrustedIdentityEnvironmentV2,
             encode::{
@@ -931,10 +935,6 @@ mod tests {
                 RegisterGeometryV2, ScalarCoordinateV2,
                 encode_account_profile_with_dynamic_fixed_span_v2_generated_atomic,
             },
-        };
-        use crate::account_rules_v3::{
-            GeneralExternalAccountWidthsV3, general_account_profile_rule_v3,
-            general_scratch_page_rule_v3, general_scratch_page_span_v3,
         };
 
         const WIDTHS: GeneralExternalAccountWidthsV3 = GeneralExternalAccountWidthsV3 {
@@ -1000,8 +1000,7 @@ mod tests {
         ];
         let bytes = dclutch_account_profile_contract::v2::DYNAMIC_FIXED_SPAN_HEADER_BYTES
             + dclutch_account_profile_contract::v2::DYNAMIC_FIXED_SPAN_ENTRY_BYTES
-            + (usize::from(fixed_count) + 1)
-                * dclutch_account_profile_contract::v2::RULE_BYTES
+            + (usize::from(fixed_count) + 1) * dclutch_account_profile_contract::v2::RULE_BYTES
             + operations.len() * dclutch_account_profile_contract::v2::OPERATION_BYTES;
         let mut scratch = vec![0_u8; bytes];
         let mut output = vec![0x55_u8; bytes];
@@ -1047,8 +1046,10 @@ mod tests {
         let mut output = vec![0x55_u8; bytes];
         crate::state_artifacts_v3::encode_general_state_lifecycle_v5_atomic(
             action,
-            crate::state_artifacts_v3::GeneralChildRentWidthsV5::new(1, 165)
-                .expect("child widths"),
+            (action == Action::InitializeSettlement).then(|| {
+                crate::state_artifacts_v3::GeneralChildRentWidthsV5::new(1, 165)
+                    .expect("child widths")
+            }),
             &mut scratch,
             &mut output,
         )
@@ -1131,9 +1132,7 @@ mod tests {
     }
 
     fn fixture() -> Fixture {
-        use dclutch_capability_program_contract::v4::{
-            ArtifactReferenceV4, CapabilityArtifactsV4,
-        };
+        use dclutch_capability_program_contract::v4::{ArtifactReferenceV4, CapabilityArtifactsV4};
 
         let account = account_profile();
         let lifecycle = lifecycle_policy();
