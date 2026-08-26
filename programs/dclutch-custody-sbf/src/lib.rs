@@ -49,6 +49,8 @@ pub const OPEN_VAULT_ACCOUNT_COUNT_V1: usize = 14;
 pub const TRANSFER_ACCOUNT_COUNT_V1: usize = 12;
 /// Exact `CloseVault` account count.
 pub const CLOSE_VAULT_ACCOUNT_COUNT_V1: usize = 12;
+/// Exact `CloseReplay` account count.
+pub const CLOSE_REPLAY_ACCOUNT_COUNT_V1: usize = 8;
 
 const CALLER_AUTHORITY: usize = 0;
 const ACTIVATION_CACHE: usize = 1;
@@ -119,6 +121,7 @@ pub fn process_instruction(
         OperationV1::CloseVault => {
             close_vault(program_id, accounts, request, request_digest, realm)
         }
+        OperationV1::CloseReplay => close_replay(program_id, accounts, request, request_digest),
     }
 }
 
@@ -326,7 +329,10 @@ fn authenticate_replay_identity(
                 return Err(CustodySbfError::Replay.into());
             }
         }
-        OperationV1::OpenVault | OperationV1::Transfer | OperationV1::CloseVault => {
+        OperationV1::OpenVault
+        | OperationV1::Transfer
+        | OperationV1::CloseVault
+        | OperationV1::CloseReplay => {
             if replay.owner != program_id || replay.data_len() != CUSTODY_REPLAY_BYTES_V1 {
                 return Err(CustodySbfError::Replay.into());
             }
@@ -647,12 +653,99 @@ fn close_vault(
     )
 }
 
+#[inline(never)]
+fn close_replay(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: CustodyRequestV1,
+    request_digest: [u8; 32],
+) -> ProgramResult {
+    let replay = account(accounts, REPLAY)?;
+    let rent_refund = account(accounts, 7)?;
+    if rent_refund.key == replay.key
+        || !rent_refund.is_writable
+        || rent_refund.executable
+        || rent_refund.key.to_bytes() != request.rent_refund
+    {
+        return Err(CustodySbfError::AccountFrame.into());
+    }
+    let replay_lamports = replay.lamports();
+    let refund_before = rent_refund.lamports();
+    let refund_after = refund_before
+        .checked_add(replay_lamports)
+        .ok_or(CustodySbfError::Postcondition)?;
+    if replay.owner != program_id
+        || replay.data_len() != CUSTODY_REPLAY_BYTES_V1
+        || replay_lamports != request.rent_lamports
+    {
+        return Err(CustodySbfError::Replay.into());
+    }
+    let poststate = poststate_commitment(PoststateProjection {
+        request_digest,
+        source: replay.key.to_bytes(),
+        destination: rent_refund.key.to_bytes(),
+        source_before: 0,
+        source_after: 0,
+        destination_before: 0,
+        destination_after: 0,
+        rent_lamports: replay_lamports,
+    });
+    let replay_state = read_replay(replay)?;
+    replay_state
+        .advance(request, request_digest, poststate)
+        .map_err(|_| CustodySbfError::Replay)?;
+    let evidence = ReceiptEvidenceV1 {
+        replay_state_digest: hash(&[]).to_bytes(),
+        ..zero_evidence(poststate)
+    };
+    let receipt = CustodyReceiptV1::new(request, request_digest, evidence)
+        .map_err(|_| CustodySbfError::Postcondition)?;
+    let receipt_bytes = receipt
+        .to_bytes()
+        .map_err(|_| CustodySbfError::Postcondition)?;
+    if receipt_bytes.len() != CUSTODY_RECEIPT_BYTES_V1 {
+        return Err(CustodySbfError::Postcondition.into());
+    }
+
+    {
+        let mut replay_data = replay
+            .try_borrow_mut_data()
+            .map_err(|_| CustodySbfError::Commit)?;
+        if replay_data.len() != CUSTODY_REPLAY_BYTES_V1 {
+            return Err(CustodySbfError::Commit.into());
+        }
+        replay_data.fill(0);
+    }
+    {
+        let mut replay_balance = replay
+            .try_borrow_mut_lamports()
+            .map_err(|_| CustodySbfError::Commit)?;
+        let mut refund_balance = rent_refund
+            .try_borrow_mut_lamports()
+            .map_err(|_| CustodySbfError::Commit)?;
+        **replay_balance = 0;
+        **refund_balance = refund_after;
+    }
+    replay.resize(0).map_err(|_| CustodySbfError::Commit)?;
+    replay.assign(&system_program::ID);
+    if replay.lamports() != 0
+        || replay.data_len() != 0
+        || replay.owner != &system_program::ID
+        || rent_refund.lamports() != refund_after
+    {
+        return Err(CustodySbfError::Postcondition.into());
+    }
+    set_return_data(&receipt_bytes);
+    Ok(())
+}
+
 fn require_account_count(accounts: &[AccountInfo<'_>], operation: OperationV1) -> ProgramResult {
     let expected = match operation {
         OperationV1::InitializeReplay => INITIALIZE_REPLAY_ACCOUNT_COUNT_V1,
         OperationV1::OpenVault => OPEN_VAULT_ACCOUNT_COUNT_V1,
         OperationV1::Transfer => TRANSFER_ACCOUNT_COUNT_V1,
         OperationV1::CloseVault => CLOSE_VAULT_ACCOUNT_COUNT_V1,
+        OperationV1::CloseReplay => CLOSE_REPLAY_ACCOUNT_COUNT_V1,
     };
     if accounts.len() != expected {
         return Err(CustodySbfError::AccountFrame.into());
@@ -1091,6 +1184,7 @@ mod tests {
         assert_eq!(OPEN_VAULT_ACCOUNT_COUNT_V1, 14);
         assert_eq!(TRANSFER_ACCOUNT_COUNT_V1, 12);
         assert_eq!(CLOSE_VAULT_ACCOUNT_COUNT_V1, 12);
+        assert_eq!(CLOSE_REPLAY_ACCOUNT_COUNT_V1, 8);
     }
 
     #[test]

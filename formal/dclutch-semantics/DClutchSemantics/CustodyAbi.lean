@@ -32,7 +32,7 @@ def receiptMagic : List UInt8 :=
   [0x44, 0x43, 0x4c, 0x43, 0x55, 0x53, 0x43, 0x31] -- `DCLCUSC1`
 
 inductive Operation where
-  | initializeReplay | openVault | transfer | closeVault
+  | initializeReplay | openVault | transfer | closeVault | closeReplay
   deriving DecidableEq, Repr
 
 def Operation.tag : Operation -> UInt8
@@ -40,6 +40,7 @@ def Operation.tag : Operation -> UInt8
   | .openVault => 1
   | .transfer => 2
   | .closeVault => 3
+  | .closeReplay => 4
 
 inductive ExecutionRole where
   | core | claims | trading | resolution
@@ -96,14 +97,14 @@ def requestSchema : List (FieldSpec RequestField) := [
 ]
 
 inductive ReplayField where
-  | magic | version | status | callerRole | reservedHeader | releaseSet
+  | magic | version | status | callerRole | openVaultCount | releaseSet
   | market | realm | context | callerProgram | rentRefund | nextRevision
   | generation | lastRequestDigest | lastPoststateCommitment
   deriving DecidableEq, Repr
 
 def replaySchema : List (FieldSpec ReplayField) := [
   ⟨.magic, .bytes 8⟩, ⟨.version, .u16⟩, ⟨.status, .u8⟩,
-  ⟨.callerRole, .u8⟩, ⟨.reservedHeader, .reserved 4⟩,
+  ⟨.callerRole, .u8⟩, ⟨.openVaultCount, .u32⟩,
   ⟨.releaseSet, .bytes 32⟩, ⟨.market, .bytes 32⟩,
   ⟨.realm, .bytes 32⟩, ⟨.context, .bytes 32⟩,
   ⟨.callerProgram, .bytes 32⟩, ⟨.rentRefund, .bytes 32⟩,

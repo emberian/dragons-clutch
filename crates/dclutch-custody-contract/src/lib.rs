@@ -70,6 +70,8 @@ pub enum Error {
     ExternalOwnerMismatch,
     /// Optimistic replay arithmetic overflowed or skipped a revision.
     RevisionOverflow,
+    /// A replay cursor's live Vault count blocked or underflowed lifecycle closure.
+    VaultCountMismatch,
     /// Request fields did not form the selected operation's exact shape.
     InvalidOperationShape,
     /// Persisted replay authority differed from the current request.
@@ -97,6 +99,8 @@ pub enum OperationV1 {
     Transfer = 2,
     /// Close one empty Realm-selected token vault to its named rent refund.
     CloseVault = 3,
+    /// Close one quiescent zero-Vault replay cursor to its persisted rent refund.
+    CloseReplay = 4,
 }
 
 impl OperationV1 {
@@ -106,6 +110,7 @@ impl OperationV1 {
             1 => Ok(Self::OpenVault),
             2 => Ok(Self::Transfer),
             3 => Ok(Self::CloseVault),
+            4 => Ok(Self::CloseReplay),
             _ => Err(Error::UnknownOperation),
         }
     }
@@ -598,6 +603,23 @@ impl CustodyRequestV1 {
                     return Err(Error::InvalidOperationShape);
                 }
             }
+            OperationV1::CloseReplay => {
+                if self.source_compartment != CompartmentV1::None
+                    || self.destination_compartment != CompartmentV1::None
+                    || !is_zero(&self.source)
+                    || !is_zero(&self.destination)
+                    || !is_zero(&self.source_vault_context)
+                    || !is_zero(&self.destination_vault_context)
+                    || !is_zero(&self.mint)
+                    || !is_zero(&self.token_program)
+                    || !is_zero(&self.payer)
+                    || is_zero(&self.rent_refund)
+                    || self.amount != 0
+                    || self.rent_lamports == 0
+                {
+                    return Err(Error::InvalidOperationShape);
+                }
+            }
         }
         Ok(())
     }
@@ -620,6 +642,8 @@ pub struct CustodyReplayV1 {
     pub caller_program: [u8; 32],
     /// Immutable lamport refund beneficiary for this cursor.
     pub rent_refund: [u8; 32],
+    /// Number of live Custody Vaults opened under this exact replay context.
+    pub open_vault_count: u32,
     /// Next required request revision.
     pub next_revision: u64,
     /// Market or resource generation.
@@ -652,6 +676,7 @@ impl CustodyReplayV1 {
             context: request.context,
             caller_program: request.caller_program,
             rent_refund: request.rent_refund,
+            open_vault_count: 0,
             next_revision: request.resulting_revision,
             generation: request.semantic.generation,
             last_request_digest: request_digest,
@@ -670,7 +695,6 @@ impl CustodyReplayV1 {
         if read_byte(input, REPLAY_STATUS_OFFSET)? != 1 {
             return Err(Error::NonCanonicalBytes);
         }
-        require_zero(input, REPLAY_RESERVED_HEADER_OFFSET, 4)?;
         let value = Self {
             caller_role: decode_caller_role(read_byte(input, REPLAY_CALLER_ROLE_OFFSET)?)?,
             release_set: read_array(input, REPLAY_RELEASE_SET_OFFSET)?,
@@ -679,6 +703,7 @@ impl CustodyReplayV1 {
             context: read_array(input, REPLAY_CONTEXT_OFFSET)?,
             caller_program: read_array(input, REPLAY_CALLER_PROGRAM_OFFSET)?,
             rent_refund: read_array(input, REPLAY_RENT_REFUND_OFFSET)?,
+            open_vault_count: read_u32(input, REPLAY_OPEN_VAULT_COUNT_OFFSET)?,
             next_revision: read_u64(input, REPLAY_NEXT_REVISION_OFFSET)?,
             generation: read_u64(input, REPLAY_GENERATION_OFFSET)?,
             last_request_digest: read_array(input, REPLAY_LAST_REQUEST_DIGEST_OFFSET)?,
@@ -699,6 +724,11 @@ impl CustodyReplayV1 {
             &mut output,
             REPLAY_CALLER_ROLE_OFFSET,
             self.caller_role as u8,
+        )?;
+        put_u32(
+            &mut output,
+            REPLAY_OPEN_VAULT_COUNT_OFFSET,
+            self.open_vault_count,
         )?;
         for (offset, value) in [
             (REPLAY_RELEASE_SET_OFFSET, self.release_set),
@@ -744,7 +774,7 @@ impl CustodyReplayV1 {
         }
         if matches!(
             request.operation,
-            OperationV1::OpenVault | OperationV1::CloseVault
+            OperationV1::OpenVault | OperationV1::CloseVault | OperationV1::CloseReplay
         ) && request.rent_refund != self.rent_refund
         {
             return Err(Error::ReplayBindingMismatch);
@@ -752,8 +782,25 @@ impl CustodyReplayV1 {
         if is_zero(&request_digest) || is_zero(&poststate_commitment) {
             return Err(Error::InvalidOperationShape);
         }
+        let open_vault_count = match request.operation {
+            OperationV1::OpenVault => self
+                .open_vault_count
+                .checked_add(1)
+                .ok_or(Error::VaultCountMismatch)?,
+            OperationV1::CloseVault => self
+                .open_vault_count
+                .checked_sub(1)
+                .ok_or(Error::VaultCountMismatch)?,
+            OperationV1::CloseReplay if self.open_vault_count != 0 => {
+                return Err(Error::VaultCountMismatch);
+            }
+            OperationV1::InitializeReplay | OperationV1::Transfer | OperationV1::CloseReplay => {
+                self.open_vault_count
+            }
+        };
         Ok(Self {
             next_revision: request.resulting_revision,
+            open_vault_count,
             last_request_digest: request_digest,
             last_poststate_commitment: poststate_commitment,
             ..self
@@ -859,7 +906,10 @@ impl CustodyReceiptV1 {
                     return Err(Error::BalanceArithmetic);
                 }
             }
-            OperationV1::InitializeReplay | OperationV1::OpenVault | OperationV1::CloseVault => {
+            OperationV1::InitializeReplay
+            | OperationV1::OpenVault
+            | OperationV1::CloseVault
+            | OperationV1::CloseReplay => {
                 if evidence.source_before != 0
                     || evidence.source_after != 0
                     || evidence.destination_before != 0
@@ -1196,6 +1246,44 @@ mod tests {
         }
     }
 
+    fn open_vault() -> CustodyRequestV1 {
+        let mut request = initialize();
+        request.operation = OperationV1::OpenVault;
+        request.destination_compartment = CompartmentV1::HoardPrincipal;
+        request.destination = id(11);
+        request.destination_vault_context = request.context;
+        request.mint = id(12);
+        request.token_program = id(13);
+        request.expected_revision = 1;
+        request.resulting_revision = 2;
+        request.rent_lamports = 1_000_000;
+        request
+    }
+
+    fn close_vault() -> CustodyRequestV1 {
+        let mut request = open_vault();
+        request.operation = OperationV1::CloseVault;
+        request.source_compartment = request.destination_compartment;
+        request.destination_compartment = CompartmentV1::None;
+        request.source = request.destination;
+        request.destination = [0; 32];
+        request.source_vault_context = request.destination_vault_context;
+        request.destination_vault_context = [0; 32];
+        request.payer = [0; 32];
+        request.expected_revision = 2;
+        request.resulting_revision = 3;
+        request
+    }
+
+    fn close_replay() -> CustodyRequestV1 {
+        let mut request = initialize();
+        request.operation = OperationV1::CloseReplay;
+        request.payer = [0; 32];
+        request.expected_revision = 1;
+        request.resulting_revision = 2;
+        request
+    }
+
     #[test]
     fn generated_request_roundtrips_and_refuses_reserved_bytes() {
         let request = transfer();
@@ -1255,6 +1343,7 @@ mod tests {
         next.resulting_revision = 2;
         let advanced = state.advance(next, id(32), id(33)).expect("advance");
         assert_eq!(advanced.next_revision, 2);
+        assert_eq!(advanced.open_vault_count, 0);
         assert_eq!(advanced.last_request_digest, id(32));
 
         let mut stale = next;
@@ -1269,6 +1358,64 @@ mod tests {
         assert_eq!(
             state.advance(substituted, id(32), id(33)),
             Err(Error::ReplayBindingMismatch)
+        );
+    }
+
+    #[test]
+    fn replay_close_requires_zero_vaults_current_role_and_exact_revision() {
+        let initial = CustodyReplayV1::initialize(initialize(), id(30), id(31)).expect("state");
+        let opened = initial.advance(open_vault(), id(32), id(33)).expect("open");
+        assert_eq!(opened.open_vault_count, 1);
+
+        let mut early_close = close_replay();
+        early_close.expected_revision = 2;
+        early_close.resulting_revision = 3;
+        assert_eq!(
+            opened.advance(early_close, id(34), id(35)),
+            Err(Error::VaultCountMismatch)
+        );
+
+        let closed_vault = opened
+            .advance(close_vault(), id(36), id(37))
+            .expect("close Vault");
+        assert_eq!(closed_vault.open_vault_count, 0);
+        let mut stale = close_replay();
+        stale.expected_revision = 2;
+        stale.resulting_revision = 3;
+        assert_eq!(
+            closed_vault.advance(stale, id(38), id(39)),
+            Err(Error::ReplayRevisionMismatch)
+        );
+        let mut foreign = close_replay();
+        foreign.expected_revision = 3;
+        foreign.resulting_revision = 4;
+        foreign.caller_role = CallerRoleV1::Claims;
+        assert_eq!(
+            closed_vault.advance(foreign, id(38), id(39)),
+            Err(Error::ReplayBindingMismatch)
+        );
+        let mut exact = close_replay();
+        exact.expected_revision = 3;
+        exact.resulting_revision = 4;
+        assert_eq!(
+            closed_vault
+                .advance(exact, id(40), id(41))
+                .expect("authorize close")
+                .next_revision,
+            4
+        );
+        assert_eq!(
+            closed_vault.advance(initialize(), id(42), id(43)),
+            Err(Error::ReplayBindingMismatch)
+        );
+
+        let saturated = CustodyReplayV1 {
+            open_vault_count: u32::MAX,
+            ..initial
+        };
+        assert_eq!(
+            saturated.advance(open_vault(), id(44), id(45)),
+            Err(Error::VaultCountMismatch)
         );
     }
 

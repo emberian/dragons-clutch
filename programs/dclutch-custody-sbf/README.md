@@ -45,6 +45,10 @@ Suffixes are exact:
   readonly, Realm token program executable, rent-refund account writable. The
   refund may also be a transaction signer; signer status cannot change the
   persisted beneficiary or close semantics.
+- `CloseReplay` (8): the exact persisted replay-rent refund beneficiary
+  writable. The current Registry-authenticated caller role may close only its
+  exact replay context, at the exact next revision, after every Vault opened
+  under that context has been closed.
 
 Each External side is independently bound to its exact semantic token-account
 owner. External sources must also have delegated the exact amount to the sole
@@ -62,8 +66,16 @@ Token-2022 programs. The campaign measures every lifecycle route and proves
 byte-for-byte rollback after a caller deliberately refuses after successful
 Custody and token CPI. It also executes a transfer between distinct External
 owners and refuses stale replay, wrong delegate, and either side's owner
-substitution without changing replay or token state.
+substitution without changing replay or token state. It also refuses early,
+stale, and foreign-role replay closure, reclaims replay rent only at zero live
+Vaults, and refuses a Vault operation after the replay has been reclaimed.
 
 Replay account rent and token-vault rent are explicit `rent_lamports` and never
 collateral `amount`. Custody has no Hoard balance, fee balance, liveness balance,
 or liability-supply DTO; those facts remain owned by their semantic programs.
+Each replay owns its checked `open_vault_count`; `OpenVault` increments it and
+`CloseVault` decrements it. Custody proves zero live Vaults before
+`CloseReplay`, while the authenticated caller's canonical state machine remains
+the semantic owner of terminal/quiescent authorization and of refusing a fresh
+`InitializeReplay` after termination. A static client is not an authority for
+either condition.

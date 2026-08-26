@@ -35,7 +35,7 @@ def main : IO Unit := do
     emitOffset "REQUEST" requestLayout name field
   for (name, field) in [
       ("VERSION", ReplayField.version), ("STATUS", .status),
-      ("CALLER_ROLE", .callerRole), ("RESERVED_HEADER", .reservedHeader),
+      ("CALLER_ROLE", .callerRole), ("OPEN_VAULT_COUNT", .openVaultCount),
       ("RELEASE_SET", .releaseSet), ("MARKET", .market), ("REALM", .realm),
       ("CONTEXT", .context), ("CALLER_PROGRAM", .callerProgram),
       ("RENT_REFUND", .rentRefund), ("NEXT_REVISION", .nextRevision),

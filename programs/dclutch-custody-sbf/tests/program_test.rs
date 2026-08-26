@@ -554,6 +554,29 @@ fn close_request(fixture: &Fixture, payer: Pubkey) -> CustodyRequestV1 {
     request
 }
 
+fn close_replay_request(
+    fixture: &Fixture,
+    payer: Pubkey,
+    expected_revision: u64,
+) -> CustodyRequestV1 {
+    let mut request = request_base(
+        fixture.profile,
+        fixture.release_set,
+        fixture.realm,
+        fixture.mint,
+    );
+    request.operation = OperationV1::CloseReplay;
+    request.mint = [0; 32];
+    request.token_program = [0; 32];
+    request.rent_refund = payer.to_bytes();
+    request.expected_revision = expected_revision;
+    request.resulting_revision = expected_revision + 1;
+    request.rent_lamports =
+        Rent::default().minimum_balance(dclutch_custody_contract::CUSTODY_REPLAY_BYTES_V1);
+    request.semantic = semantic(6);
+    request
+}
+
 fn common_metas(fixture: &Fixture, request: CustodyRequestV1) -> Vec<AccountMeta> {
     let request_bytes = request.to_bytes().expect("canonical request");
     let digest = hash(&request_bytes).to_bytes();
@@ -618,6 +641,7 @@ fn wrapper_instruction(
             AccountMeta::new_readonly(fixture.profile.token_program(), false),
             AccountMeta::new(payer, false),
         ]),
+        OperationV1::CloseReplay => accounts.push(AccountMeta::new(payer, false)),
     }
     let mut data = Vec::with_capacity(dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1 + 1);
     data.push(u8::from(fail_after));
@@ -695,6 +719,27 @@ async fn campaign(profile: Profile) {
     .await
     .expect("open transaction");
     assert!(accepted, "open vault");
+    let after_open = snapshot(&mut context, &fixture).await;
+    assert_eq!(
+        CustodyReplayV1::decode(&after_open.replay.data)
+            .expect("open replay")
+            .open_vault_count,
+        1
+    );
+
+    let (accepted, early_close_cu) = submit(
+        &mut context,
+        wrapper_instruction(
+            &fixture,
+            close_replay_request(&fixture, payer, 2),
+            payer,
+            false,
+        ),
+    )
+    .await
+    .expect("early replay-close transaction");
+    assert!(!accepted, "live Vault must block replay close");
+    assert_eq!(snapshot(&mut context, &fixture).await, after_open);
 
     let (accepted, external_cu) = submit(
         &mut context,
@@ -829,9 +874,80 @@ async fn campaign(profile: Profile) {
             .is_none(),
         "closed vault must be reclaimed"
     );
+    let replay_before_close = observed(&mut context, fixture.replay).await;
+    assert_eq!(
+        CustodyReplayV1::decode(&replay_before_close.data)
+            .expect("zero-Vault replay")
+            .open_vault_count,
+        0
+    );
+
+    let (accepted, close_stale_cu) = submit(
+        &mut context,
+        wrapper_instruction(
+            &fixture,
+            close_replay_request(&fixture, payer, 5),
+            payer,
+            false,
+        ),
+    )
+    .await
+    .expect("stale replay-close transaction");
+    assert!(!accepted, "stale replay close must refuse");
+    assert_eq!(
+        observed(&mut context, fixture.replay).await,
+        replay_before_close
+    );
+
+    let mut foreign = close_replay_request(&fixture, payer, 6);
+    foreign.caller_role = CallerRoleV1::Claims;
+    let (accepted, foreign_close_cu) = submit(
+        &mut context,
+        wrapper_instruction(&fixture, foreign, payer, false),
+    )
+    .await
+    .expect("foreign-role replay-close transaction");
+    assert!(!accepted, "foreign role must not close replay");
+    assert_eq!(
+        observed(&mut context, fixture.replay).await,
+        replay_before_close
+    );
+
+    let (accepted, close_replay_cu) = submit(
+        &mut context,
+        wrapper_instruction(
+            &fixture,
+            close_replay_request(&fixture, payer, 6),
+            payer,
+            false,
+        ),
+    )
+    .await
+    .expect("close replay transaction");
+    assert!(accepted, "zero-Vault replay close");
+    assert!(
+        context
+            .banks_client
+            .get_account(fixture.replay)
+            .await
+            .expect("closed-replay query")
+            .is_none(),
+        "closed replay rent must be reclaimed"
+    );
+
+    let mut reopen = open_request(&fixture, payer);
+    reopen.expected_revision = 7;
+    reopen.resulting_revision = 8;
+    let (accepted, reopen_cu) = submit(
+        &mut context,
+        wrapper_instruction(&fixture, reopen, payer, false),
+    )
+    .await
+    .expect("reopen-without-replay transaction");
+    assert!(!accepted, "a closed replay cannot authorize Vault reopen");
 
     eprintln!(
-        "Custody {profile:?} CU: initialize={initialize_cu}, open={open_cu}, external={external_cu}, delegate-refusal={delegate_cu}, deposit={deposit_cu}, late-rollback={late_failure_cu}, stale={stale_cu}, source-owner={source_owner_cu}, destination-owner={destination_owner_cu}, withdraw={withdraw_cu}, close={close_cu}"
+        "Custody {profile:?} CU: initialize={initialize_cu}, open={open_cu}, early-close={early_close_cu}, external={external_cu}, delegate-refusal={delegate_cu}, deposit={deposit_cu}, late-rollback={late_failure_cu}, stale={stale_cu}, source-owner={source_owner_cu}, destination-owner={destination_owner_cu}, withdraw={withdraw_cu}, close-vault={close_cu}, close-stale={close_stale_cu}, close-foreign={foreign_close_cu}, close-replay={close_replay_cu}, reopen={reopen_cu}"
     );
 }
 
