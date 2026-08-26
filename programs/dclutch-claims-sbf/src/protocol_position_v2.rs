@@ -9,7 +9,7 @@
 
 extern crate alloc;
 
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 use core::convert::{TryFrom, TryInto};
 
 use dclutch_claims_svm::{ClaimsAggregateSeedsV1, ClaimsPositionSeedsV1};
@@ -290,13 +290,17 @@ impl ProtocolPositionAdmissionReceiptV2 {
         decode_evidence(input, RECEIPT_MAGIC_V2)
     }
 
-    fn encode_with_magic(
-        self,
+    fn encode_with_magic_into(
+        &self,
         magic: [u8; 8],
-    ) -> Result<[u8; PROTOCOL_POSITION_RECEIPT_BYTES_V2], ProtocolPositionSbfErrorV2> {
-        let mut output = [0_u8; PROTOCOL_POSITION_RECEIPT_BYTES_V2];
-        put(&mut output, 0, &magic)?;
-        put(&mut output, 8, &ABI_VERSION_V2.to_le_bytes())?;
+        output: &mut [u8],
+    ) -> Result<(), ProtocolPositionSbfErrorV2> {
+        if output.len() != PROTOCOL_POSITION_RECEIPT_BYTES_V2 {
+            return Err(ProtocolPositionSbfErrorV2::Instruction);
+        }
+        output.fill(0);
+        put(output, 0, &magic)?;
+        put(output, 8, &ABI_VERSION_V2.to_le_bytes())?;
         for (offset, value) in [
             (EVIDENCE_RELEASE_OFFSET, self.release_set),
             (EVIDENCE_MARKET_OFFSET, self.market),
@@ -316,15 +320,15 @@ impl ProtocolPositionAdmissionReceiptV2 {
             (EVIDENCE_TRADING_PROGRAM_OFFSET, self.trading_program),
             (EVIDENCE_POSITION_DIGEST_OFFSET, self.position_state_digest),
         ] {
-            put(&mut output, offset, &value)?;
+            put(output, offset, &value)?;
         }
         put(
-            &mut output,
+            output,
             EVIDENCE_GENERATION_OFFSET,
             &self.generation.to_le_bytes(),
         )?;
         put(
-            &mut output,
+            output,
             EVIDENCE_OUTCOME_COUNT_OFFSET,
             &self.outcome_count.to_le_bytes(),
         )?;
@@ -340,9 +344,9 @@ impl ProtocolPositionAdmissionReceiptV2 {
                 self.market_revision_after,
             ),
         ] {
-            put(&mut output, offset, &value.to_le_bytes())?;
+            put(output, offset, &value.to_le_bytes())?;
         }
-        Ok(output)
+        Ok(())
     }
 }
 
@@ -399,9 +403,9 @@ impl<'accounts, 'info> Accounts<'accounts, 'info> {
 
 struct Admission {
     position_width: usize,
-    evidence: ProtocolPositionAdmissionReceiptV2,
+    evidence: Box<ProtocolPositionAdmissionReceiptV2>,
     position_candidate: Vec<u8>,
-    admission_candidate: [u8; PROTOCOL_POSITION_ADMISSION_BYTES_V2],
+    admission_candidate: Vec<u8>,
 }
 
 /// Execute one canonical protocol Position admission.
@@ -419,17 +423,17 @@ pub(super) fn process(
     let accounts = Accounts::parse(account_infos)?;
     authenticate_privileges(program_id, &accounts, request)?;
     authenticate_releases(program_id, &accounts, request, request_digest)?;
-    let admission = prepare_admission(program_id, &accounts, request, request_digest)?;
+    let mut admission = prepare_admission(program_id, &accounts, request, request_digest)?;
     allocate_accounts(program_id, &accounts, request, &admission)?;
     let market_revision_after = read_market_revision(accounts.market)?;
     if market_revision_after != request.expected_market_revision {
         return Err(ProtocolPositionSbfErrorV2::Commit.into());
     }
-    let receipt = ProtocolPositionAdmissionReceiptV2 {
-        market_revision_after,
-        ..admission.evidence
-    };
-    let receipt_bytes = receipt.encode_with_magic(RECEIPT_MAGIC_V2)?;
+    admission.evidence.market_revision_after = market_revision_after;
+    let mut receipt_bytes = alloc::vec![0_u8; PROTOCOL_POSITION_RECEIPT_BYTES_V2];
+    admission
+        .evidence
+        .encode_with_magic_into(RECEIPT_MAGIC_V2, &mut receipt_bytes)?;
     commit_candidates(&accounts, &admission)?;
     set_return_data(&receipt_bytes);
     Ok(())
@@ -694,7 +698,7 @@ fn prepare_admission(
     )
     .map_err(|_| ProtocolPositionSbfErrorV2::ProductBasis)?;
     let position_state_digest = hash(&position_candidate).to_bytes();
-    let evidence = ProtocolPositionAdmissionReceiptV2 {
+    let evidence = Box::new(ProtocolPositionAdmissionReceiptV2 {
         release_set: request.release_set,
         market: request.market,
         child_root: request.child_root,
@@ -715,8 +719,9 @@ fn prepare_admission(
         admission_rent_lamports: request.admission_rent_lamports,
         market_revision_before: revision,
         market_revision_after: revision,
-    };
-    let admission_candidate = evidence.encode_with_magic(ADMISSION_MAGIC_V2)?;
+    });
+    let mut admission_candidate = alloc::vec![0_u8; PROTOCOL_POSITION_ADMISSION_BYTES_V2];
+    evidence.encode_with_magic_into(ADMISSION_MAGIC_V2, &mut admission_candidate)?;
     Ok(Admission {
         position_width,
         evidence,
@@ -1079,8 +1084,9 @@ mod tests {
         let bytes = request.to_bytes().expect("request");
         assert_eq!(ProtocolPositionRequestV2::decode(&bytes), Ok(request));
         let evidence = receipt();
-        let bytes = evidence
-            .encode_with_magic(RECEIPT_MAGIC_V2)
+        let mut bytes = alloc::vec![0_u8; PROTOCOL_POSITION_RECEIPT_BYTES_V2];
+        evidence
+            .encode_with_magic_into(RECEIPT_MAGIC_V2, &mut bytes)
             .expect("receipt");
         assert_eq!(
             ProtocolPositionAdmissionReceiptV2::decode(&bytes),
@@ -1106,8 +1112,9 @@ mod tests {
 
         let mut evidence = receipt();
         evidence.market_revision_after += 1;
-        let bytes = evidence
-            .encode_with_magic(RECEIPT_MAGIC_V2)
+        let mut bytes = alloc::vec![0_u8; PROTOCOL_POSITION_RECEIPT_BYTES_V2];
+        evidence
+            .encode_with_magic_into(RECEIPT_MAGIC_V2, &mut bytes)
             .expect("structural bytes");
         assert_eq!(
             ProtocolPositionAdmissionReceiptV2::decode(&bytes),
