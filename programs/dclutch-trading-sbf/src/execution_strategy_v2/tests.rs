@@ -2,7 +2,13 @@ extern crate std;
 
 use std::{boxed::Box, vec, vec::Vec};
 
-use dclutch_capability_program_contract::{CapabilityRootHeaderV1, v3::CapabilityProgramV3};
+use dclutch_capability_program_contract::{
+    CapabilityRootHeaderV1,
+    v4::{
+        ArtifactReferenceV4, CapabilityArtifactsV4, CapabilityProgramV4,
+        SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
+    },
+};
 use dclutch_core_contract::ContentId;
 use dclutch_execution_strategy_contract::shadow_v3::{
     SHADOW_ACK_SCHEMA_ID_V3, SHADOW_REQUEST_SCHEMA_ID_V3,
@@ -250,20 +256,25 @@ impl Fixture {
         let strategy_bytes = strategy.to_bytes();
         let strategy_program_id =
             ContentId::new(hash(&strategy_bytes).to_bytes()).expect("strategy ID");
-        let capability_program = CapabilityProgramV3::new(
+        let capability_program = CapabilityProgramV4::new(
             id(1),
             id(2),
             id(3),
             id(4),
-            id(5),
-            id(6),
             id(7),
-            id(8),
-            id(9),
-            id(10),
-            schema(EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2),
-            strategy_program_id,
-            64,
+            id(6),
+            CapabilityArtifactsV4 {
+                account_profile: ArtifactReferenceV4::new(id(40), id(5)),
+                request_profile: ArtifactReferenceV4::new(id(9), id(10)),
+                lifecycle: ArtifactReferenceV4::new(id(41), id(7)),
+                strategy: ArtifactReferenceV4::new(
+                    schema(EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2),
+                    strategy_program_id,
+                ),
+                transition: ArtifactReferenceV4::new(id(11), id(12)),
+                effect: ArtifactReferenceV4::new(id(42), id(8)),
+            },
+            64_u32,
         )
         .expect("Capability Program");
         let capability_bytes = capability_program.encode();
@@ -272,7 +283,7 @@ impl Fixture {
 
         let capability_record = finalized_record(
             registry_key,
-            CAPABILITY_PROGRAM_SCHEMA_ID_V3,
+            CAPABILITY_PROGRAM_SCHEMA_ID_V4,
             capability_bytes.to_vec(),
             &rent_value,
         );
@@ -373,6 +384,7 @@ impl Fixture {
     fn authenticate(&self) -> Result<AuthenticatedExecutionStrategyV2, TradingSbfError> {
         authenticate_execution_strategy_v2(
             self.context,
+            schema(CAPABILITY_PROGRAM_SCHEMA_ID_V4),
             self.capability_program_id,
             &self.registry,
             &self.rent,
@@ -422,6 +434,7 @@ fn interpreted_uses_exact_unpadded_record_frame() {
     assert_eq!(
         authenticate_execution_strategy_v2(
             fixture.context,
+            schema(CAPABILITY_PROGRAM_SCHEMA_ID_V4),
             fixture.capability_program_id,
             &fixture.registry,
             &fixture.rent,
@@ -489,6 +502,7 @@ fn admitted_requires_the_exact_registry_admission_chain() {
     assert_eq!(
         authenticate_execution_strategy_v2(
             fixture.context,
+            schema(CAPABILITY_PROGRAM_SCHEMA_ID_V4),
             fixture.capability_program_id,
             &fixture.registry,
             &fixture.rent,
@@ -500,6 +514,20 @@ fn admitted_requires_the_exact_registry_admission_chain() {
 
 #[test]
 fn hostile_record_owner_digest_staging_alias_and_selection_refuse() {
+    let schema_substitution = Fixture::new(StrategyDispositionV2::Interpreted);
+    assert_eq!(
+        authenticate_execution_strategy_v2(
+            schema_substitution.context,
+            id(209),
+            schema_substitution.capability_program_id,
+            &schema_substitution.registry,
+            &schema_substitution.rent,
+            &schema_substitution.accounts,
+        ),
+        Err(TradingSbfError::UnsupportedContent),
+        "the ProgramSet-selected descriptor schema is authority"
+    );
+
     let mut owner = Fixture::new(StrategyDispositionV2::ShadowAot);
     fixture_account_mut(&mut owner, STRATEGY_RAW).owner = Box::leak(Box::new(system_program::ID));
     assert_eq!(owner.authenticate(), Err(TradingSbfError::Content));
@@ -639,6 +667,7 @@ fn registry_rent_privileges_and_account_width_are_not_caller_trust() {
     assert_eq!(
         authenticate_execution_strategy_v2(
             short.context,
+            schema(CAPABILITY_PROGRAM_SCHEMA_ID_V4),
             short.capability_program_id,
             &short.registry,
             &short.rent,

@@ -7,8 +7,8 @@
 //! Upgradeable Loader V3 Program/ProgramData/complete-ELF observation. This
 //! module is read-only: it grants no accelerator state or effect write authority.
 
-use dclutch_capability_program_contract::v3::{
-    CapabilityProgramV3, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V3,
+use dclutch_capability_program_contract::v4::{
+    CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
 };
 use dclutch_core_contract::ContentId;
 use dclutch_execution_strategy_contract::v2::{
@@ -17,7 +17,7 @@ use dclutch_execution_strategy_contract::v2::{
     EXECUTION_STRATEGY_CERTIFICATE_BYTES_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_PROGRAM_BYTES_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
     ExecutionStrategyAdmissionV2, ExecutionStrategyCertificateV2, ExecutionStrategyProgramV2,
-    StrategyDispositionV2, validate_admitted_aot_v2,
+    StrategyDispositionV2, validate_admitted_aot_v4,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
@@ -65,7 +65,7 @@ const ADMITTED_ACCELERATOR_PROGRAMDATA: usize = 11;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuthenticatedExecutionStrategyV2 {
     capability_program_id: ContentId,
-    capability_program: CapabilityProgramV3,
+    capability_program: CapabilityProgramV4,
     strategy_program_id: ContentId,
     strategy: ExecutionStrategyProgramV2,
     certificate_program_id: Option<ContentId>,
@@ -83,7 +83,7 @@ impl AuthenticatedExecutionStrategyV2 {
     }
 
     /// Return the hostile-decoded selected Capability Program.
-    pub const fn capability_program(self) -> CapabilityProgramV3 {
+    pub const fn capability_program(self) -> CapabilityProgramV4 {
         self.capability_program
     }
 
@@ -132,12 +132,13 @@ impl AuthenticatedExecutionStrategyV2 {
 ///
 /// `context` must be the current Trading root/release witness produced by the
 /// common fixed-role boundary. Its manifest release selects the authenticated
-/// `CapabilityProgramSetV1`, not an individual descriptor.
-/// `selected_capability_program_id` must therefore be the exact action-selected
-/// entry returned by that already-authenticated set. This adapter authenticates
-/// the corresponding descriptor record and rejoins its kind and root width to
-/// `context`; the common outer separately authenticates the context-selected
-/// config under the descriptor's config schema. `registry_program` must be the
+/// `CapabilityProgramSetV2`, not an individual descriptor.
+/// `selected_capability_program_schema` and `selected_capability_program_id`
+/// must therefore be the exact action-selected pair returned by that already-
+/// authenticated set. This adapter admits only CapabilityProgramV4, then
+/// rejoins its kind and root width to `context`; the common outer separately
+/// authenticates the context-selected config under the descriptor's config
+/// schema. `registry_program` must be the
 /// Registry account already joined to the authenticated Core Market. The
 /// adapter nevertheless rechecks its executable/read-only shape and uses it as
 /// the sole owner/PDA authority for every supplied finalized record. `accounts`
@@ -146,6 +147,7 @@ impl AuthenticatedExecutionStrategyV2 {
 #[inline(never)]
 pub fn authenticate_execution_strategy_v2(
     context: TradingFamilyContextV1,
+    selected_capability_program_schema: ContentId,
     selected_capability_program_id: ContentId,
     registry_program: &AccountInfo<'_>,
     rent_sysvar: &AccountInfo<'_>,
@@ -161,6 +163,7 @@ pub fn authenticate_execution_strategy_v2(
         &rent,
         account(accounts, CAPABILITY_RAW)?,
         account(accounts, CAPABILITY_STAGING)?,
+        selected_capability_program_schema,
         capability_program_id,
     )?;
     capability_program
@@ -174,7 +177,7 @@ pub fn authenticate_execution_strategy_v2(
         return Err(TradingSbfError::Root);
     }
 
-    let strategy_program_id = capability_program.transition_program();
+    let strategy_program_id = capability_program.strategy().program();
     let strategy = authenticate_strategy_program(
         registry_program.key,
         &rent,
@@ -183,7 +186,7 @@ pub fn authenticate_execution_strategy_v2(
         strategy_program_id,
     )?;
     strategy
-        .validate_descriptor_selection(strategy_program_id, capability_program)
+        .validate_descriptor_selection_v4(strategy_program_id, capability_program)
         .map_err(|_| TradingSbfError::Content)?;
 
     match strategy.disposition() {
@@ -229,7 +232,7 @@ fn authenticate_shadow_aot(
     rent: &Rent,
     accounts: &[AccountInfo<'_>],
     capability_program_id: ContentId,
-    capability_program: CapabilityProgramV3,
+    capability_program: CapabilityProgramV4,
     strategy_program_id: ContentId,
     strategy: ExecutionStrategyProgramV2,
 ) -> Result<AuthenticatedExecutionStrategyV2, TradingSbfError> {
@@ -245,7 +248,7 @@ fn authenticate_shadow_aot(
         certificate_program_id,
     )?;
     certificate
-        .validate_v3(
+        .validate_v4(
             certificate_program_id,
             strategy_program_id,
             strategy,
@@ -286,7 +289,7 @@ fn authenticate_admitted_aot(
     rent: &Rent,
     accounts: &[AccountInfo<'_>],
     capability_program_id: ContentId,
-    capability_program: CapabilityProgramV3,
+    capability_program: CapabilityProgramV4,
     strategy_program_id: ContentId,
     strategy: ExecutionStrategyProgramV2,
 ) -> Result<AuthenticatedExecutionStrategyV2, TradingSbfError> {
@@ -321,7 +324,7 @@ fn authenticate_admitted_aot(
         account(accounts, ADMITTED_ACCELERATOR_PROGRAM)?,
         account(accounts, ADMITTED_ACCELERATOR_PROGRAMDATA)?,
     )?;
-    let admitted_authorization = validate_admitted_aot_v2(
+    let admitted_authorization = validate_admitted_aot_v4(
         strategy_program_id,
         strategy,
         capability_program,
@@ -347,16 +350,16 @@ fn authenticate_admitted_aot(
 }
 
 fn authenticated_interpreter_artifacts(
-    capability_program: CapabilityProgramV3,
+    capability_program: CapabilityProgramV4,
     strategy: ExecutionStrategyProgramV2,
 ) -> AuthenticatedInterpreterArtifactsV2 {
     AuthenticatedInterpreterArtifactsV2 {
-        account_profile_program: capability_program.account_profile(),
-        request_profile_schema: capability_program.request_profile_schema(),
-        request_profile_program: capability_program.request_profile_program(),
+        account_profile_program: capability_program.account_profile().program(),
+        request_profile_schema: capability_program.request_profile().schema(),
+        request_profile_program: capability_program.request_profile().program(),
         transition_schema: strategy.transition_schema(),
         transition_program: strategy.transition_program(),
-        effect_program: capability_program.effect_program(),
+        effect_program: capability_program.effect().program(),
     }
 }
 
@@ -365,8 +368,12 @@ fn authenticate_capability_program(
     rent: &Rent,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
+    expected_schema: ContentId,
     expected: ContentId,
-) -> Result<CapabilityProgramV3, TradingSbfError> {
+) -> Result<CapabilityProgramV4, TradingSbfError> {
+    if expected_schema.to_bytes() != CAPABILITY_PROGRAM_SCHEMA_ID_V4 {
+        return Err(TradingSbfError::UnsupportedContent);
+    }
     let data = raw
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Content)?;
@@ -375,11 +382,11 @@ fn authenticate_capability_program(
         rent,
         raw,
         staging,
-        CAPABILITY_PROGRAM_SCHEMA_ID_V3,
+        CAPABILITY_PROGRAM_SCHEMA_ID_V4,
         expected.to_bytes(),
         &data,
     )?;
-    CapabilityProgramV3::decode(&data).map_err(|_| TradingSbfError::Content)
+    CapabilityProgramV4::decode(&data).map_err(|_| TradingSbfError::Content)
 }
 
 fn authenticate_strategy_program(

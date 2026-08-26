@@ -53,9 +53,9 @@ use dclutch_capability_program_contract::{
         HOT_TRADING_PROGRAMDATA_ACCOUNT_V3, HOT_TRANSITION_RAW_ACCOUNT_V3,
         HOT_TRANSITION_STAGING_ACCOUNT_V3, HotExecutionAckV3, HotExecutionEnvelopeV3,
     },
-    set_v1::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V1, CapabilityProgramSetV1},
-    v3::{
-        CAPABILITY_PROGRAM_V3_BYTES, CapabilityProgramV3, SCHEMA_RELEASE_ID as PROGRAM_SCHEMA_ID_V3,
+    set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
+    v4::{
+        CAPABILITY_PROGRAM_V4_BYTES, CapabilityProgramV4, SCHEMA_RELEASE_ID as PROGRAM_SCHEMA_ID_V4,
     },
 };
 use dclutch_core_contract::ContentId;
@@ -267,10 +267,10 @@ pub fn process_hot_execution_v3(
         frame.program_set_raw,
         frame.program_set_staging,
         &rent,
-        CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V1,
+        CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
         context.selection().capability_release().to_bytes(),
     )?;
-    let program_set = CapabilityProgramSetV1::decode_selected(
+    let program_set = CapabilityProgramSetV2::decode_selected(
         context.selection().capability_release().to_bytes(),
         hash(&program_set_data).to_bytes(),
         &program_set_data,
@@ -279,7 +279,11 @@ pub fn process_hot_execution_v3(
     let selected_entry = program_set
         .select_entry(family_request)
         .map_err(|_| TradingSbfError::Content)?;
-    let selected_program = selected_entry.program();
+    let selected_descriptor = selected_entry.descriptor();
+    if selected_descriptor.schema().to_bytes() != PROGRAM_SCHEMA_ID_V4 {
+        return Err(TradingSbfError::UnsupportedContent.into());
+    }
+    let selected_program = selected_descriptor.program();
     let selected_action = selected_entry.selector();
 
     let descriptor_data = borrow_finalized_record(
@@ -287,10 +291,10 @@ pub fn process_hot_execution_v3(
         frame.descriptor_raw,
         frame.descriptor_staging,
         &rent,
-        PROGRAM_SCHEMA_ID_V3,
+        selected_descriptor.schema().to_bytes(),
         selected_program.to_bytes(),
     )?;
-    if descriptor_data.len() != CAPABILITY_PROGRAM_V3_BYTES {
+    if descriptor_data.len() != CAPABILITY_PROGRAM_V4_BYTES {
         return Err(TradingSbfError::Content.into());
     }
     let descriptor = decode_capability_program_boxed_v3(&descriptor_data)?;
@@ -325,11 +329,16 @@ pub fn process_hot_execution_v3(
         frame.lifecycle_raw,
         frame.lifecycle_staging,
         &rent,
-        STATE_LIFECYCLE_POLICY_SCHEMA_ID_V4,
-        descriptor.derivation_policy().to_bytes(),
+        descriptor.lifecycle().schema().to_bytes(),
+        descriptor.lifecycle().program().to_bytes(),
     )?;
+    if descriptor.lifecycle().schema().to_bytes() != STATE_LIFECYCLE_POLICY_SCHEMA_ID_V4
+        || descriptor.derivation_policy() != descriptor.lifecycle().program()
+    {
+        return Err(TradingSbfError::UnsupportedContent.into());
+    }
     let lifecycle = StateLifecyclePolicyV4::decode_selected(
-        descriptor.derivation_policy().to_bytes(),
+        descriptor.lifecycle().program().to_bytes(),
         hash(&lifecycle_data).to_bytes(),
         &lifecycle_data,
     )
@@ -340,9 +349,12 @@ pub fn process_hot_execution_v3(
         frame.account_profile_raw,
         frame.account_profile_staging,
         &rent,
-        ACCOUNT_PROFILE_SCHEMA_ID_V2,
-        descriptor.account_profile().to_bytes(),
+        descriptor.account_profile().schema().to_bytes(),
+        descriptor.account_profile().program().to_bytes(),
     )?;
+    if descriptor.account_profile().schema().to_bytes() != ACCOUNT_PROFILE_SCHEMA_ID_V2 {
+        return Err(TradingSbfError::UnsupportedContent.into());
+    }
     let account_profile =
         AccountProfileV2::decode(&account_profile_data).map_err(|_| TradingSbfError::Content)?;
     lifecycle
@@ -354,13 +366,18 @@ pub fn process_hot_execution_v3(
         frame.request_profile_raw,
         frame.request_profile_staging,
         &rent,
-        descriptor.request_profile_schema().to_bytes(),
-        descriptor.request_profile_program().to_bytes(),
+        descriptor.request_profile().schema().to_bytes(),
+        descriptor.request_profile().program().to_bytes(),
     )?;
     let request_profile = decode_request_profile(*descriptor, &request_profile_data)?;
 
-    let (strategy, strategy_extras_end) =
-        authenticate_strategy_boxed_v3(&frame, accounts, *context, selected_program)?;
+    let (strategy, strategy_extras_end) = authenticate_strategy_boxed_v3(
+        &frame,
+        accounts,
+        *context,
+        selected_descriptor.schema(),
+        selected_program,
+    )?;
     let strategy_extras = accounts
         .get(HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3..strategy_extras_end)
         .ok_or(TradingSbfError::Content)?;
@@ -370,10 +387,13 @@ pub fn process_hot_execution_v3(
         frame.transition_raw,
         frame.transition_staging,
         &rent,
-        strategy.strategy().transition_schema().to_bytes(),
-        strategy.strategy().transition_program().to_bytes(),
+        descriptor.transition().schema().to_bytes(),
+        descriptor.transition().program().to_bytes(),
     )?;
-    if strategy.strategy().transition_schema().to_bytes() != TRANSITION_SCHEMA_ID_V3 {
+    if descriptor.transition().schema().to_bytes() != TRANSITION_SCHEMA_ID_V3
+        || strategy.strategy().transition_schema() != descriptor.transition().schema()
+        || strategy.strategy().transition_program() != descriptor.transition().program()
+    {
         return Err(TradingSbfError::UnsupportedContent.into());
     }
     let transition =
@@ -384,11 +404,14 @@ pub fn process_hot_execution_v3(
         frame.effect_raw,
         frame.effect_staging,
         &rent,
-        EFFECT_SCHEMA_ID_V3,
-        descriptor.effect_program().to_bytes(),
+        descriptor.effect().schema().to_bytes(),
+        descriptor.effect().program().to_bytes(),
     )?;
+    if descriptor.effect().schema().to_bytes() != EFFECT_SCHEMA_ID_V3 {
+        return Err(TradingSbfError::UnsupportedContent.into());
+    }
     let effect = EffectProgramV3::decode_selected(
-        descriptor.effect_program().to_bytes(),
+        descriptor.effect().program().to_bytes(),
         hash(&effect_data).to_bytes(),
         &effect_data,
     )
@@ -897,7 +920,7 @@ struct PreparedHotCommitV3<'a, 'accounts, 'info, 'artifact> {
     immutable_root_header: [u8; CAPABILITY_ROOT_HEADER_BYTES_V1],
     root_prestate: [u8; 32],
     strategy_execution_digest: [u8; 32],
-    descriptor: &'a CapabilityProgramV3,
+    descriptor: &'a CapabilityProgramV4,
     strategy: &'a AuthenticatedExecutionStrategyV2,
     context: &'a TradingFamilyContextV1,
     market: &'a CoreState,
@@ -998,11 +1021,11 @@ fn finalize_hot_ack_v3(
     let execution_digest = hashv(&[
         EXECUTION_DIGEST_DOMAIN_V3,
         &prepared.selected_program.to_bytes(),
-        &prepared.descriptor.account_profile().to_bytes(),
-        &prepared.descriptor.request_profile_program().to_bytes(),
+        &prepared.descriptor.account_profile().program().to_bytes(),
+        &prepared.descriptor.request_profile().program().to_bytes(),
         &prepared.strategy.strategy_program_id().to_bytes(),
         &prepared.strategy.strategy().transition_program().to_bytes(),
-        &prepared.descriptor.effect_program().to_bytes(),
+        &prepared.descriptor.effect().program().to_bytes(),
         &prepared.descriptor.derivation_policy().to_bytes(),
         &prepared.context.selection().config().to_bytes(),
         &prepared.market.identity.product_record.to_bytes(),
@@ -1147,8 +1170,8 @@ fn authenticate_product_runtime_boxed_v3<'accounts, 'info>(
 #[inline(never)]
 fn decode_capability_program_boxed_v3(
     descriptor_data: &[u8],
-) -> Result<Box<CapabilityProgramV3>, ProgramError> {
-    CapabilityProgramV3::decode(descriptor_data)
+) -> Result<Box<CapabilityProgramV4>, ProgramError> {
+    CapabilityProgramV4::decode(descriptor_data)
         .map(Box::new)
         .map_err(|_| TradingSbfError::Content.into())
 }
@@ -1177,6 +1200,7 @@ fn authenticate_strategy_boxed_v3<'accounts, 'info>(
     frame: &HotFrameV3<'accounts, 'info>,
     accounts: &'accounts [AccountInfo<'info>],
     context: TradingFamilyContextV1,
+    selected_schema: ContentId,
     selected_program: ContentId,
 ) -> Result<(Box<AuthenticatedExecutionStrategyV2>, usize), ProgramError> {
     let strategy_data = frame
@@ -1213,6 +1237,7 @@ fn authenticate_strategy_boxed_v3<'accounts, 'info>(
     strategy_accounts.extend_from_slice(strategy_extras);
     let strategy = authenticate_execution_strategy_v2(
         context,
+        selected_schema,
         selected_program,
         frame.registry,
         frame.rent,
@@ -1248,7 +1273,7 @@ struct AdmittedCandidateViewV3<'a, 'data, 'accounts, 'info> {
     observations: &'a [AccountObservationV1<'data>],
     envelope: HotExecutionEnvelopeV3,
     context: &'a TradingFamilyContextV1,
-    descriptor: &'a CapabilityProgramV3,
+    descriptor: &'a CapabilityProgramV4,
     strategy: &'a AuthenticatedExecutionStrategyV2,
     product_runtime_v3: &'a AuthenticatedProductRuntimeV3<'accounts, 'info>,
     family_request: &'a [u8],
@@ -1310,10 +1335,10 @@ fn execute_admitted_candidate_v3(
         accelerator_program: ContentId::new(accelerator_program.key.to_bytes())
             .map_err(|_| TradingSbfError::Content)?,
         capability_program: view.selected_program,
-        account_profile: view.descriptor.account_profile(),
-        request_profile: view.descriptor.request_profile_program(),
+        account_profile: view.descriptor.account_profile().program(),
+        request_profile: view.descriptor.request_profile().program(),
         transition: view.strategy.strategy().transition_program(),
-        effect: view.descriptor.effect_program(),
+        effect: view.descriptor.effect().program(),
         lifecycle: view.descriptor.derivation_policy(),
         strategy: view.strategy.strategy_program_id(),
         certificate: view
@@ -1415,7 +1440,7 @@ struct ShadowCandidateViewV3<'a, 'data, 'accounts, 'info> {
     runtime_accounts: &'a [&'accounts AccountInfo<'info>],
     observations: &'a [AccountObservationV1<'data>],
     envelope: HotExecutionEnvelopeV3,
-    descriptor: &'a CapabilityProgramV3,
+    descriptor: &'a CapabilityProgramV4,
     strategy: &'a AuthenticatedExecutionStrategyV2,
     family_request: &'a [u8],
     root_prestate: [u8; 32],
@@ -1510,10 +1535,10 @@ fn execute_shadow_candidate_v3(
                 .map_err(|_| TradingSbfError::Content)?,
             artifacts: ShadowArtifactTupleV3 {
                 capability_program: view.selected_program,
-                account_profile: view.descriptor.account_profile(),
-                request_profile: view.descriptor.request_profile_program(),
+                account_profile: view.descriptor.account_profile().program(),
+                request_profile: view.descriptor.request_profile().program(),
                 transition: view.strategy.strategy().transition_program(),
-                effect: view.descriptor.effect_program(),
+                effect: view.descriptor.effect().program(),
                 strategy: view.strategy.strategy_program_id(),
                 certificate: view
                     .strategy
@@ -3669,26 +3694,29 @@ impl<'a> RequestProfileKindV3<'a> {
 }
 
 fn decode_request_profile<'a>(
-    descriptor: CapabilityProgramV3,
+    descriptor: CapabilityProgramV4,
     bytes: &'a [u8],
 ) -> Result<RequestProfileKindV3<'a>, ProgramError> {
-    let selected = descriptor.request_profile_program().to_bytes();
+    let selected = descriptor.request_profile().program().to_bytes();
     let authenticated = hash(bytes).to_bytes();
-    if descriptor.request_profile_schema().to_bytes() == REQUEST_PROFILE_SCHEMA_ID_V1 {
+    if descriptor.request_profile().schema().to_bytes() == REQUEST_PROFILE_SCHEMA_ID_V1 {
         RequestProfileV1::decode_selected(selected, authenticated, bytes)
             .map(RequestProfileKindV3::Unsigned)
             .map_err(|_| TradingSbfError::Content.into())
-    } else if descriptor.request_profile_schema().to_bytes() == REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID
+    } else if descriptor.request_profile().schema().to_bytes()
+        == REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID
     {
         RequestProfileV2::decode_selected(selected, authenticated, bytes)
             .map(RequestProfileKindV3::Signed)
             .map_err(|_| TradingSbfError::Content.into())
-    } else if descriptor.request_profile_schema().to_bytes() == REQUEST_PROFILE_V3_SCHEMA_RELEASE_ID
+    } else if descriptor.request_profile().schema().to_bytes()
+        == REQUEST_PROFILE_V3_SCHEMA_RELEASE_ID
     {
         RequestProfileV3::decode_selected(selected, authenticated, bytes)
             .map(RequestProfileKindV3::Borrowed)
             .map_err(|_| TradingSbfError::Content.into())
-    } else if descriptor.request_profile_schema().to_bytes() == REQUEST_PROFILE_V4_SCHEMA_RELEASE_ID
+    } else if descriptor.request_profile().schema().to_bytes()
+        == REQUEST_PROFILE_V4_SCHEMA_RELEASE_ID
     {
         RequestProfileV4::decode_selected(selected, authenticated, bytes)
             .map(RequestProfileKindV3::RepeatedRows)
@@ -4366,15 +4394,13 @@ fn commit_data_effect(
 }
 
 fn authenticate_descriptor_root_selection(
-    descriptor: &CapabilityProgramV3,
+    descriptor: &CapabilityProgramV4,
     context: &TradingFamilyContextV1,
     entry: &dclutch_capability_contract::CapabilityEntryV1,
 ) -> Result<(), ProgramError> {
-    if descriptor.kind() != context.selection().kind()
-        || descriptor.config_schema().to_bytes() == [0; 32]
-        || descriptor.root_schema() != entry.child_schema_id()
-        || descriptor.derivation_policy() != entry.child_derivation_id()
-        || descriptor.capacity_profile() != entry.capacity_profile_id()
+    if descriptor
+        .validate_selection(context.selection(), *entry)
+        .is_err()
         || descriptor
             .root_account_bytes()
             .map_err(|_| TradingSbfError::Root)?
