@@ -17,8 +17,14 @@ use dclutch_claims_svm::{
     },
 };
 use dclutch_fractional_claim_contract::{
-    FractionalActionV1, FractionalFamilyRequestInputV1, FractionalFamilyRequestV1,
+    FractionalActionV1, FractionalExposureActionV2, FractionalExposureRequestInputV2,
+    FractionalExposureRequestV2, FractionalFamilyRequestInputV1, FractionalFamilyRequestV1,
     NO_TERMINAL_OUTCOME_V1,
+};
+use dclutch_fractional_claim_kernel::{
+    FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FractionalExposureTermsAdmissionV2,
+    FractionalExposureTermsInputV2, FractionalExposureTermsV2, encode_fractional_exposure_terms_v2,
+    fractional_exposure_terms_bytes_v2,
 };
 
 use super::*;
@@ -33,11 +39,109 @@ const BASIS: [u8; 32] = [7; 32];
 const LINKED_BASIS: [u8; 32] = [8; 32];
 const RESERVE: [u8; 32] = [9; 32];
 const ACTOR: [u8; 32] = [10; 32];
+const TERMS_V2: [u8; 32] = [14; 32];
+const TOKEN_V2: [u8; 32] = [15; 32];
+const TOKEN_BEHAVIOR_V2: [u8; 32] = [16; 32];
+const EXPOSURE_V2: [u8; 32] = [17; 32];
+const RESULT_DOMAIN_V2: [u8; 32] = [18; 32];
+const MINTS_V2: [[u8; 32]; 3] = [[21; 32], [22; 32], [23; 32]];
 
 struct State {
     market: Vec<u8>,
     reserve: Vec<u8>,
     actor: Vec<u8>,
+}
+
+fn terms_v2_bytes() -> Vec<u8> {
+    let length = fractional_exposure_terms_bytes_v2(MINTS_V2.len()).unwrap();
+    let mut scratch = vec![0; length];
+    let mut output = vec![0; length];
+    encode_fractional_exposure_terms_v2(
+        FractionalExposureTermsInputV2 {
+            market: LOGICAL_MARKET,
+            product_record: PRODUCT_RECORD,
+            result_domain: RESULT_DOMAIN_V2,
+            release_set: RELEASE,
+            token_program: TOKEN_V2,
+            token_behavior: TOKEN_BEHAVIOR_V2,
+            exposure_id: EXPOSURE_V2,
+            product_basis: LINKED_BASIS,
+            representation_basis: BASIS,
+            graph_id: [19; 32],
+            product_width: 258,
+            denominator: 10,
+            shard_mints: &MINTS_V2,
+        },
+        &mut scratch,
+        &mut output,
+    )
+    .unwrap();
+    output
+}
+
+fn terms_v2(bytes: &[u8]) -> FractionalExposureTermsV2<'_> {
+    FractionalExposureTermsV2::decode(
+        bytes,
+        FractionalExposureTermsAdmissionV2 {
+            selected_schema_id: FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
+            finalized_schema_id: FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
+            selected_terms_id: TERMS_V2,
+            finalized_terms_id: TERMS_V2,
+            recomputed_terms_digest: TERMS_V2,
+            finalized_terms_digest: TERMS_V2,
+            record_authenticated: true,
+        },
+    )
+    .unwrap()
+}
+
+fn request_v2(action: FractionalExposureActionV2, quantity: u64) -> FractionalExposureRequestV2 {
+    FractionalExposureRequestV2::new(
+        action,
+        FractionalExposureRequestInputV2 {
+            release_set: RELEASE,
+            market: LOGICAL_MARKET,
+            product_record: PRODUCT_RECORD,
+            result_domain: RESULT_DOMAIN_V2,
+            terms: TERMS_V2,
+            token_behavior: TOKEN_BEHAVIOR_V2,
+            exposure: EXPOSURE_V2,
+            owner: ACTOR,
+            source_token_account: if action == FractionalExposureActionV2::WholeUnwrap {
+                [24; 32]
+            } else {
+                [0; 32]
+            },
+            destination_token_account: if action == FractionalExposureActionV2::Wrap {
+                [25; 32]
+            } else {
+                [0; 32]
+            },
+            terminal_digest: [0; 32],
+            expected_revision: 7,
+            quantity,
+            representation_coordinate: 1,
+        },
+    )
+    .unwrap()
+}
+
+fn input_v2<'a>(
+    request: FractionalExposureRequestV2,
+    terms: FractionalExposureTermsV2<'a>,
+    state: &'a State,
+) -> FractionalExposureSignedDeltaInputV2<'a> {
+    FractionalExposureSignedDeltaInputV2 {
+        request,
+        terms,
+        semantic_product_id: PRODUCT,
+        market_account: MARKET_ACCOUNT,
+        market_bytes: &state.market,
+        claims_program: CLAIMS,
+        reserve_owner: RESERVE,
+        reserve_position_bytes: &state.reserve,
+        actor_position_bytes: &state.actor,
+    }
 }
 
 fn state(supplies: &[u64], reserve: &[u64], actor: &[u64]) -> State {
@@ -484,6 +588,124 @@ fn full_u64_overflow_refuses_explicitly() {
             &mut output,
             &mut market,
             &mut [p0.as_mut_slice(), p1.as_mut_slice()],
+        ),
+        Err(Error::Arithmetic)
+    );
+}
+
+#[test]
+fn exposure_v2_n258_k3_wrap_and_whole_unwrap_use_only_k_claims_rows() {
+    let encoded_terms = terms_v2_bytes();
+    let terms = terms_v2(&encoded_terms);
+    let state = state(&[100, 100, 100], &[3, 4, 5], &[50, 50, 50]);
+    for (action, quantity, expected_native, reserve_direction, actor_direction) in [
+        (
+            FractionalExposureActionV2::Wrap,
+            2,
+            2,
+            DeltaDirectionV3::Credit,
+            DeltaDirectionV3::Debit,
+        ),
+        (
+            FractionalExposureActionV2::WholeUnwrap,
+            23,
+            2,
+            DeltaDirectionV3::Debit,
+            DeltaDirectionV3::Credit,
+        ),
+    ] {
+        let input = input_v2(request_v2(action, quantity), terms, &state);
+        let shape = fractional_exposure_signed_delta_shape_v2(input).unwrap();
+        assert_eq!(shape.claim_count(), 3);
+        let neutral = SignedDeltaV3::new(DeltaDirectionV3::Neutral, 0).unwrap();
+        let mut aggregates = vec![neutral; 3];
+        let mut rows = vec![dummy_row(3); 2];
+        let mut packet = vec![0; shape.packet_bytes()];
+        let prepared = prepare_fractional_exposure_signed_delta_v2(
+            input,
+            &mut aggregates,
+            &mut rows,
+            &mut packet,
+        )
+        .unwrap();
+        assert_eq!(prepared.native_claims(), expected_native);
+        assert_eq!(prepared.coordinate(), 1);
+        assert_eq!(prepared.post_fractional_revision(), 8);
+        let plan = SignedDeltaPlanV3::decode(&packet).unwrap();
+        assert_eq!(plan.claim_count(), 3);
+        assert_eq!(plan.position_count(), 2);
+        assert_eq!(plan.position(0).unwrap().owner(), RESERVE);
+        assert_eq!(plan.position(1).unwrap().owner(), ACTOR);
+        assert_eq!(
+            plan.position_delta(0).unwrap().delta().direction(),
+            reserve_direction
+        );
+        assert_eq!(
+            plan.position_delta(1).unwrap().delta().direction(),
+            actor_direction
+        );
+        assert_eq!(
+            plan.position_delta(0).unwrap().delta().magnitude(),
+            expected_native
+        );
+        assert_eq!(
+            plan.position_delta(1).unwrap().delta().magnitude(),
+            expected_native
+        );
+        assert!(
+            aggregates
+                .iter()
+                .all(|delta| delta.direction() == DeltaDirectionV3::Neutral)
+        );
+    }
+}
+
+#[test]
+fn exposure_v2_refuses_product_basis_owner_balance_and_u64_substitution() {
+    let encoded_terms = terms_v2_bytes();
+    let terms = terms_v2(&encoded_terms);
+    let insufficient = state(&[100, 100, 100], &[3, 4, 5], &[50, 1, 50]);
+    let wrap = input_v2(
+        request_v2(FractionalExposureActionV2::Wrap, 2),
+        terms,
+        &insufficient,
+    );
+    let shape = fractional_exposure_signed_delta_shape_v2(wrap).unwrap();
+    let neutral = SignedDeltaV3::new(DeltaDirectionV3::Neutral, 0).unwrap();
+    let mut aggregates = vec![neutral; 3];
+    let mut rows = vec![dummy_row(3); 2];
+    let mut packet = vec![0xa5; shape.packet_bytes()];
+    assert_eq!(
+        prepare_fractional_exposure_signed_delta_v2(wrap, &mut aggregates, &mut rows, &mut packet,),
+        Err(Error::EconomicMismatch)
+    );
+
+    let mut wrong_product = wrap;
+    wrong_product.semantic_product_id = [99; 32];
+    assert_eq!(
+        fractional_exposure_signed_delta_shape_v2(wrong_product),
+        Err(Error::IdentityMismatch)
+    );
+    let mut aliased = wrap;
+    aliased.reserve_owner = ACTOR;
+    assert_eq!(
+        fractional_exposure_signed_delta_shape_v2(aliased),
+        Err(Error::IdentityMismatch)
+    );
+
+    let overflow = state(&[1, u64::MAX, 1], &[0, u64::MAX, 0], &[0, u64::MAX, 0]);
+    let overflow_input = input_v2(
+        request_v2(FractionalExposureActionV2::Wrap, 1),
+        terms,
+        &overflow,
+    );
+    let mut packet = vec![0; shape.packet_bytes()];
+    assert_eq!(
+        prepare_fractional_exposure_signed_delta_v2(
+            overflow_input,
+            &mut aggregates,
+            &mut rows,
+            &mut packet,
         ),
         Err(Error::Arithmetic)
     );

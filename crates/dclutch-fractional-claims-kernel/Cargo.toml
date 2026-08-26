@@ -10,6 +10,7 @@ publish = false
 [dependencies]
 dclutch-claims-svm = { path = "../dclutch-claims-svm" }
 dclutch-fractional-claim-contract = { path = "../dclutch-fractional-claim-contract" }
+dclutch-fractional-claim-kernel = { path = "../dclutch-fractional-claim-kernel" }
 sha2 = { version = "=0.10.9", default-features = false }
 
 [workspace]

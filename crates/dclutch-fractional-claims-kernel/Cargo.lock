@@ -71,6 +71,7 @@ dependencies = [
  "dclutch-rational-representation-v2-kernel",
  "dclutch-rational-representation-v2-lifecycle-contract",
  "dclutch-rational-representation-v2-request-contract",
+ "dclutch-representation-composition-v3-kernel",
 ]
 
 [[package]]
@@ -110,6 +111,9 @@ dependencies = [
 [[package]]
 name = "dclutch-fractional-claim-kernel"
 version = "0.1.0"
+dependencies = [
+ "dclutch-representation-composition-v3-kernel",
+]
 
 [[package]]
 name = "dclutch-fractional-claims-kernel"
@@ -117,6 +121,7 @@ version = "0.1.0"
 dependencies = [
  "dclutch-claims-svm",
  "dclutch-fractional-claim-contract",
+ "dclutch-fractional-claim-kernel",
  "sha2",
 ]
 
@@ -137,6 +142,7 @@ name = "dclutch-rational-representation-v2-kernel"
 version = "0.1.0"
 dependencies = [
  "dclutch-product-payoff-v2-codec",
+ "dclutch-representation-composition-v3-kernel",
 ]
 
 [[package]]
@@ -160,6 +166,10 @@ version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
 ]
+
+[[package]]
+name = "dclutch-representation-composition-v3-kernel"
+version = "0.1.0"
 
 [[package]]
 name = "dclutch-request-profile-contract"

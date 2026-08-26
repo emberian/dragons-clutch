@@ -10,6 +10,8 @@
 //! child request, receipt, Position layout, or payout authority. Callers own
 //! all runtime-width scratch and candidate state buffers.
 
+mod exposure_v2;
+
 use dclutch_claims_svm::{
     CallerRole,
     liability_basis_state_v2::{
@@ -29,6 +31,13 @@ use dclutch_fractional_claim_contract::{
     FractionalActionV1, FractionalFamilyRequestV1, NO_TERMINAL_OUTCOME_V1,
 };
 use sha2::{Digest, Sha256};
+
+pub use exposure_v2::{
+    FractionalExposureSignedDeltaInputV2, FractionalExposureSignedDeltaShapeV2,
+    PreparedFractionalExposureSignedDeltaV2, fractional_exposure_signed_delta_shape_v2,
+    prepare_fractional_exposure_signed_delta_v2,
+    validate_fractional_exposure_signed_delta_postcondition_v2,
+};
 
 const CLAIM_ATOM_BYTES: usize = 8;
 
