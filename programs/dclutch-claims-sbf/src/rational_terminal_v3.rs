@@ -27,6 +27,8 @@ use dclutch_custody_contract::{
 use dclutch_rational_representation_v2_contract::{
     ABSENT_REVISION, CallerRoleV2, RepresentationRequestV2,
 };
+use dclutch_realm_contract::REALM_SCHEMA_RELEASE_ID_V1;
+use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_token_svm::TokenAccount;
 use solana_program::{
@@ -477,6 +479,24 @@ fn authenticate_custody_accounts(
     let replay = CustodyReplaySeedsV1::from_request(*request);
     let authority = CustodyAuthoritySeedsV1::from_request(*request);
     let vault = CustodyVaultSeedsV1::from_request(*request, true);
+    let expected_realm = Pubkey::find_program_address(
+        &[
+            RAW_RECORD_PDA_SEED_V1,
+            &REALM_SCHEMA_RELEASE_ID_V1,
+            request.realm.as_slice(),
+        ],
+        frame.registry.key,
+    )
+    .0;
+    let expected_realm_staging = Pubkey::find_program_address(
+        &[
+            STAGING_CURSOR_PDA_SEED_V1,
+            &REALM_SCHEMA_RELEASE_ID_V1,
+            request.realm.as_slice(),
+        ],
+        frame.registry.key,
+    )
+    .0;
     if frame.custody_caller_authority.key
         != &Pubkey::find_program_address(&caller.as_slices(), program_id).0
         || frame.custody_replay.key
@@ -486,7 +506,8 @@ fn authenticate_custody_accounts(
         || frame.hoard.key
             != &Pubkey::find_program_address(&vault.as_slices(), frame.custody_program.key).0
         || frame.recipient.key.to_bytes() != request.destination
-        || frame.realm.key.to_bytes() != request.realm
+        || frame.realm.key != &expected_realm
+        || frame.realm_staging.key != &expected_realm_staging
         || frame.token_program.key.to_bytes() != request.token_program
     {
         return Err(ClaimsSbfError::Identity.into());

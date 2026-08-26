@@ -232,7 +232,7 @@ pub(crate) fn authenticate_terminal_scenario_v3(
 ) -> Result<TerminalScenarioV3, ProgramError> {
     match authenticated.admission.basis_kind() {
         BasisKindV3::CategoricalQ1 => {
-            require_coordinate_placeholders(core_program, coordinate, coordinate_staging)?;
+            require_coordinate_placeholders(rent_account, coordinate, coordinate_staging)?;
             Ok(TerminalScenarioV3::Categorical(
                 authenticated.core.terminal_winner,
             ))
@@ -243,7 +243,7 @@ pub(crate) fn authenticate_terminal_scenario_v3(
                 .checked_sub(1)
                 .ok_or(ClaimsSbfError::Identity)?;
             if authenticated.core.terminal_winner == failure {
-                require_coordinate_placeholders(core_program, coordinate, coordinate_staging)?;
+                require_coordinate_placeholders(rent_account, coordinate, coordinate_staging)?;
                 return Ok(TerminalScenarioV3::Failure);
             }
             let digest = authenticated
@@ -287,11 +287,11 @@ pub(crate) fn authenticate_terminal_scenario_v3(
 }
 
 fn require_coordinate_placeholders(
-    core_program: &AccountInfo<'_>,
+    rent_account: &AccountInfo<'_>,
     coordinate: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
 ) -> Result<(), ProgramError> {
-    if coordinate.key != core_program.key || staging.key != core_program.key {
+    if coordinate.key != rent_account.key || staging.key != rent_account.key {
         return Err(ClaimsSbfError::Identity.into());
     }
     Ok(())

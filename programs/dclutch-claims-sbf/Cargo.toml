@@ -30,6 +30,7 @@ dclutch-product-runtime-v2-svm-reader = { path = "../../crates/dclutch-product-r
 dclutch-rational-representation-v2-contract = { path = "../../crates/dclutch-rational-representation-v2-contract" }
 dclutch-rational-representation-v2-kernel = { path = "../../crates/dclutch-rational-representation-v2-kernel" }
 dclutch-rational-representation-v2-lifecycle-contract = { path = "../../crates/dclutch-rational-representation-v2-lifecycle-contract" }
+dclutch-realm-contract = { path = "../../crates/dclutch-realm-contract" }
 dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }
 dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }
 dclutch-registry-svm = { path = "../../crates/dclutch-registry-svm" }
@@ -43,7 +44,6 @@ spl-associated-token-account-interface = { version = "=2.0.0", default-features 
 spl-token-2022-interface = { version = "=3.1.1", default-features = false }
 
 [dev-dependencies]
-dclutch-realm-contract = { path = "../../crates/dclutch-realm-contract" }
 dclutch-product-runtime-v2-admission = { path = "../../crates/dclutch-product-runtime-v2-admission" }
 solana-account = "=4.3.2"
 solana-address-lookup-table-interface = { version = "=3.1.0", features = ["bincode", "bytemuck"] }

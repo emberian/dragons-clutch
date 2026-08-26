@@ -8,10 +8,11 @@
 
 use dclutch_claims_svm::{
     affine_batch_v2::{AffineBatchPlanV2, AffineBatchReceiptV2},
-    protocol_position_v2::ProtocolPositionSeedsV2,
+    protocol_position_v2::{ProtocolPositionClaimsCapabilitySeedsV2, ProtocolPositionSeedsV2},
     signed_delta_v3::{SignedDeltaPlanV3, SignedDeltaReceiptV3},
 };
 use dclutch_custody_contract::{CustodyReceiptV1, CustodyRequestV1};
+use dclutch_core_contract::ContentId;
 use dclutch_rational_representation_v2_contract::{
     AffineBatchContextV2, CompletionEvidenceV2, PreparedRepresentationV2,
     RATIONAL_ASSET_ACCOUNT_COUNT_V2, RATIONAL_BASE_ACCOUNT_COUNT_V2,
@@ -24,6 +25,7 @@ use dclutch_rational_representation_v2_kernel::{
     StructuredProjectionHeaderV2, StructuredProjectionV2,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry_svm::batch_v2::{AuthenticatedRoleBatchReceiptV2, RoleBatchRequestV2};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_token_svm::{
     TOKEN_2022_PROGRAM_ID, Token2022BehaviorAccountFactsV2, Token2022BehaviorMintFactsV2,
@@ -32,7 +34,8 @@ use dclutch_token_svm::{
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
-    program::{invoke, invoke_signed, set_return_data},
+    instruction::{AccountMeta, Instruction},
+    program::{get_return_data, invoke, invoke_signed, set_return_data},
     program_error::ProgramError,
     pubkey::Pubkey,
     rent::Rent,
@@ -43,7 +46,7 @@ use solana_system_interface::instruction::{allocate, assign};
 use spl_token_2022_interface::extension::permissioned_burn::instruction as permissioned_burn_instruction;
 use spl_token_2022_interface::instruction as token_instruction;
 
-use super::{ClaimsSbfError, reauthenticate};
+use super::ClaimsSbfError;
 use crate::{
     affine_batch_v2::{
         AFFINE_BATCH_FIXED_ACCOUNT_COUNT_V2, AuthenticatedAffineParentV2,
@@ -59,8 +62,8 @@ use crate::{
 };
 
 pub use dclutch_rational_representation_v2_contract::{
-    RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2, RATIONAL_REPLAY_BYTES_V2, RATIONAL_REPLAY_MAGIC_V2,
-    RATIONAL_REPLAY_SEED_V2, RATIONAL_REPLAY_VERSION_V2, RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
+    RATIONAL_REPLAY_BYTES_V2, RATIONAL_REPLAY_MAGIC_V2, RATIONAL_REPLAY_SEED_V2,
+    RATIONAL_REPLAY_VERSION_V2, RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
     RATIONAL_SHARD_MINT_SEED_V2, RATIONAL_STRUCTURED_CUSTODY_SEED_V2,
 };
 const CALLER_AUTHORITY: usize = 0;
@@ -652,30 +655,108 @@ fn authenticate_execution_releases(
     request: RepresentationRequestV2<'_>,
 ) -> Result<(), ProgramError> {
     let header = request.header();
-    let caller = reauthenticate(
-        base.registry,
-        base.cache,
-        caller_role(header.caller_role),
-        base.caller_program,
-        base.caller_programdata,
-    )?;
-    if caller.execution_release_set_id().as_bytes() != &header.release_set {
-        return Err(ClaimsSbfError::Release.into());
-    }
-    for (role, program, programdata) in [
-        (
-            ExecutionRoleV1::Claims,
-            base.claims_program,
-            base.claims_programdata,
-        ),
+    let mut entries = Vec::from([
         (
             ExecutionRoleV1::Core,
             base.core_program,
             base.core_programdata,
         ),
-    ] {
-        let receipt = reauthenticate(base.registry, base.cache, role, program, programdata)?;
-        if receipt.execution_release_set_id().as_bytes() != &header.release_set {
+        (
+            ExecutionRoleV1::Claims,
+            base.claims_program,
+            base.claims_programdata,
+        ),
+    ]);
+    match caller_role(header.caller_role) {
+        ExecutionRoleV1::Core => {
+            if base.caller_program.key != base.core_program.key
+                || base.caller_programdata.key != base.core_programdata.key
+            {
+                return Err(ClaimsSbfError::Release.into());
+            }
+        }
+        ExecutionRoleV1::Trading => entries.push((
+            ExecutionRoleV1::Trading,
+            base.caller_program,
+            base.caller_programdata,
+        )),
+        _ => return Err(ClaimsSbfError::Release.into()),
+    }
+    authenticate_release_batch(base.registry, base.cache, header.release_set, &entries)
+}
+
+#[inline(never)]
+fn authenticate_release_batch<'info>(
+    registry: &AccountInfo<'info>,
+    cache: &AccountInfo<'info>,
+    release_set: [u8; 32],
+    entries: &[(
+        ExecutionRoleV1,
+        &AccountInfo<'info>,
+        &AccountInfo<'info>,
+    )],
+) -> Result<(), ProgramError> {
+    let cache_digest = {
+        let bytes = cache
+            .try_borrow_data()
+            .map_err(|_| ClaimsSbfError::Release)?;
+        ContentId::new(hash(&bytes).to_bytes()).map_err(|_| ClaimsSbfError::Release)?
+    };
+    let roles = entries.iter().map(|entry| entry.0).collect::<Vec<_>>();
+    let request = RoleBatchRequestV2::new(
+        ContentId::new(release_set).map_err(|_| ClaimsSbfError::Release)?,
+        cache_digest,
+        &roles,
+    )
+    .map_err(|_| ClaimsSbfError::Release)?;
+    let request_bytes = request.to_bytes();
+    let mut metas = Vec::with_capacity(1 + entries.len() * 2);
+    let mut infos = Vec::with_capacity(2 + entries.len() * 2);
+    metas.push(AccountMeta::new_readonly(*cache.key, false));
+    infos.push(cache.clone());
+    for (_, program, programdata) in entries {
+        metas.push(AccountMeta::new_readonly(*program.key, false));
+        metas.push(AccountMeta::new_readonly(*programdata.key, false));
+        infos.push((*program).clone());
+        infos.push((*programdata).clone());
+    }
+    infos.push(registry.clone());
+    invoke(
+        &Instruction {
+            program_id: *registry.key,
+            accounts: metas,
+            data: request_bytes.to_vec(),
+        },
+        &infos,
+    )
+    .map_err(|_| ClaimsSbfError::Release)?;
+    let (producer, receipt_bytes) = get_return_data().ok_or(ClaimsSbfError::Release)?;
+    if producer != *registry.key {
+        return Err(ClaimsSbfError::Release.into());
+    }
+    let receipt = AuthenticatedRoleBatchReceiptV2::decode(&receipt_bytes)
+        .map_err(|_| ClaimsSbfError::Release)?;
+    let request_digest =
+        ContentId::new(hash(&request_bytes).to_bytes()).map_err(|_| ClaimsSbfError::Release)?;
+    if receipt.registry_program().to_bytes() != registry.key.to_bytes()
+        || receipt.activation_cache() != cache.key.to_bytes()
+        || receipt.activation_cache_digest() != cache_digest
+        || receipt.release_set_id().to_bytes() != release_set
+        || receipt.request_digest() != request_digest
+        || receipt.role_count() != request.role_count()
+        || receipt.role_mask() != request.role_mask()
+    {
+        return Err(ClaimsSbfError::Release.into());
+    }
+    for (index, (role, program, programdata)) in entries.iter().copied().enumerate() {
+        let observation = receipt
+            .observation(index)
+            .ok_or(ClaimsSbfError::Release)?
+            .map_err(|_| ClaimsSbfError::Release)?;
+        if observation.role() != role
+            || observation.program().to_bytes() != program.key.to_bytes()
+            || observation.programdata() != programdata.key.to_bytes()
+        {
             return Err(ClaimsSbfError::Release.into());
         }
     }
@@ -926,15 +1007,10 @@ fn authenticate_asset_identities(
         program_id,
     )
     .0;
-    let custody_owner = Pubkey::find_program_address(
-        &[
-            RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2,
-            &descriptor,
-            &outcome_bytes,
-        ],
-        program_id,
-    )
-    .0;
+    let custody_owner_seeds = ProtocolPositionClaimsCapabilitySeedsV2::new(descriptor, outcome)
+        .map_err(|_| ClaimsSbfError::Identity)?;
+    let custody_owner =
+        Pubkey::find_program_address(&custody_owner_seeds.as_slices(), program_id).0;
     let position_seeds =
         ProtocolPositionSeedsV2::new(base.aggregate.key.to_bytes(), custody_owner.to_bytes())
             .map_err(|_| ClaimsSbfError::Identity)?;

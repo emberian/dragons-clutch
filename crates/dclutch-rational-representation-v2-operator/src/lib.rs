@@ -20,7 +20,7 @@ use dclutch_claims_svm::{
         TERMINAL_COORDINATE_MAGIC_V2, TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2,
         encode_product_basis_terminal_signed_delta_v3,
     },
-    protocol_position_v2::ProtocolPositionSeedsV2,
+    protocol_position_v2::{ProtocolPositionClaimsCapabilitySeedsV2, ProtocolPositionSeedsV2},
     signed_delta_v3::{DeltaDirectionV3, SignedDeltaV3, plan_bytes},
 };
 use dclutch_custody_contract::{
@@ -39,8 +39,8 @@ use dclutch_product_runtime_v2_svm_reader::{
     },
 };
 use dclutch_rational_representation_v2_contract::{
-    ABSENT_REVISION, ASSET_BYTES_V2, AssetV2, CallerRoleV2, RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2,
-    RATIONAL_REPLAY_BYTES_V2, RATIONAL_REPLAY_SEED_V2, RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
+    ABSENT_REVISION, ASSET_BYTES_V2, AssetV2, CallerRoleV2, RATIONAL_REPLAY_BYTES_V2,
+    RATIONAL_REPLAY_SEED_V2, RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
     RATIONAL_SHARD_MINT_SEED_V2, RATIONAL_STRUCTURED_CUSTODY_SEED_V2, REQUEST_HEADER_BYTES_V2,
     RationalReplayV2, RepresentationActionV2, RepresentationRequestHeaderV2,
     RepresentationRequestV2,
@@ -985,15 +985,13 @@ fn authenticate_assets(
             &common.roles.claims,
         )
         .0;
-        let custody_owner = Pubkey::find_program_address(
-            &[
-                RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2,
-                common.descriptor.descriptor_id().as_slice(),
-                &outcome_bytes,
-            ],
-            &common.roles.claims,
+        let custody_owner_seeds = ProtocolPositionClaimsCapabilitySeedsV2::new(
+            common.descriptor.descriptor_id(),
+            outcome,
         )
-        .0;
+        .map_err(|_| Error::InvalidClaims)?;
+        let custody_owner =
+            Pubkey::find_program_address(&custody_owner_seeds.as_slices(), &common.roles.claims).0;
         let custody_position = Pubkey::find_program_address(
             &ProtocolPositionSeedsV2::new(
                 common.claims_aggregate.to_bytes(),

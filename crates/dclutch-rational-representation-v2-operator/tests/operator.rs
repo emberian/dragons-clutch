@@ -843,15 +843,14 @@ impl Fixture {
                     &CLAIMS,
                 )
                 .0;
-                let custody_owner = Pubkey::find_program_address(
-                &[
-                    dclutch_rational_representation_v2_contract::RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2,
-                    descriptor_id.as_slice(),
-                    &outcome_bytes,
-                ],
-                &CLAIMS,
-                )
-                .0;
+                let custody_owner_seeds =
+                    dclutch_claims_svm::protocol_position_v2::ProtocolPositionClaimsCapabilitySeedsV2::new(
+                        descriptor_id,
+                        outcome,
+                    )
+                    .expect("Claims capability owner seeds");
+                let custody_owner =
+                    Pubkey::find_program_address(&custody_owner_seeds.as_slices(), &CLAIMS).0;
                 let position_key = Pubkey::find_program_address(
                     &ProtocolPositionSeedsV2::new(
                         aggregate_key.to_bytes(),

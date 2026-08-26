@@ -10,21 +10,33 @@
 use std::{env, fs, path::PathBuf, vec::Vec};
 
 use dclutch_claims_sbf::liability_basis_v2::{
-    LIABILITY_BASIS_CANDIDATE_DIGEST_DOMAIN_V2, LIABILITY_BASIS_MARKET_SEED_V2,
-    LIABILITY_BASIS_SCHEMA_RELEASE_ID_V2, LiabilityBasisMarketInputV2,
-    LiabilityBasisPositionInputV2, TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2,
+    LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketInputV2, LiabilityBasisPositionInputV2,
+    TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2,
     encode_liability_basis_market_v2, encode_liability_basis_position_v2,
     encode_terminal_coordinate_v2,
 };
-use dclutch_claims_svm::protocol_position_v2::ProtocolPositionSeedsV2;
+use dclutch_claims_svm::{
+    CallerRole,
+    product_basis_terminal_v3::{
+        ProductBasisTerminalInputV3, TERMINAL_CANDIDATE_DOMAIN_V3,
+        encode_product_basis_terminal_signed_delta_v3,
+    },
+    protocol_position_v2::{
+        ProtocolPositionClaimsCapabilitySeedsV2, ProtocolPositionSeedsV2,
+    },
+    signed_delta_v3::{DeltaDirectionV3, SignedDeltaV3, plan_bytes},
+};
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
     CallerRoleV1 as CustodyCallerRoleV1, CompartmentV1, ContextV1, CustodyAuthoritySeedsV1,
     CustodyReplaySeedsV1, CustodyReplayV1, CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
 };
-use dclutch_liability_basis_v2_kernel::product_claims::{
-    CAPPED_RAMP_BASIS_BYTES_V2, CappedRampBasisInputV2, ContentIdV2,
-    LINKED_CAPPED_RAMP_BASIS_BYTES_V2, encode_capped_ramp_basis_v2, encode_linked_basis_record_v2,
+use dclutch_product_payoff_v2_codec::{
+    registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+    runtime_v3::{
+        BasisInputV3, BasisKindV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, basis_record_bytes_v3,
+        compile_basis_v3, semantic_basis_preimage_v3,
+    },
 };
 use dclutch_market_core_codec::{
     CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase as CorePhase, Readiness,
@@ -39,18 +51,22 @@ use dclutch_product_runtime_v2_admission::{
 };
 use dclutch_rational_representation_v2_contract::{
     ABSENT_REVISION, ASSET_BYTES_V2, AssetV2, CallerRoleV2, RATIONAL_ASSET_ACCOUNT_COUNT_V2,
-    RATIONAL_BASE_ACCOUNT_COUNT_V2, RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2,
-    RATIONAL_REPLAY_BYTES_V2, RATIONAL_REPLAY_MAGIC_V2, RATIONAL_REPLAY_SEED_V2,
+    RATIONAL_BASE_ACCOUNT_COUNT_V2, RATIONAL_REPLAY_BYTES_V2, RATIONAL_REPLAY_MAGIC_V2,
+    RATIONAL_REPLAY_SEED_V2,
     RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2, RATIONAL_SHARD_MINT_SEED_V2,
     RATIONAL_STRUCTURED_CUSTODY_SEED_V2, RATIONAL_TERMINAL_ACCOUNT_COUNT_V2,
     REQUEST_HEADER_BYTES_V2, RepresentationActionV2, RepresentationRequestHeaderV2,
     RepresentationRequestV2,
 };
 use dclutch_rational_representation_v2_kernel::{
-    DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3, GRAPH_EDGE_BYTES,
-    GRAPH_HEADER_BYTES, GRAPH_MAGIC_V2, GRAPH_NODE_BYTES,
+    ContentAdmissionV2, DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3,
+    DescriptorAdmissionV2, GRAPH_EDGE_BYTES, GRAPH_HEADER_BYTES, GRAPH_MAGIC_V2, GRAPH_NODE_BYTES,
     REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3, REPRESENTATION_GRAPH_SCHEMA_RELEASE_ID_V2,
     SCALAR_BYTES, SCHEMA_VERSION_V2,
+    product_v3::{
+        ProductRepresentationInputV3, ProductRuntimeProjectionV3, RepresentationContextV3,
+        TerminalScenarioV3, admit_product_representation_v3,
+    },
 };
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
@@ -100,11 +116,11 @@ const WINNER: u32 = 1;
 const DENOMINATOR: u64 = 10;
 const RECEIPT_SUPPLY: u64 = 7;
 const COEFFICIENTS: [u64; 2] = [3, 7];
-const SHARD_SUPPLIES: [u64; 2] = [30, 70];
+const SHARD_SUPPLIES: [u64; 2] = [40, 70];
 const SHARD_DECIMALS: [u8; 2] = [6, u8::MAX];
 const RECEIPT_DECIMALS: u8 = 19;
-const ACTOR_SHARDS: [u64; 2] = [10, 21];
-const STRUCTURED_SHARDS: [u64; 2] = [20, 49];
+const ACTOR_SHARDS: [u64; 2] = [19, 21];
+const STRUCTURED_SHARDS: [u64; 2] = [21, 49];
 const CUSTODY_EXPECTED_REVISION: u64 = 8;
 const INITIAL_RECIPIENT_ATOMS: u64 = 5;
 const INITIAL_HOARD_ATOMS: u64 = 9;
@@ -639,7 +655,10 @@ fn core_market(
 struct ProductClaimsFixture {
     product_id: [u8; 32],
     product_digest: [u8; 32],
+    result_domain_id: [u8; 32],
     basis_id: [u8; 32],
+    linked_basis_bytes: Vec<u8>,
+    linked_basis_digest: [u8; 32],
     linked_basis_record: Pubkey,
     linked_basis_staging: Pubkey,
     product_record: Pubkey,
@@ -677,43 +696,45 @@ fn runtime_id(value: [u8; 32]) -> RuntimeContentId {
 
 fn add_product_claims(test: &mut ProgramTest) -> ProductClaimsFixture {
     let stable_product = [0x61; 32];
-    let product_for_basis = ContentIdV2::new(stable_product).expect("basis Product");
-    let mut embedded = [0_u8; CAPPED_RAMP_BASIS_BYTES_V2];
-    encode_capped_ramp_basis_v2(
-        CappedRampBasisInputV2 {
-            product_instance_id: product_for_basis,
-            knot_denominator: 1,
-            left_numerator: 0,
-            right_numerator: 1,
-            scale: 1,
-        },
-        &mut embedded,
-    )
-    .expect("basis");
+    let product_id = runtime_id(stable_product);
+    let coordinate_domain_id = runtime_id([0x62; 32]);
+    let result_unit_id = runtime_id([0x63; 32]);
+    let provisional_input = BasisInputV3 {
+        kind: BasisKindV3::CategoricalQ1,
+        product_id: product_id.to_bytes(),
+        result_domain_id: [0x67; 32],
+        coordinate_domain_id: coordinate_domain_id.to_bytes(),
+        result_unit_id: result_unit_id.to_bytes(),
+        evaluator_release_id: [0x68; 32],
+        basis_width: OUTCOME_COUNT,
+        payout_scale: 1,
+        knot_denominator: 1,
+        knots: &[],
+        terms: &[],
+        failure_payouts: &[],
+    };
+    let mut provisional = vec![
+        0_u8;
+        basis_record_bytes_v3(BasisKindV3::CategoricalQ1, OUTCOME_COUNT as usize, 0, 0)
+            .expect("ProductBasisV3 width")
+    ];
+    compile_basis_v3(provisional_input, &mut provisional).expect("provisional ProductBasisV3");
+    let semantic =
+        semantic_basis_preimage_v3(&provisional).expect("ProductBasisV3 semantic preimage");
     let basis_id = hashv(&[
-        b"dclutch/lbv2/semantic-id/v2",
-        embedded.get(..32).expect("basis prefix"),
-        embedded.get(64..).expect("basis suffix"),
+        SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
+        semantic.prefix(),
+        semantic.suffix(),
     ])
     .to_bytes();
-    let mut linked = [0_u8; LINKED_CAPPED_RAMP_BASIS_BYTES_V2];
-    encode_linked_basis_record_v2(
-        product_for_basis,
-        ContentIdV2::new(basis_id).expect("basis ID"),
-        &embedded,
-        &mut linked,
-    )
-    .expect("linked basis");
-    let (linked_basis_record, linked_basis_staging, _) =
-        add_core_finalized_record(test, LIABILITY_BASIS_SCHEMA_RELEASE_ID_V2, &linked);
 
     let cuts: [i128; 0] = [];
     let mut domain = vec![0_u8; result_domain_record_bytes(0).expect("domain width")];
     compile_result_domain_v2(
         ResultDomainInputV2 {
-            product_id: runtime_id(stable_product),
-            coordinate_domain_id: runtime_id([0x62; 32]),
-            result_unit_id: runtime_id([0x63; 32]),
+            product_id,
+            coordinate_domain_id,
+            result_unit_id,
             liability_basis_id: runtime_id(basis_id),
             representation_release_id: runtime_id([0x64; 32]),
             mapping_release_id: runtime_id([0x65; 32]),
@@ -725,17 +746,16 @@ fn add_product_claims(test: &mut ProgramTest) -> ProductClaimsFixture {
     .expect("domain");
     let (result_domain_record, result_domain_staging, domain_digest) =
         add_finalized_record(test, RESULT_DOMAIN_SCHEMA_ID_V2, &domain);
-    let coefficients = [1_u64, 1];
     let mut portfolio = vec![0_u8; portfolio_record_bytes(2).expect("portfolio width")];
     compile_portfolio_v2(
         PortfolioInputV2 {
-            product_id: runtime_id(stable_product),
+            product_id,
             result_domain_id: runtime_id(domain_digest),
             claim_basis_id: runtime_id([0x66; 32]),
             liability_basis_id: runtime_id(basis_id),
             representation_release_id: runtime_id([0x64; 32]),
-            denominator: 1,
-            coefficients: &coefficients,
+            denominator: DENOMINATOR,
+            coefficients: &COEFFICIENTS,
         },
         &mut portfolio,
     )
@@ -752,10 +772,28 @@ fn add_product_claims(test: &mut ProgramTest) -> ProductClaimsFixture {
     .expect("Product root");
     let (product_record, product_staging, product_digest) =
         add_finalized_record(test, PRODUCT_RECORD_SCHEMA_ID_V2, &product);
+    let mut linked = vec![
+        0_u8;
+        basis_record_bytes_v3(BasisKindV3::CategoricalQ1, OUTCOME_COUNT as usize, 0, 0)
+            .expect("ProductBasisV3 width")
+    ];
+    compile_basis_v3(
+        BasisInputV3 {
+            result_domain_id: domain_digest,
+            ..provisional_input
+        },
+        &mut linked,
+    )
+    .expect("ProductBasisV3");
+    let (linked_basis_record, linked_basis_staging, linked_basis_digest) =
+        add_finalized_record(test, GRADED_BASIS_RECORD_SCHEMA_ID_V3, &linked);
     ProductClaimsFixture {
         product_id: stable_product,
         product_digest,
+        result_domain_id: domain_digest,
         basis_id,
+        linked_basis_bytes: linked,
+        linked_basis_digest,
         linked_basis_record,
         linked_basis_staging,
         product_record,
@@ -1130,6 +1168,129 @@ fn terminal_custody(
     (request, caller, replay, hoard, custody_authority)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn terminal_candidate_digest(
+    request_bytes: &[u8],
+    market: Pubkey,
+    aggregate: Pubkey,
+    release_set: [u8; 32],
+    realm_id: [u8; 32],
+    receipt_mint: Pubkey,
+    representation_authority: Pubkey,
+    descriptor_id: [u8; 32],
+    descriptor_bytes: &[u8],
+    graph_bytes: &[u8],
+    graph_digest: [u8; 32],
+    product: &ProductClaimsFixture,
+    selected: AssetFixture,
+) -> [u8; 32] {
+    let admission = admit_product_representation_v3(ProductRepresentationInputV3 {
+        product_basis_bytes: &product.linked_basis_bytes,
+        product: ProductRuntimeProjectionV3 {
+            product_id: product.product_id,
+            result_domain_id: product.result_domain_id,
+            coordinate_domain_id: [0x62; 32],
+            result_unit_id: [0x63; 32],
+            semantic_basis_id: product.basis_id,
+            linked_basis_record_digest: product.linked_basis_digest,
+            evaluator_release_id: [0x68; 32],
+            basis_width: OUTCOME_COUNT,
+            payout_scale: 1,
+        },
+        descriptor_bytes,
+        descriptor_admission: DescriptorAdmissionV2 {
+            selected_descriptor_id: descriptor_id,
+            finalized_descriptor_id: descriptor_id,
+            recomputed_descriptor_digest: descriptor_id,
+            finalized_descriptor_digest: descriptor_id,
+            record_authenticated: true,
+            derived_representation_authority: representation_authority.to_bytes(),
+            authority_derivation_authenticated: true,
+        },
+        graph_bytes,
+        graph_admission: ContentAdmissionV2 {
+            selected_graph_id: [0x31; 32],
+            finalized_graph_id: [0x31; 32],
+            recomputed_graph_digest: graph_digest,
+            finalized_graph_digest: graph_digest,
+            record_authenticated: true,
+        },
+        context: RepresentationContextV3 {
+            market_id: market.to_bytes(),
+            release_set_id: release_set,
+            claims_basis_id: product.basis_id,
+            claims_width: OUTCOME_COUNT,
+            receipt_mint: receipt_mint.to_bytes(),
+            token_program: TOKEN_2022_PROGRAM_ID,
+            representation_authority: representation_authority.to_bytes(),
+        },
+    })
+    .expect("Product/representation terminal admission")
+    .admission();
+    let market_bytes = encode_liability_basis_market_v2(
+        LiabilityBasisMarketInputV2 {
+            revision: 0,
+            logical_market: market.to_bytes(),
+            release_set,
+            registry_program: REGISTRY_PROGRAM_ID.to_bytes(),
+            product_instance_id: product.product_id,
+            basis_id: product.basis_id,
+            realm_id,
+            custody_context: [0x68; 32],
+            generation: GENERATION,
+        },
+        &[3, 9],
+    )
+    .expect("terminal aggregate prestate");
+    let position_bytes = encode_liability_basis_position_v2(
+        LiabilityBasisPositionInputV2 {
+            revision: 0,
+            market_account: aggregate.to_bytes(),
+            owner: selected.custody_owner.to_bytes(),
+            basis_id: product.basis_id,
+        },
+        &[0, 7],
+    )
+    .expect("terminal Position prestate");
+    let neutral = SignedDeltaV3::new(DeltaDirectionV3::Neutral, 0).expect("neutral delta");
+    let mut payouts = vec![0_u64; usize::try_from(OUTCOME_COUNT).expect("outcome width")];
+    let mut aggregate_deltas = vec![neutral; payouts.len()];
+    let mut packet = vec![0_u8; plan_bytes(OUTCOME_COUNT, 1, 1).expect("terminal packet width")];
+    let payout = encode_product_basis_terminal_signed_delta_v3(
+        ProductBasisTerminalInputV3 {
+            product_basis_bytes: &product.linked_basis_bytes,
+            representation: admission,
+            product_record_digest: product.product_digest,
+            market_account: aggregate.to_bytes(),
+            market_bytes: &market_bytes,
+            position_bytes: &position_bytes,
+            owner: selected.custody_owner.to_bytes(),
+            request_id: hash(request_bytes).to_bytes(),
+            caller_role: CallerRole::Trading,
+            terminal: TerminalScenarioV3::Categorical(WINNER),
+            claim_index: WINNER,
+            quantity: 1,
+            expected_generation: GENERATION,
+            expected_market_revision: 0,
+            expected_position_revision: 0,
+            hoard_before: INITIAL_HOARD_ATOMS,
+        },
+        &mut payouts,
+        &mut aggregate_deltas,
+        &mut packet,
+    )
+    .expect("terminal ProductBasis plan");
+    assert_eq!(payout, 1);
+    hashv(&[
+        TERMINAL_CANDIDATE_DOMAIN_V3,
+        &hash(&packet).to_bytes(),
+        &payout.to_le_bytes(),
+        &admission.to_bytes(),
+        &WINNER.to_le_bytes(),
+    ])
+    .to_bytes()
+}
+
 fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
     let artifacts = artifacts();
     let mut test = ProgramTest::default();
@@ -1269,15 +1430,11 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
             &CLAIMS_PROGRAM_ID,
         )
         .0;
-        let custody_owner = Pubkey::find_program_address(
-            &[
-                RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2,
-                &descriptor_id,
-                &outcome_bytes,
-            ],
-            &CLAIMS_PROGRAM_ID,
-        )
-        .0;
+        let custody_owner_seeds =
+            ProtocolPositionClaimsCapabilitySeedsV2::new(descriptor_id, outcome)
+                .expect("Claims capability owner seeds");
+        let custody_owner =
+            Pubkey::find_program_address(&custody_owner_seeds.as_slices(), &CLAIMS_PROGRAM_ID).0;
         let position_seeds =
             ProtocolPositionSeedsV2::new(aggregate.to_bytes(), custody_owner.to_bytes())
                 .expect("custody Position seeds");
@@ -1327,7 +1484,7 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
         generation: GENERATION,
     };
     let aggregate_data =
-        encode_liability_basis_market_v2(market_input, &[3, 9]).expect("LBV2 Claims aggregate");
+        encode_liability_basis_market_v2(market_input, &[4, 9]).expect("LBV2 Claims aggregate");
     add_account(&mut test, aggregate, CLAIMS_PROGRAM_ID, aggregate_data);
     add_account(
         &mut test,
@@ -1345,7 +1502,7 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
         .expect("actor Position"),
     );
     for (index, asset) in assets.iter().enumerate() {
-        let claims = if index == 0 { [3, 0] } else { [0, 7] };
+        let claims = if index == 0 { [4, 0] } else { [0, 7] };
         add_account(
             &mut test,
             asset.position,
@@ -1500,28 +1657,21 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
                 fixture.actor.pubkey(),
                 collateral_mint,
                 recipient,
-                hashv(&[
-                    &LIABILITY_BASIS_CANDIDATE_DIGEST_DOMAIN_V2,
-                    &encode_liability_basis_market_v2(
-                        LiabilityBasisMarketInputV2 {
-                            revision: 1,
-                            ..market_input
-                        },
-                        &[3, 8],
-                    )
-                    .expect("terminal aggregate candidate"),
-                    &encode_liability_basis_position_v2(
-                        LiabilityBasisPositionInputV2 {
-                            revision: 1,
-                            market_account: aggregate.to_bytes(),
-                            owner: fixture.assets[1].custody_owner.to_bytes(),
-                            basis_id: product_claims.basis_id,
-                        },
-                        &[0, 6],
-                    )
-                    .expect("terminal Position candidate"),
-                ])
-                .to_bytes(),
+                terminal_candidate_digest(
+                    &terminal_request,
+                    fixture.market,
+                    aggregate,
+                    fixture.release_set,
+                    fixture.realm_id,
+                    fixture.receipt_mint,
+                    fixture.representation_authority,
+                    fixture.descriptor_id,
+                    &descriptor,
+                    &graph,
+                    graph_digest,
+                    &product_claims,
+                    fixture.assets[1],
+                ),
             );
         let replay_state = CustodyReplayV1 {
             caller_role: CustodyCallerRoleV1::Claims,
@@ -1578,8 +1728,8 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
         );
         add_account(&mut test, custody_caller, system_program::ID, Vec::new());
         fixture.terminal_accounts = Some(TerminalFixture {
-            coordinate_raw: terminal_coordinate.expect("terminal coordinate").0,
-            coordinate_staging: terminal_coordinate.expect("terminal coordinate").1,
+            coordinate_raw: sysvar::rent::ID,
+            coordinate_staging: sysvar::rent::ID,
             realm_raw,
             realm_staging,
             custody_caller,
@@ -2287,7 +2437,7 @@ async fn real_sbf_open_actions_are_exact_and_conserved() {
     assert_eq!(replay_revision(&after_issue.replay), 1);
     assert_eq!(mint_supply(&after_issue.receipt_mint), RECEIPT_SUPPLY + 1);
     assert_eq!(token_amount(&after_issue.actor_receipt), 1);
-    for (index, (actor, structured)) in [(7_u64, 23_u64), (14, 56)].into_iter().enumerate() {
+    for (index, (actor, structured)) in [(16_u64, 24_u64), (14, 56)].into_iter().enumerate() {
         let supply = mint_supply(after_issue.shard_mints.get(index).expect("shard Mint"));
         assert_eq!(
             supply,
@@ -2684,7 +2834,7 @@ async fn real_sbf_losing_terminal_burns_raw_shards_without_custody_payout() {
     assert_eq!(replay_revision(&after.replay), 1);
     assert_eq!(lbv2_revision(&after.aggregate.data), 1);
     assert_eq!(lbv2_revision(&after.positions[0].data), 1);
-    assert_eq!(lbv2_position_quantity(&after.positions[0].data, 0), 2);
+    assert_eq!(lbv2_position_quantity(&after.positions[0].data, 0), 3);
     assert_account_content_eq(&after.positions[1], &before.positions[1]);
     assert_eq!(
         mint_supply(&after.shard_mints[0]),
