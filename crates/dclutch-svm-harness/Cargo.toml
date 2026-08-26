@@ -21,6 +21,7 @@ dclutch-economic-kernel = { path = "../dclutch-economic-kernel" }
 dclutch-kernel = { path = "../dclutch-kernel" }
 dclutch-market-contract = { path = "../dclutch-market-contract" }
 dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
+dclutch-market-open-v1-operator = { path = "../dclutch-market-open-v1-operator" }
 dclutch-resolution-core-v3-operator = { path = "../dclutch-resolution-core-v3-operator" }
 dclutch-pyth-contract = { path = "../dclutch-pyth-contract" }
 dclutch-pyth-svm = { path = "../dclutch-pyth-svm", features = ["synthetic-local-fixture"] }

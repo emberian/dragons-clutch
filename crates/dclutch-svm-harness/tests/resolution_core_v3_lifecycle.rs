@@ -10,6 +10,10 @@
 
 use std::{env, fs, path::PathBuf};
 
+#[path = "support/pyth_provider.rs"]
+#[allow(dead_code)]
+mod pyth_provider;
+
 use dclutch_capability_contract::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
     CapabilityEntryV1, CapabilityFundingDerivationV1, CapabilityManifestV1, CompartmentFundingV1,
@@ -26,6 +30,9 @@ use dclutch_market_core_codec::{
     Action, CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase,
     Readiness, Request,
 };
+use dclutch_market_open_v1_operator::{
+    RegistryOpenMarketContinuationStateV1, build_registry_open_market_continuation_v1,
+};
 use dclutch_product_runtime_v2::{
     ContentId as ProductContentId, PortfolioInputV2, ResultDomainInputV2, ResultDomainV2,
     compile_portfolio_v2, compile_result_domain_v2, portfolio_record_bytes,
@@ -35,22 +42,33 @@ use dclutch_product_runtime_v2_admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
     RESULT_DOMAIN_SCHEMA_ID_V2,
 };
+use dclutch_provider_transport_v3_operator::{
+    ProviderExecuteDeploymentV3, ProviderExecuteIntentV3, ProviderExecuteSnapshotV3,
+    ProviderSubmitDeploymentV3, ProviderSubmitIntentV3, ProviderSubmitSnapshotV3,
+    build_provider_execute_v3, build_provider_submit_v3,
+};
+use dclutch_pyth_svm::{
+    FullPriceUpdateV2, PYTH_RELEASE_V1_ENCODED_LEN, PythReleaseV1, VerifiedEncodedVaaV1,
+};
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
-    ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
-    ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
-    initialize_activation_cache_v1,
+    ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1,
+    ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
+    activate_execution_role_into_v1, initialize_activation_cache_v1,
 };
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
-    ExecutionRoleV1, ProgramIdentityV1,
+    ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, ProgramIdentityV1,
+    ProtocolInfrastructureProfileV1,
 };
 use dclutch_rent_contract::{RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1};
 use dclutch_resolution_codec::{
+    PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
+    ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_BYTES_V2,
     RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V4,
     ResolutionCertificateKindV2, ResolutionCertificateV2, SOURCE_CLOSURE_RECEIPT_BYTES_V2,
     SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V2, SourceClosureReceiptV2,
@@ -64,13 +82,17 @@ use dclutch_resolution_core_v3_operator::{
     validate_resolution_create_fund_report_v3, validate_resolution_verify_fund_ready_report_v3,
 };
 use dclutch_source_contract::{
-    CapacityEnvelope, ContentId as SourceContentId, RECOVERY_POLICY_SCHEMA_ID_V2,
-    RecoveryAttemptV2, RecoveryPolicyV2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
-    SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SourceCapacityProfileV1, SourceMaterialV2,
-    SourceResolutionPhaseV1, SourceResolutionStateV2,
+    CapacityEnvelope, ContentId as SourceContentId, PROVIDER_RELEASE_SCHEMA_ID_V1,
+    PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, ProviderReleaseV1, PythAdapterConfigV1,
+    RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryAttemptV2, RecoveryPolicyV2, RoundingBoundary,
+    SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+    SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1,
+    SourceAccessProfile, SourceCapacityProfileV1, SourceMaterialV2, SourceResolutionPhaseV1,
+    SourceResolutionStateV2, SourceSpecV1, StatisticKind, StatisticSpecV1,
+    WINDOW_SPEC_SCHEMA_ID_V1, WindowKind, WindowSpecV1,
 };
 use dclutch_token_svm::{LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES};
-use solana_account::Account;
+use solana_account::{Account, AccountSharedData};
 use solana_program::{
     clock::Clock,
     hash::hash,
@@ -81,7 +103,7 @@ use solana_program::{
 use solana_program_option::COption;
 use solana_program_pack::Pack;
 use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
-use solana_sdk::signature::Signer;
+use solana_sdk::signature::{Keypair, Signer};
 use solana_sdk_ids::{bpf_loader_upgradeable, native_loader, system_program, sysvar};
 use solana_system_interface::instruction::transfer;
 use solana_transaction::Transaction;
@@ -112,9 +134,14 @@ struct RecordPair {
 
 struct Fixture {
     test: Option<ProgramTest>,
+    provider: pyth_provider::ProviderAddresses,
+    update: Keypair,
     release_set: [u8; 32],
     market: Pubkey,
     activation: Pubkey,
+    infrastructure: Pubkey,
+    registry_programdata: Pubkey,
+    registry_artifact: RecordPair,
     core_programdata: Pubkey,
     custody_programdata: Pubkey,
     resolution_programdata: Pubkey,
@@ -125,6 +152,12 @@ struct Fixture {
     vault: Pubkey,
     custody_authority: Pubkey,
     source_material: RecordPair,
+    source_spec: RecordPair,
+    provider_release: RecordPair,
+    adapter_config: RecordPair,
+    window: RecordPair,
+    statistic: RecordPair,
+    pyth_release: RecordPair,
     capability_manifest: RecordPair,
     recovery_policy: RecordPair,
     product: RecordPair,
@@ -145,6 +178,30 @@ struct RetirementSnapshot {
     certificate: Option<Account>,
     closure: Option<Account>,
     rent_credit: Option<Account>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct OpenRollbackSnapshot {
+    market: Option<Account>,
+    source: Option<Account>,
+    funding: [Option<Account>; 3],
+    replay: Option<Account>,
+    vault: Option<Account>,
+    rent_credit: Option<Account>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ProviderRollbackSnapshot {
+    market: Option<Account>,
+    source: Option<Account>,
+    lifecycle: Option<Account>,
+    update: Option<Account>,
+    funding: [Option<Account>; 3],
+    certificate: Option<Account>,
+    replay: Option<Account>,
+    vault: Option<Account>,
+    rent_credit: Option<Account>,
+    treasury: Option<Account>,
 }
 
 fn id(bytes: [u8; 32]) -> CoreContentId {
@@ -253,7 +310,7 @@ fn activation(
     let release_set = ExecutionReleaseSetV1::new(
         binding(core),
         binding(core),
-        binding(core),
+        binding(custody),
         binding(resolution),
         binding(custody),
     )
@@ -265,7 +322,7 @@ fn activation(
     for (role, selected) in [
         (ExecutionRoleV1::Core, core),
         (ExecutionRoleV1::Claims, core),
-        (ExecutionRoleV1::Trading, core),
+        (ExecutionRoleV1::Trading, custody),
         (ExecutionRoleV1::Resolution, resolution),
         (ExecutionRoleV1::Custody, custody),
     ] {
@@ -480,6 +537,9 @@ fn fixture(preload_terminal: bool) -> Fixture {
         RESOLUTION_PROGRAM_ID,
         &elves.resolution,
     );
+    let provider = pyth_provider::ProviderAddresses::pinned();
+    pyth_provider::assert_all_fixture_hashes();
+    pyth_provider::add_upgraded_provider_programs(&mut test, provider);
 
     let core_release = release(CORE_PROGRAM_ID, [0x41; 32], &elves.core);
     let resolution_release = release(
@@ -488,6 +548,7 @@ fn fixture(preload_terminal: bool) -> Fixture {
         &elves.resolution,
     );
     let custody_release = release(CUSTODY_PROGRAM_ID, [0x42; 32], &elves.custody);
+    let registry_release = release(REGISTRY_PROGRAM_ID, [0x43; 32], &elves.registry);
     let (release_set, activation_data) =
         activation(core_release, resolution_release, custody_release);
     let activation = Pubkey::find_program_address(
@@ -498,6 +559,27 @@ fn fixture(preload_terminal: bool) -> Fixture {
     test.add_account(
         activation,
         protocol_account(REGISTRY_PROGRAM_ID, activation_data),
+    );
+    let registry_artifact = add_record(
+        &mut test,
+        ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        registry_release.to_bytes().to_vec(),
+    );
+    let infrastructure = Pubkey::find_program_address(
+        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
+        &CORE_PROGRAM_ID,
+    )
+    .0;
+    let rent_binding = ExecutionRoleBindingV1::new(
+        program_identity(sysvar::rent::ID),
+        ArtifactReleaseIdV1::new([0x44; 32]).expect("rent artifact identity"),
+    );
+    let infrastructure_value =
+        ProtocolInfrastructureProfileV1::new(binding(registry_release), rent_binding)
+            .expect("immutable infrastructure profile");
+    test.add_account(
+        infrastructure,
+        protocol_account(CORE_PROGRAM_ID, infrastructure_value.to_bytes().to_vec()),
     );
 
     let mint = Pubkey::new_unique();
@@ -604,13 +686,71 @@ fn fixture(preload_terminal: bool) -> Fixture {
     .expect("recovery policy");
     let recovery_policy_bytes = recovery_policy_value.to_bytes();
     let recovery_policy_id = hash(&recovery_policy_bytes).to_bytes();
+    let update_view =
+        FullPriceUpdateV2::parse(pyth_provider::PRICE_UPDATE).expect("captured full Pyth update");
+    let pyth_release_bytes = pyth_provider::synthetic_release_bytes(provider);
+    assert_eq!(pyth_release_bytes.len(), PYTH_RELEASE_V1_ENCODED_LEN);
+    let pyth_release_value =
+        PythReleaseV1::decode(&pyth_release_bytes).expect("pinned Pyth release");
+    let pyth_release_id = hash(&pyth_release_bytes).to_bytes();
+    let provider_release_value = ProviderReleaseV1::new(
+        source_id([0x96; 32]),
+        source_id(pyth_release_value.adapter_id()),
+        source_id(pyth_release_id),
+        source_id(pyth_release_value.price_update_codec_id()),
+        source_id(pyth_release_value.router_abi_id()),
+    );
+    let provider_release_bytes = provider_release_value.to_bytes();
+    let provider_release_id = hash(&provider_release_bytes).to_bytes();
+    let adapter_config_value =
+        PythAdapterConfigV1::new(update_view.feed_id(), update_view.exponent(), 10_000)
+            .expect("captured Pyth adapter configuration");
+    let adapter_config_bytes = adapter_config_value.to_bytes();
+    let adapter_config_id = hash(&adapter_config_bytes).to_bytes();
+    let source_unit = source_id([0x97; 32]);
+    let source_spec_value = SourceSpecV1::new(
+        source_id(coordinate_id),
+        source_unit,
+        source_id(provider_release_id),
+        SourceAccessProfile::PythTerminalOneTransaction,
+        source_id(adapter_config_id),
+        capacity_id,
+    );
+    let source_spec_bytes = source_spec_value.to_bytes();
+    let source_spec_id = hash(&source_spec_bytes).to_bytes();
+    let window_value = WindowSpecV1::new(
+        source_id(source_spec_id),
+        WindowKind::Terminal,
+        update_view.publish_time(),
+        update_view.publish_time(),
+        10,
+        1,
+        source_id([0x98; 32]),
+    )
+    .expect("captured terminal window");
+    let window_bytes = window_value.to_bytes();
+    let window_id = hash(&window_bytes).to_bytes();
+    let statistic_value = StatisticSpecV1::new(
+        source_unit,
+        source_id(unit_id),
+        StatisticKind::TerminalSample,
+        RoundingBoundary::ExactRational,
+        1,
+        0,
+        capacity_id,
+        source_id([0x99; 32]),
+        capacity,
+    )
+    .expect("captured terminal statistic");
+    let statistic_bytes = statistic_value.to_bytes();
+    let statistic_id = hash(&statistic_bytes).to_bytes();
     let material_value = SourceMaterialV2::new(
         source_id(product_record_id),
-        source_id([0x96; 32]),
-        source_id([0x97; 32]),
-        source_id([0x98; 32]),
+        source_id(source_spec_id),
+        source_id(window_id),
+        source_id(statistic_id),
         Some(source_id(recovery_policy_id)),
-        source_id([0x99; 32]),
+        source_id(SOURCE_FAILURE_POLICY_RELEASE_ID_V2),
     );
     let material_bytes = material_value.to_bytes();
     let material_id = hash(&material_bytes).to_bytes();
@@ -660,6 +800,32 @@ fn fixture(preload_terminal: bool) -> Fixture {
         &mut test,
         SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
         material_bytes.to_vec(),
+    );
+    let source_spec = add_record(
+        &mut test,
+        SOURCE_SPEC_SCHEMA_ID_V1,
+        source_spec_bytes.to_vec(),
+    );
+    let provider_release = add_record(
+        &mut test,
+        PROVIDER_RELEASE_SCHEMA_ID_V1,
+        provider_release_bytes.to_vec(),
+    );
+    let adapter_config = add_record(
+        &mut test,
+        PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1,
+        adapter_config_bytes.to_vec(),
+    );
+    let window = add_record(&mut test, WINDOW_SPEC_SCHEMA_ID_V1, window_bytes.to_vec());
+    let statistic = add_record(
+        &mut test,
+        STATISTIC_SPEC_SCHEMA_ID_V1,
+        statistic_bytes.to_vec(),
+    );
+    let pyth_release = add_record(
+        &mut test,
+        PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
+        pyth_release_bytes.to_vec(),
     );
     let capability_manifest = add_record(
         &mut test,
@@ -876,9 +1042,14 @@ fn fixture(preload_terminal: bool) -> Fixture {
 
     Fixture {
         test: Some(test),
+        provider,
+        update: Keypair::new(),
         release_set,
         market,
         activation,
+        infrastructure,
+        registry_programdata: programdata(REGISTRY_PROGRAM_ID),
+        registry_artifact,
         core_programdata: programdata(CORE_PROGRAM_ID),
         custody_programdata: programdata(CUSTODY_PROGRAM_ID),
         resolution_programdata: programdata(RESOLUTION_PROGRAM_ID),
@@ -889,6 +1060,12 @@ fn fixture(preload_terminal: bool) -> Fixture {
         vault,
         custody_authority,
         source_material,
+        source_spec,
+        provider_release,
+        adapter_config,
+        window,
+        statistic,
+        pyth_release,
         capability_manifest,
         recovery_policy,
         product,
@@ -968,6 +1145,74 @@ async fn submit(
         blockhash,
     );
     context.banks_client.process_transaction(transaction).await
+}
+
+async fn provider_submit_snapshot(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+    encoded_vaa: Pubkey,
+) -> ProviderSubmitSnapshotV3 {
+    ProviderSubmitSnapshotV3 {
+        market: required_observed(context, fixture.market).await,
+        source_state: required_observed(context, fixture.source).await,
+        source_material: required_observed(context, fixture.source_material.raw).await,
+        source_spec: required_observed(context, fixture.source_spec.raw).await,
+        source_provider_release: required_observed(context, fixture.provider_release.raw).await,
+        pyth_release: required_observed(context, fixture.pyth_release.raw).await,
+        window: required_observed(context, fixture.window.raw).await,
+        encoded_vaa: required_observed(context, encoded_vaa).await,
+    }
+}
+
+fn provider_submit_deployment(fixture: &Fixture) -> ProviderSubmitDeploymentV3 {
+    ProviderSubmitDeploymentV3 {
+        infrastructure: fixture.infrastructure,
+        registry_programdata: fixture.registry_programdata,
+        registry_artifact: fixture.registry_artifact.raw,
+        registry_artifact_staging: fixture.registry_artifact.staging,
+        core_programdata: fixture.core_programdata,
+        resolution_program: RESOLUTION_PROGRAM_ID,
+        resolution_programdata: fixture.resolution_programdata,
+        receiver_config: fixture.provider.config,
+        guardian_set: fixture.provider.guardian_set,
+    }
+}
+
+async fn provider_execute_snapshot(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+    lifecycle: Pubkey,
+) -> ProviderExecuteSnapshotV3 {
+    ProviderExecuteSnapshotV3 {
+        market: required_observed(context, fixture.market).await,
+        source_state: required_observed(context, fixture.source).await,
+        lifecycle: required_observed(context, lifecycle).await,
+        update: required_observed(context, fixture.update.pubkey()).await,
+        source_material: required_observed(context, fixture.source_material.raw).await,
+        source_spec: required_observed(context, fixture.source_spec.raw).await,
+        source_provider_release: required_observed(context, fixture.provider_release.raw).await,
+        adapter_config: required_observed(context, fixture.adapter_config.raw).await,
+        window: required_observed(context, fixture.window.raw).await,
+        statistic: required_observed(context, fixture.statistic.raw).await,
+        pyth_release: required_observed(context, fixture.pyth_release.raw).await,
+        product: required_observed(context, fixture.product.raw).await,
+        result_domain: required_observed(context, fixture.domain.raw).await,
+        portfolio: required_observed(context, fixture.portfolio.raw).await,
+    }
+}
+
+fn provider_execute_deployment(fixture: &Fixture) -> ProviderExecuteDeploymentV3 {
+    ProviderExecuteDeploymentV3 {
+        registry_programdata: fixture.registry_programdata,
+        registry_artifact: fixture.registry_artifact.raw,
+        registry_artifact_staging: fixture.registry_artifact.staging,
+        core_programdata: fixture.core_programdata,
+        trading_program: CUSTODY_PROGRAM_ID,
+        trading_programdata: fixture.custody_programdata,
+        resolution_program: RESOLUTION_PROGRAM_ID,
+        resolution_programdata: fixture.resolution_programdata,
+        receiver_config: fixture.provider.config,
+    }
 }
 
 async fn create_snapshot(
@@ -1075,7 +1320,7 @@ fn begin_retiring_instruction(fixture: &Fixture) -> Instruction {
     }
 }
 
-fn open_instruction(fixture: &Fixture, payer: Pubkey, operation: OperationV1) -> Instruction {
+fn core_open_instruction(fixture: &Fixture, payer: Pubkey, operation: OperationV1) -> Instruction {
     let custody = custody_request(
         fixture.release_set,
         fixture.market,
@@ -1148,6 +1393,26 @@ fn open_instruction(fixture: &Fixture, payer: Pubkey, operation: OperationV1) ->
     }
 }
 
+async fn open_instruction(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+    payer: Pubkey,
+    operation: OperationV1,
+) -> Instruction {
+    let core = core_open_instruction(fixture, payer, operation);
+    let state = RegistryOpenMarketContinuationStateV1 {
+        registry_program: required_observed(context, REGISTRY_PROGRAM_ID).await,
+        activation_cache: required_observed(context, fixture.activation).await,
+        core_program: required_observed(context, CORE_PROGRAM_ID).await,
+        core_programdata: required_observed(context, fixture.core_programdata).await,
+        custody_program: required_observed(context, CUSTODY_PROGRAM_ID).await,
+        custody_programdata: required_observed(context, fixture.custody_programdata).await,
+    };
+    build_registry_open_market_continuation_v1(&state, &core)
+        .expect("chain-derived authenticated Core market opening")
+        .instruction
+}
+
 async fn close_snapshot(
     context: &mut ProgramTestContext,
     fixture: &Fixture,
@@ -1197,6 +1462,65 @@ async fn retirement_snapshot(
     }
 }
 
+async fn provider_rollback_snapshot(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+    lifecycle: Pubkey,
+) -> ProviderRollbackSnapshot {
+    ProviderRollbackSnapshot {
+        market: observed(context, fixture.market).await,
+        source: observed(context, fixture.source).await,
+        lifecycle: observed(context, lifecycle).await,
+        update: observed(context, fixture.update.pubkey()).await,
+        funding: [
+            observed(context, fixture.funding[0]).await,
+            observed(context, fixture.funding[1]).await,
+            observed(context, fixture.funding[2]).await,
+        ],
+        certificate: observed(context, fixture.certificate).await,
+        replay: observed(context, fixture.replay).await,
+        vault: observed(context, fixture.vault).await,
+        rent_credit: observed(context, fixture.rent_credit).await,
+        treasury: observed(context, fixture.provider.treasury).await,
+    }
+}
+
+async fn advance_provider_refusal_slot(context: &mut ProgramTestContext) {
+    let current = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("ProgramTest Clock");
+    context
+        .warp_to_slot(current.slot.checked_add(1).expect("bounded fixture slot"))
+        .expect("advance hostile provider transaction blockhash");
+    let mut advanced = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("advanced ProgramTest Clock");
+    advanced.unix_timestamp = TERMINAL_TIME;
+    context.set_sysvar(&advanced);
+}
+
+async fn open_rollback_snapshot(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+) -> OpenRollbackSnapshot {
+    OpenRollbackSnapshot {
+        market: observed(context, fixture.market).await,
+        source: observed(context, fixture.source).await,
+        funding: [
+            observed(context, fixture.funding[0]).await,
+            observed(context, fixture.funding[1]).await,
+            observed(context, fixture.funding[2]).await,
+        ],
+        replay: observed(context, fixture.replay).await,
+        vault: observed(context, fixture.vault).await,
+        rent_credit: observed(context, fixture.rent_credit).await,
+    }
+}
+
 #[tokio::test]
 async fn current_resolution_creates_and_activates_exact_funding() {
     let mut fixture = fixture(false);
@@ -1206,6 +1530,8 @@ async fn current_resolution_creates_and_activates_exact_funding() {
         .expect("unstarted ProgramTest")
         .start_with_context()
         .await;
+    let encoded_vaa =
+        pyth_provider::initialize_real_providers(&mut context, fixture.provider).await;
     let mut clock = context
         .banks_client
         .get_sysvar::<Clock>()
@@ -1330,8 +1656,37 @@ async fn current_resolution_creates_and_activates_exact_funding() {
         .await
         .expect("RentCredit after readiness")
         .lamports;
+    let before_open_refusals = open_rollback_snapshot(&mut context, &fixture).await;
+    let mut reordered =
+        open_instruction(&mut context, &fixture, payer, OperationV1::InitializeReplay).await;
+    reordered.accounts.swap(1, 3);
+    assert!(
+        submit(&mut context, &[reordered]).await.is_err(),
+        "swapped Core/Custody role deployments must refuse"
+    );
+    assert_eq!(
+        open_rollback_snapshot(&mut context, &fixture).await,
+        before_open_refusals,
+        "Registry role-order refusal preserves Market, Source, Funds, Custody, and RentCredit"
+    );
+    let mut substituted =
+        open_instruction(&mut context, &fixture, payer, OperationV1::InitializeReplay).await;
+    substituted
+        .accounts
+        .last_mut()
+        .expect("nested Registry admission")
+        .pubkey = Pubkey::new_unique();
+    assert!(
+        submit(&mut context, &[substituted]).await.is_err(),
+        "substituted invocation admission must refuse"
+    );
+    assert_eq!(
+        open_rollback_snapshot(&mut context, &fixture).await,
+        before_open_refusals,
+        "admission substitution rolls back Market, Source, Funds, Custody, and RentCredit"
+    );
     for operation in [OperationV1::InitializeReplay, OperationV1::OpenVault] {
-        let instruction = open_instruction(&fixture, payer, operation);
+        let instruction = open_instruction(&mut context, &fixture, payer, operation).await;
         submit(&mut context, &[instruction])
             .await
             .expect("Core opens canonical Custody replay and Hoard vault");
@@ -1379,6 +1734,293 @@ async fn current_resolution_creates_and_activates_exact_funding() {
         )
         .expect("empty Hoard vault");
     assert_eq!(token.amount, 0);
+
+    let post_update_body = pyth_provider::RECEIVER_POST_UPDATE
+        .get(8..)
+        .expect("Receiver PostUpdate body")
+        .to_vec();
+    let submit_intent = ProviderSubmitIntentV3 {
+        submitter: payer,
+        refund_recipient: fixture.rent_credit,
+        update_account: fixture.update.pubkey(),
+        reclaim_after_unix_seconds: TERMINAL_TIME + 20,
+        post_update_body: post_update_body.clone(),
+    };
+    let submit_snapshot = provider_submit_snapshot(&mut context, &fixture, encoded_vaa).await;
+    let submit_deployment = provider_submit_deployment(&fixture);
+    let pyth_release = PythReleaseV1::decode(&submit_snapshot.pyth_release.data)
+        .expect("authenticated Pyth release");
+    let encoded = VerifiedEncodedVaaV1::parse(&submit_snapshot.encoded_vaa.data)
+        .expect("verified encoded VAA");
+    let expected_guardian = Pubkey::find_program_address(
+        &[b"GuardianSet", &encoded.guardian_set_index().to_be_bytes()],
+        &Pubkey::new_from_array(pyth_release.router_program()),
+    )
+    .0;
+    assert_eq!(submit_deployment.guardian_set, expected_guardian);
+    assert_eq!(
+        submit_deployment.receiver_config,
+        Pubkey::new_from_array(pyth_release.receiver_config())
+    );
+    assert_eq!(
+        submit_deployment.infrastructure,
+        Pubkey::find_program_address(
+            &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
+            &submit_snapshot.market.owner,
+        )
+        .0
+    );
+    let provider_submit =
+        build_provider_submit_v3(&submit_snapshot, submit_deployment, &submit_intent)
+            .expect("chain-derived real-provider submission");
+    let provider_lifecycle_rent = context
+        .banks_client
+        .get_rent()
+        .await
+        .expect("chain Rent")
+        .minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V3);
+    let prepay_provider_lifecycle =
+        transfer(&payer, &provider_submit.lifecycle, provider_lifecycle_rent);
+    let before_material_substitution =
+        provider_rollback_snapshot(&mut context, &fixture, provider_submit.lifecycle).await;
+    let mut substituted_material = provider_submit.instruction.clone();
+    substituted_material
+        .accounts
+        .get_mut(17)
+        .expect("SourceMaterial raw record")
+        .pubkey = fixture.product.raw;
+    assert!(
+        pyth_provider::submit(
+            &mut context,
+            &[prepay_provider_lifecycle.clone(), substituted_material],
+            &[&fixture.update],
+        )
+        .await
+        .is_err(),
+        "a finalized record from the wrong schema/content identity must refuse"
+    );
+    assert_eq!(
+        provider_rollback_snapshot(&mut context, &fixture, provider_submit.lifecycle).await,
+        before_material_substitution,
+        "SourceMaterial substitution rolls back Market, Source, lifecycle, certificate, all three Funds, Custody, update, and RentCredit"
+    );
+
+    let before_treasury_key_substitution =
+        provider_rollback_snapshot(&mut context, &fixture, provider_submit.lifecycle).await;
+    let mut substituted_treasury = provider_submit.instruction.clone();
+    substituted_treasury
+        .accounts
+        .get_mut(34)
+        .expect("Receiver treasury")
+        .pubkey = Pubkey::new_unique();
+    assert!(
+        pyth_provider::submit(
+            &mut context,
+            &[prepay_provider_lifecycle.clone(), substituted_treasury],
+            &[&fixture.update],
+        )
+        .await
+        .is_err(),
+        "a substituted Receiver treasury PDA must refuse"
+    );
+    assert_eq!(
+        provider_rollback_snapshot(&mut context, &fixture, provider_submit.lifecycle).await,
+        before_treasury_key_substitution,
+        "treasury-key substitution rolls back every provider and Market write"
+    );
+
+    let original_treasury = observed(&mut context, fixture.provider.treasury).await;
+    for (label, owner, data, executable) in [
+        (
+            "Receiver-owned treasury",
+            fixture.provider.receiver,
+            Vec::new(),
+            false,
+        ),
+        ("data-bearing treasury", system_program::ID, vec![1], false),
+        ("executable treasury", system_program::ID, Vec::new(), true),
+    ] {
+        advance_provider_refusal_slot(&mut context).await;
+        let hostile = Account {
+            lamports: Rent::default().minimum_balance(data.len()).max(1),
+            data,
+            owner,
+            executable,
+            rent_epoch: 0,
+        };
+        context.set_account(
+            &fixture.provider.treasury,
+            &AccountSharedData::from(hostile),
+        );
+        let before =
+            provider_rollback_snapshot(&mut context, &fixture, provider_submit.lifecycle).await;
+        assert!(
+            pyth_provider::submit(
+                &mut context,
+                &[
+                    prepay_provider_lifecycle.clone(),
+                    provider_submit.instruction.clone(),
+                ],
+                &[&fixture.update],
+            )
+            .await
+            .is_err(),
+            "{label} must refuse"
+        );
+        assert_eq!(
+            provider_rollback_snapshot(&mut context, &fixture, provider_submit.lifecycle).await,
+            before,
+            "{label} refusal rolls back every provider and Market write"
+        );
+    }
+    let restored_treasury = original_treasury.unwrap_or(Account {
+        lamports: 0,
+        data: Vec::new(),
+        owner: system_program::ID,
+        executable: false,
+        rent_epoch: 0,
+    });
+    context.set_account(
+        &fixture.provider.treasury,
+        &AccountSharedData::from(restored_treasury),
+    );
+    advance_provider_refusal_slot(&mut context).await;
+    pyth_provider::submit(
+        &mut context,
+        &[prepay_provider_lifecycle, provider_submit.instruction],
+        &[&fixture.update],
+    )
+    .await
+    .expect("Resolution submits one update through the real Receiver ELF");
+    assert_eq!(
+        observed(&mut context, fixture.update.pubkey())
+            .await
+            .expect("Receiver update")
+            .owner,
+        fixture.provider.receiver
+    );
+
+    let resolver = Keypair::new();
+    let resolver_rent = context
+        .banks_client
+        .get_rent()
+        .await
+        .expect("chain Rent")
+        .minimum_balance(0);
+    submit(
+        &mut context,
+        &[
+            transfer(
+                &payer,
+                &fixture.certificate,
+                Rent::default().minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2),
+            ),
+            transfer(&payer, &resolver.pubkey(), resolver_rent),
+        ],
+    )
+    .await
+    .expect("prepay the terminal certificate and establish the distinct resolver");
+    let execute_intent = ProviderExecuteIntentV3 {
+        resolver: resolver.pubkey(),
+        terminal_sequence: TERMINAL_SEQUENCE,
+        post_update_body,
+    };
+    let provider_execute = build_provider_execute_v3(
+        &provider_execute_snapshot(&mut context, &fixture, provider_submit.lifecycle).await,
+        provider_execute_deployment(&fixture),
+        &execute_intent,
+    )
+    .expect("chain-derived Core provider execution");
+
+    let before_late_substitution =
+        provider_rollback_snapshot(&mut context, &fixture, provider_submit.lifecycle).await;
+    let late_substitution = Instruction {
+        program_id: CORE_PROGRAM_ID,
+        accounts: vec![AccountMeta::new(fixture.source, false)],
+        data: Request::administrative(
+            Action::BeginRetiring,
+            GENERATION,
+            CoreIdentity::new(fixture.market.to_bytes()).expect("Market"),
+        )
+        .encode()
+        .expect("late hostile Core request")
+        .to_vec(),
+    };
+    assert!(
+        pyth_provider::submit(
+            &mut context,
+            &[provider_execute.instruction.clone(), late_substitution],
+            &[&resolver],
+        )
+        .await
+        .is_err(),
+        "a Market-to-Source substitution after provider terminalization must refuse"
+    );
+    assert_eq!(
+        provider_rollback_snapshot(&mut context, &fixture, provider_submit.lifecycle).await,
+        before_late_substitution,
+        "the late substitution rolls back Market, Source, lifecycle, certificate, all three Funds, Custody, update, and RentCredit"
+    );
+
+    pyth_provider::submit(&mut context, &[provider_execute.instruction], &[&resolver])
+        .await
+        .expect("Core consumes the authenticated provider result and admits terminal Market state");
+    let terminal_market = CoreState::decode(
+        &observed(&mut context, fixture.market)
+            .await
+            .expect("terminal Market")
+            .data,
+    )
+    .expect("terminal Core state");
+    assert_eq!(terminal_market.phase, Phase::Terminal);
+    assert!(terminal_market.terminal_receipt.is_some());
+    let resolved_source = SourceResolutionStateV2::decode(
+        &observed(&mut context, fixture.source)
+            .await
+            .expect("resolved Source")
+            .data,
+    )
+    .expect("resolved Source state");
+    assert_eq!(resolved_source.phase(), SourceResolutionPhaseV1::Resolved);
+    let lifecycle = ProviderUpdateLifecycleV3::decode(
+        &observed(&mut context, provider_submit.lifecycle)
+            .await
+            .expect("consumed provider lifecycle")
+            .data,
+    )
+    .expect("provider lifecycle");
+    assert_eq!(lifecycle.status, ProviderUpdateStatusV3::Consumed);
+    assert_eq!(lifecycle.terminal_sequence, TERMINAL_SEQUENCE);
+    assert_eq!(
+        observed(&mut context, provider_submit.lifecycle)
+            .await
+            .expect("rent-exempt lifecycle")
+            .data
+            .len(),
+        PROVIDER_UPDATE_LIFECYCLE_BYTES_V3
+    );
+    let certificate = ResolutionCertificateV2::decode(
+        &observed(&mut context, fixture.certificate)
+            .await
+            .expect("terminal certificate")
+            .data,
+    )
+    .expect("terminal Resolution certificate");
+    assert_eq!(
+        certificate.kind,
+        ResolutionCertificateKindV2::ResolutionSuccess
+    );
+    assert_eq!(certificate.market, fixture.market.to_bytes());
+
+    let after_success =
+        provider_rollback_snapshot(&mut context, &fixture, provider_submit.lifecycle).await;
+    assert_eq!(after_success.funding, before_late_substitution.funding);
+    assert_eq!(after_success.replay, before_late_substitution.replay);
+    assert_eq!(after_success.vault, before_late_substitution.vault);
+    assert_eq!(
+        after_success.rent_credit,
+        before_late_substitution.rent_credit
+    );
 }
 
 #[tokio::test]
