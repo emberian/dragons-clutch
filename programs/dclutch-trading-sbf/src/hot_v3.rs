@@ -841,7 +841,6 @@ pub fn process_hot_execution_v3(
         family_request,
         request_digest,
         envelope,
-        capability_program_set: context.selection().capability_release().to_bytes(),
         selected_program,
         lifecycle_plans: &lifecycle_plans,
         aliases: &aliases,
@@ -873,7 +872,6 @@ struct PreparedHotCommitV3<'a, 'accounts, 'info, 'artifact> {
     family_request: &'a [u8],
     request_digest: [u8; 32],
     envelope: HotExecutionEnvelopeV3,
-    capability_program_set: [u8; 32],
     selected_program: ContentId,
     lifecycle_plans: &'a [PreparedLifecycleInvocationV3],
     aliases: &'a [usize],
@@ -934,7 +932,7 @@ fn execute_prepared_child_routes_v3(
         prepared.family_request,
         prepared.request_digest,
         prepared.envelope,
-        prepared.capability_program_set,
+        prepared.context.selection().capability_release().to_bytes(),
         prepared.selected_program.to_bytes(),
     )
 }
