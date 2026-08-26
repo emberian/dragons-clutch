@@ -21,7 +21,6 @@ use dclutch_execution_strategy_contract::v2::{
     EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2, EXECUTION_STRATEGY_PROGRAM_BYTES_V2,
     EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
 };
-use dclutch_rational_representation_v2_contract::AuthenticatedTokenBehaviorV2;
 use dclutch_rational_representation_v2_lifecycle_contract::{
     hot_v3::RationalLifecycleHotLayoutV3,
     hot_v6::{RationalLifecycleHotRegisterLayoutV6, RATIONAL_LIFECYCLE_HOT_SCHEMA_RELEASE_ID_V6},
@@ -58,8 +57,8 @@ pub struct RationalLifecycleSelectedBundleInputV6<'a> {
     pub action: LifecycleActionV2,
     /// Exact Profile13 observations, including ProductBasis N.
     pub account_profile: RationalLifecycleSelectedAccountProfileInputV5<'a>,
-    /// Realm/release-selected Token behavior; no Market identity is embedded.
-    pub authenticated_token_behavior: AuthenticatedTokenBehaviorV2,
+    /// Immutable Realm/release Token behavior selected before Market founding.
+    pub token_behavior_selection: TokenBehaviorSelectionV2,
     /// Manifest-selected capability kind.
     pub kind: [u8; 32],
     /// Manifest-selected root schema.
@@ -104,15 +103,11 @@ pub fn build_rational_lifecycle_selected_bundle_v6(
     input: RationalLifecycleSelectedBundleInputV6<'_>,
 ) -> Result<RationalLifecycleSelectedBundleV6> {
     let coordinate_count = coordinate_count(input.action)?;
-    let selection = input.authenticated_token_behavior.selection();
+    let selection = input.token_behavior_selection;
     let release_set = selection.release_set();
     let token_program = selection.token_program();
     let token_behavior_selection = selection.to_bytes();
-    if release_set == [0; 32]
-        || token_program == [0; 32]
-        || hash(&token_behavior_selection).to_bytes()
-            != input.authenticated_token_behavior.content_digest()
-    {
+    if release_set == [0; 32] || token_program == [0; 32] {
         return Err(Error::ContentIdentity);
     }
     let account_profile =
@@ -344,9 +339,6 @@ mod tests {
     use dclutch_product_payoff_v2_codec::runtime_v3::{
         compile_basis_v3, BasisInputV3, BasisKindV3, BASIS_HEADER_BYTES_V3,
     };
-    use dclutch_rational_representation_v2_contract::{
-        authenticate_token_behavior_v2, TokenBehaviorRecordAdmissionV2,
-    };
     use dclutch_rational_representation_v2_kernel::{
         descriptor_v3::{
             encode_representation_descriptor_v3_atomic, representation_descriptor_bytes_v3,
@@ -359,7 +351,7 @@ mod tests {
         LifecycleHeaderV2, LifecycleRequestV2, LIFECYCLE_HEADER_BYTES_V2,
     };
     use dclutch_request_profile_contract::{project_atomic, ProjectionRegistersV1};
-    use dclutch_token_svm::{TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2};
+    use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
     use dclutch_transition_vm::v3::{
         execute_fold_atomic, Error as TransitionError, RegisterInput, RegisterOutput,
     };
@@ -431,29 +423,6 @@ mod tests {
         .expect("authenticated descriptor")
     }
 
-    fn token_behavior(descriptor: RepresentationDescriptorV2<'_>) -> AuthenticatedTokenBehaviorV2 {
-        let realm = id(18);
-        let selection = TokenBehaviorSelectionV2::new(realm, descriptor.release_set_id())
-            .expect("selection")
-            .to_bytes();
-        let digest = hash(&selection).to_bytes();
-        authenticate_token_behavior_v2(
-            descriptor,
-            realm,
-            &selection,
-            TokenBehaviorRecordAdmissionV2 {
-                selected_schema_id: TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
-                finalized_schema_id: TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
-                selected_content_digest: digest,
-                finalized_content_digest: digest,
-                recomputed_content_digest: digest,
-                record_authenticated: true,
-                market_realm_authenticated: true,
-            },
-        )
-        .expect("Token behavior")
-    }
-
     fn lifecycle_policy() -> Vec<u8> {
         let mut scratch = vec![0_u8; LIFECYCLE_HEADER_BYTES];
         let mut output = vec![0_u8; LIFECYCLE_HEADER_BYTES];
@@ -463,7 +432,7 @@ mod tests {
     }
 
     fn bundle(
-        behavior: AuthenticatedTokenBehaviorV2,
+        selection: TokenBehaviorSelectionV2,
         basis: &[u8],
         descriptor_bytes: usize,
         lifecycle: &[u8],
@@ -485,7 +454,7 @@ mod tests {
                 logical_data_lengths: &lengths,
                 product_basis: basis,
             },
-            authenticated_token_behavior: behavior,
+            token_behavior_selection: selection,
             kind: id(41),
             root_schema: id(42),
             lifecycle_policy: lifecycle,
@@ -537,13 +506,10 @@ mod tests {
         let first = descriptor(&first_bytes);
         let second = descriptor(&second_bytes);
         let lifecycle = lifecycle_policy();
-        let first_bundle = bundle(token_behavior(first), &basis, first_bytes.len(), &lifecycle);
-        let second_bundle = bundle(
-            token_behavior(second),
-            &basis,
-            second_bytes.len(),
-            &lifecycle,
-        );
+        let selection = TokenBehaviorSelectionV2::new(id(18), first.release_set_id())
+            .expect("pre-Market selection");
+        let first_bundle = bundle(selection, &basis, first_bytes.len(), &lifecycle);
+        let second_bundle = bundle(selection, &basis, second_bytes.len(), &lifecycle);
         assert_eq!(first.market_id(), id(21));
         assert_eq!(second.market_id(), id(22));
         assert_ne!(first.descriptor_id(), second.descriptor_id());
