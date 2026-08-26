@@ -2,10 +2,11 @@
 //!
 //! This allocation-free successor wraps one canonical V3 program. It permits
 //! finite descriptor-owned extensions of fixed child frames and exact ranges
-//! of the digest-authenticated family request to be appended to selected child
-//! requests. Fixed values or authenticated common scalar registers own every
-//! coordinate. Admission must prove that every selected scalar is derived and
-//! protected by the selected Transition.
+//! of the digest-authenticated family request. A range is either appended to
+//! one selected child request or explicitly owned by authenticated semantic
+//! projection. Fixed values, Product-width affine coordinates, or authenticated
+//! common scalar registers own every coordinate. Admission must prove that
+//! every selected scalar is derived and protected by the selected Transition.
 
 use super::v3::{Error as ErrorV3, ProgramV3, ResolvedEffectV3, ResolvedInvocationV3};
 
@@ -15,11 +16,11 @@ pub const MAGIC_V4: [u8; 4] = *b"DCE5";
 pub const VERSION_V4: u8 = 5;
 /// Finalized-record schema label.
 pub const SCHEMA_RELEASE_PREIMAGE_V4: &[u8] =
-    b"dclutch/schema/effect-program-v5-scalar-spans-and-borrowed-ranges-v1";
+    b"dclutch/schema/effect-program-v5-scalar-spans-and-borrowed-ranges-v2-tail-affine-semantic";
 /// SHA-256 of [`SCHEMA_RELEASE_PREIMAGE_V4`].
 pub const SCHEMA_RELEASE_ID_V4: [u8; 32] = [
-    0x18, 0x4f, 0x83, 0x50, 0x9b, 0x14, 0x23, 0xdb, 0xf7, 0xb2, 0x9d, 0x60, 0xd2, 0xbe, 0x63, 0x09,
-    0xa5, 0x44, 0x7c, 0x4f, 0x87, 0xc3, 0xca, 0x54, 0x70, 0x9c, 0xfb, 0xda, 0x17, 0x10, 0x12, 0x8b,
+    0x28, 0xe4, 0xa6, 0xc2, 0x95, 0x9d, 0x49, 0x76, 0x12, 0x35, 0xb7, 0x79, 0x9a, 0xa4, 0xee, 0xcf,
+    0x28, 0x45, 0x05, 0x29, 0xb2, 0xa5, 0x0c, 0xb9, 0x2b, 0x77, 0x69, 0x6d, 0x2f, 0xfe, 0xd4, 0x8c,
 ];
 /// Exact successor header width.
 pub const HEADER_BYTES_V4: usize = 24;
@@ -31,6 +32,11 @@ pub const BORROWED_RANGE_BYTES_V4: usize = 16;
 const MAX_EXTENSION_V4: u16 = 63;
 const COORDINATE_FIXED: u8 = 0;
 const COORDINATE_COMMON_SCALAR: u8 = 1;
+const COORDINATE_PRODUCT_TAIL_AFFINE: u8 = 2;
+
+/// Range owner for bytes consumed by authenticated request/transition
+/// semantics rather than appended to a child request.
+pub const SEMANTIC_RANGE_ROUTE_V4: u16 = u16::MAX;
 
 /// Stable hostile-decode or runtime-resolution refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -91,6 +97,13 @@ pub enum RequestCoordinateV4 {
     Fixed(u32),
     /// Exact common scalar register protected by admission.
     CommonScalar(u16),
+    /// `base + Product N * stride`, with N authenticated by common Hot.
+    ProductTailAffine {
+        /// Fixed byte coordinate before the Product-width tail.
+        base: u16,
+        /// Exact bytes contributed by each Product outcome.
+        stride: u16,
+    },
 }
 
 impl RequestCoordinateV4 {
@@ -100,6 +113,15 @@ impl RequestCoordinateV4 {
             COORDINATE_COMMON_SCALAR => Ok(Self::CommonScalar(
                 u16::try_from(value).map_err(|_| ErrorV4::RangeTable)?,
             )),
+            COORDINATE_PRODUCT_TAIL_AFFINE => {
+                let base = u16::try_from(value & u32::from(u16::MAX))
+                    .map_err(|_| ErrorV4::RangeTable)?;
+                let stride = u16::try_from(value >> 16).map_err(|_| ErrorV4::RangeTable)?;
+                if stride == 0 {
+                    return Err(ErrorV4::RangeTable);
+                }
+                Ok(Self::ProductTailAffine { base, stride })
+            }
             _ => Err(ErrorV4::RangeTable),
         }
     }
@@ -108,6 +130,10 @@ impl RequestCoordinateV4 {
         match self {
             Self::Fixed(value) => (COORDINATE_FIXED, value),
             Self::CommonScalar(value) => (COORDINATE_COMMON_SCALAR, u32::from(value)),
+            Self::ProductTailAffine { base, stride } => (
+                COORDINATE_PRODUCT_TAIL_AFFINE,
+                u32::from(base) | (u32::from(stride) << 16),
+            ),
         }
     }
 
@@ -118,7 +144,7 @@ impl RequestCoordinateV4 {
         Ok(())
     }
 
-    fn resolve(self, scalars: &[u64]) -> ResultV4<usize> {
+    fn resolve(self, scalars: &[u64], tail_count: u32) -> ResultV4<usize> {
         match self {
             Self::Fixed(value) => usize::try_from(value).map_err(|_| ErrorV4::Arithmetic),
             Self::CommonScalar(index) => usize::try_from(
@@ -127,6 +153,11 @@ impl RequestCoordinateV4 {
                     .ok_or(ErrorV4::RangeSelection)?,
             )
             .map_err(|_| ErrorV4::RangeSelection),
+            Self::ProductTailAffine { base, stride } => u32::from(stride)
+                .checked_mul(tail_count)
+                .and_then(|tail| u32::from(base).checked_add(tail))
+                .and_then(|value| usize::try_from(value).ok())
+                .ok_or(ErrorV4::RangeSelection),
         }
     }
 }
@@ -202,7 +233,7 @@ impl DynamicFixedSpanV4 {
     }
 }
 
-/// One source-request range appended to one selected child route.
+/// One exact source-request range owned by semantics or one child route.
 ///
 /// The table is encoded in resolved source order, not route order. Under the
 /// reuse policy, exact duplicates are then ordered by strictly increasing
@@ -220,7 +251,7 @@ impl BorrowedRangeV4 {
         Self { route, offset, len }
     }
 
-    /// Consumer route.
+    /// Consumer route, or [`SEMANTIC_RANGE_ROUTE_V4`].
     pub const fn route(self) -> u16 {
         self.route
     }
@@ -255,9 +286,13 @@ impl BorrowedRangeV4 {
         })
     }
 
-    fn resolve(self, scalars: &[u64]) -> ResultV4<ResolvedBorrowedRangeV4> {
-        let source_offset = self.offset.resolve(scalars)?;
-        let len = self.len.resolve(scalars)?;
+    fn resolve(
+        self,
+        scalars: &[u64],
+        tail_count: u32,
+    ) -> ResultV4<ResolvedBorrowedRangeV4> {
+        let source_offset = self.offset.resolve(scalars, tail_count)?;
+        let len = self.len.resolve(scalars, tail_count)?;
         if len == 0 {
             return Err(ErrorV4::RequestCoverage);
         }
@@ -511,14 +546,15 @@ impl<'a> ProgramV4<'a> {
         let mut index = 0_u16;
         while index < self.range_count {
             let declaration = self.borrowed_range(index)?;
-            if self
-                .base
-                .invocation_count(declaration.route, tail_count, scalars, identities)?
-                != 1
+            if declaration.route != SEMANTIC_RANGE_ROUTE_V4
+                && self
+                    .base
+                    .invocation_count(declaration.route, tail_count, scalars, identities)?
+                    != 1
             {
                 return Err(ErrorV4::RequestCoverage);
             }
-            let resolved = declaration.resolve(scalars)?;
+            let resolved = declaration.resolve(scalars, tail_count)?;
             let end = resolved
                 .source_offset
                 .checked_add(resolved.len)
@@ -570,6 +606,28 @@ impl<'a> ProgramV4<'a> {
         ordinal: u16,
         scalars: &[u64],
     ) -> ResultV4<ResolvedBorrowedRangeV4> {
+        let mut index = 0_u16;
+        while index < self.range_count {
+            let declaration = self.borrowed_range(index)?;
+            if declaration.route == route
+                && (matches!(declaration.offset, RequestCoordinateV4::ProductTailAffine { .. })
+                    || matches!(declaration.len, RequestCoordinateV4::ProductTailAffine { .. }))
+            {
+                return Err(ErrorV4::RangeSelection);
+            }
+            index = index.checked_add(1).ok_or(ErrorV4::Arithmetic)?;
+        }
+        self.resolved_borrowed_range_for_tail(route, ordinal, 0, scalars)
+    }
+
+    /// Resolve one route-local range using authenticated Product width.
+    pub fn resolved_borrowed_range_for_tail(
+        self,
+        route: u16,
+        ordinal: u16,
+        tail_count: u32,
+        scalars: &[u64],
+    ) -> ResultV4<ResolvedBorrowedRangeV4> {
         if route >= self.base.route_count() {
             return Err(ErrorV4::RangeTable);
         }
@@ -579,7 +637,7 @@ impl<'a> ProgramV4<'a> {
             let declaration = self.borrowed_range(index)?;
             if declaration.route == route {
                 if seen == ordinal {
-                    return declaration.resolve(scalars);
+                    return declaration.resolve(scalars, tail_count);
                 }
                 seen = seen.checked_add(1).ok_or(ErrorV4::Arithmetic)?;
             }
@@ -657,7 +715,9 @@ impl<'a> ProgramV4<'a> {
         let mut index = 0_u16;
         while index < self.range_count {
             let declaration = self.borrowed_range(index)?;
-            if declaration.route >= self.base.route_count() {
+            if declaration.route != SEMANTIC_RANGE_ROUTE_V4
+                && declaration.route >= self.base.route_count()
+            {
                 return Err(ErrorV4::RangeTable);
             }
             declaration
@@ -1253,6 +1313,70 @@ mod tests {
         assert_eq!(
             program.validate_route_window(2, 2),
             Err(ErrorV4::RangeSelection)
+        );
+    }
+
+    #[test]
+    fn product_tail_semantic_range_and_child_range_exactly_cover_request() {
+        const BYTES: usize = HEADER_BYTES_V4 + 2 * BORROWED_RANGE_BYTES_V4 + BASE_BYTES;
+        let base = base_program();
+        let ranges = [
+            BorrowedRangeV4::new(
+                SEMANTIC_RANGE_ROUTE_V4,
+                RequestCoordinateV4::Fixed(384),
+                RequestCoordinateV4::ProductTailAffine { base: 0, stride: 8 },
+            ),
+            BorrowedRangeV4::new(
+                1,
+                RequestCoordinateV4::ProductTailAffine {
+                    base: 384,
+                    stride: 8,
+                },
+                RequestCoordinateV4::CommonScalar(1),
+            ),
+        ];
+        let mut scratch = [0_u8; BYTES];
+        let mut output = [0_u8; BYTES];
+        encode_program_v4_atomic(
+            &base,
+            BorrowedRangePolicyV4::DisjointExactCoverage,
+            384,
+            &[],
+            &ranges,
+            &mut scratch,
+            &mut output,
+        )
+        .expect("semantic plus Claims ranges");
+        let program = ProgramV4::decode(&output).expect("decode");
+        let scalars = [0, 640, 0, 0, 0, 0];
+        let identities = [[1; 32]];
+        for tail_count in [1_u32, 16] {
+            let request_len = 384_usize
+                .checked_add(usize::try_from(tail_count).expect("tail") * 8)
+                .and_then(|value| value.checked_add(640))
+                .expect("bounded request");
+            assert_eq!(
+                program.validate_request_coverage(
+                    request_len,
+                    tail_count,
+                    &scalars,
+                    &identities,
+                ),
+                Ok(())
+            );
+            let claims = program
+                .resolved_borrowed_range_for_tail(1, 0, tail_count, &scalars)
+                .expect("Claims range");
+            assert_eq!(
+                claims.source_offset(),
+                384 + usize::try_from(tail_count).expect("tail") * 8
+            );
+            assert_eq!(claims.len(), 640);
+            assert_eq!(program.borrowed_range_count_for_route(1), Ok(1));
+        }
+        assert_eq!(
+            program.validate_request_coverage(384 + 16 * 8 + 639, 16, &scalars, &identities),
+            Err(ErrorV4::RequestCoverage)
         );
     }
 
