@@ -375,7 +375,7 @@ impl Fixture {
 }
 
 #[test]
-fn valid_found24_is_explicitly_unavailable_without_rent_authority() {
+fn valid_found24_is_unavailable_without_infrastructure_authority() {
     let fixture = Fixture::new();
     assert_eq!(fixture.graph.report.outcome_count, 258);
     assert_eq!(FOUND_ACCOUNT_COUNT_V2, 24);
@@ -389,11 +389,11 @@ fn valid_found24_is_explicitly_unavailable_without_rent_authority() {
     );
     assert_eq!(
         inspection.unavailable,
-        FoundUnavailableV2::RentProgramAuthorityAbsent
+        FoundUnavailableV2::InfrastructureProfileAbsent
     );
     assert_eq!(
         build_found_instruction_v2(GENERATION, fixture.state()),
-        Err(Error::UnselectedRentProgram)
+        Err(Error::UnselectedInfrastructurePrograms)
     );
 }
 

@@ -108,8 +108,8 @@ pub struct FoundInstructionPlanV2 {
 /// Exact reason a fully authenticated Found snapshot cannot export a transaction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FoundUnavailableV2 {
-    /// Core does not yet authenticate a Registry/release-selected Rent program.
-    RentProgramAuthorityAbsent,
+    /// Core does not yet pin Registry and Rent artifact releases.
+    InfrastructureProfileAbsent,
 }
 
 /// Chain-derived Found projection safe to display without exporting a transaction.
@@ -144,22 +144,23 @@ pub fn inspect_found_v2(generation: u64, state: FoundStateV2<'_>) -> Result<Foun
         observation_slot: prepared.observation_slot,
         market_rent_top_up: prepared.market_rent_top_up,
         account_count: prepared.instruction.accounts.len(),
-        unavailable: FoundUnavailableV2::RentProgramAuthorityAbsent,
+        unavailable: FoundUnavailableV2::InfrastructureProfileAbsent,
     })
 }
 
 /// Reauthenticate one finalized Runtime V2 snapshot and construct Core Found.
 ///
-/// This deliberately refuses until Core authenticates an onchain-selected
-/// Rent program. Use [`inspect_found_v2`] to obtain the complete chain-derived
-/// display projection and exact unavailable reason without exporting a
-/// transaction payload.
+/// This deliberately refuses until the current Core artifact pins an immutable
+/// infrastructure profile and authenticates the exact Registry and Rent
+/// artifact releases. Use [`inspect_found_v2`] to obtain the complete
+/// chain-derived display projection and exact unavailable reason without
+/// exporting a transaction payload.
 pub fn build_found_instruction_v2(
     generation: u64,
     state: FoundStateV2<'_>,
 ) -> Result<FoundInstructionPlanV2> {
     let _prepared = prepare_found_instruction_v2(generation, state)?;
-    Err(Error::UnselectedRentProgram)
+    Err(Error::UnselectedInfrastructurePrograms)
 }
 
 fn prepare_found_instruction_v2(
