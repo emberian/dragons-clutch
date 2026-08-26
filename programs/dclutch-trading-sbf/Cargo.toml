@@ -19,15 +19,20 @@ series-family = [
     "dep:dclutch-claims-svm",
     "dep:dclutch-custody-contract",
 ]
+dealer-family = [
+    "dep:dclutch-claims-svm",
+    "dep:dclutch-custody-contract",
+    "dep:dclutch-dealer-codec",
+    "dep:dclutch-economic-slice-kernel",
+    "dep:dclutch-token-svm",
+]
 families = [
     "series-family",
-    "dep:dclutch-dealer-codec",
+    "dealer-family",
     "dep:dclutch-direct-codec",
-    "dep:dclutch-economic-slice-kernel",
     "dep:dclutch-general-adapter-contract",
     "dep:dclutch-general-codec",
     "dep:dclutch-general-config-contract",
-    "dep:dclutch-token-svm",
 ]
 # Test-only real-SBF profile that measures the common outer without linking
 # family modules whose separate physical adapters are still under review.
