@@ -23,12 +23,12 @@ use dclutch_rent_contract::{
     RentCreditInstructionV1, RentCreditV1, SystemWalletFactsV1, WithdrawBalancePlanV1,
     WithdrawRentCreditFrameV1, WithdrawRentCreditV1,
     lifecycle_v2::{
-        CLOSE_LIFECYCLE_RENT_CREDIT_BYTES_V2, CloseLifecycleRentCreditV2,
-        CreateLifecycleRentCreditV2, LIFECYCLE_RENT_CORE_CLOSE_AUTHORITY_DOMAIN_V2,
-        LIFECYCLE_RENT_CREDIT_BYTES_V2, LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2, LifecycleAccountIdV2,
-        LifecycleAccountMetaV2, LifecycleClosePlanV2, LifecycleRentCreditV2,
-        LifecycleRentInstructionV2, LifecycleSweepPlanV2, SweepLifecycleRentCreditV2,
-        validate_refund_wallet_v2, validate_sweep_frame_v2,
+        CloseLifecycleRentCreditV2, CreateLifecycleRentCreditV2,
+        LIFECYCLE_RENT_CORE_CLOSE_AUTHORITY_DOMAIN_V2, LIFECYCLE_RENT_CREDIT_BYTES_V2,
+        LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2, LifecycleAccountIdV2, LifecycleAccountMetaV2,
+        LifecycleClosePlanV2, LifecycleRentCreditV2, LifecycleRentInstructionV2,
+        LifecycleSweepPlanV2, SweepLifecycleRentCreditV2, validate_refund_wallet_v2,
+        validate_sweep_frame_v2,
     },
 };
 use solana_program::{
@@ -684,9 +684,6 @@ fn process_close_v2(
     accounts: &[AccountInfo<'_>],
     request: CloseLifecycleRentCreditV2,
 ) -> ProgramResult {
-    if request.to_bytes().len() != CLOSE_LIFECYCLE_RENT_CREDIT_BYTES_V2 {
-        return Err(RentSbfError::Instruction.into());
-    }
     let accounts = CloseAccountsV2::parse(accounts)?;
     let state = authenticate_lifecycle_credit_v2(program_id, accounts.credit)?;
     let wallet_data_len =
