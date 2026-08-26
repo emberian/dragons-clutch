@@ -80,7 +80,12 @@ PDA, instruction frame, and next publication action.
 
 Measured on a real localhost validator on 2026-08-26, the campaign reaches
 Found31 and **Found31 does not execute**: it exhausts Solana's per-transaction
-maximum of 1,400,000 compute units. Release authentication hashes whole
+maximum of 1,400,000 compute units. Worse, when the real
+Claims/Trading/Resolution/Custody artifacts are supplied through
+`DCLUTCH_SUCCESSOR_*_ELF`, the five-role Registry activation exhausts the same
+maximum before the campaign reaches any Market work at all; the run therefore
+binds those four roles to distinct immutable deployments of the much smaller
+Registry ELF. Release authentication hashes whole
 ProgramData ELFs on chain -- the ~1.0 MB Core ELF twice in the same
 transaction, once inside Core and once inside the Registry role CPI -- and that
 hashing alone is roughly 1.19M CU. The compute limit is already the protocol
