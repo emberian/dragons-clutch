@@ -4,6 +4,8 @@
 pub mod buy_escrow;
 /// Runtime-width complementary Custody request projection.
 pub mod complementary;
+/// Existing-root inline ordinary Claims/Custody projection.
+pub mod inline;
 /// Commit-last ordinary Direct state candidates and shared physical facts.
 pub mod physical;
 /// Claims-owned record Position lifecycle for registered Sell liquidity.

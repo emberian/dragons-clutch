@@ -30,6 +30,8 @@ pub enum DirectPhysicalError {
     Postcondition,
     /// Exact Direct state-candidate encoding or output geometry refused.
     State,
+    /// The common effect profile cannot yet create or close required Trading state.
+    LifecycleUnavailable,
 }
 
 /// Result alias for Direct physical planning.

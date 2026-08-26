@@ -1,6 +1,6 @@
-use super::{buy_escrow::*, complementary::*, physical::*, sell_escrow::*};
+use super::{buy_escrow::*, complementary::*, inline::*, physical::*, sell_escrow::*};
 use dclutch_claims_svm::{
-    CallerRole as ClaimsCallerRole,
+    CLAIMS_PLAN_HEADER_BYTES_V1, CallerRole as ClaimsCallerRole, ClaimsPlanV1, ClaimsReceiptV1,
     affine_batch_v2::{
         AffineBatchPlanInputV2, AffineBatchPlanV2, AffineBatchPositionV2, AffineBatchReceiptV2,
         AffineBatchRowInputV2, AffineBatchRowV2, DeltaDirectionV2, SignedMagnitudeV2,
@@ -13,20 +13,23 @@ use dclutch_claims_svm::{
 };
 use dclutch_custody_contract::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_PDA_DOMAIN_V1, CUSTODY_VAULT_PDA_DOMAIN_V1,
-    CompartmentV1, CustodyReplayV1, OperationV1,
+    CallerRoleV1, CompartmentV1, CustodyReceiptV1, CustodyReplayV1, OperationV1, ReceiptEvidenceV1,
 };
 use dclutch_direct_codec::{
     intent_v2::CompactIntentV2,
     successor::{
         AuthenticatedCompactIntentV2, ComplementaryActionV2, ComplementaryInputV2,
         ComplementaryParticipantsV2, ComplementarySettlementV2, DIRECT_MAKER_REPLAY_BYTES_V1,
-        DIRECT_REGISTERED_RECORD_BYTES_V2, DirectExecutionConfigV1, DirectRegisteredIntentV2,
-        DirectRootStateV1, MakerReplayFirstUseV1, MakerReplayObservationV1, MakerReplayRootV1,
-        MakerReplayVacancyV1, RegisteredExecutionV2, RegisteredFillCandidateV2,
+        DIRECT_REGISTERED_RECORD_BYTES_V2, DIRECT_ROOT_STATE_BYTES_V1, DirectCoordinatesV1,
+        DirectExecutionConfigV1, DirectRegisteredIntentV2, DirectRootStateV1, InlineExecutionV2,
+        InlineOrdinaryInputV2, InlineParticipantV2, MakerReplayFirstUseV1,
+        MakerReplayObservationV1, MakerReplayRootV1, MakerReplaySeedsV1, MakerReplayVacancyV1,
+        NonceConsumptionV2, RegisteredExecutionV2, RegisteredFillCandidateV2,
         RegisteredFillInputV2, RegisteredIntentCreationV2, RegisteredIntentSeedsV2,
         RegisteredOrdinaryInputV2, RegisteredParticipantV2, RegisteredRecordAfterFillV2,
-        RegisteredRecordFirstUseV2, RegisteredTerminalEvidenceV2, preview_registered_fill_v2,
-        register_intent_v2, settle_registered_complementary_v2, terminate_registered_intent_v2,
+        RegisteredRecordFirstUseV2, RegisteredTerminalEvidenceV2, consume_nonce_v2,
+        preview_registered_fill_v2, register_intent_v2, settle_registered_complementary_v2,
+        terminate_registered_intent_v2,
     },
 };
 use dclutch_market_core_codec::{
@@ -1691,5 +1694,440 @@ fn terminal_price_improved_buy_fill_refunds_and_closes_after_transfers() {
     assert_eq!(
         plan.requests[4].expect("close replay").operation,
         OperationV1::CloseReplay
+    );
+}
+
+fn inline_compact(
+    side: u8,
+    lifecycle: u8,
+    nonce: u64,
+    collateral_account: [u8; 32],
+) -> CompactIntentV2 {
+    CompactIntentV2 {
+        side,
+        lifecycle,
+        outcome: 1,
+        market: id(1),
+        generation: 4,
+        nonce,
+        valid_from: 2,
+        valid_through: 20,
+        maximum_fill: 100,
+        limit_price: if side == 0 { 40 } else { 60 },
+        fee_basis_points: 1_000,
+        collateral_account,
+    }
+}
+
+fn existing_inline_participants(
+    seller_intent: CompactIntentV2,
+    buyer_intent: CompactIntentV2,
+) -> (
+    DirectRootStateV1,
+    InlineParticipantV2,
+    InlineParticipantV2,
+    [u8; 32],
+    [u8; 32],
+) {
+    let coordinates = DirectCoordinatesV1::new(id(1), 4).expect("coordinates");
+    let seller_seeds = MakerReplaySeedsV1::new(coordinates, id(2)).expect("seller seeds");
+    let buyer_seeds = MakerReplaySeedsV1::new(coordinates, id(3)).expect("buyer seeds");
+    let (seller_key, seller_bump) = derive_pda(id(10), &seller_seeds.as_slices());
+    let (buyer_key, buyer_bump) = derive_pda(id(10), &buyer_seeds.as_slices());
+    let seller_nonce_zero = AuthenticatedCompactIntentV2::from_adjacent_ed25519(
+        id(2),
+        CompactIntentV2 {
+            nonce: 0,
+            ..seller_intent
+        },
+    )
+    .expect("seller nonce zero");
+    let seller_created = consume_nonce_v2(
+        DirectRootStateV1::new(),
+        MakerReplayObservationV1::Vacant(MakerReplayVacancyV1::new(seller_bump, 7)),
+        seller_nonce_zero.replay().expect("seller replay"),
+        NonceConsumptionV2::Inline,
+        Some(MakerReplayFirstUseV1 {
+            rent_owner: id(90),
+            rent_principal: 100,
+        }),
+    )
+    .expect("existing seller root");
+    let buyer_nonce_zero = AuthenticatedCompactIntentV2::from_adjacent_ed25519(
+        id(3),
+        CompactIntentV2 {
+            nonce: 0,
+            ..buyer_intent
+        },
+    )
+    .expect("buyer nonce zero");
+    let buyer_created = consume_nonce_v2(
+        seller_created.root,
+        MakerReplayObservationV1::Vacant(MakerReplayVacancyV1::new(buyer_bump, 9)),
+        buyer_nonce_zero.replay().expect("buyer replay"),
+        NonceConsumptionV2::Inline,
+        Some(MakerReplayFirstUseV1 {
+            rent_owner: id(91),
+            rent_principal: 100,
+        }),
+    )
+    .expect("existing buyer root");
+    (
+        buyer_created.root,
+        InlineParticipantV2 {
+            authenticated: AuthenticatedCompactIntentV2::from_adjacent_ed25519(
+                id(2),
+                seller_intent,
+            )
+            .expect("seller"),
+            maker_replay: MakerReplayObservationV1::Existing(seller_created.maker_root),
+            first_use: None,
+        },
+        InlineParticipantV2 {
+            authenticated: AuthenticatedCompactIntentV2::from_adjacent_ed25519(id(3), buyer_intent)
+                .expect("buyer"),
+            maker_replay: MakerReplayObservationV1::Existing(buyer_created.maker_root),
+            first_use: None,
+        },
+        seller_key,
+        buyer_key,
+    )
+}
+
+fn inline_physical_fixture(
+    fill: u64,
+    lifecycle: u8,
+    delegated_amount: u64,
+) -> (
+    InlineOrdinaryInputV2,
+    DirectInlinePhysicalContextV2,
+    DirectInlineCollateralFrameV2,
+) {
+    let seller_intent = inline_compact(0, lifecycle, 1, id(30));
+    let buyer_intent = inline_compact(1, lifecycle, 1, id(31));
+    let (root, seller, buyer, seller_key, buyer_key) =
+        existing_inline_participants(seller_intent, buyer_intent);
+    let core_market = core_market_view(3);
+    let release = core_market.release_set().release_set_id.to_bytes();
+    let (custody_authority, _) =
+        derive_pda(id(20), &[CUSTODY_AUTHORITY_PDA_DOMAIN_V1, &id(1), &release]);
+    let (custody_replay, _) = derive_pda(
+        id(20),
+        &[CUSTODY_REPLAY_PDA_DOMAIN_V1, &id(1), &release, &buyer_key],
+    );
+    (
+        InlineOrdinaryInputV2 {
+            root,
+            seller,
+            buyer,
+            execution: InlineExecutionV2 {
+                config: config(1_000, id(6)),
+                outcome_count: 3,
+                slot: 7,
+                fill,
+                execution_price: 50,
+            },
+        },
+        DirectInlinePhysicalContextV2 {
+            core_market,
+            trading_program: id(10),
+            claims_program: id(11),
+            direct_root: id(50),
+            seller_maker_root: seller_key,
+            buyer_maker_root: buyer_key,
+            custody_replay,
+            custody_replay_state: CustodyReplayV1 {
+                caller_role: CallerRoleV1::Trading,
+                release_set: release,
+                market: id(1),
+                realm: id(14),
+                context: buyer_key,
+                caller_program: id(10),
+                rent_refund: id(91),
+                open_vault_count: 0,
+                next_revision: 7,
+                generation: 4,
+                last_request_digest: id(70),
+                last_poststate_commitment: id(71),
+            },
+            custody_authority,
+            parent_request_digest: id(17),
+            claims_market_revision: 8,
+            seller_position_revision: 9,
+            buyer_position_revision: 10,
+        },
+        DirectInlineCollateralFrameV2 {
+            buyer_source: DirectExternalDebitV2 {
+                account: id(31),
+                owner: id(3),
+                delegate: custody_authority,
+                delegated_amount,
+                balance: 100,
+            },
+            seller_destination: DirectExternalCollateralV2 {
+                account: id(30),
+                owner: id(2),
+                balance: 30,
+            },
+            fee_destination: DirectExternalCollateralV2 {
+                account: id(32),
+                owner: id(6),
+                balance: 40,
+            },
+        },
+    )
+}
+
+#[test]
+fn inline_ioc_projects_claims_and_net_then_combined_fee_with_residual_delegate() {
+    let (direct, context, collateral) = inline_physical_fixture(40, 1, 66);
+    let mut quantities = [0_u8; 24];
+    let mut claims_scratch = [0_u8; CLAIMS_PLAN_HEADER_BYTES_V1 + 24];
+    let mut claims_output = [0xa5_u8; CLAIMS_PLAN_HEADER_BYTES_V1 + 24];
+    let plan = prepare_inline_ordinary_physical_v2(
+        direct,
+        context,
+        collateral,
+        &mut quantities,
+        &mut claims_scratch,
+        &mut claims_output,
+    )
+    .expect("inline physical plan");
+    assert_eq!(plan.custody_count, 2);
+    assert_eq!(plan.buyer_source_after, 78);
+    assert_eq!(plan.buyer_delegated_after, 44);
+    assert_eq!(plan.seller_destination_after, 48);
+    assert_eq!(plan.fee_destination_after, 44);
+    let net = plan.custody[0].expect("seller net");
+    assert_eq!(net.request.amount, 18);
+    assert_eq!(net.request.expected_revision, 7);
+    assert_eq!(net.request.semantic.transfer_index, 0);
+    assert_eq!(net.delegated_after, 48);
+    let fee = plan.custody[1].expect("combined fee");
+    assert_eq!(fee.request.amount, 4);
+    assert_eq!(fee.request.expected_revision, 8);
+    assert_eq!(fee.request.semantic.transfer_index, 1);
+    assert_eq!(fee.delegated_after, 44);
+    let claims = ClaimsPlanV1::decode(&claims_output).expect("Claims plan");
+    assert_eq!(claims.source_owner(), id(2));
+    assert_eq!(claims.destination_owner(), id(3));
+    assert_eq!(claims.quantity(1), Ok(40));
+    assert_eq!(claims.quantity(0), Ok(0));
+
+    let mut root = [0xa5; DIRECT_ROOT_STATE_BYTES_V1];
+    let mut seller = [0xa5; DIRECT_MAKER_REPLAY_BYTES_V1];
+    let mut buyer = [0xa5; DIRECT_MAKER_REPLAY_BYTES_V1];
+    encode_inline_state_candidate_v2(
+        plan.settlement,
+        DirectInlineStateBuffersV2 {
+            root_output: &mut root,
+            seller_maker_output: &mut seller,
+            buyer_maker_output: &mut buyer,
+        },
+    )
+    .expect("state candidates");
+    assert_eq!(DirectRootStateV1::decode(&root), Ok(plan.settlement.root));
+    assert_eq!(
+        MakerReplayRootV1::decode(&seller),
+        Ok(plan.settlement.seller_maker_root)
+    );
+    assert_eq!(
+        MakerReplayRootV1::decode(&buyer),
+        Ok(plan.settlement.buyer_maker_root)
+    );
+}
+
+#[test]
+fn inline_fok_price_improvement_accepts_worst_case_allowance_and_leaves_residual() {
+    let (direct, context, collateral) = inline_physical_fixture(100, 0, 66);
+    let mut quantities = [0_u8; 24];
+    let mut claims_scratch = [0_u8; CLAIMS_PLAN_HEADER_BYTES_V1 + 24];
+    let mut claims_output = [0_u8; CLAIMS_PLAN_HEADER_BYTES_V1 + 24];
+    let plan = prepare_inline_ordinary_physical_v2(
+        direct,
+        context,
+        collateral,
+        &mut quantities,
+        &mut claims_scratch,
+        &mut claims_output,
+    )
+    .expect("price-improved FOK");
+    assert_eq!(plan.settlement.effects.gross_collateral, 50);
+    assert_eq!(plan.settlement.effects.buyer_collateral_debit, 55);
+    assert_eq!(plan.buyer_source_after, 45);
+    assert_eq!(plan.buyer_delegated_after, 11);
+}
+
+#[test]
+fn inline_receipts_bind_exact_claims_custody_and_delegate_poststate() {
+    let (direct, context, collateral) = inline_physical_fixture(40, 1, 66);
+    let mut quantities = [0_u8; 24];
+    let mut claims_scratch = [0_u8; CLAIMS_PLAN_HEADER_BYTES_V1 + 24];
+    let mut claims_output = [0_u8; CLAIMS_PLAN_HEADER_BYTES_V1 + 24];
+    let plan = prepare_inline_ordinary_physical_v2(
+        direct,
+        context,
+        collateral,
+        &mut quantities,
+        &mut claims_scratch,
+        &mut claims_output,
+    )
+    .expect("plan");
+    let claims = ClaimsPlanV1::decode(&claims_output).expect("claims");
+    let claims_receipt = ClaimsReceiptV1::new(
+        claims,
+        hash(&claims_output).to_bytes(),
+        context.claims_program,
+        9,
+        10,
+        11,
+        0,
+        id(77),
+    )
+    .expect("claims receipt")
+    .to_bytes();
+    verify_inline_claims_receipt_v2(context, &claims_output, &claims_receipt)
+        .expect("claims receipt verification");
+
+    let net = plan.custody[0].expect("net");
+    let request_bytes = net.request.to_bytes().expect("request");
+    let poststate = id(78);
+    let custody_receipt = CustodyReceiptV1::new(
+        net.request,
+        hash(&request_bytes).to_bytes(),
+        ReceiptEvidenceV1 {
+            source_before: collateral.buyer_source.balance,
+            source_after: net.source_after,
+            destination_before: collateral.seller_destination.balance,
+            destination_after: net.destination_after,
+            poststate_commitment: poststate,
+            replay_state_digest: id(79),
+        },
+    )
+    .expect("custody receipt")
+    .to_bytes()
+    .expect("custody receipt bytes");
+    verify_inline_custody_receipt_v2(net, &custody_receipt, id(79), net.delegated_after)
+        .expect("Custody receipt verification");
+    assert_eq!(
+        verify_inline_custody_receipt_v2(net, &custody_receipt, id(79), net.delegated_after + 1,),
+        Err(DirectPhysicalError::Postcondition)
+    );
+}
+
+#[test]
+fn inline_refuses_underallowance_alias_replay_and_first_use_without_state_lifecycle() {
+    let (direct, context, collateral) = inline_physical_fixture(40, 1, 21);
+    let mut quantities = [0_u8; 24];
+    let mut claims_scratch = [0_u8; CLAIMS_PLAN_HEADER_BYTES_V1 + 24];
+    let mut claims_output = [0xa5_u8; CLAIMS_PLAN_HEADER_BYTES_V1 + 24];
+    let before = claims_output;
+    assert_eq!(
+        prepare_inline_ordinary_physical_v2(
+            direct,
+            context,
+            collateral,
+            &mut quantities,
+            &mut claims_scratch,
+            &mut claims_output,
+        ),
+        Err(DirectPhysicalError::Binding)
+    );
+    assert_eq!(claims_output, before);
+
+    let mut bad_replay = context;
+    bad_replay.custody_replay_state.next_revision = 0;
+    assert_eq!(
+        prepare_inline_ordinary_physical_v2(
+            direct,
+            bad_replay,
+            DirectInlineCollateralFrameV2 {
+                buyer_source: DirectExternalDebitV2 {
+                    delegated_amount: 66,
+                    ..collateral.buyer_source
+                },
+                ..collateral
+            },
+            &mut quantities,
+            &mut claims_scratch,
+            &mut claims_output,
+        ),
+        Err(DirectPhysicalError::Binding)
+    );
+
+    let aliased = DirectInlineCollateralFrameV2 {
+        fee_destination: DirectExternalCollateralV2 {
+            account: collateral.buyer_source.account,
+            owner: id(6),
+            balance: 40,
+        },
+        buyer_source: DirectExternalDebitV2 {
+            delegated_amount: 66,
+            ..collateral.buyer_source
+        },
+        ..collateral
+    };
+    assert_eq!(
+        prepare_inline_ordinary_physical_v2(
+            direct,
+            context,
+            aliased,
+            &mut quantities,
+            &mut claims_scratch,
+            &mut claims_output,
+        ),
+        Err(DirectPhysicalError::Binding)
+    );
+
+    let first_use = InlineOrdinaryInputV2 {
+        root: DirectRootStateV1::new(),
+        seller: InlineParticipantV2 {
+            maker_replay: MakerReplayObservationV1::Vacant(MakerReplayVacancyV1::new(1, 0)),
+            first_use: Some(MakerReplayFirstUseV1 {
+                rent_owner: id(90),
+                rent_principal: 100,
+            }),
+            authenticated: AuthenticatedCompactIntentV2::from_adjacent_ed25519(
+                id(2),
+                CompactIntentV2 {
+                    nonce: 0,
+                    ..direct.seller.authenticated.intent()
+                },
+            )
+            .expect("first seller"),
+        },
+        buyer: InlineParticipantV2 {
+            maker_replay: MakerReplayObservationV1::Vacant(MakerReplayVacancyV1::new(2, 0)),
+            first_use: Some(MakerReplayFirstUseV1 {
+                rent_owner: id(91),
+                rent_principal: 100,
+            }),
+            authenticated: AuthenticatedCompactIntentV2::from_adjacent_ed25519(
+                id(3),
+                CompactIntentV2 {
+                    nonce: 0,
+                    ..direct.buyer.authenticated.intent()
+                },
+            )
+            .expect("first buyer"),
+        },
+        ..direct
+    };
+    assert_eq!(
+        prepare_inline_ordinary_physical_v2(
+            first_use,
+            context,
+            DirectInlineCollateralFrameV2 {
+                buyer_source: DirectExternalDebitV2 {
+                    delegated_amount: 66,
+                    ..collateral.buyer_source
+                },
+                ..collateral
+            },
+            &mut quantities,
+            &mut claims_scratch,
+            &mut claims_output,
+        ),
+        Err(DirectPhysicalError::LifecycleUnavailable)
     );
 }
