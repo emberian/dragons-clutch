@@ -62,32 +62,42 @@ pub const HOT_TRANSITION_STAGING_ACCOUNT_V3: usize = 15;
 pub const HOT_EFFECT_RAW_ACCOUNT_V3: usize = 16;
 /// Vacant EffectProgram staging cursor.
 pub const HOT_EFFECT_STAGING_ACCOUNT_V3: usize = 17;
+/// Finalized descriptor-selected StateLifecyclePolicy raw record.
+pub const HOT_LIFECYCLE_RAW_ACCOUNT_V3: usize = 18;
+/// Vacant StateLifecyclePolicy staging cursor.
+pub const HOT_LIFECYCLE_STAGING_ACCOUNT_V3: usize = 19;
 /// Finalized ExecutionStrategy raw record.
-pub const HOT_STRATEGY_RAW_ACCOUNT_V3: usize = 18;
+pub const HOT_STRATEGY_RAW_ACCOUNT_V3: usize = 20;
 /// Vacant ExecutionStrategy staging cursor.
-pub const HOT_STRATEGY_STAGING_ACCOUNT_V3: usize = 19;
+pub const HOT_STRATEGY_STAGING_ACCOUNT_V3: usize = 21;
 /// Registry activation cache for the Market-selected release set.
-pub const HOT_ACTIVATION_CACHE_ACCOUNT_V3: usize = 20;
+pub const HOT_ACTIVATION_CACHE_ACCOUNT_V3: usize = 22;
 /// Current Registry-selected Core Program.
-pub const HOT_CORE_PROGRAM_ACCOUNT_V3: usize = 21;
+pub const HOT_CORE_PROGRAM_ACCOUNT_V3: usize = 23;
 /// Current Core ProgramData.
-pub const HOT_CORE_PROGRAMDATA_ACCOUNT_V3: usize = 22;
+pub const HOT_CORE_PROGRAMDATA_ACCOUNT_V3: usize = 24;
 /// Current Registry-selected Trading Program.
-pub const HOT_TRADING_PROGRAM_ACCOUNT_V3: usize = 23;
+pub const HOT_TRADING_PROGRAM_ACCOUNT_V3: usize = 25;
 /// Current Trading ProgramData.
-pub const HOT_TRADING_PROGRAMDATA_ACCOUNT_V3: usize = 24;
+pub const HOT_TRADING_PROGRAMDATA_ACCOUNT_V3: usize = 26;
 /// Immutable Registry Program selected by the Market.
-pub const HOT_REGISTRY_PROGRAM_ACCOUNT_V3: usize = 25;
+pub const HOT_REGISTRY_PROGRAM_ACCOUNT_V3: usize = 27;
 /// Rent sysvar used for finalized-record and root observations.
-pub const HOT_RENT_SYSVAR_ACCOUNT_V3: usize = 26;
+pub const HOT_RENT_SYSVAR_ACCOUNT_V3: usize = 28;
 /// Instructions sysvar used only when RequestProfile V2 requires native evidence.
-pub const HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3: usize = 27;
+pub const HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3: usize = 29;
 /// Exact family-neutral account prefix width.
-pub const HOT_FIXED_ACCOUNT_COUNT_V3: usize = 28;
+pub const HOT_FIXED_ACCOUNT_COUNT_V3: usize = 30;
 /// First disposition-derived ExecutionStrategy account.
 pub const HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3: usize = HOT_FIXED_ACCOUNT_COUNT_V3;
 /// Runtime AccountProfile coordinate occupied by the prefix root account.
 pub const HOT_RUNTIME_ROOT_COORDINATE_V3: usize = 0;
+/// Common identity-register input containing SHA-256 of the exact family request.
+///
+/// This is the sole adapter-computed register fact. AccountProfile and
+/// RequestProfile own every other register coordinate, while EffectProgram
+/// may copy this digest into canonical child `parent_request_digest` fields.
+pub const HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3: usize = 0;
 
 const ENVELOPE_REQUEST_BYTES_OFFSET: usize = 12;
 const ENVELOPE_RELEASE_SET_OFFSET: usize = 16;
@@ -495,6 +505,14 @@ mod tests {
     fn frame_prefix_is_contiguous_and_runtime_root_is_unique() {
         assert_eq!(HOT_MARKET_ACCOUNT_V3, 0);
         assert_eq!(HOT_ROOT_ACCOUNT_V3, 1);
+        assert_eq!(
+            HOT_EFFECT_STAGING_ACCOUNT_V3 + 1,
+            HOT_LIFECYCLE_RAW_ACCOUNT_V3
+        );
+        assert_eq!(
+            HOT_LIFECYCLE_STAGING_ACCOUNT_V3 + 1,
+            HOT_STRATEGY_RAW_ACCOUNT_V3
+        );
         assert_eq!(
             HOT_STRATEGY_STAGING_ACCOUNT_V3 + 1,
             HOT_ACTIVATION_CACHE_ACCOUNT_V3
