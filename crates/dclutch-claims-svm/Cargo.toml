@@ -8,6 +8,8 @@ description = "Runtime-width Claims child packet and receipt ABI"
 
 [dependencies]
 dclutch-effect-kernel = { path = "../dclutch-effect-kernel" }
+dclutch-product-payoff-v2-codec = { path = "../dclutch-product-payoff-v2-codec" }
+dclutch-rational-representation-v2-kernel = { path = "../dclutch-rational-representation-v2-kernel" }
 
 [lints.rust]
 missing_docs = "deny"

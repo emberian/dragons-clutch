@@ -14,6 +14,7 @@ pub mod founding_v4;
 pub mod founding_v5;
 pub mod lbv2_terminal_v2;
 pub mod liability_basis_state_v2;
+pub mod product_basis_terminal_v3;
 pub mod protocol_position_v2;
 mod request_layout;
 pub mod signed_delta_v3;
