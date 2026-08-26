@@ -10,7 +10,7 @@
 
 use dclutch_product_runtime_v2::{
     ContentId, PortfolioInputV2, ResultDomainInputV2, compile_portfolio_v2,
-    compile_result_domain_v2,
+    compile_result_domain_v2, portfolio_record_bytes, result_domain_record_bytes,
 };
 use dclutch_product_runtime_v2_admission::{
     ADMISSION_RECEIPT_BYTES_V2, ADMISSION_RECEIPT_PDA_DOMAIN_V2, ADMISSION_REQUEST_BYTES_V2,
@@ -88,7 +88,9 @@ pub struct CompiledProductRecordsV2 {
 }
 
 /// Compile canonical Product/domain/portfolio bytes and derive their Registry
-/// coordinates. All caller buffers are validated before any is modified.
+/// coordinates. Host scratch buffers hold the complete candidate graph; all
+/// three caller buffers commit together only after every digest, record, and
+/// Registry coordinate succeeds.
 pub fn compile_product_records_v2(
     registry_program: Pubkey,
     input: ProductCompilationInputV2<'_>,
@@ -101,11 +103,20 @@ pub fn compile_product_records_v2(
         .len()
         .checked_add(2)
         .ok_or(Error::WidthMismatch)?;
+    let expected_domain_bytes =
+        result_domain_record_bytes(input.cuts.len()).map_err(|_| Error::RuntimeProduct)?;
+    let expected_portfolio_bytes =
+        portfolio_record_bytes(input.coefficients.len()).map_err(|_| Error::RuntimeProduct)?;
     if input.coefficients.len() != expected_outcomes
         || product_output.len() != PRODUCT_RECORD_BYTES_V2
+        || domain_output.len() != expected_domain_bytes
+        || portfolio_output.len() != expected_portfolio_bytes
     {
         return Err(Error::OutputLength);
     }
+    let mut candidate_product = [0_u8; PRODUCT_RECORD_BYTES_V2];
+    let mut candidate_domain = vec![0_u8; expected_domain_bytes];
+    let mut candidate_portfolio = vec![0_u8; expected_portfolio_bytes];
     compile_result_domain_v2(
         ResultDomainInputV2 {
             product_id: input.product_id,
@@ -117,10 +128,10 @@ pub fn compile_product_records_v2(
             cut_denominator: input.cut_denominator,
             cuts: input.cuts,
         },
-        domain_output,
+        &mut candidate_domain,
     )
     .map_err(|_| Error::RuntimeProduct)?;
-    let domain_digest = digest(domain_output)?;
+    let domain_digest = digest(&candidate_domain)?;
     compile_portfolio_v2(
         PortfolioInputV2 {
             product_id: input.product_id,
@@ -131,14 +142,14 @@ pub fn compile_product_records_v2(
             denominator: input.portfolio_denominator,
             coefficients: input.coefficients,
         },
-        portfolio_output,
+        &mut candidate_portfolio,
     )
     .map_err(|_| Error::RuntimeProduct)?;
-    let portfolio_digest = digest(portfolio_output)?;
+    let portfolio_digest = digest(&candidate_portfolio)?;
     ProductRecordV2::new(input.product_id, domain_digest, portfolio_digest)
-        .encode_into(product_output)
+        .encode_into(&mut candidate_product)
         .map_err(|_| Error::Admission)?;
-    let product_digest = digest(product_output)?;
+    let product_digest = digest(&candidate_product)?;
     let product = coordinate(
         registry_program,
         PRODUCT_RECORD_SCHEMA_ID_V2,
@@ -147,6 +158,9 @@ pub fn compile_product_records_v2(
     let result_domain = coordinate(registry_program, RESULT_DOMAIN_SCHEMA_ID_V2, domain_digest)?;
     let portfolio = coordinate(registry_program, PORTFOLIO_SCHEMA_ID_V2, portfolio_digest)?;
     let outcome_count = u32::try_from(expected_outcomes).map_err(|_| Error::WidthMismatch)?;
+    product_output.copy_from_slice(&candidate_product);
+    domain_output.copy_from_slice(&candidate_domain);
+    portfolio_output.copy_from_slice(&candidate_portfolio);
     Ok(CompiledProductRecordsV2 {
         receipt: AdmissionReceiptV2 {
             product,
