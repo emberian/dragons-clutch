@@ -5,6 +5,7 @@ import {
   decodeCapabilityManifestV1,
   recognizeCapabilityKindV1,
   type CapabilityActivationV1,
+  type CapabilityFundingQuoteV1,
 } from './capabilityManifest';
 import {
   classifyHeader,
@@ -18,6 +19,8 @@ import {
   type FullAccountObservation,
   type MarketPhase,
   type MarketSettlement,
+  type RealmAuthorityPolicy,
+  type RequiredBackingBasis,
 } from './decoders';
 import { CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1 } from './generated/coreFound';
 import { deriveFinalizedRecordAddressesV1 } from './releaseRegistry';
@@ -60,6 +63,7 @@ export type MarketCapabilityBadgeV1 = Readonly<{
   activation: CapabilityActivationV1;
   deadline: string | null;
   dependencies: ReadonlyArray<number>;
+  funding: CapabilityFundingQuoteV1;
 }>;
 
 export type MarketCapabilityManifestV1 =
@@ -68,8 +72,38 @@ export type MarketCapabilityManifestV1 =
   | Readonly<{ status: 'refused'; manifestId: string; reason: string }>;
 
 export type MarketCollateralV1 =
-  | Readonly<{ status: 'bound'; realmAddress: string; realmContentId: string; collateralMint: string; collateralMintShort: string; tokenProgram: string }>
+  | Readonly<{
+    status: 'bound';
+    observedSlot: string;
+    realmAddress: string;
+    realmContentId: string;
+    collateralMint: string;
+    collateralMintShort: string;
+    tokenProgram: string;
+    adapterReleaseId: string;
+    mintAuthorityPolicy: RealmAuthorityPolicy;
+    freezeAuthorityPolicy: RealmAuthorityPolicy;
+  }>
   | Readonly<{ status: 'refused'; realmAddress: string | null; realmContentId: string; reason: string }>;
+
+/**
+ * The immutable identities one Market root commits to, plus the exact artifact
+ * profile its account bytes declare. These are content identities, not
+ * addresses: a Market names what it is, and a reader reacquires each named
+ * record from its own canonical authority.
+ */
+export type MarketIdentityV1 = Readonly<{
+  schemaMagic: string;
+  schemaVersion: number;
+  categoricalProfile: number;
+  accountBytes: number;
+  realmId: string;
+  productInstanceId: string;
+  claimBasisId: string;
+  resolutionPolicyId: string;
+  capabilityManifestId: string;
+  rentRefundAuthority: string;
+}>;
 
 export type MarketDiscoveryCardV1 =
   | Readonly<{
@@ -82,8 +116,11 @@ export type MarketDiscoveryCardV1 =
     outcomeCount: number;
     hoardAtoms: string;
     supplyAtoms: ReadonlyArray<string>;
+    requiredBackingAtoms: string;
+    requiredBackingBasis: RequiredBackingBasis;
     outstandingChildren: string;
     settlement: MarketSettlement;
+    identity: MarketIdentityV1;
     collateral: MarketCollateralV1;
     capabilities: MarketCapabilityManifestV1;
     bindings: ReadonlyArray<BindingCheck>;
@@ -238,6 +275,7 @@ async function authenticateCapabilityManifest(
         activation: entry.activation,
         deadline: entry.activation === 'deadline' ? entry.deadline.toString() : null,
         dependencies: entry.dependencies,
+        funding: entry.funding,
       });
     });
     return Object.freeze({ status: 'authenticated', manifestId: manifestIdHex, recordAddress: addresses.record, observedSlot: batch.slot, badges: Object.freeze(badges) });
@@ -257,15 +295,20 @@ function collateralFrom(realm: DecodedProjection | null, realmAddress: string, r
   if (realm.semantics.contentDigest !== realmContentId) {
     return Object.freeze({ status: 'refused', realmAddress, realmContentId, reason: 'decoded Realm content digest differs from the identity the Market committed to' });
   }
-  const bytes = realm.semantics.canonicalBytes;
-  const collateralMint = new PublicKey(bytes.slice(48, 80)).toBase58();
+  // Every Realm field comes from the one canonical Realm decoder; this module
+  // does not restate a byte offset it does not own.
+  const semantics = realm.semantics;
   return Object.freeze({
     status: 'bound',
+    observedSlot: realm.observedSlot,
     realmAddress,
     realmContentId,
-    collateralMint,
-    collateralMintShort: shortAddressV1(collateralMint),
-    tokenProgram: new PublicKey(bytes.slice(16, 48)).toBase58(),
+    collateralMint: semantics.collateralMint,
+    collateralMintShort: shortAddressV1(semantics.collateralMint),
+    tokenProgram: semantics.tokenProgram,
+    adapterReleaseId: semantics.adapterReleaseId,
+    mintAuthorityPolicy: semantics.mintAuthorityPolicy,
+    freezeAuthorityPolicy: semantics.freezeAuthorityPolicy,
   });
 }
 
@@ -382,8 +425,22 @@ export async function inspectMarketDiscoveryV1(
       outcomeCount: semantics.outcomeCount,
       hoardAtoms: semantics.hoardAtoms,
       supplyAtoms: semantics.supply,
+      requiredBackingAtoms: semantics.requiredBackingAtoms,
+      requiredBackingBasis: semantics.requiredBackingBasis,
       outstandingChildren: semantics.outstandingChildren,
       settlement: semantics.settlement,
+      identity: Object.freeze({
+        schemaMagic: 'DCLTCAT1',
+        schemaVersion: semantics.schemaVersion,
+        categoricalProfile: semantics.categoricalProfile,
+        accountBytes: semantics.accountBytes,
+        realmId: semantics.realmId,
+        productInstanceId: semantics.productInstanceId,
+        claimBasisId: semantics.claimBasisId,
+        resolutionPolicyId: semantics.resolutionPolicyId,
+        capabilityManifestId: semantics.capabilityManifestId,
+        rentRefundAuthority: semantics.rentRefundAuthority,
+      }),
       collateral,
       capabilities,
       bindings: projection.bindings,

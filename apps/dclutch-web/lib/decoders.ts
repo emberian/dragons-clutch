@@ -16,11 +16,17 @@ export type MarketSettlement =
   | Readonly<{ status: 'empty'; label: string }>
   | Readonly<{ status: 'resolved'; label: string; route: string; winner: number; terminalSequence: string; evidenceId: string }>;
 
+/** Which supply the Hoard must exactly cover at this phase. */
+export type RequiredBackingBasis = 'maximum-outcome-supply' | 'winning-outcome-supply';
+
 export type MarketSemantics = Readonly<{
   kind: 'Market';
   realmId: string;
   generation: string;
   outcomeCount: number;
+  schemaVersion: number;
+  categoricalProfile: number;
+  accountBytes: number;
   phase: MarketPhase;
   identityBytes: Uint8Array;
   productInstanceId: string;
@@ -31,20 +37,31 @@ export type MarketSemantics = Readonly<{
   hoardAtoms: string;
   outstandingChildren: string;
   supply: ReadonlyArray<string>;
+  requiredBackingAtoms: string;
+  requiredBackingBasis: RequiredBackingBasis;
   settlement: MarketSettlement;
 }>;
 
-type RealmSemantics = Readonly<{
+export type RealmAuthorityPolicy = 'Require absent' | 'Admit issuer control';
+
+export type RealmSemantics = Readonly<{
   kind: 'Realm';
   canonicalBytes: Uint8Array;
   contentDigest: string | null;
+  tokenProgram: string;
+  collateralMint: string;
+  adapterReleaseId: string;
+  mintAuthorityPolicy: RealmAuthorityPolicy;
+  freezeAuthorityPolicy: RealmAuthorityPolicy;
 }>;
 
-type PositionSemantics = Readonly<{
+export type PositionSemantics = Readonly<{
   kind: 'Position';
   market: string;
   owner: string;
   generation: string;
+  outcomeCount: number;
+  balances: ReadonlyArray<string>;
 }>;
 
 type RentCreditSemantics = Readonly<{
@@ -136,6 +153,26 @@ export function deriveRealmAddress(programId: string, realmContentIdHex: string)
   return PublicKey.findProgramAddressSync([REALM_SEED, digest], new PublicKey(programId))[0].toBase58();
 }
 
+/**
+ * Derive the one canonical Position address for a Market and owner.
+ *
+ * dClutch publishes no position index and this browser will not invent one.
+ * It does not need to: a Position is the program-derived address of
+ * `POSITION_SEED` plus the exact Market and owner keys, in that order — the
+ * same seed domain `dclutch-realm-contract::POSITION_PDA_DOMAIN` names and the
+ * same order `verifyLocalBindings` checks a decoded Position against. An owner
+ * plus a Market address is therefore enough to ask the chain directly, and an
+ * address with no account is an honest "no Position", not a lookup failure.
+ */
+export function derivePositionAddressV1(programId: string, market: string, owner: string): string {
+  const program = new PublicKey(programId);
+  const [derived] = PublicKey.findProgramAddressSync(
+    [POSITION_SEED, new PublicKey(market).toBytes(), new PublicKey(owner).toBytes()],
+    program,
+  );
+  return derived.toBase58();
+}
+
 export function decodeCoreAccount(observation: FullAccountObservation, expectedProgramId: string): AccountProjection {
   const kind = kindFromMagic(observation.data);
   if (observation.owner !== expectedProgramId) {
@@ -180,7 +217,8 @@ function decodeMarket(observation: FullAccountObservation): DecodedProjection {
   if (bytes.length < 16) throw new Error('Market header is truncated');
   if (u16(bytes, 8) !== 1) throw new Error(`Market schema version ${u16(bytes, 8)} is unsupported`);
   const outcomeCount = bytes[10];
-  if (bytes[11] !== 1) throw new Error(`categorical profile ${bytes[11]} is unsupported`);
+  const categoricalProfile = bytes[11];
+  if (categoricalProfile !== 1) throw new Error(`categorical profile ${categoricalProfile} is unsupported`);
   if (outcomeCount < 2 || outcomeCount > 16) throw new Error(`outcome count ${outcomeCount} is outside provisional profile 2..16`);
   const expectedLength = 320 + outcomeCount * 8;
   commonHeader(bytes, 'DCLTCAT1', expectedLength);
@@ -251,6 +289,7 @@ function decodeMarket(observation: FullAccountObservation): DecodedProjection {
   if (phase === 'Retired' && !emptyEconomics) throw new Error('Retired Market retains economic state');
   const requiredBacking = winner === null ? supply.reduce((maximum, amount) => amount > maximum ? amount : maximum, 0n) : supply[winner];
   if (hoardAtoms < requiredBacking) throw new Error(`Hoard ${hoardAtoms} is below exact claimant backing ${requiredBacking}`);
+  const requiredBackingBasis: RequiredBackingBasis = winner === null ? 'maximum-outcome-supply' : 'winning-outcome-supply';
 
   return Object.freeze({
     status: 'decoded', kind: 'Market', address: observation.address, lamports: observation.lamports,
@@ -259,6 +298,7 @@ function decodeMarket(observation: FullAccountObservation): DecodedProjection {
       detail('Phase', phase), detail('Generation', generation), detail('Outcomes', outcomeCount),
       detail('Hoard atoms', hoardAtoms), detail('Outstanding children', outstandingChildren),
       detail('Settlement', settlementLabel), detail('Supply', supply.join(' · ')),
+      detail('Exact required backing', requiredBacking),
       detail('Realm ID', hex(realmId)), detail('Product instance ID', hex(productInstanceId)),
       detail('Claim basis ID', hex(claimBasisId)), detail('Resolution policy ID', hex(resolutionPolicyId)),
       detail('Capability manifest ID', hex(capabilityManifestId)), detail('Rent refund authority', pubkey(rentRefund, 'Market rent-refund authority')),
@@ -266,12 +306,14 @@ function decodeMarket(observation: FullAccountObservation): DecodedProjection {
     ]),
     semantics: Object.freeze({
       kind: 'Market', realmId: hex(realmId), generation: generation.toString(), outcomeCount, phase,
+      schemaVersion: u16(bytes, 8), categoricalProfile, accountBytes: bytes.length,
       identityBytes: slice(bytes, 32, 168),
       productInstanceId: hex(productInstanceId), claimBasisId: hex(claimBasisId),
       resolutionPolicyId: hex(resolutionPolicyId), capabilityManifestId: hex(capabilityManifestId),
       rentRefundAuthority: pubkey(rentRefund, 'Market rent-refund authority'),
       hoardAtoms: hoardAtoms.toString(), outstandingChildren: outstandingChildren.toString(),
       supply: Object.freeze(supply.map((amount) => amount.toString())),
+      requiredBackingAtoms: requiredBacking.toString(), requiredBackingBasis,
       settlement: settlementSemantics,
     }),
   });
@@ -295,7 +337,11 @@ function decodeRealm(observation: FullAccountObservation): DecodedProjection {
       detail('Token program', tokenProgram), detail('Collateral mint', collateralMint), detail('Adapter release ID', hex(adapterRelease)),
       detail('Mint authority policy', mintPolicy), detail('Freeze authority policy', freezePolicy),
     ]),
-    semantics: Object.freeze({ kind: 'Realm', canonicalBytes: new Uint8Array(bytes), contentDigest: null }),
+    semantics: Object.freeze({
+      kind: 'Realm', canonicalBytes: new Uint8Array(bytes), contentDigest: null,
+      tokenProgram, collateralMint, adapterReleaseId: hex(adapterRelease),
+      mintAuthorityPolicy: mintPolicy, freezeAuthorityPolicy: freezePolicy,
+    }),
   });
 }
 
@@ -318,7 +364,10 @@ function decodePosition(observation: FullAccountObservation): DecodedProjection 
       detail('Market', market), detail('Owner', owner), detail('Generation', generation),
       detail('Outcomes', outcomeCount), detail('Owned balances', balances.join(' · ')),
     ]),
-    semantics: Object.freeze({ kind: 'Position', market, owner, generation: generation.toString() }),
+    semantics: Object.freeze({
+      kind: 'Position', market, owner, generation: generation.toString(), outcomeCount,
+      balances: Object.freeze(balances.map((amount) => amount.toString())),
+    }),
   });
 }
 
