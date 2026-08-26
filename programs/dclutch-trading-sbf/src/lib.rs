@@ -64,6 +64,14 @@ pub mod hot_v3;
 pub mod native_signature;
 /// Family-neutral executable Core-to-Trading boundary.
 pub mod outer;
+/// Family-neutral projected-Custody route-zero execution and receipt join.
+#[cfg(any(
+    feature = "families",
+    feature = "series-family",
+    feature = "dealer-family"
+))]
+#[allow(dead_code)]
+mod projected_custody_composition_v4;
 /// Compact projected-Market execution and persisted-state reconstruction.
 #[cfg(any(
     feature = "families",
