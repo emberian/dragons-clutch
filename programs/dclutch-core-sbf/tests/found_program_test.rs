@@ -12,10 +12,35 @@ use dclutch_capability_contract::{
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
 };
+use dclutch_claims_svm::{
+    founding_v5::ClaimsFoundingAggregateSeedsV5,
+    liability_basis_state_v2::{
+        LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+        liability_basis_vector_width_v2,
+    },
+    protocol_position_v2::{
+        PROTOCOL_POSITION_ADMISSION_BYTES_V2, ProtocolPositionAdmissionSeedsV2,
+        ProtocolPositionSeedsV2,
+    },
+};
 use dclutch_core_contract::ContentId as CoreContentId;
+use dclutch_custody_contract::{
+    CompartmentV1, PROJECTED_CUSTODY_STATE_BYTES_V1, PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
+    ProjectedCallerRoleV1, ProjectedCustodyLockReceiptV1, ProjectedCustodyOperationV1,
+    ProjectedCustodyPhaseV1, ProjectedCustodyRequestV1, ProjectedCustodyStateSeedsV1,
+    ProjectedCustodyStateV1,
+};
 use dclutch_market_core_codec::{
     Action, CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase,
-    ProjectFoundRequestV1, Readiness, Request, STATE_BYTES,
+    ProjectFoundRequestV1, Readiness, Request, SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES,
+    SeriesFoundingPermitSeedsV1, SeriesFoundingPermitV1,
+};
+use dclutch_product_payoff_v2_codec::{
+    registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+    runtime_v3::{
+        BasisInputV3, BasisKindV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, basis_record_bytes_v3,
+        compile_basis_v3, semantic_basis_preimage_v3,
+    },
 };
 use dclutch_product_runtime_v2::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
 use dclutch_product_runtime_v2_admission::{FinalizedRecordCoordinateV2, PRODUCT_RECORD_BYTES_V2};
@@ -70,20 +95,27 @@ use dclutch_source_contract::{
 };
 use solana_account::Account;
 use solana_program::{
-    hash::hash,
+    hash::{hash, hashv},
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
     rent::Rent,
 };
+use solana_program_option::COption;
+use solana_program_pack::Pack;
 use solana_program_test::ProgramTest;
 use solana_sdk::signature::{Keypair, Signer};
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 use solana_transaction::Transaction;
+use spl_token_interface::state::{Account as SplAccount, AccountState as SplAccountState};
 
 const CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc1; 32]);
 const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc2; 32]);
 const RENT_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc3; 32]);
 const TRADING_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc4; 32]);
+const CLAIMS_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc5; 32]);
+const CUSTODY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc6; 32]);
+const TOKEN_PROGRAM_ID: Pubkey = Pubkey::new_from_array(dclutch_token_svm::LEGACY_TOKEN_PROGRAM_ID);
+const COLLATERAL_MINT: Pubkey = Pubkey::new_from_array([0xb2; 32]);
 const GENERATION: u64 = 1;
 
 struct Artifacts {
@@ -110,12 +142,15 @@ struct Fixture {
     product: Record,
     domain: Record,
     portfolio: Record,
+    linked_basis: Record,
     source: Record,
     manifest: Record,
     release_set: Record,
     cache: Pubkey,
     core_programdata: Pubkey,
     trading_programdata: Pubkey,
+    claims_programdata: Pubkey,
+    custody_programdata: Pubkey,
     registry_programdata: Pubkey,
     rent_programdata: Pubkey,
     profile: Pubkey,
@@ -137,7 +172,25 @@ struct SeriesFixture {
     funding: Pubkey,
     funding_data: Vec<u8>,
     funding_lamports: u64,
+    permit: Pubkey,
+    permit_lamports: u64,
+    projected_replay: Pubkey,
+    hoard: Pubkey,
+    funding_source: Pubkey,
+    funding_source_replay: Pubkey,
+    aggregate: Pubkey,
+    position: Pubkey,
+    admission: Pubkey,
+    claims_programdata_meta: Pubkey,
+    lock_receipt: [u8; dclutch_custody_contract::PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1],
     request: [u8; dclutch_market_core_codec::SERIES_CORE_REQUEST_BYTES_V1],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SeriesFault {
+    None,
+    LateHoardBalance,
+    BatchClaimsProgramdata,
 }
 
 fn artifacts() -> Artifacts {
@@ -363,7 +416,35 @@ fn funded_manifest_record() -> Record {
     Record::new(CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, bytes)
 }
 
-fn product_graph() -> (Record, Record, Record, u32, [u8; 32]) {
+fn product_graph() -> (Record, Record, Record, Record, u32, [u8; 32]) {
+    let provisional_input = BasisInputV3 {
+        kind: BasisKindV3::CategoricalQ1,
+        product_id: product_id(1).to_bytes(),
+        result_domain_id: [0xf2; 32],
+        coordinate_domain_id: product_id(2).to_bytes(),
+        result_unit_id: product_id(3).to_bytes(),
+        evaluator_release_id: [0xf3; 32],
+        basis_width: 258,
+        payout_scale: 1,
+        knot_denominator: 1,
+        knots: &[],
+        terms: &[],
+        failure_payouts: &[],
+    };
+    let basis_width =
+        basis_record_bytes_v3(BasisKindV3::CategoricalQ1, 258, 0, 0).expect("basis width");
+    let mut provisional_basis = vec![0_u8; basis_width];
+    compile_basis_v3(provisional_input, &mut provisional_basis).expect("provisional basis");
+    let semantic = semantic_basis_preimage_v3(&provisional_basis).expect("semantic basis");
+    let liability_basis_id = ContentId::new(
+        hashv(&[
+            SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
+            semantic.prefix(),
+            semantic.suffix(),
+        ])
+        .to_bytes(),
+    )
+    .expect("semantic basis ID");
     let cuts: Vec<i128> = (-128_i128..128).collect();
     let coefficients = vec![7_u64; cuts.len() + 2];
     let mut product = [0_u8; PRODUCT_RECORD_BYTES_V2];
@@ -377,7 +458,7 @@ fn product_graph() -> (Record, Record, Record, u32, [u8; 32]) {
             coordinate_domain_id: product_id(2),
             result_unit_id: product_id(3),
             claim_basis_id: product_id(4),
-            liability_basis_id: product_id(5),
+            liability_basis_id,
             representation_release_id: product_id(6),
             mapping_release_id: product_id(7),
             cut_denominator: 1,
@@ -390,10 +471,17 @@ fn product_graph() -> (Record, Record, Record, u32, [u8; 32]) {
         &mut portfolio,
     )
     .expect("runtime Product graph");
+    let final_input = BasisInputV3 {
+        result_domain_id: report.receipt.result_domain.content_digest.to_bytes(),
+        ..provisional_input
+    };
+    let mut linked_basis = vec![0_u8; basis_width];
+    compile_basis_v3(final_input, &mut linked_basis).expect("linked basis");
     (
         Record::from_coordinate(report.receipt.product, product.to_vec()),
         Record::from_coordinate(report.receipt.result_domain, domain),
         Record::from_coordinate(report.receipt.portfolio, portfolio),
+        Record::new(GRADED_BASIS_RECORD_SCHEMA_ID_V3, linked_basis),
         report.outcome_count,
         product_id(1).to_bytes(),
     )
@@ -406,7 +494,7 @@ fn put(target: &mut [u8], offset: usize, source: &[u8]) {
         .copy_from_slice(source);
 }
 
-fn series_fixture() -> SeriesFixture {
+fn series_fixture(fault: SeriesFault) -> SeriesFixture {
     let mut base = fixture(false);
     let test = base.test.as_mut().expect("ProgramTest");
     let rent = Rent::default();
@@ -709,6 +797,203 @@ fn series_fixture() -> SeriesFixture {
         },
     );
 
+    let hoard = Pubkey::new_unique();
+    let funding_source = Pubkey::new_unique();
+    let funding_source_replay = Pubkey::new_unique();
+    let claims_programdata_meta = if fault == SeriesFault::BatchClaimsProgramdata {
+        let substituted = Pubkey::new_unique();
+        let data = programdata_bytes(&[0x42; 32], None);
+        test.add_account(
+            substituted,
+            Account {
+                lamports: rent.minimum_balance(data.len()),
+                data,
+                owner: bpf_loader_upgradeable::ID,
+                executable: false,
+                rent_epoch: 0,
+            },
+        );
+        substituted
+    } else {
+        base.claims_programdata
+    };
+    let projected_context = hashv(&[
+        PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
+        ticket_id.to_bytes().as_slice(),
+    ])
+    .to_bytes();
+    let projected_request = ProjectedCustodyRequestV1 {
+        operation: ProjectedCustodyOperationV1::LockHoardAndCloseSource,
+        caller_role: ProjectedCallerRoleV1::TradingCapability,
+        market: base.market.to_bytes(),
+        generation: GENERATION,
+        realm: base.realm.digest,
+        product_record: base.product.digest,
+        product: product_id(1).to_bytes(),
+        source: base.source.digest,
+        release_set: base.release_set.digest,
+        projection_receipt_digest: [0xd0; 32],
+        parent_capability_root: root.to_bytes(),
+        context_digest: projected_context,
+        caller_program: TRADING_PROGRAM_ID.to_bytes(),
+        payer: base.payer.pubkey().to_bytes(),
+        core_program: CORE_PROGRAM_ID.to_bytes(),
+        rent_program: RENT_PROGRAM_ID.to_bytes(),
+        refund_owner: base.payer.pubkey().to_bytes(),
+        rent_credit: base.rent_credit.to_bytes(),
+        hoard_vault: hoard.to_bytes(),
+        funding_source_vault: funding_source.to_bytes(),
+        funding_source_context: ticket_id.to_bytes(),
+        funding_source_compartment: CompartmentV1::SeriesEscrow,
+        mint: COLLATERAL_MINT.to_bytes(),
+        token_program: TOKEN_PROGRAM_ID.to_bytes(),
+        collateral_release: [0xb3; 32],
+        expiry_slot: 10_000,
+        expected_revision: 2,
+        resulting_revision: 3,
+        amount: hoard_principal,
+        state_rent_lamports: rent.minimum_balance(PROJECTED_CUSTODY_STATE_BYTES_V1),
+        vault_rent_lamports: rent.minimum_balance(SplAccount::LEN),
+        funding_source_replay_revision: 3,
+        funding_source_state_rent_lamports: 1,
+        funding_source_vault_rent_lamports: 1,
+    };
+    let lock_request_digest = hash(
+        &projected_request
+            .encode()
+            .expect("projected LockAndClose request"),
+    )
+    .to_bytes();
+    let projected_seeds = ProjectedCustodyStateSeedsV1::from_request(projected_request);
+    let (projected_replay, projected_bump) =
+        Pubkey::find_program_address(&projected_seeds.as_slices(), &CUSTODY_PROGRAM_ID);
+    let projected_state = ProjectedCustodyStateV1 {
+        phase: ProjectedCustodyPhaseV1::HoardLocked,
+        request: projected_request,
+        next_revision: 3,
+        locked_amount: hoard_principal,
+        last_request_digest: lock_request_digest,
+        bump: projected_bump,
+    };
+    let projected_data = projected_state.encode().expect("projected state").to_vec();
+    test.add_account(
+        projected_replay,
+        Account {
+            lamports: rent.minimum_balance(projected_data.len()),
+            data: projected_data,
+            owner: CUSTODY_PROGRAM_ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+    let mut hoard_data = vec![0_u8; SplAccount::LEN];
+    SplAccount::pack(
+        SplAccount {
+            mint: COLLATERAL_MINT,
+            owner: Pubkey::new_from_array([0xb4; 32]),
+            amount: if fault == SeriesFault::LateHoardBalance {
+                hoard_principal - 1
+            } else {
+                hoard_principal
+            },
+            delegate: COption::None,
+            state: SplAccountState::Initialized,
+            is_native: COption::None,
+            delegated_amount: 0,
+            close_authority: COption::None,
+        },
+        &mut hoard_data,
+    )
+    .expect("Hoard token account");
+    test.add_account(
+        hoard,
+        Account {
+            lamports: rent.minimum_balance(hoard_data.len()),
+            data: hoard_data,
+            owner: TOKEN_PROGRAM_ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+    let lock_receipt = ProjectedCustodyLockReceiptV1 {
+        market: base.market.to_bytes(),
+        release_set: base.release_set.digest,
+        context_digest: projected_context,
+        source_vault: funding_source.to_bytes(),
+        source_replay: funding_source_replay.to_bytes(),
+        hoard_vault: hoard.to_bytes(),
+        rent_credit: base.rent_credit.to_bytes(),
+        request_digest: lock_request_digest,
+        amount: hoard_principal,
+        source_vault_rent_lamports: 1,
+        source_replay_rent_lamports: 1,
+        resulting_revision: 3,
+    }
+    .encode()
+    .expect("LockAndClose receipt");
+
+    let permit_seeds = SeriesFoundingPermitSeedsV1::new(
+        identity(base.release_set.digest),
+        identity(base.market.to_bytes()),
+        identity(ticket_id.to_bytes()),
+    );
+    let permit = Pubkey::find_program_address(&permit_seeds.as_slices(), &CORE_PROGRAM_ID).0;
+    let permit_lamports = rent.minimum_balance(SERIES_FOUNDING_PERMIT_BYTES_V1);
+    test.add_account(
+        permit,
+        Account {
+            lamports: permit_lamports,
+            data: Vec::new(),
+            owner: system_program::ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+
+    let aggregate_seeds =
+        ClaimsFoundingAggregateSeedsV5::new(base.market.to_bytes()).expect("aggregate seeds");
+    let aggregate =
+        Pubkey::find_program_address(&aggregate_seeds.as_slices(), &CLAIMS_PROGRAM_ID).0;
+    let position_seeds =
+        ProtocolPositionSeedsV2::new(aggregate.to_bytes(), base.payer.pubkey().to_bytes())
+            .expect("Position seeds");
+    let position = Pubkey::find_program_address(&position_seeds.as_slices(), &CLAIMS_PROGRAM_ID).0;
+    let admission_seeds =
+        ProtocolPositionAdmissionSeedsV2::new(aggregate.to_bytes(), base.payer.pubkey().to_bytes())
+            .expect("admission seeds");
+    let admission =
+        Pubkey::find_program_address(&admission_seeds.as_slices(), &CLAIMS_PROGRAM_ID).0;
+    for (key, width) in [
+        (
+            aggregate,
+            liability_basis_vector_width_v2(
+                LIABILITY_BASIS_MARKET_HEADER_BYTES_V2,
+                base.outcome_count,
+            )
+            .expect("aggregate width"),
+        ),
+        (
+            position,
+            liability_basis_vector_width_v2(
+                LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+                base.outcome_count,
+            )
+            .expect("Position width"),
+        ),
+        (admission, PROTOCOL_POSITION_ADMISSION_BYTES_V2),
+    ] {
+        test.add_account(
+            key,
+            Account {
+                lamports: rent.minimum_balance(width),
+                data: Vec::new(),
+                owner: system_program::ID,
+                executable: false,
+                rent_epoch: 0,
+            },
+        );
+    }
+
     SeriesFixture {
         base,
         caller_authority,
@@ -722,6 +1007,17 @@ fn series_fixture() -> SeriesFixture {
         funding,
         funding_data,
         funding_lamports,
+        permit,
+        permit_lamports,
+        projected_replay,
+        hoard,
+        funding_source,
+        funding_source_replay,
+        aggregate,
+        position,
+        admission,
+        claims_programdata_meta,
+        lock_receipt,
         request,
     }
 }
@@ -760,17 +1056,33 @@ fn fixture(core_mutable: bool) -> Fixture {
         &artifacts.trading,
         None,
     );
+    add_program(
+        &mut test,
+        "dclutch_core_sbf",
+        CLAIMS_PROGRAM_ID,
+        &artifacts.core,
+        None,
+    );
+    add_program(
+        &mut test,
+        "dclutch_core_sbf",
+        CUSTODY_PROGRAM_ID,
+        &artifacts.core,
+        None,
+    );
     let core_release = release(CORE_PROGRAM_ID, &artifacts.core, 0xa0, mutable_authority);
     let registry_release = release(REGISTRY_PROGRAM_ID, &artifacts.registry, 0xa1, None);
     let rent_release = release(RENT_PROGRAM_ID, &artifacts.rent, 0xa2, None);
     let trading_release = release(TRADING_PROGRAM_ID, &artifacts.trading, 0xa3, None);
+    let claims_release = release(CLAIMS_PROGRAM_ID, &artifacts.core, 0xa4, None);
+    let custody_release = release(CUSTODY_PROGRAM_ID, &artifacts.core, 0xa5, None);
     let core_binding = binding(core_release);
     let release_set_value = ExecutionReleaseSetV1::new(
         core_binding,
-        core_binding,
+        binding(claims_release),
         binding(trading_release),
         core_binding,
-        core_binding,
+        binding(custody_release),
     )
     .expect("release set");
     let release_set_id =
@@ -779,10 +1091,10 @@ fn fixture(core_mutable: bool) -> Fixture {
     initialize_activation_cache_v1(&mut cache_data, release_set_id).expect("cache");
     for (role, selected_release) in [
         (ExecutionRoleV1::Core, core_release),
-        (ExecutionRoleV1::Claims, core_release),
+        (ExecutionRoleV1::Claims, claims_release),
         (ExecutionRoleV1::Trading, trading_release),
         (ExecutionRoleV1::Resolution, core_release),
-        (ExecutionRoleV1::Custody, core_release),
+        (ExecutionRoleV1::Custody, custody_release),
     ] {
         activate_execution_role_into_v1(
             &mut cache_data,
@@ -809,9 +1121,10 @@ fn fixture(core_mutable: bool) -> Fixture {
         },
     );
 
-    let (product, domain, portfolio, outcome_count, stable_product_id) = product_graph();
+    let (product, domain, portfolio, linked_basis, outcome_count, stable_product_id) =
+        product_graph();
     let realm_value = RealmV1::new(RealmV1Input {
-        token_program: [0xb1; 32],
+        token_program: dclutch_token_svm::LEGACY_TOKEN_PROGRAM_ID,
         collateral_mint: [0xb2; 32],
         collateral_adapter_release_id: [0xb3; 32],
         mint_authority_policy: MintAuthorityPolicy::RequireAbsent,
@@ -849,6 +1162,7 @@ fn fixture(core_mutable: bool) -> Fixture {
         &product,
         &domain,
         &portfolio,
+        &linked_basis,
         &source,
         &manifest,
         &release_set,
@@ -940,12 +1254,15 @@ fn fixture(core_mutable: bool) -> Fixture {
         product,
         domain,
         portfolio,
+        linked_basis,
         source,
         manifest,
         release_set,
         cache,
         core_programdata: programdata_address(CORE_PROGRAM_ID),
         trading_programdata: programdata_address(TRADING_PROGRAM_ID),
+        claims_programdata: programdata_address(CLAIMS_PROGRAM_ID),
+        custody_programdata: programdata_address(CUSTODY_PROGRAM_ID),
         registry_programdata: programdata_address(REGISTRY_PROGRAM_ID),
         rent_programdata: programdata_address(RENT_PROGRAM_ID),
         profile,
@@ -1102,11 +1419,28 @@ fn series_instruction(fixture: &SeriesFixture) -> Instruction {
         AccountMeta::new_readonly(fixture.ticket.staging, false),
         AccountMeta::new_readonly(sysvar::clock::ID, false),
         AccountMeta::new_readonly(fixture.funding, false),
+        AccountMeta::new(fixture.permit, false),
+        AccountMeta::new_readonly(fixture.projected_replay, false),
+        AccountMeta::new_readonly(fixture.hoard, false),
+        AccountMeta::new_readonly(fixture.funding_source, false),
+        AccountMeta::new_readonly(fixture.funding_source_replay, false),
+        AccountMeta::new_readonly(fixture.base.linked_basis.raw, false),
+        AccountMeta::new_readonly(fixture.base.linked_basis.staging, false),
+        AccountMeta::new_readonly(CLAIMS_PROGRAM_ID, false),
+        AccountMeta::new_readonly(fixture.claims_programdata_meta, false),
+        AccountMeta::new_readonly(CUSTODY_PROGRAM_ID, false),
+        AccountMeta::new_readonly(fixture.base.custody_programdata, false),
+        AccountMeta::new_readonly(fixture.aggregate, false),
+        AccountMeta::new_readonly(fixture.position, false),
+        AccountMeta::new_readonly(fixture.admission, false),
+        AccountMeta::new_readonly(fixture.base.payer.pubkey(), false),
     ]);
+    let mut data = fixture.request.to_vec();
+    data.extend_from_slice(&fixture.lock_receipt);
     Instruction {
         program_id: TRADING_PROGRAM_ID,
         accounts,
-        data: fixture.request.to_vec(),
+        data,
     }
 }
 
@@ -1170,9 +1504,11 @@ async fn real_found31_accepts_258_outcomes_after_immutable_infrastructure_auth()
 async fn project_found31_authenticates_without_signature_or_market_mutation() {
     let fixture = fixture(false);
     let instruction = project_found_instruction(&fixture, false);
-    assert!(!instruction.accounts[0].is_signer);
-    assert!(!instruction.accounts[0].is_writable);
-    assert!(!instruction.accounts[1].is_writable);
+    let payer = instruction.accounts.first().expect("projection payer meta");
+    let market = instruction.accounts.get(1).expect("projection Market meta");
+    assert!(!payer.is_signer);
+    assert!(!payer.is_writable);
+    assert!(!market.is_writable);
     let (fixture, context, accepted) = execute_project(fixture, instruction).await;
     assert!(accepted);
     let market = context
@@ -1245,16 +1581,10 @@ async fn mutable_core_release_refuses_after_profile_init_without_market_write() 
     );
 }
 
-#[tokio::test]
-async fn series_consume_late_claims_refusal_rolls_back_found_and_all_replay_state() {
-    let fixture = series_fixture();
-    let (fixture, context, failure) = execute_series(fixture).await;
-    let failure = failure.expect("Claims founding physical seam must refuse");
-    assert!(
-        failure.contains("Custom(10)"),
-        "late refusal must be CoreSbfError::ChildCpi, got {failure}"
-    );
-
+async fn assert_series_found_rollback(
+    fixture: &SeriesFixture,
+    context: &solana_program_test::ProgramTestContext,
+) {
     let market = context
         .banks_client
         .get_account(fixture.base.market)
@@ -1267,6 +1597,27 @@ async fn series_consume_late_claims_refusal_rolls_back_found_and_all_replay_stat
         market.lamports,
         Rent::default().minimum_balance(STATE_BYTES)
     );
+
+    let permit = context
+        .banks_client
+        .get_account(fixture.permit)
+        .await
+        .expect("permit query")
+        .expect("vacant permit");
+    assert_eq!(permit.owner, system_program::ID);
+    assert_eq!(permit.lamports, fixture.permit_lamports);
+    assert!(permit.data.is_empty());
+
+    for key in [fixture.aggregate, fixture.position, fixture.admission] {
+        let candidate = context
+            .banks_client
+            .get_account(key)
+            .await
+            .expect("Claims candidate query")
+            .expect("vacant Claims candidate");
+        assert_eq!(candidate.owner, system_program::ID);
+        assert!(candidate.data.is_empty());
+    }
 
     let root = context
         .banks_client
@@ -1305,4 +1656,75 @@ async fn series_consume_late_claims_refusal_rolls_back_found_and_all_replay_stat
     assert_eq!(caller.owner, system_program::ID);
     assert_eq!(caller.lamports, 1);
     assert!(caller.data.is_empty());
+}
+
+#[tokio::test]
+async fn series_consume_accepts_258_outcomes_and_commits_found_with_permit() {
+    let fixture = series_fixture(SeriesFault::None);
+    let (fixture, context, failure) = execute_series(fixture).await;
+    assert_eq!(failure, None, "Series Found must complete under 1.4M CU");
+    assert_eq!(fixture.base.outcome_count, 258);
+
+    let market = context
+        .banks_client
+        .get_account(fixture.base.market)
+        .await
+        .expect("Market query")
+        .expect("founded Market");
+    assert_eq!(market.owner, CORE_PROGRAM_ID);
+    let state = CoreState::decode(&market.data).expect("Core state");
+    assert_eq!(state.phase, Phase::Founding);
+    assert_eq!(state.readiness, Readiness::Prepaid);
+
+    let permit = context
+        .banks_client
+        .get_account(fixture.permit)
+        .await
+        .expect("permit query")
+        .expect("Core permit");
+    assert_eq!(permit.owner, CORE_PROGRAM_ID);
+    assert_eq!(permit.lamports, fixture.permit_lamports);
+    let permit = SeriesFoundingPermitV1::decode(&permit.data).expect("Series founding permit");
+    assert_eq!(
+        permit.intent().market().to_bytes(),
+        fixture.base.market.to_bytes()
+    );
+    assert_eq!(
+        permit.intent().parent_root().to_bytes(),
+        fixture.root.to_bytes()
+    );
+    assert_eq!(
+        permit.intent().projected_replay().to_bytes(),
+        fixture.projected_replay.to_bytes()
+    );
+    assert_eq!(
+        permit.intent().claims_program().to_bytes(),
+        CLAIMS_PROGRAM_ID.to_bytes()
+    );
+    assert_eq!(permit.intent().quantity(), 5_000);
+    assert_eq!(permit.intent().basis_scale(), 1);
+}
+
+#[tokio::test]
+async fn series_consume_hostile_batch_programdata_refuses_with_byte_exact_rollback() {
+    let fixture = series_fixture(SeriesFault::BatchClaimsProgramdata);
+    let (fixture, context, failure) = execute_series(fixture).await;
+    let failure = failure.expect("substituted Claims ProgramData must refuse");
+    assert!(
+        failure.contains("Custom(3)"),
+        "Registry batch must expose its exact Deployment refusal, got {failure}"
+    );
+    assert_series_found_rollback(&fixture, &context).await;
+}
+
+#[tokio::test]
+async fn series_consume_late_hoard_refusal_rolls_back_found_and_all_replay_state() {
+    let fixture = series_fixture(SeriesFault::LateHoardBalance);
+    let (fixture, context, failure) = execute_series(fixture).await;
+    let failure = failure.expect("late Hoard postcondition must refuse");
+    assert!(
+        failure.contains("Custom(11)"),
+        "late postcondition must be CoreSbfError::ChildAck, got {failure}"
+    );
+    assert_series_found_rollback(&fixture, &context).await;
 }

@@ -8,6 +8,9 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
+use dclutch_claims_svm::founding_v5::{
+    CLAIMS_FOUNDING_RECEIPT_BYTES_V5, CLAIMS_FOUNDING_RECEIPT_MAGIC_V5,
+};
 use dclutch_market_core_codec::{
     SERIES_CORE_REQUEST_BYTES_V1, SeriesCoreActionV1, SeriesCoreRequestV1,
 };
@@ -23,8 +26,10 @@ use solana_program::{
 };
 
 const CALLER_AUTHORITY: usize = 0;
-const CORE_PROGRAM: usize = 19;
-const TICKET_RAW: usize = 39;
+const FOUND_CORE_PROGRAM: usize = 19;
+const FOUND_TICKET_RAW: usize = 39;
+const OPEN_CORE_PROGRAM: usize = 13;
+const OPEN_TICKET_RAW: usize = 21;
 
 #[cfg(not(feature = "no-entrypoint"))]
 solana_program::entrypoint!(process_instruction);
@@ -44,14 +49,24 @@ pub fn process_instruction(
     if request.action() != SeriesCoreActionV1::Consume {
         return Err(solana_program::program_error::ProgramError::InvalidInstructionData);
     }
+    let open = instruction_data
+        .len()
+        .checked_sub(CLAIMS_FOUNDING_RECEIPT_BYTES_V5)
+        .and_then(|start| instruction_data.get(start..start + CLAIMS_FOUNDING_RECEIPT_MAGIC_V5.len()))
+        == Some(CLAIMS_FOUNDING_RECEIPT_MAGIC_V5.as_slice());
+    let (core_index, ticket_index) = if open {
+        (OPEN_CORE_PROGRAM, OPEN_TICKET_RAW)
+    } else {
+        (FOUND_CORE_PROGRAM, FOUND_TICKET_RAW)
+    };
     let caller = accounts
         .get(CALLER_AUTHORITY)
         .ok_or(solana_program::program_error::ProgramError::NotEnoughAccountKeys)?;
     let core = accounts
-        .get(CORE_PROGRAM)
+        .get(core_index)
         .ok_or(solana_program::program_error::ProgramError::NotEnoughAccountKeys)?;
     let ticket_raw = accounts
-        .get(TICKET_RAW)
+        .get(ticket_index)
         .ok_or(solana_program::program_error::ProgramError::NotEnoughAccountKeys)?;
     let ticket_data = ticket_raw.try_borrow_data()?;
     let ticket = ticket_content_id(&ticket_data)

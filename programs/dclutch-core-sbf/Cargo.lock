@@ -1545,6 +1545,9 @@ name = "dclutch-claims-svm"
 version = "0.1.0"
 dependencies = [
  "dclutch-effect-kernel",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-rational-representation-v2-kernel",
+ "dclutch-rational-representation-v2-lifecycle-contract",
 ]
 
 [[package]]
@@ -1562,6 +1565,7 @@ dependencies = [
  "dclutch-custody-contract",
  "dclutch-market-core-codec",
  "dclutch-product-contract",
+ "dclutch-product-payoff-v2-codec",
  "dclutch-product-runtime-v2",
  "dclutch-product-runtime-v2-admission",
  "dclutch-product-runtime-v2-operator",
@@ -1682,6 +1686,14 @@ name = "dclutch-rational-representation-v2-kernel"
 version = "0.1.0"
 dependencies = [
  "dclutch-product-payoff-v2-codec",
+]
+
+[[package]]
+name = "dclutch-rational-representation-v2-lifecycle-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-rational-representation-v2-kernel",
+ "dclutch-token-svm",
 ]
 
 [[package]]

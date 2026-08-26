@@ -42,6 +42,13 @@ impl<'accounts, 'info> RoleDeploymentAccounts<'accounts, 'info> {
     }
 }
 
+#[derive(Clone, Copy)]
+struct ExpectedRoleObservation {
+    role: Role,
+    program: [u8; 32],
+    programdata: [u8; 32],
+}
+
 /// One cache/release-set authentication carrying a fixed requested role set.
 #[derive(Clone, Copy)]
 pub(crate) struct RoleBatchAdmissions {
@@ -135,6 +142,7 @@ pub(crate) fn authenticate_roles<'accounts, 'info>(
     let request_bytes = request.to_bytes();
     let mut metas = Vec::with_capacity(1 + requested.len() * 2);
     let mut infos = Vec::with_capacity(2 + requested.len() * 2);
+    let mut expected_observations = Vec::with_capacity(requested.len());
     metas.push(AccountMeta::new_readonly(*cache.key, false));
     infos.push(cache.clone());
     for entry in requested {
@@ -143,6 +151,11 @@ pub(crate) fn authenticate_roles<'accounts, 'info>(
         metas.push(AccountMeta::new_readonly(*entry.programdata.key, false));
         infos.push(entry.program.clone());
         infos.push(entry.programdata.clone());
+        expected_observations.push(ExpectedRoleObservation {
+            role: entry.role,
+            program: entry.program.key.to_bytes(),
+            programdata: entry.programdata.key.to_bytes(),
+        });
     }
     infos.push(registry.clone());
     let instruction = Instruction {
@@ -155,29 +168,61 @@ pub(crate) fn authenticate_roles<'accounts, 'info>(
     if producer != *registry.key {
         return Err(CoreSbfError::Release);
     }
-    let receipt = AuthenticatedRoleBatchReceiptV2::decode(&receipt_bytes)
-        .map_err(|_| CoreSbfError::Release)?;
     let expected_request_digest =
         ContentId::new(hash(&request_bytes).to_bytes()).map_err(|_| CoreSbfError::Release)?;
-    if receipt.registry_program().to_bytes() != registry.key.to_bytes()
-        || receipt.activation_cache() != cache.key.to_bytes()
-        || receipt.activation_cache_digest() != cache_digest
+    verify_role_batch_receipt(
+        &receipt_bytes,
+        registry.key.to_bytes(),
+        cache.key.to_bytes(),
+        cache_digest,
+        release_set_id,
+        expected_request_digest,
+        request.role_mask(),
+        &expected_observations,
+        selected,
+    )?;
+    Ok(RoleBatchAdmissions {
+        registry: expected_registry,
+        release_set_id: identity(release_set_id)?,
+        selected,
+        authenticated_mask: request.role_mask(),
+    })
+}
+
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn verify_role_batch_receipt(
+    receipt_bytes: &[u8],
+    registry_program: [u8; 32],
+    activation_cache: [u8; 32],
+    activation_cache_digest: ContentId,
+    release_set_id: [u8; 32],
+    request_digest: ContentId,
+    role_mask: u8,
+    expected_observations: &[ExpectedRoleObservation],
+    selected: ReleaseSet,
+) -> Result<(), CoreSbfError> {
+    let receipt = AuthenticatedRoleBatchReceiptV2::decode(receipt_bytes)
+        .map_err(|_| CoreSbfError::Release)?;
+    if receipt.registry_program().to_bytes() != registry_program
+        || receipt.activation_cache() != activation_cache
+        || receipt.activation_cache_digest() != activation_cache_digest
         || receipt.release_set_id().to_bytes() != release_set_id
-        || receipt.request_digest() != expected_request_digest
-        || usize::from(receipt.role_count()) != requested.len()
-        || receipt.role_mask() != request.role_mask()
+        || receipt.request_digest() != request_digest
+        || usize::from(receipt.role_count()) != expected_observations.len()
+        || receipt.role_mask() != role_mask
     {
         return Err(CoreSbfError::Release);
     }
-    for (index, expected) in requested.iter().copied().enumerate() {
+    for (index, expected) in expected_observations.iter().copied().enumerate() {
         let observation = receipt
             .observation(index)
             .ok_or(CoreSbfError::Release)?
             .map_err(|_| CoreSbfError::Release)?;
         let selected = selected_binding(selected, expected.role);
         if observation.role() != registry_role(expected.role)
-            || observation.program().to_bytes() != expected.program.key.to_bytes()
-            || observation.programdata() != expected.programdata.key.to_bytes()
+            || observation.program().to_bytes() != expected.program
+            || observation.programdata() != expected.programdata
             || observation.program().to_bytes() != selected.program.to_bytes()
             || observation.artifact_release_id().to_bytes() != selected.artifact_release.to_bytes()
             || observation.semantic_release_id().to_bytes() != selected.semantic_release.to_bytes()
@@ -185,12 +230,7 @@ pub(crate) fn authenticate_roles<'accounts, 'info>(
             return Err(CoreSbfError::Release);
         }
     }
-    Ok(RoleBatchAdmissions {
-        registry: expected_registry,
-        release_set_id: identity(release_set_id)?,
-        selected,
-        authenticated_mask: request.role_mask(),
-    })
+    Ok(())
 }
 
 /// Authenticate the Registry cache and one role's current Loader deployment.
@@ -385,6 +425,11 @@ pub(crate) fn identity(bytes: [u8; 32]) -> Result<Identity, CoreSbfError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dclutch_registry_svm::batch_v2::{
+        ROLE_BATCH_RECEIPT_BYTES_V2, RoleBatchReceiptInputV2, RoleDeploymentObservationV2,
+        encode_role_batch_receipt_v2,
+    };
+    use dclutch_release_set_contract::{ArtifactReleaseIdV1, ProgramIdentityV1};
 
     fn test_identity(fill: u8) -> Identity {
         Identity::new([fill; 32]).expect("nonzero identity")
@@ -396,6 +441,47 @@ mod tests {
             artifact_release: test_identity(fill + 10),
             semantic_release: test_identity(fill + 20),
         }
+    }
+
+    fn receipt_observation(
+        role: Role,
+        binding: Binding,
+        programdata: [u8; 32],
+    ) -> RoleDeploymentObservationV2 {
+        RoleDeploymentObservationV2::new(
+            registry_role(role),
+            ProgramIdentityV1::new(binding.program.to_bytes()).expect("program"),
+            programdata,
+            ArtifactReleaseIdV1::new(binding.artifact_release.to_bytes()).expect("artifact"),
+            ContentId::new(binding.semantic_release.to_bytes()).expect("semantic release"),
+            7,
+        )
+        .expect("observation")
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn receipt_bytes(
+        registry: [u8; 32],
+        cache: [u8; 32],
+        cache_digest: ContentId,
+        release_set_id: ContentId,
+        request_digest: ContentId,
+        observations: &[RoleDeploymentObservationV2],
+    ) -> [u8; ROLE_BATCH_RECEIPT_BYTES_V2] {
+        let mut output = [0; ROLE_BATCH_RECEIPT_BYTES_V2];
+        encode_role_batch_receipt_v2(
+            RoleBatchReceiptInputV2 {
+                registry_program: ProgramIdentityV1::new(registry).expect("Registry"),
+                activation_cache: cache,
+                activation_cache_digest: cache_digest,
+                release_set_id,
+                request_digest,
+                observations,
+            },
+            &mut output,
+        )
+        .expect("receipt");
+        output
     }
 
     #[test]
@@ -456,6 +542,115 @@ mod tests {
         }
         assert_eq!(
             batch.admission(Role::Resolution),
+            Err(CoreSbfError::Release)
+        );
+    }
+
+    #[test]
+    fn batch_receipt_substitution_refuses_before_admission_projection() {
+        let registry = [90; 32];
+        let cache = [91; 32];
+        let cache_digest = ContentId::new([92; 32]).expect("cache digest");
+        let release_set_id = ContentId::new([93; 32]).expect("release set");
+        let request_digest = ContentId::new([94; 32]).expect("request digest");
+        let selected = ReleaseSet {
+            release_set_id: test_identity(93),
+            bindings: [
+                test_binding(1),
+                test_binding(2),
+                test_binding(3),
+                test_binding(4),
+                test_binding(5),
+            ],
+        };
+        let [core, claims, _trading, _resolution, _custody] = selected.bindings;
+        let core_programdata = [31; 32];
+        let claims_programdata = [32; 32];
+        let expected = [
+            ExpectedRoleObservation {
+                role: Role::Core,
+                program: core.program.to_bytes(),
+                programdata: core_programdata,
+            },
+            ExpectedRoleObservation {
+                role: Role::Claims,
+                program: claims.program.to_bytes(),
+                programdata: claims_programdata,
+            },
+        ];
+        let core_observation = receipt_observation(Role::Core, core, core_programdata);
+        let claims_observation = receipt_observation(Role::Claims, claims, claims_programdata);
+        let observations = [core_observation, claims_observation];
+        let valid = receipt_bytes(
+            registry,
+            cache,
+            cache_digest,
+            release_set_id,
+            request_digest,
+            &observations,
+        );
+        assert_eq!(
+            verify_role_batch_receipt(
+                &valid,
+                registry,
+                cache,
+                cache_digest,
+                release_set_id.to_bytes(),
+                request_digest,
+                0b11,
+                &expected,
+                selected,
+            ),
+            Ok(())
+        );
+
+        let substituted_programdata = [
+            receipt_observation(Role::Core, core, [99; 32]),
+            claims_observation,
+        ];
+        let hostile = receipt_bytes(
+            registry,
+            cache,
+            cache_digest,
+            release_set_id,
+            request_digest,
+            &substituted_programdata,
+        );
+        assert_eq!(
+            verify_role_batch_receipt(
+                &hostile,
+                registry,
+                cache,
+                cache_digest,
+                release_set_id.to_bytes(),
+                request_digest,
+                0b11,
+                &expected,
+                selected,
+            ),
+            Err(CoreSbfError::Release)
+        );
+
+        let hostile_cache = receipt_bytes(
+            registry,
+            [88; 32],
+            cache_digest,
+            release_set_id,
+            request_digest,
+            &observations,
+        );
+        assert_eq!(
+            verify_role_batch_receipt(
+                &hostile_cache,
+                registry,
+                cache,
+                cache_digest,
+                release_set_id.to_bytes(),
+                request_digest,
+                0b11,
+                &expected,
+                selected,
+            ),
             Err(CoreSbfError::Release)
         );
     }

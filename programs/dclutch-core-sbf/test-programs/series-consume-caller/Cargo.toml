@@ -13,6 +13,7 @@ default = []
 no-entrypoint = []
 
 [dependencies]
+dclutch-claims-svm = { path = "../../../../crates/dclutch-claims-svm" }
 dclutch-market-core-codec = { path = "../../../../crates/dclutch-market-core-codec" }
 dclutch-release-set-contract = { path = "../../../../crates/dclutch-release-set-contract" }
 dclutch-series-v3-kernel = { path = "../../../../crates/dclutch-series-v3-kernel" }
