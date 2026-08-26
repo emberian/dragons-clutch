@@ -80,6 +80,179 @@ pub enum Error {
 /// Result alias for ProductBasisV3 terminal planning.
 pub type Result<T> = core::result::Result<T, Error>;
 
+/// Family-neutral authenticated Product-to-Claims terminal projection.
+///
+/// The SVM adapter constructs this value only after independently
+/// authenticating ProductRuntimeV3, the finalized composition-exposure
+/// record, the canonical LBV2 Market, and the selected release. It contains
+/// no Rational, Fractional, Bearer, or Structured action tag.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProductClaimsTerminalAdmissionV3 {
+    exposure_id: [u8; 32],
+    exposure_digest: [u8; 32],
+    product_id: [u8; 32],
+    result_domain_id: [u8; 32],
+    coordinate_domain_id: [u8; 32],
+    result_unit_id: [u8; 32],
+    semantic_basis_id: [u8; 32],
+    linked_basis_record_digest: [u8; 32],
+    market_id: [u8; 32],
+    release_set_id: [u8; 32],
+    evaluator_release_id: [u8; 32],
+    basis_width: u32,
+    payout_scale: u64,
+}
+
+impl ProductClaimsTerminalAdmissionV3 {
+    /// Construct one checked projection from independently authenticated facts.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        exposure_id: [u8; 32],
+        exposure_digest: [u8; 32],
+        product_id: [u8; 32],
+        result_domain_id: [u8; 32],
+        coordinate_domain_id: [u8; 32],
+        result_unit_id: [u8; 32],
+        semantic_basis_id: [u8; 32],
+        linked_basis_record_digest: [u8; 32],
+        market_id: [u8; 32],
+        release_set_id: [u8; 32],
+        evaluator_release_id: [u8; 32],
+        basis_width: u32,
+        payout_scale: u64,
+    ) -> Result<Self> {
+        for identity in [
+            exposure_id,
+            exposure_digest,
+            product_id,
+            result_domain_id,
+            coordinate_domain_id,
+            result_unit_id,
+            semantic_basis_id,
+            linked_basis_record_digest,
+            market_id,
+            release_set_id,
+            evaluator_release_id,
+        ] {
+            if identity.iter().all(|byte| *byte == 0) {
+                return Err(Error::IdentityMismatch);
+            }
+        }
+        if basis_width == 0 || payout_scale == 0 {
+            return Err(Error::WidthMismatch);
+        }
+        Ok(Self {
+            exposure_id,
+            exposure_digest,
+            product_id,
+            result_domain_id,
+            coordinate_domain_id,
+            result_unit_id,
+            semantic_basis_id,
+            linked_basis_record_digest,
+            market_id,
+            release_set_id,
+            evaluator_release_id,
+            basis_width,
+            payout_scale,
+        })
+    }
+
+    /// Finalized logical exposure identity.
+    pub const fn exposure_id(self) -> [u8; 32] {
+        self.exposure_id
+    }
+    /// SHA-256 of the exact finalized exposure bytes.
+    pub const fn exposure_digest(self) -> [u8; 32] {
+        self.exposure_digest
+    }
+    /// Stable semantic Product identity.
+    pub const fn product_id(self) -> [u8; 32] {
+        self.product_id
+    }
+    /// Product-owned result-domain identity.
+    pub const fn result_domain_id(self) -> [u8; 32] {
+        self.result_domain_id
+    }
+    /// Product-owned coordinate-domain identity.
+    pub const fn coordinate_domain_id(self) -> [u8; 32] {
+        self.coordinate_domain_id
+    }
+    /// Product-owned result-unit identity.
+    pub const fn result_unit_id(self) -> [u8; 32] {
+        self.result_unit_id
+    }
+    /// Claims semantic basis identity.
+    pub const fn semantic_basis_id(self) -> [u8; 32] {
+        self.semantic_basis_id
+    }
+    /// Finalized ProductBasisV3 record digest.
+    pub const fn linked_basis_record_digest(self) -> [u8; 32] {
+        self.linked_basis_record_digest
+    }
+    /// Logical Core Market identity.
+    pub const fn market_id(self) -> [u8; 32] {
+        self.market_id
+    }
+    /// Immutable selected release set.
+    pub const fn release_set_id(self) -> [u8; 32] {
+        self.release_set_id
+    }
+    /// Immutable Product evaluator release.
+    pub const fn evaluator_release_id(self) -> [u8; 32] {
+        self.evaluator_release_id
+    }
+    /// Runtime Claims width K.
+    pub const fn basis_width(self) -> u32 {
+        self.basis_width
+    }
+    /// Exact Product payout scale.
+    pub const fn payout_scale(self) -> u64 {
+        self.payout_scale
+    }
+}
+
+/// Borrowed family-neutral input for one terminal Claims settlement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProductClaimsTerminalInputV3<'a> {
+    /// Exact authenticated ProductBasisV3 raw bytes.
+    pub product_basis_bytes: &'a [u8],
+    /// Independently authenticated Product/Claims/exposure projection.
+    pub admission: ProductClaimsTerminalAdmissionV3,
+    /// Exact finalized Product-to-Claims exposure bytes.
+    pub composition_exposure_bytes: &'a [u8],
+    /// Exact finalized exposure record evidence.
+    pub composition_exposure_admission: RecordAdmissionV3,
+    /// Finalized Product graph-root digest.
+    pub product_record_digest: [u8; 32],
+    /// Canonical Claims aggregate account.
+    pub market_account: [u8; 32],
+    /// Exact canonical LBV2 aggregate bytes.
+    pub market_bytes: &'a [u8],
+    /// Exact canonical LBV2 Position bytes.
+    pub position_bytes: &'a [u8],
+    /// Sole Position owner debited.
+    pub owner: [u8; 32],
+    /// Digest of the complete Claims terminal-settlement request.
+    pub request_id: [u8; 32],
+    /// Registry role of the enclosing caller.
+    pub caller_role: CallerRole,
+    /// Exact Product terminal scenario authenticated from Core state.
+    pub terminal: TerminalScenarioV3,
+    /// Claims coordinate debited after Product-to-Claims translation.
+    pub claim_index: u32,
+    /// Positive native Claims atoms debited.
+    pub quantity: u64,
+    /// Immutable Market generation.
+    pub expected_generation: u64,
+    /// Aggregate optimistic pre-revision.
+    pub expected_market_revision: u64,
+    /// Position optimistic pre-revision.
+    pub expected_position_revision: u64,
+    /// Current canonical hoard collateral atoms.
+    pub hoard_before: u64,
+}
+
 /// Borrowed input for one exact terminal debit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProductBasisTerminalInputV3<'a> {
@@ -132,6 +305,61 @@ pub struct ProductBasisTerminalInputV3<'a> {
 /// matrix or additional rounding boundary exists here.
 pub fn encode_product_basis_terminal_signed_delta_v3(
     input: ProductBasisTerminalInputV3<'_>,
+    product_payout_scratch: &mut [u64],
+    translation_scratch: &mut [u64],
+    claims_payout_scratch: &mut [u64],
+    aggregate_delta_scratch: &mut [SignedDeltaV3],
+    output: &mut [u8],
+) -> Result<u64> {
+    let representation = input.representation;
+    let admission = ProductClaimsTerminalAdmissionV3::new(
+        representation.graph_id(),
+        representation.graph_digest(),
+        representation.product_id(),
+        representation.result_domain_id(),
+        representation.coordinate_domain_id(),
+        representation.result_unit_id(),
+        representation.semantic_basis_id(),
+        representation.linked_basis_record_digest(),
+        representation.market_id(),
+        representation.release_set_id(),
+        representation.evaluator_release_id(),
+        representation.basis_width(),
+        representation.payout_scale(),
+    )?;
+    encode_product_claims_terminal_signed_delta_v3(
+        ProductClaimsTerminalInputV3 {
+            product_basis_bytes: input.product_basis_bytes,
+            admission,
+            composition_exposure_bytes: input.composition_exposure_bytes,
+            composition_exposure_admission: input.composition_exposure_admission,
+            product_record_digest: input.product_record_digest,
+            market_account: input.market_account,
+            market_bytes: input.market_bytes,
+            position_bytes: input.position_bytes,
+            owner: input.owner,
+            request_id: input.request_id,
+            caller_role: input.caller_role,
+            terminal: input.terminal,
+            claim_index: input.claim_index,
+            quantity: input.quantity,
+            expected_generation: input.expected_generation,
+            expected_market_revision: input.expected_market_revision,
+            expected_position_revision: input.expected_position_revision,
+            hoard_before: input.hoard_before,
+        },
+        product_payout_scratch,
+        translation_scratch,
+        claims_payout_scratch,
+        aggregate_delta_scratch,
+        output,
+    )
+}
+
+/// Evaluate a family-neutral authenticated Product/Claims terminal projection
+/// and encode its canonical SignedDeltaV3 packet.
+pub fn encode_product_claims_terminal_signed_delta_v3(
+    input: ProductClaimsTerminalInputV3<'_>,
     product_payout_scratch: &mut [u64],
     translation_scratch: &mut [u64],
     claims_payout_scratch: &mut [u64],
@@ -255,7 +483,7 @@ pub fn encode_product_basis_terminal_signed_delta_v3(
             request_id: input.request_id,
             product_record_digest: input.product_record_digest,
             semantic_basis_id: market.basis_id,
-            linked_basis_record_digest: input.representation.linked_basis_record_digest(),
+            linked_basis_record_digest: input.admission.linked_basis_record_digest(),
             expected_market_revision: input.expected_market_revision,
             claim_count: market.claim_count,
         },
@@ -269,7 +497,7 @@ pub fn encode_product_basis_terminal_signed_delta_v3(
     Ok(collateral_out)
 }
 
-fn validate_nonzero(input: ProductBasisTerminalInputV3<'_>) -> Result<()> {
+fn validate_nonzero(input: ProductClaimsTerminalInputV3<'_>) -> Result<()> {
     for identity in [
         input.product_record_digest,
         input.market_account,
@@ -290,12 +518,12 @@ fn validate_nonzero(input: ProductBasisTerminalInputV3<'_>) -> Result<()> {
 }
 
 fn validate_joins(
-    input: ProductBasisTerminalInputV3<'_>,
+    input: ProductClaimsTerminalInputV3<'_>,
     basis: ProductBasisV3<'_>,
     market: LiabilityBasisMarketViewV2,
     position: LiabilityBasisPositionViewV2,
 ) -> Result<()> {
-    let admission = input.representation;
+    let admission = input.admission;
     if basis.product_id() != admission.product_id()
         || basis.result_domain_id() != admission.result_domain_id()
         || basis.coordinate_domain_id() != admission.coordinate_domain_id()
@@ -328,7 +556,7 @@ fn validate_joins(
 }
 
 fn decode_exposure<'a>(
-    input: ProductBasisTerminalInputV3<'a>,
+    input: ProductClaimsTerminalInputV3<'a>,
     basis: ProductBasisV3<'_>,
     market: LiabilityBasisMarketViewV2,
 ) -> Result<CompositionExposureBundleV3<'a>> {
@@ -339,17 +567,17 @@ fn decode_exposure<'a>(
     .map_err(|_| Error::Composition)?
     .verify_execution_for(CompositionExposureExecutionExpectedV3 {
         market: market.logical_market,
-        result_domain: input.representation.result_domain_id(),
+        result_domain: input.admission.result_domain_id(),
         release_set: market.release_set,
-        product_basis: input.representation.linked_basis_record_digest(),
+        product_basis: input.admission.linked_basis_record_digest(),
         representation_basis: market.basis_id,
         product_width: basis.basis_width(),
         representation_width: market.claim_count,
     })
     .map_err(|_| Error::Composition)?;
-    if exposure.bundle_id() != input.representation.graph_id()
+    if exposure.bundle_id() != input.admission.exposure_id()
         || input.composition_exposure_admission.finalized_digest
-            != input.representation.graph_digest()
+            != input.admission.exposure_digest()
     {
         return Err(Error::Composition);
     }
