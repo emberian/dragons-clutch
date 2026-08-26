@@ -16,10 +16,12 @@ use dclutch_claims_svm::{
         ProtocolPositionAdmissionV2, ProtocolPositionCloseEvidenceV2,
         ProtocolPositionCloseReceiptV2, ProtocolPositionOwnerKindV2, ProtocolPositionSeedsV2,
     },
+    sparse_native_transfer_v1::{SparseNativeTransferReceiptV1, SparseNativeTransferV1},
 };
 use dclutch_custody_contract::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_PDA_DOMAIN_V1, CUSTODY_VAULT_PDA_DOMAIN_V1,
-    CallerRoleV1, CompartmentV1, CustodyReceiptV1, CustodyReplayV1, OperationV1, ReceiptEvidenceV1,
+    CallerRoleV1, CompartmentV1, CustodyReceiptV1, CustodyReplayV1, DelegatedCustodyReceiptV2,
+    OperationV1, ReceiptEvidenceV1,
 };
 use dclutch_direct_codec::{
     intent_v2::CompactIntentV2,
@@ -2170,8 +2172,8 @@ fn maker_lifecycle_plan(
 }
 
 #[test]
-fn inline_ioc_projects_claims_and_net_then_combined_fee_with_residual_delegate() {
-    let (direct, context, collateral) = inline_physical_fixture(40, 1, 66);
+fn inline_ioc_projects_sparse_claims_and_exhausts_exact_atomic_delegate() {
+    let (direct, context, collateral) = inline_physical_fixture(40, 1, 22);
     let mut claims_scratch = [0_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
     let mut claims_output = [0xa5_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
     let plan = prepare_inline_ordinary_physical_v2(
@@ -2185,37 +2187,34 @@ fn inline_ioc_projects_claims_and_net_then_combined_fee_with_residual_delegate()
     .expect("inline physical plan");
     assert_eq!(plan.custody_count, 2);
     assert_eq!(plan.buyer_source_after, 78);
-    assert_eq!(plan.buyer_delegated_after, 44);
+    assert_eq!(plan.buyer_delegated_after, 0);
     assert_eq!(plan.seller_destination_after, 48);
     assert_eq!(plan.fee_destination_after, 44);
     let net = plan.custody[0].expect("seller net");
-    assert_eq!(net.request.amount, 18);
-    assert_eq!(net.request.expected_revision, 7);
-    assert_eq!(net.request.semantic.transfer_index, 0);
-    assert_eq!(net.delegated_after, 48);
+    assert_eq!(net.request.custody.amount, 18);
+    assert_eq!(net.request.custody.expected_revision, 7);
+    assert_eq!(net.request.custody.semantic.transfer_index, 0);
+    assert!(net.request.starts_atomic_debit);
+    assert!(!net.request.terminal);
+    assert_eq!(net.request.allowance_before, 22);
+    assert_eq!(net.request.allowance_after, 4);
+    assert_eq!(net.delegated_after, 4);
     let fee = plan.custody[1].expect("combined fee");
-    assert_eq!(fee.request.amount, 4);
-    assert_eq!(fee.request.expected_revision, 8);
-    assert_eq!(fee.request.semantic.transfer_index, 1);
-    assert_eq!(fee.delegated_after, 44);
-    let claims = AffineBatchPlanV2::decode(&claims_output).expect("Claims plan");
-    assert_eq!(claims.position_count(), 2);
-    assert_eq!(claims.row_count(), 1);
-    assert_eq!(claims.position(0).expect("seller Position").owner(), id(2));
-    assert_eq!(claims.position(1).expect("buyer Position").owner(), id(3));
-    let row = claims.row(0).expect("ordinary transfer row");
-    assert_eq!(row.outcome(), 1);
-    assert_eq!(row.source_position_index(), 0);
-    assert_eq!(row.destination_position_index(), 1);
-    assert_eq!(row.aggregate_delta().direction(), DeltaDirectionV2::Neutral);
-    assert_eq!(row.aggregate_delta().magnitude(), 0);
-    assert_eq!(row.source_delta().direction(), DeltaDirectionV2::Debit);
-    assert_eq!(row.source_delta().magnitude(), 40);
-    assert_eq!(
-        row.destination_delta().direction(),
-        DeltaDirectionV2::Credit
-    );
-    assert_eq!(row.destination_delta().magnitude(), 40);
+    assert_eq!(fee.request.custody.amount, 4);
+    assert_eq!(fee.request.custody.expected_revision, 8);
+    assert_eq!(fee.request.custody.semantic.transfer_index, 1);
+    assert!(!fee.request.starts_atomic_debit);
+    assert!(fee.request.terminal);
+    assert_eq!(fee.request.allowance_before, 4);
+    assert_eq!(fee.request.allowance_after, 0);
+    assert_eq!(fee.delegated_after, 0);
+    let claims = SparseNativeTransferV1::decode(&claims_output).expect("Claims transfer");
+    let claims = claims.input();
+    assert_eq!(claims.source_owner, id(2));
+    assert_eq!(claims.destination_owner, id(3));
+    assert_eq!(claims.outcome, 1);
+    assert_eq!(claims.claim_count, 3);
+    assert_eq!(claims.quantity, 40);
 
     let mut root = [0xa5; DIRECT_ROOT_STATE_BYTES_V1];
     let mut seller = [0xa5; DIRECT_MAKER_REPLAY_BYTES_V1];
@@ -2241,8 +2240,8 @@ fn inline_ioc_projects_claims_and_net_then_combined_fee_with_residual_delegate()
 }
 
 #[test]
-fn inline_fok_price_improvement_accepts_worst_case_allowance_and_leaves_residual() {
-    let (direct, context, collateral) = inline_physical_fixture(100, 0, 66);
+fn inline_fok_price_improvement_exhausts_exact_actual_allowance() {
+    let (direct, context, collateral) = inline_physical_fixture(100, 0, 55);
     let mut claims_scratch = [0_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
     let mut claims_output = [0_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
     let plan = prepare_inline_ordinary_physical_v2(
@@ -2257,12 +2256,12 @@ fn inline_fok_price_improvement_accepts_worst_case_allowance_and_leaves_residual
     assert_eq!(plan.settlement.effects.gross_collateral, 50);
     assert_eq!(plan.settlement.effects.buyer_collateral_debit, 55);
     assert_eq!(plan.buyer_source_after, 45);
-    assert_eq!(plan.buyer_delegated_after, 11);
+    assert_eq!(plan.buyer_delegated_after, 0);
 }
 
 #[test]
 fn inline_receipts_bind_exact_claims_custody_and_delegate_poststate() {
-    let (direct, context, collateral) = inline_physical_fixture(40, 1, 66);
+    let (direct, context, collateral) = inline_physical_fixture(40, 1, 22);
     let mut claims_scratch = [0_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
     let mut claims_output = [0_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
     let plan = prepare_inline_ordinary_physical_v2(
@@ -2274,16 +2273,17 @@ fn inline_receipts_bind_exact_claims_custody_and_delegate_poststate() {
         &mut claims_output,
     )
     .expect("plan");
-    let claims = AffineBatchPlanV2::decode(&claims_output).expect("claims");
-    let (positions, rows) = claims.table_bytes();
+    let claims = SparseNativeTransferV1::decode(&claims_output).expect("claims");
     let post_resource_digest = id(77);
-    let claims_receipt = AffineBatchReceiptV2::new(
+    let claims_input = claims.input();
+    let claims_receipt = SparseNativeTransferReceiptV1::new(
         claims,
         hash(&claims_output).to_bytes(),
-        hashv(&[positions, rows]).to_bytes(),
         context.claims_program,
         post_resource_digest,
-        context.claims_market_revision + 1,
+        claims_input.expected_market_revision + 1,
+        claims_input.expected_source_revision + 1,
+        claims_input.expected_destination_revision + 1,
     )
     .expect("claims receipt")
     .to_bytes();
@@ -2300,10 +2300,10 @@ fn inline_receipts_bind_exact_claims_custody_and_delegate_poststate() {
     );
 
     let net = plan.custody[0].expect("net");
-    let request_bytes = net.request.to_bytes().expect("request");
+    let request_bytes = net.request.encode().expect("request");
     let poststate = id(78);
     let custody_receipt = CustodyReceiptV1::new(
-        net.request,
+        net.request.custody,
         hash(&request_bytes).to_bytes(),
         ReceiptEvidenceV1 {
             source_before: collateral.buyer_source.balance,
@@ -2314,9 +2314,19 @@ fn inline_receipts_bind_exact_claims_custody_and_delegate_poststate() {
             replay_state_digest: id(79),
         },
     )
-    .expect("custody receipt")
-    .to_bytes()
-    .expect("custody receipt bytes");
+    .expect("custody receipt");
+    let custody_receipt = DelegatedCustodyReceiptV2 {
+        custody: custody_receipt,
+        starts_atomic_debit: net.request.starts_atomic_debit,
+        terminal: net.request.terminal,
+        delegate_before: net.request.delegate_before,
+        delegate_after: net.request.delegate_after,
+        total_debit: net.request.total_debit,
+        allowance_before: net.request.allowance_before,
+        allowance_after: net.request.allowance_after,
+    }
+    .encode()
+    .expect("delegated receipt bytes");
     verify_inline_custody_receipt_v2(net, &custody_receipt, id(79), net.delegated_after)
         .expect("Custody receipt verification");
     assert_eq!(
@@ -2344,6 +2354,26 @@ fn inline_refuses_underallowance_alias_replay_and_lifecycle_substitution() {
     );
     assert_eq!(claims_output, before);
 
+    let overallowance = DirectInlineCollateralFrameV2 {
+        buyer_source: DirectExternalDebitV2 {
+            delegated_amount: 23,
+            ..collateral.buyer_source
+        },
+        ..collateral
+    };
+    assert_eq!(
+        prepare_inline_ordinary_physical_v2(
+            direct,
+            context,
+            inline_lifecycle_plans(direct, context),
+            overallowance,
+            &mut claims_scratch,
+            &mut claims_output,
+        ),
+        Err(DirectPhysicalError::Binding)
+    );
+    assert_eq!(claims_output, before);
+
     let mut bad_replay = context;
     bad_replay.custody_replay_state.next_revision = 0;
     assert_eq!(
@@ -2353,7 +2383,7 @@ fn inline_refuses_underallowance_alias_replay_and_lifecycle_substitution() {
             inline_lifecycle_plans(direct, bad_replay),
             DirectInlineCollateralFrameV2 {
                 buyer_source: DirectExternalDebitV2 {
-                    delegated_amount: 66,
+                    delegated_amount: 22,
                     ..collateral.buyer_source
                 },
                 ..collateral
@@ -2371,7 +2401,7 @@ fn inline_refuses_underallowance_alias_replay_and_lifecycle_substitution() {
             balance: 40,
         },
         buyer_source: DirectExternalDebitV2 {
-            delegated_amount: 66,
+            delegated_amount: 22,
             ..collateral.buyer_source
         },
         ..collateral
@@ -2445,7 +2475,7 @@ fn inline_refuses_underallowance_alias_replay_and_lifecycle_substitution() {
     let first_lifecycle = inline_lifecycle_plans(first_use, context);
     let funded_collateral = DirectInlineCollateralFrameV2 {
         buyer_source: DirectExternalDebitV2 {
-            delegated_amount: 66,
+            delegated_amount: 22,
             ..collateral.buyer_source
         },
         ..collateral

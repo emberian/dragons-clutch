@@ -17,16 +17,15 @@ use dclutch_account_profile_contract::lifecycle_v3::{
 use dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1;
 use dclutch_claims_svm::{
     CallerRole as ClaimsCallerRole,
-    affine_batch_v2::{
-        AFFINE_BATCH_PLAN_HEADER_BYTES_V2, AFFINE_BATCH_POSITION_BYTES_V2,
-        AFFINE_BATCH_ROW_BYTES_V2, AffineBatchPlanInputV2, AffineBatchPlanV2,
-        AffineBatchPositionV2, AffineBatchReceiptV2, AffineBatchRowInputV2, AffineBatchRowV2,
-        DeltaDirectionV2, SignedMagnitudeV2,
+    sparse_native_transfer_v1::{
+        SPARSE_NATIVE_TRANSFER_BYTES_V1, SparseNativeTransferInputV1,
+        SparseNativeTransferReceiptV1, SparseNativeTransferV1,
     },
 };
 use dclutch_custody_contract::{
-    CallerRoleV1, CompartmentV1, ContextV1, CustodyAuthoritySeedsV1, CustodyReceiptV1,
-    CustodyReplaySeedsV1, CustodyReplayV1, CustodyRequestV1, OperationV1,
+    CallerRoleV1, CompartmentV1, ContextV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1,
+    CustodyReplayV1, CustodyRequestV1, DelegatedCustodyReceiptV2, DelegatedCustodyRequestV2,
+    OperationV1,
 };
 use dclutch_direct_codec::successor::{
     DIRECT_MAKER_REPLAY_BYTES_V1, DIRECT_ROOT_STATE_BYTES_V1, DirectCoordinatesV1,
@@ -42,10 +41,8 @@ use super::physical::{
 
 /// Seller-net and combined-fee are the only positive inline collateral routes.
 pub const DIRECT_INLINE_CUSTODY_EFFECT_CAPACITY_V2: usize = 2;
-/// Exact ordinary affine Claims request: header, two Positions, one row.
-pub const DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2: usize = AFFINE_BATCH_PLAN_HEADER_BYTES_V2
-    + 2 * AFFINE_BATCH_POSITION_BYTES_V2
-    + AFFINE_BATCH_ROW_BYTES_V2;
+/// Exact fixed-width sparse native-claim transfer request.
+pub const DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2: usize = SPARSE_NATIVE_TRANSFER_BYTES_V1;
 
 /// Exact external token observations for one inline ordinary match.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -109,8 +106,8 @@ pub struct DirectInlineLifecyclePlansV3 {
 /// One exact Custody request and its required token/delegate poststate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DirectInlineCustodyEffectV2 {
-    /// Canonical distinct-owner Custody transfer request.
-    pub request: CustodyRequestV1,
+    /// Canonical delegated-allowance Custody V2 transfer request.
+    pub request: DelegatedCustodyRequestV2,
     /// Exact source token balance after this CPI.
     pub source_after: u64,
     /// Exact source delegated allowance after this CPI.
@@ -179,58 +176,27 @@ pub fn prepare_inline_ordinary_physical_v2(
     }
 
     let custody = compile_custody(direct, context, collateral, settlement)?;
-    let positions = [
-        AffineBatchPositionV2::new(
-            direct.seller.authenticated.maker(),
-            context.seller_position_revision,
-        )
-        .map_err(|_| DirectPhysicalError::Claims)?,
-        AffineBatchPositionV2::new(
-            direct.buyer.authenticated.maker(),
-            context.buyer_position_revision,
-        )
-        .map_err(|_| DirectPhysicalError::Claims)?,
-    ];
-    let neutral = SignedMagnitudeV2::new(DeltaDirectionV2::Neutral, 0)
-        .map_err(|_| DirectPhysicalError::Claims)?;
-    let row = AffineBatchRowV2::new(
-        AffineBatchRowInputV2 {
-            source_present: true,
-            destination_present: true,
-            outcome: direct.seller.authenticated.intent().outcome,
-            source_position_index: 0,
-            destination_position_index: 1,
-            aggregate_delta: neutral,
-            source_delta: SignedMagnitudeV2::new(DeltaDirectionV2::Debit, direct.execution.fill)
-                .map_err(|_| DirectPhysicalError::Claims)?,
-            destination_delta: SignedMagnitudeV2::new(
-                DeltaDirectionV2::Credit,
-                direct.execution.fill,
-            )
-            .map_err(|_| DirectPhysicalError::Claims)?,
-        },
-        direct.execution.outcome_count,
-        2,
-    )
+    let claims = SparseNativeTransferV1::new(SparseNativeTransferInputV1 {
+        caller_role: ClaimsCallerRole::Trading,
+        release_set: context.core_market.release_set().release_set_id.to_bytes(),
+        market: context.core_market.market().to_bytes(),
+        request_id: context.parent_request_digest,
+        product_record_digest: context.core_market.product().product_record.to_bytes(),
+        semantic_basis_id: context.core_market.product().liability_basis.to_bytes(),
+        linked_basis_record_digest: context.linked_basis_record_digest,
+        source_owner: direct.seller.authenticated.maker(),
+        destination_owner: direct.buyer.authenticated.maker(),
+        expected_market_revision: context.claims_market_revision,
+        expected_source_revision: context.seller_position_revision,
+        expected_destination_revision: context.buyer_position_revision,
+        generation: context.core_market.generation(),
+        outcome: direct.seller.authenticated.intent().outcome,
+        claim_count: direct.execution.outcome_count,
+        quantity: direct.execution.fill,
+    })
     .map_err(|_| DirectPhysicalError::Claims)?;
-    AffineBatchPlanV2::encode_into(
-        AffineBatchPlanInputV2 {
-            caller_role: ClaimsCallerRole::Trading,
-            release_set: context.core_market.release_set().release_set_id.to_bytes(),
-            market: context.core_market.market().to_bytes(),
-            request_id: context.parent_request_digest,
-            product_record_digest: context.core_market.product().product_record.to_bytes(),
-            semantic_basis_id: context.core_market.product().liability_basis.to_bytes(),
-            linked_basis_record_digest: context.linked_basis_record_digest,
-            expected_market_revision: context.claims_market_revision,
-            outcome_count: direct.execution.outcome_count,
-        },
-        &positions,
-        &[row],
-        claims_scratch,
-    )
-    .map_err(|_| DirectPhysicalError::Claims)?;
-    AffineBatchPlanV2::decode(claims_scratch).map_err(|_| DirectPhysicalError::Claims)?;
+    claims_scratch.copy_from_slice(&claims.to_bytes());
+    SparseNativeTransferV1::decode(claims_scratch).map_err(|_| DirectPhysicalError::Claims)?;
     claims_output.copy_from_slice(claims_scratch);
 
     Ok(DirectInlinePhysicalPlanV2 {
@@ -347,15 +313,14 @@ pub fn verify_inline_claims_receipt_v2(
     if expected_post_resource_digest == [0; 32] {
         return Err(DirectPhysicalError::ZeroIdentity);
     }
-    let plan = AffineBatchPlanV2::decode(claims_packet).map_err(|_| DirectPhysicalError::Claims)?;
-    let receipt =
-        AffineBatchReceiptV2::decode(receipt_bytes).map_err(|_| DirectPhysicalError::Claims)?;
-    receipt
-        .validate_plan(plan)
+    let plan =
+        SparseNativeTransferV1::decode(claims_packet).map_err(|_| DirectPhysicalError::Claims)?;
+    let receipt = SparseNativeTransferReceiptV1::decode(receipt_bytes)
         .map_err(|_| DirectPhysicalError::Claims)?;
-    let (positions, rows) = plan.table_bytes();
+    receipt
+        .validate_request(plan)
+        .map_err(|_| DirectPhysicalError::Claims)?;
     if receipt.packet_digest() != hash(claims_packet).to_bytes()
-        || receipt.table_digest() != solana_program::hash::hashv(&[positions, rows]).to_bytes()
         || receipt.claims_program() != context.claims_program
         || receipt.post_resource_digest() != expected_post_resource_digest
     {
@@ -373,19 +338,28 @@ pub fn verify_inline_custody_receipt_v2(
 ) -> Result<()> {
     let request_bytes = effect
         .request
-        .to_bytes()
+        .encode()
         .map_err(|_| DirectPhysicalError::Custody)?;
-    let receipt =
-        CustodyReceiptV1::decode(receipt_bytes).map_err(|_| DirectPhysicalError::Custody)?;
+    let receipt = DelegatedCustodyReceiptV2::decode(receipt_bytes)
+        .map_err(|_| DirectPhysicalError::Custody)?;
     receipt
+        .custody
         .verify_for(
-            effect.request,
+            effect.request.custody,
             hash(&request_bytes).to_bytes(),
             replay_state_digest,
         )
         .map_err(|_| DirectPhysicalError::Custody)?;
-    if receipt.evidence.source_after != effect.source_after
-        || receipt.evidence.destination_after != effect.destination_after
+    if receipt.starts_atomic_debit != effect.request.starts_atomic_debit
+        || receipt.terminal != effect.request.terminal
+        || receipt.delegate_before != effect.request.delegate_before
+        || receipt.delegate_after != effect.request.delegate_after
+        || receipt.total_debit != effect.request.total_debit
+        || receipt.allowance_before != effect.request.allowance_before
+        || receipt.allowance_after != effect.request.allowance_after
+        || receipt.custody.evidence.source_after != effect.source_after
+        || receipt.custody.evidence.destination_after != effect.destination_after
+        || receipt.allowance_after != effect.delegated_after
         || observed_delegated_after != effect.delegated_after
     {
         return Err(DirectPhysicalError::Postcondition);
@@ -547,7 +521,7 @@ fn validate_collateral(
     if collateral.buyer_source.account != buyer.intent().collateral_account
         || collateral.buyer_source.owner != buyer.maker()
         || collateral.buyer_source.delegate != context.custody_authority
-        || collateral.buyer_source.delegated_amount < settlement.effects.buyer_collateral_debit
+        || collateral.buyer_source.delegated_amount != settlement.effects.buyer_collateral_debit
         || collateral.buyer_source.balance < settlement.effects.buyer_collateral_debit
         || collateral.seller_destination.account != seller.intent().collateral_account
         || collateral.seller_destination.owner != seller.maker()
@@ -579,6 +553,9 @@ fn compile_custody(
         } else {
             collateral.fee_destination.balance
         };
+    let positive_count = usize::from(settlement.effects.seller_net_collateral_credit > 0)
+        .checked_add(usize::from(settlement.effects.total_fee_transfer > 0))
+        .ok_or(DirectPhysicalError::Arithmetic)?;
     for (amount, destination) in [
         (
             settlement.effects.seller_net_collateral_credit,
@@ -606,7 +583,7 @@ fn compile_custody(
         let destination_after = destination_before
             .checked_add(amount)
             .ok_or(DirectPhysicalError::Arithmetic)?;
-        let request = custody_request(
+        let custody = custody_request(
             direct,
             context,
             collateral.buyer_source,
@@ -614,6 +591,29 @@ fn compile_custody(
             count,
             amount,
         )?;
+        let terminal = count
+            .checked_add(1)
+            .ok_or(DirectPhysicalError::Arithmetic)?
+            == positive_count;
+        let request = DelegatedCustodyRequestV2 {
+            custody,
+            starts_atomic_debit: count == 0,
+            terminal,
+            delegate_before: context.custody_authority,
+            delegate_after: if terminal {
+                [0; 32]
+            } else {
+                context.custody_authority
+            },
+            total_debit: settlement.effects.buyer_collateral_debit,
+            allowance_before: delegated_after
+                .checked_add(amount)
+                .ok_or(DirectPhysicalError::Arithmetic)?,
+            allowance_after: delegated_after,
+        };
+        request
+            .validate()
+            .map_err(|_| DirectPhysicalError::Custody)?;
         *effects
             .get_mut(count)
             .ok_or(DirectPhysicalError::Arithmetic)? = Some(DirectInlineCustodyEffectV2 {
