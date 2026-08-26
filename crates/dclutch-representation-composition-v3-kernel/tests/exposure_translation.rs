@@ -3,13 +3,13 @@
 use dclutch_representation_composition_v3_kernel::{
     COMPOSITION_DESCRIPTOR_BYTES_V3, COMPOSITION_EXPOSURE_HEADER_BYTES_V3,
     COMPOSITION_EXPOSURE_ROW_BYTES_V3, CompositionDescriptorInputV3, CompositionDescriptorV3,
-    CompositionEdgeInputV3, CompositionExposureBundleV3, CompositionExposureExpectedV3,
-    CompositionExposureInputV3, CompositionExposureLayoutV3, CompositionExposureRowInputV3,
-    CompositionExposureRowLayoutV3, CompositionExposureTermV3, CompositionGraphInputV3,
-    CompositionGraphV3, CompositionNodeInputV3, CompositionNodeKindV3, Error, RecordAdmissionV3,
-    SparseTermV3, composition_exposure_bytes_v3, composition_graph_bytes_v3,
-    encode_composition_descriptor_v3_atomic, encode_composition_exposure_v3_atomic,
-    encode_composition_graph_v3_atomic,
+    CompositionEdgeInputV3, CompositionExposureBundleV3, CompositionExposureExecutionExpectedV3,
+    CompositionExposureExpectedV3, CompositionExposureInputV3, CompositionExposureLayoutV3,
+    CompositionExposureRowInputV3, CompositionExposureRowLayoutV3, CompositionExposureTermV3,
+    CompositionGraphInputV3, CompositionGraphV3, CompositionNodeInputV3, CompositionNodeKindV3,
+    Error, RecordAdmissionV3, SparseTermV3, composition_exposure_bytes_v3,
+    composition_graph_bytes_v3, encode_composition_descriptor_v3_atomic,
+    encode_composition_exposure_v3_atomic, encode_composition_graph_v3_atomic,
 };
 
 const MARKET: [u8; 32] = [1; 32];
@@ -37,6 +37,18 @@ fn expected(product_width: u32) -> CompositionExposureExpectedV3 {
         product_basis: PRODUCT_BASIS,
         representation_basis: REPRESENTATION_BASIS,
         graph_id: GRAPH,
+        product_width,
+        representation_width: 3,
+    }
+}
+
+fn execution_expected(product_width: u32) -> CompositionExposureExecutionExpectedV3 {
+    CompositionExposureExecutionExpectedV3 {
+        market: MARKET,
+        result_domain: DOMAIN,
+        release_set: RELEASE,
+        product_basis: PRODUCT_BASIS,
+        representation_basis: REPRESENTATION_BASIS,
         product_width,
         representation_width: 3,
     }
@@ -257,6 +269,10 @@ fn k3_n1_and_k3_n258_translate_exactly() {
     let n1_bundle = CompositionExposureBundleV3::decode(&n1, admission())
         .and_then(|bundle| bundle.verify_for(expected(1)))
         .expect("K3/N1 admission");
+    assert_eq!(
+        n1_bundle.verify_execution_for(execution_expected(1)),
+        Ok(n1_bundle)
+    );
     let mut scratch = [99; 3];
     let mut output = [99; 3];
     n1_bundle

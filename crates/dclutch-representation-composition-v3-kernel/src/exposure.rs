@@ -175,6 +175,31 @@ pub struct CompositionExposureExpectedV3 {
     pub representation_width: u32,
 }
 
+/// Independently authenticated execution identities and widths.
+///
+/// The selected finalized record identity and digest are authenticated by
+/// [`RecordAdmissionV3`]. The source composition-DAG identity is deliberately
+/// absent here: publication/admission must join it with [`Self::verify_for`]
+/// and [`Self::verify_composition_graph`], while execution selects the already
+/// finalized exposure record rather than receiving the source DAG again.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompositionExposureExecutionExpectedV3 {
+    /// Logical Core Market.
+    pub market: [u8; 32],
+    /// Product-owned result domain.
+    pub result_domain: [u8; 32],
+    /// Immutable selected release set.
+    pub release_set: [u8; 32],
+    /// Product-owned terminal-result basis.
+    pub product_basis: [u8; 32],
+    /// Claims-owned representation basis.
+    pub representation_basis: [u8; 32],
+    /// Independently authenticated Product width `N`.
+    pub product_width: u32,
+    /// Independently authenticated Claims width `K`.
+    pub representation_width: u32,
+}
+
 /// One decoded row root.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CompositionExposureRowV3 {
@@ -335,12 +360,35 @@ impl<'a> CompositionExposureBundleV3<'a> {
 
     /// Require exact independently authenticated identities and dimensions.
     pub fn verify_for(self, expected: CompositionExposureExpectedV3) -> Result<Self> {
+        self.verify_execution_for(CompositionExposureExecutionExpectedV3 {
+            market: expected.market,
+            result_domain: expected.result_domain,
+            release_set: expected.release_set,
+            product_basis: expected.product_basis,
+            representation_basis: expected.representation_basis,
+            product_width: expected.product_width,
+            representation_width: expected.representation_width,
+        })?;
+        if self.graph_id != expected.graph_id {
+            return Err(Error::ContentAdmission);
+        }
+        Ok(self)
+    }
+
+    /// Require exact execution identities and independent `N`/`K` widths.
+    ///
+    /// This is the small runtime adapter boundary for a content-addressed
+    /// exposure record whose source-DAG correspondence was already admitted.
+    /// It never accepts a caller-authored matrix or replaces record admission.
+    pub fn verify_execution_for(
+        self,
+        expected: CompositionExposureExecutionExpectedV3,
+    ) -> Result<Self> {
         if self.market != expected.market
             || self.result_domain != expected.result_domain
             || self.release_set != expected.release_set
             || self.product_basis != expected.product_basis
             || self.representation_basis != expected.representation_basis
-            || self.graph_id != expected.graph_id
         {
             return Err(Error::ContentAdmission);
         }
