@@ -23,6 +23,11 @@ use solana_program::{
 #[cfg(feature = "families")]
 pub mod claims_composition_v3;
 
+/// Family-neutral EffectProgram V3 composition for canonical Core CPIs.
+pub mod core_composition_v3;
+/// Family-neutral EffectProgram V3 composition for canonical Custody CPIs.
+#[cfg(feature = "families")]
+pub mod custody_composition_v3;
 /// Dealer family projection behind the common data-defined Trading boundary.
 #[cfg(feature = "families")]
 pub mod dealer;
@@ -33,6 +38,8 @@ pub mod execution_strategy_v2;
 /// General family projection behind the common data-defined Trading boundary.
 #[cfg(feature = "families")]
 pub mod general;
+/// Family-neutral authenticated V3 hot execution outer.
+pub mod hot_v3;
 /// Family-neutral native-signature evidence authentication and register seeding.
 pub mod native_signature;
 /// Family-neutral executable Core-to-Trading boundary.
@@ -89,5 +96,9 @@ pub fn process_instruction(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
-    outer::process_activation(program_id, accounts, instruction_data)
+    if hot_v3::is_hot_execution_v3(instruction_data) {
+        hot_v3::process_hot_execution_v3(program_id, accounts, instruction_data)
+    } else {
+        outer::process_activation(program_id, accounts, instruction_data)
+    }
 }

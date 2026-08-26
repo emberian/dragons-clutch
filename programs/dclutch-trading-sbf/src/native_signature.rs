@@ -10,21 +10,18 @@ use solana_sdk_ids::{ed25519_program, sysvar};
 
 use crate::TradingSbfError;
 
-/// Authenticate one exact top-level Trading instruction and its immediately
-/// preceding canonical native-Ed25519 batch, then seed signer identities.
+/// Authenticate the exact current top-level Trading instruction and account metas.
 ///
-/// The selected RequestProfile V2 owns every absolute message slice and
-/// destination register.  This adapter introduces no family discriminator.
-#[allow(clippy::too_many_arguments)]
-pub fn authenticate_and_seed_native_signatures(
+/// The common hot outer calls this for every action, including unsigned ones,
+/// so the fixed Instructions-sysvar account is an observed authority rather
+/// than a dummy slot. The returned nonsemantic instruction index may only be
+/// used to inspect native evidence immediately preceding this instruction.
+pub fn authenticate_current_top_level_instruction(
     program_id: &Pubkey,
     current_accounts: &[AccountInfo<'_>],
     current_instruction_data: &[u8],
     instructions: &AccountInfo<'_>,
-    profile: RequestProfileV2<'_>,
-    tail_count: u32,
-    registers: NativeSignatureRegistersV1<'_>,
-) -> Result<(), ProgramError> {
+) -> Result<u16, ProgramError> {
     if instructions.key != &sysvar::instructions::ID
         || instructions.is_signer
         || instructions.is_writable
@@ -34,9 +31,6 @@ pub fn authenticate_and_seed_native_signatures(
     }
     let current =
         load_current_index_checked(instructions).map_err(|_| TradingSbfError::NativeSignature)?;
-    if current == 0 {
-        return Err(TradingSbfError::NativeSignature.into());
-    }
     let observed = load_instruction_at_checked(usize::from(current), instructions)
         .map_err(|_| TradingSbfError::NativeSignature)?;
     if observed.program_id != *program_id
@@ -52,6 +46,33 @@ pub fn authenticate_and_seed_native_signatures(
         {
             return Err(TradingSbfError::NativeSignature.into());
         }
+    }
+    Ok(current)
+}
+
+/// Authenticate one exact top-level Trading instruction and its immediately
+/// preceding canonical native-Ed25519 batch, then seed signer identities.
+///
+/// The selected RequestProfile V2 owns every absolute message slice and
+/// destination register.  This adapter introduces no family discriminator.
+#[allow(clippy::too_many_arguments)]
+pub fn authenticate_and_seed_native_signatures(
+    program_id: &Pubkey,
+    current_accounts: &[AccountInfo<'_>],
+    current_instruction_data: &[u8],
+    instructions: &AccountInfo<'_>,
+    profile: RequestProfileV2<'_>,
+    tail_count: u32,
+    registers: NativeSignatureRegistersV1<'_>,
+) -> Result<(), ProgramError> {
+    let current = authenticate_current_top_level_instruction(
+        program_id,
+        current_accounts,
+        current_instruction_data,
+        instructions,
+    )?;
+    if current == 0 {
+        return Err(TradingSbfError::NativeSignature.into());
     }
     let preceding = load_instruction_at_checked(usize::from(current - 1), instructions)
         .map_err(|_| TradingSbfError::NativeSignature)?;
