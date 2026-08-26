@@ -56,8 +56,7 @@ use crate::liability_basis_v2::{
     encode_liability_basis_market_v2, encode_liability_basis_position_v2, vector_width,
 };
 
-/// Exact FoundingV5 account count.
-pub const CLAIMS_FOUNDING_ACCOUNT_COUNT_V5: usize = 32;
+pub use dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_ACCOUNT_COUNT_V5;
 /// Exact request plus typed projected-Custody receipt instruction width.
 pub const CLAIMS_FOUNDING_INSTRUCTION_BYTES_V5: usize =
     dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_REQUEST_BYTES_V5

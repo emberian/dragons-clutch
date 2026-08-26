@@ -11,6 +11,8 @@
 
 /// Exact fixed founding request width.
 pub const CLAIMS_FOUNDING_REQUEST_BYTES_V5: usize = 832;
+/// Exact account count of the sole Claims FoundingV5 physical frame.
+pub const CLAIMS_FOUNDING_ACCOUNT_COUNT_V5: usize = 32;
 /// Exact fixed founding receipt width.
 pub const CLAIMS_FOUNDING_RECEIPT_BYTES_V5: usize = 1008;
 /// Founding request wire magic.

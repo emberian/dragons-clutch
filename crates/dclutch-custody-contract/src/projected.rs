@@ -17,6 +17,10 @@ pub const PROJECTED_CUSTODY_REQUEST_BYTES_V1: usize = 768;
 pub const PROJECTED_CUSTODY_STATE_BYTES_V1: usize = 808;
 /// Exact terminal receipt width.
 pub const PROJECTED_CUSTODY_RECEIPT_BYTES_V1: usize = 320;
+/// Exact projected-Custody lock-and-source-close physical frame width.
+pub const PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1: usize = 14;
+/// Exact projected-Custody realization physical frame width.
+pub const PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1: usize = 12;
 /// Exact receipt width for atomic Hoard credit plus source-vault/replay closure.
 pub const PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1: usize = 320;
 /// Domain separating the projected-Hoard replay context from its funding source.

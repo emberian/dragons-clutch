@@ -5,10 +5,11 @@ use core::convert::TryFrom;
 
 use dclutch_custody_contract::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CUSTODY_REPLAY_PDA_DOMAIN_V1,
-    CompartmentV1, CustodyReplayV1, CustodyVaultSeedsV1, PROJECTED_CUSTODY_STATE_BYTES_V1,
-    ProjectedCustodyCallerSeedsV1, ProjectedCustodyLockReceiptV1, ProjectedCustodyOperationV1,
-    ProjectedCustodyReceiptV1, ProjectedCustodyRequestV1, ProjectedCustodyStateSeedsV1,
-    ProjectedCustodyStateV1, normal_replay_from_realization_v1,
+    CompartmentV1, CustodyReplayV1, CustodyVaultSeedsV1,
+    PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1,
+    PROJECTED_CUSTODY_STATE_BYTES_V1, ProjectedCustodyCallerSeedsV1, ProjectedCustodyLockReceiptV1,
+    ProjectedCustodyOperationV1, ProjectedCustodyReceiptV1, ProjectedCustodyRequestV1,
+    ProjectedCustodyStateSeedsV1, ProjectedCustodyStateV1, normal_replay_from_realization_v1,
 };
 use dclutch_market_core_codec::{
     Action, CoreState, Identity, ProjectFoundReceiptV1, ProjectFoundRequestV1, Request, STATE_BYTES,
@@ -80,7 +81,7 @@ const REFUND_MINT: usize = 11;
 const REFUND_TOKEN_PROGRAM: usize = 12;
 const REFUND_MARKET: usize = 13;
 
-const REALIZE_ACCOUNTS: usize = 12;
+const REALIZE_ACCOUNTS: usize = PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1;
 const REALIZE_VAULT: usize = 7;
 const REALIZE_MARKET: usize = 8;
 const REALIZE_AUTHORITY: usize = 9;
@@ -93,7 +94,7 @@ const ABORT_AUTHORITY: usize = 8;
 const ABORT_TOKEN_PROGRAM: usize = 9;
 const ABORT_MARKET: usize = 10;
 
-const LOCK_CLOSE_ACCOUNTS: usize = 14;
+const LOCK_CLOSE_ACCOUNTS: usize = PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1;
 const LOCK_CLOSE_HOARD: usize = 7;
 const LOCK_CLOSE_SOURCE: usize = 8;
 const LOCK_CLOSE_AUTHORITY: usize = 9;

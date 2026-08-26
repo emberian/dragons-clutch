@@ -66,12 +66,12 @@ use crate::{
     release::{RoleBatchAdmissions, RoleDeploymentAccounts, authenticate_roles},
 };
 
-/// Fixed accounts before the exact ordered generic FundingState span.
-pub const GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1: usize = FOUND_ACCOUNT_COUNT_V2 + 4;
-/// Fixed suffix after the exact ordered generic FundingState span.
-pub const GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1: usize = 15;
-/// Exact account count for generic final Open.
-pub const GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1: usize = 24;
+pub use dclutch_market_core_codec::{
+    GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1, GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1,
+    GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1,
+};
+
+const _: () = assert!(GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1 == FOUND_ACCOUNT_COUNT_V2 + 4);
 
 struct GenericFoundAccounts<'accounts, 'info> {
     found: FoundAccounts<'accounts, 'info>,
