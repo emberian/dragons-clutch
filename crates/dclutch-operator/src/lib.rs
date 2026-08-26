@@ -50,6 +50,8 @@ pub mod direct_inline_v3;
 pub mod direct_successor;
 /// Chain-derived unsigned Realm and Market foundation workflows.
 pub mod foundation;
+/// Chain-derived General V3 Hot execution and packet construction.
+pub mod general_hot_v3;
 /// Chain-derived unsigned General physical-controller workflows.
 pub mod general_physical;
 /// Chain-derived inspection of immutable Core/Registry/Rent infrastructure.
@@ -64,6 +66,8 @@ pub mod registered_direct;
 pub mod registry;
 /// Checked-release admission into unsigned Registry activation workflows.
 pub mod release_activation;
+/// Chain-derived Series V3 Hot lifecycle and packet construction.
+pub mod series_hot_v3;
 /// Chain-derived address-table lifecycle and versioned-message construction.
 pub mod versioned;
 /// Chain-derived unsigned Series and Dealer workflows.

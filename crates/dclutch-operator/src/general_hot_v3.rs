@@ -17,7 +17,10 @@ use dclutch_execution_strategy_contract::v2::{BankTransportV2, classify_bank_tra
 use dclutch_general_adapter_contract::artifacts_v3::{
     GeneralArtifactBytesV3, GeneralArtifactSelectionV3, authenticate_general_artifacts_v3,
 };
-use dclutch_general_codec::{Action, CONTROLLER_REQUEST_BYTES, ControllerRequestV1};
+use dclutch_general_codec::{
+    Action,
+    successor_request_v2::{CONTROLLER_REQUEST_BYTES_V2, ControllerRequestV2},
+};
 use dclutch_product_runtime_v2::ContentId;
 use dclutch_product_runtime_v2_admission::{
     AdmissionReceiptV2, FinalizedRecordCoordinateV2, PORTFOLIO_SCHEMA_ID_V2,
@@ -186,7 +189,7 @@ pub fn build_general_hot_instruction_v3(
     state: &GeneralHotStateV3,
     artifact_selection: GeneralArtifactSelectionV3,
     artifact_bytes: GeneralArtifactBytesV3<'_>,
-    request: ControllerRequestV1,
+    request: ControllerRequestV2,
 ) -> Result<GeneralHotInstructionV3, GeneralHotOperatorErrorV3> {
     let checked = state
         .checked_release
@@ -197,7 +200,7 @@ pub fn build_general_hot_instruction_v3(
     let request_bytes = request
         .to_bytes()
         .map_err(|_| GeneralHotOperatorErrorV3::Artifact)?;
-    if request_bytes.len() != CONTROLLER_REQUEST_BYTES {
+    if request_bytes.len() != CONTROLLER_REQUEST_BYTES_V2 {
         return Err(GeneralHotOperatorErrorV3::Arithmetic);
     }
     let bundle = authenticate_general_artifacts_v3(

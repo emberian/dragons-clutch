@@ -24,6 +24,7 @@ dclutch-dealer-contract = { path = "../dclutch-dealer-contract" }
 dclutch-direct-contract = { path = "../dclutch-direct-contract" }
 dclutch-direct-codec = { path = "../dclutch-direct-codec" }
 dclutch-economic-slice-kernel = { path = "../dclutch-economic-slice-kernel" }
+dclutch-execution-strategy-contract = { path = "../dclutch-execution-strategy-contract" }
 dclutch-general-contract = { path = "../dclutch-general-contract" }
 dclutch-general-adapter-contract = { path = "../dclutch-general-adapter-contract" }
 dclutch-general-codec = { path = "../dclutch-general-codec" }
@@ -32,6 +33,8 @@ dclutch-kernel = { path = "../dclutch-kernel" }
 dclutch-market-contract = { path = "../dclutch-market-contract" }
 dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
 dclutch-product-contract = { path = "../dclutch-product-contract" }
+dclutch-product-runtime-v2 = { path = "../dclutch-product-runtime-v2" }
+dclutch-product-runtime-v2-admission = { path = "../dclutch-product-runtime-v2-admission" }
 dclutch-pyth-contract = { path = "../dclutch-pyth-contract" }
 dclutch-pyth-svm = { path = "../dclutch-pyth-svm" }
 dclutch-realm-contract = { path = "../dclutch-realm-contract" }
@@ -43,8 +46,10 @@ dclutch-resolution-codec = { path = "../dclutch-resolution-codec" }
 dclutch-release-tool = { path = "../dclutch-release-tool" }
 dclutch-rent-contract = { path = "../dclutch-rent-contract" }
 dclutch-series-contract = { path = "../dclutch-series-contract" }
+dclutch-series-v3-kernel = { path = "../dclutch-series-v3-kernel" }
 dclutch-source-contract = { path = "../dclutch-source-contract" }
 dclutch-token-svm = { path = "../dclutch-token-svm" }
+dclutch-trading-sbf = { path = "../../programs/dclutch-trading-sbf", default-features = false, features = ["no-entrypoint", "series-family"] }
 solana-program = { version = "=3.0.0", default-features = false }
 solana-address-lookup-table-interface = { version = "=3.2.0", features = ["bincode", "bytemuck"] }
 solana-compute-budget-interface = "=3.0.0"
