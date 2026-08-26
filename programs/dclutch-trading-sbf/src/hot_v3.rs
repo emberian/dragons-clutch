@@ -36,6 +36,7 @@ use dclutch_capability_program_contract::{
         HOT_EFFECT_RAW_ACCOUNT_V3, HOT_EFFECT_STAGING_ACCOUNT_V3, HOT_EXECUTION_MAGIC_V3,
         HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
         HOT_LIFECYCLE_RAW_ACCOUNT_V3, HOT_LIFECYCLE_STAGING_ACCOUNT_V3,
+        HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_LINKED_BASIS_STAGING_ACCOUNT_V3,
         HOT_MANIFEST_RAW_ACCOUNT_V3, HOT_MANIFEST_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3,
         HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3, HOT_PORTFOLIO_RAW_ACCOUNT_V3,
         HOT_PORTFOLIO_STAGING_ACCOUNT_V3, HOT_PRODUCT_RAW_ACCOUNT_V3,
@@ -80,8 +81,8 @@ use dclutch_execution_strategy_contract::{
 use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
 use dclutch_product_runtime_v2::ContentId as ProductContentId;
 use dclutch_product_runtime_v2_svm_reader::{
-    FinalizedRecordFrameV2 as ProductRecordFrameV2, ProductRuntimeFrameV2,
-    authenticate_product_runtime_v2,
+    FinalizedRecordFrameV2 as ProductRecordFrameV2, ProductRuntimeFrameV3,
+    authenticate_product_runtime_v3,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::ACTIVATION_PDA_DOMAIN_V1;
@@ -233,12 +234,12 @@ pub fn process_hot_execution_v3(
     drop(root_data);
 
     let rent = Rent::from_account_info(frame.rent).map_err(|_| TradingSbfError::Content)?;
-    let product_runtime = authenticate_product_runtime_v2(
+    let product_runtime_v3 = authenticate_product_runtime_v3(
         frame.registry.key,
         &rent,
         ProductContentId::new(market.identity.product_record.to_bytes())
             .map_err(|_| TradingSbfError::Content)?,
-        ProductRuntimeFrameV2 {
+        ProductRuntimeFrameV3 {
             product: ProductRecordFrameV2 {
                 raw: frame.product_raw,
                 staging: frame.product_staging,
@@ -251,9 +252,14 @@ pub fn process_hot_execution_v3(
                 raw: frame.portfolio_raw,
                 staging: frame.portfolio_staging,
             },
+            linked_basis: ProductRecordFrameV2 {
+                raw: frame.linked_basis_raw,
+                staging: frame.linked_basis_staging,
+            },
         },
     )
     .map_err(|_| TradingSbfError::Content)?;
+    let product_runtime = product_runtime_v3.runtime;
     let product_outcome_count = product_runtime.outcome_count;
     let manifest_data = borrow_finalized_record(
         frame,
@@ -320,14 +326,20 @@ pub fn process_hot_execution_v3(
     )?;
     let config_digest = hash(&config_data).to_bytes();
     drop(config_data);
-    require_common_projection_bindings_v3(
-        context.selection().config().to_bytes(),
-        config_digest,
-        market.identity.product_record.to_bytes(),
-        product_runtime.product_record.content_digest.to_bytes(),
-        market.identity.product_id.to_bytes(),
-        product_runtime.product_id.to_bytes(),
-    )?;
+    require_common_projection_bindings_v3(CommonProjectionBindingsV3 {
+        selected_config: context.selection().config().to_bytes(),
+        authenticated_config: config_digest,
+        selected_product_record: market.identity.product_record.to_bytes(),
+        authenticated_product_record: product_runtime.product_record.content_digest.to_bytes(),
+        market_product: market.identity.product_id.to_bytes(),
+        runtime_product: product_runtime.product_id.to_bytes(),
+        product_semantic_basis: product_runtime.liability_basis_id.to_bytes(),
+        authenticated_semantic_basis: product_runtime_v3.semantic_basis_id.to_bytes(),
+        authenticated_linked_basis: product_runtime_v3
+            .linked_basis_record
+            .content_digest
+            .to_bytes(),
+    })?;
     let lifecycle_data = borrow_finalized_record(
         frame,
         frame.lifecycle_raw,
@@ -469,6 +481,7 @@ pub fn process_hot_execution_v3(
         frame.config_raw,
         frame.product_raw,
         frame.portfolio_raw,
+        frame.linked_basis_raw,
     ]);
     runtime_accounts.extend(
         accounts
@@ -497,6 +510,10 @@ pub fn process_hot_execution_v3(
                 context.selection().config().to_bytes(),
                 product_runtime.product_record.content_digest.to_bytes(),
                 product_runtime.portfolio_record.content_digest.to_bytes(),
+                product_runtime_v3
+                    .linked_basis_record
+                    .content_digest
+                    .to_bytes(),
             );
             AccountObservationV1::new(
                 key,
@@ -874,6 +891,11 @@ pub fn process_hot_execution_v3(
         &descriptor.derivation_policy().to_bytes(),
         &context.selection().config().to_bytes(),
         &market.identity.product_record.to_bytes(),
+        &product_runtime_v3
+            .linked_basis_record
+            .content_digest
+            .to_bytes(),
+        &product_runtime_v3.semantic_basis_id.to_bytes(),
         &product_outcome_count.to_le_bytes(),
         &request_digest,
         &shadow_execution_digest,
@@ -903,29 +925,42 @@ fn logical_projection_key_v3(
     selected_config: [u8; 32],
     product_root: [u8; 32],
     portfolio: [u8; 32],
+    linked_basis: [u8; 32],
 ) -> [u8; 32] {
     match coordinate {
         1 => selected_config,
         2 => product_root,
         3 => portfolio,
+        4 => linked_basis,
         _ => physical_key,
     }
 }
 
-fn require_common_projection_bindings_v3(
+#[derive(Clone, Copy)]
+struct CommonProjectionBindingsV3 {
     selected_config: [u8; 32],
     authenticated_config: [u8; 32],
     selected_product_record: [u8; 32],
     authenticated_product_record: [u8; 32],
     market_product: [u8; 32],
     runtime_product: [u8; 32],
+    product_semantic_basis: [u8; 32],
+    authenticated_semantic_basis: [u8; 32],
+    authenticated_linked_basis: [u8; 32],
+}
+
+fn require_common_projection_bindings_v3(
+    bindings: CommonProjectionBindingsV3,
 ) -> Result<(), ProgramError> {
-    if selected_config == [0; 32]
-        || selected_config != authenticated_config
-        || selected_product_record == [0; 32]
-        || selected_product_record != authenticated_product_record
-        || market_product == [0; 32]
-        || market_product != runtime_product
+    if bindings.selected_config == [0; 32]
+        || bindings.selected_config != bindings.authenticated_config
+        || bindings.selected_product_record == [0; 32]
+        || bindings.selected_product_record != bindings.authenticated_product_record
+        || bindings.market_product == [0; 32]
+        || bindings.market_product != bindings.runtime_product
+        || bindings.product_semantic_basis == [0; 32]
+        || bindings.product_semantic_basis != bindings.authenticated_semantic_basis
+        || bindings.authenticated_linked_basis == [0; 32]
     {
         Err(TradingSbfError::Content.into())
     } else {
@@ -950,6 +985,7 @@ fn require_common_projection_permissions_v3(
     if permissions.get(1) != Some(&AccountPermission::read_only())
         || permissions.get(2) != Some(&AccountPermission::read_only())
         || permissions.get(3) != Some(&AccountPermission::read_only())
+        || permissions.get(4) != Some(&AccountPermission::read_only())
     {
         Err(TradingSbfError::Content.into())
     } else {
@@ -2038,7 +2074,7 @@ fn require_child_disjoint_from_local(
 fn require_no_common_projection_child_accounts_v3(
     invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
 ) -> Result<(), ProgramError> {
-    const RESERVED_END: usize = 4;
+    const RESERVED_END: usize = 5;
     let fixed_start = usize::from(invocation.fixed_account_start);
     let fixed_count = usize::from(invocation.fixed_account_count);
     let fixed_end = fixed_start
@@ -2764,6 +2800,8 @@ struct HotFrameV3<'accounts, 'info> {
     result_domain_staging: &'accounts AccountInfo<'info>,
     portfolio_raw: &'accounts AccountInfo<'info>,
     portfolio_staging: &'accounts AccountInfo<'info>,
+    linked_basis_raw: &'accounts AccountInfo<'info>,
+    linked_basis_staging: &'accounts AccountInfo<'info>,
 }
 
 impl<'accounts, 'info> HotFrameV3<'accounts, 'info> {
@@ -2811,6 +2849,8 @@ impl<'accounts, 'info> HotFrameV3<'accounts, 'info> {
             result_domain_staging: account(accounts, HOT_RESULT_DOMAIN_STAGING_ACCOUNT_V3)?,
             portfolio_raw: account(accounts, HOT_PORTFOLIO_RAW_ACCOUNT_V3)?,
             portfolio_staging: account(accounts, HOT_PORTFOLIO_STAGING_ACCOUNT_V3)?,
+            linked_basis_raw: account(accounts, HOT_LINKED_BASIS_RAW_ACCOUNT_V3)?,
+            linked_basis_staging: account(accounts, HOT_LINKED_BASIS_STAGING_ACCOUNT_V3)?,
         };
         if value.market.is_signer
             || value.market.is_writable
@@ -3035,38 +3075,65 @@ mod tests {
     fn common_projection_bindings_and_child_reservations_are_exact() {
         let id = |tag: u8| [tag; 32];
         assert_eq!(
-            logical_projection_key_v3(0, id(1), id(2), id(3), id(4)),
+            logical_projection_key_v3(0, id(1), id(2), id(3), id(4), id(5)),
             id(1)
         );
         assert_eq!(
-            logical_projection_key_v3(1, id(1), id(2), id(3), id(4)),
+            logical_projection_key_v3(1, id(1), id(2), id(3), id(4), id(5)),
             id(2)
         );
         assert_eq!(
-            logical_projection_key_v3(2, id(1), id(2), id(3), id(4)),
+            logical_projection_key_v3(2, id(1), id(2), id(3), id(4), id(5)),
             id(3)
         );
         assert_eq!(
-            logical_projection_key_v3(3, id(1), id(2), id(3), id(4)),
+            logical_projection_key_v3(3, id(1), id(2), id(3), id(4), id(5)),
             id(4)
         );
+        assert_eq!(
+            logical_projection_key_v3(4, id(1), id(2), id(3), id(4), id(5)),
+            id(5)
+        );
         assert_ne!(
-            logical_projection_key_v3(1, id(1), id(2), id(3), id(4)),
+            logical_projection_key_v3(1, id(1), id(2), id(3), id(4), id(5)),
             id(1)
         );
-        assert_eq!(
-            require_common_projection_bindings_v3(id(1), id(1), id(2), id(2), id(3), id(3),),
-            Ok(())
-        );
+        let canonical = CommonProjectionBindingsV3 {
+            selected_config: id(1),
+            authenticated_config: id(1),
+            selected_product_record: id(2),
+            authenticated_product_record: id(2),
+            market_product: id(3),
+            runtime_product: id(3),
+            product_semantic_basis: id(4),
+            authenticated_semantic_basis: id(4),
+            authenticated_linked_basis: id(5),
+        };
+        assert_eq!(require_common_projection_bindings_v3(canonical), Ok(()));
         for hostile in [
-            (id(4), id(1), id(2), id(2), id(3), id(3)),
-            (id(1), id(1), id(5), id(2), id(3), id(3)),
-            (id(1), id(1), id(2), id(2), id(6), id(3)),
+            CommonProjectionBindingsV3 {
+                selected_config: id(6),
+                ..canonical
+            },
+            CommonProjectionBindingsV3 {
+                selected_product_record: id(6),
+                ..canonical
+            },
+            CommonProjectionBindingsV3 {
+                market_product: id(6),
+                ..canonical
+            },
+            CommonProjectionBindingsV3 {
+                product_semantic_basis: id(6),
+                ..canonical
+            },
+            CommonProjectionBindingsV3 {
+                authenticated_linked_basis: [0; 32],
+                ..canonical
+            },
         ] {
             assert_eq!(
-                require_common_projection_bindings_v3(
-                    hostile.0, hostile.1, hostile.2, hostile.3, hostile.4, hostile.5,
-                ),
+                require_common_projection_bindings_v3(hostile),
                 Err(TradingSbfError::Content.into())
             );
         }
@@ -3093,7 +3160,7 @@ mod tests {
         assert_eq!(
             require_no_common_projection_child_accounts_v3(
                 dclutch_effect_kernel::v3::ResolvedInvocationV3 {
-                    fixed_account_start: 4,
+                    fixed_account_start: 5,
                     ..invocation
                 }
             ),
@@ -3104,7 +3171,7 @@ mod tests {
             require_tail_count_agreement_v3(7, 6),
             Err(TradingSbfError::Content.into())
         );
-        let mut permissions = [AccountPermission::read_only(); 4];
+        let mut permissions = [AccountPermission::read_only(); 5];
         permissions[0] = AccountPermission::program_owned_mutable();
         assert_eq!(
             require_common_projection_permissions_v3(&permissions),

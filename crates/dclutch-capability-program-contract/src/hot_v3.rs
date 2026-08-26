@@ -5,11 +5,11 @@
 //! disposition-derived ExecutionStrategy suffix follows the prefix; the
 //! remaining accounts are the exact AccountProfile/EffectProgram address
 //! space. The adapter injects the already-present root, immutable config raw,
-//! Product graph-root raw, and Product-selected portfolio raw accounts as
-//! logical coordinates zero through three without duplicating physical metas. Config and
-//! Product records are read-only projection evidence and no child route may
-//! borrow any injected coordinate. No family discriminator or dummy account is
-//! part of the ABI.
+//! Product graph-root raw, Product-selected portfolio raw, and the exact
+//! Product-linked basis raw accounts as logical coordinates zero through four
+//! without duplicating physical metas. Config and Product records are
+//! read-only projection evidence and no child route may borrow any injected
+//! coordinate. No family discriminator or dummy account is part of the ABI.
 
 /// Canonical hot instruction magic.
 pub const HOT_EXECUTION_MAGIC_V3: [u8; 8] = *b"DCLTHOT3";
@@ -102,8 +102,12 @@ pub const HOT_RESULT_DOMAIN_STAGING_ACCOUNT_V3: usize = 33;
 pub const HOT_PORTFOLIO_RAW_ACCOUNT_V3: usize = 34;
 /// Vacant Product-selected portfolio staging cursor.
 pub const HOT_PORTFOLIO_STAGING_ACCOUNT_V3: usize = 35;
+/// Registry-finalized Product-linked basis raw record.
+pub const HOT_LINKED_BASIS_RAW_ACCOUNT_V3: usize = 36;
+/// Vacant Product-linked basis staging cursor.
+pub const HOT_LINKED_BASIS_STAGING_ACCOUNT_V3: usize = 37;
 /// Exact family-neutral account prefix width.
-pub const HOT_FIXED_ACCOUNT_COUNT_V3: usize = 36;
+pub const HOT_FIXED_ACCOUNT_COUNT_V3: usize = 38;
 /// First disposition-derived ExecutionStrategy account.
 pub const HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3: usize = HOT_FIXED_ACCOUNT_COUNT_V3;
 /// Runtime AccountProfile coordinate occupied by the prefix root account.
@@ -114,8 +118,10 @@ pub const HOT_RUNTIME_CONFIG_COORDINATE_V3: usize = 1;
 pub const HOT_RUNTIME_PRODUCT_COORDINATE_V3: usize = 2;
 /// Runtime AccountProfile coordinate occupied by the Product portfolio body.
 pub const HOT_RUNTIME_PORTFOLIO_COORDINATE_V3: usize = 3;
+/// Runtime AccountProfile coordinate occupied by the Product-linked basis body.
+pub const HOT_RUNTIME_LINKED_BASIS_COORDINATE_V3: usize = 4;
 /// Number of fixed-prefix accounts injected into the logical runtime vector.
-pub const HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3: usize = 4;
+pub const HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3: usize = 5;
 /// Common identity-register input containing SHA-256 of the exact family request.
 ///
 /// This is the sole adapter-computed register fact. AccountProfile and
@@ -567,6 +573,14 @@ mod tests {
         );
         assert_eq!(
             HOT_PORTFOLIO_STAGING_ACCOUNT_V3 + 1,
+            HOT_LINKED_BASIS_RAW_ACCOUNT_V3
+        );
+        assert_eq!(
+            HOT_LINKED_BASIS_RAW_ACCOUNT_V3 + 1,
+            HOT_LINKED_BASIS_STAGING_ACCOUNT_V3
+        );
+        assert_eq!(
+            HOT_LINKED_BASIS_STAGING_ACCOUNT_V3 + 1,
             HOT_FIXED_ACCOUNT_COUNT_V3
         );
         assert_eq!(
@@ -577,7 +591,8 @@ mod tests {
         assert_eq!(HOT_RUNTIME_CONFIG_COORDINATE_V3, 1);
         assert_eq!(HOT_RUNTIME_PRODUCT_COORDINATE_V3, 2);
         assert_eq!(HOT_RUNTIME_PORTFOLIO_COORDINATE_V3, 3);
-        assert_eq!(HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3, 4);
+        assert_eq!(HOT_RUNTIME_LINKED_BASIS_COORDINATE_V3, 4);
+        assert_eq!(HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3, 5);
         assert_eq!(
             HOT_FAMILY_REQUEST_OFFSET_V3,
             HOT_EXECUTION_ENVELOPE_BYTES_V3
