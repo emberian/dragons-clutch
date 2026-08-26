@@ -56,7 +56,7 @@ pub struct FoundStateV2<'a> {
     pub market: AccountObservationV2<'a>,
     /// Existing permanent RentCredit account.
     pub rent_credit: AccountObservationV2<'a>,
-    /// Executable program owning the RentCredit.
+    /// Caller-supplied executable Rent candidate; not canonical until profile-pinned.
     pub rent_program: AccountObservationV2<'a>,
     /// Finalized Realm raw/staging pair.
     pub realm: FinalizedReferenceObservationV2<'a>,
@@ -78,7 +78,7 @@ pub struct FoundStateV2<'a> {
     pub core_program: AccountObservationV2<'a>,
     /// Current Core ProgramData account named by the activated release.
     pub core_programdata: AccountObservationV2<'a>,
-    /// Exact executable Registry program owning all immutable records.
+    /// Caller-supplied executable Registry candidate owning the observed records.
     pub registry_program: AccountObservationV2<'a>,
     /// Canonical Rent sysvar observation.
     pub rent: AccountObservationV2<'a>,
@@ -91,11 +91,11 @@ pub struct FoundStateV2<'a> {
 pub struct FoundInstructionPlanV2 {
     /// Exact unsigned 24-account instruction.
     pub instruction: Instruction,
-    /// Sole derived Market address.
+    /// Sole Market address derived from this authority-incomplete candidate.
     pub market_address: Pubkey,
-    /// Immutable Market identity reconstructed from authenticated records.
+    /// Candidate Market identity reconstructed relative to the supplied Registry.
     pub market_identity: MarketIdentity,
-    /// Ephemeral Product graph projection reconstructed from raw truth.
+    /// Product graph projection authenticated relative to the supplied Registry.
     pub product: AdmissionProjectionV2,
     /// Runtime native outcome width, including explicit failure.
     pub outcome_count: u32,
@@ -115,11 +115,11 @@ pub enum FoundUnavailableV2 {
 /// Chain-derived Found projection safe to display without exporting a transaction.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FoundInspectionV2 {
-    /// Sole derived Market address.
+    /// Sole Market address derived from this authority-incomplete candidate.
     pub market_address: Pubkey,
-    /// Immutable Market identity reconstructed from authenticated records.
+    /// Candidate Market identity reconstructed relative to the supplied Registry.
     pub market_identity: MarketIdentity,
-    /// Ephemeral Product graph projection reconstructed from raw truth.
+    /// Product graph projection authenticated relative to the supplied Registry.
     pub product: AdmissionProjectionV2,
     /// Runtime native outcome width, including explicit failure.
     pub outcome_count: u32,
