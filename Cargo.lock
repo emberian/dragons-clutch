@@ -621,6 +621,10 @@ name = "dclutch-product-payoff-v2-svm"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-product-runtime-v2"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-pyth-contract"
 version = "0.1.0"
 dependencies = [
@@ -777,6 +781,7 @@ name = "dclutch-source-contract"
 version = "0.1.0"
 dependencies = [
  "dclutch-product-contract",
+ "dclutch-product-runtime-v2",
 ]
 
 [[package]]

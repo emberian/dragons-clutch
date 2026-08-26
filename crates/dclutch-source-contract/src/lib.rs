@@ -26,7 +26,10 @@ use dclutch_product_contract::{
 
 #[allow(missing_docs)]
 mod generated_source_material_v2;
+#[allow(missing_docs)]
+mod generated_source_resolution_state_v2;
 mod source_material_v2;
+mod source_resolution_v2;
 
 pub use generated_source_material_v2::{
     SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SOURCE_FAILURE_POLICY_RELEASE_PREIMAGE_V2,
@@ -35,6 +38,17 @@ pub use generated_source_material_v2::{
     SOURCE_MATERIAL_V2_BYTES, SOURCE_MATERIAL_V2_MAGIC, SOURCE_MATERIAL_V2_SCHEMA_VERSION,
 };
 pub use source_material_v2::SourceMaterialV2;
+pub use source_resolution_v2::{
+    SourceResolutionCreationPlanV2, SourceResolutionDecisionV2, SourceResolutionPdaSeedsV2,
+    SourceResolutionStateV2,
+};
+
+/// Exact width of one runtime-width Source resolution state.
+pub const SOURCE_RESOLUTION_STATE_BYTES_V2: usize =
+    generated_source_resolution_state_v2::SOURCE_RESOLUTION_STATE_V2_BYTES;
+/// PDA seed domain for one runtime-width Source resolution state.
+pub const SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2: &[u8] =
+    generated_source_resolution_state_v2::SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2_GENERATED;
 
 /// Exact width of an opaque nonzero content identity.
 pub const CONTENT_ID_BYTES: usize = 32;

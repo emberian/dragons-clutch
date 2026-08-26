@@ -10,6 +10,17 @@
 
 #[rustfmt::skip]
 mod generated_source_resolution;
+#[allow(missing_docs)]
+#[rustfmt::skip]
+mod generated_v2;
+mod v2;
+
+pub use generated_v2::{
+    ACCEPT_PYTH_REQUEST_BYTES_V2, ACCEPT_PYTH_V2_ACTION, ACCEPT_PYTH_V2_MAGIC,
+    ACCEPT_PYTH_V2_VERSION, RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_MAGIC_V2,
+    RESOLUTION_CERTIFICATE_VERSION_V2,
+};
+pub use v2::{AcceptPythRequestV2, ResolutionCertificateKindV2, ResolutionCertificateV2};
 
 /// Bytes in one fixed primary-Pyth admission request.
 pub const ACCEPT_PYTH_REQUEST_BYTES: usize = generated_source_resolution::REQUEST_BYTES_VALUE;
@@ -84,6 +95,8 @@ pub enum Error {
     ZeroCoordinate,
     /// A result selector did not fit the physical Product profile.
     InvalidSelector,
+    /// A terminal certificate did not bind the authenticated Product Runtime V2 root.
+    ProductAuthorityMismatch,
     /// Canonical identities or manifest-entry indices that must differ were duplicated.
     DuplicateCoordinate,
     /// The action, receipt kind, receipt account, beneficiary, and sequence did not partition.
