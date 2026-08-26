@@ -29,6 +29,7 @@ use crate::{
     generated_intent_v2 as intent,
     ordinary_v3::{
         DIRECT_ORDINARY_COMMON_IDENTITIES_V3, DIRECT_ORDINARY_COMMON_SCALARS_V3,
+        DIRECT_ORDINARY_ITEM_IDENTITY_STRIDE_V3, DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3,
         IDENTITY_BUYER_COLLATERAL_REQUEST_V3, IDENTITY_BUYER_INTENT_MARKET_V3,
         IDENTITY_BUYER_NATIVE_SIGNER_V3, IDENTITY_BUYER_REQUEST_MAKER_V3,
         IDENTITY_SELLER_COLLATERAL_REQUEST_V3, IDENTITY_SELLER_INTENT_MARKET_V3,
@@ -59,8 +60,8 @@ pub const DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_V2_BYTES_V3: usize =
         + 2 * dclutch_request_profile_contract::v2::NATIVE_SIGNATURE_REQUIREMENT_BYTES_V1;
 /// SHA-256 content identity of the exact emitted signed RequestProfile V2.
 pub const DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_ID_V3: [u8; 32] = [
-    0xcc, 0xf3, 0x13, 0xc3, 0x38, 0xfd, 0xe9, 0xef, 0x78, 0xf2, 0xee, 0x58, 0x9a, 0x03, 0x12, 0x66,
-    0x77, 0xb5, 0xc0, 0xee, 0x25, 0x99, 0x05, 0xda, 0x7b, 0x8d, 0xb1, 0x1a, 0x24, 0x50, 0x3c, 0xf7,
+    0x87, 0xc1, 0xa5, 0x6a, 0xc8, 0xc7, 0x2e, 0x67, 0xe6, 0x26, 0x02, 0xc2, 0x2d, 0xfa, 0x12, 0x01,
+    0x60, 0x4f, 0xaa, 0xa5, 0x77, 0xaa, 0x23, 0x9b, 0x28, 0xc9, 0x4b, 0x7b, 0x4b, 0x0c, 0xe7, 0x69,
 ];
 /// SHA-256 content identity of the exact ordinary TransitionVM V3 program.
 pub const DIRECT_INLINE_ORDINARY_TRANSITION_ID_V3: [u8; 32] = [
@@ -122,9 +123,9 @@ pub fn encode_inline_ordinary_request_profile_v3_atomic(
         coordinate(INLINE_ORDINARY_REQUEST_BYTES_V3)?,
         0,
         register(DIRECT_ORDINARY_COMMON_SCALARS_V3)?,
-        0,
+        DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3,
         register(DIRECT_ORDINARY_COMMON_IDENTITIES_V3)?,
-        0,
+        DIRECT_ORDINARY_ITEM_IDENTITY_STRIDE_V3,
     );
     encode_request_profile_v1_atomic(geometry, &operations, &[], v1_scratch, v1_candidate)
         .map_err(|_| DirectOrdinaryArtifactErrorV3::RequestProfileV1)?;
