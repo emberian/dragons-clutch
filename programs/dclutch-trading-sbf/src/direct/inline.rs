@@ -11,6 +11,9 @@
 //! and cross-checks them against the Direct semantic candidate; it never owns a
 //! private System-program create or close path.
 
+extern crate alloc;
+
+use alloc::boxed::Box;
 use dclutch_account_profile_contract::lifecycle_v3::{
     AuthenticateStatePlanV3, CreateStatePlanV3, StateLifecyclePlanV3,
 };
@@ -161,7 +164,7 @@ pub fn prepare_inline_ordinary_physical_v2(
     collateral: DirectInlineCollateralFrameV2,
     claims_scratch: &mut [u8],
     claims_output: &mut [u8],
-) -> Result<DirectInlinePhysicalPlanV2> {
+) -> Result<Box<DirectInlinePhysicalPlanV2>> {
     validate_context(direct, context)?;
     let settlement =
         settle_inline_ordinary_v2(direct).map_err(|_| DirectPhysicalError::Settlement)?;
@@ -176,6 +179,28 @@ pub fn prepare_inline_ordinary_physical_v2(
     }
 
     let custody = compile_custody(direct, context, collateral, settlement)?;
+    encode_inline_claims_request_v2(direct, context, claims_scratch, claims_output)?;
+
+    Ok(Box::new(DirectInlinePhysicalPlanV2 {
+        settlement,
+        lifecycle,
+        custody: custody.effects,
+        custody_count: custody.count,
+        claims_bytes,
+        buyer_source_after: custody.source_after,
+        buyer_delegated_after: custody.delegated_after,
+        seller_destination_after: custody.seller_after,
+        fee_destination_after: custody.fee_after,
+    }))
+}
+
+#[inline(never)]
+fn encode_inline_claims_request_v2(
+    direct: InlineOrdinaryInputV2,
+    context: DirectInlinePhysicalContextV2,
+    claims_scratch: &mut [u8],
+    claims_output: &mut [u8],
+) -> Result<()> {
     let claims = SparseNativeTransferV1::new(SparseNativeTransferInputV1 {
         caller_role: ClaimsCallerRole::Trading,
         release_set: context.core_market.release_set().release_set_id.to_bytes(),
@@ -198,18 +223,7 @@ pub fn prepare_inline_ordinary_physical_v2(
     claims_scratch.copy_from_slice(&claims.to_bytes());
     SparseNativeTransferV1::decode(claims_scratch).map_err(|_| DirectPhysicalError::Claims)?;
     claims_output.copy_from_slice(claims_scratch);
-
-    Ok(DirectInlinePhysicalPlanV2 {
-        settlement,
-        lifecycle,
-        custody: custody.effects,
-        custody_count: custody.count,
-        claims_bytes,
-        buyer_source_after: custody.source_after,
-        buyer_delegated_after: custody.delegated_after,
-        seller_destination_after: custody.seller_after,
-        fee_destination_after: custody.fee_after,
-    })
+    Ok(())
 }
 
 fn validate_lifecycle(
@@ -541,7 +555,7 @@ fn compile_custody(
     context: DirectInlinePhysicalContextV2,
     collateral: DirectInlineCollateralFrameV2,
     settlement: InlineOrdinarySettlementV2,
-) -> Result<CustodyCompilationV2> {
+) -> Result<Box<CustodyCompilationV2>> {
     let mut effects = [None; DIRECT_INLINE_CUSTODY_EFFECT_CAPACITY_V2];
     let mut count = 0_usize;
     let mut source_after = collateral.buyer_source.balance;
@@ -647,14 +661,14 @@ fn compile_custody(
     {
         return Err(DirectPhysicalError::Postcondition);
     }
-    Ok(CustodyCompilationV2 {
+    Ok(Box::new(CustodyCompilationV2 {
         effects,
         count: u8::try_from(count).map_err(|_| DirectPhysicalError::Arithmetic)?,
         source_after,
         delegated_after,
         seller_after,
         fee_after,
-    })
+    }))
 }
 
 struct CustodyCompilationV2 {

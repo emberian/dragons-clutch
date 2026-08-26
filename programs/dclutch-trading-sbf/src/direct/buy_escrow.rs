@@ -7,6 +7,9 @@
 //! exact residual, close the Vault, and close the replay cursor before Direct
 //! commits the terminal record disposition.
 
+extern crate alloc;
+
+use alloc::boxed::Box;
 use dclutch_account_profile_contract::lifecycle_v3::StateLifecyclePlanV3;
 use dclutch_custody_contract::{
     CallerRoleV1, CompartmentV1, ContextV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1,
@@ -267,7 +270,7 @@ pub struct DirectBuyEscrowFillPlanV2 {
 /// Settle one ordinary registered fill solely from record-keyed Buy custody.
 pub fn prepare_buy_escrow_fill_v2(
     input: DirectBuyEscrowFillInputV2,
-) -> Result<DirectBuyEscrowFillPlanV2> {
+) -> Result<Box<DirectBuyEscrowFillPlanV2>> {
     input.context.validate(false)?;
     let buyer_before = input.direct.buyer.record;
     let seller_before = input.direct.seller.record;
@@ -439,7 +442,7 @@ pub fn prepare_buy_escrow_fill_v2(
         append_request(&mut requests, &mut next_slot, close_replay)?;
     }
 
-    Ok(DirectBuyEscrowFillPlanV2 {
+    Ok(Box::new(DirectBuyEscrowFillPlanV2 {
         settlement,
         requests,
         request_count: u8::try_from(next_slot).map_err(|_| DirectPhysicalError::Arithmetic)?,
@@ -449,7 +452,7 @@ pub fn prepare_buy_escrow_fill_v2(
         buyer_refund_destination_after: buyer_refund_after,
         closes_escrow: close.is_some(),
         record_lifecycle: input.record_lifecycle,
-    })
+    }))
 }
 
 /// Complete terminal Buy escrow observation after Direct pure termination.
@@ -490,7 +493,7 @@ pub struct DirectBuyEscrowTerminalPlanV2 {
 pub fn prepare_buy_escrow_full_fill_v2(
     input: DirectBuyEscrowTerminalObservationV2,
     candidate: RegisteredFillCandidateV2,
-) -> Result<DirectBuyEscrowTerminalPlanV2> {
+) -> Result<Box<DirectBuyEscrowTerminalPlanV2>> {
     let close = match candidate.record {
         RegisteredRecordAfterFillV2::Closed(close) => close,
         RegisteredRecordAfterFillV2::Live(_) => return Err(DirectPhysicalError::Binding),
@@ -502,7 +505,7 @@ pub fn prepare_buy_escrow_full_fill_v2(
 pub fn prepare_buy_escrow_unwind_v2(
     input: DirectBuyEscrowTerminalObservationV2,
     terminal: RegisteredTerminalResultV2,
-) -> Result<DirectBuyEscrowTerminalPlanV2> {
+) -> Result<Box<DirectBuyEscrowTerminalPlanV2>> {
     prepare_buy_escrow_terminal(input, terminal.maker_root, terminal.close, true)
 }
 
@@ -511,7 +514,7 @@ fn prepare_buy_escrow_terminal(
     maker_root: MakerReplayRootV1,
     close: RegisteredRecordCloseV2,
     is_unwind: bool,
-) -> Result<DirectBuyEscrowTerminalPlanV2> {
+) -> Result<Box<DirectBuyEscrowTerminalPlanV2>> {
     input.context.validate(true)?;
     validate_buy_record(input.context, input.record_before)?;
     validate_accounts(input.context, input.record_before, input.accounts)?;
@@ -611,11 +614,11 @@ fn prepare_buy_escrow_terminal(
     next_slot = next_slot
         .checked_add(1)
         .ok_or(DirectPhysicalError::Arithmetic)?;
-    Ok(DirectBuyEscrowTerminalPlanV2 {
+    Ok(Box::new(DirectBuyEscrowTerminalPlanV2 {
         requests,
         request_count: u8::try_from(next_slot).map_err(|_| DirectPhysicalError::Arithmetic)?,
         refund_destination_after,
-    })
+    }))
 }
 
 pub(super) enum OperationShapeV2 {
