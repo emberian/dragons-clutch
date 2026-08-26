@@ -168,7 +168,7 @@ pub fn general_account_profile_rule_v3(
         return Err(GeneralAccountRuleErrorV3::Geometry);
     }
     if coordinate < 5 {
-        return common_rule(coordinate, widths);
+        return common_rule(action, coordinate, widths);
     }
     if coordinate == GENERAL_PRIMARY_STATE_ACCOUNT_V3
         || (action == Action::Close && coordinate == GENERAL_TERMINAL_STATE_ACCOUNT_V3)
@@ -213,6 +213,7 @@ pub fn general_account_profile_rule_v3(
 }
 
 fn common_rule(
+    action: Action,
     coordinate: u16,
     widths: GeneralExternalAccountWidthsV3,
 ) -> Result<AccountRuleWithPrestateInputV2> {
@@ -239,26 +240,25 @@ fn common_rule(
             0,
             no_effects(),
         )),
-        2 => Ok(exact_rule(
-            false,
-            false,
-            false,
+        2 => Ok(rule(
+            physical_role_privileges(action, ChildRoleV3::ProductRecord)?,
             u32::try_from(PRODUCT_RECORD_BYTES_V2)
                 .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?,
             0,
-            no_effects(),
+            AccountPrestateV2::Exact,
         )),
-        3 => Ok(exact_rule(
-            false,
-            false,
-            false,
+        3 => Ok(rule(
+            physical_role_privileges(action, ChildRoleV3::PortfolioRecord)?,
             u32::try_from(PORTFOLIO_HEADER_BYTES)
                 .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?,
             u32::try_from(PORTFOLIO_COEFFICIENT_BYTES)
                 .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?,
-            no_effects(),
+            AccountPrestateV2::Exact,
         )),
-        4 => Ok(variable_rule(widths.linked_basis_prefix)),
+        4 => Ok(variable_rule_with(
+            physical_role_privileges(action, ChildRoleV3::BasisRecord)?,
+            widths.linked_basis_prefix,
+        )),
         _ => Err(GeneralAccountRuleErrorV3::Geometry),
     }
 }
@@ -343,11 +343,11 @@ fn child_rule(
 ) -> Result<AccountRuleWithPrestateInputV2> {
     let (frame, relative) = child_coordinate(action, coordinate)?;
     let role = child_role(frame, relative)?;
-    let privileges = child_privileges(frame, relative)?;
+    let privileges = physical_role_privileges(action, role)?;
     if let Some(representative) = prior_role_coordinate(action, coordinate, role)? {
         return Ok(AccountRuleWithPrestateInputV2 {
             rule: AccountRuleInputV2 {
-                privileges,
+                privileges: AccountPrivilegesV2::new(false, false, false),
                 effect_permissions: no_effects(),
                 alias: AccountAliasInputV2::Fixed(representative),
                 data_length: 0,
@@ -504,33 +504,79 @@ fn prior_role_coordinate(
     Ok(None)
 }
 
-fn child_privileges(frame: GeneralChildFrameV3, relative: u16) -> Result<AccountPrivilegesV2> {
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct ChildPrivilegeFactsV3 {
+    signer: bool,
+    writable: bool,
+    executable: bool,
+}
+
+impl ChildPrivilegeFactsV3 {
+    fn include(&mut self, other: Self) {
+        self.signer |= other.signer;
+        self.writable |= other.writable;
+        self.executable |= other.executable;
+    }
+
+    fn account_privileges(self) -> AccountPrivilegesV2 {
+        AccountPrivilegesV2::new(self.signer, self.writable, self.executable)
+    }
+}
+
+fn child_privilege_facts(
+    frame: GeneralChildFrameV3,
+    relative: u16,
+) -> Result<ChildPrivilegeFactsV3> {
     match frame {
         GeneralChildFrameV3::ClaimsProtocolPosition(action) => {
             ClaimsFrameSpecV1::protocol_position(action)
                 .account(relative)
-                .map(|account| claims_privileges(account.privileges()))
+                .map(|account| claims_privilege_facts(account.privileges()))
                 .map_err(|_| GeneralAccountRuleErrorV3::Geometry)
         }
         GeneralChildFrameV3::ClaimsAffine { position_count } => {
             ClaimsFrameSpecV1::affine(position_count)
                 .and_then(|spec| spec.account(relative))
-                .map(|account| claims_privileges(account.privileges()))
+                .map(|account| claims_privilege_facts(account.privileges()))
                 .map_err(|_| GeneralAccountRuleErrorV3::Geometry)
         }
         GeneralChildFrameV3::Custody(operation) => CustodyFrameSpecV1::new(operation)
             .account(relative)
-            .map(|account| custody_privileges(account.privileges()))
+            .map(|account| custody_privilege_facts(account.privileges()))
             .map_err(|_| GeneralAccountRuleErrorV3::Geometry),
     }
 }
 
-fn claims_privileges(value: FramePrivilegesV1) -> AccountPrivilegesV2 {
-    AccountPrivilegesV2::new(value.signer(), value.writable(), value.executable())
+fn claims_privilege_facts(value: FramePrivilegesV1) -> ChildPrivilegeFactsV3 {
+    ChildPrivilegeFactsV3 {
+        signer: value.signer(),
+        writable: value.writable(),
+        executable: value.executable(),
+    }
 }
 
-fn custody_privileges(value: CustodyFramePrivilegesV1) -> AccountPrivilegesV2 {
-    AccountPrivilegesV2::new(value.signer(), value.writable(), value.executable())
+fn custody_privilege_facts(value: CustodyFramePrivilegesV1) -> ChildPrivilegeFactsV3 {
+    ChildPrivilegeFactsV3 {
+        signer: value.signer(),
+        writable: value.writable(),
+        executable: value.executable(),
+    }
+}
+
+fn physical_role_privileges(action: Action, role: ChildRoleV3) -> Result<AccountPrivilegesV2> {
+    let mut union = ChildPrivilegeFactsV3::default();
+    let mut coordinate = crate::state_artifacts_v3::general_child_account_start_v3(action);
+    let count = general_account_profile_fixed_count_v3(action)?;
+    while coordinate < count {
+        let (frame, relative) = child_coordinate(action, coordinate)?;
+        if child_role(frame, relative)? == role {
+            union.include(child_privilege_facts(frame, relative)?);
+        }
+        coordinate = coordinate
+            .checked_add(1)
+            .ok_or(GeneralAccountRuleErrorV3::Geometry)?;
+    }
+    Ok(union.account_privileges())
 }
 
 fn claims_data_rule(
@@ -815,17 +861,40 @@ mod tests {
         for action in [Action::InitializeSettlement, Action::Close] {
             let child = crate::state_artifacts_v3::general_child_account_start_v3(action);
             let count = general_account_profile_fixed_count_v3(action).expect("count");
-            let aliases = (child..count)
-                .filter(|coordinate| {
-                    matches!(
-                        general_account_profile_rule_v3(action, *coordinate, WIDTHS)
-                            .expect("rule")
-                            .prestate,
-                        AccountPrestateV2::AuthenticatedRouteAlias
-                    )
-                })
-                .count();
+            let mut aliases = 0_usize;
+            let mut repeated_signer = false;
+            for coordinate in child..count {
+                let rule = general_account_profile_rule_v3(action, coordinate, WIDTHS)
+                    .expect("exact child rule");
+                let (frame, relative) = child_coordinate(action, coordinate).expect("child");
+                let role = child_role(frame, relative).expect("role");
+                if let AccountAliasInputV2::Fixed(representative) = rule.rule.alias {
+                    aliases += 1;
+                    assert_eq!(
+                        rule.rule.privileges,
+                        AccountPrivilegesV2::new(false, false, false),
+                        "aliases carry no second privilege truth"
+                    );
+                    if child_privilege_facts(frame, relative)
+                        .expect("FrameSpec privilege")
+                        .signer
+                    {
+                        repeated_signer = true;
+                        assert_eq!(
+                            general_account_profile_rule_v3(action, representative, WIDTHS)
+                                .expect("prior physical representative")
+                                .rule
+                                .privileges,
+                            physical_role_privileges(action, role).expect("physical union"),
+                        );
+                    }
+                }
+            }
             assert!(aliases > 0);
+            assert!(
+                repeated_signer,
+                "fixture must exercise repeated signed child roles"
+            );
         }
     }
 
