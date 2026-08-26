@@ -23,9 +23,9 @@ use dclutch_product_runtime_v2_operator::{
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1;
-use dclutch_registry_svm::RegistryInstructionV1;
+use dclutch_registry_svm::{REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1, RegistryInstructionV1};
 use dclutch_release_set_contract::{
-    ArtifactReleaseIdV1, InitializeProtocolInfrastructureV1,
+    ArtifactReleaseIdV1, ExecutionRoleV1, InitializeProtocolInfrastructureV1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1,
     ProtocolInfrastructureProfileV1,
 };
@@ -242,7 +242,11 @@ pub(crate) fn execute(spec_path: &Path) -> Result<()> {
     }
     transactions.push(rpc.send_expected_failure(
         "immutable release activation refuses pre-revocation Core",
-        &[activation_instruction(&plan, authority.pubkey())?],
+        &[role_activation_instruction(
+            &plan,
+            authority.pubkey(),
+            ExecutionRoleV1::Core,
+        )?],
         &authority,
     )?);
     if rpc.account(activation)?.is_some() {
@@ -261,11 +265,9 @@ pub(crate) fn execute(spec_path: &Path) -> Result<()> {
     )?);
     verify_core_programdata(&mut rpc, &plan)?;
 
-    transactions.push(rpc.send(
-        "activate immutable five-role release set",
-        &[activation_instruction(&plan, authority.pubkey())?],
-        &authority,
-    )?);
+    for (label, instruction) in activation_instructions(&plan, authority.pubkey())? {
+        transactions.push(rpc.send(label, &[instruction], &authority)?);
+    }
     verify_activation(&mut rpc, &plan)?;
 
     let rollback_recipient = Pubkey::new_unique();
@@ -273,8 +275,9 @@ pub(crate) fn execute(spec_path: &Path) -> Result<()> {
     if rpc.account(rollback_recipient)?.is_some() {
         return Err(Error::new("rollback recipient unexpectedly existed"));
     }
-    let mut late_activation = activation_instruction(&plan, authority.pubkey())?;
-    substitute_last_role_programdata(&mut late_activation, pubkey(&plan.core.programdata_id)?)?;
+    let mut late_activation =
+        role_activation_instruction(&plan, authority.pubkey(), ExecutionRoleV1::Custody)?;
+    substitute_role_programdata(&mut late_activation, pubkey(&plan.core.programdata_id)?)?;
     let late_failure = rpc.send_expected_failure(
         "late activation substitution rolls back prior transfer",
         &[
@@ -419,58 +422,93 @@ fn initialize_instruction(
     })
 }
 
-fn activation_instruction(plan: &SuccessorPlan, payer: Pubkey) -> Result<Instruction> {
+/// Canonical order in which the release set is walked up, one role per
+/// transaction.
+const ACTIVATION_ROLES_V1: [ExecutionRoleV1; 5] = [
+    ExecutionRoleV1::Core,
+    ExecutionRoleV1::Claims,
+    ExecutionRoleV1::Trading,
+    ExecutionRoleV1::Resolution,
+    ExecutionRoleV1::Custody,
+];
+
+/// Exact ten-account frame admitting one role into the shared activation cache.
+///
+/// Activation is one role per transaction: whole-ELF hashing costs about one
+/// compute unit per two bytes, and the real seven artifacts total roughly
+/// 4.2 MB, so a five-role transaction cannot fit under the 1,400,000 maximum.
+fn role_activation_instruction(
+    plan: &SuccessorPlan,
+    payer: Pubkey,
+    role: ExecutionRoleV1,
+) -> Result<Instruction> {
     let release_set = record(plan, "execution_release_set")?;
-    let mut accounts = vec![
+    let (label, pin) = match role {
+        ExecutionRoleV1::Core => ("core_artifact_release", &plan.core),
+        ExecutionRoleV1::Claims => ("claims_artifact_release", &plan.claims),
+        ExecutionRoleV1::Trading => ("trading_artifact_release", &plan.trading),
+        ExecutionRoleV1::Resolution => ("resolution_artifact_release", &plan.resolution),
+        ExecutionRoleV1::Custody => ("custody_artifact_release", &plan.custody),
+    };
+    let pair = record(plan, label)?;
+    let accounts = vec![
         AccountMeta::new(payer, true),
         AccountMeta::new(pubkey(&plan.activation)?, false),
         AccountMeta::new_readonly(release_set.0, false),
         AccountMeta::new_readonly(release_set.1, false),
-    ];
-    for (label, pin) in [
-        ("core_artifact_release", &plan.core),
-        ("claims_artifact_release", &plan.claims),
-        ("trading_artifact_release", &plan.trading),
-        ("resolution_artifact_release", &plan.resolution),
-        ("custody_artifact_release", &plan.custody),
-    ] {
-        let pair = record(plan, label)?;
-        accounts.extend([
-            AccountMeta::new_readonly(pair.0, false),
-            AccountMeta::new_readonly(pair.1, false),
-            AccountMeta::new_readonly(pubkey(&pin.program_id)?, false),
-            AccountMeta::new_readonly(pubkey(&pin.programdata_id)?, false),
-        ]);
-    }
-    accounts.extend([
+        AccountMeta::new_readonly(pair.0, false),
+        AccountMeta::new_readonly(pair.1, false),
+        AccountMeta::new_readonly(pubkey(&pin.program_id)?, false),
+        AccountMeta::new_readonly(pubkey(&pin.programdata_id)?, false),
         AccountMeta::new_readonly(system_program::ID, false),
         AccountMeta::new_readonly(sysvar::rent::ID, false),
-    ]);
-    if accounts.len() != 26 {
+    ];
+    if accounts.len() != REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1 {
         return Err(Error::new(
-            "internal Registry activation frame was not exact26",
+            "internal Registry role-activation frame was not exact ten",
         ));
     }
     Ok(Instruction {
         program_id: pubkey(&plan.registry.program_id)?,
         accounts,
-        data: RegistryInstructionV1::Activate.to_bytes().to_vec(),
+        data: RegistryInstructionV1::ActivateRole(role).to_bytes().to_vec(),
     })
 }
 
-fn substitute_last_role_programdata(
-    instruction: &mut Instruction,
-    replacement: Pubkey,
-) -> Result<()> {
-    if instruction.accounts.len() != 26 {
-        return Err(Error::new("late-failure probe requires exact26 activation"));
+/// Ordered per-role activation instructions with a human label for each.
+fn activation_instructions(
+    plan: &SuccessorPlan,
+    payer: Pubkey,
+) -> Result<Vec<(&'static str, Instruction)>> {
+    let mut ordered = Vec::with_capacity(ACTIVATION_ROLES_V1.len());
+    for role in ACTIVATION_ROLES_V1 {
+        ordered.push((
+            match role {
+                ExecutionRoleV1::Core => "activate immutable release-set role: Core",
+                ExecutionRoleV1::Claims => "activate immutable release-set role: Claims",
+                ExecutionRoleV1::Trading => "activate immutable release-set role: Trading",
+                ExecutionRoleV1::Resolution => "activate immutable release-set role: Resolution",
+                ExecutionRoleV1::Custody => "activate immutable release-set role: Custody",
+            },
+            role_activation_instruction(plan, payer, role)?,
+        ));
+    }
+    Ok(ordered)
+}
+
+/// Replace the role ProgramData coordinate of one ten-account activation.
+fn substitute_role_programdata(instruction: &mut Instruction, replacement: Pubkey) -> Result<()> {
+    if instruction.accounts.len() != REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1 {
+        return Err(Error::new(
+            "late-failure probe requires an exact ten-account role activation",
+        ));
     }
     let meta = instruction
         .accounts
-        .get_mut(23)
-        .ok_or_else(|| Error::new("activation omitted Custody ProgramData"))?;
+        .get_mut(7)
+        .ok_or_else(|| Error::new("activation omitted role ProgramData"))?;
     if meta.is_signer || meta.is_writable {
-        return Err(Error::new("Custody ProgramData meta had privileges"));
+        return Err(Error::new("role ProgramData meta had privileges"));
     }
     meta.pubkey = replacement;
     Ok(())
@@ -1140,25 +1178,34 @@ mod tests {
     }
 
     #[test]
-    fn late_failure_substitution_only_replaces_custody_programdata() {
+    fn late_failure_substitution_only_replaces_role_programdata() {
         let original = Pubkey::new_unique();
         let replacement = Pubkey::new_unique();
         let mut instruction = Instruction {
+            program_id: Pubkey::new_unique(),
+            accounts: (0..REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1)
+                .map(|_| AccountMeta::new_readonly(original, false))
+                .collect(),
+            data: Vec::new(),
+        };
+        substitute_role_programdata(&mut instruction, replacement).expect("substitute");
+        assert_eq!(instruction.accounts[7].pubkey, replacement);
+        assert!(
+            instruction
+                .accounts
+                .iter()
+                .enumerate()
+                .all(|(index, meta)| index == 7 || meta.pubkey == original)
+        );
+        // The retired 26-account five-role frame is refused, not reinterpreted.
+        let mut retired = Instruction {
             program_id: Pubkey::new_unique(),
             accounts: (0..26)
                 .map(|_| AccountMeta::new_readonly(original, false))
                 .collect(),
             data: Vec::new(),
         };
-        substitute_last_role_programdata(&mut instruction, replacement).expect("substitute");
-        assert_eq!(instruction.accounts[23].pubkey, replacement);
-        assert!(
-            instruction
-                .accounts
-                .iter()
-                .enumerate()
-                .all(|(index, meta)| index == 23 || meta.pubkey == original)
-        );
+        assert!(substitute_role_programdata(&mut retired, replacement).is_err());
     }
 
     #[test]
@@ -1423,7 +1470,10 @@ mod tests {
         verify_profile(&mut rpc, &plan).expect("real-SBF profile");
         rpc.send_expected_failure(
             "real-SBF activation before revoke",
-            &[activation_instruction(&plan, authority.pubkey()).expect("pre-revoke activation")],
+            &[
+                role_activation_instruction(&plan, authority.pubkey(), ExecutionRoleV1::Core)
+                    .expect("pre-revoke activation"),
+            ],
             &authority,
         )
         .expect("pre-revoke activation refuses");
@@ -1443,12 +1493,12 @@ mod tests {
         )
         .expect("real-SBF Core revoke");
         verify_core_programdata(&mut rpc, &plan).expect("real-SBF Core poststate");
-        rpc.send(
-            "real-SBF Registry activation",
-            &[activation_instruction(&plan, authority.pubkey()).expect("activation")],
-            &authority,
-        )
-        .expect("real-SBF activation succeeds");
+        for (label, instruction) in
+            activation_instructions(&plan, authority.pubkey()).expect("activation walk-up")
+        {
+            rpc.send(label, &[instruction], &authority)
+                .expect("real-SBF role activation succeeds");
+        }
         verify_activation(&mut rpc, &plan).expect("real-SBF activation cache");
 
         let mut publication_transactions = Vec::new();
@@ -1495,8 +1545,9 @@ mod tests {
             .required_account(authority.pubkey(), "real-SBF authority")
             .expect("authority prestate");
         let mut late_activation =
-            activation_instruction(&plan, authority.pubkey()).expect("late activation");
-        substitute_last_role_programdata(
+            role_activation_instruction(&plan, authority.pubkey(), ExecutionRoleV1::Custody)
+                .expect("late activation");
+        substitute_role_programdata(
             &mut late_activation,
             pubkey(&plan.core.programdata_id).expect("substitution key"),
         )

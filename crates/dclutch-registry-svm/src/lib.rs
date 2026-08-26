@@ -26,6 +26,11 @@ pub const LOADER_V3_PROGRAM_BYTES: usize = 36;
 pub const LOADER_V3_PROGRAMDATA_METADATA_BYTES: usize = 45;
 /// Exact Registry instruction width.
 pub const REGISTRY_INSTRUCTION_BYTES_V1: usize = 16;
+/// Exact account count consumed by activation of one release-set role.
+///
+/// `payer, cache, release-set record, release-set staging, artifact record,
+/// artifact staging, role Program, role ProgramData, System, Rent`.
+pub const REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1: usize = 10;
 /// Exact authenticated-role receipt width.
 pub const AUTHENTICATED_ROLE_RECEIPT_BYTES_V1: usize = 144;
 /// Registry instruction magic.
@@ -88,12 +93,25 @@ impl From<dclutch_core_contract::Error> for Error {
 pub type Result<T> = core::result::Result<T, Error>;
 
 /// Exact Registry instruction.
+///
+/// Activation is per role. The retired five-role `Activate` hashed five whole
+/// ProgramData ELFs in one transaction, which the real seven-artifact release
+/// set cannot fit under the chain compute maximum.
+///
+/// Action `0` is reused, because this magic is shared with the record family
+/// (`dclutch_record_contract::RECORD_INSTRUCTION_MAGIC_V1`), which owns every
+/// action from `2` upward; the Registry side of that split has exactly actions
+/// `0` and `1` to spend. The retired wire was action `0` with a role byte
+/// required to be zero, so it now names `ActivateRole(Core)`: strictly *less*
+/// authority than it used to claim, never more, and its 26-account frame is
+/// refused by the ten-account route. The role byte at
+/// `ROLE_OFFSET` is now meaningful for both actions.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RegistryInstructionV1 {
-    /// Authenticate five finalized artifact releases and create their cache.
-    Activate,
     /// Reauthenticate one cached role against its current Loader deployment.
     Reauthenticate(ExecutionRoleV1),
+    /// Authenticate one finalized artifact release into the shared cache.
+    ActivateRole(ExecutionRoleV1),
 }
 
 impl RegistryInstructionV1 {
@@ -108,8 +126,7 @@ impl RegistryInstructionV1 {
         let action = read_byte(bytes, ACTION_OFFSET)?;
         let role = read_byte(bytes, ROLE_OFFSET)?;
         match action {
-            0 if role == 0 => Ok(Self::Activate),
-            0 => Err(Error::NonCanonicalReservedBytes),
+            0 => Ok(Self::ActivateRole(decode_role(role)?)),
             1 => Ok(Self::Reauthenticate(decode_role(role)?)),
             _ => Err(Error::UnknownAction),
         }
@@ -125,9 +142,11 @@ impl RegistryInstructionV1 {
             &REGISTRY_WIRE_SCHEMA_V1.to_le_bytes(),
         );
         match self {
-            Self::Activate => {}
             Self::Reauthenticate(role) => {
                 set(&mut output, ACTION_OFFSET, 1);
+                set(&mut output, ROLE_OFFSET, role_byte(role));
+            }
+            Self::ActivateRole(role) => {
                 set(&mut output, ROLE_OFFSET, role_byte(role));
             }
         }

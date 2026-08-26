@@ -6,10 +6,18 @@
 //!
 //! This program is the sole writer of the release-set activation cache. It
 //! authenticates finalized headerless records, parses current Loader V3 state,
-//! hashes each complete deployed ELF tail, invokes the SDK-free Registry
-//! contract once, and persists only that derived result. Capability programs
-//! may CPI into the read-only reauthentication route and consume its fixed
-//! return-data receipt after checking this program as the producer.
+//! hashes the complete deployed ELF tail of the role being admitted, invokes
+//! the SDK-free Registry contract once, and persists only that derived result.
+//! Capability programs may CPI into the read-only reauthentication route and
+//! consume its fixed return-data receipt after checking this program as the
+//! producer.
+//!
+//! Activation admits **one role per transaction**. Whole-ELF hashing costs
+//! about one compute unit per two bytes, so admitting five real multi-hundred-
+//! kilobyte artifacts in one transaction cannot fit under the chain compute
+//! maximum. The activation cache was already an incrementally written,
+//! idempotent, alias-checked buffer, and a partially written cache cannot
+//! `decode`, so no reader can consume a half-activated release set.
 
 extern crate std;
 
@@ -20,11 +28,13 @@ use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_BYTES_V1,
     ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1, ArtifactActivationInputV1,
-    ArtifactReleaseV1, DeploymentObservationV1, activate_execution_role_into_v1,
+    ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
+    activate_execution_role_into_v1, immutable_release_elf_digest_v1,
     initialize_activation_cache_v1,
 };
 use dclutch_registry_svm::{
-    AuthenticatedRoleReceiptV1, ProgramDataV3View, ProgramV3View, RegistryInstructionV1,
+    AuthenticatedRoleReceiptV1, ProgramDataV3View, ProgramV3View,
+    REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1, RegistryInstructionV1,
 };
 use dclutch_release_set_contract::{
     EXECUTION_RELEASE_SET_BYTES_V1, EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1,
@@ -48,8 +58,6 @@ mod continuation_v1;
 mod hot_continuation_v2;
 mod record_v1;
 
-/// Exact account count for permissionless release-set activation.
-pub const ACTIVATE_ACCOUNT_COUNT_V1: usize = 26;
 /// Exact account count for one read-only role reauthentication.
 pub const REAUTHENTICATE_ACCOUNT_COUNT_V1: usize = 3;
 
@@ -138,7 +146,9 @@ pub fn process_instruction(
         return batch_v2::process(program_id, accounts, instruction_data);
     }
     match RegistryInstructionV1::decode(instruction_data).map_err(|_| RegistryError::Instruction)? {
-        RegistryInstructionV1::Activate => process_activate(program_id, accounts),
+        RegistryInstructionV1::ActivateRole(role) => {
+            process_activate_role(program_id, accounts, role)
+        }
         RegistryInstructionV1::Reauthenticate(role) => {
             process_reauthenticate(program_id, accounts, role)
         }
@@ -146,8 +156,12 @@ pub fn process_instruction(
 }
 
 #[inline(never)]
-fn process_activate(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -> ProgramResult {
-    if accounts.len() != ACTIVATE_ACCOUNT_COUNT_V1 {
+fn process_activate_role(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    role: ExecutionRoleV1,
+) -> ProgramResult {
+    if accounts.len() != REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1 {
         return Err(RegistryError::AccountFrame.into());
     }
     let mut iterator = accounts.iter();
@@ -155,35 +169,15 @@ fn process_activate(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -> Progra
     let cache = next(&mut iterator)?;
     let release_set_record = next(&mut iterator)?;
     let release_set_staging = next(&mut iterator)?;
-    let core = role_frame(&mut iterator)?;
-    let claims = role_frame(&mut iterator)?;
-    let trading = role_frame(&mut iterator)?;
-    let resolution = role_frame(&mut iterator)?;
-    let custody = role_frame(&mut iterator)?;
+    let frame = role_frame(&mut iterator)?;
     let system = next(&mut iterator)?;
     let rent_sysvar = next(&mut iterator)?;
-    validate_activate_privileges(
-        payer,
-        cache,
-        system,
-        rent_sysvar,
-        [core, claims, trading, resolution, custody],
-    )?;
+    validate_activate_role_privileges(payer, cache, system, rent_sysvar, frame)?;
     let rent = authenticate_rent_and_system(system, rent_sysvar)?;
-    let (release_set_id, release_set) = authenticate_release_set_record(
-        program_id,
-        release_set_record,
-        release_set_staging,
-        &rent,
-    )?;
+    let (release_set_id, release_set) =
+        authenticate_release_set_record(program_id, release_set_record, release_set_staging, &rent)?;
     let created =
         ensure_activation_cache_account(program_id, payer, cache, system, &rent, release_set_id)?;
-    let frames = [core, claims, trading, resolution, custody];
-    if !created {
-        let existing = cache.try_borrow_data().map_err(|_| RegistryError::Borrow)?;
-        authenticate_existing_cache(program_id, cache, &existing, release_set_id, &release_set)?;
-        drop(existing);
-    }
     let mut output = cache
         .try_borrow_mut_data()
         .map_err(|_| RegistryError::Borrow)?;
@@ -191,53 +185,39 @@ fn process_activate(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -> Progra
         initialize_activation_cache_v1(&mut output, release_set_id)
             .map_err(|_| RegistryError::ActivationCache)?;
     }
+    // `activate_execution_role_into_v1` revalidates the cache header and refuses
+    // unless the buffer already names exactly `release_set_id`, so a cache opened
+    // for one release set can never accumulate roles from another. It also refuses
+    // a conflicting rewrite of this slot or of any aliased role.
     activate_and_write_role(
         program_id,
         &mut output,
         release_set_id,
         &release_set,
         &rent,
-        ExecutionRoleV1::Core,
-        role_at(&frames, 0)?,
+        role,
+        frame,
     )?;
-    activate_and_write_role(
-        program_id,
-        &mut output,
-        release_set_id,
-        &release_set,
-        &rent,
-        ExecutionRoleV1::Claims,
-        role_at(&frames, 1)?,
-    )?;
-    activate_and_write_role(
-        program_id,
-        &mut output,
-        release_set_id,
-        &release_set,
-        &rent,
-        ExecutionRoleV1::Trading,
-        role_at(&frames, 2)?,
-    )?;
-    activate_and_write_role(
-        program_id,
-        &mut output,
-        release_set_id,
-        &release_set,
-        &rent,
-        ExecutionRoleV1::Resolution,
-        role_at(&frames, 3)?,
-    )?;
-    activate_and_write_role(
-        program_id,
-        &mut output,
-        release_set_id,
-        &release_set,
-        &rent,
-        ExecutionRoleV1::Custody,
-        role_at(&frames, 4)?,
-    )?;
-    let completed = ActivatedExecutionReleaseSetViewV1::decode(&output)
-        .map_err(|_| RegistryError::ActivationCache)?;
+    require_consistent_completion(&output, release_set_id, &release_set)
+}
+
+/// Refuse a *completed* cache that does not project to the selected release set.
+///
+/// A cache with any role slot still unwritten cannot `decode`, so no reader can
+/// consume it; leaving one in place between activation transactions is the whole
+/// point of per-role admission. Once the final role lands the buffer becomes
+/// readable, and at that instant it must name exactly the finalized release set
+/// this transaction authenticated. Every slot was written under that same
+/// selection, so this is a belt on a fact the write path already enforces, not
+/// the safety argument for it.
+fn require_consistent_completion(
+    output: &[u8],
+    release_set_id: ContentId,
+    release_set: &ExecutionReleaseSetV1,
+) -> ProgramResult {
+    let Ok(completed) = ActivatedExecutionReleaseSetViewV1::decode(output) else {
+        return Ok(());
+    };
     if completed
         .execution_release_set_id()
         .map_err(|_| RegistryError::ActivationCache)?
@@ -245,7 +225,7 @@ fn process_activate(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -> Progra
         || completed
             .release_set_projection()
             .map_err(|_| RegistryError::ActivationCache)?
-            != release_set
+            != *release_set
     {
         return Err(RegistryError::ActivationCache.into());
     }
@@ -285,7 +265,7 @@ fn process_reauthenticate(
         .role(role)
         .map_err(|_| RegistryError::ActivationCache)?;
     let release = activated_role.release();
-    let observation = deployment_observation(program, programdata, release)?;
+    let observation = cached_role_deployment_observation(program, programdata, release)?;
     activated_role
         .authenticate_current_deployment(observation)
         .map_err(|_| RegistryError::Deployment)?;
@@ -364,6 +344,102 @@ fn authenticate_artifact_role(
     ))
 }
 
+/// Observe one deployment already admitted into the activation cache.
+///
+/// Activation hashed this artifact's complete ELF once, before the cache
+/// persisted `release`. `immutable_release_elf_digest_v1` owns the argument
+/// that an immutable Loader V3 deployment's admitted digest is therefore still
+/// its exact current digest: the release must be `Immutable`, carry no upgrade
+/// authority, and the observed ProgramData must currently carry none either.
+/// Re-hashing a multi-hundred-kilobyte ELF on every recurring reauthentication
+/// recomputes an already authenticated fact, and at about one compute unit per
+/// two bytes that single hash was the whole reason canonical Found exceeded the
+/// chain compute maximum.
+///
+/// This is strictly stronger than hashing, not weaker: the fast path *requires*
+/// the immutable policy and an absent live upgrade authority, which the hashing
+/// path never demanded on its own. An `ExactAuthority` release has no such
+/// guarantee and keeps the full current-ELF hash. Identity, link, ownership,
+/// executability, deployment slot, and authority are rechecked either way by
+/// `authenticate_deployment`.
+fn cached_role_deployment_observation(
+    program: &AccountInfo<'_>,
+    programdata: &AccountInfo<'_>,
+    release: ArtifactReleaseV1,
+) -> Result<DeploymentObservationV1, ProgramError> {
+    match release.upgrade_policy() {
+        ArtifactUpgradePolicyV1::Immutable => {
+            immutable_deployment_observation(program, programdata, release)
+        }
+        ArtifactUpgradePolicyV1::ExactAuthority => {
+            deployment_observation(program, programdata, release)
+        }
+    }
+}
+
+/// Observe one immutable deployment without re-hashing its complete ELF.
+///
+/// Only callable for a release the activation cache already admitted; see
+/// [`cached_role_deployment_observation`] for the argument. First admission
+/// must still use [`deployment_observation`], because the claimed digest of a
+/// finalized artifact-release record is checked against the deployed bytes
+/// exactly once, there.
+fn immutable_deployment_observation(
+    program: &AccountInfo<'_>,
+    programdata: &AccountInfo<'_>,
+    release: ArtifactReleaseV1,
+) -> Result<DeploymentObservationV1, ProgramError> {
+    if release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
+        || release.upgrade_authority().is_some()
+        || program.key.to_bytes() != release.program().to_bytes()
+        || programdata.key.to_bytes() != release.programdata()
+        || program.owner != &bpf_loader_upgradeable::ID
+        || programdata.owner != &bpf_loader_upgradeable::ID
+        || !program.executable
+        || programdata.executable
+    {
+        return Err(RegistryError::Deployment.into());
+    }
+    let program_bytes = program
+        .try_borrow_data()
+        .map_err(|_| RegistryError::Borrow)?;
+    let program_view =
+        ProgramV3View::parse(&program_bytes).map_err(|_| RegistryError::Deployment)?;
+    let derived =
+        Pubkey::find_program_address(&[program.key.as_ref()], &bpf_loader_upgradeable::ID).0;
+    if program_view.programdata() != release.programdata() || programdata.key != &derived {
+        return Err(RegistryError::Deployment.into());
+    }
+    drop(program_bytes);
+    let programdata_bytes = programdata
+        .try_borrow_data()
+        .map_err(|_| RegistryError::Borrow)?;
+    let programdata_view =
+        ProgramDataV3View::parse(&programdata_bytes).map_err(|_| RegistryError::Deployment)?;
+    let elf_digest = immutable_release_elf_digest_v1(release, programdata_view.upgrade_authority())
+        .map_err(|_| RegistryError::Deployment)?;
+    DeploymentObservationV1::new(
+        program.key.to_bytes(),
+        program.owner.to_bytes(),
+        program.executable,
+        programdata.key.to_bytes(),
+        programdata.owner.to_bytes(),
+        programdata.executable,
+        program_view.programdata(),
+        bpf_loader_upgradeable::ID.to_bytes(),
+        programdata_view.deployment_slot(),
+        elf_digest,
+        None,
+    )
+    .map_err(|_| RegistryError::Deployment.into())
+}
+
+/// Observe one deployment by hashing its complete current ELF tail.
+///
+/// This is first admission: the claimed `elf_digest` of a finalized
+/// artifact-release record is an attacker-publishable assertion until it is
+/// checked against the bytes actually deployed, and this is the sole site that
+/// checks it. It must never be replaced by a cached-digest fast path.
 fn deployment_observation(
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
@@ -487,30 +563,6 @@ fn authenticate_cache_identity(
     Ok(())
 }
 
-fn authenticate_existing_cache(
-    program_id: &Pubkey,
-    cache: &AccountInfo<'_>,
-    bytes: &[u8],
-    release_set_id: ContentId,
-    release_set: &ExecutionReleaseSetV1,
-) -> ProgramResult {
-    let activated = ActivatedExecutionReleaseSetViewV1::decode(bytes)
-        .map_err(|_| RegistryError::ActivationCache)?;
-    authenticate_cache_identity(program_id, cache, activated)?;
-    if activated
-        .execution_release_set_id()
-        .map_err(|_| RegistryError::ActivationCache)?
-        != release_set_id
-        || activated
-            .release_set_projection()
-            .map_err(|_| RegistryError::ActivationCache)?
-            != *release_set
-    {
-        return Err(RegistryError::ActivationCache.into());
-    }
-    Ok(())
-}
-
 fn ensure_activation_cache_account<'a>(
     program_id: &Pubkey,
     payer: &AccountInfo<'a>,
@@ -568,12 +620,12 @@ fn ensure_activation_cache_account<'a>(
     Ok(true)
 }
 
-fn validate_activate_privileges(
+fn validate_activate_role_privileges(
     payer: &AccountInfo<'_>,
     cache: &AccountInfo<'_>,
     system: &AccountInfo<'_>,
     rent: &AccountInfo<'_>,
-    frames: [RoleFrame<'_, '_>; 5],
+    frame: RoleFrame<'_, '_>,
 ) -> ProgramResult {
     if !payer.is_signer
         || !payer.is_writable
@@ -590,22 +642,20 @@ fn validate_activate_privileges(
     {
         return Err(RegistryError::AccountFrame.into());
     }
-    for frame in frames {
-        if frame.artifact_record.is_signer
-            || frame.artifact_record.is_writable
-            || frame.artifact_record.executable
-            || frame.artifact_staging.is_signer
-            || frame.artifact_staging.is_writable
-            || frame.artifact_staging.executable
-            || frame.program.is_signer
-            || frame.program.is_writable
-            || !frame.program.executable
-            || frame.programdata.is_signer
-            || frame.programdata.is_writable
-            || frame.programdata.executable
-        {
-            return Err(RegistryError::AccountFrame.into());
-        }
+    if frame.artifact_record.is_signer
+        || frame.artifact_record.is_writable
+        || frame.artifact_record.executable
+        || frame.artifact_staging.is_signer
+        || frame.artifact_staging.is_writable
+        || frame.artifact_staging.executable
+        || frame.program.is_signer
+        || frame.program.is_writable
+        || !frame.program.executable
+        || frame.programdata.is_signer
+        || frame.programdata.is_writable
+        || frame.programdata.executable
+    {
+        return Err(RegistryError::AccountFrame.into());
     }
     Ok(())
 }
@@ -636,16 +686,6 @@ where
         program: next(iterator)?,
         programdata: next(iterator)?,
     })
-}
-
-fn role_at<'accounts, 'info>(
-    roles: &[RoleFrame<'accounts, 'info>; 5],
-    index: usize,
-) -> Result<RoleFrame<'accounts, 'info>, ProgramError> {
-    roles
-        .get(index)
-        .copied()
-        .ok_or_else(|| RegistryError::AccountFrame.into())
 }
 
 fn next<'accounts, 'info, I>(
