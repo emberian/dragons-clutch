@@ -6,6 +6,7 @@
 //! from authenticated state. This module signs and submits nothing.
 
 use dclutch_core_contract::ContentId;
+use dclutch_series_v3_kernel::plan::{SeriesReplayActionV3, evaluate_replay_v3};
 
 use super::{
     AdmittedOccurrenceV3, AdmittedTicketV3, SeriesV3Error, TemplateV3, admit_occurrence,
@@ -15,7 +16,7 @@ use super::{
         SERIES_ACTION_MAXIMUM_PROOF_HEIGHT_V3, SeriesActionRequestV3, SeriesActionV3,
         encode_series_action_header_v3,
     },
-    state::{SeriesStateV3, TicketPhaseV3, TicketStateV3},
+    state::{SeriesStateV3, TicketStateV3},
     template_content_id,
 };
 
@@ -124,10 +125,14 @@ pub fn build_prepare_v3(
     {
         return Err(SeriesOperatorErrorV3::Schedule);
     }
-    snapshot
-        .series
-        .prepare_ticket(snapshot.series.revision())
-        .map_err(|_| SeriesOperatorErrorV3::Replay)?;
+    preflight_replay(
+        occurrence.template(),
+        snapshot.series,
+        None,
+        SeriesReplayActionV3::Prepare {
+            ticket_record: ticket.content_id(),
+        },
+    )?;
     build_occurrence(
         SeriesActionV3::Prepare,
         occurrence,
@@ -151,16 +156,15 @@ pub fn build_consume_v3(
     if snapshot.now_slot < scheduled || snapshot.now_slot > retry {
         return Err(SeriesOperatorErrorV3::Schedule);
     }
-    snapshot
-        .series
-        .settle_current(
-            snapshot.series.revision(),
-            occurrence.template().occurrence_count(),
-        )
-        .map_err(|_| SeriesOperatorErrorV3::Replay)?;
-    ticket_state
-        .settle(ticket_state.revision(), TicketPhaseV3::Consumed)
-        .map_err(|_| SeriesOperatorErrorV3::Replay)?;
+    preflight_replay(
+        occurrence.template(),
+        snapshot.series,
+        Some(ticket_state),
+        SeriesReplayActionV3::Consume {
+            ticket_record: ticket.content_id(),
+            expected_ticket_revision: ticket_state.revision(),
+        },
+    )?;
     build_occurrence(
         SeriesActionV3::Consume,
         occurrence,
@@ -184,16 +188,15 @@ pub fn build_expire_v3(
     {
         return Err(SeriesOperatorErrorV3::Schedule);
     }
-    snapshot
-        .series
-        .settle_current(
-            snapshot.series.revision(),
-            occurrence.template().occurrence_count(),
-        )
-        .map_err(|_| SeriesOperatorErrorV3::Replay)?;
-    ticket_state
-        .settle(ticket_state.revision(), TicketPhaseV3::Expired)
-        .map_err(|_| SeriesOperatorErrorV3::Replay)?;
+    preflight_replay(
+        occurrence.template(),
+        snapshot.series,
+        Some(ticket_state),
+        SeriesReplayActionV3::Expire {
+            ticket_record: ticket.content_id(),
+            expected_ticket_revision: ticket_state.revision(),
+        },
+    )?;
     build_occurrence(
         SeriesActionV3::Expire,
         occurrence,
@@ -216,10 +219,16 @@ pub fn build_retire_v3(
     {
         return Err(SeriesOperatorErrorV3::Replay);
     }
-    snapshot
-        .series
-        .retire_ticket(snapshot.series.revision())
-        .map_err(|_| SeriesOperatorErrorV3::Replay)?;
+    let template = TemplateV3::decode(snapshot.template_bytes)?;
+    preflight_replay(
+        template,
+        snapshot.series,
+        Some(snapshot.ticket_state),
+        SeriesReplayActionV3::Retire {
+            ticket_record: ticket.content_id(),
+            expected_ticket_revision: snapshot.ticket_state.revision(),
+        },
+    )?;
     build(
         SeriesActionV3::Retire,
         template_id,
@@ -237,13 +246,7 @@ pub fn build_close_v3(
 ) -> Result<UnsignedSeriesActionV3, SeriesOperatorErrorV3> {
     let template_id = template_content_id(snapshot.template_bytes)?;
     let template = TemplateV3::decode(snapshot.template_bytes)?;
-    snapshot
-        .series
-        .admit_close(snapshot.series.revision())
-        .map_err(|_| SeriesOperatorErrorV3::Replay)?;
-    if template.occurrence_count() != snapshot.series.next_occurrence() {
-        return Err(SeriesOperatorErrorV3::Replay);
-    }
+    preflight_replay(template, snapshot.series, None, SeriesReplayActionV3::Close)?;
     build(
         SeriesActionV3::Close,
         template_id,
@@ -264,6 +267,28 @@ fn require_ticket_state(
         return Err(SeriesOperatorErrorV3::Replay);
     }
     Ok(state)
+}
+
+fn preflight_replay(
+    template: TemplateV3,
+    series: SeriesStateV3,
+    ticket: Option<TicketStateV3>,
+    action: SeriesReplayActionV3,
+) -> Result<(), SeriesOperatorErrorV3> {
+    let occurrence_count = template.occurrence_count();
+    let series_bytes = series
+        .encode(occurrence_count)
+        .map_err(|_| SeriesOperatorErrorV3::Replay)?;
+    let ticket_bytes = ticket.map(TicketStateV3::encode);
+    evaluate_replay_v3(
+        action,
+        occurrence_count,
+        series.revision(),
+        &series_bytes,
+        ticket_bytes.as_ref().map(<[u8; 64]>::as_slice),
+    )
+    .map_err(|_| SeriesOperatorErrorV3::Replay)?;
+    Ok(())
 }
 
 fn build_occurrence(
