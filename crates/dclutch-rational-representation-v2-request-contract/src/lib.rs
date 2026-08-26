@@ -13,11 +13,17 @@
 
 #[allow(missing_docs)]
 pub mod generated;
+mod open_hot_v3;
 mod request;
 
 pub use generated::{
     ASSET_BYTES_V2, PHYSICAL_ABI_VERSION_V2, RECEIPT_BYTES_V2, RECEIPT_MAGIC_V2,
     REQUEST_HEADER_BYTES_V2, REQUEST_MAGIC_V2,
+};
+pub use open_hot_v3::{
+    OPEN_REPRESENTATION_HOT_MAGIC_V3, OPEN_REPRESENTATION_HOT_REQUEST_SCHEMA_ID_V3,
+    OPEN_REPRESENTATION_HOT_REQUEST_SCHEMA_PREIMAGE_V3, OPEN_REPRESENTATION_HOT_VERSION_V3,
+    OpenRepresentationHotRequestV3,
 };
 pub use request::{
     AssetV2, CallerRoleV2, RepresentationActionV2, RepresentationRequestHeaderV2,

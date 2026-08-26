@@ -15,8 +15,9 @@ use dclutch_rational_representation_v2_lifecycle_contract::{
     LifecycleRequestV2,
 };
 use dclutch_rational_representation_v2_request_contract::{
-    CallerRoleV2 as RepresentationCallerRoleV2,
-    REQUEST_MAGIC_V2 as REPRESENTATION_REQUEST_MAGIC_V2, RepresentationRequestV2,
+    CallerRoleV2 as RepresentationCallerRoleV2, RATIONAL_ASSET_ACCOUNT_COUNT_V2,
+    RATIONAL_BASE_ACCOUNT_COUNT_V2, REQUEST_MAGIC_V2 as REPRESENTATION_REQUEST_MAGIC_V2,
+    RepresentationRequestV2,
 };
 
 use crate::{
@@ -531,7 +532,7 @@ fn validate_rational_representation_route(
     request: &[u8],
     parent: ClaimsCompositionParentV3,
 ) -> Result<(), ClaimsCompositionErrorV3> {
-    if kind != RouteKindV3::Once || state != CompositionStateV3::Start {
+    if state != CompositionStateV3::Start {
         return Err(ClaimsCompositionErrorV3::Order);
     }
     let decoded =
@@ -545,13 +546,24 @@ fn validate_rational_representation_route(
     {
         return Err(ClaimsCompositionErrorV3::ParentBinding);
     }
-    let expected_accounts = decoded
-        .physical_account_count()
-        .map_err(|_| ClaimsCompositionErrorV3::Route)?;
-    if usize::from(invocation.fixed_account_count) != expected_accounts
-        || invocation.item_account_count != 0
-        || invocation.repeated_item_count != 0
-        || invocation.borrowed_witness.is_some()
+    if invocation.borrowed_witness.is_some() {
+        return Err(ClaimsCompositionErrorV3::Route);
+    }
+    if header.action.selected_outcome() {
+        let expected_accounts = decoded
+            .physical_account_count()
+            .map_err(|_| ClaimsCompositionErrorV3::Route)?;
+        if kind != RouteKindV3::Once
+            || usize::from(invocation.fixed_account_count) != expected_accounts
+            || invocation.item_account_count != 0
+            || invocation.repeated_item_count != 0
+        {
+            return Err(ClaimsCompositionErrorV3::Route);
+        }
+    } else if kind != RouteKindV3::AffineOnce
+        || usize::from(invocation.fixed_account_count) != RATIONAL_BASE_ACCOUNT_COUNT_V2
+        || usize::from(invocation.item_account_count) != RATIONAL_ASSET_ACCOUNT_COUNT_V2
+        || invocation.repeated_item_count != header.asset_count
     {
         return Err(ClaimsCompositionErrorV3::Route);
     }
@@ -655,6 +667,9 @@ mod tests {
     use std::vec;
     use std::vec::Vec;
 
+    use dclutch_effect_kernel::v3::encode::{
+        EffectGeometryV3, RouteInputV3, encode_effect_program_v3_atomic,
+    };
     use dclutch_rational_representation_v2_lifecycle_contract::{
         LIFECYCLE_COORDINATE_BYTES_V2, LIFECYCLE_HEADER_BYTES_V2, LifecycleCoordinateV2,
         LifecycleHeaderV2,
@@ -1258,6 +1273,112 @@ mod tests {
         bytes
     }
 
+    fn structured_representation_request() -> Vec<u8> {
+        let mut assets = vec![0_u8; 2 * ASSET_BYTES_V2];
+        for index in 0..2_usize {
+            let suffix = u8::try_from(index).expect("small index");
+            AssetV2 {
+                shard_mint: id(60 + suffix),
+                actor_shard_account: id(70 + suffix),
+                structured_custody_account: id(80 + suffix),
+                claims_custody_owner: id(90 + suffix),
+                coefficient: 10,
+                expected_shard_supply: 20,
+                expected_actor_shards: 10,
+                expected_structured_shards: 10,
+            }
+            .encode_into(
+                assets
+                    .get_mut(index * ASSET_BYTES_V2..(index + 1) * ASSET_BYTES_V2)
+                    .expect("asset row"),
+            )
+            .expect("representation asset");
+        }
+        let request = RepresentationRequestV2::new(
+            RepresentationRequestHeaderV2 {
+                action: RepresentationActionV2::IssueStructured,
+                caller_role: RepresentationCallerRoleV2::Trading,
+                release_set: parent().release_set,
+                market: parent().market,
+                graph_id: id(54),
+                descriptor_id: id(55),
+                parent_context: parent().parent_request_digest,
+                actor: id(56),
+                receipt_mint: id(57),
+                receipt_account: id(58),
+                representation_authority: id(59),
+                token_program: TOKEN_2022_PROGRAM_ID,
+                realm: [0; 32],
+                collateral_recipient: [0; 32],
+                expected_representation_revision: 3,
+                expected_claims_market_revision: ABSENT_REVISION,
+                expected_actor_position_revision: ABSENT_REVISION,
+                expected_custody_position_revision: ABSENT_REVISION,
+                expected_custody_replay_revision: ABSENT_REVISION,
+                generation: parent().generation,
+                quantity: 1,
+                denominator: 10,
+                expected_receipt_supply: 0,
+                outcome_count: 2,
+                selected_outcome: u32::MAX,
+                asset_count: 2,
+            },
+            &assets,
+        )
+        .expect("structured request");
+        let mut bytes = vec![
+            0_u8;
+            dclutch_rational_representation_v2_request_contract::REQUEST_HEADER_BYTES_V2
+                + assets.len()
+        ];
+        request.encode_into(&mut bytes).expect("request bytes");
+        bytes
+    }
+
+    fn structured_effect(request: &[u8]) -> Vec<u8> {
+        let (fixed, items) = request
+            .split_at(dclutch_rational_representation_v2_request_contract::REQUEST_HEADER_BYTES_V2);
+        let item = items.get(..ASSET_BYTES_V2).expect("item template");
+        let route = [RouteInputV3 {
+            role: FixedRole::Claims,
+            kind: RouteKindV3::AffineOnce,
+            enable_common_scalar: None,
+            witness_range_common_scalar: None,
+            receipt_dependency: None,
+            fixed_account_start: 0,
+            fixed_account_count: u16::try_from(RATIONAL_BASE_ACCOUNT_COUNT_V2).expect("base frame"),
+            item_account_start: 0,
+            item_account_count: u16::try_from(RATIONAL_ASSET_ACCOUNT_COUNT_V2)
+                .expect("asset frame"),
+            fixed_request: fixed,
+            item_request: item,
+        }];
+        let width = dclutch_effect_kernel::v3::HEADER_BYTES
+            + dclutch_effect_kernel::v3::ROUTE_BYTES
+            + fixed.len()
+            + item.len();
+        let mut scratch = vec![0_u8; width];
+        let mut output = vec![0_u8; width];
+        encode_effect_program_v3_atomic(
+            EffectGeometryV3 {
+                fixed_accounts: u16::try_from(RATIONAL_BASE_ACCOUNT_COUNT_V2).expect("base frame"),
+                item_account_stride: u16::try_from(RATIONAL_ASSET_ACCOUNT_COUNT_V2)
+                    .expect("asset frame"),
+                common_scalars: 1,
+                item_scalar_stride: 0,
+                common_identities: 1,
+                item_identity_stride: 0,
+            },
+            &route,
+            &[],
+            &[],
+            &mut scratch,
+            &mut output,
+        )
+        .expect("structured EffectProgram");
+        output
+    }
+
     fn lifecycle_request(action: LifecycleActionV2, rows: u32) -> Vec<u8> {
         let mut coordinate_bytes = Vec::new();
         for row in 0..rows {
@@ -1526,6 +1647,46 @@ mod tests {
                 Err(ClaimsCompositionErrorV3::ParentBinding)
             );
         }
+    }
+
+    #[test]
+    fn composes_structured_representation_only_through_exact_affine_frame() {
+        let request = structured_representation_request();
+        let effect_bytes = structured_effect(&request);
+        let program = ProgramV3::decode(&effect_bytes).expect("structured EffectProgram");
+        let composition =
+            ClaimsCompositionV3::decode_selected(program, 2, &[1], &[id(40)], &request, parent())
+                .expect("structured composition");
+        assert_eq!(
+            composition
+                .rational_representation()
+                .expect("representation")
+                .header()
+                .action,
+            RepresentationActionV2::IssueStructured
+        );
+
+        assert_eq!(
+            {
+                let truncated = request
+                    .get(
+                        ..request
+                            .len()
+                            .checked_sub(ASSET_BYTES_V2)
+                            .expect("two-row request"),
+                    )
+                    .expect("truncated request");
+                ClaimsCompositionV3::decode_selected(
+                    program,
+                    1,
+                    &[1],
+                    &[id(40)],
+                    truncated,
+                    parent(),
+                )
+            },
+            Err(ClaimsCompositionErrorV3::Route)
+        );
     }
 
     #[test]
