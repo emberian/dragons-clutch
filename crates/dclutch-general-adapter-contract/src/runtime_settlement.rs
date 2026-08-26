@@ -964,6 +964,12 @@ mod tests {
     extern crate std;
 
     use super::*;
+    use crate::runtime_candidate::{
+        GENERAL_SETTLEMENT_BENEFICIARY_IDENTITY_V2, GENERAL_SETTLEMENT_COMMON_IDENTITIES_V2,
+        GENERAL_SETTLEMENT_COMMON_SCALARS_V2, GENERAL_SETTLEMENT_ITEM_SCALAR_STRIDE_V2,
+        GENERAL_SETTLEMENT_MOVE_SCALAR_V2, general_settlement_candidate_bank_len_v2,
+        general_settlement_scalar_count_v2, project_general_settlement_candidate_v2,
+    };
     use crate::runtime_manifest::settlement_manifest_len_v2;
     use crate::runtime_verify::{
         AuthenticatedOrderTermsV2, RuntimeConsiderRowBuffersV2, RuntimeConsiderRowViewV2,
@@ -1261,6 +1267,52 @@ mod tests {
         );
         assert_eq!(plan.header().complete_set_quantity, 3);
         assert!((0..16).all(|outcome| plan.quantity(outcome).expect("effect quantity") == 3));
+
+        let bank_len = general_settlement_candidate_bank_len_v2(16).expect("candidate bank");
+        let mut bank_scratch = vec![0; bank_len];
+        let mut bank_output = vec![0xa5; bank_len];
+        let candidate = project_general_settlement_candidate_v2(
+            &effect,
+            16,
+            &mut bank_scratch,
+            &mut bank_output,
+        )
+        .expect("Strategy candidate");
+        assert!(matches!(
+            candidate,
+            dclutch_execution_strategy_contract::v2::ExecutionCandidateV2::Accepted(_)
+        ));
+        let candidate_bytes = match candidate {
+            dclutch_execution_strategy_contract::v2::ExecutionCandidateV2::Accepted(bytes) => bytes,
+            dclutch_execution_strategy_contract::v2::ExecutionCandidateV2::Refused => &[],
+        };
+        assert_eq!(
+            read_u64(
+                candidate_bytes,
+                usize::try_from(GENERAL_SETTLEMENT_MOVE_SCALAR_V2).expect("coordinate") * 8,
+            )
+            .expect("move register"),
+            1
+        );
+        let first_quantity =
+            usize::try_from(GENERAL_SETTLEMENT_COMMON_SCALARS_V2).expect("quantity coordinate") * 8;
+        assert_eq!(
+            read_u64(candidate_bytes, first_quantity).expect("quantity"),
+            3
+        );
+        let scalar_count = general_settlement_scalar_count_v2(16).expect("scalar count");
+        let beneficiary_offset = usize::try_from(scalar_count).expect("scalar count") * 8
+            + usize::try_from(GENERAL_SETTLEMENT_BENEFICIARY_IDENTITY_V2)
+                .expect("identity coordinate")
+                * 32;
+        assert_eq!(
+            candidate_bytes
+                .get(beneficiary_offset..beneficiary_offset + 32)
+                .expect("beneficiary register"),
+            [0_u8; 32]
+        );
+        assert_eq!(GENERAL_SETTLEMENT_ITEM_SCALAR_STRIDE_V2, 1);
+        assert_eq!(GENERAL_SETTLEMENT_COMMON_IDENTITIES_V2, 4);
         cursor = next;
         let materialized = SettlementCursorV2::decode(&cursor).expect("materialized cursor");
         assert_eq!(materialized.header().quote_inventory, 1);
@@ -1359,5 +1411,65 @@ mod tests {
             assert_eq!(cursor_output, before_cursor_output);
             assert_eq!(effect_output, before_effect_output);
         }
+
+        let (_, materialize_effect) = {
+            let first_manifest =
+                SettlementManifestV2::decode(&fixture.manifests[0]).expect("first manifest");
+            let final_manifest =
+                SettlementManifestV2::decode(&fixture.manifests[1]).expect("final manifest");
+            let mut collected = cursor.clone();
+            for (manifest, index) in [
+                (first_manifest.as_bytes(), 0),
+                (final_manifest.as_bytes(), 0),
+                (final_manifest.as_bytes(), 1),
+            ] {
+                (collected, _) = settle(
+                    &fixture,
+                    &collected,
+                    RuntimeSettlementActionV2::Collect,
+                    Some(manifest),
+                    index,
+                );
+            }
+            settle(
+                &fixture,
+                &collected,
+                RuntimeSettlementActionV2::Materialize,
+                None,
+                0,
+            )
+        };
+        let exact = general_settlement_candidate_bank_len_v2(16).expect("candidate bank");
+        for delta in [-1_isize, 1] {
+            let adjusted =
+                usize::try_from(isize::try_from(exact).expect("bank length fits") + delta)
+                    .expect("adjusted bank");
+            let mut bank_scratch = vec![0; adjusted];
+            let mut bank_output = vec![0x5a; adjusted];
+            let before = bank_output.clone();
+            assert!(
+                project_general_settlement_candidate_v2(
+                    &materialize_effect,
+                    16,
+                    &mut bank_scratch,
+                    &mut bank_output,
+                )
+                .is_err()
+            );
+            assert_eq!(bank_output, before);
+        }
+        let mut bank_scratch = vec![0; exact];
+        let mut bank_output = vec![0x5a; exact];
+        let before = bank_output.clone();
+        assert!(
+            project_general_settlement_candidate_v2(
+                &materialize_effect,
+                15,
+                &mut bank_scratch,
+                &mut bank_output,
+            )
+            .is_err()
+        );
+        assert_eq!(bank_output, before);
     }
 }

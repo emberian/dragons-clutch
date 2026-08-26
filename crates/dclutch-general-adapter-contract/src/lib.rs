@@ -22,6 +22,8 @@ pub mod child_packets;
 pub mod lifecycle;
 /// Stateless, failure-atomic candidate and settlement plan evaluation.
 pub mod plan;
+/// Exact General settlement projection into generic Strategy V2 candidate banks.
+pub mod runtime_candidate;
 /// Verifier-emitted runtime-width per-order settlement manifests.
 pub mod runtime_manifest;
 /// Permissionless runtime-width settlement over verifier-emitted order manifests.

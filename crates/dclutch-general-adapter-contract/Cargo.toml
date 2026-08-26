@@ -12,6 +12,7 @@ path = "src/lib.rs"
 [dependencies]
 dclutch-claims-svm = { path = "../dclutch-claims-svm" }
 dclutch-custody-contract = { path = "../dclutch-custody-contract" }
+dclutch-execution-strategy-contract = { path = "../dclutch-execution-strategy-contract" }
 dclutch-general-codec = { path = "../dclutch-general-codec" }
 dclutch-request-profile-contract = { path = "../dclutch-request-profile-contract" }
 dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
