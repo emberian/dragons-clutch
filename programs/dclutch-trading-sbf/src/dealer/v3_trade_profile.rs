@@ -32,6 +32,8 @@ use dclutch_claims_svm::frame_spec_v1::SignedDeltaFrameSpecV3;
 #[cfg(not(target_os = "solana"))]
 use dclutch_custody_contract::{CustodyFrameSpecV1, OperationV1};
 #[cfg(not(target_os = "solana"))]
+use dclutch_dealer_codec::config_v3::DEALER_CONFIG_BYTES_V3;
+#[cfg(not(target_os = "solana"))]
 use dclutch_product_runtime_v2_svm_reader::BASIS_WIDTH_OFFSET_V3;
 
 use super::v3_hot_artifact::{
@@ -188,6 +190,7 @@ pub fn encode_dealer_scenario_account_profile_v4_atomic(
 ) -> Result<(), DealerScenarioAccountProfileErrorV4> {
     if scratch.len() != DEALER_SCENARIO_ACCOUNT_PROFILE_BYTES_V4
         || output.len() != DEALER_SCENARIO_ACCOUNT_PROFILE_BYTES_V4
+        || usize::try_from(input.common_data_lengths[1]).ok() != Some(DEALER_CONFIG_BYTES_V3)
         || OBLIGATION_V4 != 25
         || DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3 != 14
     {
@@ -510,7 +513,7 @@ mod tests {
         let mut output = vec![0; DEALER_SCENARIO_ACCOUNT_PROFILE_BYTES_V4];
         encode_dealer_scenario_account_profile_v4_atomic(
             DealerScenarioAccountProfileInputV4 {
-                common_data_lengths: [64, 80, 96, 112, 128],
+                common_data_lengths: [64, 160, 96, 112, 128],
             },
             &mut scratch,
             &mut output,
@@ -591,6 +594,23 @@ mod tests {
                 .logical_account_count_with_dynamic_spans(8, &[0, 0, 0, 0, 0, 0, 0])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn synthetic_or_legacy_config_width_refuses() {
+        let mut scratch = vec![0; DEALER_SCENARIO_ACCOUNT_PROFILE_BYTES_V4];
+        let mut output = vec![0; DEALER_SCENARIO_ACCOUNT_PROFILE_BYTES_V4];
+        assert_eq!(
+            encode_dealer_scenario_account_profile_v4_atomic(
+                DealerScenarioAccountProfileInputV4 {
+                    common_data_lengths: [64, 80, 96, 112, 128],
+                },
+                &mut scratch,
+                &mut output,
+            ),
+            Err(DealerScenarioAccountProfileErrorV4::Geometry)
+        );
+        assert!(output.iter().all(|byte| *byte == 0));
     }
 
     #[test]

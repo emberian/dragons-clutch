@@ -453,7 +453,7 @@ mod tests {
         tail_count: u32,
         span_counts: [u32; DEALER_SCENARIO_PROFILE_SPANS_V4],
     ) -> (Vec<ObservedAccountMetaV3>, Vec<ObservedAccountMetaV3>) {
-        let common_lengths = [32_u32, 40, 48, 56, 64];
+        let common_lengths = [32_u32, 160, 48, 56, 64];
         let profile_bytes = canonical_profile(common_lengths);
         let profile = AccountProfileV2::decode(&profile_bytes).expect("decode");
         let physical_count = profile
@@ -522,7 +522,7 @@ mod tests {
     fn packed_frame_refuses_privilege_and_exact_data_substitution() {
         let spans = [0, 0, 0, 0, 1, 0, 0];
         let (fixed_accounts, mut suffix) = runtime_fixture(4, spans);
-        let profile_bytes = canonical_profile([32, 40, 48, 56, 64]);
+        let profile_bytes = canonical_profile([32, 160, 48, 56, 64]);
         let profile = AccountProfileV2::decode(&profile_bytes).expect("canonical profile");
         let state = DealerScenarioHotMetaStateV4 {
             fixed_accounts: &fixed_accounts,

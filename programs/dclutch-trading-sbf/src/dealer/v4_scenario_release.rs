@@ -31,6 +31,7 @@ use dclutch_capability_program_contract::{
     },
 };
 use dclutch_core_contract::ContentId;
+use dclutch_dealer_codec::config_v3::DEALER_CONFIG_SCHEMA_PREIMAGE_V3;
 use dclutch_execution_strategy_contract::v2::{
     EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
@@ -38,7 +39,7 @@ use dclutch_request_profile_contract::v3::REQUEST_PROFILE_V3_SCHEMA_RELEASE_ID;
 use solana_program::hash::hash;
 
 use super::{
-    DEALER_CONFIG_SCHEMA_PREIMAGE_V2, DEALER_KIND_PREIMAGE_V2, DEALER_ROOT_SCHEMA_PREIMAGE_V2,
+    DEALER_KIND_PREIMAGE_V2, DEALER_ROOT_SCHEMA_PREIMAGE_V2,
     v3_equity_operator::DEALER_EQUITY_SELECTOR_OFFSET_V3,
     v3_multi_lp::MultiLpCustodyRequestV3,
     v3_release::{
@@ -216,7 +217,7 @@ pub fn finalize_dealer_scenario_descriptor_v4(
 
     let descriptor = CapabilityProgramV4::new(
         content(digest(DEALER_KIND_PREIMAGE_V2))?,
-        content(digest(DEALER_CONFIG_SCHEMA_PREIMAGE_V2))?,
+        content(digest(DEALER_CONFIG_SCHEMA_PREIMAGE_V3))?,
         content(digest(DEALER_SCENARIO_TRADE_REQUEST_SCHEMA_PREIMAGE_V3))?,
         content(digest(DEALER_ROOT_SCHEMA_PREIMAGE_V2))?,
         content(CAPABILITY_ROOT_DERIVATION_RELEASE_ID_V1)?,
@@ -398,7 +399,7 @@ fn validate_descriptor_record(
         let descriptor = CapabilityProgramV3::decode(bytes)
             .map_err(|_| DealerScenarioReleaseErrorV4::Descriptor)?;
         if descriptor.kind() != content(digest(DEALER_KIND_PREIMAGE_V2))?
-            || descriptor.config_schema() != content(digest(DEALER_CONFIG_SCHEMA_PREIMAGE_V2))?
+            || descriptor.config_schema() != content(digest(DEALER_CONFIG_SCHEMA_PREIMAGE_V3))?
             || descriptor.request_schema()
                 != dealer_request_schema_v3(selector)
                     .map_err(|_| DealerScenarioReleaseErrorV4::Descriptor)?
@@ -424,7 +425,7 @@ fn validate_v4_semantics(
     descriptor: CapabilityProgramV4,
 ) -> Result<(), DealerScenarioReleaseErrorV4> {
     if descriptor.kind() != content(digest(DEALER_KIND_PREIMAGE_V2))?
-        || descriptor.config_schema() != content(digest(DEALER_CONFIG_SCHEMA_PREIMAGE_V2))?
+        || descriptor.config_schema() != content(digest(DEALER_CONFIG_SCHEMA_PREIMAGE_V3))?
         || descriptor.request_schema()
             != dealer_request_schema_v3(selector)
                 .map_err(|_| DealerScenarioReleaseErrorV4::Descriptor)?
@@ -491,7 +492,7 @@ mod tests {
     fn v3_descriptor(selector: u16, tag: u8) -> [u8; CAPABILITY_PROGRAM_V3_BYTES] {
         CapabilityProgramV3::new(
             content(digest(DEALER_KIND_PREIMAGE_V2)).expect("kind"),
-            content(digest(DEALER_CONFIG_SCHEMA_PREIMAGE_V2)).expect("config"),
+            content(digest(DEALER_CONFIG_SCHEMA_PREIMAGE_V3)).expect("config"),
             dealer_request_schema_v3(selector).expect("request"),
             content(digest(DEALER_ROOT_SCHEMA_PREIMAGE_V2)).expect("root"),
             byte_id(tag),
@@ -509,9 +510,19 @@ mod tests {
     }
 
     fn scenario_descriptor(effect_schema: [u8; 32]) -> [u8; CAPABILITY_PROGRAM_V4_BYTES] {
+        scenario_descriptor_with_config_schema(
+            effect_schema,
+            digest(DEALER_CONFIG_SCHEMA_PREIMAGE_V3),
+        )
+    }
+
+    fn scenario_descriptor_with_config_schema(
+        effect_schema: [u8; 32],
+        config_schema: [u8; 32],
+    ) -> [u8; CAPABILITY_PROGRAM_V4_BYTES] {
         CapabilityProgramV4::new(
             content(digest(DEALER_KIND_PREIMAGE_V2)).expect("kind"),
-            content(digest(DEALER_CONFIG_SCHEMA_PREIMAGE_V2)).expect("config"),
+            content(config_schema).expect("config"),
             content(digest(DEALER_SCENARIO_TRADE_REQUEST_SCHEMA_PREIMAGE_V3)).expect("request"),
             content(digest(DEALER_ROOT_SCHEMA_PREIMAGE_V2)).expect("root"),
             content(CAPABILITY_ROOT_DERIVATION_RELEASE_ID_V1).expect("derivation"),
@@ -566,6 +577,18 @@ mod tests {
         let stale = scenario_descriptor(dclutch_effect_kernel::v3::SCHEMA_RELEASE_ID);
         assert_eq!(
             DealerDescriptorRecordV4::new(9, CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V4, &stale,),
+            Err(DealerScenarioReleaseErrorV4::Descriptor)
+        );
+        let legacy_config = scenario_descriptor_with_config_schema(
+            dclutch_effect_kernel::v4::SCHEMA_RELEASE_ID_V4,
+            digest(super::super::DEALER_CONFIG_SCHEMA_PREIMAGE_V2),
+        );
+        assert_eq!(
+            DealerDescriptorRecordV4::new(
+                9,
+                CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V4,
+                &legacy_config,
+            ),
             Err(DealerScenarioReleaseErrorV4::Descriptor)
         );
     }
