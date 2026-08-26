@@ -14,6 +14,9 @@
 //! and exact balance plans. It does not derive PDAs, inspect account owners or
 //! data, deserialize Rent, invoke System, transfer lamports, or close accounts.
 
+/// Lifecycle-scoped successor state and Market-retirement closure semantics.
+pub mod lifecycle_v2;
+
 use core::convert::TryInto;
 
 /// Exact width of a Solana-compatible public-key byte string.
