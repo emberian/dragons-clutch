@@ -218,9 +218,11 @@ pub const REGISTERED_SCALAR_MAKER_CURRENT_RENT_V4: usize = 52;
 pub const REGISTERED_SCALAR_RECORD_CURRENT_RENT_V4: usize = 53;
 /// Basis-point denominator.
 pub const REGISTERED_SCALAR_FEE_DENOMINATOR_V4: usize = 54;
+/// CompactIntentV2 magic used only for fresh registered-record initialization.
+pub const REGISTERED_SCALAR_INTENT_MAGIC_V4: usize = 55;
 
 const REQUEST_OPERATIONS: usize = 31;
-const TRANSITION_INSTRUCTIONS: usize = 40;
+const TRANSITION_INSTRUCTIONS: usize = 41;
 
 /// Exact embedded RequestProfileV1 width.
 pub const DIRECT_REGISTERED_CREATION_REQUEST_PROFILE_V1_BYTES_V4: usize =
@@ -456,6 +458,10 @@ fn transition_instructions(
         InstructionV3::load_const(
             scalar(REGISTERED_SCALAR_FEE_DENOMINATOR_V4)?,
             DIRECT_FEE_DENOMINATOR_V1 as u64,
+        ),
+        InstructionV3::load_const(
+            scalar(REGISTERED_SCALAR_INTENT_MAGIC_V4)?,
+            u64::from_le_bytes(intent::COMPACT_INTENT_MAGIC_V2),
         ),
         InstructionV3::load_const(
             scalar(REGISTERED_SCALAR_MAKER_MAGIC_V4)?,
