@@ -8,7 +8,9 @@
 //! retain those physical responsibilities.
 
 use dclutch_account_profile_contract::{
-    lifecycle_v3::{SUCCESSOR_SCHEMA_RELEASE_ID as LIFECYCLE_SCHEMA_ID_V4, StateLifecyclePolicyV4},
+    lifecycle_v3::{
+        CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5 as LIFECYCLE_SCHEMA_ID_V5, StateLifecyclePolicyV5,
+    },
     v2::{
         AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE,
         SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2,
@@ -138,7 +140,7 @@ pub struct SeriesConsumeArtifactBundleV4<'a> {
     /// Exact runtime AccountProfile.
     pub account_profile: AccountProfileV2<'a>,
     /// Exact successor lifecycle policy.
-    pub lifecycle_policy: StateLifecyclePolicyV4<'a>,
+    pub lifecycle_policy: StateLifecyclePolicyV5<'a>,
     /// Exact header RequestProfile.
     pub request_profile: RequestProfileV1<'a>,
     /// Exact selected execution strategy.
@@ -235,11 +237,11 @@ pub fn authenticate_series_consume_artifacts_v4<'a>(
 
     require_artifact(
         descriptor.lifecycle(),
-        LIFECYCLE_SCHEMA_ID_V4,
+        LIFECYCLE_SCHEMA_ID_V5,
         artifacts.lifecycle_policy,
         SeriesArtifactErrorV4::Lifecycle,
     )?;
-    let lifecycle_policy = StateLifecyclePolicyV4::decode_selected(
+    let lifecycle_policy = StateLifecyclePolicyV5::decode_selected(
         descriptor.lifecycle().program().to_bytes(),
         digest(artifacts.lifecycle_policy),
         artifacts.lifecycle_policy,
@@ -341,7 +343,7 @@ fn validate_descriptor(descriptor: CapabilityProgramV4) -> Result<()> {
         || descriptor.account_profile().schema().to_bytes() != ACCOUNT_PROFILE_SCHEMA_ID_V2
         || descriptor.request_profile().schema().to_bytes()
             != dclutch_request_profile_contract::SCHEMA_RELEASE_ID
-        || descriptor.lifecycle().schema().to_bytes() != LIFECYCLE_SCHEMA_ID_V4
+        || descriptor.lifecycle().schema().to_bytes() != LIFECYCLE_SCHEMA_ID_V5
         || descriptor.strategy().schema().to_bytes() != EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2
         || descriptor.transition().schema().to_bytes()
             != dclutch_transition_vm::v3::SCHEMA_RELEASE_ID
@@ -566,7 +568,7 @@ mod tests {
             CapabilityArtifactsV4 {
                 account_profile: reference(ACCOUNT_PROFILE_SCHEMA_ID_V2, 10),
                 request_profile: reference(dclutch_request_profile_contract::SCHEMA_RELEASE_ID, 11),
-                lifecycle: reference(LIFECYCLE_SCHEMA_ID_V4, 12),
+                lifecycle: reference(LIFECYCLE_SCHEMA_ID_V5, 12),
                 strategy: reference(EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, 13),
                 transition: reference(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID, 14),
                 effect: reference(effect_schema, 15),
