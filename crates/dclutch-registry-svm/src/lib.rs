@@ -17,6 +17,8 @@ use dclutch_release_set_contract::{ArtifactReleaseIdV1, ExecutionRoleV1, Program
 pub mod batch_v2;
 /// Invocation-scoped Registry-authenticated continuation wires.
 pub mod continuation_v1;
+/// Headerless invocation-scoped Trading Hot continuation facts.
+pub mod continuation_v2;
 
 /// Exact Upgradeable Loader V3 Program account-data width.
 pub const LOADER_V3_PROGRAM_BYTES: usize = 36;
