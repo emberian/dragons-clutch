@@ -39,6 +39,10 @@ use dclutch_rational_representation_v2_lifecycle_contract::{
         RATIONAL_LIFECYCLE_SCALAR_RENT_AFTER_V3, RATIONAL_LIFECYCLE_SCALAR_RENT_BEFORE_V3,
         RationalLifecycleHotLayoutV3, RationalLifecycleHotRegisterLayoutV3,
     },
+    hot_v6::{
+        RATIONAL_LIFECYCLE_HOT_MAGIC_V6, RATIONAL_LIFECYCLE_HOT_VERSION_V6,
+        RATIONAL_LIFECYCLE_IDENTITY_REQUEST_DESCRIPTOR_V6, RationalLifecycleHotRegisterLayoutV6,
+    },
 };
 #[cfg(test)]
 use dclutch_request_profile_contract::v4::{
@@ -54,7 +58,7 @@ use dclutch_request_profile_contract::{
 };
 use dclutch_transition_vm::v3::{
     HEADER_BYTES as TRANSITION_HEADER_BYTES, INSTRUCTION_BYTES as TRANSITION_INSTRUCTION_BYTES,
-    InstructionV3, ProgramGeometryV3, ScalarRegisterV3, encode_program_atomic,
+    IdentityRegisterV3, InstructionV3, ProgramGeometryV3, ScalarRegisterV3, encode_program_atomic,
 };
 
 use crate::{Error, Result, validate_action_geometry};
@@ -79,7 +83,13 @@ pub fn encode_rational_lifecycle_request_profile_v4(
         return Err(Error::ActionGeometry);
     }
     let layout = RationalLifecycleHotRegisterLayoutV3::new(coordinates);
-    let fixed = base_request_instructions(action, coordinate_count, None)?;
+    let fixed = base_request_instructions(
+        action,
+        coordinate_count,
+        RATIONAL_LIFECYCLE_HOT_MAGIC_V3,
+        RATIONAL_LIFECYCLE_HOT_VERSION_V3,
+        DescriptorProjection::Project(RATIONAL_LIFECYCLE_IDENTITY_DESCRIPTOR_V3),
+    )?;
     let embedded_geometry = RequestGeometryV1::new(
         narrow_u32(RationalLifecycleHotLayoutV3::FIXED_BYTES)?,
         0,
@@ -166,7 +176,13 @@ pub fn encode_rational_lifecycle_request_profile_v3(
             )
             .ok_or(Error::InvalidLength)?,
     );
-    instructions.extend(base_request_instructions(action, coordinate_count, None)?);
+    instructions.extend(base_request_instructions(
+        action,
+        coordinate_count,
+        RATIONAL_LIFECYCLE_HOT_MAGIC_V3,
+        RATIONAL_LIFECYCLE_HOT_VERSION_V3,
+        DescriptorProjection::Project(RATIONAL_LIFECYCLE_IDENTITY_DESCRIPTOR_V3),
+    )?);
     for row in 0..coordinates {
         append_row_request_instructions(&mut instructions, layout, row)?;
     }
@@ -229,10 +245,71 @@ pub fn encode_rational_lifecycle_selected_request_profile_v5(
     instructions.extend(base_request_instructions(
         action,
         coordinate_count,
-        Some(descriptor_id),
+        RATIONAL_LIFECYCLE_HOT_MAGIC_V3,
+        RATIONAL_LIFECYCLE_HOT_VERSION_V3,
+        DescriptorProjection::Require(descriptor_id),
     )?);
     for row in 0..coordinates {
         append_row_request_instructions(&mut instructions, layout, row)?;
+    }
+    let request_bytes =
+        RationalLifecycleHotLayoutV3::request_bytes(coordinates).ok_or(Error::InvalidLength)?;
+    let geometry = RequestGeometryV1::new(
+        narrow_u32(request_bytes)?,
+        0,
+        narrow_u16(layout.scalar_count().ok_or(Error::InvalidLength)?)?,
+        0,
+        narrow_u16(layout.identity_count().ok_or(Error::InvalidLength)?)?,
+        0,
+    );
+    let bytes = REQUEST_HEADER_BYTES
+        .checked_add(
+            instructions
+                .len()
+                .checked_mul(REQUEST_OPERATION_BYTES)
+                .ok_or(Error::InvalidLength)?,
+        )
+        .ok_or(Error::InvalidLength)?;
+    let mut scratch = vec![0_u8; bytes];
+    let mut output = vec![0_u8; bytes];
+    encode_request_profile_v1_atomic(geometry, &instructions, &[], &mut scratch, &mut output)
+        .map_err(Error::RequestProfile)?;
+    Ok(output)
+}
+
+/// Encode the market-neutral V6 RequestProfile.
+///
+/// The request-carried descriptor is projected into a distinct identity; the
+/// V6 Transition compares it with AccountProfile's authenticated logical-14
+/// descriptor account before Effect writes the Claims child.
+pub fn encode_rational_lifecycle_selected_request_profile_v6(
+    action: LifecycleActionV2,
+) -> Result<Vec<u8>> {
+    let coordinate_count = match action {
+        LifecycleActionV2::ActivateReceipt => 0,
+        LifecycleActionV2::ActivateCoordinate | LifecycleActionV2::RetireCoordinate => 1,
+        LifecycleActionV2::RetireReceipt => return Err(Error::ActionGeometry),
+    };
+    let coordinates = validate_action_geometry(action, coordinate_count)?;
+    let layout = RationalLifecycleHotRegisterLayoutV6::new(coordinates);
+    let mut instructions = Vec::with_capacity(
+        BASE_REQUEST_OPERATIONS
+            .checked_add(
+                coordinates
+                    .checked_mul(ROW_REQUEST_OPERATIONS)
+                    .ok_or(Error::InvalidLength)?,
+            )
+            .ok_or(Error::InvalidLength)?,
+    );
+    instructions.extend(base_request_instructions(
+        action,
+        coordinate_count,
+        RATIONAL_LIFECYCLE_HOT_MAGIC_V6,
+        RATIONAL_LIFECYCLE_HOT_VERSION_V6,
+        DescriptorProjection::Project(RATIONAL_LIFECYCLE_IDENTITY_REQUEST_DESCRIPTOR_V6),
+    )?);
+    for row in 0..coordinates {
+        append_row_request_instructions_v6(&mut instructions, layout, row)?;
     }
     let request_bytes =
         RationalLifecycleHotLayoutV3::request_bytes(coordinates).ok_or(Error::InvalidLength)?;
@@ -315,20 +392,82 @@ pub fn encode_rational_lifecycle_transition_v3(
     Ok(output)
 }
 
+/// Encode V6 transition semantics, including descriptor-account equality.
+pub fn encode_rational_lifecycle_transition_v6(
+    action: LifecycleActionV2,
+    coordinate_count: u32,
+) -> Result<Vec<u8>> {
+    let coordinates = validate_action_geometry(action, coordinate_count)?;
+    let layout = RationalLifecycleHotRegisterLayoutV6::new(coordinates);
+    let mut instructions = Vec::with_capacity(
+        coordinates
+            .checked_mul(2)
+            .and_then(|count| count.checked_add(2))
+            .ok_or(Error::InvalidLength)?,
+    );
+    instructions.push(InstructionV3::identity_eq(
+        IdentityRegisterV3::common(narrow_u16(RATIONAL_LIFECYCLE_IDENTITY_DESCRIPTOR_V3)?),
+        IdentityRegisterV3::common(narrow_u16(
+            RATIONAL_LIFECYCLE_IDENTITY_REQUEST_DESCRIPTOR_V6,
+        )?),
+    ));
+    instructions.push(InstructionV3::nonzero(transition_scalar(
+        RATIONAL_LIFECYCLE_SCALAR_OUTCOME_COUNT_V3,
+    )?));
+    for row in 0..coordinates {
+        instructions.push(InstructionV3::scalar_lt(
+            transition_scalar(
+                layout
+                    .coordinate_scalar(row, RATIONAL_LIFECYCLE_ITEM_SCALAR_OUTCOME_V3)
+                    .ok_or(Error::InvalidLength)?,
+            )?,
+            transition_scalar(RATIONAL_LIFECYCLE_SCALAR_OUTCOME_COUNT_V3)?,
+        ));
+        instructions.push(InstructionV3::nonzero(transition_scalar(
+            layout
+                .coordinate_scalar(row, RATIONAL_LIFECYCLE_ITEM_SCALAR_COEFFICIENT_V3)
+                .ok_or(Error::InvalidLength)?,
+        )?));
+    }
+    let geometry = ProgramGeometryV3 {
+        common_scalars: narrow_u16(layout.scalar_count().ok_or(Error::InvalidLength)?)?,
+        item_scalar_stride: 0,
+        common_identities: narrow_u16(layout.identity_count().ok_or(Error::InvalidLength)?)?,
+        item_identity_stride: 0,
+    };
+    let bytes = TRANSITION_HEADER_BYTES
+        .checked_add(
+            instructions
+                .len()
+                .checked_mul(TRANSITION_INSTRUCTION_BYTES)
+                .ok_or(Error::InvalidLength)?,
+        )
+        .ok_or(Error::InvalidLength)?;
+    let mut scratch = vec![0_u8; bytes];
+    let mut output = vec![0_u8; bytes];
+    encode_program_atomic(geometry, &instructions, &[], &[], &mut scratch, &mut output)
+        .map_err(Error::Transition)?;
+    Ok(output)
+}
+
+enum DescriptorProjection {
+    Project(usize),
+    Require([u8; 32]),
+}
+
 fn base_request_instructions(
     action: LifecycleActionV2,
     coordinate_count: u32,
-    required_descriptor: Option<[u8; 32]>,
+    family_magic: [u8; 8],
+    family_version: u16,
+    descriptor: DescriptorProjection,
 ) -> Result<Vec<RequestInstructionV1>> {
     let mut output = vec![
         require_u64(
             RationalLifecycleHotLayoutV3::MAGIC,
-            u64::from_le_bytes(RATIONAL_LIFECYCLE_HOT_MAGIC_V3),
+            u64::from_le_bytes(family_magic),
         )?,
-        require_u16(
-            RationalLifecycleHotLayoutV3::VERSION,
-            RATIONAL_LIFECYCLE_HOT_VERSION_V3,
-        )?,
+        require_u16(RationalLifecycleHotLayoutV3::VERSION, family_version)?,
         require_u8(RationalLifecycleHotLayoutV3::ACTION, action.tag())?,
         require_zero(RationalLifecycleHotLayoutV3::RESERVED_HEADER, 5)?,
         require_zero(RationalLifecycleHotLayoutV3::PARENT_CONTEXT, 32)?,
@@ -345,7 +484,7 @@ fn base_request_instructions(
             RATIONAL_LIFECYCLE_IDENTITY_GRAPH_V3,
         )?,
     ];
-    if let Some(descriptor) = required_descriptor {
+    if let DescriptorProjection::Require(descriptor) = descriptor {
         for (chunk, bytes) in descriptor.chunks_exact(8).enumerate() {
             output.push(require_u64(
                 RationalLifecycleHotLayoutV3::DESCRIPTOR_ID
@@ -354,10 +493,10 @@ fn base_request_instructions(
                 u64::from_le_bytes(bytes.try_into().map_err(|_| Error::InvalidLength)?),
             )?);
         }
-    } else {
+    } else if let DescriptorProjection::Project(register) = descriptor {
         output.push(project_identity(
             RationalLifecycleHotLayoutV3::DESCRIPTOR_ID,
-            RATIONAL_LIFECYCLE_IDENTITY_DESCRIPTOR_V3,
+            register,
         )?);
     }
     output.extend([
@@ -425,11 +564,42 @@ fn base_request_instructions(
     Ok(output)
 }
 
+fn append_row_request_instructions_v6(
+    output: &mut Vec<RequestInstructionV1>,
+    layout: RationalLifecycleHotRegisterLayoutV6,
+    row: usize,
+) -> Result<()> {
+    append_row_request_instructions_with(
+        output,
+        row,
+        |field| layout.coordinate_identity(row, field),
+        |field| layout.coordinate_scalar(row, field),
+    )
+}
+
 fn append_row_request_instructions(
     output: &mut Vec<RequestInstructionV1>,
     layout: RationalLifecycleHotRegisterLayoutV3,
     row: usize,
 ) -> Result<()> {
+    append_row_request_instructions_with(
+        output,
+        row,
+        |field| layout.coordinate_identity(row, field),
+        |field| layout.coordinate_scalar(row, field),
+    )
+}
+
+fn append_row_request_instructions_with<F, G>(
+    output: &mut Vec<RequestInstructionV1>,
+    row: usize,
+    identity_coordinate: F,
+    scalar_coordinate: G,
+) -> Result<()>
+where
+    F: Fn(usize) -> Option<usize>,
+    G: Fn(usize) -> Option<usize>,
+{
     let base = RationalLifecycleHotLayoutV3::FIXED_BYTES
         .checked_add(
             row.checked_mul(RationalLifecycleHotLayoutV3::ITEM_BYTES)
@@ -437,16 +607,8 @@ fn append_row_request_instructions(
         )
         .ok_or(Error::InvalidLength)?;
     let at = |field: usize| base.checked_add(field).ok_or(Error::InvalidLength);
-    let identity = |field: usize| {
-        layout
-            .coordinate_identity(row, field)
-            .ok_or(Error::InvalidLength)
-    };
-    let scalar = |field: usize| {
-        layout
-            .coordinate_scalar(row, field)
-            .ok_or(Error::InvalidLength)
-    };
+    let identity = |field: usize| identity_coordinate(field).ok_or(Error::InvalidLength);
+    let scalar = |field: usize| scalar_coordinate(field).ok_or(Error::InvalidLength);
     output.extend([
         require_zero(at(RationalLifecycleHotLayoutV3::ITEM_RESERVED_HEAD)?, 4)?,
         require_zero(at(RationalLifecycleHotLayoutV3::ITEM_RESERVED_TAIL)?, 8)?,

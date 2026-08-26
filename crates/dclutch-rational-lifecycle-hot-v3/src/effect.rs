@@ -48,6 +48,7 @@ use dclutch_rational_representation_v2_lifecycle_contract::{
         RATIONAL_LIFECYCLE_SCALAR_RENT_BEFORE_V3, RationalLifecycleHotLayoutV3,
         RationalLifecycleHotRegisterLayoutV3,
     },
+    hot_v6::RationalLifecycleHotRegisterLayoutV6,
 };
 
 use crate::{Error, Result, validate_action_geometry};
@@ -90,7 +91,19 @@ pub fn encode_rational_lifecycle_effect_v3(
     coordinate_count: u32,
 ) -> Result<Vec<u8>> {
     let coordinates = validate_action_geometry(action, coordinate_count)?;
-    let registers = RationalLifecycleHotRegisterLayoutV3::new(coordinates);
+    encode_rational_lifecycle_effect_with_layout(
+        action,
+        coordinate_count,
+        RegisterLayout::V3(RationalLifecycleHotRegisterLayoutV3::new(coordinates)),
+    )
+}
+
+fn encode_rational_lifecycle_effect_with_layout(
+    action: LifecycleActionV2,
+    coordinate_count: u32,
+    registers: RegisterLayout,
+) -> Result<Vec<u8>> {
+    let coordinates = validate_action_geometry(action, coordinate_count)?;
     let template = child_template(action, coordinate_count, coordinates)?;
     let routes = [RouteInputV3 {
         role: FixedRole::Claims,
@@ -174,6 +187,75 @@ pub fn encode_rational_lifecycle_selected_effect_v4(action: LifecycleActionV2) -
     )
     .map_err(Error::EffectV4)?;
     Ok(output)
+}
+
+/// Wrap one market-neutral V6 lifecycle effect in the sole EffectV4 schema.
+pub fn encode_rational_lifecycle_selected_effect_v6(action: LifecycleActionV2) -> Result<Vec<u8>> {
+    let coordinate_count = match action {
+        LifecycleActionV2::ActivateReceipt => 0,
+        LifecycleActionV2::ActivateCoordinate | LifecycleActionV2::RetireCoordinate => 1,
+        LifecycleActionV2::RetireReceipt => return Err(Error::ActionGeometry),
+    };
+    let coordinates = validate_action_geometry(action, coordinate_count)?;
+    let base = encode_rational_lifecycle_effect_with_layout(
+        action,
+        coordinate_count,
+        RegisterLayout::V6(RationalLifecycleHotRegisterLayoutV6::new(coordinates)),
+    )?;
+    let family_bytes =
+        RationalLifecycleHotLayoutV3::request_bytes(coordinates).ok_or(Error::InvalidLength)?;
+    let bytes = EFFECT_V4_HEADER_BYTES
+        .checked_add(base.len())
+        .ok_or(Error::InvalidLength)?;
+    let mut scratch = vec![0_u8; bytes];
+    let mut output = vec![0_u8; bytes];
+    encode_program_v4_atomic(
+        &base,
+        BorrowedRangePolicyV4::DisjointExactCoverage,
+        u32::try_from(family_bytes).map_err(|_| Error::InvalidLength)?,
+        &[],
+        &[],
+        &mut scratch,
+        &mut output,
+    )
+    .map_err(Error::EffectV4)?;
+    Ok(output)
+}
+
+#[derive(Clone, Copy)]
+enum RegisterLayout {
+    V3(RationalLifecycleHotRegisterLayoutV3),
+    V6(RationalLifecycleHotRegisterLayoutV6),
+}
+
+impl RegisterLayout {
+    const fn identity_count(self) -> Option<usize> {
+        match self {
+            Self::V3(value) => value.identity_count(),
+            Self::V6(value) => value.identity_count(),
+        }
+    }
+
+    const fn scalar_count(self) -> Option<usize> {
+        match self {
+            Self::V3(value) => value.scalar_count(),
+            Self::V6(value) => value.scalar_count(),
+        }
+    }
+
+    const fn coordinate_identity(self, row: usize, field: usize) -> Option<usize> {
+        match self {
+            Self::V3(value) => value.coordinate_identity(row, field),
+            Self::V6(value) => value.coordinate_identity(row, field),
+        }
+    }
+
+    const fn coordinate_scalar(self, row: usize, field: usize) -> Option<usize> {
+        match self {
+            Self::V3(value) => value.coordinate_scalar(row, field),
+            Self::V6(value) => value.coordinate_scalar(row, field),
+        }
+    }
 }
 
 fn child_template(
@@ -287,7 +369,7 @@ pub(crate) fn append_header_instructions(output: &mut Vec<EffectInstructionV3>) 
 
 fn append_row_instructions(
     output: &mut Vec<EffectInstructionV3>,
-    layout: RationalLifecycleHotRegisterLayoutV3,
+    layout: RegisterLayout,
     row: usize,
 ) -> Result<()> {
     let base = RationalLifecycleHotLayoutV3::FIXED_BYTES

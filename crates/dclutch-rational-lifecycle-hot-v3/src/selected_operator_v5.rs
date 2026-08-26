@@ -140,7 +140,7 @@ pub fn build_rational_lifecycle_selected_hot_instruction_v5(
     })
 }
 
-fn compact_profile13_claims_accounts_v5(
+pub(crate) fn compact_profile13_claims_accounts_v5(
     state: &RationalLifecycleHotStateV3<'_>,
     child: &[AccountMeta],
     profile: AccountProfileV2<'_>,

@@ -28,6 +28,8 @@ use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
 pub mod compact_hot_v4;
 /// Hot V3 family specialization for the sole lifecycle request/receipt ABI.
 pub mod hot_v3;
+/// Market-neutral Hot V6 family specialization with descriptor-account equality.
+pub mod hot_v6;
 
 /// Exact fixed lifecycle request header width.
 pub const LIFECYCLE_HEADER_BYTES_V2: usize = 400;

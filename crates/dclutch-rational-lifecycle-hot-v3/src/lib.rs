@@ -21,7 +21,9 @@ mod compact_operator_v4;
 mod effect;
 mod operator;
 mod selected_bundle_v5;
+mod selected_bundle_v6;
 mod selected_operator_v5;
+mod selected_operator_v6;
 mod selected_profile_v5;
 mod selected_set_v5;
 
@@ -52,12 +54,20 @@ pub use selected_bundle_v5::{
     validate_rational_lifecycle_selected_bundle_for_authenticated_selection_v5,
     validate_rational_lifecycle_selected_bundle_v5,
 };
+pub use selected_bundle_v6::{
+    RationalLifecycleSelectedBundleInputV6, RationalLifecycleSelectedBundleV6,
+    build_rational_lifecycle_selected_bundle_v6, validate_rational_lifecycle_selected_bundle_v6,
+};
 pub use selected_operator_v5::{
     RationalLifecycleSelectedSelectionV5, build_rational_lifecycle_selected_hot_instruction_v5,
+};
+pub use selected_operator_v6::{
+    RationalLifecycleSelectedSelectionV6, build_rational_lifecycle_selected_hot_instruction_v6,
 };
 pub use selected_profile_v5::{
     RationalLifecycleSelectedAccountProfileInputV5,
     encode_rational_lifecycle_selected_account_profile_v5,
+    encode_rational_lifecycle_selected_account_profile_v6,
 };
 pub use selected_set_v5::{
     RationalLifecycleProgramSetInputV5, RationalLifecycleProgramSetV5,

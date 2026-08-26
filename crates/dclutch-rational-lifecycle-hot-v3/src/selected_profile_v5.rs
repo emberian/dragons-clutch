@@ -18,6 +18,7 @@ use dclutch_rational_representation_v2_lifecycle_contract::{
         RATIONAL_LIFECYCLE_IDENTITY_DESCRIPTOR_V3,
         RATIONAL_LIFECYCLE_SCALAR_PRODUCT_OUTCOME_COUNT_V3, RationalLifecycleHotRegisterLayoutV3,
     },
+    hot_v6::RationalLifecycleHotRegisterLayoutV6,
 };
 use dclutch_token_svm::TOKEN_BEHAVIOR_SELECTION_BYTES_V2;
 
@@ -39,6 +40,28 @@ pub struct RationalLifecycleSelectedAccountProfileInputV5<'a> {
 pub fn encode_rational_lifecycle_selected_account_profile_v5(
     action: LifecycleActionV2,
     input: RationalLifecycleSelectedAccountProfileInputV5<'_>,
+) -> Result<Vec<u8>> {
+    encode_rational_lifecycle_selected_account_profile(action, input, SelectedRegisterLayout::V3)
+}
+
+/// Encode the V6 Profile13 interpreter with a separate request-descriptor identity.
+pub fn encode_rational_lifecycle_selected_account_profile_v6(
+    action: LifecycleActionV2,
+    input: RationalLifecycleSelectedAccountProfileInputV5<'_>,
+) -> Result<Vec<u8>> {
+    encode_rational_lifecycle_selected_account_profile(action, input, SelectedRegisterLayout::V6)
+}
+
+#[derive(Clone, Copy)]
+enum SelectedRegisterLayout {
+    V3,
+    V6,
+}
+
+fn encode_rational_lifecycle_selected_account_profile(
+    action: LifecycleActionV2,
+    input: RationalLifecycleSelectedAccountProfileInputV5<'_>,
+    layout: SelectedRegisterLayout,
 ) -> Result<Vec<u8>> {
     let coordinate_count = match action {
         LifecycleActionV2::ActivateReceipt => 0,
@@ -128,11 +151,18 @@ pub fn encode_rational_lifecycle_selected_account_profile_v5(
             )?),
         },
     ];
-    let registers = RationalLifecycleHotRegisterLayoutV3::new(coordinates);
+    let v3_registers = RationalLifecycleHotRegisterLayoutV3::new(coordinates);
+    let v6_registers = RationalLifecycleHotRegisterLayoutV6::new(coordinates);
     let geometry = RegisterGeometryV2 {
-        common_scalars: narrow_u16(registers.scalar_count().ok_or(Error::InvalidLength)?)?,
+        common_scalars: narrow_u16(v3_registers.scalar_count().ok_or(Error::InvalidLength)?)?,
         item_scalar_stride: 0,
-        common_identities: narrow_u16(registers.identity_count().ok_or(Error::InvalidLength)?)?,
+        common_identities: narrow_u16(
+            match layout {
+                SelectedRegisterLayout::V3 => v3_registers.identity_count(),
+                SelectedRegisterLayout::V6 => v6_registers.identity_count(),
+            }
+            .ok_or(Error::InvalidLength)?,
+        )?,
         item_identity_stride: 0,
     };
     let bytes = DYNAMIC_FIXED_SPAN_HEADER_BYTES
