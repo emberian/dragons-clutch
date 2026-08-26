@@ -317,12 +317,10 @@ pub struct AuthenticatedAcceleratorInvocationV4<'request, 'accounts, 'info> {
     request: AcceleratorRequestV2<'request>,
     envelope: HotExecutionEnvelopeV3,
     hot_instruction: Vec<u8>,
-    descriptor: CapabilityProgramV4,
-    strategy: AuthenticatedExecutionStrategyV2,
+    strategy: Box<AuthenticatedExecutionStrategyV2>,
     selected_action: u32,
-    context: AdmittedInvocationContextV3,
-    product_runtime: dclutch_product_runtime_v2_svm_reader::AuthenticatedProductRuntimeV2,
-    linked_basis_record: dclutch_product_runtime_v2_svm_reader::AuthenticatedRecordV2,
+    context: Box<AdmittedInvocationContextV3>,
+    product_runtime: Box<AuthenticatedProductRuntimeV3<'accounts, 'info>>,
     claims_program: ContentId,
     custody_program: ContentId,
     span_widths: Vec<u32>,
@@ -358,31 +356,29 @@ impl<'request, 'accounts, 'info> AuthenticatedAcceleratorInvocationV4<'request, 
 
     /// Exact hostile-decoded CapabilityProgramV4 descriptor.
     pub const fn descriptor(&self) -> CapabilityProgramV4 {
-        self.descriptor
+        self.strategy.capability_program()
     }
 
     /// Exact admitted strategy/certificate/admission/deployment witness.
     pub const fn strategy(&self) -> AuthenticatedExecutionStrategyV2 {
-        self.strategy
+        *self.strategy
     }
 
     /// Complete invocation-context preimage whose digest is in AcceleratorRequestV2.
     pub const fn context(&self) -> AdmittedInvocationContextV3 {
-        self.context
+        *self.context
     }
 
     /// Product-authenticated runtime facts.
-    pub const fn product_runtime(
-        &self,
-    ) -> dclutch_product_runtime_v2_svm_reader::AuthenticatedProductRuntimeV2 {
-        self.product_runtime
+    pub const fn product_runtime(&self) -> &AuthenticatedProductRuntimeV3<'accounts, 'info> {
+        &self.product_runtime
     }
 
     /// Independently authenticated Product-linked basis record coordinate.
     pub const fn linked_basis_record(
         &self,
     ) -> dclutch_product_runtime_v2_svm_reader::AuthenticatedRecordV2 {
-        self.linked_basis_record
+        self.product_runtime.linked_basis_record
     }
 
     /// Current Registry-selected Claims program identity.
@@ -489,7 +485,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     }
     let (trading_receipt, claims_program, custody_program) =
         authenticate_accelerator_activation_v4(frame, envelope)?;
-    let market = authenticate_market(frame, envelope)?;
+    let market = authenticate_market_boxed_v3(&frame, envelope)?;
     let root_data = frame
         .root
         .try_borrow_data()
@@ -551,8 +547,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         selected_descriptor.schema().to_bytes(),
         selected_descriptor.program().to_bytes(),
     )?;
-    let descriptor =
-        CapabilityProgramV4::decode(&descriptor_data).map_err(|_| TradingSbfError::Content)?;
+    let descriptor = decode_capability_program_boxed_v3(&descriptor_data)?;
     authenticate_descriptor_root_selection(&descriptor, &family_context, &entry)?;
 
     let config_data = borrow_finalized_record(
@@ -583,23 +578,16 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
             .content_digest
             .to_bytes(),
     })?;
-    let mut strategy_accounts = Vec::with_capacity(ADMITTED_AOT_STRATEGY_ACCOUNT_COUNT_V2);
-    strategy_accounts.extend([
-        frame.descriptor_raw.clone(),
-        frame.descriptor_staging.clone(),
-        frame.strategy_raw.clone(),
-        frame.strategy_staging.clone(),
-    ]);
-    strategy_accounts.extend(strategy_evidence.iter().cloned());
-    let strategy = authenticate_execution_strategy_v2(
+    let (strategy, strategy_end) = authenticate_strategy_boxed_v3(
+        &frame,
+        strategy_evidence,
         family_context,
         selected_descriptor.schema(),
         selected_descriptor.program(),
-        frame.registry,
-        frame.rent,
-        &strategy_accounts,
+        0,
     )?;
-    if strategy.strategy().disposition() != StrategyDispositionV2::AdmittedAot
+    if strategy_end != strategy_evidence.len()
+        || strategy.strategy().disposition() != StrategyDispositionV2::AdmittedAot
         || strategy.strategy_program_id() != request.strategy_program()
         || strategy.certificate_program_id() != Some(request.certificate_program())
         || strategy
@@ -639,7 +627,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         descriptor.request_profile().schema().to_bytes(),
         descriptor.request_profile().program().to_bytes(),
     )?;
-    let request_profile = decode_request_profile(descriptor, &request_profile_data)?;
+    let request_profile = decode_request_profile(*descriptor, &request_profile_data)?;
     let transition_data = borrow_finalized_record(
         frame,
         frame.transition_raw,
@@ -738,7 +726,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
             .content_digest
             .to_bytes(),
     )?;
-    let context = AdmittedInvocationContextV3 {
+    let context = Box::new(AdmittedInvocationContextV3 {
         release_set: family_context.release_set(),
         market: ContentId::new(envelope.market()).map_err(|_| TradingSbfError::Content)?,
         root: ContentId::new(frame.root.key.to_bytes()).map_err(|_| TradingSbfError::Content)?,
@@ -799,8 +787,8 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
             .map_err(|_| TradingSbfError::Content)?,
         scalar_count: request.scalar_count(),
         identity_count: request.identity_count(),
-    };
-    if admitted_invocation_context_digest_v3(context).map_err(|_| TradingSbfError::Content)?
+    });
+    if admitted_invocation_context_digest_v3(*context).map_err(|_| TradingSbfError::Content)?
         != request.invocation_context()
     {
         return Err(TradingSbfError::Content.into());
@@ -817,12 +805,10 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         request,
         envelope,
         hot_instruction,
-        descriptor,
         strategy,
         selected_action: selected_entry.selector(),
         context,
-        product_runtime: product_runtime.runtime,
-        linked_basis_record: product_runtime.linked_basis_record,
+        product_runtime,
         claims_program,
         custody_program,
         span_widths,
@@ -6709,6 +6695,7 @@ mod tests {
     use alloc::boxed::Box;
 
     use super::*;
+
     use dclutch_account_profile_contract::lifecycle_v3::CreateStatePlanV3;
     use dclutch_account_profile_contract::v2::{
         AccountPrestateV2, DYNAMIC_FIXED_SPAN_HEADER_BYTES,
