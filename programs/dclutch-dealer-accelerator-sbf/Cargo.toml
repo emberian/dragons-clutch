@@ -1,0 +1,39 @@
+[package]
+name = "dclutch-dealer-accelerator-sbf"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+rust-version = "1.89"
+description = "Readonly stateless admitted-AOT accelerator for Dealer scenario execution"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+path = "src/lib.rs"
+
+[features]
+default = []
+no-entrypoint = []
+custom-heap = []
+custom-panic = []
+
+[dependencies]
+dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
+dclutch-execution-strategy-contract = { path = "../../crates/dclutch-execution-strategy-contract" }
+dclutch-trading-sbf = { path = "../dclutch-trading-sbf", default-features = false, features = ["dealer-family", "series-family", "no-entrypoint"] }
+solana-program = { version = "=3.0.0", default-features = false }
+
+[workspace]
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(target_os, values("solana"))'] }
+
+[lints.clippy]
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+checked_conversions = "deny"
+float_arithmetic = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+unwrap_used = "deny"
