@@ -24,6 +24,9 @@ mod generated;
 
 pub use generated::*;
 
+/// Fixed descriptor selecting independently finalized runtime-tail artifacts.
+pub mod v3;
+
 /// Schema label for finalized [`CapabilityProgramV1`] raw records.
 pub const CAPABILITY_PROGRAM_SCHEMA_RELEASE_PREIMAGE_V1: &[u8] =
     b"dclutch/schema/capability-program-v1";

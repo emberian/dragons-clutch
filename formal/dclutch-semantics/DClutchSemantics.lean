@@ -22,6 +22,7 @@ import DClutchSemantics.EconomicCodec
 import DClutchSemantics.ExecutionRelease
 import DClutchSemantics.SourceResolution
 import DClutchSemantics.SourceResolutionAbi
+import DClutchSemantics.SourceMaterialV2Abi
 import DClutchSemantics.GeneralClearing
 import DClutchSemantics.GeneralClearingExamples
 import DClutchSemantics.GeneralControllerAbi
@@ -40,6 +41,7 @@ import DClutchSemantics.Series
 import DClutchSemantics.SeriesExamples
 import DClutchSemantics.MarketCore
 import DClutchSemantics.MarketCoreExamples
+import DClutchSemantics.CapabilityProgramV3Abi
 
 /-!
 Fresh Lean-owned semantics for dClutch's compact protocol specializer.
