@@ -9,7 +9,9 @@ publish = false
 
 [dependencies]
 dclutch-account-profile-contract = { path = "../../../../crates/dclutch-account-profile-contract" }
+dclutch-capability-contract = { path = "../../../../crates/dclutch-capability-contract" }
 dclutch-capability-program-contract = { path = "../../../../crates/dclutch-capability-program-contract" }
+dclutch-claims-svm = { path = "../../../../crates/dclutch-claims-svm" }
 dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
 dclutch-custody-contract = { path = "../../../../crates/dclutch-custody-contract" }
 dclutch-direct-codec = { path = "../../../../crates/dclutch-direct-codec" }
@@ -17,14 +19,22 @@ dclutch-market-core-codec = { path = "../../../../crates/dclutch-market-core-cod
 dclutch-product-payoff-v2-codec = { path = "../../../../crates/dclutch-product-payoff-v2-codec" }
 dclutch-product-runtime-v2 = { path = "../../../../crates/dclutch-product-runtime-v2" }
 dclutch-product-runtime-v2-admission = { path = "../../../../crates/dclutch-product-runtime-v2-admission" }
+dclutch-product-runtime-v2-operator = { path = "../../../../crates/dclutch-product-runtime-v2-operator" }
 dclutch-realm-contract = { path = "../../../../crates/dclutch-realm-contract" }
+dclutch-record-contract = { path = "../../../../crates/dclutch-record-contract" }
 dclutch-registry-contract = { path = "../../../../crates/dclutch-registry-contract" }
 dclutch-registry-svm = { path = "../../../../crates/dclutch-registry-svm" }
+dclutch-release-set-contract = { path = "../../../../crates/dclutch-release-set-contract" }
 dclutch-rent-contract = { path = "../../../../crates/dclutch-rent-contract" }
+dclutch-token-svm = { path = "../../../../crates/dclutch-token-svm" }
 sha2 = { version = "=0.10.9", default-features = false }
 solana-account = "=4.3.2"
 solana-program = { version = "=3.0.0", default-features = false }
+solana-program-option = "=3.1.0"
+solana-program-pack = "=3.1.0"
 solana-program-test = { version = "=4.2.1", features = ["agave-unstable-api"] }
+solana-sdk-ids = "=3.1.0"
+spl-token-interface = "=3.0.0"
 
 [lints.rust]
 unsafe_code = "forbid"
