@@ -165,12 +165,10 @@ fn authenticate_and_evaluate_dealer_scenario_v4(
     candidate_bank: &mut [u8],
 ) -> Result<ScenarioAtomicPlanV3, DealerScenarioAcceleratorErrorV4> {
     let config = authenticate_config(invocation, request, runtime)?;
-    let claims = Box::new(authenticate_claims(
-        invocation, request, frame, runtime, width, config,
-    )?);
+    let claims = authenticate_claims(invocation, request, frame, runtime, width, config)?;
     let current_obligation = DealerObligationProjectionV3::decode(&claims.obligation_bytes)
         .map_err(|_| DealerScenarioAcceleratorErrorV4::Claims)?;
-    let collateral = Box::new(authenticate_collateral(
+    let collateral = authenticate_collateral(
         invocation,
         request,
         frame,
@@ -178,7 +176,7 @@ fn authenticate_and_evaluate_dealer_scenario_v4(
         runtime,
         config,
         claims.core_market,
-    )?);
+    )?;
     let current_slot = invocation
         .scalars()
         .get(usize::from(DEALER_SCENARIO_CURRENT_SLOT_SCALAR_V4))
@@ -408,6 +406,7 @@ fn authenticate_config(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[inline(never)]
 fn authenticate_claims(
     invocation: &AuthenticatedAcceleratorInvocationV4<'_, '_, '_>,
     request: DealerScenarioTradeRequestV3<'_>,
@@ -415,7 +414,7 @@ fn authenticate_claims(
     runtime: &[AccountInfo<'_>],
     width: usize,
     config: DealerConfigV3,
-) -> Result<ClaimsObservationV4, DealerScenarioAcceleratorErrorV4> {
+) -> Result<Box<ClaimsObservationV4>, DealerScenarioAcceleratorErrorV4> {
     let claims_start = usize::try_from(frame.claims_fixed_start)
         .map_err(|_| DealerScenarioAcceleratorErrorV4::Arithmetic)?;
     let claims_program = invocation.claims_program().to_bytes();
@@ -597,7 +596,7 @@ fn authenticate_claims(
     )
     .map_err(|_| DealerScenarioAcceleratorErrorV4::Claims)?;
 
-    Ok(ClaimsObservationV4 {
+    Ok(Box::new(ClaimsObservationV4 {
         obligation_bytes,
         claims_revision: market.revision,
         dealer_revision,
@@ -605,7 +604,7 @@ fn authenticate_claims(
         dealer_inventory,
         counterparty_inventory,
         core_market: core_market.key.to_bytes(),
-    })
+    }))
 }
 
 fn authenticate_position(
@@ -649,6 +648,7 @@ fn authenticate_position(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[inline(never)]
 fn authenticate_collateral(
     invocation: &AuthenticatedAcceleratorInvocationV4<'_, '_, '_>,
     request: DealerScenarioTradeRequestV3<'_>,
@@ -657,7 +657,7 @@ fn authenticate_collateral(
     runtime: &[AccountInfo<'_>],
     config: DealerConfigV3,
     core_market: [u8; 32],
-) -> Result<CollateralObservationV4, DealerScenarioAcceleratorErrorV4> {
+) -> Result<Box<CollateralObservationV4>, DealerScenarioAcceleratorErrorV4> {
     if core_market != request.market {
         return Err(DealerScenarioAcceleratorErrorV4::Custody);
     }
@@ -882,14 +882,14 @@ fn authenticate_collateral(
     {
         return Err(DealerScenarioAcceleratorErrorV4::Custody);
     }
-    Ok(CollateralObservationV4 {
+    Ok(Box::new(CollateralObservationV4 {
         principal,
         fee,
         hoard,
         counterparty,
         realm,
         replay,
-    })
+    }))
 }
 
 fn scenario_custody_span_widths(spans: [u32; DEALER_SCENARIO_PROFILE_SPANS_V4]) -> [u32; 6] {
