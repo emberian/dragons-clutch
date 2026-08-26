@@ -67,9 +67,23 @@ raw-record account, not instruction data. Its pinned default-rent balance is
 as two Append pages. Its transition body is hostile-decoded as runtime-width
 TransitionVM `ProgramV2`; V1 fixed-bank bodies are not an alternate path.
 
-This base intentionally does not apply effects or dispatch to a family module.
-Those integrations land only with exact schema support, child authority,
-postcondition checks, commit-last persistence, and hostile rollback coverage.
+The executable activation route now authenticates the Core envelope and Market,
+reauthenticates Core and Trading through the Market-selected Registry, validates
+the finalized descriptor/config/AccountProfile/EffectProgram records, projects
+real account observations into runtime-width register banks, executes
+TransitionVM V2 and the alias-aware EffectProgram V2 projector, and commits the
+composite root, ordered FundingState poststates, projected lamports, and exact
+Core acknowledgment last. Its first physical profile refuses enabled child CPI,
+data writes, non-native funding, hot actions, and closure; those integrations
+land only with exact role receipts, postcondition checks, and rollback evidence.
+
+`program-test/` is an isolated workspace so Agave's test dependency graph does
+not enter the root workspace. Its three small test ELFs exercise the actual SBF
+Core caller, common Trading outer, and Registry return-data producer. The
+`outer-only` Cargo feature exists only to build that common boundary without
+linking unfinished family physical modules; it is not a release selector or a
+runtime content tag.
+
 The fixed five state-owning roles and current interpreter are a safe release profile,
 not a permanent execution-strategy ceiling. A future checked stateless
 accelerator may consume the same descriptor only through a new measured,

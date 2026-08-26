@@ -1,0 +1,40 @@
+[package]
+name = "dclutch-trading-program-test"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+publish = false
+
+[workspace]
+
+[dependencies]
+dclutch-account-profile-contract = { path = "../../../crates/dclutch-account-profile-contract" }
+dclutch-capability-contract = { path = "../../../crates/dclutch-capability-contract" }
+dclutch-capability-program-contract = { path = "../../../crates/dclutch-capability-program-contract" }
+dclutch-core-contract = { path = "../../../crates/dclutch-core-contract" }
+dclutch-effect-kernel = { path = "../../../crates/dclutch-effect-kernel" }
+dclutch-market-core-codec = { path = "../../../crates/dclutch-market-core-codec" }
+dclutch-record-contract = { path = "../../../crates/dclutch-record-contract" }
+dclutch-registry-contract = { path = "../../../crates/dclutch-registry-contract" }
+dclutch-registry-svm = { path = "../../../crates/dclutch-registry-svm" }
+dclutch-release-set-contract = { path = "../../../crates/dclutch-release-set-contract" }
+dclutch-trading-sbf = { path = "..", features = ["no-entrypoint"] }
+solana-account = "=4.3.2"
+solana-program = { version = "=3.0.0", default-features = false }
+solana-program-test = { version = "=4.2.1", features = ["agave-unstable-api"] }
+solana-sdk = "=3.0.0"
+solana-sdk-ids = "=3.1.0"
+solana-transaction = "=4.1.6"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+checked_conversions = "deny"
+float_arithmetic = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+unwrap_used = "deny"

@@ -4,9 +4,11 @@
 
 //! Canonical data-driven SBF adapter for the fixed Trading execution role.
 //!
-//! The base release exposes the common authenticated dispatch boundary. It
-//! deliberately contains no family discriminator and applies no child effect
-//! until an exact content profile is implemented by this checked artifact.
+//! The executable activation path authenticates the common Core envelope,
+//! current Registry releases, finalized descriptor/config/profile/effect
+//! records, and interpreted transition/effects before committing one composite
+//! root, its FundingState accounts, and the exact Core acknowledgment. It has
+//! no family discriminator.
 
 // `entrypoint_no_alloc!` expands through `std::mem::MaybeUninit` on both host
 // and SBF targets; the Solana toolchain supplies that core-compatible facade.
@@ -18,12 +20,17 @@ use solana_program::{
 };
 
 /// Dealer family projection behind the common data-defined Trading boundary.
+#[cfg(feature = "families")]
 pub mod dealer;
 /// Manifest-, root-, release-, and descriptor-authenticated generic dispatch.
 pub mod dispatch;
 /// General family projection behind the common data-defined Trading boundary.
+#[cfg(feature = "families")]
 pub mod general;
+/// Family-neutral executable Core-to-Trading boundary.
+pub mod outer;
 /// Series family projection behind the common data-defined Trading boundary.
+#[cfg(feature = "families")]
 pub mod series;
 
 /// Stable refusal from the canonical Trading SBF boundary.
@@ -40,6 +47,8 @@ pub enum TradingSbfError {
     Content = 3,
     /// The checked data-defined transition refused.
     Transition = 4,
+    /// A projected physical mutation or account write could not commit.
+    Commit = 5,
 }
 
 impl From<TradingSbfError> for ProgramError {
@@ -60,17 +69,15 @@ fn program_entrypoint(
     process_instruction(program_id, accounts, instruction_data)
 }
 
-/// Refuse until an exact supported content projector invokes [`dispatch`].
+/// Execute the family-neutral authenticated activation route.
 ///
-/// This base entrypoint cannot interpret arbitrary accounts as registers and
-/// cannot apply arbitrary effects. Family integration extends the artifact
-/// with exact content-ID support and calls the common dispatch boundary; it
-/// must not add another Program-authority route.
+/// Hot actions and closure remain fail-closed until their common profile and
+/// fixed-role receipt composition land in this same authority boundary.
 #[inline(never)]
 pub fn process_instruction(
-    _program_id: &Pubkey,
-    _accounts: &[AccountInfo<'_>],
-    _instruction_data: &[u8],
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction_data: &[u8],
 ) -> ProgramResult {
-    Err(TradingSbfError::UnsupportedContent.into())
+    outer::process_activation(program_id, accounts, instruction_data)
 }

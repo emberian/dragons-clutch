@@ -361,6 +361,28 @@ pub fn dispatch_activation_authenticated<'descriptor>(
     supported: SupportedContentV1,
     registers: CapabilityRegistersV2<'_>,
 ) -> Result<CapabilityProgramV1<'descriptor>, TradingSbfError> {
+    let descriptor =
+        authenticate_activation_program(context, manifest_bytes, descriptor_bytes, config_bytes)?;
+    supported
+        .require(descriptor)
+        .map_err(map_capability_program_error)?;
+    descriptor
+        .execute(registers)
+        .map_err(map_capability_program_error)?;
+    Ok(descriptor)
+}
+
+/// Authenticate one activation descriptor without selecting a Rust family.
+///
+/// The executable outer uses this join before interpreting the descriptor's
+/// finalized AccountProfile and EffectProgram. It deliberately performs no
+/// transition and carries no compiled `SupportedContentV1` list.
+pub fn authenticate_activation_program<'descriptor>(
+    context: TradingFamilyContextV1,
+    manifest_bytes: &[u8],
+    descriptor_bytes: &'descriptor [u8],
+    config_bytes: &[u8],
+) -> Result<CapabilityProgramV1<'descriptor>, TradingSbfError> {
     let selection = context.selection();
     if hash(manifest_bytes).to_bytes() != selection.manifest().to_bytes() {
         return Err(TradingSbfError::Content);
@@ -372,13 +394,9 @@ pub fn dispatch_activation_authenticated<'descriptor>(
         .map_err(|_| TradingSbfError::Content)?;
     require_entry_identity(entry, selection)?;
 
-    let descriptor =
-        authenticate_common_content(context, descriptor_bytes, config_bytes, supported)?;
+    let descriptor = authenticate_common_content(context, descriptor_bytes, config_bytes)?;
     descriptor
         .validate_selection(selection, entry)
-        .map_err(map_capability_program_error)?;
-    descriptor
-        .execute(registers)
         .map_err(map_capability_program_error)?;
     Ok(descriptor)
 }
@@ -397,8 +415,10 @@ pub fn dispatch_hot_authenticated<'descriptor>(
     supported: SupportedContentV1,
     registers: CapabilityRegistersV2<'_>,
 ) -> Result<CapabilityProgramV1<'descriptor>, TradingSbfError> {
-    let descriptor =
-        authenticate_common_content(context, descriptor_bytes, config_bytes, supported)?;
+    let descriptor = authenticate_common_content(context, descriptor_bytes, config_bytes)?;
+    supported
+        .require(descriptor)
+        .map_err(map_capability_program_error)?;
     descriptor
         .validate_persisted_selection(context.selection())
         .map_err(map_capability_program_error)?;
@@ -412,7 +432,6 @@ fn authenticate_common_content<'descriptor>(
     context: TradingFamilyContextV1,
     descriptor_bytes: &'descriptor [u8],
     config_bytes: &[u8],
-    supported: SupportedContentV1,
 ) -> Result<CapabilityProgramV1<'descriptor>, TradingSbfError> {
     let selection = context.selection();
 
@@ -430,9 +449,6 @@ fn authenticate_common_content<'descriptor>(
     {
         return Err(TradingSbfError::Root);
     }
-    supported
-        .require(descriptor)
-        .map_err(map_capability_program_error)?;
     Ok(descriptor)
 }
 

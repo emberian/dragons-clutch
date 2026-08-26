@@ -948,10 +948,22 @@ mod tests {
     fn account_data() -> (vec::Vec<u8>, vec::Vec<u8>, vec::Vec<u8>) {
         let descriptor = vec![0x55; 64];
         let mut config = vec![0_u8; 232];
-        config[16..48].copy_from_slice(&[0x41; 32]);
-        config[80..112].copy_from_slice(&[0x42; 32]);
-        config[112..120].copy_from_slice(&7_u64.to_le_bytes());
-        config[120..128].copy_from_slice(&100_u64.to_le_bytes());
+        config
+            .get_mut(16..48)
+            .expect("capability identity")
+            .copy_from_slice(&[0x41; 32]);
+        config
+            .get_mut(80..112)
+            .expect("surplus beneficiary")
+            .copy_from_slice(&[0x42; 32]);
+        config
+            .get_mut(112..120)
+            .expect("candidate capacity")
+            .copy_from_slice(&7_u64.to_le_bytes());
+        config
+            .get_mut(120..128)
+            .expect("page capacity")
+            .copy_from_slice(&100_u64.to_le_bytes());
         let clock = vec![0x09, 0, 0, 0, 0, 0, 0, 0]
             .into_iter()
             .chain([0_u8; 32])

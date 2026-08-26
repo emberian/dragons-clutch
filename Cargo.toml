@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/dclutch-account-profile-contract",
     "crates/dclutch-bearer-contract",
     "crates/dclutch-capability-contract",
     "crates/dclutch-capability-program-contract",

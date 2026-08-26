@@ -7,19 +7,9 @@ rust-version = "1.89"
 description = "Safe fixed-memory interpreter for content-selected account projections"
 publish = false
 
-[workspace]
-
 [dependencies]
 dclutch-effect-kernel = { path = "../dclutch-effect-kernel" }
 dclutch-transition-vm = { path = "../dclutch-transition-vm" }
 
-[lints.rust]
-unsafe_code = "forbid"
-
-[lints.clippy]
-all = "deny"
-pedantic = "deny"
-cast_possible_truncation = "deny"
-cast_sign_loss = "deny"
-checked_conversions = "deny"
-float_arithmetic = "deny"
+[lints]
+workspace = true
