@@ -10,6 +10,8 @@
 pub mod accounts;
 /// Exact action-selected generic V3 interpreter artifacts.
 pub mod artifacts_v3;
+/// Schema-bound V4 descriptor and global DCE5 Consume artifact admission.
+pub mod artifacts_v4;
 /// Complete Core/Custody/replay physical plans behind authenticated actions.
 /// Canonical SeriesEscrow projection into the sole Custody writer.
 pub mod custody_v3;
