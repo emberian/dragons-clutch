@@ -8,7 +8,8 @@
 //! physical executor and writer.
 
 use dclutch_account_profile_contract::{
-    lifecycle_v3::StateLifecyclePolicyV4, v2::AccountProfileV2,
+    lifecycle_v3::StateLifecyclePolicyV5,
+    v2::{AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE},
 };
 use dclutch_capability_program_contract::{
     hot_v3::{
@@ -17,7 +18,10 @@ use dclutch_capability_program_contract::{
         HOT_RUNTIME_PRODUCT_COORDINATE_V3, HOT_RUNTIME_ROOT_COORDINATE_V3,
     },
     set_v2::{CapabilityProgramSetV2, SelectorWidthV2},
-    v3::{CapabilityProgramV3, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_V3_SCHEMA_RELEASE_ID},
+    v4::{
+        CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID,
+        SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
+    },
 };
 use dclutch_claims_svm::{
     CallerRole as ClaimsCallerRole,
@@ -43,7 +47,7 @@ use dclutch_execution_strategy_contract::v2::{
     EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyAdmissionV2,
     ExecutionStrategyCertificateV2, ExecutionStrategyProgramV2, StrategyDispositionV2,
-    validate_admitted_aot_v2,
+    validate_admitted_aot_v4,
 };
 use dclutch_general_codec::{
     Action,
@@ -63,9 +67,12 @@ use dclutch_transition_vm::v3::ProgramV3 as TransitionProgramV3;
 use sha2::{Digest, Sha256};
 
 use crate::{
+    account_rules_v3::{
+        GENERAL_SCRATCH_PAGE_RULE_STRIDE_V3, general_account_profile_fixed_count_v3,
+    },
     hot_candidate_v3::{
         GENERAL_HOT_COMMON_IDENTITIES_V3, GENERAL_HOT_COMMON_SCALARS_V3,
-        GENERAL_HOT_ITEM_IDENTITY_STRIDE_V3, GENERAL_HOT_ITEM_SCALAR_STRIDE_V3,
+        GENERAL_HOT_ITEM_IDENTITY_STRIDE_V3, GENERAL_HOT_ITEM_SCALAR_STRIDE_V3, scalar,
     },
     specialization::general_request_profile_bytes_v1,
 };
@@ -89,7 +96,7 @@ pub const GENERAL_PRODUCT_TAIL_COUNT_SCALAR_V3: u16 = 10;
 pub struct GeneralArtifactBytesV3<'a> {
     /// Canonical action-to-program set.
     pub program_set: &'a [u8],
-    /// Action-selected CapabilityProgramV3 descriptor.
+    /// Action-selected CapabilityProgramV4 descriptor.
     pub descriptor: &'a [u8],
     /// Manifest-selected immutable General config.
     pub config: &'a [u8],
@@ -128,13 +135,13 @@ pub struct GeneralArtifactBundleV3<'a> {
     /// Exact decoded family request.
     pub request: ControllerRequestV2,
     /// Action-selected capability descriptor.
-    pub descriptor: CapabilityProgramV3,
+    pub descriptor: CapabilityProgramV4,
     /// Immutable runtime-width General policy.
     pub config: GeneralConfigV3,
     /// Runtime-width account projection.
     pub account_profile: AccountProfileV2<'a>,
     /// Trading-owned lifecycle policy.
-    pub lifecycle_policy: StateLifecyclePolicyV4<'a>,
+    pub lifecycle_policy: StateLifecyclePolicyV5<'a>,
     /// Exact action-specific request program.
     pub request_profile: RequestProfileV1<'a>,
     /// Exact execution strategy.
@@ -214,12 +221,12 @@ pub fn authenticate_general_artifacts_v3<'a>(
         .select_descriptor(family_request)
         .map_err(|_| GeneralArtifactErrorV3::ProgramSet)?;
     let descriptor_id = digest(artifacts.descriptor);
-    if selected_descriptor.schema().to_bytes() != CAPABILITY_PROGRAM_V3_SCHEMA_RELEASE_ID
+    if selected_descriptor.schema().to_bytes() != CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID
         || selected_descriptor.program().to_bytes() != descriptor_id
     {
         return Err(GeneralArtifactErrorV3::ContentIdentity);
     }
-    let descriptor = CapabilityProgramV3::decode(artifacts.descriptor)
+    let descriptor = CapabilityProgramV4::decode(artifacts.descriptor)
         .map_err(|_| GeneralArtifactErrorV3::Descriptor)?;
     validate_descriptor(descriptor)?;
 
@@ -233,17 +240,17 @@ pub fn authenticate_general_artifacts_v3<'a>(
     }
 
     require_content(
-        descriptor.account_profile().to_bytes(),
+        descriptor.account_profile().program().to_bytes(),
         artifacts.account_profile,
     )?;
     let account_profile = AccountProfileV2::decode(artifacts.account_profile)
         .map_err(|_| GeneralArtifactErrorV3::AccountProfile)?;
     require_content(
-        descriptor.derivation_policy().to_bytes(),
+        descriptor.lifecycle().program().to_bytes(),
         artifacts.lifecycle_policy,
     )?;
-    let lifecycle_policy = StateLifecyclePolicyV4::decode_selected(
-        descriptor.derivation_policy().to_bytes(),
+    let lifecycle_policy = StateLifecyclePolicyV5::decode_selected(
+        descriptor.lifecycle().program().to_bytes(),
         digest(artifacts.lifecycle_policy),
         artifacts.lifecycle_policy,
     )
@@ -260,14 +267,14 @@ pub fn authenticate_general_artifacts_v3<'a>(
     }
 
     require_content(
-        descriptor.request_profile_program().to_bytes(),
+        descriptor.request_profile().program().to_bytes(),
         artifacts.request_profile,
     )?;
     if artifacts.request_profile != general_request_profile_bytes_v1(request.action) {
         return Err(GeneralArtifactErrorV3::RequestProfile);
     }
     let request_profile = RequestProfileV1::decode_selected(
-        descriptor.request_profile_program().to_bytes(),
+        descriptor.request_profile().program().to_bytes(),
         digest(artifacts.request_profile),
         artifacts.request_profile,
     )
@@ -275,14 +282,14 @@ pub fn authenticate_general_artifacts_v3<'a>(
     execute_request_profile(request_profile, family_request, tail_count)?;
 
     require_content(
-        descriptor.transition_program().to_bytes(),
+        descriptor.strategy().program().to_bytes(),
         artifacts.strategy,
     )?;
     let strategy = ExecutionStrategyProgramV2::decode(artifacts.strategy)
         .map_err(|_| GeneralArtifactErrorV3::Strategy)?;
     let strategy_id = content(digest(artifacts.strategy))?;
     strategy
-        .validate_descriptor_selection(strategy_id, descriptor)
+        .validate_descriptor_selection_v4(strategy_id, descriptor)
         .map_err(|_| GeneralArtifactErrorV3::Strategy)?;
     if strategy.disposition() != StrategyDispositionV2::AdmittedAot
         || strategy.certificate_schema().to_bytes() != EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2
@@ -302,7 +309,7 @@ pub fn authenticate_general_artifacts_v3<'a>(
     let admission = ExecutionStrategyAdmissionV2::decode(artifacts.admission)
         .map_err(|_| GeneralArtifactErrorV3::Admission)?;
     require_content(
-        strategy.transition_program().to_bytes(),
+        descriptor.transition().program().to_bytes(),
         artifacts.transition,
     )?;
     if strategy.transition_schema().to_bytes() != dclutch_transition_vm::v3::SCHEMA_RELEASE_ID {
@@ -311,26 +318,26 @@ pub fn authenticate_general_artifacts_v3<'a>(
     let transition = TransitionProgramV3::decode(artifacts.transition)
         .map_err(|_| GeneralArtifactErrorV3::Transition)?;
 
-    require_content(descriptor.effect_program().to_bytes(), artifacts.effect)?;
+    require_content(descriptor.effect().program().to_bytes(), artifacts.effect)?;
     let effect = EffectProgramV3::decode_selected(
-        descriptor.effect_program().to_bytes(),
+        descriptor.effect().program().to_bytes(),
         digest(artifacts.effect),
         artifacts.effect,
     )
     .map_err(|_| GeneralArtifactErrorV3::Effect)?;
-    let admitted_aot = validate_admitted_aot_v2(
+    let admitted_aot = validate_admitted_aot_v4(
         strategy_id,
         strategy,
         descriptor,
         certificate_id,
         certificate,
         AuthenticatedInterpreterArtifactsV2 {
-            account_profile_program: descriptor.account_profile(),
-            request_profile_schema: descriptor.request_profile_schema(),
-            request_profile_program: descriptor.request_profile_program(),
+            account_profile_program: descriptor.account_profile().program(),
+            request_profile_schema: descriptor.request_profile().schema(),
+            request_profile_program: descriptor.request_profile().program(),
             transition_schema: strategy.transition_schema(),
             transition_program: strategy.transition_program(),
-            effect_program: descriptor.effect_program(),
+            effect_program: descriptor.effect().program(),
         },
         ArtifactReleaseIdV1::new(selection.artifact_release)
             .map_err(|_| GeneralArtifactErrorV3::Admission)?,
@@ -338,6 +345,7 @@ pub fn authenticate_general_artifacts_v3<'a>(
     )
     .map_err(|_| GeneralArtifactErrorV3::Admission)?;
     validate_geometry(
+        request.action,
         tail_count,
         family_request.len(),
         account_profile,
@@ -362,14 +370,21 @@ pub fn authenticate_general_artifacts_v3<'a>(
     })
 }
 
-fn validate_descriptor(descriptor: CapabilityProgramV3) -> Result<()> {
+fn validate_descriptor(descriptor: CapabilityProgramV4) -> Result<()> {
     if descriptor.kind().to_bytes() != GENERAL_CAPABILITY_KIND_ID_V1
         || descriptor.config_schema().to_bytes() != GENERAL_CONFIG_SCHEMA_ID_V3
         || descriptor.request_schema().to_bytes() != GENERAL_CONTROLLER_REQUEST_SCHEMA_ID_V3
         || descriptor.root_schema().to_bytes() != GENERAL_ROOT_SCHEMA_ID_V2
-        || descriptor.request_profile_schema().to_bytes()
+        || descriptor.derivation_policy() != descriptor.lifecycle().program()
+        || descriptor.account_profile().schema().to_bytes()
+            != dclutch_account_profile_contract::v2::SCHEMA_RELEASE_ID
+        || descriptor.request_profile().schema().to_bytes()
             != dclutch_request_profile_contract::SCHEMA_RELEASE_ID
-        || descriptor.transition_schema().to_bytes() != EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2
+        || descriptor.lifecycle().schema().to_bytes()
+            != SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5
+        || descriptor.strategy().schema().to_bytes() != EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2
+        || descriptor.transition().schema().to_bytes() != dclutch_transition_vm::v3::SCHEMA_RELEASE_ID
+        || descriptor.effect().schema().to_bytes() != dclutch_effect_kernel::v3::SCHEMA_RELEASE_ID
         || usize::try_from(descriptor.root_state_bytes())
             .map_err(|_| GeneralArtifactErrorV3::Geometry)?
             != GENERAL_ROOT_BYTES_V2
@@ -406,6 +421,7 @@ fn execute_request_profile(
 }
 
 fn validate_geometry(
+    action: Action,
     tail_count: u32,
     request_bytes: usize,
     account: AccountProfileV2<'_>,
@@ -414,6 +430,29 @@ fn validate_geometry(
     effect: EffectProgramV3<'_>,
 ) -> Result<()> {
     validate_hot_account_profile(account)?;
+    let expected_fixed = general_account_profile_fixed_count_v3(action)
+        .map_err(|_| GeneralArtifactErrorV3::Geometry)?;
+    if account.artifact_profile() != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+        || account.fixed_account_count() != expected_fixed
+        || account.dynamic_fixed_span_count() != 1
+    {
+        return Err(GeneralArtifactErrorV3::Geometry);
+    }
+    let scratch_span = account
+        .dynamic_fixed_span(0)
+        .map_err(|_| GeneralArtifactErrorV3::AccountProfile)?;
+    if scratch_span.insertion_coordinate() != expected_fixed
+        || scratch_span.count_scalar()
+            != u16::try_from(scalar::INPUT_SCRATCH_PAGE_COUNT)
+                .map_err(|_| GeneralArtifactErrorV3::Geometry)?
+        || scratch_span.rule_start() != 0
+        || scratch_span.rule_stride() != GENERAL_SCRATCH_PAGE_RULE_STRIDE_V3
+        || scratch_span.minimum() != 1
+        || scratch_span.maximum() != u32::MAX
+        || scratch_span.step() != 1
+    {
+        return Err(GeneralArtifactErrorV3::Geometry);
+    }
     if request_bytes != CONTROLLER_REQUEST_BYTES_V2
         || request.item_request_bytes() != 0
         || account.common_scalar_count()
@@ -428,7 +467,10 @@ fn validate_geometry(
         || account.item_identity_stride()
             != u16::try_from(GENERAL_HOT_ITEM_IDENTITY_STRIDE_V3)
                 .map_err(|_| GeneralArtifactErrorV3::Geometry)?
-        || account.item_account_stride() != 0
+        // Under Profile13 the item-rule table is repurposed exclusively as
+        // the dynamic fixed-span template bank. It is physical scratch-page
+        // geometry, not a Product-N semantic account stride.
+        || account.item_account_stride() != GENERAL_SCRATCH_PAGE_RULE_STRIDE_V3
         || request.common_scalar_count() != account.common_scalar_count()
         || request.item_scalar_stride() != account.item_scalar_stride()
         || request.common_identity_count() != account.common_identity_count()
@@ -818,7 +860,7 @@ fn digest(bytes: &[u8]) -> [u8; 32] {
 mod tests {
     extern crate std;
 
-    use dclutch_capability_program_contract::v3::CAPABILITY_PROGRAM_V3_BYTES;
+    use dclutch_capability_program_contract::v4::CAPABILITY_PROGRAM_V4_BYTES;
     use dclutch_execution_strategy_contract::v2::{
         ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
         EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
@@ -831,7 +873,7 @@ mod tests {
 
     struct Fixture {
         set: Vec<u8>,
-        descriptor: [u8; CAPABILITY_PROGRAM_V3_BYTES],
+        descriptor: [u8; CAPABILITY_PROGRAM_V4_BYTES],
         config: [u8; GENERAL_CONFIG_BYTES_V3],
         account: Vec<u8>,
         lifecycle: Vec<u8>,
@@ -883,91 +925,36 @@ mod tests {
 
     fn account_profile() -> Vec<u8> {
         use dclutch_account_profile_contract::v2::{
-            AccountPrestateV2, TrustedEnvironmentV2,
+            TrustedBuiltinIdentityV2, TrustedEnvironmentV2, TrustedIdentityEnvironmentV2,
             encode::{
-                AccountAliasInputV2, AccountCoordinateV2, AccountEffectPermissionsV2,
-                AccountOperationInputV2, AccountPrivilegesV2, AccountRuleInputV2,
-                AccountRuleWithPrestateInputV2, IdentityCoordinateV2, RegisterGeometryV2,
-                ScalarCoordinateV2,
-                encode_account_profile_with_adapter_authenticated_variable_data_v2_atomic,
+                AccountCoordinateV2, AccountOperationInputV2, IdentityCoordinateV2,
+                RegisterGeometryV2, ScalarCoordinateV2,
+                encode_account_profile_with_dynamic_fixed_span_v2_generated_atomic,
             },
         };
+        use crate::account_rules_v3::{
+            GeneralExternalAccountWidthsV3, general_account_profile_rule_v3,
+            general_scratch_page_rule_v3, general_scratch_page_span_v3,
+        };
 
-        const FIXED_ACCOUNTS: usize = 8;
-        let readonly = AccountPrivilegesV2::new(false, false, false);
-        let writable = AccountPrivilegesV2::new(false, true, false);
-        let signer_writable = AccountPrivilegesV2::new(true, true, false);
-        let none = AccountEffectPermissionsV2::new(false, false, false);
-        let state_effects = AccountEffectPermissionsV2::new(false, true, true);
-        let exact =
-            |privileges, effects, data_length, data_item_stride| AccountRuleWithPrestateInputV2 {
-                rule: AccountRuleInputV2 {
-                    privileges,
-                    effect_permissions: effects,
-                    alias: AccountAliasInputV2::SelfCoordinate,
-                    data_length,
-                    data_item_stride,
-                },
-                prestate: AccountPrestateV2::Exact,
-            };
-        let rules = [
-            exact(
-                writable,
-                none,
-                u32::try_from(
-                    dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1
-                        + GENERAL_ROOT_BYTES_V2,
-                )
-                .expect("root width"),
-                0,
-            ),
-            exact(
-                readonly,
-                none,
-                u32::try_from(dclutch_general_config_contract::v3::GENERAL_CONFIG_BYTES_V3)
-                    .expect("config width"),
-                0,
-            ),
-            exact(
-                readonly,
-                none,
-                u32::try_from(PRODUCT_RECORD_BYTES_V2).expect("Product width"),
-                0,
-            ),
-            exact(
-                readonly,
-                none,
-                u32::try_from(PORTFOLIO_HEADER_BYTES).expect("portfolio width"),
-                u32::try_from(PORTFOLIO_COEFFICIENT_BYTES).expect("coefficient width"),
-            ),
-            AccountRuleWithPrestateInputV2 {
-                rule: AccountRuleInputV2 {
-                    privileges: readonly,
-                    effect_permissions: none,
-                    alias: AccountAliasInputV2::SelfCoordinate,
-                    data_length: 256,
-                    data_item_stride: 0,
-                },
-                prestate: AccountPrestateV2::AdapterAuthenticatedVariableData,
-            },
-            AccountRuleWithPrestateInputV2 {
-                rule: AccountRuleInputV2 {
-                    privileges: writable,
-                    effect_permissions: state_effects,
-                    alias: AccountAliasInputV2::SelfCoordinate,
-                    data_length: u32::try_from(
-                        crate::local_state_v3::GENERAL_LOCAL_STATE_HEADER_BYTES_V3
-                            + crate::runtime_selection::RUNTIME_SELECTION_CURSOR_BYTES_V2,
-                    )
-                    .expect("selection state width"),
-                    data_item_stride: 0,
-                },
-                prestate: AccountPrestateV2::LifecycleBound,
-            },
-            exact(signer_writable, none, 0, 0),
-            exact(readonly, none, 0, 0),
-        ];
-        assert_eq!(rules.len(), FIXED_ACCOUNTS);
+        const WIDTHS: GeneralExternalAccountWidthsV3 = GeneralExternalAccountWidthsV3 {
+            linked_basis_prefix: 256,
+            result_domain: 192,
+            rent_sysvar: 17,
+            core_market: 320,
+            activation_cache: 160,
+            upgradeable_program: 36,
+            trading_programdata_prefix: 45,
+            claims_programdata_prefix: 45,
+            core_programdata_prefix: 45,
+            realm_record: 112,
+            token_mint: 82,
+            token_account: 165,
+            token_program: 36,
+            rent_credit: 48,
+        };
+        let action = Action::Freeze;
+        let fixed_count = general_account_profile_fixed_count_v3(action).expect("fixed count");
         let operations = [
             AccountOperationInputV2::ProjectTailCountU32 {
                 account: AccountCoordinateV2::fixed(
@@ -1011,17 +998,28 @@ mod tests {
                 data_offset: crate::local_state_v3::GeneralLocalStateLayoutV3::beneficiary(),
             },
         ];
-        let bytes = dclutch_account_profile_contract::v2::HEADER_BYTES
-            + rules.len() * dclutch_account_profile_contract::v2::RULE_BYTES
+        let bytes = dclutch_account_profile_contract::v2::DYNAMIC_FIXED_SPAN_HEADER_BYTES
+            + dclutch_account_profile_contract::v2::DYNAMIC_FIXED_SPAN_ENTRY_BYTES
+            + (usize::from(fixed_count) + 1)
+                * dclutch_account_profile_contract::v2::RULE_BYTES
             + operations.len() * dclutch_account_profile_contract::v2::OPERATION_BYTES;
         let mut scratch = vec![0_u8; bytes];
         let mut output = vec![0x55_u8; bytes];
-        encode_account_profile_with_adapter_authenticated_variable_data_v2_atomic(
+        encode_account_profile_with_dynamic_fixed_span_v2_generated_atomic(
             TrustedEnvironmentV2::None,
-            &rules,
-            &[],
+            TrustedIdentityEnvironmentV2::CurrentExecutingProgram {
+                destination: u16::try_from(crate::hot_candidate_v3::identity::TRADING_PROGRAM)
+                    .expect("program coordinate"),
+            },
+            TrustedBuiltinIdentityV2::None,
+            &[general_scratch_page_span_v3(action).expect("scratch span")],
+            fixed_count,
+            |coordinate| {
+                general_account_profile_rule_v3(action, coordinate, WIDTHS)
+                    .map_err(|_| dclutch_account_profile_contract::v2::Error::InvalidLength)
+            },
+            &[general_scratch_page_rule_v3()],
             &operations,
-            &[],
             RegisterGeometryV2 {
                 common_scalars: u16::try_from(GENERAL_HOT_COMMON_SCALARS_V3)
                     .expect("common scalars"),
@@ -1034,7 +1032,7 @@ mod tests {
             &mut scratch,
             &mut output,
         )
-        .expect("Profile7 account artifact");
+        .expect("Profile13 account artifact");
         output
     }
 
@@ -1043,12 +1041,14 @@ mod tests {
     }
 
     fn lifecycle_policy_for(action: Action) -> Vec<u8> {
-        let bytes = crate::state_artifacts_v3::general_state_lifecycle_bytes_v3(action)
+        let bytes = crate::state_artifacts_v3::general_state_lifecycle_bytes_v5(action)
             .expect("lifecycle width");
         let mut scratch = vec![0_u8; bytes];
         let mut output = vec![0x55_u8; bytes];
-        crate::state_artifacts_v3::encode_general_state_lifecycle_v3_atomic(
+        crate::state_artifacts_v3::encode_general_state_lifecycle_v5_atomic(
             action,
+            crate::state_artifacts_v3::GeneralChildRentWidthsV5::new(1, 165)
+                .expect("child widths"),
             &mut scratch,
             &mut output,
         )
@@ -1115,7 +1115,7 @@ mod tests {
         let entry = CapabilityProgramSetEntryV2::new(
             Action::Freeze as u32,
             CapabilityDescriptorReferenceV2::new(
-                id(CAPABILITY_PROGRAM_V3_SCHEMA_RELEASE_ID),
+                id(CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID),
                 id(descriptor),
             ),
         );
@@ -1131,6 +1131,10 @@ mod tests {
     }
 
     fn fixture() -> Fixture {
+        use dclutch_capability_program_contract::v4::{
+            ArtifactReferenceV4, CapabilityArtifactsV4,
+        };
+
         let account = account_profile();
         let lifecycle = lifecycle_policy();
         let request_profile = general_request_profile_bytes_v1(Action::Freeze).to_vec();
@@ -1168,19 +1172,39 @@ mod tests {
         .to_bytes()
         .to_vec();
         let capacity = [8; 32];
-        let descriptor = CapabilityProgramV3::new(
+        let descriptor = CapabilityProgramV4::new(
             id(GENERAL_CAPABILITY_KIND_ID_V1),
             id(GENERAL_CONFIG_SCHEMA_ID_V3),
             id(GENERAL_CONTROLLER_REQUEST_SCHEMA_ID_V3),
             id(GENERAL_ROOT_SCHEMA_ID_V2),
-            id(digest(&account)),
             id(digest(&lifecycle)),
             id(capacity),
-            id(digest(&effect)),
-            id(dclutch_request_profile_contract::SCHEMA_RELEASE_ID),
-            id(digest(&request_profile)),
-            id(EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2),
-            id(digest(&strategy)),
+            CapabilityArtifactsV4 {
+                account_profile: ArtifactReferenceV4::new(
+                    id(dclutch_account_profile_contract::v2::SCHEMA_RELEASE_ID),
+                    id(digest(&account)),
+                ),
+                request_profile: ArtifactReferenceV4::new(
+                    id(dclutch_request_profile_contract::SCHEMA_RELEASE_ID),
+                    id(digest(&request_profile)),
+                ),
+                lifecycle: ArtifactReferenceV4::new(
+                    id(SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5),
+                    id(digest(&lifecycle)),
+                ),
+                strategy: ArtifactReferenceV4::new(
+                    id(EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2),
+                    id(digest(&strategy)),
+                ),
+                transition: ArtifactReferenceV4::new(
+                    id(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID),
+                    id(digest(&transition)),
+                ),
+                effect: ArtifactReferenceV4::new(
+                    id(dclutch_effect_kernel::v3::SCHEMA_RELEASE_ID),
+                    id(digest(&effect)),
+                ),
+            },
             u32::try_from(GENERAL_ROOT_BYTES_V2).expect("root bytes"),
         )
         .expect("descriptor")
@@ -1296,8 +1320,9 @@ mod tests {
                 .expect("fixture profile")
                 .fixed_account_count(),
         );
-        let operation = dclutch_account_profile_contract::v2::HEADER_BYTES
-            + fixed_accounts * dclutch_account_profile_contract::v2::RULE_BYTES;
+        let operation = dclutch_account_profile_contract::v2::DYNAMIC_FIXED_SPAN_HEADER_BYTES
+            + dclutch_account_profile_contract::v2::DYNAMIC_FIXED_SPAN_ENTRY_BYTES
+            + (fixed_accounts + 1) * dclutch_account_profile_contract::v2::RULE_BYTES;
         put(
             &mut hostile_profile,
             operation + 2,
@@ -1314,20 +1339,21 @@ mod tests {
 
         let hostile_digest = digest(&hostile_profile);
         let mut descriptor =
-            CapabilityProgramV3::decode(&fixture.descriptor).expect("fixture descriptor");
-        descriptor = CapabilityProgramV3::new(
+            CapabilityProgramV4::decode(&fixture.descriptor).expect("fixture descriptor");
+        let mut descriptor_artifacts = descriptor.artifacts();
+        descriptor_artifacts.account_profile =
+            dclutch_capability_program_contract::v4::ArtifactReferenceV4::new(
+                descriptor.account_profile().schema(),
+                id(hostile_digest),
+            );
+        descriptor = CapabilityProgramV4::new(
             descriptor.kind(),
             descriptor.config_schema(),
             descriptor.request_schema(),
             descriptor.root_schema(),
-            id(hostile_digest),
             descriptor.derivation_policy(),
             descriptor.capacity_profile(),
-            descriptor.effect_program(),
-            descriptor.request_profile_schema(),
-            descriptor.request_profile_program(),
-            descriptor.transition_schema(),
-            descriptor.transition_program(),
+            descriptor_artifacts,
             descriptor.root_state_bytes(),
         )
         .expect("hostile descriptor");

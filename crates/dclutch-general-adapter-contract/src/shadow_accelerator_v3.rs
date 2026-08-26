@@ -84,10 +84,10 @@ pub fn evaluate_general_shadow_v3(input: GeneralShadowEvaluationV3<'_>) -> Resul
         .ok_or(GeneralShadowErrorV3::Strategy)?;
     let expected_artifacts = ShadowArtifactTupleV3 {
         capability_program: content(input.artifacts.descriptor)?,
-        account_profile: bundle.descriptor.account_profile(),
-        request_profile: bundle.descriptor.request_profile_program(),
+        account_profile: bundle.descriptor.account_profile().program(),
+        request_profile: bundle.descriptor.request_profile().program(),
         transition: bundle.strategy.transition_program(),
-        effect: bundle.descriptor.effect_program(),
+        effect: bundle.descriptor.effect().program(),
         strategy: content(input.artifacts.strategy)?,
         certificate,
     };
@@ -144,7 +144,7 @@ pub struct GeneralAcceleratorBindingV3 {
     pub strategy: ContentId,
     /// Strategy-selected translation certificate identity.
     pub certificate: ContentId,
-    /// Action-selected CapabilityProgramV3 identity.
+    /// Action-selected CapabilityProgramV4 identity.
     pub capability_program: ContentId,
     /// Invocation-context digest repeated by every chunk.
     pub invocation_context: ContentId,
