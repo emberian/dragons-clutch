@@ -170,6 +170,8 @@ pub struct DirectHotChainFixtureV5 {
     pub claims_market: Pubkey,
     /// Canonical seller and buyer Claims Positions.
     pub claims_positions: [Pubkey; 2],
+    /// Canonical seller and buyer maker replay accounts.
+    pub maker_replays: [Pubkey; 2],
     /// Canonical Custody replay mutated by the delegated transfer.
     pub custody_replay: Pubkey,
     /// Ordered source, destination, and untouched collateral token accounts.
@@ -306,6 +308,7 @@ pub fn build_direct_hot_chain_fixture_v5(
         root: capability.root,
         claims_market: state.claims_market,
         claims_positions: [state.positions[0].0, state.positions[1].0],
+        maker_replays: [capability.seller_maker, capability.buyer_maker],
         custody_replay: realm.custody_replay,
         collateral_accounts: product.collateral_accounts,
     })
