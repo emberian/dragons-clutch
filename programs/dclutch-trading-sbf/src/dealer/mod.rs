@@ -30,6 +30,8 @@ use crate::dispatch::TradingFamilyContextV1;
 
 /// Read-only admitted-AOT evaluator for scenario exact-fill.
 pub mod v3_admitted;
+/// Physical account authentication for the read-only Dealer accelerator.
+pub mod v3_accelerator_accounts;
 /// Finalized RequestProfile/Transition/Effect joins for junior equity.
 pub mod v3_artifacts;
 /// Atomic scenario-solvent Claims/Custody portfolio-fill composition.

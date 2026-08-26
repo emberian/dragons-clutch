@@ -29,6 +29,7 @@ dealer-family = [
     "dep:dclutch-economic-slice-kernel",
     "dep:dclutch-rational-representation-v2-lifecycle-contract",
     "dep:dclutch-rational-representation-v2-contract",
+    "dep:dclutch-realm-contract",
     "dep:dclutch-token-svm",
 ]
 families = [
@@ -70,6 +71,7 @@ dclutch-request-profile-contract = { path = "../../crates/dclutch-request-profil
 dclutch-release-set-contract = { path = "../../crates/dclutch-release-set-contract" }
 dclutch-resolution-codec = { path = "../../crates/dclutch-resolution-codec" }
 dclutch-rent-contract = { path = "../../crates/dclutch-rent-contract" }
+dclutch-realm-contract = { path = "../../crates/dclutch-realm-contract", optional = true }
 dclutch-series-v3-kernel = { path = "../../crates/dclutch-series-v3-kernel" }
 dclutch-transition-vm = { path = "../../crates/dclutch-transition-vm" }
 dclutch-token-svm = { path = "../../crates/dclutch-token-svm", optional = true }
