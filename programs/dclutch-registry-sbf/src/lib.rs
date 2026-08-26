@@ -100,7 +100,7 @@ struct RoleFrame<'accounts, 'info> {
 }
 
 #[cfg(not(feature = "no-entrypoint"))]
-solana_program::entrypoint_no_alloc!(process_instruction);
+solana_program::entrypoint!(process_instruction);
 
 /// Dispatch one exact activation or reauthentication request.
 #[inline(never)]
