@@ -707,32 +707,12 @@ pub fn process_hot_execution_v3(
             identities: &preplanned_lifecycle.identities,
         })?
     } else {
-        let mut transition_scratch_scalars = preplanned_lifecycle.scalars.clone();
-        let mut transition_scratch_identities = preplanned_lifecycle.identities.clone();
-        let mut transition_output_scalars = preplanned_lifecycle.scalars.clone();
-        let mut transition_output_identities = preplanned_lifecycle.identities.clone();
-        execute_fold_atomic(
+        execute_interpreted_transition_v3(
             transition,
             tail_count,
-            RegisterInput {
-                scalars: &preplanned_lifecycle.scalars,
-                identities: &preplanned_lifecycle.identities,
-            },
-            RegisterOutput {
-                scalars: &mut transition_scratch_scalars,
-                identities: &mut transition_scratch_identities,
-            },
-            RegisterOutput {
-                scalars: &mut transition_output_scalars,
-                identities: &mut transition_output_identities,
-            },
-        )
-        .map_err(|_| TradingSbfError::Transition)?;
-        CandidateExecutionV3 {
-            scalars: transition_output_scalars,
-            identities: transition_output_identities,
-            transcript_digest: [0_u8; 32],
-        }
+            &preplanned_lifecycle.scalars,
+            &preplanned_lifecycle.identities,
+        )?
     };
     let transition_output_scalars = candidate.scalars;
     let transition_output_identities = candidate.identities;
@@ -752,38 +732,20 @@ pub fn process_hot_execution_v3(
         family_request,
     )?;
 
-    let mut account_inputs = observations
-        .iter()
-        .map(|observation| AccountInput {
-            lamports: observation.lamports(),
-            data_len: observation.data().len(),
-        })
-        .collect::<Vec<_>>();
-    apply_lifecycle_candidates_v3(&preplanned_lifecycle.plans, &aliases, &mut account_inputs)?;
-    let mut permissions = vec![AccountPermission::read_only(); runtime_accounts.len()];
-    derive_effect_permissions(account_profile, tail_count, &mut permissions)
-        .map_err(|_| TradingSbfError::Content)?;
-    require_common_projection_permissions_v3(&permissions)?;
-    let mut scratch_lamports = vec![0_u64; runtime_accounts.len()];
-    let mut output_lamports = vec![0_u64; runtime_accounts.len()];
-    let mut scratch_requests = vec![0_u8; request_bytes];
-    let mut output_requests = vec![0_u8; request_bytes];
-    project_effects_atomic(
-        effect.base(),
+    let projected_effects = project_hot_effects_v3(
+        effect,
         tail_count,
-        ProjectionV3 {
-            scalars: &transition_output_scalars,
-            identities: &transition_output_identities,
-            aliases: &aliases,
-            accounts: &account_inputs,
-            permissions: &permissions,
-            scratch_lamports: &mut scratch_lamports,
-            output_lamports: &mut output_lamports,
-            scratch_requests: &mut scratch_requests,
-            output_requests: &mut output_requests,
-        },
-    )
-    .map_err(|_| TradingSbfError::Transition)?;
+        &transition_output_scalars,
+        &transition_output_identities,
+        &observations,
+        &preplanned_lifecycle.plans,
+        account_profile,
+        &aliases,
+        runtime_accounts.len(),
+        request_bytes,
+    )?;
+    let output_lamports = projected_effects.lamports;
+    let output_requests = projected_effects.requests;
 
     preflight_local_effects(
         effect,
@@ -1289,6 +1251,100 @@ struct CandidateExecutionV3 {
     scalars: Vec<u64>,
     identities: Vec<[u8; 32]>,
     transcript_digest: [u8; 32],
+}
+
+#[inline(never)]
+fn execute_interpreted_transition_v3(
+    transition: TransitionProgramV3<'_>,
+    tail_count: u32,
+    input_scalars: &[u64],
+    input_identities: &[[u8; 32]],
+) -> Result<CandidateExecutionV3, ProgramError> {
+    let mut scratch_scalars = input_scalars.to_vec();
+    let mut scratch_identities = input_identities.to_vec();
+    let mut output_scalars = input_scalars.to_vec();
+    let mut output_identities = input_identities.to_vec();
+    execute_fold_atomic(
+        transition,
+        tail_count,
+        RegisterInput {
+            scalars: input_scalars,
+            identities: input_identities,
+        },
+        RegisterOutput {
+            scalars: &mut scratch_scalars,
+            identities: &mut scratch_identities,
+        },
+        RegisterOutput {
+            scalars: &mut output_scalars,
+            identities: &mut output_identities,
+        },
+    )
+    .map_err(|_| TradingSbfError::Transition)?;
+    Ok(CandidateExecutionV3 {
+        scalars: output_scalars,
+        identities: output_identities,
+        transcript_digest: [0_u8; 32],
+    })
+}
+
+struct ProjectedEffectsV3 {
+    lamports: Vec<u64>,
+    requests: Vec<u8>,
+}
+
+/// Account candidates and both Effect scratch banks are phase-local. Only the
+/// exact lamport projection and child-request bank survive into preflight/CPI.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn project_hot_effects_v3(
+    effect: SelectedEffectProgramV4<'_>,
+    tail_count: u32,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+    observations: &[AccountObservationV1<'_>],
+    lifecycle_plans: &[PreparedLifecycleInvocationV3],
+    account_profile: AccountProfileV2<'_>,
+    aliases: &[usize],
+    runtime_account_count: usize,
+    request_bytes: usize,
+) -> Result<ProjectedEffectsV3, ProgramError> {
+    let mut account_inputs = observations
+        .iter()
+        .map(|observation| AccountInput {
+            lamports: observation.lamports(),
+            data_len: observation.data().len(),
+        })
+        .collect::<Vec<_>>();
+    apply_lifecycle_candidates_v3(lifecycle_plans, aliases, &mut account_inputs)?;
+    let mut permissions = vec![AccountPermission::read_only(); runtime_account_count];
+    derive_effect_permissions(account_profile, tail_count, &mut permissions)
+        .map_err(|_| TradingSbfError::Content)?;
+    require_common_projection_permissions_v3(&permissions)?;
+    let mut scratch_lamports = vec![0_u64; runtime_account_count];
+    let mut output_lamports = vec![0_u64; runtime_account_count];
+    let mut scratch_requests = vec![0_u8; request_bytes];
+    let mut output_requests = vec![0_u8; request_bytes];
+    project_effects_atomic(
+        effect.base(),
+        tail_count,
+        ProjectionV3 {
+            scalars,
+            identities,
+            aliases,
+            accounts: &account_inputs,
+            permissions: &permissions,
+            scratch_lamports: &mut scratch_lamports,
+            output_lamports: &mut output_lamports,
+            scratch_requests: &mut scratch_requests,
+            output_requests: &mut output_requests,
+        },
+    )
+    .map_err(|_| TradingSbfError::Transition)?;
+    Ok(ProjectedEffectsV3 {
+        lamports: output_lamports,
+        requests: output_requests,
+    })
 }
 
 #[inline(never)]
