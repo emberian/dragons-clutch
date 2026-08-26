@@ -88,6 +88,16 @@ struct TerminalFixture {
     manifests: Vec<Vec<u8>>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ExecutionEvidence {
+    action: Action,
+    outcome_count: u32,
+    compute_units: u64,
+    instruction_accounts: usize,
+    packet_bytes: usize,
+    scratch_pages: u32,
+}
+
 fn content(value: u8) -> ContentId {
     ContentId::new([value; 32]).expect("nonzero content")
 }
@@ -512,27 +522,51 @@ fn real_sbf_fixture(
 async fn submit(
     context: &mut ProgramTestContext,
     instruction: Instruction,
-) -> Result<solana_program_test::BanksTransactionResultWithMetadata, BanksClientError> {
+) -> Result<
+    (
+        solana_program_test::BanksTransactionResultWithMetadata,
+        usize,
+        usize,
+    ),
+    BanksClientError,
+> {
     let blockhash = context.banks_client.get_latest_blockhash().await?;
+    let instruction_accounts = instruction.accounts.len();
     let transaction = Transaction::new_signed_with_payer(
         &[instruction],
         Some(&context.payer.pubkey()),
         &[&context.payer],
         blockhash,
     );
-    context
+    // One short-vector signature count byte, one signature, and the exact
+    // canonical message bytes. ProgramTest uses the same legacy packet wire.
+    let packet_bytes = 1_usize
+        .checked_add(64)
+        .and_then(|prefix| prefix.checked_add(transaction.message_data().len()))
+        .expect("bounded transaction wire");
+    let processed = context
         .banks_client
         .process_transaction_with_metadata(transaction)
-        .await
+        .await?;
+    Ok((processed, instruction_accounts, packet_bytes))
 }
 
-async fn execute(fixture: RealSbfFixture) -> (AcceleratorAckV2<'static>, ProgramTestContext) {
+async fn execute(
+    fixture: RealSbfFixture,
+) -> (
+    AcceleratorAckV2<'static>,
+    ProgramTestContext,
+    ExecutionEvidence,
+) {
     let request = AcceleratorRequestV2::decode(&fixture.request_bytes).expect("request decode");
+    let (_, family_request) =
+        HotExecutionEnvelopeV3::split_instruction(&fixture.instruction.data).expect("Hot request");
+    let controller = ControllerRequestV2::decode(family_request).expect("controller request");
     let request_digest =
         ContentId::new(hash(&fixture.request_bytes).to_bytes()).expect("request digest");
     let observed = fixture.observed_accounts;
     let mut context = fixture.test.start_with_context().await;
-    let processed = submit(&mut context, fixture.instruction)
+    let (processed, instruction_accounts, packet_bytes) = submit(&mut context, fixture.instruction)
         .await
         .expect("ProgramTest processing");
     assert!(
@@ -541,6 +575,7 @@ async fn execute(fixture: RealSbfFixture) -> (AcceleratorAckV2<'static>, Program
         processed.result
     );
     let metadata = processed.metadata.expect("transaction metadata");
+    let compute_units = metadata.compute_units_consumed;
     let returned = metadata.return_data.expect("typed accelerator ack");
     assert_eq!(returned.program_id, CALLER);
     let leaked: &'static [u8] = Box::leak(returned.data.into_boxed_slice());
@@ -556,7 +591,15 @@ async fn execute(fixture: RealSbfFixture) -> (AcceleratorAckV2<'static>, Program
             .expect("runtime account");
         assert_eq!(after.data, before, "accelerator must remain readonly");
     }
-    (ack, context)
+    let evidence = ExecutionEvidence {
+        action: controller.action,
+        outcome_count: request.tail_count(),
+        compute_units,
+        instruction_accounts,
+        packet_bytes,
+        scratch_pages: request.chunk_count(),
+    };
+    (ack, context, evidence)
 }
 
 fn read_payload_scalar(payload: &[u8], coordinate: u32) -> u64 {
@@ -894,9 +937,11 @@ fn bank_for_request(width: u32, controller: ControllerRequestV2) -> Vec<u8> {
     bank
 }
 
-async fn execute_initialize(fixture: &TerminalFixture) -> AcceleratorDispositionV2 {
+async fn execute_initialize(
+    fixture: &TerminalFixture,
+) -> (AcceleratorDispositionV2, ExecutionEvidence) {
     let controller = request(Action::InitializeSettlement, 0, 0, 0);
-    let (ack, _) = execute(real_sbf_fixture(
+    let (ack, _, evidence) = execute(real_sbf_fixture(
         fixture.width,
         controller,
         bank_for_request(fixture.width, controller),
@@ -932,7 +977,7 @@ async fn execute_initialize(fixture: &TerminalFixture) -> AcceleratorDisposition
             404
         );
     }
-    ack.disposition()
+    (ack.disposition(), evidence)
 }
 
 async fn execute_settlement(
@@ -943,7 +988,7 @@ async fn execute_settlement(
     page_index: u32,
     execution_index: u8,
     manifest_order_index: u8,
-) -> AcceleratorAckV2<'static> {
+) -> (AcceleratorAckV2<'static>, ExecutionEvidence) {
     let revision = SettlementCursorV2::decode(cursor)
         .expect("settlement cursor")
         .header()
@@ -955,14 +1000,36 @@ async fn execute_settlement(
         execution_index,
         manifest_order_index,
     );
-    let (ack, _) = execute(real_sbf_fixture(
+    let (ack, _, evidence) = execute(real_sbf_fixture(
         fixture.width,
         controller,
         bank_for_request(fixture.width, controller),
         runtime_for_settlement(fixture, action, cursor, manifest),
     ))
     .await;
-    ack
+    (ack, evidence)
+}
+
+fn assert_execution_evidence(evidence: ExecutionEvidence, action: Action, outcome_count: u32) {
+    assert_eq!(evidence.action, action);
+    assert_eq!(evidence.outcome_count, outcome_count);
+    assert!(evidence.compute_units > 0);
+    assert!(evidence.compute_units <= 1_400_000);
+    assert!(evidence.instruction_accounts > 20);
+    // This readonly CPI harness deliberately submits a legacy message so the
+    // accelerator can see every scratch page directly. Some N=258 actions
+    // exceed the network packet ceiling in this diagnostic transport; the
+    // production operator separately proves the same account set packet-safe
+    // through its exact ALT-backed v0 plan.
+    assert!(evidence.packet_bytes > 0 && evidence.packet_bytes <= 2_000);
+    assert!(evidence.scratch_pages > 0);
+    eprintln!(
+        "general-real-sbf action={action:?} N={outcome_count} cu={} accounts={} legacy_packet={} scratch_pages={}",
+        evidence.compute_units,
+        evidence.instruction_accounts,
+        evidence.packet_bytes,
+        evidence.scratch_pages,
+    );
 }
 
 #[tokio::test]
@@ -1003,7 +1070,7 @@ async fn real_sbf_consider_replaces_with_best_valid_submitted_candidate_then_fre
             state_bump: 1,
             terminal_record_bump: 0,
         };
-        let (ack, _) = execute(real_sbf_fixture(
+        let (ack, _, evidence) = execute(real_sbf_fixture(
             width,
             controller,
             input_bank(width, Action::Consider),
@@ -1011,6 +1078,7 @@ async fn real_sbf_consider_replaces_with_best_valid_submitted_candidate_then_fre
         ))
         .await;
         assert_eq!(ack.disposition(), AcceleratorDispositionV2::Accepted);
+        assert_execution_evidence(evidence, Action::Consider, width);
         assert_eq!(
             read_payload_scalar(ack.payload(), scalar::SELECTION_SUBMITTED_COUNT),
             2
@@ -1044,7 +1112,7 @@ async fn real_sbf_consider_replaces_with_best_valid_submitted_candidate_then_fre
             state_bump: 1,
             terminal_record_bump: 0,
         };
-        let (ack, _) = execute(real_sbf_fixture(
+        let (ack, _, evidence) = execute(real_sbf_fixture(
             width,
             controller,
             input_bank(width, Action::Freeze),
@@ -1052,6 +1120,7 @@ async fn real_sbf_consider_replaces_with_best_valid_submitted_candidate_then_fre
         ))
         .await;
         assert_eq!(ack.disposition(), AcceleratorDispositionV2::Accepted);
+        assert_execution_evidence(evidence, Action::Freeze, width);
         assert_eq!(
             read_payload_scalar(ack.payload(), scalar::SELECTION_PHASE),
             u64::from(RuntimeSelectionPhaseV2::Frozen.tag())
@@ -1068,10 +1137,9 @@ async fn real_sbf_consider_replaces_with_best_valid_submitted_candidate_then_fre
 
 async fn run_full_settlement_lifecycle(width: u32) {
     let fixture = terminal_fixture(width);
-    assert_eq!(
-        execute_initialize(&fixture).await,
-        AcceleratorDispositionV2::Accepted
-    );
+    let (initialize, evidence) = execute_initialize(&fixture).await;
+    assert_eq!(initialize, AcceleratorDispositionV2::Accepted);
+    assert_execution_evidence(evidence, Action::InitializeSettlement, width);
     let first_manifest =
         SettlementManifestV2::decode(fixture.manifests.first().expect("first manifest bytes"))
             .expect("first manifest");
@@ -1103,7 +1171,7 @@ async fn run_full_settlement_lifecycle(width: u32) {
     // The manifest ordinal and source coordinates are distinct authenticated
     // facts. Row zero originated on source page zero; substituting the old
     // one-based/page-derived value must refuse without any runtime write.
-    let substituted_source = execute_settlement(
+    let (substituted_source, _) = execute_settlement(
         &fixture,
         Action::Collect,
         &cursor,
@@ -1120,7 +1188,7 @@ async fn run_full_settlement_lifecycle(width: u32) {
 
     // A caller cannot skip to order three. Semantic refusal returns a typed
     // refusal and the readonly cursor/manifest accounts remain byte-identical.
-    let refused = execute_settlement(
+    let (refused, _) = execute_settlement(
         &fixture,
         Action::Collect,
         &cursor,
@@ -1135,7 +1203,7 @@ async fn run_full_settlement_lifecycle(width: u32) {
     for (expected_coordinate, (manifest, manifest_order, page_index, execution_index)) in
         rows.iter().enumerate()
     {
-        let ack = execute_settlement(
+        let (ack, evidence) = execute_settlement(
             &fixture,
             Action::Collect,
             &cursor,
@@ -1146,6 +1214,7 @@ async fn run_full_settlement_lifecycle(width: u32) {
         )
         .await;
         assert_eq!(ack.disposition(), AcceleratorDispositionV2::Accepted);
+        assert_execution_evidence(evidence, Action::Collect, width);
         assert_eq!(
             read_payload_scalar(ack.payload(), scalar::ORDER_COORDINATE),
             u64::try_from(expected_coordinate).expect("order coordinate") + 1
@@ -1167,13 +1236,11 @@ async fn run_full_settlement_lifecycle(width: u32) {
             expected.header().quote_inventory
         );
     }
+    let (materialized, evidence) =
+        execute_settlement(&fixture, Action::Materialize, &cursor, None, 0, 0, 0).await;
+    assert_execution_evidence(evidence, Action::Materialize, width);
     assert_eq!(
-        read_payload_scalar(
-            execute_settlement(&fixture, Action::Materialize, &cursor, None, 0, 0, 0)
-                .await
-                .payload(),
-            scalar::CURSOR_PHASE
-        ),
+        read_payload_scalar(materialized.payload(), scalar::CURSOR_PHASE),
         6
     );
     cursor = settle_native(
@@ -1187,7 +1254,7 @@ async fn run_full_settlement_lifecycle(width: u32) {
     for (expected_coordinate, (manifest, manifest_order, page_index, execution_index)) in
         rows.iter().enumerate()
     {
-        let ack = execute_settlement(
+        let (ack, evidence) = execute_settlement(
             &fixture,
             Action::Distribute,
             &cursor,
@@ -1198,6 +1265,7 @@ async fn run_full_settlement_lifecycle(width: u32) {
         )
         .await;
         assert_eq!(ack.disposition(), AcceleratorDispositionV2::Accepted);
+        assert_execution_evidence(evidence, Action::Distribute, width);
         assert_eq!(
             read_payload_scalar(ack.payload(), scalar::ORDER_COORDINATE),
             u64::try_from(expected_coordinate).expect("order coordinate") + 1
@@ -1219,7 +1287,7 @@ async fn run_full_settlement_lifecycle(width: u32) {
     let close_request = request(Action::Close, ready.header().revision, 0, 0);
     let mut hostile_bank = bank_for_request(fixture.width, close_request);
     write_scalar(&mut hostile_bank, scalar::POSITION_TABLE_COUNT, 1);
-    let (refused, _) = execute(real_sbf_fixture(
+    let (refused, _, _) = execute(real_sbf_fixture(
         fixture.width,
         close_request,
         hostile_bank,
@@ -1228,7 +1296,8 @@ async fn run_full_settlement_lifecycle(width: u32) {
     .await;
     assert_eq!(refused.disposition(), AcceleratorDispositionV2::Refused);
 
-    let ack = execute_settlement(&fixture, Action::Close, &cursor, None, 0, 0, 0).await;
+    let (ack, evidence) = execute_settlement(&fixture, Action::Close, &cursor, None, 0, 0, 0).await;
+    assert_execution_evidence(evidence, Action::Close, width);
     assert_eq!(ack.disposition(), AcceleratorDispositionV2::Accepted);
     assert_eq!(read_payload_scalar(ack.payload(), scalar::TERMINAL), 1);
     assert_eq!(read_payload_scalar(ack.payload(), scalar::CURSOR_PHASE), 8);
@@ -1272,15 +1341,14 @@ async fn real_sbf_runs_full_settlement_at_runtime_widths_one_and_258() {
 #[tokio::test]
 async fn hostile_n258_initializes_and_refuses_candidate_substitution() {
     let fixture = terminal_fixture(258);
-    assert_eq!(
-        execute_initialize(&fixture).await,
-        AcceleratorDispositionV2::Accepted
-    );
+    let (initialize, evidence) = execute_initialize(&fixture).await;
+    assert_eq!(initialize, AcceleratorDispositionV2::Accepted);
+    assert_execution_evidence(evidence, Action::InitializeSettlement, 258);
     let cursor = initialized_cursor(&fixture);
     let final_manifest =
         SettlementManifestV2::decode(fixture.manifests.get(1).expect("final manifest bytes"))
             .expect("final manifest");
-    let out_of_order = execute_settlement(
+    let (out_of_order, _) = execute_settlement(
         &fixture,
         Action::Collect,
         &cursor,
@@ -1308,7 +1376,7 @@ async fn hostile_n258_initializes_and_refuses_candidate_substitution() {
         ),
         verified_candidate(258, FIRST_CANDIDATE, 1, 3, 9, 8, 0),
     );
-    let (ack, _) = execute(real_sbf_fixture(
+    let (ack, _, _) = execute(real_sbf_fixture(
         fixture.width,
         controller,
         bank_for_request(fixture.width, controller),
@@ -1326,7 +1394,7 @@ async fn product_or_price_scale_substitution_refuses_without_runtime_writes() {
 
         let mut substituted_product = runtime_for_initialize(&fixture);
         substituted_product.insert(2, vec![0xcc; PRODUCT_RECORD.len()]);
-        let (ack, _) = execute(real_sbf_fixture(
+        let (ack, _, _) = execute(real_sbf_fixture(
             width,
             controller,
             bank_for_request(width, controller),
@@ -1340,7 +1408,7 @@ async fn product_or_price_scale_substitution_refuses_without_runtime_writes() {
             1,
             config_with_price_scale(u64::from(width).checked_add(1).expect("scale")),
         );
-        let (ack, _) = execute(real_sbf_fixture(
+        let (ack, _, _) = execute(real_sbf_fixture(
             width,
             controller,
             bank_for_request(width, controller),
