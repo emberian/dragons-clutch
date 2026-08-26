@@ -601,54 +601,33 @@ fn narrow_u32(value: usize) -> Result<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_request_profile_contract::{RequestProfileV1, v4::RequestProfileV4};
+    use dclutch_request_profile_contract::RequestProfileV1;
     use dclutch_transition_vm::v3::ProgramV3;
 
     #[test]
-    fn all_action_artifact_geometries_decode() {
+    fn selected_action_artifact_geometries_decode() {
         for (action, coordinates) in [
             (LifecycleActionV2::ActivateReceipt, 0),
             (LifecycleActionV2::ActivateCoordinate, 1),
             (LifecycleActionV2::RetireCoordinate, 1),
-            (LifecycleActionV2::RetireReceipt, 1),
         ] {
             let request = encode_rational_lifecycle_request_profile_v3(action, coordinates)
                 .expect("request profile");
             let transition =
                 encode_rational_lifecycle_transition_v3(action, coordinates).expect("transition");
-            if action == LifecycleActionV2::RetireReceipt {
-                RequestProfileV4::decode(&request).expect("decode V4 request profile");
-            } else {
-                RequestProfileV1::decode(&request).expect("decode V1 request profile");
-            }
+            RequestProfileV1::decode(&request).expect("decode V1 request profile");
             ProgramV3::decode(&transition).expect("decode transition");
         }
         assert_eq!(
             encode_rational_lifecycle_request_profile_v3(LifecycleActionV2::ActivateReceipt, 1,),
             Err(Error::ActionGeometry)
         );
-        RequestProfileV4::decode(
-            &encode_rational_lifecycle_request_profile_v3(LifecycleActionV2::RetireReceipt, 2)
-                .expect("two-row successor"),
-        )
-        .expect("decode two-row successor");
-    }
-
-    #[test]
-    fn compact_v4_profile_is_constant_width_for_sparse_three_row_support() {
-        let one = encode_rational_lifecycle_request_profile_v4(LifecycleActionV2::RetireReceipt, 1)
-            .expect("one-row V4");
-        let three =
-            encode_rational_lifecycle_request_profile_v4(LifecycleActionV2::RetireReceipt, 3)
-                .expect("three-row V4");
-        assert_eq!(one.len(), three.len());
-        let profile = RequestProfileV4::decode(&three).expect("decode V4");
-        assert_eq!(profile.row_geometry().expected_row_count, 3);
-        assert_eq!(profile.row_geometry().row_bytes, 272);
-        assert_eq!(profile.row_geometry().row_count_common_scalar, 7);
-        assert_eq!(profile.request_bytes(), Ok(1_216));
         assert_eq!(
-            encode_rational_lifecycle_request_profile_v4(LifecycleActionV2::ActivateCoordinate, 1,),
+            encode_rational_lifecycle_request_profile_v3(LifecycleActionV2::RetireReceipt, 1),
+            Err(Error::ActionGeometry)
+        );
+        assert_eq!(
+            encode_rational_lifecycle_request_profile_v3(LifecycleActionV2::RetireReceipt, 3),
             Err(Error::ActionGeometry)
         );
     }

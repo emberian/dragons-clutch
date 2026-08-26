@@ -269,7 +269,8 @@ pub(crate) fn validate_fixed_frame(
 mod tests {
     use super::*;
     use dclutch_rational_representation_v2_lifecycle_contract::{
-        LIFECYCLE_COORDINATE_BYTES_V2, LIFECYCLE_HEADER_BYTES_V2, LifecycleActionV2,
+        LIFECYCLE_COMMON_ACCOUNT_COUNT_V2, LIFECYCLE_COORDINATE_BYTES_V2,
+        LIFECYCLE_HEADER_BYTES_V2, LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2, LifecycleActionV2,
         LifecycleCoordinateV2, LifecycleHeaderV2,
     };
     use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
@@ -350,9 +351,13 @@ mod tests {
             .specialize_child_into(digest, &mut child_data)
             .expect("child");
 
-        let count = usize::from(
-            lifecycle_claims_account_count_v3(action, coordinate_count).expect("frame"),
-        );
+        let count = if action == LifecycleActionV2::RetireReceipt {
+            LIFECYCLE_COMMON_ACCOUNT_COUNT_V2
+                + usize::try_from(coordinate_count).expect("count")
+                    * LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2
+        } else {
+            usize::from(lifecycle_claims_account_count_v3(action, coordinate_count).expect("frame"))
+        };
         let claims = key(70);
         let mut accounts = (0..count)
             .map(|index| {
@@ -440,13 +445,12 @@ mod tests {
     }
 
     #[test]
-    fn all_four_actions_build_unsigned_v0_alt_hot_instructions() {
+    fn selected_actions_build_unsigned_v0_alt_hot_instructions() {
         let fixed = fixed();
         for action in [
             LifecycleActionV2::ActivateReceipt,
             LifecycleActionV2::ActivateCoordinate,
             LifecycleActionV2::RetireCoordinate,
-            LifecycleActionV2::RetireReceipt,
         ] {
             let child = exact_child(action);
             let result = build_rational_lifecycle_hot_instruction_v3(&state(&fixed), &child)
@@ -493,19 +497,14 @@ mod tests {
     }
 
     #[test]
-    fn two_row_support_is_constructible_but_three_rows_need_staged_transport() {
+    fn caller_carried_retirement_support_is_unreachable() {
         let fixed = fixed();
-        let two = exact_child_with_coordinate_count(LifecycleActionV2::RetireReceipt, 2);
-        let result = build_rational_lifecycle_hot_instruction_v3(&state(&fixed), &two)
-            .expect("two-row Hot instruction");
-        assert_eq!(result.instruction.data.len(), 1_072);
-        assert_eq!(result.instruction.accounts.len(), 66);
-        assert!(result.requires_v0_address_lookup);
-
-        let three = exact_child_with_coordinate_count(LifecycleActionV2::RetireReceipt, 3);
-        assert_eq!(
-            build_rational_lifecycle_hot_instruction_v3(&state(&fixed), &three),
-            Err(Error::Operator)
-        );
+        for count in [1, 2, 3] {
+            let child = exact_child_with_coordinate_count(LifecycleActionV2::RetireReceipt, count);
+            assert_eq!(
+                build_rational_lifecycle_hot_instruction_v3(&state(&fixed), &child),
+                Err(Error::ActionGeometry)
+            );
+        }
     }
 }

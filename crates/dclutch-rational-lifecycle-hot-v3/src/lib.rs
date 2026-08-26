@@ -2,12 +2,12 @@
 #![deny(missing_docs)]
 
 //! Descriptor-specialized CapabilityProgram V3 artifacts and unsigned Hot
-//! operator construction for the four canonical Rational lifecycle actions.
+//! operator construction for Rational lifecycle actions.
 //!
-//! Product outcome width and descriptor nonzero support are distinct. Each
-//! finalized bundle fixes one action and exact lifecycle row count in common
-//! registers while retaining the independently authenticated Product width.
-//! Claims remains the sole physical mutation and typed receipt authority.
+//! The V3 path owns the three selected-coordinate actions. Complete receipt
+//! retirement is reachable only through the compact V4 path, which derives
+//! ordered nonzero support from the authenticated immutable descriptor. Claims
+//! remains the sole physical mutation and typed receipt authority.
 
 mod account_profile;
 mod artifacts;
@@ -91,7 +91,9 @@ fn validate_action_geometry(action: LifecycleActionV2, coordinate_count: u32) ->
         LifecycleActionV2::ActivateCoordinate | LifecycleActionV2::RetireCoordinate => {
             coordinates == 1
         }
-        LifecycleActionV2::RetireReceipt => coordinates != 0,
+        // Complete support must be descriptor-derived by compact V4. Refuse
+        // every caller-carried V3 retirement row set, including K=1.
+        LifecycleActionV2::RetireReceipt => false,
     };
     if accepted {
         Ok(coordinates)
