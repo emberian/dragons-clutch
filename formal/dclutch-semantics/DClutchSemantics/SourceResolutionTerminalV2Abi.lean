@@ -331,4 +331,197 @@ theorem certificate_refusal_corpus_refuses :
     certificateRefusalCorpus.all fun candidate => !certificateValidBytes candidate := by
   native_decide
 
+/-! ## Source closure receipt -/
+
+inductive ClosureField where
+  | magic | version | kind | reservedHeader
+  | market | sourceState | sourceMaterial | capabilityManifest
+  | terminalCertificate | receiptAccount | beneficiary
+  | sourceStateDigest | terminalCertificateDigest | fundingSetDigest
+  | generation | terminalSequence | fundingCount | selector
+  | refundLamports | closedAt | reservedBody
+  deriving DecidableEq, Repr
+
+def closureMagic : List UInt8 :=
+  [0x44, 0x43, 0x53, 0x52, 0x43, 0x4c, 0x53, 0x32]
+def closureVersion : Nat := 2
+def closureKind : Nat := 1
+def closureFundingCount : Nat := 3
+
+def closureSchema : List (FieldSpec ClosureField) := [
+  ⟨.magic, .bytes 8⟩,
+  ⟨.version, .u16⟩,
+  ⟨.kind, .u8⟩,
+  ⟨.reservedHeader, .reserved 5⟩,
+  ⟨.market, .bytes 32⟩,
+  ⟨.sourceState, .bytes 32⟩,
+  ⟨.sourceMaterial, .bytes 32⟩,
+  ⟨.capabilityManifest, .bytes 32⟩,
+  ⟨.terminalCertificate, .bytes 32⟩,
+  ⟨.receiptAccount, .bytes 32⟩,
+  ⟨.beneficiary, .bytes 32⟩,
+  ⟨.sourceStateDigest, .bytes 32⟩,
+  ⟨.terminalCertificateDigest, .bytes 32⟩,
+  ⟨.fundingSetDigest, .bytes 32⟩,
+  ⟨.generation, .u64⟩,
+  ⟨.terminalSequence, .u64⟩,
+  ⟨.fundingCount, .u32⟩,
+  ⟨.selector, .u32⟩,
+  ⟨.refundLamports, .u64⟩,
+  ⟨.closedAt, .u64⟩,
+  ⟨.reservedBody, .reserved 8⟩
+]
+
+def closureLayout : List (PlacedField ClosureField) := specialize closureSchema
+def closureBytes : Nat := schemaWidth closureSchema
+
+namespace ClosureField
+
+def rustName : ClosureField → String
+  | .magic => "CLOSURE_V2_MAGIC_OFFSET"
+  | .version => "CLOSURE_V2_VERSION_OFFSET"
+  | .kind => "CLOSURE_V2_KIND_OFFSET"
+  | .reservedHeader => "CLOSURE_V2_RESERVED_HEADER_OFFSET"
+  | .market => "CLOSURE_V2_MARKET_OFFSET"
+  | .sourceState => "CLOSURE_V2_SOURCE_STATE_OFFSET"
+  | .sourceMaterial => "CLOSURE_V2_SOURCE_MATERIAL_OFFSET"
+  | .capabilityManifest => "CLOSURE_V2_CAPABILITY_MANIFEST_OFFSET"
+  | .terminalCertificate => "CLOSURE_V2_TERMINAL_CERTIFICATE_OFFSET"
+  | .receiptAccount => "CLOSURE_V2_RECEIPT_ACCOUNT_OFFSET"
+  | .beneficiary => "CLOSURE_V2_BENEFICIARY_OFFSET"
+  | .sourceStateDigest => "CLOSURE_V2_SOURCE_STATE_DIGEST_OFFSET"
+  | .terminalCertificateDigest => "CLOSURE_V2_TERMINAL_CERTIFICATE_DIGEST_OFFSET"
+  | .fundingSetDigest => "CLOSURE_V2_FUNDING_SET_DIGEST_OFFSET"
+  | .generation => "CLOSURE_V2_GENERATION_OFFSET"
+  | .terminalSequence => "CLOSURE_V2_TERMINAL_SEQUENCE_OFFSET"
+  | .fundingCount => "CLOSURE_V2_FUNDING_COUNT_OFFSET"
+  | .selector => "CLOSURE_V2_SELECTOR_OFFSET"
+  | .refundLamports => "CLOSURE_V2_REFUND_LAMPORTS_OFFSET"
+  | .closedAt => "CLOSURE_V2_CLOSED_AT_OFFSET"
+  | .reservedBody => "CLOSURE_V2_RESERVED_BODY_OFFSET"
+
+def offset (field : ClosureField) : Nat :=
+  (coordinate? field closureLayout).map (fun value => value.1) |>.getD 0
+
+end ClosureField
+
+theorem closure_exact_width : closureBytes = 384 := by native_decide
+theorem closure_layout_disjoint : closureLayout.Pairwise Before :=
+  specializeFrom_pairwise 0 closureSchema
+
+structure Closure where
+  market : Nat
+  sourceState : Nat
+  sourceMaterial : Nat
+  capabilityManifest : Nat
+  terminalCertificate : Nat
+  receiptAccount : Nat
+  beneficiary : Nat
+  sourceStateDigest : Nat
+  terminalCertificateDigest : Nat
+  fundingSetDigest : Nat
+  generation : Nat
+  terminalSequence : Nat
+  selector : Nat
+  refundLamports : Nat
+  closedAt : Nat
+  deriving DecidableEq, Repr
+
+def Closure.valid (value : Closure) : Bool :=
+  value.market != 0 && value.market < 256 ^ 32 &&
+  value.sourceState != 0 && value.sourceState < 256 ^ 32 &&
+  value.sourceMaterial != 0 && value.sourceMaterial < 256 ^ 32 &&
+  value.capabilityManifest != 0 && value.capabilityManifest < 256 ^ 32 &&
+  value.terminalCertificate != 0 && value.terminalCertificate < 256 ^ 32 &&
+  value.receiptAccount != 0 && value.receiptAccount < 256 ^ 32 &&
+  value.beneficiary != 0 && value.beneficiary < 256 ^ 32 &&
+  value.sourceStateDigest != 0 && value.sourceStateDigest < 256 ^ 32 &&
+  value.terminalCertificateDigest != 0 && value.terminalCertificateDigest < 256 ^ 32 &&
+  value.fundingSetDigest != 0 && value.fundingSetDigest < 256 ^ 32 &&
+  value.generation != 0 && value.generation < 256 ^ 8 &&
+  value.terminalSequence != 0 && value.terminalSequence < 256 ^ 8 &&
+  value.selector < 256 ^ 4 &&
+  value.refundLamports != 0 && value.refundLamports < 256 ^ 8 &&
+  value.closedAt != 0 && value.closedAt < 256 ^ 8
+
+def encodeClosure (value : Closure) : List UInt8 :=
+  closureMagic ++ Codec.encodeLE 2 closureVersion ++ [UInt8.ofNat closureKind] ++
+  List.replicate 5 0 ++ Codec.encodeLE 32 value.market ++
+  Codec.encodeLE 32 value.sourceState ++ Codec.encodeLE 32 value.sourceMaterial ++
+  Codec.encodeLE 32 value.capabilityManifest ++
+  Codec.encodeLE 32 value.terminalCertificate ++ Codec.encodeLE 32 value.receiptAccount ++
+  Codec.encodeLE 32 value.beneficiary ++ Codec.encodeLE 32 value.sourceStateDigest ++
+  Codec.encodeLE 32 value.terminalCertificateDigest ++
+  Codec.encodeLE 32 value.fundingSetDigest ++ Codec.encodeLE 8 value.generation ++
+  Codec.encodeLE 8 value.terminalSequence ++ Codec.encodeLE 4 closureFundingCount ++
+  Codec.encodeLE 4 value.selector ++ Codec.encodeLE 8 value.refundLamports ++
+  Codec.encodeLE 8 value.closedAt ++ List.replicate 8 0
+
+theorem closure_encoding_length (value : Closure) :
+    (encodeClosure value).length = closureBytes := by
+  simp [encodeClosure, closureBytes, closureSchema, schemaWidth, closureMagic,
+    Codec.encodeLE_length, FieldKind.byteWidth]
+
+def wideClosure : Closure := {
+  market := 1, sourceState := 2, sourceMaterial := 3, capabilityManifest := 4
+  terminalCertificate := 5, receiptAccount := 6, beneficiary := 7
+  sourceStateDigest := 8, terminalCertificateDigest := 9, fundingSetDigest := 10
+  generation := 11, terminalSequence := 12, selector := 257
+  refundLamports := 13, closedAt := 14
+}
+
+def closureValidBytes (input : List UInt8) : Bool :=
+  input.length = closureBytes && input.take 8 = closureMagic &&
+  sliceNat input ClosureField.version.offset 2 = closureVersion &&
+  sliceNat input ClosureField.kind.offset 1 = closureKind &&
+  (input.drop ClosureField.reservedHeader.offset).take 5 = List.replicate 5 0 &&
+  sliceNat input ClosureField.fundingCount.offset 4 = closureFundingCount &&
+  (input.drop ClosureField.reservedBody.offset).take 8 = List.replicate 8 0 &&
+  ({
+    market := sliceNat input ClosureField.market.offset 32
+    sourceState := sliceNat input ClosureField.sourceState.offset 32
+    sourceMaterial := sliceNat input ClosureField.sourceMaterial.offset 32
+    capabilityManifest := sliceNat input ClosureField.capabilityManifest.offset 32
+    terminalCertificate := sliceNat input ClosureField.terminalCertificate.offset 32
+    receiptAccount := sliceNat input ClosureField.receiptAccount.offset 32
+    beneficiary := sliceNat input ClosureField.beneficiary.offset 32
+    sourceStateDigest := sliceNat input ClosureField.sourceStateDigest.offset 32
+    terminalCertificateDigest := sliceNat input ClosureField.terminalCertificateDigest.offset 32
+    fundingSetDigest := sliceNat input ClosureField.fundingSetDigest.offset 32
+    generation := sliceNat input ClosureField.generation.offset 8
+    terminalSequence := sliceNat input ClosureField.terminalSequence.offset 8
+    selector := sliceNat input ClosureField.selector.offset 4
+    refundLamports := sliceNat input ClosureField.refundLamports.offset 8
+    closedAt := sliceNat input ClosureField.closedAt.offset 8
+  } : Closure).valid
+
+def closureRefusalCorpus : List (List UInt8) := [
+  (encodeClosure wideClosure).set 0 0,
+  (encodeClosure wideClosure).set ClosureField.version.offset 3,
+  (encodeClosure wideClosure).set ClosureField.kind.offset 2,
+  (encodeClosure wideClosure).set ClosureField.reservedHeader.offset 1,
+  (encodeClosure wideClosure).set ClosureField.market.offset 0,
+  (encodeClosure wideClosure).set ClosureField.sourceState.offset 0,
+  (encodeClosure wideClosure).set ClosureField.sourceMaterial.offset 0,
+  (encodeClosure wideClosure).set ClosureField.capabilityManifest.offset 0,
+  (encodeClosure wideClosure).set ClosureField.terminalCertificate.offset 0,
+  (encodeClosure wideClosure).set ClosureField.receiptAccount.offset 0,
+  (encodeClosure wideClosure).set ClosureField.beneficiary.offset 0,
+  (encodeClosure wideClosure).set ClosureField.sourceStateDigest.offset 0,
+  (encodeClosure wideClosure).set ClosureField.terminalCertificateDigest.offset 0,
+  (encodeClosure wideClosure).set ClosureField.fundingSetDigest.offset 0,
+  (encodeClosure wideClosure).set ClosureField.generation.offset 0,
+  (encodeClosure wideClosure).set ClosureField.terminalSequence.offset 0,
+  (encodeClosure wideClosure).set ClosureField.fundingCount.offset 2,
+  (encodeClosure wideClosure).set ClosureField.refundLamports.offset 0,
+  (encodeClosure wideClosure).set ClosureField.closedAt.offset 0,
+  (encodeClosure wideClosure).set ClosureField.reservedBody.offset 1
+]
+
+theorem wide_closure_preserves_selector_257 :
+    closureValidBytes (encodeClosure wideClosure) = true := by native_decide
+
+theorem closure_refusal_corpus_refuses :
+    closureRefusalCorpus.all fun candidate => !closureValidBytes candidate := by native_decide
+
 end DClutch.SourceResolutionTerminalV2Abi

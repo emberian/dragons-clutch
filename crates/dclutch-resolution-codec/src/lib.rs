@@ -18,9 +18,13 @@ mod v2;
 pub use generated_v2::{
     ACCEPT_PYTH_REQUEST_BYTES_V2, ACCEPT_PYTH_V2_ACTION, ACCEPT_PYTH_V2_MAGIC,
     ACCEPT_PYTH_V2_VERSION, RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_MAGIC_V2,
-    RESOLUTION_CERTIFICATE_VERSION_V2,
+    RESOLUTION_CERTIFICATE_VERSION_V2, SOURCE_CLOSURE_RECEIPT_BYTES_V2,
+    SOURCE_CLOSURE_RECEIPT_MAGIC_V2, SOURCE_CLOSURE_RECEIPT_VERSION_V2,
 };
-pub use v2::{AcceptPythRequestV2, ResolutionCertificateKindV2, ResolutionCertificateV2};
+pub use v2::{
+    AcceptPythRequestV2, ResolutionCertificateKindV2, ResolutionCertificateV2,
+    SourceClosureReceiptV2,
+};
 
 /// Bytes in one fixed primary-Pyth admission request.
 pub const ACCEPT_PYTH_REQUEST_BYTES: usize = generated_source_resolution::REQUEST_BYTES_VALUE;
@@ -42,6 +46,8 @@ pub const SOURCE_CLOSURE_RECEIPT_BYTES: usize = generated_source_resolution::CLO
 pub const RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3: &[u8] = b"dclutch/resolution-cert/v3";
 /// PDA domain for a deterministic closure receipt paired with a Source state and sequence.
 pub const SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V1: &[u8] = b"dclutch/source-close/v1";
+/// PDA domain for a deterministic Runtime V2 closure receipt.
+pub const SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V2: &[u8] = b"dclutch/source-close/v2";
 /// State-derived immediate successor sequence for the one primary success certificate.
 pub const PRIMARY_CERTIFICATE_SEQUENCE_V3: u64 =
     generated_source_resolution::PRIMARY_CERTIFICATE_SEQUENCE_VALUE;
@@ -77,6 +83,7 @@ pub const PYTH_RELEASE_RECORD_SCHEMA_ID_V1: [u8; 32] = [
 
 const _: () = assert!(RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3.len() <= 32);
 const _: () = assert!(SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V1.len() <= 32);
+const _: () = assert!(SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V2.len() <= 32);
 
 /// Stable refusal from a hostile fixed-layout decoder or encoder.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

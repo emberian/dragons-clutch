@@ -29,6 +29,13 @@ def main : IO Unit := do
   emitBytes "pub" "RESOLUTION_CERTIFICATE_MAGIC_V2" certificateMagic
   for field in certificateLayout do
     IO.println s!"pub const {CertificateField.rustName field.spec.name}: usize = {field.offset};"
+  IO.println s!"pub const SOURCE_CLOSURE_RECEIPT_BYTES_V2: usize = {closureBytes};"
+  IO.println s!"pub const SOURCE_CLOSURE_RECEIPT_VERSION_V2: u16 = {closureVersion};"
+  IO.println s!"pub const SOURCE_CLOSURE_RECEIPT_KIND_V2: u8 = {closureKind};"
+  IO.println s!"pub const SOURCE_CLOSURE_FUNDING_COUNT_V2: u32 = {closureFundingCount};"
+  emitBytes "pub" "SOURCE_CLOSURE_RECEIPT_MAGIC_V2" closureMagic
+  for field in closureLayout do
+    IO.println s!"pub const {ClosureField.rustName field.spec.name}: usize = {field.offset};"
   IO.println "#[cfg(test)]"
   emitBytes "pub(crate)" "ACCEPT_PYTH_REQUEST_V2_EXAMPLE" (encodeRequest requestExample)
   IO.println "#[cfg(test)]"
@@ -53,6 +60,20 @@ def main : IO Unit := do
   IO.println "#[rustfmt::skip]"
   IO.println s!"pub(crate) const RESOLUTION_CERTIFICATE_V2_REFUSAL_CORPUS: [[u8; {certificateBytes}]; {certificateRefusalCorpus.length}] = ["
   for value in certificateRefusalCorpus do
+    IO.println "    ["
+    for line in List.range ((value.length + 15) / 16) do
+      let chunk := (value.drop (line * 16)).take 16
+      IO.println s!"        {String.intercalate ", " (chunk.map rustByte)},"
+    IO.println "    ],"
+  IO.println "];"
+  IO.println "#[cfg(test)]"
+  emitBytes "pub(crate)" "SOURCE_CLOSURE_RECEIPT_V2_WIDE_EXAMPLE" (encodeClosure wideClosure)
+  IO.println "#[cfg(test)]"
+  IO.println s!"pub(crate) const SOURCE_CLOSURE_RECEIPT_V2_REFUSAL_COUNT: usize = {closureRefusalCorpus.length};"
+  IO.println "#[cfg(test)]"
+  IO.println "#[rustfmt::skip]"
+  IO.println s!"pub(crate) const SOURCE_CLOSURE_RECEIPT_V2_REFUSAL_CORPUS: [[u8; {closureBytes}]; {closureRefusalCorpus.length}] = ["
+  for value in closureRefusalCorpus do
     IO.println "    ["
     for line in List.range ((value.length + 15) / 16) do
       let chunk := (value.drop (line * 16)).take 16
