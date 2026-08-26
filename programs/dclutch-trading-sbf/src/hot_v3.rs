@@ -3847,14 +3847,18 @@ fn project_tail_count(
     if projection.is_none() {
         return Ok(0);
     }
-    // Profile10's descriptor-support projection requires Product N to check
-    // exact `header + N*8` config geometry. Product Runtime V3 was already
-    // independently authenticated above, so use that N for the full atomic
-    // projection and recheck the profile's own projected Product scalar after.
+    // Profiles 10 and 12 scan descriptor support and require Product N to
+    // check exact `header + N*8` config geometry. Product Runtime V3 was
+    // already independently authenticated above, so use that N for the full
+    // atomic projection and recheck the profile's own Product scalar after.
     if profile
         .nonzero_u64_tail_count_projection()
         .map_err(|_| TradingSbfError::Content)?
         .is_some()
+        || profile
+            .nonzero_u64_tail_rows_projection()
+            .map_err(|_| TradingSbfError::Content)?
+            .is_some()
     {
         return Ok(authenticated_product_tail_count);
     }
