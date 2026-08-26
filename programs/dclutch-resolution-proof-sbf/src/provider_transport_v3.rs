@@ -112,7 +112,6 @@ fn process_submit(
         || frame.account(4).key.to_bytes() != request.refund_recipient
         || frame.account(5).key.to_bytes() != request.market
         || frame.account(16).key.to_bytes() != request.source_state
-        || frame.account(17).key.to_bytes() != request.source_material
         || frame.account(32).key.to_bytes() != request.encoded_vaa
         || hash(post_body).to_bytes() != request.post_body_digest
     {

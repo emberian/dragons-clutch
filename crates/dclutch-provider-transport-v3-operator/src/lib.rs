@@ -992,7 +992,6 @@ fn validate_submit_report(
         || account_key(accounts, 5)?.to_bytes() != request.market
         || account_key(accounts, 8)?.to_bytes() != request.registry_program
         || account_key(accounts, 16)?.to_bytes() != request.source_state
-        || account_key(accounts, 17)?.to_bytes() != request.source_material
         || account_key(accounts, 32)?.to_bytes() != request.encoded_vaa
         || report.lifecycle.to_bytes() != request.lifecycle
         || hash(body).to_bytes() != request.post_body_digest
@@ -1237,7 +1236,7 @@ mod tests {
             market: accounts[5].pubkey.to_bytes(),
             source_state: accounts[16].pubkey.to_bytes(),
             lifecycle: accounts[2].pubkey.to_bytes(),
-            source_material: accounts[17].pubkey.to_bytes(),
+            source_material: key(101).to_bytes(),
             provider_release: key(213).to_bytes(),
             update_account: accounts[1].pubkey.to_bytes(),
             provider_submitter: accounts[0].pubkey.to_bytes(),
@@ -1405,6 +1404,11 @@ mod tests {
             &report.instruction.data[..PROVIDER_SUBMIT_REQUEST_BYTES_V3],
         )
         .expect("submit request");
+        assert_ne!(
+            report.instruction.accounts[17].pubkey.to_bytes(),
+            request.source_material,
+            "SourceMaterial content digest must not be confused with its finalized-record PDA",
+        );
         assert_ne!(
             report.instruction.accounts[23].pubkey.to_bytes(),
             request.provider_release,
