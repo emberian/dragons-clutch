@@ -24,6 +24,8 @@ pub mod child_packets;
 pub mod lifecycle;
 /// Stateless, failure-atomic candidate and settlement plan evaluation.
 pub mod plan;
+/// Exact admission of all seven action-selected General V3 artifact bundles.
+pub mod release_v3;
 /// Exact General settlement projection into generic Strategy V2 candidate banks.
 pub mod runtime_candidate;
 /// Verifier-emitted runtime-width per-order settlement manifests.
@@ -34,6 +36,8 @@ pub mod runtime_settlement;
 pub mod runtime_verify;
 /// Runtime-width borrowed records without fixed outcome or page capacities.
 pub mod runtime_width;
+/// Stateless General binding to generic Shadow-AOT and chunked accelerator transport.
+pub mod shadow_accelerator_v3;
 /// Lean-owned action-specific request projections for generic Trading.
 pub mod specialization;
 
