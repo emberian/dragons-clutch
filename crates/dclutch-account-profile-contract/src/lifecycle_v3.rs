@@ -9,7 +9,8 @@ use core::convert::{TryFrom, TryInto};
 
 use super::{
     AccountObservationV1, EFFECT_PERMISSION_CREDIT_LAMPORTS, EFFECT_PERMISSION_DEBIT_LAMPORTS,
-    EFFECT_PERMISSION_WRITE_DATA, v2::AccountProfileV2,
+    EFFECT_PERMISSION_WRITE_DATA,
+    v2::{AccountPrestateV2, AccountProfileV2, AccountRuleV2},
 };
 
 /// Safe, allocation-free typed StateLifecyclePolicy V3 artifact encoder.
@@ -54,6 +55,7 @@ const SEED_ITEM_INDEX_LE: u8 = 5;
 const PLAN_AUTHENTICATE: u8 = 0;
 const PLAN_CREATE: u8 = 1;
 const PLAN_CLOSE: u8 = 2;
+const PLAN_AUTHENTICATE_OR_CREATE: u8 = 3;
 
 const SOURCE_COMMON: u8 = 0;
 const SOURCE_ITEM: u8 = 1;
@@ -150,6 +152,8 @@ pub enum LifecycleOperationV3 {
     Create,
     /// Zero and close an exact Trading-owned state PDA to permanent RentCredit.
     Close,
+    /// Authenticate an exact live PDA or create its exact vacant PDA prestate.
+    AuthenticateOrCreate,
 }
 
 impl LifecycleOperationV3 {
@@ -158,6 +162,7 @@ impl LifecycleOperationV3 {
             PLAN_AUTHENTICATE => Ok(Self::Authenticate),
             PLAN_CREATE => Ok(Self::Create),
             PLAN_CLOSE => Ok(Self::Close),
+            PLAN_AUTHENTICATE_OR_CREATE => Ok(Self::AuthenticateOrCreate),
             _ => Err(Error::UnknownTag),
         }
     }
@@ -520,7 +525,93 @@ impl<'a> StateLifecyclePolicyV3<'a> {
             }
             plan_index = plan_index.checked_add(1).ok_or(Error::Arithmetic)?;
         }
+        self.validate_lifecycle_prestates(profile)
+    }
+
+    fn validate_lifecycle_prestates(self, profile: AccountProfileV2<'_>) -> Result<()> {
+        let mut fixed = 0_u16;
+        while fixed < profile.fixed_account_count() {
+            self.validate_lifecycle_prestate_coordinate(
+                profile,
+                AccountCoordinateV3 {
+                    scope: CoordinateScopeV3::Fixed,
+                    index: fixed,
+                },
+            )?;
+            fixed = fixed.checked_add(1).ok_or(Error::Arithmetic)?;
+        }
+        let mut item = 0_u16;
+        while item < profile.item_account_stride() {
+            self.validate_lifecycle_prestate_coordinate(
+                profile,
+                AccountCoordinateV3 {
+                    scope: CoordinateScopeV3::Item,
+                    index: item,
+                },
+            )?;
+            item = item.checked_add(1).ok_or(Error::Arithmetic)?;
+        }
+        let mut plan_index = 0_u16;
+        while plan_index < self.plans {
+            let plan = self.plan(plan_index)?;
+            if plan.operation == LifecycleOperationV3::AuthenticateOrCreate {
+                let recipe = self.recipe(plan.recipe)?;
+                if rule_for_coordinate(profile, recipe.account)?.prestate()
+                    != AccountPrestateV2::LifecycleBound
+                    || plan.guard != PlanGuardV3::Always
+                {
+                    return Err(Error::ProfileMismatch);
+                }
+            }
+            plan_index = plan_index.checked_add(1).ok_or(Error::Arithmetic)?;
+        }
         Ok(())
+    }
+
+    fn validate_lifecycle_prestate_coordinate(
+        self,
+        profile: AccountProfileV2<'_>,
+        coordinate: AccountCoordinateV3,
+    ) -> Result<()> {
+        let rule = rule_for_coordinate(profile, coordinate)?;
+        if rule.prestate() != AccountPrestateV2::LifecycleBound {
+            return Ok(());
+        }
+        let mut matching_recipe = None;
+        let mut recipe_index = 0_u16;
+        while recipe_index < self.recipes {
+            let recipe = self.recipe(recipe_index)?;
+            if recipe.account == coordinate {
+                if matching_recipe.is_some()
+                    || recipe.data_base != rule.data_length()
+                    || recipe.data_stride != 0
+                {
+                    return Err(Error::ProfileMismatch);
+                }
+                matching_recipe = Some(recipe_index);
+            }
+            recipe_index = recipe_index.checked_add(1).ok_or(Error::Arithmetic)?;
+        }
+        let recipe_index = matching_recipe.ok_or(Error::ProfileMismatch)?;
+        let mut found_alternative = false;
+        let mut plan_index = 0_u16;
+        while plan_index < self.plans {
+            let plan = self.plan(plan_index)?;
+            if plan.recipe == recipe_index
+                && plan.operation == LifecycleOperationV3::AuthenticateOrCreate
+            {
+                if plan.guard != PlanGuardV3::Always {
+                    return Err(Error::ProfileMismatch);
+                }
+                found_alternative = true;
+            }
+            plan_index = plan_index.checked_add(1).ok_or(Error::Arithmetic)?;
+        }
+        if found_alternative {
+            Ok(())
+        } else {
+            Err(Error::ProfileMismatch)
+        }
     }
 
     /// Materialize one exact bounded seed for the separately named PDA adapter.
@@ -730,6 +821,16 @@ impl<'a> StateLifecyclePolicyV3<'a> {
                     || rent_credit.is_none()
                     || principal.is_none()
                     || beneficiary.is_none()
+                {
+                    return Err(Error::InvalidFunding);
+                }
+            }
+            LifecycleOperationV3::AuthenticateOrCreate => {
+                if payer.is_none()
+                    || rent_credit.is_none()
+                    || principal.is_none()
+                    || beneficiary.is_none()
+                    || guard != PlanGuardV3::Always
                 {
                     return Err(Error::InvalidFunding);
                 }
@@ -1169,6 +1270,24 @@ pub fn plan_lifecycle(
         LifecycleOperationV3::Close => {
             plan_close(selected, recipe, state, data_bytes, bump, context)
         }
+        LifecycleOperationV3::AuthenticateOrCreate => {
+            if state.owner == context.trading_program
+                && state.data.len() == usize::try_from(data_bytes).map_err(|_| Error::Arithmetic)?
+            {
+                Ok(StateLifecyclePlanV3::Authenticate(
+                    AuthenticateStatePlanV3 {
+                        state: state.key,
+                        data_bytes,
+                        lamports: state.lamports,
+                        bump,
+                    },
+                ))
+            } else if state.owner == context.system_program && state.data.is_empty() {
+                plan_create(selected, recipe, state, data_bytes, bump, context)
+            } else {
+                Err(Error::InvalidState)
+            }
+        }
     }
 }
 
@@ -1477,6 +1596,19 @@ fn validate_account_coordinate(
     }
 }
 
+fn rule_for_coordinate(
+    profile: AccountProfileV2<'_>,
+    coordinate: AccountCoordinateV3,
+) -> Result<AccountRuleV2> {
+    validate_account_coordinate(profile, coordinate)?;
+    profile
+        .rule(
+            coordinate.scope == CoordinateScopeV3::Item,
+            coordinate.index,
+        )
+        .map_err(|_| Error::ProfileMismatch)
+}
+
 fn validate_invocation_reference(
     invocation: CoordinateScopeV3,
     reference: CoordinateScopeV3,
@@ -1636,6 +1768,7 @@ const fn operation_tag(operation: LifecycleOperationV3) -> u8 {
         LifecycleOperationV3::Authenticate => PLAN_AUTHENTICATE,
         LifecycleOperationV3::Create => PLAN_CREATE,
         LifecycleOperationV3::Close => PLAN_CLOSE,
+        LifecycleOperationV3::AuthenticateOrCreate => PLAN_AUTHENTICATE_OR_CREATE,
     }
 }
 
@@ -1688,7 +1821,16 @@ mod tests {
     use std::vec::Vec;
 
     use super::*;
-    use crate::v2;
+    use crate::v2::{
+        self, AccountPrestateV2, ProjectionRegistersV2, TrustedEnvironmentV2,
+        encode::{
+            AccountAliasInputV2, AccountCoordinateV2, AccountEffectPermissionsV2,
+            AccountOperationInputV2, AccountPrivilegesV2, AccountRuleInputV2,
+            AccountRuleWithPrestateInputV2, IdentityCoordinateV2, RegisterGeometryV2,
+            ScalarCoordinateV2, encode_account_profile_with_lifecycle_v2_atomic,
+        },
+        project_atomic,
+    };
 
     const DIRECT_MAKER_DOMAIN: &[u8] = b"dclutch/direct-replay/v2";
     const DIRECT_RECORD_DOMAIN: &[u8] = b"dclutch/direct-intent/v2";
@@ -1697,6 +1839,248 @@ mod tests {
     const SYSTEM: [u8; 32] = [0x81; 32];
     const PRODUCT_DATA: [u8; 4] = 3_u32.to_le_bytes();
     const CLOSED_STATE_DATA: [u8; 148] = [0x55; 148];
+
+    #[test]
+    fn lifecycle_bound_prestate_authenticates_live_or_creates_vacant_only() {
+        let profile_rules = [
+            AccountRuleWithPrestateInputV2 {
+                rule: AccountRuleInputV2 {
+                    privileges: AccountPrivilegesV2::new(false, true, false),
+                    effect_permissions: AccountEffectPermissionsV2::new(false, true, true),
+                    alias: AccountAliasInputV2::SelfCoordinate,
+                    data_length: 152,
+                    data_item_stride: 0,
+                },
+                prestate: AccountPrestateV2::LifecycleBound,
+            },
+            AccountRuleWithPrestateInputV2 {
+                rule: AccountRuleInputV2 {
+                    privileges: AccountPrivilegesV2::new(true, true, false),
+                    effect_permissions: AccountEffectPermissionsV2::new(true, false, false),
+                    alias: AccountAliasInputV2::SelfCoordinate,
+                    data_length: 0,
+                    data_item_stride: 0,
+                },
+                prestate: AccountPrestateV2::Exact,
+            },
+            AccountRuleWithPrestateInputV2 {
+                rule: AccountRuleInputV2 {
+                    privileges: AccountPrivilegesV2::new(false, false, false),
+                    effect_permissions: AccountEffectPermissionsV2::new(false, false, false),
+                    alias: AccountAliasInputV2::SelfCoordinate,
+                    data_length: 0,
+                    data_item_stride: 0,
+                },
+                prestate: AccountPrestateV2::Exact,
+            },
+        ];
+        let profile_operations = [
+            AccountOperationInputV2::RequireOwner {
+                account: AccountCoordinateV2::fixed(1),
+                expected: IdentityCoordinateV2::common(1),
+            },
+            AccountOperationInputV2::ProjectDataU64 {
+                account: AccountCoordinateV2::fixed(0),
+                destination: ScalarCoordinateV2::common(2),
+                data_offset: 8,
+            },
+        ];
+        let profile_width = v2::HEADER_BYTES
+            + profile_rules.len() * v2::RULE_BYTES
+            + profile_operations.len() * v2::OPERATION_BYTES;
+        let mut profile_scratch = vec![0_u8; profile_width];
+        let mut profile_bytes = vec![0_u8; profile_width];
+        encode_account_profile_with_lifecycle_v2_atomic(
+            TrustedEnvironmentV2::None,
+            &profile_rules,
+            &[],
+            &profile_operations,
+            &[],
+            RegisterGeometryV2 {
+                common_scalars: 3,
+                item_scalar_stride: 0,
+                common_identities: 2,
+                item_identity_stride: 0,
+            },
+            &mut profile_scratch,
+            &mut profile_bytes,
+        )
+        .expect("profile");
+        let profile = AccountProfileV2::decode(&profile_bytes).expect("profile decode");
+
+        let recipes = [encode::LifecycleRecipeInputV3 {
+            state: encode::LifecycleAccountCoordinateV3::fixed(0),
+            seed_start: 0,
+            seed_count: 2,
+            bump_offset: 1,
+            data_base: 152,
+            data_stride: 0,
+        }];
+        let seeds = [
+            encode::LifecycleSeedInputV3::Literal(b"maker-replay"),
+            encode::LifecycleSeedInputV3::CommonScalar { index: 0, width: 1 },
+        ];
+        let plans = [encode::LifecyclePlanInputV3 {
+            action: 1,
+            operation: encode::LifecycleOperationInputV3::AuthenticateOrCreate,
+            recipe: 0,
+            payer: Some(encode::LifecycleAccountCoordinateV3::fixed(1)),
+            rent_credit: Some(encode::LifecycleAccountCoordinateV3::fixed(2)),
+            principal: Some(encode::LifecycleRegisterCoordinateV3::common(1)),
+            beneficiary: Some(encode::LifecycleRegisterCoordinateV3::common(0)),
+            guard: encode::LifecycleGuardInputV3::Always,
+        }];
+        let policy_width = HEADER_BYTES
+            + recipes.len() * RECIPE_BYTES
+            + seeds.len() * SEED_BYTES
+            + plans.len() * ACTION_PLAN_BYTES;
+        let mut policy_scratch = vec![0_u8; policy_width];
+        let mut policy_bytes = vec![0_u8; policy_width];
+        encode::encode_lifecycle_policy_v3_atomic(
+            &recipes,
+            &seeds,
+            &plans,
+            &mut policy_scratch,
+            &mut policy_bytes,
+        )
+        .expect("policy");
+        let policy = StateLifecyclePolicyV3::decode(&policy_bytes).expect("policy decode");
+        policy
+            .validate_account_profile(profile)
+            .expect("profile-policy join");
+        let unbound_plans = [encode::LifecyclePlanInputV3 {
+            action: 1,
+            operation: encode::LifecycleOperationInputV3::Authenticate,
+            recipe: 0,
+            payer: None,
+            rent_credit: None,
+            principal: None,
+            beneficiary: None,
+            guard: encode::LifecycleGuardInputV3::Always,
+        }];
+        let mut unbound_scratch = vec![0_u8; policy_width];
+        let mut unbound_bytes = vec![0_u8; policy_width];
+        encode::encode_lifecycle_policy_v3_atomic(
+            &recipes,
+            &seeds,
+            &unbound_plans,
+            &mut unbound_scratch,
+            &mut unbound_bytes,
+        )
+        .expect("unbound policy bytes");
+        assert_eq!(
+            StateLifecyclePolicyV3::decode(&unbound_bytes)
+                .expect("unbound decode")
+                .validate_account_profile(profile),
+            Err(Error::ProfileMismatch)
+        );
+        let selected = policy.action_plan(1, 0).expect("selected");
+
+        let state = [9_u8; 32];
+        let payer = [2_u8; 32];
+        let payer_owner = [6_u8; 32];
+        let credit = [3_u8; 32];
+        let beneficiary = [4_u8; 32];
+        let registers = LifecycleRegistersV3 {
+            scalars: &[9, 30, 0],
+            identities: &[beneficiary, payer_owner],
+        };
+        let rent_credit = AuthenticatedRentCreditV3 {
+            key: credit,
+            lamports: 50,
+            beneficiary,
+        };
+        let minimum = AuthenticatedRentMinimumV3 {
+            data_bytes: 152,
+            lamports: 30,
+        };
+        let plan = |state_owner: [u8; 32], state_data: &[u8], state_key: [u8; 32]| {
+            let accounts = [
+                AccountObservationV1::new(
+                    state_key,
+                    state_owner,
+                    5,
+                    state_data,
+                    false,
+                    true,
+                    false,
+                ),
+                AccountObservationV1::new(payer, payer_owner, 100, &[], true, true, false),
+                AccountObservationV1::new(credit, [7; 32], 50, &[], false, false, false),
+            ];
+            plan_lifecycle(
+                selected,
+                LifecycleContextV3 {
+                    account_profile: profile,
+                    tail_count: 0,
+                    item_index: None,
+                    accounts: &accounts,
+                    registers,
+                    trading_program: TRADING,
+                    system_program: SYSTEM,
+                    adapter_derived_pda: state,
+                    rent_credit: Some(rent_credit),
+                    current_rent_minimum: Some(minimum),
+                },
+            )
+        };
+        assert!(matches!(
+            plan(SYSTEM, &[], state),
+            Ok(StateLifecyclePlanV3::Create(CreateStatePlanV3 {
+                target_data_bytes: 152,
+                state_before: 5,
+                state_after: 30,
+                payer_debit: 25,
+                payer_after: 75,
+                ..
+            }))
+        ));
+        let live = [0_u8; 152];
+        assert!(matches!(
+            plan(TRADING, &live, state),
+            Ok(StateLifecyclePlanV3::Authenticate(
+                AuthenticateStatePlanV3 {
+                    data_bytes: 152,
+                    ..
+                }
+            ))
+        ));
+        assert_eq!(plan([0x44; 32], &[], state), Err(Error::InvalidState));
+        assert_eq!(plan(TRADING, &live[..151], state), Err(Error::InvalidState));
+        assert_eq!(plan(SYSTEM, &[], [0x55; 32]), Err(Error::IdentityMismatch));
+
+        let observations = [AccountObservationV1::new(
+            state,
+            SYSTEM,
+            5,
+            &[],
+            false,
+            true,
+            false,
+        )];
+        let mut scalar_scratch = [0_u64; 3];
+        let mut scalar_output = [99_u64; 3];
+        let mut identity_scratch = [[0_u8; 32]; 2];
+        let mut identity_output = [[9_u8; 32]; 2];
+        assert_eq!(
+            project_atomic(
+                profile,
+                0,
+                &observations,
+                ProjectionRegistersV2 {
+                    input_scalars: &[9, 30, 88],
+                    input_identities: &[beneficiary, payer_owner],
+                    scratch_scalars: &mut scalar_scratch,
+                    scratch_identities: &mut identity_scratch,
+                    output_scalars: &mut scalar_output,
+                    output_identities: &mut identity_output,
+                },
+            ),
+            Err(v2::Error::WidthMismatch)
+        );
+        assert_eq!(scalar_output, [99; 3]);
+        assert_eq!(identity_output, [[9; 32]; 2]);
+    }
 
     fn put(output: &mut [u8], offset: usize, bytes: &[u8]) {
         let end = offset.checked_add(bytes.len()).expect("fixture width");

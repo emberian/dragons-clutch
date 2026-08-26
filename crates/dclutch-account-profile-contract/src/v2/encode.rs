@@ -6,7 +6,8 @@
 //! output.
 
 use super::{
-    ARTIFACT_PROFILE, AccountProfileV2, Error, HEADER_BYTES, MAGIC, OP_PROJECT_DATA_IDENTITY,
+    ARTIFACT_PROFILE, AccountPrestateV2, AccountProfileV2, Error, HEADER_BYTES,
+    LIFECYCLE_PRESTATE_ARTIFACT_PROFILE, MAGIC, OP_PROJECT_DATA_IDENTITY,
     OP_PROJECT_DATA_IDENTITY_AFFINE, OP_PROJECT_DATA_IDENTITY_SELECTED,
     OP_PROJECT_DATA_IDENTITY_SELECTED_AFFINE, OP_PROJECT_DATA_U16, OP_PROJECT_DATA_U32,
     OP_PROJECT_DATA_U64, OP_PROJECT_DATA_U64_AFFINE, OP_PROJECT_DATA_U64_SELECTED,
@@ -33,6 +34,8 @@ pub enum AccountProfileArtifactV2 {
     TypedScalar,
     /// Typed-scalar profile with an optional trusted runtime environment scalar.
     TrustedEnvironment,
+    /// Trusted-environment profile with lifecycle-bound alternative prestates.
+    LifecyclePrestate,
 }
 
 impl AccountProfileArtifactV2 {
@@ -42,6 +45,7 @@ impl AccountProfileArtifactV2 {
             Self::SelectedWindow => SELECTED_WINDOW_ARTIFACT_PROFILE,
             Self::TypedScalar => TYPED_SCALAR_ARTIFACT_PROFILE,
             Self::TrustedEnvironment => TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE,
+            Self::LifecyclePrestate => LIFECYCLE_PRESTATE_ARTIFACT_PROFILE,
         }
     }
 }
@@ -143,6 +147,15 @@ pub struct AccountRuleInputV2 {
     pub data_length: u32,
     /// Additional exact data bytes per authenticated Product item.
     pub data_item_stride: u32,
+}
+
+/// One account rule plus its exact lifecycle-prestate semantics.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AccountRuleWithPrestateInputV2 {
+    /// Existing exact privilege, effect, alias, and live-width rule.
+    pub rule: AccountRuleInputV2,
+    /// Exact-only or lifecycle-bound vacant/live prestate.
+    pub prestate: AccountPrestateV2,
 }
 
 /// Fixed-prefix or repeated-item account coordinate.
@@ -403,8 +416,95 @@ pub fn encode_account_profile_with_environment_v2_atomic(
     scratch: &mut [u8],
     output: &mut [u8],
 ) -> Result<(), Error> {
+    encode_account_profile_atomic(
+        artifact,
+        trusted_environment,
+        RuleInputsV2::Exact(fixed_rules),
+        RuleInputsV2::Exact(item_rules),
+        fixed_operations,
+        item_operations,
+        registers,
+        scratch,
+        output,
+    )
+}
+
+/// Encode profile 6 with explicitly typed lifecycle-bound account rules.
+///
+/// The complete candidate is hostile-decoded before `output` changes. At
+/// least one rule must be lifecycle-bound; old exact profiles therefore cannot
+/// be relabeled as this successor artifact.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_account_profile_with_lifecycle_v2_atomic(
+    trusted_environment: TrustedEnvironmentV2,
+    fixed_rules: &[AccountRuleWithPrestateInputV2],
+    item_rules: &[AccountRuleWithPrestateInputV2],
+    fixed_operations: &[AccountOperationInputV2],
+    item_operations: &[AccountOperationInputV2],
+    registers: RegisterGeometryV2,
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<(), Error> {
+    encode_account_profile_atomic(
+        AccountProfileArtifactV2::LifecyclePrestate,
+        trusted_environment,
+        RuleInputsV2::WithPrestate(fixed_rules),
+        RuleInputsV2::WithPrestate(item_rules),
+        fixed_operations,
+        item_operations,
+        registers,
+        scratch,
+        output,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum RuleInputsV2<'a> {
+    Exact(&'a [AccountRuleInputV2]),
+    WithPrestate(&'a [AccountRuleWithPrestateInputV2]),
+}
+
+impl RuleInputsV2<'_> {
+    fn len(self) -> usize {
+        match self {
+            Self::Exact(values) => values.len(),
+            Self::WithPrestate(values) => values.len(),
+        }
+    }
+
+    fn get(self, index: usize) -> Result<(AccountRuleInputV2, AccountPrestateV2), Error> {
+        match self {
+            Self::Exact(values) => values
+                .get(index)
+                .copied()
+                .map(|rule| (rule, AccountPrestateV2::Exact)),
+            Self::WithPrestate(values) => values
+                .get(index)
+                .copied()
+                .map(|value| (value.rule, value.prestate)),
+        }
+        .ok_or(Error::InvalidLength)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_account_profile_atomic(
+    artifact: AccountProfileArtifactV2,
+    trusted_environment: TrustedEnvironmentV2,
+    fixed_rules: RuleInputsV2<'_>,
+    item_rules: RuleInputsV2<'_>,
+    fixed_operations: &[AccountOperationInputV2],
+    item_operations: &[AccountOperationInputV2],
+    registers: RegisterGeometryV2,
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<(), Error> {
     if trusted_environment.current_slot_destination().is_some()
-        && artifact != AccountProfileArtifactV2::TrustedEnvironment
+        && !matches!(
+            artifact,
+            AccountProfileArtifactV2::TrustedEnvironment
+                | AccountProfileArtifactV2::LifecyclePrestate
+        )
     {
         return Err(Error::InvalidTrustedEnvironment);
     }
@@ -459,9 +559,19 @@ pub fn encode_account_profile_with_environment_v2_atomic(
         )?;
     }
     let mut cursor = HEADER_BYTES;
-    for rule in fixed_rules.iter().chain(item_rules) {
-        encode_rule(*rule, scratch, cursor)?;
+    let mut rule_index = 0_usize;
+    while rule_index < fixed_rules.len() {
+        let (rule, prestate) = fixed_rules.get(rule_index)?;
+        encode_rule(rule, prestate, scratch, cursor)?;
         cursor = add(cursor, RULE_BYTES)?;
+        rule_index = rule_index.checked_add(1).ok_or(Error::InvalidLength)?;
+    }
+    rule_index = 0;
+    while rule_index < item_rules.len() {
+        let (rule, prestate) = item_rules.get(rule_index)?;
+        encode_rule(rule, prestate, scratch, cursor)?;
+        cursor = add(cursor, RULE_BYTES)?;
+        rule_index = rule_index.checked_add(1).ok_or(Error::InvalidLength)?;
     }
     for operation in fixed_operations.iter().chain(item_operations) {
         encode_operation(*operation, scratch, cursor)?;
@@ -475,7 +585,12 @@ pub fn encode_account_profile_with_environment_v2_atomic(
     Ok(())
 }
 
-fn encode_rule(rule: AccountRuleInputV2, output: &mut [u8], offset: usize) -> Result<(), Error> {
+fn encode_rule(
+    rule: AccountRuleInputV2,
+    prestate: AccountPrestateV2,
+    output: &mut [u8],
+    offset: usize,
+) -> Result<(), Error> {
     write_byte(output, offset, rule.privileges.bits())?;
     write_byte(output, add(offset, 1)?, rule.effect_permissions.bits())?;
     let (alias_kind, alias_index) = match rule.alias {
@@ -484,6 +599,14 @@ fn encode_rule(rule: AccountRuleInputV2, output: &mut [u8], offset: usize) -> Re
         AccountAliasInputV2::SameItem(index) => (2, index),
     };
     write_byte(output, add(offset, 2)?, alias_kind)?;
+    write_byte(
+        output,
+        add(offset, 3)?,
+        match prestate {
+            AccountPrestateV2::Exact => 0,
+            AccountPrestateV2::LifecycleBound => 1,
+        },
+    )?;
     write(output, add(offset, 4)?, &alias_index.to_le_bytes())?;
     write(output, add(offset, 8)?, &rule.data_length.to_le_bytes())?;
     write(
@@ -918,6 +1041,140 @@ mod tests {
             Err(Error::TrustedEnvironmentOverwrite)
         );
         assert_eq!(collision_output, before);
+    }
+
+    #[test]
+    fn lifecycle_prestate_projects_vacant_zero_or_exact_live_data_atomically() {
+        let rules = [AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: WRITABLE,
+                effect_permissions: AccountEffectPermissionsV2::new(false, true, true),
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length: 152,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::LifecycleBound,
+        }];
+        let operations = [
+            AccountOperationInputV2::ProjectDataU64 {
+                account: AccountCoordinateV2::fixed(0),
+                destination: ScalarCoordinateV2::common(0),
+                data_offset: 8,
+            },
+            AccountOperationInputV2::ProjectDataIdentity {
+                account: AccountCoordinateV2::fixed(0),
+                destination: IdentityCoordinateV2::common(0),
+                data_offset: 32,
+            },
+        ];
+        let width = HEADER_BYTES + RULE_BYTES + operations.len() * OPERATION_BYTES;
+        let mut encode_scratch = std::vec![0_u8; width];
+        let mut encoded = std::vec![0_u8; width];
+        encode_account_profile_with_lifecycle_v2_atomic(
+            TrustedEnvironmentV2::CurrentSlot { destination: 1 },
+            &rules,
+            &[],
+            &operations,
+            &[],
+            RegisterGeometryV2 {
+                common_scalars: 2,
+                item_scalar_stride: 0,
+                common_identities: 1,
+                item_identity_stride: 0,
+            },
+            &mut encode_scratch,
+            &mut encoded,
+        )
+        .expect("lifecycle profile");
+        let profile = AccountProfileV2::decode(&encoded).expect("decode lifecycle profile");
+        assert_eq!(
+            profile.artifact_profile(),
+            LIFECYCLE_PRESTATE_ARTIFACT_PROFILE
+        );
+        assert_eq!(
+            profile.rule(false, 0).expect("rule").prestate(),
+            AccountPrestateV2::LifecycleBound
+        );
+
+        let project =
+            |data: &[u8], output_scalars: &mut [u64; 2], output_ids: &mut [[u8; 32]; 1]| {
+                let accounts = [AccountObservationV1::new(
+                    [1; 32], [2; 32], 7, data, false, true, false,
+                )];
+                let input_scalars = [9_u64, 77_777];
+                let mut scalar_scratch = [0_u64; 2];
+                let mut identity_scratch = [[0_u8; 32]; 1];
+                project_atomic(
+                    profile,
+                    0,
+                    &accounts,
+                    ProjectionRegistersV2 {
+                        input_scalars: &input_scalars,
+                        input_identities: &[[8; 32]],
+                        scratch_scalars: &mut scalar_scratch,
+                        scratch_identities: &mut identity_scratch,
+                        output_scalars,
+                        output_identities: output_ids,
+                    },
+                )
+            };
+        let mut vacant_scalars = [99_u64; 2];
+        let mut vacant_ids = [[9_u8; 32]; 1];
+        project(&[], &mut vacant_scalars, &mut vacant_ids).expect("vacant zero prestate");
+        assert_eq!(vacant_scalars, [0, 77_777]);
+        assert_eq!(vacant_ids, [[0; 32]]);
+
+        let mut live = [0_u8; 152];
+        live.get_mut(8..16)
+            .expect("nonce")
+            .copy_from_slice(&41_u64.to_le_bytes());
+        live.get_mut(32..64)
+            .expect("maker")
+            .copy_from_slice(&[6; 32]);
+        let mut live_scalars = [99_u64; 2];
+        let mut live_ids = [[9_u8; 32]; 1];
+        project(&live, &mut live_scalars, &mut live_ids).expect("live exact prestate");
+        assert_eq!(live_scalars, [41, 77_777]);
+        assert_eq!(live_ids, [[6; 32]]);
+
+        let mut partial_scalars = [99_u64; 2];
+        let before_scalars = partial_scalars;
+        let mut partial_ids = [[9_u8; 32]; 1];
+        let before_ids = partial_ids;
+        assert_eq!(
+            project(&live[..151], &mut partial_scalars, &mut partial_ids),
+            Err(Error::DataLengthMismatch)
+        );
+        assert_eq!(partial_scalars, before_scalars);
+        assert_eq!(partial_ids, before_ids);
+
+        let hostile_operations = [AccountOperationInputV2::RequireOwner {
+            account: AccountCoordinateV2::fixed(0),
+            expected: IdentityCoordinateV2::common(0),
+        }];
+        let hostile_width = HEADER_BYTES + RULE_BYTES + OPERATION_BYTES;
+        let mut hostile_scratch = std::vec![0_u8; hostile_width];
+        let mut hostile_output = std::vec![0x55_u8; hostile_width];
+        let before = hostile_output.clone();
+        assert_eq!(
+            encode_account_profile_with_lifecycle_v2_atomic(
+                TrustedEnvironmentV2::None,
+                &rules,
+                &[],
+                &hostile_operations,
+                &[],
+                RegisterGeometryV2 {
+                    common_scalars: 1,
+                    item_scalar_stride: 0,
+                    common_identities: 1,
+                    item_identity_stride: 0,
+                },
+                &mut hostile_scratch,
+                &mut hostile_output,
+            ),
+            Err(Error::InvalidLifecyclePrestate)
+        );
+        assert_eq!(hostile_output, before);
     }
 
     #[test]

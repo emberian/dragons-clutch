@@ -38,6 +38,8 @@ pub const SELECTED_WINDOW_ARTIFACT_PROFILE: u16 = 3;
 pub const TYPED_SCALAR_ARTIFACT_PROFILE: u16 = 4;
 /// Typed-scalar profile with an optional trusted current-slot environment scalar.
 pub const TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE: u16 = 5;
+/// Trusted-environment profile with lifecycle-bound alternative account prestates.
+pub const LIFECYCLE_PRESTATE_ARTIFACT_PROFILE: u16 = 6;
 /// Exact V2 header width.
 pub const HEADER_BYTES: usize = 32;
 /// Exact account-rule width.
@@ -152,6 +154,8 @@ pub enum Error {
     InvalidTrustedEnvironment,
     /// A projection attempted to overwrite a trusted-environment scalar.
     TrustedEnvironmentOverwrite,
+    /// A lifecycle-bound alternative prestate was malformed or used outside profile 6.
+    InvalidLifecyclePrestate,
 }
 
 /// Result alias for runtime-tail profiles.
@@ -193,12 +197,22 @@ pub enum AliasKindV2 {
     SameItem,
 }
 
+/// Exact account-data prestate admitted by one rule.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AccountPrestateV2 {
+    /// The account must have its declared exact data width.
+    Exact,
+    /// The lifecycle policy admits either vacant data or the declared live width.
+    LifecycleBound,
+}
+
 /// Hostile-decoded account rule template.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AccountRuleV2 {
     privileges: u8,
     effect_permissions: u8,
     alias_kind: AliasKindV2,
+    prestate: AccountPrestateV2,
     alias_index: u16,
     data_length: u32,
     data_item_stride: u32,
@@ -248,6 +262,11 @@ impl AccountRuleV2 {
     /// Fixed or same-item alias coordinate.
     pub const fn alias_index(self) -> u16 {
         self.alias_index
+    }
+
+    /// Exact or lifecycle-bound account-data prestate.
+    pub const fn prestate(self) -> AccountPrestateV2 {
+        self.prestate
     }
 
     /// Exact account-data width.
@@ -302,11 +321,16 @@ impl<'a> AccountProfileV2<'a> {
                     | SELECTED_WINDOW_ARTIFACT_PROFILE
                     | TYPED_SCALAR_ARTIFACT_PROFILE
                     | TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE
+                    | LIFECYCLE_PRESTATE_ARTIFACT_PROFILE
             )
         {
             return Err(Error::UnsupportedProfile);
         }
-        if artifact_profile != TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE && read_u32(bytes, 28)? != 0 {
+        if !matches!(
+            artifact_profile,
+            TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE | LIFECYCLE_PRESTATE_ARTIFACT_PROFILE
+        ) && read_u32(bytes, 28)? != 0
+        {
             return Err(Error::NonCanonicalReserved);
         }
         let value = Self {
@@ -433,7 +457,7 @@ impl<'a> AccountProfileV2<'a> {
             .checked_mul(RULE_BYTES)
             .and_then(|body| HEADER_BYTES.checked_add(body))
             .ok_or(Error::InvalidLength)?;
-        decode_rule(self.bytes, offset)
+        decode_rule(self.bytes, offset, self.artifact_profile)
     }
 
     /// Resolve one expanded physical account to its representative coordinate.
@@ -522,6 +546,7 @@ impl<'a> AccountProfileV2<'a> {
     }
 
     fn validate_rules(self) -> Result<()> {
+        let mut lifecycle_bound = false;
         let mut fixed = 0_u16;
         while fixed < self.fixed_accounts {
             let rule = self.rule(false, fixed)?;
@@ -530,6 +555,7 @@ impl<'a> AccountProfileV2<'a> {
             }
             validate_rule(rule, false, fixed, self.fixed_accounts)?;
             self.require_owner_anchor(false, fixed, rule)?;
+            lifecycle_bound |= rule.prestate == AccountPrestateV2::LifecycleBound;
             fixed = fixed.checked_add(1).ok_or(Error::InvalidLength)?;
         }
         let mut item = 0_u16;
@@ -540,9 +566,14 @@ impl<'a> AccountProfileV2<'a> {
             }
             validate_rule(rule, true, item, self.fixed_accounts)?;
             self.require_owner_anchor(true, item, rule)?;
+            lifecycle_bound |= rule.prestate == AccountPrestateV2::LifecycleBound;
             item = item.checked_add(1).ok_or(Error::InvalidLength)?;
         }
-        Ok(())
+        if lifecycle_bound == (self.artifact_profile == LIFECYCLE_PRESTATE_ARTIFACT_PROFILE) {
+            Ok(())
+        } else {
+            Err(Error::InvalidLifecyclePrestate)
+        }
     }
 
     fn require_owner_anchor(self, item: bool, account: u16, rule: AccountRuleV2) -> Result<()> {
@@ -550,6 +581,9 @@ impl<'a> AccountProfileV2<'a> {
             & (EFFECT_PERMISSION_DEBIT_LAMPORTS | EFFECT_PERMISSION_WRITE_DATA)
             == 0
         {
+            return Ok(());
+        }
+        if rule.prestate == AccountPrestateV2::LifecycleBound {
             return Ok(());
         }
         let count = if item {
@@ -576,6 +610,7 @@ impl<'a> AccountProfileV2<'a> {
         while fixed < self.fixed_operations {
             let operation = self.operation(false, fixed)?;
             operation.validate(self, false, fixed)?;
+            self.validate_lifecycle_operation(operation)?;
             self.require_unique_projection(false, fixed, operation)?;
             fixed = fixed.checked_add(1).ok_or(Error::InvalidLength)?;
         }
@@ -583,8 +618,25 @@ impl<'a> AccountProfileV2<'a> {
         while item < self.item_operations {
             let operation = self.operation(true, item)?;
             operation.validate(self, true, item)?;
+            self.validate_lifecycle_operation(operation)?;
             self.require_unique_projection(true, item, operation)?;
             item = item.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        Ok(())
+    }
+
+    fn validate_lifecycle_operation(self, operation: Operation) -> Result<()> {
+        let rule = self.rule(operation.account_item, operation.account)?;
+        if rule.prestate != AccountPrestateV2::LifecycleBound {
+            return Ok(());
+        }
+        if matches!(
+            operation.opcode,
+            OP_REQUIRE_OWNER | OP_PROJECT_OWNER | OP_PROJECT_LAMPORTS | OP_SELECT_DATA_WINDOW
+        ) || operation.is_selected_projection()
+            || operation.opcode == OP_PROJECT_TAIL_COUNT_U32
+        {
+            return Err(Error::InvalidLifecyclePrestate);
         }
         Ok(())
     }
@@ -695,7 +747,10 @@ impl<'a> AccountProfileV2<'a> {
 }
 
 fn decode_trusted_environment(bytes: &[u8], artifact_profile: u16) -> Result<TrustedEnvironmentV2> {
-    if artifact_profile != TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE {
+    if !matches!(
+        artifact_profile,
+        TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE | LIFECYCLE_PRESTATE_ARTIFACT_PROFILE
+    ) {
         return Ok(TrustedEnvironmentV2::None);
     }
     let destination = read_u16(bytes, TRUSTED_ENVIRONMENT_SCALAR_OFFSET)?;
@@ -864,7 +919,10 @@ fn validate_accounts(
         if account.privileges() != rule.privileges {
             return Err(Error::PrivilegeMismatch);
         }
-        if account.data().len() != exact_rule_data_length(rule, tail_count)? {
+        let exact_data_length = exact_rule_data_length(rule, tail_count)?;
+        if account.data().len() != exact_data_length
+            && !(rule.prestate == AccountPrestateV2::LifecycleBound && account.data().is_empty())
+        {
             return Err(Error::DataLengthMismatch);
         }
         let representative = profile.representative(tail_count, coordinate)?;
@@ -1046,7 +1104,9 @@ impl Operation {
                 if self.opcode == OP_PROJECT_DATA_U16
                     && !matches!(
                         profile.artifact_profile,
-                        TYPED_SCALAR_ARTIFACT_PROFILE | TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE
+                        TYPED_SCALAR_ARTIFACT_PROFILE
+                            | TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE
+                            | LIFECYCLE_PRESTATE_ARTIFACT_PROFILE
                     )
                 {
                     return Err(Error::NonCanonicalOperation);
@@ -1092,6 +1152,7 @@ impl Operation {
                     SELECTED_WINDOW_ARTIFACT_PROFILE
                         | TYPED_SCALAR_ARTIFACT_PROFILE
                         | TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE
+                        | LIFECYCLE_PRESTATE_ARTIFACT_PROFILE
                 ) || item_body
                     || self.account_item
                     || self.register_item
@@ -1129,6 +1190,7 @@ impl Operation {
                     SELECTED_WINDOW_ARTIFACT_PROFILE
                         | TYPED_SCALAR_ARTIFACT_PROFILE
                         | TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE
+                        | LIFECYCLE_PRESTATE_ARTIFACT_PROFILE
                 ) || item_body
                     || self.account_item
                     || self.register_item
@@ -1220,6 +1282,16 @@ impl Operation {
         )
     }
 
+    fn is_selected_projection(self) -> bool {
+        matches!(
+            self.opcode,
+            OP_PROJECT_DATA_U64_SELECTED
+                | OP_PROJECT_DATA_IDENTITY_SELECTED
+                | OP_PROJECT_DATA_U64_SELECTED_AFFINE
+                | OP_PROJECT_DATA_IDENTITY_SELECTED_AFFINE
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn apply(
         self,
@@ -1240,6 +1312,7 @@ impl Operation {
             .get(account_index)
             .copied()
             .ok_or(Error::InvalidCoordinate)?;
+        let rule = expanded_rule(profile, account_index)?;
         let scalar = || {
             register_index(
                 profile.common_scalars,
@@ -1275,40 +1348,49 @@ impl Operation {
             OP_PROJECT_OWNER => write_identity(identities, identity()?, account.owner()),
             OP_PROJECT_LAMPORTS => write_scalar(scalars, scalar()?, account.lamports()),
             OP_PROJECT_DATA_U64 => {
-                let bytes = data_field(account.data(), self.data_offset, 8)?;
-                write_scalar(
-                    scalars,
-                    scalar()?,
-                    u64::from_le_bytes(bytes.try_into().map_err(|_| Error::DataOutOfBounds)?),
-                )
+                let value = projected_data_field(account.data(), rule, self.data_offset, 8)?
+                    .map(|bytes| {
+                        bytes
+                            .try_into()
+                            .map(u64::from_le_bytes)
+                            .map_err(|_| Error::DataOutOfBounds)
+                    })
+                    .transpose()?
+                    .unwrap_or(0);
+                write_scalar(scalars, scalar()?, value)
             }
             OP_PROJECT_DATA_U32 | OP_PROJECT_TAIL_COUNT_U32 => {
-                let bytes = data_field(account.data(), self.data_offset, 4)?;
-                write_scalar(
-                    scalars,
-                    scalar()?,
-                    u64::from(u32::from_le_bytes(
-                        bytes.try_into().map_err(|_| Error::DataOutOfBounds)?,
-                    )),
-                )
+                let value = projected_data_field(account.data(), rule, self.data_offset, 4)?
+                    .map(|bytes| {
+                        bytes
+                            .try_into()
+                            .map(u32::from_le_bytes)
+                            .map(u64::from)
+                            .map_err(|_| Error::DataOutOfBounds)
+                    })
+                    .transpose()?
+                    .unwrap_or(0);
+                write_scalar(scalars, scalar()?, value)
             }
             OP_PROJECT_DATA_U16 => {
-                let bytes = data_field(account.data(), self.data_offset, 2)?;
-                write_scalar(
-                    scalars,
-                    scalar()?,
-                    u64::from(u16::from_le_bytes(
-                        bytes.try_into().map_err(|_| Error::DataOutOfBounds)?,
-                    )),
-                )
+                let value = projected_data_field(account.data(), rule, self.data_offset, 2)?
+                    .map(|bytes| {
+                        bytes
+                            .try_into()
+                            .map(u16::from_le_bytes)
+                            .map(u64::from)
+                            .map_err(|_| Error::DataOutOfBounds)
+                    })
+                    .transpose()?
+                    .unwrap_or(0);
+                write_scalar(scalars, scalar()?, value)
             }
             OP_PROJECT_DATA_IDENTITY => {
-                let bytes = data_field(account.data(), self.data_offset, 32)?;
-                write_identity(
-                    identities,
-                    identity()?,
-                    bytes.try_into().map_err(|_| Error::DataOutOfBounds)?,
-                )
+                let value = projected_data_field(account.data(), rule, self.data_offset, 32)?
+                    .map(|bytes| bytes.try_into().map_err(|_| Error::DataOutOfBounds))
+                    .transpose()?
+                    .unwrap_or([0; 32]);
+                write_identity(identities, identity()?, value)
             }
             OP_PROJECT_DATA_U64_AFFINE => {
                 let offset = affine_data_offset(
@@ -1317,12 +1399,16 @@ impl Operation {
                     item.ok_or(Error::InvalidCoordinate)?,
                     8,
                 )?;
-                let bytes = data_field(account.data(), offset, 8)?;
-                write_scalar(
-                    scalars,
-                    scalar()?,
-                    u64::from_le_bytes(bytes.try_into().map_err(|_| Error::DataOutOfBounds)?),
-                )
+                let value = projected_data_field(account.data(), rule, offset, 8)?
+                    .map(|bytes| {
+                        bytes
+                            .try_into()
+                            .map(u64::from_le_bytes)
+                            .map_err(|_| Error::DataOutOfBounds)
+                    })
+                    .transpose()?
+                    .unwrap_or(0);
+                write_scalar(scalars, scalar()?, value)
             }
             OP_PROJECT_DATA_IDENTITY_AFFINE => {
                 let offset = affine_data_offset(
@@ -1331,12 +1417,11 @@ impl Operation {
                     item.ok_or(Error::InvalidCoordinate)?,
                     32,
                 )?;
-                let bytes = data_field(account.data(), offset, 32)?;
-                write_identity(
-                    identities,
-                    identity()?,
-                    bytes.try_into().map_err(|_| Error::DataOutOfBounds)?,
-                )
+                let value = projected_data_field(account.data(), rule, offset, 32)?
+                    .map(|bytes| bytes.try_into().map_err(|_| Error::DataOutOfBounds))
+                    .transpose()?
+                    .unwrap_or([0; 32]);
+                write_identity(identities, identity()?, value)
             }
             OP_SELECT_DATA_WINDOW => {
                 let (offset, width) = selected_window_range(profile, self, tail_count, scalars)?;
@@ -1429,6 +1514,18 @@ fn validate_rule(rule: AccountRuleV2, item: bool, index: u16, fixed_count: u16) 
     {
         return Err(Error::InvalidEffectPermissions);
     }
+    if rule.prestate == AccountPrestateV2::LifecycleBound
+        && (rule.alias_kind != AliasKindV2::SelfCoordinate
+            || rule.alias_index != 0
+            || rule.privileges != 0x02
+            || rule.data_length == 0
+            || rule.data_item_stride != 0
+            || rule.effect_permissions
+                & (EFFECT_PERMISSION_CREDIT_LAMPORTS | EFFECT_PERMISSION_WRITE_DATA)
+                != (EFFECT_PERMISSION_CREDIT_LAMPORTS | EFFECT_PERMISSION_WRITE_DATA))
+    {
+        return Err(Error::InvalidLifecyclePrestate);
+    }
     match rule.alias_kind {
         AliasKindV2::SelfCoordinate if rule.alias_index == 0 => Ok(()),
         AliasKindV2::Fixed
@@ -1442,20 +1539,33 @@ fn validate_rule(rule: AccountRuleV2, item: bool, index: u16, fixed_count: u16) 
     }
 }
 
-fn decode_rule(bytes: &[u8], offset: usize) -> Result<AccountRuleV2> {
+fn decode_rule(bytes: &[u8], offset: usize, artifact_profile: u16) -> Result<AccountRuleV2> {
     let alias_kind = match byte(bytes, add(offset, 2)?)? {
         0 => AliasKindV2::SelfCoordinate,
         1 => AliasKindV2::Fixed,
         2 => AliasKindV2::SameItem,
         _ => return Err(Error::InvalidAlias),
     };
-    if byte(bytes, add(offset, 3)?)? != 0 || read_u16(bytes, add(offset, 6)?)? != 0 {
+    let prestate_tag = byte(bytes, add(offset, 3)?)?;
+    let prestate = if artifact_profile == LIFECYCLE_PRESTATE_ARTIFACT_PROFILE {
+        match prestate_tag {
+            0 => AccountPrestateV2::Exact,
+            1 => AccountPrestateV2::LifecycleBound,
+            _ => return Err(Error::InvalidLifecyclePrestate),
+        }
+    } else if prestate_tag == 0 {
+        AccountPrestateV2::Exact
+    } else {
+        return Err(Error::NonCanonicalReserved);
+    };
+    if read_u16(bytes, add(offset, 6)?)? != 0 {
         return Err(Error::NonCanonicalReserved);
     }
     Ok(AccountRuleV2 {
         privileges: byte(bytes, offset)?,
         effect_permissions: byte(bytes, add(offset, 1)?)?,
         alias_kind,
+        prestate,
         alias_index: read_u16(bytes, add(offset, 4)?)?,
         data_length: read_u32(bytes, add(offset, 8)?)?,
         data_item_stride: read_u32(bytes, add(offset, 12)?)?,
@@ -1468,6 +1578,27 @@ fn exact_rule_data_length(rule: AccountRuleV2, tail_count: u32) -> Result<usize>
         .and_then(|tail| u64::from(rule.data_length).checked_add(tail))
         .ok_or(Error::DataLengthMismatch)?;
     usize::try_from(width).map_err(|_| Error::DataLengthMismatch)
+}
+
+fn projected_data_field(
+    data: &[u8],
+    rule: AccountRuleV2,
+    offset: u32,
+    width: usize,
+) -> Result<Option<&[u8]>> {
+    if rule.prestate == AccountPrestateV2::LifecycleBound && data.is_empty() {
+        let offset = usize::try_from(offset).map_err(|_| Error::DataOutOfBounds)?;
+        if offset
+            .checked_add(width)
+            .is_none_or(|end| end > usize::try_from(rule.data_length).unwrap_or(0))
+        {
+            Err(Error::DataOutOfBounds)
+        } else {
+            Ok(None)
+        }
+    } else {
+        data_field(data, offset, width).map(Some)
+    }
 }
 
 fn expanded_rule(profile: AccountProfileV2<'_>, coordinate: usize) -> Result<AccountRuleV2> {

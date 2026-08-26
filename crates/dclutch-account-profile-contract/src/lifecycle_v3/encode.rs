@@ -7,9 +7,10 @@
 
 use super::{
     ACTION_PLAN_BYTES, ARTIFACT_PROFILE, Error, GUARD_ALWAYS, GUARD_SCALAR_EQ, HEADER_BYTES, MAGIC,
-    MAX_SEED_BYTES, PLAN_AUTHENTICATE, PLAN_CLOSE, PLAN_CREATE, RECIPE_BYTES, SCOPE_FIXED,
-    SCOPE_ITEM, SEED_BYTES, SEED_COMMON_IDENTITY, SEED_COMMON_SCALAR_LE, SEED_ITEM_IDENTITY,
-    SEED_ITEM_INDEX_LE, SEED_ITEM_SCALAR_LE, SEED_LITERAL, StateLifecyclePolicyV3, VERSION,
+    MAX_SEED_BYTES, PLAN_AUTHENTICATE, PLAN_AUTHENTICATE_OR_CREATE, PLAN_CLOSE, PLAN_CREATE,
+    RECIPE_BYTES, SCOPE_FIXED, SCOPE_ITEM, SEED_BYTES, SEED_COMMON_IDENTITY, SEED_COMMON_SCALAR_LE,
+    SEED_ITEM_IDENTITY, SEED_ITEM_INDEX_LE, SEED_ITEM_SCALAR_LE, SEED_LITERAL,
+    StateLifecyclePolicyV3, VERSION,
 };
 
 /// Fixed-prefix or per-Product-item lifecycle coordinate.
@@ -133,6 +134,8 @@ pub enum LifecycleOperationInputV3 {
     Create,
     /// Close a terminal PDA to its permanent RentCredit.
     Close,
+    /// Authenticate an existing PDA or create its exact vacant prestate.
+    AuthenticateOrCreate,
 }
 
 /// Data-defined plan enable guard.
@@ -282,6 +285,7 @@ fn encode_plan(plan: LifecyclePlanInputV3, output: &mut [u8], offset: usize) -> 
         LifecycleOperationInputV3::Authenticate => PLAN_AUTHENTICATE,
         LifecycleOperationInputV3::Create => PLAN_CREATE,
         LifecycleOperationInputV3::Close => PLAN_CLOSE,
+        LifecycleOperationInputV3::AuthenticateOrCreate => PLAN_AUTHENTICATE_OR_CREATE,
     };
     write(output, offset, &plan.action.to_le_bytes())?;
     write_byte(output, add(offset, 4)?, operation)?;
