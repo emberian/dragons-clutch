@@ -5,8 +5,6 @@ edition = "2024"
 license = "AGPL-3.0-or-later"
 publish = false
 
-[workspace]
-
 [dependencies]
 dclutch-account-profile-contract = { path = "../../../../crates/dclutch-account-profile-contract" }
 dclutch-capability-contract = { path = "../../../../crates/dclutch-capability-contract" }
