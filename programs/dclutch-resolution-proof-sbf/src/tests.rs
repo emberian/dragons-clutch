@@ -6,12 +6,15 @@ use dclutch_capability_contract::{
     FUNDING_STATE_BYTES, FundingAmountsV1, FundingCustodyObservationV1, FundingQuoteV1,
     FundingStateV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
 };
-use dclutch_core_contract::{ContentId as CoreContentId, MarketIdentity, MarketRoot, Phase};
-use dclutch_market_contract::market::{CategoricalMarketV1, CategoricalSettlementSummaryV1};
+use dclutch_core_contract::ContentId as CoreContentId;
+use dclutch_market_core_codec::{
+    CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV1,
+    MarketIdentity as CoreMarketIdentity, Phase as CorePhase, Readiness as CoreReadiness,
+};
 use dclutch_product_contract::{
     ContentId as ProductContentId,
     capacity::CapacityProfileId,
-    product::{InstanceV1, InstanceV1Input},
+    product::{InstanceV1, InstanceV1Input, PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1},
     result_domain::{FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1, FiniteResultDomainV1},
 };
 use dclutch_pyth_svm::{
@@ -22,8 +25,7 @@ use dclutch_pyth_svm::{
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
     ACTIVATION_PDA_DOMAIN_V1, ArtifactActivationInputV1, ArtifactReleaseV1,
-    ArtifactUpgradePolicyV1, DeploymentObservationV1, EXECUTION_AUTHORITY_MANIFEST_SCHEMA_ID_V1,
-    ExecutionAuthorityManifestV1, ExecutionReleaseActivationInputsV1,
+    ArtifactUpgradePolicyV1, DeploymentObservationV1, ExecutionReleaseActivationInputsV1,
     activate_execution_release_set_v1,
 };
 use dclutch_registry_svm::LOADER_V3_PROGRAMDATA_METADATA_BYTES;
@@ -66,7 +68,7 @@ const FEED: [u8; 32] = [0x2a; 32];
 
 struct Fixture {
     program_id: Pubkey,
-    accounts: [AccountInfo<'static>; 23],
+    accounts: [AccountInfo<'static>; 21],
     request: [u8; ACCEPT_PYTH_REQUEST_BYTES],
     capability_manifest: AccountInfo<'static>,
     capability_manifest_staging: AccountInfo<'static>,
@@ -82,6 +84,10 @@ fn key(seed: u8) -> Pubkey {
 
 fn core_id(bytes: [u8; 32]) -> CoreContentId {
     CoreContentId::new(bytes).expect("nonzero Core content identity")
+}
+
+fn core_identity(bytes: [u8; 32]) -> CoreIdentity {
+    CoreIdentity::new(bytes).expect("nonzero Core identity")
 }
 
 fn source_id(bytes: [u8; 32]) -> SourceContentId {
@@ -285,6 +291,7 @@ fn binding(release: ArtifactReleaseV1) -> ExecutionRoleBindingV1 {
 
 fn fixture() -> Fixture {
     let rent = Rent::default();
+    let registry_program = key(0x50);
     let core_program = key(0x51);
     let program_id = key(0x52);
     let resolution_programdata =
@@ -561,29 +568,37 @@ fn fixture() -> Fixture {
     CapabilityManifestV1::encode_into(&capability_entries, &mut capability_manifest_bytes)
         .expect("canonical capability manifest");
     let capability_manifest_id = hash(&capability_manifest_bytes).to_bytes();
-    let authority =
-        ExecutionAuthorityManifestV1::new(core_id(capability_manifest_id), release_set_id)
-            .expect("authority manifest");
-    let authority_bytes = authority.to_bytes();
-    let authority_id = hash(&authority_bytes).to_bytes();
-
-    let market_key = key(0x59);
-    let identity = MarketIdentity::new(
-        core_id([0xc1; 32]),
-        core_id(product_instance_id),
-        core_id([0xc2; 32]),
-        core_id(material_id),
-        core_id(authority_id),
-        GENERATION,
-    );
-    let mut root = MarketRoot::founding(identity, [0xc3; 32]).expect("Market root");
-    root.transition_phase(GENERATION, Phase::Open)
-        .expect("open Market");
-    let market =
-        CategoricalMarketV1::<3>::new(root, 0, [0; 3], CategoricalSettlementSummaryV1::empty())
-            .expect("categorical Market");
-    let mut market_bytes = vec![0; CategoricalMarketV1::<3>::encoded_len().expect("Market width")];
-    market.encode(&mut market_bytes).expect("Market encoding");
+    let provisional_identity = CoreMarketIdentity {
+        market_id: core_identity([0xc9; 32]),
+        realm_id: core_identity([0xc1; 32]),
+        product_id: core_identity(product_instance_id),
+        result_domain: core_identity(domain_id),
+        resolution_policy: core_identity(material_id),
+        capability_manifest: core_identity(capability_manifest_id),
+        selected_release_set: core_identity(release_set_id.to_bytes()),
+        registry_program: core_identity(registry_program.to_bytes()),
+        generation: GENERATION,
+    };
+    let market_key = Pubkey::find_program_address(
+        &MarketCoreStateSeedsV1::new(provisional_identity).as_slices(),
+        &core_program,
+    )
+    .0;
+    let market_identity = CoreMarketIdentity {
+        market_id: core_identity(market_key.to_bytes()),
+        ..provisional_identity
+    };
+    let market_bytes = CoreState {
+        phase: CorePhase::Open,
+        readiness: CoreReadiness::Consumed,
+        terminal_winner: 0,
+        identity: market_identity,
+        outstanding_capabilities: 0,
+        rent_beneficiary: core_identity([0xc3; 32]),
+        terminal_receipt: None,
+    }
+    .encode()
+    .expect("open sparse Core state");
 
     let (state_key, bump) = Pubkey::find_program_address(
         &[
@@ -617,37 +632,30 @@ fn fixture() -> Fixture {
     )
     .0;
 
-    let (authority_raw, authority_staging) = record_pair(
-        core_program,
-        &rent,
-        EXECUTION_AUTHORITY_MANIFEST_SCHEMA_ID_V1,
-        authority_id,
-        authority_bytes.to_vec(),
-    );
     let (material_raw, material_staging) = record_pair(
-        core_program,
+        registry_program,
         &rent,
         SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1,
         material_id,
         material_bytes.to_vec(),
     );
     let (capability_manifest, capability_manifest_staging) = record_pair(
-        core_program,
+        registry_program,
         &rent,
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         capability_manifest_id,
         capability_manifest_bytes,
     );
-    let domain_record_digest = hash(&domain_bytes).to_bytes();
-    let (domain_raw, domain_staging) = record_pair(
-        core_program,
+    let product_instance_bytes = product_instance.to_bytes();
+    let (product_raw, product_staging) = record_pair(
+        registry_program,
         &rent,
-        dclutch_product_contract::result_domain::FINITE_RESULT_DOMAIN_RELEASE_ID_V1,
-        domain_record_digest,
-        domain_bytes.to_vec(),
+        PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1,
+        product_instance_id,
+        product_instance_bytes.to_vec(),
     );
     let (pyth_raw, pyth_staging) = record_pair(
-        core_program,
+        registry_program,
         &rent,
         PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
         pyth_release_id,
@@ -656,7 +664,7 @@ fn fixture() -> Fixture {
 
     let activation_key = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, release_set_id.as_bytes()],
-        &core_program,
+        &registry_program,
     )
     .0;
     let clock = Clock {
@@ -690,15 +698,20 @@ fn fixture() -> Fixture {
             program_id,
             false,
         ),
-        account(market_key, false, 1, market_bytes, core_program, false),
-        authority_raw,
-        authority_staging,
+        account(
+            market_key,
+            false,
+            rent.minimum_balance(market_bytes.len()),
+            market_bytes.to_vec(),
+            core_program,
+            false,
+        ),
         account(
             activation_key,
             false,
-            1,
+            rent.minimum_balance(activated.to_bytes().len()),
             activated.to_bytes().to_vec(),
-            core_program,
+            registry_program,
             false,
         ),
         account(
@@ -719,8 +732,8 @@ fn fixture() -> Fixture {
         ),
         material_raw,
         material_staging,
-        domain_raw,
-        domain_staging,
+        product_raw,
+        product_staging,
         pyth_raw,
         pyth_staging,
         account(
@@ -812,7 +825,7 @@ fn fixture() -> Fixture {
 
 struct FundedFixture {
     program_id: Pubkey,
-    accounts: [AccountInfo<'static>; 19],
+    accounts: [AccountInfo<'static>; 17],
     request: [u8; FUNDED_TRANSITION_REQUEST_BYTES],
     work_paid: u64,
 }
@@ -834,7 +847,7 @@ fn funded_fixture(action: FundedTransitionActionV3, prepare_prior: bool) -> Fund
     };
 
     if prepare_prior {
-        let material_data = base.accounts[8]
+        let material_data = base.accounts[6]
             .try_borrow_data()
             .expect("Source material data");
         let material = dclutch_source_contract::SourceMaterialViewV1::decode(&material_data)
@@ -963,8 +976,6 @@ fn funded_fixture(action: FundedTransitionActionV3, prepare_prior: bool) -> Fund
         base.accounts[7].clone(),
         base.accounts[8].clone(),
         base.accounts[9].clone(),
-        base.accounts[10].clone(),
-        base.accounts[11].clone(),
         base.capability_manifest.clone(),
         base.capability_manifest_staging.clone(),
         account(
@@ -975,8 +986,8 @@ fn funded_fixture(action: FundedTransitionActionV3, prepare_prior: bool) -> Fund
             sysvar::ID,
             false,
         ),
-        base.accounts[21].clone(),
-        base.accounts[22].clone(),
+        base.accounts[19].clone(),
+        base.accounts[20].clone(),
     ];
     FundedFixture {
         program_id: base.program_id,
@@ -1039,6 +1050,97 @@ fn assert_refusal_atomic(fixture: &Fixture, expected: ResolutionError) {
         Err(ProgramError::Custom(expected as u32))
     );
     assert_eq!(output_snapshot(fixture), before);
+}
+
+#[test]
+fn core_state_registry_and_product_authority_substitutions_refuse_atomically() {
+    let founding = fixture();
+    {
+        let mut market_data = founding.accounts[2]
+            .try_borrow_mut_data()
+            .expect("Core state bytes");
+        let open = CoreState::decode(&market_data).expect("open Core state");
+        let bytes = CoreState {
+            phase: CorePhase::Founding,
+            readiness: CoreReadiness::Prepaid,
+            ..open
+        }
+        .encode()
+        .expect("valid founding Core state");
+        market_data.copy_from_slice(&bytes);
+    }
+    assert_refusal_atomic(&founding, ResolutionError::MarketAuthority);
+
+    let mut substituted_registry = fixture();
+    let activation = &substituted_registry.accounts[3];
+    let activation_key = *activation.key;
+    let activation_lamports = activation.lamports();
+    let activation_data = activation
+        .try_borrow_data()
+        .expect("activation bytes")
+        .to_vec();
+    substituted_registry.accounts[3] = account(
+        activation_key,
+        false,
+        activation_lamports,
+        activation_data,
+        key(0xef),
+        false,
+    );
+    assert_refusal_atomic(&substituted_registry, ResolutionError::ResolutionRelease);
+
+    let mut digest_as_product_key = fixture();
+    let product = &digest_as_product_key.accounts[8];
+    let product_data = product
+        .try_borrow_data()
+        .expect("Product instance bytes")
+        .to_vec();
+    let product_owner = *product.owner;
+    let product_lamports = product.lamports();
+    digest_as_product_key.accounts[8] = account(
+        Pubkey::new_from_array(hash(&product_data).to_bytes()),
+        false,
+        product_lamports,
+        product_data,
+        product_owner,
+        false,
+    );
+    assert_refusal_atomic(&digest_as_product_key, ResolutionError::FinalizedRecord);
+
+    let mut core_owned_product = fixture();
+    let product = &core_owned_product.accounts[8];
+    let product_key = *product.key;
+    let product_data = product
+        .try_borrow_data()
+        .expect("Product instance bytes")
+        .to_vec();
+    let product_lamports = product.lamports();
+    let core_program = *core_owned_product.accounts[2].owner;
+    core_owned_product.accounts[8] = account(
+        product_key,
+        false,
+        product_lamports,
+        product_data,
+        core_program,
+        false,
+    );
+    assert_refusal_atomic(&core_owned_product, ResolutionError::FinalizedRecord);
+
+    let legacy_parallel_authority = fixture();
+    let before = output_snapshot(&legacy_parallel_authority);
+    let mut legacy_accounts = legacy_parallel_authority.accounts.to_vec();
+    let unattached_authority = legacy_accounts.get(3).expect("Registry activation").clone();
+    legacy_accounts.insert(3, unattached_authority.clone());
+    legacy_accounts.insert(4, unattached_authority);
+    assert_eq!(
+        process_instruction(
+            &legacy_parallel_authority.program_id,
+            &legacy_accounts,
+            &legacy_parallel_authority.request,
+        ),
+        Err(ProgramError::Custom(ResolutionError::AccountFrame as u32))
+    );
+    assert_eq!(output_snapshot(&legacy_parallel_authority), before);
 }
 
 #[test]
@@ -1307,7 +1409,7 @@ fn funded_recovery_hostile_coordinates_and_late_output_refuse_atomically() {
         leader_schedule_epoch: 0,
         unix_timestamp: 110,
     };
-    early.accounts[16]
+    early.accounts[14]
         .try_borrow_mut_data()
         .expect("Clock")
         .copy_from_slice(&bincode::serialize(&early_clock).expect("Clock bytes"));
@@ -1342,7 +1444,7 @@ fn exhaustion_before_recovery_or_before_deadline_refuses_all_four_outputs_atomic
         leader_schedule_epoch: 0,
         unix_timestamp: 120,
     };
-    early.accounts[16]
+    early.accounts[14]
         .try_borrow_mut_data()
         .expect("Clock")
         .copy_from_slice(&bincode::serialize(&early_clock).expect("Clock bytes"));
@@ -1362,7 +1464,7 @@ fn excessive_provider_confidence_refuses_without_partial_state() {
     {
         let mut update = fixture
             .accounts
-            .get(14)
+            .get(12)
             .expect("Pyth update")
             .try_borrow_mut_data()
             .expect("Pyth update bytes");

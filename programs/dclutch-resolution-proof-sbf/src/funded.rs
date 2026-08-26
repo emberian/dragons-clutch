@@ -7,7 +7,7 @@ use dclutch_capability_contract::{
     ContentId as CapabilityContentId, FUNDING_STATE_BYTES, FundingAssetClassV1, FundingCompartment,
     FundingCustodyObservationV1, FundingStateV1,
 };
-use dclutch_product_contract::result_domain::FINITE_RESULT_DOMAIN_RELEASE_ID_V1;
+use dclutch_product_contract::product::PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1;
 use dclutch_resolution_codec::{
     FUNDED_POSTSTATE_DIGEST_DOMAIN_V1, FUNDED_TRANSITION_REQUEST_BYTES, FundedReceiptPostPhaseV1,
     FundedTerminalRefundPhaseV1, FundedTransitionActionV3, FundedTransitionReceiptV1,
@@ -32,12 +32,12 @@ use solana_sdk_ids::system_program;
 use crate::{
     MarketAuthority, RecordKind, ResolutionError, authenticate_clock,
     authenticate_finalized_record, authenticate_market_and_resolution_release,
-    authenticate_material_components, authenticate_product_domain, authenticate_rent,
+    authenticate_material_components, authenticate_product_instance, authenticate_rent,
     authenticate_state_account, initialize_certificate_output,
 };
 
 /// Exact funded-transition account count.
-pub(crate) const FUNDED_TRANSITION_ACCOUNT_COUNT: usize = 19;
+pub(crate) const FUNDED_TRANSITION_ACCOUNT_COUNT: usize = 17;
 
 struct SourceTransitionPlan {
     next_state: SourceResolutionStateV1,
@@ -72,15 +72,13 @@ pub(crate) fn process_funded_transition(
     let funding_state = next(&mut iterator)?;
     let worker = next(&mut iterator)?;
     let market = next(&mut iterator)?;
-    let authority_manifest = next(&mut iterator)?;
-    let authority_manifest_staging = next(&mut iterator)?;
     let activated_release_set = next(&mut iterator)?;
     let resolution_program = next(&mut iterator)?;
     let resolution_programdata = next(&mut iterator)?;
     let source_material = next(&mut iterator)?;
     let source_material_staging = next(&mut iterator)?;
-    let product_domain = next(&mut iterator)?;
-    let product_domain_staging = next(&mut iterator)?;
+    let product_instance = next(&mut iterator)?;
+    let product_instance_staging = next(&mut iterator)?;
     let capability_manifest = next(&mut iterator)?;
     let capability_manifest_staging = next(&mut iterator)?;
     let clock_sysvar = next(&mut iterator)?;
@@ -105,8 +103,6 @@ pub(crate) fn process_funded_transition(
         market,
         prior_state,
         request.expected_generation,
-        authority_manifest,
-        authority_manifest_staging,
         activated_release_set,
         resolution_program,
         resolution_programdata,
@@ -118,7 +114,7 @@ pub(crate) fn process_funded_transition(
         .map_err(|_| ResolutionError::FinalizedRecord)?;
     let material_id = prior_state.material_id();
     authenticate_finalized_record(
-        authority.core_program,
+        authority.registry_program,
         source_material,
         source_material_staging,
         &rent,
@@ -131,24 +127,24 @@ pub(crate) fn process_funded_transition(
         .map_err(|_| ResolutionError::SourceMaterial)?;
     authenticate_material_components(material, authority.product_instance_id)?;
 
-    let domain_data = product_domain
+    let product_data = product_instance
         .try_borrow_data()
         .map_err(|_| ResolutionError::FinalizedRecord)?;
     authenticate_finalized_record(
-        authority.core_program,
-        product_domain,
-        product_domain_staging,
+        authority.registry_program,
+        product_instance,
+        product_instance_staging,
         &rent,
-        FINITE_RESULT_DOMAIN_RELEASE_ID_V1,
-        hash(&domain_data).to_bytes(),
-        &domain_data,
-        RecordKind::ProductDomain,
+        PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1,
+        authority.product_instance_id,
+        &product_data,
+        RecordKind::ProductInstance,
     )?;
-    let outcome_count = authenticate_product_domain(
+    let outcome_count = authenticate_product_instance(
         material,
-        authority.outcome_count,
+        authority,
         request.expected_result_domain_id,
-        &domain_data,
+        &product_data,
     )?;
 
     let mut source_plan = plan_source_transition(
@@ -250,7 +246,7 @@ pub(crate) fn process_funded_transition(
         .map_err(|_| ResolutionError::Funding)?;
 
     drop(manifest_data);
-    drop(domain_data);
+    drop(product_data);
     drop(material_data);
     drop(source_state_data);
     commit_funded_transition_and_emit_receipt(
@@ -499,7 +495,7 @@ fn plan_funding_release(
         .try_borrow_data()
         .map_err(|_| ResolutionError::Funding)?;
     authenticate_finalized_record(
-        authority.core_program,
+        authority.registry_program,
         manifest_account,
         manifest_staging,
         rent,
@@ -583,7 +579,7 @@ fn validate_funded_frame(accounts: &[AccountInfo<'_>], program_id: &Pubkey) -> P
         if account.is_signer {
             return Err(ResolutionError::AccountFrame.into());
         }
-        if account.is_writable != (index <= 3) || account.executable != matches!(index, 8 | 18) {
+        if account.is_writable != (index <= 3) || account.executable != matches!(index, 6 | 16) {
             return Err(ResolutionError::AccountFrame.into());
         }
         if accounts
@@ -595,8 +591,8 @@ fn validate_funded_frame(accounts: &[AccountInfo<'_>], program_id: &Pubkey) -> P
         }
     }
     let worker = accounts.get(3).ok_or(ResolutionError::AccountFrame)?;
-    if accounts.get(8).ok_or(ResolutionError::AccountFrame)?.key != program_id
-        || accounts.get(18).ok_or(ResolutionError::AccountFrame)?.key != &system_program::ID
+    if accounts.get(6).ok_or(ResolutionError::AccountFrame)?.key != program_id
+        || accounts.get(16).ok_or(ResolutionError::AccountFrame)?.key != &system_program::ID
         || worker.owner != &system_program::ID
         || worker.data_len() != 0
         || worker.executable

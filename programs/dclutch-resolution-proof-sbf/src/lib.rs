@@ -9,19 +9,16 @@ extern crate std;
 use core::convert::TryFrom;
 
 use dclutch_capability_contract::CapabilityManifestV1;
-use dclutch_core_contract::{MARKET_ROOT_BYTES, MarketRoot, Phase};
-use dclutch_market_contract::market::{MARKET_ROOT_OFFSET, decode_market_outcome_count};
-use dclutch_product_contract::result_domain::{
-    FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1, FINITE_RESULT_DOMAIN_RELEASE_ID_V1,
-    FiniteResultDomainV1,
+use dclutch_market_core_codec::{
+    CoreState, MarketCoreStateSeedsV1, Phase as CorePhase, Readiness as CoreReadiness,
 };
+use dclutch_product_contract::product::{InstanceV1, PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1};
+use dclutch_product_contract::result_domain::FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1;
 use dclutch_pyth_svm::{FullPriceUpdateV2, PythReleaseV1, ReceiverConfigV2View};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetViewV1, DeploymentObservationV1,
-    EXECUTION_AUTHORITY_MANIFEST_SCHEMA_ID_V1, ExecutionAuthorityManifestV1,
-    authenticate_market_execution_view_v1,
 };
 use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_release_set_contract::ExecutionRoleV1;
@@ -51,7 +48,7 @@ use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign};
 
 /// Exact number of accounts in the primary-Pyth successor frame.
-pub const ACCEPT_PYTH_ACCOUNT_COUNT: usize = 23;
+pub const ACCEPT_PYTH_ACCOUNT_COUNT: usize = 21;
 
 mod core_effect;
 mod funded;
@@ -99,18 +96,17 @@ impl From<ResolutionError> for ProgramError {
 }
 
 pub(crate) enum RecordKind {
-    AuthorityManifest,
     CapabilityManifest,
     SourceMaterial,
-    ProductDomain,
+    ProductInstance,
     PythRelease,
 }
 
 #[derive(Clone, Copy)]
 pub(crate) struct MarketAuthority {
     pub(crate) product_instance_id: [u8; 32],
-    pub(crate) outcome_count: u8,
-    pub(crate) core_program: Pubkey,
+    pub(crate) result_domain_id: [u8; 32],
+    pub(crate) registry_program: Pubkey,
     pub(crate) semantic_capability_manifest_id: [u8; 32],
 }
 
@@ -144,15 +140,13 @@ pub fn process_instruction(
     let source_state = next(&mut iterator)?;
     let certificate = next(&mut iterator)?;
     let market = next(&mut iterator)?;
-    let authority_manifest = next(&mut iterator)?;
-    let authority_manifest_staging = next(&mut iterator)?;
     let activated_release_set = next(&mut iterator)?;
     let resolution_program = next(&mut iterator)?;
     let resolution_programdata = next(&mut iterator)?;
     let source_material = next(&mut iterator)?;
     let source_material_staging = next(&mut iterator)?;
-    let product_domain = next(&mut iterator)?;
-    let product_domain_staging = next(&mut iterator)?;
+    let product_instance = next(&mut iterator)?;
+    let product_instance_staging = next(&mut iterator)?;
     let provider_release = next(&mut iterator)?;
     let provider_release_staging = next(&mut iterator)?;
     let price_update = next(&mut iterator)?;
@@ -186,8 +180,6 @@ pub fn process_instruction(
         market,
         prior_state,
         request.expected_generation,
-        authority_manifest,
-        authority_manifest_staging,
         activated_release_set,
         resolution_program,
         resolution_programdata,
@@ -199,7 +191,7 @@ pub fn process_instruction(
         .map_err(|_| ResolutionError::FinalizedRecord)?;
     let material_id = prior_state.material_id().to_bytes();
     authenticate_finalized_record(
-        market_authority.core_program,
+        market_authority.registry_program,
         source_material,
         source_material_staging,
         &rent,
@@ -212,25 +204,24 @@ pub fn process_instruction(
         .map_err(|_| ResolutionError::SourceMaterial)?;
     authenticate_material_components(material, market_authority.product_instance_id)?;
 
-    let domain_data = product_domain
+    let product_data = product_instance
         .try_borrow_data()
         .map_err(|_| ResolutionError::FinalizedRecord)?;
-    let domain_record_digest = hash(&domain_data).to_bytes();
     authenticate_finalized_record(
-        market_authority.core_program,
-        product_domain,
-        product_domain_staging,
+        market_authority.registry_program,
+        product_instance,
+        product_instance_staging,
         &rent,
-        FINITE_RESULT_DOMAIN_RELEASE_ID_V1,
-        domain_record_digest,
-        &domain_data,
-        RecordKind::ProductDomain,
+        PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1,
+        market_authority.product_instance_id,
+        &product_data,
+        RecordKind::ProductInstance,
     )?;
-    let domain_outcome_count = authenticate_product_domain(
+    let domain_outcome_count = authenticate_product_instance(
         material,
-        market_authority.outcome_count,
+        market_authority,
         request.expected_result_domain_id,
-        &domain_data,
+        &product_data,
     )?;
 
     let (source_id, source) = material
@@ -249,7 +240,7 @@ pub fn process_instruction(
         return Err(ResolutionError::ProviderRelease.into());
     }
     authenticate_pyth_release_record(
-        market_authority.core_program,
+        market_authority.registry_program,
         provider_release,
         provider_release_staging,
         &rent,
@@ -359,7 +350,7 @@ pub fn process_instruction(
         .map_err(|_| ResolutionError::OutputState)?;
 
     drop(update_data);
-    drop(domain_data);
+    drop(product_data);
     drop(material_data);
     drop(source_state_data);
     commit_outputs(
@@ -381,7 +372,7 @@ fn validate_frame(accounts: &[AccountInfo<'_>], program_id: &Pubkey) -> ProgramR
             return Err(ResolutionError::AccountFrame.into());
         }
         let writable = index <= 1;
-        let executable = matches!(index, 6 | 15 | 18 | 22);
+        let executable = matches!(index, 4 | 13 | 16 | 20);
         if account.is_writable != writable || account.executable != executable {
             return Err(ResolutionError::AccountFrame.into());
         }
@@ -393,8 +384,8 @@ fn validate_frame(accounts: &[AccountInfo<'_>], program_id: &Pubkey) -> ProgramR
             return Err(ResolutionError::AccountFrame.into());
         }
     }
-    if accounts.get(6).ok_or(ResolutionError::AccountFrame)?.key != program_id
-        || accounts.get(22).ok_or(ResolutionError::AccountFrame)?.key != &system_program::ID
+    if accounts.get(4).ok_or(ResolutionError::AccountFrame)?.key != program_id
+        || accounts.get(20).ok_or(ResolutionError::AccountFrame)?.key != &system_program::ID
     {
         return Err(ResolutionError::AccountFrame.into());
     }
@@ -451,8 +442,6 @@ pub(crate) fn authenticate_market_and_resolution_release(
     market: &AccountInfo<'_>,
     state: SourceResolutionStateV1,
     expected_generation: u64,
-    authority_manifest: &AccountInfo<'_>,
-    authority_manifest_staging: &AccountInfo<'_>,
     activated_release_set: &AccountInfo<'_>,
     resolution_program: &AccountInfo<'_>,
     resolution_programdata: &AccountInfo<'_>,
@@ -464,63 +453,46 @@ pub(crate) fn authenticate_market_and_resolution_release(
     let data = market
         .try_borrow_data()
         .map_err(|_| ResolutionError::MarketAuthority)?;
-    let outcome_count =
-        decode_market_outcome_count(&data).map_err(|_| ResolutionError::MarketAuthority)?;
-    let root_end = MARKET_ROOT_OFFSET
-        .checked_add(MARKET_ROOT_BYTES)
-        .ok_or(ResolutionError::Arithmetic)?;
-    let root = MarketRoot::decode(
-        data.get(MARKET_ROOT_OFFSET..root_end)
-            .ok_or(ResolutionError::MarketAuthority)?,
-    )
-    .map_err(|_| ResolutionError::MarketAuthority)?;
-    if root.phase() != Phase::Open
+    let core_state = CoreState::decode(&data).map_err(|_| ResolutionError::MarketAuthority)?;
+    let market_seeds = MarketCoreStateSeedsV1::new(core_state.identity);
+    let expected_market = Pubkey::find_program_address(&market_seeds.as_slices(), market.owner).0;
+    if !rent.is_exempt(market.lamports(), data.len())
+        || core_state.phase != CorePhase::Open
+        || core_state.readiness != CoreReadiness::Consumed
         || market.key.to_bytes() != state.market()
-        || root.identity().generation() != state.generation()
+        || market.key.to_bytes() != core_state.identity.market_id.to_bytes()
+        || market.key != &expected_market
+        || core_state.identity.generation != state.generation()
         || expected_generation != state.generation()
-        || root.identity().resolution_policy_id().to_bytes() != state.material_id().to_bytes()
+        || core_state.identity.resolution_policy.to_bytes() != state.material_id().to_bytes()
     {
         return Err(ResolutionError::MarketAuthority.into());
     }
-    let authority_manifest_data = authority_manifest
-        .try_borrow_data()
-        .map_err(|_| ResolutionError::FinalizedRecord)?;
-    let authority_manifest_id = root.identity().capability_manifest_id().to_bytes();
-    authenticate_finalized_record(
-        *market.owner,
-        authority_manifest,
-        authority_manifest_staging,
-        rent,
-        EXECUTION_AUTHORITY_MANIFEST_SCHEMA_ID_V1,
-        authority_manifest_id,
-        &authority_manifest_data,
-        RecordKind::AuthorityManifest,
-    )?;
-    let authority = ExecutionAuthorityManifestV1::decode(&authority_manifest_data)
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
+    let registry_program = Pubkey::new_from_array(core_state.identity.registry_program.to_bytes());
     let activated_data = activated_release_set
         .try_borrow_data()
         .map_err(|_| ResolutionError::ResolutionRelease)?;
+    if !rent.is_exempt(activated_release_set.lamports(), activated_data.len()) {
+        return Err(ResolutionError::ResolutionRelease.into());
+    }
     let activated = authenticate_activation_cache(
         activated_release_set,
+        registry_program,
         *market.owner,
-        authority,
+        core_state.identity.selected_release_set.to_bytes(),
         &activated_data,
     )?;
     authenticate_resolution_release(
         program_id,
         resolution_program,
         resolution_programdata,
-        root,
-        authority_manifest_id,
-        authority,
         activated,
     )?;
     Ok(MarketAuthority {
-        product_instance_id: root.identity().product_instance_id().to_bytes(),
-        outcome_count,
-        core_program: *market.owner,
-        semantic_capability_manifest_id: authority.semantic_capability_manifest_id().to_bytes(),
+        product_instance_id: core_state.identity.product_id.to_bytes(),
+        result_domain_id: core_state.identity.result_domain.to_bytes(),
+        registry_program,
+        semantic_capability_manifest_id: core_state.identity.capability_manifest.to_bytes(),
     })
 }
 
@@ -562,10 +534,9 @@ pub(crate) fn authenticate_finalized_record(
         return Err(ResolutionError::FinalizedRecord.into());
     }
     let valid = match kind {
-        RecordKind::AuthorityManifest => ExecutionAuthorityManifestV1::decode(bytes).is_ok(),
         RecordKind::CapabilityManifest => CapabilityManifestV1::decode(bytes).is_ok(),
         RecordKind::SourceMaterial => SourceMaterialViewV1::decode(bytes).is_ok(),
-        RecordKind::ProductDomain => FiniteResultDomainV1::decode(bytes).is_ok(),
+        RecordKind::ProductInstance => InstanceV1::decode(bytes).is_ok(),
         RecordKind::PythRelease => PythReleaseV1::decode(bytes).is_ok(),
     };
     if !valid {
@@ -576,11 +547,12 @@ pub(crate) fn authenticate_finalized_record(
 
 fn authenticate_activation_cache<'a>(
     account: &AccountInfo<'_>,
+    registry_program: Pubkey,
     core_program: Pubkey,
-    authority: ExecutionAuthorityManifestV1,
+    release_set_id: [u8; 32],
     bytes: &'a [u8],
 ) -> Result<ActivatedExecutionReleaseSetViewV1<'a>, ProgramError> {
-    if account.owner != &core_program
+    if account.owner != &registry_program
         || account.executable
         || bytes.len() != ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1
     {
@@ -591,7 +563,8 @@ fn authenticate_activation_cache<'a>(
     if activated
         .execution_release_set_id()
         .map_err(|_| ResolutionError::ResolutionRelease)?
-        != authority.execution_release_set_id()
+        .to_bytes()
+        != release_set_id
         || activated
             .role(ExecutionRoleV1::Core)
             .map_err(|_| ResolutionError::ResolutionRelease)?
@@ -603,14 +576,8 @@ fn authenticate_activation_cache<'a>(
         return Err(ResolutionError::ResolutionRelease.into());
     }
     let expected = Pubkey::find_program_address(
-        &[
-            ACTIVATION_PDA_DOMAIN_V1,
-            activated
-                .execution_release_set_id()
-                .map_err(|_| ResolutionError::ResolutionRelease)?
-                .as_bytes(),
-        ],
-        &core_program,
+        &[ACTIVATION_PDA_DOMAIN_V1, &release_set_id],
+        &registry_program,
     )
     .0;
     if account.key != &expected {
@@ -624,15 +591,8 @@ fn authenticate_resolution_release(
     program_id: &Pubkey,
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
-    market: MarketRoot,
-    authority_manifest_id: [u8; 32],
-    authority: ExecutionAuthorityManifestV1,
     activated: ActivatedExecutionReleaseSetViewV1<'_>,
 ) -> ProgramResult {
-    let authority_id = dclutch_core_contract::ContentId::new(authority_manifest_id)
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
-    authenticate_market_execution_view_v1(market.identity(), authority_id, authority, activated)
-        .map_err(|_| ResolutionError::ResolutionRelease)?;
     let role = activated
         .role(ExecutionRoleV1::Resolution)
         .map_err(|_| ResolutionError::ResolutionRelease)?;
@@ -738,35 +698,46 @@ pub(crate) fn authenticate_material_components(
     Ok(())
 }
 
-pub(crate) fn authenticate_product_domain(
+pub(crate) fn authenticate_product_instance(
     material: SourceMaterialViewV1<'_>,
-    market_outcome_count: u8,
+    authority: MarketAuthority,
     expected_result_domain_id: [u8; 32],
     bytes: &[u8],
 ) -> Result<u8, ProgramError> {
-    let external =
-        FiniteResultDomainV1::decode(bytes).map_err(|_| ResolutionError::ProductDomain)?;
+    let instance = InstanceV1::decode(bytes).map_err(|_| ResolutionError::ProductDomain)?;
     let embedded = material
         .result_domain()
         .map_err(|_| ResolutionError::ProductDomain)?;
-    let domain_id = hashv(&[FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1, &[0], bytes]).to_bytes();
+    let embedded_bytes = embedded.to_bytes();
+    let domain_id = hashv(&[
+        FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1,
+        &[0],
+        &embedded_bytes,
+    ])
+    .to_bytes();
     let policy = material
         .policy()
         .map_err(|_| ResolutionError::ProductDomain)?;
-    if external != embedded
-        || domain_id != expected_result_domain_id
+    if domain_id != expected_result_domain_id
+        || domain_id != authority.result_domain_id
         || domain_id != policy.result_domain_id().to_bytes()
-        || external.outcome_count() != market_outcome_count
+        || instance.result_domain_id().to_bytes() != domain_id
+        || instance.partition_cell_count() != u32::from(embedded.outcome_count())
+        || material
+            .product_instance_id()
+            .map_err(|_| ResolutionError::ProductDomain)?
+            .to_bytes()
+            != authority.product_instance_id
     {
         return Err(ResolutionError::ProductDomain.into());
     }
-    Ok(external.outcome_count())
+    Ok(embedded.outcome_count())
 }
 
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 fn authenticate_pyth_release_record(
-    core_program: Pubkey,
+    registry_program: Pubkey,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
     rent: &Rent,
@@ -783,7 +754,7 @@ fn authenticate_pyth_release_record(
         .try_borrow_data()
         .map_err(|_| ResolutionError::FinalizedRecord)?;
     authenticate_finalized_record(
-        core_program,
+        registry_program,
         raw,
         staging,
         rent,

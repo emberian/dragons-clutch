@@ -9,18 +9,35 @@ The program does not post or reclaim provider accounts and performs no
 provider CPI. The Pyth update is read-only. Before producing any mutation it
 authenticates:
 
-- the Core-owned open Market and Market-bound Source state;
-- the finalized execution-authority manifest selected by the Market;
-- the Registry-owned activated release-set PDA and its Resolution role;
+- the exact rent-exempt 352-byte Core Market PDA in `Open`/`Consumed` state
+  and the Market-bound Source state;
+- the persisted Core `registry_program` and `selected_release_set`, then the
+  Registry-owned activated release-set PDA and its Resolution role;
 - its own current Loader V3 Program, ProgramData, complete ELF digest,
   deployment slot, and upgrade-authority policy against that role;
-- finalized Source-material, Product result-domain, and Pyth-release records;
+- Registry-owned finalized Source-material, Product-instance, and Pyth-release
+  records, each with its exact vacant staging PDA;
+- the Product instance ID selected by Core and Source material, plus its
+  result-domain ID and partition width against Source material's embedded
+  `FiniteResultDomainV1`;
 - every embedded Source component content identity used by the hot path;
 - Pyth Receiver/router ProgramData links and deployment slots;
 - the Receiver configuration digest/router binding and fully verified update;
 - the canonical Clock and Rent sysvars; and
 - exact generation, Product-domain, provider-release, PDA, owner, privilege,
   account-order, and non-alias coordinates.
+
+The direct primary account frame is exactly 21 accounts: Source, certificate,
+Core Market, Registry activation, Resolution Program and ProgramData, Source
+material raw/staging, Product instance raw/staging, Pyth release raw/staging,
+posted price update, Receiver Program/ProgramData/config, Router
+Program/ProgramData, Clock, Rent, and System. The direct funded frame is exactly
+17 accounts: Source, certificate, action FundingState, worker, Core Market,
+Registry activation, Resolution Program/ProgramData, Source material
+raw/staging, Product instance raw/staging, capability manifest raw/staging,
+Clock, Rent, and System. There is no unattached execution-authority-manifest
+account and no standalone result-domain record. Those would duplicate the
+CoreState/Registry/Product authority join and are rejected by the exact frame.
 
 It delegates normalization, timing, confidence, exact Product mapping, and
 Source lifecycle mutation to `dclutch-source-contract`. Funded transitions
@@ -106,13 +123,11 @@ cargo build-sbf \
   --sbf-out-dir target/resolution-funded-deploy
 ```
 
-An exact `git archive b0e515f` build with `cargo-build-sbf 4.0.0`,
-platform-tools v1.53, and SBF rustc 1.89.0 produced a verifier-clean
-210,528-byte V3 ELF. SHA-256 was
-`f684b845a60a25e661dee334e2866895d830956aedba74c8e1bf705d5abee2e7`.
-The section audit was `.text` 196,688, `.rodata` 5,240, `.data.rel.ro` 1,424,
-`.dynamic` 176, `.dynsym` 312, `.dynstr` 177, and `.rel.dyn` 5,568 bytes. The
-prior V2 artifact is not valid for this ABI.
+The historical `b0e515f` V3 artifact predates the 352-byte CoreState,
+Registry-owned Product-instance record, 21/17-account direct frames, V4 funded
+receipt, and Core-effect routes. It is not valid for this ABI. A clean committed
+archive rebuild must supply the next artifact digest; dirty-overlay hashes are
+not release evidence.
 
 This is a local build checkpoint, not a checked release, deployed artifact,
 or mainnet claim. A clean committed rebuild must pin its own digest before use.
