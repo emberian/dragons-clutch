@@ -91,7 +91,11 @@ const TOKEN_PROGRAM_ACCOUNT: u16 = DIRECT_INLINE_SELLER_TERMINAL_ACCOUNT_START_V
 const FEE_TOKEN_ACCOUNT: u16 = DIRECT_INLINE_FEE_CONTINUATION_ACCOUNT_START_V3 + 11;
 const ROOT_BYTES: usize = CAPABILITY_ROOT_HEADER_BYTES_V1 + DIRECT_ROOT_STATE_BYTES_V1;
 const BASIS_PREFIX_BYTES: usize = BASIS_WIDTH_OFFSET_V3 + 4;
-const DOMAIN_AFFINE_BASE_BYTES: usize = DOMAIN_HEADER_BYTES - DOMAIN_CUT_BYTES;
+// Product Runtime V2 defines `outcome_count = cut_count + 2`: the fixed
+// domain header already carries the two boundary outcomes, so only `N - 2`
+// cuts are affine. Keeping those cuts in the item term would overstate every
+// canonical domain by two rows.
+const DOMAIN_AFFINE_BASE_BYTES: usize = DOMAIN_HEADER_BYTES - 2 * DOMAIN_CUT_BYTES;
 const CLAIMS_ROW_BYTES: usize = 8;
 
 /// Exact encoded fixed-topology Profile13 width for inline ordinary Direct execution.

@@ -65,8 +65,8 @@ pub const DIRECT_INLINE_ORDINARY_STRATEGY_BYTES_V3: usize = EXECUTION_STRATEGY_P
 pub const DIRECT_INLINE_ORDINARY_DESCRIPTOR_BYTES_V4: usize = CAPABILITY_PROGRAM_V4_BYTES;
 /// SHA-256 identity of the exact runtime-polymorphic fixed-topology AccountProfile13.
 pub const DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_ID_V3: [u8; 32] = [
-    0x3c, 0xb3, 0x57, 0xd3, 0x16, 0xd7, 0x6d, 0x73, 0xe4, 0x62, 0xc0, 0x36, 0xd7, 0x64, 0x86, 0xef,
-    0x42, 0x7d, 0x4d, 0x71, 0xec, 0x44, 0x64, 0xf3, 0xee, 0x3b, 0x2c, 0x15, 0x88, 0xd3, 0xe8, 0xb4,
+    0x1f, 0xfa, 0x91, 0x6d, 0x5d, 0x9d, 0x43, 0x6e, 0x80, 0x72, 0x63, 0x01, 0xfa, 0x82, 0x23, 0x92,
+    0xce, 0x11, 0xe3, 0xce, 0xff, 0x90, 0x90, 0x90, 0xc4, 0x72, 0x3d, 0x9b, 0xb6, 0x63, 0xb6, 0xad,
 ];
 /// SHA-256 identity of the exact maker LifecycleV5 policy.
 pub const DIRECT_INLINE_ORDINARY_LIFECYCLE_ID_V5: [u8; 32] = [
@@ -411,7 +411,7 @@ mod tests {
         *output.get_mut(16).expect("Product alias") =
             u32::try_from(PRODUCT_RECORD_BYTES_V2).expect("p");
         *output.get_mut(18).expect("domain") =
-            u32::try_from(DOMAIN_HEADER_BYTES - DOMAIN_CUT_BYTES + 3 * DOMAIN_CUT_BYTES)
+            u32::try_from(DOMAIN_HEADER_BYTES - 2 * DOMAIN_CUT_BYTES + 3 * DOMAIN_CUT_BYTES)
                 .expect("domain");
         *output.get_mut(20).expect("portfolio alias") = *output.get(3).expect("portfolio");
         *output.get_mut(22).expect("registry") = 17;
