@@ -28,8 +28,8 @@ use super::{
     },
     v3_multi_lp::{
         DEALER_LP_POSITION_PDA_DOMAIN_V3, DealerLpAccountObservationV3, DealerLpPositionV3,
-        MultiLpCollateralFrameV3, MultiLpContextV3, MultiLpIntentV3, MultiLpPlanV3,
-        prepare_multi_lp_v3,
+        MAX_MULTI_LP_CUSTODY_EFFECTS_V3, MultiLpCollateralFrameV3, MultiLpContextV3,
+        MultiLpCustodyEffectV3, MultiLpIntentV3, MultiLpPlanV3, prepare_multi_lp_v3,
     },
     v3_obligation::{DEALER_OBLIGATION_PDA_DOMAIN_V3, DealerObligationProjectionV3},
 };
@@ -615,6 +615,8 @@ pub fn prepare_equity_request_v3(
     post_lp_claims: &mut [u64],
     post_obligation: &mut [u8],
     post_lp: &mut [u8],
+    custody_scratch: &mut [Option<MultiLpCustodyEffectV3>; MAX_MULTI_LP_CUSTODY_EFFECTS_V3],
+    custody_output: &mut [Option<MultiLpCustodyEffectV3>; MAX_MULTI_LP_CUSTODY_EFFECTS_V3],
 ) -> Result<MultiLpPlanV3, EquityOperatorErrorV3> {
     authenticate_equity_request_v3(request, chain)?;
     if context.trading_program != chain.trading_program
@@ -649,6 +651,8 @@ pub fn prepare_equity_request_v3(
         post_lp_claims,
         post_obligation,
         post_lp,
+        custody_scratch,
+        custody_output,
     )
     .map_err(|_| EquityOperatorErrorV3::Physical)?;
     validate_equity_claims_packet_v3(

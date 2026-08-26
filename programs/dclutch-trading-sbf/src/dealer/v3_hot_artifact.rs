@@ -37,7 +37,10 @@ use super::{
     v3_equity_operator::{
         DEALER_EQUITY_HEADER_BYTES_V3, DealerEquityRequestV3, EquityRequestActionV3,
     },
-    v3_multi_lp::{MultiLpActionV3, MultiLpCustodyRequestV3, MultiLpPlanV3},
+    v3_multi_lp::{
+        MAX_MULTI_LP_CUSTODY_EFFECTS_V3, MultiLpActionV3, MultiLpCustodyEffectV3,
+        MultiLpCustodyRequestV3, MultiLpPlanV3, multi_lp_custody_digest_v3,
+    },
 };
 
 /// Logical Hot coordinates injected by the common outer before family suffix:
@@ -252,6 +255,7 @@ pub fn dealer_equity_identity_count_v3(
 pub fn project_dealer_equity_hot_registers_v3(
     request: DealerEquityRequestV3<'_>,
     plan: MultiLpPlanV3,
+    custody_effects: &[Option<MultiLpCustodyEffectV3>; MAX_MULTI_LP_CUSTODY_EFFECTS_V3],
     trusted_current_slot: u64,
     scalars: &mut [u64],
     identities: &mut [[u8; 32]],
@@ -284,10 +288,14 @@ pub fn project_dealer_equity_hot_registers_v3(
     let parent_request_digest = hash(request.bytes()).to_bytes();
     let mut by_slot = [None; 3];
     let active_count = usize::from(plan.custody_count);
-    if active_count > plan.custody.len() {
+    if active_count > custody_effects.len()
+        || multi_lp_custody_digest_v3(custody_effects, plan.custody_count)
+            .map_err(|_| DealerEquityArtifactErrorV3::Projection)?
+            != plan.custody_digest
+    {
         return Err(DealerEquityArtifactErrorV3::Projection);
     }
-    for effect in plan.custody.iter().take(active_count) {
+    for effect in custody_effects.iter().take(active_count) {
         let child = effect
             .ok_or(DealerEquityArtifactErrorV3::Projection)?
             .request;
@@ -310,7 +318,11 @@ pub fn project_dealer_equity_hot_registers_v3(
             .encode_into(&mut encoded)
             .map_err(|_| DealerEquityArtifactErrorV3::Projection)?;
     }
-    if plan.custody.iter().skip(active_count).any(Option::is_some) {
+    if custody_effects
+        .iter()
+        .skip(active_count)
+        .any(Option::is_some)
+    {
         return Err(DealerEquityArtifactErrorV3::Projection);
     }
     let expected_amounts = match plan.action {

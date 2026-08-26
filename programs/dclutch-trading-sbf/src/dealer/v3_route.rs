@@ -16,7 +16,10 @@ use dclutch_effect_kernel::{
 use super::{
     v3_composer::{MAX_DEALER_SCENARIO_CUSTODY_EFFECTS_V3, ScenarioAtomicPlanV3},
     v3_equity_operator::{DEALER_EQUITY_HEADER_BYTES_V3, DealerEquityRequestV3},
-    v3_multi_lp::{MultiLpActionV3, MultiLpCustodyRequestV3, MultiLpPlanV3},
+    v3_multi_lp::{
+        MAX_MULTI_LP_CUSTODY_EFFECTS_V3, MultiLpActionV3, MultiLpCustodyEffectV3,
+        MultiLpCustodyRequestV3, MultiLpPlanV3, multi_lp_custody_digest_v3,
+    },
 };
 
 const SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3: u16 = 20;
@@ -55,7 +58,12 @@ pub enum DealerCustodySequenceV3<'a> {
         effects: &'a [Option<super::v3_composer::ScenarioCustodyEffectV3>],
     },
     /// Borrow one complete multi-LP plan without copying its request bank.
-    MultiLp(&'a MultiLpPlanV3),
+    MultiLp {
+        /// Compact semantic/physical plan commitment.
+        plan: &'a MultiLpPlanV3,
+        /// Exact caller-owned Custody projection bank.
+        effects: &'a [Option<MultiLpCustodyEffectV3>; MAX_MULTI_LP_CUSTODY_EFFECTS_V3],
+    },
 }
 
 impl<'a> DealerCustodySequenceV3<'a> {
@@ -78,25 +86,26 @@ impl<'a> DealerCustodySequenceV3<'a> {
     }
 
     /// Project the exact ordered Custody subsequence from one equity action.
-    pub fn from_multi_lp(plan: &'a MultiLpPlanV3) -> DealerRouteResultV3<Self> {
+    pub fn from_multi_lp(
+        plan: &'a MultiLpPlanV3,
+        effects: &'a [Option<MultiLpCustodyEffectV3>; MAX_MULTI_LP_CUSTODY_EFFECTS_V3],
+    ) -> DealerRouteResultV3<Self> {
         let count = usize::from(plan.custody_count);
-        if count > MAX_DEALER_CUSTODY_ROUTES_V3 || count > plan.custody.len() {
+        if count > MAX_DEALER_CUSTODY_ROUTES_V3
+            || multi_lp_custody_digest_v3(effects, plan.custody_count)
+                .map_err(|_| DealerRouteErrorV3::InvalidSequence)?
+                != plan.custody_digest
+        {
             return Err(DealerRouteErrorV3::InvalidSequence);
         }
-        for effect in plan.custody.iter().take(count) {
-            effect.ok_or(DealerRouteErrorV3::InvalidSequence)?;
-        }
-        if plan.custody.iter().skip(count).any(Option::is_some) {
-            return Err(DealerRouteErrorV3::InvalidSequence);
-        }
-        Ok(Self::MultiLp(plan))
+        Ok(Self::MultiLp { plan, effects })
     }
 
     /// Active request count.
     pub const fn count(self) -> u8 {
         match self {
             Self::Scenario { plan, .. } => plan.custody_count,
-            Self::MultiLp(plan) => plan.custody_count,
+            Self::MultiLp { plan, .. } => plan.custody_count,
         }
     }
 
@@ -112,8 +121,7 @@ impl<'a> DealerCustodySequenceV3<'a> {
                 .flatten()
                 .map(|effect| effect.request)
                 .ok_or(DealerRouteErrorV3::InvalidSequence),
-            Self::MultiLp(plan) => plan
-                .custody
+            Self::MultiLp { effects, .. } => effects
                 .get(usize::from(index))
                 .copied()
                 .flatten()
@@ -279,11 +287,12 @@ pub fn authenticate_dealer_equity_routes_v3(
     family_request: &[u8],
     request: DealerEquityRequestV3<'_>,
     plan: &MultiLpPlanV3,
+    custody_effects: &[Option<MultiLpCustodyEffectV3>; MAX_MULTI_LP_CUSTODY_EFFECTS_V3],
 ) -> DealerRouteResultV3<DealerEquityCompositionV3> {
     if family_request != request.bytes() {
         return Err(DealerRouteErrorV3::ClaimsMismatch);
     }
-    let expected_custody = DealerCustodySequenceV3::from_multi_lp(plan)?;
+    let expected_custody = DealerCustodySequenceV3::from_multi_lp(plan, custody_effects)?;
     let custody = authenticate_dealer_custody_routes_v3(
         program,
         tail_count,

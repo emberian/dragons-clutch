@@ -22,9 +22,9 @@ use dclutch_trading_sbf::dealer::{
     },
     v3_multi_lp::{
         DEALER_LP_POSITION_BYTES_V3, DEALER_LP_POSITION_PDA_DOMAIN_V3,
-        DealerLpAccountObservationV3, DealerLpPositionV3, MultiLpActionV3,
-        MultiLpCollateralFrameV3, MultiLpContextV3, MultiLpCustodyRequestV3, MultiLpIntentV3,
-        prepare_multi_lp_v3,
+        DealerLpAccountObservationV3, DealerLpPositionV3, MAX_MULTI_LP_CUSTODY_EFFECTS_V3,
+        MultiLpActionV3, MultiLpCollateralFrameV3, MultiLpContextV3, MultiLpCustodyRequestV3,
+        MultiLpIntentV3, prepare_multi_lp_v3,
     },
     v3_obligation::{
         DEALER_OBLIGATION_HEADER_BYTES_V3, DEALER_OBLIGATION_MAGIC_V3,
@@ -319,6 +319,8 @@ fn runtime_width_equity_request_is_chain_derived_and_rejoins_physical_intent() {
     let mut post_lp_claims = [0; 3];
     let mut post_obligation = vec![0; f.obligations.len()];
     let mut post_lp = [0; DEALER_LP_POSITION_BYTES_V3];
+    let mut custody_scratch = [None; MAX_MULTI_LP_CUSTODY_EFFECTS_V3];
+    let mut custody_effects = [None; MAX_MULTI_LP_CUSTODY_EFFECTS_V3];
     let physical = prepare_equity_request_v3(
         request,
         chain,
@@ -332,6 +334,8 @@ fn runtime_width_equity_request_is_chain_derived_and_rejoins_physical_intent() {
         &mut post_lp_claims,
         &mut post_obligation,
         &mut post_lp,
+        &mut custody_scratch,
+        &mut custody_effects,
     )
     .expect("request-to-physical join");
     assert_eq!(physical.share_delta, 10);
@@ -339,7 +343,7 @@ fn runtime_width_equity_request_is_chain_derived_and_rejoins_physical_intent() {
     assert_eq!(post_dealer_claims, [0, 15, 30]);
     assert_eq!(post_lp_claims, [10, 5, 0]);
 
-    let cash = physical.custody[0].expect("cash Custody").request;
+    let cash = custody_effects[0].expect("cash Custody").request;
     let merge = inactive_merge_template(cash, &f);
     let cash_bytes = encode_custody_request(cash);
     let merge_bytes = merge.to_bytes().expect("merge request");
@@ -352,6 +356,7 @@ fn runtime_width_equity_request_is_chain_derived_and_rejoins_physical_intent() {
     project_dealer_equity_hot_registers_v3(
         request,
         physical,
+        &custody_effects,
         chain.now,
         &mut scalars,
         &mut identities,
@@ -368,6 +373,7 @@ fn runtime_width_equity_request_is_chain_derived_and_rejoins_physical_intent() {
         request_bytes,
         request,
         &physical,
+        &custody_effects,
     )
     .expect("cash then Claims route order");
     assert_eq!(composition.claims_route(), Some(1));
@@ -385,6 +391,7 @@ fn runtime_width_equity_request_is_chain_derived_and_rejoins_physical_intent() {
             request_bytes,
             request,
             &physical,
+            &custody_effects,
         )
         .is_err()
     );
@@ -550,6 +557,8 @@ fn proportional_contribution_and_redemption_are_physical() {
         let mut post_lp_claims = [0; 3];
         let mut post_obligation = vec![0; f.obligations.len()];
         let mut post_lp = [0; DEALER_LP_POSITION_BYTES_V3];
+        let mut custody_scratch = [None; MAX_MULTI_LP_CUSTODY_EFFECTS_V3];
+        let mut custody_effects = [None; MAX_MULTI_LP_CUSTODY_EFFECTS_V3];
         let plan = prepare_multi_lp_v3(
             f.context,
             MultiLpCollateralFrameV3 {
@@ -580,6 +589,8 @@ fn proportional_contribution_and_redemption_are_physical() {
             &mut post_lp_claims,
             &mut post_obligation,
             &mut post_lp,
+            &mut custody_scratch,
+            &mut custody_effects,
         )
         .expect("scenario-solvent physical plan");
         assert_eq!(plan.external_after, expected_external);
@@ -591,7 +602,7 @@ fn proportional_contribution_and_redemption_are_physical() {
             expected_lp
         );
         assert_ne!(before, after);
-        let first = plan.custody[0].expect("cash Custody effect");
+        let first = custody_effects[0].expect("cash Custody effect");
         match (action, first.request) {
             (MultiLpActionV3::Add, MultiLpCustodyRequestV3::Delegated(request)) => {
                 let encoded = request.encode().expect("delegated request");
@@ -639,6 +650,8 @@ fn substituted_lp_owner_or_oversized_exit_refuses_before_state_candidates() {
     let mut post_lp_claims = [0; 3];
     let mut post_obligation = vec![0xa5; f.obligations.len()];
     let mut post_lp = [0xa5; DEALER_LP_POSITION_BYTES_V3];
+    let mut custody_scratch = [None; MAX_MULTI_LP_CUSTODY_EFFECTS_V3];
+    let mut custody_effects = [None; MAX_MULTI_LP_CUSTODY_EFFECTS_V3];
     let refusal = prepare_multi_lp_v3(
         f.context,
         MultiLpCollateralFrameV3 {
@@ -673,6 +686,8 @@ fn substituted_lp_owner_or_oversized_exit_refuses_before_state_candidates() {
         &mut post_lp_claims,
         &mut post_obligation,
         &mut post_lp,
+        &mut custody_scratch,
+        &mut custody_effects,
     );
     assert!(refusal.is_err());
     assert!(post_obligation.iter().all(|byte| *byte == 0xa5));

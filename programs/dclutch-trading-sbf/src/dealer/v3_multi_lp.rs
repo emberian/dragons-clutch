@@ -14,7 +14,10 @@ use dclutch_custody_contract::{
     OperationV1, ReceiptEvidenceV1,
 };
 use dclutch_dealer_codec::scenario::{ClaimsInventoryObservation, ScenarioSolvencyReport};
-use solana_program::{hash::hash, pubkey::Pubkey};
+use solana_program::{
+    hash::{hash, hashv},
+    pubkey::Pubkey,
+};
 
 use super::v3_equity::{
     PoolEquityActionV3, PoolEquityContributionV3, PoolEquityInputV3, PoolEquityPlanV3,
@@ -68,6 +71,11 @@ pub type MultiLpResultV3<T> = core::result::Result<T, MultiLpErrorV3>;
 
 /// Maximum physical Custody transfers in one equity contribution/redemption.
 pub const MAX_MULTI_LP_CUSTODY_EFFECTS_V3: usize = 3;
+/// Domain separating the caller-owned Custody projection-bank commitment.
+pub const MULTI_LP_CUSTODY_DIGEST_DOMAIN_V3: &[u8] = b"dclutch:dealer:multi-lp-custody:v3";
+/// Per-effect digest chaining domain.
+pub const MULTI_LP_CUSTODY_DIGEST_STEP_DOMAIN_V3: &[u8] =
+    b"dclutch:dealer:multi-lp-custody-step:v3";
 
 /// LP capital operation selected by the exact request profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -531,8 +539,8 @@ pub struct MultiLpPlanV3 {
     pub solvency_before: ScenarioSolvencyReport,
     /// Candidate scenario-solvency report.
     pub solvency_after: ScenarioSolvencyReport,
-    /// Exact ordered physical Custody effects.
-    pub custody: [Option<MultiLpCustodyEffectV3>; MAX_MULTI_LP_CUSTODY_EFFECTS_V3],
+    /// Commitment to the exact caller-owned ordered Custody effect bank.
+    pub custody_digest: [u8; 32],
     /// Active prefix of the Custody effect bank.
     pub custody_count: u8,
     /// Required external collateral balance after execution.
@@ -578,6 +586,8 @@ pub fn prepare_multi_lp_v3(
     post_lp_claims: &mut [u64],
     post_obligation: &mut [u8],
     post_lp: &mut [u8],
+    custody_scratch: &mut [Option<MultiLpCustodyEffectV3>; MAX_MULTI_LP_CUSTODY_EFFECTS_V3],
+    custody_output: &mut [Option<MultiLpCustodyEffectV3>; MAX_MULTI_LP_CUSTODY_EFFECTS_V3],
 ) -> MultiLpResultV3<MultiLpPlanV3> {
     validate_context(
         context,
@@ -750,7 +760,15 @@ pub fn prepare_multi_lp_v3(
         present_capital: equity.collateral_after,
         locked_capital_floor: context.locked_capital_floor,
     };
-    let mut result = MultiLpPlanV3 {
+    let (custody_count, hoard_after) = prepare_equity_custody_sequence(
+        context,
+        collateral,
+        equity,
+        external_after,
+        custody_scratch,
+    )?;
+    let custody_digest = multi_lp_custody_digest_v3(custody_scratch, custody_count)?;
+    let result = MultiLpPlanV3 {
         action: intent.action(),
         lp_owner: collateral.lp_owner,
         share_delta: equity.share_delta,
@@ -760,11 +778,11 @@ pub fn prepare_multi_lp_v3(
         maximum_complete_sets_to_merge: equity.maximum_complete_sets_to_merge,
         solvency_before,
         solvency_after,
-        custody: [None; MAX_MULTI_LP_CUSTODY_EFFECTS_V3],
-        custody_count: 0,
+        custody_digest,
+        custody_count,
         external_after,
         principal_after: equity.collateral_after,
-        hoard_after: collateral.hoard_balance,
+        hoard_after,
         obligation_digest_after: hash(post_obligation).to_bytes(),
         lp_digest_after: hash(&staged_lp).to_bytes(),
         obligation_revision_after: staged_projection.revision(),
@@ -772,30 +790,65 @@ pub fn prepare_multi_lp_v3(
         total_equity_shares_after: staged_projection.total_equity_shares(),
         lp_equity_shares_after: next_lp.equity_shares,
     };
-    let (custody_count, hoard_after) = prepare_equity_custody_sequence(
-        context,
-        collateral,
-        equity,
-        external_after,
-        &mut result.custody,
-    )?;
-    result.custody_count = custody_count;
-    result.hoard_after = hoard_after;
+    custody_output.copy_from_slice(custody_scratch);
     Ok(result)
+}
+
+/// Commit the exact active prefix and canonical absence of every trailing
+/// caller-owned Custody projection. Each request is re-encoded from its typed
+/// value, so this is a physical plan commitment rather than a second request
+/// authority.
+pub fn multi_lp_custody_digest_v3(
+    effects: &[Option<MultiLpCustodyEffectV3>; MAX_MULTI_LP_CUSTODY_EFFECTS_V3],
+    count: u8,
+) -> MultiLpResultV3<[u8; 32]> {
+    let count_usize = usize::from(count);
+    if count_usize > effects.len()
+        || effects.iter().take(count_usize).any(Option::is_none)
+        || effects.iter().skip(count_usize).any(Option::is_some)
+    {
+        return Err(MultiLpErrorV3::Custody);
+    }
+    let count_bytes = [count];
+    let mut digest = hashv(&[MULTI_LP_CUSTODY_DIGEST_DOMAIN_V3, &count_bytes]).to_bytes();
+    for (index, effect) in effects.iter().take(count_usize).enumerate() {
+        let effect = effect.ok_or(MultiLpErrorV3::Custody)?;
+        let mut request_bytes = [0_u8; DELEGATED_CUSTODY_REQUEST_BYTES_V2];
+        let request = request_bytes
+            .get_mut(..effect.request.encoded_len())
+            .ok_or(MultiLpErrorV3::Custody)?;
+        effect.request.encode_into(request)?;
+        let index = u16::try_from(index)
+            .map_err(|_| MultiLpErrorV3::Arithmetic)?
+            .to_le_bytes();
+        let request_digest = hash(request).to_bytes();
+        digest = hashv(&[
+            MULTI_LP_CUSTODY_DIGEST_STEP_DOMAIN_V3,
+            &digest,
+            &index,
+            &request_digest,
+            &effect.source_after.to_le_bytes(),
+            &effect.destination_after.to_le_bytes(),
+        ])
+        .to_bytes();
+    }
+    Ok(digest)
 }
 
 /// Verify one immediate Custody receipt in the admitted global route order.
 pub fn verify_multi_lp_custody_receipt_v3(
     plan: MultiLpPlanV3,
+    effects: &[Option<MultiLpCustodyEffectV3>; MAX_MULTI_LP_CUSTODY_EFFECTS_V3],
     index: u8,
     custody_receipt: &[u8],
     custody_poststate_commitment: [u8; 32],
 ) -> MultiLpResultV3<()> {
-    if index >= plan.custody_count {
+    if index >= plan.custody_count
+        || multi_lp_custody_digest_v3(effects, plan.custody_count)? != plan.custody_digest
+    {
         return Err(MultiLpErrorV3::Custody);
     }
-    let effect = plan
-        .custody
+    let effect = effects
         .get(usize::from(index))
         .copied()
         .flatten()
@@ -1487,6 +1540,8 @@ mod tests {
         let mut post_lp_claims = [0; 3];
         let mut post_obligation = std::vec![0; obligations.len()];
         let mut post_lp = [0; DEALER_LP_POSITION_BYTES_V3];
+        let mut custody_scratch = [None; MAX_MULTI_LP_CUSTODY_EFFECTS_V3];
+        let mut custody_output = [None; MAX_MULTI_LP_CUSTODY_EFFECTS_V3];
         let plan = prepare_multi_lp_v3(
             context,
             frame,
@@ -1507,6 +1562,8 @@ mod tests {
             &mut post_lp_claims,
             &mut post_obligation,
             &mut post_lp,
+            &mut custody_scratch,
+            &mut custody_output,
         )?;
         Ok((
             plan,
@@ -1610,6 +1667,8 @@ mod tests {
         let mut post_lp_claims = [77; 3];
         let mut post_obligation = std::vec![0xa5; obligations.len()];
         let mut post_lp = [0xa5; DEALER_LP_POSITION_BYTES_V3];
+        let mut custody_scratch = [None; MAX_MULTI_LP_CUSTODY_EFFECTS_V3];
+        let mut custody_output = [None; MAX_MULTI_LP_CUSTODY_EFFECTS_V3];
         let result = prepare_multi_lp_v3(
             context,
             MultiLpCollateralFrameV3 {
@@ -1644,10 +1703,13 @@ mod tests {
             &mut post_lp_claims,
             &mut post_obligation,
             &mut post_lp,
+            &mut custody_scratch,
+            &mut custody_output,
         );
         assert_eq!(result, Err(MultiLpErrorV3::Arithmetic));
         assert!(post_obligation.iter().all(|byte| *byte == 0xa5));
         assert_eq!(post_lp, [0xa5; DEALER_LP_POSITION_BYTES_V3]);
+        assert_eq!(custody_output, [None; MAX_MULTI_LP_CUSTODY_EFFECTS_V3]);
     }
 
     #[test]
