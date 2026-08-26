@@ -13,6 +13,8 @@ dclutch-capability-contract = { path = "../dclutch-capability-contract" }
 dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
 dclutch-product-runtime-v2 = { path = "../dclutch-product-runtime-v2" }
 dclutch-product-runtime-v2-admission = { path = "../dclutch-product-runtime-v2-admission" }
+dclutch-product-compiler = { path = "../dclutch-product-compiler" }
+dclutch-product-payoff-v2-codec = { path = "../dclutch-product-payoff-v2-codec" }
 dclutch-realm-contract = { path = "../dclutch-realm-contract" }
 dclutch-record-contract = { path = "../dclutch-record-contract" }
 dclutch-registry-contract = { path = "../dclutch-registry-contract" }

@@ -3,9 +3,10 @@
 //! This module performs no CPI, account-frame selection, signing, receipt
 //! validation, or state write. It validates the four already-resolved generic
 //! EffectProgram routes, joins them to the Series semantic composition, and
-//! returns the only permitted Core→Custody→Custody→Custody call order plus the
-//! still-uncommitted replay candidate. The common outer remains sole authority
-//! for physical accounts, current role programs, receipts, and commit order.
+//! returns the only permitted Custody transfer→Core Found→Custody cleanup call
+//! order plus the still-uncommitted replay candidate. The common outer remains
+//! sole authority for physical accounts, current role programs, receipts, and
+//! commit order.
 
 use dclutch_capability_program_contract::hot_v3::HOT_FAMILY_REQUEST_OFFSET_V3;
 use dclutch_effect_kernel::{
@@ -19,8 +20,10 @@ use solana_program::{hash::hash, pubkey::Pubkey};
 
 use super::{
     artifacts_v3::{
-        SERIES_CONSUME_CORE_REQUEST_BYTES_V3, SERIES_CONSUME_IR_REQUEST_BYTES_V3,
-        SERIES_CONSUME_ROUTE_COUNT_V3, SERIES_CUSTODY_REQUEST_BYTES_V3, SeriesArtifactBundleV3,
+        SERIES_CONSUME_CLOSE_REPLAY_OFFSET_V3, SERIES_CONSUME_CLOSE_VAULT_OFFSET_V3,
+        SERIES_CONSUME_CORE_OFFSET_V3, SERIES_CONSUME_CORE_REQUEST_BYTES_V3,
+        SERIES_CONSUME_IR_REQUEST_BYTES_V3, SERIES_CONSUME_ROUTE_COUNT_V3,
+        SERIES_CONSUME_TRANSFER_OFFSET_V3, SERIES_CUSTODY_REQUEST_BYTES_V3, SeriesArtifactBundleV3,
     },
     composer_v3::{
         SeriesConsumePhysicalPlanV3, SeriesPhysicalComposerErrorV3, compose_consume_physical_v3,
@@ -118,7 +121,7 @@ impl<'a> SeriesStagedChildCallV3<'a> {
         self.request
     }
 
-    /// Exact borrowed proof suffix; present only for the first Core call.
+    /// Exact borrowed proof suffix; present only for the Core call.
     pub const fn witness(self) -> Option<&'a [u8]> {
         self.witness
     }
@@ -137,7 +140,7 @@ pub struct SeriesConsumeExecutionPlanV3<'a> {
 }
 
 impl<'a> SeriesConsumeExecutionPlanV3<'a> {
-    /// Ordered Core, transfer-to-Hoard, close-Vault, close-replay calls.
+    /// Ordered transfer-to-Hoard, Core, close-Vault, close-replay calls.
     pub const fn calls(self) -> [SeriesStagedChildCallV3<'a>; SERIES_CONSUME_ROUTE_COUNT_V3] {
         self.calls
     }
@@ -191,7 +194,7 @@ pub fn stage_series_consume_execution_v3<'a>(
         inputs.artifacts,
         *inputs
             .invocations
-            .first()
+            .get(1)
             .ok_or(SeriesExecuteErrorV3::Invocation)?,
         inputs.hot.ir_request_bank(),
         inputs.hot.family_request(),
@@ -208,30 +211,36 @@ pub fn stage_series_consume_execution_v3<'a>(
     let mut calls: [Option<SeriesStagedChildCallV3<'a>>; SERIES_CONSUME_ROUTE_COUNT_V3] =
         [None; SERIES_CONSUME_ROUTE_COUNT_V3];
     for (index, invocation) in inputs.invocations.into_iter().enumerate() {
-        let (role, offset, width, witness) = if index == 0 {
-            (
-                FixedRole::Core,
-                0,
-                SERIES_CONSUME_CORE_REQUEST_BYTES_V3,
-                Some(physical.core().witness),
-            )
-        } else {
-            let custody_index = index
-                .checked_sub(1)
-                .ok_or(SeriesExecuteErrorV3::Invocation)?;
-            let offset = SERIES_CONSUME_CORE_REQUEST_BYTES_V3
-                .checked_add(
-                    custody_index
-                        .checked_mul(SERIES_CUSTODY_REQUEST_BYTES_V3)
-                        .ok_or(SeriesExecuteErrorV3::Invocation)?,
-                )
-                .ok_or(SeriesExecuteErrorV3::Invocation)?;
-            (
+        let (role, offset, width, witness, custody_index) = match index {
+            0 => (
                 FixedRole::Custody,
-                offset,
+                SERIES_CONSUME_TRANSFER_OFFSET_V3,
                 SERIES_CUSTODY_REQUEST_BYTES_V3,
                 None,
-            )
+                Some(0),
+            ),
+            1 => (
+                FixedRole::Core,
+                SERIES_CONSUME_CORE_OFFSET_V3,
+                SERIES_CONSUME_CORE_REQUEST_BYTES_V3,
+                Some(physical.core().witness),
+                None,
+            ),
+            2 => (
+                FixedRole::Custody,
+                SERIES_CONSUME_CLOSE_VAULT_OFFSET_V3,
+                SERIES_CUSTODY_REQUEST_BYTES_V3,
+                None,
+                Some(1),
+            ),
+            3 => (
+                FixedRole::Custody,
+                SERIES_CONSUME_CLOSE_REPLAY_OFFSET_V3,
+                SERIES_CUSTODY_REQUEST_BYTES_V3,
+                None,
+                Some(2),
+            ),
+            _ => return Err(SeriesExecuteErrorV3::Invocation),
         };
         let request = validate_invocation(
             invocation,
@@ -241,13 +250,14 @@ pub fn stage_series_consume_execution_v3<'a>(
             witness.is_some(),
             inputs.hot.ir_request_bank(),
         )?;
-        if index == 0 {
+        if index == 1 {
             if request != physical.core().core_request {
                 return Err(SeriesExecuteErrorV3::RequestBank);
             }
         } else {
+            let custody_index = custody_index.ok_or(SeriesExecuteErrorV3::RequestBank)?;
             let custody = *custody_requests
-                .get(index - 1)
+                .get(custody_index)
                 .ok_or(SeriesExecuteErrorV3::RequestBank)?;
             if custody
                 .to_bytes()
@@ -272,15 +282,15 @@ pub fn stage_series_consume_execution_v3<'a>(
         });
     }
     let [
-        Some(core),
         Some(transfer),
+        Some(core),
         Some(close_vault),
         Some(close_replay),
     ] = calls
     else {
         return Err(SeriesExecuteErrorV3::Invocation);
     };
-    let calls = [core, transfer, close_vault, close_replay];
+    let calls = [transfer, core, close_vault, close_replay];
     Ok(SeriesConsumeExecutionPlanV3 { physical, calls })
 }
 
@@ -357,11 +367,13 @@ mod tests {
     }
 
     #[test]
-    fn custody_route_offsets_are_global_and_gap_free() {
+    fn consume_route_offsets_are_global_and_gap_free() {
         let bank = [0_u8; SERIES_CONSUME_IR_REQUEST_BYTES_V3];
-        for index in 0..3 {
-            let offset =
-                SERIES_CONSUME_CORE_REQUEST_BYTES_V3 + index * SERIES_CUSTODY_REQUEST_BYTES_V3;
+        for offset in [
+            SERIES_CONSUME_TRANSFER_OFFSET_V3,
+            SERIES_CONSUME_CLOSE_VAULT_OFFSET_V3,
+            SERIES_CONSUME_CLOSE_REPLAY_OFFSET_V3,
+        ] {
             let route = invocation(FixedRole::Custody, offset, SERIES_CUSTODY_REQUEST_BYTES_V3);
             assert_eq!(
                 validate_invocation(
@@ -379,19 +391,37 @@ mod tests {
         }
         let wrong = invocation(
             FixedRole::Custody,
-            SERIES_CONSUME_CORE_REQUEST_BYTES_V3 + 1,
+            SERIES_CONSUME_TRANSFER_OFFSET_V3 + 1,
             SERIES_CUSTODY_REQUEST_BYTES_V3,
         );
         assert_eq!(
             validate_invocation(
                 wrong,
                 FixedRole::Custody,
-                SERIES_CONSUME_CORE_REQUEST_BYTES_V3,
+                SERIES_CONSUME_TRANSFER_OFFSET_V3,
                 SERIES_CUSTODY_REQUEST_BYTES_V3,
                 false,
                 &bank,
             ),
             Err(SeriesExecuteErrorV3::Invocation)
+        );
+        let core = invocation(
+            FixedRole::Core,
+            SERIES_CONSUME_CORE_OFFSET_V3,
+            SERIES_CONSUME_CORE_REQUEST_BYTES_V3,
+        );
+        assert_eq!(
+            validate_invocation(
+                core,
+                FixedRole::Core,
+                SERIES_CONSUME_CORE_OFFSET_V3,
+                SERIES_CONSUME_CORE_REQUEST_BYTES_V3,
+                false,
+                &bank,
+            )
+            .expect("Core request")
+            .len(),
+            SERIES_CONSUME_CORE_REQUEST_BYTES_V3
         );
     }
 }

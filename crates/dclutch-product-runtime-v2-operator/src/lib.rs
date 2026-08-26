@@ -28,6 +28,8 @@ use solana_sdk_ids::{system_program, sysvar};
 
 /// Chain-derived unsigned Core Found construction for Runtime V2 Products.
 pub mod found;
+/// Chain-derived Registry records for Product V3 graded-basis admission.
+pub mod graded_basis_v3;
 
 /// Compiler or chain-derived instruction refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -338,7 +340,7 @@ pub fn build_admission_instruction_v2(
     })
 }
 
-fn validate_record(
+pub(crate) fn validate_record(
     registry: Pubkey,
     coordinate: FinalizedRecordCoordinateV2,
     observation: FinalizedRecordObservationV2<'_>,

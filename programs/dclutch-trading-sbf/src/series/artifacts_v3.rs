@@ -35,14 +35,24 @@ use super::{
 pub const SERIES_ACTION_SELECTOR_OFFSET_V3: u32 = 12;
 /// One exact Merkle sibling in the borrowed witness suffix.
 pub const SERIES_WITNESS_ITEM_BYTES_V3: usize = 32;
-/// Exact IR-owned Core request prefix for Consume.
+/// Exact IR-owned Core request width for Consume.
 pub const SERIES_CONSUME_CORE_REQUEST_BYTES_V3: usize =
     dclutch_market_core_codec::SERIES_CORE_REQUEST_BYTES_V1;
 /// Exact IR-owned Custody request width for every escrow edge.
 pub const SERIES_CUSTODY_REQUEST_BYTES_V3: usize =
     dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1;
-/// Core followed by the three terminal Custody routes.
+/// Transfer-to-Hoard, Core Found, and the two terminal cleanup routes.
 pub const SERIES_CONSUME_ROUTE_COUNT_V3: usize = 4;
+/// Request-bank offset of the pre-Found SeriesEscrow-to-Hoard transfer.
+pub const SERIES_CONSUME_TRANSFER_OFFSET_V3: usize = 0;
+/// Request-bank offset of the Core Found request.
+pub const SERIES_CONSUME_CORE_OFFSET_V3: usize = SERIES_CUSTODY_REQUEST_BYTES_V3;
+/// Request-bank offset of the post-Found escrow-Vault close.
+pub const SERIES_CONSUME_CLOSE_VAULT_OFFSET_V3: usize =
+    SERIES_CONSUME_CORE_OFFSET_V3 + SERIES_CONSUME_CORE_REQUEST_BYTES_V3;
+/// Request-bank offset of the terminal replay close.
+pub const SERIES_CONSUME_CLOSE_REPLAY_OFFSET_V3: usize =
+    SERIES_CONSUME_CLOSE_VAULT_OFFSET_V3 + SERIES_CUSTODY_REQUEST_BYTES_V3;
 /// Exact flat IR request bank for one Consume before its borrowed proof suffix.
 pub const SERIES_CONSUME_IR_REQUEST_BYTES_V3: usize =
     SERIES_CONSUME_CORE_REQUEST_BYTES_V3 + 3 * SERIES_CUSTODY_REQUEST_BYTES_V3;
@@ -275,7 +285,7 @@ pub fn validate_series_consume_invocation_v3<'a>(
         || invocation.kind != RouteKindV3::Once
         || invocation.item.is_some()
         || invocation.repeated_item_count != 0
-        || invocation.request_offset != 0
+        || invocation.request_offset != SERIES_CONSUME_CORE_OFFSET_V3
         || invocation.request_len != SERIES_CONSUME_CORE_REQUEST_BYTES_V3
         || ir_request_bank.len() != SERIES_CONSUME_IR_REQUEST_BYTES_V3
         || family_request.get(..SERIES_ACTION_HEADER_BYTES_V3) != Some(bundle.slices.header)
@@ -453,7 +463,7 @@ fn validate_routes(action: SeriesActionV3, effect: EffectProgramV3<'_>) -> Resul
         let route = effect
             .route(index)
             .map_err(|_| SeriesArtifactErrorV3::Effect)?;
-        let core = action == SeriesActionV3::Consume && index == 0;
+        let core = action == SeriesActionV3::Consume && index == 1;
         let expected_role = if core {
             FixedRole::Core
         } else {
@@ -703,7 +713,7 @@ mod tests {
         for route in 0..usize::from(route_count) {
             let offset = dclutch_effect_kernel::v3::HEADER_BYTES
                 + route * dclutch_effect_kernel::v3::ROUTE_BYTES;
-            let core = action == SeriesActionV3::Consume && route == 0;
+            let core = action == SeriesActionV3::Consume && route == 1;
             let role = if core { 0 } else { 4 };
             let request_width = if core {
                 SERIES_CONSUME_CORE_REQUEST_BYTES_V3
@@ -913,12 +923,15 @@ mod tests {
         let identities: [[u8; 32]; 0] = [];
         let invocation = bundle
             .effect
-            .resolved_invocation(0, 0, 0, &scalars, &identities)
+            .resolved_invocation(1, 0, 0, &scalars, &identities)
             .expect("resolved Core invocation");
         let mut request_bank = vec![0_u8; SERIES_CONSUME_IR_REQUEST_BYTES_V3];
         request_bank
-            .get_mut(..SERIES_CONSUME_CORE_REQUEST_BYTES_V3)
-            .expect("Core request prefix")
+            .get_mut(
+                SERIES_CONSUME_CORE_OFFSET_V3
+                    ..SERIES_CONSUME_CORE_OFFSET_V3 + SERIES_CONSUME_CORE_REQUEST_BYTES_V3,
+            )
+            .expect("Core request region")
             .fill(17);
         let selected = validate_series_consume_invocation_v3(
             bundle,

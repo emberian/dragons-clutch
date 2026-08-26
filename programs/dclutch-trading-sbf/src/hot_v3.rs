@@ -14,7 +14,10 @@ use alloc::{vec, vec::Vec};
 use dclutch_account_profile_contract::{
     AccountObservationV1,
     lifecycle_v3::{
-        SCHEMA_RELEASE_ID as STATE_LIFECYCLE_POLICY_SCHEMA_ID_V3, StateLifecyclePolicyV3,
+        AuthenticatedRentCreditV3, AuthenticatedRentMinimumV3, LifecycleContextV3,
+        LifecycleOperationV3, LifecycleRegistersV3,
+        SCHEMA_RELEASE_ID as STATE_LIFECYCLE_POLICY_SCHEMA_ID_V3, SeedValueV3,
+        StateLifecyclePlanV3, StateLifecyclePolicyV3, plan_lifecycle,
     },
     v2::{
         AccountProfileV2, ProjectionRegistersV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2,
@@ -63,6 +66,7 @@ use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1
 use dclutch_registry_contract::ACTIVATION_PDA_DOMAIN_V1;
 use dclutch_registry_svm::{AuthenticatedRoleReceiptV1, RegistryInstructionV1};
 use dclutch_release_set_contract::ExecutionRoleV1;
+use dclutch_rent_contract::{RENT_CREDIT_BYTES_V1, RentCreditV1};
 use dclutch_request_profile_contract::{
     ProjectionRegistersV1, RequestProfileV1, SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1,
     project_atomic as project_request_atomic,
@@ -76,13 +80,14 @@ use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
     instruction::{AccountMeta, Instruction},
-    program::{get_return_data, invoke, set_return_data},
+    program::{get_return_data, invoke, invoke_signed, set_return_data},
     program_error::ProgramError,
     pubkey::Pubkey,
     rent::Rent,
     sysvar::SysvarSerialize,
 };
 use solana_sdk_ids::{system_program, sysvar};
+use solana_system_interface::instruction::{allocate, assign, transfer as system_transfer};
 
 use crate::{
     TradingSbfError,
@@ -229,9 +234,11 @@ pub fn process_hot_execution_v3(
         &program_set_data,
     )
     .map_err(|_| TradingSbfError::Content)?;
-    let selected_program = program_set
-        .select(family_request)
+    let selected_entry = program_set
+        .select_entry(family_request)
         .map_err(|_| TradingSbfError::Content)?;
+    let selected_program = selected_entry.program();
+    let selected_action = selected_entry.selector();
 
     let descriptor_data = borrow_finalized_record(
         frame,
@@ -518,13 +525,27 @@ pub fn process_hot_execution_v3(
                 .map_err(|_| TradingSbfError::Content)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let account_inputs = observations
+    let lifecycle_plans = prepare_lifecycle_v3(
+        program_id,
+        lifecycle,
+        selected_action,
+        account_profile,
+        tail_count,
+        &observations,
+        &runtime_accounts,
+        &transition_output_scalars,
+        &transition_output_identities,
+        &rent,
+        &aliases,
+    )?;
+    let mut account_inputs = observations
         .iter()
         .map(|observation| AccountInput {
             lamports: observation.lamports(),
             data_len: observation.data().len(),
         })
         .collect::<Vec<_>>();
+    apply_lifecycle_candidates_v3(&lifecycle_plans, &aliases, &mut account_inputs)?;
     let mut permissions = vec![AccountPermission::read_only(); runtime_accounts.len()];
     derive_effect_permissions(account_profile, tail_count, &mut permissions)
         .map_err(|_| TradingSbfError::Content)?;
@@ -576,6 +597,7 @@ pub fn process_hot_execution_v3(
     )?;
     drop(observations);
     drop(runtime_data);
+    apply_lifecycle_creates_v3(program_id, &lifecycle_plans, &runtime_accounts)?;
     let child_execution_digest = execute_child_routes_v3(
         program_id,
         frame,
@@ -589,6 +611,7 @@ pub fn process_hot_execution_v3(
         request_digest,
         envelope,
     )?;
+    apply_lifecycle_closes_v3(program_id, &lifecycle_plans, &runtime_accounts, &rent)?;
     commit_local_effects(
         effect,
         tail_count,
@@ -648,6 +671,469 @@ pub fn process_hot_execution_v3(
     })
     .map_err(|_| TradingSbfError::Commit)?;
     set_return_data(&ack.to_bytes());
+    Ok(())
+}
+
+struct PreparedLifecycleInvocationV3 {
+    plan: StateLifecyclePlanV3,
+    state: usize,
+    payer: Option<usize>,
+    rent_credit: Option<usize>,
+    seeds: Vec<SeedValueV3>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_lifecycle_v3<'a>(
+    program_id: &Pubkey,
+    policy: StateLifecyclePolicyV3<'_>,
+    action: u32,
+    account_profile: AccountProfileV2<'_>,
+    tail_count: u32,
+    observations: &[AccountObservationV1<'a>],
+    accounts: &[&AccountInfo<'_>],
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+    rent: &Rent,
+    aliases: &[usize],
+) -> Result<Vec<PreparedLifecycleInvocationV3>, ProgramError> {
+    if observations.len() != accounts.len() || aliases.len() != accounts.len() {
+        return Err(TradingSbfError::Content.into());
+    }
+    let registers = LifecycleRegistersV3 {
+        scalars,
+        identities,
+    };
+    let mut candidate_lamports = observations
+        .iter()
+        .map(|observation| observation.lamports())
+        .collect::<Vec<_>>();
+    let mut used_states = vec![false; accounts.len()];
+    let mut output = Vec::new();
+    let plan_count = policy
+        .action_plan_count(action)
+        .map_err(|_| TradingSbfError::Content)?;
+    let mut ordinal = 0_u16;
+    while ordinal < plan_count {
+        let selected = policy
+            .action_plan(action, ordinal)
+            .map_err(|_| TradingSbfError::Content)?;
+        let invocation_count = selected
+            .invocation_count(tail_count)
+            .map_err(|_| TradingSbfError::Content)?;
+        let mut invocation = 0_u32;
+        while invocation < invocation_count {
+            let item = selected
+                .invocation_item(tail_count, invocation)
+                .map_err(|_| TradingSbfError::Content)?;
+            if !selected
+                .is_enabled(account_profile, tail_count, item, registers)
+                .map_err(|_| TradingSbfError::Content)?
+            {
+                invocation = invocation.checked_add(1).ok_or(TradingSbfError::Content)?;
+                continue;
+            }
+            let indices = selected
+                .project_account_indices(account_profile, tail_count, item)
+                .map_err(|_| TradingSbfError::Content)?;
+            let state = representative_v3(indices.state(), aliases)?;
+            reserve_lifecycle_state_v3(state, &mut used_states)?;
+            let payer = indices
+                .payer()
+                .map(|index| representative_v3(index, aliases))
+                .transpose()?;
+            let rent_credit = indices
+                .rent_credit()
+                .map(|index| representative_v3(index, aliases))
+                .transpose()?;
+
+            let seed_count = selected
+                .seed_count()
+                .map_err(|_| TradingSbfError::Content)?;
+            let mut seeds = Vec::with_capacity(usize::from(seed_count));
+            let mut seed = 0_u8;
+            while seed < seed_count {
+                seeds.push(
+                    selected
+                        .materialize_seed(account_profile, tail_count, item, registers, seed)
+                        .map_err(|_| TradingSbfError::Content)?,
+                );
+                seed = seed.checked_add(1).ok_or(TradingSbfError::Content)?;
+            }
+            let seed_slices = seeds.iter().map(SeedValueV3::as_slice).collect::<Vec<_>>();
+            let derived = Pubkey::create_program_address(&seed_slices, program_id)
+                .map_err(|_| TradingSbfError::Content)?;
+            if accounts
+                .get(state)
+                .is_none_or(|account| account.key != &derived)
+            {
+                return Err(TradingSbfError::Content.into());
+            }
+            let candidate_observations = observations
+                .iter()
+                .zip(accounts)
+                .zip(&candidate_lamports)
+                .map(|((observation, account), lamports)| {
+                    AccountObservationV1::new(
+                        observation.key(),
+                        observation.owner(),
+                        *lamports,
+                        observation.data(),
+                        account.is_signer,
+                        account.is_writable,
+                        account.executable,
+                    )
+                })
+                .collect::<Vec<_>>();
+            let authenticated_credit = rent_credit
+                .map(|index| {
+                    authenticate_lifecycle_credit_v3(
+                        accounts,
+                        index,
+                        *candidate_lamports
+                            .get(index)
+                            .ok_or(TradingSbfError::Content)?,
+                        rent,
+                    )
+                })
+                .transpose()?;
+            let current_rent_minimum = if selected.operation() == LifecycleOperationV3::Create {
+                let data_bytes = selected
+                    .target_data_bytes(tail_count)
+                    .map_err(|_| TradingSbfError::Content)?;
+                Some(AuthenticatedRentMinimumV3 {
+                    data_bytes,
+                    lamports: rent.minimum_balance(
+                        usize::try_from(data_bytes).map_err(|_| TradingSbfError::Content)?,
+                    ),
+                })
+            } else {
+                None
+            };
+            let plan = plan_lifecycle(
+                selected,
+                LifecycleContextV3 {
+                    account_profile,
+                    tail_count,
+                    item_index: item,
+                    accounts: &candidate_observations,
+                    registers,
+                    trading_program: program_id.to_bytes(),
+                    system_program: system_program::ID.to_bytes(),
+                    adapter_derived_pda: derived.to_bytes(),
+                    rent_credit: authenticated_credit,
+                    current_rent_minimum,
+                },
+            )
+            .map_err(|_| TradingSbfError::Content)?;
+            match plan {
+                StateLifecyclePlanV3::Authenticate(_) => {}
+                StateLifecyclePlanV3::Create(value) => {
+                    *candidate_lamports
+                        .get_mut(state)
+                        .ok_or(TradingSbfError::Content)? = value.state_after;
+                    *candidate_lamports
+                        .get_mut(payer.ok_or(TradingSbfError::Content)?)
+                        .ok_or(TradingSbfError::Content)? = value.payer_after;
+                }
+                StateLifecyclePlanV3::Close(value) => {
+                    *candidate_lamports
+                        .get_mut(state)
+                        .ok_or(TradingSbfError::Content)? = value.source_after;
+                    *candidate_lamports
+                        .get_mut(rent_credit.ok_or(TradingSbfError::Content)?)
+                        .ok_or(TradingSbfError::Content)? = value.rent_credit_after;
+                }
+            }
+            output.push(PreparedLifecycleInvocationV3 {
+                plan,
+                state,
+                payer,
+                rent_credit,
+                seeds,
+            });
+            invocation = invocation.checked_add(1).ok_or(TradingSbfError::Content)?;
+        }
+        ordinal = ordinal.checked_add(1).ok_or(TradingSbfError::Content)?;
+    }
+    Ok(output)
+}
+
+fn representative_v3(index: usize, aliases: &[usize]) -> Result<usize, ProgramError> {
+    aliases
+        .get(index)
+        .copied()
+        .ok_or_else(|| TradingSbfError::Content.into())
+}
+
+fn reserve_lifecycle_state_v3(state: usize, used_states: &mut [bool]) -> Result<(), ProgramError> {
+    if state == 0
+        || used_states
+            .get(state)
+            .copied()
+            .ok_or(TradingSbfError::Content)?
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    *used_states.get_mut(state).ok_or(TradingSbfError::Content)? = true;
+    Ok(())
+}
+
+fn authenticate_lifecycle_credit_v3(
+    accounts: &[&AccountInfo<'_>],
+    index: usize,
+    observed_lamports: u64,
+    rent: &Rent,
+) -> Result<AuthenticatedRentCreditV3, ProgramError> {
+    let account = accounts.get(index).ok_or(TradingSbfError::Content)?;
+    if account.is_signer
+        || !account.is_writable
+        || account.executable
+        || account.data_len() != RENT_CREDIT_BYTES_V1
+        || !rent.is_exempt(observed_lamports, RENT_CREDIT_BYTES_V1)
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
+    let credit = RentCreditV1::decode(&data).map_err(|_| TradingSbfError::Content)?;
+    if credit.to_bytes().as_slice() != data.as_ref() {
+        return Err(TradingSbfError::Content.into());
+    }
+    let seeds = credit.pda_seeds();
+    let authority = seeds.refund_authority().to_bytes();
+    let bump = [seeds.bump()];
+    let expected = Pubkey::create_program_address(
+        &[seeds.domain(), authority.as_slice(), &bump],
+        account.owner,
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    if account.key != &expected
+        || !accounts.iter().any(|candidate| {
+            candidate.key == account.owner
+                && candidate.executable
+                && !candidate.is_signer
+                && !candidate.is_writable
+        })
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    Ok(AuthenticatedRentCreditV3 {
+        key: account.key.to_bytes(),
+        beneficiary: authority,
+        lamports: observed_lamports,
+    })
+}
+
+fn apply_lifecycle_candidates_v3(
+    plans: &[PreparedLifecycleInvocationV3],
+    aliases: &[usize],
+    accounts: &mut [AccountInput],
+) -> Result<(), ProgramError> {
+    for prepared in plans {
+        match prepared.plan {
+            StateLifecyclePlanV3::Authenticate(_) => {}
+            StateLifecyclePlanV3::Create(plan) => {
+                set_account_candidate_v3(
+                    prepared.state,
+                    aliases,
+                    accounts,
+                    plan.state_after,
+                    usize::try_from(plan.target_data_bytes)
+                        .map_err(|_| TradingSbfError::Content)?,
+                )?;
+                set_account_candidate_lamports_v3(
+                    prepared.payer.ok_or(TradingSbfError::Content)?,
+                    aliases,
+                    accounts,
+                    plan.payer_after,
+                )?;
+            }
+            StateLifecyclePlanV3::Close(plan) => {
+                set_account_candidate_v3(prepared.state, aliases, accounts, plan.source_after, 0)?;
+                set_account_candidate_lamports_v3(
+                    prepared.rent_credit.ok_or(TradingSbfError::Content)?,
+                    aliases,
+                    accounts,
+                    plan.rent_credit_after,
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn set_account_candidate_v3(
+    representative: usize,
+    aliases: &[usize],
+    accounts: &mut [AccountInput],
+    lamports: u64,
+    data_len: usize,
+) -> Result<(), ProgramError> {
+    for (coordinate, alias) in aliases.iter().enumerate() {
+        if *alias == representative {
+            let account = accounts
+                .get_mut(coordinate)
+                .ok_or(TradingSbfError::Content)?;
+            account.lamports = lamports;
+            account.data_len = data_len;
+        }
+    }
+    Ok(())
+}
+
+fn set_account_candidate_lamports_v3(
+    representative: usize,
+    aliases: &[usize],
+    accounts: &mut [AccountInput],
+    lamports: u64,
+) -> Result<(), ProgramError> {
+    for (coordinate, alias) in aliases.iter().enumerate() {
+        if *alias == representative {
+            accounts
+                .get_mut(coordinate)
+                .ok_or(TradingSbfError::Content)?
+                .lamports = lamports;
+        }
+    }
+    Ok(())
+}
+
+fn apply_lifecycle_creates_v3(
+    program_id: &Pubkey,
+    plans: &[PreparedLifecycleInvocationV3],
+    accounts: &[&AccountInfo<'_>],
+) -> Result<(), ProgramError> {
+    let system = accounts
+        .iter()
+        .find(|account| {
+            account.key == &system_program::ID
+                && account.executable
+                && !account.is_signer
+                && !account.is_writable
+        })
+        .copied();
+    for prepared in plans {
+        let StateLifecyclePlanV3::Create(plan) = prepared.plan else {
+            continue;
+        };
+        let system = system.ok_or(TradingSbfError::Commit)?;
+        let state = accounts
+            .get(prepared.state)
+            .copied()
+            .ok_or(TradingSbfError::Commit)?;
+        let payer = accounts
+            .get(prepared.payer.ok_or(TradingSbfError::Commit)?)
+            .copied()
+            .ok_or(TradingSbfError::Commit)?;
+        if state.key.to_bytes() != plan.state
+            || payer.key.to_bytes() != plan.payer
+            || state.owner != &system_program::ID
+            || state.data_len() != 0
+            || state.lamports() != plan.state_before
+            || payer.lamports()
+                != plan
+                    .payer_after
+                    .checked_add(plan.payer_debit)
+                    .ok_or(TradingSbfError::Commit)?
+        {
+            return Err(TradingSbfError::Commit.into());
+        }
+        if plan.payer_debit != 0 {
+            invoke(
+                &system_transfer(payer.key, state.key, plan.payer_debit),
+                &[payer.clone(), state.clone(), system.clone()],
+            )
+            .map_err(|_| TradingSbfError::Commit)?;
+        }
+        let seed_slices = prepared
+            .seeds
+            .iter()
+            .map(SeedValueV3::as_slice)
+            .collect::<Vec<_>>();
+        invoke_signed(
+            &allocate(state.key, u64::from(plan.target_data_bytes)),
+            &[state.clone(), system.clone()],
+            &[seed_slices.as_slice()],
+        )
+        .map_err(|_| TradingSbfError::Commit)?;
+        invoke_signed(
+            &assign(state.key, program_id),
+            &[state.clone(), system.clone()],
+            &[seed_slices.as_slice()],
+        )
+        .map_err(|_| TradingSbfError::Commit)?;
+        let data = state
+            .try_borrow_data()
+            .map_err(|_| TradingSbfError::Commit)?;
+        if state.owner != program_id
+            || state.lamports() != plan.state_after
+            || data.len()
+                != usize::try_from(plan.target_data_bytes).map_err(|_| TradingSbfError::Commit)?
+            || data.iter().any(|byte| *byte != 0)
+            || payer.lamports() != plan.payer_after
+        {
+            return Err(TradingSbfError::Commit.into());
+        }
+    }
+    Ok(())
+}
+
+fn apply_lifecycle_closes_v3(
+    program_id: &Pubkey,
+    plans: &[PreparedLifecycleInvocationV3],
+    accounts: &[&AccountInfo<'_>],
+    rent: &Rent,
+) -> Result<(), ProgramError> {
+    for prepared in plans {
+        let StateLifecyclePlanV3::Close(plan) = prepared.plan else {
+            continue;
+        };
+        let state = accounts
+            .get(prepared.state)
+            .copied()
+            .ok_or(TradingSbfError::Commit)?;
+        let credit = accounts
+            .get(prepared.rent_credit.ok_or(TradingSbfError::Commit)?)
+            .copied()
+            .ok_or(TradingSbfError::Commit)?;
+        let authenticated_credit = authenticate_lifecycle_credit_v3(
+            accounts,
+            prepared.rent_credit.ok_or(TradingSbfError::Commit)?,
+            credit.lamports(),
+            rent,
+        )?;
+        if state.key.to_bytes() != plan.state
+            || credit.key.to_bytes() != plan.rent_credit
+            || state.owner != program_id
+            || state.data_len()
+                != usize::try_from(plan.source_data_bytes).map_err(|_| TradingSbfError::Commit)?
+            || state.lamports() != plan.source_before
+            || credit.lamports() != plan.rent_credit_before
+            || authenticated_credit.beneficiary != plan.beneficiary
+        {
+            return Err(TradingSbfError::Commit.into());
+        }
+        state
+            .try_borrow_mut_data()
+            .map_err(|_| TradingSbfError::Commit)?
+            .fill(0);
+        **state
+            .try_borrow_mut_lamports()
+            .map_err(|_| TradingSbfError::Commit)? = plan.source_after;
+        **credit
+            .try_borrow_mut_lamports()
+            .map_err(|_| TradingSbfError::Commit)? = plan.rent_credit_after;
+        state.resize(0).map_err(|_| TradingSbfError::Commit)?;
+        state.assign(&system_program::ID);
+        if state.owner != &system_program::ID
+            || state.data_len() != 0
+            || state.lamports() != 0
+            || credit.lamports() != plan.rent_credit_after
+        {
+            return Err(TradingSbfError::Commit.into());
+        }
+    }
     Ok(())
 }
 
@@ -1792,6 +2278,7 @@ pub fn is_hot_execution_v3(instruction_data: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dclutch_account_profile_contract::lifecycle_v3::CreateStatePlanV3;
 
     #[test]
     fn selector_is_exact_and_does_not_shadow_activation() {
@@ -1834,6 +2321,53 @@ mod tests {
         assert_eq!(
             require_root_write_is_state_only(ordinary_account, &[0, 1]),
             Ok(())
+        );
+    }
+
+    #[test]
+    fn lifecycle_candidate_updates_every_alias_and_reserves_nonroot_once() {
+        let plan = PreparedLifecycleInvocationV3 {
+            plan: StateLifecyclePlanV3::Create(CreateStatePlanV3 {
+                state: [1; 32],
+                payer: [2; 32],
+                rent_credit: [3; 32],
+                beneficiary: [4; 32],
+                target_data_bytes: 144,
+                historical_rent_principal: 30,
+                state_before: 5,
+                state_after: 30,
+                payer_debit: 25,
+                payer_after: 75,
+                bump: 9,
+            }),
+            state: 1,
+            payer: Some(2),
+            rent_credit: Some(4),
+            seeds: Vec::new(),
+        };
+        let aliases = [0, 1, 2, 1, 4];
+        let mut accounts = vec![
+            AccountInput {
+                lamports: 1,
+                data_len: 8,
+            };
+            aliases.len()
+        ];
+        apply_lifecycle_candidates_v3(&[plan], &aliases, &mut accounts).expect("candidate applies");
+        assert_eq!(accounts[1].lamports, 30);
+        assert_eq!(accounts[1].data_len, 144);
+        assert_eq!(accounts[3], accounts[1]);
+        assert_eq!(accounts[2].lamports, 75);
+
+        let mut used = [false; 3];
+        assert_eq!(
+            reserve_lifecycle_state_v3(0, &mut used),
+            Err(TradingSbfError::Content.into())
+        );
+        assert_eq!(reserve_lifecycle_state_v3(1, &mut used), Ok(()));
+        assert_eq!(
+            reserve_lifecycle_state_v3(1, &mut used),
+            Err(TradingSbfError::Content.into())
         );
     }
 }

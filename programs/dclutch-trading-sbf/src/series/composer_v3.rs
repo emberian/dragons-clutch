@@ -91,7 +91,7 @@ impl SeriesPreparePhysicalPlanV3 {
     }
 }
 
-/// Consume composition plus exact Core and terminal Custody calls.
+/// Consume composition plus exact pre-Found Custody, Core, and cleanup calls.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SeriesConsumePhysicalPlanV3<'a> {
     composition: SeriesConsumeCompositionV3,
@@ -163,9 +163,10 @@ pub fn compose_prepare_physical_v3(
 
 /// Compose one Consume through the selected generic Core effect route.
 ///
-/// The returned order is Core Found first, then the three terminal Custody
-/// calls, then replay commit. A caller may stage requests in another order but
-/// may not persist either replay candidate before every child receipt accepts.
+/// The caller must execute transfer-to-Hoard, Core Found, close-Vault, and
+/// close-replay in that order, then commit replay. This value keeps the Core
+/// call and three Custody requests typed separately; [`crate::series::execute_v3`]
+/// freezes their physical order and refuses any reordering.
 #[allow(clippy::too_many_arguments)]
 pub fn compose_consume_physical_v3<'a>(
     action: AuthenticatedSeriesActionV3<'_>,
