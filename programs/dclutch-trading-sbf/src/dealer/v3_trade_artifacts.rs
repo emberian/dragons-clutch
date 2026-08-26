@@ -115,8 +115,12 @@ pub const DEALER_SCENARIO_CUSTODY_SCALAR_BASE_V4: u16 = 13;
 pub const DEALER_SCENARIO_CUSTODY_SCALAR_STRIDE_V4: u16 = 14;
 /// Exact common scalar-bank width.
 pub const DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4: u16 = 97;
-/// Parent digest precedes six exact 19-identity Custody blocks.
-pub const DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4: u16 = 115;
+/// Parent digest precedes six exact 19-identity Custody blocks and one
+/// trusted current-Trading owner identity.
+pub const DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4: u16 = 116;
+/// AccountProfile-owned current Trading identity used to authenticate the
+/// sole writable obligation account independently of optional child routes.
+pub const DEALER_SCENARIO_CURRENT_TRADING_IDENTITY_V4: u16 = 115;
 
 const DEALER_SCENARIO_CUSTODY_IDENTITY_BASE_V4: u16 = 1;
 const DEALER_SCENARIO_CUSTODY_IDENTITY_STRIDE_V4: u16 = 19;
@@ -872,6 +876,7 @@ pub fn project_dealer_scenario_hot_registers_v4(
     plan: ScenarioAtomicPlanV3,
     candidate_obligation: DealerObligationProjectionV3<'_>,
     custody_effects: &[Option<ScenarioCustodyEffectV3>; MAX_DEALER_SCENARIO_CUSTODY_EFFECTS_V3],
+    trading_program: [u8; 32],
     trusted_current_slot: u64,
     scalars: &mut [u64],
     identities: &mut [[u8; 32]],
@@ -883,6 +888,7 @@ pub fn project_dealer_scenario_hot_registers_v4(
         .ok_or(DealerScenarioArtifactsErrorV4::Arithmetic)?;
     if scalars.len() != expected_scalars
         || identities.len() != usize::from(DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4)
+        || trading_program == [0; 32]
         || trusted_current_slot > request.expires_at
         || candidate_obligation.width() != request.width
         || candidate_obligation.revision() != request.candidate_obligation_revision
@@ -1011,8 +1017,16 @@ pub fn project_dealer_scenario_hot_registers_v4(
     *staged_identities
         .get_mut(0)
         .ok_or(DealerScenarioArtifactsErrorV4::Projection)? = parent_digest;
+    set_scenario_identity(
+        &mut staged_identities,
+        DEALER_SCENARIO_CURRENT_TRADING_IDENTITY_V4,
+        trading_program,
+    )?;
     for (slot, effect) in by_slot.iter().copied().enumerate() {
         let Some(effect) = effect else { continue };
+        if effect.request.custody().caller_program != trading_program {
+            return Err(DealerScenarioArtifactsErrorV4::Projection);
+        }
         set_scenario_scalar(
             &mut staged_scalars,
             scenario_route_span_scalar(slot)?,

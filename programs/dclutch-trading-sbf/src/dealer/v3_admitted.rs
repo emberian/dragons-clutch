@@ -152,6 +152,7 @@ pub fn evaluate_dealer_scenario_admitted_v4(
         plan,
         chain.candidate_obligation,
         custody_effects,
+        chain.trading_program,
         trusted_current_slot,
         candidate_scalars,
         candidate_identities,
