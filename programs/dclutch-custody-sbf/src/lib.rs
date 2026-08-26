@@ -345,20 +345,8 @@ fn authenticate_registry_continuation(
     let caller_program = account(accounts, CALLER_PROGRAM)?;
     let caller_programdata = account(accounts, CALLER_PROGRAMDATA)?;
     let admission = accounts.last().ok_or(CustodySbfError::AccountFrame)?;
-    let roles = [
-        ExecutionRoleV1::Core,
-        ExecutionRoleV1::Claims,
-        ExecutionRoleV1::Resolution,
-        ExecutionRoleV1::Custody,
-    ];
-    if continuation.release_set_id().to_bytes() != request.release_set
-        || continuation.continuation_role() != ExecutionRoleV1::Core
-        || usize::from(continuation.role_count()) != roles.len()
-        || roles
-            .iter()
-            .enumerate()
-            .any(|(index, role)| continuation.role(index) != Some(*role))
-    {
+    require_continuation_role_profile(request.operation, continuation)?;
+    if continuation.release_set_id().to_bytes() != request.release_set {
         return Err(CustodySbfError::Release.into());
     }
     let expected_cache = Pubkey::find_program_address(
@@ -983,12 +971,7 @@ fn require_account_count(
     if accounts.len() != expected {
         return Err(CustodySbfError::AccountFrame.into());
     }
-    if continuation
-        && !matches!(
-            operation,
-            OperationV1::CloseVault | OperationV1::CloseReplay
-        )
-    {
+    if continuation && continuation_roles(operation).is_none() {
         return Err(CustodySbfError::AccountFrame.into());
     }
     for (index, observed) in accounts.iter().take(base).enumerate() {
@@ -1018,6 +1001,38 @@ fn require_account_count(
         {
             return Err(CustodySbfError::AccountFrame.into());
         }
+    }
+    Ok(())
+}
+
+fn continuation_roles(operation: OperationV1) -> Option<&'static [ExecutionRoleV1]> {
+    match operation {
+        OperationV1::InitializeReplay | OperationV1::OpenVault => {
+            Some(&[ExecutionRoleV1::Core, ExecutionRoleV1::Custody])
+        }
+        OperationV1::CloseVault | OperationV1::CloseReplay => Some(&[
+            ExecutionRoleV1::Core,
+            ExecutionRoleV1::Claims,
+            ExecutionRoleV1::Resolution,
+            ExecutionRoleV1::Custody,
+        ]),
+        OperationV1::Transfer => None,
+    }
+}
+
+fn require_continuation_role_profile(
+    operation: OperationV1,
+    continuation: RegistryContinuationRequestV1,
+) -> ProgramResult {
+    let roles = continuation_roles(operation).ok_or(CustodySbfError::AccountFrame)?;
+    if continuation.continuation_role() != ExecutionRoleV1::Core
+        || usize::from(continuation.role_count()) != roles.len()
+        || roles
+            .iter()
+            .enumerate()
+            .any(|(index, role)| continuation.role(index) != Some(*role))
+    {
+        return Err(CustodySbfError::Release.into());
     }
     Ok(())
 }
@@ -1444,6 +1459,69 @@ mod tests {
         assert_eq!(TRANSFER_ACCOUNT_COUNT_V1, 14);
         assert_eq!(CLOSE_VAULT_ACCOUNT_COUNT_V1, 14);
         assert_eq!(CLOSE_REPLAY_ACCOUNT_COUNT_V1, 10);
+    }
+
+    fn continuation(roles: &[ExecutionRoleV1]) -> RegistryContinuationRequestV1 {
+        RegistryContinuationRequestV1::new(
+            ContentId::new([0x31; 32]).expect("release"),
+            ContentId::new([0x32; 32]).expect("cache"),
+            ContentId::new([0x33; 32]).expect("continuation"),
+            1,
+            ExecutionRoleV1::Core,
+            roles,
+        )
+        .expect("syntactically valid continuation")
+    }
+
+    #[test]
+    fn continuation_roles_are_operation_exact() {
+        let open = continuation(&[ExecutionRoleV1::Core, ExecutionRoleV1::Custody]);
+        for operation in [OperationV1::InitializeReplay, OperationV1::OpenVault] {
+            assert_eq!(require_continuation_role_profile(operation, open), Ok(()));
+        }
+
+        let retirement = continuation(&[
+            ExecutionRoleV1::Core,
+            ExecutionRoleV1::Claims,
+            ExecutionRoleV1::Resolution,
+            ExecutionRoleV1::Custody,
+        ]);
+        for operation in [OperationV1::CloseVault, OperationV1::CloseReplay] {
+            assert_eq!(
+                require_continuation_role_profile(operation, retirement),
+                Ok(())
+            );
+        }
+
+        assert!(
+            RegistryContinuationRequestV1::new(
+                ContentId::new([0x31; 32]).expect("release"),
+                ContentId::new([0x32; 32]).expect("cache"),
+                ContentId::new([0x33; 32]).expect("continuation"),
+                1,
+                ExecutionRoleV1::Core,
+                &[ExecutionRoleV1::Custody, ExecutionRoleV1::Core],
+            )
+            .is_err(),
+            "the Registry contract refuses swapped role order before Custody"
+        );
+        for hostile in [
+            continuation(&[
+                ExecutionRoleV1::Core,
+                ExecutionRoleV1::Claims,
+                ExecutionRoleV1::Custody,
+            ]),
+            continuation(&[ExecutionRoleV1::Core]),
+        ] {
+            assert_eq!(
+                require_continuation_role_profile(OperationV1::OpenVault, hostile),
+                Err(CustodySbfError::Release.into())
+            );
+        }
+        assert_eq!(
+            require_continuation_role_profile(OperationV1::Transfer, open),
+            Err(CustodySbfError::AccountFrame.into())
+        );
     }
 
     #[test]
