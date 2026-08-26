@@ -9,7 +9,7 @@
 
 extern crate alloc;
 
-use alloc::{vec, vec::Vec};
+use alloc::{boxed::Box, vec, vec::Vec};
 
 use dclutch_account_profile_contract::{
     AccountObservationV1,
@@ -1689,6 +1689,35 @@ fn apply_lifecycle_closes_v3(
     Ok(())
 }
 
+#[cfg(any(
+    feature = "families",
+    feature = "series-family",
+    feature = "dealer-family"
+))]
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn decode_claims_composition_boxed_v3<'request>(
+    effect: EffectProgramV3<'_>,
+    tail_count: u32,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+    request_bank: &'request [u8],
+    family_request: &'request [u8],
+    parent: ClaimsCompositionParentV3,
+) -> Result<Box<ClaimsCompositionV3<'request>>, ProgramError> {
+    ClaimsCompositionV3::decode_selected_with_witness(
+        effect,
+        tail_count,
+        scalars,
+        identities,
+        request_bank,
+        family_request,
+        parent,
+    )
+    .map(Box::new)
+    .map_err(|_| TradingSbfError::Content.into())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn preflight_child_routes_v3<'accounts, 'info>(
     program_id: &Pubkey,
@@ -1724,23 +1753,20 @@ fn preflight_child_routes_v3<'accounts, 'info>(
     ))]
     let claims_composition =
         if has_active_role(effect, tail_count, scalars, identities, FixedRole::Claims)? {
-            Some(
-                ClaimsCompositionV3::decode_selected_with_witness(
-                    effect,
-                    tail_count,
-                    scalars,
-                    identities,
-                    request_bank,
-                    family_request,
-                    ClaimsCompositionParentV3 {
-                        release_set: envelope.release_set(),
-                        market: envelope.market(),
-                        generation: envelope.generation(),
-                        parent_request_digest: request_digest,
-                    },
-                )
-                .map_err(|_| TradingSbfError::Content)?,
-            )
+            Some(decode_claims_composition_boxed_v3(
+                effect,
+                tail_count,
+                scalars,
+                identities,
+                request_bank,
+                family_request,
+                ClaimsCompositionParentV3 {
+                    release_set: envelope.release_set(),
+                    market: envelope.market(),
+                    generation: envelope.generation(),
+                    parent_request_digest: request_digest,
+                },
+            )?)
         } else {
             None
         };
@@ -1833,7 +1859,9 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                         feature = "dealer-family"
                     ))]
                     {
-                        let composition = claims_composition.ok_or(TradingSbfError::Content)?;
+                        let composition = claims_composition
+                            .as_deref()
+                            .ok_or(TradingSbfError::Content)?;
                         let selected = claims_program.ok_or(TradingSbfError::Release)?;
                         if invocation_index != 0
                             || !(composition.admit_route() == Some(route)
@@ -1955,23 +1983,20 @@ fn execute_child_routes_v3<'accounts, 'info>(
     ))]
     let claims_composition =
         if has_active_role(effect, tail_count, scalars, identities, FixedRole::Claims)? {
-            Some(
-                ClaimsCompositionV3::decode_selected_with_witness(
-                    effect,
-                    tail_count,
-                    scalars,
-                    identities,
-                    request_bank,
-                    family_request,
-                    ClaimsCompositionParentV3 {
-                        release_set: envelope.release_set(),
-                        market: envelope.market(),
-                        generation: envelope.generation(),
-                        parent_request_digest: request_digest,
-                    },
-                )
-                .map_err(|_| TradingSbfError::Content)?,
-            )
+            Some(decode_claims_composition_boxed_v3(
+                effect,
+                tail_count,
+                scalars,
+                identities,
+                request_bank,
+                family_request,
+                ClaimsCompositionParentV3 {
+                    release_set: envelope.release_set(),
+                    market: envelope.market(),
+                    generation: envelope.generation(),
+                    parent_request_digest: request_digest,
+                },
+            )?)
         } else {
             None
         };
@@ -2137,7 +2162,10 @@ fn execute_child_routes_v3<'accounts, 'info>(
                         let receipt = execute_claims_route_v3(
                             program_id,
                             effect,
-                            claims_composition.ok_or(TradingSbfError::Content)?,
+                            claims_composition
+                                .as_deref()
+                                .copied()
+                                .ok_or(TradingSbfError::Content)?,
                             route,
                             tail_count,
                             scalars,
