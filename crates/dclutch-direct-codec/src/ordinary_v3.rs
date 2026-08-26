@@ -27,7 +27,7 @@ pub const DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3: u16 = 2;
 /// Ordinary has no Product-item identity tail.
 pub const DIRECT_ORDINARY_ITEM_IDENTITY_STRIDE_V3: u16 = 0;
 /// Exact prelude instruction count of the ordinary semantic program.
-pub const DIRECT_ORDINARY_PRELUDE_INSTRUCTIONS_V3: usize = 62;
+pub const DIRECT_ORDINARY_PRELUDE_INSTRUCTIONS_V3: usize = 64;
 /// Exact per-Product-item instruction count of the ordinary semantic program.
 pub const DIRECT_ORDINARY_ITEM_INSTRUCTIONS_V3: usize = 2;
 /// Exact instruction count of the ordinary semantic program.
@@ -139,8 +139,8 @@ pub const SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V3: usize = 48;
 pub const SCALAR_BUYER_RENT_PRINCIPAL_OBSERVATION_V3: usize = 49;
 /// Lifecycle-owned buyer historical rent principal.
 pub const SCALAR_BUYER_RENT_PRINCIPAL_V3: usize = 50;
-/// Reserved transition scratch coordinate.
-pub const SCALAR_LIFECYCLE_SCRATCH_V3: usize = 51;
+/// Program-owned maker replay ABI version after Transition.
+pub const SCALAR_MAKER_VERSION_V3: usize = 51;
 /// Derived seller-intermediate plus fee-continuation route enable bit.
 pub const SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V3: usize = 52;
 /// Derived nonzero combined-fee bit.
@@ -165,6 +165,8 @@ pub const SCALAR_BUYER_BUMP_V3: usize = 61;
 pub const SCALAR_CLAIM_TRANSFER_V3: usize = 62;
 /// Derived terminal fee-only Custody route enable bit.
 pub const SCALAR_FEE_SOLE_ROUTE_ENABLED_V3: usize = 63;
+/// Program-owned maker replay magic word after fee arithmetic completes.
+pub const SCALAR_MAKER_MAGIC_V3: usize = SCALAR_FEE_DENOMINATOR_V3;
 
 /// Per-item scalar slot containing the canonical Product item index.
 pub const ITEM_SCALAR_INDEX_V3: u16 = 0;
@@ -217,8 +219,8 @@ pub const IDENTITY_BUYER_RENT_BENEFICIARY_V3: usize = 20;
 pub const IDENTITY_SELLER_MAKER_ROOT_V3: usize = 21;
 /// Lifecycle-owned buyer maker replay root and Custody context.
 pub const IDENTITY_BUYER_MAKER_ROOT_V3: usize = 22;
-/// Identity register: canonical Custody replay account.
-pub const IDENTITY_CUSTODY_REPLAY_V3: usize = 23;
+/// Identity register: independently observed System Program.
+pub const IDENTITY_SYSTEM_PROGRAM_V3: usize = 23;
 /// Identity register: canonical Custody transfer authority.
 pub const IDENTITY_CUSTODY_AUTHORITY_V3: usize = 24;
 /// Seller persisted rent-beneficiary observation.
@@ -325,8 +327,8 @@ pub struct DirectOrdinaryAuthenticatedContextV3 {
     pub seller_maker_root: [u8; 32],
     /// Buyer maker replay root and Custody context.
     pub buyer_maker_root: [u8; 32],
-    /// Canonical Custody replay account.
-    pub custody_replay: [u8; 32],
+    /// Canonical System Program account used to anchor lifecycle payers.
+    pub system_program: [u8; 32],
     /// Canonical Custody authority.
     pub custody_authority: [u8; 32],
     /// Lifecycle-owned seller immutable rent beneficiary.
@@ -400,7 +402,7 @@ pub fn project_direct_ordinary_registers_v3(
         context.buyer_rent_beneficiary,
         context.seller_maker_root,
         context.buyer_maker_root,
-        context.custody_replay,
+        context.system_program,
         context.custody_authority,
         context.seller_rent_beneficiary_observation,
         context.buyer_rent_beneficiary_observation,
@@ -774,6 +776,14 @@ const DIRECT_ORDINARY_PRELUDE_V3: [InstructionV3; DIRECT_ORDINARY_PRELUDE_INSTRU
         scalar(SCALAR_ZERO_V3),
         scalar(SCALAR_CLAIM_TRANSFER_V3),
     ),
+    InstructionV3::load_const(
+        scalar(SCALAR_MAKER_VERSION_V3),
+        crate::successor::DirectMakerReplayLayoutV1::ABI_VERSION as u64,
+    ),
+    InstructionV3::load_const(
+        scalar(SCALAR_MAKER_MAGIC_V3),
+        crate::successor::DirectMakerReplayLayoutV1::MAGIC_WORD,
+    ),
 ];
 
 const DIRECT_ORDINARY_ITEM_V3: [InstructionV3; DIRECT_ORDINARY_ITEM_INSTRUCTIONS_V3] = [
@@ -888,7 +898,7 @@ mod tests {
             token_program: id(40),
             seller_maker_root: id(42),
             buyer_maker_root: id(43),
-            custody_replay: id(44),
+            system_program: id(44),
             custody_authority: id(45),
             seller_rent_beneficiary: id(71),
             seller_rent_beneficiary_observation: id(71),
@@ -957,7 +967,7 @@ mod tests {
             + 4 * usize::from(DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3);
         let mut output = std::vec![99_u64; scalar_width];
         execute(request(), context(config), &mut output).expect("ordinary transition");
-        assert_eq!(DIRECT_ORDINARY_TRANSITION_BYTES_V3, 1_568);
+        assert_eq!(DIRECT_ORDINARY_TRANSITION_BYTES_V3, 1_616);
         assert_eq!(output[SCALAR_SELLER_NONCE_AFTER_V3], 5);
         assert_eq!(output[SCALAR_BUYER_NONCE_AFTER_V3], 10);
         assert_eq!(output[SCALAR_GROSS_V3], 10);
@@ -974,6 +984,14 @@ mod tests {
         assert_eq!(output[SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V3], 1);
         assert_eq!(output[SCALAR_FEE_NONZERO_V3], 1);
         assert_eq!(output[SCALAR_FEE_SOLE_ROUTE_ENABLED_V3], 0);
+        assert_eq!(
+            output[SCALAR_MAKER_MAGIC_V3],
+            crate::successor::DirectMakerReplayLayoutV1::MAGIC_WORD
+        );
+        assert_eq!(
+            output[SCALAR_MAKER_VERSION_V3],
+            u64::from(crate::successor::DirectMakerReplayLayoutV1::ABI_VERSION)
+        );
         assert_eq!(output[SCALAR_CUSTODY_AFTER_SELLER_V3], 15);
         assert_eq!(output[SCALAR_CUSTODY_AFTER_FEE_V3], 16);
         assert_eq!(output[SCALAR_CLAIM_TRANSFER_V3], 20);
