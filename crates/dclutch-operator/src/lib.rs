@@ -48,6 +48,8 @@ pub mod direct_successor;
 pub mod foundation;
 /// Chain-derived unsigned General physical-controller workflows.
 pub mod general_physical;
+/// Chain-derived inspection of immutable Core/Registry/Rent infrastructure.
+pub mod infrastructure;
 /// Chain-derived registered Direct execution and terminal workflows.
 pub mod registered_direct;
 /// Chain-derived unsigned Registry activation and reauthentication workflows.

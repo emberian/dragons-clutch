@@ -15,8 +15,10 @@ use dclutch_pyth_svm::{
 };
 use sha2::{Digest, Sha256};
 
+mod infrastructure;
 mod multiprogram;
 
+pub use infrastructure::*;
 pub use multiprogram::*;
 
 /// Canonical checked-release magic.
@@ -143,6 +145,12 @@ pub enum Error {
     /// Supplied checked-release manifests rebuilt to a different multiprogram
     /// evidence manifest.
     CheckedMultiprogramManifestMismatch,
+    /// A checked infrastructure evidence manifest was malformed or noncanonical.
+    InvalidInfrastructureManifest,
+    /// Supplied checked manifests rebuilt to different infrastructure evidence.
+    CheckedInfrastructureManifestMismatch,
+    /// Core, Registry, and Rent infrastructure must all be immutable.
+    InfrastructureMustBeImmutable,
 }
 
 impl fmt::Display for Error {
