@@ -30,7 +30,7 @@ use dclutch_effect_kernel::{
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
-    hash::{Hasher, hash, hashv},
+    hash::{hash, hashv},
     instruction::{AccountMeta, Instruction},
     program::{get_return_data, invoke_signed},
     program_error::ProgramError,
@@ -419,14 +419,14 @@ fn signed_delta_post_resource_digest(
     if child_accounts.len() != expected {
         return Err(TradingSbfError::Content.into());
     }
-    let mut hasher = Hasher::default();
-    hasher.hash(b"dclutch/claims/signed-delta-post-resources/v3");
+    let mut preimage = Vec::new();
+    preimage.extend_from_slice(b"dclutch/claims/signed-delta-post-resources/v3");
     let market = child_accounts
         .get(1)
         .ok_or(TradingSbfError::Content)?
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Transition)?;
-    hasher.hash(&market);
+    preimage.extend_from_slice(&market);
     let end = 20_usize
         .checked_add(positions)
         .ok_or(TradingSbfError::Content)?;
@@ -437,9 +437,9 @@ fn signed_delta_post_resource_digest(
         let data = account
             .try_borrow_data()
             .map_err(|_| TradingSbfError::Transition)?;
-        hasher.hash(&data);
+        preimage.extend_from_slice(&data);
     }
-    Ok(hasher.result().to_bytes())
+    Ok(hash(&preimage).to_bytes())
 }
 
 fn sparse_native_post_resource_digest(
@@ -448,17 +448,17 @@ fn sparse_native_post_resource_digest(
     if child_accounts.len() != 23 {
         return Err(TradingSbfError::Content.into());
     }
-    let mut hasher = Hasher::default();
-    hasher.hash(b"dclutch/claims/sparse-native-post/v1");
+    let mut preimage = Vec::new();
+    preimage.extend_from_slice(b"dclutch/claims/sparse-native-post/v1");
     for index in [1_usize, 20, 21] {
         let data = child_accounts
             .get(index)
             .ok_or(TradingSbfError::Content)?
             .try_borrow_data()
             .map_err(|_| TradingSbfError::Transition)?;
-        hasher.hash(&data);
+        preimage.extend_from_slice(&data);
     }
-    Ok(hasher.result().to_bytes())
+    Ok(hash(&preimage).to_bytes())
 }
 
 #[cfg(test)]
