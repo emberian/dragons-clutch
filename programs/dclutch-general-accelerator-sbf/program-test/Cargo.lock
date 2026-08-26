@@ -1558,6 +1558,7 @@ dependencies = [
  "dclutch-rational-representation-v2-kernel",
  "dclutch-rational-representation-v2-lifecycle-contract",
  "dclutch-rational-representation-v2-request-contract",
+ "dclutch-representation-composition-v3-kernel",
 ]
 
 [[package]]
@@ -1590,13 +1591,20 @@ dependencies = [
 name = "dclutch-general-accelerator-program-test"
 version = "0.1.0"
 dependencies = [
+ "dclutch-account-profile-contract",
  "dclutch-capability-program-contract",
  "dclutch-core-contract",
+ "dclutch-custody-contract",
+ "dclutch-effect-kernel",
  "dclutch-execution-strategy-contract",
  "dclutch-general-accelerator-test-caller-sbf",
  "dclutch-general-adapter-contract",
  "dclutch-general-codec",
  "dclutch-general-config-contract",
+ "dclutch-product-runtime-v2",
+ "dclutch-release-set-contract",
+ "dclutch-request-profile-contract",
+ "dclutch-transition-vm",
  "solana-account 4.3.2",
  "solana-program",
  "solana-program-test",
@@ -1651,6 +1659,7 @@ name = "dclutch-market-core-codec"
 version = "0.1.0"
 dependencies = [
  "dclutch-release-set-contract",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -1677,6 +1686,7 @@ name = "dclutch-rational-representation-v2-kernel"
 version = "0.1.0"
 dependencies = [
  "dclutch-product-payoff-v2-codec",
+ "dclutch-representation-composition-v3-kernel",
 ]
 
 [[package]]
@@ -1700,6 +1710,10 @@ version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
 ]
+
+[[package]]
+name = "dclutch-representation-composition-v3-kernel"
+version = "0.1.0"
 
 [[package]]
 name = "dclutch-request-profile-contract"

@@ -15,6 +15,7 @@ dclutch-claims-svm = { path = "../../../crates/dclutch-claims-svm" }
 dclutch-core-contract = { path = "../../../crates/dclutch-core-contract" }
 dclutch-custody-contract = { path = "../../../crates/dclutch-custody-contract" }
 dclutch-direct-codec = { path = "../../../crates/dclutch-direct-codec" }
+dclutch-direct-hot-program-test-support = { path = "direct-hot" }
 dclutch-effect-kernel = { path = "../../../crates/dclutch-effect-kernel" }
 dclutch-market-core-codec = { path = "../../../crates/dclutch-market-core-codec" }
 dclutch-product-payoff-v2-codec = { path = "../../../crates/dclutch-product-payoff-v2-codec" }
@@ -26,6 +27,7 @@ dclutch-registry-contract = { path = "../../../crates/dclutch-registry-contract"
 dclutch-registry-svm = { path = "../../../crates/dclutch-registry-svm" }
 dclutch-release-set-contract = { path = "../../../crates/dclutch-release-set-contract" }
 dclutch-rent-contract = { path = "../../../crates/dclutch-rent-contract" }
+dclutch-token-svm = { path = "../../../crates/dclutch-token-svm" }
 dclutch-trading-sbf = { path = "..", features = ["no-entrypoint"] }
 solana-account = "=4.3.2"
 solana-address-lookup-table-interface = { version = "=3.1.0", features = ["bincode", "bytemuck"] }

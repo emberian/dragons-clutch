@@ -6,12 +6,26 @@
 
 use std::{env, fs, path::PathBuf};
 
-use dclutch_capability_program_contract::hot_v3::{
-    HOT_ACTIVATION_CACHE_ACCOUNT_V3, HOT_CORE_PROGRAM_ACCOUNT_V3, HOT_CORE_PROGRAMDATA_ACCOUNT_V3,
-    HOT_FIXED_ACCOUNT_COUNT_V3, HOT_REGISTRY_PROGRAM_ACCOUNT_V3, HOT_RENT_SYSVAR_ACCOUNT_V3,
-    HOT_TRADING_PROGRAM_ACCOUNT_V3, HOT_TRADING_PROGRAMDATA_ACCOUNT_V3,
+use dclutch_capability_program_contract::{
+    CAPABILITY_ROOT_HEADER_BYTES_V1,
+    hot_v3::{
+        HOT_ACTIVATION_CACHE_ACCOUNT_V3, HOT_CORE_PROGRAM_ACCOUNT_V3,
+        HOT_CORE_PROGRAMDATA_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
+        HOT_REGISTRY_PROGRAM_ACCOUNT_V3, HOT_RENT_SYSVAR_ACCOUNT_V3,
+        HOT_TRADING_PROGRAM_ACCOUNT_V3, HOT_TRADING_PROGRAMDATA_ACCOUNT_V3, HotExecutionEnvelopeV3,
+    },
 };
 use dclutch_core_contract::ContentId;
+use dclutch_custody_contract::CustodyReplayV1;
+use dclutch_direct_codec::native_evidence_v3::{
+    DIRECT_NATIVE_EVIDENCE_BYTES_V3, encode_direct_headerless_registry_native_evidence_v4_atomic,
+};
+use dclutch_direct_codec::successor::{DirectMakerReplayLayoutV1, DirectRootStateLayoutV1};
+use dclutch_direct_hot_program_test_support::{
+    DirectHotDeploymentWidthsV5,
+    chain::install_direct_hot_chain_accounts_v5,
+    fixture::{DirectHotChainFixtureV5, DirectHotChainInputV5, build_direct_hot_chain_fixture_v5},
+};
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
@@ -19,25 +33,29 @@ use dclutch_registry_contract::{
     initialize_activation_cache_v1,
 };
 use dclutch_registry_svm::continuation_v1::{
-    REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationAdmissionSeedsV1,
-    RegistryContinuationRequestV1,
+    REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationRequestV1,
+};
+use dclutch_registry_svm::continuation_v2::{
+    TransparentHotAdmissionSeedsV2, TransparentHotContinuationV2,
 };
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
     ProgramIdentityV1,
 };
+use dclutch_token_svm::TokenAccount;
 use solana_account::{Account, AccountSharedData};
 use solana_address_lookup_table_interface::state::{AddressLookupTable, LookupTableMeta};
 use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
 use solana_program::{
+    clock::Clock,
     hash::hash,
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
     rent::Rent,
 };
 use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
-use solana_sdk::signature::Signer;
-use solana_sdk_ids::{bpf_loader_upgradeable, sysvar};
+use solana_sdk::signature::{Keypair, Signer};
+use solana_sdk_ids::{bpf_loader_upgradeable, ed25519_program, system_program, sysvar};
 use solana_transaction::versioned::VersionedTransaction;
 
 const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x91; 32]);
@@ -63,6 +81,13 @@ struct Releases {
     activation_digest: [u8; 32],
     core_programdata: Pubkey,
     trading_programdata: Pubkey,
+    claims_programdata: Pubkey,
+}
+
+struct DirectCase {
+    chain: DirectHotChainFixtureV5,
+    payer: Keypair,
+    makers: [Keypair; 2],
 }
 
 fn content(value: [u8; 32]) -> ContentId {
@@ -218,6 +243,101 @@ fn add_release_waist(test: &mut ProgramTest, artifacts: &Elves) -> Releases {
         activation_digest,
         core_programdata: programdata(CORE_PROGRAM_ID),
         trading_programdata: programdata(TRADING_PROGRAM_ID),
+        claims_programdata: programdata(CLAIMS_PROGRAM_ID),
+    }
+}
+
+fn direct_case(
+    test: &mut ProgramTest,
+    releases: Releases,
+    artifacts: &Elves,
+    corrupt_destination: bool,
+) -> DirectCase {
+    let payer = Keypair::new();
+    let makers = [Keypair::new(), Keypair::new()];
+    let clock = Clock {
+        slot: 1,
+        ..Clock::default()
+    };
+    test.add_sysvar_account(sysvar::clock::ID, &clock);
+    test.add_account(
+        payer.pubkey(),
+        Account {
+            lamports: 10_000_000_000,
+            data: Vec::new(),
+            owner: system_program::ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+    let deployment_widths = DirectHotDeploymentWidthsV5::new(
+        immutable_programdata(&artifacts.trading).len(),
+        immutable_programdata(&artifacts.claims).len(),
+        immutable_programdata(&artifacts.core).len(),
+    )
+    .expect("real Direct deployment widths");
+    let mut chain = build_direct_hot_chain_fixture_v5(DirectHotChainInputV5 {
+        registry_program: REGISTRY_PROGRAM_ID,
+        trading_program: TRADING_PROGRAM_ID,
+        core_program: CORE_PROGRAM_ID,
+        claims_program: CLAIMS_PROGRAM_ID,
+        custody_program: CUSTODY_PROGRAM_ID,
+        release_set: releases.release_set,
+        activation_cache: releases.activation,
+        trading_programdata: releases.trading_programdata,
+        core_programdata: releases.core_programdata,
+        claims_programdata: releases.claims_programdata,
+        deployment_widths,
+        payer: payer.pubkey(),
+        makers: [makers[0].pubkey(), makers[1].pubkey()],
+        clock_slot: clock.slot,
+    })
+    .expect("canonical Profile14 Direct chain fixture");
+    if corrupt_destination {
+        let destination = chain.collateral_accounts[1];
+        let account = chain
+            .accounts
+            .iter_mut()
+            .find(|value| value.key == destination)
+            .expect("Custody destination fixture account");
+        let state = account
+            .account
+            .data
+            .get_mut(108)
+            .expect("base token state byte");
+        *state = 0;
+        assert!(TokenAccount::parse(&account.account.data).is_ok());
+    }
+    for (index, candidate) in chain.accounts.iter().enumerate() {
+        if candidate.key == Pubkey::default() {
+            assert_eq!(candidate.key, system_program::ID);
+            assert!(chain.externally_installed_keys.contains(&candidate.key));
+        }
+        let prior = chain
+            .accounts
+            .get(..index)
+            .and_then(|accounts| accounts.iter().position(|other| other.key == candidate.key));
+        assert!(
+            prior.is_none(),
+            "Direct fixture account {index} aliases account {prior:?}: {}",
+            candidate.key
+        );
+    }
+    let installed = install_direct_hot_chain_accounts_v5(
+        test,
+        &Rent::default(),
+        &chain.accounts,
+        &chain.externally_installed_keys,
+    )
+    .expect("install canonical Direct-owned accounts");
+    assert_eq!(
+        installed.rollback_snapshot_keys,
+        chain.rollback_snapshot_keys
+    );
+    DirectCase {
+        chain,
+        payer,
+        makers,
     }
 }
 
@@ -225,16 +345,16 @@ fn registry_hot_instruction(releases: Releases, mut hot: Instruction) -> (Instru
     assert_eq!(hot.program_id, TRADING_PROGRAM_ID);
     assert!(hot.accounts.len() >= HOT_FIXED_ACCOUNT_COUNT_V3);
     let cache_digest = content(releases.activation_digest);
-    let continuation_digest = content(hash(&hot.data).to_bytes());
-    let continuation = RegistryContinuationRequestV1::new_core_trading_hot(
+    let hot_digest = content(hash(&hot.data).to_bytes());
+    let continuation = TransparentHotContinuationV2::new(
         content(releases.release_set),
         cache_digest,
-        continuation_digest,
+        hot_digest,
         u32::try_from(hot.data.len()).expect("Hot width"),
     )
-    .expect("Core+Trading Hot continuation");
+    .expect("transparent Core+Trading Hot continuation");
     let batch = continuation.role_batch_request().expect("role batch");
-    let seeds = RegistryContinuationAdmissionSeedsV1::new(
+    let seeds = TransparentHotAdmissionSeedsV2::new(
         continuation,
         releases.activation.to_bytes(),
         content(hash(&batch.to_bytes()).to_bytes()),
@@ -245,7 +365,7 @@ fn registry_hot_instruction(releases: Releases, mut hot: Instruction) -> (Instru
     let batch = seeds.batch_request_digest();
     let mask = seeds.role_mask();
     let role = seeds.continuation_role();
-    let digest = seeds.continuation_digest();
+    let digest = seeds.hot_instruction_digest();
     let admission = Pubkey::find_program_address(
         &[
             seeds.domain(),
@@ -272,17 +392,62 @@ fn registry_hot_instruction(releases: Releases, mut hot: Instruction) -> (Instru
         AccountMeta::new_readonly(admission, false),
     ];
     accounts.extend(hot.accounts);
-    let mut data = Vec::with_capacity(REGISTRY_CONTINUATION_REQUEST_BYTES_V1 + hot.data.len());
-    data.extend_from_slice(&continuation.to_bytes());
-    data.extend_from_slice(&hot.data);
     (
         Instruction {
             program_id: REGISTRY_PROGRAM_ID,
             accounts,
-            data,
+            data: hot.data,
         },
         admission,
     )
+}
+
+fn legacy_registry_hot_instruction(releases: Releases, hot: Instruction) -> (Instruction, Pubkey) {
+    let (mut outer, admission) = registry_hot_instruction(releases, hot);
+    let request = RegistryContinuationRequestV1::new_core_trading_hot(
+        content(releases.release_set),
+        content(releases.activation_digest),
+        content(hash(&outer.data).to_bytes()),
+        u32::try_from(outer.data.len()).expect("Hot width"),
+    )
+    .expect("legacy headered continuation");
+    let mut data = Vec::with_capacity(REGISTRY_CONTINUATION_REQUEST_BYTES_V1 + outer.data.len());
+    data.extend_from_slice(&request.to_bytes());
+    data.extend_from_slice(&outer.data);
+    outer.data = data;
+    (outer, admission)
+}
+
+fn direct_registry_instructions(releases: Releases, direct: &DirectCase) -> [Instruction; 2] {
+    let (registry, _) = registry_hot_instruction(releases, direct.chain.hot_instruction.clone());
+    let signatures = [
+        direct.makers[0]
+            .sign_message(&direct.chain.signed_messages[0])
+            .as_ref()
+            .try_into()
+            .expect("seller signature width"),
+        direct.makers[1]
+            .sign_message(&direct.chain.signed_messages[1])
+            .as_ref()
+            .try_into()
+            .expect("buyer signature width"),
+    ];
+    let mut evidence = [0_u8; DIRECT_NATIVE_EVIDENCE_BYTES_V3];
+    encode_direct_headerless_registry_native_evidence_v4_atomic(
+        1,
+        &registry.data,
+        signatures,
+        &mut evidence,
+    )
+    .expect("detached current-Registry native evidence");
+    [
+        Instruction {
+            program_id: ed25519_program::ID,
+            accounts: Vec::new(),
+            data: evidence.to_vec(),
+        },
+        registry,
+    ]
 }
 
 fn canonical_lookup_addresses(instructions: &[Instruction], payer: Pubkey) -> Vec<Pubkey> {
@@ -324,11 +489,14 @@ async fn submit_v0(
     context: &mut ProgramTestContext,
     instructions: &[Instruction],
     addresses: Vec<Pubkey>,
+    transaction_payer: Option<&Keypair>,
+    signers: &[&Keypair],
 ) -> Result<u64, BanksClientError> {
     let blockhash = context.banks_client.get_latest_blockhash().await?;
+    let transaction_payer = transaction_payer.unwrap_or(&context.payer);
     let message = VersionedMessage::V0(
         v0::Message::try_compile(
-            &context.payer.pubkey(),
+            &transaction_payer.pubkey(),
             instructions,
             &[AddressLookupTableAccount {
                 key: LOOKUP_TABLE,
@@ -339,14 +507,31 @@ async fn submit_v0(
         .expect("canonical v0 message"),
     );
     let wire = 1_usize
-        .checked_add(64)
+        .checked_add(
+            64_usize
+                .checked_mul(signers.len() + 1)
+                .expect("signature span"),
+        )
         .and_then(|prefix| prefix.checked_add(message.serialize().len()))
         .expect("v0 wire width");
-    assert!(wire <= 1_232, "canonical continuation packet overflow");
-    let transaction = VersionedTransaction {
-        signatures: vec![context.payer.sign_message(&message.serialize())],
-        message,
-    };
+    assert!(
+        wire <= 1_232,
+        "canonical continuation packet overflow: {wire} bytes"
+    );
+    if instructions.len() == 2
+        && instructions
+            .first()
+            .is_some_and(|instruction| instruction.program_id == ed25519_program::ID)
+        && instructions
+            .get(1)
+            .is_some_and(|instruction| instruction.program_id == REGISTRY_PROGRAM_ID)
+    {
+        assert_eq!(wire, 1_224, "transparent continuation wire changed");
+    }
+    let mut all_signers = vec![transaction_payer];
+    all_signers.extend_from_slice(signers);
+    let transaction = VersionedTransaction::try_new(message, &all_signers)
+        .expect("complete canonical v0 signatures");
     let processed = context
         .banks_client
         .process_transaction_with_metadata(transaction)
@@ -360,6 +545,7 @@ async fn submit_v0(
 
 fn program_test(artifacts: &Elves) -> ProgramTest {
     let mut test = ProgramTest::default();
+    test.prefer_bpf(true);
     test.set_compute_max_units(COMPUTE_LIMIT);
     add_program(
         &mut test,
@@ -433,13 +619,28 @@ fn registry_boundary_hot(releases: Releases) -> Instruction {
     ] {
         *accounts.get_mut(index).expect("fixed Hot account") = meta;
     }
+    let request = b"registry-boundary-fixture";
+    let envelope = HotExecutionEnvelopeV3::new(
+        u32::try_from(request.len()).expect("boundary request width"),
+        releases.release_set,
+        accounts
+            .first()
+            .expect("boundary Market account")
+            .pubkey
+            .to_bytes(),
+        1,
+        [0x71; 32],
+    )
+    .expect("canonical boundary envelope");
+    let mut data = Vec::with_capacity(128 + request.len());
+    data.extend_from_slice(&envelope.to_bytes());
+    data.extend_from_slice(request);
     Instruction {
         program_id: TRADING_PROGRAM_ID,
         accounts,
-        // Registry authenticates these exact bytes before the explicit Trading
-        // continuation entrypoint interprets them.  The hostile tests below
-        // deliberately refuse before that child boundary.
-        data: b"DCLTHOT3registry-boundary-fixture".to_vec(),
+        // Hostile cases below refuse at the Registry boundary before the
+        // intentionally incomplete child fixture can execute.
+        data,
     }
 }
 
@@ -450,6 +651,46 @@ async fn activation_snapshot(context: &mut ProgramTestContext, activation: Pubke
         .await
         .expect("activation read")
         .expect("activation account")
+}
+
+async fn account_snapshots(
+    context: &mut ProgramTestContext,
+    keys: &[Pubkey],
+) -> Vec<(Pubkey, Option<Account>)> {
+    let mut output = Vec::with_capacity(keys.len());
+    for key in keys {
+        let account = context
+            .banks_client
+            .get_account(*key)
+            .await
+            .expect("rollback account read");
+        output.push((*key, account));
+    }
+    output
+}
+
+async fn account(context: &mut ProgramTestContext, key: Pubkey) -> Account {
+    context
+        .banks_client
+        .get_account(key)
+        .await
+        .expect("account read")
+        .expect("live account")
+}
+
+async fn corrupt_account_byte(
+    context: &mut ProgramTestContext,
+    key: Pubkey,
+    offset: usize,
+) -> Account {
+    let mut value = account(context, key).await;
+    let byte = value
+        .data
+        .get_mut(offset)
+        .expect("hostile state byte in bounds");
+    *byte ^= 1;
+    context.set_account(&key, &AccountSharedData::from(value.clone()));
+    value
 }
 
 async fn assert_registry_refusal(
@@ -463,7 +704,7 @@ async fn assert_registry_refusal(
     let mut context = test.start_with_context().await;
     let before = activation_snapshot(&mut context, releases.activation).await;
     assert!(
-        submit_v0(&mut context, &[instruction], addresses)
+        submit_v0(&mut context, &[instruction], addresses, None, &[])
             .await
             .is_err(),
         "hostile Registry continuation unexpectedly executed"
@@ -503,30 +744,19 @@ fn release_fixture_uses_five_distinct_real_artifacts() {
 }
 
 #[test]
-fn wrapper_preserves_exact_hot_bytes_and_places_one_nested_admission_at_38() {
+fn transparent_wrapper_preserves_exact_hot_bytes_and_places_one_admission_at_38() {
     let releases = Releases {
         release_set: [0x41; 32],
         activation: Pubkey::new_from_array([0x42; 32]),
         activation_digest: [0x43; 32],
         core_programdata: Pubkey::new_from_array([0x44; 32]),
         trading_programdata: Pubkey::new_from_array([0x45; 32]),
+        claims_programdata: Pubkey::new_from_array([0x46; 32]),
     };
     let hot = registry_boundary_hot(releases);
     let exact_hot_bytes = hot.data.clone();
     let (outer, admission) = registry_hot_instruction(releases, hot);
-    let header = RegistryContinuationRequestV1::decode(
-        outer
-            .data
-            .get(..REGISTRY_CONTINUATION_REQUEST_BYTES_V1)
-            .expect("continuation header"),
-    )
-    .expect("typed continuation");
-    assert_eq!(header.role_count(), 2);
-    assert_eq!(header.continuation_role(), ExecutionRoleV1::Trading);
-    assert_eq!(
-        outer.data.get(REGISTRY_CONTINUATION_REQUEST_BYTES_V1..),
-        Some(exact_hot_bytes.as_slice())
-    );
+    assert_eq!(outer.data, exact_hot_bytes);
     let child = outer.accounts.get(6..).expect("nested Hot frame");
     assert_eq!(
         child
@@ -541,6 +771,16 @@ fn wrapper_preserves_exact_hot_bytes_and_places_one_nested_admission_at_38() {
 }
 
 #[tokio::test]
+async fn real_registry_refuses_legacy_headered_hot_container_atomically() {
+    let artifacts = elves();
+    let mut test = program_test(&artifacts);
+    let releases = add_release_waist(&mut test, &artifacts);
+    let (instruction, _) =
+        legacy_registry_hot_instruction(releases, registry_boundary_hot(releases));
+    assert_registry_refusal(test, releases, instruction).await;
+}
+
+#[tokio::test]
 async fn real_registry_refuses_reordered_core_and_trading_roles_atomically() {
     let artifacts = elves();
     let mut test = program_test(&artifacts);
@@ -551,30 +791,26 @@ async fn real_registry_refuses_reordered_core_and_trading_roles_atomically() {
 }
 
 #[tokio::test]
-async fn real_registry_refuses_stale_core_programdata_atomically() {
+async fn real_registry_refuses_substituted_core_programdata_atomically() {
     let artifacts = elves();
     let mut test = program_test(&artifacts);
     let releases = add_release_waist(&mut test, &artifacts);
-    let (instruction, _) = registry_hot_instruction(releases, registry_boundary_hot(releases));
+    let (mut instruction, _) = registry_hot_instruction(releases, registry_boundary_hot(releases));
+    *instruction
+        .accounts
+        .get_mut(2)
+        .expect("Core ProgramData prefix") =
+        AccountMeta::new_readonly(releases.trading_programdata, false);
     let addresses =
         canonical_lookup_addresses(core::slice::from_ref(&instruction), Pubkey::default());
     add_lookup_table(&mut test, &addresses);
     let mut context = test.start_with_context().await;
     let before = activation_snapshot(&mut context, releases.activation).await;
-    let mut stale = context
-        .banks_client
-        .get_account(releases.core_programdata)
-        .await
-        .expect("ProgramData read")
-        .expect("Core ProgramData");
-    let last = stale.data.last_mut().expect("Core ELF byte");
-    *last ^= 1;
-    context.set_account(&releases.core_programdata, &AccountSharedData::from(stale));
     assert!(
-        submit_v0(&mut context, &[instruction], addresses)
+        submit_v0(&mut context, &[instruction], addresses, None, &[])
             .await
             .is_err(),
-        "stale Core deployment unexpectedly authenticated"
+        "substituted Core ProgramData unexpectedly authenticated"
     );
     let after = activation_snapshot(&mut context, releases.activation).await;
     assert_eq!(after, before, "deployment refusal mutated release evidence");
@@ -604,4 +840,159 @@ async fn real_registry_refuses_aliased_ephemeral_admission_atomically() {
         .get_mut(child_start)
         .expect("first Hot account") = AccountMeta::new_readonly(admission, false);
     assert_registry_refusal(test, releases, instruction).await;
+}
+
+#[tokio::test]
+async fn real_registry_executes_profile14_direct_hot_under_protocol_limit() {
+    let artifacts = elves();
+    let mut test = program_test(&artifacts);
+    let releases = add_release_waist(&mut test, &artifacts);
+    let direct = direct_case(&mut test, releases, &artifacts, false);
+    let instructions = direct_registry_instructions(releases, &direct);
+    let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
+    add_lookup_table(&mut test, &addresses);
+    let mut context = test.start_with_context().await;
+    let before = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
+    let units = submit_v0(
+        &mut context,
+        &instructions,
+        addresses,
+        Some(&direct.payer),
+        &[],
+    )
+    .await
+    .expect("Registry-authenticated Direct Hot execution");
+    assert!(units > 0 && units <= COMPUTE_LIMIT);
+
+    let root = account(&mut context, direct.chain.root).await;
+    assert_eq!(root.owner, TRADING_PROGRAM_ID);
+    assert!(!root.data.is_empty());
+    let replay = account(&mut context, direct.chain.custody_replay).await;
+    let replay = CustodyReplayV1::decode(&replay.data).expect("post-Custody replay");
+    assert_eq!(replay.next_revision, 8);
+    let source = account(&mut context, direct.chain.collateral_accounts[0]).await;
+    let destination = account(&mut context, direct.chain.collateral_accounts[1]).await;
+    assert_eq!(
+        TokenAccount::parse(&source.data)
+            .expect("source token")
+            .amount,
+        95
+    );
+    assert_eq!(
+        TokenAccount::parse(&destination.data)
+            .expect("destination token")
+            .amount,
+        35
+    );
+    let after = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
+    assert_ne!(
+        after, before,
+        "successful Direct Hot left no material state change"
+    );
+}
+
+#[tokio::test]
+async fn late_custody_refusal_rolls_back_registry_hot_claims_and_lifecycle() {
+    let artifacts = elves();
+    let mut test = program_test(&artifacts);
+    let releases = add_release_waist(&mut test, &artifacts);
+    let direct = direct_case(&mut test, releases, &artifacts, true);
+    let instructions = direct_registry_instructions(releases, &direct);
+    let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
+    add_lookup_table(&mut test, &addresses);
+    let mut context = test.start_with_context().await;
+    let before = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
+    assert!(
+        submit_v0(
+            &mut context,
+            &instructions,
+            addresses,
+            Some(&direct.payer),
+            &[],
+        )
+        .await
+        .is_err(),
+        "uninitialized Custody destination unexpectedly accepted"
+    );
+    let after = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
+    assert_eq!(
+        after, before,
+        "late Custody refusal failed to roll back Claims/lifecycle bytes or lamports"
+    );
+}
+
+#[tokio::test]
+async fn corrupt_profile14_root_reserved_byte_refuses_without_mutation() {
+    let artifacts = elves();
+    let mut test = program_test(&artifacts);
+    let releases = add_release_waist(&mut test, &artifacts);
+    let direct = direct_case(&mut test, releases, &artifacts, false);
+    let instructions = direct_registry_instructions(releases, &direct);
+    let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
+    add_lookup_table(&mut test, &addresses);
+    let mut context = test.start_with_context().await;
+    corrupt_account_byte(
+        &mut context,
+        direct.chain.root,
+        CAPABILITY_ROOT_HEADER_BYTES_V1 + DirectRootStateLayoutV1::RESERVED,
+    )
+    .await;
+    let before = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
+    assert!(
+        submit_v0(
+            &mut context,
+            &instructions,
+            addresses,
+            Some(&direct.payer),
+            &[],
+        )
+        .await
+        .is_err(),
+        "noncanonical Direct root unexpectedly accepted"
+    );
+    let after = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
+    assert_eq!(after, before, "root refusal mutated Profile14 state");
+}
+
+#[tokio::test]
+async fn corrupt_live_profile14_maker_reserved_byte_refuses_without_mutation() {
+    let artifacts = elves();
+    let mut test = program_test(&artifacts);
+    let releases = add_release_waist(&mut test, &artifacts);
+    let direct = direct_case(&mut test, releases, &artifacts, false);
+    let instructions = direct_registry_instructions(releases, &direct);
+    let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
+    add_lookup_table(&mut test, &addresses);
+    let mut context = test.start_with_context().await;
+    submit_v0(
+        &mut context,
+        &instructions,
+        addresses.clone(),
+        Some(&direct.payer),
+        &[],
+    )
+    .await
+    .expect("first-use execution creates live maker replay");
+    let hostile = corrupt_account_byte(
+        &mut context,
+        direct.chain.maker_replays[0],
+        DirectMakerReplayLayoutV1::RESERVED,
+    )
+    .await;
+    assert_eq!(hostile.owner, TRADING_PROGRAM_ID);
+    let before = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
+    assert!(
+        submit_v0(
+            &mut context,
+            &instructions,
+            addresses,
+            Some(&direct.payer),
+            &[],
+        )
+        .await
+        .is_err(),
+        "noncanonical live maker replay unexpectedly accepted"
+    );
+    let after = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
+    assert_eq!(after, before, "maker refusal mutated Profile14 state");
 }
