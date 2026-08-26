@@ -9,23 +9,29 @@
 
 use dclutch_core_contract::ContentId;
 use dclutch_execution_strategy_contract::v2::{
-    AcceleratorAckV2, StrategyDispositionV2, resolve_execution_candidate_v2,
+    AcceleratorAckV2, ExecutionCandidateV2, StrategyDispositionV2, resolve_execution_candidate_v2,
 };
-use dclutch_general_codec::Action;
+use dclutch_general_codec::{Action, SelectionPolicyV1};
 use sha2::{Digest, Sha256};
 
 use crate::{
     artifacts_v3::{
-        GeneralArtifactBytesV3, GeneralArtifactSelectionV3, authenticate_general_artifacts_v3,
+        GeneralArtifactBundleV3, GeneralArtifactBytesV3, GeneralArtifactSelectionV3,
+        authenticate_general_artifacts_v3,
     },
     hot_candidate_v3::{
         GENERAL_HOT_COMMON_IDENTITIES_V3, GeneralHotEnvironmentV3, general_hot_scalar_count_v3,
-        project_general_hot_candidate_v3,
+        project_general_hot_candidate_v3, project_general_initialize_candidate_v3,
+        project_general_selection_candidate_v3,
+    },
+    runtime_selection::{
+        RuntimeSelectionCursorV2, consider_verified_candidate_v2, freeze_selection_v2,
     },
     runtime_settlement::{
         RuntimeSettlementActionV2, RuntimeSettlementBuffersV2, RuntimeSettlementViewV2,
-        evaluate_runtime_settlement_v2,
+        evaluate_runtime_settlement_v2, initialize_runtime_settlement_v2,
     },
+    runtime_width::VerifiedCandidateV2,
     shadow_accelerator_v3::{GeneralAcceleratorBindingV3, general_accelerator_ack_v3},
 };
 
@@ -67,6 +73,247 @@ pub struct GeneralAdmittedSettlementBuffersV3<'a> {
     pub bank_scratch: &'a mut [u8],
     /// Complete register candidate; unchanged on refusal.
     pub bank_output: &'a mut [u8],
+}
+
+/// Readonly inputs for Consider or permissionless Freeze.
+#[derive(Clone, Copy, Debug)]
+pub struct GeneralAdmittedSelectionViewV3<'a> {
+    /// Exact selection prestate, or all-zero vacant bytes for first Consider.
+    pub selection_before: &'a [u8],
+    /// Authenticated interpreted policy; required only for Consider.
+    pub policy: Option<SelectionPolicyV1>,
+    /// Exact incumbent verified candidate when the cursor is already live.
+    pub incumbent_verified: Option<&'a [u8]>,
+    /// Exact submitted verified candidate; required only for Consider.
+    pub submitted_verified: Option<&'a [u8]>,
+}
+
+/// Caller-owned selection and candidate-bank buffers.
+pub struct GeneralAdmittedSelectionBuffersV3<'a> {
+    /// Non-authoritative selection scratch.
+    pub selection_scratch: &'a mut [u8],
+    /// Complete selection successor candidate.
+    pub selection_output: &'a mut [u8],
+    /// Non-authoritative register-bank scratch.
+    pub bank_scratch: &'a mut [u8],
+    /// Complete register candidate.
+    pub bank_output: &'a mut [u8],
+}
+
+/// Caller-owned initialization and candidate-bank buffers.
+pub struct GeneralAdmittedInitializeBuffersV3<'a> {
+    /// Exact runtime inventory scratch.
+    pub inventory_scratch: &'a mut [u8],
+    /// Non-authoritative SettlementCursor scratch.
+    pub cursor_scratch: &'a mut [u8],
+    /// Complete SettlementCursor successor candidate.
+    pub cursor_output: &'a mut [u8],
+    /// Non-authoritative register-bank scratch.
+    pub bank_scratch: &'a mut [u8],
+    /// Complete register candidate.
+    pub bank_output: &'a mut [u8],
+}
+
+/// Evaluate Consider or Freeze through the same admitted candidate transport.
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_general_admitted_selection_v3<'a>(
+    accelerator_request: &[u8],
+    invocation_context: ContentId,
+    selection: GeneralArtifactSelectionV3,
+    artifacts: GeneralArtifactBytesV3<'_>,
+    family_request: &[u8],
+    tail_count: u32,
+    input_bank: &[u8],
+    view: GeneralAdmittedSelectionViewV3<'_>,
+    buffers: GeneralAdmittedSelectionBuffersV3<'a>,
+) -> Result<AcceleratorAckV2<'a>> {
+    let bundle =
+        authenticate_general_artifacts_v3(selection, artifacts, family_request, tail_count)
+            .map_err(|_| GeneralAdmittedAcceleratorErrorV3::Artifacts)?;
+    if bundle.strategy.disposition() != StrategyDispositionV2::AdmittedAot
+        || !matches!(bundle.request.action, Action::Consider | Action::Freeze)
+    {
+        return Err(GeneralAdmittedAcceleratorErrorV3::Action);
+    }
+    let GeneralAdmittedSelectionBuffersV3 {
+        selection_scratch,
+        selection_output,
+        bank_scratch,
+        bank_output,
+    } = buffers;
+    match bundle.request.action {
+        Action::Consider => {
+            let policy = view
+                .policy
+                .ok_or(GeneralAdmittedAcceleratorErrorV3::Action)?;
+            let submitted = view
+                .submitted_verified
+                .ok_or(GeneralAdmittedAcceleratorErrorV3::Action)?;
+            let submitted_value = VerifiedCandidateV2::decode(submitted)
+                .map_err(|_| GeneralAdmittedAcceleratorErrorV3::Settlement)?;
+            let submitted_header = submitted_value.header();
+            if policy.policy_id != bundle.config.selection_policy_id()
+                || Some(submitted_header.candidate_id) != bundle.request.candidate_id
+                || submitted_header.candidate_coordinate != bundle.request.page_index
+                || submitted_header.outcome_count != tail_count
+            {
+                return Err(GeneralAdmittedAcceleratorErrorV3::Action);
+            }
+            consider_verified_candidate_v2(
+                policy,
+                view.selection_before,
+                view.incumbent_verified,
+                submitted,
+                bundle.request.expected_revision,
+                selection_scratch,
+                selection_output,
+            )
+            .map_err(|_| GeneralAdmittedAcceleratorErrorV3::Settlement)?;
+        }
+        Action::Freeze => {
+            if view.policy.is_some()
+                || view.incumbent_verified.is_some()
+                || view.submitted_verified.is_some()
+            {
+                return Err(GeneralAdmittedAcceleratorErrorV3::Action);
+            }
+            freeze_selection_v2(
+                view.selection_before,
+                bundle.request.expected_revision,
+                selection_scratch,
+                selection_output,
+            )
+            .map_err(|_| GeneralAdmittedAcceleratorErrorV3::Settlement)?;
+        }
+        _ => return Err(GeneralAdmittedAcceleratorErrorV3::Action),
+    }
+    let selected = RuntimeSelectionCursorV2::decode(selection_output)
+        .map_err(|_| GeneralAdmittedAcceleratorErrorV3::Settlement)?;
+    if selected.header().policy_id != bundle.config.selection_policy_id() {
+        return Err(GeneralAdmittedAcceleratorErrorV3::Action);
+    }
+    let accelerated = project_general_selection_candidate_v3(
+        bundle.request.action,
+        selection_output,
+        tail_count,
+        input_bank,
+        bank_scratch,
+        bank_output,
+    )
+    .map_err(|_| GeneralAdmittedAcceleratorErrorV3::Candidate)?;
+    acknowledge_candidate(
+        accelerator_request,
+        invocation_context,
+        artifacts,
+        bundle,
+        input_bank,
+        tail_count,
+        accelerated,
+    )
+}
+
+/// Initialize the runtime-width settlement cursor from terminal verification.
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_general_admitted_initialize_v3<'a>(
+    accelerator_request: &[u8],
+    invocation_context: ContentId,
+    selection: GeneralArtifactSelectionV3,
+    artifacts: GeneralArtifactBytesV3<'_>,
+    family_request: &[u8],
+    tail_count: u32,
+    input_bank: &[u8],
+    environment: GeneralHotEnvironmentV3,
+    verifier: &[u8],
+    verified: &[u8],
+    buffers: GeneralAdmittedInitializeBuffersV3<'a>,
+) -> Result<AcceleratorAckV2<'a>> {
+    let bundle =
+        authenticate_general_artifacts_v3(selection, artifacts, family_request, tail_count)
+            .map_err(|_| GeneralAdmittedAcceleratorErrorV3::Artifacts)?;
+    if bundle.strategy.disposition() != StrategyDispositionV2::AdmittedAot
+        || bundle.request.action != Action::InitializeSettlement
+    {
+        return Err(GeneralAdmittedAcceleratorErrorV3::Action);
+    }
+    let verified_value = VerifiedCandidateV2::decode(verified)
+        .map_err(|_| GeneralAdmittedAcceleratorErrorV3::Settlement)?;
+    if verified_value.header().outcome_count != tail_count
+        || Some(verified_value.header().candidate_id) != bundle.request.candidate_id
+    {
+        return Err(GeneralAdmittedAcceleratorErrorV3::Action);
+    }
+    let GeneralAdmittedInitializeBuffersV3 {
+        inventory_scratch,
+        cursor_scratch,
+        cursor_output,
+        bank_scratch,
+        bank_output,
+    } = buffers;
+    initialize_runtime_settlement_v2(
+        verifier,
+        verified,
+        bundle.request.expected_revision,
+        inventory_scratch,
+        cursor_scratch,
+        cursor_output,
+    )
+    .map_err(|_| GeneralAdmittedAcceleratorErrorV3::Settlement)?;
+    let accelerated = project_general_initialize_candidate_v3(
+        cursor_output,
+        tail_count,
+        environment,
+        input_bank,
+        bank_scratch,
+        bank_output,
+    )
+    .map_err(|_| GeneralAdmittedAcceleratorErrorV3::Candidate)?;
+    acknowledge_candidate(
+        accelerator_request,
+        invocation_context,
+        artifacts,
+        bundle,
+        input_bank,
+        tail_count,
+        accelerated,
+    )
+}
+
+fn acknowledge_candidate<'a>(
+    accelerator_request: &[u8],
+    invocation_context: ContentId,
+    artifacts: GeneralArtifactBytesV3<'_>,
+    bundle: GeneralArtifactBundleV3<'_>,
+    input_bank: &[u8],
+    tail_count: u32,
+    accelerated: ExecutionCandidateV2<'a>,
+) -> Result<AcceleratorAckV2<'a>> {
+    let candidate = resolve_execution_candidate_v2(
+        StrategyDispositionV2::AdmittedAot,
+        None,
+        Some(accelerated),
+        Some(bundle.admitted_aot),
+    )
+    .map_err(|_| GeneralAdmittedAcceleratorErrorV3::Strategy)?;
+    let certificate = bundle
+        .strategy
+        .certificate_program()
+        .ok_or(GeneralAdmittedAcceleratorErrorV3::Artifacts)?;
+    general_accelerator_ack_v3(
+        accelerator_request,
+        input_bank,
+        candidate,
+        GeneralAcceleratorBindingV3 {
+            strategy: content(artifacts.strategy)?,
+            certificate,
+            capability_program: content(artifacts.descriptor)?,
+            invocation_context,
+            tail_count,
+            scalar_count: general_hot_scalar_count_v3(tail_count)
+                .map_err(|_| GeneralAdmittedAcceleratorErrorV3::Candidate)?,
+            identity_count: GENERAL_HOT_COMMON_IDENTITIES_V3,
+        },
+    )
+    .map_err(|_| GeneralAdmittedAcceleratorErrorV3::Transport)
 }
 
 /// Authenticate, evaluate, and acknowledge one General settlement chunk.

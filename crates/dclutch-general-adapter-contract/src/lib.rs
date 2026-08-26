@@ -28,6 +28,7 @@ pub mod effect_artifacts_v3;
 pub mod hot_candidate_v3;
 /// Exact funded batch, candidate, page, abort, and terminal lifecycle.
 pub mod lifecycle;
+pub mod local_state_v3;
 /// Stateless, failure-atomic candidate and settlement plan evaluation.
 pub mod plan;
 /// Exact admission of all seven action-selected General V3 artifact bundles.
@@ -637,10 +638,13 @@ impl CandidateVerifierV1 {
         {
             return Err(Error::Certificate);
         }
-        if let Some(current) = self.current_order
-            && (current.lots == 0 || current.lots > current.terms.max_lots)
-        {
-            return Err(Error::Certificate);
+        // The workspace still targets an edition where let-chains are not
+        // available; keep the compatible nested form intentionally.
+        #[allow(clippy::collapsible_if)]
+        if let Some(current) = self.current_order {
+            if current.lots == 0 || current.lots > current.terms.max_lots {
+                return Err(Error::Certificate);
+            }
         }
         Ok(())
     }

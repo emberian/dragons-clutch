@@ -458,6 +458,149 @@ pub fn project_general_selection_candidate_v3<'a>(
     Ok(ExecutionCandidateV2::Accepted(output))
 }
 
+/// Project settlement initialization and exact Custody replay/vault creation
+/// facts into one complete candidate bank.
+pub fn project_general_initialize_candidate_v3<'a>(
+    cursor_after: &[u8],
+    outcome_count: u32,
+    environment: GeneralHotEnvironmentV3,
+    authenticated_input: &[u8],
+    scratch: &mut [u8],
+    output: &'a mut [u8],
+) -> Result<ExecutionCandidateV2<'a>> {
+    let cursor = SettlementCursorV2::decode(cursor_after)
+        .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
+    let header = cursor.header();
+    if header.outcome_count != outcome_count
+        || header.phase != crate::runtime_width::SettlementPhaseV2::Collecting
+        || header.revision != 1
+        || environment.generation == 0
+        || environment.page_index != 0
+        || environment.execution_index != 0
+        || environment.custody_expected_revision != 0
+        || environment.custody_replay_rent_principal == 0
+        || environment.custody_vault_rent_principal == 0
+    {
+        return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
+    }
+    exact_candidate_capacities(outcome_count, authenticated_input, scratch, output)?;
+    let scalar_count = general_hot_scalar_count_v3(outcome_count)?;
+    if read_scalar(authenticated_input, scalar::OUTCOME_COUNT)? != u64::from(outcome_count)
+        || read_identity(
+            authenticated_input,
+            scalar_count,
+            identity::PARENT_REQUEST_DIGEST,
+        )? != environment.parent_request_digest
+    {
+        return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
+    }
+    for value in [
+        environment.general_root,
+        environment.parent_request_digest,
+        environment.release_set,
+        environment.market,
+        environment.realm,
+        environment.trading_program,
+        environment.custody_destination,
+        environment.mint,
+        environment.token_program,
+        environment.payer,
+        environment.rent_refund,
+    ] {
+        if value.iter().all(|byte| *byte == 0) {
+            return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
+        }
+    }
+    scratch.copy_from_slice(authenticated_input);
+    for (coordinate, value) in [
+        (
+            scalar::ACTION,
+            u64::from(Action::InitializeSettlement as u8),
+        ),
+        (scalar::OUTCOME_COUNT, u64::from(outcome_count)),
+        (scalar::GENERATION, environment.generation),
+        (
+            scalar::CUSTODY_REPLAY_RENT_LAMPORTS,
+            environment.custody_replay_rent_principal,
+        ),
+        (
+            scalar::CUSTODY_VAULT_RENT_LAMPORTS,
+            environment.custody_vault_rent_principal,
+        ),
+        (scalar::ZERO, 0),
+        (scalar::CURSOR_PHASE, settlement_phase_tag(header.phase)),
+        (scalar::CURSOR_ORDER_COUNT, u64::from(header.order_count)),
+        (scalar::CURSOR_NEXT_ORDER, u64::from(header.next_order)),
+        (scalar::CURSOR_RESULTING_REVISION, header.revision),
+        (scalar::CURSOR_QUOTE_INVENTORY, header.quote_inventory),
+        (
+            scalar::CURSOR_COMPLETE_SET_QUANTITY,
+            header.complete_set_quantity,
+        ),
+        (scalar::CURSOR_MAGIC, SettlementCursorLayoutV2::magic_u64()),
+        (
+            scalar::RUNTIME_WIDTH_VERSION,
+            u64::from(SettlementCursorLayoutV2::version_value()),
+        ),
+        (
+            scalar::CURSOR_TERMINAL_COORDINATE,
+            header.terminal_coordinate,
+        ),
+    ] {
+        write_scalar(scratch, coordinate, value)?;
+    }
+    for item in 0..outcome_count {
+        let base = GENERAL_HOT_COMMON_SCALARS_V3
+            .checked_add(
+                item.checked_mul(GENERAL_HOT_ITEM_SCALAR_STRIDE_V3)
+                    .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
+            )
+            .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?;
+        write_scalar(
+            scratch,
+            base.checked_add(item_scalar::OUTCOME)
+                .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
+            u64::from(item),
+        )?;
+        write_scalar(
+            scratch,
+            base.checked_add(item_scalar::CURSOR_INVENTORY)
+                .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
+            cursor
+                .inventory(item)
+                .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?,
+        )?;
+    }
+    for (coordinate, value) in [
+        (
+            identity::PARENT_REQUEST_DIGEST,
+            environment.parent_request_digest,
+        ),
+        (identity::CANDIDATE, header.candidate_id),
+        (identity::RELEASE_SET, environment.release_set),
+        (identity::MARKET, environment.market),
+        (identity::REALM, environment.realm),
+        (identity::TRADING_PROGRAM, environment.trading_program),
+        (
+            identity::CUSTODY_DESTINATION,
+            environment.custody_destination,
+        ),
+        (
+            identity::DESTINATION_VAULT_CONTEXT,
+            environment.general_root,
+        ),
+        (identity::MINT, environment.mint),
+        (identity::TOKEN_PROGRAM, environment.token_program),
+        (identity::PAYER, environment.payer),
+        (identity::RENT_REFUND, environment.rent_refund),
+        (identity::GENERAL_ROOT, environment.general_root),
+    ] {
+        write_identity(scratch, scalar_count, coordinate, value)?;
+    }
+    output.copy_from_slice(scratch);
+    Ok(ExecutionCandidateV2::Accepted(output))
+}
+
 /// Project one complete General plan without discarding authenticated inputs.
 ///
 /// `authenticated_input`, `scratch`, and `output` must have the one exact
@@ -1263,6 +1406,27 @@ mod tests {
         output
     }
 
+    fn initialized_cursor(outcome_count: u32) -> Vec<u8> {
+        let mut output = vec![0; settlement_cursor_len(outcome_count).expect("cursor width")];
+        SettlementCursorV2::encode_into(
+            SettlementCursorHeaderV2 {
+                outcome_count,
+                order_count: 1,
+                next_order: 0,
+                revision: 1,
+                candidate_id: [0x31; 32],
+                quote_inventory: 0,
+                complete_set_quantity: 3,
+                terminal_coordinate: 0,
+                phase: SettlementPhaseV2::Collecting,
+            },
+            &vec![0; usize::try_from(outcome_count).expect("test width")],
+            &mut output,
+        )
+        .expect("cursor encode");
+        output
+    }
+
     fn environment() -> GeneralHotEnvironmentV3 {
         GeneralHotEnvironmentV3 {
             general_root: [21; 32],
@@ -1380,6 +1544,52 @@ mod tests {
                     identity::POSITION_ZERO_OWNER,
                 ),
                 Ok(environment.settlement_position_owner)
+            );
+        }
+    }
+
+    #[test]
+    fn initialization_projects_exact_custody_and_cursor_facts_at_runtime_width() {
+        for outcome_count in [1_u32, 258] {
+            let mut environment = environment();
+            environment.payer = [0x51; 32];
+            environment.rent_refund = [0x52; 32];
+            environment.custody_expected_revision = 0;
+            let input = authenticated_input(outcome_count, environment);
+            let mut scratch = vec![0_u8; input.len()];
+            let mut output = vec![0x55_u8; input.len()];
+            assert!(matches!(
+                project_general_initialize_candidate_v3(
+                    &initialized_cursor(outcome_count),
+                    outcome_count,
+                    environment,
+                    &input,
+                    &mut scratch,
+                    &mut output,
+                ),
+                Ok(ExecutionCandidateV2::Accepted(_))
+            ));
+            assert_eq!(
+                read_scalar(&output, scalar::CURSOR_RESULTING_REVISION),
+                Ok(1)
+            );
+            assert_eq!(
+                read_scalar(&output, scalar::CUSTODY_REPLAY_RENT_LAMPORTS),
+                Ok(environment.custody_replay_rent_principal)
+            );
+            assert_eq!(
+                read_identity(
+                    &output,
+                    general_hot_scalar_count_v3(outcome_count).expect("scalars"),
+                    identity::PAYER,
+                ),
+                Ok(environment.payer)
+            );
+            let last = GENERAL_HOT_COMMON_SCALARS_V3
+                + (outcome_count - 1) * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3;
+            assert_eq!(
+                read_scalar(&output, last + item_scalar::CURSOR_INVENTORY),
+                Ok(0)
             );
         }
     }
