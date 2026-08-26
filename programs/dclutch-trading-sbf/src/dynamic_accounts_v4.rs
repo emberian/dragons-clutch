@@ -29,20 +29,51 @@ pub(crate) fn expand_dynamic_physical_accounts_v4<'accounts, 'info>(
     if physical_accounts.len() != physical_count {
         return Err(TradingSbfError::Content.into());
     }
+    // One forward sweep, not one prefix recount per coordinate.
+    //
+    // `physical_account_ordinal_with_dynamic_spans` recounts self-
+    // representatives from zero for every coordinate, so resolving the whole
+    // vector one call at a time re-decodes O(n^2) rules. An authenticated route
+    // alias always names a strictly earlier self-representative, whose physical
+    // account this sweep has already resolved, so the alias simply repeats it.
+    // The alias relation is rechecked rather than assumed: a coordinate naming
+    // a later representative, or one that is not itself a self-representative,
+    // refuses.
+    let packs = profile.supports_route_alias_packing();
     let mut logical = Vec::new();
     logical
         .try_reserve_exact(logical_count)
         .map_err(|_| TradingSbfError::Content)?;
+    let mut next = 0_usize;
     let mut coordinate = 0_usize;
     while coordinate < logical_count {
-        let ordinal = profile
-            .physical_account_ordinal_with_dynamic_spans(tail_count, span_counts, coordinate)
+        let representative = profile
+            .representative_with_dynamic_spans(tail_count, span_counts, coordinate)
             .map_err(|_| TradingSbfError::Content)?;
-        logical.push(
+        let resolved = if !packs {
             *physical_accounts
-                .get(ordinal)
-                .ok_or(TradingSbfError::Content)?,
-        );
+                .get(coordinate)
+                .ok_or(TradingSbfError::Content)?
+        } else if representative == coordinate {
+            let resolved = *physical_accounts
+                .get(next)
+                .ok_or(TradingSbfError::Content)?;
+            next = next.checked_add(1).ok_or(TradingSbfError::Content)?;
+            resolved
+        } else {
+            if representative >= coordinate
+                || profile
+                    .representative_with_dynamic_spans(tail_count, span_counts, representative)
+                    .map_err(|_| TradingSbfError::Content)?
+                    != representative
+            {
+                return Err(TradingSbfError::Content.into());
+            }
+            *logical
+                .get(representative)
+                .ok_or(TradingSbfError::Content)?
+        };
+        logical.push(resolved);
         coordinate = coordinate.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
     Ok(logical)

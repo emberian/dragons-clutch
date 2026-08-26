@@ -23,6 +23,7 @@ use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1
 use dclutch_registry_contract::{
     ARTIFACT_RELEASE_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
     ArtifactUpgradePolicyV1, DeploymentObservationV1,
+    immutable_release_elf_digest_v1,
 };
 use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_release_set_contract::ArtifactReleaseIdV1;
@@ -500,10 +501,48 @@ fn authenticate_immutable_artifact(
     Ok(release)
 }
 
+/// Reauthenticate one current Loader V3 deployment by hashing its exact ELF.
+///
+/// A finalized `ArtifactRelease` record proves only its own content identity.
+/// Nothing has bound its `elf_digest` to the account being observed, so this
+/// path always hashes the complete observed ELF.  Use
+/// `authenticate_activated_current_deployment` only where the Registry
+/// activation cache already carries that binding.
 pub(crate) fn authenticate_current_deployment(
     release: ArtifactReleaseV1,
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
+) -> Result<(), TradingSbfError> {
+    authenticate_deployment_v2(release, program, programdata, false)
+}
+
+/// Reauthenticate one activated role's current deployment without re-hashing.
+///
+/// `release` must come from the Registry activation cache, where
+/// `activate_execution_role_into_v1` already authenticated a chain-observed
+/// deployment — including the complete ELF digest — before persisting it. For
+/// an `Immutable` Loader V3 deployment whose release and whose observed
+/// ProgramData both carry no upgrade authority, that admitted ELF can never be
+/// redeployed, so hashing a megabyte-scale ELF on every hot action recomputes
+/// an already-authenticated fact. `dclutch_registry_contract::immutable_registry`
+/// owns that argument and the Registry role batch already relies on it.
+/// Identity, ProgramData link, Loader ownership, executability, the exact
+/// deployment slot, and the absent upgrade authority are still checked here and
+/// again by `authenticate_deployment`; an upgradeable activated release keeps
+/// the full current-ELF hash.
+pub(crate) fn authenticate_activated_current_deployment(
+    release: ArtifactReleaseV1,
+    program: &AccountInfo<'_>,
+    programdata: &AccountInfo<'_>,
+) -> Result<(), TradingSbfError> {
+    authenticate_deployment_v2(release, program, programdata, true)
+}
+
+fn authenticate_deployment_v2(
+    release: ArtifactReleaseV1,
+    program: &AccountInfo<'_>,
+    programdata: &AccountInfo<'_>,
+    activation_bound_elf: bool,
 ) -> Result<(), TradingSbfError> {
     if program.is_signer
         || program.is_writable
@@ -541,6 +580,10 @@ pub(crate) fn authenticate_current_deployment(
     if programdata_view.upgrade_authority().is_some() {
         return Err(TradingSbfError::Content);
     }
+    let elf_digest = activation_bound_elf
+        .then(|| immutable_release_elf_digest_v1(release, programdata_view.upgrade_authority()).ok())
+        .flatten()
+        .unwrap_or_else(|| hash(programdata_view.elf()).to_bytes());
     let observation = DeploymentObservationV1::new(
         program.key.to_bytes(),
         program.owner.to_bytes(),
@@ -551,7 +594,7 @@ pub(crate) fn authenticate_current_deployment(
         program_view.programdata(),
         bpf_loader_upgradeable::ID.to_bytes(),
         programdata_view.deployment_slot(),
-        hash(programdata_view.elf()).to_bytes(),
+        elf_digest,
         programdata_view.upgrade_authority(),
     )
     .map_err(|_| TradingSbfError::Content)?;

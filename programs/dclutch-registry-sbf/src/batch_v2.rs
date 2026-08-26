@@ -5,7 +5,7 @@ use std::vec::Vec;
 use dclutch_core_contract::ContentId;
 use dclutch_registry_contract::{
     ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1, ArtifactUpgradePolicyV1,
-    DeploymentObservationV1,
+    DeploymentObservationV1, immutable_release_elf_digest_v1,
 };
 use dclutch_registry_svm::batch_v2::{
     ROLE_BATCH_RECEIPT_BYTES_V2, RoleBatchReceiptInputV2, RoleBatchRequestV2,
@@ -129,11 +129,9 @@ fn authenticate_role(
         .role(role)
         .map_err(|_| RegistryError::ActivationCache)?;
     let release = activated_role.release();
-    // Activation already hashed the complete ELF before persisting this
-    // release. For immutable Loader ProgramData, exact identity/link/owner,
-    // slot, and the absent upgrade authority make that admitted ELF
-    // unchangeable, so recurring authentication need not hash it again. An
-    // upgradeable release retains the full current-ELF hash path.
+    // `immutable_release_elf_digest_v1` owns the argument that an immutable
+    // deployment's admitted ELF digest is still its exact current digest.
+    // An upgradeable release keeps the full current-ELF hash path.
     let observation = match release.upgrade_policy() {
         ArtifactUpgradePolicyV1::Immutable => {
             immutable_deployment_observation(program, programdata, release)?
@@ -184,6 +182,9 @@ fn immutable_deployment_observation(
     if programdata_view.upgrade_authority().is_some() {
         return Err(RegistryError::Deployment.into());
     }
+    let elf_digest =
+        immutable_release_elf_digest_v1(release, programdata_view.upgrade_authority())
+            .map_err(|_| RegistryError::Deployment)?;
     DeploymentObservationV1::new(
         program.key.to_bytes(),
         program.owner.to_bytes(),
@@ -194,7 +195,7 @@ fn immutable_deployment_observation(
         program_view.programdata(),
         bpf_loader_upgradeable::ID.to_bytes(),
         programdata_view.deployment_slot(),
-        release.elf_digest(),
+        elf_digest,
         None,
     )
     .map_err(|_| RegistryError::Deployment.into())

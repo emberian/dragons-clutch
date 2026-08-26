@@ -153,7 +153,7 @@ use crate::{
     execution_strategy_v2::{
         ADMITTED_AOT_STRATEGY_ACCOUNT_COUNT_V2, AuthenticatedExecutionStrategyV2,
         INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2, SHADOW_AOT_STRATEGY_ACCOUNT_COUNT_V2,
-        authenticate_current_deployment, authenticate_execution_strategy_v2,
+        authenticate_activated_current_deployment, authenticate_execution_strategy_v2,
     },
     native_signature::{
         load_current_top_level_instruction, seed_native_signatures_at_authenticated_instruction,
@@ -1155,9 +1155,15 @@ fn authenticate_accelerator_activation_v4(
         .role(ExecutionRoleV1::Custody)
         .map_err(|_| TradingSbfError::Release)?;
     drop(data);
-    authenticate_current_deployment(core.release(), frame.core_program, frame.core_programdata)
-        .map_err(ProgramError::from)?;
-    authenticate_current_deployment(
+    // Both releases come from the Registry activation cache, whose activation
+    // already authenticated a chain-observed complete-ELF digest for each role.
+    authenticate_activated_current_deployment(
+        core.release(),
+        frame.core_program,
+        frame.core_programdata,
+    )
+    .map_err(ProgramError::from)?;
+    authenticate_activated_current_deployment(
         trading.release(),
         frame.trading_program,
         frame.trading_programdata,
@@ -3409,13 +3415,36 @@ fn expand_runtime_accounts_v3<'accounts, 'info>(
             physical.as_slice(),
         );
     }
+    // One forward sweep, not one prefix recount per coordinate: see
+    // `expand_dynamic_physical_accounts_v4` for why the two maps are identical.
+    let packs = profile.supports_route_alias_packing();
     let mut logical = Vec::with_capacity(logical_count);
+    let mut next = 0_usize;
     let mut coordinate = 0_usize;
     while coordinate < logical_count {
-        let ordinal = profile
-            .physical_account_ordinal(tail_count, coordinate)
+        let representative = profile
+            .representative(tail_count, coordinate)
             .map_err(|_| TradingSbfError::Content)?;
-        logical.push(*physical.get(ordinal).ok_or(TradingSbfError::Content)?);
+        let resolved = if !packs {
+            *physical.get(coordinate).ok_or(TradingSbfError::Content)?
+        } else if representative == coordinate {
+            let resolved = *physical.get(next).ok_or(TradingSbfError::Content)?;
+            next = next.checked_add(1).ok_or(TradingSbfError::Content)?;
+            resolved
+        } else {
+            if representative >= coordinate
+                || profile
+                    .representative(tail_count, representative)
+                    .map_err(|_| TradingSbfError::Content)?
+                    != representative
+            {
+                return Err(TradingSbfError::Content.into());
+            }
+            *logical
+                .get(representative)
+                .ok_or(TradingSbfError::Content)?
+        };
+        logical.push(resolved);
         coordinate = coordinate.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
     Ok(logical)

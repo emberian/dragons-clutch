@@ -364,6 +364,32 @@ pub fn authenticate_immutable_finalized_record_v1<A: ImmutableFinalizedRecordAda
     })
 }
 
+/// Return the exact current ELF digest of an already-immutable deployment.
+///
+/// Activation hashed the complete ELF once, before persisting `release`. A
+/// Loader V3 deployment whose admitted policy is `Immutable`, whose release
+/// carries no upgrade authority, and whose observed ProgramData currently
+/// carries no upgrade authority can never be redeployed, so the admitted
+/// digest is the exact current ELF digest. Re-hashing a multi-hundred-kilobyte
+/// ELF on every recurring action therefore recomputes an authenticated fact.
+///
+/// This is the single semantic owner of that argument. An upgradeable release
+/// has no such guarantee: it is refused here and must hash the observed ELF.
+/// `authenticate_deployment` still checks identity, link, ownership,
+/// executability, the exact deployment slot, and the upgrade authority.
+pub fn immutable_release_elf_digest_v1(
+    release: ArtifactReleaseV1,
+    observed_upgrade_authority: Option<[u8; crate::IDENTITY_BYTES]>,
+) -> Result<[u8; crate::IDENTITY_BYTES]> {
+    if release.upgrade_policy() != ArtifactUpgradePolicyV1::Immutable
+        || release.upgrade_authority().is_some()
+        || observed_upgrade_authority.is_some()
+    {
+        return Err(Error::MutableRegistryRelease);
+    }
+    Ok(release.elf_digest())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -761,6 +787,35 @@ mod tests {
                 wrong_owner,
             ),
             Err(Error::NonCanonicalRecordCoordinate)
+        );
+    }
+
+    #[test]
+    fn immutable_elf_digest_is_the_admitted_digest_and_upgradeable_refuses() {
+        let registry = program(1);
+        let (immutable, _) = release(registry, ArtifactUpgradePolicyV1::Immutable, None);
+        assert_eq!(
+            immutable_release_elf_digest_v1(immutable, None),
+            Ok(immutable.elf_digest())
+        );
+        // A live upgrade authority on the observed ProgramData refuses even
+        // when the admitted release claims immutability.
+        assert_eq!(
+            immutable_release_elf_digest_v1(immutable, Some([9; 32])),
+            Err(Error::MutableRegistryRelease)
+        );
+        let (upgradeable, _) = release(
+            registry,
+            ArtifactUpgradePolicyV1::ExactAuthority,
+            Some([7; 32]),
+        );
+        assert_eq!(
+            immutable_release_elf_digest_v1(upgradeable, Some([7; 32])),
+            Err(Error::MutableRegistryRelease)
+        );
+        assert_eq!(
+            immutable_release_elf_digest_v1(upgradeable, None),
+            Err(Error::MutableRegistryRelease)
         );
     }
 

@@ -1009,7 +1009,12 @@ impl<'a> ProgramV3<'a> {
         } else {
             usize::from(index)
         };
-        let offset = HEADER_BYTES
+        Operation::decode(self.bytes, self.operation_offset(ordinal)?)
+    }
+
+    /// Byte offset of the operation table.
+    fn operations_start(self) -> Result<usize> {
+        HEADER_BYTES
             .checked_add(
                 usize::from(self.route_count)
                     .checked_mul(ROUTE_BYTES)
@@ -1021,9 +1026,18 @@ impl<'a> ProgramV3<'a> {
                         .checked_mul(RECEIPT_DEPENDENCY_BYTES)?,
                 )
             })
-            .and_then(|value| value.checked_add(ordinal.checked_mul(OPERATION_BYTES)?))
-            .ok_or(Error::InvalidLength)?;
-        Operation::decode(self.bytes, offset)
+            .ok_or(Error::InvalidLength)
+    }
+
+    /// Byte offset of one operation by its table ordinal.
+    fn operation_offset(self, ordinal: usize) -> Result<usize> {
+        self.operations_start()?
+            .checked_add(
+                ordinal
+                    .checked_mul(OPERATION_BYTES)
+                    .ok_or(Error::InvalidLength)?,
+            )
+            .ok_or(Error::InvalidLength)
     }
 
     fn require_register_widths(
@@ -1076,28 +1090,118 @@ impl<'a> ProgramV3<'a> {
         Ok(start)
     }
 
+    /// Refuse any static write range that overlaps an earlier operation's.
+    ///
+    /// The pairwise test is inherently quadratic, but re-decoding and
+    /// re-validating every earlier operation for each pair made it quadratic in
+    /// *full decodes*. Each earlier operation was already decoded and validated
+    /// by this same loop before it became a left operand, so a comparison needs
+    /// only the opcode plus the one or two fields its ranges are built from.
+    /// An operation with no static range cannot overlap anything, so a right
+    /// operand without one skips the sweep entirely.
     fn require_nonoverlap(self, item_body: bool, right_index: u16, right: Operation) -> Result<()> {
+        let right_data = right.static_data_range();
+        let right_request = right.static_request_range();
+        if right_data.is_none() && right_request.is_none() {
+            return Ok(());
+        }
+        let base = self.operations_start()?;
+        let ordinal_base = if item_body {
+            usize::from(self.fixed_operations)
+        } else {
+            0
+        };
         let mut left_index = 0_u16;
         while left_index < right_index {
-            let left = self.operation(item_body, left_index)?;
-            let data_overlap = match (right.static_data_range(), left.static_data_range()) {
-                (Some((ra, rs, rw)), Some((la, ls, lw))) => ra == la && overlaps(rs, rw, ls, lw)?,
-                _ => false,
-            };
-            if data_overlap {
+            let offset = base
+                .checked_add(
+                    ordinal_base
+                        .checked_add(usize::from(left_index))
+                        .and_then(|ordinal| ordinal.checked_mul(OPERATION_BYTES))
+                        .ok_or(Error::InvalidLength)?,
+                )
+                .ok_or(Error::InvalidLength)?;
+            let opcode = byte(self.bytes, offset)?;
+            if let Some((right_account, right_start, right_width)) = right_data
+                && is_static_data_write(opcode)
+                && read_u16(self.bytes, add(offset, 2)?)? == right_account
+                && overlaps(
+                    right_start,
+                    right_width,
+                    read_u32(self.bytes, add(offset, 8)?)?,
+                    write_width_of(opcode),
+                )?
+            {
                 return Err(Error::OverlappingWrites);
             }
-            let request_overlap = match (right.static_request_range(), left.static_request_range())
+            if let Some((right_route, right_start, right_width)) = right_request
+                && is_request_write(opcode)
+                && read_u16(self.bytes, add(offset, 16)?)? == right_route
+                && overlaps(
+                    right_start,
+                    right_width,
+                    read_u32(self.bytes, add(offset, 8)?)?,
+                    write_width_of(opcode),
+                )?
             {
-                (Some((rr, rs, rw)), Some((lr, ls, lw))) => rr == lr && overlaps(rs, rw, ls, lw)?,
-                _ => false,
-            };
-            if request_overlap {
                 return Err(Error::OverlappingWrites);
             }
             left_index = left_index.checked_add(1).ok_or(Error::InvalidLength)?;
         }
         Ok(())
+    }
+}
+
+const fn is_data_write(opcode: u8) -> bool {
+    matches!(
+        opcode,
+        OP_WRITE_SCALAR
+            | OP_WRITE_IDENTITY
+            | OP_WRITE_SCALAR_AFFINE
+            | OP_WRITE_IDENTITY_AFFINE
+            | OP_WRITE_DATA_U8
+            | OP_WRITE_DATA_U16
+            | OP_WRITE_DATA_U32
+            | OP_WRITE_DATA_U8_AFFINE
+            | OP_WRITE_DATA_U16_AFFINE
+            | OP_WRITE_DATA_U32_AFFINE
+    )
+}
+
+const fn is_affine_data_write(opcode: u8) -> bool {
+    matches!(
+        opcode,
+        OP_WRITE_SCALAR_AFFINE
+            | OP_WRITE_IDENTITY_AFFINE
+            | OP_WRITE_DATA_U8_AFFINE
+            | OP_WRITE_DATA_U16_AFFINE
+            | OP_WRITE_DATA_U32_AFFINE
+    )
+}
+
+const fn is_static_data_write(opcode: u8) -> bool {
+    is_data_write(opcode) && !is_affine_data_write(opcode)
+}
+
+const fn is_request_write(opcode: u8) -> bool {
+    matches!(
+        opcode,
+        OP_WRITE_REQUEST_U8
+            | OP_WRITE_REQUEST_U16
+            | OP_WRITE_REQUEST_U32
+            | OP_WRITE_REQUEST_U64
+            | OP_WRITE_REQUEST_IDENTITY
+    )
+}
+
+const fn write_width_of(opcode: u8) -> u32 {
+    match opcode {
+        OP_WRITE_REQUEST_U8 | OP_WRITE_DATA_U8 | OP_WRITE_DATA_U8_AFFINE => 1,
+        OP_WRITE_REQUEST_U16 | OP_WRITE_DATA_U16 | OP_WRITE_DATA_U16_AFFINE => 2,
+        OP_WRITE_REQUEST_U32 | OP_WRITE_DATA_U32 | OP_WRITE_DATA_U32_AFFINE => 4,
+        OP_WRITE_SCALAR | OP_WRITE_SCALAR_AFFINE | OP_WRITE_REQUEST_U64 => 8,
+        OP_WRITE_IDENTITY | OP_WRITE_IDENTITY_AFFINE | OP_WRITE_REQUEST_IDENTITY => 32,
+        _ => 0,
     }
 }
 
@@ -1426,53 +1530,20 @@ impl Operation {
         Ok(())
     }
 
-    fn is_data_write(self) -> bool {
-        matches!(
-            self.opcode,
-            OP_WRITE_SCALAR
-                | OP_WRITE_IDENTITY
-                | OP_WRITE_SCALAR_AFFINE
-                | OP_WRITE_IDENTITY_AFFINE
-                | OP_WRITE_DATA_U8
-                | OP_WRITE_DATA_U16
-                | OP_WRITE_DATA_U32
-                | OP_WRITE_DATA_U8_AFFINE
-                | OP_WRITE_DATA_U16_AFFINE
-                | OP_WRITE_DATA_U32_AFFINE
-        )
+    const fn is_data_write(self) -> bool {
+        is_data_write(self.opcode)
     }
 
-    fn is_affine_data_write(self) -> bool {
-        matches!(
-            self.opcode,
-            OP_WRITE_SCALAR_AFFINE
-                | OP_WRITE_IDENTITY_AFFINE
-                | OP_WRITE_DATA_U8_AFFINE
-                | OP_WRITE_DATA_U16_AFFINE
-                | OP_WRITE_DATA_U32_AFFINE
-        )
+    const fn is_affine_data_write(self) -> bool {
+        is_affine_data_write(self.opcode)
     }
 
-    fn is_request_write(self) -> bool {
-        matches!(
-            self.opcode,
-            OP_WRITE_REQUEST_U8
-                | OP_WRITE_REQUEST_U16
-                | OP_WRITE_REQUEST_U32
-                | OP_WRITE_REQUEST_U64
-                | OP_WRITE_REQUEST_IDENTITY
-        )
+    const fn is_request_write(self) -> bool {
+        is_request_write(self.opcode)
     }
 
     const fn write_width(self) -> u32 {
-        match self.opcode {
-            OP_WRITE_REQUEST_U8 | OP_WRITE_DATA_U8 | OP_WRITE_DATA_U8_AFFINE => 1,
-            OP_WRITE_REQUEST_U16 | OP_WRITE_DATA_U16 | OP_WRITE_DATA_U16_AFFINE => 2,
-            OP_WRITE_REQUEST_U32 | OP_WRITE_DATA_U32 | OP_WRITE_DATA_U32_AFFINE => 4,
-            OP_WRITE_SCALAR | OP_WRITE_SCALAR_AFFINE | OP_WRITE_REQUEST_U64 => 8,
-            OP_WRITE_IDENTITY | OP_WRITE_IDENTITY_AFFINE | OP_WRITE_REQUEST_IDENTITY => 32,
-            _ => 0,
-        }
+        write_width_of(self.opcode)
     }
 
     fn static_data_range(self) -> Option<(u16, u32, u32)> {
