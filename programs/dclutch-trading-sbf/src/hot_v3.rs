@@ -14,12 +14,12 @@ use alloc::{boxed::Box, vec, vec::Vec};
 use dclutch_account_profile_contract::{
     AccountObservationV1,
     lifecycle_v3::{
-        AuthenticatedRentCreditV3, AuthenticatedRentMinimumV3, CoordinateScopeV3,
-        LifecycleContextV3, LifecycleOperationV3, LifecycleProtectedRegisterBuffersV3,
-        LifecycleRegisterKindV3, LifecycleRegisterTargetV3, LifecycleRegistersV3,
-        LifecycleSeedInputValueV3,
-        SUCCESSOR_SCHEMA_RELEASE_ID as STATE_LIFECYCLE_POLICY_SCHEMA_ID_V4, StateLifecyclePlanV3,
-        StateLifecyclePolicyV4, plan_lifecycle_with_protected_outputs_atomic,
+        AuthenticatedRentCreditV3, AuthenticatedRentMinimumV3, AuthenticatedRentQuoteV5,
+        CoordinateScopeV3, LifecycleContextV3, LifecycleOperationV3,
+        LifecycleProtectedRegisterBuffersV3, LifecycleRegisterKindV3, LifecycleRegisterTargetV3,
+        LifecycleRegistersV3, LifecycleRentQuoteBuffersV5, LifecycleSeedInputValueV3,
+        StateLifecyclePlanV3, StateLifecyclePolicyV5,
+        plan_lifecycle_with_protected_outputs_atomic,
     },
     v2::{
         AccountPrestateV2, AccountProfileV2, ProjectionRegistersV2,
@@ -56,7 +56,8 @@ use dclutch_capability_program_contract::{
     },
     set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
     v4::{
-        CAPABILITY_PROGRAM_V4_BYTES, CapabilityProgramV4, SCHEMA_RELEASE_ID as PROGRAM_SCHEMA_ID_V4,
+        CAPABILITY_PROGRAM_V4_BYTES, CapabilityProgramV4,
+        SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5, SCHEMA_RELEASE_ID as PROGRAM_SCHEMA_ID_V4,
     },
 };
 use dclutch_core_contract::ContentId;
@@ -400,12 +401,12 @@ pub fn process_hot_execution_v3(
         descriptor.lifecycle().schema().to_bytes(),
         descriptor.lifecycle().program().to_bytes(),
     )?;
-    if descriptor.lifecycle().schema().to_bytes() != STATE_LIFECYCLE_POLICY_SCHEMA_ID_V4
+    if descriptor.lifecycle().schema().to_bytes() != SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5
         || descriptor.derivation_policy() != descriptor.lifecycle().program()
     {
         return Err(TradingSbfError::UnsupportedContent.into());
     }
-    let lifecycle = StateLifecyclePolicyV4::decode_selected(
+    let lifecycle = StateLifecyclePolicyV5::decode_selected(
         descriptor.lifecycle().program().to_bytes(),
         hash(&lifecycle_data).to_bytes(),
         &lifecycle_data,
@@ -634,6 +635,7 @@ pub fn process_hot_execution_v3(
     {
         return Err(TradingSbfError::UnsupportedContent.into());
     }
+    let current_rent_quotes = authenticate_current_rent_quotes_v5(lifecycle, &rent)?;
 
     let projected_request = project_account_and_request_registers_v3(
         program_id,
@@ -642,6 +644,8 @@ pub fn process_hot_execution_v3(
         *frame,
         account_profile,
         request_profile,
+        lifecycle,
+        &current_rent_quotes,
         tail_count,
         &observations,
         family_request,
@@ -659,7 +663,7 @@ pub fn process_hot_execution_v3(
         transition,
     )?;
 
-    require_lifecycle_register_ownership_v4(
+    require_lifecycle_register_ownership_v5(
         lifecycle,
         selected_action,
         request_profile,
@@ -724,6 +728,14 @@ pub fn process_hot_execution_v3(
     let transition_output_scalars = candidate.scalars;
     let transition_output_identities = candidate.identities;
     let admitted_execution_digest = candidate.transcript_digest;
+    lifecycle
+        .validate_projected_current_rent_quotes(
+            account_profile,
+            tail_count,
+            &transition_output_scalars,
+            &current_rent_quotes,
+        )
+        .map_err(|_| TradingSbfError::Content)?;
     require_trusted_environment_v3(
         trusted_environment,
         &transition_output_scalars,
@@ -1874,13 +1886,52 @@ fn lifecycle_transition_target_v4(target: LifecycleRegisterTargetV3) -> Register
     }
 }
 
+/// Materialize current-Rent facts only from the authenticated Rent sysvar and
+/// the exact V5 declarations selected by the capability descriptor.
 #[inline(never)]
-fn require_lifecycle_register_ownership_v4(
-    policy: StateLifecyclePolicyV4<'_>,
+fn authenticate_current_rent_quotes_v5(
+    policy: StateLifecyclePolicyV5<'_>,
+    rent: &Rent,
+) -> Result<Vec<AuthenticatedRentQuoteV5>, ProgramError> {
+    let mut quotes = Vec::with_capacity(usize::from(policy.current_rent_quote_count()));
+    let mut ordinal = 0_u16;
+    while ordinal < policy.current_rent_quote_count() {
+        let declaration = policy
+            .current_rent_quote(ordinal)
+            .map_err(|_| TradingSbfError::Content)?;
+        let exact_data_len = declaration.exact_data_len();
+        quotes.push(AuthenticatedRentQuoteV5 {
+            exact_data_len,
+            scalar_destination: declaration.scalar_destination().index(),
+            current_minimum: rent.minimum_balance(
+                usize::try_from(exact_data_len).map_err(|_| TradingSbfError::Content)?,
+            ),
+        });
+        ordinal = ordinal.checked_add(1).ok_or(TradingSbfError::Content)?;
+    }
+    Ok(quotes)
+}
+
+#[inline(never)]
+fn require_lifecycle_register_ownership_v5(
+    policy: StateLifecyclePolicyV5<'_>,
     action: u32,
     request: RequestProfileKindV3<'_>,
     transition: TransitionProgramV3<'_>,
 ) -> Result<(), ProgramError> {
+    let mut quote = 0_u16;
+    while quote < policy.current_rent_quote_count() {
+        require_lifecycle_target_unwritten_v4(
+            policy
+                .current_rent_quote(quote)
+                .map_err(|_| TradingSbfError::Content)?
+                .scalar_destination(),
+            request,
+            transition,
+            true,
+        )?;
+        quote = quote.checked_add(1).ok_or(TradingSbfError::Content)?;
+    }
     let count = policy
         .action_plan_count(action)
         .map_err(|_| TradingSbfError::Content)?;
@@ -2010,7 +2061,7 @@ struct PreparedLifecycleBatchV4 {
 #[inline(never)]
 fn prepare_lifecycle_v4<'a>(
     program_id: &Pubkey,
-    policy: StateLifecyclePolicyV4<'_>,
+    policy: StateLifecyclePolicyV5<'_>,
     action: u32,
     account_profile: AccountProfileV2<'_>,
     tail_count: u32,
@@ -4138,6 +4189,8 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
     frame: HotFrameV3<'accounts, 'info>,
     account_profile: AccountProfileV2<'artifact>,
     request_profile: RequestProfileKindV3<'artifact>,
+    lifecycle: StateLifecyclePolicyV5<'artifact>,
+    current_rent_quotes: &[AuthenticatedRentQuoteV5],
     tail_count: u32,
     observations: &[AccountObservationV1<'_>],
     family_request: &'artifact [u8],
@@ -4186,6 +4239,21 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
         &account_output_identities,
     )?;
 
+    let mut rent_quote_scratch_scalars = account_output_scalars.clone();
+    let mut rent_quote_output_scalars = account_output_scalars.clone();
+    lifecycle
+        .project_authenticated_current_rent_quotes_atomic(
+            account_profile,
+            tail_count,
+            &account_output_scalars,
+            current_rent_quotes,
+            LifecycleRentQuoteBuffersV5 {
+                scalar_scratch: &mut rent_quote_scratch_scalars,
+                output_scalars: &mut rent_quote_output_scalars,
+            },
+        )
+        .map_err(|_| TradingSbfError::Content)?;
+
     let mut signed_identities = account_output_identities.clone();
     if let RequestProfileKindV3::Signed(profile) = request_profile {
         let mut signature_scratch = account_output_identities.clone();
@@ -4204,15 +4272,15 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
         )?;
     }
 
-    let mut request_scratch_scalars = account_output_scalars.clone();
+    let mut request_scratch_scalars = rent_quote_output_scalars.clone();
     let mut request_scratch_identities = signed_identities.clone();
-    let mut request_output_scalars = account_output_scalars.clone();
+    let mut request_output_scalars = rent_quote_output_scalars.clone();
     let mut request_output_identities = signed_identities.clone();
     request_profile.project_atomic(
         tail_count,
         family_request,
         ProjectionRegistersV1 {
-            input_scalars: &account_output_scalars,
+            input_scalars: &rent_quote_output_scalars,
             input_identities: &signed_identities,
             scratch_scalars: &mut request_scratch_scalars,
             scratch_identities: &mut request_scratch_identities,
@@ -4225,6 +4293,14 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
         &request_output_scalars,
         &request_output_identities,
     )?;
+    lifecycle
+        .validate_projected_current_rent_quotes(
+            account_profile,
+            tail_count,
+            &request_output_scalars,
+            current_rent_quotes,
+        )
+        .map_err(|_| TradingSbfError::Content)?;
     Ok(ProjectedRequestRegistersV3 {
         scalars: request_output_scalars,
         identities: request_output_identities,
@@ -5047,6 +5123,74 @@ mod tests {
         assert!(is_hot_execution_v3(b"DCLTHOT3"));
         assert!(!is_hot_execution_v3(b"DCLTHOT2"));
         assert!(!is_hot_execution_v3(b"DCLTHOT"));
+    }
+
+    #[test]
+    fn lifecycle_v5_quotes_are_derived_only_from_current_rent() {
+        use dclutch_account_profile_contract::lifecycle_v3::{
+            ACTION_PLAN_BYTES, CURRENT_RENT_QUOTE_BYTES_V5, HEADER_BYTES,
+            PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SEED_BYTES,
+            encode::{
+                LifecycleAccountCoordinateV3, LifecycleCurrentRentQuoteInputV5,
+                LifecycleGuardInputV3, LifecycleOperationInputV3, LifecyclePlanInputV3,
+                LifecycleRecipeInputV3, LifecycleSeedInputV3,
+                encode_lifecycle_policy_v5_atomic,
+            },
+        };
+
+        const WIDTH: usize = HEADER_BYTES
+            + RECIPE_BYTES
+            + 2 * SEED_BYTES
+            + ACTION_PLAN_BYTES
+            + PROTECTED_OUTPUT_BYTES
+            + CURRENT_RENT_QUOTE_BYTES_V5;
+        let recipes = [LifecycleRecipeInputV3 {
+            state: LifecycleAccountCoordinateV3::fixed(0),
+            seed_start: 0,
+            seed_count: 2,
+            bump_offset: 1,
+            data_base: 8,
+            data_stride: 0,
+        }];
+        let seeds = [
+            LifecycleSeedInputV3::Literal(b"hot-rent-quote-v5"),
+            LifecycleSeedInputV3::CanonicalBump,
+        ];
+        let plans = [LifecyclePlanInputV3 {
+            action: 1,
+            operation: LifecycleOperationInputV3::Authenticate,
+            recipe: 0,
+            payer: None,
+            rent_credit: None,
+            principal: None,
+            beneficiary: None,
+            guard: LifecycleGuardInputV3::Always,
+        }];
+        let mut scratch = [0_u8; WIDTH];
+        let mut bytes = [0_u8; WIDTH];
+        encode_lifecycle_policy_v5_atomic(
+            &recipes,
+            &seeds,
+            &plans,
+            &[None],
+            &[],
+            &[LifecycleCurrentRentQuoteInputV5 {
+                exact_data_len: 152,
+                scalar_destination: 64,
+            }],
+            &mut scratch,
+            &mut bytes,
+        )
+        .expect("lifecycle V5 with current-Rent declaration");
+        let policy = StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], &bytes)
+            .expect("selected lifecycle V5");
+        let rent = Rent::default();
+        let quotes = authenticate_current_rent_quotes_v5(policy, &rent)
+            .expect("authenticated current Rent quote");
+        assert_eq!(quotes.len(), 1);
+        assert_eq!(quotes[0].exact_data_len, 152);
+        assert_eq!(quotes[0].scalar_destination, 64);
+        assert_eq!(quotes[0].current_minimum, rent.minimum_balance(152));
     }
 
     #[test]
