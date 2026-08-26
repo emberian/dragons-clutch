@@ -3499,22 +3499,41 @@ fn downgraded_effect_accounts_v3<'info>(
     {
         return Err(TradingSbfError::Content.into());
     }
-    logical_accounts
-        .iter()
-        .enumerate()
-        .map(|(coordinate, account)| {
-            let privileges = profile
-                .route_privileges(tail_count, coordinate)
-                .map_err(|_| TradingSbfError::Content)?;
-            if account.executable != privileges.executable() {
-                return Err(TradingSbfError::Content.into());
-            }
-            let mut logical = (*account).clone();
-            logical.is_signer = privileges.signer();
-            logical.is_writable = privileges.writable();
-            Ok(logical)
-        })
-        .collect()
+    let mut downgraded = Vec::new();
+    downgraded
+        .try_reserve_exact(logical_accounts.len())
+        .map_err(|_| TradingSbfError::Content)?;
+    for (coordinate, account) in logical_accounts.iter().enumerate() {
+        let privileges = profile
+            .route_privileges(tail_count, coordinate)
+            .map_err(|_| TradingSbfError::Content)?;
+        // An authenticated route alias declares zero privileges of its own, so
+        // the representative coordinate is the sole owner of the physical
+        // executable fact. Resolve to the representative before checking
+        // executability, or an alias of an executable representative refuses
+        // even though the physical account is genuinely executable. Signer and
+        // writable stay route-local: those are legitimately downgraded per
+        // child. Sibling of `downgrade_dynamic_child_accounts_v4`.
+        let representative = profile
+            .representative(tail_count, coordinate)
+            .map_err(|_| TradingSbfError::Content)?;
+        let representative_executable = if representative == coordinate {
+            privileges.executable()
+        } else {
+            profile
+                .route_privileges(tail_count, representative)
+                .map_err(|_| TradingSbfError::Content)?
+                .executable()
+        };
+        if account.executable != representative_executable {
+            return Err(TradingSbfError::Content.into());
+        }
+        let mut logical = (*account).clone();
+        logical.is_signer = privileges.signer();
+        logical.is_writable = privileges.writable();
+        downgraded.push(logical);
+    }
+    Ok(downgraded)
 }
 
 #[derive(Clone, Copy)]
@@ -6933,7 +6952,8 @@ mod tests {
 
     use dclutch_account_profile_contract::lifecycle_v3::CreateStatePlanV3;
     use dclutch_account_profile_contract::v2::{
-        AccountPrestateV2, DYNAMIC_FIXED_SPAN_HEADER_BYTES,
+        AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES, AccountPrestateV2,
+        DYNAMIC_FIXED_SPAN_HEADER_BYTES,
         HEADER_BYTES as ACCOUNT_PROFILE_HEADER_BYTES,
         OPERATION_BYTES as ACCOUNT_PROFILE_OPERATION_BYTES,
         RULE_BYTES as ACCOUNT_PROFILE_RULE_BYTES, TrustedBuiltinIdentityV2, TrustedEnvironmentV2,
@@ -6943,6 +6963,7 @@ mod tests {
             AccountOperationInputV2, AccountPrivilegesV2, AccountProfileArtifactV2,
             AccountRuleInputV2, AccountRuleWithPrestateInputV2, DynamicFixedSpanInputV2,
             RegisterGeometryV2, ScalarCoordinateV2, encode_account_profile_v2_atomic,
+            encode_account_profile_with_authenticated_route_alias_v2_atomic,
             encode_account_profile_with_dynamic_fixed_span_v2_atomic,
         },
     };
@@ -7578,6 +7599,93 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn fixed_route_alias_of_an_executable_representative_survives_the_child_downgrade() {
+        const READONLY: AccountPrivilegesV2 = AccountPrivilegesV2::new(false, false, false);
+        const EXECUTABLE: AccountPrivilegesV2 = AccountPrivilegesV2::new(false, false, true);
+        const NO_EFFECTS: AccountEffectPermissionsV2 =
+            AccountEffectPermissionsV2::new(false, false, false);
+
+        let exact = |privileges| AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges,
+                effect_permissions: NO_EFFECTS,
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length: 0,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::Exact,
+        };
+        // Post-`cc228cd` an authenticated route alias is privilege-free: the
+        // representative owns the physical executable fact.
+        let alias = AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: READONLY,
+                effect_permissions: NO_EFFECTS,
+                alias: AccountAliasInputV2::Fixed(1),
+                data_length: 0,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::AuthenticatedRouteAlias,
+        };
+        let rules = [exact(READONLY), exact(EXECUTABLE), alias];
+        let width = AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES
+            .checked_add(
+                rules
+                    .len()
+                    .checked_mul(ACCOUNT_PROFILE_RULE_BYTES)
+                    .expect("rules"),
+            )
+            .expect("width");
+        let mut scratch = vec![0_u8; width];
+        let mut bytes = vec![0_u8; width];
+        encode_account_profile_with_authenticated_route_alias_v2_atomic(
+            TrustedEnvironmentV2::None,
+            TrustedIdentityEnvironmentV2::None,
+            TrustedBuiltinIdentityV2::SystemProgram { destination: 0 },
+            &rules,
+            &[],
+            &[],
+            &[],
+            RegisterGeometryV2 {
+                common_scalars: 0,
+                item_scalar_stride: 0,
+                common_identities: 1,
+                item_identity_stride: 0,
+            },
+            &mut scratch,
+            &mut bytes,
+        )
+        .expect("authenticated route alias profile");
+        let profile = AccountProfileV2::decode(&bytes).expect("decode route alias profile");
+        assert!(!profile.uses_dynamic_fixed_spans());
+
+        let account = |executable| {
+            let key = Box::leak(Box::new(Pubkey::new_unique()));
+            let owner = Box::leak(Box::new(Pubkey::new_unique()));
+            let lamports = Box::leak(Box::new(0_u64));
+            let data = Box::leak(Vec::new().into_boxed_slice());
+            AccountInfo::new(key, false, false, lamports, data, owner, executable)
+        };
+        let plain = account(false);
+        let program = account(true);
+        let logical = [&plain, &program, &program];
+
+        let child = downgraded_effect_accounts_v3(profile, 0, &[], &logical)
+            .expect("alias of an executable representative downgrades");
+        assert!(child[1].executable);
+        assert!(child[2].executable, "alias lost its physical executability");
+        assert_eq!(child[1].key, child[2].key);
+        assert!(!child[2].is_signer && !child[2].is_writable);
+
+        // The representative's own executable bit is still checked against the
+        // physical account, in both directions.
+        let hostile = [&plain, &plain, &plain];
+        assert!(downgraded_effect_accounts_v3(profile, 0, &[], &hostile).is_err());
+        let inverted = [&program, &program, &program];
+        assert!(downgraded_effect_accounts_v3(profile, 0, &[], &inverted).is_err());
     }
 
     #[test]
