@@ -103,19 +103,32 @@ pub fn process_instruction(
     let invocation =
         authenticate_shadow_accelerator_invocation_v4(program_id, accounts, instruction_data)
             .map_err(|_| SeriesShadowSbfErrorV4::InvalidInvocation)?;
+    evaluate_selected_and_publish(&invocation, instruction_data)
+}
+
+#[inline(never)]
+fn evaluate_selected_and_publish(
+    invocation: &AuthenticatedShadowAcceleratorInvocationV4<'_, '_, '_>,
+    instruction_data: &[u8],
+) -> ProgramResult {
     let selected = selected_series_shadow_release_v1()
         .map_err(|_| SeriesShadowSbfErrorV4::NoSelectedRelease)?
         .ok_or(SeriesShadowSbfErrorV4::NoSelectedRelease)?;
     let request = invocation.request();
     let request_digest = invocation.request_digest();
     let acknowledgement =
-        match evaluate_authenticated_invocation(&invocation, instruction_data, selected) {
+        match evaluate_authenticated_invocation(invocation, instruction_data, selected) {
             Ok(accepted) => accepted,
             Err(SeriesShadowSbfErrorV4::Runtime | SeriesShadowSbfErrorV4::FinalizedRecord) => {
                 ShadowAckV3::refused(request, request_digest)
             }
             Err(error) => return Err(error.into()),
         };
+    publish_acknowledgement(acknowledgement)
+}
+
+#[inline(never)]
+fn publish_acknowledgement(acknowledgement: ShadowAckV3) -> ProgramResult {
     let output = acknowledgement
         .to_bytes()
         .map_err(|_| SeriesShadowSbfErrorV4::InvalidAcknowledgement)?;
@@ -453,10 +466,7 @@ mod tests {
             portfolio: [4; 32],
             linked_basis: [5; 32],
         };
-        assert_eq!(
-            logical_projection_key(0, [1; 32], projections),
-            [1; 32]
-        );
+        assert_eq!(logical_projection_key(0, [1; 32], projections), [1; 32]);
         assert_eq!(
             logical_projection_key(CONFIG_COORDINATE, [1; 32], projections),
             [2; 32]
