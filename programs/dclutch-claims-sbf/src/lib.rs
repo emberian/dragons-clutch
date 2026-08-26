@@ -46,6 +46,7 @@ mod product_runtime_v2;
 pub mod protocol_position_v2;
 pub mod rational_representation_v2;
 mod representation;
+pub mod signed_delta_v3;
 
 entrypoint!(process_instruction);
 
@@ -356,6 +357,11 @@ pub fn process_instruction(
         == Some(dclutch_claims_svm::affine_batch_v2::AFFINE_BATCH_PLAN_MAGIC_V2.as_slice())
     {
         return affine_batch_v2::process(program_id, accounts, instruction_data);
+    }
+    if instruction_data.get(..dclutch_claims_svm::signed_delta_v3::SIGNED_DELTA_PLAN_MAGIC_V3.len())
+        == Some(dclutch_claims_svm::signed_delta_v3::SIGNED_DELTA_PLAN_MAGIC_V3.as_slice())
+    {
+        return signed_delta_v3::process(program_id, accounts, instruction_data);
     }
     if instruction_data
         .get(..dclutch_claims_svm::founding_v4::CLAIMS_FOUNDING_REQUEST_MAGIC_V4.len())
