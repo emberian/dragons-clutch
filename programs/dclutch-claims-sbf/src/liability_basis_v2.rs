@@ -19,8 +19,8 @@ use dclutch_custody_contract::{
     CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
 };
 use dclutch_liability_basis_v2_kernel::product_claims::{
-    AdmittedBasisV2, BasisKindV2, ClaimsCandidateV2, ContentIdV2, LinkedBasisRecordV2,
-    ProductClaimsErrorV2, TerminalResultV2,
+    AdmittedBasisV2, BASIS_SEMANTIC_ID_DOMAIN_V2, BasisKindV2, ClaimsCandidateV2, ContentIdV2,
+    LinkedBasisRecordV2, ProductClaimsErrorV2, TerminalResultV2, semantic_basis_preimage_v2,
 };
 use dclutch_market_core_codec::{CoreState, Phase as CorePhase, STATE_BYTES};
 use dclutch_product_contract::product::{InstanceV1, PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1};
@@ -72,9 +72,6 @@ const POSITION_MAGIC_V2: [u8; 8] = *b"DCLLBP02";
 const RECEIPT_MAGIC_V2: [u8; 8] = *b"DCLLBR02";
 const RECEIPT_BYTES_V2: usize = 168;
 const CANDIDATE_DIGEST_DOMAIN_V2: [u8; 27] = *b"dclutch/lbv2/candidate/v2\0\0";
-pub(crate) const BASIS_SEMANTIC_ID_DOMAIN_V2: &[u8] = b"dclutch/lbv2/semantic-id/v2";
-pub(crate) const BASIS_PRODUCT_LINK_OFFSET_V2: usize = 32;
-pub(crate) const BASIS_PRODUCT_LINK_END_V2: usize = 64;
 
 const OWNER_ACCOUNT: usize = 0;
 const MARKET_ACCOUNT: usize = 1;
@@ -973,14 +970,14 @@ pub(crate) fn authenticate_product_and_basis_records(
         return Err(LiabilityBasisSbfErrorV2::ProductLink.into());
     }
     let embedded_basis = linked.basis_record();
-    let basis_prefix = embedded_basis
-        .get(..BASIS_PRODUCT_LINK_OFFSET_V2)
-        .ok_or(LiabilityBasisSbfErrorV2::ProductLink)?;
-    let basis_suffix = embedded_basis
-        .get(BASIS_PRODUCT_LINK_END_V2..)
-        .ok_or(LiabilityBasisSbfErrorV2::ProductLink)?;
-    let basis_semantic_id =
-        hashv(&[BASIS_SEMANTIC_ID_DOMAIN_V2, basis_prefix, basis_suffix]).to_bytes();
+    let semantic_preimage = semantic_basis_preimage_v2(embedded_basis)
+        .map_err(|_| LiabilityBasisSbfErrorV2::ProductLink)?;
+    let basis_semantic_id = hashv(&[
+        BASIS_SEMANTIC_ID_DOMAIN_V2,
+        semantic_preimage.prefix(),
+        semantic_preimage.suffix(),
+    ])
+    .to_bytes();
     if basis_semantic_id != market.basis_id {
         return Err(LiabilityBasisSbfErrorV2::ProductLink.into());
     }

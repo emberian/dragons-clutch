@@ -22,7 +22,9 @@ use dclutch_claims_svm::{
     protocol_position_v2::ProtocolPositionSeedsV2,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_liability_basis_v2_kernel::product_claims::LinkedBasisRecordV2;
+use dclutch_liability_basis_v2_kernel::product_claims::{
+    BASIS_SEMANTIC_ID_DOMAIN_V2, LinkedBasisRecordV2, semantic_basis_preimage_v2,
+};
 use dclutch_market_core_codec::{
     CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, STATE_BYTES,
 };
@@ -41,7 +43,6 @@ use solana_sdk_ids::sysvar;
 
 use super::{product_runtime_v2::authenticate_product_runtime_v2, reauthenticate};
 use crate::liability_basis_v2::{
-    BASIS_PRODUCT_LINK_END_V2, BASIS_PRODUCT_LINK_OFFSET_V2, BASIS_SEMANTIC_ID_DOMAIN_V2,
     LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
     LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, LIABILITY_BASIS_SCHEMA_RELEASE_ID_V2, MarketViewV2,
     PositionViewV2, authenticate_self_finalized_record,
@@ -49,6 +50,19 @@ use crate::liability_basis_v2::{
 
 /// Exact fixed affine-batch account count before the runtime Position tail.
 pub const AFFINE_BATCH_FIXED_ACCOUNT_COUNT_V2: usize = 20;
+
+/// Exact already-authenticated parent request joined to one nested affine plan.
+///
+/// The same generic release-pinned caller PDA is rederived from these facts;
+/// this is not a second caller authority or an adapter-local seed domain.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedAffineParentV2 {
+    pub(crate) caller_role: CallerRole,
+    pub(crate) release_set: [u8; 32],
+    pub(crate) market: [u8; 32],
+    pub(crate) parent_context: [u8; 32],
+    pub(crate) parent_request_digest: [u8; 32],
+}
 
 const AUTHORITY_ACCOUNT: usize = 0;
 const MARKET_ACCOUNT: usize = 1;
@@ -183,7 +197,43 @@ pub(super) fn process(
     authenticate_privileges(program_id, &accounts)?;
     let packet_digest = hash(instruction_data).to_bytes();
     authenticate_authority(&accounts, plan, packet_digest)?;
-    authenticate_releases(&accounts, plan)?;
+    let receipt = execute_authenticated(program_id, &accounts, plan, packet_digest)?;
+    set_return_data(&receipt.to_bytes());
+    Ok(())
+}
+
+/// Execute the sole affine writer from a parent route authenticated under the
+/// same generic release-pinned caller authority.
+///
+/// Product/basis/Core/Position authentication and commit-last behavior are
+/// identical to the public affine dispatcher. Only the immediate packet bound
+/// by the caller PDA is the parent request rather than the nested affine plan.
+pub(crate) fn execute_parent_authenticated(
+    program_id: &Pubkey,
+    account_infos: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+    parent: AuthenticatedAffineParentV2,
+) -> Result<AffineBatchReceiptV2, ProgramError> {
+    let plan = AffineBatchPlanV2::decode(instruction_data)
+        .map_err(|_| AffineBatchSbfErrorV2::Instruction)?;
+    let accounts = AffineBatchAccountsV2::parse(account_infos, plan.position_count())?;
+    authenticate_privileges(program_id, &accounts)?;
+    authenticate_parent_authority(&accounts, plan, parent)?;
+    execute_authenticated(
+        program_id,
+        &accounts,
+        plan,
+        hash(instruction_data).to_bytes(),
+    )
+}
+
+fn execute_authenticated(
+    program_id: &Pubkey,
+    accounts: &AffineBatchAccountsV2<'_, '_>,
+    plan: AffineBatchPlanV2<'_>,
+    packet_digest: [u8; 32],
+) -> Result<AffineBatchReceiptV2, ProgramError> {
+    authenticate_releases(accounts, plan)?;
 
     let market_before = accounts
         .market
@@ -191,10 +241,10 @@ pub(super) fn process(
         .map_err(|_| AffineBatchSbfErrorV2::Accounts)?;
     let market =
         MarketViewV2::decode(&market_before).map_err(|_| AffineBatchSbfErrorV2::ClaimsState)?;
-    authenticate_market(program_id, &accounts, plan, market)?;
-    authenticate_product_and_basis(&accounts, plan, market)?;
+    authenticate_market(program_id, accounts, plan, market)?;
+    authenticate_product_and_basis(accounts, plan, market)?;
     let (mut market_candidate, mut position_candidates) =
-        build_candidates(program_id, &accounts, plan, market, &market_before)?;
+        build_candidates(program_id, accounts, plan, market, &market_before)?;
     drop(market_before);
 
     apply_rows(plan, &mut market_candidate, &mut position_candidates)?;
@@ -226,10 +276,8 @@ pub(super) fn process(
         post_market_revision,
     )
     .map_err(|_| AffineBatchSbfErrorV2::Receipt)?;
-    let receipt_bytes = receipt.to_bytes();
-    commit_candidates(&accounts, &market_candidate, &position_candidates)?;
-    set_return_data(&receipt_bytes);
-    Ok(())
+    commit_candidates(accounts, &market_candidate, &position_candidates)?;
+    Ok(receipt)
 }
 
 fn authenticate_privileges(
@@ -308,6 +356,34 @@ fn authenticate_authority(
         role,
         plan.request_id(),
         packet_digest,
+    )
+    .map_err(|_| AffineBatchSbfErrorV2::Release)?;
+    if accounts.authority.key
+        != &Pubkey::find_program_address(&seeds.as_slices(), accounts.caller_program.key).0
+    {
+        return Err(AffineBatchSbfErrorV2::Release.into());
+    }
+    Ok(())
+}
+
+fn authenticate_parent_authority(
+    accounts: &AffineBatchAccountsV2<'_, '_>,
+    plan: AffineBatchPlanV2<'_>,
+    parent: AuthenticatedAffineParentV2,
+) -> Result<(), ProgramError> {
+    if plan.caller_role() != parent.caller_role
+        || plan.release_set() != parent.release_set
+        || plan.market() != parent.market
+        || plan.request_id() != parent.parent_request_digest
+    {
+        return Err(AffineBatchSbfErrorV2::Release.into());
+    }
+    let seeds = CallerAuthoritySeedsV1::new(
+        ContentId::new(parent.release_set).map_err(|_| AffineBatchSbfErrorV2::Release)?,
+        parent.market,
+        execution_role(parent.caller_role),
+        parent.parent_context,
+        parent.parent_request_digest,
     )
     .map_err(|_| AffineBatchSbfErrorV2::Release)?;
     if accounts.authority.key
@@ -462,13 +538,14 @@ pub(crate) fn authenticate_runtime_product_basis_core_v2(
     let linked = LinkedBasisRecordV2::decode(&basis_data)
         .map_err(|_| AffineBatchSbfErrorV2::ProductBasis)?;
     let embedded = linked.basis_record();
-    let prefix = embedded
-        .get(..BASIS_PRODUCT_LINK_OFFSET_V2)
-        .ok_or(AffineBatchSbfErrorV2::ProductBasis)?;
-    let suffix = embedded
-        .get(BASIS_PRODUCT_LINK_END_V2..)
-        .ok_or(AffineBatchSbfErrorV2::ProductBasis)?;
-    let semantic_basis_id = hashv(&[BASIS_SEMANTIC_ID_DOMAIN_V2, prefix, suffix]).to_bytes();
+    let semantic_preimage =
+        semantic_basis_preimage_v2(embedded).map_err(|_| AffineBatchSbfErrorV2::ProductBasis)?;
+    let semantic_basis_id = hashv(&[
+        BASIS_SEMANTIC_ID_DOMAIN_V2,
+        semantic_preimage.prefix(),
+        semantic_preimage.suffix(),
+    ])
+    .to_bytes();
     if product.product_record.content_digest.to_bytes() != expected_product_record_digest
         || product.product_id.to_bytes() != market.product_instance_id
         || product.liability_basis_id.to_bytes() != market.basis_id
