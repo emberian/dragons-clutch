@@ -17,9 +17,9 @@ use crate::{
 };
 
 /// Exact common scalar-register count in the General Hot36 ABI.
-pub const GENERAL_HOT_COMMON_SCALARS_V3: u32 = 44;
-/// Outcome index plus exact quantity for every Product outcome.
-pub const GENERAL_HOT_ITEM_SCALAR_STRIDE_V3: u32 = 2;
+pub const GENERAL_HOT_COMMON_SCALARS_V3: u32 = 47;
+/// Outcome index, quantity, and three exact signed-magnitude fields per outcome.
+pub const GENERAL_HOT_ITEM_SCALAR_STRIDE_V3: u32 = 5;
 /// Exact common identity-register count in the General Hot36 ABI.
 pub const GENERAL_HOT_COMMON_IDENTITIES_V3: u32 = 27;
 /// General has no per-outcome identity tail.
@@ -115,6 +115,26 @@ pub mod scalar {
     pub const POSITION_ONE_REVISION: u32 = 42;
     /// Exact total number of active position coordinates (zero, one, or two).
     pub const POSITION_TABLE_COUNT: u32 = 43;
+    /// Claims aggregate revision after the one affine mutation.
+    pub const CLAIMS_POST_MARKET_REVISION: u32 = 44;
+    /// Settlement Position revision after the one affine mutation.
+    pub const SETTLEMENT_POST_POSITION_REVISION: u32 = 45;
+    /// Exact amount for the selected Custody request.
+    pub const CUSTODY_AMOUNT: u32 = 46;
+}
+
+/// Scalar coordinates within each Product-outcome item bank.
+pub mod item_scalar {
+    /// Canonical Product outcome index.
+    pub const OUTCOME: u32 = 0;
+    /// Exact semantic quantity for this outcome.
+    pub const QUANTITY: u32 = 1;
+    /// Exact aggregate signed-magnitude magnitude.
+    pub const CLAIMS_AGGREGATE_MAGNITUDE: u32 = 2;
+    /// Exact source-Position signed-magnitude magnitude.
+    pub const CLAIMS_SOURCE_MAGNITUDE: u32 = 3;
+    /// Exact destination-Position signed-magnitude magnitude.
+    pub const CLAIMS_DESTINATION_MAGNITUDE: u32 = 4;
 }
 
 /// Identity coordinates consumed by exact child-packet projection.
@@ -346,6 +366,19 @@ pub fn project_general_hot_candidate_v3<'a>(
         .custody_expected_revision
         .checked_add(1)
         .ok_or(GeneralHotCandidateErrorV3::RevisionOverflow)?;
+    let claims_post_market_revision = environment
+        .claims_market_revision
+        .checked_add(1)
+        .ok_or(GeneralHotCandidateErrorV3::RevisionOverflow)?;
+    let settlement_post_position_revision = environment
+        .settlement_position_revision
+        .checked_add(1)
+        .ok_or(GeneralHotCandidateErrorV3::RevisionOverflow)?;
+    let custody_amount = if header.action == RuntimeSettlementActionV2::Materialize {
+        header.complete_set_quantity
+    } else {
+        header.quote_quantity
+    };
     for (coordinate, value) in [
         (scalar::ACTION, action_tag(header.action)),
         (
@@ -458,6 +491,15 @@ pub fn project_general_hot_candidate_v3<'a>(
         (scalar::POSITION_ZERO_REVISION, position.zero_revision),
         (scalar::POSITION_ONE_REVISION, position.one_revision),
         (scalar::POSITION_TABLE_COUNT, u64::from(position.count)),
+        (
+            scalar::CLAIMS_POST_MARKET_REVISION,
+            claims_post_market_revision,
+        ),
+        (
+            scalar::SETTLEMENT_POST_POSITION_REVISION,
+            settlement_post_position_revision,
+        ),
+        (scalar::CUSTODY_AMOUNT, custody_amount),
     ] {
         write_scalar(scratch, coordinate, value)?;
     }
@@ -468,14 +510,42 @@ pub fn project_general_hot_candidate_v3<'a>(
                     .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
             )
             .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?;
-        write_scalar(scratch, base, u64::from(item))?;
         write_scalar(
             scratch,
-            base.checked_add(1)
+            base.checked_add(item_scalar::OUTCOME)
                 .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
-            plan.quantity(item)
-                .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?,
+            u64::from(item),
         )?;
+        let quantity = plan
+            .quantity(item)
+            .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
+        write_scalar(
+            scratch,
+            base.checked_add(item_scalar::QUANTITY)
+                .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
+            quantity,
+        )?;
+        for (coordinate, direction) in [
+            (
+                item_scalar::CLAIMS_AGGREGATE_MAGNITUDE,
+                position.aggregate_direction,
+            ),
+            (
+                item_scalar::CLAIMS_SOURCE_MAGNITUDE,
+                position.source_direction,
+            ),
+            (
+                item_scalar::CLAIMS_DESTINATION_MAGNITUDE,
+                position.destination_direction,
+            ),
+        ] {
+            write_scalar(
+                scratch,
+                base.checked_add(coordinate)
+                    .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
+                if direction == 0 { 0 } else { quantity },
+            )?;
+        }
     }
     let scalar_count = general_hot_scalar_count_v3(outcome_count)?;
     for (coordinate, value) in [
@@ -995,10 +1065,34 @@ mod tests {
                 read_scalar(&output, scalar::CLAIMS_ROW_COUNT),
                 Ok(u64::from(outcome_count))
             );
+            assert_eq!(
+                read_scalar(&output, scalar::CLAIMS_POST_MARKET_REVISION),
+                Ok(environment.claims_market_revision + 1)
+            );
+            assert_eq!(
+                read_scalar(&output, scalar::SETTLEMENT_POST_POSITION_REVISION),
+                Ok(environment.settlement_position_revision + 1)
+            );
+            assert_eq!(read_scalar(&output, scalar::CUSTODY_AMOUNT), Ok(3));
             let last = GENERAL_HOT_COMMON_SCALARS_V3
                 + (outcome_count - 1) * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3;
-            assert_eq!(read_scalar(&output, last), Ok(u64::from(outcome_count - 1)));
-            assert_eq!(read_scalar(&output, last + 1), Ok(3));
+            assert_eq!(
+                read_scalar(&output, last + item_scalar::OUTCOME),
+                Ok(u64::from(outcome_count - 1))
+            );
+            assert_eq!(read_scalar(&output, last + item_scalar::QUANTITY), Ok(3));
+            assert_eq!(
+                read_scalar(&output, last + item_scalar::CLAIMS_AGGREGATE_MAGNITUDE,),
+                Ok(3)
+            );
+            assert_eq!(
+                read_scalar(&output, last + item_scalar::CLAIMS_SOURCE_MAGNITUDE),
+                Ok(0)
+            );
+            assert_eq!(
+                read_scalar(&output, last + item_scalar::CLAIMS_DESTINATION_MAGNITUDE,),
+                Ok(3)
+            );
             assert_eq!(
                 read_identity(
                     &output,
