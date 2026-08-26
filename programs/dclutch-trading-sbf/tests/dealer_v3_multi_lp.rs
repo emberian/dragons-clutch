@@ -4,6 +4,7 @@ use dclutch_capability_program_contract::set_v1::CapabilityProgramSetV1;
 use dclutch_claims_svm::affine_batch_v2::AFFINE_BATCH_PLAN_MAGIC_V2;
 use dclutch_custody_contract::{CompartmentV1, CustodyVaultSeedsV1};
 use dclutch_dealer_codec::scenario::ClaimsInventoryObservation;
+use dclutch_effect_kernel::v3::ProgramV3 as EffectProgramV3;
 use dclutch_trading_sbf::dealer::{
     v3_equity_operator::{
         DEALER_EQUITY_CONTRIBUTE_P2_SELECTOR_V3, DEALER_EQUITY_HEADER_BYTES_V3,
@@ -21,6 +22,7 @@ use dclutch_trading_sbf::dealer::{
         DEALER_OBLIGATION_PDA_DOMAIN_V3, DEALER_OBLIGATION_VERSION_V3,
         DealerObligationProjectionV3,
     },
+    v3_route::authenticate_dealer_equity_routes_v3,
 };
 use solana_program::{hash::hash, pubkey::Pubkey};
 
@@ -136,6 +138,51 @@ fn program_set(selector: u16) -> Vec<u8> {
     bytes[18..20].copy_from_slice(&1_u16.to_le_bytes());
     bytes[32..36].copy_from_slice(&u32::from(selector).to_le_bytes());
     bytes[36..68].copy_from_slice(&[42; 32]);
+    bytes
+}
+
+fn equity_effect(custody_request: &[u8], claims_first: bool) -> Vec<u8> {
+    let templates = custody_request.len().checked_mul(2).expect("templates");
+    let mut bytes = vec![0; 128 + templates];
+    bytes[..4].copy_from_slice(b"DCE3");
+    bytes[4] = 3;
+    bytes[6..8].copy_from_slice(&3_u16.to_le_bytes());
+    bytes[12..14].copy_from_slice(&57_u16.to_le_bytes());
+    bytes[16..18].copy_from_slice(&5_u16.to_le_bytes());
+    bytes[20..22].copy_from_slice(&1_u16.to_le_bytes());
+    let (custody, claims) = if claims_first { (64, 32) } else { (32, 64) };
+    bytes[custody] = 4;
+    bytes[custody + 1] = 0;
+    bytes[custody + 2] = 1;
+    bytes[custody + 6..custody + 8].copy_from_slice(&5_u16.to_le_bytes());
+    bytes[custody + 8..custody + 10].copy_from_slice(&14_u16.to_le_bytes());
+    bytes[custody + 16..custody + 20].copy_from_slice(
+        &u32::try_from(custody_request.len())
+            .expect("Custody width")
+            .to_le_bytes(),
+    );
+    bytes[claims] = 1;
+    bytes[claims + 1] = 0;
+    bytes[claims + 2] = 1;
+    bytes[claims + 3] = 1;
+    bytes[claims + 4..claims + 6].copy_from_slice(&3_u16.to_le_bytes());
+    bytes[claims + 6..claims + 8].copy_from_slice(&19_u16.to_le_bytes());
+    bytes[claims + 8..claims + 10].copy_from_slice(&22_u16.to_le_bytes());
+    bytes[claims + 14..claims + 16].copy_from_slice(&1_u16.to_le_bytes());
+    let merge = 96;
+    bytes[merge] = 4;
+    bytes[merge + 1] = 0;
+    bytes[merge + 2] = 1;
+    bytes[merge + 4..merge + 6].copy_from_slice(&4_u16.to_le_bytes());
+    bytes[merge + 6..merge + 8].copy_from_slice(&41_u16.to_le_bytes());
+    bytes[merge + 8..merge + 10].copy_from_slice(&14_u16.to_le_bytes());
+    bytes[merge + 16..merge + 20].copy_from_slice(
+        &u32::try_from(custody_request.len())
+            .expect("Custody width")
+            .to_le_bytes(),
+    );
+    bytes[128..128 + custody_request.len()].copy_from_slice(custody_request);
+    bytes[128 + custody_request.len()..].copy_from_slice(custody_request);
     bytes
 }
 
@@ -272,6 +319,53 @@ fn runtime_width_equity_request_is_chain_derived_and_rejoins_physical_intent() {
     assert_eq!(physical.principal_after, 30);
     assert_eq!(post_dealer_claims, [0, 15, 30]);
     assert_eq!(post_lp_claims, [10, 5, 0]);
+
+    let custody_request = physical.custody[0]
+        .expect("cash Custody")
+        .request
+        .to_bytes()
+        .expect("Custody request");
+    let mut request_bank = Vec::with_capacity(custody_request.len() * 2);
+    request_bank.extend_from_slice(&custody_request);
+    request_bank.extend_from_slice(&custody_request);
+    let scalars = [
+        1,
+        u64::try_from(DEALER_EQUITY_HEADER_BYTES_V3).expect("header"),
+        u64::try_from(request.claims_packet().len()).expect("packet"),
+        1,
+        0,
+    ];
+    let identities = [[1; 32]];
+    let effect_bytes = equity_effect(&custody_request, false);
+    let effect = EffectProgramV3::decode(&effect_bytes).expect("Dealer Hot effect");
+    let composition = authenticate_dealer_equity_routes_v3(
+        effect,
+        3,
+        &scalars,
+        &identities,
+        &request_bank,
+        request_bytes,
+        request,
+        physical,
+    )
+    .expect("cash then Claims route order");
+    assert_eq!(composition.claims_route(), Some(1));
+    assert_eq!(composition.custody().count(), 1);
+
+    let reversed = equity_effect(&custody_request, true);
+    assert!(
+        authenticate_dealer_equity_routes_v3(
+            EffectProgramV3::decode(&reversed).expect("reversed structural effect"),
+            3,
+            &scalars,
+            &identities,
+            &request_bank,
+            request_bytes,
+            request,
+            physical,
+        )
+        .is_err()
+    );
 
     let mut stale = chain;
     stale.collateral.principal_balance = 21;
