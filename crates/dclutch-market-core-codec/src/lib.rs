@@ -30,6 +30,7 @@ mod generated_retirement_v1 {
 }
 
 mod capability;
+mod generic_founding_v1;
 mod physical;
 mod project_found;
 mod retirement_v1;
@@ -49,6 +50,7 @@ pub use generated_physical::{
     SERIES_FOUNDING_PERMIT_MAGIC_V1, SERIES_FOUNDING_PERMIT_PDA_DOMAIN_V1,
     SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1, SERIES_PERMIT_EXPIRY_REQUEST_MAGIC_V1,
 };
+pub use generic_founding_v1::*;
 pub use physical::*;
 pub use project_found::*;
 pub use retirement_v1::*;

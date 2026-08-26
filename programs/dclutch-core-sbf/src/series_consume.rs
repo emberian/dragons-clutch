@@ -16,9 +16,7 @@ use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
 };
 use dclutch_claims_svm::{
-    founding_v5::{
-        ClaimsFoundingAggregateSeedsV5, ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5,
-    },
+    founding_v5::ClaimsFoundingAggregateSeedsV5,
     liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
         liability_basis_vector_width_v2,
@@ -35,9 +33,9 @@ use dclutch_custody_contract::{
     ProjectedCustodyStateSeedsV1, ProjectedCustodyStateV1,
 };
 use dclutch_market_core_codec::{
-    Action, FoundingIntentV5, Request, Role, SERIES_FOUNDING_PERMIT_BYTES_V1, SeriesCoreActionV1,
-    SERIES_FOUND_POST_RESOURCE_DIGEST_DOMAIN_V1, SeriesCoreFoundAckV2, SeriesCoreRequestV1,
-    SeriesFoundingPermitSeedsV1, SeriesFoundingPermitV1,
+    Action, Request, Role, SERIES_FOUND_POST_RESOURCE_DIGEST_DOMAIN_V1,
+    SERIES_FOUNDING_PERMIT_BYTES_V1, SeriesCoreActionV1, SeriesCoreFoundAckV2, SeriesCoreRequestV1,
+    SeriesFoundingPermitSeedsV1,
 };
 use dclutch_product_runtime_v2_svm_reader::{
     FinalizedRecordFrameV2, authenticate_product_basis_v3,
@@ -59,18 +57,21 @@ use solana_program::{
     account_info::AccountInfo,
     clock::Clock,
     hash::{hash, hashv},
-    program::{invoke_signed, set_return_data},
+    program::set_return_data,
     pubkey::Pubkey,
     rent::Rent,
     sysvar::SysvarSerialize,
 };
 use solana_sdk_ids::{system_program, sysvar};
-use solana_system_interface::instruction::{allocate, assign};
 
 use crate::{
     CoreSbfError,
     found::{self, PreparedFound},
     frame::{FOUND_ACCOUNT_COUNT_V2, FoundAccounts, require_distinct},
+    generic_founding_v1::{
+        GenericFoundingPermitInputV1, GenericFoundingPermitPlanV1,
+        build_permit_plan as build_generic_permit_plan, create_permit as create_generic_permit,
+    },
     records::authenticate_finalized_record,
     release::{RoleBatchAdmissions, RoleDeploymentAccounts, authenticate_roles, identity},
 };
@@ -258,10 +259,6 @@ struct AdmittedSeries {
     product: AuthenticatedProductProjectionV2,
 }
 
-struct PermitPlan {
-    permit: Box<SeriesFoundingPermitV1>,
-}
-
 #[derive(Clone, Copy)]
 struct ProductFacts {
     linked_basis_record: [u8; 32],
@@ -339,9 +336,9 @@ pub(crate) fn process(
     )?;
 
     found::apply_prepared(program_id, &frame.found, *prepared)?;
-    create_permit(
+    create_generic_permit(
         program_id,
-        suffix,
+        suffix.permit,
         frame.found.system,
         permit_plan.permit.as_ref(),
         &rent,
@@ -913,7 +910,7 @@ fn prepare_permit<'accounts, 'info>(
     lock_receipt: &ProjectedCustodyLockReceiptV1,
     lock_receipt_bytes: &[u8],
     rent: &Rent,
-) -> Result<PermitPlan, CoreSbfError> {
+) -> Result<GenericFoundingPermitPlanV1, CoreSbfError> {
     let product = authenticate_product_facts(frame, suffix, prepared, rent)?;
     let projected = authenticate_projected_facts(
         program_id,
@@ -1210,7 +1207,7 @@ fn build_permit_plan(
     product: ProductFacts,
     projected: ProjectedFacts,
     rent: &Rent,
-) -> Result<PermitPlan, CoreSbfError> {
+) -> Result<GenericFoundingPermitPlanV1, CoreSbfError> {
     let ticket_context = admitted.ticket.content_id().to_bytes();
     let permit_seeds = SeriesFoundingPermitSeedsV1::new(
         identity(request.release_set().to_bytes())?,
@@ -1231,112 +1228,6 @@ fn build_permit_plan(
     {
         return Err(CoreSbfError::Creation);
     }
-    let intent = build_intent(
-        bump,
-        frame,
-        suffix,
-        request,
-        prepared,
-        ticket_context,
-        product,
-        projected,
-    )?;
-    let intent_digest = digest_intent(&intent)?;
-    let claims_request_digest = build_claims_request_digest(
-        frame,
-        suffix,
-        request,
-        prepared,
-        lock_receipt,
-        lock_receipt_bytes,
-        product,
-        projected,
-        intent_digest,
-        rent,
-    )?;
-    finish_permit(&intent, intent_digest, claims_request_digest)
-}
-
-#[inline(never)]
-#[allow(clippy::too_many_arguments)]
-fn build_intent(
-    bump: u8,
-    frame: &SeriesConsumeAccounts<'_, '_>,
-    suffix: SeriesFoundSuffix<'_, '_>,
-    request: SeriesCoreRequestV1,
-    prepared: &PreparedFound,
-    ticket_context: [u8; 32],
-    product: ProductFacts,
-    projected: ProjectedFacts,
-) -> Result<Box<FoundingIntentV5>, CoreSbfError> {
-    Ok(Box::new(
-        FoundingIntentV5::new(
-            bump,
-            identity(request.release_set().to_bytes())?,
-            identity(frame.found.market.key.to_bytes())?,
-            identity(prepared.product_record_id)?,
-            identity(prepared.resolution_policy_id)?,
-            identity(suffix.founder.key.to_bytes())?,
-            identity(ticket_context)?,
-            identity(frame.root.key.to_bytes())?,
-            identity(suffix.projected_replay.key.to_bytes())?,
-            identity(suffix.funding_source.key.to_bytes())?,
-            identity(suffix.hoard.key.to_bytes())?,
-            identity(projected.realize_request_digest)?,
-            identity(projected.realize_receipt_digest)?,
-            identity(frame.trading_program.key.to_bytes())?,
-            identity(suffix.claims_program.key.to_bytes())?,
-            identity(frame.found.rent_credit.key.to_bytes())?,
-            request
-                .market_generation()
-                .ok_or(CoreSbfError::Instruction)?,
-            projected.quantity,
-            product.basis_scale,
-            projected.expiry_slot,
-            projected.realize_revision,
-            1,
-        )
-        .map_err(|_| CoreSbfError::Reference)?,
-    ))
-}
-
-#[inline(never)]
-fn digest_intent(intent: &FoundingIntentV5) -> Result<[u8; 32], CoreSbfError> {
-    Ok(hash(&intent.encode().map_err(|_| CoreSbfError::Reference)?).to_bytes())
-}
-
-#[inline(never)]
-fn finish_permit(
-    intent: &FoundingIntentV5,
-    intent_digest: [u8; 32],
-    request_digest: [u8; 32],
-) -> Result<PermitPlan, CoreSbfError> {
-    Ok(PermitPlan {
-        permit: Box::new(
-            SeriesFoundingPermitV1::new(
-                *intent,
-                identity(intent_digest)?,
-                identity(request_digest)?,
-            )
-            .map_err(|_| CoreSbfError::Reference)?,
-        ),
-    })
-}
-
-#[inline(never)]
-#[allow(clippy::too_many_arguments)]
-fn build_claims_request_digest(
-    frame: &SeriesConsumeAccounts<'_, '_>,
-    suffix: SeriesFoundSuffix<'_, '_>,
-    request: SeriesCoreRequestV1,
-    prepared: &PreparedFound,
-    lock_receipt: &ProjectedCustodyLockReceiptV1,
-    lock_receipt_bytes: &[u8],
-    product: ProductFacts,
-    projected: ProjectedFacts,
-    intent_digest: [u8; 32],
-    rent: &Rent,
-) -> Result<[u8; 32], CoreSbfError> {
     let aggregate_seeds = ClaimsFoundingAggregateSeedsV5::new(frame.found.market.key.to_bytes())
         .map_err(|_| CoreSbfError::Reference)?;
     let expected_aggregate =
@@ -1374,107 +1265,54 @@ fn build_claims_request_digest(
         product.claim_count,
     )
     .map_err(|_| CoreSbfError::Arithmetic)?;
-    let claims_request = ClaimsFoundingRequestV5::new(ClaimsFoundingRequestInputV5 {
+    build_generic_permit_plan(GenericFoundingPermitInputV1 {
+        bump,
         release_set: request.release_set().to_bytes(),
         market: frame.found.market.key.to_bytes(),
-        product_record_digest: prepared.product_record_id,
-        product_instance_id: prepared.product_id,
-        linked_basis_record_digest: product.linked_basis_record,
-        semantic_basis_id: product.semantic_basis,
+        product_record: prepared.product_record_id,
+        product_id: prepared.product_id,
+        linked_basis_record: product.linked_basis_record,
+        semantic_basis: product.semantic_basis,
+        source: prepared.resolution_policy_id,
         founder: suffix.founder.key.to_bytes(),
-        founding_intent_digest: intent_digest,
+        context: ticket_context,
+        capability_root: frame.root.key.to_bytes(),
+        projected_replay: suffix.projected_replay.key.to_bytes(),
+        funding_source: suffix.funding_source.key.to_bytes(),
+        hoard: suffix.hoard.key.to_bytes(),
+        projected_request_digest: projected.realize_request_digest,
+        projected_receipt_digest: projected.realize_receipt_digest,
+        custody_lock_request_digest: lock_receipt.request_digest,
+        custody_lock_receipt_digest: hash(lock_receipt_bytes).to_bytes(),
+        trading_program: frame.trading_program.key.to_bytes(),
+        claims_program: suffix.claims_program.key.to_bytes(),
+        rent_credit: frame.found.rent_credit.key.to_bytes(),
+        rent_program: frame.found.rent_program.key.to_bytes(),
         aggregate: suffix.aggregate.key.to_bytes(),
         position: suffix.position.key.to_bytes(),
         admission: suffix.admission.key.to_bytes(),
-        hoard: suffix.hoard.key.to_bytes(),
-        rent_credit: frame.found.rent_credit.key.to_bytes(),
-        rent_program: frame.found.rent_program.key.to_bytes(),
-        claims_program: suffix.claims_program.key.to_bytes(),
-        trading_program: frame.trading_program.key.to_bytes(),
-        funding_source: suffix.funding_source.key.to_bytes(),
-        custody_replay: suffix.projected_replay.key.to_bytes(),
-        custody_request_digest: lock_receipt.request_digest,
-        custody_receipt_digest: hash(lock_receipt_bytes).to_bytes(),
         generation: request
             .market_generation()
             .ok_or(CoreSbfError::Instruction)?,
         claim_count: product.claim_count,
         quantity: projected.quantity,
         basis_scale: product.basis_scale,
-        pre_source_amount: request.hoard_principal(),
-        post_source_amount: 0,
-        pre_hoard_amount: 0,
-        post_hoard_amount: projected.hoard_amount,
-        pre_custody_revision: 0,
-        post_custody_revision: 1,
-        aggregate_rent_principal: rent.minimum_balance(aggregate_width),
-        position_rent_principal: rent.minimum_balance(position_width),
-        admission_rent_principal: rent.minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2),
-        observed_aggregate_lamports: suffix.aggregate.lamports(),
-        observed_position_lamports: suffix.position.lamports(),
-        observed_admission_lamports: suffix.admission.lamports(),
-        pre_aggregate_revision: 0,
-        post_aggregate_revision: 1,
-        pre_position_revision: 0,
-        post_position_revision: 1,
+        expiry_slot: projected.expiry_slot,
+        projected_resulting_revision: projected.realize_revision,
+        normal_replay_revision: 1,
+        source_amount: request.hoard_principal(),
+        hoard_amount: projected.hoard_amount,
+        aggregate_rent: rent.minimum_balance(aggregate_width),
+        position_rent: rent.minimum_balance(position_width),
+        admission_rent: rent.minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2),
+        aggregate_lamports: suffix.aggregate.lamports(),
+        position_lamports: suffix.position.lamports(),
+        admission_lamports: suffix.admission.lamports(),
     })
-    .map_err(|_| CoreSbfError::Reference)?;
-    Ok(hash(&claims_request.to_bytes()).to_bytes())
 }
 
 #[inline(never)]
-fn create_permit<'accounts, 'info>(
-    program_id: &Pubkey,
-    suffix: SeriesFoundSuffix<'accounts, 'info>,
-    system: &'accounts AccountInfo<'info>,
-    permit: &SeriesFoundingPermitV1,
-    rent: &Rent,
-) -> Result<(), CoreSbfError> {
-    if suffix.permit.owner != &system_program::ID
-        || !suffix.permit.data_is_empty()
-        || suffix.permit.lamports() < rent.minimum_balance(SERIES_FOUNDING_PERMIT_BYTES_V1)
-    {
-        return Err(CoreSbfError::Creation);
-    }
-    let seeds = permit.seeds();
-    let base = seeds.as_slices();
-    let bump = [permit.intent().bump()];
-    let signer = [base[0], base[1], base[2], base[3], bump.as_slice()];
-    for instruction in [
-        allocate(
-            suffix.permit.key,
-            u64::try_from(SERIES_FOUNDING_PERMIT_BYTES_V1).map_err(|_| CoreSbfError::Arithmetic)?,
-        ),
-        assign(suffix.permit.key, program_id),
-    ] {
-        invoke_signed(
-            &instruction,
-            &[suffix.permit.clone(), system.clone()],
-            &[&signer],
-        )
-        .map_err(|_| CoreSbfError::Creation)?;
-    }
-    let encoded = permit.encode().map_err(|_| CoreSbfError::Commit)?;
-    {
-        let mut data = suffix
-            .permit
-            .try_borrow_mut_data()
-            .map_err(|_| CoreSbfError::Commit)?;
-        if data.len() != SERIES_FOUNDING_PERMIT_BYTES_V1 {
-            return Err(CoreSbfError::Commit);
-        }
-        data.copy_from_slice(&encoded);
-    }
-    let data = suffix
-        .permit
-        .try_borrow_data()
-        .map_err(|_| CoreSbfError::Commit)?;
-    if suffix.permit.owner != program_id || SeriesFoundingPermitV1::decode(&data) != Ok(*permit) {
-        return Err(CoreSbfError::Commit);
-    }
-    Ok(())
-}
-
+#[allow(clippy::too_many_arguments)]
 fn ticket_content_id_from_account(account: &AccountInfo<'_>) -> Result<[u8; 32], CoreSbfError> {
     let data = account
         .try_borrow_data()

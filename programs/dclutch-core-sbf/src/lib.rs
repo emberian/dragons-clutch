@@ -42,6 +42,7 @@ mod execute_provider_v3;
 mod fixed_role;
 mod found;
 mod frame;
+mod generic_founding_v1;
 mod infrastructure;
 mod open_market;
 mod product_runtime_v2;

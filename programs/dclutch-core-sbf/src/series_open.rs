@@ -5,23 +5,15 @@ use alloc::boxed::Box;
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
 };
-use dclutch_claims_svm::founding_v5::{
-    CLAIMS_FOUNDING_POST_RESOURCE_DIGEST_DOMAIN_V5, ClaimsFoundingReceiptV5,
-};
-use dclutch_custody_contract::{
-    CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CustodyReplayV1, PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
-};
+use dclutch_claims_svm::founding_v5::ClaimsFoundingReceiptV5;
 use dclutch_market_core_codec::{
-    Action, Admission, ChildEffectObservation, CoreState, MarketCoreStateSeedsV2, Readiness,
-    Request, Role, SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES, SeriesCoreAckV1,
-    SeriesCoreActionV1, SeriesCoreRequestV1, SeriesFoundingPermitV1, SeriesOpenObservation,
-    SERIES_OPEN_POST_RESOURCE_DIGEST_DOMAIN_V1, open_series_market,
+    CoreState, MarketCoreStateSeedsV2, Readiness, Role, SERIES_OPEN_POST_RESOURCE_DIGEST_DOMAIN_V1,
+    STATE_BYTES, SeriesCoreAckV1, SeriesCoreActionV1, SeriesCoreRequestV1, SeriesFoundingPermitV1,
 };
 use dclutch_product_runtime_v2_svm_reader::{
     FinalizedRecordFrameV2, ProductRuntimeFrameV2, authenticate_product_runtime_v2,
 };
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_rent_contract::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
 use dclutch_series_v3_kernel::{
     AccountKeyV3, AuthenticatedProductProjectionV2, SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3,
     SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3, SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
@@ -32,7 +24,6 @@ use dclutch_series_v3_kernel::{
     },
     template_content_id, ticket_content_id,
 };
-use dclutch_token_svm::{AccountState, TokenAccount, TokenProgram};
 use solana_program::{
     account_info::AccountInfo,
     clock::Clock,
@@ -47,6 +38,13 @@ use solana_sdk_ids::{system_program, sysvar};
 use crate::{
     CoreSbfError,
     frame::require_distinct,
+    generic_founding_v1::{
+        GenericFoundingOpenAccounts, apply_open, authenticate_claims_and_custody,
+        authenticate_permit as authenticate_generic_permit,
+        authenticate_rent_credit as authenticate_generic_rent_credit,
+        close_permit as close_generic_permit, commit_market as commit_generic_market,
+        decode_claims_receipt as decode_generic_claims_receipt,
+    },
     records::authenticate_finalized_record,
     release::{authenticate_role, identity},
 };
@@ -216,6 +214,25 @@ impl<'accounts, 'info> SeriesOpenAccounts<'accounts, 'info> {
         }
         Ok(value)
     }
+
+    fn generic(&self) -> GenericFoundingOpenAccounts<'_, 'info> {
+        GenericFoundingOpenAccounts {
+            market: self.market,
+            permit: self.permit,
+            rent_credit: self.rent_credit,
+            rent_program: self.rent_program,
+            trading_program: self.trading_program,
+            claims_program: self.claims_program,
+            custody_program: self.custody_program,
+            capability_root: self.root,
+            custody_replay: self.custody_replay,
+            hoard: self.hoard,
+            funding_source: self.funding_source,
+            aggregate: self.aggregate,
+            position: self.position,
+            admission: self.admission,
+        }
+    }
 }
 
 struct ReplayCandidates {
@@ -243,18 +260,30 @@ pub(crate) fn process(
     let (ticket_context, replay_candidates) =
         authenticate_series(&frame, request, proof_bytes, &rent, *state)?;
     authenticate_caller(&frame, request, request_bytes, ticket_context)?;
-    let permit = authenticate_permit(
+    let generic = frame.generic();
+    let permit = authenticate_generic_permit(
         program_id,
-        &frame,
-        request,
+        &generic,
         ticket_context,
+        request
+            .founder()
+            .ok_or(CoreSbfError::Instruction)?
+            .to_bytes(),
         &rent,
         clock.slot,
         *state,
     )?;
-    authenticate_rent_credit(&frame, request, &rent)?;
-    let claims_receipt = decode_claims_receipt(claims_receipt_bytes)?;
-    authenticate_claims_receipt(&frame, request, &permit, &claims_receipt, *state)?;
+    authenticate_generic_rent_credit(
+        &generic,
+        request.beneficiary().to_bytes(),
+        request.release_set().to_bytes(),
+        request
+            .market_generation()
+            .ok_or(CoreSbfError::Instruction)?,
+        &rent,
+    )?;
+    let claims_receipt = decode_generic_claims_receipt(claims_receipt_bytes)?;
+    authenticate_claims_and_custody(&generic, &permit, &claims_receipt, *state)?;
     authenticate_roles_and_apply(&frame, request, &claims_receipt, &mut state)?;
     commit_and_ack(
         program_id,
@@ -294,7 +323,7 @@ fn authenticate_roles_and_apply(
         request.release_set().to_bytes(),
         Role::Custody,
     )?;
-    apply_series_open(state, receipt, claims_admission, custody_admission)
+    apply_open(state, receipt, claims_admission, custody_admission)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -310,8 +339,8 @@ fn commit_and_ack(
     permit: &SeriesFoundingPermitV1,
     ticket_context: [u8; 32],
 ) -> Result<(), solana_program::program_error::ProgramError> {
-    commit_market(frame.market, state, program_id)?;
-    close_permit(frame.permit, frame.rent_credit, program_id)?;
+    commit_generic_market(frame.market, state, program_id)?;
+    close_generic_permit(frame.permit, frame.rent_credit, program_id)?;
     let market_data = frame
         .market
         .try_borrow_data()
@@ -645,378 +674,6 @@ fn authenticate_caller(
 }
 
 #[inline(never)]
-fn authenticate_permit(
-    program_id: &Pubkey,
-    frame: &SeriesOpenAccounts<'_, '_>,
-    request: SeriesCoreRequestV1,
-    ticket_context: [u8; 32],
-    rent: &Rent,
-    current_slot: u64,
-    state: CoreState,
-) -> Result<Box<SeriesFoundingPermitV1>, CoreSbfError> {
-    if frame.permit.owner != program_id
-        || frame.permit.data_len() != SERIES_FOUNDING_PERMIT_BYTES_V1
-        || !rent.is_exempt(frame.permit.lamports(), SERIES_FOUNDING_PERMIT_BYTES_V1)
-    {
-        return Err(CoreSbfError::Reference);
-    }
-    let permit_data = frame
-        .permit
-        .try_borrow_data()
-        .map_err(|_| CoreSbfError::Reference)?;
-    let permit =
-        SeriesFoundingPermitV1::decode(&permit_data).map_err(|_| CoreSbfError::Reference)?;
-    drop(permit_data);
-    let intent = permit.intent();
-    let permit_seeds = permit.seeds();
-    let (expected_permit, bump) =
-        Pubkey::find_program_address(&permit_seeds.as_slices(), program_id);
-    if expected_permit != *frame.permit.key
-        || bump != intent.bump()
-        || intent.market().to_bytes() != frame.market.key.to_bytes()
-        || intent.release_set().to_bytes() != request.release_set().to_bytes()
-        || intent.ticket_context().to_bytes() != ticket_context
-        || intent.product_record().to_bytes() != state.identity.product_record.to_bytes()
-        || intent.source().to_bytes() != state.identity.resolution_policy.to_bytes()
-        || intent.founder().to_bytes()
-            != request
-                .founder()
-                .ok_or(CoreSbfError::Instruction)?
-                .to_bytes()
-        || intent.parent_root().to_bytes() != frame.root.key.to_bytes()
-        || intent.projected_replay().to_bytes() != frame.custody_replay.key.to_bytes()
-        || intent.funding_source().to_bytes() != frame.funding_source.key.to_bytes()
-        || intent.hoard().to_bytes() != frame.hoard.key.to_bytes()
-        || intent.trading_program().to_bytes() != frame.trading_program.key.to_bytes()
-        || intent.claims_program().to_bytes() != frame.claims_program.key.to_bytes()
-        || intent.rent_credit().to_bytes() != frame.rent_credit.key.to_bytes()
-        || intent.generation() != state.identity.generation
-        || current_slot > intent.expiry_slot()
-    {
-        return Err(CoreSbfError::Reference);
-    }
-    Ok(Box::new(permit))
-}
-
-#[inline(never)]
-fn decode_claims_receipt(
-    claims_receipt_bytes: &[u8],
-) -> Result<Box<ClaimsFoundingReceiptV5>, CoreSbfError> {
-    let receipt = ClaimsFoundingReceiptV5::decode(claims_receipt_bytes)
-        .map_err(|_| CoreSbfError::ChildAck)?;
-    Ok(Box::new(receipt))
-}
-
-#[inline(never)]
-fn authenticate_claims_receipt(
-    frame: &SeriesOpenAccounts<'_, '_>,
-    request: SeriesCoreRequestV1,
-    permit: &SeriesFoundingPermitV1,
-    receipt: &ClaimsFoundingReceiptV5,
-    state: CoreState,
-) -> Result<(), CoreSbfError> {
-    let intent = permit.intent();
-    let claims_request = receipt.request();
-    receipt
-        .verify_for(&claims_request, permit.claims_request_digest().to_bytes())
-        .map_err(|_| CoreSbfError::ChildAck)?;
-    let intent_bytes = intent.encode().map_err(|_| CoreSbfError::ChildAck)?;
-    let intent_digest = hash(&intent_bytes).to_bytes();
-    permit
-        .verify_for_intent_and_request(
-            intent,
-            identity(intent_digest)?,
-            identity(receipt.request_digest())?,
-        )
-        .map_err(|_| CoreSbfError::ChildAck)?;
-    if claims_request.release_set() != request.release_set().to_bytes()
-        || claims_request.market() != frame.market.key.to_bytes()
-        || claims_request.product_record_digest() != state.identity.product_record.to_bytes()
-        || claims_request.product_instance_id() != state.identity.product_id.to_bytes()
-        || claims_request.founder() != intent.founder().to_bytes()
-        || claims_request.founding_intent_digest() != intent_digest
-        || claims_request.aggregate() != frame.aggregate.key.to_bytes()
-        || claims_request.position() != frame.position.key.to_bytes()
-        || claims_request.admission() != frame.admission.key.to_bytes()
-        || claims_request.funding_source() != frame.funding_source.key.to_bytes()
-        || claims_request.hoard() != frame.hoard.key.to_bytes()
-        || claims_request.custody_replay() != frame.custody_replay.key.to_bytes()
-        || claims_request.rent_credit() != frame.rent_credit.key.to_bytes()
-        || claims_request.rent_program() != frame.rent_program.key.to_bytes()
-        || claims_request.claims_program() != frame.claims_program.key.to_bytes()
-        || claims_request.trading_program() != frame.trading_program.key.to_bytes()
-        || claims_request.generation() != state.identity.generation
-        || claims_request.quantity() != intent.quantity()
-        || claims_request.basis_scale() != intent.basis_scale()
-        || claims_request.post_custody_revision() != intent.normal_replay_revision()
-        || claims_request.post_source_amount() != 0
-        || claims_request.pre_source_amount() != claims_request.collateral_transferred()
-        || claims_request.post_hoard_amount() != claims_request.collateral_transferred()
-    {
-        return Err(CoreSbfError::ChildAck);
-    }
-    authenticate_claims_poststate(frame, receipt)?;
-    let ticket_context = permit.intent().ticket_context().to_bytes();
-    authenticate_custody_poststate(frame, claims_request, intent, ticket_context)?;
-    Ok(())
-}
-
-#[inline(never)]
-fn apply_series_open(
-    state: &mut CoreState,
-    receipt: &ClaimsFoundingReceiptV5,
-    claims_admission: Admission,
-    custody_admission: Admission,
-) -> Result<(), CoreSbfError> {
-    let request = receipt.request();
-    let observation = SeriesOpenObservation {
-        claims_admission,
-        custody_admission,
-        quantity: request.quantity(),
-        basis_scale: request.basis_scale(),
-        source_debit: request.pre_source_amount(),
-        hoard_credit: request.post_hoard_amount(),
-        hoard_funding_authenticated: true,
-        found_state_bound_by_custody: true,
-        claims_custody_join_authenticated: true,
-        ticket_prepared_authenticated: true,
-        ticket_consumed_candidate_authenticated: true,
-        claims_effect: ChildEffectObservation {
-            exact_request_authenticated: true,
-            exact_receipt_authenticated: true,
-            post_resource_authenticated: true,
-        },
-        custody_effect: ChildEffectObservation {
-            exact_request_authenticated: true,
-            exact_receipt_authenticated: true,
-            post_resource_authenticated: true,
-        },
-    };
-    open_series_market(
-        Request::administrative(
-            Action::OpenMarket,
-            state.identity.generation,
-            state.identity.market_id,
-        ),
-        state,
-        observation,
-    )
-    .map_err(|_| CoreSbfError::Transition)
-}
-
-fn authenticate_rent_credit(
-    frame: &SeriesOpenAccounts<'_, '_>,
-    request: SeriesCoreRequestV1,
-    rent: &Rent,
-) -> Result<(), CoreSbfError> {
-    if frame.rent_credit.owner != frame.rent_program.key
-        || frame.rent_credit.data_len() != LIFECYCLE_RENT_CREDIT_BYTES_V2
-        || !rent.is_exempt(frame.rent_credit.lamports(), LIFECYCLE_RENT_CREDIT_BYTES_V2)
-    {
-        return Err(CoreSbfError::RentCredit);
-    }
-    let data = frame
-        .rent_credit
-        .try_borrow_data()
-        .map_err(|_| CoreSbfError::RentCredit)?;
-    let credit = LifecycleRentCreditV2::decode(&data).map_err(|_| CoreSbfError::RentCredit)?;
-    if credit.refund_wallet().to_bytes() != request.beneficiary().to_bytes()
-        || credit.market().to_bytes()
-            != request
-                .market()
-                .ok_or(CoreSbfError::Instruction)?
-                .to_bytes()
-        || credit.release_set().to_bytes() != request.release_set().to_bytes()
-        || credit.generation()
-            != request
-                .market_generation()
-                .ok_or(CoreSbfError::Instruction)?
-    {
-        return Err(CoreSbfError::RentCredit);
-    }
-    let seeds = credit.pda_seeds();
-    let market = seeds.market().to_bytes();
-    let generation = seeds.generation();
-    let bump = [seeds.bump()];
-    let expected = Pubkey::create_program_address(
-        &[seeds.domain(), &market, &generation, bump.as_slice()],
-        frame.rent_program.key,
-    )
-    .map_err(|_| CoreSbfError::RentCredit)?;
-    if expected != *frame.rent_credit.key {
-        return Err(CoreSbfError::RentCredit);
-    }
-    Ok(())
-}
-
-fn authenticate_claims_poststate(
-    frame: &SeriesOpenAccounts<'_, '_>,
-    receipt: &ClaimsFoundingReceiptV5,
-) -> Result<(), CoreSbfError> {
-    let request = receipt.request();
-    for (account, expected, digest) in [
-        (
-            frame.aggregate,
-            request.aggregate(),
-            receipt.aggregate_digest(),
-        ),
-        (
-            frame.position,
-            request.position(),
-            receipt.position_digest(),
-        ),
-        (
-            frame.admission,
-            request.admission(),
-            receipt.admission_digest(),
-        ),
-    ] {
-        if account.owner != frame.claims_program.key || account.key.to_bytes() != expected {
-            return Err(CoreSbfError::ChildAck);
-        }
-        let data = account
-            .try_borrow_data()
-            .map_err(|_| CoreSbfError::ChildAck)?;
-        if hash(&data).to_bytes() != digest {
-            return Err(CoreSbfError::ChildAck);
-        }
-    }
-    let aggregate = frame
-        .aggregate
-        .try_borrow_data()
-        .map_err(|_| CoreSbfError::ChildAck)?;
-    let position = frame
-        .position
-        .try_borrow_data()
-        .map_err(|_| CoreSbfError::ChildAck)?;
-    let admission = frame
-        .admission
-        .try_borrow_data()
-        .map_err(|_| CoreSbfError::ChildAck)?;
-    if hashv(&[
-        CLAIMS_FOUNDING_POST_RESOURCE_DIGEST_DOMAIN_V5,
-        &aggregate,
-        &position,
-        &admission,
-    ])
-    .to_bytes()
-        != receipt.post_resource_digest()
-    {
-        return Err(CoreSbfError::ChildAck);
-    }
-    Ok(())
-}
-
-fn authenticate_custody_poststate(
-    frame: &SeriesOpenAccounts<'_, '_>,
-    request: dclutch_claims_svm::founding_v5::ClaimsFoundingRequestV5,
-    intent: dclutch_market_core_codec::FoundingIntentV5,
-    ticket_context: [u8; 32],
-) -> Result<(), CoreSbfError> {
-    if frame.funding_source.owner != &system_program::ID
-        || frame.funding_source.lamports() != 0
-        || !frame.funding_source.data_is_empty()
-        || frame.custody_replay.owner != frame.custody_program.key
-        || frame.custody_replay.data_len() != CUSTODY_REPLAY_BYTES_V1
-        || TokenProgram::parse(frame.hoard.owner.to_bytes())
-            .map_err(|_| CoreSbfError::ChildAck)?
-            .program_id()
-            != frame.hoard.owner.to_bytes()
-    {
-        return Err(CoreSbfError::ChildAck);
-    }
-    let hoard_data = frame
-        .hoard
-        .try_borrow_data()
-        .map_err(|_| CoreSbfError::ChildAck)?;
-    let hoard = TokenAccount::parse(&hoard_data).map_err(|_| CoreSbfError::ChildAck)?;
-    if hoard.amount != request.post_hoard_amount()
-        || hoard.state != AccountState::Initialized
-        || !hoard.delegate.is_none()
-        || hoard.delegated_amount != 0
-        || !hoard.native_reserve.is_none()
-        || !hoard.close_authority.is_none()
-    {
-        return Err(CoreSbfError::ChildAck);
-    }
-    let replay_data = frame
-        .custody_replay
-        .try_borrow_data()
-        .map_err(|_| CoreSbfError::ChildAck)?;
-    let replay = CustodyReplayV1::decode(&replay_data).map_err(|_| CoreSbfError::ChildAck)?;
-    let projected_context =
-        hashv(&[PROJECTED_HOARD_CONTEXT_DOMAIN_V1, ticket_context.as_slice()]).to_bytes();
-    let replay_expected = Pubkey::find_program_address(
-        &[
-            dclutch_custody_contract::CUSTODY_REPLAY_PDA_DOMAIN_V1,
-            &request.market(),
-            &request.release_set(),
-            &projected_context,
-        ],
-        frame.custody_program.key,
-    )
-    .0;
-    if replay_expected != *frame.custody_replay.key
-        || replay.caller_role != CallerRoleV1::Trading
-        || replay.release_set != request.release_set()
-        || replay.market != request.market()
-        || replay.context != projected_context
-        || replay.caller_program != request.trading_program()
-        || replay.rent_refund != request.rent_credit()
-        || replay.open_vault_count != 1
-        || replay.next_revision != intent.normal_replay_revision()
-        || replay.last_request_digest != intent.projected_request_digest().to_bytes()
-        || replay.last_poststate_commitment != intent.projected_receipt_digest().to_bytes()
-    {
-        return Err(CoreSbfError::ChildAck);
-    }
-    Ok(())
-}
-
-fn commit_market(
-    market: &AccountInfo<'_>,
-    state: CoreState,
-    program_id: &Pubkey,
-) -> Result<(), CoreSbfError> {
-    let encoded = state.encode().map_err(|_| CoreSbfError::Commit)?;
-    market
-        .try_borrow_mut_data()
-        .map_err(|_| CoreSbfError::Commit)?
-        .copy_from_slice(&encoded);
-    let data = market.try_borrow_data().map_err(|_| CoreSbfError::Commit)?;
-    if market.owner != program_id || CoreState::decode(&data) != Ok(state) {
-        return Err(CoreSbfError::Commit);
-    }
-    Ok(())
-}
-
-fn close_permit(
-    permit: &AccountInfo<'_>,
-    rent_credit: &AccountInfo<'_>,
-    program_id: &Pubkey,
-) -> Result<(), CoreSbfError> {
-    if permit.owner != program_id || permit.key == rent_credit.key {
-        return Err(CoreSbfError::Commit);
-    }
-    let destination = rent_credit
-        .lamports()
-        .checked_add(permit.lamports())
-        .ok_or(CoreSbfError::Arithmetic)?;
-    permit
-        .try_borrow_mut_data()
-        .map_err(|_| CoreSbfError::Commit)?
-        .fill(0);
-    **permit
-        .try_borrow_mut_lamports()
-        .map_err(|_| CoreSbfError::Commit)? = 0;
-    **rent_credit
-        .try_borrow_mut_lamports()
-        .map_err(|_| CoreSbfError::Commit)? = destination;
-    permit.resize(0).map_err(|_| CoreSbfError::Commit)?;
-    permit.assign(&system_program::ID);
-    Ok(())
-}
-
 fn account<'accounts, 'info>(
     accounts: &'accounts [AccountInfo<'info>],
     index: usize,
