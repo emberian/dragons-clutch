@@ -66,6 +66,10 @@ name = "emit-source-material-v2-abi-rust"
 root = "EmitSourceMaterialV2AbiRust"
 
 [[lean_exe]]
+name = "emit-source-recovery-policy-v2-abi-rust"
+root = "EmitSourceRecoveryPolicyV2AbiRust"
+
+[[lean_exe]]
 name = "emit-source-resolution-state-v2-abi-rust"
 root = "EmitSourceResolutionStateV2AbiRust"
 

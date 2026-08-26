@@ -20,6 +20,8 @@ extern crate std;
 pub mod child_packets;
 /// Exact funded batch, candidate, page, abort, and terminal lifecycle.
 pub mod lifecycle;
+/// Stateless, failure-atomic candidate and settlement plan evaluation.
+pub mod plan;
 
 use dclutch_general_codec::{
     CandidateV1, ExecutionV1, MAX_EXECUTIONS_PER_PAGE, MAX_OUTCOMES, MAX_PAGES_PER_CANDIDATE,

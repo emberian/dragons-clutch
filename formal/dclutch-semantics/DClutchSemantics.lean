@@ -23,6 +23,7 @@ import DClutchSemantics.ExecutionRelease
 import DClutchSemantics.SourceResolution
 import DClutchSemantics.SourceResolutionAbi
 import DClutchSemantics.SourceMaterialV2Abi
+import DClutchSemantics.SourceRecoveryPolicyV2Abi
 import DClutchSemantics.SourceResolutionStateV2Abi
 import DClutchSemantics.SourceResolutionTerminalV2Abi
 import DClutchSemantics.GeneralClearing

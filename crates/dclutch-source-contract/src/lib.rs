@@ -27,8 +27,11 @@ use dclutch_product_contract::{
 #[allow(missing_docs)]
 mod generated_source_material_v2;
 #[allow(missing_docs)]
+mod generated_source_recovery_policy_v2;
+#[allow(missing_docs)]
 mod generated_source_resolution_state_v2;
 mod source_material_v2;
+mod source_recovery_policy_v2;
 mod source_resolution_v2;
 
 pub use generated_source_material_v2::{
@@ -37,7 +40,13 @@ pub use generated_source_material_v2::{
     SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2, SOURCE_MATERIAL_SCHEMA_RELEASE_PREIMAGE_V2,
     SOURCE_MATERIAL_V2_BYTES, SOURCE_MATERIAL_V2_MAGIC, SOURCE_MATERIAL_V2_SCHEMA_VERSION,
 };
+pub use generated_source_recovery_policy_v2::{
+    RECOVERY_ATTEMPT_BYTES_V2, RECOVERY_POLICY_BYTES_V2, RECOVERY_POLICY_MAGIC_V2,
+    RECOVERY_POLICY_MAX_ATTEMPTS_V2, RECOVERY_POLICY_SCHEMA_ID_V2,
+    RECOVERY_POLICY_SCHEMA_PREIMAGE_V2, RECOVERY_POLICY_SCHEMA_VERSION_V2,
+};
 pub use source_material_v2::SourceMaterialV2;
+pub use source_recovery_policy_v2::{RecoveryAttemptV2, RecoveryPolicyV2};
 pub use source_resolution_v2::{
     SourceResolutionCreationPlanV2, SourceResolutionDecisionV2, SourceResolutionPdaSeedsV2,
     SourceResolutionStateV2,
@@ -6860,6 +6869,10 @@ mod tests {
             (
                 REOPEN_LINK_SCHEMA_RELEASE_PREIMAGE_V1,
                 REOPEN_LINK_SCHEMA_RELEASE_ID_V1,
+            ),
+            (
+                RECOVERY_POLICY_SCHEMA_PREIMAGE_V2,
+                RECOVERY_POLICY_SCHEMA_ID_V2,
             ),
         ];
         for (preimage, expected) in releases {
