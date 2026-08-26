@@ -31,7 +31,6 @@ use dclutch_rational_representation_v2_lifecycle_contract::{
         RATIONAL_LIFECYCLE_ITEM_SCALAR_STRUCTURED_RENT_V3, RATIONAL_LIFECYCLE_SCALAR_ACTION_V3,
         RATIONAL_LIFECYCLE_SCALAR_COORDINATE_COUNT_V3, RATIONAL_LIFECYCLE_SCALAR_GENERATION_V3,
         RATIONAL_LIFECYCLE_SCALAR_MARKET_REVISION_V3, RATIONAL_LIFECYCLE_SCALAR_OUTCOME_COUNT_V3,
-        RATIONAL_LIFECYCLE_SCALAR_PRODUCT_OUTCOME_COUNT_V3,
         RATIONAL_LIFECYCLE_SCALAR_RECEIPT_LAMPORTS_V3, RATIONAL_LIFECYCLE_SCALAR_RECEIPT_RENT_V3,
         RATIONAL_LIFECYCLE_SCALAR_RECEIPT_SUPPLY_V3, RATIONAL_LIFECYCLE_SCALAR_RENT_AFTER_V3,
         RATIONAL_LIFECYCLE_SCALAR_RENT_BEFORE_V3, RationalLifecycleHotLayoutV3,
@@ -189,7 +188,11 @@ pub fn encode_rational_lifecycle_request_profile_v3(
     Ok(output)
 }
 
-/// Encode the exact Product-width and coordinate-bounds transition.
+/// Encode the exact representation-width coordinate-bounds transition.
+///
+/// The request-owned outcome count is the Claims/native-basis width `K`.
+/// Product terminal-result width `N` is independently authenticated and is
+/// deliberately not equated with `K` here.
 pub fn encode_rational_lifecycle_transition_v3(
     action: LifecycleActionV2,
     coordinate_count: u32,
@@ -202,10 +205,9 @@ pub fn encode_rational_lifecycle_transition_v3(
             .and_then(|count| count.checked_add(1))
             .ok_or(Error::InvalidLength)?,
     );
-    instructions.push(InstructionV3::scalar_eq(
-        transition_scalar(RATIONAL_LIFECYCLE_SCALAR_OUTCOME_COUNT_V3)?,
-        transition_scalar(RATIONAL_LIFECYCLE_SCALAR_PRODUCT_OUTCOME_COUNT_V3)?,
-    ));
+    instructions.push(InstructionV3::nonzero(transition_scalar(
+        RATIONAL_LIFECYCLE_SCALAR_OUTCOME_COUNT_V3,
+    )?));
     for row in 0..coordinates {
         instructions.push(InstructionV3::scalar_lt(
             transition_scalar(
@@ -213,7 +215,7 @@ pub fn encode_rational_lifecycle_transition_v3(
                     .coordinate_scalar(row, RATIONAL_LIFECYCLE_ITEM_SCALAR_OUTCOME_V3)
                     .ok_or(Error::InvalidLength)?,
             )?,
-            transition_scalar(RATIONAL_LIFECYCLE_SCALAR_PRODUCT_OUTCOME_COUNT_V3)?,
+            transition_scalar(RATIONAL_LIFECYCLE_SCALAR_OUTCOME_COUNT_V3)?,
         ));
         instructions.push(InstructionV3::nonzero(transition_scalar(
             layout
@@ -602,7 +604,63 @@ fn narrow_u32(value: usize) -> Result<u32> {
 mod tests {
     use super::*;
     use dclutch_request_profile_contract::RequestProfileV1;
-    use dclutch_transition_vm::v3::ProgramV3;
+    use dclutch_transition_vm::v3::{
+        ProgramV3, RegisterInput, RegisterOutput, execute_fold_atomic,
+    };
+
+    fn run_selected_transition(
+        product_width: u64,
+        representation_width: u64,
+        outcome: u64,
+    ) -> dclutch_transition_vm::v3::Result<()> {
+        let bytes =
+            encode_rational_lifecycle_transition_v3(LifecycleActionV2::ActivateCoordinate, 1)
+                .expect("transition");
+        let program = ProgramV3::decode(&bytes).expect("decode transition");
+        let layout = RationalLifecycleHotRegisterLayoutV3::new(1);
+        let mut input = vec![0_u64; layout.scalar_count().expect("scalar width")];
+        *input
+            .get_mut(RATIONAL_LIFECYCLE_SCALAR_OUTCOME_COUNT_V3)
+            .expect("representation width register") = representation_width;
+        *input
+            .get_mut(dclutch_rational_representation_v2_lifecycle_contract::hot_v3::RATIONAL_LIFECYCLE_SCALAR_PRODUCT_OUTCOME_COUNT_V3)
+            .expect("Product width register") = product_width;
+        *input
+            .get_mut(
+                layout
+                    .coordinate_scalar(0, RATIONAL_LIFECYCLE_ITEM_SCALAR_OUTCOME_V3)
+                    .expect("outcome register"),
+            )
+            .expect("outcome scalar") = outcome;
+        *input
+            .get_mut(
+                layout
+                    .coordinate_scalar(0, RATIONAL_LIFECYCLE_ITEM_SCALAR_COEFFICIENT_V3)
+                    .expect("coefficient register"),
+            )
+            .expect("coefficient scalar") = 1;
+        let identities = vec![[0_u8; 32]; layout.identity_count().expect("identity width")];
+        let mut scratch_scalars = vec![0_u64; input.len()];
+        let mut output_scalars = vec![0_u64; input.len()];
+        let mut scratch_identities = vec![[0_u8; 32]; identities.len()];
+        let mut output_identities = vec![[0_u8; 32]; identities.len()];
+        execute_fold_atomic(
+            program,
+            0,
+            RegisterInput {
+                scalars: &input,
+                identities: &identities,
+            },
+            RegisterOutput {
+                scalars: &mut scratch_scalars,
+                identities: &mut scratch_identities,
+            },
+            RegisterOutput {
+                scalars: &mut output_scalars,
+                identities: &mut output_identities,
+            },
+        )
+    }
 
     #[test]
     fn selected_action_artifact_geometries_decode() {
@@ -630,5 +688,18 @@ mod tests {
             encode_rational_lifecycle_request_profile_v3(LifecycleActionV2::RetireReceipt, 3),
             Err(Error::ActionGeometry)
         );
+    }
+
+    #[test]
+    fn selected_transition_keeps_representation_k_distinct_from_product_n() {
+        run_selected_transition(9, 3, 2).expect("K=3/N=9");
+        run_selected_transition(258, 3, 2).expect("K=3/N=258");
+    }
+
+    #[test]
+    fn selected_transition_bounds_claim_coordinates_by_k() {
+        assert!(run_selected_transition(258, 3, 3).is_err());
+        assert!(run_selected_transition(258, 2, 2).is_err());
+        run_selected_transition(2, 3, 2).expect("terminal N cannot substitute for Claims K");
     }
 }

@@ -1,8 +1,9 @@
 //! Compact complete-support receipt-retirement artifacts.
 //!
 //! The family request remains the exact fixed 400-byte `DCRLHC04` header.
-//! Product N and ordered nonzero descriptor rows are derived from authenticated
-//! accounts. The immutable effect artifact synthesizes the sole runtime-width
+//! Product terminal width `N`, representation width `K`, and ordered nonzero
+//! descriptor rows are independently derived from authenticated accounts. The
+//! immutable effect artifact synthesizes the sole runtime-width
 //! `DCRRLC02` Claims child; no wallet-supplied coordinate DTO survives.
 
 use dclutch_account_profile_contract::v2::{
@@ -121,7 +122,7 @@ pub struct RationalLifecycleCompactArtifactsV4 {
     pub account_profile: Vec<u8>,
     /// Fixed 400-byte family request interpreter.
     pub request_profile: Vec<u8>,
-    /// Exact Product-width and ordered-support transition.
+    /// Exact representation-width and ordered-support transition.
     pub transition: Vec<u8>,
     /// Sole Claims `Once` effect synthesizing `400 + 272*K` bytes.
     pub effect: Vec<u8>,
@@ -557,13 +558,8 @@ fn encode_transition(layout: RationalLifecycleCompactHotRegisterLayoutV4) -> Res
         layout
             .support_count()
             .checked_mul(2)
-            .and_then(|count| count.checked_add(1))
             .ok_or(Error::InvalidLength)?,
     );
-    instructions.push(InstructionV3::scalar_eq(
-        scalar_v3(RATIONAL_LIFECYCLE_SCALAR_OUTCOME_COUNT_V3)?,
-        scalar_v3(RATIONAL_LIFECYCLE_COMPACT_SCALAR_PRODUCT_OUTCOME_COUNT_V4)?,
-    ));
     for row in 0..layout.support_count() {
         instructions.push(InstructionV3::scalar_lt(
             scalar_v3(
@@ -571,7 +567,7 @@ fn encode_transition(layout: RationalLifecycleCompactHotRegisterLayoutV4) -> Res
                     .row_scalar(row, RATIONAL_LIFECYCLE_COMPACT_ROW_SCALAR_OUTCOME_V4)
                     .ok_or(Error::InvalidLength)?,
             )?,
-            scalar_v3(RATIONAL_LIFECYCLE_COMPACT_SCALAR_PRODUCT_OUTCOME_COUNT_V4)?,
+            scalar_v3(RATIONAL_LIFECYCLE_SCALAR_OUTCOME_COUNT_V3)?,
         ));
         instructions.push(InstructionV3::nonzero(scalar_v3(
             layout
@@ -945,7 +941,9 @@ mod tests {
         DescriptorAdmissionV2,
     };
     use dclutch_request_profile_contract::RequestProfileV1;
-    use dclutch_transition_vm::v3::ProgramV3 as TransitionProgramV3;
+    use dclutch_transition_vm::v3::{
+        ProgramV3 as TransitionProgramV3, RegisterInput, RegisterOutput, execute_fold_atomic,
+    };
 
     fn id(value: u8) -> [u8; 32] {
         [value; 32]
@@ -1029,6 +1027,60 @@ mod tests {
         output
     }
 
+    fn run_compact_transition(
+        product_width: u64,
+        representation_width: u64,
+        outcomes: [u64; 3],
+    ) -> dclutch_transition_vm::v3::Result<()> {
+        let layout = RationalLifecycleCompactHotRegisterLayoutV4::new(3);
+        let bytes = encode_transition(layout).expect("compact transition");
+        let program = TransitionProgramV3::decode(&bytes).expect("decode transition");
+        let mut input = vec![0_u64; layout.scalar_count().expect("scalar width")];
+        *input
+            .get_mut(RATIONAL_LIFECYCLE_SCALAR_OUTCOME_COUNT_V3)
+            .expect("representation width register") = representation_width;
+        *input
+            .get_mut(RATIONAL_LIFECYCLE_COMPACT_SCALAR_PRODUCT_OUTCOME_COUNT_V4)
+            .expect("Product width register") = product_width;
+        for (row, outcome) in outcomes.into_iter().enumerate() {
+            *input
+                .get_mut(
+                    layout
+                        .row_scalar(row, RATIONAL_LIFECYCLE_COMPACT_ROW_SCALAR_OUTCOME_V4)
+                        .expect("outcome register"),
+                )
+                .expect("outcome scalar") = outcome;
+            *input
+                .get_mut(
+                    layout
+                        .row_scalar(row, RATIONAL_LIFECYCLE_COMPACT_ROW_SCALAR_COEFFICIENT_V4)
+                        .expect("coefficient register"),
+                )
+                .expect("coefficient scalar") = 1;
+        }
+        let identities = vec![[0_u8; 32]; layout.identity_count().expect("identity width")];
+        let mut scratch_scalars = vec![0_u64; input.len()];
+        let mut output_scalars = vec![0_u64; input.len()];
+        let mut scratch_identities = vec![[0_u8; 32]; identities.len()];
+        let mut output_identities = vec![[0_u8; 32]; identities.len()];
+        execute_fold_atomic(
+            program,
+            0,
+            RegisterInput {
+                scalars: &input,
+                identities: &identities,
+            },
+            RegisterOutput {
+                scalars: &mut scratch_scalars,
+                identities: &mut scratch_identities,
+            },
+            RegisterOutput {
+                scalars: &mut output_scalars,
+                identities: &mut output_identities,
+            },
+        )
+    }
+
     #[test]
     fn k3_compact_artifacts_keep_family_fixed_and_synthesize_exact_child() {
         let basis = basis();
@@ -1089,6 +1141,20 @@ mod tests {
                 .is_some()
         );
         assert!(validate_rational_lifecycle_compact_bundle_v4(&substituted).is_err());
+    }
+
+    #[test]
+    fn compact_transition_keeps_representation_k_distinct_from_product_n() {
+        run_compact_transition(9, 3, [0, 1, 2]).expect("K=3/N=9");
+        run_compact_transition(258, 3, [0, 1, 2]).expect("K=3/N=258");
+    }
+
+    #[test]
+    fn compact_transition_bounds_support_coordinates_by_k() {
+        assert!(run_compact_transition(258, 3, [0, 1, 3]).is_err());
+        assert!(run_compact_transition(258, 2, [0, 1, 2]).is_err());
+        run_compact_transition(2, 3, [0, 1, 2])
+            .expect("terminal N cannot substitute for descriptor K");
     }
 
     #[test]
