@@ -83,12 +83,12 @@ mod tests {
             let profile = general_request_profile_v1(action).expect("generated profile");
             let scalar_count = profile.scalar_count(0).expect("scalar width");
             let identity_count = profile.identity_count(0).expect("identity width");
-            let input_scalars = [99_u64; 3];
-            let input_identities = [[0x99; 32]; 1];
-            let mut scratch_scalars = [0_u64; 3];
-            let mut scratch_identities = [[0_u8; 32]; 1];
-            let mut output_scalars = [0_u64; 3];
-            let mut output_identities = [[0_u8; 32]; 1];
+            let input_scalars = [99_u64; 11];
+            let input_identities = [[0x99; 32]; 4];
+            let mut scratch_scalars = [0_u64; 11];
+            let mut scratch_identities = [[0_u8; 32]; 4];
+            let mut output_scalars = [0_u64; 11];
+            let mut output_identities = [[0_u8; 32]; 4];
             project_atomic(
                 profile,
                 0,
@@ -115,7 +115,8 @@ mod tests {
             .expect("selected profile accepts");
             assert_eq!(output_scalars.first(), Some(&7));
             if action == Action::Freeze {
-                assert_eq!(identity_count, 0);
+                assert_eq!(identity_count, 4);
+                assert_eq!(output_identities.first(), Some(&[0x99; 32]));
             } else {
                 assert_eq!(output_identities.first(), Some(&[0x31; 32]));
             }
@@ -131,12 +132,12 @@ mod tests {
             let mut hostile = request(action);
             *hostile.get_mut(10).expect("action byte") =
                 u8::try_from((index + 1) % ACTIONS.len()).expect("bounded action");
-            let input_scalars = [1_u64; 3];
-            let input_identities = [[1_u8; 32]; 1];
-            let mut scratch_scalars = [0_u64; 3];
-            let mut scratch_identities = [[0_u8; 32]; 1];
-            let mut output_scalars = [0x55_u64; 3];
-            let mut output_identities = [[0x55_u8; 32]; 1];
+            let input_scalars = [1_u64; 11];
+            let input_identities = [[1_u8; 32]; 4];
+            let mut scratch_scalars = [0_u64; 11];
+            let mut scratch_identities = [[0_u8; 32]; 4];
+            let mut output_scalars = [0x55_u64; 11];
+            let mut output_identities = [[0x55_u8; 32]; 4];
             let before_scalars = output_scalars;
             let before_identities = output_identities;
             assert!(
