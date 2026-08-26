@@ -4,7 +4,11 @@
 //! only when an independently pinned `cargo kani` toolchain injects `cfg(kani)`
 //! and the `kani` crate.
 
-use dclutch_direct_codec::{COMPACT_INTENT_BYTES, CompactIntentV1, ControllerInstructionV1, Error};
+use dclutch_direct_codec::{
+    COMPACT_INTENT_BYTES, CompactIntentV1, ControllerInstructionV1, Error,
+    REGISTERED_CREATE_INSTRUCTION_BYTES, REGISTERED_TERMINAL_INSTRUCTION_BYTES,
+    RegisteredCreateInstructionV1, RegisteredTerminalAction, RegisteredTerminalInstructionV1,
+};
 
 fn arbitrary_intent() -> CompactIntentV1 {
     CompactIntentV1 {
@@ -51,6 +55,69 @@ fn every_fixed_width_controller_round_trips() {
     if let Ok(bytes) = encoded {
         assert_eq!(ControllerInstructionV1::decode(&bytes), Ok(instruction));
     }
+}
+
+#[kani::proof]
+fn every_fixed_width_terminal_controller_round_trips() {
+    let cancel: bool = kani::any();
+    let instruction = RegisteredTerminalInstructionV1 {
+        action: if cancel {
+            RegisteredTerminalAction::Cancel
+        } else {
+            RegisteredTerminalAction::Expire
+        },
+        controller_bump: kani::any(),
+        registration_bump: kani::any(),
+        expected_sequence: kani::any(),
+    };
+    let encoded = instruction.encode();
+    assert!(encoded.is_ok());
+    if let Ok(bytes) = encoded {
+        assert_eq!(
+            RegisteredTerminalInstructionV1::decode(&bytes),
+            Ok(instruction)
+        );
+    }
+}
+
+#[kani::proof]
+fn every_fixed_width_registered_creation_round_trips() {
+    let instruction = RegisteredCreateInstructionV1 {
+        controller_bump: kani::any(),
+        replay_bump: kani::any(),
+        registration_bump: kani::any(),
+        intent: arbitrary_intent(),
+    };
+    let encoded = instruction.encode();
+    assert!(encoded.is_ok());
+    if let Ok(bytes) = encoded {
+        assert_eq!(
+            RegisteredCreateInstructionV1::decode(&bytes),
+            Ok(instruction)
+        );
+    }
+}
+
+#[kani::proof]
+fn every_short_registered_creation_is_refused() {
+    let bytes: [u8; REGISTERED_CREATE_INSTRUCTION_BYTES] = kani::any();
+    let length: usize = kani::any();
+    kani::assume(length < REGISTERED_CREATE_INSTRUCTION_BYTES);
+    assert_eq!(
+        RegisteredCreateInstructionV1::decode(&bytes[..length]),
+        Err(Error::InvalidLength)
+    );
+}
+
+#[kani::proof]
+fn every_short_terminal_controller_is_refused() {
+    let bytes: [u8; REGISTERED_TERMINAL_INSTRUCTION_BYTES] = kani::any();
+    let length: usize = kani::any();
+    kani::assume(length < REGISTERED_TERMINAL_INSTRUCTION_BYTES);
+    assert_eq!(
+        RegisteredTerminalInstructionV1::decode(&bytes[..length]),
+        Err(Error::InvalidLength)
+    );
 }
 
 #[kani::proof]

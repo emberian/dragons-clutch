@@ -1,0 +1,27 @@
+[package]
+name = "dclutch-general-sbf"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+rust-version = "1.89"
+description = "Verifier-oriented physical adapter for General clearing"
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[features]
+default = []
+no-entrypoint = []
+custom-heap = []
+custom-panic = []
+
+[dependencies]
+dclutch-general-adapter-contract = { path = "../../crates/dclutch-general-adapter-contract" }
+dclutch-general-codec = { path = "../../crates/dclutch-general-codec" }
+dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }
+dclutch-registry-svm = { path = "../../crates/dclutch-registry-svm" }
+dclutch-release-set-contract = { path = "../../crates/dclutch-release-set-contract" }
+solana-program = { version = "=3.0.0", default-features = false }
+
+[workspace]

@@ -12,5 +12,8 @@ path = "src/lib.rs"
 default = []
 synthetic-local-fixture = []
 
+[dependencies]
+dclutch-registry-svm = { path = "../dclutch-registry-svm" }
+
 [lints]
 workspace = true

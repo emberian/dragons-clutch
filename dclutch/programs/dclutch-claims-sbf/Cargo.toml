@@ -1,0 +1,64 @@
+[package]
+name = "dclutch-claims-sbf"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+rust-version = "1.89"
+description = "Thin authenticated SBF adapter for the canonical Claims owner"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+path = "src/lib.rs"
+
+[features]
+default = []
+no-entrypoint = []
+custom-heap = []
+custom-panic = []
+
+[dependencies]
+dclutch-claims-representation-codec = { path = "../../crates/dclutch-claims-representation-codec" }
+dclutch-claims-svm = { path = "../../crates/dclutch-claims-svm" }
+dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
+dclutch-custody-contract = { path = "../../crates/dclutch-custody-contract" }
+dclutch-economic-slice-kernel = { path = "../../crates/dclutch-economic-slice-kernel" }
+dclutch-liability-basis-v2-kernel = { path = "../../crates/dclutch-liability-basis-v2-kernel" }
+dclutch-market-core-codec = { path = "../../crates/dclutch-market-core-codec" }
+dclutch-product-contract = { path = "../../crates/dclutch-product-contract" }
+dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }
+dclutch-registry-svm = { path = "../../crates/dclutch-registry-svm" }
+dclutch-release-set-contract = { path = "../../crates/dclutch-release-set-contract" }
+dclutch-token-svm = { path = "../../crates/dclutch-token-svm" }
+solana-program = { version = "=3.0.0", default-features = false }
+solana-sdk-ids = "=3.1.0"
+solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
+spl-token-2022-interface = { version = "=3.1.1", default-features = false }
+
+[dev-dependencies]
+dclutch-realm-contract = { path = "../../crates/dclutch-realm-contract" }
+dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }
+solana-account = "=4.3.2"
+solana-address-lookup-table-interface = { version = "=3.1.0", features = ["bincode", "bytemuck"] }
+solana-message = "=4.4.1"
+solana-program-option = "=3.1.0"
+solana-program-pack = "=3.1.0"
+solana-program-test = { version = "=4.2.1", features = ["agave-unstable-api"] }
+solana-sdk = "=3.0.0"
+solana-transaction = "=4.1.6"
+spl-token-interface = "=3.0.0"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[workspace]
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"
+
+[lints.clippy]
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+checked_conversions = "deny"
+float_arithmetic = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+unwrap_used = "deny"

@@ -29,8 +29,9 @@ pub mod state;
 
 pub use instruction::{
     AccountMeta, CloseAccountInstruction, CloseAccountView, InitializeAccount3Instruction,
-    InitializeAccount3View, InstructionDataView, InstructionSpec, TransferCheckedInstruction,
-    TransferCheckedView, close_account, initialize_account3, transfer_checked,
+    InitializeAccount3View, InstructionDataView, InstructionSpec, RevokeInstruction, RevokeView,
+    TransferCheckedInstruction, TransferCheckedView, close_account, initialize_account3, revoke,
+    transfer_checked,
 };
 pub use profile::{AuthorityRole, ExactTransferFacts, ExactTransferInput, ExactTransferProfileV1};
 pub use release::{

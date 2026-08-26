@@ -17,6 +17,12 @@ def maxPermittedDataIncrease : Nat := 10240
 /-- Fixed bytes before one non-duplicate account's data. -/
 def accountHeaderBytes : Nat := 88
 
+/-- Loader-v1 byte offset of an account's lamport word from its frame start. -/
+def accountLamportsOffset : Nat := 72
+
+/-- Loader-v1 byte offset of an account's current data length. -/
+def accountDataLengthOffset : Nat := 80
+
 /-- Fixed rent-epoch bytes after data, growth reserve, and alignment. -/
 def rentEpochBytes : Nat := 8
 

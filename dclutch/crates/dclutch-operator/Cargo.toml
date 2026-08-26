@@ -14,13 +14,19 @@ non-production-real-pyth-lab = ["dclutch-pyth-svm/synthetic-local-fixture"]
 
 [dependencies]
 dclutch-capability-contract = { path = "../dclutch-capability-contract" }
+dclutch-capability-program-contract = { path = "../dclutch-capability-program-contract" }
 dclutch-bearer-contract = { path = "../dclutch-bearer-contract" }
 dclutch-collateral-contract = { path = "../dclutch-collateral-contract" }
 dclutch-core-contract = { path = "../dclutch-core-contract" }
+dclutch-custody-contract = { path = "../dclutch-custody-contract" }
 dclutch-dealer-contract = { path = "../dclutch-dealer-contract" }
 dclutch-direct-contract = { path = "../dclutch-direct-contract" }
 dclutch-direct-codec = { path = "../dclutch-direct-codec" }
+dclutch-economic-slice-kernel = { path = "../dclutch-economic-slice-kernel" }
 dclutch-general-contract = { path = "../dclutch-general-contract" }
+dclutch-general-adapter-contract = { path = "../dclutch-general-adapter-contract" }
+dclutch-general-codec = { path = "../dclutch-general-codec" }
+dclutch-general-config-contract = { path = "../dclutch-general-config-contract" }
 dclutch-kernel = { path = "../dclutch-kernel" }
 dclutch-market-contract = { path = "../dclutch-market-contract" }
 dclutch-product-contract = { path = "../dclutch-product-contract" }
@@ -28,12 +34,17 @@ dclutch-pyth-contract = { path = "../dclutch-pyth-contract" }
 dclutch-pyth-svm = { path = "../dclutch-pyth-svm" }
 dclutch-realm-contract = { path = "../dclutch-realm-contract" }
 dclutch-record-contract = { path = "../dclutch-record-contract" }
+dclutch-registry-contract = { path = "../dclutch-registry-contract" }
+dclutch-registry-svm = { path = "../dclutch-registry-svm" }
+dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
+dclutch-release-tool = { path = "../dclutch-release-tool" }
 dclutch-rent-contract = { path = "../dclutch-rent-contract" }
 dclutch-series-contract = { path = "../dclutch-series-contract" }
 dclutch-source-contract = { path = "../dclutch-source-contract" }
 dclutch-token-svm = { path = "../dclutch-token-svm" }
 solana-program = { version = "=3.0.0", default-features = false }
 solana-address-lookup-table-interface = { version = "=3.2.0", features = ["bincode", "bytemuck"] }
+solana-compute-budget-interface = "=3.0.0"
 solana-hash = "=4.6.0"
 solana-message = { version = "=3.1.0", features = ["bincode"] }
 solana-sdk-ids = "=3.1.0"

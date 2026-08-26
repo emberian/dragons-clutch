@@ -5,19 +5,19 @@
 //! Found builder still requires one finalized [`super::FoundMarketState`].
 
 use dclutch_capability_contract::{
-    CapabilityFundingDerivationV1, CapabilityManifestV1, ContentId as CapabilityContentId,
-    RequiredFoundingEntryV1,
+    CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingDerivationV1, CapabilityManifestV1,
+    ContentId as CapabilityContentId, RequiredFoundingEntryV1,
 };
 use dclutch_core_contract::{MarketIdentity, MarketRoot};
 use dclutch_product_contract::{
     ContentId as ProductContentId,
-    capacity::{CapacityProfileId, CapacityProfileV1},
-    claim::{CategoricalUnitV1, CategoricalUnitV1Input},
-    product::{InstanceV1, InstanceV1Input},
+    capacity::{CAPACITY_PROFILE_SCHEMA_RELEASE_ID_V1, CapacityProfileId, CapacityProfileV1},
+    claim::{CATEGORICAL_CLAIM_SCHEMA_RELEASE_ID_V1, CategoricalUnitV1, CategoricalUnitV1Input},
+    product::{InstanceV1, InstanceV1Input, PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1},
     result_domain::{FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1, FiniteResultDomainV1},
 };
 use dclutch_pyth_contract::funding::{FUNDING_BYTES, construct_required_resolution_funding};
-use dclutch_realm_contract::RealmV1;
+use dclutch_realm_contract::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_rent_contract::RENT_CREDIT_PDA_DOMAIN_V1;
 use dclutch_source_contract::{
@@ -34,10 +34,8 @@ use solana_program::{
 };
 
 use super::{
-    CAPABILITY_MANIFEST_SCHEMA_RELEASE_PREIMAGE_V1, CATEGORICAL_CLAIM_SCHEMA_RELEASE_PREIMAGE_V1,
     FOUNDATION_GENERATION, FoundationDebitReport, FoundationError, MARKET_SEED,
-    PRODUCT_CAPACITY_SCHEMA_RELEASE_PREIMAGE_V1, PRODUCT_INSTANCE_SCHEMA_RELEASE_PREIMAGE_V1,
-    REALM_SCHEMA_RELEASE_PREIMAGE_V1, resolution_native_funding, validate_market_space,
+    resolution_native_funding, validate_market_space,
 };
 
 /// One canonical immutable record needed by direct Found admission.
@@ -605,25 +603,25 @@ pub fn compile_release_bound_creation_v1(
         record(
             input.program_id,
             CreationRecordKindV1::Realm,
-            hash(REALM_SCHEMA_RELEASE_PREIMAGE_V1).to_bytes(),
+            REALM_SCHEMA_RELEASE_ID_V1,
             realm_bytes.to_vec(),
         )?,
         record(
             input.program_id,
             CreationRecordKindV1::ProductInstance,
-            hash(PRODUCT_INSTANCE_SCHEMA_RELEASE_PREIMAGE_V1).to_bytes(),
+            PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1,
             instance_bytes.to_vec(),
         )?,
         record(
             input.program_id,
             CreationRecordKindV1::ClaimBasis,
-            hash(CATEGORICAL_CLAIM_SCHEMA_RELEASE_PREIMAGE_V1).to_bytes(),
+            CATEGORICAL_CLAIM_SCHEMA_RELEASE_ID_V1,
             claim_bytes.to_vec(),
         )?,
         record(
             input.program_id,
             CreationRecordKindV1::ProductCapacityProfile,
-            hash(PRODUCT_CAPACITY_SCHEMA_RELEASE_PREIMAGE_V1).to_bytes(),
+            CAPACITY_PROFILE_SCHEMA_RELEASE_ID_V1,
             capacity_bytes.to_vec(),
         )?,
         record(
@@ -635,7 +633,7 @@ pub fn compile_release_bound_creation_v1(
         record(
             input.program_id,
             CreationRecordKindV1::CapabilityManifest,
-            hash(CAPABILITY_MANIFEST_SCHEMA_RELEASE_PREIMAGE_V1).to_bytes(),
+            CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
             manifest.as_bytes().to_vec(),
         )?,
     ];

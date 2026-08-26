@@ -288,6 +288,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-account-profile-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-effect-kernel",
+ "dclutch-transition-vm",
+]
+
+[[package]]
 name = "dclutch-bearer-contract"
 version = "0.1.0"
 dependencies = [
@@ -307,7 +315,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-capability-program-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-contract",
+ "dclutch-core-contract",
+ "dclutch-release-set-contract",
+ "dclutch-transition-vm",
+]
+
+[[package]]
 name = "dclutch-claims-proof-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-direct-codec",
+ "dclutch-transition-vm",
+]
+
+[[package]]
+name = "dclutch-claims-svm"
 version = "0.1.0"
 
 [[package]]
@@ -334,11 +360,19 @@ dependencies = [
  "solana-instructions-sysvar",
  "solana-program",
  "solana-sdk-ids",
+ "solana-system-interface",
 ]
 
 [[package]]
 name = "dclutch-core-contract"
 version = "0.1.0"
+
+[[package]]
+name = "dclutch-custody-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-release-set-contract",
+]
 
 [[package]]
 name = "dclutch-custody-proof-sbf"
@@ -347,6 +381,10 @@ dependencies = [
  "dclutch-token-svm",
  "solana-program",
 ]
+
+[[package]]
+name = "dclutch-dealer-codec"
+version = "0.1.0"
 
 [[package]]
 name = "dclutch-dealer-contract"
@@ -361,6 +399,9 @@ dependencies = [
 [[package]]
 name = "dclutch-direct-codec"
 version = "0.1.0"
+dependencies = [
+ "dclutch-transition-vm",
+]
 
 [[package]]
 name = "dclutch-direct-contract"
@@ -370,6 +411,33 @@ dependencies = [
  "dclutch-realm-contract",
  "dclutch-rent-contract",
 ]
+
+[[package]]
+name = "dclutch-economic-adapter-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-economic-kernel",
+ "dclutch-release-set-contract",
+]
+
+[[package]]
+name = "dclutch-economic-kernel"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-economic-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-economic-adapter-contract",
+ "dclutch-economic-kernel",
+ "dclutch-release-set-contract",
+ "dclutch-token-svm",
+ "solana-program",
+]
+
+[[package]]
+name = "dclutch-economic-slice-kernel"
+version = "0.1.0"
 
 [[package]]
 name = "dclutch-effect-kernel"
@@ -384,7 +452,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-general-contract"
+name = "dclutch-general-adapter-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-general-codec",
+ "sha2",
+]
+
+[[package]]
+name = "dclutch-general-codec"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-general-config-contract"
 version = "0.1.0"
 dependencies = [
  "dclutch-capability-contract",
@@ -393,7 +473,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-general-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-contract",
+ "dclutch-core-contract",
+ "dclutch-general-config-contract",
+ "sha2",
+]
+
+[[package]]
 name = "dclutch-kernel"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-liability-basis-v2-kernel"
 version = "0.1.0"
 
 [[package]]
@@ -403,6 +497,13 @@ dependencies = [
  "dclutch-core-contract",
  "dclutch-kernel",
  "dclutch-product-contract",
+]
+
+[[package]]
+name = "dclutch-market-core-codec"
+version = "0.1.0"
+dependencies = [
+ "dclutch-release-set-contract",
 ]
 
 [[package]]
@@ -416,6 +517,8 @@ dependencies = [
  "dclutch-dealer-contract",
  "dclutch-direct-codec",
  "dclutch-direct-contract",
+ "dclutch-general-adapter-contract",
+ "dclutch-general-codec",
  "dclutch-general-contract",
  "dclutch-kernel",
  "dclutch-market-contract",
@@ -424,16 +527,33 @@ dependencies = [
  "dclutch-pyth-svm",
  "dclutch-realm-contract",
  "dclutch-record-contract",
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
+ "dclutch-release-tool",
  "dclutch-rent-contract",
  "dclutch-series-contract",
  "dclutch-source-contract",
  "dclutch-token-svm",
  "solana-address-lookup-table-interface",
+ "solana-compute-budget-interface",
  "solana-hash 4.6.0",
  "solana-message",
  "solana-program",
  "solana-sdk-ids",
  "spl-token-2022-interface",
+]
+
+[[package]]
+name = "dclutch-product-admission-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-contract",
+ "dclutch-core-contract",
+ "dclutch-product-contract",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-product-payoff-v2-svm",
+ "dclutch-resolution-codec",
 ]
 
 [[package]]
@@ -449,6 +569,58 @@ name = "dclutch-product-contract"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-product-evidence-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-contract",
+ "dclutch-core-contract",
+ "dclutch-market-contract",
+ "dclutch-product-admission-contract",
+ "dclutch-product-contract",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-product-payoff-v2-svm",
+ "dclutch-record-contract",
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
+ "dclutch-resolution-codec",
+ "solana-program",
+ "solana-sdk-ids",
+ "solana-system-interface",
+]
+
+[[package]]
+name = "dclutch-product-payoff-codec"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-product-payoff-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-product-payoff-codec",
+ "dclutch-product-payoff-svm",
+ "dclutch-record-contract",
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
+ "solana-program",
+ "solana-sdk-ids",
+ "solana-system-interface",
+]
+
+[[package]]
+name = "dclutch-product-payoff-svm"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-product-payoff-v2-codec"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-product-payoff-v2-svm"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-pyth-contract"
 version = "0.1.0"
 dependencies = [
@@ -459,6 +631,9 @@ dependencies = [
 [[package]]
 name = "dclutch-pyth-svm"
 version = "0.1.0"
+dependencies = [
+ "dclutch-registry-svm",
+]
 
 [[package]]
 name = "dclutch-realm-contract"
@@ -469,17 +644,83 @@ name = "dclutch-record-contract"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-registry-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-release-set-contract",
+]
+
+[[package]]
+name = "dclutch-registry-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-record-contract",
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
+ "solana-program",
+ "solana-sdk-ids",
+ "solana-system-interface",
+]
+
+[[package]]
+name = "dclutch-registry-svm"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-release-set-contract",
+ "sha2",
+]
+
+[[package]]
+name = "dclutch-release-set-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+]
+
+[[package]]
 name = "dclutch-release-tool"
 version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
  "dclutch-pyth-svm",
+ "dclutch-registry-contract",
+ "dclutch-release-set-contract",
  "sha2",
 ]
 
 [[package]]
 name = "dclutch-rent-contract"
 version = "0.1.0"
+
+[[package]]
+name = "dclutch-resolution-codec"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-resolution-proof-sbf"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "dclutch-capability-contract",
+ "dclutch-core-contract",
+ "dclutch-market-contract",
+ "dclutch-market-core-codec",
+ "dclutch-product-contract",
+ "dclutch-pyth-svm",
+ "dclutch-record-contract",
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
+ "dclutch-resolution-codec",
+ "dclutch-source-contract",
+ "solana-program",
+ "solana-sdk-ids",
+ "solana-system-interface",
+]
 
 [[package]]
 name = "dclutch-sbf"
@@ -523,6 +764,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-series-v2-kernel"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-market-core-codec",
+ "sha2",
+]
+
+[[package]]
 name = "dclutch-source-contract"
 version = "0.1.0"
 dependencies = [
@@ -556,6 +806,37 @@ name = "dclutch-token-svm"
 version = "0.1.0"
 dependencies = [
  "sha2",
+]
+
+[[package]]
+name = "dclutch-trading-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-account-profile-contract",
+ "dclutch-capability-contract",
+ "dclutch-capability-program-contract",
+ "dclutch-claims-svm",
+ "dclutch-core-contract",
+ "dclutch-custody-contract",
+ "dclutch-dealer-codec",
+ "dclutch-economic-slice-kernel",
+ "dclutch-effect-kernel",
+ "dclutch-general-adapter-contract",
+ "dclutch-general-codec",
+ "dclutch-general-config-contract",
+ "dclutch-market-core-codec",
+ "dclutch-record-contract",
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
+ "dclutch-series-v2-kernel",
+ "dclutch-token-svm",
+ "dclutch-transition-vm",
+ "solana-hash 4.6.0",
+ "solana-message",
+ "solana-program",
+ "solana-sdk-ids",
+ "solana-system-interface",
 ]
 
 [[package]]
@@ -1256,6 +1537,16 @@ dependencies = [
  "solana-sdk-ids",
  "solana-sdk-macro",
  "solana-sysvar-id",
+]
+
+[[package]]
+name = "solana-compute-budget-interface"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8292c436b269ad23cecc8b24f7da3ab07ca111661e25e00ce0e1d22771951ab9"
+dependencies = [
+ "solana-instruction",
+ "solana-sdk-ids",
 ]
 
 [[package]]

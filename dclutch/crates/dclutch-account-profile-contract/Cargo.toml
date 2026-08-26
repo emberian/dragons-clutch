@@ -1,0 +1,15 @@
+[package]
+name = "dclutch-account-profile-contract"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+rust-version = "1.89"
+description = "Safe fixed-memory interpreter for content-selected account projections"
+publish = false
+
+[dependencies]
+dclutch-effect-kernel = { path = "../dclutch-effect-kernel" }
+dclutch-transition-vm = { path = "../dclutch-transition-vm" }
+
+[lints]
+workspace = true

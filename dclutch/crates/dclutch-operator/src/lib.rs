@@ -42,8 +42,18 @@ use solana_sdk_ids::system_program;
 
 /// Chain-derived compiled Direct transaction construction.
 pub mod compiled_direct;
+/// Exact unsigned signing material for the Direct V2 successor.
+pub mod direct_successor;
 /// Chain-derived unsigned Realm and Market foundation workflows.
 pub mod foundation;
+/// Chain-derived unsigned General physical-controller workflows.
+pub mod general_physical;
+/// Chain-derived registered Direct execution and terminal workflows.
+pub mod registered_direct;
+/// Chain-derived unsigned Registry activation and reauthentication workflows.
+pub mod registry;
+/// Checked-release admission into unsigned Registry activation workflows.
+pub mod release_activation;
 /// Chain-derived address-table lifecycle and versioned-message construction.
 pub mod versioned;
 /// Chain-derived unsigned Series and Dealer workflows.

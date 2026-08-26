@@ -5,11 +5,17 @@ use std::{collections::BTreeMap, env, error::Error, fmt, fs, path::Path};
 
 use dclutch_direct_codec::{
     COMPACT_INTENT_BYTES, CONTROLLER_INSTRUCTION_BYTES, CompactIntentV1, ControllerInstructionV1,
+    REGISTERED_CLAIM_TERMINAL_BYTES, REGISTERED_CREATE_INSTRUCTION_BYTES,
+    REGISTERED_TERMINAL_INSTRUCTION_BYTES, RegisteredCreateInstructionV1, RegisteredTerminalAction,
+    RegisteredTerminalInstructionV1, registered_claim_terminal_instruction,
 };
 use dclutch_transition_vm::{Registers, execute};
 
 #[cfg(kani)]
 mod kani_proofs;
+
+mod registration;
+mod terminal;
 
 mod generated_program {
     #![allow(dead_code, unused_imports, unused_macros)]
@@ -41,10 +47,22 @@ type Result<T> = std::result::Result<T, Box<dyn Error>>;
 struct Statistics {
     intents: usize,
     controllers: usize,
+    registered_creations: usize,
+    registered_creation_mutations: usize,
+    registered_creation_hostile_widths: usize,
+    terminal_controllers: usize,
+    terminal_claims: usize,
     abi_mutations: usize,
+    abi_hostile_widths: usize,
     vm_cases: usize,
     vm_accepts: usize,
     vm_refusals: usize,
+    terminal_transitions: usize,
+    terminal_accepts: usize,
+    terminal_refusals: usize,
+    creation_transitions: usize,
+    creation_accepts: usize,
+    creation_refusals: usize,
     rust_roundtrips: usize,
 }
 
@@ -75,6 +93,14 @@ fn parse_u8(value: &str, context: &str) -> Result<u8> {
     value
         .parse::<u8>()
         .map_err(|error| failure(format!("{context}: invalid u8 {value:?}: {error}")))
+}
+
+fn parse_bool01(value: &str, context: &str) -> Result<bool> {
+    match value {
+        "0" => Ok(false),
+        "1" => Ok(true),
+        _ => Err(failure(format!("{context}: invalid bit {value:?}"))),
+    }
 }
 
 fn hex_nibble(byte: u8, context: &str) -> Result<u8> {
@@ -281,6 +307,408 @@ fn validate_controller_mutation(
     require_equal(actual, expected, &context)
 }
 
+#[derive(Clone)]
+struct RegisteredCreateCase {
+    bytes: Vec<u8>,
+}
+
+fn validate_registered_create(
+    fields: &[&str],
+    cases: &mut BTreeMap<String, RegisteredCreateCase>,
+) -> Result<()> {
+    if fields.len() != 10 {
+        return Err(failure("registered create: wrong field count"));
+    }
+    let context = format!("registered create {}", fields[1]);
+    let market = decode_array(fields[5], &context)?;
+    let generation = parse_u64(fields[6], &context)?;
+    let nonce = parse_u64(fields[7], &context)?;
+    let intent_bytes = decode_hex(fields[8], &context)?;
+    require_equal(intent_bytes.len(), COMPACT_INTENT_BYTES, &context)?;
+    let intent = CompactIntentV1::decode(&intent_bytes)
+        .map_err(|error| failure(format!("{context}: intent decoder refused: {error:?}")))?;
+    require_equal(
+        intent.market,
+        market,
+        &format!("{context}: Market PDA projection"),
+    )?;
+    require_equal(
+        intent.generation,
+        generation,
+        &format!("{context}: generation PDA projection"),
+    )?;
+    require_equal(
+        intent.nonce,
+        nonce,
+        &format!("{context}: registration nonce projection"),
+    )?;
+    let instruction = RegisteredCreateInstructionV1 {
+        controller_bump: parse_u8(fields[2], &context)?,
+        replay_bump: parse_u8(fields[3], &context)?,
+        registration_bump: parse_u8(fields[4], &context)?,
+        intent,
+    };
+    let expected = decode_hex(fields[9], &context)?;
+    require_equal(
+        expected.len(),
+        REGISTERED_CREATE_INSTRUCTION_BYTES,
+        &context,
+    )?;
+    let encoded = instruction
+        .encode()
+        .map_err(|error| failure(format!("{context}: Rust encoder refused: {error:?}")))?;
+    require_equal(encoded.as_slice(), expected.as_slice(), &context)?;
+    require_equal(
+        RegisteredCreateInstructionV1::decode(&expected),
+        Ok(instruction),
+        &context,
+    )?;
+    if cases
+        .insert(
+            fields[1].to_owned(),
+            RegisteredCreateCase { bytes: expected },
+        )
+        .is_some()
+    {
+        return Err(failure(format!("{context}: duplicate name")));
+    }
+    Ok(())
+}
+
+fn validate_registered_create_mutation(
+    fields: &[&str],
+    cases: &BTreeMap<String, RegisteredCreateCase>,
+) -> Result<()> {
+    if fields.len() != 4 {
+        return Err(failure("registered create mutation: wrong field count"));
+    }
+    let context = format!(
+        "registered create mutation {} byte {}",
+        fields[1], fields[2]
+    );
+    let case = cases
+        .get(fields[1])
+        .ok_or_else(|| failure(format!("{context}: unknown case")))?;
+    let mut bytes = case.bytes.clone();
+    let offset = fields[2]
+        .parse::<usize>()
+        .map_err(|error| failure(format!("{context}: invalid offset: {error}")))?;
+    let byte = bytes
+        .get_mut(offset)
+        .ok_or_else(|| failure(format!("{context}: offset out of bounds")))?;
+    *byte = changed_byte(*byte);
+    let actual = RegisteredCreateInstructionV1::decode(&bytes).is_ok();
+    require_equal(actual, disposition(fields[3], &context)?, &context)
+}
+
+fn validate_registered_create_hostile(
+    fields: &[&str],
+    cases: &BTreeMap<String, RegisteredCreateCase>,
+) -> Result<()> {
+    if fields.len() != 5 {
+        return Err(failure("registered create hostile: wrong field count"));
+    }
+    let context = format!("registered create hostile {} {}", fields[1], fields[2]);
+    if !cases.contains_key(fields[1]) {
+        return Err(failure(format!("{context}: unknown case")));
+    }
+    let bytes = decode_hex(fields[3], &context)?;
+    let actual = RegisteredCreateInstructionV1::decode(&bytes).is_ok();
+    require_equal(actual, disposition(fields[4], &context)?, &context)
+}
+
+fn validate_registered_create_transition(
+    fields: &[&str],
+    statistics: &mut Statistics,
+) -> Result<()> {
+    if fields.len() != 18 && fields.len() != 26 {
+        return Err(failure("registered create transition: wrong field count"));
+    }
+    let context = format!("registered create transition {}", fields[1]);
+    let vacant = parse_bool01(fields[2], &context)?;
+    let next_nonce = parse_u64(fields[16], &context)?;
+    let before = registration::store(next_nonce, vacant);
+    let request = registration::Request {
+        market_phase: parse_u8(fields[3], &context)?,
+        slot: parse_u64(fields[4], &context)?,
+        market: parse_u64(fields[5], &context)?,
+        generation: parse_u64(fields[6], &context)?,
+        maker: parse_u64(fields[7], &context)?,
+        nonce: parse_u64(fields[8], &context)?,
+        valid_from: parse_u64(fields[9], &context)?,
+        valid_through: parse_u64(fields[10], &context)?,
+        maximum: parse_u64(fields[11], &context)?,
+        outcome: parse_u64(fields[12], &context)?,
+        outcome_count: parse_u64(fields[13], &context)?,
+        intent_fee: parse_u64(fields[14], &context)?,
+        policy_fee: parse_u64(fields[15], &context)?,
+    };
+    let expected_accept = disposition(fields[17], &context)?;
+    let mut after = before;
+    let actual_accept = registration::apply(&mut after, request);
+    require_equal(actual_accept, expected_accept, &context)?;
+    if expected_accept {
+        if fields.len() != 26 {
+            return Err(failure(format!("{context}: acceptance omitted post-state")));
+        }
+        let expected = registration::Store {
+            next_nonce: parse_u64(fields[25], &context)?,
+            registration: registration::RegistrationSlot::Occupied(registration::RegisteredState {
+                phase: parse_u8(fields[18], &context)?,
+                remaining: parse_u64(fields[19], &context)?,
+                sequence: parse_u64(fields[20], &context)?,
+                market: parse_u64(fields[21], &context)?,
+                generation: parse_u64(fields[22], &context)?,
+                maker: parse_u64(fields[23], &context)?,
+                nonce: parse_u64(fields[24], &context)?,
+            }),
+        };
+        require_equal(after, expected, &context)?;
+        statistics.creation_accepts += 1;
+    } else {
+        if fields.len() != 18 {
+            return Err(failure(format!("{context}: refusal carried post-state")));
+        }
+        require_equal(after, before, &format!("{context}: rollback"))?;
+        statistics.creation_refusals += 1;
+    }
+    statistics.creation_transitions += 1;
+    Ok(())
+}
+
+#[derive(Clone)]
+struct TerminalControllerCase {
+    bytes: Vec<u8>,
+}
+
+#[derive(Clone)]
+struct TerminalClaimCase {
+    bytes: Vec<u8>,
+}
+
+fn terminal_actions(
+    tag: &str,
+    context: &str,
+) -> Result<(terminal::Action, RegisteredTerminalAction)> {
+    let tag = parse_u8(tag, context)?;
+    let local = terminal::Action::from_tag(tag)
+        .ok_or_else(|| failure(format!("{context}: unknown action tag {tag}")))?;
+    let rust = match local {
+        terminal::Action::Cancel => RegisteredTerminalAction::Cancel,
+        terminal::Action::Expire => RegisteredTerminalAction::Expire,
+    };
+    Ok((local, rust))
+}
+
+fn disposition(value: &str, context: &str) -> Result<bool> {
+    match value {
+        "accept" => Ok(true),
+        "reject" => Ok(false),
+        _ => Err(failure(format!("{context}: invalid Lean disposition"))),
+    }
+}
+
+fn validate_terminal_controller(
+    fields: &[&str],
+    cases: &mut BTreeMap<String, TerminalControllerCase>,
+) -> Result<()> {
+    if fields.len() != 7 {
+        return Err(failure("terminal controller: wrong field count"));
+    }
+    let context = format!("terminal controller {}", fields[1]);
+    let (_, action) = terminal_actions(fields[2], &context)?;
+    let instruction = RegisteredTerminalInstructionV1 {
+        action,
+        controller_bump: parse_u8(fields[3], &context)?,
+        registration_bump: parse_u8(fields[4], &context)?,
+        expected_sequence: parse_u64(fields[5], &context)?,
+    };
+    let expected = decode_hex(fields[6], &context)?;
+    require_equal(
+        expected.len(),
+        REGISTERED_TERMINAL_INSTRUCTION_BYTES,
+        &context,
+    )?;
+    let encoded = instruction
+        .encode()
+        .map_err(|error| failure(format!("{context}: Rust encoder refused: {error:?}")))?;
+    require_equal(encoded.as_slice(), expected.as_slice(), &context)?;
+    require_equal(
+        RegisteredTerminalInstructionV1::decode(&expected),
+        Ok(instruction),
+        &context,
+    )?;
+    if cases
+        .insert(
+            fields[1].to_owned(),
+            TerminalControllerCase { bytes: expected },
+        )
+        .is_some()
+    {
+        return Err(failure(format!("{context}: duplicate name")));
+    }
+    Ok(())
+}
+
+fn validate_terminal_controller_mutation(
+    fields: &[&str],
+    cases: &BTreeMap<String, TerminalControllerCase>,
+) -> Result<()> {
+    if fields.len() != 4 {
+        return Err(failure("terminal controller mutation: wrong field count"));
+    }
+    let context = format!(
+        "terminal controller mutation {} byte {}",
+        fields[1], fields[2]
+    );
+    let case = cases
+        .get(fields[1])
+        .ok_or_else(|| failure(format!("{context}: unknown case")))?;
+    let mut bytes = case.bytes.clone();
+    let offset = fields[2]
+        .parse::<usize>()
+        .map_err(|error| failure(format!("{context}: invalid offset: {error}")))?;
+    let byte = bytes
+        .get_mut(offset)
+        .ok_or_else(|| failure(format!("{context}: offset out of bounds")))?;
+    *byte = changed_byte(*byte);
+    let actual = RegisteredTerminalInstructionV1::decode(&bytes).is_ok();
+    require_equal(actual, disposition(fields[3], &context)?, &context)
+}
+
+fn validate_terminal_controller_hostile(
+    fields: &[&str],
+    cases: &BTreeMap<String, TerminalControllerCase>,
+) -> Result<()> {
+    if fields.len() != 5 {
+        return Err(failure("terminal controller hostile: wrong field count"));
+    }
+    let context = format!("terminal controller hostile {} {}", fields[1], fields[2]);
+    if !cases.contains_key(fields[1]) {
+        return Err(failure(format!("{context}: unknown case")));
+    }
+    let bytes = decode_hex(fields[3], &context)?;
+    let actual = RegisteredTerminalInstructionV1::decode(&bytes).is_ok();
+    require_equal(actual, disposition(fields[4], &context)?, &context)
+}
+
+fn validate_terminal_claim(
+    fields: &[&str],
+    cases: &mut BTreeMap<String, TerminalClaimCase>,
+) -> Result<()> {
+    if fields.len() != 5 {
+        return Err(failure("terminal claim: wrong field count"));
+    }
+    let context = format!("terminal claim {}", fields[1]);
+    let (local_action, rust_action) = terminal_actions(fields[2], &context)?;
+    let sequence = parse_u64(fields[3], &context)?;
+    let expected = decode_hex(fields[4], &context)?;
+    require_equal(expected.len(), REGISTERED_CLAIM_TERMINAL_BYTES, &context)?;
+    let encoded = registered_claim_terminal_instruction(rust_action, sequence)
+        .map_err(|error| failure(format!("{context}: Rust encoder refused: {error:?}")))?;
+    require_equal(encoded.as_slice(), expected.as_slice(), &context)?;
+    require_equal(
+        terminal::decode_claim(&expected),
+        Some((local_action, sequence)),
+        &context,
+    )?;
+    if cases
+        .insert(fields[1].to_owned(), TerminalClaimCase { bytes: expected })
+        .is_some()
+    {
+        return Err(failure(format!("{context}: duplicate name")));
+    }
+    Ok(())
+}
+
+fn validate_terminal_claim_mutation(
+    fields: &[&str],
+    cases: &BTreeMap<String, TerminalClaimCase>,
+) -> Result<()> {
+    if fields.len() != 4 {
+        return Err(failure("terminal claim mutation: wrong field count"));
+    }
+    let context = format!("terminal claim mutation {} byte {}", fields[1], fields[2]);
+    let case = cases
+        .get(fields[1])
+        .ok_or_else(|| failure(format!("{context}: unknown case")))?;
+    let mut bytes = case.bytes.clone();
+    let offset = fields[2]
+        .parse::<usize>()
+        .map_err(|error| failure(format!("{context}: invalid offset: {error}")))?;
+    let byte = bytes
+        .get_mut(offset)
+        .ok_or_else(|| failure(format!("{context}: offset out of bounds")))?;
+    *byte = changed_byte(*byte);
+    let actual = terminal::decode_claim(&bytes).is_some();
+    require_equal(actual, disposition(fields[3], &context)?, &context)
+}
+
+fn validate_terminal_claim_hostile(
+    fields: &[&str],
+    cases: &BTreeMap<String, TerminalClaimCase>,
+) -> Result<()> {
+    if fields.len() != 5 {
+        return Err(failure("terminal claim hostile: wrong field count"));
+    }
+    let context = format!("terminal claim hostile {} {}", fields[1], fields[2]);
+    if !cases.contains_key(fields[1]) {
+        return Err(failure(format!("{context}: unknown case")));
+    }
+    let bytes = decode_hex(fields[3], &context)?;
+    let actual = terminal::decode_claim(&bytes).is_some();
+    require_equal(actual, disposition(fields[4], &context)?, &context)
+}
+
+fn validate_terminal_transition(fields: &[&str], statistics: &mut Statistics) -> Result<()> {
+    if fields.len() != 13 && fields.len() != 19 {
+        return Err(failure("terminal transition: wrong field count"));
+    }
+    let context = format!("terminal transition {}", fields[1]);
+    let (action, _) = terminal_actions(fields[2], &context)?;
+    let before = terminal::State {
+        phase: parse_u8(fields[3], &context)?,
+        remaining: parse_u64(fields[4], &context)?,
+        maximum: parse_u64(fields[5], &context)?,
+        sequence: parse_u64(fields[6], &context)?,
+        valid_through: parse_u64(fields[7], &context)?,
+        maker: parse_u64(fields[10], &context)?,
+    };
+    let request = terminal::Request {
+        action,
+        slot: parse_u64(fields[8], &context)?,
+        expected_sequence: parse_u64(fields[9], &context)?,
+        actor_maker: parse_u64(fields[11], &context)?,
+    };
+    let expected_accept = disposition(fields[12], &context)?;
+    let mut after = before;
+    let actual_accept = terminal::apply(&mut after, request);
+    require_equal(actual_accept, expected_accept, &context)?;
+    if expected_accept {
+        if fields.len() != 19 {
+            return Err(failure(format!("{context}: acceptance omitted post-state")));
+        }
+        let expected = terminal::State {
+            phase: parse_u8(fields[13], &context)?,
+            remaining: parse_u64(fields[14], &context)?,
+            maximum: parse_u64(fields[15], &context)?,
+            sequence: parse_u64(fields[16], &context)?,
+            valid_through: parse_u64(fields[17], &context)?,
+            maker: parse_u64(fields[18], &context)?,
+        };
+        require_equal(after, expected, &context)?;
+        statistics.terminal_accepts += 1;
+    } else {
+        if fields.len() != 13 {
+            return Err(failure(format!("{context}: refusal carried post-state")));
+        }
+        require_equal(after, before, &format!("{context}: rollback"))?;
+        statistics.terminal_refusals += 1;
+    }
+    statistics.terminal_transitions += 1;
+    Ok(())
+}
+
 fn identity(value: u64) -> [u8; 32] {
     let mut bytes = [0_u8; 32];
     bytes[..8].copy_from_slice(&value.to_le_bytes());
@@ -327,19 +755,24 @@ fn validate_registers(
     Ok(())
 }
 
-fn validate_vm(fields: &[&str], statistics: &mut Statistics) -> Result<()> {
-    if fields.len() < 5 || fields.len() > 7 {
-        return Err(failure("vm case: wrong field count"));
-    }
-    let context = format!("vm {}", fields[1]);
-    let input_scalars = parse_csv(fields[2], &format!("{context} input scalars"))?;
-    let input_identities = parse_csv(fields[3], &format!("{context} input identities"))?;
+fn validate_vm_case(
+    program: &[u8],
+    name: &str,
+    input_scalars_csv: &str,
+    input_identities_csv: &str,
+    disposition: &str,
+    output: Option<(&str, &str)>,
+    statistics: &mut Statistics,
+) -> Result<()> {
+    let context = format!("vm {name}");
+    let input_scalars = parse_csv(input_scalars_csv, &format!("{context} input scalars"))?;
+    let input_identities = parse_csv(input_identities_csv, &format!("{context} input identities"))?;
     let before = registers(&input_scalars, &input_identities, &context)?;
     let mut after = before;
-    let result = execute(generated_program::bytes(), &mut after);
-    match fields[4] {
+    let result = execute(program, &mut after);
+    match disposition {
         "reject" => {
-            if fields.len() != 5 {
+            if output.is_some() {
                 return Err(failure(format!("{context}: refusal carried post-state")));
             }
             if result.is_ok() {
@@ -349,16 +782,19 @@ fn validate_vm(fields: &[&str], statistics: &mut Statistics) -> Result<()> {
             statistics.vm_refusals += 1;
         }
         "accept" => {
-            if fields.len() != 7 {
-                return Err(failure(format!("{context}: acceptance omitted post-state")));
-            }
+            let (output_scalars_csv, output_identities_csv) = output
+                .ok_or_else(|| failure(format!("{context}: acceptance omitted post-state")))?;
             result.map_err(|error| {
                 failure(format!(
                     "{context}: Rust refused Lean acceptance: {error:?}"
                 ))
             })?;
-            let output_scalars = parse_csv(fields[5], &format!("{context} output scalars"))?;
-            let output_identities = parse_csv(fields[6], &format!("{context} output identities"))?;
+            let output_scalars =
+                parse_csv(output_scalars_csv, &format!("{context} output scalars"))?;
+            let output_identities = parse_csv(
+                output_identities_csv,
+                &format!("{context} output identities"),
+            )?;
             validate_registers(&after, &output_scalars, &output_identities, &context)?;
             statistics.vm_accepts += 1;
         }
@@ -366,6 +802,37 @@ fn validate_vm(fields: &[&str], statistics: &mut Statistics) -> Result<()> {
     }
     statistics.vm_cases += 1;
     Ok(())
+}
+
+fn validate_vm(fields: &[&str], statistics: &mut Statistics) -> Result<()> {
+    if fields.len() != 5 && fields.len() != 7 {
+        return Err(failure("vm case: wrong field count"));
+    }
+    validate_vm_case(
+        generated_program::bytes(),
+        fields[1],
+        fields[2],
+        fields[3],
+        fields[4],
+        (fields.len() == 7).then(|| (fields[5], fields[6])),
+        statistics,
+    )
+}
+
+fn validate_vm_program(fields: &[&str], statistics: &mut Statistics) -> Result<()> {
+    if fields.len() != 6 && fields.len() != 8 {
+        return Err(failure("vm program case: wrong field count"));
+    }
+    let program = decode_hex(fields[2], &format!("vm program {}", fields[1]))?;
+    validate_vm_case(
+        &program,
+        fields[1],
+        fields[3],
+        fields[4],
+        fields[5],
+        (fields.len() == 8).then(|| (fields[6], fields[7])),
+        statistics,
+    )
 }
 
 fn next(seed: &mut u64) -> u64 {
@@ -451,6 +918,9 @@ fn validate(path: &Path) -> Result<Statistics> {
     let mut intents = BTreeMap::new();
     let mut intent_bytes = BTreeMap::new();
     let mut controller_bytes = BTreeMap::new();
+    let mut registered_creations = BTreeMap::new();
+    let mut terminal_controllers = BTreeMap::new();
+    let mut terminal_claims = BTreeMap::new();
     let mut program_seen = false;
 
     for (line_index, line) in lines.enumerate() {
@@ -487,7 +957,52 @@ fn validate(path: &Path) -> Result<Statistics> {
                 validate_controller_mutation(&fields, &controller_bytes)?;
                 statistics.abi_mutations += 1;
             }
+            Some("registered-create") => {
+                validate_registered_create(&fields, &mut registered_creations)?;
+                statistics.registered_creations += 1;
+            }
+            Some("registered-create-mutation") => {
+                validate_registered_create_mutation(&fields, &registered_creations)?;
+                statistics.abi_mutations += 1;
+                statistics.registered_creation_mutations += 1;
+            }
+            Some("registered-create-hostile") => {
+                validate_registered_create_hostile(&fields, &registered_creations)?;
+                statistics.abi_hostile_widths += 1;
+                statistics.registered_creation_hostile_widths += 1;
+            }
+            Some("registered-create-transition") => {
+                validate_registered_create_transition(&fields, &mut statistics)?;
+            }
+            Some("terminal-controller") => {
+                validate_terminal_controller(&fields, &mut terminal_controllers)?;
+                statistics.terminal_controllers += 1;
+            }
+            Some("terminal-controller-mutation") => {
+                validate_terminal_controller_mutation(&fields, &terminal_controllers)?;
+                statistics.abi_mutations += 1;
+            }
+            Some("terminal-controller-hostile") => {
+                validate_terminal_controller_hostile(&fields, &terminal_controllers)?;
+                statistics.abi_hostile_widths += 1;
+            }
+            Some("terminal-claim") => {
+                validate_terminal_claim(&fields, &mut terminal_claims)?;
+                statistics.terminal_claims += 1;
+            }
+            Some("terminal-claim-mutation") => {
+                validate_terminal_claim_mutation(&fields, &terminal_claims)?;
+                statistics.abi_mutations += 1;
+            }
+            Some("terminal-claim-hostile") => {
+                validate_terminal_claim_hostile(&fields, &terminal_claims)?;
+                statistics.abi_hostile_widths += 1;
+            }
+            Some("terminal-transition") => {
+                validate_terminal_transition(&fields, &mut statistics)?;
+            }
             Some("vm") => validate_vm(&fields, &mut statistics)?,
+            Some("vm-program") => validate_vm_program(&fields, &mut statistics)?,
             Some(kind) => {
                 return Err(failure(format!(
                     "line {}: unknown record {kind:?}",
@@ -500,6 +1015,30 @@ fn validate(path: &Path) -> Result<Statistics> {
     if !program_seen {
         return Err(failure("corpus omitted program bytes"));
     }
+    require_equal(
+        statistics.registered_creations,
+        14,
+        "registered creation ABI record count",
+    )?;
+    require_equal(
+        statistics.registered_creation_mutations,
+        2_128,
+        "registered creation mutation count",
+    )?;
+    require_equal(
+        statistics.registered_creation_hostile_widths,
+        2_142,
+        "registered creation hostile-width count",
+    )?;
+    require_equal(
+        (
+            statistics.creation_transitions,
+            statistics.creation_accepts,
+            statistics.creation_refusals,
+        ),
+        (17, 6, 11),
+        "registered creation transition accounting",
+    )?;
     const RUST_ROUNDTRIPS: usize = 4096;
     run_rust_roundtrips(RUST_ROUNDTRIPS)?;
     statistics.rust_roundtrips = RUST_ROUNDTRIPS;
@@ -520,12 +1059,26 @@ fn main() -> Result<()> {
     }
     let statistics = validate(Path::new(&path))?;
     println!(
-        "translation validation passed: {} Lean ABI values, {} single-byte ABI mutations, {} Lean VM states ({} accepted, {} refused with rollback), {} deterministic Rust roundtrips",
-        statistics.intents + statistics.controllers,
+        "translation validation passed: {} Lean ABI values, {} single-byte ABI mutations, {} hostile ABI widths, {} Lean VM states ({} accepted, {} refused with rollback), registered creation corpus {} ABIs/{} mutations/{} hostile widths and {} transitions ({} accepted, {} refused with exact rollback), {} registered terminal transitions ({} accepted, {} refused with exact rollback), {} deterministic Rust roundtrips",
+        statistics.intents
+            + statistics.controllers
+            + statistics.registered_creations
+            + statistics.terminal_controllers
+            + statistics.terminal_claims,
         statistics.abi_mutations,
+        statistics.abi_hostile_widths,
         statistics.vm_cases,
         statistics.vm_accepts,
         statistics.vm_refusals,
+        statistics.registered_creations,
+        statistics.registered_creation_mutations,
+        statistics.registered_creation_hostile_widths,
+        statistics.creation_transitions,
+        statistics.creation_accepts,
+        statistics.creation_refusals,
+        statistics.terminal_transitions,
+        statistics.terminal_accepts,
+        statistics.terminal_refusals,
         statistics.rust_roundtrips,
     );
     Ok(())

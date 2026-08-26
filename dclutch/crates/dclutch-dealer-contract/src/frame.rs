@@ -15,6 +15,9 @@ use crate::{MAX_NATIVE_CLAIMS, MIN_NATIVE_CLAIMS, instruction::DealerActionV1};
 pub const DEALER_PUBKEY_BYTES: usize = 32;
 /// Canonical Pool PDA domain.
 pub const DEALER_POOL_PDA_DOMAIN_V1: &[u8] = b"dclutch/dealer-pool/v1";
+/// Canonical finalized-record schema label for Dealer ladder config bytes.
+pub const DEALER_CONFIG_SCHEMA_RELEASE_PREIMAGE_V1: &[u8] =
+    b"dclutch/dealer-liquidity-config/schema/v1";
 /// Immutable generic-record schema/release ID for Dealer ladder config bytes.
 pub const DEALER_CONFIG_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
     0x6a, 0x11, 0xa5, 0x99, 0x65, 0x9e, 0x04, 0xad, 0x27, 0x54, 0xf7, 0x39, 0x23, 0x12, 0xbb, 0x4d,

@@ -1,5 +1,10 @@
 import DClutchSemantics.IR
 import DClutchSemantics.Direct
+import DClutchSemantics.DirectLifecycle
+import DClutchSemantics.DirectLifecycleProgram
+import DClutchSemantics.DirectLifecycleAbi
+import DClutchSemantics.RegisteredPhysical
+import DClutchSemantics.RegisteredControllerAbi
 import DClutchSemantics.DirectProofs
 import DClutchSemantics.Codec
 import DClutchSemantics.Examples
@@ -7,9 +12,36 @@ import DClutchSemantics.SbfProfile
 import DClutchSemantics.Physical
 import DClutchSemantics.ClaimSbfProfile
 import DClutchSemantics.TransitionVM
+import DClutchSemantics.TransitionVMV2
 import DClutchSemantics.DirectProgram
 import DClutchSemantics.CompiledPhysical
 import DClutchSemantics.DirectControllerCodec
+import DClutchSemantics.EconomicKernel
+import DClutchSemantics.EconomicExamples
+import DClutchSemantics.EconomicCodec
+import DClutchSemantics.ExecutionRelease
+import DClutchSemantics.SourceResolution
+import DClutchSemantics.SourceResolutionAbi
+import DClutchSemantics.SourceMaterialV2Abi
+import DClutchSemantics.GeneralClearing
+import DClutchSemantics.GeneralClearingExamples
+import DClutchSemantics.GeneralControllerAbi
+import DClutchSemantics.GeneralConfigAbi
+import DClutchSemantics.ProductPayoff
+import DClutchSemantics.ProductPayoffExamples
+import DClutchSemantics.ProductPayoffAbi
+import DClutchSemantics.LiabilityBasisV2
+import DClutchSemantics.ClaimsRepresentation
+import DClutchSemantics.ClaimsRepresentationExamples
+import DClutchSemantics.DealerLiquidity
+import DClutchSemantics.DealerLiquidityExamples
+import DClutchSemantics.DealerScenarioCollateral
+import DClutchSemantics.DealerTradingProfile
+import DClutchSemantics.Series
+import DClutchSemantics.SeriesExamples
+import DClutchSemantics.MarketCore
+import DClutchSemantics.MarketCoreExamples
+import DClutchSemantics.CapabilityProgramV3Abi
 
 /-!
 Fresh Lean-owned semantics for dClutch's compact protocol specializer.

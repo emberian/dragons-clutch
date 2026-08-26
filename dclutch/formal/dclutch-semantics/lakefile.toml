@@ -36,3 +36,27 @@ root = "EmitDirectControllerVectors"
 [[lean_exe]]
 name = "emit-direct-codec-rust"
 root = "EmitDirectCodecRust"
+
+[[lean_exe]]
+name = "emit-economic-vectors"
+root = "EmitEconomicVectors"
+
+[[lean_exe]]
+name = "emit-direct-lifecycle-abi-rust"
+root = "EmitDirectLifecycleAbiRust"
+
+[[lean_exe]]
+name = "emit-registered-controller-abi-rust"
+root = "EmitRegisteredControllerAbiRust"
+
+[[lean_exe]]
+name = "emit-general-controller-abi-rust"
+root = "EmitGeneralControllerAbiRust"
+
+[[lean_exe]]
+name = "emit-liability-basis-v2-rust"
+root = "EmitLiabilityBasisV2Rust"
+
+[[lean_exe]]
+name = "emit-transition-vm-v2-rust"
+root = "EmitTransitionVMV2Rust"

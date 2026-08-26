@@ -1,0 +1,30 @@
+[package]
+name = "dclutch-registry-sbf"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Thin activation and reauthentication adapter for dClutch execution releases"
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[features]
+default = []
+no-entrypoint = []
+custom-heap = []
+custom-panic = []
+
+[dependencies]
+dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
+dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }
+dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }
+dclutch-registry-svm = { path = "../../crates/dclutch-registry-svm" }
+dclutch-release-set-contract = { path = "../../crates/dclutch-release-set-contract" }
+solana-program = { version = "=3.0.0", default-features = false }
+solana-sdk-ids = "=3.1.0"
+solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
+
+[lints]
+workspace = true

@@ -19,9 +19,10 @@ pub const MAX_CAPABILITY_TEMPLATE_BYTES: usize =
 pub const CAPABILITY_TEMPLATE_MAGIC_V1: [u8; 8] = *b"DCLTCTP1";
 /// Implemented capability-template schema version.
 pub const CAPABILITY_TEMPLATE_SCHEMA_VERSION_V1: u16 = 1;
-/// Schema/validator release identity for canonical profile-1 templates.
-///
-/// This is SHA-256 of `dclutch/schema/capability-template-v1`.
+/// Canonical finalized-record schema label for [`CapabilityTemplateV1`].
+pub const CAPABILITY_TEMPLATE_SCHEMA_RELEASE_PREIMAGE_V1: &[u8] =
+    b"dclutch/schema/capability-template-v1";
+/// SHA-256 identity of [`CAPABILITY_TEMPLATE_SCHEMA_RELEASE_PREIMAGE_V1`].
 pub const CAPABILITY_TEMPLATE_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
     0xb0, 0x61, 0x6a, 0x35, 0xa5, 0x83, 0x74, 0x98, 0x71, 0x87, 0x56, 0xdc, 0x10, 0xb2, 0xa3, 0x2e,
     0x90, 0x33, 0xb4, 0xb7, 0x80, 0x60, 0x47, 0xda, 0x57, 0x56, 0xe1, 0xc2, 0x6d, 0xd4, 0xf5, 0x87,

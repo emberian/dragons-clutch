@@ -1,0 +1,37 @@
+[package]
+name = "dclutch-product-evidence-sbf"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Exact-rational Product evaluator and consumer-only Market admission adapter"
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[features]
+default = []
+no-entrypoint = []
+custom-heap = []
+custom-panic = []
+
+[dependencies]
+dclutch-capability-contract = { path = "../../crates/dclutch-capability-contract" }
+dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
+dclutch-market-contract = { path = "../../crates/dclutch-market-contract" }
+dclutch-product-admission-contract = { path = "../../crates/dclutch-product-admission-contract" }
+dclutch-product-contract = { path = "../../crates/dclutch-product-contract" }
+dclutch-product-payoff-v2-codec = { path = "../../crates/dclutch-product-payoff-v2-codec" }
+dclutch-product-payoff-v2-svm = { path = "../../crates/dclutch-product-payoff-v2-svm" }
+dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }
+dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }
+dclutch-registry-svm = { path = "../../crates/dclutch-registry-svm" }
+dclutch-release-set-contract = { path = "../../crates/dclutch-release-set-contract" }
+dclutch-resolution-codec = { path = "../../crates/dclutch-resolution-codec" }
+solana-program = { version = "=3.0.0", default-features = false }
+solana-sdk-ids = "=3.1.0"
+solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
+
+[lints]
+workspace = true

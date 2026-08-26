@@ -69,6 +69,14 @@ construction belong outside the kernel in explicitly named adapters.
 
 - Work from one canonical integration branch. Delegated lanes are short-lived,
   bounded, and either touch disjoint files or coordinate before editing.
+- Never redirect a generator directly into a canonical tracked output. Emit to
+  a temporary file on the same filesystem, require the producer to exit zero,
+  validate the expected header/width (and formatting where applicable), then
+  replace the canonical file atomically. A failed generator must leave the last
+  accepted output byte-for-byte intact.
+- Before every commit, inspect the complete staged path list. If the shared
+  index contains another lane's files, stop and coordinate; a named-file `add`
+  does not make a subsequent whole-index commit safe.
 - Build vertical executable slices. A slice includes kernel semantics, adapter,
   operator construction, and an honest user-visible status; no layer may claim
   completion alone.

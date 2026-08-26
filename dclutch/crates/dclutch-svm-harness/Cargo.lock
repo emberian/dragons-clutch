@@ -1555,6 +1555,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-economic-adapter-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-economic-kernel",
+ "dclutch-release-set-contract",
+]
+
+[[package]]
+name = "dclutch-economic-kernel"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-kernel"
 version = "0.1.0"
 
@@ -1568,7 +1580,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-product-admission-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-contract",
+ "dclutch-core-contract",
+ "dclutch-product-contract",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-product-payoff-v2-svm",
+ "dclutch-resolution-codec",
+]
+
+[[package]]
 name = "dclutch-product-contract"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-product-payoff-svm"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-product-payoff-v2-codec"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-product-payoff-v2-svm"
 version = "0.1.0"
 
 [[package]]
@@ -1580,6 +1616,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-pyth-svm"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-realm-contract"
 version = "0.1.0"
 
@@ -1588,7 +1628,34 @@ name = "dclutch-record-contract"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-registry-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-release-set-contract",
+]
+
+[[package]]
+name = "dclutch-registry-svm"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-release-set-contract",
+]
+
+[[package]]
+name = "dclutch-release-set-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+]
+
+[[package]]
 name = "dclutch-rent-contract"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-resolution-codec"
 version = "0.1.0"
 
 [[package]]
@@ -1618,13 +1685,24 @@ dependencies = [
  "dclutch-core-contract",
  "dclutch-direct-codec",
  "dclutch-direct-contract",
+ "dclutch-economic-adapter-contract",
+ "dclutch-economic-kernel",
  "dclutch-kernel",
  "dclutch-market-contract",
+ "dclutch-product-admission-contract",
  "dclutch-product-contract",
+ "dclutch-product-payoff-svm",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-product-payoff-v2-svm",
  "dclutch-pyth-contract",
+ "dclutch-pyth-svm",
  "dclutch-realm-contract",
  "dclutch-record-contract",
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
  "dclutch-rent-contract",
+ "dclutch-resolution-codec",
  "dclutch-series-contract",
  "dclutch-source-contract",
  "dclutch-terminal-contract",
@@ -1639,6 +1717,7 @@ dependencies = [
  "solana-rpc-client",
  "solana-sdk",
  "solana-sdk-ids",
+ "solana-system-interface 2.0.0",
  "solana-transaction 4.1.6",
  "tempfile",
  "tokio",

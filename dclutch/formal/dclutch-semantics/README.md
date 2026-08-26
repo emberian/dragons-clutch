@@ -21,6 +21,18 @@ Rust implementation. It currently provides:
 - a reproducible 120-byte Lean-emitted vector; and
 - executable admitted and hostile fixtures.
 
+The first Source successor specialization is also Lean-owned. It authenticates
+normalized provider observations against every immutable release coordinate,
+uses Product's ordered exact-rational result partition and derived final failure
+outcome, advances only the next finite recovery leg, and consumes only
+capability-owned prepaid work. Successful transitions emit at most five
+fixed-width V2 Effect records plus one cursor-specialized 312-byte certificate.
+Lean checks mapping boundedness/disjointness, ordinary/failure separation,
+determinism, early-failure refusal, immediate recovery ordering, funding
+conservation, exact receipt accounting, and rollback projection. Provider CPI,
+Solana account/Clock authentication, physical execution, and certificate
+identity hashing remain unverified adapter boundaries.
+
 The successor physical plan now derives a four-effect replay/claim program and
 two indivisible Realm-collateral transfers from that same admitted frame. Lean
 checks each child plan, custody conservation, exact recomposition to the Direct
@@ -40,6 +52,40 @@ semantic successor nonces, gross quote, and named floor fee. Concrete admitted
 and zero-fill fixtures remain regression checks. Reverse acceptance/refusal
 completeness, physical-register decoding, and Rust-interpreter refinement
 remain open.
+
+Registered Direct intents now have the same semantic-to-byte path. Registration
+consumes the maker nonce once; one persistent state owns the exact signed intent,
+controller authority, maker, phase, remaining quantity, and registration-local
+sequence. Lean proves GTC residual reuse, IOC residual cancellation, FOK
+exact-fill behavior, maker cancellation, permissionless expiry, terminal
+non-reuse, cumulative-fill bounds, and conservation. Its 232-byte state layout
+is cursor-specialized from field data, pairwise disjoint, and has a general
+hostile-decoder round-trip theorem. Lean also emits the exact 168-byte generic
+VM program that derives successor remaining, sequence, and phase values. The
+safe Rust codec consumes both generated artifacts and refuses unknown phases,
+malformed nested intents, nonzero reserved bytes, truncation, and alternate
+magic/version values. `RegisteredPhysical` executes that generated program for
+both authenticated registrations, joins the results to the sole Position
+balances, and proves exact claim conservation. The current 22,584-byte
+claim-owner ELF
+now dispatches this 16-byte request profile alongside inline execution; its
+real-ELF campaign covers reusable and terminal fills plus hostile rollback.
+The 32-byte controller request now drives that child route and real SPL custody
+without repeating maker signatures. Separate 24-byte, sequence-pinned terminal
+requests drive maker-signed cancellation or permissionless post-window expiry;
+the claim owner admits only an open registration and advances its phase and
+local sequence atomically. The real-ELF campaign covers stale sequence, maker
+impersonation, premature expiry, and terminal replay with byte-for-byte refusal
+state. Registration account creation and its prepaid funding/replay boundary
+are now physically connected by a 152-byte maker-signed request: the controller
+authenticates the live Market/Realm/manifest/fee/token context, tops up and
+allocates dusted replay and registration PDAs, assigns both to the claim owner,
+and atomically asks that owner to consume the global maker nonce and install the
+canonical state. Terminal registration retirement now returns rent only to the
+persisted maker; seller retirement is permissionless, while buyer retirement
+requires the maker and atomically revokes the SPL delegation before close.
+Global replay-root retirement and immutable execution-release-set wiring remain
+open.
 
 `CompiledPhysical.compilePhysicalPlan` then constructs the claim and custody
 plans from successful program outputs instead of caller-supplied gross, fee, or
@@ -70,14 +116,15 @@ claims, gross collateral, and fee custody.
 
 The general SDK/no-allocation measurement adapter remains a seven-effect
 baseline: 1,238 CU from a 12,016-byte ELF. The active Lean-generated claim
-executor assigns replay and claim facts to two canonical replay roots and two
-canonical maker/outcome Positions; it no longer uses the cheaper combined
-pairwise projection. A real-SVM controller authenticates two native Ed25519
-signatures, the canonical Market and Realm, the Market's exact capability
-manifest, the manifest-selected Direct semantic release, and its finalized fee
-policy. It then runs the generated transition program, composes the claim child
-with a real custody adapter and official SPL Token 9.0.0, and checks
-transaction-wide rollback after the first Token CPI. The earlier 1,872-byte
+executor assigns inline replay facts to canonical maker replay roots,
+registered replay facts to canonical registration-local sequences, and all
+claim balances to canonical maker/outcome Positions; it no longer uses the
+cheaper combined pairwise projection. A real-SVM controller authenticates two
+native Ed25519 signatures, the canonical Market and Realm, the Market's exact
+capability manifest, the manifest-selected Direct semantic release, and its
+finalized fee policy. It then runs the generated transition program, composes
+the claim child with a real custody adapter and official SPL Token 9.0.0, and
+checks transaction-wide rollback after the first Token CPI. The earlier 1,872-byte
 claim target has one qedsvm v0.11.0 successful-path Hoare triple, but that
 theorem does not cover the canonical-owner successor artifact. This remains
 runtime evidence plus high-level Lean theorems—not whole-CFG refinement or a
@@ -93,6 +140,14 @@ Run:
 ```sh
 lake build
 ```
+
+When accepting generator stdout into a canonical tracked file, use
+`tools/atomic-generate/dclutch-atomic-generate` from the repository root. It
+requires an output-specific header or pattern, writes beside the destination,
+and replaces the accepted file atomically only after the producer and optional
+validator succeed. Do not redirect a generator directly over its canonical
+output. The wrapper's interface and hostile regression command are documented
+in `tools/atomic-generate/README.md`.
 
 This is not a formal-verification claim for the deployed Solana program. See
 `TRUST.md` for the exact boundary and `docs/decisions/0002-lean-semantic-specializer.md`

@@ -14,6 +14,8 @@ path = "src/lib.rs"
 default = []
 
 [dependencies]
+dclutch-direct-codec = { path = "../../crates/dclutch-direct-codec" }
+dclutch-transition-vm = { path = "../../crates/dclutch-transition-vm" }
 
 [lints.rust]
 unexpected_cfgs = { level = "deny", check-cfg = ['cfg(target_os, values("solana"))'] }

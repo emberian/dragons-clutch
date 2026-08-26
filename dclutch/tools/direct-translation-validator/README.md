@@ -9,6 +9,48 @@ Direct boundary:
   single-byte mutation in the corpus, and executes the exact emitted transition
   program with `dclutch-transition-vm`.
 
+The corpus also executes isolated Lean-encoded microprograms for GTC lifecycle
+admission, checked subtraction, equality selection, and zero selection. This
+keeps newly added VM opcodes inside the cross-language boundary even before a
+full specialized market program consumes every opcode.
+
+The registered-creation extension independently checks:
+
+- fourteen exact 152-byte Lean-emitted creation requests against the public
+  safe-Rust encoder and strict decoder, including the embedded intent and the
+  Market, generation, nonce, replay-bump, and registration-bump projections
+  used to select replay and registration coordinates;
+- every single-byte mutation, every truncated width, and a padded width; and
+- a safe mutable replay/registration projection against Lean `register`, with
+  valid first and reused-replay states plus exact refusal rollback for an
+  occupied coordinate, non-open Market, invalid time window, expiry, zero
+  maximum, outcome/fee mismatch, skipped or reused nonce, and nonce overflow.
+
+The maker identity is a signing account, not a byte in the 152-byte request.
+The semantic corpus carries a finite maker coordinate to check preservation,
+but neither derives nor authenticates a Solana PDA. Agreement of the exact
+Market/generation/nonce and bump projections is therefore input evidence for a
+PDA derivation—not proof that the SBF adapter derived, authenticated, funded,
+or assigned the correct accounts.
+
+The registered terminal extension independently checks:
+
+- every Lean-emitted cancellation and expiry controller request against the
+  public safe-Rust encoder and strict decoder;
+- every Lean-emitted claim-child cancellation and expiry request against the
+  public safe-Rust encoder and a validator-local strict classifier;
+- every single-byte mutation, every truncated width, and a padded width for
+  both wire formats; and
+- a safe mutable physical projection of cancellation and expiry against the
+  Lean transition result, including exact refusal rollback for stale sequence,
+  sequence overflow, wrong phase, invalid state, premature expiry, and maker
+  mismatch.
+
+Maker authentication is an adapter observation rather than a field in Lean's
+`CancelFrame`. The corpus therefore wraps Lean `cancel` with the same explicit
+maker-equality gate evaluated by the independent Rust projection. Expiry is
+permissionless and ignores that observation.
+
 Run:
 
 ```sh
@@ -21,12 +63,23 @@ CPI, account authentication, or transaction rollback. Rust interpreter
 refusals are additionally checked to leave the supplied register frame
 unchanged.
 
-`src/kani_proofs.rs` also contains four bit-precise universal proof targets for
-all fixed-width intent/controller values, every truncated intent width, and the
-reserved intent spans. They are deliberately `cfg(kani)`-gated, following the
-Kani project's integration guidance. They are **not current evidence**: Kani is
-not installed on the checked macOS host, so no Kani result is claimed until a
-specific release/toolchain is pinned and the harnesses actually complete.
+The terminal physical projection in `src/terminal.rs` is validator code, not
+the on-chain implementation. The shipping safe-Rust claim API currently
+exposes the encoder; its child-instruction decoder lives across the SBF adapter
+boundary. Accordingly, agreement with the validator-local strict claim
+classifier is wire-format evidence, not a source-refinement claim about that
+adapter parser. Likewise, the transition comparison does not establish that
+the SBF account mutation path refines the Lean transition; exact-ELF and
+real-runtime campaigns remain separate evidence.
+
+`src/kani_proofs.rs` also contains eight bit-precise universal proof targets
+for all fixed-width intent/controller values, registered creation and terminal
+controllers, every truncated intent/creation/terminal-controller width, and
+the reserved intent spans. They are deliberately `cfg(kani)`-gated, following
+the Kani project's integration guidance. They are **not current evidence**:
+Kani is not installed on the checked macOS host, so no Kani result is claimed
+until a specific release/toolchain is pinned and the harnesses actually
+complete.
 
 The identity bridge maps each Lean `Nat` identity in this corpus injectively
 into the first eight little-endian bytes of a physical 32-byte Rust identity.
@@ -42,9 +95,9 @@ the checked-in generated transition-program include.
 
 Unchecked: whether arbitrary safe Rust refines the Lean functions outside the
 finite corpus; lowering from Rust to SBF/LLVM; Solana loader and runtime
-behavior; native signature verification; account/PDA/owner checks; and CPI or
-token semantics. Artifact-level path proofs and real-SVM campaigns remain
-separate evidence.
+behavior; native signature verification; PDA derivation; account creation,
+funding, ownership and alias checks; and CPI or token semantics. Artifact-level
+path proofs and real-SVM campaigns remain separate evidence.
 
 ## Verification route
 

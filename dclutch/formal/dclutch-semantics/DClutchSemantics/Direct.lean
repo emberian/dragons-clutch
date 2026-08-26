@@ -38,6 +38,7 @@ inductive Side where
 inductive Lifecycle where
   | fillOrKill
   | immediateOrCancel
+  | goodTillCancelled
   deriving DecidableEq, Repr
 
 /-- Immutable fee policy selected by the Market capability manifest. -/
@@ -106,6 +107,7 @@ def Lifecycle.accepts (lifecycle : Lifecycle) (maxFill fill : Nat) : Prop :=
   match lifecycle with
   | .fillOrKill => fill = maxFill
   | .immediateOrCancel => fill ≤ maxFill
+  | .goodTillCancelled => fill ≤ maxFill
 
 instance (lifecycle : Lifecycle) (maxFill fill : Nat) :
     Decidable (lifecycle.accepts maxFill fill) := by

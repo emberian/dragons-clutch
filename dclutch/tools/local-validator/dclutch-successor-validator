@@ -1,0 +1,413 @@
+#!/usr/bin/env bash
+# Fresh localhost Registry + Resolution + real-Pyth successor profile.
+set -euo pipefail
+
+readonly LAUNCHER_VERSION="1"
+readonly RECEIVER_ID="rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp"
+readonly ROUTER_ID="HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL"
+readonly RPC_PORT="20890"
+readonly FAUCET_PORT="20892"
+readonly GOSSIP_PORT="20893"
+readonly DYNAMIC_PORT_RANGE="20900-20931"
+readonly MINT_PUBKEY="11111111111111111111111111111111"
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+REPO_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd -P)
+FIXTURE_DIR="$REPO_ROOT/fixtures/pyth/local-upgraded-2026-08-22"
+PROFILE_NAME="dclutch-successor-validator-profile.json"
+SENTINEL_NAME=".dclutch-successor-validator-owner"
+PID_NAME="dclutch-successor-validator.pid"
+
+die() { printf 'dclutch-successor-validator: %s\n' "$*" >&2; exit 1; }
+
+usage() {
+  cat <<'EOF'
+Usage:
+  dclutch-successor-validator start --ledger ABSOLUTE_NEW_DIR \
+    --account-dir ABSOLUTE_DIR --plan ABSOLUTE_JSON \
+    --registry-program-id PUBKEY --registry-elf ABSOLUTE_ELF \
+    --registry-sha256 SHA256 --registry-attestation ABSOLUTE_JSON \
+    --core-program-id PUBKEY --core-elf ABSOLUTE_ELF \
+    --core-sha256 SHA256 --core-attestation ABSOLUTE_JSON \
+    --claims-program-id PUBKEY --claims-elf ABSOLUTE_ELF \
+    --claims-sha256 SHA256 --claims-attestation ABSOLUTE_JSON \
+    --trading-program-id PUBKEY --trading-elf ABSOLUTE_ELF \
+    --trading-sha256 SHA256 --trading-attestation ABSOLUTE_JSON \
+    --resolution-program-id PUBKEY --resolution-elf ABSOLUTE_ELF \
+    --resolution-sha256 SHA256 --resolution-attestation ABSOLUTE_JSON \
+    --custody-program-id PUBKEY --custody-elf ABSOLUTE_ELF \
+    --custody-sha256 SHA256 --custody-attestation ABSOLUTE_JSON \
+    [--foreground]
+  dclutch-successor-validator status --ledger ABSOLUTE_DIR
+  dclutch-successor-validator stop --ledger ABSOLUTE_DIR
+
+The profile binds only to 127.0.0.1 on ports 20890-20931. It never reads a
+Solana CLI configuration or caller wallet. The account directory must come
+from the successor prepare command and remains explicitly genesis evidence.
+Foreground mode preserves the validator as the launcher's process, which is
+useful for supervised local execution and process-lifetime-safe automation.
+EOF
+}
+
+sha256() { shasum -a 256 "$1" | awk '{print $1}'; }
+is_sha256() { [[ "$1" =~ ^[0-9a-f]{64}$ ]]; }
+is_pubkey() { [[ "$1" =~ ^[1-9A-HJ-NP-Za-km-z]{32,44}$ ]]; }
+require_command() { command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"; }
+
+canonical_file() {
+  [[ "$1" = /* && -f "$1" && ! -L "$1" ]] || die "not an absolute regular file: $1"
+  local parent base
+  parent=$(cd -- "$(dirname -- "$1")" && pwd -P)
+  base=$(basename -- "$1")
+  printf '%s/%s\n' "$parent" "$base"
+}
+
+canonical_directory() {
+  [[ "$1" = /* && -d "$1" && ! -L "$1" ]] || die "not an absolute directory: $1"
+  cd -- "$1" && pwd -P
+}
+
+canonical_new_ledger() {
+  [[ "$1" = /* ]] || die "--ledger must be absolute"
+  [[ ! -e "$1" && ! -L "$1" ]] || die "ledger must be fresh and nonexistent: $1"
+  local parent base
+  parent=$(cd -- "$(dirname -- "$1")" && pwd -P) || die "ledger parent does not exist"
+  base=$(basename -- "$1")
+  [[ -n "$base" && "$base" != "." && "$base" != ".." && "$parent" != "/" ]] || die "unsafe ledger path"
+  printf '%s/%s\n' "$parent" "$base"
+}
+
+canonical_owned_ledger() {
+  [[ "$1" = /* && -d "$1" && ! -L "$1" ]] || die "not a successor ledger directory: $1"
+  local ledger
+  ledger=$(cd -- "$1" && pwd -P)
+  [[ -f "$ledger/$SENTINEL_NAME" ]] || die "refusing directory without successor sentinel"
+  [[ "$(<"$ledger/$SENTINEL_NAME")" = "dclutch-successor-validator-ledger-v1" ]] || die "invalid successor sentinel"
+  printf '%s\n' "$ledger"
+}
+
+json_string() {
+  local value=$1
+  value=${value//\\/\\\\}
+  value=${value//\"/\\\"}
+  value=${value//$'\n'/\\n}
+  printf '"%s"' "$value"
+}
+
+rpc_ready() {
+  curl --fail --silent --show-error --max-time 1 \
+    -H 'content-type: application/json' \
+    --data '{"jsonrpc":"2.0","id":1,"method":"getHealth"}' \
+    "http://127.0.0.1:$RPC_PORT" | grep -q '"result":"ok"'
+}
+
+pid_is_ours() {
+  local ledger=$1 pid=$2 command_line
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  command_line=$(ps -p "$pid" -o command= 2>/dev/null || true)
+  [[ "$command_line" == *"solana-test-validator"* && "$command_line" == *"--ledger $ledger"* && "$command_line" == *"--rpc-port $RPC_PORT"* ]]
+}
+
+validate_attestation() {
+  local attestation=$1 elf=$2 elf_hash=$3 program_id=$4
+  jq -e \
+    --arg elf "$elf" \
+    --arg elf_hash "$elf_hash" \
+    --arg program_id "$program_id" \
+    '.elf_path == $elf and
+     .elf_sha256 == $elf_hash and
+     .program_id == $program_id and
+     (.commit | type == "string" and test("^[0-9a-f]{40}$")) and
+     (.archive_sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
+     (.cargo_build_sbf_version | type == "string" and length > 0) and
+     (.platform_tools_version | type == "string" and length > 0) and
+     (.rustc_version | type == "string" and length > 0) and
+     (.build_command | type == "string" and length > 0) and
+     (.build_log_sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
+     .verifier.status == "clean" and
+     .verifier.diagnostic_count == 0' \
+    "$attestation" >/dev/null || die "artifact attestation is missing, malformed, non-clean, or not bound to exact ELF/program pins"
+}
+
+validate_plan() {
+  local plan=$1 account_dir=$2 registry_id=$3 registry_elf=$4 registry_hash=$5 core_id=$6 core_elf=$7 core_hash=$8 claims_id=$9 claims_elf=${10} claims_hash=${11} trading_id=${12} trading_elf=${13} trading_hash=${14} resolution_id=${15} resolution_elf=${16} resolution_hash=${17} custody_id=${18} custody_elf=${19} custody_hash=${20}
+  jq -e \
+    --arg account_dir "$account_dir" \
+    --arg registry_id "$registry_id" \
+    --arg registry_elf "$registry_elf" \
+    --arg registry_hash "$registry_hash" \
+    --arg core_id "$core_id" \
+    --arg core_elf "$core_elf" \
+    --arg core_hash "$core_hash" \
+    --arg claims_id "$claims_id" \
+    --arg claims_elf "$claims_elf" \
+    --arg claims_hash "$claims_hash" \
+    --arg trading_id "$trading_id" \
+    --arg trading_elf "$trading_elf" \
+    --arg trading_hash "$trading_hash" \
+    --arg resolution_id "$resolution_id" \
+    --arg resolution_elf "$resolution_elf" \
+    --arg resolution_hash "$resolution_hash" \
+    --arg custody_id "$custody_id" \
+    --arg custody_elf "$custody_elf" \
+    --arg custody_hash "$custody_hash" \
+    '.schema == "dclutch-local-successor-genesis-plan-v1" and
+     .account_dir == $account_dir and
+     .registry.program_id == $registry_id and
+     .registry.elf_path == $registry_elf and
+     .registry.elf_sha256 == $registry_hash and
+     .genesis_accounts["loader.registry.program"].address == $registry_id and
+     .genesis_accounts["loader.registry.programdata"].address == .registry.programdata_id and
+     .core.program_id == $core_id and
+     .core.elf_path == $core_elf and
+     .core.elf_sha256 == $core_hash and
+     .genesis_accounts["loader.core.program"].address == $core_id and
+     .genesis_accounts["loader.core.programdata"].address == .core.programdata_id and
+     .claims.program_id == $claims_id and
+     .claims.elf_path == $claims_elf and
+     .claims.elf_sha256 == $claims_hash and
+     .genesis_accounts["loader.claims.program"].address == $claims_id and
+     .genesis_accounts["loader.claims.programdata"].address == .claims.programdata_id and
+     .trading.program_id == $trading_id and
+     .trading.elf_path == $trading_elf and
+     .trading.elf_sha256 == $trading_hash and
+     .genesis_accounts["loader.trading.program"].address == $trading_id and
+     .genesis_accounts["loader.trading.programdata"].address == .trading.programdata_id and
+     .resolution.program_id == $resolution_id and
+     .resolution.elf_path == $resolution_elf and
+     .resolution.elf_sha256 == $resolution_hash and
+     .genesis_accounts["loader.resolution.program"].address == $resolution_id and
+     .genesis_accounts["loader.resolution.programdata"].address == .resolution.programdata_id and
+     .custody.program_id == $custody_id and
+     .custody.elf_path == $custody_elf and
+     .custody.elf_sha256 == $custody_hash and
+     .genesis_accounts["loader.custody.program"].address == $custody_id and
+     .genesis_accounts["loader.custody.programdata"].address == .custody.programdata_id and
+     (.genesis_boundary | length == 4) and
+     (.genesis_accounts | length > 0)' \
+    "$plan" >/dev/null || die "successor plan does not match exact account/artifact pins or hides its genesis boundary"
+}
+
+validate_account_dir() {
+  local plan=$1 account_dir=$2 address expected path observed count expected_count
+  expected_count=$(jq -r '.genesis_accounts | length' "$plan")
+  count=0
+  while IFS=$'\t' read -r address expected; do
+    is_pubkey "$address" || die "plan contains an invalid genesis account address"
+    is_sha256 "$expected" || die "plan contains an invalid genesis account file hash"
+    path="$account_dir/$address.json"
+    [[ -f "$path" && ! -L "$path" ]] || die "missing exact genesis account file: $path"
+    observed=$(sha256 "$path")
+    [[ "$observed" = "$expected" ]] || die "genesis account file hash mismatch: $path"
+    count=$((count + 1))
+  done < <(jq -r '.genesis_accounts[] | [.address,.json_file_sha256] | @tsv' "$plan")
+  [[ "$count" -eq "$expected_count" ]] || die "genesis account plan enumeration was incomplete"
+  local files=("$account_dir"/*.json)
+  [[ "${#files[@]}" -eq "$expected_count" ]] || die "account directory contains unpinned or missing JSON files"
+}
+
+write_profile() {
+  local ledger=$1 account_dir=$2 plan=$3 registry_id=$4 registry_elf=$5 registry_hash=$6 registry_attestation=$7 core_id=$8 core_elf=$9 core_hash=${10} core_attestation=${11} claims_id=${12} claims_elf=${13} claims_hash=${14} claims_attestation=${15} trading_id=${16} trading_elf=${17} trading_hash=${18} trading_attestation=${19} resolution_id=${20} resolution_elf=${21} resolution_hash=${22} resolution_attestation=${23} custody_id=${24} custody_elf=${25} custody_hash=${26} custody_attestation=${27} validator=${28} version=${29}
+  {
+    printf '{\n'
+    printf '  "schema":"dclutch-successor-local-validator-profile-v1",\n'
+    printf '  "launcher_version":"%s",\n' "$LAUNCHER_VERSION"
+    printf '  "network":{"bind_address":"127.0.0.1","rpc_url":"http://127.0.0.1:%s","faucet_port":%s,"gossip_port":%s,"dynamic_port_range":"%s"},\n' "$RPC_PORT" "$FAUCET_PORT" "$GOSSIP_PORT" "$DYNAMIC_PORT_RANGE"
+    printf '  "ledger":'; json_string "$ledger"; printf ',\n'
+    printf '  "account_dir":'; json_string "$account_dir"; printf ',\n'
+    printf '  "genesis_plan":'; json_string "$plan"; printf ',\n'
+    printf '  "genesis_boundary":"Registry records, Markets, Source states, and funding are prepared inputs; only activation and Resolution transitions are transactions.",\n'
+    printf '  "key_policy":"No caller wallet/config is read; validator keys are ledger-scoped and bootstrap keys exist only in process memory.",\n'
+    printf '  "validator":{"path":'; json_string "$validator"; printf ',"version":'; json_string "$version"; printf '},\n'
+    printf '  "programs":[\n'
+    printf '    {"name":"registry","program_id":"%s","elf_path":' "$registry_id"; json_string "$registry_elf"; printf ',"elf_sha256":"%s","attestation":' "$registry_hash"; json_string "$registry_attestation"; printf '},\n'
+    printf '    {"name":"core","program_id":"%s","elf_path":' "$core_id"; json_string "$core_elf"; printf ',"elf_sha256":"%s","attestation":' "$core_hash"; json_string "$core_attestation"; printf '},\n'
+    printf '    {"name":"claims","program_id":"%s","elf_path":' "$claims_id"; json_string "$claims_elf"; printf ',"elf_sha256":"%s","attestation":' "$claims_hash"; json_string "$claims_attestation"; printf '},\n'
+    printf '    {"name":"trading","program_id":"%s","elf_path":' "$trading_id"; json_string "$trading_elf"; printf ',"elf_sha256":"%s","attestation":' "$trading_hash"; json_string "$trading_attestation"; printf '},\n'
+    printf '    {"name":"resolution","program_id":"%s","elf_path":' "$resolution_id"; json_string "$resolution_elf"; printf ',"elf_sha256":"%s","attestation":' "$resolution_hash"; json_string "$resolution_attestation"; printf '},\n'
+    printf '    {"name":"custody","program_id":"%s","elf_path":' "$custody_id"; json_string "$custody_elf"; printf ',"elf_sha256":"%s","attestation":' "$custody_hash"; json_string "$custody_attestation"; printf '},\n'
+    printf '    {"name":"pyth-receiver","program_id":"%s","elf_sha256":"c5079559864fc34dbd5fe87b4aa9fba3a1ed22690363ec490449e8660e73af64"},\n' "$RECEIVER_ID"
+    printf '    {"name":"pyth-router","program_id":"%s","elf_sha256":"f9061f03a81b89db29f4603677e3b3d89b3bbf08d67827b2832f18a4e2b61acb"}\n' "$ROUTER_ID"
+    printf '  ],\n'
+    printf '  "loader_time_boundary":"Registry and all five role programs use exact slot-0 immutable genesis Loader headers with canonical zero padding before the fixed 45-byte ELF boundary. Current wall clock differs from the captured provider fixture, and evidence makes no captured-release or production-release claim."\n'
+    printf '}\n'
+  } > "$ledger/$PROFILE_NAME"
+}
+
+start() {
+  local ledger_arg='' account_dir_arg='' plan_arg='' registry_id='' registry_elf_arg='' registry_hash='' registry_attestation_arg='' core_id='' core_elf_arg='' core_hash='' core_attestation_arg='' claims_id='' claims_elf_arg='' claims_hash='' claims_attestation_arg='' trading_id='' trading_elf_arg='' trading_hash='' trading_attestation_arg='' resolution_id='' resolution_elf_arg='' resolution_hash='' resolution_attestation_arg='' custody_id='' custody_elf_arg='' custody_hash='' custody_attestation_arg='' foreground=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --ledger) ledger_arg=${2-}; shift 2 ;;
+      --account-dir) account_dir_arg=${2-}; shift 2 ;;
+      --plan) plan_arg=${2-}; shift 2 ;;
+      --registry-program-id) registry_id=${2-}; shift 2 ;;
+      --registry-elf) registry_elf_arg=${2-}; shift 2 ;;
+      --registry-sha256) registry_hash=${2-}; shift 2 ;;
+      --registry-attestation) registry_attestation_arg=${2-}; shift 2 ;;
+      --core-program-id) core_id=${2-}; shift 2 ;;
+      --core-elf) core_elf_arg=${2-}; shift 2 ;;
+      --core-sha256) core_hash=${2-}; shift 2 ;;
+      --core-attestation) core_attestation_arg=${2-}; shift 2 ;;
+      --claims-program-id) claims_id=${2-}; shift 2 ;;
+      --claims-elf) claims_elf_arg=${2-}; shift 2 ;;
+      --claims-sha256) claims_hash=${2-}; shift 2 ;;
+      --claims-attestation) claims_attestation_arg=${2-}; shift 2 ;;
+      --trading-program-id) trading_id=${2-}; shift 2 ;;
+      --trading-elf) trading_elf_arg=${2-}; shift 2 ;;
+      --trading-sha256) trading_hash=${2-}; shift 2 ;;
+      --trading-attestation) trading_attestation_arg=${2-}; shift 2 ;;
+      --resolution-program-id) resolution_id=${2-}; shift 2 ;;
+      --resolution-elf) resolution_elf_arg=${2-}; shift 2 ;;
+      --resolution-sha256) resolution_hash=${2-}; shift 2 ;;
+      --resolution-attestation) resolution_attestation_arg=${2-}; shift 2 ;;
+      --custody-program-id) custody_id=${2-}; shift 2 ;;
+      --custody-elf) custody_elf_arg=${2-}; shift 2 ;;
+      --custody-sha256) custody_hash=${2-}; shift 2 ;;
+      --custody-attestation) custody_attestation_arg=${2-}; shift 2 ;;
+      --foreground) foreground=1; shift ;;
+      *) die "unknown start option: $1" ;;
+    esac
+  done
+  [[ -n "$ledger_arg" && -n "$account_dir_arg" && -n "$plan_arg" && -n "$registry_id" && -n "$registry_elf_arg" && -n "$registry_hash" && -n "$registry_attestation_arg" && -n "$core_id" && -n "$core_elf_arg" && -n "$core_hash" && -n "$core_attestation_arg" && -n "$claims_id" && -n "$claims_elf_arg" && -n "$claims_hash" && -n "$claims_attestation_arg" && -n "$trading_id" && -n "$trading_elf_arg" && -n "$trading_hash" && -n "$trading_attestation_arg" && -n "$resolution_id" && -n "$resolution_elf_arg" && -n "$resolution_hash" && -n "$resolution_attestation_arg" && -n "$custody_id" && -n "$custody_elf_arg" && -n "$custody_hash" && -n "$custody_attestation_arg" ]] || die "start requires every plan and artifact pin"
+  is_pubkey "$registry_id" || die "invalid Registry program ID"
+  is_pubkey "$core_id" || die "invalid Core program ID"
+  is_pubkey "$claims_id" || die "invalid Claims program ID"
+  is_pubkey "$trading_id" || die "invalid Trading program ID"
+  is_pubkey "$resolution_id" || die "invalid Resolution program ID"
+  is_pubkey "$custody_id" || die "invalid Custody program ID"
+  local ids=("$registry_id" "$core_id" "$claims_id" "$trading_id" "$resolution_id" "$custody_id") left right
+  for ((left=0; left<${#ids[@]}; left++)); do
+    for ((right=left+1; right<${#ids[@]}; right++)); do
+      [[ "${ids[$left]}" != "${ids[$right]}" ]] || die "Registry and all five role Program IDs must be pairwise distinct"
+    done
+  done
+  is_sha256 "$registry_hash" || die "invalid Registry SHA-256"
+  is_sha256 "$core_hash" || die "invalid Core SHA-256"
+  is_sha256 "$claims_hash" || die "invalid Claims SHA-256"
+  is_sha256 "$trading_hash" || die "invalid Trading SHA-256"
+  is_sha256 "$resolution_hash" || die "invalid Resolution SHA-256"
+  is_sha256 "$custody_hash" || die "invalid Custody SHA-256"
+  require_command shasum
+  require_command jq
+  require_command curl
+  require_command solana-test-validator
+  "$SCRIPT_DIR/dclutch-local-validator" verify-fixtures >/dev/null
+
+  local ledger account_dir plan registry_elf registry_attestation core_elf core_attestation claims_elf claims_attestation trading_elf trading_attestation resolution_elf resolution_attestation custody_elf custody_attestation validator version
+  ledger=$(canonical_new_ledger "$ledger_arg")
+  account_dir=$(canonical_directory "$account_dir_arg")
+  plan=$(canonical_file "$plan_arg")
+  registry_elf=$(canonical_file "$registry_elf_arg")
+  registry_attestation=$(canonical_file "$registry_attestation_arg")
+  core_elf=$(canonical_file "$core_elf_arg")
+  core_attestation=$(canonical_file "$core_attestation_arg")
+  claims_elf=$(canonical_file "$claims_elf_arg")
+  claims_attestation=$(canonical_file "$claims_attestation_arg")
+  trading_elf=$(canonical_file "$trading_elf_arg")
+  trading_attestation=$(canonical_file "$trading_attestation_arg")
+  resolution_elf=$(canonical_file "$resolution_elf_arg")
+  resolution_attestation=$(canonical_file "$resolution_attestation_arg")
+  custody_elf=$(canonical_file "$custody_elf_arg")
+  custody_attestation=$(canonical_file "$custody_attestation_arg")
+  [[ "$(sha256 "$registry_elf")" = "$registry_hash" ]] || die "Registry ELF hash mismatch"
+  [[ "$(sha256 "$core_elf")" = "$core_hash" ]] || die "Core ELF hash mismatch"
+  [[ "$(sha256 "$claims_elf")" = "$claims_hash" ]] || die "Claims ELF hash mismatch"
+  [[ "$(sha256 "$trading_elf")" = "$trading_hash" ]] || die "Trading ELF hash mismatch"
+  [[ "$(sha256 "$resolution_elf")" = "$resolution_hash" ]] || die "Resolution ELF hash mismatch"
+  [[ "$(sha256 "$custody_elf")" = "$custody_hash" ]] || die "Custody ELF hash mismatch"
+  [[ "$(od -An -tx1 -N4 "$registry_elf" | tr -d '[:space:]')" = "7f454c46" ]] || die "Registry input is not ELF"
+  [[ "$(od -An -tx1 -N4 "$core_elf" | tr -d '[:space:]')" = "7f454c46" ]] || die "Core input is not ELF"
+  [[ "$(od -An -tx1 -N4 "$claims_elf" | tr -d '[:space:]')" = "7f454c46" ]] || die "Claims input is not ELF"
+  [[ "$(od -An -tx1 -N4 "$trading_elf" | tr -d '[:space:]')" = "7f454c46" ]] || die "Trading input is not ELF"
+  [[ "$(od -An -tx1 -N4 "$resolution_elf" | tr -d '[:space:]')" = "7f454c46" ]] || die "Resolution input is not ELF"
+  [[ "$(od -An -tx1 -N4 "$custody_elf" | tr -d '[:space:]')" = "7f454c46" ]] || die "Custody input is not ELF"
+  validate_attestation "$registry_attestation" "$registry_elf" "$registry_hash" "$registry_id"
+  validate_attestation "$core_attestation" "$core_elf" "$core_hash" "$core_id"
+  validate_attestation "$claims_attestation" "$claims_elf" "$claims_hash" "$claims_id"
+  validate_attestation "$trading_attestation" "$trading_elf" "$trading_hash" "$trading_id"
+  validate_attestation "$resolution_attestation" "$resolution_elf" "$resolution_hash" "$resolution_id"
+  validate_attestation "$custody_attestation" "$custody_elf" "$custody_hash" "$custody_id"
+  validate_plan "$plan" "$account_dir" "$registry_id" "$registry_elf" "$registry_hash" "$core_id" "$core_elf" "$core_hash" "$claims_id" "$claims_elf" "$claims_hash" "$trading_id" "$trading_elf" "$trading_hash" "$resolution_id" "$resolution_elf" "$resolution_hash" "$custody_id" "$custody_elf" "$custody_hash"
+  validate_account_dir "$plan" "$account_dir"
+  validator=$(canonical_file "$(command -v solana-test-validator)")
+  version=$("$validator" --version 2>&1 | head -n 1)
+  [[ "$version" == solana-test-validator\ 4.0.2\ * ]] || die "requires solana-test-validator 4.0.2; found $version"
+
+  mkdir -- "$ledger"
+  printf 'dclutch-successor-validator-ledger-v1\n' > "$ledger/$SENTINEL_NAME"
+  write_profile "$ledger" "$account_dir" "$plan" "$registry_id" "$registry_elf" "$registry_hash" "$registry_attestation" "$core_id" "$core_elf" "$core_hash" "$core_attestation" "$claims_id" "$claims_elf" "$claims_hash" "$claims_attestation" "$trading_id" "$trading_elf" "$trading_hash" "$trading_attestation" "$resolution_id" "$resolution_elf" "$resolution_hash" "$resolution_attestation" "$custody_id" "$custody_elf" "$custody_hash" "$custody_attestation" "$validator" "$version"
+  local validator_args=(
+    --config /dev/null \
+    --ledger "$ledger" \
+    --account-dir "$account_dir" \
+    --mint "$MINT_PUBKEY" \
+    --bind-address 127.0.0.1 \
+    --rpc-port "$RPC_PORT" \
+    --faucet-port "$FAUCET_PORT" \
+    --gossip-port "$GOSSIP_PORT" \
+    --dynamic-port-range "$DYNAMIC_PORT_RANGE" \
+    --upgradeable-program "$RECEIVER_ID" "$FIXTURE_DIR/receiver.so" none \
+    --upgradeable-program "$ROUTER_ID" "$FIXTURE_DIR/router.so" none
+  )
+  if [[ "$foreground" -eq 1 ]]; then
+    printf '%s\n' "$$" > "$ledger/$PID_NAME"
+    printf 'starting foreground validator at http://127.0.0.1:%s\nprofile: %s\n' "$RPC_PORT" "$ledger/$PROFILE_NAME"
+    exec "$validator" "${validator_args[@]}"
+  fi
+  nohup "$validator" "${validator_args[@]}" \
+    > "$ledger/launcher.log" 2>&1 < /dev/null &
+  local pid=$!
+  printf '%s\n' "$pid" > "$ledger/$PID_NAME"
+  local _
+  for _ in $(seq 1 60); do
+    if rpc_ready; then
+      printf 'ready: http://127.0.0.1:%s\npid: %s\nprofile: %s\n' "$RPC_PORT" "$pid" "$ledger/$PROFILE_NAME"
+      return 0
+    fi
+    if ! kill -0 "$pid" 2>/dev/null; then
+      die "validator exited before readiness; inspect $ledger/launcher.log"
+    fi
+    sleep 1
+  done
+  kill "$pid" 2>/dev/null || true
+  die "validator did not become ready; inspect $ledger/launcher.log"
+}
+
+status() {
+  [[ $# -eq 2 && "$1" = "--ledger" ]] || die "usage: status --ledger ABSOLUTE_DIR"
+  local ledger pid=''
+  ledger=$(canonical_owned_ledger "$2")
+  [[ -f "$ledger/$PID_NAME" ]] && pid=$(<"$ledger/$PID_NAME")
+  if pid_is_ours "$ledger" "$pid" && rpc_ready; then
+    printf '{"status":"ready","pid":%s,"rpc_url":"http://127.0.0.1:%s","profile":' "$pid" "$RPC_PORT"; json_string "$ledger/$PROFILE_NAME"; printf '}\n'
+  else
+    printf '{"status":"not-ready","pid":null}\n'
+    return 1
+  fi
+}
+
+stop() {
+  [[ $# -eq 2 && "$1" = "--ledger" ]] || die "usage: stop --ledger ABSOLUTE_DIR"
+  local ledger pid
+  ledger=$(canonical_owned_ledger "$2")
+  [[ -f "$ledger/$PID_NAME" ]] || die "missing managed validator pid"
+  pid=$(<"$ledger/$PID_NAME")
+  pid_is_ours "$ledger" "$pid" || die "refusing stale or unrecognized pid"
+  kill "$pid"
+  printf 'sent TERM to managed successor validator pid %s\n' "$pid"
+}
+
+main() {
+  [[ $# -ge 1 ]] || { usage >&2; exit 1; }
+  case "$1" in
+    start) shift; start "$@" ;;
+    status) shift; status "$@" ;;
+    stop) shift; stop "$@" ;;
+    help|-h|--help) usage ;;
+    *) die "unknown command: $1" ;;
+  esac
+}
+
+main "$@"

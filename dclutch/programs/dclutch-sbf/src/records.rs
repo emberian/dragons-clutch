@@ -14,25 +14,59 @@ use dclutch_capability_contract::{
 pub(crate) use dclutch_capability_contract::{
     CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CAPABILITY_TEMPLATE_SCHEMA_RELEASE_ID_V1,
 };
+#[cfg(test)]
+use dclutch_capability_contract::{
+    CAPABILITY_MANIFEST_SCHEMA_RELEASE_PREIMAGE_V1, CAPABILITY_TEMPLATE_SCHEMA_RELEASE_PREIMAGE_V1,
+};
 use dclutch_core_contract::ContentId as CoreContentId;
 #[cfg(test)]
 use dclutch_dealer_contract::LiquidityConfigV1;
+#[cfg(test)]
+use dclutch_dealer_contract::frame::DEALER_CONFIG_SCHEMA_RELEASE_PREIMAGE_V1;
 use dclutch_dealer_contract::{
     frame::DEALER_CONFIG_SCHEMA_RELEASE_ID_V1,
     runtime::{LiquidityConfigViewV1, LiquidityProfileV1},
 };
+#[cfg(test)]
+use dclutch_direct_contract::VENUE_FEE_POLICY_SCHEMA_RELEASE_PREIMAGE_V3;
 use dclutch_direct_contract::{
     VENUE_FEE_POLICY_BYTES_V3, VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3, VenueFeePolicyV3,
 };
+#[cfg(test)]
+use dclutch_general_contract::GENERAL_CONFIG_SCHEMA_PREIMAGE_V1;
 use dclutch_general_contract::{
     GENERAL_CONFIG_BYTES, GENERAL_CONFIG_SCHEMA_ID_V1, GeneralConfigV1,
+};
+pub(crate) use dclutch_product_contract::{
+    capacity::CAPACITY_PROFILE_SCHEMA_RELEASE_ID_V1,
+    claim::CATEGORICAL_CLAIM_SCHEMA_RELEASE_ID_V1,
+    product::{
+        PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1, PRODUCT_OCCURRENCE_SCHEMA_RELEASE_ID_V1,
+        PRODUCT_TERMS_SCHEMA_RELEASE_ID_V1,
+    },
+    result_domain::FINITE_RESULT_DOMAIN_SCHEMA_RELEASE_ID_V1,
+};
+#[cfg(test)]
+use dclutch_product_contract::{
+    capacity::CAPACITY_PROFILE_SCHEMA_RELEASE_PREIMAGE_V1,
+    claim::CATEGORICAL_CLAIM_SCHEMA_RELEASE_PREIMAGE_V1,
+    product::{
+        PRODUCT_INSTANCE_SCHEMA_RELEASE_PREIMAGE_V1, PRODUCT_OCCURRENCE_SCHEMA_RELEASE_PREIMAGE_V1,
+        PRODUCT_TERMS_SCHEMA_RELEASE_PREIMAGE_V1,
+    },
+    result_domain::FINITE_RESULT_DOMAIN_SCHEMA_RELEASE_PREIMAGE_V1,
 };
 use dclutch_product_contract::{
     capacity::{CAPACITY_PROFILE_BYTES, CapacityProfileV1},
     claim::{CATEGORICAL_UNIT_BYTES, CategoricalUnitV1},
-    product::{INSTANCE_BYTES, InstanceV1},
-    result_domain::FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1,
+    product::{INSTANCE_BYTES, InstanceV1, OCCURRENCE_BYTES, OccurrenceV1, TERMS_BYTES, TermsV1},
+    result_domain::{
+        FINITE_RESULT_DOMAIN_BYTES, FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1, FiniteResultDomainV1,
+    },
 };
+pub(crate) use dclutch_realm_contract::REALM_SCHEMA_RELEASE_ID_V1;
+#[cfg(test)]
+use dclutch_realm_contract::REALM_SCHEMA_RELEASE_PREIMAGE_V1;
 use dclutch_realm_contract::{REALM_BYTES, RealmV1};
 use dclutch_record_contract::{
     AbortObservationV1, AbortRecordV1, AbortTransitionV1, AccountCloseV1, AccountId,
@@ -53,6 +87,17 @@ use dclutch_series_contract::{
     DerivedOccurrenceV1, OCCURRENCE_CAPITALIZATION_BYTES_V1, OccurrenceCapitalizationV1,
     SERIES_RECIPE_BYTES_V1, SeriesRecipeV1,
 };
+pub(crate) use dclutch_series_contract::{
+    SERIES_AGGREGATE_SCHEMA_RELEASE_ID_V1, SERIES_CAPITALIZATION_SCHEMA_RELEASE_ID_V1,
+    SERIES_DERIVED_SCHEMA_RELEASE_ID_V1, SERIES_RECIPE_SCHEMA_RELEASE_ID_V3,
+};
+#[cfg(test)]
+use dclutch_series_contract::{
+    SERIES_AGGREGATE_SCHEMA_RELEASE_PREIMAGE_V1, SERIES_CAPITALIZATION_SCHEMA_RELEASE_PREIMAGE_V1,
+    SERIES_DERIVED_SCHEMA_RELEASE_PREIMAGE_V1, SERIES_RECIPE_SCHEMA_RELEASE_PREIMAGE_V3,
+};
+#[cfg(test)]
+use dclutch_source_contract::SOURCE_MATERIAL_SCHEMA_RELEASE_PREIMAGE_V1;
 use dclutch_source_contract::{
     SOURCE_MATERIAL_BYTES, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1, SourceMaterialViewV1,
 };
@@ -76,92 +121,71 @@ const APPEND_ACCOUNTS_V1: usize = 3;
 const FINALIZE_ACCOUNTS_V1: usize = 3;
 const ABORT_ACCOUNTS_V1: usize = 5;
 
-pub(crate) const REALM_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
-    0x94, 0xfe, 0x1f, 0xd6, 0xd7, 0x25, 0x9f, 0x47, 0x50, 0x3d, 0x6a, 0xc5, 0x7e, 0xc7, 0xda, 0x78,
-    0xdc, 0x38, 0x06, 0xa5, 0xed, 0x49, 0x8f, 0xea, 0xe4, 0x3e, 0xd3, 0x78, 0x5b, 0x5d, 0x0c, 0x69,
-];
-pub(crate) const PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
-    0x96, 0x20, 0xbc, 0xd9, 0xf3, 0x1a, 0x01, 0xca, 0x6f, 0x42, 0x09, 0x1c, 0x84, 0x57, 0x9d, 0x9a,
-    0xcc, 0x48, 0x41, 0x27, 0xc0, 0x8d, 0x86, 0xac, 0xc4, 0x0f, 0xdd, 0x5a, 0x4c, 0xab, 0x1f, 0x14,
-];
-pub(crate) const CATEGORICAL_CLAIM_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
-    0xd3, 0x86, 0x0a, 0x71, 0x29, 0x03, 0x33, 0xab, 0x8d, 0x15, 0x43, 0x11, 0x75, 0x29, 0x30, 0x4f,
-    0x1d, 0xcd, 0x2a, 0xe1, 0x42, 0xff, 0xdb, 0xd6, 0x0c, 0xc7, 0x15, 0xb8, 0x62, 0x58, 0xcc, 0x6d,
-];
-pub(crate) const CAPACITY_PROFILE_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
-    0xed, 0x25, 0x2a, 0x2a, 0xc5, 0x55, 0xf0, 0xe3, 0x4f, 0xfc, 0x23, 0xac, 0x91, 0xd8, 0x6c, 0x61,
-    0xbe, 0x6d, 0xd9, 0x81, 0x24, 0x47, 0x57, 0x49, 0x94, 0x69, 0xbb, 0x99, 0xba, 0x55, 0x36, 0x50,
-];
-pub(crate) const SERIES_RECIPE_SCHEMA_RELEASE_ID_V3: [u8; 32] = [
-    0xbe, 0x66, 0x5a, 0xb8, 0xa6, 0xb9, 0x79, 0xca, 0x75, 0x31, 0x7a, 0xe3, 0x8f, 0x62, 0x60, 0xe1,
-    0x69, 0x7a, 0x84, 0xe0, 0xdf, 0xb2, 0xd0, 0xe2, 0xd3, 0x8b, 0x4c, 0x55, 0xe5, 0x1f, 0x2d, 0xf7,
-];
-pub(crate) const SERIES_AGGREGATE_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
-    0x36, 0xdc, 0xc9, 0xd8, 0x3c, 0x7a, 0x89, 0xeb, 0xb2, 0x4f, 0xd2, 0x44, 0x79, 0x23, 0xca, 0x68,
-    0x4c, 0x3c, 0x2c, 0x28, 0x20, 0x54, 0xc7, 0x58, 0x9c, 0x4a, 0xb3, 0x9d, 0xad, 0xec, 0x9a, 0xd5,
-];
-pub(crate) const SERIES_DERIVED_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
-    0x44, 0x14, 0xd1, 0xe5, 0x40, 0x3a, 0x59, 0x42, 0xfb, 0xf2, 0x88, 0x8f, 0x4a, 0x54, 0x84, 0x75,
-    0x85, 0x62, 0xcc, 0xc7, 0xd4, 0xb0, 0x53, 0xd8, 0x96, 0x42, 0xc7, 0xee, 0x02, 0xd3, 0x5c, 0xc9,
-];
-pub(crate) const SERIES_CAPITALIZATION_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
-    0x55, 0x8b, 0xc4, 0xd4, 0x83, 0xae, 0xc0, 0x5c, 0x81, 0x85, 0x33, 0x65, 0x6c, 0x58, 0xf7, 0x7c,
-    0x7f, 0x16, 0xe0, 0xb3, 0x42, 0x8f, 0x05, 0xe5, 0xa5, 0xfc, 0x97, 0x69, 0x3a, 0x1d, 0x9f, 0xdf,
-];
-
 #[cfg(test)]
-const RELEASE_LABELS_AND_IDS_V1: [(&[u8], [u8; 32]); 14] = [
-    (b"dclutch/schema/realm-v1", REALM_SCHEMA_RELEASE_ID_V1),
+const RELEASE_LABELS_AND_IDS_V1: [(&[u8], [u8; 32]); 17] = [
+    (REALM_SCHEMA_RELEASE_PREIMAGE_V1, REALM_SCHEMA_RELEASE_ID_V1),
     (
-        b"dclutch/schema/product-instance-v1",
+        PRODUCT_TERMS_SCHEMA_RELEASE_PREIMAGE_V1,
+        PRODUCT_TERMS_SCHEMA_RELEASE_ID_V1,
+    ),
+    (
+        PRODUCT_OCCURRENCE_SCHEMA_RELEASE_PREIMAGE_V1,
+        PRODUCT_OCCURRENCE_SCHEMA_RELEASE_ID_V1,
+    ),
+    (
+        PRODUCT_INSTANCE_SCHEMA_RELEASE_PREIMAGE_V1,
         PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1,
     ),
     (
-        b"dclutch/schema/categorical-unit-claim-v1",
+        FINITE_RESULT_DOMAIN_SCHEMA_RELEASE_PREIMAGE_V1,
+        FINITE_RESULT_DOMAIN_SCHEMA_RELEASE_ID_V1,
+    ),
+    (
+        CATEGORICAL_CLAIM_SCHEMA_RELEASE_PREIMAGE_V1,
         CATEGORICAL_CLAIM_SCHEMA_RELEASE_ID_V1,
     ),
     (
-        b"dclutch/schema/product-capacity-profile-v1",
+        CAPACITY_PROFILE_SCHEMA_RELEASE_PREIMAGE_V1,
         CAPACITY_PROFILE_SCHEMA_RELEASE_ID_V1,
     ),
     (
-        b"dclutch/schema/capability-manifest-profile-1-v1",
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_PREIMAGE_V1,
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
     ),
     (
-        b"dclutch/schema/capability-template-v1",
+        CAPABILITY_TEMPLATE_SCHEMA_RELEASE_PREIMAGE_V1,
         CAPABILITY_TEMPLATE_SCHEMA_RELEASE_ID_V1,
     ),
     (
-        b"dclutch/schema/direct-venue-fee-policy-v3",
+        VENUE_FEE_POLICY_SCHEMA_RELEASE_PREIMAGE_V3,
         VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3,
     ),
     (
-        b"dclutch/source-material-schema/v1",
+        SOURCE_MATERIAL_SCHEMA_RELEASE_PREIMAGE_V1,
         SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1,
     ),
     (
-        b"dclutch/schema/series-recipe-v3",
+        SERIES_RECIPE_SCHEMA_RELEASE_PREIMAGE_V3,
         SERIES_RECIPE_SCHEMA_RELEASE_ID_V3,
     ),
     (
-        b"dclutch/schema/series-capitalization-aggregate-v1",
+        SERIES_AGGREGATE_SCHEMA_RELEASE_PREIMAGE_V1,
         SERIES_AGGREGATE_SCHEMA_RELEASE_ID_V1,
     ),
     (
-        b"dclutch/schema/series-derived-occurrence-v1",
+        SERIES_DERIVED_SCHEMA_RELEASE_PREIMAGE_V1,
         SERIES_DERIVED_SCHEMA_RELEASE_ID_V1,
     ),
     (
-        b"dclutch/schema/series-occurrence-capitalization-v1",
+        SERIES_CAPITALIZATION_SCHEMA_RELEASE_PREIMAGE_V1,
         SERIES_CAPITALIZATION_SCHEMA_RELEASE_ID_V1,
     ),
     (
-        b"dclutch/dealer-liquidity-config/schema/v1",
+        DEALER_CONFIG_SCHEMA_RELEASE_PREIMAGE_V1,
         DEALER_CONFIG_SCHEMA_RELEASE_ID_V1,
     ),
     (
-        b"dclutch/schema/general-config-v1",
+        GENERAL_CONFIG_SCHEMA_PREIMAGE_V1,
         GENERAL_CONFIG_SCHEMA_ID_V1.to_bytes(),
     ),
 ];
@@ -927,8 +951,23 @@ fn validate_found_schema(schema_release_id: SchemaReleaseId, content: &[u8]) -> 
             .map(|value| value.to_bytes().as_slice() == content)
             .unwrap_or(false);
     }
+    if schema == PRODUCT_TERMS_SCHEMA_RELEASE_ID_V1 {
+        return TermsV1::decode(content)
+            .map(|value| value.to_bytes().as_slice() == content)
+            .unwrap_or(false);
+    }
+    if schema == PRODUCT_OCCURRENCE_SCHEMA_RELEASE_ID_V1 {
+        return OccurrenceV1::decode(content)
+            .map(|value| value.to_bytes().as_slice() == content)
+            .unwrap_or(false);
+    }
     if schema == PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1 {
         return InstanceV1::decode(content)
+            .map(|value| value.to_bytes().as_slice() == content)
+            .unwrap_or(false);
+    }
+    if schema == FINITE_RESULT_DOMAIN_SCHEMA_RELEASE_ID_V1 {
+        return FiniteResultDomainV1::decode(content)
             .map(|value| value.to_bytes().as_slice() == content)
             .unwrap_or(false);
     }
@@ -1093,7 +1132,10 @@ fn is_supported_found_schema_release(schema_release_id: SchemaReleaseId) -> bool
     matches!(
         schema_release_id.to_bytes(),
         REALM_SCHEMA_RELEASE_ID_V1
+            | PRODUCT_TERMS_SCHEMA_RELEASE_ID_V1
+            | PRODUCT_OCCURRENCE_SCHEMA_RELEASE_ID_V1
             | PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1
+            | FINITE_RESULT_DOMAIN_SCHEMA_RELEASE_ID_V1
             | CATEGORICAL_CLAIM_SCHEMA_RELEASE_ID_V1
             | CAPACITY_PROFILE_SCHEMA_RELEASE_ID_V1
             | CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1
@@ -1117,7 +1159,10 @@ fn is_admissible_found_schema_length(
     };
     match schema_release_id.to_bytes() {
         REALM_SCHEMA_RELEASE_ID_V1 => length == REALM_BYTES,
+        PRODUCT_TERMS_SCHEMA_RELEASE_ID_V1 => length == TERMS_BYTES,
+        PRODUCT_OCCURRENCE_SCHEMA_RELEASE_ID_V1 => length == OCCURRENCE_BYTES,
         PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1 => length == INSTANCE_BYTES,
+        FINITE_RESULT_DOMAIN_SCHEMA_RELEASE_ID_V1 => length == FINITE_RESULT_DOMAIN_BYTES,
         CATEGORICAL_CLAIM_SCHEMA_RELEASE_ID_V1 => length == CATEGORICAL_UNIT_BYTES,
         CAPACITY_PROFILE_SCHEMA_RELEASE_ID_V1 => length == CAPACITY_PROFILE_BYTES,
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1 => {
@@ -1704,6 +1749,12 @@ mod tests {
     use dclutch_general_contract::{
         ContentId as GeneralContentId, GENERAL_CAPABILITY_RELEASE_ID_V1, GeneralConfigV1Input,
     };
+    use dclutch_product_contract::{
+        ContentId as ProductContentId,
+        capacity::{CapacityEnvelope, CapacityProfileId, CapacityProfileV1Input},
+        claim::CategoricalUnitV1Input,
+        product::{InstanceV1Input, OccurrenceV1Input, TermsV1Input},
+    };
     use dclutch_realm_contract::{FreezeAuthorityPolicy, MintAuthorityPolicy, RealmV1Input};
 
     use super::*;
@@ -1783,7 +1834,13 @@ mod tests {
     fn begin_schema_admission_is_closed_and_checks_owned_geometry() {
         for (schema_id, exact_length) in [
             (REALM_SCHEMA_RELEASE_ID_V1, REALM_BYTES),
+            (PRODUCT_TERMS_SCHEMA_RELEASE_ID_V1, TERMS_BYTES),
+            (PRODUCT_OCCURRENCE_SCHEMA_RELEASE_ID_V1, OCCURRENCE_BYTES),
             (PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1, INSTANCE_BYTES),
+            (
+                FINITE_RESULT_DOMAIN_SCHEMA_RELEASE_ID_V1,
+                FINITE_RESULT_DOMAIN_BYTES,
+            ),
             (
                 CATEGORICAL_CLAIM_SCHEMA_RELEASE_ID_V1,
                 CATEGORICAL_UNIT_BYTES,
@@ -1926,6 +1983,93 @@ mod tests {
         let realm_schema = SchemaReleaseId::new(REALM_SCHEMA_RELEASE_ID_V1).expect("schema");
         assert!(validate_found_schema(realm_schema, &realm.to_bytes()));
 
+        let product_id = |byte| ProductContentId::new([byte; 32]).expect("nonzero Product ID");
+        let capacity_profile_id = CapacityProfileId::new(product_id(1));
+        let capacity = CapacityProfileV1::new(CapacityProfileV1Input {
+            envelope: CapacityEnvelope::Measured,
+            verifier_release_id: product_id(2),
+            envelope_basis_id: product_id(3),
+            max_artifact_bytes: 128,
+            page_payload_bytes: 64,
+            max_pages: 2,
+            max_partition_cells: 4,
+        })
+        .expect("capacity profile");
+        let terms = TermsV1::new(
+            TermsV1Input {
+                capacity_profile_id,
+                semantic_release_id: product_id(4),
+                artifact_id: product_id(5),
+                partition_evidence_id: product_id(6),
+                artifact_bytes: 64,
+                page_count: 1,
+                partition_cell_count: 4,
+            },
+            capacity,
+        )
+        .expect("terms");
+        let occurrence = OccurrenceV1::new(
+            OccurrenceV1Input {
+                terms_id: product_id(7),
+                capacity_profile_id,
+                occurrence_artifact_id: product_id(8),
+                artifact_bytes: 64,
+                page_count: 1,
+            },
+            capacity,
+        )
+        .expect("occurrence");
+        let claim = CategoricalUnitV1::new(
+            CategoricalUnitV1Input {
+                capacity_profile_id,
+                outcome_count: 4,
+            },
+            capacity,
+        )
+        .expect("claim basis");
+        let domain = FiniteResultDomainV1::new(product_id(9), product_id(10), 1, &[0, 1, 2])
+            .expect("finite result domain");
+        let instance = InstanceV1::new(InstanceV1Input {
+            terms_id: product_id(7),
+            occurrence_id: product_id(11),
+            claim_basis_id: product_id(12),
+            result_domain_id: product_id(13),
+            capacity_profile_id,
+            partition_cell_count: 4,
+        })
+        .expect("instance");
+
+        let capacity_bytes = capacity.to_bytes();
+        let terms_bytes = terms.to_bytes();
+        let occurrence_bytes = occurrence.to_bytes();
+        let instance_bytes = instance.to_bytes();
+        let claim_bytes = claim.to_bytes();
+        let domain_bytes = domain.to_bytes();
+        let product_records: [([u8; 32], &[u8]); 6] = [
+            (CAPACITY_PROFILE_SCHEMA_RELEASE_ID_V1, &capacity_bytes),
+            (PRODUCT_TERMS_SCHEMA_RELEASE_ID_V1, &terms_bytes),
+            (PRODUCT_OCCURRENCE_SCHEMA_RELEASE_ID_V1, &occurrence_bytes),
+            (PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1, &instance_bytes),
+            (CATEGORICAL_CLAIM_SCHEMA_RELEASE_ID_V1, &claim_bytes),
+            (FINITE_RESULT_DOMAIN_SCHEMA_RELEASE_ID_V1, &domain_bytes),
+        ];
+        for (record_index, (schema_id, bytes)) in product_records.iter().enumerate() {
+            assert!(validate_found_schema(
+                SchemaReleaseId::new(*schema_id).expect("Product schema"),
+                bytes,
+            ));
+            for (substitute_index, (substitute_schema_id, _)) in product_records.iter().enumerate()
+            {
+                if record_index != substitute_index {
+                    assert!(!validate_found_schema(
+                        SchemaReleaseId::new(*substitute_schema_id)
+                            .expect("substitute Product schema"),
+                        bytes,
+                    ));
+                }
+            }
+        }
+
         let manifest = CapabilityManifestV1::empty().expect("empty manifest");
         let manifest_schema =
             SchemaReleaseId::new(CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1).expect("schema");
@@ -1948,7 +2092,10 @@ mod tests {
         ));
 
         for schema_id in [
+            PRODUCT_TERMS_SCHEMA_RELEASE_ID_V1,
+            PRODUCT_OCCURRENCE_SCHEMA_RELEASE_ID_V1,
             PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1,
+            FINITE_RESULT_DOMAIN_SCHEMA_RELEASE_ID_V1,
             CATEGORICAL_CLAIM_SCHEMA_RELEASE_ID_V1,
             CAPACITY_PROFILE_SCHEMA_RELEASE_ID_V1,
             SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1,
@@ -1956,6 +2103,20 @@ mod tests {
             assert!(!validate_found_schema(
                 SchemaReleaseId::new(schema_id).expect("known schema"),
                 &poison,
+            ));
+        }
+
+        for schema_id in [
+            PRODUCT_TERMS_SCHEMA_RELEASE_ID_V1,
+            PRODUCT_OCCURRENCE_SCHEMA_RELEASE_ID_V1,
+            PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1,
+            FINITE_RESULT_DOMAIN_SCHEMA_RELEASE_ID_V1,
+            CATEGORICAL_CLAIM_SCHEMA_RELEASE_ID_V1,
+            CAPACITY_PROFILE_SCHEMA_RELEASE_ID_V1,
+        ] {
+            assert!(!validate_found_schema(
+                SchemaReleaseId::new(schema_id).expect("known Product schema"),
+                &realm.to_bytes(),
             ));
         }
     }

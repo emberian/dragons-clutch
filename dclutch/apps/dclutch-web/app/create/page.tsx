@@ -1,5 +1,5 @@
-import CreateMarketPreview from '@/components/CreateMarketPreview';
+import MarketWorkbench from '@/components/MarketWorkbench';
 
 export default function CreateMarketPage() {
-  return <CreateMarketPreview />;
+  return <MarketWorkbench initialStage="author" />;
 }

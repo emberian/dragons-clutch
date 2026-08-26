@@ -1,0 +1,12 @@
+[package]
+name = "dclutch-product-payoff-svm"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "SDK-free request and certificate ABI for the dClutch Product payoff adapter"
+
+[dependencies]
+
+[lints]
+workspace = true
