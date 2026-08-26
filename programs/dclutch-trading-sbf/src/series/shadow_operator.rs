@@ -27,7 +27,7 @@ use crate::execution_strategy_v2::AuthenticatedExecutionStrategyV2;
 
 use super::{
     artifacts_v3::SeriesArtifactBundleV3,
-    instruction::{SERIES_ACTION_MAXIMUM_BYTES_V3, SeriesActionRequestV3},
+    instruction::{SERIES_ACTION_MAXIMUM_BYTES_V3, SeriesActionV3},
 };
 
 /// First exact strategy-owned physical account after the common Hot prefix.
@@ -82,6 +82,8 @@ pub type Result<T> = core::result::Result<T, SeriesShadowOperatorErrorV3>;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SeriesShadowSelectionV3 {
     artifacts: ShadowArtifactTupleV3,
+    action: SeriesActionV3,
+    family_request_digest: ContentId,
     artifact_release: ContentId,
     accelerator_program: ContentId,
     accelerator_programdata: ContentId,
@@ -92,6 +94,11 @@ impl SeriesShadowSelectionV3 {
     /// Exact generic interpreter/accelerator artifact tuple.
     pub const fn artifacts(self) -> ShadowArtifactTupleV3 {
         self.artifacts
+    }
+
+    /// Action already admitted by the selected Series artifact bundle.
+    pub const fn action(self) -> SeriesActionV3 {
+        self.action
     }
 
     /// Finalized immutable ArtifactRelease record identity.
@@ -190,6 +197,9 @@ pub fn select_series_shadow_accelerator_v3(
             strategy: strategy.strategy_program_id(),
             certificate,
         },
+        action: bundle.request.action(),
+        family_request_digest: family_request_digest_v3(bundle.request.bytes())
+            .map_err(|_| SeriesShadowOperatorErrorV3::Request)?,
         artifact_release: artifact_release_id.content_id(),
         accelerator_program,
         accelerator_programdata,
@@ -207,8 +217,6 @@ pub fn build_series_shadow_request_v3<'a>(
     if family_request.is_empty() || family_request.len() > SERIES_ACTION_MAXIMUM_BYTES_V3 {
         return Err(SeriesShadowOperatorErrorV3::Request);
     }
-    let semantic_request = SeriesActionRequestV3::decode(family_request)
-        .map_err(|_| SeriesShadowOperatorErrorV3::Request)?;
     let account_count = u32::try_from(transcript.runtime_observations.len())
         .map_err(|_| SeriesShadowOperatorErrorV3::Request)?;
     let scalar_count = u32::try_from(transcript.candidate_scalars.len())
@@ -231,6 +239,9 @@ pub fn build_series_shadow_request_v3<'a>(
         .map_err(|_| SeriesShadowOperatorErrorV3::Request)?;
     let family_digest = family_request_digest_v3(family_request)
         .map_err(|_| SeriesShadowOperatorErrorV3::Request)?;
+    if family_digest != selection.family_request_digest {
+        return Err(SeriesShadowOperatorErrorV3::Request);
+    }
     let digests = ShadowExecutionDigestsV3 {
         runtime_observations: runtime_observations_digest_v3(transcript.runtime_observations)
             .map_err(|_| SeriesShadowOperatorErrorV3::Request)?,
@@ -249,7 +260,7 @@ pub fn build_series_shadow_request_v3<'a>(
         market: context.market,
         root: context.root,
         capability_program: selection.artifacts.capability_program,
-        selected_action: u32::from(semantic_request.action() as u8),
+        selected_action: u32::from(selection.action as u8),
         family_request_digest: family_digest,
         root_prestate_digest: context.root_prestate_digest,
     })
@@ -309,7 +320,7 @@ mod tests {
         ContentId::new([value; 32]).expect("content")
     }
 
-    fn selection() -> SeriesShadowSelectionV3 {
+    fn selection(family_request: &[u8]) -> SeriesShadowSelectionV3 {
         SeriesShadowSelectionV3 {
             artifacts: ShadowArtifactTupleV3 {
                 capability_program: id(1),
@@ -320,6 +331,9 @@ mod tests {
                 strategy: id(6),
                 certificate: id(7),
             },
+            action: SeriesActionV3::Close,
+            family_request_digest: family_request_digest_v3(family_request)
+                .expect("family request digest"),
             artifact_release: id(8),
             accelerator_program: id(9),
             accelerator_programdata: id(10),
@@ -371,8 +385,9 @@ mod tests {
             candidate_identities: &identities,
             effect,
         };
-        let request = build_series_shadow_request_v3(selection(), context(), &family, transcript)
-            .expect("Shadow request");
+        let request =
+            build_series_shadow_request_v3(selection(&family), context(), &family, transcript)
+                .expect("Shadow request");
         let mut bytes = [0_u8; SERIES_SHADOW_MAXIMUM_REQUEST_BYTES_V3];
         let width = encode_series_shadow_request_v3(request, &mut bytes).expect("encode");
         assert_eq!(width, SHADOW_REQUEST_HEADER_BYTES_V3 + family.len());
@@ -438,8 +453,9 @@ mod tests {
                 routes: &[],
             },
         };
+        let selected_family = close_request();
         assert_eq!(
-            build_series_shadow_request_v3(selection(), context(), &[], good),
+            build_series_shadow_request_v3(selection(&selected_family), context(), &[], good),
             Err(SeriesShadowOperatorErrorV3::Request)
         );
         let family = close_request();
@@ -456,7 +472,41 @@ mod tests {
             },
         };
         assert_eq!(
-            build_series_shadow_request_v3(selection(), context(), &family, empty),
+            build_series_shadow_request_v3(selection(&family), context(), &family, empty),
+            Err(SeriesShadowOperatorErrorV3::Request)
+        );
+    }
+
+    #[test]
+    fn selected_bundle_refuses_same_width_family_substitution() {
+        let family = close_request();
+        let mut substituted = family;
+        substituted[127] ^= 1;
+        let runtime = [ShadowRuntimeObservationV3 {
+            key: [40; 32],
+            owner: [41; 32],
+            lamports: 42,
+            data: &[],
+            signer: false,
+            writable: false,
+            executable: false,
+        }];
+        let scalars = [43_u64];
+        let output_lamports = [44_u64];
+        let transcript = SeriesShadowInterpreterTranscriptV3 {
+            tail_count: 0,
+            runtime_observations: &runtime,
+            candidate_scalars: &scalars,
+            candidate_identities: &[],
+            effect: ShadowEffectProjectionV3 {
+                tail_count: 0,
+                output_lamports: &output_lamports,
+                request_bank: &[],
+                routes: &[],
+            },
+        };
+        assert_eq!(
+            build_series_shadow_request_v3(selection(&family), context(), &substituted, transcript,),
             Err(SeriesShadowOperatorErrorV3::Request)
         );
     }
