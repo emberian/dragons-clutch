@@ -6,7 +6,12 @@
 //! account, while distinct roles must remain distinct unless a higher-level
 //! profile proves another explicit relation.
 
-use crate::protocol_position_v2::ProtocolPositionActionV2;
+use crate::{
+    liability_basis_state_v2::{
+        LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+    },
+    protocol_position_v2::{PROTOCOL_POSITION_ADMISSION_BYTES_V2, ProtocolPositionActionV2},
+};
 
 /// Exact ProtocolPosition Admit frame width.
 pub const PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V1: u16 = 26;
@@ -153,6 +158,65 @@ impl ClaimsFrameAccountV1 {
     }
 }
 
+/// Deployment-selected program-data identity whose exact byte width is bound
+/// by the current checked release rather than by the Claims state ABI.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClaimsProgramDataRoleV1 {
+    /// Release-selected Trading caller ProgramData.
+    Trading,
+    /// Release-selected Claims ProgramData.
+    Claims,
+    /// Release-selected Core ProgramData.
+    Core,
+}
+
+/// Exact data geometry owned by one Claims frame coordinate.
+///
+/// `Product*` and other external variants deliberately name the semantic
+/// owner that must supply the exact width. They are not unconstrained: an
+/// AccountProfile generator must resolve each through that owner's public ABI
+/// before it can encode a fixed rule.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClaimsFrameDataV1 {
+    /// Exact fixed byte width, including canonical vacant accounts at zero.
+    Exact(u32),
+    /// Account data is semantically ignored by Claims.
+    ///
+    /// The common AccountProfile adapter must authenticate the account's key,
+    /// owner, lamports, and privileges while withholding its bytes from every
+    /// projection and direct data effect.
+    OpaqueData,
+    /// Exact `base + ProductN * item_stride` byte width.
+    ProductTail {
+        /// Fixed bytes before the Product-owned tail.
+        base: u32,
+        /// Exact bytes contributed by each Product outcome.
+        item_stride: u32,
+    },
+    /// Finalized linked-basis record selected by Product Runtime.
+    LinkedBasisRecord,
+    /// Product root record selected by Product Runtime.
+    ProductRecord,
+    /// Result-domain record selected by Product Runtime.
+    ResultDomainRecord,
+    /// Portfolio record selected by Product Runtime.
+    PortfolioRecord,
+    /// Runtime Rent sysvar serialization.
+    RentSysvar,
+    /// Canonical Core Market state.
+    CoreMarket,
+    /// Current Registry activation cache.
+    ActivationCache,
+    /// Canonical Loader-v3 Program account.
+    UpgradeableProgram,
+    /// Checked-release ProgramData account.
+    ProgramData(ClaimsProgramDataRoleV1),
+    /// Authenticated protocol Position owner record or user identity.
+    PositionOwnerIdentity,
+    /// Canonical RentCredit state.
+    RentCredit,
+}
+
 /// Action-selected Claims frame kind.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ClaimsFrameKindV1 {
@@ -190,6 +254,12 @@ impl SparseNativeTransferFrameSpecV1 {
             return Err(FrameSpecErrorV1::InvalidCoordinate);
         }
         sparse_native_transfer(index)
+    }
+
+    /// Exact data geometry at `index`.
+    pub fn data(self, index: u16) -> Result<ClaimsFrameDataV1, FrameSpecErrorV1> {
+        let account = self.account(index)?;
+        data_for_role(account.role(), false)
     }
 }
 
@@ -243,6 +313,78 @@ impl ClaimsFrameSpecV1 {
             ClaimsFrameKindV1::Affine { .. } => affine(index),
         }
     }
+
+    /// Exact action-selected data geometry at `index`.
+    pub fn data(self, index: u16) -> Result<ClaimsFrameDataV1, FrameSpecErrorV1> {
+        let account = self.account(index)?;
+        let vacant_position = matches!(self.kind, ClaimsFrameKindV1::ProtocolPositionAdmit);
+        data_for_role(account.role(), vacant_position)
+    }
+}
+
+fn data_for_role(
+    role: ClaimsFrameRoleV1,
+    vacant_position: bool,
+) -> Result<ClaimsFrameDataV1, FrameSpecErrorV1> {
+    let value = match role {
+        ClaimsFrameRoleV1::CallerAuthority => ClaimsFrameDataV1::OpaqueData,
+        ClaimsFrameRoleV1::ClaimsMarket => ClaimsFrameDataV1::ProductTail {
+            base: u32::try_from(LIABILITY_BASIS_MARKET_HEADER_BYTES_V2)
+                .map_err(|_| FrameSpecErrorV1::InvalidCoordinate)?,
+            item_stride: 8,
+        },
+        ClaimsFrameRoleV1::ProtocolPosition if vacant_position => ClaimsFrameDataV1::Exact(0),
+        ClaimsFrameRoleV1::ProtocolPosition | ClaimsFrameRoleV1::AffinePosition(_) => {
+            ClaimsFrameDataV1::ProductTail {
+                base: u32::try_from(LIABILITY_BASIS_POSITION_HEADER_BYTES_V2)
+                    .map_err(|_| FrameSpecErrorV1::InvalidCoordinate)?,
+                item_stride: 8,
+            }
+        }
+        ClaimsFrameRoleV1::ProtocolPositionAdmission if vacant_position => {
+            ClaimsFrameDataV1::Exact(0)
+        }
+        ClaimsFrameRoleV1::ProtocolPositionAdmission => ClaimsFrameDataV1::Exact(
+            u32::try_from(PROTOCOL_POSITION_ADMISSION_BYTES_V2)
+                .map_err(|_| FrameSpecErrorV1::InvalidCoordinate)?,
+        ),
+        ClaimsFrameRoleV1::BasisRecord => ClaimsFrameDataV1::LinkedBasisRecord,
+        ClaimsFrameRoleV1::BasisStaging
+        | ClaimsFrameRoleV1::ProductStaging
+        | ClaimsFrameRoleV1::ResultDomainStaging
+        | ClaimsFrameRoleV1::PortfolioStaging => ClaimsFrameDataV1::Exact(0),
+        ClaimsFrameRoleV1::ProductRecord => ClaimsFrameDataV1::ProductRecord,
+        ClaimsFrameRoleV1::ResultDomainRecord => ClaimsFrameDataV1::ResultDomainRecord,
+        ClaimsFrameRoleV1::PortfolioRecord => ClaimsFrameDataV1::PortfolioRecord,
+        ClaimsFrameRoleV1::RentSysvar => ClaimsFrameDataV1::RentSysvar,
+        ClaimsFrameRoleV1::SystemProgram => ClaimsFrameDataV1::Exact(0),
+        ClaimsFrameRoleV1::CoreMarket => ClaimsFrameDataV1::CoreMarket,
+        ClaimsFrameRoleV1::ActivationCache => ClaimsFrameDataV1::ActivationCache,
+        ClaimsFrameRoleV1::RegistryProgram
+        | ClaimsFrameRoleV1::TradingProgram
+        | ClaimsFrameRoleV1::ClaimsProgram
+        | ClaimsFrameRoleV1::CoreProgram
+        | ClaimsFrameRoleV1::RentProgram => ClaimsFrameDataV1::UpgradeableProgram,
+        ClaimsFrameRoleV1::TradingProgramData => {
+            ClaimsFrameDataV1::ProgramData(ClaimsProgramDataRoleV1::Trading)
+        }
+        ClaimsFrameRoleV1::ClaimsProgramData => {
+            ClaimsFrameDataV1::ProgramData(ClaimsProgramDataRoleV1::Claims)
+        }
+        ClaimsFrameRoleV1::CoreProgramData => {
+            ClaimsFrameDataV1::ProgramData(ClaimsProgramDataRoleV1::Core)
+        }
+        ClaimsFrameRoleV1::PositionOwnerIdentity => ClaimsFrameDataV1::PositionOwnerIdentity,
+        ClaimsFrameRoleV1::RentCredit => ClaimsFrameDataV1::RentCredit,
+        ClaimsFrameRoleV1::SparseSourcePosition | ClaimsFrameRoleV1::SparseDestinationPosition => {
+            ClaimsFrameDataV1::ProductTail {
+                base: u32::try_from(LIABILITY_BASIS_POSITION_HEADER_BYTES_V2)
+                    .map_err(|_| FrameSpecErrorV1::InvalidCoordinate)?,
+                item_stride: 8,
+            }
+        }
+    };
+    Ok(value)
 }
 
 fn account(role: ClaimsFrameRoleV1, privileges: FramePrivilegesV1) -> ClaimsFrameAccountV1 {
@@ -424,6 +566,37 @@ mod tests {
                 Err(FrameSpecErrorV1::InvalidCoordinate)
             );
         }
+    }
+
+    #[test]
+    fn data_geometry_owns_action_selected_vacancy_and_product_tails() {
+        let admit = ClaimsFrameSpecV1::protocol_position(ProtocolPositionActionV2::Admit);
+        let close = ClaimsFrameSpecV1::protocol_position(ProtocolPositionActionV2::Close);
+        assert_eq!(admit.data(2), Ok(ClaimsFrameDataV1::Exact(0)));
+        assert_eq!(admit.data(3), Ok(ClaimsFrameDataV1::Exact(0)));
+        assert_eq!(
+            close.data(2),
+            Ok(ClaimsFrameDataV1::ProductTail {
+                base: u32::try_from(LIABILITY_BASIS_POSITION_HEADER_BYTES_V2)
+                    .expect("position header"),
+                item_stride: 8,
+            })
+        );
+        assert_eq!(
+            close.data(3),
+            Ok(ClaimsFrameDataV1::Exact(
+                u32::try_from(PROTOCOL_POSITION_ADMISSION_BYTES_V2).expect("admission")
+            ))
+        );
+        let affine = ClaimsFrameSpecV1::affine(258).expect("runtime position width");
+        assert_eq!(
+            affine.data(AFFINE_FIXED_ACCOUNT_COUNT_V1 + 257),
+            Ok(ClaimsFrameDataV1::ProductTail {
+                base: u32::try_from(LIABILITY_BASIS_POSITION_HEADER_BYTES_V2)
+                    .expect("position header"),
+                item_stride: 8,
+            })
+        );
     }
 
     #[test]

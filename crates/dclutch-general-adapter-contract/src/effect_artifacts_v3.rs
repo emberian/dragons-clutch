@@ -16,7 +16,7 @@ use dclutch_claims_svm::{
         DeltaDirectionV2, SignedMagnitudeV2,
     },
     frame_spec_v1::{
-        AFFINE_FIXED_ACCOUNT_COUNT_V1, PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V1,
+        AFFINE_FIXED_ACCOUNT_COUNT_V1, ClaimsFrameSpecV1, PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V1,
         PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V1,
     },
     protocol_position_v2::{
@@ -27,8 +27,8 @@ use dclutch_claims_svm::{
 use dclutch_custody_contract::{
     CLOSE_REPLAY_ACCOUNT_COUNT_V1 as CUSTODY_CLOSE_REPLAY_ACCOUNT_COUNT_V1,
     CLOSE_VAULT_ACCOUNT_COUNT_V1 as CUSTODY_CLOSE_VAULT_ACCOUNT_COUNT_V1, CUSTODY_RECEIPT_BYTES_V1,
-    CUSTODY_REQUEST_BYTES_V1, CallerRoleV1, CompartmentV1, ContextV1, CustodyRequestLayoutV1,
-    CustodyRequestV1,
+    CUSTODY_REQUEST_BYTES_V1, CallerRoleV1, CompartmentV1, ContextV1, CustodyFrameSpecV1,
+    CustodyRequestLayoutV1, CustodyRequestV1,
     INITIALIZE_REPLAY_ACCOUNT_COUNT_V1 as CUSTODY_INITIALIZE_REPLAY_ACCOUNT_COUNT_V1,
     OPEN_VAULT_ACCOUNT_COUNT_V1 as CUSTODY_OPEN_VAULT_ACCOUNT_COUNT_V1, OperationV1,
     TRANSFER_ACCOUNT_COUNT_V1 as CUSTODY_TRANSFER_ACCOUNT_COUNT_V1,
@@ -66,6 +66,131 @@ use crate::{
 pub const GENERAL_HOT_LOGICAL_PREFIX_ACCOUNTS_V3: u16 = 5;
 /// First action-selected General state account after the readonly Hot prefix.
 pub const GENERAL_STATE_ACCOUNT_COORDINATE_V3: u16 = GENERAL_PRIMARY_STATE_ACCOUNT_V3;
+
+/// One exact child semantic frame selected by a General effect route.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GeneralChildFrameV3 {
+    /// Claims protocol-Position lifecycle frame.
+    ClaimsProtocolPosition(ProtocolPositionActionV2),
+    /// Claims runtime-width affine frame.
+    ClaimsAffine {
+        /// Exact nonzero sorted Position-table width.
+        position_count: u32,
+    },
+    /// Custody operation frame.
+    Custody(OperationV1),
+}
+
+impl GeneralChildFrameV3 {
+    /// Exact logical account count for this child frame.
+    pub fn account_count(self) -> Result<u16> {
+        match self {
+            Self::ClaimsProtocolPosition(action) => ClaimsFrameSpecV1::protocol_position(action)
+                .account_count()
+                .map_err(|_| GeneralEffectArtifactErrorV3::Geometry),
+            Self::ClaimsAffine { position_count } => ClaimsFrameSpecV1::affine(position_count)
+                .and_then(ClaimsFrameSpecV1::account_count)
+                .map_err(|_| GeneralEffectArtifactErrorV3::Geometry),
+            Self::Custody(operation) => Ok(CustodyFrameSpecV1::new(operation).account_count()),
+        }
+    }
+}
+
+/// Exact logical placement of one child frame in a General AccountProfile.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralEffectRouteFrameV3 {
+    /// First logical account coordinate in the complete runtime vector.
+    pub account_start: u16,
+    /// Child semantic owner and action-selected frame.
+    pub frame: GeneralChildFrameV3,
+}
+
+/// Exact number of child routes selected by one General action.
+#[must_use]
+pub const fn general_effect_route_count_v3(action: Action) -> u16 {
+    match action {
+        Action::Consider | Action::Freeze => 0,
+        Action::InitializeSettlement => 3,
+        Action::Collect | Action::Materialize | Action::Distribute => 2,
+        Action::Close => 4,
+    }
+}
+
+/// Return one exact child frame and logical placement.
+pub fn general_effect_route_frame_v3(
+    action: Action,
+    route: u16,
+) -> Result<GeneralEffectRouteFrameV3> {
+    let start = general_child_account_start_v3(action);
+    let (account_start, frame) = match (action, route) {
+        (Action::InitializeSettlement, 0) => (
+            start,
+            GeneralChildFrameV3::ClaimsProtocolPosition(ProtocolPositionActionV2::Admit),
+        ),
+        (Action::InitializeSettlement, 1) => (
+            add_accounts(start, POSITION_ADMIT_ACCOUNTS)?,
+            GeneralChildFrameV3::Custody(OperationV1::InitializeReplay),
+        ),
+        (Action::InitializeSettlement, 2) => (
+            add_accounts(
+                add_accounts(start, POSITION_ADMIT_ACCOUNTS)?,
+                CUSTODY_INITIALIZE_ACCOUNTS,
+            )?,
+            GeneralChildFrameV3::Custody(OperationV1::OpenVault),
+        ),
+        (Action::Collect | Action::Distribute, 0) => (
+            start,
+            GeneralChildFrameV3::ClaimsAffine { position_count: 2 },
+        ),
+        (Action::Materialize, 0) => (
+            start,
+            GeneralChildFrameV3::ClaimsAffine { position_count: 1 },
+        ),
+        (Action::Collect | Action::Distribute, 1) => (
+            add_accounts(start, AFFINE_FIXED_ACCOUNTS + 2)?,
+            GeneralChildFrameV3::Custody(OperationV1::Transfer),
+        ),
+        (Action::Materialize, 1) => (
+            add_accounts(start, AFFINE_FIXED_ACCOUNTS + 1)?,
+            GeneralChildFrameV3::Custody(OperationV1::Transfer),
+        ),
+        (Action::Close, 0) => (start, GeneralChildFrameV3::Custody(OperationV1::Transfer)),
+        (Action::Close, 1) => (
+            add_accounts(start, CUSTODY_TRANSFER_ACCOUNTS)?,
+            GeneralChildFrameV3::ClaimsProtocolPosition(ProtocolPositionActionV2::Close),
+        ),
+        (Action::Close, 2) => (
+            add_accounts(
+                add_accounts(start, CUSTODY_TRANSFER_ACCOUNTS)?,
+                POSITION_CLOSE_ACCOUNTS,
+            )?,
+            GeneralChildFrameV3::Custody(OperationV1::CloseVault),
+        ),
+        (Action::Close, 3) => (
+            add_accounts(
+                add_accounts(
+                    add_accounts(start, CUSTODY_TRANSFER_ACCOUNTS)?,
+                    POSITION_CLOSE_ACCOUNTS,
+                )?,
+                CUSTODY_CLOSE_VAULT_ACCOUNTS,
+            )?,
+            GeneralChildFrameV3::Custody(OperationV1::CloseReplay),
+        ),
+        _ => return Err(GeneralEffectArtifactErrorV3::Geometry),
+    };
+    let selected = GeneralEffectRouteFrameV3 {
+        account_start,
+        frame,
+    };
+    let end = selected
+        .account_start
+        .checked_add(selected.frame.account_count()?)
+        .ok_or(GeneralEffectArtifactErrorV3::Geometry)?;
+    if end > general_effect_account_count_v3(action)? {
+        return Err(GeneralEffectArtifactErrorV3::Geometry);
+    }
+    Ok(selected)
+}
 
 const POSITION_ADMIT_ACCOUNTS: u16 = PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V1;
 const POSITION_CLOSE_ACCOUNTS: u16 = PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V1;

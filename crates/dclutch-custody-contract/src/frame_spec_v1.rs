@@ -132,6 +132,41 @@ impl CustodyFrameAccountV1 {
     }
 }
 
+/// Exact data geometry owned by one Custody frame coordinate.
+///
+/// External variants identify the semantic owner whose public ABI supplies
+/// the fixed width to AccountProfile generation. Custody-owned replay widths
+/// and operation-selected vacancy are carried directly here.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CustodyFrameDataV1 {
+    /// Exact fixed byte width, including canonical vacant accounts at zero.
+    Exact(u32),
+    /// Account data is semantically ignored by Custody.
+    ///
+    /// The common AccountProfile adapter must authenticate the account's key,
+    /// owner, lamports, and privileges while withholding its bytes from every
+    /// projection and direct data effect.
+    OpaqueData,
+    /// Canonical Core Market state.
+    CoreMarket,
+    /// Current Registry activation cache.
+    ActivationCache,
+    /// Canonical Loader-v3 Program account.
+    UpgradeableProgram,
+    /// Checked-release caller ProgramData account.
+    CallerProgramData,
+    /// Immutable Realm state.
+    RealmRecord,
+    /// Runtime Rent sysvar serialization.
+    RentSysvar,
+    /// Realm-selected exact-transfer Mint state.
+    TokenMint,
+    /// Realm-selected exact-transfer token Account state.
+    TokenAccount,
+    /// Realm-selected token program account.
+    TokenProgram,
+}
+
 /// Borrow-free operation-selected Custody frame specification.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CustodyFrameSpecV1 {
@@ -202,6 +237,44 @@ impl CustodyFrameSpecV1 {
         };
         Ok(account)
     }
+
+    /// Exact operation-selected data geometry at `index`.
+    pub fn data(self, index: u16) -> Result<CustodyFrameDataV1, CustodyFrameSpecErrorV1> {
+        let account = self.account(index)?;
+        let data = match account.role() {
+            CustodyFrameRoleV1::CallerAuthority
+            | CustodyFrameRoleV1::Payer
+            | CustodyFrameRoleV1::CustodyAuthority
+            | CustodyFrameRoleV1::RentRefund => CustodyFrameDataV1::OpaqueData,
+            CustodyFrameRoleV1::SystemProgram | CustodyFrameRoleV1::RealmStaging => {
+                CustodyFrameDataV1::Exact(0)
+            }
+            CustodyFrameRoleV1::CoreMarket => CustodyFrameDataV1::CoreMarket,
+            CustodyFrameRoleV1::ActivationCache => CustodyFrameDataV1::ActivationCache,
+            CustodyFrameRoleV1::RegistryProgram | CustodyFrameRoleV1::CallerProgram => {
+                CustodyFrameDataV1::UpgradeableProgram
+            }
+            CustodyFrameRoleV1::CallerProgramData => CustodyFrameDataV1::CallerProgramData,
+            CustodyFrameRoleV1::RealmRecord => CustodyFrameDataV1::RealmRecord,
+            CustodyFrameRoleV1::Replay if self.operation == OperationV1::InitializeReplay => {
+                CustodyFrameDataV1::Exact(0)
+            }
+            CustodyFrameRoleV1::Replay => CustodyFrameDataV1::Exact(
+                u32::try_from(crate::CUSTODY_REPLAY_BYTES_V1)
+                    .map_err(|_| CustodyFrameSpecErrorV1::InvalidCoordinate)?,
+            ),
+            CustodyFrameRoleV1::RentSysvar => CustodyFrameDataV1::RentSysvar,
+            CustodyFrameRoleV1::Mint => CustodyFrameDataV1::TokenMint,
+            CustodyFrameRoleV1::Vault if self.operation == OperationV1::OpenVault => {
+                CustodyFrameDataV1::Exact(0)
+            }
+            CustodyFrameRoleV1::Vault
+            | CustodyFrameRoleV1::TransferSource
+            | CustodyFrameRoleV1::TransferDestination => CustodyFrameDataV1::TokenAccount,
+            CustodyFrameRoleV1::TokenProgram => CustodyFrameDataV1::TokenProgram,
+        };
+        Ok(data)
+    }
 }
 
 fn common(index: u16) -> Result<CustodyFrameAccountV1, CustodyFrameSpecErrorV1> {
@@ -265,5 +338,21 @@ mod tests {
             initialize.account(9).expect("payer"),
             transfer.account(9).expect("mint")
         );
+    }
+
+    #[test]
+    fn data_geometry_owns_replay_and_vault_vacancy() {
+        let initialize = CustodyFrameSpecV1::new(OperationV1::InitializeReplay);
+        let transfer = CustodyFrameSpecV1::new(OperationV1::Transfer);
+        let open = CustodyFrameSpecV1::new(OperationV1::OpenVault);
+        assert_eq!(initialize.data(8), Ok(CustodyFrameDataV1::Exact(0)));
+        assert_eq!(
+            transfer.data(8),
+            Ok(CustodyFrameDataV1::Exact(
+                u32::try_from(crate::CUSTODY_REPLAY_BYTES_V1).expect("replay width")
+            ))
+        );
+        assert_eq!(open.data(10), Ok(CustodyFrameDataV1::Exact(0)));
+        assert_eq!(transfer.data(10), Ok(CustodyFrameDataV1::TokenAccount));
     }
 }
