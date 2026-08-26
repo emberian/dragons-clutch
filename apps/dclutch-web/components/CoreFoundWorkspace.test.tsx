@@ -8,7 +8,8 @@ describe('Core Found workspace', () => {
     const html = renderToStaticMarkup(<CoreFoundWorkspace />);
     expect(html).toContain('Found one common');
     expect(html).toContain('Real 31-account frame');
-    expect(html).toContain('Construct unsigned Found v0 transaction');
+    expect(html).toContain('Construct unsigned lifecycle + Found transactions');
+    expect(html).toContain('Immutable rent refund wallet');
     expect(html).toContain('No transaction has been constructed');
     expect(html).toContain('No signing or submission occurs in this UI');
     expect(html).toContain('Product Runtime V2 raw');
