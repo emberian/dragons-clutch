@@ -12,8 +12,8 @@ use core::convert::TryFrom;
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
     CUSTODY_RECEIPT_BYTES_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1,
-    CustodyAuthoritySeedsV1, CustodyReceiptV1, CustodyReplaySeedsV1, CustodyReplayV1,
-    CustodyRequestV1, CustodyVaultSeedsV1, DELEGATED_CUSTODY_REQUEST_BYTES_V2,
+    CustodyAuthoritySeedsV1, CustodyFrameSpecV1, CustodyReceiptV1, CustodyReplaySeedsV1,
+    CustodyReplayV1, CustodyRequestV1, CustodyVaultSeedsV1, DELEGATED_CUSTODY_REQUEST_BYTES_V2,
     DELEGATED_CUSTODY_REQUEST_MAGIC_V2, OperationV1, PROJECTED_CUSTODY_REQUEST_BYTES_V1,
     PROJECTED_CUSTODY_REQUEST_MAGIC_V1, ProjectedCustodyRequestV1, ReceiptEvidenceV1,
 };
@@ -47,17 +47,23 @@ use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::create_account;
 
 /// Exact common prefix length.
-pub const COMMON_ACCOUNT_COUNT_V1: usize = 9;
+pub const COMMON_ACCOUNT_COUNT_V1: usize =
+    dclutch_custody_contract::CUSTODY_COMMON_ACCOUNT_COUNT_V1 as usize;
 /// Exact `InitializeReplay` account count.
-pub const INITIALIZE_REPLAY_ACCOUNT_COUNT_V1: usize = 12;
+pub const INITIALIZE_REPLAY_ACCOUNT_COUNT_V1: usize =
+    dclutch_custody_contract::INITIALIZE_REPLAY_ACCOUNT_COUNT_V1 as usize;
 /// Exact `OpenVault` account count.
-pub const OPEN_VAULT_ACCOUNT_COUNT_V1: usize = 16;
+pub const OPEN_VAULT_ACCOUNT_COUNT_V1: usize =
+    dclutch_custody_contract::OPEN_VAULT_ACCOUNT_COUNT_V1 as usize;
 /// Exact `Transfer` account count.
-pub const TRANSFER_ACCOUNT_COUNT_V1: usize = 14;
+pub const TRANSFER_ACCOUNT_COUNT_V1: usize =
+    dclutch_custody_contract::TRANSFER_ACCOUNT_COUNT_V1 as usize;
 /// Exact `CloseVault` account count.
-pub const CLOSE_VAULT_ACCOUNT_COUNT_V1: usize = 14;
+pub const CLOSE_VAULT_ACCOUNT_COUNT_V1: usize =
+    dclutch_custody_contract::CLOSE_VAULT_ACCOUNT_COUNT_V1 as usize;
 /// Exact `CloseReplay` account count.
-pub const CLOSE_REPLAY_ACCOUNT_COUNT_V1: usize = 10;
+pub const CLOSE_REPLAY_ACCOUNT_COUNT_V1: usize =
+    dclutch_custody_contract::CLOSE_REPLAY_ACCOUNT_COUNT_V1 as usize;
 
 const CALLER_AUTHORITY: usize = 0;
 const CORE_MARKET: usize = 1;
@@ -156,45 +162,9 @@ fn authenticate_common_frame(
     request_digest: [u8; 32],
 ) -> Result<CoreState, ProgramError> {
     let caller_authority = account(accounts, CALLER_AUTHORITY)?;
-    let market = account(accounts, CORE_MARKET)?;
-    let cache = account(accounts, ACTIVATION_CACHE)?;
-    let registry = account(accounts, REGISTRY_PROGRAM)?;
     let caller_program = account(accounts, CALLER_PROGRAM)?;
-    let caller_programdata = account(accounts, CALLER_PROGRAMDATA)?;
-    let realm = account(accounts, REALM)?;
-    let realm_staging = account(accounts, REALM_STAGING)?;
     let replay = account(accounts, REPLAY)?;
 
-    if !caller_authority.is_signer
-        || caller_authority.is_writable
-        || caller_authority.executable
-        || market.is_signer
-        || market.is_writable
-        || market.executable
-        || cache.is_signer
-        || cache.is_writable
-        || cache.executable
-        || registry.is_signer
-        || registry.is_writable
-        || !registry.executable
-        || caller_program.is_signer
-        || caller_program.is_writable
-        || !caller_program.executable
-        || caller_programdata.is_signer
-        || caller_programdata.is_writable
-        || caller_programdata.executable
-        || realm.is_signer
-        || realm.is_writable
-        || realm.executable
-        || realm_staging.is_signer
-        || realm_staging.is_writable
-        || realm_staging.executable
-        || replay.is_signer
-        || !replay.is_writable
-        || replay.executable
-    {
-        return Err(CustodySbfError::AccountFrame.into());
-    }
     if caller_program.key.to_bytes() != request.caller_program {
         return Err(CustodySbfError::Release.into());
     }
@@ -507,17 +477,8 @@ fn initialize_replay(
     let payer = account(accounts, 9)?;
     let system = account(accounts, 10)?;
     let rent_account = account(accounts, 11)?;
-    if !payer.is_signer
-        || !payer.is_writable
-        || payer.executable
-        || system.key != &system_program::ID
-        || !system.executable
-        || system.is_signer
-        || system.is_writable
+    if system.key != &system_program::ID
         || rent_account.key != &sysvar::rent::ID
-        || rent_account.is_signer
-        || rent_account.is_writable
-        || rent_account.executable
         || payer.key.to_bytes() != request.payer
     {
         return Err(CustodySbfError::AccountFrame.into());
@@ -592,17 +553,9 @@ fn open_vault(
     if vault.owner != &system_program::ID
         || vault.lamports() != 0
         || vault.data_len() != 0
-        || !vault.is_writable
-        || vault.is_signer
-        || !payer.is_signer
-        || !payer.is_writable
         || payer.key.to_bytes() != request.payer
         || system.key != &system_program::ID
-        || !system.executable
         || rent_account.key != &sysvar::rent::ID
-        || rent_account.is_signer
-        || rent_account.is_writable
-        || rent_account.executable
     {
         return Err(CustodySbfError::AccountFrame.into());
     }
@@ -668,13 +621,7 @@ fn execute_transfer(
     let token_program = account(accounts, 13)?;
     validate_token_program_and_mint(mint, token_program, request, realm)?;
     validate_custody_authority(program_id, authority, request)?;
-    if !source.is_writable
-        || source.is_signer
-        || source.executable
-        || !destination.is_writable
-        || destination.is_signer
-        || destination.executable
-        || source.key.to_bytes() != request.source
+    if source.key.to_bytes() != request.source
         || destination.key.to_bytes() != request.destination
         || source.owner != token_program.key
         || destination.owner != token_program.key
@@ -756,13 +703,7 @@ fn close_vault(
     validate_token_program_and_mint(mint, token_program, request, realm)?;
     validate_custody_authority(program_id, authority, request)?;
     validate_vault_key(program_id, vault, request, true)?;
-    if !vault.is_writable
-        || vault.is_signer
-        || vault.executable
-        || !rent_refund.is_writable
-        || rent_refund.executable
-        || rent_refund.key.to_bytes() != request.rent_refund
-    {
+    if rent_refund.key.to_bytes() != request.rent_refund {
         return Err(CustodySbfError::AccountFrame.into());
     }
     let token = read_custody_account(vault, token_program, mint, authority, realm.profile)?;
@@ -822,11 +763,7 @@ fn close_replay(
 ) -> ProgramResult {
     let replay = account(accounts, REPLAY)?;
     let rent_refund = account(accounts, 9)?;
-    if rent_refund.key == replay.key
-        || !rent_refund.is_writable
-        || rent_refund.executable
-        || rent_refund.key.to_bytes() != request.rent_refund
-    {
+    if rent_refund.key == replay.key || rent_refund.key.to_bytes() != request.rent_refund {
         return Err(CustodySbfError::AccountFrame.into());
     }
     let replay_lamports = replay.lamports();
@@ -900,15 +837,23 @@ fn close_replay(
 }
 
 fn require_account_count(accounts: &[AccountInfo<'_>], operation: OperationV1) -> ProgramResult {
-    let expected = match operation {
-        OperationV1::InitializeReplay => INITIALIZE_REPLAY_ACCOUNT_COUNT_V1,
-        OperationV1::OpenVault => OPEN_VAULT_ACCOUNT_COUNT_V1,
-        OperationV1::Transfer => TRANSFER_ACCOUNT_COUNT_V1,
-        OperationV1::CloseVault => CLOSE_VAULT_ACCOUNT_COUNT_V1,
-        OperationV1::CloseReplay => CLOSE_REPLAY_ACCOUNT_COUNT_V1,
-    };
+    let spec = CustodyFrameSpecV1::new(operation);
+    let expected = usize::from(spec.account_count());
     if accounts.len() != expected {
         return Err(CustodySbfError::AccountFrame.into());
+    }
+    for (index, observed) in accounts.iter().enumerate() {
+        let coordinate = u16::try_from(index).map_err(|_| CustodySbfError::AccountFrame)?;
+        let expected = spec
+            .account(coordinate)
+            .map_err(|_| CustodySbfError::AccountFrame)?
+            .privileges();
+        if observed.is_signer != expected.signer()
+            || observed.is_writable != expected.writable()
+            || observed.executable != expected.executable()
+        {
+            return Err(CustodySbfError::AccountFrame.into());
+        }
     }
     Ok(())
 }
@@ -933,11 +878,7 @@ fn validate_custody_authority(
 ) -> ProgramResult {
     let authority_seeds = CustodyAuthoritySeedsV1::from_request(request);
     let expected = Pubkey::find_program_address(&authority_seeds.as_slices(), program_id).0;
-    if authority.key != &expected
-        || authority.is_signer
-        || authority.is_writable
-        || authority.executable
-    {
+    if authority.key != &expected {
         return Err(CustodySbfError::TokenState.into());
     }
     Ok(())
@@ -964,14 +905,8 @@ fn validate_token_program_and_mint(
     facts: RealmFacts,
 ) -> ProgramResult {
     if token_program.key.to_bytes() != request.token_program
-        || !token_program.executable
-        || token_program.is_signer
-        || token_program.is_writable
         || mint.key.to_bytes() != request.mint
         || mint.owner != token_program.key
-        || mint.is_signer
-        || mint.is_writable
-        || mint.executable
     {
         return Err(CustodySbfError::TokenState.into());
     }

@@ -15,12 +15,14 @@
 extern crate std;
 
 mod delegated;
+mod frame_spec_v1;
 #[allow(missing_docs)]
 mod generated;
 mod projected;
 mod request_layout;
 
 pub use delegated::*;
+pub use frame_spec_v1::*;
 pub use generated::{
     ABI_VERSION_V1, CUSTODY_RECEIPT_BYTES_V1, CUSTODY_REPLAY_BYTES_V1, CUSTODY_REQUEST_BYTES_V1,
 };

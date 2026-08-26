@@ -65,12 +65,6 @@ fn execute_token_effect(
     validate_token_program_and_mint(mint, token_program, custody, realm)?;
     validate_custody_authority(program_id, authority, custody)?;
     if request.delegate_before != authority.key.to_bytes()
-        || !source.is_writable
-        || source.is_signer
-        || source.executable
-        || !destination.is_writable
-        || destination.is_signer
-        || destination.executable
         || source.key.to_bytes() != custody.source
         || destination.key.to_bytes() != custody.destination
         || source.owner != token_program.key
