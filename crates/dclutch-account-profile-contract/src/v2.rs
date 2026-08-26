@@ -639,10 +639,11 @@ impl<'a> AccountProfileV2<'a> {
             || self.item_scalar_stride != 0
             || self.item_identity_stride != 0
             || self.has_affine_data_length()?;
-        if self.tail_count_projection()?.is_some() == affine {
-            Ok(())
-        } else {
+        let projection = self.tail_count_projection()?;
+        if affine && projection.is_none() {
             Err(Error::NonCanonicalOperation)
+        } else {
+            Ok(())
         }
     }
 
@@ -1035,6 +1036,11 @@ impl Operation {
             | OP_PROJECT_DATA_U16
             | OP_PROJECT_TAIL_COUNT_U32 => {
                 if self.data_stride != 0 {
+                    return Err(Error::NonCanonicalOperation);
+                }
+                if self.opcode == OP_PROJECT_TAIL_COUNT_U32
+                    && (item_body || self.account_item || self.register_item)
+                {
                     return Err(Error::NonCanonicalOperation);
                 }
                 if self.opcode == OP_PROJECT_DATA_U16
@@ -1865,6 +1871,38 @@ mod tests {
         output
     }
 
+    fn fixed_tail_count_profile_bytes(destinations: &[u16]) -> Vec<u8> {
+        let mut output =
+            vec![0_u8; HEADER_BYTES + RULE_BYTES + destinations.len() * OPERATION_BYTES];
+        put(&mut output, 0, &MAGIC);
+        for (offset, value) in [
+            (8, VERSION),
+            (10, ARTIFACT_PROFILE),
+            (12, 1),
+            (14, 0),
+            (
+                16,
+                u16::try_from(destinations.len()).expect("operation count"),
+            ),
+            (18, 0),
+            (20, 2),
+            (22, 0),
+            (24, 0),
+            (26, 0),
+        ] {
+            put(&mut output, offset, &value.to_le_bytes());
+        }
+        put(&mut output, HEADER_BYTES, &rule(4));
+        for (index, destination) in destinations.iter().copied().enumerate() {
+            put(
+                &mut output,
+                HEADER_BYTES + RULE_BYTES + index * OPERATION_BYTES,
+                &operation(OP_PROJECT_TAIL_COUNT_U32, false, 0, false, destination),
+            );
+        }
+        output
+    }
+
     fn observations(duplicate_across_items: bool) -> Vec<AccountObservationV1<'static>> {
         let second = if duplicate_across_items {
             [0x21; 32]
@@ -1975,6 +2013,88 @@ mod tests {
             Err(Error::InvalidLength)
         );
         assert_eq!(overflow, before);
+    }
+
+    #[test]
+    fn fixed_geometry_may_project_product_tail_count_without_fake_item_state() {
+        let bytes = fixed_tail_count_profile_bytes(&[0]);
+        let profile = AccountProfileV2::decode(&bytes).expect("fixed sparse profile");
+        assert_eq!(profile.item_account_stride(), 0);
+        assert_eq!(profile.item_scalar_stride(), 0);
+        assert_eq!(profile.item_identity_stride(), 0);
+        assert_eq!(
+            profile
+                .tail_count_projection()
+                .expect("tail projection")
+                .expect("present")
+                .register(),
+            0
+        );
+
+        let product_count = 513_u32.to_le_bytes();
+        let accounts = [AccountObservationV1::new(
+            [1; 32],
+            [2; 32],
+            0,
+            &product_count,
+            false,
+            false,
+            false,
+        )];
+        let mut scratch_scalars = [0_u64; 2];
+        let mut output_scalars = [9_u64; 2];
+        assert_eq!(
+            project_tail_count_atomic(
+                profile,
+                &accounts,
+                ProjectionRegistersV2 {
+                    input_scalars: &[0; 2],
+                    input_identities: &[],
+                    scratch_scalars: &mut scratch_scalars,
+                    scratch_identities: &mut [],
+                    output_scalars: &mut output_scalars,
+                    output_identities: &mut [],
+                },
+            ),
+            Ok(513)
+        );
+        assert_eq!(output_scalars, [513, 0]);
+    }
+
+    #[test]
+    fn tail_count_remains_unique_fixed_account_common_scalar_and_affine_required() {
+        assert_eq!(
+            AccountProfileV2::decode(&fixed_tail_count_profile_bytes(&[0, 1])),
+            Err(Error::DuplicateProjection)
+        );
+
+        let mut item_space = profile_bytes();
+        let operations_start = HEADER_BYTES + 3 * RULE_BYTES;
+        *item_space
+            .get_mut(operations_start + OPERATION_BYTES + 1)
+            .expect("tail account space") = 1;
+        assert_eq!(
+            AccountProfileV2::decode(&item_space),
+            Err(Error::NonCanonicalOperation)
+        );
+
+        let mut item_register = profile_bytes();
+        *item_register
+            .get_mut(operations_start + OPERATION_BYTES + 4)
+            .expect("tail register space") = 1;
+        assert_eq!(
+            AccountProfileV2::decode(&item_register),
+            Err(Error::NonCanonicalOperation)
+        );
+
+        let mut missing_affine_projection = profile_bytes();
+        *missing_affine_projection
+            .get_mut(operations_start + OPERATION_BYTES)
+            .expect("tail opcode") = OP_PROJECT_DATA_U32;
+        assert_eq!(
+            AccountProfileV2::decode(&missing_affine_projection),
+            Err(Error::NonCanonicalOperation)
+        );
     }
 
     #[test]
