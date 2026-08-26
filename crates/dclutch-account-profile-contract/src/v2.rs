@@ -45,6 +45,8 @@ const OP_PROJECT_DATA_U64: u8 = 5;
 const OP_PROJECT_DATA_IDENTITY: u8 = 6;
 const OP_PROJECT_DATA_U32: u8 = 7;
 const OP_PROJECT_TAIL_COUNT_U32: u8 = 8;
+const OP_PROJECT_DATA_U64_AFFINE: u8 = 9;
+const OP_PROJECT_DATA_IDENTITY_AFFINE: u8 = 10;
 
 /// Stable hostile-decode or projection refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -739,17 +741,14 @@ struct Operation {
     register_item: bool,
     register: u16,
     data_offset: u32,
+    data_stride: u32,
 }
 
 impl Operation {
     fn decode(bytes: &[u8], offset: usize) -> Result<Self> {
         let account_space = byte(bytes, add(offset, 1)?)?;
         let register_space = byte(bytes, add(offset, 4)?)?;
-        if account_space > 1
-            || register_space > 1
-            || byte(bytes, add(offset, 5)?)? != 0
-            || read_u32(bytes, add(offset, 12)?)? != 0
-        {
+        if account_space > 1 || register_space > 1 || byte(bytes, add(offset, 5)?)? != 0 {
             return Err(Error::NonCanonicalOperation);
         }
         Ok(Self {
@@ -759,6 +758,7 @@ impl Operation {
             register_item: register_space == 1,
             register: read_u16(bytes, add(offset, 6)?)?,
             data_offset: read_u32(bytes, add(offset, 8)?)?,
+            data_stride: read_u32(bytes, add(offset, 12)?)?,
         })
     }
 
@@ -781,6 +781,7 @@ impl Operation {
                 | OP_PROJECT_KEY
                 | OP_PROJECT_OWNER
                 | OP_PROJECT_DATA_IDENTITY
+                | OP_PROJECT_DATA_IDENTITY_AFFINE
         );
         let register_bound = if identity {
             if self.register_item {
@@ -799,14 +800,48 @@ impl Operation {
         match self.opcode {
             OP_REQUIRE_KEY | OP_REQUIRE_OWNER | OP_PROJECT_KEY | OP_PROJECT_OWNER
             | OP_PROJECT_LAMPORTS => {
-                if self.data_offset != 0 {
+                if self.data_offset != 0 || self.data_stride != 0 {
                     return Err(Error::NonCanonicalOperation);
                 }
             }
             OP_PROJECT_DATA_U64
             | OP_PROJECT_DATA_IDENTITY
             | OP_PROJECT_DATA_U32
-            | OP_PROJECT_TAIL_COUNT_U32 => {}
+            | OP_PROJECT_TAIL_COUNT_U32 => {
+                if self.data_stride != 0 {
+                    return Err(Error::NonCanonicalOperation);
+                }
+            }
+            OP_PROJECT_DATA_U64_AFFINE => {
+                if !item_body
+                    || self.account_item
+                    || !self.register_item
+                    || self.data_stride < 8
+                    || self.data_offset.checked_add(8).is_none_or(|end| {
+                        end > profile
+                            .rule(false, self.account)
+                            .map(|rule| rule.data_length)
+                            .unwrap_or(0)
+                    })
+                {
+                    return Err(Error::NonCanonicalOperation);
+                }
+            }
+            OP_PROJECT_DATA_IDENTITY_AFFINE => {
+                if !item_body
+                    || self.account_item
+                    || !self.register_item
+                    || self.data_stride < 32
+                    || self.data_offset.checked_add(32).is_none_or(|end| {
+                        end > profile
+                            .rule(false, self.account)
+                            .map(|rule| rule.data_length)
+                            .unwrap_or(0)
+                    })
+                {
+                    return Err(Error::NonCanonicalOperation);
+                }
+            }
             _ => return Err(Error::UnknownOperation),
         }
         if item_body
@@ -827,6 +862,8 @@ impl Operation {
                 | OP_PROJECT_LAMPORTS
                 | OP_PROJECT_DATA_U64
                 | OP_PROJECT_DATA_IDENTITY
+                | OP_PROJECT_DATA_U64_AFFINE
+                | OP_PROJECT_DATA_IDENTITY_AFFINE
                 | OP_PROJECT_DATA_U32
                 | OP_PROJECT_TAIL_COUNT_U32
         )
@@ -838,7 +875,10 @@ impl Operation {
         }
         let identity = matches!(
             self.opcode,
-            OP_PROJECT_KEY | OP_PROJECT_OWNER | OP_PROJECT_DATA_IDENTITY
+            OP_PROJECT_KEY
+                | OP_PROJECT_OWNER
+                | OP_PROJECT_DATA_IDENTITY
+                | OP_PROJECT_DATA_IDENTITY_AFFINE
         );
         Ok(Some((identity, self.register_item, self.register)))
     }
@@ -916,6 +956,34 @@ impl Operation {
             }
             OP_PROJECT_DATA_IDENTITY => {
                 let bytes = data_field(account.data(), self.data_offset, 32)?;
+                write_identity(
+                    identities,
+                    identity()?,
+                    bytes.try_into().map_err(|_| Error::DataOutOfBounds)?,
+                )
+            }
+            OP_PROJECT_DATA_U64_AFFINE => {
+                let offset = affine_data_offset(
+                    self.data_offset,
+                    self.data_stride,
+                    item.ok_or(Error::InvalidCoordinate)?,
+                    8,
+                )?;
+                let bytes = data_field(account.data(), offset, 8)?;
+                write_scalar(
+                    scalars,
+                    scalar()?,
+                    u64::from_le_bytes(bytes.try_into().map_err(|_| Error::DataOutOfBounds)?),
+                )
+            }
+            OP_PROJECT_DATA_IDENTITY_AFFINE => {
+                let offset = affine_data_offset(
+                    self.data_offset,
+                    self.data_stride,
+                    item.ok_or(Error::InvalidCoordinate)?,
+                    32,
+                )?;
+                let bytes = data_field(account.data(), offset, 32)?;
                 write_identity(
                     identities,
                     identity()?,
@@ -1070,6 +1138,15 @@ fn data_field(data: &[u8], offset: u32, width: usize) -> Result<&[u8]> {
     data.get(start..end).ok_or(Error::DataOutOfBounds)
 }
 
+fn affine_data_offset(base: u32, stride: u32, item: u32, width: u32) -> Result<u32> {
+    if stride < width {
+        return Err(Error::NonCanonicalOperation);
+    }
+    base.checked_add(item.checked_mul(stride).ok_or(Error::DataOutOfBounds)?)
+        .and_then(|start| start.checked_add(width).map(|_| start))
+        .ok_or(Error::DataOutOfBounds)
+}
+
 fn write_scalar(values: &mut [u64], index: usize, value: u64) -> Result<()> {
     *values.get_mut(index).ok_or(Error::InvalidCoordinate)? = value;
     Ok(())
@@ -1159,6 +1236,18 @@ mod tests {
         output
     }
 
+    fn affine_operation(
+        opcode: u8,
+        register: u16,
+        data_offset: u32,
+        data_stride: u32,
+    ) -> [u8; OPERATION_BYTES] {
+        let mut output = operation(opcode, false, 0, true, register);
+        put(&mut output, 8, &data_offset.to_le_bytes());
+        put(&mut output, 12, &data_stride.to_le_bytes());
+        output
+    }
+
     fn profile_bytes() -> Vec<u8> {
         let rules = [rule(4), rule(0), rule(0)];
         let operations = [
@@ -1199,6 +1288,56 @@ mod tests {
             );
         }
         output
+    }
+
+    fn affine_profile_bytes() -> Vec<u8> {
+        let rules = [rule(84)];
+        let operations = [
+            operation(OP_REQUIRE_KEY, false, 0, false, 0),
+            operation(OP_PROJECT_TAIL_COUNT_U32, false, 0, false, 0),
+            affine_operation(OP_PROJECT_DATA_U64_AFFINE, 1, 4, 40),
+            affine_operation(OP_PROJECT_DATA_IDENTITY_AFFINE, 0, 12, 40),
+        ];
+        let mut output =
+            vec![
+                0_u8;
+                HEADER_BYTES + rules.len() * RULE_BYTES + operations.len() * OPERATION_BYTES
+            ];
+        put(&mut output, 0, &MAGIC);
+        for (offset, value) in [
+            (8, VERSION),
+            (10, ARTIFACT_PROFILE),
+            (12, 1),
+            (14, 0),
+            (16, 2),
+            (18, 2),
+            (20, 1),
+            (22, 2),
+            (24, 1),
+            (26, 1),
+        ] {
+            put(&mut output, offset, &value.to_le_bytes());
+        }
+        put(&mut output, HEADER_BYTES, &rules[0]);
+        let operations_start = HEADER_BYTES + RULE_BYTES;
+        for (index, value) in operations.iter().enumerate() {
+            put(
+                &mut output,
+                operations_start + index * OPERATION_BYTES,
+                value,
+            );
+        }
+        output
+    }
+
+    fn affine_data(count: u32) -> [u8; 84] {
+        let mut data = [0_u8; 84];
+        put(&mut data, 0, &count.to_le_bytes());
+        put(&mut data, 4, &11_u64.to_le_bytes());
+        put(&mut data, 12, &[0x31; 32]);
+        put(&mut data, 44, &22_u64.to_le_bytes());
+        put(&mut data, 52, &[0x32; 32]);
+        data
     }
 
     fn observations(duplicate_across_items: bool) -> Vec<AccountObservationV1<'static>> {
@@ -1284,22 +1423,20 @@ mod tests {
                 } else {
                     accounts.get(..4).expect("short accounts")
                 };
-            assert!(
-                project_atomic(
-                    profile,
-                    2,
-                    used,
-                    ProjectionRegistersV2 {
-                        input_scalars: &input_scalars,
-                        input_identities: &input_identities,
-                        scratch_scalars: &mut scratch_scalars,
-                        scratch_identities: &mut scratch_identities,
-                        output_scalars: &mut output_scalars,
-                        output_identities: &mut output_identities,
-                    }
-                )
-                .is_err()
-            );
+            assert!(project_atomic(
+                profile,
+                2,
+                used,
+                ProjectionRegistersV2 {
+                    input_scalars: &input_scalars,
+                    input_identities: &input_identities,
+                    scratch_scalars: &mut scratch_scalars,
+                    scratch_identities: &mut scratch_identities,
+                    output_scalars: &mut output_scalars,
+                    output_identities: &mut output_identities,
+                }
+            )
+            .is_err());
             assert_eq!(output_scalars, before_scalars);
             assert_eq!(output_identities, before_identities);
         }
@@ -1321,6 +1458,87 @@ mod tests {
             let mut hostile = canonical.clone();
             *hostile.get_mut(offset).expect("hostile byte") ^= 1;
             assert_eq!(AccountProfileV2::decode(&hostile), Err(expected));
+        }
+    }
+
+    #[test]
+    fn compact_fixed_account_projects_runtime_affine_tail_atomically() {
+        let bytes = affine_profile_bytes();
+        let profile = AccountProfileV2::decode(&bytes).expect("affine profile");
+        let data = affine_data(2);
+        let accounts = [AccountObservationV1::new(
+            [0x11; 32], [1; 32], 1, &data, false, false, false,
+        )];
+        let input_scalars = [0_u64; 5];
+        let input_identities = [[0x11_u8; 32], [0; 32], [0; 32]];
+        let mut scratch_scalars = [0_u64; 5];
+        let mut scratch_identities = [[0_u8; 32]; 3];
+        let mut output_scalars = [9_u64; 5];
+        let mut output_identities = [[9_u8; 32]; 3];
+        project_atomic(
+            profile,
+            2,
+            &accounts,
+            ProjectionRegistersV2 {
+                input_scalars: &input_scalars,
+                input_identities: &input_identities,
+                scratch_scalars: &mut scratch_scalars,
+                scratch_identities: &mut scratch_identities,
+                output_scalars: &mut output_scalars,
+                output_identities: &mut output_identities,
+            },
+        )
+        .expect("affine projection");
+        assert_eq!(output_scalars, [2, 0, 11, 1, 22]);
+        assert_eq!(output_identities, [[0x11; 32], [0x31; 32], [0x32; 32]]);
+
+        let hostile_data = affine_data(3);
+        let hostile_accounts = [AccountObservationV1::new(
+            [0x11; 32],
+            [1; 32],
+            1,
+            &hostile_data,
+            false,
+            false,
+            false,
+        )];
+        let mut hostile_scratch_scalars = [0_u64; 7];
+        let mut hostile_scratch_identities = [[0_u8; 32]; 4];
+        let mut hostile_output_scalars = [9_u64; 7];
+        let mut hostile_output_identities = [[9_u8; 32]; 4];
+        let before_scalars = hostile_output_scalars;
+        let before_identities = hostile_output_identities;
+        assert_eq!(
+            project_atomic(
+                profile,
+                3,
+                &hostile_accounts,
+                ProjectionRegistersV2 {
+                    input_scalars: &[0; 7],
+                    input_identities: &[[0x11; 32], [0; 32], [0; 32], [0; 32]],
+                    scratch_scalars: &mut hostile_scratch_scalars,
+                    scratch_identities: &mut hostile_scratch_identities,
+                    output_scalars: &mut hostile_output_scalars,
+                    output_identities: &mut hostile_output_identities,
+                },
+            ),
+            Err(Error::DataOutOfBounds)
+        );
+        assert_eq!(hostile_output_scalars, before_scalars);
+        assert_eq!(hostile_output_identities, before_identities);
+
+        let operations_start = HEADER_BYTES + RULE_BYTES;
+        for stride in [0_u32, 7] {
+            let mut hostile = bytes.clone();
+            put(
+                &mut hostile,
+                operations_start + 2 * OPERATION_BYTES + 12,
+                &stride.to_le_bytes(),
+            );
+            assert_eq!(
+                AccountProfileV2::decode(&hostile),
+                Err(Error::NonCanonicalOperation)
+            );
         }
     }
 }

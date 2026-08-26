@@ -38,6 +38,8 @@ const OP_WRITE_REQUEST_U16: u8 = 5;
 const OP_WRITE_REQUEST_U32: u8 = 6;
 const OP_WRITE_REQUEST_U64: u8 = 7;
 const OP_WRITE_REQUEST_IDENTITY: u8 = 8;
+const OP_WRITE_SCALAR_AFFINE: u8 = 9;
+const OP_WRITE_IDENTITY_AFFINE: u8 = 10;
 
 const MODE_ACCOUNT_A_ITEM: u8 = 1 << 0;
 const MODE_ACCOUNT_B_ITEM: u8 = 1 << 1;
@@ -836,7 +838,12 @@ impl Operation {
         let account_b_item = self.mode & MODE_ACCOUNT_B_ITEM != 0;
         let register_item = self.mode & MODE_REGISTER_ITEM != 0;
         let request_item = self.mode & MODE_REQUEST_ITEM != 0;
-        if item_body && self.is_data_write() && !account_a_item {
+        if item_body && self.is_data_write() && !self.is_affine_data_write() && !account_a_item {
+            return Err(Error::NonCanonicalOperation);
+        }
+        if self.is_affine_data_write()
+            && (!item_body || account_a_item || !register_item || request_item)
+        {
             return Err(Error::NonCanonicalOperation);
         }
         if item_body && self.is_request_write() != request_item {
@@ -845,11 +852,15 @@ impl Operation {
         if !item_body && request_item {
             return Err(Error::NonCanonicalOperation);
         }
-        let identity = matches!(self.opcode, OP_WRITE_IDENTITY | OP_WRITE_REQUEST_IDENTITY);
+        let identity = matches!(
+            self.opcode,
+            OP_WRITE_IDENTITY | OP_WRITE_REQUEST_IDENTITY | OP_WRITE_IDENTITY_AFFINE
+        );
         let scalar = matches!(
             self.opcode,
             OP_TRANSFER_LAMPORTS
                 | OP_WRITE_SCALAR
+                | OP_WRITE_SCALAR_AFFINE
                 | OP_REQUIRE_LAMPORTS_EQ
                 | OP_WRITE_REQUEST_U8
                 | OP_WRITE_REQUEST_U16
@@ -908,8 +919,17 @@ impl Operation {
             {
                 return Err(Error::InvalidCoordinate);
             }
-        } else if self.route != 0 || self.extra != 0 {
-            return Err(Error::NonCanonicalOperation);
+        } else {
+            if self.route != 0 {
+                return Err(Error::NonCanonicalOperation);
+            }
+            if self.is_affine_data_write() {
+                if self.extra < self.write_width() {
+                    return Err(Error::NonCanonicalOperation);
+                }
+            } else if self.extra != 0 {
+                return Err(Error::NonCanonicalOperation);
+            }
         }
         if matches!(self.opcode, OP_TRANSFER_LAMPORTS | OP_REQUIRE_LAMPORTS_EQ)
             && self.data_offset != 0
@@ -920,7 +940,17 @@ impl Operation {
     }
 
     fn is_data_write(self) -> bool {
-        matches!(self.opcode, OP_WRITE_SCALAR | OP_WRITE_IDENTITY)
+        matches!(
+            self.opcode,
+            OP_WRITE_SCALAR | OP_WRITE_IDENTITY | OP_WRITE_SCALAR_AFFINE | OP_WRITE_IDENTITY_AFFINE
+        )
+    }
+
+    fn is_affine_data_write(self) -> bool {
+        matches!(
+            self.opcode,
+            OP_WRITE_SCALAR_AFFINE | OP_WRITE_IDENTITY_AFFINE
+        )
     }
 
     fn is_request_write(self) -> bool {
@@ -939,15 +969,18 @@ impl Operation {
             OP_WRITE_REQUEST_U8 => 1,
             OP_WRITE_REQUEST_U16 => 2,
             OP_WRITE_REQUEST_U32 => 4,
-            OP_WRITE_SCALAR | OP_WRITE_REQUEST_U64 => 8,
-            OP_WRITE_IDENTITY | OP_WRITE_REQUEST_IDENTITY => 32,
+            OP_WRITE_SCALAR | OP_WRITE_SCALAR_AFFINE | OP_WRITE_REQUEST_U64 => 8,
+            OP_WRITE_IDENTITY | OP_WRITE_IDENTITY_AFFINE | OP_WRITE_REQUEST_IDENTITY => 32,
             _ => 0,
         }
     }
 
     fn static_data_range(self) -> Option<(u16, u32, u32)> {
-        self.is_data_write()
-            .then_some((self.account_a, self.data_offset, self.write_width()))
+        (self.is_data_write() && !self.is_affine_data_write()).then_some((
+            self.account_a,
+            self.data_offset,
+            self.write_width(),
+        ))
     }
 
     fn static_request_range(self) -> Option<(u16, u32, u32)> {
@@ -1018,6 +1051,16 @@ impl Operation {
                 offset: self.data_offset,
                 value: identity()?,
             }),
+            OP_WRITE_SCALAR_AFFINE => Ok(ResolvedEffectV3::WriteScalar {
+                account: account_a,
+                offset: self.affine_data_offset(item)?,
+                value: scalar()?,
+            }),
+            OP_WRITE_IDENTITY_AFFINE => Ok(ResolvedEffectV3::WriteIdentity {
+                account: account_a,
+                offset: self.affine_data_offset(item)?,
+                value: identity()?,
+            }),
             OP_REQUIRE_LAMPORTS_EQ => Ok(ResolvedEffectV3::RequireLamportsEq {
                 account: account_a,
                 value: scalar()?,
@@ -1057,6 +1100,18 @@ impl Operation {
             }
             _ => Err(Error::UnknownOperation),
         }
+    }
+
+    fn affine_data_offset(self, item: Option<u32>) -> Result<u32> {
+        let item = item.ok_or(Error::InvalidCoordinate)?;
+        let offset = item
+            .checked_mul(self.extra)
+            .and_then(|relative| self.data_offset.checked_add(relative))
+            .ok_or(Error::ArithmeticOverflow)?;
+        offset
+            .checked_add(self.write_width())
+            .ok_or(Error::ArithmeticOverflow)?;
+        Ok(offset)
     }
 }
 
@@ -1661,6 +1716,29 @@ mod tests {
         data_offset: u32,
         route: u16,
     ) -> [u8; OPERATION_BYTES] {
+        operation_with_extra(
+            opcode,
+            mode,
+            account_a,
+            account_b,
+            register,
+            data_offset,
+            0,
+            route,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn operation_with_extra(
+        opcode: u8,
+        mode: u8,
+        account_a: u16,
+        account_b: u16,
+        register: u16,
+        data_offset: u32,
+        extra: u32,
+        route: u16,
+    ) -> [u8; OPERATION_BYTES] {
         let mut output = [0_u8; OPERATION_BYTES];
         output[0] = opcode;
         output[1] = mode;
@@ -1668,7 +1746,45 @@ mod tests {
         put(&mut output, 4, &account_b.to_le_bytes());
         put(&mut output, 6, &register.to_le_bytes());
         put(&mut output, 8, &data_offset.to_le_bytes());
+        put(&mut output, 12, &extra.to_le_bytes());
         put(&mut output, 16, &route.to_le_bytes());
+        output
+    }
+
+    fn affine_data_program(scalar_stride: u32, identity_base: u32) -> Vec<u8> {
+        let operations = [
+            operation_with_extra(
+                OP_WRITE_SCALAR_AFFINE,
+                MODE_REGISTER_ITEM,
+                0,
+                0,
+                0,
+                4,
+                scalar_stride,
+                0,
+            ),
+            operation_with_extra(
+                OP_WRITE_IDENTITY_AFFINE,
+                MODE_REGISTER_ITEM,
+                0,
+                0,
+                0,
+                identity_base,
+                40,
+                0,
+            ),
+        ];
+        let mut output = vec![0_u8; HEADER_BYTES + operations.len() * OPERATION_BYTES];
+        put(&mut output, 0, &MAGIC);
+        *output.get_mut(4).expect("version") = VERSION;
+        for (offset, value) in [(10, 2_u16), (12, 1), (18, 1), (22, 1)] {
+            put(&mut output, offset, &value.to_le_bytes());
+        }
+        let mut cursor = HEADER_BYTES;
+        for value in operations {
+            put(&mut output, cursor, &value);
+            cursor += OPERATION_BYTES;
+        }
         output
     }
 
@@ -1881,24 +1997,22 @@ mod tests {
             } else {
                 &mut output_requests[..]
             };
-            assert!(
-                project_atomic(
-                    program,
-                    2,
-                    ProjectionV3 {
-                        scalars: &scalars,
-                        identities: &identities,
-                        aliases: &aliases,
-                        accounts: &accounts,
-                        permissions: &permissions,
-                        scratch_lamports: &mut scratch_lamports,
-                        output_lamports: &mut output_lamports,
-                        scratch_requests: &mut scratch_requests,
-                        output_requests: request_output,
-                    },
-                )
-                .is_err()
-            );
+            assert!(project_atomic(
+                program,
+                2,
+                ProjectionV3 {
+                    scalars: &scalars,
+                    identities: &identities,
+                    aliases: &aliases,
+                    accounts: &accounts,
+                    permissions: &permissions,
+                    scratch_lamports: &mut scratch_lamports,
+                    output_lamports: &mut output_lamports,
+                    scratch_requests: &mut scratch_requests,
+                    output_requests: request_output,
+                },
+            )
+            .is_err());
             assert_eq!(output_lamports, before_lamports);
             assert_eq!(output_requests, before_requests);
         }
@@ -1921,5 +2035,157 @@ mod tests {
             ProgramV3::decode_selected([1; 32], [2; 32], &canonical),
             Err(Error::ProgramIdentityMismatch)
         );
+    }
+
+    #[test]
+    fn affine_fixed_account_writes_resolve_runtime_offsets() {
+        let bytes = affine_data_program(40, 12);
+        let program = ProgramV3::decode(&bytes).expect("affine program");
+        let scalars = [11_u64, 22];
+        let identities = [[3_u8; 32], [4_u8; 32]];
+        assert_eq!(
+            program.resolved_item_effect(0, 0, 2, &scalars, &identities),
+            Ok(ResolvedEffectV3::WriteScalar {
+                account: 0,
+                offset: 4,
+                value: 11,
+            })
+        );
+        assert_eq!(
+            program.resolved_item_effect(1, 0, 2, &scalars, &identities),
+            Ok(ResolvedEffectV3::WriteScalar {
+                account: 0,
+                offset: 44,
+                value: 22,
+            })
+        );
+        assert_eq!(
+            program.resolved_item_effect(1, 1, 2, &scalars, &identities),
+            Ok(ResolvedEffectV3::WriteIdentity {
+                account: 0,
+                offset: 52,
+                value: [4; 32],
+            })
+        );
+
+        let accounts = [AccountInput {
+            lamports: 7,
+            data_len: 84,
+        }];
+        let permissions = [AccountPermission::new(false, false, true)];
+        let aliases = [0_usize];
+        let mut scratch_lamports = [0_u64];
+        let mut output_lamports = [99_u64];
+        let mut scratch_requests = [];
+        let mut output_requests = [];
+        project_atomic(
+            program,
+            2,
+            ProjectionV3 {
+                scalars: &scalars,
+                identities: &identities,
+                aliases: &aliases,
+                accounts: &accounts,
+                permissions: &permissions,
+                scratch_lamports: &mut scratch_lamports,
+                output_lamports: &mut output_lamports,
+                scratch_requests: &mut scratch_requests,
+                output_requests: &mut output_requests,
+            },
+        )
+        .expect("exact affine account bounds");
+        assert_eq!(output_lamports, [7]);
+    }
+
+    #[test]
+    fn affine_writes_refuse_bad_stride_overlap_and_bounds_atomically() {
+        assert_eq!(
+            ProgramV3::decode(&affine_data_program(7, 12)),
+            Err(Error::NonCanonicalOperation)
+        );
+        assert_eq!(
+            ProgramV3::decode(&affine_data_program(40, 8))
+                .expect("cross-operation overlap is runtime-resolved")
+                .resolved_item_effect(0, 1, 2, &[11, 22], &[[3; 32], [4; 32]]),
+            Ok(ResolvedEffectV3::WriteIdentity {
+                account: 0,
+                offset: 8,
+                value: [3; 32],
+            })
+        );
+
+        for (bytes, tail_count, expected) in [
+            (affine_data_program(40, 8), 2, Error::OverlappingWrites),
+            (affine_data_program(40, 12), 3, Error::WidthMismatch),
+        ] {
+            let program = ProgramV3::decode(&bytes).expect("structural program");
+            let scalars = [11_u64, 22];
+            let identities = [[3_u8; 32], [4_u8; 32]];
+            let accounts = [AccountInput {
+                lamports: 7,
+                data_len: 84,
+            }];
+            let permissions = [AccountPermission::new(false, false, true)];
+            let aliases = [0_usize];
+            let mut scratch_lamports = [55_u64];
+            let mut output_lamports = [99_u64];
+            let before_output = output_lamports;
+            let mut scratch_requests = [];
+            let mut output_requests = [];
+            assert_eq!(
+                project_atomic(
+                    program,
+                    tail_count,
+                    ProjectionV3 {
+                        scalars: &scalars,
+                        identities: &identities,
+                        aliases: &aliases,
+                        accounts: &accounts,
+                        permissions: &permissions,
+                        scratch_lamports: &mut scratch_lamports,
+                        output_lamports: &mut output_lamports,
+                        scratch_requests: &mut scratch_requests,
+                        output_requests: &mut output_requests,
+                    },
+                ),
+                Err(expected)
+            );
+            assert_eq!(output_lamports, before_output);
+        }
+
+        let bytes = affine_data_program(40, 12);
+        let program = ProgramV3::decode(&bytes).expect("program");
+        let scalars = [11_u64, 22, 33];
+        let identities = [[3_u8; 32], [4_u8; 32], [5_u8; 32]];
+        let accounts = [AccountInput {
+            lamports: 7,
+            data_len: 84,
+        }];
+        let permissions = [AccountPermission::new(false, false, true)];
+        let aliases = [0_usize];
+        let mut scratch_lamports = [55_u64];
+        let mut output_lamports = [99_u64];
+        let before_output = output_lamports;
+        let mut scratch_requests = [];
+        let mut output_requests = [];
+        assert_eq!(
+            project_atomic(
+                program,
+                3,
+                ProjectionV3 {
+                    scalars: &scalars,
+                    identities: &identities,
+                    aliases: &aliases,
+                    accounts: &accounts,
+                    permissions: &permissions,
+                    scratch_lamports: &mut scratch_lamports,
+                    output_lamports: &mut output_lamports,
+                    scratch_requests: &mut scratch_requests,
+                    output_requests: &mut output_requests,
+                },
+            ),
+            Err(Error::DataOutOfBounds)
+        );
+        assert_eq!(output_lamports, before_output);
     }
 }
