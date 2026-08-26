@@ -1,8 +1,10 @@
 import {
   AddressLookupTableAccount,
+  Ed25519Program,
   PublicKey,
   SYSVAR_INSTRUCTIONS_PUBKEY,
   SYSVAR_RENT_PUBKEY,
+  TransactionInstruction,
 } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
@@ -16,6 +18,7 @@ import {
   encodeCompactIntentSigningMessageV2,
   encodeDirectInlineOrdinaryRequestV3,
   previewDirectInlineV3,
+  validateDirectNativeEvidenceInstructionV3,
   validateRuntimeAccountProfileV2,
 } from './directInlineV3';
 import {
@@ -24,6 +27,10 @@ import {
   CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID,
   DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3,
   DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3,
+  DIRECT_NATIVE_EVIDENCE_BUYER_MESSAGE_OFFSET_V3,
+  DIRECT_NATIVE_EVIDENCE_BYTES_V3,
+  DIRECT_NATIVE_EVIDENCE_DESCRIPTOR_BYTES_V3,
+  DIRECT_NATIVE_EVIDENCE_SELLER_MESSAGE_OFFSET_V3,
   DIRECT_SIGNED_PARTICIPANT_BYTES_V3,
   HOT_EXECUTION_ENVELOPE_BYTES_V3,
   HOT_FIXED_ACCOUNT_COUNT_V3,
@@ -78,6 +85,13 @@ function runtimeProfile(): Uint8Array {
 
 function account(address: string, isWritable = false, executable = false): DirectHotAccountMetaV3 {
   return Object.freeze({ address, isSigner: false, isWritable, executable });
+}
+
+function containsSlice(bytes: Uint8Array, needle: Uint8Array): boolean {
+  for (let offset = 0; offset + needle.length <= bytes.length; offset += 1) {
+    if (needle.every((value, index) => bytes[offset + index] === value)) return true;
+  }
+  return false;
 }
 
 function route(checked = true): DirectInlineHotRouteV3 {
@@ -161,9 +175,62 @@ describe('Direct V3 inline transaction construction', () => {
     expect(plan.hotInstructionBytes).toHaveLength(HOT_EXECUTION_ENVELOPE_BYTES_V3 + DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3);
     expect(plan.requiredSigners).toEqual([candidate.payer]);
     expect(plan.transaction.message.compiledInstructions).toHaveLength(2);
+    expect(plan.nativeEvidenceBytes).toHaveLength(DIRECT_NATIVE_EVIDENCE_BYTES_V3);
+    expect(plan.nativeEvidenceInstructionIndex).toBe(0);
+    expect(plan.tradingInstructionIndex).toBe(1);
+    expect(plan.nativeMessageOffsets).toEqual([
+      DIRECT_NATIVE_EVIDENCE_SELLER_MESSAGE_OFFSET_V3,
+      DIRECT_NATIVE_EVIDENCE_BUYER_MESSAGE_OFFSET_V3,
+    ]);
+    expect(containsSlice(plan.nativeEvidenceBytes, encodeCompactIntentSigningMessageV2(seller.intent))).toBe(false);
+    expect(containsSlice(plan.nativeEvidenceBytes, encodeCompactIntentSigningMessageV2(buyer.intent))).toBe(false);
     expect(plan.wireBytes.length).toBeLessThanOrEqual(1_232);
     expect(plan.loadedAddresses).toBeGreaterThan(20);
     expect(() => compileDirectInlineTransactionV3({ route: route(false), seller, buyer, fill: 2_000n, executionPrice: 500_000n, clockSlot: 1_000n })).toThrow(/unavailable/);
+  });
+
+  it('binds native evidence to exact Trading offsets and assembler-derived instruction index', () => {
+    const candidate = route();
+    const { seller, buyer } = participants(candidate.market);
+    const plan = compileDirectInlineTransactionV3({ route: candidate, seller, buyer, fill: 2_000n, executionPrice: 500_000n, clockSlot: 1_000n });
+    const trading = new TransactionInstruction({
+      programId: new PublicKey(candidate.tradingProgram),
+      keys: [],
+      data: plan.hotInstructionBytes as Buffer,
+    });
+    const evidence = new TransactionInstruction({
+      programId: Ed25519Program.programId,
+      keys: [],
+      data: plan.nativeEvidenceBytes as Buffer,
+    });
+    expect(() => validateDirectNativeEvidenceInstructionV3(
+      evidence, trading, plan.tradingInstructionIndex, new PublicKey(candidate.tradingProgram),
+    )).not.toThrow();
+
+    const offset = plan.nativeEvidenceBytes.slice();
+    new DataView(offset.buffer).setUint16(2 + 8, DIRECT_NATIVE_EVIDENCE_SELLER_MESSAGE_OFFSET_V3 - 1, true);
+    expect(() => validateDirectNativeEvidenceInstructionV3(
+      new TransactionInstruction({ programId: Ed25519Program.programId, keys: [], data: offset as Buffer }),
+      trading, plan.tradingInstructionIndex, new PublicKey(candidate.tradingProgram),
+    )).toThrow(/offset or instruction index/);
+
+    const instructionIndex = plan.nativeEvidenceBytes.slice();
+    new DataView(instructionIndex.buffer).setUint16(2 + DIRECT_NATIVE_EVIDENCE_DESCRIPTOR_BYTES_V3 + 12, 0, true);
+    expect(() => validateDirectNativeEvidenceInstructionV3(
+      new TransactionInstruction({ programId: Ed25519Program.programId, keys: [], data: instructionIndex as Buffer }),
+      trading, plan.tradingInstructionIndex, new PublicKey(candidate.tradingProgram),
+    )).toThrow(/offset or instruction index/);
+
+    expect(() => validateDirectNativeEvidenceInstructionV3(
+      new TransactionInstruction({ programId: new PublicKey(key(88)), keys: [], data: plan.nativeEvidenceBytes as Buffer }),
+      trading, plan.tradingInstructionIndex, new PublicKey(candidate.tradingProgram),
+    )).toThrow(/substitutes the Ed25519 program/);
+    expect(() => validateDirectNativeEvidenceInstructionV3(
+      evidence,
+      new TransactionInstruction({ programId: new PublicKey(key(87)), keys: [], data: plan.hotInstructionBytes as Buffer }),
+      plan.tradingInstructionIndex,
+      new PublicKey(candidate.tradingProgram),
+    )).toThrow(/not the authenticated Trading program/);
   });
 
   it('refuses every noncanonical lookup-table shape before transaction construction', () => {

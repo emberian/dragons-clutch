@@ -34,6 +34,16 @@ import {
   DIRECT_EXECUTION_REQUEST_VERSION_V3,
   DIRECT_INLINE_ORDINARY_ACTION_V3,
   DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3,
+  DIRECT_NATIVE_EVIDENCE_BUYER_MAKER_OFFSET_V3,
+  DIRECT_NATIVE_EVIDENCE_BUYER_MESSAGE_OFFSET_V3,
+  DIRECT_NATIVE_EVIDENCE_BYTES_V3,
+  DIRECT_NATIVE_EVIDENCE_DESCRIPTOR_BYTES_V3,
+  DIRECT_NATIVE_EVIDENCE_DIRECT_BIAS_V3,
+  DIRECT_NATIVE_EVIDENCE_HEADER_BYTES_V3,
+  DIRECT_NATIVE_EVIDENCE_PARTICIPANT_BYTES_V3,
+  DIRECT_NATIVE_EVIDENCE_SELLER_MAKER_OFFSET_V3,
+  DIRECT_NATIVE_EVIDENCE_SELLER_MESSAGE_OFFSET_V3,
+  DIRECT_NATIVE_EVIDENCE_SIGNATURE_COUNT_V3,
   DIRECT_SIGNED_PARTICIPANT_BYTES_V3,
   HEADER_BYTES,
   HOT_EXECUTION_ENVELOPE_BYTES_V3,
@@ -54,9 +64,7 @@ import {
 import { PACKET_DATA_SIZE } from './directTransaction';
 
 const MAX_U64 = 18_446_744_073_709_551_615n;
-const ED25519_DESCRIPTOR_BYTES = 14;
-const ED25519_HEADER_BYTES = 2 + 2 * ED25519_DESCRIPTOR_BYTES;
-const ED25519_PARTICIPANT_BYTES = 96;
+const MAX_U16 = 0xffff;
 
 export type CompactIntentV2Input = Readonly<{
   side: 0 | 1;
@@ -130,6 +138,10 @@ export type DirectInlineEconomicPreviewV3 = Readonly<{
 export type DirectInlineTransactionPlanV3 = Readonly<{
   requestBytes: Uint8Array;
   hotInstructionBytes: Uint8Array;
+  nativeEvidenceBytes: Uint8Array;
+  nativeEvidenceInstructionIndex: number;
+  tradingInstructionIndex: number;
+  nativeMessageOffsets: ReadonlyArray<number>;
   transaction: VersionedTransaction;
   wireBytes: Uint8Array;
   requiredSigners: ReadonlyArray<string>;
@@ -212,6 +224,20 @@ function putU64(bytes: Uint8Array, offset: number, value: bigint): void {
   new DataView(bytes.buffer, bytes.byteOffset + offset, 8).setBigUint64(0, exactU64(value, 'u64 field'), true);
 }
 
+function readU16(bytes: Uint8Array, offset: number): number {
+  if (!Number.isInteger(offset) || offset < 0 || offset + 2 > bytes.length) throw new Error('native evidence u16 coordinate exceeds its exact wire');
+  return new DataView(bytes.buffer, bytes.byteOffset + offset, 2).getUint16(0, true);
+}
+
+function readU32(bytes: Uint8Array, offset: number): number {
+  if (!Number.isInteger(offset) || offset < 0 || offset + 4 > bytes.length) throw new Error('Direct instruction u32 coordinate exceeds its exact wire');
+  return new DataView(bytes.buffer, bytes.byteOffset + offset, 4).getUint32(0, true);
+}
+
+function same(left: Uint8Array, right: Uint8Array): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
 export function encodeCompactIntentV2(input: CompactIntentV2Input): Uint8Array {
   if (!Number.isInteger(input.outcome) || input.outcome < 0 || input.outcome > 0xffff_ffff) throw new Error('outcome is outside the runtime u32 coordinate');
   if (input.side !== 0 && input.side !== 1) throw new Error('side must be Sell 0 or Buy 1');
@@ -270,27 +296,128 @@ export function encodeDirectInlineOrdinaryRequestV3(
   return output;
 }
 
-function nativeEd25519V3(seller: SignedDirectIntentV3, buyer: SignedDirectIntentV3): TransactionInstruction {
-  const output = new Uint8Array(ED25519_HEADER_BYTES + 2 * ED25519_PARTICIPANT_BYTES);
-  output[0] = 2;
-  for (const [index, participant, messageOffset] of [
-    [0, seller, HOT_EXECUTION_ENVELOPE_BYTES_V3 + 64],
-    [1, buyer, HOT_EXECUTION_ENVELOPE_BYTES_V3 + 268],
-  ] as const) {
-    const descriptor = 2 + index * ED25519_DESCRIPTOR_BYTES;
-    const publicKey = ED25519_HEADER_BYTES + index * ED25519_PARTICIPANT_BYTES;
+type DirectNativeParticipantV3 = Readonly<{
+  makerOffset: number;
+  messageOffset: number;
+  signature: Uint8Array;
+  field: string;
+}>;
+
+function directNativeParticipantsV3(
+  currentInstruction: TransactionInstruction,
+  expectedTradingProgram: PublicKey,
+  sellerSignature: Uint8Array,
+  buyerSignature: Uint8Array,
+): ReadonlyArray<DirectNativeParticipantV3> {
+  if (!currentInstruction.programId.equals(expectedTradingProgram)) {
+    throw new Error('native evidence current instruction is not the authenticated Trading program');
+  }
+  const bytes = new Uint8Array(currentInstruction.data);
+  if (DIRECT_NATIVE_EVIDENCE_DIRECT_BIAS_V3 !== 0
+      || bytes.length !== HOT_EXECUTION_ENVELOPE_BYTES_V3 + DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3
+      || !same(bytes.slice(0, 8), HOT_EXECUTION_MAGIC_V3)
+      || readU16(bytes, 8) !== HOT_EXECUTION_VERSION_V3
+      || readU16(bytes, 10) !== HOT_EXECUTION_PROFILE_V3
+      || readU32(bytes, 12) !== DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3
+      || bytes.slice(120, HOT_EXECUTION_ENVELOPE_BYTES_V3).some((value) => value !== 0)) {
+    throw new Error('native evidence current instruction is not one canonical direct-bias-zero Hot envelope');
+  }
+  const request = HOT_EXECUTION_ENVELOPE_BYTES_V3;
+  if (!same(bytes.slice(request, request + 8), DIRECT_EXECUTION_REQUEST_MAGIC_V3)
+      || readU16(bytes, request + 8) !== DIRECT_EXECUTION_REQUEST_VERSION_V3
+      || readU16(bytes, request + 10) !== 0
+      || readU32(bytes, request + 12) !== DIRECT_INLINE_ORDINARY_ACTION_V3
+      || readU32(bytes, request + 16) !== DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3 - DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3
+      || bytes.slice(request + 20, request + DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3).some((value) => value !== 0)) {
+    throw new Error('native evidence current instruction does not contain canonical InlineOrdinary request bytes');
+  }
+  const participants = Object.freeze([
+    Object.freeze({ makerOffset: DIRECT_NATIVE_EVIDENCE_SELLER_MAKER_OFFSET_V3, messageOffset: DIRECT_NATIVE_EVIDENCE_SELLER_MESSAGE_OFFSET_V3, signature: exactSignature(sellerSignature, 'seller signature'), field: 'seller' }),
+    Object.freeze({ makerOffset: DIRECT_NATIVE_EVIDENCE_BUYER_MAKER_OFFSET_V3, messageOffset: DIRECT_NATIVE_EVIDENCE_BUYER_MESSAGE_OFFSET_V3, signature: exactSignature(buyerSignature, 'buyer signature'), field: 'buyer' }),
+  ]);
+  for (const participant of participants) {
+    if (participant.messageOffset + COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2 > bytes.length
+        || bytes.slice(participant.makerOffset, participant.makerOffset + 32).every((value) => value === 0)
+        || bytes.slice(participant.messageOffset, participant.messageOffset + COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2).every((value) => value === 0)) {
+      throw new Error(`native evidence ${participant.field} range exceeds or is zero in the authenticated Trading instruction`);
+    }
+  }
+  if (same(bytes.slice(participants[0].makerOffset, participants[0].makerOffset + 32), bytes.slice(participants[1].makerOffset, participants[1].makerOffset + 32))) {
+    throw new Error('native evidence seller and buyer identities alias');
+  }
+  return participants;
+}
+
+/** Encode the canonical 222-byte native instruction by reference to the current Trading bytes. */
+export function buildDirectNativeEvidenceInstructionV3(
+  currentInstruction: TransactionInstruction,
+  currentInstructionIndex: number,
+  expectedTradingProgram: PublicKey,
+  sellerSignature: Uint8Array,
+  buyerSignature: Uint8Array,
+): TransactionInstruction {
+  if (!Number.isInteger(currentInstructionIndex) || currentInstructionIndex < 0 || currentInstructionIndex > MAX_U16) {
+    throw new Error('native evidence current instruction index exceeds u16');
+  }
+  const participants = directNativeParticipantsV3(currentInstruction, expectedTradingProgram, sellerSignature, buyerSignature);
+  const output = new Uint8Array(DIRECT_NATIVE_EVIDENCE_BYTES_V3);
+  output[0] = DIRECT_NATIVE_EVIDENCE_SIGNATURE_COUNT_V3;
+  for (const [index, participant] of participants.entries()) {
+    const descriptor = 2 + index * DIRECT_NATIVE_EVIDENCE_DESCRIPTOR_BYTES_V3;
+    const publicKey = DIRECT_NATIVE_EVIDENCE_HEADER_BYTES_V3 + index * DIRECT_NATIVE_EVIDENCE_PARTICIPANT_BYTES_V3;
     const signature = publicKey + 32;
     putU16(output, descriptor, signature);
-    putU16(output, descriptor + 2, 0xffff);
+    putU16(output, descriptor + 2, MAX_U16);
     putU16(output, descriptor + 4, publicKey);
-    putU16(output, descriptor + 6, 0xffff);
-    putU16(output, descriptor + 8, messageOffset);
+    putU16(output, descriptor + 6, MAX_U16);
+    putU16(output, descriptor + 8, participant.messageOffset);
     putU16(output, descriptor + 10, COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2);
-    putU16(output, descriptor + 12, 1);
-    output.set(exactKey(participant.maker, `${index === 0 ? 'seller' : 'buyer'} maker`).toBytes(), publicKey);
-    output.set(exactSignature(participant.signature, `${index === 0 ? 'seller' : 'buyer'} signature`), signature);
+    putU16(output, descriptor + 12, currentInstructionIndex);
+    output.set(currentInstruction.data.slice(participant.makerOffset, participant.makerOffset + 32), publicKey);
+    output.set(participant.signature, signature);
   }
-  return new TransactionInstruction({ programId: Ed25519Program.programId, keys: [], data: output as Buffer });
+  const instruction = new TransactionInstruction({ programId: Ed25519Program.programId, keys: [], data: output as Buffer });
+  validateDirectNativeEvidenceInstructionV3(instruction, currentInstruction, currentInstructionIndex, expectedTradingProgram);
+  return instruction;
+}
+
+/** Hostile-decode one native-evidence instruction against its exact current Trading instruction. */
+export function validateDirectNativeEvidenceInstructionV3(
+  evidence: TransactionInstruction,
+  currentInstruction: TransactionInstruction,
+  currentInstructionIndex: number,
+  expectedTradingProgram: PublicKey,
+): void {
+  if (!evidence.programId.equals(Ed25519Program.programId) || evidence.keys.length !== 0) {
+    throw new Error('Direct native evidence substitutes the Ed25519 program or account frame');
+  }
+  if (!Number.isInteger(currentInstructionIndex) || currentInstructionIndex < 0 || currentInstructionIndex > MAX_U16) {
+    throw new Error('Direct native evidence current instruction index exceeds u16');
+  }
+  const participants = directNativeParticipantsV3(currentInstruction, expectedTradingProgram, new Uint8Array(64).fill(1), new Uint8Array(64).fill(1));
+  const bytes = new Uint8Array(evidence.data);
+  if (bytes.length !== DIRECT_NATIVE_EVIDENCE_BYTES_V3
+      || bytes[0] !== DIRECT_NATIVE_EVIDENCE_SIGNATURE_COUNT_V3 || bytes[1] !== 0) {
+    throw new Error('Direct native evidence has another count, reserved byte, or exact width');
+  }
+  for (const [index, participant] of participants.entries()) {
+    const descriptor = 2 + index * DIRECT_NATIVE_EVIDENCE_DESCRIPTOR_BYTES_V3;
+    const publicKey = DIRECT_NATIVE_EVIDENCE_HEADER_BYTES_V3 + index * DIRECT_NATIVE_EVIDENCE_PARTICIPANT_BYTES_V3;
+    const signature = publicKey + 32;
+    if (readU16(bytes, descriptor) !== signature
+        || readU16(bytes, descriptor + 2) !== MAX_U16
+        || readU16(bytes, descriptor + 4) !== publicKey
+        || readU16(bytes, descriptor + 6) !== MAX_U16
+        || readU16(bytes, descriptor + 8) !== participant.messageOffset
+        || readU16(bytes, descriptor + 10) !== COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2
+        || readU16(bytes, descriptor + 12) !== currentInstructionIndex) {
+      throw new Error(`Direct native evidence descriptor ${index} substitutes an offset or instruction index`);
+    }
+    if (!same(bytes.slice(publicKey, publicKey + 32), currentInstruction.data.slice(participant.makerOffset, participant.makerOffset + 32))
+        || bytes.slice(signature, signature + 64).every((value) => value === 0)) {
+      throw new Error(`Direct native evidence participant ${index} substitutes its Trading maker or zero signature`);
+    }
+  }
 }
 
 function validateFixedFrame(route: DirectInlineHotRouteV3): void {
@@ -430,11 +557,26 @@ export function compileDirectInlineTransactionV3(input: Readonly<{
     ],
     data: hotInstructionBytes as Buffer,
   });
+  const instructions: TransactionInstruction[] = [];
+  const nativeEvidenceInstructionIndex = instructions.length;
+  const tradingInstructionIndex = nativeEvidenceInstructionIndex + 1;
+  const nativeEvidence = buildDirectNativeEvidenceInstructionV3(
+    trading,
+    tradingInstructionIndex,
+    trading.programId,
+    input.seller.signature,
+    input.buyer.signature,
+  );
+  instructions.push(nativeEvidence, trading);
+  if (instructions[tradingInstructionIndex - 1] !== nativeEvidence
+      || instructions[tradingInstructionIndex] !== trading) {
+    throw new Error('Direct native evidence is not immediately adjacent to its current Trading instruction');
+  }
   exactKey(input.route.recentBlockhash, 'recent blockhash');
   const transaction = new VersionedTransaction(new TransactionMessage({
     payerKey: exactKey(input.route.payer, 'payer'),
     recentBlockhash: input.route.recentBlockhash,
-    instructions: [nativeEd25519V3(input.seller, input.buyer), trading],
+    instructions,
   }).compileToV0Message([...input.route.lookupTables]));
   const wireBytes = transaction.serialize();
   if (wireBytes.length > PACKET_DATA_SIZE) throw new Error(`Direct V3 transaction is ${wireBytes.length} bytes, above the ${PACKET_DATA_SIZE}-byte packet bound`);
@@ -445,6 +587,13 @@ export function compileDirectInlineTransactionV3(input: Readonly<{
   return Object.freeze({
     requestBytes,
     hotInstructionBytes,
+    nativeEvidenceBytes: new Uint8Array(nativeEvidence.data),
+    nativeEvidenceInstructionIndex,
+    tradingInstructionIndex,
+    nativeMessageOffsets: Object.freeze([
+      DIRECT_NATIVE_EVIDENCE_SELLER_MESSAGE_OFFSET_V3,
+      DIRECT_NATIVE_EVIDENCE_BUYER_MESSAGE_OFFSET_V3,
+    ]),
     transaction,
     wireBytes,
     requiredSigners,

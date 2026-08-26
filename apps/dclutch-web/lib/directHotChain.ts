@@ -639,10 +639,14 @@ export function validateDirectSignedRequestProfileV2(bytes: Uint8Array): void {
     }
   }
   const destinations = new Set<number>();
-  for (const [index, expectedOffset] of [[0, 192], [1, 396]] as const) {
+  for (const [index, expectedOffset] of [
+    [0, DirectAbi.DIRECT_NATIVE_EVIDENCE_SELLER_MESSAGE_OFFSET_V3],
+    [1, DirectAbi.DIRECT_NATIVE_EVIDENCE_BUYER_MESSAGE_OFFSET_V3],
+  ] as const) {
     const offset = tail + index * DirectAbi.NATIVE_SIGNATURE_REQUIREMENT_BYTES_V1;
-    if (u16(bytes, offset) !== expectedOffset || u16(bytes, offset + 2) !== 172) {
-      throw new Error(`InlineOrdinary signature requirement ${index} selects another current-instruction message`);
+    if (u16(bytes, offset) !== expectedOffset
+        || u16(bytes, offset + 2) !== DirectAbi.COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2) {
+      throw new Error(`InlineOrdinary signature requirement ${index} selects another authenticated Trading-instruction message`);
     }
     const destination = readU32(bytes, offset + 4);
     if (destination >= commonIdentities || destinations.has(destination)) throw new Error('InlineOrdinary signature requirements select an invalid or aliased identity register');

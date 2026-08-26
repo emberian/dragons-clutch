@@ -159,11 +159,11 @@ function signedRequestProfileFixture(): Uint8Array {
   putU32(bytes, operation + Abi.REQUEST_OPERATION_REQUEST_OFFSET_OFFSET, 12);
   putU64(bytes, operation + Abi.REQUEST_OPERATION_IMMEDIATE_OFFSET, 1n);
   const requirements = embedded + embeddedBytes;
-  putU16(bytes, requirements, 192);
-  putU16(bytes, requirements + 2, 172);
+  putU16(bytes, requirements, Abi.DIRECT_NATIVE_EVIDENCE_SELLER_MESSAGE_OFFSET_V3);
+  putU16(bytes, requirements + 2, Abi.COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2);
   putU32(bytes, requirements + 4, Abi.IDENTITY_SELLER_NATIVE_SIGNER_V3);
-  putU16(bytes, requirements + Abi.NATIVE_SIGNATURE_REQUIREMENT_BYTES_V1, 396);
-  putU16(bytes, requirements + Abi.NATIVE_SIGNATURE_REQUIREMENT_BYTES_V1 + 2, 172);
+  putU16(bytes, requirements + Abi.NATIVE_SIGNATURE_REQUIREMENT_BYTES_V1, Abi.DIRECT_NATIVE_EVIDENCE_BUYER_MESSAGE_OFFSET_V3);
+  putU16(bytes, requirements + Abi.NATIVE_SIGNATURE_REQUIREMENT_BYTES_V1 + 2, Abi.COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2);
   putU32(bytes, requirements + Abi.NATIVE_SIGNATURE_REQUIREMENT_BYTES_V1 + 4, Abi.IDENTITY_BUYER_NATIVE_SIGNER_V3);
   return bytes;
 }
@@ -208,6 +208,9 @@ describe('Direct V3 chain-selected artifacts', () => {
     const strategy = descriptorFixture();
     strategy.set(identity(11), Abi.CAPABILITY_PROGRAM_V4_STRATEGY_SCHEMA_OFFSET);
     expect(() => decodeDirectDescriptorV4(strategy)).toThrow(/schema-bound/);
+    const staleAccountProfile = descriptorFixture();
+    staleAccountProfile.set(identity(12), Abi.CAPABILITY_PROGRAM_V4_ACCOUNT_PROFILE_PROGRAM_OFFSET);
+    expect(() => decodeDirectDescriptorV4(staleAccountProfile)).toThrow(/schema-bound/);
     const parallelLifecycle = descriptorFixture();
     parallelLifecycle.set(identity(11), Abi.CAPABILITY_PROGRAM_V4_DERIVATION_POLICY_OFFSET);
     expect(() => decodeDirectDescriptorV4(parallelLifecycle)).toThrow(/schema-bound/);
@@ -218,8 +221,8 @@ describe('Direct V3 chain-selected artifacts', () => {
     const offset = signedRequestProfileFixture();
     const embeddedBytes = Abi.REQUEST_PROFILE_HEADER_BYTES_V1 + Abi.REQUEST_PROFILE_OPERATION_BYTES_V1;
     const requirements = Abi.REQUEST_PROFILE_V2_HEADER_BYTES + embeddedBytes;
-    putU16(offset, requirements, 191);
-    expect(() => validateDirectSignedRequestProfileV2(offset)).toThrow(/current-instruction message/);
+    putU16(offset, requirements, Abi.DIRECT_NATIVE_EVIDENCE_SELLER_MESSAGE_OFFSET_V3 - 1);
+    expect(() => validateDirectSignedRequestProfileV2(offset)).toThrow(/authenticated Trading-instruction message/);
 
     const alias = signedRequestProfileFixture();
     putU32(alias, requirements + Abi.NATIVE_SIGNATURE_REQUIREMENT_BYTES_V1 + 4, Abi.IDENTITY_SELLER_NATIVE_SIGNER_V3);

@@ -14,6 +14,7 @@ const sources = Object.freeze({
   set: readFileSync(new URL('crates/dclutch-capability-program-contract/src/generated_set_v1.rs', root), 'utf8'),
   setV2: readFileSync(new URL('crates/dclutch-capability-program-contract/src/generated_set_v2.rs', root), 'utf8'),
   direct: readFileSync(new URL('crates/dclutch-direct-codec/src/execution_v3.rs', root), 'utf8'),
+  nativeEvidence: readFileSync(new URL('crates/dclutch-direct-codec/src/native_evidence_v3.rs', root), 'utf8'),
   intent: readFileSync(new URL('crates/dclutch-direct-codec/src/generated_intent_v2.rs', root), 'utf8'),
   ordinary: readFileSync(new URL('crates/dclutch-direct-codec/src/ordinary_v3.rs', root), 'utf8'),
   ordinaryArtifacts: readFileSync(new URL('crates/dclutch-direct-codec/src/ordinary_artifacts_v3.rs', root), 'utf8'),
@@ -40,7 +41,7 @@ function scalar(source, name) {
 }
 
 function scalarExpression(source, name, expected) {
-  const match = sources[source].match(new RegExp(`pub const ${name}: [^=]+ = ([^;]+);`));
+  const match = sources[source].match(new RegExp(`(?:pub(?:\\(crate\\))? )?const ${name}: [^=]+ = ([^;]+);`));
   if (!match || match[1].trim() !== expected) throw new Error(`unexpected Rust expression ${source}.${name}`);
 }
 
@@ -135,6 +136,8 @@ const scalars = Object.freeze([
   ['setV2', 'CAPABILITY_PROGRAM_SET_ENTRY_DESCRIPTOR_PROGRAM_OFFSET_V2'], ['setV2', 'CAPABILITY_PROGRAM_SET_ENTRY_RESERVED_OFFSET_V2'],
   ['direct', 'DIRECT_EXECUTION_REQUEST_VERSION_V3'], ['direct', 'DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3'],
   ['direct', 'DIRECT_EXECUTION_REQUEST_SELECTOR_OFFSET_V3'],
+  ['nativeEvidence', 'DIRECT_NATIVE_EVIDENCE_DIRECT_BIAS_V3'],
+  ['nativeEvidence', 'DIRECT_NATIVE_EVIDENCE_REGISTRY_BIAS_V3'],
   ['intent', 'COMPACT_INTENT_VERSION_V2'], ['intent', 'COMPACT_INTENT_BYTES_V2'],
   ['intent', 'COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2'],
   ['intent', 'COMPACT_INTENT_MAGIC_OFFSET_V2'],
@@ -177,13 +180,32 @@ const scalars = Object.freeze([
 ]);
 
 scalarExpression('hot', 'HOT_FAMILY_REQUEST_OFFSET_V3', 'HOT_EXECUTION_ENVELOPE_BYTES_V3');
+scalarExpression('nativeEvidence', 'HEADER_BYTES', '2 + SIGNATURES * DESCRIPTOR_BYTES');
+scalarExpression('nativeEvidence', 'PARTICIPANT_BYTES', '32 + 64');
+scalarExpression('nativeEvidence', 'DIRECT_NATIVE_EVIDENCE_BYTES_V3', 'HEADER_BYTES + SIGNATURES * PARTICIPANT_BYTES');
+const evidenceSignatures = scalar('nativeEvidence', 'SIGNATURES');
+const evidenceDescriptorBytes = scalar('nativeEvidence', 'DESCRIPTOR_BYTES');
+if (evidenceSignatures !== 2
+    || !sources.nativeEvidence.includes('native_signature_slice_v3')
+    || !sources.nativeEvidence.includes('HOT_FAMILY_REQUEST_OFFSET_V3')) {
+  throw new Error('Direct native evidence no longer has the exact two-party InlineOrdinary geometry');
+}
 let output = '// @generated from canonical Rust/Lean-emitted Direct Hot V3 / Capability V4 ABIs; do not edit.\n';
 output += '// Regenerate with: npm run abi:direct-v3\n\n';
 for (const [source, name] of scalars) output += `export const ${name} = ${scalar(source, name)} as const;\n`;
 output += 'export const HOT_FAMILY_REQUEST_OFFSET_V3 = HOT_EXECUTION_ENVELOPE_BYTES_V3;\n';
 output += 'export const DIRECT_SIGNED_PARTICIPANT_BYTES_V3 = 32 + COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2;\n';
 output += 'export const DIRECT_INLINE_ORDINARY_ACTION_V3 = 1 as const;\n';
-output += 'export const DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3 = DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3 + 2 * DIRECT_SIGNED_PARTICIPANT_BYTES_V3 + 16;\n\n';
+output += 'export const DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3 = DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3 + 2 * DIRECT_SIGNED_PARTICIPANT_BYTES_V3 + 16;\n';
+output += `export const DIRECT_NATIVE_EVIDENCE_SIGNATURE_COUNT_V3 = ${evidenceSignatures} as const;\n`;
+output += `export const DIRECT_NATIVE_EVIDENCE_DESCRIPTOR_BYTES_V3 = ${evidenceDescriptorBytes} as const;\n`;
+output += 'export const DIRECT_NATIVE_EVIDENCE_HEADER_BYTES_V3 = 2 + DIRECT_NATIVE_EVIDENCE_SIGNATURE_COUNT_V3 * DIRECT_NATIVE_EVIDENCE_DESCRIPTOR_BYTES_V3;\n';
+output += 'export const DIRECT_NATIVE_EVIDENCE_PARTICIPANT_BYTES_V3 = 32 + 64;\n';
+output += 'export const DIRECT_NATIVE_EVIDENCE_BYTES_V3 = DIRECT_NATIVE_EVIDENCE_HEADER_BYTES_V3 + DIRECT_NATIVE_EVIDENCE_SIGNATURE_COUNT_V3 * DIRECT_NATIVE_EVIDENCE_PARTICIPANT_BYTES_V3;\n';
+output += 'export const DIRECT_NATIVE_EVIDENCE_SELLER_MESSAGE_OFFSET_V3 = DIRECT_NATIVE_EVIDENCE_DIRECT_BIAS_V3 + HOT_FAMILY_REQUEST_OFFSET_V3 + DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3 + 32;\n';
+output += 'export const DIRECT_NATIVE_EVIDENCE_SELLER_MAKER_OFFSET_V3 = DIRECT_NATIVE_EVIDENCE_SELLER_MESSAGE_OFFSET_V3 - 32;\n';
+output += 'export const DIRECT_NATIVE_EVIDENCE_BUYER_MESSAGE_OFFSET_V3 = DIRECT_NATIVE_EVIDENCE_SELLER_MESSAGE_OFFSET_V3 + DIRECT_SIGNED_PARTICIPANT_BYTES_V3;\n';
+output += 'export const DIRECT_NATIVE_EVIDENCE_BUYER_MAKER_OFFSET_V3 = DIRECT_NATIVE_EVIDENCE_BUYER_MESSAGE_OFFSET_V3 - 32;\n\n';
 for (const [source, name] of [
   ['hot', 'HOT_EXECUTION_MAGIC_V3'], ['descriptor', 'CAPABILITY_PROGRAM_V3_MAGIC'],
   ['descriptorV4', 'CAPABILITY_PROGRAM_V4_MAGIC'], ['setV2', 'CAPABILITY_PROGRAM_SET_MAGIC_V2'],
