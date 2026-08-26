@@ -198,6 +198,22 @@ fn verifier_selection_and_certificate_are_distinct_failure_atomic_banks() {
 }
 
 #[test]
+fn incumbent_certificate_cannot_cross_product_or_batch_coordinates() {
+    let fixture = consider_fixture();
+    let mut substituted = fixture.certificate;
+    substituted[80] ^= 1;
+    assert_eq!(
+        decode_incumbent(
+            &fixture.selection,
+            Some(&substituted),
+            candidate(),
+            policy(),
+        ),
+        Err(PlanErrorV2::CoordinateMismatch)
+    );
+}
+
+#[test]
 fn freeze_initialize_and_settlement_emit_plans_without_child_authority() {
     let fixture = consider_fixture();
     let selection = SelectionCursorV1::decode(&fixture.selection).expect("selection");

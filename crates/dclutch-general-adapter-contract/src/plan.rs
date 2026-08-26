@@ -508,7 +508,11 @@ fn decode_incumbent(
         (Some(expected), Some(bytes)) if bytes.len() == VERIFIED_CANDIDATE_BYTES_V1 => {
             let value =
                 VerifiedCandidateV1::decode(bytes).map_err(|_| PlanErrorV2::InvalidInput)?;
-            if value.candidate_id == expected {
+            if value.candidate_id == expected
+                && value.product_id == candidate.product_id
+                && value.batch_id == candidate.batch_id
+                && value.outcome_count == candidate.outcome_count
+            {
                 Ok(Some(value))
             } else {
                 Err(PlanErrorV2::CoordinateMismatch)
