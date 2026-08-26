@@ -755,6 +755,12 @@ pub fn process_hot_execution_v3(
             .get(runtime_start..)
             .ok_or(TradingSbfError::Content)?,
     )?;
+    let input_scratch_pages = authenticated_input_scratch_pages_v3(
+        account_profile,
+        &dynamic_spans.widths,
+        dynamic_spans.transport_span,
+        &runtime_accounts,
+    )?;
     if runtime_accounts.len() > MAX_HOT_RUNTIME_ACCOUNTS_V3 {
         return Err(TradingSbfError::UnsupportedContent.into());
     }
@@ -928,6 +934,7 @@ pub fn process_hot_execution_v3(
             caller_authorities,
             strategy_extras,
             runtime_accounts: &runtime_accounts,
+            input_scratch_pages,
             observations: &observations,
             envelope,
             context,
@@ -1508,6 +1515,7 @@ struct AdmittedCandidateViewV3<'a, 'data, 'accounts, 'info> {
     caller_authorities: &'a [AccountInfo<'info>],
     strategy_extras: &'a [AccountInfo<'info>],
     runtime_accounts: &'a [&'accounts AccountInfo<'info>],
+    input_scratch_pages: &'a [&'accounts AccountInfo<'info>],
     observations: &'a [AccountObservationV1<'data>],
     envelope: HotExecutionEnvelopeV3,
     context: &'a TradingFamilyContextV1,
@@ -1789,7 +1797,7 @@ fn execute_admitted_candidate_v3(
             accelerator_programdata,
         },
         view.runtime_accounts,
-        &[],
+        view.input_scratch_pages,
         &admitted_context,
         *view.strategy,
         view.scalars,
@@ -1956,6 +1964,7 @@ fn logical_projection_key_v3(
 struct AuthenticatedDynamicSpanWidthsV3 {
     widths: Vec<u32>,
     request_projection_scalars: Vec<u64>,
+    transport_span: Option<u16>,
 }
 
 fn require_dynamic_span_transition_ownership_v3(
@@ -2039,6 +2048,7 @@ fn authenticate_dynamic_span_widths_v3(
         return Ok(AuthenticatedDynamicSpanWidthsV3 {
             widths: Vec::new(),
             request_projection_scalars: Vec::new(),
+            transport_span: None,
         });
     }
     let mut input_scalars = vec![0_u64; scalar_count];
@@ -2099,7 +2109,7 @@ fn authenticate_dynamic_span_widths_v3(
         });
         if request_owned {
             if !effect_owned {
-                return Err(TradingSbfError::Content.into());
+                require_trailing_account_profile_only_span_v3(profile, span)?;
             }
         } else {
             if effect_owned
@@ -2108,6 +2118,7 @@ fn authenticate_dynamic_span_widths_v3(
             {
                 return Err(TradingSbfError::Content.into());
             }
+            require_trailing_account_profile_only_span_v3(profile, span)?;
             let page_count = transport_page_count.ok_or(TradingSbfError::Content)?;
             *projected_scalars
                 .get_mut(usize::from(span.count_scalar()))
@@ -2139,10 +2150,69 @@ fn authenticate_dynamic_span_widths_v3(
         .successor
         .account_count(tail_count, &projected_scalars)
         .map_err(|_| TradingSbfError::Content)?;
+    if disposition == StrategyDispositionV2::AdmittedAot
+        && transport_page_count.is_some() != transport_span.is_some()
+    {
+        return Err(TradingSbfError::Content.into());
+    }
     Ok(AuthenticatedDynamicSpanWidthsV3 {
         widths,
         request_projection_scalars: projected_scalars,
+        transport_span,
     })
+}
+
+fn authenticated_input_scratch_pages_v3<'accounts, 'info>(
+    profile: AccountProfileV2<'_>,
+    span_counts: &[u32],
+    transport_span: Option<u16>,
+    logical_accounts: &'accounts [&'accounts AccountInfo<'info>],
+) -> Result<&'accounts [&'accounts AccountInfo<'info>], ProgramError> {
+    let Some(transport_span) = transport_span else {
+        return Ok(&[]);
+    };
+    if profile.artifact_profile() != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+        || span_counts.len() != usize::from(profile.dynamic_fixed_span_count())
+        || transport_span >= profile.dynamic_fixed_span_count()
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    let span = profile
+        .dynamic_fixed_span(transport_span)
+        .map_err(|_| TradingSbfError::Content)?;
+    require_trailing_account_profile_only_span_v3(profile, span)?;
+    let prior_width = span_counts
+        .get(..usize::from(transport_span))
+        .ok_or(TradingSbfError::Content)?
+        .iter()
+        .try_fold(0_usize, |sum, width| {
+            sum.checked_add(usize::try_from(*width).map_err(|_| TradingSbfError::Content)?)
+                .ok_or(TradingSbfError::Content)
+        })?;
+    let start = usize::from(profile.fixed_account_count())
+        .checked_add(prior_width)
+        .ok_or(TradingSbfError::Content)?;
+    let width = usize::try_from(
+        *span_counts
+            .get(usize::from(transport_span))
+            .ok_or(TradingSbfError::Content)?,
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    let end = start.checked_add(width).ok_or(TradingSbfError::Content)?;
+    logical_accounts
+        .get(start..end)
+        .ok_or_else(|| TradingSbfError::Content.into())
+}
+
+fn require_trailing_account_profile_only_span_v3(
+    profile: AccountProfileV2<'_>,
+    span: dclutch_account_profile_contract::v2::DynamicFixedSpanV2,
+) -> Result<(), ProgramError> {
+    if span.insertion_coordinate() != profile.fixed_account_count() {
+        Err(TradingSbfError::Content.into())
+    } else {
+        Ok(())
+    }
 }
 
 fn expand_runtime_accounts_v3<'accounts, 'info>(
@@ -5585,8 +5655,8 @@ mod tests {
         encode::{
             AccountAliasInputV2, AccountCoordinateV2, AccountEffectPermissionsV2,
             AccountOperationInputV2, AccountPrivilegesV2, AccountProfileArtifactV2,
-            AccountRuleInputV2, AccountRuleWithPrestateInputV2, RegisterGeometryV2,
-            ScalarCoordinateV2, encode_account_profile_v2_atomic,
+            AccountRuleInputV2, AccountRuleWithPrestateInputV2, DynamicFixedSpanInputV2,
+            RegisterGeometryV2, ScalarCoordinateV2, encode_account_profile_v2_atomic,
             encode_account_profile_with_dynamic_fixed_span_v2_atomic,
         },
     };
@@ -6014,6 +6084,77 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn profile13_trailing_transport_span_selects_exact_scratch_pages() {
+        const READONLY: AccountPrivilegesV2 = AccountPrivilegesV2::new(false, false, false);
+        const NO_EFFECTS: AccountEffectPermissionsV2 =
+            AccountEffectPermissionsV2::new(false, false, false);
+        let rule = AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: READONLY,
+                effect_permissions: NO_EFFECTS,
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length: 0,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::AuthenticatedOpaqueReadonlyData,
+        };
+        let fixed_rules = [rule; 5];
+        let spans = [DynamicFixedSpanInputV2 {
+            insertion_coordinate: 5,
+            count_scalar: 0,
+            rule_start: 0,
+            rule_stride: 1,
+            minimum: 1,
+            maximum: 4,
+            step: 1,
+        }];
+        let width = DYNAMIC_FIXED_SPAN_HEADER_BYTES
+            + ACCOUNT_PROFILE_RULE_BYTES * (fixed_rules.len() + 1)
+            + dclutch_account_profile_contract::v2::DYNAMIC_FIXED_SPAN_ENTRY_BYTES;
+        let mut scratch = vec![0_u8; width];
+        let mut bytes = vec![0_u8; width];
+        encode_account_profile_with_dynamic_fixed_span_v2_atomic(
+            TrustedEnvironmentV2::None,
+            TrustedIdentityEnvironmentV2::None,
+            TrustedBuiltinIdentityV2::SystemProgram { destination: 0 },
+            &spans,
+            &fixed_rules,
+            &[rule],
+            &[],
+            RegisterGeometryV2 {
+                common_scalars: 1,
+                item_scalar_stride: 0,
+                common_identities: 1,
+                item_identity_stride: 0,
+            },
+            &mut scratch,
+            &mut bytes,
+        )
+        .expect("trailing scratch span");
+        let profile = AccountProfileV2::decode(&bytes).expect("decode profile13");
+        let make_account = || {
+            AccountInfo::new(
+                Box::leak(Box::new(Pubkey::new_unique())),
+                false,
+                false,
+                Box::leak(Box::new(0_u64)),
+                Box::leak(Vec::new().into_boxed_slice()),
+                Box::leak(Box::new(Pubkey::new_unique())),
+                false,
+            )
+        };
+        let accounts = (0..7).map(|_| make_account()).collect::<Vec<_>>();
+        let logical = accounts.iter().collect::<Vec<_>>();
+        let pages = authenticated_input_scratch_pages_v3(profile, &[2], Some(0), &logical)
+            .expect("exact trailing pages");
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0].key, accounts[5].key);
+        assert_eq!(pages[1].key, accounts[6].key);
+        assert!(authenticated_input_scratch_pages_v3(profile, &[2], Some(1), &logical).is_err());
+        assert!(authenticated_input_scratch_pages_v3(profile, &[4], Some(0), &logical).is_err());
     }
 
     #[cfg(any(
