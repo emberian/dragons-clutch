@@ -21,6 +21,8 @@ pub const PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V1: u16 = 15;
 pub const AFFINE_FIXED_ACCOUNT_COUNT_V1: u16 = 20;
 /// Exact sparse native-transfer frame width.
 pub const SPARSE_NATIVE_TRANSFER_ACCOUNT_COUNT_V1: u16 = 22;
+/// Exact SignedDeltaV3 frame width before its runtime Position table.
+pub const SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3: u16 = 20;
 
 /// Stable frame-spec refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -113,8 +115,12 @@ pub enum ClaimsFrameRoleV1 {
     RegistryProgram,
     /// Trading program.
     TradingProgram,
+    /// Descriptor-selected caller program for a family-neutral signed delta.
+    CallerProgram,
     /// Trading ProgramData.
     TradingProgramData,
+    /// Checked-release caller ProgramData for a family-neutral signed delta.
+    CallerProgramData,
     /// Claims program.
     ClaimsProgram,
     /// Claims ProgramData.
@@ -131,6 +137,8 @@ pub enum ClaimsFrameRoleV1 {
     RentProgram,
     /// Runtime sorted affine Position-table entry.
     AffinePosition(u16),
+    /// Runtime sorted SignedDelta Position-table entry.
+    SignedDeltaPosition(u16),
     /// Sparse-transfer source Position.
     SparseSourcePosition,
     /// Sparse-transfer destination Position.
@@ -164,6 +172,8 @@ impl ClaimsFrameAccountV1 {
 pub enum ClaimsProgramDataRoleV1 {
     /// Release-selected Trading caller ProgramData.
     Trading,
+    /// Descriptor-selected caller ProgramData.
+    Caller,
     /// Release-selected Claims ProgramData.
     Claims,
     /// Release-selected Core ProgramData.
@@ -240,6 +250,45 @@ pub struct ClaimsFrameSpecV1 {
 /// Borrow-free exact sparse native-transfer frame specification.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SparseNativeTransferFrameSpecV1;
+
+/// Borrow-free exact SignedDeltaV3 frame specification.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SignedDeltaFrameSpecV3 {
+    position_count: u16,
+}
+
+impl SignedDeltaFrameSpecV3 {
+    /// Select one exact nonempty runtime Position table.
+    pub fn new(position_count: u32) -> Result<Self, FrameSpecErrorV1> {
+        let position_count =
+            u16::try_from(position_count).map_err(|_| FrameSpecErrorV1::InvalidPositionCount)?;
+        if position_count == 0 {
+            return Err(FrameSpecErrorV1::InvalidPositionCount);
+        }
+        Ok(Self { position_count })
+    }
+
+    /// Exact fixed prefix plus runtime Position-table width.
+    pub fn account_count(self) -> Result<u16, FrameSpecErrorV1> {
+        SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3
+            .checked_add(self.position_count)
+            .ok_or(FrameSpecErrorV1::InvalidPositionCount)
+    }
+
+    /// Exact account role and privileges at `index`.
+    pub fn account(self, index: u16) -> Result<ClaimsFrameAccountV1, FrameSpecErrorV1> {
+        if index >= self.account_count()? {
+            return Err(FrameSpecErrorV1::InvalidCoordinate);
+        }
+        signed_delta(index)
+    }
+
+    /// Exact action-selected data geometry at `index`.
+    pub fn data(self, index: u16) -> Result<ClaimsFrameDataV1, FrameSpecErrorV1> {
+        let account = self.account(index)?;
+        data_for_role(account.role(), false)
+    }
+}
 
 impl SparseNativeTransferFrameSpecV1 {
     /// Exact account count.
@@ -362,11 +411,15 @@ fn data_for_role(
         ClaimsFrameRoleV1::ActivationCache => ClaimsFrameDataV1::ActivationCache,
         ClaimsFrameRoleV1::RegistryProgram
         | ClaimsFrameRoleV1::TradingProgram
+        | ClaimsFrameRoleV1::CallerProgram
         | ClaimsFrameRoleV1::ClaimsProgram
         | ClaimsFrameRoleV1::CoreProgram
         | ClaimsFrameRoleV1::RentProgram => ClaimsFrameDataV1::UpgradeableProgram,
         ClaimsFrameRoleV1::TradingProgramData => {
             ClaimsFrameDataV1::ProgramData(ClaimsProgramDataRoleV1::Trading)
+        }
+        ClaimsFrameRoleV1::CallerProgramData => {
+            ClaimsFrameDataV1::ProgramData(ClaimsProgramDataRoleV1::Caller)
         }
         ClaimsFrameRoleV1::ClaimsProgramData => {
             ClaimsFrameDataV1::ProgramData(ClaimsProgramDataRoleV1::Claims)
@@ -383,8 +436,51 @@ fn data_for_role(
                 item_stride: 8,
             }
         }
+        ClaimsFrameRoleV1::SignedDeltaPosition(_) => ClaimsFrameDataV1::ProductTail {
+            base: u32::try_from(LIABILITY_BASIS_POSITION_HEADER_BYTES_V2)
+                .map_err(|_| FrameSpecErrorV1::InvalidCoordinate)?,
+            item_stride: 8,
+        },
     };
     Ok(value)
+}
+
+fn signed_delta(index: u16) -> Result<ClaimsFrameAccountV1, FrameSpecErrorV1> {
+    let role = match index {
+        0 => ClaimsFrameRoleV1::CallerAuthority,
+        1 => ClaimsFrameRoleV1::ClaimsMarket,
+        2 => ClaimsFrameRoleV1::BasisRecord,
+        3 => ClaimsFrameRoleV1::BasisStaging,
+        4 => ClaimsFrameRoleV1::ProductRecord,
+        5 => ClaimsFrameRoleV1::ProductStaging,
+        6 => ClaimsFrameRoleV1::ResultDomainRecord,
+        7 => ClaimsFrameRoleV1::ResultDomainStaging,
+        8 => ClaimsFrameRoleV1::PortfolioRecord,
+        9 => ClaimsFrameRoleV1::PortfolioStaging,
+        10 => ClaimsFrameRoleV1::RentSysvar,
+        11 => ClaimsFrameRoleV1::CoreMarket,
+        12 => ClaimsFrameRoleV1::ActivationCache,
+        13 => ClaimsFrameRoleV1::RegistryProgram,
+        14 => ClaimsFrameRoleV1::CallerProgram,
+        15 => ClaimsFrameRoleV1::CallerProgramData,
+        16 => ClaimsFrameRoleV1::ClaimsProgram,
+        17 => ClaimsFrameRoleV1::ClaimsProgramData,
+        18 => ClaimsFrameRoleV1::CoreProgram,
+        19 => ClaimsFrameRoleV1::CoreProgramData,
+        position => ClaimsFrameRoleV1::SignedDeltaPosition(
+            position
+                .checked_sub(SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3)
+                .ok_or(FrameSpecErrorV1::InvalidCoordinate)?,
+        ),
+    };
+    let privileges = match index {
+        0 => SIGNER,
+        1 => WRITABLE,
+        13 | 14 | 16 | 18 => EXECUTABLE,
+        position if position >= SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3 => WRITABLE,
+        _ => READONLY,
+    };
+    Ok(account(role, privileges))
 }
 
 fn account(role: ClaimsFrameRoleV1, privileges: FramePrivilegesV1) -> ClaimsFrameAccountV1 {
@@ -622,5 +718,36 @@ mod tests {
             spec.account(20).expect("source"),
             spec.account(21).expect("destination")
         );
+    }
+
+    #[test]
+    fn signed_delta_frame_owns_fixed_and_runtime_position_geometry() {
+        let spec = SignedDeltaFrameSpecV3::new(258).expect("runtime frame");
+        assert_eq!(spec.account_count(), Ok(278));
+        assert_eq!(
+            spec.account(14).expect("caller program").role(),
+            ClaimsFrameRoleV1::CallerProgram
+        );
+        assert!(
+            spec.account(14)
+                .expect("caller program")
+                .privileges()
+                .executable()
+        );
+        assert_eq!(
+            spec.account(277).expect("last Position").role(),
+            ClaimsFrameRoleV1::SignedDeltaPosition(257)
+        );
+        assert!(
+            spec.account(277)
+                .expect("last Position")
+                .privileges()
+                .writable()
+        );
+        assert_eq!(
+            SignedDeltaFrameSpecV3::new(0),
+            Err(FrameSpecErrorV1::InvalidPositionCount)
+        );
+        assert_eq!(spec.account(278), Err(FrameSpecErrorV1::InvalidCoordinate));
     }
 }

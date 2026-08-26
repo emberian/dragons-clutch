@@ -15,6 +15,11 @@ use core::{
 
 use dclutch_claims_svm::{
     CallerRole,
+    frame_spec_v1::{
+        ClaimsFrameRoleV1,
+        SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3 as SEMANTIC_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3,
+        SignedDeltaFrameSpecV3,
+    },
     protocol_position_v2::ProtocolPositionSeedsV2,
     signed_delta_v3::{DeltaDirectionV3, SignedDeltaPlanV3, SignedDeltaReceiptV3, SignedDeltaV3},
 };
@@ -37,7 +42,8 @@ use crate::liability_basis_v2::{
 };
 
 /// Exact fixed account count before the runtime Position tail.
-pub const SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3: usize = 20;
+pub const SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3: usize =
+    SEMANTIC_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3 as usize;
 
 /// Exact already-authenticated parent request joined to one generated
 /// SignedDeltaV3 plan.
@@ -49,27 +55,6 @@ pub(crate) struct AuthenticatedSignedDeltaParentV3 {
     pub(crate) parent_context: [u8; 32],
     pub(crate) parent_request_digest: [u8; 32],
 }
-
-const AUTHORITY_ACCOUNT: usize = 0;
-const MARKET_ACCOUNT: usize = 1;
-const BASIS_RECORD_ACCOUNT: usize = 2;
-const BASIS_STAGING_ACCOUNT: usize = 3;
-const PRODUCT_RECORD_ACCOUNT: usize = 4;
-const PRODUCT_STAGING_ACCOUNT: usize = 5;
-const RESULT_DOMAIN_RECORD_ACCOUNT: usize = 6;
-const RESULT_DOMAIN_STAGING_ACCOUNT: usize = 7;
-const PORTFOLIO_RECORD_ACCOUNT: usize = 8;
-const PORTFOLIO_STAGING_ACCOUNT: usize = 9;
-const RENT_ACCOUNT: usize = 10;
-const CORE_MARKET_ACCOUNT: usize = 11;
-const ACTIVATION_CACHE_ACCOUNT: usize = 12;
-const REGISTRY_PROGRAM_ACCOUNT: usize = 13;
-const CALLER_PROGRAM_ACCOUNT: usize = 14;
-const CALLER_PROGRAMDATA_ACCOUNT: usize = 15;
-const CLAIMS_PROGRAM_ACCOUNT: usize = 16;
-const CLAIMS_PROGRAMDATA_ACCOUNT: usize = 17;
-const CORE_PROGRAM_ACCOUNT: usize = 18;
-const CORE_PROGRAMDATA_ACCOUNT: usize = 19;
 
 const MARKET_REVISION_OFFSET: usize = 16;
 const POSITION_REVISION_OFFSET: usize = 16;
@@ -107,6 +92,7 @@ impl From<SignedDeltaSbfErrorV3> for ProgramError {
 
 #[derive(Clone, Copy)]
 struct SignedDeltaAccountsV3<'accounts, 'info> {
+    all: &'accounts [AccountInfo<'info>],
     authority: &'accounts AccountInfo<'info>,
     market: &'accounts AccountInfo<'info>,
     basis_record: &'accounts AccountInfo<'info>,
@@ -135,34 +121,57 @@ impl<'accounts, 'info> SignedDeltaAccountsV3<'accounts, 'info> {
         accounts: &'accounts [AccountInfo<'info>],
         position_count: u32,
     ) -> Result<Self, ProgramError> {
-        let count = usize::try_from(position_count)
-            .ok()
-            .and_then(|count| SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3.checked_add(count))
-            .ok_or(SignedDeltaSbfErrorV3::Accounts)?;
+        let spec = SignedDeltaFrameSpecV3::new(position_count)
+            .map_err(|_| SignedDeltaSbfErrorV3::Accounts)?;
+        let count = usize::from(
+            spec.account_count()
+                .map_err(|_| SignedDeltaSbfErrorV3::Accounts)?,
+        );
         if accounts.len() != count {
             return Err(SignedDeltaSbfErrorV3::Accounts.into());
         }
         Ok(Self {
-            authority: account(accounts, AUTHORITY_ACCOUNT)?,
-            market: account(accounts, MARKET_ACCOUNT)?,
-            basis_record: account(accounts, BASIS_RECORD_ACCOUNT)?,
-            basis_staging: account(accounts, BASIS_STAGING_ACCOUNT)?,
-            product_record: account(accounts, PRODUCT_RECORD_ACCOUNT)?,
-            product_staging: account(accounts, PRODUCT_STAGING_ACCOUNT)?,
-            result_domain_record: account(accounts, RESULT_DOMAIN_RECORD_ACCOUNT)?,
-            result_domain_staging: account(accounts, RESULT_DOMAIN_STAGING_ACCOUNT)?,
-            portfolio_record: account(accounts, PORTFOLIO_RECORD_ACCOUNT)?,
-            portfolio_staging: account(accounts, PORTFOLIO_STAGING_ACCOUNT)?,
-            rent: account(accounts, RENT_ACCOUNT)?,
-            core_market: account(accounts, CORE_MARKET_ACCOUNT)?,
-            cache: account(accounts, ACTIVATION_CACHE_ACCOUNT)?,
-            registry: account(accounts, REGISTRY_PROGRAM_ACCOUNT)?,
-            caller_program: account(accounts, CALLER_PROGRAM_ACCOUNT)?,
-            caller_programdata: account(accounts, CALLER_PROGRAMDATA_ACCOUNT)?,
-            claims_program: account(accounts, CLAIMS_PROGRAM_ACCOUNT)?,
-            claims_programdata: account(accounts, CLAIMS_PROGRAMDATA_ACCOUNT)?,
-            core_program: account(accounts, CORE_PROGRAM_ACCOUNT)?,
-            core_programdata: account(accounts, CORE_PROGRAMDATA_ACCOUNT)?,
+            all: accounts,
+            authority: account_for_role(accounts, spec, ClaimsFrameRoleV1::CallerAuthority)?,
+            market: account_for_role(accounts, spec, ClaimsFrameRoleV1::ClaimsMarket)?,
+            basis_record: account_for_role(accounts, spec, ClaimsFrameRoleV1::BasisRecord)?,
+            basis_staging: account_for_role(accounts, spec, ClaimsFrameRoleV1::BasisStaging)?,
+            product_record: account_for_role(accounts, spec, ClaimsFrameRoleV1::ProductRecord)?,
+            product_staging: account_for_role(accounts, spec, ClaimsFrameRoleV1::ProductStaging)?,
+            result_domain_record: account_for_role(
+                accounts,
+                spec,
+                ClaimsFrameRoleV1::ResultDomainRecord,
+            )?,
+            result_domain_staging: account_for_role(
+                accounts,
+                spec,
+                ClaimsFrameRoleV1::ResultDomainStaging,
+            )?,
+            portfolio_record: account_for_role(accounts, spec, ClaimsFrameRoleV1::PortfolioRecord)?,
+            portfolio_staging: account_for_role(
+                accounts,
+                spec,
+                ClaimsFrameRoleV1::PortfolioStaging,
+            )?,
+            rent: account_for_role(accounts, spec, ClaimsFrameRoleV1::RentSysvar)?,
+            core_market: account_for_role(accounts, spec, ClaimsFrameRoleV1::CoreMarket)?,
+            cache: account_for_role(accounts, spec, ClaimsFrameRoleV1::ActivationCache)?,
+            registry: account_for_role(accounts, spec, ClaimsFrameRoleV1::RegistryProgram)?,
+            caller_program: account_for_role(accounts, spec, ClaimsFrameRoleV1::CallerProgram)?,
+            caller_programdata: account_for_role(
+                accounts,
+                spec,
+                ClaimsFrameRoleV1::CallerProgramData,
+            )?,
+            claims_program: account_for_role(accounts, spec, ClaimsFrameRoleV1::ClaimsProgram)?,
+            claims_programdata: account_for_role(
+                accounts,
+                spec,
+                ClaimsFrameRoleV1::ClaimsProgramData,
+            )?,
+            core_program: account_for_role(accounts, spec, ClaimsFrameRoleV1::CoreProgram)?,
+            core_programdata: account_for_role(accounts, spec, ClaimsFrameRoleV1::CoreProgramData)?,
             positions: accounts
                 .get(SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3..)
                 .ok_or(SignedDeltaSbfErrorV3::Accounts)?,
@@ -274,48 +283,28 @@ fn authenticate_privileges(
     program_id: &Pubkey,
     accounts: &SignedDeltaAccountsV3<'_, '_>,
 ) -> Result<(), ProgramError> {
-    if !accounts.authority.is_signer
-        || accounts.authority.is_writable
-        || accounts.authority.executable
-        || !accounts.market.is_writable
-        || accounts.market.is_signer
-        || accounts.market.executable
-        || accounts.claims_program.key != program_id
-        || !accounts.claims_program.executable
-        || accounts.claims_program.is_signer
-        || accounts.claims_program.is_writable
-        || !accounts.registry.executable
-        || accounts.registry.is_signer
-        || accounts.registry.is_writable
-        || !accounts.caller_program.executable
-        || accounts.caller_program.is_signer
-        || accounts.caller_program.is_writable
-        || !accounts.core_program.executable
-        || accounts.core_program.is_signer
-        || accounts.core_program.is_writable
-        || accounts.rent.key != &sysvar::rent::ID
+    let position_count =
+        u32::try_from(accounts.positions.len()).map_err(|_| SignedDeltaSbfErrorV3::Accounts)?;
+    let spec =
+        SignedDeltaFrameSpecV3::new(position_count).map_err(|_| SignedDeltaSbfErrorV3::Accounts)?;
+    for index in 0..spec
+        .account_count()
+        .map_err(|_| SignedDeltaSbfErrorV3::Accounts)?
     {
-        return Err(SignedDeltaSbfErrorV3::Accounts.into());
-    }
-    for account in [
-        accounts.basis_record,
-        accounts.basis_staging,
-        accounts.product_record,
-        accounts.product_staging,
-        accounts.result_domain_record,
-        accounts.result_domain_staging,
-        accounts.portfolio_record,
-        accounts.portfolio_staging,
-        accounts.rent,
-        accounts.core_market,
-        accounts.cache,
-        accounts.caller_programdata,
-        accounts.claims_programdata,
-        accounts.core_programdata,
-    ] {
-        if account.is_signer || account.is_writable || account.executable {
+        let expected = spec
+            .account(index)
+            .map_err(|_| SignedDeltaSbfErrorV3::Accounts)?
+            .privileges();
+        let observed = account(accounts.all, usize::from(index))?;
+        if observed.is_signer != expected.signer()
+            || observed.is_writable != expected.writable()
+            || observed.executable != expected.executable()
+        {
             return Err(SignedDeltaSbfErrorV3::Accounts.into());
         }
+    }
+    if accounts.claims_program.key != program_id || accounts.rent.key != &sysvar::rent::ID {
+        return Err(SignedDeltaSbfErrorV3::Accounts.into());
     }
     for (left, position) in accounts.positions.iter().enumerate() {
         if !position.is_writable
@@ -332,6 +321,31 @@ fn authenticate_privileges(
         }
     }
     Ok(())
+}
+
+fn account_for_role<'accounts, 'info>(
+    accounts: &'accounts [AccountInfo<'info>],
+    spec: SignedDeltaFrameSpecV3,
+    role: ClaimsFrameRoleV1,
+) -> Result<&'accounts AccountInfo<'info>, ProgramError> {
+    let mut found = None;
+    for index in 0..spec
+        .account_count()
+        .map_err(|_| SignedDeltaSbfErrorV3::Accounts)?
+    {
+        if spec
+            .account(index)
+            .map_err(|_| SignedDeltaSbfErrorV3::Accounts)?
+            .role()
+            == role
+        {
+            if found.is_some() {
+                return Err(SignedDeltaSbfErrorV3::Accounts.into());
+            }
+            found = Some(account(accounts, usize::from(index))?);
+        }
+    }
+    found.ok_or_else(|| SignedDeltaSbfErrorV3::Accounts.into())
 }
 
 fn authenticate_authority(
