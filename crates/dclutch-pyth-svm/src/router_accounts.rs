@@ -6,8 +6,8 @@ pub const ENCODED_VAA_DISCRIMINATOR_V1: [u8; 8] = [0xe2, 0x65, 0xa3, 0x04, 0x85,
 pub const GUARDIAN_SET_DISCRIMINATOR_V1: [u8; 8] = [0x78, 0x4d, 0x4a, 0x62, 0x22, 0x53, 0x60, 0x7d];
 /// Router processing status for a cryptographically verified VAA.
 pub const ENCODED_VAA_VERIFIED_STATUS_V1: u8 = 2;
-/// Fixed header before the signed VAA body.
-pub const ENCODED_VAA_HEADER_BYTES_V1: usize = 41;
+/// Fixed Anchor/Borsh header before the signed VAA vector payload.
+pub const ENCODED_VAA_HEADER_BYTES_V1: usize = 46;
 /// Serialized GuardianSet header through its vector count.
 pub const GUARDIAN_SET_HEADER_BYTES_V1: usize = 16;
 /// One Ethereum guardian address width.
@@ -22,13 +22,15 @@ pub enum RouterAccountErrorV1 {
     InvalidDiscriminator,
     /// Encoded VAA was not in the terminal verified phase.
     NotVerified,
+    /// Router account format version was not the pinned V1 format.
+    UnsupportedAccountVersion,
     /// Signed VAA version was not the pinned V1 format.
     UnsupportedVaaVersion,
     /// Guardian count was zero, did not fit V1, or differed from the release.
     InvalidGuardianCount,
     /// Guardian set index in account and VAA differed.
     GuardianSetMismatch,
-    /// Reserved allocation tail contained nonzero bytes.
+    /// Serialized content left a noncanonical account-allocation tail.
     NonCanonicalTail,
 }
 
@@ -44,7 +46,7 @@ pub struct VerifiedEncodedVaaV1<'a> {
 impl<'a> VerifiedEncodedVaaV1<'a> {
     /// Parse a verified account and its exact V1 signed VAA header.
     pub fn parse(bytes: &'a [u8]) -> Result<Self, RouterAccountErrorV1> {
-        if bytes.len() < 47 {
+        if bytes.len() < ENCODED_VAA_HEADER_BYTES_V1 {
             return Err(RouterAccountErrorV1::InvalidLength);
         }
         if array::<8>(bytes, 0)? != ENCODED_VAA_DISCRIMINATOR_V1 {
@@ -53,8 +55,22 @@ impl<'a> VerifiedEncodedVaaV1<'a> {
         if byte(bytes, 8)? != ENCODED_VAA_VERIFIED_STATUS_V1 {
             return Err(RouterAccountErrorV1::NotVerified);
         }
+        if byte(bytes, 41)? != 1 {
+            return Err(RouterAccountErrorV1::UnsupportedAccountVersion);
+        }
+        let payload_len = usize::try_from(u32::from_le_bytes(array(bytes, 42)?))
+            .map_err(|_| RouterAccountErrorV1::InvalidLength)?;
+        let payload_end = ENCODED_VAA_HEADER_BYTES_V1
+            .checked_add(payload_len)
+            .ok_or(RouterAccountErrorV1::InvalidLength)?;
+        if bytes.len() < payload_end {
+            return Err(RouterAccountErrorV1::InvalidLength);
+        }
+        if bytes.len() != payload_end {
+            return Err(RouterAccountErrorV1::NonCanonicalTail);
+        }
         let signed_vaa = bytes
-            .get(ENCODED_VAA_HEADER_BYTES_V1..)
+            .get(ENCODED_VAA_HEADER_BYTES_V1..payload_end)
             .ok_or(RouterAccountErrorV1::InvalidLength)?;
         if byte(signed_vaa, 0)? != 1 {
             return Err(RouterAccountErrorV1::UnsupportedVaaVersion);
@@ -210,15 +226,47 @@ mod tests {
 
     use super::*;
 
+    fn encoded_account(authority: [u8; 32], signed_vaa: &[u8]) -> std::vec::Vec<u8> {
+        let mut account = std::vec![0_u8; ENCODED_VAA_HEADER_BYTES_V1 + signed_vaa.len()];
+        account
+            .get_mut(..8)
+            .expect("discriminator region")
+            .copy_from_slice(&ENCODED_VAA_DISCRIMINATOR_V1);
+        *account.get_mut(8).expect("status byte") = ENCODED_VAA_VERIFIED_STATUS_V1;
+        account
+            .get_mut(9..41)
+            .expect("authority region")
+            .copy_from_slice(&authority);
+        *account.get_mut(41).expect("account version") = 1;
+        account
+            .get_mut(42..46)
+            .expect("vector length region")
+            .copy_from_slice(
+                &u32::try_from(signed_vaa.len())
+                    .expect("bounded test VAA")
+                    .to_le_bytes(),
+            );
+        account
+            .get_mut(ENCODED_VAA_HEADER_BYTES_V1..)
+            .expect("signed VAA region")
+            .copy_from_slice(signed_vaa);
+        account
+    }
+
+    fn signed_vaa(guardian_set_index: u32, signature_count: u8) -> std::vec::Vec<u8> {
+        let mut signed = std::vec![0_u8; 7 + usize::from(signature_count) * 66];
+        *signed.get_mut(0).expect("signed VAA version") = 1;
+        signed
+            .get_mut(1..5)
+            .expect("guardian index region")
+            .copy_from_slice(&guardian_set_index.to_be_bytes());
+        *signed.get_mut(5).expect("signature count") = signature_count;
+        signed
+    }
+
     #[test]
     fn verified_vaa_and_guardian_set_join_exactly() {
-        let mut encoded = [0_u8; 48 + 66 * 3];
-        encoded[..8].copy_from_slice(&ENCODED_VAA_DISCRIMINATOR_V1);
-        encoded[8] = 2;
-        encoded[9..41].copy_from_slice(&[7; 32]);
-        encoded[41] = 1;
-        encoded[42..46].copy_from_slice(&9_u32.to_be_bytes());
-        encoded[46] = 3;
+        let encoded = encoded_account([7; 32], &signed_vaa(9, 3));
         let vaa = VerifiedEncodedVaaV1::parse(&encoded).expect("verified VAA");
 
         let mut guardians = [0_u8; 16 + 20 * 5 + 8];
@@ -235,16 +283,13 @@ mod tests {
 
     #[test]
     fn processing_and_index_substitutions_refuse() {
-        let mut encoded = [0_u8; 48 + 66];
-        encoded[..8].copy_from_slice(&ENCODED_VAA_DISCRIMINATOR_V1);
-        encoded[8] = 1;
-        encoded[41] = 1;
-        encoded[46] = 1;
+        let mut encoded = encoded_account([7; 32], &signed_vaa(0, 1));
+        *encoded.get_mut(8).expect("status byte") = 1;
         assert_eq!(
             VerifiedEncodedVaaV1::parse(&encoded),
             Err(RouterAccountErrorV1::NotVerified)
         );
-        encoded[8] = 2;
+        *encoded.get_mut(8).expect("status byte") = 2;
         let mut guardians = [0_u8; 16 + 20 + 8];
         guardians[..8].copy_from_slice(&GUARDIAN_SET_DISCRIMINATOR_V1);
         guardians[8..12].copy_from_slice(&1_u32.to_le_bytes());
@@ -259,23 +304,74 @@ mod tests {
     }
 
     #[test]
+    fn account_version_and_vector_bounds_refuse() {
+        let signed = signed_vaa(0, 1);
+        let canonical = encoded_account([7; 32], &signed);
+
+        let mut wrong_account_version = canonical.clone();
+        *wrong_account_version.get_mut(41).expect("account version") = 2;
+        assert_eq!(
+            VerifiedEncodedVaaV1::parse(&wrong_account_version),
+            Err(RouterAccountErrorV1::UnsupportedAccountVersion)
+        );
+
+        let mut wrong_vaa_version = canonical.clone();
+        *wrong_vaa_version
+            .get_mut(ENCODED_VAA_HEADER_BYTES_V1)
+            .expect("signed VAA version") = 2;
+        assert_eq!(
+            VerifiedEncodedVaaV1::parse(&wrong_vaa_version),
+            Err(RouterAccountErrorV1::UnsupportedVaaVersion)
+        );
+
+        let mut overclaimed = canonical.clone();
+        overclaimed
+            .get_mut(42..46)
+            .expect("vector length region")
+            .copy_from_slice(
+                &u32::try_from(signed.len() + 1)
+                    .expect("bounded test VAA")
+                    .to_le_bytes(),
+            );
+        assert_eq!(
+            VerifiedEncodedVaaV1::parse(&overclaimed),
+            Err(RouterAccountErrorV1::InvalidLength)
+        );
+
+        let mut underclaimed = canonical.clone();
+        underclaimed
+            .get_mut(42..46)
+            .expect("vector length region")
+            .copy_from_slice(
+                &u32::try_from(signed.len() - 1)
+                    .expect("bounded test VAA")
+                    .to_le_bytes(),
+            );
+        assert_eq!(
+            VerifiedEncodedVaaV1::parse(&underclaimed),
+            Err(RouterAccountErrorV1::NonCanonicalTail)
+        );
+
+        let mut truncated = canonical.clone();
+        truncated.pop();
+        assert_eq!(
+            VerifiedEncodedVaaV1::parse(&truncated),
+            Err(RouterAccountErrorV1::InvalidLength)
+        );
+
+        let mut trailing = canonical;
+        trailing.push(0);
+        assert_eq!(
+            VerifiedEncodedVaaV1::parse(&trailing),
+            Err(RouterAccountErrorV1::NonCanonicalTail)
+        );
+    }
+
+    #[test]
     fn captured_signed_vaa_has_the_pinned_real_quorum_shape() {
         const SIGNED: &[u8] =
             include_bytes!("../../../fixtures/pyth/local-upgraded-2026-08-22/signed.vaa");
-        let mut account = std::vec![0_u8; ENCODED_VAA_HEADER_BYTES_V1 + SIGNED.len()];
-        account
-            .get_mut(..8)
-            .expect("discriminator region")
-            .copy_from_slice(&ENCODED_VAA_DISCRIMINATOR_V1);
-        *account.get_mut(8).expect("status byte") = ENCODED_VAA_VERIFIED_STATUS_V1;
-        account
-            .get_mut(9..41)
-            .expect("authority region")
-            .copy_from_slice(&[7; 32]);
-        account
-            .get_mut(41..)
-            .expect("signed VAA region")
-            .copy_from_slice(SIGNED);
+        let account = encoded_account([7; 32], SIGNED);
         let view = VerifiedEncodedVaaV1::parse(&account).expect("captured verified VAA");
         assert_eq!(view.guardian_set_index(), 0);
         assert_eq!(view.signature_count(), 13);
