@@ -9,8 +9,6 @@ publish = false
 
 [dependencies]
 
-[workspace]
-
 [lints.rust]
 missing_docs = "deny"
 unsafe_code = "forbid"

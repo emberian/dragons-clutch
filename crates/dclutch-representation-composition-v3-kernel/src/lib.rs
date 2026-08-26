@@ -15,6 +15,7 @@
 //! physical economic writers.
 
 mod abi;
+mod exposure;
 mod graph;
 mod translation;
 
@@ -30,6 +31,18 @@ pub use abi::{
     MAX_COMPOSITION_EDGES_V3, MAX_COMPOSITION_NODES_V3, MAX_COMPOSITION_OUTCOMES_V3,
     MAX_COMPOSITION_TERMS_V3, MIN_COMPOSITION_OUTCOMES_V3, RecordAdmissionV3, Result,
     encode_composition_descriptor_v3_atomic,
+};
+pub use exposure::{
+    COMPOSITION_EXPOSURE_CAPACITY_ID_V3, COMPOSITION_EXPOSURE_CAPACITY_PREIMAGE_V3,
+    COMPOSITION_EXPOSURE_HEADER_BYTES_V3, COMPOSITION_EXPOSURE_MAGIC_V3,
+    COMPOSITION_EXPOSURE_ROW_BYTES_V3, COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
+    COMPOSITION_EXPOSURE_SCHEMA_PREIMAGE_V3, COMPOSITION_EXPOSURE_TERM_BYTES_V3,
+    COMPOSITION_EXPOSURE_VERSION_V3, CompositionExposureBundleV3, CompositionExposureExpectedV3,
+    CompositionExposureInputV3, CompositionExposureLayoutV3, CompositionExposureRowInputV3,
+    CompositionExposureRowLayoutV3, CompositionExposureRowV3, CompositionExposureTermLayoutV3,
+    CompositionExposureTermV3, MAX_COMPOSITION_EXPOSURE_TERMS_V3, MAX_COMPOSITION_PRODUCT_WIDTH_V3,
+    MAX_COMPOSITION_REPRESENTATION_WIDTH_V3, MIN_COMPOSITION_PRODUCT_WIDTH_V3,
+    composition_exposure_bytes_v3, encode_composition_exposure_v3_atomic,
 };
 pub use graph::{
     COMPOSITION_EDGE_BYTES_V3, COMPOSITION_NODE_BYTES_V3, COMPOSITION_TERM_BYTES_V3,
