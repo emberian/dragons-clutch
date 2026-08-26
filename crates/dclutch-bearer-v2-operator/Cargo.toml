@@ -17,6 +17,7 @@ dclutch-product-payoff-v2-codec = { path = "../dclutch-product-payoff-v2-codec" 
 dclutch-rational-representation-v2-contract = { path = "../dclutch-rational-representation-v2-contract" }
 dclutch-rational-representation-v2-kernel = { path = "../dclutch-rational-representation-v2-kernel" }
 dclutch-rational-representation-v2-operator = { path = "../dclutch-rational-representation-v2-operator" }
+dclutch-rational-representation-v2-request-contract = { path = "../dclutch-rational-representation-v2-request-contract" }
 dclutch-request-profile-contract = { path = "../dclutch-request-profile-contract" }
 dclutch-transition-vm = { path = "../dclutch-transition-vm" }
 solana-program = { version = "=3.0.0", default-features = false }
