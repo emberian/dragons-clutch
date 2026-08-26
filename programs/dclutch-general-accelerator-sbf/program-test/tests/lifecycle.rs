@@ -1029,9 +1029,8 @@ async fn real_sbf_consider_replaces_with_best_valid_submitted_candidate_then_fre
     }
 }
 
-#[tokio::test]
-async fn real_sbf_runs_initialize_two_pass_settlement_and_terminal_close() {
-    let fixture = terminal_fixture(1);
+async fn run_full_settlement_lifecycle(width: u32) {
+    let fixture = terminal_fixture(width);
     assert_eq!(
         execute_initialize(&fixture).await,
         AcceleratorDispositionV2::Accepted
@@ -1187,6 +1186,13 @@ async fn real_sbf_runs_initialize_two_pass_settlement_and_terminal_close() {
 }
 
 #[tokio::test]
+async fn real_sbf_runs_full_settlement_at_runtime_widths_one_and_258() {
+    for width in [1_u32, 258] {
+        run_full_settlement_lifecycle(width).await;
+    }
+}
+
+#[tokio::test]
 async fn hostile_n258_initializes_and_refuses_candidate_substitution() {
     let fixture = terminal_fixture(258);
     assert_eq!(
@@ -1197,6 +1203,19 @@ async fn hostile_n258_initializes_and_refuses_candidate_substitution() {
     let final_manifest =
         SettlementManifestV2::decode(fixture.manifests.get(1).expect("final manifest bytes"))
             .expect("final manifest");
+    let out_of_order = execute_settlement(
+        &fixture,
+        Action::Collect,
+        &cursor,
+        Some(final_manifest.as_bytes()),
+        2,
+        1,
+    )
+    .await;
+    assert_eq!(
+        out_of_order.disposition(),
+        AcceleratorDispositionV2::Refused
+    );
     let controller = request(Action::Collect, 1, 2, 1);
     let mut runtime = runtime_for_settlement(
         &fixture,
