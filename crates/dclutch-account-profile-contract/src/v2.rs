@@ -29,6 +29,8 @@ pub const SCHEMA_RELEASE_ID: [u8; 32] = [
 pub const VERSION: u16 = 2;
 /// Canonical runtime-tail physical profile.
 pub const ARTIFACT_PROFILE: u16 = 2;
+/// Runtime-tail physical profile with affine account lengths and selected windows.
+pub const SELECTED_WINDOW_ARTIFACT_PROFILE: u16 = 3;
 /// Exact V2 header width.
 pub const HEADER_BYTES: usize = 32;
 /// Exact account-rule width.
@@ -47,6 +49,11 @@ const OP_PROJECT_DATA_U32: u8 = 7;
 const OP_PROJECT_TAIL_COUNT_U32: u8 = 8;
 const OP_PROJECT_DATA_U64_AFFINE: u8 = 9;
 const OP_PROJECT_DATA_IDENTITY_AFFINE: u8 = 10;
+const OP_SELECT_DATA_WINDOW: u8 = 11;
+const OP_PROJECT_DATA_U64_SELECTED: u8 = 12;
+const OP_PROJECT_DATA_IDENTITY_SELECTED: u8 = 13;
+const OP_PROJECT_DATA_U64_SELECTED_AFFINE: u8 = 14;
+const OP_PROJECT_DATA_IDENTITY_SELECTED_AFFINE: u8 = 15;
 
 /// Stable hostile-decode or projection refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -115,6 +122,7 @@ pub struct AccountRuleV2 {
     alias_kind: AliasKindV2,
     alias_index: u16,
     data_length: u32,
+    data_item_stride: u32,
 }
 
 /// Unique fixed-prefix source selected as the authenticated runtime tail width.
@@ -168,6 +176,11 @@ impl AccountRuleV2 {
         self.data_length
     }
 
+    /// Additional exact account-data bytes per authenticated runtime item.
+    pub const fn data_item_stride(self) -> u32 {
+        self.data_item_stride
+    }
+
     fn permission(self) -> AccountPermission {
         AccountPermission::new(
             self.effect_permissions & EFFECT_PERMISSION_DEBIT_LAMPORTS != 0,
@@ -180,6 +193,7 @@ impl AccountRuleV2 {
 /// Hostile-decoded borrowed runtime-tail profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AccountProfileV2<'a> {
+    artifact_profile: u16,
     fixed_accounts: u16,
     item_account_stride: u16,
     fixed_operations: u16,
@@ -200,13 +214,20 @@ impl<'a> AccountProfileV2<'a> {
         if bytes.get(..8) != Some(MAGIC.as_slice()) {
             return Err(Error::InvalidMagic);
         }
-        if read_u16(bytes, 8)? != VERSION || read_u16(bytes, 10)? != ARTIFACT_PROFILE {
+        let artifact_profile = read_u16(bytes, 10)?;
+        if read_u16(bytes, 8)? != VERSION
+            || !matches!(
+                artifact_profile,
+                ARTIFACT_PROFILE | SELECTED_WINDOW_ARTIFACT_PROFILE
+            )
+        {
             return Err(Error::UnsupportedProfile);
         }
         if read_u32(bytes, 28)? != 0 {
             return Err(Error::NonCanonicalReserved);
         }
         let value = Self {
+            artifact_profile,
             fixed_accounts: read_u16(bytes, 12)?,
             item_account_stride: read_u16(bytes, 14)?,
             fixed_operations: read_u16(bytes, 16)?,
@@ -253,6 +274,11 @@ impl<'a> AccountProfileV2<'a> {
     /// Fixed-prefix account count.
     pub const fn fixed_account_count(self) -> u16 {
         self.fixed_accounts
+    }
+
+    /// Selected physical profile discriminator.
+    pub const fn artifact_profile(self) -> u16 {
+        self.artifact_profile
     }
 
     /// Accounts repeated per authenticated item.
@@ -398,6 +424,9 @@ impl<'a> AccountProfileV2<'a> {
         let mut fixed = 0_u16;
         while fixed < self.fixed_accounts {
             let rule = self.rule(false, fixed)?;
+            if self.artifact_profile == ARTIFACT_PROFILE && rule.data_item_stride != 0 {
+                return Err(Error::NonCanonicalReserved);
+            }
             validate_rule(rule, false, fixed, self.fixed_accounts)?;
             self.require_owner_anchor(false, fixed, rule)?;
             fixed = fixed.checked_add(1).ok_or(Error::InvalidLength)?;
@@ -405,6 +434,9 @@ impl<'a> AccountProfileV2<'a> {
         let mut item = 0_u16;
         while item < self.item_account_stride {
             let rule = self.rule(true, item)?;
+            if self.artifact_profile == ARTIFACT_PROFILE && rule.data_item_stride != 0 {
+                return Err(Error::NonCanonicalReserved);
+            }
             validate_rule(rule, true, item, self.fixed_accounts)?;
             self.require_owner_anchor(true, item, rule)?;
             item = item.checked_add(1).ok_or(Error::InvalidLength)?;
@@ -442,30 +474,93 @@ impl<'a> AccountProfileV2<'a> {
         let mut fixed = 0_u16;
         while fixed < self.fixed_operations {
             let operation = self.operation(false, fixed)?;
-            operation.validate(self, false)?;
+            operation.validate(self, false, fixed)?;
             self.require_unique_projection(false, fixed, operation)?;
             fixed = fixed.checked_add(1).ok_or(Error::InvalidLength)?;
         }
         let mut item = 0_u16;
         while item < self.item_operations {
             let operation = self.operation(true, item)?;
-            operation.validate(self, true)?;
+            operation.validate(self, true, item)?;
             self.require_unique_projection(true, item, operation)?;
             item = item.checked_add(1).ok_or(Error::InvalidLength)?;
         }
         Ok(())
     }
 
+    fn selected_window(self, account: u16) -> Result<(u16, Operation)> {
+        let mut found = None;
+        let mut index = 0_u16;
+        while index < self.fixed_operations {
+            let operation = self.operation(false, index)?;
+            if operation.opcode == OP_SELECT_DATA_WINDOW && operation.account == account {
+                if found.is_some() {
+                    return Err(Error::NonCanonicalOperation);
+                }
+                found = Some((index, operation));
+            }
+            index = index.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        found.ok_or(Error::NonCanonicalOperation)
+    }
+
+    fn selected_item_stride(self, account: u16) -> Result<u32> {
+        let mut found = None;
+        let mut index = 0_u16;
+        while index < self.item_operations {
+            let operation = self.operation(true, index)?;
+            if operation.is_selected_affine_projection() && operation.account == account {
+                if found.is_some_and(|stride| stride != operation.data_stride) {
+                    return Err(Error::NonCanonicalOperation);
+                }
+                found = Some(operation.data_stride);
+            }
+            index = index.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        found.ok_or(Error::NonCanonicalOperation)
+    }
+
+    fn fixed_scalar_projection_index(self, register: u16) -> Result<u16> {
+        let mut index = 0_u16;
+        while index < self.fixed_operations {
+            if self.operation(false, index)?.projection_target()? == Some((false, false, register))
+            {
+                return Ok(index);
+            }
+            index = index.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        Err(Error::NonCanonicalOperation)
+    }
+
     fn validate_tail_count_projection(self) -> Result<()> {
         let affine = self.item_account_stride != 0
             || self.item_operations != 0
             || self.item_scalar_stride != 0
-            || self.item_identity_stride != 0;
+            || self.item_identity_stride != 0
+            || self.has_affine_data_length()?;
         if self.tail_count_projection()?.is_some() == affine {
             Ok(())
         } else {
             Err(Error::NonCanonicalOperation)
         }
+    }
+
+    fn has_affine_data_length(self) -> Result<bool> {
+        let mut fixed = 0_u16;
+        while fixed < self.fixed_accounts {
+            if self.rule(false, fixed)?.data_item_stride != 0 {
+                return Ok(true);
+            }
+            fixed = fixed.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        let mut item = 0_u16;
+        while item < self.item_account_stride {
+            if self.rule(true, item)?.data_item_stride != 0 {
+                return Ok(true);
+            }
+            item = item.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        Ok(false)
     }
 
     fn require_unique_projection(self, item: bool, index: u16, operation: Operation) -> Result<()> {
@@ -645,9 +740,7 @@ fn validate_accounts(
         if account.privileges() != rule.privileges {
             return Err(Error::PrivilegeMismatch);
         }
-        if account.data().len()
-            != usize::try_from(rule.data_length).map_err(|_| Error::DataLengthMismatch)?
-        {
+        if account.data().len() != exact_rule_data_length(rule, tail_count)? {
             return Err(Error::DataLengthMismatch);
         }
         let representative = profile.representative(tail_count, coordinate)?;
@@ -707,6 +800,7 @@ fn apply_operations(
         profile.operation(false, fixed)?.apply(
             profile,
             None,
+            tail_count,
             accounts,
             input_identities,
             scalars,
@@ -721,6 +815,7 @@ fn apply_operations(
             profile.operation(true, operation)?.apply(
                 profile,
                 Some(item),
+                tail_count,
                 accounts,
                 input_identities,
                 scalars,
@@ -762,7 +857,12 @@ impl Operation {
         })
     }
 
-    fn validate(self, profile: AccountProfileV2<'_>, item_body: bool) -> Result<()> {
+    fn validate(
+        self,
+        profile: AccountProfileV2<'_>,
+        item_body: bool,
+        operation_index: u16,
+    ) -> Result<()> {
         if !item_body && (self.account_item || self.register_item) {
             return Err(Error::NonCanonicalOperation);
         }
@@ -782,6 +882,8 @@ impl Operation {
                 | OP_PROJECT_OWNER
                 | OP_PROJECT_DATA_IDENTITY
                 | OP_PROJECT_DATA_IDENTITY_AFFINE
+                | OP_PROJECT_DATA_IDENTITY_SELECTED
+                | OP_PROJECT_DATA_IDENTITY_SELECTED_AFFINE
         );
         let register_bound = if identity {
             if self.register_item {
@@ -817,12 +919,14 @@ impl Operation {
                     || self.account_item
                     || !self.register_item
                     || self.data_stride < 8
-                    || self.data_offset.checked_add(8).is_none_or(|end| {
-                        end > profile
-                            .rule(false, self.account)
-                            .map(|rule| rule.data_length)
-                            .unwrap_or(0)
-                    })
+                    || self.data_offset.checked_add(8).is_none()
+                    || (profile.artifact_profile == ARTIFACT_PROFILE
+                        && self.data_offset.checked_add(8).is_none_or(|end| {
+                            end > profile
+                                .rule(false, self.account)
+                                .map(|rule| rule.data_length)
+                                .unwrap_or(0)
+                        }))
                 {
                     return Err(Error::NonCanonicalOperation);
                 }
@@ -832,10 +936,83 @@ impl Operation {
                     || self.account_item
                     || !self.register_item
                     || self.data_stride < 32
-                    || self.data_offset.checked_add(32).is_none_or(|end| {
-                        end > profile
-                            .rule(false, self.account)
-                            .map(|rule| rule.data_length)
+                    || self.data_offset.checked_add(32).is_none()
+                    || (profile.artifact_profile == ARTIFACT_PROFILE
+                        && self.data_offset.checked_add(32).is_none_or(|end| {
+                            end > profile
+                                .rule(false, self.account)
+                                .map(|rule| rule.data_length)
+                                .unwrap_or(0)
+                        }))
+                {
+                    return Err(Error::NonCanonicalOperation);
+                }
+            }
+            OP_SELECT_DATA_WINDOW => {
+                if profile.artifact_profile != SELECTED_WINDOW_ARTIFACT_PROFILE
+                    || item_body
+                    || self.account_item
+                    || self.register_item
+                    || self.data_stride == 0
+                    || self.data_offset.checked_add(self.data_stride).is_none()
+                    || profile.fixed_scalar_projection_index(self.register)? >= operation_index
+                {
+                    return Err(Error::NonCanonicalOperation);
+                }
+                let item_stride = profile.selected_item_stride(self.account)?;
+                let rule = profile.rule(false, self.account)?;
+                let row_bytes = rule
+                    .data_length
+                    .checked_sub(self.data_offset)
+                    .ok_or(Error::NonCanonicalOperation)?;
+                if row_bytes == 0
+                    || row_bytes % self.data_stride != 0
+                    || rule.data_item_stride
+                        != (row_bytes / self.data_stride)
+                            .checked_mul(item_stride)
+                            .ok_or(Error::NonCanonicalOperation)?
+                {
+                    return Err(Error::NonCanonicalOperation);
+                }
+            }
+            OP_PROJECT_DATA_U64_SELECTED | OP_PROJECT_DATA_IDENTITY_SELECTED => {
+                let (_, window) = profile.selected_window(self.account)?;
+                let width = if self.opcode == OP_PROJECT_DATA_U64_SELECTED {
+                    8
+                } else {
+                    32
+                };
+                if profile.artifact_profile != SELECTED_WINDOW_ARTIFACT_PROFILE
+                    || item_body
+                    || self.account_item
+                    || self.register_item
+                    || self.data_stride != 0
+                    || self
+                        .data_offset
+                        .checked_add(width)
+                        .is_none_or(|end| end > window.data_stride)
+                    || profile.fixed_scalar_projection_index(window.register)? >= operation_index
+                {
+                    return Err(Error::NonCanonicalOperation);
+                }
+            }
+            OP_PROJECT_DATA_U64_SELECTED_AFFINE | OP_PROJECT_DATA_IDENTITY_SELECTED_AFFINE => {
+                let (_, window) = profile.selected_window(self.account)?;
+                let width = if self.opcode == OP_PROJECT_DATA_U64_SELECTED_AFFINE {
+                    8
+                } else {
+                    32
+                };
+                if profile.artifact_profile != SELECTED_WINDOW_ARTIFACT_PROFILE
+                    || !item_body
+                    || self.account_item
+                    || !self.register_item
+                    || self.data_stride < width
+                    || self.data_offset < window.data_stride
+                    || self.data_offset.checked_add(width).is_none_or(|end| {
+                        end > window
+                            .data_stride
+                            .checked_add(self.data_stride)
                             .unwrap_or(0)
                     })
                 {
@@ -864,6 +1041,10 @@ impl Operation {
                 | OP_PROJECT_DATA_IDENTITY
                 | OP_PROJECT_DATA_U64_AFFINE
                 | OP_PROJECT_DATA_IDENTITY_AFFINE
+                | OP_PROJECT_DATA_U64_SELECTED
+                | OP_PROJECT_DATA_IDENTITY_SELECTED
+                | OP_PROJECT_DATA_U64_SELECTED_AFFINE
+                | OP_PROJECT_DATA_IDENTITY_SELECTED_AFFINE
                 | OP_PROJECT_DATA_U32
                 | OP_PROJECT_TAIL_COUNT_U32
         )
@@ -879,8 +1060,17 @@ impl Operation {
                 | OP_PROJECT_OWNER
                 | OP_PROJECT_DATA_IDENTITY
                 | OP_PROJECT_DATA_IDENTITY_AFFINE
+                | OP_PROJECT_DATA_IDENTITY_SELECTED
+                | OP_PROJECT_DATA_IDENTITY_SELECTED_AFFINE
         );
         Ok(Some((identity, self.register_item, self.register)))
+    }
+
+    fn is_selected_affine_projection(self) -> bool {
+        matches!(
+            self.opcode,
+            OP_PROJECT_DATA_U64_SELECTED_AFFINE | OP_PROJECT_DATA_IDENTITY_SELECTED_AFFINE
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -888,6 +1078,7 @@ impl Operation {
         self,
         profile: AccountProfileV2<'_>,
         item: Option<u32>,
+        tail_count: u32,
         accounts: &[AccountObservationV1<'_>],
         input_identities: &[[u8; 32]],
         scalars: &mut [u64],
@@ -990,9 +1181,82 @@ impl Operation {
                     bytes.try_into().map_err(|_| Error::DataOutOfBounds)?,
                 )
             }
+            OP_SELECT_DATA_WINDOW => {
+                let (offset, width) = selected_window_range(profile, self, tail_count, scalars)?;
+                let width = usize::try_from(width).map_err(|_| Error::DataOutOfBounds)?;
+                data_field(account.data(), offset, width).map(|_| ())
+            }
+            OP_PROJECT_DATA_U64_SELECTED | OP_PROJECT_DATA_U64_SELECTED_AFFINE => {
+                let offset = selected_data_offset(profile, self, item, tail_count, scalars, 8)?;
+                let bytes = data_field(account.data(), offset, 8)?;
+                write_scalar(
+                    scalars,
+                    scalar()?,
+                    u64::from_le_bytes(bytes.try_into().map_err(|_| Error::DataOutOfBounds)?),
+                )
+            }
+            OP_PROJECT_DATA_IDENTITY_SELECTED | OP_PROJECT_DATA_IDENTITY_SELECTED_AFFINE => {
+                let offset = selected_data_offset(profile, self, item, tail_count, scalars, 32)?;
+                let bytes = data_field(account.data(), offset, 32)?;
+                write_identity(
+                    identities,
+                    identity()?,
+                    bytes.try_into().map_err(|_| Error::DataOutOfBounds)?,
+                )
+            }
             _ => Err(Error::UnknownOperation),
         }
     }
+}
+
+fn selected_window_range(
+    profile: AccountProfileV2<'_>,
+    window: Operation,
+    tail_count: u32,
+    scalars: &[u64],
+) -> Result<(u32, u32)> {
+    let selector = u32::try_from(
+        *scalars
+            .get(usize::from(window.register))
+            .ok_or(Error::InvalidCoordinate)?,
+    )
+    .map_err(|_| Error::InvalidCoordinate)?;
+    let item_stride = profile.selected_item_stride(window.account)?;
+    let row_width = tail_count
+        .checked_mul(item_stride)
+        .and_then(|tail| window.data_stride.checked_add(tail))
+        .ok_or(Error::DataOutOfBounds)?;
+    let start = selector
+        .checked_mul(row_width)
+        .and_then(|selected| window.data_offset.checked_add(selected))
+        .ok_or(Error::DataOutOfBounds)?;
+    start.checked_add(row_width).ok_or(Error::DataOutOfBounds)?;
+    Ok((start, row_width))
+}
+
+fn selected_data_offset(
+    profile: AccountProfileV2<'_>,
+    operation: Operation,
+    item: Option<u32>,
+    tail_count: u32,
+    scalars: &[u64],
+    width: u32,
+) -> Result<u32> {
+    let (_, window) = profile.selected_window(operation.account)?;
+    let (row_start, _) = selected_window_range(profile, window, tail_count, scalars)?;
+    let local = if operation.is_selected_affine_projection() {
+        operation
+            .data_stride
+            .checked_mul(item.ok_or(Error::InvalidCoordinate)?)
+            .and_then(|offset| operation.data_offset.checked_add(offset))
+            .ok_or(Error::DataOutOfBounds)?
+    } else {
+        operation.data_offset
+    };
+    row_start
+        .checked_add(local)
+        .and_then(|offset| offset.checked_add(width).map(|_| offset))
+        .ok_or(Error::DataOutOfBounds)
 }
 
 fn validate_rule(rule: AccountRuleV2, item: bool, index: u16, fixed_count: u16) -> Result<()> {
@@ -1028,10 +1292,7 @@ fn decode_rule(bytes: &[u8], offset: usize) -> Result<AccountRuleV2> {
         2 => AliasKindV2::SameItem,
         _ => return Err(Error::InvalidAlias),
     };
-    if byte(bytes, add(offset, 3)?)? != 0
-        || read_u16(bytes, add(offset, 6)?)? != 0
-        || read_u32(bytes, add(offset, 12)?)? != 0
-    {
+    if byte(bytes, add(offset, 3)?)? != 0 || read_u16(bytes, add(offset, 6)?)? != 0 {
         return Err(Error::NonCanonicalReserved);
     }
     Ok(AccountRuleV2 {
@@ -1040,7 +1301,16 @@ fn decode_rule(bytes: &[u8], offset: usize) -> Result<AccountRuleV2> {
         alias_kind,
         alias_index: read_u16(bytes, add(offset, 4)?)?,
         data_length: read_u32(bytes, add(offset, 8)?)?,
+        data_item_stride: read_u32(bytes, add(offset, 12)?)?,
     })
+}
+
+fn exact_rule_data_length(rule: AccountRuleV2, tail_count: u32) -> Result<usize> {
+    let width = u64::from(rule.data_item_stride)
+        .checked_mul(u64::from(tail_count))
+        .and_then(|tail| u64::from(rule.data_length).checked_add(tail))
+        .ok_or(Error::DataLengthMismatch)?;
+    usize::try_from(width).map_err(|_| Error::DataLengthMismatch)
 }
 
 fn expanded_rule(profile: AccountProfileV2<'_>, coordinate: usize) -> Result<AccountRuleV2> {
@@ -1220,6 +1490,12 @@ mod tests {
         output
     }
 
+    fn affine_rule(data_length: u32, data_item_stride: u32) -> [u8; RULE_BYTES] {
+        let mut output = rule(data_length);
+        put(&mut output, 12, &data_item_stride.to_le_bytes());
+        output
+    }
+
     fn operation(
         opcode: u8,
         account_item: bool,
@@ -1243,6 +1519,21 @@ mod tests {
         data_stride: u32,
     ) -> [u8; OPERATION_BYTES] {
         let mut output = operation(opcode, false, 0, true, register);
+        put(&mut output, 8, &data_offset.to_le_bytes());
+        put(&mut output, 12, &data_stride.to_le_bytes());
+        output
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn data_operation(
+        opcode: u8,
+        account: u16,
+        register_item: bool,
+        register: u16,
+        data_offset: u32,
+        data_stride: u32,
+    ) -> [u8; OPERATION_BYTES] {
+        let mut output = operation(opcode, false, account, register_item, register);
         put(&mut output, 8, &data_offset.to_le_bytes());
         put(&mut output, 12, &data_stride.to_le_bytes());
         output
@@ -1337,6 +1628,64 @@ mod tests {
         put(&mut data, 12, &[0x31; 32]);
         put(&mut data, 44, &22_u64.to_le_bytes());
         put(&mut data, 52, &[0x32; 32]);
+        data
+    }
+
+    fn selected_window_profile_bytes() -> Vec<u8> {
+        let rules = [rule(4), rule(4), affine_rule(104, 16)];
+        let operations = [
+            operation(OP_REQUIRE_KEY, false, 0, false, 0),
+            operation(OP_PROJECT_TAIL_COUNT_U32, false, 0, false, 0),
+            data_operation(OP_PROJECT_DATA_U32, 1, false, 1, 0, 0),
+            data_operation(OP_SELECT_DATA_WINDOW, 2, false, 1, 8, 48),
+            data_operation(OP_PROJECT_DATA_IDENTITY_SELECTED, 2, false, 1, 0, 0),
+            data_operation(OP_PROJECT_DATA_U64_SELECTED, 2, false, 2, 32, 0),
+            data_operation(OP_PROJECT_DATA_U64_SELECTED_AFFINE, 2, true, 1, 48, 8),
+        ];
+        let mut output =
+            vec![
+                0_u8;
+                HEADER_BYTES + rules.len() * RULE_BYTES + operations.len() * OPERATION_BYTES
+            ];
+        put(&mut output, 0, &MAGIC);
+        for (offset, value) in [
+            (8, VERSION),
+            (10, SELECTED_WINDOW_ARTIFACT_PROFILE),
+            (12, 3),
+            (14, 0),
+            (16, 6),
+            (18, 1),
+            (20, 3),
+            (22, 2),
+            (24, 2),
+            (26, 0),
+        ] {
+            put(&mut output, offset, &value.to_le_bytes());
+        }
+        for (index, value) in rules.iter().enumerate() {
+            put(&mut output, HEADER_BYTES + index * RULE_BYTES, value);
+        }
+        let operations_start = HEADER_BYTES + rules.len() * RULE_BYTES;
+        for (index, value) in operations.iter().enumerate() {
+            put(
+                &mut output,
+                operations_start + index * OPERATION_BYTES,
+                value,
+            );
+        }
+        output
+    }
+
+    fn selected_window_data() -> [u8; 136] {
+        let mut data = [0_u8; 136];
+        put(&mut data, 8, &[0x41; 32]);
+        put(&mut data, 40, &66_u64.to_le_bytes());
+        put(&mut data, 56, &1_u64.to_le_bytes());
+        put(&mut data, 64, &2_u64.to_le_bytes());
+        put(&mut data, 72, &[0x42; 32]);
+        put(&mut data, 104, &77_u64.to_le_bytes());
+        put(&mut data, 120, &11_u64.to_le_bytes());
+        put(&mut data, 128, &22_u64.to_le_bytes());
         data
     }
 
@@ -1540,5 +1889,112 @@ mod tests {
                 Err(Error::NonCanonicalOperation)
             );
         }
+    }
+
+    #[test]
+    fn authenticated_selector_projects_one_runtime_width_row() {
+        let bytes = selected_window_profile_bytes();
+        let profile = AccountProfileV2::decode(&bytes).expect("selected profile");
+        assert_eq!(profile.artifact_profile(), SELECTED_WINDOW_ARTIFACT_PROFILE);
+        let selector = 1_u32.to_le_bytes();
+        let page = selected_window_data();
+        let accounts = [
+            AccountObservationV1::new([0x11; 32], [1; 32], 1, &PRODUCT_COUNT, false, false, false),
+            AccountObservationV1::new([0x12; 32], [1; 32], 1, &selector, false, false, false),
+            AccountObservationV1::new([0x13; 32], [1; 32], 1, &page, false, false, false),
+        ];
+        let input_scalars = [0_u64; 7];
+        let input_identities = [[0x11_u8; 32], [0; 32]];
+        let mut scratch_scalars = [0_u64; 7];
+        let mut scratch_identities = [[0_u8; 32]; 2];
+        let mut output_scalars = [9_u64; 7];
+        let mut output_identities = [[9_u8; 32]; 2];
+        project_atomic(
+            profile,
+            2,
+            &accounts,
+            ProjectionRegistersV2 {
+                input_scalars: &input_scalars,
+                input_identities: &input_identities,
+                scratch_scalars: &mut scratch_scalars,
+                scratch_identities: &mut scratch_identities,
+                output_scalars: &mut output_scalars,
+                output_identities: &mut output_identities,
+            },
+        )
+        .expect("selected projection");
+        assert_eq!(output_scalars, [2, 1, 77, 0, 11, 1, 22]);
+        assert_eq!(output_identities, [[0x11; 32], [0x42; 32]]);
+    }
+
+    #[test]
+    fn selected_window_refuses_unbound_geometry_and_selector_atomically() {
+        let canonical = selected_window_profile_bytes();
+        let rules_start = HEADER_BYTES;
+        let operations_start = HEADER_BYTES + 3 * RULE_BYTES;
+        for (offset, value) in [
+            (rules_start + 2 * RULE_BYTES + 12, 15_u32),
+            (operations_start + 3 * OPERATION_BYTES + 12, 47),
+            (operations_start + 6 * OPERATION_BYTES + 12, 7),
+        ] {
+            let mut hostile = canonical.clone();
+            put(&mut hostile, offset, &value.to_le_bytes());
+            assert_eq!(
+                AccountProfileV2::decode(&hostile),
+                Err(Error::NonCanonicalOperation)
+            );
+        }
+
+        let mut legacy_with_affine_length = canonical.clone();
+        put(
+            &mut legacy_with_affine_length,
+            10,
+            &ARTIFACT_PROFILE.to_le_bytes(),
+        );
+        assert_eq!(
+            AccountProfileV2::decode(&legacy_with_affine_length),
+            Err(Error::NonCanonicalReserved)
+        );
+
+        let profile = AccountProfileV2::decode(&canonical).expect("profile");
+        let hostile_selector = 2_u32.to_le_bytes();
+        let page = selected_window_data();
+        let accounts = [
+            AccountObservationV1::new([0x11; 32], [1; 32], 1, &PRODUCT_COUNT, false, false, false),
+            AccountObservationV1::new(
+                [0x12; 32],
+                [1; 32],
+                1,
+                &hostile_selector,
+                false,
+                false,
+                false,
+            ),
+            AccountObservationV1::new([0x13; 32], [1; 32], 1, &page, false, false, false),
+        ];
+        let mut scratch_scalars = [0_u64; 7];
+        let mut scratch_identities = [[0_u8; 32]; 2];
+        let mut output_scalars = [9_u64; 7];
+        let mut output_identities = [[9_u8; 32]; 2];
+        let before_scalars = output_scalars;
+        let before_identities = output_identities;
+        assert_eq!(
+            project_atomic(
+                profile,
+                2,
+                &accounts,
+                ProjectionRegistersV2 {
+                    input_scalars: &[0; 7],
+                    input_identities: &[[0x11; 32], [0; 32]],
+                    scratch_scalars: &mut scratch_scalars,
+                    scratch_identities: &mut scratch_identities,
+                    output_scalars: &mut output_scalars,
+                    output_identities: &mut output_identities,
+                },
+            ),
+            Err(Error::DataOutOfBounds)
+        );
+        assert_eq!(output_scalars, before_scalars);
+        assert_eq!(output_identities, before_identities);
     }
 }
