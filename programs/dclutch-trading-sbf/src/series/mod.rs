@@ -8,6 +8,8 @@
 
 /// Solana account authentication and commit-last physical persistence.
 pub mod accounts;
+/// Canonical SeriesEscrow projection into the sole Custody writer.
+pub mod custody_v3;
 /// Exact sparse family request consumed by the canonical Trading hot outer.
 pub mod instruction;
 /// Content-to-Solana/Core conversion at the explicit adapter boundary.
@@ -23,6 +25,9 @@ pub mod state;
 /// Terminal Ticket-retire/root-close differential execution oracle.
 pub mod terminal;
 
+pub use dclutch_series_v3_kernel::composition::{
+    SeriesConsumeCompositionErrorV3, SeriesConsumeCompositionV3, compose_series_consume_v3,
+};
 pub use dclutch_series_v3_kernel::escrow::{
     PrepareSeriesEscrowPlanV3, SeriesEscrowEffectKindV3, SeriesEscrowEffectV3,
     TerminalSeriesEscrowPlanV3, consume_series_escrow_v3, expire_series_escrow_v3,

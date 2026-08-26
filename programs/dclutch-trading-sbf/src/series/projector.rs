@@ -10,8 +10,9 @@ use solana_program::pubkey::Pubkey;
 
 use super::{
     AccountKeyV3, AdmittedOccurrenceV3, AdmittedTicketV3, AuthenticatedProductProjectionV2,
-    PrepareSeriesEscrowPlanV3, SeriesV3Error, TemplateV3, TerminalSeriesEscrowPlanV3,
-    admit_occurrence_bytes, admit_ticket, consume_series_escrow_v3, expire_series_escrow_v3,
+    PrepareSeriesEscrowPlanV3, SeriesConsumeCompositionErrorV3, SeriesConsumeCompositionV3,
+    SeriesV3Error, TemplateV3, TerminalSeriesEscrowPlanV3, admit_occurrence_bytes, admit_ticket,
+    compose_series_consume_v3, consume_series_escrow_v3, expire_series_escrow_v3,
     instruction::{SeriesActionRequestV3, SeriesActionV3},
     lifecycle::{
         ClosePlanV3, LifecycleErrorV3, OccurrenceCommitPlanV3, PendingFundingPlanV3, RetirePlanV3,
@@ -31,6 +32,8 @@ pub enum SeriesProjectorErrorV3 {
     Content,
     /// Schedule, replay, funding, or Core-request planning refused.
     Lifecycle(LifecycleErrorV3),
+    /// The joint Core/Custody/funding/replay composition refused.
+    Composition(SeriesConsumeCompositionErrorV3),
 }
 
 impl From<SeriesV3Error> for SeriesProjectorErrorV3 {
@@ -42,6 +45,12 @@ impl From<SeriesV3Error> for SeriesProjectorErrorV3 {
 impl From<LifecycleErrorV3> for SeriesProjectorErrorV3 {
     fn from(value: LifecycleErrorV3) -> Self {
         Self::Lifecycle(value)
+    }
+}
+
+impl From<SeriesConsumeCompositionErrorV3> for SeriesProjectorErrorV3 {
+    fn from(value: SeriesConsumeCompositionErrorV3) -> Self {
+        Self::Composition(value)
     }
 }
 
@@ -142,6 +151,34 @@ impl<'a> AuthenticatedSeriesActionV3<'a> {
             self.request.expected_ticket_revision(),
             now_slot,
             funding,
+        )?)
+    }
+
+    /// Join raw replay prestates to the exact Core, escrow, and funding effects.
+    #[allow(clippy::too_many_arguments)]
+    pub fn compose_consume(
+        self,
+        product: AuthenticatedProductProjectionV2,
+        registry_program: AccountKeyV3,
+        ticket_state_key: Pubkey,
+        series_bytes: &[u8],
+        ticket_state_bytes: &[u8],
+        now_slot: u64,
+    ) -> Result<SeriesConsumeCompositionV3, SeriesProjectorErrorV3> {
+        if self.action() != SeriesActionV3::Consume {
+            return Err(SeriesProjectorErrorV3::Frame);
+        }
+        Ok(compose_series_consume_v3(
+            self.required_occurrence()?,
+            self.required_ticket()?,
+            product,
+            registry_program,
+            AccountKeyV3::new(ticket_state_key.to_bytes())?,
+            series_bytes,
+            ticket_state_bytes,
+            now_slot,
+            self.request.expected_series_revision(),
+            self.request.expected_ticket_revision(),
         )?)
     }
 
@@ -452,6 +489,66 @@ mod tests {
             accepted.plan_prepare_escrow(product, AccountKeyV3::new([59; 32]).expect("Registry")),
             Err(SeriesProjectorErrorV3::Frame)
         );
+    }
+
+    #[test]
+    fn authenticated_consume_exposes_one_atomic_stateless_composition() {
+        let (_, template_bytes, occurrence_bytes, ticket_bytes) = occurrence_fixture();
+        let template_id = template_content_id(&template_bytes).expect("Template ID");
+        let occurrence_id = occurrence_content_id(&occurrence_bytes).expect("occurrence ID");
+        let admitted_ticket = admit_ticket(&ticket_bytes).expect("Ticket");
+        let request = encode_series_action_header_v3(
+            SeriesActionV3::Consume,
+            template_id,
+            Some(occurrence_id),
+            Some(admitted_ticket.content_id()),
+            1,
+            0,
+            0,
+        )
+        .expect("Consume request");
+        let accepted = authenticate_action_content_v3(
+            SeriesActionRequestV3::decode(&request).expect("request decode"),
+            &template_bytes,
+            Some(&occurrence_bytes),
+            Some(&ticket_bytes),
+        )
+        .expect("content join");
+        let product = AuthenticatedProductProjectionV2::new(
+            accepted
+                .occurrence()
+                .expect("occurrence")
+                .occurrence()
+                .product_record(),
+            ContentId::new([61; 32]).expect("stable Product"),
+            ContentId::new([62; 32]).expect("result domain"),
+        );
+        let template = accepted.template();
+        let series = SeriesStateV3::new(template.close_rent())
+            .prepare_ticket(0)
+            .expect("prepared root")
+            .encode(template.occurrence_count())
+            .expect("root bytes");
+        let ticket_state = TicketStateV3::prepared(admitted_ticket.content_id()).encode();
+        let composition = accepted
+            .compose_consume(
+                product,
+                AccountKeyV3::new([59; 32]).expect("Registry"),
+                Pubkey::new_unique(),
+                &series,
+                &ticket_state,
+                100,
+            )
+            .expect("atomic composition");
+        assert_eq!(
+            composition.core_request().action(),
+            dclutch_market_core_codec::SeriesCoreActionV1::Consume
+        );
+        assert_eq!(
+            composition.escrow().effects()[0].kind(),
+            crate::series::SeriesEscrowEffectKindV3::ConsumeIntoHoard
+        );
+        assert_eq!(composition.escrow().effects()[2].resulting_revision(), 6);
     }
 
     #[test]
