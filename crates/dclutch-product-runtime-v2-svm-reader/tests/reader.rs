@@ -1,5 +1,12 @@
 //! Hostile borrowed-account tests for the independent Product graph reader.
 
+use dclutch_product_payoff_v2_codec::{
+    registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+    runtime_v3::{
+        BasisInputV3, BasisKindV3, BasisShapeV3, BasisTermV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
+        basis_record_bytes_v3, compile_basis_v3, semantic_basis_preimage_v3,
+    },
+};
 use dclutch_product_runtime_v2::{
     ContentId, PortfolioInputV2, ResultDomainInputV2, compile_portfolio_v2,
     compile_result_domain_v2, portfolio_record_bytes, result_domain_record_bytes,
@@ -11,7 +18,12 @@ use dclutch_product_runtime_v2_admission::{
 };
 use dclutch_product_runtime_v2_svm_reader::*;
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use solana_program::{account_info::AccountInfo, hash::hash, pubkey::Pubkey, rent::Rent};
+use solana_program::{
+    account_info::AccountInfo,
+    hash::{hash, hashv},
+    pubkey::Pubkey,
+    rent::Rent,
+};
 use solana_sdk_ids::system_program;
 
 const REGISTRY: Pubkey = Pubkey::new_from_array([0x91; 32]);
@@ -41,6 +53,27 @@ struct RecordBacking {
     raw: BackingAccount,
     staging: BackingAccount,
     coordinate: FinalizedRecordCoordinateV2,
+}
+
+struct RuntimeV3Backing {
+    product: RecordBacking,
+    domain: RecordBacking,
+    portfolio: RecordBacking,
+    basis: RecordBacking,
+}
+
+#[derive(Clone, Copy)]
+struct RuntimeV3Snapshot {
+    runtime: AuthenticatedProductRuntimeV2,
+    linked_basis_record: AuthenticatedRecordV2,
+    semantic_basis_id: ContentId,
+    basis_kind: BasisKindV3,
+    basis_width: u32,
+    payout_scale: u64,
+    evaluator_release_id: ContentId,
+    linked_basis_raw_writable: bool,
+    linked_basis_staging_writable: bool,
+    linked_basis_body_digest: ContentId,
 }
 
 fn id(byte: u8) -> ContentId {
@@ -127,6 +160,129 @@ fn compiled_records(cuts: &[i128]) -> (RecordBacking, RecordBacking, RecordBacki
     (product_record, domain_record, portfolio_record)
 }
 
+fn semantic_basis_id(bytes: &[u8]) -> ContentId {
+    let semantic = semantic_basis_preimage_v3(bytes).expect("semantic basis");
+    ContentId::new(
+        hashv(&[
+            SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
+            semantic.prefix(),
+            semantic.suffix(),
+        ])
+        .to_bytes(),
+    )
+    .expect("semantic digest")
+}
+
+fn basis_bytes(
+    kind: BasisKindV3,
+    product_id: ContentId,
+    result_domain_id: ContentId,
+    changed_semantics: bool,
+) -> Vec<u8> {
+    let knots = [0_i128, 10_i128];
+    let terms = [BasisTermV3 {
+        claim_index: 0,
+        shape: BasisShapeV3::RampUp { left: 0, right: 1 },
+        amplitude: if changed_semantics { 99 } else { 100 },
+    }];
+    let failure_payouts = [0_u64, 100_u64];
+    let (basis_width, payout_scale, knot_denominator, active_knots, active_terms, failure) =
+        match kind {
+            BasisKindV3::CategoricalQ1 => (4, 1, 1, &[][..], &[][..], &[][..]),
+            BasisKindV3::GradedExactComplement => {
+                (2, 100, 1, &knots[..], &terms[..], &failure_payouts[..])
+            }
+        };
+    let categorical_width = if changed_semantics && kind == BasisKindV3::CategoricalQ1 {
+        5
+    } else {
+        basis_width
+    };
+    let input = BasisInputV3 {
+        kind,
+        product_id: product_id.to_bytes(),
+        result_domain_id: result_domain_id.to_bytes(),
+        coordinate_domain_id: id(2).to_bytes(),
+        result_unit_id: id(3).to_bytes(),
+        evaluator_release_id: id(8).to_bytes(),
+        basis_width: categorical_width,
+        payout_scale,
+        knot_denominator,
+        knots: active_knots,
+        terms: active_terms,
+        failure_payouts: failure,
+    };
+    let width = basis_record_bytes_v3(
+        kind,
+        usize::try_from(input.basis_width).expect("basis width"),
+        input.knots.len(),
+        input.terms.len(),
+    )
+    .expect("basis record width");
+    let mut bytes = vec![0_u8; width];
+    compile_basis_v3(input, &mut bytes).expect("basis");
+    bytes
+}
+
+fn compiled_runtime_v3(kind: BasisKindV3, product_byte: u8) -> RuntimeV3Backing {
+    let product_id = id(product_byte);
+    let provisional_basis = basis_bytes(kind, id(0xf1), id(0xf2), false);
+    let liability_basis_id = semantic_basis_id(&provisional_basis);
+    let cuts = [-10_i128, 10_i128];
+    let mut domain = vec![0_u8; result_domain_record_bytes(cuts.len()).expect("domain width")];
+    compile_result_domain_v2(
+        ResultDomainInputV2 {
+            product_id,
+            coordinate_domain_id: id(2),
+            result_unit_id: id(3),
+            liability_basis_id,
+            representation_release_id: id(5),
+            mapping_release_id: id(6),
+            cut_denominator: 10,
+            cuts: &cuts,
+        },
+        &mut domain,
+    )
+    .expect("domain");
+    let domain = record(RESULT_DOMAIN_SCHEMA_ID_V2, domain);
+    let coefficients = [7_u64; 4];
+    let mut portfolio =
+        vec![0_u8; portfolio_record_bytes(coefficients.len()).expect("portfolio width")];
+    compile_portfolio_v2(
+        PortfolioInputV2 {
+            product_id,
+            result_domain_id: domain.coordinate.content_digest,
+            claim_basis_id: id(7),
+            liability_basis_id,
+            representation_release_id: id(5),
+            denominator: 9,
+            coefficients: &coefficients,
+        },
+        &mut portfolio,
+    )
+    .expect("portfolio");
+    let portfolio = record(PORTFOLIO_SCHEMA_ID_V2, portfolio);
+    let mut product = vec![0_u8; PRODUCT_RECORD_BYTES_V2];
+    ProductRecordV2::new(
+        product_id,
+        domain.coordinate.content_digest,
+        portfolio.coordinate.content_digest,
+    )
+    .encode_into(&mut product)
+    .expect("Product record");
+    let product = record(PRODUCT_RECORD_SCHEMA_ID_V2, product);
+    let basis = record(
+        GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+        basis_bytes(kind, product_id, domain.coordinate.content_digest, false),
+    );
+    RuntimeV3Backing {
+        product,
+        domain,
+        portfolio,
+        basis,
+    }
+}
+
 fn authenticate(
     product: &mut RecordBacking,
     domain: &mut RecordBacking,
@@ -157,6 +313,65 @@ fn authenticate(
             },
         },
     )
+}
+
+fn authenticate_v3(runtime: &mut RuntimeV3Backing) -> Result<RuntimeV3Snapshot> {
+    let product_raw = runtime.product.raw.info();
+    let product_staging = runtime.product.staging.info();
+    let domain_raw = runtime.domain.raw.info();
+    let domain_staging = runtime.domain.staging.info();
+    let portfolio_raw = runtime.portfolio.raw.info();
+    let portfolio_staging = runtime.portfolio.staging.info();
+    let basis_raw = runtime.basis.raw.info();
+    let basis_staging = runtime.basis.staging.info();
+    let authenticated = authenticate_product_runtime_v3(
+        &REGISTRY,
+        &Rent::default(),
+        runtime.product.coordinate.content_digest,
+        ProductRuntimeFrameV3 {
+            product: FinalizedRecordFrameV2 {
+                raw: &product_raw,
+                staging: &product_staging,
+            },
+            result_domain: FinalizedRecordFrameV2 {
+                raw: &domain_raw,
+                staging: &domain_staging,
+            },
+            portfolio: FinalizedRecordFrameV2 {
+                raw: &portfolio_raw,
+                staging: &portfolio_staging,
+            },
+            linked_basis: FinalizedRecordFrameV2 {
+                raw: &basis_raw,
+                staging: &basis_staging,
+            },
+        },
+    )?;
+    let linked_basis_body_digest = content_id(
+        hash(
+            &authenticated
+                .linked_basis_raw
+                .try_borrow_data()
+                .map_err(|_| Error::Borrow)?,
+        )
+        .to_bytes(),
+    );
+    Ok(RuntimeV3Snapshot {
+        runtime: authenticated.runtime,
+        linked_basis_record: authenticated.linked_basis_record,
+        semantic_basis_id: authenticated.semantic_basis_id,
+        basis_kind: authenticated.basis_kind,
+        basis_width: authenticated.basis_width,
+        payout_scale: authenticated.payout_scale,
+        evaluator_release_id: authenticated.evaluator_release_id,
+        linked_basis_raw_writable: authenticated.linked_basis_raw.is_writable,
+        linked_basis_staging_writable: authenticated.linked_basis_staging.is_writable,
+        linked_basis_body_digest,
+    })
+}
+
+fn content_id(bytes: [u8; 32]) -> ContentId {
+    ContentId::new(bytes).expect("nonzero digest")
 }
 
 #[test]
@@ -201,4 +416,107 @@ fn same_width_domain_substitution_refuses_without_receipt_authority() {
         Err(Error::ResultDomainRecord)
     );
     assert!(authenticate(&mut product, &mut domain, &mut portfolio).is_ok());
+}
+
+#[test]
+fn v3_authenticates_both_canonical_basis_kinds_and_exposes_read_only_coordinate() {
+    for (kind, expected_width, expected_scale) in [
+        (BasisKindV3::CategoricalQ1, 4, 1),
+        (BasisKindV3::GradedExactComplement, 2, 100),
+    ] {
+        let mut backing = compiled_runtime_v3(kind, 0x21);
+        let expected_basis_digest = backing.basis.coordinate.content_digest;
+        let authenticated = authenticate_v3(&mut backing).expect("V3 graph");
+        assert_eq!(authenticated.basis_kind, kind);
+        assert_eq!(authenticated.basis_width, expected_width);
+        assert_eq!(authenticated.payout_scale, expected_scale);
+        assert_eq!(authenticated.evaluator_release_id, id(8));
+        assert_eq!(
+            authenticated.semantic_basis_id,
+            authenticated.runtime.liability_basis_id
+        );
+        assert_eq!(
+            authenticated.linked_basis_record.schema_id,
+            ContentId::new(GRADED_BASIS_RECORD_SCHEMA_ID_V3).expect("schema")
+        );
+        assert_eq!(
+            authenticated.linked_basis_record.content_digest,
+            expected_basis_digest
+        );
+        assert!(!authenticated.linked_basis_raw_writable);
+        assert!(!authenticated.linked_basis_staging_writable);
+        assert_eq!(
+            authenticated.linked_basis_body_digest,
+            expected_basis_digest
+        );
+    }
+}
+
+#[test]
+fn v3_equivalent_semantics_do_not_pin_one_raw_encoding_in_product() {
+    for kind in [
+        BasisKindV3::CategoricalQ1,
+        BasisKindV3::GradedExactComplement,
+    ] {
+        let mut first = compiled_runtime_v3(kind, 0x31);
+        let mut second = compiled_runtime_v3(kind, 0x32);
+        assert_ne!(first.basis.raw.data, second.basis.raw.data);
+        assert_ne!(
+            first.basis.coordinate.content_digest,
+            second.basis.coordinate.content_digest
+        );
+        let first = authenticate_v3(&mut first).expect("first encoding");
+        let second = authenticate_v3(&mut second).expect("relinked encoding");
+        assert_eq!(first.semantic_basis_id, second.semantic_basis_id);
+        assert_ne!(
+            first.linked_basis_record.content_digest,
+            second.linked_basis_record.content_digest
+        );
+    }
+}
+
+#[test]
+fn v3_refuses_schema_raw_and_product_link_substitution() {
+    let mut valid = compiled_runtime_v3(BasisKindV3::GradedExactComplement, 0x41);
+    let mut foreign = compiled_runtime_v3(BasisKindV3::GradedExactComplement, 0x42);
+    core::mem::swap(&mut valid.basis, &mut foreign.basis);
+    assert!(matches!(
+        authenticate_v3(&mut valid),
+        Err(Error::LinkedBasisComposition)
+    ));
+
+    let mut wrong_schema = compiled_runtime_v3(BasisKindV3::CategoricalQ1, 0x43);
+    wrong_schema.basis = record([0xa5; 32], wrong_schema.basis.raw.data.clone());
+    assert!(matches!(
+        authenticate_v3(&mut wrong_schema),
+        Err(Error::LinkedBasisRecord)
+    ));
+
+    let mut wrong_raw = compiled_runtime_v3(BasisKindV3::CategoricalQ1, 0x44);
+    *wrong_raw.basis.raw.data.last_mut().expect("basis byte") ^= 1;
+    assert!(matches!(
+        authenticate_v3(&mut wrong_raw),
+        Err(Error::LinkedBasisRecord)
+    ));
+}
+
+#[test]
+fn v3_refuses_canonical_wrong_semantic_basis() {
+    for kind in [
+        BasisKindV3::CategoricalQ1,
+        BasisKindV3::GradedExactComplement,
+    ] {
+        let mut backing = compiled_runtime_v3(kind, 0x51);
+        let changed = basis_bytes(
+            kind,
+            id(0x51),
+            backing.domain.coordinate.content_digest,
+            true,
+        );
+        backing.basis = record(GRADED_BASIS_RECORD_SCHEMA_ID_V3, changed);
+        assert!(matches!(
+            authenticate_v3(&mut backing),
+            Err(Error::LinkedBasisComposition)
+        ));
+    }
 }

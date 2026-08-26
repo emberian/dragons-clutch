@@ -1,14 +1,31 @@
-//! Independent SVM authentication and decoding for Product Runtime V2 graphs.
+//! Independent SVM authentication and decoding for Product Runtime graphs.
 //!
 //! The exact Product-record digest is the graph root. The Product body selects
 //! the domain and portfolio digests; neither an admission receipt nor a caller
 //! may select those children independently. A receipt can be rechecked after
-//! authentication as a coordinate cache, but it is never authority.
+//! authentication as a coordinate cache, but it is never authority. The V3
+//! frame additionally authenticates one canonical ProductBasisV3 raw/staging
+//! pair. Product owns only its semantic liability-basis identity: the reader
+//! authenticates and returns the independently finalized raw coordinate rather
+//! than adding a raw-record digest to ProductRecordV2.
+//!
+//! Follow-on convergence is mechanically limited to the remaining legacy
+//! `LinkedBasisRecordV2` Claims consumers:
+//! `src/{affine_batch_v2,liability_basis_v2,rational_representation_v2}.rs`
+//! and `program-test/affine-batch/src/lib.rs` under `dclutch-claims-sbf`, plus
+//! `dclutch-liability-basis-v2-kernel::{src,tests}/product_claims.rs`. They must
+//! consume this V3 authentication result rather than add another basis decoder.
 
 #![no_std]
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+use dclutch_product_payoff_v2_codec::{
+    registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+    runtime_v3::{
+        BasisKindV3, ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, semantic_basis_preimage_v3,
+    },
+};
 use dclutch_product_runtime_v2::{ContentId, PortfolioV2, ResultDomainV2};
 use dclutch_product_runtime_v2_admission::{
     AdmissionReceiptV2, FinalizedRecordCoordinateV2, PORTFOLIO_SCHEMA_ID_V2,
@@ -16,7 +33,12 @@ use dclutch_product_runtime_v2_admission::{
     admit_authenticated_views_v2,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use solana_program::{account_info::AccountInfo, hash::hash, pubkey::Pubkey, rent::Rent};
+use solana_program::{
+    account_info::AccountInfo,
+    hash::{hash, hashv},
+    pubkey::Pubkey,
+    rent::Rent,
+};
 use solana_sdk_ids::system_program;
 
 /// Product Runtime V2 SVM-reader refusal.
@@ -30,6 +52,10 @@ pub enum Error {
     ResultDomainRecord,
     /// Portfolio record owner, PDA, digest, rent, or staging vacancy refused.
     PortfolioRecord,
+    /// ProductBasisV3 record owner, PDA, digest, rent, or staging vacancy refused.
+    LinkedBasisRecord,
+    /// ProductBasisV3 decoding, semantic identity, or Product/domain links refused.
+    LinkedBasisComposition,
     /// Product/domain/portfolio decoding or exact identity composition refused.
     Composition,
     /// Optional receipt coordinates differed from independently authenticated facts.
@@ -59,6 +85,24 @@ pub struct ProductRuntimeFrameV2<'accounts, 'info> {
     pub result_domain: FinalizedRecordFrameV2<'accounts, 'info>,
     /// Product-selected exact rational portfolio.
     pub portfolio: FinalizedRecordFrameV2<'accounts, 'info>,
+}
+
+/// Exact Product/domain/portfolio/ProductBasisV3 read-only account frame.
+///
+/// The basis schema is fixed to
+/// [`GRADED_BASIS_RECORD_SCHEMA_ID_V3`]; neither a caller nor family action
+/// selects an alternate decoder. Both categorical-Q1 and graded exact-
+/// complement kinds are admitted by the same canonical ProductBasisV3 decoder.
+#[derive(Clone, Copy)]
+pub struct ProductRuntimeFrameV3<'accounts, 'info> {
+    /// Product graph-root record.
+    pub product: FinalizedRecordFrameV2<'accounts, 'info>,
+    /// Product-selected result domain.
+    pub result_domain: FinalizedRecordFrameV2<'accounts, 'info>,
+    /// Product-selected exact rational portfolio.
+    pub portfolio: FinalizedRecordFrameV2<'accounts, 'info>,
+    /// Independently finalized Product-linked ProductBasisV3 record.
+    pub linked_basis: FinalizedRecordFrameV2<'accounts, 'info>,
 }
 
 /// One independently authenticated finalized coordinate.
@@ -116,6 +160,34 @@ pub struct AuthenticatedProductRuntimeV2 {
     pub mapping_release_id: ContentId,
     /// Runtime native outcome count including explicit failure.
     pub outcome_count: u32,
+}
+
+/// Ephemeral authenticated Product Runtime V3 projection.
+///
+/// `linked_basis_raw` and `linked_basis_staging` are read-only evidence, not
+/// routable effect accounts. A hot executor may project the raw content digest
+/// as an immutable synthetic coordinate and borrow the exact raw body, but may
+/// not authorize writes from that observation.
+#[derive(Clone, Copy)]
+pub struct AuthenticatedProductRuntimeV3<'accounts, 'info> {
+    /// Existing independently authenticated Product/domain/portfolio graph.
+    pub runtime: AuthenticatedProductRuntimeV2,
+    /// Authenticated ProductBasisV3 schema, raw digest, and canonical PDAs.
+    pub linked_basis_record: AuthenticatedRecordV2,
+    /// Registry-owned read-only exact ProductBasisV3 body.
+    pub linked_basis_raw: &'accounts AccountInfo<'info>,
+    /// System-owned read-only vacant finalization cursor.
+    pub linked_basis_staging: &'accounts AccountInfo<'info>,
+    /// Product-owned semantic liability-basis identity.
+    pub semantic_basis_id: ContentId,
+    /// Canonical V3 evaluator kind.
+    pub basis_kind: BasisKindV3,
+    /// Runtime number of native basis claims.
+    pub basis_width: u32,
+    /// Exact native payout scale.
+    pub payout_scale: u64,
+    /// Immutable evaluator semantic release.
+    pub evaluator_release_id: ContentId,
 }
 
 impl AuthenticatedProductRuntimeV2 {
@@ -237,6 +309,103 @@ pub fn authenticate_product_runtime_v2<'accounts, 'info>(
     })
 }
 
+/// Derive the Product graph-root digest from its exact raw body, authenticate
+/// the Product/domain/portfolio graph and one V3 linked basis, and return the
+/// complete ephemeral projection.
+pub fn authenticate_content_addressed_product_runtime_v3<'accounts, 'info>(
+    registry_program: &Pubkey,
+    rent: &Rent,
+    frame: ProductRuntimeFrameV3<'accounts, 'info>,
+) -> Result<AuthenticatedProductRuntimeV3<'accounts, 'info>> {
+    let product_data = frame
+        .product
+        .raw
+        .try_borrow_data()
+        .map_err(|_| Error::Borrow)?;
+    let digest = content(hash(&product_data).to_bytes())?;
+    drop(product_data);
+    authenticate_product_runtime_v3(registry_program, rent, digest, frame)
+}
+
+/// Authenticate a Product-selected graph and an independently finalized,
+/// canonical ProductBasisV3 record.
+///
+/// ProductRecordV2 deliberately does not pin a linked-basis raw digest. The
+/// supplied basis is content-addressed under the sole V3 Registry schema, then
+/// its semantic preimage and embedded Product/domain/unit links are checked
+/// against the authenticated Product graph. This admits either canonical V3
+/// evaluator kind without admitting legacy LinkedBasisRecordV2.
+pub fn authenticate_product_runtime_v3<'accounts, 'info>(
+    registry_program: &Pubkey,
+    rent: &Rent,
+    expected_product_digest: ContentId,
+    frame: ProductRuntimeFrameV3<'accounts, 'info>,
+) -> Result<AuthenticatedProductRuntimeV3<'accounts, 'info>> {
+    require_distinct_v3(frame)?;
+    let runtime = authenticate_product_runtime_v2(
+        registry_program,
+        rent,
+        expected_product_digest,
+        ProductRuntimeFrameV2 {
+            product: frame.product,
+            result_domain: frame.result_domain,
+            portfolio: frame.portfolio,
+        },
+    )?;
+    let basis_data = frame
+        .linked_basis
+        .raw
+        .try_borrow_data()
+        .map_err(|_| Error::Borrow)?;
+    let basis_digest = content(hash(&basis_data).to_bytes())?;
+    drop(basis_data);
+    let linked_basis_record = authenticate_record(
+        registry_program,
+        rent,
+        frame.linked_basis,
+        GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+        basis_digest,
+        Error::LinkedBasisRecord,
+    )?;
+    let basis_data = frame
+        .linked_basis
+        .raw
+        .try_borrow_data()
+        .map_err(|_| Error::Borrow)?;
+    let basis = ProductBasisV3::decode(&basis_data).map_err(|_| Error::LinkedBasisComposition)?;
+    let semantic =
+        semantic_basis_preimage_v3(&basis_data).map_err(|_| Error::LinkedBasisComposition)?;
+    let semantic_basis_id = content(
+        hashv(&[
+            SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
+            semantic.prefix(),
+            semantic.suffix(),
+        ])
+        .to_bytes(),
+    )?;
+    let evaluator_release_id =
+        content(basis.evaluator_release_id()).map_err(|_| Error::LinkedBasisComposition)?;
+    if semantic_basis_id != runtime.liability_basis_id
+        || basis.product_id() != runtime.product_id.to_bytes()
+        || basis.result_domain_id() != runtime.result_domain_record.content_digest.to_bytes()
+        || basis.coordinate_domain_id() != runtime.coordinate_domain_id.to_bytes()
+        || basis.result_unit_id() != runtime.result_unit_id.to_bytes()
+    {
+        return Err(Error::LinkedBasisComposition);
+    }
+    Ok(AuthenticatedProductRuntimeV3 {
+        runtime,
+        linked_basis_record,
+        linked_basis_raw: frame.linked_basis.raw,
+        linked_basis_staging: frame.linked_basis.staging,
+        semantic_basis_id,
+        basis_kind: basis.kind(),
+        basis_width: basis.basis_width(),
+        payout_scale: basis.payout_scale(),
+        evaluator_release_id,
+    })
+}
+
 fn authenticate_record(
     registry_program: &Pubkey,
     rent: &Rent,
@@ -297,6 +466,29 @@ fn require_distinct(frame: ProductRuntimeFrameV2<'_, '_>) -> Result<()> {
         frame.result_domain.staging,
         frame.portfolio.raw,
         frame.portfolio.staging,
+    ];
+    for (left_index, left) in accounts.iter().enumerate() {
+        if accounts
+            .iter()
+            .skip(left_index.saturating_add(1))
+            .any(|right| left.key == right.key)
+        {
+            return Err(Error::AccountFrame);
+        }
+    }
+    Ok(())
+}
+
+fn require_distinct_v3(frame: ProductRuntimeFrameV3<'_, '_>) -> Result<()> {
+    let accounts = [
+        frame.product.raw,
+        frame.product.staging,
+        frame.result_domain.raw,
+        frame.result_domain.staging,
+        frame.portfolio.raw,
+        frame.portfolio.staging,
+        frame.linked_basis.raw,
+        frame.linked_basis.staging,
     ];
     for (left_index, left) in accounts.iter().enumerate() {
         if accounts
