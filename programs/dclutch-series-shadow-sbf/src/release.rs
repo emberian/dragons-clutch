@@ -94,7 +94,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_build_has_no_implicitly_accepted_release() {
-        assert_eq!(selected_series_shadow_release_v1(), Ok(None));
+    fn build_selection_matches_the_generated_contract() {
+        let selected = selected_series_shadow_release_v1();
+        assert!(selected.is_ok());
+        assert_eq!(
+            selected.ok().flatten().is_some(),
+            generated::SERIES_SHADOW_RELEASE_SELECTED_V1
+        );
     }
 }
