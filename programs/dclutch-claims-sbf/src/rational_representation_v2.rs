@@ -1004,6 +1004,7 @@ fn authenticate_asset_identities(
     })
 }
 
+#[inline(never)]
 fn token_effect_digest(prepared: PreparedRepresentationV2<'_>) -> Result<[u8; 32], ProgramError> {
     let mut transcript = Vec::new();
     for effect in prepared.token_effects() {
@@ -1082,6 +1083,7 @@ fn expected_post_mint_supply(
     Ok(expected)
 }
 
+#[inline(never)]
 fn execute_token_effects<'accounts, 'info>(
     program_id: &Pubkey,
     account_infos: &'accounts [AccountInfo<'info>],
@@ -1626,6 +1628,7 @@ fn authenticate_terminal_privileges(
     Ok(())
 }
 
+#[inline(never)]
 fn post_token_observations(
     account_infos: &[AccountInfo<'_>],
     base: BaseAccounts<'_, '_>,
@@ -1684,6 +1687,7 @@ fn post_token_observations(
     Ok((output, receipt.supply))
 }
 
+#[inline(never)]
 fn post_resource_digest(
     account_infos: &[AccountInfo<'_>],
     base: BaseAccounts<'_, '_>,
