@@ -301,12 +301,16 @@ pub fn prepare_scenario_atomic_v3(
             &mut balances,
         )?;
     }
+    let fee_kind = match input.quote.direction {
+        ScenarioQuoteDirectionV3::CounterpartyPaysDealer => TransferKindV3::CounterpartyToFee,
+        ScenarioQuoteDirectionV3::DealerPaysCounterparty => TransferKindV3::PrincipalToFee,
+    };
     push_transfer(
         &mut custody,
         &mut count,
         context,
         frame,
-        TransferKindV3::CounterpartyToFee,
+        fee_kind,
         input.quote.realized_fee,
         &mut balances,
     )?;
@@ -329,13 +333,18 @@ pub fn prepare_scenario_atomic_v3(
         &mut balances,
     )?;
     if input.quote.direction == ScenarioQuoteDirectionV3::DealerPaysCounterparty {
+        let counterparty_proceeds = input
+            .quote
+            .principal
+            .checked_sub(input.quote.realized_fee)
+            .ok_or(ScenarioComposerErrorV3::Arithmetic)?;
         push_transfer(
             &mut custody,
             &mut count,
             context,
             frame,
             TransferKindV3::PrincipalToCounterparty,
-            input.quote.principal,
+            counterparty_proceeds,
             &mut balances,
         )?;
     }
@@ -528,6 +537,7 @@ enum TransferKindV3 {
     CounterpartyToPrincipal,
     PrincipalToCounterparty,
     CounterpartyToFee,
+    PrincipalToFee,
     PrincipalToHoard,
     HoardToPrincipal,
 }
@@ -602,6 +612,18 @@ fn push_transfer(
             [0; 32],
             context.child_root,
             balances.counterparty,
+            balances.fee,
+        ),
+        TransferKindV3::PrincipalToFee => (
+            frame.principal_vault,
+            frame.fee_vault,
+            CompartmentV1::TradingPrincipal,
+            CompartmentV1::FeeVault,
+            [0; 32],
+            [0; 32],
+            context.child_root,
+            context.child_root,
+            balances.principal,
             balances.fee,
         ),
         TransferKindV3::PrincipalToHoard => (
@@ -696,6 +718,10 @@ fn push_transfer(
         }
         TransferKindV3::CounterpartyToFee => {
             balances.counterparty = source_after;
+            balances.fee = destination_after;
+        }
+        TransferKindV3::PrincipalToFee => {
+            balances.principal = source_after;
             balances.fee = destination_after;
         }
         TransferKindV3::PrincipalToHoard => {

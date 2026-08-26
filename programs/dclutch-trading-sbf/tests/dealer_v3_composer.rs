@@ -185,6 +185,14 @@ fn outgoing_quote_executes_after_merge_and_fee_never_becomes_capital() {
     assert_eq!(plan.hoard_after, 96);
     assert_eq!(plan.counterparty_after, 104);
     assert_eq!(plan.custody_count, 3);
+    let fee = plan.custody[0].expect("principal-to-fee effect");
+    assert_eq!(
+        fee.request.source_compartment,
+        CompartmentV1::TradingPrincipal
+    );
+    assert_eq!(fee.request.destination_compartment, CompartmentV1::FeeVault);
+    let payout = plan.custody[2].expect("net counterparty payout");
+    assert_eq!(payout.request.amount, 4);
 }
 
 #[test]
