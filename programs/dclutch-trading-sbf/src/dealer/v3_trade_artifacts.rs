@@ -8,11 +8,32 @@
 //! sole borrowed request range and covers every byte after the 384-byte
 //! semantic header.
 
+#[cfg(not(target_os = "solana"))]
+extern crate alloc;
+
+#[cfg(not(target_os = "solana"))]
+use alloc::{vec, vec::Vec};
+
 use dclutch_claims_svm::signed_delta_v3::{
     SIGNED_DELTA_PLAN_MAGIC_V3, SIGNED_DELTA_RECEIPT_BYTES_V3, SIGNED_DELTA_RECEIPT_MAGIC_V3,
     plan_bytes as signed_delta_plan_bytes,
 };
+use dclutch_custody_contract::{
+    CUSTODY_REQUEST_BYTES_V1, CustodyRequestLayoutV1, DELEGATED_CUSTODY_REQUEST_BYTES_V2,
+    DelegatedCustodyRequestLayoutV2,
+};
+#[cfg(not(target_os = "solana"))]
+use dclutch_custody_contract::{CallerRoleV1, CompartmentV1, OperationV1};
 use dclutch_dealer_codec::MAX_OUTCOMES;
+#[cfg(not(target_os = "solana"))]
+use dclutch_effect_kernel::v3::{
+    HEADER_BYTES as EFFECT_HEADER_BYTES, OPERATION_BYTES as EFFECT_OPERATION_BYTES,
+    RECEIPT_DEPENDENCY_BYTES, ROUTE_BYTES as EFFECT_ROUTE_BYTES, RouteReceiptDependencyV3,
+    encode::{
+        AccountCoordinateV3, EffectGeometryV3, EffectInstructionV3, IdentityCoordinateV3,
+        RequestSpaceV3, RouteInputV3, ScalarCoordinateV3, encode_effect_program_v3_atomic,
+    },
+};
 use dclutch_effect_kernel::{
     v2::FixedRole,
     v3::{ProgramV3 as EffectProgramV3, RouteKindV3},
@@ -36,11 +57,23 @@ use dclutch_transition_vm::v3::{
     InstructionV3, ProgramGeometryV3, ProgramV3 as TransitionProgramV3, ScalarRegisterV3,
     encode_program_atomic,
 };
+#[cfg(not(target_os = "solana"))]
+use solana_program::hash::hash;
 
+#[cfg(not(target_os = "solana"))]
+use super::{
+    v3_composer::{
+        MAX_DEALER_SCENARIO_CUSTODY_EFFECTS_V3, ScenarioAtomicPlanV3, ScenarioCustodyEffectV3,
+    },
+    v3_multi_lp::MultiLpCustodyRequestV3,
+    v3_obligation::{DEALER_OBLIGATION_HEADER_BYTES_V3, DealerObligationProjectionV3},
+    v3_trade::{DealerScenarioTradeRequestV3, ScenarioTradeDirectionV3},
+};
 use super::{
     v3_hot_artifact::{
         DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3, DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3,
-        DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3,
+        DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3, DealerCustodyIdentityFieldV3,
+        DealerCustodyScalarFieldV3,
     },
     v3_trade::{
         DEALER_SCENARIO_TRADE_ACTION_V3, DEALER_SCENARIO_TRADE_CLAIMS_PACKET_BYTES_OFFSET_V3,
@@ -84,11 +117,27 @@ pub const DEALER_SCENARIO_ROUTE_SPAN_SCALAR_BASE_V4: u16 = 7;
 /// First per-Custody-route request scalar block.
 pub const DEALER_SCENARIO_CUSTODY_SCALAR_BASE_V4: u16 = 13;
 /// Exact canonical Custody request scalar stride.
-pub const DEALER_SCENARIO_CUSTODY_SCALAR_STRIDE_V4: u16 = 9;
+pub const DEALER_SCENARIO_CUSTODY_SCALAR_STRIDE_V4: u16 = 14;
 /// Exact common scalar-bank width.
-pub const DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4: u16 = 67;
-/// Parent digest precedes six exact 17-identity Custody blocks.
-pub const DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4: u16 = 103;
+pub const DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4: u16 = 97;
+/// Parent digest precedes six exact 19-identity Custody blocks.
+pub const DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4: u16 = 115;
+
+const DEALER_SCENARIO_CUSTODY_IDENTITY_BASE_V4: u16 = 1;
+const DEALER_SCENARIO_CUSTODY_IDENTITY_STRIDE_V4: u16 = 19;
+const DEALER_SCENARIO_OBLIGATION_ACCOUNT_V4: u16 = DEALER_SCENARIO_BASE_FIXED_ACCOUNTS_V4 - 1;
+const DEALER_SCENARIO_OBLIGATION_REVISION_OFFSET_V4: u32 = 16;
+const DEALER_SCENARIO_CUSTODY_BASE_SCALAR_FIELDS_V4: usize = 9;
+const DEALER_SCENARIO_CUSTODY_BASE_IDENTITY_FIELDS_V4: usize = 17;
+const DEALER_SCENARIO_CUSTODY_TEMPLATE_BYTES_V4: usize =
+    2 * DELEGATED_CUSTODY_REQUEST_BYTES_V2 + 4 * CUSTODY_REQUEST_BYTES_V1;
+#[cfg(not(target_os = "solana"))]
+const DEALER_SCENARIO_EFFECT_OPERATION_COUNT_V4: usize = 6
+    * (DEALER_SCENARIO_CUSTODY_BASE_SCALAR_FIELDS_V4
+        + DEALER_SCENARIO_CUSTODY_BASE_IDENTITY_FIELDS_V4
+        + 1)
+    + 2 * 7
+    + 2;
 
 const REQUEST_PROFILE_OPERATIONS_V4: usize = 7;
 const REQUEST_PROFILE_V1_BYTES_V4: usize = dclutch_request_profile_contract::HEADER_BYTES
@@ -114,6 +163,8 @@ pub enum DealerScenarioArtifactsErrorV4 {
     Effect,
     /// Checked width or coordinate arithmetic overflowed.
     Arithmetic,
+    /// Signed request, scenario plan, Custody bank, or candidate state diverged.
+    Projection,
 }
 
 /// Exact combined SignedDelta packet bounds for selector 9.
@@ -283,6 +334,870 @@ pub fn dealer_scenario_effect_program_bytes_v4(
         })
         .and_then(|value| value.checked_add(base_program_bytes))
         .ok_or(DealerScenarioArtifactsErrorV4::Arithmetic)
+}
+
+/// Exact canonical V3 program width nested beneath selector-9 Effect V4.
+#[cfg(not(target_os = "solana"))]
+pub fn dealer_scenario_base_effect_program_bytes_v4()
+-> Result<usize, DealerScenarioArtifactsErrorV4> {
+    EFFECT_HEADER_BYTES
+        .checked_add(
+            usize::from(DEALER_SCENARIO_ROUTE_COUNT_V4)
+                .checked_mul(EFFECT_ROUTE_BYTES)
+                .ok_or(DealerScenarioArtifactsErrorV4::Arithmetic)?,
+        )
+        .and_then(|value| value.checked_add(2 * RECEIPT_DEPENDENCY_BYTES))
+        .and_then(|value| {
+            value.checked_add(
+                DEALER_SCENARIO_EFFECT_OPERATION_COUNT_V4.checked_mul(EFFECT_OPERATION_BYTES)?,
+            )
+        })
+        .and_then(|value| value.checked_add(DEALER_SCENARIO_CUSTODY_TEMPLATE_BYTES_V4))
+        .ok_or(DealerScenarioArtifactsErrorV4::Arithmetic)
+}
+
+/// Emit the sole selector-9 V3 Effect body from six typed Custody shapes.
+///
+/// The templates are used only to prove their static operation, caller role,
+/// and compartment pair. Every request-owned scalar and identity byte is
+/// cleared before finalization and reconstructed from the admitted register
+/// bank at execution time.
+#[cfg(not(target_os = "solana"))]
+pub fn encode_dealer_scenario_base_effect_program_v4(
+    custody_templates: &[MultiLpCustodyRequestV3],
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<(), DealerScenarioArtifactsErrorV4> {
+    if custody_templates.len() != DEALER_SCENARIO_CUSTODY_ROUTE_COUNT_V4
+        || scratch.len() != dealer_scenario_base_effect_program_bytes_v4()?
+        || output.len() != dealer_scenario_base_effect_program_bytes_v4()?
+    {
+        return Err(DealerScenarioArtifactsErrorV4::Effect);
+    }
+    let mut templates = Vec::with_capacity(DEALER_SCENARIO_CUSTODY_ROUTE_COUNT_V4);
+    for (slot, request) in custody_templates.iter().copied().enumerate() {
+        validate_scenario_custody_shape(slot, request)?;
+        let mut bytes = vec![0; request.encoded_len()];
+        request
+            .encode_into(&mut bytes)
+            .map_err(|_| DealerScenarioArtifactsErrorV4::Effect)?;
+        canonicalize_custody_template(request, &mut bytes)?;
+        templates.push(bytes);
+    }
+
+    let claims_receipt = RouteReceiptDependencyV3::new(
+        FixedRole::Claims,
+        DEALER_SCENARIO_CLAIMS_ROUTE_V4,
+        u16::try_from(SIGNED_DELTA_RECEIPT_BYTES_V3)
+            .map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic)?,
+    );
+    let mut routes = Vec::with_capacity(usize::from(DEALER_SCENARIO_ROUTE_COUNT_V4));
+    for route in 0..DEALER_SCENARIO_ROUTE_COUNT_V4 {
+        if route == DEALER_SCENARIO_CLAIMS_ROUTE_V4 {
+            routes.push(RouteInputV3 {
+                role: FixedRole::Claims,
+                kind: RouteKindV3::Once,
+                enable_common_scalar: None,
+                witness_range_common_scalar: None,
+                receipt_dependency: None,
+                fixed_account_start: DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3,
+                fixed_account_count: DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3,
+                item_account_start: 0,
+                item_account_count: 0,
+                fixed_request: &[],
+                item_request: &[],
+            });
+            continue;
+        }
+        let slot = scenario_custody_slot(route)?;
+        routes.push(RouteInputV3 {
+            role: FixedRole::Custody,
+            kind: RouteKindV3::Once,
+            enable_common_scalar: Some(scenario_route_span_scalar(slot)?),
+            witness_range_common_scalar: None,
+            receipt_dependency: (route > DEALER_SCENARIO_CLAIMS_ROUTE_V4).then_some(claims_receipt),
+            fixed_account_start: if route < DEALER_SCENARIO_CLAIMS_ROUTE_V4 {
+                DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3
+            } else {
+                DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3
+                    .checked_add(DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3)
+                    .ok_or(DealerScenarioArtifactsErrorV4::Arithmetic)?
+            },
+            fixed_account_count: 0,
+            item_account_start: 0,
+            item_account_count: 0,
+            fixed_request: templates
+                .get(slot)
+                .map(Vec::as_slice)
+                .ok_or(DealerScenarioArtifactsErrorV4::Effect)?,
+            item_request: &[],
+        });
+    }
+
+    let mut instructions = Vec::with_capacity(DEALER_SCENARIO_EFFECT_OPERATION_COUNT_V4 - 1);
+    instructions.push(EffectInstructionV3::write_u64(
+        AccountCoordinateV3::fixed(DEALER_SCENARIO_OBLIGATION_ACCOUNT_V4),
+        DEALER_SCENARIO_OBLIGATION_REVISION_OFFSET_V4,
+        ScalarCoordinateV3::common(DEALER_SCENARIO_OBLIGATION_REVISION_SCALAR_V4),
+    ));
+    let item_instructions = [EffectInstructionV3::write_u64_affine(
+        AccountCoordinateV3::fixed(DEALER_SCENARIO_OBLIGATION_ACCOUNT_V4),
+        u32::try_from(DEALER_OBLIGATION_HEADER_BYTES_V3)
+            .map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic)?,
+        8,
+        ScalarCoordinateV3::item(0),
+    )];
+    for slot in 0..DEALER_SCENARIO_CUSTODY_ROUTE_COUNT_V4 {
+        push_scenario_custody_projection(slot, &mut instructions)?;
+    }
+    if instructions.len() + item_instructions.len() != DEALER_SCENARIO_EFFECT_OPERATION_COUNT_V4 {
+        return Err(DealerScenarioArtifactsErrorV4::Effect);
+    }
+    encode_effect_program_v3_atomic(
+        EffectGeometryV3 {
+            fixed_accounts: DEALER_SCENARIO_BASE_FIXED_ACCOUNTS_V4,
+            item_account_stride: 0,
+            common_scalars: DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4,
+            item_scalar_stride: DEALER_SCENARIO_ITEM_SCALAR_STRIDE_V4,
+            common_identities: DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4,
+            item_identity_stride: DEALER_SCENARIO_ITEM_IDENTITY_STRIDE_V4,
+        },
+        &routes,
+        &instructions,
+        &item_instructions,
+        scratch,
+        output,
+    )
+    .map_err(|_| DealerScenarioArtifactsErrorV4::Effect)
+}
+
+/// Exact common scalar coordinate for one nested Custody V1 field.
+pub fn dealer_scenario_custody_scalar_register_v4(
+    slot: u16,
+    field: DealerCustodyScalarFieldV3,
+) -> Option<u16> {
+    let field = match field {
+        DealerCustodyScalarFieldV3::TransferIndex => 0,
+        DealerCustodyScalarFieldV3::ExpectedRevision => 1,
+        DealerCustodyScalarFieldV3::ResultingRevision => 2,
+        DealerCustodyScalarFieldV3::OrderNonce => 3,
+        DealerCustodyScalarFieldV3::Generation => 4,
+        DealerCustodyScalarFieldV3::Amount => 5,
+        DealerCustodyScalarFieldV3::RentLamports => 6,
+        DealerCustodyScalarFieldV3::PageIndex => 7,
+        DealerCustodyScalarFieldV3::ExecutionIndex => 8,
+    };
+    slot.checked_mul(DEALER_SCENARIO_CUSTODY_SCALAR_STRIDE_V4)
+        .and_then(|offset| DEALER_SCENARIO_CUSTODY_SCALAR_BASE_V4.checked_add(offset))
+        .and_then(|base| base.checked_add(field))
+}
+
+/// Exact common identity coordinate for one nested Custody V1 field.
+pub fn dealer_scenario_custody_identity_register_v4(
+    slot: u16,
+    field: DealerCustodyIdentityFieldV3,
+) -> Option<u16> {
+    let field = match field {
+        DealerCustodyIdentityFieldV3::ReleaseSet => 0,
+        DealerCustodyIdentityFieldV3::Market => 1,
+        DealerCustodyIdentityFieldV3::Realm => 2,
+        DealerCustodyIdentityFieldV3::Context => 3,
+        DealerCustodyIdentityFieldV3::CallerProgram => 4,
+        DealerCustodyIdentityFieldV3::Candidate => 5,
+        DealerCustodyIdentityFieldV3::SourceOwner => 6,
+        DealerCustodyIdentityFieldV3::DestinationOwner => 7,
+        DealerCustodyIdentityFieldV3::Order => 8,
+        DealerCustodyIdentityFieldV3::Source => 9,
+        DealerCustodyIdentityFieldV3::Destination => 10,
+        DealerCustodyIdentityFieldV3::SourceVaultContext => 11,
+        DealerCustodyIdentityFieldV3::DestinationVaultContext => 12,
+        DealerCustodyIdentityFieldV3::Mint => 13,
+        DealerCustodyIdentityFieldV3::TokenProgram => 14,
+        DealerCustodyIdentityFieldV3::Payer => 15,
+        DealerCustodyIdentityFieldV3::RentRefund => 16,
+    };
+    slot.checked_mul(DEALER_SCENARIO_CUSTODY_IDENTITY_STRIDE_V4)
+        .and_then(|offset| DEALER_SCENARIO_CUSTODY_IDENTITY_BASE_V4.checked_add(offset))
+        .and_then(|base| base.checked_add(field))
+}
+
+#[cfg(not(target_os = "solana"))]
+fn push_scenario_custody_projection(
+    slot: usize,
+    output: &mut Vec<EffectInstructionV3>,
+) -> Result<(), DealerScenarioArtifactsErrorV4> {
+    let slot_u16 = u16::try_from(slot).map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic)?;
+    let route = scenario_custody_route(slot)?;
+    let delegated = slot < 2;
+    let base = if delegated {
+        DelegatedCustodyRequestLayoutV2::BASE
+    } else {
+        0
+    };
+    output.push(EffectInstructionV3::write_request_u16(
+        route,
+        RequestSpaceV3::Fixed,
+        request_offset(base, CustodyRequestLayoutV1::TRANSFER_INDEX)?,
+        ScalarCoordinateV3::common(scenario_custody_scalar(
+            slot_u16,
+            DealerCustodyScalarFieldV3::TransferIndex,
+        )?),
+    ));
+    output.push(EffectInstructionV3::write_request_identity(
+        route,
+        RequestSpaceV3::Fixed,
+        request_offset(base, CustodyRequestLayoutV1::PARENT_REQUEST_DIGEST)?,
+        IdentityCoordinateV3::common(0),
+    ));
+    for (field, offset) in scenario_identity_fields()
+        .into_iter()
+        .zip(scenario_identity_offsets())
+    {
+        output.push(EffectInstructionV3::write_request_identity(
+            route,
+            RequestSpaceV3::Fixed,
+            request_offset(base, offset)?,
+            IdentityCoordinateV3::common(scenario_custody_identity(slot_u16, field)?),
+        ));
+    }
+    for (field, offset) in scenario_u64_fields() {
+        output.push(EffectInstructionV3::write_request_u64(
+            route,
+            RequestSpaceV3::Fixed,
+            request_offset(base, offset)?,
+            ScalarCoordinateV3::common(scenario_custody_scalar(slot_u16, field)?),
+        ));
+    }
+    for (field, offset) in scenario_u32_fields() {
+        output.push(EffectInstructionV3::write_request_u32(
+            route,
+            RequestSpaceV3::Fixed,
+            request_offset(base, offset)?,
+            ScalarCoordinateV3::common(scenario_custody_scalar(slot_u16, field)?),
+        ));
+    }
+    if delegated {
+        for (offset, field) in [
+            (DelegatedCustodyRequestLayoutV2::STARTS_ATOMIC_DEBIT, 9),
+            (DelegatedCustodyRequestLayoutV2::TERMINAL, 10),
+        ] {
+            output.push(EffectInstructionV3::write_request_u8(
+                route,
+                RequestSpaceV3::Fixed,
+                request_offset(0, offset)?,
+                ScalarCoordinateV3::common(scenario_extra_scalar(slot_u16, field)?),
+            ));
+        }
+        for (offset, field) in [
+            (DelegatedCustodyRequestLayoutV2::DELEGATE_BEFORE, 17),
+            (DelegatedCustodyRequestLayoutV2::DELEGATE_AFTER, 18),
+        ] {
+            output.push(EffectInstructionV3::write_request_identity(
+                route,
+                RequestSpaceV3::Fixed,
+                request_offset(0, offset)?,
+                IdentityCoordinateV3::common(scenario_extra_identity(slot_u16, field)?),
+            ));
+        }
+        for (offset, field) in [
+            (DelegatedCustodyRequestLayoutV2::TOTAL_DEBIT, 11),
+            (DelegatedCustodyRequestLayoutV2::ALLOWANCE_BEFORE, 12),
+            (DelegatedCustodyRequestLayoutV2::ALLOWANCE_AFTER, 13),
+        ] {
+            output.push(EffectInstructionV3::write_request_u64(
+                route,
+                RequestSpaceV3::Fixed,
+                request_offset(0, offset)?,
+                ScalarCoordinateV3::common(scenario_extra_scalar(slot_u16, field)?),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn scenario_custody_slot(route: u16) -> Result<usize, DealerScenarioArtifactsErrorV4> {
+    match route {
+        0..=3 => Ok(usize::from(route)),
+        5 | 6 => Ok(usize::from(route - 1)),
+        _ => Err(DealerScenarioArtifactsErrorV4::Effect),
+    }
+}
+
+fn scenario_custody_route(slot: usize) -> Result<u16, DealerScenarioArtifactsErrorV4> {
+    match slot {
+        0..=3 => u16::try_from(slot).map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic),
+        4 | 5 => u16::try_from(slot + 1).map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic),
+        _ => Err(DealerScenarioArtifactsErrorV4::Effect),
+    }
+}
+
+fn scenario_route_span_scalar(slot: usize) -> Result<u16, DealerScenarioArtifactsErrorV4> {
+    DEALER_SCENARIO_ROUTE_SPAN_SCALAR_BASE_V4
+        .checked_add(u16::try_from(slot).map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic)?)
+        .ok_or(DealerScenarioArtifactsErrorV4::Arithmetic)
+}
+
+fn scenario_custody_scalar(
+    slot: u16,
+    field: DealerCustodyScalarFieldV3,
+) -> Result<u16, DealerScenarioArtifactsErrorV4> {
+    dealer_scenario_custody_scalar_register_v4(slot, field)
+        .ok_or(DealerScenarioArtifactsErrorV4::Arithmetic)
+}
+
+fn scenario_custody_identity(
+    slot: u16,
+    field: DealerCustodyIdentityFieldV3,
+) -> Result<u16, DealerScenarioArtifactsErrorV4> {
+    dealer_scenario_custody_identity_register_v4(slot, field)
+        .ok_or(DealerScenarioArtifactsErrorV4::Arithmetic)
+}
+
+fn scenario_extra_scalar(slot: u16, field: u16) -> Result<u16, DealerScenarioArtifactsErrorV4> {
+    slot.checked_mul(DEALER_SCENARIO_CUSTODY_SCALAR_STRIDE_V4)
+        .and_then(|offset| DEALER_SCENARIO_CUSTODY_SCALAR_BASE_V4.checked_add(offset))
+        .and_then(|base| base.checked_add(field))
+        .ok_or(DealerScenarioArtifactsErrorV4::Arithmetic)
+}
+
+fn scenario_extra_identity(slot: u16, field: u16) -> Result<u16, DealerScenarioArtifactsErrorV4> {
+    slot.checked_mul(DEALER_SCENARIO_CUSTODY_IDENTITY_STRIDE_V4)
+        .and_then(|offset| DEALER_SCENARIO_CUSTODY_IDENTITY_BASE_V4.checked_add(offset))
+        .and_then(|base| base.checked_add(field))
+        .ok_or(DealerScenarioArtifactsErrorV4::Arithmetic)
+}
+
+fn request_offset(base: usize, field: usize) -> Result<u32, DealerScenarioArtifactsErrorV4> {
+    base.checked_add(field)
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or(DealerScenarioArtifactsErrorV4::Arithmetic)
+}
+
+#[cfg(not(target_os = "solana"))]
+fn validate_scenario_custody_shape(
+    slot: usize,
+    request: MultiLpCustodyRequestV3,
+) -> Result<(), DealerScenarioArtifactsErrorV4> {
+    let expected = match slot {
+        0 => (CompartmentV1::External, CompartmentV1::TradingPrincipal),
+        1 => (CompartmentV1::External, CompartmentV1::FeeVault),
+        2 => (CompartmentV1::TradingPrincipal, CompartmentV1::FeeVault),
+        3 => (
+            CompartmentV1::TradingPrincipal,
+            CompartmentV1::HoardPrincipal,
+        ),
+        4 => (
+            CompartmentV1::HoardPrincipal,
+            CompartmentV1::TradingPrincipal,
+        ),
+        5 => (CompartmentV1::TradingPrincipal, CompartmentV1::External),
+        _ => return Err(DealerScenarioArtifactsErrorV4::Effect),
+    };
+    let custody = request.custody();
+    let kind = matches!(
+        (slot, request),
+        (0 | 1, MultiLpCustodyRequestV3::Delegated(_))
+            | (2..=5, MultiLpCustodyRequestV3::Canonical(_))
+    );
+    if !kind
+        || custody.operation != OperationV1::Transfer
+        || custody.caller_role != CallerRoleV1::Trading
+        || (custody.source_compartment, custody.destination_compartment) != expected
+    {
+        return Err(DealerScenarioArtifactsErrorV4::Effect);
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "solana"))]
+fn canonicalize_custody_template(
+    request: MultiLpCustodyRequestV3,
+    bytes: &mut [u8],
+) -> Result<(), DealerScenarioArtifactsErrorV4> {
+    let base = if matches!(request, MultiLpCustodyRequestV3::Delegated(_)) {
+        DelegatedCustodyRequestLayoutV2::BASE
+    } else {
+        0
+    };
+    for (offset, width) in core::iter::once((CustodyRequestLayoutV1::TRANSFER_INDEX, 2))
+        .chain(core::iter::once((
+            CustodyRequestLayoutV1::PARENT_REQUEST_DIGEST,
+            32,
+        )))
+        .chain(
+            scenario_identity_offsets()
+                .into_iter()
+                .map(|offset| (offset, 32)),
+        )
+        .chain(
+            scenario_u64_fields()
+                .into_iter()
+                .map(|(_, offset)| (offset, 8)),
+        )
+        .chain(
+            scenario_u32_fields()
+                .into_iter()
+                .map(|(_, offset)| (offset, 4)),
+        )
+    {
+        clear(bytes, base, offset, width)?;
+    }
+    if matches!(request, MultiLpCustodyRequestV3::Delegated(_)) {
+        for (offset, width) in [
+            (DelegatedCustodyRequestLayoutV2::STARTS_ATOMIC_DEBIT, 1),
+            (DelegatedCustodyRequestLayoutV2::TERMINAL, 1),
+            (DelegatedCustodyRequestLayoutV2::DELEGATE_BEFORE, 32),
+            (DelegatedCustodyRequestLayoutV2::DELEGATE_AFTER, 32),
+            (DelegatedCustodyRequestLayoutV2::TOTAL_DEBIT, 8),
+            (DelegatedCustodyRequestLayoutV2::ALLOWANCE_BEFORE, 8),
+            (DelegatedCustodyRequestLayoutV2::ALLOWANCE_AFTER, 8),
+        ] {
+            clear(bytes, 0, offset, width)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "solana"))]
+fn clear(
+    bytes: &mut [u8],
+    base: usize,
+    offset: usize,
+    width: usize,
+) -> Result<(), DealerScenarioArtifactsErrorV4> {
+    let start = base
+        .checked_add(offset)
+        .ok_or(DealerScenarioArtifactsErrorV4::Arithmetic)?;
+    let end = start
+        .checked_add(width)
+        .ok_or(DealerScenarioArtifactsErrorV4::Arithmetic)?;
+    bytes
+        .get_mut(start..end)
+        .ok_or(DealerScenarioArtifactsErrorV4::Effect)?
+        .fill(0);
+    Ok(())
+}
+
+const fn scenario_identity_offsets() -> [usize; DEALER_SCENARIO_CUSTODY_BASE_IDENTITY_FIELDS_V4] {
+    [
+        CustodyRequestLayoutV1::RELEASE_SET,
+        CustodyRequestLayoutV1::MARKET,
+        CustodyRequestLayoutV1::REALM,
+        CustodyRequestLayoutV1::CONTEXT,
+        CustodyRequestLayoutV1::CALLER_PROGRAM,
+        CustodyRequestLayoutV1::CANDIDATE,
+        CustodyRequestLayoutV1::SOURCE_OWNER,
+        CustodyRequestLayoutV1::DESTINATION_OWNER,
+        CustodyRequestLayoutV1::ORDER,
+        CustodyRequestLayoutV1::SOURCE,
+        CustodyRequestLayoutV1::DESTINATION,
+        CustodyRequestLayoutV1::SOURCE_VAULT_CONTEXT,
+        CustodyRequestLayoutV1::DESTINATION_VAULT_CONTEXT,
+        CustodyRequestLayoutV1::MINT,
+        CustodyRequestLayoutV1::TOKEN_PROGRAM,
+        CustodyRequestLayoutV1::PAYER,
+        CustodyRequestLayoutV1::RENT_REFUND,
+    ]
+}
+
+const fn scenario_identity_fields()
+-> [DealerCustodyIdentityFieldV3; DEALER_SCENARIO_CUSTODY_BASE_IDENTITY_FIELDS_V4] {
+    [
+        DealerCustodyIdentityFieldV3::ReleaseSet,
+        DealerCustodyIdentityFieldV3::Market,
+        DealerCustodyIdentityFieldV3::Realm,
+        DealerCustodyIdentityFieldV3::Context,
+        DealerCustodyIdentityFieldV3::CallerProgram,
+        DealerCustodyIdentityFieldV3::Candidate,
+        DealerCustodyIdentityFieldV3::SourceOwner,
+        DealerCustodyIdentityFieldV3::DestinationOwner,
+        DealerCustodyIdentityFieldV3::Order,
+        DealerCustodyIdentityFieldV3::Source,
+        DealerCustodyIdentityFieldV3::Destination,
+        DealerCustodyIdentityFieldV3::SourceVaultContext,
+        DealerCustodyIdentityFieldV3::DestinationVaultContext,
+        DealerCustodyIdentityFieldV3::Mint,
+        DealerCustodyIdentityFieldV3::TokenProgram,
+        DealerCustodyIdentityFieldV3::Payer,
+        DealerCustodyIdentityFieldV3::RentRefund,
+    ]
+}
+
+const fn scenario_u64_fields() -> [(DealerCustodyScalarFieldV3, usize); 6] {
+    [
+        (
+            DealerCustodyScalarFieldV3::ExpectedRevision,
+            CustodyRequestLayoutV1::EXPECTED_REVISION,
+        ),
+        (
+            DealerCustodyScalarFieldV3::ResultingRevision,
+            CustodyRequestLayoutV1::RESULTING_REVISION,
+        ),
+        (
+            DealerCustodyScalarFieldV3::OrderNonce,
+            CustodyRequestLayoutV1::ORDER_NONCE,
+        ),
+        (
+            DealerCustodyScalarFieldV3::Generation,
+            CustodyRequestLayoutV1::GENERATION,
+        ),
+        (
+            DealerCustodyScalarFieldV3::Amount,
+            CustodyRequestLayoutV1::AMOUNT,
+        ),
+        (
+            DealerCustodyScalarFieldV3::RentLamports,
+            CustodyRequestLayoutV1::RENT_LAMPORTS,
+        ),
+    ]
+}
+
+const fn scenario_u32_fields() -> [(DealerCustodyScalarFieldV3, usize); 2] {
+    [
+        (
+            DealerCustodyScalarFieldV3::PageIndex,
+            CustodyRequestLayoutV1::PAGE_INDEX,
+        ),
+        (
+            DealerCustodyScalarFieldV3::ExecutionIndex,
+            CustodyRequestLayoutV1::EXECUTION_INDEX,
+        ),
+    ]
+}
+
+/// Project the admitted selector-9 register bank from the exact semantic plan.
+///
+/// No route shape, amount, or Claims quantity is supplied separately: active
+/// Custody routes are classified from the exact composer-owned requests, the
+/// SignedDelta suffix owns P and all Claims rows, and the authenticated
+/// candidate obligation account owns the repeated outcome vector.
+#[cfg(not(target_os = "solana"))]
+#[allow(clippy::too_many_arguments)]
+pub fn project_dealer_scenario_hot_registers_v4(
+    request: DealerScenarioTradeRequestV3<'_>,
+    plan: ScenarioAtomicPlanV3,
+    candidate_obligation: DealerObligationProjectionV3<'_>,
+    custody_effects: &[Option<ScenarioCustodyEffectV3>; MAX_DEALER_SCENARIO_CUSTODY_EFFECTS_V3],
+    trusted_current_slot: u64,
+    scalars: &mut [u64],
+    identities: &mut [[u8; 32]],
+) -> Result<(), DealerScenarioArtifactsErrorV4> {
+    let width =
+        usize::try_from(request.width).map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic)?;
+    let expected_scalars = usize::from(DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4)
+        .checked_add(width)
+        .ok_or(DealerScenarioArtifactsErrorV4::Arithmetic)?;
+    if scalars.len() != expected_scalars
+        || identities.len() != usize::from(DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4)
+        || trusted_current_slot > request.expires_at
+        || candidate_obligation.width() != request.width
+        || candidate_obligation.revision() != request.candidate_obligation_revision
+        || candidate_obligation.state_digest() != request.candidate_obligation_digest
+        || plan.obligation_revision_after != request.candidate_obligation_revision
+        || plan.obligation_digest_after != request.candidate_obligation_digest
+        || plan.claims.width != request.width
+        || plan.claims.dealer_owner != request.dealer_owner
+        || plan.claims.counterparty_owner != request.counterparty_owner
+        || plan.claims.dealer_revision_before != request.dealer_position_revision
+        || plan.claims.counterparty_revision_before != request.counterparty_position_revision
+        || plan.claims.claims_revision_before != request.claims_revision
+    {
+        return Err(DealerScenarioArtifactsErrorV4::Projection);
+    }
+    let claims = request
+        .claims_plan()
+        .map_err(|_| DealerScenarioArtifactsErrorV4::Projection)?;
+    if claims.position_count() != u32::from(request.claims_position_count)
+        || claims.claim_count() != request.width
+        || request.claims_packet().len()
+            != usize::try_from(request.claims_packet_bytes)
+                .map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic)?
+    {
+        return Err(DealerScenarioArtifactsErrorV4::Projection);
+    }
+    let active_count = usize::from(plan.custody_count);
+    if active_count > custody_effects.len()
+        || custody_effects
+            .iter()
+            .skip(active_count)
+            .any(Option::is_some)
+    {
+        return Err(DealerScenarioArtifactsErrorV4::Projection);
+    }
+    let parent_digest = hash(request.bytes()).to_bytes();
+    let mut by_slot = [None; DEALER_SCENARIO_CUSTODY_ROUTE_COUNT_V4];
+    for effect in custody_effects.iter().take(active_count).copied() {
+        let effect = effect.ok_or(DealerScenarioArtifactsErrorV4::Projection)?;
+        let slot = classify_scenario_custody(effect.request)
+            .ok_or(DealerScenarioArtifactsErrorV4::Projection)?;
+        if effect.request.custody().semantic.parent_request_digest != parent_digest
+            || by_slot
+                .get_mut(slot)
+                .ok_or(DealerScenarioArtifactsErrorV4::Projection)?
+                .replace(effect)
+                .is_some()
+        {
+            return Err(DealerScenarioArtifactsErrorV4::Projection);
+        }
+    }
+    let incoming = request.direction == ScenarioTradeDirectionV3::CounterpartyPaysDealer;
+    let outgoing = request.direction == ScenarioTradeDirectionV3::DealerPaysCounterparty;
+    let expected_amounts = [
+        if incoming { request.principal } else { 0 },
+        if incoming { request.realized_fee } else { 0 },
+        if outgoing { request.realized_fee } else { 0 },
+        plan.scenario.minimum_complete_sets_to_split,
+        plan.scenario.maximum_complete_sets_to_merge,
+        if outgoing {
+            request
+                .principal
+                .checked_sub(request.realized_fee)
+                .ok_or(DealerScenarioArtifactsErrorV4::Projection)?
+        } else {
+            0
+        },
+    ];
+    let mut observed_count = 0_usize;
+    for (slot, expected_amount) in expected_amounts.iter().copied().enumerate() {
+        match by_slot.get(slot).copied().flatten() {
+            Some(effect)
+                if expected_amount != 0 && effect.request.custody().amount == expected_amount =>
+            {
+                observed_count = observed_count
+                    .checked_add(1)
+                    .ok_or(DealerScenarioArtifactsErrorV4::Arithmetic)?;
+            }
+            None if expected_amount == 0 => {}
+            _ => return Err(DealerScenarioArtifactsErrorV4::Projection),
+        }
+    }
+    if observed_count != active_count {
+        return Err(DealerScenarioArtifactsErrorV4::Projection);
+    }
+
+    let mut staged_scalars = vec![0_u64; expected_scalars];
+    let mut staged_identities =
+        vec![[0_u8; 32]; usize::from(DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4)];
+    set_scenario_scalar(
+        &mut staged_scalars,
+        DEALER_SCENARIO_POSITION_COUNT_SCALAR_V4,
+        u64::from(request.claims_position_count),
+    )?;
+    set_scenario_scalar(
+        &mut staged_scalars,
+        DEALER_SCENARIO_WITNESS_BYTES_SCALAR_V4,
+        u64::from(request.claims_packet_bytes),
+    )?;
+    set_scenario_scalar(
+        &mut staged_scalars,
+        DEALER_SCENARIO_WITNESS_OFFSET_SCALAR_V4,
+        u64::try_from(DEALER_SCENARIO_TRADE_HEADER_BYTES_V3)
+            .map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic)?,
+    )?;
+    set_scenario_scalar(
+        &mut staged_scalars,
+        DEALER_SCENARIO_CURRENT_SLOT_SCALAR_V4,
+        trusted_current_slot,
+    )?;
+    set_scenario_scalar(
+        &mut staged_scalars,
+        DEALER_SCENARIO_EXPIRY_SCALAR_V4,
+        request.expires_at,
+    )?;
+    set_scenario_scalar(
+        &mut staged_scalars,
+        DEALER_SCENARIO_MAX_POSITION_COUNT_SCALAR_V4,
+        2,
+    )?;
+    set_scenario_scalar(
+        &mut staged_scalars,
+        DEALER_SCENARIO_OBLIGATION_REVISION_SCALAR_V4,
+        plan.obligation_revision_after,
+    )?;
+    *staged_identities
+        .get_mut(0)
+        .ok_or(DealerScenarioArtifactsErrorV4::Projection)? = parent_digest;
+    for (slot, effect) in by_slot.iter().copied().enumerate() {
+        let Some(effect) = effect else { continue };
+        set_scenario_scalar(
+            &mut staged_scalars,
+            scenario_route_span_scalar(slot)?,
+            u64::from(DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3),
+        )?;
+        project_scenario_custody_request(
+            u16::try_from(slot).map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic)?,
+            effect.request,
+            &mut staged_scalars,
+            &mut staged_identities,
+        )?;
+    }
+    for (index, obligation) in candidate_obligation.obligations().enumerate() {
+        let destination = usize::from(DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4)
+            .checked_add(index)
+            .ok_or(DealerScenarioArtifactsErrorV4::Arithmetic)?;
+        *staged_scalars
+            .get_mut(destination)
+            .ok_or(DealerScenarioArtifactsErrorV4::Projection)? = obligation;
+    }
+    scalars.copy_from_slice(&staged_scalars);
+    identities.copy_from_slice(&staged_identities);
+    Ok(())
+}
+
+#[cfg(not(target_os = "solana"))]
+fn project_scenario_custody_request(
+    slot: u16,
+    request: MultiLpCustodyRequestV3,
+    scalars: &mut [u64],
+    identities: &mut [[u8; 32]],
+) -> Result<(), DealerScenarioArtifactsErrorV4> {
+    let custody = request.custody();
+    for (field, value) in [
+        (
+            DealerCustodyScalarFieldV3::TransferIndex,
+            u64::from(custody.semantic.transfer_index),
+        ),
+        (
+            DealerCustodyScalarFieldV3::ExpectedRevision,
+            custody.expected_revision,
+        ),
+        (
+            DealerCustodyScalarFieldV3::ResultingRevision,
+            custody.resulting_revision,
+        ),
+        (
+            DealerCustodyScalarFieldV3::OrderNonce,
+            custody.semantic.order_nonce,
+        ),
+        (
+            DealerCustodyScalarFieldV3::Generation,
+            custody.semantic.generation,
+        ),
+        (DealerCustodyScalarFieldV3::Amount, custody.amount),
+        (
+            DealerCustodyScalarFieldV3::RentLamports,
+            custody.rent_lamports,
+        ),
+        (
+            DealerCustodyScalarFieldV3::PageIndex,
+            u64::from(custody.semantic.page_index),
+        ),
+        (
+            DealerCustodyScalarFieldV3::ExecutionIndex,
+            u64::from(custody.semantic.execution_index),
+        ),
+    ] {
+        set_scenario_scalar(scalars, scenario_custody_scalar(slot, field)?, value)?;
+    }
+    for (field, value) in scenario_identity_fields().into_iter().zip([
+        custody.release_set,
+        custody.market,
+        custody.realm,
+        custody.context,
+        custody.caller_program,
+        custody.semantic.candidate,
+        custody.semantic.source_owner,
+        custody.semantic.destination_owner,
+        custody.semantic.order,
+        custody.source,
+        custody.destination,
+        custody.source_vault_context,
+        custody.destination_vault_context,
+        custody.mint,
+        custody.token_program,
+        custody.payer,
+        custody.rent_refund,
+    ]) {
+        set_scenario_identity(identities, scenario_custody_identity(slot, field)?, value)?;
+    }
+    if let MultiLpCustodyRequestV3::Delegated(value) = request {
+        for (field, scalar) in [
+            (9, u64::from(value.starts_atomic_debit)),
+            (10, u64::from(value.terminal)),
+            (11, value.total_debit),
+            (12, value.allowance_before),
+            (13, value.allowance_after),
+        ] {
+            set_scenario_scalar(scalars, scenario_extra_scalar(slot, field)?, scalar)?;
+        }
+        set_scenario_identity(
+            identities,
+            scenario_extra_identity(slot, 17)?,
+            value.delegate_before,
+        )?;
+        set_scenario_identity(
+            identities,
+            scenario_extra_identity(slot, 18)?,
+            value.delegate_after,
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "solana"))]
+fn classify_scenario_custody(request: MultiLpCustodyRequestV3) -> Option<usize> {
+    let custody = request.custody();
+    match (
+        request,
+        custody.source_compartment,
+        custody.destination_compartment,
+    ) {
+        (
+            MultiLpCustodyRequestV3::Delegated(_),
+            CompartmentV1::External,
+            CompartmentV1::TradingPrincipal,
+        ) => Some(0),
+        (
+            MultiLpCustodyRequestV3::Delegated(_),
+            CompartmentV1::External,
+            CompartmentV1::FeeVault,
+        ) => Some(1),
+        (
+            MultiLpCustodyRequestV3::Canonical(_),
+            CompartmentV1::TradingPrincipal,
+            CompartmentV1::FeeVault,
+        ) => Some(2),
+        (
+            MultiLpCustodyRequestV3::Canonical(_),
+            CompartmentV1::TradingPrincipal,
+            CompartmentV1::HoardPrincipal,
+        ) => Some(3),
+        (
+            MultiLpCustodyRequestV3::Canonical(_),
+            CompartmentV1::HoardPrincipal,
+            CompartmentV1::TradingPrincipal,
+        ) => Some(4),
+        (
+            MultiLpCustodyRequestV3::Canonical(_),
+            CompartmentV1::TradingPrincipal,
+            CompartmentV1::External,
+        ) => Some(5),
+        _ => None,
+    }
+}
+
+#[cfg(not(target_os = "solana"))]
+fn set_scenario_scalar(
+    scalars: &mut [u64],
+    index: u16,
+    value: u64,
+) -> Result<(), DealerScenarioArtifactsErrorV4> {
+    *scalars
+        .get_mut(usize::from(index))
+        .ok_or(DealerScenarioArtifactsErrorV4::Projection)? = value;
+    Ok(())
+}
+
+#[cfg(not(target_os = "solana"))]
+fn set_scenario_identity(
+    identities: &mut [[u8; 32]],
+    index: u16,
+    value: [u8; 32],
+) -> Result<(), DealerScenarioArtifactsErrorV4> {
+    *identities
+        .get_mut(usize::from(index))
+        .ok_or(DealerScenarioArtifactsErrorV4::Projection)? = value;
+    Ok(())
 }
 
 /// Wrap one canonical selector-9 base program in the exact protected V4
@@ -477,6 +1392,7 @@ fn validate_base_effect(base_program: &[u8]) -> Result<(), DealerScenarioArtifac
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dclutch_custody_contract::{ContextV1, CustodyRequestV1, DelegatedCustodyRequestV2};
     use dclutch_effect_kernel::v3::{
         HEADER_BYTES as EFFECT_HEADER_BYTES, RECEIPT_DEPENDENCY_BYTES, ROUTE_BYTES,
         RouteReceiptDependencyV3,
@@ -484,6 +1400,88 @@ mod tests {
     };
     use std::vec;
     use std::vec::Vec;
+
+    fn custody_template(slot: usize) -> MultiLpCustodyRequestV3 {
+        let (source_compartment, destination_compartment) = match slot {
+            0 => (CompartmentV1::External, CompartmentV1::TradingPrincipal),
+            1 => (CompartmentV1::External, CompartmentV1::FeeVault),
+            2 => (CompartmentV1::TradingPrincipal, CompartmentV1::FeeVault),
+            3 => (
+                CompartmentV1::TradingPrincipal,
+                CompartmentV1::HoardPrincipal,
+            ),
+            4 => (
+                CompartmentV1::HoardPrincipal,
+                CompartmentV1::TradingPrincipal,
+            ),
+            5 => (CompartmentV1::TradingPrincipal, CompartmentV1::External),
+            _ => panic!("slot"),
+        };
+        let external_source = source_compartment == CompartmentV1::External;
+        let external_destination = destination_compartment == CompartmentV1::External;
+        let tag = u8::try_from(slot + 1).expect("tag");
+        let request = CustodyRequestV1 {
+            operation: OperationV1::Transfer,
+            caller_role: CallerRoleV1::Trading,
+            source_compartment,
+            destination_compartment,
+            release_set: [1; 32],
+            market: [2; 32],
+            realm: [3; 32],
+            context: [4; 32],
+            caller_program: [5; 32],
+            semantic: ContextV1 {
+                candidate: [6; 32],
+                source_owner: if external_source { [7; 32] } else { [0; 32] },
+                destination_owner: if external_destination {
+                    [8; 32]
+                } else {
+                    [0; 32]
+                },
+                order: [9; 32],
+                parent_request_digest: [10; 32],
+                order_nonce: 11,
+                generation: 12,
+                page_index: 0,
+                execution_index: 0,
+                transfer_index: u16::try_from(slot).expect("slot"),
+            },
+            source: [tag; 32],
+            destination: [tag + 20; 32],
+            source_vault_context: if external_source { [0; 32] } else { [13; 32] },
+            destination_vault_context: if external_destination {
+                [0; 32]
+            } else {
+                [14; 32]
+            },
+            mint: [15; 32],
+            token_program: [16; 32],
+            payer: [0; 32],
+            rent_refund: [0; 32],
+            expected_revision: 17 + u64::try_from(slot).expect("slot"),
+            resulting_revision: 18 + u64::try_from(slot).expect("slot"),
+            amount: 1,
+            rent_lamports: 0,
+        };
+        if slot < 2 {
+            MultiLpCustodyRequestV3::Delegated(DelegatedCustodyRequestV2 {
+                custody: request,
+                starts_atomic_debit: true,
+                terminal: true,
+                delegate_before: [19; 32],
+                delegate_after: [0; 32],
+                total_debit: 1,
+                allowance_before: 1,
+                allowance_after: 0,
+            })
+        } else {
+            MultiLpCustodyRequestV3::Canonical(request)
+        }
+    }
+
+    fn custody_templates() -> [MultiLpCustodyRequestV3; 6] {
+        core::array::from_fn(custody_template)
+    }
 
     fn base_effect() -> Vec<u8> {
         let template = [0_u8; 1];
@@ -619,6 +1617,72 @@ mod tests {
                 Ok(())
             );
         }
+    }
+
+    #[test]
+    fn typed_base_effect_is_canonical_and_shifts_local_obligation() {
+        let templates = custody_templates();
+        let base_bytes = dealer_scenario_base_effect_program_bytes_v4().expect("base width");
+        let mut base_scratch = vec![0; base_bytes];
+        let mut base = vec![0; base_bytes];
+        encode_dealer_scenario_base_effect_program_v4(&templates, &mut base_scratch, &mut base)
+            .expect("base effect");
+        let decoded = EffectProgramV3::decode(&base).expect("base decode");
+        assert_eq!(decoded.route_count(), DEALER_SCENARIO_ROUTE_COUNT_V4);
+        assert_eq!(decoded.fixed_operation_count(), 177);
+        assert_eq!(decoded.item_operation_count(), 1);
+        assert_eq!(
+            decoded.route(0).expect("delegated").fixed_request_bytes(),
+            776
+        );
+        assert_eq!(
+            decoded.route(2).expect("canonical").fixed_request_bytes(),
+            672
+        );
+        assert_eq!(
+            decoded.route(5).expect("post Claims").receipt_dependency(),
+            Some(RouteReceiptDependencyV3::new(
+                FixedRole::Claims,
+                DEALER_SCENARIO_CLAIMS_ROUTE_V4,
+                376,
+            ))
+        );
+
+        let effect_bytes = dealer_scenario_effect_program_bytes_v4(base.len()).expect("width");
+        let mut effect_scratch = vec![0; effect_bytes];
+        let mut effect = vec![0; effect_bytes];
+        encode_dealer_scenario_effect_program_v4(&base, &mut effect_scratch, &mut effect)
+            .expect("effect v4");
+        let program = EffectProgramV4::decode(&effect).expect("decode v4");
+        let mut scalars = vec![0; usize::from(DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4) + 2];
+        let identities = vec![[1; 32]; usize::from(DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4)];
+        scalars[usize::from(DEALER_SCENARIO_POSITION_COUNT_SCALAR_V4)] = 2;
+        scalars[usize::from(DEALER_SCENARIO_ROUTE_SPAN_SCALAR_BASE_V4)] = 14;
+        scalars[usize::from(DEALER_SCENARIO_ROUTE_SPAN_SCALAR_BASE_V4 + 4)] = 14;
+        assert_eq!(program.account_count(2, &scalars), Ok(56));
+        assert!(matches!(
+            program.resolved_fixed_effect(0, 2, &scalars, &identities),
+            Ok(dclutch_effect_kernel::v3::ResolvedEffectV3::WriteScalar {
+                account: 55,
+                offset: 16,
+                ..
+            })
+        ));
+        assert!(matches!(
+            program.resolved_item_effect(1, 0, 2, &scalars, &identities),
+            Ok(dclutch_effect_kernel::v3::ResolvedEffectV3::WriteScalar {
+                account: 55,
+                offset: 200,
+                ..
+            })
+        ));
+
+        let mut altered = custody_templates();
+        altered[5] = custody_template(4);
+        assert_eq!(
+            encode_dealer_scenario_base_effect_program_v4(&altered, &mut base_scratch, &mut base,),
+            Err(DealerScenarioArtifactsErrorV4::Effect)
+        );
     }
 
     #[test]
