@@ -608,3 +608,211 @@ fn authenticate_replay_commit(
 fn identity(bytes: [u8; 32]) -> Result<Identity, ProgramError> {
     Identity::new(bytes).map_err(|_| TradingSbfError::Transition.into())
 }
+
+#[cfg(test)]
+mod tests {
+    use alloc::{boxed::Box, vec};
+
+    use super::*;
+
+    fn id(byte: u8) -> Identity {
+        Identity::new([byte; 32]).expect("identity")
+    }
+
+    fn request() -> SeriesCoreRequestV1 {
+        SeriesCoreRequestV1::occurrence(
+            SeriesCoreActionV1::Consume,
+            id(1),
+            id(2),
+            id(3),
+            id(4),
+            id(5),
+            id(6),
+            id(7),
+            id(8),
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+        )
+        .expect("request")
+    }
+
+    fn account(key: Pubkey, owner: Pubkey, lamports: u64, data: Vec<u8>) -> AccountInfo<'static> {
+        AccountInfo::new(
+            Box::leak(Box::new(key)),
+            false,
+            true,
+            Box::leak(Box::new(lamports)),
+            Box::leak(data.into_boxed_slice()),
+            Box::leak(Box::new(owner)),
+            false,
+        )
+    }
+
+    struct OpenFixture {
+        request: SeriesCoreRequestV1,
+        core: Pubkey,
+        accounts: Vec<AccountInfo<'static>>,
+        claims: [u8; CLAIMS_FOUNDING_RECEIPT_BYTES_V5],
+        root: [u8; 64],
+        ticket: [u8; 64],
+        acknowledgement: [u8; SERIES_CORE_ACK_BYTES_V1],
+    }
+
+    fn fixture() -> OpenFixture {
+        let request = request();
+        let core = Pubkey::new_from_array([20; 32]);
+        let mut accounts = (0..OPEN_ACCOUNT_COUNT_V4 + 1)
+            .map(|_| account(Pubkey::new_unique(), Pubkey::new_unique(), 1, Vec::new()))
+            .collect::<Vec<_>>();
+        *accounts.get_mut(MARKET).expect("market account") = account(
+            Pubkey::new_from_array(request.market().expect("market").to_bytes()),
+            core,
+            2,
+            vec![21; 64],
+        );
+        *accounts.get_mut(PERMIT).expect("permit account") =
+            account(Pubkey::new_unique(), system_program::ID, 0, Vec::new());
+        *accounts.get_mut(RENT_CREDIT).expect("rent account") =
+            account(Pubkey::new_unique(), Pubkey::new_unique(), 8, Vec::new());
+        let claims = [22; CLAIMS_FOUNDING_RECEIPT_BYTES_V5];
+        let root = [23; 64];
+        let ticket = [24; 64];
+        let request_digest = hash(&request.encode().expect("request bytes")).to_bytes();
+        let market_data = accounts
+            .get(MARKET)
+            .expect("market account")
+            .try_borrow_data()
+            .expect("market data");
+        let post = hashv(&[
+            SERIES_OPEN_POST_RESOURCE_DIGEST_DOMAIN_V1,
+            &market_data,
+            &claims,
+            &root,
+            &ticket,
+        ])
+        .to_bytes();
+        drop(market_data);
+        let acknowledgement = SeriesCoreAckV1::new(
+            request,
+            id(20),
+            Identity::new(request_digest).expect("request digest"),
+            Identity::new(post).expect("post resource"),
+        )
+        .encode()
+        .expect("acknowledgement");
+        OpenFixture {
+            request,
+            core,
+            accounts,
+            claims,
+            root,
+            ticket,
+            acknowledgement,
+        }
+    }
+
+    fn authenticate(value: &OpenFixture) -> Result<SeriesCoreAckV1, ProgramError> {
+        let digest = hash(&value.request.encode().expect("request bytes")).to_bytes();
+        authenticate_open_result(
+            value.request,
+            digest,
+            &value.claims,
+            value.root,
+            value.ticket,
+            &value.accounts,
+            value.core,
+            value.core,
+            &value.acknowledgement,
+            0,
+            8,
+        )
+    }
+
+    #[test]
+    fn exact_open_ack_binds_market_claims_and_both_replay_candidates() {
+        let exact = fixture();
+        assert!(authenticate(&exact).is_ok());
+
+        let mut wrong_root = fixture();
+        wrong_root.root[0] ^= 1;
+        assert_eq!(authenticate(&wrong_root), Err(TradingSbfError::Transition.into()));
+
+        let mut wrong_ticket = fixture();
+        wrong_ticket.ticket[0] ^= 1;
+        assert_eq!(authenticate(&wrong_ticket), Err(TradingSbfError::Transition.into()));
+
+        let mut wrong_claims = fixture();
+        wrong_claims.claims[0] ^= 1;
+        assert_eq!(authenticate(&wrong_claims), Err(TradingSbfError::Transition.into()));
+    }
+
+    #[test]
+    fn producer_market_and_permit_rent_substitution_refuse() {
+        let wrong_producer = fixture();
+        let digest = hash(
+            &wrong_producer
+                .request
+                .encode()
+                .expect("request bytes"),
+        )
+        .to_bytes();
+        assert_eq!(
+            authenticate_open_result(
+                wrong_producer.request,
+                digest,
+                &wrong_producer.claims,
+                wrong_producer.root,
+                wrong_producer.ticket,
+                &wrong_producer.accounts,
+                Pubkey::new_unique(),
+                wrong_producer.core,
+                &wrong_producer.acknowledgement,
+                0,
+                8,
+            ),
+            Err(TradingSbfError::Transition.into())
+        );
+
+        let wrong_market = fixture();
+        *wrong_market
+            .accounts
+            .get(MARKET)
+            .expect("market")
+            .try_borrow_mut_data()
+            .expect("market data")
+            .first_mut()
+            .expect("market byte") ^= 1;
+        assert_eq!(authenticate(&wrong_market), Err(TradingSbfError::Transition.into()));
+
+        let wrong_rent = fixture();
+        assert_eq!(
+            authenticate_open_result(
+                wrong_rent.request,
+                hash(&wrong_rent.request.encode().expect("request bytes")).to_bytes(),
+                &wrong_rent.claims,
+                wrong_rent.root,
+                wrong_rent.ticket,
+                &wrong_rent.accounts,
+                wrong_rent.core,
+                wrong_rent.core,
+                &wrong_rent.acknowledgement,
+                1,
+                8,
+            ),
+            Err(TradingSbfError::Transition.into())
+        );
+    }
+
+    #[test]
+    fn route_four_geometry_is_exact() {
+        assert_eq!(SERIES_CONSUME_OPEN_ROUTE_V4, 4);
+        assert_eq!(OPEN_ACCOUNT_COUNT_V4, 37);
+        assert_eq!(SERIES_CORE_OPEN_RECEIPT_DEPENDENCIES_V3.len(), 1);
+        assert_eq!(SERIES_CORE_ACK_BYTES_V1, 264);
+    }
+}
