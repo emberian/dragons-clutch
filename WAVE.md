@@ -59,8 +59,61 @@ gates. It is not release evidence.
 
 | Lane | Scope | State |
 |---|---|---|
-| W1 open-market | bootstrap successor + generic founding campaign | active |
-| W2 hot-fast-path | `hot_v3.rs` + registry fast path + 1.4M gate | active |
+| W2b hot-heap | `hot_v3.rs` heap wall + AccountObservationV1 shape | active |
+| W1b foundability | founding-root ADR + projected-Custody wiring + ELF fast-path adoption + campaign rerun | active |
+| ST structured-v2 | Lean/kernel/operator, new files | active |
+| LB liability-basis-v2 | ramp/complement theorem + kernel + corpus | active |
+| RL checked release | release-tool pipeline + candidate + rerun script | active |
+| reviewer | batched Opus review of the four Sonnet outputs | active |
+
+Cross-lane board: /private/tmp/dclutch-wave-board.md (append-only, not authority).
+
+## Cycle-1 results (LINGER₂ snapshot, 2026-08-26 evening)
+
+- **W2 (CU)**: pre-transition Hot 2,949,172 → 831,953 CU (−71.8%); compute is no
+  longer the Hot blocker; the 32KB heap wall at phase 4/10 is (W2b active).
+  Fast path = immutability-argument ELF/record authentication, strengthened
+  never weakened; commits 48ece27 + 76279bd. cc228cd had silently broken every
+  Profile14 emission — fixed producer-side.
+- **W1 (founding)**: gate honestly NOT met — three measured blockers, all owned
+  by W1b: (A) founding capability root is circular (root creation needs an
+  existing Market; DCLTGMF1 Locks before Found) — needs ADR 0004; (B) the Lock
+  stage consumes projected-Custody state no live route can create
+  (projected_custody_composition_v4 is undispatched dead code); (C) on-chain
+  release auth hashes whole ELFs — Core's 1.0MB twice per Found31 (~1.19M CU),
+  and five-role activation with real artifacts exceeds 1.4M outright; the
+  existing immutable fast path must be adopted at registry-sbf/src/lib.rs:367
+  and core-sbf/src/infrastructure.rs:314. Also fixed en route: real System
+  Program metadata acceptance (c25de27), the capability-root selection SHA-256
+  fixed point (386f254), and Found31 was 10 bytes over the legacy packet limit
+  and now rides a finalized ALT as v0 (4e1c4db). Evidence:
+  docs/evidence/GENERIC_FOUNDING_REACHABILITY_2026_08_26.md. A real demo-market
+  run-spec subcommand exists (SOL/USD range protection, synthetic-local Pyth).
+- **Frontend**: Wallet Standard discovery (Talisman confirmed conformant),
+  /markets, /markets/:address, /portfolio (indexer-free Position derivation);
+  web suite 126 → 200 passing; all six abi:verify green; the shared DCLTCAP1
+  decoder now enforces the FundingQuoteV1 grammar (browser refuses what the
+  chain refuses).
+- **Workspace**: satellites folded; exclusions down to general-sbf (missing
+  GENERAL_ROOT_PDA_DOMAIN_V2 protocol fact) and series-shadow-sbf (subtractive
+  feature breaks additive-feature contract; fix = extract the shadow
+  authenticator crate or invert the feature). SDK aligned on the
+  program-test 4.3.0-beta.2 line (bd4d85d) — bump the whole tree together when
+  4.3.0 goes stable.
+- Stashes: the two superseded hot_v3 stashes dropped (patches archived under
+  /private/tmp/w2-lane/); stash@{0} wip-source-borrowed-view remains,
+  uninspected, unowned.
+
+## Cycle-2 sequencing (revised at LINGER₂)
+
+Tranche A (Direct, Claims→Custody→Token-2022 terminal, Series chains) launches
+when W2b lands the heap gate — family ProgramTest campaigns do NOT wait for the
+open market. The open-market path (W1b) runs in parallel and gates only the
+live-chain demo substrate + creation evidence. Queue additionally: founding
+root ADR fallout, coreFound manifest-validator convergence, Lean emission of
+POSITION_PDA_DOMAIN + DCLTCAP1/DCLTFQ01 to the web ABI, funding-STATE
+(DCLTCFS1) browser decoder, general-sbf's missing protocol fact, the
+series-shadow feature refactor, fixtures:verify provenance drift.
 
 Lane protocol: **commit with `git commit --only -- <paths>` exclusively** —
 staged-list inspection alone has a proven race (two collisions on 2026-08-26);
