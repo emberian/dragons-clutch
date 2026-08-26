@@ -335,6 +335,9 @@ dependencies = [
 [[package]]
 name = "dclutch-claims-svm"
 version = "0.1.0"
+dependencies = [
+ "dclutch-effect-kernel",
+]
 
 [[package]]
 name = "dclutch-collateral-contract"
@@ -385,6 +388,9 @@ dependencies = [
 [[package]]
 name = "dclutch-dealer-codec"
 version = "0.1.0"
+dependencies = [
+ "dclutch-dealer-scenario-kernel",
+]
 
 [[package]]
 name = "dclutch-dealer-contract"
@@ -395,6 +401,10 @@ dependencies = [
  "dclutch-realm-contract",
  "dclutch-record-contract",
 ]
+
+[[package]]
+name = "dclutch-dealer-scenario-kernel"
+version = "0.1.0"
 
 [[package]]
 name = "dclutch-direct-codec"
@@ -785,6 +795,7 @@ dependencies = [
  "dclutch-registry-contract",
  "dclutch-release-set-contract",
  "sha2",
+ "solana-program",
 ]
 
 [[package]]

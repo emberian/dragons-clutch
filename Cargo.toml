@@ -10,6 +10,7 @@ members = [
     "crates/dclutch-custody-contract",
     "crates/dclutch-dealer-codec",
     "crates/dclutch-dealer-contract",
+    "crates/dclutch-dealer-scenario-kernel",
     "crates/dclutch-direct-contract",
     "crates/dclutch-direct-codec",
     "crates/dclutch-economic-adapter-contract",

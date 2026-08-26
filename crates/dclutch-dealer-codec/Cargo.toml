@@ -9,6 +9,9 @@ description = "Lean-generated fixed-layout interpreter for successor Dealer liqu
 [lib]
 path = "src/lib.rs"
 
+[dependencies]
+dclutch-dealer-scenario-kernel = { path = "../dclutch-dealer-scenario-kernel" }
+
 [lints.rust]
 unsafe_code = "forbid"
 missing_docs = "deny"

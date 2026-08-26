@@ -1,177 +1,149 @@
-//! Runtime-width finite-scenario collateral planning for Dealer V2.
+//! Descriptor-bound stateless Dealer scenario planning.
 //!
-//! This module never creates signed native Positions or persists a parallel
-//! liability vector. Inputs are projections of canonical Dealer Claims
-//! inventory plus the two nonnegative portfolio legs executed in the same
-//! atomic transaction. A shortfall is covered by depositing present Dealer
-//! capital into the Market Hoard and minting equal complete sets. An optional
-//! release is bounded by the equal residual claims that Claims can merge.
+//! [`plan_descriptor_scenario`] is the sole generalized scenario-solvency
+//! planner. [`plan_gross_covered_scenario`] is a conservative zero-obligation
+//! profile over that same kernel; it owns no arithmetic and cannot diverge into
+//! a parallel reserve implementation.
 
-/// Stable refusal from scenario-collateral planning.
+use dclutch_dealer_scenario_kernel::{
+    plan_scenario_netting, ClaimsInventoryExpectation, ScenarioTransition,
+};
+pub use dclutch_dealer_scenario_kernel::{
+    ClaimsInventoryObservation, Error as ScenarioError, ScenarioNettingPlan as ScenarioPlan,
+};
+
+/// Stable refusal at the Dealer scenario-profile boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ScenarioError {
-    /// No Product scenario was supplied.
-    EmptyBook,
-    /// Inventory, incoming, outgoing, and output widths differed.
-    WidthMismatch,
-    /// Canonical Claims Position Market or holder identity did not join policy.
-    PositionMismatch,
-    /// Canonical Claims Position revision did not match the invocation.
-    StalePosition,
-    /// Checked scenario arithmetic exceeded `u64`.
-    ArithmeticOverflow,
-    /// Present Dealer capital did not fund the required Hoard deposit.
-    UnderfundedReserve,
-    /// Requested Hoard release exceeded equal mergeable complete sets.
-    ExcessiveRelease,
+pub enum ScenarioProfileError {
+    /// The sole scenario-solvency kernel refused the candidate.
+    Kernel(ScenarioError),
+    /// The gross-covered profile supplied a nonzero terminal obligation.
+    CoveredProfileHasObligation,
 }
 
-/// Ephemeral projection of the one canonical Dealer Claims Position.
+impl From<ScenarioError> for ScenarioProfileError {
+    fn from(value: ScenarioError) -> Self {
+        Self::Kernel(value)
+    }
+}
+
+/// Result alias for descriptor-bound scenario planning.
+pub type ScenarioResult<T> = core::result::Result<T, ScenarioProfileError>;
+
+/// Immutable Dealer scenario-solvency descriptor projection.
 ///
-/// The adapter constructs this value only through canonical Claims getters;
-/// it is not another persisted inventory DTO.
+/// A finalized content-addressed Dealer descriptor is the semantic owner of
+/// these coordinates. This projection is stateless and contains no inventory,
+/// obligations, fees, or anticipated revenue.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ClaimsPositionObservation<'a> {
-    /// Logical Core Market referenced by the Claims Position.
+pub struct ScenarioSolvencyDescriptor {
+    /// Immutable logical Core Market identity.
     pub market_id: [u8; 32],
-    /// Exact Dealer holder identity.
-    pub owner: [u8; 32],
-    /// Current canonical Claims Position revision.
-    pub revision: u64,
-    /// Runtime-width native Claims quantities.
-    pub native: &'a [u64],
+    /// Immutable stable semantic Product identity.
+    pub product_id: [u8; 32],
+    /// Immutable semantic LiabilityBasis identity.
+    pub liability_basis_id: [u8; 32],
+    /// Immutable canonical Dealer Claims Position owner.
+    pub position_owner: [u8; 32],
+    /// Minimum exact equity required in every terminal scenario.
+    pub locked_capital_floor: u64,
 }
 
-/// Runtime-width canonical Claims projections for one atomic portfolio fill.
+impl ScenarioSolvencyDescriptor {
+    fn expectation(self, position_revision: u64) -> ClaimsInventoryExpectation {
+        ClaimsInventoryExpectation {
+            market_id: self.market_id,
+            product_id: self.product_id,
+            liability_basis_id: self.liability_basis_id,
+            position_owner: self.position_owner,
+            position_revision,
+        }
+    }
+}
+
+/// Borrowed generalized scenario plan input.
+///
+/// Claims inventory remains borrowed from the canonical Position. Terminal
+/// obligations are borrowed from their separately authenticated semantic owner
+/// and are not persisted by this planner.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ScenarioBook<'a> {
-    /// Ephemeral canonical Dealer Claims Position projection.
-    pub position: ClaimsPositionObservation<'a>,
-    /// Immutable policy Market expected by this Dealer capability.
-    pub expected_market_id: [u8; 32],
-    /// Immutable Dealer holder expected by this capability.
-    pub expected_dealer_id: [u8; 32],
+pub struct DescriptorScenarioInput<'a> {
+    /// Immutable descriptor projection.
+    pub descriptor: ScenarioSolvencyDescriptor,
+    /// Canonical Claims Position projection.
+    pub position: ClaimsInventoryObservation<'a>,
     /// Optimistic Claims Position revision bound by the request.
     pub expected_position_revision: u64,
-    /// Native Claims acquired from the counterparty in this transaction.
+    /// Present eligible collateral; anticipated fees are excluded.
+    pub present_capital: u64,
+    /// Exact incoming terminal obligations.
+    pub obligations_before: &'a [u64],
+    /// Nonnegative native Claims acquired in the atomic fill.
     pub acquired: &'a [u64],
-    /// Native Claims delivered to the counterparty in this transaction.
+    /// Nonnegative native Claims delivered in the atomic fill.
     pub delivered: &'a [u64],
-    /// Present Dealer quote capital available for new Hoard principal.
-    pub present_reserve_funding: u64,
-    /// Equal residual complete sets requested for merge and Hoard release.
-    pub requested_release: u64,
+    /// Exact candidate terminal obligations.
+    pub obligations_after: &'a [u64],
 }
 
-/// Exact complete-set and collateral plan for one admitted portfolio fill.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ScenarioPlan {
-    /// Present collateral moved from Dealer TradingPrincipal to Market Hoard.
-    pub reserve_to_hoard: u64,
-    /// Equal complete sets minted by Claims into the Dealer Position.
-    pub complete_sets_to_mint: u64,
-    /// Equal complete sets merged by Claims after portfolio transfers.
-    pub complete_sets_to_merge: u64,
-    /// Hoard principal returned to Dealer TradingPrincipal after the merge.
-    pub release_from_hoard: u64,
-    /// Maximum equal complete sets available before the requested merge.
-    pub maximum_mergeable: u64,
-}
-
-/// Plan one exact finite-scenario portfolio fill without allocation.
+/// Borrowed conservative gross-covered scenario profile.
 ///
-/// The function validates the complete candidate state in a first pass and
-/// mutates `post_inventory` only after every width, arithmetic, present-funding,
-/// and merge bound succeeds. Each output coordinate is therefore nonnegative.
-/// Claims must execute the nonnegative acquire/deliver vectors and equal-set
-/// mint/merge; Custody must execute the two named Hoard transfers. Their own
-/// canonical programs remain responsible for supply and principal authority.
-pub fn plan_scenario_netting(
-    book: ScenarioBook<'_>,
+/// Both obligation projections must be the same runtime width as Claims and
+/// contain only zero. This explicitly embeds covered V1 into the generalized
+/// planner instead of retaining a second reserve algorithm.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GrossCoveredScenarioInput<'a> {
+    /// General descriptor-bound input with zero terminal obligations.
+    pub scenario: DescriptorScenarioInput<'a>,
+}
+
+/// Execute the sole descriptor-bound generalized scenario planner.
+///
+/// Both caller-owned outputs remain unchanged on every refusal.
+pub fn plan_descriptor_scenario(
+    input: DescriptorScenarioInput<'_>,
     post_inventory: &mut [u64],
-) -> Result<ScenarioPlan, ScenarioError> {
-    if book.expected_market_id == [0; 32]
-        || book.expected_dealer_id == [0; 32]
-        || book.position.market_id != book.expected_market_id
-        || book.position.owner != book.expected_dealer_id
-    {
-        return Err(ScenarioError::PositionMismatch);
-    }
-    if book.position.revision != book.expected_position_revision {
-        return Err(ScenarioError::StalePosition);
-    }
-    let width = book.position.native.len();
-    if width == 0 {
-        return Err(ScenarioError::EmptyBook);
-    }
-    if book.acquired.len() != width
-        || book.delivered.len() != width
-        || post_inventory.len() != width
-    {
-        return Err(ScenarioError::WidthMismatch);
-    }
+    post_equity: &mut [i128],
+) -> ScenarioResult<ScenarioPlan> {
+    let expected = input
+        .descriptor
+        .expectation(input.expected_position_revision);
+    plan_scenario_netting(
+        ScenarioTransition {
+            position: input.position,
+            expected,
+            present_capital: input.present_capital,
+            locked_capital_floor: input.descriptor.locked_capital_floor,
+            obligations_before: input.obligations_before,
+            acquired: input.acquired,
+            delivered: input.delivered,
+            obligations_after: input.obligations_after,
+        },
+        post_inventory,
+        post_equity,
+    )
+    .map_err(ScenarioProfileError::Kernel)
+}
 
-    let mut reserve = 0_u64;
-    for ((inventory, acquired), delivered) in book
-        .position
-        .native
+/// Execute the conservative zero-obligation profile through the sole planner.
+///
+/// The profile derives the same minimum split and maximum merge as the
+/// generalized descriptor route. It does not accept a caller-selected release.
+pub fn plan_gross_covered_scenario(
+    input: GrossCoveredScenarioInput<'_>,
+    post_inventory: &mut [u64],
+    post_equity: &mut [i128],
+) -> ScenarioResult<ScenarioPlan> {
+    if input
+        .scenario
+        .obligations_before
         .iter()
-        .zip(book.acquired.iter())
-        .zip(book.delivered.iter())
+        .chain(input.scenario.obligations_after.iter())
+        .any(|obligation| *obligation != 0)
     {
-        let available = inventory
-            .checked_add(*acquired)
-            .ok_or(ScenarioError::ArithmeticOverflow)?;
-        reserve = reserve.max(delivered.saturating_sub(available));
+        return Err(ScenarioProfileError::CoveredProfileHasObligation);
     }
-    if reserve > book.present_reserve_funding {
-        return Err(ScenarioError::UnderfundedReserve);
-    }
-
-    let mut maximum_mergeable = u64::MAX;
-    for ((inventory, acquired), delivered) in book
-        .position
-        .native
-        .iter()
-        .zip(book.acquired.iter())
-        .zip(book.delivered.iter())
-    {
-        let available = inventory
-            .checked_add(*acquired)
-            .and_then(|value| value.checked_add(reserve))
-            .ok_or(ScenarioError::ArithmeticOverflow)?;
-        let funded = available
-            .checked_sub(*delivered)
-            .ok_or(ScenarioError::ArithmeticOverflow)?;
-        maximum_mergeable = maximum_mergeable.min(funded);
-    }
-    if book.requested_release > maximum_mergeable {
-        return Err(ScenarioError::ExcessiveRelease);
-    }
-
-    for (((inventory, acquired), delivered), post) in book
-        .position
-        .native
-        .iter()
-        .zip(book.acquired.iter())
-        .zip(book.delivered.iter())
-        .zip(post_inventory.iter_mut())
-    {
-        *post = inventory
-            .checked_add(*acquired)
-            .and_then(|value| value.checked_add(reserve))
-            .and_then(|value| value.checked_sub(*delivered))
-            .and_then(|value| value.checked_sub(book.requested_release))
-            .ok_or(ScenarioError::ArithmeticOverflow)?;
-    }
-
-    Ok(ScenarioPlan {
-        reserve_to_hoard: reserve,
-        complete_sets_to_mint: reserve,
-        complete_sets_to_merge: book.requested_release,
-        release_from_hoard: book.requested_release,
-        maximum_mergeable,
-    })
+    plan_descriptor_scenario(input.scenario, post_inventory, post_equity)
 }
 
 #[cfg(test)]
@@ -179,143 +151,116 @@ mod tests {
     use super::*;
 
     const MARKET: [u8; 32] = [1; 32];
-    const DEALER: [u8; 32] = [2; 32];
-    const REVISION: u64 = 7;
+    const PRODUCT: [u8; 32] = [2; 32];
+    const BASIS: [u8; 32] = [3; 32];
+    const OWNER: [u8; 32] = [4; 32];
 
-    const fn observed(native: &[u64]) -> ClaimsPositionObservation<'_> {
-        ClaimsPositionObservation {
+    const fn descriptor(floor: u64) -> ScenarioSolvencyDescriptor {
+        ScenarioSolvencyDescriptor {
             market_id: MARKET,
-            owner: DEALER,
-            revision: REVISION,
-            native,
+            product_id: PRODUCT,
+            liability_basis_id: BASIS,
+            position_owner: OWNER,
+            locked_capital_floor: floor,
         }
     }
 
-    const fn book<'a>(
+    const fn position(inventory: &[u64]) -> ClaimsInventoryObservation<'_> {
+        ClaimsInventoryObservation {
+            market_id: MARKET,
+            product_id: PRODUCT,
+            liability_basis_id: BASIS,
+            position_owner: OWNER,
+            revision: 7,
+            inventory,
+        }
+    }
+
+    const fn input<'a>(
         inventory: &'a [u64],
+        obligations_before: &'a [u64],
         acquired: &'a [u64],
         delivered: &'a [u64],
-        present_reserve_funding: u64,
-        requested_release: u64,
-    ) -> ScenarioBook<'a> {
-        ScenarioBook {
-            position: observed(inventory),
-            expected_market_id: MARKET,
-            expected_dealer_id: DEALER,
-            expected_position_revision: REVISION,
+        obligations_after: &'a [u64],
+        capital: u64,
+        floor: u64,
+    ) -> DescriptorScenarioInput<'a> {
+        DescriptorScenarioInput {
+            descriptor: descriptor(floor),
+            position: position(inventory),
+            expected_position_revision: 7,
+            present_capital: capital,
+            obligations_before,
             acquired,
             delivered,
-            present_reserve_funding,
-            requested_release,
+            obligations_after,
         }
     }
 
     #[test]
-    fn portfolio_netting_funds_only_the_maximum_terminal_shortfall() {
-        let inventory = [2, 10, 0];
-        let acquired = [3, 0, 4];
-        let delivered = [10, 1, 6];
-        let mut post = [u64::MAX; 3];
-        let plan = plan_scenario_netting(book(&inventory, &acquired, &delivered, 5, 0), &mut post)
-            .expect("present reserve covers every terminal scenario");
-        assert_eq!(plan.reserve_to_hoard, 5);
-        assert_eq!(plan.complete_sets_to_mint, 5);
-        assert_eq!(plan.maximum_mergeable, 0);
-        assert_eq!(post, [0, 14, 3]);
-        for index in 0..post.len() {
-            assert_eq!(
-                post[index] + delivered[index],
-                inventory[index] + acquired[index] + plan.complete_sets_to_mint
-            );
-        }
-    }
-
-    #[test]
-    fn equal_residual_complete_sets_are_the_only_releasable_principal() {
-        let inventory = [9, 8, 10];
-        let acquired = [3, 4, 0];
-        let delivered = [2, 1, 0];
-        let mut post = [0; 3];
-        let plan = plan_scenario_netting(book(&inventory, &acquired, &delivered, 0, 10), &mut post)
-            .expect("ten complete sets remain in every scenario");
-        assert_eq!(plan.reserve_to_hoard, 0);
-        assert_eq!(plan.maximum_mergeable, 10);
-        assert_eq!(plan.complete_sets_to_merge, 10);
-        assert_eq!(plan.release_from_hoard, 10);
-        assert_eq!(post, [0, 1, 0]);
-    }
-
-    #[test]
-    fn hostile_width_funding_overflow_and_release_refuse_before_mutation() {
-        let unchanged = [0xa5_u64; 3];
-        let mut post = unchanged;
-        assert_eq!(
-            plan_scenario_netting(book(&[1, 2, 3], &[0, 0], &[0, 0, 0], 0, 0), &mut post,),
-            Err(ScenarioError::WidthMismatch)
-        );
-        assert_eq!(post, unchanged);
-
-        assert_eq!(
-            plan_scenario_netting(book(&[0, 0, 0], &[0, 0, 0], &[5, 2, 1], 4, 0), &mut post,),
-            Err(ScenarioError::UnderfundedReserve)
-        );
-        assert_eq!(post, unchanged);
-
-        assert_eq!(
-            plan_scenario_netting(
-                book(&[u64::MAX, 0, 0], &[1, 0, 0], &[0, 0, 0], 0, 0),
-                &mut post,
+    fn descriptor_plan_enforces_terminal_obligations_and_floor() {
+        let mut post_inventory = [99; 3];
+        let mut post_equity = [99; 3];
+        let plan = plan_descriptor_scenario(
+            input(
+                &[2, 10, 0],
+                &[2, 10, 0],
+                &[3, 0, 4],
+                &[10, 1, 6],
+                &[0, 9, 3],
+                10,
+                5,
             ),
-            Err(ScenarioError::ArithmeticOverflow)
-        );
-        assert_eq!(post, unchanged);
-
-        assert_eq!(
-            plan_scenario_netting(book(&[9, 8, 10], &[3, 4, 0], &[2, 1, 0], 0, 11), &mut post,),
-            Err(ScenarioError::ExcessiveRelease)
-        );
-        assert_eq!(post, unchanged);
+            &mut post_inventory,
+            &mut post_equity,
+        )
+        .expect("descriptor-bound candidate meets every scenario floor");
+        assert_eq!(plan.minimum_complete_sets_to_split, 5);
+        assert_eq!(plan.maximum_complete_sets_to_merge, 0);
+        assert_eq!(post_inventory, [0, 14, 3]);
+        assert_eq!(post_equity, [5, 10, 5]);
     }
 
     #[test]
-    fn empty_book_refuses_without_a_vacuous_solvency_claim() {
-        let mut post = [];
-        assert_eq!(
-            plan_scenario_netting(book(&[], &[], &[], 0, 0), &mut post,),
-            Err(ScenarioError::EmptyBook)
+    fn gross_covered_profile_is_the_zero_obligation_embedding() {
+        let zero = [0, 0, 0];
+        let scenario = input(&[9, 8, 10], &zero, &[3, 4, 0], &[2, 1, 0], &zero, 20, 0);
+        let mut generalized_inventory = [0; 3];
+        let mut generalized_equity = [0; 3];
+        let generalized = plan_descriptor_scenario(
+            scenario,
+            &mut generalized_inventory,
+            &mut generalized_equity,
         );
+        let mut covered_inventory = [0; 3];
+        let mut covered_equity = [0; 3];
+        let covered = plan_gross_covered_scenario(
+            GrossCoveredScenarioInput { scenario },
+            &mut covered_inventory,
+            &mut covered_equity,
+        );
+        assert_eq!(covered, generalized);
+        assert_eq!(covered_inventory, generalized_inventory);
+        assert_eq!(covered_equity, generalized_equity);
     }
 
     #[test]
-    fn stale_and_substituted_claims_positions_refuse_before_mutation() {
-        let inventory = [4, 5, 6];
-        let acquired = [0, 0, 0];
-        let delivered = [1, 2, 3];
-        let unchanged = [0xa5_u64; 3];
-
-        let mut substituted_market = book(&inventory, &acquired, &delivered, 0, 0);
-        substituted_market.position.market_id = [9; 32];
-        let mut post = unchanged;
+    fn covered_profile_refuses_obligations_without_touching_outputs() {
+        let obligations = [0, 1, 0];
+        let zero = [0, 0, 0];
+        let mut post_inventory = [0xa5; 3];
+        let mut post_equity = [0x5a; 3];
         assert_eq!(
-            plan_scenario_netting(substituted_market, &mut post),
-            Err(ScenarioError::PositionMismatch)
+            plan_gross_covered_scenario(
+                GrossCoveredScenarioInput {
+                    scenario: input(&[2, 3, 4], &obligations, &zero, &zero, &zero, 5, 0,),
+                },
+                &mut post_inventory,
+                &mut post_equity,
+            ),
+            Err(ScenarioProfileError::CoveredProfileHasObligation)
         );
-        assert_eq!(post, unchanged);
-
-        let mut substituted_holder = book(&inventory, &acquired, &delivered, 0, 0);
-        substituted_holder.position.owner = [8; 32];
-        assert_eq!(
-            plan_scenario_netting(substituted_holder, &mut post),
-            Err(ScenarioError::PositionMismatch)
-        );
-        assert_eq!(post, unchanged);
-
-        let mut stale = book(&inventory, &acquired, &delivered, 0, 0);
-        stale.expected_position_revision = REVISION + 1;
-        assert_eq!(
-            plan_scenario_netting(stale, &mut post),
-            Err(ScenarioError::StalePosition)
-        );
-        assert_eq!(post, unchanged);
+        assert_eq!(post_inventory, [0xa5; 3]);
+        assert_eq!(post_equity, [0x5a; 3]);
     }
 }
