@@ -4,30 +4,26 @@
 //! Descriptor-specialized CapabilityProgram V4 artifacts and unsigned Hot
 //! operator construction for Rational lifecycle actions.
 //!
-//! The legacy V3 path remains fail-closed for caller-carried receipt
-//! retirement. Complete receipt retirement is selected only through the
-//! compact CapabilityV4/LifecycleV5/Profile13 path, which derives ordered
-//! nonzero support from the authenticated immutable descriptor. Claims remains
-//! the sole physical mutation and typed receipt authority.
+//! Fixed-cardinality actions are selected only through CapabilityV4,
+//! LifecycleV5, and Profile13. Complete receipt retirement is selected only
+//! through the compact CapabilityV4/LifecycleV5/Profile13 path, which derives
+//! ordered nonzero support from the authenticated immutable descriptor. The
+//! superseded V3 artifact constructors remain private implementation helpers;
+//! there is no public unprofiled fallback. Claims remains the sole physical
+//! mutation and typed receipt authority.
 
 mod account_profile;
 mod artifacts;
+#[cfg(test)]
 mod bundle;
 mod compact_artifacts_v4;
 mod compact_operator_v4;
 mod effect;
 mod operator;
+mod selected_bundle_v5;
+mod selected_operator_v5;
+mod selected_profile_v5;
 
-pub use account_profile::{
-    RationalLifecycleAccountProfileInputV3, encode_rational_lifecycle_account_profile_v3,
-};
-pub use artifacts::{
-    encode_rational_lifecycle_request_profile_v3, encode_rational_lifecycle_transition_v3,
-};
-pub use bundle::{
-    RationalLifecycleHotBundleInputV3, RationalLifecycleHotBundleV3,
-    build_rational_lifecycle_hot_bundle_v3, validate_rational_lifecycle_hot_bundle_v3,
-};
 pub use compact_artifacts_v4::{
     RATIONAL_LIFECYCLE_COMPACT_DESCRIPTOR_BYTES_V4, RATIONAL_LIFECYCLE_COMPACT_STRATEGY_BYTES_V4,
     RationalLifecycleCompactArtifactInputV4, RationalLifecycleCompactArtifactsV4,
@@ -41,12 +37,26 @@ pub use compact_operator_v4::{
     build_rational_lifecycle_compact_hot_instruction_v4,
 };
 pub use effect::{
-    RATIONAL_LIFECYCLE_HOT_INJECTED_ACCOUNT_COUNT_V3, encode_rational_lifecycle_effect_v3,
-    lifecycle_claims_account_count_v3, lifecycle_logical_account_count_v3,
+    RATIONAL_LIFECYCLE_HOT_INJECTED_ACCOUNT_COUNT_V3, lifecycle_claims_account_count_v3,
+    lifecycle_logical_account_count_v3,
 };
 pub use operator::{
     CheckedRationalLifecycleHotOuterV3, RationalLifecycleHotInstructionV3,
-    RationalLifecycleHotStateV3, build_rational_lifecycle_hot_instruction_v3,
+    RationalLifecycleHotStateV3,
+};
+pub use selected_bundle_v5::{
+    RATIONAL_LIFECYCLE_SELECTED_DESCRIPTOR_BYTES_V5, RATIONAL_LIFECYCLE_SELECTED_STRATEGY_BYTES_V5,
+    RationalLifecycleSelectedBundleInputV5, RationalLifecycleSelectedBundleV5,
+    build_rational_lifecycle_selected_bundle_v5,
+    validate_rational_lifecycle_selected_bundle_for_authenticated_selection_v5,
+    validate_rational_lifecycle_selected_bundle_v5,
+};
+pub use selected_operator_v5::{
+    RationalLifecycleSelectedSelectionV5, build_rational_lifecycle_selected_hot_instruction_v5,
+};
+pub use selected_profile_v5::{
+    RationalLifecycleSelectedAccountProfileInputV5,
+    encode_rational_lifecycle_selected_account_profile_v5,
 };
 
 use dclutch_rational_representation_v2_lifecycle_contract::LifecycleActionV2;

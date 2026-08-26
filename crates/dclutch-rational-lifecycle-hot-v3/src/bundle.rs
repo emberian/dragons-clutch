@@ -26,10 +26,17 @@ use dclutch_transition_vm::v3::ProgramV3 as TransitionProgramV3;
 use solana_program::hash::hash;
 
 use crate::{
-    Error, RationalLifecycleAccountProfileInputV3, Result,
-    encode_rational_lifecycle_account_profile_v3, encode_rational_lifecycle_effect_v3,
-    encode_rational_lifecycle_request_profile_v3, encode_rational_lifecycle_transition_v3,
-    lifecycle_claims_account_count_v3, lifecycle_logical_account_count_v3,
+    Error, Result,
+    account_profile::{
+        RationalLifecycleAccountProfileInputV3, encode_rational_lifecycle_account_profile_v3,
+    },
+    artifacts::{
+        encode_rational_lifecycle_request_profile_v3, encode_rational_lifecycle_transition_v3,
+    },
+    effect::{
+        encode_rational_lifecycle_effect_v3, lifecycle_claims_account_count_v3,
+        lifecycle_logical_account_count_v3,
+    },
     validate_action_geometry,
 };
 

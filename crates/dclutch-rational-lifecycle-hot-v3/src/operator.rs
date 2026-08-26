@@ -1,22 +1,29 @@
 //! Unsigned, chain-derived Hot instruction construction for lifecycle actions.
 
+#[cfg(test)]
 use dclutch_capability_program_contract::hot_v3::{
-    HOT_FAMILY_REQUEST_OFFSET_V3, HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
+    HOT_FAMILY_REQUEST_OFFSET_V3, HotExecutionEnvelopeV3,
+};
+use dclutch_capability_program_contract::hot_v3::{
+    HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
     HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_LINKED_BASIS_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3,
     HOT_RENT_SYSVAR_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
-    HotExecutionEnvelopeV3,
 };
+#[cfg(test)]
 use dclutch_rational_representation_v2_lifecycle_contract::{
     LifecycleRequestV2, hot_v3::RationalLifecycleHotRequestV3,
 };
+#[cfg(test)]
+use solana_program::hash::hash;
 use solana_program::{
-    hash::hash,
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
 };
 use solana_sdk_ids::sysvar;
 
-use crate::{Error, Result, lifecycle_claims_account_count_v3, validate_action_geometry};
+use crate::{Error, Result};
+#[cfg(test)]
+use crate::{lifecycle_claims_account_count_v3, validate_action_geometry};
 
 // IPv6 minimum-MTU Solana packet payload. Address lookup tables can compress
 // account keys, but never instruction bytes themselves.
@@ -76,6 +83,7 @@ pub struct RationalLifecycleHotInstructionV3 {
 /// The child caller-authority PDA is a signer only during Trading's downstream
 /// CPI and is therefore deliberately not a transaction signer. No wallet
 /// identity is smuggled into the representation lifecycle authority path.
+#[cfg(test)]
 pub fn build_rational_lifecycle_hot_instruction_v3(
     state: &RationalLifecycleHotStateV3<'_>,
     claims_child: &Instruction,

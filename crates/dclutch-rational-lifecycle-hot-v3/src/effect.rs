@@ -10,6 +10,9 @@ use dclutch_effect_kernel::{
             RouteInputV3, ScalarCoordinateV3, encode_effect_program_v3_atomic,
         },
     },
+    v4::{
+        BorrowedRangePolicyV4, HEADER_BYTES_V4 as EFFECT_V4_HEADER_BYTES, encode_program_v4_atomic,
+    },
 };
 use dclutch_rational_representation_v2_lifecycle_contract::{
     LIFECYCLE_COMMON_ACCOUNT_COUNT_V2, LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2,
@@ -141,6 +144,35 @@ pub fn encode_rational_lifecycle_effect_v3(
         &mut output,
     )
     .map_err(Error::Effect)?;
+    Ok(output)
+}
+
+/// Wrap one fixed-cardinality lifecycle effect in the sole EffectV4 schema.
+pub fn encode_rational_lifecycle_selected_effect_v4(action: LifecycleActionV2) -> Result<Vec<u8>> {
+    let coordinate_count = match action {
+        LifecycleActionV2::ActivateReceipt => 0,
+        LifecycleActionV2::ActivateCoordinate | LifecycleActionV2::RetireCoordinate => 1,
+        LifecycleActionV2::RetireReceipt => return Err(Error::ActionGeometry),
+    };
+    let coordinates = validate_action_geometry(action, coordinate_count)?;
+    let base = encode_rational_lifecycle_effect_v3(action, coordinate_count)?;
+    let family_bytes =
+        RationalLifecycleHotLayoutV3::request_bytes(coordinates).ok_or(Error::InvalidLength)?;
+    let bytes = EFFECT_V4_HEADER_BYTES
+        .checked_add(base.len())
+        .ok_or(Error::InvalidLength)?;
+    let mut scratch = vec![0_u8; bytes];
+    let mut output = vec![0_u8; bytes];
+    encode_program_v4_atomic(
+        &base,
+        BorrowedRangePolicyV4::DisjointExactCoverage,
+        u32::try_from(family_bytes).map_err(|_| Error::InvalidLength)?,
+        &[],
+        &[],
+        &mut scratch,
+        &mut output,
+    )
+    .map_err(Error::EffectV4)?;
     Ok(output)
 }
 

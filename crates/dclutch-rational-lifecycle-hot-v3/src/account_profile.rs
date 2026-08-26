@@ -1,35 +1,44 @@
 //! Exact logical AccountProfile for one lifecycle action/support geometry.
 
+use dclutch_account_profile_contract::v2::encode::{
+    AccountAliasInputV2, AccountEffectPermissionsV2, AccountPrivilegesV2, AccountRuleInputV2,
+};
+#[cfg(test)]
 use dclutch_account_profile_contract::v2::{
     AccountPrestateV2, HEADER_BYTES as ACCOUNT_HEADER_BYTES,
     OPERATION_BYTES as ACCOUNT_OPERATION_BYTES, RULE_BYTES as ACCOUNT_RULE_BYTES,
     TRUSTED_EXECUTING_PROGRAM_HEADER_BYTES, TrustedEnvironmentV2, TrustedIdentityEnvironmentV2,
     encode::{
-        AccountAliasInputV2, AccountCoordinateV2, AccountEffectPermissionsV2,
-        AccountOperationInputV2, AccountPrivilegesV2, AccountProfileArtifactV2, AccountRuleInputV2,
+        AccountCoordinateV2, AccountOperationInputV2, AccountProfileArtifactV2,
         AccountRuleWithPrestateInputV2, RegisterGeometryV2, ScalarCoordinateV2,
         encode_account_profile_v2_atomic,
         encode_account_profile_with_nonzero_u64_tail_count_v2_atomic,
     },
 };
+#[cfg(test)]
 use dclutch_product_payoff_v2_codec::runtime_v3::{BASIS_WIDTH_OFFSET_V3, ProductBasisV3};
+#[cfg(test)]
 use dclutch_rational_representation_v2_kernel::{
     DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES,
 };
-use dclutch_rational_representation_v2_lifecycle_contract::{
-    LifecycleActionV2,
-    hot_v3::{
-        RATIONAL_LIFECYCLE_SCALAR_COORDINATE_COUNT_V3,
-        RATIONAL_LIFECYCLE_SCALAR_PRODUCT_OUTCOME_COUNT_V3, RationalLifecycleHotRegisterLayoutV3,
-    },
+use dclutch_rational_representation_v2_lifecycle_contract::LifecycleActionV2;
+#[cfg(test)]
+use dclutch_rational_representation_v2_lifecycle_contract::hot_v3::{
+    RATIONAL_LIFECYCLE_SCALAR_COORDINATE_COUNT_V3,
+    RATIONAL_LIFECYCLE_SCALAR_PRODUCT_OUTCOME_COUNT_V3, RationalLifecycleHotRegisterLayoutV3,
 };
 
-use crate::{Error, Result, lifecycle_logical_account_count_v3, validate_action_geometry};
+use crate::{Error, Result};
+#[cfg(test)]
+use crate::{lifecycle_logical_account_count_v3, validate_action_geometry};
 
+#[cfg(test)]
 const TYPED_PROFILE_OPERATION_COUNT: usize = 1;
+#[cfg(test)]
 const SUPPORT_PROFILE_OPERATION_COUNT: usize = 2;
 
 /// Exact account observations needed to emit one descriptor-specific profile.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RationalLifecycleAccountProfileInputV3<'a> {
     /// Exact logical account data lengths in injected-prefix plus child order.
@@ -39,6 +48,7 @@ pub struct RationalLifecycleAccountProfileInputV3<'a> {
 }
 
 /// Encode one exact lifecycle AccountProfile.
+#[cfg(test)]
 pub fn encode_rational_lifecycle_account_profile_v3(
     action: LifecycleActionV2,
     coordinate_count: u32,
@@ -212,10 +222,12 @@ pub(crate) fn rule(
     })
 }
 
+#[cfg(test)]
 fn narrow_u16(value: usize) -> Result<u16> {
     u16::try_from(value).map_err(|_| Error::InvalidLength)
 }
 
+#[cfg(test)]
 fn narrow_u32(value: usize) -> Result<u32> {
     u32::try_from(value).map_err(|_| Error::InvalidLength)
 }
