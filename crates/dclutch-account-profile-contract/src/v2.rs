@@ -977,8 +977,6 @@ impl<'a> AccountProfileV2<'a> {
         if self.dynamic_fixed_span_count == 0
             || self.item_account_stride == 0
             || self.item_operations != 0
-            || self.item_scalar_stride != 0
-            || self.item_identity_stride != 0
         {
             return Err(Error::InvalidDynamicSpan);
         }

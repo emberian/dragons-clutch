@@ -3712,6 +3712,97 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_spans_are_orthogonal_to_product_item_register_geometry() {
+        let fixed = [AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: READONLY,
+                effect_permissions: NO_EFFECTS,
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length: 4,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::Exact,
+        }];
+        let span_rules = [AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: READONLY,
+                effect_permissions: NO_EFFECTS,
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length: 0,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::AuthenticatedOpaqueReadonlyData,
+        }];
+        let spans = [DynamicFixedSpanInputV2 {
+            insertion_coordinate: 1,
+            count_scalar: 0,
+            rule_start: 0,
+            rule_stride: 1,
+            minimum: 1,
+            maximum: 1,
+            step: 1,
+        }];
+        let operations = [AccountOperationInputV2::ProjectTailCountU32 {
+            account: AccountCoordinateV2::fixed(0),
+            destination: ScalarCoordinateV2::common(1),
+            data_offset: 0,
+        }];
+        let width = DYNAMIC_FIXED_SPAN_HEADER_BYTES
+            + DYNAMIC_FIXED_SPAN_ENTRY_BYTES
+            + (fixed.len() + span_rules.len()) * RULE_BYTES
+            + operations.len() * OPERATION_BYTES;
+        let mut scratch = std::vec![0_u8; width];
+        let mut output = std::vec![0_u8; width];
+        encode_account_profile_with_dynamic_fixed_span_v2_atomic(
+            TrustedEnvironmentV2::None,
+            TrustedIdentityEnvironmentV2::None,
+            TrustedBuiltinIdentityV2::None,
+            &spans,
+            &fixed,
+            &span_rules,
+            &operations,
+            RegisterGeometryV2 {
+                common_scalars: 2,
+                item_scalar_stride: 1,
+                common_identities: 1,
+                item_identity_stride: 1,
+            },
+            &mut scratch,
+            &mut output,
+        )
+        .expect("dynamic accounts with Product item registers");
+        let profile = AccountProfileV2::decode(&output).expect("Profile13");
+        let tail_count_bytes = 2_u32.to_le_bytes();
+        let accounts = [
+            AccountObservationV1::new([1; 32], [2; 32], 1, &tail_count_bytes, false, false, false),
+            AccountObservationV1::new([3; 32], [4; 32], 1, &[], false, false, false),
+        ];
+        let input_scalars = [1_u64, 0, 99, 99];
+        let input_identities = [[5_u8; 32]; 3];
+        let mut scratch_scalars = [0_u64; 4];
+        let mut output_scalars = [0_u64; 4];
+        let mut scratch_identities = [[0_u8; 32]; 3];
+        let mut output_identities = [[0_u8; 32]; 3];
+        project_dynamic_fixed_spans_atomic(
+            profile,
+            2,
+            &[1],
+            &accounts,
+            ProjectionRegistersV2 {
+                input_scalars: &input_scalars,
+                input_identities: &input_identities,
+                scratch_scalars: &mut scratch_scalars,
+                scratch_identities: &mut scratch_identities,
+                output_scalars: &mut output_scalars,
+                output_identities: &mut output_identities,
+            },
+        )
+        .expect("orthogonal projection");
+        assert_eq!(output_scalars, [1, 2, 0, 1]);
+        assert_eq!(output_identities, input_identities);
+    }
+
+    #[test]
     fn dynamic_span_table_is_stable_congruent_and_failure_atomic() {
         let fixed = [AccountRuleWithPrestateInputV2 {
             rule: AccountRuleInputV2 {
