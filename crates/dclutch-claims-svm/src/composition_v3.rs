@@ -14,6 +14,10 @@ use dclutch_rational_representation_v2_lifecycle_contract::{
     LIFECYCLE_REQUEST_MAGIC_V2, LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2, LifecycleActionV2,
     LifecycleRequestV2,
 };
+use dclutch_rational_representation_v2_request_contract::{
+    CallerRoleV2 as RepresentationCallerRoleV2,
+    REQUEST_MAGIC_V2 as REPRESENTATION_REQUEST_MAGIC_V2, RepresentationRequestV2,
+};
 
 use crate::{
     CallerRole,
@@ -87,6 +91,7 @@ pub struct ClaimsCompositionV3<'a> {
     signed_delta: Option<SignedDeltaPlanV3<'a>>,
     sparse_native_transfer: Option<SparseNativeTransferV1>,
     founding: Option<&'a [u8]>,
+    rational_representation: Option<&'a [u8]>,
     rational_lifecycle: Option<&'a [u8]>,
     close: Option<ProtocolPositionRequestV2>,
     admit_route: Option<u16>,
@@ -140,6 +145,7 @@ impl<'a> ClaimsCompositionV3<'a> {
         let mut signed_delta = None;
         let mut sparse_native_transfer = None;
         let mut founding = None;
+        let mut rational_representation = None;
         let mut rational_lifecycle = None;
         let mut close = None;
         let mut admit_route = None;
@@ -254,6 +260,17 @@ impl<'a> ClaimsCompositionV3<'a> {
                     founding = Some(request);
                     mutation_route = Some(route_index);
                     state = CompositionStateV3::Affined;
+                } else if request.get(..8) == Some(REPRESENTATION_REQUEST_MAGIC_V2.as_slice()) {
+                    validate_rational_representation_route(
+                        route.kind(),
+                        state,
+                        invocation,
+                        request,
+                        parent,
+                    )?;
+                    rational_representation = Some(request);
+                    mutation_route = Some(route_index);
+                    state = CompositionStateV3::Affined;
                 } else if request.get(..8) == Some(LIFECYCLE_REQUEST_MAGIC_V2.as_slice()) {
                     validate_rational_lifecycle_route(
                         route.kind(),
@@ -278,6 +295,7 @@ impl<'a> ClaimsCompositionV3<'a> {
             .checked_add(u8::from(signed_delta.is_some()))
             .and_then(|count| count.checked_add(u8::from(sparse_native_transfer.is_some())))
             .and_then(|count| count.checked_add(u8::from(founding.is_some())))
+            .and_then(|count| count.checked_add(u8::from(rational_representation.is_some())))
             .and_then(|count| count.checked_add(u8::from(rational_lifecycle.is_some())))
             .ok_or(ClaimsCompositionErrorV3::MissingAffine)?;
         if mutation_count != 1 {
@@ -299,6 +317,7 @@ impl<'a> ClaimsCompositionV3<'a> {
             signed_delta,
             sparse_native_transfer,
             founding,
+            rational_representation,
             rational_lifecycle,
             close,
             admit_route,
@@ -331,6 +350,12 @@ impl<'a> ClaimsCompositionV3<'a> {
     pub fn founding(self) -> Option<ClaimsFoundingRequestV5> {
         self.founding
             .and_then(|request| ClaimsFoundingRequestV5::decode(request).ok())
+    }
+
+    /// Sole canonical Rational Representation V2 mutation, when selected.
+    pub fn rational_representation(self) -> Option<RepresentationRequestV2<'a>> {
+        self.rational_representation
+            .and_then(|request| RepresentationRequestV2::decode(request).ok())
     }
 
     /// Sole Rational physical lifecycle request, when selected.
@@ -499,6 +524,41 @@ fn validate_founding_route(
 }
 
 #[inline(never)]
+fn validate_rational_representation_route(
+    kind: RouteKindV3,
+    state: CompositionStateV3,
+    invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
+    request: &[u8],
+    parent: ClaimsCompositionParentV3,
+) -> Result<(), ClaimsCompositionErrorV3> {
+    if kind != RouteKindV3::Once || state != CompositionStateV3::Start {
+        return Err(ClaimsCompositionErrorV3::Order);
+    }
+    let decoded =
+        RepresentationRequestV2::decode(request).map_err(|_| ClaimsCompositionErrorV3::Route)?;
+    let header = decoded.header();
+    if header.caller_role != RepresentationCallerRoleV2::Trading
+        || header.release_set != parent.release_set
+        || header.market != parent.market
+        || header.generation != parent.generation
+        || header.parent_context != parent.parent_request_digest
+    {
+        return Err(ClaimsCompositionErrorV3::ParentBinding);
+    }
+    let expected_accounts = decoded
+        .physical_account_count()
+        .map_err(|_| ClaimsCompositionErrorV3::Route)?;
+    if usize::from(invocation.fixed_account_count) != expected_accounts
+        || invocation.item_account_count != 0
+        || invocation.repeated_item_count != 0
+        || invocation.borrowed_witness.is_some()
+    {
+        return Err(ClaimsCompositionErrorV3::Route);
+    }
+    Ok(())
+}
+
+#[inline(never)]
 fn validate_rational_lifecycle_route(
     kind: RouteKindV3,
     state: CompositionStateV3,
@@ -598,6 +658,10 @@ mod tests {
     use dclutch_rational_representation_v2_lifecycle_contract::{
         LIFECYCLE_COORDINATE_BYTES_V2, LIFECYCLE_HEADER_BYTES_V2, LifecycleCoordinateV2,
         LifecycleHeaderV2,
+    };
+    use dclutch_rational_representation_v2_request_contract::{
+        ABSENT_REVISION, ASSET_BYTES_V2, AssetV2, RepresentationActionV2,
+        RepresentationRequestHeaderV2,
     };
     use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
 
@@ -1137,6 +1201,63 @@ mod tests {
         .expect("founding request")
     }
 
+    fn rational_representation_request() -> Vec<u8> {
+        let mut asset = [0_u8; ASSET_BYTES_V2];
+        AssetV2 {
+            shard_mint: id(50),
+            actor_shard_account: id(51),
+            structured_custody_account: id(52),
+            claims_custody_owner: id(53),
+            coefficient: 10,
+            expected_shard_supply: 20,
+            expected_actor_shards: 10,
+            expected_structured_shards: 10,
+        }
+        .encode_into(&mut asset)
+        .expect("representation asset");
+        let request = RepresentationRequestV2::new(
+            RepresentationRequestHeaderV2 {
+                action: RepresentationActionV2::Denominate,
+                caller_role: RepresentationCallerRoleV2::Trading,
+                release_set: parent().release_set,
+                market: parent().market,
+                graph_id: id(54),
+                descriptor_id: id(55),
+                parent_context: parent().parent_request_digest,
+                actor: id(56),
+                receipt_mint: id(57),
+                receipt_account: [0; 32],
+                representation_authority: id(58),
+                token_program: TOKEN_2022_PROGRAM_ID,
+                realm: [0; 32],
+                collateral_recipient: [0; 32],
+                expected_representation_revision: 3,
+                expected_claims_market_revision: MARKET_REVISION,
+                expected_actor_position_revision: 4,
+                expected_custody_position_revision: 5,
+                expected_custody_replay_revision: ABSENT_REVISION,
+                generation: parent().generation,
+                quantity: 1,
+                denominator: 10,
+                expected_receipt_supply: 0,
+                outcome_count: 3,
+                selected_outcome: 1,
+                asset_count: 1,
+            },
+            &asset,
+        )
+        .expect("representation request");
+        let mut bytes = vec![
+            0_u8;
+            dclutch_rational_representation_v2_request_contract::REQUEST_HEADER_BYTES_V2
+                + ASSET_BYTES_V2
+        ];
+        request
+            .encode_into(&mut bytes)
+            .expect("representation bytes");
+        bytes
+    }
+
     fn lifecycle_request(action: LifecycleActionV2, rows: u32) -> Vec<u8> {
         let mut coordinate_bytes = Vec::new();
         for row in 0..rows {
@@ -1314,6 +1435,82 @@ mod tests {
             },
             ClaimsCompositionParentV3 {
                 generation: parent().generation + 1,
+                ..parent()
+            },
+        ] {
+            assert_eq!(
+                ClaimsCompositionV3::decode_selected(
+                    ProgramV3::decode(&effect_bytes).expect("structural EffectProgram"),
+                    TAIL_COUNT,
+                    &[1],
+                    &[id(40)],
+                    &request_bank,
+                    hostile_parent,
+                ),
+                Err(ClaimsCompositionErrorV3::ParentBinding)
+            );
+        }
+    }
+
+    #[test]
+    fn composes_exact_rational_representation_and_refuses_frame_or_parent_substitution() {
+        let request = rational_representation_request();
+        let decoded = RepresentationRequestV2::decode(&request).expect("representation request");
+        let canonical_route = RouteFixture {
+            role: 1,
+            kind: 0,
+            enabled: false,
+            fixed_account_count: u16::try_from(
+                decoded.physical_account_count().expect("physical frame"),
+            )
+            .expect("u16 frame"),
+            request: request.clone(),
+        };
+        let (effect_bytes, request_bank) = effect(core::slice::from_ref(&canonical_route));
+        let composition = ClaimsCompositionV3::decode_selected(
+            ProgramV3::decode(&effect_bytes).expect("representation EffectProgram"),
+            TAIL_COUNT,
+            &[1],
+            &[id(40)],
+            &request_bank,
+            parent(),
+        )
+        .expect("representation composition");
+        assert_eq!(
+            composition
+                .rational_representation()
+                .expect("representation")
+                .header(),
+            decoded.header()
+        );
+        assert!(composition.rational_lifecycle().is_none());
+        assert!(composition.affine().is_none());
+
+        let mut wrong_frame = canonical_route.clone();
+        wrong_frame.fixed_account_count = wrong_frame
+            .fixed_account_count
+            .checked_sub(1)
+            .expect("nonzero frame");
+        let (wrong_effect, wrong_bank) = effect(&[wrong_frame]);
+        assert_eq!(
+            ClaimsCompositionV3::decode_selected(
+                ProgramV3::decode(&wrong_effect).expect("structural EffectProgram"),
+                TAIL_COUNT,
+                &[1],
+                &[id(40)],
+                &wrong_bank,
+                parent(),
+            ),
+            Err(ClaimsCompositionErrorV3::Route)
+        );
+
+        for hostile_parent in [
+            ClaimsCompositionParentV3 {
+                generation: parent().generation + 1,
+                ..parent()
+            },
+            ClaimsCompositionParentV3 {
+                parent_request_digest: id(99),
                 ..parent()
             },
         ] {

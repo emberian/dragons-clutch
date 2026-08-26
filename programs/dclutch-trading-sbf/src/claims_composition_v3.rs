@@ -31,6 +31,11 @@ use dclutch_effect_kernel::{
     v2::FixedRole,
     v3::{ProgramV3, ResolvedInvocationV3, RouteKindV3},
 };
+use dclutch_rational_representation_v2_contract::{
+    CallerRoleV2, RECEIPT_BYTES_V2 as REPRESENTATION_RECEIPT_BYTES_V2,
+    REQUEST_MAGIC_V2 as REPRESENTATION_REQUEST_MAGIC_V2, RepresentationReceiptV2,
+    RepresentationRequestV2,
+};
 use dclutch_rational_representation_v2_lifecycle_contract::{
     LIFECYCLE_REQUEST_MAGIC_V2, LifecycleReceiptV2, LifecycleRequestV2,
     hot_v3::verify_rational_lifecycle_hot_receipt_v3,
@@ -62,6 +67,8 @@ pub enum ClaimsRouteReceiptV3 {
     Founding(Box<ClaimsFoundingReceiptV5>),
     /// One exact Rational receipt/coordinate resource lifecycle committed.
     RationalLifecycle(LifecycleReceiptV2),
+    /// One exact Rational representation mutation committed.
+    RationalRepresentation(Box<RepresentationReceiptV2>),
     /// Zero canonical Position and admission record were reclaimed.
     Close(ProtocolPositionCloseReceiptV2),
 }
@@ -187,6 +194,7 @@ enum ReceiptKindV3 {
     SparseNativeTransfer,
     Founding,
     RationalLifecycle,
+    RationalRepresentation,
     Close,
 }
 
@@ -365,6 +373,25 @@ fn route_authority(
         )
         .map_err(|_| TradingSbfError::Content)?;
         Ok((seeds, ReceiptKindV3::Founding))
+    } else if request.get(..8) == Some(REPRESENTATION_REQUEST_MAGIC_V2.as_slice()) {
+        if kind != RouteKindV3::Once {
+            return Err(TradingSbfError::Content.into());
+        }
+        let request =
+            RepresentationRequestV2::decode(request).map_err(|_| TradingSbfError::Content)?;
+        let header = request.header();
+        if header.caller_role != CallerRoleV2::Trading {
+            return Err(TradingSbfError::Content.into());
+        }
+        let seeds = CallerAuthoritySeedsV1::new(
+            ContentId::new(header.release_set).map_err(|_| TradingSbfError::Content)?,
+            header.market,
+            ExecutionRoleV1::Trading,
+            header.parent_context,
+            packet_digest,
+        )
+        .map_err(|_| TradingSbfError::Content)?;
+        Ok((seeds, ReceiptKindV3::RationalRepresentation))
     } else if request.get(..8) == Some(LIFECYCLE_REQUEST_MAGIC_V2.as_slice()) {
         if kind != RouteKindV3::Once {
             return Err(TradingSbfError::Content.into());
@@ -439,10 +466,39 @@ fn verify_route_receipt(
         ReceiptKindV3::RationalLifecycle => {
             verify_rational_lifecycle_receipt(request, receipt, request_digest)
         }
+        ReceiptKindV3::RationalRepresentation => {
+            verify_rational_representation_receipt(request, receipt, request_digest, claims_program)
+        }
         ReceiptKindV3::Close => {
             verify_close_receipt(request, receipt, request_digest, claims_program)
         }
     }
+}
+
+#[inline(never)]
+fn verify_rational_representation_receipt(
+    request: &[u8],
+    receipt: &[u8],
+    request_digest: [u8; 32],
+    claims_program: [u8; 32],
+) -> Result<ClaimsRouteReceiptV3, ProgramError> {
+    if receipt.len() != REPRESENTATION_RECEIPT_BYTES_V2 {
+        return Err(TradingSbfError::Transition.into());
+    }
+    let request = RepresentationRequestV2::decode(request).map_err(|_| TradingSbfError::Content)?;
+    let receipt = Box::new(
+        RepresentationReceiptV2::decode(receipt).map_err(|_| TradingSbfError::Transition)?,
+    );
+    receipt
+        .verify_for(request, request_digest)
+        .map_err(|_| TradingSbfError::Transition)?;
+    if receipt.representation_program() != claims_program
+        || receipt.claims_program() != claims_program
+        || receipt.token_program() != request.header().token_program
+    {
+        return Err(TradingSbfError::Transition.into());
+    }
+    Ok(ClaimsRouteReceiptV3::RationalRepresentation(receipt))
 }
 
 #[inline(never)]
@@ -707,6 +763,12 @@ mod tests {
             SparseNativeTransferV1,
         },
     };
+    use dclutch_rational_representation_v2_contract::{
+        ABSENT_REVISION, ASSET_BYTES_V2, AssetV2, RepresentationActionV2,
+        RepresentationRequestHeaderV2,
+    };
+    use dclutch_rational_representation_v2_request_contract::generated as representation_wire;
+    use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
 
     use super::*;
 
@@ -886,6 +948,169 @@ mod tests {
         .expect("sparse request")
     }
 
+    fn representation_bytes() -> Vec<u8> {
+        let mut asset = [0_u8; ASSET_BYTES_V2];
+        AssetV2 {
+            shard_mint: id(50),
+            actor_shard_account: id(51),
+            structured_custody_account: id(52),
+            claims_custody_owner: id(53),
+            coefficient: 10,
+            expected_shard_supply: 20,
+            expected_actor_shards: 10,
+            expected_structured_shards: 10,
+        }
+        .encode_into(&mut asset)
+        .expect("asset");
+        let request = RepresentationRequestV2::new(
+            RepresentationRequestHeaderV2 {
+                action: RepresentationActionV2::Denominate,
+                caller_role: CallerRoleV2::Trading,
+                release_set: id(1),
+                market: id(2),
+                graph_id: id(54),
+                descriptor_id: id(55),
+                parent_context: id(4),
+                actor: id(56),
+                receipt_mint: id(57),
+                receipt_account: [0; 32],
+                representation_authority: id(58),
+                token_program: TOKEN_2022_PROGRAM_ID,
+                realm: [0; 32],
+                collateral_recipient: [0; 32],
+                expected_representation_revision: 3,
+                expected_claims_market_revision: 8,
+                expected_actor_position_revision: 4,
+                expected_custody_position_revision: 5,
+                expected_custody_replay_revision: ABSENT_REVISION,
+                generation: 7,
+                quantity: 1,
+                denominator: 10,
+                expected_receipt_supply: 0,
+                outcome_count: 2,
+                selected_outcome: 1,
+                asset_count: 1,
+            },
+            &asset,
+        )
+        .expect("representation");
+        let mut bytes = alloc::vec![
+            0_u8;
+            dclutch_rational_representation_v2_contract::REQUEST_HEADER_BYTES_V2
+                + ASSET_BYTES_V2
+        ];
+        request.encode_into(&mut bytes).expect("request bytes");
+        bytes
+    }
+
+    fn representation_receipt_bytes(request_bytes: &[u8], claims: [u8; 32]) -> Vec<u8> {
+        let request = RepresentationRequestV2::decode(request_bytes).expect("request");
+        let header = request.header();
+        let mut receipt = alloc::vec![0_u8; representation_wire::RECEIPT_BYTES_V2];
+        let mut put = |offset: usize, value: &[u8]| {
+            receipt[offset..offset + value.len()].copy_from_slice(value);
+        };
+        put(
+            representation_wire::RECEIPT_MAGIC_OFFSET,
+            &representation_wire::RECEIPT_MAGIC_V2,
+        );
+        put(
+            representation_wire::RECEIPT_VERSION_OFFSET,
+            &representation_wire::PHYSICAL_ABI_VERSION_V2.to_le_bytes(),
+        );
+        put(
+            representation_wire::RECEIPT_ACTION_OFFSET,
+            &[representation_wire::ACTION_DENOMINATE],
+        );
+        put(
+            representation_wire::RECEIPT_CALLER_ROLE_OFFSET,
+            &[representation_wire::CALLER_ROLE_TRADING],
+        );
+        for (offset, value) in [
+            (
+                representation_wire::RECEIPT_RELEASE_SET_OFFSET,
+                header.release_set,
+            ),
+            (representation_wire::RECEIPT_MARKET_OFFSET, header.market),
+            (
+                representation_wire::RECEIPT_GRAPH_ID_OFFSET,
+                header.graph_id,
+            ),
+            (
+                representation_wire::RECEIPT_DESCRIPTOR_ID_OFFSET,
+                header.descriptor_id,
+            ),
+            (
+                representation_wire::RECEIPT_PARENT_CONTEXT_OFFSET,
+                header.parent_context,
+            ),
+            (
+                representation_wire::RECEIPT_REQUEST_DIGEST_OFFSET,
+                hash(request_bytes).to_bytes(),
+            ),
+            (representation_wire::RECEIPT_ACTOR_OFFSET, header.actor),
+            (
+                representation_wire::RECEIPT_REPRESENTATION_PROGRAM_OFFSET,
+                claims,
+            ),
+            (representation_wire::RECEIPT_CLAIMS_PROGRAM_OFFSET, claims),
+            (
+                representation_wire::RECEIPT_TOKEN_PROGRAM_OFFSET,
+                header.token_program,
+            ),
+            (
+                representation_wire::RECEIPT_CLAIMS_PLAN_DIGEST_OFFSET,
+                id(70),
+            ),
+            (
+                representation_wire::RECEIPT_CLAIMS_RESOURCE_DIGEST_OFFSET,
+                id(71),
+            ),
+            (
+                representation_wire::RECEIPT_TOKEN_EFFECT_DIGEST_OFFSET,
+                id(72),
+            ),
+            (
+                representation_wire::RECEIPT_POST_RESOURCE_DIGEST_OFFSET,
+                id(73),
+            ),
+        ] {
+            put(offset, &value);
+        }
+        for (offset, value) in [
+            (
+                representation_wire::RECEIPT_PRE_REPRESENTATION_REVISION_OFFSET,
+                header.expected_representation_revision,
+            ),
+            (
+                representation_wire::RECEIPT_POST_REPRESENTATION_REVISION_OFFSET,
+                header.expected_representation_revision + 1,
+            ),
+            (
+                representation_wire::RECEIPT_POST_CLAIMS_MARKET_REVISION_OFFSET,
+                header.expected_claims_market_revision + 1,
+            ),
+            (
+                representation_wire::RECEIPT_POST_ACTOR_POSITION_REVISION_OFFSET,
+                header.expected_actor_position_revision + 1,
+            ),
+            (
+                representation_wire::RECEIPT_POST_CUSTODY_POSITION_REVISION_OFFSET,
+                header.expected_custody_position_revision + 1,
+            ),
+            (representation_wire::RECEIPT_POST_RECEIPT_SUPPLY_OFFSET, 0),
+            (representation_wire::RECEIPT_PAYOUT_OFFSET, 0),
+        ] {
+            put(offset, &value.to_le_bytes());
+        }
+        put(
+            representation_wire::RECEIPT_OUTCOME_COUNT_OFFSET,
+            &header.outcome_count.to_le_bytes(),
+        );
+        RepresentationReceiptV2::decode(&receipt).expect("canonical representation receipt");
+        receipt
+    }
+
     fn founding(claims: [u8; 32], trading: [u8; 32]) -> ClaimsFoundingRequestV5 {
         ClaimsFoundingRequestV5::new(ClaimsFoundingRequestInputV5 {
             release_set: id(1),
@@ -1035,12 +1260,16 @@ mod tests {
             .to_bytes()
             .expect("admit");
         let affine = affine_bytes();
+        let representation = representation_bytes();
         let (admit_seeds, admit_kind) =
             route_authority(&admit, RouteKindV3::Once).expect("admit authority");
         let (affine_seeds, affine_kind) =
             route_authority(&affine, RouteKindV3::AffineOnce).expect("affine authority");
+        let (representation_seeds, representation_kind) =
+            route_authority(&representation, RouteKindV3::Once).expect("representation authority");
         assert_eq!(admit_kind, ReceiptKindV3::Admit);
         assert_eq!(affine_kind, ReceiptKindV3::Affine);
+        assert_eq!(representation_kind, ReceiptKindV3::RationalRepresentation);
         let program = Pubkey::new_from_array(id(21));
         assert_ne!(
             Pubkey::find_program_address(&admit_seeds.as_slices(), &program).0,
@@ -1048,6 +1277,82 @@ mod tests {
         );
         assert!(route_authority(&admit, RouteKindV3::AffineOnce).is_err());
         assert!(route_authority(&affine, RouteKindV3::Once).is_err());
+        assert!(route_authority(&representation, RouteKindV3::AffineOnce).is_err());
+        assert_ne!(
+            Pubkey::find_program_address(&representation_seeds.as_slices(), &program).0,
+            Pubkey::find_program_address(&affine_seeds.as_slices(), &program).0,
+        );
+    }
+
+    #[test]
+    fn verifies_rational_representation_receipt_and_refuses_every_program_substitution() {
+        let request = representation_bytes();
+        let claims = id(20);
+        let receipt = representation_receipt_bytes(&request, claims);
+        assert!(matches!(
+            verify_route_receipt(
+                ReceiptKindV3::RationalRepresentation,
+                &request,
+                &receipt,
+                claims,
+                id(21),
+                PostResourceEvidenceV3::None,
+            ),
+            Ok(ClaimsRouteReceiptV3::RationalRepresentation(_))
+        ));
+
+        for hostile_claims in [id(98), id(99)] {
+            assert!(
+                verify_route_receipt(
+                    ReceiptKindV3::RationalRepresentation,
+                    &request,
+                    &receipt,
+                    hostile_claims,
+                    id(21),
+                    PostResourceEvidenceV3::None,
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            verify_route_receipt(
+                ReceiptKindV3::RationalRepresentation,
+                &request,
+                &receipt[..receipt.len() - 1],
+                claims,
+                id(21),
+                PostResourceEvidenceV3::None,
+            )
+            .is_err()
+        );
+
+        let mut substituted_receipt = receipt.clone();
+        substituted_receipt[representation_wire::RECEIPT_TOKEN_PROGRAM_OFFSET] ^= 1;
+        assert!(
+            verify_route_receipt(
+                ReceiptKindV3::RationalRepresentation,
+                &request,
+                &substituted_receipt,
+                claims,
+                id(21),
+                PostResourceEvidenceV3::None,
+            )
+            .is_err()
+        );
+
+        let mut substituted_request = request.clone();
+        substituted_request[representation_wire::REQUEST_QUANTITY_OFFSET] ^= 1;
+        assert!(
+            verify_route_receipt(
+                ReceiptKindV3::RationalRepresentation,
+                &substituted_request,
+                &receipt,
+                claims,
+                id(21),
+                PostResourceEvidenceV3::None,
+            )
+            .is_err()
+        );
     }
 
     #[test]

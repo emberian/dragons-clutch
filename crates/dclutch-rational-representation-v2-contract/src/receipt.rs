@@ -258,6 +258,21 @@ impl RepresentationReceiptV2 {
         self.request_digest
     }
 
+    /// Registry-selected Claims program which executed the representation adapter.
+    pub const fn representation_program(self) -> [u8; 32] {
+        self.representation_program
+    }
+
+    /// Registry-selected Claims program which executed the economic child packet.
+    pub const fn claims_program(self) -> [u8; 32] {
+        self.claims_program
+    }
+
+    /// Exact Token or Token-2022 program used by every physical token effect.
+    pub const fn token_program(self) -> [u8; 32] {
+        self.token_program
+    }
+
     /// SHA-256 of the exact canonical affine or SignedDelta Claims packet.
     pub const fn claims_packet_digest(self) -> [u8; 32] {
         self.claims_packet_digest

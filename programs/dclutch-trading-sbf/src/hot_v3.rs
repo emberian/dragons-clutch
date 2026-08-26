@@ -3452,6 +3452,10 @@ fn claims_receipt_digest_v3(receipt: ClaimsRouteReceiptV3) -> Result<[u8; 32], P
             .to_bytes()
             .map(Vec::from)
             .map_err(|_| TradingSbfError::Transition)?,
+        ClaimsRouteReceiptV3::RationalRepresentation(value) => value
+            .to_bytes()
+            .map(Vec::from)
+            .map_err(|_| TradingSbfError::Transition)?,
         ClaimsRouteReceiptV3::Close(value) => value
             .to_bytes()
             .map(Vec::from)

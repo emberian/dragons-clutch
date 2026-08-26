@@ -33,6 +33,61 @@ pub const RATIONAL_ASSET_ACCOUNT_COUNT_V2: usize = 4;
 /// Positive terminal Claims-coordinate plus Custody account suffix width.
 pub const RATIONAL_TERMINAL_ACCOUNT_COUNT_V2: usize = 13;
 
+/// Canonical Claims adapter frame geometry for one representation request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RepresentationFrameSpecV2 {
+    fixed_accounts: usize,
+    asset_account_stride: usize,
+    terminal_account_suffix: usize,
+}
+
+impl RepresentationFrameSpecV2 {
+    /// Sole current Rational Representation V2 frame specification.
+    pub const fn canonical() -> Self {
+        Self {
+            fixed_accounts: RATIONAL_BASE_ACCOUNT_COUNT_V2,
+            asset_account_stride: RATIONAL_ASSET_ACCOUNT_COUNT_V2,
+            terminal_account_suffix: RATIONAL_TERMINAL_ACCOUNT_COUNT_V2,
+        }
+    }
+
+    /// Fixed account prefix before active asset rows.
+    pub const fn fixed_accounts(self) -> usize {
+        self.fixed_accounts
+    }
+
+    /// Exact account stride for one ordered active asset row.
+    pub const fn asset_account_stride(self) -> usize {
+        self.asset_account_stride
+    }
+
+    /// Exact suffix appended only for terminal redemption.
+    pub const fn terminal_account_suffix(self) -> usize {
+        self.terminal_account_suffix
+    }
+
+    /// Exact physical account count for an already hostile-decoded request.
+    pub fn account_count(self, request: RepresentationRequestV2<'_>) -> Result<usize> {
+        let assets = usize::try_from(request.header().asset_count)
+            .map_err(|_| Error::InvalidWidth)?
+            .checked_mul(self.asset_account_stride)
+            .ok_or(Error::InvalidLength)?;
+        let terminal = if request.header().action == RepresentationActionV2::RedeemTerminal {
+            self.terminal_account_suffix
+        } else {
+            0
+        };
+        self.fixed_accounts
+            .checked_add(assets)
+            .and_then(|width| width.checked_add(terminal))
+            .ok_or(Error::InvalidLength)
+    }
+}
+
+/// Sole current representation frame specification.
+pub const REPRESENTATION_FRAME_SPEC_V2: RepresentationFrameSpecV2 =
+    RepresentationFrameSpecV2::canonical();
+
 /// Stable hostile-decode and request-shape refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {

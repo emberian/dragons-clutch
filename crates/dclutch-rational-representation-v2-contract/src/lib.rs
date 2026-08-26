@@ -33,8 +33,9 @@ pub use dclutch_rational_representation_v2_request_contract::{
     ABSENT_REVISION, ASSET_BYTES_V2, AssetV2, CallerRoleV2, Error, PHYSICAL_ABI_VERSION_V2,
     RATIONAL_ASSET_ACCOUNT_COUNT_V2, RATIONAL_BASE_ACCOUNT_COUNT_V2,
     RATIONAL_TERMINAL_ACCOUNT_COUNT_V2, RECEIPT_BYTES_V2, RECEIPT_MAGIC_V2,
-    REQUEST_HEADER_BYTES_V2, REQUEST_MAGIC_V2, RepresentationActionV2,
-    RepresentationRequestHeaderV2, RepresentationRequestV2, Result,
+    REPRESENTATION_FRAME_SPEC_V2, REQUEST_HEADER_BYTES_V2, REQUEST_MAGIC_V2,
+    RepresentationActionV2, RepresentationFrameSpecV2, RepresentationRequestHeaderV2,
+    RepresentationRequestV2, Result,
 };
 pub use generated_hot_v3::{
     RATIONAL_TERMINAL_HOT_ACTION_OFFSET_V3, RATIONAL_TERMINAL_HOT_ACTOR_OFFSET_V3,
