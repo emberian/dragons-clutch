@@ -69,7 +69,7 @@ use dclutch_effect_kernel::{
     },
 };
 use dclutch_execution_strategy_contract::{
-    admitted_v3::AdmittedInvocationContextV3,
+    admitted_v3::{AdmittedInvocationContextV3, admitted_invocation_context_digest_v3},
     shadow_digest_v3::{
         ShadowEffectProjectionV3, ShadowInvocationContextV3, ShadowReceiptDependencyV3,
         ShadowResolvedRouteV3, ShadowRouteKindV3, ShadowRouteRoleV3, ShadowRuntimeObservationV3,
@@ -81,8 +81,10 @@ use dclutch_execution_strategy_contract::{
         ShadowArtifactTupleV3, ShadowExecutionDigestsV3, ShadowRequestV3, ShadowRuntimeShapeV3,
     },
     v2::{
-        AcceleratorTransportProfileV2, BankTransportV2, EXECUTION_STRATEGY_PROGRAM_BYTES_V2,
-        ExecutionStrategyProgramV2, StrategyDispositionV2, classify_bank_transport_v2,
+        AcceleratorRequestV2, AcceleratorTransportProfileV2, AuthenticatedScratchPageV2,
+        BankTransportV2, EXECUTION_STRATEGY_PROGRAM_BYTES_V2, ExecutionStrategyProgramV2,
+        RequestTransportV2, StrategyDispositionV2, classify_bank_transport_v2,
+        register_bank_bytes_v2,
     },
 };
 use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
@@ -92,7 +94,7 @@ use dclutch_product_runtime_v2_svm_reader::{
     ProductRuntimeFrameV3, authenticate_product_runtime_v3,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::ACTIVATION_PDA_DOMAIN_V1;
+use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use dclutch_registry_svm::{
     AuthenticatedRoleReceiptV1, RegistryInstructionV1,
     continuation_v1::{
@@ -100,7 +102,7 @@ use dclutch_registry_svm::{
         RegistryContinuationRequestV1,
     },
 };
-use dclutch_release_set_contract::ExecutionRoleV1;
+use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_rent_contract::{RENT_CREDIT_BYTES_V1, RentCreditV1};
 use dclutch_request_profile_contract::{
     ProjectionRegisterKindV1, ProjectionRegisterSpaceV1, ProjectionRegistersV1, ProjectionTargetV1,
@@ -135,7 +137,11 @@ use solana_system_interface::instruction::{allocate, assign, transfer as system_
 use crate::{
     TradingSbfError,
     admitted_composition_v3::{
-        AdmittedCpiFrameV3, admitted_caller_authority_count_v3, execute_admitted_aot_v3,
+        ADMITTED_ACCELERATOR_HOT_FIXED_COUNT_V4, ADMITTED_ACCELERATOR_HOT_FIXED_START_V4,
+        ADMITTED_ACCELERATOR_RUNTIME_ACCOUNTS_START_V4,
+        ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4,
+        ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_START_V4, AdmittedCpiFrameV3,
+        admitted_caller_authority_count_v3, execute_admitted_aot_v3,
     },
     child_receipt_v3::{
         ChildReceiptBankV3, ExpectedReceiptProvenanceV4, require_chain_receipt_width_v3,
@@ -150,7 +156,7 @@ use crate::{
     execution_strategy_v2::{
         ADMITTED_AOT_STRATEGY_ACCOUNT_COUNT_V2, AuthenticatedExecutionStrategyV2,
         INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2, SHADOW_AOT_STRATEGY_ACCOUNT_COUNT_V2,
-        authenticate_execution_strategy_v2,
+        authenticate_current_deployment, authenticate_execution_strategy_v2,
     },
     native_signature::{
         load_current_top_level_instruction, seed_native_signatures_at_authenticated_instruction,
@@ -243,13 +249,6 @@ use crate::{
     feature = "dealer-family"
 ))]
 use dclutch_claims_svm::composition_v3::{ClaimsCompositionParentV3, ClaimsCompositionV3};
-#[cfg(any(
-    feature = "families",
-    feature = "series-family",
-    feature = "dealer-family"
-))]
-use dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1;
-
 // These are SBF-heap profile bounds, not semantic/product limits. The lifting
 // path is scratch-page transport under authenticated ExecutionStrategy V2.
 const MAX_HOT_RUNTIME_ACCOUNTS_V3: usize = 256;
@@ -287,6 +286,1027 @@ pub fn hot_admitted_runtime_accounts_start_v3(
             identity_count,
         )?)
         .ok_or_else(|| TradingSbfError::Content.into())
+}
+
+/// Descriptor artifact class exposed by one authenticated accelerator view.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AcceleratorArtifactClassV4 {
+    /// AccountProfile selected by CapabilityProgramV4.
+    AccountProfile,
+    /// RequestProfile selected by CapabilityProgramV4.
+    RequestProfile,
+    /// LifecycleV5 policy selected by CapabilityProgramV4.
+    Lifecycle,
+    /// ExecutionStrategy selected by CapabilityProgramV4.
+    Strategy,
+    /// Transition program selected by CapabilityProgramV4/Strategy.
+    Transition,
+    /// EffectV4 program selected by CapabilityProgramV4.
+    Effect,
+}
+
+/// Public read-only facts authenticated for one admitted accelerator callback.
+///
+/// This is an ephemeral adapter view, not a persisted DTO and not write/CPI
+/// authority. The complete family request remains owned by the current
+/// top-level Hot instruction; the view owns that loaded instruction only so an
+/// external accelerator can borrow its exact request slice after this helper
+/// has rejoined the caller PDA, activation, records, Product, runtime digest,
+/// and AcceleratorRequestV2 invocation-context digest.
+pub struct AuthenticatedAcceleratorInvocationV4<'request, 'accounts, 'info> {
+    request: AcceleratorRequestV2<'request>,
+    envelope: HotExecutionEnvelopeV3,
+    hot_instruction: Vec<u8>,
+    descriptor: CapabilityProgramV4,
+    strategy: AuthenticatedExecutionStrategyV2,
+    selected_action: u32,
+    context: AdmittedInvocationContextV3,
+    product_runtime: dclutch_product_runtime_v2_svm_reader::AuthenticatedProductRuntimeV2,
+    linked_basis_record: dclutch_product_runtime_v2_svm_reader::AuthenticatedRecordV2,
+    claims_program: ContentId,
+    custody_program: ContentId,
+    span_widths: Vec<u32>,
+    input_bank: Vec<u8>,
+    scalars: Vec<u64>,
+    identities: Vec<[u8; 32]>,
+    artifact_raw_accounts: [&'accounts AccountInfo<'info>; 6],
+    runtime_accounts: &'accounts [AccountInfo<'info>],
+}
+
+impl<'request, 'accounts, 'info> AuthenticatedAcceleratorInvocationV4<'request, 'accounts, 'info> {
+    /// Exact canonical AcceleratorRequestV2 supplied by Trading.
+    pub const fn request(&self) -> AcceleratorRequestV2<'request> {
+        self.request
+    }
+
+    /// Exact authenticated common Hot envelope.
+    pub const fn envelope(&self) -> HotExecutionEnvelopeV3 {
+        self.envelope
+    }
+
+    /// Borrow the complete family request from the authenticated top-level instruction.
+    pub fn family_request(&self) -> &[u8] {
+        self.hot_instruction
+            .get(dclutch_capability_program_contract::hot_v3::HOT_FAMILY_REQUEST_OFFSET_V3..)
+            .unwrap_or(&[])
+    }
+
+    /// Action selector returned by the authenticated CapabilityProgramSetV2.
+    pub const fn selected_action(&self) -> u32 {
+        self.selected_action
+    }
+
+    /// Exact hostile-decoded CapabilityProgramV4 descriptor.
+    pub const fn descriptor(&self) -> CapabilityProgramV4 {
+        self.descriptor
+    }
+
+    /// Exact admitted strategy/certificate/admission/deployment witness.
+    pub const fn strategy(&self) -> AuthenticatedExecutionStrategyV2 {
+        self.strategy
+    }
+
+    /// Complete invocation-context preimage whose digest is in AcceleratorRequestV2.
+    pub const fn context(&self) -> AdmittedInvocationContextV3 {
+        self.context
+    }
+
+    /// Product-authenticated runtime facts.
+    pub const fn product_runtime(
+        &self,
+    ) -> dclutch_product_runtime_v2_svm_reader::AuthenticatedProductRuntimeV2 {
+        self.product_runtime
+    }
+
+    /// Independently authenticated Product-linked basis record coordinate.
+    pub const fn linked_basis_record(
+        &self,
+    ) -> dclutch_product_runtime_v2_svm_reader::AuthenticatedRecordV2 {
+        self.linked_basis_record
+    }
+
+    /// Current Registry-selected Claims program identity.
+    pub const fn claims_program(&self) -> ContentId {
+        self.claims_program
+    }
+
+    /// Current Registry-selected Custody program identity.
+    pub const fn custody_program(&self) -> ContentId {
+        self.custody_program
+    }
+
+    /// Exact protected Profile13 span widths in descriptor order.
+    pub fn span_widths(&self) -> &[u32] {
+        &self.span_widths
+    }
+
+    /// Exact complete pre-Transition register bank committed by the request.
+    pub fn input_bank(&self) -> &[u8] {
+        &self.input_bank
+    }
+
+    /// Scalar prefix decoded without narrowing from the complete input bank.
+    pub fn scalars(&self) -> &[u64] {
+        &self.scalars
+    }
+
+    /// Identity suffix decoded from the complete input bank.
+    pub fn identities(&self) -> &[[u8; 32]] {
+        &self.identities
+    }
+
+    /// Exact finalized raw account for one descriptor artifact class.
+    pub const fn artifact_raw_account(
+        &self,
+        class: AcceleratorArtifactClassV4,
+    ) -> &'accounts AccountInfo<'info> {
+        let [
+            account_profile,
+            request_profile,
+            lifecycle,
+            strategy,
+            transition,
+            effect,
+        ] = self.artifact_raw_accounts;
+        match class {
+            AcceleratorArtifactClassV4::AccountProfile => account_profile,
+            AcceleratorArtifactClassV4::RequestProfile => request_profile,
+            AcceleratorArtifactClassV4::Lifecycle => lifecycle,
+            AcceleratorArtifactClassV4::Strategy => strategy,
+            AcceleratorArtifactClassV4::Transition => transition,
+            AcceleratorArtifactClassV4::Effect => effect,
+        }
+    }
+
+    /// Expanded logical AccountInfo sequence, downgraded read-only for the callback.
+    pub const fn runtime_accounts(&self) -> &'accounts [AccountInfo<'info>] {
+        self.runtime_accounts
+    }
+}
+
+/// Authenticate one external admitted-accelerator invocation without lending
+/// mutation or child-CPI authority.
+#[inline(never)]
+pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
+    accelerator_program: &Pubkey,
+    accounts: &'accounts [AccountInfo<'info>],
+    request_bytes: &'request [u8],
+) -> Result<AuthenticatedAcceleratorInvocationV4<'request, 'accounts, 'info>, ProgramError> {
+    let request =
+        AcceleratorRequestV2::decode(request_bytes).map_err(|_| TradingSbfError::Content)?;
+    let caller_authority = account(accounts, 0)?;
+    let fixed = accounts
+        .get(
+            ADMITTED_ACCELERATOR_HOT_FIXED_START_V4
+                ..ADMITTED_ACCELERATOR_HOT_FIXED_START_V4 + ADMITTED_ACCELERATOR_HOT_FIXED_COUNT_V4,
+        )
+        .ok_or(TradingSbfError::Content)?;
+    let strategy_evidence = accounts
+        .get(
+            ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_START_V4
+                ..ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_START_V4
+                    + ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4,
+        )
+        .ok_or(TradingSbfError::Content)?;
+    let runtime_accounts = accounts
+        .get(ADMITTED_ACCELERATOR_RUNTIME_ACCOUNTS_START_V4..)
+        .ok_or(TradingSbfError::Content)?;
+    let trading_program = account(fixed, HOT_TRADING_PROGRAM_ACCOUNT_V3)?;
+    let frame = HotFrameV3::parse_accelerator_readonly(trading_program.key, fixed)?;
+    let hot_instruction =
+        authenticate_accelerator_top_level_v4(frame, strategy_evidence, caller_authority, request)?;
+    let (envelope, family_request) = HotExecutionEnvelopeV3::split_instruction(&hot_instruction)
+        .map_err(|_| TradingSbfError::Content)?;
+    let root_prestate = {
+        let data = frame
+            .root
+            .try_borrow_data()
+            .map_err(|_| TradingSbfError::Root)?;
+        hash(&data).to_bytes()
+    };
+    if root_prestate != envelope.root_prestate_digest() {
+        return Err(TradingSbfError::Root.into());
+    }
+    let (trading_receipt, claims_program, custody_program) =
+        authenticate_accelerator_activation_v4(frame, envelope)?;
+    let market = authenticate_market(frame, envelope)?;
+    let root_data = frame
+        .root
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Root)?;
+    let family_context = TradingFamilyContextV1::authenticate(
+        frame.trading_program.key,
+        frame.root.key,
+        frame.root.owner,
+        &root_data,
+        trading_receipt,
+    )?;
+    drop(root_data);
+    if family_context.market() != envelope.market()
+        || family_context.release_set().to_bytes() != envelope.release_set()
+        || family_context.generation() != envelope.generation()
+    {
+        return Err(TradingSbfError::Root.into());
+    }
+    let rent = Rent::from_account_info(frame.rent).map_err(|_| TradingSbfError::Content)?;
+    let product_runtime = authenticate_product_runtime_boxed_v3(&frame, &rent, &market)?;
+
+    let manifest_data = borrow_finalized_record(
+        frame,
+        frame.manifest_raw,
+        frame.manifest_staging,
+        &rent,
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        family_context.selection().manifest().to_bytes(),
+    )?;
+    let entry = authenticate_manifest_entry_boxed_v3(&manifest_data, &family_context)?;
+    let program_set_data = borrow_finalized_record(
+        frame,
+        frame.program_set_raw,
+        frame.program_set_staging,
+        &rent,
+        CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+        family_context.selection().capability_release().to_bytes(),
+    )?;
+    let program_set = CapabilityProgramSetV2::decode_selected(
+        family_context.selection().capability_release().to_bytes(),
+        hash(&program_set_data).to_bytes(),
+        &program_set_data,
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    let selected_entry = program_set
+        .select_entry(family_request)
+        .map_err(|_| TradingSbfError::Content)?;
+    let selected_descriptor = selected_entry.descriptor();
+    if selected_descriptor.schema().to_bytes() != PROGRAM_SCHEMA_ID_V4
+        || selected_descriptor.program() != request.capability_program()
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    let descriptor_data = borrow_finalized_record(
+        frame,
+        frame.descriptor_raw,
+        frame.descriptor_staging,
+        &rent,
+        selected_descriptor.schema().to_bytes(),
+        selected_descriptor.program().to_bytes(),
+    )?;
+    let descriptor =
+        CapabilityProgramV4::decode(&descriptor_data).map_err(|_| TradingSbfError::Content)?;
+    authenticate_descriptor_root_selection(&descriptor, &family_context, &entry)?;
+
+    let config_data = borrow_finalized_record(
+        frame,
+        frame.config_raw,
+        frame.config_staging,
+        &rent,
+        descriptor.config_schema().to_bytes(),
+        family_context.selection().config().to_bytes(),
+    )?;
+    let config_digest = hash(&config_data).to_bytes();
+    drop(config_data);
+    require_common_projection_bindings_v3(CommonProjectionBindingsV3 {
+        selected_config: family_context.selection().config().to_bytes(),
+        authenticated_config: config_digest,
+        selected_product_record: market.identity.product_record.to_bytes(),
+        authenticated_product_record: product_runtime
+            .runtime
+            .product_record
+            .content_digest
+            .to_bytes(),
+        market_product: market.identity.product_id.to_bytes(),
+        runtime_product: product_runtime.runtime.product_id.to_bytes(),
+        product_semantic_basis: product_runtime.runtime.liability_basis_id.to_bytes(),
+        authenticated_semantic_basis: product_runtime.semantic_basis_id.to_bytes(),
+        authenticated_linked_basis: product_runtime
+            .linked_basis_record
+            .content_digest
+            .to_bytes(),
+    })?;
+    let mut strategy_accounts = Vec::with_capacity(ADMITTED_AOT_STRATEGY_ACCOUNT_COUNT_V2);
+    strategy_accounts.extend([
+        frame.descriptor_raw.clone(),
+        frame.descriptor_staging.clone(),
+        frame.strategy_raw.clone(),
+        frame.strategy_staging.clone(),
+    ]);
+    strategy_accounts.extend(strategy_evidence.iter().cloned());
+    let strategy = authenticate_execution_strategy_v2(
+        family_context,
+        selected_descriptor.schema(),
+        selected_descriptor.program(),
+        frame.registry,
+        frame.rent,
+        &strategy_accounts,
+    )?;
+    if strategy.strategy().disposition() != StrategyDispositionV2::AdmittedAot
+        || strategy.strategy_program_id() != request.strategy_program()
+        || strategy.certificate_program_id() != Some(request.certificate_program())
+        || strategy
+            .artifact_release()
+            .ok_or(TradingSbfError::Content)?
+            .program()
+            .to_bytes()
+            != accelerator_program.to_bytes()
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+
+    let input_bank = authenticate_accelerator_input_bank_v4(
+        request,
+        runtime_accounts,
+        frame.trading_program.key,
+    )?;
+    let (scalars, identities) = decode_accelerator_register_bank_v4(request, &input_bank)?;
+    let account_profile_data = borrow_finalized_record(
+        frame,
+        frame.account_profile_raw,
+        frame.account_profile_staging,
+        &rent,
+        descriptor.account_profile().schema().to_bytes(),
+        descriptor.account_profile().program().to_bytes(),
+    )?;
+    if descriptor.account_profile().schema().to_bytes() != ACCOUNT_PROFILE_SCHEMA_ID_V2 {
+        return Err(TradingSbfError::UnsupportedContent.into());
+    }
+    let account_profile =
+        AccountProfileV2::decode(&account_profile_data).map_err(|_| TradingSbfError::Content)?;
+    let request_profile_data = borrow_finalized_record(
+        frame,
+        frame.request_profile_raw,
+        frame.request_profile_staging,
+        &rent,
+        descriptor.request_profile().schema().to_bytes(),
+        descriptor.request_profile().program().to_bytes(),
+    )?;
+    let request_profile = decode_request_profile(descriptor, &request_profile_data)?;
+    let transition_data = borrow_finalized_record(
+        frame,
+        frame.transition_raw,
+        frame.transition_staging,
+        &rent,
+        descriptor.transition().schema().to_bytes(),
+        descriptor.transition().program().to_bytes(),
+    )?;
+    if descriptor.transition().schema().to_bytes() != TRANSITION_SCHEMA_ID_V3
+        || strategy.strategy().transition_schema() != descriptor.transition().schema()
+        || strategy.strategy().transition_program() != descriptor.transition().program()
+    {
+        return Err(TradingSbfError::UnsupportedContent.into());
+    }
+    let transition =
+        TransitionProgramV3::decode(&transition_data).map_err(|_| TradingSbfError::Content)?;
+    let effect_data = borrow_finalized_record(
+        frame,
+        frame.effect_raw,
+        frame.effect_staging,
+        &rent,
+        descriptor.effect().schema().to_bytes(),
+        descriptor.effect().program().to_bytes(),
+    )?;
+    let effect = decode_selected_effect_v4(descriptor.effect().schema().to_bytes(), &effect_data)?;
+    let lifecycle_data = borrow_finalized_record(
+        frame,
+        frame.lifecycle_raw,
+        frame.lifecycle_staging,
+        &rent,
+        descriptor.lifecycle().schema().to_bytes(),
+        descriptor.lifecycle().program().to_bytes(),
+    )?;
+    if descriptor.lifecycle().schema().to_bytes() != SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5
+        || descriptor.derivation_policy() != descriptor.lifecycle().program()
+    {
+        return Err(TradingSbfError::UnsupportedContent.into());
+    }
+    StateLifecyclePolicyV5::decode_selected(
+        descriptor.lifecycle().program().to_bytes(),
+        hash(&lifecycle_data).to_bytes(),
+        &lifecycle_data,
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    let mut span_widths =
+        if account_profile.artifact_profile() == DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
+            vec![0_u32; usize::from(account_profile.dynamic_fixed_span_count())]
+        } else {
+            Vec::new()
+        };
+    if account_profile.artifact_profile() == DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
+        account_profile
+            .dynamic_span_widths_from_scalars(&scalars, &mut span_widths)
+            .map_err(|_| TradingSbfError::Content)?;
+    }
+    let logical_count = if account_profile.artifact_profile() == DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+    {
+        account_profile
+            .logical_account_count_with_dynamic_spans(request.tail_count(), &span_widths)
+            .map_err(|_| TradingSbfError::Content)?
+    } else {
+        account_profile
+            .logical_account_count(request.tail_count())
+            .map_err(|_| TradingSbfError::Content)?
+    };
+    if logical_count != runtime_accounts.len()
+        || request.tail_count() != product_runtime.runtime.outcome_count
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    require_geometry(
+        account_profile,
+        request_profile,
+        transition,
+        effect,
+        request.tail_count(),
+        family_request,
+        runtime_accounts.len(),
+        &span_widths,
+        &scalars,
+    )?;
+
+    let runtime_observations_digest = accelerator_runtime_observations_digest_v4(
+        runtime_accounts,
+        family_context.selection().config().to_bytes(),
+        product_runtime
+            .runtime
+            .product_record
+            .content_digest
+            .to_bytes(),
+        product_runtime
+            .runtime
+            .portfolio_record
+            .content_digest
+            .to_bytes(),
+        product_runtime
+            .linked_basis_record
+            .content_digest
+            .to_bytes(),
+    )?;
+    let context = AdmittedInvocationContextV3 {
+        release_set: family_context.release_set(),
+        market: ContentId::new(envelope.market()).map_err(|_| TradingSbfError::Content)?,
+        root: ContentId::new(frame.root.key.to_bytes()).map_err(|_| TradingSbfError::Content)?,
+        registry_program: ContentId::new(frame.registry.key.to_bytes())
+            .map_err(|_| TradingSbfError::Content)?,
+        trading_program: ContentId::new(frame.trading_program.key.to_bytes())
+            .map_err(|_| TradingSbfError::Content)?,
+        accelerator_program: ContentId::new(accelerator_program.to_bytes())
+            .map_err(|_| TradingSbfError::Content)?,
+        capability_program: selected_descriptor.program(),
+        account_profile: descriptor.account_profile().program(),
+        request_profile: descriptor.request_profile().program(),
+        transition: strategy.strategy().transition_program(),
+        effect: descriptor.effect().program(),
+        lifecycle: descriptor.derivation_policy(),
+        strategy: strategy.strategy_program_id(),
+        certificate: strategy
+            .certificate_program_id()
+            .ok_or(TradingSbfError::Content)?,
+        admission: strategy
+            .admission_program_id()
+            .ok_or(TradingSbfError::Content)?,
+        artifact_release: strategy
+            .artifact_release_id()
+            .ok_or(TradingSbfError::Content)?,
+        config: family_context.selection().config(),
+        product: ContentId::new(
+            product_runtime
+                .runtime
+                .product_record
+                .content_digest
+                .to_bytes(),
+        )
+        .map_err(|_| TradingSbfError::Content)?,
+        portfolio: ContentId::new(
+            product_runtime
+                .runtime
+                .portfolio_record
+                .content_digest
+                .to_bytes(),
+        )
+        .map_err(|_| TradingSbfError::Content)?,
+        linked_basis: ContentId::new(
+            product_runtime
+                .linked_basis_record
+                .content_digest
+                .to_bytes(),
+        )
+        .map_err(|_| TradingSbfError::Content)?,
+        family_request_digest: ContentId::new(hash(family_request).to_bytes())
+            .map_err(|_| TradingSbfError::Content)?,
+        runtime_observations_digest,
+        root_prestate_digest: ContentId::new(root_prestate)
+            .map_err(|_| TradingSbfError::Content)?,
+        selected_action: selected_entry.selector(),
+        tail_count: request.tail_count(),
+        account_count: u32::try_from(runtime_accounts.len())
+            .map_err(|_| TradingSbfError::Content)?,
+        scalar_count: request.scalar_count(),
+        identity_count: request.identity_count(),
+    };
+    if admitted_invocation_context_digest_v3(context).map_err(|_| TradingSbfError::Content)?
+        != request.invocation_context()
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    authenticate_accelerator_caller_authority_v4(
+        frame.trading_program.key,
+        caller_authority,
+        envelope,
+        frame.root.key,
+        request_bytes,
+    )?;
+
+    Ok(AuthenticatedAcceleratorInvocationV4 {
+        request,
+        envelope,
+        hot_instruction,
+        descriptor,
+        strategy,
+        selected_action: selected_entry.selector(),
+        context,
+        product_runtime: product_runtime.runtime,
+        linked_basis_record: product_runtime.linked_basis_record,
+        claims_program,
+        custody_program,
+        span_widths,
+        input_bank,
+        scalars,
+        identities,
+        artifact_raw_accounts: [
+            frame.account_profile_raw,
+            frame.request_profile_raw,
+            frame.lifecycle_raw,
+            frame.strategy_raw,
+            frame.transition_raw,
+            frame.effect_raw,
+        ],
+        runtime_accounts,
+    })
+}
+
+fn authenticate_accelerator_top_level_v4(
+    frame: HotFrameV3<'_, '_>,
+    strategy_evidence: &[AccountInfo<'_>],
+    caller_authority: &AccountInfo<'_>,
+    request: AcceleratorRequestV2<'_>,
+) -> Result<Vec<u8>, ProgramError> {
+    let (_, observed) = load_current_top_level_instruction(frame.instructions)?;
+    let (hot_instruction, fixed_start, strategy_start, caller_start, registry_mode) =
+        if observed.program_id == *frame.trading_program.key {
+            (
+                observed.data.clone(),
+                0_usize,
+                HOT_FIXED_ACCOUNT_COUNT_V3,
+                HOT_FIXED_ACCOUNT_COUNT_V3
+                    .checked_add(ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4)
+                    .ok_or(TradingSbfError::Content)?,
+                false,
+            )
+        } else if observed.program_id == *frame.registry.key {
+            let header = observed
+                .data
+                .get(..REGISTRY_CONTINUATION_REQUEST_BYTES_V1)
+                .ok_or(TradingSbfError::NativeSignature)?;
+            let nested = observed
+                .data
+                .get(REGISTRY_CONTINUATION_REQUEST_BYTES_V1..)
+                .ok_or(TradingSbfError::NativeSignature)?;
+            let (envelope, _) = HotExecutionEnvelopeV3::split_instruction(nested)
+                .map_err(|_| TradingSbfError::NativeSignature)?;
+            let continuation = RegistryContinuationRequestV1::decode(header)
+                .map_err(|_| TradingSbfError::NativeSignature)?;
+            let activation_digest = {
+                let data = frame
+                    .activation_cache
+                    .try_borrow_data()
+                    .map_err(|_| TradingSbfError::NativeSignature)?;
+                ContentId::new(hash(&data).to_bytes())
+                    .map_err(|_| TradingSbfError::NativeSignature)?
+            };
+            continuation
+                .verify_core_trading_hot(
+                    ContentId::new(envelope.release_set())
+                        .map_err(|_| TradingSbfError::NativeSignature)?,
+                    activation_digest,
+                    ContentId::new(hash(nested).to_bytes())
+                        .map_err(|_| TradingSbfError::NativeSignature)?,
+                    u32::try_from(nested.len()).map_err(|_| TradingSbfError::NativeSignature)?,
+                )
+                .map_err(|_| TradingSbfError::NativeSignature)?;
+            let outer = observed
+                .accounts
+                .get(..REGISTRY_CONTINUATION_OUTER_PREFIX_ACCOUNTS_V1)
+                .ok_or(TradingSbfError::NativeSignature)?;
+            let expected_outer = [
+                frame.activation_cache.key,
+                frame.core_program.key,
+                frame.core_programdata.key,
+                frame.trading_program.key,
+                frame.trading_programdata.key,
+            ];
+            if outer
+                .iter()
+                .take(expected_outer.len())
+                .zip(expected_outer)
+                .any(|(meta, key)| meta.pubkey != *key || meta.is_signer || meta.is_writable)
+            {
+                return Err(TradingSbfError::NativeSignature.into());
+            }
+            let batch = continuation
+                .role_batch_request()
+                .map_err(|_| TradingSbfError::NativeSignature)?;
+            let batch_digest = ContentId::new(hash(&batch.to_bytes()).to_bytes())
+                .map_err(|_| TradingSbfError::NativeSignature)?;
+            let seeds = RegistryContinuationAdmissionSeedsV1::new(
+                continuation,
+                frame.activation_cache.key.to_bytes(),
+                batch_digest,
+            )
+            .map_err(|_| TradingSbfError::NativeSignature)?;
+            let release = seeds.release_set();
+            let cache = seeds.activation_cache();
+            let batch = seeds.batch_request_digest();
+            let mask = seeds.role_mask();
+            let role = seeds.continuation_role();
+            let digest = seeds.continuation_digest();
+            let expected_admission = Pubkey::find_program_address(
+                &[
+                    seeds.domain(),
+                    release.as_slice(),
+                    cache.as_slice(),
+                    batch.as_slice(),
+                    mask.as_slice(),
+                    role.as_slice(),
+                    digest.as_slice(),
+                ],
+                frame.registry.key,
+            )
+            .0;
+            let admission_meta = outer.get(5).ok_or(TradingSbfError::NativeSignature)?;
+            if admission_meta.pubkey != expected_admission
+                || admission_meta.is_signer
+                || admission_meta.is_writable
+            {
+                return Err(TradingSbfError::NativeSignature.into());
+            }
+            let fixed_start = REGISTRY_CONTINUATION_OUTER_PREFIX_ACCOUNTS_V1;
+            let strategy_start = fixed_start
+                .checked_add(HOT_FIXED_ACCOUNT_COUNT_V3)
+                .and_then(|value| value.checked_add(1))
+                .ok_or(TradingSbfError::Content)?;
+            let caller_start = strategy_start
+                .checked_add(ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4)
+                .ok_or(TradingSbfError::Content)?;
+            (
+                nested.to_vec(),
+                fixed_start,
+                strategy_start,
+                caller_start,
+                true,
+            )
+        } else {
+            return Err(TradingSbfError::NativeSignature.into());
+        };
+    let (envelope, _) = HotExecutionEnvelopeV3::split_instruction(&hot_instruction)
+        .map_err(|_| TradingSbfError::NativeSignature)?;
+    let fixed_metas = observed
+        .accounts
+        .get(fixed_start..fixed_start + HOT_FIXED_ACCOUNT_COUNT_V3)
+        .ok_or(TradingSbfError::NativeSignature)?;
+    let fixed_accounts = [
+        frame.market,
+        frame.root,
+        frame.manifest_raw,
+        frame.manifest_staging,
+        frame.program_set_raw,
+        frame.program_set_staging,
+        frame.descriptor_raw,
+        frame.descriptor_staging,
+        frame.config_raw,
+        frame.config_staging,
+        frame.account_profile_raw,
+        frame.account_profile_staging,
+        frame.request_profile_raw,
+        frame.request_profile_staging,
+        frame.transition_raw,
+        frame.transition_staging,
+        frame.effect_raw,
+        frame.effect_staging,
+        frame.lifecycle_raw,
+        frame.lifecycle_staging,
+        frame.strategy_raw,
+        frame.strategy_staging,
+        frame.activation_cache,
+        frame.core_program,
+        frame.core_programdata,
+        frame.trading_program,
+        frame.trading_programdata,
+        frame.registry,
+        frame.rent,
+        frame.instructions,
+        frame.product_raw,
+        frame.product_staging,
+        frame.result_domain_raw,
+        frame.result_domain_staging,
+        frame.portfolio_raw,
+        frame.portfolio_staging,
+        frame.linked_basis_raw,
+        frame.linked_basis_staging,
+    ];
+    for (index, (meta, info)) in fixed_metas.iter().zip(fixed_accounts).enumerate() {
+        let expected_writable =
+            index == HOT_ROOT_ACCOUNT_V3 || (registry_mode && index == HOT_MARKET_ACCOUNT_V3);
+        if meta.pubkey != *info.key || meta.is_signer || meta.is_writable != expected_writable {
+            return Err(TradingSbfError::NativeSignature.into());
+        }
+    }
+    let strategy_metas = observed
+        .accounts
+        .get(
+            strategy_start
+                ..strategy_start
+                    .checked_add(ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4)
+                    .ok_or(TradingSbfError::Content)?,
+        )
+        .ok_or(TradingSbfError::NativeSignature)?;
+    if strategy_metas
+        .iter()
+        .zip(strategy_evidence)
+        .any(|(meta, info)| meta.pubkey != *info.key || meta.is_signer || meta.is_writable)
+    {
+        return Err(TradingSbfError::NativeSignature.into());
+    }
+    let caller_count =
+        admitted_caller_authority_count_v3(request.scalar_count(), request.identity_count())?;
+    if caller_count
+        != usize::try_from(request.chunk_count()).map_err(|_| TradingSbfError::Content)?
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    let caller_index = caller_start
+        .checked_add(usize::try_from(request.chunk_index()).map_err(|_| TradingSbfError::Content)?)
+        .ok_or(TradingSbfError::Content)?;
+    let caller_meta = observed
+        .accounts
+        .get(caller_index)
+        .ok_or(TradingSbfError::NativeSignature)?;
+    if caller_meta.pubkey != *caller_authority.key
+        || caller_meta.is_signer
+        || caller_meta.is_writable
+        || caller_start
+            .checked_add(caller_count)
+            .ok_or(TradingSbfError::Content)?
+            > observed.accounts.len()
+        || envelope.market() == [0; 32]
+    {
+        return Err(TradingSbfError::NativeSignature.into());
+    }
+    Ok(hot_instruction)
+}
+
+fn authenticate_accelerator_activation_v4(
+    frame: HotFrameV3<'_, '_>,
+    envelope: HotExecutionEnvelopeV3,
+) -> Result<(AuthenticatedRoleReceiptV1, ContentId, ContentId), ProgramError> {
+    let expected_cache = Pubkey::find_program_address(
+        &[ACTIVATION_PDA_DOMAIN_V1, &envelope.release_set()],
+        frame.registry.key,
+    )
+    .0;
+    if frame.activation_cache.key != &expected_cache
+        || frame.activation_cache.owner != frame.registry.key
+        || frame.activation_cache.is_signer
+        || frame.activation_cache.is_writable
+        || frame.activation_cache.executable
+    {
+        return Err(TradingSbfError::Release.into());
+    }
+    let data = frame
+        .activation_cache
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Release)?;
+    let activated =
+        ActivatedExecutionReleaseSetViewV1::decode(&data).map_err(|_| TradingSbfError::Release)?;
+    if activated
+        .execution_release_set_id()
+        .map_err(|_| TradingSbfError::Release)?
+        .to_bytes()
+        != envelope.release_set()
+    {
+        return Err(TradingSbfError::Release.into());
+    }
+    let core = activated
+        .role(ExecutionRoleV1::Core)
+        .map_err(|_| TradingSbfError::Release)?;
+    let trading = activated
+        .role(ExecutionRoleV1::Trading)
+        .map_err(|_| TradingSbfError::Release)?;
+    let claims = activated
+        .role(ExecutionRoleV1::Claims)
+        .map_err(|_| TradingSbfError::Release)?;
+    let custody = activated
+        .role(ExecutionRoleV1::Custody)
+        .map_err(|_| TradingSbfError::Release)?;
+    drop(data);
+    authenticate_current_deployment(core.release(), frame.core_program, frame.core_programdata)
+        .map_err(ProgramError::from)?;
+    authenticate_current_deployment(
+        trading.release(),
+        frame.trading_program,
+        frame.trading_programdata,
+    )
+    .map_err(ProgramError::from)?;
+    Ok((
+        AuthenticatedRoleReceiptV1::new(
+            ExecutionRoleV1::Trading,
+            ContentId::new(envelope.release_set()).map_err(|_| TradingSbfError::Release)?,
+            trading.release().program(),
+            trading.artifact_release_id(),
+            trading.release().semantic_release_id(),
+        ),
+        ContentId::new(claims.release().program().to_bytes())
+            .map_err(|_| TradingSbfError::Release)?,
+        ContentId::new(custody.release().program().to_bytes())
+            .map_err(|_| TradingSbfError::Release)?,
+    ))
+}
+
+fn authenticate_accelerator_input_bank_v4(
+    request: AcceleratorRequestV2<'_>,
+    runtime_accounts: &[AccountInfo<'_>],
+    trading_program: &Pubkey,
+) -> Result<Vec<u8>, ProgramError> {
+    let bank = match request.transport() {
+        RequestTransportV2::Inline => request.inline_bank().to_vec(),
+        RequestTransportV2::ScratchPages => {
+            let page_count =
+                usize::try_from(request.chunk_count()).map_err(|_| TradingSbfError::Content)?;
+            let mut pages = vec![None; page_count];
+            for account in runtime_accounts {
+                if account.owner != trading_program
+                    || account.is_signer
+                    || account.is_writable
+                    || account.executable
+                    || runtime_accounts
+                        .iter()
+                        .filter(|runtime| runtime.key == account.key)
+                        .count()
+                        != 1
+                {
+                    continue;
+                }
+                let data = account
+                    .try_borrow_data()
+                    .map_err(|_| TradingSbfError::Content)?;
+                let Ok(page) = AuthenticatedScratchPageV2::decode(&data) else {
+                    continue;
+                };
+                page.validate_request_input(
+                    ContentId::new(trading_program.to_bytes())
+                        .map_err(|_| TradingSbfError::Content)?,
+                    request,
+                )
+                .map_err(|_| TradingSbfError::Content)?;
+                let index =
+                    usize::try_from(page.chunk_index()).map_err(|_| TradingSbfError::Content)?;
+                let slot = pages.get_mut(index).ok_or(TradingSbfError::Content)?;
+                if slot.is_some() {
+                    return Err(TradingSbfError::Content.into());
+                }
+                *slot = Some((page.chunk_offset(), page.payload().to_vec()));
+            }
+            let mut bank = Vec::with_capacity(
+                usize::try_from(request.total_bank_bytes())
+                    .map_err(|_| TradingSbfError::Content)?,
+            );
+            for (index, page) in pages.into_iter().enumerate() {
+                let (offset, payload) = page.ok_or(TradingSbfError::Content)?;
+                if usize::try_from(offset).map_err(|_| TradingSbfError::Content)? != bank.len()
+                    || index >= page_count
+                {
+                    return Err(TradingSbfError::Content.into());
+                }
+                bank.extend_from_slice(&payload);
+            }
+            bank
+        }
+    };
+    if u64::try_from(bank.len()).map_err(|_| TradingSbfError::Content)?
+        != request.total_bank_bytes()
+        || ContentId::new(hash(&bank).to_bytes()).map_err(|_| TradingSbfError::Content)?
+            != request.input_bank_digest()
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    Ok(bank)
+}
+
+fn decode_accelerator_register_bank_v4(
+    request: AcceleratorRequestV2<'_>,
+    bank: &[u8],
+) -> Result<(Vec<u64>, Vec<[u8; 32]>), ProgramError> {
+    let expected = register_bank_bytes_v2(request.scalar_count(), request.identity_count())
+        .map_err(|_| TradingSbfError::Content)?;
+    if usize::try_from(expected).map_err(|_| TradingSbfError::Content)? != bank.len() {
+        return Err(TradingSbfError::Content.into());
+    }
+    let scalar_bytes = usize::try_from(request.scalar_count())
+        .map_err(|_| TradingSbfError::Content)?
+        .checked_mul(8)
+        .ok_or(TradingSbfError::Content)?;
+    let mut scalars = Vec::with_capacity(
+        usize::try_from(request.scalar_count()).map_err(|_| TradingSbfError::Content)?,
+    );
+    for bytes in bank
+        .get(..scalar_bytes)
+        .ok_or(TradingSbfError::Content)?
+        .chunks_exact(8)
+    {
+        scalars.push(u64::from_le_bytes(
+            bytes.try_into().map_err(|_| TradingSbfError::Content)?,
+        ));
+    }
+    let identities = bank
+        .get(scalar_bytes..)
+        .ok_or(TradingSbfError::Content)?
+        .chunks_exact(32)
+        .map(|bytes| bytes.try_into().map_err(|_| TradingSbfError::Content))
+        .collect::<Result<Vec<[u8; 32]>, _>>()?;
+    if scalars.len()
+        != usize::try_from(request.scalar_count()).map_err(|_| TradingSbfError::Content)?
+        || identities.len()
+            != usize::try_from(request.identity_count()).map_err(|_| TradingSbfError::Content)?
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    Ok((scalars, identities))
+}
+
+fn accelerator_runtime_observations_digest_v4(
+    runtime_accounts: &[AccountInfo<'_>],
+    selected_config: [u8; 32],
+    product_root: [u8; 32],
+    portfolio: [u8; 32],
+    linked_basis: [u8; 32],
+) -> Result<ContentId, ProgramError> {
+    let runtime_data = runtime_accounts
+        .iter()
+        .map(|account| {
+            account
+                .try_borrow_data()
+                .map_err(|_| TradingSbfError::Content)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let observations = runtime_accounts
+        .iter()
+        .zip(&runtime_data)
+        .enumerate()
+        .map(|(coordinate, (account, data))| ShadowRuntimeObservationV3 {
+            key: logical_projection_key_v3(
+                coordinate,
+                account.key.to_bytes(),
+                selected_config,
+                product_root,
+                portfolio,
+                linked_basis,
+            ),
+            owner: account.owner.to_bytes(),
+            lamports: account.lamports(),
+            data: data.as_ref(),
+            signer: false,
+            writable: false,
+            executable: account.executable,
+        })
+        .collect::<Vec<_>>();
+    runtime_observations_digest_v3(&observations).map_err(|_| TradingSbfError::Content.into())
+}
+
+fn authenticate_accelerator_caller_authority_v4(
+    trading_program: &Pubkey,
+    caller_authority: &AccountInfo<'_>,
+    envelope: HotExecutionEnvelopeV3,
+    root: &Pubkey,
+    request_bytes: &[u8],
+) -> Result<(), ProgramError> {
+    let request_digest =
+        ContentId::new(hash(request_bytes).to_bytes()).map_err(|_| TradingSbfError::Release)?;
+    let seeds = CallerAuthoritySeedsV1::new(
+        ContentId::new(envelope.release_set()).map_err(|_| TradingSbfError::Release)?,
+        envelope.market(),
+        ExecutionRoleV1::Trading,
+        root.to_bytes(),
+        request_digest.to_bytes(),
+    )
+    .map_err(|_| TradingSbfError::Release)?;
+    let expected = Pubkey::find_program_address(&seeds.as_slices(), trading_program).0;
+    if caller_authority.key != &expected
+        || !caller_authority.is_signer
+        || caller_authority.is_writable
+        || caller_authority.executable
+    {
+        Err(TradingSbfError::Release.into())
+    } else {
+        Ok(())
+    }
 }
 
 const REGISTRY_CONTINUATION_OUTER_PREFIX_ACCOUNTS_V1: usize = 6;
@@ -931,6 +1951,9 @@ pub fn process_hot_execution_v3(
         execute_admitted_candidate_v3(AdmittedCandidateViewV3 {
             program_id,
             frame: &frame,
+            hot_fixed_accounts: accounts
+                .get(..HOT_FIXED_ACCOUNT_COUNT_V3)
+                .ok_or(TradingSbfError::Content)?,
             caller_authorities,
             strategy_extras,
             runtime_accounts: &runtime_accounts,
@@ -1512,6 +2535,7 @@ fn authenticate_strategy_boxed_v3<'accounts, 'info>(
 struct AdmittedCandidateViewV3<'a, 'data, 'accounts, 'info> {
     program_id: &'a Pubkey,
     frame: &'a HotFrameV3<'accounts, 'info>,
+    hot_fixed_accounts: &'a [AccountInfo<'info>],
     caller_authorities: &'a [AccountInfo<'info>],
     strategy_extras: &'a [AccountInfo<'info>],
     runtime_accounts: &'a [&'accounts AccountInfo<'info>],
@@ -1759,6 +2783,7 @@ fn execute_admitted_candidate_v3(
         view.program_id,
         AdmittedCpiFrameV3 {
             caller_authorities: view.caller_authorities,
+            hot_fixed_accounts: view.hot_fixed_accounts,
             activation: view.frame.activation_cache,
             registry: view.frame.registry,
             rent: view.frame.rent,
@@ -4528,7 +5553,6 @@ fn require_geometry(
     };
     if expected_accounts != runtime_accounts
         || effect_accounts > expected_accounts
-        || (effect.successor.span_count() != 0 && effect_accounts != expected_accounts)
         || account.fixed_account_count() != effect.fixed_account_count()
         || account.item_account_stride() != effect.item_account_stride()
         || account.common_scalar_count() != request_v1.common_scalar_count()
@@ -5536,15 +6560,11 @@ struct HotFrameV3<'accounts, 'info> {
 }
 
 impl<'accounts, 'info> HotFrameV3<'accounts, 'info> {
-    fn parse(
-        program_id: &Pubkey,
-        accounts: &'accounts [AccountInfo<'info>],
-        permits_fixed_market_union: bool,
-    ) -> Result<Self, ProgramError> {
+    fn from_accounts(accounts: &'accounts [AccountInfo<'info>]) -> Result<Self, ProgramError> {
         if accounts.len() < HOT_FIXED_ACCOUNT_COUNT_V3 {
             return Err(TradingSbfError::Content.into());
         }
-        let value = Self {
+        Ok(Self {
             market: account(accounts, HOT_MARKET_ACCOUNT_V3)?,
             root: account(accounts, HOT_ROOT_ACCOUNT_V3)?,
             manifest_raw: account(accounts, HOT_MANIFEST_RAW_ACCOUNT_V3)?,
@@ -5583,7 +6603,15 @@ impl<'accounts, 'info> HotFrameV3<'accounts, 'info> {
             portfolio_staging: account(accounts, HOT_PORTFOLIO_STAGING_ACCOUNT_V3)?,
             linked_basis_raw: account(accounts, HOT_LINKED_BASIS_RAW_ACCOUNT_V3)?,
             linked_basis_staging: account(accounts, HOT_LINKED_BASIS_STAGING_ACCOUNT_V3)?,
-        };
+        })
+    }
+
+    fn parse(
+        program_id: &Pubkey,
+        accounts: &'accounts [AccountInfo<'info>],
+        permits_fixed_market_union: bool,
+    ) -> Result<Self, ProgramError> {
+        let value = Self::from_accounts(accounts)?;
         if value.market.is_signer
             || (value.market.is_writable && !permits_fixed_market_union)
             || value.market.executable
@@ -5615,6 +6643,44 @@ impl<'accounts, 'info> HotFrameV3<'accounts, 'info> {
         {
             if accounts
                 .get(left.saturating_add(1)..HOT_FIXED_ACCOUNT_COUNT_V3)
+                .ok_or(TradingSbfError::Content)?
+                .iter()
+                .any(|other| other.key == account.key)
+            {
+                return Err(TradingSbfError::Content.into());
+            }
+        }
+        Ok(value)
+    }
+
+    fn parse_accelerator_readonly(
+        trading_program: &Pubkey,
+        accounts: &'accounts [AccountInfo<'info>],
+    ) -> Result<Self, ProgramError> {
+        if accounts.len() != HOT_FIXED_ACCOUNT_COUNT_V3
+            || accounts
+                .iter()
+                .any(|account| account.is_signer || account.is_writable)
+        {
+            return Err(TradingSbfError::Content.into());
+        }
+        let value = Self::from_accounts(accounts)?;
+        if value.market.executable
+            || value.root.executable
+            || value.trading_program.key != trading_program
+            || !value.trading_program.executable
+            || !value.core_program.executable
+            || !value.registry.executable
+            || value.rent.key != &sysvar::rent::ID
+            || value.rent.executable
+            || value.instructions.key != &sysvar::instructions::ID
+            || value.instructions.executable
+        {
+            return Err(TradingSbfError::Content.into());
+        }
+        for (left, account) in accounts.iter().enumerate() {
+            if accounts
+                .get(left.saturating_add(1)..)
                 .ok_or(TradingSbfError::Content)?
                 .iter()
                 .any(|other| other.key == account.key)
@@ -5714,6 +6780,58 @@ mod tests {
         let mut hostile = output;
         hostile[0] ^= 1;
         assert!(decode_selected_effect_v4(EFFECT_SCHEMA_ID_V4, &hostile).is_err());
+    }
+
+    #[test]
+    fn authenticated_accelerator_inline_bank_is_exact_and_untruncated() {
+        let mut bank = Vec::new();
+        bank.extend_from_slice(&11_u64.to_le_bytes());
+        bank.extend_from_slice(&u64::MAX.to_le_bytes());
+        bank.extend_from_slice(&[0x5a; 32]);
+        let content = |byte| ContentId::new([byte; 32]).expect("nonzero content");
+        let request = AcceleratorRequestV2::new(
+            RequestTransportV2::Inline,
+            content(1),
+            content(2),
+            content(3),
+            content(4),
+            ContentId::new(hash(&bank).to_bytes()).expect("bank digest"),
+            7,
+            2,
+            1,
+            0,
+            &bank,
+        )
+        .expect("inline request");
+        assert_eq!(
+            authenticate_accelerator_input_bank_v4(request, &[], &Pubkey::new_unique())
+                .expect("authenticated inline bank"),
+            bank
+        );
+        let (scalars, identities) =
+            decode_accelerator_register_bank_v4(request, &bank).expect("register decode");
+        assert_eq!(scalars, [11, u64::MAX]);
+        assert_eq!(identities, [[0x5a; 32]]);
+
+        let wrong_digest = AcceleratorRequestV2::new(
+            RequestTransportV2::Inline,
+            content(1),
+            content(2),
+            content(3),
+            content(4),
+            content(9),
+            7,
+            2,
+            1,
+            0,
+            &bank,
+        )
+        .expect("hostile request shape");
+        assert!(
+            authenticate_accelerator_input_bank_v4(wrong_digest, &[], &Pubkey::new_unique())
+                .is_err()
+        );
+        assert!(decode_accelerator_register_bank_v4(request, &bank[..40]).is_err());
     }
 
     #[test]

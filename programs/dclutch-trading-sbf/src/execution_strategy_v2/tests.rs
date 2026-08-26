@@ -7,6 +7,7 @@ use dclutch_capability_program_contract::{
     v4::{
         ArtifactReferenceV4, CapabilityArtifactsV4, CapabilityProgramV4,
         SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
+        SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
     },
 };
 use dclutch_core_contract::ContentId;
@@ -266,7 +267,10 @@ impl Fixture {
             CapabilityArtifactsV4 {
                 account_profile: ArtifactReferenceV4::new(id(40), id(5)),
                 request_profile: ArtifactReferenceV4::new(id(9), id(10)),
-                lifecycle: ArtifactReferenceV4::new(id(41), id(7)),
+                lifecycle: ArtifactReferenceV4::new(
+                    schema(SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5),
+                    id(7),
+                ),
                 strategy: ArtifactReferenceV4::new(
                     schema(EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2),
                     strategy_program_id,

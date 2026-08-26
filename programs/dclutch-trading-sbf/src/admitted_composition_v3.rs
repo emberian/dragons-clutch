@@ -15,10 +15,7 @@ use alloc::{vec, vec::Vec};
 use dclutch_capability_program_contract::v3::SCHEMA_RELEASE_ID as CAPABILITY_SCHEMA_ID_V3;
 use dclutch_core_contract::ContentId;
 use dclutch_execution_strategy_contract::{
-    admitted_v3::{
-        ADMITTED_RUNTIME_ACCOUNTS_START_V3, AdmittedInvocationContextV3,
-        admitted_invocation_context_digest_v3,
-    },
+    admitted_v3::{AdmittedInvocationContextV3, admitted_invocation_context_digest_v3},
     v2::{
         ACCELERATOR_ACK_HEADER_BYTES_V2, ACCELERATOR_REQUEST_HEADER_BYTES_V2, AcceleratorAckV2,
         AcceleratorDispositionV2, AcceleratorRequestV2, AcceleratorTransportProfileV2,
@@ -45,11 +42,29 @@ use crate::{TradingSbfError, execution_strategy_v2::AuthenticatedExecutionStrate
 
 const ADMITTED_ACK_TRANSCRIPT_DOMAIN_V3: &[u8] = b"dclutch:hot-admitted-ack:v3";
 
+/// Caller authority in the authenticated accelerator V4 CPI frame.
+pub const ADMITTED_ACCELERATOR_CALLER_AUTHORITY_ACCOUNT_V4: usize = 0;
+/// First account of the exact common Hot fixed frame.
+pub const ADMITTED_ACCELERATOR_HOT_FIXED_START_V4: usize = 1;
+/// Exact number of common Hot fixed accounts carried read-only into the accelerator.
+pub const ADMITTED_ACCELERATOR_HOT_FIXED_COUNT_V4: usize = 38;
+/// First strategy-owned Certificate/Admission/Artifact/deployment evidence account.
+pub const ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_START_V4: usize =
+    ADMITTED_ACCELERATOR_HOT_FIXED_START_V4 + ADMITTED_ACCELERATOR_HOT_FIXED_COUNT_V4;
+/// Exact eight-account admitted strategy suffix, including Program/ProgramData.
+pub const ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4: usize = 8;
+/// First expanded AccountProfile-ordered logical runtime observation.
+pub const ADMITTED_ACCELERATOR_RUNTIME_ACCOUNTS_START_V4: usize =
+    ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_START_V4
+        + ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4;
+
 /// Exact fixed evidence passed before the AccountProfile-ordered runtime slice.
 #[derive(Clone, Copy)]
 pub struct AdmittedCpiFrameV3<'a, 'info> {
     /// One release-pinned Trading authority per canonical output chunk.
     pub caller_authorities: &'a [AccountInfo<'info>],
+    /// Exact common Hot fixed frame, downgraded read-only for the accelerator.
+    pub hot_fixed_accounts: &'a [AccountInfo<'info>],
     /// Current release-set activation cache.
     pub activation: &'a AccountInfo<'info>,
     /// Immutable executable Registry.
@@ -349,7 +364,7 @@ fn invoke_admitted_chunk<'info>(
         return Err(TradingSbfError::Release.into());
     }
     let mut metas = Vec::with_capacity(
-        ADMITTED_RUNTIME_ACCOUNTS_START_V3
+        ADMITTED_ACCELERATOR_RUNTIME_ACCOUNTS_START_V4
             .checked_add(runtime_accounts.len())
             .ok_or(TradingSbfError::Content)?,
     );
@@ -369,14 +384,12 @@ fn invoke_admitted_chunk<'info>(
         data: request_bytes,
     };
     let mut infos = Vec::with_capacity(
-        ADMITTED_RUNTIME_ACCOUNTS_START_V3
+        ADMITTED_ACCELERATOR_RUNTIME_ACCOUNTS_START_V4
             .checked_add(runtime_accounts.len())
-            .and_then(|value| value.checked_add(1))
             .ok_or(TradingSbfError::Content)?,
     );
     infos.extend(fixed_cpi_accounts(frame, caller_authority).cloned());
     infos.extend(runtime_accounts.iter().map(|account| (*account).clone()));
-    infos.push(frame.accelerator_program.clone());
     let bump_seed = [bump];
     let [domain, release, market, role, authority_context, digest] = authority_seeds.as_slices();
     invoke_signed(
@@ -406,27 +419,18 @@ fn fixed_cpi_accounts<'a, 'info>(
     frame: AdmittedCpiFrameV3<'a, 'info>,
     authority: &'a AccountInfo<'info>,
 ) -> impl Iterator<Item = &'a AccountInfo<'info>> {
-    [
-        authority,
-        frame.activation,
-        frame.registry,
-        frame.rent,
-        frame.instructions,
-        frame.trading_program,
-        frame.trading_programdata,
-        frame.capability_raw,
-        frame.capability_staging,
-        frame.strategy_raw,
-        frame.strategy_staging,
-        frame.certificate_raw,
-        frame.certificate_staging,
-        frame.admission_raw,
-        frame.admission_staging,
-        frame.artifact_raw,
-        frame.artifact_staging,
-        frame.accelerator_programdata,
-    ]
-    .into_iter()
+    core::iter::once(authority)
+        .chain(frame.hot_fixed_accounts.iter())
+        .chain([
+            frame.certificate_raw,
+            frame.certificate_staging,
+            frame.admission_raw,
+            frame.admission_staging,
+            frame.artifact_raw,
+            frame.artifact_staging,
+            frame.accelerator_program,
+            frame.accelerator_programdata,
+        ])
 }
 
 fn validate_authenticated_frame(
@@ -441,7 +445,8 @@ fn validate_authenticated_frame(
     let artifact = authenticated
         .artifact_release()
         .ok_or(TradingSbfError::Content)?;
-    if strategy.disposition() != StrategyDispositionV2::AdmittedAot
+    if frame.hot_fixed_accounts.len() != ADMITTED_ACCELERATOR_HOT_FIXED_COUNT_V4
+        || strategy.disposition() != StrategyDispositionV2::AdmittedAot
         || strategy
             .transport_profile()
             .map_err(|_| TradingSbfError::Content)?
@@ -700,6 +705,16 @@ fn content(bytes: &[u8]) -> Result<ContentId, ProgramError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authenticated_accelerator_v4_frame_is_exact_and_nonoverlapping() {
+        assert_eq!(ADMITTED_ACCELERATOR_CALLER_AUTHORITY_ACCOUNT_V4, 0);
+        assert_eq!(ADMITTED_ACCELERATOR_HOT_FIXED_START_V4, 1);
+        assert_eq!(ADMITTED_ACCELERATOR_HOT_FIXED_COUNT_V4, 38);
+        assert_eq!(ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_START_V4, 39);
+        assert_eq!(ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4, 8);
+        assert_eq!(ADMITTED_ACCELERATOR_RUNTIME_ACCOUNTS_START_V4, 47);
+    }
 
     #[test]
     fn register_bank_roundtrips_scalar_then_identity_without_narrowing() {

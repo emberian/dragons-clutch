@@ -500,7 +500,7 @@ fn authenticate_immutable_artifact(
     Ok(release)
 }
 
-fn authenticate_current_deployment(
+pub(crate) fn authenticate_current_deployment(
     release: ArtifactReleaseV1,
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
