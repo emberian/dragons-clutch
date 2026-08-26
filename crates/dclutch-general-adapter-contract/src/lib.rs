@@ -22,6 +22,8 @@ pub mod child_packets;
 pub mod lifecycle;
 /// Stateless, failure-atomic candidate and settlement plan evaluation.
 pub mod plan;
+/// Lean-owned action-specific request projections for generic Trading.
+pub mod specialization;
 
 use dclutch_general_codec::{
     CandidateV1, ExecutionV1, MAX_EXECUTIONS_PER_PAGE, MAX_OUTCOMES, MAX_PAGES_PER_CANDIDATE,
