@@ -1120,7 +1120,7 @@ mod tests {
                 coordinate_domain_id: id(3),
                 result_unit_id: id(4),
                 evaluator_release_id: id(5),
-                basis_width: 5,
+                basis_width: 258,
                 payout_scale: 1,
                 knot_denominator: 1,
                 knots: &[],
@@ -1217,6 +1217,25 @@ mod tests {
             u32::try_from(TOKEN_BEHAVIOR_SELECTION_BYTES_V2).expect("Token selection width");
         *output.get_mut(4).expect("Product") = u32::try_from(product_bytes).expect("Product width");
         *output.get_mut(14).expect("descriptor alias") =
+            u32::try_from(descriptor_bytes).expect("descriptor width");
+        output
+    }
+
+    fn selected_lengths(
+        action: LifecycleActionV2,
+        product_bytes: usize,
+        descriptor_bytes: usize,
+    ) -> Vec<u32> {
+        let coordinate_count = u32::from(action != LifecycleActionV2::ActivateReceipt);
+        let count = usize::from(
+            crate::lifecycle_logical_account_count_v3(action, coordinate_count)
+                .expect("selected logical count"),
+        );
+        let mut output = vec![0_u32; count];
+        *output.get_mut(1).expect("Token selection") =
+            u32::try_from(TOKEN_BEHAVIOR_SELECTION_BYTES_V2).expect("Token selection width");
+        *output.get_mut(4).expect("Product") = u32::try_from(product_bytes).expect("Product width");
+        *output.get_mut(14).expect("descriptor") =
             u32::try_from(descriptor_bytes).expect("descriptor width");
         output
     }
@@ -1391,6 +1410,75 @@ mod tests {
                 }
             ),
             Err(Error::AccountObservation)
+        );
+    }
+
+    #[test]
+    fn four_action_program_set_has_one_profiled_descriptor_per_action() {
+        let basis = basis();
+        let descriptor_bytes = descriptor_bytes(&[0, 7, 5, 0, 9]);
+        let descriptor = descriptor(&descriptor_bytes);
+        let authenticated = token_behavior(descriptor, id(51));
+        let lifecycle = lifecycle_policy();
+        let build_selected = |action| {
+            let lengths = selected_lengths(action, basis.len(), descriptor_bytes.len());
+            crate::build_rational_lifecycle_selected_bundle_v5(
+                crate::RationalLifecycleSelectedBundleInputV5 {
+                    action,
+                    account_profile: crate::RationalLifecycleSelectedAccountProfileInputV5 {
+                        logical_data_lengths: &lengths,
+                        product_basis: &basis,
+                    },
+                    representation_descriptor: descriptor,
+                    authenticated_token_behavior: authenticated,
+                    kind: id(41),
+                    root_schema: id(42),
+                    lifecycle_policy: &lifecycle,
+                    capacity_profile: id(44),
+                    root_state_bytes: 64,
+                },
+            )
+            .expect("selected bundle")
+        };
+        let activate_receipt = build_selected(LifecycleActionV2::ActivateReceipt);
+        let activate_coordinate = build_selected(LifecycleActionV2::ActivateCoordinate);
+        let retire_coordinate = build_selected(LifecycleActionV2::RetireCoordinate);
+        let compact_lengths = lengths(basis.len(), descriptor_bytes.len(), 3);
+        let retire_receipt =
+            build_rational_lifecycle_compact_bundle_v4(RationalLifecycleCompactBundleInputV4 {
+                artifacts: RationalLifecycleCompactArtifactInputV4 {
+                    logical_data_lengths: &compact_lengths,
+                    product_basis: &basis,
+                    descriptor,
+                    claims_program: Pubkey::new_from_array(id(31)),
+                },
+                kind: id(41),
+                authenticated_token_behavior: authenticated,
+                root_schema: id(42),
+                lifecycle_policy: &lifecycle,
+                capacity_profile: id(44),
+                root_state_bytes: 64,
+            })
+            .expect("compact bundle");
+        let input = crate::RationalLifecycleProgramSetInputV5 {
+            authenticated_token_behavior: authenticated,
+            activate_receipt: &activate_receipt,
+            activate_coordinate: &activate_coordinate,
+            retire_coordinate: &retire_coordinate,
+            retire_receipt: &retire_receipt,
+        };
+        let set = crate::build_rational_lifecycle_program_set_v5(input).expect("ProgramSet");
+        crate::validate_rational_lifecycle_program_set_v5(&set, input).expect("selected set");
+
+        let mut substituted = set.clone();
+        substituted
+            .program_set
+            .last_mut()
+            .expect("descriptor identity")
+            .clone_from(&99);
+        assert_eq!(
+            crate::validate_rational_lifecycle_program_set_v5(&substituted, input),
+            Err(Error::ContentIdentity)
         );
     }
 }

@@ -23,6 +23,7 @@ mod operator;
 mod selected_bundle_v5;
 mod selected_operator_v5;
 mod selected_profile_v5;
+mod selected_set_v5;
 
 pub use compact_artifacts_v4::{
     RATIONAL_LIFECYCLE_COMPACT_DESCRIPTOR_BYTES_V4, RATIONAL_LIFECYCLE_COMPACT_STRATEGY_BYTES_V4,
@@ -57,6 +58,10 @@ pub use selected_operator_v5::{
 pub use selected_profile_v5::{
     RationalLifecycleSelectedAccountProfileInputV5,
     encode_rational_lifecycle_selected_account_profile_v5,
+};
+pub use selected_set_v5::{
+    RationalLifecycleProgramSetInputV5, RationalLifecycleProgramSetV5,
+    build_rational_lifecycle_program_set_v5, validate_rational_lifecycle_program_set_v5,
 };
 
 use dclutch_rational_representation_v2_lifecycle_contract::LifecycleActionV2;
