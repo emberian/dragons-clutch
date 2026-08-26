@@ -438,19 +438,20 @@ pub fn process_hot_execution_v3(
         return Err(TradingSbfError::Content.into());
     }
 
-    let mut runtime_accounts = Vec::new();
-    runtime_accounts.extend_from_slice(&[
-        frame.root,
-        frame.config_raw,
-        frame.product_raw,
-        frame.portfolio_raw,
-        frame.linked_basis_raw,
-    ]);
-    runtime_accounts.extend(
+    let runtime_accounts = expand_runtime_accounts_v3(
+        account_profile,
+        product_outcome_count,
+        [
+            frame.root,
+            frame.config_raw,
+            frame.product_raw,
+            frame.portfolio_raw,
+            frame.linked_basis_raw,
+        ],
         accounts
             .get(runtime_start..)
             .ok_or(TradingSbfError::Content)?,
-    );
+    )?;
     if runtime_accounts.len() > MAX_HOT_RUNTIME_ACCOUNTS_V3 {
         return Err(TradingSbfError::UnsupportedContent.into());
     }
@@ -796,10 +797,8 @@ pub fn process_hot_execution_v3(
         &aliases,
     )?;
     let lifecycle_plans = revalidated_lifecycle.plans;
-    let effect_accounts = runtime_accounts
-        .iter()
-        .map(|account| (*account).clone())
-        .collect::<Vec<_>>();
+    let effect_accounts =
+        downgraded_effect_accounts_v3(account_profile, tail_count, &runtime_accounts)?;
     preflight_child_routes_v3(
         program_id,
         *frame,
@@ -1557,6 +1556,85 @@ fn logical_projection_key_v3(
         4 => linked_basis,
         _ => physical_key,
     }
+}
+
+fn expand_runtime_accounts_v3<'accounts, 'info>(
+    profile: AccountProfileV2<'_>,
+    tail_count: u32,
+    injected: [&'accounts AccountInfo<'info>; 5],
+    supplied_suffix: &'accounts [AccountInfo<'info>],
+) -> Result<Vec<&'accounts AccountInfo<'info>>, ProgramError> {
+    let logical_count = profile
+        .logical_account_count(tail_count)
+        .map_err(|_| TradingSbfError::Content)?;
+    let physical_count = profile
+        .physical_account_count(tail_count)
+        .map_err(|_| TradingSbfError::Content)?;
+    if logical_count > MAX_HOT_RUNTIME_ACCOUNTS_V3
+        || physical_count < injected.len()
+        || supplied_suffix.len()
+            != physical_count
+                .checked_sub(injected.len())
+                .ok_or(TradingSbfError::Content)?
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    for coordinate in 0..injected.len() {
+        if profile
+            .representative(tail_count, coordinate)
+            .map_err(|_| TradingSbfError::Content)?
+            != coordinate
+            || profile
+                .physical_account_ordinal(tail_count, coordinate)
+                .map_err(|_| TradingSbfError::Content)?
+                != coordinate
+        {
+            return Err(TradingSbfError::Content.into());
+        }
+    }
+    let mut physical = Vec::with_capacity(physical_count);
+    physical.extend(injected);
+    physical.extend(supplied_suffix.iter());
+    let mut logical = Vec::with_capacity(logical_count);
+    let mut coordinate = 0_usize;
+    while coordinate < logical_count {
+        let ordinal = profile
+            .physical_account_ordinal(tail_count, coordinate)
+            .map_err(|_| TradingSbfError::Content)?;
+        logical.push(*physical.get(ordinal).ok_or(TradingSbfError::Content)?);
+        coordinate = coordinate.checked_add(1).ok_or(TradingSbfError::Content)?;
+    }
+    Ok(logical)
+}
+
+fn downgraded_effect_accounts_v3<'info>(
+    profile: AccountProfileV2<'_>,
+    tail_count: u32,
+    logical_accounts: &[&AccountInfo<'info>],
+) -> Result<Vec<AccountInfo<'info>>, ProgramError> {
+    if logical_accounts.len()
+        != profile
+            .logical_account_count(tail_count)
+            .map_err(|_| TradingSbfError::Content)?
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    logical_accounts
+        .iter()
+        .enumerate()
+        .map(|(coordinate, account)| {
+            let privileges = profile
+                .route_privileges(tail_count, coordinate)
+                .map_err(|_| TradingSbfError::Content)?;
+            if account.executable != privileges.executable() {
+                return Err(TradingSbfError::Content.into());
+            }
+            let mut logical = (*account).clone();
+            logical.is_signer = privileges.signer();
+            logical.is_writable = privileges.writable();
+            Ok(logical)
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy)]
@@ -3843,6 +3921,7 @@ fn require_projected_tail_count_agreement_v3(
 struct TrustedEnvironmentObservationV3 {
     current_slot: Option<(usize, u64)>,
     current_executing_program: Option<(usize, [u8; 32])>,
+    system_program: Option<(usize, [u8; 32])>,
 }
 
 fn observe_trusted_environment_v3(
@@ -3861,6 +3940,9 @@ fn observe_trusted_environment_v3(
         current_executing_program: profile
             .trusted_current_executing_program_identity()
             .map(|destination| (usize::from(destination), program_id.to_bytes())),
+        system_program: profile
+            .trusted_system_program_identity()
+            .map(|destination| (usize::from(destination), system_program::ID.to_bytes())),
     })
 }
 
@@ -3879,6 +3961,11 @@ fn seed_trusted_environment_v3(
             .get_mut(destination)
             .ok_or(TradingSbfError::Content)? = current_program;
     }
+    if let Some((destination, system_program)) = observation.system_program {
+        *identities
+            .get_mut(destination)
+            .ok_or(TradingSbfError::Content)? = system_program;
+    }
     Ok(())
 }
 
@@ -3894,6 +3981,11 @@ fn require_trusted_environment_v3(
             .current_executing_program
             .is_some_and(|(destination, current_program)| {
                 identities.get(destination) != Some(&current_program)
+            })
+        || observation
+            .system_program
+            .is_some_and(|(destination, system_program)| {
+                identities.get(destination) != Some(&system_program)
             })
     {
         Err(TradingSbfError::Content.into())
@@ -3937,7 +4029,21 @@ fn require_trusted_environment_register_ownership_v3(
                 },
             )
         });
-    for (request_target, transition_target) in scalar.into_iter().chain(identity) {
+    let builtin = profile.trusted_system_program_identity().map(|index| {
+        (
+            ProjectionTargetV1 {
+                kind: ProjectionRegisterKindV1::Identity,
+                space: ProjectionRegisterSpaceV1::Common,
+                index,
+            },
+            RegisterWriteTargetV3 {
+                kind: RegisterKindV3::Identity,
+                space: RegisterSpaceV3::Common,
+                index,
+            },
+        )
+    });
+    for (request_target, transition_target) in scalar.into_iter().chain(identity).chain(builtin) {
         if request.writes_register(request_target)?
             || transition
                 .writes_register(transition_target)
@@ -4553,14 +4659,17 @@ mod tests {
     use super::*;
     use dclutch_account_profile_contract::lifecycle_v3::CreateStatePlanV3;
     use dclutch_account_profile_contract::v2::{
+        AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES, AccountPrestateV2,
         HEADER_BYTES as ACCOUNT_PROFILE_HEADER_BYTES,
         OPERATION_BYTES as ACCOUNT_PROFILE_OPERATION_BYTES,
-        RULE_BYTES as ACCOUNT_PROFILE_RULE_BYTES,
+        RULE_BYTES as ACCOUNT_PROFILE_RULE_BYTES, TrustedBuiltinIdentityV2, TrustedEnvironmentV2,
+        TrustedIdentityEnvironmentV2,
         encode::{
             AccountAliasInputV2, AccountCoordinateV2, AccountEffectPermissionsV2,
             AccountOperationInputV2, AccountPrivilegesV2, AccountProfileArtifactV2,
-            AccountRuleInputV2, RegisterGeometryV2, ScalarCoordinateV2,
-            encode_account_profile_v2_atomic,
+            AccountRuleInputV2, AccountRuleWithPrestateInputV2, RegisterGeometryV2,
+            ScalarCoordinateV2, encode_account_profile_v2_atomic,
+            encode_account_profile_with_authenticated_route_alias_v2_atomic,
         },
     };
     use dclutch_transition_vm::v3::{
@@ -4574,6 +4683,125 @@ mod tests {
         assert!(is_hot_execution_v3(b"DCLTHOT3"));
         assert!(!is_hot_execution_v3(b"DCLTHOT2"));
         assert!(!is_hot_execution_v3(b"DCLTHOT"));
+    }
+
+    #[test]
+    fn authenticated_route_aliases_expand_once_and_downgrade_child_privileges() {
+        const READONLY: AccountPrivilegesV2 = AccountPrivilegesV2::new(false, false, false);
+        const WRITABLE: AccountPrivilegesV2 = AccountPrivilegesV2::new(false, true, false);
+        const NO_EFFECTS: AccountEffectPermissionsV2 =
+            AccountEffectPermissionsV2::new(false, false, false);
+
+        let exact = |privileges| AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges,
+                effect_permissions: NO_EFFECTS,
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length: 0,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::Exact,
+        };
+        let alias = AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: READONLY,
+                effect_permissions: NO_EFFECTS,
+                alias: AccountAliasInputV2::Fixed(4),
+                data_length: 0,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::AuthenticatedRouteAlias,
+        };
+        let rules = [
+            exact(READONLY),
+            exact(READONLY),
+            exact(READONLY),
+            exact(READONLY),
+            exact(WRITABLE),
+            exact(READONLY),
+            alias,
+        ];
+        let width = AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES
+            .checked_add(
+                rules
+                    .len()
+                    .checked_mul(ACCOUNT_PROFILE_RULE_BYTES)
+                    .expect("rules"),
+            )
+            .expect("width");
+        let mut scratch = vec![0_u8; width];
+        let mut bytes = vec![0_u8; width];
+        encode_account_profile_with_authenticated_route_alias_v2_atomic(
+            TrustedEnvironmentV2::None,
+            TrustedIdentityEnvironmentV2::None,
+            TrustedBuiltinIdentityV2::SystemProgram { destination: 0 },
+            &rules,
+            &[],
+            &[],
+            &[],
+            RegisterGeometryV2 {
+                common_scalars: 0,
+                item_scalar_stride: 0,
+                common_identities: 1,
+                item_identity_stride: 0,
+            },
+            &mut scratch,
+            &mut bytes,
+        )
+        .expect("profile11");
+        let profile = AccountProfileV2::decode(&bytes).expect("decode profile11");
+
+        let make_account = |writable| {
+            let key = Box::leak(Box::new(Pubkey::new_unique()));
+            let owner = Box::leak(Box::new(Pubkey::new_unique()));
+            let lamports = Box::leak(Box::new(0_u64));
+            let data = Box::leak(Vec::new().into_boxed_slice());
+            AccountInfo::new(key, false, writable, lamports, data, owner, false)
+        };
+        let physical = [
+            make_account(false),
+            make_account(false),
+            make_account(false),
+            make_account(false),
+            make_account(true),
+            make_account(false),
+        ];
+        let logical = expand_runtime_accounts_v3(
+            profile,
+            0,
+            [
+                &physical[0],
+                &physical[1],
+                &physical[2],
+                &physical[3],
+                &physical[4],
+            ],
+            &physical[5..],
+        )
+        .expect("expand physical representatives");
+        assert_eq!(logical.len(), 7);
+        assert_eq!(logical[4].key, logical[6].key);
+
+        let child =
+            downgraded_effect_accounts_v3(profile, 0, &logical).expect("downgrade route views");
+        assert!(child[4].is_writable);
+        assert!(!child[6].is_writable);
+        assert_eq!(child[4].key, child[6].key);
+        assert!(
+            expand_runtime_accounts_v3(
+                profile,
+                0,
+                [
+                    &physical[0],
+                    &physical[1],
+                    &physical[2],
+                    &physical[3],
+                    &physical[4],
+                ],
+                &physical[4..],
+            )
+            .is_err()
+        );
     }
 
     #[cfg(any(
@@ -4596,6 +4824,7 @@ mod tests {
         let observation = TrustedEnvironmentObservationV3 {
             current_slot: Some((1, 42)),
             current_executing_program: Some((2, [0x91; 32])),
+            system_program: Some((0, system_program::ID.to_bytes())),
         };
         let mut projected = [0_u64; 3];
         let mut projected_identities = [[0_u8; 32]; 3];
@@ -4614,6 +4843,12 @@ mod tests {
         hostile_identities[2] = [0x92; 32];
         assert_eq!(
             require_trusted_environment_v3(observation, &projected, &hostile_identities),
+            Err(TradingSbfError::Content.into())
+        );
+        let mut hostile_builtin = projected_identities;
+        hostile_builtin[0] = [0x93; 32];
+        assert_eq!(
+            require_trusted_environment_v3(observation, &projected, &hostile_builtin),
             Err(TradingSbfError::Content.into())
         );
 
