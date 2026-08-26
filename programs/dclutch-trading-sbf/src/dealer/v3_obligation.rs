@@ -3,9 +3,11 @@
 //! The account is the one persisted owner of Dealer terminal obligations.  It
 //! is a PDA of the canonical Trading program beneath the immutable child root;
 //! callers may borrow its runtime-width vector, but may not supply a parallel
-//! obligation DTO.  The vector includes all admitted liabilities, while
-//! `lp_principal` records the scenario-uniform par slice owed to liquidity
-//! providers.  Realized fees have no field in this account.
+//! obligation DTO. The vector includes all admitted liabilities, while
+//! `total_equity_shares` records the outstanding junior ownership supply.
+//! Equity shares are not obligations: their value is derived exclusively from
+//! the authenticated residual vector `capital + Claims - obligations`.
+//! Realized fees have no field in this account.
 
 use dclutch_dealer_codec::scenario::ScenarioSolvencyDescriptor;
 use solana_program::{hash::hash, pubkey::Pubkey};
@@ -17,7 +19,7 @@ pub const DEALER_OBLIGATION_HEADER_BYTES_V3: usize = 192;
 /// Wire magic for the Trading-owned obligation account.
 pub const DEALER_OBLIGATION_MAGIC_V3: [u8; 8] = *b"DCLDOB03";
 /// Current wire version.
-pub const DEALER_OBLIGATION_VERSION_V3: u16 = 1;
+pub const DEALER_OBLIGATION_VERSION_V3: u16 = 2;
 
 const _: () = assert!(DEALER_OBLIGATION_PDA_DOMAIN_V3.len() <= 32);
 
@@ -34,8 +36,8 @@ pub enum ObligationErrorV3 {
     CoordinateMismatch,
     /// Optimistic revision or exact state digest was stale.
     StaleState,
-    /// The LP principal slice exceeded an obligation coordinate.
-    LpPrincipalUncovered,
+    /// An equity-share supply transition was zero, stale, or underflowed.
+    InvalidShareSupply,
     /// Checked obligation or revision arithmetic failed.
     Arithmetic,
 }
@@ -166,9 +168,9 @@ pub fn prepare_obligation_open_v3(
         return Err(ObligationErrorV3::AccountMismatch);
     }
     output.fill(0);
-    output[..8].copy_from_slice(&DEALER_OBLIGATION_MAGIC_V3);
-    output[8..10].copy_from_slice(&DEALER_OBLIGATION_VERSION_V3.to_le_bytes());
-    output[12..16].copy_from_slice(&input.width.to_le_bytes());
+    write_bytes(output, 0, &DEALER_OBLIGATION_MAGIC_V3)?;
+    write_bytes(output, 8, &DEALER_OBLIGATION_VERSION_V3.to_le_bytes())?;
+    write_bytes(output, 12, &input.width.to_le_bytes())?;
     write_u64(output, 16, 1)?;
     for (offset, identity) in [
         (24, input.market),
@@ -177,7 +179,7 @@ pub fn prepare_obligation_open_v3(
         (120, input.position_owner),
         (152, input.child_root),
     ] {
-        output[offset..offset + 32].copy_from_slice(&identity);
+        write_bytes(output, offset, &identity)?;
     }
     DealerObligationProjectionV3::decode(output)?;
     Ok(ObligationOpenPlanV3 {
@@ -188,7 +190,7 @@ pub fn prepare_obligation_open_v3(
     })
 }
 
-/// Admit reclamation only after all LP principal and scenario obligations are zero.
+/// Admit reclamation only after all equity shares and scenario obligations are zero.
 pub fn prepare_obligation_close_v3(
     trading_program: [u8; 32],
     observed: ObligationAccountObservationV3<'_>,
@@ -196,8 +198,8 @@ pub fn prepare_obligation_close_v3(
 ) -> ObligationResultV3<ObligationClosePlanV3> {
     let projection =
         DealerObligationProjectionV3::authenticate(trading_program, observed, expected)?;
-    if projection.lp_principal() != 0 || projection.obligations().any(|value| value != 0) {
-        return Err(ObligationErrorV3::LpPrincipalUncovered);
+    if projection.total_equity_shares() != 0 || projection.obligations().any(|value| value != 0) {
+        return Err(ObligationErrorV3::InvalidShareSupply);
     }
     Ok(ObligationClosePlanV3 {
         obligation: observed.address,
@@ -217,7 +219,7 @@ pub struct DealerObligationProjectionV3<'a> {
     position_owner: [u8; 32],
     child_root: [u8; 32],
     revision: u64,
-    lp_principal: u64,
+    total_equity_shares: u64,
     width: u32,
 }
 
@@ -293,16 +295,11 @@ impl<'a> DealerObligationProjectionV3<'a> {
             liability_basis: read_identity(bytes, 88)?,
             position_owner: read_identity(bytes, 120)?,
             child_root: read_identity(bytes, 152)?,
-            lp_principal: read_u64(bytes, 184)?,
+            total_equity_shares: read_u64(bytes, 184)?,
             width,
         };
         if value.revision == 0 {
             return Err(ObligationErrorV3::InvalidBytes);
-        }
-        for index in 0..width {
-            if value.obligation(index)? < value.lp_principal {
-                return Err(ObligationErrorV3::LpPrincipalUncovered);
-            }
         }
         Ok(value)
     }
@@ -350,9 +347,9 @@ impl<'a> DealerObligationProjectionV3<'a> {
         self.width
     }
 
-    /// Exact scenario-uniform principal owed to all admitted LPs.
-    pub const fn lp_principal(self) -> u64 {
-        self.lp_principal
+    /// Exact outstanding junior equity-share supply.
+    pub const fn total_equity_shares(self) -> u64 {
+        self.total_equity_shares
     }
 
     /// Canonical Dealer Claims Position owner.
@@ -371,65 +368,45 @@ impl<'a> DealerObligationProjectionV3<'a> {
     }
 }
 
-/// Exact scenario-uniform LP principal delta.
+/// Exact junior equity-share supply delta.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum LpPrincipalDeltaV3 {
-    /// Admit present LP capital and an equal obligation in every scenario.
-    Add(u64),
-    /// Return LP capital and remove an equal obligation in every scenario.
-    Remove(u64),
+pub enum EquityShareDeltaV3 {
+    /// Mint shares for an exact proportional scenario contribution.
+    Mint(u64),
+    /// Burn shares for the canonical pro-rata residual payout.
+    Burn(u64),
 }
 
-/// Stage a complete write-last obligation candidate.
+/// Stage a complete write-last share-supply candidate.
 ///
 /// `output` remains byte-for-byte unchanged on every refusal.
-pub fn stage_lp_principal_delta_v3(
+pub fn stage_equity_share_supply_v3(
     current: DealerObligationProjectionV3<'_>,
-    delta: LpPrincipalDeltaV3,
+    delta: EquityShareDeltaV3,
     output: &mut [u8],
 ) -> ObligationResultV3<()> {
     if output.len() != current.bytes.len() {
         return Err(ObligationErrorV3::InvalidBytes);
     }
     let amount = match delta {
-        LpPrincipalDeltaV3::Add(amount) | LpPrincipalDeltaV3::Remove(amount) => amount,
+        EquityShareDeltaV3::Mint(amount) | EquityShareDeltaV3::Burn(amount) => amount,
     };
     if amount == 0 {
-        return Err(ObligationErrorV3::Arithmetic);
+        return Err(ObligationErrorV3::InvalidShareSupply);
     }
     let next_revision = current
         .revision
         .checked_add(1)
         .ok_or(ObligationErrorV3::Arithmetic)?;
-    let next_lp = match delta {
-        LpPrincipalDeltaV3::Add(_) => current.lp_principal.checked_add(amount),
-        LpPrincipalDeltaV3::Remove(_) => current.lp_principal.checked_sub(amount),
+    let next_supply = match delta {
+        EquityShareDeltaV3::Mint(_) => current.total_equity_shares.checked_add(amount),
+        EquityShareDeltaV3::Burn(_) => current.total_equity_shares.checked_sub(amount),
     }
-    .ok_or(ObligationErrorV3::Arithmetic)?;
-    for index in 0..current.width {
-        let obligation = current.obligation(index)?;
-        let next = match delta {
-            LpPrincipalDeltaV3::Add(_) => obligation.checked_add(amount),
-            LpPrincipalDeltaV3::Remove(_) => obligation.checked_sub(amount),
-        }
-        .ok_or(ObligationErrorV3::Arithmetic)?;
-        if next < next_lp {
-            return Err(ObligationErrorV3::LpPrincipalUncovered);
-        }
-    }
+    .ok_or(ObligationErrorV3::InvalidShareSupply)?;
 
     output.copy_from_slice(current.bytes);
     write_u64(output, 16, next_revision)?;
-    write_u64(output, 184, next_lp)?;
-    for index in 0..current.width {
-        let offset = DEALER_OBLIGATION_HEADER_BYTES_V3
-            + usize::try_from(index).map_err(|_| ObligationErrorV3::InvalidBytes)? * 8;
-        let next = match delta {
-            LpPrincipalDeltaV3::Add(_) => current.obligation(index)?.saturating_add(amount),
-            LpPrincipalDeltaV3::Remove(_) => current.obligation(index)?.saturating_sub(amount),
-        };
-        write_u64(output, offset, next)?;
-    }
+    write_u64(output, 184, next_supply)?;
     DealerObligationProjectionV3::decode(output).map(|_| ())
 }
 
@@ -502,6 +479,17 @@ fn write_u64(bytes: &mut [u8], offset: usize, value: u64) -> ObligationResultV3<
     Ok(())
 }
 
+fn write_bytes(bytes: &mut [u8], offset: usize, value: &[u8]) -> ObligationResultV3<()> {
+    let end = offset
+        .checked_add(value.len())
+        .ok_or(ObligationErrorV3::InvalidBytes)?;
+    bytes
+        .get_mut(offset..end)
+        .ok_or(ObligationErrorV3::InvalidBytes)?
+        .copy_from_slice(value);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -563,27 +551,27 @@ mod tests {
             projection.obligations().collect::<std::vec::Vec<_>>(),
             [10, 11, 12]
         );
-        assert_eq!(projection.lp_principal(), 8);
+        assert_eq!(projection.total_equity_shares(), 8);
     }
 
     #[test]
-    fn lp_delta_is_uniform_and_refusal_atomic() {
+    fn equity_supply_changes_without_rewriting_external_obligations() {
         let data = bytes(&[10, 11, 12], 8);
         let current = DealerObligationProjectionV3::decode(&data).expect("state");
         let mut post = std::vec![0; data.len()];
-        stage_lp_principal_delta_v3(current, LpPrincipalDeltaV3::Add(5), &mut post)
-            .expect("funded add");
+        stage_equity_share_supply_v3(current, EquityShareDeltaV3::Mint(5), &mut post)
+            .expect("equity issue");
         let post = DealerObligationProjectionV3::decode(&post).expect("post");
-        assert_eq!(post.lp_principal(), 13);
+        assert_eq!(post.total_equity_shares(), 13);
         assert_eq!(
             post.obligations().collect::<std::vec::Vec<_>>(),
-            [15, 16, 17]
+            [10, 11, 12]
         );
 
         let mut untouched = std::vec![0xa5; data.len()];
         assert_eq!(
-            stage_lp_principal_delta_v3(current, LpPrincipalDeltaV3::Remove(9), &mut untouched),
-            Err(ObligationErrorV3::Arithmetic),
+            stage_equity_share_supply_v3(current, EquityShareDeltaV3::Burn(9), &mut untouched),
+            Err(ObligationErrorV3::InvalidShareSupply),
         );
         assert!(untouched.iter().all(|byte| *byte == 0xa5));
     }

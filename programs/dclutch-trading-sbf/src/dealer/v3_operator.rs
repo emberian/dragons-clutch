@@ -1,20 +1,18 @@
-//! Chain-derived unsigned construction for Dealer V3 multi-LP actions.
+//! Chain-derived unsigned construction for Dealer V3 LP-account lifecycle.
 //!
-//! The operator accepts only an authenticated chain projection.  User choice
-//! is limited to a positive principal amount (or no amount for open/close),
-//! while every identity, digest, revision, generation, and expiry coordinate
-//! is copied from chain state.  The family-neutral CapabilityProgramSetV1 then
-//! selects the complete action bundle from the exact request selector.
+//! Junior equity contribution/redemption has a separate runtime-width request
+//! in `v3_equity_operator`; this fixed wire owns only vacant Open and quiescent
+//! Close. Every coordinate is copied from authenticated chain state.
 
 use dclutch_capability_program_contract::set_v1::CapabilityProgramSetV1;
 use dclutch_core_contract::ContentId;
 use solana_program::{hash::hash, pubkey::Pubkey};
 
-use super::v3_multi_lp::{DEALER_LP_POSITION_PDA_DOMAIN_V3, DealerLpPositionV3};
-use super::v3_obligation::{DEALER_OBLIGATION_PDA_DOMAIN_V3, DealerObligationProjectionV3};
+use super::v3_multi_lp::{DealerLpPositionV3, DEALER_LP_POSITION_PDA_DOMAIN_V3};
+use super::v3_obligation::{DealerObligationProjectionV3, DEALER_OBLIGATION_PDA_DOMAIN_V3};
 
 /// Exact unsigned multi-LP request width.
-pub const DEALER_MULTI_LP_REQUEST_BYTES_V3: usize = 320;
+pub const DEALER_MULTI_LP_REQUEST_BYTES_V3: usize = 312;
 /// Request magic.
 pub const DEALER_MULTI_LP_REQUEST_MAGIC_V3: [u8; 8] = *b"DCLMLP03";
 /// Current request version.
@@ -28,10 +26,6 @@ pub const DEALER_MULTI_LP_ACTION_SELECTOR_OFFSET_V3: u32 = 10;
 pub enum MultiLpRequestActionV3 {
     /// Create one vacant prepaid Trading-owned LP Position.
     Open = 1,
-    /// Deposit present external collateral and admit equal par obligations.
-    Add = 2,
-    /// Remove equal par obligations and return present collateral.
-    Remove = 3,
     /// Reclaim one zero-share LP Position to its immutable refund recipient.
     Close = 4,
 }
@@ -108,8 +102,6 @@ pub struct DealerMultiLpRequestV3 {
     pub obligation_digest: [u8; 32],
     /// Optimistic digest of the exact LP Position prestate; zero only for Open.
     pub lp_digest: [u8; 32],
-    /// Exact present collateral/share quantity; zero only for Open and Close.
-    pub amount: u64,
     /// Optimistic obligation revision.
     pub obligation_revision: u64,
     /// Optimistic LP Position revision; zero only for Open.
@@ -128,15 +120,13 @@ impl DealerMultiLpRequestV3 {
             || read_u16(bytes, 8)? != DEALER_MULTI_LP_REQUEST_VERSION_V3
             || bytes.get(12..16).is_none_or(|value| value != [0; 4])
             || bytes
-                .get(312..320)
+                .get(304..312)
                 .is_none_or(|value| value.iter().any(|byte| *byte != 0))
         {
             return Err(MultiLpOperatorErrorV3::InvalidRequest);
         }
         let action = match read_u16(bytes, 10)? {
             1 => MultiLpRequestActionV3::Open,
-            2 => MultiLpRequestActionV3::Add,
-            3 => MultiLpRequestActionV3::Remove,
             4 => MultiLpRequestActionV3::Close,
             _ => return Err(MultiLpOperatorErrorV3::InvalidRequest),
         };
@@ -150,25 +140,17 @@ impl DealerMultiLpRequestV3 {
             obligation: read_identity(bytes, 176)?,
             obligation_digest: read_identity(bytes, 208)?,
             lp_digest: read_identity_or_zero(bytes, 240)?,
-            amount: read_u64(bytes, 272)?,
-            obligation_revision: read_u64(bytes, 280)?,
-            lp_revision: read_u64(bytes, 288)?,
-            generation: read_u64(bytes, 296)?,
-            expires_at: read_u64(bytes, 304)?,
+            obligation_revision: read_u64(bytes, 272)?,
+            lp_revision: read_u64(bytes, 280)?,
+            generation: read_u64(bytes, 288)?,
+            expires_at: read_u64(bytes, 296)?,
         };
         if value.obligation_revision == 0 || value.generation == 0 {
             return Err(MultiLpOperatorErrorV3::InvalidRequest);
         }
         let action_is_canonical = match action {
-            MultiLpRequestActionV3::Open => {
-                value.amount == 0 && value.lp_revision == 0 && value.lp_digest == [0; 32]
-            }
-            MultiLpRequestActionV3::Add | MultiLpRequestActionV3::Remove => {
-                value.amount != 0 && value.lp_revision != 0 && value.lp_digest != [0; 32]
-            }
-            MultiLpRequestActionV3::Close => {
-                value.amount == 0 && value.lp_revision != 0 && value.lp_digest != [0; 32]
-            }
+            MultiLpRequestActionV3::Open => value.lp_revision == 0 && value.lp_digest == [0; 32],
+            MultiLpRequestActionV3::Close => value.lp_revision != 0 && value.lp_digest != [0; 32],
         };
         if !action_is_canonical {
             return Err(MultiLpOperatorErrorV3::InvalidRequest);
@@ -207,21 +189,9 @@ pub fn authenticate_multi_lp_request_v3(
                 return Err(MultiLpOperatorErrorV3::InvalidChoice);
             }
         }
-        MultiLpRequestActionV3::Add => {
-            if chain.terminal {
-                return Err(MultiLpOperatorErrorV3::InvalidChoice);
-            }
-            authenticate_current_lp(request, chain)?;
-        }
-        MultiLpRequestActionV3::Remove => {
-            let lp = authenticate_current_lp(request, chain)?;
-            if request.amount > lp.principal_shares {
-                return Err(MultiLpOperatorErrorV3::InvalidChoice);
-            }
-        }
         MultiLpRequestActionV3::Close => {
             let lp = authenticate_current_lp(request, chain)?;
-            if lp.principal_shares != 0 {
+            if lp.equity_shares != 0 {
                 return Err(MultiLpOperatorErrorV3::InvalidChoice);
             }
         }
@@ -254,51 +224,19 @@ pub fn build_open_lp_v3(
     {
         return Err(MultiLpOperatorErrorV3::InvalidChoice);
     }
-    build(chain, lp_owner, MultiLpRequestActionV3::Open, 0, set)
+    build(chain, lp_owner, MultiLpRequestActionV3::Open, set)
 }
 
-/// Construct an exact present-capital deposit.
-pub fn build_add_lp_v3(
-    chain: MultiLpChainProjectionV3<'_>,
-    amount: u64,
-    set: CapabilityProgramSetV1<'_>,
-) -> Result<UnsignedMultiLpRequestV3, MultiLpOperatorErrorV3> {
-    if chain.terminal || amount == 0 {
-        return Err(MultiLpOperatorErrorV3::InvalidChoice);
-    }
-    let lp = current_lp(chain)?;
-    build(chain, lp.lp_owner, MultiLpRequestActionV3::Add, amount, set)
-}
-
-/// Construct an exact principal withdrawal or terminal par redemption.
-pub fn build_remove_lp_v3(
-    chain: MultiLpChainProjectionV3<'_>,
-    amount: u64,
-    set: CapabilityProgramSetV1<'_>,
-) -> Result<UnsignedMultiLpRequestV3, MultiLpOperatorErrorV3> {
-    let lp = current_lp(chain)?;
-    if amount == 0 || amount > lp.principal_shares {
-        return Err(MultiLpOperatorErrorV3::InvalidChoice);
-    }
-    build(
-        chain,
-        lp.lp_owner,
-        MultiLpRequestActionV3::Remove,
-        amount,
-        set,
-    )
-}
-
-/// Construct close after all principal shares have been returned.
+/// Construct close after all equity shares have been burned.
 pub fn build_close_lp_v3(
     chain: MultiLpChainProjectionV3<'_>,
     set: CapabilityProgramSetV1<'_>,
 ) -> Result<UnsignedMultiLpRequestV3, MultiLpOperatorErrorV3> {
     let lp = current_lp(chain)?;
-    if lp.principal_shares != 0 {
+    if lp.equity_shares != 0 {
         return Err(MultiLpOperatorErrorV3::InvalidChoice);
     }
-    build(chain, lp.lp_owner, MultiLpRequestActionV3::Close, 0, set)
+    build(chain, lp.lp_owner, MultiLpRequestActionV3::Close, set)
 }
 
 fn current_lp(
@@ -320,7 +258,6 @@ fn build(
     chain: MultiLpChainProjectionV3<'_>,
     lp_owner: [u8; 32],
     action: MultiLpRequestActionV3,
-    amount: u64,
     set: CapabilityProgramSetV1<'_>,
 ) -> Result<UnsignedMultiLpRequestV3, MultiLpOperatorErrorV3> {
     validate_projection(chain, lp_owner)?;
@@ -336,9 +273,13 @@ fn build(
         None => return Err(MultiLpOperatorErrorV3::InvalidProjection),
     };
     let mut bytes = [0; DEALER_MULTI_LP_REQUEST_BYTES_V3];
-    bytes[..8].copy_from_slice(&DEALER_MULTI_LP_REQUEST_MAGIC_V3);
-    bytes[8..10].copy_from_slice(&DEALER_MULTI_LP_REQUEST_VERSION_V3.to_le_bytes());
-    bytes[10..12].copy_from_slice(&(action as u16).to_le_bytes());
+    write_bytes(&mut bytes, 0, &DEALER_MULTI_LP_REQUEST_MAGIC_V3)?;
+    write_bytes(
+        &mut bytes,
+        8,
+        &DEALER_MULTI_LP_REQUEST_VERSION_V3.to_le_bytes(),
+    )?;
+    write_bytes(&mut bytes, 10, &(action as u16).to_le_bytes())?;
     for (offset, identity) in [
         (16, chain.release_set),
         (48, chain.market),
@@ -349,16 +290,15 @@ fn build(
         (208, chain.obligation.state_digest()),
         (240, lp_digest),
     ] {
-        bytes[offset..offset + 32].copy_from_slice(&identity);
+        write_bytes(&mut bytes, offset, &identity)?;
     }
     for (offset, value) in [
-        (272, amount),
-        (280, chain.obligation.revision()),
-        (288, lp_revision),
-        (296, chain.generation),
-        (304, chain.expires_at),
+        (272, chain.obligation.revision()),
+        (280, lp_revision),
+        (288, chain.generation),
+        (296, chain.expires_at),
     ] {
-        bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+        write_bytes(&mut bytes, offset, &value.to_le_bytes())?;
     }
     let selected_program = set
         .select(&bytes)
@@ -466,6 +406,21 @@ fn read_identity_or_zero(bytes: &[u8], offset: usize) -> Result<[u8; 32], MultiL
         .ok_or(MultiLpOperatorErrorV3::InvalidRequest)
 }
 
+fn write_bytes(
+    bytes: &mut [u8],
+    offset: usize,
+    value: &[u8],
+) -> Result<(), MultiLpOperatorErrorV3> {
+    let end = offset
+        .checked_add(value.len())
+        .ok_or(MultiLpOperatorErrorV3::InvalidRequest)?;
+    bytes
+        .get_mut(offset..end)
+        .ok_or(MultiLpOperatorErrorV3::InvalidRequest)?
+        .copy_from_slice(value);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -528,7 +483,7 @@ mod tests {
             lp_owner: owner,
             rent_refund: [9; 32],
             obligation_account: obligation,
-            principal_shares: shares,
+            equity_shares: shares,
             generation: 11,
         }
         .encode_into(&mut bytes)
@@ -581,7 +536,7 @@ mod tests {
         assert_eq!(request.obligation, obligation_address);
         assert_eq!(unsigned.selected_program().to_bytes(), [42; 32]);
 
-        for index in [0, 8, 12, 312] {
+        for index in [0, 8, 12, 304] {
             let mut hostile = *unsigned.as_bytes();
             hostile[index] ^= 1;
             assert!(DealerMultiLpRequestV3::decode(&hostile).is_err());
@@ -600,7 +555,7 @@ mod tests {
     }
 
     #[test]
-    fn add_remove_and_terminal_rules_bind_current_lp() {
+    fn close_binds_current_zero_share_position() {
         let trading_program = [1; 32];
         let release_set = [6; 32];
         let market = [2; 32];
@@ -620,7 +575,7 @@ mod tests {
         let obligation_bytes = obligation_bytes(child_root);
         let obligation =
             DealerObligationProjectionV3::decode(&obligation_bytes).expect("obligation");
-        let lp_bytes = lp_bytes(
+        let nonzero_lp_bytes = lp_bytes(
             release_set,
             market,
             child_root,
@@ -628,7 +583,7 @@ mod tests {
             obligation_address,
             10,
         );
-        let lp = DealerLpPositionV3::decode(&lp_bytes).expect("LP");
+        let lp = DealerLpPositionV3::decode(&nonzero_lp_bytes).expect("LP");
         let chain = MultiLpChainProjectionV3 {
             trading_program,
             release_set,
@@ -636,7 +591,7 @@ mod tests {
             child_root,
             lp_position_address,
             lp_position: Some(lp),
-            lp_position_bytes: Some(&lp_bytes),
+            lp_position_bytes: Some(&nonzero_lp_bytes),
             obligation,
             obligation_address,
             generation: 11,
@@ -644,30 +599,29 @@ mod tests {
             expires_at: 25,
             terminal: false,
         };
-        let add_set_bytes = program_set(MultiLpRequestActionV3::Add);
-        let add_set = CapabilityProgramSetV1::decode(&add_set_bytes).expect("set");
-        let add = build_add_lp_v3(chain, 4, add_set).expect("add");
+        let close_set_bytes = program_set(MultiLpRequestActionV3::Close);
+        let close_set = CapabilityProgramSetV1::decode(&close_set_bytes).expect("set");
         assert_eq!(
-            DealerMultiLpRequestV3::decode(add.as_bytes())
-                .expect("request")
-                .amount,
-            4
-        );
-
-        let remove_set_bytes = program_set(MultiLpRequestActionV3::Remove);
-        let remove_set = CapabilityProgramSetV1::decode(&remove_set_bytes).expect("set");
-        assert!(build_remove_lp_v3(chain, 10, remove_set).is_ok());
-        assert_eq!(
-            build_remove_lp_v3(chain, 11, remove_set),
+            build_close_lp_v3(chain, close_set),
             Err(MultiLpOperatorErrorV3::InvalidChoice)
         );
-
-        let mut terminal = chain;
-        terminal.terminal = true;
-        assert_eq!(
-            build_add_lp_v3(terminal, 1, add_set),
-            Err(MultiLpOperatorErrorV3::InvalidChoice)
+        let zero_bytes = lp_bytes(
+            release_set,
+            market,
+            child_root,
+            lp_owner,
+            obligation_address,
+            0,
         );
-        assert!(build_remove_lp_v3(terminal, 1, remove_set).is_ok());
+        let mut zero_chain = chain;
+        zero_chain.lp_position = Some(DealerLpPositionV3::decode(&zero_bytes).expect("zero LP"));
+        zero_chain.lp_position_bytes = Some(&zero_bytes);
+        let close = build_close_lp_v3(zero_chain, close_set).expect("zero-share close");
+        assert_eq!(
+            DealerMultiLpRequestV3::decode(close.as_bytes())
+                .expect("close request")
+                .action,
+            MultiLpRequestActionV3::Close
+        );
     }
 }

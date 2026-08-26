@@ -13,7 +13,7 @@ use dclutch_custody_contract::{
     CustodyVaultSeedsV1, OperationV1,
 };
 use dclutch_dealer_codec::scenario::{
-    ClaimsInventoryObservation, DescriptorScenarioInput, ScenarioPlan, plan_descriptor_scenario,
+    plan_descriptor_scenario, ClaimsInventoryObservation, DescriptorScenarioInput, ScenarioPlan,
 };
 use solana_program::{
     hash::{hash, hashv},
@@ -501,7 +501,7 @@ fn validate_coordinates(
         || current.position_owner() != input.dealer_position.position_owner
         || current.width() != candidate.width()
         || usize::try_from(current.width()).ok() != Some(input.dealer_position.inventory.len())
-        || current.lp_principal() != candidate.lp_principal()
+        || current.total_equity_shares() != candidate.total_equity_shares()
         || current.revision().checked_add(1) != Some(candidate.revision())
         || candidate.state_digest() != candidate_digest
         || input.dealer_position.market_id != context.market
@@ -594,7 +594,9 @@ fn stage_transfer(
     let destination_after = destination_before
         .checked_add(amount)
         .ok_or(ScenarioComposerErrorV3::Arithmetic)?;
-    output[*count] = Some(StagedTransferV3 {
+    *output
+        .get_mut(*count)
+        .ok_or(ScenarioComposerErrorV3::Custody)? = Some(StagedTransferV3 {
         kind,
         amount,
         ordinal: u16::try_from(*count).map_err(|_| ScenarioComposerErrorV3::Arithmetic)?,

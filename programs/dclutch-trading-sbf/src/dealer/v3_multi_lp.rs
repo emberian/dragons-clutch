@@ -1,25 +1,26 @@
 //! Scenario-solvent, custody-backed multi-LP capital for Dealer V3.
 //!
-//! Each liquidity provider owns one Trading PDA whose `principal_shares` are
-//! exact collateral atoms.  Adding one share moves one present collateral atom
-//! into TradingPrincipal and adds one par obligation in every terminal
-//! scenario.  Removing one share performs the inverse only when both the
-//! incoming and candidate state satisfy the descriptor's locked floor.  Fees,
-//! future order flow, and Market Hoard principal are structurally absent.
+//! Each liquidity provider owns one Trading PDA whose `equity_shares` are a
+//! junior pro-rata claim on the exact scenario-residual vector
+//! `capital + Claims - obligations`. Shares are never par obligations. Later
+//! issuance requires an exactly proportional scenario contribution; burns
+//! return the floor-rounded pro-rata residual and leave rounding dust in the
+//! pool. Fees, future order flow, and Market Hoard principal are absent.
 
 use dclutch_custody_contract::{
     CallerRoleV1, CompartmentV1, ContextV1, CustodyReceiptV1, CustodyRequestV1,
     CustodyVaultSeedsV1, OperationV1,
 };
-use dclutch_dealer_codec::scenario::{
-    ClaimsInventoryObservation, DescriptorSolvencyInput, ScenarioSolvencyReport,
-    assess_descriptor_solvency,
-};
+use dclutch_dealer_codec::scenario::{ClaimsInventoryObservation, ScenarioSolvencyReport};
 use solana_program::{hash::hash, pubkey::Pubkey};
 
+use super::v3_equity::{
+    plan_pool_equity_v3, PoolEquityActionV3, PoolEquityContributionV3, PoolEquityInputV3,
+    PoolEquityPlanV3, PoolEquityRedemptionV3,
+};
 use super::v3_obligation::{
-    DealerObligationProjectionV3, LpPrincipalDeltaV3, ObligationErrorV3,
-    stage_lp_principal_delta_v3,
+    stage_equity_share_supply_v3, DealerObligationProjectionV3, EquityShareDeltaV3,
+    ObligationErrorV3,
 };
 
 /// PDA domain for one LP position beneath a canonical Dealer child root.
@@ -29,7 +30,7 @@ pub const DEALER_LP_POSITION_BYTES_V3: usize = 256;
 /// Exact LP position wire magic.
 pub const DEALER_LP_POSITION_MAGIC_V3: [u8; 8] = *b"DCLDLP03";
 /// Current LP position wire version.
-pub const DEALER_LP_POSITION_VERSION_V3: u16 = 1;
+pub const DEALER_LP_POSITION_VERSION_V3: u16 = 2;
 
 const _: () = assert!(DEALER_LP_POSITION_PDA_DOMAIN_V3.len() <= 32);
 
@@ -63,6 +64,9 @@ impl From<ObligationErrorV3> for MultiLpErrorV3 {
 /// Result alias for multi-LP physical planning.
 pub type MultiLpResultV3<T> = core::result::Result<T, MultiLpErrorV3>;
 
+/// Maximum physical Custody transfers in one equity contribution/redemption.
+pub const MAX_MULTI_LP_CUSTODY_EFFECTS_V3: usize = 3;
+
 /// LP capital operation selected by the exact request profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MultiLpActionV3 {
@@ -89,8 +93,8 @@ pub struct DealerLpPositionV3 {
     pub rent_refund: [u8; 32],
     /// Canonical Dealer obligation PDA joined by this Position.
     pub obligation_account: [u8; 32],
-    /// Exact outstanding par principal shares.
-    pub principal_shares: u64,
+    /// Exact outstanding junior equity shares owned by this LP.
+    pub equity_shares: u64,
     /// Core Market generation.
     pub generation: u64,
 }
@@ -116,7 +120,7 @@ impl DealerLpPositionV3 {
             lp_owner: read_identity(bytes, 120)?,
             rent_refund: read_identity(bytes, 152)?,
             obligation_account: read_identity(bytes, 184)?,
-            principal_shares: read_u64(bytes, 216)?,
+            equity_shares: read_u64(bytes, 216)?,
             generation: read_u64(bytes, 224)?,
         };
         if value.revision == 0 {
@@ -143,8 +147,14 @@ impl DealerLpPositionV3 {
             }
         }
         output.fill(0);
-        output[..8].copy_from_slice(&DEALER_LP_POSITION_MAGIC_V3);
-        output[8..10].copy_from_slice(&DEALER_LP_POSITION_VERSION_V3.to_le_bytes());
+        output
+            .get_mut(..8)
+            .ok_or(MultiLpErrorV3::InvalidState)?
+            .copy_from_slice(&DEALER_LP_POSITION_MAGIC_V3);
+        output
+            .get_mut(8..10)
+            .ok_or(MultiLpErrorV3::InvalidState)?
+            .copy_from_slice(&DEALER_LP_POSITION_VERSION_V3.to_le_bytes());
         write_u64(output, 16, self.revision)?;
         for (offset, value) in [
             (24, self.release_set),
@@ -154,9 +164,12 @@ impl DealerLpPositionV3 {
             (152, self.rent_refund),
             (184, self.obligation_account),
         ] {
-            output[offset..offset + 32].copy_from_slice(&value);
+            output
+                .get_mut(offset..offset + 32)
+                .ok_or(MultiLpErrorV3::InvalidState)?
+                .copy_from_slice(&value);
         }
-        write_u64(output, 216, self.principal_shares)?;
+        write_u64(output, 216, self.equity_shares)?;
         write_u64(output, 224, self.generation)?;
         Self::decode(output).map(|_| ())
     }
@@ -194,6 +207,7 @@ pub struct DealerLpOpenPlanV3 {
 ///
 /// The common Trading outer performs System allocate/assign with the PDA,
 /// verifies owner/lamports/data length, and commits `initial_state` last.
+#[allow(clippy::too_many_arguments)]
 pub fn prepare_lp_open_v3(
     context: MultiLpContextV3,
     lp_owner: [u8; 32],
@@ -246,7 +260,7 @@ pub fn prepare_lp_open_v3(
         lp_owner,
         rent_refund,
         obligation_account: context.obligation_account,
-        principal_shares: 0,
+        equity_shares: 0,
         generation: context.generation,
     }
     .encode_into(&mut initial_state)?;
@@ -275,7 +289,7 @@ pub struct DealerLpClosePlanV3 {
     pub terminal_revision: u64,
 }
 
-/// Prepare closure only after all principal shares have exited.
+/// Prepare closure only after all junior equity shares have exited.
 pub fn prepare_lp_close_v3(
     context: MultiLpContextV3,
     observation: DealerLpAccountObservationV3<'_>,
@@ -288,7 +302,7 @@ pub fn prepare_lp_close_v3(
     if expected_digest == [0; 32]
         || hash(observation.data).to_bytes() != expected_digest
         || lp.revision != expected_revision
-        || lp.principal_shares != 0
+        || lp.equity_shares != 0
         || position_lamports == 0
     {
         return Err(MultiLpErrorV3::PositionMismatch);
@@ -346,19 +360,70 @@ pub struct MultiLpCollateralFrameV3 {
     pub principal_vault: [u8; 32],
     /// TradingPrincipal balance before the operation.
     pub principal_balance: u64,
+    /// Canonical Market HoardPrincipal vault used only for complete-set backing.
+    pub hoard_vault: [u8; 32],
+    /// HoardPrincipal balance before the operation.
+    pub hoard_balance: u64,
 }
 
 /// User economic intent after chain-derived optimistic coordinates are fixed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MultiLpIntentV3 {
-    /// Add or remove present par principal.
-    pub action: MultiLpActionV3,
-    /// Positive exact collateral atoms and principal shares.
-    pub amount: u64,
-    /// Expected LP Position revision.
-    pub expected_lp_revision: u64,
-    /// Digest of exact LP Position prestate bytes.
-    pub expected_lp_digest: [u8; 32],
+pub enum MultiLpIntentV3<'a> {
+    /// Contribute an exact scenario basket and mint junior equity shares.
+    Contribute {
+        /// Present collateral supplied by the LP.
+        collateral: u64,
+        /// Native Claims supplied by the LP in every scenario.
+        claims: &'a [u64],
+        /// Exact shares requested; later issuance must be exactly proportional.
+        minted_shares: u64,
+        /// Expected LP Position revision.
+        expected_lp_revision: u64,
+        /// Digest of exact LP Position prestate bytes.
+        expected_lp_digest: [u8; 32],
+    },
+    /// Burn junior equity shares for the floor-rounded pro-rata residual.
+    Redeem {
+        /// Exact LP shares burned.
+        burned_shares: u64,
+        /// Expected LP Position revision.
+        expected_lp_revision: u64,
+        /// Digest of exact LP Position prestate bytes.
+        expected_lp_digest: [u8; 32],
+    },
+}
+
+impl MultiLpIntentV3<'_> {
+    const fn action(self) -> MultiLpActionV3 {
+        match self {
+            Self::Contribute { .. } => MultiLpActionV3::Add,
+            Self::Redeem { .. } => MultiLpActionV3::Remove,
+        }
+    }
+
+    const fn expected_lp_revision(self) -> u64 {
+        match self {
+            Self::Contribute {
+                expected_lp_revision,
+                ..
+            }
+            | Self::Redeem {
+                expected_lp_revision,
+                ..
+            } => expected_lp_revision,
+        }
+    }
+
+    const fn expected_lp_digest(self) -> [u8; 32] {
+        match self {
+            Self::Contribute {
+                expected_lp_digest, ..
+            }
+            | Self::Redeem {
+                expected_lp_digest, ..
+            } => expected_lp_digest,
+        }
+    }
 }
 
 /// Exact Custody transfer and post-balance evidence.
@@ -366,10 +431,10 @@ pub struct MultiLpIntentV3 {
 pub struct MultiLpCustodyEffectV3 {
     /// Canonical Custody request.
     pub request: CustodyRequestV1,
-    /// Required external account balance after execution.
-    pub external_after: u64,
-    /// Required TradingPrincipal balance after execution.
-    pub principal_after: u64,
+    /// Required source balance after execution.
+    pub source_after: u64,
+    /// Required destination balance after execution.
+    pub destination_after: u64,
 }
 
 /// Complete preflighted multi-LP candidate; Trading-owned writes commit last.
@@ -379,14 +444,30 @@ pub struct MultiLpPlanV3 {
     pub action: MultiLpActionV3,
     /// Exact LP owner.
     pub lp_owner: [u8; 32],
-    /// Exact principal/share quantity.
-    pub amount: u64,
+    /// Exact shares minted or burned.
+    pub share_delta: u64,
+    /// Present collateral contributed by the LP.
+    pub collateral_in: u64,
+    /// Present collateral returned to the LP.
+    pub collateral_out: u64,
+    /// Minimum complete sets split for physical redemption.
+    pub minimum_complete_sets_to_split: u64,
+    /// Maximum complete sets merged after the Claims move.
+    pub maximum_complete_sets_to_merge: u64,
     /// Incoming scenario-solvency report.
     pub solvency_before: ScenarioSolvencyReport,
     /// Candidate scenario-solvency report.
     pub solvency_after: ScenarioSolvencyReport,
-    /// Exact physical Custody effect.
-    pub custody: MultiLpCustodyEffectV3,
+    /// Exact ordered physical Custody effects.
+    pub custody: [Option<MultiLpCustodyEffectV3>; MAX_MULTI_LP_CUSTODY_EFFECTS_V3],
+    /// Active prefix of the Custody effect bank.
+    pub custody_count: u8,
+    /// Required external collateral balance after execution.
+    pub external_after: u64,
+    /// Required TradingPrincipal balance after execution.
+    pub principal_after: u64,
+    /// Required HoardPrincipal balance after execution.
+    pub hoard_after: u64,
     /// Required post-obligation-state digest.
     pub obligation_digest_after: [u8; 32],
     /// Required post-LP-state digest.
@@ -408,34 +489,49 @@ pub fn prepare_multi_lp_v3(
     collateral: MultiLpCollateralFrameV3,
     lp_account: DealerLpAccountObservationV3<'_>,
     obligation: DealerObligationProjectionV3<'_>,
-    claims_position: ClaimsInventoryObservation<'_>,
-    intent: MultiLpIntentV3,
-    obligation_before_scratch: &mut [u64],
-    obligation_after_scratch: &mut [u64],
-    equity_before: &mut [i128],
-    equity_after: &mut [i128],
+    dealer_claims_position: ClaimsInventoryObservation<'_>,
+    lp_claims_position: ClaimsInventoryObservation<'_>,
+    intent: MultiLpIntentV3<'_>,
+    obligation_scratch: &mut [u64],
+    residual_before: &mut [u64],
+    residual_after: &mut [u64],
+    claims_transferred: &mut [u64],
+    post_dealer_claims: &mut [u64],
+    post_lp_claims: &mut [u64],
     post_obligation: &mut [u8],
     post_lp: &mut [u8],
 ) -> MultiLpResultV3<MultiLpPlanV3> {
-    validate_context(context, collateral, obligation, claims_position)?;
-    if intent.amount == 0
-        || intent.expected_lp_digest == [0; 32]
-        || hash(lp_account.data).to_bytes() != intent.expected_lp_digest
+    validate_context(
+        context,
+        collateral,
+        obligation,
+        dealer_claims_position,
+        lp_claims_position,
+    )?;
+    if intent.expected_lp_digest() == [0; 32]
+        || hash(lp_account.data).to_bytes() != intent.expected_lp_digest()
         || collateral.lp_owner == [0; 32]
     {
         return Err(MultiLpErrorV3::InvalidState);
     }
     let lp = authenticate_lp_position(context, collateral.lp_owner, lp_account)?;
-    if lp.revision != intent.expected_lp_revision {
+    if lp.revision != intent.expected_lp_revision()
+        || lp.equity_shares > obligation.total_equity_shares()
+        || lp.revision == u64::MAX
+        || obligation.revision() == u64::MAX
+    {
         return Err(MultiLpErrorV3::PositionMismatch);
     }
     let width = usize::try_from(obligation.width()).map_err(|_| MultiLpErrorV3::WidthMismatch)?;
     for observed in [
-        claims_position.inventory.len(),
-        obligation_before_scratch.len(),
-        obligation_after_scratch.len(),
-        equity_before.len(),
-        equity_after.len(),
+        dealer_claims_position.inventory.len(),
+        lp_claims_position.inventory.len(),
+        obligation_scratch.len(),
+        residual_before.len(),
+        residual_after.len(),
+        claims_transferred.len(),
+        post_dealer_claims.len(),
+        post_lp_claims.len(),
     ] {
         if observed != width {
             return Err(MultiLpErrorV3::WidthMismatch);
@@ -451,95 +547,149 @@ pub fn prepare_multi_lp_v3(
         return Err(MultiLpErrorV3::InvalidState);
     }
 
-    let next_lp_shares = match intent.action {
-        MultiLpActionV3::Add => lp.principal_shares.checked_add(intent.amount),
-        MultiLpActionV3::Remove => lp.principal_shares.checked_sub(intent.amount),
-    }
-    .ok_or(MultiLpErrorV3::Arithmetic)?;
-    let principal_after = match intent.action {
-        MultiLpActionV3::Add => collateral.principal_balance.checked_add(intent.amount),
-        MultiLpActionV3::Remove => collateral.principal_balance.checked_sub(intent.amount),
-    }
-    .ok_or(MultiLpErrorV3::Arithmetic)?;
-    let external_after = match intent.action {
-        MultiLpActionV3::Add => collateral.lp_external_balance.checked_sub(intent.amount),
-        MultiLpActionV3::Remove => collateral.lp_external_balance.checked_add(intent.amount),
-    }
-    .ok_or(MultiLpErrorV3::Arithmetic)?;
-
-    for (output, value) in obligation_before_scratch
-        .iter_mut()
-        .zip(obligation.obligations())
-    {
-        *output = value;
-    }
-    let descriptor = obligation.descriptor(context.locked_capital_floor);
-    let solvency_before = assess_descriptor_solvency(
-        DescriptorSolvencyInput {
-            descriptor,
-            position: claims_position,
-            expected_position_revision: claims_position.revision,
-            present_capital: collateral.principal_balance,
-            obligations: obligation_before_scratch,
-        },
-        equity_before,
-    )
-    .map_err(|_| MultiLpErrorV3::Insolvent)?;
-
-    let delta = match intent.action {
-        MultiLpActionV3::Add => LpPrincipalDeltaV3::Add(intent.amount),
-        MultiLpActionV3::Remove => LpPrincipalDeltaV3::Remove(intent.amount),
-    };
-    for (index, output) in obligation_after_scratch.iter_mut().enumerate() {
-        let current = obligation
-            .obligation(u32::try_from(index).map_err(|_| MultiLpErrorV3::WidthMismatch)?)?;
-        *output = match delta {
-            LpPrincipalDeltaV3::Add(amount) => current.checked_add(amount),
-            LpPrincipalDeltaV3::Remove(amount) => current.checked_sub(amount),
+    let equity_action = match intent {
+        MultiLpIntentV3::Contribute {
+            collateral: contribution,
+            claims,
+            minted_shares,
+            ..
+        } => {
+            if contribution > collateral.lp_external_balance || claims.len() != width {
+                return Err(MultiLpErrorV3::Arithmetic);
+            }
+            for (available, supplied) in lp_claims_position.inventory.iter().zip(claims.iter()) {
+                if supplied > available {
+                    return Err(MultiLpErrorV3::Arithmetic);
+                }
+            }
+            PoolEquityActionV3::Contribute(PoolEquityContributionV3 {
+                collateral: contribution,
+                claims,
+                minted_shares,
+            })
         }
-        .ok_or(MultiLpErrorV3::Arithmetic)?;
+        MultiLpIntentV3::Redeem { burned_shares, .. } => {
+            if burned_shares > lp.equity_shares {
+                return Err(MultiLpErrorV3::Arithmetic);
+            }
+            for (lp_inventory, dealer_inventory) in lp_claims_position
+                .inventory
+                .iter()
+                .zip(dealer_claims_position.inventory.iter())
+            {
+                let largest_residual = collateral
+                    .principal_balance
+                    .checked_add(*dealer_inventory)
+                    .ok_or(MultiLpErrorV3::Arithmetic)?;
+                lp_inventory
+                    .checked_add(largest_residual)
+                    .ok_or(MultiLpErrorV3::Arithmetic)?;
+            }
+            PoolEquityActionV3::Redeem(PoolEquityRedemptionV3 { burned_shares })
+        }
+    };
+    for (destination, value) in obligation_scratch.iter_mut().zip(obligation.obligations()) {
+        *destination = value;
     }
-    let solvency_after = assess_descriptor_solvency(
-        DescriptorSolvencyInput {
-            descriptor,
-            position: claims_position,
-            expected_position_revision: claims_position.revision,
-            present_capital: principal_after,
-            obligations: obligation_after_scratch,
+    let equity = plan_pool_equity_v3(
+        PoolEquityInputV3 {
+            collateral: collateral.principal_balance,
+            claims: dealer_claims_position.inventory,
+            obligations: obligation_scratch,
+            total_shares: obligation.total_equity_shares(),
+            locked_capital_floor: context.locked_capital_floor,
+            action: equity_action,
         },
-        equity_after,
+        residual_before,
+        residual_after,
+        claims_transferred,
+        post_dealer_claims,
     )
-    .map_err(|_| MultiLpErrorV3::Insolvent)?;
+    .map_err(|error| match error {
+        super::v3_equity::PoolEquityErrorV3::Insolvent => MultiLpErrorV3::Insolvent,
+        super::v3_equity::PoolEquityErrorV3::WidthMismatch => MultiLpErrorV3::WidthMismatch,
+        _ => MultiLpErrorV3::Arithmetic,
+    })?;
+    let (next_lp_shares, share_delta) = match intent {
+        MultiLpIntentV3::Contribute { claims, .. } => {
+            for ((output, current), supplied) in post_lp_claims
+                .iter_mut()
+                .zip(lp_claims_position.inventory.iter())
+                .zip(claims.iter())
+            {
+                *output = current.saturating_sub(*supplied);
+            }
+            (
+                lp.equity_shares
+                    .checked_add(equity.share_delta)
+                    .ok_or(MultiLpErrorV3::Arithmetic)?,
+                EquityShareDeltaV3::Mint(equity.share_delta),
+            )
+        }
+        MultiLpIntentV3::Redeem { .. } => {
+            for ((output, current), received) in post_lp_claims
+                .iter_mut()
+                .zip(lp_claims_position.inventory.iter())
+                .zip(claims_transferred.iter())
+            {
+                *output = current.saturating_add(*received);
+            }
+            (
+                lp.equity_shares
+                    .checked_sub(equity.share_delta)
+                    .ok_or(MultiLpErrorV3::Arithmetic)?,
+                EquityShareDeltaV3::Burn(equity.share_delta),
+            )
+        }
+    };
+    let external_after = collateral
+        .lp_external_balance
+        .checked_sub(equity.collateral_in)
+        .and_then(|value| value.checked_add(equity.collateral_out))
+        .ok_or(MultiLpErrorV3::Arithmetic)?;
+    let (custody, custody_count, hoard_after) =
+        prepare_equity_custody_sequence(context, collateral, equity, external_after)?;
 
     let next_lp = DealerLpPositionV3 {
         revision: lp
             .revision
             .checked_add(1)
             .ok_or(MultiLpErrorV3::Arithmetic)?,
-        principal_shares: next_lp_shares,
+        equity_shares: next_lp_shares,
         ..lp
     };
     let mut staged_lp = [0; DEALER_LP_POSITION_BYTES_V3];
     next_lp.encode_into(&mut staged_lp)?;
-    let custody = prepare_custody_transfer(
-        context,
-        collateral,
-        intent.action,
-        intent.amount,
-        external_after,
-        principal_after,
-    )?;
-
-    stage_lp_principal_delta_v3(obligation, delta, post_obligation)?;
+    stage_equity_share_supply_v3(obligation, share_delta, post_obligation)?;
     let staged_projection = DealerObligationProjectionV3::decode(post_obligation)?;
     post_lp.copy_from_slice(&staged_lp);
+    let solvency_before = ScenarioSolvencyReport {
+        minimum_equity: i128::from(equity.minimum_residual_before),
+        minimum_scenario: equity.minimum_scenario_before,
+        present_capital: collateral.principal_balance,
+        locked_capital_floor: context.locked_capital_floor,
+    };
+    let solvency_after = ScenarioSolvencyReport {
+        minimum_equity: i128::from(equity.minimum_residual_after),
+        minimum_scenario: equity.minimum_scenario_after,
+        present_capital: equity.collateral_after,
+        locked_capital_floor: context.locked_capital_floor,
+    };
     Ok(MultiLpPlanV3 {
-        action: intent.action,
+        action: intent.action(),
         lp_owner: collateral.lp_owner,
-        amount: intent.amount,
+        share_delta: equity.share_delta,
+        collateral_in: equity.collateral_in,
+        collateral_out: equity.collateral_out,
+        minimum_complete_sets_to_split: equity.minimum_complete_sets_to_split,
+        maximum_complete_sets_to_merge: equity.maximum_complete_sets_to_merge,
         solvency_before,
         solvency_after,
         custody,
+        custody_count,
+        external_after,
+        principal_after: equity.collateral_after,
+        hoard_after,
         obligation_digest_after: hash(post_obligation).to_bytes(),
         lp_digest_after: hash(&staged_lp).to_bytes(),
         obligation_revision_after: staged_projection.revision(),
@@ -547,47 +697,67 @@ pub fn prepare_multi_lp_v3(
     })
 }
 
-/// Verify the immediate Custody receipt and all write-last postconditions.
-#[allow(clippy::too_many_arguments)]
-pub fn verify_multi_lp_postconditions_v3(
+/// Verify one immediate Custody receipt in the admitted global route order.
+pub fn verify_multi_lp_custody_receipt_v3(
     plan: MultiLpPlanV3,
+    index: u8,
     custody_receipt: &[u8],
     custody_poststate_commitment: [u8; 32],
-    observed_external_balance: u64,
-    observed_principal_balance: u64,
-    observed_obligation: &[u8],
-    observed_lp: &[u8],
 ) -> MultiLpResultV3<()> {
-    let request_bytes = plan
+    if index >= plan.custody_count {
+        return Err(MultiLpErrorV3::Custody);
+    }
+    let effect = plan
         .custody
+        .get(usize::from(index))
+        .copied()
+        .flatten()
+        .ok_or(MultiLpErrorV3::Custody)?;
+    let request_bytes = effect
         .request
         .to_bytes()
         .map_err(|_| MultiLpErrorV3::Custody)?;
     let receipt = CustodyReceiptV1::decode(custody_receipt).map_err(|_| MultiLpErrorV3::Custody)?;
     receipt
         .verify_for(
-            plan.custody.request,
+            effect.request,
             hash(&request_bytes).to_bytes(),
             custody_poststate_commitment,
         )
         .map_err(|_| MultiLpErrorV3::Custody)?;
-    if receipt.evidence.source_after
-        != match plan.action {
-            MultiLpActionV3::Add => plan.custody.external_after,
-            MultiLpActionV3::Remove => plan.custody.principal_after,
-        }
-        || receipt.evidence.destination_after
-            != match plan.action {
-                MultiLpActionV3::Add => plan.custody.principal_after,
-                MultiLpActionV3::Remove => plan.custody.external_after,
-            }
-        || observed_external_balance != plan.custody.external_after
-        || observed_principal_balance != plan.custody.principal_after
+    if receipt.evidence.source_after != effect.source_after
+        || receipt.evidence.destination_after != effect.destination_after
+    {
+        return Err(MultiLpErrorV3::Postcondition);
+    }
+    Ok(())
+}
+
+/// Verify all write-last pool, share, and Claims postconditions.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_multi_lp_postconditions_v3(
+    plan: MultiLpPlanV3,
+    observed_external_balance: u64,
+    observed_principal_balance: u64,
+    observed_hoard_balance: u64,
+    observed_obligation: &[u8],
+    observed_lp: &[u8],
+    expected_dealer_claims: &[u64],
+    observed_dealer_claims: &[u64],
+    expected_lp_claims: &[u64],
+    observed_lp_claims: &[u64],
+) -> MultiLpResultV3<()> {
+    if observed_external_balance != plan.external_after
+        || observed_principal_balance != plan.principal_after
+        || observed_hoard_balance != plan.hoard_after
         || hash(observed_obligation).to_bytes() != plan.obligation_digest_after
         || hash(observed_lp).to_bytes() != plan.lp_digest_after
         || DealerObligationProjectionV3::decode(observed_obligation)?.revision()
             != plan.obligation_revision_after
         || DealerLpPositionV3::decode(observed_lp)?.revision != plan.lp_revision_after
+        || expected_dealer_claims != observed_dealer_claims
+        || expected_lp_claims != observed_lp_claims
+        || expected_dealer_claims.len() != expected_lp_claims.len()
     {
         return Err(MultiLpErrorV3::Postcondition);
     }
@@ -598,7 +768,8 @@ fn validate_context(
     context: MultiLpContextV3,
     collateral: MultiLpCollateralFrameV3,
     obligation: DealerObligationProjectionV3<'_>,
-    claims: ClaimsInventoryObservation<'_>,
+    dealer_claims: ClaimsInventoryObservation<'_>,
+    lp_claims: ClaimsInventoryObservation<'_>,
 ) -> MultiLpResultV3<()> {
     for identity in [
         context.trading_program,
@@ -614,6 +785,7 @@ fn validate_context(
         collateral.lp_external_account,
         collateral.lp_owner,
         collateral.principal_vault,
+        collateral.hoard_vault,
     ] {
         if identity == [0; 32] {
             return Err(MultiLpErrorV3::InvalidState);
@@ -640,13 +812,38 @@ fn validate_context(
     )
     .0
     .to_bytes();
+    let descriptor = obligation.descriptor(context.locked_capital_floor);
+    let expected_hoard = Pubkey::find_program_address(
+        &CustodyVaultSeedsV1::new(
+            context.market,
+            context.release_set,
+            context.market,
+            CompartmentV1::HoardPrincipal,
+        )
+        .as_slices(),
+        &Pubkey::new_from_array(context.custody_program),
+    )
+    .0
+    .to_bytes();
     if context.obligation_account != expected_obligation
         || collateral.principal_vault != expected_vault
+        || collateral.hoard_vault != expected_hoard
         || collateral.principal_vault == collateral.lp_external_account
+        || collateral.hoard_vault == collateral.lp_external_account
+        || collateral.hoard_vault == collateral.principal_vault
         || obligation.child_root() != context.child_root
-        || obligation.position_owner() != claims.position_owner
-        || usize::try_from(obligation.width()).ok() != Some(claims.inventory.len())
-        || claims.market_id != context.market
+        || obligation.position_owner() != dealer_claims.position_owner
+        || descriptor.market_id != context.market
+        || descriptor.product_id != dealer_claims.product_id
+        || descriptor.liability_basis_id != dealer_claims.liability_basis_id
+        || usize::try_from(obligation.width()).ok() != Some(dealer_claims.inventory.len())
+        || dealer_claims.inventory.len() != lp_claims.inventory.len()
+        || dealer_claims.market_id != context.market
+        || lp_claims.market_id != context.market
+        || dealer_claims.product_id != lp_claims.product_id
+        || dealer_claims.liability_basis_id != lp_claims.liability_basis_id
+        || lp_claims.position_owner != collateral.lp_owner
+        || dealer_claims.position_owner == lp_claims.position_owner
     {
         return Err(MultiLpErrorV3::PositionMismatch);
     }
@@ -684,14 +881,118 @@ fn authenticate_lp_position(
     Ok(lp)
 }
 
-fn prepare_custody_transfer(
+#[derive(Clone, Copy)]
+enum EquityCustodyTransferV3 {
+    ExternalToPrincipal,
+    PrincipalToExternal,
+    PrincipalToHoard,
+    HoardToPrincipal,
+}
+
+fn prepare_equity_custody_sequence(
     context: MultiLpContextV3,
     frame: MultiLpCollateralFrameV3,
-    action: MultiLpActionV3,
-    amount: u64,
+    plan: PoolEquityPlanV3,
     external_after: u64,
-    principal_after: u64,
-) -> MultiLpResultV3<MultiLpCustodyEffectV3> {
+) -> MultiLpResultV3<(
+    [Option<MultiLpCustodyEffectV3>; MAX_MULTI_LP_CUSTODY_EFFECTS_V3],
+    u8,
+    u64,
+)> {
+    let mut effects = [None; MAX_MULTI_LP_CUSTODY_EFFECTS_V3];
+    let mut count = 0_usize;
+    let mut external = frame.lp_external_balance;
+    let mut principal = frame.principal_balance;
+    let mut hoard = frame.hoard_balance;
+    if plan.collateral_in != 0 {
+        stage_equity_custody_transfer(
+            context,
+            frame,
+            EquityCustodyTransferV3::ExternalToPrincipal,
+            plan.collateral_in,
+            &mut external,
+            &mut principal,
+            &mut hoard,
+            &mut effects,
+            &mut count,
+        )?;
+    }
+    if plan.minimum_complete_sets_to_split != 0 {
+        stage_equity_custody_transfer(
+            context,
+            frame,
+            EquityCustodyTransferV3::PrincipalToHoard,
+            plan.minimum_complete_sets_to_split,
+            &mut external,
+            &mut principal,
+            &mut hoard,
+            &mut effects,
+            &mut count,
+        )?;
+    }
+    if plan.collateral_out != 0 {
+        stage_equity_custody_transfer(
+            context,
+            frame,
+            EquityCustodyTransferV3::PrincipalToExternal,
+            plan.collateral_out,
+            &mut external,
+            &mut principal,
+            &mut hoard,
+            &mut effects,
+            &mut count,
+        )?;
+    }
+    if plan.maximum_complete_sets_to_merge != 0 {
+        stage_equity_custody_transfer(
+            context,
+            frame,
+            EquityCustodyTransferV3::HoardToPrincipal,
+            plan.maximum_complete_sets_to_merge,
+            &mut external,
+            &mut principal,
+            &mut hoard,
+            &mut effects,
+            &mut count,
+        )?;
+    }
+    if count > effects.len() || external != external_after || principal != plan.collateral_after {
+        return Err(MultiLpErrorV3::Postcondition);
+    }
+    Ok((
+        effects,
+        u8::try_from(count).map_err(|_| MultiLpErrorV3::Arithmetic)?,
+        hoard,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn stage_equity_custody_transfer(
+    context: MultiLpContextV3,
+    frame: MultiLpCollateralFrameV3,
+    kind: EquityCustodyTransferV3,
+    amount: u64,
+    external: &mut u64,
+    principal: &mut u64,
+    hoard: &mut u64,
+    output: &mut [Option<MultiLpCustodyEffectV3>; MAX_MULTI_LP_CUSTODY_EFFECTS_V3],
+    count: &mut usize,
+) -> MultiLpResultV3<()> {
+    if amount == 0 || *count >= output.len() {
+        return Err(MultiLpErrorV3::Arithmetic);
+    }
+    let (source_before, destination_before) = match kind {
+        EquityCustodyTransferV3::ExternalToPrincipal => (*external, *principal),
+        EquityCustodyTransferV3::PrincipalToExternal => (*principal, *external),
+        EquityCustodyTransferV3::PrincipalToHoard => (*principal, *hoard),
+        EquityCustodyTransferV3::HoardToPrincipal => (*hoard, *principal),
+    };
+    let source_after = source_before
+        .checked_sub(amount)
+        .ok_or(MultiLpErrorV3::Arithmetic)?;
+    let destination_after = destination_before
+        .checked_add(amount)
+        .ok_or(MultiLpErrorV3::Arithmetic)?;
     let (
         source,
         destination,
@@ -701,8 +1002,8 @@ fn prepare_custody_transfer(
         destination_owner,
         source_vault,
         destination_vault,
-    ) = match action {
-        MultiLpActionV3::Add => (
+    ) = match kind {
+        EquityCustodyTransferV3::ExternalToPrincipal => (
             frame.lp_external_account,
             frame.principal_vault,
             CompartmentV1::External,
@@ -712,7 +1013,7 @@ fn prepare_custody_transfer(
             [0; 32],
             context.child_root,
         ),
-        MultiLpActionV3::Remove => (
+        EquityCustodyTransferV3::PrincipalToExternal => (
             frame.principal_vault,
             frame.lp_external_account,
             CompartmentV1::TradingPrincipal,
@@ -721,8 +1022,33 @@ fn prepare_custody_transfer(
             frame.lp_owner,
             context.child_root,
             [0; 32],
+        ),
+        EquityCustodyTransferV3::PrincipalToHoard => (
+            frame.principal_vault,
+            frame.hoard_vault,
+            CompartmentV1::TradingPrincipal,
+            CompartmentV1::HoardPrincipal,
+            [0; 32],
+            [0; 32],
+            context.child_root,
+            context.market,
+        ),
+        EquityCustodyTransferV3::HoardToPrincipal => (
+            frame.hoard_vault,
+            frame.principal_vault,
+            CompartmentV1::HoardPrincipal,
+            CompartmentV1::TradingPrincipal,
+            [0; 32],
+            [0; 32],
+            context.market,
+            context.child_root,
         ),
     };
+    let ordinal = u16::try_from(*count).map_err(|_| MultiLpErrorV3::Arithmetic)?;
+    let expected_revision = context
+        .custody_replay_revision
+        .checked_add(u64::from(ordinal))
+        .ok_or(MultiLpErrorV3::Arithmetic)?;
     let request = CustodyRequestV1 {
         operation: OperationV1::Transfer,
         caller_role: CallerRoleV1::Trading,
@@ -743,7 +1069,7 @@ fn prepare_custody_transfer(
             generation: context.generation,
             page_index: 0,
             execution_index: 0,
-            transfer_index: 0,
+            transfer_index: ordinal,
         },
         source,
         destination,
@@ -753,20 +1079,39 @@ fn prepare_custody_transfer(
         token_program: context.token_program,
         payer: [0; 32],
         rent_refund: [0; 32],
-        expected_revision: context.custody_replay_revision,
-        resulting_revision: context
-            .custody_replay_revision
+        expected_revision,
+        resulting_revision: expected_revision
             .checked_add(1)
             .ok_or(MultiLpErrorV3::Arithmetic)?,
         amount,
         rent_lamports: 0,
     };
     request.validate().map_err(|_| MultiLpErrorV3::Custody)?;
-    Ok(MultiLpCustodyEffectV3 {
+    *output.get_mut(*count).ok_or(MultiLpErrorV3::Custody)? = Some(MultiLpCustodyEffectV3 {
         request,
-        external_after,
-        principal_after,
-    })
+        source_after,
+        destination_after,
+    });
+    match kind {
+        EquityCustodyTransferV3::ExternalToPrincipal => {
+            *external = source_after;
+            *principal = destination_after;
+        }
+        EquityCustodyTransferV3::PrincipalToExternal => {
+            *principal = source_after;
+            *external = destination_after;
+        }
+        EquityCustodyTransferV3::PrincipalToHoard => {
+            *principal = source_after;
+            *hoard = destination_after;
+        }
+        EquityCustodyTransferV3::HoardToPrincipal => {
+            *hoard = source_after;
+            *principal = destination_after;
+        }
+    }
+    *count = count.checked_add(1).ok_or(MultiLpErrorV3::Arithmetic)?;
+    Ok(())
 }
 
 fn read_identity(bytes: &[u8], offset: usize) -> MultiLpResultV3<[u8; 32]> {
@@ -808,8 +1153,8 @@ fn write_u64(bytes: &mut [u8], offset: usize, value: u64) -> MultiLpResultV3<()>
 #[cfg(test)]
 mod tests {
     use super::super::v3_obligation::{
-        DEALER_OBLIGATION_HEADER_BYTES_V3, DEALER_OBLIGATION_MAGIC_V3,
-        DEALER_OBLIGATION_VERSION_V3, DealerObligationProjectionV3,
+        DealerObligationProjectionV3, DEALER_OBLIGATION_HEADER_BYTES_V3,
+        DEALER_OBLIGATION_MAGIC_V3, DEALER_OBLIGATION_VERSION_V3,
     };
     use super::*;
 
@@ -862,7 +1207,7 @@ mod tests {
             lp_owner: owner,
             rent_refund: owner,
             obligation_account: obligation,
-            principal_shares: shares,
+            equity_shares: shares,
             generation: 2,
         }
         .encode_into(&mut bytes)
@@ -899,11 +1244,12 @@ mod tests {
 
     fn run(
         action: MultiLpActionV3,
-        amount: u64,
     ) -> MultiLpResultV3<(
         MultiLpPlanV3,
         std::vec::Vec<u8>,
         [u8; DEALER_LP_POSITION_BYTES_V3],
+        [u64; 3],
+        [u64; 3],
     )> {
         let trading = [9; 32];
         let custody = [13; 32];
@@ -915,7 +1261,14 @@ mod tests {
         )
         .0
         .to_bytes();
-        let obligations = obligation_bytes(&[20, 20, 20], 20);
+        let hoard_vault = Pubkey::find_program_address(
+            &CustodyVaultSeedsV1::new([1; 32], [6; 32], [1; 32], CompartmentV1::HoardPrincipal)
+                .as_slices(),
+            &Pubkey::new_from_array(custody),
+        )
+        .0
+        .to_bytes();
+        let obligations = obligation_bytes(&[0, 0, 0], 20);
         let projection = DealerObligationProjectionV3::decode(&obligations).expect("obligations");
         let (lp_address, lp) = lp_bytes(20, trading);
         let frame = MultiLpCollateralFrameV3 {
@@ -923,20 +1276,46 @@ mod tests {
             lp_owner: [8; 32],
             lp_external_balance: 100,
             principal_vault,
-            principal_balance: 30,
+            principal_balance: 20,
+            hoard_vault,
+            hoard_balance: 100,
         };
-        let claims = ClaimsInventoryObservation {
+        let dealer_claims = ClaimsInventoryObservation {
             market_id: [1; 32],
             product_id: [2; 32],
             liability_basis_id: [3; 32],
             position_owner: [4; 32],
             revision: 5,
-            inventory: &[0, 0, 0],
+            inventory: &[0, 10, 20],
         };
+        let lp_claims = ClaimsInventoryObservation {
+            market_id: [1; 32],
+            product_id: [2; 32],
+            liability_basis_id: [3; 32],
+            position_owner: [8; 32],
+            revision: 6,
+            inventory: &[10, 10, 10],
+        };
+        let intent = match action {
+            MultiLpActionV3::Add => MultiLpIntentV3::Contribute {
+                collateral: 10,
+                claims: &[0, 5, 10],
+                minted_shares: 10,
+                expected_lp_revision: 4,
+                expected_lp_digest: hash(&lp).to_bytes(),
+            },
+            MultiLpActionV3::Remove => MultiLpIntentV3::Redeem {
+                burned_shares: 10,
+                expected_lp_revision: 4,
+                expected_lp_digest: hash(&lp).to_bytes(),
+            },
+        };
+        let mut obligations_scratch = [0; 3];
         let mut before = [0; 3];
         let mut after = [0; 3];
-        let mut eq_before = [0; 3];
-        let mut eq_after = [0; 3];
+        let mut transferred = [0; 3];
+        let mut post_dealer_claims = [0; 3];
+        let mut post_lp_claims = [0; 3];
         let mut post_obligation = std::vec![0; obligations.len()];
         let mut post_lp = [0; DEALER_LP_POSITION_BYTES_V3];
         let plan = prepare_multi_lp_v3(
@@ -948,67 +1327,72 @@ mod tests {
                 data: &lp,
             },
             projection,
-            claims,
-            MultiLpIntentV3 {
-                action,
-                amount,
-                expected_lp_revision: 4,
-                expected_lp_digest: hash(&lp).to_bytes(),
-            },
+            dealer_claims,
+            lp_claims,
+            intent,
+            &mut obligations_scratch,
             &mut before,
             &mut after,
-            &mut eq_before,
-            &mut eq_after,
+            &mut transferred,
+            &mut post_dealer_claims,
+            &mut post_lp_claims,
             &mut post_obligation,
             &mut post_lp,
         )?;
-        Ok((plan, post_obligation, post_lp))
+        Ok((
+            plan,
+            post_obligation,
+            post_lp,
+            post_dealer_claims,
+            post_lp_claims,
+        ))
     }
 
     #[test]
-    fn add_and_remove_move_capital_and_uniform_obligations_together() {
-        let (add, add_obligation, add_lp) = run(MultiLpActionV3::Add, 7).expect("add");
-        assert_eq!(add.custody.external_after, 93);
-        assert_eq!(add.custody.principal_after, 37);
+    fn contributions_and_redemptions_move_junior_scenario_equity() {
+        let (add, add_obligation, add_lp, add_dealer_claims, add_lp_claims) =
+            run(MultiLpActionV3::Add).expect("proportional contribution");
+        assert_eq!(add.external_after, 90);
+        assert_eq!(add.principal_after, 30);
+        assert_eq!(add_dealer_claims, [0, 15, 30]);
+        assert_eq!(add_lp_claims, [10, 5, 0]);
         assert_eq!(
             DealerLpPositionV3::decode(&add_lp)
                 .expect("lp")
-                .principal_shares,
-            27
+                .equity_shares,
+            30
         );
         assert_eq!(
             DealerObligationProjectionV3::decode(&add_obligation)
                 .expect("obligation")
                 .obligations()
                 .collect::<std::vec::Vec<_>>(),
-            [27, 27, 27]
+            [0, 0, 0]
         );
-        assert_eq!(
-            add.solvency_before.minimum_equity,
-            add.solvency_after.minimum_equity
-        );
+        assert_eq!(add.solvency_before.minimum_equity, 20);
+        assert_eq!(add.solvency_after.minimum_equity, 30);
 
-        let (remove, remove_obligation, remove_lp) =
-            run(MultiLpActionV3::Remove, 7).expect("remove");
-        assert_eq!(remove.custody.external_after, 107);
-        assert_eq!(remove.custody.principal_after, 23);
+        let (remove, remove_obligation, remove_lp, remove_dealer_claims, remove_lp_claims) =
+            run(MultiLpActionV3::Remove).expect("pro-rata redemption");
+        assert_eq!(remove.external_after, 110);
+        assert_eq!(remove.principal_after, 10);
+        assert_eq!(remove_dealer_claims, [0, 5, 10]);
+        assert_eq!(remove_lp_claims, [10, 15, 20]);
         assert_eq!(
             DealerLpPositionV3::decode(&remove_lp)
                 .expect("lp")
-                .principal_shares,
-            13
+                .equity_shares,
+            10
         );
         assert_eq!(
             DealerObligationProjectionV3::decode(&remove_obligation)
                 .expect("obligation")
                 .obligations()
                 .collect::<std::vec::Vec<_>>(),
-            [13, 13, 13]
+            [0, 0, 0]
         );
-        assert_eq!(
-            remove.solvency_before.minimum_equity,
-            remove.solvency_after.minimum_equity
-        );
+        assert_eq!(remove.solvency_before.minimum_equity, 20);
+        assert_eq!(remove.solvency_after.minimum_equity, 10);
     }
 
     #[test]
@@ -1023,7 +1407,14 @@ mod tests {
         )
         .0
         .to_bytes();
-        let obligations = obligation_bytes(&[20, 20, 20], 20);
+        let hoard_vault = Pubkey::find_program_address(
+            &CustodyVaultSeedsV1::new([1; 32], [6; 32], [1; 32], CompartmentV1::HoardPrincipal)
+                .as_slices(),
+            &Pubkey::new_from_array(custody),
+        )
+        .0
+        .to_bytes();
+        let obligations = obligation_bytes(&[0, 0, 0], 20);
         let projection = DealerObligationProjectionV3::decode(&obligations).expect("obligations");
         let (lp_address, lp) = lp_bytes(20, trading);
         let claims = ClaimsInventoryObservation {
@@ -1032,12 +1423,22 @@ mod tests {
             liability_basis_id: [3; 32],
             position_owner: [4; 32],
             revision: 5,
+            inventory: &[0, 10, 20],
+        };
+        let lp_claims = ClaimsInventoryObservation {
+            market_id: [1; 32],
+            product_id: [2; 32],
+            liability_basis_id: [3; 32],
+            position_owner: [8; 32],
+            revision: 6,
             inventory: &[0, 0, 0],
         };
+        let mut obligations_scratch = [77; 3];
         let mut before = [77; 3];
         let mut after = [77; 3];
-        let mut eq_before = [77; 3];
-        let mut eq_after = [77; 3];
+        let mut transferred = [77; 3];
+        let mut post_dealer_claims = [77; 3];
+        let mut post_lp_claims = [77; 3];
         let mut post_obligation = std::vec![0xa5; obligations.len()];
         let mut post_lp = [0xa5; DEALER_LP_POSITION_BYTES_V3];
         let result = prepare_multi_lp_v3(
@@ -1047,7 +1448,9 @@ mod tests {
                 lp_owner: [8; 32],
                 lp_external_balance: 100,
                 principal_vault,
-                principal_balance: 30,
+                principal_balance: 20,
+                hoard_vault,
+                hoard_balance: 100,
             },
             DealerLpAccountObservationV3 {
                 address: lp_address,
@@ -1056,16 +1459,18 @@ mod tests {
             },
             projection,
             claims,
-            MultiLpIntentV3 {
-                action: MultiLpActionV3::Remove,
-                amount: 21,
+            lp_claims,
+            MultiLpIntentV3::Redeem {
+                burned_shares: 21,
                 expected_lp_revision: 4,
                 expected_lp_digest: hash(&lp).to_bytes(),
             },
+            &mut obligations_scratch,
             &mut before,
             &mut after,
-            &mut eq_before,
-            &mut eq_after,
+            &mut transferred,
+            &mut post_dealer_claims,
+            &mut post_lp_claims,
             &mut post_obligation,
             &mut post_lp,
         );

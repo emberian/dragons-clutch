@@ -73,12 +73,30 @@ impl DealerCustodySequenceV3 {
         })
     }
 
-    /// Project the sole exact Custody request from one multi-LP action.
-    pub const fn from_multi_lp(plan: MultiLpPlanV3) -> Self {
-        Self {
-            requests: [Some(plan.custody.request), None, None, None],
-            count: 1,
+    /// Project the exact ordered Custody subsequence from one equity action.
+    pub fn from_multi_lp(plan: MultiLpPlanV3) -> DealerRouteResultV3<Self> {
+        let mut requests = [None; MAX_DEALER_CUSTODY_ROUTES_V3];
+        let count = usize::from(plan.custody_count);
+        if count > requests.len() || count > plan.custody.len() {
+            return Err(DealerRouteErrorV3::InvalidSequence);
         }
+        for (index, destination) in requests.iter_mut().take(count).enumerate() {
+            *destination = Some(
+                plan.custody
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .ok_or(DealerRouteErrorV3::InvalidSequence)?
+                    .request,
+            );
+        }
+        if plan.custody.iter().skip(count).any(Option::is_some) {
+            return Err(DealerRouteErrorV3::InvalidSequence);
+        }
+        Ok(Self {
+            requests,
+            count: plan.custody_count,
+        })
     }
 
     /// Active request count.

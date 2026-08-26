@@ -39,6 +39,10 @@ pub mod operator;
 pub mod physical;
 /// Atomic scenario-solvent Claims/Custody portfolio-fill composition.
 pub mod v3_composer;
+/// Exact scenario-residual junior pool-equity kernel.
+pub mod v3_equity;
+/// Runtime-width chain-derived junior-equity contribution/redemption requests.
+pub mod v3_equity_operator;
 /// Canonical Claims Position plus Trading obligation activation and retirement.
 pub mod v3_lifecycle;
 /// Scenario-solvent, custody-backed multi-LP capital under canonical Trading.

@@ -13,11 +13,11 @@ use solana_program::{hash::hash, pubkey::Pubkey};
 
 use super::{
     v3_composer::{
-        ScenarioAtomicPlanV3, ScenarioCollateralFrameV3, ScenarioComposerContextV3,
-        ScenarioComposerErrorV3, ScenarioFillInputV3, ScenarioQuoteDirectionV3, ScenarioQuoteLegV3,
-        prepare_scenario_atomic_v3,
+        prepare_scenario_atomic_v3, ScenarioAtomicPlanV3, ScenarioCollateralFrameV3,
+        ScenarioComposerContextV3, ScenarioComposerErrorV3, ScenarioFillInputV3,
+        ScenarioQuoteDirectionV3, ScenarioQuoteLegV3,
     },
-    v3_obligation::{DEALER_OBLIGATION_PDA_DOMAIN_V3, DealerObligationProjectionV3},
+    v3_obligation::{DealerObligationProjectionV3, DEALER_OBLIGATION_PDA_DOMAIN_V3},
 };
 
 /// Canonical exact-fill request magic.
@@ -215,11 +215,13 @@ impl<'a> DealerScenarioTradeRequestV3<'a> {
         if acquired.len() != width || delivered.len() != width {
             return Err(ScenarioTradeErrorV3::WidthMismatch);
         }
-        for index in 0..width {
+        for (index, (acquired_output, delivered_output)) in
+            acquired.iter_mut().zip(delivered.iter_mut()).enumerate()
+        {
             let coordinate =
                 u32::try_from(index).map_err(|_| ScenarioTradeErrorV3::WidthMismatch)?;
-            acquired[index] = self.acquired(coordinate)?;
-            delivered[index] = self.delivered(coordinate)?;
+            *acquired_output = self.acquired(coordinate)?;
+            *delivered_output = self.delivered(coordinate)?;
         }
         Ok(())
     }
@@ -331,10 +333,10 @@ pub fn build_scenario_trade_request_v3(
         .map_err(|_| ScenarioTradeErrorV3::ProgramSelection)?;
 
     output.fill(0);
-    output[..8].copy_from_slice(&DEALER_SCENARIO_TRADE_MAGIC_V3);
-    output[8..10].copy_from_slice(&DEALER_SCENARIO_TRADE_VERSION_V3.to_le_bytes());
-    output[10..12].copy_from_slice(&DEALER_SCENARIO_TRADE_ACTION_V3.to_le_bytes());
-    output[12..16].copy_from_slice(&width.to_le_bytes());
+    write_bytes(output, 0, &DEALER_SCENARIO_TRADE_MAGIC_V3)?;
+    write_bytes(output, 8, &DEALER_SCENARIO_TRADE_VERSION_V3.to_le_bytes())?;
+    write_bytes(output, 10, &DEALER_SCENARIO_TRADE_ACTION_V3.to_le_bytes())?;
+    write_bytes(output, 12, &width.to_le_bytes())?;
     for (offset, identity) in [
         (16, chain.release_set),
         (48, chain.market),
@@ -346,7 +348,7 @@ pub fn build_scenario_trade_request_v3(
         (240, chain.counterparty_position.position_owner),
         (272, chain.counterparty_account),
     ] {
-        output[offset..offset + 32].copy_from_slice(&identity);
+        write_bytes(output, offset, &identity)?;
     }
     for (offset, value) in [
         (304, chain.current_obligation.revision()),
@@ -359,9 +361,11 @@ pub fn build_scenario_trade_request_v3(
         (360, intent.principal),
         (368, intent.realized_fee),
     ] {
-        output[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+        write_bytes(output, offset, &value.to_le_bytes())?;
     }
-    output[376] = match intent.direction {
+    *output
+        .get_mut(376)
+        .ok_or(ScenarioTradeErrorV3::InvalidRequest)? = match intent.direction {
         ScenarioTradeDirectionV3::CounterpartyPaysDealer => 0,
         ScenarioTradeDirectionV3::DealerPaysCounterparty => 1,
     };
@@ -372,8 +376,8 @@ pub fn build_scenario_trade_request_v3(
         .enumerate()
     {
         let offset = DEALER_SCENARIO_TRADE_HEADER_BYTES_V3 + index * 16;
-        output[offset..offset + 8].copy_from_slice(&acquired.to_le_bytes());
-        output[offset + 8..offset + 16].copy_from_slice(&delivered.to_le_bytes());
+        write_bytes(output, offset, &acquired.to_le_bytes())?;
+        write_bytes(output, offset + 8, &delivered.to_le_bytes())?;
     }
     let request = DealerScenarioTradeRequestV3::decode(output)?;
     authenticate_scenario_trade_request_v3(request, chain)?;
@@ -512,7 +516,7 @@ fn validate_projection(
         || current.descriptor(0) != candidate.descriptor(0)
         || current.revision().checked_add(1) != Some(candidate.revision())
         || current.width() != candidate.width()
-        || current.lp_principal() != candidate.lp_principal()
+        || current.total_equity_shares() != candidate.total_equity_shares()
         || current.position_owner() != dealer.position_owner
         || dealer.position_owner == counterparty.position_owner
         || dealer.market_id != chain.market
@@ -598,6 +602,17 @@ fn read_identity(bytes: &[u8], offset: usize) -> Result<[u8; 32], ScenarioTradeE
     } else {
         Ok(value)
     }
+}
+
+fn write_bytes(bytes: &mut [u8], offset: usize, value: &[u8]) -> Result<(), ScenarioTradeErrorV3> {
+    let end = offset
+        .checked_add(value.len())
+        .ok_or(ScenarioTradeErrorV3::InvalidRequest)?;
+    bytes
+        .get_mut(offset..end)
+        .ok_or(ScenarioTradeErrorV3::InvalidRequest)?
+        .copy_from_slice(value);
+    Ok(())
 }
 
 #[cfg(test)]

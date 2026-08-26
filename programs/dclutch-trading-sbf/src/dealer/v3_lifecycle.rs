@@ -195,7 +195,7 @@ pub fn verify_dealer_activation_v3(
     if obligation.revision() != plan.obligation.initial_revision
         || obligation.width() != context.outcome_count
         || obligation.position_owner() != context.child_root
-        || obligation.lp_principal() != 0
+        || obligation.total_equity_shares() != 0
         || obligation.obligations().any(|value| value != 0)
     {
         return Err(DealerLifecycleErrorV3::Postcondition);
