@@ -14,7 +14,7 @@
 //! Activation is split into receipt-Mint and single-coordinate steps so
 //! runtime width does not create one unbounded CPI frame. Coordinates are
 //! exactly the descriptor's ordered nonzero coefficient support: zero
-//! coefficients create no Mint, ATA, Position, admission record, or rent
+//! coefficients create no Mint, custody account, Position, admission record, or rent
 //! obligation. Retirement closes coordinates independently once all physical
 //! quantities are zero, then closes the receipt Mint only after an exact
 //! ordered vacancy scan over the complete nonzero support.
@@ -67,7 +67,7 @@ const ROW_OUTCOME_OFFSET: usize = 0;
 const ROW_RESERVED_HEAD_OFFSET: usize = 4;
 const ROW_COEFFICIENT_OFFSET: usize = 8;
 const ROW_SHARD_MINT_OFFSET: usize = 16;
-const ROW_STRUCTURED_ATA_OFFSET: usize = 48;
+const ROW_STRUCTURED_CUSTODY_OFFSET: usize = 48;
 const ROW_CUSTODY_OWNER_OFFSET: usize = 80;
 const ROW_CUSTODY_POSITION_OFFSET: usize = 112;
 const ROW_POSITION_ADMISSION_OFFSET: usize = 144;
@@ -140,7 +140,7 @@ pub type Result<T> = core::result::Result<T, Error>;
 pub enum LifecycleActionV2 {
     /// Initialize the descriptor's closeable Structured receipt Mint.
     ActivateReceipt = 0,
-    /// Initialize one exact nonzero-support shard/ATA/Position coordinate.
+    /// Initialize one exact nonzero-support shard/custody/Position coordinate.
     ActivateCoordinate = 1,
     /// Close one exact zero-supply, empty-custody coordinate.
     RetireCoordinate = 2,
@@ -337,8 +337,8 @@ pub struct LifecycleCoordinateV2 {
     pub coefficient: u64,
     /// Canonical closeable shard Mint PDA.
     pub shard_mint: [u8; 32],
-    /// Canonical Structured custody ATA.
-    pub structured_custody_ata: [u8; 32],
+    /// Canonical Claims-derived closeable Structured custody token account.
+    pub structured_custody_account: [u8; 32],
     /// Canonical Claims custody-owner PDA.
     pub claims_custody_owner: [u8; 32],
     /// Canonical LBV2 Claims custody Position PDA.
@@ -347,7 +347,7 @@ pub struct LifecycleCoordinateV2 {
     pub position_admission: [u8; 32],
     /// Complete observed/prepaid shard Mint lamports.
     pub observed_shard_lamports: u64,
-    /// Complete observed/prepaid Structured ATA lamports.
+    /// Complete observed/prepaid Structured custody-account lamports.
     pub observed_structured_lamports: u64,
     /// Complete observed/prepaid custody Position lamports.
     pub observed_position_lamports: u64,
@@ -355,7 +355,7 @@ pub struct LifecycleCoordinateV2 {
     pub observed_admission_lamports: u64,
     /// Current shard Mint Rent minimum.
     pub shard_rent_principal: u64,
-    /// Current Structured ATA Rent minimum.
+    /// Current Structured custody-account Rent minimum.
     pub structured_rent_principal: u64,
     /// Current LBV2 Position Rent minimum.
     pub position_rent_principal: u64,
@@ -381,7 +381,7 @@ impl LifecycleCoordinateV2 {
             outcome: read_u32(input, ROW_OUTCOME_OFFSET)?,
             coefficient: read_u64(input, ROW_COEFFICIENT_OFFSET)?,
             shard_mint: read_array(input, ROW_SHARD_MINT_OFFSET)?,
-            structured_custody_ata: read_array(input, ROW_STRUCTURED_ATA_OFFSET)?,
+            structured_custody_account: read_array(input, ROW_STRUCTURED_CUSTODY_OFFSET)?,
             claims_custody_owner: read_array(input, ROW_CUSTODY_OWNER_OFFSET)?,
             claims_custody_position: read_array(input, ROW_CUSTODY_POSITION_OFFSET)?,
             position_admission: read_array(input, ROW_POSITION_ADMISSION_OFFSET)?,
@@ -414,8 +414,8 @@ impl LifecycleCoordinateV2 {
         put(output, ROW_SHARD_MINT_OFFSET, &self.shard_mint)?;
         put(
             output,
-            ROW_STRUCTURED_ATA_OFFSET,
-            &self.structured_custody_ata,
+            ROW_STRUCTURED_CUSTODY_OFFSET,
+            &self.structured_custody_account,
         )?;
         put(output, ROW_CUSTODY_OWNER_OFFSET, &self.claims_custody_owner)?;
         put(
@@ -776,7 +776,7 @@ fn authenticate_coordinate(
     }
     for identity in [
         row.shard_mint,
-        row.structured_custody_ata,
+        row.structured_custody_account,
         row.claims_custody_owner,
         row.claims_custody_position,
         row.position_admission,
@@ -788,7 +788,7 @@ fn authenticate_coordinate(
         header.representation_authority,
         header.rent_credit,
         row.shard_mint,
-        row.structured_custody_ata,
+        row.structured_custody_account,
         row.claims_custody_owner,
         row.claims_custody_position,
         row.position_admission,
@@ -845,14 +845,14 @@ fn authenticate_global_aliases(request: LifecycleRequestV2<'_>) -> Result<()> {
             let right = right?;
             for left_key in [
                 left.shard_mint,
-                left.structured_custody_ata,
+                left.structured_custody_account,
                 left.claims_custody_owner,
                 left.claims_custody_position,
                 left.position_admission,
             ] {
                 if [
                     right.shard_mint,
-                    right.structured_custody_ata,
+                    right.structured_custody_account,
                     right.claims_custody_owner,
                     right.claims_custody_position,
                     right.position_admission,
@@ -886,7 +886,7 @@ pub struct LifecycleCompletionEvidenceV2 {
     pub rent_credit_after: u64,
     /// Current Trading caller/release binding was reauthenticated.
     pub caller_authenticated: bool,
-    /// Finalized descriptor record and derived PDAs/ATA were authenticated.
+    /// Finalized descriptor record and derived resource PDAs were authenticated.
     pub descriptor_and_resources_authenticated: bool,
     /// Token-2022 and protocol-Position effects reached exact postconditions.
     pub physical_effects_committed: bool,

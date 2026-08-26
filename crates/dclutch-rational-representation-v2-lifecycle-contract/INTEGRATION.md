@@ -9,8 +9,8 @@ parallel lifecycle ledger.
   the Claims representation authority as both mint authority and
   `MintCloseAuthority`.
 - `ActivateCoordinate` initializes one ordered nonzero descriptor coordinate:
-  a closeable shard Mint, the representation authority's canonical Structured
-  ATA, and the canonical Claims LBV2 custody Position plus admission record.
+  a closeable shard Mint, the Claims-derived closeable Structured custody token
+  account, and the canonical Claims LBV2 custody Position plus admission record.
 - Zero-coefficient coordinates create no physical resource or rent obligation.
 - All target accounts are already funded. The adapter rejects funding below the
   current Rent minimum and never accepts an offchain payer or permissioned

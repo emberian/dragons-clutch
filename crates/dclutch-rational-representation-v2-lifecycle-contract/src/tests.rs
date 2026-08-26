@@ -89,7 +89,7 @@ fn coordinate(outcome: u32, coefficient: u64, vacancy: bool) -> LifecycleCoordin
         outcome,
         coefficient,
         shard_mint: id(20 + seed),
-        structured_custody_ata: id(21 + seed),
+        structured_custody_account: id(21 + seed),
         claims_custody_owner: id(22 + seed),
         claims_custody_position: id(23 + seed),
         position_admission: id(24 + seed),
