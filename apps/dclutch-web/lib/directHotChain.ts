@@ -16,12 +16,18 @@ import { decodeCoreFoundProductGraphV2 } from './coreFound';
 import * as DirectAbi from './generated/directInlineV3';
 import {
   ACCOUNT_SCHEMA_RELEASE_ID,
-  CAPABILITY_PROGRAM_SET_ENTRY_BYTES_V1,
-  CAPABILITY_PROGRAM_SET_HEADER_BYTES_V1,
-  CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V1,
-  CAPABILITY_PROGRAM_V3_BYTES,
-  DESCRIPTORCONTRACT_SCHEMA_RELEASE_ID,
+  CAPABILITY_PROGRAM_SET_ENTRY_BYTES_V2,
+  CAPABILITY_PROGRAM_SET_HEADER_BYTES_V2,
+  CAPABILITY_PROGRAM_SET_MAX_ENTRIES_V2,
+  CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+  CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID,
   DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3,
+  DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_ID_V3,
+  DIRECT_INLINE_ORDINARY_EFFECT_ID_V4,
+  DIRECT_INLINE_ORDINARY_LIFECYCLE_ID_V4,
+  DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_ID_V3,
+  DIRECT_INLINE_ORDINARY_STRATEGY_ID_V3,
+  DIRECT_INLINE_ORDINARY_TRANSITION_ID_V3,
   DIRECT_ORDINARY_COMMON_IDENTITIES_V3,
   DIRECT_ORDINARY_COMMON_SCALARS_V3,
   DIRECT_SUCCESSOR_KIND_ID_V3,
@@ -79,7 +85,7 @@ import {
   TERM_FLOOR_EXACT_COMPLEMENT_BOUNDARY_V3,
   IDENTITY_BUYER_NATIVE_SIGNER_V3,
   IDENTITY_SELLER_NATIVE_SIGNER_V3,
-  LIFECYCLE_SCHEMA_RELEASE_ID,
+  LIFECYCLE_SUCCESSOR_SCHEMA_RELEASE_ID,
   REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID,
   STRATEGY_DISPOSITION_OFFSET_V2,
   STRATEGY_TRANSITION_PROGRAM_OFFSET_V2,
@@ -90,6 +96,7 @@ import {
   type CheckedHotOuterEvidenceV3,
   type DirectHotAccountMetaV3,
   type DirectInlineHotRouteV3,
+  canonicalDirectInlineLookupAddressesV3,
   validateRuntimeAccountProfileV2,
 } from './directInlineV3';
 import {
@@ -125,6 +132,7 @@ export type DirectHotRouteManifestV3 = Readonly<{
 export type DirectHotRouteInspectionV3 = Readonly<{
   observedSlot: string;
   route: DirectInlineHotRouteV3;
+  selectedProgramSchema: string;
   selectedProgramDigest: string;
   programSetDigest: string;
   accountProfileDigest: string;
@@ -438,71 +446,122 @@ export function decodeSelectedDirectManifestEntryV1(bytes: Uint8Array, selection
   return selected;
 }
 
-function programSetSelection(bytes: Uint8Array): Uint8Array {
-  if (bytes.length < CAPABILITY_PROGRAM_SET_HEADER_BYTES_V1 || ascii(bytes, 0, 8) !== 'DCLTCPS1' || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 1) throw new Error('CapabilityProgramSet has the wrong exact header');
-  if (new DataView(bytes.buffer, bytes.byteOffset + 12, 4).getUint32(0, true) !== 12 || bytes[16] !== 4 || bytes[17] !== 0) throw new Error('CapabilityProgramSet does not select canonical Direct u32 action offset 12');
-  requireZero(bytes, 20, 12, 'CapabilityProgramSet header');
-  const count = u16(bytes, 18);
-  if (count === 0 || bytes.length !== CAPABILITY_PROGRAM_SET_HEADER_BYTES_V1 + count * CAPABILITY_PROGRAM_SET_ENTRY_BYTES_V1) throw new Error('CapabilityProgramSet has a noncanonical table width');
-  let prior = -1;
-  let selected: Uint8Array | null = null;
-  for (let index = 0; index < count; index += 1) {
-    const offset = CAPABILITY_PROGRAM_SET_HEADER_BYTES_V1 + index * CAPABILITY_PROGRAM_SET_ENTRY_BYTES_V1;
-    const selector = new DataView(bytes.buffer, bytes.byteOffset + offset, 4).getUint32(0, true);
-    if (selector <= prior) throw new Error('CapabilityProgramSet entries are not strictly ordered');
-    prior = selector;
-    requireZero(bytes, offset + 36, 4, 'CapabilityProgramSet entry');
-    const digest = slice(bytes, offset + 4, 32);
-    requireNonzero(digest, 'CapabilityProgramSet descriptor');
-    if (selector === 1) selected = digest;
+export type DirectProgramSelectionV2 = Readonly<{ schema: Uint8Array; program: Uint8Array }>;
+
+export function decodeDirectProgramSetV2(bytes: Uint8Array): DirectProgramSelectionV2 {
+  if (bytes.length < CAPABILITY_PROGRAM_SET_HEADER_BYTES_V2
+      || bytes.length > DirectAbi.CAPABILITY_PROGRAM_SET_MAX_BYTES_V2
+      || !same(slice(bytes, 0, 8), DirectAbi.CAPABILITY_PROGRAM_SET_MAGIC_V2)
+      || u16(bytes, 8) !== DirectAbi.CAPABILITY_PROGRAM_SET_SCHEMA_VERSION_V2
+      || u16(bytes, 10) !== DirectAbi.CAPABILITY_PROGRAM_SET_ARTIFACT_PROFILE_V2) {
+    throw new Error('CapabilityProgramSetV2 has the wrong exact header or width');
   }
-  if (selected === null) throw new Error('CapabilityProgramSet has no InlineOrdinary action 1');
+  if (readU32(bytes, DirectAbi.CAPABILITY_PROGRAM_SET_SELECTOR_OFFSET_OFFSET_V2) !== DirectAbi.DIRECT_EXECUTION_REQUEST_SELECTOR_OFFSET_V3
+      || bytes[DirectAbi.CAPABILITY_PROGRAM_SET_SELECTOR_WIDTH_OFFSET_V2] !== 4
+      || bytes[DirectAbi.CAPABILITY_PROGRAM_SET_SELECTOR_ENDIAN_OFFSET_V2] !== DirectAbi.CAPABILITY_PROGRAM_SET_CANONICAL_ENDIAN_V2) {
+    throw new Error('CapabilityProgramSetV2 does not select canonical Direct u32 action offset 12');
+  }
+  requireZero(bytes, DirectAbi.CAPABILITY_PROGRAM_SET_RESERVED_OFFSET_V2,
+    CAPABILITY_PROGRAM_SET_HEADER_BYTES_V2 - DirectAbi.CAPABILITY_PROGRAM_SET_RESERVED_OFFSET_V2,
+    'CapabilityProgramSetV2 header');
+  const count = u16(bytes, DirectAbi.CAPABILITY_PROGRAM_SET_ENTRY_COUNT_OFFSET_V2);
+  if (count === 0 || count > CAPABILITY_PROGRAM_SET_MAX_ENTRIES_V2
+      || bytes.length !== CAPABILITY_PROGRAM_SET_HEADER_BYTES_V2 + count * CAPABILITY_PROGRAM_SET_ENTRY_BYTES_V2) {
+    throw new Error('CapabilityProgramSetV2 has a noncanonical table width');
+  }
+  let prior = -1;
+  let selected: DirectProgramSelectionV2 | null = null;
+  for (let index = 0; index < count; index += 1) {
+    const offset = CAPABILITY_PROGRAM_SET_HEADER_BYTES_V2 + index * CAPABILITY_PROGRAM_SET_ENTRY_BYTES_V2;
+    const selector = readU32(bytes, offset + DirectAbi.CAPABILITY_PROGRAM_SET_ENTRY_SELECTOR_OFFSET_V2);
+    if (selector <= prior) throw new Error('CapabilityProgramSetV2 entries are not strictly ordered');
+    prior = selector;
+    requireZero(bytes, offset + DirectAbi.CAPABILITY_PROGRAM_SET_ENTRY_RESERVED_OFFSET_V2,
+      CAPABILITY_PROGRAM_SET_ENTRY_BYTES_V2 - DirectAbi.CAPABILITY_PROGRAM_SET_ENTRY_RESERVED_OFFSET_V2,
+      'CapabilityProgramSetV2 entry');
+    const schema = slice(bytes, offset + DirectAbi.CAPABILITY_PROGRAM_SET_ENTRY_DESCRIPTOR_SCHEMA_OFFSET_V2, 32);
+    const program = slice(bytes, offset + DirectAbi.CAPABILITY_PROGRAM_SET_ENTRY_DESCRIPTOR_PROGRAM_OFFSET_V2, 32);
+    requireNonzero(schema, 'CapabilityProgramSetV2 descriptor schema');
+    requireNonzero(program, 'CapabilityProgramSetV2 descriptor program');
+    if (selector === DirectAbi.DIRECT_INLINE_ORDINARY_ACTION_V3) selected = Object.freeze({ schema, program });
+  }
+  if (selected === null) throw new Error('CapabilityProgramSetV2 has no InlineOrdinary action 1');
   return selected;
 }
 
-export function decodeDirectDescriptorV3(bytes: Uint8Array): Readonly<{
+export type DirectArtifactReferenceV4 = Readonly<{ schema: Uint8Array; program: Uint8Array }>;
+
+export function decodeDirectDescriptorV4(bytes: Uint8Array): Readonly<{
   configSchema: Uint8Array;
+  requestSchema: Uint8Array;
   rootSchema: Uint8Array;
-  accountProfile: Uint8Array;
-  lifecycle: Uint8Array;
+  derivationPolicy: Uint8Array;
   capacityProfile: Uint8Array;
-  effect: Uint8Array;
-  requestProfileSchema: Uint8Array;
-  requestProfileProgram: Uint8Array;
-  strategySchema: Uint8Array;
-  strategyProgram: Uint8Array;
+  accountProfile: DirectArtifactReferenceV4;
+  requestProfile: DirectArtifactReferenceV4;
+  lifecycle: DirectArtifactReferenceV4;
+  strategy: DirectArtifactReferenceV4;
+  transition: DirectArtifactReferenceV4;
+  effect: DirectArtifactReferenceV4;
   rootStateBytes: number;
 }> {
-  if (bytes.length !== CAPABILITY_PROGRAM_V3_BYTES
-      || !same(slice(bytes, 0, 8), DirectAbi.CAPABILITY_PROGRAM_V3_MAGIC)
-      || u16(bytes, DirectAbi.CAPABILITY_PROGRAM_V3_SCHEMA_VERSION_OFFSET) !== DirectAbi.CAPABILITY_PROGRAM_V3_SCHEMA_VERSION
-      || u16(bytes, DirectAbi.CAPABILITY_PROGRAM_V3_ARTIFACT_PROFILE_OFFSET) !== DirectAbi.CAPABILITY_PROGRAM_V3_ARTIFACT_PROFILE
-      || u16(bytes, DirectAbi.CAPABILITY_PROGRAM_V3_TRANSITION_SCHEMA_VERSION_OFFSET) !== DirectAbi.CAPABILITY_PROGRAM_V3_TRANSITION_SCHEMA_VERSION
-      || u16(bytes, DirectAbi.CAPABILITY_PROGRAM_V3_REQUEST_PROFILE_SCHEMA_VERSION_OFFSET) !== DirectAbi.CAPABILITY_PROGRAM_V3_REQUEST_PROFILE_SCHEMA_VERSION) {
-    throw new Error('CapabilityProgramV3 descriptor has the wrong exact ABI');
+  if (bytes.length !== DirectAbi.CAPABILITY_PROGRAM_V4_BYTES
+      || !same(slice(bytes, 0, 8), DirectAbi.CAPABILITY_PROGRAM_V4_MAGIC)
+      || u16(bytes, DirectAbi.CAPABILITY_PROGRAM_V4_SCHEMA_VERSION_OFFSET) !== DirectAbi.CAPABILITY_PROGRAM_V4_SCHEMA_VERSION
+      || u16(bytes, DirectAbi.CAPABILITY_PROGRAM_V4_ARTIFACT_PROFILE_OFFSET) !== DirectAbi.CAPABILITY_PROGRAM_V4_ARTIFACT_PROFILE) {
+    throw new Error('CapabilityProgramV4 descriptor has the wrong exact ABI');
   }
-  if (!same(slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V3_KIND_OFFSET, 32), DIRECT_SUCCESSOR_KIND_ID_V3)
-      || !same(slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V3_CONFIG_SCHEMA_OFFSET, 32), DirectAbi.DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1)
-      || !same(slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V3_REQUEST_SCHEMA_OFFSET, 32), DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3)
-      || !same(slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V3_ROOT_SCHEMA_OFFSET, 32), DirectAbi.DIRECT_ROOT_SCHEMA_ID_V1)
-      || !same(slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V3_REQUEST_PROFILE_SCHEMA_OFFSET, 32), REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID)
-      || !same(slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V3_TRANSITION_SCHEMA_OFFSET, 32), EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2)) {
-    throw new Error('selected descriptor is not the signed Direct V3 / Strategy V2 bundle');
+  requireZero(bytes, DirectAbi.CAPABILITY_PROGRAM_V4_HEADER_RESERVED_OFFSET, 4, 'CapabilityProgramV4 header');
+  requireZero(bytes, DirectAbi.CAPABILITY_PROGRAM_V4_TAIL_RESERVED_OFFSET, 4, 'CapabilityProgramV4 tail');
+  const artifact = (schemaOffset: number, programOffset: number, field: string): DirectArtifactReferenceV4 => {
+    const schema = slice(bytes, schemaOffset, 32);
+    const program = slice(bytes, programOffset, 32);
+    requireNonzero(schema, `${field} schema`);
+    requireNonzero(program, `${field} program`);
+    return Object.freeze({ schema, program });
+  };
+  const accountProfile = artifact(DirectAbi.CAPABILITY_PROGRAM_V4_ACCOUNT_PROFILE_SCHEMA_OFFSET, DirectAbi.CAPABILITY_PROGRAM_V4_ACCOUNT_PROFILE_PROGRAM_OFFSET, 'AccountProfile');
+  const requestProfile = artifact(DirectAbi.CAPABILITY_PROGRAM_V4_REQUEST_PROFILE_SCHEMA_OFFSET, DirectAbi.CAPABILITY_PROGRAM_V4_REQUEST_PROFILE_PROGRAM_OFFSET, 'RequestProfile');
+  const lifecycle = artifact(DirectAbi.CAPABILITY_PROGRAM_V4_LIFECYCLE_SCHEMA_OFFSET, DirectAbi.CAPABILITY_PROGRAM_V4_LIFECYCLE_PROGRAM_OFFSET, 'Lifecycle');
+  const strategy = artifact(DirectAbi.CAPABILITY_PROGRAM_V4_STRATEGY_SCHEMA_OFFSET, DirectAbi.CAPABILITY_PROGRAM_V4_STRATEGY_PROGRAM_OFFSET, 'Strategy');
+  const transition = artifact(DirectAbi.CAPABILITY_PROGRAM_V4_TRANSITION_SCHEMA_OFFSET, DirectAbi.CAPABILITY_PROGRAM_V4_TRANSITION_PROGRAM_OFFSET, 'Transition');
+  const effect = artifact(DirectAbi.CAPABILITY_PROGRAM_V4_EFFECT_SCHEMA_OFFSET, DirectAbi.CAPABILITY_PROGRAM_V4_EFFECT_PROGRAM_OFFSET, 'Effect');
+  const derivationPolicy = slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V4_DERIVATION_POLICY_OFFSET, 32);
+  if (!same(slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V4_KIND_OFFSET, 32), DIRECT_SUCCESSOR_KIND_ID_V3)
+      || !same(slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V4_CONFIG_SCHEMA_OFFSET, 32), DirectAbi.DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1)
+      || !same(slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V4_REQUEST_SCHEMA_OFFSET, 32), DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3)
+      || !same(slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V4_ROOT_SCHEMA_OFFSET, 32), DirectAbi.DIRECT_ROOT_SCHEMA_ID_V1)
+      || !same(derivationPolicy, lifecycle.program)
+      || !same(accountProfile.schema, ACCOUNT_SCHEMA_RELEASE_ID)
+      || !same(requestProfile.schema, REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID)
+      || !same(lifecycle.schema, LIFECYCLE_SUCCESSOR_SCHEMA_RELEASE_ID)
+      || !same(strategy.schema, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2)
+      || !same(transition.schema, TRANSITION_SCHEMA_RELEASE_ID)
+      || !same(effect.schema, EFFECT_SCHEMA_RELEASE_ID)
+      || !same(accountProfile.program, DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_ID_V3)
+      || !same(requestProfile.program, DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_ID_V3)
+      || !same(lifecycle.program, DIRECT_INLINE_ORDINARY_LIFECYCLE_ID_V4)
+      || !same(strategy.program, DIRECT_INLINE_ORDINARY_STRATEGY_ID_V3)
+      || !same(transition.program, DIRECT_INLINE_ORDINARY_TRANSITION_ID_V3)
+      || !same(effect.program, DIRECT_INLINE_ORDINARY_EFFECT_ID_V4)) {
+    throw new Error('selected CapabilityProgramV4 is not the schema-bound signed Direct InlineOrdinary bundle');
   }
-  requireZero(bytes, DirectAbi.CAPABILITY_PROGRAM_V3_TAIL_RESERVED_OFFSET, 4, 'CapabilityProgramV3 tail');
-  const rootStateBytes = readU32(bytes, DirectAbi.CAPABILITY_PROGRAM_V3_ROOT_STATE_BYTES_OFFSET);
+  const capacityProfile = slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V4_CAPACITY_PROFILE_OFFSET, 32);
+  requireNonzero(capacityProfile, 'CapabilityProgramV4 capacity profile');
+  const rootStateBytes = readU32(bytes, DirectAbi.CAPABILITY_PROGRAM_V4_ROOT_STATE_BYTES_OFFSET);
   if (rootStateBytes !== DirectAbi.DIRECT_ROOT_STATE_BYTES_V1) throw new Error('Direct descriptor selects another mutable root-tail width');
   return Object.freeze({
-    configSchema: slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V3_CONFIG_SCHEMA_OFFSET, 32),
-    rootSchema: slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V3_ROOT_SCHEMA_OFFSET, 32),
-    accountProfile: slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V3_ACCOUNT_PROFILE_OFFSET, 32),
-    lifecycle: slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V3_DERIVATION_POLICY_OFFSET, 32),
-    capacityProfile: slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V3_CAPACITY_PROFILE_OFFSET, 32),
-    effect: slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V3_EFFECT_PROGRAM_OFFSET, 32),
-    requestProfileSchema: slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V3_REQUEST_PROFILE_SCHEMA_OFFSET, 32),
-    requestProfileProgram: slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V3_REQUEST_PROFILE_PROGRAM_OFFSET, 32),
-    strategySchema: slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V3_TRANSITION_SCHEMA_OFFSET, 32),
-    strategyProgram: slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V3_TRANSITION_PROGRAM_OFFSET, 32),
+    configSchema: slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V4_CONFIG_SCHEMA_OFFSET, 32),
+    requestSchema: slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V4_REQUEST_SCHEMA_OFFSET, 32),
+    rootSchema: slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V4_ROOT_SCHEMA_OFFSET, 32),
+    derivationPolicy,
+    capacityProfile,
+    accountProfile,
+    requestProfile,
+    lifecycle,
+    strategy,
+    transition,
+    effect,
     rootStateBytes,
   });
 }
@@ -689,15 +748,18 @@ export async function inspectDirectHotRouteV3(
   const manifestEntry = decodeSelectedDirectManifestEntryV1(manifestRaw.data, selection);
   const programSetRaw = await finalizedRecord(client, observation.accounts, registryProgram,
     fixed[HOT_PROGRAM_SET_RAW_ACCOUNT_V3].address, fixed[HOT_PROGRAM_SET_STAGING_ACCOUNT_V3].address,
-    CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V1, selection.programSet, 'capability program set');
-  const selectedProgram = programSetSelection(programSetRaw.data);
+    CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, selection.programSet, 'CapabilityProgramSetV2');
+  const selectedProgram = decodeDirectProgramSetV2(programSetRaw.data);
+  if (!same(selectedProgram.schema, CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID)) {
+    throw new Error('InlineOrdinary selects a descriptor schema other than CapabilityProgramV4');
+  }
   const descriptorRaw = await finalizedRecord(client, observation.accounts, registryProgram,
     fixed[HOT_DESCRIPTOR_RAW_ACCOUNT_V3].address, fixed[HOT_DESCRIPTOR_STAGING_ACCOUNT_V3].address,
-    DESCRIPTORCONTRACT_SCHEMA_RELEASE_ID, selectedProgram, 'Direct descriptor');
-  const descriptor = decodeDirectDescriptorV3(descriptorRaw.data);
+    selectedProgram.schema, selectedProgram.program, 'Direct CapabilityProgramV4 descriptor');
+  const descriptor = decodeDirectDescriptorV4(descriptorRaw.data);
   if (!same(manifestEntry.capacityProfile, descriptor.capacityProfile)
       || !same(manifestEntry.childSchema, descriptor.rootSchema)
-      || !same(manifestEntry.childDerivation, descriptor.lifecycle)
+      || !same(manifestEntry.childDerivation, descriptor.derivationPolicy)
       || root.data.length !== DirectAbi.CAPABILITY_ROOT_HEADER_BYTES_V1 + descriptor.rootStateBytes) {
     throw new Error('Direct descriptor, manifest entry, lifecycle, capacity, or mutable root width does not join');
   }
@@ -742,26 +804,28 @@ export async function inspectDirectHotRouteV3(
 
   const profileRaw = await finalizedRecord(client, observation.accounts, registryProgram,
     fixed[HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3].address, fixed[HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3].address,
-    ACCOUNT_SCHEMA_RELEASE_ID, descriptor.accountProfile, 'AccountProfile V2');
+    descriptor.accountProfile.schema, descriptor.accountProfile.program, 'AccountProfile V2');
   const requestProfileRaw = await finalizedRecord(client, observation.accounts, registryProgram,
     fixed[HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3].address, fixed[HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3].address,
-    descriptor.requestProfileSchema, descriptor.requestProfileProgram, 'RequestProfile V2');
+    descriptor.requestProfile.schema, descriptor.requestProfile.program, 'RequestProfile V2');
   validateDirectSignedRequestProfileV2(requestProfileRaw.data);
   await finalizedRecord(client, observation.accounts, registryProgram,
     fixed[HOT_LIFECYCLE_RAW_ACCOUNT_V3].address, fixed[HOT_LIFECYCLE_STAGING_ACCOUNT_V3].address,
-    LIFECYCLE_SCHEMA_RELEASE_ID, descriptor.lifecycle, 'state lifecycle policy');
-  if (!same(descriptor.requestProfileSchema, REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID)
-      || !same(descriptor.strategySchema, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2)) throw new Error('descriptor selects another signed request or execution-strategy schema');
+    descriptor.lifecycle.schema, descriptor.lifecycle.program, 'state lifecycle policy');
   const strategyRaw = await finalizedRecord(client, observation.accounts, registryProgram,
     fixed[HOT_STRATEGY_RAW_ACCOUNT_V3].address, fixed[HOT_STRATEGY_STAGING_ACCOUNT_V3].address,
-    EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, descriptor.strategyProgram, 'ExecutionStrategy V2');
+    descriptor.strategy.schema, descriptor.strategy.program, 'ExecutionStrategy V2');
   const interpreted = decodeInterpretedStrategy(strategyRaw.data);
+  if (!same(interpreted.transitionSchema, descriptor.transition.schema)
+      || !same(interpreted.transitionProgram, descriptor.transition.program)) {
+    throw new Error('ExecutionStrategy transition differs from the CapabilityProgramV4 transition edge');
+  }
   const transitionRaw = await finalizedRecord(client, observation.accounts, registryProgram,
     fixed[HOT_TRANSITION_RAW_ACCOUNT_V3].address, fixed[HOT_TRANSITION_STAGING_ACCOUNT_V3].address,
-    interpreted.transitionSchema, interpreted.transitionProgram, 'TransitionVM V3');
+    descriptor.transition.schema, descriptor.transition.program, 'TransitionVM V3');
   await finalizedRecord(client, observation.accounts, registryProgram,
     fixed[HOT_EFFECT_RAW_ACCOUNT_V3].address, fixed[HOT_EFFECT_STAGING_ACCOUNT_V3].address,
-    EFFECT_SCHEMA_RELEASE_ID, descriptor.effect, 'EffectProgram V3');
+    descriptor.effect.schema, descriptor.effect.program, 'EffectProgram V3');
   const runtimeAccounts = manifest.runtimeAccounts.map((coordinate, index) => required(observation.accounts, coordinate.address, `runtime account ${index}`));
   const logicalRuntimeAccounts = [
     required(observation.accounts, fixed[HOT_ROOT_ACCOUNT_V3].address, 'logical capability root'),
@@ -804,6 +868,7 @@ export async function inspectDirectHotRouteV3(
   }
 
   const latest = await client.latestBlockhash(observation.slot);
+  if (manifest.lookupTables.length !== 1) throw new Error('Direct InlineOrdinary requires one canonical finalized lookup table');
   const lookupTables = Object.freeze(manifest.lookupTables.map((address) => lookupTable(address, required(observation.accounts, address, 'lookup table'))));
   const route: DirectInlineHotRouteV3 = Object.freeze({
     payer: manifest.payer,
@@ -816,6 +881,8 @@ export async function inspectDirectHotRouteV3(
     priceScale,
     feeBasisPoints,
     accountProfile: profileRaw.data,
+    selectedProgramSchema: selectedProgram.schema,
+    selectedProgram: selectedProgram.program,
     fixedAccounts: fixed,
     strategyAccounts: strategyMetas,
     runtimeAccounts: runtimeMetas,
@@ -823,10 +890,17 @@ export async function inspectDirectHotRouteV3(
     lookupTables,
     outerEvidence: checkedOuter,
   });
+  const expectedLookupAddresses = canonicalDirectInlineLookupAddressesV3(route);
+  const observedLookupAddresses = lookupTables[0]?.state.addresses;
+  if (observedLookupAddresses === undefined || observedLookupAddresses.length !== expectedLookupAddresses.length
+      || observedLookupAddresses.some((address, index) => !address.equals(expectedLookupAddresses[index] as PublicKey))) {
+    throw new Error('finalized Direct lookup table differs from the sole canonical Rust operator sequence');
+  }
   return Object.freeze({
     observedSlot: observation.slot,
     route,
-    selectedProgramDigest: hex(selectedProgram),
+    selectedProgramSchema: hex(selectedProgram.schema),
+    selectedProgramDigest: hex(selectedProgram.program),
     programSetDigest: hex(await sha256(programSetRaw.data)),
     accountProfileDigest: hex(await sha256(profileRaw.data)),
     strategyDigest: hex(await sha256(strategyRaw.data)),

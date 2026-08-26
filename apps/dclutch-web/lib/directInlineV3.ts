@@ -28,6 +28,7 @@ import {
   COMPACT_INTENT_VALID_FROM_OFFSET_V2,
   COMPACT_INTENT_VALID_THROUGH_OFFSET_V2,
   COMPACT_INTENT_VERSION_V2,
+  CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID,
   DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3,
   DIRECT_EXECUTION_REQUEST_MAGIC_V3,
   DIRECT_EXECUTION_REQUEST_VERSION_V3,
@@ -105,6 +106,8 @@ export type DirectInlineHotRouteV3 = Readonly<{
   priceScale: bigint;
   feeBasisPoints: number;
   accountProfile: Uint8Array;
+  selectedProgramSchema: Uint8Array;
+  selectedProgram: Uint8Array;
   fixedAccounts: ReadonlyArray<DirectHotAccountMetaV3>;
   strategyAccounts: ReadonlyArray<DirectHotAccountMetaV3>;
   runtimeAccounts: ReadonlyArray<DirectHotAccountMetaV3>;
@@ -133,6 +136,48 @@ export type DirectInlineTransactionPlanV3 = Readonly<{
   preview: DirectInlineEconomicPreviewV3;
   loadedAddresses: number;
 }>;
+
+function compareKeys(left: PublicKey, right: PublicKey): number {
+  const a = left.toBytes();
+  const b = right.toBytes();
+  for (let index = 0; index < 32; index += 1) {
+    const order = (a[index] ?? 0) - (b[index] ?? 0);
+    if (order !== 0) return order;
+  }
+  return 0;
+}
+
+/** The sole sorted, duplicate-free LUT sequence accepted by the Rust operator. */
+export function canonicalDirectInlineLookupAddressesV3(
+  route: Pick<DirectInlineHotRouteV3, 'payer' | 'tradingProgram' | 'fixedAccounts' | 'strategyAccounts' | 'runtimeAccounts'>,
+): ReadonlyArray<PublicKey> {
+  const payer = exactKey(route.payer, 'payer');
+  const programs = new Set([Ed25519Program.programId.toBase58(), exactKey(route.tradingProgram, 'Trading program').toBase58()]);
+  const signers = new Set([payer.toBase58()]);
+  for (const account of [...route.fixedAccounts, ...route.strategyAccounts, ...route.runtimeAccounts]) {
+    if (account.isSigner) signers.add(exactKey(account.address, 'Hot instruction signer').toBase58());
+  }
+  const byAddress = new Map<string, PublicKey>();
+  for (const [index, account] of [...route.fixedAccounts, ...route.strategyAccounts, ...route.runtimeAccounts].entries()) {
+    const address = exactKey(account.address, `Hot account ${index}`);
+    const text = address.toBase58();
+    if (!signers.has(text) && !programs.has(text)) byAddress.set(text, address);
+  }
+  const addresses = [...byAddress.values()].sort(compareKeys);
+  if (addresses.length === 0 || addresses.length > 256) throw new Error('Direct InlineOrdinary canonical lookup sequence is empty or exceeds 256 addresses');
+  return Object.freeze(addresses);
+}
+
+function validateCanonicalLookupTableV3(route: DirectInlineHotRouteV3): void {
+  if (route.lookupTables.length !== 1) throw new Error('Direct InlineOrdinary requires exactly one canonical finalized lookup table');
+  const observed = route.lookupTables[0];
+  if (observed === undefined || !observed.isActive()) throw new Error('Direct InlineOrdinary lookup table is absent or deactivated');
+  const expected = canonicalDirectInlineLookupAddressesV3(route);
+  if (observed.state.addresses.length !== expected.length
+      || observed.state.addresses.some((address, index) => !address.equals(expected[index] as PublicKey))) {
+    throw new Error('Direct InlineOrdinary lookup table differs from the sole canonical address sequence');
+  }
+}
 
 function exactKey(value: string, field: string): PublicKey {
   const key = new PublicKey(value);
@@ -348,7 +393,13 @@ export function compileDirectInlineTransactionV3(input: Readonly<{
   if (input.route.outerEvidence.status !== 'checked') throw new Error(`Direct V3 hot execution unavailable: ${input.route.outerEvidence.reason}`);
   exactIdentity(input.route.releaseSet, 'execution release set');
   exactIdentity(input.route.rootPrestateDigest, 'root prestate digest');
+  const selectedProgramSchema = exactIdentity(input.route.selectedProgramSchema, 'selected capability-program schema');
+  if (!selectedProgramSchema.every((value, index) => value === CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID[index])) {
+    throw new Error('Direct InlineOrdinary route does not select CapabilityProgramV4');
+  }
+  exactIdentity(input.route.selectedProgram, 'selected CapabilityProgramV4 content');
   validateFixedFrame(input.route);
+  validateCanonicalLookupTableV3(input.route);
   validateRuntimeAccountProfileV2(input.route.accountProfile, input.route.outcomeCount, [
     input.route.fixedAccounts[HOT_ROOT_ACCOUNT_V3],
     input.route.fixedAccounts[HOT_CONFIG_RAW_ACCOUNT_V3],

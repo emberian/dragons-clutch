@@ -6,13 +6,18 @@ const sources = Object.freeze({
   hot: readFileSync(new URL('crates/dclutch-capability-program-contract/src/hot_v3.rs', root), 'utf8'),
   descriptor: readFileSync(new URL('crates/dclutch-capability-program-contract/src/generated_v3.rs', root), 'utf8'),
   descriptorContract: readFileSync(new URL('crates/dclutch-capability-program-contract/src/v3.rs', root), 'utf8'),
+  descriptorV4: readFileSync(new URL('crates/dclutch-capability-program-contract/src/generated_v4.rs', root), 'utf8'),
+  descriptorContractV4: readFileSync(new URL('crates/dclutch-capability-program-contract/src/v4.rs', root), 'utf8'),
   root: readFileSync(new URL('crates/dclutch-capability-program-contract/src/generated.rs', root), 'utf8'),
   selection: readFileSync(new URL('crates/dclutch-release-set-contract/src/generated_capability_execution.rs', root), 'utf8'),
   manifest: readFileSync(new URL('crates/dclutch-capability-contract/src/lib.rs', root), 'utf8'),
   set: readFileSync(new URL('crates/dclutch-capability-program-contract/src/generated_set_v1.rs', root), 'utf8'),
+  setV2: readFileSync(new URL('crates/dclutch-capability-program-contract/src/generated_set_v2.rs', root), 'utf8'),
   direct: readFileSync(new URL('crates/dclutch-direct-codec/src/execution_v3.rs', root), 'utf8'),
   intent: readFileSync(new URL('crates/dclutch-direct-codec/src/generated_intent_v2.rs', root), 'utf8'),
   ordinary: readFileSync(new URL('crates/dclutch-direct-codec/src/ordinary_v3.rs', root), 'utf8'),
+  ordinaryArtifacts: readFileSync(new URL('crates/dclutch-direct-codec/src/ordinary_artifacts_v3.rs', root), 'utf8'),
+  ordinaryBundle: readFileSync(new URL('crates/dclutch-direct-codec/src/ordinary_bundle_v4.rs', root), 'utf8'),
   successor: readFileSync(new URL('crates/dclutch-direct-codec/src/successor.rs', root), 'utf8'),
   successorGenerated: readFileSync(new URL('crates/dclutch-direct-codec/src/generated_successor.rs', root), 'utf8'),
   account: readFileSync(new URL('crates/dclutch-account-profile-contract/src/v2.rs', root), 'utf8'),
@@ -87,6 +92,19 @@ const scalars = Object.freeze([
   ['descriptor', 'CAPABILITY_PROGRAM_V3_REQUEST_PROFILE_PROGRAM_OFFSET'], ['descriptor', 'CAPABILITY_PROGRAM_V3_TRANSITION_SCHEMA_OFFSET'],
   ['descriptor', 'CAPABILITY_PROGRAM_V3_TRANSITION_PROGRAM_OFFSET'], ['descriptor', 'CAPABILITY_PROGRAM_V3_ROOT_STATE_BYTES_OFFSET'],
   ['descriptor', 'CAPABILITY_PROGRAM_V3_TAIL_RESERVED_OFFSET'],
+  ['descriptorV4', 'CAPABILITY_PROGRAM_V4_BYTES'], ['descriptorV4', 'CAPABILITY_PROGRAM_V4_SCHEMA_VERSION'],
+  ['descriptorV4', 'CAPABILITY_PROGRAM_V4_ARTIFACT_PROFILE'], ['descriptorV4', 'CAPABILITY_PROGRAM_V4_SCHEMA_VERSION_OFFSET'],
+  ['descriptorV4', 'CAPABILITY_PROGRAM_V4_ARTIFACT_PROFILE_OFFSET'], ['descriptorV4', 'CAPABILITY_PROGRAM_V4_HEADER_RESERVED_OFFSET'],
+  ['descriptorV4', 'CAPABILITY_PROGRAM_V4_KIND_OFFSET'], ['descriptorV4', 'CAPABILITY_PROGRAM_V4_CONFIG_SCHEMA_OFFSET'],
+  ['descriptorV4', 'CAPABILITY_PROGRAM_V4_REQUEST_SCHEMA_OFFSET'], ['descriptorV4', 'CAPABILITY_PROGRAM_V4_ROOT_SCHEMA_OFFSET'],
+  ['descriptorV4', 'CAPABILITY_PROGRAM_V4_DERIVATION_POLICY_OFFSET'], ['descriptorV4', 'CAPABILITY_PROGRAM_V4_CAPACITY_PROFILE_OFFSET'],
+  ['descriptorV4', 'CAPABILITY_PROGRAM_V4_ACCOUNT_PROFILE_SCHEMA_OFFSET'], ['descriptorV4', 'CAPABILITY_PROGRAM_V4_ACCOUNT_PROFILE_PROGRAM_OFFSET'],
+  ['descriptorV4', 'CAPABILITY_PROGRAM_V4_REQUEST_PROFILE_SCHEMA_OFFSET'], ['descriptorV4', 'CAPABILITY_PROGRAM_V4_REQUEST_PROFILE_PROGRAM_OFFSET'],
+  ['descriptorV4', 'CAPABILITY_PROGRAM_V4_LIFECYCLE_SCHEMA_OFFSET'], ['descriptorV4', 'CAPABILITY_PROGRAM_V4_LIFECYCLE_PROGRAM_OFFSET'],
+  ['descriptorV4', 'CAPABILITY_PROGRAM_V4_STRATEGY_SCHEMA_OFFSET'], ['descriptorV4', 'CAPABILITY_PROGRAM_V4_STRATEGY_PROGRAM_OFFSET'],
+  ['descriptorV4', 'CAPABILITY_PROGRAM_V4_TRANSITION_SCHEMA_OFFSET'], ['descriptorV4', 'CAPABILITY_PROGRAM_V4_TRANSITION_PROGRAM_OFFSET'],
+  ['descriptorV4', 'CAPABILITY_PROGRAM_V4_EFFECT_SCHEMA_OFFSET'], ['descriptorV4', 'CAPABILITY_PROGRAM_V4_EFFECT_PROGRAM_OFFSET'],
+  ['descriptorV4', 'CAPABILITY_PROGRAM_V4_ROOT_STATE_BYTES_OFFSET'], ['descriptorV4', 'CAPABILITY_PROGRAM_V4_TAIL_RESERVED_OFFSET'],
   ['root', 'CAPABILITY_ROOT_HEADER_BYTES_V1'], ['root', 'CAPABILITY_ROOT_SCHEMA_VERSION_V1'],
   ['root', 'CAPABILITY_ROOT_PROFILE_V1'], ['root', 'CAPABILITY_ROOT_MAGIC_OFFSET'],
   ['root', 'CAPABILITY_ROOT_SCHEMA_VERSION_OFFSET'], ['root', 'CAPABILITY_ROOT_PROFILE_OFFSET'],
@@ -107,6 +125,14 @@ const scalars = Object.freeze([
   ['manifest', 'CHILD_DERIVATION_ID_OFFSET'], ['manifest', 'ACTIVATION_POLICY_OFFSET'], ['manifest', 'DEPENDENCY_COUNT_OFFSET'],
   ['manifest', 'ENTRY_RESERVED_OFFSET'], ['manifest', 'ACTIVATION_DEADLINE_OFFSET'], ['manifest', 'DEPENDENCIES_OFFSET'],
   ['set', 'CAPABILITY_PROGRAM_SET_HEADER_BYTES_V1'], ['set', 'CAPABILITY_PROGRAM_SET_ENTRY_BYTES_V1'],
+  ['setV2', 'CAPABILITY_PROGRAM_SET_HEADER_BYTES_V2'], ['setV2', 'CAPABILITY_PROGRAM_SET_ENTRY_BYTES_V2'],
+  ['setV2', 'CAPABILITY_PROGRAM_SET_MAX_BYTES_V2'], ['setV2', 'CAPABILITY_PROGRAM_SET_MAX_ENTRIES_V2'],
+  ['setV2', 'CAPABILITY_PROGRAM_SET_SCHEMA_VERSION_V2'], ['setV2', 'CAPABILITY_PROGRAM_SET_ARTIFACT_PROFILE_V2'],
+  ['setV2', 'CAPABILITY_PROGRAM_SET_CANONICAL_ENDIAN_V2'], ['setV2', 'CAPABILITY_PROGRAM_SET_SELECTOR_OFFSET_OFFSET_V2'],
+  ['setV2', 'CAPABILITY_PROGRAM_SET_SELECTOR_WIDTH_OFFSET_V2'], ['setV2', 'CAPABILITY_PROGRAM_SET_SELECTOR_ENDIAN_OFFSET_V2'],
+  ['setV2', 'CAPABILITY_PROGRAM_SET_ENTRY_COUNT_OFFSET_V2'], ['setV2', 'CAPABILITY_PROGRAM_SET_RESERVED_OFFSET_V2'],
+  ['setV2', 'CAPABILITY_PROGRAM_SET_ENTRY_SELECTOR_OFFSET_V2'], ['setV2', 'CAPABILITY_PROGRAM_SET_ENTRY_DESCRIPTOR_SCHEMA_OFFSET_V2'],
+  ['setV2', 'CAPABILITY_PROGRAM_SET_ENTRY_DESCRIPTOR_PROGRAM_OFFSET_V2'], ['setV2', 'CAPABILITY_PROGRAM_SET_ENTRY_RESERVED_OFFSET_V2'],
   ['direct', 'DIRECT_EXECUTION_REQUEST_VERSION_V3'], ['direct', 'DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3'],
   ['direct', 'DIRECT_EXECUTION_REQUEST_SELECTOR_OFFSET_V3'],
   ['intent', 'COMPACT_INTENT_VERSION_V2'], ['intent', 'COMPACT_INTENT_BYTES_V2'],
@@ -151,7 +177,7 @@ const scalars = Object.freeze([
 ]);
 
 scalarExpression('hot', 'HOT_FAMILY_REQUEST_OFFSET_V3', 'HOT_EXECUTION_ENVELOPE_BYTES_V3');
-let output = '// @generated from canonical Rust/Lean-emitted Direct V3 ABIs; do not edit.\n';
+let output = '// @generated from canonical Rust/Lean-emitted Direct Hot V3 / Capability V4 ABIs; do not edit.\n';
 output += '// Regenerate with: npm run abi:direct-v3\n\n';
 for (const [source, name] of scalars) output += `export const ${name} = ${scalar(source, name)} as const;\n`;
 output += 'export const HOT_FAMILY_REQUEST_OFFSET_V3 = HOT_EXECUTION_ENVELOPE_BYTES_V3;\n';
@@ -160,6 +186,7 @@ output += 'export const DIRECT_INLINE_ORDINARY_ACTION_V3 = 1 as const;\n';
 output += 'export const DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3 = DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3 + 2 * DIRECT_SIGNED_PARTICIPANT_BYTES_V3 + 16;\n\n';
 for (const [source, name] of [
   ['hot', 'HOT_EXECUTION_MAGIC_V3'], ['descriptor', 'CAPABILITY_PROGRAM_V3_MAGIC'],
+  ['descriptorV4', 'CAPABILITY_PROGRAM_V4_MAGIC'], ['setV2', 'CAPABILITY_PROGRAM_SET_MAGIC_V2'],
   ['basis', 'BASIS_MAGIC_V3'], ['basisGenerated', 'GRADED_BASIS_RECORD_SCHEMA_ID_V3'],
   ['root', 'CAPABILITY_ROOT_MAGIC_V1'], ['selection', 'CAPABILITY_EXECUTION_SELECTION_MAGIC_V1'],
   ['manifest', 'MANIFEST_MAGIC'], ['direct', 'DIRECT_EXECUTION_REQUEST_MAGIC_V3'],
@@ -168,17 +195,34 @@ for (const [source, name] of [
   ['successor', 'DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1'], ['successor', 'DIRECT_ROOT_SCHEMA_ID_V1'],
   ['successorGenerated', 'DIRECT_CONFIG_MAGIC_V1'],
   ['descriptorContract', 'SCHEMA_RELEASE_ID'], ['set', 'CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V1'],
+  ['descriptorContractV4', 'SCHEMA_RELEASE_ID'], ['setV2', 'CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2'],
   ['account', 'MAGIC'], ['account', 'SCHEMA_RELEASE_ID'],
   ['request', 'REQUEST_PROFILE_V2_MAGIC'], ['request', 'REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID'],
   ['requestGenerated', 'REQUEST_PROFILE_MAGIC_V1'], ['transition', 'SCHEMA_RELEASE_ID'],
   ['effect', 'SCHEMA_RELEASE_ID'], ['lifecycle', 'SCHEMA_RELEASE_ID'],
   ['strategy', 'EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2'],
   ['strategyGenerated', 'EXECUTION_STRATEGY_PROGRAM_MAGIC_V2'],
-]) output += array(name === 'SCHEMA_RELEASE_ID' ? `${source.toUpperCase()}_SCHEMA_RELEASE_ID` : name, bytes(source, name));
+  ['lifecycle', 'SUCCESSOR_SCHEMA_RELEASE_ID'],
+  ['ordinaryArtifacts', 'DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_ID_V3'],
+  ['ordinaryArtifacts', 'DIRECT_INLINE_ORDINARY_TRANSITION_ID_V3'],
+  ['ordinaryArtifacts', 'DIRECT_INLINE_ORDINARY_STRATEGY_ID_V3'],
+  ['ordinaryBundle', 'DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_ID_V3'],
+  ['ordinaryBundle', 'DIRECT_INLINE_ORDINARY_LIFECYCLE_ID_V4'],
+  ['ordinaryBundle', 'DIRECT_INLINE_ORDINARY_EFFECT_ID_V4'],
+]) {
+  const alias = source === 'descriptorContractV4' && name === 'SCHEMA_RELEASE_ID'
+    ? 'CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID'
+    : source === 'lifecycle' && name === 'SUCCESSOR_SCHEMA_RELEASE_ID'
+      ? 'LIFECYCLE_SUCCESSOR_SCHEMA_RELEASE_ID'
+      : name === 'SCHEMA_RELEASE_ID'
+        ? `${source.toUpperCase()}_SCHEMA_RELEASE_ID`
+        : name;
+  output += array(alias, bytes(source, name));
+}
 
 if (process.argv.includes('--check')) {
   if (readFileSync(outputUrl, 'utf8') !== output) {
-    console.error('Direct V3 TypeScript ABI is stale');
+    console.error('Direct Hot V3 / Capability V4 TypeScript ABI is stale');
     process.exit(1);
   }
 } else {
@@ -187,9 +231,9 @@ if (process.argv.includes('--check')) {
   try {
     writeFileSync(temporaryPath, output, { flag: 'wx' });
     const staged = readFileSync(temporaryPath, 'utf8');
-    if (!staged.startsWith('// @generated from canonical Rust/Lean-emitted Direct V3 ABIs; do not edit.\n')
+    if (!staged.startsWith('// @generated from canonical Rust/Lean-emitted Direct Hot V3 / Capability V4 ABIs; do not edit.\n')
         || !staged.includes('export const DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3 =')) {
-      throw new Error('generated Direct V3 TypeScript ABI failed its header/width validation');
+      throw new Error('generated Direct Hot V3 / Capability V4 TypeScript ABI failed its header/width validation');
     }
     renameSync(temporaryPath, outputPath);
   } catch (error) {

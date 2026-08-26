@@ -11,6 +11,7 @@ import {
   type DirectHotAccountMetaV3,
   type DirectInlineHotRouteV3,
   type SignedDirectIntentV3,
+  canonicalDirectInlineLookupAddressesV3,
   compileDirectInlineTransactionV3,
   encodeCompactIntentSigningMessageV2,
   encodeDirectInlineOrdinaryRequestV3,
@@ -20,6 +21,7 @@ import {
 import {
   COMPACT_INTENT_OUTCOME_OFFSET_V2,
   COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2,
+  CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID,
   DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3,
   DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3,
   DIRECT_SIGNED_PARTICIPANT_BYTES_V3,
@@ -86,6 +88,13 @@ function route(checked = true): DirectInlineHotRouteV3 {
   fixed[HOT_TRADING_PROGRAM_ACCOUNT_V3] = account(key(12), false, true);
   fixed[HOT_RENT_SYSVAR_ACCOUNT_V3] = account(SYSVAR_RENT_PUBKEY.toBase58());
   fixed[HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3] = account(SYSVAR_INSTRUCTIONS_PUBKEY.toBase58());
+  const routeAccounts = Object.freeze({
+    payer: key(91),
+    tradingProgram: key(12),
+    fixedAccounts: Object.freeze(fixed),
+    strategyAccounts: Object.freeze([]),
+    runtimeAccounts: Object.freeze([]),
+  });
   const lookupTable = new AddressLookupTableAccount({
     key: new PublicKey(key(90)),
     state: {
@@ -93,12 +102,11 @@ function route(checked = true): DirectInlineHotRouteV3 {
       lastExtendedSlot: 800,
       lastExtendedSlotStartIndex: 0,
       authority: undefined,
-      addresses: fixed.map((value) => new PublicKey(value.address)),
+      addresses: [...canonicalDirectInlineLookupAddressesV3(routeAccounts)],
     },
   });
   return Object.freeze({
-    payer: key(91),
-    tradingProgram: key(12),
+    ...routeAccounts,
     market,
     releaseSet: new Uint8Array(32).fill(31),
     generation: 19n,
@@ -107,9 +115,8 @@ function route(checked = true): DirectInlineHotRouteV3 {
     priceScale: 1_000_000n,
     feeBasisPoints: 25,
     accountProfile: runtimeProfile(),
-    fixedAccounts: Object.freeze(fixed),
-    strategyAccounts: Object.freeze([]),
-    runtimeAccounts: Object.freeze([]),
+    selectedProgramSchema: CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID,
+    selectedProgram: new Uint8Array(32).fill(33),
     recentBlockhash: key(92),
     lookupTables: Object.freeze([lookupTable]),
     outerEvidence: checked
@@ -157,6 +164,27 @@ describe('Direct V3 inline transaction construction', () => {
     expect(plan.wireBytes.length).toBeLessThanOrEqual(1_232);
     expect(plan.loadedAddresses).toBeGreaterThan(20);
     expect(() => compileDirectInlineTransactionV3({ route: route(false), seller, buyer, fill: 2_000n, executionPrice: 500_000n, clockSlot: 1_000n })).toThrow(/unavailable/);
+  });
+
+  it('refuses every noncanonical lookup-table shape before transaction construction', () => {
+    const candidate = route();
+    const { seller, buyer } = participants(candidate.market);
+    expect(() => compileDirectInlineTransactionV3({
+      route: { ...candidate, lookupTables: [] }, seller, buyer,
+      fill: 2_000n, executionPrice: 500_000n, clockSlot: 1_000n,
+    })).toThrow(/exactly one canonical/);
+    const substituted = new AddressLookupTableAccount({
+      key: new PublicKey(key(89)),
+      state: { ...candidate.lookupTables[0].state, addresses: candidate.lookupTables[0].state.addresses.slice(1) },
+    });
+    expect(() => compileDirectInlineTransactionV3({
+      route: { ...candidate, lookupTables: [substituted] }, seller, buyer,
+      fill: 2_000n, executionPrice: 500_000n, clockSlot: 1_000n,
+    })).toThrow(/sole canonical address sequence/);
+    expect(() => compileDirectInlineTransactionV3({
+      route: { ...candidate, selectedProgramSchema: new Uint8Array(32).fill(44) }, seller, buyer,
+      fill: 2_000n, executionPrice: 500_000n, clockSlot: 1_000n,
+    })).toThrow(/does not select CapabilityProgramV4/);
   });
 
   it('refuses AccountProfile privilege substitution and intent over-width coordinates', () => {

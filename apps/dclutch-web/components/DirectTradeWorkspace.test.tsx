@@ -7,8 +7,9 @@ describe('Direct V3 trade workbench', () => {
   it('presents a real chain-derived route and explicit transaction boundary', () => {
     const html = renderToStaticMarkup(<DirectTradeWorkspace />);
     expect(html).toContain('One signed price.');
-    expect(html).toContain('Exact Hot38 + strategy/runtime-suffix route manifest');
-    expect(html).toContain('2,280-byte checked infrastructure');
+    expect(html).toContain('ProgramSetV2 → CapabilityProgramV4');
+    expect(html).toContain('Exact Hot38 + strategy/runtime-suffix + one canonical LUT route manifest');
+    expect(html).toContain('2,280-byte checked V4-capable infrastructure');
     expect(html).toContain('runtime-u32 outcome coordinates');
     expect(html).toContain('Build exact unsigned v0 transaction');
     expect(html).toContain('Sign as transaction payer');
