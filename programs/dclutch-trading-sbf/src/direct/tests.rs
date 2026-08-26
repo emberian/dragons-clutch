@@ -1,4 +1,10 @@
-use super::{buy_escrow::*, complementary::*, inline::*, physical::*, sell_escrow::*};
+use super::{
+    buy_escrow::*, complementary::*, inline::*, lifecycle::*, physical::*, sell_escrow::*,
+};
+use dclutch_account_profile_contract::lifecycle_v3::{
+    AuthenticateStatePlanV3, CreateStatePlanV3, StateLifecyclePlanV3,
+};
+use dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1;
 use dclutch_claims_svm::{
     CLAIMS_PLAN_HEADER_BYTES_V1, CallerRole as ClaimsCallerRole, ClaimsPlanV1, ClaimsReceiptV1,
     affine_batch_v2::{
@@ -28,8 +34,8 @@ use dclutch_direct_codec::{
         RegisteredFillInputV2, RegisteredIntentCreationV2, RegisteredIntentSeedsV2,
         RegisteredOrdinaryInputV2, RegisteredParticipantV2, RegisteredRecordAfterFillV2,
         RegisteredRecordFirstUseV2, RegisteredTerminalEvidenceV2, consume_nonce_v2,
-        preview_registered_fill_v2, register_intent_v2, settle_registered_complementary_v2,
-        terminate_registered_intent_v2,
+        preview_registered_fill_v2, register_intent_v2, settle_inline_ordinary_v2,
+        settle_registered_complementary_v2, terminate_registered_intent_v2,
     },
 };
 use dclutch_market_core_codec::{
@@ -183,9 +189,30 @@ fn register_canonical(
 ) -> RegisteredIntentCreationV2 {
     let authenticated = AuthenticatedCompactIntentV2::from_adjacent_ed25519(maker, signed)
         .expect("authenticated canonical registration");
-    let seeds = RegisteredIntentSeedsV2::new(authenticated).expect("record seeds");
-    let (_, bump) = derive_pda(id(10), &seeds.as_slices());
-    register(root, maker, signed, selected, bump)
+    let record_seeds = RegisteredIntentSeedsV2::new(authenticated).expect("record seeds");
+    let (_, record_bump) = derive_pda(id(10), &record_seeds.as_slices());
+    let maker_seeds =
+        MakerReplaySeedsV1::new(authenticated.replay().expect("replay").coordinates(), maker)
+            .expect("maker seeds");
+    let (_, maker_bump) = derive_pda(id(10), &maker_seeds.as_slices());
+    register_intent_v2(
+        root,
+        MakerReplayObservationV1::Vacant(MakerReplayVacancyV1::new(maker_bump, 3)),
+        authenticated,
+        selected,
+        3,
+        Some(MakerReplayFirstUseV1 {
+            rent_owner: id(90),
+            rent_principal: 100,
+        }),
+        RegisteredRecordFirstUseV2 {
+            bump: record_bump,
+            observed_lamports: 7,
+            rent_owner: id(91),
+            rent_principal: 100,
+        },
+    )
+    .expect("canonical registration")
 }
 
 fn ordinary_fixture(fee_basis_points: u16) -> RegisteredOrdinaryInputV2 {
@@ -345,6 +372,7 @@ fn complementary_context() -> DirectComplementaryPhysicalContextV2 {
         derive_pda(id(20), &[CUSTODY_AUTHORITY_PDA_DOMAIN_V1, &id(1), &id(13)]);
     DirectComplementaryPhysicalContextV2 {
         trading_program: id(10),
+        direct_root: id(84),
         core_market: core_market_view(3),
         custody_authority,
         parent_request_digest: id(17),
@@ -991,6 +1019,7 @@ fn sell_escrow_fixture() -> (
         },
         DirectSellEscrowContextV2 {
             core_market: core_market_view(3),
+            direct_root: id(84),
             trading_program: id(10),
             claims_program: id(11),
             rent_program: id(81),
@@ -1073,10 +1102,87 @@ fn sell_admission(
     .expect("admission")
 }
 
+fn registered_creation_lifecycle(
+    creation: RegisteredIntentCreationV2,
+    trading_program: [u8; 32],
+    record: [u8; 32],
+) -> DirectRegisteredCreationLifecycleV3 {
+    let coordinates = DirectCoordinatesV1::new(
+        creation.record.intent().market,
+        creation.record.intent().generation,
+    )
+    .expect("coordinates");
+    let maker_seeds =
+        MakerReplaySeedsV1::new(coordinates, creation.record.maker()).expect("maker seeds");
+    let maker = derive_pda(trading_program, &maker_seeds.as_slices()).0;
+    let maker_plan = match creation.maker_creation {
+        None => StateLifecyclePlanV3::Authenticate(AuthenticateStatePlanV3 {
+            state: maker,
+            data_bytes: u32::try_from(DIRECT_MAKER_REPLAY_BYTES_V1).expect("maker bytes"),
+            lamports: creation.maker_root.rent_principal(),
+            bump: creation.maker_root.bump(),
+        }),
+        Some(candidate) => state_create_plan(
+            maker,
+            DIRECT_MAKER_REPLAY_BYTES_V1,
+            creation.maker_root.rent_owner(),
+            creation.maker_root.rent_principal(),
+            creation.maker_root.bump(),
+            candidate,
+            80,
+        ),
+    };
+    DirectRegisteredCreationLifecycleV3 {
+        root: StateLifecyclePlanV3::Authenticate(AuthenticateStatePlanV3 {
+            state: id(84),
+            data_bytes: u32::try_from(CAPABILITY_ROOT_HEADER_BYTES_V1 + DIRECT_ROOT_STATE_BYTES_V1)
+                .expect("root bytes"),
+            lamports: 100,
+            bump: 1,
+        }),
+        maker: maker_plan,
+        record: state_create_plan(
+            record,
+            DIRECT_REGISTERED_RECORD_BYTES_V2,
+            creation.record.rent_owner(),
+            creation.record.rent_principal(),
+            creation.record.bump(),
+            creation.record_creation,
+            82,
+        ),
+    }
+}
+
+fn state_create_plan(
+    state: [u8; 32],
+    data_bytes: usize,
+    beneficiary: [u8; 32],
+    principal: u64,
+    bump: u8,
+    creation: dclutch_direct_codec::successor::MakerReplayCreationPlanV1,
+    payer_byte: u8,
+) -> StateLifecyclePlanV3 {
+    StateLifecyclePlanV3::Create(CreateStatePlanV3 {
+        state,
+        payer: id(payer_byte),
+        rent_credit: id(payer_byte + 1),
+        beneficiary,
+        target_data_bytes: u32::try_from(data_bytes).expect("state bytes"),
+        historical_rent_principal: principal,
+        state_before: creation.observed_lamports,
+        state_after: creation.post_lamports,
+        payer_debit: creation.top_up_lamports,
+        payer_after: 1_000 - creation.top_up_lamports,
+        bump,
+    })
+}
+
 #[test]
 fn sell_registration_admits_record_position_and_reserves_exact_claims() {
     let (creation, accounts, funding, context) = sell_escrow_fixture();
-    let plan = prepare_sell_registration_v2(creation, accounts, funding, context)
+    let lifecycle =
+        registered_creation_lifecycle(creation, context.trading_program, accounts.record);
+    let plan = prepare_sell_registration_v2(creation, accounts, funding, context, lifecycle)
         .expect("Sell registration");
     assert_eq!(plan.admission.position_owner, accounts.record);
     assert_eq!(plan.admission.rent_credit, creation.record.rent_owner());
@@ -1112,8 +1218,21 @@ fn sell_registration_admits_record_position_and_reserves_exact_claims() {
         ..accounts
     };
     assert_eq!(
-        prepare_sell_registration_v2(creation, hostile_accounts, funding, context),
+        prepare_sell_registration_v2(creation, hostile_accounts, funding, context, lifecycle),
         Err(DirectPhysicalError::Binding)
+    );
+
+    let mut hostile_lifecycle = lifecycle;
+    let StateLifecyclePlanV3::Create(record_create) = hostile_lifecycle.record else {
+        panic!("record create")
+    };
+    hostile_lifecycle.record = StateLifecyclePlanV3::Create(CreateStatePlanV3 {
+        beneficiary: id(99),
+        ..record_create
+    });
+    assert_eq!(
+        prepare_sell_registration_v2(creation, accounts, funding, context, hostile_lifecycle,),
+        Err(DirectPhysicalError::State)
     );
 }
 
@@ -1209,8 +1328,14 @@ fn sell_partial_fill_releases_only_from_record_position() {
 #[test]
 fn sell_unwind_refunds_residual_then_closes_to_persisted_rent_credit() {
     let (creation, accounts, funding, context) = sell_escrow_fixture();
-    let registration = prepare_sell_registration_v2(creation, accounts, funding, context)
-        .expect("Sell registration");
+    let registration = prepare_sell_registration_v2(
+        creation,
+        accounts,
+        funding,
+        context,
+        registered_creation_lifecycle(creation, context.trading_program, accounts.record),
+    )
+    .expect("Sell registration");
     let admission = sell_admission(registration.admission, context);
     let terminal = terminate_registered_intent_v2(
         creation.root,
@@ -1312,13 +1437,8 @@ fn buy_escrow_fixture() -> (
         .expect("authenticated Buy");
     let record_seeds = RegisteredIntentSeedsV2::new(authenticated).expect("record seeds");
     let (record, record_bump) = derive_pda(id(10), &record_seeds.as_slices());
-    let creation = register(
-        DirectRootStateV1::new(),
-        maker,
-        signed,
-        selected,
-        record_bump,
-    );
+    let creation = register_canonical(DirectRootStateV1::new(), maker, signed, selected);
+    assert_eq!(record_bump, creation.record.bump());
     let market = id(1);
     let release_set = id(13);
     let custody_program = id(20);
@@ -1358,6 +1478,7 @@ fn buy_escrow_fixture() -> (
         creation,
         DirectBuyEscrowContextV2 {
             core_market: core_market_view(3),
+            direct_root: id(84),
             trading_program: id(10),
             parent_request_digest: id(17),
         },
@@ -1390,6 +1511,8 @@ fn live_buy_replay(
 #[test]
 fn registered_buy_deposits_exact_reserve_into_record_keyed_custody() {
     let (creation, context, accounts, source) = buy_escrow_fixture();
+    let lifecycle =
+        registered_creation_lifecycle(creation, context.trading_program, accounts.record);
     let plan = prepare_buy_escrow_registration_v2(DirectBuyEscrowRegistrationInputV2 {
         creation,
         accounts,
@@ -1400,6 +1523,7 @@ fn registered_buy_deposits_exact_reserve_into_record_keyed_custody() {
             vault_rent_lamports: 30,
         },
         context,
+        lifecycle,
     })
     .expect("funded Buy registration");
     assert_eq!(plan.requests[0].operation, OperationV1::InitializeReplay);
@@ -1432,8 +1556,33 @@ fn registered_buy_deposits_exact_reserve_into_record_keyed_custody() {
                 vault_rent_lamports: 30,
             },
             context,
+            lifecycle,
         }),
         Err(DirectPhysicalError::Binding)
+    );
+
+    let mut hostile_lifecycle = lifecycle;
+    let StateLifecyclePlanV3::Create(record_create) = hostile_lifecycle.record else {
+        panic!("record create")
+    };
+    hostile_lifecycle.record = StateLifecyclePlanV3::Create(CreateStatePlanV3 {
+        historical_rent_principal: record_create.historical_rent_principal + 1,
+        ..record_create
+    });
+    assert_eq!(
+        prepare_buy_escrow_registration_v2(DirectBuyEscrowRegistrationInputV2 {
+            creation,
+            accounts,
+            source,
+            funding: DirectBuyEscrowCreationFundingV2 {
+                payer: id(80),
+                replay_rent_lamports: 20,
+                vault_rent_lamports: 30,
+            },
+            context,
+            lifecycle: hostile_lifecycle,
+        }),
+        Err(DirectPhysicalError::State)
     );
 }
 
@@ -1878,6 +2027,64 @@ fn inline_physical_fixture(
     )
 }
 
+fn inline_lifecycle_plans(
+    direct: InlineOrdinaryInputV2,
+    context: DirectInlinePhysicalContextV2,
+) -> DirectInlineLifecyclePlansV3 {
+    let settlement = settle_inline_ordinary_v2(direct).expect("inline settlement");
+    DirectInlineLifecyclePlansV3 {
+        root: StateLifecyclePlanV3::Authenticate(AuthenticateStatePlanV3 {
+            state: context.direct_root,
+            data_bytes: u32::try_from(CAPABILITY_ROOT_HEADER_BYTES_V1 + DIRECT_ROOT_STATE_BYTES_V1)
+                .expect("root bytes"),
+            lamports: 100,
+            bump: 1,
+        }),
+        seller_maker: maker_lifecycle_plan(
+            context.seller_maker_root,
+            direct.seller.first_use,
+            settlement.seller_creation,
+            settlement.seller_maker_root,
+        ),
+        buyer_maker: maker_lifecycle_plan(
+            context.buyer_maker_root,
+            direct.buyer.first_use,
+            settlement.buyer_creation,
+            settlement.buyer_maker_root,
+        ),
+    }
+}
+
+fn maker_lifecycle_plan(
+    state: [u8; 32],
+    first_use: Option<MakerReplayFirstUseV1>,
+    creation: Option<dclutch_direct_codec::successor::MakerReplayCreationPlanV1>,
+    maker: MakerReplayRootV1,
+) -> StateLifecyclePlanV3 {
+    match (first_use, creation) {
+        (None, None) => StateLifecyclePlanV3::Authenticate(AuthenticateStatePlanV3 {
+            state,
+            data_bytes: u32::try_from(DIRECT_MAKER_REPLAY_BYTES_V1).expect("maker bytes"),
+            lamports: maker.rent_principal(),
+            bump: maker.bump(),
+        }),
+        (Some(first_use), Some(creation)) => StateLifecyclePlanV3::Create(CreateStatePlanV3 {
+            state,
+            payer: id(88),
+            rent_credit: id(89),
+            beneficiary: first_use.rent_owner,
+            target_data_bytes: u32::try_from(DIRECT_MAKER_REPLAY_BYTES_V1).expect("maker bytes"),
+            historical_rent_principal: first_use.rent_principal,
+            state_before: creation.observed_lamports,
+            state_after: creation.post_lamports,
+            payer_debit: creation.top_up_lamports,
+            payer_after: 1_000 - creation.top_up_lamports,
+            bump: maker.bump(),
+        }),
+        _ => panic!("semantic lifecycle pair"),
+    }
+}
+
 #[test]
 fn inline_ioc_projects_claims_and_net_then_combined_fee_with_residual_delegate() {
     let (direct, context, collateral) = inline_physical_fixture(40, 1, 66);
@@ -1887,6 +2094,7 @@ fn inline_ioc_projects_claims_and_net_then_combined_fee_with_residual_delegate()
     let plan = prepare_inline_ordinary_physical_v2(
         direct,
         context,
+        inline_lifecycle_plans(direct, context),
         collateral,
         &mut quantities,
         &mut claims_scratch,
@@ -1946,6 +2154,7 @@ fn inline_fok_price_improvement_accepts_worst_case_allowance_and_leaves_residual
     let plan = prepare_inline_ordinary_physical_v2(
         direct,
         context,
+        inline_lifecycle_plans(direct, context),
         collateral,
         &mut quantities,
         &mut claims_scratch,
@@ -1967,6 +2176,7 @@ fn inline_receipts_bind_exact_claims_custody_and_delegate_poststate() {
     let plan = prepare_inline_ordinary_physical_v2(
         direct,
         context,
+        inline_lifecycle_plans(direct, context),
         collateral,
         &mut quantities,
         &mut claims_scratch,
@@ -2016,7 +2226,7 @@ fn inline_receipts_bind_exact_claims_custody_and_delegate_poststate() {
 }
 
 #[test]
-fn inline_refuses_underallowance_alias_replay_and_first_use_without_state_lifecycle() {
+fn inline_refuses_underallowance_alias_replay_and_lifecycle_substitution() {
     let (direct, context, collateral) = inline_physical_fixture(40, 1, 21);
     let mut quantities = [0_u8; 24];
     let mut claims_scratch = [0_u8; CLAIMS_PLAN_HEADER_BYTES_V1 + 24];
@@ -2026,6 +2236,7 @@ fn inline_refuses_underallowance_alias_replay_and_first_use_without_state_lifecy
         prepare_inline_ordinary_physical_v2(
             direct,
             context,
+            inline_lifecycle_plans(direct, context),
             collateral,
             &mut quantities,
             &mut claims_scratch,
@@ -2041,6 +2252,7 @@ fn inline_refuses_underallowance_alias_replay_and_first_use_without_state_lifecy
         prepare_inline_ordinary_physical_v2(
             direct,
             bad_replay,
+            inline_lifecycle_plans(direct, bad_replay),
             DirectInlineCollateralFrameV2 {
                 buyer_source: DirectExternalDebitV2 {
                     delegated_amount: 66,
@@ -2071,6 +2283,7 @@ fn inline_refuses_underallowance_alias_replay_and_first_use_without_state_lifecy
         prepare_inline_ordinary_physical_v2(
             direct,
             context,
+            inline_lifecycle_plans(direct, context),
             aliased,
             &mut quantities,
             &mut claims_scratch,
@@ -2079,10 +2292,28 @@ fn inline_refuses_underallowance_alias_replay_and_first_use_without_state_lifecy
         Err(DirectPhysicalError::Binding)
     );
 
+    let coordinates = DirectCoordinatesV1::new(id(1), 4).expect("coordinates");
+    let seller_bump = derive_pda(
+        context.trading_program,
+        &MakerReplaySeedsV1::new(coordinates, id(2))
+            .expect("seller seeds")
+            .as_slices(),
+    )
+    .1;
+    let buyer_bump = derive_pda(
+        context.trading_program,
+        &MakerReplaySeedsV1::new(coordinates, id(3))
+            .expect("buyer seeds")
+            .as_slices(),
+    )
+    .1;
     let first_use = InlineOrdinaryInputV2 {
         root: DirectRootStateV1::new(),
         seller: InlineParticipantV2 {
-            maker_replay: MakerReplayObservationV1::Vacant(MakerReplayVacancyV1::new(1, 0)),
+            maker_replay: MakerReplayObservationV1::Vacant(MakerReplayVacancyV1::new(
+                seller_bump,
+                0,
+            )),
             first_use: Some(MakerReplayFirstUseV1 {
                 rent_owner: id(90),
                 rent_principal: 100,
@@ -2097,7 +2328,9 @@ fn inline_refuses_underallowance_alias_replay_and_first_use_without_state_lifecy
             .expect("first seller"),
         },
         buyer: InlineParticipantV2 {
-            maker_replay: MakerReplayObservationV1::Vacant(MakerReplayVacancyV1::new(2, 0)),
+            maker_replay: MakerReplayObservationV1::Vacant(MakerReplayVacancyV1::new(
+                buyer_bump, 0,
+            )),
             first_use: Some(MakerReplayFirstUseV1 {
                 rent_owner: id(91),
                 rent_principal: 100,
@@ -2113,21 +2346,54 @@ fn inline_refuses_underallowance_alias_replay_and_first_use_without_state_lifecy
         },
         ..direct
     };
+    let first_lifecycle = inline_lifecycle_plans(first_use, context);
+    let funded_collateral = DirectInlineCollateralFrameV2 {
+        buyer_source: DirectExternalDebitV2 {
+            delegated_amount: 66,
+            ..collateral.buyer_source
+        },
+        ..collateral
+    };
+    let first_plan = prepare_inline_ordinary_physical_v2(
+        first_use,
+        context,
+        first_lifecycle,
+        funded_collateral,
+        &mut quantities,
+        &mut claims_scratch,
+        &mut claims_output,
+    )
+    .expect("generic lifecycle admits maker first use");
+    assert!(matches!(
+        first_plan.lifecycle.seller_maker,
+        StateLifecyclePlanV3::Create(_)
+    ));
+    assert!(matches!(
+        first_plan.lifecycle.buyer_maker,
+        StateLifecyclePlanV3::Create(_)
+    ));
+    assert_eq!(first_plan.settlement.root.open_maker_root_count(), 2);
+
+    let mut substituted = first_lifecycle;
+    let StateLifecyclePlanV3::Create(seller_create) = substituted.seller_maker else {
+        panic!("seller create")
+    };
+    substituted.seller_maker = StateLifecyclePlanV3::Create(CreateStatePlanV3 {
+        beneficiary: id(92),
+        ..seller_create
+    });
+    let before = claims_output;
     assert_eq!(
         prepare_inline_ordinary_physical_v2(
             first_use,
             context,
-            DirectInlineCollateralFrameV2 {
-                buyer_source: DirectExternalDebitV2 {
-                    delegated_amount: 66,
-                    ..collateral.buyer_source
-                },
-                ..collateral
-            },
+            substituted,
+            funded_collateral,
             &mut quantities,
             &mut claims_scratch,
             &mut claims_output,
         ),
-        Err(DirectPhysicalError::LifecycleUnavailable)
+        Err(DirectPhysicalError::State)
     );
+    assert_eq!(claims_output, before);
 }

@@ -20,6 +20,9 @@ use dclutch_direct_codec::successor::{
 use dclutch_market_core_codec::{CoreMarketViewV1, Phase};
 use solana_program::pubkey::Pubkey;
 
+use super::lifecycle::{
+    DirectRegisteredCreationLifecycleV3, validate_registered_creation_lifecycle_v3,
+};
 use super::physical::{
     DirectExternalCollateralV2, DirectExternalDebitV2, DirectPhysicalError, Result,
 };
@@ -36,6 +39,8 @@ pub const DIRECT_BUY_ESCROW_FILL_STEPS_V2: usize = 5;
 pub struct DirectBuyEscrowContextV2 {
     /// Sparse-Core view after exact reference and Registry authentication.
     pub core_market: CoreMarketViewV1,
+    /// Descriptor-derived composite Direct capability root.
+    pub direct_root: [u8; 32],
     /// Current Registry-selected Trading program.
     pub trading_program: [u8; 32],
     /// SHA-256 of the complete canonical parent Trading request.
@@ -52,7 +57,8 @@ impl DirectBuyEscrowContextV2 {
         } else {
             self.core_market.phase() == Phase::Open
         };
-        if self.trading_program == [0; 32]
+        if self.direct_root == [0; 32]
+            || self.trading_program == [0; 32]
             || self.parent_request_digest == [0; 32]
             || self.core_market.release_set().bindings[2]
                 .program
@@ -109,6 +115,8 @@ pub struct DirectBuyEscrowRegistrationInputV2 {
     pub funding: DirectBuyEscrowCreationFundingV2,
     /// Fixed current Core/release/request facts.
     pub context: DirectBuyEscrowContextV2,
+    /// Exact generic root/maker/record lifecycle plans.
+    pub lifecycle: DirectRegisteredCreationLifecycleV3,
 }
 
 /// Three exact Custody requests and their checked terminal token facts.
@@ -122,6 +130,8 @@ pub struct DirectBuyEscrowRegistrationPlanV2 {
     pub delegated_after: u64,
     /// Record-keyed Vault balance after the deposit.
     pub vault_after: u64,
+    /// Exact generic root/maker/record lifecycle plans committed last.
+    pub lifecycle: DirectRegisteredCreationLifecycleV3,
 }
 
 /// Build the exact funded resting-Buy Custody lifecycle.
@@ -133,6 +143,12 @@ pub fn prepare_buy_escrow_registration_v2(
     let reserve = record.reserved_collateral();
     validate_buy_record(input.context, record)?;
     validate_accounts(input.context, record, input.accounts)?;
+    validate_registered_creation_lifecycle_v3(
+        input.creation,
+        input.context.trading_program,
+        input.context.direct_root,
+        input.lifecycle,
+    )?;
     if input.funding.payer == [0; 32]
         || input.funding.replay_rent_lamports == 0
         || input.funding.vault_rent_lamports == 0
@@ -192,6 +208,7 @@ pub fn prepare_buy_escrow_registration_v2(
         source_after,
         delegated_after: 0,
         vault_after: reserve,
+        lifecycle: input.lifecycle,
     })
 }
 

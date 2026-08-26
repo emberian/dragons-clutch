@@ -6,12 +6,15 @@
 //! common hot executor owns CPI order, receipt producer checks, and the single
 //! final state commit.
 //!
-//! This profile requires an existing Direct root, both existing maker replay
-//! roots, and an existing zero-Vault Custody replay keyed by the buyer maker
-//! root. The common effect language cannot yet allocate/assign or close
-//! Trading-owned accounts, so first-use remains fail-closed rather than being
-//! implemented by a Direct-private System-program path.
+//! Trading-owned root/maker creation is described only by the descriptor's
+//! canonical `StateLifecyclePolicyV3`. This module accepts those generic plans
+//! and cross-checks them against the Direct semantic candidate; it never owns a
+//! private System-program create or close path.
 
+use dclutch_account_profile_contract::lifecycle_v3::{
+    AuthenticateStatePlanV3, CreateStatePlanV3, StateLifecyclePlanV3,
+};
+use dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1;
 use dclutch_claims_svm::{
     CLAIMS_PLAN_HEADER_BYTES_V1, CallerRole as ClaimsCallerRole, ClaimsAction, ClaimsPlanV1,
     ClaimsReceiptV1,
@@ -77,6 +80,21 @@ pub struct DirectInlinePhysicalContextV2 {
     pub buyer_position_revision: u64,
 }
 
+/// Exact generic lifecycle plans for the root and both maker replay accounts.
+///
+/// The common Hot V3 outer obtains these only from `plan_lifecycle` after
+/// AccountProfile projection and PDA/Rent/RentCredit authentication. Direct
+/// independently checks that their economic facts equal its semantic candidate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectInlineLifecyclePlansV3 {
+    /// Existing composite Direct capability root authentication.
+    pub root: StateLifecyclePlanV3,
+    /// Existing authentication or dust-tolerant first-use creation for seller.
+    pub seller_maker: StateLifecyclePlanV3,
+    /// Existing authentication or dust-tolerant first-use creation for buyer.
+    pub buyer_maker: StateLifecyclePlanV3,
+}
+
 /// One exact Custody request and its required token/delegate poststate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DirectInlineCustodyEffectV2 {
@@ -95,6 +113,8 @@ pub struct DirectInlineCustodyEffectV2 {
 pub struct DirectInlinePhysicalPlanV2 {
     /// Sole accepted Direct settlement candidate.
     pub settlement: InlineOrdinarySettlementV2,
+    /// Exact generic root/maker lifecycle plans bound to the settlement.
+    pub lifecycle: DirectInlineLifecyclePlansV3,
     /// Positive seller-net then combined-fee Custody transfers.
     pub custody: [Option<DirectInlineCustodyEffectV2>; DIRECT_INLINE_CUSTODY_EFFECT_CAPACITY_V2],
     /// Number of positive Custody transfers.
@@ -129,6 +149,7 @@ pub struct DirectInlineStateBuffersV2<'a> {
 pub fn prepare_inline_ordinary_physical_v2(
     direct: InlineOrdinaryInputV2,
     context: DirectInlinePhysicalContextV2,
+    lifecycle: DirectInlineLifecyclePlansV3,
     collateral: DirectInlineCollateralFrameV2,
     quantity_scratch: &mut [u8],
     claims_scratch: &mut [u8],
@@ -137,9 +158,7 @@ pub fn prepare_inline_ordinary_physical_v2(
     validate_context(direct, context)?;
     let settlement =
         settle_inline_ordinary_v2(direct).map_err(|_| DirectPhysicalError::Settlement)?;
-    if settlement.seller_creation.is_some() || settlement.buyer_creation.is_some() {
-        return Err(DirectPhysicalError::LifecycleUnavailable);
-    }
+    validate_lifecycle(direct, context, settlement, lifecycle)?;
     validate_maker_roots(direct, context, settlement)?;
     validate_replay(context)?;
     validate_collateral(direct, context, collateral, settlement)?;
@@ -196,6 +215,7 @@ pub fn prepare_inline_ordinary_physical_v2(
 
     Ok(DirectInlinePhysicalPlanV2 {
         settlement,
+        lifecycle,
         custody: custody.effects,
         custody_count: custody.count,
         claims_bytes,
@@ -204,6 +224,97 @@ pub fn prepare_inline_ordinary_physical_v2(
         seller_destination_after: custody.seller_after,
         fee_destination_after: custody.fee_after,
     })
+}
+
+fn validate_lifecycle(
+    direct: InlineOrdinaryInputV2,
+    context: DirectInlinePhysicalContextV2,
+    settlement: InlineOrdinarySettlementV2,
+    lifecycle: DirectInlineLifecyclePlansV3,
+) -> Result<()> {
+    match lifecycle.root {
+        StateLifecyclePlanV3::Authenticate(AuthenticateStatePlanV3 {
+            state, data_bytes, ..
+        }) if state == context.direct_root
+            && usize::try_from(data_bytes).ok()
+                == CAPABILITY_ROOT_HEADER_BYTES_V1.checked_add(DIRECT_ROOT_STATE_BYTES_V1) => {}
+        StateLifecyclePlanV3::Authenticate(_)
+        | StateLifecyclePlanV3::Create(_)
+        | StateLifecyclePlanV3::Close(_) => return Err(DirectPhysicalError::State),
+    }
+    validate_maker_lifecycle(
+        context.seller_maker_root,
+        direct.seller.first_use,
+        settlement.seller_maker_root,
+        settlement.seller_creation,
+        lifecycle.seller_maker,
+    )?;
+    validate_maker_lifecycle(
+        context.buyer_maker_root,
+        direct.buyer.first_use,
+        settlement.buyer_maker_root,
+        settlement.buyer_creation,
+        lifecycle.buyer_maker,
+    )
+}
+
+fn validate_maker_lifecycle(
+    expected_state: [u8; 32],
+    first_use: Option<dclutch_direct_codec::successor::MakerReplayFirstUseV1>,
+    maker_state: dclutch_direct_codec::successor::MakerReplayRootV1,
+    creation: Option<dclutch_direct_codec::successor::MakerReplayCreationPlanV1>,
+    lifecycle: StateLifecyclePlanV3,
+) -> Result<()> {
+    match (first_use, creation, lifecycle) {
+        (
+            None,
+            None,
+            StateLifecyclePlanV3::Authenticate(AuthenticateStatePlanV3 {
+                state,
+                data_bytes,
+                bump,
+                ..
+            }),
+        ) if state == expected_state
+            && usize::try_from(data_bytes).ok() == Some(DIRECT_MAKER_REPLAY_BYTES_V1)
+            && bump == maker_state.bump() =>
+        {
+            Ok(())
+        }
+        (
+            Some(first_use),
+            Some(creation),
+            StateLifecyclePlanV3::Create(CreateStatePlanV3 {
+                state,
+                payer,
+                rent_credit,
+                beneficiary,
+                target_data_bytes,
+                historical_rent_principal,
+                state_before,
+                state_after,
+                payer_debit,
+                bump,
+                ..
+            }),
+        ) if state == expected_state
+            && payer != [0; 32]
+            && rent_credit != [0; 32]
+            && payer != state
+            && rent_credit != state
+            && payer != rent_credit
+            && beneficiary == first_use.rent_owner
+            && usize::try_from(target_data_bytes).ok() == Some(DIRECT_MAKER_REPLAY_BYTES_V1)
+            && historical_rent_principal == first_use.rent_principal
+            && state_before == creation.observed_lamports
+            && state_after == creation.post_lamports
+            && payer_debit == creation.top_up_lamports
+            && bump == maker_state.bump() =>
+        {
+            Ok(())
+        }
+        _ => Err(DirectPhysicalError::State),
+    }
 }
 
 /// Verify one immediate Claims receipt against the exact inline packet.

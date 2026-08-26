@@ -25,6 +25,9 @@ use dclutch_direct_codec::successor::{
 use dclutch_market_core_codec::{CoreMarketViewV1, Phase};
 use solana_program::{hash::hash, pubkey::Pubkey};
 
+use super::lifecycle::{
+    DirectRegisteredCreationLifecycleV3, validate_registered_creation_lifecycle_v3,
+};
 use super::physical::{DirectPhysicalError, Result};
 
 /// Exact physical accounts for one Claims-owned protocol Position lifecycle.
@@ -77,6 +80,8 @@ struct PositionRequestSelectionV2 {
 pub struct DirectSellEscrowContextV2 {
     /// Sparse-Core view after exact Market/reference/Registry authentication.
     pub core_market: CoreMarketViewV1,
+    /// Descriptor-derived composite Direct capability root.
+    pub direct_root: [u8; 32],
     /// Current Registry-selected Trading program.
     pub trading_program: [u8; 32],
     /// Current Registry-selected Claims program.
@@ -101,7 +106,8 @@ impl DirectSellEscrowContextV2 {
         } else {
             self.core_market.phase() == Phase::Open
         };
-        if self.trading_program == [0; 32]
+        if self.direct_root == [0; 32]
+            || self.trading_program == [0; 32]
             || self.claims_program == [0; 32]
             || self.rent_program == [0; 32]
             || self.parent_request_digest == [0; 32]
@@ -129,6 +135,8 @@ pub struct DirectSellRegistrationPlanV2 {
     pub admission: ProtocolPositionRequestV2,
     /// Exact claims moved maker-to-record by the following affine effect.
     pub reserved_claims: u64,
+    /// Exact generic root/maker/record lifecycle plans committed last.
+    pub lifecycle: DirectRegisteredCreationLifecycleV3,
 }
 
 /// Build the exact Claims admission for one accepted registered Sell.
@@ -137,11 +145,18 @@ pub fn prepare_sell_registration_v2(
     accounts: DirectSellPositionAccountsV2,
     funding: DirectPositionFundingV2,
     context: DirectSellEscrowContextV2,
+    lifecycle: DirectRegisteredCreationLifecycleV3,
 ) -> Result<DirectSellRegistrationPlanV2> {
     context.validate(false)?;
     let record = creation.record;
     validate_sell_record(record, context)?;
     validate_record_accounts(record, accounts, context)?;
+    validate_registered_creation_lifecycle_v3(
+        creation,
+        context.trading_program,
+        context.direct_root,
+        lifecycle,
+    )?;
     if record.reserved_claims() == 0 || record.reserved_collateral() != 0 {
         return Err(DirectPhysicalError::Binding);
     }
@@ -160,6 +175,7 @@ pub fn prepare_sell_registration_v2(
     Ok(DirectSellRegistrationPlanV2 {
         admission,
         reserved_claims: record.reserved_claims(),
+        lifecycle,
     })
 }
 

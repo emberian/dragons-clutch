@@ -54,6 +54,8 @@ pub enum DirectComplementaryCustodyRouteV2 {
 pub struct DirectComplementaryPhysicalContextV2 {
     /// Current Registry-selected Trading program.
     pub trading_program: [u8; 32],
+    /// Descriptor-derived composite Direct capability root.
+    pub direct_root: [u8; 32],
     /// Sparse-Core view after exact Market, reference-record, and Registry authentication.
     pub core_market: CoreMarketViewV1,
     /// Canonical Custody transfer-authority PDA.
@@ -74,6 +76,7 @@ impl DirectComplementaryPhysicalContextV2 {
         let realm = self.core_market.realm();
         for identity in [
             self.trading_program,
+            self.direct_root,
             self.core_market.market().to_bytes(),
             self.core_market.claims_aggregate().to_bytes(),
             release_set.release_set_id.to_bytes(),
@@ -559,6 +562,7 @@ fn project_buy_escrow_effect(
     }
     let context = DirectBuyEscrowContextV2 {
         core_market: input.context.core_market,
+        direct_root: input.context.direct_root,
         trading_program: input.context.trading_program,
         parent_request_digest: input.context.parent_request_digest,
     };

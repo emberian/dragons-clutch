@@ -6,6 +6,8 @@ pub mod buy_escrow;
 pub mod complementary;
 /// Existing-root inline ordinary Claims/Custody projection.
 pub mod inline;
+/// Generic Trading-owned lifecycle joins for Direct root, maker, and record state.
+pub mod lifecycle;
 /// Commit-last ordinary Direct state candidates and shared physical facts.
 pub mod physical;
 /// Claims-owned record Position lifecycle for registered Sell liquidity.
