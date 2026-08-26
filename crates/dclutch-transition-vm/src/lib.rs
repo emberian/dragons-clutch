@@ -6,6 +6,8 @@
 
 /// Runtime-width V2 codec and borrowed-register executor.
 pub mod v2;
+/// Runtime-tail V3 fold interpreter over common and per-item register banks.
+pub mod v3;
 
 /// Canonical transition-program magic (`DCTV`).
 pub const MAGIC: [u8; 4] = *b"DCTV";

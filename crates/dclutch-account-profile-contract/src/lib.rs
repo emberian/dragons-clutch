@@ -16,6 +16,9 @@ use core::convert::{TryFrom, TryInto};
 use dclutch_effect_kernel::v2::AccountPermission;
 use dclutch_transition_vm::v2::{RegisterInput, RegisterOutput};
 
+/// Runtime-tail account and register projection profiles.
+pub mod v2;
+
 #[rustfmt::skip]
 #[allow(missing_docs)]
 mod generated;

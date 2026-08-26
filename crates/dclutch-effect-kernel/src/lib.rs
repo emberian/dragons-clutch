@@ -9,6 +9,8 @@
 
 /// Runtime-width, account-profile-constrained physical effect projection.
 pub mod v2;
+/// Runtime-tail local effects and typed fixed-role request projection.
+pub mod v3;
 
 /// Canonical wire magic (`DCEF`).
 pub const MAGIC: [u8; 4] = *b"DCEF";

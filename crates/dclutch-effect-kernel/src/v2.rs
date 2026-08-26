@@ -134,6 +134,21 @@ impl AccountPermission {
     pub const fn lamport_receiver() -> Self {
         Self::new(false, true, false)
     }
+
+    /// Whether this authenticated account may lose lamports.
+    pub const fn may_debit_lamports(self) -> bool {
+        self.may_debit_lamports
+    }
+
+    /// Whether this authenticated account may gain lamports.
+    pub const fn may_credit_lamports(self) -> bool {
+        self.may_credit_lamports
+    }
+
+    /// Whether this authenticated account may receive a data write.
+    pub const fn may_write_data(self) -> bool {
+        self.may_write_data
+    }
 }
 
 /// Immutable physical account facts used during effect projection.
