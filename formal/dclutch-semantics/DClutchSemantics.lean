@@ -30,6 +30,7 @@ import DClutchSemantics.GeneralClearing
 import DClutchSemantics.GeneralClearingExamples
 import DClutchSemantics.GeneralControllerAbi
 import DClutchSemantics.GeneralConfigAbi
+import DClutchSemantics.GeneralConfigV3Abi
 import DClutchSemantics.ProductPayoff
 import DClutchSemantics.ProductPayoffExamples
 import DClutchSemantics.ProductPayoffAbi

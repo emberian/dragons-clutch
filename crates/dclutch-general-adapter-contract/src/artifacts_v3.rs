@@ -21,8 +21,8 @@ use dclutch_execution_strategy_contract::v2::{
 };
 use dclutch_general_codec::{Action, CONTROLLER_REQUEST_BYTES, ControllerRequestV1};
 use dclutch_general_config_contract::{
-    GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_CONFIG_SCHEMA_ID_V2, GENERAL_ROOT_BYTES_V2,
-    GENERAL_ROOT_SCHEMA_ID_V2, GeneralConfigV2,
+    GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_ROOT_BYTES_V2, GENERAL_ROOT_SCHEMA_ID_V2,
+    v3::{GENERAL_CONFIG_SCHEMA_ID_V3, GeneralConfigV3},
 };
 use dclutch_request_profile_contract::{ProjectionRegistersV1, RequestProfileV1, project_atomic};
 use dclutch_transition_vm::v3::ProgramV3 as TransitionProgramV3;
@@ -86,8 +86,8 @@ pub struct GeneralArtifactBundleV3<'a> {
     pub request: ControllerRequestV1,
     /// Action-selected capability descriptor.
     pub descriptor: CapabilityProgramV3,
-    /// Immutable General policy. Its legacy physical width is not authority.
-    pub config: GeneralConfigV2,
+    /// Immutable runtime-width General policy.
+    pub config: GeneralConfigV3,
     /// Runtime-width account projection.
     pub account_profile: AccountProfileV2<'a>,
     /// Trading-owned lifecycle policy.
@@ -138,9 +138,8 @@ pub type Result<T> = core::result::Result<T, GeneralArtifactErrorV3>;
 
 /// Authenticate and join one complete General runtime-width artifact bundle.
 ///
-/// `tail_count` comes from the authenticated Product result domain. The legacy
-/// provisional `GeneralConfigV2.outcome_count` is intentionally not consulted:
-/// it is not allowed to reintroduce the prototype's `N <= 16` semantic cap.
+/// `tail_count` comes from the authenticated Product result domain. V3 has no
+/// config-owned outcome count and cannot reintroduce a physical semantic cap.
 pub fn authenticate_general_artifacts_v3<'a>(
     selection: GeneralArtifactSelectionV3,
     artifacts: GeneralArtifactBytesV3<'a>,
@@ -177,8 +176,8 @@ pub fn authenticate_general_artifacts_v3<'a>(
 
     require_selected(selection.config, artifacts.config)?;
     let config =
-        GeneralConfigV2::decode(artifacts.config).map_err(|_| GeneralArtifactErrorV3::Config)?;
-    if config.capability_program_id() != selection.program_set
+        GeneralConfigV3::decode(artifacts.config).map_err(|_| GeneralArtifactErrorV3::Config)?;
+    if config.program_set_id() != selection.program_set
         || descriptor.capacity_profile().to_bytes() != config.capacity_profile_id()
     {
         return Err(GeneralArtifactErrorV3::Config);
@@ -279,7 +278,7 @@ pub fn authenticate_general_artifacts_v3<'a>(
 
 fn validate_descriptor(descriptor: CapabilityProgramV3) -> Result<()> {
     if descriptor.kind().to_bytes() != GENERAL_CAPABILITY_KIND_ID_V1
-        || descriptor.config_schema().to_bytes() != GENERAL_CONFIG_SCHEMA_ID_V2
+        || descriptor.config_schema().to_bytes() != GENERAL_CONFIG_SCHEMA_ID_V3
         || descriptor.request_schema().to_bytes() != GENERAL_CONTROLLER_REQUEST_SCHEMA_ID_V3
         || descriptor.root_schema().to_bytes() != GENERAL_ROOT_SCHEMA_ID_V2
         || descriptor.request_profile_schema().to_bytes()
@@ -446,7 +445,7 @@ mod tests {
         EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
         StrategyDispositionV2,
     };
-    use dclutch_general_config_contract::{GENERAL_CONFIG_BYTES_V2, GeneralConfigV2Input};
+    use dclutch_general_config_contract::v3::{GENERAL_CONFIG_BYTES_V3, GeneralConfigV3Input};
     use std::{vec, vec::Vec};
 
     use super::*;
@@ -454,7 +453,7 @@ mod tests {
     struct Fixture {
         set: Vec<u8>,
         descriptor: [u8; CAPABILITY_PROGRAM_V3_BYTES],
-        config: [u8; GENERAL_CONFIG_BYTES_V2],
+        config: [u8; GENERAL_CONFIG_BYTES_V3],
         account: Vec<u8>,
         lifecycle: Vec<u8>,
         request_profile: Vec<u8>,
@@ -648,7 +647,7 @@ mod tests {
         let capacity = [8; 32];
         let descriptor = CapabilityProgramV3::new(
             id(GENERAL_CAPABILITY_KIND_ID_V1),
-            id(GENERAL_CONFIG_SCHEMA_ID_V2),
+            id(GENERAL_CONFIG_SCHEMA_ID_V3),
             id(GENERAL_CONTROLLER_REQUEST_SCHEMA_ID_V3),
             id(GENERAL_ROOT_SCHEMA_ID_V2),
             id(digest(&account)),
@@ -664,10 +663,10 @@ mod tests {
         .expect("descriptor")
         .encode();
         let set = program_set(digest(&descriptor));
-        let config = GeneralConfigV2::new(GeneralConfigV2Input {
+        let config = GeneralConfigV3::new(GeneralConfigV3Input {
             capacity_profile_id: capacity,
             claim_basis_id: [9; 32],
-            capability_program_id: digest(&set),
+            program_set_id: digest(&set),
             generation: 7,
             price_scale: 1_000,
             collection_slots: 10,
@@ -677,7 +676,6 @@ mod tests {
             max_pages_per_candidate: 10,
             continuation_reward_lamports: 1,
             selection_policy_id: [10; 32],
-            outcome_count: 2,
             quote_surplus_beneficiary: [11; 32],
         })
         .expect("legacy config")
@@ -706,19 +704,23 @@ mod tests {
     }
 
     #[test]
-    fn exact_bundle_joins_at_runtime_width_beyond_legacy_config_cap() {
+    fn exact_bundle_joins_at_product_owned_runtime_widths() {
         let fixture = fixture();
-        let bundle = authenticate_general_artifacts_v3(
-            fixture.selection(),
-            fixture.artifacts(),
-            &fixture.request,
-            258,
-        )
-        .expect("complete joined bundle");
-        assert_eq!(bundle.request.action, Action::Freeze);
-        assert_eq!(bundle.tail_count, 258);
-        assert_eq!(bundle.config.outcome_count(), 2);
-        assert_eq!(bundle.request_profile.scalar_count(258), Ok(269));
+        for tail_count in [1_u32, 258] {
+            let bundle = authenticate_general_artifacts_v3(
+                fixture.selection(),
+                fixture.artifacts(),
+                &fixture.request,
+                tail_count,
+            )
+            .expect("complete joined bundle");
+            assert_eq!(bundle.request.action, Action::Freeze);
+            assert_eq!(bundle.tail_count, tail_count);
+            assert_eq!(
+                bundle.request_profile.scalar_count(tail_count),
+                Ok(11_usize + usize::try_from(tail_count).expect("test tail"))
+            );
+        }
     }
 
     #[test]

@@ -16,8 +16,11 @@ extern crate std;
 pub mod activation;
 #[allow(missing_docs)]
 mod generated;
+mod generated_v3;
 /// Minimal persistent root and canonical activation plan.
 pub mod root;
+/// Runtime-width successor configuration with ProgramSet authority.
+pub mod v3;
 
 pub use activation::*;
 pub use root::*;
