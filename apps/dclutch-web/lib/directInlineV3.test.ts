@@ -30,6 +30,8 @@ import {
   DIRECT_NATIVE_EVIDENCE_BUYER_MESSAGE_OFFSET_V3,
   DIRECT_NATIVE_EVIDENCE_BYTES_V3,
   DIRECT_NATIVE_EVIDENCE_DESCRIPTOR_BYTES_V3,
+  DIRECT_NATIVE_EVIDENCE_DIRECT_BIAS_V3,
+  DIRECT_NATIVE_EVIDENCE_HEADERLESS_REGISTRY_BIAS_V4,
   DIRECT_NATIVE_EVIDENCE_SELLER_MESSAGE_OFFSET_V3,
   DIRECT_SIGNED_PARTICIPANT_BYTES_V3,
   HOT_EXECUTION_ENVELOPE_BYTES_V3,
@@ -240,6 +242,59 @@ describe('Direct V3 inline transaction construction', () => {
       plan.tradingInstructionIndex,
       new PublicKey(candidate.tradingProgram),
     )).toThrow(/not the authenticated Trading program/);
+  });
+
+  it('pins the exact bias-zero native-evidence wire against the Rust codec vector', () => {
+    // Expected bytes are the vector asserted by
+    // crates/dclutch-direct-codec/src/native_evidence_v3.rs, test
+    // `direct_and_headerless_registry_use_exact_current_instruction_offsets`:
+    // 222-byte evidence, message offsets 192 and 396, u16::MAX sentinels, and
+    // the same coordinates for the headerless Registry successor.
+    const candidate = route();
+    const { seller, buyer } = participants(candidate.market);
+    const plan = compileDirectInlineTransactionV3({ route: candidate, seller, buyer, fill: 2_000n, executionPrice: 500_000n, clockSlot: 1_000n });
+    const evidence = plan.nativeEvidenceBytes;
+    const view = new DataView(evidence.buffer, evidence.byteOffset, evidence.byteLength);
+    const u16le = (offset: number): number => view.getUint16(offset, true);
+    expect(DIRECT_NATIVE_EVIDENCE_DIRECT_BIAS_V3).toBe(0);
+    expect(DIRECT_NATIVE_EVIDENCE_HEADERLESS_REGISTRY_BIAS_V4).toBe(DIRECT_NATIVE_EVIDENCE_DIRECT_BIAS_V3);
+    expect(DIRECT_NATIVE_EVIDENCE_SELLER_MESSAGE_OFFSET_V3).toBe(192);
+    expect(DIRECT_NATIVE_EVIDENCE_BUYER_MESSAGE_OFFSET_V3).toBe(396);
+    expect(evidence).toHaveLength(222);
+    expect(evidence[0]).toBe(2);
+    expect(evidence[1]).toBe(0);
+    for (const [descriptor, publicKey, message] of [[2, 30, 192], [16, 126, 396]]) {
+      expect(u16le(descriptor)).toBe(publicKey + 32);
+      expect(u16le(descriptor + 2)).toBe(0xffff);
+      expect(u16le(descriptor + 4)).toBe(publicKey);
+      expect(u16le(descriptor + 6)).toBe(0xffff);
+      expect(u16le(descriptor + 8)).toBe(message);
+      expect(u16le(descriptor + 10)).toBe(172);
+      expect(u16le(descriptor + 12)).toBe(plan.tradingInstructionIndex);
+    }
+    expect([...evidence.slice(30, 62)]).toEqual([...new PublicKey(seller.maker).toBytes()]);
+    expect([...evidence.slice(62, 126)]).toEqual([...seller.signature]);
+    expect([...evidence.slice(126, 158)]).toEqual([...new PublicKey(buyer.maker).toBytes()]);
+    expect([...evidence.slice(158, 222)]).toEqual([...buyer.signature]);
+    expect([...plan.hotInstructionBytes.slice(192, 192 + 172)]).toEqual([...encodeCompactIntentSigningMessageV2(seller.intent)]);
+    expect([...plan.hotInstructionBytes.slice(396, 396 + 172)]).toEqual([...encodeCompactIntentSigningMessageV2(buyer.intent)]);
+  });
+
+  it('refuses the retired 128-byte-headered Registry container as the current instruction', () => {
+    // Mirrors `retired_headered_registry_shape_refuses_without_output_mutation`:
+    // the Registry continuation is headerless, so Hot bytes behind a fixed
+    // 128-byte header are no longer an authenticated evidence container.
+    const candidate = route();
+    const { seller, buyer } = participants(candidate.market);
+    const plan = compileDirectInlineTransactionV3({ route: candidate, seller, buyer, fill: 2_000n, executionPrice: 500_000n, clockSlot: 1_000n });
+    const headered = new Uint8Array(128 + plan.hotInstructionBytes.length);
+    headered.set(plan.hotInstructionBytes, 128);
+    expect(() => validateDirectNativeEvidenceInstructionV3(
+      new TransactionInstruction({ programId: Ed25519Program.programId, keys: [], data: plan.nativeEvidenceBytes as Buffer }),
+      new TransactionInstruction({ programId: new PublicKey(candidate.tradingProgram), keys: [], data: headered as Buffer }),
+      plan.tradingInstructionIndex,
+      new PublicKey(candidate.tradingProgram),
+    )).toThrow(/canonical direct-bias-zero Hot envelope/);
   });
 
   it('refuses every noncanonical lookup-table shape before transaction construction', () => {

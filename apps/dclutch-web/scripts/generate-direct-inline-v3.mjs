@@ -138,7 +138,6 @@ const scalars = Object.freeze([
   ['direct', 'DIRECT_EXECUTION_REQUEST_VERSION_V3'], ['direct', 'DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3'],
   ['direct', 'DIRECT_EXECUTION_REQUEST_SELECTOR_OFFSET_V3'],
   ['nativeEvidence', 'DIRECT_NATIVE_EVIDENCE_DIRECT_BIAS_V3'],
-  ['nativeEvidence', 'DIRECT_NATIVE_EVIDENCE_REGISTRY_BIAS_V3'],
   ['intent', 'COMPACT_INTENT_VERSION_V2'], ['intent', 'COMPACT_INTENT_BYTES_V2'],
   ['intent', 'COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2'],
   ['intent', 'COMPACT_INTENT_MAGIC_OFFSET_V2'],
@@ -208,6 +207,43 @@ if (evidenceSignatures !== 2
     || !sources.nativeEvidence.includes('HOT_FAMILY_REQUEST_OFFSET_V3')) {
   throw new Error('Direct native evidence no longer has the exact two-party InlineOrdinary geometry');
 }
+
+// The Registry continuation is headerless: its instruction data is the exact
+// Hot bytes from byte zero, so Registry evidence carries the Direct bias and
+// the retired headered container must not reappear under any name.
+function evidenceContainerVariants() {
+  const start = sources.nativeEvidence.indexOf('pub enum DirectNativeEvidenceContainerV3 {');
+  const end = sources.nativeEvidence.indexOf('\n}', start);
+  if (start < 0 || end < 0) throw new Error('missing canonical Direct native evidence container enum');
+  return sources.nativeEvidence.slice(start, end).split('\n')
+    .map((line) => line.trim())
+    .filter((line) => /^[A-Z][A-Za-z0-9]*,$/.test(line))
+    .map((line) => line.slice(0, -1));
+}
+
+function headerlessRegistrySuccessorBias() {
+  const marker = 'pub fn encode_direct_headerless_registry_native_evidence_many_v4_atomic(';
+  const start = sources.nativeEvidence.indexOf(marker);
+  const end = sources.nativeEvidence.indexOf('\n}', start);
+  if (start < 0 || end < 0) throw new Error('missing headerless Registry native evidence successor');
+  const body = sources.nativeEvidence.slice(start + marker.length, end);
+  const delegation = body.match(/encode_direct_native_evidence_many_v3_atomic\(\s*DirectNativeEvidenceContainerV3::([A-Za-z0-9]+),/);
+  if (!delegation) throw new Error('headerless Registry successor no longer delegates to one named container');
+  return delegation[1];
+}
+
+const evidenceContainers = evidenceContainerVariants();
+if (evidenceContainers.length !== 1 || evidenceContainers[0] !== 'TradingHot') {
+  throw new Error(`Direct native evidence containers changed: ${evidenceContainers.join(', ')}`);
+}
+if (!sources.nativeEvidence.includes('pub fn encode_direct_headerless_registry_native_evidence_v4_atomic(')
+    || headerlessRegistrySuccessorBias() !== 'TradingHot') {
+  throw new Error('the headerless Registry native evidence successor is absent or no longer bias-zero');
+}
+if (sources.nativeEvidence.includes('DIRECT_NATIVE_EVIDENCE_REGISTRY_BIAS_V3')
+    || sources.nativeEvidence.includes('RegistryContinuation')) {
+  throw new Error('the retired headered Registry evidence container reappeared in the Direct codec');
+}
 let output = '// @generated from canonical Rust/Lean-emitted Direct Hot V3 / Capability V4 ABIs; do not edit.\n';
 output += '// Regenerate with: npm run abi:direct-v3\n\n';
 for (const [source, name] of scalars) output += `export const ${name} = ${scalar(source, name)} as const;\n`;
@@ -220,6 +256,7 @@ output += `export const DIRECT_NATIVE_EVIDENCE_DESCRIPTOR_BYTES_V3 = ${evidenceD
 output += 'export const DIRECT_NATIVE_EVIDENCE_HEADER_BYTES_V3 = 2 + DIRECT_NATIVE_EVIDENCE_SIGNATURE_COUNT_V3 * DIRECT_NATIVE_EVIDENCE_DESCRIPTOR_BYTES_V3;\n';
 output += 'export const DIRECT_NATIVE_EVIDENCE_PARTICIPANT_BYTES_V3 = 32 + 64;\n';
 output += 'export const DIRECT_NATIVE_EVIDENCE_BYTES_V3 = DIRECT_NATIVE_EVIDENCE_HEADER_BYTES_V3 + DIRECT_NATIVE_EVIDENCE_SIGNATURE_COUNT_V3 * DIRECT_NATIVE_EVIDENCE_PARTICIPANT_BYTES_V3;\n';
+output += 'export const DIRECT_NATIVE_EVIDENCE_HEADERLESS_REGISTRY_BIAS_V4 = DIRECT_NATIVE_EVIDENCE_DIRECT_BIAS_V3;\n';
 output += 'export const DIRECT_NATIVE_EVIDENCE_SELLER_MESSAGE_OFFSET_V3 = DIRECT_NATIVE_EVIDENCE_DIRECT_BIAS_V3 + HOT_FAMILY_REQUEST_OFFSET_V3 + DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3 + 32;\n';
 output += 'export const DIRECT_NATIVE_EVIDENCE_SELLER_MAKER_OFFSET_V3 = DIRECT_NATIVE_EVIDENCE_SELLER_MESSAGE_OFFSET_V3 - 32;\n';
 output += 'export const DIRECT_NATIVE_EVIDENCE_BUYER_MESSAGE_OFFSET_V3 = DIRECT_NATIVE_EVIDENCE_SELLER_MESSAGE_OFFSET_V3 + DIRECT_SIGNED_PARTICIPANT_BYTES_V3;\n';
