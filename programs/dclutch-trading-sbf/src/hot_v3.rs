@@ -25,7 +25,6 @@ use dclutch_account_profile_contract::{
         SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2, TrustedEnvironmentV2,
         derive_effect_permissions, derive_effect_permissions_with_dynamic_spans,
         project_atomic as project_accounts_atomic, project_dynamic_fixed_spans_atomic,
-        project_tail_count_atomic,
     },
 };
 use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
@@ -260,12 +259,43 @@ const CHILD_EXECUTION_DIGEST_DOMAIN_V3: &[u8] = b"dclutch:hot-child-execution:v3
 const CHILD_RECEIPT_CONTEXT_DOMAIN_V4: &[u8] = b"dclutch:hot-child-receipt-context:v4";
 const CHILD_REQUEST_DIGEST_DOMAIN_V4: &[u8] = b"dclutch:hot-child-request:v4";
 
+/// Diagnostic-only phase checkpoint: phase name, remaining compute units, and
+/// the SBF bump allocator's total-ever-allocated position.
+///
+/// The default SBF allocator never frees and returns the new bump position
+/// itself, so the address of one fresh single-byte allocation reads the exact
+/// running total. The whole checkpoint is one out-of-line call taking a single
+/// `&str`, because `process_hot_execution_v3` is already near the 4KB SBF
+/// frame limit: expanding three separate syscalls inline at ten phases spills
+/// enough of its frame to make the profiled executable overwrite its own
+/// caller frame, which silently invalidates every number it prints.
+///
+/// Reports both bytes used against the protocol 32KB heap and the raw bump
+/// offset from the heap floor, so a deliberately oversized diagnostic heap can
+/// be read from the same log.
+#[cfg(feature = "hot-cu-profile")]
+#[inline(never)]
+fn hot_checkpoint(phase: &str) {
+    solana_program::log::sol_log(phase);
+    solana_program::log::sol_log_compute_units();
+    let probe = Vec::<u8>::with_capacity(1);
+    let position = probe.as_ptr() as usize;
+    let floor = solana_program::entrypoint::HEAP_START_ADDRESS as usize;
+    let ceiling = floor.saturating_add(solana_program::entrypoint::HEAP_LENGTH);
+    solana_program::log::sol_log_64(
+        ceiling.saturating_sub(position) as u64,
+        position.saturating_sub(floor) as u64,
+        0,
+        0,
+        0,
+    );
+}
+
 #[cfg(feature = "hot-cu-profile")]
 macro_rules! hot_cu_checkpoint {
-    ($phase:literal) => {{
-        solana_program::msg!(concat!("dclutch-hot-cu:", $phase));
-        solana_program::log::sol_log_compute_units();
-    }};
+    ($phase:literal) => {
+        crate::hot_v3::hot_checkpoint(concat!("dclutch-hot-cu:", $phase))
+    };
 }
 
 #[cfg(not(feature = "hot-cu-profile"))]
@@ -1302,14 +1332,18 @@ fn accelerator_runtime_observations_digest_v4(
     portfolio: [u8; 32],
     linked_basis: [u8; 32],
 ) -> Result<ContentId, ProgramError> {
-    let runtime_data = runtime_accounts
-        .iter()
-        .map(|account| {
+    // Exact capacity, not `collect::<Result<Vec<_>, _>>()`. A fallible collect
+    // reports a zero lower bound, so the SBF bump allocator - which never frees
+    // - is walked through the whole doubling ladder and charges several times
+    // the live width for every fallible bank on this path.
+    let mut runtime_data = Vec::with_capacity(runtime_accounts.len());
+    for account in runtime_accounts.iter() {
+        runtime_data.push(
             account
                 .try_borrow_data()
-                .map_err(|_| TradingSbfError::Content)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+                .map_err(|_| TradingSbfError::Content)?,
+        );
+    }
     let observations = runtime_accounts
         .iter()
         .zip(&runtime_data)
@@ -1844,14 +1878,29 @@ pub fn process_hot_execution_v3(
     if runtime_accounts.len() > MAX_HOT_RUNTIME_ACCOUNTS_V3 {
         return Err(TradingSbfError::UnsupportedContent.into());
     }
-    let runtime_data = runtime_accounts
-        .iter()
-        .map(|account| {
+    // Exact capacity, not `collect::<Result<Vec<_>, _>>()`. A fallible collect
+    // reports a zero lower bound, so the SBF bump allocator - which never frees
+    // - is walked through the whole doubling ladder and charges several times
+    // the live width for every fallible bank on this path.
+    let mut runtime_data = Vec::with_capacity(runtime_accounts.len());
+    for account in &runtime_accounts {
+        runtime_data.push(
             account
                 .try_borrow_data()
-                .map_err(|_| TradingSbfError::Content)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+                .map_err(|_| TradingSbfError::Content)?,
+        );
+    }
+    let tail_count = project_tail_count(account_profile, product_outcome_count)?;
+    require_tail_count_agreement_v3(product_outcome_count, tail_count)?;
+    // Representatives are resolved before the observation bank because the
+    // logical projection key of an aliased coordinate is its representative's,
+    // not its own.
+    let aliases = representative_coordinates_v3(
+        account_profile,
+        tail_count,
+        &dynamic_spans.widths,
+        runtime_accounts.len(),
+    )?;
     let selected_config_coordinate = u16::try_from(HOT_SELECTED_CONFIG_LOGICAL_ACCOUNT_V3)
         .map_err(|_| TradingSbfError::Content)?;
     let selected_config_is_variable = account_profile
@@ -1865,7 +1914,7 @@ pub fn process_hot_execution_v3(
         .enumerate()
         .map(|(coordinate, (account, data))| {
             let key = logical_projection_key_v3(
-                coordinate,
+                *aliases.get(coordinate).unwrap_or(&coordinate),
                 account.key.to_bytes(),
                 context.selection().config().to_bytes(),
                 product_runtime.product_record.content_digest.to_bytes(),
@@ -1907,14 +1956,6 @@ pub fn process_hot_execution_v3(
         .collect::<Vec<_>>();
     hot_cu_checkpoint!("runtime-observations");
 
-    let tail_count = project_tail_count(
-        account_profile,
-        &observations,
-        request_digest,
-        trusted_environment,
-        product_outcome_count,
-    )?;
-    require_tail_count_agreement_v3(product_outcome_count, tail_count)?;
     require_geometry(
         account_profile,
         request_profile,
@@ -1977,23 +2018,6 @@ pub fn process_hot_execution_v3(
         request_profile,
         transition,
     )?;
-    let aliases = (0..runtime_accounts.len())
-        .map(|coordinate| {
-            if account_profile.uses_dynamic_fixed_spans() {
-                account_profile
-                    .representative_with_dynamic_spans(
-                        tail_count,
-                        &dynamic_spans.widths,
-                        coordinate,
-                    )
-                    .map_err(|_| TradingSbfError::Content)
-            } else {
-                account_profile
-                    .representative(tail_count, coordinate)
-                    .map_err(|_| TradingSbfError::Content)
-            }
-        })
-        .collect::<Result<Vec<_>, _>>()?;
     let preplanned_lifecycle = prepare_lifecycle_v4(
         program_id,
         envelope.market(),
@@ -5821,72 +5845,59 @@ fn require_borrowed_witness_receipt_v3(
     }
 }
 
+/// Resolve every runtime coordinate to its canonical representative once.
+///
+/// Exact capacity: a fallible `collect` reports a zero lower bound, which walks
+/// the never-freeing SBF bump allocator through its whole doubling ladder.
+fn representative_coordinates_v3(
+    profile: AccountProfileV2<'_>,
+    tail_count: u32,
+    span_counts: &[u32],
+    runtime_account_count: usize,
+) -> Result<Vec<usize>, ProgramError> {
+    let dynamic = profile.uses_dynamic_fixed_spans();
+    let mut output = Vec::with_capacity(runtime_account_count);
+    for coordinate in 0..runtime_account_count {
+        let representative = if dynamic {
+            profile.representative_with_dynamic_spans(tail_count, span_counts, coordinate)
+        } else {
+            profile.representative(tail_count, coordinate)
+        }
+        .map_err(|_| TradingSbfError::Content)?;
+        output.push(representative);
+    }
+    Ok(output)
+}
+
+/// Resolve the authenticated runtime tail width for one selected profile.
+///
+/// A profile that declares a tail-count projection binds its own tail scalar
+/// to the independently authenticated Product Runtime V3 outcome count. That
+/// binding is *checked*, not assumed: the full account projection runs at this
+/// width in `project_account_and_request_registers_v3`, and
+/// `require_projected_tail_count_agreement_v3` refuses unless the profile's own
+/// projected tail scalar equals the same authenticated count.
+///
+/// Discovering the width by running the account projection at a fictitious
+/// `tail_count` of zero cannot work and was never load-bearing. It cannot work
+/// because a fixed rule with a nonzero `data_item_stride` — Profile 14's
+/// Portfolio, linked-basis and Claims records among them — has no valid width
+/// at tail zero, so `validate_accounts` refuses with `DataLengthMismatch`
+/// before the projection reads anything. It was never load-bearing because the
+/// only consumer of the discovered value immediately required it to equal the
+/// authenticated Product outcome count anyway.
 fn project_tail_count(
     profile: AccountProfileV2<'_>,
-    observations: &[AccountObservationV1<'_>],
-    request_digest: [u8; 32],
-    trusted_environment: TrustedEnvironmentObservationV3,
     authenticated_product_tail_count: u32,
 ) -> Result<u32, ProgramError> {
-    let projection = profile
+    if profile
         .tail_count_projection()
-        .map_err(|_| TradingSbfError::Content)?;
-    if projection.is_none() {
+        .map_err(|_| TradingSbfError::Content)?
+        .is_none()
+    {
         return Ok(0);
     }
-    // Profiles 10 and 12 scan descriptor support and require Product N to
-    // check exact `header + N*8` config geometry. Product Runtime V3 was
-    // already independently authenticated above, so use that N for the full
-    // atomic projection and recheck the profile's own Product scalar after.
-    if profile
-        .nonzero_u64_tail_count_projection()
-        .map_err(|_| TradingSbfError::Content)?
-        .is_some()
-        || profile
-            .nonzero_u64_tail_rows_projection()
-            .map_err(|_| TradingSbfError::Content)?
-            .is_some()
-    {
-        return Ok(authenticated_product_tail_count);
-    }
-    let fixed_count = usize::from(profile.fixed_account_count());
-    let fixed = observations
-        .get(..fixed_count)
-        .ok_or(TradingSbfError::Content)?;
-    let scalar_count = usize::from(profile.common_scalar_count());
-    let identity_count = usize::from(profile.common_identity_count());
-    if scalar_count > MAX_HOT_SCALARS_V3 || identity_count > MAX_HOT_IDENTITIES_V3 {
-        return Err(TradingSbfError::UnsupportedContent.into());
-    }
-    let mut input_scalars = vec![0_u64; scalar_count];
-    let mut input_identities = vec![[0_u8; 32]; identity_count];
-    *input_identities
-        .get_mut(HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3)
-        .ok_or(TradingSbfError::Content)? = request_digest;
-    seed_trusted_environment_v3(
-        trusted_environment,
-        &mut input_scalars,
-        &mut input_identities,
-    )?;
-    let mut scratch_scalars = input_scalars.clone();
-    let mut scratch_identities = input_identities.clone();
-    let mut output_scalars = input_scalars.clone();
-    let mut output_identities = input_identities.clone();
-    let tail_count = project_tail_count_atomic(
-        profile,
-        fixed,
-        ProjectionRegistersV2 {
-            input_scalars: &input_scalars,
-            input_identities: &input_identities,
-            scratch_scalars: &mut scratch_scalars,
-            scratch_identities: &mut scratch_identities,
-            output_scalars: &mut output_scalars,
-            output_identities: &mut output_identities,
-        },
-    )
-    .map_err(|_| TradingSbfError::Content)?;
-    require_trusted_environment_v3(trusted_environment, &output_scalars, &output_identities)?;
-    Ok(tail_count)
+    Ok(authenticated_product_tail_count)
 }
 
 fn require_projected_tail_count_agreement_v3(
@@ -5968,17 +5979,24 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
     } else if !span_counts.is_empty() {
         return Err(TradingSbfError::Content.into());
     }
-    let mut account_scratch_scalars = input_scalars.clone();
-    let mut account_scratch_identities = input_identities.clone();
-    let mut account_output_scalars = input_scalars.clone();
-    let mut account_output_identities = input_identities.clone();
+    // Five chained projections share three scalar banks and three identity
+    // banks, rotated by `swap`, instead of cloning a fresh pair per step. The
+    // SBF allocator never frees, so a clone per step charged seven live pairs
+    // of total-ever-allocated for a chain that is never more than three deep.
+    let mut current_scalars = input_scalars;
+    let mut current_identities = input_identities;
+    let mut scratch_scalars = vec![0_u64; scalar_count];
+    let mut scratch_identities = vec![[0_u8; 32]; identity_count];
+    let mut next_scalars = vec![0_u64; scalar_count];
+    let mut next_identities = vec![[0_u8; 32]; identity_count];
+
     let account_registers = ProjectionRegistersV2 {
-        input_scalars: &input_scalars,
-        input_identities: &input_identities,
-        scratch_scalars: &mut account_scratch_scalars,
-        scratch_identities: &mut account_scratch_identities,
-        output_scalars: &mut account_output_scalars,
-        output_identities: &mut account_output_identities,
+        input_scalars: &current_scalars,
+        input_identities: &current_identities,
+        scratch_scalars: &mut scratch_scalars,
+        scratch_identities: &mut scratch_identities,
+        output_scalars: &mut next_scalars,
+        output_identities: &mut next_identities,
     };
     if account_profile.uses_dynamic_fixed_spans() {
         project_dynamic_fixed_spans_atomic(
@@ -5992,35 +6010,31 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
         project_accounts_atomic(account_profile, tail_count, observations, account_registers)
     }
     .map_err(|_| TradingSbfError::Content)?;
+    core::mem::swap(&mut current_scalars, &mut next_scalars);
+    core::mem::swap(&mut current_identities, &mut next_identities);
     require_projected_tail_count_agreement_v3(
         account_profile,
         authenticated_product_tail_count,
-        &account_output_scalars,
+        &current_scalars,
     )?;
-    require_trusted_environment_v3(
-        trusted_environment,
-        &account_output_scalars,
-        &account_output_identities,
-    )?;
+    require_trusted_environment_v3(trusted_environment, &current_scalars, &current_identities)?;
 
-    let mut rent_quote_scratch_scalars = account_output_scalars.clone();
-    let mut rent_quote_output_scalars = account_output_scalars.clone();
     lifecycle
         .project_authenticated_current_rent_quotes_atomic(
             account_profile,
             tail_count,
-            &account_output_scalars,
+            &current_scalars,
             current_rent_quotes,
             LifecycleRentQuoteBuffersV5 {
-                scalar_scratch: &mut rent_quote_scratch_scalars,
-                output_scalars: &mut rent_quote_output_scalars,
+                scalar_scratch: &mut scratch_scalars,
+                output_scalars: &mut next_scalars,
             },
         )
         .map_err(|_| TradingSbfError::Content)?;
+    core::mem::swap(&mut current_scalars, &mut next_scalars);
 
-    let mut signed_identities = account_output_identities.clone();
     if let RequestProfileKindV3::Signed(profile) = request_profile {
-        let mut signature_scratch = account_output_identities.clone();
+        next_identities.copy_from_slice(&current_identities);
         seed_native_signatures_at_authenticated_instruction(
             current_instruction,
             instruction_data,
@@ -6029,54 +6043,49 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
             profile,
             tail_count,
             NativeSignatureRegistersV1 {
-                input_identities: &account_output_identities,
-                scratch_identities: &mut signature_scratch,
-                output_identities: &mut signed_identities,
+                input_identities: &current_identities,
+                scratch_identities: &mut scratch_identities,
+                output_identities: &mut next_identities,
             },
         )?;
+        core::mem::swap(&mut current_identities, &mut next_identities);
     }
 
-    let mut request_scratch_scalars = rent_quote_output_scalars.clone();
-    let mut request_scratch_identities = signed_identities.clone();
-    let mut request_output_scalars = rent_quote_output_scalars.clone();
-    let mut request_output_identities = signed_identities.clone();
     request_profile.project_atomic(
         tail_count,
         family_request,
         ProjectionRegistersV1 {
-            input_scalars: &rent_quote_output_scalars,
-            input_identities: &signed_identities,
-            scratch_scalars: &mut request_scratch_scalars,
-            scratch_identities: &mut request_scratch_identities,
-            output_scalars: &mut request_output_scalars,
-            output_identities: &mut request_output_identities,
+            input_scalars: &current_scalars,
+            input_identities: &current_identities,
+            scratch_scalars: &mut scratch_scalars,
+            scratch_identities: &mut scratch_identities,
+            output_scalars: &mut next_scalars,
+            output_identities: &mut next_identities,
         },
     )?;
+    core::mem::swap(&mut current_scalars, &mut next_scalars);
+    core::mem::swap(&mut current_identities, &mut next_identities);
     if account_profile.uses_dynamic_fixed_spans() {
         let mut revalidated = vec![0_u32; span_counts.len()];
         account_profile
-            .dynamic_span_widths_from_scalars(&request_output_scalars, &mut revalidated)
+            .dynamic_span_widths_from_scalars(&current_scalars, &mut revalidated)
             .map_err(|_| TradingSbfError::Content)?;
         if revalidated != span_counts {
             return Err(TradingSbfError::Content.into());
         }
     }
-    require_trusted_environment_v3(
-        trusted_environment,
-        &request_output_scalars,
-        &request_output_identities,
-    )?;
+    require_trusted_environment_v3(trusted_environment, &current_scalars, &current_identities)?;
     lifecycle
         .validate_projected_current_rent_quotes(
             account_profile,
             tail_count,
-            &request_output_scalars,
+            &current_scalars,
             current_rent_quotes,
         )
         .map_err(|_| TradingSbfError::Content)?;
     Ok(ProjectedRequestRegistersV3 {
-        scalars: request_output_scalars,
-        identities: request_output_identities,
+        scalars: current_scalars,
+        identities: current_identities,
     })
 }
 
