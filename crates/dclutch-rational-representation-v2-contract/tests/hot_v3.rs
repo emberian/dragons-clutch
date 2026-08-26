@@ -70,8 +70,11 @@ fn terminal_hot_specializes_exact_child_without_fixed_point() {
     let mut family_bytes = [0_u8; RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3];
     let family = RationalTerminalHotRequestV3::from_child_into(child, &mut family_bytes)
         .expect("family request");
-    assert_eq!(&family.as_bytes()[..8], &RATIONAL_TERMINAL_HOT_MAGIC_V3);
-    assert_eq!(&family.as_bytes()[144..176], &[0_u8; 32]);
+    assert_eq!(
+        family.as_bytes().get(..8),
+        Some(RATIONAL_TERMINAL_HOT_MAGIC_V3.as_slice())
+    );
+    assert_eq!(family.as_bytes().get(144..176), Some([0_u8; 32].as_slice()));
 
     let family_digest = id(91);
     let mut child_bytes = [0_u8; RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3];
@@ -82,6 +85,16 @@ fn terminal_hot_specializes_exact_child_without_fixed_point() {
     assert_eq!(specialized.header().outcome_count, 258);
     assert_eq!(specialized.header().selected_outcome, 257);
     assert_eq!(specialized.asset(0).expect("asset").shard_mint, id(20));
+
+    let registers = family
+        .project_registers(family_digest)
+        .expect("canonical register projection");
+    assert_eq!(registers.identity(0), Ok(family_digest));
+    assert_eq!(registers.identity(11), Ok(id(20)));
+    assert_eq!(registers.scalar(9), Ok(258));
+    assert_eq!(registers.scalar(10), Ok(257));
+    assert_eq!(registers.identity(15), Err(Error::InvalidWidth));
+    assert_eq!(registers.scalar(16), Err(Error::InvalidWidth));
 }
 
 #[test]
