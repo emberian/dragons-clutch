@@ -46,8 +46,10 @@ use dclutch_transition_vm::v3::{
 use sha2::{Digest, Sha256};
 
 mod manifest;
+mod source_operator;
 
 pub use manifest::*;
+pub use source_operator::*;
 
 /// Domain for the exact generated bundle and provenance commitment.
 pub const SERIES_SHADOW_BUNDLE_DIGEST_DOMAIN_V4: &[u8] =
