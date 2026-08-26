@@ -3163,6 +3163,16 @@ fn authenticate_dynamic_span_widths_v3(
             transport_span: None,
         });
     }
+    if profile.dynamic_fixed_span_count() == 0 {
+        if effect.successor.span_count() != 0 {
+            return Err(TradingSbfError::Content.into());
+        }
+        return Ok(AuthenticatedDynamicSpanWidthsV3 {
+            widths: Vec::new(),
+            request_projection_scalars: Vec::new(),
+            transport_span: None,
+        });
+    }
     let mut input_scalars = vec![0_u64; scalar_count];
     let mut input_identities = vec![[0_u8; 32]; identity_count];
     *input_identities
