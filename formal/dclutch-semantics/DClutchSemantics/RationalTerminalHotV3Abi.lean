@@ -31,9 +31,26 @@ def childActionOffset : Nat := RequestField.offset .action
 def childCallerRoleOffset : Nat := RequestField.offset .callerRole
 def parentContextOffset : Nat := RequestField.offset .parentContext
 
+/-!
+The Hot RequestProfile consumes the terminal family as one fixed 648-byte
+request.  These aliases remain projections of the sole physical ABI owner;
+they do not restate numeric coordinates.  Asset coordinates are made absolute
+because the RequestProfile instruction space is the complete family request.
+-/
+def requestOffset (field : RequestField) : Nat := RequestField.offset field
+def assetStartOffset : Nat := requestHeaderBytes
+def absoluteAssetOffset (field : AssetField) : Nat :=
+  assetStartOffset + AssetField.offset field
+
 theorem request_bytes_exact : requestBytes = 648 := by decide
 theorem parent_context_is_digest_coordinate : parentContextOffset = 144 := by decide
 theorem specialization_preserves_width :
     requestBytes = requestHeaderBytes + assetBytes := by decide
+theorem request_profile_coordinates_exact :
+    requestOffset .releaseSet = 16 ∧
+    requestOffset .expectedRepresentationRevision = 400 ∧
+    requestOffset .outcomeCount = 472 ∧
+    absoluteAssetOffset .shardMint = 488 ∧
+    absoluteAssetOffset .expectedStructuredShards = 640 := by decide
 
 end DClutch.RationalTerminalHotV3Abi
