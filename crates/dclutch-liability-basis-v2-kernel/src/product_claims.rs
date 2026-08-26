@@ -65,12 +65,23 @@ pub const CAPPED_RAMP_COMPLEMENT_FLOOR_BOUNDARY_ID_V2: [u8; 32] = [
     0xdb, 0xc0, 0x28, 0x5d, 0xd2, 0x8a, 0xe1, 0x1c, 0xd2, 0xae, 0xcb, 0x84, 0xab, 0x48, 0x2d, 0xe5,
     0x03, 0x32, 0x81, 0x10, 0x4d, 0x92, 0xcc, 0x07, 0xd7, 0x09, 0x17, 0x04, 0xf0, 0x01, 0x40, 0x8e,
 ];
+/// Domain separating one Product-independent LiabilityBasisV2 semantic identity.
+///
+/// Adapters hash this domain followed by the slices returned by
+/// [`semantic_basis_preimage_v2`]. The Product-instance link is omitted so one
+/// semantic evaluator may be linked to multiple Product instances without
+/// conflating their distinct finalized linked records.
+pub const BASIS_SEMANTIC_ID_DOMAIN_V2: &[u8] = b"dclutch/lbv2/semantic-id/v2";
 
 const KIND_OFFSET: usize = 12;
 const CLAIM_COUNT_OFFSET: usize = 16;
 const BODY_BYTES_OFFSET: usize = 20;
 const SCALE_OFFSET: usize = 24;
 const PRODUCT_INSTANCE_ID_OFFSET: usize = 32;
+/// First byte of the Product-instance link omitted from the semantic identity.
+pub const BASIS_PRODUCT_LINK_OFFSET_V2: usize = PRODUCT_INSTANCE_ID_OFFSET;
+/// First byte after the Product-instance link omitted from the semantic identity.
+pub const BASIS_PRODUCT_LINK_END_V2: usize = BASIS_PRODUCT_LINK_OFFSET_V2 + CONTENT_ID_BYTES_V2;
 const EVALUATOR_RELEASE_ID_OFFSET: usize = 64;
 const ROUNDING_BOUNDARY_ID_OFFSET: usize = 96;
 const CATEGORICAL_KIND_V2: u8 = 1;
@@ -83,6 +94,25 @@ const RAMP_RIGHT_NUMERATOR_OFFSET: usize = 144;
 const LINKED_PRODUCT_INSTANCE_ID_OFFSET: usize = 16;
 const LINKED_SEMANTIC_BASIS_ID_OFFSET: usize = 48;
 const LINKED_EMBEDDED_BYTES_OFFSET: usize = 80;
+
+/// Canonical Product-independent semantic-identity preimage slices.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SemanticBasisPreimageV2<'a> {
+    prefix: &'a [u8],
+    suffix: &'a [u8],
+}
+
+impl<'a> SemanticBasisPreimageV2<'a> {
+    /// Bytes preceding the omitted Product-instance link.
+    pub const fn prefix(self) -> &'a [u8] {
+        self.prefix
+    }
+
+    /// Bytes following the omitted Product-instance link.
+    pub const fn suffix(self) -> &'a [u8] {
+        self.suffix
+    }
+}
 
 /// Refusal from LiabilityBasisV2 Product admission or Claims planning.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -152,6 +182,25 @@ impl ContentIdV2 {
     pub const fn as_bytes(&self) -> &[u8; CONTENT_ID_BYTES_V2] {
         &self.0
     }
+}
+
+/// Validate one canonical basis and project its sole semantic-identity preimage.
+///
+/// Hashing remains an adapter concern. This function owns which bytes have
+/// evaluator meaning and refuses malformed or noncanonical basis records
+/// before exposing either slice.
+pub fn semantic_basis_preimage_v2(
+    basis_record: &[u8],
+) -> ProductClaimsResultV2<SemanticBasisPreimageV2<'_>> {
+    let placeholder = ContentIdV2::new([1; CONTENT_ID_BYTES_V2])?;
+    let _ = decode_basis(basis_record, placeholder)?;
+    let prefix = basis_record
+        .get(..BASIS_PRODUCT_LINK_OFFSET_V2)
+        .ok_or(ProductClaimsErrorV2::InvalidLength)?;
+    let suffix = basis_record
+        .get(BASIS_PRODUCT_LINK_END_V2..)
+        .ok_or(ProductClaimsErrorV2::InvalidLength)?;
+    Ok(SemanticBasisPreimageV2 { prefix, suffix })
 }
 
 /// Runtime evaluator selected by an admitted LiabilityBasisV2 record.
