@@ -19,6 +19,10 @@ use solana_program::{
     pubkey::Pubkey,
 };
 
+/// Family-neutral EffectProgram V3 composition for canonical Claims CPIs.
+#[cfg(feature = "families")]
+pub mod claims_composition_v3;
+
 /// Dealer family projection behind the common data-defined Trading boundary.
 #[cfg(feature = "families")]
 pub mod dealer;

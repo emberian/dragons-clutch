@@ -753,6 +753,25 @@ impl ProtocolPositionAdmissionV2 {
     pub const fn admission_lamports(self) -> u64 {
         self.request.observed_admission_lamports
     }
+
+    /// Require this immediate receipt to bind one exact admission request.
+    pub fn validate_request(
+        self,
+        request: ProtocolPositionRequestV2,
+        request_digest: [u8; 32],
+        claims_program: [u8; 32],
+        trading_program: [u8; 32],
+    ) -> Result<()> {
+        if self.request != request
+            || self.evidence.request_digest != request_digest
+            || self.evidence.claims_program != claims_program
+            || self.evidence.trading_program != trading_program
+        {
+            Err(ProtocolPositionErrorV2::ReceiptMismatch)
+        } else {
+            Ok(())
+        }
+    }
 }
 
 /// Exact terminal-close evidence supplied by the adapter.
@@ -954,6 +973,40 @@ impl ProtocolPositionCloseReceiptV2 {
             return Err(ProtocolPositionErrorV2::ReceiptMismatch);
         }
         Ok(value)
+    }
+
+    /// Require this immediate receipt to bind one exact close request.
+    pub fn validate_request(
+        self,
+        request: ProtocolPositionRequestV2,
+        request_digest: [u8; 32],
+        claims_program: [u8; 32],
+    ) -> Result<()> {
+        let total = request
+            .observed_position_lamports
+            .checked_add(request.observed_admission_lamports)
+            .ok_or(ProtocolPositionErrorV2::InvalidRent)?;
+        if request.action != ProtocolPositionActionV2::Close
+            || self.owner_kind != request.owner_kind
+            || self.release_set != request.release_set
+            || self.market != request.market
+            || self.position_owner != request.position_owner
+            || self.parent_request_digest != request.parent_request_digest
+            || self.request_digest != request_digest
+            || self.rent_credit != request.rent_credit
+            || self.rent_program != request.rent_program
+            || self.claims_program != claims_program
+            || self.position_lamports != request.observed_position_lamports
+            || self.admission_lamports != request.observed_admission_lamports
+            || self.total_credit != total
+            || self.position_revision != request.expected_position_revision
+            || self.market_revision != request.expected_market_revision
+            || self.generation != request.generation
+        {
+            Err(ProtocolPositionErrorV2::ReceiptMismatch)
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -1175,6 +1228,23 @@ mod tests {
             ProtocolPositionAdmissionV2::decode_receipt(&receipt),
             Ok(admission)
         );
+        admission
+            .validate_request(
+                request,
+                evidence().request_digest,
+                evidence().claims_program,
+                evidence().trading_program,
+            )
+            .expect("exact request-bound receipt");
+        assert_eq!(
+            admission.validate_request(
+                request,
+                [99; 32],
+                evidence().claims_program,
+                evidence().trading_program,
+            ),
+            Err(ProtocolPositionErrorV2::ReceiptMismatch)
+        );
 
         let mut dirty = state;
         dirty[EVIDENCE_RESERVED_TAIL_OFFSET] = 1;
@@ -1201,6 +1271,13 @@ mod tests {
         .expect("close");
         let bytes = close.to_bytes().expect("bytes");
         assert_eq!(ProtocolPositionCloseReceiptV2::decode(&bytes), Ok(close));
+        close
+            .validate_request(request, [14; 32], [16; 32])
+            .expect("exact request-bound close");
+        assert_eq!(
+            close.validate_request(request, [99; 32], [16; 32]),
+            Err(ProtocolPositionErrorV2::ReceiptMismatch)
+        );
 
         let mut bad = bytes;
         bad[CLOSE_RENT_CREDIT_AFTER_OFFSET] = 44;

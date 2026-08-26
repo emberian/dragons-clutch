@@ -9,6 +9,7 @@
 //! The vector tail is borrowed, exact-width, and never allocated.
 
 pub mod affine_batch_v2;
+pub mod composition_v3;
 pub mod protocol_position_v2;
 
 /// Bytes before the runtime-width `u64` quantity vector.
