@@ -31,7 +31,9 @@ use dclutch_claims_svm::{
     },
 };
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{CompartmentV1, CustodyRequestV1, OperationV1};
+use dclutch_custody_contract::{
+    CUSTODY_RECEIPT_BYTES_V1, CompartmentV1, CustodyRequestV1, OperationV1,
+};
 use dclutch_effect_kernel::{
     v2::FixedRole,
     v3::{ProgramV3 as EffectProgramV3, RouteKindV3},
@@ -568,8 +570,25 @@ fn validate_hot_account_profile(account: AccountProfileV2<'_>) -> Result<()> {
 
 fn validate_routes(action: Action, effect: EffectProgramV3<'_>) -> Result<()> {
     match action {
-        Action::Consider | Action::Freeze | Action::InitializeSettlement => {
-            require_route_count(effect, 0)
+        Action::Consider | Action::Freeze => require_route_count(effect, 0),
+        Action::InitializeSettlement => {
+            require_route_count(effect, 2)?;
+            require_custody_route(
+                effect,
+                0,
+                OperationV1::InitializeReplay,
+                CompartmentV1::None,
+                CompartmentV1::None,
+                None,
+            )?;
+            require_custody_route(
+                effect,
+                1,
+                OperationV1::OpenVault,
+                CompartmentV1::None,
+                CompartmentV1::Settlement,
+                Some((FixedRole::Custody, 0)),
+            )
         }
         Action::Collect => {
             require_route_count(effect, 3)?;
@@ -609,12 +628,28 @@ fn validate_routes(action: Action, effect: EffectProgramV3<'_>) -> Result<()> {
             )
         }
         Action::Close => {
-            require_route_count(effect, 1)?;
+            require_route_count(effect, 3)?;
             require_custody_transfer_route(
                 effect,
                 0,
                 CompartmentV1::Settlement,
                 CompartmentV1::External,
+            )?;
+            require_custody_route(
+                effect,
+                1,
+                OperationV1::CloseVault,
+                CompartmentV1::Settlement,
+                CompartmentV1::None,
+                None,
+            )?;
+            require_custody_route(
+                effect,
+                2,
+                OperationV1::CloseReplay,
+                CompartmentV1::None,
+                CompartmentV1::None,
+                Some((FixedRole::Custody, 1)),
             )
         }
     }
@@ -722,6 +757,24 @@ fn require_custody_transfer_route(
     source: CompartmentV1,
     destination: CompartmentV1,
 ) -> Result<()> {
+    require_custody_route(
+        effect,
+        index,
+        OperationV1::Transfer,
+        source,
+        destination,
+        None,
+    )
+}
+
+fn require_custody_route(
+    effect: EffectProgramV3<'_>,
+    index: u16,
+    operation: OperationV1,
+    source: CompartmentV1,
+    destination: CompartmentV1,
+    dependency: Option<(FixedRole, u16)>,
+) -> Result<()> {
     let route = effect
         .route(index)
         .map_err(|_| GeneralArtifactErrorV3::Effect)?;
@@ -732,9 +785,16 @@ fn require_custody_transfer_route(
     if route.role() != FixedRole::Custody
         || route.kind() != RouteKindV3::Once
         || !item.is_empty()
-        || request.operation != OperationV1::Transfer
+        || request.operation != operation
         || request.source_compartment != source
         || request.destination_compartment != destination
+        || route.receipt_dependency().map(|value| {
+            (
+                value.producer_role(),
+                value.producer_route(),
+                usize::from(value.expected_receipt_bytes()),
+            )
+        }) != dependency.map(|(role, route)| (role, route, CUSTODY_RECEIPT_BYTES_V1))
     {
         return Err(GeneralArtifactErrorV3::Effect);
     }

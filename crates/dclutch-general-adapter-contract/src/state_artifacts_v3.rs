@@ -38,44 +38,6 @@ pub const GENERAL_CLOSE_PAYER_ACCOUNT_V3: u16 = 7;
 /// Shared Close terminal-create and settlement-close RentCredit coordinate.
 pub const GENERAL_CLOSE_RENT_CREDIT_ACCOUNT_V3: u16 = 8;
 
-/// AccountProfile-owned live primary bump observation.
-pub const GENERAL_PRIMARY_BUMP_OBSERVATION_SCALAR_V3: u16 = 71;
-/// AccountProfile-owned live primary historical-principal observation.
-pub const GENERAL_PRIMARY_PRINCIPAL_OBSERVATION_SCALAR_V3: u16 = 72;
-/// Lifecycle-owned primary created/authenticated branch output.
-pub const GENERAL_PRIMARY_CREATED_SCALAR_V3: u16 = 73;
-/// Lifecycle-owned primary canonical bump output.
-pub const GENERAL_PRIMARY_BUMP_SCALAR_V3: u16 = 74;
-/// Lifecycle-owned primary historical-principal output.
-pub const GENERAL_PRIMARY_PRINCIPAL_SCALAR_V3: u16 = 75;
-/// AccountProfile-owned live terminal bump observation.
-pub const GENERAL_TERMINAL_BUMP_OBSERVATION_SCALAR_V3: u16 = 76;
-/// AccountProfile-owned live terminal historical-principal observation.
-pub const GENERAL_TERMINAL_PRINCIPAL_OBSERVATION_SCALAR_V3: u16 = 77;
-/// Lifecycle-owned terminal created/authenticated branch output.
-pub const GENERAL_TERMINAL_CREATED_SCALAR_V3: u16 = 78;
-/// Lifecycle-owned terminal canonical bump output.
-pub const GENERAL_TERMINAL_BUMP_SCALAR_V3: u16 = 79;
-/// Lifecycle-owned terminal historical-principal output.
-pub const GENERAL_TERMINAL_PRINCIPAL_SCALAR_V3: u16 = 80;
-
-/// AccountProfile-owned live primary RentCredit beneficiary observation.
-pub const GENERAL_PRIMARY_BENEFICIARY_OBSERVATION_IDENTITY_V3: u16 = 32;
-/// Lifecycle-owned primary beneficiary output.
-pub const GENERAL_PRIMARY_BENEFICIARY_IDENTITY_V3: u16 = 33;
-/// Lifecycle-owned primary state-key output.
-pub const GENERAL_PRIMARY_STATE_IDENTITY_V3: u16 = 34;
-/// Lifecycle-owned primary Trading-owner output.
-pub const GENERAL_PRIMARY_OWNER_IDENTITY_V3: u16 = 35;
-/// AccountProfile-owned live terminal RentCredit beneficiary observation.
-pub const GENERAL_TERMINAL_BENEFICIARY_OBSERVATION_IDENTITY_V3: u16 = 36;
-/// Lifecycle-owned terminal beneficiary output.
-pub const GENERAL_TERMINAL_BENEFICIARY_IDENTITY_V3: u16 = 37;
-/// Lifecycle-owned terminal state-key output.
-pub const GENERAL_TERMINAL_STATE_IDENTITY_V3: u16 = 38;
-/// Lifecycle-owned terminal Trading-owner output.
-pub const GENERAL_TERMINAL_OWNER_IDENTITY_V3: u16 = 39;
-
 const GENERAL_STATE_SEED_DOMAIN_V3: &[u8] = b"dclutch-general-state-v3";
 const SELECTION_STATE_SEED_V3: &[u8] = b"selection";
 const SETTLEMENT_STATE_SEED_V3: &[u8] = b"settlement";
@@ -186,15 +148,15 @@ fn encode_primary(action: Action, scratch: &mut [u8], output: &mut [u8]) -> Resu
         rent_credit: Some(LifecycleAccountCoordinateV3::fixed(
             GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3,
         )),
-        principal: Some(LifecycleRegisterCoordinateV3::common(
-            GENERAL_PRIMARY_PRINCIPAL_OBSERVATION_SCALAR_V3,
-        )),
-        beneficiary: Some(LifecycleRegisterCoordinateV3::common(
-            GENERAL_PRIMARY_BENEFICIARY_OBSERVATION_IDENTITY_V3,
-        )),
+        principal: Some(LifecycleRegisterCoordinateV3::common(scalar_u16(
+            scalar::PRIMARY_PRINCIPAL_OBSERVATION,
+        )?)),
+        beneficiary: Some(LifecycleRegisterCoordinateV3::common(identity_u16(
+            identity::PRIMARY_BENEFICIARY_OBSERVATION,
+        )?)),
         guard: LifecycleGuardInputV3::Always,
     }];
-    let protected = [Some(primary_protected())];
+    let protected = [Some(primary_protected()?)];
     encode_lifecycle_policy_with_protected_outputs_v3_atomic(
         &recipe,
         if selection {
@@ -265,12 +227,12 @@ fn encode_close(action: Action, scratch: &mut [u8], output: &mut [u8]) -> Result
             rent_credit: Some(LifecycleAccountCoordinateV3::fixed(
                 GENERAL_CLOSE_RENT_CREDIT_ACCOUNT_V3,
             )),
-            principal: Some(LifecycleRegisterCoordinateV3::common(
-                GENERAL_PRIMARY_PRINCIPAL_OBSERVATION_SCALAR_V3,
-            )),
-            beneficiary: Some(LifecycleRegisterCoordinateV3::common(
-                GENERAL_PRIMARY_BENEFICIARY_OBSERVATION_IDENTITY_V3,
-            )),
+            principal: Some(LifecycleRegisterCoordinateV3::common(scalar_u16(
+                scalar::PRIMARY_PRINCIPAL_OBSERVATION,
+            )?)),
+            beneficiary: Some(LifecycleRegisterCoordinateV3::common(identity_u16(
+                identity::PRIMARY_BENEFICIARY_OBSERVATION,
+            )?)),
             guard: LifecycleGuardInputV3::Always,
         },
         LifecyclePlanInputV3 {
@@ -283,16 +245,16 @@ fn encode_close(action: Action, scratch: &mut [u8], output: &mut [u8]) -> Result
             rent_credit: Some(LifecycleAccountCoordinateV3::fixed(
                 GENERAL_CLOSE_RENT_CREDIT_ACCOUNT_V3,
             )),
-            principal: Some(LifecycleRegisterCoordinateV3::common(
-                GENERAL_TERMINAL_PRINCIPAL_OBSERVATION_SCALAR_V3,
-            )),
-            beneficiary: Some(LifecycleRegisterCoordinateV3::common(
-                GENERAL_TERMINAL_BENEFICIARY_OBSERVATION_IDENTITY_V3,
-            )),
+            principal: Some(LifecycleRegisterCoordinateV3::common(scalar_u16(
+                scalar::TERMINAL_PRINCIPAL_OBSERVATION,
+            )?)),
+            beneficiary: Some(LifecycleRegisterCoordinateV3::common(identity_u16(
+                identity::TERMINAL_BENEFICIARY_OBSERVATION,
+            )?)),
             guard: LifecycleGuardInputV3::Always,
         },
     ];
-    let protected = [None, Some(terminal_protected())];
+    let protected = [None, Some(terminal_protected()?)];
     encode_lifecycle_policy_with_protected_outputs_v3_atomic(
         &recipes, &seeds, &plans, &protected, scratch, output,
     )
@@ -301,28 +263,28 @@ fn encode_close(action: Action, scratch: &mut [u8], output: &mut [u8]) -> Result
     Ok(())
 }
 
-const fn primary_protected() -> LifecycleProtectedOutputsInputV3 {
-    LifecycleProtectedOutputsInputV3 {
-        created: GENERAL_PRIMARY_CREATED_SCALAR_V3,
-        bump_observation: GENERAL_PRIMARY_BUMP_OBSERVATION_SCALAR_V3,
-        bump: GENERAL_PRIMARY_BUMP_SCALAR_V3,
-        historical_rent_principal: GENERAL_PRIMARY_PRINCIPAL_SCALAR_V3,
-        beneficiary: GENERAL_PRIMARY_BENEFICIARY_IDENTITY_V3,
-        state: GENERAL_PRIMARY_STATE_IDENTITY_V3,
-        owner: GENERAL_PRIMARY_OWNER_IDENTITY_V3,
-    }
+fn primary_protected() -> Result<LifecycleProtectedOutputsInputV3> {
+    Ok(LifecycleProtectedOutputsInputV3 {
+        created: scalar_u16(scalar::PRIMARY_CREATED)?,
+        bump_observation: scalar_u16(scalar::PRIMARY_BUMP_OBSERVATION)?,
+        bump: scalar_u16(scalar::PRIMARY_CANONICAL_BUMP)?,
+        historical_rent_principal: scalar_u16(scalar::PRIMARY_RENT_PRINCIPAL)?,
+        beneficiary: identity_u16(identity::PRIMARY_BENEFICIARY)?,
+        state: identity_u16(identity::PRIMARY_STATE)?,
+        owner: identity_u16(identity::PRIMARY_OWNER)?,
+    })
 }
 
-const fn terminal_protected() -> LifecycleProtectedOutputsInputV3 {
-    LifecycleProtectedOutputsInputV3 {
-        created: GENERAL_TERMINAL_CREATED_SCALAR_V3,
-        bump_observation: GENERAL_TERMINAL_BUMP_OBSERVATION_SCALAR_V3,
-        bump: GENERAL_TERMINAL_BUMP_SCALAR_V3,
-        historical_rent_principal: GENERAL_TERMINAL_PRINCIPAL_SCALAR_V3,
-        beneficiary: GENERAL_TERMINAL_BENEFICIARY_IDENTITY_V3,
-        state: GENERAL_TERMINAL_STATE_IDENTITY_V3,
-        owner: GENERAL_TERMINAL_OWNER_IDENTITY_V3,
-    }
+fn terminal_protected() -> Result<LifecycleProtectedOutputsInputV3> {
+    Ok(LifecycleProtectedOutputsInputV3 {
+        created: scalar_u16(scalar::TERMINAL_CREATED)?,
+        bump_observation: scalar_u16(scalar::TERMINAL_BUMP_OBSERVATION)?,
+        bump: scalar_u16(scalar::TERMINAL_CANONICAL_BUMP)?,
+        historical_rent_principal: scalar_u16(scalar::TERMINAL_RENT_PRINCIPAL)?,
+        beneficiary: identity_u16(identity::TERMINAL_BENEFICIARY)?,
+        state: identity_u16(identity::TERMINAL_STATE)?,
+        owner: identity_u16(identity::TERMINAL_OWNER)?,
+    })
 }
 
 const fn lifecycle_counts(action: Action) -> (usize, usize, usize) {

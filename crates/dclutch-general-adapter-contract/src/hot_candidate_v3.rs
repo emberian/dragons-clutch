@@ -13,6 +13,7 @@ use dclutch_execution_strategy_contract::v2::{ExecutionCandidateV2, register_ban
 use dclutch_general_codec::Action;
 
 use crate::{
+    local_state_v3::{GeneralLocalStateKindV3, GeneralLocalStateLayoutV3},
     runtime_selection::{
         RuntimeSelectionCursorV2, RuntimeSelectionLayoutV2, RuntimeSelectionPhaseV2,
     },
@@ -22,11 +23,11 @@ use crate::{
 };
 
 /// Exact common scalar-register count in the General Hot38 ABI.
-pub const GENERAL_HOT_COMMON_SCALARS_V3: u32 = 71;
+pub const GENERAL_HOT_COMMON_SCALARS_V3: u32 = 84;
 /// Outcome index, quantity, three claim magnitudes, and cursor inventory.
 pub const GENERAL_HOT_ITEM_SCALAR_STRIDE_V3: u32 = 6;
 /// Exact common identity-register count in the General Hot38 ABI.
-pub const GENERAL_HOT_COMMON_IDENTITIES_V3: u32 = 32;
+pub const GENERAL_HOT_COMMON_IDENTITIES_V3: u32 = 40;
 /// General has no per-outcome identity tail.
 pub const GENERAL_HOT_ITEM_IDENTITY_STRIDE_V3: u32 = 0;
 
@@ -174,6 +175,32 @@ pub mod scalar {
     pub const STATE_BUMP: u32 = 69;
     /// Untrusted Close terminal-record PDA bump witness projected from the request.
     pub const TERMINAL_RECORD_BUMP: u32 = 70;
+    /// AccountProfile-owned persisted primary-state bump observation.
+    pub const PRIMARY_BUMP_OBSERVATION: u32 = 71;
+    /// AccountProfile-owned primary-state historical Rent principal observation.
+    pub const PRIMARY_PRINCIPAL_OBSERVATION: u32 = 72;
+    /// Lifecycle-owned primary-state created/authenticated branch.
+    pub const PRIMARY_CREATED: u32 = 73;
+    /// Lifecycle-owned primary-state canonical bump.
+    pub const PRIMARY_CANONICAL_BUMP: u32 = 74;
+    /// Lifecycle-owned primary-state historical Rent principal.
+    pub const PRIMARY_RENT_PRINCIPAL: u32 = 75;
+    /// AccountProfile-owned persisted terminal-record bump observation.
+    pub const TERMINAL_BUMP_OBSERVATION: u32 = 76;
+    /// AccountProfile-owned terminal-record historical Rent principal observation.
+    pub const TERMINAL_PRINCIPAL_OBSERVATION: u32 = 77;
+    /// Lifecycle-owned terminal-record created/authenticated branch.
+    pub const TERMINAL_CREATED: u32 = 78;
+    /// Lifecycle-owned terminal-record canonical bump.
+    pub const TERMINAL_CANONICAL_BUMP: u32 = 79;
+    /// Lifecycle-owned terminal-record historical Rent principal.
+    pub const TERMINAL_RENT_PRINCIPAL: u32 = 80;
+    /// General local-state envelope magic as one little-endian scalar.
+    pub const LOCAL_STATE_MAGIC: u32 = 81;
+    /// General local-state envelope ABI version.
+    pub const LOCAL_STATE_VERSION: u32 = 82;
+    /// General local-state selection/settlement kind.
+    pub const LOCAL_STATE_KIND: u32 = 83;
 }
 
 /// Scalar coordinates within each Product-outcome item bank.
@@ -258,6 +285,22 @@ pub mod identity {
     pub const SELECTION_POLICY: u32 = 30;
     /// Digest of the exact best submitted VerifiedCandidate record.
     pub const BEST_VERIFIED_DIGEST: u32 = 31;
+    /// AccountProfile-owned primary-state RentCredit beneficiary observation.
+    pub const PRIMARY_BENEFICIARY_OBSERVATION: u32 = 32;
+    /// Lifecycle-owned primary-state RentCredit beneficiary.
+    pub const PRIMARY_BENEFICIARY: u32 = 33;
+    /// Lifecycle-owned exact primary-state PDA.
+    pub const PRIMARY_STATE: u32 = 34;
+    /// Lifecycle-owned current Trading program owner.
+    pub const PRIMARY_OWNER: u32 = 35;
+    /// AccountProfile-owned terminal-record RentCredit beneficiary observation.
+    pub const TERMINAL_BENEFICIARY_OBSERVATION: u32 = 36;
+    /// Lifecycle-owned terminal-record RentCredit beneficiary.
+    pub const TERMINAL_BENEFICIARY: u32 = 37;
+    /// Lifecycle-owned exact terminal-record PDA.
+    pub const TERMINAL_STATE: u32 = 38;
+    /// Lifecycle-owned terminal-record Trading program owner.
+    pub const TERMINAL_OWNER: u32 = 39;
 }
 
 /// Independently authenticated environment needed by exact Claims/Custody packets.
@@ -415,6 +458,7 @@ pub fn project_general_selection_candidate_v3<'a>(
     }
     exact_candidate_capacities(outcome_count, authenticated_input, scratch, output)?;
     scratch.copy_from_slice(authenticated_input);
+    write_local_state_constants(scratch, GeneralLocalStateKindV3::Selection)?;
     for (coordinate, value) in [
         (scalar::ACTION, u64::from(action as u8)),
         (scalar::OUTCOME_COUNT, u64::from(outcome_count)),
@@ -512,6 +556,7 @@ pub fn project_general_initialize_candidate_v3<'a>(
         }
     }
     scratch.copy_from_slice(authenticated_input);
+    write_local_state_constants(scratch, GeneralLocalStateKindV3::Settlement)?;
     for (coordinate, value) in [
         (
             scalar::ACTION,
@@ -643,6 +688,7 @@ pub fn project_general_hot_candidate_v3<'a>(
         environment,
     )?;
     scratch.copy_from_slice(authenticated_input);
+    write_local_state_constants(scratch, GeneralLocalStateKindV3::Settlement)?;
     let header = plan.header();
     let position = position_geometry(header.action, header.claims_active, environment, header)?;
     let custody = custody_geometry(
@@ -1265,6 +1311,23 @@ fn move_tag(value: RuntimeCompleteSetMoveV2) -> u64 {
         RuntimeCompleteSetMoveV2::Mint => 1,
         RuntimeCompleteSetMoveV2::Merge => 2,
     }
+}
+
+fn write_local_state_constants(output: &mut [u8], kind: GeneralLocalStateKindV3) -> Result<()> {
+    for (coordinate, value) in [
+        (
+            scalar::LOCAL_STATE_MAGIC,
+            GeneralLocalStateLayoutV3::magic_u64(),
+        ),
+        (
+            scalar::LOCAL_STATE_VERSION,
+            u64::from(GeneralLocalStateLayoutV3::version_value()),
+        ),
+        (scalar::LOCAL_STATE_KIND, u64::from(kind.tag())),
+    ] {
+        write_scalar(output, coordinate, value)?;
+    }
+    Ok(())
 }
 
 fn write_scalar(output: &mut [u8], coordinate: u32, value: u64) -> Result<()> {

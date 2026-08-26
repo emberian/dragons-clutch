@@ -43,14 +43,20 @@ use crate::hot_candidate_v3::{
     GENERAL_HOT_ITEM_IDENTITY_STRIDE_V3, GENERAL_HOT_ITEM_SCALAR_STRIDE_V3, identity, item_scalar,
     scalar,
 };
-use crate::{runtime_selection::RuntimeSelectionLayoutV2, runtime_width::SettlementCursorLayoutV2};
+use crate::{
+    local_state_v3::GeneralLocalStateLayoutV3,
+    runtime_selection::RuntimeSelectionLayoutV2,
+    runtime_width::SettlementCursorLayoutV2,
+    state_artifacts_v3::{
+        GENERAL_PRIMARY_STATE_ACCOUNT_V3, GENERAL_TERMINAL_STATE_ACCOUNT_V3,
+        general_child_account_start_v3,
+    },
+};
 
 /// Frozen Hot38 logical fixed prefix ending at linked-basis coordinate four.
 pub const GENERAL_HOT_LOGICAL_PREFIX_ACCOUNTS_V3: u16 = 5;
 /// First action-selected General state account after the readonly Hot prefix.
-pub const GENERAL_STATE_ACCOUNT_COORDINATE_V3: u16 = GENERAL_HOT_LOGICAL_PREFIX_ACCOUNTS_V3;
-/// First child-frame account after the action-selected General state.
-pub const GENERAL_CHILD_ACCOUNT_START_V3: u16 = GENERAL_STATE_ACCOUNT_COORDINATE_V3 + 1;
+pub const GENERAL_STATE_ACCOUNT_COORDINATE_V3: u16 = GENERAL_PRIMARY_STATE_ACCOUNT_V3;
 
 const POSITION_ADMIT_ACCOUNTS: u16 = 26;
 const POSITION_CLOSE_ACCOUNTS: u16 = 15;
@@ -93,10 +99,11 @@ pub const GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3: EffectInstructionV3 =
 /// Return `(fixed, repeated-item)` instruction counts for one action artifact.
 pub const fn general_effect_instruction_count_v3(action: Action) -> (usize, usize) {
     match action {
-        Action::Consider | Action::Freeze => (14, 0),
-        Action::InitializeSettlement => (35, 1),
+        Action::Consider => (20, 0),
+        Action::Freeze => (14, 0),
+        Action::InitializeSettlement => (41, 1),
         Action::Collect | Action::Materialize | Action::Distribute => (61, 12),
-        Action::Close => (73, 1),
+        Action::Close => (79, 1),
     }
 }
 
@@ -177,7 +184,7 @@ pub fn general_effect_account_count_v3(action: Action) -> Result<u16> {
             CUSTODY_TRANSFER_ACCOUNTS + CUSTODY_CLOSE_VAULT_ACCOUNTS + CUSTODY_CLOSE_REPLAY_ACCOUNTS
         }
     };
-    GENERAL_CHILD_ACCOUNT_START_V3
+    general_child_account_start_v3(action)
         .checked_add(suffix)
         .ok_or(GeneralEffectArtifactErrorV3::Geometry)
 }
@@ -329,7 +336,7 @@ fn build_initialize<'a>(
         CompartmentV1::None,
         CompartmentV1::Settlement,
     )?);
-    let initialize_start = GENERAL_CHILD_ACCOUNT_START_V3;
+    let initialize_start = general_child_account_start_v3(Action::InitializeSettlement);
     let open_start = add_accounts(initialize_start, CUSTODY_INITIALIZE_ACCOUNTS)?;
     routes[0] = route(
         FixedRole::Custody,
@@ -405,7 +412,7 @@ fn build_settlement<'a>(
     )?;
     copy_at(templates, custody_offset, &custody_bytes)?;
 
-    let prefix = GENERAL_CHILD_ACCOUNT_START_V3;
+    let prefix = general_child_account_start_v3(action);
     let affine_accounts = AFFINE_FIXED_ACCOUNTS
         .checked_add(
             u16::try_from(position_count).map_err(|_| GeneralEffectArtifactErrorV3::Geometry)?,
@@ -529,7 +536,7 @@ fn build_close<'a>(
     copy_at(templates, 0, &transfer)?;
     copy_at(templates, CUSTODY_REQUEST_BYTES_V1, &close_vault)?;
     copy_at(templates, 2 * CUSTODY_REQUEST_BYTES_V1, &close_replay)?;
-    let transfer_start = GENERAL_CHILD_ACCOUNT_START_V3;
+    let transfer_start = general_child_account_start_v3(Action::Close);
     let vault_start = add_accounts(transfer_start, CUSTODY_TRANSFER_ACCOUNTS)?;
     let replay_start = add_accounts(vault_start, CUSTODY_CLOSE_VAULT_ACCOUNTS)?;
     routes[0] = route(
@@ -587,7 +594,18 @@ fn append_general_state_patches(
     fixed: &mut usize,
     item: &mut usize,
 ) -> Result<()> {
-    let state = AccountCoordinateV3::fixed(GENERAL_STATE_ACCOUNT_COORDINATE_V3);
+    let terminal = action == Action::Close;
+    let state = AccountCoordinateV3::fixed(if terminal {
+        GENERAL_TERMINAL_STATE_ACCOUNT_V3
+    } else {
+        GENERAL_STATE_ACCOUNT_COORDINATE_V3
+    });
+    if matches!(
+        action,
+        Action::Consider | Action::InitializeSettlement | Action::Close
+    ) {
+        append_local_state_header(instructions, fixed, state, terminal)?;
+    }
     if matches!(action, Action::Consider | Action::Freeze) {
         for (offset, coordinate) in [
             (RuntimeSelectionLayoutV2::magic(), scalar::SELECTION_MAGIC),
@@ -607,7 +625,11 @@ fn append_general_state_patches(
             push_fixed(
                 instructions,
                 fixed,
-                EffectInstructionV3::write_u64(state, offset, scalar_common(coordinate)?),
+                EffectInstructionV3::write_u64(
+                    state,
+                    state_body_offset(offset)?,
+                    scalar_common(coordinate)?,
+                ),
             )?;
         }
         push_fixed(
@@ -615,7 +637,7 @@ fn append_general_state_patches(
             fixed,
             EffectInstructionV3::write_u16(
                 state,
-                RuntimeSelectionLayoutV2::version(),
+                state_body_offset(RuntimeSelectionLayoutV2::version())?,
                 scalar_common(scalar::RUNTIME_WIDTH_VERSION)?,
             ),
         )?;
@@ -624,7 +646,7 @@ fn append_general_state_patches(
             fixed,
             EffectInstructionV3::write_u8(
                 state,
-                RuntimeSelectionLayoutV2::phase(),
+                state_body_offset(RuntimeSelectionLayoutV2::phase())?,
                 scalar_common(scalar::SELECTION_PHASE)?,
             ),
         )?;
@@ -645,7 +667,11 @@ fn append_general_state_patches(
             push_fixed(
                 instructions,
                 fixed,
-                EffectInstructionV3::write_u32(state, offset, scalar_common(coordinate)?),
+                EffectInstructionV3::write_u32(
+                    state,
+                    state_body_offset(offset)?,
+                    scalar_common(coordinate)?,
+                ),
             )?;
         }
         for (offset, coordinate) in [
@@ -673,7 +699,11 @@ fn append_general_state_patches(
             push_fixed(
                 instructions,
                 fixed,
-                EffectInstructionV3::write_identity(state, offset, identity_common(coordinate)?),
+                EffectInstructionV3::write_identity(
+                    state,
+                    state_body_offset(offset)?,
+                    identity_common(coordinate)?,
+                ),
             )?;
         }
         return Ok(());
@@ -701,7 +731,11 @@ fn append_general_state_patches(
         push_fixed(
             instructions,
             fixed,
-            EffectInstructionV3::write_u64(state, offset, scalar_common(coordinate)?),
+            EffectInstructionV3::write_u64(
+                state,
+                state_body_offset(offset)?,
+                scalar_common(coordinate)?,
+            ),
         )?;
     }
     push_fixed(
@@ -709,7 +743,7 @@ fn append_general_state_patches(
         fixed,
         EffectInstructionV3::write_u16(
             state,
-            SettlementCursorLayoutV2::version(),
+            state_body_offset(SettlementCursorLayoutV2::version())?,
             scalar_common(scalar::RUNTIME_WIDTH_VERSION)?,
         ),
     )?;
@@ -718,7 +752,7 @@ fn append_general_state_patches(
         fixed,
         EffectInstructionV3::write_u8(
             state,
-            SettlementCursorLayoutV2::phase(),
+            state_body_offset(SettlementCursorLayoutV2::phase())?,
             scalar_common(scalar::CURSOR_PHASE)?,
         ),
     )?;
@@ -739,7 +773,11 @@ fn append_general_state_patches(
         push_fixed(
             instructions,
             fixed,
-            EffectInstructionV3::write_u32(state, offset, scalar_common(coordinate)?),
+            EffectInstructionV3::write_u32(
+                state,
+                state_body_offset(offset)?,
+                scalar_common(coordinate)?,
+            ),
         )?;
     }
     push_fixed(
@@ -747,7 +785,7 @@ fn append_general_state_patches(
         fixed,
         EffectInstructionV3::write_identity(
             state,
-            SettlementCursorLayoutV2::candidate_id(),
+            state_body_offset(SettlementCursorLayoutV2::candidate_id())?,
             identity_common(identity::CANDIDATE)?,
         ),
     )?;
@@ -756,11 +794,91 @@ fn append_general_state_patches(
         item,
         EffectInstructionV3::write_u64_affine(
             state,
-            SettlementCursorLayoutV2::inventory_base(),
+            state_body_offset(SettlementCursorLayoutV2::inventory_base())?,
             SettlementCursorLayoutV2::inventory_stride(),
             ScalarCoordinateV3::item(scalar_u16(item_scalar::CURSOR_INVENTORY)?),
         ),
     )
+}
+
+fn append_local_state_header(
+    instructions: &mut [EffectInstructionV3],
+    fixed: &mut usize,
+    state: AccountCoordinateV3,
+    terminal: bool,
+) -> Result<()> {
+    push_fixed(
+        instructions,
+        fixed,
+        EffectInstructionV3::write_u64(
+            state,
+            GeneralLocalStateLayoutV3::magic(),
+            scalar_common(scalar::LOCAL_STATE_MAGIC)?,
+        ),
+    )?;
+    push_fixed(
+        instructions,
+        fixed,
+        EffectInstructionV3::write_u16(
+            state,
+            GeneralLocalStateLayoutV3::version(),
+            scalar_common(scalar::LOCAL_STATE_VERSION)?,
+        ),
+    )?;
+    push_fixed(
+        instructions,
+        fixed,
+        EffectInstructionV3::write_u8(
+            state,
+            GeneralLocalStateLayoutV3::kind(),
+            scalar_common(scalar::LOCAL_STATE_KIND)?,
+        ),
+    )?;
+    push_fixed(
+        instructions,
+        fixed,
+        EffectInstructionV3::write_u8(
+            state,
+            GeneralLocalStateLayoutV3::bump(),
+            scalar_common(if terminal {
+                scalar::TERMINAL_CANONICAL_BUMP
+            } else {
+                scalar::PRIMARY_CANONICAL_BUMP
+            })?,
+        ),
+    )?;
+    push_fixed(
+        instructions,
+        fixed,
+        EffectInstructionV3::write_u64(
+            state,
+            GeneralLocalStateLayoutV3::rent_principal(),
+            scalar_common(if terminal {
+                scalar::TERMINAL_RENT_PRINCIPAL
+            } else {
+                scalar::PRIMARY_RENT_PRINCIPAL
+            })?,
+        ),
+    )?;
+    push_fixed(
+        instructions,
+        fixed,
+        EffectInstructionV3::write_identity(
+            state,
+            GeneralLocalStateLayoutV3::beneficiary(),
+            identity_common(if terminal {
+                identity::TERMINAL_BENEFICIARY
+            } else {
+                identity::PRIMARY_BENEFICIARY
+            })?,
+        ),
+    )
+}
+
+fn state_body_offset(offset: u32) -> Result<u32> {
+    GeneralLocalStateLayoutV3::body()
+        .checked_add(offset)
+        .ok_or(GeneralEffectArtifactErrorV3::Geometry)
 }
 
 fn append_position_patches(
@@ -1786,7 +1904,7 @@ mod tests {
         let program = ProgramV3::decode(&bytes).expect("close artifact");
         assert_eq!(
             program.route(0).expect("transfer").fixed_account_start(),
-            GENERAL_CHILD_ACCOUNT_START_V3
+            general_child_account_start_v3(Action::Close)
         );
         let (vault, _) = program.route_template(1).expect("vault close");
         let (replay, _) = program.route_template(2).expect("replay close");

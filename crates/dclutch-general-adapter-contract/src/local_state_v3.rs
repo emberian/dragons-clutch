@@ -25,6 +25,16 @@ const KIND_SETTLEMENT: u8 = 2;
 pub struct GeneralLocalStateLayoutV3;
 
 impl GeneralLocalStateLayoutV3 {
+    /// Header magic interpreted as one little-endian scalar.
+    pub const fn magic_u64() -> u64 {
+        u64::from_le_bytes(GENERAL_LOCAL_STATE_MAGIC_V3)
+    }
+
+    /// Exact envelope ABI version.
+    pub const fn version_value() -> u16 {
+        GENERAL_LOCAL_STATE_VERSION_V3
+    }
+
     /// Header magic offset.
     pub const fn magic() -> u32 {
         0
@@ -71,7 +81,8 @@ pub enum GeneralLocalStateKindV3 {
 }
 
 impl GeneralLocalStateKindV3 {
-    const fn tag(self) -> u8 {
+    /// Canonical encoded kind tag.
+    pub const fn tag(self) -> u8 {
         match self {
             Self::Selection => KIND_SELECTION,
             Self::Settlement => KIND_SETTLEMENT,
