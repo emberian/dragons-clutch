@@ -9,7 +9,10 @@
 
 use dclutch_account_profile_contract::{
     lifecycle_v3::{SUCCESSOR_SCHEMA_RELEASE_ID as LIFECYCLE_SCHEMA_ID_V4, StateLifecyclePolicyV4},
-    v2::{AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2},
+    v2::{
+        AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE,
+        SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2,
+    },
 };
 use dclutch_capability_program_contract::{
     set_v2::{CapabilityProgramSetV2, SelectorWidthV2},
@@ -30,13 +33,20 @@ use dclutch_series_v3_kernel::{
 use dclutch_transition_vm::{MAX_IDENTITIES, MAX_SCALARS, v3::ProgramV3 as TransitionProgramV3};
 use solana_program::hash::hash;
 
+use crate::projected_market_v2::AuthenticatedFoundSpanV2;
+
 use super::{
     artifacts_v3::{
         SERIES_ACTION_HEADER_SCHEMA_PREIMAGE_V3, SERIES_ACTION_SELECTOR_OFFSET_V3,
-        SERIES_ROOT_SCHEMA_PREIMAGE_V3, SERIES_SUCCESSOR_KIND_PREIMAGE_V3,
-        SERIES_TICKET_DERIVATION_PREIMAGE_V3, SERIES_WITNESS_ITEM_BYTES_V3, SeriesRequestSlicesV3,
+        SERIES_CONSUME_MAXIMUM_FUNDING_STATES_V3, SERIES_ROOT_SCHEMA_PREIMAGE_V3,
+        SERIES_SUCCESSOR_KIND_PREIMAGE_V3, SERIES_TICKET_DERIVATION_PREIMAGE_V3,
+        SERIES_WITNESS_ITEM_BYTES_V3, SeriesRequestSlicesV3,
     },
-    effect_v4::{SERIES_CONSUME_LOGICAL_ACCOUNT_BASE_V4, SeriesConsumeEffectV4},
+    effect_v4::{
+        SERIES_CONSUME_ACCOUNT_PROFILE_PREFIX_V4, SERIES_CONSUME_ACCOUNT_PROFILE_SUFFIX_V4,
+        SERIES_CONSUME_FUNDING_COUNT_SCALAR_V4, SERIES_CONSUME_LOGICAL_ACCOUNT_BASE_V4,
+        SeriesConsumeEffectV4, SeriesConsumeRouteWindowV4,
+    },
     instruction::SERIES_ACTION_HEADER_BYTES_V3,
     state::SERIES_STATE_BYTES_V3,
 };
@@ -109,6 +119,8 @@ pub enum SeriesArtifactErrorV4 {
     Effect,
     /// Cross-artifact register or account geometry differed.
     Geometry,
+    /// Current Core did not attest the exact FundingState span selected by the artifact.
+    FoundAcknowledgement,
 }
 
 /// Result alias for Series V4 artifact admission.
@@ -135,6 +147,43 @@ pub struct SeriesConsumeArtifactBundleV4<'a> {
     pub transition: TransitionProgramV3<'a>,
     /// Exact global DCE5 Consume plan.
     pub effect: SeriesConsumeEffectV4<'a>,
+}
+
+/// Live-Market continuation authority after current Core attests the affine span.
+///
+/// The contained generic witness is the sole promotion boundary for the
+/// pre-Core routing hint. Constructing this value neither executes a child nor
+/// grants write authority; the common outer must still reauthenticate the
+/// exact global artifact and execute only routes `[2, 5)` commit-last.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SeriesConsumeContinuationBundleV4<'a> {
+    /// Exact globally admitted Series artifact bundle.
+    pub artifacts: SeriesConsumeArtifactBundleV4<'a>,
+    /// Current-Core attestation of F and the ordered FundingState-list identity.
+    pub found_span: AuthenticatedFoundSpanV2,
+}
+
+/// Join one already-admitted global plan to the current Core Found attestation.
+///
+/// This does not infer F from account count or the compact projected header.
+/// `AuthenticatedFoundSpanV2` can originate only from the generic Core-return
+/// verifier that binds the exact Core request, permit, FundingState list, and
+/// post-resource digest.
+pub fn authenticate_series_consume_continuation_v4<'a>(
+    artifacts: SeriesConsumeArtifactBundleV4<'a>,
+    found_span: AuthenticatedFoundSpanV2,
+) -> Result<SeriesConsumeContinuationBundleV4<'a>> {
+    if u16::from(found_span.funding_count()) != artifacts.effect.funding_count_hint() {
+        return Err(SeriesArtifactErrorV4::FoundAcknowledgement);
+    }
+    artifacts
+        .effect
+        .require_window(SeriesConsumeRouteWindowV4::LiveMarketContinuation)
+        .map_err(|_| SeriesArtifactErrorV4::Effect)?;
+    Ok(SeriesConsumeContinuationBundleV4 {
+        artifacts,
+        found_span,
+    })
 }
 
 /// Authenticate and join one complete schema-bound Series Consume bundle.
@@ -260,7 +309,13 @@ pub fn authenticate_series_consume_artifacts_v4<'a>(
     )
     .map_err(|_| SeriesArtifactErrorV4::Effect)?;
 
-    validate_geometry(account_profile, request_profile, transition, effect)?;
+    validate_geometry(
+        account_profile,
+        request_profile,
+        transition,
+        effect,
+        registers,
+    )?;
     Ok(SeriesConsumeArtifactBundleV4 {
         request,
         slices,
@@ -303,12 +358,14 @@ fn validate_geometry(
     request: RequestProfileV1<'_>,
     transition: TransitionProgramV3<'_>,
     effect: SeriesConsumeEffectV4<'_>,
+    registers: SeriesConsumeArtifactRegistersV4<'_>,
 ) -> Result<()> {
     let base = effect.program().base();
     let common_scalars = account.common_scalar_count();
     let common_identities = account.common_identity_count();
-    if account.fixed_account_count() != SERIES_CONSUME_LOGICAL_ACCOUNT_BASE_V4
-        || account.item_account_stride() != 0
+    if account.artifact_profile() != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+        || account.fixed_account_count() != SERIES_CONSUME_LOGICAL_ACCOUNT_BASE_V4
+        || account.item_account_stride() != 1
         || account.item_scalar_stride() != 0
         || account.item_identity_stride() != 0
         || request.common_scalar_count() != common_scalars
@@ -324,6 +381,53 @@ fn validate_geometry(
         || base.item_scalar_stride() != 0
         || base.item_identity_stride() != 0
         || base.item_operation_count() != 0
+    {
+        return Err(SeriesArtifactErrorV4::Geometry);
+    }
+    validate_dynamic_account_span(account, effect, registers)?;
+    Ok(())
+}
+
+fn validate_dynamic_account_span(
+    account: AccountProfileV2<'_>,
+    effect: SeriesConsumeEffectV4<'_>,
+    registers: SeriesConsumeArtifactRegistersV4<'_>,
+) -> Result<()> {
+    if account.dynamic_fixed_span_count() != 1
+        || account.trusted_current_slot_scalar().is_some()
+        || account.trusted_current_executing_program_identity() != Some(0)
+        || account.trusted_system_program_identity().is_some()
+        || SERIES_CONSUME_ACCOUNT_PROFILE_PREFIX_V4
+            .checked_add(SERIES_CONSUME_ACCOUNT_PROFILE_SUFFIX_V4)
+            != Some(SERIES_CONSUME_LOGICAL_ACCOUNT_BASE_V4)
+    {
+        return Err(SeriesArtifactErrorV4::Geometry);
+    }
+    let span = account
+        .dynamic_fixed_span(0)
+        .map_err(|_| SeriesArtifactErrorV4::Geometry)?;
+    if span.insertion_coordinate() != SERIES_CONSUME_ACCOUNT_PROFILE_PREFIX_V4
+        || span.count_scalar() != SERIES_CONSUME_FUNDING_COUNT_SCALAR_V4
+        || span.rule_start() != 0
+        || span.rule_stride() != 1
+        || span.minimum() != 1
+        || span.maximum() != u32::from(SERIES_CONSUME_MAXIMUM_FUNDING_STATES_V3)
+        || span.step() != 1
+    {
+        return Err(SeriesArtifactErrorV4::Geometry);
+    }
+    let mut span_counts = [0_u32; 1];
+    account
+        .dynamic_span_widths_from_scalars(registers.scalars, &mut span_counts)
+        .map_err(|_| SeriesArtifactErrorV4::Geometry)?;
+    if span_counts[0] != u32::from(registers.funding_count_hint)
+        || account
+            .logical_account_count_with_dynamic_spans(registers.tail_count, &span_counts)
+            .map_err(|_| SeriesArtifactErrorV4::Geometry)?
+            != effect
+                .program()
+                .account_count(registers.tail_count, registers.scalars)
+                .map_err(|_| SeriesArtifactErrorV4::Geometry)?
     {
         return Err(SeriesArtifactErrorV4::Geometry);
     }
@@ -428,9 +532,16 @@ fn digest(bytes: &[u8]) -> [u8; 32] {
 
 #[cfg(test)]
 mod tests {
+    extern crate alloc;
+
+    use alloc::vec;
     use dclutch_capability_program_contract::v4::CapabilityArtifactsV4;
 
     use super::*;
+    use crate::series::account_profile_v4::{
+        SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4, SeriesConsumeAccountProfileInputV4,
+        encode_series_consume_account_profile_v4_atomic,
+    };
 
     fn id(bytes: [u8; 32]) -> ContentId {
         ContentId::new(bytes).expect("nonzero identity")
@@ -497,6 +608,52 @@ mod tests {
                 SeriesArtifactErrorV4::Effect
             ),
             Err(SeriesArtifactErrorV4::Effect)
+        );
+    }
+
+    #[test]
+    fn dynamic_account_profile_geometry_is_exact() {
+        let lengths = [0_u32; SERIES_CONSUME_LOGICAL_ACCOUNT_BASE_V4 as usize];
+        let mut scratch = vec![0_u8; SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4];
+        let mut bytes = vec![0_u8; SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4];
+        encode_series_consume_account_profile_v4_atomic(
+            SeriesConsumeAccountProfileInputV4 {
+                fixed_data_lengths: &lengths,
+            },
+            &mut scratch,
+            &mut bytes,
+        )
+        .expect("Series Profile13");
+        let exact = AccountProfileV2::decode(&bytes).expect("decode Profile13");
+        let scalars = [128, 64, 2, 32, 7];
+        let registers = SeriesConsumeArtifactRegistersV4 {
+            tail_count: 258,
+            scalars: &scalars,
+            identities: &[[9_u8; 32]],
+            funding_count_hint: 7,
+        };
+        let effect_program = crate::series::effect_v4::tests::successor();
+        let request = crate::series::effect_v4::tests::request();
+        let effect = SeriesConsumeEffectV4::decode(
+            &effect_program,
+            &request,
+            registers.tail_count,
+            registers.scalars,
+            registers.identities,
+            registers.funding_count_hint,
+        )
+        .expect("Series DCE5");
+        assert_eq!(
+            validate_dynamic_account_span(exact, effect, registers),
+            Ok(())
+        );
+
+        let insertion = dclutch_account_profile_contract::v2::DYNAMIC_FIXED_SPAN_HEADER_BYTES;
+        bytes[insertion..insertion + 2].copy_from_slice(&62_u16.to_le_bytes());
+        let substituted = AccountProfileV2::decode(&bytes).expect("valid substituted Profile13");
+        assert_eq!(
+            validate_dynamic_account_span(substituted, effect, registers),
+            Err(SeriesArtifactErrorV4::Geometry)
         );
     }
 }

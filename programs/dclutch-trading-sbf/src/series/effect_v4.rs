@@ -110,6 +110,7 @@ const ALLOWED_FUNDING_COUNTS: u64 =
     ((1_u64 << (SERIES_CONSUME_MAXIMUM_FUNDING_STATES_V3 + 1)) - 1) & !1;
 const SERIES_ACTION_HEADER_OFFSET_V4: u32 = 128;
 const SERIES_CONSUME_COMMON_SCALAR_COUNT_V4: u16 = 5;
+const SERIES_CONSUME_COMMON_IDENTITY_COUNT_V4: u16 = 1;
 const _: () = assert!(SERIES_ACTION_HEADER_BYTES_V3 == 128);
 
 /// Stable refusal from the Series-owned Effect V4 topology join.
@@ -330,7 +331,7 @@ fn validate_base(program: ProgramV3<'_>) -> Result<(), SeriesConsumeEffectErrorV
         || program.item_account_stride() != 0
         || program.common_scalar_count() != SERIES_CONSUME_COMMON_SCALAR_COUNT_V4
         || program.item_scalar_stride() != 0
-        || program.common_identity_count() != 0
+        || program.common_identity_count() != SERIES_CONSUME_COMMON_IDENTITY_COUNT_V4
         || program.item_identity_stride() != 0
         || program.item_operation_count() != 0
         || SERIES_CONSUME_LOCK_OFFSET_V3 != 0
@@ -441,7 +442,7 @@ fn validate_base_route(
         return Err(SeriesConsumeEffectErrorV4::BaseProgram);
     }
     let zero_scalars = [0_u64; 5];
-    let zero_identities: [[u8; 32]; 0] = [];
+    let zero_identities = [[0_u8; 32]; 1];
     let resolved = program
         .resolved_invocation(expected.route, 0, 0, &zero_scalars, &zero_identities)
         .map_err(|_| SeriesConsumeEffectErrorV4::BaseProgram)?;
@@ -513,7 +514,7 @@ fn validate_resolved(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     extern crate alloc;
 
     use alloc::{vec, vec::Vec};
@@ -535,7 +536,7 @@ mod tests {
         ContentId::new([byte; 32]).expect("fixture identity")
     }
 
-    fn request() -> Vec<u8> {
+    pub(crate) fn request() -> Vec<u8> {
         let header = encode_series_action_header_v3(
             SeriesActionV3::Consume,
             id(1),
@@ -627,7 +628,7 @@ mod tests {
                 item_account_stride: 0,
                 common_scalars: SCALARS as u16,
                 item_scalar_stride: 0,
-                common_identities: 0,
+                common_identities: SERIES_CONSUME_COMMON_IDENTITY_COUNT_V4,
                 item_identity_stride: 0,
             },
             &routes,
@@ -641,7 +642,7 @@ mod tests {
         output
     }
 
-    fn successor() -> Vec<u8> {
+    pub(crate) fn successor() -> Vec<u8> {
         let base = base_program();
         let width = SERIES_CONSUME_EFFECT_V4_OVERHEAD_BYTES + base.len();
         let mut scratch = vec![0_u8; width];
@@ -660,7 +661,8 @@ mod tests {
         let bytes = successor();
         let request = request();
         let scalars = registers(7);
-        let admitted = SeriesConsumeEffectV4::decode(&bytes, &request, 0, &scalars, &[], 7)
+        let identities = [[0_u8; 32]; 1];
+        let admitted = SeriesConsumeEffectV4::decode(&bytes, &request, 0, &scalars, &identities, 7)
             .expect("global Series program");
         assert_eq!(admitted.program().account_count(0, &scalars), Ok(164));
         assert_eq!(
@@ -711,10 +713,12 @@ mod tests {
     fn funding_hint_and_duplicate_proof_ranges_are_exact() {
         let bytes = successor();
         let request = request();
+        let identities = [[0_u8; 32]; 1];
         for count in [1_u16, 16] {
             let scalars = registers(count);
-            let admitted = SeriesConsumeEffectV4::decode(&bytes, &request, 0, &scalars, &[], count)
-                .expect("bounded funding count");
+            let admitted =
+                SeriesConsumeEffectV4::decode(&bytes, &request, 0, &scalars, &identities, count)
+                    .expect("bounded funding count");
             for route in [ROUTE_FOUND, ROUTE_OPEN] {
                 let range = admitted
                     .program()
@@ -726,13 +730,13 @@ mod tests {
         for count in [0_u16, 17] {
             let scalars = registers(count);
             assert_eq!(
-                SeriesConsumeEffectV4::decode(&bytes, &request, 0, &scalars, &[], count),
+                SeriesConsumeEffectV4::decode(&bytes, &request, 0, &scalars, &identities, count,),
                 Err(SeriesConsumeEffectErrorV4::Registers)
             );
         }
         let scalars = registers(3);
         assert_eq!(
-            SeriesConsumeEffectV4::decode(&bytes, &request, 0, &scalars, &[], 4),
+            SeriesConsumeEffectV4::decode(&bytes, &request, 0, &scalars, &identities, 4),
             Err(SeriesConsumeEffectErrorV4::Registers)
         );
     }
@@ -742,9 +746,11 @@ mod tests {
         let bytes = successor();
         let mut padded_request = request();
         let scalars = registers(2);
+        let identities = [[0_u8; 32]; 1];
         padded_request.push(0);
         assert!(
-            SeriesConsumeEffectV4::decode(&bytes, &padded_request, 0, &scalars, &[], 2).is_err()
+            SeriesConsumeEffectV4::decode(&bytes, &padded_request, 0, &scalars, &identities, 2,)
+                .is_err()
         );
 
         let mut hostile = bytes;
@@ -754,7 +760,10 @@ mod tests {
             .get_mut(route..route + 2)
             .expect("range route")
             .copy_from_slice(&ROUTE_REALIZE.to_le_bytes());
-        assert!(SeriesConsumeEffectV4::decode(&hostile, &request(), 0, &scalars, &[], 2,).is_err());
+        assert!(
+            SeriesConsumeEffectV4::decode(&hostile, &request(), 0, &scalars, &identities, 2,)
+                .is_err()
+        );
     }
 
     #[test]

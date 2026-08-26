@@ -26,7 +26,7 @@ use solana_program::hash::hash;
 use crate::execution_strategy_v2::AuthenticatedExecutionStrategyV2;
 
 use super::{
-    artifacts_v3::SeriesArtifactBundleV3,
+    artifacts_v4::SeriesConsumeArtifactBundleV4,
     instruction::{SERIES_ACTION_MAXIMUM_BYTES_V3, SeriesActionV3},
 };
 
@@ -157,7 +157,7 @@ pub struct SeriesShadowInterpreterTranscriptV3<'a> {
 /// Rejoin the selected Series descriptor to one authenticated Shadow release.
 pub fn select_series_shadow_accelerator_v3(
     strategy: AuthenticatedExecutionStrategyV2,
-    bundle: SeriesArtifactBundleV3<'_>,
+    bundle: SeriesConsumeArtifactBundleV4<'_>,
 ) -> Result<SeriesShadowSelectionV3> {
     if strategy.strategy().disposition() != StrategyDispositionV2::ShadowAot
         || strategy.strategy().transport_profile()
@@ -190,10 +190,10 @@ pub fn select_series_shadow_accelerator_v3(
     Ok(SeriesShadowSelectionV3 {
         artifacts: ShadowArtifactTupleV3 {
             capability_program: descriptor_id,
-            account_profile: bundle.descriptor.account_profile(),
-            request_profile: bundle.descriptor.request_profile_program(),
+            account_profile: bundle.descriptor.account_profile().program(),
+            request_profile: bundle.descriptor.request_profile().program(),
             transition: bundle.strategy.transition_program(),
-            effect: bundle.descriptor.effect_program(),
+            effect: bundle.descriptor.effect().program(),
             strategy: strategy.strategy_program_id(),
             certificate,
         },
