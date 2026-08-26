@@ -31,6 +31,8 @@ pub mod hot_v3;
 pub mod set_v1;
 /// Fixed descriptor selecting independently finalized runtime-tail artifacts.
 pub mod v3;
+/// Successor descriptor with explicit schema/content pairs for every executable artifact.
+pub mod v4;
 
 /// Schema label for finalized [`CapabilityProgramV1`] raw records.
 pub const CAPABILITY_PROGRAM_SCHEMA_RELEASE_PREIMAGE_V1: &[u8] =
