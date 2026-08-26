@@ -2,7 +2,7 @@ use super::{
     buy_escrow::*, complementary::*, inline::*, lifecycle::*, physical::*, sell_escrow::*,
 };
 use dclutch_account_profile_contract::lifecycle_v3::{
-    AuthenticateStatePlanV3, CreateStatePlanV3, StateLifecyclePlanV3,
+    AuthenticateStatePlanV3, CloseStatePlanV3, CreateStatePlanV3, StateLifecyclePlanV3,
 };
 use dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1;
 use dclutch_claims_svm::{
@@ -1177,6 +1177,27 @@ fn state_create_plan(
     })
 }
 
+fn record_close_lifecycle(
+    record: DirectRegisteredIntentV2,
+    close: dclutch_direct_codec::successor::RegisteredRecordCloseV2,
+    trading_program: [u8; 32],
+) -> StateLifecyclePlanV3 {
+    let seeds = RegisteredIntentSeedsV2::from_record(record);
+    let (state, bump) = derive_pda(trading_program, &seeds.as_slices());
+    StateLifecyclePlanV3::Close(CloseStatePlanV3 {
+        state,
+        rent_credit: id(85),
+        beneficiary: close.rent_owner,
+        source_data_bytes: u32::try_from(DIRECT_REGISTERED_RECORD_BYTES_V2).expect("record bytes"),
+        historical_rent_principal: close.rent_principal,
+        source_before: close.total_rent_credit,
+        source_after: 0,
+        rent_credit_before: 1_000,
+        rent_credit_after: 1_000 + close.total_rent_credit,
+        bump,
+    })
+}
+
 #[test]
 fn sell_registration_admits_record_position_and_reserves_exact_claims() {
     let (creation, accounts, funding, context) = sell_escrow_fixture();
@@ -1375,16 +1396,39 @@ fn sell_unwind_refunds_residual_then_closes_to_persisted_rent_credit() {
     validate_sell_affine_plan_v2(refund_expectation, context, &refund)
         .expect("record-to-maker refund");
 
-    let close = prepare_sell_close_v2(
-        creation.record,
-        terminal.close,
+    let close_lifecycle =
+        record_close_lifecycle(creation.record, terminal.close, context.trading_program);
+    let close = prepare_sell_close_v2(DirectSellCloseInputV2 {
+        record_before: creation.record,
+        close: terminal.close,
         accounts,
         admission,
-        2,
-        funding,
+        post_affine_position_revision: 2,
+        current_funding: funding,
         context,
-    )
+        lifecycle: close_lifecycle,
+    })
     .expect("zero Position close");
+    let StateLifecyclePlanV3::Close(close_plan) = close_lifecycle else {
+        panic!("record close")
+    };
+    let hostile_lifecycle = StateLifecyclePlanV3::Close(CloseStatePlanV3 {
+        beneficiary: id(99),
+        ..close_plan
+    });
+    assert_eq!(
+        prepare_sell_close_v2(DirectSellCloseInputV2 {
+            record_before: creation.record,
+            close: terminal.close,
+            accounts,
+            admission,
+            post_affine_position_revision: 2,
+            current_funding: funding,
+            context,
+            lifecycle: hostile_lifecycle,
+        }),
+        Err(DirectPhysicalError::State)
+    );
     let admission_state = admission.to_state_bytes().expect("admission state");
     let close_bytes = close.to_bytes().expect("close bytes");
     let receipt = ProtocolPositionCloseReceiptV2::new(
@@ -1618,6 +1662,11 @@ fn buy_cancel_refunds_then_closes_vault_and_replay() {
             },
             vault_rent_lamports: 30,
             replay_rent_lamports: 20,
+            record_lifecycle: record_close_lifecycle(
+                creation.record,
+                terminal.close,
+                context.trading_program,
+            ),
             context,
         },
         terminal,
@@ -1661,6 +1710,11 @@ fn buy_cancel_refunds_then_closes_vault_and_replay() {
             },
             vault_rent_lamports: 30,
             replay_rent_lamports: 20,
+            record_lifecycle: record_close_lifecycle(
+                creation.record,
+                expired.close,
+                context.trading_program,
+            ),
             context,
         },
         expired,
@@ -1688,13 +1742,14 @@ fn full_buy_fill_with_zero_residual_closes_without_refund_transfer() {
         },
     })
     .expect("full Buy fill");
-    match candidate.record {
+    let close = match candidate.record {
         RegisteredRecordAfterFillV2::Closed(close) => {
             assert_eq!(close.collateral_refund, 0);
             assert_eq!(close.claim_refund, 0);
+            close
         }
         RegisteredRecordAfterFillV2::Live(_) => panic!("full fill must close"),
-    }
+    };
     let plan = prepare_buy_escrow_full_fill_v2(
         DirectBuyEscrowTerminalObservationV2 {
             record_before: creation.record,
@@ -1708,6 +1763,11 @@ fn full_buy_fill_with_zero_residual_closes_without_refund_transfer() {
             },
             vault_rent_lamports: 30,
             replay_rent_lamports: 20,
+            record_lifecycle: record_close_lifecycle(
+                creation.record,
+                close,
+                context.trading_program,
+            ),
             context,
         },
         candidate,
@@ -1736,27 +1796,38 @@ fn ordinary_buy_escrow_input(fill: u64, execution_price: u64) -> DirectBuyEscrow
         config(1_000, id(6)),
         7,
     );
-    DirectBuyEscrowFillInputV2 {
-        direct: RegisteredOrdinaryInputV2 {
-            root: seller.root,
-            seller: RegisteredParticipantV2 {
-                maker_root: seller.maker_root,
-                record: seller.record,
-                observed_record_lamports: 100,
-            },
-            buyer: RegisteredParticipantV2 {
-                maker_root: buyer.maker_root,
-                record: buyer.record,
-                observed_record_lamports: 100,
-            },
-            execution: RegisteredExecutionV2 {
-                config: config(1_000, id(6)),
-                outcome_count: 3,
-                slot: 5,
-                fill,
-                execution_price,
-            },
+    let direct = RegisteredOrdinaryInputV2 {
+        root: seller.root,
+        seller: RegisteredParticipantV2 {
+            maker_root: seller.maker_root,
+            record: seller.record,
+            observed_record_lamports: 100,
         },
+        buyer: RegisteredParticipantV2 {
+            maker_root: buyer.maker_root,
+            record: buyer.record,
+            observed_record_lamports: 100,
+        },
+        execution: RegisteredExecutionV2 {
+            config: config(1_000, id(6)),
+            outcome_count: 3,
+            slot: 5,
+            fill,
+            execution_price,
+        },
+    };
+    let settlement = dclutch_direct_codec::successor::settle_registered_ordinary_v2(direct)
+        .expect("ordinary settlement");
+    let record_lifecycle = match settlement.buyer.record {
+        RegisteredRecordAfterFillV2::Live(_) => None,
+        RegisteredRecordAfterFillV2::Closed(close) => Some(record_close_lifecycle(
+            buyer.record,
+            close,
+            context.trading_program,
+        )),
+    };
+    DirectBuyEscrowFillInputV2 {
+        direct,
         accounts,
         replay: live_buy_replay(buyer, context, accounts),
         vault_balance: buyer.record.reserved_collateral(),
@@ -1780,6 +1851,7 @@ fn ordinary_buy_escrow_input(fill: u64, execution_price: u64) -> DirectBuyEscrow
         },
         vault_rent_lamports: 30,
         replay_rent_lamports: 20,
+        record_lifecycle,
         context,
     }
 }
@@ -1787,6 +1859,7 @@ fn ordinary_buy_escrow_input(fill: u64, execution_price: u64) -> DirectBuyEscrow
 #[test]
 fn partial_buy_fill_spends_record_vault_and_keeps_lifecycle_live() {
     let input = ordinary_buy_escrow_input(20, 50);
+    assert_eq!(input.record_lifecycle, None);
     let plan = prepare_buy_escrow_fill_v2(input).expect("partial escrow fill");
     assert_eq!(plan.request_count, 2);
     assert!(!plan.closes_escrow);
@@ -1826,6 +1899,16 @@ fn partial_buy_fill_spends_record_vault_and_keeps_lifecycle_live() {
 #[test]
 fn terminal_price_improved_buy_fill_refunds_and_closes_after_transfers() {
     let input = ordinary_buy_escrow_input(100, 50);
+    assert!(matches!(
+        input.record_lifecycle,
+        Some(StateLifecyclePlanV3::Close(_))
+    ));
+    let mut missing_close = input;
+    missing_close.record_lifecycle = None;
+    assert_eq!(
+        prepare_buy_escrow_fill_v2(missing_close),
+        Err(DirectPhysicalError::State)
+    );
     let plan = prepare_buy_escrow_fill_v2(input).expect("terminal escrow fill");
     assert_eq!(plan.request_count, 5);
     assert!(plan.closes_escrow);

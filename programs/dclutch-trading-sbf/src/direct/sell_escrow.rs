@@ -7,6 +7,7 @@
 //! record Position and its admission state then close to the record's persisted
 //! RentCredit. Direct never mirrors the claims vector.
 
+use dclutch_account_profile_contract::lifecycle_v3::StateLifecyclePlanV3;
 use dclutch_claims_svm::{
     CallerRole as ClaimsCallerRole,
     affine_batch_v2::{AffineBatchPlanV2, AffineBatchReceiptV2, DeltaDirectionV2},
@@ -27,6 +28,7 @@ use solana_program::{hash::hash, pubkey::Pubkey};
 
 use super::lifecycle::{
     DirectRegisteredCreationLifecycleV3, validate_registered_creation_lifecycle_v3,
+    validate_registered_record_close_lifecycle_v3,
 };
 use super::physical::{DirectPhysicalError, Result};
 
@@ -392,16 +394,39 @@ pub fn verify_sell_affine_receipt_v2(
     Ok(())
 }
 
+/// Complete terminal Sell Position/admission/record-close observation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectSellCloseInputV2 {
+    /// Live registered Sell record before terminal settlement.
+    pub record_before: DirectRegisteredIntentV2,
+    /// Accepted terminal Direct record disposition.
+    pub close: RegisteredRecordCloseV2,
+    /// Canonical record Position and admission accounts.
+    pub accounts: DirectSellPositionAccountsV2,
+    /// Authenticated Claims admission state before closure.
+    pub admission: ProtocolPositionAdmissionV2,
+    /// Record Position revision after its zeroing affine effect.
+    pub post_affine_position_revision: u64,
+    /// Current Position and admission lamport observations.
+    pub current_funding: DirectPositionFundingV2,
+    /// Fixed Market/release/Claims facts.
+    pub context: DirectSellEscrowContextV2,
+    /// Enabled generic Trading record Close plan.
+    pub lifecycle: StateLifecyclePlanV3,
+}
+
 /// Close one terminal zero record Position and admission state.
-pub fn prepare_sell_close_v2(
-    record_before: DirectRegisteredIntentV2,
-    close: RegisteredRecordCloseV2,
-    accounts: DirectSellPositionAccountsV2,
-    admission: ProtocolPositionAdmissionV2,
-    post_affine_position_revision: u64,
-    current_funding: DirectPositionFundingV2,
-    context: DirectSellEscrowContextV2,
-) -> Result<ProtocolPositionRequestV2> {
+pub fn prepare_sell_close_v2(input: DirectSellCloseInputV2) -> Result<ProtocolPositionRequestV2> {
+    let DirectSellCloseInputV2 {
+        record_before,
+        close,
+        accounts,
+        admission,
+        post_affine_position_revision,
+        current_funding,
+        context,
+        lifecycle,
+    } = input;
     context.validate(true)?;
     validate_sell_record(record_before, context)?;
     validate_record_accounts(record_before, accounts, context)?;
@@ -417,6 +442,12 @@ pub fn prepare_sell_close_v2(
     {
         return Err(DirectPhysicalError::Binding);
     }
+    validate_registered_record_close_lifecycle_v3(
+        record_before,
+        close,
+        context.trading_program,
+        lifecycle,
+    )?;
     position_request(
         PositionRequestSelectionV2 {
             action: ProtocolPositionActionV2::Close,

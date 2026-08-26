@@ -6,13 +6,14 @@
 //! operation selected by the accepted Direct transition.
 
 use dclutch_account_profile_contract::lifecycle_v3::{
-    AuthenticateStatePlanV3, CreateStatePlanV3, StateLifecyclePlanV3,
+    AuthenticateStatePlanV3, CloseStatePlanV3, CreateStatePlanV3, StateLifecyclePlanV3,
 };
 use dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1;
 use dclutch_direct_codec::successor::{
     DIRECT_MAKER_REPLAY_BYTES_V1, DIRECT_REGISTERED_RECORD_BYTES_V2, DIRECT_ROOT_STATE_BYTES_V1,
-    DirectCoordinatesV1, MakerReplayCreationPlanV1, MakerReplayRootV1, MakerReplaySeedsV1,
-    RegisteredIntentCreationV2, RegisteredIntentSeedsV2,
+    DirectCoordinatesV1, DirectRegisteredIntentV2, MakerReplayCreationPlanV1, MakerReplayRootV1,
+    MakerReplaySeedsV1, RegisteredIntentCreationV2, RegisteredIntentSeedsV2,
+    RegisteredRecordCloseV2,
 };
 use solana_program::pubkey::Pubkey;
 
@@ -27,6 +28,51 @@ pub struct DirectRegisteredCreationLifecycleV3 {
     pub maker: StateLifecyclePlanV3,
     /// Newly created registered intent record.
     pub record: StateLifecyclePlanV3,
+}
+
+/// Require one enabled generic Close plan to match a terminal Direct record.
+pub fn validate_registered_record_close_lifecycle_v3(
+    record_before: DirectRegisteredIntentV2,
+    close: RegisteredRecordCloseV2,
+    trading_program: [u8; 32],
+    lifecycle: StateLifecyclePlanV3,
+) -> Result<()> {
+    if trading_program == [0; 32] {
+        return Err(DirectPhysicalError::ZeroIdentity);
+    }
+    let seeds = RegisteredIntentSeedsV2::from_record(record_before);
+    let (record, bump) = derive(trading_program, &seeds.as_slices());
+    match lifecycle {
+        StateLifecyclePlanV3::Close(CloseStatePlanV3 {
+            state,
+            rent_credit,
+            beneficiary,
+            source_data_bytes,
+            historical_rent_principal,
+            source_before,
+            source_after,
+            rent_credit_before,
+            rent_credit_after,
+            bump: observed_bump,
+        }) if state == record
+            && rent_credit != [0; 32]
+            && rent_credit != record
+            && beneficiary == close.rent_owner
+            && usize::try_from(source_data_bytes).ok()
+                == Some(DIRECT_REGISTERED_RECORD_BYTES_V2)
+            && historical_rent_principal == close.rent_principal
+            && source_before == close.total_rent_credit
+            && source_after == 0
+            && rent_credit_before.checked_add(source_before) == Some(rent_credit_after)
+            && bump == record_before.bump()
+            && observed_bump == bump =>
+        {
+            Ok(())
+        }
+        StateLifecyclePlanV3::Authenticate(_)
+        | StateLifecyclePlanV3::Create(_)
+        | StateLifecyclePlanV3::Close(_) => Err(DirectPhysicalError::State),
+    }
 }
 
 /// Require exact generic lifecycle plans for an accepted Direct registration.

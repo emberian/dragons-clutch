@@ -7,6 +7,7 @@
 //! exact residual, close the Vault, and close the replay cursor before Direct
 //! commits the terminal record disposition.
 
+use dclutch_account_profile_contract::lifecycle_v3::StateLifecyclePlanV3;
 use dclutch_custody_contract::{
     CallerRoleV1, CompartmentV1, ContextV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1,
     CustodyReplayV1, CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
@@ -22,6 +23,7 @@ use solana_program::pubkey::Pubkey;
 
 use super::lifecycle::{
     DirectRegisteredCreationLifecycleV3, validate_registered_creation_lifecycle_v3,
+    validate_registered_record_close_lifecycle_v3,
 };
 use super::physical::{
     DirectExternalCollateralV2, DirectExternalDebitV2, DirectPhysicalError, Result,
@@ -233,6 +235,8 @@ pub struct DirectBuyEscrowFillInputV2 {
     pub vault_rent_lamports: u64,
     /// Exact current replay rent, used only if this fill closes the record.
     pub replay_rent_lamports: u64,
+    /// Enabled record Close plan exactly for a terminal fill; absent for partial fills.
+    pub record_lifecycle: Option<StateLifecyclePlanV3>,
     /// Fixed current Core/release/request facts.
     pub context: DirectBuyEscrowContextV2,
 }
@@ -256,6 +260,8 @@ pub struct DirectBuyEscrowFillPlanV2 {
     pub buyer_refund_destination_after: u64,
     /// Whether this fill must close Vault and replay before Direct state commits.
     pub closes_escrow: bool,
+    /// Enabled generic record Close plan exactly for a terminal fill.
+    pub record_lifecycle: Option<StateLifecyclePlanV3>,
 }
 
 /// Settle one ordinary registered fill solely from record-keyed Buy custody.
@@ -364,6 +370,16 @@ pub fn prepare_buy_escrow_fill_v2(
         RegisteredRecordAfterFillV2::Live(record) => (record.reserved_collateral(), None),
         RegisteredRecordAfterFillV2::Closed(close) => (close.collateral_refund, Some(close)),
     };
+    match (close, input.record_lifecycle) {
+        (None, None) => {}
+        (Some(close), Some(lifecycle)) => validate_registered_record_close_lifecycle_v3(
+            buyer_before,
+            close,
+            input.context.trading_program,
+            lifecycle,
+        )?,
+        (None, Some(_)) | (Some(_), None) => return Err(DirectPhysicalError::State),
+    }
     if vault_after != expected_residual {
         return Err(DirectPhysicalError::Postcondition);
     }
@@ -432,6 +448,7 @@ pub fn prepare_buy_escrow_fill_v2(
         fee_destination_after: fee_after,
         buyer_refund_destination_after: buyer_refund_after,
         closes_escrow: close.is_some(),
+        record_lifecycle: input.record_lifecycle,
     })
 }
 
@@ -452,6 +469,8 @@ pub struct DirectBuyEscrowTerminalObservationV2 {
     pub vault_rent_lamports: u64,
     /// Exact current replay rent recovered on close.
     pub replay_rent_lamports: u64,
+    /// Enabled generic record Close plan.
+    pub record_lifecycle: StateLifecyclePlanV3,
     /// Fixed current Core/release/request facts.
     pub context: DirectBuyEscrowContextV2,
 }
@@ -519,6 +538,12 @@ fn prepare_buy_escrow_terminal(
     {
         return Err(DirectPhysicalError::Binding);
     }
+    validate_registered_record_close_lifecycle_v3(
+        input.record_before,
+        close,
+        input.context.trading_program,
+        input.record_lifecycle,
+    )?;
 
     let mut requests = [None; DIRECT_BUY_ESCROW_TERMINAL_STEPS_V2];
     let mut revision = input.replay.next_revision;
