@@ -1,0 +1,28 @@
+[package]
+name = "dclutch-fractional-claims-kernel"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+rust-version = "1.89"
+description = "Exact Fractional lowering into the canonical Claims SignedDeltaV3 waist"
+publish = false
+
+[dependencies]
+dclutch-claims-svm = { path = "../dclutch-claims-svm" }
+dclutch-fractional-claim-contract = { path = "../dclutch-fractional-claim-contract" }
+sha2 = { version = "=0.10.9", default-features = false }
+
+[workspace]
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"
+
+[lints.clippy]
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+checked_conversions = "deny"
+float_arithmetic = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+unwrap_used = "deny"
