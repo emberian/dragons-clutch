@@ -25,6 +25,7 @@ dclutch-dealer-contract = { path = "../dclutch-dealer-contract" }
 dclutch-direct-contract = { path = "../dclutch-direct-contract" }
 dclutch-direct-codec = { path = "../dclutch-direct-codec" }
 dclutch-economic-slice-kernel = { path = "../dclutch-economic-slice-kernel" }
+dclutch-effect-kernel = { path = "../dclutch-effect-kernel" }
 dclutch-execution-strategy-contract = { path = "../dclutch-execution-strategy-contract" }
 dclutch-general-contract = { path = "../dclutch-general-contract" }
 dclutch-general-adapter-contract = { path = "../dclutch-general-adapter-contract" }
