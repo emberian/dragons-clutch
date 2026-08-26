@@ -344,6 +344,7 @@ pub fn authenticate_content_addressed_product_runtime_v3<'accounts, 'info>(
 /// its semantic preimage and embedded Product/domain/unit links are checked
 /// against the authenticated Product graph. This admits either canonical V3
 /// evaluator kind without admitting legacy LinkedBasisRecordV2.
+#[inline(never)]
 pub fn authenticate_product_runtime_v3<'accounts, 'info>(
     registry_program: &Pubkey,
     rent: &Rent,
@@ -371,6 +372,7 @@ pub fn authenticate_product_runtime_v3<'accounts, 'info>(
 /// or hash those runtime-width tails a second time. The fixed basis schema,
 /// content-addressed raw/staging coordinate, and every semantic Product join
 /// are still independently checked here.
+#[inline(never)]
 pub fn authenticate_product_basis_v3<'accounts, 'info>(
     registry_program: &Pubkey,
     rent: &Rent,
@@ -430,6 +432,7 @@ pub fn authenticate_product_basis_v3<'accounts, 'info>(
     })
 }
 
+#[inline(never)]
 fn authenticate_record(
     registry_program: &Pubkey,
     rent: &Rent,
