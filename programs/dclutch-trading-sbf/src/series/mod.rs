@@ -1,8 +1,8 @@
-//! Canonical Trading adapter for recurring-Series V2.
+//! Canonical Trading adapter for recurring-Series V3.
 //!
 //! Immutable record decoding, content identities, occurrence proofs, funding
 //! list semantics, and future-Market projection have one SDK-free owner in
-//! `dclutch-series-v2-kernel`. This module retains only Solana account access,
+//! `dclutch-series-v3-kernel`. This module retains only Solana account access,
 //! PDA derivation, Core request construction, replay persistence, and physical
 //! commit-last lifecycle planning.
 
@@ -12,22 +12,26 @@ pub mod accounts;
 pub mod instruction;
 /// Content-to-Solana/Core conversion at the explicit adapter boundary.
 mod kernel_adapter;
-/// Total commit-last lifecycle planning for recurring Series V2.
+/// Total commit-last lifecycle planning for recurring Series V3.
 pub mod lifecycle;
+/// Chain-derived unsigned hot-action request construction.
+pub mod operator;
 /// Exact content/replay projector behind the canonical Trading hot outer.
 pub mod projector;
 /// Fixed-layout mutable replay state owned by the selected Trading program.
 pub mod state;
+/// Terminal Ticket-retire/root-close differential execution oracle.
+pub mod terminal;
 
 #[cfg(test)]
-pub(crate) use dclutch_series_v2_kernel::generated;
-pub use dclutch_series_v2_kernel::{
-    AccountKeyV2, AdmittedOccurrenceV2, AdmittedTicketV2, FoundingFundsV2,
-    FutureMarketProjectionV2, OccurrenceV2, PrefoundingSeriesEscrowV2,
-    SERIES_MAXIMUM_MERKLE_HEIGHT_V2, SERIES_OCCURRENCE_BYTES_V2, SERIES_TEMPLATE_BYTES_V2,
-    SERIES_TICKET_BYTES_V2, SeriesV2Error, TemplateV2, TicketV2, admit_occurrence, admit_ticket,
-    future_market_projection, occurrence_content_id, pre_founding_series_escrow,
-    template_content_id, ticket_content_id,
+pub(crate) use dclutch_series_v3_kernel::generated;
+pub use dclutch_series_v3_kernel::{
+    AccountKeyV3, AdmittedOccurrenceV3, AdmittedTicketV3, AuthenticatedProductProjectionV2,
+    FoundingFundsV3, FutureMarketProjectionV3, OccurrenceV3, PrefoundingSeriesEscrowV3,
+    SERIES_MAXIMUM_MERKLE_HEIGHT_V3, SERIES_OCCURRENCE_BYTES_V3, SERIES_TEMPLATE_BYTES_V3,
+    SERIES_TICKET_BYTES_V3, SeriesV3Error, TemplateV3, TicketV3, admit_occurrence,
+    admit_occurrence_bytes, admit_ticket, future_market_projection, occurrence_content_id,
+    pre_founding_series_escrow, template_content_id, ticket_content_id,
 };
 #[cfg(test)]
 pub(crate) use kernel_adapter::{core_identity, core_pubkey_identity};

@@ -1,6 +1,6 @@
 use super::*;
 use dclutch_core_contract::ContentId;
-use dclutch_market_core_codec::{MarketCoreStateSeedsV1, MarketIdentity, SeriesCoreActionV1};
+use dclutch_market_core_codec::{MarketCoreStateSeedsV2, MarketIdentity, SeriesCoreActionV1};
 use solana_program::{hash::hashv, pubkey::Pubkey};
 
 const HASH_SEPARATOR: [u8; 1] = [0];
@@ -24,7 +24,7 @@ fn projection_root(occurrence_id: ContentId, index: u32, siblings: &[[u8; 32]]) 
     for sibling in siblings {
         node = if cursor & 1 == 0 {
             hashv(&[
-                &generated::SERIES_PROJECTION_NODE_DOMAIN_V2,
+                &generated::SERIES_PROJECTION_NODE_DOMAIN_V3,
                 &HASH_SEPARATOR,
                 &node,
                 sibling,
@@ -32,7 +32,7 @@ fn projection_root(occurrence_id: ContentId, index: u32, siblings: &[[u8; 32]]) 
             .to_bytes()
         } else {
             hashv(&[
-                &generated::SERIES_PROJECTION_NODE_DOMAIN_V2,
+                &generated::SERIES_PROJECTION_NODE_DOMAIN_V3,
                 &HASH_SEPARATOR,
                 sibling,
                 &node,
@@ -46,38 +46,44 @@ fn projection_root(occurrence_id: ContentId, index: u32, siblings: &[[u8; 32]]) 
 
 #[derive(Clone)]
 struct Fixture {
-    template: [u8; SERIES_TEMPLATE_BYTES_V2],
-    occurrence: [u8; SERIES_OCCURRENCE_BYTES_V2],
-    ticket: [u8; SERIES_TICKET_BYTES_V2],
+    template: [u8; SERIES_TEMPLATE_BYTES_V3],
+    occurrence: [u8; SERIES_OCCURRENCE_BYTES_V3],
+    ticket: [u8; SERIES_TICKET_BYTES_V3],
     siblings: [[u8; 32]; 2],
     funding: [Pubkey; 2],
     core_program: Pubkey,
     registry_program: Pubkey,
+    product: AuthenticatedProductProjectionV2,
 }
 
 impl Fixture {
     fn new() -> Self {
-        let mut template = generated::SERIES_EXAMPLE_TEMPLATE_V2;
-        let mut occurrence = generated::SERIES_EXAMPLE_OCCURRENCE_V2;
-        let mut ticket = generated::SERIES_EXAMPLE_TICKET_V2;
+        let mut template = generated::SERIES_EXAMPLE_TEMPLATE_V3;
+        let mut occurrence = generated::SERIES_EXAMPLE_OCCURRENCE_V3;
+        let mut ticket = generated::SERIES_EXAMPLE_TICKET_V3;
         let siblings = [key(90).to_bytes(), key(91).to_bytes()];
         let funding = [key(70), key(71)];
         let funding_id = funding_list_id(&funding).expect("funding list");
         put(
             &mut occurrence,
-            generated::SERIES_OCCURRENCE_FUNDING_LIST_OFFSET_V2,
+            generated::SERIES_OCCURRENCE_FUNDING_LIST_OFFSET_V3,
             &funding_id.to_bytes(),
         );
 
         let core_program = key(60);
         let registry_program = key(59);
-        let occurrence_value = OccurrenceV2::decode(&occurrence).expect("occurrence before market");
-        let template_value = TemplateV2::decode(&template).expect("template before root");
+        let occurrence_value = OccurrenceV3::decode(&occurrence).expect("occurrence before market");
+        let template_value = TemplateV3::decode(&template).expect("template before root");
+        let product = AuthenticatedProductProjectionV2::new(
+            occurrence_value.product_record(),
+            ContentId::new([57; 32]).expect("stable Product"),
+            ContentId::new([58; 32]).expect("result domain"),
+        );
         let identity = MarketIdentity {
             market_id: core_pubkey_identity(key(61)).expect("temporary market"),
             realm_id: core_identity(template_value.realm()).expect("realm"),
-            product_id: core_identity(occurrence_value.product()).expect("product"),
-            result_domain: core_identity(occurrence_value.result_domain()).expect("domain"),
+            product_record: core_identity(product.product_record()).expect("Product record"),
+            product_id: core_identity(product.stable_product_id()).expect("stable Product"),
             resolution_policy: core_identity(occurrence_value.resolution_policy())
                 .expect("resolution"),
             capability_manifest: core_identity(occurrence_value.capability_manifest())
@@ -86,11 +92,11 @@ impl Fixture {
             registry_program: core_pubkey_identity(registry_program).expect("Registry"),
             generation: u64::from(occurrence_value.occurrence()) + 1,
         };
-        let seeds = MarketCoreStateSeedsV1::new(identity);
+        let seeds = MarketCoreStateSeedsV2::new(identity);
         let market = Pubkey::find_program_address(&seeds.as_slices(), &core_program).0;
         put(
             &mut occurrence,
-            generated::SERIES_OCCURRENCE_MARKET_OFFSET_V2,
+            generated::SERIES_OCCURRENCE_MARKET_OFFSET_V3,
             &market.to_bytes(),
         );
 
@@ -98,28 +104,28 @@ impl Fixture {
         let root = projection_root(occurrence_id, 1, &siblings);
         put(
             &mut template,
-            generated::SERIES_TEMPLATE_PROJECTION_ROOT_OFFSET_V2,
+            generated::SERIES_TEMPLATE_PROJECTION_ROOT_OFFSET_V3,
             &root,
         );
         let template_id = template_content_id(&template).expect("template id");
         put(
             &mut ticket,
-            generated::SERIES_TICKET_TEMPLATE_OFFSET_V2,
+            generated::SERIES_TICKET_TEMPLATE_OFFSET_V3,
             &template_id.to_bytes(),
         );
         put(
             &mut ticket,
-            generated::SERIES_TICKET_OCCURRENCE_ID_OFFSET_V2,
+            generated::SERIES_TICKET_OCCURRENCE_ID_OFFSET_V3,
             &occurrence_id.to_bytes(),
         );
         put(
             &mut ticket,
-            generated::SERIES_TICKET_MARKET_OFFSET_V2,
+            generated::SERIES_TICKET_MARKET_OFFSET_V3,
             &market.to_bytes(),
         );
         put(
             &mut ticket,
-            generated::SERIES_TICKET_FUNDING_LIST_OFFSET_V2,
+            generated::SERIES_TICKET_FUNDING_LIST_OFFSET_V3,
             &funding_id.to_bytes(),
         );
         Self {
@@ -130,37 +136,38 @@ impl Fixture {
             funding,
             core_program,
             registry_program,
+            product,
         }
     }
 
     fn recommit_occurrence(&mut self) {
         let occurrence_id = occurrence_content_id(&self.occurrence).expect("occurrence id");
-        let occurrence = OccurrenceV2::decode(&self.occurrence).expect("occurrence");
+        let occurrence = OccurrenceV3::decode(&self.occurrence).expect("occurrence");
         let root = projection_root(occurrence_id, occurrence.occurrence(), &self.siblings);
         put(
             &mut self.template,
-            generated::SERIES_TEMPLATE_PROJECTION_ROOT_OFFSET_V2,
+            generated::SERIES_TEMPLATE_PROJECTION_ROOT_OFFSET_V3,
             &root,
         );
         let template_id = template_content_id(&self.template).expect("template id");
         put(
             &mut self.ticket,
-            generated::SERIES_TICKET_TEMPLATE_OFFSET_V2,
+            generated::SERIES_TICKET_TEMPLATE_OFFSET_V3,
             &template_id.to_bytes(),
         );
         put(
             &mut self.ticket,
-            generated::SERIES_TICKET_OCCURRENCE_ID_OFFSET_V2,
+            generated::SERIES_TICKET_OCCURRENCE_ID_OFFSET_V3,
             &occurrence_id.to_bytes(),
         );
         put(
             &mut self.ticket,
-            generated::SERIES_TICKET_MARKET_OFFSET_V2,
+            generated::SERIES_TICKET_MARKET_OFFSET_V3,
             &occurrence.market().to_bytes(),
         );
     }
 
-    fn admit(&self) -> AdmittedOccurrenceV2 {
+    fn admit(&self) -> AdmittedOccurrenceV3 {
         admit_occurrence(&self.template, &self.occurrence, &self.siblings)
             .expect("admitted occurrence")
     }
@@ -168,13 +175,13 @@ impl Fixture {
 
 #[test]
 fn lean_vectors_hostile_decode_and_exact_admission() {
-    assert!(TemplateV2::decode(&generated::SERIES_EXAMPLE_TEMPLATE_V2).is_ok());
-    assert!(OccurrenceV2::decode(&generated::SERIES_EXAMPLE_OCCURRENCE_V2).is_ok());
-    assert!(TicketV2::decode(&generated::SERIES_EXAMPLE_TICKET_V2).is_ok());
+    assert!(TemplateV3::decode(&generated::SERIES_EXAMPLE_TEMPLATE_V3).is_ok());
+    assert!(OccurrenceV3::decode(&generated::SERIES_EXAMPLE_OCCURRENCE_V3).is_ok());
+    assert!(TicketV3::decode(&generated::SERIES_EXAMPLE_TICKET_V3).is_ok());
 
     let fixture = Fixture::new();
     let admitted = fixture.admit();
-    let ticket = TicketV2::decode(&fixture.ticket).expect("ticket");
+    let ticket = TicketV3::decode(&fixture.ticket).expect("ticket");
     assert_eq!(
         admitted.occurrence().liability_basis().to_bytes().first(),
         Some(&16)
@@ -189,38 +196,43 @@ fn lean_vectors_hostile_decode_and_exact_admission() {
     );
     admitted.require_ticket(ticket).expect("exact ticket");
     require_funding_list(admitted.occurrence(), &fixture.funding).expect("exact funding");
-    require_market_pda(admitted, &fixture.core_program, &fixture.registry_program)
-        .expect("exact Market");
+    require_market_pda(
+        admitted,
+        fixture.product,
+        &fixture.core_program,
+        &fixture.registry_program,
+    )
+    .expect("exact Market");
 }
 
 #[test]
 fn header_width_reserved_and_zero_identity_refuse() {
     let fixture = Fixture::new();
     assert_eq!(
-        TemplateV2::decode(
+        TemplateV3::decode(
             fixture
                 .template
                 .get(..fixture.template.len() - 1)
                 .expect("short Template")
         ),
-        Err(SeriesV2Error::Length)
+        Err(SeriesV3Error::Length)
     );
     let mut template = fixture.template;
     *template.first_mut().expect("Template magic") ^= 1;
-    assert_eq!(TemplateV2::decode(&template), Err(SeriesV2Error::Header));
+    assert_eq!(TemplateV3::decode(&template), Err(SeriesV3Error::Header));
     let mut occurrence = fixture.occurrence;
     *occurrence
-        .get_mut(generated::SERIES_OCCURRENCE_RESERVED_OFFSET_V2)
+        .get_mut(generated::SERIES_OCCURRENCE_RESERVED_OFFSET_V3)
         .expect("reserved byte") = 1;
     assert_eq!(
-        OccurrenceV2::decode(&occurrence),
-        Err(SeriesV2Error::Header)
+        OccurrenceV3::decode(&occurrence),
+        Err(SeriesV3Error::Header)
     );
     let mut ticket = fixture.ticket;
-    ticket[generated::SERIES_TICKET_FOUNDER_OFFSET_V2
-        ..generated::SERIES_TICKET_FOUNDER_OFFSET_V2 + 32]
+    ticket[generated::SERIES_TICKET_FOUNDER_OFFSET_V3
+        ..generated::SERIES_TICKET_FOUNDER_OFFSET_V3 + 32]
         .fill(0);
-    assert_eq!(TicketV2::decode(&ticket), Err(SeriesV2Error::Identity));
+    assert_eq!(TicketV3::decode(&ticket), Err(SeriesV3Error::Identity));
 }
 
 #[test]
@@ -229,21 +241,21 @@ fn schedule_overflow_and_wrong_scheduled_slot_refuse() {
     let mut overflow = fixture.template;
     put(
         &mut overflow,
-        generated::SERIES_TEMPLATE_FIRST_SLOT_OFFSET_V2,
+        generated::SERIES_TEMPLATE_FIRST_SLOT_OFFSET_V3,
         &u64::MAX.to_le_bytes(),
     );
-    assert_eq!(TemplateV2::decode(&overflow), Err(SeriesV2Error::Schedule));
+    assert_eq!(TemplateV3::decode(&overflow), Err(SeriesV3Error::Schedule));
 
     let mut wrong = fixture.clone();
     put(
         &mut wrong.occurrence,
-        generated::SERIES_OCCURRENCE_SCHEDULED_SLOT_OFFSET_V2,
+        generated::SERIES_OCCURRENCE_SCHEDULED_SLOT_OFFSET_V3,
         &111_u64.to_le_bytes(),
     );
     wrong.recommit_occurrence();
     assert_eq!(
         admit_occurrence(&wrong.template, &wrong.occurrence, &wrong.siblings),
-        Err(SeriesV2Error::Commitment)
+        Err(SeriesV3Error::Commitment)
     );
 }
 
@@ -251,15 +263,15 @@ fn schedule_overflow_and_wrong_scheduled_slot_refuse() {
 fn product_basis_and_representation_substitution_refuse() {
     let fixture = Fixture::new();
     for offset in [
-        generated::SERIES_OCCURRENCE_PRODUCT_OFFSET_V2,
-        generated::SERIES_OCCURRENCE_LIABILITY_BASIS_OFFSET_V2,
-        generated::SERIES_OCCURRENCE_RATIONAL_REPRESENTATION_OFFSET_V2,
+        generated::SERIES_OCCURRENCE_PRODUCT_RECORD_OFFSET_V3,
+        generated::SERIES_OCCURRENCE_LIABILITY_BASIS_OFFSET_V3,
+        generated::SERIES_OCCURRENCE_RATIONAL_REPRESENTATION_OFFSET_V3,
     ] {
         let mut occurrence = fixture.occurrence;
         *occurrence.get_mut(offset).expect("occurrence field") ^= 0x40;
         assert_eq!(
             admit_occurrence(&fixture.template, &occurrence, &fixture.siblings),
-            Err(SeriesV2Error::Commitment)
+            Err(SeriesV3Error::Commitment)
         );
     }
 }
@@ -273,7 +285,7 @@ fn merkle_sibling_length_value_and_order_refuse() {
             &fixture.occurrence,
             fixture.siblings.get(..1).expect("short proof")
         ),
-        Err(SeriesV2Error::Commitment)
+        Err(SeriesV3Error::Commitment)
     );
     let mut changed = fixture.siblings;
     *changed
@@ -283,7 +295,7 @@ fn merkle_sibling_length_value_and_order_refuse() {
         .expect("first sibling byte") ^= 1;
     assert_eq!(
         admit_occurrence(&fixture.template, &fixture.occurrence, &changed),
-        Err(SeriesV2Error::Commitment)
+        Err(SeriesV3Error::Commitment)
     );
     let swapped = [
         *fixture.siblings.get(1).expect("second sibling"),
@@ -291,7 +303,7 @@ fn merkle_sibling_length_value_and_order_refuse() {
     ];
     assert_eq!(
         admit_occurrence(&fixture.template, &fixture.occurrence, &swapped),
-        Err(SeriesV2Error::Commitment)
+        Err(SeriesV3Error::Commitment)
     );
 }
 
@@ -299,30 +311,41 @@ fn merkle_sibling_length_value_and_order_refuse() {
 fn market_pda_commits_every_core_identity_coordinate() {
     let fixture = Fixture::new();
     let admitted = fixture.admit();
-    require_market_pda(admitted, &fixture.core_program, &fixture.registry_program)
-        .expect("exact Market");
+    require_market_pda(
+        admitted,
+        fixture.product,
+        &fixture.core_program,
+        &fixture.registry_program,
+    )
+    .expect("exact Market");
     assert_eq!(
-        require_market_pda(admitted, &key(62), &fixture.registry_program),
-        Err(SeriesV2Error::Market)
+        require_market_pda(
+            admitted,
+            fixture.product,
+            &key(62),
+            &fixture.registry_program
+        ),
+        Err(SeriesV3Error::Market)
     );
     assert_eq!(
-        require_market_pda(admitted, &fixture.core_program, &key(58)),
-        Err(SeriesV2Error::Market)
+        require_market_pda(admitted, fixture.product, &fixture.core_program, &key(58)),
+        Err(SeriesV3Error::Market)
     );
 
     let mut substituted = fixture.clone();
     *substituted
         .occurrence
-        .get_mut(generated::SERIES_OCCURRENCE_MARKET_OFFSET_V2)
+        .get_mut(generated::SERIES_OCCURRENCE_MARKET_OFFSET_V3)
         .expect("Market byte") ^= 1;
     substituted.recommit_occurrence();
     assert_eq!(
         require_market_pda(
             substituted.admit(),
+            substituted.product,
             &substituted.core_program,
             &substituted.registry_program,
         ),
-        Err(SeriesV2Error::Market)
+        Err(SeriesV3Error::Market)
     );
 }
 
@@ -336,16 +359,16 @@ fn funding_list_is_ordered_bounded_nonzero_and_alias_free() {
     assert_ne!(original, reversed);
     assert_eq!(
         funding_list_id(&[first, first]),
-        Err(SeriesV2Error::Funding)
+        Err(SeriesV3Error::Funding)
     );
-    assert_eq!(funding_list_id(&[]), Err(SeriesV2Error::Funding));
+    assert_eq!(funding_list_id(&[]), Err(SeriesV3Error::Funding));
     assert_eq!(
         funding_list_id(&[Pubkey::default()]),
-        Err(SeriesV2Error::Funding)
+        Err(SeriesV3Error::Funding)
     );
     assert_eq!(
         require_funding_list(fixture.admit().occurrence(), &[second]),
-        Err(SeriesV2Error::Funding)
+        Err(SeriesV3Error::Funding)
     );
 }
 
@@ -353,20 +376,20 @@ fn funding_list_is_ordered_bounded_nonzero_and_alias_free() {
 fn ticket_substitution_and_funding_mismatch_refuse() {
     let fixture = Fixture::new();
     let admitted = fixture.admit();
-    let ticket = TicketV2::decode(&fixture.ticket).expect("ticket");
+    let ticket = TicketV3::decode(&fixture.ticket).expect("ticket");
     admitted.require_ticket(ticket).expect("exact");
     for offset in [
-        generated::SERIES_TICKET_OCCURRENCE_ID_OFFSET_V2,
-        generated::SERIES_TICKET_MARKET_OFFSET_V2,
-        generated::SERIES_TICKET_FUNDING_LIST_OFFSET_V2,
-        generated::SERIES_TICKET_HOARD_PRINCIPAL_OFFSET_V2,
+        generated::SERIES_TICKET_OCCURRENCE_ID_OFFSET_V3,
+        generated::SERIES_TICKET_MARKET_OFFSET_V3,
+        generated::SERIES_TICKET_FUNDING_LIST_OFFSET_V3,
+        generated::SERIES_TICKET_HOARD_PRINCIPAL_OFFSET_V3,
     ] {
         let mut bytes = fixture.ticket;
         *bytes.get_mut(offset).expect("Ticket field") ^= 1;
-        let changed = TicketV2::decode(&bytes).expect("changed ticket decodes");
+        let changed = TicketV3::decode(&bytes).expect("changed ticket decodes");
         assert_eq!(
             admitted.require_ticket(changed),
-            Err(SeriesV2Error::Commitment)
+            Err(SeriesV3Error::Commitment)
         );
     }
 }
@@ -376,28 +399,28 @@ fn compartment_total_overflow_refuses_without_reclassification() {
     let fixture = Fixture::new();
     let mut occurrence = fixture.occurrence;
     for offset in [
-        generated::SERIES_OCCURRENCE_HOARD_PRINCIPAL_OFFSET_V2,
-        generated::SERIES_OCCURRENCE_MARKET_RENT_OFFSET_V2,
-        generated::SERIES_OCCURRENCE_CAPABILITY_NATIVE_OFFSET_V2,
-        generated::SERIES_OCCURRENCE_FOUNDING_WORK_OFFSET_V2,
+        generated::SERIES_OCCURRENCE_HOARD_PRINCIPAL_OFFSET_V3,
+        generated::SERIES_OCCURRENCE_MARKET_RENT_OFFSET_V3,
+        generated::SERIES_OCCURRENCE_CAPABILITY_NATIVE_OFFSET_V3,
+        generated::SERIES_OCCURRENCE_FOUNDING_WORK_OFFSET_V3,
     ] {
         put(&mut occurrence, offset, &u64::MAX.to_le_bytes());
     }
     assert_eq!(
-        OccurrenceV2::decode(&occurrence),
-        Err(SeriesV2Error::Funding)
+        OccurrenceV3::decode(&occurrence),
+        Err(SeriesV3Error::Funding)
     );
 
     let mut ticket = fixture.ticket;
     for offset in [
-        generated::SERIES_TICKET_HOARD_PRINCIPAL_OFFSET_V2,
-        generated::SERIES_TICKET_MARKET_RENT_OFFSET_V2,
-        generated::SERIES_TICKET_CAPABILITY_NATIVE_OFFSET_V2,
-        generated::SERIES_TICKET_FOUNDING_WORK_OFFSET_V2,
+        generated::SERIES_TICKET_HOARD_PRINCIPAL_OFFSET_V3,
+        generated::SERIES_TICKET_MARKET_RENT_OFFSET_V3,
+        generated::SERIES_TICKET_CAPABILITY_NATIVE_OFFSET_V3,
+        generated::SERIES_TICKET_FOUNDING_WORK_OFFSET_V3,
     ] {
         put(&mut ticket, offset, &u64::MAX.to_le_bytes());
     }
-    assert_eq!(TicketV2::decode(&ticket), Err(SeriesV2Error::Funding));
+    assert_eq!(TicketV3::decode(&ticket), Err(SeriesV3Error::Funding));
 }
 
 #[test]
@@ -406,21 +429,21 @@ fn collateral_principal_is_never_added_to_native_lamports() {
     let mut occurrence = fixture.occurrence;
     put(
         &mut occurrence,
-        generated::SERIES_OCCURRENCE_HOARD_PRINCIPAL_OFFSET_V2,
+        generated::SERIES_OCCURRENCE_HOARD_PRINCIPAL_OFFSET_V3,
         &u64::MAX.to_le_bytes(),
     );
-    let value = OccurrenceV2::decode(&occurrence).expect("collateral is a separate asset");
+    let value = OccurrenceV3::decode(&occurrence).expect("collateral is a separate asset");
     assert_eq!(value.funds().hoard_principal(), u64::MAX);
     assert_eq!(value.funds().checked_native_total(), Ok(90));
 
     put(
         &mut occurrence,
-        generated::SERIES_OCCURRENCE_MARKET_RENT_OFFSET_V2,
+        generated::SERIES_OCCURRENCE_MARKET_RENT_OFFSET_V3,
         &u64::MAX.to_le_bytes(),
     );
     assert_eq!(
-        OccurrenceV2::decode(&occurrence),
-        Err(SeriesV2Error::Funding)
+        OccurrenceV3::decode(&occurrence),
+        Err(SeriesV3Error::Funding)
     );
 }
 
@@ -429,7 +452,7 @@ fn prepare_and_expire_commit_under_controller_without_fabricating_core() {
     let fixture = Fixture::new();
     let admitted = fixture.admit();
     let admitted_ticket = admit_ticket(&fixture.ticket).expect("Ticket identity");
-    let initial = state::SeriesStateV2::new(admitted.template().close_rent());
+    let initial = state::SeriesStateV3::new(admitted.template().close_rent());
     let occurrence_zero = initial
         .prepare_ticket(0)
         .expect("synthetic occurrence zero");
@@ -486,24 +509,25 @@ fn prepare_and_expire_commit_under_controller_without_fabricating_core() {
             1,
             u64::MAX,
         ),
-        Err(lifecycle::LifecycleErrorV2::Replay)
+        Err(lifecycle::LifecycleErrorV3::Replay)
     );
 
     let (series_bytes, ticket_bytes) = expire
         .commit_controller()
         .expect("controller commit after direct effects");
     assert_eq!(
-        state::SeriesStateV2::decode(&series_bytes, admitted.template().occurrence_count())
+        state::SeriesStateV3::decode(&series_bytes, admitted.template().occurrence_count())
             .expect("Series candidate"),
         expire.series_after()
     );
     assert_eq!(
-        state::TicketStateV2::decode(&ticket_bytes).expect("Ticket candidate"),
+        state::TicketStateV3::decode(&ticket_bytes).expect("Ticket candidate"),
         expire.ticket_after()
     );
 
     let request = core_request(
         admitted,
+        fixture.product,
         SeriesCoreActionV1::Consume,
         admitted_ticket.ticket(),
         ticket_state_key,
@@ -528,17 +552,18 @@ fn prepare_and_expire_commit_under_controller_without_fabricating_core() {
     );
     assert_eq!(
         expire.commit_after_ack(ack, core_program, request_digest, post_digest),
-        Err(lifecycle::LifecycleErrorV2::CoreAck)
+        Err(lifecycle::LifecycleErrorV3::CoreAck)
     );
 }
 
 #[test]
-fn core_request_uses_exact_v2_ticket_and_compartments() {
+fn core_request_uses_exact_v3_ticket_and_compartments() {
     let fixture = Fixture::new();
     let admitted = fixture.admit();
-    let ticket = TicketV2::decode(&fixture.ticket).expect("ticket");
+    let ticket = TicketV3::decode(&fixture.ticket).expect("ticket");
     let request = core_request(
         admitted,
+        fixture.product,
         SeriesCoreActionV1::Consume,
         ticket,
         key(72),
@@ -560,7 +585,7 @@ fn core_request_uses_exact_v2_ticket_and_compartments() {
     );
     assert_eq!(
         request.product().expect("product").to_bytes(),
-        admitted.occurrence().product().to_bytes()
+        admitted.occurrence().product_record().to_bytes()
     );
     assert_eq!(
         request.occurrence_index(),
@@ -583,48 +608,57 @@ fn core_request_uses_exact_v2_ticket_and_compartments() {
         admitted.occurrence().funds().hoard_principal()
     );
     assert_eq!(
-        core_request(admitted, SeriesCoreActionV1::Close, ticket, key(72), 8, 11,),
-        Err(SeriesV2Error::Action)
+        core_request(
+            admitted,
+            fixture.product,
+            SeriesCoreActionV1::Close,
+            ticket,
+            key(72),
+            8,
+            11,
+        ),
+        Err(SeriesV3Error::Action)
     );
     assert_eq!(
         core_request(
             admitted,
+            fixture.product,
             SeriesCoreActionV1::Prepare,
             ticket,
             key(72),
             8,
             11,
         ),
-        Err(SeriesV2Error::Action)
+        Err(SeriesV3Error::Action)
     );
 }
 
 #[test]
-fn checked_in_series_v2_constants_are_exact_lean_output() {
+fn checked_in_series_v3_constants_are_exact_lean_output() {
     let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let formal = manifest.join("../../formal/dclutch-semantics");
     let build = std::process::Command::new("lake")
-        .args(["build", "DClutchSemantics.SeriesOccurrenceV2Abi"])
+        .args(["build", "DClutchSemantics.SeriesOccurrenceV3Abi"])
         .current_dir(&formal)
         .output()
-        .expect("build Series V2 semantic ABI");
+        .expect("build Series V3 semantic ABI");
     assert!(
         build.status.success(),
-        "Series V2 semantic build failed: {}",
+        "Series V3 semantic build failed: {}",
         std::string::String::from_utf8_lossy(&build.stderr)
     );
     let output = std::process::Command::new("lake")
-        .args(["env", "lean", "--run", "EmitSeriesOccurrenceV2Rust.lean"])
+        .args(["env", "lean", "--run", "EmitSeriesOccurrenceV3Rust.lean"])
         .current_dir(&formal)
         .output()
-        .expect("run Series V2 Lean generator");
+        .expect("run Series V3 Lean generator");
     assert!(
         output.status.success(),
-        "Series V2 generator failed: {}",
+        "Series V3 generator failed: {}",
         std::string::String::from_utf8_lossy(&output.stderr)
     );
     let checked_in =
-        std::fs::read(manifest.join("../../crates/dclutch-series-v2-kernel/src/generated.rs"))
-            .expect("read checked-in Series V2 constants");
-    assert_eq!(output.stdout, checked_in, "regenerate Series V2 constants");
+        std::fs::read(manifest.join("../../crates/dclutch-series-v3-kernel/src/generated.rs"))
+            .expect("read checked-in Series V3 constants");
+    assert_eq!(output.stdout, checked_in, "regenerate Series V3 constants");
 }

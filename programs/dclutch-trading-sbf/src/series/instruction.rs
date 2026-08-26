@@ -10,15 +10,15 @@
 use dclutch_core_contract::ContentId;
 
 /// Fixed portion before the bounded occurrence Merkle path.
-pub const SERIES_ACTION_HEADER_BYTES_V2: usize = 128;
+pub const SERIES_ACTION_HEADER_BYTES_V3: usize = 128;
 /// Maximum number of SHA-256 siblings in one occurrence commitment proof.
-pub const SERIES_ACTION_MAXIMUM_PROOF_HEIGHT_V2: usize = 32;
+pub const SERIES_ACTION_MAXIMUM_PROOF_HEIGHT_V3: usize = 32;
 /// Maximum exact Series family-request width.
-pub const SERIES_ACTION_MAXIMUM_BYTES_V2: usize =
-    SERIES_ACTION_HEADER_BYTES_V2 + SERIES_ACTION_MAXIMUM_PROOF_HEIGHT_V2 * 32;
+pub const SERIES_ACTION_MAXIMUM_BYTES_V3: usize =
+    SERIES_ACTION_HEADER_BYTES_V3 + SERIES_ACTION_MAXIMUM_PROOF_HEIGHT_V3 * 32;
 
-const MAGIC: [u8; 8] = *b"DCLTSIX2";
-const SCHEMA: u16 = 2;
+const MAGIC: [u8; 8] = *b"DCLTSIX3";
+const SCHEMA: u16 = 3;
 const PROFILE: u16 = 1;
 const ACTION_OFFSET: usize = 12;
 const PROOF_COUNT_OFFSET: usize = 13;
@@ -34,7 +34,7 @@ const ZERO_IDENTITY: [u8; IDENTITY_BYTES] = [0; IDENTITY_BYTES];
 /// Recurring-Series action selected after common Trading authentication.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SeriesActionV2 {
+pub enum SeriesActionV3 {
     /// Create and exactly prepay one occurrence replay account.
     Prepare = 0,
     /// Atomically consume a prepared Ticket through Core into its Found Market.
@@ -47,15 +47,15 @@ pub enum SeriesActionV2 {
     Close = 4,
 }
 
-impl SeriesActionV2 {
-    fn decode(value: u8) -> Result<Self, SeriesInstructionErrorV2> {
+impl SeriesActionV3 {
+    fn decode(value: u8) -> Result<Self, SeriesInstructionErrorV3> {
         match value {
             0 => Ok(Self::Prepare),
             1 => Ok(Self::Consume),
             2 => Ok(Self::Expire),
             3 => Ok(Self::Retire),
             4 => Ok(Self::Close),
-            _ => Err(SeriesInstructionErrorV2::Action),
+            _ => Err(SeriesInstructionErrorV3::Action),
         }
     }
 
@@ -72,7 +72,7 @@ impl SeriesActionV2 {
 
 /// Refusal from the bounded Series family-request decoder.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SeriesInstructionErrorV2 {
+pub enum SeriesInstructionErrorV3 {
     /// Exact packet width, magic, schema, profile, or reserved bytes refused.
     Encoding,
     /// Action tag or its action-specific optional-field shape refused.
@@ -85,8 +85,8 @@ pub enum SeriesInstructionErrorV2 {
 
 /// Borrowed hostile-decoded Series family request.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SeriesActionRequestV2<'a> {
-    action: SeriesActionV2,
+pub struct SeriesActionRequestV3<'a> {
+    action: SeriesActionV3,
     template: ContentId,
     occurrence: Option<ContentId>,
     ticket: Option<ContentId>,
@@ -96,32 +96,32 @@ pub struct SeriesActionRequestV2<'a> {
     proof_bytes: &'a [u8],
 }
 
-impl<'a> SeriesActionRequestV2<'a> {
+impl<'a> SeriesActionRequestV3<'a> {
     /// Decode one exact `header || ordered Merkle siblings` family request.
-    pub fn decode(input: &'a [u8]) -> Result<Self, SeriesInstructionErrorV2> {
+    pub fn decode(input: &'a [u8]) -> Result<Self, SeriesInstructionErrorV3> {
         let header = input
-            .get(..SERIES_ACTION_HEADER_BYTES_V2)
-            .ok_or(SeriesInstructionErrorV2::Encoding)?;
+            .get(..SERIES_ACTION_HEADER_BYTES_V3)
+            .ok_or(SeriesInstructionErrorV3::Encoding)?;
         if header.get(..8) != Some(MAGIC.as_slice())
             || read_u16(header, 8)? != SCHEMA
             || read_u16(header, 10)? != PROFILE
             || header.get(RESERVED_OFFSET..TEMPLATE_OFFSET) != Some([0_u8; 2].as_slice())
         {
-            return Err(SeriesInstructionErrorV2::Encoding);
+            return Err(SeriesInstructionErrorV3::Encoding);
         }
-        let action = SeriesActionV2::decode(read_u8(header, ACTION_OFFSET)?)?;
+        let action = SeriesActionV3::decode(read_u8(header, ACTION_OFFSET)?)?;
         let proof_count = read_u8(header, PROOF_COUNT_OFFSET)?;
-        if usize::from(proof_count) > SERIES_ACTION_MAXIMUM_PROOF_HEIGHT_V2 {
-            return Err(SeriesInstructionErrorV2::Proof);
+        if usize::from(proof_count) > SERIES_ACTION_MAXIMUM_PROOF_HEIGHT_V3 {
+            return Err(SeriesInstructionErrorV3::Proof);
         }
         let proof_bytes_len = usize::from(proof_count)
             .checked_mul(IDENTITY_BYTES)
-            .ok_or(SeriesInstructionErrorV2::Proof)?;
-        let exact_len = SERIES_ACTION_HEADER_BYTES_V2
+            .ok_or(SeriesInstructionErrorV3::Proof)?;
+        let exact_len = SERIES_ACTION_HEADER_BYTES_V3
             .checked_add(proof_bytes_len)
-            .ok_or(SeriesInstructionErrorV2::Proof)?;
+            .ok_or(SeriesInstructionErrorV3::Proof)?;
         if input.len() != exact_len {
-            return Err(SeriesInstructionErrorV2::Proof);
+            return Err(SeriesInstructionErrorV3::Proof);
         }
         let template = read_content(header, TEMPLATE_OFFSET)?;
         let occurrence = read_optional_content(header, OCCURRENCE_OFFSET)?;
@@ -129,14 +129,14 @@ impl<'a> SeriesActionRequestV2<'a> {
         let expected_series_revision = read_u64(header, SERIES_REVISION_OFFSET)?;
         let expected_ticket_revision = read_u64(header, TICKET_REVISION_OFFSET)?;
         let valid_shape = match action {
-            SeriesActionV2::Prepare => {
+            SeriesActionV3::Prepare => {
                 occurrence.is_some() && ticket.is_some() && expected_ticket_revision == 0
             }
-            SeriesActionV2::Consume | SeriesActionV2::Expire => {
+            SeriesActionV3::Consume | SeriesActionV3::Expire => {
                 occurrence.is_some() && ticket.is_some()
             }
-            SeriesActionV2::Retire => occurrence.is_none() && ticket.is_some() && proof_count == 0,
-            SeriesActionV2::Close => {
+            SeriesActionV3::Retire => occurrence.is_none() && ticket.is_some() && proof_count == 0,
+            SeriesActionV3::Close => {
                 occurrence.is_none()
                     && ticket.is_none()
                     && expected_ticket_revision == 0
@@ -144,7 +144,7 @@ impl<'a> SeriesActionRequestV2<'a> {
             }
         };
         if !valid_shape {
-            return Err(SeriesInstructionErrorV2::Action);
+            return Err(SeriesInstructionErrorV3::Action);
         }
         Ok(Self {
             action,
@@ -155,13 +155,13 @@ impl<'a> SeriesActionRequestV2<'a> {
             expected_ticket_revision,
             proof_count,
             proof_bytes: input
-                .get(SERIES_ACTION_HEADER_BYTES_V2..)
-                .ok_or(SeriesInstructionErrorV2::Proof)?,
+                .get(SERIES_ACTION_HEADER_BYTES_V3..)
+                .ok_or(SeriesInstructionErrorV3::Proof)?,
         })
     }
 
     /// Selected family action.
-    pub const fn action(self) -> SeriesActionV2 {
+    pub const fn action(self) -> SeriesActionV3 {
         self.action
     }
     /// Exact finalized Template/config content identity.
@@ -189,47 +189,52 @@ impl<'a> SeriesActionRequestV2<'a> {
         self.proof_count
     }
 
+    /// Borrow the exact canonical `32 * proof_count` proof bytes.
+    pub const fn proof_bytes(self) -> &'a [u8] {
+        self.proof_bytes
+    }
+
     /// Copy the bounded proof into fixed caller storage without allocation.
     pub fn copy_proof_into(
         self,
-        output: &mut [[u8; IDENTITY_BYTES]; SERIES_ACTION_MAXIMUM_PROOF_HEIGHT_V2],
-    ) -> Result<&[[u8; IDENTITY_BYTES]], SeriesInstructionErrorV2> {
+        output: &mut [[u8; IDENTITY_BYTES]; SERIES_ACTION_MAXIMUM_PROOF_HEIGHT_V3],
+    ) -> Result<&[[u8; IDENTITY_BYTES]], SeriesInstructionErrorV3> {
         let count = usize::from(self.proof_count);
         for (index, destination) in output
             .get_mut(..count)
-            .ok_or(SeriesInstructionErrorV2::Proof)?
+            .ok_or(SeriesInstructionErrorV3::Proof)?
             .iter_mut()
             .enumerate()
         {
             let start = index
                 .checked_mul(IDENTITY_BYTES)
-                .ok_or(SeriesInstructionErrorV2::Proof)?;
+                .ok_or(SeriesInstructionErrorV3::Proof)?;
             let end = start
                 .checked_add(IDENTITY_BYTES)
-                .ok_or(SeriesInstructionErrorV2::Proof)?;
+                .ok_or(SeriesInstructionErrorV3::Proof)?;
             destination.copy_from_slice(
                 self.proof_bytes
                     .get(start..end)
-                    .ok_or(SeriesInstructionErrorV2::Proof)?,
+                    .ok_or(SeriesInstructionErrorV3::Proof)?,
             );
         }
-        output.get(..count).ok_or(SeriesInstructionErrorV2::Proof)
+        output.get(..count).ok_or(SeriesInstructionErrorV3::Proof)
     }
 }
 
 /// Encode an already validated action header; append exactly `proof_count`
 /// ordered 32-byte siblings to obtain the final request.
 #[allow(clippy::too_many_arguments)]
-pub fn encode_series_action_header_v2(
-    action: SeriesActionV2,
+pub fn encode_series_action_header_v3(
+    action: SeriesActionV3,
     template: ContentId,
     occurrence: Option<ContentId>,
     ticket: Option<ContentId>,
     expected_series_revision: u64,
     expected_ticket_revision: u64,
     proof_count: u8,
-) -> Result<[u8; SERIES_ACTION_HEADER_BYTES_V2], SeriesInstructionErrorV2> {
-    let mut output = [0_u8; SERIES_ACTION_HEADER_BYTES_V2];
+) -> Result<[u8; SERIES_ACTION_HEADER_BYTES_V3], SeriesInstructionErrorV3> {
+    let mut output = [0_u8; SERIES_ACTION_HEADER_BYTES_V3];
     output[..8].copy_from_slice(&MAGIC);
     output[8..10].copy_from_slice(&SCHEMA.to_le_bytes());
     output[10..12].copy_from_slice(&PROFILE.to_le_bytes());
@@ -242,82 +247,82 @@ pub fn encode_series_action_header_v2(
         .copy_from_slice(&expected_series_revision.to_le_bytes());
     output[TICKET_REVISION_OFFSET..TICKET_REVISION_OFFSET + 8]
         .copy_from_slice(&expected_ticket_revision.to_le_bytes());
-    let mut validation = [0_u8; SERIES_ACTION_MAXIMUM_BYTES_V2];
-    validation[..SERIES_ACTION_HEADER_BYTES_V2].copy_from_slice(&output);
-    let exact_len = SERIES_ACTION_HEADER_BYTES_V2
+    let mut validation = [0_u8; SERIES_ACTION_MAXIMUM_BYTES_V3];
+    validation[..SERIES_ACTION_HEADER_BYTES_V3].copy_from_slice(&output);
+    let exact_len = SERIES_ACTION_HEADER_BYTES_V3
         .checked_add(usize::from(proof_count).saturating_mul(IDENTITY_BYTES))
-        .ok_or(SeriesInstructionErrorV2::Proof)?;
-    SeriesActionRequestV2::decode(
+        .ok_or(SeriesInstructionErrorV3::Proof)?;
+    SeriesActionRequestV3::decode(
         validation
             .get(..exact_len)
-            .ok_or(SeriesInstructionErrorV2::Proof)?,
+            .ok_or(SeriesInstructionErrorV3::Proof)?,
     )?;
     Ok(output)
 }
 
-fn read_u8(input: &[u8], offset: usize) -> Result<u8, SeriesInstructionErrorV2> {
+fn read_u8(input: &[u8], offset: usize) -> Result<u8, SeriesInstructionErrorV3> {
     input
         .get(offset)
         .copied()
-        .ok_or(SeriesInstructionErrorV2::Encoding)
+        .ok_or(SeriesInstructionErrorV3::Encoding)
 }
 
-fn read_u16(input: &[u8], offset: usize) -> Result<u16, SeriesInstructionErrorV2> {
+fn read_u16(input: &[u8], offset: usize) -> Result<u16, SeriesInstructionErrorV3> {
     let bytes: [u8; 2] = input
         .get(offset..offset.saturating_add(2))
-        .ok_or(SeriesInstructionErrorV2::Encoding)?
+        .ok_or(SeriesInstructionErrorV3::Encoding)?
         .try_into()
-        .map_err(|_| SeriesInstructionErrorV2::Encoding)?;
+        .map_err(|_| SeriesInstructionErrorV3::Encoding)?;
     Ok(u16::from_le_bytes(bytes))
 }
 
-fn read_u64(input: &[u8], offset: usize) -> Result<u64, SeriesInstructionErrorV2> {
+fn read_u64(input: &[u8], offset: usize) -> Result<u64, SeriesInstructionErrorV3> {
     let bytes: [u8; 8] = input
         .get(offset..offset.saturating_add(8))
-        .ok_or(SeriesInstructionErrorV2::Encoding)?
+        .ok_or(SeriesInstructionErrorV3::Encoding)?
         .try_into()
-        .map_err(|_| SeriesInstructionErrorV2::Encoding)?;
+        .map_err(|_| SeriesInstructionErrorV3::Encoding)?;
     Ok(u64::from_le_bytes(bytes))
 }
 
-fn read_content(input: &[u8], offset: usize) -> Result<ContentId, SeriesInstructionErrorV2> {
+fn read_content(input: &[u8], offset: usize) -> Result<ContentId, SeriesInstructionErrorV3> {
     let bytes = read_identity(input, offset)?;
-    ContentId::new(bytes).map_err(|_| SeriesInstructionErrorV2::Identity)
+    ContentId::new(bytes).map_err(|_| SeriesInstructionErrorV3::Identity)
 }
 
 fn read_optional_content(
     input: &[u8],
     offset: usize,
-) -> Result<Option<ContentId>, SeriesInstructionErrorV2> {
+) -> Result<Option<ContentId>, SeriesInstructionErrorV3> {
     let bytes = read_identity(input, offset)?;
     if bytes == ZERO_IDENTITY {
         Ok(None)
     } else {
         ContentId::new(bytes)
             .map(Some)
-            .map_err(|_| SeriesInstructionErrorV2::Identity)
+            .map_err(|_| SeriesInstructionErrorV3::Identity)
     }
 }
 
 fn read_identity(
     input: &[u8],
     offset: usize,
-) -> Result<[u8; IDENTITY_BYTES], SeriesInstructionErrorV2> {
+) -> Result<[u8; IDENTITY_BYTES], SeriesInstructionErrorV3> {
     input
         .get(offset..offset.saturating_add(IDENTITY_BYTES))
-        .ok_or(SeriesInstructionErrorV2::Encoding)?
+        .ok_or(SeriesInstructionErrorV3::Encoding)?
         .try_into()
-        .map_err(|_| SeriesInstructionErrorV2::Encoding)
+        .map_err(|_| SeriesInstructionErrorV3::Encoding)
 }
 
 fn put_content(
     output: &mut [u8],
     offset: usize,
     value: Option<ContentId>,
-) -> Result<(), SeriesInstructionErrorV2> {
+) -> Result<(), SeriesInstructionErrorV3> {
     output
         .get_mut(offset..offset.saturating_add(IDENTITY_BYTES))
-        .ok_or(SeriesInstructionErrorV2::Encoding)?
+        .ok_or(SeriesInstructionErrorV3::Encoding)?
         .copy_from_slice(&value.map_or(ZERO_IDENTITY, ContentId::to_bytes));
     Ok(())
 }
@@ -335,11 +340,11 @@ mod tests {
     }
 
     fn occurrence_packet(
-        action: SeriesActionV2,
+        action: SeriesActionV3,
         ticket_revision: u64,
         proof: &[[u8; 32]],
     ) -> Vec<u8> {
-        let header = encode_series_action_header_v2(
+        let header = encode_series_action_header_v3(
             action,
             id(1),
             Some(id(2)),
@@ -359,52 +364,62 @@ mod tests {
     #[test]
     fn occurrence_packet_roundtrips_without_allocation_in_decoder() {
         let proof = [[5_u8; 32], [6_u8; 32]];
-        let bytes = occurrence_packet(SeriesActionV2::Consume, 7, &proof);
-        let decoded = SeriesActionRequestV2::decode(&bytes).expect("decode");
-        assert_eq!(decoded.action(), SeriesActionV2::Consume);
+        let bytes = occurrence_packet(SeriesActionV3::Consume, 7, &proof);
+        let decoded = SeriesActionRequestV3::decode(&bytes).expect("decode");
+        assert_eq!(decoded.action(), SeriesActionV3::Consume);
         assert!(decoded.action().core_founding());
         assert_eq!(decoded.template(), id(1));
         assert_eq!(decoded.occurrence(), Some(id(2)));
         assert_eq!(decoded.ticket(), Some(id(3)));
         assert_eq!(decoded.expected_series_revision(), 4);
         assert_eq!(decoded.expected_ticket_revision(), 7);
-        let mut copied = [[0_u8; 32]; SERIES_ACTION_MAXIMUM_PROOF_HEIGHT_V2];
+        let mut copied = [[0_u8; 32]; SERIES_ACTION_MAXIMUM_PROOF_HEIGHT_V3];
         assert_eq!(decoded.copy_proof_into(&mut copied), Ok(proof.as_slice()));
     }
 
     #[test]
     fn hostile_lengths_reserved_tags_and_shapes_refuse() {
         let proof = [[5_u8; 32], [6_u8; 32]];
-        let bytes = occurrence_packet(SeriesActionV2::Consume, 7, &proof);
+        let bytes = occurrence_packet(SeriesActionV3::Consume, 7, &proof);
         assert_eq!(
-            SeriesActionRequestV2::decode(
+            SeriesActionRequestV3::decode(
                 bytes
                     .get(..bytes.len().saturating_sub(1))
                     .expect("short packet"),
             ),
-            Err(SeriesInstructionErrorV2::Proof)
+            Err(SeriesInstructionErrorV3::Proof)
         );
         let mut trailing = bytes.clone();
         trailing.push(0);
         assert_eq!(
-            SeriesActionRequestV2::decode(&trailing),
-            Err(SeriesInstructionErrorV2::Proof)
+            SeriesActionRequestV3::decode(&trailing),
+            Err(SeriesInstructionErrorV3::Proof)
         );
         let mut reserved = bytes.clone();
         *reserved.get_mut(RESERVED_OFFSET).expect("reserved byte") = 1;
         assert_eq!(
-            SeriesActionRequestV2::decode(&reserved),
-            Err(SeriesInstructionErrorV2::Encoding)
+            SeriesActionRequestV3::decode(&reserved),
+            Err(SeriesInstructionErrorV3::Encoding)
+        );
+        let mut obsolete_v2 = bytes.clone();
+        *obsolete_v2.get_mut(7).expect("versioned magic byte") = b'2';
+        obsolete_v2
+            .get_mut(8..10)
+            .expect("schema bytes")
+            .copy_from_slice(&2_u16.to_le_bytes());
+        assert_eq!(
+            SeriesActionRequestV3::decode(&obsolete_v2),
+            Err(SeriesInstructionErrorV3::Encoding)
         );
         let mut tag = bytes.clone();
         *tag.get_mut(ACTION_OFFSET).expect("action byte") = u8::MAX;
         assert_eq!(
-            SeriesActionRequestV2::decode(&tag),
-            Err(SeriesInstructionErrorV2::Action)
+            SeriesActionRequestV3::decode(&tag),
+            Err(SeriesInstructionErrorV3::Action)
         );
         assert_eq!(
-            encode_series_action_header_v2(
-                SeriesActionV2::Prepare,
+            encode_series_action_header_v3(
+                SeriesActionV3::Prepare,
                 id(1),
                 Some(id(2)),
                 Some(id(3)),
@@ -412,11 +427,11 @@ mod tests {
                 1,
                 0,
             ),
-            Err(SeriesInstructionErrorV2::Action)
+            Err(SeriesInstructionErrorV3::Action)
         );
         assert_eq!(
-            encode_series_action_header_v2(
-                SeriesActionV2::Close,
+            encode_series_action_header_v3(
+                SeriesActionV3::Close,
                 id(1),
                 None,
                 Some(id(3)),
@@ -424,14 +439,14 @@ mod tests {
                 0,
                 0,
             ),
-            Err(SeriesInstructionErrorV2::Action)
+            Err(SeriesInstructionErrorV3::Action)
         );
     }
 
     #[test]
     fn terminal_packets_cannot_smuggle_occurrence_proofs() {
-        let retire = encode_series_action_header_v2(
-            SeriesActionV2::Retire,
+        let retire = encode_series_action_header_v3(
+            SeriesActionV3::Retire,
             id(1),
             None,
             Some(id(3)),
@@ -440,22 +455,22 @@ mod tests {
             0,
         )
         .expect("retire");
-        let retire = SeriesActionRequestV2::decode(&retire).expect("retire decode");
-        assert_eq!(retire.action(), SeriesActionV2::Retire);
+        let retire = SeriesActionRequestV3::decode(&retire).expect("retire decode");
+        assert_eq!(retire.action(), SeriesActionV3::Retire);
         assert!(!retire.action().occurrence_bound());
 
         let close =
-            encode_series_action_header_v2(SeriesActionV2::Close, id(1), None, None, 10, 0, 0)
+            encode_series_action_header_v3(SeriesActionV3::Close, id(1), None, None, 10, 0, 0)
                 .expect("close");
         assert_eq!(
-            SeriesActionRequestV2::decode(&close)
+            SeriesActionRequestV3::decode(&close)
                 .expect("close decode")
                 .action(),
-            SeriesActionV2::Close
+            SeriesActionV3::Close
         );
         assert_eq!(
-            encode_series_action_header_v2(
-                SeriesActionV2::Retire,
+            encode_series_action_header_v3(
+                SeriesActionV3::Retire,
                 id(1),
                 None,
                 Some(id(3)),
@@ -463,7 +478,7 @@ mod tests {
                 9,
                 1,
             ),
-            Err(SeriesInstructionErrorV2::Action)
+            Err(SeriesInstructionErrorV3::Action)
         );
     }
 }
