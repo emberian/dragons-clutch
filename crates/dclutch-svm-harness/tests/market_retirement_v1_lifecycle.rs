@@ -2,40 +2,27 @@
 
 include!("resolution_core_v3_lifecycle.rs");
 
-use dclutch_claims_svm::{
-    liability_basis_state_v2::{
-        LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
-        LiabilityBasisMarketInputV2, encode_liability_basis_market_into_v2,
-        liability_basis_vector_width_v2,
-    },
-    market_closure_v1::{
-        CLAIMS_MARKET_CLOSURE_POST_RESOURCE_DIGEST_DOMAIN_V1,
-        CLAIMS_MARKET_CLOSURE_PRE_RESOURCE_DIGEST_DOMAIN_V1, ClaimsMarketClosureReceiptInputV1,
-        ClaimsMarketClosureReceiptV1, ClaimsMarketClosureRequestInputV1,
-        ClaimsMarketClosureRequestV1,
-    },
+use dclutch_claims_svm::liability_basis_state_v2::{
+    LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
+    LiabilityBasisMarketInputV2, encode_liability_basis_market_into_v2,
+    liability_basis_vector_width_v2,
 };
-use dclutch_custody_contract::{
-    CUSTODY_POSTSTATE_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CustodyReceiptV1, ReceiptEvidenceV1,
-};
-use dclutch_market_core_codec::{
-    RETIREMENT_CUSTODY_RECEIPT_COUNT_V1, RETIREMENT_POST_RESOURCE_DIGEST_DOMAIN_V1,
-    RETIREMENT_ROLE_COUNT_V1, RetirementBundleInputV1, RetirementBundleV1,
+use dclutch_custody_contract::CUSTODY_REPLAY_BYTES_V1;
+use dclutch_market_retirement_v1_operator::{
+    MarketRetirementOperatorErrorV1, MarketRetirementSnapshotV1, build_market_retirement_v1,
 };
 use dclutch_registry_svm::continuation_v1::{
     REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationAdmissionSeedsV1,
     RegistryContinuationRequestV1,
 };
 use dclutch_rent_contract::lifecycle_v2::{
-    LIFECYCLE_RENT_CORE_CLOSE_AUTHORITY_DOMAIN_V2, LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
-    LifecycleAccountIdV2, LifecycleRentCreditV2,
+    LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
 };
 use dclutch_token_svm::ACCOUNT_BYTES as TOKEN_ACCOUNT_BYTES;
-use solana_account::AccountSharedData;
-use solana_program::hash::hashv;
 use spl_token_interface::state::{Account as SplAccount, AccountState};
 
 const CLAIMS_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x76; 32]);
+const TRADING_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x77; 32]);
 const CUSTODY_CONTEXT: [u8; 32] = [0xc7; 32];
 const CLAIMS_REVISION: u64 = 11;
 const CUSTODY_REVISION: u64 = 17;
@@ -43,6 +30,7 @@ const CUSTODY_REVISION: u64 = 17;
 struct JoinedFixture {
     base: Fixture,
     claims_programdata: Pubkey,
+    trading_programdata: Pubkey,
     rent_programdata: Pubkey,
     refund_wallet: Pubkey,
     claims_aggregate: Pubkey,
@@ -65,13 +53,14 @@ struct JoinedSnapshot {
 fn joined_activation(
     core: ArtifactReleaseV1,
     claims: ArtifactReleaseV1,
+    trading: ArtifactReleaseV1,
     resolution: ArtifactReleaseV1,
     custody: ArtifactReleaseV1,
 ) -> ([u8; 32], Vec<u8>) {
     let release_set = ExecutionReleaseSetV1::new(
         binding(core),
         binding(claims),
-        binding(core),
+        binding(trading),
         binding(resolution),
         binding(custody),
     )
@@ -83,7 +72,7 @@ fn joined_activation(
     for (role, selected) in [
         (ExecutionRoleV1::Core, core),
         (ExecutionRoleV1::Claims, claims),
-        (ExecutionRoleV1::Trading, core),
+        (ExecutionRoleV1::Trading, trading),
         (ExecutionRoleV1::Resolution, resolution),
         (ExecutionRoleV1::Custody, custody),
     ] {
@@ -159,14 +148,22 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
     let mut base = fixture(true);
     let directory = PathBuf::from(env::var("SBF_OUT_DIR").expect("SBF_OUT_DIR is required"));
     let claims_elf = fs::read(directory.join("dclutch_claims_sbf.so")).expect("Claims ELF");
+    let trading_elf = fs::read(directory.join("dclutch_trading_sbf.so")).expect("Trading ELF");
     let rent_elf = fs::read(directory.join("dclutch_rent_sbf.so")).expect("Rent ELF");
     let elves = artifacts();
     let test = base.test.as_mut().expect("unstarted ProgramTest");
     add_program(test, "dclutch_claims_sbf", CLAIMS_PROGRAM_ID, &claims_elf);
+    add_program(
+        test,
+        "dclutch_trading_sbf",
+        TRADING_PROGRAM_ID,
+        &trading_elf,
+    );
     add_program(test, "dclutch_rent_sbf", RENT_PROGRAM_ID, &rent_elf);
 
     let core_release = release(CORE_PROGRAM_ID, [0x41; 32], &elves.core);
     let claims_release = release(CLAIMS_PROGRAM_ID, [0x43; 32], &claims_elf);
+    let trading_release = release(TRADING_PROGRAM_ID, [0x46; 32], &trading_elf);
     let resolution_release = release(
         RESOLUTION_PROGRAM_ID,
         RESOLUTION_CONTROLLER_RELEASE_ID_V4,
@@ -178,6 +175,7 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
     let (release_set, activation_data) = joined_activation(
         core_release,
         claims_release,
+        trading_release,
         resolution_release,
         custody_release,
     );
@@ -289,16 +287,7 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
     let material_account = observed(&mut context, base.source_material.raw)
         .await
         .expect("Source material");
-    let material = SourceMaterialV2::decode(&material_account.data).expect("Source material V2");
     let material_id = hash(&material_account.data).to_bytes();
-    let product_account = observed(&mut context, base.product.raw)
-        .await
-        .expect("Product record");
-    let product_record_id = hash(&product_account.data).to_bytes();
-    let domain_account = observed(&mut context, base.domain.raw)
-        .await
-        .expect("ResultDomain");
-    let domain = ResultDomainV2::decode(&domain_account.data).expect("ResultDomain V2");
     let (source, source_bump) = Pubkey::find_program_address(
         &[
             SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
@@ -307,7 +296,7 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
         ],
         &RESOLUTION_PROGRAM_ID,
     );
-    let mut source_value = SourceResolutionStateV2::fresh(
+    let source_value = SourceResolutionStateV2::fresh(
         market.to_bytes(),
         GENERATION,
         source_id(material_id),
@@ -318,20 +307,6 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
     )
     .expect("fresh Source")
     .state();
-    let decision = source_value
-        .resolve_primary_from_authenticated_domain(
-            source_id(material_id),
-            material,
-            source_id(product_record_id),
-            domain,
-            source_id([0xb3; 32]),
-            -1,
-            1,
-            GENERATION,
-            TERMINAL_TIME,
-            TERMINAL_SEQUENCE,
-        )
-        .expect("resolved Source");
     set_account(
         &mut context,
         source,
@@ -347,33 +322,6 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
         &RESOLUTION_PROGRAM_ID,
     )
     .0;
-    let certificate_value = ResolutionCertificateV2 {
-        kind: ResolutionCertificateKindV2::ResolutionSuccess,
-        market: market.to_bytes(),
-        route: [0xb4; 32],
-        source_material: material_id,
-        product_record_digest: product_record_id,
-        provider_evidence: [0xb3; 32],
-        funding_allocation: [0; 32],
-        receipt_account: certificate.to_bytes(),
-        generation: GENERATION,
-        attempt_index: 0,
-        schedule_index: 0,
-        selector: decision.selector(),
-        work_paid: 0,
-        funding_remaining: 0,
-        result_numerator: -1,
-        result_denominator: 1,
-        observed_at: u64::try_from(TERMINAL_TIME).expect("positive time"),
-    };
-    set_account(
-        &mut context,
-        certificate,
-        protocol_account(
-            RESOLUTION_PROGRAM_ID,
-            certificate_value.to_bytes().expect("certificate").to_vec(),
-        ),
-    );
     let closure = Pubkey::find_program_address(
         &[
             SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V2,
@@ -464,12 +412,15 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
         &CLAIMS_PROGRAM_ID,
     )
     .0;
-    let mut aggregate_bytes =
-        vec![
-            0;
-            liability_basis_vector_width_v2(LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, 3)
-                .expect("aggregate width")
-        ];
+    const RETIREMENT_CLAIM_COUNT: u32 = 5;
+    let mut aggregate_bytes = vec![
+        0;
+        liability_basis_vector_width_v2(
+            LIABILITY_BASIS_MARKET_HEADER_BYTES_V2,
+            RETIREMENT_CLAIM_COUNT,
+        )
+        .expect("runtime aggregate width")
+    ];
     encode_liability_basis_market_into_v2(
         LiabilityBasisMarketInputV2 {
             revision: CLAIMS_REVISION,
@@ -482,7 +433,7 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
             custody_context: CUSTODY_CONTEXT,
             generation: GENERATION,
         },
-        &[0, 0, 0],
+        &[0, 0, 0, 0, 0],
         &mut aggregate_bytes,
     )
     .expect("empty Claims aggregate");
@@ -494,6 +445,8 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
 
     base.release_set = release_set;
     base.activation = activation;
+    base.infrastructure = infrastructure_profile;
+    base.registry_artifact = registry_artifact;
     base.market = market;
     base.source = source;
     base.funding = funding;
@@ -507,6 +460,7 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
         JoinedFixture {
             base,
             claims_programdata: programdata(CLAIMS_PROGRAM_ID),
+            trading_programdata: programdata(TRADING_PROGRAM_ID),
             rent_programdata: programdata(RENT_PROGRAM_ID),
             refund_wallet,
             claims_aggregate,
@@ -603,43 +557,6 @@ fn joined_custody_request(
     }
 }
 
-fn custody_poststate(
-    request_digest: [u8; 32],
-    source: Pubkey,
-    destination: Pubkey,
-    rent_lamports: u64,
-) -> [u8; 32] {
-    hashv(&[
-        CUSTODY_POSTSTATE_DOMAIN_V1,
-        &request_digest,
-        source.as_ref(),
-        destination.as_ref(),
-        &0_u64.to_le_bytes(),
-        &0_u64.to_le_bytes(),
-        &0_u64.to_le_bytes(),
-        &0_u64.to_le_bytes(),
-        &rent_lamports.to_le_bytes(),
-    ])
-    .to_bytes()
-}
-
-fn caller_authority(
-    release_set: [u8; 32],
-    market: Pubkey,
-    context: [u8; 32],
-    request_bytes: &[u8],
-) -> Pubkey {
-    let seeds = CallerAuthoritySeedsV1::from_bytes(
-        release_set,
-        market.to_bytes(),
-        ExecutionRoleV1::Core,
-        context,
-        hash(request_bytes).to_bytes(),
-    )
-    .expect("Core caller authority");
-    Pubkey::find_program_address(&seeds.as_slices(), &CORE_PROGRAM_ID).0
-}
-
 struct RetirementPlan {
     instruction: Instruction,
     direct_instruction: Instruction,
@@ -647,7 +564,7 @@ struct RetirementPlan {
     expected_refund_delta: u64,
 }
 
-fn registry_retirement_continuation(
+fn hostile_registry_retirement_continuation(
     fixture: &JoinedFixture,
     activation_cache_digest: CoreContentId,
     mut core: Instruction,
@@ -722,325 +639,63 @@ fn registry_retirement_continuation(
     }
 }
 
+async fn retirement_operator_snapshot(
+    context: &mut ProgramTestContext,
+    fixture: &JoinedFixture,
+) -> MarketRetirementSnapshotV1 {
+    MarketRetirementSnapshotV1 {
+        market: required_observed(context, fixture.base.market).await,
+        rent_credit: required_observed(context, fixture.base.rent_credit).await,
+        activation_cache: required_observed(context, fixture.base.activation).await,
+        registry_program: required_observed(context, REGISTRY_PROGRAM_ID).await,
+        core_program: required_observed(context, CORE_PROGRAM_ID).await,
+        core_programdata: required_observed(context, fixture.base.core_programdata).await,
+        claims_program: required_observed(context, CLAIMS_PROGRAM_ID).await,
+        claims_programdata: required_observed(context, fixture.claims_programdata).await,
+        resolution_program: required_observed(context, RESOLUTION_PROGRAM_ID).await,
+        resolution_programdata: required_observed(context, fixture.base.resolution_programdata)
+            .await,
+        custody_program: required_observed(context, CUSTODY_PROGRAM_ID).await,
+        custody_programdata: required_observed(context, fixture.base.custody_programdata).await,
+        rent_program: required_observed(context, RENT_PROGRAM_ID).await,
+        source_receipt: required_observed(context, fixture.base.closure).await,
+        claims_aggregate: required_observed(context, fixture.claims_aggregate).await,
+        custody_replay: required_observed(context, fixture.base.replay).await,
+        hoard_vault: required_observed(context, fixture.base.vault).await,
+        custody_authority: observed_or_vacant(context, fixture.base.custody_authority).await,
+        collateral_mint: required_observed(context, fixture.base.mint).await,
+        collateral_token_program: required_observed(
+            context,
+            Pubkey::new_from_array(LEGACY_TOKEN_PROGRAM_ID),
+        )
+        .await,
+        realm_raw: required_observed(context, fixture.base.realm_record.raw).await,
+        realm_staging: observed_or_vacant(context, fixture.base.realm_record.staging).await,
+        infrastructure_profile: required_observed(context, fixture.infrastructure_profile).await,
+        registry_artifact_raw: required_observed(context, fixture.registry_artifact.raw).await,
+        registry_artifact_staging: observed_or_vacant(context, fixture.registry_artifact.staging)
+            .await,
+        registry_programdata: required_observed(context, fixture.base.registry_programdata).await,
+        rent_artifact_raw: required_observed(context, fixture.rent_artifact.raw).await,
+        rent_artifact_staging: observed_or_vacant(context, fixture.rent_artifact.staging).await,
+        rent_programdata: required_observed(context, fixture.rent_programdata).await,
+        rent_sysvar: required_observed(context, sysvar::rent::ID).await,
+        refund_wallet: required_observed(context, fixture.refund_wallet).await,
+    }
+}
+
 async fn retirement_instruction(
     context: &mut ProgramTestContext,
     fixture: &JoinedFixture,
 ) -> RetirementPlan {
-    let core_request = Request::administrative(
-        Action::Retire,
-        GENERATION,
-        CoreIdentity::new(fixture.base.market.to_bytes()).expect("Market"),
-    );
-    let core_bytes = core_request.encode().expect("Retire request");
-    let parent_digest = hash(&core_bytes).to_bytes();
-    let aggregate_account = observed(context, fixture.claims_aggregate)
-        .await
-        .expect("Claims aggregate");
-    let aggregate =
-        dclutch_claims_svm::liability_basis_state_v2::LiabilityBasisMarketViewV2::decode(
-            &aggregate_account.data,
-        )
-        .expect("Claims aggregate view");
-    let claims = ClaimsMarketClosureRequestV1::new(ClaimsMarketClosureRequestInputV1 {
-        release_set: fixture.base.release_set,
-        market: fixture.base.market.to_bytes(),
-        aggregate: fixture.claims_aggregate.to_bytes(),
-        rent_credit: fixture.base.rent_credit.to_bytes(),
-        parent_request_digest: parent_digest,
-        core_program: CORE_PROGRAM_ID.to_bytes(),
-        generation: GENERATION,
-        expected_revision: CLAIMS_REVISION,
-        resulting_revision: CLAIMS_REVISION + 1,
-        claim_count: aggregate.claim_count,
-    })
-    .expect("Claims close request");
-    let claims_bytes = claims.to_bytes();
-    let close_vault = joined_custody_request(
-        fixture.base.release_set,
-        fixture.base.market,
-        fixture.base.realm,
-        fixture.base.mint,
-        fixture.base.rent_credit,
-        OperationV1::CloseVault,
-        parent_digest,
-        CUSTODY_REVISION,
-        0,
-    );
-    let close_vault_bytes = close_vault.to_bytes().expect("CloseVault request");
-    let close_replay = joined_custody_request(
-        fixture.base.release_set,
-        fixture.base.market,
-        fixture.base.realm,
-        fixture.base.mint,
-        fixture.base.rent_credit,
-        OperationV1::CloseReplay,
-        parent_digest,
-        CUSTODY_REVISION + 1,
-        1,
-    );
-    let close_replay_bytes = close_replay.to_bytes().expect("CloseReplay request");
-
-    let source_account = observed(context, fixture.base.closure)
-        .await
-        .expect("Resolution closure receipt");
-    let source = SourceClosureReceiptV2::decode(&source_account.data).expect("Source receipt");
-    let market_account = observed(context, fixture.base.market)
-        .await
-        .expect("Retiring Market");
-    let credit_account = observed(context, fixture.base.rent_credit)
-        .await
-        .expect("lifecycle RentCredit");
-    let replay_account = observed(context, fixture.base.replay)
-        .await
-        .expect("Custody replay");
-    let replay = CustodyReplayV1::decode(&replay_account.data).expect("Custody replay state");
-    let vault_account = observed(context, fixture.base.vault)
-        .await
-        .expect("Hoard vault");
-
-    let claims_request_digest = hash(&claims_bytes).to_bytes();
-    let claims_pre_digest = hashv(&[
-        CLAIMS_MARKET_CLOSURE_PRE_RESOURCE_DIGEST_DOMAIN_V1.as_slice(),
-        fixture.claims_aggregate.as_ref(),
-        aggregate_account.data.as_slice(),
-    ])
-    .to_bytes();
-    let claims_credit_after = credit_account
-        .lamports
-        .checked_add(aggregate_account.lamports)
-        .expect("Claims refund");
-    let claims_post_digest = hashv(&[
-        CLAIMS_MARKET_CLOSURE_POST_RESOURCE_DIGEST_DOMAIN_V1.as_slice(),
-        fixture.claims_aggregate.as_ref(),
-        fixture.base.rent_credit.as_ref(),
-        &(CLAIMS_REVISION + 1).to_le_bytes(),
-        &aggregate_account.lamports.to_le_bytes(),
-        &claims_credit_after.to_le_bytes(),
-    ])
-    .to_bytes();
-    let claims_receipt = ClaimsMarketClosureReceiptV1::new(ClaimsMarketClosureReceiptInputV1 {
-        producer: CLAIMS_PROGRAM_ID.to_bytes(),
-        release_set: fixture.base.release_set,
-        market: fixture.base.market.to_bytes(),
-        aggregate: fixture.claims_aggregate.to_bytes(),
-        rent_credit: fixture.base.rent_credit.to_bytes(),
-        request_digest: claims_request_digest,
-        pre_resource_digest: claims_pre_digest,
-        post_resource_digest: claims_post_digest,
-        generation: GENERATION,
-        pre_revision: CLAIMS_REVISION,
-        post_revision: CLAIMS_REVISION + 1,
-        liability_units: 0,
-        refund_lamports: aggregate_account.lamports,
-        claim_count: aggregate.claim_count,
-    })
-    .expect("Claims receipt");
-    let claims_receipt_digest = hash(&claims_receipt.to_bytes()).to_bytes();
-
-    let close_vault_digest = hash(&close_vault_bytes).to_bytes();
-    let close_vault_poststate = custody_poststate(
-        close_vault_digest,
-        fixture.base.vault,
-        fixture.base.rent_credit,
-        vault_account.lamports,
-    );
-    let replay_after_vault = replay
-        .advance(close_vault, close_vault_digest, close_vault_poststate)
-        .expect("CloseVault replay transition");
-    let replay_after_vault_bytes = replay_after_vault
-        .to_bytes()
-        .expect("post-CloseVault replay");
-    let close_vault_receipt = CustodyReceiptV1::new(
-        close_vault,
-        close_vault_digest,
-        ReceiptEvidenceV1 {
-            source_before: 0,
-            source_after: 0,
-            destination_before: 0,
-            destination_after: 0,
-            poststate_commitment: close_vault_poststate,
-            replay_state_digest: hash(&replay_after_vault_bytes).to_bytes(),
-        },
-    )
-    .expect("CloseVault receipt");
-    let close_vault_receipt_digest = hash(
-        &close_vault_receipt
-            .to_bytes()
-            .expect("CloseVault receipt bytes"),
-    )
-    .to_bytes();
-
-    let close_replay_digest = hash(&close_replay_bytes).to_bytes();
-    let close_replay_poststate = custody_poststate(
-        close_replay_digest,
-        fixture.base.replay,
-        fixture.base.rent_credit,
-        replay_account.lamports,
-    );
-    replay_after_vault
-        .advance(close_replay, close_replay_digest, close_replay_poststate)
-        .expect("CloseReplay transition");
-    let close_replay_receipt = CustodyReceiptV1::new(
-        close_replay,
-        close_replay_digest,
-        ReceiptEvidenceV1 {
-            source_before: 0,
-            source_after: 0,
-            destination_before: 0,
-            destination_after: 0,
-            poststate_commitment: close_replay_poststate,
-            replay_state_digest: hash(&[]).to_bytes(),
-        },
-    )
-    .expect("CloseReplay receipt");
-    let close_replay_receipt_digest = hash(
-        &close_replay_receipt
-            .to_bytes()
-            .expect("CloseReplay receipt bytes"),
-    )
-    .to_bytes();
-
-    let final_credit = credit_account
-        .lamports
-        .checked_add(aggregate_account.lamports)
-        .and_then(|value| value.checked_add(vault_account.lamports))
-        .and_then(|value| value.checked_add(replay_account.lamports))
-        .and_then(|value| value.checked_add(market_account.lamports))
-        .expect("complete retirement refund");
-    let source_digest = hash(&source_account.data).to_bytes();
-    let post_resource_digest = hashv(&[
-        RETIREMENT_POST_RESOURCE_DIGEST_DOMAIN_V1.as_slice(),
-        &[RETIREMENT_ROLE_COUNT_V1],
-        &[RETIREMENT_CUSTODY_RECEIPT_COUNT_V1],
-        fixture.base.rent_credit.as_ref(),
-        source_digest.as_slice(),
-        claims_receipt_digest.as_slice(),
-        close_vault_receipt_digest.as_slice(),
-        close_replay_receipt_digest.as_slice(),
-        market_account.lamports.to_le_bytes().as_slice(),
-        aggregate_account.lamports.to_le_bytes().as_slice(),
-        vault_account
-            .lamports
-            .checked_add(replay_account.lamports)
-            .expect("Custody refund")
-            .to_le_bytes()
-            .as_slice(),
-        final_credit.to_le_bytes().as_slice(),
-    ])
-    .to_bytes();
-    let rent_close_authority = Pubkey::find_program_address(
-        &[
-            LIFECYCLE_RENT_CORE_CLOSE_AUTHORITY_DOMAIN_V2,
-            fixture.base.rent_credit.as_ref(),
-            post_resource_digest.as_slice(),
-        ],
-        &CORE_PROGRAM_ID,
-    )
-    .0;
-    let bundle = RetirementBundleV1::new(RetirementBundleInputV1 {
-        market: fixture.base.market.to_bytes(),
-        release_set: fixture.base.release_set,
-        rent_credit: fixture.base.rent_credit.to_bytes(),
-        source_receipt_account: fixture.base.closure.to_bytes(),
-        claims_aggregate: fixture.claims_aggregate.to_bytes(),
-        custody_replay: fixture.base.replay.to_bytes(),
-        hoard_vault: fixture.base.vault.to_bytes(),
-        source_receipt_digest: source_digest,
-        claims_request_digest,
-        custody_close_vault_request_digest: close_vault_digest,
-        custody_close_replay_request_digest: close_replay_digest,
-        core_prestate_digest: hash(&market_account.data).to_bytes(),
-        generation: GENERATION,
-        source_closure_revision: source.terminal_sequence + 1,
-        claims_pre_revision: CLAIMS_REVISION,
-        claims_post_revision: CLAIMS_REVISION + 1,
-        custody_pre_revision: CUSTODY_REVISION,
-        custody_middle_revision: CUSTODY_REVISION + 1,
-        custody_post_revision: CUSTODY_REVISION + 2,
-        expected_core_lamports: market_account.lamports,
-    })
-    .expect("retirement bundle");
-
-    let claims_authority = caller_authority(
-        fixture.base.release_set,
-        fixture.base.market,
-        parent_digest,
-        &claims_bytes,
-    );
-    let close_vault_authority = caller_authority(
-        fixture.base.release_set,
-        fixture.base.market,
-        CUSTODY_CONTEXT,
-        &close_vault_bytes,
-    );
-    let close_replay_authority = caller_authority(
-        fixture.base.release_set,
-        fixture.base.market,
-        CUSTODY_CONTEXT,
-        &close_replay_bytes,
-    );
-    let mut data = Vec::with_capacity(2_152);
-    data.extend_from_slice(&core_bytes);
-    data.extend_from_slice(&bundle.to_bytes());
-    data.extend_from_slice(&claims_bytes);
-    data.extend_from_slice(&close_vault_bytes);
-    data.extend_from_slice(&close_replay_bytes);
-    assert_eq!(data.len(), 2_152);
-    let direct_instruction = Instruction {
-        program_id: CORE_PROGRAM_ID,
-        accounts: vec![
-            AccountMeta::new(fixture.base.market, false),
-            AccountMeta::new(fixture.base.rent_credit, false),
-            AccountMeta::new_readonly(fixture.base.activation, false),
-            AccountMeta::new_readonly(REGISTRY_PROGRAM_ID, false),
-            AccountMeta::new_readonly(CORE_PROGRAM_ID, false),
-            AccountMeta::new_readonly(fixture.base.core_programdata, false),
-            AccountMeta::new_readonly(CLAIMS_PROGRAM_ID, false),
-            AccountMeta::new_readonly(fixture.claims_programdata, false),
-            AccountMeta::new_readonly(RESOLUTION_PROGRAM_ID, false),
-            AccountMeta::new_readonly(fixture.base.resolution_programdata, false),
-            AccountMeta::new_readonly(CUSTODY_PROGRAM_ID, false),
-            AccountMeta::new_readonly(fixture.base.custody_programdata, false),
-            AccountMeta::new_readonly(RENT_PROGRAM_ID, false),
-            AccountMeta::new_readonly(fixture.base.closure, false),
-            AccountMeta::new(fixture.claims_aggregate, false),
-            AccountMeta::new(fixture.base.replay, false),
-            AccountMeta::new(fixture.base.vault, false),
-            AccountMeta::new_readonly(fixture.base.custody_authority, false),
-            AccountMeta::new_readonly(fixture.base.mint, false),
-            AccountMeta::new_readonly(Pubkey::new_from_array(LEGACY_TOKEN_PROGRAM_ID), false),
-            AccountMeta::new_readonly(fixture.base.realm_record.raw, false),
-            AccountMeta::new_readonly(fixture.base.realm_record.staging, false),
-            AccountMeta::new_readonly(claims_authority, false),
-            AccountMeta::new_readonly(close_vault_authority, false),
-            AccountMeta::new_readonly(close_replay_authority, false),
-            AccountMeta::new_readonly(fixture.infrastructure_profile, false),
-            AccountMeta::new_readonly(fixture.registry_artifact.raw, false),
-            AccountMeta::new_readonly(fixture.registry_artifact.staging, false),
-            AccountMeta::new_readonly(programdata(REGISTRY_PROGRAM_ID), false),
-            AccountMeta::new_readonly(fixture.rent_artifact.raw, false),
-            AccountMeta::new_readonly(fixture.rent_artifact.staging, false),
-            AccountMeta::new_readonly(fixture.rent_programdata, false),
-            AccountMeta::new_readonly(sysvar::rent::ID, false),
-            AccountMeta::new(fixture.refund_wallet, false),
-            AccountMeta::new_readonly(rent_close_authority, false),
-        ],
-        data,
-    };
-    let activation = observed(context, fixture.base.activation)
-        .await
-        .expect("Registry activation cache");
-    let activation_cache_digest = id(hash(&activation.data).to_bytes());
-    let instruction = registry_retirement_continuation(
-        fixture,
-        activation_cache_digest,
-        direct_instruction.clone(),
-    );
+    let snapshot = retirement_operator_snapshot(context, fixture).await;
+    let activation_cache_digest = id(hash(&snapshot.activation_cache.data).to_bytes());
+    let report = build_market_retirement_v1(&snapshot).expect("chain-derived aggregate retirement");
     RetirementPlan {
-        instruction,
-        direct_instruction,
+        instruction: report.instruction,
+        direct_instruction: report.direct_instruction,
         activation_cache_digest,
-        expected_refund_delta: final_credit,
+        expected_refund_delta: report.expected_refund_delta,
     }
 }
 
@@ -1059,9 +714,182 @@ async fn joined_snapshot(
     }
 }
 
+async fn execute_same_lineage_real_provider(
+    context: &mut ProgramTestContext,
+    fixture: &JoinedFixture,
+) {
+    let encoded_vaa =
+        pyth_provider::initialize_real_providers(context, fixture.base.provider).await;
+    let mut clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("ProgramTest Clock");
+    clock.slot = clock.slot.max(1);
+    clock.unix_timestamp = TERMINAL_TIME;
+    context.set_sysvar(&clock);
+
+    let payer = context.payer.pubkey();
+    let post_update_body = pyth_provider::RECEIVER_POST_UPDATE
+        .get(8..)
+        .expect("Receiver PostUpdate body")
+        .to_vec();
+    let submit_intent = ProviderSubmitIntentV3 {
+        submitter: payer,
+        refund_recipient: fixture.base.rent_credit,
+        update_account: fixture.base.update.pubkey(),
+        reclaim_after_unix_seconds: TERMINAL_TIME + 20,
+        post_update_body: post_update_body.clone(),
+    };
+    let submit_report = build_provider_submit_v3(
+        &provider_submit_snapshot(context, &fixture.base, encoded_vaa).await,
+        provider_submit_deployment(&fixture.base),
+        &submit_intent,
+    )
+    .expect("chain-derived real-provider submission");
+    let lifecycle_rent = context
+        .banks_client
+        .get_rent()
+        .await
+        .expect("chain Rent")
+        .minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V3);
+    let before_profile_refusals =
+        provider_rollback_snapshot(context, &fixture.base, submit_report.lifecycle).await;
+    let mut substituted_profile = submit_report.instruction.clone();
+    substituted_profile.accounts[7].pubkey = fixture.base.realm_record.raw;
+    assert!(
+        pyth_provider::submit(
+            context,
+            &[
+                transfer(&payer, &submit_report.lifecycle, lifecycle_rent),
+                substituted_profile,
+            ],
+            &[&fixture.base.update],
+        )
+        .await
+        .is_err(),
+        "a substituted immutable infrastructure profile must refuse"
+    );
+    assert_eq!(
+        provider_rollback_snapshot(context, &fixture.base, submit_report.lifecycle).await,
+        before_profile_refusals,
+        "profile substitution rolls back provider, Source, funding, Market, Custody, and RentCredit"
+    );
+    let mut substituted_registry_artifact = submit_report.instruction.clone();
+    substituted_registry_artifact.accounts[10].pubkey = fixture.rent_artifact.raw;
+    assert!(
+        pyth_provider::submit(
+            context,
+            &[
+                transfer(&payer, &submit_report.lifecycle, lifecycle_rent),
+                substituted_registry_artifact,
+            ],
+            &[&fixture.base.update],
+        )
+        .await
+        .is_err(),
+        "a different finalized infrastructure artifact must refuse"
+    );
+    assert_eq!(
+        provider_rollback_snapshot(context, &fixture.base, submit_report.lifecycle).await,
+        before_profile_refusals,
+        "Registry-artifact substitution preserves every provider and Market resource"
+    );
+    pyth_provider::submit(
+        context,
+        &[
+            transfer(&payer, &submit_report.lifecycle, lifecycle_rent),
+            submit_report.instruction,
+        ],
+        &[&fixture.base.update],
+    )
+    .await
+    .expect("captured Receiver accepts the provider update");
+
+    let resolver = Keypair::new();
+    let resolver_rent = context
+        .banks_client
+        .get_rent()
+        .await
+        .expect("chain Rent")
+        .minimum_balance(0);
+    submit(
+        context,
+        &[
+            transfer(
+                &payer,
+                &fixture.base.certificate,
+                Rent::default().minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2),
+            ),
+            transfer(&payer, &resolver.pubkey(), resolver_rent),
+        ],
+    )
+    .await
+    .expect("prepay terminal certificate and distinct resolver");
+    let execute_deployment = ProviderExecuteDeploymentV3 {
+        trading_program: TRADING_PROGRAM_ID,
+        trading_programdata: fixture.trading_programdata,
+        ..provider_execute_deployment(&fixture.base)
+    };
+    let execute_report = build_provider_execute_v3(
+        &provider_execute_snapshot(context, &fixture.base, submit_report.lifecycle).await,
+        execute_deployment,
+        &ProviderExecuteIntentV3 {
+            resolver: resolver.pubkey(),
+            terminal_sequence: TERMINAL_SEQUENCE,
+            post_update_body,
+        },
+    )
+    .expect("chain-derived Core provider execution");
+    let before_inactive_role_substitution =
+        provider_rollback_snapshot(context, &fixture.base, submit_report.lifecycle).await;
+    let mut substituted_inactive_trading = execute_report.instruction.clone();
+    substituted_inactive_trading.accounts[13].pubkey = CUSTODY_PROGRAM_ID;
+    assert!(
+        pyth_provider::submit(context, &[substituted_inactive_trading], &[&resolver])
+            .await
+            .is_err(),
+        "inactive Trading deployment identity remains release-bound"
+    );
+    assert_eq!(
+        provider_rollback_snapshot(context, &fixture.base, submit_report.lifecycle).await,
+        before_inactive_role_substitution,
+        "inactive-role substitution rolls provider, Source, Market, funding, Custody, and RentCredit back"
+    );
+    pyth_provider::submit(context, &[execute_report.instruction], &[&resolver])
+        .await
+        .expect("Core consumes the authenticated provider result");
+
+    let market = CoreState::decode(
+        &observed(context, fixture.base.market)
+            .await
+            .expect("provider-terminal Market")
+            .data,
+    )
+    .expect("Core Market state");
+    assert_eq!(market.phase, Phase::Terminal);
+    let source = SourceResolutionStateV2::decode(
+        &observed(context, fixture.base.source)
+            .await
+            .expect("provider-resolved Source")
+            .data,
+    )
+    .expect("Source state");
+    assert_eq!(source.phase(), SourceResolutionPhaseV1::Resolved);
+    let lifecycle = ProviderUpdateLifecycleV3::decode(
+        &observed(context, submit_report.lifecycle)
+            .await
+            .expect("consumed provider lifecycle")
+            .data,
+    )
+    .expect("provider lifecycle");
+    assert_eq!(lifecycle.status, ProviderUpdateStatusV3::Consumed);
+}
+
 #[tokio::test]
 async fn joined_retirement_is_atomic_through_rent_close_last() {
     let (fixture, mut context) = joined_fixture().await;
+    execute_same_lineage_real_provider(&mut context, &fixture).await;
     let mut clock = context
         .banks_client
         .get_sysvar::<Clock>()
@@ -1070,12 +898,6 @@ async fn joined_retirement_is_atomic_through_rent_close_last() {
     clock.unix_timestamp = TERMINAL_TIME + 1;
     context.set_sysvar(&clock);
 
-    let admit =
-        build_resolution_admit_terminal_v3(&admit_snapshot(&mut context, &fixture.base).await)
-            .expect("chain-derived AdmitTerminal");
-    submit(&mut context, &[admit.instruction])
-        .await
-        .expect("Core -> Resolution terminal admission");
     submit(&mut context, &[begin_retiring_instruction(&fixture.base)])
         .await
         .expect("permissionless BeginRetiring");
@@ -1095,6 +917,40 @@ async fn joined_retirement_is_atomic_through_rent_close_last() {
         .expect("Resolution closes Source subtree first");
 
     let plan = retirement_instruction(&mut context, &fixture).await;
+    let chain_snapshot = retirement_operator_snapshot(&mut context, &fixture).await;
+    let mut stale_observation = chain_snapshot.clone();
+    stale_observation.claims_aggregate.observation.slot += 1;
+    assert_eq!(
+        build_market_retirement_v1(&stale_observation),
+        Err(MarketRetirementOperatorErrorV1::Observation),
+        "one stale child observation cannot enter the packet"
+    );
+    let mut stale_release = chain_snapshot.clone();
+    stale_release.activation_cache.data[0] ^= 1;
+    assert_eq!(
+        build_market_retirement_v1(&stale_release),
+        Err(MarketRetirementOperatorErrorV1::Release),
+        "a stale or substituted release cache must refuse"
+    );
+    let mut swapped_child = chain_snapshot.clone();
+    swapped_child.claims_aggregate = chain_snapshot.source_receipt.clone();
+    assert_eq!(
+        build_market_retirement_v1(&swapped_child),
+        Err(MarketRetirementOperatorErrorV1::Frame),
+        "a Resolution receipt cannot alias the Claims aggregate"
+    );
+    let mut nonempty_custody = chain_snapshot.clone();
+    let mut token = SplAccount::unpack(&nonempty_custody.hoard_vault.data).expect("Hoard vault");
+    token.amount = 1;
+    SplAccount::pack(token, &mut nonempty_custody.hoard_vault.data).expect("hostile token state");
+    assert_eq!(
+        build_market_retirement_v1(&nonempty_custody),
+        Err(MarketRetirementOperatorErrorV1::Custody),
+        "partial Custody settlement cannot retire"
+    );
+    let report = build_market_retirement_v1(&chain_snapshot).expect("retirement report");
+    assert_eq!(report.claim_count, 5, "Claims width is runtime-derived");
+    assert_eq!(fixture.base.funding.len(), 3, "Resolution has three funds");
     assert_eq!(plan.direct_instruction.accounts.len(), 35);
     assert_eq!(plan.direct_instruction.data.len(), 2_152);
     assert_eq!(plan.instruction.accounts.len(), 46);
@@ -1115,8 +971,11 @@ async fn joined_retirement_is_atomic_through_rent_close_last() {
 
     let mut missing_source = plan.direct_instruction.clone();
     missing_source.accounts.remove(13);
-    let missing_source =
-        registry_retirement_continuation(&fixture, plan.activation_cache_digest, missing_source);
+    let missing_source = hostile_registry_retirement_continuation(
+        &fixture,
+        plan.activation_cache_digest,
+        missing_source,
+    );
     assert!(
         submit(&mut context, &[missing_source]).await.is_err(),
         "missing Resolution receipt must refuse"
@@ -1129,7 +988,7 @@ async fn joined_retirement_is_atomic_through_rent_close_last() {
 
     let mut substituted_source = plan.direct_instruction.clone();
     substituted_source.accounts[13].pubkey = fixture.base.certificate;
-    let substituted_source = registry_retirement_continuation(
+    let substituted_source = hostile_registry_retirement_continuation(
         &fixture,
         plan.activation_cache_digest,
         substituted_source,
@@ -1155,7 +1014,7 @@ async fn joined_retirement_is_atomic_through_rent_close_last() {
     reordered.data[CLOSE_VAULT_OFFSET + CUSTODY_BYTES..CLOSE_VAULT_OFFSET + 2 * CUSTODY_BYTES]
         .copy_from_slice(&first);
     let reordered =
-        registry_retirement_continuation(&fixture, plan.activation_cache_digest, reordered);
+        hostile_registry_retirement_continuation(&fixture, plan.activation_cache_digest, reordered);
     assert!(
         submit(&mut context, &[reordered]).await.is_err(),
         "ordered CloseVault/CloseReplay evidence cannot be reversed"
@@ -1168,8 +1027,11 @@ async fn joined_retirement_is_atomic_through_rent_close_last() {
 
     let mut late_rent_refusal = plan.direct_instruction.clone();
     late_rent_refusal.accounts[34].pubkey = Pubkey::new_from_array([0xf1; 32]);
-    let late_rent_refusal =
-        registry_retirement_continuation(&fixture, plan.activation_cache_digest, late_rent_refusal);
+    let late_rent_refusal = hostile_registry_retirement_continuation(
+        &fixture,
+        plan.activation_cache_digest,
+        late_rent_refusal,
+    );
     assert!(
         submit(&mut context, &[late_rent_refusal]).await.is_err(),
         "substituted Core-derived Rent close signer must refuse after child closure work"

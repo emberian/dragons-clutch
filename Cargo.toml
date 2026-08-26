@@ -29,6 +29,7 @@ members = [
     "crates/dclutch-market-contract",
     "crates/dclutch-market-core-codec",
     "crates/dclutch-market-open-v1-operator",
+    "crates/dclutch-market-retirement-v1-operator",
     "crates/dclutch-operator",
     "crates/dclutch-pyth-svm",
     "crates/dclutch-pyth-contract",
