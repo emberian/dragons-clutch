@@ -9,6 +9,7 @@ extern crate alloc;
 
 use dclutch_claims_svm::{
     CallerRole,
+    frame_spec_v1::SparseNativeTransferFrameSpecV1,
     liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
         LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, LiabilityBasisMarketViewV2,
@@ -40,7 +41,8 @@ use solana_sdk_ids::sysvar;
 use super::reauthenticate;
 
 /// Exact fixed account frame for one sparse transfer.
-pub const SPARSE_NATIVE_TRANSFER_ACCOUNT_COUNT_V1: usize = 22;
+pub const SPARSE_NATIVE_TRANSFER_ACCOUNT_COUNT_V1: usize =
+    dclutch_claims_svm::frame_spec_v1::SPARSE_NATIVE_TRANSFER_ACCOUNT_COUNT_V1 as usize;
 
 const AUTHORITY: usize = 0;
 const MARKET: usize = 1;
@@ -164,7 +166,7 @@ pub(super) fn process(
     let request = SparseNativeTransferV1::decode(instruction_data)
         .map_err(|_| SparseNativeTransferSbfErrorV1::Instruction)?;
     let accounts = Accounts::parse(account_infos)?;
-    authenticate_privileges(program_id, accounts)?;
+    authenticate_privileges(program_id, account_infos, accounts)?;
     let packet_digest = hash(instruction_data).to_bytes();
     authenticate_authority(accounts, request, packet_digest)?;
     authenticate_releases(accounts, request)?;
@@ -262,61 +264,32 @@ pub(super) fn process(
 
 fn authenticate_privileges(
     program_id: &Pubkey,
+    account_infos: &[AccountInfo<'_>],
     accounts: Accounts<'_, '_>,
 ) -> Result<(), ProgramError> {
-    if !accounts.authority.is_signer
-        || accounts.authority.is_writable
-        || accounts.authority.executable
-        || !accounts.market.is_writable
-        || !accounts.source.is_writable
-        || !accounts.destination.is_writable
-        || accounts.market.is_signer
-        || accounts.source.is_signer
-        || accounts.destination.is_signer
-        || accounts.market.executable
-        || accounts.source.executable
-        || accounts.destination.executable
-        || accounts.market.key == accounts.source.key
+    let spec = SparseNativeTransferFrameSpecV1;
+    if account_infos.len() != usize::from(spec.account_count()) {
+        return Err(SparseNativeTransferSbfErrorV1::Accounts.into());
+    }
+    for (index, observed) in account_infos.iter().enumerate() {
+        let expected = spec
+            .account(u16::try_from(index).map_err(|_| SparseNativeTransferSbfErrorV1::Accounts)?)
+            .map_err(|_| SparseNativeTransferSbfErrorV1::Accounts)?
+            .privileges();
+        if observed.is_signer != expected.signer()
+            || observed.is_writable != expected.writable()
+            || observed.executable != expected.executable()
+        {
+            return Err(SparseNativeTransferSbfErrorV1::Accounts.into());
+        }
+    }
+    if accounts.market.key == accounts.source.key
         || accounts.market.key == accounts.destination.key
         || accounts.source.key == accounts.destination.key
         || accounts.claims_program.key != program_id
-        || !accounts.claims_program.executable
-        || !accounts.registry.executable
-        || !accounts.caller_program.executable
-        || !accounts.core_program.executable
         || accounts.rent.key != &sysvar::rent::ID
     {
         return Err(SparseNativeTransferSbfErrorV1::Accounts.into());
-    }
-    for account in [
-        accounts.basis_raw,
-        accounts.basis_staging,
-        accounts.product_raw,
-        accounts.product_staging,
-        accounts.domain_raw,
-        accounts.domain_staging,
-        accounts.portfolio_raw,
-        accounts.portfolio_staging,
-        accounts.rent,
-        accounts.core_market,
-        accounts.cache,
-        accounts.caller_programdata,
-        accounts.claims_programdata,
-        accounts.core_programdata,
-    ] {
-        if account.is_signer || account.is_writable || account.executable {
-            return Err(SparseNativeTransferSbfErrorV1::Accounts.into());
-        }
-    }
-    for executable in [
-        accounts.registry,
-        accounts.caller_program,
-        accounts.claims_program,
-        accounts.core_program,
-    ] {
-        if executable.is_signer || executable.is_writable || !executable.executable {
-            return Err(SparseNativeTransferSbfErrorV1::Accounts.into());
-        }
     }
     Ok(())
 }

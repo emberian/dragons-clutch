@@ -14,6 +14,8 @@ pub const PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V1: u16 = 26;
 pub const PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V1: u16 = 15;
 /// Exact affine frame width before its runtime Position table.
 pub const AFFINE_FIXED_ACCOUNT_COUNT_V1: u16 = 20;
+/// Exact sparse native-transfer frame width.
+pub const SPARSE_NATIVE_TRANSFER_ACCOUNT_COUNT_V1: u16 = 22;
 
 /// Stable frame-spec refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -124,6 +126,10 @@ pub enum ClaimsFrameRoleV1 {
     RentProgram,
     /// Runtime sorted affine Position-table entry.
     AffinePosition(u16),
+    /// Sparse-transfer source Position.
+    SparseSourcePosition,
+    /// Sparse-transfer destination Position.
+    SparseDestinationPosition,
 }
 
 /// One canonical frame coordinate.
@@ -165,6 +171,26 @@ pub enum ClaimsFrameKindV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ClaimsFrameSpecV1 {
     kind: ClaimsFrameKindV1,
+}
+
+/// Borrow-free exact sparse native-transfer frame specification.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SparseNativeTransferFrameSpecV1;
+
+impl SparseNativeTransferFrameSpecV1 {
+    /// Exact account count.
+    #[must_use]
+    pub const fn account_count(self) -> u16 {
+        SPARSE_NATIVE_TRANSFER_ACCOUNT_COUNT_V1
+    }
+
+    /// Exact account role and privileges at `index`.
+    pub fn account(self, index: u16) -> Result<ClaimsFrameAccountV1, FrameSpecErrorV1> {
+        if index >= self.account_count() {
+            return Err(FrameSpecErrorV1::InvalidCoordinate);
+        }
+        sparse_native_transfer(index)
+    }
 }
 
 impl ClaimsFrameSpecV1 {
@@ -332,6 +358,41 @@ fn affine(index: u16) -> Result<ClaimsFrameAccountV1, FrameSpecErrorV1> {
     Ok(account(role, privileges))
 }
 
+fn sparse_native_transfer(index: u16) -> Result<ClaimsFrameAccountV1, FrameSpecErrorV1> {
+    let role = match index {
+        0 => ClaimsFrameRoleV1::CallerAuthority,
+        1 => ClaimsFrameRoleV1::ClaimsMarket,
+        2 => ClaimsFrameRoleV1::BasisRecord,
+        3 => ClaimsFrameRoleV1::BasisStaging,
+        4 => ClaimsFrameRoleV1::ProductRecord,
+        5 => ClaimsFrameRoleV1::ProductStaging,
+        6 => ClaimsFrameRoleV1::ResultDomainRecord,
+        7 => ClaimsFrameRoleV1::ResultDomainStaging,
+        8 => ClaimsFrameRoleV1::PortfolioRecord,
+        9 => ClaimsFrameRoleV1::PortfolioStaging,
+        10 => ClaimsFrameRoleV1::RentSysvar,
+        11 => ClaimsFrameRoleV1::CoreMarket,
+        12 => ClaimsFrameRoleV1::ActivationCache,
+        13 => ClaimsFrameRoleV1::RegistryProgram,
+        14 => ClaimsFrameRoleV1::TradingProgram,
+        15 => ClaimsFrameRoleV1::TradingProgramData,
+        16 => ClaimsFrameRoleV1::ClaimsProgram,
+        17 => ClaimsFrameRoleV1::ClaimsProgramData,
+        18 => ClaimsFrameRoleV1::CoreProgram,
+        19 => ClaimsFrameRoleV1::CoreProgramData,
+        20 => ClaimsFrameRoleV1::SparseSourcePosition,
+        21 => ClaimsFrameRoleV1::SparseDestinationPosition,
+        _ => return Err(FrameSpecErrorV1::InvalidCoordinate),
+    };
+    let privileges = match index {
+        0 => SIGNER,
+        1 | 20 | 21 => WRITABLE,
+        13 | 14 | 16 | 18 => EXECUTABLE,
+        _ => READONLY,
+    };
+    Ok(account(role, privileges))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -363,5 +424,30 @@ mod tests {
                 Err(FrameSpecErrorV1::InvalidCoordinate)
             );
         }
+    }
+
+    #[test]
+    fn sparse_native_transfer_frame_is_exact_and_distinguishes_positions() {
+        let spec = SparseNativeTransferFrameSpecV1;
+        assert_eq!(spec.account_count(), 22);
+        for index in 0..spec.account_count() {
+            spec.account(index).expect("sparse coordinate");
+        }
+        assert_eq!(
+            spec.account(spec.account_count()),
+            Err(FrameSpecErrorV1::InvalidCoordinate)
+        );
+        assert_eq!(
+            spec.account(20).expect("source").role(),
+            ClaimsFrameRoleV1::SparseSourcePosition
+        );
+        assert_eq!(
+            spec.account(21).expect("destination").role(),
+            ClaimsFrameRoleV1::SparseDestinationPosition
+        );
+        assert_ne!(
+            spec.account(20).expect("source"),
+            spec.account(21).expect("destination")
+        );
     }
 }
