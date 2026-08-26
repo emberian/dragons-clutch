@@ -10,7 +10,7 @@ use dclutch_rational_representation_v2_contract::{
 };
 use dclutch_rational_representation_v2_kernel::{
     ContentAdmissionV2, CoordinateObservation, DESCRIPTOR_COEFFICIENT_BYTES,
-    DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V2, DescriptorAdmissionV2, GRAPH_EDGE_BYTES,
+    DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3, DescriptorAdmissionV2, GRAPH_EDGE_BYTES,
     GRAPH_HEADER_BYTES, GRAPH_MAGIC_V2, GRAPH_NODE_BYTES, RepresentationDescriptorV2,
     RepresentationGraphV2, SCHEMA_VERSION_V2, STRUCTURED_HEADER_BYTES,
     StructuredProjectionHeaderV2, StructuredProjectionV2,
@@ -48,8 +48,8 @@ fn descriptor_fixture(
 ) -> Vec<u8> {
     let mut bytes =
         vec![0_u8; DESCRIPTOR_HEADER_BYTES + WIDTH as usize * DESCRIPTOR_COEFFICIENT_BYTES];
-    put(&mut bytes, 0, &DESCRIPTOR_MAGIC_V2);
-    put(&mut bytes, 8, &SCHEMA_VERSION_V2.to_le_bytes());
+    put(&mut bytes, 0, &DESCRIPTOR_MAGIC_V3);
+    put(&mut bytes, 8, &3_u16.to_le_bytes());
     put(&mut bytes, 16, &graph_id);
     put(&mut bytes, 48, &graph_digest);
     put(&mut bytes, 80, &root);
@@ -57,9 +57,8 @@ fn descriptor_fixture(
     put(&mut bytes, 144, &id(3));
     put(&mut bytes, 176, &id(4));
     put(&mut bytes, 208, &TOKEN_2022_PROGRAM_ID);
-    put(&mut bytes, 240, &id(5));
-    put_u32(&mut bytes, 272, WIDTH);
-    put_u64(&mut bytes, 280, DENOMINATOR);
+    put_u32(&mut bytes, 240, WIDTH);
+    put_u64(&mut bytes, 248, DENOMINATOR);
     for (index, coefficient) in coefficients.iter().enumerate() {
         put_u64(
             &mut bytes,
@@ -79,6 +78,8 @@ fn descriptor(bytes: &[u8]) -> RepresentationDescriptorV2<'_> {
             recomputed_descriptor_digest: id(1),
             finalized_descriptor_digest: id(1),
             record_authenticated: true,
+            derived_representation_authority: id(5),
+            authority_derivation_authenticated: true,
         },
     )
     .expect("descriptor")

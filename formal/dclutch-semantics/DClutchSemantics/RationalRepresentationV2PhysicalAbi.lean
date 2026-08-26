@@ -27,11 +27,19 @@ def receiptMagic : List UInt8 :=
 
 def version : Nat := 2
 
+/-!
+The descriptor schema is independently versioned. Version three removes the
+representation-authority field from the hashed preimage: that authority is the
+Claims PDA derived from the finalized descriptor digest, so persisting it in
+the digest preimage would require a hash/PDA fixed point.
+-/
+def descriptorVersion : Nat := 3
+
 /-! ## Immutable finalized descriptor -/
 
 inductive DescriptorField where
   | magic | version | reservedHeader | graphId | graphDigest | rootId | market | releaseSet
-  | receiptMint | tokenProgram | representationAuthority | outcomeCount
+  | receiptMint | tokenProgram | outcomeCount
   | reservedTail | denominator
   deriving DecidableEq, Repr
 
@@ -40,7 +48,7 @@ def descriptorSchema : List (FieldSpec DescriptorField) := [
   ⟨.graphId, .bytes 32⟩, ⟨.graphDigest, .bytes 32⟩,
   ⟨.rootId, .bytes 32⟩, ⟨.market, .bytes 32⟩,
   ⟨.releaseSet, .bytes 32⟩, ⟨.receiptMint, .bytes 32⟩,
-  ⟨.tokenProgram, .bytes 32⟩, ⟨.representationAuthority, .bytes 32⟩,
+  ⟨.tokenProgram, .bytes 32⟩,
   ⟨.outcomeCount, .u32⟩, ⟨.reservedTail, .reserved 4⟩,
   ⟨.denominator, .u64⟩
 ]
@@ -49,11 +57,13 @@ def descriptorLayout : List (PlacedField DescriptorField) := specialize descript
 def descriptorHeaderBytes : Nat := schemaWidth descriptorSchema
 def descriptorCoefficientBytes : Nat := 8
 
+theorem descriptorHeaderIsNonCircular : descriptorHeaderBytes = 256 := by decide
+
 namespace DescriptorField
 
 def all : List DescriptorField := [
   .magic, .version, .reservedHeader, .graphId, .graphDigest, .rootId, .market, .releaseSet,
-  .receiptMint, .tokenProgram, .representationAuthority, .outcomeCount,
+  .receiptMint, .tokenProgram, .outcomeCount,
   .reservedTail, .denominator
 ]
 
@@ -68,7 +78,6 @@ def rustName : DescriptorField → String
   | .releaseSet => "DESCRIPTOR_RELEASE_SET_ID_OFFSET"
   | .receiptMint => "DESCRIPTOR_RECEIPT_MINT_OFFSET"
   | .tokenProgram => "DESCRIPTOR_TOKEN_PROGRAM_OFFSET"
-  | .representationAuthority => "DESCRIPTOR_AUTHORITY_OFFSET"
   | .outcomeCount => "DESCRIPTOR_OUTCOME_COUNT_OFFSET"
   | .reservedTail => "DESCRIPTOR_RESERVED_OFFSET"
   | .denominator => "DESCRIPTOR_DENOMINATOR_OFFSET"

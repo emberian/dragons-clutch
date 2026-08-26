@@ -360,7 +360,7 @@ mod tests {
     use dclutch_rational_representation_v2_contract::REQUEST_HEADER_BYTES_V2;
     use dclutch_rational_representation_v2_kernel::{
         ContentAdmissionV2, DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES,
-        DESCRIPTOR_MAGIC_V2, DescriptorAdmissionV2, GRAPH_HEADER_BYTES, GRAPH_MAGIC_V2,
+        DESCRIPTOR_MAGIC_V3, DescriptorAdmissionV2, GRAPH_HEADER_BYTES, GRAPH_MAGIC_V2,
         GRAPH_NODE_BYTES, RepresentationDescriptorV2, RepresentationGraphV2, SCHEMA_VERSION_V2,
     };
     use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
@@ -408,11 +408,11 @@ mod tests {
         bytes
     }
 
-    fn descriptor_fixture(authority: [u8; 32]) -> Vec<u8> {
+    fn descriptor_fixture() -> Vec<u8> {
         let mut bytes =
             vec![0_u8; DESCRIPTOR_HEADER_BYTES + WIDTH as usize * DESCRIPTOR_COEFFICIENT_BYTES];
-        put(&mut bytes, 0, &DESCRIPTOR_MAGIC_V2);
-        put(&mut bytes, 8, &SCHEMA_VERSION_V2.to_le_bytes());
+        put(&mut bytes, 0, &DESCRIPTOR_MAGIC_V3);
+        put(&mut bytes, 8, &3_u16.to_le_bytes());
         put(&mut bytes, 16, &id(20));
         put(&mut bytes, 48, &id(21));
         put(&mut bytes, 80, &id(14));
@@ -420,9 +420,8 @@ mod tests {
         put(&mut bytes, 144, &id(3));
         put(&mut bytes, 176, &id(4));
         put(&mut bytes, 208, &TOKEN_2022_PROGRAM_ID);
-        put(&mut bytes, 240, &authority);
-        put_u32(&mut bytes, 272, WIDTH);
-        put_u64(&mut bytes, 280, DENOMINATOR);
+        put_u32(&mut bytes, 240, WIDTH);
+        put_u64(&mut bytes, 248, DENOMINATOR);
         put_u64(
             &mut bytes,
             DESCRIPTOR_HEADER_BYTES + DESCRIPTOR_COEFFICIENT_BYTES,
@@ -431,7 +430,11 @@ mod tests {
         bytes
     }
 
-    fn bearer<'a>(descriptor_bytes: &'a [u8], graph_bytes: &'a [u8]) -> BearerDescriptorV2<'a> {
+    fn bearer<'a>(
+        descriptor_bytes: &'a [u8],
+        graph_bytes: &'a [u8],
+        derived_authority: [u8; 32],
+    ) -> BearerDescriptorV2<'a> {
         let descriptor = RepresentationDescriptorV2::decode(
             descriptor_bytes,
             DescriptorAdmissionV2 {
@@ -440,6 +443,8 @@ mod tests {
                 recomputed_descriptor_digest: id(1),
                 finalized_descriptor_digest: id(1),
                 record_authenticated: true,
+                derived_representation_authority: derived_authority,
+                authority_derivation_authenticated: true,
             },
         )
         .expect("descriptor");
@@ -477,17 +482,7 @@ mod tests {
 
     fn fixture() -> (Vec<u8>, Vec<u8>, [u8; 32]) {
         let claims_program = id(60);
-        let authority = Pubkey::find_program_address(
-            &[RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2, &id(1)],
-            &Pubkey::new_from_array(claims_program),
-        )
-        .0
-        .to_bytes();
-        (
-            descriptor_fixture(authority),
-            graph_fixture(),
-            claims_program,
-        )
+        (descriptor_fixture(), graph_fixture(), claims_program)
     }
 
     fn balances() -> BearerBalancesV2 {
@@ -519,7 +514,13 @@ mod tests {
     #[test]
     fn constructs_all_actions_as_the_shared_request() {
         let (descriptor_bytes, graph_bytes, claims_program) = fixture();
-        let bearer = bearer(&descriptor_bytes, &graph_bytes);
+        let authority = Pubkey::find_program_address(
+            &[RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2, &id(1)],
+            &Pubkey::new_from_array(claims_program),
+        )
+        .0
+        .to_bytes();
+        let bearer = bearer(&descriptor_bytes, &graph_bytes, authority);
         let mut denominate_row = [0_u8; ASSET_BYTES_V2];
         let denominate =
             construct_denominate(bearer, active(claims_program, id(40)), &mut denominate_row)
@@ -593,7 +594,13 @@ mod tests {
     #[test]
     fn holder_transfer_does_not_rebind_static_asset_identity() {
         let (descriptor_bytes, graph_bytes, claims_program) = fixture();
-        let bearer = bearer(&descriptor_bytes, &graph_bytes);
+        let authority = Pubkey::find_program_address(
+            &[RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2, &id(1)],
+            &Pubkey::new_from_array(claims_program),
+        )
+        .0
+        .to_bytes();
+        let bearer = bearer(&descriptor_bytes, &graph_bytes, authority);
         let first =
             derive_asset_identities(bearer, claims_program, id(40), HolderAccountV2::Associated)
                 .expect("first holder");
@@ -622,8 +629,8 @@ mod tests {
     #[test]
     fn substituted_authority_and_invalid_scratch_refuse() {
         let (_, graph_bytes, claims_program) = fixture();
-        let hostile_descriptor = descriptor_fixture(id(99));
-        let hostile_bearer = bearer(&hostile_descriptor, &graph_bytes);
+        let hostile_descriptor = descriptor_fixture();
+        let hostile_bearer = bearer(&hostile_descriptor, &graph_bytes, id(99));
         assert_eq!(
             derive_asset_identities(
                 hostile_bearer,
@@ -635,7 +642,13 @@ mod tests {
         );
 
         let (descriptor_bytes, graph_bytes, claims_program) = fixture();
-        let bearer = bearer(&descriptor_bytes, &graph_bytes);
+        let authority = Pubkey::find_program_address(
+            &[RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2, &id(1)],
+            &Pubkey::new_from_array(claims_program),
+        )
+        .0
+        .to_bytes();
+        let bearer = bearer(&descriptor_bytes, &graph_bytes, authority);
         let mut short = [0_u8; ASSET_BYTES_V2 - 1];
         assert_eq!(
             construct_denominate(bearer, active(claims_program, id(40)), &mut short),

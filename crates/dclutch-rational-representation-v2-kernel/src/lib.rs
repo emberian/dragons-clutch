@@ -12,16 +12,16 @@
 #[allow(missing_docs)]
 mod generated_descriptor;
 
-use generated_descriptor::{
-    DESCRIPTOR_AUTHORITY_OFFSET, DESCRIPTOR_DENOMINATOR_OFFSET, DESCRIPTOR_GRAPH_DIGEST_OFFSET,
-    DESCRIPTOR_GRAPH_ID_OFFSET, DESCRIPTOR_MAGIC_OFFSET, DESCRIPTOR_MARKET_ID_OFFSET,
-    DESCRIPTOR_OUTCOME_COUNT_OFFSET, DESCRIPTOR_RECEIPT_MINT_OFFSET,
-    DESCRIPTOR_RELEASE_SET_ID_OFFSET, DESCRIPTOR_RESERVED_HEADER_OFFSET,
-    DESCRIPTOR_RESERVED_OFFSET, DESCRIPTOR_ROOT_ID_OFFSET, DESCRIPTOR_TOKEN_PROGRAM_OFFSET,
-    DESCRIPTOR_VERSION_OFFSET,
-};
 pub use generated_descriptor::{
-    DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V2,
+    DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3,
+    DESCRIPTOR_SCHEMA_VERSION_V3,
+};
+use generated_descriptor::{
+    DESCRIPTOR_DENOMINATOR_OFFSET, DESCRIPTOR_GRAPH_DIGEST_OFFSET, DESCRIPTOR_GRAPH_ID_OFFSET,
+    DESCRIPTOR_MAGIC_OFFSET, DESCRIPTOR_MARKET_ID_OFFSET, DESCRIPTOR_OUTCOME_COUNT_OFFSET,
+    DESCRIPTOR_RECEIPT_MINT_OFFSET, DESCRIPTOR_RELEASE_SET_ID_OFFSET,
+    DESCRIPTOR_RESERVED_HEADER_OFFSET, DESCRIPTOR_RESERVED_OFFSET, DESCRIPTOR_ROOT_ID_OFFSET,
+    DESCRIPTOR_TOKEN_PROGRAM_OFFSET, DESCRIPTOR_VERSION_OFFSET,
 };
 
 /// Fixed Structured projection header before five runtime-width `u64` vectors.
@@ -41,12 +41,12 @@ pub const GRAPH_EDGE_BYTES: usize = 48;
 /// Canonical graph magic.
 pub const GRAPH_MAGIC_V2: [u8; 8] = *b"DCRRGRP2";
 /// Canonical finalized-record schema label for [`RepresentationDescriptorV2`].
-pub const REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_PREIMAGE_V2: &[u8] =
-    b"dclutch/schema/rational-representation-v2";
-/// SHA-256 identity of [`REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_PREIMAGE_V2`].
-pub const REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V2: [u8; 32] = [
-    0x78, 0x05, 0x26, 0x58, 0xd7, 0x7f, 0x62, 0xdb, 0xe0, 0x3a, 0x14, 0x24, 0xca, 0x0c, 0x28, 0x5c,
-    0x82, 0x22, 0x22, 0xf1, 0xac, 0x99, 0x3c, 0xf2, 0x22, 0xbb, 0x1c, 0xbd, 0x37, 0xd2, 0x3d, 0x28,
+pub const REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_PREIMAGE_V3: &[u8] =
+    b"dclutch/schema/rational-representation-v2/noncircular-authority-v3";
+/// SHA-256 identity of [`REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_PREIMAGE_V3`].
+pub const REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3: [u8; 32] = [
+    0x63, 0xe4, 0x17, 0xde, 0x63, 0x6d, 0xc1, 0x95, 0xdc, 0xa3, 0xec, 0x0d, 0xaf, 0xdc, 0x6c, 0x10,
+    0x59, 0xda, 0xd9, 0x22, 0xe4, 0x8d, 0x27, 0xee, 0x3d, 0x65, 0x60, 0xb6, 0x96, 0x12, 0xbe, 0xb5,
 ];
 /// Canonical finalized-record schema label for [`RepresentationGraphV2`].
 pub const REPRESENTATION_GRAPH_SCHEMA_RELEASE_PREIMAGE_V2: &[u8] =
@@ -693,6 +693,12 @@ pub struct DescriptorAdmissionV2 {
     pub finalized_descriptor_digest: [u8; 32],
     /// Finalized raw owner/PDA, vacant staging PDA, and rent were authenticated.
     pub record_authenticated: bool,
+    /// Claims PDA observed by the request/account adapter after digest finality.
+    /// This value is not persisted in the descriptor preimage.
+    pub derived_representation_authority: [u8; 32],
+    /// The adapter rederived the authority from Claims program plus finalized
+    /// descriptor digest and joined the observed request/account coordinate.
+    pub authority_derivation_authenticated: bool,
 }
 
 /// Borrowed immutable authority for one exact rational representation.
@@ -724,10 +730,10 @@ impl<'a> RepresentationDescriptorV2<'a> {
         if input.len() < DESCRIPTOR_HEADER_BYTES {
             return Err(Error::InvalidLength);
         }
-        if array_at::<8>(input, DESCRIPTOR_MAGIC_OFFSET)? != DESCRIPTOR_MAGIC_V2 {
+        if array_at::<8>(input, DESCRIPTOR_MAGIC_OFFSET)? != DESCRIPTOR_MAGIC_V3 {
             return Err(Error::InvalidMagic);
         }
-        if u16_at(input, DESCRIPTOR_VERSION_OFFSET)? != SCHEMA_VERSION_V2 {
+        if u16_at(input, DESCRIPTOR_VERSION_OFFSET)? != DESCRIPTOR_SCHEMA_VERSION_V3 {
             return Err(Error::UnsupportedVersion);
         }
         require_zero(input, DESCRIPTOR_RESERVED_HEADER_OFFSET, 6)?;
@@ -757,7 +763,7 @@ impl<'a> RepresentationDescriptorV2<'a> {
             release_set_id: nonzero_array(input, DESCRIPTOR_RELEASE_SET_ID_OFFSET)?,
             receipt_mint: nonzero_array(input, DESCRIPTOR_RECEIPT_MINT_OFFSET)?,
             token_program: nonzero_array(input, DESCRIPTOR_TOKEN_PROGRAM_OFFSET)?,
-            representation_authority: nonzero_array(input, DESCRIPTOR_AUTHORITY_OFFSET)?,
+            representation_authority: admission.derived_representation_authority,
             outcome_count,
             denominator: u64_at(input, DESCRIPTOR_DENOMINATOR_OFFSET)?,
             coefficients: subslice(input, DESCRIPTOR_HEADER_BYTES, coefficient_bytes)?,
@@ -1319,7 +1325,9 @@ fn validate_content_admission(graph_id: [u8; 32], admission: ContentAdmissionV2)
 
 fn validate_descriptor_admission(admission: DescriptorAdmissionV2) -> Result<()> {
     if !admission.record_authenticated
+        || !admission.authority_derivation_authenticated
         || is_zero(&admission.selected_descriptor_id)
+        || is_zero(&admission.derived_representation_authority)
         || admission.selected_descriptor_id != admission.finalized_descriptor_id
         || admission.selected_descriptor_id != admission.recomputed_descriptor_digest
         || admission.recomputed_descriptor_digest != admission.finalized_descriptor_digest
@@ -1524,13 +1532,15 @@ mod tests {
             recomputed_descriptor_digest: [8; 32],
             finalized_descriptor_digest: [8; 32],
             record_authenticated: true,
+            derived_representation_authority: [11; 32],
+            authority_derivation_authenticated: true,
         }
     }
 
     fn descriptor_fixture() -> Vec<u8> {
         let mut bytes = vec![0_u8; DESCRIPTOR_HEADER_BYTES + 2 * DESCRIPTOR_COEFFICIENT_BYTES];
-        put(&mut bytes, 0, &DESCRIPTOR_MAGIC_V2);
-        put(&mut bytes, 8, &SCHEMA_VERSION_V2.to_le_bytes());
+        put(&mut bytes, 0, &DESCRIPTOR_MAGIC_V3);
+        put(&mut bytes, 8, &DESCRIPTOR_SCHEMA_VERSION_V3.to_le_bytes());
         put(&mut bytes, DESCRIPTOR_GRAPH_ID_OFFSET, &[6; 32]);
         put(&mut bytes, DESCRIPTOR_GRAPH_DIGEST_OFFSET, &[7; 32]);
         put(&mut bytes, DESCRIPTOR_ROOT_ID_OFFSET, &[5; 32]);
@@ -1538,7 +1548,6 @@ mod tests {
         put(&mut bytes, DESCRIPTOR_RELEASE_SET_ID_OFFSET, &[9; 32]);
         put(&mut bytes, DESCRIPTOR_RECEIPT_MINT_OFFSET, &[3; 32]);
         put(&mut bytes, DESCRIPTOR_TOKEN_PROGRAM_OFFSET, &[10; 32]);
-        put(&mut bytes, DESCRIPTOR_AUTHORITY_OFFSET, &[11; 32]);
         put_u32(&mut bytes, DESCRIPTOR_OUTCOME_COUNT_OFFSET, 2);
         put_u64(&mut bytes, DESCRIPTOR_DENOMINATOR_OFFSET, 10);
         put_u64(&mut bytes, DESCRIPTOR_HEADER_BYTES, 3);
