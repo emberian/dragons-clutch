@@ -37,6 +37,54 @@ const POSITION_OWNER_OFFSET: usize = 56;
 const POSITION_BASIS_OFFSET: usize = 88;
 const POSITION_RESERVED_OFFSET: usize = 120;
 
+/// Canonical patch/projection coordinates of a LiabilityBasisV2 aggregate.
+///
+/// Account-profile generators consume these typed coordinates instead of
+/// restating private wire offsets. The hostile decoder remains the authority
+/// for admitting account bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LiabilityBasisMarketLayoutV2;
+
+impl LiabilityBasisMarketLayoutV2 {
+    /// Runtime claim count (`u32`, little-endian).
+    pub const CLAIM_COUNT: usize = MARKET_CLAIM_COUNT_OFFSET;
+    /// Aggregate optimistic revision (`u64`, little-endian).
+    pub const REVISION: usize = MARKET_REVISION_OFFSET;
+    /// Runtime supply vector base; each entry is one little-endian `u64`.
+    pub const SUPPLIES: usize = LIABILITY_BASIS_MARKET_HEADER_BYTES_V2;
+    /// Runtime supply-vector element stride.
+    pub const SUPPLY_STRIDE: usize = 8;
+
+    /// Hostile-decode and atomically copy the aggregate revision.
+    pub fn copy_revision_into(input: &[u8], output: &mut u64) -> Result<()> {
+        let candidate = LiabilityBasisMarketViewV2::decode(input)?.revision;
+        *output = candidate;
+        Ok(())
+    }
+}
+
+/// Canonical patch/projection coordinates of a LiabilityBasisV2 Position.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LiabilityBasisPositionLayoutV2;
+
+impl LiabilityBasisPositionLayoutV2 {
+    /// Runtime claim count (`u32`, little-endian).
+    pub const CLAIM_COUNT: usize = POSITION_CLAIM_COUNT_OFFSET;
+    /// Position optimistic revision (`u64`, little-endian).
+    pub const REVISION: usize = POSITION_REVISION_OFFSET;
+    /// Runtime balance vector base; each entry is one little-endian `u64`.
+    pub const BALANCES: usize = LIABILITY_BASIS_POSITION_HEADER_BYTES_V2;
+    /// Runtime balance-vector element stride.
+    pub const BALANCE_STRIDE: usize = 8;
+
+    /// Hostile-decode and atomically copy the Position revision.
+    pub fn copy_revision_into(input: &[u8], output: &mut u64) -> Result<()> {
+        let candidate = LiabilityBasisPositionViewV2::decode(input)?.revision;
+        *output = candidate;
+        Ok(())
+    }
+}
+
 /// Stable hostile-decode or encoding refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LiabilityBasisStateErrorV2 {
@@ -521,5 +569,90 @@ mod tests {
             Err(LiabilityBasisStateErrorV2::InvalidLength)
         );
         assert_eq!(output, before);
+    }
+
+    #[test]
+    fn public_layout_coordinates_track_encoders_and_round_trip() {
+        let mut market = [0_u8; LIABILITY_BASIS_MARKET_HEADER_BYTES_V2 + 16];
+        encode_liability_basis_market_into_v2(market_input(), &[11, 12], &mut market)
+            .expect("market");
+        assert_eq!(
+            market.get(
+                LiabilityBasisMarketLayoutV2::REVISION..LiabilityBasisMarketLayoutV2::REVISION + 8
+            ),
+            Some(7_u64.to_le_bytes().as_slice())
+        );
+        assert_eq!(
+            market.get(
+                LiabilityBasisMarketLayoutV2::SUPPLIES + LiabilityBasisMarketLayoutV2::SUPPLY_STRIDE
+                    ..LiabilityBasisMarketLayoutV2::SUPPLIES
+                        + 2 * LiabilityBasisMarketLayoutV2::SUPPLY_STRIDE
+            ),
+            Some(12_u64.to_le_bytes().as_slice())
+        );
+        let mut market_revision = u64::MAX;
+        LiabilityBasisMarketLayoutV2::copy_revision_into(&market, &mut market_revision)
+            .expect("market revision");
+        assert_eq!(market_revision, 7);
+
+        let input = LiabilityBasisPositionInputV2 {
+            revision: 9,
+            market_account: [8; 32],
+            owner: [9; 32],
+            basis_id: [5; 32],
+        };
+        let mut position = [0_u8; LIABILITY_BASIS_POSITION_HEADER_BYTES_V2 + 16];
+        encode_liability_basis_position_into_v2(input, &[4, 5], &mut position).expect("position");
+        assert_eq!(
+            position.get(
+                LiabilityBasisPositionLayoutV2::REVISION
+                    ..LiabilityBasisPositionLayoutV2::REVISION + 8
+            ),
+            Some(9_u64.to_le_bytes().as_slice())
+        );
+        assert_eq!(
+            position.get(
+                LiabilityBasisPositionLayoutV2::BALANCES
+                    + LiabilityBasisPositionLayoutV2::BALANCE_STRIDE
+                    ..LiabilityBasisPositionLayoutV2::BALANCES
+                        + 2 * LiabilityBasisPositionLayoutV2::BALANCE_STRIDE
+            ),
+            Some(5_u64.to_le_bytes().as_slice())
+        );
+        let mut position_revision = u64::MAX;
+        LiabilityBasisPositionLayoutV2::copy_revision_into(&position, &mut position_revision)
+            .expect("position revision");
+        assert_eq!(position_revision, 9);
+    }
+
+    #[test]
+    fn hostile_layout_projection_preserves_outputs() {
+        let mut market = [0_u8; LIABILITY_BASIS_MARKET_HEADER_BYTES_V2 + 8];
+        encode_liability_basis_market_into_v2(market_input(), &[11], &mut market).expect("market");
+        market[10] = 1;
+        let mut market_revision = 0xa5a5;
+        let market_before = market_revision;
+        assert!(
+            LiabilityBasisMarketLayoutV2::copy_revision_into(&market, &mut market_revision)
+                .is_err()
+        );
+        assert_eq!(market_revision, market_before);
+
+        let input = LiabilityBasisPositionInputV2 {
+            revision: 9,
+            market_account: [8; 32],
+            owner: [9; 32],
+            basis_id: [5; 32],
+        };
+        let mut position = [0_u8; LIABILITY_BASIS_POSITION_HEADER_BYTES_V2 + 8];
+        encode_liability_basis_position_into_v2(input, &[4], &mut position).expect("position");
+        position[POSITION_RESERVED_OFFSET] = 1;
+        let mut position_revision = 0x5a5a;
+        let position_before = position_revision;
+        assert!(
+            LiabilityBasisPositionLayoutV2::copy_revision_into(&position, &mut position_revision)
+                .is_err()
+        );
+        assert_eq!(position_revision, position_before);
     }
 }
