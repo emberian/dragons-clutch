@@ -1,10 +1,6 @@
 //! Hostile and positive physical Claims/Token/Custody composition corpus.
 
 use dclutch_claims_svm::affine_batch_v2::{AffineBatchReceiptV2, DeltaDirectionV2};
-use dclutch_claims_svm::lbv2_terminal_v2::{
-    LBV2_TERMINAL_ABSENT_CUSTODY_REVISION_V2, Lbv2TerminalRedeemReceiptV2,
-    Lbv2TerminalRedeemRequestInputV2, Lbv2TerminalRedeemRequestV2,
-};
 use dclutch_claims_svm::{
     CallerRole,
     signed_delta_v3::{
@@ -436,13 +432,12 @@ fn structured_issue_is_token_only_and_exactly_conserved() {
             request_digest: id(30),
             representation_program: id(31),
             claims_program: id(31),
-            affine_packet_digest: [0; 32],
+            claims_packet_digest: [0; 32],
             affine_packet: None,
             affine_context: None,
             affine_receipt: None,
-            terminal_request: None,
-            terminal_request_digest: [0; 32],
-            terminal_receipt: None,
+            signed_delta_packet: None,
+            signed_delta_receipt: None,
             token_effect_digest: id(32),
             post_receipt_supply: 8,
             post_asset_observations: &posts,
@@ -535,13 +530,12 @@ fn denomination_emits_one_canonical_affine_packet_and_shard_mint() {
             request_digest: id(30),
             representation_program: id(31),
             claims_program: id(31),
-            affine_packet_digest: id(34),
+            claims_packet_digest: id(34),
             affine_packet: Some(packet),
             affine_context: Some(context),
             affine_receipt: Some(affine_receipt),
-            terminal_request: None,
-            terminal_request_digest: [0; 32],
-            terminal_receipt: None,
+            signed_delta_packet: None,
+            signed_delta_receipt: None,
             token_effect_digest: id(37),
             post_receipt_supply: 7,
             post_asset_observations: &posts,
@@ -555,7 +549,7 @@ fn denomination_emits_one_canonical_affine_packet_and_shard_mint() {
     )
     .expect("finalize");
     assert_eq!(receipt.payout(), 0);
-    assert_eq!(receipt.affine_packet_digest(), id(34));
+    assert_eq!(receipt.claims_packet_digest(), id(34));
     receipt.verify_for(request, id(30)).expect("exact receipt");
 }
 
@@ -616,13 +610,12 @@ fn reconstitution_and_unwrap_are_exact_inverse_effect_shapes() {
             request_digest: id(30),
             representation_program: id(31),
             claims_program: id(31),
-            affine_packet_digest: id(34),
+            claims_packet_digest: id(34),
             affine_packet: Some(packet),
             affine_context: Some(context),
             affine_receipt: Some(affine_receipt),
-            terminal_request: None,
-            terminal_request_digest: [0; 32],
-            terminal_receipt: None,
+            signed_delta_packet: None,
+            signed_delta_receipt: None,
             token_effect_digest: id(37),
             post_receipt_supply: 7,
             post_asset_observations: &posts,
@@ -688,13 +681,12 @@ fn reconstitution_and_unwrap_are_exact_inverse_effect_shapes() {
             request_digest: id(30),
             representation_program: id(31),
             claims_program: id(31),
-            affine_packet_digest: [0; 32],
+            claims_packet_digest: [0; 32],
             affine_packet: None,
             affine_context: None,
             affine_receipt: None,
-            terminal_request: None,
-            terminal_request_digest: [0; 32],
-            terminal_receipt: None,
+            signed_delta_packet: None,
+            signed_delta_receipt: None,
             token_effect_digest: id(36),
             post_receipt_supply: 6,
             post_asset_observations: &posts,
@@ -711,7 +703,7 @@ fn reconstitution_and_unwrap_are_exact_inverse_effect_shapes() {
 }
 
 #[test]
-fn terminal_requires_typed_lbv2_evidence_and_accepts_exact_zero_payout() {
+fn terminal_finalize_consumes_signed_delta_and_accepts_exact_zero_payout() {
     let projection_bytes = projection_fixture(4, 40, 19);
     let projection = StructuredProjectionV2::decode(&projection_bytes).expect("projection");
     let descriptor_bytes = descriptor_fixture();
@@ -719,11 +711,11 @@ fn terminal_requires_typed_lbv2_evidence_and_accepts_exact_zero_payout() {
     let mut selected = assets()[0];
     selected.expected_shard_supply = 40;
     selected.expected_actor_shards = 19;
-    let rows = asset_bytes(&[selected]);
+    let asset_rows = asset_bytes(&[selected]);
     let mut request_header = header(RepresentationActionV2::RedeemTerminal, 0, 1);
     request_header.expected_custody_replay_revision = ABSENT_REVISION;
     let request =
-        RepresentationRequestV2::new(request_header, &rows).expect("request remains decodable");
+        RepresentationRequestV2::new(request_header, &asset_rows).expect("terminal request");
     let prepared = prepare(
         request,
         descriptor(&descriptor_bytes),
@@ -731,86 +723,57 @@ fn terminal_requires_typed_lbv2_evidence_and_accepts_exact_zero_payout() {
         graph(&graph_bytes),
     )
     .expect("prepare");
-    assert_eq!(
-        prepared.affine_packet_bytes(),
-        Err(Error::InvalidActionShape)
-    );
     let posts = post_assets(&[(30, 9, 21)]);
-    assert_eq!(
-        finalize(
-            prepared,
-            CompletionEvidenceV2 {
-                request_digest: id(30),
-                representation_program: id(31),
-                claims_program: id(31),
-                affine_packet_digest: [0; 32],
-                affine_packet: None,
-                affine_context: None,
-                affine_receipt: None,
-                terminal_request: None,
-                terminal_request_digest: [0; 32],
-                terminal_receipt: None,
-                token_effect_digest: id(36),
-                post_receipt_supply: 7,
-                post_asset_observations: &posts,
-                custody_request: None,
-                custody_request_digest: [0; 32],
-                custody_receipt: None,
-                custody_receipt_digest: [0; 32],
-                custody_replay_digest: [0; 32],
-                post_resource_digest: id(37),
-            },
-        ),
-        Err(Error::ClaimsMismatch)
-    );
-    let terminal_request = Lbv2TerminalRedeemRequestV2::new(Lbv2TerminalRedeemRequestInputV2 {
-        release_set: id(1),
-        market: id(2),
-        product_record_digest: id(80),
-        semantic_product_id: id(81),
-        semantic_basis_id: id(82),
-        linked_basis_record_digest: id(83),
-        terminal_coordinate_digest: id(84),
-        owner: id(53),
-        protocol_position: id(85),
-        claims_program: id(31),
-        custody_request_digest: [0; 32],
-        candidate_digest: id(86),
-        terminal_numerator: 0,
-        terminal_denominator: 1,
-        claim_index: 0,
-        pre_market_revision: 10,
-        post_market_revision: 11,
-        pre_position_revision: 30,
-        post_position_revision: 31,
-        debit_quantity: 1,
-        evaluated_payout: 0,
-        pre_custody_revision: LBV2_TERMINAL_ABSENT_CUSTODY_REVISION_V2,
-        post_custody_revision: LBV2_TERMINAL_ABSENT_CUSTODY_REVISION_V2,
-    })
-    .expect("typed terminal request");
-    let terminal_request_digest = id(87);
-    let terminal_receipt = Lbv2TerminalRedeemReceiptV2::new(
-        terminal_request,
-        terminal_request_digest,
-        [0; 32],
-        [0; 32],
-        id(88),
+    let neutral = SignedDeltaV3::new(DeltaDirectionV3::Neutral, 0).expect("neutral");
+    let debit = SignedDeltaV3::new(DeltaDirectionV3::Debit, 1).expect("debit");
+    let positions = [SignedDeltaPositionV3::new(id(53), 30).expect("position")];
+    let aggregate = [debit, neutral];
+    let delta_rows = [PositionDeltaV3::new(
+        PositionDeltaInputV3 {
+            position_index: 0,
+            outcome: 0,
+            delta: debit,
+        },
+        1,
+        2,
     )
-    .expect("typed terminal receipt");
+    .expect("row")];
+    let mut packet_bytes = vec![0; plan_bytes(2, 1, 1).expect("packet width")];
+    SignedDeltaPlanV3::encode_into(
+        SignedDeltaPlanInputV3 {
+            caller_role: CallerRole::Trading,
+            release_set: id(1),
+            market: id(2),
+            request_id: id(30),
+            product_record_digest: id(80),
+            semantic_basis_id: id(81),
+            linked_basis_record_digest: id(82),
+            expected_market_revision: 10,
+            claim_count: 2,
+        },
+        &positions,
+        &aggregate,
+        &delta_rows,
+        &mut packet_bytes,
+    )
+    .expect("terminal packet");
+    let packet = SignedDeltaPlanV3::decode(&packet_bytes).expect("terminal packet decode");
+    let packet_digest = id(83);
+    let signed_receipt =
+        SignedDeltaReceiptV3::new(packet, packet_digest, id(84), id(31), id(85), 11)
+            .expect("terminal receipt");
     let receipt = finalize(
         prepared,
         CompletionEvidenceV2 {
             request_digest: id(30),
             representation_program: id(31),
             claims_program: id(31),
-            affine_packet_digest: [0; 32],
+            claims_packet_digest: packet_digest,
             affine_packet: None,
             affine_context: None,
             affine_receipt: None,
-            terminal_request: Some(&terminal_request),
-            terminal_request_digest,
-            terminal_receipt: Some(&terminal_receipt),
+            signed_delta_packet: Some(packet),
+            signed_delta_receipt: Some(signed_receipt),
             token_effect_digest: id(36),
             post_receipt_supply: 7,
             post_asset_observations: &posts,
@@ -822,7 +785,7 @@ fn terminal_requires_typed_lbv2_evidence_and_accepts_exact_zero_payout() {
             post_resource_digest: id(37),
         },
     )
-    .expect("typed terminal completion");
+    .expect("signed terminal completion");
     assert_eq!(receipt.payout(), 0);
     assert_eq!(receipt.post_claims_market_revision(), 11);
     assert_eq!(receipt.post_custody_position_revision(), 31);
@@ -981,13 +944,12 @@ fn hostile_partial_reconstitution_replay_and_late_token_post_refuse() {
                 request_digest: id(30),
                 representation_program: id(31),
                 claims_program: id(31),
-                affine_packet_digest: [0; 32],
+                claims_packet_digest: [0; 32],
                 affine_packet: None,
                 affine_context: None,
                 affine_receipt: None,
-                terminal_request: None,
-                terminal_request_digest: [0; 32],
-                terminal_receipt: None,
+                signed_delta_packet: None,
+                signed_delta_receipt: None,
                 token_effect_digest: id(32),
                 post_receipt_supply: 8,
                 post_asset_observations: &hostile_posts,
@@ -1038,13 +1000,12 @@ fn hostile_partial_reconstitution_replay_and_late_token_post_refuse() {
                 request_digest: id(30),
                 representation_program: id(31),
                 claims_program: id(31),
-                affine_packet_digest: id(34),
+                claims_packet_digest: id(34),
                 affine_packet: Some(substituted_packet),
                 affine_context: Some(context),
                 affine_receipt: Some(substituted_receipt),
-                terminal_request: None,
-                terminal_request_digest: [0; 32],
-                terminal_receipt: None,
+                signed_delta_packet: None,
+                signed_delta_receipt: None,
                 token_effect_digest: id(37),
                 post_receipt_supply: 7,
                 post_asset_observations: &denomination_posts,
@@ -1079,13 +1040,12 @@ fn hostile_partial_reconstitution_replay_and_late_token_post_refuse() {
                 request_digest: id(30),
                 representation_program: id(31),
                 claims_program: id(31),
-                affine_packet_digest: id(34),
+                claims_packet_digest: id(34),
                 affine_packet: Some(canonical_packet),
                 affine_context: Some(substituted_context),
                 affine_receipt: Some(canonical_receipt),
-                terminal_request: None,
-                terminal_request_digest: [0; 32],
-                terminal_receipt: None,
+                signed_delta_packet: None,
+                signed_delta_receipt: None,
                 token_effect_digest: id(37),
                 post_receipt_supply: 7,
                 post_asset_observations: &denomination_posts,

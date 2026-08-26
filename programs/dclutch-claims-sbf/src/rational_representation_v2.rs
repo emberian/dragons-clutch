@@ -8,15 +8,10 @@
 
 use dclutch_claims_svm::{
     affine_batch_v2::{AffineBatchPlanV2, AffineBatchReceiptV2},
-    lbv2_terminal_v2::{Lbv2TerminalRedeemReceiptV2, Lbv2TerminalRedeemRequestV2},
     protocol_position_v2::ProtocolPositionSeedsV2,
+    signed_delta_v3::{SignedDeltaPlanV3, SignedDeltaReceiptV3},
 };
 use dclutch_custody_contract::{CustodyReceiptV1, CustodyRequestV1};
-use dclutch_liability_basis_v2_kernel::product_claims::{
-    AdmittedBasisV2, ContentIdV2, LinkedBasisRecordV2,
-};
-use dclutch_market_core_codec::Phase as CorePhase;
-use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV2};
 use dclutch_rational_representation_v2_contract::{
     AffineBatchContextV2, CompletionEvidenceV2, PreparedRepresentationV2,
     RATIONAL_ASSET_ACCOUNT_COUNT_V2, RATIONAL_BASE_ACCOUNT_COUNT_V2,
@@ -24,10 +19,9 @@ use dclutch_rational_representation_v2_contract::{
     RepresentationRequestV2, TokenEffectStyleV2, finalize, prepare,
 };
 use dclutch_rational_representation_v2_kernel::{
-    ContentAdmissionV2, CoordinateObservation, DescriptorAdmissionV2,
-    REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3, REPRESENTATION_GRAPH_SCHEMA_RELEASE_ID_V2,
-    RepresentationDescriptorV2, RepresentationGraphV2, SCALAR_BYTES, STRUCTURED_HEADER_BYTES,
-    STRUCTURED_VECTOR_COUNT, StructuredProjectionHeaderV2, StructuredProjectionV2,
+    ContentAdmissionV2, CoordinateObservation, DescriptorAdmissionV2, RepresentationDescriptorV2,
+    RepresentationGraphV2, SCALAR_BYTES, STRUCTURED_HEADER_BYTES, STRUCTURED_VECTOR_COUNT,
+    StructuredProjectionHeaderV2, StructuredProjectionV2,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
@@ -51,13 +45,15 @@ use super::{ClaimsSbfError, reauthenticate};
 use crate::{
     affine_batch_v2::{
         AFFINE_BATCH_FIXED_ACCOUNT_COUNT_V2, AuthenticatedAffineParentV2,
-        authenticate_runtime_product_basis_core_v2, execute_parent_authenticated,
+        execute_parent_authenticated,
     },
     liability_basis_v2::{
-        AuthenticatedLbv2TerminalParentV2, LIABILITY_BASIS_ACCOUNT_COUNT_V2,
-        LIABILITY_BASIS_MARKET_SEED_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, MarketViewV2,
-        PositionViewV2, execute_parent_authenticated_terminal_v2, read_vector,
+        LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, MarketViewV2, PositionViewV2, read_vector,
     },
+    rational_product_v3::{
+        AuthenticatedRationalProductV3, RationalProductFrameV3, authenticate_rational_product_v3,
+    },
+    rational_terminal_v3::{RationalTerminalFrameV3, execute_rational_terminal_v3},
 };
 
 pub use dclutch_rational_representation_v2_contract::{
@@ -192,6 +188,34 @@ impl<'accounts, 'info> BaseAccounts<'accounts, 'info> {
     }
 }
 
+const fn rational_product_frame<'accounts, 'info>(
+    base: BaseAccounts<'accounts, 'info>,
+) -> RationalProductFrameV3<'accounts, 'info> {
+    RationalProductFrameV3 {
+        aggregate: base.aggregate,
+        actor_position: base.actor_position,
+        linked_basis_record: base.linked_basis_record,
+        linked_basis_staging: base.linked_basis_staging,
+        product_record: base.product_record,
+        product_staging: base.product_staging,
+        result_domain_record: base.result_domain_record,
+        result_domain_staging: base.result_domain_staging,
+        portfolio_record: base.portfolio_record,
+        portfolio_staging: base.portfolio_staging,
+        descriptor_record: base.descriptor_raw,
+        descriptor_staging: base.descriptor_staging,
+        graph_record: base.graph_raw,
+        graph_staging: base.graph_staging,
+        receipt_mint: base.receipt_mint,
+        token_program: base.token_program,
+        rent: base.rent,
+        registry: base.registry,
+        core_market: base.core_market,
+        core_program: base.core_program,
+        claims_program: base.claims_program,
+    }
+}
+
 #[derive(Clone, Copy)]
 struct AssetAccounts<'accounts, 'info> {
     position: &'accounts AccountInfo<'info>,
@@ -230,9 +254,7 @@ struct ClaimsEvidence {
     packet: Vec<u8>,
     context: Option<AffineBatchContextV2>,
     receipt: Option<AffineBatchReceiptV2>,
-    terminal_request: Option<Box<Lbv2TerminalRedeemRequestV2>>,
-    terminal_request_digest: [u8; 32],
-    terminal_receipt: Option<Box<Lbv2TerminalRedeemReceiptV2>>,
+    signed_delta_receipt: Option<SignedDeltaReceiptV3>,
     custody: Option<Box<CustodyEvidence>>,
 }
 
@@ -261,24 +283,19 @@ fn prepare_and_execute<'accounts, 'info>(
     request_digest: [u8; 32],
 ) -> Result<(), ProgramError> {
     let header = request.header();
+    authenticate_execution_releases(base, request)?;
+    let authenticated =
+        authenticate_rational_product_v3(program_id, rational_product_frame(base), request)?;
     let descriptor_data = base
         .descriptor_raw
         .try_borrow_data()
         .map_err(|_| ClaimsSbfError::Accounts)?;
-    authenticate_finalized_record(
-        base,
-        base.descriptor_raw,
-        base.descriptor_staging,
-        REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
-        header.descriptor_id,
-        &descriptor_data,
-    )?;
     let descriptor = RepresentationDescriptorV2::decode(
         &descriptor_data,
         DescriptorAdmissionV2 {
             selected_descriptor_id: header.descriptor_id,
             finalized_descriptor_id: header.descriptor_id,
-            recomputed_descriptor_digest: request_digest_of(&descriptor_data),
+            recomputed_descriptor_digest: header.descriptor_id,
             finalized_descriptor_digest: header.descriptor_id,
             record_authenticated: true,
             derived_representation_authority: header.representation_authority,
@@ -291,28 +308,18 @@ fn prepare_and_execute<'accounts, 'info>(
         .graph_raw
         .try_borrow_data()
         .map_err(|_| ClaimsSbfError::Accounts)?;
-    authenticate_finalized_record(
-        base,
-        base.graph_raw,
-        base.graph_staging,
-        REPRESENTATION_GRAPH_SCHEMA_RELEASE_ID_V2,
-        descriptor.graph_digest(),
-        &graph_data,
-    )?;
     let graph = RepresentationGraphV2::decode(
         &graph_data,
         ContentAdmissionV2 {
             selected_graph_id: header.graph_id,
             finalized_graph_id: header.graph_id,
-            recomputed_graph_digest: descriptor.graph_digest(),
-            finalized_graph_digest: descriptor.graph_digest(),
+            recomputed_graph_digest: authenticated.admission.graph_digest(),
+            finalized_graph_digest: authenticated.admission.graph_digest(),
             record_authenticated: true,
         },
     )
     .map_err(|_| ClaimsSbfError::Representation)?;
 
-    let (_core_generation, admitted_basis) =
-        authenticate_core_and_economics(program_id, base, request)?;
     let replay_fresh = authenticate_or_allocate_replay(program_id, base, request)?;
     let projection_bytes = build_projection(program_id, account_infos, base, request, descriptor)?;
     let projection = StructuredProjectionV2::decode(&projection_bytes)
@@ -326,7 +333,7 @@ fn prepare_and_execute<'accounts, 'info>(
         base,
         prepared,
         request_digest,
-        admitted_basis,
+        authenticated,
         replay_fresh,
     )
 }
@@ -339,7 +346,7 @@ fn execute_prepared<'accounts, 'info>(
     base: BaseAccounts<'accounts, 'info>,
     prepared: PreparedRepresentationV2<'_>,
     request_digest: [u8; 32],
-    admitted_basis: AdmittedBasisV2,
+    authenticated: Box<AuthenticatedRationalProductV3>,
     replay_fresh: bool,
 ) -> Result<(), ProgramError> {
     let token_effect_digest = token_effect_digest(prepared)?;
@@ -350,7 +357,7 @@ fn execute_prepared<'accounts, 'info>(
         base,
         prepared,
         request_digest,
-        admitted_basis,
+        authenticated,
     )?;
 
     finalize_execution(
@@ -383,22 +390,29 @@ fn finalize_execution(
     let (post_asset_observations, post_receipt_supply) =
         post_token_observations(account_infos, base, request)?;
     let post_resource_digest = post_resource_digest(account_infos, base, request, custody)?;
-    let affine_packet = if claims.packet.is_empty() {
-        None
-    } else {
+    let affine_packet = if matches!(
+        request.header().action,
+        RepresentationActionV2::Denominate | RepresentationActionV2::Reconstitute
+    ) {
         Some(AffineBatchPlanV2::decode(&claims.packet).map_err(|_| ClaimsSbfError::Receipt)?)
+    } else {
+        None
+    };
+    let signed_delta_packet = if request.header().action == RepresentationActionV2::RedeemTerminal {
+        Some(SignedDeltaPlanV3::decode(&claims.packet).map_err(|_| ClaimsSbfError::Receipt)?)
+    } else {
+        None
     };
     let evidence = CompletionEvidenceV2 {
         request_digest,
         representation_program: program_id.to_bytes(),
         claims_program: program_id.to_bytes(),
-        affine_packet_digest: claims.plan_digest,
+        claims_packet_digest: claims.plan_digest,
         affine_packet,
         affine_context: claims.context,
         affine_receipt: claims.receipt,
-        terminal_request: claims.terminal_request.as_deref(),
-        terminal_request_digest: claims.terminal_request_digest,
-        terminal_receipt: claims.terminal_receipt.as_deref(),
+        signed_delta_packet,
+        signed_delta_receipt: claims.signed_delta_receipt,
         token_effect_digest,
         post_receipt_supply,
         post_asset_observations: &post_asset_observations,
@@ -589,26 +603,6 @@ fn authenticate_base(
     Ok(())
 }
 
-fn authenticate_finalized_record(
-    base: BaseAccounts<'_, '_>,
-    raw: &AccountInfo<'_>,
-    staging: &AccountInfo<'_>,
-    schema: [u8; 32],
-    expected_digest: [u8; 32],
-    bytes: &[u8],
-) -> Result<(), ProgramError> {
-    let rent = Rent::from_account_info(base.rent).map_err(|_| ClaimsSbfError::Accounts)?;
-    authenticate_finalized_rational_record(
-        base.registry.key,
-        &rent,
-        raw,
-        staging,
-        schema,
-        expected_digest,
-        bytes,
-    )
-}
-
 /// Authenticate one immutable Registry record used by RationalRepresentationV2.
 ///
 /// This is the sole in-program finalized-record reader shared by the request
@@ -651,11 +645,10 @@ pub(crate) fn authenticate_finalized_rational_record(
     Ok(())
 }
 
-fn authenticate_core_and_economics(
-    program_id: &Pubkey,
+fn authenticate_execution_releases(
     base: BaseAccounts<'_, '_>,
     request: RepresentationRequestV2<'_>,
-) -> Result<(u64, AdmittedBasisV2), ProgramError> {
+) -> Result<(), ProgramError> {
     let header = request.header();
     let caller = reauthenticate(
         base.registry,
@@ -667,127 +660,24 @@ fn authenticate_core_and_economics(
     if caller.execution_release_set_id().as_bytes() != &header.release_set {
         return Err(ClaimsSbfError::Release.into());
     }
-    // A positive terminal payout crosses the canonical Custody boundary.
-    // Custody independently reauthenticates Claims, Custody, and Core against
-    // this release set and its typed receipt is required before either Claims
-    // state or Rational replay commits. Repeating Claims/Core Registry CPIs in
-    // this enclosing route would add no authority and exceeds the transaction
-    // CU limit. Open-only paths have no such child proof and retain both checks.
-    if header.action != RepresentationActionV2::RedeemTerminal {
-        for (role, program, programdata) in [
-            (
-                ExecutionRoleV1::Claims,
-                base.claims_program,
-                base.claims_programdata,
-            ),
-            (
-                ExecutionRoleV1::Core,
-                base.core_program,
-                base.core_programdata,
-            ),
-        ] {
-            let receipt = reauthenticate(base.registry, base.cache, role, program, programdata)?;
-            if receipt.execution_release_set_id().as_bytes() != &header.release_set {
-                return Err(ClaimsSbfError::Release.into());
-            }
+    for (role, program, programdata) in [
+        (
+            ExecutionRoleV1::Claims,
+            base.claims_program,
+            base.claims_programdata,
+        ),
+        (
+            ExecutionRoleV1::Core,
+            base.core_program,
+            base.core_programdata,
+        ),
+    ] {
+        let receipt = reauthenticate(base.registry, base.cache, role, program, programdata)?;
+        if receipt.execution_release_set_id().as_bytes() != &header.release_set {
+            return Err(ClaimsSbfError::Release.into());
         }
     }
-    let aggregate = base
-        .aggregate
-        .try_borrow_data()
-        .map_err(|_| ClaimsSbfError::Accounts)?;
-    let market = MarketViewV2::decode(&aggregate).map_err(|_| ClaimsSbfError::Economic)?;
-    let expected_market = Pubkey::find_program_address(
-        &[LIABILITY_BASIS_MARKET_SEED_V2, header.market.as_slice()],
-        program_id,
-    )
-    .0;
-    if base.aggregate.owner != program_id
-        || base.aggregate.key != &expected_market
-        || market.logical_market != header.market
-        || market.release_set != header.release_set
-        || market.registry_program != base.registry.key.to_bytes()
-        || market.claim_count != header.outcome_count
-        || market.generation != header.generation
-        || (header.action.uses_claims()
-            && market.revision != header.expected_claims_market_revision)
-    {
-        return Err(ClaimsSbfError::Identity.into());
-    }
-    if matches!(
-        header.action,
-        RepresentationActionV2::Denominate | RepresentationActionV2::Reconstitute
-    ) {
-        let actor = base
-            .actor_position
-            .try_borrow_data()
-            .map_err(|_| ClaimsSbfError::Accounts)?;
-        let position = PositionViewV2::decode(&actor).map_err(|_| ClaimsSbfError::Economic)?;
-        if position.market_account != base.aggregate.key.to_bytes()
-            || position.owner != header.actor
-            || position.basis_id != market.basis_id
-            || position.claim_count != market.claim_count
-            || position.revision != header.expected_actor_position_revision
-        {
-            return Err(ClaimsSbfError::Identity.into());
-        }
-    }
-    drop(aggregate);
-    let product_digest = {
-        let bytes = base
-            .product_record
-            .try_borrow_data()
-            .map_err(|_| ClaimsSbfError::Accounts)?;
-        hash(&bytes).to_bytes()
-    };
-    let linked_basis_digest = {
-        let bytes = base
-            .linked_basis_record
-            .try_borrow_data()
-            .map_err(|_| ClaimsSbfError::Accounts)?;
-        hash(&bytes).to_bytes()
-    };
-    authenticate_runtime_product_basis_core_v2(
-        base.registry,
-        base.rent,
-        base.core_market,
-        base.core_program,
-        base.linked_basis_record,
-        base.linked_basis_staging,
-        ProductRuntimeFrameV2 {
-            product: FinalizedRecordFrameV2 {
-                raw: base.product_record,
-                staging: base.product_staging,
-            },
-            result_domain: FinalizedRecordFrameV2 {
-                raw: base.result_domain_record,
-                staging: base.result_domain_staging,
-            },
-            portfolio: FinalizedRecordFrameV2 {
-                raw: base.portfolio_record,
-                staging: base.portfolio_staging,
-            },
-        },
-        market,
-        product_digest,
-        linked_basis_digest,
-        if header.action == RepresentationActionV2::RedeemTerminal {
-            CorePhase::Terminal
-        } else {
-            CorePhase::Open
-        },
-    )?;
-    let linked_data = base
-        .linked_basis_record
-        .try_borrow_data()
-        .map_err(|_| ClaimsSbfError::Accounts)?;
-    let linked = LinkedBasisRecordV2::decode(&linked_data).map_err(|_| ClaimsSbfError::Identity)?;
-    let basis_id = ContentIdV2::new(market.basis_id).map_err(|_| ClaimsSbfError::Identity)?;
-    let product_id =
-        ContentIdV2::new(market.product_instance_id).map_err(|_| ClaimsSbfError::Identity)?;
-    let admitted = AdmittedBasisV2::admit(linked.basis_record(), basis_id, basis_id, product_id)
-        .map_err(|_| ClaimsSbfError::Identity)?;
-    Ok((market.generation, admitted))
+    Ok(())
 }
 
 fn authenticate_or_allocate_replay<'info>(
@@ -1347,7 +1237,7 @@ fn execute_claims_if_any<'accounts, 'info>(
     base: BaseAccounts<'accounts, 'info>,
     prepared: PreparedRepresentationV2<'_>,
     request_digest: [u8; 32],
-    admitted_basis: AdmittedBasisV2,
+    authenticated: Box<AuthenticatedRationalProductV3>,
 ) -> Result<Box<ClaimsEvidence>, ProgramError> {
     let request = prepared.request();
     if !request.header().action.uses_claims() {
@@ -1356,9 +1246,7 @@ fn execute_claims_if_any<'accounts, 'info>(
             packet: Vec::new(),
             context: None,
             receipt: None,
-            terminal_request: None,
-            terminal_request_digest: [0; 32],
-            terminal_receipt: None,
+            signed_delta_receipt: None,
             custody: None,
         }));
     }
@@ -1369,7 +1257,7 @@ fn execute_claims_if_any<'accounts, 'info>(
             base,
             request,
             request_digest,
-            admitted_basis,
+            authenticated,
         );
     }
     let header = request.header();
@@ -1455,9 +1343,7 @@ fn execute_claims_if_any<'accounts, 'info>(
         packet: affine_plan,
         context: Some(context),
         receipt: Some(receipt),
-        terminal_request: None,
-        terminal_request_digest: [0; 32],
-        terminal_receipt: None,
+        signed_delta_receipt: None,
         custody: None,
     }))
 }
@@ -1469,7 +1355,7 @@ fn execute_terminal_claims<'accounts, 'info>(
     base: BaseAccounts<'accounts, 'info>,
     request: RepresentationRequestV2<'_>,
     request_digest: [u8; 32],
-    admitted_basis: AdmittedBasisV2,
+    authenticated: Box<AuthenticatedRationalProductV3>,
 ) -> Result<Box<ClaimsEvidence>, ProgramError> {
     let header = request.header();
     let offset = terminal_offset(header.asset_count)?;
@@ -1482,62 +1368,49 @@ fn execute_terminal_claims<'accounts, 'info>(
     }
     let terminal = terminal_accounts(account_infos, offset)?;
     authenticate_terminal_privileges(terminal)?;
-    let custody_position = asset_accounts(account_infos, 0)?.position;
-    let terminal_accounts = vec![
-        base.actor.clone(),
-        base.aggregate.clone(),
-        custody_position.clone(),
-        base.linked_basis_record.clone(),
-        base.linked_basis_staging.clone(),
-        base.product_record.clone(),
-        base.product_staging.clone(),
-        base.rent.clone(),
-        base.core_market.clone(),
-        terminal.coordinate.clone(),
-        terminal.coordinate_staging.clone(),
-        base.cache.clone(),
-        base.registry.clone(),
-        base.claims_program.clone(),
-        base.claims_programdata.clone(),
-        terminal.custody_program.clone(),
-        terminal.custody_programdata.clone(),
-        base.core_program.clone(),
-        base.core_programdata.clone(),
-        terminal.caller_authority.clone(),
-        terminal.realm.clone(),
-        terminal.realm_staging.clone(),
-        terminal.replay.clone(),
-        terminal.collateral_mint.clone(),
-        terminal.hoard.clone(),
-        terminal.recipient.clone(),
-        terminal.custody_authority.clone(),
-        terminal.token_program.clone(),
-    ];
-    if terminal_accounts.len() != LIABILITY_BASIS_ACCOUNT_COUNT_V2 {
-        return Err(ClaimsSbfError::Accounts.into());
-    }
-    let executed = execute_parent_authenticated_terminal_v2(
+    let position = asset_accounts(account_infos, 0)?.position;
+    let mut executed = execute_rational_terminal_v3(
         program_id,
-        &terminal_accounts,
-        Box::new(AuthenticatedLbv2TerminalParentV2 {
-            release_set: header.release_set,
-            market: header.market,
-            descriptor_id: header.descriptor_id,
-            outcome: header.selected_outcome,
-            beneficiary_actor: header.actor,
-            parent_context: header.parent_context,
-            parent_request_digest: request_digest,
-            custody_request_nonce: header.expected_representation_revision,
-            expected_market_revision: header.expected_claims_market_revision,
-            expected_position_revision: header.expected_custody_position_revision,
-            expected_custody_revision: header.expected_custody_replay_revision,
-            debit_quantity: header.quantity,
-            admitted_basis,
-        }),
+        RationalTerminalFrameV3 {
+            caller_authority: base.caller_authority,
+            aggregate: base.aggregate,
+            linked_basis_record: base.linked_basis_record,
+            linked_basis_staging: base.linked_basis_staging,
+            product_record: base.product_record,
+            product_staging: base.product_staging,
+            result_domain_record: base.result_domain_record,
+            result_domain_staging: base.result_domain_staging,
+            portfolio_record: base.portfolio_record,
+            portfolio_staging: base.portfolio_staging,
+            rent: base.rent,
+            core_market: base.core_market,
+            cache: base.cache,
+            registry: base.registry,
+            caller_program: base.caller_program,
+            caller_programdata: base.caller_programdata,
+            claims_program: base.claims_program,
+            claims_programdata: base.claims_programdata,
+            core_program: base.core_program,
+            core_programdata: base.core_programdata,
+            position,
+            custody_caller_authority: terminal.caller_authority,
+            custody_program: terminal.custody_program,
+            coordinate: terminal.coordinate,
+            coordinate_staging: terminal.coordinate_staging,
+            realm: terminal.realm,
+            realm_staging: terminal.realm_staging,
+            custody_replay: terminal.replay,
+            collateral_mint: terminal.collateral_mint,
+            hoard: terminal.hoard,
+            recipient: terminal.recipient,
+            custody_authority: terminal.custody_authority,
+            token_program: terminal.token_program,
+        },
+        request,
+        request_digest,
+        authenticated,
     )?;
-    let terminal_request = executed.receipt.request();
-    let terminal_request_digest = executed.receipt.request_digest();
-    let custody = executed.custody.map(|evidence| {
+    let custody = executed.custody.take().map(|evidence| {
         Box::new(CustodyEvidence {
             request: evidence.request,
             request_digest: evidence.request_digest,
@@ -1547,13 +1420,11 @@ fn execute_terminal_claims<'accounts, 'info>(
         })
     });
     Ok(Box::new(ClaimsEvidence {
-        plan_digest: [0; 32],
-        packet: Vec::new(),
+        plan_digest: executed.packet_digest,
+        packet: core::mem::take(&mut executed.packet),
         context: None,
         receipt: None,
-        terminal_request: Some(Box::new(terminal_request)),
-        terminal_request_digest,
-        terminal_receipt: Some(executed.receipt),
+        signed_delta_receipt: Some(executed.receipt),
         custody,
     }))
 }
@@ -1865,8 +1736,4 @@ const fn token_effect_tag(style: TokenEffectStyleV2) -> u8 {
         TokenEffectStyleV2::MintReceipt => 5,
         TokenEffectStyleV2::BurnReceipt => 6,
     }
-}
-
-fn request_digest_of(bytes: &[u8]) -> [u8; 32] {
-    hash(bytes).to_bytes()
 }

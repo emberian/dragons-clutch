@@ -3,9 +3,6 @@
 use dclutch_claims_svm::affine_batch_v2::{
     AffineBatchPlanV2, AffineBatchReceiptV2, DeltaDirectionV2,
 };
-use dclutch_claims_svm::lbv2_terminal_v2::{
-    Lbv2TerminalRedeemReceiptV2, Lbv2TerminalRedeemRequestV2,
-};
 use dclutch_claims_svm::signed_delta_v3::{
     DeltaDirectionV3, SignedDeltaPlanV3, SignedDeltaReceiptV3,
 };
@@ -26,9 +23,9 @@ use crate::{
 /// Structured custody balance as three little-endian `u64` values.
 pub const POST_ASSET_OBSERVATION_BYTES_V2: usize = 24;
 
-// The normalized physical receipt width is unchanged. This field now commits
-// the canonical affine packet rather than the retired scalar Claims packet.
-const RECEIPT_AFFINE_PACKET_DIGEST_OFFSET: usize = RECEIPT_CLAIMS_PLAN_DIGEST_OFFSET;
+// The normalized physical receipt width is unchanged. This field commits the
+// canonical affine or SignedDelta packet rather than a family-specific DTO.
+const RECEIPT_CLAIMS_PACKET_DIGEST_OFFSET: usize = RECEIPT_CLAIMS_PLAN_DIGEST_OFFSET;
 
 /// Exact evidence observed after all child effects and before replay state is
 /// committed. Every digest is computed by the physical adapter over exact
@@ -41,20 +38,18 @@ pub struct CompletionEvidenceV2<'a> {
     pub representation_program: [u8; 32],
     /// Same current Claims program selected for the affine batch.
     pub claims_program: [u8; 32],
-    /// SHA-256 of exact affine packet bytes, zero for Structured actions.
-    pub affine_packet_digest: [u8; 32],
+    /// SHA-256 of the exact active Claims packet, zero for Structured actions.
+    pub claims_packet_digest: [u8; 32],
     /// Exact affine packet, absent for Structured actions.
     pub affine_packet: Option<AffineBatchPlanV2<'a>>,
     /// Finalized Product/LiabilityBasis identities authenticated before CPI.
     pub affine_context: Option<AffineBatchContextV2>,
     /// Exact affine-batch return data, absent for Structured actions.
     pub affine_receipt: Option<AffineBatchReceiptV2>,
-    /// Exact typed terminal Claims request, present only for terminal redemption.
-    pub terminal_request: Option<&'a Lbv2TerminalRedeemRequestV2>,
-    /// SHA-256 of the exact terminal Claims request bytes.
-    pub terminal_request_digest: [u8; 32],
-    /// Exact typed terminal Claims receipt, present only for terminal redemption.
-    pub terminal_receipt: Option<&'a Lbv2TerminalRedeemReceiptV2>,
+    /// Canonical SignedDeltaV3 packet, present only for terminal redemption.
+    pub signed_delta_packet: Option<SignedDeltaPlanV3<'a>>,
+    /// Canonical SignedDeltaV3 receipt, present only for terminal redemption.
+    pub signed_delta_receipt: Option<SignedDeltaReceiptV3>,
     /// SHA-256 of the ordered exact Token effect transcript.
     pub token_effect_digest: [u8; 32],
     /// Exact post receipt Mint supply.
@@ -90,7 +85,7 @@ pub struct RepresentationReceiptV2 {
     representation_program: [u8; 32],
     claims_program: [u8; 32],
     token_program: [u8; 32],
-    affine_packet_digest: [u8; 32],
+    claims_packet_digest: [u8; 32],
     claims_resource_digest: [u8; 32],
     token_effect_digest: [u8; 32],
     custody_request_digest: [u8; 32],
@@ -136,7 +131,7 @@ impl RepresentationReceiptV2 {
             )?)?,
             claims_program: require_nonzero(array_at(input, RECEIPT_CLAIMS_PROGRAM_OFFSET)?)?,
             token_program: require_nonzero(array_at(input, RECEIPT_TOKEN_PROGRAM_OFFSET)?)?,
-            affine_packet_digest: array_at(input, RECEIPT_AFFINE_PACKET_DIGEST_OFFSET)?,
+            claims_packet_digest: array_at(input, RECEIPT_CLAIMS_PACKET_DIGEST_OFFSET)?,
             claims_resource_digest: array_at(input, RECEIPT_CLAIMS_RESOURCE_DIGEST_OFFSET)?,
             token_effect_digest: require_nonzero(array_at(
                 input,
@@ -201,8 +196,8 @@ impl RepresentationReceiptV2 {
             (RECEIPT_CLAIMS_PROGRAM_OFFSET, self.claims_program),
             (RECEIPT_TOKEN_PROGRAM_OFFSET, self.token_program),
             (
-                RECEIPT_AFFINE_PACKET_DIGEST_OFFSET,
-                self.affine_packet_digest,
+                RECEIPT_CLAIMS_PACKET_DIGEST_OFFSET,
+                self.claims_packet_digest,
             ),
             (
                 RECEIPT_CLAIMS_RESOURCE_DIGEST_OFFSET,
@@ -263,9 +258,9 @@ impl RepresentationReceiptV2 {
         self.request_digest
     }
 
-    /// SHA-256 of the exact canonical affine or typed terminal Claims request.
-    pub const fn affine_packet_digest(self) -> [u8; 32] {
-        self.affine_packet_digest
+    /// SHA-256 of the exact canonical affine or SignedDelta Claims packet.
+    pub const fn claims_packet_digest(self) -> [u8; 32] {
+        self.claims_packet_digest
     }
 
     /// Resulting canonical Claims aggregate revision, or the absent sentinel.
@@ -350,7 +345,7 @@ impl RepresentationReceiptV2 {
         );
         let claims = affine || self.action == RepresentationActionV2::RedeemTerminal;
         if claims
-            != (!is_zero(self.affine_packet_digest)
+            != (!is_zero(self.claims_packet_digest)
                 && !is_zero(self.claims_resource_digest)
                 && self.post_claims_market_revision != ABSENT_REVISION)
         {
@@ -426,7 +421,7 @@ pub fn finalize(
         representation_program: evidence.representation_program,
         claims_program: evidence.claims_program,
         token_program: header.token_program,
-        affine_packet_digest: claims.effect_digest,
+        claims_packet_digest: claims.effect_digest,
         claims_resource_digest: claims.resource_digest,
         token_effect_digest: evidence.token_effect_digest,
         custody_request_digest: evidence.custody_request_digest,
@@ -561,10 +556,9 @@ fn validate_claims(
         if evidence.affine_packet.is_some()
             || evidence.affine_context.is_some()
             || evidence.affine_receipt.is_some()
-            || !is_zero(evidence.affine_packet_digest)
-            || evidence.terminal_request.is_some()
-            || evidence.terminal_receipt.is_some()
-            || !is_zero(evidence.terminal_request_digest)
+            || evidence.signed_delta_packet.is_some()
+            || evidence.signed_delta_receipt.is_some()
+            || !is_zero(evidence.claims_packet_digest)
         {
             return Err(Error::ClaimsMismatch);
         }
@@ -581,51 +575,43 @@ fn validate_claims(
         if evidence.affine_packet.is_some()
             || evidence.affine_context.is_some()
             || evidence.affine_receipt.is_some()
-            || !is_zero(evidence.affine_packet_digest)
         {
             return Err(Error::ClaimsMismatch);
         }
-        let request = *evidence.terminal_request.ok_or(Error::ClaimsMismatch)?;
-        let receipt = *evidence.terminal_receipt.ok_or(Error::ClaimsMismatch)?;
-        require_nonzero(evidence.terminal_request_digest)?;
-        receipt
-            .verify_for(request, evidence.terminal_request_digest)
-            .map_err(|_| Error::ClaimsMismatch)?;
-        let asset = prepared.request().asset(0)?;
-        if request.release_set() != header.release_set
-            || request.market() != header.market
-            || request.owner() != asset.claims_custody_owner
-            || request.claim_index() != header.selected_outcome
-            || request.pre_market_revision() != header.expected_claims_market_revision
-            || request.pre_position_revision() != header.expected_custody_position_revision
-            || request.debit_quantity() != header.quantity
-            || request.claims_program() != evidence.claims_program
-            || request.custody_request_digest() != evidence.custody_request_digest
-            || receipt.custody_receipt_digest() != evidence.custody_receipt_digest
-            || receipt.custody_replay_digest() != evidence.custody_replay_digest
-            || (request.evaluated_payout() == 0
-                && header.expected_custody_replay_revision != ABSENT_REVISION)
-            || (request.evaluated_payout() != 0
-                && request.pre_custody_revision() != header.expected_custody_replay_revision)
+        let packet = evidence.signed_delta_packet.ok_or(Error::ClaimsMismatch)?;
+        let receipt = evidence.signed_delta_receipt.ok_or(Error::ClaimsMismatch)?;
+        let completion = validate_signed_delta_terminal_v3(
+            prepared.request(),
+            SignedDeltaTerminalEvidenceV3 {
+                request_digest: evidence.request_digest,
+                claims_program: evidence.claims_program,
+                packet_digest: evidence.claims_packet_digest,
+                packet,
+                receipt,
+            },
+        )?;
+        let payout = evidence.custody_request.map_or(0, |request| request.amount);
+        if (payout == 0 && header.expected_custody_replay_revision != ABSENT_REVISION)
+            || (payout != 0
+                && evidence.custody_request.is_none_or(|request| {
+                    request.expected_revision != header.expected_custody_replay_revision
+                }))
         {
             return Err(Error::ClaimsMismatch);
         }
         return Ok(ClaimsCompletionV2 {
-            effect_digest: evidence.terminal_request_digest,
-            resource_digest: receipt.post_resource_digest(),
-            market_revision: request.post_market_revision(),
+            effect_digest: completion.effect_digest,
+            resource_digest: completion.resource_digest,
+            market_revision: completion.market_revision,
             actor_position_revision: ABSENT_REVISION,
-            custody_position_revision: request.post_position_revision(),
-            payout: request.evaluated_payout(),
+            custody_position_revision: completion.custody_position_revision,
+            payout,
         });
     }
-    if evidence.terminal_request.is_some()
-        || evidence.terminal_receipt.is_some()
-        || !is_zero(evidence.terminal_request_digest)
-    {
+    if evidence.signed_delta_packet.is_some() || evidence.signed_delta_receipt.is_some() {
         return Err(Error::ClaimsMismatch);
     }
-    require_nonzero(evidence.affine_packet_digest)?;
+    require_nonzero(evidence.claims_packet_digest)?;
     let packet = evidence.affine_packet.ok_or(Error::ClaimsMismatch)?;
     let context = evidence.affine_context.ok_or(Error::ClaimsMismatch)?;
     let receipt = evidence.affine_receipt.ok_or(Error::ClaimsMismatch)?;
@@ -647,7 +633,7 @@ fn validate_claims(
         || packet.outcome_count() != header.outcome_count
         || packet.position_count() != 2
         || packet.row_count() != 1
-        || receipt.packet_digest() != evidence.affine_packet_digest
+        || receipt.packet_digest() != evidence.claims_packet_digest
         || receipt.claims_program() != evidence.claims_program
         || receipt.pre_market_revision() != header.expected_claims_market_revision
         || receipt.post_market_revision()
@@ -692,7 +678,7 @@ fn validate_claims(
         return Err(Error::ClaimsMismatch);
     }
     Ok(ClaimsCompletionV2 {
-        effect_digest: evidence.affine_packet_digest,
+        effect_digest: evidence.claims_packet_digest,
         resource_digest: receipt.post_resource_digest(),
         market_revision: receipt.post_market_revision(),
         actor_position_revision: header
@@ -740,8 +726,28 @@ fn validate_custody(
         || request.release_set != header.release_set
         || request.market != header.market
         || request.realm != header.realm
+        || request.caller_program != evidence.claims_program
+        || request.semantic.candidate == [0; 32]
+        || request.semantic.source_owner != [0; 32]
         || request.semantic.destination_owner != header.actor
+        || request.semantic.order != [0; 32]
+        || request.semantic.parent_request_digest != evidence.request_digest
+        || request.semantic.order_nonce != header.expected_representation_revision
+        || request.semantic.generation != header.generation
+        || request.semantic.page_index != 0
+        || request.semantic.execution_index != 0
+        || request.semantic.transfer_index != 0
         || request.destination != header.collateral_recipient
+        || request.token_program != header.token_program
+        || request.expected_revision != header.expected_custody_replay_revision
+        || request.resulting_revision
+            != header
+                .expected_custody_replay_revision
+                .checked_add(1)
+                .ok_or(Error::ArithmeticOverflow)?
+        || request.payer != [0; 32]
+        || request.rent_refund != [0; 32]
+        || request.rent_lamports != 0
     {
         return Err(Error::CustodyMismatch);
     }

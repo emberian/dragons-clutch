@@ -39,6 +39,17 @@ use crate::liability_basis_v2::{
 /// Exact fixed account count before the runtime Position tail.
 pub const SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3: usize = 20;
 
+/// Exact already-authenticated parent request joined to one generated
+/// SignedDeltaV3 plan.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedSignedDeltaParentV3 {
+    pub(crate) caller_role: CallerRole,
+    pub(crate) release_set: [u8; 32],
+    pub(crate) market: [u8; 32],
+    pub(crate) parent_context: [u8; 32],
+    pub(crate) parent_request_digest: [u8; 32],
+}
+
 const AUTHORITY_ACCOUNT: usize = 0;
 const MARKET_ACCOUNT: usize = 1;
 const BASIS_RECORD_ACCOUNT: usize = 2;
@@ -172,7 +183,43 @@ pub(super) fn process(
     authenticate_privileges(program_id, &accounts)?;
     let packet_digest = hash(instruction_data).to_bytes();
     authenticate_authority(&accounts, plan, packet_digest)?;
-    authenticate_releases(&accounts, plan)?;
+    let receipt = execute_authenticated(program_id, &accounts, plan, packet_digest, false)?;
+    set_return_data(&receipt.to_bytes());
+    Ok(())
+}
+
+/// Execute one generated SignedDeltaV3 plan from an enclosing Claims route
+/// authenticated under the same caller authority and ProductRuntimeV3 graph.
+pub(crate) fn execute_parent_authenticated(
+    program_id: &Pubkey,
+    account_infos: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+    parent: AuthenticatedSignedDeltaParentV3,
+) -> Result<SignedDeltaReceiptV3, ProgramError> {
+    let plan = SignedDeltaPlanV3::decode(instruction_data)
+        .map_err(|_| SignedDeltaSbfErrorV3::Instruction)?;
+    let accounts = SignedDeltaAccountsV3::parse(account_infos, plan.position_count())?;
+    authenticate_privileges(program_id, &accounts)?;
+    authenticate_parent_authority(&accounts, plan, parent)?;
+    execute_authenticated(
+        program_id,
+        &accounts,
+        plan,
+        hash(instruction_data).to_bytes(),
+        true,
+    )
+}
+
+fn execute_authenticated(
+    program_id: &Pubkey,
+    accounts: &SignedDeltaAccountsV3<'_, '_>,
+    plan: SignedDeltaPlanV3<'_>,
+    packet_digest: [u8; 32],
+    parent_authenticated: bool,
+) -> Result<SignedDeltaReceiptV3, ProgramError> {
+    if !parent_authenticated {
+        authenticate_releases(accounts, plan)?;
+    }
 
     let market_before = accounts
         .market
@@ -180,10 +227,14 @@ pub(super) fn process(
         .map_err(|_| SignedDeltaSbfErrorV3::Accounts)?;
     let market =
         MarketViewV2::decode(&market_before).map_err(|_| SignedDeltaSbfErrorV3::ClaimsState)?;
-    authenticate_market(program_id, &accounts, plan, market)?;
-    authenticate_product_and_basis(&accounts, plan, market)?;
+    authenticate_market(program_id, accounts, plan, market)?;
+    if parent_authenticated {
+        authenticate_parent_product_digests(accounts, plan)?;
+    } else {
+        authenticate_product_and_basis(accounts, plan, market)?;
+    }
     let (mut market_candidate, mut position_candidates) =
-        build_candidates(program_id, &accounts, plan, market, &market_before)?;
+        build_candidates(program_id, accounts, plan, market, &market_before)?;
     drop(market_before);
 
     apply_deltas(plan, &mut market_candidate, &mut position_candidates)?;
@@ -215,9 +266,8 @@ pub(super) fn process(
         post_market_revision,
     )
     .map_err(|_| SignedDeltaSbfErrorV3::Receipt)?;
-    commit_candidates(&accounts, &market_candidate, &position_candidates)?;
-    set_return_data(&receipt.to_bytes());
-    Ok(())
+    commit_candidates(accounts, &market_candidate, &position_candidates)?;
+    Ok(receipt)
 }
 
 fn authenticate_privileges(
@@ -295,6 +345,34 @@ fn authenticate_authority(
         execution_role(plan.caller_role()),
         plan.request_id(),
         packet_digest,
+    )
+    .map_err(|_| SignedDeltaSbfErrorV3::Release)?;
+    if accounts.authority.key
+        != &Pubkey::find_program_address(&seeds.as_slices(), accounts.caller_program.key).0
+    {
+        return Err(SignedDeltaSbfErrorV3::Release.into());
+    }
+    Ok(())
+}
+
+fn authenticate_parent_authority(
+    accounts: &SignedDeltaAccountsV3<'_, '_>,
+    plan: SignedDeltaPlanV3<'_>,
+    parent: AuthenticatedSignedDeltaParentV3,
+) -> Result<(), ProgramError> {
+    if plan.caller_role() != parent.caller_role
+        || plan.release_set() != parent.release_set
+        || plan.market() != parent.market
+        || plan.request_id() != parent.parent_request_digest
+    {
+        return Err(SignedDeltaSbfErrorV3::Release.into());
+    }
+    let seeds = CallerAuthoritySeedsV1::new(
+        ContentId::new(parent.release_set).map_err(|_| SignedDeltaSbfErrorV3::Release)?,
+        parent.market,
+        execution_role(parent.caller_role),
+        parent.parent_context,
+        parent.parent_request_digest,
     )
     .map_err(|_| SignedDeltaSbfErrorV3::Release)?;
     if accounts.authority.key
@@ -402,6 +480,31 @@ fn authenticate_product_and_basis(
         dclutch_market_core_codec::Phase::Open,
     )
     .map_err(|_| SignedDeltaSbfErrorV3::ProductBasis)?)
+}
+
+/// Rejoin the exact Product and ProductBasisV3 raw digests already
+/// authenticated by the enclosing representation route.
+fn authenticate_parent_product_digests(
+    accounts: &SignedDeltaAccountsV3<'_, '_>,
+    plan: SignedDeltaPlanV3<'_>,
+) -> Result<(), ProgramError> {
+    let product = accounts
+        .product_record
+        .try_borrow_data()
+        .map_err(|_| SignedDeltaSbfErrorV3::Accounts)?;
+    let product_digest = hash(&product).to_bytes();
+    drop(product);
+    let basis = accounts
+        .basis_record
+        .try_borrow_data()
+        .map_err(|_| SignedDeltaSbfErrorV3::Accounts)?;
+    let basis_digest = hash(&basis).to_bytes();
+    if product_digest != plan.product_record_digest()
+        || basis_digest != plan.linked_basis_record_digest()
+    {
+        return Err(SignedDeltaSbfErrorV3::ProductBasis.into());
+    }
+    Ok(())
 }
 
 fn build_candidates(

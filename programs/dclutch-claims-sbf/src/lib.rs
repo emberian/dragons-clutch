@@ -43,7 +43,9 @@ pub mod liability_basis_v2;
 mod product_runtime_v2;
 pub mod protocol_position_v2;
 pub mod rational_lifecycle_v2;
+mod rational_product_v3;
 pub mod rational_representation_v2;
+mod rational_terminal_v3;
 pub mod signed_delta_v3;
 pub mod sparse_native_transfer_v1;
 
