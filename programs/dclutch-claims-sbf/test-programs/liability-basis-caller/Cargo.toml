@@ -1,0 +1,33 @@
+[package]
+name = "dclutch-claims-liability-basis-test-caller-sbf"
+version = "0.1.0"
+edition = "2024"
+publish = false
+rust-version = "1.89"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+path = "src/lib.rs"
+
+[features]
+default = []
+no-entrypoint = []
+custom-heap = []
+custom-panic = []
+
+[dependencies]
+dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
+dclutch-release-set-contract = { path = "../../../../crates/dclutch-release-set-contract" }
+solana-program = { version = "=3.0.0", default-features = false }
+
+[workspace]
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(target_os, values("solana"))'] }
+
+[lints.clippy]
+indexing_slicing = "deny"
+panic = "deny"
+unwrap_used = "deny"

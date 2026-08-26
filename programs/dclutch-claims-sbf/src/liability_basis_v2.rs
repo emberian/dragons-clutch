@@ -98,14 +98,15 @@ const CORE_PROGRAM_ACCOUNT: usize = 17;
 const CORE_PROGRAMDATA_ACCOUNT: usize = 18;
 const CUSTODY_CALLER_AUTHORITY_ACCOUNT: usize = 19;
 const REALM_ACCOUNT: usize = 20;
-const CUSTODY_REPLAY_ACCOUNT: usize = 21;
-const COLLATERAL_MINT_ACCOUNT: usize = 22;
-const SOURCE_TOKEN_ACCOUNT: usize = 23;
-const DESTINATION_TOKEN_ACCOUNT: usize = 24;
-const CUSTODY_AUTHORITY_ACCOUNT: usize = 25;
-const COLLATERAL_TOKEN_PROGRAM_ACCOUNT: usize = 26;
+const REALM_STAGING_ACCOUNT: usize = 21;
+const CUSTODY_REPLAY_ACCOUNT: usize = 22;
+const COLLATERAL_MINT_ACCOUNT: usize = 23;
+const SOURCE_TOKEN_ACCOUNT: usize = 24;
+const DESTINATION_TOKEN_ACCOUNT: usize = 25;
+const CUSTODY_AUTHORITY_ACCOUNT: usize = 26;
+const COLLATERAL_TOKEN_PROGRAM_ACCOUNT: usize = 27;
 /// Exact LiabilityBasisV2 account count.
-pub const LIABILITY_BASIS_ACCOUNT_COUNT_V2: usize = 27;
+pub const LIABILITY_BASIS_ACCOUNT_COUNT_V2: usize = 28;
 
 const ACTION_KIND_OFFSET: usize = 10;
 const ACTION_CUSTODY_PRESENT_OFFSET: usize = 11;
@@ -656,6 +657,7 @@ struct LiabilityBasisAccountsV2<'accounts, 'info> {
     core_programdata: &'accounts AccountInfo<'info>,
     custody_caller_authority: &'accounts AccountInfo<'info>,
     realm: &'accounts AccountInfo<'info>,
+    realm_staging: &'accounts AccountInfo<'info>,
     custody_replay: &'accounts AccountInfo<'info>,
     collateral_mint: &'accounts AccountInfo<'info>,
     source_token: &'accounts AccountInfo<'info>,
@@ -688,6 +690,7 @@ impl<'accounts, 'info> LiabilityBasisAccountsV2<'accounts, 'info> {
             core_programdata: account(accounts, CORE_PROGRAMDATA_ACCOUNT)?,
             custody_caller_authority: account(accounts, CUSTODY_CALLER_AUTHORITY_ACCOUNT)?,
             realm: account(accounts, REALM_ACCOUNT)?,
+            realm_staging: account(accounts, REALM_STAGING_ACCOUNT)?,
             custody_replay: account(accounts, CUSTODY_REPLAY_ACCOUNT)?,
             collateral_mint: account(accounts, COLLATERAL_MINT_ACCOUNT)?,
             source_token: account(accounts, SOURCE_TOKEN_ACCOUNT)?,
@@ -847,6 +850,7 @@ fn authenticate_privileges(
         accounts.custody_programdata,
         accounts.core_programdata,
         accounts.realm,
+        accounts.realm_staging,
         accounts.custody_authority,
     ] {
         if account.is_signer || account.is_writable {
@@ -1426,11 +1430,13 @@ fn invoke_custody<'info>(
         program_id: *accounts.custody_program.key,
         accounts: Vec::from([
             AccountMeta::new_readonly(*accounts.custody_caller_authority.key, true),
+            AccountMeta::new_readonly(*accounts.core_market.key, false),
             AccountMeta::new_readonly(*accounts.cache.key, false),
             AccountMeta::new_readonly(*accounts.registry.key, false),
             AccountMeta::new_readonly(*accounts.claims_program.key, false),
             AccountMeta::new_readonly(*accounts.claims_programdata.key, false),
             AccountMeta::new_readonly(*accounts.realm.key, false),
+            AccountMeta::new_readonly(*accounts.realm_staging.key, false),
             AccountMeta::new(*accounts.custody_replay.key, false),
             AccountMeta::new_readonly(*accounts.collateral_mint.key, false),
             AccountMeta::new(*accounts.source_token.key, false),
@@ -1457,11 +1463,13 @@ fn invoke_custody<'info>(
         &instruction,
         &[
             accounts.custody_caller_authority.clone(),
+            accounts.core_market.clone(),
             accounts.cache.clone(),
             accounts.registry.clone(),
             accounts.claims_program.clone(),
             accounts.claims_programdata.clone(),
             accounts.realm.clone(),
+            accounts.realm_staging.clone(),
             accounts.custody_replay.clone(),
             accounts.collateral_mint.clone(),
             accounts.source_token.clone(),
