@@ -257,6 +257,30 @@ pub fn build_product_publication_step_v2(
     content: ProductPublicationContentV2<'_>,
     state: ProductPublicationStateV2<'_>,
 ) -> Result<ProductPublicationPlanV2, PublicationErrorV1> {
+    let slot = state.product.sponsor.slot;
+    for account in [
+        state.product.raw_record,
+        state.product.staging_cursor,
+        state.product.system_program,
+        state.product.rent,
+        state.product.clock,
+        state.result_domain.sponsor,
+        state.result_domain.raw_record,
+        state.result_domain.staging_cursor,
+        state.result_domain.system_program,
+        state.result_domain.rent,
+        state.result_domain.clock,
+        state.portfolio.sponsor,
+        state.portfolio.raw_record,
+        state.portfolio.staging_cursor,
+        state.portfolio.system_program,
+        state.portfolio.rent,
+        state.portfolio.clock,
+    ] {
+        if account.slot != slot {
+            return Err(PublicationErrorV1::ObservationMismatch);
+        }
+    }
     let product =
         build_record_publication_step_v1(registry_program, content.product, state.product)?;
     if product.action != RecordPublicationActionV1::Complete {

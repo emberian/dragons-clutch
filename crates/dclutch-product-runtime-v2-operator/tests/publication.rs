@@ -420,4 +420,19 @@ fn compiled_product_graph_owns_schemas_digests_and_publication_order() {
     .expect("next graph publication");
     assert_eq!(next.member, ProductPublicationMemberV2::ResultDomain);
     assert_eq!(next.record.action, RecordPublicationActionV1::Begin);
+
+    let mut stale_portfolio = portfolio_state;
+    stale_portfolio.clock.slot += 1;
+    assert_eq!(
+        build_product_publication_step_v2(
+            REGISTRY,
+            content,
+            ProductPublicationStateV2 {
+                product: product_state,
+                result_domain: domain_state,
+                portfolio: stale_portfolio,
+            },
+        ),
+        Err(PublicationErrorV1::ObservationMismatch)
+    );
 }
