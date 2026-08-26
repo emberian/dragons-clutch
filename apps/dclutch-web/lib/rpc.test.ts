@@ -78,4 +78,18 @@ describe('bounded finalized RPC client', () => {
       slot: '45', accounts: [{ address: addresses[0], account: null }, { address: addresses[1], account: { lamports: '1' } }],
     });
   });
+
+  it('submits only one bounded caller-signed packet with preflight enabled', async () => {
+    const signature = '2'.repeat(88);
+    const fetcher: typeof fetch = async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as { method: string; params: unknown[] };
+      expect(request.method).toBe('sendTransaction');
+      expect(request.params).toEqual([btoa(String.fromCharCode(1, 2, 3)), {
+        encoding: 'base64', skipPreflight: false, preflightCommitment: 'confirmed', maxRetries: 3,
+      }]);
+      return response(signature);
+    };
+    await expect(new SolanaRpcClient('http://127.0.0.1:8899', fetcher).sendRawTransaction(Uint8Array.from([1, 2, 3]))).resolves.toBe(signature);
+    await expect(new SolanaRpcClient('http://127.0.0.1:8899', fetcher).sendRawTransaction(new Uint8Array(1_233))).rejects.toThrow(/1..1232/);
+  });
 });
