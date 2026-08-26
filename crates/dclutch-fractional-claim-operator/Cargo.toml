@@ -1,0 +1,43 @@
+[package]
+name = "dclutch-fractional-claim-operator"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+rust-version = "1.89"
+description = "Chain-derived unsigned v0 operator for exact fractional claims"
+publish = false
+
+[dependencies]
+dclutch-account-profile-contract = { path = "../dclutch-account-profile-contract" }
+dclutch-capability-program-contract = { path = "../dclutch-capability-program-contract" }
+dclutch-effect-kernel = { path = "../dclutch-effect-kernel" }
+dclutch-execution-strategy-contract = { path = "../dclutch-execution-strategy-contract" }
+dclutch-fractional-claim-contract = { path = "../dclutch-fractional-claim-contract" }
+dclutch-fractional-claim-kernel = { path = "../dclutch-fractional-claim-kernel" }
+dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
+dclutch-product-runtime-v2-admission = { path = "../dclutch-product-runtime-v2-admission" }
+dclutch-record-contract = { path = "../dclutch-record-contract" }
+dclutch-request-profile-contract = { path = "../dclutch-request-profile-contract" }
+dclutch-resolution-core-v3-operator = { path = "../dclutch-resolution-core-v3-operator" }
+dclutch-token-svm = { path = "../dclutch-token-svm" }
+dclutch-transition-vm = { path = "../dclutch-transition-vm" }
+dclutch-versioned-message-operator = { path = "../dclutch-versioned-message-operator" }
+sha2 = "=0.10.9"
+solana-hash = "=4.6.0"
+solana-program = { version = "=3.0.0", default-features = false }
+solana-sdk-ids = "=3.1.0"
+
+[workspace]
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"
+
+[lints.clippy]
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+checked_conversions = "deny"
+float_arithmetic = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+unwrap_used = "deny"

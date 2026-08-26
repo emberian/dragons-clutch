@@ -23,7 +23,7 @@ pub use request::{
     FRACTIONAL_FAMILY_REQUEST_BYTES_V1, FRACTIONAL_FAMILY_REQUEST_MAGIC_V1,
     FRACTIONAL_FAMILY_REQUEST_SCHEMA_ID_V1, FRACTIONAL_FAMILY_REQUEST_SCHEMA_PREIMAGE_V1,
     FractionalActionV1, FractionalFamilyRequestInputV1, FractionalFamilyRequestV1,
-    FractionalRequestErrorV1, Result as RequestResult,
+    FractionalRequestErrorV1, NO_TERMINAL_OUTCOME_V1, Result as RequestResult,
 };
 pub use root::{
     FRACTIONAL_ROOT_BYTES_V1, FRACTIONAL_ROOT_MAGIC_V1, FRACTIONAL_ROOT_SCHEMA_ID_V1,
