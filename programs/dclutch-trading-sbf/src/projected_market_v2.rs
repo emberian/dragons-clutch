@@ -11,7 +11,9 @@ use dclutch_custody_contract::{
     ProjectedCustodyOperationV1, ProjectedCustodyPhaseV1, ProjectedCustodyRequestV1,
     ProjectedCustodyStateV1,
 };
-use dclutch_market_core_codec::{Action, Identity, ProjectFoundReceiptV1, Request};
+use dclutch_market_core_codec::{
+    Action, Identity, ProjectFoundReceiptV1, Request, SeriesCoreFoundAckV2, SeriesCoreRequestV1,
+};
 use solana_program::hash::hash;
 
 /// Compact projected-execution instruction magic.
@@ -48,6 +50,8 @@ pub enum ProjectedMarketExecutionErrorV2 {
     Projection,
     /// The next projected-Custody Lock request could not be constructed.
     LockRequest,
+    /// Core return provenance or the Found-only funding attestation refused.
+    FoundAcknowledgement,
 }
 
 /// Borrowed exact compact instruction partition.
@@ -56,6 +60,36 @@ pub struct ProjectedMarketExecutionV2<'a> {
     witness_words: u8,
     affine_count: u8,
     family_request: &'a [u8],
+}
+
+/// Core-promoted affine span admitted for the live-Market continuation.
+///
+/// The compact preamble count is only a routing hint until this value exists.
+/// It can be constructed only from the current Core program's exact raw
+/// `SeriesCoreFoundAckV2`, joined to the derived Core request and independently
+/// authenticated ordered FundingState-list identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedFoundSpanV2 {
+    funding_count: u8,
+    funding_list_id: [u8; 32],
+    acknowledgement_digest: [u8; 32],
+}
+
+impl AuthenticatedFoundSpanV2 {
+    /// Core-authenticated nonzero FundingState count.
+    pub const fn funding_count(self) -> u8 {
+        self.funding_count
+    }
+
+    /// Core-authenticated exact ordered FundingState-list identity.
+    pub const fn funding_list_id(self) -> [u8; 32] {
+        self.funding_list_id
+    }
+
+    /// SHA-256 of the exact raw Core return bytes retained by the outer.
+    pub const fn acknowledgement_digest(self) -> [u8; 32] {
+        self.acknowledgement_digest
+    }
 }
 
 impl<'a> ProjectedMarketExecutionV2<'a> {
@@ -227,6 +261,52 @@ pub fn reconstruct_projected_lock_v1(
     Ok(request)
 }
 
+/// Promote the bounded preamble hint through the sole current-Core authority.
+///
+/// `funding_list_id` and `observed_post_resource_digest` must be derived from
+/// the authenticated ordered FundingState accounts and live Market/permit
+/// poststate, respectively. The raw return producer is checked separately from
+/// the identities echoed by the typed receipt so substituted return data from
+/// another executable program cannot promote the continuation span.
+#[allow(clippy::too_many_arguments)]
+pub fn authenticate_series_found_span_v2(
+    execution: ProjectedMarketExecutionV2<'_>,
+    return_data_producer: [u8; 32],
+    raw_acknowledgement: &[u8],
+    core_request: SeriesCoreRequestV1,
+    expected_core_program: [u8; 32],
+    expected_permit: [u8; 32],
+    core_request_digest: [u8; 32],
+    funding_list_id: [u8; 32],
+    observed_post_resource_digest: [u8; 32],
+) -> Result<AuthenticatedFoundSpanV2, ProjectedMarketExecutionErrorV2> {
+    if return_data_producer != expected_core_program {
+        return Err(ProjectedMarketExecutionErrorV2::FoundAcknowledgement);
+    }
+    let acknowledgement = SeriesCoreFoundAckV2::decode(raw_acknowledgement)
+        .map_err(|_| ProjectedMarketExecutionErrorV2::FoundAcknowledgement)?;
+    let funding_count = execution.affine_count();
+    if acknowledgement.funding_count() != funding_count {
+        return Err(ProjectedMarketExecutionErrorV2::FoundAcknowledgement);
+    }
+    acknowledgement
+        .validate_for(
+            core_request,
+            identity_ack(expected_core_program)?,
+            identity_ack(expected_permit)?,
+            identity_ack(core_request_digest)?,
+            funding_count,
+            identity_ack(funding_list_id)?,
+            identity_ack(observed_post_resource_digest)?,
+        )
+        .map_err(|_| ProjectedMarketExecutionErrorV2::FoundAcknowledgement)?;
+    Ok(AuthenticatedFoundSpanV2 {
+        funding_count,
+        funding_list_id,
+        acknowledgement_digest: hash(raw_acknowledgement).to_bytes(),
+    })
+}
+
 fn require_open_projected_state(
     state: ProjectedCustodyStateV1,
 ) -> Result<(), ProjectedMarketExecutionErrorV2> {
@@ -243,6 +323,10 @@ fn require_open_projected_state(
 
 fn identity(value: [u8; 32]) -> Result<Identity, ProjectedMarketExecutionErrorV2> {
     Identity::new(value).map_err(|_| ProjectedMarketExecutionErrorV2::Projection)
+}
+
+fn identity_ack(value: [u8; 32]) -> Result<Identity, ProjectedMarketExecutionErrorV2> {
+    Identity::new(value).map_err(|_| ProjectedMarketExecutionErrorV2::FoundAcknowledgement)
 }
 
 fn read_u8(input: &[u8], offset: usize) -> Result<u8, ProjectedMarketExecutionErrorV2> {
@@ -385,6 +469,36 @@ mod tests {
         }
     }
 
+    fn core_request() -> SeriesCoreRequestV1 {
+        SeriesCoreRequestV1::occurrence(
+            dclutch_market_core_codec::SeriesCoreActionV1::Consume,
+            identity_ack(id(30)).expect("release"),
+            identity_ack(id(31)).expect("Template"),
+            identity_ack(id(32)).expect("Ticket"),
+            identity_ack(id(33)).expect("Market"),
+            identity_ack(id(34)).expect("Product"),
+            identity_ack(id(35)).expect("Source"),
+            identity_ack(id(36)).expect("founder"),
+            identity_ack(id(37)).expect("RentCredit"),
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+            44,
+        )
+        .expect("Consume request")
+    }
+
+    fn execution(affine_count: u8) -> alloc::vec::Vec<u8> {
+        let header = [0x44; PROJECTED_MARKET_FAMILY_HEADER_BYTES_V2];
+        let mut output = vec![0_u8; PROJECTED_MARKET_EXECUTION_FIXED_BYTES_V2];
+        encode_projected_market_execution_v2(&mut output, &header, &[], affine_count)
+            .expect("compact execution");
+        output
+    }
+
     #[test]
     fn compact_wire_keeps_one_contiguous_family_request() {
         let header = [0x44; PROJECTED_MARKET_FAMILY_HEADER_BYTES_V2];
@@ -479,6 +593,99 @@ mod tests {
         assert_eq!(
             reconstruct_projected_lock_v1(state, 0),
             Err(ProjectedMarketExecutionErrorV2::LockRequest)
+        );
+    }
+
+    #[test]
+    fn only_current_core_ack_promotes_the_affine_hint() {
+        let request = core_request();
+        let core_program = id(51);
+        let permit = id(52);
+        let request_digest = id(53);
+        let funding_list = id(54);
+        let post_resource = id(55);
+        let raw_acknowledgement = SeriesCoreFoundAckV2::new(
+            request,
+            identity_ack(core_program).expect("Core"),
+            identity_ack(permit).expect("permit"),
+            identity_ack(request_digest).expect("request digest"),
+            3,
+            identity_ack(funding_list).expect("funding list"),
+            identity_ack(post_resource).expect("post resource"),
+        )
+        .expect("Found acknowledgement")
+        .encode()
+        .expect("acknowledgement bytes");
+        let wire = execution(3);
+        let decoded = ProjectedMarketExecutionV2::decode(&wire).expect("compact wire");
+        let promoted = authenticate_series_found_span_v2(
+            decoded,
+            core_program,
+            &raw_acknowledgement,
+            request,
+            core_program,
+            permit,
+            request_digest,
+            funding_list,
+            post_resource,
+        )
+        .expect("Core-promoted span");
+        assert_eq!(promoted.funding_count(), 3);
+        assert_eq!(promoted.funding_list_id(), funding_list);
+        assert_eq!(
+            promoted.acknowledgement_digest(),
+            hash(&raw_acknowledgement).to_bytes()
+        );
+    }
+
+    #[test]
+    fn producer_hint_and_funding_substitution_cannot_promote() {
+        let request = core_request();
+        let core_program = id(51);
+        let permit = id(52);
+        let request_digest = id(53);
+        let funding_list = id(54);
+        let post_resource = id(55);
+        let raw_acknowledgement = SeriesCoreFoundAckV2::new(
+            request,
+            identity_ack(core_program).expect("Core"),
+            identity_ack(permit).expect("permit"),
+            identity_ack(request_digest).expect("request digest"),
+            3,
+            identity_ack(funding_list).expect("funding list"),
+            identity_ack(post_resource).expect("post resource"),
+        )
+        .expect("Found acknowledgement")
+        .encode()
+        .expect("acknowledgement bytes");
+        let wire = execution(3);
+        let decoded = ProjectedMarketExecutionV2::decode(&wire).expect("compact wire");
+        let authenticate = |execution, producer, list| {
+            authenticate_series_found_span_v2(
+                execution,
+                producer,
+                &raw_acknowledgement,
+                request,
+                core_program,
+                permit,
+                request_digest,
+                list,
+                post_resource,
+            )
+        };
+        assert_eq!(
+            authenticate(decoded, id(56), funding_list),
+            Err(ProjectedMarketExecutionErrorV2::FoundAcknowledgement)
+        );
+        assert_eq!(
+            authenticate(decoded, core_program, id(57)),
+            Err(ProjectedMarketExecutionErrorV2::FoundAcknowledgement)
+        );
+        let changed_wire = execution(2);
+        let changed = ProjectedMarketExecutionV2::decode(&changed_wire).expect("changed hint");
+        assert_eq!(
+            authenticate(changed, core_program, funding_list),
+            Err(ProjectedMarketExecutionErrorV2::FoundAcknowledgement)
         );
     }
 }
