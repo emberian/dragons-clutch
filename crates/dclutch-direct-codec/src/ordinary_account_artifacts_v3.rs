@@ -6,13 +6,15 @@
 //! account frames and state layouts.
 
 use dclutch_account_profile_contract::v2::{
-    AccountPrestateV2, AccountProfileV2, DYNAMIC_FIXED_SPAN_HEADER_BYTES, OPERATION_BYTES,
-    RULE_BYTES, TrustedBuiltinIdentityV2, TrustedEnvironmentV2, TrustedIdentityEnvironmentV2,
+    AccountPrestateV2, AccountProfileV2, FIXED_DATA_PREDICATE_BYTES,
+    FIXED_DATA_PREDICATE_HEADER_BYTES, OPERATION_BYTES, RULE_BYTES, TrustedBuiltinIdentityV2,
+    TrustedEnvironmentV2, TrustedIdentityEnvironmentV2,
     encode::{
         AccountAliasInputV2, AccountCoordinateV2, AccountEffectPermissionsV2,
         AccountOperationInputV2, AccountPrivilegesV2, AccountRuleInputV2,
-        AccountRuleWithPrestateInputV2, IdentityCoordinateV2, RegisterGeometryV2,
-        ScalarCoordinateV2, encode_account_profile_with_dynamic_fixed_span_v2_atomic,
+        AccountRuleWithPrestateInputV2, FixedDataPredicateInputV2, IdentityCoordinateV2,
+        RegisterGeometryV2, ScalarCoordinateV2,
+        encode_account_profile_with_fixed_data_predicates_v2_atomic,
     },
 };
 use dclutch_capability_program_contract::{
@@ -77,6 +79,7 @@ use crate::{
 
 const FIXED_ACCOUNTS: usize = DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3 as usize;
 const FIXED_OPERATIONS: usize = 37;
+const FIXED_DATA_PREDICATES: usize = 9;
 const CLAIMS_MARKET_ACCOUNT: u16 = DIRECT_INLINE_CLAIMS_ACCOUNT_START_V3 + 1;
 const CLAIMS_SOURCE_POSITION_ACCOUNT: u16 = DIRECT_INLINE_CLAIMS_ACCOUNT_START_V3 + 20;
 const CLAIMS_DESTINATION_POSITION_ACCOUNT: u16 = DIRECT_INLINE_CLAIMS_ACCOUNT_START_V3 + 21;
@@ -98,15 +101,16 @@ const BASIS_PREFIX_BYTES: usize = BASIS_WIDTH_OFFSET_V3 + 4;
 const DOMAIN_AFFINE_BASE_BYTES: usize = DOMAIN_HEADER_BYTES - 2 * DOMAIN_CUT_BYTES;
 const CLAIMS_ROW_BYTES: usize = 8;
 
-/// Exact encoded fixed-topology Profile13 width for inline ordinary Direct execution.
-pub const DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3: usize = DYNAMIC_FIXED_SPAN_HEADER_BYTES
+/// Exact encoded fixed-topology Profile14 width for inline ordinary Direct execution.
+pub const DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3: usize = FIXED_DATA_PREDICATE_HEADER_BYTES
+    + FIXED_DATA_PREDICATES * FIXED_DATA_PREDICATE_BYTES
     + FIXED_ACCOUNTS * RULE_BYTES
     + FIXED_OPERATIONS * OPERATION_BYTES;
 
 /// Exact account observations used to finalize one release-pinned profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DirectInlineOrdinaryAccountProfileInputV3<'a> {
-    /// Exact logical data lengths in Profile13 coordinate order.
+    /// Exact logical data lengths in Profile14 coordinate order.
     ///
     /// Runtime-width states are checked for one consistent positive Product
     /// width, while the authenticated ProductBasis record remains variable
@@ -125,7 +129,7 @@ pub enum DirectOrdinaryAccountArtifactErrorV3 {
     Profile(dclutch_account_profile_contract::v2::Error),
 }
 
-/// Emit one complete inline-ordinary fixed-topology Profile13 atomically.
+/// Emit one complete inline-ordinary fixed-topology Profile14 atomically.
 pub fn encode_direct_inline_ordinary_account_profile_v3_atomic(
     input: DirectInlineOrdinaryAccountProfileInputV3<'_>,
     scratch: &mut [u8],
@@ -138,8 +142,9 @@ pub fn encode_direct_inline_ordinary_account_profile_v3_atomic(
     }
     validate_lengths(input.logical_data_lengths)?;
     let rules = rules(input.logical_data_lengths)?;
+    let predicates = fixed_data_predicates()?;
     let operations = operations()?;
-    encode_account_profile_with_dynamic_fixed_span_v2_atomic(
+    encode_account_profile_with_fixed_data_predicates_v2_atomic(
         TrustedEnvironmentV2::CurrentSlot {
             destination: scalar(SCALAR_SLOT_V3)?,
         },
@@ -150,6 +155,7 @@ pub fn encode_direct_inline_ordinary_account_profile_v3_atomic(
             destination: identity(IDENTITY_SYSTEM_PROGRAM_V3)?,
         },
         &[],
+        &predicates,
         &rules,
         &[],
         &operations,
@@ -165,6 +171,70 @@ pub fn encode_direct_inline_ordinary_account_profile_v3_atomic(
     .map_err(DirectOrdinaryAccountArtifactErrorV3::Profile)?;
     AccountProfileV2::decode(output).map_err(DirectOrdinaryAccountArtifactErrorV3::Profile)?;
     Ok(())
+}
+
+fn fixed_data_predicates()
+-> Result<[FixedDataPredicateInputV2; FIXED_DATA_PREDICATES], DirectOrdinaryAccountArtifactErrorV3>
+{
+    let root = |state_offset: usize| {
+        CAPABILITY_ROOT_HEADER_BYTES_V1
+            .checked_add(state_offset)
+            .ok_or(DirectOrdinaryAccountArtifactErrorV3::Geometry)
+            .and_then(offset)
+    };
+    Ok([
+        FixedDataPredicateInputV2::RequireDataU64 {
+            account: 0,
+            data_offset: root(DirectRootStateLayoutV1::MAGIC)?,
+            value: DirectRootStateLayoutV1::MAGIC_WORD,
+        },
+        FixedDataPredicateInputV2::RequireDataU16 {
+            account: 0,
+            data_offset: root(DirectRootStateLayoutV1::VERSION)?,
+            value: DirectRootStateLayoutV1::ABI_VERSION,
+        },
+        FixedDataPredicateInputV2::RequireZeroRange {
+            account: 0,
+            data_offset: root(DirectRootStateLayoutV1::RESERVED)?,
+            length: width(DirectRootStateLayoutV1::RESERVED_BYTES)?,
+        },
+        maker_magic_predicate(DIRECT_SELLER_MAKER_ACCOUNT_V3)?,
+        maker_version_predicate(DIRECT_SELLER_MAKER_ACCOUNT_V3)?,
+        maker_reserved_predicate(DIRECT_SELLER_MAKER_ACCOUNT_V3)?,
+        maker_magic_predicate(DIRECT_BUYER_MAKER_ACCOUNT_V3)?,
+        maker_version_predicate(DIRECT_BUYER_MAKER_ACCOUNT_V3)?,
+        maker_reserved_predicate(DIRECT_BUYER_MAKER_ACCOUNT_V3)?,
+    ])
+}
+
+fn maker_magic_predicate(
+    account: u16,
+) -> Result<FixedDataPredicateInputV2, DirectOrdinaryAccountArtifactErrorV3> {
+    Ok(FixedDataPredicateInputV2::RequireDataU64 {
+        account,
+        data_offset: offset(DirectMakerReplayLayoutV1::MAGIC)?,
+        value: DirectMakerReplayLayoutV1::MAGIC_WORD,
+    })
+}
+
+fn maker_version_predicate(
+    account: u16,
+) -> Result<FixedDataPredicateInputV2, DirectOrdinaryAccountArtifactErrorV3> {
+    Ok(FixedDataPredicateInputV2::RequireDataU16 {
+        account,
+        data_offset: offset(DirectMakerReplayLayoutV1::VERSION)?,
+        value: DirectMakerReplayLayoutV1::ABI_VERSION,
+    })
+}
+
+fn maker_reserved_predicate(
+    account: u16,
+) -> Result<FixedDataPredicateInputV2, DirectOrdinaryAccountArtifactErrorV3> {
+    Ok(FixedDataPredicateInputV2::RequireZeroRange {
+        account,
+        data_offset: offset(DirectMakerReplayLayoutV1::RESERVED)?,
+        length: width(DirectMakerReplayLayoutV1::RESERVED_BYTES)?,
+    })
 }
 
 fn rules(
@@ -774,7 +844,7 @@ mod tests {
     use super::*;
     use dclutch_account_profile_contract::{
         EFFECT_PERMISSION_CREDIT_LAMPORTS, EFFECT_PERMISSION_DEBIT_LAMPORTS,
-        EFFECT_PERMISSION_WRITE_DATA,
+        EFFECT_PERMISSION_WRITE_DATA, v2::FixedDataPredicateKindV2,
     };
 
     fn lengths(basis_bytes: u32) -> [u32; FIXED_ACCOUNTS] {
@@ -850,9 +920,47 @@ mod tests {
     }
 
     #[test]
-    fn profile13_round_trips_exact_hot_and_child_geometry() {
+    fn profile14_round_trips_exact_hot_child_geometry_and_state_predicates() {
         let bytes = emit(&lengths(256));
         let profile = AccountProfileV2::decode(&bytes).expect("decode");
+        assert!(profile.uses_fixed_data_predicates());
+        assert_eq!(profile.fixed_data_predicate_count(), 9);
+        let root_magic = profile.fixed_data_predicate(0).expect("root magic");
+        assert_eq!(root_magic.account(), 0);
+        assert_eq!(
+            root_magic.data_offset(),
+            u32::try_from(CAPABILITY_ROOT_HEADER_BYTES_V1 + DirectRootStateLayoutV1::MAGIC)
+                .expect("root magic offset")
+        );
+        assert_eq!(
+            root_magic.kind(),
+            FixedDataPredicateKindV2::RequireDataU64(DirectRootStateLayoutV1::MAGIC_WORD)
+        );
+        for (ordinal, account) in [(3_u16, 5_u16), (6, 8)] {
+            let magic = profile.fixed_data_predicate(ordinal).expect("maker magic");
+            let version = profile
+                .fixed_data_predicate(ordinal + 1)
+                .expect("maker version");
+            let reserved = profile
+                .fixed_data_predicate(ordinal + 2)
+                .expect("maker reserved");
+            assert_eq!(magic.account(), account);
+            assert_eq!(
+                magic.kind(),
+                FixedDataPredicateKindV2::RequireDataU64(DirectMakerReplayLayoutV1::MAGIC_WORD)
+            );
+            assert_eq!(
+                version.kind(),
+                FixedDataPredicateKindV2::RequireDataU16(DirectMakerReplayLayoutV1::ABI_VERSION)
+            );
+            assert_eq!(
+                reserved.kind(),
+                FixedDataPredicateKindV2::RequireZeroRange(
+                    u32::try_from(DirectMakerReplayLayoutV1::RESERVED_BYTES)
+                        .expect("reserved width")
+                )
+            );
+        }
         assert_eq!(profile.fixed_account_count(), 90);
         assert_eq!(profile.item_account_stride(), 0);
         assert_eq!(profile.dynamic_fixed_span_count(), 0);

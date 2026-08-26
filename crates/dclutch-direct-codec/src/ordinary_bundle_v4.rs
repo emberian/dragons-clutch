@@ -63,10 +63,10 @@ use crate::{
 pub const DIRECT_INLINE_ORDINARY_STRATEGY_BYTES_V3: usize = EXECUTION_STRATEGY_PROGRAM_BYTES_V2;
 /// Exact CapabilityProgram descriptor width.
 pub const DIRECT_INLINE_ORDINARY_DESCRIPTOR_BYTES_V4: usize = CAPABILITY_PROGRAM_V4_BYTES;
-/// SHA-256 identity of the exact runtime-polymorphic fixed-topology AccountProfile13.
+/// SHA-256 identity of the exact runtime-polymorphic fixed-topology AccountProfile14.
 pub const DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_ID_V3: [u8; 32] = [
-    0x1f, 0xfa, 0x91, 0x6d, 0x5d, 0x9d, 0x43, 0x6e, 0x80, 0x72, 0x63, 0x01, 0xfa, 0x82, 0x23, 0x92,
-    0xce, 0x11, 0xe3, 0xce, 0xff, 0x90, 0x90, 0x90, 0xc4, 0x72, 0x3d, 0x9b, 0xb6, 0x63, 0xb6, 0xad,
+    0xcb, 0xa5, 0x7e, 0x92, 0xe0, 0x51, 0x18, 0x73, 0x82, 0x68, 0x45, 0x99, 0x5e, 0x4a, 0xb7, 0xd9,
+    0x61, 0xe5, 0xf9, 0xa3, 0x30, 0x0a, 0xed, 0x21, 0xd1, 0x66, 0xd3, 0xaa, 0xb2, 0x77, 0x58, 0xa4,
 ];
 /// SHA-256 identity of the exact maker LifecycleV5 policy.
 pub const DIRECT_INLINE_ORDINARY_LIFECYCLE_ID_V5: [u8; 32] = [
@@ -91,7 +91,7 @@ pub struct DirectInlineOrdinaryHotBundleInputV4<'a> {
 /// Every finalized record selected by one ordinary CapabilityProgram.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DirectInlineOrdinaryHotBundleV4 {
-    /// Runtime-width fixed-topology AccountProfile13 bytes.
+    /// Runtime-width fixed-topology AccountProfile14 bytes.
     pub account_profile: [u8; DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3],
     /// Maker AuthenticateOrCreate LifecycleV5 bytes.
     pub lifecycle_policy: [u8; DIRECT_INLINE_ORDINARY_LIFECYCLE_BYTES_V5],
