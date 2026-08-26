@@ -10,6 +10,10 @@
 //! descriptor and graph select one runtime outcome with coefficient equal to
 //! the exact denominator.
 
+mod hot_terminal_v3;
+
+pub use hot_terminal_v3::{ConstructedHotTerminalV3, construct_chain_hot_redeem_terminal_v3};
+
 use dclutch_bearer_v2_contract::BearerDescriptorV2;
 use dclutch_rational_representation_v2_kernel::{
     ContentAdmissionV2, DescriptorAdmissionV2, RepresentationDescriptorV2, RepresentationGraphV2,
@@ -24,6 +28,12 @@ use solana_program::{hash::hash, pubkey::Pubkey};
 pub enum Error {
     /// The chain-derived generic Rational operator refused the observation.
     ChainOperator(dclutch_rational_representation_v2_operator::Error),
+    /// The safe Rational terminal Hot contract refused the projected message.
+    HotContract(dclutch_rational_representation_v2_contract::Error),
+    /// The caller supplied a parent even though Hot owns that digest.
+    NonCanonicalParent,
+    /// Independent family specialization differed from the chain-derived child.
+    HotChildMismatch,
     /// Finalized descriptor/graph bytes were not the selected Bearer basis vector.
     NotBearer,
 }

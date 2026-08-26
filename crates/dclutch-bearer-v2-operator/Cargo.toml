@@ -8,12 +8,12 @@ description = "Chain-derived Rational Representation V2 specialization gate for 
 
 [dependencies]
 dclutch-bearer-v2-contract = { path = "../dclutch-bearer-v2-contract" }
+dclutch-rational-representation-v2-contract = { path = "../dclutch-rational-representation-v2-contract" }
 dclutch-rational-representation-v2-kernel = { path = "../dclutch-rational-representation-v2-kernel" }
 dclutch-rational-representation-v2-operator = { path = "../dclutch-rational-representation-v2-operator" }
 solana-program = { version = "=3.0.0", default-features = false }
 
 [dev-dependencies]
-dclutch-rational-representation-v2-contract = { path = "../dclutch-rational-representation-v2-contract" }
 dclutch-token-svm = { path = "../dclutch-token-svm" }
 
 [workspace]
