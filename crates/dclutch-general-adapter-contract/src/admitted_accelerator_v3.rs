@@ -57,6 +57,43 @@ pub enum GeneralAdmittedAcceleratorErrorV3 {
 /// Result alias for General's admitted accelerator.
 pub type Result<T> = core::result::Result<T, GeneralAdmittedAcceleratorErrorV3>;
 
+/// Authenticate the exact terminal selection-to-verification join required
+/// before a settlement cursor may be initialized.
+///
+/// A complete verifier certificate is not selection authority by itself. The
+/// frozen cursor must name its candidate, coordinate, revision, Product,
+/// Batch, and exact record digest under the immutable selection policy.
+pub fn authenticate_frozen_selection_v3<'a>(
+    selection_policy_id: [u8; 32],
+    requested_candidate: Option<[u8; 32]>,
+    tail_count: u32,
+    frozen_selection: &[u8],
+    verified: &'a [u8],
+) -> Result<VerifiedCandidateV2<'a>> {
+    let verified_value = VerifiedCandidateV2::decode(verified)
+        .map_err(|_| GeneralAdmittedAcceleratorErrorV3::Settlement)?;
+    let verified_header = verified_value.header();
+    let frozen = RuntimeSelectionCursorV2::decode(frozen_selection)
+        .map_err(|_| GeneralAdmittedAcceleratorErrorV3::Settlement)?;
+    let frozen_header = frozen.header();
+    let verified_digest: [u8; 32] = Sha256::digest(verified).into();
+    if frozen_header.phase != crate::runtime_selection::RuntimeSelectionPhaseV2::Frozen
+        || frozen_header.outcome_count != tail_count
+        || frozen_header.policy_id != selection_policy_id
+        || frozen_header.best_candidate_id != verified_header.candidate_id
+        || frozen_header.best_candidate_coordinate != verified_header.candidate_coordinate
+        || frozen_header.best_verified_revision != verified_header.revision
+        || frozen_header.product_id != verified_header.product_id
+        || frozen_header.batch_id != verified_header.batch_id
+        || frozen_header.best_verified_digest != verified_digest
+        || verified_header.outcome_count != tail_count
+        || Some(verified_header.candidate_id) != requested_candidate
+    {
+        return Err(GeneralAdmittedAcceleratorErrorV3::Action);
+    }
+    Ok(verified_value)
+}
+
 /// Complete caller-owned scratch and candidate buffers for one evaluation.
 pub struct GeneralAdmittedSettlementBuffersV3<'a> {
     /// Non-authoritative successor-cursor scratch.
@@ -217,6 +254,7 @@ pub fn evaluate_general_admitted_initialize_v3<'a>(
     tail_count: u32,
     input_bank: &[u8],
     environment: GeneralHotEnvironmentV3,
+    frozen_selection: &[u8],
     verifier: &[u8],
     verified: &[u8],
     buffers: GeneralAdmittedInitializeBuffersV3<'a>,
@@ -229,13 +267,13 @@ pub fn evaluate_general_admitted_initialize_v3<'a>(
     {
         return Err(GeneralAdmittedAcceleratorErrorV3::Action);
     }
-    let verified_value = VerifiedCandidateV2::decode(verified)
-        .map_err(|_| GeneralAdmittedAcceleratorErrorV3::Settlement)?;
-    if verified_value.header().outcome_count != tail_count
-        || Some(verified_value.header().candidate_id) != bundle.request.candidate_id
-    {
-        return Err(GeneralAdmittedAcceleratorErrorV3::Action);
-    }
+    authenticate_frozen_selection_v3(
+        bundle.config.selection_policy_id(),
+        bundle.request.candidate_id,
+        tail_count,
+        frozen_selection,
+        verified,
+    )?;
     let GeneralAdmittedInitializeBuffersV3 {
         inventory_scratch,
         cursor_scratch,
@@ -414,8 +452,75 @@ fn content(bytes: &[u8]) -> Result<ContentId> {
 #[cfg(test)]
 mod tests {
     use dclutch_execution_strategy_contract::v2::ExecutionCandidateV2;
+    use dclutch_general_codec::{MAX_SELECTION_CRITERIA, SelectionCriterion};
+    use std::{vec, vec::Vec};
 
     use super::*;
+    use crate::{
+        runtime_selection::{RUNTIME_SELECTION_CURSOR_BYTES_V2, RuntimeSelectionPhaseV2},
+        runtime_width::{VerifiedCandidateHeaderV2, VerifiedCandidateV2, verified_candidate_len},
+    };
+
+    const PRODUCT: [u8; 32] = [21; 32];
+    const BATCH: [u8; 32] = [22; 32];
+    const POLICY: [u8; 32] = [23; 32];
+    const CANDIDATE: [u8; 32] = [24; 32];
+
+    fn selection_policy() -> SelectionPolicyV1 {
+        let mut criteria = [SelectionCriterion::MaximizeFilledLots; MAX_SELECTION_CRITERIA];
+        criteria[1] = SelectionCriterion::MinimizeQuoteSurplus;
+        criteria[2] = SelectionCriterion::MinimizeCandidateId;
+        SelectionPolicyV1 {
+            policy_id: POLICY,
+            criterion_count: 3,
+            criteria,
+        }
+    }
+
+    fn verified_candidate(width: u32) -> Vec<u8> {
+        let count = usize::try_from(width).expect("test width");
+        let mut output = vec![0; verified_candidate_len(width).expect("verified width")];
+        VerifiedCandidateV2::encode_into(
+            VerifiedCandidateHeaderV2 {
+                outcome_count: width,
+                page_count: 1,
+                candidate_coordinate: 7,
+                revision: 9,
+                candidate_id: CANDIDATE,
+                product_id: PRODUCT,
+                batch_id: BATCH,
+                filled_lots: 11,
+                quote_debit: 12,
+                quote_credit: 1,
+                price_scale: 10,
+            },
+            &vec![11; count],
+            &vec![13; count],
+            &mut output,
+        )
+        .expect("verified candidate");
+        output
+    }
+
+    fn frozen_selection(width: u32, verified: &[u8]) -> [u8; RUNTIME_SELECTION_CURSOR_BYTES_V2] {
+        let mut scratch = [0; RUNTIME_SELECTION_CURSOR_BYTES_V2];
+        let mut open = [0; RUNTIME_SELECTION_CURSOR_BYTES_V2];
+        consider_verified_candidate_v2(
+            selection_policy(),
+            &[0; RUNTIME_SELECTION_CURSOR_BYTES_V2],
+            verified,
+            0,
+            &mut scratch,
+            &mut open,
+        )
+        .expect("consider selected candidate");
+        let mut frozen = [0; RUNTIME_SELECTION_CURSOR_BYTES_V2];
+        freeze_selection_v2(&open, 1, &mut scratch, &mut frozen).expect("freeze selection");
+        let decoded = RuntimeSelectionCursorV2::decode(&frozen).expect("frozen cursor");
+        assert_eq!(decoded.header().outcome_count, width);
+        assert_eq!(decoded.header().phase, RuntimeSelectionPhaseV2::Frozen);
+        frozen
+    }
 
     #[test]
     fn only_the_four_runtime_settlement_actions_join() {
@@ -456,5 +561,70 @@ mod tests {
     fn candidate_type_carries_no_account_authority() {
         let refused = ExecutionCandidateV2::Refused;
         assert_eq!(refused, ExecutionCandidateV2::Refused);
+    }
+
+    #[test]
+    fn initialize_requires_the_exact_frozen_best_valid_submitted_candidate() {
+        for width in [1_u32, 258] {
+            let verified = verified_candidate(width);
+            let frozen = frozen_selection(width, &verified);
+            let selected = authenticate_frozen_selection_v3(
+                POLICY,
+                Some(CANDIDATE),
+                width,
+                &frozen,
+                &verified,
+            )
+            .expect("exact frozen selection joins");
+            assert_eq!(selected.header().candidate_id, CANDIDATE);
+
+            let mut open = frozen;
+            open[10] = RuntimeSelectionPhaseV2::Open.tag();
+            assert_eq!(
+                authenticate_frozen_selection_v3(POLICY, Some(CANDIDATE), width, &open, &verified,),
+                Err(GeneralAdmittedAcceleratorErrorV3::Action)
+            );
+
+            let mut substituted_digest = frozen;
+            substituted_digest[176] ^= 1;
+            assert_eq!(
+                authenticate_frozen_selection_v3(
+                    POLICY,
+                    Some(CANDIDATE),
+                    width,
+                    &substituted_digest,
+                    &verified,
+                ),
+                Err(GeneralAdmittedAcceleratorErrorV3::Action)
+            );
+
+            assert_eq!(
+                authenticate_frozen_selection_v3(POLICY, Some([25; 32]), width, &frozen, &verified,),
+                Err(GeneralAdmittedAcceleratorErrorV3::Action)
+            );
+            assert_eq!(
+                authenticate_frozen_selection_v3(
+                    [26; 32],
+                    Some(CANDIDATE),
+                    width,
+                    &frozen,
+                    &verified,
+                ),
+                Err(GeneralAdmittedAcceleratorErrorV3::Action)
+            );
+
+            let mut substituted_revision = verified.clone();
+            substituted_revision[24] ^= 1;
+            assert_eq!(
+                authenticate_frozen_selection_v3(
+                    POLICY,
+                    Some(CANDIDATE),
+                    width,
+                    &frozen,
+                    &substituted_revision,
+                ),
+                Err(GeneralAdmittedAcceleratorErrorV3::Action)
+            );
+        }
     }
 }

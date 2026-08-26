@@ -63,7 +63,7 @@ def profile (action : Action) : Profile := {
   -- The common Strategy bank has one stable geometry for all action-selected
   -- programs. Request projection fills only the action's coordinates; account
   -- projection and Transition own the remaining values.
-  commonScalars := 86
+  commonScalars := 87
   itemScalarStride := 6
   commonIdentities := 40
   itemIdentityStride := 0
@@ -101,9 +101,9 @@ theorem freeze_has_no_candidate_projection :
           operation.requestOffset = 24 ∧ operation.immediate = 32) := by native_decide
 
 theorem row_actions_project_runtime_coordinates :
-    (profile .consider).commonScalars = 86 ∧
-      (profile .collect).commonScalars = 86 ∧
-      (profile .distribute).commonScalars = 86 ∧
+    (profile .consider).commonScalars = 87 ∧
+      (profile .collect).commonScalars = 87 ∧
+      (profile .distribute).commonScalars = 87 ∧
       (profile .consider).itemScalarStride = 6 := by native_decide
 
 theorem close_alone_projects_terminal_record_bump :

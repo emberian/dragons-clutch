@@ -38,6 +38,32 @@ pub const GENERAL_CLOSE_PAYER_ACCOUNT_V3: u16 = 7;
 /// Shared Close terminal-create and settlement-close RentCredit coordinate.
 pub const GENERAL_CLOSE_RENT_CREDIT_ACCOUNT_V3: u16 = 8;
 
+/// Semantic owner of one readonly General evaluator input.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GeneralReadonlyEvidenceKindV3 {
+    /// Immutable interpreted best-valid-submitted-candidate policy.
+    SelectionPolicy,
+    /// Newly submitted complete verified-candidate record.
+    SubmittedVerifiedCandidate,
+    /// Frozen selection cursor naming the sole winning verified candidate.
+    FrozenSelection,
+    /// Terminal runtime verifier cursor used to initialize settlement.
+    RuntimeVerifier,
+    /// Selected complete verified-candidate record.
+    SelectedVerifiedCandidate,
+    /// Exact settlement order manifest emitted by candidate verification.
+    SettlementManifest,
+}
+
+/// One action-selected readonly evidence account and its logical coordinate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralReadonlyEvidenceV3 {
+    /// AccountProfile coordinate in the expanded logical runtime frame.
+    pub coordinate: u16,
+    /// Exact semantic record consumed by the stateless evaluator.
+    pub kind: GeneralReadonlyEvidenceKindV3,
+}
+
 const GENERAL_STATE_SEED_DOMAIN_V3: &[u8] = b"dclutch-general-state-v3";
 const SELECTION_STATE_SEED_V3: &[u8] = b"selection";
 const SETTLEMENT_STATE_SEED_V3: &[u8] = b"settlement";
@@ -72,16 +98,59 @@ pub fn general_state_lifecycle_bytes_v3(action: Action) -> Result<usize> {
         .ok_or(GeneralStateArtifactErrorV3::Geometry)
 }
 
-/// First child-route account after action-selected local lifecycle accounts.
-pub const fn general_child_account_start_v3(action: Action) -> u16 {
+/// Number of exact readonly evaluator inputs selected by one action.
+#[must_use]
+pub const fn general_readonly_evidence_count_v3(action: Action) -> u16 {
     match action {
-        Action::Consider | Action::Freeze => 8,
-        Action::InitializeSettlement
-        | Action::Collect
-        | Action::Materialize
-        | Action::Distribute => 8,
-        Action::Close => 9,
+        Action::Consider => 2,
+        Action::Freeze => 0,
+        Action::InitializeSettlement => 3,
+        Action::Collect | Action::Distribute => 2,
+        Action::Materialize | Action::Close => 1,
     }
+}
+
+/// Return one exact readonly evaluator input.
+pub fn general_readonly_evidence_v3(
+    action: Action,
+    index: u16,
+) -> Result<GeneralReadonlyEvidenceV3> {
+    let base = general_readonly_evidence_start_v3(action);
+    let kind = match (action, index) {
+        (Action::Consider, 0) => GeneralReadonlyEvidenceKindV3::SelectionPolicy,
+        (Action::Consider, 1) => GeneralReadonlyEvidenceKindV3::SubmittedVerifiedCandidate,
+        (Action::InitializeSettlement, 0) => GeneralReadonlyEvidenceKindV3::FrozenSelection,
+        (Action::InitializeSettlement, 1) => GeneralReadonlyEvidenceKindV3::RuntimeVerifier,
+        (Action::InitializeSettlement, 2)
+        | (Action::Collect | Action::Materialize | Action::Distribute | Action::Close, 0) => {
+            GeneralReadonlyEvidenceKindV3::SelectedVerifiedCandidate
+        }
+        (Action::Collect | Action::Distribute, 1) => {
+            GeneralReadonlyEvidenceKindV3::SettlementManifest
+        }
+        _ => return Err(GeneralStateArtifactErrorV3::Geometry),
+    };
+    Ok(GeneralReadonlyEvidenceV3 {
+        coordinate: base
+            .checked_add(index)
+            .ok_or(GeneralStateArtifactErrorV3::Geometry)?,
+        kind,
+    })
+}
+
+/// First readonly evidence coordinate after local lifecycle accounts.
+#[must_use]
+pub const fn general_readonly_evidence_start_v3(action: Action) -> u16 {
+    if matches!(action, Action::Close) {
+        9
+    } else {
+        8
+    }
+}
+
+/// First child-route account after action-selected readonly evidence.
+pub const fn general_child_account_start_v3(action: Action) -> u16 {
+    general_readonly_evidence_start_v3(action) + general_readonly_evidence_count_v3(action)
 }
 
 /// Generate one complete protected-output lifecycle policy atomically.
@@ -446,6 +515,36 @@ mod tests {
                     .expect("selected")
                     .uses_canonical_bump(),
                 Ok(true)
+            );
+        }
+    }
+
+    #[test]
+    fn all_actions_select_exact_readonly_evidence_before_child_routes() {
+        let expected = [
+            (Action::Consider, 8, 2, 10),
+            (Action::Freeze, 8, 0, 8),
+            (Action::InitializeSettlement, 8, 3, 11),
+            (Action::Collect, 8, 2, 10),
+            (Action::Materialize, 8, 1, 9),
+            (Action::Distribute, 8, 2, 10),
+            (Action::Close, 9, 1, 10),
+        ];
+        for (action, start, count, child) in expected {
+            assert_eq!(general_readonly_evidence_start_v3(action), start);
+            assert_eq!(general_readonly_evidence_count_v3(action), count);
+            assert_eq!(general_child_account_start_v3(action), child);
+            for index in 0..count {
+                assert_eq!(
+                    general_readonly_evidence_v3(action, index)
+                        .expect("selected evidence")
+                        .coordinate,
+                    start + index
+                );
+            }
+            assert_eq!(
+                general_readonly_evidence_v3(action, count),
+                Err(GeneralStateArtifactErrorV3::Geometry)
             );
         }
     }

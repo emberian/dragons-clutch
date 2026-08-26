@@ -23,7 +23,7 @@ use crate::{
 };
 
 /// Exact common scalar-register count in the General Hot38 ABI.
-pub const GENERAL_HOT_COMMON_SCALARS_V3: u32 = 86;
+pub const GENERAL_HOT_COMMON_SCALARS_V3: u32 = 87;
 /// Outcome index, quantity, three claim magnitudes, and cursor inventory.
 pub const GENERAL_HOT_ITEM_SCALAR_STRIDE_V3: u32 = 6;
 /// Exact common identity-register count in the General Hot38 ABI.
@@ -205,6 +205,8 @@ pub mod scalar {
     pub const SELECTION_BEST_FILLED_LOTS: u32 = 84;
     /// Quote-surplus component of the best submitted candidate comparison key.
     pub const SELECTION_BEST_QUOTE_SURPLUS: u32 = 85;
+    /// Trusted canonical input scratch-page count derived from bank geometry.
+    pub const INPUT_SCRATCH_PAGE_COUNT: u32 = 86;
 }
 
 /// Scalar coordinates within each Product-outcome item bank.
@@ -388,6 +390,92 @@ pub struct GeneralHotEnvironmentV3 {
     pub custody_vault_rent_principal: u64,
 }
 
+/// Decode the complete independently authenticated environment from the
+/// Account/RequestProfile register bank supplied by common Trading.
+///
+/// The accelerator must not reconstruct these facts from child account order
+/// or caller-provided side channels. Every value below is projected once by
+/// the selected generic profile and remains read-only at the family boundary.
+pub fn general_hot_environment_from_bank_v3(
+    bank: &[u8],
+    outcome_count: u32,
+) -> Result<GeneralHotEnvironmentV3> {
+    if bank.len() != general_hot_candidate_bank_len_v3(outcome_count)?
+        || read_scalar(bank, scalar::OUTCOME_COUNT)? != u64::from(outcome_count)
+    {
+        return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
+    }
+    let scalar_count = general_hot_scalar_count_v3(outcome_count)?;
+    let scalar_u32 = |coordinate| {
+        u32::try_from(read_scalar(bank, coordinate)?)
+            .map_err(|_| GeneralHotCandidateErrorV3::InvalidCoordinate)
+    };
+    let scalar_u16 = |coordinate| {
+        u16::try_from(read_scalar(bank, coordinate)?)
+            .map_err(|_| GeneralHotCandidateErrorV3::InvalidCoordinate)
+    };
+    let present = read_scalar(bank, scalar::SETTLEMENT_POSITION_PRESENT)?;
+    if present > 1 {
+        return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
+    }
+    Ok(GeneralHotEnvironmentV3 {
+        general_root: read_identity(bank, scalar_count, identity::GENERAL_ROOT)?,
+        parent_request_digest: read_identity(bank, scalar_count, identity::PARENT_REQUEST_DIGEST)?,
+        release_set: read_identity(bank, scalar_count, identity::RELEASE_SET)?,
+        market: read_identity(bank, scalar_count, identity::MARKET)?,
+        product_record_digest: read_identity(bank, scalar_count, identity::PRODUCT_RECORD_DIGEST)?,
+        semantic_basis_id: read_identity(bank, scalar_count, identity::SEMANTIC_BASIS_ID)?,
+        linked_basis_record_digest: read_identity(
+            bank,
+            scalar_count,
+            identity::LINKED_BASIS_RECORD_DIGEST,
+        )?,
+        realm: read_identity(bank, scalar_count, identity::REALM)?,
+        trading_program: read_identity(bank, scalar_count, identity::TRADING_PROGRAM)?,
+        generation: read_scalar(bank, scalar::GENERATION)?,
+        page_index: scalar_u32(scalar::PAGE_INDEX)?,
+        execution_index: scalar_u32(scalar::EXECUTION_INDEX)?,
+        claims_market_revision: read_scalar(bank, scalar::CLAIMS_MARKET_REVISION)?,
+        owner_position_revision: read_scalar(bank, scalar::OWNER_POSITION_REVISION)?,
+        settlement_position_revision: read_scalar(bank, scalar::SETTLEMENT_POSITION_REVISION)?,
+        settlement_position_present: present == 1,
+        close_settlement_position: read_scalar(bank, scalar::POSITION_TABLE_COUNT)? == 0,
+        settlement_position_owner: read_identity(
+            bank,
+            scalar_count,
+            identity::SETTLEMENT_POSITION_OWNER,
+        )?,
+        rent_credit: read_identity(bank, scalar_count, identity::RENT_CREDIT)?,
+        rent_program: read_identity(bank, scalar_count, identity::RENT_PROGRAM)?,
+        observed_position_lamports: read_scalar(bank, scalar::OBSERVED_POSITION_LAMPORTS)?,
+        observed_admission_lamports: read_scalar(bank, scalar::OBSERVED_ADMISSION_LAMPORTS)?,
+        position_rent_principal: read_scalar(bank, scalar::POSITION_RENT_PRINCIPAL)?,
+        admission_rent_principal: read_scalar(bank, scalar::ADMISSION_RENT_PRINCIPAL)?,
+        custody_source: read_identity(bank, scalar_count, identity::CUSTODY_SOURCE)?,
+        custody_destination: read_identity(bank, scalar_count, identity::CUSTODY_DESTINATION)?,
+        custody_source_owner: read_identity(bank, scalar_count, identity::CUSTODY_SOURCE_OWNER)?,
+        custody_destination_owner: read_identity(
+            bank,
+            scalar_count,
+            identity::CUSTODY_DESTINATION_OWNER,
+        )?,
+        source_vault_context: read_identity(bank, scalar_count, identity::SOURCE_VAULT_CONTEXT)?,
+        destination_vault_context: read_identity(
+            bank,
+            scalar_count,
+            identity::DESTINATION_VAULT_CONTEXT,
+        )?,
+        mint: read_identity(bank, scalar_count, identity::MINT)?,
+        token_program: read_identity(bank, scalar_count, identity::TOKEN_PROGRAM)?,
+        payer: read_identity(bank, scalar_count, identity::PAYER)?,
+        rent_refund: read_identity(bank, scalar_count, identity::RENT_REFUND)?,
+        custody_expected_revision: read_scalar(bank, scalar::CUSTODY_EXPECTED_REVISION)?,
+        transfer_index: scalar_u16(scalar::TRANSFER_INDEX)?,
+        custody_replay_rent_principal: read_scalar(bank, scalar::CUSTODY_REPLAY_RENT_LAMPORTS)?,
+        custody_vault_rent_principal: read_scalar(bank, scalar::CUSTODY_VAULT_RENT_LAMPORTS)?,
+    })
+}
+
 /// Stable refusal from General Hot candidate projection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GeneralHotCandidateErrorV3 {
@@ -432,6 +520,43 @@ pub fn general_hot_candidate_bank_len_v3(outcome_count: u32) -> Result<usize> {
     usize::try_from(bytes).map_err(|_| GeneralHotCandidateErrorV3::ArithmeticOverflow)
 }
 
+/// Authenticated input-bank transport for a read-only General accelerator.
+///
+/// Implementations may read one contiguous inline request or copy from the
+/// exact ordered Trading-owned scratch pages. The destination is explicitly a
+/// non-authoritative workspace: callers may observe partial bytes on refusal,
+/// but no acknowledgement or state effect may be emitted until projection
+/// returns `Ok(())` for the complete Product-derived width.
+pub trait GeneralCandidateBankSourceV3 {
+    /// Copy the complete authenticated bank into one exact-width workspace.
+    fn copy_complete_bank_v3(&self, output: &mut [u8]) -> Result<()>;
+}
+
+/// Borrowed contiguous implementation used by inline accelerator requests and
+/// host-side differential tests.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ContiguousGeneralBankV3<'a> {
+    bytes: &'a [u8],
+}
+
+impl<'a> ContiguousGeneralBankV3<'a> {
+    /// Construct one exact borrowed bank source.
+    #[must_use]
+    pub const fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes }
+    }
+}
+
+impl GeneralCandidateBankSourceV3 for ContiguousGeneralBankV3<'_> {
+    fn copy_complete_bank_v3(&self, output: &mut [u8]) -> Result<()> {
+        if output.len() != self.bytes.len() {
+            return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
+        }
+        output.copy_from_slice(self.bytes);
+        Ok(())
+    }
+}
+
 /// Project one exact Consider or Freeze selection successor into a candidate bank.
 ///
 /// The selection evaluator produced `selection_after` failure-atomically. This
@@ -449,6 +574,47 @@ pub fn project_general_selection_candidate_v3<'a>(
     if !matches!(action, Action::Consider | Action::Freeze) {
         return Err(GeneralHotCandidateErrorV3::InvalidPlan);
     }
+    exact_candidate_capacities(outcome_count, authenticated_input, scratch, output)?;
+    project_general_selection_candidate_scratch_v3(
+        action,
+        selection_after,
+        outcome_count,
+        &ContiguousGeneralBankV3::new(authenticated_input),
+        scratch,
+    )?;
+    output.copy_from_slice(scratch);
+    Ok(ExecutionCandidateV2::Accepted(output))
+}
+
+/// Project Consider/Freeze into one non-authoritative complete workspace.
+///
+/// The source may be inline or scratch-page backed. The returned bytes remain
+/// non-authoritative until the accelerator has committed the whole-bank digest
+/// and emitted the exact request-selected acknowledgement chunk.
+pub fn project_general_selection_candidate_scratch_v3(
+    action: Action,
+    selection_after: &[u8],
+    outcome_count: u32,
+    source: &impl GeneralCandidateBankSourceV3,
+    candidate_scratch: &mut [u8],
+) -> Result<()> {
+    let required = general_hot_candidate_bank_len_v3(outcome_count)?;
+    if candidate_scratch.len() != required {
+        return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
+    }
+    source.copy_complete_bank_v3(candidate_scratch)?;
+    apply_general_selection_candidate_v3(action, selection_after, outcome_count, candidate_scratch)
+}
+
+fn apply_general_selection_candidate_v3(
+    action: Action,
+    selection_after: &[u8],
+    outcome_count: u32,
+    candidate: &mut [u8],
+) -> Result<()> {
+    if !matches!(action, Action::Consider | Action::Freeze) {
+        return Err(GeneralHotCandidateErrorV3::InvalidPlan);
+    }
     let selection = RuntimeSelectionCursorV2::decode(selection_after)
         .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
     let header = selection.header();
@@ -460,9 +626,7 @@ pub fn project_general_selection_candidate_v3<'a>(
     if header.outcome_count != outcome_count || header.phase != expected_phase {
         return Err(GeneralHotCandidateErrorV3::TailCountMismatch);
     }
-    exact_candidate_capacities(outcome_count, authenticated_input, scratch, output)?;
-    scratch.copy_from_slice(authenticated_input);
-    write_local_state_constants(scratch, GeneralLocalStateKindV3::Selection)?;
+    write_local_state_constants(candidate, GeneralLocalStateKindV3::Selection)?;
     for (coordinate, value) in [
         (scalar::ACTION, u64::from(action as u8)),
         (scalar::OUTCOME_COUNT, u64::from(outcome_count)),
@@ -495,7 +659,7 @@ pub fn project_general_selection_candidate_v3<'a>(
             u64::from(RuntimeSelectionLayoutV2::version_value()),
         ),
     ] {
-        write_scalar(scratch, coordinate, value)?;
+        write_scalar(candidate, coordinate, value)?;
     }
     let scalar_count = general_hot_scalar_count_v3(outcome_count)?;
     for (coordinate, value) in [
@@ -505,10 +669,9 @@ pub fn project_general_selection_candidate_v3<'a>(
         (identity::SELECTION_POLICY, header.policy_id),
         (identity::BEST_VERIFIED_DIGEST, header.best_verified_digest),
     ] {
-        write_identity(scratch, scalar_count, coordinate, value)?;
+        write_identity(candidate, scalar_count, coordinate, value)?;
     }
-    output.copy_from_slice(scratch);
-    Ok(ExecutionCandidateV2::Accepted(output))
+    Ok(())
 }
 
 /// Project settlement initialization and exact Custody replay/vault creation
@@ -521,6 +684,45 @@ pub fn project_general_initialize_candidate_v3<'a>(
     scratch: &mut [u8],
     output: &'a mut [u8],
 ) -> Result<ExecutionCandidateV2<'a>> {
+    exact_candidate_capacities(outcome_count, authenticated_input, scratch, output)?;
+    project_general_initialize_candidate_scratch_v3(
+        cursor_after,
+        outcome_count,
+        environment,
+        &ContiguousGeneralBankV3::new(authenticated_input),
+        scratch,
+    )?;
+    output.copy_from_slice(scratch);
+    Ok(ExecutionCandidateV2::Accepted(output))
+}
+
+/// Project settlement initialization into one non-authoritative complete bank.
+pub fn project_general_initialize_candidate_scratch_v3(
+    cursor_after: &[u8],
+    outcome_count: u32,
+    environment: GeneralHotEnvironmentV3,
+    source: &impl GeneralCandidateBankSourceV3,
+    candidate_scratch: &mut [u8],
+) -> Result<()> {
+    let required = general_hot_candidate_bank_len_v3(outcome_count)?;
+    if candidate_scratch.len() != required {
+        return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
+    }
+    source.copy_complete_bank_v3(candidate_scratch)?;
+    apply_general_initialize_candidate_v3(
+        cursor_after,
+        outcome_count,
+        environment,
+        candidate_scratch,
+    )
+}
+
+fn apply_general_initialize_candidate_v3(
+    cursor_after: &[u8],
+    outcome_count: u32,
+    environment: GeneralHotEnvironmentV3,
+    candidate: &mut [u8],
+) -> Result<()> {
     let cursor = SettlementCursorV2::decode(cursor_after)
         .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
     let header = cursor.header();
@@ -546,14 +748,10 @@ pub fn project_general_initialize_candidate_v3<'a>(
     {
         return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
     }
-    exact_candidate_capacities(outcome_count, authenticated_input, scratch, output)?;
     let scalar_count = general_hot_scalar_count_v3(outcome_count)?;
-    if read_scalar(authenticated_input, scalar::OUTCOME_COUNT)? != u64::from(outcome_count)
-        || read_identity(
-            authenticated_input,
-            scalar_count,
-            identity::PARENT_REQUEST_DIGEST,
-        )? != environment.parent_request_digest
+    if read_scalar(candidate, scalar::OUTCOME_COUNT)? != u64::from(outcome_count)
+        || read_identity(candidate, scalar_count, identity::PARENT_REQUEST_DIGEST)?
+            != environment.parent_request_digest
     {
         return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
     }
@@ -574,8 +772,7 @@ pub fn project_general_initialize_candidate_v3<'a>(
             return Err(GeneralHotCandidateErrorV3::InvalidCoordinate);
         }
     }
-    scratch.copy_from_slice(authenticated_input);
-    write_local_state_constants(scratch, GeneralLocalStateKindV3::Settlement)?;
+    write_local_state_constants(candidate, GeneralLocalStateKindV3::Settlement)?;
     for (coordinate, value) in [
         (
             scalar::ACTION,
@@ -635,7 +832,7 @@ pub fn project_general_initialize_candidate_v3<'a>(
             header.terminal_coordinate,
         ),
     ] {
-        write_scalar(scratch, coordinate, value)?;
+        write_scalar(candidate, coordinate, value)?;
     }
     for item in 0..outcome_count {
         let base = GENERAL_HOT_COMMON_SCALARS_V3
@@ -645,13 +842,13 @@ pub fn project_general_initialize_candidate_v3<'a>(
             )
             .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?;
         write_scalar(
-            scratch,
+            candidate,
             base.checked_add(item_scalar::OUTCOME)
                 .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
             u64::from(item),
         )?;
         write_scalar(
-            scratch,
+            candidate,
             base.checked_add(item_scalar::CURSOR_INVENTORY)
                 .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
             cursor
@@ -689,10 +886,9 @@ pub fn project_general_initialize_candidate_v3<'a>(
         (identity::RENT_REFUND, environment.rent_refund),
         (identity::GENERAL_ROOT, environment.general_root),
     ] {
-        write_identity(scratch, scalar_count, coordinate, value)?;
+        write_identity(candidate, scalar_count, coordinate, value)?;
     }
-    output.copy_from_slice(scratch);
-    Ok(ExecutionCandidateV2::Accepted(output))
+    Ok(())
 }
 
 /// Project one complete General plan without discarding authenticated inputs.
@@ -709,6 +905,49 @@ pub fn project_general_hot_candidate_v3<'a>(
     scratch: &mut [u8],
     output: &'a mut [u8],
 ) -> Result<ExecutionCandidateV2<'a>> {
+    exact_candidate_capacities(outcome_count, authenticated_input, scratch, output)?;
+    project_general_hot_candidate_scratch_v3(
+        effect_plan,
+        cursor_after,
+        outcome_count,
+        environment,
+        &ContiguousGeneralBankV3::new(authenticated_input),
+        scratch,
+    )?;
+    output.copy_from_slice(scratch);
+    Ok(ExecutionCandidateV2::Accepted(output))
+}
+
+/// Project Collect/Materialize/Distribute/Close into one complete scratch bank.
+pub fn project_general_hot_candidate_scratch_v3(
+    effect_plan: &[u8],
+    cursor_after: &[u8],
+    outcome_count: u32,
+    environment: GeneralHotEnvironmentV3,
+    source: &impl GeneralCandidateBankSourceV3,
+    candidate_scratch: &mut [u8],
+) -> Result<()> {
+    let required = general_hot_candidate_bank_len_v3(outcome_count)?;
+    if candidate_scratch.len() != required {
+        return Err(GeneralHotCandidateErrorV3::InvalidCapacity);
+    }
+    source.copy_complete_bank_v3(candidate_scratch)?;
+    apply_general_hot_candidate_v3(
+        effect_plan,
+        cursor_after,
+        outcome_count,
+        environment,
+        candidate_scratch,
+    )
+}
+
+fn apply_general_hot_candidate_v3(
+    effect_plan: &[u8],
+    cursor_after: &[u8],
+    outcome_count: u32,
+    environment: GeneralHotEnvironmentV3,
+    candidate: &mut [u8],
+) -> Result<()> {
     let plan = RuntimeSettlementEffectPlanV2::decode(effect_plan)
         .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
     let cursor = SettlementCursorV2::decode(cursor_after)
@@ -720,11 +959,10 @@ pub fn project_general_hot_candidate_v3<'a>(
     {
         return Err(GeneralHotCandidateErrorV3::TailCountMismatch);
     }
-    exact_candidate_capacities(outcome_count, authenticated_input, scratch, output)?;
     let input_scalar_count = general_hot_scalar_count_v3(outcome_count)?;
-    if read_scalar(authenticated_input, scalar::OUTCOME_COUNT)? != u64::from(outcome_count)
+    if read_scalar(candidate, scalar::OUTCOME_COUNT)? != u64::from(outcome_count)
         || read_identity(
-            authenticated_input,
+            candidate,
             input_scalar_count,
             identity::PARENT_REQUEST_DIGEST,
         )? != environment.parent_request_digest
@@ -736,8 +974,7 @@ pub fn project_general_hot_candidate_v3<'a>(
         plan.header().custody_active,
         environment,
     )?;
-    scratch.copy_from_slice(authenticated_input);
-    write_local_state_constants(scratch, GeneralLocalStateKindV3::Settlement)?;
+    write_local_state_constants(candidate, GeneralLocalStateKindV3::Settlement)?;
     let header = plan.header();
     let position = position_geometry(header.action, header.claims_active, environment, header)?;
     let custody = custody_geometry(
@@ -945,7 +1182,7 @@ pub fn project_general_hot_candidate_v3<'a>(
             cursor_header.terminal_coordinate,
         ),
     ] {
-        write_scalar(scratch, coordinate, value)?;
+        write_scalar(candidate, coordinate, value)?;
     }
     for item in 0..outcome_count {
         let base = GENERAL_HOT_COMMON_SCALARS_V3
@@ -955,7 +1192,7 @@ pub fn project_general_hot_candidate_v3<'a>(
             )
             .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?;
         write_scalar(
-            scratch,
+            candidate,
             base.checked_add(item_scalar::OUTCOME)
                 .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
             u64::from(item),
@@ -964,13 +1201,13 @@ pub fn project_general_hot_candidate_v3<'a>(
             .quantity(item)
             .map_err(|_| GeneralHotCandidateErrorV3::InvalidPlan)?;
         write_scalar(
-            scratch,
+            candidate,
             base.checked_add(item_scalar::QUANTITY)
                 .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
             quantity,
         )?;
         write_scalar(
-            scratch,
+            candidate,
             base.checked_add(item_scalar::CURSOR_INVENTORY)
                 .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
             cursor
@@ -992,7 +1229,7 @@ pub fn project_general_hot_candidate_v3<'a>(
             ),
         ] {
             write_scalar(
-                scratch,
+                candidate,
                 base.checked_add(coordinate)
                     .ok_or(GeneralHotCandidateErrorV3::ArithmeticOverflow)?,
                 if direction == 0 { 0 } else { quantity },
@@ -1057,10 +1294,9 @@ pub fn project_general_hot_candidate_v3<'a>(
         (identity::POSITION_ONE_OWNER, position.one_owner),
         (identity::GENERAL_ROOT, environment.general_root),
     ] {
-        write_identity(scratch, scalar_count, coordinate, value)?;
+        write_identity(candidate, scalar_count, coordinate, value)?;
     }
-    output.copy_from_slice(scratch);
-    Ok(ExecutionCandidateV2::Accepted(output))
+    Ok(())
 }
 
 fn exact_candidate_capacities(
