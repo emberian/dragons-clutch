@@ -30,7 +30,7 @@ use dclutch_series_v3_kernel::{
     },
     request::{SERIES_ACTION_HEADER_BYTES_V3, SeriesActionRequestV3, SeriesActionV3},
 };
-use dclutch_trading_sbf::hot_v3::{
+use dclutch_trading_sbf::shadow_accelerator_auth_v4::{
     AuthenticatedShadowAcceleratorInvocationV4, authenticate_shadow_accelerator_invocation_v4,
 };
 use solana_program::{
