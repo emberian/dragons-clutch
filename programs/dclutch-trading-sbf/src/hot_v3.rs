@@ -12,31 +12,30 @@ extern crate alloc;
 use alloc::{vec, vec::Vec};
 
 use dclutch_account_profile_contract::{
-    AccountObservationV1,
     lifecycle_v3::{
-        AuthenticatedRentCreditV3, AuthenticatedRentMinimumV3, LifecycleContextV3,
-        LifecycleOperationV3, LifecycleRegistersV3,
-        SCHEMA_RELEASE_ID as STATE_LIFECYCLE_POLICY_SCHEMA_ID_V3, SeedValueV3,
-        StateLifecyclePlanV3, StateLifecyclePolicyV3, plan_lifecycle,
+        plan_lifecycle, AuthenticatedRentCreditV3, AuthenticatedRentMinimumV3, LifecycleContextV3,
+        LifecycleOperationV3, LifecycleRegistersV3, SeedValueV3, StateLifecyclePlanV3,
+        StateLifecyclePolicyV3, SCHEMA_RELEASE_ID as STATE_LIFECYCLE_POLICY_SCHEMA_ID_V3,
     },
     v2::{
-        AccountProfileV2, ProjectionRegistersV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2,
         derive_effect_permissions, project_atomic as project_accounts_atomic,
-        project_tail_count_atomic,
+        project_tail_count_atomic, AccountProfileV2, ProjectionRegistersV2,
+        SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2,
     },
+    AccountObservationV1,
 };
-use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
+use dclutch_capability_contract::{CapabilityManifestV1, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1};
 use dclutch_capability_program_contract::{
-    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
     hot_v3::{
-        HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
-        HOT_ACTIVATION_CACHE_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CONFIG_STAGING_ACCOUNT_V3,
-        HOT_CORE_PROGRAM_ACCOUNT_V3, HOT_CORE_PROGRAMDATA_ACCOUNT_V3,
-        HOT_DESCRIPTOR_RAW_ACCOUNT_V3, HOT_DESCRIPTOR_STAGING_ACCOUNT_V3,
-        HOT_EFFECT_RAW_ACCOUNT_V3, HOT_EFFECT_STAGING_ACCOUNT_V3, HOT_EXECUTION_MAGIC_V3,
-        HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
-        HOT_LIFECYCLE_RAW_ACCOUNT_V3, HOT_LIFECYCLE_STAGING_ACCOUNT_V3,
-        HOT_MANIFEST_RAW_ACCOUNT_V3, HOT_MANIFEST_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3,
+        HotExecutionAckV3, HotExecutionEnvelopeV3, HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
+        HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3, HOT_ACTIVATION_CACHE_ACCOUNT_V3,
+        HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CONFIG_STAGING_ACCOUNT_V3, HOT_CORE_PROGRAMDATA_ACCOUNT_V3,
+        HOT_CORE_PROGRAM_ACCOUNT_V3, HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
+        HOT_DESCRIPTOR_STAGING_ACCOUNT_V3, HOT_EFFECT_RAW_ACCOUNT_V3,
+        HOT_EFFECT_STAGING_ACCOUNT_V3, HOT_EXECUTION_MAGIC_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
+        HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3, HOT_LIFECYCLE_RAW_ACCOUNT_V3,
+        HOT_LIFECYCLE_STAGING_ACCOUNT_V3, HOT_MANIFEST_RAW_ACCOUNT_V3,
+        HOT_MANIFEST_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3,
         HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3, HOT_PORTFOLIO_RAW_ACCOUNT_V3,
         HOT_PORTFOLIO_STAGING_ACCOUNT_V3, HOT_PRODUCT_RAW_ACCOUNT_V3,
         HOT_PRODUCT_STAGING_ACCOUNT_V3, HOT_PROGRAM_SET_RAW_ACCOUNT_V3,
@@ -45,44 +44,45 @@ use dclutch_capability_program_contract::{
         HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3, HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3,
         HOT_RESULT_DOMAIN_STAGING_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3,
         HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3, HOT_STRATEGY_RAW_ACCOUNT_V3,
-        HOT_STRATEGY_STAGING_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
-        HOT_TRADING_PROGRAMDATA_ACCOUNT_V3, HOT_TRANSITION_RAW_ACCOUNT_V3,
-        HOT_TRANSITION_STAGING_ACCOUNT_V3, HotExecutionAckV3, HotExecutionEnvelopeV3,
+        HOT_STRATEGY_STAGING_ACCOUNT_V3, HOT_TRADING_PROGRAMDATA_ACCOUNT_V3,
+        HOT_TRADING_PROGRAM_ACCOUNT_V3, HOT_TRANSITION_RAW_ACCOUNT_V3,
+        HOT_TRANSITION_STAGING_ACCOUNT_V3,
     },
-    set_v1::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V1, CapabilityProgramSetV1},
+    set_v1::{CapabilityProgramSetV1, CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V1},
     v3::{
-        CAPABILITY_PROGRAM_V3_BYTES, CapabilityProgramV3, SCHEMA_RELEASE_ID as PROGRAM_SCHEMA_ID_V3,
+        CapabilityProgramV3, CAPABILITY_PROGRAM_V3_BYTES, SCHEMA_RELEASE_ID as PROGRAM_SCHEMA_ID_V3,
     },
+    CapabilityRootHeaderV1, CAPABILITY_ROOT_HEADER_BYTES_V1,
 };
 use dclutch_effect_kernel::{
     v2::{AccountInput, AccountPermission, FixedRole},
     v3::{
-        ProgramV3 as EffectProgramV3, ProjectionV3, ResolvedEffectV3,
-        SCHEMA_RELEASE_ID as EFFECT_SCHEMA_ID_V3, project_atomic as project_effects_atomic,
+        project_atomic as project_effects_atomic, ProgramV3 as EffectProgramV3, ProjectionV3,
+        ResolvedEffectV3, SCHEMA_RELEASE_ID as EFFECT_SCHEMA_ID_V3,
     },
 };
 use dclutch_execution_strategy_contract::v2::{
-    EXECUTION_STRATEGY_PROGRAM_BYTES_V2, ExecutionStrategyProgramV2, StrategyDispositionV2,
+    ExecutionStrategyProgramV2, StrategyDispositionV2, EXECUTION_STRATEGY_PROGRAM_BYTES_V2,
 };
 use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
 use dclutch_product_runtime_v2::ContentId as ProductContentId;
 use dclutch_product_runtime_v2_svm_reader::{
-    FinalizedRecordFrameV2 as ProductRecordFrameV2, ProductRuntimeFrameV2,
-    authenticate_product_runtime_v2,
+    authenticate_product_runtime_v2, FinalizedRecordFrameV2 as ProductRecordFrameV2,
+    ProductRuntimeFrameV2,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::ACTIVATION_PDA_DOMAIN_V1;
 use dclutch_registry_svm::{AuthenticatedRoleReceiptV1, RegistryInstructionV1};
 use dclutch_release_set_contract::ExecutionRoleV1;
-use dclutch_rent_contract::{RENT_CREDIT_BYTES_V1, RentCreditV1};
+use dclutch_rent_contract::{RentCreditV1, RENT_CREDIT_BYTES_V1};
 use dclutch_request_profile_contract::{
-    ProjectionRegistersV1, RequestProfileV1, SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1,
     project_atomic as project_request_atomic,
-    v2::{NativeSignatureRegistersV1, REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID, RequestProfileV2},
+    v2::{NativeSignatureRegistersV1, RequestProfileV2, REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID},
+    ProjectionRegistersV1, RequestProfileV1, SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1,
 };
 use dclutch_transition_vm::v3::{
-    ProgramV3 as TransitionProgramV3, RegisterInput, RegisterOutput,
-    SCHEMA_RELEASE_ID as TRANSITION_SCHEMA_ID_V3, execute_fold_atomic,
+    execute_fold_atomic, ProgramV3 as TransitionProgramV3, RegisterInput, RegisterOutput,
+    SCHEMA_RELEASE_ID as TRANSITION_SCHEMA_ID_V3,
 };
 use solana_program::{
     account_info::AccountInfo,
@@ -98,30 +98,30 @@ use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign, transfer as system_transfer};
 
 use crate::{
-    TradingSbfError,
     core_composition_v3::{
-        CoreCompositionParentV3, execute_core_route_v3, preflight_core_route_v3,
+        execute_core_route_v3, preflight_core_route_v3, CoreCompositionParentV3,
     },
     dispatch::TradingFamilyContextV1,
     execution_strategy_v2::{
-        ADMITTED_AOT_STRATEGY_ACCOUNT_COUNT_V2, INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2,
-        SHADOW_AOT_STRATEGY_ACCOUNT_COUNT_V2, authenticate_execution_strategy_v2,
+        authenticate_execution_strategy_v2, ADMITTED_AOT_STRATEGY_ACCOUNT_COUNT_V2,
+        INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2, SHADOW_AOT_STRATEGY_ACCOUNT_COUNT_V2,
     },
     native_signature::{
         authenticate_and_seed_native_signatures, authenticate_current_top_level_instruction,
     },
+    TradingSbfError,
 };
 
 #[cfg(feature = "families")]
 use crate::resolution_composition_v3::{
-    ResolutionCompositionParentV3, execute_resolution_route_v3, preflight_resolution_route_v3,
+    execute_resolution_route_v3, preflight_resolution_route_v3, ResolutionCompositionParentV3,
 };
 
 #[cfg(feature = "families")]
 use crate::{
-    claims_composition_v3::{ClaimsRouteReceiptV3, execute_claims_route_v3},
+    claims_composition_v3::{execute_claims_route_v3, ClaimsRouteReceiptV3},
     custody_composition_v3::{
-        CustodyCompositionParentV3, execute_custody_route_v3, preflight_custody_route_v3,
+        execute_custody_route_v3, preflight_custody_route_v3, CustodyCompositionParentV3,
     },
 };
 #[cfg(feature = "families")]
@@ -1745,7 +1745,10 @@ fn mark_local_mutation(
             ..
         } => [Some(source), Some(destination)],
         ResolvedEffectV3::WriteScalar { account, .. }
-        | ResolvedEffectV3::WriteIdentity { account, .. } => [Some(account), None],
+        | ResolvedEffectV3::WriteIdentity { account, .. }
+        | ResolvedEffectV3::WriteU8 { account, .. }
+        | ResolvedEffectV3::WriteU16 { account, .. }
+        | ResolvedEffectV3::WriteU32 { account, .. } => [Some(account), None],
         ResolvedEffectV3::RequireLamportsEq { .. } | ResolvedEffectV3::WriteRequest { .. } => {
             [None, None]
         }
@@ -2111,6 +2114,15 @@ fn require_root_write_is_state_only(
         }
         | ResolvedEffectV3::WriteIdentity {
             account, offset, ..
+        }
+        | ResolvedEffectV3::WriteU8 {
+            account, offset, ..
+        }
+        | ResolvedEffectV3::WriteU16 {
+            account, offset, ..
+        }
+        | ResolvedEffectV3::WriteU32 {
+            account, offset, ..
         } => (account, offset),
         _ => return Ok(()),
     };
@@ -2215,6 +2227,33 @@ fn commit_data_effect(
             account,
             usize::try_from(offset).map_err(|_| TradingSbfError::Commit)?,
             Vec::from(value),
+        ),
+        ResolvedEffectV3::WriteU8 {
+            account,
+            offset,
+            value,
+        } => (
+            account,
+            usize::try_from(offset).map_err(|_| TradingSbfError::Commit)?,
+            Vec::from(value.to_le_bytes()),
+        ),
+        ResolvedEffectV3::WriteU16 {
+            account,
+            offset,
+            value,
+        } => (
+            account,
+            usize::try_from(offset).map_err(|_| TradingSbfError::Commit)?,
+            Vec::from(value.to_le_bytes()),
+        ),
+        ResolvedEffectV3::WriteU32 {
+            account,
+            offset,
+            value,
+        } => (
+            account,
+            usize::try_from(offset).map_err(|_| TradingSbfError::Commit)?,
+            Vec::from(value.to_le_bytes()),
         ),
         _ => return Ok(()),
     };
@@ -2526,6 +2565,8 @@ pub fn is_hot_execution_v3(instruction_data: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use alloc::boxed::Box;
+
     use super::*;
     use dclutch_account_profile_contract::lifecycle_v3::CreateStatePlanV3;
 
@@ -2571,6 +2612,71 @@ mod tests {
             require_root_write_is_state_only(ordinary_account, &[0, 1]),
             Ok(())
         );
+
+        let narrow_root_header = ResolvedEffectV3::WriteU8 {
+            account: 0,
+            offset: u32::try_from(CAPABILITY_ROOT_HEADER_BYTES_V1 - 1).expect("offset"),
+            value: 1,
+        };
+        assert!(require_root_write_is_state_only(narrow_root_header, &[0, 1]).is_err());
+    }
+
+    #[test]
+    fn typed_writes_initialize_zeroed_lifecycle_state_exactly() {
+        let root_key = Box::leak(Box::new(Pubkey::new_unique()));
+        let state_key = Box::leak(Box::new(Pubkey::new_unique()));
+        let owner = Box::leak(Box::new(Pubkey::new_unique()));
+        let root_lamports = Box::leak(Box::new(1_u64));
+        let state_lamports = Box::leak(Box::new(1_u64));
+        let root_data = Box::leak(Vec::new().into_boxed_slice());
+        let state_data = Box::leak(vec![0_u8; 16].into_boxed_slice());
+        let root = AccountInfo::new(
+            root_key,
+            false,
+            true,
+            root_lamports,
+            root_data,
+            owner,
+            false,
+        );
+        let state = AccountInfo::new(
+            state_key,
+            false,
+            true,
+            state_lamports,
+            state_data,
+            owner,
+            false,
+        );
+        let accounts = [&root, &state];
+        let aliases = [0, 1];
+        for effect in [
+            ResolvedEffectV3::WriteU8 {
+                account: 1,
+                offset: 0,
+                value: 0xa1,
+            },
+            ResolvedEffectV3::WriteU16 {
+                account: 1,
+                offset: 1,
+                value: 0xb2c3,
+            },
+            ResolvedEffectV3::WriteU32 {
+                account: 1,
+                offset: 3,
+                value: 0xd4e5_f607,
+            },
+        ] {
+            commit_data_effect(effect, &accounts, &aliases, false).expect("typed write");
+        }
+        let data = state.try_borrow_data().expect("state data");
+        assert_eq!(data.get(0), Some(&0xa1));
+        assert_eq!(data.get(1..3), Some(0xb2c3_u16.to_le_bytes().as_slice()));
+        assert_eq!(
+            data.get(3..7),
+            Some(0xd4e5_f607_u32.to_le_bytes().as_slice())
+        );
+        assert!(data.get(7..).expect("tail").iter().all(|byte| *byte == 0));
     }
 
     #[test]
