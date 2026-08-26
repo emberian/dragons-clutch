@@ -42,8 +42,7 @@ use dclutch_market_core_codec::{
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_rent_contract::RentCreditV1;
 use dclutch_product_runtime_v2_svm_reader::{
-    FinalizedRecordFrameV2, ProductRuntimeFrameV3,
-    authenticate_content_addressed_product_runtime_v3,
+    FinalizedRecordFrameV2, authenticate_product_basis_v3,
 };
 use dclutch_token_svm::{AccountState, TokenAccount, TokenProgram};
 use dclutch_series_v3_kernel::{
@@ -879,26 +878,13 @@ fn authenticate_product_facts<'accounts, 'info>(
     prepared: &PreparedFound,
     rent: &Rent,
 ) -> Result<ProductFacts, CoreSbfError> {
-    let product = authenticate_content_addressed_product_runtime_v3(
+    let product = authenticate_product_basis_v3(
         frame.found.registry_program.key,
         rent,
-        ProductRuntimeFrameV3 {
-            product: FinalizedRecordFrameV2 {
-                raw: frame.found.product_raw,
-                staging: frame.found.product_staging,
-            },
-            result_domain: FinalizedRecordFrameV2 {
-                raw: frame.found.result_domain_raw,
-                staging: frame.found.result_domain_staging,
-            },
-            portfolio: FinalizedRecordFrameV2 {
-                raw: frame.found.portfolio_raw,
-                staging: frame.found.portfolio_staging,
-            },
-            linked_basis: FinalizedRecordFrameV2 {
-                raw: suffix.linked_basis_raw,
-                staging: suffix.linked_basis_staging,
-            },
+        *prepared.runtime,
+        FinalizedRecordFrameV2 {
+            raw: suffix.linked_basis_raw,
+            staging: suffix.linked_basis_staging,
         },
     )
     .map_err(|_| CoreSbfError::Reference)?;

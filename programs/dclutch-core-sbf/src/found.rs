@@ -27,6 +27,8 @@ use solana_program::{
 };
 use solana_sdk_ids::system_program;
 use solana_system_interface::instruction::{allocate, assign, transfer};
+use alloc::boxed::Box;
+use dclutch_product_runtime_v2_svm_reader::AuthenticatedProductRuntimeV2;
 
 use crate::{
     CoreSbfError,
@@ -69,6 +71,7 @@ pub(crate) struct PreparedFound {
     pub(crate) product_record_id: [u8; 32],
     pub(crate) product_id: [u8; 32],
     pub(crate) product: Product,
+    pub(crate) runtime: Box<AuthenticatedProductRuntimeV2>,
     pub(crate) resolution_policy_id: [u8; 32],
     pub(crate) manifest_id: [u8; 32],
     pub(crate) release_set_id: [u8; 32],
@@ -96,7 +99,7 @@ pub(crate) fn project(
     }
     let frame = FoundAccounts::parse_project(program_id, accounts)?;
     let rent = Rent::from_account_info(frame.rent).map_err(|_| CoreSbfError::Creation)?;
-    let prepared = prepare(program_id, &frame, request, &rent)?;
+    let prepared = prepare_boxed(program_id, &frame, request, &rent)?;
     let receipt = ProjectFoundReceiptV1::new(
         request.market,
         request.generation,
@@ -115,6 +118,16 @@ pub(crate) fn project(
     let bytes = receipt.encode().map_err(|_| CoreSbfError::Transition)?;
     set_return_data(&bytes);
     Ok(())
+}
+
+#[inline(never)]
+fn prepare_boxed(
+    program_id: &Pubkey,
+    frame: &FoundAccounts<'_, '_>,
+    request: Request,
+    rent: &Rent,
+) -> Result<Box<PreparedFound>, solana_program::program_error::ProgramError> {
+    Ok(Box::new(prepare(program_id, frame, request, rent)?))
 }
 
 #[inline(never)]
@@ -166,7 +179,7 @@ pub(crate) fn prepare(
     // has been authenticated directly from that now-immutable Registry observation.
     let release_set_id = observe_release_set_id(frame)?;
     authenticate_immutable_core_release(frame, release_set_id)?;
-    let references = authenticate_references(frame, rent, release_set_id)?;
+    let (references, runtime) = authenticate_references(frame, rent, release_set_id)?;
     authenticate_rent_credit(frame)?;
     let admission = authenticate_role(
         frame.activation_cache,
@@ -186,6 +199,7 @@ pub(crate) fn prepare(
         product_record_id: references.product_record_id,
         product_id: references.product_id,
         product: references.product,
+        runtime,
         resolution_policy_id: references.resolution_policy_id,
         manifest_id: references.manifest_id,
         release_set_id: references.release_set_id,
@@ -284,7 +298,7 @@ fn authenticate_references(
     frame: &FoundAccounts<'_, '_>,
     rent: &Rent,
     expected_release_set_id: [u8; 32],
-) -> Result<References, CoreSbfError> {
+) -> Result<(References, Box<AuthenticatedProductRuntimeV2>), CoreSbfError> {
     let registry = frame.registry_program.key;
     let realm_data = frame
         .realm_raw
@@ -303,7 +317,7 @@ fn authenticate_references(
     )?;
     let realm = RealmV1::decode(realm_bytes).map_err(|_| CoreSbfError::Reference)?;
 
-    let runtime = authenticate_product_runtime_v2(
+    let runtime = Box::new(authenticate_product_runtime_v2(
         registry,
         rent,
         ProductRuntimeFrameV2 {
@@ -320,10 +334,10 @@ fn authenticate_references(
                 staging: frame.portfolio_staging,
             },
         },
-    )?;
+    )?);
     let product_record_id = runtime.product_record.content_digest.to_bytes();
     let product_id = runtime.product_id.to_bytes();
-    let product = project_core_product_v2(runtime)?;
+    let product = project_core_product_v2(*runtime)?;
 
     let resolution_data = frame
         .resolution_raw
@@ -380,7 +394,7 @@ fn authenticate_references(
     }
     ExecutionReleaseSetV1::decode(release_bytes).map_err(|_| CoreSbfError::Reference)?;
 
-    Ok(References {
+    Ok((References {
         realm_id,
         realm,
         product_record_id,
@@ -389,7 +403,7 @@ fn authenticate_references(
         resolution_policy_id,
         manifest_id,
         release_set_id,
-    })
+    }, runtime))
 }
 
 #[inline(never)]
