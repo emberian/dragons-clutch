@@ -14,14 +14,18 @@ use std::{
 
 use dclutch_release_set_contract::{ExecutionReleaseSetV1, ProtocolInfrastructureProfileV1};
 use dclutch_release_tool::{
-    BuildMetadataV1, CheckedCapabilityExecutionV1, CheckedExecutionReleaseSetV1,
-    CheckedInfrastructureV1, CheckedReleaseV1, ReleaseEvidenceV1,
+    BuildMetadataV1, CHECKED_TRANSLATION_VALIDATION_INPUT_COUNT_V1,
+    CHECKED_TRANSLATION_VALIDATION_LABELS_V1, CheckedCapabilityExecutionV1,
+    CheckedExecutionReleaseSetV1, CheckedInfrastructureV1, CheckedReleaseV1,
+    CheckedTranslationValidationV1, ReleaseEvidenceV1, TranslationValidationEvidenceV1,
     build_checked_capability_execution_from_bytes_v1, build_checked_execution_release_set,
-    build_checked_infrastructure_v1, build_checked_release, verify_checked_capability_execution_v1,
-    verify_checked_execution_release_set, verify_checked_infrastructure_v1, verify_checked_release,
+    build_checked_infrastructure_v1, build_checked_release, build_checked_translation_validation,
+    verify_checked_capability_execution_v1, verify_checked_execution_release_set,
+    verify_checked_infrastructure_v1, verify_checked_release,
+    verify_checked_translation_validation,
 };
 
-const USAGE: &str = "usage:\n  dclutch-release-tool create --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify --manifest PATH --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH [--text-out PATH]\n  dclutch-release-tool inspect --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-set --release-set PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-set --manifest PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH [--text-out PATH]\n  dclutch-release-tool inspect-set --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-infrastructure --execution PATH --profile PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-infrastructure --manifest PATH --execution PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH [--text-out PATH]\n  dclutch-release-tool inspect-infrastructure --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-capability-execution --descriptor PATH --strategy PATH --certificate PATH [--admission PATH] --accelerator PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-capability-execution --manifest PATH --accelerator PATH [--text-out PATH]\n  dclutch-release-tool inspect-capability-execution --manifest PATH [--text-out PATH]";
+const USAGE: &str = "usage:\n  dclutch-release-tool create --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify --manifest PATH --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH [--text-out PATH]\n  dclutch-release-tool inspect --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-set --release-set PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-set --manifest PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH [--text-out PATH]\n  dclutch-release-tool inspect-set --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-infrastructure --execution PATH --profile PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-infrastructure --manifest PATH --execution PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH [--text-out PATH]\n  dclutch-release-tool inspect-infrastructure --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-capability-execution --descriptor PATH --strategy PATH --certificate PATH [--admission PATH] --accelerator PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-capability-execution --manifest PATH --accelerator PATH [--text-out PATH]\n  dclutch-release-tool inspect-capability-execution --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-translation --evidence-dir PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-translation --manifest PATH --evidence-dir PATH [--text-out PATH]\n  dclutch-release-tool inspect-translation --manifest PATH [--text-out PATH]";
 
 fn main() -> ExitCode {
     match run() {
@@ -58,7 +62,56 @@ fn run() -> Result<(), String> {
         "create-capability-execution" => create_capability_execution(&mut flags),
         "verify-capability-execution" => verify_capability_execution(&mut flags),
         "inspect-capability-execution" => inspect_capability_execution(&mut flags),
+        "create-translation" => create_translation(&mut flags),
+        "verify-translation" => verify_translation(&mut flags),
+        "inspect-translation" => inspect_translation(&mut flags),
         _ => Err(format!("unknown command: {command}")),
+    }
+}
+
+fn create_translation(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), String> {
+    let output = required(flags, "--out")?;
+    let text_output = flags.remove("--text-out");
+    let evidence = TranslationEvidenceFiles::load(required(flags, "--evidence-dir")?)?;
+    require_no_flags(flags)?;
+    let result =
+        build_checked_translation_validation(evidence.evidence()).map_err(format_release_error)?;
+    fs::write(&output, result.encode())
+        .map_err(|error| format!("failed writing {}: {error}", output.display()))?;
+    emit_translation_text(result, text_output)
+}
+
+fn verify_translation(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), String> {
+    let manifest = read_bytes(required(flags, "--manifest")?)?;
+    let text_output = flags.remove("--text-out");
+    let evidence = TranslationEvidenceFiles::load(required(flags, "--evidence-dir")?)?;
+    require_no_flags(flags)?;
+    let result = verify_checked_translation_validation(&manifest, evidence.evidence())
+        .map_err(format_release_error)?;
+    emit_translation_text(result, text_output)
+}
+
+fn inspect_translation(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), String> {
+    let manifest = read_bytes(required(flags, "--manifest")?)?;
+    let text_output = flags.remove("--text-out");
+    require_no_flags(flags)?;
+    let result = CheckedTranslationValidationV1::decode(&manifest).map_err(format_release_error)?;
+    emit_translation_text(result, text_output)
+}
+
+fn emit_translation_text(
+    translation: CheckedTranslationValidationV1,
+    output: Option<PathBuf>,
+) -> Result<(), String> {
+    let text = translation.render_text().map_err(format_release_error)?;
+    if let Some(path) = output {
+        fs::write(&path, text)
+            .map_err(|error| format!("failed writing {}: {error}", path.display()))
+    } else {
+        io::stdout()
+            .lock()
+            .write_all(text.as_bytes())
+            .map_err(|error| format!("failed writing stdout: {error}"))
     }
 }
 
@@ -333,6 +386,57 @@ struct EvidenceFiles {
 
 struct CheckedManifestFiles {
     manifests: [Vec<u8>; 5],
+}
+
+struct TranslationEvidenceFiles {
+    inputs: [Vec<u8>; CHECKED_TRANSLATION_VALIDATION_INPUT_COUNT_V1],
+}
+
+impl TranslationEvidenceFiles {
+    fn load(directory: PathBuf) -> Result<Self, String> {
+        let mut inputs = Vec::with_capacity(CHECKED_TRANSLATION_VALIDATION_INPUT_COUNT_V1);
+        for label in CHECKED_TRANSLATION_VALIDATION_LABELS_V1 {
+            inputs.push(read_bytes(directory.join(format!("{label}.bin")))?);
+        }
+        let inputs = inputs.try_into().map_err(|values: Vec<Vec<u8>>| {
+            format!(
+                "translation evidence directory produced {} inputs, expected {}",
+                values.len(),
+                CHECKED_TRANSLATION_VALIDATION_INPUT_COUNT_V1,
+            )
+        })?;
+        Ok(Self { inputs })
+    }
+
+    fn evidence(&self) -> TranslationValidationEvidenceV1<'_> {
+        TranslationValidationEvidenceV1 {
+            corpus: &self.inputs[0],
+            lean_sources: [
+                &self.inputs[1],
+                &self.inputs[2],
+                &self.inputs[3],
+                &self.inputs[4],
+                &self.inputs[5],
+                &self.inputs[6],
+                &self.inputs[7],
+                &self.inputs[8],
+            ],
+            rust_sources: [
+                &self.inputs[9],
+                &self.inputs[10],
+                &self.inputs[11],
+                &self.inputs[12],
+                &self.inputs[13],
+                &self.inputs[14],
+                &self.inputs[15],
+                &self.inputs[16],
+            ],
+            validator_result: &self.inputs[17],
+            rustc_verbose: &self.inputs[18],
+            lake_version: &self.inputs[19],
+            validator_cargo_lock: &self.inputs[20],
+        }
+    }
 }
 
 impl CheckedManifestFiles {

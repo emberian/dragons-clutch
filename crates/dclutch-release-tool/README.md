@@ -169,6 +169,34 @@ immutable executable artifact without adding a second runtime authority. The
 translation-validation or proof obligation for that exact artifact remains a
 separately named boundary.
 
+## Direct translation-validation evidence
+
+`tools/direct-translation-validator/check.sh <evidence-dir>` emits 21 exact
+inputs under the stable labels owned by `CheckedTranslationValidationV1`.
+The release tool hashes and checks that complete directory rather than parsing
+human-readable digest output:
+
+```text
+dclutch-release-tool create-translation \
+  --evidence-dir <direct-translation-evidence> \
+  --out <direct-translation.checked> \
+  [--text-out <direct-translation.txt>]
+
+dclutch-release-tool verify-translation \
+  --manifest <direct-translation.checked> \
+  --evidence-dir <direct-translation-evidence> \
+  [--text-out <direct-translation.txt>]
+
+dclutch-release-tool inspect-translation \
+  --manifest <direct-translation.checked> \
+  [--text-out <direct-translation.txt>]
+```
+
+The directory must contain exactly named `<label>.bin` inputs for the labels
+shown by `inspect-translation`. This is finite-corpus three-way differential
+evidence. It is not universal Rust refinement, an SBF artifact proof, or an
+Agave/runtime proof.
+
 ## Metadata V1
 
 The metadata input is canonical UTF-8 text. Lines must occur in this exact
