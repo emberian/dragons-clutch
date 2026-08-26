@@ -19,6 +19,8 @@ mod generated;
 mod generated_v3;
 /// Minimal persistent root and canonical activation plan.
 pub mod root;
+/// Runtime-width activation and hot-root context.
+pub mod root_v3;
 /// Runtime-width successor configuration with ProgramSet authority.
 pub mod v3;
 
