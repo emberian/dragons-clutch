@@ -5,6 +5,13 @@
 //! encoder hostile-decodes the complete scratch candidate before copying it to
 //! output.
 
+use super::generated_profile14::{
+    FIXED_DATA_PREDICATE_ARTIFACT_PROFILE, FIXED_DATA_PREDICATE_BYTES,
+    FIXED_DATA_PREDICATE_COUNT_OFFSET, FIXED_DATA_PREDICATE_HEADER_BYTES,
+    FIXED_DATA_PREDICATE_REQUIRE_U8, FIXED_DATA_PREDICATE_REQUIRE_U16,
+    FIXED_DATA_PREDICATE_REQUIRE_U32, FIXED_DATA_PREDICATE_REQUIRE_U64,
+    FIXED_DATA_PREDICATE_REQUIRE_ZERO_RANGE,
+};
 use super::{
     ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE,
     ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE, ARTIFACT_PROFILE,
@@ -67,6 +74,8 @@ pub enum AccountProfileArtifactV2 {
     NonzeroU64TailRows,
     /// One checked account span inserted into a fixed logical sequence.
     DynamicFixedSpan,
+    /// Dynamic-span/route-alias successor with canonical fixed-data predicates.
+    FixedDataPredicate,
 }
 
 impl AccountProfileArtifactV2 {
@@ -88,6 +97,7 @@ impl AccountProfileArtifactV2 {
             Self::AuthenticatedRouteAlias => AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE,
             Self::NonzeroU64TailRows => NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE,
             Self::DynamicFixedSpan => DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE,
+            Self::FixedDataPredicate => FIXED_DATA_PREDICATE_ARTIFACT_PROFILE,
         }
     }
 
@@ -99,6 +109,7 @@ impl AccountProfileArtifactV2 {
             | Self::NonzeroU64TailRows => TRUSTED_EXECUTING_PROGRAM_HEADER_BYTES,
             Self::AuthenticatedRouteAlias => AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES,
             Self::DynamicFixedSpan => DYNAMIC_FIXED_SPAN_HEADER_BYTES,
+            Self::FixedDataPredicate => FIXED_DATA_PREDICATE_HEADER_BYTES,
             _ => HEADER_BYTES,
         }
     }
@@ -121,6 +132,139 @@ pub struct DynamicFixedSpanInputV2 {
     pub maximum: u32,
     /// Positive congruence step within the inclusive range.
     pub step: u32,
+}
+
+/// One canonical Profile 14 fixed-data prestate predicate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FixedDataPredicateInputV2 {
+    /// Require one exact byte.
+    RequireDataU8 {
+        /// Fixed-rule account coordinate.
+        account: u16,
+        /// Exact account-data offset.
+        data_offset: u32,
+        /// Required byte.
+        value: u8,
+    },
+    /// Require one exact little-endian `u16`.
+    RequireDataU16 {
+        /// Fixed-rule account coordinate.
+        account: u16,
+        /// Exact account-data offset.
+        data_offset: u32,
+        /// Required integer.
+        value: u16,
+    },
+    /// Require one exact little-endian `u32`.
+    RequireDataU32 {
+        /// Fixed-rule account coordinate.
+        account: u16,
+        /// Exact account-data offset.
+        data_offset: u32,
+        /// Required integer.
+        value: u32,
+    },
+    /// Require one exact little-endian `u64`.
+    RequireDataU64 {
+        /// Fixed-rule account coordinate.
+        account: u16,
+        /// Exact account-data offset.
+        data_offset: u32,
+        /// Required integer.
+        value: u64,
+    },
+    /// Require one nonempty range to contain only zero bytes.
+    RequireZeroRange {
+        /// Fixed-rule account coordinate.
+        account: u16,
+        /// Exact account-data offset.
+        data_offset: u32,
+        /// Positive range width.
+        length: u32,
+    },
+}
+
+impl FixedDataPredicateInputV2 {
+    const fn parts(self) -> (u8, u16, u32, [u8; 8]) {
+        match self {
+            Self::RequireDataU8 {
+                account,
+                data_offset,
+                value,
+            } => {
+                let mut payload = [0_u8; 8];
+                payload[0] = value;
+                (
+                    FIXED_DATA_PREDICATE_REQUIRE_U8,
+                    account,
+                    data_offset,
+                    payload,
+                )
+            }
+            Self::RequireDataU16 {
+                account,
+                data_offset,
+                value,
+            } => {
+                let mut payload = [0_u8; 8];
+                let bytes = value.to_le_bytes();
+                payload[0] = bytes[0];
+                payload[1] = bytes[1];
+                (
+                    FIXED_DATA_PREDICATE_REQUIRE_U16,
+                    account,
+                    data_offset,
+                    payload,
+                )
+            }
+            Self::RequireDataU32 {
+                account,
+                data_offset,
+                value,
+            } => {
+                let mut payload = [0_u8; 8];
+                let bytes = value.to_le_bytes();
+                payload[0] = bytes[0];
+                payload[1] = bytes[1];
+                payload[2] = bytes[2];
+                payload[3] = bytes[3];
+                (
+                    FIXED_DATA_PREDICATE_REQUIRE_U32,
+                    account,
+                    data_offset,
+                    payload,
+                )
+            }
+            Self::RequireDataU64 {
+                account,
+                data_offset,
+                value,
+            } => (
+                FIXED_DATA_PREDICATE_REQUIRE_U64,
+                account,
+                data_offset,
+                value.to_le_bytes(),
+            ),
+            Self::RequireZeroRange {
+                account,
+                data_offset,
+                length,
+            } => {
+                let mut payload = [0_u8; 8];
+                let bytes = length.to_le_bytes();
+                payload[0] = bytes[0];
+                payload[1] = bytes[1];
+                payload[2] = bytes[2];
+                payload[3] = bytes[3];
+                (
+                    FIXED_DATA_PREDICATE_REQUIRE_ZERO_RANGE,
+                    account,
+                    data_offset,
+                    payload,
+                )
+            }
+        }
+    }
 }
 
 /// Caller-declared register geometry owned by the encoded profile.
@@ -795,6 +939,7 @@ pub fn encode_account_profile_with_dynamic_fixed_span_v2_atomic(
         trusted_identity_environment,
         trusted_builtin_identity,
         Some(dynamic_spans),
+        None,
         RuleInputsV2::WithPrestate(fixed_rules),
         RuleInputsV2::WithPrestate(span_rules),
         fixed_operations,
@@ -874,10 +1019,48 @@ pub fn encode_account_profile_with_dynamic_fixed_span_v2_borrowed_generated_atom
         trusted_identity_environment,
         trusted_builtin_identity,
         Some(dynamic_spans),
+        None,
         GeneratedRuleInputsV2 {
             len: usize::from(fixed_rule_count),
             project: fixed_rule,
         },
+        RuleInputsV2::WithPrestate(span_rules),
+        fixed_operations,
+        &[],
+        registers,
+        scratch,
+        output,
+    )
+}
+
+/// Encode Profile 14 with Profile 13 dynamic-span/route-alias semantics plus
+/// a canonical table of fixed-data prestate predicates.
+///
+/// Predicate ordering and target eligibility are hostile-decoded before
+/// `output` changes. Predicates may address only exact or lifecycle-live,
+/// fixed, self-representative rules with fixed data width.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_account_profile_with_fixed_data_predicates_v2_atomic(
+    trusted_environment: TrustedEnvironmentV2,
+    trusted_identity_environment: TrustedIdentityEnvironmentV2,
+    trusted_builtin_identity: TrustedBuiltinIdentityV2,
+    dynamic_spans: &[DynamicFixedSpanInputV2],
+    predicates: &[FixedDataPredicateInputV2],
+    fixed_rules: &[AccountRuleWithPrestateInputV2],
+    span_rules: &[AccountRuleWithPrestateInputV2],
+    fixed_operations: &[AccountOperationInputV2],
+    registers: RegisterGeometryV2,
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<(), Error> {
+    encode_account_profile_atomic_with_span(
+        AccountProfileArtifactV2::FixedDataPredicate,
+        trusted_environment,
+        trusted_identity_environment,
+        trusted_builtin_identity,
+        Some(dynamic_spans),
+        Some(predicates),
+        RuleInputsV2::WithPrestate(fixed_rules),
         RuleInputsV2::WithPrestate(span_rules),
         fixed_operations,
         &[],
@@ -964,6 +1147,7 @@ fn encode_account_profile_atomic(
         trusted_identity_environment,
         trusted_builtin_identity,
         None,
+        None,
         fixed_rules,
         item_rules,
         fixed_operations,
@@ -981,6 +1165,7 @@ fn encode_account_profile_atomic_with_span<F, I>(
     trusted_identity_environment: TrustedIdentityEnvironmentV2,
     trusted_builtin_identity: TrustedBuiltinIdentityV2,
     dynamic_fixed_spans: Option<&[DynamicFixedSpanInputV2]>,
+    fixed_data_predicates: Option<&[FixedDataPredicateInputV2]>,
     mut fixed_rules: F,
     mut item_rules: I,
     fixed_operations: &[AccountOperationInputV2],
@@ -1005,6 +1190,7 @@ where
                 | AccountProfileArtifactV2::AuthenticatedRouteAlias
                 | AccountProfileArtifactV2::NonzeroU64TailRows
                 | AccountProfileArtifactV2::DynamicFixedSpan
+                | AccountProfileArtifactV2::FixedDataPredicate
         )
     {
         return Err(Error::InvalidTrustedEnvironment);
@@ -1020,6 +1206,7 @@ where
                 | AccountProfileArtifactV2::AuthenticatedRouteAlias
                 | AccountProfileArtifactV2::NonzeroU64TailRows
                 | AccountProfileArtifactV2::DynamicFixedSpan
+                | AccountProfileArtifactV2::FixedDataPredicate
         )
     {
         return Err(Error::InvalidTrustedExecutingProgram);
@@ -1031,6 +1218,7 @@ where
             artifact,
             AccountProfileArtifactV2::AuthenticatedRouteAlias
                 | AccountProfileArtifactV2::DynamicFixedSpan
+                | AccountProfileArtifactV2::FixedDataPredicate
         )
     {
         return Err(Error::InvalidTrustedBuiltin);
@@ -1048,6 +1236,15 @@ where
             .ok_or(Error::InvalidLength)?,
         None => 0,
     };
+    let predicates = fixed_data_predicates.unwrap_or(&[]);
+    if (artifact == AccountProfileArtifactV2::FixedDataPredicate) != fixed_data_predicates.is_some()
+    {
+        return Err(Error::InvalidFixedDataPredicate);
+    }
+    let predicate_table_bytes = predicates
+        .len()
+        .checked_mul(FIXED_DATA_PREDICATE_BYTES)
+        .ok_or(Error::InvalidLength)?;
     let expected = fixed_rules
         .len()
         .checked_add(item_rules.len())
@@ -1063,6 +1260,7 @@ where
             artifact
                 .header_bytes()
                 .checked_add(dynamic_table_bytes)
+                .and_then(|header| header.checked_add(predicate_table_bytes))
                 .and_then(|header| header.checked_add(body))
         })
         .ok_or(Error::InvalidLength)?;
@@ -1177,6 +1375,29 @@ where
         .header_bytes()
         .checked_add(dynamic_table_bytes)
         .ok_or(Error::InvalidLength)?;
+    if fixed_data_predicates.is_some() {
+        write(
+            scratch,
+            FIXED_DATA_PREDICATE_COUNT_OFFSET,
+            &u16::try_from(predicates.len())
+                .map_err(|_| Error::InvalidLength)?
+                .to_le_bytes(),
+        )?;
+        let mut index = 0_usize;
+        while index < predicates.len() {
+            let (opcode, account, data_offset, payload) = predicates
+                .get(index)
+                .copied()
+                .ok_or(Error::InvalidLength)?
+                .parts();
+            write_byte(scratch, cursor, opcode)?;
+            write(scratch, add(cursor, 2)?, &account.to_le_bytes())?;
+            write(scratch, add(cursor, 4)?, &data_offset.to_le_bytes())?;
+            write(scratch, add(cursor, 8)?, &payload)?;
+            cursor = add(cursor, FIXED_DATA_PREDICATE_BYTES)?;
+            index = index.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+    }
     let mut rule_index = 0_usize;
     while rule_index < fixed_rules.len() {
         let (rule, prestate) = fixed_rules.get(rule_index)?;

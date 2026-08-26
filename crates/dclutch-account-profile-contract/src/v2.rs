@@ -18,6 +18,19 @@ use super::{
 
 /// Safe, allocation-free typed AccountProfile V2 artifact encoder.
 pub mod encode;
+/// Profile 14 fixed-data prestate predicate semantics.
+pub mod profile14;
+
+#[path = "v2/generated_profile14.rs"]
+#[allow(dead_code, missing_docs)]
+mod generated_profile14;
+
+pub use generated_profile14::{
+    FIXED_DATA_PREDICATE_ARTIFACT_PROFILE, FIXED_DATA_PREDICATE_BYTES,
+    FIXED_DATA_PREDICATE_COUNT_OFFSET, FIXED_DATA_PREDICATE_HEADER_BYTES,
+    FIXED_DATA_PREDICATE_PROFILE_ID, FIXED_DATA_PREDICATE_PROFILE_PREIMAGE,
+};
+pub use profile14::{FixedDataPredicateKindV2, FixedDataPredicateV2};
 
 /// Canonical runtime-tail profile magic.
 pub const MAGIC: [u8; 8] = *b"DCLTAP02";
@@ -273,6 +286,10 @@ pub enum Error {
     InvalidDynamicSpan,
     /// An opaque-data observation asserted local data authority.
     InvalidOpaqueDataPrestate,
+    /// A fixed-data predicate was malformed, noncanonical, or targeted an ineligible rule.
+    InvalidFixedDataPredicate,
+    /// A live account did not satisfy an authenticated fixed-data predicate.
+    FixedDataPredicateMismatch,
 }
 
 /// Result alias for runtime-tail profiles.
@@ -742,6 +759,7 @@ pub struct AccountProfileV2<'a> {
     trusted_identity_environment: TrustedIdentityEnvironmentV2,
     trusted_builtin_identity: TrustedBuiltinIdentityV2,
     dynamic_fixed_span_count: u16,
+    fixed_data_predicate_count: u16,
     bytes: &'a [u8],
 }
 
@@ -770,6 +788,7 @@ impl<'a> AccountProfileV2<'a> {
                     | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
                     | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
                     | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+                    | FIXED_DATA_PREDICATE_ARTIFACT_PROFILE
             )
         {
             return Err(Error::UnsupportedProfile);
@@ -785,6 +804,7 @@ impl<'a> AccountProfileV2<'a> {
                 | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
                 | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
                 | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+                | FIXED_DATA_PREDICATE_ARTIFACT_PROFILE
         ) && read_u32(bytes, 28)? != 0
         {
             return Err(Error::NonCanonicalReserved);
@@ -806,6 +826,7 @@ impl<'a> AccountProfileV2<'a> {
             )?,
             trusted_builtin_identity: decode_trusted_builtin_identity(bytes, artifact_profile)?,
             dynamic_fixed_span_count: decode_dynamic_fixed_span_count(bytes, artifact_profile)?,
+            fixed_data_predicate_count: profile14::decode_predicate_count(bytes, artifact_profile)?,
             bytes,
         };
         if value.fixed_accounts == 0
@@ -815,7 +836,7 @@ impl<'a> AccountProfileV2<'a> {
                 && value.item_identity_stride == 0)
             || (value.item_account_stride != 0
                 && value.item_scalar_stride == 0
-                && value.artifact_profile != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE)
+                && !value.uses_dynamic_fixed_spans())
         {
             return Err(Error::EmptyProfile);
         }
@@ -870,6 +891,7 @@ impl<'a> AccountProfileV2<'a> {
         }
         value.validate_rules()?;
         value.validate_operations()?;
+        value.validate_fixed_data_predicates()?;
         value.validate_tail_count_projection()?;
         Ok(value)
     }
@@ -882,6 +904,29 @@ impl<'a> AccountProfileV2<'a> {
     /// Selected physical profile discriminator.
     pub const fn artifact_profile(self) -> u16 {
         self.artifact_profile
+    }
+
+    /// Whether the selected profile owns descriptor-authenticated dynamic fixed spans.
+    pub const fn uses_dynamic_fixed_spans(self) -> bool {
+        matches!(
+            self.artifact_profile,
+            DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE | FIXED_DATA_PREDICATE_ARTIFACT_PROFILE
+        )
+    }
+
+    /// Whether the selected profile supports authenticated physical route-alias packing.
+    pub const fn supports_route_alias_packing(self) -> bool {
+        matches!(
+            self.artifact_profile,
+            AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
+                | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+                | FIXED_DATA_PREDICATE_ARTIFACT_PROFILE
+        )
+    }
+
+    /// Whether the selected profile owns fixed-data prestate predicates.
+    pub const fn uses_fixed_data_predicates(self) -> bool {
+        self.artifact_profile == FIXED_DATA_PREDICATE_ARTIFACT_PROFILE
     }
 
     /// Accounts repeated per authenticated item.
@@ -947,9 +992,7 @@ impl<'a> AccountProfileV2<'a> {
 
     /// Decode one canonical dynamic-span table entry.
     pub fn dynamic_fixed_span(self, index: u16) -> Result<DynamicFixedSpanV2> {
-        if self.artifact_profile != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
-            || index >= self.dynamic_fixed_span_count
-        {
+        if !self.uses_dynamic_fixed_spans() || index >= self.dynamic_fixed_span_count {
             return Err(Error::InvalidDynamicSpan);
         }
         let offset = usize::from(index)
@@ -1020,7 +1063,7 @@ impl<'a> AccountProfileV2<'a> {
     }
 
     fn validate_dynamic_fixed_spans(self) -> Result<()> {
-        if self.artifact_profile != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
+        if !self.uses_dynamic_fixed_spans() {
             return if self.dynamic_fixed_span_count == 0 {
                 Ok(())
             } else {
@@ -1144,6 +1187,11 @@ impl<'a> AccountProfileV2<'a> {
     }
 
     fn header_bytes(self) -> usize {
+        if self.uses_fixed_data_predicates() {
+            return FIXED_DATA_PREDICATE_HEADER_BYTES
+                + usize::from(self.dynamic_fixed_span_count) * DYNAMIC_FIXED_SPAN_ENTRY_BYTES
+                + usize::from(self.fixed_data_predicate_count) * FIXED_DATA_PREDICATE_BYTES;
+        }
         if matches!(
             self.artifact_profile,
             TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
@@ -1153,7 +1201,7 @@ impl<'a> AccountProfileV2<'a> {
                 | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
                 | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
         ) {
-            if self.artifact_profile == DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
+            if self.uses_dynamic_fixed_spans() {
                 DYNAMIC_FIXED_SPAN_HEADER_BYTES
                     + usize::from(self.dynamic_fixed_span_count) * DYNAMIC_FIXED_SPAN_ENTRY_BYTES
             } else if self.artifact_profile == AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE {
@@ -1257,7 +1305,7 @@ impl<'a> AccountProfileV2<'a> {
     /// per-logical-coordinate contract.
     pub fn physical_account_count(self, tail_count: u32) -> Result<usize> {
         let logical = account_width(self, tail_count)?;
-        if self.artifact_profile != AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE {
+        if !self.supports_route_alias_packing() {
             return Ok(logical);
         }
         let mut count = 0_usize;
@@ -1298,7 +1346,7 @@ impl<'a> AccountProfileV2<'a> {
         logical_coordinate: usize,
     ) -> Result<usize> {
         let representative = self.representative(tail_count, logical_coordinate)?;
-        if self.artifact_profile != AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE {
+        if !self.supports_route_alias_packing() {
             return Ok(logical_coordinate);
         }
         let mut ordinal = 0_usize;
@@ -1584,7 +1632,9 @@ impl<'a> AccountProfileV2<'a> {
             )?;
             if matches!(
                 self.artifact_profile,
-                AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+                AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
+                    | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+                    | FIXED_DATA_PREDICATE_ARTIFACT_PROFILE
             ) && rule.alias_kind != AliasKindV2::SelfCoordinate
                 && !matches!(
                     rule.prestate,
@@ -1628,7 +1678,7 @@ impl<'a> AccountProfileV2<'a> {
                 return Err(Error::NonCanonicalReserved);
             }
             validate_rule(rule, true, item, self.fixed_accounts, self.artifact_profile)?;
-            if self.artifact_profile == DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
+            if self.uses_dynamic_fixed_spans() {
                 let span = self.dynamic_span_for_rule_template(item)?;
                 if rule.alias_kind == AliasKindV2::Fixed
                     && rule.alias_index >= span.insertion_coordinate
@@ -1638,7 +1688,9 @@ impl<'a> AccountProfileV2<'a> {
             }
             if matches!(
                 self.artifact_profile,
-                AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+                AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
+                    | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+                    | FIXED_DATA_PREDICATE_ARTIFACT_PROFILE
             ) && rule.alias_kind != AliasKindV2::SelfCoordinate
             {
                 return Err(Error::InvalidRouteAlias);
@@ -1677,6 +1729,7 @@ impl<'a> AccountProfileV2<'a> {
             NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE if adapter_authenticated_variable_data => Ok(()),
             AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE if authenticated_route_alias => Ok(()),
             DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE => Ok(()),
+            FIXED_DATA_PREDICATE_ARTIFACT_PROFILE => Ok(()),
             LIFECYCLE_PRESTATE_ARTIFACT_PROFILE => Err(Error::InvalidLifecyclePrestate),
             ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE => {
                 Err(Error::InvalidVariableDataPrestate)
@@ -1833,8 +1886,7 @@ impl<'a> AccountProfileV2<'a> {
     }
 
     fn validate_tail_count_projection(self) -> Result<()> {
-        let affine = (self.item_account_stride != 0
-            && self.artifact_profile != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE)
+        let affine = (self.item_account_stride != 0 && !self.uses_dynamic_fixed_spans())
             || self.item_operations != 0
             || self.item_scalar_stride != 0
             || self.item_identity_stride != 0
@@ -1937,6 +1989,7 @@ fn decode_trusted_environment(bytes: &[u8], artifact_profile: u16) -> Result<Tru
             | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
             | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
             | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+            | FIXED_DATA_PREDICATE_ARTIFACT_PROFILE
     ) {
         return Ok(TrustedEnvironmentV2::None);
     }
@@ -1964,6 +2017,7 @@ fn decode_trusted_identity_environment(
             | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
             | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
             | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+            | FIXED_DATA_PREDICATE_ARTIFACT_PROFILE
     ) {
         return Ok(TrustedIdentityEnvironmentV2::None);
     }
@@ -1989,7 +2043,9 @@ fn decode_trusted_builtin_identity(
 ) -> Result<TrustedBuiltinIdentityV2> {
     if !matches!(
         artifact_profile,
-        AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+        AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
+            | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+            | FIXED_DATA_PREDICATE_ARTIFACT_PROFILE
     ) {
         return Ok(TrustedBuiltinIdentityV2::None);
     }
@@ -2008,14 +2064,18 @@ fn decode_trusted_builtin_identity(
 }
 
 fn decode_dynamic_fixed_span_count(bytes: &[u8], artifact_profile: u16) -> Result<u16> {
-    if artifact_profile != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
+    if !matches!(
+        artifact_profile,
+        DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE | FIXED_DATA_PREDICATE_ARTIFACT_PROFILE
+    ) {
         return Ok(0);
     }
-    if bytes
-        .get(DYNAMIC_FIXED_SPAN_RESERVED_OFFSET..DYNAMIC_FIXED_SPAN_HEADER_BYTES)
-        .ok_or(Error::InvalidLength)?
-        .iter()
-        .any(|byte| *byte != 0)
+    if artifact_profile == DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+        && bytes
+            .get(DYNAMIC_FIXED_SPAN_RESERVED_OFFSET..DYNAMIC_FIXED_SPAN_HEADER_BYTES)
+            .ok_or(Error::InvalidLength)?
+            .iter()
+            .any(|byte| *byte != 0)
     {
         return Err(Error::InvalidDynamicSpan);
     }
@@ -2067,6 +2127,7 @@ pub fn project_atomic(
         return Err(Error::WidthMismatch);
     }
     validate_accounts(profile, tail_count, accounts)?;
+    profile14::validate_observations(profile, &[], accounts)?;
     registers
         .scratch_scalars
         .copy_from_slice(registers.input_scalars);
@@ -2138,6 +2199,7 @@ pub fn project_dynamic_fixed_spans_atomic(
         index = index.checked_add(1).ok_or(Error::InvalidLength)?;
     }
     validate_accounts_with_dynamic_spans(profile, tail_count, span_counts, accounts)?;
+    profile14::validate_observations(profile, span_counts, accounts)?;
     registers
         .scratch_scalars
         .copy_from_slice(registers.input_scalars);
@@ -2265,12 +2327,11 @@ fn validate_accounts(
     for (coordinate, account) in accounts.iter().copied().enumerate() {
         let rule = expanded_rule(profile, coordinate)?;
         let representative = profile.representative(tail_count, coordinate)?;
-        let expected_privileges =
-            if profile.artifact_profile == AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE {
-                representative_privileges(profile, tail_count, representative)?
-            } else {
-                rule.privileges
-            };
+        let expected_privileges = if profile.supports_route_alias_packing() {
+            representative_privileges(profile, tail_count, representative)?
+        } else {
+            rule.privileges
+        };
         if account.privileges() != expected_privileges {
             return Err(Error::PrivilegeMismatch);
         }
@@ -2740,6 +2801,7 @@ impl Operation {
                             | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
                             | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
                             | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+                            | FIXED_DATA_PREDICATE_ARTIFACT_PROFILE
                     )
                 {
                     return Err(Error::NonCanonicalOperation);
@@ -2793,6 +2855,7 @@ impl Operation {
                         | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
                         | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
                         | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+                        | FIXED_DATA_PREDICATE_ARTIFACT_PROFILE
                 ) || item_body
                     || self.account_item
                     || self.register_item
@@ -2837,6 +2900,7 @@ impl Operation {
                         | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
                         | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
                         | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+                        | FIXED_DATA_PREDICATE_ARTIFACT_PROFILE
                 ) || item_body
                     || self.account_item
                     || self.register_item
@@ -3337,8 +3401,10 @@ fn validate_rule(
         != 0
         || (rule.effect_permissions != 0
             && rule.privileges & 0x02 == 0
-            && !(artifact_profile == DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
-                && !item
+            && !(matches!(
+                artifact_profile,
+                DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE | FIXED_DATA_PREDICATE_ARTIFACT_PROFILE
+            ) && !item
                 && rule.alias_kind == AliasKindV2::SelfCoordinate
                 && rule.alias_index == 0))
     {
@@ -3433,6 +3499,7 @@ fn decode_rule(bytes: &[u8], offset: usize, artifact_profile: u16) -> Result<Acc
             | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
             | NONZERO_U64_TAIL_ROWS_ARTIFACT_PROFILE
             | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+            | FIXED_DATA_PREDICATE_ARTIFACT_PROFILE
     ) {
         match prestate_tag {
             0 => AccountPrestateV2::Exact,
@@ -3450,12 +3517,18 @@ fn decode_rule(bytes: &[u8], offset: usize, artifact_profile: u16) -> Result<Acc
             }
             4 if matches!(
                 artifact_profile,
-                AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+                AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
+                    | DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+                    | FIXED_DATA_PREDICATE_ARTIFACT_PROFILE
             ) =>
             {
                 AccountPrestateV2::AuthenticatedRouteAlias
             }
-            5 if artifact_profile == DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE => {
+            5 if matches!(
+                artifact_profile,
+                DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE | FIXED_DATA_PREDICATE_ARTIFACT_PROFILE
+            ) =>
+            {
                 AccountPrestateV2::AuthenticatedOpaqueReadonlyData
             }
             _ => return Err(Error::InvalidVariableDataPrestate),
@@ -3570,7 +3643,7 @@ fn expanded_rule_with_dynamic_spans(
 }
 
 fn require_dynamic_span_counts(profile: AccountProfileV2<'_>, span_counts: &[u32]) -> Result<()> {
-    if profile.artifact_profile != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+    if !profile.uses_dynamic_fixed_spans()
         || span_counts.len() != usize::from(profile.dynamic_fixed_span_count)
     {
         return Err(Error::InvalidDynamicSpan);
