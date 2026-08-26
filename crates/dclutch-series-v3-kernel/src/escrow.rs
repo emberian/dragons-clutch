@@ -12,12 +12,18 @@ use crate::{AccountKeyV3, PrefoundingSeriesEscrowV3};
 pub enum SeriesEscrowEffectKindV3 {
     /// Bind a fresh Custody replay context to this Ticket and refund owner.
     InitializeReplay,
+    /// Create the canonical empty SeriesEscrow vault for the future Market.
+    OpenEscrowVault,
     /// Lock exact founder collateral into the canonical SeriesEscrow.
     Lock,
     /// After atomic Core Found, move SeriesEscrow collateral into Hoard.
     ConsumeIntoHoard,
     /// After the retry deadline, return SeriesEscrow collateral to refund owner.
     RefundExpired,
+    /// Close the now-empty canonical SeriesEscrow vault and return its rent.
+    CloseEscrowVault,
+    /// Close the terminal Custody replay account and return its rent.
+    CloseReplay,
 }
 
 /// One semantic effect derived entirely from authenticated Series content.
@@ -42,9 +48,12 @@ impl SeriesEscrowEffectV3 {
     pub const fn expected_revision(self) -> u64 {
         match self.kind {
             SeriesEscrowEffectKindV3::InitializeReplay => 0,
-            SeriesEscrowEffectKindV3::Lock => 1,
+            SeriesEscrowEffectKindV3::OpenEscrowVault => 1,
+            SeriesEscrowEffectKindV3::Lock => 2,
             SeriesEscrowEffectKindV3::ConsumeIntoHoard
-            | SeriesEscrowEffectKindV3::RefundExpired => 2,
+            | SeriesEscrowEffectKindV3::RefundExpired => 3,
+            SeriesEscrowEffectKindV3::CloseEscrowVault => 4,
+            SeriesEscrowEffectKindV3::CloseReplay => 5,
         }
     }
 
@@ -56,7 +65,10 @@ impl SeriesEscrowEffectV3 {
     /// Exact Realm-collateral atoms moved; zero only for replay initialization.
     pub const fn amount(self) -> u64 {
         match self.kind {
-            SeriesEscrowEffectKindV3::InitializeReplay => 0,
+            SeriesEscrowEffectKindV3::InitializeReplay
+            | SeriesEscrowEffectKindV3::OpenEscrowVault
+            | SeriesEscrowEffectKindV3::CloseEscrowVault
+            | SeriesEscrowEffectKindV3::CloseReplay => 0,
             SeriesEscrowEffectKindV3::Lock
             | SeriesEscrowEffectKindV3::ConsumeIntoHoard
             | SeriesEscrowEffectKindV3::RefundExpired => self.escrow.hoard_principal(),
@@ -68,8 +80,11 @@ impl SeriesEscrowEffectV3 {
         match self.kind {
             SeriesEscrowEffectKindV3::Lock => Some(self.escrow.founder()),
             SeriesEscrowEffectKindV3::InitializeReplay
+            | SeriesEscrowEffectKindV3::OpenEscrowVault
             | SeriesEscrowEffectKindV3::ConsumeIntoHoard
-            | SeriesEscrowEffectKindV3::RefundExpired => None,
+            | SeriesEscrowEffectKindV3::RefundExpired
+            | SeriesEscrowEffectKindV3::CloseEscrowVault
+            | SeriesEscrowEffectKindV3::CloseReplay => None,
         }
     }
 
@@ -78,8 +93,11 @@ impl SeriesEscrowEffectV3 {
         match self.kind {
             SeriesEscrowEffectKindV3::RefundExpired => Some(self.escrow.refund_owner()),
             SeriesEscrowEffectKindV3::InitializeReplay
+            | SeriesEscrowEffectKindV3::OpenEscrowVault
             | SeriesEscrowEffectKindV3::Lock
-            | SeriesEscrowEffectKindV3::ConsumeIntoHoard => None,
+            | SeriesEscrowEffectKindV3::ConsumeIntoHoard
+            | SeriesEscrowEffectKindV3::CloseEscrowVault
+            | SeriesEscrowEffectKindV3::CloseReplay => None,
         }
     }
 
@@ -102,15 +120,28 @@ impl SeriesEscrowEffectV3 {
     }
 }
 
-/// Exact two-effect Prepare plan: initialize replay, then lock collateral.
+/// Exact three-effect Prepare plan: initialize replay, open vault, then lock.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PrepareSeriesEscrowPlanV3 {
-    effects: [SeriesEscrowEffectV3; 2],
+    effects: [SeriesEscrowEffectV3; 3],
 }
 
 impl PrepareSeriesEscrowPlanV3 {
     /// Canonical ordered effects.
-    pub const fn effects(self) -> [SeriesEscrowEffectV3; 2] {
+    pub const fn effects(self) -> [SeriesEscrowEffectV3; 3] {
+        self.effects
+    }
+}
+
+/// Exact terminal transfer and cleanup sequence after Consume or Expire.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TerminalSeriesEscrowPlanV3 {
+    effects: [SeriesEscrowEffectV3; 3],
+}
+
+impl TerminalSeriesEscrowPlanV3 {
+    /// Canonical ordered transfer, empty-vault close, and replay close effects.
+    pub const fn effects(self) -> [SeriesEscrowEffectV3; 3] {
         self.effects
     }
 }
@@ -126,6 +157,10 @@ pub const fn prepare_series_escrow_v3(
                 escrow,
             },
             SeriesEscrowEffectV3 {
+                kind: SeriesEscrowEffectKindV3::OpenEscrowVault,
+                escrow,
+            },
+            SeriesEscrowEffectV3 {
                 kind: SeriesEscrowEffectKindV3::Lock,
                 escrow,
             },
@@ -133,20 +168,40 @@ pub const fn prepare_series_escrow_v3(
     }
 }
 
-/// Construct the exact post-Found SeriesEscrow-to-Hoard effect.
-pub const fn consume_series_escrow_v3(escrow: PrefoundingSeriesEscrowV3) -> SeriesEscrowEffectV3 {
-    SeriesEscrowEffectV3 {
-        kind: SeriesEscrowEffectKindV3::ConsumeIntoHoard,
-        escrow,
+/// Construct the exact post-Found transfer and terminal cleanup plan.
+pub const fn consume_series_escrow_v3(
+    escrow: PrefoundingSeriesEscrowV3,
+) -> TerminalSeriesEscrowPlanV3 {
+    terminal_series_escrow_v3(escrow, SeriesEscrowEffectKindV3::ConsumeIntoHoard)
+}
+
+const fn terminal_series_escrow_v3(
+    escrow: PrefoundingSeriesEscrowV3,
+    transfer: SeriesEscrowEffectKindV3,
+) -> TerminalSeriesEscrowPlanV3 {
+    TerminalSeriesEscrowPlanV3 {
+        effects: [
+            SeriesEscrowEffectV3 {
+                kind: transfer,
+                escrow,
+            },
+            SeriesEscrowEffectV3 {
+                kind: SeriesEscrowEffectKindV3::CloseEscrowVault,
+                escrow,
+            },
+            SeriesEscrowEffectV3 {
+                kind: SeriesEscrowEffectKindV3::CloseReplay,
+                escrow,
+            },
+        ],
     }
 }
 
-/// Construct the exact post-deadline SeriesEscrow refund effect.
-pub const fn expire_series_escrow_v3(escrow: PrefoundingSeriesEscrowV3) -> SeriesEscrowEffectV3 {
-    SeriesEscrowEffectV3 {
-        kind: SeriesEscrowEffectKindV3::RefundExpired,
-        escrow,
-    }
+/// Construct the exact post-deadline refund and terminal cleanup plan.
+pub const fn expire_series_escrow_v3(
+    escrow: PrefoundingSeriesEscrowV3,
+) -> TerminalSeriesEscrowPlanV3 {
+    terminal_series_escrow_v3(escrow, SeriesEscrowEffectKindV3::RefundExpired)
 }
 
 #[cfg(test)]
@@ -232,26 +287,48 @@ mod tests {
         assert_eq!(prepare[0].expected_revision(), 0);
         assert_eq!(prepare[0].resulting_revision(), 1);
         assert_eq!(prepare[0].amount(), 0);
-        assert_eq!(prepare[1].kind(), SeriesEscrowEffectKindV3::Lock);
+        assert_eq!(prepare[1].kind(), SeriesEscrowEffectKindV3::OpenEscrowVault);
         assert_eq!(prepare[1].expected_revision(), 1);
         assert_eq!(prepare[1].resulting_revision(), 2);
-        assert_eq!(prepare[1].amount(), escrow.hoard_principal());
-        assert_eq!(prepare[1].external_source_owner(), Some(escrow.founder()));
-        assert!(prepare[1].series_escrow_is_destination());
+        assert_eq!(prepare[1].amount(), 0);
+        assert_eq!(prepare[2].kind(), SeriesEscrowEffectKindV3::Lock);
+        assert_eq!(prepare[2].expected_revision(), 2);
+        assert_eq!(prepare[2].resulting_revision(), 3);
+        assert_eq!(prepare[2].amount(), escrow.hoard_principal());
+        assert_eq!(prepare[2].external_source_owner(), Some(escrow.founder()));
+        assert!(prepare[2].series_escrow_is_destination());
 
-        let consume = consume_series_escrow_v3(escrow);
-        let expire = expire_series_escrow_v3(escrow);
-        assert_eq!(consume.expected_revision(), 2);
-        assert_eq!(expire.expected_revision(), 2);
-        assert_eq!(consume.resulting_revision(), 3);
-        assert_eq!(expire.resulting_revision(), 3);
-        assert_eq!(consume.amount(), expire.amount());
-        assert_eq!(consume.escrow().ticket_id(), expire.escrow().ticket_id());
-        assert!(consume.series_escrow_is_source());
-        assert!(consume.hoard_is_destination());
+        let consume = consume_series_escrow_v3(escrow).effects();
+        let expire = expire_series_escrow_v3(escrow).effects();
+        let consume_transfer = consume[0];
+        let expire_transfer = expire[0];
+        assert_eq!(consume_transfer.expected_revision(), 3);
+        assert_eq!(expire_transfer.expected_revision(), 3);
+        assert_eq!(consume_transfer.resulting_revision(), 4);
+        assert_eq!(expire_transfer.resulting_revision(), 4);
+        assert_eq!(consume_transfer.amount(), expire_transfer.amount());
         assert_eq!(
-            expire.external_destination_owner(),
+            consume_transfer.escrow().ticket_id(),
+            expire_transfer.escrow().ticket_id()
+        );
+        assert!(consume_transfer.series_escrow_is_source());
+        assert!(consume_transfer.hoard_is_destination());
+        assert_eq!(
+            expire_transfer.external_destination_owner(),
             Some(escrow.refund_owner())
         );
+        for terminal in [consume, expire] {
+            assert_eq!(
+                terminal[1].kind(),
+                SeriesEscrowEffectKindV3::CloseEscrowVault
+            );
+            assert_eq!(terminal[1].expected_revision(), 4);
+            assert_eq!(terminal[1].resulting_revision(), 5);
+            assert_eq!(terminal[1].amount(), 0);
+            assert_eq!(terminal[2].kind(), SeriesEscrowEffectKindV3::CloseReplay);
+            assert_eq!(terminal[2].expected_revision(), 5);
+            assert_eq!(terminal[2].resulting_revision(), 6);
+            assert_eq!(terminal[2].amount(), 0);
+        }
     }
 }

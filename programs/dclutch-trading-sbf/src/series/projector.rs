@@ -10,7 +10,7 @@ use solana_program::pubkey::Pubkey;
 
 use super::{
     AccountKeyV3, AdmittedOccurrenceV3, AdmittedTicketV3, AuthenticatedProductProjectionV2,
-    PrepareSeriesEscrowPlanV3, SeriesEscrowEffectV3, SeriesV3Error, TemplateV3,
+    PrepareSeriesEscrowPlanV3, SeriesV3Error, TemplateV3, TerminalSeriesEscrowPlanV3,
     admit_occurrence_bytes, admit_ticket, consume_series_escrow_v3, expire_series_escrow_v3,
     instruction::{SeriesActionRequestV3, SeriesActionV3},
     lifecycle::{
@@ -150,7 +150,7 @@ impl<'a> AuthenticatedSeriesActionV3<'a> {
         self,
         product: AuthenticatedProductProjectionV2,
         registry_program: AccountKeyV3,
-    ) -> Result<SeriesEscrowEffectV3, SeriesProjectorErrorV3> {
+    ) -> Result<TerminalSeriesEscrowPlanV3, SeriesProjectorErrorV3> {
         if self.action() != SeriesActionV3::Consume {
             return Err(SeriesProjectorErrorV3::Frame);
         }
@@ -191,7 +191,7 @@ impl<'a> AuthenticatedSeriesActionV3<'a> {
         self,
         product: AuthenticatedProductProjectionV2,
         registry_program: AccountKeyV3,
-    ) -> Result<SeriesEscrowEffectV3, SeriesProjectorErrorV3> {
+    ) -> Result<TerminalSeriesEscrowPlanV3, SeriesProjectorErrorV3> {
         if self.action() != SeriesActionV3::Expire {
             return Err(SeriesProjectorErrorV3::Frame);
         }
@@ -430,15 +430,24 @@ mod tests {
             ContentId::new([61; 32]).expect("stable Product"),
             ContentId::new([62; 32]).expect("result domain"),
         );
-        let effect = accepted
+        let effects = accepted
             .plan_consume_escrow(product, AccountKeyV3::new([59; 32]).expect("Registry"))
-            .expect("Consume escrow effect");
+            .expect("Consume escrow effects")
+            .effects();
         assert_eq!(
-            effect.kind(),
+            effects[0].kind(),
             crate::series::SeriesEscrowEffectKindV3::ConsumeIntoHoard
         );
-        assert_eq!(effect.expected_revision(), 2);
-        assert!(effect.hoard_is_destination());
+        assert_eq!(effects[0].expected_revision(), 3);
+        assert!(effects[0].hoard_is_destination());
+        assert_eq!(
+            effects[1].kind(),
+            crate::series::SeriesEscrowEffectKindV3::CloseEscrowVault
+        );
+        assert_eq!(
+            effects[2].kind(),
+            crate::series::SeriesEscrowEffectKindV3::CloseReplay
+        );
         assert_eq!(
             accepted.plan_prepare_escrow(product, AccountKeyV3::new([59; 32]).expect("Registry")),
             Err(SeriesProjectorErrorV3::Frame)

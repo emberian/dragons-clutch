@@ -11,53 +11,81 @@ namespace DClutch.SeriesEscrowV3
 
 inductive Effect where
   | initializeReplay
+  | openEscrowVault
   | lock
   | consumeIntoHoard
   | refundExpired
+  | closeEscrowVault
+  | closeReplay
   deriving DecidableEq, Repr
 
 def expectedRevision : Effect → Nat
   | .initializeReplay => 0
-  | .lock => 1
-  | .consumeIntoHoard | .refundExpired => 2
+  | .openEscrowVault => 1
+  | .lock => 2
+  | .consumeIntoHoard | .refundExpired => 3
+  | .closeEscrowVault => 4
+  | .closeReplay => 5
 
 def resultingRevision (effect : Effect) : Nat := expectedRevision effect + 1
 
 def movesCollateral : Effect → Bool
-  | .initializeReplay => false
+  | .initializeReplay | .openEscrowVault | .closeEscrowVault | .closeReplay => false
   | .lock | .consumeIntoHoard | .refundExpired => true
 
-def terminal : Effect → Bool
+def terminalTransfer : Effect → Bool
   | .consumeIntoHoard | .refundExpired => true
-  | .initializeReplay | .lock => false
+  | .initializeReplay | .openEscrowVault | .lock | .closeEscrowVault | .closeReplay => false
 
 /-- A Custody replay accepts only the exact next Series semantic edge. -/
-def accepts (currentRevision : Nat) (alreadyTerminal : Bool) (effect : Effect) : Bool :=
-  !alreadyTerminal && currentRevision = expectedRevision effect
+def accepts (currentRevision : Nat) (effect : Effect) : Bool :=
+  currentRevision = expectedRevision effect
 
 theorem prepare_revision_chain :
-    resultingRevision .initializeReplay = expectedRevision .lock := by
+    resultingRevision .initializeReplay = expectedRevision .openEscrowVault ∧
+    resultingRevision .openEscrowVault = expectedRevision .lock := by
   decide
+
+theorem lock_enables_terminal_edges :
+    resultingRevision .lock = expectedRevision .consumeIntoHoard ∧
+    resultingRevision .lock = expectedRevision .refundExpired := by
+  decide
+
+theorem terminal_cleanup_chain (effect : Effect)
+    (terminalEffect : terminalTransfer effect = true) :
+    resultingRevision effect = expectedRevision .closeEscrowVault ∧
+    resultingRevision .closeEscrowVault = expectedRevision .closeReplay := by
+  cases effect <;> simp_all [terminalTransfer, resultingRevision, expectedRevision]
 
 theorem consume_and_refund_share_exact_prestate :
     expectedRevision .consumeIntoHoard = expectedRevision .refundExpired := by
   decide
 
 theorem successful_terminal_refuses_second_terminal (effect next : Effect)
-    (terminalEffect : terminal effect = true)
-    (nextTerminal : terminal next = true) :
-    accepts (resultingRevision effect) false next = false := by
+    (terminalEffect : terminalTransfer effect = true)
+    (nextTerminal : terminalTransfer next = true) :
+    accepts (resultingRevision effect) next = false := by
   cases effect <;> cases next <;>
-    simp_all [terminal, accepts, resultingRevision, expectedRevision]
+    simp_all [terminalTransfer, accepts, resultingRevision, expectedRevision]
 
 theorem hoard_and_refund_are_distinct_effects :
     Effect.consumeIntoHoard ≠ Effect.refundExpired := by
   decide
 
-theorem hostile_skip_lock_refuses : accepts 1 false .consumeIntoHoard = false := by
+theorem hostile_skip_open_refuses : accepts 1 .lock = false := by
   native_decide
 
-theorem hostile_replay_after_terminal_refuses : accepts 2 true .refundExpired = false := by
+theorem hostile_skip_lock_refuses : accepts 2 .consumeIntoHoard = false := by
   native_decide
+
+theorem hostile_second_terminal_refuses :
+    accepts (resultingRevision .consumeIntoHoard) .refundExpired = false := by
+  native_decide
+
+theorem hostile_cleanup_before_terminal_refuses : accepts 3 .closeEscrowVault = false := by
+  native_decide
+
+theorem completed_cleanup_has_revision_six : resultingRevision .closeReplay = 6 := by
+  decide
 
 end DClutch.SeriesEscrowV3
