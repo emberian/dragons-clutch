@@ -13,6 +13,7 @@ mod generated_source_resolution;
 #[allow(missing_docs)]
 #[rustfmt::skip]
 mod generated_v2;
+mod provider_transport_v3;
 mod provider_v3;
 mod v2;
 
@@ -22,6 +23,7 @@ pub use generated_v2::{
     RESOLUTION_CERTIFICATE_VERSION_V2, SOURCE_CLOSURE_RECEIPT_BYTES_V2,
     SOURCE_CLOSURE_RECEIPT_MAGIC_V2, SOURCE_CLOSURE_RECEIPT_VERSION_V2,
 };
+pub use provider_transport_v3::*;
 pub use provider_v3::{
     PROVIDER_EXECUTION_RECEIPT_BYTES_V3, PROVIDER_EXECUTION_REQUEST_BYTES_V3,
     PROVIDER_EXECUTION_REQUEST_MAGIC_V3, PROVIDER_EXECUTION_REQUEST_SCHEMA_ID_V3,

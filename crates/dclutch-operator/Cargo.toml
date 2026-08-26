@@ -29,6 +29,7 @@ dclutch-general-codec = { path = "../dclutch-general-codec" }
 dclutch-general-config-contract = { path = "../dclutch-general-config-contract" }
 dclutch-kernel = { path = "../dclutch-kernel" }
 dclutch-market-contract = { path = "../dclutch-market-contract" }
+dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
 dclutch-product-contract = { path = "../dclutch-product-contract" }
 dclutch-pyth-contract = { path = "../dclutch-pyth-contract" }
 dclutch-pyth-svm = { path = "../dclutch-pyth-svm" }
@@ -37,6 +38,7 @@ dclutch-record-contract = { path = "../dclutch-record-contract" }
 dclutch-registry-contract = { path = "../dclutch-registry-contract" }
 dclutch-registry-svm = { path = "../dclutch-registry-svm" }
 dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
+dclutch-resolution-codec = { path = "../dclutch-resolution-codec" }
 dclutch-release-tool = { path = "../dclutch-release-tool" }
 dclutch-rent-contract = { path = "../dclutch-rent-contract" }
 dclutch-series-contract = { path = "../dclutch-series-contract" }

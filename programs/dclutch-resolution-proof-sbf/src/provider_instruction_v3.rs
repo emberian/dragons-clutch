@@ -39,8 +39,10 @@ use dclutch_resolution_codec::{
     PROVIDER_EXECUTION_REQUEST_BYTES_V3, PROVIDER_EXECUTION_REQUEST_MAGIC_V3,
     PROVIDER_EXECUTION_REQUEST_SCHEMA_ID_V3, PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3,
     PROVIDER_RESOLUTION_CORE_TAIL_START_V3, PROVIDER_RESOLUTION_TRADING_ACCOUNT_COUNT_V3,
-    PROVIDER_RESOLUTION_TRADING_TAIL_START_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1, ProviderCallerV3,
-    ProviderExecutionRequestV3, RESOLUTION_CERTIFICATE_BYTES_V2,
+    PROVIDER_RESOLUTION_TRADING_TAIL_START_V3, PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3,
+    PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
+    PYTH_RELEASE_RECORD_SCHEMA_ID_V1, ProviderCallerV3, ProviderExecutionRequestV3,
+    ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_BYTES_V2,
     RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V4,
 };
 use dclutch_source_contract::{
@@ -143,6 +145,7 @@ pub(crate) fn process_provider_resolution_v3(
         .update()
         .try_borrow_data()
         .map_err(|_| ResolutionError::ProviderObservation)?;
+    let lifecycle = boxed_provider_lifecycle(program_id, &request, frame, &rent, &update_data)?;
     let result_domain_data = frame
         .account(33)
         .try_borrow_data()
@@ -159,6 +162,7 @@ pub(crate) fn process_provider_resolution_v3(
         &product_runtime,
         &result_domain_data,
         &update_data,
+        &lifecycle,
         post_body,
         clock,
     )?;
@@ -167,7 +171,7 @@ pub(crate) fn process_provider_resolution_v3(
     drop(source_data);
     drop(result_domain_data);
     drop(update_data);
-    commit_plan(program_id, &request, frame, &rent, &plan)
+    commit_plan(program_id, &request, frame, &rent, &lifecycle, &plan)
 }
 
 fn boxed_source_records(
@@ -214,6 +218,68 @@ fn boxed_source_state(bytes: &[u8]) -> Result<Box<SourceResolutionStateV2>, Prog
     ))
 }
 
+fn boxed_provider_lifecycle(
+    program_id: &Pubkey,
+    request: &ProviderExecutionRequestV3,
+    frame: ProviderFrameV3<'_, '_>,
+    rent: &Rent,
+    update_bytes: &[u8],
+) -> Result<Box<ProviderUpdateLifecycleV3>, ProgramError> {
+    let lifecycle_account = frame.lifecycle();
+    let (expected_lifecycle, bump) = Pubkey::find_program_address(
+        &[
+            PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
+            frame.update().key.as_ref(),
+        ],
+        program_id,
+    );
+    let (expected_authority, _) = Pubkey::find_program_address(
+        &[
+            PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3,
+            &request.market,
+            &request.source_state,
+            frame.update().key.as_ref(),
+        ],
+        program_id,
+    );
+    let lifecycle_data = lifecycle_account
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::ProviderObservation)?;
+    if lifecycle_account.key != &expected_lifecycle
+        || lifecycle_account.owner != program_id
+        || lifecycle_account.executable
+        || lifecycle_data.len() != PROVIDER_UPDATE_LIFECYCLE_BYTES_V3
+        || !rent.is_exempt(lifecycle_account.lamports(), lifecycle_data.len())
+    {
+        return Err(ResolutionError::ProviderObservation.into());
+    }
+    let lifecycle = ProviderUpdateLifecycleV3::decode(&lifecycle_data)
+        .map_err(|_| ResolutionError::ProviderObservation)?;
+    let update =
+        FullPriceUpdateV2::parse(update_bytes).map_err(|_| ResolutionError::ProviderObservation)?;
+    if lifecycle.status != ProviderUpdateStatusV3::Submitted
+        || lifecycle.bump != bump
+        || lifecycle.generation != request.generation
+        || lifecycle.market != request.market
+        || lifecycle.source_state != request.source_state
+        || lifecycle.source_material != request.source_material
+        || lifecycle.provider_release != request.provider_release
+        || lifecycle.update_account != request.update_account
+        || lifecycle.update_digest != request.expected_update_digest
+        || lifecycle.post_body_digest != request.post_params_body_digest
+        || lifecycle.provider_submitter != request.provider_submitter
+        || lifecycle.release_set != request.release_set
+        || lifecycle.registry_program != frame.registry_program().key.to_bytes()
+        || lifecycle.update_authority != expected_authority.to_bytes()
+        || lifecycle.update_authority != update.write_authority()
+        || lifecycle.posted_slot != update.posted_slot()
+        || lifecycle.publish_time != update.publish_time()
+    {
+        return Err(ResolutionError::ProviderObservation.into());
+    }
+    Ok(Box::new(lifecycle))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn boxed_observation<'a>(
     request: &ProviderExecutionRequestV3,
@@ -222,6 +288,7 @@ fn boxed_observation<'a>(
     product_runtime: &dclutch_product_runtime_v2_svm_reader::AuthenticatedProductRuntimeV2,
     result_domain_bytes: &'a [u8],
     update_bytes: &'a [u8],
+    lifecycle: &ProviderUpdateLifecycleV3,
     post_body: &'a [u8],
     clock: solana_program::clock::Clock,
 ) -> Result<Box<AuthenticatedProviderObservationV3<'a>>, ProgramError> {
@@ -235,6 +302,8 @@ fn boxed_observation<'a>(
         result_domain_bytes,
         result_domain,
         update_account: frame.update().key.to_bytes(),
+        provider_submitter: lifecycle.provider_submitter,
+        expected_update_authority: lifecycle.update_authority,
         update_bytes,
         post_params_body: post_body,
         current_slot: clock.slot,
@@ -247,18 +316,59 @@ fn commit_plan<'info>(
     request: &ProviderExecutionRequestV3,
     frame: ProviderFrameV3<'_, 'info>,
     rent: &Rent,
+    lifecycle: &ProviderUpdateLifecycleV3,
     plan: &crate::provider_v3::ProviderResolutionPlanV3,
 ) -> ProgramResult {
-    let next_source = plan.next_source.to_bytes();
-    let certificate = plan
-        .certificate
-        .to_bytes()
-        .map_err(|_| ResolutionError::Transition)?;
+    let next_source = Box::new(plan.next_source.to_bytes());
+    let certificate = boxed_certificate(plan)?;
+    let lifecycle_bytes = boxed_consumed_lifecycle(request, lifecycle, plan)?;
+    commit_outputs(
+        program_id,
+        request,
+        frame,
+        rent,
+        &next_source,
+        &certificate,
+        &lifecycle_bytes,
+    )?;
+    set_provider_receipt(plan)
+}
+
+#[inline(never)]
+fn boxed_certificate(
+    plan: &crate::provider_v3::ProviderResolutionPlanV3,
+) -> Result<Box<[u8; RESOLUTION_CERTIFICATE_BYTES_V2]>, ProgramError> {
+    Ok(Box::new(
+        plan.certificate
+            .to_bytes()
+            .map_err(|_| ResolutionError::Transition)?,
+    ))
+}
+
+#[inline(never)]
+fn boxed_consumed_lifecycle(
+    request: &ProviderExecutionRequestV3,
+    lifecycle: &ProviderUpdateLifecycleV3,
+    plan: &crate::provider_v3::ProviderResolutionPlanV3,
+) -> Result<Box<[u8; PROVIDER_UPDATE_LIFECYCLE_BYTES_V3]>, ProgramError> {
+    let mut next = Box::new(*lifecycle);
+    next.consume(
+        request.terminal_sequence,
+        plan.receipt.provider_evidence,
+        request.certificate_account,
+    )
+    .map_err(|_| ResolutionError::Transition)?;
+    Ok(Box::new(
+        next.to_bytes().map_err(|_| ResolutionError::Transition)?,
+    ))
+}
+
+#[inline(never)]
+fn set_provider_receipt(plan: &crate::provider_v3::ProviderResolutionPlanV3) -> ProgramResult {
     let receipt = plan
         .receipt
         .to_bytes()
         .map_err(|_| ResolutionError::Transition)?;
-    commit_outputs(program_id, request, frame, rent, &next_source, &certificate)?;
     set_return_data(&receipt);
     Ok(())
 }
@@ -278,6 +388,9 @@ impl<'accounts, 'info> ProviderFrameV3<'accounts, 'info> {
     }
     fn registry_program(self) -> &'accounts AccountInfo<'info> {
         self.account(7)
+    }
+    fn lifecycle(self) -> &'accounts AccountInfo<'info> {
+        self.account(self.tail_start - 1)
     }
     fn update(self) -> &'accounts AccountInfo<'info> {
         self.account(self.tail_start)
@@ -317,7 +430,7 @@ fn authenticate_privileges(
         let expected_executable = matches!(index, 7 | 11 | 13 | 15)
             || matches!(index, value if value == tail_start + 1 || value == tail_start + 4 || value == tail_start + 8);
         if account.is_signer != matches!(index, 0 | 1)
-            || account.is_writable != matches!(index, 2 | 3)
+            || account.is_writable != (matches!(index, 2 | 3) || index == tail_start - 1)
             || account.executable != expected_executable
             || accounts
                 .iter()
@@ -724,7 +837,7 @@ fn authenticate_pyth_release(
     Ok(release)
 }
 
-fn authenticate_provider_program(
+pub(crate) fn authenticate_provider_program(
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
     expected_programdata: [u8; 32],
@@ -794,7 +907,7 @@ fn borrow_record<'a>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn authenticate_record(
+pub(crate) fn authenticate_record(
     registry: &Pubkey,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
@@ -833,9 +946,11 @@ fn commit_outputs<'info>(
     rent: &Rent,
     source: &[u8; SOURCE_RESOLUTION_STATE_BYTES_V2],
     certificate: &[u8; RESOLUTION_CERTIFICATE_BYTES_V2],
+    lifecycle: &[u8; PROVIDER_UPDATE_LIFECYCLE_BYTES_V3],
 ) -> ProgramResult {
     let source_account = frame.account(2);
     let certificate_account = frame.account(3);
+    let lifecycle_account = frame.lifecycle();
     if source_account.owner != program_id
         || source_account.data_len() != SOURCE_RESOLUTION_STATE_BYTES_V2
         || source_account.executable
@@ -843,6 +958,15 @@ fn commit_outputs<'info>(
         return Err(ResolutionError::OutputState.into());
     }
     source_account
+        .try_borrow_mut_data()
+        .map_err(|_| ResolutionError::OutputState)?;
+    if lifecycle_account.owner != program_id
+        || lifecycle_account.data_len() != PROVIDER_UPDATE_LIFECYCLE_BYTES_V3
+        || lifecycle_account.executable
+    {
+        return Err(ResolutionError::OutputState.into());
+    }
+    lifecycle_account
         .try_borrow_mut_data()
         .map_err(|_| ResolutionError::OutputState)?;
     initialize_certificate(
@@ -859,6 +983,9 @@ fn commit_outputs<'info>(
     let mut certificate_output = certificate_account
         .try_borrow_mut_data()
         .map_err(|_| ResolutionError::OutputState)?;
+    let mut lifecycle_output = lifecycle_account
+        .try_borrow_mut_data()
+        .map_err(|_| ResolutionError::OutputState)?;
     if certificate_output.len() != RESOLUTION_CERTIFICATE_BYTES_V2
         || certificate_output.iter().any(|byte| *byte != 0)
     {
@@ -866,6 +993,7 @@ fn commit_outputs<'info>(
     }
     source_output.copy_from_slice(source);
     certificate_output.copy_from_slice(certificate);
+    lifecycle_output.copy_from_slice(lifecycle);
     Ok(())
 }
 
@@ -978,10 +1106,10 @@ mod tests {
 
     #[test]
     fn frozen_frame_has_one_four_account_trading_extension() {
-        assert_eq!(PROVIDER_RESOLUTION_CORE_TAIL_START_V3, 37);
-        assert_eq!(PROVIDER_RESOLUTION_TRADING_TAIL_START_V3, 41);
-        assert_eq!(PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3, 46);
-        assert_eq!(PROVIDER_RESOLUTION_TRADING_ACCOUNT_COUNT_V3, 50);
+        assert_eq!(PROVIDER_RESOLUTION_CORE_TAIL_START_V3, 38);
+        assert_eq!(PROVIDER_RESOLUTION_TRADING_TAIL_START_V3, 42);
+        assert_eq!(PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3, 47);
+        assert_eq!(PROVIDER_RESOLUTION_TRADING_ACCOUNT_COUNT_V3, 51);
         assert_eq!(
             PROVIDER_RESOLUTION_TRADING_ACCOUNT_COUNT_V3
                 - PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3,

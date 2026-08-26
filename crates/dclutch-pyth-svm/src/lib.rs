@@ -19,6 +19,8 @@ pub mod price_update;
 pub mod receiver_config;
 /// Immutable Pyth adapter release contracts and the empty production catalog.
 pub mod release;
+/// Exact borrowed Wormhole router account views used by Pyth Receiver.
+pub mod router_accounts;
 /// Provenance-pinned synthetic-local release facts, never production catalog data.
 #[cfg(feature = "synthetic-local-fixture")]
 pub mod synthetic_fixture;
@@ -35,6 +37,11 @@ pub use release::{
     PYTH_RELEASE_V1_SCHEMA_VERSION, PythReleaseV1, PythReleaseV1Error, PythReleaseV1Input,
     ReleaseField, SyntheticLocalReleaseV1, SyntheticLocalReleaseV1Error,
     SyntheticLocalReleaseV1Input,
+};
+pub use router_accounts::{
+    ENCODED_VAA_DISCRIMINATOR_V1, ENCODED_VAA_HEADER_BYTES_V1, ENCODED_VAA_VERIFIED_STATUS_V1,
+    GUARDIAN_ADDRESS_BYTES_V1, GUARDIAN_SET_DISCRIMINATOR_V1, GUARDIAN_SET_HEADER_BYTES_V1,
+    GuardianSetV1, RouterAccountErrorV1, VerifiedEncodedVaaV1,
 };
 #[cfg(feature = "synthetic-local-fixture")]
 pub use synthetic_fixture::{

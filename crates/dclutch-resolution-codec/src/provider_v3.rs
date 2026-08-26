@@ -30,10 +30,10 @@ pub const PROVIDER_EXECUTION_REQUEST_SCHEMA_ID_V3: [u8; 32] = [
 ];
 
 /// Exact account count for the fixed Core caller frame.
-pub const PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3: usize = 46;
+pub const PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3: usize = 47;
 /// Exact account count for the Trading caller frame, including its selected
 /// ProgramSet and descriptor raw/staging pairs.
-pub const PROVIDER_RESOLUTION_TRADING_ACCOUNT_COUNT_V3: usize = 50;
+pub const PROVIDER_RESOLUTION_TRADING_ACCOUNT_COUNT_V3: usize = 51;
 /// First common account index. The order from this index is caller authority,
 /// resolver, Source state, certificate, Market, activation, infrastructure
 /// profile, Registry Program/ProgramData/artifact pair, Core Program/ProgramData,
@@ -67,11 +67,13 @@ pub const PROVIDER_RESOLUTION_PRODUCT_RECORDS_START_V3: usize = 31;
 /// First Trading-only account: ProgramSet and selected CapabilityProgramV3
 /// raw/staging pairs.
 pub const PROVIDER_RESOLUTION_TRADING_RECORDS_START_V3: usize = 37;
-/// Core tail start. The tail is update, Receiver Program/ProgramData/config,
-/// router Program/ProgramData, Clock, Rent, and System Program.
-pub const PROVIDER_RESOLUTION_CORE_TAIL_START_V3: usize = 37;
-/// Trading tail start after its four additional finalized-record accounts.
-pub const PROVIDER_RESOLUTION_TRADING_TAIL_START_V3: usize = 41;
+/// Core tail start after the writable provider lifecycle account at index 37.
+/// The tail is update, Receiver Program/ProgramData/config, router
+/// Program/ProgramData, Clock, Rent, and System Program.
+pub const PROVIDER_RESOLUTION_CORE_TAIL_START_V3: usize = 38;
+/// Trading tail start after its four additional finalized-record accounts and
+/// writable provider lifecycle account at index 41.
+pub const PROVIDER_RESOLUTION_TRADING_TAIL_START_V3: usize = 42;
 
 const GENERATION_OFFSET: usize = 16;
 const TERMINAL_SEQUENCE_OFFSET: usize = 24;
@@ -129,7 +131,9 @@ pub struct ProviderExecutionRequestV3 {
     pub update_account: [u8; 32],
     /// SHA-256 of the exact provider-owned update bytes.
     pub expected_update_digest: [u8; 32],
-    /// Submitter retained as the Pyth update's write authority.
+    /// Provider submitter that paid for and authorized posting this update.
+    /// Receiver write authority is instead a Resolution-owned PDA persisted in
+    /// the provider lifecycle account.
     pub provider_submitter: [u8; 32],
     /// Permissionless resolver executing this transition.
     pub resolver: [u8; 32],

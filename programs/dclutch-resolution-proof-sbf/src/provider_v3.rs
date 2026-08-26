@@ -68,6 +68,8 @@ pub struct AuthenticatedProviderObservationV3<'a> {
     pub(crate) result_domain_bytes: &'a [u8],
     pub(crate) result_domain: ResultDomainV2<'a>,
     pub(crate) update_account: [u8; 32],
+    pub(crate) provider_submitter: [u8; 32],
+    pub(crate) expected_update_authority: [u8; 32],
     pub(crate) update_bytes: &'a [u8],
     pub(crate) post_params_body: &'a [u8],
     pub(crate) current_slot: u64,
@@ -173,7 +175,8 @@ pub fn plan_provider_resolution_v3(
     }
     let update = FullPriceUpdateV2::parse(observation.update_bytes)
         .map_err(|_| ProviderJoinErrorV3::Provider)?;
-    if update.write_authority() != request.provider_submitter
+    if request.provider_submitter != observation.provider_submitter
+        || update.write_authority() != observation.expected_update_authority
         || update.posted_slot() > observation.current_slot
         || update.publish_time() <= 0
     {
@@ -546,7 +549,7 @@ mod tests {
         let provider_submitter = if matches!(case, Case::WrongSubmitter) {
             [50; 32]
         } else {
-            update.write_authority()
+            [58; 32]
         };
         let request = ProviderExecutionRequestV3 {
             caller: ProviderCallerV3::Core,
@@ -596,6 +599,8 @@ mod tests {
             result_domain_bytes: &domain_bytes,
             result_domain: domain,
             update_account: request.update_account,
+            provider_submitter: [58; 32],
+            expected_update_authority: update.write_authority(),
             update_bytes: UPDATE,
             post_params_body: post_body,
             current_slot: update.posted_slot(),
