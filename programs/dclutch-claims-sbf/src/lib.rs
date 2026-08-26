@@ -39,6 +39,7 @@ use solana_program::{
 use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign};
 
+pub mod affine_batch_v2;
 pub mod liability_basis_v2;
 pub mod protocol_position_v2;
 mod representation;
@@ -317,6 +318,11 @@ pub fn process_instruction(
         == Some(liability_basis_v2::LIABILITY_BASIS_ACTION_MAGIC_V2.as_slice())
     {
         return liability_basis_v2::process(program_id, accounts, instruction_data);
+    }
+    if instruction_data.get(..dclutch_claims_svm::affine_batch_v2::AFFINE_BATCH_PLAN_MAGIC_V2.len())
+        == Some(dclutch_claims_svm::affine_batch_v2::AFFINE_BATCH_PLAN_MAGIC_V2.as_slice())
+    {
+        return affine_batch_v2::process(program_id, accounts, instruction_data);
     }
     if instruction_data.get(..protocol_position_v2::PROTOCOL_POSITION_REQUEST_MAGIC_V2.len())
         == Some(protocol_position_v2::PROTOCOL_POSITION_REQUEST_MAGIC_V2.as_slice())
