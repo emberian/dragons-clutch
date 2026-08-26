@@ -21,7 +21,11 @@ use dclutch_claims_svm::{
         SignedDeltaFrameSpecV3,
     },
     protocol_position_v2::ProtocolPositionSeedsV2,
-    signed_delta_v3::{DeltaDirectionV3, SignedDeltaPlanV3, SignedDeltaReceiptV3, SignedDeltaV3},
+    signed_delta_v3::{
+        DeltaDirectionV3, SIGNED_DELTA_POST_RESOURCE_DIGEST_DOMAIN_V3,
+        SIGNED_DELTA_TABLE_DIGEST_DOMAIN_V3, SignedDeltaPlanV3, SignedDeltaReceiptV3,
+        SignedDeltaV3,
+    },
 };
 use dclutch_core_contract::ContentId;
 use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV2};
@@ -59,8 +63,6 @@ pub(crate) struct AuthenticatedSignedDeltaParentV3 {
 const MARKET_REVISION_OFFSET: usize = 16;
 const POSITION_REVISION_OFFSET: usize = 16;
 const SCALAR_BYTES: usize = 8;
-const TABLE_DIGEST_DOMAIN_V3: &[u8] = b"dclutch/claims/signed-delta-table/v3";
-const RESOURCE_DIGEST_DOMAIN_V3: &[u8] = b"dclutch/claims/signed-delta-post-resources/v3";
 
 /// Stable signed-delta SBF refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -264,7 +266,13 @@ fn execute_authenticated(
     }
 
     let (positions, aggregates, deltas) = plan.table_bytes();
-    let table_digest = hashv(&[TABLE_DIGEST_DOMAIN_V3, positions, aggregates, deltas]).to_bytes();
+    let table_digest = hashv(&[
+        SIGNED_DELTA_TABLE_DIGEST_DOMAIN_V3,
+        positions,
+        aggregates,
+        deltas,
+    ])
+    .to_bytes();
     let post_resource_digest = resource_digest(&market_candidate, &position_candidates);
     let receipt = SignedDeltaReceiptV3::new(
         plan,
@@ -613,7 +621,7 @@ fn apply_coordinate(
 
 fn resource_digest(market: &[u8], positions: &[Vec<u8>]) -> [u8; 32] {
     let mut resources: Vec<&[u8]> = Vec::with_capacity(positions.len().saturating_add(2));
-    resources.push(RESOURCE_DIGEST_DOMAIN_V3);
+    resources.push(SIGNED_DELTA_POST_RESOURCE_DIGEST_DOMAIN_V3);
     resources.push(market);
     for position in positions {
         resources.push(position);

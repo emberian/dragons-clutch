@@ -24,6 +24,14 @@ pub const SIGNED_DELTA_PLAN_MAGIC_V3: [u8; 8] = *b"DCLSDP03";
 pub const SIGNED_DELTA_RECEIPT_MAGIC_V3: [u8; 8] = *b"DCLSDR03";
 /// Implemented wire version.
 pub const SIGNED_DELTA_WIRE_VERSION_V3: u16 = 3;
+/// Domain prefix for the digest of the exact ordered Position, aggregate-delta,
+/// and Position-delta tables borrowed from [`SignedDeltaPlanV3::table_bytes`].
+pub const SIGNED_DELTA_TABLE_DIGEST_DOMAIN_V3: &[u8] =
+    b"dclutch/claims/signed-delta-table/v3";
+/// Domain prefix for the digest of the exact post-commit Claims Market bytes
+/// followed by every post-commit Position in canonical plan-table order.
+pub const SIGNED_DELTA_POST_RESOURCE_DIGEST_DOMAIN_V3: &[u8] =
+    b"dclutch/claims/signed-delta-post-resources/v3";
 
 const VERSION_OFFSET: usize = 8;
 const CALLER_ROLE_OFFSET: usize = 10;
@@ -629,6 +637,51 @@ pub struct SignedDeltaReceiptV3 {
     position_delta_count: u32,
 }
 
+/// Independently recomputed physical commitments required from one Claims
+/// SignedDelta receipt.
+///
+/// The adapter computes `packet_digest` over the complete canonical plan,
+/// `table_digest` over
+/// `[SIGNED_DELTA_TABLE_DIGEST_DOMAIN_V3, positions, aggregates, deltas]`, and
+/// `post_resource_digest` over
+/// `[SIGNED_DELTA_POST_RESOURCE_DIGEST_DOMAIN_V3, post_market,
+/// post_position_0, ...]`. Positions use the canonical plan-table order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SignedDeltaReceiptCommitmentV3 {
+    packet_digest: [u8; 32],
+    table_digest: [u8; 32],
+    claims_program: [u8; 32],
+    post_resource_digest: [u8; 32],
+}
+
+impl SignedDeltaReceiptCommitmentV3 {
+    /// Construct one exact nonzero expected physical commitment.
+    pub fn new(
+        packet_digest: [u8; 32],
+        table_digest: [u8; 32],
+        claims_program: [u8; 32],
+        post_resource_digest: [u8; 32],
+    ) -> Result<Self> {
+        if [
+            packet_digest,
+            table_digest,
+            claims_program,
+            post_resource_digest,
+        ]
+        .into_iter()
+        .any(is_zero)
+        {
+            return Err(SignedDeltaErrorV3::ZeroIdentity);
+        }
+        Ok(Self {
+            packet_digest,
+            table_digest,
+            claims_program,
+            post_resource_digest,
+        })
+    }
+}
+
 impl SignedDeltaReceiptV3 {
     /// Construct a receipt whose aggregate revision advanced exactly once.
     pub fn new(
@@ -781,6 +834,24 @@ impl SignedDeltaReceiptV3 {
             || self.claim_count != plan.claim_count()
             || self.position_count != plan.position_count()
             || self.position_delta_count != plan.position_delta_count()
+        {
+            return Err(SignedDeltaErrorV3::ReceiptMismatch);
+        }
+        Ok(())
+    }
+
+    /// Require the complete canonical plan join and every independently
+    /// recomputed physical digest/provenance commitment.
+    pub fn validate_commitment(
+        self,
+        plan: SignedDeltaPlanV3<'_>,
+        expected: SignedDeltaReceiptCommitmentV3,
+    ) -> Result<()> {
+        self.validate_plan(plan)?;
+        if self.packet_digest != expected.packet_digest
+            || self.table_digest != expected.table_digest
+            || self.claims_program != expected.claims_program
+            || self.post_resource_digest != expected.post_resource_digest
         {
             return Err(SignedDeltaErrorV3::ReceiptMismatch);
         }
@@ -1089,9 +1160,40 @@ mod tests {
         let plan = SignedDeltaPlanV3::decode(&bytes).expect("plan");
         let receipt = SignedDeltaReceiptV3::new(plan, [8; 32], [9; 32], [10; 32], [11; 32], 8)
             .expect("receipt");
+        let commitment =
+            SignedDeltaReceiptCommitmentV3::new([8; 32], [9; 32], [10; 32], [11; 32])
+                .expect("commitment");
         assert_eq!(
             SignedDeltaReceiptV3::decode(&receipt.to_bytes()).expect("decode"),
             receipt
+        );
+        assert_eq!(receipt.validate_commitment(plan, commitment), Ok(()));
+        for substituted_commitment in [
+            SignedDeltaReceiptCommitmentV3::new([12; 32], [9; 32], [10; 32], [11; 32])
+                .expect("packet substitution"),
+            SignedDeltaReceiptCommitmentV3::new([8; 32], [12; 32], [10; 32], [11; 32])
+                .expect("table substitution"),
+            SignedDeltaReceiptCommitmentV3::new([8; 32], [9; 32], [12; 32], [11; 32])
+                .expect("program substitution"),
+            SignedDeltaReceiptCommitmentV3::new([8; 32], [9; 32], [10; 32], [12; 32])
+                .expect("post-resource substitution"),
+        ] {
+            assert_eq!(
+                receipt.validate_commitment(plan, substituted_commitment),
+                Err(SignedDeltaErrorV3::ReceiptMismatch)
+            );
+        }
+        assert_eq!(
+            SignedDeltaReceiptCommitmentV3::new([0; 32], [9; 32], [10; 32], [11; 32]),
+            Err(SignedDeltaErrorV3::ZeroIdentity)
+        );
+        assert_eq!(
+            SIGNED_DELTA_TABLE_DIGEST_DOMAIN_V3,
+            b"dclutch/claims/signed-delta-table/v3"
+        );
+        assert_eq!(
+            SIGNED_DELTA_POST_RESOURCE_DIGEST_DOMAIN_V3,
+            b"dclutch/claims/signed-delta-post-resources/v3"
         );
         let mut substituted = bytes.clone();
         *substituted
