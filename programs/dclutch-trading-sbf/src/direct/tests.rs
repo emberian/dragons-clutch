@@ -1652,7 +1652,7 @@ fn buy_cancel_refunds_then_closes_vault_and_replay() {
     )
     .expect("cancel");
     let plan = prepare_buy_escrow_unwind_v2(
-        DirectBuyEscrowTerminalObservationV2 {
+        &DirectBuyEscrowTerminalObservationV2 {
             record_before: creation.record,
             accounts,
             replay: live_buy_replay(creation, context, accounts),
@@ -1675,18 +1675,12 @@ fn buy_cancel_refunds_then_closes_vault_and_replay() {
     )
     .expect("terminal escrow plan");
     assert_eq!(plan.request_count, 3);
-    let refund = plan.requests[0].expect("refund");
+    let refund = plan.requests[0];
     assert_eq!(refund.operation, OperationV1::Transfer);
     assert_eq!(refund.source, accounts.vault);
     assert_eq!(refund.amount, creation.record.reserved_collateral());
-    assert_eq!(
-        plan.requests[1].expect("close Vault").operation,
-        OperationV1::CloseVault
-    );
-    assert_eq!(
-        plan.requests[2].expect("close replay").operation,
-        OperationV1::CloseReplay
-    );
+    assert_eq!(plan.requests[1].operation, OperationV1::CloseVault);
+    assert_eq!(plan.requests[2].operation, OperationV1::CloseReplay);
     assert_eq!(plan.refund_destination_after, 76);
 
     let expired = terminate_registered_intent_v2(
@@ -1700,7 +1694,7 @@ fn buy_cancel_refunds_then_closes_vault_and_replay() {
     )
     .expect("strictly post-interval expiry");
     let expired_plan = prepare_buy_escrow_unwind_v2(
-        DirectBuyEscrowTerminalObservationV2 {
+        &DirectBuyEscrowTerminalObservationV2 {
             record_before: creation.record,
             accounts,
             replay: live_buy_replay(creation, context, accounts),
@@ -1753,7 +1747,7 @@ fn full_buy_fill_with_zero_residual_closes_without_refund_transfer() {
         RegisteredRecordAfterFillV2::Live(_) => panic!("full fill must close"),
     };
     let plan = prepare_buy_escrow_full_fill_v2(
-        DirectBuyEscrowTerminalObservationV2 {
+        &DirectBuyEscrowTerminalObservationV2 {
             record_before: creation.record,
             accounts,
             replay: live_buy_replay(creation, context, accounts),
@@ -1776,15 +1770,9 @@ fn full_buy_fill_with_zero_residual_closes_without_refund_transfer() {
     )
     .expect("full-fill close");
     assert_eq!(plan.request_count, 2);
-    assert_eq!(
-        plan.requests[0].expect("close Vault").operation,
-        OperationV1::CloseVault
-    );
-    assert_eq!(
-        plan.requests[1].expect("close replay").operation,
-        OperationV1::CloseReplay
-    );
-    assert_eq!(plan.requests[2], None);
+    assert_eq!(plan.requests[0].operation, OperationV1::CloseVault);
+    assert_eq!(plan.requests[1].operation, OperationV1::CloseReplay);
+    assert_eq!(plan.requests.len(), 2);
 
     assert_eq!(plan.refund_destination_after, 10);
 }
@@ -1862,29 +1850,29 @@ fn ordinary_buy_escrow_input(fill: u64, execution_price: u64) -> DirectBuyEscrow
 fn partial_buy_fill_spends_record_vault_and_keeps_lifecycle_live() {
     let input = ordinary_buy_escrow_input(20, 50);
     assert_eq!(input.record_lifecycle, None);
-    let plan = prepare_buy_escrow_fill_v2(input).expect("partial escrow fill");
+    let plan = prepare_buy_escrow_fill_v2(&input).expect("partial escrow fill");
     assert_eq!(plan.request_count, 2);
     assert!(!plan.closes_escrow);
     assert_eq!(plan.vault_after, 55);
     assert_eq!(plan.seller_destination_after, 39);
     assert_eq!(plan.fee_destination_after, 42);
     assert_eq!(plan.buyer_refund_destination_after, 34);
-    let net = plan.requests[0].expect("seller net");
+    let net = plan.requests[0];
     assert_eq!(net.operation, OperationV1::Transfer);
     assert_eq!(net.source_compartment, CompartmentV1::TradingPrincipal);
     assert_eq!(net.source, input.accounts.vault);
     assert_eq!(net.amount, 9);
     assert_eq!(net.expected_revision, 3);
-    let fee = plan.requests[1].expect("combined fee");
+    let fee = plan.requests[1];
     assert_eq!(fee.amount, 2);
     assert_eq!(fee.expected_revision, 4);
-    assert_eq!(plan.requests[2], None);
+    assert_eq!(plan.requests.len(), 2);
 
     let mut high_revision = input;
     high_revision.replay.next_revision = 70_000;
     let high_revision_plan =
-        prepare_buy_escrow_fill_v2(high_revision).expect("u64 Custody replay revision");
-    let high_net = high_revision_plan.requests[0].expect("high-revision net");
+        prepare_buy_escrow_fill_v2(&high_revision).expect("u64 Custody replay revision");
+    let high_net = high_revision_plan.requests[0];
     assert_eq!(high_net.expected_revision, 70_000);
     assert_eq!(high_net.semantic.transfer_index, 0);
 
@@ -1893,7 +1881,7 @@ fn partial_buy_fill_spends_record_vault_and_keeps_lifecycle_live() {
         ..input
     };
     assert_eq!(
-        prepare_buy_escrow_fill_v2(underfunded),
+        prepare_buy_escrow_fill_v2(&underfunded),
         Err(DirectPhysicalError::Binding)
     );
 }
@@ -1908,27 +1896,21 @@ fn terminal_price_improved_buy_fill_refunds_and_closes_after_transfers() {
     let mut missing_close = input;
     missing_close.record_lifecycle = None;
     assert_eq!(
-        prepare_buy_escrow_fill_v2(missing_close),
+        prepare_buy_escrow_fill_v2(&missing_close),
         Err(DirectPhysicalError::State)
     );
-    let plan = prepare_buy_escrow_fill_v2(input).expect("terminal escrow fill");
+    let plan = prepare_buy_escrow_fill_v2(&input).expect("terminal escrow fill");
     assert_eq!(plan.request_count, 5);
     assert!(plan.closes_escrow);
     assert_eq!(plan.vault_after, 0);
     assert_eq!(plan.seller_destination_after, 75);
     assert_eq!(plan.fee_destination_after, 50);
     assert_eq!(plan.buyer_refund_destination_after, 45);
-    assert_eq!(plan.requests[0].expect("net").amount, 45);
-    assert_eq!(plan.requests[1].expect("fees").amount, 10);
-    assert_eq!(plan.requests[2].expect("residual").amount, 11);
-    assert_eq!(
-        plan.requests[3].expect("close Vault").operation,
-        OperationV1::CloseVault
-    );
-    assert_eq!(
-        plan.requests[4].expect("close replay").operation,
-        OperationV1::CloseReplay
-    );
+    assert_eq!(plan.requests[0].amount, 45);
+    assert_eq!(plan.requests[1].amount, 10);
+    assert_eq!(plan.requests[2].amount, 11);
+    assert_eq!(plan.requests[3].operation, OperationV1::CloseVault);
+    assert_eq!(plan.requests[4].operation, OperationV1::CloseReplay);
 }
 
 fn inline_compact(

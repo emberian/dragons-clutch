@@ -9,7 +9,7 @@
 
 extern crate alloc;
 
-use alloc::boxed::Box;
+use alloc::{boxed::Box, vec::Vec};
 use dclutch_account_profile_contract::lifecycle_v3::StateLifecyclePlanV3;
 use dclutch_custody_contract::{
     CallerRoleV1, CompartmentV1, ContextV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1,
@@ -245,12 +245,13 @@ pub struct DirectBuyEscrowFillInputV2 {
 }
 
 /// Exact ordinary Buy escrow requests and preflighted token poststate.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectBuyEscrowFillPlanV2 {
     /// Sole checked Direct ordinary settlement.
-    pub settlement: RegisteredOrdinarySettlementV2,
+    pub settlement: Box<RegisteredOrdinarySettlementV2>,
     /// Seller net, combined fee, optional residual refund, optional closes.
-    pub requests: [Option<CustodyRequestV1>; DIRECT_BUY_ESCROW_FILL_STEPS_V2],
+    /// The boxed slice is bounded by [`DIRECT_BUY_ESCROW_FILL_STEPS_V2`].
+    pub requests: Box<[CustodyRequestV1]>,
     /// Number of positive canonical requests.
     pub request_count: u8,
     /// Record-keyed Vault balance after all token transfers.
@@ -269,7 +270,7 @@ pub struct DirectBuyEscrowFillPlanV2 {
 
 /// Settle one ordinary registered fill solely from record-keyed Buy custody.
 pub fn prepare_buy_escrow_fill_v2(
-    input: DirectBuyEscrowFillInputV2,
+    input: &DirectBuyEscrowFillInputV2,
 ) -> Result<Box<DirectBuyEscrowFillPlanV2>> {
     input.context.validate(false)?;
     let buyer_before = input.direct.buyer.record;
@@ -300,10 +301,10 @@ pub fn prepare_buy_escrow_fill_v2(
         return Err(DirectPhysicalError::Binding);
     }
 
-    let settlement =
-        settle_registered_ordinary_v2(input.direct).map_err(|_| DirectPhysicalError::Settlement)?;
-    let mut requests = [None; DIRECT_BUY_ESCROW_FILL_STEPS_V2];
-    let mut next_slot = 0_usize;
+    let settlement = Box::new(
+        settle_registered_ordinary_v2(input.direct).map_err(|_| DirectPhysicalError::Settlement)?,
+    );
+    let mut requests = Vec::with_capacity(DIRECT_BUY_ESCROW_FILL_STEPS_V2);
     let mut revision = input.replay.next_revision;
     let mut vault_after = input.vault_balance;
     let mut seller_after = input.seller_destination.balance;
@@ -326,9 +327,9 @@ pub fn prepare_buy_escrow_fill_v2(
                 amount: settlement.seller_net_collateral_credit,
             },
             revision,
-            u16::try_from(next_slot).map_err(|_| DirectPhysicalError::Arithmetic)?,
+            request_index(&requests)?,
         )?;
-        append_request(&mut requests, &mut next_slot, request)?;
+        append_request(&mut requests, request, DIRECT_BUY_ESCROW_FILL_STEPS_V2)?;
         revision = request.resulting_revision;
         vault_after = vault_after
             .checked_sub(settlement.seller_net_collateral_credit)
@@ -354,9 +355,9 @@ pub fn prepare_buy_escrow_fill_v2(
                 amount: settlement.total_fee_transfer,
             },
             revision,
-            u16::try_from(next_slot).map_err(|_| DirectPhysicalError::Arithmetic)?,
+            request_index(&requests)?,
         )?;
-        append_request(&mut requests, &mut next_slot, request)?;
+        append_request(&mut requests, request, DIRECT_BUY_ESCROW_FILL_STEPS_V2)?;
         revision = request.resulting_revision;
         vault_after = vault_after
             .checked_sub(settlement.total_fee_transfer)
@@ -401,9 +402,9 @@ pub fn prepare_buy_escrow_fill_v2(
                     amount: close.collateral_refund,
                 },
                 revision,
-                u16::try_from(next_slot).map_err(|_| DirectPhysicalError::Arithmetic)?,
+                request_index(&requests)?,
             )?;
-            append_request(&mut requests, &mut next_slot, request)?;
+            append_request(&mut requests, request, DIRECT_BUY_ESCROW_FILL_STEPS_V2)?;
             revision = request.resulting_revision;
             vault_after = vault_after
                 .checked_sub(close.collateral_refund)
@@ -424,9 +425,9 @@ pub fn prepare_buy_escrow_fill_v2(
                 rent_lamports: input.vault_rent_lamports,
             },
             revision,
-            u16::try_from(next_slot).map_err(|_| DirectPhysicalError::Arithmetic)?,
+            request_index(&requests)?,
         )?;
-        append_request(&mut requests, &mut next_slot, close_vault)?;
+        append_request(&mut requests, close_vault, DIRECT_BUY_ESCROW_FILL_STEPS_V2)?;
         revision = close_vault.resulting_revision;
         let close_replay = request(
             input.context,
@@ -437,15 +438,17 @@ pub fn prepare_buy_escrow_fill_v2(
                 rent_lamports: input.replay_rent_lamports,
             },
             revision,
-            u16::try_from(next_slot).map_err(|_| DirectPhysicalError::Arithmetic)?,
+            request_index(&requests)?,
         )?;
-        append_request(&mut requests, &mut next_slot, close_replay)?;
+        append_request(&mut requests, close_replay, DIRECT_BUY_ESCROW_FILL_STEPS_V2)?;
     }
 
+    let request_count =
+        u8::try_from(requests.len()).map_err(|_| DirectPhysicalError::Arithmetic)?;
     Ok(Box::new(DirectBuyEscrowFillPlanV2 {
         settlement,
-        requests,
-        request_count: u8::try_from(next_slot).map_err(|_| DirectPhysicalError::Arithmetic)?,
+        requests: requests.into_boxed_slice(),
+        request_count,
         vault_after,
         seller_destination_after: seller_after,
         fee_destination_after: fee_after,
@@ -479,10 +482,11 @@ pub struct DirectBuyEscrowTerminalObservationV2 {
 }
 
 /// Terminal residual refund followed by Vault and replay close.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectBuyEscrowTerminalPlanV2 {
     /// Positive refund if present, then close Vault and replay.
-    pub requests: [Option<CustodyRequestV1>; DIRECT_BUY_ESCROW_TERMINAL_STEPS_V2],
+    /// The boxed slice is bounded by [`DIRECT_BUY_ESCROW_TERMINAL_STEPS_V2`].
+    pub requests: Box<[CustodyRequestV1]>,
     /// Number of positive canonical requests.
     pub request_count: u8,
     /// External signed destination after residual refund.
@@ -491,7 +495,7 @@ pub struct DirectBuyEscrowTerminalPlanV2 {
 
 /// Project a full fill into exact terminal Custody requests.
 pub fn prepare_buy_escrow_full_fill_v2(
-    input: DirectBuyEscrowTerminalObservationV2,
+    input: &DirectBuyEscrowTerminalObservationV2,
     candidate: RegisteredFillCandidateV2,
 ) -> Result<Box<DirectBuyEscrowTerminalPlanV2>> {
     let close = match candidate.record {
@@ -503,14 +507,14 @@ pub fn prepare_buy_escrow_full_fill_v2(
 
 /// Project cancel, expiry, or invalidation into exact terminal Custody requests.
 pub fn prepare_buy_escrow_unwind_v2(
-    input: DirectBuyEscrowTerminalObservationV2,
+    input: &DirectBuyEscrowTerminalObservationV2,
     terminal: RegisteredTerminalResultV2,
 ) -> Result<Box<DirectBuyEscrowTerminalPlanV2>> {
     prepare_buy_escrow_terminal(input, terminal.maker_root, terminal.close, true)
 }
 
 fn prepare_buy_escrow_terminal(
-    input: DirectBuyEscrowTerminalObservationV2,
+    input: &DirectBuyEscrowTerminalObservationV2,
     maker_root: MakerReplayRootV1,
     close: RegisteredRecordCloseV2,
     is_unwind: bool,
@@ -548,9 +552,8 @@ fn prepare_buy_escrow_terminal(
         input.record_lifecycle,
     )?;
 
-    let mut requests = [None; DIRECT_BUY_ESCROW_TERMINAL_STEPS_V2];
+    let mut requests = Vec::with_capacity(DIRECT_BUY_ESCROW_TERMINAL_STEPS_V2);
     let mut revision = input.replay.next_revision;
-    let mut next_slot = 0_usize;
     let refund_destination_after = input
         .refund_destination
         .balance
@@ -569,15 +572,10 @@ fn prepare_buy_escrow_terminal(
                 amount: close.collateral_refund,
             },
             revision,
-            u16::try_from(next_slot).map_err(|_| DirectPhysicalError::Arithmetic)?,
+            request_index(&requests)?,
         )?;
-        *requests
-            .get_mut(next_slot)
-            .ok_or(DirectPhysicalError::Arithmetic)? = Some(refund);
+        append_request(&mut requests, refund, DIRECT_BUY_ESCROW_TERMINAL_STEPS_V2)?;
         revision = refund.resulting_revision;
-        next_slot = next_slot
-            .checked_add(1)
-            .ok_or(DirectPhysicalError::Arithmetic)?;
     }
     let close_vault = request(
         input.context,
@@ -588,15 +586,14 @@ fn prepare_buy_escrow_terminal(
             rent_lamports: input.vault_rent_lamports,
         },
         revision,
-        u16::try_from(next_slot).map_err(|_| DirectPhysicalError::Arithmetic)?,
+        request_index(&requests)?,
     )?;
-    *requests
-        .get_mut(next_slot)
-        .ok_or(DirectPhysicalError::Arithmetic)? = Some(close_vault);
+    append_request(
+        &mut requests,
+        close_vault,
+        DIRECT_BUY_ESCROW_TERMINAL_STEPS_V2,
+    )?;
     revision = close_vault.resulting_revision;
-    next_slot = next_slot
-        .checked_add(1)
-        .ok_or(DirectPhysicalError::Arithmetic)?;
     let close_replay = request(
         input.context,
         input.record_before,
@@ -606,17 +603,18 @@ fn prepare_buy_escrow_terminal(
             rent_lamports: input.replay_rent_lamports,
         },
         revision,
-        u16::try_from(next_slot).map_err(|_| DirectPhysicalError::Arithmetic)?,
+        request_index(&requests)?,
     )?;
-    *requests
-        .get_mut(next_slot)
-        .ok_or(DirectPhysicalError::Arithmetic)? = Some(close_replay);
-    next_slot = next_slot
-        .checked_add(1)
-        .ok_or(DirectPhysicalError::Arithmetic)?;
+    append_request(
+        &mut requests,
+        close_replay,
+        DIRECT_BUY_ESCROW_TERMINAL_STEPS_V2,
+    )?;
+    let request_count =
+        u8::try_from(requests.len()).map_err(|_| DirectPhysicalError::Arithmetic)?;
     Ok(Box::new(DirectBuyEscrowTerminalPlanV2 {
-        requests,
-        request_count: u8::try_from(next_slot).map_err(|_| DirectPhysicalError::Arithmetic)?,
+        requests: requests.into_boxed_slice(),
+        request_count,
         refund_destination_after,
     }))
 }
@@ -875,17 +873,19 @@ pub(super) fn validate_replay(
     Ok(())
 }
 
-fn append_request<const N: usize>(
-    requests: &mut [Option<CustodyRequestV1>; N],
-    next_slot: &mut usize,
+fn request_index(requests: &[CustodyRequestV1]) -> Result<u16> {
+    u16::try_from(requests.len()).map_err(|_| DirectPhysicalError::Arithmetic)
+}
+
+fn append_request(
+    requests: &mut Vec<CustodyRequestV1>,
     request: CustodyRequestV1,
+    maximum: usize,
 ) -> Result<()> {
-    *requests
-        .get_mut(*next_slot)
-        .ok_or(DirectPhysicalError::Arithmetic)? = Some(request);
-    *next_slot = next_slot
-        .checked_add(1)
-        .ok_or(DirectPhysicalError::Arithmetic)?;
+    if requests.len() >= maximum {
+        return Err(DirectPhysicalError::Arithmetic);
+    }
+    requests.push(request);
     Ok(())
 }
 
