@@ -15,7 +15,6 @@ use alloc::{vec, vec::Vec};
 #[cfg(not(target_os = "solana"))]
 use dclutch_account_profile_contract::v2::{
     AccountPrestateV2, AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE,
-    DYNAMIC_FIXED_SPAN_ENTRY_BYTES, DYNAMIC_FIXED_SPAN_HEADER_BYTES, OPERATION_BYTES, RULE_BYTES,
     TrustedBuiltinIdentityV2, TrustedEnvironmentV2, TrustedIdentityEnvironmentV2,
     encode::{
         AccountAliasInputV2, AccountCoordinateV2, AccountEffectPermissionsV2,
@@ -24,20 +23,21 @@ use dclutch_account_profile_contract::v2::{
         RegisterGeometryV2, encode_account_profile_with_dynamic_fixed_span_v2_atomic,
     },
 };
-#[cfg(not(target_os = "solana"))]
-use dclutch_claims_svm::frame_spec_v1::{
-    SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3, SignedDeltaFrameSpecV3,
+use dclutch_account_profile_contract::v2::{
+    DYNAMIC_FIXED_SPAN_ENTRY_BYTES, DYNAMIC_FIXED_SPAN_HEADER_BYTES, OPERATION_BYTES, RULE_BYTES,
 };
+use dclutch_claims_svm::frame_spec_v1::SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3;
+#[cfg(not(target_os = "solana"))]
+use dclutch_claims_svm::frame_spec_v1::SignedDeltaFrameSpecV3;
 #[cfg(not(target_os = "solana"))]
 use dclutch_custody_contract::{CustodyFrameSpecV1, OperationV1};
 #[cfg(not(target_os = "solana"))]
 use dclutch_product_runtime_v2_svm_reader::BASIS_WIDTH_OFFSET_V3;
 
+use super::v3_hot_artifact::DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3;
 #[cfg(not(target_os = "solana"))]
 use super::{
-    v3_hot_artifact::{
-        DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3, DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3,
-    },
+    v3_hot_artifact::DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3,
     v3_obligation::DEALER_OBLIGATION_HEADER_BYTES_V3,
     v3_trade_artifacts::{
         DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4, DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4,
