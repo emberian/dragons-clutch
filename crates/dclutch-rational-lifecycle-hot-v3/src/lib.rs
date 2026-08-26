@@ -13,6 +13,7 @@ mod account_profile;
 mod artifacts;
 mod bundle;
 mod compact_artifacts_v4;
+mod compact_operator_v4;
 mod effect;
 mod operator;
 
@@ -32,6 +33,9 @@ pub use compact_artifacts_v4::{
     RationalLifecycleCompactBundleInputV4, RationalLifecycleCompactBundleV4,
     build_rational_lifecycle_compact_bundle_v4, encode_rational_lifecycle_compact_artifacts_v4,
     validate_rational_lifecycle_compact_bundle_v4,
+};
+pub use compact_operator_v4::{
+    RationalLifecycleVacancyAccountsV4, build_rational_lifecycle_compact_hot_instruction_v4,
 };
 pub use effect::{
     RATIONAL_LIFECYCLE_HOT_INJECTED_ACCOUNT_COUNT_V3, encode_rational_lifecycle_effect_v3,

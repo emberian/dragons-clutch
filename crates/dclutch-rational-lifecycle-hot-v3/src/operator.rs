@@ -20,7 +20,7 @@ use crate::{Error, Result, lifecycle_claims_account_count_v3, validate_action_ge
 
 // IPv6 minimum-MTU Solana packet payload. Address lookup tables can compress
 // account keys, but never instruction bytes themselves.
-const MAX_SOLANA_PACKET_BYTES: usize = 1_232;
+pub(crate) const MAX_SOLANA_PACKET_BYTES: usize = 1_232;
 
 /// Checked release evidence for the immutable Trading Hot outer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -170,7 +170,7 @@ pub fn build_rational_lifecycle_hot_instruction_v3(
     })
 }
 
-fn validate_child_frame(
+pub(crate) fn validate_child_frame(
     claims_child: &Instruction,
     action: dclutch_rational_representation_v2_lifecycle_contract::LifecycleActionV2,
 ) -> Result<()> {
@@ -213,7 +213,7 @@ fn validate_child_frame(
     Ok(())
 }
 
-fn validate_fixed_frame(
+pub(crate) fn validate_fixed_frame(
     state: &RationalLifecycleHotStateV3<'_>,
     checked: CheckedRationalLifecycleHotOuterV3,
 ) -> Result<()> {
