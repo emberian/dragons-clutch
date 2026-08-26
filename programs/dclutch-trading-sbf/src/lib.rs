@@ -10,8 +10,9 @@
 //! root, its FundingState accounts, and the exact Core acknowledgment. It has
 //! no family discriminator.
 
-// `entrypoint_no_alloc!` expands through `std::mem::MaybeUninit` on both host
-// and SBF targets; the Solana toolchain supplies that core-compatible facade.
+// The canonical physical profiles exceed the 64-account hard limit of the
+// pinned `entrypoint_no_alloc!` deserializer. The standard entrypoint owns its
+// bounded per-instruction account vector on the SBF heap instead.
 extern crate std;
 
 #[cfg(feature = "shadow-accelerator-auth-only")]
@@ -160,11 +161,21 @@ impl From<TradingSbfError> for ProgramError {
     }
 }
 
+/// Maximum bounded account vector accepted by the canonical Trading entrypoint.
+///
+/// This covers the Registry-continuation Hot frame at the common heap-profile
+/// maxima: 38 fixed accounts, one continuation admission, eight admitted-AOT
+/// evidence accounts, ten 880-byte bank pages, and 251 non-injected physical
+/// runtime representatives. The standard entrypoint deserializes this vector
+/// without the obsolete 64-account fixed-array limit; larger frames refuse
+/// before any family or mutation path executes.
+pub const TRADING_MAX_INSTRUCTION_ACCOUNTS_V3: usize = 308;
+
 #[cfg(all(
     not(feature = "no-entrypoint"),
     not(feature = "shadow-accelerator-auth-only")
 ))]
-solana_program::entrypoint_no_alloc!(program_entrypoint);
+solana_program::entrypoint!(program_entrypoint);
 
 #[cfg(all(
     not(feature = "no-entrypoint"),
@@ -189,9 +200,38 @@ pub fn process_instruction(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
+    require_instruction_account_bound_v3(accounts.len())?;
     if hot_v3::is_hot_execution_v3(instruction_data) {
         hot_v3::process_hot_execution_v3(program_id, accounts, instruction_data)
     } else {
         outer::process_activation(program_id, accounts, instruction_data)
+    }
+}
+
+#[cfg(not(feature = "shadow-accelerator-auth-only"))]
+fn require_instruction_account_bound_v3(account_count: usize) -> ProgramResult {
+    if account_count <= TRADING_MAX_INSTRUCTION_ACCOUNTS_V3 {
+        Ok(())
+    } else {
+        Err(TradingSbfError::UnsupportedContent.into())
+    }
+}
+
+#[cfg(all(test, not(feature = "shadow-accelerator-auth-only")))]
+mod entrypoint_tests {
+    use super::*;
+
+    #[test]
+    fn canonical_bound_exceeds_legacy_limit_and_refuses_overflow() {
+        assert!(TRADING_MAX_INSTRUCTION_ACCOUNTS_V3 > 64);
+        assert_eq!(require_instruction_account_bound_v3(65), Ok(()));
+        assert_eq!(
+            require_instruction_account_bound_v3(TRADING_MAX_INSTRUCTION_ACCOUNTS_V3),
+            Ok(())
+        );
+        assert_eq!(
+            require_instruction_account_bound_v3(TRADING_MAX_INSTRUCTION_ACCOUNTS_V3 + 1),
+            Err(TradingSbfError::UnsupportedContent.into())
+        );
     }
 }
