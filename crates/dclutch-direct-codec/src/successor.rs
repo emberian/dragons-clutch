@@ -31,6 +31,91 @@ pub const DIRECT_REGISTERED_RECORD_BYTES_V2: usize = generated::DIRECT_REGISTERE
 /// Basis-point denominator and sole fee floor denominator.
 pub const DIRECT_FEE_DENOMINATOR_V1: u16 = 10_000;
 
+/// Canonical projection coordinates of [`DirectExecutionConfigV1`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectExecutionConfigLayoutV1;
+
+impl DirectExecutionConfigLayoutV1 {
+    /// Positive price scale (`u64`, little-endian).
+    pub const PRICE_SCALE: usize = generated::DIRECT_CONFIG_PRICE_SCALE_OFFSET_V1;
+    /// Venue fee rate (`u16`, little-endian).
+    pub const FEE_BASIS_POINTS: usize = generated::DIRECT_CONFIG_FEE_BPS_OFFSET_V1;
+    /// Immutable fee-recipient identity.
+    pub const FEE_RECIPIENT: usize = generated::DIRECT_CONFIG_FEE_RECIPIENT_OFFSET_V1;
+
+    /// Hostile-decode and atomically copy the complete typed config facts.
+    pub fn copy_facts_into(
+        selected_config_id: [u8; 32],
+        authenticated_config_id: [u8; 32],
+        input: &[u8],
+        price_scale: &mut u64,
+        fee_basis_points: &mut u16,
+        fee_recipient: &mut [u8; 32],
+    ) -> SuccessorResult<()> {
+        let value = DirectExecutionConfigV1::decode_selected(
+            selected_config_id,
+            authenticated_config_id,
+            input,
+        )?;
+        let scale_candidate = value.price_scale();
+        let fee_candidate = value.fee_basis_points();
+        let recipient_candidate = value.fee_recipient();
+        *price_scale = scale_candidate;
+        *fee_basis_points = fee_candidate;
+        *fee_recipient = recipient_candidate;
+        Ok(())
+    }
+}
+
+/// Canonical projection coordinates of the Direct root-state tail.
+///
+/// These offsets are relative to the family state following the common
+/// `CapabilityRootHeaderV1`; account-profile emitters add that public header
+/// width exactly once.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectRootStateLayoutV1;
+
+impl DirectRootStateLayoutV1 {
+    /// Root phase (`u8`).
+    pub const PHASE: usize = generated::DIRECT_ROOT_PHASE_OFFSET_V1;
+    /// Exact number of live maker replay roots (`u64`, little-endian).
+    pub const OPEN_MAKER_ROOT_COUNT: usize = generated::DIRECT_ROOT_OPEN_MAKER_COUNT_OFFSET_V1;
+}
+
+/// Canonical projection/write coordinates of [`MakerReplayRootV1`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectMakerReplayLayoutV1;
+
+impl DirectMakerReplayLayoutV1 {
+    /// Domain-separated state magic (`u64` bytes).
+    pub const MAGIC: usize = generated::DIRECT_MAKER_MAGIC_OFFSET_V1;
+    /// State ABI version (`u16`, little-endian).
+    pub const VERSION: usize = generated::DIRECT_MAKER_VERSION_OFFSET_V1;
+    /// Canonical PDA bump (`u8`).
+    pub const BUMP: usize = generated::DIRECT_MAKER_BUMP_OFFSET_V1;
+    /// Immutable Core Market identity.
+    pub const MARKET: usize = generated::DIRECT_MAKER_MARKET_OFFSET_V1;
+    /// Immutable Market generation (`u64`, little-endian).
+    pub const GENERATION: usize = generated::DIRECT_MAKER_GENERATION_OFFSET_V1;
+    /// Immutable maker identity.
+    pub const MAKER: usize = generated::DIRECT_MAKER_IDENTITY_OFFSET_V1;
+    /// Exact next replay nonce (`u64`, little-endian).
+    pub const NEXT_NONCE: usize = generated::DIRECT_MAKER_NEXT_NONCE_OFFSET_V1;
+    /// Number of live registered records (`u64`, little-endian).
+    pub const LIVE_COUNT: usize = generated::DIRECT_MAKER_LIVE_COUNT_OFFSET_V1;
+    /// Lowest still-live registered nonce (`u64`, little-endian).
+    pub const MINIMUM_LIVE_NONCE: usize = generated::DIRECT_MAKER_MINIMUM_LIVE_NONCE_OFFSET_V1;
+    /// Immutable rent beneficiary.
+    pub const RENT_OWNER: usize = generated::DIRECT_MAKER_RENT_OWNER_OFFSET_V1;
+    /// Historical rent principal (`u64`, little-endian).
+    pub const RENT_PRINCIPAL: usize = generated::DIRECT_MAKER_RENT_PRINCIPAL_OFFSET_V1;
+
+    /// Exact encoded magic word used only by typed state initialization.
+    pub const MAGIC_WORD: u64 = u64::from_le_bytes(generated::DIRECT_MAKER_MAGIC_V1);
+    /// Exact encoded ABI version used only by typed state initialization.
+    pub const ABI_VERSION: u16 = generated::DIRECT_SUCCESSOR_ABI_VERSION_V1;
+}
+
 /// Finalized-record schema label for [`DirectExecutionConfigV1`].
 pub const DIRECT_EXECUTION_CONFIG_SCHEMA_PREIMAGE_V1: &[u8] =
     b"dclutch/schema/direct-execution-config-v1";
@@ -3491,5 +3576,142 @@ mod tests {
             ),
             Err(SuccessorError::MakerRootCountInvariant)
         );
+    }
+
+    #[test]
+    fn public_projection_layout_tracks_canonical_encoders() {
+        let selected = config();
+        let config_bytes = selected.encode();
+        assert_eq!(
+            config_bytes.get(
+                DirectExecutionConfigLayoutV1::PRICE_SCALE
+                    ..DirectExecutionConfigLayoutV1::PRICE_SCALE + 8
+            ),
+            Some(selected.price_scale().to_le_bytes().as_slice())
+        );
+        assert_eq!(
+            config_bytes.get(
+                DirectExecutionConfigLayoutV1::FEE_BASIS_POINTS
+                    ..DirectExecutionConfigLayoutV1::FEE_BASIS_POINTS + 2
+            ),
+            Some(selected.fee_basis_points().to_le_bytes().as_slice())
+        );
+        assert_eq!(
+            config_bytes.get(
+                DirectExecutionConfigLayoutV1::FEE_RECIPIENT
+                    ..DirectExecutionConfigLayoutV1::FEE_RECIPIENT + 32
+            ),
+            Some(selected.fee_recipient().as_slice())
+        );
+        let mut price_scale = 0;
+        let mut fee_basis_points = 0;
+        let mut fee_recipient = [0; 32];
+        DirectExecutionConfigLayoutV1::copy_facts_into(
+            id(42),
+            id(42),
+            &config_bytes,
+            &mut price_scale,
+            &mut fee_basis_points,
+            &mut fee_recipient,
+        )
+        .expect("config projection");
+        assert_eq!(price_scale, selected.price_scale());
+        assert_eq!(fee_basis_points, selected.fee_basis_points());
+        assert_eq!(fee_recipient, selected.fee_recipient());
+
+        let root = DirectRootStateV1::new();
+        let root_bytes = root.encode();
+        assert_eq!(
+            root_bytes.get(DirectRootStateLayoutV1::PHASE),
+            Some(&(root.phase().byte()))
+        );
+        assert_eq!(
+            root_bytes.get(
+                DirectRootStateLayoutV1::OPEN_MAKER_ROOT_COUNT
+                    ..DirectRootStateLayoutV1::OPEN_MAKER_ROOT_COUNT + 8
+            ),
+            Some(root.open_maker_root_count().to_le_bytes().as_slice())
+        );
+
+        let maker = MakerReplayRootV1::new(
+            DirectCoordinatesV1::new(id(1), 4).expect("coordinates"),
+            id(2),
+            id(3),
+            100,
+            7,
+        )
+        .expect("maker");
+        let maker_bytes = maker.encode().expect("maker bytes");
+        assert_eq!(
+            maker_bytes.get(DirectMakerReplayLayoutV1::MAGIC..DirectMakerReplayLayoutV1::MAGIC + 8),
+            Some(
+                DirectMakerReplayLayoutV1::MAGIC_WORD
+                    .to_le_bytes()
+                    .as_slice()
+            )
+        );
+        assert_eq!(
+            maker_bytes
+                .get(DirectMakerReplayLayoutV1::VERSION..DirectMakerReplayLayoutV1::VERSION + 2),
+            Some(
+                DirectMakerReplayLayoutV1::ABI_VERSION
+                    .to_le_bytes()
+                    .as_slice()
+            )
+        );
+        for (offset, expected) in [
+            (DirectMakerReplayLayoutV1::MARKET, maker.market()),
+            (DirectMakerReplayLayoutV1::MAKER, maker.maker()),
+            (DirectMakerReplayLayoutV1::RENT_OWNER, maker.rent_owner()),
+        ] {
+            assert_eq!(
+                maker_bytes.get(offset..offset + 32),
+                Some(expected.as_slice())
+            );
+        }
+        for (offset, expected) in [
+            (DirectMakerReplayLayoutV1::GENERATION, maker.generation()),
+            (DirectMakerReplayLayoutV1::NEXT_NONCE, maker.next_nonce()),
+            (DirectMakerReplayLayoutV1::LIVE_COUNT, maker.live_count()),
+            (
+                DirectMakerReplayLayoutV1::MINIMUM_LIVE_NONCE,
+                maker.minimum_live_nonce(),
+            ),
+            (
+                DirectMakerReplayLayoutV1::RENT_PRINCIPAL,
+                maker.rent_principal(),
+            ),
+        ] {
+            assert_eq!(
+                maker_bytes.get(offset..offset + 8),
+                Some(expected.to_le_bytes().as_slice())
+            );
+        }
+        assert_eq!(
+            maker_bytes.get(DirectMakerReplayLayoutV1::BUMP),
+            Some(&maker.bump())
+        );
+    }
+
+    #[test]
+    fn hostile_config_projection_preserves_all_outputs() {
+        let mut bytes = config().encode();
+        bytes[generated::DIRECT_CONFIG_RESERVED_A_OFFSET_V1] = 1;
+        let mut price_scale = 9;
+        let mut fee_basis_points = 8;
+        let mut fee_recipient = id(7);
+        let before = (price_scale, fee_basis_points, fee_recipient);
+        assert!(
+            DirectExecutionConfigLayoutV1::copy_facts_into(
+                id(42),
+                id(42),
+                &bytes,
+                &mut price_scale,
+                &mut fee_basis_points,
+                &mut fee_recipient,
+            )
+            .is_err()
+        );
+        assert_eq!((price_scale, fee_basis_points, fee_recipient), before);
     }
 }
