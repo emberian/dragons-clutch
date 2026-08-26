@@ -14,6 +14,8 @@ pub mod artifacts_v3;
 pub mod composer_v3;
 /// Canonical SeriesEscrow projection into the sole Custody writer.
 pub mod custody_v3;
+/// Exact Core-to-Custody call staging behind the common Hot V3 outer.
+pub mod execute_v3;
 /// Exact sparse family request consumed by the canonical Trading hot outer.
 pub mod instruction;
 /// Content-to-Solana/Core conversion at the explicit adapter boundary.
