@@ -32,7 +32,7 @@ pub const DEALER_LP_POSITION_BYTES_V3: usize = 256;
 /// Exact LP position wire magic.
 pub const DEALER_LP_POSITION_MAGIC_V3: [u8; 8] = *b"DCLDLP03";
 /// Current LP position wire version.
-pub const DEALER_LP_POSITION_VERSION_V3: u16 = 3;
+pub const DEALER_LP_POSITION_VERSION_V3: u16 = 4;
 
 const _: () = assert!(DEALER_LP_POSITION_PDA_DOMAIN_V3.len() <= 32);
 
@@ -101,6 +101,8 @@ pub struct DealerLpPositionV3 {
     pub generation: u64,
     /// Historical rent principal funded at creation; dust is distinct.
     pub rent_principal: u64,
+    /// Canonical Trading PDA bump persisted for lifecycle authentication.
+    pub pda_bump: u16,
 }
 
 impl DealerLpPositionV3 {
@@ -111,7 +113,7 @@ impl DealerLpPositionV3 {
             || read_u16(bytes, 8)? != DEALER_LP_POSITION_VERSION_V3
             || bytes.get(10..16).is_none_or(|reserved| reserved != [0; 6])
             || bytes
-                .get(240..)
+                .get(242..)
                 .is_none_or(|reserved| reserved.iter().any(|byte| *byte != 0))
         {
             return Err(MultiLpErrorV3::InvalidState);
@@ -127,8 +129,9 @@ impl DealerLpPositionV3 {
             equity_shares: read_u64(bytes, 216)?,
             generation: read_u64(bytes, 224)?,
             rent_principal: read_u64(bytes, 232)?,
+            pda_bump: read_u16(bytes, 240)?,
         };
-        if value.revision == 0 || value.rent_principal == 0 {
+        if value.revision == 0 || value.rent_principal == 0 || value.pda_bump > u16::from(u8::MAX) {
             return Err(MultiLpErrorV3::InvalidState);
         }
         Ok(value)
@@ -177,6 +180,10 @@ impl DealerLpPositionV3 {
         write_u64(output, 216, self.equity_shares)?;
         write_u64(output, 224, self.generation)?;
         write_u64(output, 232, self.rent_principal)?;
+        output
+            .get_mut(240..242)
+            .ok_or(MultiLpErrorV3::InvalidState)?
+            .copy_from_slice(&self.pda_bump.to_le_bytes());
         Self::decode(output).map(|_| ())
     }
 }
@@ -245,17 +252,15 @@ pub fn prepare_lp_open_v3(
             return Err(MultiLpErrorV3::InvalidState);
         }
     }
-    let expected_address = Pubkey::find_program_address(
+    let (expected_address, pda_bump) = Pubkey::find_program_address(
         &[
             DEALER_LP_POSITION_PDA_DOMAIN_V3,
             &context.child_root,
             &lp_owner,
         ],
         &Pubkey::new_from_array(context.trading_program),
-    )
-    .0
-    .to_bytes();
-    if vacant_address != expected_address
+    );
+    if vacant_address != expected_address.to_bytes()
         || vacant_owner != solana_system_interface::program::ID.to_bytes()
         || required_rent_lamports == 0
         || !vacant_data.is_empty()
@@ -274,6 +279,7 @@ pub fn prepare_lp_open_v3(
         equity_shares: 0,
         generation: context.generation,
         rent_principal: required_rent_lamports,
+        pda_bump: u16::from(pda_bump),
     }
     .encode_into(&mut initial_state)?;
     let payer_debit = required_rent_lamports.saturating_sub(vacant_lamports);
@@ -1309,12 +1315,11 @@ mod tests {
 
     fn lp_bytes(shares: u64, trading: [u8; 32]) -> ([u8; 32], [u8; DEALER_LP_POSITION_BYTES_V3]) {
         let owner = [8; 32];
-        let address = Pubkey::find_program_address(
+        let (address, pda_bump) = Pubkey::find_program_address(
             &[DEALER_LP_POSITION_PDA_DOMAIN_V3, &[5; 32], &owner],
             &Pubkey::new_from_array(trading),
-        )
-        .0
-        .to_bytes();
+        );
+        let address = address.to_bytes();
         let obligation = Pubkey::find_program_address(
             &[
                 super::super::v3_obligation::DEALER_OBLIGATION_PDA_DOMAIN_V3,
@@ -1336,6 +1341,7 @@ mod tests {
             equity_shares: shares,
             generation: 2,
             rent_principal: 50,
+            pda_bump: u16::from(pda_bump),
         }
         .encode_into(&mut bytes)
         .expect("lp");

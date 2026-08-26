@@ -113,12 +113,11 @@ fn fixture() -> Fixture {
     )
     .0
     .to_bytes();
-    let lp_address = Pubkey::find_program_address(
+    let (lp_address, lp_bump) = Pubkey::find_program_address(
         &[DEALER_LP_POSITION_PDA_DOMAIN_V3, &[5; 32], &[8; 32]],
         &Pubkey::new_from_array(trading),
-    )
-    .0
-    .to_bytes();
+    );
+    let lp_address = lp_address.to_bytes();
     let mut lp = [0; DEALER_LP_POSITION_BYTES_V3];
     DealerLpPositionV3 {
         revision: 4,
@@ -131,6 +130,7 @@ fn fixture() -> Fixture {
         equity_shares: 20,
         generation: 2,
         rent_principal: 50,
+        pda_bump: u16::from(lp_bump),
     }
     .encode_into(&mut lp)
     .expect("LP state");

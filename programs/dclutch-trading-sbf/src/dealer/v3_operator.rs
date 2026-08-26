@@ -16,7 +16,7 @@ pub const DEALER_MULTI_LP_REQUEST_BYTES_V3: usize = 312;
 /// Request magic.
 pub const DEALER_MULTI_LP_REQUEST_MAGIC_V3: [u8; 8] = *b"DCLMLP03";
 /// Current request version.
-pub const DEALER_MULTI_LP_REQUEST_VERSION_V3: u16 = 1;
+pub const DEALER_MULTI_LP_REQUEST_VERSION_V3: u16 = 2;
 /// CapabilityProgramSet selector offset in every multi-LP request.
 pub const DEALER_MULTI_LP_ACTION_SELECTOR_OFFSET_V3: u32 = 10;
 
@@ -70,6 +70,12 @@ pub struct MultiLpChainProjectionV3<'a> {
     pub now: u64,
     /// Last admitted slot/time for this unsigned request.
     pub expires_at: u64,
+    /// Current Rent minimum for a new fixed LP Position.
+    ///
+    /// The common lifecycle adapter independently recomputes this from the
+    /// trusted Rent sysvar before creation. For Close this must equal the
+    /// immutable historical principal in the live LP Position.
+    pub lp_position_rent_principal: u64,
     /// Whether Core has entered terminal settlement.
     pub terminal: bool,
 }
@@ -110,6 +116,8 @@ pub struct DealerMultiLpRequestV3 {
     pub generation: u64,
     /// Last admitted slot/time coordinate.
     pub expires_at: u64,
+    /// Exact historical rent principal used by the generic lifecycle plan.
+    pub rent_principal: u64,
 }
 
 impl DealerMultiLpRequestV3 {
@@ -119,9 +127,6 @@ impl DealerMultiLpRequestV3 {
             || bytes.get(..8) != Some(DEALER_MULTI_LP_REQUEST_MAGIC_V3.as_slice())
             || read_u16(bytes, 8)? != DEALER_MULTI_LP_REQUEST_VERSION_V3
             || bytes.get(12..16).is_none_or(|value| value != [0; 4])
-            || bytes
-                .get(304..312)
-                .is_none_or(|value| value.iter().any(|byte| *byte != 0))
         {
             return Err(MultiLpOperatorErrorV3::InvalidRequest);
         }
@@ -144,8 +149,9 @@ impl DealerMultiLpRequestV3 {
             lp_revision: read_u64(bytes, 280)?,
             generation: read_u64(bytes, 288)?,
             expires_at: read_u64(bytes, 296)?,
+            rent_principal: read_u64(bytes, 304)?,
         };
-        if value.obligation_revision == 0 || value.generation == 0 {
+        if value.obligation_revision == 0 || value.generation == 0 || value.rent_principal == 0 {
             return Err(MultiLpOperatorErrorV3::InvalidRequest);
         }
         let action_is_canonical = match action {
@@ -179,6 +185,7 @@ pub fn authenticate_multi_lp_request_v3(
         || request.obligation_revision != chain.obligation.revision()
         || request.generation != chain.generation
         || request.expires_at != chain.expires_at
+        || request.rent_principal != chain.lp_position_rent_principal
         || chain.now > request.expires_at
     {
         return Err(MultiLpOperatorErrorV3::InvalidProjection);
@@ -191,7 +198,7 @@ pub fn authenticate_multi_lp_request_v3(
         }
         MultiLpRequestActionV3::Close => {
             let lp = authenticate_current_lp(request, chain)?;
-            if lp.equity_shares != 0 {
+            if lp.equity_shares != 0 || lp.rent_principal != request.rent_principal {
                 return Err(MultiLpOperatorErrorV3::InvalidChoice);
             }
         }
@@ -297,6 +304,7 @@ fn build(
         (280, lp_revision),
         (288, chain.generation),
         (296, chain.expires_at),
+        (304, chain.lp_position_rent_principal),
     ] {
         write_bytes(&mut bytes, offset, &value.to_le_bytes())?;
     }
@@ -331,6 +339,7 @@ fn validate_projection(
     if chain.expires_at < chain.now
         || chain.obligation.child_root() != chain.child_root
         || chain.generation == 0
+        || chain.lp_position_rent_principal == 0
     {
         return Err(MultiLpOperatorErrorV3::InvalidProjection);
     }
@@ -474,6 +483,11 @@ mod tests {
         obligation: [u8; 32],
         shares: u64,
     ) -> [u8; DEALER_LP_POSITION_BYTES_V3] {
+        let pda_bump = Pubkey::find_program_address(
+            &[DEALER_LP_POSITION_PDA_DOMAIN_V3, &child_root, &owner],
+            &Pubkey::new_from_array([1; 32]),
+        )
+        .1;
         let mut bytes = [0; DEALER_LP_POSITION_BYTES_V3];
         DealerLpPositionV3 {
             revision: 3,
@@ -486,6 +500,7 @@ mod tests {
             equity_shares: shares,
             generation: 11,
             rent_principal: 50,
+            pda_bump: u16::from(pda_bump),
         }
         .encode_into(&mut bytes)
         .expect("LP state");
@@ -527,6 +542,7 @@ mod tests {
             now: 20,
             expires_at: 25,
             terminal: false,
+            lp_position_rent_principal: 50,
         };
         let set_bytes = program_set(MultiLpRequestActionV3::Open);
         let set = CapabilityProgramSetV1::decode(&set_bytes).expect("set");
@@ -535,13 +551,17 @@ mod tests {
         assert_eq!(request.action, MultiLpRequestActionV3::Open);
         assert_eq!(request.lp_position, lp_position_address);
         assert_eq!(request.obligation, obligation_address);
+        assert_eq!(request.rent_principal, 50);
         assert_eq!(unsigned.selected_program().to_bytes(), [42; 32]);
 
-        for index in [0, 8, 12, 304] {
+        for index in [0, 8, 12] {
             let mut hostile = *unsigned.as_bytes();
             hostile[index] ^= 1;
             assert!(DealerMultiLpRequestV3::decode(&hostile).is_err());
         }
+        let mut zero_rent = *unsigned.as_bytes();
+        zero_rent[304..312].fill(0);
+        assert!(DealerMultiLpRequestV3::decode(&zero_rent).is_err());
         for substitute in [
             |value: &mut DealerMultiLpRequestV3| value.lp_position[0] ^= 1,
             |value: &mut DealerMultiLpRequestV3| value.obligation_digest[0] ^= 1,
@@ -553,6 +573,12 @@ mod tests {
                 Err(MultiLpOperatorErrorV3::InvalidProjection)
             );
         }
+        let mut substituted_rent = request;
+        substituted_rent.rent_principal += 1;
+        assert_eq!(
+            authenticate_multi_lp_request_v3(substituted_rent, chain),
+            Err(MultiLpOperatorErrorV3::InvalidProjection)
+        );
     }
 
     #[test]
@@ -599,6 +625,7 @@ mod tests {
             now: 20,
             expires_at: 25,
             terminal: false,
+            lp_position_rent_principal: 50,
         };
         let close_set_bytes = program_set(MultiLpRequestActionV3::Close);
         let close_set = CapabilityProgramSetV1::decode(&close_set_bytes).expect("set");
