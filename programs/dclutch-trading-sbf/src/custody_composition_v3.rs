@@ -5,7 +5,10 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{CallerRoleV1, CustodyReceiptV1, CustodyRequestV1};
+use dclutch_custody_contract::{
+    CallerRoleV1, CompartmentV1, CustodyReceiptV1, CustodyRequestV1,
+    DELEGATED_CUSTODY_REQUEST_MAGIC_V2, DelegatedCustodyReceiptV2, DelegatedCustodyRequestV2,
+};
 use dclutch_effect_kernel::{
     v2::FixedRole,
     v3::{ProgramV3, ResolvedInvocationV3, RouteKindV3},
@@ -131,8 +134,6 @@ pub fn execute_custody_route_v3<'info>(
     if producer != *custody_program.key {
         return Err(TradingSbfError::Transition.into());
     }
-    let receipt =
-        CustodyReceiptV1::decode(&receipt_bytes).map_err(|_| TradingSbfError::Transition)?;
     let replay = child_accounts
         .get(CUSTODY_REPLAY_FRAME_COORDINATE_V1)
         .ok_or(TradingSbfError::Transition)?;
@@ -142,9 +143,12 @@ pub fn execute_custody_route_v3<'info>(
             .map_err(|_| TradingSbfError::Transition)?;
         hash(&bytes).to_bytes()
     };
-    receipt
-        .verify_for(prepared.request, prepared.request_digest, replay_digest)
-        .map_err(|_| TradingSbfError::Transition)?;
+    verify_custody_receipt_v3(
+        prepared.request,
+        &receipt_bytes,
+        prepared.request_digest,
+        replay_digest,
+    )?;
     Ok(hashv(&[
         CUSTODY_EXECUTION_DIGEST_DOMAIN_V3,
         &route_index.to_le_bytes(),
@@ -157,11 +161,26 @@ pub fn execute_custody_route_v3<'info>(
 
 struct PreparedCustodyInvocationV3<'a> {
     invocation: ResolvedInvocationV3,
-    request: CustodyRequestV1,
+    request: CustodyRequestKindV3,
     request_bytes: &'a [u8],
     request_digest: [u8; 32],
     authority_seeds: CallerAuthoritySeedsV1,
     bump: u8,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CustodyRequestKindV3 {
+    V1(CustodyRequestV1),
+    DelegatedV2(DelegatedCustodyRequestV2),
+}
+
+impl CustodyRequestKindV3 {
+    const fn base(self) -> CustodyRequestV1 {
+        match self {
+            Self::V1(request) => request,
+            Self::DelegatedV2(request) => request.custody,
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -202,22 +221,23 @@ fn prepare<'a>(
         return Err(TradingSbfError::Content.into());
     }
     let request_bytes = invocation_request(invocation, request_bank)?;
-    let request = CustodyRequestV1::decode(request_bytes).map_err(|_| TradingSbfError::Content)?;
-    if request.caller_role != CallerRoleV1::Trading
-        || request.release_set != parent.release_set
-        || request.market != parent.market
-        || request.semantic.generation != parent.generation
-        || request.semantic.parent_request_digest != parent.parent_request_digest
-        || request.caller_program != parent.trading_program
+    let request = decode_custody_request_v3(request_bytes)?;
+    let custody = request.base();
+    if custody.caller_role != CallerRoleV1::Trading
+        || custody.release_set != parent.release_set
+        || custody.market != parent.market
+        || custody.semantic.generation != parent.generation
+        || custody.semantic.parent_request_digest != parent.parent_request_digest
+        || custody.caller_program != parent.trading_program
     {
         return Err(TradingSbfError::Content.into());
     }
     let request_digest = hash(request_bytes).to_bytes();
     let authority_seeds = CallerAuthoritySeedsV1::new(
-        ContentId::new(request.release_set).map_err(|_| TradingSbfError::Content)?,
-        request.market,
+        ContentId::new(custody.release_set).map_err(|_| TradingSbfError::Content)?,
+        custody.market,
         ExecutionRoleV1::Trading,
-        request.context,
+        custody.context,
         request_digest,
     )
     .map_err(|_| TradingSbfError::Content)?;
@@ -246,6 +266,56 @@ fn prepare<'a>(
         authority_seeds,
         bump,
     })
+}
+
+fn decode_custody_request_v3(bytes: &[u8]) -> Result<CustodyRequestKindV3, ProgramError> {
+    if bytes.get(..8) == Some(DELEGATED_CUSTODY_REQUEST_MAGIC_V2.as_slice()) {
+        DelegatedCustodyRequestV2::decode(bytes)
+            .map(CustodyRequestKindV3::DelegatedV2)
+            .map_err(|_| TradingSbfError::Content.into())
+    } else {
+        let request = CustodyRequestV1::decode(bytes).map_err(|_| TradingSbfError::Content)?;
+        if request.source_compartment == CompartmentV1::External {
+            return Err(TradingSbfError::Content.into());
+        }
+        Ok(CustodyRequestKindV3::V1(request))
+    }
+}
+
+fn verify_custody_receipt_v3(
+    request: CustodyRequestKindV3,
+    receipt_bytes: &[u8],
+    request_digest: [u8; 32],
+    replay_digest: [u8; 32],
+) -> Result<(), ProgramError> {
+    match request {
+        CustodyRequestKindV3::V1(request) => {
+            let receipt =
+                CustodyReceiptV1::decode(receipt_bytes).map_err(|_| TradingSbfError::Transition)?;
+            receipt
+                .verify_for(request, request_digest, replay_digest)
+                .map_err(|_| TradingSbfError::Transition.into())
+        }
+        CustodyRequestKindV3::DelegatedV2(request) => {
+            let receipt = DelegatedCustodyReceiptV2::decode(receipt_bytes)
+                .map_err(|_| TradingSbfError::Transition)?;
+            receipt
+                .custody
+                .verify_for(request.custody, request_digest, replay_digest)
+                .map_err(|_| TradingSbfError::Transition)?;
+            if receipt.starts_atomic_debit != request.starts_atomic_debit
+                || receipt.terminal != request.terminal
+                || receipt.delegate_before != request.delegate_before
+                || receipt.delegate_after != request.delegate_after
+                || receipt.total_debit != request.total_debit
+                || receipt.allowance_before != request.allowance_before
+                || receipt.allowance_after != request.allowance_after
+            {
+                return Err(TradingSbfError::Transition.into());
+            }
+            Ok(())
+        }
+    }
 }
 
 fn validate_parent(
@@ -337,7 +407,119 @@ fn invocation_accounts<'info>(
 
 #[cfg(test)]
 mod tests {
+    use dclutch_custody_contract::{
+        ContextV1, DelegatedAllowanceObservationV2, OperationV1, ReceiptEvidenceV1,
+    };
+
     use super::*;
+
+    fn id(value: u8) -> [u8; 32] {
+        [value; 32]
+    }
+
+    fn delegated_request() -> DelegatedCustodyRequestV2 {
+        DelegatedCustodyRequestV2 {
+            custody: CustodyRequestV1 {
+                operation: OperationV1::Transfer,
+                caller_role: CallerRoleV1::Trading,
+                source_compartment: CompartmentV1::External,
+                destination_compartment: CompartmentV1::HoardPrincipal,
+                release_set: id(1),
+                market: id(2),
+                realm: id(3),
+                context: id(4),
+                caller_program: id(5),
+                semantic: ContextV1 {
+                    candidate: id(6),
+                    source_owner: id(7),
+                    destination_owner: [0; 32],
+                    order: id(8),
+                    parent_request_digest: id(9),
+                    order_nonce: 10,
+                    generation: 11,
+                    page_index: 12,
+                    execution_index: 13,
+                    transfer_index: 0,
+                },
+                source: id(14),
+                destination: id(15),
+                source_vault_context: [0; 32],
+                destination_vault_context: id(4),
+                mint: id(16),
+                token_program: id(17),
+                payer: [0; 32],
+                rent_refund: [0; 32],
+                expected_revision: 3,
+                resulting_revision: 4,
+                amount: 40,
+                rent_lamports: 0,
+            },
+            starts_atomic_debit: true,
+            terminal: false,
+            delegate_before: id(18),
+            delegate_after: id(18),
+            total_debit: 100,
+            allowance_before: 100,
+            allowance_after: 60,
+        }
+    }
+
+    #[test]
+    fn delegated_v2_is_distinct_and_v1_external_debit_is_fail_closed() {
+        let request = delegated_request();
+        let bytes = request.encode().expect("delegated request");
+        assert_eq!(
+            decode_custody_request_v3(&bytes),
+            Ok(CustodyRequestKindV3::DelegatedV2(request))
+        );
+        let base = request.custody.to_bytes().expect("base request");
+        assert_eq!(
+            decode_custody_request_v3(&base),
+            Err(TradingSbfError::Content.into())
+        );
+
+        let request_digest = hash(&bytes).to_bytes();
+        let replay_digest = id(20);
+        let receipt = DelegatedCustodyReceiptV2::new(
+            request,
+            request_digest,
+            ReceiptEvidenceV1 {
+                source_before: 500,
+                source_after: 460,
+                destination_before: 10,
+                destination_after: 50,
+                poststate_commitment: id(19),
+                replay_state_digest: replay_digest,
+            },
+            DelegatedAllowanceObservationV2 {
+                delegate_before: id(18),
+                allowance_before: 100,
+                delegate_after: id(18),
+                allowance_after: 60,
+            },
+        )
+        .expect("delegated receipt")
+        .encode()
+        .expect("receipt bytes");
+        assert_eq!(
+            verify_custody_receipt_v3(
+                CustodyRequestKindV3::DelegatedV2(request),
+                &receipt,
+                request_digest,
+                replay_digest,
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            verify_custody_receipt_v3(
+                CustodyRequestKindV3::DelegatedV2(request),
+                &receipt,
+                request_digest,
+                id(21),
+            ),
+            Err(TradingSbfError::Transition.into())
+        );
+    }
 
     #[test]
     fn parent_binding_refuses_program_or_request_substitution() {
