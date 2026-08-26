@@ -7,7 +7,11 @@
 //! performs no RPC, signing, submission, or account mutation.
 
 use dclutch_account_profile_contract::lifecycle_v3::{
-    LifecycleOperationV3, LifecycleRegistersV3, LifecycleSeedInputValueV3, SelectedLifecycleV3,
+    CoordinateScopeV3, LifecycleOperationV3, LifecycleRegisterKindV3, LifecycleRegistersV3,
+    LifecycleSeedInputValueV3, SelectedLifecycleV3,
+};
+use dclutch_account_profile_contract::v2::{
+    DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE, PhysicalAccountDataGeometryV2,
 };
 use dclutch_capability_program_contract::hot_v3::{
     HOT_CONFIG_RAW_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
@@ -27,8 +31,8 @@ use dclutch_general_adapter_contract::{
         GENERAL_CLOSE_PAYER_ACCOUNT_V3, GENERAL_CLOSE_RENT_CREDIT_ACCOUNT_V3,
         GENERAL_PRIMARY_PAYER_ACCOUNT_V3, GENERAL_PRIMARY_RENT_CREDIT_ACCOUNT_V3,
         GENERAL_PRIMARY_STATE_ACCOUNT_V3, GENERAL_TERMINAL_STATE_ACCOUNT_V3,
-        encode_general_state_lifecycle_v3_atomic, general_child_account_start_v3,
-        general_state_lifecycle_bytes_v3,
+        GeneralChildRentWidthsV5, encode_general_state_lifecycle_v5_atomic,
+        general_child_account_start_v3, general_state_lifecycle_bytes_v5,
     },
 };
 use dclutch_general_codec::{
@@ -104,8 +108,8 @@ pub struct GeneralHotStateV3 {
     pub fixed_accounts: Vec<GeneralObservedAccountMetaV3>,
     /// Exact admitted-AOT transport accounts between Hot38 and runtime state.
     pub strategy_accounts: Vec<GeneralObservedAccountMetaV3>,
-    /// AccountProfile coordinates after the injected logical prefix
-    /// `[root, config, Product, portfolio, linked-basis]`.
+    /// Packed AccountProfile physical representatives after the injected
+    /// `[root, config, Product, portfolio, linked-basis]` representatives.
     pub runtime_suffix_accounts: Vec<GeneralObservedAccountMetaV3>,
     /// Immutable execution release set selected by Market.
     pub release_set: [u8; 32],
@@ -141,15 +145,15 @@ pub struct GeneralLifecycleProjectionV3 {
 /// Exact content identities of the complete authenticated General artifact graph.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralHotArtifactDigestsV3 {
-    /// Action-selector CapabilityProgramSetV1.
+    /// Action-selector CapabilityProgramSetV2.
     pub program_set: [u8; 32],
-    /// Action-selected CapabilityProgramV3 descriptor.
+    /// Action-selected CapabilityProgramV4 descriptor.
     pub descriptor: [u8; 32],
     /// Immutable GeneralConfigV3.
     pub config: [u8; 32],
-    /// Runtime-width AccountProfileV2.
+    /// Runtime-width Profile13 AccountProfileV2.
     pub account_profile: [u8; 32],
-    /// Protected StateLifecyclePolicyV3.
+    /// Protected StateLifecyclePolicyV5.
     pub lifecycle_policy: [u8; 32],
     /// Exact action RequestProfileV1.
     pub request_profile: [u8; 32],
@@ -290,7 +294,7 @@ pub fn build_general_hot_instruction_v3(
     if provisional_bundle.request != canonical_request {
         return Err(GeneralHotOperatorErrorV3::Artifact);
     }
-    let provisional_lifecycle = project_general_lifecycle_v3(
+    let provisional_lifecycle = project_general_lifecycle_v5(
         state,
         provisional_bundle,
         canonical_request,
@@ -314,7 +318,7 @@ pub fn build_general_hot_instruction_v3(
         return Err(GeneralHotOperatorErrorV3::Artifact);
     }
     let lifecycle =
-        project_general_lifecycle_v3(state, bundle, canonical_request, checked.trading_program)?;
+        project_general_lifecycle_v5(state, bundle, canonical_request, checked.trading_program)?;
     if lifecycle != provisional_lifecycle {
         return Err(GeneralHotOperatorErrorV3::Lifecycle);
     }
@@ -612,28 +616,8 @@ fn validate_strategy_geometry(
     state: &GeneralHotStateV3,
     bundle: dclutch_general_adapter_contract::artifacts_v3::GeneralArtifactBundleV3<'_>,
 ) -> Result<(), GeneralHotOperatorErrorV3> {
-    let scalar_count = bundle
-        .effect
-        .scalar_count(bundle.tail_count)
-        .map_err(|_| GeneralHotOperatorErrorV3::StrategyGeometry)?;
-    let identity_count = bundle
-        .effect
-        .identity_count(bundle.tail_count)
-        .map_err(|_| GeneralHotOperatorErrorV3::StrategyGeometry)?;
-    let caller_count = match classify_bank_transport_v2(
-        u32::try_from(scalar_count).map_err(|_| GeneralHotOperatorErrorV3::Arithmetic)?,
-        u32::try_from(identity_count).map_err(|_| GeneralHotOperatorErrorV3::Arithmetic)?,
-    )
-    .map_err(|_| GeneralHotOperatorErrorV3::StrategyGeometry)?
-    {
-        BankTransportV2::InlineReturnData { bank_bytes } if bank_bytes != 0 => 1_usize,
-        BankTransportV2::AuthenticatedScratchPages { page_count, .. } => {
-            usize::try_from(page_count).map_err(|_| GeneralHotOperatorErrorV3::Arithmetic)?
-        }
-        BankTransportV2::InlineReturnData { .. } => {
-            return Err(GeneralHotOperatorErrorV3::StrategyGeometry);
-        }
-    };
+    let caller_count = usize::try_from(selected_bank_span_count_v3(bundle)?)
+        .map_err(|_| GeneralHotOperatorErrorV3::Arithmetic)?;
     let expected = ADMITTED_AOT_FIXED_EXTRAS_V3
         .checked_add(caller_count)
         .ok_or(GeneralHotOperatorErrorV3::Arithmetic)?;
@@ -652,58 +636,132 @@ fn validate_strategy_geometry(
     Ok(())
 }
 
+fn selected_bank_span_count_v3(
+    bundle: dclutch_general_adapter_contract::artifacts_v3::GeneralArtifactBundleV3<'_>,
+) -> Result<u32, GeneralHotOperatorErrorV3> {
+    let scalar_count = bundle
+        .effect
+        .scalar_count(bundle.tail_count)
+        .map_err(|_| GeneralHotOperatorErrorV3::StrategyGeometry)?;
+    let identity_count = bundle
+        .effect
+        .identity_count(bundle.tail_count)
+        .map_err(|_| GeneralHotOperatorErrorV3::StrategyGeometry)?;
+    match classify_bank_transport_v2(
+        u32::try_from(scalar_count).map_err(|_| GeneralHotOperatorErrorV3::Arithmetic)?,
+        u32::try_from(identity_count).map_err(|_| GeneralHotOperatorErrorV3::Arithmetic)?,
+    )
+    .map_err(|_| GeneralHotOperatorErrorV3::StrategyGeometry)?
+    {
+        BankTransportV2::InlineReturnData { bank_bytes } if bank_bytes != 0 => Ok(1),
+        BankTransportV2::AuthenticatedScratchPages { page_count, .. } if page_count != 0 => {
+            Ok(page_count)
+        }
+        BankTransportV2::InlineReturnData { .. } => {
+            Err(GeneralHotOperatorErrorV3::StrategyGeometry)
+        }
+        BankTransportV2::AuthenticatedScratchPages { .. } => {
+            Err(GeneralHotOperatorErrorV3::StrategyGeometry)
+        }
+    }
+}
+
 fn validate_runtime_geometry(
     state: &GeneralHotStateV3,
     bundle: dclutch_general_adapter_contract::artifacts_v3::GeneralArtifactBundleV3<'_>,
 ) -> Result<(), GeneralHotOperatorErrorV3> {
     let profile = bundle.account_profile;
-    let fixed = usize::from(profile.fixed_account_count());
-    let stride = usize::from(profile.item_account_stride());
-    let tail =
-        usize::try_from(bundle.tail_count).map_err(|_| GeneralHotOperatorErrorV3::Arithmetic)?;
-    let total = stride
-        .checked_mul(tail)
-        .and_then(|value| fixed.checked_add(value))
-        .ok_or(GeneralHotOperatorErrorV3::Arithmetic)?;
-    if fixed < HOT_RUNTIME_LOGICAL_PREFIX_V3
+    if profile.artifact_profile() != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+        || profile.dynamic_fixed_span_count() != 1
+    {
+        return Err(GeneralHotOperatorErrorV3::RuntimeGeometry);
+    }
+    let span_counts = [selected_bank_span_count_v3(bundle)?];
+    let logical_count = profile
+        .logical_account_count_with_dynamic_spans(bundle.tail_count, &span_counts)
+        .map_err(|_| GeneralHotOperatorErrorV3::RuntimeGeometry)?;
+    let physical_count = profile
+        .physical_account_count_with_dynamic_spans(bundle.tail_count, &span_counts)
+        .map_err(|_| GeneralHotOperatorErrorV3::RuntimeGeometry)?;
+    if logical_count < HOT_RUNTIME_LOGICAL_PREFIX_V3
+        || physical_count < HOT_RUNTIME_LOGICAL_PREFIX_V3
         || state.runtime_suffix_accounts.len()
-            != total
+            != physical_count
                 .checked_sub(HOT_RUNTIME_LOGICAL_PREFIX_V3)
                 .ok_or(GeneralHotOperatorErrorV3::RuntimeGeometry)?
     {
         return Err(GeneralHotOperatorErrorV3::RuntimeGeometry);
     }
-    for coordinate in 0..total {
-        let account = logical_runtime_account(state, coordinate)?;
-        let (item, local) = if coordinate < fixed {
-            (false, coordinate)
-        } else {
-            if stride == 0 {
-                return Err(GeneralHotOperatorErrorV3::RuntimeGeometry);
-            }
-            (true, (coordinate - fixed) % stride)
-        };
-        let rule = profile
-            .rule(
-                item,
-                u16::try_from(local).map_err(|_| GeneralHotOperatorErrorV3::Arithmetic)?,
-            )
+    let mut ordinal = 0_usize;
+    while ordinal < physical_count {
+        let account = physical_runtime_account(state, ordinal)?;
+        let geometry = profile
+            .physical_account_geometry_with_dynamic_spans(bundle.tail_count, &span_counts, ordinal)
             .map_err(|_| GeneralHotOperatorErrorV3::RuntimeGeometry)?;
-        let privileges = rule.privileges();
-        if account.is_signer != (privileges & 1 != 0)
-            || account.is_writable != (privileges & 2 != 0)
-            || account.account.executable != (privileges & 4 != 0)
+        let privileges = geometry.privileges();
+        if account.is_signer != privileges.signer()
+            || account.is_writable != privileges.writable()
+            || account.account.executable != privileges.executable()
+            || !physical_data_matches_v3(geometry.data(), account.account.data.len())
         {
             return Err(GeneralHotOperatorErrorV3::RuntimeGeometry);
         }
-        let representative = profile
-            .representative(bundle.tail_count, coordinate)
-            .map_err(|_| GeneralHotOperatorErrorV3::RuntimeGeometry)?;
-        if logical_runtime_account(state, representative)?.account.key != account.account.key {
-            return Err(GeneralHotOperatorErrorV3::RuntimeGeometry);
+        let mut prior = 0_usize;
+        while prior < ordinal {
+            if physical_runtime_account(state, prior)?.account.key == account.account.key {
+                return Err(GeneralHotOperatorErrorV3::RuntimeGeometry);
+            }
+            prior = prior
+                .checked_add(1)
+                .ok_or(GeneralHotOperatorErrorV3::Arithmetic)?;
         }
+        ordinal = ordinal
+            .checked_add(1)
+            .ok_or(GeneralHotOperatorErrorV3::Arithmetic)?;
+    }
+    let span = profile
+        .dynamic_fixed_span(0)
+        .map_err(|_| GeneralHotOperatorErrorV3::RuntimeGeometry)?;
+    if span.count_scalar()
+        != u16::try_from(general_scalar::INPUT_SCRATCH_PAGE_COUNT)
+            .map_err(|_| GeneralHotOperatorErrorV3::Arithmetic)?
+        || usize::from(span.insertion_coordinate()).checked_add(
+            usize::try_from(span_counts[0]).map_err(|_| GeneralHotOperatorErrorV3::Arithmetic)?,
+        ) != Some(logical_count)
+    {
+        return Err(GeneralHotOperatorErrorV3::RuntimeGeometry);
     }
     Ok(())
+}
+
+fn physical_data_matches_v3(geometry: PhysicalAccountDataGeometryV2, actual: usize) -> bool {
+    match geometry {
+        PhysicalAccountDataGeometryV2::Exact { bytes } => actual == bytes,
+        PhysicalAccountDataGeometryV2::VacantOrExact { live_bytes } => {
+            actual == 0 || actual == live_bytes
+        }
+        PhysicalAccountDataGeometryV2::AdapterAuthenticatedVariable { minimum_bytes } => {
+            actual >= minimum_bytes
+        }
+        PhysicalAccountDataGeometryV2::Opaque => true,
+    }
+}
+
+fn physical_runtime_account(
+    state: &GeneralHotStateV3,
+    physical_ordinal: usize,
+) -> Result<&GeneralObservedAccountMetaV3, GeneralHotOperatorErrorV3> {
+    if physical_ordinal < HOT_RUNTIME_LOGICAL_PREFIX_V3 {
+        return logical_runtime_account(state, physical_ordinal);
+    }
+    state
+        .runtime_suffix_accounts
+        .get(
+            physical_ordinal
+                .checked_sub(HOT_RUNTIME_LOGICAL_PREFIX_V3)
+                .ok_or(GeneralHotOperatorErrorV3::RuntimeGeometry)?,
+        )
+        .ok_or(GeneralHotOperatorErrorV3::RuntimeGeometry)
 }
 
 fn logical_runtime_account(
@@ -735,18 +793,24 @@ fn logical_runtime_account(
     }
 }
 
-fn project_general_lifecycle_v3(
+fn project_general_lifecycle_v5(
     state: &GeneralHotStateV3,
     bundle: dclutch_general_adapter_contract::artifacts_v3::GeneralArtifactBundleV3<'_>,
     request: ControllerRequestV2,
     trading_program: Pubkey,
 ) -> Result<GeneralLifecycleProjectionV3, GeneralHotOperatorErrorV3> {
-    let policy_bytes = general_state_lifecycle_bytes_v3(request.action)
+    let policy_bytes = general_state_lifecycle_bytes_v5(request.action)
         .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
     let mut scratch = vec![0_u8; policy_bytes];
     let mut canonical = vec![0_u8; policy_bytes];
-    encode_general_state_lifecycle_v3_atomic(request.action, &mut scratch, &mut canonical)
-        .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
+    let child_widths = selected_child_rent_widths_v5(bundle)?;
+    encode_general_state_lifecycle_v5_atomic(
+        request.action,
+        child_widths,
+        &mut scratch,
+        &mut canonical,
+    )
+    .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
     if bundle.lifecycle_policy.bytes() != canonical.as_slice() {
         return Err(GeneralHotOperatorErrorV3::Lifecycle);
     }
@@ -883,6 +947,58 @@ fn project_general_lifecycle_v3(
         return Err(GeneralHotOperatorErrorV3::Lifecycle);
     }
     Ok(projection)
+}
+
+fn selected_child_rent_widths_v5(
+    bundle: dclutch_general_adapter_contract::artifacts_v3::GeneralArtifactBundleV3<'_>,
+) -> Result<Option<GeneralChildRentWidthsV5>, GeneralHotOperatorErrorV3> {
+    if bundle.request.action != Action::InitializeSettlement {
+        if bundle.lifecycle_policy.current_rent_quote_count() != 0 {
+            return Err(GeneralHotOperatorErrorV3::Lifecycle);
+        }
+        return Ok(None);
+    }
+    let expected_destinations = [
+        general_scalar::POSITION_RENT_PRINCIPAL,
+        general_scalar::ADMISSION_RENT_PRINCIPAL,
+        general_scalar::CUSTODY_REPLAY_RENT_LAMPORTS,
+        general_scalar::CUSTODY_VAULT_RENT_LAMPORTS,
+    ];
+    if usize::from(bundle.lifecycle_policy.current_rent_quote_count())
+        != expected_destinations.len()
+    {
+        return Err(GeneralHotOperatorErrorV3::Lifecycle);
+    }
+    // Product N and the semantic-owner fixed child widths are regenerated by
+    // `GeneralChildRentWidthsV5` and the canonical V5 encoder below. The sole
+    // release-variable input is the selected vault width committed by the V5
+    // policy; it is never taken from the family request or GeneralConfig.
+    let mut vault_width = None;
+    for (ordinal, expected_destination) in expected_destinations.into_iter().enumerate() {
+        let quote = bundle
+            .lifecycle_policy
+            .current_rent_quote(
+                u16::try_from(ordinal).map_err(|_| GeneralHotOperatorErrorV3::Arithmetic)?,
+            )
+            .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
+        let destination = quote.scalar_destination();
+        if destination.kind() != LifecycleRegisterKindV3::Scalar
+            || destination.scope() != CoordinateScopeV3::Fixed
+            || u32::from(destination.index()) != expected_destination
+            || quote.exact_data_len() == 0
+        {
+            return Err(GeneralHotOperatorErrorV3::Lifecycle);
+        }
+        if ordinal == 3 {
+            vault_width = Some(quote.exact_data_len());
+        }
+    }
+    GeneralChildRentWidthsV5::new(
+        bundle.tail_count,
+        vault_width.ok_or(GeneralHotOperatorErrorV3::Lifecycle)?,
+    )
+    .map(Some)
+    .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1105,6 +1221,13 @@ fn signer_keys(accounts: &[AccountMeta]) -> Result<Vec<Pubkey>, GeneralHotOperat
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow;
+
+    use dclutch_account_profile_contract::lifecycle_v3::{
+        Error as LifecycleErrorV3, StateLifecyclePolicyV5,
+    };
+    use dclutch_general_adapter_contract::state_artifacts_v3::{
+        encode_general_state_lifecycle_v3_atomic, general_state_lifecycle_bytes_v3,
+    };
 
     use super::*;
     use solana_address_lookup_table_interface::state::LookupTableMeta;
@@ -1334,6 +1457,24 @@ mod tests {
         assert_eq!(
             canonical_terminal_coordinate_v3(Action::Close, u64::MAX),
             Err(GeneralHotOperatorErrorV3::Arithmetic)
+        );
+    }
+
+    #[test]
+    fn stale_v4_lifecycle_bytes_cannot_enter_the_operator() {
+        let width = general_state_lifecycle_bytes_v3(Action::InitializeSettlement)
+            .expect("legacy V4 width");
+        let mut scratch = vec![0_u8; width];
+        let mut legacy = vec![0_u8; width];
+        encode_general_state_lifecycle_v3_atomic(
+            Action::InitializeSettlement,
+            &mut scratch,
+            &mut legacy,
+        )
+        .expect("canonical legacy evidence");
+        assert_eq!(
+            StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], &legacy),
+            Err(LifecycleErrorV3::UnsupportedProfile)
         );
     }
 }
