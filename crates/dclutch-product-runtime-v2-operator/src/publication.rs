@@ -550,7 +550,6 @@ fn authenticate_common(state: RecordPublicationStateV1<'_>) -> Result<(), Public
         || state.system_program.key != system_program::ID
         || state.system_program.owner != native_loader::ID
         || !state.system_program.executable
-        || !state.system_program.data.is_empty()
         || state.rent.key != sysvar::rent::ID
         || state.rent.owner != sysvar::ID
         || state.rent.executable

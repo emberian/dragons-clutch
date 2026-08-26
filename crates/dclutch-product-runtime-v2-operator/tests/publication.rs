@@ -25,6 +25,10 @@ const SLOT: u64 = 730;
 const CLOCK_SLOT: u64 = 19_000;
 const REGISTRY: Pubkey = Pubkey::new_from_array([0x71; 32]);
 const SPONSOR: Pubkey = Pubkey::new_from_array([0x72; 32]);
+// Agave 4.0.2 exposes this exact immutable NativeLoader metadata on the
+// built-in System Program account. It is not executable program state owned
+// by the caller and must not be confused with a vacant System-owned account.
+const AGAVE_4_0_2_SYSTEM_PROGRAM_DATA: &[u8; 14] = b"system_program";
 
 fn account<'a>(
     key: Pubkey,
@@ -101,10 +105,59 @@ fn state<'a>(
             false,
             cursor.data,
         ),
-        system_program: account(system_program::ID, native_loader::ID, 1, true, &[]),
+        system_program: account(
+            system_program::ID,
+            native_loader::ID,
+            1,
+            true,
+            AGAVE_4_0_2_SYSTEM_PROGRAM_DATA,
+        ),
         rent: account(sysvar::rent::ID, sysvar::ID, 1, false, rent),
         clock: account(sysvar::clock::ID, sysvar::ID, 1, false, clock),
     }
+}
+
+#[test]
+fn publication_accepts_real_agave_system_metadata_and_refuses_authority_substitution() {
+    let bytes = [0x30; 17];
+    let content = RecordPublicationContentV1 {
+        schema_release_id: [0x43; 32],
+        content: &bytes,
+    };
+    let (raw, cursor, _) = derive_record_addresses_v1(REGISTRY, content).expect("addresses");
+    let rent_bytes = rent_data();
+    let clock_bytes = clock_data();
+    let canonical = state(
+        observed(raw, system_program::ID, 0, &[]),
+        observed(cursor, system_program::ID, 0, &[]),
+        &rent_bytes,
+        &clock_bytes,
+    );
+    assert_eq!(
+        build_record_publication_step_v1(REGISTRY, content, canonical)
+            .expect("real System Program metadata")
+            .action,
+        RecordPublicationActionV1::Begin
+    );
+
+    let mut wrong_key = canonical;
+    wrong_key.system_program.key = Pubkey::new_unique();
+    assert_eq!(
+        build_record_publication_step_v1(REGISTRY, content, wrong_key),
+        Err(PublicationErrorV1::AccountAuthority)
+    );
+    let mut wrong_owner = canonical;
+    wrong_owner.system_program.owner = system_program::ID;
+    assert_eq!(
+        build_record_publication_step_v1(REGISTRY, content, wrong_owner),
+        Err(PublicationErrorV1::AccountAuthority)
+    );
+    let mut not_executable = canonical;
+    not_executable.system_program.executable = false;
+    assert_eq!(
+        build_record_publication_step_v1(REGISTRY, content, not_executable),
+        Err(PublicationErrorV1::AccountAuthority)
+    );
 }
 
 struct AcceptAdapter;
