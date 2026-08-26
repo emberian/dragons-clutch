@@ -11,6 +11,9 @@ use core::convert::TryInto;
 
 use super::v2::{AccountInput, AccountPermission, FixedRole};
 
+/// Safe, allocation-free typed EffectProgram V3 artifact encoder.
+pub mod encode;
+
 /// Canonical runtime-tail effect-program magic.
 pub const MAGIC: [u8; 4] = *b"DCE3";
 /// Finalized-record schema label for the V3 syntax successor admitting typed
