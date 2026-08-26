@@ -1,0 +1,28 @@
+[package]
+name = "dclutch-series-sbf"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.85"
+description = "Thin authenticated SBF adapter for recurring Series"
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[features]
+default = []
+no-entrypoint = []
+custom-heap = []
+custom-panic = []
+
+[dependencies]
+dclutch-registry-svm = { path = "../../crates/dclutch-registry-svm" }
+dclutch-release-set-contract = { path = "../../crates/dclutch-release-set-contract" }
+dclutch-market-core-codec = { path = "../../crates/dclutch-market-core-codec" }
+dclutch-series-codec = { path = "../../crates/dclutch-series-codec" }
+solana-program = { version = "=3.0.0", default-features = false }
+solana-sdk-ids = "=3.1.0"
+solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
+
+[workspace]
