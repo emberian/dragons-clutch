@@ -30,6 +30,84 @@ pub const RATIONAL_LIFECYCLE_HOT_ITEM_IDENTITIES_V3: usize = 5;
 /// Exact scalar registers per coordinate row.
 pub const RATIONAL_LIFECYCLE_HOT_ITEM_SCALARS_V3: usize = 13;
 
+/// Canonical descriptor-specialized flat register geometry.
+///
+/// Common Hot's runtime tail is independently fixed by Product outcome width,
+/// while lifecycle rows are the descriptor's nonzero support and therefore
+/// may be sparse. Lifecycle artifacts consequently flatten their exact,
+/// descriptor-known row count into common registers instead of claiming that
+/// support count equals Product width.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RationalLifecycleHotRegisterLayoutV3 {
+    coordinate_count: usize,
+}
+
+impl RationalLifecycleHotRegisterLayoutV3 {
+    /// Construct the exact register geometry for one descriptor/action pair.
+    pub const fn new(coordinate_count: usize) -> Self {
+        Self { coordinate_count }
+    }
+
+    /// Exact lifecycle coordinate count.
+    pub const fn coordinate_count(self) -> usize {
+        self.coordinate_count
+    }
+
+    /// Exact flat common-identity count.
+    pub const fn identity_count(self) -> Option<usize> {
+        match self
+            .coordinate_count
+            .checked_mul(RATIONAL_LIFECYCLE_HOT_ITEM_IDENTITIES_V3)
+        {
+            Some(items) => RATIONAL_LIFECYCLE_HOT_COMMON_IDENTITIES_V3.checked_add(items),
+            None => None,
+        }
+    }
+
+    /// Exact flat common-scalar count.
+    pub const fn scalar_count(self) -> Option<usize> {
+        match self
+            .coordinate_count
+            .checked_mul(RATIONAL_LIFECYCLE_HOT_ITEM_SCALARS_V3)
+        {
+            Some(items) => RATIONAL_LIFECYCLE_HOT_COMMON_SCALARS_V3.checked_add(items),
+            None => None,
+        }
+    }
+
+    /// Flat common-identity index for one coordinate field.
+    pub const fn coordinate_identity(self, row: usize, field: usize) -> Option<usize> {
+        if row >= self.coordinate_count || field >= RATIONAL_LIFECYCLE_HOT_ITEM_IDENTITIES_V3 {
+            return None;
+        }
+        match row.checked_mul(RATIONAL_LIFECYCLE_HOT_ITEM_IDENTITIES_V3) {
+            Some(row_start) => {
+                match RATIONAL_LIFECYCLE_HOT_COMMON_IDENTITIES_V3.checked_add(row_start) {
+                    Some(base) => base.checked_add(field),
+                    None => None,
+                }
+            }
+            None => None,
+        }
+    }
+
+    /// Flat common-scalar index for one coordinate field.
+    pub const fn coordinate_scalar(self, row: usize, field: usize) -> Option<usize> {
+        if row >= self.coordinate_count || field >= RATIONAL_LIFECYCLE_HOT_ITEM_SCALARS_V3 {
+            return None;
+        }
+        match row.checked_mul(RATIONAL_LIFECYCLE_HOT_ITEM_SCALARS_V3) {
+            Some(row_start) => {
+                match RATIONAL_LIFECYCLE_HOT_COMMON_SCALARS_V3.checked_add(row_start) {
+                    Some(base) => base.checked_add(field),
+                    None => None,
+                }
+            }
+            None => None,
+        }
+    }
+}
+
 /// Canonical byte layout for lifecycle Hot family requests.
 ///
 /// Fixed-header offsets delegate the sole lifecycle request ABI. Coordinate
@@ -240,6 +318,15 @@ pub struct RationalLifecycleHotRegisterOutputV3<'a> {
     pub item_scalars: &'a mut [u64],
 }
 
+/// Caller-owned flat register banks populated for one descriptor-specific
+/// lifecycle artifact.
+pub struct RationalLifecycleHotFlatRegisterOutputV3<'a> {
+    /// Exact common identity bank, including flattened coordinate identities.
+    pub identities: &'a mut [[u8; 32]],
+    /// Exact common scalar bank, including flattened coordinate scalars.
+    pub scalars: &'a mut [u64],
+}
+
 impl<'a> RationalLifecycleHotRequestV3<'a> {
     /// Hostile-decode one exact runtime-width Hot family request.
     pub fn decode(input: &'a [u8]) -> Result<Self> {
@@ -401,6 +488,44 @@ impl<'a> RationalLifecycleHotRequestV3<'a> {
         Ok(())
     }
 
+    /// Project descriptor-specific flat register banks atomically.
+    ///
+    /// This is the semantic reference for lifecycle RequestProfile artifacts.
+    /// The family row count determines only the flat lifecycle register tail;
+    /// `product_outcome_count` remains an independent authenticated register.
+    pub fn project_flat_registers(
+        self,
+        family_digest: [u8; 32],
+        product_outcome_count: u32,
+        output: RationalLifecycleHotFlatRegisterOutputV3<'_>,
+    ) -> Result<()> {
+        let child = decode_specialized(self.bytes, family_digest)?;
+        let coordinate_count =
+            usize::try_from(child.header().coordinate_count).map_err(|_| Error::InvalidLength)?;
+        let layout = RationalLifecycleHotRegisterLayoutV3::new(coordinate_count);
+        if output.identities.len() != layout.identity_count().ok_or(Error::InvalidLength)?
+            || output.scalars.len() != layout.scalar_count().ok_or(Error::InvalidLength)?
+        {
+            return Err(Error::InvalidLength);
+        }
+        let (common_identities, item_identities) = output
+            .identities
+            .split_at_mut(RATIONAL_LIFECYCLE_HOT_COMMON_IDENTITIES_V3);
+        let (common_scalars, item_scalars) = output
+            .scalars
+            .split_at_mut(RATIONAL_LIFECYCLE_HOT_COMMON_SCALARS_V3);
+        self.project_registers(
+            family_digest,
+            product_outcome_count,
+            RationalLifecycleHotRegisterOutputV3 {
+                common_identities,
+                common_scalars,
+                item_identities,
+                item_scalars,
+            },
+        )
+    }
+
     /// Exact family bytes hashed into the Claims child parent context.
     pub const fn as_bytes(self) -> &'a [u8] {
         self.bytes
@@ -533,6 +658,17 @@ mod tests {
         assert_eq!(
             RationalLifecycleHotLayoutV3::ITEM_POSITION_REVISION,
             ROW_POSITION_REVISION_OFFSET
+        );
+        let flat = RationalLifecycleHotRegisterLayoutV3::new(2);
+        assert_eq!(flat.identity_count(), Some(20));
+        assert_eq!(flat.scalar_count(), Some(37));
+        assert_eq!(
+            flat.coordinate_identity(1, RATIONAL_LIFECYCLE_ITEM_IDENTITY_POSITION_ADMISSION_V3),
+            Some(19)
+        );
+        assert_eq!(
+            flat.coordinate_scalar(1, RATIONAL_LIFECYCLE_ITEM_SCALAR_POSITION_REVISION_V3),
+            Some(36)
         );
     }
 

@@ -13,8 +13,6 @@ dclutch-token-svm = { path = "../dclutch-token-svm" }
 [dev-dependencies]
 sha2 = "=0.10.9"
 
-[workspace]
-
 [lints.rust]
 missing_docs = "deny"
 unsafe_code = "forbid"

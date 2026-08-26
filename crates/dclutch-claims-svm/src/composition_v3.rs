@@ -9,6 +9,11 @@
 
 use dclutch_effect_kernel::v2::FixedRole;
 use dclutch_effect_kernel::v3::{ProgramV3, RouteKindV3};
+use dclutch_rational_representation_v2_lifecycle_contract::{
+    LIFECYCLE_COMMON_ACCOUNT_COUNT_V2, LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2,
+    LIFECYCLE_REQUEST_MAGIC_V2, LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2, LifecycleActionV2,
+    LifecycleRequestV2,
+};
 
 use crate::{
     CallerRole,
@@ -82,6 +87,7 @@ pub struct ClaimsCompositionV3<'a> {
     signed_delta: Option<SignedDeltaPlanV3<'a>>,
     sparse_native_transfer: Option<SparseNativeTransferV1>,
     founding: Option<&'a [u8]>,
+    rational_lifecycle: Option<&'a [u8]>,
     close: Option<ProtocolPositionRequestV2>,
     admit_route: Option<u16>,
     mutation_route: u16,
@@ -134,6 +140,7 @@ impl<'a> ClaimsCompositionV3<'a> {
         let mut signed_delta = None;
         let mut sparse_native_transfer = None;
         let mut founding = None;
+        let mut rational_lifecycle = None;
         let mut close = None;
         let mut admit_route = None;
         let mut mutation_route = None;
@@ -247,6 +254,17 @@ impl<'a> ClaimsCompositionV3<'a> {
                     founding = Some(request);
                     mutation_route = Some(route_index);
                     state = CompositionStateV3::Affined;
+                } else if request.get(..8) == Some(LIFECYCLE_REQUEST_MAGIC_V2.as_slice()) {
+                    validate_rational_lifecycle_route(
+                        route.kind(),
+                        state,
+                        invocation,
+                        request,
+                        parent,
+                    )?;
+                    rational_lifecycle = Some(request);
+                    mutation_route = Some(route_index);
+                    state = CompositionStateV3::Affined;
                 } else {
                     return Err(ClaimsCompositionErrorV3::Route);
                 }
@@ -260,6 +278,7 @@ impl<'a> ClaimsCompositionV3<'a> {
             .checked_add(u8::from(signed_delta.is_some()))
             .and_then(|count| count.checked_add(u8::from(sparse_native_transfer.is_some())))
             .and_then(|count| count.checked_add(u8::from(founding.is_some())))
+            .and_then(|count| count.checked_add(u8::from(rational_lifecycle.is_some())))
             .ok_or(ClaimsCompositionErrorV3::MissingAffine)?;
         if mutation_count != 1 {
             return Err(ClaimsCompositionErrorV3::MissingAffine);
@@ -280,6 +299,7 @@ impl<'a> ClaimsCompositionV3<'a> {
             signed_delta,
             sparse_native_transfer,
             founding,
+            rational_lifecycle,
             close,
             admit_route,
             mutation_route,
@@ -311,6 +331,12 @@ impl<'a> ClaimsCompositionV3<'a> {
     pub fn founding(self) -> Option<ClaimsFoundingRequestV5> {
         self.founding
             .and_then(|request| ClaimsFoundingRequestV5::decode(request).ok())
+    }
+
+    /// Sole Rational physical lifecycle request, when selected.
+    pub fn rational_lifecycle(self) -> Option<LifecycleRequestV2<'a>> {
+        self.rational_lifecycle
+            .and_then(|request| LifecycleRequestV2::decode(request).ok())
     }
 
     /// Optional canonical zero-Position close request.
@@ -472,6 +498,48 @@ fn validate_founding_route(
     Ok(())
 }
 
+#[inline(never)]
+fn validate_rational_lifecycle_route(
+    kind: RouteKindV3,
+    state: CompositionStateV3,
+    invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
+    request: &[u8],
+    parent: ClaimsCompositionParentV3,
+) -> Result<(), ClaimsCompositionErrorV3> {
+    if kind != RouteKindV3::Once || state != CompositionStateV3::Start {
+        return Err(ClaimsCompositionErrorV3::Order);
+    }
+    let decoded =
+        LifecycleRequestV2::decode(request).map_err(|_| ClaimsCompositionErrorV3::Route)?;
+    let header = decoded.header();
+    if header.release_set != parent.release_set
+        || header.market != parent.market
+        || header.generation != parent.generation
+        || header.parent_context != parent.parent_request_digest
+    {
+        return Err(ClaimsCompositionErrorV3::ParentBinding);
+    }
+    let expected_accounts = match header.action {
+        LifecycleActionV2::ActivateReceipt => LIFECYCLE_COMMON_ACCOUNT_COUNT_V2,
+        LifecycleActionV2::ActivateCoordinate | LifecycleActionV2::RetireCoordinate => {
+            LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2
+        }
+        LifecycleActionV2::RetireReceipt => usize::try_from(header.coordinate_count)
+            .ok()
+            .and_then(|count| count.checked_mul(LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2))
+            .and_then(|tail| tail.checked_add(LIFECYCLE_COMMON_ACCOUNT_COUNT_V2))
+            .ok_or(ClaimsCompositionErrorV3::Route)?,
+    };
+    if usize::from(invocation.fixed_account_count) != expected_accounts
+        || invocation.item_account_count != 0
+        || invocation.repeated_item_count != 0
+        || invocation.borrowed_witness.is_some()
+    {
+        return Err(ClaimsCompositionErrorV3::Route);
+    }
+    Ok(())
+}
+
 fn require_admission_join(
     request: ProtocolPositionRequestV2,
     affine: AffineBatchPlanV2<'_>,
@@ -526,6 +594,12 @@ mod tests {
 
     use std::vec;
     use std::vec::Vec;
+
+    use dclutch_rational_representation_v2_lifecycle_contract::{
+        LIFECYCLE_COORDINATE_BYTES_V2, LIFECYCLE_HEADER_BYTES_V2, LifecycleCoordinateV2,
+        LifecycleHeaderV2,
+    };
+    use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
 
     use crate::{
         affine_batch_v2::{
@@ -1063,6 +1137,80 @@ mod tests {
         .expect("founding request")
     }
 
+    fn lifecycle_request(action: LifecycleActionV2, rows: u32) -> Vec<u8> {
+        let mut coordinate_bytes = Vec::new();
+        for row in 0..rows {
+            let mut bytes = [0_u8; LIFECYCLE_COORDINATE_BYTES_V2];
+            LifecycleCoordinateV2 {
+                outcome: row,
+                coefficient: 1,
+                shard_mint: id(50_u8
+                    .checked_add(u8::try_from(row).expect("small row"))
+                    .expect("id")),
+                structured_custody_account: id(60_u8
+                    .checked_add(u8::try_from(row).expect("small row"))
+                    .expect("id")),
+                claims_custody_owner: id(70_u8
+                    .checked_add(u8::try_from(row).expect("small row"))
+                    .expect("id")),
+                claims_custody_position: id(80_u8
+                    .checked_add(u8::try_from(row).expect("small row"))
+                    .expect("id")),
+                position_admission: id(90_u8
+                    .checked_add(u8::try_from(row).expect("small row"))
+                    .expect("id")),
+                observed_shard_lamports: 10,
+                observed_structured_lamports: 11,
+                observed_position_lamports: 12,
+                observed_admission_lamports: 13,
+                shard_rent_principal: 10,
+                structured_rent_principal: 11,
+                position_rent_principal: 12,
+                admission_rent_principal: 13,
+                expected_shard_supply: 0,
+                expected_structured_amount: 0,
+                expected_position_revision: 0,
+            }
+            .encode_into(&mut bytes)
+            .expect("coordinate");
+            coordinate_bytes.extend_from_slice(&bytes);
+        }
+        let request = LifecycleRequestV2::new(
+            LifecycleHeaderV2 {
+                action,
+                release_set: parent().release_set,
+                market: parent().market,
+                graph_id: id(20),
+                descriptor_id: id(21),
+                parent_context: parent().parent_request_digest,
+                representation_authority: id(22),
+                receipt_mint: id(23),
+                token_program: TOKEN_2022_PROGRAM_ID,
+                rent_credit: id(24),
+                rent_program: id(25),
+                generation: parent().generation,
+                expected_claims_market_revision: 3,
+                observed_receipt_lamports: 10,
+                receipt_rent_principal: 10,
+                expected_receipt_supply: 0,
+                outcome_count: 3,
+                coordinate_count: rows,
+                rent_credit_before: 100,
+                rent_credit_after: 100,
+            },
+            &coordinate_bytes,
+        )
+        .expect("lifecycle request");
+        let mut output = vec![
+            0_u8;
+            LIFECYCLE_HEADER_BYTES_V2
+                + usize::try_from(rows).expect("rows")
+                    * LIFECYCLE_COORDINATE_BYTES_V2
+        ];
+        request.encode_into(&mut output).expect("lifecycle bytes");
+        output
+    }
+
     #[test]
     fn composes_one_exact_sparse_native_transfer_and_refuses_geometry_or_parent_substitution() {
         let sparse = sparse_request().to_bytes().to_vec();
@@ -1181,5 +1329,71 @@ mod tests {
                 Err(ClaimsCompositionErrorV3::ParentBinding)
             );
         }
+    }
+
+    #[test]
+    fn composes_exact_rational_lifecycle_and_refuses_frame_or_parent_substitution() {
+        let request = lifecycle_request(LifecycleActionV2::ActivateCoordinate, 1);
+        let canonical_route = RouteFixture {
+            role: 1,
+            kind: 0,
+            enabled: false,
+            fixed_account_count: u16::try_from(LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2)
+                .expect("frame"),
+            request: request.clone(),
+        };
+        let (effect_bytes, request_bank) = effect(core::slice::from_ref(&canonical_route));
+        let composition = ClaimsCompositionV3::decode_selected(
+            ProgramV3::decode(&effect_bytes).expect("lifecycle EffectProgram"),
+            TAIL_COUNT,
+            &[1],
+            &[id(40)],
+            &request_bank,
+            parent(),
+        )
+        .expect("lifecycle composition");
+        let lifecycle = composition.rational_lifecycle().expect("lifecycle");
+        assert_eq!(
+            lifecycle.header().action,
+            LifecycleActionV2::ActivateCoordinate
+        );
+        assert_eq!(
+            lifecycle.header().parent_context,
+            parent().parent_request_digest
+        );
+        assert!(composition.affine().is_none());
+        assert!(composition.founding().is_none());
+
+        let mut wrong_frame = canonical_route.clone();
+        wrong_frame.fixed_account_count = wrong_frame
+            .fixed_account_count
+            .checked_sub(1)
+            .expect("nonzero frame");
+        let (wrong_effect, wrong_bank) = effect(&[wrong_frame]);
+        assert_eq!(
+            ClaimsCompositionV3::decode_selected(
+                ProgramV3::decode(&wrong_effect).expect("structural EffectProgram"),
+                TAIL_COUNT,
+                &[1],
+                &[id(40)],
+                &wrong_bank,
+                parent(),
+            ),
+            Err(ClaimsCompositionErrorV3::Route)
+        );
+
+        let mut hostile_parent = parent();
+        hostile_parent.parent_request_digest = id(99);
+        assert_eq!(
+            ClaimsCompositionV3::decode_selected(
+                ProgramV3::decode(&effect_bytes).expect("structural EffectProgram"),
+                TAIL_COUNT,
+                &[1],
+                &[id(40)],
+                &request_bank,
+                hostile_parent,
+            ),
+            Err(ClaimsCompositionErrorV3::ParentBinding)
+        );
     }
 }

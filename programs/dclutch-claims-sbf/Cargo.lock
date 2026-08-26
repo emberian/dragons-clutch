@@ -1534,6 +1534,7 @@ dependencies = [
  "dclutch-liability-basis-v2-kernel",
  "dclutch-market-core-codec",
  "dclutch-product-contract",
+ "dclutch-product-payoff-v2-codec",
  "dclutch-product-runtime-v2",
  "dclutch-product-runtime-v2-admission",
  "dclutch-product-runtime-v2-svm-reader",
@@ -1571,6 +1572,7 @@ dependencies = [
  "dclutch-effect-kernel",
  "dclutch-product-payoff-v2-codec",
  "dclutch-rational-representation-v2-kernel",
+ "dclutch-rational-representation-v2-lifecycle-contract",
 ]
 
 [[package]]

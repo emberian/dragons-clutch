@@ -33,6 +33,12 @@ pub const LIFECYCLE_HEADER_BYTES_V2: usize = 400;
 pub const LIFECYCLE_COORDINATE_BYTES_V2: usize = 272;
 /// Exact completion receipt width.
 pub const LIFECYCLE_RECEIPT_BYTES_V2: usize = 320;
+/// Exact physical account count shared by receipt-wide lifecycle actions.
+pub const LIFECYCLE_COMMON_ACCOUNT_COUNT_V2: usize = 20;
+/// Exact physical account count for one coordinate activation or retirement.
+pub const LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2: usize = 34;
+/// Exact physical account count added per proven-vacant retirement row.
+pub const LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2: usize = 4;
 /// Lifecycle request magic.
 pub const LIFECYCLE_REQUEST_MAGIC_V2: [u8; 8] = *b"DCRRLC02";
 /// Lifecycle receipt magic.

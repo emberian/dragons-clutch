@@ -369,6 +369,8 @@ dependencies = [
  "dclutch-effect-kernel",
  "dclutch-product-payoff-v2-codec",
  "dclutch-rational-representation-v2-kernel",
+ "dclutch-rational-representation-v2-lifecycle-contract",
+ "dclutch-token-svm",
 ]
 
 [[package]]
@@ -774,6 +776,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-rational-lifecycle-hot-v3"
+version = "0.1.0"
+dependencies = [
+ "dclutch-account-profile-contract",
+ "dclutch-capability-program-contract",
+ "dclutch-core-contract",
+ "dclutch-effect-kernel",
+ "dclutch-execution-strategy-contract",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-rational-representation-v2-kernel",
+ "dclutch-rational-representation-v2-lifecycle-contract",
+ "dclutch-request-profile-contract",
+ "dclutch-token-svm",
+ "dclutch-transition-vm",
+ "solana-program",
+ "solana-sdk-ids",
+]
+
+[[package]]
 name = "dclutch-rational-representation-v2-contract"
 version = "0.1.0"
 dependencies = [
@@ -791,6 +812,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-rational-representation-v2-lifecycle-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-rational-representation-v2-kernel",
+ "dclutch-token-svm",
+ "sha2",
+]
+
+[[package]]
 name = "dclutch-rational-representation-v2-operator"
 version = "0.1.0"
 dependencies = [
@@ -798,6 +828,10 @@ dependencies = [
  "dclutch-core-contract",
  "dclutch-custody-contract",
  "dclutch-market-core-codec",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-product-runtime-v2",
+ "dclutch-product-runtime-v2-admission",
+ "dclutch-product-runtime-v2-svm-reader",
  "dclutch-rational-representation-v2-contract",
  "dclutch-rational-representation-v2-kernel",
  "dclutch-realm-contract",
@@ -1019,6 +1053,7 @@ dependencies = [
  "dclutch-market-core-codec",
  "dclutch-product-runtime-v2",
  "dclutch-product-runtime-v2-svm-reader",
+ "dclutch-rational-representation-v2-lifecycle-contract",
  "dclutch-record-contract",
  "dclutch-registry-contract",
  "dclutch-registry-svm",

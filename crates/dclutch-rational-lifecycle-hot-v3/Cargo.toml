@@ -1,16 +1,24 @@
 [package]
-name = "dclutch-claims-svm"
+name = "dclutch-rational-lifecycle-hot-v3"
 version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 rust-version = "1.89"
-description = "Runtime-width Claims child packet and receipt ABI"
+description = "Descriptor-specialized Hot V3 artifacts and unsigned operator for Rational lifecycle"
 
 [dependencies]
+dclutch-account-profile-contract = { path = "../dclutch-account-profile-contract" }
+dclutch-capability-program-contract = { path = "../dclutch-capability-program-contract" }
+dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-effect-kernel = { path = "../dclutch-effect-kernel" }
+dclutch-execution-strategy-contract = { path = "../dclutch-execution-strategy-contract" }
 dclutch-product-payoff-v2-codec = { path = "../dclutch-product-payoff-v2-codec" }
 dclutch-rational-representation-v2-kernel = { path = "../dclutch-rational-representation-v2-kernel" }
 dclutch-rational-representation-v2-lifecycle-contract = { path = "../dclutch-rational-representation-v2-lifecycle-contract" }
+dclutch-request-profile-contract = { path = "../dclutch-request-profile-contract" }
+dclutch-transition-vm = { path = "../dclutch-transition-vm" }
+solana-program = { version = "=3.0.0", default-features = false }
+solana-sdk-ids = "=3.1.0"
 
 [dev-dependencies]
 dclutch-token-svm = { path = "../dclutch-token-svm" }

@@ -31,6 +31,10 @@ use dclutch_effect_kernel::{
     v2::FixedRole,
     v3::{ProgramV3, ResolvedInvocationV3, RouteKindV3},
 };
+use dclutch_rational_representation_v2_lifecycle_contract::{
+    LIFECYCLE_REQUEST_MAGIC_V2, LifecycleReceiptV2, LifecycleRequestV2,
+    hot_v3::verify_rational_lifecycle_hot_receipt_v3,
+};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
@@ -56,6 +60,8 @@ pub enum ClaimsRouteReceiptV3 {
     SparseNativeTransfer(SparseNativeTransferReceiptV1),
     /// Permit-authorized aggregate, founder Position, and admission were created.
     Founding(Box<ClaimsFoundingReceiptV5>),
+    /// One exact Rational receipt/coordinate resource lifecycle committed.
+    RationalLifecycle(LifecycleReceiptV2),
     /// Zero canonical Position and admission record were reclaimed.
     Close(ProtocolPositionCloseReceiptV2),
 }
@@ -180,6 +186,7 @@ enum ReceiptKindV3 {
     SignedDelta,
     SparseNativeTransfer,
     Founding,
+    RationalLifecycle,
     Close,
 }
 
@@ -358,6 +365,21 @@ fn route_authority(
         )
         .map_err(|_| TradingSbfError::Content)?;
         Ok((seeds, ReceiptKindV3::Founding))
+    } else if request.get(..8) == Some(LIFECYCLE_REQUEST_MAGIC_V2.as_slice()) {
+        if kind != RouteKindV3::Once {
+            return Err(TradingSbfError::Content.into());
+        }
+        let request = LifecycleRequestV2::decode(request).map_err(|_| TradingSbfError::Content)?;
+        let header = request.header();
+        let seeds = CallerAuthoritySeedsV1::new(
+            ContentId::new(header.release_set).map_err(|_| TradingSbfError::Content)?,
+            header.market,
+            ExecutionRoleV1::Trading,
+            header.parent_context,
+            packet_digest,
+        )
+        .map_err(|_| TradingSbfError::Content)?;
+        Ok((seeds, ReceiptKindV3::RationalLifecycle))
     } else {
         Err(TradingSbfError::Content.into())
     }
@@ -414,10 +436,25 @@ fn verify_route_receipt(
                 _ => None,
             },
         ),
+        ReceiptKindV3::RationalLifecycle => {
+            verify_rational_lifecycle_receipt(request, receipt, request_digest)
+        }
         ReceiptKindV3::Close => {
             verify_close_receipt(request, receipt, request_digest, claims_program)
         }
     }
+}
+
+#[inline(never)]
+fn verify_rational_lifecycle_receipt(
+    request: &[u8],
+    receipt: &[u8],
+    request_digest: [u8; 32],
+) -> Result<ClaimsRouteReceiptV3, ProgramError> {
+    let request = LifecycleRequestV2::decode(request).map_err(|_| TradingSbfError::Content)?;
+    let receipt = verify_rational_lifecycle_hot_receipt_v3(request, request_digest, receipt)
+        .map_err(|_| TradingSbfError::Transition)?;
+    Ok(ClaimsRouteReceiptV3::RationalLifecycle(receipt))
 }
 
 #[inline(never)]

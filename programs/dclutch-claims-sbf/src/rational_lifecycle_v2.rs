@@ -27,8 +27,9 @@ use dclutch_rational_representation_v2_kernel::{
     RepresentationDescriptorV2,
 };
 use dclutch_rational_representation_v2_lifecycle_contract::{
-    LifecycleActionV2, LifecycleCompletionEvidenceV2, LifecycleCoordinateV2, LifecycleRequestV2,
-    finalize, prepare,
+    LIFECYCLE_COMMON_ACCOUNT_COUNT_V2, LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2,
+    LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2, LifecycleActionV2, LifecycleCompletionEvidenceV2,
+    LifecycleCoordinateV2, LifecycleRequestV2, finalize, prepare,
 };
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_rent_contract::RentCreditV1;
@@ -58,11 +59,12 @@ use crate::{
 };
 
 /// Exact account count shared by receipt-wide lifecycle actions.
-pub const RATIONAL_LIFECYCLE_COMMON_ACCOUNT_COUNT_V2: usize = 20;
+pub const RATIONAL_LIFECYCLE_COMMON_ACCOUNT_COUNT_V2: usize = LIFECYCLE_COMMON_ACCOUNT_COUNT_V2;
 /// Exact account count for one coordinate activation or retirement.
-pub const RATIONAL_LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2: usize = 34;
+pub const RATIONAL_LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2: usize =
+    LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2;
 /// Exact account count added per proven-vacant coordinate on receipt retirement.
-pub const RATIONAL_LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2: usize = 4;
+pub const RATIONAL_LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2: usize = LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2;
 
 const CALLER_AUTHORITY: usize = 0;
 const TRADING_PROGRAM: usize = 1;
