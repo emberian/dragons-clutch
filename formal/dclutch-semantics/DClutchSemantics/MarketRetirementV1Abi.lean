@@ -42,7 +42,7 @@ commitment.  Its adapter preimage is ordered and exact:
 `domain || roleCount:u8 || custodyReceiptCount:u8 || rentCredit ||
  sourceReceiptDigest || claimsReceiptDigest || closeVaultReceiptDigest ||
  closeReplayReceiptDigest || coreRefund:u64 || claimsRefund:u64 ||
- custodyRefund:u64`.
+ custodyRefund:u64 || rentCreditPostLamports:u64`.
 
 Thus the one Core receipt commits every producer leaf and refund into the sole
 RentCredit account.  The RentCredit contract remains the sole semantic owner of

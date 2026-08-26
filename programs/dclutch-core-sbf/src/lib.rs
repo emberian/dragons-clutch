@@ -14,16 +14,18 @@ extern crate alloc;
 use dclutch_claims_svm::founding_v5::{
     CLAIMS_FOUNDING_RECEIPT_BYTES_V5, CLAIMS_FOUNDING_RECEIPT_MAGIC_V5,
 };
+use dclutch_claims_svm::market_closure_v1::CLAIMS_MARKET_CLOSURE_REQUEST_BYTES_V1;
 use dclutch_custody_contract::{
-    PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1, PROJECTED_CUSTODY_LOCK_RECEIPT_MAGIC_V1,
+    CUSTODY_REQUEST_BYTES_V1, PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1,
+    PROJECTED_CUSTODY_LOCK_RECEIPT_MAGIC_V1,
 };
 use dclutch_market_core_codec::{
     Action, CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1, CORE_EFFECT_ENVELOPE_BYTES_V1,
-    CapabilityFundingHeaderV1, CoreEffectEnvelopeV1, REQUEST_BYTES, Request,
-    PROJECT_FOUND_REQUEST_BYTES_V1, PROJECT_FOUND_REQUEST_MAGIC_V1, ProjectFoundRequestV1,
-    SERIES_CORE_REQUEST_BYTES_V1, SERIES_CORE_REQUEST_MAGIC_V1, SeriesCoreRequestV1,
-    SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1, SERIES_PERMIT_EXPIRY_REQUEST_MAGIC_V1,
-    SeriesPermitExpiryRequestV1,
+    CapabilityFundingHeaderV1, CoreEffectEnvelopeV1, PROJECT_FOUND_REQUEST_BYTES_V1,
+    PROJECT_FOUND_REQUEST_MAGIC_V1, ProjectFoundRequestV1, REQUEST_BYTES,
+    RETIREMENT_BUNDLE_BYTES_V1, Request, SERIES_CORE_REQUEST_BYTES_V1,
+    SERIES_CORE_REQUEST_MAGIC_V1, SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1,
+    SERIES_PERMIT_EXPIRY_REQUEST_MAGIC_V1, SeriesCoreRequestV1, SeriesPermitExpiryRequestV1,
 };
 use dclutch_release_set_contract::{
     CAPABILITY_EXECUTION_SELECTION_BYTES_V1, CapabilityExecutionSelectionV1,
@@ -34,6 +36,7 @@ use solana_program::{
     pubkey::Pubkey,
 };
 
+mod begin_retiring;
 mod capability;
 mod fixed_role;
 mod found;
@@ -44,11 +47,14 @@ mod product_runtime_v2;
 mod records;
 mod release;
 mod resolution;
+pub mod retire_v1;
 mod series_consume;
 mod series_open;
 mod series_permit_expiry;
 
+pub use begin_retiring::BEGIN_RETIRING_ACCOUNT_COUNT_V1;
 pub use frame::{FOUND_ACCOUNT_COUNT_V2, INITIALIZE_INFRASTRUCTURE_ACCOUNT_COUNT_V1};
+pub use retire_v1::{RETIREMENT_ACCOUNT_COUNT_V1, RETIREMENT_INSTRUCTION_BYTES_V1};
 pub use series_consume::{
     SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V1, SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V1,
 };
@@ -215,6 +221,9 @@ pub fn process_instruction(
         Action::Found if instruction_data.len() == REQUEST_BYTES => {
             found::process(program_id, accounts, request)
         }
+        Action::BeginRetiring if instruction_data.len() == REQUEST_BYTES => {
+            begin_retiring::process(program_id, accounts, request)
+        }
         Action::OpenMarket
             if instruction_data.len() == open_market::OPEN_MARKET_INSTRUCTION_BYTES_V1 =>
         {
@@ -222,6 +231,34 @@ pub fn process_instruction(
                 .get(REQUEST_BYTES..)
                 .ok_or(CoreSbfError::Instruction)?;
             open_market::process(program_id, accounts, request, request_bytes, custody_bytes)
+        }
+        Action::Retire if instruction_data.len() == retire_v1::RETIREMENT_INSTRUCTION_BYTES_V1 => {
+            let bundle_start = REQUEST_BYTES;
+            let claims_start = bundle_start + RETIREMENT_BUNDLE_BYTES_V1;
+            let close_vault_start = claims_start + CLAIMS_MARKET_CLOSURE_REQUEST_BYTES_V1;
+            let close_replay_start = close_vault_start + CUSTODY_REQUEST_BYTES_V1;
+            let bundle_bytes = instruction_data
+                .get(bundle_start..claims_start)
+                .ok_or(CoreSbfError::Instruction)?;
+            let claims_request_bytes = instruction_data
+                .get(claims_start..close_vault_start)
+                .ok_or(CoreSbfError::Instruction)?;
+            let close_vault_request_bytes = instruction_data
+                .get(close_vault_start..close_replay_start)
+                .ok_or(CoreSbfError::Instruction)?;
+            let close_replay_request_bytes = instruction_data
+                .get(close_replay_start..)
+                .ok_or(CoreSbfError::Instruction)?;
+            retire_v1::process(
+                program_id,
+                accounts,
+                request,
+                request_bytes,
+                bundle_bytes,
+                claims_request_bytes,
+                close_vault_request_bytes,
+                close_replay_request_bytes,
+            )
         }
         Action::ActivateCapability | Action::CloseCapability => {
             let envelope_end = CAPABILITY_PREFIX_BYTES_V1;

@@ -3,7 +3,9 @@
 use alloc::vec::Vec;
 
 use dclutch_core_contract::ContentId;
-use dclutch_market_core_codec::{Admission, Binding, Identity, ReleaseReceipt, ReleaseSet, Role};
+use dclutch_market_core_codec::{
+    Admission, Binding, CoreState, Identity, ReleaseReceipt, ReleaseSet, RetirementAdmissions, Role,
+};
 use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use dclutch_registry_svm::{
     AuthenticatedRoleReceiptV1, RegistryInstructionV1,
@@ -84,6 +86,22 @@ impl RoleBatchAdmissions {
                 current_deployment_reauthenticated: true,
             },
         })
+    }
+
+    /// Lower one exact Core/Claims/Resolution/Custody Registry batch into the
+    /// shared fixed-memory retirement admission observation.
+    pub(crate) fn retirement(self, state: CoreState) -> Result<RetirementAdmissions, CoreSbfError> {
+        for role in [Role::Core, Role::Claims, Role::Resolution, Role::Custody] {
+            self.require(role)?;
+        }
+        RetirementAdmissions::from_authenticated_batch(
+            state,
+            self.registry,
+            self.release_set_id,
+            self.selected,
+            [Role::Core, Role::Claims, Role::Resolution, Role::Custody],
+        )
+        .map_err(|_| CoreSbfError::Release)
     }
 }
 

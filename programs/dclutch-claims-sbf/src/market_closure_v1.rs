@@ -339,7 +339,6 @@ fn authenticate_rent_credit(accounts: ClosureAccounts<'_, '_>, core: CoreState) 
         .map_err(|_| ClaimsMarketClosureSbfErrorV1::Identity)?;
     let seeds = credit.pda_seeds();
     let bump = [seeds.bump()];
-    let authority = credit.refund_wallet().to_bytes();
     let market = seeds.market().to_bytes();
     let generation = seeds.generation();
     let expected = Pubkey::create_program_address(
@@ -353,8 +352,7 @@ fn authenticate_rent_credit(accounts: ClosureAccounts<'_, '_>, core: CoreState) 
     )
     .map_err(|_| ClaimsMarketClosureSbfErrorV1::Identity)?;
     if expected != *accounts.rent_credit.key
-        || accounts.rent_credit.key.to_bytes() == core.rent_beneficiary.to_bytes()
-        || authority != core.rent_beneficiary.to_bytes()
+        || accounts.rent_credit.key.to_bytes() != core.rent_beneficiary.to_bytes()
         || credit.market().to_bytes() != core.identity.market_id.to_bytes()
         || credit.release_set().to_bytes() != core.identity.selected_release_set.to_bytes()
         || credit.generation() != core.identity.generation

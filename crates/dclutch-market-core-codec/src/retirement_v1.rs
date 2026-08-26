@@ -304,6 +304,12 @@ impl RetirementBundleV1 {
     pub const fn input(self) -> RetirementBundleInputV1 {
         self.0
     }
+
+    /// Borrow all validated bundle coordinates without duplicating the fixed
+    /// release and evidence projection on a constrained adapter stack.
+    pub const fn input_ref(&self) -> &RetirementBundleInputV1 {
+        &self.0
+    }
 }
 
 /// Construction input for the immediate Core retirement receipt.
@@ -335,8 +341,8 @@ pub struct RetirementReceiptInputV1 {
     ///
     /// Its exact preimage orders the fixed role/count header, RentCredit,
     /// Source/Claims/CloseVault/CloseReplay receipt digests, and the three
-    /// refund-lamport observations. The bound RentCredit remains sole owner of
-    /// its immutable refund-wallet fact.
+    /// refund-lamport observations followed by final RentCredit lamports. The
+    /// bound RentCredit remains sole owner of its immutable refund-wallet fact.
     pub post_resource_digest: [u8; 32],
     /// Immutable Market generation.
     pub generation: u64,
