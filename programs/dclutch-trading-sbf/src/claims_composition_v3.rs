@@ -18,6 +18,9 @@ use dclutch_claims_svm::{
         ProtocolPositionCloseReceiptV2, ProtocolPositionRequestV2,
     },
     signed_delta_v3::{SIGNED_DELTA_PLAN_MAGIC_V3, SignedDeltaPlanV3, SignedDeltaReceiptV3},
+    sparse_native_transfer_v1::{
+        SPARSE_NATIVE_TRANSFER_MAGIC_V1, SparseNativeTransferReceiptV1, SparseNativeTransferV1,
+    },
 };
 use dclutch_core_contract::ContentId;
 use dclutch_effect_kernel::{
@@ -45,6 +48,8 @@ pub enum ClaimsRouteReceiptV3 {
     Affine(AffineBatchReceiptV2),
     /// Canonical runtime-width unique signed-delta batch committed.
     SignedDelta(SignedDeltaReceiptV3),
+    /// Canonical O(1) native-claim transfer committed.
+    SparseNativeTransfer(SparseNativeTransferReceiptV1),
     /// Zero canonical Position and admission record were reclaimed.
     Close(ProtocolPositionCloseReceiptV2),
 }
@@ -133,6 +138,9 @@ pub fn execute_claims_route_v3<'info>(
                 .map_err(|_| TradingSbfError::Content)?
                 .position_count(),
         )?),
+        ReceiptKindV3::SparseNativeTransfer => {
+            Some(sparse_native_post_resource_digest(&child_accounts)?)
+        }
         _ => None,
     };
     verify_route_receipt(
@@ -159,6 +167,7 @@ enum ReceiptKindV3 {
     Admit,
     Affine,
     SignedDelta,
+    SparseNativeTransfer,
     Close,
 }
 
@@ -288,6 +297,25 @@ fn route_authority(
         )
         .map_err(|_| TradingSbfError::Content)?;
         Ok((seeds, ReceiptKindV3::SignedDelta))
+    } else if request.get(..8) == Some(SPARSE_NATIVE_TRANSFER_MAGIC_V1.as_slice()) {
+        if kind != RouteKindV3::Once {
+            return Err(TradingSbfError::Content.into());
+        }
+        let request =
+            SparseNativeTransferV1::decode(request).map_err(|_| TradingSbfError::Content)?;
+        let input = request.input();
+        if input.caller_role != dclutch_claims_svm::CallerRole::Trading {
+            return Err(TradingSbfError::Content.into());
+        }
+        let seeds = CallerAuthoritySeedsV1::new(
+            ContentId::new(input.release_set).map_err(|_| TradingSbfError::Content)?,
+            input.market,
+            ExecutionRoleV1::Trading,
+            input.request_id,
+            packet_digest,
+        )
+        .map_err(|_| TradingSbfError::Content)?;
+        Ok((seeds, ReceiptKindV3::SparseNativeTransfer))
     } else {
         Err(TradingSbfError::Content.into())
     }
@@ -351,6 +379,22 @@ fn verify_route_receipt(
             }
             Ok(ClaimsRouteReceiptV3::SignedDelta(receipt))
         }
+        ReceiptKindV3::SparseNativeTransfer => {
+            let request =
+                SparseNativeTransferV1::decode(request).map_err(|_| TradingSbfError::Content)?;
+            let receipt = SparseNativeTransferReceiptV1::decode(receipt)
+                .map_err(|_| TradingSbfError::Transition)?;
+            receipt
+                .validate_request(request)
+                .map_err(|_| TradingSbfError::Transition)?;
+            if receipt.packet_digest() != request_digest
+                || receipt.claims_program() != claims_program
+                || Some(receipt.post_resource_digest()) != expected_post_resource_digest
+            {
+                return Err(TradingSbfError::Transition.into());
+            }
+            Ok(ClaimsRouteReceiptV3::SparseNativeTransfer(receipt))
+        }
         ReceiptKindV3::Close => {
             let request =
                 ProtocolPositionRequestV2::decode(request).map_err(|_| TradingSbfError::Content)?;
@@ -398,6 +442,25 @@ fn signed_delta_post_resource_digest(
     Ok(hasher.result().to_bytes())
 }
 
+fn sparse_native_post_resource_digest(
+    child_accounts: &[AccountInfo<'_>],
+) -> Result<[u8; 32], ProgramError> {
+    if child_accounts.len() != 23 {
+        return Err(TradingSbfError::Content.into());
+    }
+    let mut hasher = Hasher::default();
+    hasher.hash(b"dclutch/claims/sparse-native-post/v1");
+    for index in [1_usize, 20, 21] {
+        let data = child_accounts
+            .get(index)
+            .ok_or(TradingSbfError::Content)?
+            .try_borrow_data()
+            .map_err(|_| TradingSbfError::Transition)?;
+        hasher.hash(&data);
+    }
+    Ok(hasher.result().to_bytes())
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::boxed::Box;
@@ -415,6 +478,10 @@ mod tests {
         signed_delta_v3::{
             DeltaDirectionV3, PositionDeltaInputV3, PositionDeltaV3, SignedDeltaPlanInputV3,
             SignedDeltaPositionV3, SignedDeltaV3, plan_bytes as signed_plan_bytes,
+        },
+        sparse_native_transfer_v1::{
+            SPARSE_NATIVE_TRANSFER_RECEIPT_BYTES_V1, SparseNativeTransferInputV1,
+            SparseNativeTransferV1,
         },
     };
 
@@ -572,6 +639,28 @@ mod tests {
         )
         .expect("signed");
         bytes
+    }
+
+    fn sparse() -> SparseNativeTransferV1 {
+        SparseNativeTransferV1::new(SparseNativeTransferInputV1 {
+            caller_role: CallerRole::Trading,
+            release_set: id(1),
+            market: id(2),
+            request_id: id(4),
+            product_record_digest: id(10),
+            semantic_basis_id: id(11),
+            linked_basis_record_digest: id(12),
+            source_owner: id(3),
+            destination_owner: id(9),
+            expected_market_revision: 8,
+            expected_source_revision: 4,
+            expected_destination_revision: 6,
+            generation: 7,
+            outcome: 1,
+            claim_count: 2,
+            quantity: 5,
+        })
+        .expect("sparse request")
     }
 
     #[test]
@@ -738,5 +827,88 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn verifies_sparse_authority_producer_packet_and_post_resources() {
+        let request = sparse();
+        let request_bytes = request.to_bytes();
+        let claims = id(20);
+        let post_resources = id(21);
+        let receipt = SparseNativeTransferReceiptV1::new(
+            request,
+            hash(&request_bytes).to_bytes(),
+            claims,
+            post_resources,
+            9,
+            5,
+            7,
+        )
+        .expect("sparse receipt")
+        .to_bytes();
+        assert_eq!(receipt.len(), SPARSE_NATIVE_TRANSFER_RECEIPT_BYTES_V1);
+        assert!(matches!(
+            verify_route_receipt(
+                ReceiptKindV3::SparseNativeTransfer,
+                &request_bytes,
+                &receipt,
+                claims,
+                id(30),
+                Some(post_resources),
+            ),
+            Ok(ClaimsRouteReceiptV3::SparseNativeTransfer(_))
+        ));
+        assert!(
+            verify_route_receipt(
+                ReceiptKindV3::SparseNativeTransfer,
+                &request_bytes,
+                &receipt[..receipt.len() - 1],
+                claims,
+                id(30),
+                Some(post_resources),
+            )
+            .is_err()
+        );
+        for (producer, poststate) in [(id(99), post_resources), (claims, id(99))] {
+            assert!(
+                verify_route_receipt(
+                    ReceiptKindV3::SparseNativeTransfer,
+                    &request_bytes,
+                    &receipt,
+                    producer,
+                    id(30),
+                    Some(poststate),
+                )
+                .is_err()
+            );
+        }
+
+        let program = Pubkey::new_from_array(id(30));
+        let (authority, kind) =
+            route_authority(&request_bytes, RouteKindV3::Once).expect("sparse authority");
+        assert_eq!(kind, ReceiptKindV3::SparseNativeTransfer);
+        assert!(route_authority(&request_bytes, RouteKindV3::AffineOnce).is_err());
+        let mut changed = request.input();
+        changed.quantity = 6;
+        let changed = SparseNativeTransferV1::new(changed)
+            .expect("changed request")
+            .to_bytes();
+        let (changed_authority, _) =
+            route_authority(&changed, RouteKindV3::Once).expect("changed authority");
+        assert_ne!(
+            Pubkey::find_program_address(&authority.as_slices(), &program).0,
+            Pubkey::find_program_address(&changed_authority.as_slices(), &program).0,
+        );
+    }
+
+    #[test]
+    fn sparse_resource_digest_binds_exact_aggregate_source_destination_poststates() {
+        let mut accounts: Vec<_> = (0..23).map(|_| account_info(false, false)).collect();
+        accounts[1] = account_info(false, true);
+        accounts[20] = account_info(false, true);
+        accounts[21] = account_info(false, true);
+        let expected = hashv(&[b"dclutch/claims/sparse-native-post/v1", &[], &[], &[]]).to_bytes();
+        assert_eq!(sparse_native_post_resource_digest(&accounts), Ok(expected));
+        assert!(sparse_native_post_resource_digest(&accounts[..22]).is_err());
     }
 }

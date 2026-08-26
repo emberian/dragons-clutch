@@ -18,10 +18,13 @@ use crate::{
         ProtocolPositionRequestV2,
     },
     signed_delta_v3::{SIGNED_DELTA_PLAN_MAGIC_V3, SignedDeltaPlanV3},
+    sparse_native_transfer_v1::{SPARSE_NATIVE_TRANSFER_MAGIC_V1, SparseNativeTransferV1},
 };
 
 /// Exact fixed SignedDeltaV3 account frame before its canonical Position tail.
 pub const SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3: u16 = 20;
+/// Exact fixed sparse native-transfer account frame.
+pub const SPARSE_NATIVE_TRANSFER_FIXED_ACCOUNT_COUNT_V1: u16 = 22;
 
 /// Stable cross-route composition refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -38,7 +41,7 @@ pub enum ClaimsCompositionErrorV3 {
     AdmissionJoin,
     /// Close did not consume one affine Position at its exact post revision.
     CloseJoin,
-    /// No canonical affine Claims mutation was selected.
+    /// No sole canonical Claims mutation was selected.
     MissingAffine,
 }
 
@@ -74,6 +77,7 @@ pub struct ClaimsCompositionV3<'a> {
     admit: Option<ProtocolPositionRequestV2>,
     affine: Option<AffineBatchPlanV2<'a>>,
     signed_delta: Option<SignedDeltaPlanV3<'a>>,
+    sparse_native_transfer: Option<SparseNativeTransferV1>,
     close: Option<ProtocolPositionRequestV2>,
     admit_route: Option<u16>,
     mutation_route: u16,
@@ -124,6 +128,7 @@ impl<'a> ClaimsCompositionV3<'a> {
         let mut admit = None;
         let mut affine = None;
         let mut signed_delta = None;
+        let mut sparse_native_transfer = None;
         let mut close = None;
         let mut admit_route = None;
         let mut mutation_route = None;
@@ -215,6 +220,23 @@ impl<'a> ClaimsCompositionV3<'a> {
                     signed_delta = Some(decoded);
                     mutation_route = Some(route_index);
                     state = CompositionStateV3::Affined;
+                } else if request.get(..8) == Some(SPARSE_NATIVE_TRANSFER_MAGIC_V1.as_slice()) {
+                    if route.kind() != RouteKindV3::Once || state != CompositionStateV3::Start {
+                        return Err(ClaimsCompositionErrorV3::Order);
+                    }
+                    let decoded = SparseNativeTransferV1::decode(request)
+                        .map_err(|_| ClaimsCompositionErrorV3::Route)?;
+                    require_sparse_native_parent(decoded, parent)?;
+                    if invocation.fixed_account_count
+                        != SPARSE_NATIVE_TRANSFER_FIXED_ACCOUNT_COUNT_V1
+                        || invocation.item_account_count != 0
+                        || invocation.repeated_item_count != 0
+                    {
+                        return Err(ClaimsCompositionErrorV3::Route);
+                    }
+                    sparse_native_transfer = Some(decoded);
+                    mutation_route = Some(route_index);
+                    state = CompositionStateV3::Affined;
                 } else {
                     return Err(ClaimsCompositionErrorV3::Route);
                 }
@@ -224,7 +246,11 @@ impl<'a> ClaimsCompositionV3<'a> {
                 .ok_or(ClaimsCompositionErrorV3::EffectProgram)?;
         }
         let mutation_route = mutation_route.ok_or(ClaimsCompositionErrorV3::MissingAffine)?;
-        if affine.is_none() == signed_delta.is_none() {
+        let mutation_count = u8::from(affine.is_some())
+            .checked_add(u8::from(signed_delta.is_some()))
+            .and_then(|count| count.checked_add(u8::from(sparse_native_transfer.is_some())))
+            .ok_or(ClaimsCompositionErrorV3::MissingAffine)?;
+        if mutation_count != 1 {
             return Err(ClaimsCompositionErrorV3::MissingAffine);
         }
         if let Some(affine) = affine {
@@ -241,6 +267,7 @@ impl<'a> ClaimsCompositionV3<'a> {
             admit,
             affine,
             signed_delta,
+            sparse_native_transfer,
             close,
             admit_route,
             mutation_route,
@@ -261,6 +288,11 @@ impl<'a> ClaimsCompositionV3<'a> {
     /// Sole canonical signed-delta mutation, when selected.
     pub const fn signed_delta(self) -> Option<SignedDeltaPlanV3<'a>> {
         self.signed_delta
+    }
+
+    /// Sole canonical sparse native transfer, when selected.
+    pub const fn sparse_native_transfer(self) -> Option<SparseNativeTransferV1> {
+        self.sparse_native_transfer
     }
 
     /// Optional canonical zero-Position close request.
@@ -362,6 +394,23 @@ fn require_signed_delta_parent(
     }
 }
 
+fn require_sparse_native_parent(
+    request: SparseNativeTransferV1,
+    parent: ClaimsCompositionParentV3,
+) -> Result<(), ClaimsCompositionErrorV3> {
+    let input = request.input();
+    if input.caller_role != CallerRole::Trading
+        || input.release_set != parent.release_set
+        || input.market != parent.market
+        || input.request_id != parent.parent_request_digest
+        || input.generation != parent.generation
+    {
+        Err(ClaimsCompositionErrorV3::ParentBinding)
+    } else {
+        Ok(())
+    }
+}
+
 fn require_admission_join(
     request: ProtocolPositionRequestV2,
     affine: AffineBatchPlanV2<'_>,
@@ -428,6 +477,7 @@ mod tests {
             SignedDeltaPlanV3, SignedDeltaPositionV3, SignedDeltaV3,
             plan_bytes as signed_plan_bytes,
         },
+        sparse_native_transfer_v1::{SparseNativeTransferInputV1, SparseNativeTransferV1},
     };
 
     use super::*;
@@ -440,6 +490,7 @@ mod tests {
         role: u8,
         kind: u8,
         enabled: bool,
+        fixed_account_count: u16,
         request: Vec<u8>,
     }
 
@@ -543,6 +594,7 @@ mod tests {
             role: 1,
             kind,
             enabled: false,
+            fixed_account_count: 1,
             request,
         }
     }
@@ -558,10 +610,15 @@ mod tests {
             total.checked_add(route.request.len())
         });
         let mut bytes = vec![0; header + templates.expect("template bytes")];
-        put(&mut bytes, 0, b"DCE3");
-        put(&mut bytes, 4, &[3, 0]);
+        put(&mut bytes, 0, b"DCE4");
+        put(&mut bytes, 4, &[4, 0]);
         put(&mut bytes, 6, &route_count.to_le_bytes());
-        put(&mut bytes, 12, &1_u16.to_le_bytes());
+        let fixed_accounts = routes
+            .iter()
+            .map(|route| route.fixed_account_count)
+            .max()
+            .unwrap_or(1);
+        put(&mut bytes, 12, &fixed_accounts.to_le_bytes());
         put(&mut bytes, 14, &1_u16.to_le_bytes());
         put(&mut bytes, 16, &1_u16.to_le_bytes());
         put(&mut bytes, 20, &1_u16.to_le_bytes());
@@ -577,7 +634,11 @@ mod tests {
             put(&mut bytes, offset, &[route.role]);
             put(&mut bytes, offset + 1, &[route.kind]);
             put(&mut bytes, offset + 2, &[u8::from(route.enabled)]);
-            put(&mut bytes, offset + 8, &1_u16.to_le_bytes());
+            put(
+                &mut bytes,
+                offset + 8,
+                &route.fixed_account_count.to_le_bytes(),
+            );
             let request_len = u32::try_from(route.request.len()).expect("request len");
             put(&mut bytes, offset + 16, &request_len.to_le_bytes());
             put(&mut bytes, template_offset, &route.request);
@@ -650,8 +711,8 @@ mod tests {
             dclutch_effect_kernel::v3::HEADER_BYTES
                 + dclutch_effect_kernel::v3::ROUTE_BYTES
         ];
-        put(&mut effect, 0, b"DCE3");
-        put(&mut effect, 4, &[3, 0]);
+        put(&mut effect, 0, b"DCE4");
+        put(&mut effect, 4, &[4, 0]);
         put(&mut effect, 6, &1_u16.to_le_bytes());
         put(&mut effect, 12, &22_u16.to_le_bytes());
         put(&mut effect, 16, &3_u16.to_le_bytes());
@@ -756,6 +817,7 @@ mod tests {
                 role: 1,
                 kind: 0,
                 enabled: true,
+                fixed_account_count: 1,
                 request: vec![0xa5; 320],
             },
             route(1, affine(record, 8, buyer)),
@@ -865,6 +927,84 @@ mod tests {
                 &[1],
                 &[id(40)],
                 &requests,
+                hostile_parent,
+            ),
+            Err(ClaimsCompositionErrorV3::ParentBinding)
+        );
+    }
+
+    fn sparse_request() -> SparseNativeTransferV1 {
+        SparseNativeTransferV1::new(SparseNativeTransferInputV1 {
+            caller_role: CallerRole::Trading,
+            release_set: parent().release_set,
+            market: parent().market,
+            request_id: parent().parent_request_digest,
+            product_record_digest: id(30),
+            semantic_basis_id: id(31),
+            linked_basis_record_digest: id(32),
+            source_owner: id(10),
+            destination_owner: id(11),
+            expected_market_revision: MARKET_REVISION,
+            expected_source_revision: 7,
+            expected_destination_revision: 8,
+            generation: parent().generation,
+            outcome: 1,
+            claim_count: 3,
+            quantity: 9,
+        })
+        .expect("sparse request")
+    }
+
+    #[test]
+    fn composes_one_exact_sparse_native_transfer_and_refuses_geometry_or_parent_substitution() {
+        let sparse = sparse_request().to_bytes().to_vec();
+        let canonical_route = RouteFixture {
+            role: 1,
+            kind: 0,
+            enabled: false,
+            fixed_account_count: SPARSE_NATIVE_TRANSFER_FIXED_ACCOUNT_COUNT_V1,
+            request: sparse.clone(),
+        };
+        let (canonical_effect_bytes, canonical_request_bank) =
+            effect(core::slice::from_ref(&canonical_route));
+        let composition = ClaimsCompositionV3::decode_selected(
+            ProgramV3::decode(&canonical_effect_bytes).expect("sparse EffectProgram"),
+            TAIL_COUNT,
+            &[1],
+            &[id(40)],
+            &canonical_request_bank,
+            parent(),
+        )
+        .expect("sparse composition");
+        assert_eq!(composition.mutation_route(), 0);
+        assert_eq!(composition.sparse_native_transfer(), Some(sparse_request()));
+        assert!(composition.affine().is_none());
+        assert!(composition.signed_delta().is_none());
+
+        let mut wrong_geometry = canonical_route.clone();
+        wrong_geometry.fixed_account_count = SPARSE_NATIVE_TRANSFER_FIXED_ACCOUNT_COUNT_V1 - 1;
+        let (effect_bytes, request_bank) = effect(&[wrong_geometry]);
+        assert_eq!(
+            ClaimsCompositionV3::decode_selected(
+                ProgramV3::decode(&effect_bytes).expect("structural EffectProgram"),
+                TAIL_COUNT,
+                &[1],
+                &[id(40)],
+                &request_bank,
+                parent(),
+            ),
+            Err(ClaimsCompositionErrorV3::Route)
+        );
+
+        let mut hostile_parent = parent();
+        hostile_parent.parent_request_digest = id(99);
+        assert_eq!(
+            ClaimsCompositionV3::decode_selected(
+                ProgramV3::decode(&canonical_effect_bytes).expect("structural EffectProgram"),
+                TAIL_COUNT,
+                &[1],
+                &[id(40)],
+                &canonical_request_bank,
                 hostile_parent,
             ),
             Err(ClaimsCompositionErrorV3::ParentBinding)
