@@ -83,8 +83,8 @@ use dclutch_execution_strategy_contract::{
 use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
 use dclutch_product_runtime_v2::ContentId as ProductContentId;
 use dclutch_product_runtime_v2_svm_reader::{
-    FinalizedRecordFrameV2 as ProductRecordFrameV2, ProductRuntimeFrameV3,
-    authenticate_product_runtime_v3,
+    AuthenticatedProductRuntimeV3, FinalizedRecordFrameV2 as ProductRecordFrameV2,
+    ProductRuntimeFrameV3, authenticate_product_runtime_v3,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::ACTIVATION_PDA_DOMAIN_V1;
@@ -131,8 +131,9 @@ use crate::{
     },
     dispatch::TradingFamilyContextV1,
     execution_strategy_v2::{
-        ADMITTED_AOT_STRATEGY_ACCOUNT_COUNT_V2, INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2,
-        SHADOW_AOT_STRATEGY_ACCOUNT_COUNT_V2, authenticate_execution_strategy_v2,
+        ADMITTED_AOT_STRATEGY_ACCOUNT_COUNT_V2, AuthenticatedExecutionStrategyV2,
+        INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2, SHADOW_AOT_STRATEGY_ACCOUNT_COUNT_V2,
+        authenticate_execution_strategy_v2,
     },
     native_signature::{
         authenticate_and_seed_native_signatures, authenticate_current_top_level_instruction,
@@ -215,7 +216,7 @@ pub fn process_hot_execution_v3(
 ) -> Result<(), ProgramError> {
     let (envelope, family_request) = HotExecutionEnvelopeV3::split_instruction(instruction_data)
         .map_err(|_| TradingSbfError::Content)?;
-    let frame = HotFrameV3::parse(program_id, accounts)?;
+    let frame = parse_hot_frame_boxed_v3(program_id, accounts)?;
     authenticate_current_top_level_instruction(
         program_id,
         accounts,
@@ -234,101 +235,27 @@ pub fn process_hot_execution_v3(
         return Err(TradingSbfError::Root.into());
     }
 
-    let market = authenticate_market(frame, envelope)?;
-    let core_receipt = reauthenticate_role(
-        frame,
-        ExecutionRoleV1::Core,
-        frame.core_program,
-        frame.core_programdata,
-        envelope.release_set(),
-    )?;
-    if core_receipt.program().as_bytes() != &frame.core_program.key.to_bytes() {
-        return Err(TradingSbfError::Release.into());
-    }
-    let trading_receipt = reauthenticate_role(
-        frame,
-        ExecutionRoleV1::Trading,
-        frame.trading_program,
-        frame.trading_programdata,
-        envelope.release_set(),
-    )?;
-    let root_data = frame
-        .root
-        .try_borrow_data()
-        .map_err(|_| TradingSbfError::Root)?;
-    let context = TradingFamilyContextV1::authenticate(
-        program_id,
-        frame.root.key,
-        frame.root.owner,
-        &root_data,
-        trading_receipt,
-    )?;
-    let root_header = CapabilityRootHeaderV1::decode(
-        root_data
-            .get(..CAPABILITY_ROOT_HEADER_BYTES_V1)
-            .ok_or(TradingSbfError::Root)?,
-    )
-    .map_err(|_| TradingSbfError::Root)?;
-    if context.market() != envelope.market()
-        || context.release_set().to_bytes() != envelope.release_set()
-        || context.generation() != envelope.generation()
-        || market.identity.market_id.to_bytes() != envelope.market()
-    {
-        return Err(TradingSbfError::Root.into());
-    }
-    let immutable_root_header = root_header.to_bytes();
-    drop(root_data);
+    let market = authenticate_market_boxed_v3(&frame, envelope)?;
+    let root = authenticate_root_boxed_v3(program_id, &frame, envelope, &market)?;
+    let context = &root.context;
+    let immutable_root_header = root.immutable_header;
 
     let rent = Rent::from_account_info(frame.rent).map_err(|_| TradingSbfError::Content)?;
-    let product_runtime_v3 = authenticate_product_runtime_v3(
-        frame.registry.key,
-        &rent,
-        ProductContentId::new(market.identity.product_record.to_bytes())
-            .map_err(|_| TradingSbfError::Content)?,
-        ProductRuntimeFrameV3 {
-            product: ProductRecordFrameV2 {
-                raw: frame.product_raw,
-                staging: frame.product_staging,
-            },
-            result_domain: ProductRecordFrameV2 {
-                raw: frame.result_domain_raw,
-                staging: frame.result_domain_staging,
-            },
-            portfolio: ProductRecordFrameV2 {
-                raw: frame.portfolio_raw,
-                staging: frame.portfolio_staging,
-            },
-            linked_basis: ProductRecordFrameV2 {
-                raw: frame.linked_basis_raw,
-                staging: frame.linked_basis_staging,
-            },
-        },
-    )
-    .map_err(|_| TradingSbfError::Content)?;
+    let product_runtime_v3 = authenticate_product_runtime_boxed_v3(&frame, &rent, &market)?;
     let product_runtime = product_runtime_v3.runtime;
     let product_outcome_count = product_runtime.outcome_count;
     let manifest_data = borrow_finalized_record(
-        frame,
+        *frame,
         frame.manifest_raw,
         frame.manifest_staging,
         &rent,
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         context.selection().manifest().to_bytes(),
     )?;
-    let manifest =
-        CapabilityManifestV1::decode(&manifest_data).map_err(|_| TradingSbfError::Content)?;
-    let entry = manifest
-        .entry(context.selection().entry_index())
-        .map_err(|_| TradingSbfError::Content)?;
-    if entry.kind_id() != context.selection().kind()
-        || entry.release_id() != context.selection().capability_release()
-        || entry.config_id() != context.selection().config()
-    {
-        return Err(TradingSbfError::Content.into());
-    }
+    let entry = authenticate_manifest_entry_boxed_v3(&manifest_data, context)?;
 
     let program_set_data = borrow_finalized_record(
-        frame,
+        *frame,
         frame.program_set_raw,
         frame.program_set_staging,
         &rent,
@@ -348,7 +275,7 @@ pub fn process_hot_execution_v3(
     let selected_action = selected_entry.selector();
 
     let descriptor_data = borrow_finalized_record(
-        frame,
+        *frame,
         frame.descriptor_raw,
         frame.descriptor_staging,
         &rent,
@@ -358,12 +285,11 @@ pub fn process_hot_execution_v3(
     if descriptor_data.len() != CAPABILITY_PROGRAM_V3_BYTES {
         return Err(TradingSbfError::Content.into());
     }
-    let descriptor =
-        CapabilityProgramV3::decode(&descriptor_data).map_err(|_| TradingSbfError::Content)?;
-    authenticate_descriptor_root_selection(descriptor, context, entry)?;
+    let descriptor = decode_capability_program_boxed_v3(&descriptor_data)?;
+    authenticate_descriptor_root_selection(&descriptor, context, &entry)?;
 
     let config_data = borrow_finalized_record(
-        frame,
+        *frame,
         frame.config_raw,
         frame.config_staging,
         &rent,
@@ -387,7 +313,7 @@ pub fn process_hot_execution_v3(
             .to_bytes(),
     })?;
     let lifecycle_data = borrow_finalized_record(
-        frame,
+        *frame,
         frame.lifecycle_raw,
         frame.lifecycle_staging,
         &rent,
@@ -402,7 +328,7 @@ pub fn process_hot_execution_v3(
     .map_err(|_| TradingSbfError::Content)?;
 
     let account_profile_data = borrow_finalized_record(
-        frame,
+        *frame,
         frame.account_profile_raw,
         frame.account_profile_staging,
         &rent,
@@ -416,75 +342,23 @@ pub fn process_hot_execution_v3(
         .map_err(|_| TradingSbfError::Content)?;
 
     let request_profile_data = borrow_finalized_record(
-        frame,
+        *frame,
         frame.request_profile_raw,
         frame.request_profile_staging,
         &rent,
         descriptor.request_profile_schema().to_bytes(),
         descriptor.request_profile_program().to_bytes(),
     )?;
-    let request_profile = decode_request_profile(descriptor, &request_profile_data)?;
+    let request_profile = decode_request_profile(*descriptor, &request_profile_data)?;
 
-    let strategy_data = frame
-        .strategy_raw
-        .try_borrow_data()
-        .map_err(|_| TradingSbfError::Content)?;
-    if strategy_data.len() != EXECUTION_STRATEGY_PROGRAM_BYTES_V2 {
-        return Err(TradingSbfError::Content.into());
-    }
-    let preliminary_strategy =
-        ExecutionStrategyProgramV2::decode(&strategy_data).map_err(|_| TradingSbfError::Content)?;
-    drop(strategy_data);
-    let strategy_account_count = match preliminary_strategy.disposition() {
-        StrategyDispositionV2::Interpreted => INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2,
-        StrategyDispositionV2::ShadowAot => SHADOW_AOT_STRATEGY_ACCOUNT_COUNT_V2,
-        StrategyDispositionV2::AdmittedAot => ADMITTED_AOT_STRATEGY_ACCOUNT_COUNT_V2,
-    };
-    let strategy_extra_count = strategy_account_count
-        .checked_sub(INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2)
-        .ok_or(TradingSbfError::Content)?;
-    let strategy_extras_end = HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3
-        .checked_add(strategy_extra_count)
-        .ok_or(TradingSbfError::Content)?;
+    let (strategy, strategy_extras_end) =
+        authenticate_strategy_boxed_v3(&frame, accounts, *context, selected_program)?;
     let strategy_extras = accounts
         .get(HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3..strategy_extras_end)
         .ok_or(TradingSbfError::Content)?;
-    let mut strategy_accounts = Vec::with_capacity(strategy_account_count);
-    strategy_accounts.extend_from_slice(&[
-        frame.descriptor_raw.clone(),
-        frame.descriptor_staging.clone(),
-        frame.strategy_raw.clone(),
-        frame.strategy_staging.clone(),
-    ]);
-    strategy_accounts.extend_from_slice(strategy_extras);
-    let strategy = authenticate_execution_strategy_v2(
-        context,
-        selected_program,
-        frame.registry,
-        frame.rent,
-        &strategy_accounts,
-    )?;
-    if strategy.strategy().disposition() == StrategyDispositionV2::ShadowAot
-        && strategy
-            .strategy()
-            .transport_profile()
-            .map_err(|_| TradingSbfError::Content)?
-            != AcceleratorTransportProfileV2::ShadowTranscriptV3
-    {
-        return Err(TradingSbfError::UnsupportedContent.into());
-    }
-    if strategy.strategy().disposition() == StrategyDispositionV2::AdmittedAot
-        && strategy
-            .strategy()
-            .transport_profile()
-            .map_err(|_| TradingSbfError::Content)?
-            != AcceleratorTransportProfileV2::ChunkedBankV2
-    {
-        return Err(TradingSbfError::Content.into());
-    }
 
     let transition_data = borrow_finalized_record(
-        frame,
+        *frame,
         frame.transition_raw,
         frame.transition_staging,
         &rent,
@@ -498,7 +372,7 @@ pub fn process_hot_execution_v3(
         TransitionProgramV3::decode(&transition_data).map_err(|_| TradingSbfError::Content)?;
 
     let effect_data = borrow_finalized_record(
-        frame,
+        *frame,
         frame.effect_raw,
         frame.effect_staging,
         &rent,
@@ -703,145 +577,58 @@ pub fn process_hot_execution_v3(
     )?;
     require_trusted_environment_v3(trusted_environment, &request_output_scalars)?;
 
-    let (transition_output_scalars, transition_output_identities, admitted_execution_digest) =
-        if let Some(caller_authorities) = admitted_caller_authorities {
-            let accelerator_program = strategy_extras.get(6).ok_or(TradingSbfError::Content)?;
-            let accelerator_programdata = strategy_extras.get(7).ok_or(TradingSbfError::Content)?;
-            let family_request_digest =
-                family_request_digest_v3(family_request).map_err(|_| TradingSbfError::Content)?;
-            let runtime_transcript = observations
-                .iter()
-                .zip(&runtime_accounts)
-                .map(|(observation, account)| ShadowRuntimeObservationV3 {
-                    key: observation.key(),
-                    owner: observation.owner(),
-                    lamports: observation.lamports(),
-                    data: observation.data(),
-                    signer: false,
-                    writable: false,
-                    executable: account.executable,
-                })
-                .collect::<Vec<_>>();
-            let runtime_observations_digest = runtime_observations_digest_v3(&runtime_transcript)
-                .map_err(|_| TradingSbfError::Content)?;
-            let admitted_context = AdmittedInvocationContextV3 {
-                release_set: ContentId::new(envelope.release_set())
-                    .map_err(|_| TradingSbfError::Content)?,
-                market: ContentId::new(envelope.market()).map_err(|_| TradingSbfError::Content)?,
-                root: ContentId::new(frame.root.key.to_bytes())
-                    .map_err(|_| TradingSbfError::Content)?,
-                registry_program: ContentId::new(frame.registry.key.to_bytes())
-                    .map_err(|_| TradingSbfError::Content)?,
-                trading_program: ContentId::new(program_id.to_bytes())
-                    .map_err(|_| TradingSbfError::Content)?,
-                accelerator_program: ContentId::new(accelerator_program.key.to_bytes())
-                    .map_err(|_| TradingSbfError::Content)?,
-                capability_program: selected_program,
-                account_profile: descriptor.account_profile(),
-                request_profile: descriptor.request_profile_program(),
-                transition: strategy.strategy().transition_program(),
-                effect: descriptor.effect_program(),
-                lifecycle: descriptor.derivation_policy(),
-                strategy: strategy.strategy_program_id(),
-                certificate: strategy
-                    .certificate_program_id()
-                    .ok_or(TradingSbfError::Content)?,
-                admission: strategy
-                    .admission_program_id()
-                    .ok_or(TradingSbfError::Content)?,
-                artifact_release: strategy
-                    .artifact_release_id()
-                    .ok_or(TradingSbfError::Content)?,
-                config: context.selection().config(),
-                product: ContentId::new(product_runtime.product_record.content_digest.to_bytes())
-                    .map_err(|_| TradingSbfError::Content)?,
-                portfolio: ContentId::new(
-                    product_runtime.portfolio_record.content_digest.to_bytes(),
-                )
-                .map_err(|_| TradingSbfError::Content)?,
-                linked_basis: ContentId::new(
-                    product_runtime_v3
-                        .linked_basis_record
-                        .content_digest
-                        .to_bytes(),
-                )
-                .map_err(|_| TradingSbfError::Content)?,
-                family_request_digest,
-                runtime_observations_digest,
-                root_prestate_digest: ContentId::new(root_prestate)
-                    .map_err(|_| TradingSbfError::Content)?,
-                selected_action,
-                tail_count,
-                account_count: u32::try_from(runtime_accounts.len())
-                    .map_err(|_| TradingSbfError::Content)?,
-                scalar_count: u32::try_from(request_output_scalars.len())
-                    .map_err(|_| TradingSbfError::Content)?,
-                identity_count: u32::try_from(request_output_identities.len())
-                    .map_err(|_| TradingSbfError::Content)?,
-            };
-            let execution = execute_admitted_aot_v3(
-                program_id,
-                AdmittedCpiFrameV3 {
-                    caller_authorities,
-                    activation: frame.activation_cache,
-                    registry: frame.registry,
-                    rent: frame.rent,
-                    instructions: frame.instructions,
-                    trading_program: frame.trading_program,
-                    trading_programdata: frame.trading_programdata,
-                    capability_raw: frame.descriptor_raw,
-                    capability_staging: frame.descriptor_staging,
-                    strategy_raw: frame.strategy_raw,
-                    strategy_staging: frame.strategy_staging,
-                    certificate_raw: strategy_extras.first().ok_or(TradingSbfError::Content)?,
-                    certificate_staging: strategy_extras.get(1).ok_or(TradingSbfError::Content)?,
-                    admission_raw: strategy_extras.get(2).ok_or(TradingSbfError::Content)?,
-                    admission_staging: strategy_extras.get(3).ok_or(TradingSbfError::Content)?,
-                    artifact_raw: strategy_extras.get(4).ok_or(TradingSbfError::Content)?,
-                    artifact_staging: strategy_extras.get(5).ok_or(TradingSbfError::Content)?,
-                    accelerator_program,
-                    accelerator_programdata,
-                },
-                &runtime_accounts,
-                &[],
-                &admitted_context,
-                strategy,
-                &request_output_scalars,
-                &request_output_identities,
-            )?;
-            (
-                execution.scalars,
-                execution.identities,
-                execution.transcript_digest,
-            )
-        } else {
-            let mut transition_scratch_scalars = request_output_scalars.clone();
-            let mut transition_scratch_identities = request_output_identities.clone();
-            let mut transition_output_scalars = request_output_scalars.clone();
-            let mut transition_output_identities = request_output_identities.clone();
-            execute_fold_atomic(
-                transition,
-                tail_count,
-                RegisterInput {
-                    scalars: &request_output_scalars,
-                    identities: &request_output_identities,
-                },
-                RegisterOutput {
-                    scalars: &mut transition_scratch_scalars,
-                    identities: &mut transition_scratch_identities,
-                },
-                RegisterOutput {
-                    scalars: &mut transition_output_scalars,
-                    identities: &mut transition_output_identities,
-                },
-            )
-            .map_err(|_| TradingSbfError::Transition)?;
-            (
-                transition_output_scalars,
-                transition_output_identities,
-                [0_u8; 32],
-            )
-        };
+    let candidate = if let Some(caller_authorities) = admitted_caller_authorities {
+        execute_admitted_candidate_v3(AdmittedCandidateViewV3 {
+            program_id,
+            frame: &frame,
+            caller_authorities,
+            strategy_extras,
+            runtime_accounts: &runtime_accounts,
+            observations: &observations,
+            envelope,
+            context,
+            descriptor: &descriptor,
+            strategy: &strategy,
+            product_runtime_v3: &product_runtime_v3,
+            family_request,
+            root_prestate,
+            selected_program,
+            selected_action,
+            tail_count,
+            scalars: &request_output_scalars,
+            identities: &request_output_identities,
+        })?
+    } else {
+        let mut transition_scratch_scalars = request_output_scalars.clone();
+        let mut transition_scratch_identities = request_output_identities.clone();
+        let mut transition_output_scalars = request_output_scalars.clone();
+        let mut transition_output_identities = request_output_identities.clone();
+        execute_fold_atomic(
+            transition,
+            tail_count,
+            RegisterInput {
+                scalars: &request_output_scalars,
+                identities: &request_output_identities,
+            },
+            RegisterOutput {
+                scalars: &mut transition_scratch_scalars,
+                identities: &mut transition_scratch_identities,
+            },
+            RegisterOutput {
+                scalars: &mut transition_output_scalars,
+                identities: &mut transition_output_identities,
+            },
+        )
+        .map_err(|_| TradingSbfError::Transition)?;
+        CandidateExecutionV3 {
+            scalars: transition_output_scalars,
+            identities: transition_output_identities,
+            transcript_digest: [0_u8; 32],
+        }
+    };
+    let transition_output_scalars = candidate.scalars;
+    let transition_output_identities = candidate.identities;
+    let admitted_execution_digest = candidate.transcript_digest;
 
     require_borrowed_witness_coverage_v3(
         request_profile,
@@ -918,7 +705,7 @@ pub fn process_hot_execution_v3(
         .collect::<Vec<_>>();
     preflight_child_routes_v3(
         program_id,
-        frame,
+        *frame,
         effect,
         tail_count,
         &transition_output_scalars,
@@ -933,79 +720,707 @@ pub fn process_hot_execution_v3(
         &aliases,
     )?;
     let strategy_execution_digest = if let Some(caller_authority) = shadow_caller_authority {
-        let accelerator_program = strategy_extras.get(4).ok_or(TradingSbfError::Content)?;
-        let accelerator_programdata = strategy_extras.get(5).ok_or(TradingSbfError::Content)?;
-        let family_digest =
-            family_request_digest_v3(family_request).map_err(|_| TradingSbfError::Content)?;
-        let runtime_transcript = observations
-            .iter()
-            .zip(&runtime_accounts)
-            .map(|(observation, account)| ShadowRuntimeObservationV3 {
-                key: observation.key(),
-                owner: observation.owner(),
-                lamports: observation.lamports(),
-                data: observation.data(),
-                signer: false,
-                writable: false,
-                executable: account.executable,
-            })
-            .collect::<Vec<_>>();
-        let runtime_digest = runtime_observations_digest_v3(&runtime_transcript)
-            .map_err(|_| TradingSbfError::Content)?;
-        let candidate_digest = candidate_digest_v3(
-            tail_count,
-            &transition_output_scalars,
-            &transition_output_identities,
-        )
-        .map_err(|_| TradingSbfError::Content)?;
-        let routes = shadow_routes_v3(
+        execute_shadow_candidate_v3(ShadowCandidateViewV3 {
+            program_id,
+            frame: &frame,
+            caller_authority,
+            strategy_extras,
+            runtime_accounts: &runtime_accounts,
+            observations: &observations,
+            envelope,
+            descriptor: &descriptor,
+            strategy: &strategy,
+            family_request,
+            root_prestate,
+            selected_program,
+            selected_action,
             effect,
             tail_count,
-            &transition_output_scalars,
-            &transition_output_identities,
-        )?;
-        let effect_digest = effect_digest_v3(ShadowEffectProjectionV3 {
-            tail_count,
+            scalars: &transition_output_scalars,
+            identities: &transition_output_identities,
             output_lamports: &output_lamports,
             request_bank: &output_requests,
-            routes: &routes,
-        })
+        })?
+    } else {
+        admitted_execution_digest
+    };
+    drop(observations);
+    drop(runtime_data);
+    commit_prepared_hot_v3(Box::new(PreparedHotCommitV3 {
+        program_id,
+        frame: &frame,
+        request_profile,
+        effect,
+        tail_count,
+        scalars: &transition_output_scalars,
+        identities: &transition_output_identities,
+        runtime_accounts: &runtime_accounts,
+        effect_accounts: &effect_accounts,
+        request_bank: &output_requests,
+        family_request,
+        request_digest,
+        envelope,
+        capability_program_set: context.selection().capability_release().to_bytes(),
+        selected_program,
+        lifecycle_plans: &lifecycle_plans,
+        aliases: &aliases,
+        output_lamports: &output_lamports,
+        rent: &rent,
+        immutable_root_header,
+        root_prestate,
+        strategy_execution_digest,
+        descriptor: &descriptor,
+        strategy: &strategy,
+        context,
+        market: &market,
+        product_runtime_v3: &product_runtime_v3,
+        product_outcome_count,
+    }))
+}
+
+struct PreparedHotCommitV3<'a, 'accounts, 'info, 'artifact> {
+    program_id: &'a Pubkey,
+    frame: &'a HotFrameV3<'accounts, 'info>,
+    request_profile: RequestProfileKindV3<'artifact>,
+    effect: EffectProgramV3<'artifact>,
+    tail_count: u32,
+    scalars: &'a [u64],
+    identities: &'a [[u8; 32]],
+    runtime_accounts: &'a [&'accounts AccountInfo<'info>],
+    effect_accounts: &'a [AccountInfo<'info>],
+    request_bank: &'a [u8],
+    family_request: &'a [u8],
+    request_digest: [u8; 32],
+    envelope: HotExecutionEnvelopeV3,
+    capability_program_set: [u8; 32],
+    selected_program: ContentId,
+    lifecycle_plans: &'a [PreparedLifecycleInvocationV3],
+    aliases: &'a [usize],
+    output_lamports: &'a [u64],
+    rent: &'a Rent,
+    immutable_root_header: [u8; CAPABILITY_ROOT_HEADER_BYTES_V1],
+    root_prestate: [u8; 32],
+    strategy_execution_digest: [u8; 32],
+    descriptor: &'a CapabilityProgramV3,
+    strategy: &'a AuthenticatedExecutionStrategyV2,
+    context: &'a TradingFamilyContextV1,
+    market: &'a CoreState,
+    product_runtime_v3: &'a AuthenticatedProductRuntimeV3<'accounts, 'info>,
+    product_outcome_count: u32,
+}
+
+#[inline(never)]
+fn commit_prepared_hot_v3(
+    prepared: Box<PreparedHotCommitV3<'_, '_, '_, '_>>,
+) -> Result<(), ProgramError> {
+    apply_lifecycle_creates_v3(
+        prepared.program_id,
+        prepared.lifecycle_plans,
+        prepared.runtime_accounts,
+    )?;
+    let child_execution_digest = execute_prepared_child_routes_v3(&prepared)?;
+    commit_prepared_post_children_v3(&prepared)?;
+    let root_poststate = {
+        let bytes = prepared
+            .frame
+            .root
+            .try_borrow_data()
+            .map_err(|_| TradingSbfError::Commit)?;
+        if bytes.get(..CAPABILITY_ROOT_HEADER_BYTES_V1)
+            != Some(prepared.immutable_root_header.as_slice())
+        {
+            return Err(TradingSbfError::Commit.into());
+        }
+        hash(&bytes).to_bytes()
+    };
+    finalize_hot_ack_v3(&prepared, child_execution_digest, root_poststate)
+}
+
+#[inline(never)]
+fn execute_prepared_child_routes_v3(
+    prepared: &PreparedHotCommitV3<'_, '_, '_, '_>,
+) -> Result<[u8; 32], ProgramError> {
+    execute_child_routes_v3(
+        prepared.program_id,
+        *prepared.frame,
+        prepared.request_profile,
+        prepared.effect,
+        prepared.tail_count,
+        prepared.scalars,
+        prepared.identities,
+        prepared.effect_accounts,
+        prepared.request_bank,
+        prepared.family_request,
+        prepared.request_digest,
+        prepared.envelope,
+        prepared.capability_program_set,
+        prepared.selected_program.to_bytes(),
+    )
+}
+
+#[inline(never)]
+fn commit_prepared_post_children_v3(
+    prepared: &PreparedHotCommitV3<'_, '_, '_, '_>,
+) -> Result<(), ProgramError> {
+    apply_lifecycle_closes_v3(
+        prepared.program_id,
+        prepared.lifecycle_plans,
+        prepared.runtime_accounts,
+        prepared.rent,
+    )?;
+    commit_local_effects(
+        prepared.effect,
+        prepared.tail_count,
+        prepared.scalars,
+        prepared.identities,
+        prepared.runtime_accounts,
+        prepared.aliases,
+        prepared.output_lamports,
+        prepared.rent,
+        false,
+    )?;
+    commit_local_effects(
+        prepared.effect,
+        prepared.tail_count,
+        prepared.scalars,
+        prepared.identities,
+        prepared.runtime_accounts,
+        prepared.aliases,
+        prepared.output_lamports,
+        prepared.rent,
+        true,
+    )?;
+    Ok(())
+}
+
+#[inline(never)]
+fn finalize_hot_ack_v3(
+    prepared: &PreparedHotCommitV3<'_, '_, '_, '_>,
+    child_execution_digest: [u8; 32],
+    root_poststate: [u8; 32],
+) -> Result<(), ProgramError> {
+    let execution_digest = hashv(&[
+        EXECUTION_DIGEST_DOMAIN_V3,
+        &prepared.selected_program.to_bytes(),
+        &prepared.descriptor.account_profile().to_bytes(),
+        &prepared.descriptor.request_profile_program().to_bytes(),
+        &prepared.strategy.strategy_program_id().to_bytes(),
+        &prepared.strategy.strategy().transition_program().to_bytes(),
+        &prepared.descriptor.effect_program().to_bytes(),
+        &prepared.descriptor.derivation_policy().to_bytes(),
+        &prepared.context.selection().config().to_bytes(),
+        &prepared.market.identity.product_record.to_bytes(),
+        &prepared
+            .product_runtime_v3
+            .linked_basis_record
+            .content_digest
+            .to_bytes(),
+        &prepared.product_runtime_v3.semantic_basis_id.to_bytes(),
+        &prepared.product_outcome_count.to_le_bytes(),
+        &prepared.request_digest,
+        &prepared.strategy_execution_digest,
+        &child_execution_digest,
+        &root_poststate,
+    ])
+    .to_bytes();
+    let ack = HotExecutionAckV3::new(HotExecutionAckV3 {
+        release_set: prepared.envelope.release_set(),
+        market: prepared.envelope.market(),
+        generation: prepared.envelope.generation(),
+        root: prepared.frame.root.key.to_bytes(),
+        request_digest: prepared.request_digest,
+        selected_program: prepared.selected_program.to_bytes(),
+        root_prestate_digest: prepared.root_prestate,
+        root_poststate_digest: root_poststate,
+        execution_digest,
+    })
+    .map_err(|_| TradingSbfError::Commit)?;
+    set_return_data(&ack.to_bytes());
+    Ok(())
+}
+
+struct AuthenticatedRootV3 {
+    context: TradingFamilyContextV1,
+    immutable_header: [u8; CAPABILITY_ROOT_HEADER_BYTES_V1],
+}
+
+#[inline(never)]
+fn parse_hot_frame_boxed_v3<'accounts, 'info>(
+    program_id: &Pubkey,
+    accounts: &'accounts [AccountInfo<'info>],
+) -> Result<Box<HotFrameV3<'accounts, 'info>>, ProgramError> {
+    HotFrameV3::parse(program_id, accounts).map(Box::new)
+}
+
+#[inline(never)]
+fn authenticate_market_boxed_v3<'accounts, 'info>(
+    frame: &HotFrameV3<'accounts, 'info>,
+    envelope: HotExecutionEnvelopeV3,
+) -> Result<Box<CoreState>, ProgramError> {
+    authenticate_market(*frame, envelope).map(Box::new)
+}
+
+#[inline(never)]
+fn authenticate_root_boxed_v3<'accounts, 'info>(
+    program_id: &Pubkey,
+    frame: &HotFrameV3<'accounts, 'info>,
+    envelope: HotExecutionEnvelopeV3,
+    market: &CoreState,
+) -> Result<Box<AuthenticatedRootV3>, ProgramError> {
+    let core_receipt = reauthenticate_role(
+        *frame,
+        ExecutionRoleV1::Core,
+        frame.core_program,
+        frame.core_programdata,
+        envelope.release_set(),
+    )?;
+    if core_receipt.program().as_bytes() != &frame.core_program.key.to_bytes() {
+        return Err(TradingSbfError::Release.into());
+    }
+    let trading_receipt = reauthenticate_role(
+        *frame,
+        ExecutionRoleV1::Trading,
+        frame.trading_program,
+        frame.trading_programdata,
+        envelope.release_set(),
+    )?;
+    let root_data = frame
+        .root
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Root)?;
+    let context = TradingFamilyContextV1::authenticate(
+        program_id,
+        frame.root.key,
+        frame.root.owner,
+        &root_data,
+        trading_receipt,
+    )?;
+    let root_header = CapabilityRootHeaderV1::decode(
+        root_data
+            .get(..CAPABILITY_ROOT_HEADER_BYTES_V1)
+            .ok_or(TradingSbfError::Root)?,
+    )
+    .map_err(|_| TradingSbfError::Root)?;
+    if context.market() != envelope.market()
+        || context.release_set().to_bytes() != envelope.release_set()
+        || context.generation() != envelope.generation()
+        || market.identity.market_id.to_bytes() != envelope.market()
+    {
+        return Err(TradingSbfError::Root.into());
+    }
+    Ok(Box::new(AuthenticatedRootV3 {
+        context,
+        immutable_header: root_header.to_bytes(),
+    }))
+}
+
+#[inline(never)]
+fn authenticate_product_runtime_boxed_v3<'accounts, 'info>(
+    frame: &HotFrameV3<'accounts, 'info>,
+    rent: &Rent,
+    market: &CoreState,
+) -> Result<Box<AuthenticatedProductRuntimeV3<'accounts, 'info>>, ProgramError> {
+    authenticate_product_runtime_v3(
+        frame.registry.key,
+        rent,
+        ProductContentId::new(market.identity.product_record.to_bytes())
+            .map_err(|_| TradingSbfError::Content)?,
+        ProductRuntimeFrameV3 {
+            product: ProductRecordFrameV2 {
+                raw: frame.product_raw,
+                staging: frame.product_staging,
+            },
+            result_domain: ProductRecordFrameV2 {
+                raw: frame.result_domain_raw,
+                staging: frame.result_domain_staging,
+            },
+            portfolio: ProductRecordFrameV2 {
+                raw: frame.portfolio_raw,
+                staging: frame.portfolio_staging,
+            },
+            linked_basis: ProductRecordFrameV2 {
+                raw: frame.linked_basis_raw,
+                staging: frame.linked_basis_staging,
+            },
+        },
+    )
+    .map(Box::new)
+    .map_err(|_| TradingSbfError::Content.into())
+}
+
+#[inline(never)]
+fn decode_capability_program_boxed_v3(
+    descriptor_data: &[u8],
+) -> Result<Box<CapabilityProgramV3>, ProgramError> {
+    CapabilityProgramV3::decode(descriptor_data)
+        .map(Box::new)
+        .map_err(|_| TradingSbfError::Content.into())
+}
+
+#[inline(never)]
+fn authenticate_manifest_entry_boxed_v3(
+    manifest_data: &[u8],
+    context: &TradingFamilyContextV1,
+) -> Result<Box<dclutch_capability_contract::CapabilityEntryV1>, ProgramError> {
+    let manifest =
+        CapabilityManifestV1::decode(manifest_data).map_err(|_| TradingSbfError::Content)?;
+    let entry = manifest
+        .entry(context.selection().entry_index())
         .map_err(|_| TradingSbfError::Content)?;
-        let release_set =
-            ContentId::new(envelope.release_set()).map_err(|_| TradingSbfError::Content)?;
-        let market_id = ContentId::new(envelope.market()).map_err(|_| TradingSbfError::Content)?;
-        let root_id =
-            ContentId::new(frame.root.key.to_bytes()).map_err(|_| TradingSbfError::Content)?;
-        let root_prestate_id =
-            ContentId::new(root_prestate).map_err(|_| TradingSbfError::Content)?;
-        let invocation_context = invocation_context_digest_v3(ShadowInvocationContextV3 {
-            release_set,
-            market: market_id,
-            root: root_id,
-            capability_program: selected_program,
-            selected_action,
-            family_request_digest: family_digest,
-            root_prestate_digest: root_prestate_id,
-        })
+    if entry.kind_id() != context.selection().kind()
+        || entry.release_id() != context.selection().capability_release()
+        || entry.config_id() != context.selection().config()
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    Ok(Box::new(entry))
+}
+
+#[inline(never)]
+fn authenticate_strategy_boxed_v3<'accounts, 'info>(
+    frame: &HotFrameV3<'accounts, 'info>,
+    accounts: &'accounts [AccountInfo<'info>],
+    context: TradingFamilyContextV1,
+    selected_program: ContentId,
+) -> Result<(Box<AuthenticatedExecutionStrategyV2>, usize), ProgramError> {
+    let strategy_data = frame
+        .strategy_raw
+        .try_borrow_data()
         .map_err(|_| TradingSbfError::Content)?;
-        let request = ShadowRequestV3 {
+    if strategy_data.len() != EXECUTION_STRATEGY_PROGRAM_BYTES_V2 {
+        return Err(TradingSbfError::Content.into());
+    }
+    let preliminary_strategy =
+        ExecutionStrategyProgramV2::decode(&strategy_data).map_err(|_| TradingSbfError::Content)?;
+    drop(strategy_data);
+    let strategy_account_count = match preliminary_strategy.disposition() {
+        StrategyDispositionV2::Interpreted => INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2,
+        StrategyDispositionV2::ShadowAot => SHADOW_AOT_STRATEGY_ACCOUNT_COUNT_V2,
+        StrategyDispositionV2::AdmittedAot => ADMITTED_AOT_STRATEGY_ACCOUNT_COUNT_V2,
+    };
+    let strategy_extra_count = strategy_account_count
+        .checked_sub(INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2)
+        .ok_or(TradingSbfError::Content)?;
+    let strategy_extras_end = HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3
+        .checked_add(strategy_extra_count)
+        .ok_or(TradingSbfError::Content)?;
+    let strategy_extras = accounts
+        .get(HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3..strategy_extras_end)
+        .ok_or(TradingSbfError::Content)?;
+    let mut strategy_accounts = Vec::with_capacity(strategy_account_count);
+    strategy_accounts.extend_from_slice(&[
+        frame.descriptor_raw.clone(),
+        frame.descriptor_staging.clone(),
+        frame.strategy_raw.clone(),
+        frame.strategy_staging.clone(),
+    ]);
+    strategy_accounts.extend_from_slice(strategy_extras);
+    let strategy = authenticate_execution_strategy_v2(
+        context,
+        selected_program,
+        frame.registry,
+        frame.rent,
+        &strategy_accounts,
+    )?;
+    if strategy.strategy().disposition() == StrategyDispositionV2::ShadowAot
+        && strategy
+            .strategy()
+            .transport_profile()
+            .map_err(|_| TradingSbfError::Content)?
+            != AcceleratorTransportProfileV2::ShadowTranscriptV3
+    {
+        return Err(TradingSbfError::UnsupportedContent.into());
+    }
+    if strategy.strategy().disposition() == StrategyDispositionV2::AdmittedAot
+        && strategy
+            .strategy()
+            .transport_profile()
+            .map_err(|_| TradingSbfError::Content)?
+            != AcceleratorTransportProfileV2::ChunkedBankV2
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    Ok((Box::new(strategy), strategy_extras_end))
+}
+
+struct AdmittedCandidateViewV3<'a, 'data, 'accounts, 'info> {
+    program_id: &'a Pubkey,
+    frame: &'a HotFrameV3<'accounts, 'info>,
+    caller_authorities: &'a [AccountInfo<'info>],
+    strategy_extras: &'a [AccountInfo<'info>],
+    runtime_accounts: &'a [&'accounts AccountInfo<'info>],
+    observations: &'a [AccountObservationV1<'data>],
+    envelope: HotExecutionEnvelopeV3,
+    context: &'a TradingFamilyContextV1,
+    descriptor: &'a CapabilityProgramV3,
+    strategy: &'a AuthenticatedExecutionStrategyV2,
+    product_runtime_v3: &'a AuthenticatedProductRuntimeV3<'accounts, 'info>,
+    family_request: &'a [u8],
+    root_prestate: [u8; 32],
+    selected_program: ContentId,
+    selected_action: u32,
+    tail_count: u32,
+    scalars: &'a [u64],
+    identities: &'a [[u8; 32]],
+}
+
+struct CandidateExecutionV3 {
+    scalars: Vec<u64>,
+    identities: Vec<[u8; 32]>,
+    transcript_digest: [u8; 32],
+}
+
+#[inline(never)]
+fn execute_admitted_candidate_v3(
+    view: AdmittedCandidateViewV3<'_, '_, '_, '_>,
+) -> Result<CandidateExecutionV3, ProgramError> {
+    let accelerator_program = view
+        .strategy_extras
+        .get(6)
+        .ok_or(TradingSbfError::Content)?;
+    let accelerator_programdata = view
+        .strategy_extras
+        .get(7)
+        .ok_or(TradingSbfError::Content)?;
+    let family_request_digest =
+        family_request_digest_v3(view.family_request).map_err(|_| TradingSbfError::Content)?;
+    let runtime_transcript = view
+        .observations
+        .iter()
+        .zip(view.runtime_accounts)
+        .map(|(observation, account)| ShadowRuntimeObservationV3 {
+            key: observation.key(),
+            owner: observation.owner(),
+            lamports: observation.lamports(),
+            data: observation.data(),
+            signer: false,
+            writable: false,
+            executable: account.executable,
+        })
+        .collect::<Vec<_>>();
+    let runtime_observations_digest = runtime_observations_digest_v3(&runtime_transcript)
+        .map_err(|_| TradingSbfError::Content)?;
+    let product_runtime = view.product_runtime_v3.runtime;
+    let admitted_context = AdmittedInvocationContextV3 {
+        release_set: ContentId::new(view.envelope.release_set())
+            .map_err(|_| TradingSbfError::Content)?,
+        market: ContentId::new(view.envelope.market()).map_err(|_| TradingSbfError::Content)?,
+        root: ContentId::new(view.frame.root.key.to_bytes())
+            .map_err(|_| TradingSbfError::Content)?,
+        registry_program: ContentId::new(view.frame.registry.key.to_bytes())
+            .map_err(|_| TradingSbfError::Content)?,
+        trading_program: ContentId::new(view.program_id.to_bytes())
+            .map_err(|_| TradingSbfError::Content)?,
+        accelerator_program: ContentId::new(accelerator_program.key.to_bytes())
+            .map_err(|_| TradingSbfError::Content)?,
+        capability_program: view.selected_program,
+        account_profile: view.descriptor.account_profile(),
+        request_profile: view.descriptor.request_profile_program(),
+        transition: view.strategy.strategy().transition_program(),
+        effect: view.descriptor.effect_program(),
+        lifecycle: view.descriptor.derivation_policy(),
+        strategy: view.strategy.strategy_program_id(),
+        certificate: view
+            .strategy
+            .certificate_program_id()
+            .ok_or(TradingSbfError::Content)?,
+        admission: view
+            .strategy
+            .admission_program_id()
+            .ok_or(TradingSbfError::Content)?,
+        artifact_release: view
+            .strategy
+            .artifact_release_id()
+            .ok_or(TradingSbfError::Content)?,
+        config: view.context.selection().config(),
+        product: ContentId::new(product_runtime.product_record.content_digest.to_bytes())
+            .map_err(|_| TradingSbfError::Content)?,
+        portfolio: ContentId::new(product_runtime.portfolio_record.content_digest.to_bytes())
+            .map_err(|_| TradingSbfError::Content)?,
+        linked_basis: ContentId::new(
+            view.product_runtime_v3
+                .linked_basis_record
+                .content_digest
+                .to_bytes(),
+        )
+        .map_err(|_| TradingSbfError::Content)?,
+        family_request_digest,
+        runtime_observations_digest,
+        root_prestate_digest: ContentId::new(view.root_prestate)
+            .map_err(|_| TradingSbfError::Content)?,
+        selected_action: view.selected_action,
+        tail_count: view.tail_count,
+        account_count: u32::try_from(view.runtime_accounts.len())
+            .map_err(|_| TradingSbfError::Content)?,
+        scalar_count: u32::try_from(view.scalars.len()).map_err(|_| TradingSbfError::Content)?,
+        identity_count: u32::try_from(view.identities.len())
+            .map_err(|_| TradingSbfError::Content)?,
+    };
+    let execution = execute_admitted_aot_v3(
+        view.program_id,
+        AdmittedCpiFrameV3 {
+            caller_authorities: view.caller_authorities,
+            activation: view.frame.activation_cache,
+            registry: view.frame.registry,
+            rent: view.frame.rent,
+            instructions: view.frame.instructions,
+            trading_program: view.frame.trading_program,
+            trading_programdata: view.frame.trading_programdata,
+            capability_raw: view.frame.descriptor_raw,
+            capability_staging: view.frame.descriptor_staging,
+            strategy_raw: view.frame.strategy_raw,
+            strategy_staging: view.frame.strategy_staging,
+            certificate_raw: view
+                .strategy_extras
+                .first()
+                .ok_or(TradingSbfError::Content)?,
+            certificate_staging: view
+                .strategy_extras
+                .get(1)
+                .ok_or(TradingSbfError::Content)?,
+            admission_raw: view
+                .strategy_extras
+                .get(2)
+                .ok_or(TradingSbfError::Content)?,
+            admission_staging: view
+                .strategy_extras
+                .get(3)
+                .ok_or(TradingSbfError::Content)?,
+            artifact_raw: view
+                .strategy_extras
+                .get(4)
+                .ok_or(TradingSbfError::Content)?,
+            artifact_staging: view
+                .strategy_extras
+                .get(5)
+                .ok_or(TradingSbfError::Content)?,
+            accelerator_program,
+            accelerator_programdata,
+        },
+        view.runtime_accounts,
+        &[],
+        &admitted_context,
+        *view.strategy,
+        view.scalars,
+        view.identities,
+    )?;
+    Ok(CandidateExecutionV3 {
+        scalars: execution.scalars,
+        identities: execution.identities,
+        transcript_digest: execution.transcript_digest,
+    })
+}
+
+struct ShadowCandidateViewV3<'a, 'data, 'accounts, 'info> {
+    program_id: &'a Pubkey,
+    frame: &'a HotFrameV3<'accounts, 'info>,
+    caller_authority: &'a AccountInfo<'info>,
+    strategy_extras: &'a [AccountInfo<'info>],
+    runtime_accounts: &'a [&'accounts AccountInfo<'info>],
+    observations: &'a [AccountObservationV1<'data>],
+    envelope: HotExecutionEnvelopeV3,
+    descriptor: &'a CapabilityProgramV3,
+    strategy: &'a AuthenticatedExecutionStrategyV2,
+    family_request: &'a [u8],
+    root_prestate: [u8; 32],
+    selected_program: ContentId,
+    selected_action: u32,
+    effect: EffectProgramV3<'a>,
+    tail_count: u32,
+    scalars: &'a [u64],
+    identities: &'a [[u8; 32]],
+    output_lamports: &'a [u64],
+    request_bank: &'a [u8],
+}
+
+#[inline(never)]
+fn execute_shadow_candidate_v3(
+    view: ShadowCandidateViewV3<'_, '_, '_, '_>,
+) -> Result<[u8; 32], ProgramError> {
+    let accelerator_program = view
+        .strategy_extras
+        .get(4)
+        .ok_or(TradingSbfError::Content)?;
+    let accelerator_programdata = view
+        .strategy_extras
+        .get(5)
+        .ok_or(TradingSbfError::Content)?;
+    let family_digest =
+        family_request_digest_v3(view.family_request).map_err(|_| TradingSbfError::Content)?;
+    let runtime_transcript = view
+        .observations
+        .iter()
+        .zip(view.runtime_accounts)
+        .map(|(observation, account)| ShadowRuntimeObservationV3 {
+            key: observation.key(),
+            owner: observation.owner(),
+            lamports: observation.lamports(),
+            data: observation.data(),
+            signer: false,
+            writable: false,
+            executable: account.executable,
+        })
+        .collect::<Vec<_>>();
+    let runtime_digest = runtime_observations_digest_v3(&runtime_transcript)
+        .map_err(|_| TradingSbfError::Content)?;
+    let candidate_digest = candidate_digest_v3(view.tail_count, view.scalars, view.identities)
+        .map_err(|_| TradingSbfError::Content)?;
+    let routes = shadow_routes_v3(view.effect, view.tail_count, view.scalars, view.identities)?;
+    let effect_digest = effect_digest_v3(ShadowEffectProjectionV3 {
+        tail_count: view.tail_count,
+        output_lamports: view.output_lamports,
+        request_bank: view.request_bank,
+        routes: &routes,
+    })
+    .map_err(|_| TradingSbfError::Content)?;
+    let release_set =
+        ContentId::new(view.envelope.release_set()).map_err(|_| TradingSbfError::Content)?;
+    let market = ContentId::new(view.envelope.market()).map_err(|_| TradingSbfError::Content)?;
+    let root =
+        ContentId::new(view.frame.root.key.to_bytes()).map_err(|_| TradingSbfError::Content)?;
+    let root_prestate_digest =
+        ContentId::new(view.root_prestate).map_err(|_| TradingSbfError::Content)?;
+    let invocation_context = invocation_context_digest_v3(ShadowInvocationContextV3 {
+        release_set,
+        market,
+        root,
+        capability_program: view.selected_program,
+        selected_action: view.selected_action,
+        family_request_digest: family_digest,
+        root_prestate_digest,
+    })
+    .map_err(|_| TradingSbfError::Content)?;
+    execute_shadow_aot_v3(
+        view.program_id,
+        ShadowCpiFrameV3 {
+            caller_authority: view.caller_authority,
+            activation: view.frame.activation_cache,
+            registry: view.frame.registry,
+            trading_program: view.frame.trading_program,
+            trading_programdata: view.frame.trading_programdata,
+            accelerator_program,
+            accelerator_programdata,
+        },
+        view.runtime_accounts,
+        ShadowRequestV3 {
             release_set,
-            market: market_id,
-            root: root_id,
-            registry_program: ContentId::new(frame.registry.key.to_bytes())
+            market,
+            root,
+            registry_program: ContentId::new(view.frame.registry.key.to_bytes())
                 .map_err(|_| TradingSbfError::Content)?,
-            trading_program: ContentId::new(program_id.to_bytes())
+            trading_program: ContentId::new(view.program_id.to_bytes())
                 .map_err(|_| TradingSbfError::Content)?,
             accelerator_program: ContentId::new(accelerator_program.key.to_bytes())
                 .map_err(|_| TradingSbfError::Content)?,
             artifacts: ShadowArtifactTupleV3 {
-                capability_program: selected_program,
-                account_profile: descriptor.account_profile(),
-                request_profile: descriptor.request_profile_program(),
-                transition: strategy.strategy().transition_program(),
-                effect: descriptor.effect_program(),
-                strategy: strategy.strategy_program_id(),
-                certificate: strategy
+                capability_program: view.selected_program,
+                account_profile: view.descriptor.account_profile(),
+                request_profile: view.descriptor.request_profile_program(),
+                transition: view.strategy.strategy().transition_program(),
+                effect: view.descriptor.effect_program(),
+                strategy: view.strategy.strategy_program_id(),
+                certificate: view
+                    .strategy
                     .certificate_program_id()
                     .ok_or(TradingSbfError::Content)?,
             },
@@ -1017,122 +1432,17 @@ pub fn process_hot_execution_v3(
                 interpreted_effect: effect_digest,
             },
             shape: ShadowRuntimeShapeV3 {
-                tail_count,
-                account_count: u32::try_from(runtime_accounts.len())
+                tail_count: view.tail_count,
+                account_count: u32::try_from(view.runtime_accounts.len())
                     .map_err(|_| TradingSbfError::Content)?,
-                scalar_count: u32::try_from(transition_output_scalars.len())
+                scalar_count: u32::try_from(view.scalars.len())
                     .map_err(|_| TradingSbfError::Content)?,
-                identity_count: u32::try_from(transition_output_identities.len())
+                identity_count: u32::try_from(view.identities.len())
                     .map_err(|_| TradingSbfError::Content)?,
             },
-            family_request,
-        };
-        execute_shadow_aot_v3(
-            program_id,
-            ShadowCpiFrameV3 {
-                caller_authority,
-                activation: frame.activation_cache,
-                registry: frame.registry,
-                trading_program: frame.trading_program,
-                trading_programdata: frame.trading_programdata,
-                accelerator_program,
-                accelerator_programdata,
-            },
-            &runtime_accounts,
-            request,
-        )?
-    } else {
-        admitted_execution_digest
-    };
-    drop(observations);
-    drop(runtime_data);
-    apply_lifecycle_creates_v3(program_id, &lifecycle_plans, &runtime_accounts)?;
-    let child_execution_digest = execute_child_routes_v3(
-        program_id,
-        frame,
-        request_profile,
-        effect,
-        tail_count,
-        &transition_output_scalars,
-        &transition_output_identities,
-        &effect_accounts,
-        &output_requests,
-        family_request,
-        request_digest,
-        envelope,
-        context.selection().capability_release().to_bytes(),
-        selected_program.to_bytes(),
-    )?;
-    apply_lifecycle_closes_v3(program_id, &lifecycle_plans, &runtime_accounts, &rent)?;
-    commit_local_effects(
-        effect,
-        tail_count,
-        &transition_output_scalars,
-        &transition_output_identities,
-        &runtime_accounts,
-        &aliases,
-        &output_lamports,
-        &rent,
-        false,
-    )?;
-    commit_local_effects(
-        effect,
-        tail_count,
-        &transition_output_scalars,
-        &transition_output_identities,
-        &runtime_accounts,
-        &aliases,
-        &output_lamports,
-        &rent,
-        true,
-    )?;
-    let root_poststate = {
-        let bytes = frame
-            .root
-            .try_borrow_data()
-            .map_err(|_| TradingSbfError::Commit)?;
-        if bytes.get(..CAPABILITY_ROOT_HEADER_BYTES_V1) != Some(immutable_root_header.as_slice()) {
-            return Err(TradingSbfError::Commit.into());
-        }
-        hash(&bytes).to_bytes()
-    };
-    let execution_digest = hashv(&[
-        EXECUTION_DIGEST_DOMAIN_V3,
-        &selected_program.to_bytes(),
-        &descriptor.account_profile().to_bytes(),
-        &descriptor.request_profile_program().to_bytes(),
-        &strategy.strategy_program_id().to_bytes(),
-        &strategy.strategy().transition_program().to_bytes(),
-        &descriptor.effect_program().to_bytes(),
-        &descriptor.derivation_policy().to_bytes(),
-        &context.selection().config().to_bytes(),
-        &market.identity.product_record.to_bytes(),
-        &product_runtime_v3
-            .linked_basis_record
-            .content_digest
-            .to_bytes(),
-        &product_runtime_v3.semantic_basis_id.to_bytes(),
-        &product_outcome_count.to_le_bytes(),
-        &request_digest,
-        &strategy_execution_digest,
-        &child_execution_digest,
-        &root_poststate,
-    ])
-    .to_bytes();
-    let ack = HotExecutionAckV3::new(HotExecutionAckV3 {
-        release_set: envelope.release_set(),
-        market: envelope.market(),
-        generation: envelope.generation(),
-        root: frame.root.key.to_bytes(),
-        request_digest,
-        selected_program: selected_program.to_bytes(),
-        root_prestate_digest: root_prestate,
-        root_poststate_digest: root_poststate,
-        execution_digest,
-    })
-    .map_err(|_| TradingSbfError::Commit)?;
-    set_return_data(&ack.to_bytes());
-    Ok(())
+            family_request: view.family_request,
+        },
+    )
 }
 
 fn logical_projection_key_v3(
@@ -2680,6 +2990,7 @@ fn claims_receipt_digest_v3(receipt: ClaimsRouteReceiptV3) -> Result<[u8; 32], P
         ClaimsRouteReceiptV3::Affine(value) => Vec::from(value.to_bytes()),
         ClaimsRouteReceiptV3::SignedDelta(value) => Vec::from(value.to_bytes()),
         ClaimsRouteReceiptV3::SparseNativeTransfer(value) => Vec::from(value.to_bytes()),
+        ClaimsRouteReceiptV3::Founding(value) => Vec::from(value.to_bytes()),
         ClaimsRouteReceiptV3::Close(value) => value
             .to_bytes()
             .map(Vec::from)
@@ -3319,9 +3630,9 @@ fn commit_data_effect(
 }
 
 fn authenticate_descriptor_root_selection(
-    descriptor: CapabilityProgramV3,
-    context: TradingFamilyContextV1,
-    entry: dclutch_capability_contract::CapabilityEntryV1,
+    descriptor: &CapabilityProgramV3,
+    context: &TradingFamilyContextV1,
+    entry: &dclutch_capability_contract::CapabilityEntryV1,
 ) -> Result<(), ProgramError> {
     if descriptor.kind() != context.selection().kind()
         || descriptor.config_schema().to_bytes() == [0; 32]
