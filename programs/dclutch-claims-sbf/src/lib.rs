@@ -40,6 +40,7 @@ use solana_system_interface::instruction::{allocate, assign};
 pub mod affine_batch_v2;
 pub mod founding_v5;
 pub mod liability_basis_v2;
+pub mod market_closure_v1;
 mod product_runtime_v2;
 pub mod protocol_position_v2;
 pub mod rational_lifecycle_v2;
@@ -196,6 +197,15 @@ pub fn process_instruction(
         == Some(liability_basis_v2::LIABILITY_BASIS_ACTION_MAGIC_V2.as_slice())
     {
         return liability_basis_v2::process(program_id, accounts, instruction_data);
+    }
+    if instruction_data
+        .get(..dclutch_claims_svm::market_closure_v1::CLAIMS_MARKET_CLOSURE_REQUEST_MAGIC_V1.len())
+        == Some(
+            dclutch_claims_svm::market_closure_v1::CLAIMS_MARKET_CLOSURE_REQUEST_MAGIC_V1
+                .as_slice(),
+        )
+    {
+        return market_closure_v1::process(program_id, accounts, instruction_data);
     }
     if instruction_data.get(..dclutch_claims_svm::affine_batch_v2::AFFINE_BATCH_PLAN_MAGIC_V2.len())
         == Some(dclutch_claims_svm::affine_batch_v2::AFFINE_BATCH_PLAN_MAGIC_V2.as_slice())
