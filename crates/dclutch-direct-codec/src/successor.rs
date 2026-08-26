@@ -948,6 +948,185 @@ pub fn consume_nonce_v2(
     })
 }
 
+/// One signature-authenticated inline participant and its replay observation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InlineParticipantV2 {
+    /// Exact signer and compact intent authenticated by the native Ed25519 adapter.
+    pub authenticated: AuthenticatedCompactIntentV2,
+    /// Existing or authenticated-vacant maker replay PDA.
+    pub maker_replay: MakerReplayObservationV1,
+    /// Present exactly when the maker replay PDA is vacant.
+    pub first_use: Option<MakerReplayFirstUseV1>,
+}
+
+/// Common execution facts for one inline ordinary match.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InlineExecutionV2 {
+    /// Immutable descriptor-selected economics.
+    pub config: DirectExecutionConfigV1,
+    /// Authenticated Product result-domain width.
+    pub outcome_count: u32,
+    /// Trusted `Clock::get()` slot.
+    pub slot: u64,
+    /// Positive matcher-selected quantity.
+    pub fill: u64,
+    /// Exact scaled execution price.
+    pub execution_price: u64,
+}
+
+/// Complete inline ordinary observation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InlineOrdinaryInputV2 {
+    /// Global Direct root before either nonce is consumed.
+    pub root: DirectRootStateV1,
+    /// Signature-authenticated seller and replay observation.
+    pub seller: InlineParticipantV2,
+    /// Signature-authenticated buyer and replay observation.
+    pub buyer: InlineParticipantV2,
+    /// Common fill, price, slot, Product, and config facts.
+    pub execution: InlineExecutionV2,
+}
+
+/// Exact ordinary Claims/Custody effect facts after both inline nonces validate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InlineOrdinaryEffectsV2 {
+    /// Claims debited from the seller Position and credited to the buyer Position.
+    pub claim_transfer: u64,
+    /// Signed seller collateral destination.
+    pub seller_collateral_destination: [u8; 32],
+    /// Signed buyer collateral source.
+    pub buyer_collateral_source: [u8; 32],
+    /// Gross quote before either signed-side fee.
+    pub gross_collateral: u64,
+    /// Gross less the seller-side fee, transferred first to the seller.
+    pub seller_net_collateral_credit: u64,
+    /// Gross plus the buyer-side fee, debited from the buyer.
+    pub buyer_collateral_debit: u64,
+    /// Immutable config recipient of the combined seller and buyer fees.
+    pub fee_recipient: [u8; 32],
+    /// Seller-withheld plus buyer-added fee, transferred second.
+    pub total_fee_transfer: u64,
+}
+
+/// Atomic candidates for one inline ordinary match.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InlineOrdinarySettlementV2 {
+    /// Global root after both optional maker first-use increments.
+    pub root: DirectRootStateV1,
+    /// Seller replay root after exact nonce consumption.
+    pub seller_maker_root: MakerReplayRootV1,
+    /// Buyer replay root after exact nonce consumption.
+    pub buyer_maker_root: MakerReplayRootV1,
+    /// Seller dust-tolerant first-use plan, if any.
+    pub seller_creation: Option<MakerReplayCreationPlanV1>,
+    /// Buyer dust-tolerant first-use plan, if any.
+    pub buyer_creation: Option<MakerReplayCreationPlanV1>,
+    /// Exact ordered Claims/Custody economic facts.
+    pub effects: InlineOrdinaryEffectsV2,
+}
+
+/// Preview one inline ordinary match. No account or output buffer is mutated.
+pub fn settle_inline_ordinary_v2(
+    input: InlineOrdinaryInputV2,
+) -> SuccessorResult<InlineOrdinarySettlementV2> {
+    let seller = input.seller.authenticated;
+    let buyer = input.buyer.authenticated;
+    let seller_intent = seller.intent;
+    let buyer_intent = buyer.intent;
+    let execution = input.execution;
+    validate_inline_intent_v2(
+        execution.config,
+        seller_intent,
+        execution.outcome_count,
+        execution.fill,
+    )?;
+    validate_inline_intent_v2(
+        execution.config,
+        buyer_intent,
+        execution.outcome_count,
+        execution.fill,
+    )?;
+    if execution.fill == 0
+        || DirectSideV2::decode(seller_intent.side)? != DirectSideV2::Sell
+        || DirectSideV2::decode(buyer_intent.side)? != DirectSideV2::Buy
+        || seller_intent.market != buyer_intent.market
+        || seller_intent.generation != buyer_intent.generation
+        || seller_intent.outcome != buyer_intent.outcome
+        || seller.maker == buyer.maker
+    {
+        return Err(SuccessorError::IncompatibleMatch);
+    }
+    if execution.slot < seller_intent.valid_from
+        || execution.slot > seller_intent.valid_through
+        || execution.slot < buyer_intent.valid_from
+        || execution.slot > buyer_intent.valid_through
+    {
+        return Err(SuccessorError::IntentExpired);
+    }
+    if execution.execution_price < seller_intent.limit_price
+        || execution.execution_price > buyer_intent.limit_price
+        || execution.execution_price > execution.config.price_scale
+    {
+        return Err(SuccessorError::IncompatibleMatch);
+    }
+
+    let gross_collateral = exact_quote_v2(
+        execution.fill,
+        execution.execution_price,
+        execution.config.price_scale,
+    )?;
+    let seller_fee = fee_floor_v2(gross_collateral, execution.config.fee_basis_points)?;
+    let buyer_fee = fee_floor_v2(gross_collateral, execution.config.fee_basis_points)?;
+    let seller_net_collateral_credit = gross_collateral
+        .checked_sub(seller_fee)
+        .ok_or(SuccessorError::ArithmeticOverflow)?;
+    let buyer_collateral_debit = gross_collateral
+        .checked_add(buyer_fee)
+        .ok_or(SuccessorError::ArithmeticOverflow)?;
+    let total_fee_transfer = seller_fee
+        .checked_add(buyer_fee)
+        .ok_or(SuccessorError::ArithmeticOverflow)?;
+    if seller_net_collateral_credit
+        .checked_add(total_fee_transfer)
+        .ok_or(SuccessorError::ArithmeticOverflow)?
+        != buyer_collateral_debit
+    {
+        return Err(SuccessorError::InvalidReservation);
+    }
+
+    let seller_consumed = consume_nonce_v2(
+        input.root,
+        input.seller.maker_replay,
+        seller.replay()?,
+        NonceConsumptionV2::Inline,
+        input.seller.first_use,
+    )?;
+    let buyer_consumed = consume_nonce_v2(
+        seller_consumed.root,
+        input.buyer.maker_replay,
+        buyer.replay()?,
+        NonceConsumptionV2::Inline,
+        input.buyer.first_use,
+    )?;
+    Ok(InlineOrdinarySettlementV2 {
+        root: buyer_consumed.root,
+        seller_maker_root: seller_consumed.maker_root,
+        buyer_maker_root: buyer_consumed.maker_root,
+        seller_creation: seller_consumed.creation,
+        buyer_creation: buyer_consumed.creation,
+        effects: InlineOrdinaryEffectsV2 {
+            claim_transfer: execution.fill,
+            seller_collateral_destination: seller_intent.collateral_account,
+            buyer_collateral_source: buyer_intent.collateral_account,
+            gross_collateral,
+            seller_net_collateral_credit,
+            buyer_collateral_debit,
+            fee_recipient: execution.config.fee_recipient,
+            total_fee_transfer,
+        },
+    })
+}
+
 /// Canonical PDA seeds for one live registered intent.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RegisteredIntentSeedsV2 {
@@ -1918,11 +2097,39 @@ fn validate_intent_v2(
     outcome_count: u32,
     required_lifecycle: DirectLifecycleV2,
 ) -> SuccessorResult<()> {
+    let (_, lifecycle) = validate_intent_common_v2(config, intent, outcome_count)?;
+    if lifecycle != required_lifecycle {
+        return Err(SuccessorError::InvalidIntent);
+    }
+    Ok(())
+}
+
+fn validate_inline_intent_v2(
+    config: DirectExecutionConfigV1,
+    intent: CompactIntentV2,
+    outcome_count: u32,
+    fill: u64,
+) -> SuccessorResult<()> {
+    let (_, lifecycle) = validate_intent_common_v2(config, intent, outcome_count)?;
+    match lifecycle {
+        DirectLifecycleV2::InlineFillOrKill if fill == intent.maximum_fill => Ok(()),
+        DirectLifecycleV2::InlineImmediateOrCancel if fill <= intent.maximum_fill => Ok(()),
+        DirectLifecycleV2::InlineFillOrKill
+        | DirectLifecycleV2::InlineImmediateOrCancel
+        | DirectLifecycleV2::Registered => Err(SuccessorError::InvalidIntent),
+    }
+}
+
+fn validate_intent_common_v2(
+    config: DirectExecutionConfigV1,
+    intent: CompactIntentV2,
+    outcome_count: u32,
+) -> SuccessorResult<(DirectSideV2, DirectLifecycleV2)> {
     require_nonzero(intent.market)?;
     require_nonzero(intent.collateral_account)?;
-    if DirectLifecycleV2::decode(intent.lifecycle)? != required_lifecycle
-        || DirectSideV2::decode(intent.side).is_err()
-        || outcome_count < 2
+    let side = DirectSideV2::decode(intent.side)?;
+    let lifecycle = DirectLifecycleV2::decode(intent.lifecycle)?;
+    if outcome_count < 2
         || intent.outcome >= outcome_count
         || intent.valid_from > intent.valid_through
         || intent.maximum_fill == 0
@@ -1931,7 +2138,7 @@ fn validate_intent_v2(
     {
         return Err(SuccessorError::InvalidIntent);
     }
-    Ok(())
+    Ok((side, lifecycle))
 }
 
 fn maximum_buy_reserve_v2(
@@ -2173,6 +2380,55 @@ mod tests {
         }
     }
 
+    fn inline_intent(
+        side: u8,
+        lifecycle: DirectLifecycleV2,
+        nonce: u64,
+        maximum_fill: u64,
+        limit_price: u64,
+        collateral: [u8; 32],
+    ) -> CompactIntentV2 {
+        let lifecycle = match lifecycle {
+            DirectLifecycleV2::InlineFillOrKill => 0,
+            DirectLifecycleV2::InlineImmediateOrCancel => 1,
+            DirectLifecycleV2::Registered => 2,
+        };
+        CompactIntentV2 {
+            side,
+            outcome: 1,
+            lifecycle,
+            market: id(1),
+            generation: 4,
+            nonce,
+            valid_from: 2,
+            valid_through: 20,
+            maximum_fill,
+            limit_price,
+            fee_basis_points: 1_000,
+            collateral_account: collateral,
+        }
+    }
+
+    fn first_inline_participant(
+        maker: [u8; 32],
+        compact: CompactIntentV2,
+        bump: u8,
+        observed_lamports: u64,
+    ) -> InlineParticipantV2 {
+        InlineParticipantV2 {
+            authenticated: AuthenticatedCompactIntentV2::from_adjacent_ed25519(maker, compact)
+                .expect("authentication projection"),
+            maker_replay: MakerReplayObservationV1::Vacant(MakerReplayVacancyV1::new(
+                bump,
+                observed_lamports,
+            )),
+            first_use: Some(MakerReplayFirstUseV1 {
+                rent_owner: id(bump),
+                rent_principal: 100,
+            }),
+        }
+    }
+
     fn register(
         root: DirectRootStateV1,
         maker: [u8; 32],
@@ -2374,6 +2630,224 @@ mod tests {
         .expect("next nonce");
         assert_eq!(next.root, consumed.root);
         assert_eq!(next.maker_root.next_nonce(), 2);
+    }
+
+    #[test]
+    fn inline_fok_price_improvement_binds_conserving_ordered_effects() {
+        let seller = first_inline_participant(
+            id(2),
+            inline_intent(0, DirectLifecycleV2::InlineFillOrKill, 0, 100, 40, id(30)),
+            11,
+            3,
+        );
+        let buyer = first_inline_participant(
+            id(3),
+            inline_intent(1, DirectLifecycleV2::InlineFillOrKill, 0, 100, 60, id(31)),
+            12,
+            130,
+        );
+        let settlement = settle_inline_ordinary_v2(InlineOrdinaryInputV2 {
+            root: DirectRootStateV1::new(),
+            seller,
+            buyer,
+            execution: InlineExecutionV2 {
+                config: config(),
+                outcome_count: 3,
+                slot: 7,
+                fill: 100,
+                execution_price: 50,
+            },
+        })
+        .expect("inline FOK match");
+
+        assert_eq!(settlement.root.open_maker_root_count(), 2);
+        assert_eq!(settlement.seller_maker_root.next_nonce(), 1);
+        assert_eq!(settlement.buyer_maker_root.next_nonce(), 1);
+        assert_eq!(settlement.seller_maker_root.live_count(), 0);
+        assert_eq!(settlement.buyer_maker_root.live_count(), 0);
+        assert_eq!(
+            settlement.seller_creation,
+            Some(MakerReplayCreationPlanV1 {
+                observed_lamports: 3,
+                top_up_lamports: 97,
+                post_lamports: 100,
+            })
+        );
+        assert_eq!(
+            settlement.buyer_creation,
+            Some(MakerReplayCreationPlanV1 {
+                observed_lamports: 130,
+                top_up_lamports: 0,
+                post_lamports: 130,
+            })
+        );
+        assert_eq!(settlement.effects.claim_transfer, 100);
+        assert_eq!(settlement.effects.gross_collateral, 50);
+        assert_eq!(settlement.effects.seller_net_collateral_credit, 45);
+        assert_eq!(settlement.effects.buyer_collateral_debit, 55);
+        assert_eq!(settlement.effects.total_fee_transfer, 10);
+        assert_eq!(settlement.effects.fee_recipient, id(99));
+        assert_eq!(settlement.effects.seller_collateral_destination, id(30));
+        assert_eq!(settlement.effects.buyer_collateral_source, id(31));
+        assert_eq!(
+            settlement
+                .effects
+                .seller_net_collateral_credit
+                .checked_add(settlement.effects.total_fee_transfer),
+            Some(settlement.effects.buyer_collateral_debit)
+        );
+    }
+
+    #[test]
+    fn inline_ioc_partial_fill_debits_actual_not_worst_case_and_replays_refuse() {
+        let seller_intent = inline_intent(
+            0,
+            DirectLifecycleV2::InlineImmediateOrCancel,
+            0,
+            100,
+            40,
+            id(30),
+        );
+        let buyer_intent = inline_intent(
+            1,
+            DirectLifecycleV2::InlineImmediateOrCancel,
+            0,
+            100,
+            60,
+            id(31),
+        );
+        let seller = first_inline_participant(id(2), seller_intent, 11, 0);
+        let buyer = first_inline_participant(id(3), buyer_intent, 12, 0);
+        let input = InlineOrdinaryInputV2 {
+            root: DirectRootStateV1::new(),
+            seller,
+            buyer,
+            execution: InlineExecutionV2 {
+                config: config(),
+                outcome_count: 3,
+                slot: 7,
+                fill: 40,
+                execution_price: 50,
+            },
+        };
+        let settlement = settle_inline_ordinary_v2(input).expect("inline IOC match");
+        assert_eq!(settlement.effects.gross_collateral, 20);
+        assert_eq!(settlement.effects.buyer_collateral_debit, 22);
+        assert_eq!(maximum_buy_reserve_v2(config(), buyer_intent), Ok(66));
+        assert!(settlement.effects.buyer_collateral_debit < 66);
+
+        let replay = settle_inline_ordinary_v2(InlineOrdinaryInputV2 {
+            root: settlement.root,
+            seller: InlineParticipantV2 {
+                maker_replay: MakerReplayObservationV1::Existing(settlement.seller_maker_root),
+                first_use: None,
+                ..seller
+            },
+            buyer: InlineParticipantV2 {
+                maker_replay: MakerReplayObservationV1::Existing(settlement.buyer_maker_root),
+                first_use: None,
+                ..buyer
+            },
+            ..input
+        });
+        assert_eq!(replay, Err(SuccessorError::NonceMismatch));
+    }
+
+    #[test]
+    fn inline_lifecycle_slot_price_and_maker_substitutions_refuse() {
+        let seller = first_inline_participant(
+            id(2),
+            inline_intent(0, DirectLifecycleV2::InlineFillOrKill, 0, 100, 40, id(30)),
+            11,
+            0,
+        );
+        let buyer = first_inline_participant(
+            id(3),
+            inline_intent(
+                1,
+                DirectLifecycleV2::InlineImmediateOrCancel,
+                0,
+                100,
+                60,
+                id(31),
+            ),
+            12,
+            0,
+        );
+        let input = InlineOrdinaryInputV2 {
+            root: DirectRootStateV1::new(),
+            seller,
+            buyer,
+            execution: InlineExecutionV2 {
+                config: config(),
+                outcome_count: 3,
+                slot: 7,
+                fill: 40,
+                execution_price: 50,
+            },
+        };
+        assert_eq!(
+            settle_inline_ordinary_v2(input),
+            Err(SuccessorError::InvalidIntent)
+        );
+        let full = InlineOrdinaryInputV2 {
+            execution: InlineExecutionV2 {
+                fill: 100,
+                ..input.execution
+            },
+            ..input
+        };
+        assert_eq!(
+            settle_inline_ordinary_v2(InlineOrdinaryInputV2 {
+                execution: InlineExecutionV2 {
+                    slot: 21,
+                    ..full.execution
+                },
+                ..full
+            }),
+            Err(SuccessorError::IntentExpired)
+        );
+        assert_eq!(
+            settle_inline_ordinary_v2(InlineOrdinaryInputV2 {
+                execution: InlineExecutionV2 {
+                    execution_price: 61,
+                    ..full.execution
+                },
+                ..full
+            }),
+            Err(SuccessorError::IncompatibleMatch)
+        );
+        assert_eq!(
+            settle_inline_ordinary_v2(InlineOrdinaryInputV2 {
+                buyer: InlineParticipantV2 {
+                    authenticated: AuthenticatedCompactIntentV2::from_adjacent_ed25519(
+                        id(2),
+                        buyer.authenticated.intent(),
+                    )
+                    .expect("alias signer"),
+                    ..buyer
+                },
+                ..full
+            }),
+            Err(SuccessorError::IncompatibleMatch)
+        );
+        assert_eq!(
+            settle_inline_ordinary_v2(InlineOrdinaryInputV2 {
+                buyer: InlineParticipantV2 {
+                    authenticated: AuthenticatedCompactIntentV2::from_adjacent_ed25519(
+                        id(3),
+                        CompactIntentV2 {
+                            lifecycle: 2,
+                            ..buyer.authenticated.intent()
+                        },
+                    )
+                    .expect("registered signer"),
+                    ..buyer
+                },
+                ..full
+            }),
+            Err(SuccessorError::InvalidIntent)
+        );
     }
 
     #[test]
