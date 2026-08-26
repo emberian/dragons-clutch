@@ -327,6 +327,36 @@ pub fn build_checked_infrastructure_v1(
     Ok(result)
 }
 
+/// Derive the one canonical Core-owned infrastructure profile that checked
+/// Registry and Rent manifests already determine.
+///
+/// Both bindings are pure functions of the supplied checked manifests, exactly
+/// as [`build_checked_infrastructure_v1`] will re-derive and require them. The
+/// profile stays Core-owned: this derives its exact bytes offline and never
+/// initializes, publishes, or signs the PDA that holds it.
+pub fn derive_protocol_infrastructure_profile_v1(
+    registry_checked: &CheckedReleaseV1,
+    rent_checked: &CheckedReleaseV1,
+) -> Result<ProtocolInfrastructureProfileV1> {
+    let registry = binding_from_checked(registry_checked)?;
+    let rent = binding_from_checked(rent_checked)?;
+    ProtocolInfrastructureProfileV1::new(registry, rent)
+        .map_err(|_| Error::InvalidInfrastructureManifest)
+}
+
+fn binding_from_checked(
+    checked: &CheckedReleaseV1,
+) -> Result<dclutch_release_set_contract::ExecutionRoleBindingV1> {
+    let artifact = artifact_release_from_checked(checked)?;
+    require_immutable(artifact)?;
+    let artifact_id = ArtifactReleaseIdV1::new(sha256(&artifact.to_bytes()))
+        .map_err(|_| Error::InvalidArtifactRelease)?;
+    Ok(dclutch_release_set_contract::ExecutionRoleBindingV1::new(
+        artifact.program(),
+        artifact_id,
+    ))
+}
+
 /// Rebuild and compare exact infrastructure evidence to user-supplied manifests.
 pub fn verify_checked_infrastructure_v1(
     manifest: &[u8],
@@ -513,6 +543,43 @@ mod tests {
         let artifact_id =
             ArtifactReleaseIdV1::new(sha256(&artifact.to_bytes())).expect("artifact release id");
         ExecutionRoleBindingV1::new(artifact.program(), artifact_id)
+    }
+
+    #[test]
+    fn the_infrastructure_profile_is_derivable_and_refuses_upgradeable_components() {
+        let fixture = Fixture::immutable();
+        let derived = derive_protocol_infrastructure_profile_v1(&fixture.registry, &fixture.rent)
+            .expect("derived profile");
+        assert_eq!(derived, fixture.profile);
+        assert_eq!(
+            build_checked_infrastructure_v1(
+                fixture.execution,
+                derived,
+                &fixture.execution_releases[0],
+                &fixture.registry,
+                &fixture.rent,
+            ),
+            Ok(fixture.checked),
+        );
+        // Derivation must never launder an upgradeable component into a profile
+        // that the infrastructure manifest would then have to refuse.
+        assert_eq!(
+            derive_protocol_infrastructure_profile_v1(&release(71, Some([9; 32])), &fixture.rent),
+            Err(Error::InfrastructureMustBeImmutable)
+        );
+        assert_eq!(
+            derive_protocol_infrastructure_profile_v1(
+                &fixture.registry,
+                &release(81, Some([9; 32]))
+            ),
+            Err(Error::InfrastructureMustBeImmutable)
+        );
+        // A different Rent release must move the derived profile.
+        assert_ne!(
+            derive_protocol_infrastructure_profile_v1(&fixture.registry, &release(91, None))
+                .expect("other profile"),
+            derived
+        );
     }
 
     #[test]

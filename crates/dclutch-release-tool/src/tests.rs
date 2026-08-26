@@ -377,3 +377,137 @@ fn loader_account_limits_are_release_admission_not_deployment_lore() -> Result<(
     );
     Ok(())
 }
+
+fn metadata_text_with_ids(
+    kind: &str,
+    program_id: &[u8; 32],
+    programdata_id: &[u8; 32],
+    loader_program_id: &[u8; 32],
+) -> String {
+    format!(
+        "{RELEASE_METADATA_HEADER_V1}\nsemantic_kind={kind}\nprogram_id={}\nprogramdata_id={}\nloader_program_id={}\nprogram_owner={}\nprogram_executable=true\nprogramdata_owner={}\nprogramdata_executable=false\nsource_digest={}\ncargo_lock_digest={}\nsource_revision=commit\nrustc_version=rustc 1.89.0\nsolana_version=solana-cli 4.0.2\ncargo_build_sbf_version=cargo-build-sbf 4.0.0\ntarget_triple=sbpf-solana-solana\nbuild_command=cargo build-sbf\nassumption=loader account data was constructed offline, never observed\n",
+        encode_hex(program_id),
+        encode_hex(programdata_id),
+        encode_hex(loader_program_id),
+        encode_hex(loader_program_id),
+        encode_hex(loader_program_id),
+        repeated_hex(4),
+        repeated_hex(5),
+    )
+}
+
+#[test]
+fn unowned_semantic_kind_is_a_named_absence_not_a_silent_capability_claim() -> Result<()> {
+    assert_eq!(
+        SemanticPreimageKindV1::parse("unowned"),
+        Ok(SemanticPreimageKindV1::Unowned)
+    );
+    assert_eq!(SemanticPreimageKindV1::Unowned.label(), "unowned");
+    assert_eq!(
+        SemanticPreimageKindV1::parse("role"),
+        Err(Error::UnknownSemanticKind)
+    );
+    assert_eq!(
+        SemanticPreimageKindV1::decode(2),
+        Ok(SemanticPreimageKindV1::Unowned)
+    );
+    assert_eq!(
+        SemanticPreimageKindV1::decode(3),
+        Err(Error::UnknownSemanticKind)
+    );
+
+    let mut fixture = Fixture::new("unowned", b"dclutch/test/unowned-role/v1".to_vec(), None)?;
+    let release = build_checked_release(fixture.evidence())?;
+    assert_eq!(release.semantic_kind, SemanticPreimageKindV1::Unowned);
+    assert!(release.render_text()?.contains("semantic_kind=unowned\n"));
+    let bytes = release.encode()?;
+    assert_eq!(CheckedReleaseV1::decode(&bytes), Ok(release));
+
+    // An unowned preimage is still exact: empty bytes remain a refusal, and the
+    // manifest byte is not interchangeable with the capability kind.
+    fixture.semantic.clear();
+    assert_eq!(
+        build_checked_release(fixture.evidence()),
+        Err(Error::EmptyInput)
+    );
+    let mut relabeled = bytes.clone();
+    *relabeled
+        .get_mut(SEMANTIC_KIND_OFFSET)
+        .ok_or(Error::InvalidLength)? = 0;
+    assert_ne!(
+        CheckedReleaseV1::decode(&relabeled)?.semantic_kind,
+        SemanticPreimageKindV1::Unowned
+    );
+    Ok(())
+}
+
+#[test]
+fn offline_loader_construction_feeds_the_checked_release_path_exactly() -> Result<()> {
+    let elf = sbf_elf()?;
+    let loader_program_id = [3_u8; 32];
+    let program_id = [7_u8; 32];
+    let programdata_id = loader_v3_programdata_address_v1(&program_id, &loader_program_id);
+    assert_eq!(
+        programdata_id,
+        loader_v3_programdata_address_v1(&program_id, &loader_program_id)
+    );
+    assert_ne!(programdata_id, program_id);
+    assert_ne!(programdata_id, loader_program_id);
+
+    let program = loader_v3_program_account_data_v1(&programdata_id)?;
+    let programdata = loader_v3_programdata_account_data_v1(&elf, 0, None)?;
+    assert_eq!(program.len(), LOADER_V3_PROGRAM_BYTES);
+    assert_eq!(
+        programdata.len(),
+        LOADER_V3_PROGRAMDATA_METADATA_BYTES
+            .checked_add(elf.len())
+            .ok_or(Error::ArithmeticOverflow)?
+    );
+    let metadata = BuildMetadataV1::parse(&metadata_text_with_ids(
+        "unowned",
+        &program_id,
+        &programdata_id,
+        &loader_program_id,
+    ))?;
+    let evidence = ReleaseEvidenceV1 {
+        elf: &elf,
+        semantic_preimage: b"dclutch/test/unowned-role/v1",
+        program_account_data: &program,
+        programdata_account_data: &programdata,
+        metadata: &metadata,
+    };
+    let release = build_checked_release(evidence)?;
+    assert_eq!(release.upgrade_authority(), None);
+    assert_eq!(release.deployment_slot(), 0);
+    assert_eq!(release.programdata_id(), programdata_id);
+
+    // Constructed bytes must not become a way to smuggle a nonzero authority
+    // tag, a non-SBF payload, or a linkage to some other ProgramData.
+    assert_eq!(
+        loader_v3_programdata_account_data_v1(&elf, 0, Some([0; 32])),
+        Err(Error::NonCanonicalUpgradeAuthority)
+    );
+    assert_eq!(
+        loader_v3_programdata_account_data_v1(&[], 0, None),
+        Err(Error::InvalidSbfElf)
+    );
+    let foreign = loader_v3_program_account_data_v1(&[9; 32])?;
+    let hostile = ReleaseEvidenceV1 {
+        program_account_data: &foreign,
+        ..evidence
+    };
+    assert_eq!(
+        build_checked_release(hostile),
+        Err(Error::ProgramDataLinkMismatch)
+    );
+    let upgradeable = loader_v3_programdata_account_data_v1(&elf, 5, Some([2; 32]))?;
+    let mutable = ReleaseEvidenceV1 {
+        programdata_account_data: &upgradeable,
+        ..evidence
+    };
+    assert_eq!(
+        build_checked_release(mutable)?.upgrade_authority(),
+        Some([2; 32])
+    );
+    Ok(())
+}

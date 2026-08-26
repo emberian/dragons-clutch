@@ -43,6 +43,33 @@ manifest, evidence mismatch, ELF change, semantic-preimage change, Loader
 linkage change, ProgramData change, metadata change, or nonzero allocation
 padding.
 
+## Offline Loader V3 account construction
+
+A checked release binds *account* evidence, not only an ELF. Before a program is
+deployed anywhere there is nothing to snapshot, so the account bytes have to be
+constructed. `loader-accounts` does that construction once, in the same crate
+that later enforces the layout, instead of leaving every caller to reimplement
+Loader V3's 36-byte `Program` record, its 45-byte `ProgramData` metadata
+boundary, and its ProgramData address derivation.
+
+```text
+dclutch-release-tool loader-accounts \
+  --program-id <hex32> --loader-program-id <hex32> \
+  --elf <program.so> --deployment-slot <u64> \
+  [--upgrade-authority <hex32>] \
+  --program-out <program-account.bin> \
+  --programdata-out <programdata-account.bin> \
+  [--text-out <loader-accounts.txt>]
+```
+
+The text projection reports `evidence_class=predicted-loader-state-not-observed`
+and names the derived ProgramData address. **These bytes are a prediction of the
+account state a Loader V3 deployment—or a `solana-test-validator
+--upgradeable-program ADDRESS ELF none` genesis install—would hold. They are not
+an observation of any chain.** A release built from constructed accounts must
+say so in its own `assumption=` lines; the tool cannot say it for you, and no
+downstream manifest turns a prediction into a deployment.
+
 ## Multiprogram release sets
 
 The successor runtime is promoted as one Registry-selected five-role set, not
@@ -51,7 +78,16 @@ binds the canonical Core, Claims, Trading, Resolution, and Custody release-set
 preimage to each role's compact onchain `ArtifactReleaseV1` record and complete
 `CheckedReleaseV1` manifest identity.
 
+The 336-byte release-set preimage is not independent evidence: every binding is
+a pure function of the five checked manifests. `derive-set` emits exactly the
+value that `create-set` will then insist on, so nobody has to hand-transcribe it.
+
 ```text
+dclutch-release-tool derive-set \
+  --core <core.checked> --claims <claims.checked> \
+  --trading <trading.checked> --resolution <resolution.checked> \
+  --custody <custody.checked> --out <execution-release-set.bin>
+
 dclutch-release-tool create-set \
   --release-set <execution-release-set.bin> \
   --core <core.checked> --claims <claims.checked> \
@@ -84,7 +120,15 @@ Core release in that exact set, bind the exact profile to independently checked
 Registry and Rent artifacts, derive the profile PDA, and refuse any upgradeable
 component.
 
+The 144-byte profile is likewise determined by the checked Registry and Rent
+manifests. `derive-infrastructure-profile` emits it and refuses an upgradeable
+component at derivation time rather than letting one reach the manifest.
+
 ```text
+dclutch-release-tool derive-infrastructure-profile \
+  --registry <registry.checked> --rent <rent.checked> \
+  --out <infrastructure-profile.bin>
+
 dclutch-release-tool create-infrastructure \
   --execution <multiprogram.checked> \
   --profile <infrastructure-profile.bin> \
@@ -224,7 +268,15 @@ build_command=<printable one-line value>
 assumption=<printable one-line value>
 ```
 
-`semantic_kind` is `capability` for a capability-owned exact preimage or
-`pyth-v1` for the canonical 440-byte `PythReleaseV1` preimage. In the latter
-case this tool delegates semantic decoding to `dclutch-pyth-svm`; it does not
-reimplement or loosen the Pyth release schema.
+`semantic_kind` is `capability` for a capability-owned exact preimage,
+`pyth-v1` for the canonical 440-byte `PythReleaseV1` preimage, or `unowned`.
+For `pyth-v1` this tool delegates semantic decoding to `dclutch-pyth-svm`; it
+does not reimplement or loosen the Pyth release schema.
+
+`unowned` is a **named absence**, not a schema. Every execution role, Registry,
+and Rent persists a `semantic_release_id` inside its `ArtifactReleaseV1`, but no
+first-party contract in this tree owns or decodes a role-program release
+preimage. Calling such a preimage `capability` would assert a decoder that does
+not exist. `unowned` records the exact bytes and their SHA-256 identity while
+stating plainly that naming an owner is still an open protocol obligation. The
+tool does not invent that owner.

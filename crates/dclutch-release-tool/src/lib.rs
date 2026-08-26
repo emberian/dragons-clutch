@@ -14,6 +14,7 @@ use dclutch_pyth_svm::{
     LoaderV3Error, ProgramDataV3View, ProgramV3View, PythReleaseV1, PythReleaseV1Error,
 };
 use sha2::{Digest, Sha256};
+use solana_program::pubkey::Pubkey;
 
 mod capability_execution;
 mod infrastructure;
@@ -193,6 +194,16 @@ pub enum SemanticPreimageKindV1 {
     Capability = 0,
     /// Exact canonical [`PythReleaseV1`] preimage, decoded by `dclutch-pyth-svm`.
     PythReleaseV1 = 1,
+    /// Exact preimage that **no** in-tree semantic contract decodes.
+    ///
+    /// The five execution roles, Registry, and Rent each persist a
+    /// `semantic_release_id` inside their `ArtifactReleaseV1`, but no first-party
+    /// contract in this tree owns or decodes a role-program release preimage.
+    /// Labeling such a preimage `capability` would assert an owner that does not
+    /// exist. This kind records the exact supplied bytes and their SHA-256
+    /// identity while stating plainly that naming a decoder remains an open
+    /// obligation. It is not a schema, a DTO, or a second semantic authority.
+    Unowned = 2,
 }
 
 impl SemanticPreimageKindV1 {
@@ -201,6 +212,7 @@ impl SemanticPreimageKindV1 {
         match label {
             "capability" => Ok(Self::Capability),
             "pyth-v1" => Ok(Self::PythReleaseV1),
+            "unowned" => Ok(Self::Unowned),
             _ => Err(Error::UnknownSemanticKind),
         }
     }
@@ -210,6 +222,7 @@ impl SemanticPreimageKindV1 {
         match self {
             Self::Capability => "capability",
             Self::PythReleaseV1 => "pyth-v1",
+            Self::Unowned => "unowned",
         }
     }
 
@@ -221,6 +234,7 @@ impl SemanticPreimageKindV1 {
         match value {
             0 => Ok(Self::Capability),
             1 => Ok(Self::PythReleaseV1),
+            2 => Ok(Self::Unowned),
             _ => Err(Error::UnknownSemanticKind),
         }
     }
@@ -875,9 +889,111 @@ pub fn verify_checked_release(
     Ok(checked)
 }
 
+/// Loader V3 `Program` account-data enum discriminant.
+const LOADER_V3_PROGRAM_DISCRIMINANT_V1: u32 = 2;
+/// Loader V3 `ProgramData` account-data enum discriminant.
+const LOADER_V3_PROGRAMDATA_DISCRIMINANT_V1: u32 = 3;
+const LOADER_V3_PROGRAMDATA_SLOT_OFFSET_V1: usize = 4;
+const LOADER_V3_PROGRAMDATA_AUTHORITY_TAG_OFFSET_V1: usize = 12;
+const LOADER_V3_PROGRAMDATA_AUTHORITY_OFFSET_V1: usize = 13;
+
+/// Derive Loader V3's canonical ProgramData address for one program identity.
+///
+/// This is the loader's own fixed derivation, applied offline. It reads no
+/// account, contacts no network, and asserts nothing about whether either
+/// address currently exists.
+#[must_use]
+pub fn loader_v3_programdata_address_v1(
+    program_id: &[u8; 32],
+    loader_program_id: &[u8; 32],
+) -> [u8; 32] {
+    Pubkey::find_program_address(
+        &[program_id.as_slice()],
+        &Pubkey::new_from_array(*loader_program_id),
+    )
+    .0
+    .to_bytes()
+}
+
+/// Construct the exact Loader V3 `Program` account data naming one ProgramData.
+///
+/// The returned bytes are a **prediction** of the account a Loader V3 deployment
+/// (or a genesis install of an upgradeable program) would hold, never an
+/// observation of one. Whoever supplies them to [`build_checked_release`] owns
+/// saying so in that release's assumptions.
+pub fn loader_v3_program_account_data_v1(
+    programdata_id: &[u8; 32],
+) -> Result<[u8; LOADER_V3_PROGRAM_BYTES]> {
+    let mut output = [0_u8; LOADER_V3_PROGRAM_BYTES];
+    write_at(
+        &mut output,
+        0,
+        &LOADER_V3_PROGRAM_DISCRIMINANT_V1.to_le_bytes(),
+    )?;
+    write_at(&mut output, 4, programdata_id)?;
+    Ok(output)
+}
+
+/// Construct the exact Loader V3 `ProgramData` account data for one ELF.
+///
+/// The ELF begins at the loader's fixed 45-byte metadata boundary and the
+/// account is allocated to exactly that width; no extra allocation padding is
+/// emitted. Like [`loader_v3_program_account_data_v1`], these bytes are a
+/// prediction of a deployment, not an observation of one.
+pub fn loader_v3_programdata_account_data_v1(
+    elf: &[u8],
+    deployment_slot: u64,
+    upgrade_authority: Option<[u8; 32]>,
+) -> Result<Vec<u8>> {
+    validate_sbf_elf(elf)?;
+    let length = LOADER_V3_PROGRAMDATA_METADATA_BYTES
+        .checked_add(elf.len())
+        .ok_or(Error::ArithmeticOverflow)?;
+    if length > SOLANA_MAX_PERMITTED_ACCOUNT_DATA_BYTES {
+        return Err(Error::ProgramDataExceedsAccountLimit);
+    }
+    let mut output = vec![0_u8; length];
+    write_at(
+        &mut output,
+        0,
+        &LOADER_V3_PROGRAMDATA_DISCRIMINANT_V1.to_le_bytes(),
+    )?;
+    write_at(
+        &mut output,
+        LOADER_V3_PROGRAMDATA_SLOT_OFFSET_V1,
+        &deployment_slot.to_le_bytes(),
+    )?;
+    if let Some(authority) = upgrade_authority {
+        require_nonzero(&authority).map_err(|_| Error::NonCanonicalUpgradeAuthority)?;
+        write_at(
+            &mut output,
+            LOADER_V3_PROGRAMDATA_AUTHORITY_TAG_OFFSET_V1,
+            &[1],
+        )?;
+        write_at(
+            &mut output,
+            LOADER_V3_PROGRAMDATA_AUTHORITY_OFFSET_V1,
+            &authority,
+        )?;
+    }
+    write_at(&mut output, LOADER_V3_PROGRAMDATA_METADATA_BYTES, elf)?;
+    Ok(output)
+}
+
+fn write_at(output: &mut [u8], offset: usize, value: &[u8]) -> Result<()> {
+    let end = offset
+        .checked_add(value.len())
+        .ok_or(Error::ArithmeticOverflow)?;
+    output
+        .get_mut(offset..end)
+        .ok_or(Error::InvalidLength)?
+        .copy_from_slice(value);
+    Ok(())
+}
+
 fn validate_semantic_preimage(kind: SemanticPreimageKindV1, bytes: &[u8]) -> Result<()> {
     match kind {
-        SemanticPreimageKindV1::Capability => {
+        SemanticPreimageKindV1::Capability | SemanticPreimageKindV1::Unowned => {
             if bytes.is_empty() {
                 return Err(Error::EmptyInput);
             }

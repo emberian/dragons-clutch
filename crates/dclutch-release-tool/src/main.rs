@@ -20,12 +20,14 @@ use dclutch_release_tool::{
     CheckedTranslationValidationV1, ReleaseEvidenceV1, TranslationValidationEvidenceV1,
     build_checked_capability_execution_from_bytes_v1, build_checked_execution_release_set,
     build_checked_infrastructure_v1, build_checked_release, build_checked_translation_validation,
-    verify_checked_capability_execution_v1, verify_checked_execution_release_set,
-    verify_checked_infrastructure_v1, verify_checked_release,
+    derive_execution_release_set, derive_protocol_infrastructure_profile_v1,
+    loader_v3_program_account_data_v1, loader_v3_programdata_account_data_v1,
+    loader_v3_programdata_address_v1, verify_checked_capability_execution_v1,
+    verify_checked_execution_release_set, verify_checked_infrastructure_v1, verify_checked_release,
     verify_checked_translation_validation,
 };
 
-const USAGE: &str = "usage:\n  dclutch-release-tool create --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify --manifest PATH --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH [--text-out PATH]\n  dclutch-release-tool inspect --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-set --release-set PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-set --manifest PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH [--text-out PATH]\n  dclutch-release-tool inspect-set --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-infrastructure --execution PATH --profile PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-infrastructure --manifest PATH --execution PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH [--text-out PATH]\n  dclutch-release-tool inspect-infrastructure --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-capability-execution --descriptor PATH --strategy PATH --certificate PATH [--admission PATH] --accelerator PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-capability-execution --manifest PATH --accelerator PATH [--text-out PATH]\n  dclutch-release-tool inspect-capability-execution --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-translation --evidence-dir PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-translation --manifest PATH --evidence-dir PATH [--text-out PATH]\n  dclutch-release-tool inspect-translation --manifest PATH [--text-out PATH]";
+const USAGE: &str = "usage:\n  dclutch-release-tool create --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify --manifest PATH --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH [--text-out PATH]\n  dclutch-release-tool inspect --manifest PATH [--text-out PATH]\n  dclutch-release-tool loader-accounts --program-id HEX32 --loader-program-id HEX32 --elf PATH --deployment-slot U64 [--upgrade-authority HEX32] --program-out PATH --programdata-out PATH [--text-out PATH]\n  dclutch-release-tool derive-set --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH\n  dclutch-release-tool derive-infrastructure-profile --registry PATH --rent PATH --out PATH\n  dclutch-release-tool create-set --release-set PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-set --manifest PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH [--text-out PATH]\n  dclutch-release-tool inspect-set --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-infrastructure --execution PATH --profile PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-infrastructure --manifest PATH --execution PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH [--text-out PATH]\n  dclutch-release-tool inspect-infrastructure --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-capability-execution --descriptor PATH --strategy PATH --certificate PATH [--admission PATH] --accelerator PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-capability-execution --manifest PATH --accelerator PATH [--text-out PATH]\n  dclutch-release-tool inspect-capability-execution --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-translation --evidence-dir PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-translation --manifest PATH --evidence-dir PATH [--text-out PATH]\n  dclutch-release-tool inspect-translation --manifest PATH [--text-out PATH]";
 
 fn main() -> ExitCode {
     match run() {
@@ -53,6 +55,9 @@ fn run() -> Result<(), String> {
         "create" => create(&mut flags),
         "verify" => verify(&mut flags),
         "inspect" => inspect(&mut flags),
+        "loader-accounts" => loader_accounts(&mut flags),
+        "derive-set" => derive_set(&mut flags),
+        "derive-infrastructure-profile" => derive_infrastructure_profile(&mut flags),
         "create-set" => create_set(&mut flags),
         "verify-set" => verify_set(&mut flags),
         "inspect-set" => inspect_set(&mut flags),
@@ -229,6 +234,165 @@ fn emit_capability_execution_text(
             .lock()
             .write_all(text.as_bytes())
             .map_err(|error| format!("failed writing stdout: {error}"))
+    }
+}
+
+fn loader_accounts(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), String> {
+    let program_id = required_hex32(flags, "--program-id")?;
+    let loader_program_id = required_hex32(flags, "--loader-program-id")?;
+    let elf = read_bytes(required(flags, "--elf")?)?;
+    let deployment_slot = required_u64(flags, "--deployment-slot")?;
+    let upgrade_authority = optional_hex32(flags, "--upgrade-authority")?;
+    let program_out = required(flags, "--program-out")?;
+    let programdata_out = required(flags, "--programdata-out")?;
+    let text_output = flags.remove("--text-out");
+    require_no_flags(flags)?;
+
+    let programdata_id = loader_v3_programdata_address_v1(&program_id, &loader_program_id);
+    let program =
+        loader_v3_program_account_data_v1(&programdata_id).map_err(format_release_error)?;
+    let programdata =
+        loader_v3_programdata_account_data_v1(&elf, deployment_slot, upgrade_authority)
+            .map_err(format_release_error)?;
+    fs::write(&program_out, program)
+        .map_err(|error| format!("failed writing {}: {error}", program_out.display()))?;
+    fs::write(&programdata_out, &programdata)
+        .map_err(|error| format!("failed writing {}: {error}", programdata_out.display()))?;
+
+    let mut text = String::new();
+    push_line(&mut text, "format", "dclutch-loader-v3-accounts-v1");
+    push_line(&mut text, "program_id", &hex(&program_id));
+    push_line(&mut text, "programdata_id", &hex(&programdata_id));
+    push_line(&mut text, "loader_program_id", &hex(&loader_program_id));
+    push_line(&mut text, "deployment_slot", &deployment_slot.to_string());
+    push_line(
+        &mut text,
+        "upgrade_authority",
+        &upgrade_authority.map_or_else(|| "none".to_owned(), |value| hex(&value)),
+    );
+    push_line(
+        &mut text,
+        "program_account_bytes",
+        &program.len().to_string(),
+    );
+    push_line(
+        &mut text,
+        "programdata_account_bytes",
+        &programdata.len().to_string(),
+    );
+    push_line(&mut text, "elf_bytes", &elf.len().to_string());
+    push_line(
+        &mut text,
+        "evidence_class",
+        "predicted-loader-state-not-observed",
+    );
+    write_text(text, text_output)
+}
+
+fn derive_set(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), String> {
+    let output = required(flags, "--out")?;
+    let manifests = CheckedManifestFiles::load(flags)?;
+    require_no_flags(flags)?;
+    let checked = manifests.decode()?;
+    let release_set = derive_execution_release_set([
+        &checked[0],
+        &checked[1],
+        &checked[2],
+        &checked[3],
+        &checked[4],
+    ])
+    .map_err(format_release_error)?;
+    fs::write(&output, release_set.to_bytes())
+        .map_err(|error| format!("failed writing {}: {error}", output.display()))
+}
+
+fn derive_infrastructure_profile(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), String> {
+    let output = required(flags, "--out")?;
+    let registry = load_checked_release(required(flags, "--registry")?)?;
+    let rent = load_checked_release(required(flags, "--rent")?)?;
+    require_no_flags(flags)?;
+    let profile = derive_protocol_infrastructure_profile_v1(&registry, &rent)
+        .map_err(format_release_error)?;
+    fs::write(&output, profile.to_bytes())
+        .map_err(|error| format!("failed writing {}: {error}", output.display()))
+}
+
+fn write_text(text: String, output: Option<PathBuf>) -> Result<(), String> {
+    if let Some(path) = output {
+        fs::write(&path, text)
+            .map_err(|error| format!("failed writing {}: {error}", path.display()))
+    } else {
+        io::stdout()
+            .lock()
+            .write_all(text.as_bytes())
+            .map_err(|error| format!("failed writing stdout: {error}"))
+    }
+}
+
+fn push_line(output: &mut String, key: &str, value: &str) {
+    output.push_str(key);
+    output.push('=');
+    output.push_str(value);
+    output.push('\n');
+}
+
+fn hex(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len().saturating_mul(2));
+    for byte in bytes {
+        output.push(hex_digit(byte >> 4));
+        output.push(hex_digit(byte & 0x0f));
+    }
+    output
+}
+
+fn hex_digit(value: u8) -> char {
+    match value {
+        10..=15 => char::from(b'a'.saturating_add(value.saturating_sub(10))),
+        _ => char::from(b'0'.saturating_add(value)),
+    }
+}
+
+fn required_hex32(flags: &mut BTreeMap<String, PathBuf>, name: &str) -> Result<[u8; 32], String> {
+    let value = required(flags, name)?;
+    decode_hex32(&value.to_string_lossy(), name)
+}
+
+fn optional_hex32(
+    flags: &mut BTreeMap<String, PathBuf>,
+    name: &str,
+) -> Result<Option<[u8; 32]>, String> {
+    flags
+        .remove(name)
+        .map(|value| decode_hex32(&value.to_string_lossy(), name))
+        .transpose()
+}
+
+fn required_u64(flags: &mut BTreeMap<String, PathBuf>, name: &str) -> Result<u64, String> {
+    let value = required(flags, name)?;
+    value
+        .to_string_lossy()
+        .parse::<u64>()
+        .map_err(|error| format!("{name} must be a decimal u64: {error}"))
+}
+
+fn decode_hex32(value: &str, name: &str) -> Result<[u8; 32], String> {
+    if value.len() != 64 {
+        return Err(format!("{name} must be 64 lowercase hexadecimal digits"));
+    }
+    let mut output = [0_u8; 32];
+    for (destination, pair) in output.iter_mut().zip(value.as_bytes().chunks_exact(2)) {
+        let high = nibble(pair.first().copied(), name)?;
+        let low = nibble(pair.get(1).copied(), name)?;
+        *destination = high.saturating_mul(16).saturating_add(low);
+    }
+    Ok(output)
+}
+
+fn nibble(value: Option<u8>, name: &str) -> Result<u8, String> {
+    match value {
+        Some(byte @ b'0'..=b'9') => Ok(byte.saturating_sub(b'0')),
+        Some(byte @ b'a'..=b'f') => Ok(byte.saturating_sub(b'a').saturating_add(10)),
+        _ => Err(format!("{name} must be 64 lowercase hexadecimal digits")),
     }
 }
 
