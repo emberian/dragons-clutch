@@ -73,6 +73,8 @@ pub enum Error {
     NonCanonicalInstruction,
     /// An instruction addressed an absent or aliased account coordinate.
     InvalidAccount,
+    /// The supplied authenticated alias partition was not canonical.
+    InvalidAlias,
     /// An instruction addressed an absent scalar or identity coordinate.
     InvalidRegister,
     /// Caller-owned account, register, scratch, or output widths differed.
@@ -507,6 +509,226 @@ pub fn project_with_requests_atomic(
     output_lamports.copy_from_slice(scratch_lamports);
     output_request.copy_from_slice(scratch_request);
     Ok(())
+}
+
+/// Project effects using an authenticated physical-account alias partition.
+///
+/// `aliases[index]` is the canonical representative coordinate selected by
+/// the authenticated AccountProfile. Representatives name themselves and an
+/// alias may only point backward to a representative. Aliases must expose the
+/// same immutable account facts and permissions. Local lamport checks and
+/// writes are evaluated against the representative, so two coordinates for
+/// one physical account cannot manufacture a transfer or bypass overlapping-
+/// write checks. Child invocation frames retain their exact coordinates.
+///
+/// Both output slices remain unchanged on refusal. Scratch slices may contain
+/// a rejected candidate.
+#[allow(clippy::too_many_arguments)]
+pub fn project_with_aliases_and_requests_atomic(
+    program: ProgramV2<'_>,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+    aliases: &[u16],
+    accounts: &[AccountInput],
+    permissions: &[AccountPermission],
+    scratch_lamports: &mut [u64],
+    output_lamports: &mut [u64],
+    scratch_request: &mut [u8],
+    output_request: &mut [u8],
+) -> Result<()> {
+    program.require_register_widths(scalars, identities)?;
+    let account_count = usize::from(program.account_count);
+    let request_bytes = usize::from(program.request_bytes);
+    if aliases.len() != account_count
+        || accounts.len() != account_count
+        || permissions.len() != account_count
+        || scratch_lamports.len() != account_count
+        || output_lamports.len() != account_count
+        || scratch_request.len() != request_bytes
+        || output_request.len() != request_bytes
+    {
+        return Err(Error::WidthMismatch);
+    }
+    validate_alias_partition(aliases, accounts, permissions)?;
+    require_alias_write_nonoverlap(program, scalars, identities, aliases)?;
+    for (destination, account) in scratch_lamports.iter_mut().zip(accounts) {
+        *destination = account.lamports;
+    }
+    scratch_request.fill(0);
+    let mut index = 0_u16;
+    while index < program.instruction_count {
+        let effect = program.resolved_effect(index, scalars, identities)?;
+        project_effect_with_request_and_aliases(
+            effect,
+            aliases,
+            accounts,
+            permissions,
+            scratch_lamports,
+            scratch_request,
+        )?;
+        index = index.checked_add(1).ok_or(Error::InvalidLength)?;
+    }
+    for (index, output) in output_lamports.iter_mut().enumerate() {
+        *output = *scratch_lamports
+            .get(alias_index(aliases, index)?)
+            .ok_or(Error::InvalidAlias)?;
+    }
+    output_request.copy_from_slice(scratch_request);
+    Ok(())
+}
+
+fn validate_alias_partition(
+    aliases: &[u16],
+    accounts: &[AccountInput],
+    permissions: &[AccountPermission],
+) -> Result<()> {
+    for index in 0..aliases.len() {
+        let representative = alias_index(aliases, index)?;
+        if alias_index(aliases, representative)? != representative {
+            return Err(Error::InvalidAlias);
+        }
+        if index != representative
+            && (accounts.get(index) != accounts.get(representative)
+                || permissions.get(index) != permissions.get(representative))
+        {
+            return Err(Error::InvalidAlias);
+        }
+    }
+    Ok(())
+}
+
+fn alias_index(aliases: &[u16], index: usize) -> Result<usize> {
+    let representative = usize::from(*aliases.get(index).ok_or(Error::InvalidAlias)?);
+    if representative <= index && representative < aliases.len() {
+        Ok(representative)
+    } else {
+        Err(Error::InvalidAlias)
+    }
+}
+
+fn require_alias_write_nonoverlap(
+    program: ProgramV2<'_>,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+    aliases: &[u16],
+) -> Result<()> {
+    let mut right_index = 0_u16;
+    while right_index < program.instruction_count {
+        let right = program.resolved_effect(right_index, scalars, identities)?;
+        let Some((right_account, right_start, right_width)) = resolved_write_range(right) else {
+            right_index = right_index.checked_add(1).ok_or(Error::InvalidLength)?;
+            continue;
+        };
+        let right_account = alias_index(aliases, usize::from(right_account))?;
+        let right_end = right_start
+            .checked_add(right_width)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let mut left_index = 0_u16;
+        while left_index < right_index {
+            let left = program.resolved_effect(left_index, scalars, identities)?;
+            if let Some((left_account, left_start, left_width)) = resolved_write_range(left) {
+                let left_account = alias_index(aliases, usize::from(left_account))?;
+                let left_end = left_start
+                    .checked_add(left_width)
+                    .ok_or(Error::ArithmeticOverflow)?;
+                if left_account == right_account && left_start < right_end && right_start < left_end
+                {
+                    return Err(Error::OverlappingWrites);
+                }
+            }
+            left_index = left_index.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        right_index = right_index.checked_add(1).ok_or(Error::InvalidLength)?;
+    }
+    Ok(())
+}
+
+fn resolved_write_range(effect: ResolvedEffect) -> Option<(u16, usize, usize)> {
+    match effect {
+        ResolvedEffect::WriteScalar {
+            account, offset, ..
+        } => Some((account, usize::try_from(offset).ok()?, 8)),
+        ResolvedEffect::WriteIdentity {
+            account, offset, ..
+        } => Some((account, usize::try_from(offset).ok()?, 32)),
+        _ => None,
+    }
+}
+
+fn project_effect_with_request_and_aliases(
+    effect: ResolvedEffect,
+    aliases: &[u16],
+    accounts: &[AccountInput],
+    permissions: &[AccountPermission],
+    lamports: &mut [u64],
+    request: &mut [u8],
+) -> Result<()> {
+    match effect {
+        ResolvedEffect::TransferLamports {
+            source,
+            destination,
+            amount,
+        } => {
+            let source = alias_index(aliases, usize::from(source))?;
+            let destination = alias_index(aliases, usize::from(destination))?;
+            if source == destination {
+                return Err(Error::InvalidAccount);
+            }
+            project_effect(
+                ResolvedEffect::TransferLamports {
+                    source: u16::try_from(source).map_err(|_| Error::InvalidAlias)?,
+                    destination: u16::try_from(destination).map_err(|_| Error::InvalidAlias)?,
+                    amount,
+                },
+                accounts,
+                permissions,
+                lamports,
+            )
+        }
+        ResolvedEffect::WriteScalar {
+            account,
+            offset,
+            value,
+        } => project_effect(
+            ResolvedEffect::WriteScalar {
+                account: u16::try_from(alias_index(aliases, usize::from(account))?)
+                    .map_err(|_| Error::InvalidAlias)?,
+                offset,
+                value,
+            },
+            accounts,
+            permissions,
+            lamports,
+        ),
+        ResolvedEffect::WriteIdentity {
+            account,
+            offset,
+            value,
+        } => project_effect(
+            ResolvedEffect::WriteIdentity {
+                account: u16::try_from(alias_index(aliases, usize::from(account))?)
+                    .map_err(|_| Error::InvalidAlias)?,
+                offset,
+                value,
+            },
+            accounts,
+            permissions,
+            lamports,
+        ),
+        ResolvedEffect::RequireLamportsEq { account, value } => project_effect(
+            ResolvedEffect::RequireLamportsEq {
+                account: u16::try_from(alias_index(aliases, usize::from(account))?)
+                    .map_err(|_| Error::InvalidAlias)?,
+                value,
+            },
+            accounts,
+            permissions,
+            lamports,
+        ),
+        request_effect => {
+            project_effect_with_request(request_effect, accounts, permissions, lamports, request)
+        }
+    }
 }
 
 fn project_effect(
@@ -1219,6 +1441,140 @@ mod tests {
             ProgramV2::decode_selected(exact, [8; 32], &bytes),
             Err(Error::ProgramIdentityMismatch)
         );
+    }
+
+    #[test]
+    fn authenticated_aliases_share_one_physical_lamport_state() {
+        let bytes = program(
+            3,
+            3,
+            0,
+            &[
+                instruction(OP_TRANSFER_LAMPORTS, 0, 2, 0, 0),
+                instruction(OP_REQUIRE_LAMPORTS_EQ, 1, 0, 1, 0),
+                instruction(OP_REQUIRE_LAMPORTS_EQ, 2, 0, 2, 0),
+            ],
+        );
+        let program = ProgramV2::decode(&bytes).expect("alias-aware effect program");
+        let accounts = [
+            AccountInput {
+                lamports: 100,
+                data_len: 0,
+            },
+            AccountInput {
+                lamports: 100,
+                data_len: 0,
+            },
+            AccountInput {
+                lamports: 0,
+                data_len: 0,
+            },
+        ];
+        let permissions = [
+            AccountPermission::program_owned_mutable(),
+            AccountPermission::program_owned_mutable(),
+            AccountPermission::lamport_receiver(),
+        ];
+        let mut scratch_lamports = [0_u64; 3];
+        let mut output_lamports = [0xa5_u64; 3];
+        let mut scratch_request = [];
+        let mut output_request = [];
+        project_with_aliases_and_requests_atomic(
+            program,
+            &[30, 70, 30],
+            &[],
+            &[0, 0, 2],
+            &accounts,
+            &permissions,
+            &mut scratch_lamports,
+            &mut output_lamports,
+            &mut scratch_request,
+            &mut output_request,
+        )
+        .expect("one physical debit through its representative");
+        assert_eq!(output_lamports, [70, 70, 30]);
+    }
+
+    #[test]
+    fn alias_self_transfer_and_cross_coordinate_overlap_refuse_atomically() {
+        let transfer_bytes = program(2, 1, 0, &[instruction(OP_TRANSFER_LAMPORTS, 0, 1, 0, 0)]);
+        let transfer = ProgramV2::decode(&transfer_bytes).expect("coordinate-distinct transfer");
+        let alias_accounts = [
+            AccountInput {
+                lamports: 100,
+                data_len: 64,
+            },
+            AccountInput {
+                lamports: 100,
+                data_len: 64,
+            },
+        ];
+        let alias_permissions = [AccountPermission::program_owned_mutable(); 2];
+        let mut scratch_lamports = [0_u64; 2];
+        let mut output_lamports = [0xa5_u64; 2];
+        let mut scratch_request = [];
+        let mut output_request = [];
+        assert_eq!(
+            project_with_aliases_and_requests_atomic(
+                transfer,
+                &[1],
+                &[],
+                &[0, 0],
+                &alias_accounts,
+                &alias_permissions,
+                &mut scratch_lamports,
+                &mut output_lamports,
+                &mut scratch_request,
+                &mut output_request,
+            ),
+            Err(Error::InvalidAccount)
+        );
+        assert_eq!(output_lamports, [0xa5; 2]);
+
+        let write_bytes = program(
+            2,
+            1,
+            1,
+            &[
+                instruction(OP_WRITE_SCALAR, 0, 0, 0, 0),
+                instruction(OP_WRITE_IDENTITY, 1, 0, 0, 0),
+            ],
+        );
+        let writes = ProgramV2::decode(&write_bytes)
+            .expect("coordinate-distinct writes are syntactically valid");
+        assert_eq!(
+            project_with_aliases_and_requests_atomic(
+                writes,
+                &[1],
+                &[[2; 32]],
+                &[0, 0],
+                &alias_accounts,
+                &alias_permissions,
+                &mut scratch_lamports,
+                &mut output_lamports,
+                &mut scratch_request,
+                &mut output_request,
+            ),
+            Err(Error::OverlappingWrites)
+        );
+        assert_eq!(output_lamports, [0xa5; 2]);
+
+        assert_eq!(
+            project_with_aliases_and_requests_atomic(
+                transfer,
+                &[1],
+                &[],
+                &[1, 1],
+                &alias_accounts,
+                &alias_permissions,
+                &mut scratch_lamports,
+                &mut output_lamports,
+                &mut scratch_request,
+                &mut output_request,
+            ),
+            Err(Error::InvalidAlias)
+        );
+        assert_eq!(output_lamports, [0xa5; 2]);
     }
 
     #[test]
