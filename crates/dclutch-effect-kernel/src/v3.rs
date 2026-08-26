@@ -115,11 +115,13 @@ pub struct RouteV3 {
     role: FixedRole,
     kind: RouteKindV3,
     enabled_if_nonzero: bool,
+    borrows_witness: bool,
     enable_common_scalar: u16,
     fixed_account_start: u16,
     fixed_account_count: u16,
     item_account_start: u16,
     item_account_count: u16,
+    witness_range_common_scalar: u16,
     fixed_request_bytes: u32,
     item_request_bytes: u32,
 }
@@ -165,6 +167,11 @@ impl RouteV3 {
         self.item_request_bytes
     }
 
+    /// Whether the invocation appends an authenticated slice of the family request.
+    pub const fn borrows_witness(self) -> bool {
+        self.borrows_witness
+    }
+
     fn enabled(self, scalars: &[u64]) -> Result<bool> {
         if self.enabled_if_nonzero {
             Ok(*scalars
@@ -202,6 +209,52 @@ pub struct ResolvedInvocationV3 {
     pub request_offset: usize,
     /// Exact request width for this invocation.
     pub request_len: usize,
+    /// Optional exact top-level family-request suffix appended after the IR-owned request.
+    pub borrowed_witness: Option<BorrowedWitnessV3>,
+}
+
+/// Exact borrowed witness range in the authenticated top-level family request.
+///
+/// The EffectProgram owns whether a route may borrow a witness and which two
+/// common scalar registers provide `(offset, length)`. RequestProfile and the
+/// transition own those scalar values. This lets a typed child request append
+/// a variable proof without making Product tail width a second proof-count
+/// authority or letting the family adapter fabricate child instruction data.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BorrowedWitnessV3 {
+    source_offset: usize,
+    len: usize,
+}
+
+impl BorrowedWitnessV3 {
+    /// Absolute offset within the family request (after the common hot envelope).
+    pub const fn source_offset(self) -> usize {
+        self.source_offset
+    }
+
+    /// Exact borrowed byte width, which may be zero for an empty proof.
+    pub const fn len(self) -> usize {
+        self.len
+    }
+
+    /// Whether the authenticated suffix is empty, as for a single-leaf proof.
+    pub const fn is_empty(self) -> bool {
+        self.len == 0
+    }
+
+    /// Borrow the exact trailing range, refusing overflow, truncation, or padding.
+    pub fn slice(self, family_request: &[u8]) -> Result<&[u8]> {
+        let end = self
+            .source_offset
+            .checked_add(self.len)
+            .ok_or(Error::ArithmeticOverflow)?;
+        if end != family_request.len() {
+            return Err(Error::InvalidCoordinate);
+        }
+        family_request
+            .get(self.source_offset..end)
+            .ok_or(Error::InvalidCoordinate)
+    }
 }
 
 /// One fully register- and item-resolved local effect.
@@ -537,6 +590,7 @@ impl<'a> ProgramV3<'a> {
         let route = self.route(route_index)?;
         let route_request_start = self.route_request_start(route_index, tail_count)?;
         let tail_accounts_start = usize::from(self.fixed_accounts);
+        let borrowed_witness = route.resolve_borrowed_witness(scalars)?;
         match route.kind {
             RouteKindV3::Once => Ok(ResolvedInvocationV3 {
                 role: route.role,
@@ -550,6 +604,7 @@ impl<'a> ProgramV3<'a> {
                 repeated_item_count: 0,
                 request_offset: route_request_start,
                 request_len: usize_from_u32(route.fixed_request_bytes)?,
+                borrowed_witness,
             }),
             RouteKindV3::AffineOnce => Ok(ResolvedInvocationV3 {
                 role: route.role,
@@ -565,6 +620,7 @@ impl<'a> ProgramV3<'a> {
                 repeated_item_count: tail_count,
                 request_offset: route_request_start,
                 request_len: route_expanded_request_bytes(route, tail_count)?,
+                borrowed_witness,
             }),
             RouteKindV3::Each => {
                 let item_account_start = item_index(
@@ -594,6 +650,7 @@ impl<'a> ProgramV3<'a> {
                     repeated_item_count: 1,
                     request_offset,
                     request_len,
+                    borrowed_witness,
                 })
             }
         }
@@ -751,18 +808,22 @@ impl RouteV3 {
             1 => true,
             _ => return Err(Error::InvalidRoute),
         };
-        if byte(bytes, add(offset, 3)?)? != 0 || read_u16(bytes, add(offset, 14)?)? != 0 {
-            return Err(Error::NonCanonicalReserved);
-        }
+        let borrows_witness = match byte(bytes, add(offset, 3)?)? {
+            0 => false,
+            1 => true,
+            _ => return Err(Error::InvalidRoute),
+        };
         Ok(Self {
             role,
             kind,
             enabled_if_nonzero,
+            borrows_witness,
             enable_common_scalar: read_u16(bytes, add(offset, 4)?)?,
             fixed_account_start: read_u16(bytes, add(offset, 6)?)?,
             fixed_account_count: read_u16(bytes, add(offset, 8)?)?,
             item_account_start: read_u16(bytes, add(offset, 10)?)?,
             item_account_count: read_u16(bytes, add(offset, 12)?)?,
+            witness_range_common_scalar: read_u16(bytes, add(offset, 14)?)?,
             fixed_request_bytes: read_u32(bytes, add(offset, 16)?)?,
             item_request_bytes: read_u32(bytes, add(offset, 20)?)?,
         })
@@ -777,10 +838,19 @@ impl RouteV3 {
             .item_account_start
             .checked_add(self.item_account_count)
             .ok_or(Error::InvalidRoute)?;
+        let witness_registers_valid = if self.borrows_witness {
+            self.witness_range_common_scalar
+                .checked_add(1)
+                .is_some_and(|last| last < program.common_scalars)
+                && self.kind != RouteKindV3::Each
+        } else {
+            self.witness_range_common_scalar == 0
+        };
         if fixed_end > program.fixed_accounts
             || item_end > program.item_account_stride
             || (!self.enabled_if_nonzero && self.enable_common_scalar != 0)
             || (self.enabled_if_nonzero && self.enable_common_scalar >= program.common_scalars)
+            || !witness_registers_valid
         {
             return Err(Error::InvalidRoute);
         }
@@ -798,6 +868,32 @@ impl RouteV3 {
             }
             _ => Err(Error::InvalidRoute),
         }
+    }
+
+    fn resolve_borrowed_witness(self, scalars: &[u64]) -> Result<Option<BorrowedWitnessV3>> {
+        if !self.borrows_witness {
+            return Ok(None);
+        }
+        let offset_register = usize::from(self.witness_range_common_scalar);
+        let length_register = offset_register
+            .checked_add(1)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let source_offset = usize::try_from(
+            *scalars
+                .get(offset_register)
+                .ok_or(Error::InvalidCoordinate)?,
+        )
+        .map_err(|_| Error::ArithmeticOverflow)?;
+        let len = usize::try_from(
+            *scalars
+                .get(length_register)
+                .ok_or(Error::InvalidCoordinate)?,
+        )
+        .map_err(|_| Error::ArithmeticOverflow)?;
+        source_offset
+            .checked_add(len)
+            .ok_or(Error::ArithmeticOverflow)?;
+        Ok(Some(BorrowedWitnessV3 { source_offset, len }))
     }
 }
 
@@ -1942,6 +2038,50 @@ mod tests {
     }
 
     #[test]
+    fn borrowed_witness_is_an_exact_authenticated_suffix() {
+        let mut core = route(0, 0, 0, 1, 0, 0, 8, 0);
+        core[3] = 1;
+        put(&mut core, 14, &0_u16.to_le_bytes());
+        let mut bytes = vec![0_u8; HEADER_BYTES + ROUTE_BYTES + 8];
+        put(&mut bytes, 0, &MAGIC);
+        bytes[4] = VERSION;
+        for (offset, value) in [(6, 1_u16), (12, 1), (16, 2)] {
+            put(&mut bytes, offset, &value.to_le_bytes());
+        }
+        put(&mut bytes, HEADER_BYTES, &core);
+        put(&mut bytes, HEADER_BYTES + ROUTE_BYTES, b"CORE_REQ");
+
+        let program = ProgramV3::decode(&bytes).expect("borrowed-witness program");
+        let invocation = program
+            .resolved_invocation(0, 0, 0, &[8, 4], &[])
+            .expect("invocation");
+        let witness = invocation.borrowed_witness.expect("borrowed witness");
+        assert_eq!(invocation.request_len, 8);
+        assert_eq!(program.request_bytes(0), Ok(8));
+        assert_eq!(witness.source_offset(), 8);
+        assert_eq!(witness.len(), 4);
+        assert_eq!(witness.slice(b"12345678PROO"), Ok(b"PROO".as_slice()));
+        assert_eq!(
+            witness.slice(b"12345678PROOF"),
+            Err(Error::InvalidCoordinate)
+        );
+
+        let mut invalid_register_pair = bytes.clone();
+        put(
+            &mut invalid_register_pair,
+            HEADER_BYTES + 14,
+            &1_u16.to_le_bytes(),
+        );
+        assert_eq!(
+            ProgramV3::decode(&invalid_register_pair),
+            Err(Error::InvalidRoute)
+        );
+        let mut invalid_each = bytes;
+        invalid_each[HEADER_BYTES + 1] = 2;
+        assert_eq!(ProgramV3::decode(&invalid_each), Err(Error::InvalidRoute));
+    }
+
+    #[test]
     fn short_buffer_narrowing_and_cross_item_alias_preserve_outputs() {
         let canonical = canonical();
         let program = ProgramV3::decode(&canonical).expect("program");
@@ -1997,22 +2137,24 @@ mod tests {
             } else {
                 &mut output_requests[..]
             };
-            assert!(project_atomic(
-                program,
-                2,
-                ProjectionV3 {
-                    scalars: &scalars,
-                    identities: &identities,
-                    aliases: &aliases,
-                    accounts: &accounts,
-                    permissions: &permissions,
-                    scratch_lamports: &mut scratch_lamports,
-                    output_lamports: &mut output_lamports,
-                    scratch_requests: &mut scratch_requests,
-                    output_requests: request_output,
-                },
-            )
-            .is_err());
+            assert!(
+                project_atomic(
+                    program,
+                    2,
+                    ProjectionV3 {
+                        scalars: &scalars,
+                        identities: &identities,
+                        aliases: &aliases,
+                        accounts: &accounts,
+                        permissions: &permissions,
+                        scratch_lamports: &mut scratch_lamports,
+                        output_lamports: &mut output_lamports,
+                        scratch_requests: &mut scratch_requests,
+                        output_requests: request_output,
+                    },
+                )
+                .is_err()
+            );
             assert_eq!(output_lamports, before_lamports);
             assert_eq!(output_requests, before_requests);
         }
