@@ -1,15 +1,17 @@
-use super::physical::*;
+use super::{complementary::*, physical::*};
 use dclutch_claims_svm::{ClaimsPlanV1, ClaimsReceiptV1};
 use dclutch_custody_contract::{CustodyReceiptV1, ReceiptEvidenceV1};
 use dclutch_direct_codec::{
     intent_v2::CompactIntentV2,
     successor::{
-        AuthenticatedCompactIntentV2, DIRECT_MAKER_REPLAY_BYTES_V1,
+        AuthenticatedCompactIntentV2, ComplementaryActionV2, ComplementaryInputV2,
+        ComplementaryParticipantsV2, ComplementarySettlementV2, DIRECT_MAKER_REPLAY_BYTES_V1,
         DIRECT_REGISTERED_RECORD_BYTES_V2, DirectExecutionConfigV1, DirectRegisteredIntentV2,
         DirectRootStateV1, MakerReplayFirstUseV1, MakerReplayObservationV1, MakerReplayRootV1,
-        MakerReplayVacancyV1, RegisteredExecutionV2, RegisteredIntentCreationV2,
-        RegisteredOrdinaryInputV2, RegisteredParticipantV2, RegisteredRecordAfterFillV2,
-        RegisteredRecordFirstUseV2, register_intent_v2,
+        MakerReplayVacancyV1, RegisteredExecutionV2, RegisteredFillCandidateV2,
+        RegisteredFillInputV2, RegisteredIntentCreationV2, RegisteredOrdinaryInputV2,
+        RegisteredParticipantV2, RegisteredRecordAfterFillV2, RegisteredRecordFirstUseV2,
+        preview_registered_fill_v2, register_intent_v2, settle_registered_complementary_v2,
     },
 };
 use solana_program::hash::hash;
@@ -561,4 +563,272 @@ fn consistent_seller_fee_alias_accumulates_both_ordered_credits() {
     let (plan, _) = prepare(aliased_input, context, aliased);
     assert_eq!(plan.seller_destination_after, 51);
     assert_eq!(plan.fee_destination_after, 51);
+}
+
+fn complementary_context() -> DirectComplementaryPhysicalContextV2 {
+    DirectComplementaryPhysicalContextV2 {
+        trading_program: id(10),
+        release_set: id(13),
+        market: id(1),
+        realm: id(14),
+        mint: id(15),
+        token_program: id(16),
+        custody_authority: id(23),
+        parent_request_digest: id(17),
+        hoard_token_account: id(41),
+        hoard_balance: 500,
+        fee_destination: DirectExternalCollateralV2 {
+            account: id(22),
+            owner: id(6),
+            balance: 100,
+        },
+        generation: 4,
+    }
+}
+
+fn complementary_candidates(
+    side: u8,
+) -> (
+    [MakerReplayRootV1; 3],
+    [DirectRegisteredIntentV2; 3],
+    [RegisteredFillCandidateV2; 3],
+) {
+    let prices = [20_u64, 30, 50];
+    let seed = register(
+        DirectRootStateV1::new(),
+        id(70),
+        CompactIntentV2 {
+            side,
+            lifecycle: 2,
+            outcome: 0,
+            market: id(1),
+            generation: 4,
+            nonce: 0,
+            valid_from: 2,
+            valid_through: 20,
+            maximum_fill: 100,
+            limit_price: 20,
+            fee_basis_points: 1_000,
+            collateral_account: id(30),
+        },
+        config(1_000, id(6)),
+        1,
+    );
+    let mut roots = [seed.maker_root; 3];
+    let mut records = [seed.record; 3];
+    let mut root = DirectRootStateV1::new();
+    for (index, price) in prices.iter().copied().enumerate() {
+        let maker = id(u8::try_from(index + 2).expect("maker"));
+        let outcome = u32::try_from(index).expect("outcome");
+        let created = register(
+            root,
+            maker,
+            CompactIntentV2 {
+                side,
+                lifecycle: 2,
+                outcome,
+                market: id(1),
+                generation: 4,
+                nonce: 0,
+                valid_from: 2,
+                valid_through: 20,
+                maximum_fill: 100,
+                limit_price: price,
+                fee_basis_points: 1_000,
+                collateral_account: id(u8::try_from(index + 30).expect("collateral")),
+            },
+            config(1_000, id(6)),
+            u8::try_from(index + 2).expect("bump"),
+        );
+        root = created.root;
+        *roots.get_mut(index).expect("root slot") = created.maker_root;
+        *records.get_mut(index).expect("record slot") = created.record;
+    }
+    let first = preview_registered_fill_v2(RegisteredFillInputV2 {
+        root,
+        participant: RegisteredParticipantV2 {
+            maker_root: *roots.first().expect("first root"),
+            record: *records.first().expect("first record"),
+            observed_record_lamports: 100,
+        },
+        execution: RegisteredExecutionV2 {
+            config: config(1_000, id(6)),
+            outcome_count: 3,
+            slot: 5,
+            fill: 100,
+            execution_price: 20,
+        },
+    })
+    .expect("first candidate");
+    let mut scratch = [first; 3];
+    settle_registered_complementary_v2(ComplementaryInputV2 {
+        action: if side == 1 {
+            ComplementaryActionV2::Split
+        } else {
+            ComplementaryActionV2::Merge
+        },
+        root,
+        participants: ComplementaryParticipantsV2 {
+            maker_roots: &roots,
+            records: &records,
+            record_lamports: &[100; 3],
+            execution_prices: &prices,
+        },
+        scratch: &mut scratch,
+        config: config(1_000, id(6)),
+        outcome_count: 3,
+        slot: 5,
+        fill: 100,
+    })
+    .expect("complementary settlement");
+    (roots, records, scratch)
+}
+
+#[test]
+fn complementary_custody_routes_are_affine_ordered_and_hostile_bound() {
+    let split_aggregate = validate_complementary_custody_aggregate_v2(
+        ComplementaryActionV2::Split,
+        ComplementarySettlementV2 {
+            market_vault_transfer: 100,
+            total_fee_transfer: 10,
+        },
+        config(1_000, id(6)),
+        complementary_context(),
+    )
+    .expect("split aggregate preflight");
+    assert_eq!(split_aggregate.hoard_after, 600);
+    assert_eq!(split_aggregate.fee_after, 110);
+    let (_buy_roots, buy_records, buy_candidates) = complementary_candidates(1);
+    let buy_record = *buy_records.get(1).expect("buy record");
+    let buy_candidate = *buy_candidates.get(1).expect("buy candidate");
+    let buy_source = DirectExternalDebitV2 {
+        account: buy_record.intent().collateral_account,
+        owner: buy_record.maker(),
+        delegate: id(23),
+        delegated_amount: buy_record.reserved_collateral(),
+        balance: 100,
+    };
+    let participant = DirectComplementaryParticipantV2 {
+        maker_root: id(51),
+        record: id(61),
+        collateral: DirectComplementaryCollateralV2::BuySource(buy_source),
+        custody_replay_revision: 10,
+    };
+    let projection = |route, participant| DirectComplementaryProjectionInputV2 {
+        action: ComplementaryActionV2::Split,
+        route,
+        participant_index: 1,
+        record_before: buy_record,
+        candidate: buy_candidate,
+        participant,
+        config: config(1_000, id(6)),
+        context: complementary_context(),
+    };
+    let principal = project_complementary_custody_effect_v2(projection(
+        DirectComplementaryCustodyRouteV2::PrincipalOrNet,
+        participant,
+    ))
+    .expect("split principal")
+    .expect("positive split principal");
+    assert_eq!(principal.request.amount, 30);
+    assert_eq!(principal.request.source, buy_source.account);
+    assert_eq!(principal.request.destination, id(41));
+    assert_eq!(principal.request.semantic.transfer_index, 0);
+    assert_eq!(principal.request.expected_revision, 10);
+    assert_eq!(principal.terminal_delegated_amount, Some(0));
+    let fee = project_complementary_custody_effect_v2(projection(
+        DirectComplementaryCustodyRouteV2::Fee,
+        participant,
+    ))
+    .expect("split fee")
+    .expect("positive split fee");
+    assert_eq!(fee.request.amount, 3);
+    assert_eq!(fee.request.destination, id(22));
+    assert_eq!(fee.request.semantic.transfer_index, 1);
+    assert_eq!(fee.request.expected_revision, 11);
+
+    let hostile = DirectComplementaryParticipantV2 {
+        collateral: DirectComplementaryCollateralV2::BuySource(DirectExternalDebitV2 {
+            delegate: id(99),
+            ..buy_source
+        }),
+        ..participant
+    };
+    assert_eq!(
+        project_complementary_custody_effect_v2(projection(
+            DirectComplementaryCustodyRouteV2::PrincipalOrNet,
+            hostile,
+        )),
+        Err(DirectPhysicalError::Binding)
+    );
+
+    let merge_aggregate = validate_complementary_custody_aggregate_v2(
+        ComplementaryActionV2::Merge,
+        ComplementarySettlementV2 {
+            market_vault_transfer: 100,
+            total_fee_transfer: 10,
+        },
+        config(1_000, id(6)),
+        complementary_context(),
+    )
+    .expect("merge aggregate preflight");
+    assert_eq!(merge_aggregate.hoard_after, 400);
+    let underfunded = DirectComplementaryPhysicalContextV2 {
+        hoard_balance: 99,
+        ..complementary_context()
+    };
+    assert_eq!(
+        validate_complementary_custody_aggregate_v2(
+            ComplementaryActionV2::Merge,
+            ComplementarySettlementV2 {
+                market_vault_transfer: 100,
+                total_fee_transfer: 10,
+            },
+            config(1_000, id(6)),
+            underfunded,
+        ),
+        Err(DirectPhysicalError::Arithmetic)
+    );
+
+    let (_sell_roots, sell_records, sell_candidates) = complementary_candidates(0);
+    let sell_record = *sell_records.get(2).expect("sell record");
+    let sell_candidate = *sell_candidates.get(2).expect("sell candidate");
+    let seller = DirectExternalCollateralV2 {
+        account: sell_record.intent().collateral_account,
+        owner: sell_record.maker(),
+        balance: 5,
+    };
+    let seller_participant = DirectComplementaryParticipantV2 {
+        maker_root: id(52),
+        record: id(62),
+        collateral: DirectComplementaryCollateralV2::SellDestination(seller),
+        custody_replay_revision: 20,
+    };
+    let merge_projection = |route| DirectComplementaryProjectionInputV2 {
+        action: ComplementaryActionV2::Merge,
+        route,
+        participant_index: 2,
+        record_before: sell_record,
+        candidate: sell_candidate,
+        participant: seller_participant,
+        config: config(1_000, id(6)),
+        context: complementary_context(),
+    };
+    let net = project_complementary_custody_effect_v2(merge_projection(
+        DirectComplementaryCustodyRouteV2::PrincipalOrNet,
+    ))
+    .expect("merge net")
+    .expect("positive merge net");
+    assert_eq!(net.request.amount, 45);
+    assert_eq!(net.request.source, id(41));
+    assert_eq!(net.request.destination, seller.account);
+    assert_eq!(net.request.semantic.transfer_index, 0);
+    let merge_fee = project_complementary_custody_effect_v2(merge_projection(
+        DirectComplementaryCustodyRouteV2::Fee,
+    ))
+    .expect("merge fee")
+    .expect("positive merge fee");
+    assert_eq!(merge_fee.request.amount, 5);
+    assert_eq!(merge_fee.request.destination, id(22));
+    assert_eq!(merge_fee.request.semantic.transfer_index, 1);
 }

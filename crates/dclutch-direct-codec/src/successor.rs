@@ -704,6 +704,21 @@ impl MakerReplayRootV1 {
         self.next_nonce
     }
 
+    /// Exact Market bound by this replay root.
+    pub const fn market(self) -> [u8; 32] {
+        self.market
+    }
+
+    /// Immutable Market generation bound by this replay root.
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+
+    /// Verified maker identity bound by this replay root.
+    pub const fn maker(self) -> [u8; 32] {
+        self.maker
+    }
+
     /// Number of registered intent records not yet closed.
     pub const fn live_count(self) -> u64 {
         self.live_count
