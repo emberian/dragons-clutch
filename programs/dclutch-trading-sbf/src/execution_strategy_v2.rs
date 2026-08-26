@@ -131,14 +131,22 @@ impl AuthenticatedExecutionStrategyV2 {
 /// Authenticate one selected Execution Strategy and all disposition-owned records.
 ///
 /// `context` must be the current Trading root/release witness produced by the
-/// common fixed-role boundary. `registry_program` must be the Registry account
-/// already joined to the authenticated Core Market. The adapter nevertheless
-/// rechecks its executable/read-only shape and uses it as the sole owner/PDA
-/// authority for every supplied finalized record. `accounts` has one of the
-/// three exact disposition-derived layouts documented by the count constants.
+/// common fixed-role boundary. Its manifest release selects the authenticated
+/// `CapabilityProgramSetV1`, not an individual descriptor.
+/// `selected_capability_program_id` must therefore be the exact action-selected
+/// entry returned by that already-authenticated set. This adapter authenticates
+/// the corresponding descriptor record and rejoins its kind and root width to
+/// `context`; the common outer separately authenticates the context-selected
+/// config under the descriptor's config schema. `registry_program` must be the
+/// Registry account already joined to the authenticated Core Market. The
+/// adapter nevertheless rechecks its executable/read-only shape and uses it as
+/// the sole owner/PDA authority for every supplied finalized record. `accounts`
+/// has one of the three exact disposition-derived layouts documented by the
+/// count constants.
 #[inline(never)]
 pub fn authenticate_execution_strategy_v2(
     context: TradingFamilyContextV1,
+    selected_capability_program_id: ContentId,
     registry_program: &AccountInfo<'_>,
     rent_sysvar: &AccountInfo<'_>,
     accounts: &[AccountInfo<'_>],
@@ -147,7 +155,7 @@ pub fn authenticate_execution_strategy_v2(
     if accounts.len() < INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2 {
         return Err(TradingSbfError::Content);
     }
-    let capability_program_id = context.selection().capability_release();
+    let capability_program_id = selected_capability_program_id;
     let capability_program = authenticate_capability_program(
         registry_program.key,
         &rent,

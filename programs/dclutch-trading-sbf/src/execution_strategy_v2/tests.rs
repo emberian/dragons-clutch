@@ -320,9 +320,8 @@ impl Fixture {
             }
         }
 
-        let selection =
-            CapabilityExecutionSelectionV1::new(0, id(30), id(1), capability_program_id, id(31))
-                .expect("selection");
+        let selection = CapabilityExecutionSelectionV1::new(0, id(30), id(1), id(36), id(31))
+            .expect("ProgramSet selection");
         let root = CapabilityRootHeaderV1::new(id(32), [33; 32], 34, selection).expect("root");
         let trading_program = Pubkey::new_from_array([203; 32]);
         let child_root =
@@ -359,7 +358,13 @@ impl Fixture {
     }
 
     fn authenticate(&self) -> Result<AuthenticatedExecutionStrategyV2, TradingSbfError> {
-        authenticate_execution_strategy_v2(self.context, &self.registry, &self.rent, &self.accounts)
+        authenticate_execution_strategy_v2(
+            self.context,
+            self.capability_program_id,
+            &self.registry,
+            &self.rent,
+            &self.accounts,
+        )
     }
 }
 
@@ -367,6 +372,11 @@ impl Fixture {
 fn interpreted_uses_exact_unpadded_record_frame() {
     let fixture = Fixture::new(StrategyDispositionV2::Interpreted);
     let authenticated = fixture.authenticate().expect("interpreted strategy");
+    assert_ne!(
+        fixture.context.selection().capability_release(),
+        fixture.capability_program_id,
+        "the root selects a ProgramSet, while the action selects this descriptor"
+    );
     assert_eq!(
         fixture.accounts.len(),
         INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2
@@ -399,6 +409,7 @@ fn interpreted_uses_exact_unpadded_record_frame() {
     assert_eq!(
         authenticate_execution_strategy_v2(
             fixture.context,
+            fixture.capability_program_id,
             &fixture.registry,
             &fixture.rent,
             &padded,
@@ -465,6 +476,7 @@ fn admitted_requires_the_exact_registry_admission_chain() {
     assert_eq!(
         authenticate_execution_strategy_v2(
             fixture.context,
+            fixture.capability_program_id,
             &fixture.registry,
             &fixture.rent,
             &missing_admission,
@@ -614,6 +626,7 @@ fn registry_rent_privileges_and_account_width_are_not_caller_trust() {
     assert_eq!(
         authenticate_execution_strategy_v2(
             short.context,
+            short.capability_program_id,
             &short.registry,
             &short.rent,
             short.accounts.get(..3).expect("short frame"),
