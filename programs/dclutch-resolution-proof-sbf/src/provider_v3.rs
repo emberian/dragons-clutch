@@ -350,16 +350,15 @@ mod tests {
     use std::vec;
 
     use dclutch_product_runtime_v2::{
-        ContentId as ProductContentId, ResultDomainInputV2, compile_result_domain_v2,
-        result_domain_record_bytes,
+        compile_result_domain_v2, result_domain_record_bytes, ContentId as ProductContentId,
+        ResultDomainInputV2,
     };
     use dclutch_product_runtime_v2_svm_reader::AuthenticatedRecordV2;
     use dclutch_pyth_svm::PythReleaseV1Input;
     use dclutch_resolution_codec::ProviderCallerV3;
     use dclutch_source_contract::{
-        CapacityEnvelope, PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1, RoundingBoundary,
-        SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SourceAccessProfile, SourceCapacityProfileV1,
-        SourceResolutionPhaseV1, StatisticKind, WindowKind,
+        CapacityEnvelope, RoundingBoundary, SourceAccessProfile, SourceCapacityProfileV1,
+        SourceResolutionPhaseV1, StatisticKind, WindowKind, SOURCE_FAILURE_POLICY_RELEASE_ID_V2,
     };
     use solana_program::pubkey::Pubkey;
 
@@ -377,6 +376,7 @@ mod tests {
         WrongSubmitter,
         WrongProductDomain,
         ParallelProviderRelease,
+        ParallelAdapter,
     }
 
     fn source_id(tag: u8) -> SourceContentId {
@@ -454,7 +454,7 @@ mod tests {
             receiver_abi_id: [38; 32],
             router_abi_id: [39; 32],
             price_update_codec_id: [40; 32],
-            adapter_id: PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1,
+            adapter_id: [0xad; 32],
             receiver_deployment_slot: 1,
             router_deployment_slot: 2,
             guardian_set_count: 19,
@@ -465,9 +465,14 @@ mod tests {
         })
         .expect("Pyth release");
         let pyth_release_id = hash(&pyth_release.to_bytes()).to_bytes();
+        let provider_adapter_id = if matches!(case, Case::ParallelAdapter) {
+            source_id(91)
+        } else {
+            SourceContentId::new(pyth_release.adapter_id()).expect("adapter release")
+        };
         let provider_release = ProviderReleaseV1::new(
             source_id(43),
-            SourceContentId::new(pyth_release.adapter_id()).expect("adapter release"),
+            provider_adapter_id,
             SourceContentId::new(pyth_release_id).expect("Pyth release ID"),
             SourceContentId::new(pyth_release.price_update_codec_id()).expect("codec ID"),
             SourceContentId::new(pyth_release.router_abi_id()).expect("transport ID"),
@@ -642,6 +647,10 @@ mod tests {
         assert_eq!(
             plan(Case::ParallelProviderRelease),
             Err(ProviderJoinErrorV3::Source)
+        );
+        assert_eq!(
+            plan(Case::ParallelAdapter),
+            Err(ProviderJoinErrorV3::Provider)
         );
     }
 }

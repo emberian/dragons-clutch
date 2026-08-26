@@ -7,9 +7,9 @@
 //! those remain obligations of the Pyth SVM adapter.
 
 use super::{
-    ContentId, Error, NormalizedProviderEvidenceV1, PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1,
-    ProviderReleaseV1, PythAdapterConfigV1, Result, SourceAccessProfile, SourceMaterialV2,
-    SourceSpecV1, StatisticKind, StatisticSpecV1, WindowKind, WindowSpecV1,
+    ContentId, Error, NormalizedProviderEvidenceV1, ProviderReleaseV1, PythAdapterConfigV1, Result,
+    SourceAccessProfile, SourceMaterialV2, SourceSpecV1, StatisticKind, StatisticSpecV1,
+    WindowKind, WindowSpecV1,
 };
 
 /// Canonical finalized-record schema for [`SourceSpecV1`].
@@ -97,8 +97,6 @@ impl PythProviderAdapterObligationV2 {
         if source.provider_release_id() != provider_release_id
             || source.adapter_config_id() != adapter_config_id
             || source.access_profile() != SourceAccessProfile::PythTerminalOneTransaction
-            || provider_release.adapter_release_id().to_bytes()
-                != PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1
             || statistic.source_unit_id() != source.unit_id()
             || statistic.kind() != StatisticKind::TerminalSample
             || statistic.required_samples() != 1
@@ -188,8 +186,8 @@ impl PythProviderAdapterObligationV2 {
 mod tests {
     use super::*;
     use crate::{
-        CapacityEnvelope, RoundingBoundary, SOURCE_FAILURE_POLICY_RELEASE_ID_V2,
-        SourceCapacityProfileV1, StatisticKind,
+        CapacityEnvelope, RoundingBoundary, SourceCapacityProfileV1, StatisticKind,
+        SOURCE_FAILURE_POLICY_RELEASE_ID_V2,
     };
 
     fn id(tag: u8) -> ContentId {
@@ -232,13 +230,7 @@ mod tests {
             adapter_id,
             capacity_id,
         );
-        let provider = ProviderReleaseV1::new(
-            id(10),
-            ContentId::new(PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1).expect("nonzero adapter release"),
-            id(11),
-            id(12),
-            id(13),
-        );
+        let provider = ProviderReleaseV1::new(id(10), id(11), id(12), id(13), id(19));
         let adapter = PythAdapterConfigV1::new([42; 32], -8, 100).expect("canonical Pyth adapter");
         let window = WindowSpecV1::new(source_id, WindowKind::Terminal, 100, 100, 10, 2, id(14))
             .expect("terminal window");
@@ -303,6 +295,11 @@ mod tests {
             .expect("authenticated update");
         assert_eq!(evidence.source_spec_id(), fixture.source_id);
         assert_eq!(evidence.provider_release_id(), fixture.provider_id);
+        assert_eq!(
+            evidence.adapter_release_id(),
+            fixture.provider.adapter_release_id(),
+            "the authenticated ProviderRelease selects the adapter"
+        );
         assert_eq!(evidence.atoms(), 1_000_000);
     }
 
