@@ -14,22 +14,24 @@ use dclutch_custody_contract::{
 use dclutch_market_core_codec::{Action, REQUEST_BYTES, Request};
 use dclutch_realm_contract::REALM_SCHEMA_RELEASE_ID_V1;
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_svm::continuation_v1::{
-    REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationAdmissionSeedsV1,
-    RegistryContinuationRequestV1,
+use dclutch_registry_contract::{
+    ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1, DeploymentObservationV1,
+};
+use dclutch_registry_svm::{
+    ProgramDataV3View, ProgramV3View,
+    continuation_v1::{
+        REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationAdmissionSeedsV1,
+        RegistryContinuationRequestV1,
+    },
 };
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_resolution_core_v3_operator::{Finality, Observation, ObservedAccount};
 use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
 };
-use solana_sdk_ids::{system_program, sysvar};
-
-use super::{
-    Error as RegistryError, RegistryReauthenticationState, build_registry_reauthentication_v1,
-};
-use crate::{Observation, ObservedAccount};
+use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 
 /// Exact Registry batch and admission prefix before the nested Core frame.
 pub const REGISTRY_OPEN_MARKET_CONTINUATION_PREFIX_ACCOUNTS_V1: usize = 6;
@@ -88,7 +90,7 @@ pub struct RegistryOpenMarketContinuationReportV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RegistryOpenMarketContinuationErrorV1 {
     /// Registry cache or current Loader deployment authentication refused.
-    Registry(RegistryError),
+    Registry(RegistryOpenMarketObservationErrorV1),
     /// Instruction bytes, release, program, account order, or privileges refused.
     InvalidCoreInstruction,
     /// A required digest or checked width refused.
@@ -97,10 +99,33 @@ pub enum RegistryOpenMarketContinuationErrorV1 {
     Admission,
 }
 
-impl From<RegistryError> for RegistryOpenMarketContinuationErrorV1 {
-    fn from(value: RegistryError) -> Self {
+impl From<RegistryOpenMarketObservationErrorV1> for RegistryOpenMarketContinuationErrorV1 {
+    fn from(value: RegistryOpenMarketObservationErrorV1) -> Self {
         Self::Registry(value)
     }
+}
+
+/// Refusal from finalized Registry cache or current Loader observations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RegistryOpenMarketObservationErrorV1 {
+    /// At least one account observation was not finalized.
+    ObservationNotFinalized,
+    /// Accounts came from different slots, times, or finality observations.
+    ObservationMismatch,
+    /// One key carried conflicting observed account facts.
+    InconsistentAlias,
+    /// Registry program ownership, execution, or Loader state refused.
+    InvalidRegistry,
+    /// Activation-cache owner, bytes, release identity, or PDA refused.
+    InvalidActivationCache,
+    /// A selected Core/Custody Program or ProgramData deployment refused.
+    InvalidDeployment,
+}
+
+#[derive(Clone, Copy)]
+struct AuthenticatedRegistryOpenV1 {
+    observation: Observation,
+    release_set_id: ContentId,
 }
 
 /// Build one exact unsigned top-level Registry Core+Custody open continuation.
@@ -108,32 +133,7 @@ pub fn build_registry_open_market_continuation_v1(
     state: &RegistryOpenMarketContinuationStateV1,
     core_instruction: &Instruction,
 ) -> Result<RegistryOpenMarketContinuationReportV1, RegistryOpenMarketContinuationErrorV1> {
-    let core = build_registry_reauthentication_v1(
-        &RegistryReauthenticationState {
-            registry_program: state.registry_program.clone(),
-            cache: state.activation_cache.clone(),
-            role_program: state.core_program.clone(),
-            role_programdata: state.core_programdata.clone(),
-        },
-        ExecutionRoleV1::Core,
-    )?;
-    let custody = build_registry_reauthentication_v1(
-        &RegistryReauthenticationState {
-            registry_program: state.registry_program.clone(),
-            cache: state.activation_cache.clone(),
-            role_program: state.custody_program.clone(),
-            role_programdata: state.custody_programdata.clone(),
-        },
-        ExecutionRoleV1::Custody,
-    )?;
-    if core.observation != custody.observation
-        || core.cache != custody.cache
-        || core.execution_release_set_id != custody.execution_release_set_id
-        || core.role_program != state.core_program.key
-        || custody.role_program != state.custody_program.key
-    {
-        return Err(RegistryOpenMarketContinuationErrorV1::InvalidCoreInstruction);
-    }
+    let authenticated = authenticate_registry_open(state)?;
 
     let custody_start = REQUEST_BYTES;
     let custody_end = custody_start
@@ -167,7 +167,7 @@ pub fn build_registry_open_market_continuation_v1(
         || request.generation != custody_request.semantic.generation
         || custody_request.caller_role != CallerRoleV1::Core
         || custody_request.caller_program != state.core_program.key.to_bytes()
-        || custody_request.release_set != core.execution_release_set_id.to_bytes()
+        || custody_request.release_set != authenticated.release_set_id.to_bytes()
     {
         return Err(RegistryOpenMarketContinuationErrorV1::InvalidCoreInstruction);
     }
@@ -180,7 +180,7 @@ pub fn build_registry_open_market_continuation_v1(
     let core_instruction_len = u32::try_from(core_instruction.data.len())
         .map_err(|_| RegistryOpenMarketContinuationErrorV1::Identity)?;
     let continuation = RegistryContinuationRequestV1::new(
-        core.execution_release_set_id,
+        authenticated.release_set_id,
         activation_cache_digest,
         core_instruction_digest,
         core_instruction_len,
@@ -251,14 +251,147 @@ pub fn build_registry_open_market_continuation_v1(
             accounts,
             data,
         },
-        observation: core.observation,
-        release_set_id: core.execution_release_set_id,
+        observation: authenticated.observation,
+        release_set_id: authenticated.release_set_id,
         activation_cache_digest,
         core_instruction_digest,
         admission,
         continuation,
         operation: custody_request.operation,
     })
+}
+
+fn authenticate_registry_open(
+    state: &RegistryOpenMarketContinuationStateV1,
+) -> Result<AuthenticatedRegistryOpenV1, RegistryOpenMarketObservationErrorV1> {
+    let accounts = [
+        &state.registry_program,
+        &state.activation_cache,
+        &state.core_program,
+        &state.core_programdata,
+        &state.custody_program,
+        &state.custody_programdata,
+    ];
+    let observation = accounts
+        .first()
+        .map(|account| account.observation)
+        .ok_or(RegistryOpenMarketObservationErrorV1::ObservationMismatch)?;
+    if accounts
+        .iter()
+        .any(|account| account.observation.finality != Finality::Finalized)
+    {
+        return Err(RegistryOpenMarketObservationErrorV1::ObservationNotFinalized);
+    }
+    if accounts
+        .iter()
+        .any(|account| account.observation != observation)
+    {
+        return Err(RegistryOpenMarketObservationErrorV1::ObservationMismatch);
+    }
+    for (left_index, left) in accounts.iter().enumerate() {
+        for right in accounts.iter().skip(left_index.saturating_add(1)) {
+            if left.key == right.key && left != right {
+                return Err(RegistryOpenMarketObservationErrorV1::InconsistentAlias);
+            }
+        }
+    }
+    if state.registry_program.owner != bpf_loader_upgradeable::ID
+        || !state.registry_program.executable
+        || ProgramV3View::parse(&state.registry_program.data).is_err()
+    {
+        return Err(RegistryOpenMarketObservationErrorV1::InvalidRegistry);
+    }
+    if state.activation_cache.owner != state.registry_program.key
+        || state.activation_cache.executable
+    {
+        return Err(RegistryOpenMarketObservationErrorV1::InvalidActivationCache);
+    }
+    let activated = ActivatedExecutionReleaseSetViewV1::decode(&state.activation_cache.data)
+        .map_err(|_| RegistryOpenMarketObservationErrorV1::InvalidActivationCache)?;
+    let release_set_id = activated
+        .execution_release_set_id()
+        .map_err(|_| RegistryOpenMarketObservationErrorV1::InvalidActivationCache)?;
+    let expected_cache = Pubkey::find_program_address(
+        &[ACTIVATION_PDA_DOMAIN_V1, release_set_id.as_bytes()],
+        &state.registry_program.key,
+    )
+    .0;
+    if state.activation_cache.key != expected_cache {
+        return Err(RegistryOpenMarketObservationErrorV1::InvalidActivationCache);
+    }
+    authenticate_current_role(
+        activated,
+        ExecutionRoleV1::Core,
+        &state.core_program,
+        &state.core_programdata,
+    )?;
+    authenticate_current_role(
+        activated,
+        ExecutionRoleV1::Custody,
+        &state.custody_program,
+        &state.custody_programdata,
+    )?;
+    Ok(AuthenticatedRegistryOpenV1 {
+        observation,
+        release_set_id,
+    })
+}
+
+fn authenticate_current_role(
+    activated: ActivatedExecutionReleaseSetViewV1<'_>,
+    role: ExecutionRoleV1,
+    program: &ObservedAccount,
+    programdata: &ObservedAccount,
+) -> Result<(), RegistryOpenMarketObservationErrorV1> {
+    let selected = activated
+        .role(role)
+        .map_err(|_| RegistryOpenMarketObservationErrorV1::InvalidActivationCache)?;
+    let release = selected.release();
+    if release.program().to_bytes() != program.key.to_bytes()
+        || release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
+        || release.programdata() != programdata.key.to_bytes()
+        || program.owner != bpf_loader_upgradeable::ID
+        || programdata.owner != bpf_loader_upgradeable::ID
+        || !program.executable
+        || programdata.executable
+    {
+        return Err(RegistryOpenMarketObservationErrorV1::InvalidDeployment);
+    }
+    let deployment = deployment_observation(program, programdata)?;
+    selected
+        .authenticate_current_deployment(deployment)
+        .map_err(|_| RegistryOpenMarketObservationErrorV1::InvalidDeployment)
+}
+
+fn deployment_observation(
+    program: &ObservedAccount,
+    programdata: &ObservedAccount,
+) -> Result<DeploymentObservationV1, RegistryOpenMarketObservationErrorV1> {
+    let program_view = ProgramV3View::parse(&program.data)
+        .map_err(|_| RegistryOpenMarketObservationErrorV1::InvalidDeployment)?;
+    let expected_programdata =
+        Pubkey::find_program_address(&[program.key.as_ref()], &bpf_loader_upgradeable::ID).0;
+    if program_view.programdata() != programdata.key.to_bytes()
+        || programdata.key != expected_programdata
+    {
+        return Err(RegistryOpenMarketObservationErrorV1::InvalidDeployment);
+    }
+    let programdata_view = ProgramDataV3View::parse(&programdata.data)
+        .map_err(|_| RegistryOpenMarketObservationErrorV1::InvalidDeployment)?;
+    DeploymentObservationV1::new(
+        program.key.to_bytes(),
+        program.owner.to_bytes(),
+        program.executable,
+        programdata.key.to_bytes(),
+        programdata.owner.to_bytes(),
+        programdata.executable,
+        program_view.programdata(),
+        bpf_loader_upgradeable::ID.to_bytes(),
+        programdata_view.deployment_slot(),
+        hash(programdata_view.elf()).to_bytes(),
+        programdata_view.upgrade_authority(),
+    )
+    .map_err(|_| RegistryOpenMarketObservationErrorV1::InvalidDeployment)
 }
 
 fn authenticate_core_frame(

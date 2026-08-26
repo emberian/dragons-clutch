@@ -37,7 +37,9 @@ use crate::{Finality, Observation, ObservedAccount, versioned::PACKET_DATA_BYTES
 /// Chain-derived Core+Trading Registry continuation construction.
 pub mod hot_continuation_v1;
 /// Chain-derived Core+Custody market-open Registry continuation construction.
-pub mod open_market_continuation_v1;
+pub mod open_market_continuation_v1 {
+    pub use dclutch_market_open_v1_operator::*;
+}
 
 /// Exact number of accounts consumed by release-set activation.
 pub const REGISTRY_ACTIVATE_ACCOUNT_COUNT_V1: usize = 26;

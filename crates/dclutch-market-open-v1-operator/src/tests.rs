@@ -135,18 +135,14 @@ impl Fixture {
         let core_input = ArtifactActivationInputV1::new(
             core.artifact,
             core.release,
-            crate::registry::deployment_observation(&core.program, &core.programdata, core.release)
+            super::deployment_observation(&core.program, &core.programdata)
                 .expect("Core deployment"),
         );
         let custody_input = ArtifactActivationInputV1::new(
             custody.artifact,
             custody.release,
-            crate::registry::deployment_observation(
-                &custody.program,
-                &custody.programdata,
-                custody.release,
-            )
-            .expect("Custody deployment"),
+            super::deployment_observation(&custody.program, &custody.programdata)
+                .expect("Custody deployment"),
         );
         let activated = activate_execution_release_set_v1(
             release_set_id,
@@ -391,11 +387,7 @@ fn release_order_privilege_and_alias_substitutions_refuse() {
     );
 
     let mut privilege = fixture.instruction.clone();
-    privilege
-        .accounts
-        .get_mut(15)
-        .expect("payer")
-        .is_signer = false;
+    privilege.accounts.get_mut(15).expect("payer").is_signer = false;
     assert_eq!(
         build_registry_open_market_continuation_v1(&fixture.state, &privilege),
         Err(RegistryOpenMarketContinuationErrorV1::InvalidCoreInstruction)
@@ -428,7 +420,7 @@ fn nonfinal_or_changed_current_deployment_refuses() {
     assert_eq!(
         build_registry_open_market_continuation_v1(&nonfinal, &fixture.instruction),
         Err(RegistryOpenMarketContinuationErrorV1::Registry(
-            RegistryError::ObservationNotFinalized
+            RegistryOpenMarketObservationErrorV1::ObservationNotFinalized
         ))
     );
 
@@ -441,7 +433,7 @@ fn nonfinal_or_changed_current_deployment_refuses() {
     assert_eq!(
         build_registry_open_market_continuation_v1(&changed, &fixture.instruction),
         Err(RegistryOpenMarketContinuationErrorV1::Registry(
-            RegistryError::InvalidDeployment
+            RegistryOpenMarketObservationErrorV1::InvalidDeployment
         ))
     );
 }

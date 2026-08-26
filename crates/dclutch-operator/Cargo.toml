@@ -33,6 +33,7 @@ dclutch-general-config-contract = { path = "../dclutch-general-config-contract" 
 dclutch-kernel = { path = "../dclutch-kernel" }
 dclutch-market-contract = { path = "../dclutch-market-contract" }
 dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
+dclutch-market-open-v1-operator = { path = "../dclutch-market-open-v1-operator" }
 dclutch-product-contract = { path = "../dclutch-product-contract" }
 dclutch-product-runtime-v2 = { path = "../dclutch-product-runtime-v2" }
 dclutch-product-runtime-v2-admission = { path = "../dclutch-product-runtime-v2-admission" }
