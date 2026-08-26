@@ -1,5 +1,11 @@
 use super::{complementary::*, physical::*};
-use dclutch_claims_svm::{ClaimsPlanV1, ClaimsReceiptV1};
+use dclutch_claims_svm::{
+    CallerRole as ClaimsCallerRole, ClaimsPlanV1, ClaimsReceiptV1,
+    affine_batch_v2::{
+        AffineBatchPlanInputV2, AffineBatchPlanV2, AffineBatchPositionV2, AffineBatchReceiptV2,
+        AffineBatchRowInputV2, AffineBatchRowV2, DeltaDirectionV2, SignedMagnitudeV2,
+    },
+};
 use dclutch_custody_contract::{CustodyReceiptV1, ReceiptEvidenceV1};
 use dclutch_direct_codec::{
     intent_v2::CompactIntentV2,
@@ -14,10 +20,92 @@ use dclutch_direct_codec::{
         preview_registered_fill_v2, register_intent_v2, settle_registered_complementary_v2,
     },
 };
-use solana_program::hash::hash;
+use dclutch_market_core_codec::{
+    Binding, CoreMarketViewV1, CoreReferenceObservationV1, CoreState, Identity, MarketIdentity,
+    Phase, Product, Readiness, Realm, ReleaseSet,
+};
+use solana_program::hash::{hash, hashv};
 
 fn id(byte: u8) -> [u8; 32] {
     [byte; 32]
+}
+
+fn identity(byte: u8) -> Identity {
+    Identity::new(id(byte)).expect("identity")
+}
+
+fn binding(program: u8, artifact: u8, semantic: u8) -> Binding {
+    Binding {
+        program: identity(program),
+        artifact_release: identity(artifact),
+        semantic_release: identity(semantic),
+    }
+}
+
+fn core_market_view(outcome_count: u32) -> CoreMarketViewV1 {
+    let release_set = ReleaseSet {
+        release_set_id: identity(13),
+        bindings: [
+            binding(9, 50, 60),
+            binding(11, 51, 61),
+            binding(10, 52, 62),
+            binding(12, 53, 63),
+            binding(20, 54, 64),
+        ],
+    };
+    let product = Product {
+        product_record: identity(24),
+        product_id: identity(25),
+        result_domain: identity(31),
+        portfolio: identity(32),
+        coordinate_domain: identity(33),
+        result_unit: identity(34),
+        claim_basis: identity(35),
+        liability_basis: identity(36),
+        representation_release: identity(37),
+        mapping_release: identity(38),
+        outcome_count,
+    };
+    let realm = Realm {
+        realm_id: identity(14),
+        collateral_mint: identity(15),
+        token_program: identity(16),
+        collateral_release: identity(29),
+    };
+    let state = CoreState {
+        phase: Phase::Open,
+        readiness: Readiness::Consumed,
+        terminal_winner: 0,
+        identity: MarketIdentity {
+            market_id: identity(1),
+            realm_id: realm.realm_id,
+            product_record: product.product_record,
+            product_id: product.product_id,
+            resolution_policy: identity(26),
+            capability_manifest: identity(27),
+            selected_release_set: release_set.release_set_id,
+            registry_program: identity(8),
+            generation: 4,
+        },
+        outstanding_capabilities: 0,
+        rent_beneficiary: identity(90),
+        terminal_receipt: None,
+    };
+    CoreMarketViewV1::authenticate(
+        state,
+        identity(1),
+        identity(40),
+        CoreReferenceObservationV1 {
+            realm,
+            product,
+            release_set,
+            realm_record_authenticated: true,
+            product_graph_authenticated: true,
+            release_set_record_authenticated: true,
+            claims_aggregate_derivation_authenticated: true,
+        },
+    )
+    .expect("Core Market view")
 }
 
 fn config(fee_basis_points: u16, fee_recipient: [u8; 32]) -> DirectExecutionConfigV1 {
@@ -568,11 +656,7 @@ fn consistent_seller_fee_alias_accumulates_both_ordered_credits() {
 fn complementary_context() -> DirectComplementaryPhysicalContextV2 {
     DirectComplementaryPhysicalContextV2 {
         trading_program: id(10),
-        release_set: id(13),
-        market: id(1),
-        realm: id(14),
-        mint: id(15),
-        token_program: id(16),
+        core_market: core_market_view(3),
         custody_authority: id(23),
         parent_request_digest: id(17),
         hoard_token_account: id(41),
@@ -582,7 +666,6 @@ fn complementary_context() -> DirectComplementaryPhysicalContextV2 {
             owner: id(6),
             balance: 100,
         },
-        generation: 4,
     }
 }
 
@@ -733,9 +816,17 @@ fn complementary_custody_routes_are_affine_ordered_and_hostile_bound() {
     assert_eq!(principal.request.amount, 30);
     assert_eq!(principal.request.source, buy_source.account);
     assert_eq!(principal.request.destination, id(41));
+    assert_eq!(principal.request.destination_vault_context, id(40));
+    assert_ne!(principal.request.destination_vault_context, id(1));
     assert_eq!(principal.request.semantic.transfer_index, 0);
     assert_eq!(principal.request.expected_revision, 10);
     assert_eq!(principal.terminal_delegated_amount, Some(0));
+    let mut market_as_hoard_context = principal.request;
+    market_as_hoard_context.destination_vault_context = id(1);
+    assert_eq!(
+        validate_complementary_custody_request_v2(principal, market_as_hoard_context),
+        Err(DirectPhysicalError::Binding)
+    );
     let fee = project_complementary_custody_effect_v2(projection(
         DirectComplementaryCustodyRouteV2::Fee,
         participant,
@@ -822,6 +913,7 @@ fn complementary_custody_routes_are_affine_ordered_and_hostile_bound() {
     assert_eq!(net.request.amount, 45);
     assert_eq!(net.request.source, id(41));
     assert_eq!(net.request.destination, seller.account);
+    assert_eq!(net.request.source_vault_context, id(40));
     assert_eq!(net.request.semantic.transfer_index, 0);
     let merge_fee = project_complementary_custody_effect_v2(merge_projection(
         DirectComplementaryCustodyRouteV2::Fee,
@@ -831,4 +923,189 @@ fn complementary_custody_routes_are_affine_ordered_and_hostile_bound() {
     assert_eq!(merge_fee.request.amount, 5);
     assert_eq!(merge_fee.request.destination, id(22));
     assert_eq!(merge_fee.request.semantic.transfer_index, 1);
+}
+
+fn claims_context(fill: u64) -> DirectComplementaryClaimsContextV2 {
+    DirectComplementaryClaimsContextV2 {
+        core_market: core_market_view(3),
+        claims_program: id(11),
+        parent_request_digest: id(17),
+        linked_basis_record_digest: id(39),
+        claims_market_revision: 7,
+        fill,
+    }
+}
+
+fn signed(direction: DeltaDirectionV2, magnitude: u64) -> SignedMagnitudeV2 {
+    SignedMagnitudeV2::new(direction, magnitude).expect("canonical delta")
+}
+
+fn complementary_claims_packet(
+    action: ComplementaryActionV2,
+    context: DirectComplementaryClaimsContextV2,
+    position_owners: [[u8; 32]; 3],
+    position_revisions: [u64; 3],
+) -> [u8; 552] {
+    let positions = [
+        AffineBatchPositionV2::new(position_owners[0], position_revisions[0]).expect("Position 0"),
+        AffineBatchPositionV2::new(position_owners[1], position_revisions[1]).expect("Position 1"),
+        AffineBatchPositionV2::new(position_owners[2], position_revisions[2]).expect("Position 2"),
+    ];
+    let rows: [AffineBatchRowV2; 3] = core::array::from_fn(|index| {
+        let outcome = u32::try_from(index).expect("outcome");
+        let (source_present, destination_present, source_delta, destination_delta, aggregate) =
+            match action {
+                ComplementaryActionV2::Split => (
+                    false,
+                    true,
+                    signed(DeltaDirectionV2::Neutral, 0),
+                    signed(DeltaDirectionV2::Credit, context.fill),
+                    signed(DeltaDirectionV2::Credit, context.fill),
+                ),
+                ComplementaryActionV2::Merge => (
+                    true,
+                    false,
+                    signed(DeltaDirectionV2::Debit, context.fill),
+                    signed(DeltaDirectionV2::Neutral, 0),
+                    signed(DeltaDirectionV2::Debit, context.fill),
+                ),
+            };
+        AffineBatchRowV2::new(
+            AffineBatchRowInputV2 {
+                source_present,
+                destination_present,
+                outcome,
+                source_position_index: if source_present { outcome } else { 0 },
+                destination_position_index: if destination_present { outcome } else { 0 },
+                aggregate_delta: aggregate,
+                source_delta,
+                destination_delta,
+            },
+            3,
+            3,
+        )
+        .expect("affine row")
+    });
+    let mut bytes = [0_u8; 552];
+    let product = context.core_market.product();
+    AffineBatchPlanV2::encode_into(
+        AffineBatchPlanInputV2 {
+            caller_role: ClaimsCallerRole::Trading,
+            release_set: context.core_market.release_set().release_set_id.to_bytes(),
+            market: context.core_market.market().to_bytes(),
+            request_id: context.parent_request_digest,
+            product_record_digest: product.product_record.to_bytes(),
+            semantic_basis_id: product.liability_basis.to_bytes(),
+            linked_basis_record_digest: context.linked_basis_record_digest,
+            expected_market_revision: context.claims_market_revision,
+            outcome_count: 3,
+        },
+        &positions,
+        &rows,
+        &mut bytes,
+    )
+    .expect("affine packet");
+    bytes
+}
+
+#[test]
+fn complementary_claims_batch_binds_every_runtime_row_and_receipt() {
+    let context = claims_context(100);
+    let (_roots, records, candidates) = complementary_candidates(1);
+    let owners = core::array::from_fn(|index| records.get(index).expect("record").maker());
+    let revisions = [30_u64, 31, 32];
+    let packet =
+        complementary_claims_packet(ComplementaryActionV2::Split, context, owners, revisions);
+    let plan =
+        validate_complementary_claims_plan_v2(ComplementaryActionV2::Split, context, &packet)
+            .expect("Direct-bound affine plan");
+    for index in 0..3_u32 {
+        let slot = usize::try_from(index).expect("slot");
+        validate_complementary_claims_item_v2(
+            ComplementaryActionV2::Split,
+            context,
+            plan,
+            index,
+            DirectComplementaryClaimsParticipantV2 {
+                record_before: *records.get(slot).expect("record"),
+                candidate: *candidates.get(slot).expect("candidate"),
+                expected_position_revision: *revisions.get(slot).expect("revision"),
+            },
+        )
+        .expect("item binding");
+    }
+
+    let (positions, rows) = plan.table_bytes();
+    let receipt = AffineBatchReceiptV2::new(
+        plan,
+        hash(&packet).to_bytes(),
+        hashv(&[positions, rows]).to_bytes(),
+        id(11),
+        id(99),
+        8,
+    )
+    .expect("receipt")
+    .to_bytes();
+    verify_direct_complementary_claims_receipt_v2(
+        ComplementaryActionV2::Split,
+        context,
+        &packet,
+        &receipt,
+        id(99),
+    )
+    .expect("receipt binding");
+    assert_eq!(
+        verify_direct_complementary_claims_receipt_v2(
+            ComplementaryActionV2::Split,
+            context,
+            &packet,
+            &receipt,
+            id(98),
+        ),
+        Err(DirectPhysicalError::Postcondition)
+    );
+}
+
+#[test]
+fn complementary_claims_substitution_and_wrong_action_refuse() {
+    let context = claims_context(100);
+    let (_roots, records, candidates) = complementary_candidates(1);
+    let owners = core::array::from_fn(|index| records.get(index).expect("record").maker());
+    let revisions = [30_u64, 31, 32];
+    let packet =
+        complementary_claims_packet(ComplementaryActionV2::Split, context, owners, revisions);
+    assert_eq!(
+        validate_complementary_claims_plan_v2(ComplementaryActionV2::Merge, context, &packet,),
+        Err(DirectPhysicalError::Binding)
+    );
+    let plan =
+        validate_complementary_claims_plan_v2(ComplementaryActionV2::Split, context, &packet)
+            .expect("split plan");
+    assert_eq!(
+        validate_complementary_claims_item_v2(
+            ComplementaryActionV2::Split,
+            context,
+            plan,
+            1,
+            DirectComplementaryClaimsParticipantV2 {
+                record_before: records[1],
+                candidate: candidates[1],
+                expected_position_revision: 99,
+            },
+        ),
+        Err(DirectPhysicalError::Binding)
+    );
+
+    let hostile_context = DirectComplementaryClaimsContextV2 {
+        linked_basis_record_digest: id(77),
+        ..context
+    };
+    assert_eq!(
+        validate_complementary_claims_plan_v2(
+            ComplementaryActionV2::Split,
+            hostile_context,
+            &packet,
+        ),
+        Err(DirectPhysicalError::Binding)
+    );
 }
