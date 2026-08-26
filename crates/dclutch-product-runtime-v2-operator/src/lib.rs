@@ -26,6 +26,9 @@ use solana_program::{
 };
 use solana_sdk_ids::{system_program, sysvar};
 
+/// Chain-derived unsigned Core Found construction for Runtime V2 Products.
+pub mod found;
+
 /// Compiler or chain-derived instruction refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -43,6 +46,14 @@ pub enum Error {
     RecordMismatch,
     /// A caller buffer had the wrong exact size.
     OutputLength,
+    /// A non-Product finalized record or canonical runtime value refused.
+    InvalidRecord,
+    /// Two independently decoded authorities did not join exactly.
+    CrossRecordMismatch,
+    /// Payer principal could not cover the exact current Market rent top-up.
+    InsufficientPayer,
+    /// Core does not yet authenticate an onchain-selected Rent program.
+    UnselectedRentProgram,
 }
 
 /// Operator result alias.
