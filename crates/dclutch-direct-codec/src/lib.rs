@@ -9,6 +9,10 @@ mod generated_layout;
 mod generated_lifecycle;
 #[rustfmt::skip]
 mod generated_registered_controller;
+#[rustfmt::skip]
+#[allow(missing_docs)]
+mod generated_intent_v2;
+pub mod intent_v2;
 pub mod successor;
 
 /// Bytes in one independently signed compact intent.

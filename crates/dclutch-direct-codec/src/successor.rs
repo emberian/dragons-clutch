@@ -13,7 +13,7 @@
 //! remain in the Trading adapter. These transitions return complete candidates
 //! by value, so a refusal cannot partially mutate caller state.
 
-use crate::CompactIntentV1;
+use crate::intent_v2::{COMPACT_INTENT_BYTES_V2, CancelThroughV2, CompactIntentV2};
 
 #[rustfmt::skip]
 #[allow(missing_docs)]
@@ -26,8 +26,8 @@ pub const DIRECT_EXECUTION_CONFIG_BYTES_V1: usize = generated::DIRECT_EXECUTION_
 pub const DIRECT_ROOT_STATE_BYTES_V1: usize = generated::DIRECT_ROOT_STATE_BYTES_V1;
 /// Per-maker replay-root byte width.
 pub const DIRECT_MAKER_REPLAY_BYTES_V1: usize = generated::DIRECT_MAKER_REPLAY_BYTES_V1;
-/// One live registered-intent record width.
-pub const DIRECT_REGISTERED_RECORD_BYTES_V1: usize = generated::DIRECT_REGISTERED_RECORD_BYTES_V1;
+/// One live successor registered-intent record width.
+pub const DIRECT_REGISTERED_RECORD_BYTES_V2: usize = generated::DIRECT_REGISTERED_RECORD_BYTES_V2;
 /// Basis-point denominator and sole fee floor denominator.
 pub const DIRECT_FEE_DENOMINATOR_V1: u16 = 10_000;
 
@@ -61,29 +61,29 @@ pub const DIRECT_MAKER_REPLAY_DERIVATION_ID_V1: [u8; 32] = [
     0xe2, 0x15, 0x48, 0x89, 0x1e, 0x52, 0xe9, 0x67, 0x5d, 0x12, 0x3e, 0x2f, 0x38, 0xc1, 0x41, 0xf4,
     0xf6, 0x9a, 0x53, 0x33, 0x85, 0xa2, 0x8e, 0x7f, 0x85, 0x5c, 0x63, 0x51, 0xb9, 0xdd, 0x23, 0x8c,
 ];
-/// Live registered-intent schema label.
-pub const DIRECT_REGISTERED_RECORD_SCHEMA_PREIMAGE_V1: &[u8] =
-    b"dclutch/schema/direct-registered-intent-v1";
-/// SHA-256 of [`DIRECT_REGISTERED_RECORD_SCHEMA_PREIMAGE_V1`].
-pub const DIRECT_REGISTERED_RECORD_SCHEMA_ID_V1: [u8; 32] = [
-    0x70, 0xf4, 0x0a, 0x55, 0x3b, 0x86, 0xd0, 0x22, 0xf1, 0x33, 0xac, 0x0f, 0x25, 0xdb, 0x5c, 0x0e,
-    0x51, 0x56, 0x99, 0x99, 0xae, 0xd0, 0x28, 0x56, 0x4e, 0x13, 0x4d, 0xdf, 0x8c, 0xd5, 0x44, 0x94,
+/// Live successor registered-intent schema label.
+pub const DIRECT_REGISTERED_RECORD_SCHEMA_PREIMAGE_V2: &[u8] =
+    b"dclutch/schema/direct-registered-intent-v2";
+/// SHA-256 of [`DIRECT_REGISTERED_RECORD_SCHEMA_PREIMAGE_V2`].
+pub const DIRECT_REGISTERED_RECORD_SCHEMA_ID_V2: [u8; 32] = [
+    0x7f, 0xef, 0xbb, 0x5c, 0x79, 0x3d, 0xf0, 0xf1, 0x68, 0xd3, 0xe6, 0x09, 0x7c, 0x27, 0xbc, 0xa9,
+    0x8f, 0x15, 0x9c, 0xa8, 0x14, 0x79, 0x25, 0x68, 0xd8, 0xec, 0xfa, 0x04, 0x34, 0xfe, 0xe8, 0x24,
 ];
-/// Live registered-intent derivation-policy label.
-pub const DIRECT_REGISTERED_RECORD_DERIVATION_PREIMAGE_V1: &[u8] =
-    b"dclutch/derivation/direct-registered-intent-v1";
-/// SHA-256 of [`DIRECT_REGISTERED_RECORD_DERIVATION_PREIMAGE_V1`].
-pub const DIRECT_REGISTERED_RECORD_DERIVATION_ID_V1: [u8; 32] = [
-    0x28, 0xf6, 0xe4, 0xfe, 0x58, 0x98, 0x1b, 0x4f, 0x70, 0xc0, 0x6e, 0x09, 0x73, 0xa0, 0x25, 0xe3,
-    0x1f, 0xc5, 0x5a, 0x29, 0x09, 0x7d, 0xb1, 0x74, 0x23, 0xc1, 0xd2, 0x21, 0x8e, 0xdc, 0xbb, 0x4e,
+/// Live successor registered-intent derivation-policy label.
+pub const DIRECT_REGISTERED_RECORD_DERIVATION_PREIMAGE_V2: &[u8] =
+    b"dclutch/derivation/direct-registered-intent-v2";
+/// SHA-256 of [`DIRECT_REGISTERED_RECORD_DERIVATION_PREIMAGE_V2`].
+pub const DIRECT_REGISTERED_RECORD_DERIVATION_ID_V2: [u8; 32] = [
+    0xd7, 0x4b, 0x96, 0xdb, 0xf8, 0x6d, 0x3e, 0x60, 0x2c, 0x5f, 0xbd, 0xd1, 0x34, 0x50, 0x08, 0x85,
+    0xaf, 0xcd, 0xb8, 0x41, 0xa8, 0x0b, 0x88, 0x6f, 0x17, 0xb8, 0xc9, 0xfc, 0x1b, 0x49, 0xe8, 0x21,
 ];
 /// Canonical maker-root PDA domain under the selected Trading program.
 pub const DIRECT_MAKER_REPLAY_PDA_DOMAIN_V1: &[u8] = b"dclutch:direct-maker:v1";
-/// Canonical live-record PDA domain under the selected Trading program.
-pub const DIRECT_REGISTERED_RECORD_PDA_DOMAIN_V1: &[u8] = b"dclutch:direct-intent:v1";
+/// Canonical successor live-record PDA domain under the selected Trading program.
+pub const DIRECT_REGISTERED_RECORD_PDA_DOMAIN_V2: &[u8] = b"dclutch:direct-intent:v2";
 
 const _: () = assert!(DIRECT_MAKER_REPLAY_PDA_DOMAIN_V1.len() <= 32);
-const _: () = assert!(DIRECT_REGISTERED_RECORD_PDA_DOMAIN_V1.len() <= 32);
+const _: () = assert!(DIRECT_REGISTERED_RECORD_PDA_DOMAIN_V2.len() <= 32);
 
 /// Stable refusal from the Direct successor config/replay contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -153,9 +153,9 @@ pub type SuccessorResult<T> = core::result::Result<T, SuccessorError>;
 
 /// Descriptor-owned requirements known before account/effect profile selection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DirectSuccessorRequirementsV1;
+pub struct DirectSuccessorRequirementsV2;
 
-impl DirectSuccessorRequirementsV1 {
+impl DirectSuccessorRequirementsV2 {
     /// Require the descriptor's config/root/derivation coordinates.
     pub fn validate(
         config_schema: [u8; 32],
@@ -167,8 +167,8 @@ impl DirectSuccessorRequirementsV1 {
         if config_schema != DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1
             || root_schema != DIRECT_ROOT_SCHEMA_ID_V1
             || maker_derivation_policy != DIRECT_MAKER_REPLAY_DERIVATION_ID_V1
-            || record_schema != DIRECT_REGISTERED_RECORD_SCHEMA_ID_V1
-            || record_derivation_policy != DIRECT_REGISTERED_RECORD_DERIVATION_ID_V1
+            || record_schema != DIRECT_REGISTERED_RECORD_SCHEMA_ID_V2
+            || record_derivation_policy != DIRECT_REGISTERED_RECORD_DERIVATION_ID_V2
         {
             Err(SuccessorError::ConfigSelectionMismatch)
         } else {
@@ -278,14 +278,14 @@ impl DirectExecutionConfigV1 {
 
 /// Canonical signed Direct side tag.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DirectSideV1 {
+pub enum DirectSideV2 {
     /// Claims leave the maker; collateral returns to the signed destination.
     Sell,
     /// Collateral leaves the signed source; claims return to the maker Position.
     Buy,
 }
 
-impl DirectSideV1 {
+impl DirectSideV2 {
     fn decode(value: u8) -> SuccessorResult<Self> {
         match value {
             0 => Ok(Self::Sell),
@@ -297,7 +297,7 @@ impl DirectSideV1 {
 
 /// Canonical signed Direct execution lifecycle.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DirectLifecycleV1 {
+pub enum DirectLifecycleV2 {
     /// Inline execution must consume the full signed maximum.
     InlineFillOrKill,
     /// Inline execution may consume any positive amount through the signed maximum.
@@ -306,7 +306,7 @@ pub enum DirectLifecycleV1 {
     Registered,
 }
 
-impl DirectLifecycleV1 {
+impl DirectLifecycleV2 {
     fn decode(value: u8) -> SuccessorResult<Self> {
         match value {
             0 => Ok(Self::InlineFillOrKill),
@@ -320,12 +320,12 @@ impl DirectLifecycleV1 {
 /// Exact compact intent after the adapter authenticates the immediately
 /// preceding native Ed25519 instruction and signer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AuthenticatedCompactIntentV1 {
+pub struct AuthenticatedCompactIntentV2 {
     maker: [u8; 32],
-    intent: CompactIntentV1,
+    intent: CompactIntentV2,
 }
 
-impl AuthenticatedCompactIntentV1 {
+impl AuthenticatedCompactIntentV2 {
     /// Seal an adapter-authenticated signer/message pair.
     ///
     /// This is a trust-boundary constructor, not a signature verifier. The
@@ -333,7 +333,7 @@ impl AuthenticatedCompactIntentV1 {
     /// identity, adjacency, descriptor offsets, and message equality.
     pub fn from_adjacent_ed25519(
         maker: [u8; 32],
-        intent: CompactIntentV1,
+        intent: CompactIntentV2,
     ) -> SuccessorResult<Self> {
         require_nonzero(maker)?;
         Ok(Self { maker, intent })
@@ -345,13 +345,13 @@ impl AuthenticatedCompactIntentV1 {
     }
 
     /// Exact signed CompactIntent bytes decoded into their sole DTO.
-    pub const fn intent(self) -> CompactIntentV1 {
+    pub const fn intent(self) -> CompactIntentV2 {
         self.intent
     }
 
     /// Project only the replay coordinate used by the maker-root transition.
-    pub fn replay(self) -> SuccessorResult<AuthenticatedIntentReplayV1> {
-        AuthenticatedIntentReplayV1::from_signed_intent(self.maker, self.intent)
+    pub fn replay(self) -> SuccessorResult<AuthenticatedIntentReplayV2> {
+        AuthenticatedIntentReplayV2::from_signed_intent(self.maker, self.intent)
     }
 }
 
@@ -754,18 +754,18 @@ impl MakerReplayRootV1 {
 
 /// Signature-authenticated replay projection of the sole compact intent DTO.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AuthenticatedIntentReplayV1 {
+pub struct AuthenticatedIntentReplayV2 {
     coordinates: DirectCoordinatesV1,
     maker: [u8; 32],
     nonce: u64,
 }
 
-impl AuthenticatedIntentReplayV1 {
+impl AuthenticatedIntentReplayV2 {
     /// Project replay facts from the exact compact message and verified signer.
     ///
     /// Constructing this value does not itself verify a signature. Trading must
     /// expose it only after adjacent native-Ed25519 authentication of `intent`.
-    pub fn from_signed_intent(maker: [u8; 32], intent: CompactIntentV1) -> SuccessorResult<Self> {
+    pub fn from_signed_intent(maker: [u8; 32], intent: CompactIntentV2) -> SuccessorResult<Self> {
         require_nonzero(maker)?;
         Ok(Self {
             coordinates: DirectCoordinatesV1::new(intent.market, intent.generation)?,
@@ -792,7 +792,7 @@ impl AuthenticatedIntentReplayV1 {
 
 /// Whether nonce consumption creates a live registered record.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum NonceConsumptionV1 {
+pub enum NonceConsumptionV2 {
     /// Immediate execution consumes the nonce without a live record.
     Inline,
     /// Resting registration consumes the nonce and creates one live record.
@@ -847,7 +847,7 @@ pub struct MakerReplayCreationPlanV1 {
 
 /// Atomic state candidates after one signed nonce is consumed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct NonceConsumptionResultV1 {
+pub struct NonceConsumptionResultV2 {
     /// Global root after an optional first-use count increment.
     pub root: DirectRootStateV1,
     /// Per-maker replay root after exact nonce/live transition.
@@ -857,13 +857,13 @@ pub struct NonceConsumptionResultV1 {
 }
 
 /// Consume one inline or registered nonce atomically.
-pub fn consume_nonce_v1(
+pub fn consume_nonce_v2(
     root: DirectRootStateV1,
     observation: MakerReplayObservationV1,
-    intent: AuthenticatedIntentReplayV1,
-    consumption: NonceConsumptionV1,
+    intent: AuthenticatedIntentReplayV2,
+    consumption: NonceConsumptionV2,
     first_use: Option<MakerReplayFirstUseV1>,
-) -> SuccessorResult<NonceConsumptionResultV1> {
+) -> SuccessorResult<NonceConsumptionResultV2> {
     if root.phase != DirectRootPhaseV1::Open {
         return Err(SuccessorError::InvalidRootPhase);
     }
@@ -919,14 +919,14 @@ pub fn consume_nonce_v1(
         .next_nonce
         .checked_add(1)
         .ok_or(SuccessorError::NonceMismatch)?;
-    if consumption == NonceConsumptionV1::Register {
+    if consumption == NonceConsumptionV2::Register {
         maker_root.live_count = maker_root
             .live_count
             .checked_add(1)
             .ok_or(SuccessorError::LiveCountInvariant)?;
     }
     maker_root.validate()?;
-    Ok(NonceConsumptionResultV1 {
+    Ok(NonceConsumptionResultV2 {
         root: root_after,
         maker_root,
         creation,
@@ -935,16 +935,16 @@ pub fn consume_nonce_v1(
 
 /// Canonical PDA seeds for one live registered intent.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RegisteredIntentSeedsV1 {
+pub struct RegisteredIntentSeedsV2 {
     market: [u8; 32],
     generation: [u8; 8],
     maker: [u8; 32],
     nonce: [u8; 8],
 }
 
-impl RegisteredIntentSeedsV1 {
+impl RegisteredIntentSeedsV2 {
     /// Project the exact live-record coordinate from an authenticated intent.
-    pub fn new(authenticated: AuthenticatedCompactIntentV1) -> SuccessorResult<Self> {
+    pub fn new(authenticated: AuthenticatedCompactIntentV2) -> SuccessorResult<Self> {
         let replay = authenticated.replay()?;
         Ok(Self {
             market: replay.coordinates.market,
@@ -957,7 +957,7 @@ impl RegisteredIntentSeedsV1 {
     /// Borrow ordered seeds excluding the bump.
     pub fn as_slices(&self) -> [&[u8]; 5] {
         [
-            DIRECT_REGISTERED_RECORD_PDA_DOMAIN_V1,
+            DIRECT_REGISTERED_RECORD_PDA_DOMAIN_V2,
             &self.market,
             &self.generation,
             &self.maker,
@@ -968,9 +968,9 @@ impl RegisteredIntentSeedsV1 {
 
 /// Sole live registered-intent, custody-reservation, and cumulative-fee state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DirectRegisteredIntentV1 {
+pub struct DirectRegisteredIntentV2 {
     maker: [u8; 32],
-    intent: CompactIntentV1,
+    intent: CompactIntentV2,
     filled: u64,
     reserved_claims: u64,
     reserved_collateral: u64,
@@ -981,41 +981,45 @@ pub struct DirectRegisteredIntentV1 {
     bump: u8,
 }
 
-impl DirectRegisteredIntentV1 {
+impl DirectRegisteredIntentV2 {
     /// Hostile-decode a live record against the immutable selected config and Product width.
     pub fn decode_selected(
         config: DirectExecutionConfigV1,
-        outcome_count: u16,
+        outcome_count: u32,
         input: &[u8],
     ) -> SuccessorResult<Self> {
-        exact_width(input, DIRECT_REGISTERED_RECORD_BYTES_V1)?;
+        exact_width(input, DIRECT_REGISTERED_RECORD_BYTES_V2)?;
         exact(
             input,
-            generated::DIRECT_RECORD_MAGIC_OFFSET_V1,
-            &generated::DIRECT_RECORD_MAGIC_V1,
+            generated::DIRECT_RECORD_MAGIC_OFFSET_V2,
+            &generated::DIRECT_RECORD_MAGIC_V2,
         )?;
-        version(input, generated::DIRECT_RECORD_VERSION_OFFSET_V1)?;
-        zero_range(input, generated::DIRECT_RECORD_RESERVED_OFFSET_V1, 5)?;
+        if u16_at(input, generated::DIRECT_RECORD_VERSION_OFFSET_V2)?
+            != generated::DIRECT_REGISTERED_RECORD_VERSION_V2
+        {
+            return Err(SuccessorError::UnsupportedVersion);
+        }
+        zero_range(input, generated::DIRECT_RECORD_RESERVED_OFFSET_V2, 5)?;
         let intent_bytes = slice(
             input,
-            generated::DIRECT_RECORD_INTENT_OFFSET_V1,
-            crate::COMPACT_INTENT_BYTES,
+            generated::DIRECT_RECORD_INTENT_OFFSET_V2,
+            COMPACT_INTENT_BYTES_V2,
         )?;
         let value = Self {
-            maker: array_at(input, generated::DIRECT_RECORD_MAKER_OFFSET_V1)?,
-            intent: CompactIntentV1::decode(intent_bytes)
+            maker: array_at(input, generated::DIRECT_RECORD_MAKER_OFFSET_V2)?,
+            intent: CompactIntentV2::decode(intent_bytes)
                 .map_err(|_| SuccessorError::InvalidIntent)?,
-            filled: u64_at(input, generated::DIRECT_RECORD_FILLED_OFFSET_V1)?,
-            reserved_claims: u64_at(input, generated::DIRECT_RECORD_RESERVED_CLAIMS_OFFSET_V1)?,
+            filled: u64_at(input, generated::DIRECT_RECORD_FILLED_OFFSET_V2)?,
+            reserved_claims: u64_at(input, generated::DIRECT_RECORD_RESERVED_CLAIMS_OFFSET_V2)?,
             reserved_collateral: u64_at(
                 input,
-                generated::DIRECT_RECORD_RESERVED_COLLATERAL_OFFSET_V1,
+                generated::DIRECT_RECORD_RESERVED_COLLATERAL_OFFSET_V2,
             )?,
-            cumulative_gross: u64_at(input, generated::DIRECT_RECORD_CUMULATIVE_GROSS_OFFSET_V1)?,
-            cumulative_fee: u64_at(input, generated::DIRECT_RECORD_CUMULATIVE_FEE_OFFSET_V1)?,
-            rent_owner: array_at(input, generated::DIRECT_RECORD_RENT_OWNER_OFFSET_V1)?,
-            rent_principal: u64_at(input, generated::DIRECT_RECORD_RENT_PRINCIPAL_OFFSET_V1)?,
-            bump: byte_at(input, generated::DIRECT_RECORD_BUMP_OFFSET_V1)?,
+            cumulative_gross: u64_at(input, generated::DIRECT_RECORD_CUMULATIVE_GROSS_OFFSET_V2)?,
+            cumulative_fee: u64_at(input, generated::DIRECT_RECORD_CUMULATIVE_FEE_OFFSET_V2)?,
+            rent_owner: array_at(input, generated::DIRECT_RECORD_RENT_OWNER_OFFSET_V2)?,
+            rent_principal: u64_at(input, generated::DIRECT_RECORD_RENT_PRINCIPAL_OFFSET_V2)?,
+            bump: byte_at(input, generated::DIRECT_RECORD_BUMP_OFFSET_V2)?,
         };
         value.validate(config, outcome_count)?;
         Ok(value)
@@ -1025,33 +1029,33 @@ impl DirectRegisteredIntentV1 {
     pub fn encode_selected(
         self,
         config: DirectExecutionConfigV1,
-        outcome_count: u16,
-    ) -> SuccessorResult<[u8; DIRECT_REGISTERED_RECORD_BYTES_V1]> {
+        outcome_count: u32,
+    ) -> SuccessorResult<[u8; DIRECT_REGISTERED_RECORD_BYTES_V2]> {
         self.validate(config, outcome_count)?;
-        let mut output = [0_u8; DIRECT_REGISTERED_RECORD_BYTES_V1];
+        let mut output = [0_u8; DIRECT_REGISTERED_RECORD_BYTES_V2];
         put(
             &mut output,
-            generated::DIRECT_RECORD_MAGIC_OFFSET_V1,
-            &generated::DIRECT_RECORD_MAGIC_V1,
+            generated::DIRECT_RECORD_MAGIC_OFFSET_V2,
+            &generated::DIRECT_RECORD_MAGIC_V2,
         );
         put(
             &mut output,
-            generated::DIRECT_RECORD_VERSION_OFFSET_V1,
-            &generated::DIRECT_SUCCESSOR_ABI_VERSION_V1.to_le_bytes(),
+            generated::DIRECT_RECORD_VERSION_OFFSET_V2,
+            &generated::DIRECT_REGISTERED_RECORD_VERSION_V2.to_le_bytes(),
         );
         put_byte(
             &mut output,
-            generated::DIRECT_RECORD_BUMP_OFFSET_V1,
+            generated::DIRECT_RECORD_BUMP_OFFSET_V2,
             self.bump,
         );
         put(
             &mut output,
-            generated::DIRECT_RECORD_MAKER_OFFSET_V1,
+            generated::DIRECT_RECORD_MAKER_OFFSET_V2,
             &self.maker,
         );
         put(
             &mut output,
-            generated::DIRECT_RECORD_INTENT_OFFSET_V1,
+            generated::DIRECT_RECORD_INTENT_OFFSET_V2,
             &self
                 .intent
                 .encode()
@@ -1059,48 +1063,48 @@ impl DirectRegisteredIntentV1 {
         );
         put_u64(
             &mut output,
-            generated::DIRECT_RECORD_FILLED_OFFSET_V1,
+            generated::DIRECT_RECORD_FILLED_OFFSET_V2,
             self.filled,
         );
         put_u64(
             &mut output,
-            generated::DIRECT_RECORD_RESERVED_CLAIMS_OFFSET_V1,
+            generated::DIRECT_RECORD_RESERVED_CLAIMS_OFFSET_V2,
             self.reserved_claims,
         );
         put_u64(
             &mut output,
-            generated::DIRECT_RECORD_RESERVED_COLLATERAL_OFFSET_V1,
+            generated::DIRECT_RECORD_RESERVED_COLLATERAL_OFFSET_V2,
             self.reserved_collateral,
         );
         put_u64(
             &mut output,
-            generated::DIRECT_RECORD_CUMULATIVE_GROSS_OFFSET_V1,
+            generated::DIRECT_RECORD_CUMULATIVE_GROSS_OFFSET_V2,
             self.cumulative_gross,
         );
         put_u64(
             &mut output,
-            generated::DIRECT_RECORD_CUMULATIVE_FEE_OFFSET_V1,
+            generated::DIRECT_RECORD_CUMULATIVE_FEE_OFFSET_V2,
             self.cumulative_fee,
         );
         put(
             &mut output,
-            generated::DIRECT_RECORD_RENT_OWNER_OFFSET_V1,
+            generated::DIRECT_RECORD_RENT_OWNER_OFFSET_V2,
             &self.rent_owner,
         );
         put_u64(
             &mut output,
-            generated::DIRECT_RECORD_RENT_PRINCIPAL_OFFSET_V1,
+            generated::DIRECT_RECORD_RENT_PRINCIPAL_OFFSET_V2,
             self.rent_principal,
         );
         Ok(output)
     }
 
-    fn validate(self, config: DirectExecutionConfigV1, outcome_count: u16) -> SuccessorResult<()> {
-        validate_intent_v1(
+    fn validate(self, config: DirectExecutionConfigV1, outcome_count: u32) -> SuccessorResult<()> {
+        validate_intent_v2(
             config,
             self.intent,
             outcome_count,
-            DirectLifecycleV1::Registered,
+            DirectLifecycleV2::Registered,
         )?;
         require_nonzero(self.maker)?;
         require_nonzero(self.rent_owner)?;
@@ -1108,7 +1112,7 @@ impl DirectRegisteredIntentV1 {
             return Err(SuccessorError::InvalidReservation);
         }
         if self.cumulative_gross > self.filled
-            || self.cumulative_fee != fee_floor_v1(self.cumulative_gross, config.fee_basis_points)?
+            || self.cumulative_fee != fee_floor_v2(self.cumulative_gross, config.fee_basis_points)?
         {
             return Err(SuccessorError::InvalidReservation);
         }
@@ -1117,14 +1121,14 @@ impl DirectRegisteredIntentV1 {
             .maximum_fill
             .checked_sub(self.filled)
             .ok_or(SuccessorError::InvalidReservation)?;
-        match DirectSideV1::decode(self.intent.side)? {
-            DirectSideV1::Sell => {
+        match DirectSideV2::decode(self.intent.side)? {
+            DirectSideV2::Sell => {
                 if self.reserved_claims != remaining || self.reserved_collateral != 0 {
                     return Err(SuccessorError::InvalidReservation);
                 }
             }
-            DirectSideV1::Buy => {
-                let initial = maximum_buy_reserve_v1(config, self.intent)?;
+            DirectSideV2::Buy => {
+                let initial = maximum_buy_reserve_v2(config, self.intent)?;
                 let spent = self
                     .cumulative_gross
                     .checked_add(self.cumulative_fee)
@@ -1159,7 +1163,7 @@ impl DirectRegisteredIntentV1 {
     }
 
     /// Sole persisted signed intent.
-    pub const fn intent(self) -> CompactIntentV1 {
+    pub const fn intent(self) -> CompactIntentV2 {
         self.intent
     }
 
@@ -1206,7 +1210,7 @@ impl DirectRegisteredIntentV1 {
 
 /// Dust-tolerant first-use facts for one live registered record.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RegisteredRecordFirstUseV1 {
+pub struct RegisteredRecordFirstUseV2 {
     /// Canonical PDA bump.
     pub bump: u8,
     /// Existing lamports on the empty System-owned candidate.
@@ -1219,13 +1223,13 @@ pub struct RegisteredRecordFirstUseV1 {
 
 /// Atomic candidates from a maker-authorized resting registration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RegisteredIntentCreationV1 {
+pub struct RegisteredIntentCreationV2 {
     /// Global root after possible maker-root first use.
     pub root: DirectRootStateV1,
     /// Maker root after nonce consumption and live-count increment.
     pub maker_root: MakerReplayRootV1,
     /// Sole live registered record.
-    pub record: DirectRegisteredIntentV1,
+    pub record: DirectRegisteredIntentV2,
     /// Present only when the maker replay root is first created.
     pub maker_creation: Option<MakerReplayCreationPlanV1>,
     /// Exact live-record creation funding.
@@ -1233,38 +1237,38 @@ pub struct RegisteredIntentCreationV1 {
 }
 
 /// Register one authenticated CompactIntent and reserve its exact worst case.
-pub fn register_intent_v1(
+pub fn register_intent_v2(
     root: DirectRootStateV1,
     maker_observation: MakerReplayObservationV1,
-    authenticated: AuthenticatedCompactIntentV1,
+    authenticated: AuthenticatedCompactIntentV2,
     config: DirectExecutionConfigV1,
-    outcome_count: u16,
+    outcome_count: u32,
     maker_first_use: Option<MakerReplayFirstUseV1>,
-    record_first_use: RegisteredRecordFirstUseV1,
-) -> SuccessorResult<RegisteredIntentCreationV1> {
-    validate_intent_v1(
+    record_first_use: RegisteredRecordFirstUseV2,
+) -> SuccessorResult<RegisteredIntentCreationV2> {
+    validate_intent_v2(
         config,
         authenticated.intent,
         outcome_count,
-        DirectLifecycleV1::Registered,
+        DirectLifecycleV2::Registered,
     )?;
     require_nonzero(record_first_use.rent_owner)?;
     if record_first_use.rent_principal == 0 {
         return Err(SuccessorError::InvalidRent);
     }
-    let consumed = consume_nonce_v1(
+    let consumed = consume_nonce_v2(
         root,
         maker_observation,
         authenticated.replay()?,
-        NonceConsumptionV1::Register,
+        NonceConsumptionV2::Register,
         maker_first_use,
     )?;
     let (reserved_claims, reserved_collateral) =
-        match DirectSideV1::decode(authenticated.intent.side)? {
-            DirectSideV1::Sell => (authenticated.intent.maximum_fill, 0),
-            DirectSideV1::Buy => (0, maximum_buy_reserve_v1(config, authenticated.intent)?),
+        match DirectSideV2::decode(authenticated.intent.side)? {
+            DirectSideV2::Sell => (authenticated.intent.maximum_fill, 0),
+            DirectSideV2::Buy => (0, maximum_buy_reserve_v2(config, authenticated.intent)?),
         };
-    let record = DirectRegisteredIntentV1 {
+    let record = DirectRegisteredIntentV2 {
         maker: authenticated.maker,
         intent: authenticated.intent,
         filled: 0,
@@ -1280,7 +1284,7 @@ pub fn register_intent_v1(
     let top_up_lamports = record_first_use
         .rent_principal
         .saturating_sub(record_first_use.observed_lamports);
-    Ok(RegisteredIntentCreationV1 {
+    Ok(RegisteredIntentCreationV2 {
         root: consumed.root,
         maker_root: consumed.maker_root,
         record,
@@ -1298,7 +1302,7 @@ pub fn register_intent_v1(
 
 /// Exact asset and rent disposition when one live record closes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RegisteredRecordCloseV1 {
+pub struct RegisteredRecordCloseV2 {
     /// Signed nonce whose replay remains rejected by the maker root.
     pub closed_nonce: u64,
     /// Remaining Sell claims returned to the maker Position.
@@ -1317,16 +1321,16 @@ pub struct RegisteredRecordCloseV1 {
 
 /// Live replacement or terminal close; never both.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RegisteredRecordAfterFillV1 {
+pub enum RegisteredRecordAfterFillV2 {
     /// Partial fill leaves one validated live record.
-    Live(DirectRegisteredIntentV1),
+    Live(DirectRegisteredIntentV2),
     /// Full fill closes the live record and returns residual assets/rent.
-    Closed(RegisteredRecordCloseV1),
+    Closed(RegisteredRecordCloseV2),
 }
 
 /// One participant's exact claim/collateral effects after a checked fill.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RegisteredParticipantEffectsV1 {
+pub struct RegisteredParticipantEffectsV2 {
     /// Claims debited from registered Sell custody.
     pub claim_custody_debit: u64,
     /// Claims credited to a Buy maker Position.
@@ -1343,22 +1347,22 @@ pub struct RegisteredParticipantEffectsV1 {
 
 /// Complete candidate for one participant; physical state remains unchanged.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RegisteredFillCandidateV1 {
+pub struct RegisteredFillCandidateV2 {
     /// Maker replay root after optional live-count decrement.
     pub maker_root: MakerReplayRootV1,
     /// Live replacement or terminal disposition.
-    pub record: RegisteredRecordAfterFillV1,
+    pub record: RegisteredRecordAfterFillV2,
     /// Exact effect projection for Claims and distinct-owner Custody requests.
-    pub effects: RegisteredParticipantEffectsV1,
+    pub effects: RegisteredParticipantEffectsV2,
 }
 
 /// Common checked execution facts for one registered participant.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RegisteredExecutionV1 {
+pub struct RegisteredExecutionV2 {
     /// Immutable descriptor-selected economics.
     pub config: DirectExecutionConfigV1,
     /// Authenticated Product result-domain width.
-    pub outcome_count: u16,
+    pub outcome_count: u32,
     /// Trusted `Clock::get()` slot.
     pub slot: u64,
     /// Positive matcher-selected quantity.
@@ -1369,30 +1373,30 @@ pub struct RegisteredExecutionV1 {
 
 /// One live participant observation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RegisteredParticipantV1 {
+pub struct RegisteredParticipantV2 {
     /// Exact maker replay root.
     pub maker_root: MakerReplayRootV1,
     /// Exact live record.
-    pub record: DirectRegisteredIntentV1,
+    pub record: DirectRegisteredIntentV2,
     /// Current record lamports used only if the fill closes it.
     pub observed_record_lamports: u64,
 }
 
 /// Complete preview input for one participant.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RegisteredFillInputV1 {
+pub struct RegisteredFillInputV2 {
     /// Global Direct root.
     pub root: DirectRootStateV1,
     /// Live participant observation.
-    pub participant: RegisteredParticipantV1,
+    pub participant: RegisteredParticipantV2,
     /// Common execution facts.
-    pub execution: RegisteredExecutionV1,
+    pub execution: RegisteredExecutionV2,
 }
 
 /// Preview one registered partial/full fill with all arithmetic checked.
-pub fn preview_registered_fill_v1(
-    input: RegisteredFillInputV1,
-) -> SuccessorResult<RegisteredFillCandidateV1> {
+pub fn preview_registered_fill_v2(
+    input: RegisteredFillInputV2,
+) -> SuccessorResult<RegisteredFillCandidateV2> {
     let root = input.root;
     let maker_root = input.participant.maker_root;
     let record = input.participant.record;
@@ -1416,15 +1420,15 @@ pub fn preview_registered_fill_v1(
     if fill == 0 {
         return Err(SuccessorError::InvalidIntent);
     }
-    let side = DirectSideV1::decode(record.intent.side)?;
+    let side = DirectSideV2::decode(record.intent.side)?;
     match side {
-        DirectSideV1::Sell if execution_price < record.intent.limit_price => {
+        DirectSideV2::Sell if execution_price < record.intent.limit_price => {
             return Err(SuccessorError::IncompatibleMatch);
         }
-        DirectSideV1::Buy if execution_price > record.intent.limit_price => {
+        DirectSideV2::Buy if execution_price > record.intent.limit_price => {
             return Err(SuccessorError::IncompatibleMatch);
         }
-        DirectSideV1::Sell | DirectSideV1::Buy => {}
+        DirectSideV2::Sell | DirectSideV2::Buy => {}
     }
     if execution_price > config.price_scale {
         return Err(SuccessorError::IncompatibleMatch);
@@ -1436,17 +1440,17 @@ pub fn preview_registered_fill_v1(
     if filled > record.intent.maximum_fill {
         return Err(SuccessorError::InvalidReservation);
     }
-    let gross = exact_quote_v1(fill, execution_price, config.price_scale)?;
+    let gross = exact_quote_v2(fill, execution_price, config.price_scale)?;
     let cumulative_gross = record
         .cumulative_gross
         .checked_add(gross)
         .ok_or(SuccessorError::ArithmeticOverflow)?;
-    let cumulative_fee = fee_floor_v1(cumulative_gross, config.fee_basis_points)?;
+    let cumulative_fee = fee_floor_v2(cumulative_gross, config.fee_basis_points)?;
     let fee_delta = cumulative_fee
         .checked_sub(record.cumulative_fee)
         .ok_or(SuccessorError::InvalidReservation)?;
     let (reserved_claims, reserved_collateral, effects) = match side {
-        DirectSideV1::Sell => {
+        DirectSideV2::Sell => {
             let claims = record
                 .reserved_claims
                 .checked_sub(fill)
@@ -1457,7 +1461,7 @@ pub fn preview_registered_fill_v1(
             (
                 claims,
                 0,
-                RegisteredParticipantEffectsV1 {
+                RegisteredParticipantEffectsV2 {
                     claim_custody_debit: fill,
                     claim_position_credit: 0,
                     gross_collateral_debit: 0,
@@ -1467,7 +1471,7 @@ pub fn preview_registered_fill_v1(
                 },
             )
         }
-        DirectSideV1::Buy => {
+        DirectSideV2::Buy => {
             let debit = gross
                 .checked_add(fee_delta)
                 .ok_or(SuccessorError::ArithmeticOverflow)?;
@@ -1478,7 +1482,7 @@ pub fn preview_registered_fill_v1(
             (
                 0,
                 collateral,
-                RegisteredParticipantEffectsV1 {
+                RegisteredParticipantEffectsV2 {
                     claim_custody_debit: 0,
                     claim_position_credit: fill,
                     gross_collateral_debit: gross,
@@ -1491,19 +1495,19 @@ pub fn preview_registered_fill_v1(
     };
     if filled == record.intent.maximum_fill {
         let maker_root = maker_root.close_live()?;
-        let close = close_record_plan_v1(
+        let close = close_record_plan_v2(
             record,
             reserved_claims,
             reserved_collateral,
             observed_record_lamports,
         )?;
-        Ok(RegisteredFillCandidateV1 {
+        Ok(RegisteredFillCandidateV2 {
             maker_root,
-            record: RegisteredRecordAfterFillV1::Closed(close),
+            record: RegisteredRecordAfterFillV2::Closed(close),
             effects,
         })
     } else {
-        let next = DirectRegisteredIntentV1 {
+        let next = DirectRegisteredIntentV2 {
             filled,
             reserved_claims,
             reserved_collateral,
@@ -1512,9 +1516,9 @@ pub fn preview_registered_fill_v1(
             ..record
         };
         next.validate(config, outcome_count)?;
-        Ok(RegisteredFillCandidateV1 {
+        Ok(RegisteredFillCandidateV2 {
             maker_root,
-            record: RegisteredRecordAfterFillV1::Live(next),
+            record: RegisteredRecordAfterFillV2::Live(next),
             effects,
         })
     }
@@ -1522,11 +1526,11 @@ pub fn preview_registered_fill_v1(
 
 /// Atomic ordinary seller/buyer candidate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RegisteredOrdinarySettlementV1 {
+pub struct RegisteredOrdinarySettlementV2 {
     /// Seller candidate.
-    pub seller: RegisteredFillCandidateV1,
+    pub seller: RegisteredFillCandidateV2,
     /// Buyer candidate.
-    pub buyer: RegisteredFillCandidateV1,
+    pub buyer: RegisteredFillCandidateV2,
     /// Gross amount split into seller net plus seller fee.
     pub gross_collateral: u64,
     /// Net seller destination credit.
@@ -1539,28 +1543,28 @@ pub struct RegisteredOrdinarySettlementV1 {
 
 /// Complete ordinary match observation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RegisteredOrdinaryInputV1 {
+pub struct RegisteredOrdinaryInputV2 {
     /// Global Direct root.
     pub root: DirectRootStateV1,
     /// Registered seller.
-    pub seller: RegisteredParticipantV1,
+    pub seller: RegisteredParticipantV2,
     /// Registered buyer.
-    pub buyer: RegisteredParticipantV1,
+    pub buyer: RegisteredParticipantV2,
     /// Common fill/price/config facts.
-    pub execution: RegisteredExecutionV1,
+    pub execution: RegisteredExecutionV2,
 }
 
 /// Preview one ordinary match. No account or output buffer is mutated.
-pub fn settle_registered_ordinary_v1(
-    input: RegisteredOrdinaryInputV1,
-) -> SuccessorResult<RegisteredOrdinarySettlementV1> {
+pub fn settle_registered_ordinary_v2(
+    input: RegisteredOrdinaryInputV2,
+) -> SuccessorResult<RegisteredOrdinarySettlementV2> {
     let root = input.root;
     let seller_record = input.seller.record;
     let buyer_record = input.buyer.record;
     let seller_intent = seller_record.intent;
     let buyer_intent = buyer_record.intent;
-    if DirectSideV1::decode(seller_intent.side)? != DirectSideV1::Sell
-        || DirectSideV1::decode(buyer_intent.side)? != DirectSideV1::Buy
+    if DirectSideV2::decode(seller_intent.side)? != DirectSideV2::Sell
+        || DirectSideV2::decode(buyer_intent.side)? != DirectSideV2::Buy
         || seller_intent.market != buyer_intent.market
         || seller_intent.generation != buyer_intent.generation
         || seller_intent.outcome != buyer_intent.outcome
@@ -1568,12 +1572,12 @@ pub fn settle_registered_ordinary_v1(
     {
         return Err(SuccessorError::IncompatibleMatch);
     }
-    let seller = preview_registered_fill_v1(RegisteredFillInputV1 {
+    let seller = preview_registered_fill_v2(RegisteredFillInputV2 {
         root,
         participant: input.seller,
         execution: input.execution,
     })?;
-    let buyer = preview_registered_fill_v1(RegisteredFillInputV1 {
+    let buyer = preview_registered_fill_v2(RegisteredFillInputV2 {
         root,
         participant: input.buyer,
         execution: input.execution,
@@ -1590,7 +1594,7 @@ pub fn settle_registered_ordinary_v1(
     let buyer_collateral_debit = gross
         .checked_add(buyer.effects.fee_transfer)
         .ok_or(SuccessorError::ArithmeticOverflow)?;
-    Ok(RegisteredOrdinarySettlementV1 {
+    Ok(RegisteredOrdinarySettlementV2 {
         seller,
         buyer,
         gross_collateral: gross,
@@ -1602,7 +1606,7 @@ pub fn settle_registered_ordinary_v1(
 
 /// Runtime-width complementary split or merge.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ComplementaryActionV1 {
+pub enum ComplementaryActionV2 {
     /// N canonical Buy records mint one complete set.
     Split,
     /// N canonical Sell records burn one complete set.
@@ -1611,7 +1615,7 @@ pub enum ComplementaryActionV1 {
 
 /// Aggregate result over caller-owned candidate scratch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ComplementarySettlementV1 {
+pub struct ComplementarySettlementV2 {
     /// Split vault credit or merge vault debit; always the common fill.
     pub market_vault_transfer: u64,
     /// Sum of cumulative-difference participant fees.
@@ -1619,11 +1623,11 @@ pub struct ComplementarySettlementV1 {
 }
 
 /// Runtime-width complementary participant slices.
-pub struct ComplementaryParticipantsV1<'a> {
+pub struct ComplementaryParticipantsV2<'a> {
     /// Maker roots in canonical outcome order.
     pub maker_roots: &'a [MakerReplayRootV1],
     /// Live records in canonical outcome order.
-    pub records: &'a [DirectRegisteredIntentV1],
+    pub records: &'a [DirectRegisteredIntentV2],
     /// Current record lamports in canonical outcome order.
     pub record_lamports: &'a [u64],
     /// Exact execution prices in canonical outcome order.
@@ -1631,19 +1635,19 @@ pub struct ComplementaryParticipantsV1<'a> {
 }
 
 /// Runtime-width complementary preview input.
-pub struct ComplementaryInputV1<'a> {
+pub struct ComplementaryInputV2<'a> {
     /// Split or merge.
-    pub action: ComplementaryActionV1,
+    pub action: ComplementaryActionV2,
     /// Global Direct root.
     pub root: DirectRootStateV1,
     /// Canonically ordered participant observations.
-    pub participants: ComplementaryParticipantsV1<'a>,
+    pub participants: ComplementaryParticipantsV2<'a>,
     /// Caller-owned, non-authoritative candidate scratch.
-    pub scratch: &'a mut [RegisteredFillCandidateV1],
+    pub scratch: &'a mut [RegisteredFillCandidateV2],
     /// Immutable descriptor-selected economics.
     pub config: DirectExecutionConfigV1,
     /// Authenticated Product result-domain width.
-    pub outcome_count: u16,
+    pub outcome_count: u32,
     /// Trusted `Clock::get()` slot.
     pub slot: u64,
     /// Common positive quantity.
@@ -1655,9 +1659,9 @@ pub struct ComplementaryInputV1<'a> {
 /// `scratch` may change on refusal and is never authority. Records, roots, and
 /// child accounts remain untouched until the adapter observes success, checks
 /// every child CPI receipt, and commits the candidates last.
-pub fn settle_registered_complementary_v1(
-    input: ComplementaryInputV1<'_>,
-) -> SuccessorResult<ComplementarySettlementV1> {
+pub fn settle_registered_complementary_v2(
+    input: ComplementaryInputV2<'_>,
+) -> SuccessorResult<ComplementarySettlementV2> {
     let action = input.action;
     let root = input.root;
     let maker_roots = input.participants.maker_roots;
@@ -1669,7 +1673,7 @@ pub fn settle_registered_complementary_v1(
     let outcome_count = input.outcome_count;
     let slot = input.slot;
     let fill = input.fill;
-    let count = usize::from(outcome_count);
+    let count = usize::try_from(outcome_count).map_err(|_| SuccessorError::ComplementWidth)?;
     if count < 2
         || count > usize::from(u8::MAX) + 1
         || maker_roots.len() != count
@@ -1688,8 +1692,8 @@ pub fn settle_registered_complementary_v1(
         .ok_or(SuccessorError::ComplementWidth)?
         .intent;
     let expected_side = match action {
-        ComplementaryActionV1::Split => DirectSideV1::Buy,
-        ComplementaryActionV1::Merge => DirectSideV1::Sell,
+        ComplementaryActionV2::Split => DirectSideV2::Buy,
+        ComplementaryActionV2::Merge => DirectSideV2::Sell,
     };
     let mut price_sum = 0_u64;
     let mut gross_sum = 0_u64;
@@ -1701,8 +1705,8 @@ pub fn settle_registered_complementary_v1(
         .zip(execution_prices.iter())
         .enumerate()
     {
-        let expected_outcome = u8::try_from(index).map_err(|_| SuccessorError::InvalidOutcome)?;
-        if DirectSideV1::decode(record.intent.side)? != expected_side
+        let expected_outcome = u32::try_from(index).map_err(|_| SuccessorError::InvalidOutcome)?;
+        if DirectSideV2::decode(record.intent.side)? != expected_side
             || record.intent.market != first.market
             || record.intent.generation != first.generation
             || record.intent.outcome != expected_outcome
@@ -1713,14 +1717,14 @@ pub fn settle_registered_complementary_v1(
         {
             return Err(SuccessorError::NonCanonicalComplement);
         }
-        let candidate = preview_registered_fill_v1(RegisteredFillInputV1 {
+        let candidate = preview_registered_fill_v2(RegisteredFillInputV2 {
             root,
-            participant: RegisteredParticipantV1 {
+            participant: RegisteredParticipantV2 {
                 maker_root: *maker_root,
                 record: *record,
                 observed_record_lamports: *lamports,
             },
-            execution: RegisteredExecutionV1 {
+            execution: RegisteredExecutionV2 {
                 config,
                 outcome_count,
                 slot,
@@ -1732,8 +1736,8 @@ pub fn settle_registered_complementary_v1(
             .checked_add(*price)
             .ok_or(SuccessorError::ArithmeticOverflow)?;
         let gross = match action {
-            ComplementaryActionV1::Split => candidate.effects.gross_collateral_debit,
-            ComplementaryActionV1::Merge => candidate.effects.gross_collateral_credit,
+            ComplementaryActionV2::Split => candidate.effects.gross_collateral_debit,
+            ComplementaryActionV2::Merge => candidate.effects.gross_collateral_credit,
         };
         gross_sum = gross_sum
             .checked_add(gross)
@@ -1748,7 +1752,7 @@ pub fn settle_registered_complementary_v1(
     if price_sum != config.price_scale || gross_sum != fill {
         return Err(SuccessorError::NonCanonicalComplement);
     }
-    Ok(ComplementarySettlementV1 {
+    Ok(ComplementarySettlementV2 {
         market_vault_transfer: fill,
         total_fee_transfer: fee_sum,
     })
@@ -1756,52 +1760,54 @@ pub fn settle_registered_complementary_v1(
 
 /// Adapter-authenticated maker kill-switch projection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AuthenticatedCancelThroughV1 {
-    coordinates: DirectCoordinatesV1,
+pub struct AuthenticatedCancelThroughV2 {
     maker: [u8; 32],
-    minimum_live_nonce: u64,
+    message: CancelThroughV2,
 }
 
-impl AuthenticatedCancelThroughV1 {
-    /// Seal exact coordinates only after Trading verifies the adjacent native
-    /// Ed25519 message for this maker.
+impl AuthenticatedCancelThroughV2 {
+    /// Seal the exact canonical message only after Trading verifies the
+    /// adjacent native Ed25519 instruction for this maker.
     pub fn from_adjacent_ed25519(
-        coordinates: DirectCoordinatesV1,
         maker: [u8; 32],
-        minimum_live_nonce: u64,
+        message: CancelThroughV2,
     ) -> SuccessorResult<Self> {
         require_nonzero(maker)?;
-        Ok(Self {
-            coordinates,
-            maker,
-            minimum_live_nonce,
-        })
+        require_nonzero(message.market)?;
+        if message.minimum_live_nonce == 0 {
+            return Err(SuccessorError::MinimumLiveNonceInvariant);
+        }
+        Ok(Self { maker, message })
     }
 
     /// Signed minimum nonce that remains live.
     pub const fn minimum_live_nonce(self) -> u64 {
-        self.minimum_live_nonce
+        self.message.minimum_live_nonce
     }
 }
 
 /// Apply one O(1) maker-authorized invalidation threshold.
-pub fn apply_cancel_through_v1(
+pub fn apply_cancel_through_v2(
     root: DirectRootStateV1,
     maker_root: MakerReplayRootV1,
-    authenticated: AuthenticatedCancelThroughV1,
+    authenticated: AuthenticatedCancelThroughV2,
 ) -> SuccessorResult<MakerReplayRootV1> {
     if root.open_maker_root_count == 0 {
         return Err(SuccessorError::MakerRootCountInvariant);
     }
-    maker_root.validate_coordinate(authenticated.coordinates, authenticated.maker)?;
-    maker_root.cancel_through(authenticated.minimum_live_nonce)
+    let coordinates = DirectCoordinatesV1::new(
+        authenticated.message.market,
+        authenticated.message.generation,
+    )?;
+    maker_root.validate_coordinate(coordinates, authenticated.maker)?;
+    maker_root.cancel_through(authenticated.message.minimum_live_nonce)
 }
 
 /// Exact authority for a terminal live-record unwind.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RegisteredTerminalEvidenceV1 {
+pub enum RegisteredTerminalEvidenceV2 {
     /// Maker reauthenticates the exact signed CompactIntent being cancelled.
-    Cancel(AuthenticatedCompactIntentV1),
+    Cancel(AuthenticatedCompactIntentV2),
     /// Anyone may close strictly after the signed inclusive slot interval.
     Expire {
         /// Trusted `Clock::get()` slot.
@@ -1813,44 +1819,44 @@ pub enum RegisteredTerminalEvidenceV1 {
 
 /// Atomic terminal candidate for a registered intent.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RegisteredTerminalResultV1 {
+pub struct RegisteredTerminalResultV2 {
     /// Maker replay root after exact live-count decrement.
     pub maker_root: MakerReplayRootV1,
     /// Asset and RentCredit disposition.
-    pub close: RegisteredRecordCloseV1,
+    pub close: RegisteredRecordCloseV2,
 }
 
 /// Cancel, expire, or permissionlessly unwind one invalidated live record.
-pub fn terminate_registered_intent_v1(
+pub fn terminate_registered_intent_v2(
     root: DirectRootStateV1,
     maker_root: MakerReplayRootV1,
-    record: DirectRegisteredIntentV1,
+    record: DirectRegisteredIntentV2,
     config: DirectExecutionConfigV1,
-    outcome_count: u16,
-    evidence: RegisteredTerminalEvidenceV1,
+    outcome_count: u32,
+    evidence: RegisteredTerminalEvidenceV2,
     observed_record_lamports: u64,
-) -> SuccessorResult<RegisteredTerminalResultV1> {
+) -> SuccessorResult<RegisteredTerminalResultV2> {
     if root.open_maker_root_count == 0 {
         return Err(SuccessorError::MakerRootCountInvariant);
     }
     record.validate(config, outcome_count)?;
     record.validate_coordinate(maker_root)?;
     match evidence {
-        RegisteredTerminalEvidenceV1::Cancel(authenticated)
+        RegisteredTerminalEvidenceV2::Cancel(authenticated)
             if authenticated.maker == record.maker && authenticated.intent == record.intent => {}
-        RegisteredTerminalEvidenceV1::Expire { slot } if slot > record.intent.valid_through => {}
-        RegisteredTerminalEvidenceV1::Invalidated
+        RegisteredTerminalEvidenceV2::Expire { slot } if slot > record.intent.valid_through => {}
+        RegisteredTerminalEvidenceV2::Invalidated
             if record.intent.nonce < maker_root.minimum_live_nonce => {}
-        RegisteredTerminalEvidenceV1::Cancel(_)
-        | RegisteredTerminalEvidenceV1::Expire { .. }
-        | RegisteredTerminalEvidenceV1::Invalidated => {
+        RegisteredTerminalEvidenceV2::Cancel(_)
+        | RegisteredTerminalEvidenceV2::Expire { .. }
+        | RegisteredTerminalEvidenceV2::Invalidated => {
             return Err(SuccessorError::InvalidTerminal);
         }
     }
     let maker_root = maker_root.close_live()?;
-    Ok(RegisteredTerminalResultV1 {
+    Ok(RegisteredTerminalResultV2 {
         maker_root,
-        close: close_record_plan_v1(
+        close: close_record_plan_v2(
             record,
             record.reserved_claims,
             record.reserved_collateral,
@@ -1859,16 +1865,16 @@ pub fn terminate_registered_intent_v1(
     })
 }
 
-fn close_record_plan_v1(
-    record: DirectRegisteredIntentV1,
+fn close_record_plan_v2(
+    record: DirectRegisteredIntentV2,
     claim_refund: u64,
     collateral_refund: u64,
     observed_lamports: u64,
-) -> SuccessorResult<RegisteredRecordCloseV1> {
+) -> SuccessorResult<RegisteredRecordCloseV2> {
     if observed_lamports < record.rent_principal {
         return Err(SuccessorError::InvalidRent);
     }
-    Ok(RegisteredRecordCloseV1 {
+    Ok(RegisteredRecordCloseV2 {
         closed_nonce: record.intent.nonce,
         claim_refund,
         collateral_refund,
@@ -1879,18 +1885,18 @@ fn close_record_plan_v1(
     })
 }
 
-fn validate_intent_v1(
+fn validate_intent_v2(
     config: DirectExecutionConfigV1,
-    intent: CompactIntentV1,
-    outcome_count: u16,
-    required_lifecycle: DirectLifecycleV1,
+    intent: CompactIntentV2,
+    outcome_count: u32,
+    required_lifecycle: DirectLifecycleV2,
 ) -> SuccessorResult<()> {
     require_nonzero(intent.market)?;
     require_nonzero(intent.collateral_account)?;
-    if DirectLifecycleV1::decode(intent.lifecycle)? != required_lifecycle
-        || DirectSideV1::decode(intent.side).is_err()
+    if DirectLifecycleV2::decode(intent.lifecycle)? != required_lifecycle
+        || DirectSideV2::decode(intent.side).is_err()
         || outcome_count < 2
-        || u16::from(intent.outcome) >= outcome_count
+        || intent.outcome >= outcome_count
         || intent.valid_from > intent.valid_through
         || intent.maximum_fill == 0
         || intent.limit_price > config.price_scale
@@ -1901,19 +1907,19 @@ fn validate_intent_v1(
     Ok(())
 }
 
-fn maximum_buy_reserve_v1(
+fn maximum_buy_reserve_v2(
     config: DirectExecutionConfigV1,
-    intent: CompactIntentV1,
+    intent: CompactIntentV2,
 ) -> SuccessorResult<u64> {
     let product = u128::from(intent.maximum_fill) * u128::from(intent.limit_price);
     let gross = u64::try_from(product / u128::from(config.price_scale))
         .map_err(|_| SuccessorError::ArithmeticOverflow)?;
     gross
-        .checked_add(fee_floor_v1(gross, config.fee_basis_points)?)
+        .checked_add(fee_floor_v2(gross, config.fee_basis_points)?)
         .ok_or(SuccessorError::ArithmeticOverflow)
 }
 
-fn exact_quote_v1(quantity: u64, price: u64, scale: u64) -> SuccessorResult<u64> {
+fn exact_quote_v2(quantity: u64, price: u64, scale: u64) -> SuccessorResult<u64> {
     let product = u128::from(quantity) * u128::from(price);
     let denominator = u128::from(scale);
     if product % denominator != 0 {
@@ -1922,7 +1928,7 @@ fn exact_quote_v1(quantity: u64, price: u64, scale: u64) -> SuccessorResult<u64>
     u64::try_from(product / denominator).map_err(|_| SuccessorError::ArithmeticOverflow)
 }
 
-fn fee_floor_v1(gross: u64, basis_points: u16) -> SuccessorResult<u64> {
+fn fee_floor_v2(gross: u64, basis_points: u16) -> SuccessorResult<u64> {
     let product = u128::from(gross) * u128::from(basis_points);
     u64::try_from(product / u128::from(DIRECT_FEE_DENOMINATOR_V1))
         .map_err(|_| SuccessorError::ArithmeticOverflow)
@@ -1930,7 +1936,7 @@ fn fee_floor_v1(gross: u64, basis_points: u16) -> SuccessorResult<u64> {
 
 /// Exact rent/donation return when one maker root closes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MakerReplayClosePlanV1 {
+pub struct MakerReplayClosePlanV2 {
     /// Immutable RentCredit beneficiary.
     pub rent_owner: [u8; 32],
     /// Exact historical account-rent principal.
@@ -1943,19 +1949,19 @@ pub struct MakerReplayClosePlanV1 {
 
 /// Atomic candidates after one terminal maker-root close.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MakerReplayCloseResultV1 {
+pub struct MakerReplayCloseResultV2 {
     /// Global root after exact count decrement.
     pub root: DirectRootStateV1,
     /// Exact refund classification.
-    pub plan: MakerReplayClosePlanV1,
+    pub plan: MakerReplayClosePlanV2,
 }
 
 /// Close one zero-live maker root after global retirement begins.
-pub fn close_maker_replay_v1(
+pub fn close_maker_replay_v2(
     root: DirectRootStateV1,
     maker_root: MakerReplayRootV1,
     observed_lamports: u64,
-) -> SuccessorResult<MakerReplayCloseResultV1> {
+) -> SuccessorResult<MakerReplayCloseResultV2> {
     if root.phase != DirectRootPhaseV1::Retiring {
         return Err(SuccessorError::InvalidRootPhase);
     }
@@ -1970,12 +1976,12 @@ pub fn close_maker_replay_v1(
         .open_maker_root_count
         .checked_sub(1)
         .ok_or(SuccessorError::MakerRootCountInvariant)?;
-    Ok(MakerReplayCloseResultV1 {
+    Ok(MakerReplayCloseResultV2 {
         root: DirectRootStateV1 {
             open_maker_root_count,
             ..root
         },
-        plan: MakerReplayClosePlanV1 {
+        plan: MakerReplayClosePlanV2 {
             rent_owner: maker_root.rent_owner,
             rent_principal: maker_root.rent_principal,
             unclassified_donation: observed_lamports - maker_root.rent_principal,
@@ -2088,10 +2094,10 @@ mod tests {
             .copy_from_slice(value);
     }
 
-    fn intent(maker: [u8; 32], nonce: u64) -> AuthenticatedIntentReplayV1 {
-        AuthenticatedIntentReplayV1::from_signed_intent(
+    fn intent(maker: [u8; 32], nonce: u64) -> AuthenticatedIntentReplayV2 {
+        AuthenticatedIntentReplayV2::from_signed_intent(
             maker,
-            CompactIntentV1 {
+            CompactIntentV2 {
                 side: 0,
                 outcome: 1,
                 lifecycle: 1,
@@ -2115,14 +2121,14 @@ mod tests {
 
     fn registered_intent(
         side: u8,
-        outcome: u8,
+        outcome: u32,
         market: [u8; 32],
         nonce: u64,
         maximum_fill: u64,
         limit_price: u64,
         collateral: [u8; 32],
-    ) -> CompactIntentV1 {
-        CompactIntentV1 {
+    ) -> CompactIntentV2 {
+        CompactIntentV2 {
             side,
             outcome,
             lifecycle: 2,
@@ -2141,13 +2147,13 @@ mod tests {
     fn register(
         root: DirectRootStateV1,
         maker: [u8; 32],
-        intent: CompactIntentV1,
+        intent: CompactIntentV2,
         bump: u8,
-    ) -> RegisteredIntentCreationV1 {
-        register_intent_v1(
+    ) -> RegisteredIntentCreationV2 {
+        register_intent_v2(
             root,
             MakerReplayObservationV1::Vacant(MakerReplayVacancyV1::new(bump, 3)),
-            AuthenticatedCompactIntentV1::from_adjacent_ed25519(maker, intent)
+            AuthenticatedCompactIntentV2::from_adjacent_ed25519(maker, intent)
                 .expect("authentication projection"),
             config(),
             3,
@@ -2155,7 +2161,7 @@ mod tests {
                 rent_owner: id(90),
                 rent_principal: 100,
             }),
-            RegisteredRecordFirstUseV1 {
+            RegisteredRecordFirstUseV2 {
                 bump,
                 observed_lamports: 7,
                 rent_owner: id(91),
@@ -2168,19 +2174,19 @@ mod tests {
     fn preview(
         root: DirectRootStateV1,
         maker_root: MakerReplayRootV1,
-        record: DirectRegisteredIntentV1,
+        record: DirectRegisteredIntentV2,
         fill: u64,
         execution_price: u64,
         lamports: u64,
-    ) -> SuccessorResult<RegisteredFillCandidateV1> {
-        preview_registered_fill_v1(RegisteredFillInputV1 {
+    ) -> SuccessorResult<RegisteredFillCandidateV2> {
+        preview_registered_fill_v2(RegisteredFillInputV2 {
             root,
-            participant: RegisteredParticipantV1 {
+            participant: RegisteredParticipantV2 {
                 maker_root,
                 record,
                 observed_record_lamports: lamports,
             },
-            execution: RegisteredExecutionV1 {
+            execution: RegisteredExecutionV2 {
                 config: config(),
                 outcome_count: 3,
                 slot: 5,
@@ -2218,39 +2224,39 @@ mod tests {
             maker.encode().expect("encode"),
             generated::DIRECT_MAKER_EXAMPLE_V1
         );
-        let record = DirectRegisteredIntentV1::decode_selected(
+        let record = DirectRegisteredIntentV2::decode_selected(
             config,
             2,
-            &generated::DIRECT_RECORD_EXAMPLE_V1,
+            &generated::DIRECT_RECORD_EXAMPLE_V2,
         )
         .expect("record");
         assert_eq!(record.filled(), 3);
-        assert_eq!(record.reserved_claims(), 1_997);
+        assert_eq!(record.reserved_claims(), 4_997);
         assert_eq!(record.cumulative_gross(), 1);
         assert_eq!(
             record.encode_selected(config, 2).expect("record encode"),
-            generated::DIRECT_RECORD_EXAMPLE_V1
+            generated::DIRECT_RECORD_EXAMPLE_V2
         );
     }
 
     #[test]
     fn config_substitution_and_hostile_economics_refuse() {
         let exact = id(5);
-        DirectSuccessorRequirementsV1::validate(
+        DirectSuccessorRequirementsV2::validate(
             DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1,
             DIRECT_ROOT_SCHEMA_ID_V1,
             DIRECT_MAKER_REPLAY_DERIVATION_ID_V1,
-            DIRECT_REGISTERED_RECORD_SCHEMA_ID_V1,
-            DIRECT_REGISTERED_RECORD_DERIVATION_ID_V1,
+            DIRECT_REGISTERED_RECORD_SCHEMA_ID_V2,
+            DIRECT_REGISTERED_RECORD_DERIVATION_ID_V2,
         )
         .expect("successor descriptor requirements");
         assert_eq!(
-            DirectSuccessorRequirementsV1::validate(
+            DirectSuccessorRequirementsV2::validate(
                 DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1,
                 DIRECT_ROOT_SCHEMA_ID_V1,
                 DIRECT_MAKER_REPLAY_DERIVATION_ID_V1,
                 id(1),
-                DIRECT_REGISTERED_RECORD_DERIVATION_ID_V1,
+                DIRECT_REGISTERED_RECORD_DERIVATION_ID_V2,
             ),
             Err(SuccessorError::ConfigSelectionMismatch)
         );
@@ -2297,11 +2303,11 @@ mod tests {
     #[test]
     fn inline_first_use_is_dust_tolerant_and_counts_once() {
         let root = DirectRootStateV1::new();
-        let consumed = consume_nonce_v1(
+        let consumed = consume_nonce_v2(
             root,
             MakerReplayObservationV1::Vacant(MakerReplayVacancyV1::new(7, 3)),
             intent(id(2), 0),
-            NonceConsumptionV1::Inline,
+            NonceConsumptionV2::Inline,
             Some(MakerReplayFirstUseV1 {
                 rent_owner: id(9),
                 rent_principal: 100,
@@ -2320,20 +2326,20 @@ mod tests {
             })
         );
 
-        let replayed = consume_nonce_v1(
+        let replayed = consume_nonce_v2(
             consumed.root,
             MakerReplayObservationV1::Existing(consumed.maker_root),
             intent(id(2), 0),
-            NonceConsumptionV1::Inline,
+            NonceConsumptionV2::Inline,
             None,
         );
         assert_eq!(replayed, Err(SuccessorError::NonceMismatch));
 
-        let next = consume_nonce_v1(
+        let next = consume_nonce_v2(
             consumed.root,
             MakerReplayObservationV1::Existing(consumed.maker_root),
             intent(id(2), 1),
-            NonceConsumptionV1::Inline,
+            NonceConsumptionV2::Inline,
             None,
         )
         .expect("next nonce");
@@ -2343,11 +2349,11 @@ mod tests {
 
     #[test]
     fn registration_live_and_cancel_through_are_single_owner() {
-        let created = consume_nonce_v1(
+        let created = consume_nonce_v2(
             DirectRootStateV1::new(),
             MakerReplayObservationV1::Vacant(MakerReplayVacancyV1::new(4, 100)),
             intent(id(2), 0),
-            NonceConsumptionV1::Register,
+            NonceConsumptionV2::Register,
             Some(MakerReplayFirstUseV1 {
                 rent_owner: id(9),
                 rent_principal: 100,
@@ -2374,11 +2380,11 @@ mod tests {
 
     #[test]
     fn coordinate_count_and_first_use_substitutions_refuse() {
-        let created = consume_nonce_v1(
+        let created = consume_nonce_v2(
             DirectRootStateV1::new(),
             MakerReplayObservationV1::Vacant(MakerReplayVacancyV1::new(1, 0)),
             intent(id(2), 0),
-            NonceConsumptionV1::Inline,
+            NonceConsumptionV2::Inline,
             Some(MakerReplayFirstUseV1 {
                 rent_owner: id(9),
                 rent_principal: 100,
@@ -2386,31 +2392,31 @@ mod tests {
         )
         .expect("create");
         assert_eq!(
-            consume_nonce_v1(
+            consume_nonce_v2(
                 created.root,
                 MakerReplayObservationV1::Existing(created.maker_root),
                 intent(id(3), 1),
-                NonceConsumptionV1::Inline,
+                NonceConsumptionV2::Inline,
                 None,
             ),
             Err(SuccessorError::MakerCoordinateMismatch)
         );
         assert_eq!(
-            consume_nonce_v1(
+            consume_nonce_v2(
                 DirectRootStateV1::new(),
                 MakerReplayObservationV1::Existing(created.maker_root),
                 intent(id(2), 1),
-                NonceConsumptionV1::Inline,
+                NonceConsumptionV2::Inline,
                 None,
             ),
             Err(SuccessorError::MakerRootCountInvariant)
         );
         assert_eq!(
-            consume_nonce_v1(
+            consume_nonce_v2(
                 created.root,
                 MakerReplayObservationV1::Existing(created.maker_root),
                 intent(id(2), 1),
-                NonceConsumptionV1::Inline,
+                NonceConsumptionV2::Inline,
                 Some(MakerReplayFirstUseV1 {
                     rent_owner: id(9),
                     rent_principal: 100,
@@ -2422,11 +2428,11 @@ mod tests {
 
     #[test]
     fn maker_and_root_closure_conserve_count_and_refund() {
-        let created = consume_nonce_v1(
+        let created = consume_nonce_v2(
             DirectRootStateV1::new(),
             MakerReplayObservationV1::Vacant(MakerReplayVacancyV1::new(8, 3)),
             intent(id(2), 0),
-            NonceConsumptionV1::Inline,
+            NonceConsumptionV2::Inline,
             Some(MakerReplayFirstUseV1 {
                 rent_owner: id(9),
                 rent_principal: 100,
@@ -2434,11 +2440,11 @@ mod tests {
         )
         .expect("create");
         assert_eq!(
-            close_maker_replay_v1(created.root, created.maker_root, 111),
+            close_maker_replay_v2(created.root, created.maker_root, 111),
             Err(SuccessorError::InvalidRootPhase)
         );
         let retiring = created.root.begin_retiring().expect("retiring");
-        let closed = close_maker_replay_v1(retiring, created.maker_root, 111).expect("close maker");
+        let closed = close_maker_replay_v2(retiring, created.maker_root, 111).expect("close maker");
         assert_eq!(closed.root.open_maker_root_count(), 0);
         assert_eq!(closed.plan.rent_owner, id(9));
         assert_eq!(closed.plan.rent_principal, 100);
@@ -2446,7 +2452,7 @@ mod tests {
         assert_eq!(closed.plan.total_credit, 111);
         closed.root.require_closable().expect("root closable");
         assert_eq!(
-            close_maker_replay_v1(closed.root, created.maker_root, 111),
+            close_maker_replay_v2(closed.root, created.maker_root, 111),
             Err(SuccessorError::MakerRootCountInvariant)
         );
     }
@@ -2476,15 +2482,56 @@ mod tests {
             Err(SuccessorError::LiveCountInvariant)
         );
         let selected = DirectExecutionConfigV1::new(1_000_000, 25, id(9)).expect("selected config");
-        let mut bad_record = generated::DIRECT_RECORD_EXAMPLE_V1;
+        let mut bad_record = generated::DIRECT_RECORD_EXAMPLE_V2;
         overwrite(
             &mut bad_record,
-            generated::DIRECT_RECORD_CUMULATIVE_FEE_OFFSET_V1,
+            generated::DIRECT_RECORD_CUMULATIVE_FEE_OFFSET_V2,
             &1_u64.to_le_bytes(),
         );
         assert_eq!(
-            DirectRegisteredIntentV1::decode_selected(selected, 2, &bad_record),
+            DirectRegisteredIntentV2::decode_selected(selected, 2, &bad_record),
             Err(SuccessorError::InvalidReservation)
+        );
+    }
+
+    #[test]
+    fn successor_registration_uses_product_v2_u32_outcomes_and_refuses_legacy_record_width() {
+        let signed = registered_intent(0, 70_000, id(1), 0, 10, 40, id(20));
+        let created = register_intent_v2(
+            DirectRootStateV1::new(),
+            MakerReplayObservationV1::Vacant(MakerReplayVacancyV1::new(3, 0)),
+            AuthenticatedCompactIntentV2::from_adjacent_ed25519(id(2), signed)
+                .expect("authenticated wide intent"),
+            config(),
+            70_001,
+            Some(MakerReplayFirstUseV1 {
+                rent_owner: id(90),
+                rent_principal: 100,
+            }),
+            RegisteredRecordFirstUseV2 {
+                bump: 4,
+                observed_lamports: 0,
+                rent_owner: id(91),
+                rent_principal: 100,
+            },
+        )
+        .expect("wide Product registration");
+        assert_eq!(created.record.intent().outcome, 70_000);
+        let encoded = created
+            .record
+            .encode_selected(config(), 70_001)
+            .expect("wide record encoding");
+        assert_eq!(
+            DirectRegisteredIntentV2::decode_selected(config(), 70_001, &encoded),
+            Ok(created.record)
+        );
+        assert_eq!(
+            DirectRegisteredIntentV2::decode_selected(config(), 70_000, &encoded),
+            Err(SuccessorError::InvalidIntent)
+        );
+        assert_eq!(
+            DirectRegisteredIntentV2::decode_selected(config(), 70_001, &[0_u8; 264]),
+            Err(SuccessorError::InvalidLength)
         );
     }
 
@@ -2497,15 +2544,15 @@ mod tests {
         assert_eq!(created.record.reserved_collateral(), 11);
         assert_eq!(created.record_creation.top_up_lamports, 93);
         assert_eq!(
-            register_intent_v1(
+            register_intent_v2(
                 created.root,
                 MakerReplayObservationV1::Existing(created.maker_root),
-                AuthenticatedCompactIntentV1::from_adjacent_ed25519(id(2), signed)
+                AuthenticatedCompactIntentV2::from_adjacent_ed25519(id(2), signed)
                     .expect("replay projection"),
                 config(),
                 3,
                 None,
-                RegisteredRecordFirstUseV1 {
+                RegisteredRecordFirstUseV2 {
                     bump: 3,
                     observed_lamports: 0,
                     rent_owner: id(91),
@@ -2526,11 +2573,11 @@ mod tests {
                 .expect("fee sum");
             maker_root = candidate.maker_root;
             match candidate.record {
-                RegisteredRecordAfterFillV1::Live(next) => {
+                RegisteredRecordAfterFillV2::Live(next) => {
                     assert!(step < 9);
                     record = next;
                 }
-                RegisteredRecordAfterFillV1::Closed(close) => {
+                RegisteredRecordAfterFillV2::Closed(close) => {
                     assert_eq!(step, 9);
                     assert_eq!(close.collateral_refund, 0);
                     assert_eq!(close.unclassified_donation, 7);
@@ -2560,19 +2607,19 @@ mod tests {
             registered_intent(1, 1, id(1), 0, 100, 60, id(31)),
             3,
         );
-        let input = RegisteredOrdinaryInputV1 {
+        let input = RegisteredOrdinaryInputV2 {
             root: buyer.root,
-            seller: RegisteredParticipantV1 {
+            seller: RegisteredParticipantV2 {
                 maker_root: seller.maker_root,
                 record: seller.record,
                 observed_record_lamports: 100,
             },
-            buyer: RegisteredParticipantV1 {
+            buyer: RegisteredParticipantV2 {
                 maker_root: buyer.maker_root,
                 record: buyer.record,
                 observed_record_lamports: 100,
             },
-            execution: RegisteredExecutionV1 {
+            execution: RegisteredExecutionV2 {
                 config: config(),
                 outcome_count: 3,
                 slot: 5,
@@ -2580,7 +2627,7 @@ mod tests {
                 execution_price: 50,
             },
         };
-        let settled = settle_registered_ordinary_v1(input).expect("ordinary");
+        let settled = settle_registered_ordinary_v2(input).expect("ordinary");
         assert_eq!(settled.gross_collateral, 10);
         assert_eq!(settled.seller_net_collateral_credit, 9);
         assert_eq!(settled.buyer_collateral_debit, 11);
@@ -2588,8 +2635,8 @@ mod tests {
         assert_eq!(settled.seller.effects.claim_custody_debit, 20);
         assert_eq!(settled.buyer.effects.claim_position_credit, 20);
         assert_eq!(
-            settle_registered_ordinary_v1(RegisteredOrdinaryInputV1 {
-                execution: RegisteredExecutionV1 {
+            settle_registered_ordinary_v2(RegisteredOrdinaryInputV2 {
+                execution: RegisteredExecutionV2 {
                     execution_price: 39,
                     ..input.execution
                 },
@@ -2603,42 +2650,42 @@ mod tests {
     fn terminal_paths_refuse_substitution_and_preserve_refunds() {
         let signed = registered_intent(0, 1, id(1), 0, 10, 40, id(20));
         let created = register(DirectRootStateV1::new(), id(2), signed, 4);
-        let wrong = AuthenticatedCompactIntentV1::from_adjacent_ed25519(
+        let wrong = AuthenticatedCompactIntentV2::from_adjacent_ed25519(
             id(2),
-            CompactIntentV1 { nonce: 1, ..signed },
+            CompactIntentV2 { nonce: 1, ..signed },
         )
         .expect("wrong auth projection");
         assert_eq!(
-            terminate_registered_intent_v1(
+            terminate_registered_intent_v2(
                 created.root,
                 created.maker_root,
                 created.record,
                 config(),
                 3,
-                RegisteredTerminalEvidenceV1::Cancel(wrong),
+                RegisteredTerminalEvidenceV2::Cancel(wrong),
                 100,
             ),
             Err(SuccessorError::InvalidTerminal)
         );
         assert_eq!(
-            terminate_registered_intent_v1(
+            terminate_registered_intent_v2(
                 created.root,
                 created.maker_root,
                 created.record,
                 config(),
                 3,
-                RegisteredTerminalEvidenceV1::Expire { slot: 20 },
+                RegisteredTerminalEvidenceV2::Expire { slot: 20 },
                 100,
             ),
             Err(SuccessorError::InvalidTerminal)
         );
-        let expired = terminate_registered_intent_v1(
+        let expired = terminate_registered_intent_v2(
             created.root,
             created.maker_root,
             created.record,
             config(),
             3,
-            RegisteredTerminalEvidenceV1::Expire { slot: 21 },
+            RegisteredTerminalEvidenceV2::Expire { slot: 21 },
             109,
         )
         .expect("expiry");
@@ -2652,26 +2699,42 @@ mod tests {
     fn cancel_through_is_strict_and_invalidated_close_is_permissionless() {
         let signed = registered_intent(0, 0, id(1), 0, 10, 40, id(20));
         let created = register(DirectRootStateV1::new(), id(2), signed, 4);
-        let kill = AuthenticatedCancelThroughV1::from_adjacent_ed25519(
-            DirectCoordinatesV1::new(id(1), 4).expect("coordinates"),
+        let kill = AuthenticatedCancelThroughV2::from_adjacent_ed25519(
             id(2),
-            1,
+            CancelThroughV2 {
+                market: id(1),
+                generation: 4,
+                minimum_live_nonce: 1,
+            },
         )
         .expect("kill switch auth");
         let invalidated =
-            apply_cancel_through_v1(created.root, created.maker_root, kill).expect("invalidate");
+            apply_cancel_through_v2(created.root, created.maker_root, kill).expect("invalidate");
         assert_eq!(invalidated.minimum_live_nonce(), 1);
         assert_eq!(
-            apply_cancel_through_v1(created.root, invalidated, kill),
+            apply_cancel_through_v2(created.root, invalidated, kill),
             Err(SuccessorError::MinimumLiveNonceInvariant)
         );
-        let closed = terminate_registered_intent_v1(
+        let wrong_market = AuthenticatedCancelThroughV2::from_adjacent_ed25519(
+            id(2),
+            CancelThroughV2 {
+                market: id(9),
+                generation: 4,
+                minimum_live_nonce: 1,
+            },
+        )
+        .expect("wrong-market signed message");
+        assert_eq!(
+            apply_cancel_through_v2(created.root, created.maker_root, wrong_market),
+            Err(SuccessorError::MakerCoordinateMismatch)
+        );
+        let closed = terminate_registered_intent_v2(
             created.root,
             invalidated,
             created.record,
             config(),
             3,
-            RegisteredTerminalEvidenceV1::Invalidated,
+            RegisteredTerminalEvidenceV2::Invalidated,
             100,
         )
         .expect("permissionless invalidated close");
@@ -2700,12 +2763,12 @@ mod tests {
         .record; 3];
         for (index, price) in prices.iter().copied().enumerate() {
             let maker = id(u8::try_from(index + 10).expect("maker byte"));
-            let outcome = u8::try_from(index).expect("outcome");
+            let outcome = u32::try_from(index).expect("outcome");
             let creation = register(
                 root,
                 maker,
                 registered_intent(1, outcome, id(1), 0, 100, price, id(30)),
-                outcome,
+                u8::try_from(index).expect("bump"),
             );
             root = creation.root;
             *buy_roots.get_mut(index).expect("root slot") = creation.maker_root;
@@ -2721,10 +2784,10 @@ mod tests {
         )
         .expect("seed candidate");
         let mut scratch = [seed; 3];
-        let split = settle_registered_complementary_v1(ComplementaryInputV1 {
-            action: ComplementaryActionV1::Split,
+        let split = settle_registered_complementary_v2(ComplementaryInputV2 {
+            action: ComplementaryActionV2::Split,
             root,
-            participants: ComplementaryParticipantsV1 {
+            participants: ComplementaryParticipantsV2 {
                 maker_roots: &buy_roots,
                 records: &buy_records,
                 record_lamports: &[100; 3],
@@ -2742,7 +2805,7 @@ mod tests {
         assert!(
             scratch.iter().all(|candidate| matches!(
                 candidate.record,
-                RegisteredRecordAfterFillV1::Closed(_)
+                RegisteredRecordAfterFillV2::Closed(_)
             ))
         );
 
@@ -2750,10 +2813,10 @@ mod tests {
         let first_maker = aliased.first().expect("first record").maker;
         aliased.get_mut(1).expect("second record").maker = first_maker;
         assert_eq!(
-            settle_registered_complementary_v1(ComplementaryInputV1 {
-                action: ComplementaryActionV1::Split,
+            settle_registered_complementary_v2(ComplementaryInputV2 {
+                action: ComplementaryActionV2::Split,
                 root,
-                participants: ComplementaryParticipantsV1 {
+                participants: ComplementaryParticipantsV2 {
                     maker_roots: &buy_roots,
                     records: &aliased,
                     record_lamports: &[100; 3],
@@ -2773,21 +2836,21 @@ mod tests {
         let mut sell_records = buy_records;
         for (index, price) in prices.iter().copied().enumerate() {
             let maker = id(u8::try_from(index + 20).expect("maker byte"));
-            let outcome = u8::try_from(index).expect("outcome");
+            let outcome = u32::try_from(index).expect("outcome");
             let creation = register(
                 sell_root,
                 maker,
                 registered_intent(0, outcome, id(1), 0, 100, price, id(40)),
-                outcome,
+                u8::try_from(index).expect("bump"),
             );
             sell_root = creation.root;
             *sell_roots.get_mut(index).expect("root slot") = creation.maker_root;
             *sell_records.get_mut(index).expect("record slot") = creation.record;
         }
-        let merge = settle_registered_complementary_v1(ComplementaryInputV1 {
-            action: ComplementaryActionV1::Merge,
+        let merge = settle_registered_complementary_v2(ComplementaryInputV2 {
+            action: ComplementaryActionV2::Merge,
             root: sell_root,
-            participants: ComplementaryParticipantsV1 {
+            participants: ComplementaryParticipantsV2 {
                 maker_roots: &sell_roots,
                 records: &sell_records,
                 record_lamports: &[100; 3],
@@ -2811,11 +2874,11 @@ mod tests {
             open_maker_root_count: u64::MAX,
         };
         assert_eq!(
-            consume_nonce_v1(
+            consume_nonce_v2(
                 root,
                 MakerReplayObservationV1::Vacant(MakerReplayVacancyV1::new(1, 0)),
                 intent(id(2), 0),
-                NonceConsumptionV1::Inline,
+                NonceConsumptionV2::Inline,
                 Some(MakerReplayFirstUseV1 {
                     rent_owner: id(9),
                     rent_principal: 100,

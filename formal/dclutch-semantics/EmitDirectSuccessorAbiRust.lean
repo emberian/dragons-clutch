@@ -21,7 +21,8 @@ def main : IO Unit := do
   IO.println s!"pub(crate) const DIRECT_EXECUTION_CONFIG_BYTES_V1: usize = {configBytes};"
   IO.println s!"pub(crate) const DIRECT_ROOT_STATE_BYTES_V1: usize = {rootBytes};"
   IO.println s!"pub(crate) const DIRECT_MAKER_REPLAY_BYTES_V1: usize = {makerBytes};"
-  IO.println s!"pub(crate) const DIRECT_REGISTERED_RECORD_BYTES_V1: usize = {recordBytes};"
+  IO.println s!"pub(crate) const DIRECT_REGISTERED_RECORD_VERSION_V2: u16 = {recordVersion};"
+  IO.println s!"pub(crate) const DIRECT_REGISTERED_RECORD_BYTES_V2: usize = {recordBytes};"
   emitBytes "DIRECT_CONFIG_MAGIC_V1" configMagic
   for field in configLayout do
     IO.println s!"pub(crate) const {ConfigField.rustName field.spec.name}: usize = {field.offset};"
@@ -31,7 +32,7 @@ def main : IO Unit := do
   emitBytes "DIRECT_MAKER_MAGIC_V1" makerMagic
   for field in makerLayout do
     IO.println s!"pub(crate) const {MakerField.rustName field.spec.name}: usize = {field.offset};"
-  emitBytes "DIRECT_RECORD_MAGIC_V1" recordMagic
+  emitBytes "DIRECT_RECORD_MAGIC_V2" recordMagic
   for field in recordLayout do
     IO.println s!"pub(crate) const {RecordField.rustName field.spec.name}: usize = {field.offset};"
   IO.println ""
@@ -42,4 +43,4 @@ def main : IO Unit := do
   IO.println "#[cfg(test)]"
   emitBytes "DIRECT_MAKER_EXAMPLE_V1" (encodeMakerRootStateV1 Examples.maker)
   IO.println "#[cfg(test)]"
-  emitBytes "DIRECT_RECORD_EXAMPLE_V1" (encodeRegisteredRecordStateV1 Examples.record)
+  emitBytes "DIRECT_RECORD_EXAMPLE_V2" (encodeRegisteredRecordStateV2 Examples.record)

@@ -1,5 +1,6 @@
 import DClutchSemantics.AbiSchema
 import DClutchSemantics.DirectControllerCodec
+import DClutchSemantics.DirectIntentV2Codec
 import DClutchSemantics.DirectSuccessor
 
 /-!
@@ -16,12 +17,14 @@ namespace DClutch.DirectSuccessorAbi
 
 open DClutch.AbiSchema
 open DClutch.DirectControllerCodec
+open DClutch.DirectIntentV2Codec
 
 def configMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x44, 0x45, 0x43, 0x31]
 def rootMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x44, 0x52, 0x54, 0x31]
 def makerMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x44, 0x4d, 0x52, 0x31]
-def recordMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x44, 0x52, 0x49, 0x31]
+def recordMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x44, 0x52, 0x49, 0x32]
 def version : Nat := 1
+def recordVersion : Nat := 2
 
 inductive ConfigField where
   | magic | version | reservedA | priceScale | feeBasisPoints | reservedB | feeRecipient
@@ -157,7 +160,7 @@ inductive RecordField where
 def recordSchema : List (FieldSpec RecordField) := [
   ⟨.magic, .bytes 8⟩, ⟨.version, .u16⟩, ⟨.bump, .u8⟩,
   ⟨.reserved, .reserved 5⟩, ⟨.maker, .bytes 32⟩,
-  ⟨.intent, .nested compactIntentBytes⟩, ⟨.filled, .u64⟩,
+  ⟨.intent, .nested compactIntentBytesV2⟩, ⟨.filled, .u64⟩,
   ⟨.reservedClaims, .u64⟩, ⟨.reservedCollateral, .u64⟩,
   ⟨.cumulativeGross, .u64⟩, ⟨.cumulativeFee, .u64⟩,
   ⟨.rentOwner, .bytes 32⟩, ⟨.rentPrincipal, .u64⟩
@@ -181,26 +184,26 @@ def offset (field : RecordField) : Nat := (coordinate field).1
 def width (field : RecordField) : Nat := (coordinate field).2
 
 def rustName : RecordField → String
-  | .magic => "DIRECT_RECORD_MAGIC_OFFSET_V1"
-  | .version => "DIRECT_RECORD_VERSION_OFFSET_V1"
-  | .bump => "DIRECT_RECORD_BUMP_OFFSET_V1"
-  | .reserved => "DIRECT_RECORD_RESERVED_OFFSET_V1"
-  | .maker => "DIRECT_RECORD_MAKER_OFFSET_V1"
-  | .intent => "DIRECT_RECORD_INTENT_OFFSET_V1"
-  | .filled => "DIRECT_RECORD_FILLED_OFFSET_V1"
-  | .reservedClaims => "DIRECT_RECORD_RESERVED_CLAIMS_OFFSET_V1"
-  | .reservedCollateral => "DIRECT_RECORD_RESERVED_COLLATERAL_OFFSET_V1"
-  | .cumulativeGross => "DIRECT_RECORD_CUMULATIVE_GROSS_OFFSET_V1"
-  | .cumulativeFee => "DIRECT_RECORD_CUMULATIVE_FEE_OFFSET_V1"
-  | .rentOwner => "DIRECT_RECORD_RENT_OWNER_OFFSET_V1"
-  | .rentPrincipal => "DIRECT_RECORD_RENT_PRINCIPAL_OFFSET_V1"
+  | .magic => "DIRECT_RECORD_MAGIC_OFFSET_V2"
+  | .version => "DIRECT_RECORD_VERSION_OFFSET_V2"
+  | .bump => "DIRECT_RECORD_BUMP_OFFSET_V2"
+  | .reserved => "DIRECT_RECORD_RESERVED_OFFSET_V2"
+  | .maker => "DIRECT_RECORD_MAKER_OFFSET_V2"
+  | .intent => "DIRECT_RECORD_INTENT_OFFSET_V2"
+  | .filled => "DIRECT_RECORD_FILLED_OFFSET_V2"
+  | .reservedClaims => "DIRECT_RECORD_RESERVED_CLAIMS_OFFSET_V2"
+  | .reservedCollateral => "DIRECT_RECORD_RESERVED_COLLATERAL_OFFSET_V2"
+  | .cumulativeGross => "DIRECT_RECORD_CUMULATIVE_GROSS_OFFSET_V2"
+  | .cumulativeFee => "DIRECT_RECORD_CUMULATIVE_FEE_OFFSET_V2"
+  | .rentOwner => "DIRECT_RECORD_RENT_OWNER_OFFSET_V2"
+  | .rentPrincipal => "DIRECT_RECORD_RENT_PRINCIPAL_OFFSET_V2"
 
 end RecordField
 
 theorem config_width : configBytes = 64 := by native_decide
 theorem root_width : rootBytes = 24 := by native_decide
 theorem maker_width : makerBytes = 152 := by native_decide
-theorem record_width : recordBytes = 264 := by native_decide
+theorem record_width : recordBytes = 268 := by native_decide
 
 theorem config_names_unique : (configSchema.map fun field => field.name).Nodup := by
   native_decide
@@ -238,10 +241,10 @@ theorem maker_coordinates : coordinates makerLayout = [
 
 theorem record_coordinates : coordinates recordLayout = [
     (.magic, 0, 8), (.version, 8, 2), (.bump, 10, 1), (.reserved, 11, 5),
-    (.maker, 16, 32), (.intent, 48, 136), (.filled, 184, 8),
-    (.reservedClaims, 192, 8), (.reservedCollateral, 200, 8),
-    (.cumulativeGross, 208, 8), (.cumulativeFee, 216, 8),
-    (.rentOwner, 224, 32), (.rentPrincipal, 256, 8)] := by native_decide
+    (.maker, 16, 32), (.intent, 48, 140), (.filled, 188, 8),
+    (.reservedClaims, 196, 8), (.reservedCollateral, 204, 8),
+    (.cumulativeGross, 212, 8), (.cumulativeFee, 220, 8),
+    (.rentOwner, 228, 32), (.rentPrincipal, 260, 8)] := by native_decide
 
 def zeroBytes32 : Bytes32 := fun _ => 0
 def bytesNonzero (bytes : Bytes32) : Bool := (encodeBytes32 bytes).any (fun byte => byte != 0)
@@ -315,10 +318,10 @@ theorem encode_maker_length (root : MakerRootStateV1) :
     Codec.encodeLE_length, encodeBytes32_length, zeros]
   native_decide
 
-structure RegisteredRecordStateV1 where
+structure RegisteredRecordStateV2 where
   bump : UInt8
   maker : Bytes32
-  intent : CompactIntentV1
+  intent : CompactIntentV2
   filled : Nat
   reservedClaims : Nat
   reservedCollateral : Nat
@@ -327,13 +330,13 @@ structure RegisteredRecordStateV1 where
   rentOwner : Bytes32
   rentPrincipal : Nat
 
-def encodeRegisteredRecordStateV1 (record : RegisteredRecordStateV1) : List UInt8 :=
+def encodeRegisteredRecordStateV2 (record : RegisteredRecordStateV2) : List UInt8 :=
   recordMagic ++
-  Codec.encodeLE 2 version ++
+  Codec.encodeLE 2 recordVersion ++
   [record.bump] ++
   zeros 5 ++
   encodeBytes32 record.maker ++
-  encodeCompactIntentV1 record.intent ++
+  encodeCompactIntentV2 record.intent ++
   Codec.encodeLE 8 record.filled ++
   Codec.encodeLE 8 record.reservedClaims ++
   Codec.encodeLE 8 record.reservedCollateral ++
@@ -342,10 +345,10 @@ def encodeRegisteredRecordStateV1 (record : RegisteredRecordStateV1) : List UInt
   encodeBytes32 record.rentOwner ++
   Codec.encodeLE 8 record.rentPrincipal
 
-theorem encode_record_length (record : RegisteredRecordStateV1) :
-    (encodeRegisteredRecordStateV1 record).length = recordBytes := by
-  simp [encodeRegisteredRecordStateV1, recordMagic, recordBytes, recordSchema,
-    Codec.encodeLE_length, encodeBytes32_length, encodeCompactIntentV1_length, zeros]
+theorem encode_record_length (record : RegisteredRecordStateV2) :
+    (encodeRegisteredRecordStateV2 record).length = recordBytes := by
+  simp [encodeRegisteredRecordStateV2, recordMagic, recordBytes, recordSchema,
+    Codec.encodeLE_length, encodeBytes32_length, DirectIntentV2Codec.encode_length, zeros]
   native_decide
 
 namespace Examples
@@ -372,12 +375,12 @@ def maker : MakerRootStateV1 := {
   rentPrincipal := 2_000_000
 }
 
-def record : RegisteredRecordStateV1 := {
+def record : RegisteredRecordStateV2 := {
   bump := 6
   maker := bytes32 2
-  intent := { DirectControllerCodec.Examples.sellerIntent with lifecycle := 2 }
+  intent := { DirectIntentV2Codec.Examples.intent with side := 0, outcome := 1 }
   filled := 3
-  reservedClaims := 1997
+  reservedClaims := 4997
   reservedCollateral := 0
   cumulativeGross := 1
   cumulativeFee := 0
@@ -389,7 +392,7 @@ theorem exact_example_widths :
     (encodeExecutionConfigV1 config).length = 64 ∧
     (encodeRootStateV1 root).length = 24 ∧
     (encodeMakerRootStateV1 maker).length = 152 ∧
-    (encodeRegisteredRecordStateV1 record).length = 264 := by native_decide
+    (encodeRegisteredRecordStateV2 record).length = 268 := by native_decide
 
 theorem zero_recipient_is_not_valid : bytesNonzero zeroBytes32 = false := by native_decide
 
