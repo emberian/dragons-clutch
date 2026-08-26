@@ -17,6 +17,7 @@ pub mod liability_basis_state_v2;
 pub mod protocol_position_v2;
 mod request_layout;
 pub mod signed_delta_v3;
+pub mod sparse_native_transfer_v1;
 
 pub use request_layout::ClaimsPlanLayoutV1;
 
