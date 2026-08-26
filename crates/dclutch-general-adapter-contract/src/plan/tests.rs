@@ -245,19 +245,29 @@ fn freeze_initialize_and_settlement_emit_plans_without_child_authority() {
     let mut first_output = [0x22; GENERAL_CHILD_PLAN_HEADER_BYTES_V2 + 8];
     let mut second_scratch = [];
     let mut second_output = [];
-    let summary = evaluate_settlement_v2(
-        SettlementPlanViewV2 {
-            action: Action::Collect,
-            cursor_before: &settlement,
-            certificate: &fixture.certificate,
-            page: Some(&fixture.page),
-            context: ExecutionContextV1 {
-                market_id: id(9),
-                release_set_id: id(10),
-            },
-            expected_revision: 0,
-            surplus_route: None,
+    let settlement_view = SettlementPlanViewV2 {
+        action: Action::Collect,
+        cursor_before: &settlement,
+        certificate: &fixture.certificate,
+        page: Some(&fixture.page),
+        context: ExecutionContextV1 {
+            market_id: id(9),
+            release_set_id: id(10),
         },
+        expected_revision: 0,
+        surplus_route: None,
+    };
+    let measured = measure_settlement_v2(settlement_view, &mut cursor_scratch).expect("measure");
+    assert_eq!(
+        measured,
+        SettlementPlanSummaryV2 {
+            first_effect_bytes: u32::try_from(GENERAL_CHILD_PLAN_HEADER_BYTES_V2 + 8)
+                .expect("effect width"),
+            second_effect_bytes: 0,
+        }
+    );
+    let summary = evaluate_settlement_v2(
+        settlement_view,
         SettlementPlanBuffersV2 {
             cursor_scratch: &mut cursor_scratch,
             cursor_output: &mut cursor_output,

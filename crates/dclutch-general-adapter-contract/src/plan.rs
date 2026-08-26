@@ -284,6 +284,7 @@ pub fn evaluate_initialize_settlement_v2(
 }
 
 /// Readonly views for one two-pass settlement continuation.
+#[derive(Clone, Copy, Debug)]
 pub struct SettlementPlanViewV2<'a> {
     /// Collect, Materialize, Distribute, or Close.
     pub action: Action,
@@ -326,6 +327,40 @@ pub struct SettlementPlanSummaryV2 {
     pub second_effect_bytes: u32,
 }
 
+/// Derive the complete semantic effect-bank shape without consulting capacity.
+///
+/// The supplied cursor is non-authoritative scratch and may change on refusal.
+/// The returned widths describe the entire canonical plan; they are not caller
+/// limits and do not impose a semantic outcome, row, or page cap.
+#[inline(never)]
+pub fn measure_settlement_v2(
+    view: SettlementPlanViewV2<'_>,
+    cursor_scratch: &mut [u8],
+) -> PlanResultV2<SettlementPlanSummaryV2> {
+    require_settlement_view_widths(&view, cursor_scratch.len())?;
+    let verified =
+        VerifiedCandidateV1::decode(view.certificate).map_err(|_| PlanErrorV2::InvalidInput)?;
+    cursor_scratch.copy_from_slice(view.cursor_before);
+    let mut measurement = EffectRecorderV2 {
+        first: None,
+        second: None,
+        lengths: [0; 2],
+        count: 0,
+        surplus_route: view.surplus_route,
+        error: None,
+    };
+    let measured =
+        execute_settlement_transition_v2(&view, &verified, cursor_scratch, &mut measurement);
+    if let Some(error) = measurement.error {
+        return Err(error);
+    }
+    measured?;
+    Ok(SettlementPlanSummaryV2 {
+        first_effect_bytes: measurement.lengths[0],
+        second_effect_bytes: measurement.lengths[1],
+    })
+}
+
 /// Evaluate one settlement continuation without accounts, writes, or CPI.
 #[inline(never)]
 pub fn evaluate_settlement_v2(
@@ -343,23 +378,9 @@ pub fn evaluate_settlement_v2(
         second_effect_scratch,
         second_effect_output,
     } = buffers;
-    cursor_scratch.copy_from_slice(view.cursor_before);
-    let mut measurement = EffectRecorderV2 {
-        first: None,
-        second: None,
-        lengths: [0; 2],
-        count: 0,
-        surplus_route: view.surplus_route,
-        error: None,
-    };
-    let measured =
-        execute_settlement_transition_v2(&view, &verified, cursor_scratch, &mut measurement);
-    if let Some(error) = measurement.error {
-        return Err(error);
-    }
-    measured?;
+    let measurement = measure_settlement_v2(view, cursor_scratch)?;
     require_effect_capacities(
-        &measurement,
+        measurement,
         first_effect_scratch.len(),
         second_effect_scratch.len(),
     )?;
@@ -380,7 +401,12 @@ pub fn evaluate_settlement_v2(
         return Err(error);
     }
     emitted?;
-    if recorder.count != measurement.count || recorder.lengths != measurement.lengths {
+    if recorder.lengths
+        != [
+            measurement.first_effect_bytes,
+            measurement.second_effect_bytes,
+        ]
+    {
         return Err(PlanErrorV2::Transition);
     }
     let summary = SettlementPlanSummaryV2 {
@@ -441,20 +467,14 @@ fn execute_settlement_transition_v2(
 }
 
 fn require_effect_capacities(
-    measurement: &EffectRecorderV2<'_>,
+    measurement: SettlementPlanSummaryV2,
     first_capacity: usize,
     second_capacity: usize,
 ) -> PlanResultV2<()> {
-    let first_required = if measurement.count > 0 {
-        usize::try_from(measurement.lengths[0]).map_err(|_| PlanErrorV2::EffectCapacity)?
-    } else {
-        0
-    };
-    let second_required = if measurement.count > 1 {
-        usize::try_from(measurement.lengths[1]).map_err(|_| PlanErrorV2::EffectCapacity)?
-    } else {
-        0
-    };
+    let first_required =
+        usize::try_from(measurement.first_effect_bytes).map_err(|_| PlanErrorV2::EffectCapacity)?;
+    let second_required = usize::try_from(measurement.second_effect_bytes)
+        .map_err(|_| PlanErrorV2::EffectCapacity)?;
     if first_capacity != first_required || second_capacity != second_required {
         Err(PlanErrorV2::EffectCapacity)
     } else {
@@ -549,15 +569,27 @@ fn require_settlement_widths(
     view: &SettlementPlanViewV2<'_>,
     buffers: &SettlementPlanBuffersV2<'_>,
 ) -> PlanResultV2<()> {
+    require_settlement_view_widths(view, buffers.cursor_scratch.len())?;
+    if buffers.cursor_output.len() != SETTLEMENT_CURSOR_BYTES
+        || buffers.first_effect_scratch.len() != buffers.first_effect_output.len()
+        || buffers.second_effect_scratch.len() != buffers.second_effect_output.len()
+    {
+        Err(PlanErrorV2::InvalidWidth)
+    } else {
+        Ok(())
+    }
+}
+
+fn require_settlement_view_widths(
+    view: &SettlementPlanViewV2<'_>,
+    cursor_scratch_len: usize,
+) -> PlanResultV2<()> {
     let row = matches!(view.action, Action::Collect | Action::Distribute);
     if view.cursor_before.len() != SETTLEMENT_CURSOR_BYTES
         || view.certificate.len() != VERIFIED_CANDIDATE_BYTES_V1
         || row != view.page.is_some()
         || view.page.is_some_and(|page| page.len() != PAGE_BYTES)
-        || buffers.cursor_scratch.len() != SETTLEMENT_CURSOR_BYTES
-        || buffers.cursor_output.len() != SETTLEMENT_CURSOR_BYTES
-        || buffers.first_effect_scratch.len() != buffers.first_effect_output.len()
-        || buffers.second_effect_scratch.len() != buffers.second_effect_output.len()
+        || cursor_scratch_len != SETTLEMENT_CURSOR_BYTES
     {
         Err(PlanErrorV2::InvalidWidth)
     } else {
