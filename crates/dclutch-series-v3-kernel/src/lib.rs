@@ -31,6 +31,8 @@ pub mod plan;
 pub mod replay;
 /// Exact Series action request and occurrence-proof wire.
 pub mod request;
+/// Stateless complete semantic plan for Shadow-AOT and differential execution.
+pub mod shadow;
 
 pub use generated::{
     SERIES_MAXIMUM_MERKLE_HEIGHT_V3, SERIES_OCCURRENCE_BYTES_V3,
