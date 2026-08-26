@@ -512,7 +512,11 @@ impl<'a> RepresentationRequestV2<'a> {
                 claims_market && actor_position && custody_position && !custody_replay
             }
             RepresentationActionV2::RedeemTerminal => {
-                claims_market && !actor_position && custody_position && custody_replay
+                // Exact payout is derived only after Product/basis terminal
+                // evaluation. Custody replay is therefore present for a
+                // positive payout and absent for a zero payout; completion
+                // evidence closes that shape.
+                claims_market && !actor_position && custody_position
             }
             RepresentationActionV2::IssueStructured | RepresentationActionV2::UnwrapStructured => {
                 !claims_market && !actor_position && !custody_position && !custody_replay
