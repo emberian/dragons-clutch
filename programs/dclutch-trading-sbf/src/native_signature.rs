@@ -86,6 +86,7 @@ pub fn authenticate_and_seed_native_signatures(
     seed_native_signatures_at_authenticated_instruction(
         current,
         current_instruction_data,
+        0,
         instructions,
         profile,
         tail_count,
@@ -97,12 +98,14 @@ pub fn authenticate_and_seed_native_signatures(
 /// authenticated the exact current top-level invocation.
 ///
 /// Registry continuation mode needs this narrower seam because the current
-/// top-level program is Registry while the signed message remains the exact
-/// nested Trading Hot bytes. The caller owns authentication of `current` and
-/// those byte-exact nested bytes before reaching this function.
+/// top-level program is Registry while the request-profile message coordinates
+/// remain relative to the exact nested Trading Hot bytes. The caller owns
+/// authentication of `current`, the byte-exact nested bytes, and the canonical
+/// top-level offset at which those bytes begin.
 pub(crate) fn seed_native_signatures_at_authenticated_instruction(
     current: u16,
-    current_instruction_data: &[u8],
+    authenticated_message_data: &[u8],
+    message_offset_bias: u16,
     instructions: &AccountInfo<'_>,
     profile: RequestProfileV2<'_>,
     tail_count: u32,
@@ -121,7 +124,9 @@ pub(crate) fn seed_native_signatures_at_authenticated_instruction(
         tail_count,
         NativeEd25519InstructionViewV1 {
             ed25519_data: &preceding.data,
-            current_instruction_data,
+            authenticated_message_data,
+            message_instruction_index: current,
+            message_offset_bias,
         },
         registers,
     )
@@ -212,25 +217,28 @@ mod tests {
         bytes
     }
 
-    fn ed25519_data(message: &[u8], signer: [u8; 32]) -> Vec<u8> {
+    fn ed25519_data(
+        message_offset: u16,
+        message_bytes: u16,
+        message_instruction_index: u16,
+        signer: [u8; 32],
+    ) -> Vec<u8> {
         let public_key = ED25519_SIGNATURE_OFFSETS_START + ED25519_SIGNATURE_OFFSETS_BYTES;
         let signature = public_key + ED25519_PUBLIC_KEY_BYTES;
-        let message_offset = signature + ED25519_SIGNATURE_BYTES;
         let mut bytes = vec![1_u8, 0];
         for value in [
             u16::try_from(signature).expect("offset"),
             ED25519_SELF_INSTRUCTION_INDEX,
             u16::try_from(public_key).expect("offset"),
             ED25519_SELF_INSTRUCTION_INDEX,
-            u16::try_from(message_offset).expect("offset"),
-            u16::try_from(message.len()).expect("message"),
-            ED25519_SELF_INSTRUCTION_INDEX,
+            message_offset,
+            message_bytes,
+            message_instruction_index,
         ] {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
         bytes.extend_from_slice(&signer);
         bytes.extend_from_slice(&[0x55; ED25519_SIGNATURE_BYTES]);
-        bytes.extend_from_slice(message);
         bytes
     }
 
@@ -284,7 +292,7 @@ mod tests {
             .copy_from_slice(b"sig");
         let profile_bytes = profile_bytes(20, 3);
         let profile = RequestProfileV2::decode(&profile_bytes).expect("profile");
-        let native = ed25519_data(b"sig", [7; 32]);
+        let native = ed25519_data(20, 3, 1, [7; 32]);
         let mut sysvar_lamports = 1;
         let mut sysvar_data = Vec::new();
         let instructions = sysvar_account(
@@ -328,7 +336,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_outer_keeps_self_contained_signature_bound_to_nested_hot_bytes() {
+    fn registry_outer_binds_detached_message_to_authenticated_nested_hot_bytes() {
         let mut nested_hot = [0_u8; 32];
         nested_hot
             .get_mut(20..23)
@@ -338,7 +346,7 @@ mod tests {
         registry_outer.extend_from_slice(&nested_hot);
         let profile_bytes = profile_bytes(20, 3);
         let profile = RequestProfileV2::decode(&profile_bytes).expect("profile");
-        let native = ed25519_data(b"sig", [7; 32]);
+        let native = ed25519_data(148, 3, 1, [7; 32]);
         let mut sysvar_lamports = 1;
         let mut sysvar_data = Vec::new();
         let instructions = sysvar_account(
@@ -355,6 +363,7 @@ mod tests {
         seed_native_signatures_at_authenticated_instruction(
             1,
             &nested_hot,
+            128,
             &instructions,
             profile,
             0,
@@ -364,15 +373,14 @@ mod tests {
                 output_identities: &mut output,
             },
         )
-        .expect("self-contained signature over nested Hot bytes");
+        .expect("detached signature over authenticated Registry bytes");
         assert_eq!(output, [[7; 32]]);
 
-        let mut substituted = nested_hot;
-        substituted[20] ^= 1;
         assert!(
             seed_native_signatures_at_authenticated_instruction(
                 1,
-                &substituted,
+                &nested_hot,
+                127,
                 &instructions,
                 profile,
                 0,
@@ -395,7 +403,7 @@ mod tests {
             .copy_from_slice(b"sig");
         let profile_bytes = profile_bytes(20, 3);
         let profile = RequestProfileV2::decode(&profile_bytes).expect("profile");
-        let native = ed25519_data(b"sig", [7; 32]);
+        let native = ed25519_data(20, 3, 1, [7; 32]);
         for case in 0..3 {
             let preceding_program = if case == 0 {
                 Pubkey::new_from_array([4; 32])

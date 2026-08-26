@@ -300,6 +300,7 @@ const REGISTRY_CONTINUATION_OUTER_PREFIX_ACCOUNTS_V1: usize = 6;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct AuthenticatedHotInvocationV3 {
     current_instruction: u16,
+    native_message_offset_bias: u16,
     strategy_extras_start: usize,
     permits_fixed_market_union: bool,
 }
@@ -330,6 +331,7 @@ fn authenticate_hot_invocation_v3(
         }
         return Ok(AuthenticatedHotInvocationV3 {
             current_instruction,
+            native_message_offset_bias: 0,
             strategy_extras_start: HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3,
             permits_fixed_market_union: false,
         });
@@ -461,6 +463,8 @@ fn authenticate_hot_invocation_v3(
     }
     Ok(AuthenticatedHotInvocationV3 {
         current_instruction,
+        native_message_offset_bias: u16::try_from(REGISTRY_CONTINUATION_REQUEST_BYTES_V1)
+            .map_err(|_| TradingSbfError::NativeSignature)?,
         strategy_extras_start: HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3
             .checked_add(1)
             .ok_or(TradingSbfError::Content)?,
@@ -856,6 +860,7 @@ pub fn process_hot_execution_v3(
 
     let projected_request = project_account_and_request_registers_v3(
         invocation.current_instruction,
+        invocation.native_message_offset_bias,
         instruction_data,
         *frame,
         account_profile,
@@ -4402,6 +4407,7 @@ struct ProjectedRequestRegistersV3 {
 #[allow(clippy::too_many_arguments)]
 fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
     current_instruction: u16,
+    native_message_offset_bias: u16,
     instruction_data: &'artifact [u8],
     frame: HotFrameV3<'accounts, 'info>,
     account_profile: AccountProfileV2<'artifact>,
@@ -4477,6 +4483,7 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
         seed_native_signatures_at_authenticated_instruction(
             current_instruction,
             instruction_data,
+            native_message_offset_bias,
             frame.instructions,
             profile,
             tail_count,

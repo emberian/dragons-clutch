@@ -315,13 +315,22 @@ impl<'a> RequestProfileV2<'a> {
     }
 }
 
-/// Immediately preceding canonical native-Ed25519 data and current instruction.
+/// Immediately preceding canonical native-Ed25519 data and the exact message
+/// slice authenticated by the enclosing adapter.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NativeEd25519InstructionViewV1<'a> {
     /// Exact preceding native instruction data.
     pub ed25519_data: &'a [u8],
-    /// Exact complete current Trading instruction data.
-    pub current_instruction_data: &'a [u8],
+    /// Exact complete nested message bytes owned by the selected request
+    /// profile (the Trading instruction in direct mode and the byte-identical
+    /// nested Trading instruction in continuation mode).
+    pub authenticated_message_data: &'a [u8],
+    /// Authenticated top-level instruction index containing every message.
+    pub message_instruction_index: u16,
+    /// Checked top-level byte offset at which `authenticated_message_data`
+    /// begins. Direct execution uses zero; a typed continuation supplies its
+    /// exact canonical header width.
+    pub message_offset_bias: u16,
 }
 
 /// Failure-atomic signer-identity register banks.
@@ -388,19 +397,18 @@ pub fn seed_authenticated_signers_atomic(
         let signature_offset = public_key_offset
             .checked_add(ED25519_PUBLIC_KEY_BYTES)
             .ok_or(Error::ArithmeticOverflow)?;
-        let message_offset = signature_offset
-            .checked_add(ED25519_SIGNATURE_BYTES)
-            .ok_or(Error::ArithmeticOverflow)?;
-        let message_end = message_offset
-            .checked_add(usize::from(requirement.message_bytes))
+        let message_offset = requirement
+            .message_offset
+            .checked_add(view.message_offset_bias)
             .ok_or(Error::ArithmeticOverflow)?;
         if read_u16(view.ed25519_data, descriptor)? != u16_from(signature_offset)?
             || read_u16(view.ed25519_data, add(descriptor, 2)?)? != ED25519_SELF_INSTRUCTION_INDEX
             || read_u16(view.ed25519_data, add(descriptor, 4)?)? != u16_from(public_key_offset)?
             || read_u16(view.ed25519_data, add(descriptor, 6)?)? != ED25519_SELF_INSTRUCTION_INDEX
-            || read_u16(view.ed25519_data, add(descriptor, 8)?)? != u16_from(message_offset)?
+            || read_u16(view.ed25519_data, add(descriptor, 8)?)? != message_offset
             || read_u16(view.ed25519_data, add(descriptor, 10)?)? != requirement.message_bytes
-            || read_u16(view.ed25519_data, add(descriptor, 12)?)? != ED25519_SELF_INSTRUCTION_INDEX
+            || read_u16(view.ed25519_data, add(descriptor, 12)?)? != view.message_instruction_index
+            || view.message_instruction_index == ED25519_SELF_INSTRUCTION_INDEX
         {
             return Err(Error::InvalidNativeInstruction);
         }
@@ -412,7 +420,12 @@ pub fn seed_authenticated_signers_atomic(
         if signer == [0; 32]
             || view
                 .ed25519_data
-                .get(signature_offset..message_offset)
+                .get(
+                    signature_offset
+                        ..signature_offset
+                            .checked_add(ED25519_SIGNATURE_BYTES)
+                            .ok_or(Error::ArithmeticOverflow)?,
+                )
                 .ok_or(Error::InvalidNativeInstruction)?
                 .iter()
                 .all(|byte| *byte == 0)
@@ -423,10 +436,10 @@ pub fn seed_authenticated_signers_atomic(
         let current_end = current_start
             .checked_add(usize::from(requirement.message_bytes))
             .ok_or(Error::ArithmeticOverflow)?;
-        if view.ed25519_data.get(message_offset..message_end)
-            != view
-                .current_instruction_data
-                .get(current_start..current_end)
+        if view
+            .authenticated_message_data
+            .get(current_start..current_end)
+            .is_none()
         {
             return Err(Error::MessageMismatch);
         }
@@ -440,7 +453,9 @@ pub fn seed_authenticated_signers_atomic(
             return Err(Error::InvalidSigner);
         }
         *slot = signer;
-        payload = message_end;
+        payload = signature_offset
+            .checked_add(ED25519_SIGNATURE_BYTES)
+            .ok_or(Error::ArithmeticOverflow)?;
         index = index.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
     }
     if payload != view.ed25519_data.len() {
@@ -578,9 +593,10 @@ mod tests {
     }
 
     fn native_instruction(
-        current: &[u8],
         requirements: &[(u16, u16, u32)],
         signers: &[[u8; 32]],
+        message_instruction_index: u16,
+        message_offset_bias: u16,
     ) -> Vec<u8> {
         let header =
             ED25519_SIGNATURE_OFFSETS_START + requirements.len() * ED25519_SIGNATURE_OFFSETS_BYTES;
@@ -593,15 +609,19 @@ mod tests {
                 ED25519_SIGNATURE_OFFSETS_START + index * ED25519_SIGNATURE_OFFSETS_BYTES;
             let public_key = payload;
             let signature = public_key + ED25519_PUBLIC_KEY_BYTES;
-            let message = signature + ED25519_SIGNATURE_BYTES;
             for (field, value) in [
                 (descriptor, u16::try_from(signature).expect("offset")),
                 (descriptor + 2, ED25519_SELF_INSTRUCTION_INDEX),
                 (descriptor + 4, u16::try_from(public_key).expect("offset")),
                 (descriptor + 6, ED25519_SELF_INSTRUCTION_INDEX),
-                (descriptor + 8, u16::try_from(message).expect("offset")),
+                (
+                    descriptor + 8,
+                    offset
+                        .checked_add(message_offset_bias)
+                        .expect("message offset"),
+                ),
                 (descriptor + 10, *width),
-                (descriptor + 12, ED25519_SELF_INSTRUCTION_INDEX),
+                (descriptor + 12, message_instruction_index),
             ] {
                 bytes
                     .get_mut(field..field + 2)
@@ -610,13 +630,7 @@ mod tests {
             }
             bytes.extend_from_slice(signer);
             bytes.extend_from_slice(&[0x55; ED25519_SIGNATURE_BYTES]);
-            let start = usize::from(*offset);
-            bytes.extend_from_slice(
-                current
-                    .get(start..start + usize::from(*width))
-                    .expect("current message"),
-            );
-            payload = message + usize::from(*width);
+            payload = signature + ED25519_SIGNATURE_BYTES;
         }
         assert_eq!(payload, bytes.len());
         bytes
@@ -638,7 +652,7 @@ mod tests {
             .get_mut(30..34)
             .expect("message two")
             .copy_from_slice(b"two!");
-        let native = native_instruction(&current, &requirements, &[[7; 32], [8; 32]]);
+        let native = native_instruction(&requirements, &[[7; 32], [8; 32]], 4, 128);
         let input = [[0_u8; 32]; 2];
         let mut scratch = [[9_u8; 32]; 2];
         let mut output = [[6_u8; 32]; 2];
@@ -647,7 +661,9 @@ mod tests {
             2,
             NativeEd25519InstructionViewV1 {
                 ed25519_data: &native,
-                current_instruction_data: &current,
+                authenticated_message_data: &current,
+                message_instruction_index: 4,
+                message_offset_bias: 128,
             },
             NativeSignatureRegistersV1 {
                 input_identities: &input,
@@ -748,10 +764,12 @@ mod tests {
             .get_mut(30..34)
             .expect("message two")
             .copy_from_slice(b"two!");
-        let canonical = native_instruction(&current, &requirements, &[[7; 32], [8; 32]]);
-        for case in 0..8 {
+        let canonical = native_instruction(&requirements, &[[7; 32], [8; 32]], 4, 128);
+        for case in 0..10 {
             let mut native = canonical.clone();
-            let mut hostile_current = current;
+            let mut authenticated_message_data = current.as_slice();
+            let mut message_instruction_index = 4;
+            let mut message_offset_bias = 128;
             let mut input = [[0_u8; 32]; 2];
             match case {
                 0 => *native.first_mut().expect("count") = 1,
@@ -760,7 +778,9 @@ mod tests {
                 3 => native.push(0),
                 4 => *native.get_mut(2 + 2).expect("descriptor index") = 0,
                 5 => *native.get_mut(2 + 14 + 12).expect("descriptor index") = 0,
-                6 => *hostile_current.get_mut(30).expect("message") ^= 1,
+                6 => message_instruction_index = 5,
+                7 => message_offset_bias = 127,
+                8 => authenticated_message_data = &current[..32],
                 _ => *input.get_mut(1).expect("identity register") = [4; 32],
             }
             let mut scratch = [[9_u8; 32]; 2];
@@ -772,7 +792,9 @@ mod tests {
                     2,
                     NativeEd25519InstructionViewV1 {
                         ed25519_data: &native,
-                        current_instruction_data: &hostile_current,
+                        authenticated_message_data,
+                        message_instruction_index,
+                        message_offset_bias,
                     },
                     NativeSignatureRegistersV1 {
                         input_identities: &input,
