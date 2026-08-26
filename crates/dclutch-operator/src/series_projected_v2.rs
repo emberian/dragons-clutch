@@ -185,7 +185,7 @@ mod tests {
     }
 
     #[test]
-    fn maximum_projected_consume_has_a_real_v0_packet_margin() {
+    fn maximum_projected_runtime_subframe_has_a_v0_packet_margin() {
         const MAXIMUM_FUNDING_COUNT: u32 = 16;
         const SOLANA_PACKET_BYTES: usize = 1_232;
         const REQUIRED_PACKET_MARGIN: usize = 256;
@@ -269,7 +269,7 @@ mod tests {
         assert_eq!(wire_bytes, 850);
         assert!(
             wire_bytes + REQUIRED_PACKET_MARGIN <= SOLANA_PACKET_BYTES,
-            "{wire_bytes}B packet leaves less than {REQUIRED_PACKET_MARGIN}B margin"
+            "{wire_bytes}B runtime-subframe packet leaves less than {REQUIRED_PACKET_MARGIN}B margin"
         );
     }
 }
