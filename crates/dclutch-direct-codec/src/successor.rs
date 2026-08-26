@@ -1675,7 +1675,6 @@ pub fn settle_registered_complementary_v2(
     let fill = input.fill;
     let count = usize::try_from(outcome_count).map_err(|_| SuccessorError::ComplementWidth)?;
     if count < 2
-        || count > usize::from(u8::MAX) + 1
         || maker_roots.len() != count
         || records.len() != count
         || record_lamports.len() != count
@@ -2080,6 +2079,8 @@ fn put_u64(output: &mut [u8], offset: usize, value: u64) {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use super::*;
 
     fn id(byte: u8) -> [u8; 32] {
@@ -2865,6 +2866,108 @@ mod tests {
         .expect("merge");
         assert_eq!(merge.market_vault_transfer, 100);
         assert_eq!(merge.total_fee_transfer, 10);
+    }
+
+    #[test]
+    fn complementary_semantics_do_not_invent_an_u8_product_width_ceiling() {
+        const OUTCOMES: u32 = 257;
+        let count = usize::try_from(OUTCOMES).expect("host outcome width");
+        let selected =
+            DirectExecutionConfigV1::new(u64::from(OUTCOMES), 0, id(99)).expect("wide config");
+        let root = DirectRootStateV1 {
+            phase: DirectRootPhaseV1::Open,
+            open_maker_root_count: u64::from(OUTCOMES),
+        };
+        let mut maker_roots = std::vec::Vec::with_capacity(count);
+        let mut records = std::vec::Vec::with_capacity(count);
+        let mut prices = std::vec::Vec::with_capacity(count);
+        let mut lamports = std::vec::Vec::with_capacity(count);
+        let coordinates = DirectCoordinatesV1::new(id(1), 4).expect("coordinates");
+        let mut outcome = 0_u32;
+        while outcome < OUTCOMES {
+            let mut maker = [0xa5; 32];
+            maker
+                .get_mut(..4)
+                .expect("maker prefix")
+                .copy_from_slice(&outcome.to_le_bytes());
+            let bump = u8::try_from(outcome % 256).expect("physical PDA bump");
+            maker_roots.push(MakerReplayRootV1 {
+                market: id(1),
+                generation: 4,
+                maker,
+                next_nonce: 1,
+                live_count: 1,
+                minimum_live_nonce: 0,
+                rent_owner: id(90),
+                rent_principal: 100,
+                bump,
+            });
+            records.push(DirectRegisteredIntentV2 {
+                maker,
+                intent: CompactIntentV2 {
+                    side: 1,
+                    lifecycle: 2,
+                    outcome,
+                    market: id(1),
+                    generation: 4,
+                    nonce: 0,
+                    valid_from: 2,
+                    valid_through: 20,
+                    maximum_fill: u64::from(OUTCOMES),
+                    limit_price: 1,
+                    fee_basis_points: 0,
+                    collateral_account: id(30),
+                },
+                filled: 0,
+                reserved_claims: 0,
+                reserved_collateral: 1,
+                cumulative_gross: 0,
+                cumulative_fee: 0,
+                rent_owner: id(91),
+                rent_principal: 100,
+                bump,
+            });
+            prices.push(1);
+            lamports.push(100);
+            outcome = outcome.checked_add(1).expect("bounded outcome");
+        }
+        let seed = preview_registered_fill_v2(RegisteredFillInputV2 {
+            root,
+            participant: RegisteredParticipantV2 {
+                maker_root: *maker_roots.first().expect("first root"),
+                record: *records.first().expect("first record"),
+                observed_record_lamports: 100,
+            },
+            execution: RegisteredExecutionV2 {
+                config: selected,
+                outcome_count: OUTCOMES,
+                slot: 5,
+                fill: u64::from(OUTCOMES),
+                execution_price: 1,
+            },
+        })
+        .expect("seed candidate");
+        let mut scratch = std::vec![seed; count];
+        let settlement = settle_registered_complementary_v2(ComplementaryInputV2 {
+            action: ComplementaryActionV2::Split,
+            root,
+            participants: ComplementaryParticipantsV2 {
+                maker_roots: &maker_roots,
+                records: &records,
+                record_lamports: &lamports,
+                execution_prices: &prices,
+            },
+            scratch: &mut scratch,
+            config: selected,
+            outcome_count: OUTCOMES,
+            slot: 5,
+            fill: u64::from(OUTCOMES),
+        })
+        .expect("runtime-width semantic settlement");
+        assert_eq!(settlement.market_vault_transfer, u64::from(OUTCOMES));
+        assert_eq!(settlement.total_fee_transfer, 0);
+        assert_eq!(scratch.len(), count);
+        assert_eq!(coordinates.market(), id(1));
     }
 
     #[test]
