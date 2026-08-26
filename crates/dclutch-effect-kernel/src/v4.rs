@@ -345,7 +345,7 @@ impl<'a> ProgramV4<'a> {
         let range_count = read_u16(bytes, 8)?;
         let base_bytes = usize::try_from(read_u32(bytes, 12)?).map_err(|_| ErrorV4::Wire)?;
         let semantic_prefix_bytes = read_u32(bytes, 16)?;
-        if (span_count == 0 && range_count == 0) || base_bytes == 0 || semantic_prefix_bytes == 0 {
+        if base_bytes == 0 || semantic_prefix_bytes == 0 {
             return Err(ErrorV4::Wire);
         }
         let range_start = HEADER_BYTES_V4
@@ -824,7 +824,7 @@ pub fn encode_program_v4_atomic(
     scratch: &mut [u8],
     output: &mut [u8],
 ) -> ResultV4<()> {
-    if (spans.is_empty() && ranges.is_empty()) || semantic_prefix_bytes == 0 {
+    if semantic_prefix_bytes == 0 {
         return Err(ErrorV4::Wire);
     }
     let span_bytes = spans
@@ -1068,6 +1068,39 @@ mod tests {
         )
         .expect("successor");
         output
+    }
+
+    #[test]
+    fn fixed_topology_base_has_one_canonical_zero_extension_envelope() {
+        const FIXED_SUCCESSOR_BYTES: usize = HEADER_BYTES_V4 + BASE_BYTES;
+        let base = base_program();
+        let mut scratch = [0_u8; FIXED_SUCCESSOR_BYTES];
+        let mut output = [0_u8; FIXED_SUCCESSOR_BYTES];
+        encode_program_v4_atomic(
+            &base,
+            BorrowedRangePolicyV4::DisjointExactCoverage,
+            1,
+            &[],
+            &[],
+            &mut scratch,
+            &mut output,
+        )
+        .expect("fixed topology successor");
+        let program = ProgramV4::decode(&output).expect("decode fixed successor");
+        assert_eq!(program.span_count(), 0);
+        assert_eq!(program.range_count(), 0);
+        assert_eq!(program.base().bytes(), base.as_slice());
+        assert_eq!(program.account_count(0, &[0; 6]), Ok(26));
+
+        let mut hostile = output;
+        hostile[6] = 1;
+        assert_eq!(ProgramV4::decode(&hostile), Err(ErrorV4::Wire));
+        let mut hostile = output;
+        hostile[8] = 1;
+        assert_eq!(ProgramV4::decode(&hostile), Err(ErrorV4::Wire));
+        let mut hostile = output;
+        hostile[20] = 1;
+        assert_eq!(ProgramV4::decode(&hostile), Err(ErrorV4::Wire));
     }
 
     #[test]
