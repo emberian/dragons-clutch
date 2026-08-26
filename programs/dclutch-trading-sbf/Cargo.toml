@@ -44,6 +44,8 @@ dclutch-general-adapter-contract = { path = "../../crates/dclutch-general-adapte
 dclutch-general-codec = { path = "../../crates/dclutch-general-codec", optional = true }
 dclutch-general-config-contract = { path = "../../crates/dclutch-general-config-contract", optional = true }
 dclutch-market-core-codec = { path = "../../crates/dclutch-market-core-codec" }
+dclutch-product-runtime-v2 = { path = "../../crates/dclutch-product-runtime-v2" }
+dclutch-product-runtime-v2-svm-reader = { path = "../../crates/dclutch-product-runtime-v2-svm-reader" }
 dclutch-registry-svm = { path = "../../crates/dclutch-registry-svm" }
 dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }
 dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }

@@ -37,10 +37,13 @@ use dclutch_capability_program_contract::{
         HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
         HOT_LIFECYCLE_RAW_ACCOUNT_V3, HOT_LIFECYCLE_STAGING_ACCOUNT_V3,
         HOT_MANIFEST_RAW_ACCOUNT_V3, HOT_MANIFEST_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3,
-        HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3, HOT_PROGRAM_SET_RAW_ACCOUNT_V3,
+        HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3, HOT_PORTFOLIO_RAW_ACCOUNT_V3,
+        HOT_PORTFOLIO_STAGING_ACCOUNT_V3, HOT_PRODUCT_RAW_ACCOUNT_V3,
+        HOT_PRODUCT_STAGING_ACCOUNT_V3, HOT_PROGRAM_SET_RAW_ACCOUNT_V3,
         HOT_PROGRAM_SET_STAGING_ACCOUNT_V3, HOT_REGISTRY_PROGRAM_ACCOUNT_V3,
         HOT_RENT_SYSVAR_ACCOUNT_V3, HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3,
-        HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3,
+        HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3, HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3,
+        HOT_RESULT_DOMAIN_STAGING_ACCOUNT_V3, HOT_ROOT_ACCOUNT_V3,
         HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3, HOT_STRATEGY_RAW_ACCOUNT_V3,
         HOT_STRATEGY_STAGING_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
         HOT_TRADING_PROGRAMDATA_ACCOUNT_V3, HOT_TRANSITION_RAW_ACCOUNT_V3,
@@ -62,6 +65,11 @@ use dclutch_execution_strategy_contract::v2::{
     EXECUTION_STRATEGY_PROGRAM_BYTES_V2, ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
 use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
+use dclutch_product_runtime_v2::ContentId as ProductContentId;
+use dclutch_product_runtime_v2_svm_reader::{
+    FinalizedRecordFrameV2 as ProductRecordFrameV2, ProductRuntimeFrameV2,
+    authenticate_product_runtime_v2,
+};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::ACTIVATION_PDA_DOMAIN_V1;
 use dclutch_registry_svm::{AuthenticatedRoleReceiptV1, RegistryInstructionV1};
@@ -205,6 +213,28 @@ pub fn process_hot_execution_v3(
     drop(root_data);
 
     let rent = Rent::from_account_info(frame.rent).map_err(|_| TradingSbfError::Content)?;
+    let product_runtime = authenticate_product_runtime_v2(
+        frame.registry.key,
+        &rent,
+        ProductContentId::new(market.identity.product_record.to_bytes())
+            .map_err(|_| TradingSbfError::Content)?,
+        ProductRuntimeFrameV2 {
+            product: ProductRecordFrameV2 {
+                raw: frame.product_raw,
+                staging: frame.product_staging,
+            },
+            result_domain: ProductRecordFrameV2 {
+                raw: frame.result_domain_raw,
+                staging: frame.result_domain_staging,
+            },
+            portfolio: ProductRecordFrameV2 {
+                raw: frame.portfolio_raw,
+                staging: frame.portfolio_staging,
+            },
+        },
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    let product_outcome_count = product_runtime.outcome_count;
     let manifest_data = borrow_finalized_record(
         frame,
         frame.manifest_raw,
@@ -268,7 +298,16 @@ pub fn process_hot_execution_v3(
         descriptor.config_schema().to_bytes(),
         context.selection().config().to_bytes(),
     )?;
-    let _ = config_data;
+    let config_digest = hash(&config_data).to_bytes();
+    drop(config_data);
+    require_common_projection_bindings_v3(
+        context.selection().config().to_bytes(),
+        config_digest,
+        market.identity.product_record.to_bytes(),
+        product_runtime.product_record.content_digest.to_bytes(),
+        market.identity.product_id.to_bytes(),
+        product_runtime.product_id.to_bytes(),
+    )?;
     let lifecycle_data = borrow_finalized_record(
         frame,
         frame.lifecycle_raw,
@@ -381,7 +420,12 @@ pub fn process_hot_execution_v3(
     .map_err(|_| TradingSbfError::Content)?;
 
     let mut runtime_accounts = Vec::new();
-    runtime_accounts.push(frame.root);
+    runtime_accounts.extend_from_slice(&[
+        frame.root,
+        frame.config_raw,
+        frame.product_raw,
+        frame.portfolio_raw,
+    ]);
     runtime_accounts.extend(
         accounts
             .get(runtime_start..)
@@ -415,6 +459,7 @@ pub fn process_hot_execution_v3(
         .collect::<Vec<_>>();
 
     let tail_count = project_tail_count(account_profile, &observations, request_digest)?;
+    require_tail_count_agreement_v3(product_outcome_count, tail_count)?;
     require_geometry(
         account_profile,
         request_profile.v1(),
@@ -554,6 +599,7 @@ pub fn process_hot_execution_v3(
     let mut permissions = vec![AccountPermission::read_only(); runtime_accounts.len()];
     derive_effect_permissions(account_profile, tail_count, &mut permissions)
         .map_err(|_| TradingSbfError::Content)?;
+    require_common_projection_permissions_v3(&permissions)?;
     let mut scratch_lamports = vec![0_u64; runtime_accounts.len()];
     let mut output_lamports = vec![0_u64; runtime_accounts.len()];
     let mut scratch_requests = vec![0_u8; request_bytes];
@@ -662,6 +708,9 @@ pub fn process_hot_execution_v3(
         &strategy.strategy().transition_program().to_bytes(),
         &descriptor.effect_program().to_bytes(),
         &descriptor.derivation_policy().to_bytes(),
+        &context.selection().config().to_bytes(),
+        &market.identity.product_record.to_bytes(),
+        &product_outcome_count.to_le_bytes(),
         &request_digest,
         &child_execution_digest,
         &root_poststate,
@@ -681,6 +730,51 @@ pub fn process_hot_execution_v3(
     .map_err(|_| TradingSbfError::Commit)?;
     set_return_data(&ack.to_bytes());
     Ok(())
+}
+
+fn require_common_projection_bindings_v3(
+    selected_config: [u8; 32],
+    authenticated_config: [u8; 32],
+    selected_product_record: [u8; 32],
+    authenticated_product_record: [u8; 32],
+    market_product: [u8; 32],
+    runtime_product: [u8; 32],
+) -> Result<(), ProgramError> {
+    if selected_config == [0; 32]
+        || selected_config != authenticated_config
+        || selected_product_record == [0; 32]
+        || selected_product_record != authenticated_product_record
+        || market_product == [0; 32]
+        || market_product != runtime_product
+    {
+        Err(TradingSbfError::Content.into())
+    } else {
+        Ok(())
+    }
+}
+
+fn require_tail_count_agreement_v3(
+    product_outcome_count: u32,
+    projected_tail_count: u32,
+) -> Result<(), ProgramError> {
+    if product_outcome_count < 2 || product_outcome_count != projected_tail_count {
+        Err(TradingSbfError::Content.into())
+    } else {
+        Ok(())
+    }
+}
+
+fn require_common_projection_permissions_v3(
+    permissions: &[AccountPermission],
+) -> Result<(), ProgramError> {
+    if permissions.get(1) != Some(&AccountPermission::read_only())
+        || permissions.get(2) != Some(&AccountPermission::read_only())
+        || permissions.get(3) != Some(&AccountPermission::read_only())
+    {
+        Err(TradingSbfError::Content.into())
+    } else {
+        Ok(())
+    }
 }
 
 struct PreparedLifecycleInvocationV3 {
@@ -1247,6 +1341,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
             let invocation = effect
                 .resolved_invocation(route, invocation_index, tail_count, scalars, identities)
                 .map_err(|_| TradingSbfError::Content)?;
+            require_no_common_projection_child_accounts_v3(invocation)?;
             require_child_disjoint_from_local(invocation, aliases, &locally_mutated)?;
             match invocation.role {
                 FixedRole::Core => preflight_core_route_v3(
@@ -1703,6 +1798,42 @@ fn require_child_disjoint_from_local(
         {
             return Err(TradingSbfError::Content.into());
         }
+    }
+    Ok(())
+}
+
+fn require_no_common_projection_child_accounts_v3(
+    invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
+) -> Result<(), ProgramError> {
+    const RESERVED_END: usize = 4;
+    let fixed_start = usize::from(invocation.fixed_account_start);
+    let fixed_count = usize::from(invocation.fixed_account_count);
+    let fixed_end = fixed_start
+        .checked_add(fixed_count)
+        .ok_or(TradingSbfError::Content)?;
+    if fixed_count != 0 && fixed_start < RESERVED_END && fixed_end > 0 {
+        return Err(TradingSbfError::Content.into());
+    }
+    let item_count = usize::from(invocation.item_account_count);
+    let stride = usize::from(invocation.item_account_stride);
+    let mut item = 0_u32;
+    while item < invocation.repeated_item_count {
+        let start = invocation
+            .item_account_start
+            .checked_add(
+                usize::try_from(item)
+                    .map_err(|_| TradingSbfError::Content)?
+                    .checked_mul(stride)
+                    .ok_or(TradingSbfError::Content)?,
+            )
+            .ok_or(TradingSbfError::Content)?;
+        let end = start
+            .checked_add(item_count)
+            .ok_or(TradingSbfError::Content)?;
+        if item_count != 0 && start < RESERVED_END && end > 0 {
+            return Err(TradingSbfError::Content.into());
+        }
+        item = item.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
     Ok(())
 }
@@ -2283,6 +2414,12 @@ struct HotFrameV3<'accounts, 'info> {
     registry: &'accounts AccountInfo<'info>,
     rent: &'accounts AccountInfo<'info>,
     instructions: &'accounts AccountInfo<'info>,
+    product_raw: &'accounts AccountInfo<'info>,
+    product_staging: &'accounts AccountInfo<'info>,
+    result_domain_raw: &'accounts AccountInfo<'info>,
+    result_domain_staging: &'accounts AccountInfo<'info>,
+    portfolio_raw: &'accounts AccountInfo<'info>,
+    portfolio_staging: &'accounts AccountInfo<'info>,
 }
 
 impl<'accounts, 'info> HotFrameV3<'accounts, 'info> {
@@ -2324,6 +2461,12 @@ impl<'accounts, 'info> HotFrameV3<'accounts, 'info> {
             registry: account(accounts, HOT_REGISTRY_PROGRAM_ACCOUNT_V3)?,
             rent: account(accounts, HOT_RENT_SYSVAR_ACCOUNT_V3)?,
             instructions: account(accounts, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3)?,
+            product_raw: account(accounts, HOT_PRODUCT_RAW_ACCOUNT_V3)?,
+            product_staging: account(accounts, HOT_PRODUCT_STAGING_ACCOUNT_V3)?,
+            result_domain_raw: account(accounts, HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3)?,
+            result_domain_staging: account(accounts, HOT_RESULT_DOMAIN_STAGING_ACCOUNT_V3)?,
+            portfolio_raw: account(accounts, HOT_PORTFOLIO_RAW_ACCOUNT_V3)?,
+            portfolio_staging: account(accounts, HOT_PORTFOLIO_STAGING_ACCOUNT_V3)?,
         };
         if value.market.is_signer
             || value.market.is_writable
@@ -2473,6 +2616,71 @@ mod tests {
         assert_eq!(reserve_lifecycle_state_v3(1, &mut used), Ok(()));
         assert_eq!(
             reserve_lifecycle_state_v3(1, &mut used),
+            Err(TradingSbfError::Content.into())
+        );
+    }
+
+    #[test]
+    fn common_projection_bindings_and_child_reservations_are_exact() {
+        let id = |tag: u8| [tag; 32];
+        assert_eq!(
+            require_common_projection_bindings_v3(id(1), id(1), id(2), id(2), id(3), id(3),),
+            Ok(())
+        );
+        for hostile in [
+            (id(4), id(1), id(2), id(2), id(3), id(3)),
+            (id(1), id(1), id(5), id(2), id(3), id(3)),
+            (id(1), id(1), id(2), id(2), id(6), id(3)),
+        ] {
+            assert_eq!(
+                require_common_projection_bindings_v3(
+                    hostile.0, hostile.1, hostile.2, hostile.3, hostile.4, hostile.5,
+                ),
+                Err(TradingSbfError::Content.into())
+            );
+        }
+
+        let invocation = dclutch_effect_kernel::v3::ResolvedInvocationV3 {
+            role: FixedRole::Custody,
+            kind: dclutch_effect_kernel::v3::RouteKindV3::Once,
+            item: None,
+            fixed_account_start: 1,
+            fixed_account_count: 1,
+            item_account_start: 0,
+            item_account_count: 0,
+            item_account_stride: 0,
+            repeated_item_count: 0,
+            request_offset: 0,
+            request_len: 1,
+            borrowed_witness: None,
+        };
+        assert_eq!(
+            require_no_common_projection_child_accounts_v3(invocation),
+            Err(TradingSbfError::Content.into())
+        );
+        assert_eq!(
+            require_no_common_projection_child_accounts_v3(
+                dclutch_effect_kernel::v3::ResolvedInvocationV3 {
+                    fixed_account_start: 4,
+                    ..invocation
+                }
+            ),
+            Ok(())
+        );
+        assert_eq!(require_tail_count_agreement_v3(7, 7), Ok(()));
+        assert_eq!(
+            require_tail_count_agreement_v3(7, 6),
+            Err(TradingSbfError::Content.into())
+        );
+        let mut permissions = [AccountPermission::read_only(); 4];
+        permissions[0] = AccountPermission::program_owned_mutable();
+        assert_eq!(
+            require_common_projection_permissions_v3(&permissions),
+            Ok(())
+        );
+        permissions[2] = AccountPermission::program_owned_mutable();
+        assert_eq!(
+            require_common_projection_permissions_v3(&permissions),
             Err(TradingSbfError::Content.into())
         );
     }

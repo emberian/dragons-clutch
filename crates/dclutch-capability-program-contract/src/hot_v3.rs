@@ -4,8 +4,12 @@
 //! every content-selection authority before any family runtime account. A
 //! disposition-derived ExecutionStrategy suffix follows the prefix; the
 //! remaining accounts are the exact AccountProfile/EffectProgram address
-//! space, with the already-present root injected as runtime coordinate zero by
-//! the adapter. No family discriminator or dummy account is part of the ABI.
+//! space. The adapter injects the already-present root, immutable config raw,
+//! Product graph-root raw, and Product-selected portfolio raw accounts as
+//! logical coordinates zero through three without duplicating physical metas. Config and
+//! Product records are read-only projection evidence and no child route may
+//! borrow any injected coordinate. No family discriminator or dummy account is
+//! part of the ABI.
 
 /// Canonical hot instruction magic.
 pub const HOT_EXECUTION_MAGIC_V3: [u8; 8] = *b"DCLTHOT3";
@@ -86,12 +90,32 @@ pub const HOT_REGISTRY_PROGRAM_ACCOUNT_V3: usize = 27;
 pub const HOT_RENT_SYSVAR_ACCOUNT_V3: usize = 28;
 /// Instructions sysvar used only when RequestProfile V2 requires native evidence.
 pub const HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3: usize = 29;
+/// Registry-finalized Product Runtime V2 graph-root raw record selected by Market.
+pub const HOT_PRODUCT_RAW_ACCOUNT_V3: usize = 30;
+/// Vacant Product Runtime V2 graph-root staging cursor.
+pub const HOT_PRODUCT_STAGING_ACCOUNT_V3: usize = 31;
+/// Registry-finalized Product-selected result-domain raw record.
+pub const HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3: usize = 32;
+/// Vacant Product-selected result-domain staging cursor.
+pub const HOT_RESULT_DOMAIN_STAGING_ACCOUNT_V3: usize = 33;
+/// Registry-finalized Product-selected portfolio raw record.
+pub const HOT_PORTFOLIO_RAW_ACCOUNT_V3: usize = 34;
+/// Vacant Product-selected portfolio staging cursor.
+pub const HOT_PORTFOLIO_STAGING_ACCOUNT_V3: usize = 35;
 /// Exact family-neutral account prefix width.
-pub const HOT_FIXED_ACCOUNT_COUNT_V3: usize = 30;
+pub const HOT_FIXED_ACCOUNT_COUNT_V3: usize = 36;
 /// First disposition-derived ExecutionStrategy account.
 pub const HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3: usize = HOT_FIXED_ACCOUNT_COUNT_V3;
 /// Runtime AccountProfile coordinate occupied by the prefix root account.
 pub const HOT_RUNTIME_ROOT_COORDINATE_V3: usize = 0;
+/// Runtime AccountProfile coordinate occupied by authenticated immutable config.
+pub const HOT_RUNTIME_CONFIG_COORDINATE_V3: usize = 1;
+/// Runtime AccountProfile coordinate occupied by the Product graph-root body.
+pub const HOT_RUNTIME_PRODUCT_COORDINATE_V3: usize = 2;
+/// Runtime AccountProfile coordinate occupied by the Product portfolio body.
+pub const HOT_RUNTIME_PORTFOLIO_COORDINATE_V3: usize = 3;
+/// Number of fixed-prefix accounts injected into the logical runtime vector.
+pub const HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3: usize = 4;
 /// Common identity-register input containing SHA-256 of the exact family request.
 ///
 /// This is the sole adapter-computed register fact. AccountProfile and
@@ -519,6 +543,30 @@ mod tests {
         );
         assert_eq!(
             HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3 + 1,
+            HOT_PRODUCT_RAW_ACCOUNT_V3
+        );
+        assert_eq!(
+            HOT_PRODUCT_RAW_ACCOUNT_V3 + 1,
+            HOT_PRODUCT_STAGING_ACCOUNT_V3
+        );
+        assert_eq!(
+            HOT_PRODUCT_STAGING_ACCOUNT_V3 + 1,
+            HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3
+        );
+        assert_eq!(
+            HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3 + 1,
+            HOT_RESULT_DOMAIN_STAGING_ACCOUNT_V3
+        );
+        assert_eq!(
+            HOT_RESULT_DOMAIN_STAGING_ACCOUNT_V3 + 1,
+            HOT_PORTFOLIO_RAW_ACCOUNT_V3
+        );
+        assert_eq!(
+            HOT_PORTFOLIO_RAW_ACCOUNT_V3 + 1,
+            HOT_PORTFOLIO_STAGING_ACCOUNT_V3
+        );
+        assert_eq!(
+            HOT_PORTFOLIO_STAGING_ACCOUNT_V3 + 1,
             HOT_FIXED_ACCOUNT_COUNT_V3
         );
         assert_eq!(
@@ -526,6 +574,10 @@ mod tests {
             HOT_FIXED_ACCOUNT_COUNT_V3
         );
         assert_eq!(HOT_RUNTIME_ROOT_COORDINATE_V3, 0);
+        assert_eq!(HOT_RUNTIME_CONFIG_COORDINATE_V3, 1);
+        assert_eq!(HOT_RUNTIME_PRODUCT_COORDINATE_V3, 2);
+        assert_eq!(HOT_RUNTIME_PORTFOLIO_COORDINATE_V3, 3);
+        assert_eq!(HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3, 4);
         assert_eq!(
             HOT_FAMILY_REQUEST_OFFSET_V3,
             HOT_EXECUTION_ENVELOPE_BYTES_V3
