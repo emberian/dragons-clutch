@@ -226,7 +226,7 @@ export async function inspectRationalCapabilityCommonV4(
   const portfolioRaw = await authenticateFinalizedRationalHotRecordV4(client, merged, registry,
     fixed[Hot.HOT_PORTFOLIO_RAW_ACCOUNT_V3]?.address ?? '', fixed[Hot.HOT_PORTFOLIO_STAGING_ACCOUNT_V3]?.address ?? '', PORTFOLIO_SCHEMA_ID_V2, portfolioDigest, 'Product portfolio');
   const product = decodeCoreFoundProductGraphV2(productRaw.data, domainRaw.data, portfolioRaw.data, domainDigest, portfolioDigest);
-  if (!same(product.productId, market.productId) || product.outcomeCount !== descriptor.outcomeCount) throw new Error('Product-owned N differs from the representation descriptor');
+  if (!same(product.productId, market.productId)) throw new Error('Product identity differs from the Core Market');
   const lookupTable = decodeRationalHotLookupTableV4(input.lookupTable, required(merged, input.lookupTable, 'address lookup table'));
   return Object.freeze({ observedSlot: graphObservation.slot, accounts: merged, fixed, payer, actor, lookupTable,
     marketAddress, coreProgram, trading, registry, market, activation, capabilitySelection, capability,

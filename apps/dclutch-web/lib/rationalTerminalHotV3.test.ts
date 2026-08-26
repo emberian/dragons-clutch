@@ -2,7 +2,7 @@ import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
 import * as Abi from './generated/rationalTerminalHotV3';
-import { compileRationalTerminalHotV3, encodeRationalTerminalHotRequestV3, evaluateRationalTerminalPayoutV3, specializeRationalTerminalChildV2 } from './rationalTerminalHotV3';
+import { compileRationalTerminalHotV3, decodeRationalProductBasisV3, encodeRationalTerminalHotRequestV3, evaluateRationalTerminalPayoutV3, specializeRationalTerminalChildV2 } from './rationalTerminalHotV3';
 
 function key(seed: number): string { return new PublicKey(new Uint8Array(32).fill(seed)).toBase58(); }
 function id(seed: number): Uint8Array { return new Uint8Array(32).fill(seed); }
@@ -27,6 +27,7 @@ function putU64(output: Uint8Array, offset: number, value: bigint): void { new D
 function categoricalBasis(): Uint8Array {
   const output = new Uint8Array(256); output.set(new TextEncoder().encode('DCLTPAY3'));
   putU16(output, 8, 3); putU16(output, 10, 256); putU32(output, 12, output.length); output[16] = 1;
+  [32, 64, 96, 128, 176].forEach((offset, index) => output.set(id(20 + index), offset));
   putU32(output, 20, 3); putU64(output, 160, 1n); putU64(output, 168, 1n); return output;
 }
 
@@ -34,6 +35,7 @@ function gradedBasis(): Uint8Array {
   // Two primary constant terms of 3 and 5, then exact complement 2 at Q=10.
   const output = new Uint8Array(256 + 3 * 8 + 2 * 32); output.set(new TextEncoder().encode('DCLTPAY3'));
   putU16(output, 8, 3); putU16(output, 10, 256); putU32(output, 12, output.length); output[16] = 2; output[17] = 1;
+  [32, 64, 96, 128, 176].forEach((offset, index) => output.set(id(30 + index), offset));
   putU32(output, 20, 3); putU32(output, 24, 0); putU32(output, 28, 2); putU64(output, 160, 10n); putU64(output, 168, 1n);
   [4n, 0n, 6n].forEach((value, index) => putU64(output, 256 + index * 8, value));
   for (const [index, amplitude] of [3n, 5n].entries()) {
@@ -80,9 +82,20 @@ describe('Rational terminal Hot V3 codec', () => {
   });
 
   it('evaluates graded ordinary and explicit failure partitions with the same exact raw quantity', () => {
+    // K=3 native claims over N=4 terminal outcomes is intentional and must not
+    // collapse back into the old K=N restriction.
     expect(evaluateRationalTerminalPayoutV3({ basis: gradedBasis(), resultOutcomeCount: 4, terminalWinner: 1,
       selectedOutcome: 2, rawQuantity: 2n, terminalCoordinate: { numerator: 7n, denominator: 3n } })).toMatchObject({ payoutPerShard: 2n, rawPayout: 4n, scenario: 'graded-rational' });
     expect(evaluateRationalTerminalPayoutV3({ basis: gradedBasis(), resultOutcomeCount: 4, terminalWinner: 3,
       selectedOutcome: 0, rawQuantity: 2n, terminalCoordinate: null })).toMatchObject({ payoutPerShard: 4n, rawPayout: 8n, scenario: 'graded-failure' });
+  });
+
+  it('hostile-decodes reserved bytes, exact failure partition, and gap-free term order', () => {
+    const reserved = categoricalBasis(); reserved[208] = 1;
+    expect(() => decodeRationalProductBasisV3(reserved)).toThrow(/tail/);
+    const partition = gradedBasis(); putU64(partition, 256, 5n);
+    expect(() => decodeRationalProductBasisV3(partition)).toThrow(/partition/);
+    const terms = gradedBasis(); putU32(terms, 312, 0);
+    expect(() => decodeRationalProductBasisV3(terms)).toThrow(/canonical and gap-free/);
   });
 });

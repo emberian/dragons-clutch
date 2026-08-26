@@ -1,6 +1,6 @@
 import { PublicKey } from '@solana/web3.js';
 
-import { isZero, sha256 } from './bytes';
+import { isZero, requireNonzero, requireZero, sha256, slice } from './bytes';
 import * as Abi from './generated/rationalTerminalHotV3';
 
 const MAX_U64 = 18_446_744_073_709_551_615n;
@@ -58,6 +58,31 @@ export type RationalTerminalPayoutV3 = Readonly<{
   losing: boolean;
 }>;
 
+type RationalBasisTermV3 = Readonly<{
+  claim: number;
+  tag: 0 | 1 | 2 | 3;
+  left: number;
+  peak: number;
+  right: number;
+  amplitude: bigint;
+}>;
+
+export type RationalProductBasisViewV3 = Readonly<{
+  bytes: Uint8Array;
+  kind: 'categorical-q1' | 'graded-exact-complement';
+  productId: Uint8Array;
+  resultDomainId: Uint8Array;
+  coordinateDomainId: Uint8Array;
+  resultUnitId: Uint8Array;
+  evaluatorReleaseId: Uint8Array;
+  width: number;
+  scale: bigint;
+  knotDenominator: bigint;
+  failurePayouts: ReadonlyArray<bigint>;
+  knots: ReadonlyArray<bigint>;
+  terms: ReadonlyArray<RationalBasisTermV3>;
+}>;
+
 const BASIS_HEADER_BYTES_V3 = 256;
 const BASIS_KNOT_BYTES_V3 = 16;
 const BASIS_TERM_BYTES_V3 = 32;
@@ -99,6 +124,113 @@ function terminalRamp(amplitude: bigint, left: bigint, right: bigint, knotDenomi
   return amplitude * elapsed / width;
 }
 
+function compareTerm(left: RationalBasisTermV3, right: RationalBasisTermV3): number {
+  for (const [a, b] of [[left.claim, right.claim], [left.tag, right.tag], [left.left, right.left], [left.peak, right.peak], [left.right, right.right]]) {
+    if (a !== b) return a < b ? -1 : 1;
+  }
+  return 0;
+}
+
+function evaluateBasisTerm(term: RationalBasisTermV3, knots: ReadonlyArray<bigint>, knotDenominator: bigint,
+  numerator: bigint, denominator: bigint): bigint {
+  const knot = (index: number): bigint => {
+    const value = knots[index];
+    if (value === undefined) throw new Error('graded ProductBasisV3 term selects an absent knot');
+    return value;
+  };
+  if (term.tag === 0) return term.amplitude;
+  if (term.tag === 1) return terminalRamp(term.amplitude, knot(term.left), knot(term.right), knotDenominator, numerator, denominator, true);
+  if (term.tag === 2) return terminalRamp(term.amplitude, knot(term.left), knot(term.right), knotDenominator, numerator, denominator, false);
+  return [
+    terminalRamp(term.amplitude, knot(term.left), knot(term.peak), knotDenominator, numerator, denominator, true),
+    terminalRamp(term.amplitude, knot(term.peak), knot(term.right), knotDenominator, numerator, denominator, false),
+  ].reduce((left, right) => left < right ? left : right);
+}
+
+/** Hostile-decode the exact ProductBasisV3 body used by the Rust operator. */
+export function decodeRationalProductBasisV3(bytes: Uint8Array): RationalProductBasisViewV3 {
+  if (bytes.length < BASIS_HEADER_BYTES_V3 || new TextDecoder().decode(bytes.slice(0, 8)) !== 'DCLTPAY3'
+      || new DataView(bytes.buffer, bytes.byteOffset + 8, 2).getUint16(0, true) !== 3
+      || new DataView(bytes.buffer, bytes.byteOffset + 10, 2).getUint16(0, true) !== BASIS_HEADER_BYTES_V3
+      || readU32(bytes, 12) !== bytes.length) throw new Error('ProductBasisV3 has the wrong exact header or width');
+  requireZero(bytes, 18, 2, 'ProductBasisV3 header'); requireZero(bytes, 208, 48, 'ProductBasisV3 tail');
+  const tag = bytes[16]; const rounding = bytes[17]; const width = readU32(bytes, 20);
+  const knotCount = readU32(bytes, 24); const termCount = readU32(bytes, 28);
+  const productId = slice(bytes, 32, 32); const resultDomainId = slice(bytes, 64, 32);
+  const coordinateDomainId = slice(bytes, 96, 32); const resultUnitId = slice(bytes, 128, 32);
+  const evaluatorReleaseId = slice(bytes, 176, 32);
+  [productId, resultDomainId, coordinateDomainId, resultUnitId, evaluatorReleaseId]
+    .forEach((value, index) => requireNonzero(value, `ProductBasisV3 identity ${index}`));
+  const scale = readU64(bytes, 160); const knotDenominator = readU64(bytes, 168);
+  if (width === 0 || scale === 0n) throw new Error('ProductBasisV3 has a zero basis width or payout scale');
+  const graded = tag === 2;
+  if (tag !== 1 && tag !== 2) throw new Error('ProductBasisV3 has an undefined basis kind');
+  const exact = BASIS_HEADER_BYTES_V3 + (graded ? width * 8 : 0) + knotCount * BASIS_KNOT_BYTES_V3 + termCount * BASIS_TERM_BYTES_V3;
+  if (!Number.isSafeInteger(exact) || bytes.length !== exact) throw new Error('ProductBasisV3 has the wrong exact runtime tail');
+  if (!graded && (rounding !== 0 || width === 0 || scale !== 1n || knotDenominator !== 1n || knotCount !== 0 || termCount !== 0)) {
+    throw new Error('categorical ProductBasisV3 is noncanonical');
+  }
+  if (graded && (rounding !== 1 || width < 2 || knotDenominator === 0n || termCount === 0)) {
+    throw new Error('graded ProductBasisV3 is noncanonical');
+  }
+  const failurePayouts: bigint[] = [];
+  let offset = BASIS_HEADER_BYTES_V3;
+  if (graded) {
+    let total = 0n;
+    for (let index = 0; index < width; index += 1) {
+      const payout = readU64(bytes, offset); offset += 8; total += payout;
+      if (total > MAX_U64) throw new Error('graded ProductBasisV3 failure partition overflows u64');
+      failurePayouts.push(payout);
+    }
+    if (total !== scale) throw new Error('graded ProductBasisV3 failure payouts do not partition Q');
+  }
+  const knots: bigint[] = [];
+  for (let index = 0; index < knotCount; index += 1) {
+    const value = readI128(bytes, offset); offset += BASIS_KNOT_BYTES_V3;
+    if (knots.length > 0 && value <= (knots[knots.length - 1] as bigint)) throw new Error('graded ProductBasisV3 knots are not strictly increasing');
+    knots.push(value);
+  }
+  const terms: RationalBasisTermV3[] = [];
+  for (let index = 0; index < termCount; index += 1) {
+    requireZero(bytes, offset + 5, 3, 'ProductBasisV3 term'); requireZero(bytes, offset + 20, 4, 'ProductBasisV3 term');
+    const claim = readU32(bytes, offset); const termTag = bytes[offset + 4];
+    const left = readU32(bytes, offset + 8); const peak = readU32(bytes, offset + 12); const right = readU32(bytes, offset + 16);
+    const amplitude = readU64(bytes, offset + 24); offset += BASIS_TERM_BYTES_V3;
+    if (termTag === undefined || termTag > 3 || amplitude === 0n || claim >= width - 1
+        || (termTag === 0 && (left !== 0 || peak !== 0 || right !== 0))
+        || ((termTag === 1 || termTag === 2) && (peak !== 0 || left >= right || right >= knotCount))
+        || (termTag === 3 && (left >= peak || peak >= right || right >= knotCount))) {
+      throw new Error('graded ProductBasisV3 has an invalid term');
+    }
+    const term = Object.freeze({ claim, tag: termTag as 0 | 1 | 2 | 3, left, peak, right, amplitude });
+    const prior = terms[terms.length - 1];
+    if ((prior !== undefined && compareTerm(prior, term) >= 0)
+        || (prior === undefined && claim !== 0)
+        || (prior !== undefined && claim !== prior.claim && claim !== prior.claim + 1)) {
+      throw new Error('graded ProductBasisV3 terms are not canonical and gap-free');
+    }
+    terms.push(term);
+  }
+  if (graded && terms[terms.length - 1]?.claim !== width - 2) throw new Error('graded ProductBasisV3 omits a primary claim');
+  if (graded) {
+    const cells: ReadonlyArray<readonly [bigint, bigint]> = knots.length >= 2
+      ? knots.slice(0, -1).map((left, index) => [left, knots[index + 1] as bigint] as const)
+      : [[knots[0] ?? 0n, knots[0] ?? 0n] as const];
+    for (const [left, right] of cells) {
+      let bound = 0n;
+      for (const term of terms) {
+        const a = evaluateBasisTerm(term, knots, knotDenominator, left, knotDenominator);
+        const b = evaluateBasisTerm(term, knots, knotDenominator, right, knotDenominator);
+        bound += a > b ? a : b;
+      }
+      if (bound > scale) throw new Error('graded ProductBasisV3 exceeds its simultaneous payout envelope');
+    }
+  }
+  return Object.freeze({ bytes: new Uint8Array(bytes), kind: graded ? 'graded-exact-complement' : 'categorical-q1',
+    productId, resultDomainId, coordinateDomainId, resultUnitId, evaluatorReleaseId, width, scale, knotDenominator,
+    failurePayouts: Object.freeze(failurePayouts), knots: Object.freeze(knots), terms: Object.freeze(terms) });
+}
+
 /** Evaluate the exact ProductBasisV3 payout; one final floor occurs per graded term. */
 export function evaluateRationalTerminalPayoutV3(input: Readonly<{
   basis: Uint8Array;
@@ -108,67 +240,41 @@ export function evaluateRationalTerminalPayoutV3(input: Readonly<{
   rawQuantity: bigint;
   terminalCoordinate: Readonly<{ numerator: bigint; denominator: bigint }> | null;
 }>): RationalTerminalPayoutV3 {
-  const bytes = input.basis;
-  if (bytes.length < BASIS_HEADER_BYTES_V3 || new TextDecoder().decode(bytes.slice(0, 8)) !== 'DCLTPAY3'
-      || new DataView(bytes.buffer, bytes.byteOffset + 8, 2).getUint16(0, true) !== 3
-      || new DataView(bytes.buffer, bytes.byteOffset + 10, 2).getUint16(0, true) !== BASIS_HEADER_BYTES_V3
-      || readU32(bytes, 12) !== bytes.length) throw new Error('ProductBasisV3 has the wrong exact header or width');
-  const kind = bytes[16]; const width = readU32(bytes, 20); const knotCount = readU32(bytes, 24); const termCount = readU32(bytes, 28);
-  const scale = readU64(bytes, 160); const knotDenominator = readU64(bytes, 168);
-  if (width === 0 || input.resultOutcomeCount === 0 || input.terminalWinner >= input.resultOutcomeCount
-      || input.selectedOutcome >= width || input.rawQuantity <= 0n || input.rawQuantity > MAX_U64 || scale === 0n) {
+  const basis = decodeRationalProductBasisV3(input.basis);
+  if (basis.width === 0 || input.resultOutcomeCount === 0 || input.terminalWinner >= input.resultOutcomeCount
+      || input.selectedOutcome >= basis.width || input.rawQuantity <= 0n || input.rawQuantity > MAX_U64) {
     throw new Error('terminal Product/result selector or raw quantity is outside its exact domain');
   }
   let payout: bigint; let scenario: RationalTerminalPayoutV3['scenario'];
-  if (kind === 1) {
-    if (input.terminalCoordinate !== null || scale !== 1n || knotCount !== 0 || termCount !== 0
-        || bytes.length !== BASIS_HEADER_BYTES_V3 || width !== input.resultOutcomeCount) {
+  if (basis.kind === 'categorical-q1') {
+    if (input.terminalCoordinate !== null || basis.width !== input.resultOutcomeCount) {
       throw new Error('categorical ProductBasisV3 or terminal scenario is noncanonical');
     }
     payout = input.selectedOutcome === input.terminalWinner ? 1n : 0n;
     scenario = 'categorical';
-  } else if (kind === 2) {
-    const exact = BASIS_HEADER_BYTES_V3 + width * 8 + knotCount * BASIS_KNOT_BYTES_V3 + termCount * BASIS_TERM_BYTES_V3;
-    if (bytes.length !== exact || width < 2 || knotDenominator === 0n) throw new Error('graded ProductBasisV3 has the wrong exact runtime tail');
+  } else {
+    if (basis.width < 2) throw new Error('graded ProductBasisV3 has the wrong exact runtime tail');
     const failure = input.terminalWinner === input.resultOutcomeCount - 1;
     if (failure) {
       if (input.terminalCoordinate !== null) throw new Error('failure terminal cannot carry a rational coordinate');
-      payout = readU64(bytes, BASIS_HEADER_BYTES_V3 + input.selectedOutcome * 8);
+      payout = basis.failurePayouts[input.selectedOutcome] as bigint;
       scenario = 'graded-failure';
     } else {
       const coordinate = input.terminalCoordinate;
       if (coordinate === null || coordinate.denominator <= 0n || coordinate.denominator > 0xffff_ffffn) {
         throw new Error('ordinary graded terminal requires one exact i64/u32 coordinate');
       }
-      const knotStart = BASIS_HEADER_BYTES_V3 + width * 8;
-      const termStart = knotStart + knotCount * BASIS_KNOT_BYTES_V3;
       let primary = 0n; let total = 0n;
-      for (let index = 0; index < termCount; index += 1) {
-        const offset = termStart + index * BASIS_TERM_BYTES_V3;
-        const claim = readU32(bytes, offset); const tag = bytes[offset + 4];
-        const leftIndex = readU32(bytes, offset + 8); const peakIndex = readU32(bytes, offset + 12); const rightIndex = readU32(bytes, offset + 16);
-        const amplitude = readU64(bytes, offset + 24);
-        const knot = (indexValue: number): bigint => {
-          if (indexValue >= knotCount) throw new Error('graded terminal term selects an absent knot');
-          return readI128(bytes, knotStart + indexValue * BASIS_KNOT_BYTES_V3);
-        };
-        let value: bigint;
-        if (tag === 0) value = amplitude;
-        else if (tag === 1) value = terminalRamp(amplitude, knot(leftIndex), knot(rightIndex), knotDenominator, coordinate.numerator, coordinate.denominator, true);
-        else if (tag === 2) value = terminalRamp(amplitude, knot(leftIndex), knot(rightIndex), knotDenominator, coordinate.numerator, coordinate.denominator, false);
-        else if (tag === 3) value = [
-          terminalRamp(amplitude, knot(leftIndex), knot(peakIndex), knotDenominator, coordinate.numerator, coordinate.denominator, true),
-          terminalRamp(amplitude, knot(peakIndex), knot(rightIndex), knotDenominator, coordinate.numerator, coordinate.denominator, false),
-        ].reduce((left, right) => left < right ? left : right);
-        else throw new Error('graded terminal term has an undefined shape');
+      for (const term of basis.terms) {
+        const value = evaluateBasisTerm(term, basis.knots, basis.knotDenominator, coordinate.numerator, coordinate.denominator);
         total += value;
-        if (claim === input.selectedOutcome) primary += value;
+        if (term.claim === input.selectedOutcome) primary += value;
       }
-      if (total > scale) throw new Error('graded terminal payouts exceed their exact complement scale');
-      payout = input.selectedOutcome === width - 1 ? scale - total : primary;
+      if (total > basis.scale) throw new Error('graded terminal payouts exceed their exact complement scale');
+      payout = input.selectedOutcome === basis.width - 1 ? basis.scale - total : primary;
       scenario = 'graded-rational';
     }
-  } else throw new Error('ProductBasisV3 has an undefined basis kind');
+  }
   const rawPayout = payout * input.rawQuantity;
   if (rawPayout > MAX_U64) throw new Error('terminal raw collateral payout exceeds u64::MAX');
   return Object.freeze({ scenario, payoutPerShard: payout, rawPayout, losing: rawPayout === 0n });

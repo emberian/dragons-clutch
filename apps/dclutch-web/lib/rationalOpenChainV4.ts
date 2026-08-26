@@ -291,7 +291,7 @@ export async function inspectRationalOpenChainV4(
   });
   const { payer, actor, fixed, marketAddress, coreProgram, trading, registry, market, activation,
     capabilitySelection, configDigest, rootDigest, artifacts, descriptorId, descriptorAddresses,
-    descriptor, graphAddresses, product } = common;
+    descriptor, graphAddresses } = common;
   if (descriptor.market !== marketAddress || !same(descriptor.releaseSet, market.releaseSet) || descriptor.tokenProgram !== TOKEN_2022_PROGRAM_ID) {
     throw new Error('representation descriptor differs from Market/release/TokenBehaviorV2');
   }
@@ -300,9 +300,9 @@ export async function inspectRationalOpenChainV4(
   if (expectedReceipt.toBase58() !== descriptor.receiptMint) throw new Error('descriptor receipt Mint is not the graph+Market+release Claims PDA');
   const aggregate = PublicKey.findProgramAddressSync([CLAIMS_AGGREGATE_SEED, key(marketAddress, 'Market').toBytes()], key(activation.claims, 'Claims program'))[0];
   const replay = PublicKey.findProgramAddressSync([REPLAY_SEED, descriptorId, key(actor, 'actor').toBytes()], key(activation.claims, 'Claims program'))[0];
-  if (selectedAction(input.action) && (input.selectedOutcome === null || input.selectedOutcome < 0 || input.selectedOutcome >= product.outcomeCount)) throw new Error('selected action outcome is outside Product N');
+  if (selectedAction(input.action) && (input.selectedOutcome === null || input.selectedOutcome < 0 || input.selectedOutcome >= descriptor.outcomeCount)) throw new Error('selected action outcome is outside representation K');
   if (!selectedAction(input.action) && input.selectedOutcome !== null) throw new Error('Structured action cannot carry a selected outcome');
-  const outcomes = selectedAction(input.action) ? [input.selectedOutcome as number] : Array.from({ length: product.outcomeCount }, (_, index) => index);
+  const outcomes = selectedAction(input.action) ? [input.selectedOutcome as number] : Array.from({ length: descriptor.outcomeCount }, (_, index) => index);
   const actorPosition = selectedAction(input.action)
     ? PublicKey.findProgramAddressSync([POSITION_SEED, aggregate.toBytes(), key(actor, 'actor').toBytes()], key(activation.claims, 'Claims program'))[0]
     : null;
@@ -330,7 +330,7 @@ export async function inspectRationalOpenChainV4(
   const aggregateAccount = required(accounts, aggregate.toBase58(), 'Claims aggregate');
   if (aggregateAccount.owner !== activation.claims || aggregateAccount.executable) throw new Error('Claims aggregate owner/executable state differs');
   const claims = decodeRationalClaimsAggregateV2(aggregateAccount.data, { market: marketAddress, releaseSet: market.releaseSet, registry,
-    product: market.productRecord, realm: market.realm, generation: market.generation, outcomes: product.outcomeCount });
+    product: market.productRecord, realm: market.realm, generation: market.generation, outcomes: descriptor.outcomeCount });
   const replayAccount = required(accounts, replay.toBase58(), 'representation replay funding');
   const replayRevision = decodeRationalRepresentationReplayV2(replayAccount, activation.claims, descriptorId, actor);
   if (replayAccount.owner === SYSTEM_PROGRAM_ID) {
@@ -345,7 +345,7 @@ export async function inspectRationalOpenChainV4(
   if (actorPosition !== null) {
     const account = required(accounts, actorPosition.toBase58(), 'actor Claims Position');
     if (account.owner !== activation.claims || account.executable) throw new Error('actor Claims Position owner/executable state differs');
-    actorPositionRevision = decodeRationalClaimsPositionV2(account.data, aggregate.toBase58(), actor, claims.basis, product.outcomeCount);
+    actorPositionRevision = decodeRationalClaimsPositionV2(account.data, aggregate.toBase58(), actor, claims.basis, descriptor.outcomeCount);
   }
   if (actorReceipt !== null) {
     const receipt = decodeToken2022BehaviorAccountV2(actorReceipt.toBase58(), required(accounts, actorReceipt.toBase58(), 'actor receipt account'));
@@ -356,7 +356,7 @@ export async function inspectRationalOpenChainV4(
   for (const row of derived) {
     const positionAccount = required(accounts, row.position.toBase58(), `Claims custody Position outcome ${row.outcome}`);
     if (positionAccount.owner !== activation.claims || positionAccount.executable) throw new Error(`Claims custody Position ${row.outcome} owner/executable state differs`);
-    const positionRevision = decodeRationalClaimsPositionV2(positionAccount.data, aggregate.toBase58(), row.owner.toBase58(), claims.basis, product.outcomeCount);
+    const positionRevision = decodeRationalClaimsPositionV2(positionAccount.data, aggregate.toBase58(), row.owner.toBase58(), claims.basis, descriptor.outcomeCount);
     if (selectedAction(input.action)) selectedCustodyRevision = positionRevision;
     const mint = decodeToken2022BehaviorMintV2(row.mint.toBase58(), required(accounts, row.mint.toBase58(), `shard Mint ${row.outcome}`));
     const actorToken = decodeToken2022BehaviorAccountV2(row.actorToken.toBase58(), required(accounts, row.actorToken.toBase58(), `actor shard ATA ${row.outcome}`));
@@ -377,7 +377,7 @@ export async function inspectRationalOpenChainV4(
     expectedClaimsMarketRevision: selectedAction(input.action) ? claims.revision : RATIONAL_OPEN_ABSENT_REVISION_V3,
     expectedActorPositionRevision: actorPositionRevision, expectedCustodyPositionRevision: selectedCustodyRevision,
     generation: market.generation, quantity: input.rawQuantity, denominator: descriptor.denominator,
-    expectedReceiptSupply: receiptMint.rawSupply, outcomeCount: product.outcomeCount, selectedOutcome: input.selectedOutcome, assets,
+    expectedReceiptSupply: receiptMint.rawSupply, outcomeCount: descriptor.outcomeCount, selectedOutcome: input.selectedOutcome, assets,
   });
   const caller = PublicKey.findProgramAddressSync([CALLER_AUTHORITY_SEED, market.releaseSet, key(marketAddress, 'Market').toBytes(), Uint8Array.of(2), family.familyDigest, family.childDigest], key(trading, 'Trading program'))[0];
   const child = rationalOpenClaimsMetasV4({ caller: caller.toBase58(), trading, tradingProgramData: activation.tradingProgramData,
@@ -394,9 +394,9 @@ export async function inspectRationalOpenChainV4(
   });
   const injected = [fixed[Hot.HOT_ROOT_ACCOUNT_V3], fixed[Hot.HOT_CONFIG_RAW_ACCOUNT_V3], fixed[Hot.HOT_PRODUCT_RAW_ACCOUNT_V3], fixed[Hot.HOT_PORTFOLIO_RAW_ACCOUNT_V3], fixed[Hot.HOT_LINKED_BASIS_RAW_ACCOUNT_V3]];
   if (injected.some((meta) => meta === undefined)) throw new Error('Hot fixed frame omits one injected profile coordinate');
-  const physical = compactRationalProfile11AccountsV4(artifacts[0]?.data ?? new Uint8Array(), selectedAction(input.action) ? 0 : product.outcomeCount, injected as ReadonlyArray<Meta>, child, accounts);
+  const physical = compactRationalProfile11AccountsV4(artifacts[0]?.data ?? new Uint8Array(), selectedAction(input.action) ? 0 : descriptor.outcomeCount, injected as ReadonlyArray<Meta>, child, accounts);
   return Object.freeze({ observedSlot: dynamicObservation.slot, action: input.action, payer, actor, market: marketAddress,
-    generation: market.generation, outcomeCount: product.outcomeCount, selectedOutcome: input.selectedOutcome, rawQuantity: input.rawQuantity,
+    generation: market.generation, outcomeCount: descriptor.outcomeCount, selectedOutcome: input.selectedOutcome, rawQuantity: input.rawQuantity,
     displayDecimals: receiptMint.displayDecimals, descriptorId, tokenBehaviorDigest: configDigest,
     capabilityDigest: capabilitySelection.digest, rootDigest, family, fixedAccounts: fixed,
     physicalClaimsAccounts: physical, lookupTable: common.lookupTable, executionStatus: 'blocked',
