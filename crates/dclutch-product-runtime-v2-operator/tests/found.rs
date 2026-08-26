@@ -10,7 +10,7 @@ use dclutch_product_runtime_v2_operator::{
     ProductCompilationInputV2, compile_product_records_v2,
     found::{
         FOUND_ACCOUNT_COUNT_V2, FinalizedReferenceObservationV2, FoundStateV2,
-        build_found_instruction_v2,
+        build_found_instruction_v2, project_found_v2,
     },
     lifecycle_rent_v2::{LifecycleRentCreateStateV2, build_lifecycle_rent_create_v2},
 };
@@ -567,7 +567,8 @@ fn valid_found31_exports_runtime_width_instruction() {
 #[test]
 fn lifecycle_credit_creation_is_derived_from_the_found_projection() {
     let fixture = Fixture::new();
-    let found = build_found_instruction_v2(GENERATION, fixture.state()).expect("Found plan");
+    let found = project_found_v2(GENERATION, fixture.state().projection_state())
+        .expect("pre-credit Found projection");
     let plan = build_lifecycle_rent_create_v2(
         &found,
         LifecycleRentCreateStateV2 {
@@ -603,6 +604,105 @@ fn lifecycle_credit_creation_is_derived_from_the_found_projection() {
         },
     );
     assert_eq!(hostile, Err(dclutch_product_runtime_v2_operator::lifecycle_rent_v2::LifecycleRentOperatorErrorV2::InvalidCredit));
+}
+
+#[test]
+fn pre_credit_projection_refuses_stale_and_substituted_authority() {
+    let fixture = Fixture::new();
+    let state = fixture.state().projection_state();
+    let projection = project_found_v2(GENERATION, state).expect("pre-credit projection");
+    assert_eq!(projection.market_address, fixture.market);
+    assert_eq!(projection.market_identity.generation, GENERATION);
+
+    let stale_slot = AccountObservationV2 {
+        slot: SLOT - 1,
+        ..state.market
+    };
+    assert_eq!(
+        project_found_v2(
+            GENERATION,
+            dclutch_product_runtime_v2_operator::found::FoundProjectionStateV2 {
+                market: stale_slot,
+                ..state
+            }
+        ),
+        Err(Error::ObservationMismatch)
+    );
+
+    let substituted_release = FinalizedReferenceObservationV2 {
+        schema_id: state.execution_release_set.schema_id,
+        record: state.capability_manifest.record,
+    };
+    assert_eq!(
+        project_found_v2(
+            GENERATION,
+            dclutch_product_runtime_v2_operator::found::FoundProjectionStateV2 {
+                execution_release_set: substituted_release,
+                ..state
+            }
+        ),
+        Err(Error::AccountAuthority)
+    );
+}
+
+#[test]
+fn found_requires_reacquired_real_post_create_credit() {
+    let fixture = Fixture::new();
+    let projection = project_found_v2(GENERATION, fixture.state().projection_state())
+        .expect("pre-credit Found projection");
+    let create = build_lifecycle_rent_create_v2(
+        &projection,
+        LifecycleRentCreateStateV2 {
+            payer: account(PAYER, system_program::ID, 10_000_000_000, false, &[]),
+            credit_destination: account(fixture.rent_credit, system_program::ID, 0, false, &[]),
+            refund_wallet: account(PAYER, system_program::ID, 10_000_000_000, false, &[]),
+            rent_program: fixture.state().rent_program,
+            system_program: fixture.state().system_program,
+            rent: fixture.state().rent,
+        },
+    )
+    .expect("lifecycle credit creation");
+
+    let vacant = AccountObservationV2 {
+        key: create.credit,
+        owner: system_program::ID,
+        lamports: 0,
+        executable: false,
+        data: &[],
+        slot: SLOT,
+    };
+    assert_eq!(
+        build_found_instruction_v2(
+            GENERATION,
+            FoundStateV2 {
+                rent_credit: vacant,
+                ..fixture.state()
+            }
+        ),
+        Err(Error::AccountAuthority)
+    );
+
+    let stale_credit = AccountObservationV2 {
+        slot: SLOT - 1,
+        ..fixture.state().rent_credit
+    };
+    assert_eq!(
+        build_found_instruction_v2(
+            GENERATION,
+            FoundStateV2 {
+                rent_credit: stale_credit,
+                ..fixture.state()
+            }
+        ),
+        Err(Error::ObservationMismatch)
+    );
+
+    let final_plan = build_found_instruction_v2(GENERATION, fixture.state())
+        .expect("reacquired post-create credit enables Found31");
+    assert_eq!(
+        final_plan.market_address,
+        create.state.market().to_bytes().into()
+    );
 }
 
 #[test]

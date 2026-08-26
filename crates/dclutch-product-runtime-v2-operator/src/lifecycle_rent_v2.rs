@@ -25,7 +25,7 @@ use solana_program::{
 };
 use solana_sdk_ids::{native_loader, system_program, sysvar};
 
-use crate::{AccountObservationV2, found::FoundInstructionPlanV2};
+use crate::{AccountObservationV2, found::FoundProjectionV2};
 
 /// Exact V2 Create frame width.
 pub const LIFECYCLE_RENT_CREATE_ACCOUNT_COUNT_V2: usize = 4;
@@ -124,7 +124,7 @@ pub struct LifecycleRentCloseExpectationV2 {
 
 /// Construct the sole lifecycle credit selected by an authenticated Found plan.
 pub fn build_lifecycle_rent_create_v2(
-    found: &FoundInstructionPlanV2,
+    found: &FoundProjectionV2,
     state: LifecycleRentCreateStateV2<'_>,
 ) -> Result<LifecycleRentCreatePlanV2, LifecycleRentOperatorErrorV2> {
     let slot = found.observation_slot;

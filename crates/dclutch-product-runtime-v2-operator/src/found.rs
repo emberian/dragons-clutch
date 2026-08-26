@@ -56,7 +56,55 @@ pub struct FinalizedReferenceObservationV2<'a> {
     pub record: FinalizedRecordObservationV2<'a>,
 }
 
-/// One finalized snapshot sufficient to construct Core Found for Runtime V2.
+/// One finalized pre-credit snapshot sufficient to derive the sole Market and
+/// lifecycle-credit coordinates for Runtime V2.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FoundProjectionStateV2<'a> {
+    /// System-owned signing payer and Market rent sponsor.
+    pub payer: AccountObservationV2<'a>,
+    /// System-owned empty exact Market PDA destination.
+    pub market: AccountObservationV2<'a>,
+    /// Exact executable Rent program selected by the immutable profile.
+    pub rent_program: AccountObservationV2<'a>,
+    /// Finalized Realm raw/staging pair.
+    pub realm: FinalizedReferenceObservationV2<'a>,
+    /// Finalized Runtime V2 Product raw/staging pair.
+    pub product: FinalizedRecordObservationV2<'a>,
+    /// Finalized Runtime V2 result-domain raw/staging pair.
+    pub result_domain: FinalizedRecordObservationV2<'a>,
+    /// Finalized Runtime V2 portfolio raw/staging pair.
+    pub portfolio: FinalizedRecordObservationV2<'a>,
+    /// Finalized SourceMaterialV2 raw/staging pair.
+    pub source_material: FinalizedReferenceObservationV2<'a>,
+    /// Finalized capability-manifest raw/staging pair.
+    pub capability_manifest: FinalizedReferenceObservationV2<'a>,
+    /// Finalized execution-release-set raw/staging pair.
+    pub execution_release_set: FinalizedReferenceObservationV2<'a>,
+    /// Registry-owned activated release-set cache.
+    pub activation_cache: AccountObservationV2<'a>,
+    /// Exact executable Core program selected for Found.
+    pub core_program: AccountObservationV2<'a>,
+    /// Current Core ProgramData account named by the activated release.
+    pub core_programdata: AccountObservationV2<'a>,
+    /// Exact executable Registry program selected by the immutable profile.
+    pub registry_program: AccountObservationV2<'a>,
+    /// Canonical Rent sysvar observation.
+    pub rent: AccountObservationV2<'a>,
+    /// Canonical executable System Program observation.
+    pub system_program: AccountObservationV2<'a>,
+    /// Immutable per-Core Registry/Rent selection PDA.
+    pub infrastructure_profile: AccountObservationV2<'a>,
+    /// Finalized immutable Registry artifact release.
+    pub registry_artifact: FinalizedRecordObservationV2<'a>,
+    /// Current Registry ProgramData observation.
+    pub registry_programdata: AccountObservationV2<'a>,
+    /// Finalized immutable Rent artifact release.
+    pub rent_artifact: FinalizedRecordObservationV2<'a>,
+    /// Current Rent ProgramData observation.
+    pub rent_programdata: AccountObservationV2<'a>,
+}
+
+/// One finalized post-credit snapshot sufficient to construct Core Found for Runtime V2.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FoundStateV2<'a> {
     /// System-owned signing payer and Market rent sponsor.
@@ -105,6 +153,55 @@ pub struct FoundStateV2<'a> {
     pub rent_programdata: AccountObservationV2<'a>,
 }
 
+impl<'a> FoundStateV2<'a> {
+    /// Remove only the lifecycle-credit observation, retaining the complete
+    /// same-slot authority needed to derive its exact pre-creation coordinate.
+    pub fn projection_state(self) -> FoundProjectionStateV2<'a> {
+        FoundProjectionStateV2 {
+            payer: self.payer,
+            market: self.market,
+            rent_program: self.rent_program,
+            realm: self.realm,
+            product: self.product,
+            result_domain: self.result_domain,
+            portfolio: self.portfolio,
+            source_material: self.source_material,
+            capability_manifest: self.capability_manifest,
+            execution_release_set: self.execution_release_set,
+            activation_cache: self.activation_cache,
+            core_program: self.core_program,
+            core_programdata: self.core_programdata,
+            registry_program: self.registry_program,
+            rent: self.rent,
+            system_program: self.system_program,
+            infrastructure_profile: self.infrastructure_profile,
+            registry_artifact: self.registry_artifact,
+            registry_programdata: self.registry_programdata,
+            rent_artifact: self.rent_artifact,
+            rent_programdata: self.rent_programdata,
+        }
+    }
+}
+
+/// Authenticated pre-credit Found projection. This is not an executable Found
+/// instruction: it exists solely to select the exact Market, generation,
+/// release set, and lifecycle-credit PDA before the credit account exists.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FoundProjectionV2 {
+    /// Sole Market address derived from the authenticated snapshot.
+    pub market_address: Pubkey,
+    /// Market identity reconstructed from the exact selected Registry.
+    pub market_identity: MarketIdentity,
+    /// Product graph projection authenticated under the selected Registry.
+    pub product: AdmissionProjectionV2,
+    /// Runtime native outcome width, including explicit failure.
+    pub outcome_count: u32,
+    /// Shared finalized observation slot.
+    pub observation_slot: u64,
+    /// Exact Market rent top-up required from the payer.
+    pub market_rent_top_up: u64,
+}
+
 /// Exact chain-derived Runtime V2 Core Found plan.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FoundInstructionPlanV2 {
@@ -129,13 +226,60 @@ pub fn build_found_instruction_v2(
     generation: u64,
     state: FoundStateV2<'_>,
 ) -> Result<FoundInstructionPlanV2> {
-    prepare_found_instruction_v2(generation, state)
+    let projection = project_found_v2(generation, state.projection_state())?;
+    if state.rent_credit.slot != projection.observation_slot {
+        return Err(Error::ObservationMismatch);
+    }
+    if projection_accounts(state.projection_state())
+        .iter()
+        .any(|account| account.key == state.rent_credit.key)
+    {
+        return Err(Error::AccountAuthority);
+    }
+    authenticate_rent_credit(
+        state.rent_program,
+        state.rent_credit,
+        projection.market_address,
+        generation,
+        projection.market_identity.selected_release_set.to_bytes(),
+    )?;
+    let request = Request::administrative(
+        Action::Found,
+        generation,
+        projection.market_identity.market_id,
+    )
+    .encode()
+    .map_err(|_| Error::InvalidRecord)?;
+    if request.len() != REQUEST_BYTES {
+        return Err(Error::InvalidRecord);
+    }
+    let accounts = found_metas(state);
+    if accounts.len() != FOUND_ACCOUNT_COUNT_V2 {
+        return Err(Error::AccountAuthority);
+    }
+    Ok(FoundInstructionPlanV2 {
+        instruction: Instruction {
+            program_id: state.core_program.key,
+            accounts,
+            data: request.to_vec(),
+        },
+        market_address: projection.market_address,
+        market_identity: projection.market_identity,
+        outcome_count: projection.outcome_count,
+        product: projection.product,
+        observation_slot: projection.observation_slot,
+        market_rent_top_up: projection.market_rent_top_up,
+    })
 }
 
-fn prepare_found_instruction_v2(
+/// Authenticate the complete immutable Found authority and derive the exact
+/// pre-credit Market projection. The projection cannot be submitted as Found;
+/// callers must first create and reacquire its lifecycle credit, then call
+/// [`build_found_instruction_v2`] with the real post-create observation.
+pub fn project_found_v2(
     generation: u64,
-    state: FoundStateV2<'_>,
-) -> Result<FoundInstructionPlanV2> {
+    state: FoundProjectionStateV2<'_>,
+) -> Result<FoundProjectionV2> {
     let slot = require_one_slot(state)?;
     authenticate_runtime_accounts(state)?;
     let rent = decode_rent(state.rent)?;
@@ -211,7 +355,6 @@ fn prepare_found_instruction_v2(
     }
     authenticate_activation(state, release_set_digest.to_bytes(), release_set)?;
     authenticate_infrastructure(state, &rent)?;
-    authenticate_rent_credit(state, generation, release_set_digest.to_bytes())?;
 
     let mut market_identity = MarketIdentity {
         market_id: identity(state.market.key.to_bytes())?,
@@ -238,22 +381,7 @@ fn prepare_found_instruction_v2(
     if state.payer.lamports < market_rent_top_up {
         return Err(Error::InsufficientPayer);
     }
-    let request = Request::administrative(Action::Found, generation, market_identity.market_id)
-        .encode()
-        .map_err(|_| Error::InvalidRecord)?;
-    if request.len() != REQUEST_BYTES {
-        return Err(Error::InvalidRecord);
-    }
-    let accounts = found_metas(state);
-    if accounts.len() != FOUND_ACCOUNT_COUNT_V2 {
-        return Err(Error::AccountAuthority);
-    }
-    Ok(FoundInstructionPlanV2 {
-        instruction: Instruction {
-            program_id: state.core_program.key,
-            accounts,
-            data: request.to_vec(),
-        },
+    Ok(FoundProjectionV2 {
         market_address,
         market_identity,
         outcome_count: product.join.outcome_count,
@@ -263,9 +391,9 @@ fn prepare_found_instruction_v2(
     })
 }
 
-fn require_one_slot(state: FoundStateV2<'_>) -> Result<u64> {
+fn require_one_slot(state: FoundProjectionStateV2<'_>) -> Result<u64> {
     let slot = state.registry_program.slot;
-    if all_accounts(state)
+    if projection_accounts(state)
         .iter()
         .any(|account| account.slot != slot)
     {
@@ -274,8 +402,8 @@ fn require_one_slot(state: FoundStateV2<'_>) -> Result<u64> {
     Ok(slot)
 }
 
-fn authenticate_runtime_accounts(state: FoundStateV2<'_>) -> Result<()> {
-    let keys: Vec<Pubkey> = all_accounts(state)
+fn authenticate_runtime_accounts(state: FoundProjectionStateV2<'_>) -> Result<()> {
+    let keys: Vec<Pubkey> = projection_accounts(state)
         .iter()
         .map(|account| account.key)
         .collect();
@@ -314,7 +442,7 @@ fn authenticate_runtime_accounts(state: FoundStateV2<'_>) -> Result<()> {
     Ok(())
 }
 
-fn authenticate_record_rent_minima(state: FoundStateV2<'_>, rent: &Rent) -> Result<()> {
+fn authenticate_record_rent_minima(state: FoundProjectionStateV2<'_>, rent: &Rent) -> Result<()> {
     let records = [
         state.realm.record,
         state.product,
@@ -359,7 +487,7 @@ fn authenticate_reference(
 }
 
 fn authenticate_activation(
-    state: FoundStateV2<'_>,
+    state: FoundProjectionStateV2<'_>,
     release_set_digest: [u8; 32],
     release_set: ExecutionReleaseSetV1,
 ) -> Result<()> {
@@ -405,7 +533,7 @@ fn authenticate_activation(
     Ok(())
 }
 
-fn authenticate_infrastructure(state: FoundStateV2<'_>, rent: &Rent) -> Result<()> {
+fn authenticate_infrastructure(state: FoundProjectionStateV2<'_>, rent: &Rent) -> Result<()> {
     let expected_profile = Pubkey::find_program_address(
         &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
         &state.core_program.key,
@@ -513,16 +641,18 @@ fn authenticate_current_deployment(
 }
 
 fn authenticate_rent_credit(
-    state: FoundStateV2<'_>,
+    rent_program: AccountObservationV2<'_>,
+    rent_credit: AccountObservationV2<'_>,
+    market_address: Pubkey,
     generation: u64,
     release_set: [u8; 32],
 ) -> Result<()> {
-    if state.rent_credit.owner != state.rent_program.key || state.rent_credit.executable {
+    if rent_credit.owner != rent_program.key || rent_credit.executable {
         return Err(Error::AccountAuthority);
     }
     let credit =
-        LifecycleRentCreditV2::decode(state.rent_credit.data).map_err(|_| Error::InvalidRecord)?;
-    if credit.market().to_bytes() != state.market.key.to_bytes()
+        LifecycleRentCreditV2::decode(rent_credit.data).map_err(|_| Error::InvalidRecord)?;
+    if credit.market().to_bytes() != market_address.to_bytes()
         || credit.release_set().to_bytes() != release_set
         || credit.generation() != generation
     {
@@ -538,10 +668,10 @@ fn authenticate_rent_credit(
             &generation_bytes,
             &bump,
         ],
-        &state.rent_program.key,
+        &rent_program.key,
     )
     .map_err(|_| Error::AccountAuthority)?;
-    if expected != state.rent_credit.key {
+    if expected != rent_credit.key {
         return Err(Error::AccountAuthority);
     }
     Ok(())
@@ -605,11 +735,12 @@ fn found_metas(state: FoundStateV2<'_>) -> Vec<AccountMeta> {
     ]
 }
 
-fn all_accounts(state: FoundStateV2<'_>) -> [AccountObservationV2<'_>; FOUND_ACCOUNT_COUNT_V2] {
+fn projection_accounts(
+    state: FoundProjectionStateV2<'_>,
+) -> [AccountObservationV2<'_>; FOUND_ACCOUNT_COUNT_V2 - 1] {
     [
         state.payer,
         state.market,
-        state.rent_credit,
         state.rent_program,
         state.realm.record.raw,
         state.realm.record.staging,
