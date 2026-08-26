@@ -457,7 +457,7 @@ pub fn build_equity_request_v3(
         .map_err(|_| EquityOperatorErrorV3::Claims)?;
     let claims_packet_bytes =
         u32::try_from(geometry.packet_bytes).map_err(|_| EquityOperatorErrorV3::WidthMismatch)?;
-    let selector = physical_selector(action, geometry.position_count)?;
+    let selector = dealer_equity_selector_v3(action, geometry.position_count)?;
     if set.selector_offset() != DEALER_EQUITY_SELECTOR_OFFSET_V3
         || set.selector_width() != SelectorWidthV1::U16
     {
@@ -846,7 +846,9 @@ fn selector_shape(selector: u16) -> Result<(EquityRequestActionV3, u32), EquityO
     }
 }
 
-fn physical_selector(
+/// Return the sole canonical physical selector for one equity action and
+/// SignedDelta Position-table width.
+pub fn dealer_equity_selector_v3(
     action: EquityRequestActionV3,
     positions: u32,
 ) -> Result<u16, EquityOperatorErrorV3> {

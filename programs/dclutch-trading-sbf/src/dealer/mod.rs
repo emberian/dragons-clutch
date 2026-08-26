@@ -28,6 +28,8 @@ use solana_program::{hash::hash, pubkey::Pubkey};
 
 use crate::dispatch::TradingFamilyContextV1;
 
+/// Finalized RequestProfile/Transition/Effect joins for junior equity.
+pub mod v3_artifacts;
 /// Atomic scenario-solvent Claims/Custody portfolio-fill composition.
 pub mod v3_composer;
 /// Exact scenario-residual junior pool-equity kernel.
