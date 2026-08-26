@@ -111,15 +111,16 @@ impl SeriesShadowEffectsV3 {
 /// Complete stateless semantic result for one Series action.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SeriesShadowPlanV3<'a> {
-    admitted: AdmittedSeriesActionV3<'a>,
+    action: SeriesActionV3,
     replay: SeriesReplayWitnessV3,
     effects: SeriesShadowEffectsV3,
+    marker: core::marker::PhantomData<&'a [u8]>,
 }
 
 impl<'a> SeriesShadowPlanV3<'a> {
-    /// Exact immutable action admission.
-    pub const fn admitted(self) -> AdmittedSeriesActionV3<'a> {
-        self.admitted
+    /// Action whose exact immutable record join was admitted before evaluation.
+    pub const fn action(self) -> SeriesActionV3 {
+        self.action
     }
 
     /// Candidate root/Ticket replay transition.
@@ -134,7 +135,10 @@ impl<'a> SeriesShadowPlanV3<'a> {
 }
 
 /// Evaluate one complete Series action without state or CPI authority.
-pub fn evaluate_series_shadow_v3(input: SeriesShadowInputV3<'_>) -> Result<SeriesShadowPlanV3<'_>> {
+#[inline(never)]
+pub fn evaluate_series_shadow_v3<'a>(
+    input: &SeriesShadowInputV3<'a>,
+) -> Result<SeriesShadowPlanV3<'a>> {
     let admitted = admit_series_action_v3(
         input.family_request,
         input.template,
@@ -142,10 +146,34 @@ pub fn evaluate_series_shadow_v3(input: SeriesShadowInputV3<'_>) -> Result<Serie
         input.ticket,
     )
     .map_err(|_| SeriesShadowErrorV3::Content)?;
+    let series = decode_series_shadow_state_v3(admitted, input.series_state)?;
+    let replay =
+        evaluate_series_shadow_replay_v3(admitted, input.series_state, input.ticket_state)?;
+    let effects = occurrence_effects(input.observations, admitted, series)?;
+    Ok(SeriesShadowPlanV3 {
+        action: admitted.action(),
+        replay,
+        effects,
+        marker: core::marker::PhantomData,
+    })
+}
+
+#[inline(never)]
+fn decode_series_shadow_state_v3(
+    admitted: AdmittedSeriesActionV3<'_>,
+    series_state: &[u8],
+) -> Result<SeriesStateV3> {
+    SeriesStateV3::decode(series_state, admitted.template().occurrence_count())
+        .map_err(|_| SeriesShadowErrorV3::Replay)
+}
+
+#[inline(never)]
+fn evaluate_series_shadow_replay_v3(
+    admitted: AdmittedSeriesActionV3<'_>,
+    series_state: &[u8],
+    ticket_state: Option<&[u8]>,
+) -> Result<SeriesReplayWitnessV3> {
     let request = admitted.request();
-    let template = admitted.template();
-    let series = SeriesStateV3::decode(input.series_state, template.occurrence_count())
-        .map_err(|_| SeriesShadowErrorV3::Replay)?;
     let ticket_record = admitted.ticket().map(|ticket| ticket.content_id());
     let replay_action = match request.action() {
         SeriesActionV3::Prepare => SeriesReplayActionV3::Prepare {
@@ -167,20 +195,16 @@ pub fn evaluate_series_shadow_v3(input: SeriesShadowInputV3<'_>) -> Result<Serie
     };
     let replay = evaluate_replay_v3(
         replay_action,
-        template.occurrence_count(),
+        admitted.template().occurrence_count(),
         request.expected_series_revision(),
-        input.series_state,
-        input.ticket_state,
+        series_state,
+        ticket_state,
     )
     .map_err(|_| SeriesShadowErrorV3::Replay)?;
-    let effects = occurrence_effects(input.observations, admitted, series)?;
-    Ok(SeriesShadowPlanV3 {
-        admitted,
-        replay,
-        effects,
-    })
+    Ok(replay)
 }
 
+#[inline(never)]
 fn occurrence_effects(
     observations: SeriesShadowObservationsV3,
     admitted: AdmittedSeriesActionV3<'_>,
@@ -437,8 +461,8 @@ mod tests {
     #[test]
     fn consume_shadow_joins_content_replay_schedule_and_effects() {
         let fixture = Fixture::new();
-        let plan = evaluate_series_shadow_v3(fixture.input()).expect("Shadow plan");
-        assert_eq!(plan.admitted().request().action(), SeriesActionV3::Consume);
+        let plan = evaluate_series_shadow_v3(&fixture.input()).expect("Shadow plan");
+        assert_eq!(plan.action(), SeriesActionV3::Consume);
         assert!(matches!(
             plan.replay().series(),
             ReplayCandidateV3::Replace(_)
@@ -466,7 +490,7 @@ mod tests {
         let mut input = fixture.input();
         input.family_request = &substituted_request;
         assert_eq!(
-            evaluate_series_shadow_v3(input),
+            evaluate_series_shadow_v3(&input),
             Err(SeriesShadowErrorV3::Content)
         );
 
@@ -485,21 +509,21 @@ mod tests {
         let mut stale_replay = fixture.input();
         stale_replay.family_request = &stale_request;
         assert_eq!(
-            evaluate_series_shadow_v3(stale_replay),
+            evaluate_series_shadow_v3(&stale_replay),
             Err(SeriesShadowErrorV3::Replay)
         );
 
         let mut missing_product = fixture.input();
         missing_product.observations.product = None;
         assert_eq!(
-            evaluate_series_shadow_v3(missing_product),
+            evaluate_series_shadow_v3(&missing_product),
             Err(SeriesShadowErrorV3::Observation)
         );
 
         let mut early = fixture.input();
         early.observations.now_slot = fixture.scheduled_slot - 1;
         assert_eq!(
-            evaluate_series_shadow_v3(early),
+            evaluate_series_shadow_v3(&early),
             Err(SeriesShadowErrorV3::Schedule)
         );
     }
@@ -514,7 +538,7 @@ mod tests {
             fixture.product.result_domain(),
         ));
         assert_eq!(
-            evaluate_series_shadow_v3(input),
+            evaluate_series_shadow_v3(&input),
             Err(SeriesShadowErrorV3::Effect)
         );
     }

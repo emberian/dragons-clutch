@@ -621,7 +621,6 @@ impl AdmittedOccurrenceV3 {
 pub struct FutureMarketProjectionV3 {
     committed_address: AccountKeyV3,
     identity: MarketIdentity,
-    seeds: MarketCoreStateSeedsV2,
 }
 
 /// Product Runtime V2 facts admitted by its canonical graph reader.
@@ -761,7 +760,7 @@ impl FutureMarketProjectionV3 {
 
     /// Return the sole ordered Core PDA seed projection.
     pub const fn seeds(self) -> MarketCoreStateSeedsV2 {
-        self.seeds
+        MarketCoreStateSeedsV2::new(self.identity)
     }
 
     /// Require an adapter-derived address to equal the committed address.
@@ -820,6 +819,7 @@ pub fn admit_occurrence(
 /// This is the SBF-oriented equivalent of [`admit_occurrence`]. It refuses a
 /// partial sibling and iterates the canonical byte string one 32-byte node at
 /// a time, avoiding a maximum-width proof copy on the adapter stack.
+#[inline(never)]
 pub fn admit_occurrence_bytes(
     template_bytes: &[u8],
     occurrence_bytes: &[u8],
@@ -888,7 +888,6 @@ pub fn future_market_projection(
     Ok(FutureMarketProjectionV3 {
         committed_address: occurrence.market,
         identity,
-        seeds: MarketCoreStateSeedsV2::new(identity),
     })
 }
 

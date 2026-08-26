@@ -243,10 +243,27 @@ impl<'a> SeriesActionRequestV3<'a> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AdmittedSeriesActionV3<'a> {
     request: SeriesActionRequestV3<'a>,
-    template: TemplateV3,
-    template_id: ContentId,
-    occurrence: Option<AdmittedOccurrenceV3>,
-    ticket: Option<AdmittedTicketV3>,
+    content: AdmittedSeriesContentV3,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+// Fixed no-alloc variants deliberately trade a bounded inactive tail for
+// eliminating the duplicated Template in occurrence actions.
+#[allow(clippy::large_enum_variant)]
+enum AdmittedSeriesContentV3 {
+    Occurrence {
+        occurrence: AdmittedOccurrenceV3,
+        ticket: AdmittedTicketV3,
+    },
+    Retire {
+        template: TemplateV3,
+        template_id: ContentId,
+        ticket: AdmittedTicketV3,
+    },
+    Close {
+        template: TemplateV3,
+        template_id: ContentId,
+    },
 }
 
 impl<'a> AdmittedSeriesActionV3<'a> {
@@ -262,32 +279,47 @@ impl<'a> AdmittedSeriesActionV3<'a> {
 
     /// Exact immutable Template.
     pub const fn template(self) -> TemplateV3 {
-        self.template
+        match self.content {
+            AdmittedSeriesContentV3::Occurrence { occurrence, .. } => occurrence.template(),
+            AdmittedSeriesContentV3::Retire { template, .. }
+            | AdmittedSeriesContentV3::Close { template, .. } => template,
+        }
     }
 
     /// Domain-separated Template content identity.
     pub const fn template_id(self) -> ContentId {
-        self.template_id
+        match self.content {
+            AdmittedSeriesContentV3::Occurrence { occurrence, .. } => occurrence.template_id(),
+            AdmittedSeriesContentV3::Retire { template_id, .. }
+            | AdmittedSeriesContentV3::Close { template_id, .. } => template_id,
+        }
     }
 
     /// Admitted occurrence, present only for occurrence-bound actions.
     pub const fn occurrence(self) -> Option<AdmittedOccurrenceV3> {
-        self.occurrence
+        match self.content {
+            AdmittedSeriesContentV3::Occurrence { occurrence, .. } => Some(occurrence),
+            AdmittedSeriesContentV3::Retire { .. } | AdmittedSeriesContentV3::Close { .. } => None,
+        }
     }
 
     /// Admitted Ticket, absent only for root Close.
     pub const fn ticket(self) -> Option<AdmittedTicketV3> {
-        self.ticket
+        match self.content {
+            AdmittedSeriesContentV3::Occurrence { ticket, .. }
+            | AdmittedSeriesContentV3::Retire { ticket, .. } => Some(ticket),
+            AdmittedSeriesContentV3::Close { .. } => None,
+        }
     }
 
     /// Require the action-selected occurrence.
     pub fn required_occurrence(self) -> Result<AdmittedOccurrenceV3, SeriesInstructionErrorV3> {
-        self.occurrence.ok_or(SeriesInstructionErrorV3::Action)
+        self.occurrence().ok_or(SeriesInstructionErrorV3::Action)
     }
 
     /// Require the action-selected Ticket.
     pub fn required_ticket(self) -> Result<AdmittedTicketV3, SeriesInstructionErrorV3> {
-        self.ticket.ok_or(SeriesInstructionErrorV3::Action)
+        self.ticket().ok_or(SeriesInstructionErrorV3::Action)
     }
 }
 
@@ -296,6 +328,7 @@ impl<'a> AdmittedSeriesActionV3<'a> {
 /// Occurrence actions authenticate the exact Merkle proof embedded in
 /// `family_request`. Retire accepts a Ticket but no occurrence/proof. Close
 /// accepts neither. Missing and extraneous record bodies both refuse.
+#[inline(never)]
 pub fn admit_series_action_v3<'a>(
     family_request: &'a [u8],
     template_bytes: &[u8],
@@ -310,53 +343,80 @@ pub fn admit_series_action_v3<'a>(
     if template_id != request.template() {
         return Err(SeriesInstructionErrorV3::ImmutableContent);
     }
-    let (occurrence, ticket) = match request.action() {
+    let content = match request.action() {
         SeriesActionV3::Prepare | SeriesActionV3::Consume | SeriesActionV3::Expire => {
-            let occurrence = admit_occurrence_bytes(
+            let (occurrence, ticket) = admit_occurrence_action_v3(
+                request,
                 template_bytes,
-                occurrence_bytes.ok_or(SeriesInstructionErrorV3::Action)?,
-                request.proof_bytes(),
-            )
-            .map_err(|_| SeriesInstructionErrorV3::ImmutableContent)?;
-            let ticket = admit_ticket(ticket_bytes.ok_or(SeriesInstructionErrorV3::Action)?)
-                .map_err(|_| SeriesInstructionErrorV3::ImmutableContent)?;
-            if request.occurrence() != Some(occurrence.occurrence_id())
-                || request.ticket() != Some(ticket.content_id())
-            {
-                return Err(SeriesInstructionErrorV3::ImmutableContent);
-            }
-            occurrence
-                .require_ticket(ticket.ticket())
-                .map_err(|_| SeriesInstructionErrorV3::ImmutableContent)?;
-            (Some(occurrence), Some(ticket))
+                occurrence_bytes,
+                ticket_bytes,
+            )?;
+            AdmittedSeriesContentV3::Occurrence { occurrence, ticket }
         }
         SeriesActionV3::Retire => {
-            if occurrence_bytes.is_some() {
-                return Err(SeriesInstructionErrorV3::Action);
+            let ticket =
+                admit_retire_action_v3(request, template_id, occurrence_bytes, ticket_bytes)?;
+            AdmittedSeriesContentV3::Retire {
+                template,
+                template_id,
+                ticket,
             }
-            let ticket = admit_ticket(ticket_bytes.ok_or(SeriesInstructionErrorV3::Action)?)
-                .map_err(|_| SeriesInstructionErrorV3::ImmutableContent)?;
-            if request.ticket() != Some(ticket.content_id())
-                || ticket.ticket().template() != template_id
-            {
-                return Err(SeriesInstructionErrorV3::ImmutableContent);
-            }
-            (None, Some(ticket))
         }
         SeriesActionV3::Close => {
             if occurrence_bytes.is_some() || ticket_bytes.is_some() {
                 return Err(SeriesInstructionErrorV3::Action);
             }
-            (None, None)
+            AdmittedSeriesContentV3::Close {
+                template,
+                template_id,
+            }
         }
     };
-    Ok(AdmittedSeriesActionV3 {
-        request,
-        template,
-        template_id,
-        occurrence,
-        ticket,
-    })
+    Ok(AdmittedSeriesActionV3 { request, content })
+}
+
+#[inline(never)]
+fn admit_occurrence_action_v3(
+    request: SeriesActionRequestV3<'_>,
+    template_bytes: &[u8],
+    occurrence_bytes: Option<&[u8]>,
+    ticket_bytes: Option<&[u8]>,
+) -> Result<(AdmittedOccurrenceV3, AdmittedTicketV3), SeriesInstructionErrorV3> {
+    let occurrence = admit_occurrence_bytes(
+        template_bytes,
+        occurrence_bytes.ok_or(SeriesInstructionErrorV3::Action)?,
+        request.proof_bytes(),
+    )
+    .map_err(|_| SeriesInstructionErrorV3::ImmutableContent)?;
+    let ticket = admit_ticket(ticket_bytes.ok_or(SeriesInstructionErrorV3::Action)?)
+        .map_err(|_| SeriesInstructionErrorV3::ImmutableContent)?;
+    if request.occurrence() != Some(occurrence.occurrence_id())
+        || request.ticket() != Some(ticket.content_id())
+    {
+        return Err(SeriesInstructionErrorV3::ImmutableContent);
+    }
+    occurrence
+        .require_ticket(ticket.ticket())
+        .map_err(|_| SeriesInstructionErrorV3::ImmutableContent)?;
+    Ok((occurrence, ticket))
+}
+
+#[inline(never)]
+fn admit_retire_action_v3(
+    request: SeriesActionRequestV3<'_>,
+    template_id: ContentId,
+    occurrence_bytes: Option<&[u8]>,
+    ticket_bytes: Option<&[u8]>,
+) -> Result<AdmittedTicketV3, SeriesInstructionErrorV3> {
+    if occurrence_bytes.is_some() {
+        return Err(SeriesInstructionErrorV3::Action);
+    }
+    let ticket = admit_ticket(ticket_bytes.ok_or(SeriesInstructionErrorV3::Action)?)
+        .map_err(|_| SeriesInstructionErrorV3::ImmutableContent)?;
+    if request.ticket() != Some(ticket.content_id()) || ticket.ticket().template() != template_id {
+        return Err(SeriesInstructionErrorV3::ImmutableContent);
+    }
+    Ok(ticket)
 }
 
 /// Encode an already validated action header; append exactly `proof_count`
