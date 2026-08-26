@@ -84,3 +84,7 @@ root = "EmitRequestProfileAbiRust"
 [[lean_exe]]
 name = "emit-request-profile-v4-abi-rust"
 root = "EmitRequestProfileV4AbiRust"
+
+[[lean_exe]]
+name = "emit-structured-v2-abi-rust"
+root = "EmitStructuredV2AbiRust"

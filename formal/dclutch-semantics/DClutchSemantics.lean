@@ -59,6 +59,9 @@ import DClutchSemantics.RepresentationCompositionV3Abi
 import DClutchSemantics.ProductRepresentationExposureV3Abi
 import DClutchSemantics.EffectProgramV4Abi
 import DClutchSemantics.RationalCrossDomainV3
+import DClutchSemantics.StructuredV2
+import DClutchSemantics.StructuredV2Abi
+import DClutchSemantics.StructuredV2Examples
 
 /-!
 Fresh Lean-owned semantics for dClutch's compact protocol specializer.
