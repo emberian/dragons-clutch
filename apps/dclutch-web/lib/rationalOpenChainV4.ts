@@ -18,6 +18,7 @@ import {
 } from './rationalOpenHotV3';
 import {
   acquireRationalHotAccountsV4,
+  authenticateRationalProductBasisRecordV3,
   type RationalHotAccountMetaV4,
   type RationalHotRpcV4,
 } from './rationalRetireReceiptV4';
@@ -60,7 +61,8 @@ export type RationalOpenChainInspectionV4 = Readonly<{
   actor: string;
   market: string;
   generation: bigint;
-  outcomeCount: number;
+  representationWidth: number;
+  resultOutcomeCount: number;
   selectedOutcome: number | null;
   rawQuantity: bigint;
   displayDecimals: number;
@@ -292,6 +294,15 @@ export async function inspectRationalOpenChainV4(
   const { payer, actor, fixed, marketAddress, coreProgram, trading, registry, market, activation,
     capabilitySelection, configDigest, rootDigest, artifacts, descriptorId, descriptorAddresses,
     descriptor, graphAddresses } = common;
+  const admittedBasis = await authenticateRationalProductBasisRecordV3(client, common.accounts, {
+    registry,
+    rawAddress: fixed[Hot.HOT_LINKED_BASIS_RAW_ACCOUNT_V3]?.address ?? '',
+    stagingAddress: fixed[Hot.HOT_LINKED_BASIS_STAGING_ACCOUNT_V3]?.address ?? '',
+    productId: common.product.productId,
+    domainDigest: common.domainDigest,
+    domainBytes: common.domainRaw.data,
+    representationWidth: descriptor.outcomeCount,
+  });
   if (descriptor.market !== marketAddress || !same(descriptor.releaseSet, market.releaseSet) || descriptor.tokenProgram !== TOKEN_2022_PROGRAM_ID) {
     throw new Error('representation descriptor differs from Market/release/TokenBehaviorV2');
   }
@@ -396,7 +407,9 @@ export async function inspectRationalOpenChainV4(
   if (injected.some((meta) => meta === undefined)) throw new Error('Hot fixed frame omits one injected profile coordinate');
   const physical = compactRationalProfile11AccountsV4(artifacts[0]?.data ?? new Uint8Array(), selectedAction(input.action) ? 0 : descriptor.outcomeCount, injected as ReadonlyArray<Meta>, child, accounts);
   return Object.freeze({ observedSlot: dynamicObservation.slot, action: input.action, payer, actor, market: marketAddress,
-    generation: market.generation, outcomeCount: descriptor.outcomeCount, selectedOutcome: input.selectedOutcome, rawQuantity: input.rawQuantity,
+    generation: market.generation, representationWidth: admittedBasis.basis.width,
+    resultOutcomeCount: common.product.outcomeCount, selectedOutcome: input.selectedOutcome,
+    rawQuantity: input.rawQuantity,
     displayDecimals: receiptMint.displayDecimals, descriptorId, tokenBehaviorDigest: configDigest,
     capabilityDigest: capabilitySelection.digest, rootDigest, family, fixedAccounts: fixed,
     physicalClaimsAccounts: physical, lookupTable: common.lookupTable, executionStatus: 'blocked',
@@ -432,7 +445,8 @@ export function buildRationalOpenCandidateV4(inspection: RationalOpenChainInspec
 
 export function rationalOpenChainSummaryV4(inspection: RationalOpenChainInspectionV4): Readonly<Record<string, string>> {
   return Object.freeze({ action: inspection.action, descriptor: hex(inspection.descriptorId), capability: hex(inspection.capabilityDigest),
-    quantity: `${inspection.rawQuantity.toString()} raw atoms`, width: `N=${inspection.outcomeCount}`,
+    quantity: `${inspection.rawQuantity.toString()} raw atoms`,
+    width: `K=${inspection.representationWidth} claims over N=${inspection.resultOutcomeCount} terminal results`,
     claims: `${inspection.family.claimsAccountCount} logical → ${inspection.physicalClaimsAccounts.length} physical`,
     decimals: `${inspection.displayDecimals} display-only` });
 }

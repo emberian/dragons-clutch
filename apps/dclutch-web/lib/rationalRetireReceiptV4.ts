@@ -31,6 +31,10 @@ import {
   deriveFinalizedRecordAddressesV1,
 } from './releaseRegistry';
 import { decodeToken2022BehaviorMintV2, TOKEN_2022_PROGRAM_ID } from './rationalTokenV2';
+import {
+  decodeRationalProductBasisV3,
+  type RationalProductBasisViewV3,
+} from './rationalTerminalHotV3';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
 import { PACKET_DATA_SIZE } from './directTransaction';
 
@@ -71,6 +75,7 @@ const CLAIMS_MARKET_SEED = new TextEncoder().encode('dclutch:lbv2:market');
 const POSITION_SEED = new TextEncoder().encode('dclutch:lbv2:position');
 const ADMISSION_SEED = new TextEncoder().encode('dclutch:protocol-position:v2');
 const ACTIVATION_SEED = new TextEncoder().encode('dclutch:release-activation:v1');
+const SEMANTIC_BASIS_CONTENT_DOMAIN_V3 = new TextEncoder().encode('dclutch/product-basis/semantic/v3');
 
 export type RationalHotAccountMetaV4 = Readonly<{ address: string; isSigner: boolean; isWritable: boolean }>;
 type AccountMetaV4 = RationalHotAccountMetaV4;
@@ -100,7 +105,8 @@ export type RationalRetireReceiptInspectionV4 = Readonly<{
   receiptMint: string;
   claimsProgram: string;
   claimsRevision: bigint;
-  productOutcomeCount: number;
+  representationWidth: number;
+  resultOutcomeCount: number;
   rentCredit: string;
   rentProgram: string;
   receiptLamports: bigint;
@@ -137,6 +143,14 @@ type RetireRpc = RationalHotRpcV4;
 
 function same(left: Uint8Array, right: Uint8Array): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function concatenate(parts: ReadonlyArray<Uint8Array>): Uint8Array {
+  const total = parts.reduce((sum, part) => sum + part.length, 0);
+  if (!Number.isSafeInteger(total)) throw new Error('semantic basis preimage exceeds the browser exact-length bound');
+  const output = new Uint8Array(total); let offset = 0;
+  for (const part of parts) { output.set(part, offset); offset += part.length; }
+  return output;
 }
 
 function u32(bytes: Uint8Array, offset: number): number {
@@ -232,6 +246,58 @@ export async function authenticateFinalizedRationalHotRecordV4(
   const rent = await client.minimumBalanceForRentExemption(raw.data.length);
   if (BigInt(raw.lamports) < BigInt(rent.lamports)) throw new Error(`${field} is below its current exact rent minimum`);
   return raw;
+}
+
+/**
+ * Authenticate one finalized ProductBasisV3 and its exact semantic join.
+ * Representation/native-claims width `K` is independent from Product result
+ * width `N`; callers supply only `K` here and validate `N` in Product state.
+ */
+export async function authenticateRationalProductBasisRecordV3(
+  client: Pick<SolanaRpcClient, 'minimumBalanceForRentExemption'>,
+  accounts: ReadonlyMap<string, RpcAccount | null>,
+  input: Readonly<{
+    registry: string;
+    rawAddress: string;
+    stagingAddress: string;
+    productId: Uint8Array;
+    domainDigest: Uint8Array;
+    domainBytes: Uint8Array;
+    representationWidth: number;
+  }>,
+): Promise<Readonly<{
+  basis: RationalProductBasisViewV3;
+  digest: Uint8Array;
+  semanticBasisId: Uint8Array;
+}>> {
+  const raw = required(accounts, input.rawAddress, 'ProductBasisV3 raw');
+  const digest = await sha256(raw.data);
+  await authenticateFinalizedRationalHotRecordV4(
+    client,
+    accounts,
+    input.registry,
+    input.rawAddress,
+    input.stagingAddress,
+    Hot.GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+    digest,
+    'ProductBasisV3',
+  );
+  const basis = decodeRationalProductBasisV3(raw.data);
+  const semanticBasisId = await sha256(concatenate([
+    SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
+    basis.bytes.slice(0, 32),
+    basis.bytes.slice(96),
+  ]));
+  requireNonzero(semanticBasisId, 'Product semantic basis');
+  if (!same(basis.productId, input.productId)
+      || !same(basis.resultDomainId, input.domainDigest)
+      || !same(basis.coordinateDomainId, slice(input.domainBytes, 64, 32))
+      || !same(basis.resultUnitId, slice(input.domainBytes, 96, 32))
+      || !same(semanticBasisId, slice(input.domainBytes, 128, 32))
+      || basis.width !== input.representationWidth) {
+    throw new Error('ProductBasisV3 does not join Product/domain semantics or representation K');
+  }
+  return Object.freeze({ basis, digest, semanticBasisId });
 }
 
 export type RationalHotCoreViewV2 = Readonly<{
@@ -512,7 +578,7 @@ export function encodeRationalRetireReceiptFamilyV4(input: Readonly<{
   generation: bigint; claimsRevision: bigint; receiptLamports: bigint; receiptRent: bigint;
   outcomeCount: number; rentBefore: bigint;
 }>): Uint8Array {
-  if (input.outcomeCount === 0 || input.generation === 0n) throw new Error('compact receipt retirement has a zero Product width or Market generation');
+  if (input.outcomeCount === 0 || input.generation === 0n) throw new Error('compact receipt retirement has a zero representation width or Market generation');
   const distinct = [key(input.market, 'Market'), key(input.representationAuthority, 'representation authority'),
     key(input.receiptMint, 'receipt Mint'), key(TOKEN_2022_PROGRAM_ID, 'Token-2022 program'),
     key(input.rentCredit, 'RentCredit'), key(input.rentProgram, 'Rent program')]
@@ -724,10 +790,19 @@ export async function inspectRationalRetireReceiptV4(
   const domainRaw = await authenticateFinalizedRationalHotRecordV4(client, accounts, registry, fixed[32].address, fixed[33].address, RESULT_DOMAIN_SCHEMA_ID_V2, domainDigest, 'Product result domain');
   const portfolioRaw = await authenticateFinalizedRationalHotRecordV4(client, accounts, registry, fixed[34].address, fixed[35].address, PORTFOLIO_SCHEMA_ID_V2, portfolioDigest, 'Product portfolio');
   const product = decodeCoreFoundProductGraphV2(productRaw.data, domainRaw.data, portfolioRaw.data, domainDigest, portfolioDigest);
-  if (!same(product.productId, market.productId) || product.outcomeCount !== descriptor.outcomeCount) throw new Error('Product-owned N differs from the representation descriptor outcome width');
+  if (!same(product.productId, market.productId)) throw new Error('Product identity differs from the Core Market');
+  const admittedBasis = await authenticateRationalProductBasisRecordV3(client, accounts, {
+    registry,
+    rawAddress: fixed[Hot.HOT_LINKED_BASIS_RAW_ACCOUNT_V3].address,
+    stagingAddress: fixed[Hot.HOT_LINKED_BASIS_STAGING_ACCOUNT_V3].address,
+    productId: product.productId,
+    domainDigest,
+    domainBytes: domainRaw.data,
+    representationWidth: descriptor.outcomeCount,
+  });
   const aggregateAccount = required(accounts, aggregate, 'Claims aggregate');
   if (aggregateAccount.owner !== activation.claims || aggregateAccount.executable) throw new Error('Claims aggregate has the wrong owner or executable bit');
-  const claimsRevision = decodeClaimsMarket(aggregateAccount.data, marketAddress, market.releaseSet, registry, market.productRecord, market.realm, market.generation, product.outcomeCount);
+  const claimsRevision = decodeClaimsMarket(aggregateAccount.data, marketAddress, market.releaseSet, registry, market.productRecord, market.realm, market.generation, admittedBasis.basis.width);
   const creditAccount = required(accounts, market.rentCredit, 'LifecycleRentCreditV2');
   const credit = decodeLifecycleRentCredit(market.rentCredit, creditAccount, marketAddress, market.releaseSet, market.generation);
   const creditRent = BigInt((await client.minimumBalanceForRentExemption(LIFECYCLE_RENT_CREDIT_BYTES_V2)).lamports);
@@ -753,7 +828,7 @@ export async function inspectRationalRetireReceiptV4(
     releaseSet: market.releaseSet, market: marketAddress, graphId: descriptor.graphId, descriptorId: descriptor.id,
     representationAuthority: authority.toBase58(), receiptMint: descriptor.receiptMint, rentCredit: market.rentCredit,
     rentProgram: credit.program, generation: market.generation, claimsRevision,
-    receiptLamports: BigInt(mintAccount.lamports), receiptRent, outcomeCount: product.outcomeCount, rentBefore: credit.balance,
+    receiptLamports: BigInt(mintAccount.lamports), receiptRent, outcomeCount: admittedBasis.basis.width, rentBefore: credit.balance,
   });
   const familyDigest = await sha256(familyBytes);
   const exactChildDigest = await deriveRationalRetireReceiptChildDigestV4(familyBytes, support);
@@ -794,7 +869,8 @@ export async function inspectRationalRetireReceiptV4(
     lookupTable, market: marketAddress, generation: market.generation, releaseSet: market.releaseSet,
     descriptorId: descriptor.id, graphId: descriptor.graphId, representationAuthority: authority.toBase58(),
     receiptMint: descriptor.receiptMint, claimsProgram: activation.claims, claimsRevision,
-    productOutcomeCount: product.outcomeCount, rentCredit: market.rentCredit, rentProgram: credit.program,
+    representationWidth: admittedBasis.basis.width, resultOutcomeCount: product.outcomeCount,
+    rentCredit: market.rentCredit, rentProgram: credit.program,
     receiptLamports: BigInt(mintAccount.lamports), receiptRentPrincipal: receiptRent, rentCreditBefore: credit.balance,
     familyBytes, familyDigest, childDigest: exactChildDigest, rootDigest: await sha256(rootAccount.data), callerAuthority: caller,
     executionStatus: 'blocked',

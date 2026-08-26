@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildRationalOpenCandidateV4,
   rationalOpenClaimsMetasV4,
+  rationalOpenChainSummaryV4,
   type RationalOpenChainInspectionV4,
 } from './rationalOpenChainV4';
 import {
@@ -83,7 +84,8 @@ describe('chain-derived Rational open V4', () => {
     });
     const inspection = Object.freeze({
       observedSlot: '80', action: 'denominate' as const, payer, actor, market, generation: 3n,
-      outcomeCount: 3, selectedOutcome: 1, rawQuantity: 2n, displayDecimals: 255,
+      representationWidth: 3, resultOutcomeCount: 258, selectedOutcome: 1,
+      rawQuantity: 2n, displayDecimals: 255,
       descriptorId: bytes(225), tokenBehaviorDigest: bytes(231), capabilityDigest: bytes(232), rootDigest: bytes(233),
       family, fixedAccounts: fixed, physicalClaimsAccounts: physical, lookupTable: table,
       executionStatus: 'blocked' as const, refusal: 'checked common Hot release pending',
@@ -96,5 +98,7 @@ describe('chain-derived Rational open V4', () => {
     expect(candidate.wireBytes.length).toBeLessThanOrEqual(1232);
     expect([...candidate.requiredSigners].sort()).toEqual([actor, payer].sort());
     expect(candidate.executionStatus).toBe('blocked');
+    expect(rationalOpenChainSummaryV4(inspection).width)
+      .toBe('K=3 claims over N=258 terminal results');
   });
 });

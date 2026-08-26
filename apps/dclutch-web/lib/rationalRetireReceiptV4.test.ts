@@ -34,7 +34,7 @@ function family() {
 }
 
 describe('compact Rational RetireReceipt V4', () => {
-  it('hostile-decodes descriptor-owned N and derives only its ordered positive support K', () => {
+  it('hostile-decodes descriptor-owned K and derives only its ordered positive support S', () => {
     const decoded = decodeRationalRepresentationDescriptorV3(descriptor(), bytes(21));
     expect(decoded.outcomeCount).toBe(5);
     expect(decoded.support).toEqual([
@@ -84,7 +84,7 @@ describe('compact Rational RetireReceipt V4', () => {
       observedSlot: '10', payer: address(201), fixedAccounts: fixed, claimsAccounts: claims, support, lookupTable: table,
       market: address(14), generation: 14n, releaseSet: bytes(15), descriptorId: bytes(21), graphId: bytes(11),
       representationAuthority: address(22), receiptMint: address(16), claimsProgram: address(30), claimsRevision: 3n,
-      productOutcomeCount: 5, rentCredit: address(24), rentProgram: address(25), receiptLamports: 10n,
+      representationWidth: 5, resultOutcomeCount: 258, rentCredit: address(24), rentProgram: address(25), receiptLamports: 10n,
       receiptRentPrincipal: 10n, rentCreditBefore: 100n, familyBytes: request, familyDigest: bytes(202),
       childDigest: bytes(203), rootDigest: bytes(204), callerAuthority: address(205), executionStatus: 'blocked' as const,
       refusal: 'EffectV4 pending',

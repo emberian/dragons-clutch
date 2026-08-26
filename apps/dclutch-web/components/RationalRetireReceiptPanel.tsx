@@ -60,7 +60,7 @@ export default function RationalRetireReceiptPanel() {
       const next = await inspectRationalRetireReceiptV4(new SolanaRpcClient(endpoint), {
         payer, fixedAccounts: fixedAddresses(fixed), lookupTable,
       });
-      setState({ kind: 'ready', inspection: next, message: `Exact N=${next.productOutcomeCount}, K=${next.support.length} retirement candidate joined at finalized slot ${next.observedSlot}.` });
+      setState({ kind: 'ready', inspection: next, message: `Exact representation K=${next.representationWidth}, terminal N=${next.resultOutcomeCount}, support S=${next.support.length} retirement candidate joined at finalized slot ${next.observedSlot}.` });
       setBuildStatus('Chain-derived family and child digests are ready. Acquire one fresh blockhash to compile the v0 candidate.');
     } catch (error) { setState({ kind: 'refused', message: `Refused: ${errorMessage(error)}` }); }
   }
@@ -87,7 +87,7 @@ export default function RationalRetireReceiptPanel() {
   return <>
     <section className="trade-v3-card">
       <header><span>04</span><div><h2>Retire a zero-supply Structured receipt from descriptor truth</h2><p>The wallet never supplies N, K, outcomes, coefficients, custody owners, Position addresses, or rent arithmetic. The browser derives them from finalized Product, descriptor, Claims, Token-2022, and lifecycle-scoped RentCreditV2 state.</p></div></header>
-      <div className="trade-v3-evidence"><article><span>Family wire</span><strong>fixed 400</strong><small>DCRLHC04 · RetireReceipt only</small></article><article><span>Product N / support K</span><strong>20 + 4K</strong><small>K is ordered nonzero descriptor support</small></article><article><span>Payout</span><strong>none</strong><small>closure only; not a payout route</small></article><article><span>Execution</span><strong>release-gated</strong><small>candidate/export complete · signing disabled</small></article></div>
+      <div className="trade-v3-evidence"><article><span>Family wire</span><strong>fixed 400</strong><small>DCRLHC04 · RetireReceipt only</small></article><article><span>Claims frame</span><strong>20 + 4S</strong><small>S is ordered nonzero support within representation K</small></article><article><span>Payout</span><strong>none</strong><small>closure only; not a payout route</small></article><article><span>Execution</span><strong>release-gated</strong><small>candidate/export complete · signing disabled</small></article></div>
     </section>
 
     <form className="trade-v3-card route-card" onSubmit={(event) => void inspect(event)}>
@@ -96,7 +96,7 @@ export default function RationalRetireReceiptPanel() {
       <label><span>Hot fixed38 addresses · one canonical base58 address per line</span><textarea required rows={12} value={fixed} onChange={(event) => setFixed(event.target.value)} /></label>
       <div className="direct-actions"><button type="button" onClick={() => void connectWallet()}>Connect payer identity</button><button disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading finalized lifecycle…' : 'Authenticate compact RetireReceipt'}</button></div>
       <p className="direct-status">{walletStatus}</p><p className="direct-status" aria-live="polite">{state.message}</p>
-      {inspection && summary && <div className="trade-v3-evidence"><article><span>Product N / support K</span><strong>{inspection.productOutcomeCount} / {inspection.support.length}</strong><small>outcomes {inspection.support.map((row) => row.outcome).join(', ')}</small></article><article><span>Claims frame</span><strong>{summary.frame}</strong><small>{inspection.claimsAccounts.length} exact child metas</small></article><article><span>Descriptor</span><strong>{summary.descriptorId.slice(0, 16)}…</strong><small>receipt {short(inspection.receiptMint)}</small></article><article><span>Rent credit</span><strong>{inspection.rentCreditBefore.toString()} lamports</strong><small>+ {inspection.receiptLamports.toString()} receipt lamports on close</small></article></div>}
+      {inspection && summary && <div className="trade-v3-evidence"><article><span>Representation K / result N / support S</span><strong>{inspection.representationWidth} / {inspection.resultOutcomeCount} / {inspection.support.length}</strong><small>support outcomes {inspection.support.map((row) => row.outcome).join(', ')}</small></article><article><span>Claims frame</span><strong>{summary.frame}</strong><small>{inspection.claimsAccounts.length} exact child metas</small></article><article><span>Descriptor</span><strong>{summary.descriptorId.slice(0, 16)}…</strong><small>receipt {short(inspection.receiptMint)}</small></article><article><span>Rent credit</span><strong>{inspection.rentCreditBefore.toString()} lamports</strong><small>+ {inspection.receiptLamports.toString()} receipt lamports on close</small></article></div>}
     </form>
 
     <section className="trade-v3-card signing-card">
