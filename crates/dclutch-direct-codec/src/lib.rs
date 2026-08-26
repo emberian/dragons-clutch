@@ -9,6 +9,7 @@ mod generated_layout;
 mod generated_lifecycle;
 #[rustfmt::skip]
 mod generated_registered_controller;
+pub mod successor;
 
 /// Bytes in one independently signed compact intent.
 pub const COMPACT_INTENT_BYTES: usize = generated_layout::COMPACT_INTENT_BYTES_VALUE;
