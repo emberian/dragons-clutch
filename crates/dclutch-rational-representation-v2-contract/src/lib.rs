@@ -12,20 +12,29 @@
 //! revision only; Claims and Token remain the economic/supply owners.
 
 #[allow(missing_docs)]
-mod generated;
+pub(crate) mod generated {
+    pub(crate) use dclutch_rational_representation_v2_request_contract::generated::*;
+}
+pub(crate) mod request {
+    pub(crate) use dclutch_rational_representation_v2_request_contract::{
+        AssetV2, CallerRoleV2, RepresentationActionV2, RepresentationRequestV2,
+    };
+}
 #[allow(missing_docs)]
 mod generated_hot_v3;
 mod hot_v3;
 mod plan;
 mod receipt;
 mod replay;
-mod request;
 mod seeds;
 
 pub use dclutch_rational_representation_v2_kernel::RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2;
-pub use generated::{
-    ASSET_BYTES_V2, PHYSICAL_ABI_VERSION_V2, RECEIPT_BYTES_V2, RECEIPT_MAGIC_V2,
-    REQUEST_HEADER_BYTES_V2, REQUEST_MAGIC_V2,
+pub use dclutch_rational_representation_v2_request_contract::{
+    ABSENT_REVISION, ASSET_BYTES_V2, AssetV2, CallerRoleV2, Error, PHYSICAL_ABI_VERSION_V2,
+    RATIONAL_ASSET_ACCOUNT_COUNT_V2, RATIONAL_BASE_ACCOUNT_COUNT_V2,
+    RATIONAL_TERMINAL_ACCOUNT_COUNT_V2, RECEIPT_BYTES_V2, RECEIPT_MAGIC_V2,
+    REQUEST_HEADER_BYTES_V2, REQUEST_MAGIC_V2, RepresentationActionV2,
+    RepresentationRequestHeaderV2, RepresentationRequestV2, Result,
 };
 pub use generated_hot_v3::{
     RATIONAL_TERMINAL_HOT_ACTION_OFFSET_V3, RATIONAL_TERMINAL_HOT_ACTOR_OFFSET_V3,
@@ -56,8 +65,7 @@ pub use generated_hot_v3::{
     RATIONAL_TERMINAL_HOT_REPRESENTATION_AUTHORITY_OFFSET_V3,
     RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3, RATIONAL_TERMINAL_HOT_REQUEST_SCHEMA_ID_V3,
     RATIONAL_TERMINAL_HOT_REQUEST_SCHEMA_PREIMAGE_V3,
-    RATIONAL_TERMINAL_HOT_RESERVED_HEADER_OFFSET_V3,
-    RATIONAL_TERMINAL_HOT_RESERVED_TAIL_OFFSET_V3,
+    RATIONAL_TERMINAL_HOT_RESERVED_HEADER_OFFSET_V3, RATIONAL_TERMINAL_HOT_RESERVED_TAIL_OFFSET_V3,
     RATIONAL_TERMINAL_HOT_SELECTED_OUTCOME_OFFSET_V3,
     RATIONAL_TERMINAL_HOT_TOKEN_PROGRAM_OFFSET_V3, RATIONAL_TERMINAL_HOT_VERSION_OFFSET_V3,
     RATIONAL_TERMINAL_HOT_VERSION_V3,
@@ -97,14 +105,8 @@ pub use replay::{
     RATIONAL_REPLAY_BYTES_V2, RATIONAL_REPLAY_MAGIC_V2, RATIONAL_REPLAY_VERSION_V2,
     RationalReplayV2,
 };
-pub use request::{
-    AssetV2, CallerRoleV2, RepresentationActionV2, RepresentationRequestHeaderV2,
-    RepresentationRequestV2,
-};
 pub use seeds::{RATIONAL_RECEIPT_MINT_SEED_V2, RationalReceiptMintSeedsV2};
 
-/// Exact absent revision sentinel shared with the canonical Claims ABI.
-pub const ABSENT_REVISION: u64 = dclutch_claims_svm::NO_POSITION_REVISION;
 /// Claims PDA seed for one outcome's canonical shard Mint.
 pub const RATIONAL_SHARD_MINT_SEED_V2: &[u8] = b"dclutch:rational-shard-mint:v2";
 /// Claims PDA seed for one outcome's canonical Claims custody owner.
@@ -113,55 +115,6 @@ pub const RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2: &[u8] = b"dclutch:rational-clai
 pub const RATIONAL_STRUCTURED_CUSTODY_SEED_V2: &[u8] = b"dclutch:rational-structured:v2";
 /// Claims PDA seed for one holder's rational representation replay cursor.
 pub const RATIONAL_REPLAY_SEED_V2: &[u8] = b"dclutch:rational-replay:v2";
-/// Fixed account prefix before one four-account row per active request asset.
-///
-/// The suffix added in the successor frame is the independently authenticated
-/// linked basis plus Product Runtime V2 graph. These are immutable authority
-/// inputs, never duplicated Claims balances.
-pub const RATIONAL_BASE_ACCOUNT_COUNT_V2: usize = 32;
-/// Accounts in one active request asset row.
-pub const RATIONAL_ASSET_ACCOUNT_COUNT_V2: usize = 4;
-/// Positive terminal Claims-coordinate plus Custody account suffix width.
-pub const RATIONAL_TERMINAL_ACCOUNT_COUNT_V2: usize = 13;
-
-/// Stable hostile-decode, composition, or postcondition refusal.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Error {
-    /// A fixed or runtime-derived wire width differed.
-    InvalidLength,
-    /// Magic bytes selected another wire family.
-    InvalidMagic,
-    /// The physical ABI version is unsupported.
-    UnsupportedVersion,
-    /// Reserved bytes or a tag were noncanonical.
-    NonCanonical,
-    /// A required identity or digest was zero.
-    ZeroIdentity,
-    /// The action's receipt, terminal, outcome, asset, or revision shape differed.
-    InvalidActionShape,
-    /// Runtime outcome or asset width was zero or unrepresentable.
-    InvalidWidth,
-    /// Two semantic roles or two asset rows aliased.
-    AccountAlias,
-    /// A checked scalar, revision, or offset overflowed.
-    ArithmeticOverflow,
-    /// An observed balance could not fund an exact action.
-    InsufficientBalance,
-    /// Request, graph, descriptor, Market, or Token observations did not join.
-    ProjectionMismatch,
-    /// The canonical affine Claims packet or returned receipt differed.
-    ClaimsMismatch,
-    /// An ordered Token effect or post-state observation differed.
-    TokenMismatch,
-    /// A required Custody request/receipt differed or appeared when inactive.
-    CustodyMismatch,
-    /// A replay, program, request digest, or normalized receipt was substituted.
-    ReceiptMismatch,
-}
-
-/// Result alias for the physical composition contract.
-pub type Result<T> = core::result::Result<T, Error>;
-
 pub(crate) fn require_nonzero(value: [u8; 32]) -> Result<[u8; 32]> {
     if is_zero(value) {
         Err(Error::ZeroIdentity)

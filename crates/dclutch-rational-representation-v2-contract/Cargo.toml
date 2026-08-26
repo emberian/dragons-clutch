@@ -10,6 +10,7 @@ description = "Exact physical Claims/Token/Custody composition contract for rati
 dclutch-claims-svm = { path = "../dclutch-claims-svm" }
 dclutch-custody-contract = { path = "../dclutch-custody-contract" }
 dclutch-rational-representation-v2-kernel = { path = "../dclutch-rational-representation-v2-kernel" }
+dclutch-rational-representation-v2-request-contract = { path = "../dclutch-rational-representation-v2-request-contract" }
 dclutch-token-svm = { path = "../dclutch-token-svm" }
 
 [lints]

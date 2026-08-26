@@ -45,6 +45,7 @@ members = [
     "crates/dclutch-record-contract",
     "crates/dclutch-request-profile-contract",
     "crates/dclutch-rational-representation-v2-contract",
+    "crates/dclutch-rational-representation-v2-request-contract",
     "crates/dclutch-rational-representation-v2-kernel",
     "crates/dclutch-rational-representation-v2-lifecycle-contract",
     "crates/dclutch-rational-representation-v2-operator",

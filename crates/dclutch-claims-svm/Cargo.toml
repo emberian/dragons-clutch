@@ -11,6 +11,7 @@ dclutch-effect-kernel = { path = "../dclutch-effect-kernel" }
 dclutch-product-payoff-v2-codec = { path = "../dclutch-product-payoff-v2-codec" }
 dclutch-rational-representation-v2-kernel = { path = "../dclutch-rational-representation-v2-kernel" }
 dclutch-rational-representation-v2-lifecycle-contract = { path = "../dclutch-rational-representation-v2-lifecycle-contract" }
+dclutch-rational-representation-v2-request-contract = { path = "../dclutch-rational-representation-v2-request-contract" }
 
 [dev-dependencies]
 dclutch-token-svm = { path = "../dclutch-token-svm" }
