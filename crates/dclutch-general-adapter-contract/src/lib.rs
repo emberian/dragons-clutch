@@ -224,24 +224,33 @@ impl VerifiedCandidateV1 {
 
     /// Encode one exact program-derived certificate.
     pub fn to_bytes(self) -> Result<[u8; VERIFIED_CANDIDATE_BYTES_V1]> {
-        self.validate()?;
         let mut output = [0_u8; VERIFIED_CANDIDATE_BYTES_V1];
-        put(&mut output, 0, &CERTIFICATE_MAGIC)?;
-        put(&mut output, 8, &VERSION.to_le_bytes())?;
-        put_byte(&mut output, 10, self.complete_set_move as u8)?;
-        put_byte(&mut output, 11, self.outcome_count)?;
-        put(&mut output, 16, &self.candidate_id)?;
-        put(&mut output, 48, &self.product_id)?;
-        put(&mut output, 80, &self.batch_id)?;
-        put(&mut output, 112, &self.page_count.to_le_bytes())?;
-        put(&mut output, 120, &self.filled_lots.to_le_bytes())?;
-        put(&mut output, 128, &self.quote_surplus.to_le_bytes())?;
-        put(&mut output, 136, &self.quote_inputs.to_le_bytes())?;
-        put(&mut output, 144, &self.quote_outputs.to_le_bytes())?;
-        put(&mut output, 152, &self.complete_set_quantity.to_le_bytes())?;
-        put_u64_array(&mut output, 160, &self.claim_inputs)?;
-        put_u64_array(&mut output, 288, &self.claim_outputs)?;
+        self.encode_into(&mut output)?;
         Ok(output)
+    }
+
+    /// Encode into one exact caller-owned certificate buffer.
+    pub fn encode_into(&self, output: &mut [u8]) -> Result<()> {
+        self.validate()?;
+        if output.len() != VERIFIED_CANDIDATE_BYTES_V1 {
+            return Err(Error::Certificate);
+        }
+        output.fill(0);
+        put(output, 0, &CERTIFICATE_MAGIC)?;
+        put(output, 8, &VERSION.to_le_bytes())?;
+        put_byte(output, 10, self.complete_set_move as u8)?;
+        put_byte(output, 11, self.outcome_count)?;
+        put(output, 16, &self.candidate_id)?;
+        put(output, 48, &self.product_id)?;
+        put(output, 80, &self.batch_id)?;
+        put(output, 112, &self.page_count.to_le_bytes())?;
+        put(output, 120, &self.filled_lots.to_le_bytes())?;
+        put(output, 128, &self.quote_surplus.to_le_bytes())?;
+        put(output, 136, &self.quote_inputs.to_le_bytes())?;
+        put(output, 144, &self.quote_outputs.to_le_bytes())?;
+        put(output, 152, &self.complete_set_quantity.to_le_bytes())?;
+        put_u64_array(output, 160, &self.claim_inputs)?;
+        put_u64_array(output, 288, &self.claim_outputs)
     }
 
     fn validate(&self) -> Result<()> {
@@ -362,38 +371,49 @@ impl CandidateVerifierV1 {
     /// Encode one exact persisted verification cursor.
     #[inline(never)]
     pub fn to_bytes(self) -> Result<[u8; VERIFICATION_CURSOR_BYTES_V1]> {
-        self.validate_cursor()?;
         let mut output = [0_u8; VERIFICATION_CURSOR_BYTES_V1];
-        infallible_put(&mut output, 0, &VERIFICATION_CURSOR_MAGIC);
-        infallible_put(&mut output, 8, &VERSION.to_le_bytes());
+        self.encode_into(&mut output)?;
+        Ok(output)
+    }
+
+    /// Encode into one exact caller-owned verification-cursor buffer.
+    #[inline(never)]
+    pub fn encode_into(&self, output: &mut [u8]) -> Result<()> {
+        self.validate_cursor()?;
+        if output.len() != VERIFICATION_CURSOR_BYTES_V1 {
+            return Err(Error::Certificate);
+        }
+        output.fill(0);
+        infallible_put(output, 0, &VERIFICATION_CURSOR_MAGIC);
+        infallible_put(output, 8, &VERSION.to_le_bytes());
         output[10] = u8::from(self.current_order.is_some());
         infallible_put(
-            &mut output,
+            output,
             16,
             &self.candidate.to_bytes().map_err(|_| Error::Codec)?,
         );
-        infallible_put(&mut output, 272, &self.next_page.to_le_bytes());
-        infallible_put(&mut output, 276, &self.order_count.to_le_bytes());
+        infallible_put(output, 272, &self.next_page.to_le_bytes());
+        infallible_put(output, 276, &self.order_count.to_le_bytes());
         if let Some(current) = self.current_order {
             infallible_put(
-                &mut output,
+                output,
                 280,
                 &current
                     .terms
                     .to_bytes_for_outcomes(self.candidate.outcome_count)
                     .map_err(|_| Error::Codec)?,
             );
-            infallible_put(&mut output, 648, &current.lots.to_le_bytes());
-            infallible_put(&mut output, 656, &current.quote_debit.to_le_bytes());
-            infallible_put(&mut output, 664, &current.quote_credit.to_le_bytes());
+            infallible_put(output, 648, &current.lots.to_le_bytes());
+            infallible_put(output, 656, &current.quote_debit.to_le_bytes());
+            infallible_put(output, 664, &current.quote_credit.to_le_bytes());
         }
-        infallible_put(&mut output, 672, &self.filled_lots.to_le_bytes());
-        infallible_put(&mut output, 680, &self.quote_inputs.to_le_bytes());
-        infallible_put(&mut output, 688, &self.quote_outputs.to_le_bytes());
-        infallible_put_u64_array(&mut output, 696, &self.claim_inputs);
-        infallible_put_u64_array(&mut output, 824, &self.claim_outputs);
-        infallible_put(&mut output, 952, &self.revision.to_le_bytes());
-        Ok(output)
+        infallible_put(output, 672, &self.filled_lots.to_le_bytes());
+        infallible_put(output, 680, &self.quote_inputs.to_le_bytes());
+        infallible_put(output, 688, &self.quote_outputs.to_le_bytes());
+        infallible_put_u64_array(output, 696, &self.claim_inputs);
+        infallible_put_u64_array(output, 824, &self.claim_outputs);
+        infallible_put(output, 952, &self.revision.to_le_bytes());
+        Ok(())
     }
 
     /// Hostile-decode one exact persisted verification cursor.
@@ -710,6 +730,24 @@ pub fn candidate_better(
     false
 }
 
+/// Borrowed best-valid-submitted-candidate selection inputs.
+///
+/// This packed ABI keeps the physical SBF call boundary below its fixed
+/// argument-register limit without changing the interpreted policy semantics.
+#[derive(Clone, Copy, Debug)]
+pub struct ConsiderVerifiedInputV1<'a> {
+    /// Immutable candidate header.
+    pub candidate: &'a CandidateV1,
+    /// Immutable interpreted selection policy.
+    pub policy: &'a SelectionPolicyV1,
+    /// Program-derived certificate for the submitted candidate.
+    pub verified: &'a VerifiedCandidateV1,
+    /// Current best certificate, when selection is nonempty.
+    pub incumbent: Option<&'a VerifiedCandidateV1>,
+    /// Exact selection cursor revision consumed by this admission.
+    pub expected_revision: u64,
+}
+
 /// Admit one verified candidate and atomically update selection/certificate bytes.
 pub fn consider_verified(
     selection_output: &mut [u8],
@@ -720,6 +758,33 @@ pub fn consider_verified(
     incumbent: Option<&VerifiedCandidateV1>,
     expected_revision: u64,
 ) -> Result<()> {
+    consider_verified_input(
+        selection_output,
+        certificate_output,
+        ConsiderVerifiedInputV1 {
+            candidate,
+            policy,
+            verified: &verified,
+            incumbent,
+            expected_revision,
+        },
+    )
+}
+
+/// Admit through the SBF-bounded best-valid-submitted-candidate argument ABI.
+#[inline(never)]
+pub fn consider_verified_input(
+    selection_output: &mut [u8],
+    certificate_output: &mut [u8],
+    input: ConsiderVerifiedInputV1<'_>,
+) -> Result<()> {
+    let ConsiderVerifiedInputV1 {
+        candidate,
+        policy,
+        verified,
+        incumbent,
+        expected_revision,
+    } = input;
     if verified.candidate_id != candidate.candidate_id
         || verified.product_id != candidate.product_id
         || verified.batch_id != candidate.batch_id
@@ -755,7 +820,7 @@ pub fn consider_verified(
         None => incumbent.is_none(),
         Some(best) => match incumbent {
             Some(certificate) if certificate.candidate_id == best => {
-                candidate_better(policy, &verified, certificate)
+                candidate_better(policy, verified, certificate)
             }
             _ => return Err(Error::Selection),
         },
@@ -840,6 +905,23 @@ pub struct ExecutionContextV1 {
     pub market_id: [u8; 32],
     /// Registry-authenticated execution-release-set identity.
     pub release_set_id: [u8; 32],
+}
+
+/// Borrowed inputs for one runtime-width settlement row.
+///
+/// Keeping the row coordinates behind one reference is part of the SBF
+/// adapter contract: it avoids a sixth scalar argument crossing a 4 KiB SBF
+/// frame while preserving the same total, allocation-free kernel operation.
+#[derive(Clone, Copy, Debug)]
+pub struct SettlementRowInputV1<'a> {
+    /// Authenticated Market/release coordinates.
+    pub context: ExecutionContextV1,
+    /// Program-derived candidate certificate.
+    pub verified: &'a VerifiedCandidateV1,
+    /// Exact immutable candidate page bytes.
+    pub page_bytes: &'a [u8],
+    /// Exact cursor revision consumed by this row.
+    pub expected_revision: u64,
 }
 
 impl ExecutionContextV1 {
@@ -1236,6 +1318,31 @@ pub fn collect_execution<C: SettlementChildrenV1>(
     expected_revision: u64,
     children: &mut C,
 ) -> Result<()> {
+    collect_execution_row(
+        output,
+        SettlementRowInputV1 {
+            context,
+            verified,
+            page_bytes,
+            expected_revision,
+        },
+        children,
+    )
+}
+
+/// Collect one exact next execution row through the SBF-bounded argument ABI.
+#[inline(never)]
+pub fn collect_execution_row<C: SettlementChildrenV1>(
+    output: &mut [u8],
+    input: SettlementRowInputV1<'_>,
+    children: &mut C,
+) -> Result<()> {
+    let SettlementRowInputV1 {
+        context,
+        verified,
+        page_bytes,
+        expected_revision,
+    } = input;
     context.validate()?;
     let mut cursor = settlement_pre(output, verified, expected_revision, Phase::Collecting)?;
     let page = settlement_page(verified, page_bytes, cursor.next_page)?;
@@ -1343,6 +1450,31 @@ pub fn distribute_execution<C: SettlementChildrenV1>(
     expected_revision: u64,
     children: &mut C,
 ) -> Result<()> {
+    distribute_execution_row(
+        output,
+        SettlementRowInputV1 {
+            context,
+            verified,
+            page_bytes,
+            expected_revision,
+        },
+        children,
+    )
+}
+
+/// Distribute one exact next execution row through the SBF-bounded argument ABI.
+#[inline(never)]
+pub fn distribute_execution_row<C: SettlementChildrenV1>(
+    output: &mut [u8],
+    input: SettlementRowInputV1<'_>,
+    children: &mut C,
+) -> Result<()> {
+    let SettlementRowInputV1 {
+        context,
+        verified,
+        page_bytes,
+        expected_revision,
+    } = input;
     context.validate()?;
     let mut cursor = settlement_pre(output, verified, expected_revision, Phase::Distributing)?;
     let page = settlement_page(verified, page_bytes, cursor.next_page)?;

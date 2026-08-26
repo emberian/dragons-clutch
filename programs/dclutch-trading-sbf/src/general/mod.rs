@@ -8,5 +8,9 @@
 pub mod activation;
 /// Commit-last fixed-role child execution for General settlement.
 pub mod controller;
+/// Runtime-width candidate selection and settlement dispatch.
+pub mod hot_controller;
+/// Authenticated action routing and exact account-derived settlement inputs.
+pub mod route;
 /// Atomic two-pass settlement preparation and exact fixed-role child packets.
 pub mod settlement;

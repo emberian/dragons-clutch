@@ -9,14 +9,14 @@
 //! instruction boundary.
 
 use dclutch_claims_svm::NO_POSITION_REVISION;
-use dclutch_custody_contract::{CUSTODY_POSTSTATE_DOMAIN_V1, CustodyReplayV1};
+use dclutch_custody_contract::{CustodyReplayV1, CUSTODY_POSTSTATE_DOMAIN_V1};
 use dclutch_economic_slice_kernel::{market_revision, position_owner, position_revision};
 use dclutch_general_adapter_contract::child_packets::{
-    ExpectedClaimsPostV2, ExpectedCustodyPostV2, verify_claims_receipt_v2,
-    verify_custody_receipt_v2,
+    verify_claims_receipt_v2, verify_custody_receipt_v2, ExpectedClaimsPostV2,
+    ExpectedCustodyPostV2,
 };
 use dclutch_general_codec::{MAX_OUTCOMES, SETTLEMENT_CURSOR_BYTES};
-use dclutch_general_config_contract::{GENERAL_CONFIG_SCHEMA_ID_V2, GeneralConfigV2};
+use dclutch_general_config_contract::{GeneralConfigV2, GENERAL_CONFIG_SCHEMA_ID_V2};
 use dclutch_record_contract::RAW_RECORD_PDA_SEED_V1;
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_token_svm::TokenAccount;
@@ -30,42 +30,42 @@ use solana_program::{
 };
 
 use crate::{
-    TradingSbfError,
     dispatch::TradingFamilyContextV1,
-    general::settlement::{PreparedSettlementStepV2, derive_caller_authorities_v2},
+    general::settlement::{derive_caller_authorities_v2, PreparedSettlementStepV2},
+    TradingSbfError,
 };
 
 /// Exact canonical account count for one General physical settlement step.
 pub const GENERAL_SETTLEMENT_ACCOUNT_COUNT_V2: usize = 28;
 
-const CORE_MARKET: usize = 0;
-const ACTIVATION_CACHE: usize = 1;
-const REGISTRY_PROGRAM: usize = 2;
-const TRADING_PROGRAM: usize = 3;
-const TRADING_PROGRAMDATA: usize = 4;
-const CORE_PROGRAM: usize = 5;
-const CORE_PROGRAMDATA: usize = 6;
-const CLAIMS_PROGRAM: usize = 7;
-const CLAIMS_PROGRAMDATA: usize = 8;
-const CUSTODY_PROGRAM: usize = 9;
-const CLAIMS_CALLER_AUTHORITY: usize = 10;
-const CUSTODY_CALLER_AUTHORITY: usize = 11;
-const SETTLEMENT_CURSOR: usize = 12;
-const VERIFIED_CERTIFICATE: usize = 13;
-const CANDIDATE: usize = 14;
-const PAGE_OR_MARKET: usize = 15;
-const CLAIMS_MARKET: usize = 16;
-const ROW_OWNER_POSITION: usize = 17;
-const SETTLEMENT_POSITION: usize = 18;
-const REALM: usize = 19;
-const REALM_STAGING: usize = 20;
-const CUSTODY_REPLAY: usize = 21;
-const COLLATERAL_MINT: usize = 22;
-const COLLATERAL_SOURCE: usize = 23;
-const COLLATERAL_DESTINATION: usize = 24;
-const CUSTODY_TRANSFER_AUTHORITY: usize = 25;
-const TOKEN_PROGRAM: usize = 26;
-const GENERAL_CONFIG: usize = 27;
+pub(super) const CORE_MARKET: usize = 0;
+pub(super) const ACTIVATION_CACHE: usize = 1;
+pub(super) const REGISTRY_PROGRAM: usize = 2;
+pub(super) const TRADING_PROGRAM: usize = 3;
+pub(super) const TRADING_PROGRAMDATA: usize = 4;
+pub(super) const CORE_PROGRAM: usize = 5;
+pub(super) const CORE_PROGRAMDATA: usize = 6;
+pub(super) const CLAIMS_PROGRAM: usize = 7;
+pub(super) const CLAIMS_PROGRAMDATA: usize = 8;
+pub(super) const CUSTODY_PROGRAM: usize = 9;
+pub(super) const CLAIMS_CALLER_AUTHORITY: usize = 10;
+pub(super) const CUSTODY_CALLER_AUTHORITY: usize = 11;
+pub(super) const SETTLEMENT_CURSOR: usize = 12;
+pub(super) const VERIFIED_CERTIFICATE: usize = 13;
+pub(super) const CANDIDATE: usize = 14;
+pub(super) const PAGE_OR_MARKET: usize = 15;
+pub(super) const CLAIMS_MARKET: usize = 16;
+pub(super) const ROW_OWNER_POSITION: usize = 17;
+pub(super) const SETTLEMENT_POSITION: usize = 18;
+pub(super) const REALM: usize = 19;
+pub(super) const REALM_STAGING: usize = 20;
+pub(super) const CUSTODY_REPLAY: usize = 21;
+pub(super) const COLLATERAL_MINT: usize = 22;
+pub(super) const COLLATERAL_SOURCE: usize = 23;
+pub(super) const COLLATERAL_DESTINATION: usize = 24;
+pub(super) const CUSTODY_TRANSFER_AUTHORITY: usize = 25;
+pub(super) const TOKEN_PROGRAM: usize = 26;
+pub(super) const GENERAL_CONFIG: usize = 27;
 
 /// Invoke every active fixed-role child and commit the cursor last.
 ///
@@ -77,7 +77,7 @@ pub fn apply_prepared_settlement_v2(
     program_id: &Pubkey,
     context: TradingFamilyContextV1,
     accounts: &[AccountInfo<'_>],
-    prepared: PreparedSettlementStepV2,
+    prepared: &PreparedSettlementStepV2,
 ) -> Result<(), ProgramError> {
     if accounts.len() != GENERAL_SETTLEMENT_ACCOUNT_COUNT_V2
         || context.program_id() != program_id.to_bytes()
@@ -108,7 +108,7 @@ pub fn apply_prepared_settlement_v2(
     let config = authenticate_config(context, accounts)?;
 
     if let Some(packet) = prepared.claims() {
-        invoke_claims(program_id, context, accounts, &packet)?;
+        invoke_claims(program_id, context, accounts, packet)?;
     }
     if let Some(packet) = prepared.custody() {
         invoke_custody(program_id, context, accounts, packet, config)?;
@@ -245,7 +245,7 @@ fn invoke_custody(
     program_id: &Pubkey,
     context: TradingFamilyContextV1,
     accounts: &[AccountInfo<'_>],
-    packet: dclutch_general_adapter_contract::child_packets::CustodyPacketV2,
+    packet: &dclutch_general_adapter_contract::child_packets::CustodyPacketV2,
     config: GeneralConfigV2,
 ) -> Result<(), ProgramError> {
     let request = packet.request();
@@ -354,7 +354,7 @@ fn invoke_custody(
     .to_bytes();
     drop(replay);
     verify_custody_receipt_v2(
-        packet,
+        *packet,
         producer.to_bytes(),
         &receipt,
         ExpectedCustodyPostV2 {
