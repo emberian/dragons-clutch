@@ -428,7 +428,7 @@ fn validate_context(
         return Err(DirectPhysicalError::Binding);
     }
     let custody_program = release.bindings[4].program.to_bytes();
-    let probe = base_custody_request(context, 0, 1, [1; 32])?;
+    let probe = base_custody_request(context, 0, 1)?;
     let authority = CustodyAuthoritySeedsV1::from_request(probe);
     if derive(custody_program, &authority.as_slices()).0 != context.custody_authority {
         return Err(DirectPhysicalError::Binding);
@@ -489,7 +489,7 @@ fn validate_replay(context: DirectInlinePhysicalContextV2) -> Result<()> {
     {
         return Err(DirectPhysicalError::Binding);
     }
-    let probe = base_custody_request(context, 0, 0, [1; 32])?;
+    let probe = base_custody_request(context, 0, 0)?;
     let replay_seeds = CustodyReplaySeedsV1::from_request(probe);
     if derive(custody_program, &replay_seeds.as_slices()).0 != context.custody_replay {
         return Err(DirectPhysicalError::Binding);
@@ -675,18 +675,12 @@ fn custody_request(
     amount: u64,
 ) -> Result<CustodyRequestV1> {
     let buyer_intent = direct.buyer.authenticated.intent();
-    let order = hash(
-        &buyer_intent
-            .signed_preimage()
-            .map_err(|_| DirectPhysicalError::Binding)?,
-    )
-    .to_bytes();
     let expected_revision = context
         .custody_replay_state
         .next_revision
         .checked_add(u64::try_from(transfer_index).map_err(|_| DirectPhysicalError::Arithmetic)?)
         .ok_or(DirectPhysicalError::Arithmetic)?;
-    let mut request = base_custody_request(context, transfer_index, amount, order)?;
+    let mut request = base_custody_request(context, transfer_index, amount)?;
     request.semantic.source_owner = source.owner;
     request.semantic.destination_owner = destination.owner;
     request.semantic.order_nonce = buyer_intent.nonce;
@@ -705,7 +699,6 @@ fn base_custody_request(
     context: DirectInlinePhysicalContextV2,
     transfer_index: usize,
     amount: u64,
-    order: [u8; 32],
 ) -> Result<CustodyRequestV1> {
     let realm = context.core_market.realm();
     Ok(CustodyRequestV1 {
@@ -722,7 +715,10 @@ fn base_custody_request(
             candidate: [0; 32],
             source_owner: [1; 32],
             destination_owner: [2; 32],
-            order,
+            // Inline ordinary has no separately persisted order record. The
+            // complete authenticated Direct request is therefore the sole
+            // canonical order coordinate as well as the parent request.
+            order: context.parent_request_digest,
             parent_request_digest: context.parent_request_digest,
             order_nonce: 0,
             generation: context.core_market.generation(),

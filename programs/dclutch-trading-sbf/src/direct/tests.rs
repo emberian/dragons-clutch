@@ -2194,6 +2194,14 @@ fn inline_ioc_projects_sparse_claims_and_exhausts_exact_atomic_delegate() {
     assert_eq!(net.request.custody.amount, 18);
     assert_eq!(net.request.custody.expected_revision, 7);
     assert_eq!(net.request.custody.semantic.transfer_index, 0);
+    assert_eq!(
+        net.request.custody.semantic.order,
+        context.parent_request_digest
+    );
+    assert_eq!(
+        net.request.custody.semantic.parent_request_digest,
+        context.parent_request_digest
+    );
     assert!(net.request.starts_atomic_debit);
     assert!(!net.request.terminal);
     assert_eq!(net.request.allowance_before, 22);
@@ -2329,6 +2337,17 @@ fn inline_receipts_bind_exact_claims_custody_and_delegate_poststate() {
     .expect("delegated receipt bytes");
     verify_inline_custody_receipt_v2(net, &custody_receipt, id(79), net.delegated_after)
         .expect("Custody receipt verification");
+    let mut divergent_order = net;
+    divergent_order.request.custody.semantic.order = id(80);
+    assert_eq!(
+        verify_inline_custody_receipt_v2(
+            divergent_order,
+            &custody_receipt,
+            id(79),
+            net.delegated_after,
+        ),
+        Err(DirectPhysicalError::Custody)
+    );
     assert_eq!(
         verify_inline_custody_receipt_v2(net, &custody_receipt, id(79), net.delegated_after + 1,),
         Err(DirectPhysicalError::Postcondition)
