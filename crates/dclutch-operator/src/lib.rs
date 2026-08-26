@@ -26,8 +26,7 @@ use dclutch_pyth_contract::{
 };
 use dclutch_pyth_svm::{PRODUCTION_RELEASES, PostUpdateParamsView, PythReleaseV1};
 use dclutch_rent_contract::{
-    CREATE_RENT_CREDIT_BYTES_V1, CreateRentCreditV1, RENT_CREDIT_BYTES_V1,
-    RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1,
+    RENT_CREDIT_BYTES_V1, RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1,
 };
 use dclutch_source_contract::{
     PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1,
@@ -60,6 +59,10 @@ pub mod general_hot_v3;
 pub mod general_physical;
 /// Chain-derived inspection of immutable Core/Registry/Rent infrastructure.
 pub mod infrastructure;
+/// Lifecycle-scoped RentCredit creation, sweeping, and close evidence.
+pub mod lifecycle_rent_v2 {
+    pub use dclutch_product_runtime_v2_operator::lifecycle_rent_v2::*;
+}
 mod product_graph_observation_v3 {
     pub(crate) use dclutch_resolution_core_v3_operator::product_graph_observation_v3::{
         AuthenticatedProductGraphObservationV3, FinalizedProductGraphAccountsV3,
@@ -220,35 +223,6 @@ pub enum Error {
     InstructionEncoding,
 }
 
-/// Inputs for a separate permissionless permanent-RentCredit creation action.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CreateRentCreditState {
-    /// System-wallet signer that donates the current rent reserve.
-    pub payer: ObservedAccount,
-    /// Finalized System-owned, data-empty, zero-lamport observation of the
-    /// derived credit address before creation.
-    pub rent_credit_destination: ObservedAccount,
-    /// Canonical executable System Program observation.
-    pub system_program: ObservedAccount,
-    /// Canonical Rent sysvar observation.
-    pub rent_sysvar: ObservedAccount,
-}
-
-/// Unsigned explicit RentCredit-create action, required before beneficiary flows.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CreateRentCreditReport {
-    /// Exact unsigned rent-credit instruction.
-    pub instruction: Instruction,
-    /// Shared finalized observation selecting every input.
-    pub observation: Observation,
-    /// Derived permanent credit address.
-    pub rent_credit: Pubkey,
-    /// Immutable beneficiary authority bound into the credit.
-    pub beneficiary: Pubkey,
-    /// Current Rent-minimum payer debit.
-    pub rent_debit: u64,
-}
-
 /// Build the canonical 15-account Pyth price-resolution frame.
 pub fn build_price_resolution(
     program_id: Pubkey,
@@ -362,76 +336,6 @@ pub fn build_failure_resolution(
         },
         observation,
         funding: facts.funding,
-    })
-}
-
-/// Build the standalone four-account permissionless credit-creation action.
-///
-/// A workflow must submit and observe this action before it can use a
-/// beneficiary's credit in Found, Open, or resolution.  The beneficiary is an
-/// instruction binding, not a wallet account or an inferred fixture value.
-pub fn build_create_rent_credit(
-    program_id: Pubkey,
-    state: &CreateRentCreditState,
-    beneficiary: Pubkey,
-) -> Result<CreateRentCreditReport, Error> {
-    let observation = same_observation(&[
-        &state.payer,
-        &state.rent_credit_destination,
-        &state.system_program,
-        &state.rent_sysvar,
-    ])?;
-    if state.payer.owner != system_program::ID
-        || state.payer.executable
-        || !state.payer.data.is_empty()
-    {
-        return Err(Error::InvalidOwner);
-    }
-    if state.system_program.key != system_program::ID
-        || !state.system_program.executable
-        || !state.system_program.data.is_empty()
-    {
-        return Err(Error::InvalidOwner);
-    }
-    if state.rent_credit_destination.owner != system_program::ID
-        || state.rent_credit_destination.executable
-        || state.rent_credit_destination.lamports != 0
-        || !state.rent_credit_destination.data.is_empty()
-    {
-        return Err(Error::InvalidRentCredit);
-    }
-    let rent = foundation::decode_rent(&state.rent_sysvar).map_err(|_| Error::InvalidOwner)?;
-    let authority =
-        RefundAuthority::new(beneficiary.to_bytes()).map_err(|_| Error::RentCreditPdaMismatch)?;
-    let authority_bytes = authority.to_bytes();
-    let (rent_credit, bump) = Pubkey::find_program_address(
-        &[RENT_CREDIT_PDA_DOMAIN_V1, authority_bytes.as_slice()],
-        &program_id,
-    );
-    if state.rent_credit_destination.key != rent_credit {
-        return Err(Error::RentCreditPdaMismatch);
-    }
-    let rent_debit = rent.minimum_balance(RENT_CREDIT_BYTES_V1);
-    if state.payer.lamports < rent_debit {
-        return Err(Error::FundUnderfunded);
-    }
-    let data = CreateRentCreditV1::new(authority, bump).to_bytes().to_vec();
-    debug_assert_eq!(data.len(), CREATE_RENT_CREDIT_BYTES_V1);
-    Ok(CreateRentCreditReport {
-        instruction: Instruction {
-            program_id,
-            accounts: vec![
-                AccountMeta::new(state.payer.key, true),
-                AccountMeta::new(rent_credit, false),
-                AccountMeta::new_readonly(system_program::ID, false),
-                AccountMeta::new_readonly(solana_sdk_ids::sysvar::rent::ID, false),
-            ],
-            data,
-        },
-        observation,
-        rent_credit,
-        beneficiary,
-        rent_debit,
     })
 }
 
@@ -1560,41 +1464,6 @@ mod tests {
                 }
             ),
             Err(Error::FundUnderfunded)
-        );
-    }
-
-    #[test]
-    fn rent_credit_creation_is_explicit_and_requires_an_observed_vacancy() {
-        let program = Pubkey::new_from_array([61; 32]);
-        let beneficiary = Pubkey::new_from_array([62; 32]);
-        let (credit, _) = Pubkey::find_program_address(
-            &[RENT_CREDIT_PDA_DOMAIN_V1, beneficiary.as_ref()],
-            &program,
-        );
-        let rent = Rent::default();
-        let state = CreateRentCreditState {
-            payer: account(
-                Pubkey::new_from_array([63; 32]),
-                system_program::ID,
-                rent.minimum_balance(RENT_CREDIT_BYTES_V1),
-                Vec::new(),
-            ),
-            rent_credit_destination: account(credit, system_program::ID, 0, Vec::new()),
-            system_program: system_program_account(),
-            rent_sysvar: rent_account(),
-        };
-        let report = build_create_rent_credit(program, &state, beneficiary).expect("create");
-        assert_eq!(report.rent_credit, credit);
-        assert_eq!(report.instruction.accounts.len(), 4);
-        assert_eq!(
-            report.instruction.accounts.get(1),
-            Some(&AccountMeta::new(credit, false))
-        );
-        let mut occupied = state.clone();
-        occupied.rent_credit_destination.lamports = 1;
-        assert_eq!(
-            build_create_rent_credit(program, &occupied, beneficiary),
-            Err(Error::InvalidRentCredit)
         );
     }
 }

@@ -36,6 +36,7 @@ dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
 dclutch-product-contract = { path = "../dclutch-product-contract" }
 dclutch-product-runtime-v2 = { path = "../dclutch-product-runtime-v2" }
 dclutch-product-runtime-v2-admission = { path = "../dclutch-product-runtime-v2-admission" }
+dclutch-product-runtime-v2-operator = { path = "../dclutch-product-runtime-v2-operator" }
 dclutch-pyth-contract = { path = "../dclutch-pyth-contract" }
 dclutch-pyth-svm = { path = "../dclutch-pyth-svm" }
 dclutch-realm-contract = { path = "../dclutch-realm-contract" }
