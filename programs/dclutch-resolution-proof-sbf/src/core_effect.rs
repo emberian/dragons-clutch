@@ -23,7 +23,8 @@ use dclutch_resolution_codec::{
     RESOLUTION_CONTROLLER_RELEASE_ID_V4, RESOLUTION_CORE_ROLE_REQUEST_BYTES,
     RESOLUTION_POSTSTATE_DIGEST_DOMAIN_V1, ResolutionCertificateKindV1, ResolutionCertificateV1,
     ResolutionCoreActionV1, ResolutionCoreReceiptKindV1, ResolutionRoleRequestV1,
-    SOURCE_CLOSURE_RECEIPT_BYTES, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V1, SourceClosureReceiptV1,
+    SOURCE_CLOSURE_RECEIPT_BYTES, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V1,
+    SOURCE_FUNDING_SET_DIGEST_DOMAIN_V1, SourceClosureReceiptV1,
 };
 use dclutch_source_contract::{
     SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1, SOURCE_RESOLUTION_STATE_BYTES, SourceMaterialViewV1,
@@ -60,7 +61,6 @@ pub(crate) const ADMIT_TERMINAL_ACCOUNT_COUNT: usize = 18;
 /// Close: common sixteen, certificate, closure, beneficiary, Clock, Rent, and System.
 pub(crate) const CLOSE_FUND_ACCOUNT_COUNT: usize = 22;
 
-const SOURCE_FUNDING_SET_DIGEST_DOMAIN_V1: &[u8] = b"dclutch/source-funding-set/v1";
 const RESOLUTION_FUNDING_COUNT: u8 = 3;
 
 #[derive(Clone, Copy)]
@@ -189,9 +189,9 @@ pub(crate) fn process_core_effect(
             program_id,
             accounts,
             common,
-            envelope,
-            request,
-            authenticated,
+            &envelope,
+            &request,
+            &authenticated,
             &rent,
         ),
     }
@@ -551,7 +551,7 @@ fn process_create<'info>(
     authenticated: AuthenticatedCore,
     rent: &Rent,
 ) -> ProgramResult {
-    require_revisions(envelope, 0, 0)?;
+    require_revisions(&envelope, 0, 0)?;
     let system = accounts.get(17).ok_or(ResolutionError::AccountFrame)?;
     if system.key != &system_program::ID
         || !system.executable
@@ -697,7 +697,7 @@ fn process_create<'info>(
     write_state(common.failure_funding, &failure_bytes)?;
     return_ack(
         program_id,
-        envelope,
+        &envelope,
         authenticated.full_effect_digest,
         post_digest,
         0,
@@ -717,7 +717,7 @@ fn process_verify(
     authenticated: AuthenticatedCore,
     rent: &Rent,
 ) -> ProgramResult {
-    require_revisions(envelope, 0, 0)?;
+    require_revisions(&envelope, 0, 0)?;
     let beneficiary = accounts.get(16).ok_or(ResolutionError::AccountFrame)?;
     let clock_account = accounts.get(17).ok_or(ResolutionError::AccountFrame)?;
     if beneficiary.key.to_bytes() != request.beneficiary
@@ -877,7 +877,7 @@ fn process_verify(
     )?;
     return_ack(
         program_id,
-        envelope,
+        &envelope,
         authenticated.full_effect_digest,
         post_digest,
         0,
@@ -925,8 +925,8 @@ fn process_admit(
     let source = authenticate_terminal_source(
         program_id,
         common,
-        request,
-        authenticated.state,
+        &request,
+        &authenticated.state,
         &source_data,
     )?;
     let decision = source
@@ -940,7 +940,7 @@ fn process_admit(
     if decision.terminal_sequence() != request.receipt_sequence {
         return Err(ResolutionError::Transition.into());
     }
-    require_revisions(envelope, request.receipt_sequence, 1)?;
+    require_revisions(&envelope, request.receipt_sequence, 1)?;
     let recovery = load_active_funding(
         program_id,
         common.market,
@@ -1002,7 +1002,7 @@ fn process_admit(
     let _ = certificate;
     return_ack(
         program_id,
-        envelope,
+        &envelope,
         authenticated.full_effect_digest,
         post_digest,
         request.receipt_sequence,
@@ -1017,9 +1017,9 @@ fn process_close<'info>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'info>],
     common: CommonAccounts<'_, 'info>,
-    envelope: CoreEffectEnvelopeV1,
-    request: ResolutionRoleRequestV1,
-    authenticated: AuthenticatedCore,
+    envelope: &CoreEffectEnvelopeV1,
+    request: &ResolutionRoleRequestV1,
+    authenticated: &AuthenticatedCore,
     rent: &Rent,
 ) -> ProgramResult {
     let certificate_account = accounts.get(16).ok_or(ResolutionError::AccountFrame)?;
@@ -1073,7 +1073,7 @@ fn process_close<'info>(
         program_id,
         common,
         request,
-        authenticated.state,
+        &authenticated.state,
         &source_data,
     )?;
     let decision = source
@@ -1171,13 +1171,7 @@ fn process_close<'info>(
         .failure_funding
         .try_borrow_data()
         .map_err(|_| ResolutionError::Funding)?;
-    let funding_set_digest = hashv(&[
-        SOURCE_FUNDING_SET_DIGEST_DOMAIN_V1,
-        &recovery_data,
-        &exhaustion_data,
-        &failure_data,
-    ])
-    .to_bytes();
+    let funding_set_digest = funding_set_digest(&recovery_data, &exhaustion_data, &failure_data);
     let recovery_refund = funding_refund(
         recovery,
         common.recovery_funding,
@@ -1458,7 +1452,7 @@ fn validate_post_funding(
 }
 
 fn require_revisions(
-    envelope: CoreEffectEnvelopeV1,
+    envelope: &CoreEffectEnvelopeV1,
     resource_a: u64,
     resource_b: u64,
 ) -> ProgramResult {
@@ -1479,6 +1473,7 @@ fn action_byte(action: ResolutionCoreActionV1) -> u8 {
     }
 }
 
+#[inline(never)]
 fn poststate_digest(
     action: ResolutionCoreActionV1,
     source_or_closure: &[u8],
@@ -1501,6 +1496,17 @@ fn poststate_digest(
         .to_bytes(),
     )
     .map_err(|_| ResolutionError::OutputState.into())
+}
+
+#[inline(never)]
+fn funding_set_digest(recovery: &[u8], exhaustion: &[u8], failure: &[u8]) -> [u8; 32] {
+    hashv(&[
+        SOURCE_FUNDING_SET_DIGEST_DOMAIN_V1,
+        recovery,
+        exhaustion,
+        failure,
+    ])
+    .to_bytes()
 }
 
 fn require_prepaid_output(account: &AccountInfo<'_>, minimum_lamports: u64) -> ProgramResult {
@@ -1633,7 +1639,7 @@ fn write_state(account: &AccountInfo<'_>, bytes: &[u8]) -> ProgramResult {
 #[allow(clippy::too_many_arguments)]
 fn return_ack(
     program_id: &Pubkey,
-    envelope: CoreEffectEnvelopeV1,
+    envelope: &CoreEffectEnvelopeV1,
     full_effect_digest: Identity,
     post_digest: Identity,
     pre_a: u64,
@@ -1658,7 +1664,7 @@ fn return_ack(
 #[allow(clippy::too_many_arguments)]
 fn build_ack(
     program_id: &Pubkey,
-    envelope: CoreEffectEnvelopeV1,
+    envelope: &CoreEffectEnvelopeV1,
     full_effect_digest: Identity,
     post_digest: Identity,
     pre_a: u64,
@@ -1744,8 +1750,8 @@ fn commit_activated_funding(
 fn authenticate_terminal_source(
     program_id: &Pubkey,
     common: CommonAccounts<'_, '_>,
-    request: ResolutionRoleRequestV1,
-    state: CoreState,
+    request: &ResolutionRoleRequestV1,
+    state: &CoreState,
     bytes: &[u8],
 ) -> Result<SourceResolutionStateV1, ProgramError> {
     let source =
@@ -1764,6 +1770,7 @@ fn authenticate_terminal_source(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[inline(never)]
 fn authenticate_terminal_certificate(
     program_id: &Pubkey,
     source_state: &AccountInfo<'_>,
@@ -1826,6 +1833,7 @@ fn authenticate_terminal_certificate(
     Ok(certificate)
 }
 
+#[inline(never)]
 fn funding_refund(
     funding: FundingStateV1,
     account: &AccountInfo<'_>,
@@ -2176,9 +2184,9 @@ mod tests {
     #[test]
     fn revisions_and_poststate_digest_refuse_substitution() {
         let envelope = envelope(ResolutionCoreActionV1::AdmitTerminal, 3, 1);
-        require_revisions(envelope, 3, 1).expect("exact revisions");
+        require_revisions(&envelope, 3, 1).expect("exact revisions");
         assert_eq!(
-            require_revisions(envelope, 2, 1),
+            require_revisions(&envelope, 2, 1),
             Err(ResolutionError::Transition.into())
         );
         let exact = poststate_digest(
@@ -2235,7 +2243,7 @@ mod tests {
         let post_digest = identity(23);
         let bytes = build_ack(
             &program_id,
-            envelope,
+            &envelope,
             effect_digest,
             post_digest,
             0,

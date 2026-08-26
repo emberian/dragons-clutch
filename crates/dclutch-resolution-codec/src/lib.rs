@@ -40,6 +40,8 @@ pub const PYTH_EVIDENCE_CONTENT_DOMAIN_V1: &[u8] = b"dclutch/pyth-evidence/v1";
 pub const FUNDED_POSTSTATE_DIGEST_DOMAIN_V1: &[u8] = b"dclutch/funded-poststate/v1";
 /// Domain for the exact ordered Source/Core effect poststate digest.
 pub const RESOLUTION_POSTSTATE_DIGEST_DOMAIN_V1: &[u8] = b"dclutch/resolution-poststate/v1";
+/// Domain separating the exact three-account Resolution funding-set digest.
+pub const SOURCE_FUNDING_SET_DIGEST_DOMAIN_V1: &[u8] = b"dclutch/source-funding-set/v1";
 /// Closed semantic release preimage for the sequential funded controller profile.
 pub const RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V3: &[u8] =
     b"dclutch/release/source-resolution-controller-deterministic-prepaid-cert-funded-recovery-exhaustion-failure-v3";
@@ -2017,7 +2019,7 @@ mod tests {
             ),
         ] {
             let mut hostile = encoded;
-            hostile[offset] = 0xff;
+            *hostile.get_mut(offset).expect("generated receipt offset") = 0xff;
             assert_eq!(FundedTransitionReceiptV1::decode(&hostile), Err(expected));
         }
         let mut hostile = encoded;

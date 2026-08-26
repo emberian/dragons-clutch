@@ -67,6 +67,7 @@ use solana_transaction::{InstructionError, Transaction, TransactionError};
 
 const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x51; 32]);
 const RESOLUTION_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x52; 32]);
+const RECEIPT_CALLER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x53; 32]);
 const GENERATION: u64 = 1;
 const PROVIDER_SLOT: u64 = 460_336_313;
 const PUBLISH_TIME: i64 = 1_787_431_680;
@@ -504,7 +505,7 @@ fn add_lifecycle_case(
     }
 }
 
-fn require_compiled_elves() -> (Vec<u8>, Vec<u8>) {
+fn require_compiled_elves() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     let directory = PathBuf::from(
         env::var("SBF_OUT_DIR").expect("SBF_OUT_DIR is required for compiled Resolution evidence"),
     );
@@ -512,7 +513,13 @@ fn require_compiled_elves() -> (Vec<u8>, Vec<u8>) {
         .expect("read exact compiled Resolution ELF");
     let registry = fs::read(directory.join("dclutch_registry_sbf.so"))
         .expect("read exact compiled Registry ELF");
-    for (label, elf) in [("Resolution", &resolution), ("Registry", &registry)] {
+    let receipt_caller = fs::read(directory.join("dclutch_resolution_receipt_test_caller_sbf.so"))
+        .expect("read exact compiled receipt-caller ELF");
+    for (label, elf) in [
+        ("Resolution", &resolution),
+        ("Registry", &registry),
+        ("Receipt caller", &receipt_caller),
+    ] {
         assert_eq!(
             elf.get(..4),
             Some(&[0x7f, b'E', b'L', b'F'][..]),
@@ -520,12 +527,12 @@ fn require_compiled_elves() -> (Vec<u8>, Vec<u8>) {
         );
         eprintln!("{label} ELF SHA-256: {:?}", hash(elf).to_bytes());
     }
-    (resolution, registry)
+    (resolution, registry, receipt_caller)
 }
 
 impl Fixture {
     fn new() -> Self {
-        let (resolution_elf, registry_elf) = require_compiled_elves();
+        let (resolution_elf, registry_elf, receipt_caller_elf) = require_compiled_elves();
         assert_eq!(
             hash(RECEIVER_ELF).to_bytes(),
             [
@@ -559,6 +566,13 @@ impl Fixture {
             &mut test,
             RESOLUTION_PROGRAM_ID,
             &resolution_elf,
+            0,
+            PROTOCOL_UPGRADE_AUTHORITY,
+        );
+        add_upgradeable_program(
+            &mut test,
+            RECEIPT_CALLER_PROGRAM_ID,
+            &receipt_caller_elf,
             0,
             PROTOCOL_UPGRADE_AUTHORITY,
         );
@@ -915,7 +929,7 @@ impl Fixture {
             manifest_id,
             manifest,
             0xe3,
-            true,
+            false,
         );
         let underfunded = add_case(
             &mut test,
@@ -1048,6 +1062,27 @@ fn funded_instruction(
             AccountMeta::new_readonly(system_program::ID, false),
         ],
         data: request.to_vec(),
+    }
+}
+
+fn funded_caller_instruction(
+    fixture: &Fixture,
+    case: LifecycleAccounts,
+    step: FundedStepAccounts,
+    action: FundedTransitionActionV3,
+    fail_after_receipt: bool,
+) -> Instruction {
+    let child = funded_instruction(fixture, case, step, action);
+    let mut accounts = Vec::with_capacity(child.accounts.len() + 1);
+    accounts.push(AccountMeta::new_readonly(RESOLUTION_PROGRAM_ID, false));
+    accounts.extend(child.accounts);
+    let mut data = Vec::with_capacity(child.data.len() + 1);
+    data.push(u8::from(fail_after_receipt));
+    data.extend(child.data);
+    Instruction {
+        program_id: RECEIPT_CALLER_PROGRAM_ID,
+        accounts,
+        data,
     }
 }
 
@@ -1277,11 +1312,12 @@ async fn compiled_resolution_executes_primary_recovery_failure_and_atomic_refusa
     let recovery_worker_before = observed(&mut context, fixture.lifecycle.worker).await;
     submit(
         &mut context,
-        funded_instruction(
+        funded_caller_instruction(
             &fixture,
             fixture.lifecycle,
             fixture.lifecycle.recovery,
             FundedTransitionActionV3::FailNext,
+            false,
         ),
     )
     .await
@@ -1334,11 +1370,12 @@ async fn compiled_resolution_executes_primary_recovery_failure_and_atomic_refusa
     let exhaustion_worker_before = observed(&mut context, fixture.lifecycle.worker).await;
     submit(
         &mut context,
-        funded_instruction(
+        funded_caller_instruction(
             &fixture,
             fixture.lifecycle,
             fixture.lifecycle.exhaustion,
             FundedTransitionActionV3::Exhaust,
+            false,
         ),
     )
     .await
@@ -1401,11 +1438,12 @@ async fn compiled_resolution_executes_primary_recovery_failure_and_atomic_refusa
     let failure_worker_before = observed(&mut context, fixture.lifecycle.worker).await;
     submit(
         &mut context,
-        funded_instruction(
+        funded_caller_instruction(
             &fixture,
             fixture.lifecycle,
             fixture.lifecycle.failure,
             FundedTransitionActionV3::CommitFailure,
+            false,
         ),
     )
     .await
@@ -1459,11 +1497,12 @@ async fn compiled_resolution_executes_primary_recovery_failure_and_atomic_refusa
     .await;
     submit(
         &mut context,
-        funded_instruction(
+        funded_caller_instruction(
             &fixture,
             fixture.rollback,
             fixture.rollback.recovery,
             FundedTransitionActionV3::FailNext,
+            false,
         ),
     )
     .await
@@ -1477,25 +1516,33 @@ async fn compiled_resolution_executes_primary_recovery_failure_and_atomic_refusa
     .await;
     submit(
         &mut context,
-        funded_instruction(
+        funded_caller_instruction(
             &fixture,
             fixture.rollback,
             fixture.rollback.exhaustion,
             FundedTransitionActionV3::Exhaust,
+            false,
         ),
     )
     .await
     .expect("rollback lineage reaches exhausted state");
     set_clock(&mut context, EXHAUSTION_TIME + 1);
+    prepay_certificate(
+        &mut context,
+        fixture.rollback.failure.certificate,
+        fixture.exact_certificate_rent,
+    )
+    .await;
     let rollback_before =
         snapshot_funded(&mut context, fixture.rollback, fixture.rollback.failure).await;
     let refusal = submit(
         &mut context,
-        funded_instruction(
+        funded_caller_instruction(
             &fixture,
             fixture.rollback,
             fixture.rollback.failure,
             FundedTransitionActionV3::CommitFailure,
+            true,
         ),
     )
     .await;
@@ -1503,10 +1550,10 @@ async fn compiled_resolution_executes_primary_recovery_failure_and_atomic_refusa
         matches!(
             refusal,
             Err(BanksClientError::TransactionError(
-                TransactionError::InstructionError(0, InstructionError::Custom(2))
+                TransactionError::InstructionError(0, InstructionError::Custom(5))
             ))
         ),
-        "occupied sequential certificate refuses at the final output gate: {refusal:?}"
+        "caller validates the complete funded receipt before deliberate refusal: {refusal:?}"
     );
     assert_eq!(
         snapshot_funded(&mut context, fixture.rollback, fixture.rollback.failure).await,
