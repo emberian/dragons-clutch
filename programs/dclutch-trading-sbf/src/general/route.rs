@@ -7,35 +7,34 @@
 
 extern crate alloc;
 
-use dclutch_custody_contract::{CallerRoleV1, CustodyReplayV1, CUSTODY_REPLAY_PDA_DOMAIN_V1};
+use dclutch_custody_contract::{CUSTODY_REPLAY_PDA_DOMAIN_V1, CallerRoleV1, CustodyReplayV1};
 use dclutch_economic_slice_kernel::{market_revision, position_owner, position_revision};
 use dclutch_general_adapter_contract::{
+    CompleteSetMoveV1, GENERAL_CANDIDATE_PDA_DOMAIN_V1, GENERAL_CERTIFICATE_PDA_DOMAIN_V1,
+    GENERAL_PAGE_PDA_DOMAIN_V1, GENERAL_SETTLEMENT_PDA_DOMAIN_V1, VerifiedCandidateV1,
     child_packets::{ClaimsResourcesV2, CustodyResourcesV2},
-    CompleteSetMoveV1, VerifiedCandidateV1, GENERAL_CANDIDATE_PDA_DOMAIN_V1,
-    GENERAL_CERTIFICATE_PDA_DOMAIN_V1, GENERAL_PAGE_PDA_DOMAIN_V1,
-    GENERAL_SETTLEMENT_PDA_DOMAIN_V1,
 };
 use dclutch_general_codec::{
-    Action, CandidateV1, ControllerRequestV1, PageViewV1, SettlementCursorV1, CANDIDATE_BYTES,
-    PAGE_BYTES, SETTLEMENT_CURSOR_BYTES,
+    Action, CANDIDATE_BYTES, CandidateV1, ControllerRequestV1, PAGE_BYTES, PageViewV1,
+    SETTLEMENT_CURSOR_BYTES, SettlementCursorV1,
 };
 use dclutch_general_config_contract::GeneralConfigV2;
 use solana_program::{account_info::AccountInfo, program_error::ProgramError, pubkey::Pubkey};
 
 use crate::{
+    TradingSbfError,
     dispatch::TradingFamilyContextV1,
     general::{
         controller::{
-            apply_prepared_settlement_v2, CANDIDATE, CLAIMS_MARKET, COLLATERAL_DESTINATION,
-            COLLATERAL_MINT, COLLATERAL_SOURCE, CORE_MARKET, CUSTODY_PROGRAM, CUSTODY_REPLAY,
-            GENERAL_SETTLEMENT_ACCOUNT_COUNT_V2, PAGE_OR_MARKET, ROW_OWNER_POSITION,
-            SETTLEMENT_CURSOR, SETTLEMENT_POSITION, TOKEN_PROGRAM, VERIFIED_CERTIFICATE,
+            CANDIDATE, CLAIMS_MARKET, COLLATERAL_DESTINATION, COLLATERAL_MINT, COLLATERAL_SOURCE,
+            CORE_MARKET, CUSTODY_PROGRAM, CUSTODY_REPLAY, GENERAL_SETTLEMENT_ACCOUNT_COUNT_V2,
+            PAGE_OR_MARKET, ROW_OWNER_POSITION, SETTLEMENT_CURSOR, SETTLEMENT_POSITION,
+            TOKEN_PROGRAM, VERIFIED_CERTIFICATE, apply_prepared_settlement_v2,
         },
         settlement::{
             prepare_close_v2, prepare_collect_v2, prepare_distribute_v2, prepare_materialize_v2,
         },
     },
-    TradingSbfError,
 };
 
 /// Execute one permissionless physical General continuation.

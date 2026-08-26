@@ -140,7 +140,10 @@ mod tests {
         for offset in [0_usize, VERSION_OFFSET, RESERVED_OFFSET] {
             let mut mutated = canonical;
             *mutated.get_mut(offset).expect("fixture offset") ^= 1;
-            assert!(RationalReplayV2::decode(&mutated).is_err(), "offset {offset}");
+            assert!(
+                RationalReplayV2::decode(&mutated).is_err(),
+                "offset {offset}"
+            );
         }
         for offset in [DESCRIPTOR_OFFSET, ACTOR_OFFSET] {
             let mut mutated = canonical;
@@ -148,7 +151,10 @@ mod tests {
                 .get_mut(offset..offset + 32)
                 .expect("fixture identity")
                 .fill(0);
-            assert!(RationalReplayV2::decode(&mutated).is_err(), "offset {offset}");
+            assert!(
+                RationalReplayV2::decode(&mutated).is_err(),
+                "offset {offset}"
+            );
         }
         assert_eq!(
             RationalReplayV2::decode(

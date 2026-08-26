@@ -2,12 +2,12 @@
 
 use dclutch_account_profile_contract::{
     lifecycle_v3::{
-        StateLifecyclePolicyV5, CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5 as LIFECYCLE_SCHEMA_ID_V5,
+        CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5 as LIFECYCLE_SCHEMA_ID_V5, StateLifecyclePolicyV5,
     },
     v2::{AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE},
 };
 use dclutch_capability_program_contract::v4::{
-    ArtifactReferenceV4, CapabilityArtifactsV4, CapabilityProgramV4, CAPABILITY_PROGRAM_V4_BYTES,
+    ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4, CapabilityProgramV4,
 };
 use dclutch_core_contract::ContentId;
 use dclutch_effect_kernel::{
@@ -16,24 +16,25 @@ use dclutch_effect_kernel::{
     v4::{ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4},
 };
 use dclutch_execution_strategy_contract::v2::{
-    ExecutionStrategyProgramV2, StrategyDispositionV2, ACCELERATOR_ACK_SCHEMA_ID_V2,
-    ACCELERATOR_REQUEST_SCHEMA_ID_V2, EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2,
-    EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2, EXECUTION_STRATEGY_PROGRAM_BYTES_V2,
-    EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
+    ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
+    EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
+    EXECUTION_STRATEGY_PROGRAM_BYTES_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
+    ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
 use dclutch_rational_representation_v2_lifecycle_contract::{
-    hot_v3::RationalLifecycleHotLayoutV3,
-    hot_v6::{RationalLifecycleHotRegisterLayoutV6, RATIONAL_LIFECYCLE_HOT_SCHEMA_RELEASE_ID_V6},
     LifecycleActionV2,
+    hot_v3::RationalLifecycleHotLayoutV3,
+    hot_v6::{RATIONAL_LIFECYCLE_HOT_SCHEMA_RELEASE_ID_V6, RationalLifecycleHotRegisterLayoutV6},
 };
 use dclutch_request_profile_contract::RequestProfileV1;
 use dclutch_token_svm::{
-    TokenBehaviorSelectionV2, TOKEN_BEHAVIOR_SELECTION_BYTES_V2,
-    TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
+    TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
+    TokenBehaviorSelectionV2,
 };
 use solana_program::hash::hash;
 
 use crate::{
+    Error, RationalLifecycleSelectedAccountProfileInputV5, Result,
     artifacts::{
         encode_rational_lifecycle_selected_request_profile_v6,
         encode_rational_lifecycle_transition_v6,
@@ -41,7 +42,6 @@ use crate::{
     effect::encode_rational_lifecycle_selected_effect_v6,
     lifecycle_claims_account_count_v3, lifecycle_logical_account_count_v3,
     selected_profile_v5::encode_rational_lifecycle_selected_account_profile_v6,
-    Error, RationalLifecycleSelectedAccountProfileInputV5, Result,
 };
 
 /// Exact interpreted strategy width reused by V6.
@@ -334,26 +334,26 @@ fn artifact(schema: [u8; 32], program: [u8; 32]) -> Result<ArtifactReferenceV4> 
 mod tests {
     use super::*;
     use dclutch_account_profile_contract::lifecycle_v3::{
-        encode::encode_lifecycle_policy_v5_atomic, HEADER_BYTES as LIFECYCLE_HEADER_BYTES,
+        HEADER_BYTES as LIFECYCLE_HEADER_BYTES, encode::encode_lifecycle_policy_v5_atomic,
     };
     use dclutch_product_payoff_v2_codec::runtime_v3::{
-        compile_basis_v3, BasisInputV3, BasisKindV3, BASIS_HEADER_BYTES_V3,
+        BASIS_HEADER_BYTES_V3, BasisInputV3, BasisKindV3, compile_basis_v3,
     };
     use dclutch_rational_representation_v2_kernel::{
-        descriptor_v3::{
-            encode_representation_descriptor_v3_atomic, representation_descriptor_bytes_v3,
-            RepresentationDescriptorInputV3,
-        },
         DescriptorAdmissionV2, RepresentationDescriptorV2,
+        descriptor_v3::{
+            RepresentationDescriptorInputV3, encode_representation_descriptor_v3_atomic,
+            representation_descriptor_bytes_v3,
+        },
     };
     use dclutch_rational_representation_v2_lifecycle_contract::{
+        LIFECYCLE_HEADER_BYTES_V2, LifecycleHeaderV2, LifecycleRequestV2,
         hot_v3::RATIONAL_LIFECYCLE_IDENTITY_DESCRIPTOR_V3, hot_v6::RationalLifecycleHotRequestV6,
-        LifecycleHeaderV2, LifecycleRequestV2, LIFECYCLE_HEADER_BYTES_V2,
     };
-    use dclutch_request_profile_contract::{project_atomic, ProjectionRegistersV1};
+    use dclutch_request_profile_contract::{ProjectionRegistersV1, project_atomic};
     use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
     use dclutch_transition_vm::v3::{
-        execute_fold_atomic, Error as TransitionError, RegisterInput, RegisterOutput,
+        Error as TransitionError, RegisterInput, RegisterOutput, execute_fold_atomic,
     };
 
     fn id(value: u8) -> [u8; 32] {

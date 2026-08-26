@@ -422,12 +422,8 @@ pub fn evaluate_runtime_settlement_in_place_v2(
             consumed_revision,
         )?,
     };
-    SettlementCursorV2::encode_le_inventory_into(
-        successor,
-        inventory_workspace,
-        cursor_workspace,
-    )
-    .map_err(|_| RuntimeSettlementErrorV2::Codec)?;
+    SettlementCursorV2::encode_le_inventory_into(successor, inventory_workspace, cursor_workspace)
+        .map_err(|_| RuntimeSettlementErrorV2::Codec)?;
     encode_effect_plan(effect_header, order, view.verified, effect_workspace)?;
     RuntimeSettlementEffectPlanV2::decode(effect_workspace)?;
     Ok(())

@@ -71,8 +71,7 @@ pub const SERIES_FOUND_POST_RESOURCE_DIGEST_DOMAIN_V1: &[u8] =
 /// Claims Founding receipt, and the canonical next Series-root and Ticket
 /// replay bytes. Trading recomputes the same value before its commit-last
 /// replay write accepts a [`SeriesCoreAckV1`].
-pub const SERIES_OPEN_POST_RESOURCE_DIGEST_DOMAIN_V1: &[u8] =
-    b"dclutch/core-series-open-post/v1";
+pub const SERIES_OPEN_POST_RESOURCE_DIGEST_DOMAIN_V1: &[u8] = b"dclutch/core-series-open-post/v1";
 
 /// Canonical cross-program effect selected by Market Core.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

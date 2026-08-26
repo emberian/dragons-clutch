@@ -281,11 +281,13 @@ mod tests {
         use dclutch_capability_program_contract::set_v2::{
             CAPABILITY_PROGRAM_SET_ENTRY_BYTES_V2, CAPABILITY_PROGRAM_SET_ENTRY_COUNT_OFFSET_V2,
             CAPABILITY_PROGRAM_SET_ENTRY_DESCRIPTOR_PROGRAM_OFFSET_V2,
-            CAPABILITY_PROGRAM_SET_ENTRY_SELECTOR_OFFSET_V2, CAPABILITY_PROGRAM_SET_HEADER_BYTES_V2,
+            CAPABILITY_PROGRAM_SET_ENTRY_SELECTOR_OFFSET_V2,
+            CAPABILITY_PROGRAM_SET_HEADER_BYTES_V2,
         };
 
         let mut missing = canonical.clone();
-        missing[CAPABILITY_PROGRAM_SET_ENTRY_COUNT_OFFSET_V2..CAPABILITY_PROGRAM_SET_ENTRY_COUNT_OFFSET_V2 + 2]
+        missing[CAPABILITY_PROGRAM_SET_ENTRY_COUNT_OFFSET_V2
+            ..CAPABILITY_PROGRAM_SET_ENTRY_COUNT_OFFSET_V2 + 2]
             .copy_from_slice(&6_u16.to_le_bytes());
         missing.truncate(
             CAPABILITY_PROGRAM_SET_HEADER_BYTES_V2 + 6 * CAPABILITY_PROGRAM_SET_ENTRY_BYTES_V2,
@@ -299,8 +301,7 @@ mod tests {
         let reordered_selector = CAPABILITY_PROGRAM_SET_HEADER_BYTES_V2
             + 3 * CAPABILITY_PROGRAM_SET_ENTRY_BYTES_V2
             + CAPABILITY_PROGRAM_SET_ENTRY_SELECTOR_OFFSET_V2;
-        reordered[reordered_selector..reordered_selector + 4]
-            .copy_from_slice(&9_u32.to_le_bytes());
+        reordered[reordered_selector..reordered_selector + 4].copy_from_slice(&9_u32.to_le_bytes());
         assert_eq!(
             authenticate_general_program_set_v3(digest(&reordered), digest(&reordered), &reordered,),
             Err(GeneralReleaseErrorV3::ProgramSet)

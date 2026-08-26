@@ -20,8 +20,10 @@ fn monolith_reexports_the_exact_narrow_types_and_builder() {
     > = dclutch_operator::resolution_core_v3::build_resolution_close_fund_v3;
     let _: fn(
         &narrow::ResolutionCloseFundSnapshotV3,
-    ) -> Result<narrow::ResolutionCloseFundReportV3, narrow::ResolutionCoreOperatorErrorV3> =
-        monolith_builder;
+    ) -> Result<
+        narrow::ResolutionCloseFundReportV3,
+        narrow::ResolutionCoreOperatorErrorV3,
+    > = monolith_builder;
 
     assert_eq!(
         dclutch_operator::resolution_core_v3::RESOLUTION_ADMIT_TERMINAL_ACCOUNT_COUNT_V3,

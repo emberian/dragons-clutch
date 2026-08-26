@@ -23,8 +23,7 @@ mod generated {
 pub use generated::*;
 
 /// Canonical projection-certificate schema version.
-pub const APPROXIMATION_CERTIFICATE_SCHEMA_V3: u16 =
-    GRADED_BASIS_REGISTRY_SCHEMA_VERSION_V3;
+pub const APPROXIMATION_CERTIFICATE_SCHEMA_V3: u16 = GRADED_BASIS_REGISTRY_SCHEMA_VERSION_V3;
 
 /// Refusal from a Registry-finalized graded-basis record join.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -1009,11 +1009,10 @@ fn alias_region_accepts_v4(
     if item_stride == 0 {
         return Err(ErrorV4::BaseProgram);
     }
-    Ok(coordinate
-        .checked_sub(fixed)
-        .ok_or(ErrorV4::Arithmetic)?
-        / item_stride
-        == resolved.checked_sub(fixed).ok_or(ErrorV4::Arithmetic)? / item_stride)
+    Ok(
+        coordinate.checked_sub(fixed).ok_or(ErrorV4::Arithmetic)? / item_stride
+            == resolved.checked_sub(fixed).ok_or(ErrorV4::Arithmetic)? / item_stride,
+    )
 }
 
 fn validate_runtime_write_nonoverlap_v4(
@@ -1407,13 +1406,10 @@ mod tests {
         let scalars = [2, 32, 0, 0, 0, 0];
         let identities = [[1; 32]];
         let aliases = core::array::from_fn::<_, 28, _>(|index| index);
-        let mut accounts = [
-            AccountInput {
-                lamports: 3,
-                data_len: 0,
-            };
-            28
-        ];
+        let mut accounts = [AccountInput {
+            lamports: 3,
+            data_len: 0,
+        }; 28];
         accounts[27].data_len = 8;
         let mut permissions = [AccountPermission::read_only(); 28];
         permissions[27] = AccountPermission::new(false, false, true);

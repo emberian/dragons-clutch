@@ -16,12 +16,10 @@ use dclutch_custody_contract::{
 };
 use dclutch_effect_kernel::{
     v2::FixedRole,
-    v3::{
-        ProgramV3, ResolvedInvocationV3, ResolvedReceiptDependencyV3, RouteKindV3,
-    },
+    v3::{ProgramV3, ResolvedInvocationV3, ResolvedReceiptDependencyV3, RouteKindV3},
     v4::ProgramV4,
 };
-use dclutch_market_core_codec::{SeriesCoreFoundAckV2, SERIES_CORE_FOUND_ACK_BYTES_V2};
+use dclutch_market_core_codec::{SERIES_CORE_FOUND_ACK_BYTES_V2, SeriesCoreFoundAckV2};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
@@ -282,7 +280,12 @@ fn prepare(
             identities,
         )
         .map_err(|_| TradingSbfError::Content)?;
-    validate_invocation(base, resolved.invocation, resolved.borrowed_range_count(), funding_count)?;
+    validate_invocation(
+        base,
+        resolved.invocation,
+        resolved.borrowed_range_count(),
+        funding_count,
+    )?;
     let request_end = resolved
         .invocation
         .request_offset
@@ -453,10 +456,10 @@ fn authenticate_receipt_join(
     trading_program: Pubkey,
     claims_program: Pubkey,
 ) -> Result<(), ProgramError> {
-    let lock = ProjectedCustodyLockReceiptV1::decode(raw_lock)
-        .map_err(|_| TradingSbfError::Content)?;
-    let realize = ProjectedCustodyReceiptV1::decode(raw_realize)
-        .map_err(|_| TradingSbfError::Content)?;
+    let lock =
+        ProjectedCustodyLockReceiptV1::decode(raw_lock).map_err(|_| TradingSbfError::Content)?;
+    let realize =
+        ProjectedCustodyReceiptV1::decode(raw_realize).map_err(|_| TradingSbfError::Content)?;
     if lock_producer != realize_producer
         || request.release_set() != lock.release_set
         || request.release_set() != realize.release_set
@@ -511,9 +514,15 @@ fn authenticate_frame(
         (AGGREGATE, Pubkey::new_from_array(request.aggregate())),
         (POSITION, Pubkey::new_from_array(request.position())),
         (ADMISSION, Pubkey::new_from_array(request.admission())),
-        (FUNDING_SOURCE, Pubkey::new_from_array(request.funding_source())),
+        (
+            FUNDING_SOURCE,
+            Pubkey::new_from_array(request.funding_source()),
+        ),
         (HOARD, Pubkey::new_from_array(request.hoard())),
-        (CUSTODY_REPLAY, Pubkey::new_from_array(request.custody_replay())),
+        (
+            CUSTODY_REPLAY,
+            Pubkey::new_from_array(request.custody_replay()),
+        ),
         (MARKET, Pubkey::new_from_array(request.market())),
         (CLAIMS_PROGRAM, *claims_program.key),
         (CORE_PROGRAM, core_prefix.producer()),
@@ -528,7 +537,9 @@ fn authenticate_frame(
             .iter()
             .any(|account| account.key == claims_program.key && !account.executable)
         || expected.iter().any(|(index, key)| {
-            accounts.get(*index).is_none_or(|account| account.key != key)
+            accounts
+                .get(*index)
+                .is_none_or(|account| account.key != key)
         })
     {
         return Err(TradingSbfError::Release.into());
@@ -742,9 +753,7 @@ mod tests {
             authenticate_result(request, request_digest, &accounts, claims, claims, &receipt),
             Ok(())
         );
-        accounts[POSITION]
-            .try_borrow_mut_data()
-            .expect("position")[0] ^= 1;
+        accounts[POSITION].try_borrow_mut_data().expect("position")[0] ^= 1;
         assert_eq!(
             authenticate_result(request, request_digest, &accounts, claims, claims, &receipt),
             Err(TradingSbfError::Transition.into())

@@ -186,8 +186,8 @@ impl PythProviderAdapterObligationV2 {
 mod tests {
     use super::*;
     use crate::{
-        CapacityEnvelope, RoundingBoundary, SourceCapacityProfileV1, StatisticKind,
-        SOURCE_FAILURE_POLICY_RELEASE_ID_V2,
+        CapacityEnvelope, RoundingBoundary, SOURCE_FAILURE_POLICY_RELEASE_ID_V2,
+        SourceCapacityProfileV1, StatisticKind,
     };
 
     fn id(tag: u8) -> ContentId {

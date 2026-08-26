@@ -273,7 +273,10 @@ mod tests {
     fn caller_authority_cannot_reappear_in_readonly_runtime_slice() {
         let authority = Pubkey::new_unique();
         let other = Pubkey::new_unique();
-        assert!(!runtime_keys_alias_authority(&authority, [&other].into_iter()));
+        assert!(!runtime_keys_alias_authority(
+            &authority,
+            [&other].into_iter()
+        ));
         assert!(runtime_keys_alias_authority(
             &authority,
             [&other, &authority].into_iter()

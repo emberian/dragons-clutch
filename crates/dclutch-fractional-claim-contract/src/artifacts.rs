@@ -1,7 +1,7 @@
 //! Exact finalized generic-artifact join for the Fractional successor.
 
 use dclutch_account_profile_contract::{
-    lifecycle_v3::{StateLifecyclePolicyV4, SUCCESSOR_SCHEMA_RELEASE_ID},
+    lifecycle_v3::{SUCCESSOR_SCHEMA_RELEASE_ID, StateLifecyclePolicyV4},
     v2::{AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID},
 };
 use dclutch_capability_program_contract::v3::{
@@ -19,17 +19,14 @@ use dclutch_fractional_claim_kernel::{
     FRACTIONAL_TERMS_SCHEMA_ID_V1, FractionalTermsAdmissionV1, FractionalTermsV1,
 };
 use dclutch_request_profile_contract::{RequestProfileV1, validate_request};
-use dclutch_token_svm::{
-    TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, TokenBehaviorSelectionV2,
-};
+use dclutch_token_svm::{TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, TokenBehaviorSelectionV2};
 use dclutch_transition_vm::v3::ProgramV3 as TransitionProgramV3;
 use sha2::{Digest, Sha256};
 
 use crate::{
     FRACTIONAL_CAPABILITY_KIND_ID_V1, FRACTIONAL_FAMILY_REQUEST_BYTES_V1,
-    FRACTIONAL_FAMILY_REQUEST_SCHEMA_ID_V1, FRACTIONAL_ROOT_BYTES_V1,
-    FRACTIONAL_ROOT_SCHEMA_ID_V1, FractionalActionV1, FractionalFamilyRequestV1,
-    request::NO_TERMINAL_OUTCOME_V1,
+    FRACTIONAL_FAMILY_REQUEST_SCHEMA_ID_V1, FRACTIONAL_ROOT_BYTES_V1, FRACTIONAL_ROOT_SCHEMA_ID_V1,
+    FractionalActionV1, FractionalFamilyRequestV1, request::NO_TERMINAL_OUTCOME_V1,
 };
 
 /// Authentication of one exact finalized raw/staging Record coordinate.
@@ -200,7 +197,11 @@ pub fn authenticate_fractional_artifact_bundle_v1<'a>(
     family_request_bytes: &[u8],
 ) -> Result<FractionalArtifactBundleV1<'a>> {
     validate_selection(selection)?;
-    require_record(selection.descriptor_id, admissions.descriptor, artifacts.descriptor)?;
+    require_record(
+        selection.descriptor_id,
+        admissions.descriptor,
+        artifacts.descriptor,
+    )?;
     let descriptor = CapabilityProgramV3::decode(artifacts.descriptor)
         .map_err(|_| FractionalArtifactErrorV1::Descriptor)?;
     validate_descriptor(descriptor, selection)?;
@@ -246,7 +247,11 @@ pub fn authenticate_fractional_artifact_bundle_v1<'a>(
     }
 
     let account_id = descriptor.account_profile().to_bytes();
-    require_record(account_id, admissions.account_profile, artifacts.account_profile)?;
+    require_record(
+        account_id,
+        admissions.account_profile,
+        artifacts.account_profile,
+    )?;
     let account_profile = AccountProfileV2::decode(artifacts.account_profile)
         .map_err(|_| FractionalArtifactErrorV1::AccountProfile)?;
 
@@ -264,12 +269,9 @@ pub fn authenticate_fractional_artifact_bundle_v1<'a>(
 
     let request_id = descriptor.request_profile_program().to_bytes();
     require_record(request_id, admissions.request, artifacts.request)?;
-    let request_profile = RequestProfileV1::decode_selected(
-        request_id,
-        digest(artifacts.request),
-        artifacts.request,
-    )
-    .map_err(|_| FractionalArtifactErrorV1::RequestProfile)?;
+    let request_profile =
+        RequestProfileV1::decode_selected(request_id, digest(artifacts.request), artifacts.request)
+            .map_err(|_| FractionalArtifactErrorV1::RequestProfile)?;
 
     let strategy_id = descriptor.transition_program().to_bytes();
     require_record(strategy_id, admissions.strategy, artifacts.strategy)?;
@@ -291,18 +293,19 @@ pub fn authenticate_fractional_artifact_bundle_v1<'a>(
 
     let effect_id = descriptor.effect_program().to_bytes();
     require_record(effect_id, admissions.effect, artifacts.effect)?;
-    let effect = EffectProgramV3::decode_selected(
-        effect_id,
-        digest(artifacts.effect),
-        artifacts.effect,
-    )
-    .map_err(|_| FractionalArtifactErrorV1::Effect)?;
+    let effect =
+        EffectProgramV3::decode_selected(effect_id, digest(artifacts.effect), artifacts.effect)
+            .map_err(|_| FractionalArtifactErrorV1::Effect)?;
 
     let family_request = FractionalFamilyRequestV1::decode(family_request_bytes)
         .map_err(|_| FractionalArtifactErrorV1::FamilyRequest)?;
     validate_family_request(family_request, selection, terms)?;
-    validate_request(request_profile, selection.outcome_count, family_request_bytes)
-        .map_err(|_| FractionalArtifactErrorV1::RequestProfile)?;
+    validate_request(
+        request_profile,
+        selection.outcome_count,
+        family_request_bytes,
+    )
+    .map_err(|_| FractionalArtifactErrorV1::RequestProfile)?;
     validate_geometry(
         selection.outcome_count,
         account_profile,
@@ -458,11 +461,7 @@ fn validate_claims_route(effect: EffectProgramV3<'_>) -> Result<()> {
     Ok(())
 }
 
-fn require_record(
-    selected: [u8; 32],
-    admission: ArtifactAdmissionV1,
-    bytes: &[u8],
-) -> Result<()> {
+fn require_record(selected: [u8; 32], admission: ArtifactAdmissionV1, bytes: &[u8]) -> Result<()> {
     if is_zero(&selected)
         || !admission.record_authenticated
         || selected != admission.finalized_digest

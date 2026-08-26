@@ -4,9 +4,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use dclutch_claims_svm::founding_v5::{
-    CLAIMS_FOUNDING_RECEIPT_BYTES_V5, ClaimsFoundingRequestV5,
-};
+use dclutch_claims_svm::founding_v5::{CLAIMS_FOUNDING_RECEIPT_BYTES_V5, ClaimsFoundingRequestV5};
 use dclutch_core_contract::ContentId;
 use dclutch_effect_kernel::{
     v2::FixedRole,
@@ -14,10 +12,9 @@ use dclutch_effect_kernel::{
     v4::ProgramV4,
 };
 use dclutch_market_core_codec::{
-    Identity, SERIES_CORE_ACK_BYTES_V1, SERIES_CORE_REQUEST_BYTES_V1,
-    SERIES_CORE_REQUEST_MAGIC_V1, SERIES_FOUNDING_PERMIT_BYTES_V1,
-    SERIES_OPEN_POST_RESOURCE_DIGEST_DOMAIN_V1, SeriesCoreAckV1, SeriesCoreActionV1,
-    SeriesCoreFoundAckV2, SeriesCoreRequestV1,
+    Identity, SERIES_CORE_ACK_BYTES_V1, SERIES_CORE_REQUEST_BYTES_V1, SERIES_CORE_REQUEST_MAGIC_V1,
+    SERIES_FOUNDING_PERMIT_BYTES_V1, SERIES_OPEN_POST_RESOURCE_DIGEST_DOMAIN_V1, SeriesCoreAckV1,
+    SeriesCoreActionV1, SeriesCoreFoundAckV2, SeriesCoreRequestV1,
 };
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_series_v3_kernel::ticket_content_id;
@@ -41,8 +38,7 @@ use crate::{
     series::{
         accounts::{SERIES_ROOT_ACCOUNT_BYTES_V3, commit_occurrence_after_ack},
         artifacts_v3::{
-            SERIES_CONSUME_CORE_OPEN_ACCOUNT_COUNT_V3,
-            SERIES_CORE_OPEN_RECEIPT_DEPENDENCIES_V3,
+            SERIES_CONSUME_CORE_OPEN_ACCOUNT_COUNT_V3, SERIES_CORE_OPEN_RECEIPT_DEPENDENCIES_V3,
         },
         effect_v4::{
             SERIES_CONSUME_CLAIMS_ROUTE_V4, SERIES_CONSUME_OPEN_ROUTE_V4,
@@ -122,9 +118,22 @@ pub(crate) fn execute_projected_open_route_v4<'info>(
     provenance: ExpectedReceiptProvenanceV4,
 ) -> Result<AuthenticatedProjectedOpenV4, ProgramError> {
     let prepared = prepare(
-        program_id, execution, effect, tail_count, scalars, identities, effect_accounts,
-        request_bank, core_program, outer_root, outer_ticket, plan, lock_prefix, found_prefix,
-        claims_prefix, provenance,
+        program_id,
+        execution,
+        effect,
+        tail_count,
+        scalars,
+        identities,
+        effect_accounts,
+        request_bank,
+        core_program,
+        outer_root,
+        outer_ticket,
+        plan,
+        lock_prefix,
+        found_prefix,
+        claims_prefix,
+        provenance,
     )?;
     let mut child_accounts = invocation_accounts(prepared.invocation, effect_accounts)?;
     let metas = child_accounts
@@ -318,10 +327,7 @@ fn prepare(
     let ticket_context = ticket_context_from_frame(&child_accounts)?;
     let authority_seeds = CallerAuthoritySeedsV1::new(
         ContentId::new(request.release_set().to_bytes()).map_err(|_| TradingSbfError::Content)?,
-        request
-            .market()
-            .ok_or(TradingSbfError::Content)?
-            .to_bytes(),
+        request.market().ok_or(TradingSbfError::Content)?.to_bytes(),
         ExecutionRoleV1::Trading,
         ticket_context,
         request_digest,
@@ -342,8 +348,9 @@ fn prepare(
         authority,
         &child_accounts,
     )?;
-    let (candidate_root_tail, candidate_ticket) =
-        plan.candidate_bytes().map_err(|_| TradingSbfError::Content)?;
+    let (candidate_root_tail, candidate_ticket) = plan
+        .candidate_bytes()
+        .map_err(|_| TradingSbfError::Content)?;
     let permit = child_accounts.get(PERMIT).ok_or(TradingSbfError::Content)?;
     let rent_credit = child_accounts
         .get(RENT_CREDIT)
@@ -487,12 +494,7 @@ fn authenticate_frame(
         (CALLER, authority),
         (
             MARKET,
-            Pubkey::new_from_array(
-                request
-                    .market()
-                    .ok_or(TradingSbfError::Content)?
-                    .to_bytes(),
-            ),
+            Pubkey::new_from_array(request.market().ok_or(TradingSbfError::Content)?.to_bytes()),
         ),
         (PERMIT, Pubkey::new_from_array(ack.permit().to_bytes())),
         (RENT_CREDIT, Pubkey::new_from_array(claims.rent_credit())),
@@ -740,27 +742,30 @@ mod tests {
 
         let mut wrong_root = fixture();
         wrong_root.root[0] ^= 1;
-        assert_eq!(authenticate(&wrong_root), Err(TradingSbfError::Transition.into()));
+        assert_eq!(
+            authenticate(&wrong_root),
+            Err(TradingSbfError::Transition.into())
+        );
 
         let mut wrong_ticket = fixture();
         wrong_ticket.ticket[0] ^= 1;
-        assert_eq!(authenticate(&wrong_ticket), Err(TradingSbfError::Transition.into()));
+        assert_eq!(
+            authenticate(&wrong_ticket),
+            Err(TradingSbfError::Transition.into())
+        );
 
         let mut wrong_claims = fixture();
         wrong_claims.claims[0] ^= 1;
-        assert_eq!(authenticate(&wrong_claims), Err(TradingSbfError::Transition.into()));
+        assert_eq!(
+            authenticate(&wrong_claims),
+            Err(TradingSbfError::Transition.into())
+        );
     }
 
     #[test]
     fn producer_market_and_permit_rent_substitution_refuse() {
         let wrong_producer = fixture();
-        let digest = hash(
-            &wrong_producer
-                .request
-                .encode()
-                .expect("request bytes"),
-        )
-        .to_bytes();
+        let digest = hash(&wrong_producer.request.encode().expect("request bytes")).to_bytes();
         assert_eq!(
             authenticate_open_result(
                 wrong_producer.request,
@@ -787,7 +792,10 @@ mod tests {
             .expect("market data")
             .first_mut()
             .expect("market byte") ^= 1;
-        assert_eq!(authenticate(&wrong_market), Err(TradingSbfError::Transition.into()));
+        assert_eq!(
+            authenticate(&wrong_market),
+            Err(TradingSbfError::Transition.into())
+        );
 
         let wrong_rent = fixture();
         assert_eq!(

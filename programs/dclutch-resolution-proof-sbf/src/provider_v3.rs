@@ -350,15 +350,16 @@ mod tests {
     use std::vec;
 
     use dclutch_product_runtime_v2::{
-        compile_result_domain_v2, result_domain_record_bytes, ContentId as ProductContentId,
-        ResultDomainInputV2,
+        ContentId as ProductContentId, ResultDomainInputV2, compile_result_domain_v2,
+        result_domain_record_bytes,
     };
     use dclutch_product_runtime_v2_svm_reader::AuthenticatedRecordV2;
     use dclutch_pyth_svm::PythReleaseV1Input;
     use dclutch_resolution_codec::ProviderCallerV3;
     use dclutch_source_contract::{
-        CapacityEnvelope, RoundingBoundary, SourceAccessProfile, SourceCapacityProfileV1,
-        SourceResolutionPhaseV1, StatisticKind, WindowKind, SOURCE_FAILURE_POLICY_RELEASE_ID_V2,
+        CapacityEnvelope, RoundingBoundary, SOURCE_FAILURE_POLICY_RELEASE_ID_V2,
+        SourceAccessProfile, SourceCapacityProfileV1, SourceResolutionPhaseV1, StatisticKind,
+        WindowKind,
     };
     use solana_program::pubkey::Pubkey;
 

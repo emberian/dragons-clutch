@@ -621,14 +621,8 @@ mod tests {
                 LiabilityBasisMarketLayoutV2::PRODUCT_INSTANCE,
                 market_input().product_instance_id,
             ),
-            (
-                LiabilityBasisMarketLayoutV2::BASIS,
-                market_input().basis_id,
-            ),
-            (
-                LiabilityBasisMarketLayoutV2::REALM,
-                market_input().realm_id,
-            ),
+            (LiabilityBasisMarketLayoutV2::BASIS, market_input().basis_id),
+            (LiabilityBasisMarketLayoutV2::REALM, market_input().realm_id),
             (
                 LiabilityBasisMarketLayoutV2::CUSTODY_CONTEXT,
                 market_input().custody_context,

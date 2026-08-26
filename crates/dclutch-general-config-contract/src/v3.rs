@@ -459,21 +459,16 @@ mod tests {
         assert_eq!(GeneralConfigV3Layout::BYTES, bytes.len());
         assert_eq!(
             bytes.get(
-                GeneralConfigV3Layout::CLAIM_BASIS_ID
-                    ..GeneralConfigV3Layout::CLAIM_BASIS_ID + 32
+                GeneralConfigV3Layout::CLAIM_BASIS_ID..GeneralConfigV3Layout::CLAIM_BASIS_ID + 32
             ),
             Some(input().claim_basis_id.as_slice())
         );
         assert_eq!(
-            bytes.get(
-                GeneralConfigV3Layout::GENERATION..GeneralConfigV3Layout::GENERATION + 8
-            ),
+            bytes.get(GeneralConfigV3Layout::GENERATION..GeneralConfigV3Layout::GENERATION + 8),
             Some(input().generation.to_le_bytes().as_slice())
         );
         assert_eq!(
-            bytes.get(
-                GeneralConfigV3Layout::PRICE_SCALE..GeneralConfigV3Layout::PRICE_SCALE + 8
-            ),
+            bytes.get(GeneralConfigV3Layout::PRICE_SCALE..GeneralConfigV3Layout::PRICE_SCALE + 8),
             Some(input().price_scale.to_le_bytes().as_slice())
         );
         assert_eq!(

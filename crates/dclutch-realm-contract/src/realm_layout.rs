@@ -4,7 +4,7 @@
 //! mint and token-program identities. Token-account parsing remains solely in
 //! the Custody adapter.
 
-use crate::{Error, RealmV1, REALM_COLLATERAL_MINT_OFFSET, REALM_TOKEN_PROGRAM_OFFSET};
+use crate::{Error, REALM_COLLATERAL_MINT_OFFSET, REALM_TOKEN_PROGRAM_OFFSET, RealmV1};
 
 /// Canonical byte coordinates of the immutable [`RealmV1`] transfer facts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -89,12 +89,14 @@ mod tests {
         let mut collateral_mint = [0x66; 32];
         let token_before = token_program;
         let mint_before = collateral_mint;
-        assert!(RealmLayoutV1::copy_transfer_identities_into(
-            &bytes,
-            &mut token_program,
-            &mut collateral_mint,
-        )
-        .is_err());
+        assert!(
+            RealmLayoutV1::copy_transfer_identities_into(
+                &bytes,
+                &mut token_program,
+                &mut collateral_mint,
+            )
+            .is_err()
+        );
         assert_eq!(token_program, token_before);
         assert_eq!(collateral_mint, mint_before);
     }

@@ -2151,12 +2151,7 @@ fn validate_coordinate(coordinate: u16, item_space: bool, common: u16, stride: u
     }
 }
 
-pub(super) fn overlaps(
-    left: u32,
-    left_width: u32,
-    right: u32,
-    right_width: u32,
-) -> Result<bool> {
+pub(super) fn overlaps(left: u32, left_width: u32, right: u32, right_width: u32) -> Result<bool> {
     let left_end = left
         .checked_add(left_width)
         .ok_or(Error::ArithmeticOverflow)?;

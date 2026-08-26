@@ -9,14 +9,14 @@
 //! instruction boundary.
 
 use dclutch_claims_svm::NO_POSITION_REVISION;
-use dclutch_custody_contract::{CustodyReplayV1, CUSTODY_POSTSTATE_DOMAIN_V1};
+use dclutch_custody_contract::{CUSTODY_POSTSTATE_DOMAIN_V1, CustodyReplayV1};
 use dclutch_economic_slice_kernel::{market_revision, position_owner, position_revision};
 use dclutch_general_adapter_contract::child_packets::{
-    verify_claims_receipt_v2, verify_custody_receipt_v2, ExpectedClaimsPostV2,
-    ExpectedCustodyPostV2,
+    ExpectedClaimsPostV2, ExpectedCustodyPostV2, verify_claims_receipt_v2,
+    verify_custody_receipt_v2,
 };
 use dclutch_general_codec::{MAX_OUTCOMES, SETTLEMENT_CURSOR_BYTES};
-use dclutch_general_config_contract::{GeneralConfigV2, GENERAL_CONFIG_SCHEMA_ID_V2};
+use dclutch_general_config_contract::{GENERAL_CONFIG_SCHEMA_ID_V2, GeneralConfigV2};
 use dclutch_record_contract::RAW_RECORD_PDA_SEED_V1;
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_token_svm::TokenAccount;
@@ -30,9 +30,9 @@ use solana_program::{
 };
 
 use crate::{
-    dispatch::TradingFamilyContextV1,
-    general::settlement::{derive_caller_authorities_v2, PreparedSettlementStepV2},
     TradingSbfError,
+    dispatch::TradingFamilyContextV1,
+    general::settlement::{PreparedSettlementStepV2, derive_caller_authorities_v2},
 };
 
 /// Exact canonical account count for one General physical settlement step.

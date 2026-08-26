@@ -11,8 +11,8 @@ use core::convert::TryFrom;
 
 pub use dclutch_product_payoff_v2_codec::registry_v3::{
     APPROXIMATION_CERTIFICATE_BYTES_V3, APPROXIMATION_CERTIFICATE_MAGIC_V3,
-    APPROXIMATION_CERTIFICATE_SCHEMA_V3,
-    CategoricalApproximationCertificateV3, CategoricalProjectionBoundaryV3,
+    APPROXIMATION_CERTIFICATE_SCHEMA_V3, CategoricalApproximationCertificateV3,
+    CategoricalProjectionBoundaryV3,
 };
 use dclutch_product_payoff_v2_codec::runtime_v3::{
     BasisKindV3, LINKED_BASIS_CONTENT_DOMAIN_V3, ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3,

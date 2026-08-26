@@ -776,12 +776,7 @@ mod tests {
             let mut output = vec![0x55_u8; width];
             let before = output.clone();
             assert_eq!(
-                encode_general_state_lifecycle_v5_atomic(
-                    action,
-                    widths,
-                    &mut scratch,
-                    &mut output,
-                ),
+                encode_general_state_lifecycle_v5_atomic(action, widths, &mut scratch, &mut output,),
                 Err(GeneralStateArtifactErrorV3::Geometry)
             );
             assert_eq!(output, before);

@@ -11,23 +11,22 @@ extern crate alloc;
 use alloc::boxed::Box;
 
 use dclutch_general_adapter_contract::{
-    consider_verified_input, freeze_selection, initialize_settlement, CandidateVerifierV1,
-    ConsiderVerifiedInputV1, VerifiedCandidateV1, GENERAL_CANDIDATE_PDA_DOMAIN_V1,
-    GENERAL_CERTIFICATE_PDA_DOMAIN_V1, GENERAL_PAGE_PDA_DOMAIN_V1,
-    GENERAL_POLICY_PDA_DOMAIN_V1, GENERAL_SELECTION_PDA_DOMAIN_V1,
-    GENERAL_SETTLEMENT_PDA_DOMAIN_V1, GENERAL_VERIFICATION_PDA_DOMAIN_V1,
-    VERIFICATION_CURSOR_BYTES_V1, VERIFIED_CANDIDATE_BYTES_V1,
+    CandidateVerifierV1, ConsiderVerifiedInputV1, GENERAL_CANDIDATE_PDA_DOMAIN_V1,
+    GENERAL_CERTIFICATE_PDA_DOMAIN_V1, GENERAL_PAGE_PDA_DOMAIN_V1, GENERAL_POLICY_PDA_DOMAIN_V1,
+    GENERAL_SELECTION_PDA_DOMAIN_V1, GENERAL_SETTLEMENT_PDA_DOMAIN_V1,
+    GENERAL_VERIFICATION_PDA_DOMAIN_V1, VERIFICATION_CURSOR_BYTES_V1, VERIFIED_CANDIDATE_BYTES_V1,
+    VerifiedCandidateV1, consider_verified_input, freeze_selection, initialize_settlement,
 };
 use dclutch_general_codec::{
-    Action, CandidateV1, ControllerRequestV1, PageViewV1, SelectionCursorV1, SelectionPolicyV1,
-    CANDIDATE_BYTES, CONTROLLER_REQUEST_BYTES, PAGE_BYTES, SELECTION_CURSOR_BYTES,
-    SELECTION_POLICY_BYTES, SETTLEMENT_CURSOR_BYTES,
+    Action, CANDIDATE_BYTES, CONTROLLER_REQUEST_BYTES, CandidateV1, ControllerRequestV1,
+    PAGE_BYTES, PageViewV1, SELECTION_CURSOR_BYTES, SELECTION_POLICY_BYTES,
+    SETTLEMENT_CURSOR_BYTES, SelectionCursorV1, SelectionPolicyV1,
 };
 use dclutch_general_config_contract::GeneralConfigV2;
 use solana_program::{account_info::AccountInfo, program_error::ProgramError, pubkey::Pubkey};
 
 use crate::{
-    dispatch::TradingFamilyContextV1, general::route::process_settlement_v2, TradingSbfError,
+    TradingSbfError, dispatch::TradingFamilyContextV1, general::route::process_settlement_v2,
 };
 
 /// Exact General suffix widths before the settlement phase.

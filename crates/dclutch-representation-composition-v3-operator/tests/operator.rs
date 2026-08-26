@@ -1,7 +1,7 @@
 //! Chain-observation, K/N separation, hostile refusal, and packet corpus.
 
 use dclutch_account_profile_contract::lifecycle_v3::{
-    encode::encode_lifecycle_policy_v5_atomic, HEADER_BYTES as LIFECYCLE_POLICY_BYTES_V5,
+    HEADER_BYTES as LIFECYCLE_POLICY_BYTES_V5, encode::encode_lifecycle_policy_v5_atomic,
 };
 use dclutch_capability_program_contract::hot_v3::{
     HOT_CONFIG_RAW_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
@@ -11,63 +11,62 @@ use dclutch_capability_program_contract::hot_v3::{
 use dclutch_product_payoff_v2_codec::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
     runtime_v3::{
-        basis_record_bytes_v3, compile_basis_v3, semantic_basis_preimage_v3, BasisInputV3,
-        BasisKindV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
+        BasisInputV3, BasisKindV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, basis_record_bytes_v3,
+        compile_basis_v3, semantic_basis_preimage_v3,
     },
 };
-use dclutch_product_runtime_v2::{portfolio_record_bytes, result_domain_record_bytes, ContentId};
+use dclutch_product_runtime_v2::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
 use dclutch_product_runtime_v2_admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2,
     RESULT_DOMAIN_SCHEMA_ID_V2,
 };
-use dclutch_product_runtime_v2_operator::{compile_product_records_v2, ProductCompilationInputV2};
+use dclutch_product_runtime_v2_operator::{ProductCompilationInputV2, compile_product_records_v2};
 use dclutch_rational_lifecycle_hot_v3::{
-    build_rational_lifecycle_selected_bundle_v5, build_rational_lifecycle_selected_bundle_v6,
-    lifecycle_logical_account_count_v3, CheckedRationalLifecycleHotOuterV3,
-    RationalLifecycleHotStateV3, RationalLifecycleSelectedAccountProfileInputV5,
-    RationalLifecycleSelectedBundleInputV5, RationalLifecycleSelectedBundleInputV6,
-    RationalLifecycleSelectedSelectionV5, RationalLifecycleSelectedSelectionV6,
+    CheckedRationalLifecycleHotOuterV3, RationalLifecycleHotStateV3,
+    RationalLifecycleSelectedAccountProfileInputV5, RationalLifecycleSelectedBundleInputV5,
+    RationalLifecycleSelectedBundleInputV6, RationalLifecycleSelectedSelectionV5,
+    RationalLifecycleSelectedSelectionV6, build_rational_lifecycle_selected_bundle_v5,
+    build_rational_lifecycle_selected_bundle_v6, lifecycle_logical_account_count_v3,
 };
 use dclutch_rational_representation_v2_contract::{
-    authenticate_token_behavior_v2, AuthenticatedTokenBehaviorV2, TokenBehaviorRecordAdmissionV2,
+    AuthenticatedTokenBehaviorV2, TokenBehaviorRecordAdmissionV2, authenticate_token_behavior_v2,
 };
 use dclutch_rational_representation_v2_kernel::{
+    DescriptorAdmissionV2, RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
+    REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3, RepresentationDescriptorV2,
     descriptor_v3::{
-        encode_representation_descriptor_v3_atomic, representation_descriptor_bytes_v3,
-        RepresentationDescriptorInputV3,
+        RepresentationDescriptorInputV3, encode_representation_descriptor_v3_atomic,
+        representation_descriptor_bytes_v3,
     },
-    DescriptorAdmissionV2, RepresentationDescriptorV2, RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
-    REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
 };
 use dclutch_rational_representation_v2_lifecycle_contract::{
-    LifecycleActionV2, LifecycleHeaderV2, LIFECYCLE_COMMON_ACCOUNT_COUNT_V2,
+    LIFECYCLE_COMMON_ACCOUNT_COUNT_V2, LifecycleActionV2, LifecycleHeaderV2,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_representation_composition_v3_kernel::{
-    composition_exposure_bytes_v3, composition_graph_bytes_v3, composition_translation_bytes_v3,
-    encode_canonical_translation_v3_atomic, encode_composition_descriptor_v3_atomic,
-    encode_composition_exposure_v3_atomic, encode_composition_graph_v3_atomic,
-    CanonicalTranslationInputV3, CompositionDescriptorInputV3, CompositionEdgeInputV3,
-    CompositionExposureInputV3, CompositionExposureLayoutV3, CompositionExposureRowInputV3,
-    CompositionExposureRowLayoutV3, CompositionExposureTermV3, CompositionGraphInputV3,
-    CompositionNodeInputV3, CompositionNodeKindV3, DescriptorLayoutV3, EdgeLayoutV3, SparseTermV3,
     COMPOSITION_DESCRIPTOR_BYTES_V3, COMPOSITION_DESCRIPTOR_SCHEMA_ID_V3,
     COMPOSITION_EXPOSURE_HEADER_BYTES_V3, COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
     COMPOSITION_GRAPH_HEADER_BYTES_V3, COMPOSITION_GRAPH_SCHEMA_ID_V3, COMPOSITION_NODE_BYTES_V3,
-    COMPOSITION_TRANSLATION_SCHEMA_ID_V3,
+    COMPOSITION_TRANSLATION_SCHEMA_ID_V3, CanonicalTranslationInputV3,
+    CompositionDescriptorInputV3, CompositionEdgeInputV3, CompositionExposureInputV3,
+    CompositionExposureLayoutV3, CompositionExposureRowInputV3, CompositionExposureRowLayoutV3,
+    CompositionExposureTermV3, CompositionGraphInputV3, CompositionNodeInputV3,
+    CompositionNodeKindV3, DescriptorLayoutV3, EdgeLayoutV3, SparseTermV3,
+    composition_exposure_bytes_v3, composition_graph_bytes_v3, composition_translation_bytes_v3,
+    encode_canonical_translation_v3_atomic, encode_composition_descriptor_v3_atomic,
+    encode_composition_exposure_v3_atomic, encode_composition_graph_v3_atomic,
 };
 use dclutch_representation_composition_v3_operator::{
-    authenticate_composition_v3, build_claims_lifecycle_plan_v3,
-    build_composition_admission_plan_v3, build_publication_plan_v3, compile_unsigned_packet_v0,
-    hot_v3::build_composition_lifecycle_hot_plan_v3,
-    hot_v6::build_composition_lifecycle_hot_plan_v6, validate_publication_candidates_v3,
     ClaimsLifecyclePlanV3, CompositionChainObservationV3, Error, FinalizedRecordObservationV3,
     ProductCompositionObservationV3, PublicationContextV3, PublicationTargetV3,
-    RepresentationCompositionObservationV3,
+    RepresentationCompositionObservationV3, authenticate_composition_v3,
+    build_claims_lifecycle_plan_v3, build_composition_admission_plan_v3, build_publication_plan_v3,
+    compile_unsigned_packet_v0, hot_v3::build_composition_lifecycle_hot_plan_v3,
+    hot_v6::build_composition_lifecycle_hot_plan_v6, validate_publication_candidates_v3,
 };
 use dclutch_token_svm::{
-    TokenBehaviorSelectionV2, TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_BYTES_V2,
-    TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
+    TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_BYTES_V2,
+    TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, TokenBehaviorSelectionV2,
 };
 use dclutch_versioned_message_operator::{Finality, Observation, ObservedAccount};
 use solana_address_lookup_table_interface::{

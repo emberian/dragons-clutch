@@ -84,7 +84,10 @@ fn every_action_round_trips_without_hidden_change_fields() {
         FractionalActionV1::ZeroSupplyRetire,
     ] {
         let value = request(action);
-        assert_eq!(FractionalFamilyRequestV1::decode(&value.to_bytes()), Ok(value));
+        assert_eq!(
+            FractionalFamilyRequestV1::decode(&value.to_bytes()),
+            Ok(value)
+        );
     }
     let unwrap = request(FractionalActionV1::WholeUnwrap).input();
     assert_eq!(unwrap.destination_token_account, [0; 32]);
