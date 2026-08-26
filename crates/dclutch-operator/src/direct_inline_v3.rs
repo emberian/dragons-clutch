@@ -45,7 +45,8 @@ use dclutch_direct_codec::{
         authenticate_direct_artifacts_v4,
     },
     execution_v3::{
-        DIRECT_SIGNED_PARTICIPANT_BYTES_V3, DirectExecutionActionV3, DirectExecutionRequestV3,
+        DIRECT_REGISTRATION_REQUEST_BYTES_V3, DIRECT_SIGNED_PARTICIPANT_BYTES_V3,
+        DirectExecutionActionV3, DirectExecutionRequestV3, DirectRegistrationRequestV3,
         encode_header_v3,
     },
     intent_v2::CompactIntentV2,
@@ -55,6 +56,7 @@ use dclutch_direct_codec::{
         encode_direct_headerless_registry_native_evidence_many_v4_atomic,
         encode_direct_native_evidence_many_v3_atomic, encode_direct_native_evidence_v3_atomic,
     },
+    registered_requests_v4::encode_direct_registration_request_v3_atomic,
 };
 use dclutch_release_set_contract::ExecutionRoleV1;
 use solana_address_lookup_table_interface::{
@@ -569,6 +571,27 @@ pub fn build_direct_hot_request_v4(
         checked_manifest_digest: checked.checked_manifest_digest,
         required_instruction_signers,
     })
+}
+
+/// Build a signed RegisterSell or RegisterBuy request through generic Hot.
+///
+/// The caller supplies detached signature bytes only. The action-selected
+/// request encoder owns the exact 316-byte wire, and [`build_direct_hot_request_v4`]
+/// independently reauthenticates SetV2, CapabilityV4, Profile14, LifecycleV5,
+/// Transition, Strategy, and Effect records from the finalized chain snapshot.
+pub fn build_direct_registration_hot_v4(
+    state: &DirectHotStateV4,
+    action: DirectExecutionActionV3,
+    request: DirectRegistrationRequestV3,
+    signature: [u8; 64],
+) -> Result<DirectHotReportV4, Error> {
+    if signature.iter().all(|byte| *byte == 0) {
+        return Err(Error::ZeroIdentity);
+    }
+    let mut encoded = [0_u8; DIRECT_REGISTRATION_REQUEST_BYTES_V3];
+    encode_direct_registration_request_v3_atomic(action, request, &mut encoded)
+        .map_err(|_| Error::EconomicMismatch)?;
+    build_direct_hot_request_v4(state, &encoded, core::slice::from_ref(&signature))
 }
 
 fn authenticate_chain_artifacts_v4<'a>(
@@ -2128,6 +2151,38 @@ mod tests {
         assert_eq!(
             compile_direct_inline_request_v3(seller, buyer, 1, 1),
             Err(Error::ZeroIdentity)
+        );
+
+        let (state, _) = hot38_state();
+        let mut registered_intent = seller.intent;
+        registered_intent.lifecycle = 2;
+        let registration = DirectRegistrationRequestV3 {
+            participant: DirectSignedParticipantV3 {
+                maker: seller.maker.to_bytes(),
+                intent: registered_intent,
+            },
+            maker_rent_credit: [31; 32],
+            record_rent_credit: [32; 32],
+            maker_rent_principal: 10_000,
+            record_rent_principal: 20_000,
+        };
+        assert_eq!(
+            build_direct_registration_hot_v4(
+                &state,
+                DirectExecutionActionV3::RegisterSell,
+                registration,
+                [0; 64],
+            ),
+            Err(Error::ZeroIdentity)
+        );
+        assert_eq!(
+            build_direct_registration_hot_v4(
+                &state,
+                DirectExecutionActionV3::InlineOrdinary,
+                registration,
+                seller.signature,
+            ),
+            Err(Error::EconomicMismatch)
         );
     }
 
