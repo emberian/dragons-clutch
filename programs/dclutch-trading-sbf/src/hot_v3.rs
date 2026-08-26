@@ -18,15 +18,14 @@ use dclutch_account_profile_contract::{
         CoordinateScopeV3, LifecycleContextV3, LifecycleOperationV3,
         LifecycleProtectedRegisterBuffersV3, LifecycleRegisterKindV3, LifecycleRegisterTargetV3,
         LifecycleRegistersV3, LifecycleRentQuoteBuffersV5, LifecycleSeedInputValueV3,
-        StateLifecyclePlanV3, StateLifecyclePolicyV5,
-        plan_lifecycle_with_protected_outputs_atomic,
+        StateLifecyclePlanV3, StateLifecyclePolicyV5, plan_lifecycle_with_protected_outputs_atomic,
     },
     v2::{
-        AccountPrestateV2, AccountProfileV2, ProjectionRegistersV2,
-        DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE,
-        SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2, TrustedEnvironmentV2,
-        derive_effect_permissions, project_atomic as project_accounts_atomic,
-        project_tail_count_atomic,
+        AccountPrestateV2, AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE,
+        ProjectionRegistersV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2,
+        TrustedEnvironmentV2, derive_effect_permissions,
+        derive_effect_permissions_with_dynamic_spans, project_atomic as project_accounts_atomic,
+        project_dynamic_fixed_spans_atomic, project_tail_count_atomic,
     },
 };
 use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
@@ -57,17 +56,17 @@ use dclutch_capability_program_contract::{
     set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
     v4::{
         CAPABILITY_PROGRAM_V4_BYTES, CapabilityProgramV4,
-        SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5, SCHEMA_RELEASE_ID as PROGRAM_SCHEMA_ID_V4,
+        SCHEMA_RELEASE_ID as PROGRAM_SCHEMA_ID_V4, SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
     },
 };
 use dclutch_core_contract::ContentId;
 use dclutch_effect_kernel::{
     v2::{AccountInput, AccountPermission, FixedRole},
-    v3::{
-        ProgramV3 as EffectProgramV3, ProjectionV3, ResolvedEffectV3,
-        project_atomic as project_effects_atomic,
+    v3::{ProgramV3 as EffectProgramV3, ProjectionV3, ResolvedEffectV3},
+    v4::{
+        ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4,
+        project_atomic as project_effects_v4_atomic,
     },
-    v4::{ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4},
 };
 use dclutch_execution_strategy_contract::{
     admitted_v3::AdmittedInvocationContextV3,
@@ -82,8 +81,8 @@ use dclutch_execution_strategy_contract::{
         ShadowArtifactTupleV3, ShadowExecutionDigestsV3, ShadowRequestV3, ShadowRuntimeShapeV3,
     },
     v2::{
-        AcceleratorTransportProfileV2, EXECUTION_STRATEGY_PROGRAM_BYTES_V2,
-        ExecutionStrategyProgramV2, StrategyDispositionV2,
+        AcceleratorTransportProfileV2, BankTransportV2, EXECUTION_STRATEGY_PROGRAM_BYTES_V2,
+        ExecutionStrategyProgramV2, StrategyDispositionV2, classify_bank_transport_v2,
     },
 };
 use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
@@ -317,15 +316,11 @@ fn authenticate_hot_invocation_v3(
     if observed.program_id == *program_id {
         if observed.data.as_slice() != instruction_data
             || observed.accounts.len() != accounts.len()
-            || observed
-                .accounts
-                .iter()
-                .zip(accounts)
-                .any(|(meta, info)| {
-                    meta.pubkey != *info.key
-                        || meta.is_signer != info.is_signer
-                        || meta.is_writable != info.is_writable
-                })
+            || observed.accounts.iter().zip(accounts).any(|(meta, info)| {
+                meta.pubkey != *info.key
+                    || meta.is_signer != info.is_signer
+                    || meta.is_writable != info.is_writable
+            })
         {
             return Err(TradingSbfError::NativeSignature.into());
         }
@@ -392,12 +387,9 @@ fn authenticate_hot_invocation_v3(
         .map_err(|_| TradingSbfError::NativeSignature)?;
     let batch_digest = ContentId::new(hash(&batch.to_bytes()).to_bytes())
         .map_err(|_| TradingSbfError::NativeSignature)?;
-    let seeds = RegistryContinuationAdmissionSeedsV1::new(
-        request,
-        activation.key.to_bytes(),
-        batch_digest,
-    )
-    .map_err(|_| TradingSbfError::NativeSignature)?;
+    let seeds =
+        RegistryContinuationAdmissionSeedsV1::new(request, activation.key.to_bytes(), batch_digest)
+            .map_err(|_| TradingSbfError::NativeSignature)?;
     let release = seeds.release_set();
     let cache = seeds.activation_cache();
     let batch = seeds.batch_request_digest();
@@ -481,17 +473,10 @@ pub fn process_hot_execution_v3(
 ) -> Result<(), ProgramError> {
     let (envelope, family_request) = HotExecutionEnvelopeV3::split_instruction(instruction_data)
         .map_err(|_| TradingSbfError::Content)?;
-    let invocation = authenticate_hot_invocation_v3(
-        program_id,
-        accounts,
-        instruction_data,
-        envelope,
-    )?;
-    let frame = parse_hot_frame_boxed_v3(
-        program_id,
-        accounts,
-        invocation.permits_fixed_market_union,
-    )?;
+    let invocation =
+        authenticate_hot_invocation_v3(program_id, accounts, instruction_data, envelope)?;
+    let frame =
+        parse_hot_frame_boxed_v3(program_id, accounts, invocation.permits_fixed_market_union)?;
     let request_digest = hash(family_request).to_bytes();
     let root_prestate = {
         let bytes = frame
@@ -677,60 +662,58 @@ pub fn process_hot_execution_v3(
     let provisional_identity_count = effect
         .identity_count(product_outcome_count)
         .map_err(|_| TradingSbfError::Content)?;
-    let (shadow_caller_authority, admitted_caller_authorities, runtime_start) = match strategy
-        .strategy()
-        .disposition()
-    {
-        StrategyDispositionV2::Interpreted => (None, None, strategy_extras_end),
-        StrategyDispositionV2::ShadowAot => {
-            let expected = HOT_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3
-                .checked_add(
-                    invocation
-                        .strategy_extras_start
-                        .checked_sub(HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3)
+    let (shadow_caller_authority, admitted_caller_authorities, runtime_start) =
+        match strategy.strategy().disposition() {
+            StrategyDispositionV2::Interpreted => (None, None, strategy_extras_end),
+            StrategyDispositionV2::ShadowAot => {
+                let expected = HOT_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3
+                    .checked_add(
+                        invocation
+                            .strategy_extras_start
+                            .checked_sub(HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3)
+                            .ok_or(TradingSbfError::Content)?,
+                    )
+                    .ok_or(TradingSbfError::Content)?;
+                if strategy_extras_end != expected {
+                    return Err(TradingSbfError::Content.into());
+                }
+                let caller = accounts
+                    .get(strategy_extras_end)
+                    .ok_or(TradingSbfError::Content)?;
+                (
+                    Some(caller),
+                    None,
+                    strategy_extras_end
+                        .checked_add(1)
                         .ok_or(TradingSbfError::Content)?,
                 )
-                .ok_or(TradingSbfError::Content)?;
-            if strategy_extras_end != expected {
-                return Err(TradingSbfError::Content.into());
             }
-            let caller = accounts
-                .get(strategy_extras_end)
-                .ok_or(TradingSbfError::Content)?;
-            (
-                Some(caller),
-                None,
-                strategy_extras_end
-                    .checked_add(1)
-                    .ok_or(TradingSbfError::Content)?,
-            )
-        }
-        StrategyDispositionV2::AdmittedAot => {
-            let admitted_start = HOT_ADMITTED_CALLER_AUTHORITIES_START_V3
-                .checked_add(
-                    invocation
-                        .strategy_extras_start
-                        .checked_sub(HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3)
-                        .ok_or(TradingSbfError::Content)?,
-                )
-                .ok_or(TradingSbfError::Content)?;
-            if strategy_extras_end != admitted_start {
-                return Err(TradingSbfError::Content.into());
+            StrategyDispositionV2::AdmittedAot => {
+                let admitted_start = HOT_ADMITTED_CALLER_AUTHORITIES_START_V3
+                    .checked_add(
+                        invocation
+                            .strategy_extras_start
+                            .checked_sub(HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3)
+                            .ok_or(TradingSbfError::Content)?,
+                    )
+                    .ok_or(TradingSbfError::Content)?;
+                if strategy_extras_end != admitted_start {
+                    return Err(TradingSbfError::Content.into());
+                }
+                let runtime_start = admitted_start
+                    .checked_add(admitted_caller_authority_count_v3(
+                        u32::try_from(provisional_scalar_count)
+                            .map_err(|_| TradingSbfError::Content)?,
+                        u32::try_from(provisional_identity_count)
+                            .map_err(|_| TradingSbfError::Content)?,
+                    )?)
+                    .ok_or(TradingSbfError::Content)?;
+                let callers = accounts
+                    .get(admitted_start..runtime_start)
+                    .ok_or(TradingSbfError::Content)?;
+                (None, Some(callers), runtime_start)
             }
-            let runtime_start = admitted_start
-                .checked_add(admitted_caller_authority_count_v3(
-                    u32::try_from(provisional_scalar_count)
-                        .map_err(|_| TradingSbfError::Content)?,
-                    u32::try_from(provisional_identity_count)
-                        .map_err(|_| TradingSbfError::Content)?,
-                )?)
-                .ok_or(TradingSbfError::Content)?;
-            let callers = accounts
-                .get(admitted_start..runtime_start)
-                .ok_or(TradingSbfError::Content)?;
-            (None, Some(callers), runtime_start)
-        }
-    };
+        };
     let expected_shadow_runtime = HOT_SHADOW_RUNTIME_ACCOUNTS_START_V3
         .checked_add(
             invocation
@@ -743,10 +726,24 @@ pub fn process_hot_execution_v3(
         return Err(TradingSbfError::Content.into());
     }
 
+    let trusted_environment = observe_trusted_environment_v3(account_profile, program_id)?;
+    let dynamic_spans = authenticate_dynamic_span_widths_v3(
+        account_profile,
+        request_profile,
+        effect,
+        strategy.strategy().disposition(),
+        product_outcome_count,
+        family_request,
+        request_digest,
+        trusted_environment,
+        provisional_scalar_count,
+        provisional_identity_count,
+    )?;
+
     let runtime_accounts = expand_runtime_accounts_v3(
         account_profile,
         product_outcome_count,
-        &[],
+        &dynamic_spans.widths,
         [
             frame.root,
             frame.config_raw,
@@ -823,7 +820,6 @@ pub fn process_hot_execution_v3(
         })
         .collect::<Vec<_>>();
 
-    let trusted_environment = observe_trusted_environment_v3(account_profile, program_id)?;
     let tail_count = project_tail_count(
         account_profile,
         &observations,
@@ -840,6 +836,8 @@ pub fn process_hot_execution_v3(
         tail_count,
         family_request,
         runtime_accounts.len(),
+        &dynamic_spans.widths,
+        &dynamic_spans.request_projection_scalars,
     )?;
     let scalar_count = effect
         .scalar_count(tail_count)
@@ -867,6 +865,7 @@ pub fn process_hot_execution_v3(
         request_profile,
         lifecycle,
         &current_rent_quotes,
+        &dynamic_spans.widths,
         tail_count,
         &observations,
         family_request,
@@ -883,6 +882,7 @@ pub fn process_hot_execution_v3(
         request_profile,
         transition,
     )?;
+    require_dynamic_span_transition_ownership_v3(account_profile, transition)?;
 
     require_lifecycle_register_ownership_v5(
         lifecycle,
@@ -892,9 +892,19 @@ pub fn process_hot_execution_v3(
     )?;
     let aliases = (0..runtime_accounts.len())
         .map(|coordinate| {
-            account_profile
-                .representative(tail_count, coordinate)
-                .map_err(|_| TradingSbfError::Content)
+            if account_profile.artifact_profile() == DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
+                account_profile
+                    .representative_with_dynamic_spans(
+                        tail_count,
+                        &dynamic_spans.widths,
+                        coordinate,
+                    )
+                    .map_err(|_| TradingSbfError::Content)
+            } else {
+                account_profile
+                    .representative(tail_count, coordinate)
+                    .map_err(|_| TradingSbfError::Content)
+            }
         })
         .collect::<Result<Vec<_>, _>>()?;
     let preplanned_lifecycle = prepare_lifecycle_v4(
@@ -962,6 +972,11 @@ pub fn process_hot_execution_v3(
         &transition_output_scalars,
         &transition_output_identities,
     )?;
+    require_dynamic_span_values_v3(
+        account_profile,
+        &dynamic_spans.widths,
+        &transition_output_scalars,
+    )?;
 
     require_borrowed_witness_coverage_v3(
         request_profile,
@@ -980,6 +995,7 @@ pub fn process_hot_execution_v3(
         &observations,
         &preplanned_lifecycle.plans,
         account_profile,
+        &dynamic_spans.widths,
         &aliases,
         runtime_accounts.len(),
         request_bytes,
@@ -1022,8 +1038,12 @@ pub fn process_hot_execution_v3(
         &aliases,
     )?;
     let lifecycle_plans = revalidated_lifecycle.plans;
-    let effect_accounts =
-        downgraded_effect_accounts_v3(account_profile, tail_count, &[], &runtime_accounts)?;
+    let effect_accounts = downgraded_effect_accounts_v3(
+        account_profile,
+        tail_count,
+        &dynamic_spans.widths,
+        &runtime_accounts,
+    )?;
     preflight_child_routes_v3(
         program_id,
         *frame,
@@ -1134,9 +1154,7 @@ struct PreparedHotCommitV3<'a, 'accounts, 'info, 'artifact> {
 }
 
 #[inline(never)]
-fn commit_prepared_hot_v3(
-    prepared: Box<PreparedHotCommitV3<'_, '_, '_, '_>>,
-) -> u64 {
+fn commit_prepared_hot_v3(prepared: Box<PreparedHotCommitV3<'_, '_, '_, '_>>) -> u64 {
     match commit_prepared_hot_result_v3(&prepared) {
         Ok(()) => 0,
         Err(error) => error.into(),
@@ -1563,6 +1581,7 @@ fn project_hot_effects_v3(
     observations: &[AccountObservationV1<'_>],
     lifecycle_plans: &[PreparedLifecycleInvocationV3],
     account_profile: AccountProfileV2<'_>,
+    span_counts: &[u32],
     aliases: &[usize],
     runtime_account_count: usize,
     request_bytes: usize,
@@ -1576,29 +1595,66 @@ fn project_hot_effects_v3(
         .collect::<Vec<_>>();
     apply_lifecycle_candidates_v3(lifecycle_plans, aliases, &mut account_inputs)?;
     let mut permissions = vec![AccountPermission::read_only(); runtime_account_count];
-    derive_effect_permissions(account_profile, tail_count, &mut permissions)
+    if account_profile.artifact_profile() == DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
+        derive_effect_permissions_with_dynamic_spans(
+            account_profile,
+            tail_count,
+            span_counts,
+            &mut permissions,
+        )
         .map_err(|_| TradingSbfError::Content)?;
+    } else {
+        derive_effect_permissions(account_profile, tail_count, &mut permissions)
+            .map_err(|_| TradingSbfError::Content)?;
+    }
     require_common_projection_permissions_v3(&permissions)?;
-    let mut scratch_lamports = vec![0_u64; runtime_account_count];
-    let mut output_lamports = vec![0_u64; runtime_account_count];
+    let effect_account_count = effect
+        .successor
+        .account_count(tail_count, scalars)
+        .map_err(|_| TradingSbfError::Transition)?;
+    if effect_account_count > runtime_account_count
+        || permissions
+            .get(effect_account_count..)
+            .ok_or(TradingSbfError::Content)?
+            .iter()
+            .any(|permission| *permission != AccountPermission::read_only())
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    let mut scratch_lamports = vec![0_u64; effect_account_count];
+    let mut effect_output_lamports = vec![0_u64; effect_account_count];
     let mut scratch_requests = vec![0_u8; request_bytes];
     let mut output_requests = vec![0_u8; request_bytes];
-    project_effects_atomic(
-        effect.base(),
+    project_effects_v4_atomic(
+        effect.successor,
         tail_count,
         ProjectionV3 {
             scalars,
             identities,
-            aliases,
-            accounts: &account_inputs,
-            permissions: &permissions,
+            aliases: aliases
+                .get(..effect_account_count)
+                .ok_or(TradingSbfError::Content)?,
+            accounts: account_inputs
+                .get(..effect_account_count)
+                .ok_or(TradingSbfError::Content)?,
+            permissions: permissions
+                .get(..effect_account_count)
+                .ok_or(TradingSbfError::Content)?,
             scratch_lamports: &mut scratch_lamports,
-            output_lamports: &mut output_lamports,
+            output_lamports: &mut effect_output_lamports,
             scratch_requests: &mut scratch_requests,
             output_requests: &mut output_requests,
         },
     )
     .map_err(|_| TradingSbfError::Transition)?;
+    let mut output_lamports = account_inputs
+        .iter()
+        .map(|account| account.lamports)
+        .collect::<Vec<_>>();
+    output_lamports
+        .get_mut(..effect_account_count)
+        .ok_or(TradingSbfError::Content)?
+        .copy_from_slice(&effect_output_lamports);
     Ok(ProjectedEffectsV3 {
         lamports: output_lamports,
         requests: output_requests,
@@ -1895,6 +1951,198 @@ fn logical_projection_key_v3(
         4 => linked_basis,
         _ => physical_key,
     }
+}
+
+struct AuthenticatedDynamicSpanWidthsV3 {
+    widths: Vec<u32>,
+    request_projection_scalars: Vec<u64>,
+}
+
+fn require_dynamic_span_transition_ownership_v3(
+    profile: AccountProfileV2<'_>,
+    transition: TransitionProgramV3<'_>,
+) -> Result<(), ProgramError> {
+    if profile.artifact_profile() != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
+        return Ok(());
+    }
+    let mut index = 0_u16;
+    while index < profile.dynamic_fixed_span_count() {
+        let scalar = profile
+            .dynamic_fixed_span(index)
+            .map_err(|_| TradingSbfError::Content)?
+            .count_scalar();
+        if transition
+            .writes_register(RegisterWriteTargetV3 {
+                kind: RegisterKindV3::Scalar,
+                space: RegisterSpaceV3::Common,
+                index: scalar,
+            })
+            .map_err(|_| TradingSbfError::Content)?
+        {
+            return Err(TradingSbfError::Content.into());
+        }
+        index = index.checked_add(1).ok_or(TradingSbfError::Content)?;
+    }
+    Ok(())
+}
+
+fn require_dynamic_span_values_v3(
+    profile: AccountProfileV2<'_>,
+    expected: &[u32],
+    scalars: &[u64],
+) -> Result<(), ProgramError> {
+    if profile.artifact_profile() != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
+        return if expected.is_empty() {
+            Ok(())
+        } else {
+            Err(TradingSbfError::Content.into())
+        };
+    }
+    let mut observed = vec![0_u32; usize::from(profile.dynamic_fixed_span_count())];
+    profile
+        .dynamic_span_widths_from_scalars(scalars, &mut observed)
+        .map_err(|_| TradingSbfError::Content)?;
+    if observed == expected {
+        Ok(())
+    } else {
+        Err(TradingSbfError::Content.into())
+    }
+}
+
+/// Derive Profile13 physical widths before account expansion without accepting
+/// account-vector length as authority.
+///
+/// Request-owned selectors are projected once from the exact family bytes into
+/// a throwaway bank. A sole non-Request selector is admitted only when the
+/// authenticated strategy's canonical bank geometry requires scratch pages;
+/// that page count is then derived from scalar/identity widths. Every EffectV4
+/// span selector must be one of the Request-owned Profile13 selectors, while
+/// the scratch transport span remains AccountProfile-only and effectless.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn authenticate_dynamic_span_widths_v3(
+    profile: AccountProfileV2<'_>,
+    request: RequestProfileKindV3<'_>,
+    effect: SelectedEffectProgramV4<'_>,
+    disposition: StrategyDispositionV2,
+    tail_count: u32,
+    family_request: &[u8],
+    request_digest: [u8; 32],
+    trusted_environment: TrustedEnvironmentObservationV3,
+    scalar_count: usize,
+    identity_count: usize,
+) -> Result<AuthenticatedDynamicSpanWidthsV3, ProgramError> {
+    if profile.artifact_profile() != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
+        if profile.dynamic_fixed_span_count() != 0 || effect.successor.span_count() != 0 {
+            return Err(TradingSbfError::Content.into());
+        }
+        return Ok(AuthenticatedDynamicSpanWidthsV3 {
+            widths: Vec::new(),
+            request_projection_scalars: Vec::new(),
+        });
+    }
+    let mut input_scalars = vec![0_u64; scalar_count];
+    let mut input_identities = vec![[0_u8; 32]; identity_count];
+    *input_identities
+        .get_mut(HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3)
+        .ok_or(TradingSbfError::Content)? = request_digest;
+    seed_trusted_environment_v3(
+        trusted_environment,
+        &mut input_scalars,
+        &mut input_identities,
+    )?;
+    let mut scratch_scalars = input_scalars.clone();
+    let mut scratch_identities = input_identities.clone();
+    let mut projected_scalars = input_scalars.clone();
+    let mut projected_identities = input_identities.clone();
+    request.project_atomic(
+        tail_count,
+        family_request,
+        ProjectionRegistersV1 {
+            input_scalars: &input_scalars,
+            input_identities: &input_identities,
+            scratch_scalars: &mut scratch_scalars,
+            scratch_identities: &mut scratch_identities,
+            output_scalars: &mut projected_scalars,
+            output_identities: &mut projected_identities,
+        },
+    )?;
+    // `projected_scalars` is the failure-atomic output of the throwaway request
+    // projection; the other banks remain phase-local validation scratch.
+    let mut widths = vec![0_u32; usize::from(profile.dynamic_fixed_span_count())];
+    let transport_page_count = match classify_bank_transport_v2(
+        u32::try_from(scalar_count).map_err(|_| TradingSbfError::Content)?,
+        u32::try_from(identity_count).map_err(|_| TradingSbfError::Content)?,
+    )
+    .map_err(|_| TradingSbfError::Content)?
+    {
+        BankTransportV2::InlineReturnData { .. } => None,
+        BankTransportV2::AuthenticatedScratchPages { page_count, .. } => Some(page_count),
+    };
+    let mut transport_span = None;
+    let mut index = 0_u16;
+    while index < profile.dynamic_fixed_span_count() {
+        let span = profile
+            .dynamic_fixed_span(index)
+            .map_err(|_| TradingSbfError::Content)?;
+        let target = ProjectionTargetV1 {
+            kind: ProjectionRegisterKindV1::Scalar,
+            space: ProjectionRegisterSpaceV1::Common,
+            index: span.count_scalar(),
+        };
+        let request_owned = request.writes_register(target)?;
+        let effect_owned = (0..effect.successor.span_count()).any(|effect_index| {
+            effect
+                .successor
+                .span(effect_index)
+                .is_ok_and(|value| value.selector_common_scalar() == span.count_scalar())
+        });
+        if request_owned {
+            if !effect_owned {
+                return Err(TradingSbfError::Content.into());
+            }
+        } else {
+            if effect_owned
+                || disposition != StrategyDispositionV2::AdmittedAot
+                || transport_span.is_some()
+            {
+                return Err(TradingSbfError::Content.into());
+            }
+            let page_count = transport_page_count.ok_or(TradingSbfError::Content)?;
+            *projected_scalars
+                .get_mut(usize::from(span.count_scalar()))
+                .ok_or(TradingSbfError::Content)? = u64::from(page_count);
+            transport_span = Some(index);
+        }
+        index = index.checked_add(1).ok_or(TradingSbfError::Content)?;
+    }
+    let mut effect_span = 0_u16;
+    while effect_span < effect.successor.span_count() {
+        let selector = effect
+            .successor
+            .span(effect_span)
+            .map_err(|_| TradingSbfError::Content)?
+            .selector_common_scalar();
+        if !(0..profile.dynamic_fixed_span_count()).any(|profile_index| {
+            profile
+                .dynamic_fixed_span(profile_index)
+                .is_ok_and(|value| value.count_scalar() == selector)
+        }) {
+            return Err(TradingSbfError::Content.into());
+        }
+        effect_span = effect_span.checked_add(1).ok_or(TradingSbfError::Content)?;
+    }
+    profile
+        .dynamic_span_widths_from_scalars(&projected_scalars, &mut widths)
+        .map_err(|_| TradingSbfError::Content)?;
+    effect
+        .successor
+        .account_count(tail_count, &projected_scalars)
+        .map_err(|_| TradingSbfError::Content)?;
+    Ok(AuthenticatedDynamicSpanWidthsV3 {
+        widths,
+        request_projection_scalars: projected_scalars,
+    })
 }
 
 fn expand_runtime_accounts_v3<'accounts, 'info>(
@@ -4159,10 +4407,10 @@ fn decode_selected_effect_v4<'a>(
         return Err(TradingSbfError::UnsupportedContent.into());
     }
     let successor = EffectProgramV4::decode(bytes).map_err(|_| TradingSbfError::Content)?;
-    // This first accepted runtime slice is exact fixed topology. Dynamic spans
-    // and borrowed ranges remain fail-closed until their physical expansion
-    // and child-request append paths are committed together.
-    if successor.span_count() != 0 || successor.range_count() != 0 {
+    // Profile13 and the EffectV4 kernel jointly own selected account spans.
+    // Borrowed family ranges remain fail-closed until the child-request append
+    // and continuation-window path lands as one coherent boundary.
+    if successor.range_count() != 0 {
         return Err(TradingSbfError::UnsupportedContent.into());
     }
     Ok(SelectedEffectProgramV4 {
@@ -4180,18 +4428,37 @@ fn require_geometry(
     tail_count: u32,
     family_request: &[u8],
     runtime_accounts: usize,
+    span_counts: &[u32],
+    preprojected_scalars: &[u64],
 ) -> Result<(), ProgramError> {
     request.require_request_shape(tail_count, family_request)?;
     let request_v1 = request.v1();
-    let expected_accounts = usize::from(account.fixed_account_count())
-        .checked_add(
-            usize::try_from(tail_count)
-                .map_err(|_| TradingSbfError::Content)?
-                .checked_mul(usize::from(account.item_account_stride()))
-                .ok_or(TradingSbfError::Content)?,
-        )
-        .ok_or(TradingSbfError::Content)?;
+    let expected_accounts = if account.artifact_profile() == DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
+        account
+            .logical_account_count_with_dynamic_spans(tail_count, span_counts)
+            .map_err(|_| TradingSbfError::Content)?
+    } else {
+        if !span_counts.is_empty() {
+            return Err(TradingSbfError::Content.into());
+        }
+        account
+            .logical_account_count(tail_count)
+            .map_err(|_| TradingSbfError::Content)?
+    };
+    let effect_accounts = if preprojected_scalars.is_empty() {
+        effect
+            .base()
+            .account_count(tail_count)
+            .map_err(|_| TradingSbfError::Content)?
+    } else {
+        effect
+            .successor
+            .account_count(tail_count, preprojected_scalars)
+            .map_err(|_| TradingSbfError::Content)?
+    };
     if expected_accounts != runtime_accounts
+        || effect_accounts > expected_accounts
+        || (effect.successor.span_count() != 0 && effect_accounts != expected_accounts)
         || account.fixed_account_count() != effect.fixed_account_count()
         || account.item_account_stride() != effect.item_account_stride()
         || account.common_scalar_count() != request_v1.common_scalar_count()
@@ -4414,6 +4681,7 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
     request_profile: RequestProfileKindV3<'artifact>,
     lifecycle: StateLifecyclePolicyV5<'artifact>,
     current_rent_quotes: &[AuthenticatedRentQuoteV5],
+    span_counts: &[u32],
     tail_count: u32,
     observations: &[AccountObservationV1<'_>],
     family_request: &'artifact [u8],
@@ -4433,23 +4701,50 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
         &mut input_scalars,
         &mut input_identities,
     )?;
+    if account_profile.artifact_profile() == DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
+        if span_counts.len() != usize::from(account_profile.dynamic_fixed_span_count()) {
+            return Err(TradingSbfError::Content.into());
+        }
+        let mut index = 0_u16;
+        while index < account_profile.dynamic_fixed_span_count() {
+            let span = account_profile
+                .dynamic_fixed_span(index)
+                .map_err(|_| TradingSbfError::Content)?;
+            *input_scalars
+                .get_mut(usize::from(span.count_scalar()))
+                .ok_or(TradingSbfError::Content)? = u64::from(
+                *span_counts
+                    .get(usize::from(index))
+                    .ok_or(TradingSbfError::Content)?,
+            );
+            index = index.checked_add(1).ok_or(TradingSbfError::Content)?;
+        }
+    } else if !span_counts.is_empty() {
+        return Err(TradingSbfError::Content.into());
+    }
     let mut account_scratch_scalars = input_scalars.clone();
     let mut account_scratch_identities = input_identities.clone();
     let mut account_output_scalars = input_scalars.clone();
     let mut account_output_identities = input_identities.clone();
-    project_accounts_atomic(
-        account_profile,
-        tail_count,
-        observations,
-        ProjectionRegistersV2 {
-            input_scalars: &input_scalars,
-            input_identities: &input_identities,
-            scratch_scalars: &mut account_scratch_scalars,
-            scratch_identities: &mut account_scratch_identities,
-            output_scalars: &mut account_output_scalars,
-            output_identities: &mut account_output_identities,
-        },
-    )
+    let account_registers = ProjectionRegistersV2 {
+        input_scalars: &input_scalars,
+        input_identities: &input_identities,
+        scratch_scalars: &mut account_scratch_scalars,
+        scratch_identities: &mut account_scratch_identities,
+        output_scalars: &mut account_output_scalars,
+        output_identities: &mut account_output_identities,
+    };
+    if account_profile.artifact_profile() == DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
+        project_dynamic_fixed_spans_atomic(
+            account_profile,
+            tail_count,
+            span_counts,
+            observations,
+            account_registers,
+        )
+    } else {
+        project_accounts_atomic(account_profile, tail_count, observations, account_registers)
+    }
     .map_err(|_| TradingSbfError::Content)?;
     require_projected_tail_count_agreement_v3(
         account_profile,
@@ -4511,6 +4806,15 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
             output_identities: &mut request_output_identities,
         },
     )?;
+    if account_profile.artifact_profile() == DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
+        let mut revalidated = vec![0_u32; span_counts.len()];
+        account_profile
+            .dynamic_span_widths_from_scalars(&request_output_scalars, &mut revalidated)
+            .map_err(|_| TradingSbfError::Content)?;
+        if revalidated != span_counts {
+            return Err(TradingSbfError::Content.into());
+        }
+    }
     require_trusted_environment_v3(
         trusted_environment,
         &request_output_scalars,
@@ -5453,13 +5757,15 @@ mod tests {
                 is_writable: false,
             })
             .collect::<Vec<_>>();
-        metas.extend(keys.iter().enumerate().map(|(index, key)| {
-            BorrowedAccountMeta {
-                pubkey: key,
-                is_signer: false,
-                is_writable: index == HOT_MARKET_ACCOUNT_V3 || index == HOT_ROOT_ACCOUNT_V3,
-            }
-        }));
+        metas.extend(
+            keys.iter()
+                .enumerate()
+                .map(|(index, key)| BorrowedAccountMeta {
+                    pubkey: key,
+                    is_signer: false,
+                    is_writable: index == HOT_MARKET_ACCOUNT_V3 || index == HOT_ROOT_ACCOUNT_V3,
+                }),
+        );
         let borrowed = [BorrowedInstruction {
             program_id: &registry,
             accounts: metas,
@@ -5503,25 +5809,29 @@ mod tests {
         let authenticated =
             authenticate_hot_invocation_v3(&program_id, &accounts, &hot_bytes, envelope)
                 .expect("Registry continuation");
-        assert_eq!(authenticated.strategy_extras_start, HOT_FIXED_ACCOUNT_COUNT_V3 + 1);
+        assert_eq!(
+            authenticated.strategy_extras_start,
+            HOT_FIXED_ACCOUNT_COUNT_V3 + 1
+        );
         assert!(authenticated.permits_fixed_market_union);
         assert!(HotFrameV3::parse(&program_id, &accounts, false).is_err());
         assert!(HotFrameV3::parse(&program_id, &accounts, true).is_ok());
 
         accounts[HOT_FIXED_ACCOUNT_COUNT_V3].is_signer = false;
-        assert!(authenticate_hot_invocation_v3(&program_id, &accounts, &hot_bytes, envelope).is_err());
+        assert!(
+            authenticate_hot_invocation_v3(&program_id, &accounts, &hot_bytes, envelope).is_err()
+        );
     }
 
     #[test]
     fn lifecycle_v5_quotes_are_derived_only_from_current_rent() {
         use dclutch_account_profile_contract::lifecycle_v3::{
-            ACTION_PLAN_BYTES, CURRENT_RENT_QUOTE_BYTES_V5, HEADER_BYTES,
-            PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SEED_BYTES,
+            ACTION_PLAN_BYTES, CURRENT_RENT_QUOTE_BYTES_V5, HEADER_BYTES, PROTECTED_OUTPUT_BYTES,
+            RECIPE_BYTES, SEED_BYTES,
             encode::{
                 LifecycleAccountCoordinateV3, LifecycleCurrentRentQuoteInputV5,
                 LifecycleGuardInputV3, LifecycleOperationInputV3, LifecyclePlanInputV3,
-                LifecycleRecipeInputV3, LifecycleSeedInputV3,
-                encode_lifecycle_policy_v5_atomic,
+                LifecycleRecipeInputV3, LifecycleSeedInputV3, encode_lifecycle_policy_v5_atomic,
             },
         };
 
@@ -5645,7 +5955,10 @@ mod tests {
         )
         .expect("profile13 zero spans");
         let profile = AccountProfileV2::decode(&bytes).expect("decode profile13");
-        assert_eq!(profile.artifact_profile(), DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE);
+        assert_eq!(
+            profile.artifact_profile(),
+            DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+        );
         assert_eq!(profile.dynamic_fixed_span_count(), 0);
 
         let make_account = |writable| {
