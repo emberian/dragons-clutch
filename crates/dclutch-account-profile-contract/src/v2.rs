@@ -43,6 +43,8 @@ const OP_PROJECT_OWNER: u8 = 3;
 const OP_PROJECT_LAMPORTS: u8 = 4;
 const OP_PROJECT_DATA_U64: u8 = 5;
 const OP_PROJECT_DATA_IDENTITY: u8 = 6;
+const OP_PROJECT_DATA_U32: u8 = 7;
+const OP_PROJECT_TAIL_COUNT_U32: u8 = 8;
 
 /// Stable hostile-decode or projection refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -111,6 +113,31 @@ pub struct AccountRuleV2 {
     alias_kind: AliasKindV2,
     alias_index: u16,
     data_length: u32,
+}
+
+/// Unique fixed-prefix source selected as the authenticated runtime tail width.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TailCountProjectionV2 {
+    account: u16,
+    register: u16,
+    data_offset: u32,
+}
+
+impl TailCountProjectionV2 {
+    /// Fixed-prefix account containing the independently authenticated Product body.
+    pub const fn account(self) -> u16 {
+        self.account
+    }
+
+    /// Common scalar receiving the canonical `u32` outcome count.
+    pub const fn register(self) -> u16 {
+        self.register
+    }
+
+    /// Checked byte offset inside the authenticated Product body.
+    pub const fn data_offset(self) -> u32 {
+        self.data_offset
+    }
 }
 
 impl AccountRuleV2 {
@@ -217,6 +244,7 @@ impl<'a> AccountProfileV2<'a> {
         }
         value.validate_rules()?;
         value.validate_operations()?;
+        value.validate_tail_count_projection()?;
         Ok(value)
     }
 
@@ -312,6 +340,27 @@ impl<'a> AccountProfileV2<'a> {
         )
     }
 
+    /// Return the unique fixed-prefix Product tail-count projection, if affine.
+    pub fn tail_count_projection(self) -> Result<Option<TailCountProjectionV2>> {
+        let mut found = None;
+        let mut index = 0_u16;
+        while index < self.fixed_operations {
+            let operation = self.operation(false, index)?;
+            if operation.opcode == OP_PROJECT_TAIL_COUNT_U32 {
+                if found.is_some() {
+                    return Err(Error::DuplicateProjection);
+                }
+                found = Some(TailCountProjectionV2 {
+                    account: operation.account,
+                    register: operation.register,
+                    data_offset: operation.data_offset,
+                });
+            }
+            index = index.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        Ok(found)
+    }
+
     fn operation(self, item_template: bool, index: u16) -> Result<Operation> {
         let count = if item_template {
             self.item_operations
@@ -405,6 +454,18 @@ impl<'a> AccountProfileV2<'a> {
         Ok(())
     }
 
+    fn validate_tail_count_projection(self) -> Result<()> {
+        let affine = self.item_account_stride != 0
+            || self.item_operations != 0
+            || self.item_scalar_stride != 0
+            || self.item_identity_stride != 0;
+        if self.tail_count_projection()?.is_some() == affine {
+            Ok(())
+        } else {
+            Err(Error::NonCanonicalOperation)
+        }
+    }
+
     fn require_unique_projection(self, item: bool, index: u16, operation: Operation) -> Result<()> {
         let Some(target) = operation.projection_target()? else {
             return Ok(());
@@ -495,6 +556,49 @@ pub fn project_atomic(
         .output_identities
         .copy_from_slice(registers.scratch_identities);
     Ok(())
+}
+
+/// Authenticate only the fixed prefix and return its unique Product-owned count.
+///
+/// The outer must independently authenticate the source account as the exact
+/// finalized Product Runtime V2 graph selected by Core before using this
+/// descriptor-level projection. This function does not make AccountProfile a
+/// second Product decoder or semantic owner.
+pub fn project_tail_count_atomic(
+    profile: AccountProfileV2<'_>,
+    fixed_accounts: &[AccountObservationV1<'_>],
+    registers: ProjectionRegistersV2<'_>,
+) -> Result<u32> {
+    let projection = profile
+        .tail_count_projection()?
+        .ok_or(Error::NonCanonicalOperation)?;
+    let ProjectionRegistersV2 {
+        input_scalars,
+        input_identities,
+        scratch_scalars,
+        scratch_identities,
+        output_scalars,
+        output_identities,
+    } = registers;
+    project_atomic(
+        profile,
+        0,
+        fixed_accounts,
+        ProjectionRegistersV2 {
+            input_scalars,
+            input_identities,
+            scratch_scalars: &mut *scratch_scalars,
+            scratch_identities: &mut *scratch_identities,
+            output_scalars: &mut *output_scalars,
+            output_identities: &mut *output_identities,
+        },
+    )?;
+    u32::try_from(
+        *output_scalars
+            .get(usize::from(projection.register))
+            .ok_or(Error::InvalidCoordinate)?,
+    )
+    .map_err(|_| Error::InvalidCoordinate)
 }
 
 /// Expand exact effect permissions for one authenticated tail.
@@ -699,7 +803,10 @@ impl Operation {
                     return Err(Error::NonCanonicalOperation);
                 }
             }
-            OP_PROJECT_DATA_U64 | OP_PROJECT_DATA_IDENTITY => {}
+            OP_PROJECT_DATA_U64
+            | OP_PROJECT_DATA_IDENTITY
+            | OP_PROJECT_DATA_U32
+            | OP_PROJECT_TAIL_COUNT_U32 => {}
             _ => return Err(Error::UnknownOperation),
         }
         if item_body
@@ -720,6 +827,8 @@ impl Operation {
                 | OP_PROJECT_LAMPORTS
                 | OP_PROJECT_DATA_U64
                 | OP_PROJECT_DATA_IDENTITY
+                | OP_PROJECT_DATA_U32
+                | OP_PROJECT_TAIL_COUNT_U32
         )
     }
 
@@ -793,6 +902,16 @@ impl Operation {
                     scalars,
                     scalar()?,
                     u64::from_le_bytes(bytes.try_into().map_err(|_| Error::DataOutOfBounds)?),
+                )
+            }
+            OP_PROJECT_DATA_U32 | OP_PROJECT_TAIL_COUNT_U32 => {
+                let bytes = data_field(account.data(), self.data_offset, 4)?;
+                write_scalar(
+                    scalars,
+                    scalar()?,
+                    u64::from(u32::from_le_bytes(
+                        bytes.try_into().map_err(|_| Error::DataOutOfBounds)?,
+                    )),
                 )
             }
             OP_PROJECT_DATA_IDENTITY => {
@@ -1016,8 +1135,12 @@ mod tests {
             .copy_from_slice(bytes);
     }
 
-    fn rule() -> [u8; RULE_BYTES] {
-        [0_u8; RULE_BYTES]
+    const PRODUCT_COUNT: [u8; 4] = 2_u32.to_le_bytes();
+
+    fn rule(data_length: u32) -> [u8; RULE_BYTES] {
+        let mut output = [0_u8; RULE_BYTES];
+        put(&mut output, 8, &data_length.to_le_bytes());
+        output
     }
 
     fn operation(
@@ -1037,9 +1160,10 @@ mod tests {
     }
 
     fn profile_bytes() -> Vec<u8> {
-        let rules = [rule(), rule(), rule()];
+        let rules = [rule(4), rule(0), rule(0)];
         let operations = [
             operation(OP_REQUIRE_KEY, false, 0, false, 0),
+            operation(OP_PROJECT_TAIL_COUNT_U32, false, 0, false, 0),
             operation(OP_PROJECT_KEY, true, 0, true, 0),
             operation(OP_PROJECT_LAMPORTS, true, 1, true, 1),
         ];
@@ -1054,7 +1178,7 @@ mod tests {
             (10, ARTIFACT_PROFILE),
             (12, 1),
             (14, 2),
-            (16, 1),
+            (16, 2),
             (18, 2),
             (20, 1),
             (22, 2),
@@ -1084,7 +1208,7 @@ mod tests {
             [0x31; 32]
         };
         vec![
-            AccountObservationV1::new([0x11; 32], [1; 32], 1, &[], false, false, false),
+            AccountObservationV1::new([0x11; 32], [1; 32], 1, &PRODUCT_COUNT, false, false, false),
             AccountObservationV1::new([0x21; 32], [1; 32], 2, &[], false, false, false),
             AccountObservationV1::new([0x22; 32], [1; 32], 3, &[], false, false, false),
             AccountObservationV1::new(second, [1; 32], 4, &[], false, false, false),
@@ -1117,8 +1241,28 @@ mod tests {
             },
         )
         .expect("projection");
-        assert_eq!(output_scalars, [0, 0, 3, 1, 5]);
+        assert_eq!(output_scalars, [2, 0, 3, 1, 5]);
         assert_eq!(output_identities, [[0x11; 32], [0x21; 32], [0x31; 32]]);
+
+        let mut prefix_scratch_scalars = [0_u64; 1];
+        let mut prefix_scratch_identities = [[0_u8; 32]; 1];
+        let mut prefix_output_scalars = [9_u64; 1];
+        let mut prefix_output_identities = [[9_u8; 32]; 1];
+        assert_eq!(
+            project_tail_count_atomic(
+                profile,
+                accounts.get(..1).expect("fixed prefix"),
+                ProjectionRegistersV2 {
+                    input_scalars: &[0],
+                    input_identities: &[[0x11; 32]],
+                    scratch_scalars: &mut prefix_scratch_scalars,
+                    scratch_identities: &mut prefix_scratch_identities,
+                    output_scalars: &mut prefix_output_scalars,
+                    output_identities: &mut prefix_output_identities,
+                },
+            ),
+            Ok(2)
+        );
     }
 
     #[test]
