@@ -20,8 +20,6 @@ dclutch-token-svm = { path = "../dclutch-token-svm" }
 dclutch-transition-vm = { path = "../dclutch-transition-vm" }
 sha2 = { version = "=0.10.9", default-features = false }
 
-[workspace]
-
 [lints.rust]
 missing_docs = "deny"
 unsafe_code = "forbid"

@@ -81,6 +81,50 @@ members = [
     "programs/dclutch-product-evidence-sbf",
     "programs/dclutch-sbf",
     "programs/dclutch-trading-sbf",
+    "crates/dclutch-claims-representation-codec",
+    "crates/dclutch-direct-aot-contract",
+    "crates/dclutch-direct-aot-v3-contract",
+    "crates/dclutch-fractional-claim-contract",
+    "crates/dclutch-fractional-claim-kernel",
+    "crates/dclutch-fractional-claim-operator",
+    "crates/dclutch-fractional-claims-kernel",
+    "crates/dclutch-series-codec",
+    "programs/dclutch-dealer-accelerator-sbf",
+    "programs/dclutch-dealer-sbf",
+    "programs/dclutch-general-accelerator-sbf",
+    "programs/dclutch-series-sbf",
+]
+exclude = [
+    # blocked: awaiting GENERAL_ROOT_PDA_DOMAIN_V2 contract counterpart
+    "programs/dclutch-general-sbf",
+    # blocked: this crate's own Cargo.toml requests dclutch-trading-sbf's
+    # "shadow-accelerator-auth-only" feature, which cfg-gates out hot_v3
+    # (and other modules) in dclutch-trading-sbf. Under root `cargo check
+    # --workspace`, Cargo unions every requested feature of dclutch-trading-sbf
+    # across all workspace members onto the ONE dclutch-trading-sbf build, so
+    # this feature collides with dclutch-trading-sbf's own dealer module
+    # (programs/dclutch-trading-sbf/src/dealer/v3_accelerator_accounts.rs
+    # uses crate::hot_v3 unconditionally), which is never a problem in a real
+    # per-package `cargo build-sbf` invocation. Fixing it means editing the
+    # cfg-gating around hot_v3 in dclutch-trading-sbf, which is active W2
+    # lane territory (hot_v3.rs itself is on this task's do-not-touch list)
+    # -- left for that lane's owner rather than guessed at here.
+    "programs/dclutch-series-shadow-sbf",
+    # blocked: dev-dependency solana-program-test "=4.2.1" hard-caps
+    # solana-address at <2.7.0, but dclutch-token-svm (already a root
+    # member, depended on by e.g. dclutch-controller-proof-sbf) pins
+    # solana-address "=2.7.0" exactly. Cargo's workspace-wide version
+    # unification makes this an unconditional global conflict: only the
+    # solana-program-test 4.3.0-beta.2 pre-release supports solana-address
+    # 2.7.0, and no stable release does. Bumping the whole workspace's
+    # test-SDK pin to a beta, or downgrading dclutch-token-svm's pin, is a
+    # protocol/test-infra decision outside this lane's mandate.
+    "programs/dclutch-claims-sbf",
+    "programs/dclutch-core-sbf",
+    "programs/dclutch-custody-sbf",
+    "programs/dclutch-direct-aot-sbf",
+    "programs/dclutch-product-runtime-v2-sbf",
+    "programs/dclutch-rent-sbf",
 ]
 resolver = "2"
 

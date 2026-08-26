@@ -12,8 +12,6 @@ dclutch-direct-codec = { path = "../dclutch-direct-codec" }
 [dev-dependencies]
 dclutch-transition-vm = { path = "../dclutch-transition-vm" }
 
-[workspace]
-
 [lints.rust]
 missing_docs = "deny"
 unsafe_code = "forbid"

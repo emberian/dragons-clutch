@@ -13,8 +13,6 @@ dclutch-representation-composition-v3-kernel = { path = "../dclutch-representati
 [dev-dependencies]
 sha2 = "=0.10.9"
 
-[workspace]
-
 [lints.rust]
 missing_docs = "deny"
 unsafe_code = "forbid"

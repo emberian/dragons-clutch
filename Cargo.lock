@@ -355,6 +355,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-claims-representation-codec"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-claims-svm"
 version = "0.1.0"
 dependencies = [
@@ -415,6 +419,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-dealer-accelerator-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-execution-strategy-contract",
+ "dclutch-trading-sbf",
+ "solana-program",
+]
+
+[[package]]
 name = "dclutch-dealer-codec"
 version = "0.1.0"
 dependencies = [
@@ -432,8 +446,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-dealer-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-claims-svm",
+ "dclutch-core-contract",
+ "dclutch-custody-contract",
+ "dclutch-dealer-codec",
+ "dclutch-economic-slice-kernel",
+ "dclutch-market-core-codec",
+ "dclutch-realm-contract",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
+ "dclutch-token-svm",
+ "solana-program",
+ "solana-sdk-ids",
+]
+
+[[package]]
 name = "dclutch-dealer-scenario-kernel"
 version = "0.1.0"
+
+[[package]]
+name = "dclutch-direct-aot-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-transition-vm",
+]
+
+[[package]]
+name = "dclutch-direct-aot-v3-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-direct-codec",
+ "dclutch-transition-vm",
+]
 
 [[package]]
 name = "dclutch-direct-codec"
@@ -515,6 +562,88 @@ dependencies = [
  "dclutch-core-contract",
  "dclutch-release-set-contract",
  "sha2",
+]
+
+[[package]]
+name = "dclutch-fractional-claim-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-account-profile-contract",
+ "dclutch-capability-program-contract",
+ "dclutch-claims-svm",
+ "dclutch-core-contract",
+ "dclutch-effect-kernel",
+ "dclutch-execution-strategy-contract",
+ "dclutch-fractional-claim-kernel",
+ "dclutch-request-profile-contract",
+ "dclutch-token-svm",
+ "dclutch-transition-vm",
+ "sha2",
+]
+
+[[package]]
+name = "dclutch-fractional-claim-kernel"
+version = "0.1.0"
+dependencies = [
+ "dclutch-representation-composition-v3-kernel",
+ "sha2",
+]
+
+[[package]]
+name = "dclutch-fractional-claim-operator"
+version = "0.1.0"
+dependencies = [
+ "dclutch-account-profile-contract",
+ "dclutch-capability-program-contract",
+ "dclutch-claims-svm",
+ "dclutch-core-contract",
+ "dclutch-effect-kernel",
+ "dclutch-execution-strategy-contract",
+ "dclutch-fractional-claim-contract",
+ "dclutch-fractional-claim-kernel",
+ "dclutch-fractional-claims-kernel",
+ "dclutch-market-core-codec",
+ "dclutch-product-runtime-v2",
+ "dclutch-product-runtime-v2-admission",
+ "dclutch-record-contract",
+ "dclutch-release-set-contract",
+ "dclutch-rent-contract",
+ "dclutch-representation-composition-v3-kernel",
+ "dclutch-request-profile-contract",
+ "dclutch-resolution-core-v3-operator",
+ "dclutch-token-svm",
+ "dclutch-transition-vm",
+ "dclutch-versioned-message-operator",
+ "sha2",
+ "solana-hash 4.6.0",
+ "solana-program",
+ "solana-sdk-ids",
+ "spl-token-2022-interface",
+]
+
+[[package]]
+name = "dclutch-fractional-claims-kernel"
+version = "0.1.0"
+dependencies = [
+ "dclutch-claims-svm",
+ "dclutch-fractional-claim-contract",
+ "dclutch-fractional-claim-kernel",
+ "sha2",
+]
+
+[[package]]
+name = "dclutch-general-accelerator-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-program-contract",
+ "dclutch-core-contract",
+ "dclutch-execution-strategy-contract",
+ "dclutch-general-adapter-contract",
+ "dclutch-general-codec",
+ "dclutch-general-config-contract",
+ "solana-instructions-sysvar",
+ "solana-program",
+ "solana-sdk-ids",
 ]
 
 [[package]]
@@ -1123,6 +1252,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-series-codec"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-series-contract"
 version = "0.1.0"
 dependencies = [
@@ -1130,6 +1263,19 @@ dependencies = [
  "dclutch-product-contract",
  "dclutch-source-contract",
  "sha2",
+]
+
+[[package]]
+name = "dclutch-series-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-market-core-codec",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
+ "dclutch-series-codec",
+ "solana-program",
+ "solana-sdk-ids",
+ "solana-system-interface",
 ]
 
 [[package]]
