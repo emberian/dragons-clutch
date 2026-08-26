@@ -329,6 +329,46 @@ pub fn evaluate_runtime_settlement_v2(
     view: RuntimeSettlementViewV2<'_>,
     buffers: RuntimeSettlementBuffersV2<'_>,
 ) -> RuntimeSettlementResultV2<()> {
+    let effect_bytes = runtime_settlement_effect_len_v2(
+        SettlementCursorV2::decode(view.cursor_before)
+            .map_err(|_| RuntimeSettlementErrorV2::Codec)?
+            .header()
+            .outcome_count,
+    )?;
+    if buffers.cursor_output.len() != view.cursor_before.len()
+        || buffers.effect_output.len() != effect_bytes
+    {
+        return Err(RuntimeSettlementErrorV2::CoordinateMismatch);
+    }
+    evaluate_runtime_settlement_in_place_v2(
+        view,
+        buffers.cursor_scratch,
+        buffers.inventory_scratch,
+        buffers.effect_scratch,
+    )?;
+    buffers
+        .cursor_output
+        .copy_from_slice(buffers.cursor_scratch);
+    buffers
+        .effect_output
+        .copy_from_slice(buffers.effect_scratch);
+    Ok(())
+}
+
+/// Evaluate into non-authoritative workspaces without duplicate output banks.
+///
+/// The caller must discard all three workspaces on error. This is the bounded
+/// SBF accelerator path: common Trading accepts nothing until the complete
+/// candidate-bank acknowledgement authenticates, so partially changed scratch
+/// has no authority. [`evaluate_runtime_settlement_v2`] remains the atomic
+/// output API for callers that expose separate candidate buffers.
+#[inline(never)]
+pub fn evaluate_runtime_settlement_in_place_v2(
+    view: RuntimeSettlementViewV2<'_>,
+    cursor_workspace: &mut [u8],
+    inventory_workspace: &mut [u8],
+    effect_workspace: &mut [u8],
+) -> RuntimeSettlementResultV2<()> {
     let cursor = SettlementCursorV2::decode(view.cursor_before)
         .map_err(|_| RuntimeSettlementErrorV2::Codec)?;
     let verified =
@@ -340,11 +380,9 @@ pub fn evaluate_runtime_settlement_v2(
     if cursor_header.outcome_count != verified_header.outcome_count
         || cursor_header.candidate_id != verified_header.candidate_id
         || cursor_header.revision != view.expected_revision
-        || buffers.cursor_scratch.len() != view.cursor_before.len()
-        || buffers.cursor_output.len() != view.cursor_before.len()
-        || buffers.inventory_scratch.len() != inventory_bytes
-        || buffers.effect_scratch.len() != effect_bytes
-        || buffers.effect_output.len() != effect_bytes
+        || cursor_workspace.len() != view.cursor_before.len()
+        || inventory_workspace.len() != inventory_bytes
+        || effect_workspace.len() != effect_bytes
     {
         return Err(RuntimeSettlementErrorV2::CoordinateMismatch);
     }
@@ -355,30 +393,30 @@ pub fn evaluate_runtime_settlement_v2(
         .revision
         .checked_add(1)
         .ok_or(RuntimeSettlementErrorV2::ArithmeticOverflow)?;
-    copy_inventory(cursor, buffers.inventory_scratch)?;
+    copy_inventory(cursor, inventory_workspace)?;
     let effect_header = match view.action {
         RuntimeSettlementActionV2::Collect => collect(
             order.ok_or(RuntimeSettlementErrorV2::CoordinateMismatch)?,
             &mut successor,
-            buffers.inventory_scratch,
+            inventory_workspace,
             consumed_revision,
         )?,
         RuntimeSettlementActionV2::Materialize => materialize(
             view.verified,
             &mut successor,
-            buffers.inventory_scratch,
+            inventory_workspace,
             consumed_revision,
         )?,
         RuntimeSettlementActionV2::Distribute => distribute(
             order.ok_or(RuntimeSettlementErrorV2::CoordinateMismatch)?,
             &mut successor,
-            buffers.inventory_scratch,
+            inventory_workspace,
             consumed_revision,
         )?,
         RuntimeSettlementActionV2::Close => close(
             view.verified,
             &mut successor,
-            buffers.inventory_scratch,
+            inventory_workspace,
             view.surplus_beneficiary
                 .ok_or(RuntimeSettlementErrorV2::CoordinateMismatch)?,
             consumed_revision,
@@ -386,18 +424,12 @@ pub fn evaluate_runtime_settlement_v2(
     };
     SettlementCursorV2::encode_le_inventory_into(
         successor,
-        buffers.inventory_scratch,
-        buffers.cursor_scratch,
+        inventory_workspace,
+        cursor_workspace,
     )
     .map_err(|_| RuntimeSettlementErrorV2::Codec)?;
-    encode_effect_plan(effect_header, order, view.verified, buffers.effect_scratch)?;
-    RuntimeSettlementEffectPlanV2::decode(buffers.effect_scratch)?;
-    buffers
-        .cursor_output
-        .copy_from_slice(buffers.cursor_scratch);
-    buffers
-        .effect_output
-        .copy_from_slice(buffers.effect_scratch);
+    encode_effect_plan(effect_header, order, view.verified, effect_workspace)?;
+    RuntimeSettlementEffectPlanV2::decode(effect_workspace)?;
     Ok(())
 }
 

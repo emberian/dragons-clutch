@@ -42,8 +42,8 @@ use dclutch_general_adapter_contract::{
         RUNTIME_SELECTION_CURSOR_BYTES_V2, consider_verified_candidate_v2, freeze_selection_v2,
     },
     runtime_settlement::{
-        RuntimeSettlementActionV2, RuntimeSettlementBuffersV2, RuntimeSettlementViewV2,
-        evaluate_runtime_settlement_v2, initialize_runtime_settlement_in_place_v2,
+        RuntimeSettlementActionV2, RuntimeSettlementViewV2,
+        evaluate_runtime_settlement_in_place_v2, initialize_runtime_settlement_in_place_v2,
         runtime_settlement_effect_len_v2,
     },
     runtime_width::{VerifiedCandidateV2, settlement_cursor_len},
@@ -540,12 +540,10 @@ fn evaluate_settlement(
         .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?
         .checked_mul(8)
         .ok_or(GeneralAcceleratorSemanticErrorV3::State)?;
-    let mut cursor_scratch = vec![0_u8; cursor_bytes];
-    let mut cursor_output = vec![0_u8; cursor_bytes];
-    let mut inventory_scratch = vec![0_u8; inventory_bytes];
-    let mut effect_scratch = vec![0_u8; effect_bytes];
-    let mut effect_output = vec![0_u8; effect_bytes];
-    evaluate_runtime_settlement_v2(
+    let mut cursor_workspace = vec![0_u8; cursor_bytes];
+    let mut inventory_workspace = vec![0_u8; inventory_bytes];
+    let mut effect_workspace = vec![0_u8; effect_bytes];
+    evaluate_runtime_settlement_in_place_v2(
         RuntimeSettlementViewV2 {
             action,
             cursor_before: state.body(),
@@ -559,18 +557,14 @@ fn evaluate_settlement(
                 None
             },
         },
-        RuntimeSettlementBuffersV2 {
-            cursor_scratch: &mut cursor_scratch,
-            cursor_output: &mut cursor_output,
-            inventory_scratch: &mut inventory_scratch,
-            effect_scratch: &mut effect_scratch,
-            effect_output: &mut effect_output,
-        },
+        &mut cursor_workspace,
+        &mut inventory_workspace,
+        &mut effect_workspace,
     )
     .map_err(|_| GeneralAcceleratorSemanticErrorV3::Transition)?;
     project_general_hot_candidate_in_place_v3(
-        &effect_output,
-        &cursor_output,
+        &effect_workspace,
+        &cursor_workspace,
         outcome_count,
         environment,
         candidate,
