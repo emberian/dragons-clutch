@@ -24,6 +24,8 @@ mod kernel_adapter;
 pub mod lifecycle;
 /// Chain-derived unsigned hot-action request construction.
 pub mod operator;
+/// Canonical projected-Hoard Custody request construction.
+pub mod projected_custody_v3;
 /// Exact content/replay projector behind the canonical Trading hot outer.
 pub mod projector;
 /// Chain-derived Shadow-AOT release selection and generic request construction.
@@ -37,9 +39,9 @@ pub use dclutch_series_v3_kernel::composition::{
     SeriesConsumeCompositionErrorV3, SeriesConsumeCompositionV3, compose_series_consume_v3,
 };
 pub use dclutch_series_v3_kernel::escrow::{
-    PrepareSeriesEscrowPlanV3, SeriesEscrowEffectKindV3, SeriesEscrowEffectV3,
-    TerminalSeriesEscrowPlanV3, consume_series_escrow_v3, expire_series_escrow_v3,
-    prepare_series_escrow_v3,
+    ConsumeSeriesEscrowPlanV3, PrepareSeriesEscrowPlanV3, SeriesEscrowEffectKindV3,
+    SeriesEscrowEffectV3, TerminalSeriesEscrowPlanV3, consume_series_escrow_v3,
+    expire_series_escrow_v3, prepare_series_escrow_v3,
 };
 #[cfg(test)]
 pub(crate) use dclutch_series_v3_kernel::generated;

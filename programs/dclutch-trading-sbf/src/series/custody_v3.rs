@@ -113,7 +113,6 @@ fn project_effect(
     let ticket = escrow.ticket_id().to_bytes();
     let refund_owner = escrow.refund_owner().to_bytes();
     let escrow_vault_context = ticket;
-    let hoard_vault_context = market;
 
     let mut request = CustodyRequestV1 {
         operation: OperationV1::InitializeReplay,
@@ -188,20 +187,6 @@ fn project_effect(
             request.mint = physical.mint;
             request.token_program = physical.token_program;
         }
-        SeriesEscrowEffectKindV3::ConsumeIntoHoard => {
-            require_token_profile(physical)?;
-            require_identity(physical.escrow_vault)?;
-            require_identity(physical.hoard_vault)?;
-            request.operation = OperationV1::Transfer;
-            request.source_compartment = CompartmentV1::SeriesEscrow;
-            request.destination_compartment = CompartmentV1::HoardPrincipal;
-            request.source = physical.escrow_vault;
-            request.destination = physical.hoard_vault;
-            request.source_vault_context = escrow_vault_context;
-            request.destination_vault_context = hoard_vault_context;
-            request.mint = physical.mint;
-            request.token_program = physical.token_program;
-        }
         SeriesEscrowEffectKindV3::RefundExpired => {
             require_token_profile(physical)?;
             require_identity(physical.escrow_vault)?;
@@ -244,9 +229,7 @@ fn project_effect(
 
 const fn transfer_index(kind: SeriesEscrowEffectKindV3) -> u16 {
     match kind {
-        SeriesEscrowEffectKindV3::InitializeReplay
-        | SeriesEscrowEffectKindV3::ConsumeIntoHoard
-        | SeriesEscrowEffectKindV3::RefundExpired => 0,
+        SeriesEscrowEffectKindV3::InitializeReplay | SeriesEscrowEffectKindV3::RefundExpired => 0,
         SeriesEscrowEffectKindV3::OpenEscrowVault | SeriesEscrowEffectKindV3::CloseEscrowVault => 1,
         SeriesEscrowEffectKindV3::Lock | SeriesEscrowEffectKindV3::CloseReplay => 2,
     }
@@ -391,36 +374,20 @@ mod tests {
     }
 
     #[test]
-    fn consume_and_refund_share_cleanup_but_not_destination_authority() {
+    fn expiry_refund_closes_normal_source_without_hiding_projected_consume() {
         let projection = escrow();
-        let consume = project_terminal_custody_v3(consume_series_escrow_v3(projection), physical())
-            .expect("consume requests");
         let refund = project_terminal_custody_v3(expire_series_escrow_v3(projection), physical())
             .expect("refund requests");
-        assert_eq!(
-            consume.map(|request| request.operation),
-            [
-                OperationV1::Transfer,
-                OperationV1::CloseVault,
-                OperationV1::CloseReplay,
-            ]
-        );
-        assert_eq!(consume.map(|request| request.expected_revision), [3, 4, 5]);
-        assert_eq!(
-            consume[0].destination_compartment,
-            CompartmentV1::HoardPrincipal
-        );
-        assert_eq!(
-            consume[0].destination_vault_context,
-            projection.market().to_bytes()
-        );
         assert_eq!(refund[0].destination_compartment, CompartmentV1::External);
         assert_eq!(
             refund[0].semantic.destination_owner,
             projection.refund_owner().to_bytes()
         );
-        assert_eq!(consume[1], refund[1]);
-        assert_eq!(consume[2], refund[2]);
+        assert_eq!(refund.map(|request| request.expected_revision), [3, 4, 5]);
+        assert_eq!(
+            consume_series_escrow_v3(projection).source_replay_revision(),
+            3
+        );
     }
 
     #[test]
@@ -435,7 +402,7 @@ mod tests {
         let mut no_rent = physical();
         no_rent.vault_rent_lamports = 0;
         assert_eq!(
-            project_terminal_custody_v3(consume_series_escrow_v3(projection), no_rent),
+            project_terminal_custody_v3(expire_series_escrow_v3(projection), no_rent),
             Err(SeriesCustodyProjectionErrorV3::MissingRent)
         );
     }
@@ -443,7 +410,7 @@ mod tests {
     #[test]
     fn receipt_must_bind_exact_request_and_current_replay_digest() {
         let projection = escrow();
-        let request = project_terminal_custody_v3(consume_series_escrow_v3(projection), physical())
+        let request = project_terminal_custody_v3(expire_series_escrow_v3(projection), physical())
             .expect("terminal requests")[0];
         let request_digest = hash(&request.to_bytes().expect("request bytes")).to_bytes();
         let replay_digest = [31; 32];
