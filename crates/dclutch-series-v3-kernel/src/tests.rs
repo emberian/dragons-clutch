@@ -298,6 +298,142 @@ fn consume_core_request_is_one_sdk_free_occurrence_projection() {
 }
 
 #[test]
+fn atomic_consume_composes_core_escrow_funding_and_commit_last_replay() {
+    let fixture = Fixture::new();
+    let admitted = fixture.admit();
+    let admitted_ticket = admit_ticket(&fixture.ticket).expect("admitted Ticket");
+    let occurrence_count = admitted.template().occurrence_count();
+    let series = replay::SeriesStateV3::new(admitted.template().close_rent())
+        .prepare_ticket(0)
+        .expect("occurrence zero prepared")
+        .settle_current(1, occurrence_count)
+        .expect("occurrence zero settled")
+        .retire_ticket(2)
+        .expect("occurrence zero Ticket retired")
+        .prepare_ticket(3)
+        .expect("occurrence one prepared");
+    let series_bytes = series.encode(occurrence_count).expect("Series bytes");
+    let ticket_state = replay::TicketStateV3::prepared(admitted_ticket.content_id()).encode();
+    let now_slot = admitted.occurrence().scheduled_slot();
+
+    let composition = composition::compose_series_consume_v3(
+        admitted,
+        admitted_ticket,
+        fixture.product,
+        fixture.registry_program,
+        key(72),
+        &series_bytes,
+        &ticket_state,
+        now_slot,
+        4,
+        0,
+    )
+    .expect("one atomic semantic composition");
+    assert_eq!(
+        composition.core_request().action(),
+        SeriesCoreActionV1::Consume
+    );
+    assert_eq!(
+        composition.funding_list(),
+        admitted.occurrence().funding_list()
+    );
+    let funds = admitted.occurrence().funds();
+    assert_eq!(
+        composition.native_from_ticket(),
+        funds.market_rent() + funds.capability_native() + funds.founding_work()
+    );
+    assert_ne!(composition.native_from_ticket(), funds.hoard_principal());
+    assert!(matches!(
+        composition.replay().series(),
+        plan::ReplayCandidateV3::Replace(_)
+    ));
+    assert!(matches!(
+        composition.replay().ticket(),
+        plan::ReplayCandidateV3::Replace(_)
+    ));
+    let escrow = composition.escrow().effects();
+    assert_eq!(
+        escrow[0].kind(),
+        escrow::SeriesEscrowEffectKindV3::ConsumeIntoHoard
+    );
+    assert_eq!(escrow[0].expected_revision(), 3);
+    assert_eq!(escrow[0].resulting_revision(), 4);
+    assert_eq!(escrow[0].amount(), funds.hoard_principal());
+    assert_eq!(
+        escrow[1].kind(),
+        escrow::SeriesEscrowEffectKindV3::CloseEscrowVault
+    );
+    assert_eq!(escrow[1].expected_revision(), 4);
+    assert_eq!(
+        escrow[2].kind(),
+        escrow::SeriesEscrowEffectKindV3::CloseReplay
+    );
+    assert_eq!(escrow[2].resulting_revision(), 6);
+
+    let after_retry = admitted
+        .template()
+        .retry_through(admitted.occurrence().occurrence())
+        .expect("retry deadline")
+        .checked_add(1)
+        .expect("hostile slot");
+    assert_eq!(
+        composition::compose_series_consume_v3(
+            admitted,
+            admitted_ticket,
+            fixture.product,
+            fixture.registry_program,
+            key(72),
+            &series_bytes,
+            &ticket_state,
+            after_retry,
+            4,
+            0,
+        ),
+        Err(composition::SeriesConsumeCompositionErrorV3::Schedule)
+    );
+
+    let substituted_product = AuthenticatedProductProjectionV2::new(
+        ContentId::new([99; 32]).expect("substituted Product record"),
+        fixture.product.stable_product_id(),
+        fixture.product.result_domain(),
+    );
+    assert_eq!(
+        composition::compose_series_consume_v3(
+            admitted,
+            admitted_ticket,
+            substituted_product,
+            fixture.registry_program,
+            key(72),
+            &series_bytes,
+            &ticket_state,
+            now_slot,
+            4,
+            0,
+        ),
+        Err(composition::SeriesConsumeCompositionErrorV3::Content(
+            SeriesV3Error::Commitment
+        ))
+    );
+    assert_eq!(
+        composition::compose_series_consume_v3(
+            admitted,
+            admitted_ticket,
+            fixture.product,
+            fixture.registry_program,
+            key(72),
+            &series_bytes,
+            &ticket_state,
+            now_slot,
+            4,
+            1,
+        ),
+        Err(composition::SeriesConsumeCompositionErrorV3::Replay(
+            plan::SeriesReplayPlanErrorV3::State(replay::SeriesStateError::Replay)
+        ))
+    );
+}
+
+#[test]
 fn product_record_join_refuses_substituted_runtime_projection() {
     let fixture = Fixture::new();
     let substituted = AuthenticatedProductProjectionV2::new(

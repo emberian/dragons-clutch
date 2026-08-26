@@ -17,6 +17,8 @@ use dclutch_market_core_codec::{
 };
 use sha2::{Digest, Sha256};
 
+/// Complete stateless Ticket-to-Found Consume composition.
+pub mod composition;
 /// Stateless pre-founding SeriesEscrow effect sequence.
 pub mod escrow;
 /// Lean-generated Series V3 widths, offsets, domains, and hostile examples.
