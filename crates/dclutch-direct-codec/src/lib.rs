@@ -34,7 +34,6 @@ pub mod registered_bundle_v4;
 pub mod registered_creation_artifacts_v4;
 #[cfg(not(target_os = "solana"))]
 pub mod registered_effect_artifacts_v4;
-#[cfg(not(target_os = "solana"))]
 pub mod registered_fill_artifacts_v4;
 pub mod registered_requests_v4;
 #[cfg(not(target_os = "solana"))]

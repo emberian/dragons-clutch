@@ -11,6 +11,9 @@
 
 use dclutch_direct_codec::ordinary_v3::*;
 
+mod registered;
+pub use registered::execute_registered_ordinary_fill_atomic;
+
 /// Stable refusal from a current Direct AOT translation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -336,5 +339,7 @@ fn mul_div_floor(left: u64, right: u64, denominator: u64) -> Result<u64> {
         .map_err(|_| Error::Arithmetic)
 }
 
+#[cfg(test)]
+mod registered_tests;
 #[cfg(test)]
 mod tests;
