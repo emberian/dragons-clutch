@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 
 use dclutch_effect_kernel::{
     v2::FixedRole,
-    v3::{ResolvedInvocationV3, ResolvedReceiptDependencyV3},
+    v3::{ProgramV3, ResolvedInvocationV3, ResolvedReceiptDependencyV3},
 };
 use solana_program::{program::MAX_RETURN_DATA, program_error::ProgramError, pubkey::Pubkey};
 
@@ -18,7 +18,20 @@ struct ExecutedReceiptV3 {
     route: u16,
     invocation: u32,
     program: Pubkey,
+    context_digest: [u8; 32],
+    request_kind: [u8; 8],
+    request_digest: [u8; 32],
+    receipt_kind: [u8; 8],
     bytes: Vec<u8>,
+}
+
+/// Exact producer-side provenance recomputed from the authenticated Effect
+/// program and request bank when a later route resolves a dependency.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ExpectedReceiptProvenanceV4 {
+    pub(crate) context_digest: [u8; 32],
+    pub(crate) request_kind: [u8; 8],
+    pub(crate) request_digest: [u8; 32],
 }
 
 /// Ordered ephemeral receipt bank. It is never persisted and grants no authority.
@@ -33,15 +46,25 @@ impl ChildReceiptBankV3 {
         }
     }
 
-    pub(crate) fn record(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn record_exact(
         &mut self,
         role: FixedRole,
         route: u16,
         invocation: u32,
         program: Pubkey,
+        context_digest: [u8; 32],
+        request_kind: [u8; 8],
+        request_digest: [u8; 32],
+        receipt_kind: [u8; 8],
         bytes: Vec<u8>,
     ) -> Result<(), ProgramError> {
         if bytes.is_empty()
+            || context_digest == [0; 32]
+            || request_kind == [0; 8]
+            || request_digest == [0; 32]
+            || receipt_kind == [0; 8]
+            || bytes.get(..8) != Some(receipt_kind.as_slice())
             || self
                 .receipts
                 .iter()
@@ -54,6 +77,10 @@ impl ChildReceiptBankV3 {
             route,
             invocation,
             program,
+            context_digest,
+            request_kind,
+            request_digest,
+            receipt_kind,
             bytes,
         });
         Ok(())
@@ -63,14 +90,16 @@ impl ChildReceiptBankV3 {
         &self,
         dependency: Option<ResolvedReceiptDependencyV3>,
         expected_program: Option<&Pubkey>,
+        expected_provenance: Option<ExpectedReceiptProvenanceV4>,
     ) -> Result<Option<&[u8]>, ProgramError> {
         let Some(dependency) = dependency else {
-            if expected_program.is_some() {
+            if expected_program.is_some() || expected_provenance.is_some() {
                 return Err(TradingSbfError::Content.into());
             }
             return Ok(None);
         };
         let expected_program = expected_program.ok_or(TradingSbfError::Content)?;
+        let expected_provenance = expected_provenance.ok_or(TradingSbfError::Content)?;
         let mut matching = self.receipts.iter().filter(|receipt| {
             receipt.role == dependency.producer_role
                 && receipt.route == dependency.producer_route
@@ -80,6 +109,11 @@ impl ChildReceiptBankV3 {
         let receipt = matching.next().ok_or(TradingSbfError::Transition)?;
         if matching.next().is_some()
             || receipt.bytes.len() != usize::from(dependency.expected_receipt_bytes)
+            || receipt.context_digest != expected_provenance.context_digest
+            || receipt.request_kind != expected_provenance.request_kind
+            || receipt.request_digest != expected_provenance.request_digest
+            || receipt.receipt_kind == [0; 8]
+            || receipt.bytes.get(..8) != Some(receipt.receipt_kind.as_slice())
         {
             return Err(TradingSbfError::Transition.into());
         }
@@ -87,17 +121,25 @@ impl ChildReceiptBankV3 {
     }
 }
 
-/// Append the exact descriptor-selected receipt or refuse any caller-supplied suffix.
+/// Append the exact descriptor-selected ordered receipt suffix or refuse any
+/// caller-supplied bytes. Resolution has already selected every boundary in
+/// declared table order; this final check binds their exact aggregate width.
 pub(crate) fn append_receipt_dependency_v3(
     invocation: ResolvedInvocationV3,
     child_data: &mut Vec<u8>,
     receipt: Option<&[u8]>,
 ) -> Result<(), ProgramError> {
-    match (invocation.receipt_dependency, receipt) {
-        (None, None) => Ok(()),
-        (Some(dependency), Some(receipt))
-            if receipt.len() == usize::from(dependency.expected_receipt_bytes) =>
-        {
+    let dependencies = invocation.receipt_dependencies;
+    let expected = if dependencies.is_empty() {
+        invocation.receipt_dependency.map_or(0_u32, |dependency| {
+            u32::from(dependency.expected_receipt_bytes)
+        })
+    } else {
+        dependencies.expected_receipt_bytes()
+    };
+    match (expected == 0, receipt) {
+        (true, None) => Ok(()),
+        (false, Some(receipt)) if usize::try_from(expected) == Ok(receipt.len()) => {
             child_data
                 .try_reserve(receipt.len())
                 .map_err(|_| TradingSbfError::Content)?;
@@ -110,12 +152,24 @@ pub(crate) fn append_receipt_dependency_v3(
 
 /// Refuse metadata that cannot be produced by the chain return-data syscall.
 pub(crate) fn require_chain_receipt_width_v3(
+    effect: ProgramV3<'_>,
     invocation: ResolvedInvocationV3,
 ) -> Result<(), ProgramError> {
-    if invocation
-        .receipt_dependency
-        .is_some_and(|dependency| usize::from(dependency.expected_receipt_bytes) > MAX_RETURN_DATA)
-    {
+    let mut index = 0_u16;
+    while index < invocation.receipt_dependencies.len() {
+        let dependency = effect
+            .resolved_receipt_dependency(invocation.receipt_dependencies, index)
+            .map_err(|_| TradingSbfError::Content)?;
+        require_one_chain_receipt_width_v3(dependency)?;
+        index = index.checked_add(1).ok_or(TradingSbfError::Content)?;
+    }
+    Ok(())
+}
+
+fn require_one_chain_receipt_width_v3(
+    dependency: ResolvedReceiptDependencyV3,
+) -> Result<(), ProgramError> {
+    if usize::from(dependency.expected_receipt_bytes) > MAX_RETURN_DATA {
         Err(TradingSbfError::Content.into())
     } else {
         Ok(())
@@ -142,6 +196,7 @@ mod tests {
             request_offset: 0,
             request_len: 8,
             borrowed_witness: None,
+            receipt_dependencies: dclutch_effect_kernel::v3::ResolvedReceiptDependenciesV3::empty(),
             receipt_dependency: dependency,
         }
     }
@@ -151,7 +206,7 @@ mod tests {
             producer_role: FixedRole::Custody,
             producer_route: 2,
             producer_invocation: 3,
-            expected_receipt_bytes: 4,
+            expected_receipt_bytes: 8,
         }
     }
 
@@ -159,18 +214,66 @@ mod tests {
     fn bank_binds_role_route_invocation_program_and_exact_width() {
         let program = Pubkey::new_unique();
         let mut bank = ChildReceiptBankV3::new();
-        bank.record(FixedRole::Custody, 2, 3, program, vec![1, 2, 3, 4])
-            .expect("record");
+        bank.record_exact(
+            FixedRole::Custody,
+            2,
+            3,
+            program,
+            [1; 32],
+            *b"REQUEST1",
+            [2; 32],
+            *b"RECEIPT1",
+            b"RECEIPT1".to_vec(),
+        )
+        .expect("record");
         assert_eq!(
-            bank.resolve(Some(dependency()), Some(&program)),
-            Ok(Some([1_u8, 2, 3, 4].as_slice()))
+            bank.resolve(
+                Some(dependency()),
+                Some(&program),
+                Some(ExpectedReceiptProvenanceV4 {
+                    context_digest: [1; 32],
+                    request_kind: *b"REQUEST1",
+                    request_digest: [2; 32],
+                }),
+            ),
+            Ok(Some(b"RECEIPT1".as_slice()))
         );
         assert_eq!(
-            bank.resolve(Some(dependency()), Some(&Pubkey::new_unique())),
+            bank.resolve(
+                Some(dependency()),
+                Some(&Pubkey::new_unique()),
+                Some(ExpectedReceiptProvenanceV4 {
+                    context_digest: [1; 32],
+                    request_kind: *b"REQUEST1",
+                    request_digest: [2; 32],
+                }),
+            ),
             Err(TradingSbfError::Transition.into())
         );
         assert_eq!(
-            bank.record(FixedRole::Claims, 2, 3, program, vec![0]),
+            bank.resolve(
+                Some(dependency()),
+                Some(&program),
+                Some(ExpectedReceiptProvenanceV4 {
+                    context_digest: [9; 32],
+                    request_kind: *b"REQUEST1",
+                    request_digest: [2; 32],
+                }),
+            ),
+            Err(TradingSbfError::Transition.into())
+        );
+        assert_eq!(
+            bank.record_exact(
+                FixedRole::Claims,
+                2,
+                3,
+                program,
+                [1; 32],
+                *b"REQUEST1",
+                [2; 32],
+                *b"RECEIPT1",
+                b"RECEIPT1".to_vec(),
+            ),
             Err(TradingSbfError::Transition.into())
         );
     }
@@ -181,14 +284,14 @@ mod tests {
         append_receipt_dependency_v3(
             invocation(Some(dependency())),
             &mut bytes,
-            Some(&[1, 2, 3, 4]),
+            Some(b"RECEIPT1"),
         )
         .expect("append");
         assert_eq!(
             bytes,
             [9_u8; 8]
                 .into_iter()
-                .chain([1, 2, 3, 4])
+                .chain(*b"RECEIPT1")
                 .collect::<Vec<_>>()
         );
 
@@ -204,7 +307,7 @@ mod tests {
             ..dependency()
         };
         assert_eq!(
-            require_chain_receipt_width_v3(invocation(Some(oversized))),
+            require_one_chain_receipt_width_v3(oversized),
             Err(TradingSbfError::Content.into())
         );
     }

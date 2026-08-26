@@ -16,7 +16,9 @@ pub const RUNTIME_OBSERVATION_DIGEST_DOMAIN_V3: &[u8] = b"dclutch:shadow-runtime
 /// Domain for one interpreted candidate register bank.
 pub const CANDIDATE_DIGEST_DOMAIN_V3: &[u8] = b"dclutch:shadow-candidate:v3";
 /// Domain for one interpreted effect projection.
-pub const EFFECT_DIGEST_DOMAIN_V3: &[u8] = b"dclutch:shadow-effect:v3";
+pub const EFFECT_DIGEST_DOMAIN_V3: &[u8] = b"dclutch:shadow-effect:v4-ordered-receipts";
+/// Domain for one route's exact ordered prior-receipt dependency list.
+pub const RECEIPT_DEPENDENCIES_DIGEST_DOMAIN_V4: &[u8] = b"dclutch:shadow-receipt-dependencies:v4";
 /// Domain for one selected action invocation.
 pub const INVOCATION_DIGEST_DOMAIN_V3: &[u8] = b"dclutch:shadow-invocation:v3";
 
@@ -112,6 +114,11 @@ pub struct ShadowResolvedRouteV3 {
     pub borrowed_witness: Option<(u32, u32)>,
     /// Optional exact resolved prior receipt appended after the request/witness.
     pub receipt_dependency: Option<ShadowReceiptDependencyV3>,
+    /// Number of receipts in the exact ordered dependency list.
+    pub receipt_dependency_count: u16,
+    /// Digest of every resolved dependency in declared append order; zero only
+    /// when the count is zero.
+    pub receipt_dependencies_digest: [u8; 32],
 }
 
 /// Exact prior receipt selected for one resolved Shadow route invocation.
@@ -136,13 +143,50 @@ impl ShadowResolvedRouteV3 {
         if !item_is_canonical {
             return Err(ShadowDigestErrorV3::InvalidRoutePresence);
         }
-        if self
-            .receipt_dependency
-            .is_some_and(|dependency| dependency.expected_receipt_bytes == 0)
+        let dependency_presence = match self.receipt_dependency_count {
+            0 => self.receipt_dependency.is_none() && self.receipt_dependencies_digest == [0; 32],
+            1 => self.receipt_dependency.is_some() && self.receipt_dependencies_digest != [0; 32],
+            _ => self.receipt_dependency.is_none() && self.receipt_dependencies_digest != [0; 32],
+        };
+        if !dependency_presence
+            || self
+                .receipt_dependency
+                .is_some_and(|dependency| dependency.expected_receipt_bytes == 0)
         {
             return Err(ShadowDigestErrorV3::InvalidRoutePresence);
         }
         Ok(())
+    }
+}
+
+/// Digest one exact ordered resolved dependency list for the Shadow effect
+/// transcript. Reordering or substituting any role, route, invocation, or
+/// width changes the commitment.
+pub fn receipt_dependencies_digest_v4(
+    dependencies: &[ShadowReceiptDependencyV3],
+) -> Result<[u8; 32]> {
+    if dependencies.is_empty()
+        || dependencies
+            .iter()
+            .any(|entry| entry.expected_receipt_bytes == 0)
+    {
+        return Err(ShadowDigestErrorV3::InvalidRoutePresence);
+    }
+    let count =
+        u16::try_from(dependencies.len()).map_err(|_| ShadowDigestErrorV3::CountOverflow)?;
+    let mut hasher = begin(RECEIPT_DEPENDENCIES_DIGEST_DOMAIN_V4);
+    hasher.update(count.to_le_bytes());
+    for dependency in dependencies {
+        hasher.update([dependency.producer_role as u8]);
+        hasher.update(dependency.producer_route.to_le_bytes());
+        hasher.update(dependency.producer_invocation.to_le_bytes());
+        hasher.update(dependency.expected_receipt_bytes.to_le_bytes());
+    }
+    let digest: [u8; 32] = hasher.finalize().into();
+    if digest == [0; 32] {
+        Err(ShadowDigestErrorV3::ZeroDigest)
+    } else {
+        Ok(digest)
     }
 }
 
@@ -273,6 +317,8 @@ pub fn effect_digest_v3(projection: ShadowEffectProjectionV3<'_>) -> Result<Cont
             }
             None => hasher.update([0_u8; 10]),
         }
+        hasher.update(route.receipt_dependency_count.to_le_bytes());
+        hasher.update(route.receipt_dependencies_digest);
     }
     finish(hasher)
 }
@@ -355,6 +401,16 @@ mod tests {
                 producer_invocation: 2,
                 expected_receipt_bytes: 384,
             }),
+            receipt_dependency_count: 1,
+            receipt_dependencies_digest: receipt_dependencies_digest_v4(&[
+                ShadowReceiptDependencyV3 {
+                    producer_role: ShadowRouteRoleV3::Claims,
+                    producer_route: 0,
+                    producer_invocation: 2,
+                    expected_receipt_bytes: 384,
+                },
+            ])
+            .expect("dependency digest"),
         }
     }
 

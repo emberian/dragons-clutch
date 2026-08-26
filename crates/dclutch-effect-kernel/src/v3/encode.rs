@@ -12,7 +12,7 @@ use super::{
     OP_WRITE_DATA_U32, OP_WRITE_DATA_U32_AFFINE, OP_WRITE_IDENTITY, OP_WRITE_IDENTITY_AFFINE,
     OP_WRITE_REQUEST_IDENTITY, OP_WRITE_REQUEST_U8, OP_WRITE_REQUEST_U16, OP_WRITE_REQUEST_U32,
     OP_WRITE_REQUEST_U64, OP_WRITE_SCALAR, OP_WRITE_SCALAR_AFFINE, OPERATION_BYTES, ProgramV3,
-    ROUTE_BYTES, RouteKindV3, RouteReceiptDependencyV3, VERSION,
+    RECEIPT_DEPENDENCY_BYTES, ROUTE_BYTES, RouteKindV3, RouteReceiptDependencyV3, VERSION,
 };
 
 /// Fixed-prefix or per-Product-item coordinate space.
@@ -417,7 +417,83 @@ pub fn encode_effect_program_v3_atomic(
     scratch: &mut [u8],
     output: &mut [u8],
 ) -> Result<(), Error> {
+    encode_effect_program_with_dependencies(
+        geometry,
+        routes,
+        fixed_instructions,
+        item_instructions,
+        |index| {
+            routes
+                .get(index)
+                .map_or(&[], |route| route.receipt_dependency.as_slice())
+        },
+        scratch,
+        output,
+    )
+}
+
+/// Encode the ordered-dependency EffectProgram successor atomically.
+///
+/// `route_receipt_dependencies` has exactly one borrowed ordered list per
+/// route. Empty and single-entry lists naturally encode existing capability
+/// shapes; longer lists append every selected immediate receipt in declaration
+/// order without a family discriminator.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_effect_program_v4_atomic<'a>(
+    geometry: EffectGeometryV3,
+    routes: &[RouteInputV3<'_>],
+    route_receipt_dependencies: &'a [&'a [RouteReceiptDependencyV3]],
+    fixed_instructions: &[EffectInstructionV3],
+    item_instructions: &[EffectInstructionV3],
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<(), Error> {
+    if route_receipt_dependencies.len() != routes.len()
+        || routes
+            .iter()
+            .any(|route| route.receipt_dependency.is_some())
+    {
+        return Err(Error::InvalidReceiptDependency);
+    }
+    encode_effect_program_with_dependencies(
+        geometry,
+        routes,
+        fixed_instructions,
+        item_instructions,
+        |index| {
+            route_receipt_dependencies
+                .get(index)
+                .copied()
+                .unwrap_or(&[])
+        },
+        scratch,
+        output,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_effect_program_with_dependencies<'a, F>(
+    geometry: EffectGeometryV3,
+    routes: &[RouteInputV3<'_>],
+    fixed_instructions: &[EffectInstructionV3],
+    item_instructions: &[EffectInstructionV3],
+    dependencies: F,
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<(), Error>
+where
+    F: Fn(usize) -> &'a [RouteReceiptDependencyV3],
+{
     let route_count = u16::try_from(routes.len()).map_err(|_| Error::InvalidLength)?;
+    let dependency_count = routes
+        .iter()
+        .enumerate()
+        .try_fold(0_usize, |total, (index, _)| {
+            total
+                .checked_add(dependencies(index).len())
+                .ok_or(Error::InvalidLength)
+        })?;
+    let dependency_count_u16 = u16::try_from(dependency_count).map_err(|_| Error::InvalidLength)?;
     let fixed_count = u16::try_from(fixed_instructions.len()).map_err(|_| Error::InvalidLength)?;
     let item_count = u16::try_from(item_instructions.len()).map_err(|_| Error::InvalidLength)?;
     let template_bytes = routes.iter().try_fold(0_usize, |total, route| {
@@ -429,6 +505,11 @@ pub fn encode_effect_program_v3_atomic(
     let expected = routes
         .len()
         .checked_mul(ROUTE_BYTES)
+        .and_then(|route_bytes| {
+            dependency_count
+                .checked_mul(RECEIPT_DEPENDENCY_BYTES)
+                .and_then(|dependency_bytes| route_bytes.checked_add(dependency_bytes))
+        })
         .and_then(|route_bytes| {
             fixed_instructions
                 .len()
@@ -455,13 +536,26 @@ pub fn encode_effect_program_v3_atomic(
         (18, geometry.item_scalar_stride),
         (20, geometry.common_identities),
         (22, geometry.item_identity_stride),
+        (24, dependency_count_u16),
     ] {
         write(scratch, offset, &value.to_le_bytes())?;
     }
     let mut cursor = HEADER_BYTES;
-    for route in routes {
-        encode_route(*route, scratch, cursor)?;
+    let mut dependency_start = 0_u16;
+    for (index, route) in routes.iter().enumerate() {
+        let dependency_len = u16::try_from(dependencies(index).len())
+            .map_err(|_| Error::InvalidReceiptDependency)?;
+        encode_route(*route, dependency_start, dependency_len, scratch, cursor)?;
+        dependency_start = dependency_start
+            .checked_add(dependency_len)
+            .ok_or(Error::InvalidReceiptDependency)?;
         cursor = add(cursor, ROUTE_BYTES)?;
+    }
+    for (index, _) in routes.iter().enumerate() {
+        for dependency in dependencies(index) {
+            encode_receipt_dependency(*dependency, scratch, cursor)?;
+            cursor = add(cursor, RECEIPT_DEPENDENCY_BYTES)?;
+        }
     }
     for instruction in fixed_instructions {
         encode_instruction(*instruction, false, scratch, cursor)?;
@@ -485,7 +579,13 @@ pub fn encode_effect_program_v3_atomic(
     Ok(())
 }
 
-fn encode_route(route: RouteInputV3<'_>, output: &mut [u8], offset: usize) -> Result<(), Error> {
+fn encode_route(
+    route: RouteInputV3<'_>,
+    dependency_start: u16,
+    dependency_count: u16,
+    output: &mut [u8],
+    offset: usize,
+) -> Result<(), Error> {
     let role = match route.role {
         FixedRole::Core => 0,
         FixedRole::Claims => 1,
@@ -533,26 +633,33 @@ fn encode_route(route: RouteInputV3<'_>, output: &mut [u8], offset: usize) -> Re
             .map_err(|_| Error::InvalidLength)?
             .to_le_bytes(),
     )?;
-    if let Some(dependency) = route.receipt_dependency {
-        let role = match dependency.producer_role() {
-            FixedRole::Core => 0,
-            FixedRole::Claims => 1,
-            FixedRole::Resolution => 3,
-            FixedRole::Custody => 4,
-        };
-        write_byte(output, add(offset, 24)?, 1)?;
-        write_byte(output, add(offset, 25)?, role)?;
-        write(
-            output,
-            add(offset, 26)?,
-            &dependency.producer_route().to_le_bytes(),
-        )?;
-        write(
-            output,
-            add(offset, 28)?,
-            &dependency.expected_receipt_bytes().to_le_bytes(),
-        )?;
-    }
+    write(output, add(offset, 24)?, &dependency_start.to_le_bytes())?;
+    write(output, add(offset, 26)?, &dependency_count.to_le_bytes())?;
+    Ok(())
+}
+
+fn encode_receipt_dependency(
+    dependency: RouteReceiptDependencyV3,
+    output: &mut [u8],
+    offset: usize,
+) -> Result<(), Error> {
+    let role = match dependency.producer_role() {
+        FixedRole::Core => 0,
+        FixedRole::Claims => 1,
+        FixedRole::Resolution => 3,
+        FixedRole::Custody => 4,
+    };
+    write_byte(output, offset, role)?;
+    write(
+        output,
+        add(offset, 2)?,
+        &dependency.producer_route().to_le_bytes(),
+    )?;
+    write(
+        output,
+        add(offset, 4)?,
+        &dependency.expected_receipt_bytes().to_le_bytes(),
+    )?;
     Ok(())
 }
 
@@ -714,5 +821,101 @@ mod tests {
             Err(Error::OverlappingWrites)
         );
         assert_eq!(hostile_output, before);
+    }
+
+    #[test]
+    fn ordered_dependency_encoder_preserves_plural_declaration_order() {
+        let routes = [
+            RouteInputV3 {
+                role: FixedRole::Custody,
+                kind: RouteKindV3::Once,
+                enable_common_scalar: None,
+                witness_range_common_scalar: None,
+                receipt_dependency: None,
+                fixed_account_start: 0,
+                fixed_account_count: 1,
+                item_account_start: 0,
+                item_account_count: 0,
+                fixed_request: b"LOCK_REQ",
+                item_request: &[],
+            },
+            RouteInputV3 {
+                role: FixedRole::Custody,
+                kind: RouteKindV3::Once,
+                enable_common_scalar: None,
+                witness_range_common_scalar: None,
+                receipt_dependency: None,
+                fixed_account_start: 0,
+                fixed_account_count: 1,
+                item_account_start: 0,
+                item_account_count: 0,
+                fixed_request: b"REAL_REQ",
+                item_request: &[],
+            },
+            RouteInputV3 {
+                role: FixedRole::Claims,
+                kind: RouteKindV3::Once,
+                enable_common_scalar: None,
+                witness_range_common_scalar: None,
+                receipt_dependency: None,
+                fixed_account_start: 0,
+                fixed_account_count: 1,
+                item_account_start: 0,
+                item_account_count: 0,
+                fixed_request: b"CLAI_REQ",
+                item_request: &[],
+            },
+        ];
+        let dependencies = [
+            RouteReceiptDependencyV3::new(FixedRole::Custody, 0, 320),
+            RouteReceiptDependencyV3::new(FixedRole::Custody, 1, 320),
+        ];
+        let lists: [&[RouteReceiptDependencyV3]; 3] = [&[], &[], &dependencies];
+        let width = HEADER_BYTES
+            + routes.len() * ROUTE_BYTES
+            + dependencies.len() * RECEIPT_DEPENDENCY_BYTES
+            + routes
+                .iter()
+                .map(|route| route.fixed_request.len())
+                .sum::<usize>();
+        let mut scratch = std::vec![0_u8; width];
+        let mut output = std::vec![0_u8; width];
+        encode_effect_program_v4_atomic(
+            EffectGeometryV3 {
+                fixed_accounts: 1,
+                item_account_stride: 0,
+                common_scalars: 1,
+                item_scalar_stride: 0,
+                common_identities: 0,
+                item_identity_stride: 0,
+            },
+            &routes,
+            &lists,
+            &[],
+            &[],
+            &mut scratch,
+            &mut output,
+        )
+        .expect("plural program");
+        let program = ProgramV3::decode(&output).expect("decoded plural program");
+        assert_eq!(program.receipt_dependency_count(), 2);
+        assert_eq!(
+            program
+                .route(2)
+                .expect("consumer")
+                .receipt_dependency_count(),
+            2
+        );
+        assert_eq!(
+            program.route(2).expect("consumer").receipt_dependency(),
+            None
+        );
+        assert_eq!(program.route_receipt_dependency(2, 0), Ok(dependencies[0]));
+        assert_eq!(program.route_receipt_dependency(2, 1), Ok(dependencies[1]));
+        let resolved = program
+            .resolved_invocation(2, 0, 0, &[1], &[])
+            .expect("resolved consumer");
+        assert_eq!(resolved.receipt_dependencies.len(), 2);
+        assert_eq!(resolved.receipt_dependencies.expected_receipt_bytes(), 640);
     }
 }
