@@ -1,10 +1,11 @@
 //! Real-SVM evidence for the successor Resolution controller.
 //!
-//! The fixture prepares compiled Core, Registry, and Resolution ELFs plus the
-//! provenance-pinned receiver/router ELFs and captured provider accounts. The
-//! joined route remains explicitly unavailable until distinct real Claims,
-//! Trading, and Custody artifacts complete the five-role release set; this
-//! test therefore cannot currently claim execution evidence.
+//! The fixture prepares pairwise-distinct compiled Registry, Core, Claims,
+//! Trading, Resolution, Custody, and Rent ELFs plus the provenance-pinned
+//! receiver/router ELFs and captured provider accounts. The joined route is
+//! explicitly unavailable only until the canonical Core infrastructure init
+//! and 31-account Found request land; this test therefore cannot yet claim
+//! lifecycle execution evidence.
 
 use std::{env, fs, path::PathBuf, str::FromStr};
 
@@ -31,14 +32,13 @@ use dclutch_product_runtime_v2_admission::{
 use dclutch_pyth_svm::{FullPriceUpdateV2, local_validator_release_v1};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
-    ACTIVATION_PDA_DOMAIN_V1, ArtifactActivationInputV1, ArtifactReleaseV1,
-    ArtifactUpgradePolicyV1, DeploymentObservationV1, ExecutionReleaseActivationInputsV1,
-    activate_execution_release_set_v1,
+    ACTIVATION_PDA_DOMAIN_V1, ArtifactReleaseV1, ArtifactUpgradePolicyV1,
 };
 use dclutch_registry_svm::RegistryInstructionV1;
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
-    ProgramIdentityV1,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
+    ProgramIdentityV1, ProtocolInfrastructureProfileV1,
 };
 use dclutch_resolution_codec::{
     FundedTransitionActionV3, PRIMARY_CERTIFICATE_SEQUENCE_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
@@ -71,6 +71,10 @@ const CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x50; 32]);
 const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x51; 32]);
 const RESOLUTION_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x52; 32]);
 const RECEIPT_CALLER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x53; 32]);
+const CLAIMS_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x54; 32]);
+const TRADING_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x55; 32]);
+const CUSTODY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x56; 32]);
+const RENT_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x57; 32]);
 const GENERATION: u64 = 1;
 const PROVIDER_SLOT: u64 = 460_336_313;
 const PUBLISH_TIME: i64 = 1_787_431_680;
@@ -190,6 +194,16 @@ fn loader_programdata_bytes(
     bytes
 }
 
+fn immutable_loader_programdata_bytes(elf: &[u8]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(45 + elf.len());
+    bytes.extend_from_slice(&3_u32.to_le_bytes());
+    bytes.extend_from_slice(&0_u64.to_le_bytes());
+    bytes.push(0);
+    bytes.extend_from_slice(&[0_u8; 32]);
+    bytes.extend_from_slice(elf);
+    bytes
+}
+
 fn add_upgradeable_program(
     test: &mut ProgramTest,
     program: Pubkey,
@@ -223,6 +237,33 @@ fn add_upgradeable_program(
     );
 }
 
+fn add_immutable_program(test: &mut ProgramTest, program: Pubkey, elf: &[u8]) {
+    let rent = Rent::default();
+    let programdata = programdata_address(program);
+    let program_bytes = loader_program_bytes(programdata);
+    let programdata_bytes = immutable_loader_programdata_bytes(elf);
+    test.add_genesis_account(
+        program,
+        Account {
+            lamports: rent.minimum_balance(program_bytes.len()),
+            data: program_bytes,
+            owner: bpf_loader_upgradeable::ID,
+            executable: true,
+            rent_epoch: u64::MAX,
+        },
+    );
+    test.add_genesis_account(
+        programdata,
+        Account {
+            lamports: rent.minimum_balance(programdata_bytes.len()),
+            data: programdata_bytes,
+            owner: bpf_loader_upgradeable::ID,
+            executable: false,
+            rent_epoch: u64::MAX,
+        },
+    );
+}
+
 fn artifact(program: Pubkey, semantic_release: [u8; 32], elf: &[u8]) -> ArtifactReleaseV1 {
     ArtifactReleaseV1::new(
         program_identity(program),
@@ -231,14 +272,32 @@ fn artifact(program: Pubkey, semantic_release: [u8; 32], elf: &[u8]) -> Artifact
         core_id(semantic_release),
         hash(elf).to_bytes(),
         0,
-        ArtifactUpgradePolicyV1::ExactAuthority,
-        Some(PROTOCOL_UPGRADE_AUTHORITY),
+        ArtifactUpgradePolicyV1::Immutable,
+        None,
     )
     .expect("exact local artifact release")
 }
 
 fn artifact_id(release: ArtifactReleaseV1) -> ArtifactReleaseIdV1 {
     ArtifactReleaseIdV1::new(hash(&release.to_bytes()).to_bytes()).expect("artifact ID")
+}
+
+fn required_semantic_release(variable: &str) -> [u8; 32] {
+    let value = env::var(variable).unwrap_or_else(|_| panic!("{variable} is required"));
+    assert_eq!(value.len(), 64, "{variable} must be 32-byte lowercase hex");
+    assert!(
+        value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+        "{variable} must be lowercase hexadecimal"
+    );
+    let mut output = [0_u8; 32];
+    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+        let pair = core::str::from_utf8(pair).expect("ASCII semantic release ID");
+        output[index] = u8::from_str_radix(pair, 16).expect("hex semantic release ID");
+    }
+    assert_ne!(output, [0; 32], "{variable} must be nonzero");
+    output
 }
 
 fn binding(release: ArtifactReleaseV1) -> ExecutionRoleBindingV1 {
@@ -268,24 +327,6 @@ fn require_pairwise_distinct_role_programs(release_set: ExecutionReleaseSetV1) {
             "joined Resolution evidence requires five distinct real role programs"
         );
     }
-}
-
-fn activation_input(release: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
-    let observation = DeploymentObservationV1::new(
-        release.program().to_bytes(),
-        bpf_loader_upgradeable::ID.to_bytes(),
-        true,
-        release.programdata(),
-        bpf_loader_upgradeable::ID.to_bytes(),
-        false,
-        release.programdata(),
-        bpf_loader_upgradeable::ID.to_bytes(),
-        release.deployment_slot(),
-        release.elf_digest(),
-        release.upgrade_authority(),
-    )
-    .expect("complete deployment observation");
-    ArtifactActivationInputV1::new(artifact_id(release), release, observation)
 }
 
 fn add_record(test: &mut ProgramTest, schema: [u8; 32], digest: [u8; 32], data: Vec<u8>) {
@@ -509,7 +550,18 @@ fn add_lifecycle_case(
     }
 }
 
-fn require_compiled_elves() -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
+struct CompiledElves {
+    registry: Vec<u8>,
+    core: Vec<u8>,
+    claims: Vec<u8>,
+    trading: Vec<u8>,
+    resolution: Vec<u8>,
+    custody: Vec<u8>,
+    rent: Vec<u8>,
+    receipt_caller: Vec<u8>,
+}
+
+fn require_compiled_elves() -> CompiledElves {
     let directory = PathBuf::from(
         env::var("SBF_OUT_DIR").expect("SBF_OUT_DIR is required for compiled Resolution evidence"),
     );
@@ -519,12 +571,24 @@ fn require_compiled_elves() -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
         .expect("read exact compiled Registry ELF");
     let core =
         fs::read(directory.join("dclutch_core_sbf.so")).expect("read exact compiled Core ELF");
+    let claims =
+        fs::read(directory.join("dclutch_claims_sbf.so")).expect("read exact compiled Claims ELF");
+    let trading = fs::read(directory.join("dclutch_trading_sbf.so"))
+        .expect("read exact compiled Trading ELF");
+    let custody = fs::read(directory.join("dclutch_custody_sbf.so"))
+        .expect("read exact compiled Custody ELF");
+    let rent =
+        fs::read(directory.join("dclutch_rent_sbf.so")).expect("read exact compiled Rent ELF");
     let receipt_caller = fs::read(directory.join("dclutch_resolution_receipt_test_caller_sbf.so"))
         .expect("read exact compiled receipt-caller ELF");
     for (label, elf) in [
         ("Resolution", &resolution),
         ("Registry", &registry),
         ("Core", &core),
+        ("Claims", &claims),
+        ("Trading", &trading),
+        ("Custody", &custody),
+        ("Rent", &rent),
         ("Receipt caller", &receipt_caller),
     ] {
         assert_eq!(
@@ -534,12 +598,21 @@ fn require_compiled_elves() -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
         );
         eprintln!("{label} ELF SHA-256: {:?}", hash(elf).to_bytes());
     }
-    (resolution, registry, core, receipt_caller)
+    CompiledElves {
+        registry,
+        core,
+        claims,
+        trading,
+        resolution,
+        custody,
+        rent,
+        receipt_caller,
+    }
 }
 
 impl Fixture {
     fn new() -> Self {
-        let (resolution_elf, registry_elf, core_elf, receipt_caller_elf) = require_compiled_elves();
+        let elves = require_compiled_elves();
         assert_eq!(
             hash(RECEIVER_ELF).to_bytes(),
             [
@@ -562,70 +635,94 @@ impl Fixture {
         let mut test = ProgramTest::default();
         test.prefer_bpf(true);
         test.set_compute_max_units(1_400_000);
+        for (program, elf) in [
+            (REGISTRY_PROGRAM_ID, elves.registry.as_slice()),
+            (CLAIMS_PROGRAM_ID, elves.claims.as_slice()),
+            (TRADING_PROGRAM_ID, elves.trading.as_slice()),
+            (RESOLUTION_PROGRAM_ID, elves.resolution.as_slice()),
+            (CUSTODY_PROGRAM_ID, elves.custody.as_slice()),
+            (RENT_PROGRAM_ID, elves.rent.as_slice()),
+        ] {
+            add_immutable_program(&mut test, program, elf);
+        }
         add_upgradeable_program(
             &mut test,
             CORE_PROGRAM_ID,
-            &core_elf,
-            0,
-            PROTOCOL_UPGRADE_AUTHORITY,
-        );
-        add_upgradeable_program(
-            &mut test,
-            REGISTRY_PROGRAM_ID,
-            &registry_elf,
-            0,
-            PROTOCOL_UPGRADE_AUTHORITY,
-        );
-        add_upgradeable_program(
-            &mut test,
-            RESOLUTION_PROGRAM_ID,
-            &resolution_elf,
+            &elves.core,
             0,
             PROTOCOL_UPGRADE_AUTHORITY,
         );
         add_upgradeable_program(
             &mut test,
             RECEIPT_CALLER_PROGRAM_ID,
-            &receipt_caller_elf,
+            &elves.receipt_caller,
             0,
             PROTOCOL_UPGRADE_AUTHORITY,
         );
 
-        let core_release = artifact(CORE_PROGRAM_ID, [0x71; 32], &core_elf);
+        let registry_release = artifact(
+            REGISTRY_PROGRAM_ID,
+            required_semantic_release("DCLUTCH_REGISTRY_SEMANTIC_RELEASE_ID"),
+            &elves.registry,
+        );
+        let core_release = artifact(
+            CORE_PROGRAM_ID,
+            required_semantic_release("DCLUTCH_CORE_SEMANTIC_RELEASE_ID"),
+            &elves.core,
+        );
+        let claims_release = artifact(
+            CLAIMS_PROGRAM_ID,
+            required_semantic_release("DCLUTCH_CLAIMS_SEMANTIC_RELEASE_ID"),
+            &elves.claims,
+        );
+        let trading_release = artifact(
+            TRADING_PROGRAM_ID,
+            required_semantic_release("DCLUTCH_TRADING_SEMANTIC_RELEASE_ID"),
+            &elves.trading,
+        );
         let resolution_release = artifact(
             RESOLUTION_PROGRAM_ID,
             RESOLUTION_CONTROLLER_RELEASE_ID_V4,
-            &resolution_elf,
+            &elves.resolution,
         );
+        let custody_release = artifact(
+            CUSTODY_PROGRAM_ID,
+            required_semantic_release("DCLUTCH_CUSTODY_SEMANTIC_RELEASE_ID"),
+            &elves.custody,
+        );
+        let rent_release = artifact(
+            RENT_PROGRAM_ID,
+            required_semantic_release("DCLUTCH_RENT_SEMANTIC_RELEASE_ID"),
+            &elves.rent,
+        );
+        let infrastructure =
+            ProtocolInfrastructureProfileV1::new(binding(registry_release), binding(rent_release))
+                .expect("distinct Registry/Rent infrastructure profile");
+        assert_eq!(
+            infrastructure.to_bytes().len(),
+            PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1
+        );
+        let infrastructure_address = Pubkey::find_program_address(
+            &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
+            &CORE_PROGRAM_ID,
+        )
+        .0;
+        assert_ne!(infrastructure_address, Pubkey::default());
         let release_set = ExecutionReleaseSetV1::new(
             binding(core_release),
+            binding(claims_release),
+            binding(trading_release),
             binding(resolution_release),
-            binding(resolution_release),
-            binding(resolution_release),
-            binding(resolution_release),
+            binding(custody_release),
         )
-        .expect("provisional unjoined release set");
+        .expect("pairwise-distinct release set");
         require_pairwise_distinct_role_programs(release_set);
         let release_set_id = core_id(hash(&release_set.to_bytes()).to_bytes());
-        let activation_inputs = ExecutionReleaseActivationInputsV1::new(
-            activation_input(core_release),
-            activation_input(resolution_release),
-            activation_input(resolution_release),
-            activation_input(resolution_release),
-            activation_input(resolution_release),
-        );
-        let activated =
-            activate_execution_release_set_v1(release_set_id, &release_set, &activation_inputs)
-                .expect("canonical activation cache");
         let activation = Pubkey::find_program_address(
             &[ACTIVATION_PDA_DOMAIN_V1, release_set_id.as_bytes()],
             &REGISTRY_PROGRAM_ID,
         )
         .0;
-        test.add_account(
-            activation,
-            protocol_account(REGISTRY_PROGRAM_ID, activated.to_bytes().to_vec()),
-        );
 
         let synthetic =
             local_validator_release_v1().expect("pinned local-validator Pyth release projection");
@@ -1118,7 +1215,7 @@ fn assert_exact_bounty_compartments(account: &Account, exact_funding_rent: u64) 
 }
 
 #[tokio::test]
-#[ignore = "requires distinct real Core, Claims, Trading, Resolution, and Custody artifacts"]
+#[ignore = "requires canonical Core infrastructure init and 31-account Found request"]
 async fn compiled_resolution_executes_primary_recovery_failure_and_atomic_refusal() {
     let mut fixture = Fixture::new();
     let mut context = fixture

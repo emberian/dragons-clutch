@@ -1,149 +1,136 @@
-# Local successor bootstrap
+# Successor immutable-infrastructure bootstrap
 
-This standalone host package composes the small Registry and Resolution SBF
-successors with the real local Pyth router/receiver bootstrap. It never reads a
-Solana CLI configuration, wallet, browser session, or public RPC endpoint.
+This standalone localhost utility prepares the exact immutable substrate for
+the current multi-program successor. It does not manufacture a partial Market
+or call a legacy direct Resolution ABI.
 
-The `prepare` command emits a fresh `--account-dir` and a machine-readable plan.
-Those files are explicitly **genesis fixtures**, not transactions: the current
-Registry can activate finalized records but cannot publish them, and the current
-Core/Resolution split does not yet create Market, Source-state, or funding
-accounts. The runner refuses any plan that hides that boundary.
+The prepared plan binds seven pairwise-distinct, real SBF artifacts:
 
-The `run` command accepts only an explicit loopback HTTP RPC URL and the evidence
-file produced by the real provider bootstrap. It observes Loader V3 facts from
-chain, activates and reauthenticates the Registry release set, consumes the real
-posted 134-byte Pyth `PriceUpdate`, and submits sequential funded Source actions.
-It records transaction logs, compute units, exact account hashes, and a hostile
-rollback snapshot. It does not claim a checked production release, captured
-deployment identity, or on-chain creation for genesis-prepared state.
+- Registry
+- Core
+- Claims
+- Trading
+- Resolution
+- Custody
+- RentCredit
 
-The fixture semantics were reconstructed from the public contract constructors
-and the compiled-SBF successor test. This package does not import the harness and
-does not substitute native processors. Local validator Loader headers, slots,
-and clock remain a separately named runtime boundary.
+Registry, Claims, Trading, Resolution, Custody, and Rent are represented by
+immutable Loader-v3 Program accounts and canonical fixed-45-byte ProgramData
+headers followed by the exact ELFs. Core begins with the same exact ELF and a
+single ephemeral upgrade authority, then must reach that immutable header by
+Loader revocation before release recognition. The plan also creates distinct
+`ArtifactReleaseV1` bodies, the five-role
+`ExecutionReleaseSetV1`, the captured local-Pyth release body, and the expected
+144-byte `ProtocolInfrastructureProfileV1` body selecting Registry and Rent.
+The profile itself is not genesis-injected: its sole PDA is derived under Core
+and must be created by the canonical initialization transaction.
 
-## Reproducible sequence
+## Evidence boundary
 
-Build this package in its standalone workspace. Its lock and target directory do
-not mutate the root workspace.
+Only Loader accounts and finalized Registry record bodies are prepared as
+genesis fixtures. Core's genesis ProgramData is explicitly pre-init and not an
+accepted immutable release observation. These remain executable transactions:
 
-```sh
-cargo build \
-  --manifest-path tools/local-validator/bootstrap/successor/Cargo.toml \
-  --locked --offline
-```
+1. Core initialization of the sole Registry/Rent infrastructure profile.
+2. Loader-v3 revocation of Core's ephemeral authority to `None`, followed by
+   Registry activation of the five-role immutable release set.
+3. RentCredit creation through the selected Rent program.
+4. Canonical 31-account Found.
+5. Core-owned Source creation/funding and Resolution consumption of the real
+   locally posted Pyth update.
 
-Choose explicit local Registry and Resolution program IDs. They are inputs to a
-local campaign, not canonical deployment authority. Build both ELFs from one
-exact `git archive`, retain the build logs, and create the launcher's two
-attestation JSON files. Each attestation binds the full source commit, source
-archive SHA-256, ELF path and SHA-256, selected program ID, exact SBF tool
-versions and build command, build-log SHA-256, and
-`verifier: {"status":"clean","diagnostic_count":0}`.
+Core commit `d6d5f2d` exposes verifier-clean infrastructure-init and Found31
+instructions. The remaining executable seam is process ownership: one
+ephemeral Core upgrade-authority key must remain only in memory across validator
+start, init, Loader revocation, immutable release activation, and Found. The
+standalone `run` command does not yet own that process lifetime, so it validates
+the full plan and provider evidence, then fails before opening an RPC connection
+or signing anything. This is an intentional gate, not lifecycle evidence.
 
-Prepare the immutable Loader V3 accounts and protocol genesis inputs:
+## Safety boundary
 
-```sh
-cargo run \
-  --manifest-path tools/local-validator/bootstrap/successor/Cargo.toml \
-  --locked --offline -- prepare \
-  --account-dir /absolute/new/account-dir \
+- RPC input must be an exact numeric loopback HTTP origin.
+- No Solana CLI config, wallet, browser session, or public RPC is read.
+- Semantic release IDs are mandatory checked inputs; the tool does not invent
+  a release identity from an ELF hash.
+- All seven program IDs, all seven artifact IDs, and Registry/Rent bindings
+  must be pairwise distinct where the protocol requires distinctness.
+- The historical Pyth fixture is a local lab projection, not a checked
+  production release.
+
+## Prepare
+
+Build the seven actual SBF programs from one exact committed source archive and
+retain clean verifier attestations. Then run:
+
+```text
+cargo run --manifest-path tools/local-validator/bootstrap/successor/Cargo.toml --offline -- prepare \
+  --account-dir /absolute/new/accounts \
   --output /absolute/new/plan.json \
-  --registry-program-id REGISTRY_PROGRAM_ID \
-  --registry-elf /absolute/path/dclutch_registry_sbf.so \
+  --registry-program-id REGISTRY_ID \
+  --registry-elf /absolute/dclutch_registry_sbf.so \
   --registry-sha256 REGISTRY_ELF_SHA256 \
-  --resolution-program-id RESOLUTION_PROGRAM_ID \
-  --resolution-elf /absolute/path/dclutch_resolution_proof_sbf.so \
-  --resolution-sha256 RESOLUTION_ELF_SHA256
-```
-
-Start a fresh successor profile. The launcher verifies the plan, every genesis
-JSON hash, both attestations, both ELFs, and all committed Pyth fixture pins
-before starting the validator.
-
-```sh
-tools/local-validator/dclutch-successor-validator start \
-  --ledger /absolute/new/ledger \
-  --account-dir /absolute/new/account-dir \
-  --plan /absolute/new/plan.json \
-  --registry-program-id REGISTRY_PROGRAM_ID \
-  --registry-elf /absolute/path/dclutch_registry_sbf.so \
-  --registry-sha256 REGISTRY_ELF_SHA256 \
-  --registry-attestation /absolute/path/registry-attestation.json \
-  --resolution-program-id RESOLUTION_PROGRAM_ID \
-  --resolution-elf /absolute/path/dclutch_resolution_proof_sbf.so \
+  --registry-semantic-release-id REGISTRY_SEMANTIC_RELEASE_ID \
+  --core-program-id CORE_ID \
+  --core-elf /absolute/dclutch_core_sbf.so \
+  --core-sha256 CORE_ELF_SHA256 \
+  --core-semantic-release-id CORE_SEMANTIC_RELEASE_ID \
+  --core-bootstrap-upgrade-authority IN_MEMORY_AUTHORITY_PUBKEY \
+  --claims-program-id CLAIMS_ID \
+  --claims-elf /absolute/dclutch_claims_sbf.so \
+  --claims-sha256 CLAIMS_ELF_SHA256 \
+  --claims-semantic-release-id CLAIMS_SEMANTIC_RELEASE_ID \
+  --trading-program-id TRADING_ID \
+  --trading-elf /absolute/dclutch_trading_sbf.so \
+  --trading-sha256 TRADING_ELF_SHA256 \
+  --trading-semantic-release-id TRADING_SEMANTIC_RELEASE_ID \
+  --resolution-program-id RESOLUTION_ID \
+  --resolution-elf /absolute/dclutch_resolution_proof_sbf.so \
   --resolution-sha256 RESOLUTION_ELF_SHA256 \
-  --resolution-attestation /absolute/path/resolution-attestation.json
+  --resolution-semantic-release-id RESOLUTION_SEMANTIC_RELEASE_ID \
+  --custody-program-id CUSTODY_ID \
+  --custody-elf /absolute/dclutch_custody_sbf.so \
+  --custody-sha256 CUSTODY_ELF_SHA256 \
+  --custody-semantic-release-id CUSTODY_SEMANTIC_RELEASE_ID \
+  --rent-credit-program-id RENT_ID \
+  --rent-credit-elf /absolute/dclutch_rent_sbf.so \
+  --rent-credit-sha256 RENT_ELF_SHA256 \
+  --rent-credit-semantic-release-id RENT_SEMANTIC_RELEASE_ID
 ```
 
-The profile is fixed at `http://127.0.0.1:20890`. First run the existing real
-provider bootstrap without `--reclaim`, then compose the successor lifecycle:
+The command refuses an existing output or account directory, invalid or
+duplicate program IDs, non-ELFs, digest mismatches, non-lowercase IDs, a
+Resolution semantic ID that does not match the executable contract, and an
+aliased Registry/Rent profile. The authority argument is only a public
+observation supplied by the future same-process supervisor; this utility never
+persists its corresponding private key.
 
-```sh
-cargo run --manifest-path tools/local-validator/bootstrap/Cargo.toml \
-  --locked --offline -- \
-  --rpc-url http://127.0.0.1:20890 \
-  --evidence /absolute/new/provider-evidence.json
+## Launch substrate only
 
-cargo run \
-  --manifest-path tools/local-validator/bootstrap/successor/Cargo.toml \
-  --locked --offline -- run \
-  --rpc-url http://127.0.0.1:20890 \
-  --plan /absolute/new/plan.json \
-  --provider-evidence /absolute/new/provider-evidence.json \
-  --output /absolute/new/successor-evidence.json
+`tools/local-validator/dclutch-successor-validator` verifies all artifact
+attestations, the plan, and every account JSON hash. Its foreground mode is the
+process boundary intended for a supervisor that retains the ephemeral Core
+authority in memory; starting this substrate is not a claim that init,
+revocation, Found, or Source resolution ran.
+
+The later joined command shape is reserved as:
+
+```text
+cargo run --manifest-path tools/local-validator/bootstrap/successor/Cargo.toml --offline -- run \
+  --rpc-url http://127.0.0.1:20890/ \
+  --plan /absolute/plan.json \
+  --provider-evidence /absolute/provider-evidence.json \
+  --output /absolute/new/evidence.json
 ```
 
-All payer, worker, VAA, and PriceUpdate signing identities are generated in
-process memory. The clients reject non-loopback RPC origins, proxies, redirects,
-reclaimed provider evidence, mismatched provider accounts, and output paths that
-already exist.
+Until the same-process supervisor is wired, this exits with the machine plan's
+exact blocker and creates no output evidence file.
 
-## Exact semantic boundaries
+## Local checks
 
-Registry and Resolution are installed as complete immutable Loader V3 genesis
-accounts. Their ProgramData layout is variant `3`, slot `0`, authority `None`,
-canonical zero padding through byte `44`, and ELF beginning at the fixed byte
-offset `45`. The runtime re-reads the Program and ProgramData accounts from RPC
-and verifies their PDA linkage, owners, headers, authority, ELF hashes, and full
-account hashes before submitting protocol instructions.
-
-The signed Pyth fixture has a historical publish time. The primary Source
-material therefore uses a checked local policy whose maximum age is the observed
-clock delta plus 900 seconds. The funded recovery cases use a distinct Source
-material with maximum age one second, so their primary and recovery deadlines
-are genuinely expired. The plan and runner reject conflating these two immutable
-materials. No oracle, clock, loader, feed, exponent, confidence, funding, or
-certificate check is bypassed.
-
-An Active funding account holds exactly its account rent floor plus the bounty:
-activation has already moved the quote's Rent compartment from `remaining` to
-`released`. The larger two-rent-plus-bounty observation belongs only to the
-pre-activation Pending boundary.
-
-The campaign executes Registry activation and reauthentication, primary Pyth
-resolution, then recovery, exhaustion, and explicit failure. A final attempt
-preoccupies the failure-certificate PDA and must refuse atomically; evidence
-requires exact Source, certificate, funding, and worker hashes before and after
-that failed transaction.
-
-## Validated immutable checkpoint
-
-The first immutable campaign used exact `git archive` commit
-`30dc6cbb2929de00ffd41cd1a720e9390f3a94fe` with source-archive SHA-256
-`21e5660e3250b7d29026a35cd53ef71ce8a883c7a67093a1cfd31a973f0194f9`.
-Its verifier-clean Registry ELF SHA-256 is
-`b7d6634a23de84cb1b1f0a3368493b9008d88278c460f90e26b522af5e9a6e39`
-(89,760 bytes); its Resolution ELF SHA-256 is
-`a1b75d4093d688cea61456f5d2124cd7e9e1f95b010259d0ac61509811dde6d8`
-(210,528 bytes). Both were built with `cargo-build-sbf 4.0.0`, platform-tools
-v1.53, and SBF rustc 1.89.0, with zero verifier diagnostics.
-
-That localhost run consumed 619,265 CU for Registry activation, 127,044 for
-reauthentication, 224,287 for primary Pyth resolution, 283,229 for recovery,
-285,940 for exhaustion, and 294,399 for explicit failure. The rollback lineage
-used 286,229 and 284,440 CU; its deliberately occupied final certificate refused
-with custom error `2` after 278,204 CU and preserved every pinned account hash.
-These figures describe that exact local-validator campaign only; they are not a
-mainnet benchmark or a checked production release.
+```text
+cargo fmt --manifest-path tools/local-validator/bootstrap/successor/Cargo.toml -- --check
+cargo test --manifest-path tools/local-validator/bootstrap/successor/Cargo.toml --offline
+cargo clippy --manifest-path tools/local-validator/bootstrap/successor/Cargo.toml --all-targets --offline -- -D warnings
+bash -n tools/local-validator/dclutch-successor-validator
+```

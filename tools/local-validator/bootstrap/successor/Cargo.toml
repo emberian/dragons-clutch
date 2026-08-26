@@ -12,18 +12,12 @@ publish = false
 
 [dependencies]
 base64 = "=0.22.1"
-bincode = "=1.3.3"
-dclutch-capability-contract = { path = "../../../../crates/dclutch-capability-contract" }
 dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
-dclutch-market-contract = { path = "../../../../crates/dclutch-market-contract" }
-dclutch-product-contract = { path = "../../../../crates/dclutch-product-contract" }
 dclutch-pyth-svm = { path = "../../../../crates/dclutch-pyth-svm", features = ["synthetic-local-fixture"] }
 dclutch-record-contract = { path = "../../../../crates/dclutch-record-contract" }
 dclutch-registry-contract = { path = "../../../../crates/dclutch-registry-contract" }
-dclutch-registry-svm = { path = "../../../../crates/dclutch-registry-svm" }
 dclutch-release-set-contract = { path = "../../../../crates/dclutch-release-set-contract" }
 dclutch-resolution-codec = { path = "../../../../crates/dclutch-resolution-codec" }
-dclutch-source-contract = { path = "../../../../crates/dclutch-source-contract" }
 reqwest = { version = "=0.12.28", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.149"

@@ -46,8 +46,9 @@ Usage:
 The profile binds only to 127.0.0.1 on ports 20890-20931. It never reads a
 Solana CLI configuration or caller wallet. The account directory must come
 from the successor prepare command and remains explicitly genesis evidence.
-Foreground mode preserves the validator as the launcher's process, which is
-useful for supervised local execution and process-lifetime-safe automation.
+Foreground mode preserves the validator as the launcher's process and is
+required for a same-process supervisor retaining the ephemeral Core authority
+in memory through infrastructure init and immediate Loader revocation.
 EOF
 }
 
@@ -157,7 +158,7 @@ validate_plan() {
     --arg rent_credit_id "$rent_credit_id" \
     --arg rent_credit_elf "$rent_credit_elf" \
     --arg rent_credit_hash "$rent_credit_hash" \
-    '.schema == "dclutch-local-successor-genesis-plan-v1" and
+    '.schema == "dclutch-local-successor-infrastructure-plan-v2" and
      .account_dir == $account_dir and
      .registry.program_id == $registry_id and
      .registry.elf_path == $registry_elf and
@@ -169,6 +170,11 @@ validate_plan() {
      .core.elf_sha256 == $core_hash and
      .genesis_accounts["loader.core.program"].address == $core_id and
      .genesis_accounts["loader.core.programdata"].address == .core.programdata_id and
+     .genesis_accounts["loader.core.programdata"].data_sha256 == .core_bootstrap.genesis_programdata_sha256 and
+     (.core_bootstrap.upgrade_authority | type == "string" and test("^[1-9A-HJ-NP-Za-km-z]{32,44}$")) and
+     (.core_bootstrap.post_revoke_programdata_sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
+     .core_bootstrap.genesis_programdata_sha256 != .core_bootstrap.post_revoke_programdata_sha256 and
+     .core_bootstrap.release_recognition_requires_revoke == true and
      .claims.program_id == $claims_id and
      .claims.elf_path == $claims_elf and
      .claims.elf_sha256 == $claims_hash and
@@ -194,8 +200,14 @@ validate_plan() {
      .rent_credit.elf_sha256 == $rent_credit_hash and
      .genesis_accounts["loader.rent-credit.program"].address == $rent_credit_id and
      .genesis_accounts["loader.rent-credit.programdata"].address == .rent_credit.programdata_id and
-     (.genesis_boundary | length == 4) and
-     (.genesis_accounts | length > 0)' \
+     .infrastructure_profile.registry_artifact_release_id == .registry.artifact_release_id and
+     .infrastructure_profile.rent_artifact_release_id == .rent_credit.artifact_release_id and
+     .genesis_accounts["record.registry_artifact_release"].data_sha256 == .records.registry_artifact_release.content_sha256 and
+     .genesis_accounts["record.rent_artifact_release"].data_sha256 == .records.rent_artifact_release.content_sha256 and
+     (.genesis_boundary | length == 2) and
+     (.bootstrap_order | length == 5) and
+     (.execution_blocker | type == "string" and length > 0) and
+     (.genesis_accounts | length == 23)' \
     "$plan" >/dev/null || die "successor plan does not match exact account/artifact pins or hides its genesis boundary"
 }
 
@@ -227,7 +239,7 @@ write_profile() {
     printf '  "ledger":'; json_string "$ledger"; printf ',\n'
     printf '  "account_dir":'; json_string "$account_dir"; printf ',\n'
     printf '  "genesis_plan":'; json_string "$plan"; printf ',\n'
-    printf '  "genesis_boundary":"Registry records, Markets, Source states, and funding are prepared inputs; only activation and Resolution transitions are transactions.",\n'
+    printf '  "genesis_boundary":"Six immutable Loader-v3 programs, one authority-bearing pre-init Core, and finalized Registry record bodies are prepared. Init, Core revocation, activation, RentCredit, Found, Source, funding, and Resolution remain transactions.",\n'
     printf '  "key_policy":"No caller wallet/config is read; validator keys are ledger-scoped and bootstrap keys exist only in process memory.",\n'
     printf '  "validator":{"path":'; json_string "$validator"; printf ',"version":'; json_string "$version"; printf '},\n'
     printf '  "programs":[\n'
@@ -241,7 +253,7 @@ write_profile() {
     printf '    {"name":"pyth-receiver","program_id":"%s","elf_sha256":"c5079559864fc34dbd5fe87b4aa9fba3a1ed22690363ec490449e8660e73af64"},\n' "$RECEIVER_ID"
     printf '    {"name":"pyth-router","program_id":"%s","elf_sha256":"f9061f03a81b89db29f4603677e3b3d89b3bbf08d67827b2832f18a4e2b61acb"}\n' "$ROUTER_ID"
     printf '  ],\n'
-    printf '  "loader_time_boundary":"Registry, all five role programs, and RentCredit use exact slot-0 immutable genesis Loader headers with canonical zero padding before the fixed 45-byte ELF boundary. Current wall clock differs from the captured provider fixture, and evidence makes no captured-release or production-release claim."\n'
+    printf '  "loader_time_boundary":"Registry, Claims, Trading, Resolution, Custody, and Rent use exact slot-0 immutable Loader headers. Core alone starts with the plan-pinned ephemeral authority, must initialize the profile, and must revoke to the pinned fixed-45-byte None header before immutable release recognition. Current wall clock differs from the captured provider fixture."\n'
     printf '}\n'
   } > "$ledger/$PROFILE_NAME"
 }
@@ -286,6 +298,7 @@ start() {
     esac
   done
   [[ -n "$ledger_arg" && -n "$account_dir_arg" && -n "$plan_arg" && -n "$registry_id" && -n "$registry_elf_arg" && -n "$registry_hash" && -n "$registry_attestation_arg" && -n "$core_id" && -n "$core_elf_arg" && -n "$core_hash" && -n "$core_attestation_arg" && -n "$claims_id" && -n "$claims_elf_arg" && -n "$claims_hash" && -n "$claims_attestation_arg" && -n "$trading_id" && -n "$trading_elf_arg" && -n "$trading_hash" && -n "$trading_attestation_arg" && -n "$resolution_id" && -n "$resolution_elf_arg" && -n "$resolution_hash" && -n "$resolution_attestation_arg" && -n "$custody_id" && -n "$custody_elf_arg" && -n "$custody_hash" && -n "$custody_attestation_arg" && -n "$rent_credit_id" && -n "$rent_credit_elf_arg" && -n "$rent_credit_hash" && -n "$rent_credit_attestation_arg" ]] || die "start requires every plan and artifact pin"
+  [[ "$foreground" -eq 1 ]] || die "start requires --foreground under a same-process in-memory Core-authority supervisor"
   is_pubkey "$registry_id" || die "invalid Registry program ID"
   is_pubkey "$core_id" || die "invalid Core program ID"
   is_pubkey "$claims_id" || die "invalid Claims program ID"

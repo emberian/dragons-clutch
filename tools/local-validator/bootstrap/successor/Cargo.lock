@@ -335,18 +335,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-capability-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-core-contract",
-]
-
-[[package]]
 name = "dclutch-core-contract"
-version = "0.1.0"
-
-[[package]]
-name = "dclutch-kernel"
 version = "0.1.0"
 
 [[package]]
@@ -354,18 +343,12 @@ name = "dclutch-local-successor-bootstrap"
 version = "0.1.0"
 dependencies = [
  "base64",
- "bincode",
- "dclutch-capability-contract",
  "dclutch-core-contract",
- "dclutch-market-contract",
- "dclutch-product-contract",
  "dclutch-pyth-svm",
  "dclutch-record-contract",
  "dclutch-registry-contract",
- "dclutch-registry-svm",
  "dclutch-release-set-contract",
  "dclutch-resolution-codec",
- "dclutch-source-contract",
  "reqwest",
  "serde",
  "serde_json",
@@ -374,19 +357,6 @@ dependencies = [
  "solana-sdk",
  "solana-sdk-ids",
 ]
-
-[[package]]
-name = "dclutch-market-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-core-contract",
- "dclutch-kernel",
- "dclutch-product-contract",
-]
-
-[[package]]
-name = "dclutch-product-contract"
-version = "0.1.0"
 
 [[package]]
 name = "dclutch-pyth-svm"
@@ -425,13 +395,6 @@ dependencies = [
 [[package]]
 name = "dclutch-resolution-codec"
 version = "0.1.0"
-
-[[package]]
-name = "dclutch-source-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-product-contract",
-]
 
 [[package]]
 name = "der"
