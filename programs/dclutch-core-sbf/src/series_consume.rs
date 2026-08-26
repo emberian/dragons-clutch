@@ -35,8 +35,8 @@ use dclutch_custody_contract::{
     ProjectedCustodyStateSeedsV1, ProjectedCustodyStateV1,
 };
 use dclutch_market_core_codec::{
-    Action, FoundingIntentV5, Request, Role, SERIES_FOUNDING_PERMIT_BYTES_V1, SeriesCoreAckV1,
-    SeriesCoreActionV1, SeriesCoreRequestV1, SeriesFoundingPermitSeedsV1, SeriesFoundingPermitV1,
+    Action, FoundingIntentV5, Request, Role, SERIES_FOUNDING_PERMIT_BYTES_V1, SeriesCoreActionV1,
+    SeriesCoreFoundAckV2, SeriesCoreRequestV1, SeriesFoundingPermitSeedsV1, SeriesFoundingPermitV1,
 };
 use dclutch_product_runtime_v2_svm_reader::{
     FinalizedRecordFrameV2, authenticate_product_basis_v3,
@@ -282,6 +282,12 @@ struct ProjectedFacts {
     hoard_amount: u64,
 }
 
+#[derive(Clone, Copy)]
+struct FundingSpanEvidence {
+    count: u8,
+    list_id: [u8; 32],
+}
+
 /// Authenticate and create the Founding Core Market for one Series Consume.
 #[inline(never)]
 pub(crate) fn process(
@@ -316,7 +322,7 @@ pub(crate) fn process(
 
     let admitted = authenticate_series(&frame, request, proof_bytes, &rent, program_id, &prepared)?;
     authenticate_root_and_replay(&frame, request, &admitted, program_id)?;
-    let (_funding, suffix_accounts) =
+    let (funding_span, suffix_accounts) =
         split_funding_prefix(&frame, &admitted, request, &rent, &prepared)?;
     let suffix = SeriesFoundSuffix::parse(suffix_accounts)?;
     release_admissions.require(Role::Claims)?;
@@ -359,12 +365,16 @@ pub(crate) fn process(
     .to_bytes();
     drop(market_bytes);
     drop(permit_bytes);
-    let acknowledgement = SeriesCoreAckV1::new(
+    let acknowledgement = SeriesCoreFoundAckV2::new(
         request,
         identity(program_id.to_bytes())?,
+        identity(suffix.permit.key.to_bytes())?,
         identity(hash(request_bytes).to_bytes())?,
+        funding_span.count,
+        identity(funding_span.list_id)?,
         identity(post_resource_digest)?,
-    );
+    )
+    .map_err(|_| CoreSbfError::ChildAck)?;
     let bytes = acknowledgement
         .encode()
         .map_err(|_| CoreSbfError::ChildAck)?;
@@ -693,7 +703,7 @@ fn split_funding_prefix<'a, 'info>(
     request: SeriesCoreRequestV1,
     rent: &Rent,
     prepared: &PreparedFound,
-) -> Result<(&'a [AccountInfo<'info>], &'a [AccountInfo<'info>]), CoreSbfError> {
+) -> Result<(FundingSpanEvidence, &'a [AccountInfo<'info>]), CoreSbfError> {
     let maximum = min(frame.tail.len(), MAXIMUM_FUNDING_STATES_V1);
     let placeholder = AccountKeyV3::new([1; 32]).map_err(|_| CoreSbfError::Funding)?;
     let mut keys = [placeholder; MAXIMUM_FUNDING_STATES_V1];
@@ -705,19 +715,24 @@ fn split_funding_prefix<'a, 'info>(
             .ok_or(CoreSbfError::AccountFrame)?;
         *keys.get_mut(count - 1).ok_or(CoreSbfError::Arithmetic)? =
             AccountKeyV3::new(account.key.to_bytes()).map_err(|_| CoreSbfError::Funding)?;
-        if funding_list_id(keys.get(..count).ok_or(CoreSbfError::Arithmetic)?)
-            .map_err(|_| CoreSbfError::Funding)?
-            == admitted.ticket.ticket().funding_list()
-        {
-            matched = Some(count);
+        let list_id = funding_list_id(keys.get(..count).ok_or(CoreSbfError::Arithmetic)?)
+            .map_err(|_| CoreSbfError::Funding)?;
+        if list_id == admitted.ticket.ticket().funding_list() {
+            matched = Some((count, list_id.to_bytes()));
             break;
         }
     }
-    let count = matched.ok_or(CoreSbfError::Funding)?;
+    let (count, list_id) = matched.ok_or(CoreSbfError::Funding)?;
     let funding = frame.tail.get(..count).ok_or(CoreSbfError::AccountFrame)?;
     let claims = frame.tail.get(count..).ok_or(CoreSbfError::AccountFrame)?;
     authenticate_funding(frame, admitted, request, funding, rent, prepared)?;
-    Ok((funding, claims))
+    Ok((
+        FundingSpanEvidence {
+            count: u8::try_from(count).map_err(|_| CoreSbfError::Arithmetic)?,
+            list_id,
+        },
+        claims,
+    ))
 }
 
 fn authenticate_funding(
