@@ -6,12 +6,13 @@
 //! success.
 
 use super::{
-    ACTION_PLAN_BYTES, ARTIFACT_PROFILE, Error, GUARD_ALWAYS, GUARD_SCALAR_EQ, HEADER_BYTES, MAGIC,
-    MAX_SEED_BYTES, PLAN_AUTHENTICATE, PLAN_AUTHENTICATE_OR_CREATE, PLAN_CLOSE, PLAN_CREATE,
-    PROTECTED_OUTPUT_ARTIFACT_PROFILE, PROTECTED_OUTPUT_AUTHENTICATE_OR_CREATE,
-    PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SCOPE_FIXED, SCOPE_ITEM, SEED_BYTES, SEED_CANONICAL_BUMP,
-    SEED_COMMON_IDENTITY, SEED_COMMON_SCALAR_LE, SEED_ITEM_IDENTITY, SEED_ITEM_INDEX_LE,
-    SEED_ITEM_SCALAR_LE, SEED_LITERAL, StateLifecyclePolicyV3, VERSION,
+    ACTION_PLAN_BYTES, ARTIFACT_PROFILE, Error, GUARD_ALWAYS, GUARD_SCALAR_EQ, HEADER_BYTES,
+    IMMUTABLE_IDENTITY_BINDING_BYTES, MAGIC, MAX_SEED_BYTES, PLAN_AUTHENTICATE,
+    PLAN_AUTHENTICATE_OR_CREATE, PLAN_CLOSE, PLAN_CREATE, PROTECTED_OUTPUT_ARTIFACT_PROFILE,
+    PROTECTED_OUTPUT_AUTHENTICATE_OR_CREATE, PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SCOPE_FIXED,
+    SCOPE_ITEM, SEED_BYTES, SEED_CANONICAL_BUMP, SEED_COMMON_IDENTITY, SEED_COMMON_SCALAR_LE,
+    SEED_ITEM_IDENTITY, SEED_ITEM_INDEX_LE, SEED_ITEM_SCALAR_LE, SEED_LITERAL,
+    SUCCESSOR_ARTIFACT_PROFILE, StateLifecyclePolicyV3, VERSION,
 };
 
 /// Fixed-prefix or per-Product-item lifecycle coordinate.
@@ -199,6 +200,17 @@ pub struct LifecycleProtectedOutputsInputV3 {
     pub owner: u16,
 }
 
+/// One successor immutable state-field binding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LifecycleImmutableIdentityBindingInputV4 {
+    /// Exact action-plan table index.
+    pub plan: u16,
+    /// Exact 32-byte identity offset in the live state body.
+    pub data_offset: u32,
+    /// Canonical common or item identity register.
+    pub canonical: LifecycleRegisterCoordinateV3,
+}
+
 /// Encode one complete StateLifecyclePolicy V3 atomically.
 pub fn encode_lifecycle_policy_v3_atomic(
     recipes: &[LifecycleRecipeInputV3],
@@ -212,6 +224,7 @@ pub fn encode_lifecycle_policy_v3_atomic(
         recipes,
         seeds,
         plans,
+        &[],
         &[],
         scratch,
         output,
@@ -239,6 +252,32 @@ pub fn encode_lifecycle_policy_with_protected_outputs_v3_atomic(
         seeds,
         plans,
         protected_outputs,
+        &[],
+        scratch,
+        output,
+    )
+}
+
+/// Encode one V4 successor lifecycle policy atomically.
+pub fn encode_lifecycle_policy_v4_atomic(
+    recipes: &[LifecycleRecipeInputV3],
+    seeds: &[LifecycleSeedInputV3<'_>],
+    plans: &[LifecyclePlanInputV3],
+    protected_outputs: &[Option<LifecycleProtectedOutputsInputV3>],
+    immutable_identity_bindings: &[LifecycleImmutableIdentityBindingInputV4],
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<(), Error> {
+    if protected_outputs.len() != plans.len() {
+        return Err(Error::InvalidLength);
+    }
+    encode_lifecycle_policy_inner_v3_atomic(
+        SUCCESSOR_ARTIFACT_PROFILE,
+        recipes,
+        seeds,
+        plans,
+        protected_outputs,
+        immutable_identity_bindings,
         scratch,
         output,
     )
@@ -251,6 +290,7 @@ fn encode_lifecycle_policy_inner_v3_atomic(
     seeds: &[LifecycleSeedInputV3<'_>],
     plans: &[LifecyclePlanInputV3],
     protected_outputs: &[Option<LifecycleProtectedOutputsInputV3>],
+    immutable_identity_bindings: &[LifecycleImmutableIdentityBindingInputV4],
     scratch: &mut [u8],
     output: &mut [u8],
 ) -> Result<(), Error> {
@@ -265,6 +305,12 @@ fn encode_lifecycle_policy_inner_v3_atomic(
                 .len()
                 .checked_mul(SEED_BYTES)
                 .and_then(|seed_width| width.checked_add(seed_width))
+        })
+        .and_then(|width| {
+            immutable_identity_bindings
+                .len()
+                .checked_mul(IMMUTABLE_IDENTITY_BINDING_BYTES)
+                .and_then(|binding_width| width.checked_add(binding_width))
         })
         .and_then(|width| {
             plans
@@ -290,8 +336,16 @@ fn encode_lifecycle_policy_inner_v3_atomic(
     for (offset, value) in [(12, recipe_count), (14, seed_count), (16, plan_count)] {
         write(scratch, offset, &value.to_le_bytes())?;
     }
-    if artifact_profile == PROTECTED_OUTPUT_ARTIFACT_PROFILE {
+    if matches!(
+        artifact_profile,
+        PROTECTED_OUTPUT_ARTIFACT_PROFILE | SUCCESSOR_ARTIFACT_PROFILE
+    ) {
         write(scratch, 18, &plan_count.to_le_bytes())?;
+    }
+    if artifact_profile == SUCCESSOR_ARTIFACT_PROFILE {
+        let binding_count =
+            u16::try_from(immutable_identity_bindings.len()).map_err(|_| Error::InvalidLength)?;
+        write(scratch, 20, &binding_count.to_le_bytes())?;
     }
     let mut cursor = HEADER_BYTES;
     for recipe in recipes {
@@ -310,12 +364,31 @@ fn encode_lifecycle_policy_inner_v3_atomic(
         encode_protected_outputs(*protected, scratch, cursor)?;
         cursor = add(cursor, PROTECTED_OUTPUT_BYTES)?;
     }
+    for binding in immutable_identity_bindings {
+        encode_immutable_identity_binding(*binding, scratch, cursor)?;
+        cursor = add(cursor, IMMUTABLE_IDENTITY_BINDING_BYTES)?;
+    }
     if cursor != expected {
         return Err(Error::InvalidLength);
     }
     StateLifecyclePolicyV3::decode(scratch)?;
     output.copy_from_slice(scratch);
     Ok(())
+}
+
+fn encode_immutable_identity_binding(
+    binding: LifecycleImmutableIdentityBindingInputV4,
+    output: &mut [u8],
+    offset: usize,
+) -> Result<(), Error> {
+    write(output, offset, &binding.plan.to_le_bytes())?;
+    write_byte(output, add(offset, 2)?, binding.canonical.space.tag())?;
+    write(
+        output,
+        add(offset, 4)?,
+        &binding.canonical.index.to_le_bytes(),
+    )?;
+    write(output, add(offset, 8)?, &binding.data_offset.to_le_bytes())
 }
 
 fn encode_protected_outputs(
@@ -570,6 +643,10 @@ mod tests {
         )
         .expect("protected encode");
         StateLifecyclePolicyV3::decode(&output).expect("protected decode");
+        assert_eq!(
+            crate::lifecycle_v3::StateLifecyclePolicyV4::decode_selected([1; 32], [1; 32], &output,),
+            Err(Error::UnsupportedProfile)
+        );
 
         let mut hostile_scratch = std::vec![0; width];
         let mut hostile_output = std::vec![7; width];

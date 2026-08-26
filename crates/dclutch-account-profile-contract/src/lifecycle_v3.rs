@@ -28,12 +28,21 @@ pub const SCHEMA_RELEASE_ID: [u8; 32] = [
     0xad, 0xfe, 0x22, 0x40, 0x22, 0xdf, 0xb6, 0xff, 0xb2, 0x14, 0xd7, 0xd4, 0x24, 0x83, 0xf9, 0x64,
     0xc9, 0xe0, 0x8b, 0x7f, 0xb1, 0xa2, 0x80, 0x1e, 0x2e, 0x8c, 0x73, 0x8a, 0x34, 0xad, 0x03, 0x0a,
 ];
+/// Successor schema label with protected outputs and immutable identity bindings.
+pub const SUCCESSOR_SCHEMA_RELEASE_PREIMAGE: &[u8] = b"dclutch/schema/state-lifecycle-policy-v4";
+/// SHA-256 of [`SUCCESSOR_SCHEMA_RELEASE_PREIMAGE`].
+pub const SUCCESSOR_SCHEMA_RELEASE_ID: [u8; 32] = [
+    0x3a, 0x15, 0x1e, 0xd5, 0x08, 0x0b, 0x68, 0xd7, 0xc9, 0xe3, 0xbd, 0x2c, 0x5d, 0xf5, 0x17, 0x20,
+    0xe4, 0x31, 0x48, 0x4d, 0x92, 0xee, 0x64, 0xdc, 0xfb, 0x87, 0x2a, 0x1e, 0x6f, 0x09, 0x38, 0x6a,
+];
 /// Canonical schema version.
 pub const VERSION: u16 = 3;
 /// Canonical physical artifact profile.
 pub const ARTIFACT_PROFILE: u16 = 1;
 /// Successor artifact profile with lifecycle-owned protected outputs.
 pub const PROTECTED_OUTPUT_ARTIFACT_PROFILE: u16 = 2;
+/// Successor artifact profile with immutable identity-field bindings.
+pub const SUCCESSOR_ARTIFACT_PROFILE: u16 = 3;
 /// Exact header width.
 pub const HEADER_BYTES: usize = 40;
 /// Exact derivation-recipe width.
@@ -44,6 +53,8 @@ pub const SEED_BYTES: usize = 40;
 pub const ACTION_PLAN_BYTES: usize = 40;
 /// Exact protected-output record width for artifact profile 2.
 pub const PROTECTED_OUTPUT_BYTES: usize = 16;
+/// Exact immutable identity-binding width for the successor profile.
+pub const IMMUTABLE_IDENTITY_BINDING_BYTES: usize = 16;
 /// Solana's chain-derived maximum number of seeds per PDA.
 pub const MAX_SEEDS: u8 = 16;
 /// Solana's chain-derived maximum width of one seed.
@@ -170,6 +181,25 @@ pub struct LifecycleProtectedOutputsV3 {
     beneficiary: u16,
     state: u16,
     owner: u16,
+}
+
+/// One lifecycle-owned immutable state-field binding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LifecycleImmutableIdentityBindingV4 {
+    data_offset: u32,
+    canonical: LifecycleRegisterTargetV3,
+}
+
+impl LifecycleImmutableIdentityBindingV4 {
+    /// Exact 32-byte identity offset in the live state body.
+    pub const fn data_offset(self) -> u32 {
+        self.data_offset
+    }
+
+    /// Canonical common or item identity register.
+    pub const fn canonical(self) -> LifecycleRegisterTargetV3 {
+        self.canonical
+    }
 }
 
 impl LifecycleProtectedOutputsV3 {
@@ -392,6 +422,21 @@ impl SelectedLifecycleV3<'_> {
             5 => Ok(outputs.owner()),
             _ => Err(Error::InvalidCoordinate),
         }
+    }
+
+    /// Number of immutable identity-field bindings for this plan.
+    pub fn immutable_identity_binding_count(self) -> Result<u16> {
+        self.policy
+            .immutable_identity_binding_count(self.plan_index)
+    }
+
+    /// Select one immutable identity-field binding for this plan.
+    pub fn immutable_identity_binding(
+        self,
+        ordinal: u16,
+    ) -> Result<LifecycleImmutableIdentityBindingV4> {
+        self.policy
+            .immutable_identity_binding_for_plan(self.plan_index, ordinal)
     }
 
     /// Whether this plan runs once or once for every authenticated runtime item.
@@ -634,7 +679,49 @@ pub struct StateLifecyclePolicyV3<'a> {
     seeds: u16,
     plans: u16,
     protected_outputs: u16,
+    immutable_identity_bindings: u16,
     bytes: &'a [u8],
+}
+
+/// Successor-only lifecycle policy selected under the V4 Registry schema.
+///
+/// This wrapper makes the legacy profiles unreachable to the Hot successor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StateLifecyclePolicyV4<'a>(StateLifecyclePolicyV3<'a>);
+
+impl<'a> StateLifecyclePolicyV4<'a> {
+    /// Decode exact successor bytes after content authentication.
+    pub fn decode_selected(
+        selected_id: [u8; 32],
+        authenticated_id: [u8; 32],
+        bytes: &'a [u8],
+    ) -> Result<Self> {
+        let policy = StateLifecyclePolicyV3::decode_selected(selected_id, authenticated_id, bytes)?;
+        if policy.artifact_profile != SUCCESSOR_ARTIFACT_PROFILE {
+            return Err(Error::UnsupportedProfile);
+        }
+        Ok(Self(policy))
+    }
+
+    /// Exact canonical successor bytes.
+    pub const fn bytes(self) -> &'a [u8] {
+        self.0.bytes()
+    }
+
+    /// Number of plans selected by one action.
+    pub fn action_plan_count(self, action: u32) -> Result<u16> {
+        self.0.action_plan_count(action)
+    }
+
+    /// Select one canonical action plan.
+    pub fn action_plan(self, action: u32, ordinal: u16) -> Result<SelectedLifecycleV3<'a>> {
+        self.0.action_plan(action, ordinal)
+    }
+
+    /// Join the successor policy to the authenticated AccountProfile.
+    pub fn validate_account_profile(self, profile: AccountProfileV2<'_>) -> Result<()> {
+        self.0.validate_account_profile(profile)
+    }
 }
 
 impl<'a> StateLifecyclePolicyV3<'a> {
@@ -663,15 +750,21 @@ impl<'a> StateLifecyclePolicyV3<'a> {
             return Err(Error::UnsupportedProfile);
         }
         let artifact_profile = read_u16(bytes, 10)?;
-        let protected_outputs = match artifact_profile {
+        let (protected_outputs, immutable_identity_bindings) = match artifact_profile {
             ARTIFACT_PROFILE => {
                 require_zero(bytes, 18, 22)?;
-                0
+                (0, 0)
             }
             PROTECTED_OUTPUT_ARTIFACT_PROFILE => {
                 let count = read_u16(bytes, 18)?;
                 require_zero(bytes, 20, 20)?;
-                count
+                (count, 0)
+            }
+            SUCCESSOR_ARTIFACT_PROFILE => {
+                let protected = read_u16(bytes, 18)?;
+                let bindings = read_u16(bytes, 20)?;
+                require_zero(bytes, 22, 18)?;
+                (protected, bindings)
             }
             _ => return Err(Error::UnsupportedProfile),
         };
@@ -681,13 +774,16 @@ impl<'a> StateLifecyclePolicyV3<'a> {
             seeds: read_u16(bytes, 14)?,
             plans: read_u16(bytes, 16)?,
             protected_outputs,
+            immutable_identity_bindings,
             bytes,
         };
         if value.recipes == 0 || value.seeds == 0 || value.plans == 0 {
             return Err(Error::EmptyPolicy);
         }
-        if value.artifact_profile == PROTECTED_OUTPUT_ARTIFACT_PROFILE
-            && value.protected_outputs != value.plans
+        if matches!(
+            value.artifact_profile,
+            PROTECTED_OUTPUT_ARTIFACT_PROFILE | SUCCESSOR_ARTIFACT_PROFILE
+        ) && value.protected_outputs != value.plans
         {
             return Err(Error::InvalidLength);
         }
@@ -707,6 +803,11 @@ impl<'a> StateLifecyclePolicyV3<'a> {
                 usize::from(value.protected_outputs)
                     .checked_mul(PROTECTED_OUTPUT_BYTES)
                     .and_then(|protected| width.checked_add(protected))
+            })
+            .and_then(|width| {
+                usize::from(value.immutable_identity_bindings)
+                    .checked_mul(IMMUTABLE_IDENTITY_BINDING_BYTES)
+                    .and_then(|bindings| width.checked_add(bindings))
             })
             .and_then(|body| HEADER_BYTES.checked_add(body))
             .ok_or(Error::InvalidLength)?;
@@ -805,6 +906,15 @@ impl<'a> StateLifecyclePolicyV3<'a> {
             plan_index = plan_index.checked_add(1).ok_or(Error::Arithmetic)?;
         }
         self.validate_protected_output_uniqueness()?;
+        let mut binding_index = 0_u16;
+        while binding_index < self.immutable_identity_bindings {
+            let (plan_index, binding) = self.immutable_identity_binding(binding_index)?;
+            let plan = self.plan(plan_index)?;
+            let recipe = self.recipe(plan.recipe)?;
+            validate_lifecycle_target(profile, binding.canonical)?;
+            validate_invocation_source(recipe.account.scope, register_source(binding.canonical))?;
+            binding_index = binding_index.checked_add(1).ok_or(Error::Arithmetic)?;
+        }
         self.validate_lifecycle_prestates(profile)
     }
 
@@ -1080,7 +1190,9 @@ impl<'a> StateLifecyclePolicyV3<'a> {
                     bump.source,
                     SeedSourceV3::CommonScalar | SeedSourceV3::ItemScalar
                 ),
-                PROTECTED_OUTPUT_ARTIFACT_PROFILE => bump.source == SeedSourceV3::CanonicalBump,
+                PROTECTED_OUTPUT_ARTIFACT_PROFILE | SUCCESSOR_ARTIFACT_PROFILE => {
+                    bump.source == SeedSourceV3::CanonicalBump
+                }
                 _ => false,
             };
             if !bump_valid || bump.width != 1 {
@@ -1104,12 +1216,45 @@ impl<'a> StateLifecyclePolicyV3<'a> {
             }
             let protected = self.protected_outputs(plan_index)?;
             if (plan.operation == LifecycleOperationV3::AuthenticateOrCreate) != protected.is_some()
-                && self.artifact_profile == PROTECTED_OUTPUT_ARTIFACT_PROFILE
+                && matches!(
+                    self.artifact_profile,
+                    PROTECTED_OUTPUT_ARTIFACT_PROFILE | SUCCESSOR_ARTIFACT_PROFILE
+                )
             {
                 return Err(Error::NonCanonicalReserved);
             }
             previous = Some(order);
             plan_index = plan_index.checked_add(1).ok_or(Error::Arithmetic)?;
+        }
+        let mut previous_binding = None;
+        let mut binding_index = 0_u16;
+        while binding_index < self.immutable_identity_bindings {
+            let (bound_plan, binding) = self.immutable_identity_binding(binding_index)?;
+            let plan = self.plan(bound_plan)?;
+            let recipe = self.recipe(plan.recipe)?;
+            if self.artifact_profile != SUCCESSOR_ARTIFACT_PROFILE
+                || plan.operation != LifecycleOperationV3::AuthenticateOrCreate
+                || self.protected_outputs(bound_plan)?.is_none()
+                || binding
+                    .data_offset
+                    .checked_add(32)
+                    .is_none_or(|end| end > recipe.data_base)
+            {
+                return Err(Error::InvalidCoordinate);
+            }
+            let order = (bound_plan, binding.data_offset);
+            if previous_binding.is_some_and(|previous: (u16, u32)| {
+                previous >= order
+                    || (previous.0 == bound_plan
+                        && previous
+                            .1
+                            .checked_add(32)
+                            .is_none_or(|end| end > binding.data_offset))
+            }) {
+                return Err(Error::InvalidCoordinate);
+            }
+            previous_binding = Some(order);
+            binding_index = binding_index.checked_add(1).ok_or(Error::Arithmetic)?;
         }
         Ok(())
     }
@@ -1314,6 +1459,103 @@ impl<'a> StateLifecyclePolicyV3<'a> {
             }
             _ => Err(Error::UnknownTag),
         }
+    }
+
+    fn immutable_identity_binding_count(self, plan_index: u16) -> Result<u16> {
+        if plan_index >= self.plans {
+            return Err(Error::InvalidCoordinate);
+        }
+        let mut found = 0_u16;
+        let mut index = 0_u16;
+        while index < self.immutable_identity_bindings {
+            if self.immutable_identity_binding(index)?.0 == plan_index {
+                found = found.checked_add(1).ok_or(Error::Arithmetic)?;
+            }
+            index = index.checked_add(1).ok_or(Error::Arithmetic)?;
+        }
+        Ok(found)
+    }
+
+    fn immutable_identity_binding_for_plan(
+        self,
+        plan_index: u16,
+        ordinal: u16,
+    ) -> Result<LifecycleImmutableIdentityBindingV4> {
+        let mut seen = 0_u16;
+        let mut index = 0_u16;
+        while index < self.immutable_identity_bindings {
+            let (candidate_plan, binding) = self.immutable_identity_binding(index)?;
+            if candidate_plan == plan_index {
+                if seen == ordinal {
+                    return Ok(binding);
+                }
+                seen = seen.checked_add(1).ok_or(Error::Arithmetic)?;
+            }
+            index = index.checked_add(1).ok_or(Error::Arithmetic)?;
+        }
+        Err(Error::InvalidCoordinate)
+    }
+
+    fn immutable_identity_binding(
+        self,
+        index: u16,
+    ) -> Result<(u16, LifecycleImmutableIdentityBindingV4)> {
+        if index >= self.immutable_identity_bindings {
+            return Err(Error::InvalidCoordinate);
+        }
+        let offset = HEADER_BYTES
+            .checked_add(
+                usize::from(self.recipes)
+                    .checked_mul(RECIPE_BYTES)
+                    .ok_or(Error::InvalidLength)?,
+            )
+            .and_then(|base| {
+                usize::from(self.seeds)
+                    .checked_mul(SEED_BYTES)
+                    .and_then(|width| base.checked_add(width))
+            })
+            .and_then(|base| {
+                usize::from(self.plans)
+                    .checked_mul(ACTION_PLAN_BYTES)
+                    .and_then(|width| base.checked_add(width))
+            })
+            .and_then(|base| {
+                usize::from(self.protected_outputs)
+                    .checked_mul(PROTECTED_OUTPUT_BYTES)
+                    .and_then(|width| base.checked_add(width))
+            })
+            .and_then(|base| {
+                usize::from(index)
+                    .checked_mul(IMMUTABLE_IDENTITY_BINDING_BYTES)
+                    .and_then(|width| base.checked_add(width))
+            })
+            .ok_or(Error::InvalidLength)?;
+        let plan_index = read_u16(self.bytes, offset)?;
+        let item = match read_u8(self.bytes, offset + 2)? {
+            SOURCE_COMMON => false,
+            SOURCE_ITEM => true,
+            _ => return Err(Error::UnknownTag),
+        };
+        require_zero(self.bytes, offset + 3, 1)?;
+        let canonical = LifecycleRegisterTargetV3 {
+            kind: LifecycleRegisterKindV3::Identity,
+            scope: if item {
+                CoordinateScopeV3::Item
+            } else {
+                CoordinateScopeV3::Fixed
+            },
+            index: read_u16(self.bytes, offset + 4)?,
+        };
+        require_zero(self.bytes, offset + 6, 2)?;
+        let data_offset = read_u32(self.bytes, offset + 8)?;
+        require_zero(self.bytes, offset + 12, 4)?;
+        Ok((
+            plan_index,
+            LifecycleImmutableIdentityBindingV4 {
+                data_offset,
+                canonical,
+            },
+        ))
     }
 
     fn validate_seed_against_profile(
@@ -1804,6 +2046,7 @@ fn plan_lifecycle_with_values(
     StateLifecyclePlanV3,
     Option<(LifecycleProtectedOutputsV3, LifecycleProtectedValuesV3)>,
 )> {
+    let selected_record = selected;
     let policy = selected.policy;
     let protected = selected.protected_outputs()?;
     if !selected.is_enabled(
@@ -1914,6 +2157,7 @@ fn plan_lifecycle_with_values(
             }
         }
     };
+    validate_immutable_identity_bindings(selected_record, state, context, plan)?;
     let protected = protected
         .map(|declaration| {
             validate_protected_values(
@@ -1929,6 +2173,46 @@ fn plan_lifecycle_with_values(
         })
         .transpose()?;
     Ok((plan, protected))
+}
+
+fn validate_immutable_identity_bindings(
+    selected: SelectedLifecycleV3<'_>,
+    state: AccountObservationV1<'_>,
+    context: LifecycleContextV3<'_>,
+    plan: StateLifecyclePlanV3,
+) -> Result<()> {
+    let count = selected.immutable_identity_binding_count()?;
+    let mut ordinal = 0_u16;
+    while ordinal < count {
+        let binding = selected.immutable_identity_binding(ordinal)?;
+        let canonical = identity_register(
+            context.account_profile,
+            context.tail_count,
+            context.item_index,
+            context.registers,
+            register_source(binding.canonical),
+        )?;
+        if canonical == [0; 32] {
+            return Err(Error::IdentityMismatch);
+        }
+        match plan {
+            StateLifecyclePlanV3::Authenticate(_) => {
+                let start = usize::try_from(binding.data_offset).map_err(|_| Error::Arithmetic)?;
+                let end = start.checked_add(32).ok_or(Error::Arithmetic)?;
+                if state.data.get(start..end) != Some(canonical.as_slice()) {
+                    return Err(Error::IdentityMismatch);
+                }
+            }
+            StateLifecyclePlanV3::Create(_) => {
+                if !state.data.is_empty() {
+                    return Err(Error::InvalidState);
+                }
+            }
+            StateLifecyclePlanV3::Close(_) => return Err(Error::InvalidState),
+        }
+        ordinal = ordinal.checked_add(1).ok_or(Error::Arithmetic)?;
+    }
+    Ok(())
 }
 
 fn plan_create(
@@ -3063,23 +3347,31 @@ mod tests {
             state: 2,
             owner: 3,
         })];
+        let bindings = [encode::LifecycleImmutableIdentityBindingInputV4 {
+            plan: 0,
+            data_offset: 48,
+            canonical: encode::LifecycleRegisterCoordinateV3::common(4),
+        }];
         let policy_width = HEADER_BYTES
             + RECIPE_BYTES
             + 3 * SEED_BYTES
             + ACTION_PLAN_BYTES
-            + PROTECTED_OUTPUT_BYTES;
+            + PROTECTED_OUTPUT_BYTES
+            + IMMUTABLE_IDENTITY_BINDING_BYTES;
         let mut policy_scratch = vec![0; policy_width];
         let mut policy_bytes = vec![0; policy_width];
-        encode::encode_lifecycle_policy_with_protected_outputs_v3_atomic(
+        encode::encode_lifecycle_policy_v4_atomic(
             &recipes,
             &seeds,
             &plans,
             &protected,
+            &bindings,
             &mut policy_scratch,
             &mut policy_bytes,
         )
         .expect("protected policy");
-        let policy = StateLifecyclePolicyV3::decode(&policy_bytes).expect("policy decode");
+        let policy = StateLifecyclePolicyV4::decode_selected(POLICY_ID, POLICY_ID, &policy_bytes)
+            .expect("successor policy decode");
         policy
             .validate_account_profile(profile)
             .expect("static profile join");
@@ -3087,6 +3379,18 @@ mod tests {
         assert_eq!(selected.uses_canonical_bump(), Ok(true));
         assert_eq!(selected.protected_observation_count(), Ok(3));
         assert_eq!(selected.protected_output_count(), Ok(6));
+        assert_eq!(selected.immutable_identity_binding_count(), Ok(1));
+        assert_eq!(
+            selected.immutable_identity_binding(0),
+            Ok(LifecycleImmutableIdentityBindingV4 {
+                data_offset: 48,
+                canonical: LifecycleRegisterTargetV3 {
+                    kind: LifecycleRegisterKindV3::Identity,
+                    scope: CoordinateScopeV3::Fixed,
+                    index: 4,
+                },
+            })
+        );
         assert_eq!(
             selected.seed_register_target(1),
             Ok(Some(LifecycleRegisterTargetV3 {
@@ -3206,6 +3510,7 @@ mod tests {
         live[..8].copy_from_slice(&242_u64.to_le_bytes());
         live[8..16].copy_from_slice(&100_u64.to_le_bytes());
         live[16..48].copy_from_slice(&beneficiary);
+        live[48..80].copy_from_slice(&payer_owner);
         let mut authenticate_scalars = [88; 5];
         let mut authenticate_identities = [[88; 32]; 5];
         assert!(matches!(
@@ -3242,24 +3547,40 @@ mod tests {
         assert_eq!(hostile_scalars, hostile_scalars_before);
         assert_eq!(hostile_identities, hostile_identities_before);
 
+        live[..8].copy_from_slice(&242_u64.to_le_bytes());
+        live[48..80].fill(0x99);
+        assert_eq!(
+            exercise(
+                TRADING,
+                100,
+                &live,
+                &mut hostile_scalars,
+                &mut hostile_identities
+            ),
+            Err(Error::IdentityMismatch)
+        );
+        assert_eq!(hostile_scalars, hostile_scalars_before);
+        assert_eq!(hostile_identities, hostile_identities_before);
+
         let colliding = [Some(encode::LifecycleProtectedOutputsInputV3 {
             bump: 2,
             ..protected[0].expect("protected")
         })];
         let mut colliding_scratch = vec![0; policy_width];
         let mut colliding_bytes = vec![0; policy_width];
-        encode::encode_lifecycle_policy_with_protected_outputs_v3_atomic(
+        encode::encode_lifecycle_policy_v4_atomic(
             &recipes,
             &seeds,
             &plans,
             &colliding,
+            &bindings,
             &mut colliding_scratch,
             &mut colliding_bytes,
         )
         .expect("colliding wire remains hostile-decodable");
         assert_eq!(
-            StateLifecyclePolicyV3::decode(&colliding_bytes)
-                .expect("decode")
+            StateLifecyclePolicyV4::decode_selected(POLICY_ID, POLICY_ID, &colliding_bytes)
+                .expect("decode successor")
                 .validate_account_profile(profile),
             Err(Error::ProfileMismatch)
         );
@@ -3270,21 +3591,43 @@ mod tests {
         })];
         let mut out_of_range_scratch = vec![0; policy_width];
         let mut out_of_range_bytes = vec![0; policy_width];
-        encode::encode_lifecycle_policy_with_protected_outputs_v3_atomic(
+        encode::encode_lifecycle_policy_v4_atomic(
             &recipes,
             &seeds,
             &plans,
             &out_of_range,
+            &bindings,
             &mut out_of_range_scratch,
             &mut out_of_range_bytes,
         )
         .expect("out-of-range wire remains hostile-decodable");
         assert_eq!(
-            StateLifecyclePolicyV3::decode(&out_of_range_bytes)
-                .expect("decode")
+            StateLifecyclePolicyV4::decode_selected(POLICY_ID, POLICY_ID, &out_of_range_bytes)
+                .expect("decode successor")
                 .validate_account_profile(profile),
             Err(Error::ProfileMismatch)
         );
+
+        let invalid_bindings = [encode::LifecycleImmutableIdentityBindingInputV4 {
+            data_offset: 121,
+            ..bindings[0]
+        }];
+        let mut invalid_binding_scratch = vec![0; policy_width];
+        let mut invalid_binding_output = vec![55; policy_width];
+        let invalid_binding_before = invalid_binding_output.clone();
+        assert_eq!(
+            encode::encode_lifecycle_policy_v4_atomic(
+                &recipes,
+                &seeds,
+                &plans,
+                &protected,
+                &invalid_bindings,
+                &mut invalid_binding_scratch,
+                &mut invalid_binding_output,
+            ),
+            Err(Error::InvalidCoordinate)
+        );
+        assert_eq!(invalid_binding_output, invalid_binding_before);
     }
 
     fn put(output: &mut [u8], offset: usize, bytes: &[u8]) {
