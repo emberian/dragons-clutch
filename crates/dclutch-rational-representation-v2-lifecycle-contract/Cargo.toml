@@ -10,6 +10,9 @@ description = "Exact activation and retirement semantics for Rational Representa
 dclutch-rational-representation-v2-kernel = { path = "../dclutch-rational-representation-v2-kernel" }
 dclutch-token-svm = { path = "../dclutch-token-svm" }
 
+[dev-dependencies]
+sha2 = "=0.10.9"
+
 [workspace]
 
 [lints.rust]

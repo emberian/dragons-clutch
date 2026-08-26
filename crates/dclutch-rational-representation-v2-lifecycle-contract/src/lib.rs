@@ -24,6 +24,9 @@ use core::convert::TryInto;
 use dclutch_rational_representation_v2_kernel::RepresentationDescriptorV2;
 use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
 
+/// Hot V3 family specialization for the sole lifecycle request/receipt ABI.
+pub mod hot_v3;
+
 /// Exact fixed lifecycle request header width.
 pub const LIFECYCLE_HEADER_BYTES_V2: usize = 400;
 /// Exact width of one physical nonzero-support coordinate observation.
@@ -159,7 +162,8 @@ impl LifecycleActionV2 {
         }
     }
 
-    const fn byte(self) -> u8 {
+    /// Canonical physical action tag.
+    pub const fn tag(self) -> u8 {
         match self {
             Self::ActivateReceipt => 0,
             Self::ActivateCoordinate => 1,
@@ -269,7 +273,7 @@ impl LifecycleHeaderV2 {
             .fill(0);
         put(output, 0, &LIFECYCLE_REQUEST_MAGIC_V2)?;
         put(output, 8, &LIFECYCLE_VERSION_V2.to_le_bytes())?;
-        put_byte(output, ACTION_OFFSET, self.action.byte())?;
+        put_byte(output, ACTION_OFFSET, self.action.tag())?;
         put(output, RELEASE_SET_OFFSET, &self.release_set)?;
         put(output, MARKET_OFFSET, &self.market)?;
         put(output, GRAPH_ID_OFFSET, &self.graph_id)?;
@@ -951,7 +955,7 @@ impl LifecycleReceiptV2 {
         let mut output = [0; LIFECYCLE_RECEIPT_BYTES_V2];
         put(&mut output, 0, &LIFECYCLE_RECEIPT_MAGIC_V2)?;
         put(&mut output, 8, &LIFECYCLE_VERSION_V2.to_le_bytes())?;
-        put_byte(&mut output, RECEIPT_ACTION_OFFSET, self.action.byte())?;
+        put_byte(&mut output, RECEIPT_ACTION_OFFSET, self.action.tag())?;
         put_byte(&mut output, RECEIPT_STATUS_OFFSET, 1)?;
         put(
             &mut output,
@@ -1027,6 +1031,69 @@ impl LifecycleReceiptV2 {
     /// Return exact reclaimed native rent.
     pub const fn credited_lamports(self) -> u64 {
         self.credited_lamports
+    }
+
+    /// Join this immediate receipt to one exact lifecycle request and digest.
+    ///
+    /// The runtime adapter must separately authenticate the return-data
+    /// producer as the Registry-selected Claims program. This pure check owns
+    /// the complete request/receipt field relationship and therefore avoids a
+    /// second Hot-specific receipt DTO.
+    pub fn verify_for(
+        self,
+        request: LifecycleRequestV2<'_>,
+        request_digest: [u8; 32],
+    ) -> Result<()> {
+        let header = request.header();
+        let coordinate_action = matches!(
+            header.action,
+            LifecycleActionV2::ActivateCoordinate | LifecycleActionV2::RetireCoordinate
+        );
+        let (expected_outcome, expected_credit) = request_effect(request)?;
+        if is_zero(&request_digest)
+            || self.action != header.action
+            || self.request_digest != request_digest
+            || self.descriptor_id != header.descriptor_id
+            || self.market != header.market
+            || is_zero(&self.post_resource_digest)
+            || coordinate_action == is_zero(&self.position_lifecycle_receipt_digest)
+            || self.rent_credit != header.rent_credit
+            || self.rent_program != header.rent_program
+            || self.generation != header.generation
+            || self.outcome != expected_outcome
+            || self.rent_credit_before != header.rent_credit_before
+            || self.rent_credit_after != header.rent_credit_after
+            || self.credited_lamports != expected_credit
+            || self.coordinate_count != header.coordinate_count
+        {
+            return Err(Error::InvalidCompletion);
+        }
+        Ok(())
+    }
+}
+
+fn request_effect(request: LifecycleRequestV2<'_>) -> Result<(u32, u64)> {
+    match request.header().action {
+        LifecycleActionV2::ActivateReceipt => Ok((ABSENT_OUTCOME_V2, 0)),
+        LifecycleActionV2::ActivateCoordinate => Ok((
+            request
+                .coordinates()
+                .next()
+                .ok_or(Error::InvalidSupport)??
+                .outcome,
+            0,
+        )),
+        LifecycleActionV2::RetireCoordinate => {
+            let coordinate = request
+                .coordinates()
+                .next()
+                .ok_or(Error::InvalidSupport)??;
+            Ok((coordinate.outcome, coordinate.observed_lamports()?))
+        }
+        LifecycleActionV2::RetireReceipt => Ok((
+            ABSENT_OUTCOME_V2,
+            request.header().observed_receipt_lamports,
+        )),
     }
 }
 
