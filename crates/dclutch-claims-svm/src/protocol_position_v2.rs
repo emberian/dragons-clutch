@@ -27,6 +27,10 @@ pub const PROTOCOL_POSITION_CLOSE_RECEIPT_MAGIC_V2: [u8; 8] = *b"DCLPCL02";
 pub const PROTOCOL_POSITION_WIRE_VERSION_V2: u16 = 2;
 /// Claims-owned admission PDA seed domain.
 pub const PROTOCOL_POSITION_ADMISSION_SEED_V2: &[u8] = b"dclutch:protocol-position:v2";
+/// Canonical LBV2 Position PDA seed domain.
+pub const PROTOCOL_POSITION_STATE_SEED_V2: &[u8] = b"dclutch:lbv2:position";
+/// Canonical Claims-owned rational capability owner PDA seed domain.
+pub const PROTOCOL_POSITION_CLAIMS_CAPABILITY_SEED_V2: &[u8] = b"dclutch:rational-claims:v2";
 
 const ACTION_OFFSET: usize = 10;
 const OWNER_KIND_OFFSET: usize = 11;
@@ -45,7 +49,9 @@ const OBSERVED_POSITION_LAMPORTS_OFFSET: usize = 232;
 const OBSERVED_ADMISSION_LAMPORTS_OFFSET: usize = 240;
 const POSITION_RENT_PRINCIPAL_OFFSET: usize = 248;
 const ADMISSION_RENT_PRINCIPAL_OFFSET: usize = 256;
-const REQUEST_RESERVED_OFFSET: usize = 264;
+const CAPABILITY_DESCRIPTOR_OFFSET: usize = 264;
+const CAPABILITY_OUTCOME_OFFSET: usize = 296;
+const REQUEST_RESERVED_OFFSET: usize = 300;
 
 const EVIDENCE_STATUS_OFFSET: usize = 10;
 const EVIDENCE_OWNER_KIND_OFFSET: usize = 11;
@@ -59,7 +65,7 @@ const EVIDENCE_RENT_CREDIT_OFFSET: usize = 272;
 const EVIDENCE_RENT_PROGRAM_OFFSET: usize = 304;
 const EVIDENCE_CLAIMS_PROGRAM_OFFSET: usize = 336;
 const EVIDENCE_TRADING_PROGRAM_OFFSET: usize = 368;
-const EVIDENCE_POSITION_DIGEST_OFFSET: usize = 400;
+const EVIDENCE_CAPABILITY_DESCRIPTOR_OFFSET: usize = 400;
 const EVIDENCE_GENERATION_OFFSET: usize = 432;
 const EVIDENCE_OUTCOME_COUNT_OFFSET: usize = 440;
 const EVIDENCE_RESERVED_MIDDLE_OFFSET: usize = 444;
@@ -146,6 +152,8 @@ pub enum ProtocolPositionOwnerKindV2 {
     TradingRecord = 0,
     /// Ordinary user identity receiving or holding claims.
     User = 1,
+    /// Claims-owned capability PDA derived from an exact descriptor/outcome.
+    ClaimsCapability = 2,
 }
 
 impl ProtocolPositionOwnerKindV2 {
@@ -153,6 +161,7 @@ impl ProtocolPositionOwnerKindV2 {
         match value {
             0 => Ok(Self::TradingRecord),
             1 => Ok(Self::User),
+            2 => Ok(Self::ClaimsCapability),
             _ => Err(ProtocolPositionErrorV2::UnknownTag),
         }
     }
@@ -166,6 +175,85 @@ pub enum ProtocolPositionPresenceV2 {
     Vacant = 0,
     /// Both canonical PDAs are existing Claims-owned state.
     Existing = 1,
+}
+
+/// Canonical LBV2 Position PDA coordinates under the current Claims program.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProtocolPositionSeedsV2 {
+    aggregate: [u8; 32],
+    owner: [u8; 32],
+}
+
+impl ProtocolPositionSeedsV2 {
+    /// Construct the unique runtime-width Position coordinates.
+    pub fn new(aggregate: [u8; 32], owner: [u8; 32]) -> Result<Self> {
+        require_nonzero(aggregate)?;
+        require_nonzero(owner)?;
+        if aggregate == owner {
+            return Err(ProtocolPositionErrorV2::InvalidIdentity);
+        }
+        Ok(Self { aggregate, owner })
+    }
+
+    /// Borrow the sole exact Position PDA seed order, excluding its bump.
+    pub fn as_slices(&self) -> [&[u8]; 3] {
+        [
+            PROTOCOL_POSITION_STATE_SEED_V2,
+            &self.aggregate,
+            &self.owner,
+        ]
+    }
+}
+
+/// Canonical Claims-owned admission-record PDA coordinates.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProtocolPositionAdmissionSeedsV2 {
+    aggregate: [u8; 32],
+    owner: [u8; 32],
+}
+
+/// Exact Claims-owned capability owner PDA coordinates.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProtocolPositionClaimsCapabilitySeedsV2 {
+    descriptor: [u8; 32],
+    outcome: [u8; 4],
+}
+
+impl ProtocolPositionClaimsCapabilitySeedsV2 {
+    /// Construct one nonzero descriptor and runtime `u32` outcome coordinate.
+    pub fn new(descriptor: [u8; 32], outcome: u32) -> Result<Self> {
+        require_nonzero(descriptor)?;
+        Ok(Self {
+            descriptor,
+            outcome: outcome.to_le_bytes(),
+        })
+    }
+
+    /// Borrow the sole exact capability-owner PDA seed order, excluding bump.
+    pub fn as_slices(&self) -> [&[u8]; 3] {
+        [
+            PROTOCOL_POSITION_CLAIMS_CAPABILITY_SEED_V2,
+            &self.descriptor,
+            &self.outcome,
+        ]
+    }
+}
+
+impl ProtocolPositionAdmissionSeedsV2 {
+    /// Construct the unique admission-record coordinates.
+    pub fn new(aggregate: [u8; 32], owner: [u8; 32]) -> Result<Self> {
+        ProtocolPositionSeedsV2::new(aggregate, owner)?;
+        Ok(Self { aggregate, owner })
+    }
+
+    /// Borrow the sole exact admission PDA seed order, excluding its bump.
+    pub fn as_slices(&self) -> [&[u8]; 3] {
+        [
+            PROTOCOL_POSITION_ADMISSION_SEED_V2,
+            &self.aggregate,
+            &self.owner,
+        ]
+    }
 }
 
 impl ProtocolPositionPresenceV2 {
@@ -213,6 +301,10 @@ pub struct ProtocolPositionRequestV2 {
     pub position_rent_principal: u64,
     /// Current rent minimum committed as admission-record rent principal.
     pub admission_rent_principal: u64,
+    /// Claims capability descriptor; exact zero for record/user owners.
+    pub capability_descriptor: [u8; 32],
+    /// Claims capability outcome; exact zero for record/user owners.
+    pub capability_outcome: u32,
 }
 
 impl ProtocolPositionRequestV2 {
@@ -232,7 +324,7 @@ impl ProtocolPositionRequestV2 {
             return Err(ProtocolPositionErrorV2::InvalidHeader);
         }
         require_zero(input, HEADER_RESERVED_OFFSET, 3)?;
-        require_zero(input, REQUEST_RESERVED_OFFSET, 56)?;
+        require_zero(input, REQUEST_RESERVED_OFFSET, 20)?;
         Self {
             action: ProtocolPositionActionV2::decode(read_byte(input, ACTION_OFFSET)?)?,
             owner_kind: ProtocolPositionOwnerKindV2::decode(read_byte(input, OWNER_KIND_OFFSET)?)?,
@@ -250,6 +342,8 @@ impl ProtocolPositionRequestV2 {
             observed_admission_lamports: read_u64(input, OBSERVED_ADMISSION_LAMPORTS_OFFSET)?,
             position_rent_principal: read_u64(input, POSITION_RENT_PRINCIPAL_OFFSET)?,
             admission_rent_principal: read_u64(input, ADMISSION_RENT_PRINCIPAL_OFFSET)?,
+            capability_descriptor: read_array(input, CAPABILITY_DESCRIPTOR_OFFSET)?,
+            capability_outcome: read_u32(input, CAPABILITY_OUTCOME_OFFSET)?,
         }
         .new()
     }
@@ -303,6 +397,16 @@ impl ProtocolPositionRequestV2 {
         ] {
             write(&mut output, offset, &value.to_le_bytes())?;
         }
+        write(
+            &mut output,
+            CAPABILITY_DESCRIPTOR_OFFSET,
+            &self.capability_descriptor,
+        )?;
+        write(
+            &mut output,
+            CAPABILITY_OUTCOME_OFFSET,
+            &self.capability_outcome.to_le_bytes(),
+        )?;
         Ok(output)
     }
 
@@ -343,6 +447,19 @@ impl ProtocolPositionRequestV2 {
             }
             _ => return Err(ProtocolPositionErrorV2::InvalidPresence),
         }
+        match self.owner_kind {
+            ProtocolPositionOwnerKindV2::ClaimsCapability => {
+                ProtocolPositionClaimsCapabilitySeedsV2::new(
+                    self.capability_descriptor,
+                    self.capability_outcome,
+                )?;
+            }
+            ProtocolPositionOwnerKindV2::TradingRecord | ProtocolPositionOwnerKindV2::User => {
+                if self.capability_descriptor != [0; 32] || self.capability_outcome != 0 {
+                    return Err(ProtocolPositionErrorV2::NonCanonical);
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -362,8 +479,10 @@ pub struct ProtocolPositionAdmissionEvidenceV2 {
     pub claims_program: [u8; 32],
     /// Registry-selected current Trading program.
     pub trading_program: [u8; 32],
-    /// Digest of the exact initialized zero LBV2 Position bytes.
-    pub position_state_digest: [u8; 32],
+    /// Claims capability descriptor; exact zero for record/user owners.
+    pub capability_descriptor: [u8; 32],
+    /// Claims capability outcome; exact zero for record/user owners.
+    pub capability_outcome: u32,
     /// Product Runtime V2 outcome width.
     pub outcome_count: u32,
 }
@@ -395,9 +514,13 @@ impl ProtocolPositionAdmissionV2 {
             evidence.request_digest,
             evidence.claims_program,
             evidence.trading_program,
-            evidence.position_state_digest,
         ] {
             require_nonzero(identity)?;
+        }
+        if evidence.capability_descriptor != request.capability_descriptor
+            || evidence.capability_outcome != request.capability_outcome
+        {
+            return Err(ProtocolPositionErrorV2::AdmissionMismatch);
         }
         Ok(Self { request, evidence })
     }
@@ -468,8 +591,8 @@ impl ProtocolPositionAdmissionV2 {
                 self.evidence.trading_program,
             ),
             (
-                EVIDENCE_POSITION_DIGEST_OFFSET,
-                self.evidence.position_state_digest,
+                EVIDENCE_CAPABILITY_DESCRIPTOR_OFFSET,
+                self.evidence.capability_descriptor,
             ),
         ] {
             write(&mut output, offset, &value)?;
@@ -483,6 +606,11 @@ impl ProtocolPositionAdmissionV2 {
             &mut output,
             EVIDENCE_OUTCOME_COUNT_OFFSET,
             &self.evidence.outcome_count.to_le_bytes(),
+        )?;
+        write(
+            &mut output,
+            EVIDENCE_RESERVED_MIDDLE_OFFSET,
+            &self.evidence.capability_outcome.to_le_bytes(),
         )?;
         for (offset, value) in [
             (
@@ -586,9 +714,14 @@ impl ProtocolPositionAdmissionV2 {
         self.evidence.trading_program
     }
 
-    /// Return the initialized Position digest.
-    pub const fn position_state_digest(self) -> [u8; 32] {
-        self.evidence.position_state_digest
+    /// Return the Claims capability descriptor, or exact zero when inactive.
+    pub const fn capability_descriptor(self) -> [u8; 32] {
+        self.evidence.capability_descriptor
+    }
+
+    /// Return the Claims capability outcome, or exact zero when inactive.
+    pub const fn capability_outcome(self) -> u32 {
+        self.evidence.capability_outcome
     }
 
     /// Return runtime Product width.
@@ -835,7 +968,6 @@ fn decode_admission(input: &[u8], magic: [u8; 8]) -> Result<ProtocolPositionAdmi
         return Err(ProtocolPositionErrorV2::InvalidHeader);
     }
     require_zero(input, EVIDENCE_RESERVED_HEADER_OFFSET, 4)?;
-    require_zero(input, EVIDENCE_RESERVED_MIDDLE_OFFSET, 4)?;
     require_zero(input, EVIDENCE_RESERVED_TAIL_OFFSET, 8)?;
     let request = ProtocolPositionRequestV2 {
         action: ProtocolPositionActionV2::Admit,
@@ -857,6 +989,8 @@ fn decode_admission(input: &[u8], magic: [u8; 8]) -> Result<ProtocolPositionAdmi
         observed_admission_lamports: read_u64(input, EVIDENCE_ADMISSION_LAMPORTS_OFFSET)?,
         position_rent_principal: read_u64(input, EVIDENCE_POSITION_RENT_OFFSET)?,
         admission_rent_principal: read_u64(input, EVIDENCE_ADMISSION_RENT_OFFSET)?,
+        capability_descriptor: read_array(input, EVIDENCE_CAPABILITY_DESCRIPTOR_OFFSET)?,
+        capability_outcome: read_u32(input, EVIDENCE_RESERVED_MIDDLE_OFFSET)?,
     };
     if read_u64(input, EVIDENCE_MARKET_REVISION_AFTER_OFFSET)? != request.expected_market_revision
         || read_u64(input, EVIDENCE_POSITION_REVISION_OFFSET)? != 0
@@ -872,7 +1006,8 @@ fn decode_admission(input: &[u8], magic: [u8; 8]) -> Result<ProtocolPositionAdmi
             request_digest: read_array(input, EVIDENCE_REQUEST_DIGEST_OFFSET)?,
             claims_program: read_array(input, EVIDENCE_CLAIMS_PROGRAM_OFFSET)?,
             trading_program: read_array(input, EVIDENCE_TRADING_PROGRAM_OFFSET)?,
-            position_state_digest: read_array(input, EVIDENCE_POSITION_DIGEST_OFFSET)?,
+            capability_descriptor: read_array(input, EVIDENCE_CAPABILITY_DESCRIPTOR_OFFSET)?,
+            capability_outcome: read_u32(input, EVIDENCE_RESERVED_MIDDLE_OFFSET)?,
             outcome_count: read_u32(input, EVIDENCE_OUTCOME_COUNT_OFFSET)?,
         },
     )
@@ -982,6 +1117,8 @@ mod tests {
             observed_admission_lamports: 13,
             position_rent_principal: 10,
             admission_rent_principal: 11,
+            capability_descriptor: [0; 32],
+            capability_outcome: 0,
         }
         .new()
         .expect("request")
@@ -995,7 +1132,8 @@ mod tests {
             request_digest: [10; 32],
             claims_program: [11; 32],
             trading_program: [12; 32],
-            position_state_digest: [13; 32],
+            capability_descriptor: [0; 32],
+            capability_outcome: 0,
             outcome_count: 70_001,
         }
     }
@@ -1103,7 +1241,7 @@ mod tests {
             Err(ProtocolPositionErrorV2::NonCanonical)
         );
         bytes[REQUEST_RESERVED_OFFSET] = 0;
-        bytes[OWNER_KIND_OFFSET] = 2;
+        bytes[OWNER_KIND_OFFSET] = 3;
         assert_eq!(
             ProtocolPositionRequestV2::decode(&bytes),
             Err(ProtocolPositionErrorV2::UnknownTag)
@@ -1114,6 +1252,66 @@ mod tests {
         assert_eq!(
             close.to_bytes(),
             Err(ProtocolPositionErrorV2::InvalidRevision)
+        );
+    }
+
+    #[test]
+    fn claims_capability_owner_binds_descriptor_and_u32_outcome() {
+        let descriptor = [21; 32];
+        let outcome = 70_000;
+        let seeds = ProtocolPositionClaimsCapabilitySeedsV2::new(descriptor, outcome)
+            .expect("capability seeds");
+        assert_eq!(
+            seeds.as_slices(),
+            [
+                PROTOCOL_POSITION_CLAIMS_CAPABILITY_SEED_V2,
+                descriptor.as_slice(),
+                outcome.to_le_bytes().as_slice(),
+            ]
+        );
+
+        let mut capability = request(ProtocolPositionActionV2::Admit);
+        capability.owner_kind = ProtocolPositionOwnerKindV2::ClaimsCapability;
+        capability.capability_descriptor = descriptor;
+        capability.capability_outcome = outcome;
+        let bytes = capability.to_bytes().expect("capability request");
+        assert_eq!(ProtocolPositionRequestV2::decode(&bytes), Ok(capability));
+
+        let mut hidden = request(ProtocolPositionActionV2::Admit);
+        hidden.capability_descriptor = descriptor;
+        assert_eq!(
+            hidden.to_bytes(),
+            Err(ProtocolPositionErrorV2::NonCanonical)
+        );
+        capability.capability_descriptor = [0; 32];
+        assert_eq!(
+            capability.to_bytes(),
+            Err(ProtocolPositionErrorV2::InvalidIdentity)
+        );
+    }
+
+    #[test]
+    fn pure_position_seed_projection_has_no_legacy_market_rule() {
+        let aggregate = [31; 32];
+        let owner = [32; 32];
+        let position = ProtocolPositionSeedsV2::new(aggregate, owner).expect("position seeds");
+        let admission =
+            ProtocolPositionAdmissionSeedsV2::new(aggregate, owner).expect("admission seeds");
+        assert_eq!(
+            position.as_slices(),
+            [
+                PROTOCOL_POSITION_STATE_SEED_V2,
+                aggregate.as_slice(),
+                owner.as_slice(),
+            ]
+        );
+        assert_eq!(
+            admission.as_slices(),
+            [
+                PROTOCOL_POSITION_ADMISSION_SEED_V2,
+                aggregate.as_slice(),
+                owner.as_slice(),
+            ]
         );
     }
 }

@@ -27,7 +27,7 @@ use solana_program::{
 };
 
 const PROTOCOL_POSITION_MAGIC_V2: &[u8] = b"DCLPPR02";
-const PROTOCOL_POSITION_BYTES_V2: usize = 224;
+const PROTOCOL_POSITION_BYTES_V2: usize = 320;
 
 /// Stable test-wrapper refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -99,12 +99,12 @@ pub fn process_instruction(
     if protocol_position {
         let release_set = array::<32>(request, 16)?;
         let market = array::<32>(request, 48)?;
-        let child_root = array::<32>(request, 80)?;
+        let position_owner = array::<32>(request, 80)?;
         let seeds = CallerAuthoritySeedsV1::new(
             ContentId::new(release_set).map_err(|_| LiabilityBasisTestCallerError::Instruction)?,
             market,
             ExecutionRoleV1::Trading,
-            child_root,
+            position_owner,
             hash(request).to_bytes(),
         )
         .map_err(|_| LiabilityBasisTestCallerError::Instruction)?;
