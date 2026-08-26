@@ -1,10 +1,11 @@
 //! Release-selected Trading-to-Core recurring-Series Consume admission.
 //!
-//! The accepted Claims founding effect is intentionally absent from this
-//! tranche. This adapter authenticates every authority and prestate through
-//! the transactional Found write, then refuses at that exact child boundary.
-//! Solana rollback therefore restores the vacant Market byte-for-byte.
+//! This first stage authenticates every authority and Series prestate, creates
+//! the exact Founding/Prepaid Market, and returns a producer-bound
+//! acknowledgement. Custody realization, Claims founding, and final Core Open
+//! are separate typed dependency stages owned by the common Hot controller.
 
+use alloc::boxed::Box;
 use core::cmp::min;
 
 use dclutch_capability_contract::{
@@ -15,9 +16,36 @@ use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_market_core_codec::{Action, Request, Role, SeriesCoreActionV1, SeriesCoreRequestV1};
+use dclutch_claims_svm::{
+    founding_v5::{
+        ClaimsFoundingAggregateSeedsV5, ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5,
+    },
+    liability_basis_state_v2::{
+        LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+        liability_basis_vector_width_v2,
+    },
+    protocol_position_v2::{
+        PROTOCOL_POSITION_ADMISSION_BYTES_V2, ProtocolPositionAdmissionSeedsV2,
+        ProtocolPositionSeedsV2,
+    },
+};
+use dclutch_custody_contract::{
+    PROJECTED_CUSTODY_STATE_BYTES_V1, PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
+    ProjectedCustodyLockReceiptV1, ProjectedCustodyOperationV1, ProjectedCustodyPhaseV1,
+    ProjectedCustodyStateSeedsV1, ProjectedCustodyStateV1,
+};
+use dclutch_market_core_codec::{
+    Action, FoundingIntentV5, Request, Role, SERIES_FOUNDING_PERMIT_BYTES_V1,
+    SeriesCoreAckV1, SeriesCoreActionV1, SeriesCoreRequestV1, SeriesFoundingPermitSeedsV1,
+    SeriesFoundingPermitV1,
+};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_rent_contract::RentCreditV1;
+use dclutch_product_runtime_v2_svm_reader::{
+    FinalizedRecordFrameV2, ProductRuntimeFrameV3,
+    authenticate_content_addressed_product_runtime_v3,
+};
+use dclutch_token_svm::{AccountState, TokenAccount, TokenProgram};
 use dclutch_series_v3_kernel::{
     AccountKeyV3, AuthenticatedProductProjectionV2, SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3,
     SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3, SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
@@ -29,10 +57,16 @@ use dclutch_series_v3_kernel::{
     template_content_id, ticket_content_id,
 };
 use solana_program::{
-    account_info::AccountInfo, clock::Clock, hash::hash, pubkey::Pubkey, rent::Rent,
+    account_info::AccountInfo,
+    clock::Clock,
+    hash::{hash, hashv},
+    program::{invoke_signed, set_return_data},
+    pubkey::Pubkey,
+    rent::Rent,
     sysvar::SysvarSerialize,
 };
 use solana_sdk_ids::{system_program, sysvar};
+use solana_system_interface::instruction::{allocate, assign};
 
 use crate::{
     CoreSbfError,
@@ -44,6 +78,11 @@ use crate::{
 
 /// Fixed account count before the ordered FundingState prefix and Claims suffix.
 pub const SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V1: usize = FOUND_ACCOUNT_COUNT_V2 + 11;
+/// Exact evidence suffix after the ordered FundingState accounts for Found.
+pub const SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V1: usize = 15;
+/// Domain binding the Found-stage Market and one-shot permit bytes together.
+pub const SERIES_CONSUME_FOUND_WITH_PERMIT_DIGEST_DOMAIN_V1: &[u8] =
+    b"dclutch/core-series-found-permit/v1";
 const MAXIMUM_FUNDING_STATES_V1: usize = 16;
 
 struct SeriesConsumeAccounts<'accounts, 'info> {
@@ -60,6 +99,81 @@ struct SeriesConsumeAccounts<'accounts, 'info> {
     ticket_staging: &'accounts AccountInfo<'info>,
     clock: &'accounts AccountInfo<'info>,
     tail: &'accounts [AccountInfo<'info>],
+}
+
+#[derive(Clone, Copy)]
+struct SeriesFoundSuffix<'accounts, 'info> {
+    permit: &'accounts AccountInfo<'info>,
+    projected_replay: &'accounts AccountInfo<'info>,
+    hoard: &'accounts AccountInfo<'info>,
+    funding_source: &'accounts AccountInfo<'info>,
+    funding_source_replay: &'accounts AccountInfo<'info>,
+    linked_basis_raw: &'accounts AccountInfo<'info>,
+    linked_basis_staging: &'accounts AccountInfo<'info>,
+    claims_program: &'accounts AccountInfo<'info>,
+    claims_programdata: &'accounts AccountInfo<'info>,
+    custody_program: &'accounts AccountInfo<'info>,
+    custody_programdata: &'accounts AccountInfo<'info>,
+    aggregate: &'accounts AccountInfo<'info>,
+    position: &'accounts AccountInfo<'info>,
+    admission: &'accounts AccountInfo<'info>,
+    founder: &'accounts AccountInfo<'info>,
+}
+
+impl<'accounts, 'info> SeriesFoundSuffix<'accounts, 'info> {
+    fn parse(accounts: &'accounts [AccountInfo<'info>]) -> Result<Self, CoreSbfError> {
+        if accounts.len() != SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V1 {
+            return Err(CoreSbfError::AccountFrame);
+        }
+        let value = Self {
+            permit: account(accounts, 0)?,
+            projected_replay: account(accounts, 1)?,
+            hoard: account(accounts, 2)?,
+            funding_source: account(accounts, 3)?,
+            funding_source_replay: account(accounts, 4)?,
+            linked_basis_raw: account(accounts, 5)?,
+            linked_basis_staging: account(accounts, 6)?,
+            claims_program: account(accounts, 7)?,
+            claims_programdata: account(accounts, 8)?,
+            custody_program: account(accounts, 9)?,
+            custody_programdata: account(accounts, 10)?,
+            aggregate: account(accounts, 11)?,
+            position: account(accounts, 12)?,
+            admission: account(accounts, 13)?,
+            founder: account(accounts, 14)?,
+        };
+        if value.permit.is_signer
+            || !value.permit.is_writable
+            || value.permit.executable
+            || value.claims_program.is_signer
+            || value.claims_program.is_writable
+            || !value.claims_program.executable
+            || value.custody_program.is_signer
+            || value.custody_program.is_writable
+            || !value.custody_program.executable
+        {
+            return Err(CoreSbfError::AccountFrame);
+        }
+        for readonly in [
+            value.projected_replay,
+            value.hoard,
+            value.funding_source,
+            value.funding_source_replay,
+            value.linked_basis_raw,
+            value.linked_basis_staging,
+            value.claims_programdata,
+            value.custody_programdata,
+            value.aggregate,
+            value.position,
+            value.admission,
+            value.founder,
+        ] {
+            if readonly.is_signer || readonly.is_writable || readonly.executable {
+                return Err(CoreSbfError::AccountFrame);
+            }
+        }
+        Ok(value)
+    }
 }
 
 impl<'accounts, 'info> SeriesConsumeAccounts<'accounts, 'info> {
@@ -148,7 +262,29 @@ struct AdmittedSeries {
     product: AuthenticatedProductProjectionV2,
 }
 
-/// Authenticate one Series Consume and stop at the unavailable Claims effect.
+struct PermitPlan {
+    permit: Box<SeriesFoundingPermitV1>,
+}
+
+#[derive(Clone, Copy)]
+struct ProductFacts {
+    linked_basis_record: [u8; 32],
+    semantic_basis: [u8; 32],
+    claim_count: u32,
+    basis_scale: u64,
+}
+
+#[derive(Clone, Copy)]
+struct ProjectedFacts {
+    realize_request_digest: [u8; 32],
+    realize_receipt_digest: [u8; 32],
+    realize_revision: u64,
+    quantity: u64,
+    expiry_slot: u64,
+    hoard_amount: u64,
+}
+
+/// Authenticate and create the Founding Core Market for one Series Consume.
 #[inline(never)]
 pub(crate) fn process(
     program_id: &Pubkey,
@@ -156,11 +292,14 @@ pub(crate) fn process(
     request: SeriesCoreRequestV1,
     request_bytes: &[u8],
     proof_bytes: &[u8],
+    lock_receipt_bytes: &[u8],
 ) -> Result<(), solana_program::program_error::ProgramError> {
     if request.action() != SeriesCoreActionV1::Consume {
         return Err(CoreSbfError::Instruction.into());
     }
     let frame = SeriesConsumeAccounts::parse(program_id, accounts)?;
+    require_distinct(accounts)?;
+    let lock_receipt = decode_lock_receipt(lock_receipt_bytes)?;
     let rent = Rent::from_account_info(frame.found.rent).map_err(|_| CoreSbfError::Creation)?;
 
     let found_request = Request::administrative(
@@ -178,20 +317,82 @@ pub(crate) fn process(
     // This single preparation establishes the infrastructure root, immutable
     // Core release, Registry records, Runtime Product, and vacant Market plan.
     // No Market bytes are written until every Series precondition also joins.
-    let prepared = found::prepare(program_id, &frame.found, found_request, &rent)?;
+    let prepared = prepare_found(program_id, &frame.found, found_request, &rent)?;
     authenticate_trading_caller(&frame, request, request_bytes)?;
 
     let admitted = authenticate_series(&frame, request, proof_bytes, &rent, program_id, &prepared)?;
-    authenticate_root_and_replay(&frame, request, admitted, program_id)?;
-    let (_funding, _claims_suffix) =
-        split_funding_prefix(&frame, admitted, request, &rent, &prepared)?;
-    authenticate_found_coordinates(&frame, request, admitted, &rent, &prepared)?;
+    authenticate_root_and_replay(&frame, request, &admitted, program_id)?;
+    let (_funding, suffix_accounts) =
+        split_funding_prefix(&frame, &admitted, request, &rent, &prepared)?;
+    let suffix = SeriesFoundSuffix::parse(suffix_accounts)?;
+    authenticate_found_coordinates(&frame, request, &admitted, &rent, &prepared)?;
+    let permit_plan = prepare_permit(
+        program_id,
+        &frame,
+        suffix,
+        request,
+        &admitted,
+        &prepared,
+        &lock_receipt,
+        lock_receipt_bytes,
+        &rent,
+    )?;
 
-    // Found is an intentional transactional prewrite: the accepted Claims
-    // adapter authenticates the live Core Market. Returning an error at the
-    // still-missing child seam rolls the allocation, bytes, and lamports back.
-    found::apply_prepared(program_id, &frame.found, prepared)?;
-    Err(CoreSbfError::ChildCpi.into())
+    found::apply_prepared(program_id, &frame.found, *prepared)?;
+    create_permit(
+        program_id,
+        suffix,
+        frame.found.system,
+        permit_plan.permit.as_ref(),
+        &rent,
+    )?;
+    let market_bytes = frame
+        .found
+        .market
+        .try_borrow_data()
+        .map_err(|_| CoreSbfError::Commit)?;
+    let permit_bytes = suffix
+        .permit
+        .try_borrow_data()
+        .map_err(|_| CoreSbfError::Commit)?;
+    let post_resource_digest = hashv(&[
+        SERIES_CONSUME_FOUND_WITH_PERMIT_DIGEST_DOMAIN_V1,
+        &market_bytes,
+        &permit_bytes,
+    ])
+    .to_bytes();
+    drop(market_bytes);
+    drop(permit_bytes);
+    let acknowledgement = SeriesCoreAckV1::new(
+        request,
+        identity(program_id.to_bytes())?,
+        identity(hash(request_bytes).to_bytes())?,
+        identity(post_resource_digest)?,
+    );
+    let bytes = acknowledgement
+        .encode()
+        .map_err(|_| CoreSbfError::ChildAck)?;
+    set_return_data(&bytes);
+    Ok(())
+}
+
+#[inline(never)]
+fn decode_lock_receipt(
+    input: &[u8],
+) -> Result<Box<ProjectedCustodyLockReceiptV1>, CoreSbfError> {
+    Ok(Box::new(
+        ProjectedCustodyLockReceiptV1::decode(input).map_err(|_| CoreSbfError::ChildAck)?,
+    ))
+}
+
+#[inline(never)]
+fn prepare_found(
+    program_id: &Pubkey,
+    frame: &FoundAccounts<'_, '_>,
+    request: Request,
+    rent: &Rent,
+) -> Result<Box<PreparedFound>, solana_program::program_error::ProgramError> {
+    Ok(Box::new(found::prepare(program_id, frame, request, rent)?))
 }
 
 #[inline(never)]
@@ -238,7 +439,7 @@ fn authenticate_series(
     rent: &Rent,
     program_id: &Pubkey,
     prepared: &PreparedFound,
-) -> Result<AdmittedSeries, CoreSbfError> {
+) -> Result<Box<AdmittedSeries>, CoreSbfError> {
     let template_bytes = frame
         .template_raw
         .try_borrow_data()
@@ -323,11 +524,11 @@ fn authenticate_series(
     if frame.found.market.key != &expected {
         return Err(CoreSbfError::Market);
     }
-    Ok(AdmittedSeries {
+    Ok(Box::new(AdmittedSeries {
         occurrence,
         ticket,
         product,
-    })
+    }))
 }
 
 fn authenticate_series_record(
@@ -354,7 +555,7 @@ fn authenticate_series_record(
 fn authenticate_root_and_replay(
     frame: &SeriesConsumeAccounts<'_, '_>,
     request: SeriesCoreRequestV1,
-    admitted: AdmittedSeries,
+    admitted: &AdmittedSeries,
     _program_id: &Pubkey,
 ) -> Result<(), CoreSbfError> {
     if frame.root.owner != frame.trading_program.key
@@ -427,7 +628,7 @@ fn authenticate_root_and_replay(
 #[inline(never)]
 fn split_funding_prefix<'a, 'info>(
     frame: &'a SeriesConsumeAccounts<'a, 'info>,
-    admitted: AdmittedSeries,
+    admitted: &AdmittedSeries,
     request: SeriesCoreRequestV1,
     rent: &Rent,
     prepared: &PreparedFound,
@@ -460,7 +661,7 @@ fn split_funding_prefix<'a, 'info>(
 
 fn authenticate_funding(
     frame: &SeriesConsumeAccounts<'_, '_>,
-    admitted: AdmittedSeries,
+    admitted: &AdmittedSeries,
     request: SeriesCoreRequestV1,
     accounts: &[AccountInfo<'_>],
     rent: &Rent,
@@ -545,7 +746,7 @@ fn authenticate_funding(
 fn authenticate_found_coordinates(
     frame: &SeriesConsumeAccounts<'_, '_>,
     request: SeriesCoreRequestV1,
-    admitted: AdmittedSeries,
+    admitted: &AdmittedSeries,
     rent: &Rent,
     prepared: &PreparedFound,
 ) -> Result<(), CoreSbfError> {
@@ -610,6 +811,618 @@ fn authenticate_found_coordinates(
         .map_err(|_| CoreSbfError::Reference)?;
     if clock.slot < occurrence.scheduled_slot() || clock.slot > retry_through {
         return Err(CoreSbfError::Reference);
+    }
+    Ok(())
+}
+
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn prepare_permit<'accounts, 'info>(
+    program_id: &Pubkey,
+    frame: &SeriesConsumeAccounts<'accounts, 'info>,
+    suffix: SeriesFoundSuffix<'accounts, 'info>,
+    request: SeriesCoreRequestV1,
+    admitted: &AdmittedSeries,
+    prepared: &PreparedFound,
+    lock_receipt: &ProjectedCustodyLockReceiptV1,
+    lock_receipt_bytes: &[u8],
+    rent: &Rent,
+) -> Result<PermitPlan, CoreSbfError> {
+    authenticate_role(
+        frame.found.activation_cache,
+        frame.found.registry_program,
+        suffix.claims_program,
+        suffix.claims_programdata,
+        identity(frame.found.registry_program.key.to_bytes())?,
+        request.release_set().to_bytes(),
+        Role::Claims,
+    )?;
+    authenticate_role(
+        frame.found.activation_cache,
+        frame.found.registry_program,
+        suffix.custody_program,
+        suffix.custody_programdata,
+        identity(frame.found.registry_program.key.to_bytes())?,
+        request.release_set().to_bytes(),
+        Role::Custody,
+    )?;
+    let product = authenticate_product_facts(frame, suffix, prepared, rent)?;
+    let projected = authenticate_projected_facts(
+        program_id,
+        frame,
+        suffix,
+        request,
+        admitted,
+        prepared,
+        lock_receipt,
+        product,
+    )?;
+    build_permit_plan(
+        program_id,
+        frame,
+        suffix,
+        request,
+        admitted,
+        prepared,
+        lock_receipt,
+        lock_receipt_bytes,
+        product,
+        projected,
+        rent,
+    )
+}
+
+#[inline(never)]
+fn authenticate_product_facts<'accounts, 'info>(
+    frame: &SeriesConsumeAccounts<'accounts, 'info>,
+    suffix: SeriesFoundSuffix<'accounts, 'info>,
+    prepared: &PreparedFound,
+    rent: &Rent,
+) -> Result<ProductFacts, CoreSbfError> {
+    let product = authenticate_content_addressed_product_runtime_v3(
+        frame.found.registry_program.key,
+        rent,
+        ProductRuntimeFrameV3 {
+            product: FinalizedRecordFrameV2 {
+                raw: frame.found.product_raw,
+                staging: frame.found.product_staging,
+            },
+            result_domain: FinalizedRecordFrameV2 {
+                raw: frame.found.result_domain_raw,
+                staging: frame.found.result_domain_staging,
+            },
+            portfolio: FinalizedRecordFrameV2 {
+                raw: frame.found.portfolio_raw,
+                staging: frame.found.portfolio_staging,
+            },
+            linked_basis: FinalizedRecordFrameV2 {
+                raw: suffix.linked_basis_raw,
+                staging: suffix.linked_basis_staging,
+            },
+        },
+    )
+    .map_err(|_| CoreSbfError::Reference)?;
+    if product.runtime.product_record.content_digest.to_bytes() != prepared.product_record_id
+        || product.runtime.product_id.to_bytes() != prepared.product_id
+        || product.runtime.result_domain_record.content_digest.to_bytes()
+            != prepared.product.result_domain.to_bytes()
+        || product.runtime.portfolio_record.content_digest.to_bytes()
+            != prepared.product.portfolio.to_bytes()
+        || product.runtime.outcome_count != prepared.product.outcome_count
+        || product.semantic_basis_id.to_bytes() != prepared.product.liability_basis.to_bytes()
+        || product.basis_width != product.runtime.outcome_count
+        || product.payout_scale == 0
+    {
+        return Err(CoreSbfError::Reference);
+    }
+    Ok(ProductFacts {
+        linked_basis_record: product.linked_basis_record.content_digest.to_bytes(),
+        semantic_basis: product.semantic_basis_id.to_bytes(),
+        claim_count: product.runtime.outcome_count,
+        basis_scale: product.payout_scale,
+    })
+}
+
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn authenticate_projected_facts(
+    program_id: &Pubkey,
+    frame: &SeriesConsumeAccounts<'_, '_>,
+    suffix: SeriesFoundSuffix<'_, '_>,
+    request: SeriesCoreRequestV1,
+    admitted: &AdmittedSeries,
+    prepared: &PreparedFound,
+    lock_receipt: &ProjectedCustodyLockReceiptV1,
+    product: ProductFacts,
+) -> Result<ProjectedFacts, CoreSbfError> {
+    let projected = authenticate_projected_state(
+        program_id,
+        frame,
+        suffix,
+        request,
+        admitted,
+        prepared,
+        lock_receipt,
+    )?;
+    let quantity = request
+        .hoard_principal()
+        .checked_div(product.basis_scale)
+        .filter(|quantity| *quantity > 0)
+        .ok_or(CoreSbfError::Arithmetic)?;
+    if quantity
+        .checked_mul(product.basis_scale)
+        .ok_or(CoreSbfError::Arithmetic)?
+        != request.hoard_principal()
+    {
+        return Err(CoreSbfError::Funding);
+    }
+    let realize_request_digest = realize_request_digest(&projected)?;
+    let (realize_receipt_digest, realize_revision) = realize_receipt_facts(
+        &projected,
+        realize_request_digest,
+        prepared.candidate_state(),
+        request.hoard_principal(),
+        frame.found.rent_credit.key.to_bytes(),
+    )?;
+    let expiry_slot = admitted
+        .occurrence
+        .template()
+        .retry_through(admitted.occurrence.occurrence().occurrence())
+        .map_err(|_| CoreSbfError::Reference)?;
+    Ok(ProjectedFacts {
+        realize_request_digest,
+        realize_receipt_digest,
+        realize_revision,
+        quantity,
+        expiry_slot,
+        hoard_amount: request.hoard_principal(),
+    })
+}
+
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn authenticate_projected_state(
+    program_id: &Pubkey,
+    frame: &SeriesConsumeAccounts<'_, '_>,
+    suffix: SeriesFoundSuffix<'_, '_>,
+    request: SeriesCoreRequestV1,
+    admitted: &AdmittedSeries,
+    prepared: &PreparedFound,
+    lock_receipt: &ProjectedCustodyLockReceiptV1,
+) -> Result<Box<ProjectedCustodyStateV1>, CoreSbfError> {
+    let data = suffix
+        .projected_replay
+        .try_borrow_data()
+        .map_err(|_| CoreSbfError::ChildAck)?;
+    if suffix.projected_replay.owner != suffix.custody_program.key
+        || data.len() != PROJECTED_CUSTODY_STATE_BYTES_V1
+    {
+        return Err(CoreSbfError::ChildAck);
+    }
+    let projected = Box::new(
+        ProjectedCustodyStateV1::decode(&data).map_err(|_| CoreSbfError::ChildAck)?,
+    );
+    drop(data);
+    let seeds = ProjectedCustodyStateSeedsV1::from_request(projected.request);
+    let (expected, bump) =
+        Pubkey::find_program_address(&seeds.as_slices(), suffix.custody_program.key);
+    let ticket_context = admitted.ticket.content_id().to_bytes();
+    let context = hashv(&[
+        PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
+        ticket_context.as_slice(),
+    ])
+    .to_bytes();
+    let expiry = admitted
+        .occurrence
+        .template()
+        .retry_through(admitted.occurrence.occurrence().occurrence())
+        .map_err(|_| CoreSbfError::Reference)?;
+    if expected != *suffix.projected_replay.key
+        || bump != projected.bump
+        || projected.phase != ProjectedCustodyPhaseV1::HoardLocked
+        || projected.request.market != frame.found.market.key.to_bytes()
+        || projected.request.generation
+            != request
+                .market_generation()
+                .ok_or(CoreSbfError::Instruction)?
+        || projected.request.realm != prepared.realm_id
+        || projected.request.product_record != prepared.product_record_id
+        || projected.request.product != prepared.product_id
+        || projected.request.source != prepared.resolution_policy_id
+        || projected.request.release_set != request.release_set().to_bytes()
+        || projected.request.parent_capability_root != frame.root.key.to_bytes()
+        || projected.request.context_digest != context
+        || projected.request.caller_program != frame.trading_program.key.to_bytes()
+        || projected.request.core_program != program_id.to_bytes()
+        || projected.request.rent_program != frame.found.rent_program.key.to_bytes()
+        || projected.request.refund_owner != request.beneficiary().to_bytes()
+        || projected.request.rent_credit != frame.found.rent_credit.key.to_bytes()
+        || projected.request.hoard_vault != suffix.hoard.key.to_bytes()
+        || projected.request.funding_source_vault != suffix.funding_source.key.to_bytes()
+        || projected.request.funding_source_context != ticket_context
+        || projected.request.mint != prepared.collateral_mint
+        || projected.request.token_program != prepared.token_program
+        || projected.request.collateral_release != prepared.collateral_release
+        || projected.request.expiry_slot != expiry
+        || projected.locked_amount != request.hoard_principal()
+        || projected.last_request_digest != lock_receipt.request_digest
+        || projected.next_revision != lock_receipt.resulting_revision
+        || lock_receipt.market != frame.found.market.key.to_bytes()
+        || lock_receipt.release_set != request.release_set().to_bytes()
+        || lock_receipt.context_digest != context
+        || lock_receipt.source_vault != suffix.funding_source.key.to_bytes()
+        || lock_receipt.source_replay != suffix.funding_source_replay.key.to_bytes()
+        || lock_receipt.hoard_vault != suffix.hoard.key.to_bytes()
+        || lock_receipt.rent_credit != frame.found.rent_credit.key.to_bytes()
+        || lock_receipt.amount != request.hoard_principal()
+        || lock_receipt.resulting_revision != projected.next_revision
+    {
+        return Err(CoreSbfError::ChildAck);
+    }
+    for closed in [suffix.funding_source, suffix.funding_source_replay] {
+        if closed.owner != &system_program::ID
+            || closed.lamports() != 0
+            || !closed.data_is_empty()
+            || closed.executable
+        {
+            return Err(CoreSbfError::ChildAck);
+        }
+    }
+    if TokenProgram::parse(suffix.hoard.owner.to_bytes()).map_err(|_| CoreSbfError::ChildAck)?
+        .program_id()
+        != prepared.token_program
+    {
+        return Err(CoreSbfError::ChildAck);
+    }
+    let hoard_data = suffix
+        .hoard
+        .try_borrow_data()
+        .map_err(|_| CoreSbfError::ChildAck)?;
+    let hoard = TokenAccount::parse(&hoard_data).map_err(|_| CoreSbfError::ChildAck)?;
+    if hoard.mint != prepared.collateral_mint
+        || hoard.amount != request.hoard_principal()
+        || hoard.state != AccountState::Initialized
+        || !hoard.delegate.is_none()
+        || hoard.delegated_amount != 0
+        || !hoard.native_reserve.is_none()
+        || !hoard.close_authority.is_none()
+    {
+        return Err(CoreSbfError::ChildAck);
+    }
+    Ok(projected)
+}
+
+fn canonical_realize_request(
+    projected: &ProjectedCustodyStateV1,
+) -> Result<dclutch_custody_contract::ProjectedCustodyRequestV1, CoreSbfError> {
+    let mut request = projected.request;
+    request.operation = ProjectedCustodyOperationV1::RealizeAndClose;
+    request.expected_revision = projected.next_revision;
+    request.resulting_revision = projected
+        .next_revision
+        .checked_add(1)
+        .ok_or(CoreSbfError::Arithmetic)?;
+    request.amount = projected.locked_amount;
+    Ok(request)
+}
+
+#[inline(never)]
+fn realize_request_digest(
+    projected: &ProjectedCustodyStateV1,
+) -> Result<[u8; 32], CoreSbfError> {
+    Ok(hash(
+        &canonical_realize_request(projected)?
+            .encode()
+            .map_err(|_| CoreSbfError::ChildAck)?,
+    )
+    .to_bytes())
+}
+
+#[inline(never)]
+fn realize_receipt_facts(
+    projected: &ProjectedCustodyStateV1,
+    request_digest: [u8; 32],
+    market: dclutch_market_core_codec::CoreState,
+    hoard_amount: u64,
+    rent_credit: [u8; 32],
+) -> Result<([u8; 32], u64), CoreSbfError> {
+    let market_digest = hash(&market.encode().map_err(|_| CoreSbfError::Transition)?).to_bytes();
+    let receipt = projected
+        .realize_and_close(
+            canonical_realize_request(projected)?,
+            request_digest,
+            market,
+            market_digest,
+            hoard_amount,
+            rent_credit,
+        )
+        .map_err(|_| CoreSbfError::ChildAck)?;
+    Ok((
+        hash(&receipt.encode().map_err(|_| CoreSbfError::ChildAck)?).to_bytes(),
+        receipt.resulting_revision,
+    ))
+}
+
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn build_permit_plan(
+    program_id: &Pubkey,
+    frame: &SeriesConsumeAccounts<'_, '_>,
+    suffix: SeriesFoundSuffix<'_, '_>,
+    request: SeriesCoreRequestV1,
+    admitted: &AdmittedSeries,
+    prepared: &PreparedFound,
+    lock_receipt: &ProjectedCustodyLockReceiptV1,
+    lock_receipt_bytes: &[u8],
+    product: ProductFacts,
+    projected: ProjectedFacts,
+    rent: &Rent,
+) -> Result<PermitPlan, CoreSbfError> {
+    let ticket_context = admitted.ticket.content_id().to_bytes();
+    let permit_seeds = SeriesFoundingPermitSeedsV1::new(
+        identity(request.release_set().to_bytes())?,
+        identity(frame.found.market.key.to_bytes())?,
+        identity(ticket_context)?,
+    );
+    let (expected_permit, bump) =
+        Pubkey::find_program_address(&permit_seeds.as_slices(), program_id);
+    if suffix.permit.key != &expected_permit
+        || suffix.permit.owner != &system_program::ID
+        || !suffix.permit.data_is_empty()
+        || suffix.permit.lamports() < rent.minimum_balance(SERIES_FOUNDING_PERMIT_BYTES_V1)
+        || suffix.founder.key.to_bytes()
+            != request
+                .founder()
+                .ok_or(CoreSbfError::Instruction)?
+                .to_bytes()
+    {
+        return Err(CoreSbfError::Creation);
+    }
+    let intent = build_intent(
+        bump,
+        frame,
+        suffix,
+        request,
+        prepared,
+        ticket_context,
+        product,
+        projected,
+    )?;
+    let intent_digest = digest_intent(&intent)?;
+    let claims_request_digest = build_claims_request_digest(
+        frame,
+        suffix,
+        request,
+        prepared,
+        lock_receipt,
+        lock_receipt_bytes,
+        product,
+        projected,
+        intent_digest,
+        rent,
+    )?;
+    finish_permit(&intent, intent_digest, claims_request_digest)
+}
+
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn build_intent(
+    bump: u8,
+    frame: &SeriesConsumeAccounts<'_, '_>,
+    suffix: SeriesFoundSuffix<'_, '_>,
+    request: SeriesCoreRequestV1,
+    prepared: &PreparedFound,
+    ticket_context: [u8; 32],
+    product: ProductFacts,
+    projected: ProjectedFacts,
+) -> Result<Box<FoundingIntentV5>, CoreSbfError> {
+    Ok(Box::new(
+        FoundingIntentV5::new(
+            bump,
+            identity(request.release_set().to_bytes())?,
+            identity(frame.found.market.key.to_bytes())?,
+            identity(prepared.product_record_id)?,
+            identity(prepared.resolution_policy_id)?,
+            identity(suffix.founder.key.to_bytes())?,
+            identity(ticket_context)?,
+            identity(frame.root.key.to_bytes())?,
+            identity(suffix.projected_replay.key.to_bytes())?,
+            identity(suffix.funding_source.key.to_bytes())?,
+            identity(suffix.hoard.key.to_bytes())?,
+            identity(projected.realize_request_digest)?,
+            identity(projected.realize_receipt_digest)?,
+            identity(frame.trading_program.key.to_bytes())?,
+            identity(suffix.claims_program.key.to_bytes())?,
+            identity(frame.found.rent_credit.key.to_bytes())?,
+            request
+                .market_generation()
+                .ok_or(CoreSbfError::Instruction)?,
+            projected.quantity,
+            product.basis_scale,
+            projected.expiry_slot,
+            projected.realize_revision,
+            1,
+        )
+        .map_err(|_| CoreSbfError::Reference)?,
+    ))
+}
+
+#[inline(never)]
+fn digest_intent(intent: &FoundingIntentV5) -> Result<[u8; 32], CoreSbfError> {
+    Ok(hash(&intent.encode().map_err(|_| CoreSbfError::Reference)?).to_bytes())
+}
+
+#[inline(never)]
+fn finish_permit(
+    intent: &FoundingIntentV5,
+    intent_digest: [u8; 32],
+    request_digest: [u8; 32],
+) -> Result<PermitPlan, CoreSbfError> {
+    Ok(PermitPlan {
+        permit: Box::new(
+            SeriesFoundingPermitV1::new(
+                *intent,
+                identity(intent_digest)?,
+                identity(request_digest)?,
+            )
+            .map_err(|_| CoreSbfError::Reference)?,
+        ),
+    })
+}
+
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn build_claims_request_digest(
+    frame: &SeriesConsumeAccounts<'_, '_>,
+    suffix: SeriesFoundSuffix<'_, '_>,
+    request: SeriesCoreRequestV1,
+    prepared: &PreparedFound,
+    lock_receipt: &ProjectedCustodyLockReceiptV1,
+    lock_receipt_bytes: &[u8],
+    product: ProductFacts,
+    projected: ProjectedFacts,
+    intent_digest: [u8; 32],
+    rent: &Rent,
+) -> Result<[u8; 32], CoreSbfError> {
+    let aggregate_seeds = ClaimsFoundingAggregateSeedsV5::new(frame.found.market.key.to_bytes())
+        .map_err(|_| CoreSbfError::Reference)?;
+    let expected_aggregate =
+        Pubkey::find_program_address(&aggregate_seeds.as_slices(), suffix.claims_program.key).0;
+    let position_seeds = ProtocolPositionSeedsV2::new(
+        expected_aggregate.to_bytes(),
+        suffix.founder.key.to_bytes(),
+    )
+    .map_err(|_| CoreSbfError::Reference)?;
+    let expected_position =
+        Pubkey::find_program_address(&position_seeds.as_slices(), suffix.claims_program.key).0;
+    let admission_seeds = ProtocolPositionAdmissionSeedsV2::new(
+        expected_aggregate.to_bytes(),
+        suffix.founder.key.to_bytes(),
+    )
+    .map_err(|_| CoreSbfError::Reference)?;
+    let expected_admission =
+        Pubkey::find_program_address(&admission_seeds.as_slices(), suffix.claims_program.key).0;
+    if suffix.aggregate.key != &expected_aggregate
+        || suffix.position.key != &expected_position
+        || suffix.admission.key != &expected_admission
+    {
+        return Err(CoreSbfError::Reference);
+    }
+    for vacant in [suffix.aggregate, suffix.position, suffix.admission] {
+        if vacant.owner != &system_program::ID || !vacant.data_is_empty() || vacant.executable {
+            return Err(CoreSbfError::Creation);
+        }
+    }
+    let aggregate_width = liability_basis_vector_width_v2(
+        LIABILITY_BASIS_MARKET_HEADER_BYTES_V2,
+        product.claim_count,
+    )
+    .map_err(|_| CoreSbfError::Arithmetic)?;
+    let position_width = liability_basis_vector_width_v2(
+        LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+        product.claim_count,
+    )
+    .map_err(|_| CoreSbfError::Arithmetic)?;
+    let claims_request = ClaimsFoundingRequestV5::new(ClaimsFoundingRequestInputV5 {
+        release_set: request.release_set().to_bytes(),
+        market: frame.found.market.key.to_bytes(),
+        product_record_digest: prepared.product_record_id,
+        product_instance_id: prepared.product_id,
+        linked_basis_record_digest: product.linked_basis_record,
+        semantic_basis_id: product.semantic_basis,
+        founder: suffix.founder.key.to_bytes(),
+        founding_intent_digest: intent_digest,
+        aggregate: suffix.aggregate.key.to_bytes(),
+        position: suffix.position.key.to_bytes(),
+        admission: suffix.admission.key.to_bytes(),
+        hoard: suffix.hoard.key.to_bytes(),
+        rent_credit: frame.found.rent_credit.key.to_bytes(),
+        rent_program: frame.found.rent_program.key.to_bytes(),
+        claims_program: suffix.claims_program.key.to_bytes(),
+        trading_program: frame.trading_program.key.to_bytes(),
+        funding_source: suffix.funding_source.key.to_bytes(),
+        custody_replay: suffix.projected_replay.key.to_bytes(),
+        custody_request_digest: lock_receipt.request_digest,
+        custody_receipt_digest: hash(lock_receipt_bytes).to_bytes(),
+        generation: request
+            .market_generation()
+            .ok_or(CoreSbfError::Instruction)?,
+        claim_count: product.claim_count,
+        quantity: projected.quantity,
+        basis_scale: product.basis_scale,
+        pre_source_amount: request.hoard_principal(),
+        post_source_amount: 0,
+        pre_hoard_amount: 0,
+        post_hoard_amount: projected.hoard_amount,
+        pre_custody_revision: 0,
+        post_custody_revision: 1,
+        aggregate_rent_principal: rent.minimum_balance(aggregate_width),
+        position_rent_principal: rent.minimum_balance(position_width),
+        admission_rent_principal: rent.minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2),
+        observed_aggregate_lamports: suffix.aggregate.lamports(),
+        observed_position_lamports: suffix.position.lamports(),
+        observed_admission_lamports: suffix.admission.lamports(),
+        pre_aggregate_revision: 0,
+        post_aggregate_revision: 1,
+        pre_position_revision: 0,
+        post_position_revision: 1,
+    })
+    .map_err(|_| CoreSbfError::Reference)?;
+    Ok(hash(&claims_request.to_bytes()).to_bytes())
+}
+
+#[inline(never)]
+fn create_permit<'accounts, 'info>(
+    program_id: &Pubkey,
+    suffix: SeriesFoundSuffix<'accounts, 'info>,
+    system: &'accounts AccountInfo<'info>,
+    permit: &SeriesFoundingPermitV1,
+    rent: &Rent,
+) -> Result<(), CoreSbfError> {
+    if suffix.permit.owner != &system_program::ID
+        || !suffix.permit.data_is_empty()
+        || suffix.permit.lamports() < rent.minimum_balance(SERIES_FOUNDING_PERMIT_BYTES_V1)
+    {
+        return Err(CoreSbfError::Creation);
+    }
+    let seeds = permit.seeds();
+    let base = seeds.as_slices();
+    let bump = [permit.intent().bump()];
+    let signer = [base[0], base[1], base[2], base[3], bump.as_slice()];
+    for instruction in [
+        allocate(
+            suffix.permit.key,
+            u64::try_from(SERIES_FOUNDING_PERMIT_BYTES_V1)
+                .map_err(|_| CoreSbfError::Arithmetic)?,
+        ),
+        assign(suffix.permit.key, program_id),
+    ] {
+        invoke_signed(
+            &instruction,
+            &[suffix.permit.clone(), system.clone()],
+            &[&signer],
+        )
+        .map_err(|_| CoreSbfError::Creation)?;
+    }
+    let encoded = permit.encode().map_err(|_| CoreSbfError::Commit)?;
+    {
+        let mut data = suffix
+            .permit
+            .try_borrow_mut_data()
+            .map_err(|_| CoreSbfError::Commit)?;
+        if data.len() != SERIES_FOUNDING_PERMIT_BYTES_V1 {
+            return Err(CoreSbfError::Commit);
+        }
+        data.copy_from_slice(&encoded);
+    }
+    let data = suffix
+        .permit
+        .try_borrow_data()
+        .map_err(|_| CoreSbfError::Commit)?;
+    if suffix.permit.owner != program_id
+        || SeriesFoundingPermitV1::decode(&data) != Ok(*permit)
+    {
+        return Err(CoreSbfError::Commit);
     }
     Ok(())
 }

@@ -11,6 +11,12 @@
 
 extern crate alloc;
 
+use dclutch_claims_svm::founding_v5::{
+    CLAIMS_FOUNDING_RECEIPT_BYTES_V5, CLAIMS_FOUNDING_RECEIPT_MAGIC_V5,
+};
+use dclutch_custody_contract::{
+    PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1, PROJECTED_CUSTODY_LOCK_RECEIPT_MAGIC_V1,
+};
 use dclutch_market_core_codec::{
     Action, CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1, CORE_EFFECT_ENVELOPE_BYTES_V1,
     CapabilityFundingHeaderV1, CoreEffectEnvelopeV1, REQUEST_BYTES, Request,
@@ -39,10 +45,14 @@ mod records;
 mod release;
 mod resolution;
 mod series_consume;
+mod series_open;
 mod series_permit_expiry;
 
 pub use frame::{FOUND_ACCOUNT_COUNT_V2, INITIALIZE_INFRASTRUCTURE_ACCOUNT_COUNT_V1};
-pub use series_consume::SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V1;
+pub use series_consume::{
+    SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V1, SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V1,
+};
+pub use series_open::SERIES_OPEN_ACCOUNT_COUNT_V1;
 pub use series_permit_expiry::SERIES_PERMIT_EXPIRY_ACCOUNT_COUNT_V1;
 
 /// Exact instruction prefix shared by all Core actions.
@@ -133,12 +143,57 @@ pub fn process_instruction(
         let request_bytes = instruction_data
             .get(..SERIES_CORE_REQUEST_BYTES_V1)
             .ok_or(CoreSbfError::Instruction)?;
-        let proof_bytes = instruction_data
-            .get(SERIES_CORE_REQUEST_BYTES_V1..)
-            .ok_or(CoreSbfError::Instruction)?;
         let request =
             SeriesCoreRequestV1::decode(request_bytes).map_err(|_| CoreSbfError::Instruction)?;
-        return series_consume::process(program_id, accounts, request, request_bytes, proof_bytes);
+        if let Some(dependency_start) = instruction_data
+            .len()
+            .checked_sub(CLAIMS_FOUNDING_RECEIPT_BYTES_V5)
+            .filter(|start| *start >= SERIES_CORE_REQUEST_BYTES_V1)
+        {
+            let claims_receipt_bytes = instruction_data
+                .get(dependency_start..)
+                .ok_or(CoreSbfError::Instruction)?;
+            if claims_receipt_bytes.get(..CLAIMS_FOUNDING_RECEIPT_MAGIC_V5.len())
+                == Some(CLAIMS_FOUNDING_RECEIPT_MAGIC_V5.as_slice())
+            {
+                let proof_bytes = instruction_data
+                    .get(SERIES_CORE_REQUEST_BYTES_V1..dependency_start)
+                    .ok_or(CoreSbfError::Instruction)?;
+                return series_open::process(
+                    program_id,
+                    accounts,
+                    request,
+                    request_bytes,
+                    proof_bytes,
+                    claims_receipt_bytes,
+                );
+            }
+        }
+        if let Some(dependency_start) = instruction_data
+            .len()
+            .checked_sub(PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1)
+            .filter(|start| *start >= SERIES_CORE_REQUEST_BYTES_V1)
+        {
+            let lock_receipt_bytes = instruction_data
+                .get(dependency_start..)
+                .ok_or(CoreSbfError::Instruction)?;
+            if lock_receipt_bytes.get(..PROJECTED_CUSTODY_LOCK_RECEIPT_MAGIC_V1.len())
+                == Some(PROJECTED_CUSTODY_LOCK_RECEIPT_MAGIC_V1.as_slice())
+            {
+                let proof_bytes = instruction_data
+                    .get(SERIES_CORE_REQUEST_BYTES_V1..dependency_start)
+                    .ok_or(CoreSbfError::Instruction)?;
+                return series_consume::process(
+                    program_id,
+                    accounts,
+                    request,
+                    request_bytes,
+                    proof_bytes,
+                    lock_receipt_bytes,
+                );
+            }
+        }
+        return Err(CoreSbfError::Instruction.into());
     }
     if instruction_data.len() == PROJECT_FOUND_REQUEST_BYTES_V1
         && instruction_data.get(..PROJECT_FOUND_REQUEST_MAGIC_V1.len())

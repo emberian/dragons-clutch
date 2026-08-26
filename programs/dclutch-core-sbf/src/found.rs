@@ -74,6 +74,13 @@ pub(crate) struct PreparedFound {
     pub(crate) release_set_id: [u8; 32],
 }
 
+impl PreparedFound {
+    /// Candidate Core state authenticated by [`prepare`] but not yet written.
+    pub(crate) const fn candidate_state(&self) -> CoreState {
+        self.creation.state
+    }
+}
+
 /// Authenticate the exact Found31 authority graph and return its future
 /// Market projection without acquiring any writable account or applying the
 /// prepared creation plan.
