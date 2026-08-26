@@ -72,6 +72,17 @@ const ROUTE_OPEN: u16 = SERIES_CONSUME_OPEN_ROUTE_V4;
 
 const LOCK_ACCOUNT_START: u16 = SERIES_CONSUME_INJECTED_ACCOUNT_COUNT_V4;
 const FOUND_ACCOUNT_START: u16 = LOCK_ACCOUNT_START + SERIES_CONSUME_LOCK_ACCOUNT_COUNT_V3;
+/// Fixed Core Found prefix before the ordered FundingState span.
+pub const SERIES_CONSUME_CORE_FOUND_PREFIX_ACCOUNT_COUNT_V4: u16 = 42;
+/// Exact logical coordinate where the ordered FundingState span is inserted.
+///
+/// The span is inside route 1: five injected accounts and route 0 precede the
+/// Core frame, then Core's fixed 42-account prefix precedes Funding.  It is not
+/// appended after Core's 15-account evidence suffix.
+pub const SERIES_CONSUME_FUNDING_ACCOUNT_START_V4: u16 =
+    FOUND_ACCOUNT_START + SERIES_CONSUME_CORE_FOUND_PREFIX_ACCOUNT_COUNT_V4;
+/// Fixed Core Found evidence suffix after the ordered FundingState span.
+pub const SERIES_CONSUME_CORE_FOUND_SUFFIX_ACCOUNT_COUNT_V4: u16 = 15;
 const REALIZE_ACCOUNT_START_BEFORE_FUNDING: u16 =
     FOUND_ACCOUNT_START + SERIES_CONSUME_CORE_FOUND_ACCOUNT_BASE_V3;
 const CLAIMS_ACCOUNT_START_BEFORE_FUNDING: u16 =
@@ -85,6 +96,16 @@ const OPEN_ACCOUNT_START_BEFORE_FUNDING: u16 =
 /// successor that owns their privilege subsets.
 pub const SERIES_CONSUME_LOGICAL_ACCOUNT_BASE_V4: u16 =
     OPEN_ACCOUNT_START_BEFORE_FUNDING + SERIES_CONSUME_CORE_OPEN_ACCOUNT_COUNT_V3;
+/// Dynamic AccountProfile prefix before the ordered FundingState span.
+pub const SERIES_CONSUME_ACCOUNT_PROFILE_PREFIX_V4: u16 = SERIES_CONSUME_FUNDING_ACCOUNT_START_V4;
+/// Dynamic AccountProfile suffix after the ordered FundingState span.
+pub const SERIES_CONSUME_ACCOUNT_PROFILE_SUFFIX_V4: u16 =
+    SERIES_CONSUME_LOGICAL_ACCOUNT_BASE_V4 - SERIES_CONSUME_ACCOUNT_PROFILE_PREFIX_V4;
+const _: () = assert!(
+    SERIES_CONSUME_CORE_FOUND_ACCOUNT_BASE_V3
+        == SERIES_CONSUME_CORE_FOUND_PREFIX_ACCOUNT_COUNT_V4
+            + SERIES_CONSUME_CORE_FOUND_SUFFIX_ACCOUNT_COUNT_V4
+);
 const ALLOWED_FUNDING_COUNTS: u64 =
     ((1_u64 << (SERIES_CONSUME_MAXIMUM_FUNDING_STATES_V3 + 1)) - 1) & !1;
 const SERIES_ACTION_HEADER_OFFSET_V4: u32 = 128;
@@ -651,6 +672,15 @@ mod tests {
             Ok(())
         );
         assert_eq!(series_consume_logical_account_count_v4(7), Some(164));
+        assert_eq!(SERIES_CONSUME_ACCOUNT_PROFILE_PREFIX_V4, 61);
+        assert_eq!(SERIES_CONSUME_FUNDING_ACCOUNT_START_V4, 61);
+        assert_eq!(SERIES_CONSUME_ACCOUNT_PROFILE_SUFFIX_V4, 96);
+        assert_eq!(
+            SERIES_CONSUME_CORE_FOUND_PREFIX_ACCOUNT_COUNT_V4
+                + 7
+                + SERIES_CONSUME_CORE_FOUND_SUFFIX_ACCOUNT_COUNT_V4,
+            64
+        );
         assert_eq!(
             series_consume_route_account_start_v4(ROUTE_LOCK, 7),
             Some(5)
