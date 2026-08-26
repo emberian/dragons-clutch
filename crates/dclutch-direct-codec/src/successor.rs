@@ -84,6 +84,8 @@ impl DirectRootStateLayoutV1 {
     pub const PHASE: usize = generated::DIRECT_ROOT_PHASE_OFFSET_V1;
     /// Canonical zero padding after phase (five bytes).
     pub const RESERVED: usize = generated::DIRECT_ROOT_RESERVED_OFFSET_V1;
+    /// Exact width of the canonical-zero reserved range.
+    pub const RESERVED_BYTES: usize = 5;
     /// Exact number of live maker replay roots (`u64`, little-endian).
     pub const OPEN_MAKER_ROOT_COUNT: usize = generated::DIRECT_ROOT_OPEN_MAKER_COUNT_OFFSET_V1;
 
@@ -106,6 +108,8 @@ impl DirectMakerReplayLayoutV1 {
     pub const BUMP: usize = generated::DIRECT_MAKER_BUMP_OFFSET_V1;
     /// Canonical zero padding after the bump (five bytes).
     pub const RESERVED: usize = generated::DIRECT_MAKER_RESERVED_OFFSET_V1;
+    /// Exact width of the canonical-zero reserved range.
+    pub const RESERVED_BYTES: usize = 5;
     /// Immutable Core Market identity.
     pub const MARKET: usize = generated::DIRECT_MAKER_MARKET_OFFSET_V1;
     /// Immutable Market generation (`u64`, little-endian).
@@ -127,6 +131,51 @@ impl DirectMakerReplayLayoutV1 {
     pub const MAGIC_WORD: u64 = u64::from_le_bytes(generated::DIRECT_MAKER_MAGIC_V1);
     /// Exact encoded ABI version used only by typed state initialization.
     pub const ABI_VERSION: u16 = generated::DIRECT_SUCCESSOR_ABI_VERSION_V1;
+}
+
+/// Canonical projection/write coordinates of [`DirectRegisteredIntentV2`].
+///
+/// Profile emitters use this semantic-owner surface rather than copying the
+/// generated ABI offsets. A live record must authenticate the magic, version,
+/// and complete reserved range before any Transition or Effect can write its
+/// mutable economic fields.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectRegisteredRecordLayoutV2;
+
+impl DirectRegisteredRecordLayoutV2 {
+    /// Domain-separated registered-record magic (`u64` bytes).
+    pub const MAGIC: usize = generated::DIRECT_RECORD_MAGIC_OFFSET_V2;
+    /// Registered-record ABI version (`u16`, little-endian).
+    pub const VERSION: usize = generated::DIRECT_RECORD_VERSION_OFFSET_V2;
+    /// Canonical PDA bump (`u8`).
+    pub const BUMP: usize = generated::DIRECT_RECORD_BUMP_OFFSET_V2;
+    /// Canonical-zero padding after the bump.
+    pub const RESERVED: usize = generated::DIRECT_RECORD_RESERVED_OFFSET_V2;
+    /// Exact width of the canonical-zero reserved range.
+    pub const RESERVED_BYTES: usize = 5;
+    /// Immutable maker identity.
+    pub const MAKER: usize = generated::DIRECT_RECORD_MAKER_OFFSET_V2;
+    /// Sole persisted [`CompactIntentV2`] bytes.
+    pub const INTENT: usize = generated::DIRECT_RECORD_INTENT_OFFSET_V2;
+    /// Aggregate filled quantity (`u64`, little-endian).
+    pub const FILLED: usize = generated::DIRECT_RECORD_FILLED_OFFSET_V2;
+    /// Remaining Sell claim reserve (`u64`, little-endian).
+    pub const RESERVED_CLAIMS: usize = generated::DIRECT_RECORD_RESERVED_CLAIMS_OFFSET_V2;
+    /// Remaining Buy collateral reserve (`u64`, little-endian).
+    pub const RESERVED_COLLATERAL: usize = generated::DIRECT_RECORD_RESERVED_COLLATERAL_OFFSET_V2;
+    /// Aggregate gross collateral (`u64`, little-endian).
+    pub const CUMULATIVE_GROSS: usize = generated::DIRECT_RECORD_CUMULATIVE_GROSS_OFFSET_V2;
+    /// Aggregate difference-of-floors fee (`u64`, little-endian).
+    pub const CUMULATIVE_FEE: usize = generated::DIRECT_RECORD_CUMULATIVE_FEE_OFFSET_V2;
+    /// Immutable RentCredit beneficiary identity.
+    pub const RENT_OWNER: usize = generated::DIRECT_RECORD_RENT_OWNER_OFFSET_V2;
+    /// Historical record-rent principal (`u64`, little-endian).
+    pub const RENT_PRINCIPAL: usize = generated::DIRECT_RECORD_RENT_PRINCIPAL_OFFSET_V2;
+
+    /// Exact encoded magic word used by typed profile validation and creation.
+    pub const MAGIC_WORD: u64 = u64::from_le_bytes(generated::DIRECT_RECORD_MAGIC_V2);
+    /// Exact registered-record ABI version.
+    pub const ABI_VERSION: u16 = generated::DIRECT_REGISTERED_RECORD_VERSION_V2;
 }
 
 /// Finalized-record schema label for [`DirectExecutionConfigV1`].
@@ -2597,12 +2646,29 @@ mod tests {
         assert_eq!(root.phase(), DirectRootPhaseV1::Open);
         assert_eq!(root.open_maker_root_count(), 3);
         assert_eq!(root.encode(), generated::DIRECT_ROOT_EXAMPLE_V1);
+        assert_eq!(DirectRootStateLayoutV1::RESERVED_BYTES, 5);
+        assert_eq!(
+            generated::DIRECT_ROOT_EXAMPLE_V1.get(
+                DirectRootStateLayoutV1::RESERVED
+                    ..DirectRootStateLayoutV1::RESERVED + DirectRootStateLayoutV1::RESERVED_BYTES
+            ),
+            Some([0_u8; 5].as_slice())
+        );
 
         let maker = MakerReplayRootV1::decode(&generated::DIRECT_MAKER_EXAMPLE_V1).expect("maker");
         assert_eq!(maker.next_nonce(), 9);
         assert_eq!(maker.live_count(), 2);
         assert_eq!(maker.minimum_live_nonce(), 5);
         assert_eq!(maker.rent_principal(), 2_000_000);
+        assert_eq!(DirectMakerReplayLayoutV1::RESERVED_BYTES, 5);
+        assert_eq!(
+            generated::DIRECT_MAKER_EXAMPLE_V1.get(
+                DirectMakerReplayLayoutV1::RESERVED
+                    ..DirectMakerReplayLayoutV1::RESERVED
+                        + DirectMakerReplayLayoutV1::RESERVED_BYTES
+            ),
+            Some([0_u8; 5].as_slice())
+        );
         assert_eq!(
             maker.encode().expect("encode"),
             generated::DIRECT_MAKER_EXAMPLE_V1
@@ -2616,6 +2682,36 @@ mod tests {
         assert_eq!(record.filled(), 3);
         assert_eq!(record.reserved_claims(), 4_997);
         assert_eq!(record.cumulative_gross(), 1);
+        assert_eq!(DirectRegisteredRecordLayoutV2::RESERVED_BYTES, 5);
+        assert_eq!(
+            generated::DIRECT_RECORD_EXAMPLE_V2.get(
+                DirectRegisteredRecordLayoutV2::MAGIC..DirectRegisteredRecordLayoutV2::MAGIC + 8
+            ),
+            Some(
+                DirectRegisteredRecordLayoutV2::MAGIC_WORD
+                    .to_le_bytes()
+                    .as_slice()
+            )
+        );
+        assert_eq!(
+            generated::DIRECT_RECORD_EXAMPLE_V2.get(
+                DirectRegisteredRecordLayoutV2::VERSION
+                    ..DirectRegisteredRecordLayoutV2::VERSION + 2
+            ),
+            Some(
+                DirectRegisteredRecordLayoutV2::ABI_VERSION
+                    .to_le_bytes()
+                    .as_slice()
+            )
+        );
+        assert_eq!(
+            generated::DIRECT_RECORD_EXAMPLE_V2.get(
+                DirectRegisteredRecordLayoutV2::RESERVED
+                    ..DirectRegisteredRecordLayoutV2::RESERVED
+                        + DirectRegisteredRecordLayoutV2::RESERVED_BYTES
+            ),
+            Some([0_u8; 5].as_slice())
+        );
         assert_eq!(
             record.encode_selected(config, 2).expect("record encode"),
             generated::DIRECT_RECORD_EXAMPLE_V2
