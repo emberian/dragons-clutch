@@ -72,6 +72,7 @@ use super::{
     },
     v3_trade::{
         DEALER_SCENARIO_TRADE_ACTION_V3, DEALER_SCENARIO_TRADE_CLAIMS_PACKET_BYTES_OFFSET_V3,
+        DEALER_SCENARIO_TRADE_DEALER_EVIDENCE_COUNT_OFFSET_V3,
         DEALER_SCENARIO_TRADE_HEADER_BYTES_V3, DEALER_SCENARIO_TRADE_MAGIC_V3,
         DEALER_SCENARIO_TRADE_POSITION_COUNT_OFFSET_V3, DEALER_SCENARIO_TRADE_SELECTOR_OFFSET_V3,
         DEALER_SCENARIO_TRADE_VERSION_V3,
@@ -113,8 +114,12 @@ pub const DEALER_SCENARIO_ROUTE_SPAN_SCALAR_BASE_V4: u16 = 7;
 pub const DEALER_SCENARIO_CUSTODY_SCALAR_BASE_V4: u16 = 13;
 /// Exact canonical Custody request scalar stride.
 pub const DEALER_SCENARIO_CUSTODY_SCALAR_STRIDE_V4: u16 = 14;
+/// Request-projected trailing Dealer Position evidence width, exactly `2 - P`.
+pub const DEALER_SCENARIO_DEALER_EVIDENCE_COUNT_SCALAR_V4: u16 = 97;
+/// Transition scratch proving `P + dealer_evidence_count == 2`.
+pub const DEALER_SCENARIO_POSITION_GEOMETRY_SUM_SCALAR_V4: u16 = 98;
 /// Exact common scalar-bank width.
-pub const DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4: u16 = 97;
+pub const DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4: u16 = 99;
 /// Parent digest precedes six exact 19-identity Custody blocks, the trusted
 /// current-Trading owner, and the request-bound obligation key.
 pub const DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4: u16 = 117;
@@ -140,13 +145,13 @@ const DEALER_SCENARIO_EFFECT_OPERATION_COUNT_V4: usize = 6
     + 2 * 7
     + 2;
 
-const REQUEST_PROFILE_OPERATIONS_V4: usize = 9;
+const REQUEST_PROFILE_OPERATIONS_V4: usize = 10;
 const REQUEST_PROFILE_V1_BYTES_V4: usize = dclutch_request_profile_contract::HEADER_BYTES
     + REQUEST_PROFILE_OPERATIONS_V4 * dclutch_request_profile_contract::OPERATION_BYTES;
 /// Exact selector-9 RequestProfile V3 bytes.
 pub const DEALER_SCENARIO_REQUEST_PROFILE_BYTES_V4: usize =
     REQUEST_PROFILE_V3_HEADER_BYTES + REQUEST_PROFILE_V1_BYTES_V4;
-const TRANSITION_OPERATIONS_V4: usize = 6;
+const TRANSITION_OPERATIONS_V4: usize = 8;
 /// Exact selector-9 TransitionVM bytes.
 pub const DEALER_SCENARIO_TRANSITION_BYTES_V4: usize = dclutch_transition_vm::v3::HEADER_BYTES
     + TRANSITION_OPERATIONS_V4 * dclutch_transition_vm::v3::INSTRUCTION_BYTES;
@@ -218,6 +223,13 @@ pub fn encode_dealer_scenario_request_profile_v4(
             ),
             ScalarRegisterV1::common(DEALER_SCENARIO_POSITION_COUNT_SCALAR_V4),
         ),
+        RequestInstructionV1::project_u8(
+            RequestCoordinateV1::fixed(
+                u32::try_from(DEALER_SCENARIO_TRADE_DEALER_EVIDENCE_COUNT_OFFSET_V3)
+                    .map_err(|_| DealerScenarioArtifactsErrorV4::Arithmetic)?,
+            ),
+            ScalarRegisterV1::common(DEALER_SCENARIO_DEALER_EVIDENCE_COUNT_SCALAR_V4),
+        ),
         RequestInstructionV1::project_u32(
             RequestCoordinateV1::fixed(
                 u32::try_from(DEALER_SCENARIO_TRADE_CLAIMS_PACKET_BYTES_OFFSET_V3)
@@ -233,7 +245,7 @@ pub fn encode_dealer_scenario_request_profile_v4(
             RequestCoordinateV1::fixed(112),
             IdentityRegisterV1::common(DEALER_SCENARIO_OBLIGATION_IDENTITY_V4),
         ),
-        RequestInstructionV1::require_zero(RequestCoordinateV1::fixed(378), 2),
+        RequestInstructionV1::require_zero(RequestCoordinateV1::fixed(379), 1),
     ];
     let item_instructions = [RequestInstructionV1::project_u64(
         RequestCoordinateV1::item(0),
@@ -302,6 +314,15 @@ pub fn encode_dealer_scenario_transition_v4(
         ),
         InstructionV3::scalar_le(
             ScalarRegisterV3::common(DEALER_SCENARIO_POSITION_COUNT_SCALAR_V4),
+            ScalarRegisterV3::common(DEALER_SCENARIO_MAX_POSITION_COUNT_SCALAR_V4),
+        ),
+        InstructionV3::checked_add_into(
+            ScalarRegisterV3::common(DEALER_SCENARIO_POSITION_COUNT_SCALAR_V4),
+            ScalarRegisterV3::common(DEALER_SCENARIO_DEALER_EVIDENCE_COUNT_SCALAR_V4),
+            ScalarRegisterV3::common(DEALER_SCENARIO_POSITION_GEOMETRY_SUM_SCALAR_V4),
+        ),
+        InstructionV3::scalar_eq(
+            ScalarRegisterV3::common(DEALER_SCENARIO_POSITION_GEOMETRY_SUM_SCALAR_V4),
             ScalarRegisterV3::common(DEALER_SCENARIO_MAX_POSITION_COUNT_SCALAR_V4),
         ),
         InstructionV3::nonzero(ScalarRegisterV3::common(
@@ -1072,6 +1093,18 @@ fn seed_scenario_projection_header_v4(
     )?;
     set_scenario_scalar(
         staged_scalars,
+        DEALER_SCENARIO_DEALER_EVIDENCE_COUNT_SCALAR_V4,
+        u64::from(request.dealer_evidence_count),
+    )?;
+    set_scenario_scalar(
+        staged_scalars,
+        DEALER_SCENARIO_POSITION_GEOMETRY_SUM_SCALAR_V4,
+        u64::from(request.claims_position_count)
+            .checked_add(u64::from(request.dealer_evidence_count))
+            .ok_or(DealerScenarioArtifactsErrorV4::Arithmetic)?,
+    )?;
+    set_scenario_scalar(
+        staged_scalars,
         DEALER_SCENARIO_WITNESS_BYTES_SCALAR_V4,
         u64::from(request.claims_packet_bytes),
     )?;
@@ -1487,6 +1520,12 @@ pub fn authenticate_dealer_scenario_artifacts_v4<'a>(
         .get_mut(usize::from(DEALER_SCENARIO_POSITION_COUNT_SCALAR_V4))
         .ok_or(DealerScenarioArtifactsErrorV4::Effect)? = 1;
     *scalars
+        .get_mut(usize::from(DEALER_SCENARIO_DEALER_EVIDENCE_COUNT_SCALAR_V4))
+        .ok_or(DealerScenarioArtifactsErrorV4::Effect)? = 1;
+    *scalars
+        .get_mut(usize::from(DEALER_SCENARIO_POSITION_GEOMETRY_SUM_SCALAR_V4))
+        .ok_or(DealerScenarioArtifactsErrorV4::Effect)? = 2;
+    *scalars
         .get_mut(usize::from(DEALER_SCENARIO_WITNESS_BYTES_SCALAR_V4))
         .ok_or(DealerScenarioArtifactsErrorV4::Effect)? =
         u64::from(dealer_scenario_witness_bounds_v4()?.0);
@@ -1585,6 +1624,7 @@ mod tests {
         encode::{EffectGeometryV3, RouteInputV3, encode_effect_program_v3_atomic},
     };
     use dclutch_request_profile_contract::ProjectionRegistersV1;
+    use dclutch_transition_vm::v3::{RegisterInput, RegisterOutput, execute_fold_atomic};
     use std::vec;
     use std::vec::Vec;
 
@@ -1904,6 +1944,7 @@ mod tests {
         family_request[8..10].copy_from_slice(&DEALER_SCENARIO_TRADE_VERSION_V3.to_le_bytes());
         family_request[10..12].copy_from_slice(&DEALER_SCENARIO_TRADE_ACTION_V3.to_le_bytes());
         family_request[377] = 1;
+        family_request[378] = 1;
         family_request[380..384]
             .copy_from_slice(&u32::try_from(witness).expect("bounded").to_le_bytes());
         family_request[352..360].copy_from_slice(&99_u64.to_le_bytes());
@@ -1937,11 +1978,69 @@ mod tests {
             &output_scalars[usize::from(DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4)..],
             &[11, 29]
         );
+        assert_eq!(
+            output_scalars
+                .get(usize::from(DEALER_SCENARIO_DEALER_EVIDENCE_COUNT_SCALAR_V4))
+                .copied(),
+            Some(1)
+        );
 
         let mut transition_scratch = [0; DEALER_SCENARIO_TRANSITION_BYTES_V4];
         let mut transition = [0; DEALER_SCENARIO_TRANSITION_BYTES_V4];
         encode_dealer_scenario_transition_v4(&mut transition_scratch, &mut transition)
             .expect("transition");
+        let transition_program = TransitionProgramV3::decode(&transition).expect("decode");
+        let mut executed_scalars = vec![0_u64; scalar_count];
+        let mut executed_identities = vec![[0_u8; 32]; identity_count];
+        let mut execution_scratch_scalars = vec![0_u64; scalar_count];
+        let mut execution_scratch_identities = vec![[0_u8; 32]; identity_count];
+        output_scalars[usize::from(DEALER_SCENARIO_CURRENT_SLOT_SCALAR_V4)] = 98;
+        execute_fold_atomic(
+            transition_program,
+            2,
+            RegisterInput {
+                scalars: &output_scalars,
+                identities: &output_identities,
+            },
+            RegisterOutput {
+                scalars: &mut execution_scratch_scalars,
+                identities: &mut execution_scratch_identities,
+            },
+            RegisterOutput {
+                scalars: &mut executed_scalars,
+                identities: &mut executed_identities,
+            },
+        )
+        .expect("P1 plus one evidence account");
+        assert_eq!(
+            executed_scalars
+                .get(usize::from(DEALER_SCENARIO_POSITION_GEOMETRY_SUM_SCALAR_V4))
+                .copied(),
+            Some(2)
+        );
+        let mut hostile_scalars = output_scalars.clone();
+        hostile_scalars[usize::from(DEALER_SCENARIO_DEALER_EVIDENCE_COUNT_SCALAR_V4)] = 0;
+        let untouched = executed_scalars.clone();
+        assert!(
+            execute_fold_atomic(
+                transition_program,
+                2,
+                RegisterInput {
+                    scalars: &hostile_scalars,
+                    identities: &output_identities,
+                },
+                RegisterOutput {
+                    scalars: &mut execution_scratch_scalars,
+                    identities: &mut execution_scratch_identities,
+                },
+                RegisterOutput {
+                    scalars: &mut executed_scalars,
+                    identities: &mut executed_identities,
+                },
+            )
+            .is_err()
+        );
+        assert_eq!(executed_scalars, untouched);
 
         let base = base_effect();
         let effect_bytes = dealer_scenario_effect_program_bytes_v4(base.len()).expect("width");

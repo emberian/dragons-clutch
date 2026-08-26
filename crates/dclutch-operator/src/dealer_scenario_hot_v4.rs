@@ -3,8 +3,9 @@
 //! Selector 9 has one runtime-width semantic path.  This module re-executes
 //! that path from the exact SignedDelta-bearing family request, derives the
 //! complete candidate register bank, and lets the canonical Profile13 artifact
-//! select all seven variable account spans.  Callers cannot supply a Position
-//! count, Custody-route bitmap, or packed-account width separately.
+//! select all eight variable account spans. Callers cannot supply a Position
+//! count, conditional Dealer evidence account, Custody-route bitmap, or packed
+//! account width separately.
 //!
 //! Common Hot finalized-record and accelerator authentication remains owned by
 //! the family-neutral Trading outer.  This module deliberately returns only
@@ -82,13 +83,13 @@ pub struct DealerScenarioHotMetaReportV4 {
     pub observation: Observation,
     /// Canonical scenario-solvent plan re-derived from the request.
     pub semantic_plan: ScenarioAtomicPlanV3,
-    /// Six `{0,14}` Custody spans followed by the Claims `{1,2}` span in
-    /// canonical Profile13 table order.
+    /// Six `{0,14}` Custody spans, the Claims `{1,2}` span, and the trailing
+    /// Dealer evidence `{1,0}` span in canonical Profile13 table order.
     pub dynamic_span_counts: [u32; DEALER_SCENARIO_PROFILE_SPANS_V4],
     /// Exact packed physical AccountProfile account count, including the five
     /// common injected accounts.
     pub runtime_physical_account_count: usize,
-    /// Exact admitted-AOT caller-authority page count for `97 + N` scalars and
+    /// Exact admitted-AOT caller-authority page count for `99 + N` scalars and
     /// 117 identities.
     pub caller_authority_count: usize,
     /// Canonical transaction metas in `Hot38 || strategy || packed suffix`
@@ -504,7 +505,7 @@ mod tests {
 
     #[test]
     fn profile13_packs_sparse_and_dense_selector_nine_frames() {
-        for spans in [[0, 0, 0, 0, 1, 0, 0], [14, 14, 14, 14, 2, 14, 14]] {
+        for spans in [[0, 0, 0, 0, 1, 0, 0, 1], [14, 14, 14, 14, 2, 14, 14, 0]] {
             let (fixed_accounts, suffix) = runtime_fixture(4, spans);
             let state = DealerScenarioHotMetaStateV4 {
                 fixed_accounts: &fixed_accounts,
@@ -520,7 +521,7 @@ mod tests {
 
     #[test]
     fn packed_frame_refuses_privilege_and_exact_data_substitution() {
-        let spans = [0, 0, 0, 0, 1, 0, 0];
+        let spans = [0, 0, 0, 0, 1, 0, 0, 1];
         let (fixed_accounts, mut suffix) = runtime_fixture(4, spans);
         let profile_bytes = canonical_profile([32, 160, 48, 56, 64]);
         let profile = AccountProfileV2::decode(&profile_bytes).expect("canonical profile");
@@ -557,7 +558,7 @@ mod tests {
 
     #[test]
     fn profile_bytes_are_bound_to_observed_common_widths() {
-        let spans = [0, 0, 0, 0, 1, 0, 0];
+        let spans = [0, 0, 0, 0, 1, 0, 0, 1];
         let (mut fixed_accounts, suffix) = runtime_fixture(4, spans);
         let state = DealerScenarioHotMetaStateV4 {
             fixed_accounts: &fixed_accounts,

@@ -73,7 +73,7 @@ pub const DEALER_MULTI_LP_REQUEST_SCHEMA_PREIMAGE_V3: &[u8] =
     b"dclutch/schema/dealer-multi-lp-request-v3";
 /// Canonical scenario exact-fill request schema label.
 pub const DEALER_SCENARIO_TRADE_REQUEST_SCHEMA_PREIMAGE_V3: &[u8] =
-    b"dclutch/schema/dealer-scenario-trade-request-v3";
+    b"dclutch/schema/dealer-scenario-trade-request-v4";
 
 /// First selector in the sole canonical Dealer space.
 pub const DEALER_GLOBAL_SELECTOR_MIN_V3: u16 = DEALER_EQUITY_CONTRIBUTE_P0_SELECTOR_V3;
