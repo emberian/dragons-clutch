@@ -84,6 +84,8 @@ pub struct EmbeddedSeriesShadowBundleV4<'a> {
     pub account_profile: &'a [u8],
     /// Exact fixed-header RequestProfile bytes.
     pub request_profile: &'a [u8],
+    /// Exact selected LifecycleV5 bytes bound by the descriptor.
+    pub lifecycle: &'a [u8],
     /// Exact TransitionVM V3 bytes.
     pub transition: &'a [u8],
     /// Exact global DCE5 Effect bytes.
@@ -405,6 +407,7 @@ fn authenticate_embedded_bundle(
     if actual != expected
         || descriptor.account_profile().program() != actual.account_profile
         || descriptor.request_profile().program() != actual.request_profile
+        || descriptor.lifecycle().program() != content(bundle.lifecycle)?
         || descriptor.transition().program() != actual.transition
         || descriptor.effect().program() != actual.effect
         || descriptor.strategy().program() != actual.strategy
