@@ -19,6 +19,7 @@ families = [
     "dep:dclutch-claims-svm",
     "dep:dclutch-custody-contract",
     "dep:dclutch-dealer-codec",
+    "dep:dclutch-direct-codec",
     "dep:dclutch-economic-slice-kernel",
     "dep:dclutch-general-adapter-contract",
     "dep:dclutch-general-codec",
@@ -37,6 +38,7 @@ dclutch-claims-svm = { path = "../../crates/dclutch-claims-svm", optional = true
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
 dclutch-custody-contract = { path = "../../crates/dclutch-custody-contract", optional = true }
 dclutch-dealer-codec = { path = "../../crates/dclutch-dealer-codec", optional = true }
+dclutch-direct-codec = { path = "../../crates/dclutch-direct-codec", optional = true }
 dclutch-economic-slice-kernel = { path = "../../crates/dclutch-economic-slice-kernel", optional = true }
 dclutch-effect-kernel = { path = "../../crates/dclutch-effect-kernel" }
 dclutch-execution-strategy-contract = { path = "../../crates/dclutch-execution-strategy-contract" }
