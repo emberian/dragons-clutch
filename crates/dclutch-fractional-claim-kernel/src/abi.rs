@@ -61,6 +61,8 @@ pub enum Error {
     InsufficientBalance,
     /// A selected shard input contained no whole native claim.
     NoWholeClaim,
+    /// The authenticated N→K exposure required a fractional collateral atom.
+    NonIntegralTranslation,
     /// A transfer source and destination were equal.
     AccountAlias,
     /// A shard Mint still had supply at retirement.

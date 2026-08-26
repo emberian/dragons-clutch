@@ -40,8 +40,13 @@ dependencies = [
 name = "dclutch-fractional-claim-kernel"
 version = "0.1.0"
 dependencies = [
+ "dclutch-representation-composition-v3-kernel",
  "sha2",
 ]
+
+[[package]]
+name = "dclutch-representation-composition-v3-kernel"
+version = "0.1.0"
 
 [[package]]
 name = "digest"

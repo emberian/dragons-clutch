@@ -8,6 +8,7 @@ description = "Exact categorical claim-shard and explicit remainder kernel for d
 publish = false
 
 [dependencies]
+dclutch-representation-composition-v3-kernel = { path = "../dclutch-representation-composition-v3-kernel" }
 
 [dev-dependencies]
 sha2 = "=0.10.9"
