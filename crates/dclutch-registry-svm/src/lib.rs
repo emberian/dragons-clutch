@@ -13,6 +13,9 @@
 use dclutch_core_contract::ContentId;
 use dclutch_release_set_contract::{ArtifactReleaseIdV1, ExecutionRoleV1, ProgramIdentityV1};
 
+/// Canonical family-neutral batched role authentication wires.
+pub mod batch_v2;
+
 /// Exact Upgradeable Loader V3 Program account-data width.
 pub const LOADER_V3_PROGRAM_BYTES: usize = 36;
 /// Fixed Upgradeable Loader V3 ProgramData metadata allocation width.

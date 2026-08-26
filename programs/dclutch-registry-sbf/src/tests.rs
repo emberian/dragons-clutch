@@ -8,7 +8,14 @@ use dclutch_registry_contract::{
     ActivatedExecutionReleaseSetV1, ArtifactReleaseV1, ArtifactUpgradePolicyV1,
     initialize_activation_cache_v1,
 };
-use dclutch_registry_svm::{AuthenticatedRoleReceiptV1, RegistryInstructionV1};
+use dclutch_registry_svm::{
+    AuthenticatedRoleReceiptV1, RegistryInstructionV1,
+    batch_v2::{
+        AuthenticatedRoleBatchReceiptV2, BatchErrorV2, ROLE_BATCH_RECEIPT_BYTES_V2,
+        RoleBatchReceiptInputV2, RoleBatchRequestV2, RoleDeploymentObservationV2,
+        encode_role_batch_receipt_v2,
+    },
+};
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
     ProgramIdentityV1,
@@ -473,6 +480,160 @@ fn reauthentication_refuses_substituted_cache_and_stale_programdata() {
             &accounts,
             &RegistryInstructionV1::Reauthenticate(ExecutionRoleV1::Claims).to_bytes(),
         ),
+        Err(RegistryError::Deployment.into())
+    );
+}
+
+#[test]
+fn batch_reauthentication_accepts_one_cache_and_four_ordered_current_roles() {
+    let fixture = Fixture::new();
+    let cache = fixture.cache_account();
+    let cache_digest =
+        ContentId::new(hash(&cache.try_borrow_data().expect("cache bytes")).to_bytes())
+            .expect("cache digest");
+    let roles = [
+        ExecutionRoleV1::Core,
+        ExecutionRoleV1::Claims,
+        ExecutionRoleV1::Trading,
+        ExecutionRoleV1::Custody,
+    ];
+    let request = RoleBatchRequestV2::new(fixture.release_set_id, cache_digest, &roles)
+        .expect("batch request");
+    let mut accounts = vec![cache];
+    for _ in roles {
+        accounts.extend([fixture.program.clone(), fixture.programdata.clone()]);
+    }
+    process_instruction(&fixture.registry, &accounts, &request.to_bytes())
+        .expect("one physical Registry batch");
+
+    // Host syscall stubs do not retain return data. Reconstruct the exact
+    // bytes from the authenticated facts and exercise the hostile decoder.
+    let observations = roles.map(|role| {
+        RoleDeploymentObservationV2::new(
+            role,
+            fixture.release.program(),
+            fixture.release.programdata(),
+            fixture.artifact_id,
+            fixture.release.semantic_release_id(),
+            fixture.release.deployment_slot(),
+        )
+        .expect("observation")
+    });
+    let request_bytes = request.to_bytes();
+    let mut receipt_bytes = [0_u8; ROLE_BATCH_RECEIPT_BYTES_V2];
+    encode_role_batch_receipt_v2(
+        RoleBatchReceiptInputV2 {
+            registry_program: ProgramIdentityV1::new(fixture.registry.to_bytes())
+                .expect("Registry program"),
+            activation_cache: *accounts.first().expect("cache").key.as_array(),
+            activation_cache_digest: cache_digest,
+            release_set_id: fixture.release_set_id,
+            request_digest: ContentId::new(hash(&request_bytes).to_bytes())
+                .expect("request digest"),
+            observations: &observations,
+        },
+        &mut receipt_bytes,
+    )
+    .expect("receipt");
+    let receipt = AuthenticatedRoleBatchReceiptV2::decode(&receipt_bytes).expect("batch receipt");
+    assert_eq!(receipt.role_count(), 4);
+    assert_eq!(receipt.role_mask(), 0b1_0111);
+    for (index, role) in roles.into_iter().enumerate() {
+        assert_eq!(
+            receipt
+                .observation(index)
+                .expect("active observation")
+                .expect("valid observation")
+                .role(),
+            role
+        );
+    }
+}
+
+#[test]
+fn batch_reauthentication_refuses_duplicate_reorder_cache_and_deployment_substitution() {
+    let fixture = Fixture::new();
+    let cache = fixture.cache_account();
+    let cache_digest =
+        ContentId::new(hash(&cache.try_borrow_data().expect("cache bytes")).to_bytes())
+            .expect("cache digest");
+    assert_eq!(
+        RoleBatchRequestV2::new(
+            fixture.release_set_id,
+            cache_digest,
+            &[ExecutionRoleV1::Core, ExecutionRoleV1::Core],
+        ),
+        Err(BatchErrorV2::NonCanonicalRoleOrder)
+    );
+    assert_eq!(
+        RoleBatchRequestV2::new(
+            fixture.release_set_id,
+            cache_digest,
+            &[ExecutionRoleV1::Trading, ExecutionRoleV1::Claims],
+        ),
+        Err(BatchErrorV2::NonCanonicalRoleOrder)
+    );
+
+    let roles = [ExecutionRoleV1::Core, ExecutionRoleV1::Claims];
+    let request = RoleBatchRequestV2::new(fixture.release_set_id, cache_digest, &roles)
+        .expect("batch request");
+    let wrong_digest =
+        RoleBatchRequestV2::new(fixture.release_set_id, content(99), &roles).expect("bad request");
+    let accounts = [
+        cache.clone(),
+        fixture.program.clone(),
+        fixture.programdata.clone(),
+        fixture.program.clone(),
+        fixture.programdata.clone(),
+    ];
+    assert_eq!(
+        process_instruction(&fixture.registry, &accounts, &wrong_digest.to_bytes()),
+        Err(RegistryError::ActivationCache.into())
+    );
+
+    let wrong_cache = account(
+        Pubkey::new_from_array(bytes(99)),
+        false,
+        false,
+        cache.lamports(),
+        cache.try_borrow_data().expect("cache data").to_vec(),
+        fixture.registry,
+        false,
+    );
+    let substituted_cache_accounts = [
+        wrong_cache,
+        fixture.program.clone(),
+        fixture.programdata.clone(),
+        fixture.program.clone(),
+        fixture.programdata.clone(),
+    ];
+    assert_eq!(
+        process_instruction(
+            &fixture.registry,
+            &substituted_cache_accounts,
+            &request.to_bytes(),
+        ),
+        Err(RegistryError::ActivationCache.into())
+    );
+
+    let stale_programdata = account(
+        *fixture.programdata.key,
+        false,
+        false,
+        1,
+        immutable_programdata_bytes(fixture.release.deployment_slot() + 1, &[0xa5; 96]),
+        bpf_loader_upgradeable::ID,
+        false,
+    );
+    let stale_accounts = [
+        cache,
+        fixture.program.clone(),
+        fixture.programdata.clone(),
+        fixture.program.clone(),
+        stale_programdata,
+    ];
+    assert_eq!(
+        process_instruction(&fixture.registry, &stale_accounts, &request.to_bytes()),
         Err(RegistryError::Deployment.into())
     );
 }

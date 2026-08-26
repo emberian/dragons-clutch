@@ -43,6 +43,8 @@ use solana_program::{
 use solana_sdk_ids::{bpf_loader_upgradeable, native_loader, system_program, sysvar};
 use solana_system_interface::instruction::create_account;
 
+mod batch_v2;
+
 /// Exact account count for permissionless release-set activation.
 pub const ACTIVATE_ACCOUNT_COUNT_V1: usize = 26;
 /// Exact account count for one read-only role reauthentication.
@@ -72,6 +74,8 @@ pub enum RegistryError {
     Arithmetic = 8,
     /// Clock-independent Rent or native-program authentication refused.
     Sysvar = 9,
+    /// A batched request or receipt failed its canonical fixed-width contract.
+    Batch = 10,
 }
 
 impl From<RegistryError> for ProgramError {
@@ -98,6 +102,11 @@ pub fn process_instruction(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
+    if instruction_data.get(..8)
+        == Some(dclutch_registry_svm::batch_v2::ROLE_BATCH_REQUEST_MAGIC_V2.as_slice())
+    {
+        return batch_v2::process(program_id, accounts, instruction_data);
+    }
     match RegistryInstructionV1::decode(instruction_data).map_err(|_| RegistryError::Instruction)? {
         RegistryInstructionV1::Activate => process_activate(program_id, accounts),
         RegistryInstructionV1::Reauthenticate(role) => {
