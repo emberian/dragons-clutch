@@ -5,9 +5,9 @@
 //! future-Market seed projection remain owned by `dclutch-series-v3-kernel`.
 
 use dclutch_core_contract::ContentId;
-use dclutch_market_core_codec::{
-    Identity as CoreIdentity, SeriesCoreActionV1, SeriesCoreRequestV1,
-};
+#[cfg(test)]
+use dclutch_market_core_codec::Identity as CoreIdentity;
+use dclutch_market_core_codec::{SeriesCoreActionV1, SeriesCoreRequestV1};
 use dclutch_series_v3_kernel::{
     AccountKeyV3, AdmittedOccurrenceV3, AdmittedTicketV3, AuthenticatedProductProjectionV2,
     OccurrenceV3, SeriesV3Error, funding_list_id as kernel_funding_list_id,
@@ -99,6 +99,7 @@ fn account_key(value: Pubkey) -> Result<AccountKeyV3, SeriesV3Error> {
     AccountKeyV3::new(value.to_bytes())
 }
 
+#[cfg(test)]
 pub(crate) fn core_identity(value: ContentId) -> Result<CoreIdentity, SeriesV3Error> {
     CoreIdentity::new(value.to_bytes()).map_err(|_| SeriesV3Error::Identity)
 }
@@ -108,6 +109,7 @@ pub(crate) fn core_pubkey_identity(value: Pubkey) -> Result<CoreIdentity, Series
     core_account_identity(account_key(value)?)
 }
 
+#[cfg(test)]
 fn core_account_identity(value: AccountKeyV3) -> Result<CoreIdentity, SeriesV3Error> {
     CoreIdentity::new(value.to_bytes()).map_err(|_| SeriesV3Error::Identity)
 }

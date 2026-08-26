@@ -8,6 +8,8 @@
 
 /// Solana account authentication and commit-last physical persistence.
 pub mod accounts;
+/// Exact action-selected generic V3 interpreter artifacts.
+pub mod artifacts_v3;
 /// Canonical SeriesEscrow projection into the sole Custody writer.
 pub mod custody_v3;
 /// Exact sparse family request consumed by the canonical Trading hot outer.
