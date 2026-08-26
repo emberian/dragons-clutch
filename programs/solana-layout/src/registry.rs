@@ -538,6 +538,16 @@ pub const DEALER_COVERED_SELECTION_ACCOUNT_BYTES: usize =
 pub const PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_TAG: u8 = 0xb0;
 /// First Product Market-lifecycle replay receipt version.
 pub const PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_VERSION: u8 = 1;
+/// Permanent counted Product Series-lifecycle replay discriminator.
+pub const PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG: u8 = 0xb8;
+/// First permanent counted Product Series-lifecycle replay version.
+pub const PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION: u8 = 1;
+/// Product-owned Direct global-liveness manifest and allocation lifecycle discriminator.
+pub const PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_TAG: u8 = 0xba;
+/// Current acyclic Product Direct global-liveness account version.
+pub const PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_VERSION: u8 = 2;
+/// Exact current Product Direct global-liveness account width.
+pub const PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_BYTES: usize = 1_192;
 /// Bytes occupied by the successor family tag, family version, and local action.
 pub const EXTENSION_ENVELOPE_BYTES: usize = 3;
 /// Largest successor action payload without changing the frozen packet ceiling.
@@ -550,6 +560,9 @@ const _: () = assert!(DIRECT_MARKET_ROOT_ACCOUNT_TAG == 0xb1);
 const _: () = assert!(DIRECT_SELECTION_ACCOUNT_TAG == 0xb2);
 const _: () = assert!(DIRECT_ACTION_REPLAY_ACCOUNT_TAG == 0xb3);
 const _: () = assert!(DIRECT_RESERVATION_ACCOUNT_TAG == 0xb4);
+const _: () = assert!(PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG == 0xb8);
+const _: () = assert!(PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_TAG == 0xba);
+const _: () = assert!(PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_BYTES == 1_192);
 const _: () = assert!(GENERAL_V2_FROZEN_ORDER_LOCATOR_ACCOUNT_TAG == 0xb5);
 const _: () = assert!(GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_TAG == 0xb6);
 const _: () = assert!(GENERAL_V2_FAMILY_TAG == 0x4a);
@@ -1749,6 +1762,24 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "product-market-lifecycle-replay-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG,
+            version: PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "product-series-lifecycle-replay-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_TAG,
+            version: PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "product-direct-global-liveness-v2-account",
     },
 ];
 
@@ -3596,5 +3627,23 @@ mod tests {
         let mut bytes = [0_u8; MAX_INTENT_BYTES];
         assert_eq!(envelope.encode(&mut bytes), Ok(MAX_INTENT_BYTES));
         assert_eq!(ExtensionEnvelope::decode(&bytes), Ok(envelope));
+    }
+
+    #[test]
+    fn permanent_series_lifecycle_replay_coordinate_is_unique_and_disabled() {
+        let mut matching = CENTRAL_COLLISION_LEDGER.iter().filter(|entry| {
+            coordinates_include(
+                entry.coordinates,
+                WireNamespace::MainAccount,
+                PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG,
+                PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION,
+            )
+        });
+        assert_eq!(
+            matching.next().map(|entry| entry.status),
+            Some(AllocationStatus::ReservedDisabled),
+        );
+        assert!(matching.next().is_none());
+        assert_eq!(PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG, 0xb8);
     }
 }

@@ -3,9 +3,10 @@
 """Offline gate for identity-linked capability profiles and ELF evidence.
 
 This checker reads local JSON only. It never builds, deploys, signs, or contacts
-RPC. V2 evidence is eligible only when it repeats the exact semantic-owner and
-central-registry manifest whose canonical digest defines the profile identity.
-Historical V1 measurements remain comparison-only evidence.
+RPC. V2 evidence is eligible only when it repeats the exact semantic-owner,
+central-registry, and exhaustive wire-surface manifest whose canonical digest
+defines the profile identity. Historical V1 measurements remain comparison-only
+evidence.
 """
 
 from __future__ import annotations
@@ -23,8 +24,29 @@ MANIFEST_SCHEMA = "dragons-clutch/capability-profile-manifest/v2"
 IDENTITY_DOMAIN = "dragons-clutch/capability-profile-identity/v2"
 HISTORICAL_MEASUREMENT_SCHEMA = "dragons-clutch/capability-profile-measurement/v1"
 LINKED_MEASUREMENT_SCHEMA = "dragons-clutch/capability-profile-measurement/v2"
+WIRE_SURFACE_SCHEMA = "dragons-clutch/wire-surface/v1"
+WIRE_SURFACE_IDENTITY_DOMAIN = "dragons-clutch/wire-surface-identity/v1"
 LOADER_V3_MAX_PERMITTED_DATA_LENGTH = 10 * 1024 * 1024
 PROGRAMDATA_METADATA_DATA_LEN_BYTES = 45
+
+OUTER_REQUEST_ACTIONS = [0, 1, 2]
+DIRECT_V3_TAGS = frozenset(range(36, 47))
+SOURCE_V1_TAGS = frozenset(range(23, 27))
+SOURCE_V2_TAGS = frozenset(range(70, 74))
+FULL_PROFILE_SOURCE_EXTENSION_TRIPLES = [[77, 2, action] for action in range(1, 5)]
+SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE = "profile-successor-chain-attached-v1"
+# This is the complete local-action-zero wire surface of the first
+# chain-attached successor.  It intentionally excludes legacy market founding,
+# retired Source generations, old Direct generations, and every General value
+# or clearing action.  Current Direct V4 owns shared tags 7/14 and its
+# dedicated 36..=46 decoder; current Collateral owns 2..=5 and 15..=17.
+SUCCESSOR_CHAIN_ATTACHED_LEGACY_INTENT_PAIRS = [
+    [tag, 3]
+    for tag in [2, 3, 4, 5, 7, 10, 11, 14, 15, 16, 17, 18, 19, 20, 21, 68]
+]
+SUCCESSOR_CHAIN_ATTACHED_DIRECT_INTENT_PAIRS = [
+    [tag, 3] for tag in range(36, 47)
+]
 
 CAPABILITY_OWNERS: tuple[tuple[str, str], ...] = (
     ("relation", "dragons-clutch/semantic-owner/relation"),
@@ -48,10 +70,15 @@ PROFILE_FEATURES = frozenset(
         "profile-full",
         "profile-direct-v3-source-v2-point",
         "profile-general-source-v2-point",
+        SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE,
     }
 )
 SOURCE_IDENTITY_FEATURE: dict[str, str | None] = {
     "production-inert": None,
+    # SourcePlane V3 admits only a separately authenticated content-addressed
+    # SourceReleaseManifestV2. It changes the checked capability-profile
+    # identity but never compiles a fixture registry row into the ELF.
+    "runtime-real-pyth-release": None,
     "non-production-mock-source-lab": "non-production-mock-source",
     "non-production-real-pyth-lab": "non-production-real-pyth-lab",
 }
@@ -147,6 +174,7 @@ def canonical_json_sha256(value: Any) -> str:
 
 IntentTriple = tuple[int, int, int]
 AccountCoordinate = tuple[int, int]
+IntentPair = tuple[int, int]
 
 
 def validate_intent_triples(value: Any, where: str) -> list[list[int]]:
@@ -198,6 +226,198 @@ def validate_account_coordinates(value: Any, where: str) -> list[list[int]]:
     require(len(set(parsed)) == len(parsed), f"{where}: duplicate account coordinate")
     require(parsed == sorted(parsed), f"{where}: noncanonical account-coordinate order")
     return [list(item) for item in parsed]
+
+
+def validate_intent_pairs(value: Any, where: str) -> list[list[int]]:
+    require(isinstance(value, list), f"{where}: expected array")
+    parsed: list[IntentPair] = []
+    for index, item in enumerate(value):
+        item_where = f"{where}[{index}]"
+        require(
+            isinstance(item, list) and len(item) == 2,
+            f"{item_where}: expected pair",
+        )
+        pair = tuple(
+            require_positive_int(field, f"{item_where}[{field_index}]")
+            for field_index, field in enumerate(item)
+        )
+        require(
+            all(field <= 255 for field in pair),
+            f"{item_where}: coordinate exceeds one byte",
+        )
+        parsed.append(pair)  # type: ignore[arg-type]
+    require(len(set(parsed)) == len(parsed), f"{where}: duplicate intent pair")
+    require(parsed == sorted(parsed), f"{where}: noncanonical intent-pair order")
+    return [list(item) for item in parsed]
+
+
+def validate_byte_discriminants(value: Any, where: str) -> list[int]:
+    require(isinstance(value, list), f"{where}: expected array")
+    parsed = [require_nonnegative_int(item, f"{where}[{index}]") for index, item in enumerate(value)]
+    require(all(item <= 255 for item in parsed), f"{where}: value exceeds one byte")
+    require(parsed == sorted(set(parsed)), f"{where}: noncanonical byte order")
+    return parsed
+
+
+def wire_surface_sha256(value: dict[str, Any]) -> str:
+    return canonical_json_sha256(
+        {"domain": WIRE_SURFACE_IDENTITY_DOMAIN, "wire_surface": value}
+    )
+
+
+def validate_wire_surface(
+    value: Any,
+    *,
+    build_contract: dict[str, Any],
+    capabilities: list[dict[str, Any]],
+    central_registry: dict[str, Any],
+) -> dict[str, Any]:
+    require(isinstance(value, dict), "wire_surface: expected object")
+    exact_keys(
+        value,
+        {
+            "schema",
+            "legacy_intent_pairs",
+            "dedicated_direct_intent_pairs",
+            "outer_request_actions",
+            "source_generation_discriminants",
+        },
+        "wire_surface",
+    )
+    require(
+        value["schema"] == WIRE_SURFACE_SCHEMA,
+        "wire_surface.schema: unsupported schema",
+    )
+    legacy = validate_intent_pairs(
+        value["legacy_intent_pairs"], "wire_surface.legacy_intent_pairs"
+    )
+    direct = validate_intent_pairs(
+        value["dedicated_direct_intent_pairs"],
+        "wire_surface.dedicated_direct_intent_pairs",
+    )
+    outer = validate_byte_discriminants(
+        value["outer_request_actions"], "wire_surface.outer_request_actions"
+    )
+    generations = validate_byte_discriminants(
+        value["source_generation_discriminants"],
+        "wire_surface.source_generation_discriminants",
+    )
+    require(
+        outer == OUTER_REQUEST_ACTIONS,
+        f"wire_surface.outer_request_actions: expected {OUTER_REQUEST_ACTIONS}",
+    )
+
+    legacy_set = {tuple(pair) for pair in legacy}
+    direct_set = {tuple(pair) for pair in direct}
+    require(
+        not legacy_set.intersection(direct_set),
+        "wire_surface: legacy and dedicated Direct intent pairs overlap",
+    )
+    require(
+        all(pair[0] not in DIRECT_V3_TAGS for pair in legacy_set),
+        "wire_surface.legacy_intent_pairs: dedicated Direct V3 tag misclassified",
+    )
+    require(
+        all(pair[0] in DIRECT_V3_TAGS for pair in direct_set),
+        "wire_surface.dedicated_direct_intent_pairs: non-Direct tag",
+    )
+    enabled_pairs = {
+        (tag, version)
+        for tag, version, local_action in central_registry["enabled_intent_triples"]
+        if local_action == 0
+    }
+    require(
+        legacy_set.union(direct_set) == enabled_pairs,
+        "wire_surface: intent pairs do not exactly match central-registry legacy/dedicated coverage",
+    )
+
+    source_tags = {tag for tag, _version in legacy_set if tag in SOURCE_V1_TAGS | SOURCE_V2_TAGS}
+    expected_generations: list[int] = []
+    if source_tags.intersection(SOURCE_V1_TAGS):
+        expected_generations.append(1)
+    if source_tags.intersection(SOURCE_V2_TAGS):
+        expected_generations.append(2)
+    require(
+        generations == expected_generations,
+        "wire_surface.source_generation_discriminants: legacy Source generation mismatch",
+    )
+
+    source_identity = build_contract["source_identity"]
+    if source_identity in {"production-inert", "runtime-real-pyth-release"}:
+        require(
+            not source_tags and generations == [],
+            "wire_surface: release-class profile retains legacy Source authority",
+        )
+
+    source_owner = next(row for row in capabilities if row["slot"] == "source-plane")
+    required_source_extensions = [
+        triple
+        for triple in source_owner["required_intent_triples"]
+        if triple[0] == 77 and triple[1] == 2 and triple[2] != 0
+    ]
+    all_required_source_extensions = [
+        triple
+        for row in capabilities
+        for triple in row["required_intent_triples"]
+        if triple[0] == 77 and triple[1] == 2 and triple[2] != 0
+    ]
+    require(
+        all_required_source_extensions == required_source_extensions,
+        "wire_surface: Source V3 actions have a non-Source semantic owner",
+    )
+    enabled_source_extensions = [
+        triple
+        for triple in central_registry["enabled_intent_triples"]
+        if triple[0] == 77 and triple[1] == 2 and triple[2] != 0
+    ]
+    profile_feature = build_contract["cargo_profile_feature"]
+    if profile_feature == "profile-full":
+        require(
+            required_source_extensions == FULL_PROFILE_SOURCE_EXTENSION_TRIPLES,
+            "wire_surface: current Source requirements must be exactly 77/v2 actions 1 through 4",
+        )
+        if source_owner["linkage"] == "linked":
+            require(
+                enabled_source_extensions == FULL_PROFILE_SOURCE_EXTENSION_TRIPLES,
+                "wire_surface: linked current Source must enable exactly 77/v2 actions 1 through 4",
+            )
+        else:
+            require(
+                enabled_source_extensions == [],
+                "wire_surface: planned Source owner unexpectedly enables Source V3 actions",
+            )
+    elif profile_feature == SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE:
+        require(
+            required_source_extensions == [] and enabled_source_extensions == [],
+            "wire_surface: incomplete chain-attached Source lifecycle must disable actions 1 through 12",
+        )
+    else:
+        require(
+            required_source_extensions == [] and enabled_source_extensions == [],
+            "wire_surface: narrow profile unexpectedly retains Source V3 actions",
+        )
+
+    if profile_feature == SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE:
+        require(
+            legacy == SUCCESSOR_CHAIN_ATTACHED_LEGACY_INTENT_PAIRS,
+            "wire_surface: chain-attached successor legacy intent set is not exact",
+        )
+        require(
+            direct == SUCCESSOR_CHAIN_ATTACHED_DIRECT_INTENT_PAIRS,
+            "wire_surface: chain-attached successor Direct intent set is not exact",
+        )
+        require(
+            generations == [],
+            "wire_surface: chain-attached successor retains a legacy Source generation",
+        )
+
+    return {
+        "schema": WIRE_SURFACE_SCHEMA,
+        "legacy_intent_pairs": legacy,
+        "dedicated_direct_intent_pairs": direct,
+        "outer_request_actions": outer,
+        "source_generation_discriminants": generations,
+    }
 
 
 def validate_capabilities(value: Any) -> list[dict[str, Any]]:
@@ -475,6 +695,7 @@ def profile_identity(
     build_contract: dict[str, Any],
     capabilities: list[dict[str, Any]],
     central_registry: dict[str, Any],
+    wire_surface: dict[str, Any],
     limits: dict[str, int],
 ) -> str:
     return canonical_json_sha256(
@@ -485,6 +706,7 @@ def profile_identity(
             "build_contract": build_contract,
             "capabilities": capabilities,
             "central_registry": central_registry,
+            "wire_surface": wire_surface,
             "artifact_budget_limits": limits,
         }
     )
@@ -1121,6 +1343,8 @@ def extract_linked_measurement(
     build_contract: dict[str, Any],
     capabilities: list[dict[str, Any]],
     central_registry: dict[str, Any],
+    wire_surface: dict[str, Any],
+    expected_wire_surface_sha256: str,
     limits: dict[str, int],
 ) -> dict[str, Any]:
     require(isinstance(evidence, dict), "measurement evidence: expected object")
@@ -1186,6 +1410,8 @@ def extract_linked_measurement(
             "identity_manifest_sha256",
             "semantic_owners",
             "central_registry",
+            "wire_surface",
+            "wire_surface_sha256",
             "reproducible",
             "measurements",
             "default_feature_equivalence",
@@ -1225,6 +1451,18 @@ def extract_linked_measurement(
     require(
         profile["central_registry"] == central_registry,
         "measurement evidence: central-registry manifest mismatch",
+    )
+    require(
+        profile["wire_surface"] == wire_surface,
+        "measurement evidence: wire-surface manifest mismatch",
+    )
+    require(
+        require_hex32(
+            profile["wire_surface_sha256"],
+            "measurement evidence.wire_surface_sha256",
+        )
+        == expected_wire_surface_sha256,
+        "measurement evidence: wire-surface identity mismatch",
     )
     require(
         profile["reproducible"] is True,
@@ -1365,6 +1603,7 @@ def validate_manifest(
             "build_contract",
             "capabilities",
             "central_registry",
+            "wire_surface",
             "artifact_budget",
         },
         "manifest",
@@ -1395,10 +1634,36 @@ def validate_manifest(
         classification in {"planning", "deployable"},
         "profile.classification: unknown state",
     )
-
     build_contract = validate_build_contract(data["build_contract"])
+    if classification == "deployable":
+        require(
+            build_contract["source_identity"]
+            in {"production-inert", "runtime-real-pyth-release"},
+            "profile: non-production source identity cannot be deployable",
+        )
+    if build_contract["source_identity"] == "runtime-real-pyth-release":
+        require(
+            build_contract["cargo_profile_feature"]
+            == SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE,
+            "profile: runtime real-Pyth release requires the chain-attached successor profile",
+        )
+    if (
+        build_contract["cargo_profile_feature"]
+        == SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE
+    ):
+        require(
+            build_contract["source_identity"] == "runtime-real-pyth-release",
+            "profile: chain-attached successor requires the runtime real-Pyth release identity",
+        )
     capabilities = validate_capabilities(data["capabilities"])
     central_registry = validate_registry(data["central_registry"], capabilities)
+    wire_surface = validate_wire_surface(
+        data["wire_surface"],
+        build_contract=build_contract,
+        capabilities=capabilities,
+        central_registry=central_registry,
+    )
+    computed_wire_surface_sha256 = wire_surface_sha256(wire_surface)
     artifact_budget = data["artifact_budget"]
     require(isinstance(artifact_budget, dict), "artifact_budget: expected object")
     exact_keys(
@@ -1408,7 +1673,13 @@ def validate_manifest(
     )
     limits = validate_limits(artifact_budget["limits"])
     computed_identity = profile_identity(
-        name, label, build_contract, capabilities, central_registry, limits
+        name,
+        label,
+        build_contract,
+        capabilities,
+        central_registry,
+        wire_surface,
+        limits,
     )
     declared_identity = require_hex32(
         profile["identity_sha256"], "profile.identity_sha256"
@@ -1465,6 +1736,8 @@ def validate_manifest(
                 build_contract=build_contract,
                 capabilities=capabilities,
                 central_registry=central_registry,
+                wire_surface=wire_surface,
+                expected_wire_surface_sha256=computed_wire_surface_sha256,
                 limits=limits,
             )
         check_budget(measurement, limits)
@@ -1493,6 +1766,8 @@ def validate_manifest(
         "cargo_features": cargo_features(build_contract),
         "capabilities": capabilities,
         "central_registry": central_registry,
+        "wire_surface": wire_surface,
+        "wire_surface_sha256": computed_wire_surface_sha256,
         "limits": limits,
         "linked_capabilities": linked,
         "planned_capabilities": planned,

@@ -14,13 +14,14 @@
 //! wired.
 
 use clutch_product_series::{
-    CompiledProductSeriesBundleV5Id, ContentId, FixedCodec, MarketInstanceV2Id,
+    CompiledProductSeriesBundleV5Id, ContentId, DirectGlobalLivenessV2, FixedCodec, MarketInstanceV2Id,
     MarketLifecycleReplayReceiptV1, MarketLifecycleRootV1, SeriesFundingComponentV1,
-    SeriesFundingStateV1, SeriesFundingStateV2, SeriesFundingTermsV2Id, SeriesMarketLinkV1,
-    SeriesPlanV5Id, SourceOccurrenceV1Id,
-    MARKET_LIFECYCLE_REPLAY_RECEIPT_BYTES_V1, MARKET_LIFECYCLE_ROOT_BYTES_V1,
+    SeriesFundingStateV1, SeriesFundingStateV2, SeriesFundingTermsV2Id,
+    SeriesLifecycleReplayV1, SeriesMarketLinkV1, SeriesPlanV5Id, SourceOccurrenceV1Id,
+    DIRECT_GLOBAL_LIVENESS_BYTES_V2, MARKET_LIFECYCLE_REPLAY_RECEIPT_BYTES_V1, MARKET_LIFECYCLE_ROOT_BYTES_V1,
     SERIES_COLLATERAL_VAULT_COUNT_V2, SERIES_FUNDING_COMPONENT_COUNT,
-    SERIES_FUNDING_STATE_BYTES, SERIES_FUNDING_STATE_BYTES_V2, SERIES_MARKET_LINK_BYTES_V1,
+    SERIES_FUNDING_STATE_BYTES, SERIES_FUNDING_STATE_BYTES_V2,
+    SERIES_LIFECYCLE_REPLAY_BYTES_V1, SERIES_MARKET_LINK_BYTES_V1,
 };
 
 use crate::{digest, is_zero, registry, CodecError, Hash32, Result, HASH_BYTES};
@@ -35,6 +36,8 @@ pub const SERIES_REGISTRY_PDA_PREFIX_V1: &[u8] = b"dc:series-registry:v1";
 /// Canonical SeriesFunding PDA prefix. FundingV2 retains this address so a
 /// historical V1 account permanently prevents successor recreation.
 pub const SERIES_FUNDING_PDA_PREFIX_V1: &[u8] = b"dc:series-funding:v1";
+/// Canonical permanent counted Series lifecycle replay PDA prefix.
+pub const SERIES_LIFECYCLE_REPLAY_PDA_PREFIX_V1: &[u8] = b"dc:series-lifecycle-replay:v1";
 
 /// Exact immutable registered-Series account width.
 pub const SERIES_REGISTRY_ACCOUNT_BYTES_V1: usize = 168;
@@ -51,6 +54,9 @@ pub const SERIES_FUNDING_ACCOUNT_BYTES_V2: usize =
     4 + 8 + (8 * SERIES_COLLATERAL_VAULT_COUNT_V2) + SERIES_FUNDING_STATE_BYTES_V2;
 /// Exact common header before one Product market/link semantic body.
 pub const PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1: usize = 16;
+/// Exact permanent counted Series lifecycle replay account width.
+pub const SERIES_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V1: usize =
+    PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1 + SERIES_LIFECYCLE_REPLAY_BYTES_V1;
 /// Exact framed shared MarketLifecycleRoot account width.
 pub const MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V1: usize =
     PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1 + MARKET_LIFECYCLE_ROOT_BYTES_V1;
@@ -60,6 +66,14 @@ pub const MARKET_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V1: usize =
 /// Exact framed per-Series SeriesMarketLink account width.
 pub const SERIES_MARKET_LINK_ACCOUNT_BYTES_V1: usize =
     PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1 + SERIES_MARKET_LINK_BYTES_V1;
+/// Canonical Product-owned Direct global-liveness PDA prefix.
+pub const PRODUCT_DIRECT_GLOBAL_LIVENESS_PDA_PREFIX_V2: &[u8] =
+    b"dc:product-direct-live:v2";
+/// Exact framed Product Direct global-liveness account width.
+pub const PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_BYTES_V2: usize =
+    PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1 + DIRECT_GLOBAL_LIVENESS_BYTES_V2;
+
+const _: () = assert!(PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_BYTES_V2 == 1_192);
 
 /// Recompute the sole shared authentication identity for one exact Product
 /// SeriesMarketLink account. Product and standalone attachment adapters must
@@ -100,27 +114,44 @@ pub const OBSERVE_SERIES_DONATION_PAYLOAD_BYTES_V1: usize = HASH_BYTES + 1 + 1 +
 pub const CLOSE_SERIES_FUNDING_PAYLOAD_BYTES_V1: usize = HASH_BYTES;
 
 /// Exact current physical FundingV2 activation account count.
-pub const ACTIVATE_SERIES_FUNDING_ACCOUNT_COUNT_V2: usize = 43;
+pub const ACTIVATE_SERIES_FUNDING_ACCOUNT_COUNT_V2: usize = 44;
 /// First of six ordered System-owned lamport vaults.
-pub const ACTIVATE_SERIES_LAMPORT_VAULT_START_V2: usize = 3;
+pub const ACTIVATE_SERIES_LAMPORT_VAULT_START_V2: usize = 4;
 /// Exclusive end of the six ordered System-owned lamport vaults.
-pub const ACTIVATE_SERIES_LAMPORT_VAULT_END_V2: usize = 9;
+pub const ACTIVATE_SERIES_LAMPORT_VAULT_END_V2: usize = 10;
 /// First of five ordered Realm-selected collateral vaults.
-pub const ACTIVATE_SERIES_COLLATERAL_VAULT_START_V2: usize = 21;
+pub const ACTIVATE_SERIES_COLLATERAL_VAULT_START_V2: usize = 22;
 /// Exclusive end of the five ordered Realm-selected collateral vaults.
-pub const ACTIVATE_SERIES_COLLATERAL_VAULT_END_V2: usize = 26;
+pub const ACTIVATE_SERIES_COLLATERAL_VAULT_END_V2: usize = 27;
 /// First of nine ordered immutable Series artifacts.
-pub const ACTIVATE_SERIES_ARTIFACT_START_V2: usize = 34;
+pub const ACTIVATE_SERIES_ARTIFACT_START_V2: usize = 35;
 /// Exclusive end of the nine ordered immutable Series artifacts.
-pub const ACTIVATE_SERIES_ARTIFACT_END_V2: usize = 43;
+pub const ACTIVATE_SERIES_ARTIFACT_END_V2: usize = 44;
+
+/// Exact current physical FundingV2 retirement account count.
+pub const CLOSE_SERIES_FUNDING_ACCOUNT_COUNT_V2: usize = 42;
+/// First of five ordered Realm-selected collateral vaults at retirement.
+pub const CLOSE_SERIES_COLLATERAL_VAULT_START_V2: usize = 14;
+/// Exclusive end of five ordered collateral vaults at retirement.
+pub const CLOSE_SERIES_COLLATERAL_VAULT_END_V2: usize = 19;
+/// First of six ordered System-owned lamport vaults at retirement.
+pub const CLOSE_SERIES_LAMPORT_VAULT_START_V2: usize = 19;
+/// Exclusive end of six ordered lamport vaults at retirement.
+pub const CLOSE_SERIES_LAMPORT_VAULT_END_V2: usize = 25;
+/// First of nine immutable Series artifacts at retirement.
+pub const CLOSE_SERIES_ARTIFACT_START_V2: usize = 33;
+/// Exclusive end of nine immutable Series artifacts at retirement.
+pub const CLOSE_SERIES_ARTIFACT_END_V2: usize = 42;
 
 /// Semantic role of one ordered current FundingV2 activation account.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ActivateSeriesFundingAccountRoleV2 {
-    /// Writable persistent Series registry/replay owner.
+    /// Writable persistent Series registry owner.
     Registry,
     /// Writable absent FundingV2 PDA.
     Funding,
+    /// Writable absent permanent `0xb8/v1` lifecycle replay PDA.
+    SeriesLifecycleReplay,
     /// FundingTerms-bound lamport payer and refund identity.
     Payer,
     /// MarketCore lamport custody PDA.
@@ -205,53 +236,193 @@ pub enum ActivateSeriesFundingAccountRoleV2 {
     AttachmentPlan,
 }
 
+/// Semantic role of one ordered current FundingV2 retirement account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CloseSeriesFundingAccountRoleV2 {
+    /// Read-only persistent Series registry owner.
+    Registry,
+    /// Writable current FundingV2 PDA retired by this action.
+    Funding,
+    /// Writable permanent `0xb8/v1` Series lifecycle replay.
+    SeriesLifecycleReplay,
+    /// Terms-bound payer lamport-principal and account-rent refund destination.
+    LamportPrincipalRefund,
+    /// Terms-bound neutral lamport donation/surplus sink.
+    NeutralLamportSink,
+    /// Terms-bound receive-only collateral-principal refund account.
+    CollateralPrincipalRefund,
+    /// Terms-bound receive-only neutral collateral disposition account.
+    NeutralCollateralDisposition,
+    /// Canonical Series collateral-vault authority PDA.
+    CollateralAuthority,
+    /// Immutable Realm account.
+    Realm,
+    /// Immutable ProfileV2 account.
+    Profile,
+    /// Exact collateral-policy artifact.
+    CollateralPolicy,
+    /// Realm-selected collateral mint.
+    CollateralMint,
+    /// Realm-selected collateral token program.
+    CollateralTokenProgram,
+    /// Exact linked collateral ProgramData account.
+    CollateralTokenProgramData,
+    /// MarketCore collateral vault.
+    CollateralVaultMarketCore,
+    /// RecoveryReserve collateral vault.
+    CollateralVaultRecoveryReserve,
+    /// SourceWork collateral vault.
+    CollateralVaultSourceWork,
+    /// LiquidityFacility collateral vault.
+    CollateralVaultLiquidityFacility,
+    /// WrapperSet collateral vault.
+    CollateralVaultWrapperSet,
+    /// MarketCore lamport custody PDA.
+    LamportVaultMarketCore,
+    /// SeriesAdmission lamport custody PDA.
+    LamportVaultSeriesAdmission,
+    /// RecoveryReserve lamport custody PDA.
+    LamportVaultRecoveryReserve,
+    /// SourceWork lamport custody PDA.
+    LamportVaultSourceWork,
+    /// LiquidityFacility lamport custody PDA.
+    LamportVaultLiquidityFacility,
+    /// WrapperSet lamport custody PDA.
+    LamportVaultWrapperSet,
+    /// System Program.
+    SystemProgram,
+    /// Rent sysvar.
+    RentSysvar,
+    /// Executing Clutch program account.
+    ExecutingProgram,
+    /// Linked Clutch ProgramData account.
+    ExecutingProgramData,
+    /// Exact RegistryRelease artifact.
+    RegistryRelease,
+    /// Exact CapabilityProfile artifact.
+    CapabilityProfile,
+    /// Exact Source release account.
+    SourceRelease,
+    /// Exact compiled BundleV5 artifact.
+    CompilerBundle,
+    /// SeriesPlanV5 artifact.
+    SeriesPlan,
+    /// SeriesFundingTermsV2 artifact.
+    FundingTerms,
+    /// ProductTemplateV4 artifact.
+    ProductTemplate,
+    /// NativeClaimBasisV1 artifact.
+    NativeClaimBasis,
+    /// EvidenceOnlyRecoveryPolicyV1 artifact.
+    RecoveryPolicy,
+    /// PriceMeasurePolicyV1 artifact.
+    PricePolicy,
+    /// MarketGenesisProfileV2 artifact.
+    MarketGenesis,
+    /// SeriesFundingQuoteV4 artifact.
+    FundingQuote,
+    /// SeriesAttachmentPlanV4 artifact.
+    AttachmentPlan,
+}
+
+impl CloseSeriesFundingAccountRoleV2 {
+    /// Exact index in the current FundingV2 retirement account list.
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Registry => 0,
+            Self::Funding => 1,
+            Self::SeriesLifecycleReplay => 2,
+            Self::LamportPrincipalRefund => 3,
+            Self::NeutralLamportSink => 4,
+            Self::CollateralPrincipalRefund => 5,
+            Self::NeutralCollateralDisposition => 6,
+            Self::CollateralAuthority => 7,
+            Self::Realm => 8,
+            Self::Profile => 9,
+            Self::CollateralPolicy => 10,
+            Self::CollateralMint => 11,
+            Self::CollateralTokenProgram => 12,
+            Self::CollateralTokenProgramData => 13,
+            Self::CollateralVaultMarketCore => 14,
+            Self::CollateralVaultRecoveryReserve => 15,
+            Self::CollateralVaultSourceWork => 16,
+            Self::CollateralVaultLiquidityFacility => 17,
+            Self::CollateralVaultWrapperSet => 18,
+            Self::LamportVaultMarketCore => 19,
+            Self::LamportVaultSeriesAdmission => 20,
+            Self::LamportVaultRecoveryReserve => 21,
+            Self::LamportVaultSourceWork => 22,
+            Self::LamportVaultLiquidityFacility => 23,
+            Self::LamportVaultWrapperSet => 24,
+            Self::SystemProgram => 25,
+            Self::RentSysvar => 26,
+            Self::ExecutingProgram => 27,
+            Self::ExecutingProgramData => 28,
+            Self::RegistryRelease => 29,
+            Self::CapabilityProfile => 30,
+            Self::SourceRelease => 31,
+            Self::CompilerBundle => 32,
+            Self::SeriesPlan => 33,
+            Self::FundingTerms => 34,
+            Self::ProductTemplate => 35,
+            Self::NativeClaimBasis => 36,
+            Self::RecoveryPolicy => 37,
+            Self::PricePolicy => 38,
+            Self::MarketGenesis => 39,
+            Self::FundingQuote => 40,
+            Self::AttachmentPlan => 41,
+        }
+    }
+}
+
 impl ActivateSeriesFundingAccountRoleV2 {
     /// Exact index in the current FundingV2 activation account list.
     pub const fn index(self) -> usize {
         match self {
             Self::Registry => 0,
             Self::Funding => 1,
-            Self::Payer => 2,
-            Self::LamportVaultMarketCore => 3,
-            Self::LamportVaultSeriesAdmission => 4,
-            Self::LamportVaultRecoveryReserve => 5,
-            Self::LamportVaultSourceWork => 6,
-            Self::LamportVaultLiquidityFacility => 7,
-            Self::LamportVaultWrapperSet => 8,
-            Self::PayerCollateralSource => 9,
-            Self::PayerTokenAuthority => 10,
-            Self::CollateralPrincipalRefund => 11,
-            Self::NeutralCollateralDisposition => 12,
-            Self::NeutralLamportSink => 13,
-            Self::CollateralAuthority => 14,
-            Self::Realm => 15,
-            Self::Profile => 16,
-            Self::CollateralPolicy => 17,
-            Self::CollateralMint => 18,
-            Self::CollateralTokenProgram => 19,
-            Self::CollateralTokenProgramData => 20,
-            Self::CollateralVaultMarketCore => 21,
-            Self::CollateralVaultRecoveryReserve => 22,
-            Self::CollateralVaultSourceWork => 23,
-            Self::CollateralVaultLiquidityFacility => 24,
-            Self::CollateralVaultWrapperSet => 25,
-            Self::SystemProgram => 26,
-            Self::RentSysvar => 27,
-            Self::ExecutingProgram => 28,
-            Self::ExecutingProgramData => 29,
-            Self::RegistryRelease => 30,
-            Self::CapabilityProfile => 31,
-            Self::SourceRelease => 32,
-            Self::CompilerBundle => 33,
-            Self::SeriesPlan => 34,
-            Self::FundingTerms => 35,
-            Self::ProductTemplate => 36,
-            Self::NativeClaimBasis => 37,
-            Self::RecoveryPolicy => 38,
-            Self::PricePolicy => 39,
-            Self::MarketGenesis => 40,
-            Self::FundingQuote => 41,
-            Self::AttachmentPlan => 42,
+            Self::SeriesLifecycleReplay => 2,
+            Self::Payer => 3,
+            Self::LamportVaultMarketCore => 4,
+            Self::LamportVaultSeriesAdmission => 5,
+            Self::LamportVaultRecoveryReserve => 6,
+            Self::LamportVaultSourceWork => 7,
+            Self::LamportVaultLiquidityFacility => 8,
+            Self::LamportVaultWrapperSet => 9,
+            Self::PayerCollateralSource => 10,
+            Self::PayerTokenAuthority => 11,
+            Self::CollateralPrincipalRefund => 12,
+            Self::NeutralCollateralDisposition => 13,
+            Self::NeutralLamportSink => 14,
+            Self::CollateralAuthority => 15,
+            Self::Realm => 16,
+            Self::Profile => 17,
+            Self::CollateralPolicy => 18,
+            Self::CollateralMint => 19,
+            Self::CollateralTokenProgram => 20,
+            Self::CollateralTokenProgramData => 21,
+            Self::CollateralVaultMarketCore => 22,
+            Self::CollateralVaultRecoveryReserve => 23,
+            Self::CollateralVaultSourceWork => 24,
+            Self::CollateralVaultLiquidityFacility => 25,
+            Self::CollateralVaultWrapperSet => 26,
+            Self::SystemProgram => 27,
+            Self::RentSysvar => 28,
+            Self::ExecutingProgram => 29,
+            Self::ExecutingProgramData => 30,
+            Self::RegistryRelease => 31,
+            Self::CapabilityProfile => 32,
+            Self::SourceRelease => 33,
+            Self::CompilerBundle => 34,
+            Self::SeriesPlan => 35,
+            Self::FundingTerms => 36,
+            Self::ProductTemplate => 37,
+            Self::NativeClaimBasis => 38,
+            Self::RecoveryPolicy => 39,
+            Self::PricePolicy => 40,
+            Self::MarketGenesis => 41,
+            Self::FundingQuote => 42,
+            Self::AttachmentPlan => 43,
         }
     }
 }
@@ -302,6 +473,12 @@ pub const ACTIVATE_SERIES_FUNDING_ACCOUNT_METAS_V2:
     [ActivateSeriesFundingAccountMetaV2; ACTIVATE_SERIES_FUNDING_ACCOUNT_COUNT_V2] = [
     activation_meta(ActivateSeriesFundingAccountRoleV2::Registry, false, true, false),
     activation_meta(ActivateSeriesFundingAccountRoleV2::Funding, false, true, false),
+    activation_meta(
+        ActivateSeriesFundingAccountRoleV2::SeriesLifecycleReplay,
+        false,
+        true,
+        false,
+    ),
     activation_meta(ActivateSeriesFundingAccountRoleV2::Payer, true, true, false),
     activation_meta(ActivateSeriesFundingAccountRoleV2::LamportVaultMarketCore, false, true, false),
     activation_meta(ActivateSeriesFundingAccountRoleV2::LamportVaultSeriesAdmission, false, true, false),
@@ -409,6 +586,138 @@ where
         }
         if observed.signer != effective_signer || observed.writable != effective_writable {
             return Err(CodecError::MismatchedBinding);
+        }
+        index += 1;
+    }
+    Ok(())
+}
+
+/// Required effective Solana privileges for one retirement role.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CloseSeriesFundingAccountMetaV2 {
+    /// Exact semantic role at this index.
+    pub role: CloseSeriesFundingAccountRoleV2,
+    /// Required signer bit.
+    pub signer: bool,
+    /// Required writable bit.
+    pub writable: bool,
+    /// Required executable bit.
+    pub executable: bool,
+}
+
+/// Observed retirement key and privileges without a Solana SDK dependency.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ObservedCloseSeriesFundingAccountMetaV2 {
+    /// Exact runtime account key.
+    pub key: [u8; HASH_BYTES],
+    /// Effective transaction signer bit.
+    pub signer: bool,
+    /// Effective transaction writable bit.
+    pub writable: bool,
+    /// Runtime executable bit.
+    pub executable: bool,
+}
+
+const fn close_meta(
+    role: CloseSeriesFundingAccountRoleV2,
+    signer: bool,
+    writable: bool,
+    executable: bool,
+) -> CloseSeriesFundingAccountMetaV2 {
+    CloseSeriesFundingAccountMetaV2 {
+        role,
+        signer,
+        writable,
+        executable,
+    }
+}
+
+/// Frozen full account order for current FundingV2 physical retirement.
+pub const CLOSE_SERIES_FUNDING_ACCOUNT_METAS_V2:
+    [CloseSeriesFundingAccountMetaV2; CLOSE_SERIES_FUNDING_ACCOUNT_COUNT_V2] = [
+    close_meta(CloseSeriesFundingAccountRoleV2::Registry, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::Funding, false, true, false),
+    close_meta(
+        CloseSeriesFundingAccountRoleV2::SeriesLifecycleReplay,
+        false,
+        true,
+        false,
+    ),
+    close_meta(CloseSeriesFundingAccountRoleV2::LamportPrincipalRefund, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::NeutralLamportSink, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::CollateralPrincipalRefund, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::NeutralCollateralDisposition, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::CollateralAuthority, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::Realm, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::Profile, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::CollateralPolicy, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::CollateralMint, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::CollateralTokenProgram, false, false, true),
+    close_meta(CloseSeriesFundingAccountRoleV2::CollateralTokenProgramData, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::CollateralVaultMarketCore, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::CollateralVaultRecoveryReserve, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::CollateralVaultSourceWork, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::CollateralVaultLiquidityFacility, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::CollateralVaultWrapperSet, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::LamportVaultMarketCore, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::LamportVaultSeriesAdmission, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::LamportVaultRecoveryReserve, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::LamportVaultSourceWork, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::LamportVaultLiquidityFacility, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::LamportVaultWrapperSet, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::SystemProgram, false, false, true),
+    close_meta(CloseSeriesFundingAccountRoleV2::RentSysvar, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::ExecutingProgram, false, false, true),
+    close_meta(CloseSeriesFundingAccountRoleV2::ExecutingProgramData, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::RegistryRelease, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::CapabilityProfile, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::SourceRelease, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::CompilerBundle, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::SeriesPlan, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::FundingTerms, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::ProductTemplate, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::NativeClaimBasis, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::RecoveryPolicy, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::PricePolicy, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::MarketGenesis, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::FundingQuote, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::AttachmentPlan, false, false, false),
+];
+
+/// Validate exact retirement count, order-derived privileges, executability,
+/// nonzero keys, and total pairwise role separation.
+pub fn validate_close_series_funding_account_metas_v2<F>(
+    observed_len: usize,
+    mut observed_at: F,
+) -> Result<()>
+where
+    F: FnMut(usize) -> Option<ObservedCloseSeriesFundingAccountMetaV2>,
+{
+    if observed_len < CLOSE_SERIES_FUNDING_ACCOUNT_COUNT_V2 {
+        return Err(CodecError::Truncated);
+    }
+    if observed_len > CLOSE_SERIES_FUNDING_ACCOUNT_COUNT_V2 {
+        return Err(CodecError::TrailingBytes);
+    }
+    let mut index = 0usize;
+    while index < CLOSE_SERIES_FUNDING_ACCOUNT_COUNT_V2 {
+        let observed = observed_at(index).ok_or(CodecError::InvalidCount)?;
+        let requirement = CLOSE_SERIES_FUNDING_ACCOUNT_METAS_V2[index];
+        if (is_zero(&observed.key)
+            && requirement.role != CloseSeriesFundingAccountRoleV2::SystemProgram)
+            || observed.signer != requirement.signer
+            || observed.writable != requirement.writable
+            || observed.executable != requirement.executable
+        {
+            return Err(CodecError::MismatchedBinding);
+        }
+        let mut other_index = index + 1;
+        while other_index < CLOSE_SERIES_FUNDING_ACCOUNT_COUNT_V2 {
+            let other = observed_at(other_index).ok_or(CodecError::InvalidCount)?;
+            if observed.key == other.key {
+                return Err(CodecError::MismatchedBinding);
+            }
+            other_index += 1;
         }
         index += 1;
     }
@@ -889,6 +1198,67 @@ impl SeriesFundingAccountV2 {
     }
 }
 
+/// Program-owned frame for the permanent counted Series lifecycle replay.
+///
+/// The 501-byte semantic body is owned solely by `clutch-product-series`; this
+/// layout contributes only the exact tag/version/bump/rent frame. The rent
+/// principal is permanently retained and therefore names no close authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SeriesLifecycleReplayAccountV1 {
+    /// Sole field-level semantic owner.
+    pub state: SeriesLifecycleReplayV1,
+    /// Exact permanently retained payer-supplied rent principal.
+    pub permanent_rent_principal_lamports: u64,
+    /// Canonical per-Series replay PDA bump.
+    pub stored_bump: u8,
+}
+
+impl SeriesLifecycleReplayAccountV1 {
+    /// Encode the exact 16-byte frame plus Product-owned semantic body.
+    pub fn encode(&self, output: &mut [u8]) -> Result<()> {
+        require_exact(output, SERIES_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V1)?;
+        if self.permanent_rent_principal_lamports == 0 {
+            return Err(CodecError::ZeroValue);
+        }
+        output.fill(0);
+        output[0] = registry::PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG;
+        output[1] = registry::PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION;
+        output[2] = self.stored_bump;
+        output[8..16].copy_from_slice(&self.permanent_rent_principal_lamports.to_le_bytes());
+        self.state
+            .encode_into(&mut output[PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1..])
+            .map_err(map_product_error)
+    }
+
+    /// Hostile-decode the exact frame and complete Product semantic owner.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        require_exact(input, SERIES_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V1)?;
+        if input[0] != registry::PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG {
+            return Err(CodecError::WrongTag);
+        }
+        if input[1] != registry::PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION {
+            return Err(CodecError::WrongVersion);
+        }
+        require_reserved(&input[3..8])?;
+        let value = Self {
+            state: SeriesLifecycleReplayV1::decode(
+                &input[PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1..],
+            )
+            .map_err(map_product_error)?,
+            permanent_rent_principal_lamports: u64::from_le_bytes(
+                input[8..16]
+                    .try_into()
+                    .map_err(|_| CodecError::Truncated)?,
+            ),
+            stored_bump: input[2],
+        };
+        if value.permanent_rent_principal_lamports == 0 {
+            return Err(CodecError::ZeroValue);
+        }
+        Ok(value)
+    }
+}
+
 /// Program-owned frame for the shared Product MarketLifecycleRoot.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MarketLifecycleRootAccountV1 {
@@ -970,6 +1340,98 @@ impl MarketLifecycleRootAccountV1 {
             return Err(CodecError::ZeroValue);
         }
         Ok(())
+    }
+}
+
+/// Program-owned frame for the Product Direct global-liveness manifest.
+///
+/// The embedded state owns no physical work balance. Its rent field is the
+/// exact separately refundable principal locked in this `0xba/v2` account;
+/// any lamports above it are neutral-sink donation and may never discount the
+/// payer's required debit.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ProductDirectGlobalLivenessAccountV2 {
+    /// Sole Product semantic manifest/allocation lifecycle.
+    pub state: DirectGlobalLivenessV2,
+    /// Exact refundable payer-funded account rent principal.
+    pub rent_principal_lamports: u64,
+    /// Canonical Product Direct global-liveness PDA bump.
+    pub stored_bump: u8,
+}
+
+impl ProductDirectGlobalLivenessAccountV2 {
+    /// Encode the exact `0xba/v2` hostile account frame.
+    pub fn encode(&self, output: &mut [u8]) -> Result<()> {
+        Self::encode_parts(
+            &self.state,
+            self.rent_principal_lamports,
+            self.stored_bump,
+            output,
+        )
+    }
+
+    /// Encode from borrowed state without an additional 1,176-byte copy.
+    pub fn encode_parts(
+        state: &DirectGlobalLivenessV2,
+        rent_principal_lamports: u64,
+        stored_bump: u8,
+        output: &mut [u8],
+    ) -> Result<()> {
+        require_exact(output, PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_BYTES_V2)?;
+        state.validate().map_err(map_product_error)?;
+        if rent_principal_lamports == 0
+            || rent_principal_lamports != state.manifest_rent_principal_lamports()
+        {
+            return Err(if rent_principal_lamports == 0 {
+                CodecError::ZeroValue
+            } else {
+                CodecError::MismatchedBinding
+            });
+        }
+        output.fill(0);
+        output[0] = registry::PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_TAG;
+        output[1] = registry::PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_VERSION;
+        output[2] = stored_bump;
+        output[8..16].copy_from_slice(&rent_principal_lamports.to_le_bytes());
+        state
+            .encode_into(&mut output[PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1..])
+            .map_err(map_product_error)
+    }
+
+    /// Hostile-decode the exact tag/version/width and complete semantic body.
+    #[inline(never)]
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        require_exact(input, PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_BYTES_V2)?;
+        if input[0] != registry::PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_TAG {
+            return Err(CodecError::WrongTag);
+        }
+        if input[1] != registry::PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_VERSION {
+            return Err(CodecError::WrongVersion);
+        }
+        require_reserved(&input[3..8])?;
+        let rent_principal_lamports = u64::from_le_bytes(
+            input[8..16]
+                .try_into()
+                .map_err(|_| CodecError::Truncated)?,
+        );
+        let state = DirectGlobalLivenessV2::decode(
+            &input[PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1..],
+        )
+        .map_err(map_product_error)?;
+        if rent_principal_lamports == 0
+            || rent_principal_lamports != state.manifest_rent_principal_lamports()
+        {
+            return Err(if rent_principal_lamports == 0 {
+                CodecError::ZeroValue
+            } else {
+                CodecError::MismatchedBinding
+            });
+        }
+        Ok(Self {
+            state,
+            rent_principal_lamports,
+            stored_bump: input[2],
+        })
     }
 }
 
@@ -1515,6 +1977,21 @@ mod tests {
         }
     }
 
+    fn observed_close_meta(index: usize) -> ObservedCloseSeriesFundingAccountMetaV2 {
+        let requirement = CLOSE_SERIES_FUNDING_ACCOUNT_METAS_V2[index];
+        let key_byte = u8::try_from(index.checked_add(1).unwrap()).unwrap();
+        ObservedCloseSeriesFundingAccountMetaV2 {
+            key: if requirement.role == CloseSeriesFundingAccountRoleV2::SystemProgram {
+                [0; HASH_BYTES]
+            } else {
+                [key_byte; HASH_BYTES]
+            },
+            signer: requirement.signer,
+            writable: requirement.writable,
+            executable: requirement.executable,
+        }
+    }
+
     fn registry_v2() -> SeriesRegistryAccountV2 {
         SeriesRegistryAccountV2 {
             series_plan_id: SeriesPlanV5Id::from_bytes([1; HASH_BYTES]),
@@ -1626,6 +2103,16 @@ mod tests {
                 [ACTIVATE_SERIES_COLLATERAL_VAULT_START_V2]
                 .role,
             ActivateSeriesFundingAccountRoleV2::CollateralVaultMarketCore
+        );
+        assert_eq!(
+            ACTIVATE_SERIES_FUNDING_ACCOUNT_METAS_V2
+                [ActivateSeriesFundingAccountRoleV2::SeriesLifecycleReplay.index()],
+            activation_meta(
+                ActivateSeriesFundingAccountRoleV2::SeriesLifecycleReplay,
+                false,
+                true,
+                false,
+            )
         );
         assert_eq!(
             ACTIVATE_SERIES_FUNDING_ACCOUNT_METAS_V2
@@ -1747,6 +2234,20 @@ mod tests {
             ),
             Err(CodecError::MismatchedBinding)
         );
+        let replay = ActivateSeriesFundingAccountRoleV2::SeriesLifecycleReplay.index();
+        assert_eq!(
+            validate_activate_series_funding_account_metas_v2(
+                ACTIVATE_SERIES_FUNDING_ACCOUNT_COUNT_V2,
+                |index| {
+                    let mut observed = observed_activation_meta(index, false);
+                    if index == replay {
+                        observed.writable = false;
+                    }
+                    Some(observed)
+                },
+            ),
+            Err(CodecError::MismatchedBinding)
+        );
     }
 
     #[test]
@@ -1791,6 +2292,185 @@ mod tests {
                 &[0u8; ACTIVATE_SERIES_FUNDING_PAYLOAD_BYTES_V1]
             ),
             Err(CodecError::ZeroIdentity)
+        );
+    }
+    #[test]
+    fn close_account_contract_is_exact_and_has_no_alias_exception() {
+        assert_eq!(
+            validate_close_series_funding_account_metas_v2(
+                CLOSE_SERIES_FUNDING_ACCOUNT_COUNT_V2,
+                |index| Some(observed_close_meta(index)),
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            CLOSE_SERIES_FUNDING_ACCOUNT_METAS_V2[CLOSE_SERIES_COLLATERAL_VAULT_START_V2].role,
+            CloseSeriesFundingAccountRoleV2::CollateralVaultMarketCore
+        );
+        assert_eq!(
+            CLOSE_SERIES_FUNDING_ACCOUNT_METAS_V2[CLOSE_SERIES_LAMPORT_VAULT_START_V2].role,
+            CloseSeriesFundingAccountRoleV2::LamportVaultMarketCore
+        );
+        assert_eq!(
+            CLOSE_SERIES_FUNDING_ACCOUNT_METAS_V2[CLOSE_SERIES_ARTIFACT_START_V2].role,
+            CloseSeriesFundingAccountRoleV2::SeriesPlan
+        );
+        assert!(
+            ACTIVATE_SERIES_FUNDING_ACCOUNT_METAS_V2
+                [ActivateSeriesFundingAccountRoleV2::Registry.index()]
+            .writable
+        );
+        assert!(
+            !CLOSE_SERIES_FUNDING_ACCOUNT_METAS_V2
+                [CloseSeriesFundingAccountRoleV2::Registry.index()]
+            .writable
+        );
+        assert!(
+            CLOSE_SERIES_FUNDING_ACCOUNT_METAS_V2
+                [CloseSeriesFundingAccountRoleV2::SeriesLifecycleReplay.index()]
+            .writable
+        );
+        let refund = CloseSeriesFundingAccountRoleV2::LamportPrincipalRefund.index();
+        let sink = CloseSeriesFundingAccountRoleV2::NeutralLamportSink.index();
+        let refund_key = observed_close_meta(refund).key;
+        assert_eq!(
+            validate_close_series_funding_account_metas_v2(
+                CLOSE_SERIES_FUNDING_ACCOUNT_COUNT_V2,
+                |index| {
+                    let mut observed = observed_close_meta(index);
+                    if index == sink {
+                        observed.key = refund_key;
+                    }
+                    Some(observed)
+                },
+            ),
+            Err(CodecError::MismatchedBinding)
+        );
+    }
+
+    #[test]
+    fn close_account_contract_refuses_wrong_flags_and_count() {
+        let funding = CloseSeriesFundingAccountRoleV2::Funding.index();
+        assert_eq!(
+            validate_close_series_funding_account_metas_v2(
+                CLOSE_SERIES_FUNDING_ACCOUNT_COUNT_V2,
+                |index| {
+                    let mut observed = observed_close_meta(index);
+                    if index == funding {
+                        observed.writable = false;
+                    }
+                    Some(observed)
+                },
+            ),
+            Err(CodecError::MismatchedBinding)
+        );
+        let registry = CloseSeriesFundingAccountRoleV2::Registry.index();
+        assert_eq!(
+            validate_close_series_funding_account_metas_v2(
+                CLOSE_SERIES_FUNDING_ACCOUNT_COUNT_V2,
+                |index| {
+                    let mut observed = observed_close_meta(index);
+                    if index == registry {
+                        observed.writable = true;
+                    }
+                    Some(observed)
+                },
+            ),
+            Err(CodecError::MismatchedBinding)
+        );
+        let replay = CloseSeriesFundingAccountRoleV2::SeriesLifecycleReplay.index();
+        assert_eq!(
+            validate_close_series_funding_account_metas_v2(
+                CLOSE_SERIES_FUNDING_ACCOUNT_COUNT_V2,
+                |index| {
+                    let mut observed = observed_close_meta(index);
+                    if index == replay {
+                        observed.writable = false;
+                    }
+                    Some(observed)
+                },
+            ),
+            Err(CodecError::MismatchedBinding)
+        );
+        assert_eq!(
+            validate_close_series_funding_account_metas_v2(
+                CLOSE_SERIES_FUNDING_ACCOUNT_COUNT_V2.checked_sub(1).unwrap(),
+                |_| None,
+            ),
+            Err(CodecError::Truncated)
+        );
+        assert_eq!(
+            validate_close_series_funding_account_metas_v2(
+                CLOSE_SERIES_FUNDING_ACCOUNT_COUNT_V2.checked_add(1).unwrap(),
+                |_| None,
+            ),
+            Err(CodecError::TrailingBytes)
+        );
+    }
+
+    #[test]
+    fn permanent_series_replay_frame_is_exact_and_hostile() {
+        let state = SeriesLifecycleReplayV1::initialize(
+            clutch_product_series::SeriesLifecycleReplayBindingV1 {
+                series_plan_id: SeriesPlanV5Id::from_bytes([1; HASH_BYTES]),
+                funding_terms_id: SeriesFundingTermsV2Id::from_bytes([2; HASH_BYTES]),
+                funding_quote_id: clutch_product_series::SeriesFundingQuoteV4Id::from_bytes([
+                    3; HASH_BYTES
+                ]),
+                attachment_plan_id:
+                    clutch_product_series::SeriesAttachmentPlanV4Id::from_bytes([
+                        4; HASH_BYTES
+                    ]),
+                compiler_bundle_id: CompiledProductSeriesBundleV5Id::from_bytes([
+                    5; HASH_BYTES
+                ]),
+                registry_release_id:
+                    clutch_product_series::RegistryProgramReleaseV2Id::from_bytes([
+                        6; HASH_BYTES
+                    ]),
+                capability_profile_id:
+                    clutch_product_series::RegistryCapabilityProfileV4Id::from_bytes([
+                        7; HASH_BYTES
+                    ]),
+                registry_account_id: ContentId::from_bytes([8; HASH_BYTES]),
+                funding_account_id: ContentId::from_bytes([9; HASH_BYTES]),
+                lifecycle_replay_account_id: ContentId::from_bytes([10; HASH_BYTES]),
+                permanent_rent_funder: ContentId::from_bytes([11; HASH_BYTES]),
+                neutral_lamport_sink: ContentId::from_bytes([12; HASH_BYTES]),
+                instance_count: 2,
+            },
+        )
+        .unwrap();
+        let frame = SeriesLifecycleReplayAccountV1 {
+            state,
+            permanent_rent_principal_lamports: 1_234,
+            stored_bump: 17,
+        };
+        let mut bytes = [0u8; SERIES_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V1];
+        frame.encode(&mut bytes).unwrap();
+        assert_eq!(SeriesLifecycleReplayAccountV1::decode(&bytes), Ok(frame));
+
+        let mut hostile = bytes;
+        hostile[0] ^= 1;
+        assert_eq!(
+            SeriesLifecycleReplayAccountV1::decode(&hostile),
+            Err(CodecError::WrongTag),
+        );
+        hostile = bytes;
+        hostile[3] = 1;
+        assert_eq!(
+            SeriesLifecycleReplayAccountV1::decode(&hostile),
+            Err(CodecError::NonCanonicalPadding),
+        );
+        hostile = bytes;
+        hostile[8..16].fill(0);
+        assert_eq!(
+            SeriesLifecycleReplayAccountV1::decode(&hostile),
+            Err(CodecError::ZeroValue),
+        );
+        assert_eq!(
+            SeriesLifecycleReplayAccountV1::decode(&bytes[..bytes.len() - 1]),
+            Err(CodecError::Truncated),
         );
     }
 }

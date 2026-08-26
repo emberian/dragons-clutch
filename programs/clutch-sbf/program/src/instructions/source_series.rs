@@ -12,8 +12,9 @@ use crate::source_plane_v3::{
     authenticate_route_clock_bucket, runtime_key,
 };
 use crate::source_plane_v3_actions::{
-    apply_source_work_liveness, authenticate_source_work_schedule_artifact, bind_work_execution,
-    ingest_parser_boundary_atomic, initialize_head, open_raw_page, register_release_from_artifact,
+    apply_source_work_liveness, authenticate_source_funding_custody_v1,
+    authenticate_source_work_schedule_artifact, bind_work_execution, ingest_parser_boundary_atomic,
+    initialize_head, open_raw_page, register_release_from_artifact,
 };
 use clutch_pyth_parser_v1::PythParserRequestV1;
 use clutch_solana_layout::registry::SourceSeriesAction;
@@ -79,11 +80,56 @@ pub fn process(
         (SourceSeriesAction::IngestBoundaryBatch, SourceSeriesPayloadV2::Transition(intent)) => {
             process_ingest_boundary(program_id, accounts, sequence, intent)
         }
+        (SourceSeriesAction::SealRawPage, SourceSeriesPayloadV2::Transition(intent)) => {
+            super::source_series_successor::process_seal_raw_page(
+                program_id, accounts, sequence, intent,
+            )
+        }
+        (SourceSeriesAction::InitializeWindowWork, SourceSeriesPayloadV2::Transition(intent)) => {
+            super::source_series_successor::process_initialize_window_work(
+                program_id, accounts, sequence, intent,
+            )
+        }
+        (SourceSeriesAction::FoldWindowPages, SourceSeriesPayloadV2::Transition(intent)) => {
+            super::source_series_successor::process_fold_window_page(
+                program_id, accounts, sequence, intent,
+            )
+        }
+        (SourceSeriesAction::SealWindow, SourceSeriesPayloadV2::Transition(intent)) => {
+            super::source_series_successor::process_seal_window(
+                program_id, accounts, sequence, intent,
+            )
+        }
+        (SourceSeriesAction::EvaluateStatistic, SourceSeriesPayloadV2::Transition(intent)) => {
+            super::source_series_successor::process_evaluate_statistic(
+                program_id, accounts, sequence, intent,
+            )
+        }
+        (
+            SourceSeriesAction::EmitFailureHandoff,
+            SourceSeriesPayloadV2::EmitFailureHandoff(intent),
+        ) => super::source_series_successor::process_emit_source_handoff(
+            program_id, accounts, sequence, intent,
+        ),
+        (
+            SourceSeriesAction::ReopenGeneration,
+            SourceSeriesPayloadV2::ReopenGeneration(intent),
+        ) => super::source_series_successor::process_reopen_generation(
+            program_id, accounts, sequence, intent,
+        ),
+        (
+            SourceSeriesAction::CloseGeneration,
+            SourceSeriesPayloadV2::CloseGeneration(intent),
+        ) => super::source_series_successor::process_close_generation(
+            program_id, accounts, sequence, intent,
+        ),
         _ => Err(ClutchError::UnsupportedInstruction.into()),
     }
 }
 
-fn require_live_intent(
+/// Require the exact current adapter program, submitting keeper, and an
+/// unexpired Clock-slot bound before any successor state transition.
+pub(super) fn require_live_intent(
     program_id: &Pubkey,
     keeper: &AccountInfo<'_>,
     intent: IntentPreimageV3,
@@ -98,8 +144,9 @@ fn require_live_intent(
 }
 
 /// Execute action 2 against the exact release-selected route and schedule.
-/// The generation request is derived under the release-selected external
-/// authority; Clutch only authenticates and consumes it.
+/// The generation request is derived under the release-selected authority.
+/// Current V2 releases bind that role to the exact authenticated adapter
+/// deployment; this action only authenticates and consumes the immutable body.
 #[allow(clippy::too_many_arguments)]
 fn process_initialize_head(
     program_id: &Pubkey,
@@ -122,9 +169,8 @@ fn process_initialize_head(
     )
     .map_err(Refusal::from)?;
     let schedule = authenticate_source_work_schedule_artifact(program_id, route, &accounts[7])?;
-    require(
-        runtime_key(accounts[15].key) == schedule.payer(),
-        ClutchError::MismatchedState,
+    let custody = authenticate_source_funding_custody_v1(
+        program_id, route, schedule, &accounts[15],
     )?;
     let authorization =
         authenticate_generation_request(route, &accounts[8]).map_err(Refusal::from)?;
@@ -138,6 +184,7 @@ fn process_initialize_head(
         program_id,
         route,
         authorization,
+        custody,
         &accounts[15],
         &accounts[9],
         &accounts[10],
@@ -183,6 +230,7 @@ fn process_initialize_head(
         ceiling,
         accounts[14].key,
         ceiling,
+        custody,
         &accounts[15],
         &accounts[16],
         &accounts[17],
@@ -223,9 +271,8 @@ fn process_open_raw_page(
     )
     .map_err(Refusal::from)?;
     let schedule = authenticate_source_work_schedule_artifact(program_id, route, &accounts[7])?;
-    require(
-        runtime_key(accounts[16].key) == schedule.payer(),
-        ClutchError::MismatchedState,
+    let custody = authenticate_source_funding_custody_v1(
+        program_id, route, schedule, &accounts[16],
     )?;
     require_live_intent(program_id, &accounts[15], intent)?;
     let head_lineage =
@@ -241,6 +288,7 @@ fn process_open_raw_page(
         program_id,
         route,
         head,
+        custody,
         &accounts[16],
         &accounts[10],
         &accounts[11],
@@ -287,6 +335,7 @@ fn process_open_raw_page(
         ceiling,
         accounts[15].key,
         ceiling,
+        custody,
         &accounts[16],
         &accounts[17],
         &accounts[18],
@@ -327,9 +376,8 @@ fn process_ingest_boundary(
     )
     .map_err(Refusal::from)?;
     let schedule = authenticate_source_work_schedule_artifact(program_id, route, &accounts[7])?;
-    require(
-        runtime_key(accounts[21].key) == schedule.payer(),
-        ClutchError::MismatchedState,
+    let custody = authenticate_source_funding_custody_v1(
+        program_id, route, schedule, &accounts[21],
     )?;
     require_live_intent(program_id, &accounts[20], intent)?;
     let clock = authenticate_route_clock_bucket(route, &accounts[8]).map_err(Refusal::from)?;
@@ -403,6 +451,7 @@ fn process_ingest_boundary(
         ceiling,
         &accounts[20],
         ceiling,
+        custody,
         &accounts[21],
         &accounts[21],
         &accounts[18],

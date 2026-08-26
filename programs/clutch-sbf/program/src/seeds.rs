@@ -183,6 +183,14 @@ pub const SEED_SERIES_COLLATERAL_VAULT_V1: &[u8] = b"dc:series-collateral:v1";
 pub const SEED_SOURCE_OCCURRENCE_V1: &[u8] = b"dc:source-occurrence:v1";
 /// Immutable Source-selected runtime-liveness policy account prefix.
 pub const SEED_SOURCE_LIVENESS_POLICY_V1: &[u8] = b"dc:source-live-policy:v1";
+/// Zero-data, System-owned prepaid Source lifecycle rent custody.
+pub const SEED_SOURCE_FUNDING_CUSTODY_V1: &[u8] = b"dc:source-funding:v1";
+/// Mutable prepaid Source liveness compartment for one lifecycle.
+pub const SEED_SOURCE_COMPARTMENT_V1: &[u8] = b"dc:source-compartment:v1";
+/// Immutable initial/repair GenerationAuthority request.
+pub const SEED_SOURCE_GENERATION_REQUEST_V1: &[u8] = b"dc-sp3-generation-request";
+/// Immutable post-terminal GenerationAuthority reopen request.
+pub const SEED_SOURCE_REOPEN_REQUEST_V1: &[u8] = b"dc-sp3-reopen-request";
 /// Direct candidate-window account seed prefix.
 pub const SEED_DIRECT_WINDOW: &[u8] = b"dragons-clutch:direct-window:v1";
 /// Full-width verified direct candidate seed prefix.
@@ -202,9 +210,11 @@ pub const SEED_DIRECT_RECEIPT_V3: &[u8] = b"dc:direct-receipt:v3";
 /// Direct V3 zero-pot seed prefix, disjoint from V2 pots.
 pub const SEED_DIRECT_POT_V3: &[u8] = b"dc:direct-pot:v3";
 /// Immutable authenticated source-spec account seed prefix.
-pub const SEED_SOURCE_SPEC: &[u8] = crate::source_archive::SOURCE_SPEC_SEED_V1;
+pub const SEED_SOURCE_SPEC: &[u8] = b"source-spec-v1";
 /// Per-window authenticated source-archive account seed prefix.
-pub const SEED_SOURCE_ARCHIVE: &[u8] = crate::source_archive::SOURCE_ARCHIVE_SEED_V1;
+pub const SEED_SOURCE_ARCHIVE: &[u8] = b"source-archive-v1";
+const _: () = assert!(SEED_SOURCE_SPEC.len() == 14);
+const _: () = assert!(SEED_SOURCE_ARCHIVE.len() == 17);
 /// Per-Realm revenue-policy record seed prefix; exactly 32 bytes (the seed
 /// cap), the string `docs/design/REVENUE_POLICY_V1.md` §3 names.
 pub const SEED_REVENUE_POLICY: &[u8] = b"dragons-clutch:revenue-policy:v1";
@@ -308,6 +318,15 @@ pub const SEED_PRODUCT_MARKET_FOUNDATION_VAULT: &[u8] = b"dc:market-foundation-v
 pub const SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY: &[u8] = b"dc:market-lifecycle-replay:v1";
 /// Per-Series/ordinal Product Market-admission link.
 pub const SEED_PRODUCT_SERIES_MARKET_LINK: &[u8] = b"dc:series-market-link:v1";
+/// Permanent counted Product Series-lifecycle replay.
+pub const SEED_PRODUCT_SERIES_LIFECYCLE_REPLAY: &[u8] =
+    clutch_solana_layout::product_series::SERIES_LIFECYCLE_REPLAY_PDA_PREFIX_V1;
+/// Product-owned Direct global-liveness manifest/allocation lifecycle.
+pub const SEED_PRODUCT_DIRECT_GLOBAL_LIVENESS: &[u8] =
+    clutch_solana_layout::product_series::PRODUCT_DIRECT_GLOBAL_LIVENESS_PDA_PREFIX_V2;
+/// One physical generic-liveness row owned by Product `0xba/v2`.
+pub const SEED_PRODUCT_DIRECT_GLOBAL_LIVENESS_COMPARTMENT: &[u8] =
+    b"dc:product-direct-row:v2";
 
 /// Canonical Realm address and bump.
 pub fn realm_pda(program_id: &Pubkey, realm: &[u8; 32]) -> (Pubkey, u8) {
@@ -481,6 +500,40 @@ pub fn product_market_lifecycle_root_pda(
     )
 }
 
+/// Canonical separate Product Direct global-liveness account.
+pub fn product_direct_global_liveness_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_PRODUCT_DIRECT_GLOBAL_LIVENESS,
+            market_instance_v2_id,
+            &generation.to_le_bytes(),
+        ],
+    )
+}
+
+/// One canonical Source..Recovery generic-liveness account.
+pub fn product_direct_global_liveness_compartment_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    generation: u64,
+    kind: u8,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_PRODUCT_DIRECT_GLOBAL_LIVENESS_COMPARTMENT,
+            market_instance_v2_id,
+            &generation.to_le_bytes(),
+            &[kind],
+        ],
+    )
+}
+
 /// Canonical zero-data Product FoundationVault PDA.
 pub fn product_market_foundation_vault_pda(
     program_id: &Pubkey,
@@ -526,6 +579,17 @@ pub fn product_series_market_link_pda(
             series_plan_v5_id,
             &ordinal.to_le_bytes(),
         ],
+    )
+}
+
+/// Derive the permanent counted lifecycle replay for one Series.
+pub fn product_series_lifecycle_replay_pda(
+    program_id: &Pubkey,
+    series_plan_v5_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_PRODUCT_SERIES_LIFECYCLE_REPLAY, series_plan_v5_id],
     )
 }
 
@@ -1212,6 +1276,25 @@ pub fn product_artifact_pda(program_id: &Pubkey, kind: u8, digest: &[u8; 32]) ->
 /// Canonical immutable liveness policy selected by a Source release.
 pub fn source_liveness_policy_pda(program_id: &Pubkey, policy_id: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_SOURCE_LIVENESS_POLICY_V1, policy_id])
+}
+
+/// Canonical prepaid Source custody for one immutable lifecycle identity.
+pub fn source_funding_custody_pda(
+    program_id: &Pubkey,
+    lifecycle_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_SOURCE_FUNDING_CUSTODY_V1, lifecycle_id],
+    )
+}
+
+/// Canonical Source liveness compartment for one immutable lifecycle.
+pub fn source_compartment_pda(
+    program_id: &Pubkey,
+    lifecycle_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(program_id, &[SEED_SOURCE_COMPARTMENT_V1, lifecycle_id])
 }
 
 /// Canonical immutable registered-Series address.
@@ -1966,6 +2049,9 @@ mod tests {
             SEED_PRODUCT_MARKET_FOUNDATION_VAULT,
             SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY,
             SEED_PRODUCT_SERIES_MARKET_LINK,
+            SEED_PRODUCT_SERIES_LIFECYCLE_REPLAY,
+            SEED_PRODUCT_DIRECT_GLOBAL_LIVENESS,
+            SEED_PRODUCT_DIRECT_GLOBAL_LIVENESS_COMPARTMENT,
             SEED_FAILURE_MARKET_ROOT_V2,
             SEED_FAILURE_EXTERNAL_ROOT,
             SEED_FAILURE_REPLAY_TOMBSTONE,

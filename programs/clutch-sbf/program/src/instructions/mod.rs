@@ -141,24 +141,41 @@ pub mod general_v2_settlement_producer_v5;
 ))]
 pub mod general_v2_settlement_traversal_v5;
 pub mod genesis;
+/// Private pre-root Product/Collateral join for the current General V3 founder.
+pub(crate) mod general_market_foundation_v3;
 #[cfg(test)]
 pub mod market_init;
 #[cfg(test)]
 pub mod merge_materialize;
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 pub mod observe_resolve;
 pub mod orders_batch;
 pub mod product_artifact;
 /// Disabled narrow Product authority for founding the current General Market owner.
 pub(crate) mod product_general_family;
+/// Private full-payer capitalization and authentication of Product `0xba/v2`.
+pub(crate) mod product_direct_global_liveness;
 /// Always-compiled Product Market/link account authentication; routes remain capability-gated.
 pub mod product_market;
-#[cfg(feature = "non-production-product-series-lab")]
+/// Capability-disabled Product FoundationVault/Recovery/founder compositor.
+pub(crate) mod product_market_foundation_init;
+/// Always-compiled Product/Series semantic owner; executable routes remain
+/// independently capability-gated, including in source-empty releases.
 pub mod product_series;
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 pub mod resolution_work;
 pub mod series_failure_funding;
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 pub mod source_ingest;
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 pub mod source_ingest_v2;
 pub mod source_series;
+pub mod source_series_successor;
+pub(crate) mod source_occurrence_foundation_v1;
+/// Unrouted private Source terminal composer. It is always compiled so the
+/// current final Failure postwrite can implement its default-refusing bridge;
+/// no checked capability tuple enters it until the complete chain is admitted.
+pub(crate) mod source_terminal_resolution_v5;
 pub mod split;
 /// Wrapper-signed Structured custody and current full-vector lifecycle.
 #[cfg(feature = "non-production-structured-custody-lab")]

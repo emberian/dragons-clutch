@@ -47,7 +47,8 @@
 #[cfg(not(any(
     feature = "profile-full",
     feature = "profile-direct-v3-source-v2-point",
-    feature = "profile-general-source-v2-point"
+    feature = "profile-general-source-v2-point",
+    feature = "profile-successor-chain-attached-v1"
 )))]
 compile_error!("select exactly one Dragon's Clutch capability profile");
 #[cfg(any(
@@ -59,6 +60,14 @@ compile_error!("select exactly one Dragon's Clutch capability profile");
     all(
         feature = "profile-direct-v3-source-v2-point",
         feature = "profile-general-source-v2-point"
+    ),
+    all(
+        feature = "profile-successor-chain-attached-v1",
+        any(
+            feature = "profile-full",
+            feature = "profile-direct-v3-source-v2-point",
+            feature = "profile-general-source-v2-point"
+        )
     )
 ))]
 compile_error!("Dragon's Clutch capability profiles are mutually exclusive");
@@ -73,7 +82,8 @@ use clutch_kernel::{
 };
 #[cfg(any(
     feature = "profile-full",
-    feature = "profile-direct-v3-source-v2-point"
+    feature = "profile-direct-v3-source-v2-point",
+    feature = "profile-successor-chain-attached-v1"
 ))]
 use clutch_solana_layout::direct_selection_v3::DirectV3Intent;
 use clutch_solana_layout::{
@@ -626,7 +636,8 @@ pub struct ExtensionRequest<'a> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg(any(
     feature = "profile-full",
-    feature = "profile-direct-v3-source-v2-point"
+    feature = "profile-direct-v3-source-v2-point",
+    feature = "profile-successor-chain-attached-v1"
 ))]
 pub struct DirectV3Request {
     /// Exact replay sequence supplied to the routed lifecycle action.
@@ -1060,7 +1071,8 @@ impl<'a> ExtensionRequest<'a> {
 
 #[cfg(any(
     feature = "profile-full",
-    feature = "profile-direct-v3-source-v2-point"
+    feature = "profile-direct-v3-source-v2-point",
+    feature = "profile-successor-chain-attached-v1"
 ))]
 impl DirectV3Request {
     /// Encode the strict reference envelope and exact Direct V3 inner wire.
@@ -3117,7 +3129,8 @@ mod tests {
 
     #[cfg(any(
         feature = "profile-full",
-        feature = "profile-direct-v3-source-v2-point"
+        feature = "profile-direct-v3-source-v2-point",
+        feature = "profile-successor-chain-attached-v1"
     ))]
     fn direct_v3_intents() -> [DirectV3Intent; 11] {
         let rewards = clutch_solana_layout::direct_selection_v3::DirectKeeperRewardsV3 {
@@ -3188,7 +3201,8 @@ mod tests {
     #[test]
     #[cfg(any(
         feature = "profile-full",
-        feature = "profile-direct-v3-source-v2-point"
+        feature = "profile-direct-v3-source-v2-point",
+        feature = "profile-successor-chain-attached-v1"
     ))]
     fn dedicated_direct_v3_request_envelope_is_exact_and_legacy_refuses() {
         for (sequence, intent) in direct_v3_intents().into_iter().enumerate() {
