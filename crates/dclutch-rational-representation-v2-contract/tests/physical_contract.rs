@@ -11,9 +11,10 @@ use dclutch_rational_representation_v2_contract::{
     RepresentationRequestHeaderV2, RepresentationRequestV2, TokenEffectStyleV2, finalize, prepare,
 };
 use dclutch_rational_representation_v2_kernel::{
-    ContentAdmissionV2, GRAPH_EDGE_BYTES, GRAPH_HEADER_BYTES, GRAPH_MAGIC_V2, GRAPH_NODE_BYTES,
-    RepresentationGraphV2, SCHEMA_VERSION_V2, STRUCTURED_HEADER_BYTES, STRUCTURED_MAGIC_V2,
-    StructuredProjectionV2,
+    ContentAdmissionV2, DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V2,
+    DescriptorAdmissionV2, GRAPH_EDGE_BYTES, GRAPH_HEADER_BYTES, GRAPH_MAGIC_V2, GRAPH_NODE_BYTES,
+    RepresentationDescriptorV2, RepresentationGraphV2, SCHEMA_VERSION_V2, STRUCTURED_HEADER_BYTES,
+    STRUCTURED_MAGIC_V2, StructuredProjectionV2,
 };
 use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
 
@@ -52,6 +53,42 @@ fn projection_fixture(native0: u64, supply0: u64, free0: u64) -> Vec<u8> {
         put_u64(&mut bytes, STRUCTURED_HEADER_BYTES + index * 8, *value);
     }
     bytes
+}
+
+fn descriptor_fixture() -> Vec<u8> {
+    let mut bytes = vec![0_u8; DESCRIPTOR_HEADER_BYTES + 2 * DESCRIPTOR_COEFFICIENT_BYTES];
+    put(&mut bytes, 0, &DESCRIPTOR_MAGIC_V2);
+    put(&mut bytes, 8, &SCHEMA_VERSION_V2.to_le_bytes());
+    put(&mut bytes, 16, &id(3));
+    put(&mut bytes, 48, &id(14));
+    put(&mut bytes, 80, &id(2));
+    put(&mut bytes, 112, &id(1));
+    put(&mut bytes, 144, &id(5));
+    put(&mut bytes, 176, &TOKEN_2022_PROGRAM_ID);
+    put(&mut bytes, 208, &id(9));
+    put_u32(&mut bytes, 240, 2);
+    put_u64(&mut bytes, 248, 10);
+    put_u64(&mut bytes, DESCRIPTOR_HEADER_BYTES, 3);
+    put_u64(
+        &mut bytes,
+        DESCRIPTOR_HEADER_BYTES + DESCRIPTOR_COEFFICIENT_BYTES,
+        7,
+    );
+    bytes
+}
+
+fn descriptor<'a>(bytes: &'a [u8]) -> RepresentationDescriptorV2<'a> {
+    RepresentationDescriptorV2::decode(
+        bytes,
+        DescriptorAdmissionV2 {
+            selected_descriptor_id: id(4),
+            finalized_descriptor_id: id(4),
+            recomputed_descriptor_digest: id(4),
+            finalized_descriptor_digest: id(4),
+            record_authenticated: true,
+        },
+    )
+    .expect("descriptor")
 }
 
 #[derive(Clone, Copy)]
@@ -298,6 +335,7 @@ fn post_assets(rows: &[(u64, u64, u64)]) -> Vec<u8> {
 fn structured_issue_is_token_only_and_exactly_conserved() {
     let projection_bytes = projection_fixture(3, 30, 9);
     let projection = StructuredProjectionV2::decode(&projection_bytes).expect("projection");
+    let descriptor_bytes = descriptor_fixture();
     let graph_bytes = graph_fixture();
     let row_bytes = asset_bytes(&assets());
     let request = RepresentationRequestV2::new(
@@ -330,7 +368,13 @@ fn structured_issue_is_token_only_and_exactly_conserved() {
         RepresentationRequestV2::decode(&hostile_action),
         Err(Error::NonCanonical)
     );
-    let prepared = prepare(request, projection, graph(&graph_bytes)).expect("prepare");
+    let prepared = prepare(
+        request,
+        descriptor(&descriptor_bytes),
+        projection,
+        graph(&graph_bytes),
+    )
+    .expect("prepare");
     let effects: Vec<_> = prepared.token_effects().collect();
     assert_eq!(effects.len(), 3);
     assert_eq!(
@@ -392,6 +436,7 @@ fn structured_issue_is_token_only_and_exactly_conserved() {
 fn denomination_emits_one_canonical_claims_plan_and_shard_mint() {
     let projection_bytes = projection_fixture(3, 30, 9);
     let projection = StructuredProjectionV2::decode(&projection_bytes).expect("projection");
+    let descriptor_bytes = descriptor_fixture();
     let graph_bytes = graph_fixture();
     let mut selected = assets()[0];
     selected.expected_actor_shards = 9;
@@ -399,7 +444,13 @@ fn denomination_emits_one_canonical_claims_plan_and_shard_mint() {
     let mut request_header = header(RepresentationActionV2::Denominate, 0, 1);
     request_header.quantity = 2;
     let request = RepresentationRequestV2::new(request_header, &rows).expect("request");
-    let prepared = prepare(request, projection, graph(&graph_bytes)).expect("prepare");
+    let prepared = prepare(
+        request,
+        descriptor(&descriptor_bytes),
+        projection,
+        graph(&graph_bytes),
+    )
+    .expect("prepare");
     let effect = prepared
         .token_effects()
         .next()
@@ -447,6 +498,7 @@ fn denomination_emits_one_canonical_claims_plan_and_shard_mint() {
 #[test]
 fn reconstitution_and_unwrap_are_exact_inverse_effect_shapes() {
     let graph_bytes = graph_fixture();
+    let descriptor_bytes = descriptor_fixture();
     let coalesced_projection_bytes = projection_fixture(4, 40, 19);
     let coalesced_projection =
         StructuredProjectionV2::decode(&coalesced_projection_bytes).expect("projection");
@@ -459,7 +511,13 @@ fn reconstitution_and_unwrap_are_exact_inverse_effect_shapes() {
         &selected_rows,
     )
     .expect("reconstitution request");
-    let prepared = prepare(request, coalesced_projection, graph(&graph_bytes)).expect("prepare");
+    let prepared = prepare(
+        request,
+        descriptor(&descriptor_bytes),
+        coalesced_projection,
+        graph(&graph_bytes),
+    )
+    .expect("prepare");
     let effect = prepared
         .token_effects()
         .next()
@@ -507,7 +565,13 @@ fn reconstitution_and_unwrap_are_exact_inverse_effect_shapes() {
         &all_rows,
     )
     .expect("unwrap request");
-    let prepared = prepare(unwrap, projection, graph(&graph_bytes)).expect("prepare unwrap");
+    let prepared = prepare(
+        unwrap,
+        descriptor(&descriptor_bytes),
+        projection,
+        graph(&graph_bytes),
+    )
+    .expect("prepare unwrap");
     let effects: Vec<_> = prepared.token_effects().collect();
     assert_eq!(effects.len(), 3);
     assert_eq!(
@@ -556,6 +620,7 @@ fn reconstitution_and_unwrap_are_exact_inverse_effect_shapes() {
 fn terminal_winner_burn_claims_and_custody_join_is_exact() {
     let projection_bytes = projection_fixture(4, 40, 19);
     let projection = StructuredProjectionV2::decode(&projection_bytes).expect("projection");
+    let descriptor_bytes = descriptor_fixture();
     let graph_bytes = graph_fixture();
     let mut selected = assets()[0];
     selected.expected_shard_supply = 40;
@@ -564,7 +629,13 @@ fn terminal_winner_burn_claims_and_custody_join_is_exact() {
     let request =
         RepresentationRequestV2::new(header(RepresentationActionV2::RedeemTerminal, 0, 1), &rows)
             .expect("request");
-    let prepared = prepare(request, projection, graph(&graph_bytes)).expect("prepare");
+    let prepared = prepare(
+        request,
+        descriptor(&descriptor_bytes),
+        projection,
+        graph(&graph_bytes),
+    )
+    .expect("prepare");
     let mut quantities = vec![0_u8; prepared.claims_quantity_bytes().expect("width")];
     prepared
         .write_claims_quantities(&mut quantities)
@@ -657,13 +728,19 @@ fn terminal_winner_burn_claims_and_custody_join_is_exact() {
 fn hostile_partial_reconstitution_replay_and_late_token_post_refuse() {
     let projection_bytes = projection_fixture(3, 30, 9);
     let projection = StructuredProjectionV2::decode(&projection_bytes).expect("projection");
+    let descriptor_bytes = descriptor_fixture();
     let graph_bytes = graph_fixture();
     let rows = asset_bytes(&[assets()[0]]);
     let request =
         RepresentationRequestV2::new(header(RepresentationActionV2::Reconstitute, 0, 1), &rows)
             .expect("request");
     assert_eq!(
-        prepare(request, projection, graph(&graph_bytes)),
+        prepare(
+            request,
+            descriptor(&descriptor_bytes),
+            projection,
+            graph(&graph_bytes),
+        ),
         Err(Error::InsufficientBalance)
     );
 
@@ -673,7 +750,35 @@ fn hostile_partial_reconstitution_replay_and_late_token_post_refuse() {
         &all_rows,
     )
     .expect("issue");
-    let prepared = prepare(issue, projection, graph(&graph_bytes)).expect("prepare issue");
+    let mut substituted_coefficients = descriptor_fixture();
+    put_u64(&mut substituted_coefficients, DESCRIPTOR_HEADER_BYTES, 4);
+    assert_eq!(
+        prepare(
+            issue,
+            descriptor(&substituted_coefficients),
+            projection,
+            graph(&graph_bytes),
+        ),
+        Err(Error::ProjectionMismatch)
+    );
+    let mut substituted_graph = descriptor_fixture();
+    put(&mut substituted_graph, 16, &id(99));
+    assert_eq!(
+        prepare(
+            issue,
+            descriptor(&substituted_graph),
+            projection,
+            graph(&graph_bytes),
+        ),
+        Err(Error::ProjectionMismatch)
+    );
+    let prepared = prepare(
+        issue,
+        descriptor(&descriptor_bytes),
+        projection,
+        graph(&graph_bytes),
+    )
+    .expect("prepare issue");
     let hostile_posts = post_assets(&[(30, 6, 23), (60, 4, 56)]);
     assert_eq!(
         finalize(
@@ -706,7 +811,13 @@ fn hostile_partial_reconstitution_replay_and_late_token_post_refuse() {
         &selected_rows,
     )
     .expect("denomination");
-    let prepared = prepare(denomination, projection, graph(&graph_bytes)).expect("prepare");
+    let prepared = prepare(
+        denomination,
+        descriptor(&descriptor_bytes),
+        projection,
+        graph(&graph_bytes),
+    )
+    .expect("prepare");
     let mut quantities = vec![0_u8; prepared.claims_quantity_bytes().expect("width")];
     prepared
         .write_claims_quantities(&mut quantities)

@@ -131,6 +131,37 @@ def acceptedGraph : Graph := {
 example : acceptedGraph.valid = true := by native_decide
 example : acceptedGraph.rootExposure? = some ⟨[30, 70]⟩ := by native_decide
 
+def acceptedDescriptor : ImmutableDescriptor := {
+  descriptorId := 7
+  graphId := 6
+  rootId := 5
+  marketId := 8
+  releaseSetId := 9
+  receiptMint := 10
+  tokenProgram := 11
+  representationAuthority := 12
+  denominator := 10
+  coefficients := [3, 7]
+}
+
+example : acceptedDescriptor.validFor acceptedGraph = true := by native_decide
+
+/-- A same-width coefficient vector is not substitutable for the finalized
+descriptor's exact common-scale payoff. -/
+def substitutedCoefficients : ImmutableDescriptor := {
+  acceptedDescriptor with coefficients := [4, 6]
+}
+
+example : substitutedCoefficients.validFor acceptedGraph = false := by native_decide
+
+/-- A descriptor cannot transplant its valid coefficient vector to another
+same-width graph identity. -/
+def substitutedGraphIdentity : ImmutableDescriptor := {
+  acceptedDescriptor with graphId := 99
+}
+
+example : substitutedGraphIdentity.validFor acceptedGraph = false := by native_decide
+
 /-- A self-reference authenticates an existing identity but cannot decrease
 rank, so it is refused as a cycle. -/
 def cyclicBasket : Node := {

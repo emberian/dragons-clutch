@@ -4,7 +4,9 @@ use dclutch_claims_svm::{
     CLAIM_QUANTITY_BYTES, CLAIMS_PLAN_HEADER_BYTES_V1, CallerRole, ClaimsAction, ClaimsPlanV1,
     NO_POSITION_REVISION,
 };
-use dclutch_rational_representation_v2_kernel::{RepresentationGraphV2, StructuredProjectionV2};
+use dclutch_rational_representation_v2_kernel::{
+    RepresentationDescriptorV2, RepresentationGraphV2, StructuredProjectionV2,
+};
 
 use crate::{
     Error, Result, is_zero,
@@ -220,11 +222,24 @@ impl<'a> PreparedRepresentationV2<'a> {
 /// projection. No balance is copied into a protocol-owned state.
 pub fn prepare<'a>(
     request: RepresentationRequestV2<'a>,
+    descriptor: RepresentationDescriptorV2<'_>,
     projection: StructuredProjectionV2<'a>,
     graph: RepresentationGraphV2<'a>,
 ) -> Result<PreparedRepresentationV2<'a>> {
     let header = request.header();
-    if graph.graph_id() != header.graph_id
+    descriptor
+        .authenticate_graph(graph)
+        .map_err(|_| Error::ProjectionMismatch)?;
+    if descriptor.descriptor_id() != header.descriptor_id
+        || descriptor.graph_id() != header.graph_id
+        || descriptor.market_id() != header.market
+        || descriptor.release_set_id() != header.release_set
+        || descriptor.receipt_mint() != header.receipt_mint
+        || descriptor.token_program() != header.token_program
+        || descriptor.representation_authority() != header.representation_authority
+        || descriptor.outcome_count() != header.outcome_count
+        || descriptor.denominator() != header.denominator
+        || graph.graph_id() != header.graph_id
         || graph.outcome_count() != header.outcome_count
         || projection.descriptor_id() != header.descriptor_id
         || projection.market_id() != header.market
@@ -247,7 +262,11 @@ pub fn prepare<'a>(
         let coordinate = projection
             .coordinate(outcome)
             .map_err(|_| Error::ProjectionMismatch)?;
-        if asset.coefficient != coordinate.coefficient
+        if asset.coefficient
+            != descriptor
+                .coefficient(outcome)
+                .map_err(|_| Error::ProjectionMismatch)?
+            || asset.coefficient != coordinate.coefficient
             || asset.expected_shard_supply != coordinate.shard_supply
             || asset.expected_structured_shards != coordinate.structured_custody
             || asset.expected_actor_shards > coordinate.explicit_free_shards

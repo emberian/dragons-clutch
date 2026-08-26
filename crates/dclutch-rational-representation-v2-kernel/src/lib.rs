@@ -9,6 +9,20 @@
 //! native/materialized economic owner, and finalized representation records
 //! remain the sole recipe owner. No mutable representation ledger exists here.
 
+#[allow(missing_docs)]
+mod generated_descriptor;
+
+use generated_descriptor::{
+    DESCRIPTOR_AUTHORITY_OFFSET, DESCRIPTOR_DENOMINATOR_OFFSET, DESCRIPTOR_GRAPH_ID_OFFSET,
+    DESCRIPTOR_MAGIC_OFFSET, DESCRIPTOR_MARKET_ID_OFFSET, DESCRIPTOR_OUTCOME_COUNT_OFFSET,
+    DESCRIPTOR_RECEIPT_MINT_OFFSET, DESCRIPTOR_RELEASE_SET_ID_OFFSET,
+    DESCRIPTOR_RESERVED_HEADER_OFFSET, DESCRIPTOR_RESERVED_OFFSET, DESCRIPTOR_ROOT_ID_OFFSET,
+    DESCRIPTOR_TOKEN_PROGRAM_OFFSET, DESCRIPTOR_VERSION_OFFSET,
+};
+pub use generated_descriptor::{
+    DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V2,
+};
+
 /// Fixed Structured projection header before five runtime-width `u64` vectors.
 pub const STRUCTURED_HEADER_BYTES: usize = 144;
 /// One scalar in every runtime-width vector.
@@ -25,6 +39,14 @@ pub const GRAPH_NODE_BYTES: usize = 64;
 pub const GRAPH_EDGE_BYTES: usize = 48;
 /// Canonical graph magic.
 pub const GRAPH_MAGIC_V2: [u8; 8] = *b"DCRRGRP2";
+/// Canonical finalized-record schema label for [`RepresentationDescriptorV2`].
+pub const REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_PREIMAGE_V2: &[u8] =
+    b"dclutch/schema/rational-representation-v2";
+/// SHA-256 identity of [`REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_PREIMAGE_V2`].
+pub const REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V2: [u8; 32] = [
+    0x78, 0x05, 0x26, 0x58, 0xd7, 0x7f, 0x62, 0xdb, 0xe0, 0x3a, 0x14, 0x24, 0xca, 0x0c, 0x28, 0x5c,
+    0x82, 0x22, 0x22, 0xf1, 0xac, 0x99, 0x3c, 0xf2, 0x22, 0xbb, 0x1c, 0xbd, 0x37, 0xd2, 0x3d, 0x28,
+];
 /// Implemented schema version.
 pub const SCHEMA_VERSION_V2: u16 = 2;
 
@@ -92,6 +114,8 @@ pub enum Error {
     InsufficientBalance,
     /// Selected and finalized content identities or record evidence differed.
     ContentAdmissionMismatch,
+    /// Immutable descriptor, graph root, or exact coefficient payoff differed.
+    DescriptorMismatch,
     /// Node identities or `(rank, content_id)` order were noncanonical.
     NonCanonicalNodeOrder,
     /// An edge selected a missing, substituted, future, or unordered child.
@@ -513,6 +537,195 @@ pub fn prepare_reconstitute(
             .checked_sub(shard_atoms)
             .ok_or(Error::InsufficientBalance)?,
     })
+}
+
+/// Finalized-record authentication observed for one immutable descriptor.
+///
+/// The adapter owns SHA-256, Record-program ownership, canonical raw/staging
+/// PDA checks, and rent exemption. This kernel names those assumptions and
+/// requires every identity to join; it never treats an ID echo as finality.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DescriptorAdmissionV2 {
+    /// Descriptor selected by the Market/operator request.
+    pub selected_descriptor_id: [u8; 32],
+    /// Descriptor content identity in the finalized raw-record coordinates.
+    pub finalized_descriptor_id: [u8; 32],
+    /// SHA-256 of the exact descriptor bytes recomputed by the adapter.
+    pub recomputed_descriptor_digest: [u8; 32],
+    /// Digest committed by the finalized record identity.
+    pub finalized_descriptor_digest: [u8; 32],
+    /// Finalized raw owner/PDA, vacant staging PDA, and rent were authenticated.
+    pub record_authenticated: bool,
+}
+
+/// Borrowed immutable authority for one exact rational representation.
+///
+/// The descriptor persists no Claims quantities, Token supplies, Token holder
+/// balances, or replay revision. Its runtime-width tail contains only the
+/// exact coefficients which interpret one receipt atom against a finalized
+/// payoff graph. Per-outcome Mint/custody addresses are derived from this
+/// content identity by the physical Claims adapter rather than repeated here.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RepresentationDescriptorV2<'a> {
+    descriptor_id: [u8; 32],
+    graph_id: [u8; 32],
+    root_id: [u8; 32],
+    market_id: [u8; 32],
+    release_set_id: [u8; 32],
+    receipt_mint: [u8; 32],
+    token_program: [u8; 32],
+    representation_authority: [u8; 32],
+    outcome_count: u32,
+    denominator: u64,
+    coefficients: &'a [u8],
+}
+
+impl<'a> RepresentationDescriptorV2<'a> {
+    /// Hostile-decode an exact finalized descriptor preimage.
+    pub fn decode(input: &'a [u8], admission: DescriptorAdmissionV2) -> Result<Self> {
+        if input.len() < DESCRIPTOR_HEADER_BYTES {
+            return Err(Error::InvalidLength);
+        }
+        if array_at::<8>(input, DESCRIPTOR_MAGIC_OFFSET)? != DESCRIPTOR_MAGIC_V2 {
+            return Err(Error::InvalidMagic);
+        }
+        if u16_at(input, DESCRIPTOR_VERSION_OFFSET)? != SCHEMA_VERSION_V2 {
+            return Err(Error::UnsupportedVersion);
+        }
+        require_zero(input, DESCRIPTOR_RESERVED_HEADER_OFFSET, 6)?;
+        let outcome_count = u32_at(input, DESCRIPTOR_OUTCOME_COUNT_OFFSET)?;
+        if outcome_count == 0 {
+            return Err(Error::InvalidWidth);
+        }
+        require_zero(input, DESCRIPTOR_RESERVED_OFFSET, 4)?;
+        let coefficient_bytes = usize::try_from(outcome_count)
+            .map_err(|_| Error::InvalidWidth)?
+            .checked_mul(DESCRIPTOR_COEFFICIENT_BYTES)
+            .ok_or(Error::InvalidLength)?;
+        if input.len()
+            != DESCRIPTOR_HEADER_BYTES
+                .checked_add(coefficient_bytes)
+                .ok_or(Error::InvalidLength)?
+        {
+            return Err(Error::InvalidLength);
+        }
+        validate_descriptor_admission(admission)?;
+        let descriptor = Self {
+            descriptor_id: admission.selected_descriptor_id,
+            graph_id: nonzero_array(input, DESCRIPTOR_GRAPH_ID_OFFSET)?,
+            root_id: nonzero_array(input, DESCRIPTOR_ROOT_ID_OFFSET)?,
+            market_id: nonzero_array(input, DESCRIPTOR_MARKET_ID_OFFSET)?,
+            release_set_id: nonzero_array(input, DESCRIPTOR_RELEASE_SET_ID_OFFSET)?,
+            receipt_mint: nonzero_array(input, DESCRIPTOR_RECEIPT_MINT_OFFSET)?,
+            token_program: nonzero_array(input, DESCRIPTOR_TOKEN_PROGRAM_OFFSET)?,
+            representation_authority: nonzero_array(input, DESCRIPTOR_AUTHORITY_OFFSET)?,
+            outcome_count,
+            denominator: u64_at(input, DESCRIPTOR_DENOMINATOR_OFFSET)?,
+            coefficients: subslice(input, DESCRIPTOR_HEADER_BYTES, coefficient_bytes)?,
+        };
+        if descriptor.denominator == 0 {
+            return Err(Error::ZeroDenominator);
+        }
+        let mut any_coefficient = false;
+        let mut outcome = 0_u32;
+        while outcome < descriptor.outcome_count {
+            any_coefficient |= descriptor.coefficient(outcome)? != 0;
+            outcome = outcome.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+        }
+        if !any_coefficient {
+            return Err(Error::EmptyRecipe);
+        }
+        Ok(descriptor)
+    }
+
+    /// Exact content identity of the immutable descriptor bytes.
+    pub const fn descriptor_id(self) -> [u8; 32] {
+        self.descriptor_id
+    }
+
+    /// Finalized graph selected by this descriptor.
+    pub const fn graph_id(self) -> [u8; 32] {
+        self.graph_id
+    }
+
+    /// Finalized graph root selected by this descriptor.
+    pub const fn root_id(self) -> [u8; 32] {
+        self.root_id
+    }
+
+    /// Logical Core Market whose native Claims back this representation.
+    pub const fn market_id(self) -> [u8; 32] {
+        self.market_id
+    }
+
+    /// Exact execution release set admitting the representation.
+    pub const fn release_set_id(self) -> [u8; 32] {
+        self.release_set_id
+    }
+
+    /// Token-owned Structured receipt Mint.
+    pub const fn receipt_mint(self) -> [u8; 32] {
+        self.receipt_mint
+    }
+
+    /// Immutable legacy Token or Token-2022 adapter selection.
+    pub const fn token_program(self) -> [u8; 32] {
+        self.token_program
+    }
+
+    /// Claims PDA controlling exact shard and receipt mutations.
+    pub const fn representation_authority(self) -> [u8; 32] {
+        self.representation_authority
+    }
+
+    /// Product-owned runtime outcome width.
+    pub const fn outcome_count(self) -> u32 {
+        self.outcome_count
+    }
+
+    /// Shard atoms backing one native claim atom.
+    pub const fn denominator(self) -> u64 {
+        self.denominator
+    }
+
+    /// Exact shard atoms required per Structured receipt atom at one outcome.
+    pub fn coefficient(self, outcome: u32) -> Result<u64> {
+        if outcome >= self.outcome_count {
+            return Err(Error::InvalidWidth);
+        }
+        let offset = usize::try_from(outcome)
+            .map_err(|_| Error::InvalidWidth)?
+            .checked_mul(DESCRIPTOR_COEFFICIENT_BYTES)
+            .ok_or(Error::InvalidLength)?;
+        u64_at(self.coefficients, offset)
+    }
+
+    /// Join this descriptor to its exact graph/root and prove every
+    /// coefficient has the same common-scale native payoff.
+    pub fn authenticate_graph(self, graph: RepresentationGraphV2<'_>) -> Result<()> {
+        if self.graph_id != graph.graph_id()
+            || self.root_id != graph.root_id()
+            || self.outcome_count != graph.outcome_count()
+        {
+            return Err(Error::DescriptorMismatch);
+        }
+        let mut outcome = 0_u32;
+        while outcome < self.outcome_count {
+            let coefficient_payoff = self
+                .coefficient(outcome)?
+                .checked_mul(graph.scale())
+                .ok_or(Error::ArithmeticOverflow)?;
+            let root_payoff = graph
+                .root_exposure(outcome)?
+                .checked_mul(self.denominator)
+                .ok_or(Error::ArithmeticOverflow)?;
+            if coefficient_payoff != root_payoff {
+                return Err(Error::DescriptorMismatch);
+            }
+            outcome = outcome.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+        }
+        Ok(())
+    }
 }
 
 /// Finalized-record authentication observed by the physical adapter.
@@ -952,6 +1165,18 @@ fn validate_content_admission(graph_id: [u8; 32], admission: ContentAdmissionV2)
     Ok(())
 }
 
+fn validate_descriptor_admission(admission: DescriptorAdmissionV2) -> Result<()> {
+    if !admission.record_authenticated
+        || is_zero(&admission.selected_descriptor_id)
+        || admission.selected_descriptor_id != admission.finalized_descriptor_id
+        || admission.selected_descriptor_id != admission.recomputed_descriptor_digest
+        || admission.recomputed_descriptor_digest != admission.finalized_descriptor_digest
+    {
+        return Err(Error::ContentAdmissionMismatch);
+    }
+    Ok(())
+}
+
 fn exact_magic(input: &[u8], expected: &[u8; 8]) -> Result<()> {
     if array_at::<8>(input, 0)? != *expected {
         return Err(Error::InvalidMagic);
@@ -1082,6 +1307,38 @@ mod tests {
             finalized_graph_digest: [7; 32],
             record_authenticated: true,
         }
+    }
+
+    fn descriptor_admission() -> DescriptorAdmissionV2 {
+        DescriptorAdmissionV2 {
+            selected_descriptor_id: [8; 32],
+            finalized_descriptor_id: [8; 32],
+            recomputed_descriptor_digest: [8; 32],
+            finalized_descriptor_digest: [8; 32],
+            record_authenticated: true,
+        }
+    }
+
+    fn descriptor_fixture() -> Vec<u8> {
+        let mut bytes = vec![0_u8; DESCRIPTOR_HEADER_BYTES + 2 * DESCRIPTOR_COEFFICIENT_BYTES];
+        put(&mut bytes, 0, &DESCRIPTOR_MAGIC_V2);
+        put(&mut bytes, 8, &SCHEMA_VERSION_V2.to_le_bytes());
+        put(&mut bytes, DESCRIPTOR_GRAPH_ID_OFFSET, &[6; 32]);
+        put(&mut bytes, DESCRIPTOR_ROOT_ID_OFFSET, &[5; 32]);
+        put(&mut bytes, DESCRIPTOR_MARKET_ID_OFFSET, &[2; 32]);
+        put(&mut bytes, DESCRIPTOR_RELEASE_SET_ID_OFFSET, &[9; 32]);
+        put(&mut bytes, DESCRIPTOR_RECEIPT_MINT_OFFSET, &[3; 32]);
+        put(&mut bytes, DESCRIPTOR_TOKEN_PROGRAM_OFFSET, &[10; 32]);
+        put(&mut bytes, DESCRIPTOR_AUTHORITY_OFFSET, &[11; 32]);
+        put_u32(&mut bytes, DESCRIPTOR_OUTCOME_COUNT_OFFSET, 2);
+        put_u64(&mut bytes, DESCRIPTOR_DENOMINATOR_OFFSET, 10);
+        put_u64(&mut bytes, DESCRIPTOR_HEADER_BYTES, 3);
+        put_u64(
+            &mut bytes,
+            DESCRIPTOR_HEADER_BYTES + DESCRIPTOR_COEFFICIENT_BYTES,
+            7,
+        );
+        bytes
     }
 
     #[derive(Clone, Copy)]
@@ -1334,6 +1591,67 @@ mod tests {
         assert_eq!(graph.root_id(), [5; 32]);
         assert_eq!(graph.root_exposure(0), Ok(30));
         assert_eq!(graph.root_exposure(1), Ok(70));
+    }
+
+    #[test]
+    fn finalized_descriptor_joins_exact_graph_root_and_coefficients() {
+        let descriptor_bytes = descriptor_fixture();
+        let descriptor =
+            RepresentationDescriptorV2::decode(&descriptor_bytes, descriptor_admission())
+                .expect("finalized descriptor");
+        let graph_bytes = graph_fixture();
+        let graph = RepresentationGraphV2::decode(&graph_bytes, admission()).expect("graph");
+        descriptor
+            .authenticate_graph(graph)
+            .expect("exact payoff join");
+        assert_eq!(descriptor.descriptor_id(), [8; 32]);
+        assert_eq!(descriptor.graph_id(), [6; 32]);
+        assert_eq!(descriptor.root_id(), [5; 32]);
+        assert_eq!(descriptor.market_id(), [2; 32]);
+        assert_eq!(descriptor.release_set_id(), [9; 32]);
+        assert_eq!(descriptor.receipt_mint(), [3; 32]);
+        assert_eq!(descriptor.token_program(), [10; 32]);
+        assert_eq!(descriptor.representation_authority(), [11; 32]);
+        assert_eq!(descriptor.outcome_count(), 2);
+        assert_eq!(descriptor.denominator(), 10);
+        assert_eq!(descriptor.coefficient(0), Ok(3));
+        assert_eq!(descriptor.coefficient(1), Ok(7));
+    }
+
+    #[test]
+    fn same_width_coefficient_graph_and_record_substitutions_refuse() {
+        let graph_bytes = graph_fixture();
+        let graph = RepresentationGraphV2::decode(&graph_bytes, admission()).expect("graph");
+        let mut coefficient_substitution = descriptor_fixture();
+        put_u64(&mut coefficient_substitution, DESCRIPTOR_HEADER_BYTES, 4);
+        let descriptor =
+            RepresentationDescriptorV2::decode(&coefficient_substitution, descriptor_admission())
+                .expect("same-width descriptor");
+        assert_eq!(
+            descriptor.authenticate_graph(graph),
+            Err(Error::DescriptorMismatch)
+        );
+
+        let mut graph_substitution = descriptor_fixture();
+        put(
+            &mut graph_substitution,
+            DESCRIPTOR_GRAPH_ID_OFFSET,
+            &[12; 32],
+        );
+        let descriptor =
+            RepresentationDescriptorV2::decode(&graph_substitution, descriptor_admission())
+                .expect("alternate graph selection");
+        assert_eq!(
+            descriptor.authenticate_graph(graph),
+            Err(Error::DescriptorMismatch)
+        );
+
+        let mut hostile_admission = descriptor_admission();
+        hostile_admission.finalized_descriptor_id = [13; 32];
+        assert_eq!(
+            RepresentationDescriptorV2::decode(&descriptor_fixture(), hostile_admission),
+            Err(Error::ContentAdmissionMismatch)
+        );
     }
 
     #[test]

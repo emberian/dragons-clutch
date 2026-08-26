@@ -320,4 +320,56 @@ theorem root_exposure_is_precomputed
     graph.rootExposure? = some node.exposure := by
   simp [Graph.rootExposure?, found]
 
+/-! ## Immutable descriptor authority -/
+
+/-- Immutable representation authority. Mutable Claims quantities, Token
+supplies and holder balances, and replay revisions are deliberately absent. -/
+structure ImmutableDescriptor where
+  descriptorId : Nat
+  graphId : Nat
+  rootId : Nat
+  marketId : Nat
+  releaseSetId : Nat
+  receiptMint : Nat
+  tokenProgram : Nat
+  representationAuthority : Nat
+  denominator : Nat
+  coefficients : List Nat
+  deriving DecidableEq, Repr
+
+/-- The descriptor selects one exact graph and root, rather than merely an
+arbitrary same-width exposure. -/
+def ImmutableDescriptor.bindsGraph
+    (descriptor : ImmutableDescriptor) (graph : Graph) : Bool :=
+  descriptor.graphId = graph.graphId && descriptor.rootId = graph.rootId
+
+theorem bindsGraph_iff_exact_identities
+    (descriptor : ImmutableDescriptor) (graph : Graph) :
+    descriptor.bindsGraph graph = true ↔
+      descriptor.graphId = graph.graphId ∧ descriptor.rootId = graph.rootId := by
+  simp [ImmutableDescriptor.bindsGraph]
+
+/-- Every coefficient is the same exact common-scale payoff as the selected
+graph root: `c_i * graphScale = rootExposure_i * denominator`. -/
+def coefficientPayoffsExact
+    (denominator graphScale : Nat) (coefficients exposure : List Nat) : Bool :=
+  coefficients.length = exposure.length &&
+    (List.zipWith
+      (fun coefficient native => coefficient * graphScale == native * denominator)
+      coefficients exposure).all id
+
+/-- Full immutable descriptor→graph admission. Record finality and content
+hashing remain separately named physical-adapter assumptions. -/
+def ImmutableDescriptor.validFor
+    (descriptor : ImmutableDescriptor) (graph : Graph) : Bool :=
+  descriptor.descriptorId != 0 && descriptor.marketId != 0 &&
+  descriptor.releaseSetId != 0 && descriptor.receiptMint != 0 &&
+  descriptor.tokenProgram != 0 && descriptor.representationAuthority != 0 &&
+  0 < descriptor.denominator && descriptor.bindsGraph graph &&
+  descriptor.coefficients.length = graph.outcomeCount &&
+  match graph.rootExposure? with
+  | some exposure => coefficientPayoffsExact
+      descriptor.denominator graph.scale descriptor.coefficients exposure.quantities
+  | none => false
+
 end DClutch.RationalRepresentationV2

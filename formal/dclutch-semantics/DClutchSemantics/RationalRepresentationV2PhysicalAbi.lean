@@ -27,6 +27,55 @@ def receiptMagic : List UInt8 :=
 
 def version : Nat := 2
 
+/-! ## Immutable finalized descriptor -/
+
+inductive DescriptorField where
+  | magic | version | reservedHeader | graphId | rootId | market | releaseSet
+  | receiptMint | tokenProgram | representationAuthority | outcomeCount
+  | reservedTail | denominator
+  deriving DecidableEq, Repr
+
+def descriptorSchema : List (FieldSpec DescriptorField) := [
+  ⟨.magic, .bytes 8⟩, ⟨.version, .u16⟩, ⟨.reservedHeader, .reserved 6⟩,
+  ⟨.graphId, .bytes 32⟩, ⟨.rootId, .bytes 32⟩, ⟨.market, .bytes 32⟩,
+  ⟨.releaseSet, .bytes 32⟩, ⟨.receiptMint, .bytes 32⟩,
+  ⟨.tokenProgram, .bytes 32⟩, ⟨.representationAuthority, .bytes 32⟩,
+  ⟨.outcomeCount, .u32⟩, ⟨.reservedTail, .reserved 4⟩,
+  ⟨.denominator, .u64⟩
+]
+
+def descriptorLayout : List (PlacedField DescriptorField) := specialize descriptorSchema
+def descriptorHeaderBytes : Nat := schemaWidth descriptorSchema
+def descriptorCoefficientBytes : Nat := 8
+
+namespace DescriptorField
+
+def all : List DescriptorField := [
+  .magic, .version, .reservedHeader, .graphId, .rootId, .market, .releaseSet,
+  .receiptMint, .tokenProgram, .representationAuthority, .outcomeCount,
+  .reservedTail, .denominator
+]
+
+def rustName : DescriptorField → String
+  | .magic => "DESCRIPTOR_MAGIC_OFFSET"
+  | .version => "DESCRIPTOR_VERSION_OFFSET"
+  | .reservedHeader => "DESCRIPTOR_RESERVED_HEADER_OFFSET"
+  | .graphId => "DESCRIPTOR_GRAPH_ID_OFFSET"
+  | .rootId => "DESCRIPTOR_ROOT_ID_OFFSET"
+  | .market => "DESCRIPTOR_MARKET_ID_OFFSET"
+  | .releaseSet => "DESCRIPTOR_RELEASE_SET_ID_OFFSET"
+  | .receiptMint => "DESCRIPTOR_RECEIPT_MINT_OFFSET"
+  | .tokenProgram => "DESCRIPTOR_TOKEN_PROGRAM_OFFSET"
+  | .representationAuthority => "DESCRIPTOR_AUTHORITY_OFFSET"
+  | .outcomeCount => "DESCRIPTOR_OUTCOME_COUNT_OFFSET"
+  | .reservedTail => "DESCRIPTOR_RESERVED_OFFSET"
+  | .denominator => "DESCRIPTOR_DENOMINATOR_OFFSET"
+
+def offset (field : DescriptorField) : Nat :=
+  ((coordinate? field descriptorLayout).getD (0, 0)).1
+
+end DescriptorField
+
 inductive Action where
   | denominate | reconstitute | issueStructured | unwrapStructured | redeemTerminal
   deriving DecidableEq, Repr
@@ -256,6 +305,8 @@ theorem asset_schema_well_formed : WellFormed assetSchema := by
   simp [WellFormed, assetSchema, FieldKind.byteWidth]
 theorem receipt_schema_well_formed : WellFormed receiptSchema := by
   simp [WellFormed, receiptSchema, FieldKind.byteWidth]
+theorem descriptor_schema_well_formed : WellFormed descriptorSchema := by
+  simp [WellFormed, descriptorSchema, FieldKind.byteWidth]
 
 theorem request_layout_disjoint : requestLayout.Pairwise Before :=
   specializeFrom_pairwise 0 requestSchema
@@ -265,5 +316,8 @@ theorem asset_layout_disjoint : assetLayout.Pairwise Before :=
 
 theorem receipt_layout_disjoint : receiptLayout.Pairwise Before :=
   specializeFrom_pairwise 0 receiptSchema
+
+theorem descriptor_layout_disjoint : descriptorLayout.Pairwise Before :=
+  specializeFrom_pairwise 0 descriptorSchema
 
 end DClutch.RationalRepresentationV2PhysicalAbi
