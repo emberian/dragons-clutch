@@ -6,6 +6,8 @@
 //! PDA derivation, Core request construction, replay persistence, and physical
 //! commit-last lifecycle planning.
 
+/// Exact dynamic-span physical AccountProfile for global Consume execution.
+pub mod account_profile_v4;
 /// Solana account authentication and commit-last physical persistence.
 pub mod accounts;
 /// Exact action-selected generic V3 interpreter artifacts.

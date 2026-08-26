@@ -100,8 +100,20 @@ pub fn build_series_projected_consume_v2(
 
 #[cfg(test)]
 mod tests {
+    use dclutch_account_profile_contract::v2::AccountProfileV2;
     use dclutch_core_contract::ContentId;
     use dclutch_series_v3_kernel::request::encode_series_action_header_v3;
+    use dclutch_trading_sbf::series::account_profile_v4::{
+        SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4, SeriesConsumeAccountProfileInputV4,
+        encode_series_consume_account_profile_v4_atomic,
+    };
+    use solana_compute_budget_interface::ComputeBudgetInstruction;
+    use solana_hash::Hash;
+    use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
+    use solana_program::{
+        instruction::{AccountMeta, Instruction},
+        pubkey::Pubkey,
+    };
 
     use super::*;
 
@@ -109,7 +121,7 @@ mod tests {
         ContentId::new([byte; 32]).expect("identity")
     }
 
-    fn request(action: SeriesActionV3) -> Vec<u8> {
+    fn request_with_proof(action: SeriesActionV3, proof_count: u8) -> Vec<u8> {
         let occurrence_bound = action.occurrence_bound();
         let header = encode_series_action_header_v3(
             action,
@@ -122,14 +134,18 @@ mod tests {
             } else {
                 5
             },
-            if occurrence_bound { 2 } else { 0 },
+            if occurrence_bound { proof_count } else { 0 },
         )
         .expect("header");
         let mut bytes = header.to_vec();
         if occurrence_bound {
-            bytes.extend_from_slice(&[9; 64]);
+            bytes.extend_from_slice(&vec![9; usize::from(proof_count) * 32]);
         }
         bytes
+    }
+
+    fn request(action: SeriesActionV3) -> Vec<u8> {
+        request_with_proof(action, 2)
     }
 
     #[test]
@@ -165,6 +181,95 @@ mod tests {
         assert_eq!(
             build_series_projected_consume_v2(&padded, 3),
             Err(SeriesProjectedOperatorErrorV2::Request)
+        );
+    }
+
+    #[test]
+    fn maximum_projected_consume_has_a_real_v0_packet_margin() {
+        const MAXIMUM_FUNDING_COUNT: u32 = 16;
+        const SOLANA_PACKET_BYTES: usize = 1_232;
+        const REQUIRED_PACKET_MARGIN: usize = 256;
+
+        let lengths = [0_u32; 157];
+        let mut profile_scratch = vec![0_u8; SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4];
+        let mut profile_bytes = vec![0_u8; SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4];
+        encode_series_consume_account_profile_v4_atomic(
+            SeriesConsumeAccountProfileInputV4 {
+                fixed_data_lengths: &lengths,
+            },
+            &mut profile_scratch,
+            &mut profile_bytes,
+        )
+        .expect("canonical Series Profile13");
+        let profile = AccountProfileV2::decode(&profile_bytes).expect("Profile13 decode");
+        let physical_accounts = profile
+            .physical_account_count_with_dynamic_spans(0, &[MAXIMUM_FUNDING_COUNT])
+            .expect("physical account count");
+        assert_eq!(physical_accounts, 80);
+
+        let family_request = request_with_proof(SeriesActionV3::Consume, 9);
+        let projected = build_series_projected_consume_v2(
+            &family_request,
+            u8::try_from(MAXIMUM_FUNDING_COUNT).expect("bounded count"),
+        )
+        .expect("maximum projected Consume");
+        assert_eq!(projected.data().len(), 432);
+
+        let payer = Pubkey::new_from_array([1; 32]);
+        let trading_program = Pubkey::new_from_array([2; 32]);
+        let addresses = (0..physical_accounts)
+            .map(|index| {
+                Pubkey::new_from_array([
+                    u8::try_from(index + 3).expect("bounded representative index");
+                    32
+                ])
+            })
+            .collect::<Vec<_>>();
+        let accounts = addresses
+            .iter()
+            .enumerate()
+            .map(|(index, key)| {
+                if index.is_multiple_of(5) {
+                    AccountMeta::new(*key, false)
+                } else {
+                    AccountMeta::new_readonly(*key, false)
+                }
+            })
+            .collect::<Vec<_>>();
+        let instruction = Instruction {
+            program_id: trading_program,
+            accounts,
+            data: projected.data().to_vec(),
+        };
+        let lookup = AddressLookupTableAccount {
+            key: Pubkey::new_from_array([254; 32]),
+            addresses,
+        };
+        let message = v0::Message::try_compile(
+            &payer,
+            &[
+                ComputeBudgetInstruction::set_compute_unit_limit(1_400_000),
+                ComputeBudgetInstruction::set_compute_unit_price(1),
+                instruction,
+            ],
+            &[lookup],
+            Hash::new_from_array([255; 32]),
+        )
+        .expect("maximum projected Consume v0 message");
+        assert_eq!(message.account_keys.len(), 3);
+        assert_eq!(message.address_table_lookups.len(), 1);
+        let loaded_addresses = message.address_table_lookups[0]
+            .writable_indexes
+            .len()
+            + message.address_table_lookups[0].readonly_indexes.len();
+        assert_eq!(loaded_addresses, physical_accounts);
+        let required_signatures = usize::from(message.header.num_required_signatures);
+        let wire_bytes =
+            1 + required_signatures * 64 + VersionedMessage::V0(message).serialize().len();
+        assert_eq!(wire_bytes, 850);
+        assert!(
+            wire_bytes + REQUIRED_PACKET_MARGIN <= SOLANA_PACKET_BYTES,
+            "{wire_bytes}B packet leaves less than {REQUIRED_PACKET_MARGIN}B margin"
         );
     }
 }
