@@ -51,6 +51,10 @@ pub const ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE: u16 = 9;
 /// Variable-alias successor deriving one protected support width by counting
 /// nonzero `u64` rows in an authenticated immutable descriptor tail.
 pub const NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE: u16 = 10;
+/// Successor profile with one authenticated physical representative per alias
+/// group, route-local privilege subsets, and an optional trusted System
+/// Program identity supplied by the adapter.
+pub const AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE: u16 = 11;
 /// Exact V2 header width.
 pub const HEADER_BYTES: usize = 32;
 /// Exact profile-8 header width including the trusted role-identity declaration.
@@ -71,11 +75,21 @@ pub const TRUSTED_EXECUTING_PROGRAM_IDENTITY_OFFSET: usize = 32;
 pub const TRUSTED_EXECUTING_PROGRAM_KIND_OFFSET: usize = 34;
 /// Trusted current-executing-program reserved-byte offset.
 pub const TRUSTED_EXECUTING_PROGRAM_RESERVED_OFFSET: usize = 35;
+/// Exact profile-11 header width including one trusted builtin identity.
+pub const AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES: usize = 40;
+/// Little-endian trusted builtin identity-coordinate offset.
+pub const TRUSTED_BUILTIN_IDENTITY_OFFSET: usize = 36;
+/// Trusted builtin kind-tag offset.
+pub const TRUSTED_BUILTIN_KIND_OFFSET: usize = 38;
+/// Trusted builtin reserved-byte offset.
+pub const TRUSTED_BUILTIN_RESERVED_OFFSET: usize = 39;
 
 const TRUSTED_ENVIRONMENT_NONE: u8 = 0;
 const TRUSTED_ENVIRONMENT_CURRENT_SLOT: u8 = 1;
 const TRUSTED_EXECUTING_PROGRAM_NONE: u8 = 0;
 const TRUSTED_EXECUTING_PROGRAM_CURRENT: u8 = 1;
+const TRUSTED_BUILTIN_NONE: u8 = 0;
+const TRUSTED_BUILTIN_SYSTEM_PROGRAM: u8 = 1;
 
 const OP_REQUIRE_KEY: u8 = 0;
 const OP_REQUIRE_OWNER: u8 = 1;
@@ -218,6 +232,12 @@ pub enum Error {
     InvalidVariableDataPrestate,
     /// An authenticated `u64` tail had no nonzero row.
     EmptyNonzeroTail,
+    /// A route alias asserted independent state or invalid privilege semantics.
+    InvalidRouteAlias,
+    /// A trusted builtin tag, reserved byte, or identity coordinate was invalid.
+    InvalidTrustedBuiltin,
+    /// A projection attempted to overwrite a trusted builtin identity.
+    TrustedBuiltinOverwrite,
 }
 
 /// Result alias for runtime-tail profiles.
@@ -252,6 +272,45 @@ pub enum TrustedIdentityEnvironmentV2 {
         /// Common identity coordinate receiving the authenticated program ID.
         destination: u16,
     },
+}
+
+/// Trusted immutable builtin identity supplied by the runtime adapter.
+///
+/// The neutral kernel names the semantic role and destination only. It does
+/// not contain an SVM public key or accept an instruction-supplied account as
+/// authority for this value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TrustedBuiltinIdentityV2 {
+    /// No builtin identity is declared.
+    None,
+    /// Canonical System Program identity used as the owner of vacant accounts.
+    SystemProgram {
+        /// Common identity coordinate receiving the adapter-trusted value.
+        destination: u16,
+    },
+}
+
+/// Route-local privilege requirements for one logical account coordinate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RouteAccountPrivilegesV2 {
+    bits: u8,
+}
+
+impl RouteAccountPrivilegesV2 {
+    /// Whether the child route requires the account to sign.
+    pub const fn signer(self) -> bool {
+        self.bits & 1 != 0
+    }
+
+    /// Whether the child route requires writable access.
+    pub const fn writable(self) -> bool {
+        self.bits & 2 != 0
+    }
+
+    /// Whether the physical account must be executable.
+    pub const fn executable(self) -> bool {
+        self.bits & 4 != 0
+    }
 }
 
 /// Scalar or identity register kind inspected for profile write authority.
@@ -303,6 +362,16 @@ impl TrustedIdentityEnvironmentV2 {
     }
 }
 
+impl TrustedBuiltinIdentityV2 {
+    /// Trusted System Program destination, when selected.
+    pub const fn system_program_destination(self) -> Option<u16> {
+        match self {
+            Self::None => None,
+            Self::SystemProgram { destination } => Some(destination),
+        }
+    }
+}
+
 /// Canonical account-alias space.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AliasKindV2 {
@@ -329,6 +398,10 @@ pub enum AccountPrestateV2 {
     /// representative's exact observation and carries no independent width or
     /// authentication bit.
     AdapterAuthenticatedVariableDataAlias,
+    /// This later fixed logical coordinate borrows every account fact from one
+    /// earlier physical representative while declaring only its own child-route
+    /// privilege subset.
+    AuthenticatedRouteAlias,
 }
 
 /// Hostile-decoded account rule template.
@@ -400,6 +473,13 @@ impl AccountRuleV2 {
         self.privileges
     }
 
+    /// Route-local privilege subset declared for this logical coordinate.
+    pub const fn route_privileges(self) -> RouteAccountPrivilegesV2 {
+        RouteAccountPrivilegesV2 {
+            bits: self.privileges,
+        }
+    }
+
     /// Exact debit/credit/data-write permission bits.
     pub const fn effect_permissions(self) -> u8 {
         self.effect_permissions
@@ -453,6 +533,7 @@ pub struct AccountProfileV2<'a> {
     item_identity_stride: u16,
     trusted_environment: TrustedEnvironmentV2,
     trusted_identity_environment: TrustedIdentityEnvironmentV2,
+    trusted_builtin_identity: TrustedBuiltinIdentityV2,
     bytes: &'a [u8],
 }
 
@@ -478,6 +559,7 @@ impl<'a> AccountProfileV2<'a> {
                     | TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
                     | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
                     | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
+                    | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
             )
         {
             return Err(Error::UnsupportedProfile);
@@ -490,6 +572,7 @@ impl<'a> AccountProfileV2<'a> {
                 | TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
                 | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
                 | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
+                | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
         ) && read_u32(bytes, 28)? != 0
         {
             return Err(Error::NonCanonicalReserved);
@@ -509,6 +592,7 @@ impl<'a> AccountProfileV2<'a> {
                 bytes,
                 artifact_profile,
             )?,
+            trusted_builtin_identity: decode_trusted_builtin_identity(bytes, artifact_profile)?,
             bytes,
         };
         if value.fixed_accounts == 0
@@ -533,6 +617,22 @@ impl<'a> AccountProfileV2<'a> {
             .is_some_and(|destination| destination >= value.common_identities)
         {
             return Err(Error::InvalidTrustedExecutingProgram);
+        }
+        if value
+            .trusted_builtin_identity
+            .system_program_destination()
+            .is_some_and(|destination| destination >= value.common_identities)
+            || value
+                .trusted_builtin_identity
+                .system_program_destination()
+                .is_some_and(|destination| {
+                    value
+                        .trusted_identity_environment
+                        .current_executing_program_destination()
+                        == Some(destination)
+                })
+        {
+            return Err(Error::InvalidTrustedBuiltin);
         }
         let rules = usize::from(value.fixed_accounts)
             .checked_add(usize::from(value.item_account_stride))
@@ -614,6 +714,16 @@ impl<'a> AccountProfileV2<'a> {
             .current_executing_program_destination()
     }
 
+    /// Trusted builtin identity declaration.
+    pub const fn trusted_builtin_identity(self) -> TrustedBuiltinIdentityV2 {
+        self.trusted_builtin_identity
+    }
+
+    /// Common identity that the outer must seed with the trusted System Program.
+    pub const fn trusted_system_program_identity(self) -> Option<u16> {
+        self.trusted_builtin_identity.system_program_destination()
+    }
+
     /// Whether any account projection or trusted-environment seed writes `target`.
     ///
     /// This is a static artifact inspection. It does not execute projections or
@@ -628,6 +738,12 @@ impl<'a> AccountProfileV2<'a> {
         if target.kind == ProjectionRegisterKindV2::Identity
             && target.space == ProjectionRegisterSpaceV2::Common
             && self.trusted_current_executing_program_identity() == Some(target.index)
+        {
+            return Ok(true);
+        }
+        if target.kind == ProjectionRegisterKindV2::Identity
+            && target.space == ProjectionRegisterSpaceV2::Common
+            && self.trusted_system_program_identity() == Some(target.index)
         {
             return Ok(true);
         }
@@ -664,8 +780,13 @@ impl<'a> AccountProfileV2<'a> {
             TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
                 | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
                 | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
+                | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
         ) {
-            TRUSTED_EXECUTING_PROGRAM_HEADER_BYTES
+            if self.artifact_profile == AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE {
+                AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES
+            } else {
+                TRUSTED_EXECUTING_PROGRAM_HEADER_BYTES
+            }
         } else {
             HEADER_BYTES
         }
@@ -726,6 +847,92 @@ impl<'a> AccountProfileV2<'a> {
             coordinate,
             item_start,
         )
+    }
+
+    /// Number of logical account coordinates after checked affine expansion.
+    pub fn logical_account_count(self, tail_count: u32) -> Result<usize> {
+        account_width(self, tail_count)
+    }
+
+    /// Number of unique physical representatives in canonical logical order.
+    ///
+    /// Profile 11 permits the outer to supply one `AccountInfo` per returned
+    /// representative. Earlier profiles retain their existing one-observation-
+    /// per-logical-coordinate contract.
+    pub fn physical_account_count(self, tail_count: u32) -> Result<usize> {
+        let logical = account_width(self, tail_count)?;
+        if self.artifact_profile != AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE {
+            return Ok(logical);
+        }
+        let mut count = 0_usize;
+        let mut coordinate = 0_usize;
+        while coordinate < logical {
+            if self.representative(tail_count, coordinate)? == coordinate {
+                count = count.checked_add(1).ok_or(Error::InvalidLength)?;
+            }
+            coordinate = coordinate.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        Ok(count)
+    }
+
+    /// Canonical physical representative ordinal for one logical coordinate.
+    pub fn physical_account_ordinal(
+        self,
+        tail_count: u32,
+        logical_coordinate: usize,
+    ) -> Result<usize> {
+        let representative = self.representative(tail_count, logical_coordinate)?;
+        if self.artifact_profile != AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE {
+            return Ok(logical_coordinate);
+        }
+        let mut ordinal = 0_usize;
+        let mut coordinate = 0_usize;
+        while coordinate < representative {
+            if self.representative(tail_count, coordinate)? == coordinate {
+                ordinal = ordinal.checked_add(1).ok_or(Error::InvalidLength)?;
+            }
+            coordinate = coordinate.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        Ok(ordinal)
+    }
+
+    /// Logical self-representative coordinate for one physical ordinal.
+    pub fn physical_representative_coordinate(
+        self,
+        tail_count: u32,
+        physical_ordinal: usize,
+    ) -> Result<usize> {
+        if physical_ordinal >= self.physical_account_count(tail_count)? {
+            return Err(Error::InvalidCoordinate);
+        }
+        if self.artifact_profile != AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE {
+            return Ok(physical_ordinal);
+        }
+        let logical = account_width(self, tail_count)?;
+        let mut ordinal = 0_usize;
+        let mut coordinate = 0_usize;
+        while coordinate < logical {
+            if self.representative(tail_count, coordinate)? == coordinate {
+                if ordinal == physical_ordinal {
+                    return Ok(coordinate);
+                }
+                ordinal = ordinal.checked_add(1).ok_or(Error::InvalidLength)?;
+            }
+            coordinate = coordinate.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        Err(Error::InvalidCoordinate)
+    }
+
+    /// Route-local privilege subset for one expanded logical coordinate.
+    pub fn route_privileges(
+        self,
+        tail_count: u32,
+        logical_coordinate: usize,
+    ) -> Result<RouteAccountPrivilegesV2> {
+        if logical_coordinate >= account_width(self, tail_count)? {
+            return Err(Error::InvalidCoordinate);
+        }
+        Ok(expanded_rule(self, logical_coordinate)?.route_privileges())
     }
 
     /// Return the unique fixed-prefix Product tail-count projection, if affine.
@@ -808,6 +1015,7 @@ impl<'a> AccountProfileV2<'a> {
         let mut lifecycle_bound = false;
         let mut adapter_authenticated_variable_data = false;
         let mut adapter_authenticated_variable_data_alias = false;
+        let mut authenticated_route_alias = false;
         let mut fixed = 0_u16;
         while fixed < self.fixed_accounts {
             let rule = self.rule(false, fixed)?;
@@ -815,6 +1023,16 @@ impl<'a> AccountProfileV2<'a> {
                 return Err(Error::NonCanonicalReserved);
             }
             validate_rule(rule, false, fixed, self.fixed_accounts)?;
+            if self.artifact_profile == AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
+                && rule.alias_kind != AliasKindV2::SelfCoordinate
+                && !matches!(
+                    rule.prestate,
+                    AccountPrestateV2::AdapterAuthenticatedVariableDataAlias
+                        | AccountPrestateV2::AuthenticatedRouteAlias
+                )
+            {
+                return Err(Error::InvalidRouteAlias);
+            }
             self.require_owner_anchor(false, fixed, rule)?;
             lifecycle_bound |= rule.prestate == AccountPrestateV2::LifecycleBound;
             adapter_authenticated_variable_data |=
@@ -829,6 +1047,17 @@ impl<'a> AccountProfileV2<'a> {
                 }
                 adapter_authenticated_variable_data_alias = true;
             }
+            if rule.prestate == AccountPrestateV2::AuthenticatedRouteAlias {
+                let representative = self.rule(false, rule.alias_index)?;
+                if representative.alias_kind != AliasKindV2::SelfCoordinate
+                    || representative.alias_index != 0
+                    || rule.privileges & 1 != 0
+                    || rule.privileges & 0x04 != representative.privileges & 0x04
+                {
+                    return Err(Error::InvalidRouteAlias);
+                }
+                authenticated_route_alias = true;
+            }
             fixed = fixed.checked_add(1).ok_or(Error::InvalidLength)?;
         }
         let mut item = 0_u16;
@@ -838,12 +1067,19 @@ impl<'a> AccountProfileV2<'a> {
                 return Err(Error::NonCanonicalReserved);
             }
             validate_rule(rule, true, item, self.fixed_accounts)?;
+            if self.artifact_profile == AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
+                && rule.alias_kind != AliasKindV2::SelfCoordinate
+            {
+                return Err(Error::InvalidRouteAlias);
+            }
             self.require_owner_anchor(true, item, rule)?;
             lifecycle_bound |= rule.prestate == AccountPrestateV2::LifecycleBound;
             adapter_authenticated_variable_data |=
                 rule.prestate == AccountPrestateV2::AdapterAuthenticatedVariableData;
             adapter_authenticated_variable_data_alias |=
                 rule.prestate == AccountPrestateV2::AdapterAuthenticatedVariableDataAlias;
+            authenticated_route_alias |=
+                rule.prestate == AccountPrestateV2::AuthenticatedRouteAlias;
             item = item.checked_add(1).ok_or(Error::InvalidLength)?;
         }
         match self.artifact_profile {
@@ -867,6 +1103,7 @@ impl<'a> AccountProfileV2<'a> {
             NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE if adapter_authenticated_variable_data => {
                 Ok(())
             }
+            AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE if authenticated_route_alias => Ok(()),
             LIFECYCLE_PRESTATE_ARTIFACT_PROFILE => Err(Error::InvalidLifecyclePrestate),
             ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE => {
                 Err(Error::InvalidVariableDataPrestate)
@@ -875,9 +1112,11 @@ impl<'a> AccountProfileV2<'a> {
                 Err(Error::InvalidVariableDataPrestate)
             }
             NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE => Err(Error::InvalidVariableDataPrestate),
+            AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE => Err(Error::InvalidRouteAlias),
             _ if !lifecycle_bound
                 && !adapter_authenticated_variable_data
-                && !adapter_authenticated_variable_data_alias =>
+                && !adapter_authenticated_variable_data_alias
+                && !authenticated_route_alias =>
             {
                 Ok(())
             }
@@ -1050,6 +1289,12 @@ impl<'a> AccountProfileV2<'a> {
         {
             return Err(Error::TrustedExecutingProgramOverwrite);
         }
+        if self
+            .trusted_system_program_identity()
+            .is_some_and(|destination| target == (true, false, destination))
+        {
+            return Err(Error::TrustedBuiltinOverwrite);
+        }
         if item && !operation.register_item {
             return Err(Error::DuplicateProjection);
         }
@@ -1078,6 +1323,7 @@ fn decode_trusted_environment(bytes: &[u8], artifact_profile: u16) -> Result<Tru
             | TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
             | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
             | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
+            | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
     ) {
         return Ok(TrustedEnvironmentV2::None);
     }
@@ -1102,6 +1348,7 @@ fn decode_trusted_identity_environment(
         TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
             | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
             | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
+            | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
     ) {
         return Ok(TrustedIdentityEnvironmentV2::None);
     }
@@ -1118,6 +1365,27 @@ fn decode_trusted_identity_environment(
             Ok(TrustedIdentityEnvironmentV2::CurrentExecutingProgram { destination })
         }
         _ => Err(Error::InvalidTrustedExecutingProgram),
+    }
+}
+
+fn decode_trusted_builtin_identity(
+    bytes: &[u8],
+    artifact_profile: u16,
+) -> Result<TrustedBuiltinIdentityV2> {
+    if artifact_profile != AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE {
+        return Ok(TrustedBuiltinIdentityV2::None);
+    }
+    let destination = read_u16(bytes, TRUSTED_BUILTIN_IDENTITY_OFFSET)?;
+    let kind = byte(bytes, TRUSTED_BUILTIN_KIND_OFFSET)?;
+    if byte(bytes, TRUSTED_BUILTIN_RESERVED_OFFSET)? != 0 {
+        return Err(Error::InvalidTrustedBuiltin);
+    }
+    match kind {
+        TRUSTED_BUILTIN_NONE if destination == 0 => Ok(TrustedBuiltinIdentityV2::None),
+        TRUSTED_BUILTIN_SYSTEM_PROGRAM => {
+            Ok(TrustedBuiltinIdentityV2::SystemProgram { destination })
+        }
+        _ => Err(Error::InvalidTrustedBuiltin),
     }
 }
 
@@ -1243,23 +1511,14 @@ pub fn derive_effect_permissions(
         return Err(Error::WidthMismatch);
     }
     for (coordinate, permission) in output.iter_mut().enumerate() {
-        let fixed = usize::from(profile.fixed_accounts);
-        let rule = if coordinate < fixed {
-            profile.rule(
-                false,
-                u16::try_from(coordinate).map_err(|_| Error::InvalidCoordinate)?,
-            )?
+        let authority_coordinate = if expanded_rule(profile, coordinate)?.prestate
+            == AccountPrestateV2::AuthenticatedRouteAlias
+        {
+            profile.representative(tail_count, coordinate)?
         } else {
-            let stride = usize::from(profile.item_account_stride);
-            let local = coordinate
-                .checked_sub(fixed)
-                .ok_or(Error::InvalidCoordinate)?
-                % stride;
-            profile.rule(
-                true,
-                u16::try_from(local).map_err(|_| Error::InvalidCoordinate)?,
-            )?
+            coordinate
         };
+        let rule = expanded_rule(profile, authority_coordinate)?;
         *permission = rule.permission();
     }
     Ok(())
@@ -1272,17 +1531,27 @@ fn validate_accounts(
 ) -> Result<()> {
     for (coordinate, account) in accounts.iter().copied().enumerate() {
         let rule = expanded_rule(profile, coordinate)?;
-        if account.privileges() != rule.privileges {
+        let representative = profile.representative(tail_count, coordinate)?;
+        let expected_privileges =
+            if profile.artifact_profile == AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE {
+                representative_privileges(profile, tail_count, representative)?
+            } else {
+                rule.privileges
+            };
+        if account.privileges() != expected_privileges {
             return Err(Error::PrivilegeMismatch);
         }
         let variable_representative =
             rule.prestate == AccountPrestateV2::AdapterAuthenticatedVariableData;
         let variable_alias =
             rule.prestate == AccountPrestateV2::AdapterAuthenticatedVariableDataAlias;
+        let route_alias = rule.prestate == AccountPrestateV2::AuthenticatedRouteAlias;
         if (variable_representative && !account.adapter_authenticated_variable_data())
             || (variable_alias && account.adapter_authenticated_variable_data())
+            || (route_alias && account.adapter_authenticated_variable_data())
             || (!variable_representative
                 && !variable_alias
+                && !route_alias
                 && account.adapter_authenticated_variable_data())
         {
             return Err(Error::InvalidVariableDataPrestate);
@@ -1309,9 +1578,9 @@ fn validate_accounts(
             {
                 return Err(Error::InvalidVariableDataPrestate);
             }
+            AccountPrestateV2::AuthenticatedRouteAlias => {}
             _ => {}
         }
-        let representative = profile.representative(tail_count, coordinate)?;
         let canonical = accounts
             .get(representative)
             .copied()
@@ -1325,7 +1594,7 @@ fn validate_accounts(
             || (variable_alias
                 && (canonical_rule.prestate != AccountPrestateV2::AdapterAuthenticatedVariableData
                     || !canonical.adapter_authenticated_variable_data()))
-            || (!variable_alias
+            || (!(variable_alias || route_alias)
                 && account.adapter_authenticated_variable_data()
                     != canonical.adapter_authenticated_variable_data())
         {
@@ -1344,6 +1613,32 @@ fn validate_accounts(
         }
     }
     Ok(())
+}
+
+fn representative_privileges(
+    profile: AccountProfileV2<'_>,
+    tail_count: u32,
+    representative: usize,
+) -> Result<u8> {
+    if profile.representative(tail_count, representative)? != representative {
+        return Err(Error::InvalidAlias);
+    }
+    let representative_rule = expanded_rule(profile, representative)?;
+    let executable = representative_rule.privileges & 0x04;
+    let mut union = executable;
+    let logical_count = account_width(profile, tail_count)?;
+    let mut coordinate = 0_usize;
+    while coordinate < logical_count {
+        if profile.representative(tail_count, coordinate)? == representative {
+            let rule = expanded_rule(profile, coordinate)?;
+            if rule.privileges & 0x04 != executable {
+                return Err(Error::InvalidRouteAlias);
+            }
+            union |= rule.privileges & 0x03;
+        }
+        coordinate = coordinate.checked_add(1).ok_or(Error::InvalidLength)?;
+    }
+    Ok(union)
 }
 
 fn inject_indices(
@@ -1456,7 +1751,11 @@ impl Operation {
             return Err(Error::InvalidCoordinate);
         }
         let account_rule = profile.rule(self.account_item, self.account)?;
-        if account_rule.prestate == AccountPrestateV2::AdapterAuthenticatedVariableDataAlias {
+        if matches!(
+            account_rule.prestate,
+            AccountPrestateV2::AdapterAuthenticatedVariableDataAlias
+                | AccountPrestateV2::AuthenticatedRouteAlias
+        ) {
             // Route aliases exist only so Effect may select the same already
             // authenticated physical record in a child frame. AccountProfile
             // cannot project or require through a second logical authority.
@@ -1518,6 +1817,7 @@ impl Operation {
                             | TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
                             | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
                             | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
+                            | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
                     )
                 {
                     return Err(Error::NonCanonicalOperation);
@@ -1568,6 +1868,7 @@ impl Operation {
                         | TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
                         | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
                         | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
+                        | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
                 ) || item_body
                     || self.account_item
                     || self.register_item
@@ -1609,6 +1910,7 @@ impl Operation {
                         | TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
                         | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
                         | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
+                        | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
                 ) || item_body
                     || self.account_item
                     || self.register_item
@@ -2022,6 +2324,16 @@ fn validate_rule(rule: AccountRuleV2, item: bool, index: u16, fixed_count: u16) 
     {
         return Err(Error::InvalidVariableDataPrestate);
     }
+    if rule.prestate == AccountPrestateV2::AuthenticatedRouteAlias
+        && (item
+            || rule.alias_kind != AliasKindV2::Fixed
+            || rule.alias_index >= index
+            || rule.effect_permissions != 0
+            || rule.data_length != 0
+            || rule.data_item_stride != 0)
+    {
+        return Err(Error::InvalidRouteAlias);
+    }
     match rule.alias_kind {
         AliasKindV2::SelfCoordinate if rule.alias_index == 0 => Ok(()),
         AliasKindV2::Fixed
@@ -2055,6 +2367,7 @@ fn decode_rule(bytes: &[u8], offset: usize, artifact_profile: u16) -> Result<Acc
             | TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
             | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
             | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
+            | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
     ) {
         match prestate_tag {
             0 => AccountPrestateV2::Exact,
@@ -2064,9 +2377,13 @@ fn decode_rule(bytes: &[u8], offset: usize, artifact_profile: u16) -> Result<Acc
                 artifact_profile,
                 ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
                     | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
+                    | AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
             ) =>
             {
                 AccountPrestateV2::AdapterAuthenticatedVariableDataAlias
+            }
+            4 if artifact_profile == AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE => {
+                AccountPrestateV2::AuthenticatedRouteAlias
             }
             _ => return Err(Error::InvalidVariableDataPrestate),
         }

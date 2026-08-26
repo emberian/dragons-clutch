@@ -7,22 +7,24 @@
 
 use super::{
     ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE,
-    ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE, ARTIFACT_PROFILE, AccountPrestateV2,
-    AccountProfileV2, Error, HEADER_BYTES, LIFECYCLE_PRESTATE_ARTIFACT_PROFILE, MAGIC,
-    NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE, OP_PROJECT_DATA_IDENTITY,
+    ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE, ARTIFACT_PROFILE,
+    AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE, AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES,
+    AccountPrestateV2, AccountProfileV2, Error, HEADER_BYTES, LIFECYCLE_PRESTATE_ARTIFACT_PROFILE,
+    MAGIC, NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE, OP_PROJECT_DATA_IDENTITY,
     OP_PROJECT_DATA_IDENTITY_AFFINE, OP_PROJECT_DATA_IDENTITY_SELECTED,
     OP_PROJECT_DATA_IDENTITY_SELECTED_AFFINE, OP_PROJECT_DATA_U8, OP_PROJECT_DATA_U16,
     OP_PROJECT_DATA_U32, OP_PROJECT_DATA_U64, OP_PROJECT_DATA_U64_AFFINE,
     OP_PROJECT_DATA_U64_SELECTED, OP_PROJECT_DATA_U64_SELECTED_AFFINE, OP_PROJECT_KEY,
     OP_PROJECT_LAMPORTS, OP_PROJECT_NONZERO_U64_TAIL_COUNT, OP_PROJECT_OWNER,
     OP_PROJECT_TAIL_COUNT_U32, OP_REQUIRE_KEY, OP_REQUIRE_OWNER, OP_SELECT_DATA_WINDOW,
-    OPERATION_BYTES, RULE_BYTES, SELECTED_WINDOW_ARTIFACT_PROFILE,
+    OPERATION_BYTES, RULE_BYTES, SELECTED_WINDOW_ARTIFACT_PROFILE, TRUSTED_BUILTIN_IDENTITY_OFFSET,
+    TRUSTED_BUILTIN_KIND_OFFSET, TRUSTED_BUILTIN_SYSTEM_PROGRAM,
     TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE, TRUSTED_ENVIRONMENT_CURRENT_SLOT,
     TRUSTED_ENVIRONMENT_KIND_OFFSET, TRUSTED_ENVIRONMENT_SCALAR_OFFSET,
     TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE, TRUSTED_EXECUTING_PROGRAM_CURRENT,
     TRUSTED_EXECUTING_PROGRAM_HEADER_BYTES, TRUSTED_EXECUTING_PROGRAM_IDENTITY_OFFSET,
-    TRUSTED_EXECUTING_PROGRAM_KIND_OFFSET, TYPED_SCALAR_ARTIFACT_PROFILE, TrustedEnvironmentV2,
-    TrustedIdentityEnvironmentV2, VERSION,
+    TRUSTED_EXECUTING_PROGRAM_KIND_OFFSET, TYPED_SCALAR_ARTIFACT_PROFILE, TrustedBuiltinIdentityV2,
+    TrustedEnvironmentV2, TrustedIdentityEnvironmentV2, VERSION,
 };
 use crate::{
     EFFECT_PERMISSION_CREDIT_LAMPORTS, EFFECT_PERMISSION_DEBIT_LAMPORTS,
@@ -53,6 +55,8 @@ pub enum AccountProfileArtifactV2 {
     /// Variable-alias successor deriving a positive support width from an
     /// authenticated immutable `u64` tail.
     NonzeroU64TailCount,
+    /// Physical-representative route aliases plus optional trusted builtin.
+    AuthenticatedRouteAlias,
 }
 
 impl AccountProfileArtifactV2 {
@@ -71,6 +75,7 @@ impl AccountProfileArtifactV2 {
                 ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
             }
             Self::NonzeroU64TailCount => NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE,
+            Self::AuthenticatedRouteAlias => AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE,
         }
     }
 
@@ -79,6 +84,7 @@ impl AccountProfileArtifactV2 {
             Self::TrustedExecutingProgram
             | Self::AdapterAuthenticatedVariableDataAlias
             | Self::NonzeroU64TailCount => TRUSTED_EXECUTING_PROGRAM_HEADER_BYTES,
+            Self::AuthenticatedRouteAlias => AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES,
             _ => HEADER_BYTES,
         }
     }
@@ -472,6 +478,7 @@ pub fn encode_account_profile_with_environment_v2_atomic(
         artifact,
         trusted_environment,
         TrustedIdentityEnvironmentV2::None,
+        TrustedBuiltinIdentityV2::None,
         RuleInputsV2::Exact(fixed_rules),
         RuleInputsV2::Exact(item_rules),
         fixed_operations,
@@ -502,6 +509,7 @@ pub fn encode_account_profile_with_lifecycle_v2_atomic(
         AccountProfileArtifactV2::LifecyclePrestate,
         trusted_environment,
         TrustedIdentityEnvironmentV2::None,
+        TrustedBuiltinIdentityV2::None,
         RuleInputsV2::WithPrestate(fixed_rules),
         RuleInputsV2::WithPrestate(item_rules),
         fixed_operations,
@@ -533,6 +541,7 @@ pub fn encode_account_profile_with_adapter_authenticated_variable_data_v2_atomic
         AccountProfileArtifactV2::AdapterAuthenticatedVariableData,
         trusted_environment,
         TrustedIdentityEnvironmentV2::None,
+        TrustedBuiltinIdentityV2::None,
         RuleInputsV2::WithPrestate(fixed_rules),
         RuleInputsV2::WithPrestate(item_rules),
         fixed_operations,
@@ -565,6 +574,7 @@ pub fn encode_account_profile_with_trusted_executing_program_v2_atomic(
         AccountProfileArtifactV2::TrustedExecutingProgram,
         trusted_environment,
         trusted_identity_environment,
+        TrustedBuiltinIdentityV2::None,
         RuleInputsV2::WithPrestate(fixed_rules),
         RuleInputsV2::WithPrestate(item_rules),
         fixed_operations,
@@ -599,6 +609,7 @@ pub fn encode_account_profile_with_adapter_authenticated_variable_data_alias_v2_
         AccountProfileArtifactV2::AdapterAuthenticatedVariableDataAlias,
         trusted_environment,
         trusted_identity_environment,
+        TrustedBuiltinIdentityV2::None,
         RuleInputsV2::WithPrestate(fixed_rules),
         RuleInputsV2::WithPrestate(item_rules),
         fixed_operations,
@@ -630,6 +641,42 @@ pub fn encode_account_profile_with_nonzero_u64_tail_count_v2_atomic(
         AccountProfileArtifactV2::NonzeroU64TailCount,
         trusted_environment,
         trusted_identity_environment,
+        TrustedBuiltinIdentityV2::None,
+        RuleInputsV2::WithPrestate(fixed_rules),
+        RuleInputsV2::WithPrestate(item_rules),
+        fixed_operations,
+        item_operations,
+        registers,
+        scratch,
+        output,
+    )
+}
+
+/// Encode profile 11 with authenticated physical route representatives.
+///
+/// Later fixed aliases declare only route-local privilege subsets and inherit
+/// key, owner, lamports, data, variable-data authentication, and effect
+/// authority from their earlier representative. The optional trusted builtin
+/// names a common identity destination that the adapter seeds from its
+/// canonical System Program constant.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_account_profile_with_authenticated_route_alias_v2_atomic(
+    trusted_environment: TrustedEnvironmentV2,
+    trusted_identity_environment: TrustedIdentityEnvironmentV2,
+    trusted_builtin_identity: TrustedBuiltinIdentityV2,
+    fixed_rules: &[AccountRuleWithPrestateInputV2],
+    item_rules: &[AccountRuleWithPrestateInputV2],
+    fixed_operations: &[AccountOperationInputV2],
+    item_operations: &[AccountOperationInputV2],
+    registers: RegisterGeometryV2,
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<(), Error> {
+    encode_account_profile_atomic(
+        AccountProfileArtifactV2::AuthenticatedRouteAlias,
+        trusted_environment,
+        trusted_identity_environment,
+        trusted_builtin_identity,
         RuleInputsV2::WithPrestate(fixed_rules),
         RuleInputsV2::WithPrestate(item_rules),
         fixed_operations,
@@ -674,6 +721,7 @@ fn encode_account_profile_atomic(
     artifact: AccountProfileArtifactV2,
     trusted_environment: TrustedEnvironmentV2,
     trusted_identity_environment: TrustedIdentityEnvironmentV2,
+    trusted_builtin_identity: TrustedBuiltinIdentityV2,
     fixed_rules: RuleInputsV2<'_>,
     item_rules: RuleInputsV2<'_>,
     fixed_operations: &[AccountOperationInputV2],
@@ -691,6 +739,7 @@ fn encode_account_profile_atomic(
                 | AccountProfileArtifactV2::TrustedExecutingProgram
                 | AccountProfileArtifactV2::AdapterAuthenticatedVariableDataAlias
                 | AccountProfileArtifactV2::NonzeroU64TailCount
+                | AccountProfileArtifactV2::AuthenticatedRouteAlias
         )
     {
         return Err(Error::InvalidTrustedEnvironment);
@@ -703,9 +752,17 @@ fn encode_account_profile_atomic(
             AccountProfileArtifactV2::TrustedExecutingProgram
                 | AccountProfileArtifactV2::AdapterAuthenticatedVariableDataAlias
                 | AccountProfileArtifactV2::NonzeroU64TailCount
+                | AccountProfileArtifactV2::AuthenticatedRouteAlias
         )
     {
         return Err(Error::InvalidTrustedExecutingProgram);
+    }
+    if trusted_builtin_identity
+        .system_program_destination()
+        .is_some()
+        && artifact != AccountProfileArtifactV2::AuthenticatedRouteAlias
+    {
+        return Err(Error::InvalidTrustedBuiltin);
     }
     let fixed_account_count = u16::try_from(fixed_rules.len()).map_err(|_| Error::InvalidLength)?;
     let item_account_stride = u16::try_from(item_rules.len()).map_err(|_| Error::InvalidLength)?;
@@ -771,6 +828,18 @@ fn encode_account_profile_atomic(
             TRUSTED_EXECUTING_PROGRAM_CURRENT,
         )?;
     }
+    if let TrustedBuiltinIdentityV2::SystemProgram { destination } = trusted_builtin_identity {
+        write(
+            scratch,
+            TRUSTED_BUILTIN_IDENTITY_OFFSET,
+            &destination.to_le_bytes(),
+        )?;
+        write_byte(
+            scratch,
+            TRUSTED_BUILTIN_KIND_OFFSET,
+            TRUSTED_BUILTIN_SYSTEM_PROGRAM,
+        )?;
+    }
     let mut cursor = artifact.header_bytes();
     let mut rule_index = 0_usize;
     while rule_index < fixed_rules.len() {
@@ -820,6 +889,7 @@ fn encode_rule(
             AccountPrestateV2::LifecycleBound => 1,
             AccountPrestateV2::AdapterAuthenticatedVariableData => 2,
             AccountPrestateV2::AdapterAuthenticatedVariableDataAlias => 3,
+            AccountPrestateV2::AuthenticatedRouteAlias => 4,
         },
     )?;
     write(output, add(offset, 4)?, &alias_index.to_le_bytes())?;
@@ -2559,6 +2629,315 @@ mod tests {
                 Err(Error::NonCanonicalOperation)
             );
             assert_eq!(missing_output, before);
+        }
+    }
+
+    #[test]
+    fn authenticated_route_aliases_use_one_union_privileged_representative() {
+        let representative = AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: READONLY,
+                effect_permissions: NO_EFFECTS,
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length: 4,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::Exact,
+        };
+        let writable_alias = AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: WRITABLE,
+                effect_permissions: NO_EFFECTS,
+                alias: AccountAliasInputV2::Fixed(0),
+                data_length: 0,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::AuthenticatedRouteAlias,
+        };
+        let readonly_alias = AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: READONLY,
+                ..writable_alias.rule
+            },
+            prestate: AccountPrestateV2::AuthenticatedRouteAlias,
+        };
+        let system = AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: AccountPrivilegesV2::new(false, false, true),
+                effect_permissions: NO_EFFECTS,
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length: 0,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::Exact,
+        };
+        let rules = [representative, writable_alias, readonly_alias, system];
+        let registers = RegisterGeometryV2 {
+            common_scalars: 1,
+            item_scalar_stride: 0,
+            common_identities: 4,
+            item_identity_stride: 0,
+        };
+        let width = AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES + rules.len() * RULE_BYTES;
+        let mut scratch = std::vec![0_u8; width];
+        let mut encoded = std::vec![0_u8; width];
+        encode_account_profile_with_authenticated_route_alias_v2_atomic(
+            TrustedEnvironmentV2::CurrentSlot { destination: 0 },
+            TrustedIdentityEnvironmentV2::CurrentExecutingProgram { destination: 1 },
+            TrustedBuiltinIdentityV2::SystemProgram { destination: 2 },
+            &rules,
+            &[],
+            &[],
+            &[],
+            registers,
+            &mut scratch,
+            &mut encoded,
+        )
+        .expect("profile11");
+        let profile = AccountProfileV2::decode(&encoded).expect("decode profile11");
+        assert_eq!(
+            profile.artifact_profile(),
+            AUTHENTICATED_ROUTE_ALIAS_ARTIFACT_PROFILE
+        );
+        assert_eq!(profile.trusted_system_program_identity(), Some(2));
+        assert_eq!(
+            profile.writes_register(crate::v2::ProjectionTargetV2 {
+                kind: crate::v2::ProjectionRegisterKindV2::Identity,
+                space: crate::v2::ProjectionRegisterSpaceV2::Common,
+                index: 2,
+            }),
+            Ok(true)
+        );
+        assert_eq!(profile.logical_account_count(0), Ok(4));
+        assert_eq!(profile.physical_account_count(0), Ok(2));
+        assert_eq!(profile.physical_account_ordinal(0, 0), Ok(0));
+        assert_eq!(profile.physical_account_ordinal(0, 1), Ok(0));
+        assert_eq!(profile.physical_account_ordinal(0, 2), Ok(0));
+        assert_eq!(profile.physical_account_ordinal(0, 3), Ok(1));
+        assert_eq!(profile.physical_representative_coordinate(0, 0), Ok(0));
+        assert_eq!(profile.physical_representative_coordinate(0, 1), Ok(3));
+        assert_eq!(
+            profile.physical_representative_coordinate(0, 2),
+            Err(Error::InvalidCoordinate)
+        );
+        assert!(
+            !profile
+                .route_privileges(0, 0)
+                .expect("representative route")
+                .writable()
+        );
+        assert!(
+            profile
+                .route_privileges(0, 1)
+                .expect("write route")
+                .writable()
+        );
+        assert!(
+            !profile
+                .route_privileges(0, 2)
+                .expect("read route")
+                .writable()
+        );
+
+        let body = [7_u8; 4];
+        let representative_observation =
+            AccountObservationV1::new([1; 32], [2; 32], 9, &body, false, true, false);
+        let system_observation =
+            AccountObservationV1::new([3; 32], [4; 32], 0, &[], false, false, true);
+        let accounts = [
+            representative_observation,
+            representative_observation,
+            representative_observation,
+            system_observation,
+        ];
+        let input_scalars = [11_u64];
+        let input_identities = [[5_u8; 32], [6; 32], [7; 32], [8; 32]];
+        let mut scalar_scratch = [0_u64; 1];
+        let mut identity_scratch = [[0_u8; 32]; 4];
+        let mut output_scalars = [99_u64; 1];
+        let mut output_identities = [[99_u8; 32]; 4];
+        project_atomic(
+            profile,
+            0,
+            &accounts,
+            ProjectionRegistersV2 {
+                input_scalars: &input_scalars,
+                input_identities: &input_identities,
+                scratch_scalars: &mut scalar_scratch,
+                scratch_identities: &mut identity_scratch,
+                output_scalars: &mut output_scalars,
+                output_identities: &mut output_identities,
+            },
+        )
+        .expect("union-privileged physical representative");
+        assert_eq!(output_scalars, input_scalars);
+        assert_eq!(output_identities, input_identities);
+
+        let assert_refuses = |hostile: &[AccountObservationV1<'_>], expected: Error| {
+            let mut scalar_scratch = [0_u64; 1];
+            let mut identity_scratch = [[0_u8; 32]; 4];
+            let mut output_scalars = [99_u64; 1];
+            let before_scalars = output_scalars;
+            let mut output_identities = [[99_u8; 32]; 4];
+            let before_identities = output_identities;
+            assert_eq!(
+                project_atomic(
+                    profile,
+                    0,
+                    hostile,
+                    ProjectionRegistersV2 {
+                        input_scalars: &input_scalars,
+                        input_identities: &input_identities,
+                        scratch_scalars: &mut scalar_scratch,
+                        scratch_identities: &mut identity_scratch,
+                        output_scalars: &mut output_scalars,
+                        output_identities: &mut output_identities,
+                    },
+                ),
+                Err(expected)
+            );
+            assert_eq!(output_scalars, before_scalars);
+            assert_eq!(output_identities, before_identities);
+        };
+
+        let readonly_physical =
+            AccountObservationV1::new([1; 32], [2; 32], 9, &body, false, false, false);
+        assert_refuses(
+            &[
+                readonly_physical,
+                readonly_physical,
+                readonly_physical,
+                system_observation,
+            ],
+            Error::PrivilegeMismatch,
+        );
+        let substituted = AccountObservationV1::new([9; 32], [2; 32], 9, &body, false, true, false);
+        assert_refuses(
+            &[
+                representative_observation,
+                substituted,
+                representative_observation,
+                system_observation,
+            ],
+            Error::AliasMismatch,
+        );
+        let wrong_owner = AccountObservationV1::new([1; 32], [9; 32], 9, &body, false, true, false);
+        assert_refuses(
+            &[
+                representative_observation,
+                representative_observation,
+                wrong_owner,
+                system_observation,
+            ],
+            Error::AliasMismatch,
+        );
+        let other_body = [8_u8; 4];
+        let wrong_data =
+            AccountObservationV1::new([1; 32], [2; 32], 9, &other_body, false, true, false);
+        assert_refuses(
+            &[
+                representative_observation,
+                representative_observation,
+                wrong_data,
+                system_observation,
+            ],
+            Error::AliasMismatch,
+        );
+        let wrong_lamports =
+            AccountObservationV1::new([1; 32], [2; 32], 10, &body, false, true, false);
+        assert_refuses(
+            &[
+                representative_observation,
+                wrong_lamports,
+                representative_observation,
+                system_observation,
+            ],
+            Error::AliasMismatch,
+        );
+
+        let mut signer_alias_rules = rules;
+        signer_alias_rules[1].rule.privileges = AccountPrivilegesV2::new(true, true, false);
+        let mut hostile_scratch = std::vec![0_u8; width];
+        let mut hostile_output = std::vec![0x55_u8; width];
+        let before = hostile_output.clone();
+        assert_eq!(
+            encode_account_profile_with_authenticated_route_alias_v2_atomic(
+                TrustedEnvironmentV2::CurrentSlot { destination: 0 },
+                TrustedIdentityEnvironmentV2::CurrentExecutingProgram { destination: 1 },
+                TrustedBuiltinIdentityV2::SystemProgram { destination: 2 },
+                &signer_alias_rules,
+                &[],
+                &[],
+                &[],
+                registers,
+                &mut hostile_scratch,
+                &mut hostile_output,
+            ),
+            Err(Error::InvalidRouteAlias)
+        );
+        assert_eq!(hostile_output, before);
+
+        let alias_offset = AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES + RULE_BYTES;
+        for hostile_index in [1_u16, 2, 7] {
+            let mut forward_alias = encoded.clone();
+            forward_alias
+                .get_mut(alias_offset + 4..alias_offset + 6)
+                .expect("alias index")
+                .copy_from_slice(&hostile_index.to_le_bytes());
+            assert_eq!(
+                AccountProfileV2::decode(&forward_alias),
+                Err(Error::InvalidRouteAlias)
+            );
+        }
+
+        let overwrite = [AccountOperationInputV2::ProjectKey {
+            account: AccountCoordinateV2::fixed(3),
+            destination: IdentityCoordinateV2::common(2),
+        }];
+        let overwrite_width = width + OPERATION_BYTES;
+        let mut overwrite_scratch = std::vec![0_u8; overwrite_width];
+        let mut overwrite_output = std::vec![0x77_u8; overwrite_width];
+        let before = overwrite_output.clone();
+        assert_eq!(
+            encode_account_profile_with_authenticated_route_alias_v2_atomic(
+                TrustedEnvironmentV2::CurrentSlot { destination: 0 },
+                TrustedIdentityEnvironmentV2::CurrentExecutingProgram { destination: 1 },
+                TrustedBuiltinIdentityV2::SystemProgram { destination: 2 },
+                &rules,
+                &[],
+                &overwrite,
+                &[],
+                registers,
+                &mut overwrite_scratch,
+                &mut overwrite_output,
+            ),
+            Err(Error::TrustedBuiltinOverwrite)
+        );
+        assert_eq!(overwrite_output, before);
+
+        for trusted_builtin in [
+            TrustedBuiltinIdentityV2::SystemProgram { destination: 1 },
+            TrustedBuiltinIdentityV2::SystemProgram { destination: 4 },
+        ] {
+            let mut hostile_scratch = std::vec![0_u8; width];
+            let mut hostile_output = std::vec![0x88_u8; width];
+            let before = hostile_output.clone();
+            assert_eq!(
+                encode_account_profile_with_authenticated_route_alias_v2_atomic(
+                    TrustedEnvironmentV2::CurrentSlot { destination: 0 },
+                    TrustedIdentityEnvironmentV2::CurrentExecutingProgram { destination: 1 },
+                    trusted_builtin,
+                    &rules,
+                    &[],
+                    &[],
+                    &[],
+                    registers,
+                    &mut hostile_scratch,
+                    &mut hostile_output,
+                ),
+                Err(Error::InvalidTrustedBuiltin)
+            );
+            assert_eq!(hostile_output, before);
         }
     }
 }
