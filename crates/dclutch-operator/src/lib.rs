@@ -69,6 +69,8 @@ pub mod registered_direct;
 pub mod registry;
 /// Checked-release admission into unsigned Registry activation workflows.
 pub mod release_activation;
+/// Chain-derived Core admission of one terminal Resolution result.
+pub mod resolution_core_v3;
 /// Chain-derived Series V3 Hot lifecycle and packet construction.
 pub mod series_hot_v3;
 /// Chain-derived address-table lifecycle and versioned-message construction.
