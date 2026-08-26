@@ -21,6 +21,8 @@ use dclutch_capability_program_contract::CapabilityProgramV1;
 use dclutch_core_contract::ContentId;
 use dclutch_release_set_contract::ArtifactReleaseIdV1;
 
+/// Fixed family-neutral transport for stateless Shadow-AOT comparison.
+pub mod shadow_v3;
 /// V3 semantic-waist strategy records, certificates, admission, and transport.
 pub mod v2;
 
