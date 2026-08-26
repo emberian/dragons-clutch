@@ -1,4 +1,12 @@
+use dclutch_capability_program_contract::{
+    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
+};
 use dclutch_core_contract::ContentId;
+use dclutch_custody_contract::{CallerRoleV1, CustodyReplayV1};
+use dclutch_economic_slice_kernel::{
+    MARKET_HEADER_BYTES, POSITION_HEADER_BYTES, Phase as ClaimsPhase, SCALAR_BYTES,
+    initialize_market, initialize_position,
+};
 use dclutch_general_adapter_contract::{
     CandidateVerifierV1, GENERAL_CANDIDATE_PDA_DOMAIN_V1, GENERAL_CERTIFICATE_PDA_DOMAIN_V1,
     GENERAL_PAGE_PDA_DOMAIN_V1, GENERAL_POLICY_PDA_DOMAIN_V1, GENERAL_SELECTION_PDA_DOMAIN_V1,
@@ -7,16 +15,22 @@ use dclutch_general_adapter_contract::{
 };
 use dclutch_general_codec::{
     Action, CandidateV1, ControllerRequestV1, ExecutionV1, MAX_EXECUTIONS_PER_PAGE, MAX_OUTCOMES,
-    MAX_SELECTION_CRITERIA, PAGE_BYTES, PageV1, SELECTION_CURSOR_BYTES, SETTLEMENT_CURSOR_BYTES,
-    SelectionCriterion, SelectionCursorV1, SelectionPolicyV1,
+    MAX_SELECTION_CRITERIA, PAGE_BYTES, PageV1, Phase, SELECTION_CURSOR_BYTES,
+    SETTLEMENT_CURSOR_BYTES, SelectionCriterion, SelectionCursorV1, SelectionPolicyV1,
+    SettlementCursorV1,
 };
+use dclutch_general_config_contract::{
+    GENERAL_CONFIG_SCHEMA_ID_V2, GeneralConfigV2, GeneralConfigV2Input,
+};
+use dclutch_record_contract::RAW_RECORD_PDA_SEED_V1;
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ArtifactActivationInputV1,
     ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
     ExecutionReleaseActivationInputsV1, activate_execution_release_set_v1,
 };
 use dclutch_release_set_contract::{
-    ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ProgramIdentityV1,
+    ArtifactReleaseIdV1, CapabilityExecutionSelectionV1, ExecutionReleaseSetV1,
+    ExecutionRoleBindingV1, ProgramIdentityV1,
 };
 use solana_program::{hash::hash, pubkey::Pubkey};
 use solana_sdk_ids::bpf_loader_upgradeable;
@@ -214,6 +228,7 @@ fn verified() -> VerifiedCandidateV1 {
 struct Fixture {
     registry: Pubkey,
     program: Pubkey,
+    core_programdata: ObservedAccount,
     market: ObservedAccount,
     common: GeneralCommonStateV1,
 }
@@ -260,7 +275,7 @@ impl Fixture {
         let common = GeneralCommonStateV1 {
             market: market.clone(),
             trading_release: RegistryReauthenticationState {
-                registry_program: core.program,
+                registry_program: core.program.clone(),
                 cache: observed(cache_key, registry, false, activation.to_bytes().to_vec()),
                 role_program: trading.program,
                 role_programdata: trading.programdata,
@@ -273,6 +288,7 @@ impl Fixture {
         Self {
             registry,
             program,
+            core_programdata: core.programdata,
             market,
             common,
         }
@@ -413,6 +429,274 @@ impl Fixture {
             ),
         }
     }
+
+    fn settlement(&self) -> GeneralSettlementStateV1 {
+        let candidate = candidate();
+        let market = self.market.key.to_bytes();
+        let settlement = SettlementCursorV1 {
+            phase: Phase::Collecting,
+            outcome_count: candidate.outcome_count,
+            candidate_id: candidate.candidate_id,
+            page_count: candidate.page_count,
+            next_page: 0,
+            next_execution: 0,
+            revision: 0,
+            claim_inventory: [0; MAX_OUTCOMES],
+            quote_inventory: 0,
+            quote_surplus_paid: 0,
+        };
+        let role = RegistryReauthenticationState {
+            registry_program: self.common.trading_release.registry_program.clone(),
+            cache: self.common.trading_release.cache.clone(),
+            role_program: self.common.trading_release.registry_program.clone(),
+            role_programdata: self.core_programdata.clone(),
+        };
+        let release_set = build_registry_reauthentication_v1(
+            &self.common.trading_release,
+            dclutch_release_set_contract::ExecutionRoleV1::Trading,
+        )
+        .expect("Trading release")
+        .execution_release_set_id
+        .to_bytes();
+        let inert = |seed| {
+            observed(
+                Pubkey::new_from_array(id(seed)),
+                self.program,
+                false,
+                vec![1],
+            )
+        };
+        let claims_program = role.role_program.key;
+        let count = u32::from(candidate.outcome_count);
+        let mut claims_market =
+            vec![0; MARKET_HEADER_BYTES + usize::from(candidate.outcome_count) * 3 * SCALAR_BYTES];
+        initialize_market(
+            &mut claims_market,
+            market,
+            release_set,
+            self.registry.to_bytes(),
+            count,
+            ClaimsPhase::Open,
+            0,
+        )
+        .expect("claims market");
+        let mut owner_position = vec![
+            0;
+            POSITION_HEADER_BYTES
+                + usize::from(candidate.outcome_count) * 2 * SCALAR_BYTES
+        ];
+        initialize_position(&mut owner_position, market, id(11), count).expect("owner position");
+        let mut settlement_position =
+            vec![
+                0;
+                POSITION_HEADER_BYTES + usize::from(candidate.outcome_count) * 2 * SCALAR_BYTES
+            ];
+        initialize_position(
+            &mut settlement_position,
+            market,
+            candidate.candidate_id,
+            count,
+        )
+        .expect("settlement position");
+        let replay = CustodyReplayV1 {
+            caller_role: CallerRoleV1::Trading,
+            release_set,
+            market,
+            realm: id(90),
+            context: candidate.candidate_id,
+            caller_program: self.program.to_bytes(),
+            rent_refund: id(91),
+            open_vault_count: 2,
+            next_revision: 1,
+            generation: 1,
+            last_request_digest: id(92),
+            last_poststate_commitment: id(93),
+        };
+        let config = GeneralConfigV2::new(GeneralConfigV2Input {
+            capacity_profile_id: id(94),
+            claim_basis_id: id(95),
+            capability_program_id: id(96),
+            generation: 1,
+            price_scale: 2,
+            collection_slots: 1,
+            selection_slots: 1,
+            settlement_slots: 1,
+            max_orders_per_candidate: 16,
+            max_pages_per_candidate: 1,
+            continuation_reward_lamports: 1,
+            selection_policy_id: policy().policy_id,
+            outcome_count: 2,
+            quote_surplus_beneficiary: id(97),
+        })
+        .expect("config");
+        let config_data = config.to_bytes().to_vec();
+        let config_digest = hash(&config_data).to_bytes();
+        let config_key = Pubkey::find_program_address(
+            &[
+                RAW_RECORD_PDA_SEED_V1,
+                &GENERAL_CONFIG_SCHEMA_ID_V2,
+                &config_digest,
+            ],
+            &self.registry,
+        )
+        .0;
+        let selection = CapabilityExecutionSelectionV1::new(
+            0,
+            ContentId::new(id(113)).expect("manifest ID"),
+            ContentId::new(id(114)).expect("General kind"),
+            ContentId::new(id(96)).expect("capability program ID"),
+            ContentId::new(config_digest).expect("config ID"),
+        )
+        .expect("selection");
+        let root_header = CapabilityRootHeaderV1::new(
+            ContentId::new(release_set).expect("release-set ID"),
+            market,
+            1,
+            selection,
+        )
+        .expect("root header");
+        let root_seeds = root_header.seeds();
+        let root_key = Pubkey::find_program_address(&root_seeds.as_slices(), &self.program).0;
+        let mut root_data = vec![0; CAPABILITY_ROOT_HEADER_BYTES_V1 + 128];
+        root_data
+            .get_mut(..CAPABILITY_ROOT_HEADER_BYTES_V1)
+            .expect("root header range")
+            .copy_from_slice(&root_header.to_bytes());
+        let mut state = GeneralSettlementStateV1 {
+            common: self.common.clone(),
+            general_root: observed(root_key, self.program, false, root_data),
+            core_release: role.clone(),
+            claims_release: role.clone(),
+            custody_release: role,
+            claims_caller_authority: observed(claims_program, self.registry, true, vec![]),
+            custody_caller_authority: observed(self.registry, self.registry, true, vec![]),
+            settlement: self.general_account(
+                self.pda(&[
+                    GENERAL_SETTLEMENT_PDA_DOMAIN_V1,
+                    &market,
+                    &candidate.candidate_id,
+                ]),
+                settlement.to_bytes().expect("settlement").to_vec(),
+            ),
+            certificate: self.general_account(
+                self.pda(&[
+                    GENERAL_CERTIFICATE_PDA_DOMAIN_V1,
+                    &market,
+                    &candidate.candidate_id,
+                ]),
+                verified().to_bytes().expect("certificate").to_vec(),
+            ),
+            candidate: self.general_account(
+                self.pda(&[
+                    GENERAL_CANDIDATE_PDA_DOMAIN_V1,
+                    &market,
+                    &candidate.candidate_id,
+                ]),
+                candidate.to_bytes().expect("candidate").to_vec(),
+            ),
+            page: self.general_account(
+                self.pda(&[
+                    GENERAL_PAGE_PDA_DOMAIN_V1,
+                    &market,
+                    &candidate.candidate_id,
+                    &0_u32.to_le_bytes(),
+                ]),
+                page().to_vec(),
+            ),
+            claims_market: observed(inert(101).key, claims_program, false, claims_market),
+            owner_position: observed(inert(102).key, claims_program, false, owner_position),
+            settlement_position: observed(
+                inert(103).key,
+                claims_program,
+                false,
+                settlement_position,
+            ),
+            realm: inert(105),
+            realm_staging: inert(104),
+            custody_replay: observed(
+                inert(115).key,
+                self.registry,
+                false,
+                replay.to_bytes().expect("replay").to_vec(),
+            ),
+            mint: inert(106),
+            collateral_source: inert(107),
+            collateral_destination: inert(108),
+            custody_authority: inert(109),
+            token_program: observed(Pubkey::new_from_array(id(110)), self.registry, true, vec![]),
+            general_config: observed(config_key, self.registry, false, config_data),
+        };
+        bind_authorities(&mut state, Action::Collect);
+        state
+    }
+}
+
+fn bind_authorities(state: &mut GeneralSettlementStateV1, action: Action) {
+    let authority = authenticate_common(&state.common).expect("common authority");
+    let root = authenticate_general_root(state, authority).expect("selected root");
+    let config = authenticate_general_config(state, root).expect("selected config");
+    let verified = VerifiedCandidateV1::decode(&state.certificate.data).expect("certificate");
+    let cursor = SettlementCursorV1::decode(&state.settlement.data).expect("cursor");
+    let context = ExecutionContextV1 {
+        market_id: state.common.market.key.to_bytes(),
+        release_set_id: authority.release_set_id,
+    };
+    let mut staged = state.settlement.data.clone();
+    let mut children =
+        OperatorChildren::new(state, verified, config, authority).expect("operator children");
+    let page = if matches!(action, Action::Collect | Action::Distribute) {
+        state.page.data.as_slice()
+    } else {
+        &[]
+    };
+    match action {
+        Action::Collect => collect_execution(
+            &mut staged,
+            context,
+            &verified,
+            page,
+            cursor.revision,
+            &mut children,
+        ),
+        Action::Materialize => materialize(
+            &mut staged,
+            context,
+            &verified,
+            cursor.revision,
+            &mut children,
+        ),
+        Action::Distribute => distribute_execution(
+            &mut staged,
+            context,
+            &verified,
+            page,
+            cursor.revision,
+            &mut children,
+        ),
+        Action::Close => close(
+            &mut staged,
+            context,
+            &verified,
+            cursor.revision,
+            &mut children,
+        ),
+        _ => panic!("settlement action"),
+    }
+    .expect("packet projection");
+    let claims = children.claims;
+    let custody = children.custody;
+    let (claims_key, custody_key) =
+        packet_authority_keys(state, authority, claims, custody).expect("authority keys");
+    state.claims_caller_authority = if claims.is_some() {
+        observed(claims_key, authority.program_id, false, vec![])
+    } else {
+        state.claims_release.role_program.clone()
+    };
+    state.custody_caller_authority = if custody.is_some() {
+        observed(custody_key, authority.program_id, false, vec![])
+    } else {
+        state.custody_release.role_program.clone()
+    };
 }
 
 #[test]
@@ -609,5 +893,229 @@ fn semantic_aliases_and_invalid_packet_plumbing_refuse() {
             TRANSACTION_COMPUTE_UNIT_LIMIT_V1 + 1,
         ),
         Err(Error::InvalidComputeLimit)
+    );
+}
+
+#[test]
+fn collect_route_is_chain_derived_permissionless_and_packet_safe() {
+    let fixture = Fixture::new();
+    let state = fixture.settlement();
+    let report = build_general_settlement_v1(&state, Action::Collect).expect("Collect plan");
+    assert_eq!(report.action, Action::Collect);
+    assert_eq!(report.expected_revision, 0);
+    assert_eq!(
+        report.instruction.accounts.len(),
+        GENERAL_SETTLEMENT_ACCOUNT_COUNT_V1
+    );
+    assert!(
+        report
+            .instruction
+            .accounts
+            .iter()
+            .all(|meta| !meta.is_signer)
+    );
+    let request = ControllerRequestV1::decode(&report.instruction.data).expect("request");
+    assert_eq!(request.action, Action::Collect);
+    assert_eq!(request.page_index, 0);
+    assert_eq!(request.execution_index, 0);
+    let packet = compile_general_packet_v0(
+        &report,
+        Pubkey::new_from_array(id(111)),
+        Hash::new_from_array(id(112)),
+        1_000_000,
+    )
+    .expect("packet");
+    assert!(packet.wire_bytes <= PACKET_DATA_BYTES);
+}
+
+#[test]
+fn settlement_family_suffix_has_the_controller_order_without_root_duplication() {
+    let fixture = Fixture::new();
+    let state = fixture.settlement();
+    let suffix = general_settlement_suffix_metas(&state, Action::Collect);
+    let keys = suffix.iter().map(|meta| meta.pubkey).collect::<Vec<_>>();
+    assert_eq!(suffix.len(), GENERAL_SETTLEMENT_ACCOUNT_COUNT_V1);
+    assert_eq!(
+        keys,
+        vec![
+            state.common.market.key,
+            state.common.trading_release.cache.key,
+            state.common.trading_release.registry_program.key,
+            state.common.trading_release.role_program.key,
+            state.common.trading_release.role_programdata.key,
+            state.core_release.role_program.key,
+            state.core_release.role_programdata.key,
+            state.claims_release.role_program.key,
+            state.claims_release.role_programdata.key,
+            state.custody_release.role_program.key,
+            state.claims_caller_authority.key,
+            state.custody_caller_authority.key,
+            state.settlement.key,
+            state.certificate.key,
+            state.candidate.key,
+            state.page.key,
+            state.claims_market.key,
+            state.owner_position.key,
+            state.settlement_position.key,
+            state.realm.key,
+            state.realm_staging.key,
+            state.custody_replay.key,
+            state.mint.key,
+            state.collateral_source.key,
+            state.collateral_destination.key,
+            state.custody_authority.key,
+            state.token_program.key,
+            state.general_config.key,
+        ]
+    );
+    assert!(!keys.contains(&state.general_root.key));
+}
+
+#[test]
+fn aggregate_and_distribution_routes_construct_from_their_exact_cursor_phases() {
+    let fixture = Fixture::new();
+
+    let mut materialize_state = fixture.settlement();
+    materialize_state.page = materialize_state.common.market.clone();
+    materialize_state.settlement.data = SettlementCursorV1 {
+        phase: Phase::Materializing,
+        outcome_count: 2,
+        candidate_id: candidate().candidate_id,
+        page_count: 1,
+        next_page: 0,
+        next_execution: 0,
+        revision: 2,
+        claim_inventory: [0; MAX_OUTCOMES],
+        quote_inventory: 2,
+        quote_surplus_paid: 0,
+    }
+    .to_bytes()
+    .expect("materializing cursor")
+    .to_vec();
+    bind_authorities(&mut materialize_state, Action::Materialize);
+    let materialize = build_general_settlement_v1(&materialize_state, Action::Materialize)
+        .expect("Materialize plan");
+    assert_eq!(materialize.expected_revision, 2);
+
+    let mut distribute_state = fixture.settlement();
+    distribute_state.settlement.data = SettlementCursorV1 {
+        phase: Phase::Distributing,
+        outcome_count: 2,
+        candidate_id: candidate().candidate_id,
+        page_count: 1,
+        next_page: 0,
+        next_execution: 0,
+        revision: 3,
+        claim_inventory: vector(1, 1),
+        quote_inventory: 1,
+        quote_surplus_paid: 0,
+    }
+    .to_bytes()
+    .expect("distributing cursor")
+    .to_vec();
+    bind_authorities(&mut distribute_state, Action::Distribute);
+    let distribute = build_general_settlement_v1(&distribute_state, Action::Distribute)
+        .expect("Distribute plan");
+    assert_eq!(distribute.expected_revision, 3);
+
+    let mut close_state = fixture.settlement();
+    close_state.page = close_state.common.market.clone();
+    close_state.settlement.data = SettlementCursorV1 {
+        phase: Phase::ReadyToClose,
+        outcome_count: 2,
+        candidate_id: candidate().candidate_id,
+        page_count: 1,
+        next_page: 0,
+        next_execution: 0,
+        revision: 5,
+        claim_inventory: [0; MAX_OUTCOMES],
+        quote_inventory: 1,
+        quote_surplus_paid: 0,
+    }
+    .to_bytes()
+    .expect("close cursor")
+    .to_vec();
+    bind_authorities(&mut close_state, Action::Close);
+    let close = build_general_settlement_v1(&close_state, Action::Close).expect("Close plan");
+    assert_eq!(close.expected_revision, 5);
+    for report in [materialize, distribute, close] {
+        assert_eq!(
+            report.instruction.accounts.len(),
+            GENERAL_SETTLEMENT_ACCOUNT_COUNT_V1
+        );
+        assert!(
+            report
+                .instruction
+                .accounts
+                .iter()
+                .all(|meta| !meta.is_signer)
+        );
+    }
+}
+
+#[test]
+fn stale_settlement_and_substituted_page_refuse_before_construction() {
+    let fixture = Fixture::new();
+    let mut stale = fixture.settlement();
+    stale.settlement.observation.slot += 1;
+    assert_eq!(
+        build_general_settlement_v1(&stale, Action::Collect),
+        Err(Error::ObservationMismatch)
+    );
+
+    let mut substituted = fixture.settlement();
+    substituted.page.key = Pubkey::new_unique();
+    assert_eq!(
+        build_general_settlement_v1(&substituted, Action::Collect),
+        Err(Error::ImmutableInput)
+    );
+
+    assert_eq!(
+        build_general_settlement_v1(&fixture.settlement(), Action::Freeze),
+        Err(Error::Encoding)
+    );
+}
+
+#[test]
+fn alternate_content_addressed_config_cannot_substitute_for_root_selection() {
+    let fixture = Fixture::new();
+    let mut state = fixture.settlement();
+    let alternate = GeneralConfigV2::new(GeneralConfigV2Input {
+        capacity_profile_id: id(94),
+        claim_basis_id: id(95),
+        capability_program_id: id(96),
+        generation: 1,
+        price_scale: 2,
+        collection_slots: 1,
+        selection_slots: 1,
+        settlement_slots: 1,
+        max_orders_per_candidate: 16,
+        max_pages_per_candidate: 1,
+        continuation_reward_lamports: 1,
+        selection_policy_id: policy().policy_id,
+        outcome_count: 2,
+        quote_surplus_beneficiary: id(118),
+    })
+    .expect("alternate config");
+    let data = alternate.to_bytes().to_vec();
+    let digest = hash(&data).to_bytes();
+    state.general_config = observed(
+        Pubkey::find_program_address(
+            &[
+                RAW_RECORD_PDA_SEED_V1,
+                &GENERAL_CONFIG_SCHEMA_ID_V2,
+                &digest,
+            ],
+            &fixture.registry,
+        )
+        .0,
+        fixture.registry,
+        false,
+        data,
+    );
+
+    assert_eq!(
+        build_general_settlement_v1(&state, Action::Collect),
+        Err(Error::AccountShape)
     );
 }

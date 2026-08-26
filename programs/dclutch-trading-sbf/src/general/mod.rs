@@ -6,3 +6,7 @@
 
 /// Pure, preauthenticated General activation planning.
 pub mod activation;
+/// Commit-last fixed-role child execution for General settlement.
+pub mod controller;
+/// Atomic two-pass settlement preparation and exact fixed-role child packets.
+pub mod settlement;

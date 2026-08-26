@@ -205,26 +205,41 @@ pub fn build_row_packets_v2(
     claims: ClaimsResourcesV2,
     custody: Option<CustodyResourcesV2>,
 ) -> ChildPacketResult<GeneralChildPacketsV2> {
+    match effect {
+        GeneralChildEffectV1::CollectClaims | GeneralChildEffectV1::DistributeClaims => {
+            if custody.is_some() {
+                return Err(ChildPacketError::Coordinate);
+            }
+            build_row_claims_packets_v2(effect, context, outcome_count, quantities, claims)
+        }
+        GeneralChildEffectV1::CollectCollateral | GeneralChildEffectV1::DistributeCollateral => {
+            build_row_custody_packets_v2(
+                effect,
+                context,
+                outcome_count,
+                quantities,
+                custody.ok_or(ChildPacketError::Coordinate)?,
+            )
+        }
+        _ => Err(ChildPacketError::General),
+    }
+}
+
+#[inline(never)]
+fn build_row_claims_packets_v2(
+    effect: GeneralChildEffectV1,
+    context: RowReplayContextV1,
+    outcome_count: u8,
+    quantities: &[u64; MAX_OUTCOMES],
+    claims: ClaimsResourcesV2,
+) -> ChildPacketResult<GeneralChildPacketsV2> {
     let tail = encode_quantities(outcome_count, quantities)?;
     let active_tail = &tail[..usize::from(outcome_count) * 8];
-    let scalar = matches!(
-        effect,
-        GeneralChildEffectV1::CollectCollateral | GeneralChildEffectV1::DistributeCollateral
-    );
-    let parent = GeneralChildPlanV2::new_row(
-        effect,
-        context,
-        if scalar { 1 } else { u32::from(outcome_count) },
-        if scalar {
-            &active_tail[..8]
-        } else {
-            active_tail
-        },
-    )?
-    .digest()?;
-
+    let parent =
+        GeneralChildPlanV2::new_row(effect, context, u32::from(outcome_count), active_tail)?
+            .digest()?;
     let claims_packet = match effect {
-        GeneralChildEffectV1::CollectClaims => Some(build_claims_packet(
+        GeneralChildEffectV1::CollectClaims => build_claims_packet(
             ClaimsAction::TransferNative,
             context,
             outcome_count,
@@ -235,8 +250,8 @@ pub fn build_row_packets_v2(
             claims.owner_position_revision,
             claims.settlement_position_revision,
             parent,
-        )?),
-        GeneralChildEffectV1::DistributeClaims => Some(build_claims_packet(
+        )?,
+        GeneralChildEffectV1::DistributeClaims => build_claims_packet(
             ClaimsAction::TransferNative,
             context,
             outcome_count,
@@ -247,35 +262,71 @@ pub fn build_row_packets_v2(
             claims.settlement_position_revision,
             claims.owner_position_revision,
             parent,
-        )?),
-        GeneralChildEffectV1::CollectCollateral | GeneralChildEffectV1::DistributeCollateral => {
-            None
-        }
+        )?,
         _ => return Err(ChildPacketError::General),
     };
-    let custody_packet = match effect {
-        GeneralChildEffectV1::CollectCollateral | GeneralChildEffectV1::DistributeCollateral => {
-            let resources = custody.ok_or(ChildPacketError::Coordinate)?;
-            let amount = quantities[0];
-            Some(build_custody_packet(
-                context.execution.release_set_id,
-                context.execution.market_id,
-                context.candidate_id,
-                context.order_id,
-                context.order_nonce,
-                context.page_index,
-                u32::from(context.execution_index),
-                amount,
-                resources,
-                parent,
-            )?)
-        }
-        _ if custody.is_none() => None,
-        _ => return Err(ChildPacketError::Coordinate),
-    };
     Ok(GeneralChildPacketsV2 {
-        claims: claims_packet,
-        custody: custody_packet,
+        claims: Some(claims_packet),
+        custody: None,
+        parent_request_digest: parent,
+    })
+}
+
+#[inline(never)]
+fn build_row_custody_packets_v2(
+    effect: GeneralChildEffectV1,
+    context: RowReplayContextV1,
+    outcome_count: u8,
+    quantities: &[u64; MAX_OUTCOMES],
+    resources: CustodyResourcesV2,
+) -> ChildPacketResult<GeneralChildPacketsV2> {
+    if usize::from(outcome_count) > MAX_OUTCOMES
+        || outcome_count == 0
+        || quantities[1..].iter().any(|quantity| *quantity != 0)
+    {
+        return Err(ChildPacketError::Coordinate);
+    }
+    let route_valid = if effect == GeneralChildEffectV1::CollectCollateral {
+        resources.source_owner == context.owner_id
+            && is_zero(&resources.source_vault_context)
+            && is_zero(&resources.destination_owner)
+            && resources.destination_vault_context == context.candidate_id
+    } else {
+        is_zero(&resources.source_owner)
+            && resources.source_vault_context == context.candidate_id
+            && resources.destination_owner == context.owner_id
+            && is_zero(&resources.destination_vault_context)
+    };
+    if !route_valid {
+        return Err(ChildPacketError::Coordinate);
+    }
+    let quantity = quantities[0].to_le_bytes();
+    let parent = GeneralChildPlanV2::new_row(effect, context, 1, &quantity)?.digest()?;
+    let custody = build_custody_packet(
+        context.execution.release_set_id,
+        context.execution.market_id,
+        context.candidate_id,
+        context.order_id,
+        context.order_nonce,
+        context.page_index,
+        u32::from(context.execution_index),
+        quantities[0],
+        resources,
+        if effect == GeneralChildEffectV1::CollectCollateral {
+            CompartmentV1::External
+        } else {
+            CompartmentV1::Settlement
+        },
+        if effect == GeneralChildEffectV1::CollectCollateral {
+            CompartmentV1::Settlement
+        } else {
+            CompartmentV1::External
+        },
+        parent,
+    )?;
+    Ok(GeneralChildPacketsV2 {
+        claims: None,
+        custody: Some(custody),
         parent_request_digest: parent,
     })
 }
@@ -290,10 +341,22 @@ pub fn build_materialize_packets_v2(
     claims: ClaimsResourcesV2,
     custody: CustodyResourcesV2,
 ) -> ChildPacketResult<GeneralChildPacketsV2> {
-    if quantity == 0 {
+    let custody_route_valid = if mint {
+        is_zero(&custody.source_owner)
+            && custody.source_vault_context == context.candidate_id
+            && is_zero(&custody.destination_owner)
+            && custody.destination_vault_context == context.execution.market_id
+    } else {
+        is_zero(&custody.source_owner)
+            && custody.source_vault_context == context.execution.market_id
+            && is_zero(&custody.destination_owner)
+            && custody.destination_vault_context == context.candidate_id
+    };
+    if quantity == 0 || !custody_route_valid {
         return Err(ChildPacketError::Coordinate);
     }
-    let quantities = [quantity; MAX_OUTCOMES];
+    let mut quantities = [0; MAX_OUTCOMES];
+    quantities[..usize::from(outcome_count)].fill(quantity);
     let tail = encode_quantities(outcome_count, &quantities)?;
     let active_tail = &tail[..usize::from(outcome_count) * 8];
     let effect = if mint {
@@ -356,6 +419,16 @@ pub fn build_materialize_packets_v2(
         0,
         quantity,
         custody,
+        if mint {
+            CompartmentV1::Settlement
+        } else {
+            CompartmentV1::HoardPrincipal
+        },
+        if mint {
+            CompartmentV1::HoardPrincipal
+        } else {
+            CompartmentV1::Settlement
+        },
         parent,
     )?;
     Ok(GeneralChildPacketsV2 {
@@ -372,7 +445,13 @@ pub fn build_surplus_packet_v2(
     route: QuoteSurplusRouteV2,
     custody: CustodyResourcesV2,
 ) -> ChildPacketResult<GeneralChildPacketsV2> {
-    if quantity == 0 || custody.destination != route.destination_account {
+    if quantity == 0
+        || custody.destination != route.destination_account
+        || !is_zero(&custody.source_owner)
+        || custody.source_vault_context != context.candidate_id
+        || custody.destination_owner != route.beneficiary
+        || !is_zero(&custody.destination_vault_context)
+    {
         return Err(ChildPacketError::Coordinate);
     }
     let tail = quantity.to_le_bytes();
@@ -387,6 +466,8 @@ pub fn build_surplus_packet_v2(
         0,
         quantity,
         custody,
+        CompartmentV1::Settlement,
+        CompartmentV1::External,
         parent,
     )?;
     Ok(GeneralChildPacketsV2 {
@@ -514,27 +595,15 @@ fn build_custody_packet(
     execution_index: u32,
     amount: u64,
     resources: CustodyResourcesV2,
+    source_compartment: CompartmentV1,
+    destination_compartment: CompartmentV1,
     parent_request_digest: [u8; 32],
 ) -> ChildPacketResult<CustodyPacketV2> {
-    let source_external = !is_zero(&resources.source_owner);
-    let destination_external = !is_zero(&resources.destination_owner);
     let request = CustodyRequestV1 {
         operation: OperationV1::Transfer,
         caller_role: ExecutionRoleV1::Trading,
-        source_compartment: if source_external {
-            CompartmentV1::External
-        } else if resources.source_vault_context == candidate {
-            CompartmentV1::Settlement
-        } else {
-            CompartmentV1::HoardPrincipal
-        },
-        destination_compartment: if destination_external {
-            CompartmentV1::External
-        } else if resources.destination_vault_context == candidate {
-            CompartmentV1::Settlement
-        } else {
-            CompartmentV1::HoardPrincipal
-        },
+        source_compartment,
+        destination_compartment,
         release_set,
         market,
         realm: resources.realm,
@@ -635,12 +704,8 @@ mod tests {
             generation: 4,
             source: id(10),
             destination: id(11),
-            source_owner: if source_external { id(12) } else { [0; 32] },
-            destination_owner: if destination_external {
-                id(13)
-            } else {
-                [0; 32]
-            },
+            source_owner: if source_external { id(4) } else { [0; 32] },
+            destination_owner: if destination_external { id(4) } else { [0; 32] },
             source_vault_context: if source_external { [0; 32] } else { id(3) },
             destination_vault_context: if destination_external { [0; 32] } else { id(3) },
             mint: id(14),
@@ -675,6 +740,25 @@ mod tests {
     }
 
     #[test]
+    fn materialize_packets_bind_settlement_to_hoard_custody_direction() {
+        let context = AggregateReplayContextV1 {
+            execution: row().execution,
+            candidate_id: row().candidate_id,
+            revision: 9,
+        };
+        let mut resources = custody(false, false);
+        resources.destination_vault_context = row().execution.market_id;
+        let packets = build_materialize_packets_v2(true, context, 2, 1, claims(), resources)
+            .expect("materialize packets");
+        let request = packets.custody.expect("custody").request();
+        assert_eq!(request.source_compartment, CompartmentV1::Settlement);
+        assert_eq!(
+            request.destination_compartment,
+            CompartmentV1::HoardPrincipal
+        );
+    }
+
+    #[test]
     fn distinct_external_owner_collateral_packet_round_trips_and_receipt_checks() {
         let mut quantities = [0; MAX_OUTCOMES];
         quantities[0] = 19;
@@ -689,7 +773,7 @@ mod tests {
         .expect("packets");
         let packet = packets.custody.expect("custody");
         let request = packet.request();
-        assert_eq!(request.semantic.source_owner, id(12));
+        assert_eq!(request.semantic.source_owner, row().owner_id);
         assert_eq!(request.source_compartment, CompartmentV1::External);
         assert_eq!(request.destination_compartment, CompartmentV1::Settlement);
         let evidence = ReceiptEvidenceV1 {
