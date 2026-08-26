@@ -1776,7 +1776,11 @@ pub fn project_atomic(
     Ok(())
 }
 
-fn initialize_requests(program: ProgramV3<'_>, tail_count: u32, output: &mut [u8]) -> Result<()> {
+pub(super) fn initialize_requests(
+    program: ProgramV3<'_>,
+    tail_count: u32,
+    output: &mut [u8],
+) -> Result<()> {
     let mut route_index = 0_u16;
     while route_index < program.route_count {
         let route = program.route(route_index)?;
@@ -1816,7 +1820,10 @@ fn initialize_requests(program: ProgramV3<'_>, tail_count: u32, output: &mut [u8
     Ok(())
 }
 
-fn project_effect(effect: ResolvedEffectV3, projection: &mut ProjectionV3<'_>) -> Result<()> {
+pub(super) fn project_effect(
+    effect: ResolvedEffectV3,
+    projection: &mut ProjectionV3<'_>,
+) -> Result<()> {
     match effect {
         ResolvedEffectV3::TransferLamports {
             source,
@@ -1984,7 +1991,7 @@ fn alias_region_accepts(
     Ok(item == representative_item)
 }
 
-fn representative(aliases: &[usize], coordinate: usize) -> Result<usize> {
+pub(super) fn representative(aliases: &[usize], coordinate: usize) -> Result<usize> {
     let resolved = *aliases.get(coordinate).ok_or(Error::InvalidAlias)?;
     if resolved <= coordinate && resolved < aliases.len() {
         Ok(resolved)
@@ -2065,7 +2072,7 @@ fn resolved_by_ordinal(
     )
 }
 
-fn resolved_data_range(
+pub(super) fn resolved_data_range(
     effect: ResolvedEffectV3,
     aliases: &[usize],
 ) -> Result<Option<(usize, u32, u32)>> {
@@ -2144,7 +2151,12 @@ fn validate_coordinate(coordinate: u16, item_space: bool, common: u16, stride: u
     }
 }
 
-fn overlaps(left: u32, left_width: u32, right: u32, right_width: u32) -> Result<bool> {
+pub(super) fn overlaps(
+    left: u32,
+    left_width: u32,
+    right: u32,
+    right_width: u32,
+) -> Result<bool> {
     let left_end = left
         .checked_add(left_width)
         .ok_or(Error::ArithmeticOverflow)?;

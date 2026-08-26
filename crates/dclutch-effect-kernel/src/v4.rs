@@ -8,7 +8,10 @@
 //! common scalar registers own every coordinate. Admission must prove that
 //! every selected scalar is derived and protected by the selected Transition.
 
-use super::v3::{Error as ErrorV3, ProgramV3, ResolvedEffectV3, ResolvedInvocationV3};
+use super::v3::{
+    Error as ErrorV3, ProgramV3, ProjectionV3, ResolvedEffectV3, ResolvedInvocationV3,
+    initialize_requests, overlaps, project_effect, representative, resolved_data_range,
+};
 
 /// Distinct successor magic.
 pub const MAGIC_V4: [u8; 4] = *b"DCE5";
@@ -114,8 +117,8 @@ impl RequestCoordinateV4 {
                 u16::try_from(value).map_err(|_| ErrorV4::RangeTable)?,
             )),
             COORDINATE_PRODUCT_TAIL_AFFINE => {
-                let base = u16::try_from(value & u32::from(u16::MAX))
-                    .map_err(|_| ErrorV4::RangeTable)?;
+                let base =
+                    u16::try_from(value & u32::from(u16::MAX)).map_err(|_| ErrorV4::RangeTable)?;
                 let stride = u16::try_from(value >> 16).map_err(|_| ErrorV4::RangeTable)?;
                 if stride == 0 {
                     return Err(ErrorV4::RangeTable);
@@ -286,11 +289,7 @@ impl BorrowedRangeV4 {
         })
     }
 
-    fn resolve(
-        self,
-        scalars: &[u64],
-        tail_count: u32,
-    ) -> ResultV4<ResolvedBorrowedRangeV4> {
+    fn resolve(self, scalars: &[u64], tail_count: u32) -> ResultV4<ResolvedBorrowedRangeV4> {
         let source_offset = self.offset.resolve(scalars, tail_count)?;
         let len = self.len.resolve(scalars, tail_count)?;
         if len == 0 {
@@ -610,8 +609,13 @@ impl<'a> ProgramV4<'a> {
         while index < self.range_count {
             let declaration = self.borrowed_range(index)?;
             if declaration.route == route
-                && (matches!(declaration.offset, RequestCoordinateV4::ProductTailAffine { .. })
-                    || matches!(declaration.len, RequestCoordinateV4::ProductTailAffine { .. }))
+                && (matches!(
+                    declaration.offset,
+                    RequestCoordinateV4::ProductTailAffine { .. }
+                ) || matches!(
+                    declaration.len,
+                    RequestCoordinateV4::ProductTailAffine { .. }
+                ))
             {
                 return Err(ErrorV4::RangeSelection);
             }
@@ -874,6 +878,209 @@ impl<'a> ProgramV4<'a> {
     }
 }
 
+/// Project the embedded effect program atomically after resolving every V4
+/// account-span shift from protected common scalars.
+///
+/// Request templates remain owned by the canonical embedded V3 program;
+/// borrowed family ranges are appended only at child-invocation time and never
+/// become caller-authored bytes in this local request bank.
+pub fn project_atomic(
+    program: ProgramV4<'_>,
+    tail_count: u32,
+    mut projection: ProjectionV3<'_>,
+) -> ResultV4<()> {
+    let accounts = program.account_count(tail_count, projection.scalars)?;
+    let scalar_count = program.base.scalar_count(tail_count)?;
+    let identity_count = program.base.identity_count(tail_count)?;
+    let request_bytes = program.base.request_bytes(tail_count)?;
+    if projection.scalars.len() != scalar_count
+        || projection.identities.len() != identity_count
+        || projection.aliases.len() != accounts
+        || projection.accounts.len() != accounts
+        || projection.permissions.len() != accounts
+        || projection.scratch_lamports.len() != accounts
+        || projection.output_lamports.len() != accounts
+        || projection.scratch_requests.len() != request_bytes
+        || projection.output_requests.len() != request_bytes
+    {
+        return Err(ErrorV4::BaseProgram);
+    }
+    validate_aliases_v4(
+        program,
+        projection.scalars,
+        projection.aliases,
+        projection.accounts,
+        projection.permissions,
+    )?;
+    validate_runtime_write_nonoverlap_v4(
+        program,
+        tail_count,
+        projection.scalars,
+        projection.identities,
+        projection.aliases,
+    )?;
+    initialize_requests(program.base, tail_count, projection.scratch_requests)?;
+    for (output, input) in projection
+        .scratch_lamports
+        .iter_mut()
+        .zip(projection.accounts.iter())
+    {
+        *output = input.lamports;
+    }
+    let mut fixed = 0_u16;
+    while fixed < program.base.fixed_operation_count() {
+        project_effect(
+            program.resolved_fixed_effect(
+                fixed,
+                tail_count,
+                projection.scalars,
+                projection.identities,
+            )?,
+            &mut projection,
+        )?;
+        fixed = fixed.checked_add(1).ok_or(ErrorV4::Arithmetic)?;
+    }
+    let mut item = 0_u32;
+    while item < tail_count {
+        let mut operation = 0_u16;
+        while operation < program.base.item_operation_count() {
+            project_effect(
+                program.resolved_item_effect(
+                    item,
+                    operation,
+                    tail_count,
+                    projection.scalars,
+                    projection.identities,
+                )?,
+                &mut projection,
+            )?;
+            operation = operation.checked_add(1).ok_or(ErrorV4::Arithmetic)?;
+        }
+        item = item.checked_add(1).ok_or(ErrorV4::Arithmetic)?;
+    }
+    for (index, output) in projection.output_lamports.iter_mut().enumerate() {
+        *output = *projection
+            .scratch_lamports
+            .get(representative(projection.aliases, index)?)
+            .ok_or(ErrorV4::BaseProgram)?;
+    }
+    projection
+        .output_requests
+        .copy_from_slice(projection.scratch_requests);
+    Ok(())
+}
+
+fn validate_aliases_v4(
+    program: ProgramV4<'_>,
+    scalars: &[u64],
+    aliases: &[usize],
+    accounts: &[super::v2::AccountInput],
+    permissions: &[super::v2::AccountPermission],
+) -> ResultV4<()> {
+    let fixed = usize::from(program.base.fixed_account_count())
+        .checked_add(usize::from(program.total_extension(scalars)?))
+        .ok_or(ErrorV4::Arithmetic)?;
+    let stride = usize::from(program.base.item_account_stride());
+    for coordinate in 0..aliases.len() {
+        let resolved = representative(aliases, coordinate)?;
+        if representative(aliases, resolved)? != resolved
+            || accounts.get(coordinate) != accounts.get(resolved)
+            || permissions.get(coordinate) != permissions.get(resolved)
+            || !alias_region_accepts_v4(coordinate, resolved, fixed, stride)?
+        {
+            return Err(ErrorV4::BaseProgram);
+        }
+    }
+    Ok(())
+}
+
+fn alias_region_accepts_v4(
+    coordinate: usize,
+    resolved: usize,
+    fixed: usize,
+    item_stride: usize,
+) -> ResultV4<bool> {
+    if coordinate < fixed {
+        return Ok(resolved < fixed);
+    }
+    if resolved < fixed {
+        return Ok(true);
+    }
+    if item_stride == 0 {
+        return Err(ErrorV4::BaseProgram);
+    }
+    Ok(coordinate
+        .checked_sub(fixed)
+        .ok_or(ErrorV4::Arithmetic)?
+        / item_stride
+        == resolved.checked_sub(fixed).ok_or(ErrorV4::Arithmetic)? / item_stride)
+}
+
+fn validate_runtime_write_nonoverlap_v4(
+    program: ProgramV4<'_>,
+    tail_count: u32,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+    aliases: &[usize],
+) -> ResultV4<()> {
+    let total = u64::from(program.base.item_operation_count())
+        .checked_mul(u64::from(tail_count))
+        .and_then(|value| value.checked_add(u64::from(program.base.fixed_operation_count())))
+        .ok_or(ErrorV4::Arithmetic)?;
+    let mut right = 0_u64;
+    while right < total {
+        if let Some((right_account, right_start, right_width)) = resolved_data_range(
+            resolved_by_ordinal_v4(program, right, tail_count, scalars, identities)?,
+            aliases,
+        )? {
+            let mut left = 0_u64;
+            while left < right {
+                if let Some((left_account, left_start, left_width)) = resolved_data_range(
+                    resolved_by_ordinal_v4(program, left, tail_count, scalars, identities)?,
+                    aliases,
+                )? && left_account == right_account
+                    && overlaps(left_start, left_width, right_start, right_width)?
+                {
+                    return Err(ErrorV4::BaseProgram);
+                }
+                left = left.checked_add(1).ok_or(ErrorV4::Arithmetic)?;
+            }
+        }
+        right = right.checked_add(1).ok_or(ErrorV4::Arithmetic)?;
+    }
+    Ok(())
+}
+
+fn resolved_by_ordinal_v4(
+    program: ProgramV4<'_>,
+    ordinal: u64,
+    tail_count: u32,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+) -> ResultV4<ResolvedEffectV3> {
+    let fixed = u64::from(program.base.fixed_operation_count());
+    if ordinal < fixed {
+        return program.resolved_fixed_effect(
+            u16::try_from(ordinal).map_err(|_| ErrorV4::Arithmetic)?,
+            tail_count,
+            scalars,
+            identities,
+        );
+    }
+    let item_operations = u64::from(program.base.item_operation_count());
+    if item_operations == 0 {
+        return Err(ErrorV4::BaseProgram);
+    }
+    let tail_ordinal = ordinal.checked_sub(fixed).ok_or(ErrorV4::Arithmetic)?;
+    program.resolved_item_effect(
+        u32::try_from(tail_ordinal / item_operations).map_err(|_| ErrorV4::Arithmetic)?,
+        u16::try_from(tail_ordinal % item_operations).map_err(|_| ErrorV4::Arithmetic)?,
+        tail_count,
+        scalars,
+        identities,
+    )
+}
+
 /// Encode one exact successor program atomically around canonical V3 bytes.
 pub fn encode_program_v4_atomic(
     base_program: &[u8],
@@ -1020,7 +1227,7 @@ fn put(output: &mut [u8], offset: usize, value: &[u8]) -> ResultV4<()> {
 mod tests {
     use super::*;
     use crate::{
-        v2::FixedRole,
+        v2::{AccountInput, AccountPermission, FixedRole},
         v3::encode::{
             AccountCoordinateV3, EffectGeometryV3, EffectInstructionV3, RouteInputV3,
             ScalarCoordinateV3, encode_effect_program_v3_atomic,
@@ -1194,6 +1401,67 @@ mod tests {
     }
 
     #[test]
+    fn selected_span_projection_writes_only_the_shifted_account_atomically() {
+        let bytes = series_successor(BorrowedRangePolicyV4::IdenticalReuseExactCoverage, [1, 2]);
+        let program = ProgramV4::decode(&bytes).expect("decode");
+        let scalars = [2, 32, 0, 0, 0, 0];
+        let identities = [[1; 32]];
+        let aliases = core::array::from_fn::<_, 28, _>(|index| index);
+        let mut accounts = [
+            AccountInput {
+                lamports: 3,
+                data_len: 0,
+            };
+            28
+        ];
+        accounts[27].data_len = 8;
+        let mut permissions = [AccountPermission::read_only(); 28];
+        permissions[27] = AccountPermission::new(false, false, true);
+        let mut scratch_lamports = [0; 28];
+        let mut output_lamports = [9; 28];
+        project_atomic(
+            program,
+            0,
+            ProjectionV3 {
+                scalars: &scalars,
+                identities: &identities,
+                aliases: &aliases,
+                accounts: &accounts,
+                permissions: &permissions,
+                scratch_lamports: &mut scratch_lamports,
+                output_lamports: &mut output_lamports,
+                scratch_requests: &mut [],
+                output_requests: &mut [],
+            },
+        )
+        .expect("V4 shifted projection");
+        assert_eq!(output_lamports, [3; 28]);
+
+        permissions[27] = AccountPermission::read_only();
+        let mut hostile_scratch = [0; 28];
+        let mut hostile_output = [7; 28];
+        assert!(
+            project_atomic(
+                program,
+                0,
+                ProjectionV3 {
+                    scalars: &scalars,
+                    identities: &identities,
+                    aliases: &aliases,
+                    accounts: &accounts,
+                    permissions: &permissions,
+                    scratch_lamports: &mut hostile_scratch,
+                    output_lamports: &mut hostile_output,
+                    scratch_requests: &mut [],
+                    output_requests: &mut [],
+                },
+            )
+            .is_err()
+        );
+        assert_eq!(hostile_output, [7; 28]);
+    }
+
+    #[test]
     fn zero_base_span_omits_or_materializes_one_optional_child_frame() {
         const OPTIONAL_BASE_BYTES: usize = HEADER_BYTES + 2 * ROUTE_BYTES + OPERATION_BYTES;
         const OPTIONAL_BYTES: usize = HEADER_BYTES_V4 + DYNAMIC_SPAN_BYTES_V4 + OPTIONAL_BASE_BYTES;
@@ -1356,12 +1624,7 @@ mod tests {
                 .and_then(|value| value.checked_add(640))
                 .expect("bounded request");
             assert_eq!(
-                program.validate_request_coverage(
-                    request_len,
-                    tail_count,
-                    &scalars,
-                    &identities,
-                ),
+                program.validate_request_coverage(request_len, tail_count, &scalars, &identities,),
                 Ok(())
             );
             let claims = program
