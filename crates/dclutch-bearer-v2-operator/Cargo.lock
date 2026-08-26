@@ -287,7 +287,9 @@ dependencies = [
  "dclutch-rational-representation-v2-contract",
  "dclutch-rational-representation-v2-kernel",
  "dclutch-rational-representation-v2-operator",
+ "dclutch-request-profile-contract",
  "dclutch-token-svm",
+ "dclutch-transition-vm",
  "solana-program",
 ]
 
@@ -383,7 +385,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-request-profile-contract"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-token-svm"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-transition-vm"
 version = "0.1.0"
 
 [[package]]
