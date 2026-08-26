@@ -178,7 +178,7 @@ pub fn authenticate_general_artifacts_v3<'a>(
     require_selected(selection.config, artifacts.config)?;
     let config =
         GeneralConfigV2::decode(artifacts.config).map_err(|_| GeneralArtifactErrorV3::Config)?;
-    if config.capability_program_id() != descriptor_id
+    if config.capability_program_id() != selection.program_set
         || descriptor.capacity_profile().to_bytes() != config.capacity_profile_id()
     {
         return Err(GeneralArtifactErrorV3::Config);
@@ -663,10 +663,11 @@ mod tests {
         )
         .expect("descriptor")
         .encode();
+        let set = program_set(digest(&descriptor));
         let config = GeneralConfigV2::new(GeneralConfigV2Input {
             capacity_profile_id: capacity,
             claim_basis_id: [9; 32],
-            capability_program_id: digest(&descriptor),
+            capability_program_id: digest(&set),
             generation: 7,
             price_scale: 1_000,
             collection_slots: 10,
@@ -681,7 +682,6 @@ mod tests {
         })
         .expect("legacy config")
         .to_bytes();
-        let set = program_set(digest(&descriptor));
         let request = ControllerRequestV1 {
             action: Action::Freeze,
             expected_revision: 7,
