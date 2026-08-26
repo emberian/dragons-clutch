@@ -104,7 +104,7 @@ use dclutch_registry_svm::{
     },
 };
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_rent_contract::{RENT_CREDIT_BYTES_V1, RentCreditV1};
+use dclutch_rent_contract::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
 use dclutch_request_profile_contract::{
     ProjectionRegisterKindV1, ProjectionRegisterSpaceV1, ProjectionRegistersV1, ProjectionTargetV1,
     RequestProfileV1, SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1,
@@ -2234,6 +2234,9 @@ pub fn process_hot_execution_v3(
         .collect::<Result<Vec<_>, _>>()?;
     let preplanned_lifecycle = prepare_lifecycle_v4(
         program_id,
+        envelope.market(),
+        envelope.release_set(),
+        envelope.generation(),
         lifecycle,
         selected_action,
         account_profile,
@@ -2341,6 +2344,9 @@ pub fn process_hot_execution_v3(
     )?;
     let revalidated_lifecycle = prepare_lifecycle_v4(
         program_id,
+        envelope.market(),
+        envelope.release_set(),
+        envelope.generation(),
         lifecycle,
         selected_action,
         account_profile,
@@ -2548,6 +2554,9 @@ fn commit_prepared_post_children_v3(
 ) -> Result<(), ProgramError> {
     apply_lifecycle_closes_v3(
         prepared.program_id,
+        prepared.envelope.market(),
+        prepared.envelope.release_set(),
+        prepared.envelope.generation(),
         prepared.lifecycle_plans,
         prepared.runtime_accounts,
         prepared.rent,
@@ -3926,6 +3935,9 @@ struct PreparedLifecycleBatchV4 {
 #[inline(never)]
 fn prepare_lifecycle_v4<'a>(
     program_id: &Pubkey,
+    expected_market: [u8; 32],
+    expected_release_set: [u8; 32],
+    expected_generation: u64,
     policy: StateLifecyclePolicyV5<'_>,
     action: u32,
     account_profile: AccountProfileV2<'_>,
@@ -4066,6 +4078,9 @@ fn prepare_lifecycle_v4<'a>(
                             .get(index)
                             .ok_or(TradingSbfError::Content)?,
                         rent,
+                        expected_market,
+                        expected_release_set,
+                        expected_generation,
                     )
                 })
                 .transpose()?;
@@ -4370,28 +4385,42 @@ fn authenticate_lifecycle_credit_v3(
     index: usize,
     observed_lamports: u64,
     rent: &Rent,
+    expected_market: [u8; 32],
+    expected_release_set: [u8; 32],
+    expected_generation: u64,
 ) -> Result<AuthenticatedRentCreditV3, ProgramError> {
     let account = accounts.get(index).ok_or(TradingSbfError::Content)?;
     if account.is_signer
         || !account.is_writable
         || account.executable
-        || account.data_len() != RENT_CREDIT_BYTES_V1
-        || !rent.is_exempt(observed_lamports, RENT_CREDIT_BYTES_V1)
+        || account.data_len() != LIFECYCLE_RENT_CREDIT_BYTES_V2
+        || !rent.is_exempt(observed_lamports, LIFECYCLE_RENT_CREDIT_BYTES_V2)
     {
         return Err(TradingSbfError::Content.into());
     }
     let data = account
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Content)?;
-    let credit = RentCreditV1::decode(&data).map_err(|_| TradingSbfError::Content)?;
-    if credit.to_bytes().as_slice() != data.as_ref() {
+    let credit = LifecycleRentCreditV2::decode(&data).map_err(|_| TradingSbfError::Content)?;
+    if credit.to_bytes().as_slice() != data.as_ref()
+        || credit.market().to_bytes() != expected_market
+        || credit.release_set().to_bytes() != expected_release_set
+        || credit.generation() != expected_generation
+    {
         return Err(TradingSbfError::Content.into());
     }
     let seeds = credit.pda_seeds();
-    let authority = seeds.refund_authority().to_bytes();
+    let authority = credit.refund_wallet().to_bytes();
+    let market = seeds.market().to_bytes();
+    let generation = seeds.generation();
     let bump = [seeds.bump()];
     let expected = Pubkey::create_program_address(
-        &[seeds.domain(), authority.as_slice(), &bump],
+        &[
+            seeds.domain(),
+            market.as_slice(),
+            generation.as_slice(),
+            &bump,
+        ],
         account.owner,
     )
     .map_err(|_| TradingSbfError::Content)?;
@@ -4564,6 +4593,9 @@ fn apply_lifecycle_creates_v3(
 
 fn apply_lifecycle_closes_v3(
     program_id: &Pubkey,
+    expected_market: [u8; 32],
+    expected_release_set: [u8; 32],
+    expected_generation: u64,
     plans: &[PreparedLifecycleInvocationV3],
     accounts: &[&AccountInfo<'_>],
     rent: &Rent,
@@ -4585,6 +4617,9 @@ fn apply_lifecycle_closes_v3(
             prepared.rent_credit.ok_or(TradingSbfError::Commit)?,
             credit.lamports(),
             rent,
+            expected_market,
+            expected_release_set,
+            expected_generation,
         )?;
         if state.key.to_bytes() != plan.state
             || credit.key.to_bytes() != plan.rent_credit
@@ -7066,6 +7101,130 @@ mod tests {
         assert!(
             require_shadow_callback_runtime_v4(root.to_bytes(), 2, &aliased_authority, &runtime,)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn lifecycle_rent_credit_v2_binds_market_release_and_generation() {
+        use dclutch_rent_contract::{
+            RefundAuthority,
+            lifecycle_v2::{
+                LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
+            },
+        };
+
+        let rent_program = Pubkey::new_unique();
+        let refund = Pubkey::new_unique();
+        let market = Pubkey::new_unique();
+        let release = Pubkey::new_unique();
+        let generation = 9_u64;
+        let generation_seed = generation.to_le_bytes();
+        let (credit_key, bump) = Pubkey::find_program_address(
+            &[
+                LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+                market.as_ref(),
+                &generation_seed,
+            ],
+            &rent_program,
+        );
+        let state = LifecycleRentCreditV2::new(
+            RefundAuthority::new(refund.to_bytes()).expect("refund"),
+            LifecycleAccountIdV2::new(market.to_bytes()).expect("market"),
+            LifecycleAccountIdV2::new(release.to_bytes()).expect("release"),
+            generation,
+            bump,
+        )
+        .expect("state");
+        let rent = Rent::default();
+        let floor = rent.minimum_balance(LIFECYCLE_RENT_CREDIT_BYTES_V2);
+        let credit = AccountInfo::new(
+            Box::leak(Box::new(credit_key)),
+            false,
+            true,
+            Box::leak(Box::new(floor)),
+            Box::leak(state.to_bytes().to_vec().into_boxed_slice()),
+            Box::leak(Box::new(rent_program)),
+            false,
+        );
+        let owner = AccountInfo::new(
+            Box::leak(Box::new(rent_program)),
+            false,
+            false,
+            Box::leak(Box::new(1_u64)),
+            Box::leak(Vec::new().into_boxed_slice()),
+            Box::leak(Box::new(Pubkey::new_unique())),
+            true,
+        );
+        let accounts = [&credit, &owner];
+        let authenticated = authenticate_lifecycle_credit_v3(
+            &accounts,
+            0,
+            floor,
+            &rent,
+            market.to_bytes(),
+            release.to_bytes(),
+            generation,
+        )
+        .expect("exact lifecycle credit");
+        assert_eq!(authenticated.beneficiary, refund.to_bytes());
+        assert!(
+            authenticate_lifecycle_credit_v3(
+                &accounts,
+                0,
+                floor,
+                &rent,
+                Pubkey::new_unique().to_bytes(),
+                release.to_bytes(),
+                generation,
+            )
+            .is_err()
+        );
+        assert!(
+            authenticate_lifecycle_credit_v3(
+                &accounts,
+                0,
+                floor,
+                &rent,
+                market.to_bytes(),
+                Pubkey::new_unique().to_bytes(),
+                generation,
+            )
+            .is_err()
+        );
+        assert!(
+            authenticate_lifecycle_credit_v3(
+                &accounts,
+                0,
+                floor,
+                &rent,
+                market.to_bytes(),
+                release.to_bytes(),
+                generation + 1,
+            )
+            .is_err()
+        );
+
+        let stale_v1 = AccountInfo::new(
+            Box::leak(Box::new(Pubkey::new_unique())),
+            false,
+            true,
+            Box::leak(Box::new(rent.minimum_balance(48))),
+            Box::leak(vec![0_u8; 48].into_boxed_slice()),
+            Box::leak(Box::new(rent_program)),
+            false,
+        );
+        let stale_accounts = [&stale_v1, &owner];
+        assert!(
+            authenticate_lifecycle_credit_v3(
+                &stale_accounts,
+                0,
+                stale_v1.lamports(),
+                &rent,
+                market.to_bytes(),
+                release.to_bytes(),
+                generation,
+            )
+            .is_err()
         );
     }
 
