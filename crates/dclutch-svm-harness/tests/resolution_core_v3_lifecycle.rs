@@ -1,12 +1,12 @@
-//! Real-SVM evidence for the current Resolution terminal-retirement waist.
-//!
-//! The fixture loads compiled Registry, Core, Resolution, and Custody ELFs. It
-//! executes exact Resolution funding creation/readiness into canonical Custody
-//! opening, and separately starts from an authenticated provider-produced
-//! terminal Source/certificate boundary to execute chain-derived terminal
-//! admission and closure. A deliberately stale retirement instruction proves
-//! rollback of the physical close across Core, Source, all three Funds, the
-//! closure output, and the immutable RentCredit beneficiary.
+// Real-SVM evidence for the current Resolution terminal-retirement waist.
+//
+// The fixture loads compiled Registry, Core, Resolution, and Custody ELFs. It
+// executes exact Resolution funding creation/readiness into canonical Custody
+// opening, and separately starts from an authenticated provider-produced
+// terminal Source/certificate boundary to execute chain-derived terminal
+// admission and closure. A deliberately stale retirement instruction proves
+// rollback of the physical close across Core, Source, all three Funds, the
+// closure output, and the immutable RentCredit beneficiary.
 
 use std::{env, fs, path::PathBuf};
 
