@@ -84,6 +84,12 @@ impl PreparedFound {
     pub(crate) const fn candidate_state(&self) -> CoreState {
         self.creation.state
     }
+
+    /// Borrow the authenticated candidate without copying its fixed-layout
+    /// state through an SBF caller frame.
+    pub(crate) const fn candidate_state_ref(&self) -> &CoreState {
+        &self.creation.state
+    }
 }
 
 /// Authenticate the exact Found31 authority graph and return its future

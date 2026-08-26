@@ -389,14 +389,14 @@ pub(crate) fn process(
         GenericFoundingStageV1::FoundAndPermit => process_found(
             program_id,
             accounts,
-            request,
+            &request,
             request_bytes,
             dependency_bytes,
         ),
         GenericFoundingStageV1::Open => process_open(
             program_id,
             accounts,
-            request,
+            &request,
             request_bytes,
             dependency_bytes,
         ),
@@ -407,7 +407,7 @@ pub(crate) fn process(
 fn process_found(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
-    request: GenericFoundingRequestV1,
+    request: &GenericFoundingRequestV1,
     request_bytes: &[u8],
     lock_receipt_bytes: &[u8],
 ) -> Result<(), solana_program::program_error::ProgramError> {
@@ -418,36 +418,14 @@ fn process_found(
     if clock.slot > request.expiry_slot() {
         return Err(CoreSbfError::Reference.into());
     }
-    let roles = authenticate_generic_found_roles(&frame, request)?;
-    let found_request = Request::administrative(
-        Action::Found,
-        request.generation(),
-        identity(request.market().to_bytes())?,
-    );
-    let prepared = Box::new(found::prepare_with_admission(
-        program_id,
-        &frame.found,
-        found_request,
-        &rent,
-        roles.admission(Role::Core)?,
-    )?);
-    authenticate_root(frame.capability_root, frame.trading_program, request)?;
-    authenticate_found_request(&frame, request, request_bytes, &prepared, &rent)?;
-    authenticate_generic_funding(&frame, request, &prepared, &rent)?;
-    let lock_receipt = ProjectedCustodyLockReceiptV1::decode(lock_receipt_bytes)
-        .map_err(|_| CoreSbfError::ChildAck)?;
-    let product = authenticate_generic_product(&frame, &prepared, &rent)?;
-    let projected =
-        authenticate_generic_projected(program_id, &frame, request, &prepared, lock_receipt)?;
-    let permit_plan = build_generic_found_permit(
+    let prepared = prepare_generic_core_found(program_id, &frame, request, &rent)?;
+    authenticate_generic_core_found_references(&frame, request, request_bytes, &prepared, &rent)?;
+    let permit_plan = prepare_generic_claims_permit(
         program_id,
         &frame,
         request,
-        &prepared,
-        lock_receipt,
         lock_receipt_bytes,
-        product,
-        projected,
+        &prepared,
         &rent,
     )?;
     found::apply_prepared(program_id, &frame.found, *prepared)?;
@@ -458,6 +436,86 @@ fn process_found(
         &permit_plan.permit,
         &rent,
     )?;
+    finish_found(program_id, &frame, request, request_bytes)
+}
+
+#[inline(never)]
+fn prepare_generic_core_found(
+    program_id: &Pubkey,
+    frame: &GenericFoundAccounts<'_, '_>,
+    request: &GenericFoundingRequestV1,
+    rent: &Rent,
+) -> Result<Box<PreparedFound>, solana_program::program_error::ProgramError> {
+    let admission = authenticate_generic_core_admission(frame, request)?;
+    let found_request = Request::administrative(
+        Action::Found,
+        request.generation(),
+        identity(request.market().to_bytes())?,
+    );
+    let prepared = Box::new(found::prepare_with_admission(
+        program_id,
+        &frame.found,
+        found_request,
+        rent,
+        admission,
+    )?);
+    Ok(prepared)
+}
+
+#[inline(never)]
+fn authenticate_generic_core_admission(
+    frame: &GenericFoundAccounts<'_, '_>,
+    request: &GenericFoundingRequestV1,
+) -> Result<Admission, CoreSbfError> {
+    authenticate_generic_found_roles(frame, request)?.admission(Role::Core)
+}
+
+#[inline(never)]
+fn authenticate_generic_core_found_references(
+    frame: &GenericFoundAccounts<'_, '_>,
+    request: &GenericFoundingRequestV1,
+    request_bytes: &[u8],
+    prepared: &PreparedFound,
+    rent: &Rent,
+) -> Result<(), CoreSbfError> {
+    authenticate_root(frame.capability_root, frame.trading_program, request)?;
+    authenticate_found_request(frame, request, request_bytes, prepared, rent)?;
+    authenticate_generic_funding(frame, request, prepared, rent)
+}
+
+#[inline(never)]
+fn prepare_generic_claims_permit(
+    program_id: &Pubkey,
+    frame: &GenericFoundAccounts<'_, '_>,
+    request: &GenericFoundingRequestV1,
+    lock_receipt_bytes: &[u8],
+    prepared: &PreparedFound,
+    rent: &Rent,
+) -> Result<GenericFoundingPermitPlanV1, CoreSbfError> {
+    let lock_receipt = decode_lock_receipt(lock_receipt_bytes)?;
+    let product = authenticate_generic_product(frame, prepared, rent)?;
+    let projected =
+        authenticate_generic_projected(program_id, frame, request, prepared, &lock_receipt)?;
+    build_generic_found_permit(
+        program_id,
+        frame,
+        request,
+        prepared,
+        &lock_receipt,
+        lock_receipt_bytes,
+        &product,
+        &projected,
+        rent,
+    )
+}
+
+#[inline(never)]
+fn finish_found(
+    program_id: &Pubkey,
+    frame: &GenericFoundAccounts<'_, '_>,
+    request: &GenericFoundingRequestV1,
+    request_bytes: &[u8],
+) -> Result<(), solana_program::program_error::ProgramError> {
     let market_data = frame
         .found
         .market
@@ -489,7 +547,7 @@ fn process_found(
 fn process_open(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
-    request: GenericFoundingRequestV1,
+    request: &GenericFoundingRequestV1,
     request_bytes: &[u8],
     claims_receipt_bytes: &[u8],
 ) -> Result<(), solana_program::program_error::ProgramError> {
@@ -548,9 +606,16 @@ fn process_open(
     return_ack(program_id, request, request_bytes, frame.permit.key, post)
 }
 
+#[inline(never)]
+fn decode_lock_receipt(bytes: &[u8]) -> Result<Box<ProjectedCustodyLockReceiptV1>, CoreSbfError> {
+    ProjectedCustodyLockReceiptV1::decode(bytes)
+        .map(Box::new)
+        .map_err(|_| CoreSbfError::ChildAck)
+}
+
 fn authenticate_generic_found_roles(
     frame: &GenericFoundAccounts<'_, '_>,
-    request: GenericFoundingRequestV1,
+    request: &GenericFoundingRequestV1,
 ) -> Result<RoleBatchAdmissions, CoreSbfError> {
     authenticate_roles(
         frame.found.activation_cache,
@@ -584,7 +649,7 @@ fn authenticate_generic_found_roles(
 
 fn authenticate_generic_open_roles(
     frame: &GenericOpenFrame<'_, '_>,
-    request: GenericFoundingRequestV1,
+    request: &GenericFoundingRequestV1,
 ) -> Result<RoleBatchAdmissions, CoreSbfError> {
     authenticate_roles(
         frame.activation_cache,
@@ -615,7 +680,7 @@ fn authenticate_generic_open_roles(
 fn authenticate_root(
     root: &AccountInfo<'_>,
     trading_program: &AccountInfo<'_>,
-    request: GenericFoundingRequestV1,
+    request: &GenericFoundingRequestV1,
 ) -> Result<(), CoreSbfError> {
     if root.key.to_bytes() != request.capability_root().to_bytes()
         || root.owner != trading_program.key
@@ -650,7 +715,7 @@ fn authenticate_root(
 fn authenticate_generic_caller(
     caller: &AccountInfo<'_>,
     trading_program: &AccountInfo<'_>,
-    request: GenericFoundingRequestV1,
+    request: &GenericFoundingRequestV1,
     request_bytes: &[u8],
 ) -> Result<(), CoreSbfError> {
     let seeds = CallerAuthoritySeedsV1::from_bytes(
@@ -672,7 +737,7 @@ fn authenticate_generic_caller(
 
 fn authenticate_found_request(
     frame: &GenericFoundAccounts<'_, '_>,
-    request: GenericFoundingRequestV1,
+    request: &GenericFoundingRequestV1,
     request_bytes: &[u8],
     prepared: &PreparedFound,
     rent: &Rent,
@@ -717,7 +782,7 @@ fn authenticate_found_request(
 
 fn authenticate_generic_funding(
     frame: &GenericFoundAccounts<'_, '_>,
-    request: GenericFoundingRequestV1,
+    request: &GenericFoundingRequestV1,
     prepared: &PreparedFound,
     rent: &Rent,
 ) -> Result<(), CoreSbfError> {
@@ -835,9 +900,9 @@ fn authenticate_generic_product(
 fn authenticate_generic_projected(
     program_id: &Pubkey,
     frame: &GenericFoundAccounts<'_, '_>,
-    request: GenericFoundingRequestV1,
+    request: &GenericFoundingRequestV1,
     prepared: &PreparedFound,
-    lock_receipt: ProjectedCustodyLockReceiptV1,
+    lock_receipt: &ProjectedCustodyLockReceiptV1,
 ) -> Result<GenericProjectedFacts, CoreSbfError> {
     let data = frame
         .suffix
@@ -849,7 +914,7 @@ fn authenticate_generic_projected(
     {
         return Err(CoreSbfError::ChildAck);
     }
-    let projected = ProjectedCustodyStateV1::decode(&data).map_err(|_| CoreSbfError::ChildAck)?;
+    let projected = decode_projected_state(&data)?;
     drop(data);
     let (expected, bump) = Pubkey::find_program_address(
         &ProjectedCustodyStateSeedsV1::from_request(projected.request).as_slices(),
@@ -937,7 +1002,7 @@ fn authenticate_generic_projected(
     {
         return Err(CoreSbfError::ChildAck);
     }
-    let mut realize = projected.request;
+    let mut realize = Box::new(projected.request);
     realize.operation = ProjectedCustodyOperationV1::RealizeAndClose;
     realize.expected_revision = projected.next_revision;
     realize.resulting_revision = projected
@@ -945,51 +1010,87 @@ fn authenticate_generic_projected(
         .checked_add(1)
         .ok_or(CoreSbfError::Arithmetic)?;
     realize.amount = projected.locked_amount;
-    let realize_request_digest =
-        hash(&realize.encode().map_err(|_| CoreSbfError::ChildAck)?).to_bytes();
-    let market_digest = hash(
-        &prepared
-            .candidate_state()
-            .encode()
-            .map_err(|_| CoreSbfError::Transition)?,
+    let realize_request_digest = digest_projected_request(&realize)?;
+    finish_projected_facts(
+        &projected,
+        &realize,
+        realize_request_digest,
+        prepared.candidate_state_ref(),
+        principal,
+        frame.found.rent_credit.key.to_bytes(),
+        request.projected_resulting_revision(),
     )
-    .to_bytes();
-    let realize_receipt = projected
-        .realize_and_close(
+}
+
+#[inline(never)]
+fn decode_projected_state(bytes: &[u8]) -> Result<Box<ProjectedCustodyStateV1>, CoreSbfError> {
+    ProjectedCustodyStateV1::decode(bytes)
+        .map(Box::new)
+        .map_err(|_| CoreSbfError::ChildAck)
+}
+
+#[inline(never)]
+fn digest_projected_request(
+    request: &dclutch_custody_contract::ProjectedCustodyRequestV1,
+) -> Result<[u8; 32], CoreSbfError> {
+    Ok(hash(&request.encode().map_err(|_| CoreSbfError::ChildAck)?).to_bytes())
+}
+
+#[inline(never)]
+fn digest_core_state(state: &CoreState) -> Result<[u8; 32], CoreSbfError> {
+    Ok(hash(&state.encode().map_err(|_| CoreSbfError::Transition)?).to_bytes())
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn finish_projected_facts(
+    projected: &ProjectedCustodyStateV1,
+    realize: &dclutch_custody_contract::ProjectedCustodyRequestV1,
+    realize_request_digest: [u8; 32],
+    market: &CoreState,
+    principal: u64,
+    rent_credit: [u8; 32],
+    expected_revision: u64,
+) -> Result<GenericProjectedFacts, CoreSbfError> {
+    let market_digest = digest_core_state(market)?;
+    let receipt = projected
+        .realize_and_close_ref(
             realize,
             realize_request_digest,
-            prepared.candidate_state(),
+            market,
             market_digest,
             principal,
-            frame.found.rent_credit.key.to_bytes(),
+            rent_credit,
         )
         .map_err(|_| CoreSbfError::ChildAck)?;
-    if realize_receipt.resulting_revision != request.projected_resulting_revision() {
+    if receipt.resulting_revision != expected_revision {
         return Err(CoreSbfError::ChildAck);
     }
     Ok(GenericProjectedFacts {
         realize_request_digest,
-        realize_receipt_digest: hash(
-            &realize_receipt
-                .encode()
-                .map_err(|_| CoreSbfError::ChildAck)?,
-        )
-        .to_bytes(),
-        realize_revision: realize_receipt.resulting_revision,
+        realize_receipt_digest: digest_projected_receipt(&receipt)?,
+        realize_revision: receipt.resulting_revision,
         hoard_amount: principal,
     })
+}
+
+#[inline(never)]
+fn digest_projected_receipt(
+    receipt: &dclutch_custody_contract::ProjectedCustodyReceiptV1,
+) -> Result<[u8; 32], CoreSbfError> {
+    Ok(hash(&receipt.encode().map_err(|_| CoreSbfError::ChildAck)?).to_bytes())
 }
 
 #[allow(clippy::too_many_arguments)]
 fn build_generic_found_permit(
     program_id: &Pubkey,
     frame: &GenericFoundAccounts<'_, '_>,
-    request: GenericFoundingRequestV1,
+    request: &GenericFoundingRequestV1,
     prepared: &PreparedFound,
-    lock_receipt: ProjectedCustodyLockReceiptV1,
+    lock_receipt: &ProjectedCustodyLockReceiptV1,
     lock_receipt_bytes: &[u8],
-    product: GenericProductFacts,
-    projected: GenericProjectedFacts,
+    product: &GenericProductFacts,
+    projected: &GenericProjectedFacts,
     rent: &Rent,
 ) -> Result<GenericFoundingPermitPlanV1, CoreSbfError> {
     if product.basis_scale != request.basis_scale() {
@@ -1107,7 +1208,7 @@ fn build_generic_found_permit(
 fn authenticate_generic_market(
     program_id: &Pubkey,
     frame: &GenericOpenFrame<'_, '_>,
-    request: GenericFoundingRequestV1,
+    request: &GenericFoundingRequestV1,
 ) -> Result<Box<CoreState>, CoreSbfError> {
     if frame.market.owner != program_id || frame.market.data_len() != STATE_BYTES {
         return Err(CoreSbfError::Market);
@@ -1137,7 +1238,7 @@ fn authenticate_generic_market(
 }
 
 fn authenticate_open_request(
-    request: GenericFoundingRequestV1,
+    request: &GenericFoundingRequestV1,
     permit: &SeriesFoundingPermitV1,
     market_lamports: u64,
 ) -> Result<(), CoreSbfError> {
@@ -1164,13 +1265,13 @@ fn authenticate_open_request(
 
 fn return_ack(
     program_id: &Pubkey,
-    request: GenericFoundingRequestV1,
+    request: &GenericFoundingRequestV1,
     request_bytes: &[u8],
     permit: &Pubkey,
     post_resource_digest: [u8; 32],
 ) -> Result<(), solana_program::program_error::ProgramError> {
     let ack = GenericFoundingAckV1::new(
-        request,
+        *request,
         identity(program_id.to_bytes())?,
         identity(permit.to_bytes())?,
         identity(hash(request_bytes).to_bytes())?,

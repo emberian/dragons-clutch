@@ -608,7 +608,7 @@ impl ProjectedCustodyStateV1 {
         vault_balance: u64,
         market_vacant: bool,
     ) -> Result<Self, ProjectedCustodyError> {
-        self.authenticate_next(request, request_digest)?;
+        self.authenticate_next(&request, request_digest)?;
         if self.phase != ProjectedCustodyPhaseV1::Initialized
             || request.operation != ProjectedCustodyOperationV1::OpenHoard
             || vault_balance != 0
@@ -630,7 +630,7 @@ impl ProjectedCustodyStateV1 {
         vault_after: u64,
         market_vacant: bool,
     ) -> Result<Self, ProjectedCustodyError> {
-        self.authenticate_next(request, request_digest)?;
+        self.authenticate_next(&request, request_digest)?;
         if self.phase != ProjectedCustodyPhaseV1::HoardOpen
             || request.operation != ProjectedCustodyOperationV1::LockHoard
             || vault_before != 0
@@ -663,7 +663,7 @@ impl ProjectedCustodyStateV1 {
         rent_credit: [u8; 32],
         market_vacant: bool,
     ) -> Result<(Self, ProjectedCustodyLockReceiptV1), ProjectedCustodyError> {
-        self.authenticate_next(request, request_digest)?;
+        self.authenticate_next(&request, request_digest)?;
         nonzero(source_replay_key)?;
         if self.phase != ProjectedCustodyPhaseV1::HoardOpen
             || request.operation != ProjectedCustodyOperationV1::LockHoardAndCloseSource
@@ -721,7 +721,7 @@ impl ProjectedCustodyStateV1 {
         rent_credit: [u8; 32],
         market_vacant: bool,
     ) -> Result<ProjectedCustodyReceiptV1, ProjectedCustodyError> {
-        self.authenticate_next(request, request_digest)?;
+        self.authenticate_next(&request, request_digest)?;
         if self.phase != ProjectedCustodyPhaseV1::HoardLocked
             || request.operation != ProjectedCustodyOperationV1::RefundAndClose
             || current_slot <= self.request.expiry_slot
@@ -733,7 +733,7 @@ impl ProjectedCustodyStateV1 {
         {
             return Err(ProjectedCustodyError::Expiry);
         }
-        ProjectedCustodyReceiptV1::terminal(self, request, request_digest, false, false, [0; 32])
+        ProjectedCustodyReceiptV1::terminal(&self, &request, request_digest, false, false, [0; 32])
     }
 
     /// Authorize expiry cleanup of an empty prepared Hoard and projection state.
@@ -747,7 +747,7 @@ impl ProjectedCustodyStateV1 {
         rent_credit: [u8; 32],
         market_vacant: bool,
     ) -> Result<ProjectedCustodyReceiptV1, ProjectedCustodyError> {
-        self.authenticate_next(request, request_digest)?;
+        self.authenticate_next(&request, request_digest)?;
         if self.phase != ProjectedCustodyPhaseV1::HoardOpen
             || request.operation != ProjectedCustodyOperationV1::AbortOpenAndClose
             || request.amount != 0
@@ -758,7 +758,7 @@ impl ProjectedCustodyStateV1 {
         {
             return Err(ProjectedCustodyError::Expiry);
         }
-        ProjectedCustodyReceiptV1::terminal(self, request, request_digest, false, true, [0; 32])
+        ProjectedCustodyReceiptV1::terminal(&self, &request, request_digest, false, true, [0; 32])
     }
 
     /// Rebind the already-credited projected Hoard to the exact newly founded
@@ -768,6 +768,28 @@ impl ProjectedCustodyStateV1 {
         request: ProjectedCustodyRequestV1,
         request_digest: [u8; 32],
         market: CoreState,
+        market_state_digest: [u8; 32],
+        vault_balance: u64,
+        rent_credit: [u8; 32],
+    ) -> Result<ProjectedCustodyReceiptV1, ProjectedCustodyError> {
+        self.realize_and_close_ref(
+            &request,
+            request_digest,
+            &market,
+            market_state_digest,
+            vault_balance,
+            rent_credit,
+        )
+    }
+
+    /// Reference-preserving form of [`Self::realize_and_close`] for bounded
+    /// SBF frames. It executes the identical semantic check without copying
+    /// the 808-byte state, 768-byte request, and Core state through one frame.
+    pub fn realize_and_close_ref(
+        &self,
+        request: &ProjectedCustodyRequestV1,
+        request_digest: [u8; 32],
+        market: &CoreState,
         market_state_digest: [u8; 32],
         vault_balance: u64,
         rent_credit: [u8; 32],
@@ -801,8 +823,8 @@ impl ProjectedCustodyStateV1 {
     }
 
     fn authenticate_next(
-        self,
-        request: ProjectedCustodyRequestV1,
+        &self,
+        request: &ProjectedCustodyRequestV1,
         request_digest: [u8; 32],
     ) -> Result<(), ProjectedCustodyError> {
         request.validate()?;
@@ -1074,8 +1096,8 @@ impl ProjectedCustodyReceiptV1 {
     }
 
     fn terminal(
-        state: ProjectedCustodyStateV1,
-        request: ProjectedCustodyRequestV1,
+        state: &ProjectedCustodyStateV1,
+        request: &ProjectedCustodyRequestV1,
         request_digest: [u8; 32],
         realized: bool,
         aborted_open: bool,
@@ -1412,16 +1434,23 @@ mod tests {
                 true,
             )
             .expect("lock");
+        let realize = request(ProjectedCustodyOperationV1::RealizeAndClose, 3, 500);
+        let market = live_market();
         let receipt = state
-            .realize_and_close(
-                request(ProjectedCustodyOperationV1::RealizeAndClose, 3, 500),
-                id(33),
-                live_market(),
-                id(34),
-                500,
-                id(15),
-            )
-            .expect("realize");
+            .realize_and_close_ref(&realize, id(33), &market, id(34), 500, id(15))
+            .expect("reference-preserving realize");
+        assert_eq!(
+            receipt,
+            state
+                .realize_and_close(realize, id(33), market, id(34), 500, id(15))
+                .expect("compatibility realize")
+        );
+        let mut substituted = realize;
+        substituted.release_set = id(44);
+        assert_eq!(
+            state.realize_and_close_ref(&substituted, id(33), &market, id(34), 500, id(15),),
+            Err(ProjectedCustodyError::Revision)
+        );
         assert!(receipt.realized);
         assert_eq!(receipt.amount, 500);
         assert_eq!(receipt.hoard_vault, id(16));
