@@ -708,6 +708,70 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         &scalars,
     )?;
 
+    let context = authenticate_accelerator_context_v4(
+        accelerator_program,
+        frame,
+        envelope,
+        family_context,
+        selected_entry.selector(),
+        &descriptor,
+        &strategy,
+        &product_runtime,
+        request,
+        family_request,
+        runtime_accounts,
+        root_prestate,
+    )?;
+    authenticate_accelerator_caller_authority_v4(
+        frame.trading_program.key,
+        caller_authority,
+        envelope,
+        frame.root.key,
+        request_bytes,
+    )?;
+
+    Ok(Box::new(AuthenticatedAcceleratorInvocationV4 {
+        request,
+        envelope,
+        hot_instruction,
+        strategy,
+        selected_action: selected_entry.selector(),
+        context,
+        product_runtime,
+        claims_program,
+        custody_program,
+        span_widths,
+        input_bank,
+        scalars,
+        identities,
+        artifact_raw_accounts: [
+            frame.account_profile_raw,
+            frame.request_profile_raw,
+            frame.lifecycle_raw,
+            frame.strategy_raw,
+            frame.transition_raw,
+            frame.effect_raw,
+        ],
+        runtime_accounts,
+    }))
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn authenticate_accelerator_context_v4<'accounts, 'info>(
+    accelerator_program: &Pubkey,
+    frame: HotFrameV3<'accounts, 'info>,
+    envelope: HotExecutionEnvelopeV3,
+    family_context: TradingFamilyContextV1,
+    selected_action: u32,
+    descriptor: &CapabilityProgramV4,
+    strategy: &AuthenticatedExecutionStrategyV2,
+    product_runtime: &AuthenticatedProductRuntimeV3<'accounts, 'info>,
+    request: AcceleratorRequestV2<'_>,
+    family_request: &[u8],
+    runtime_accounts: &[AccountInfo<'info>],
+    root_prestate: [u8; 32],
+) -> Result<Box<AdmittedInvocationContextV3>, ProgramError> {
     let runtime_observations_digest = accelerator_runtime_observations_digest_v4(
         runtime_accounts,
         family_context.selection().config().to_bytes(),
@@ -736,7 +800,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
             .map_err(|_| TradingSbfError::Content)?,
         accelerator_program: ContentId::new(accelerator_program.to_bytes())
             .map_err(|_| TradingSbfError::Content)?,
-        capability_program: selected_descriptor.program(),
+        capability_program: strategy.capability_program_id(),
         account_profile: descriptor.account_profile().program(),
         request_profile: descriptor.request_profile().program(),
         transition: strategy.strategy().transition_program(),
@@ -781,7 +845,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         runtime_observations_digest,
         root_prestate_digest: ContentId::new(root_prestate)
             .map_err(|_| TradingSbfError::Content)?,
-        selected_action: selected_entry.selector(),
+        selected_action,
         tail_count: request.tail_count(),
         account_count: u32::try_from(runtime_accounts.len())
             .map_err(|_| TradingSbfError::Content)?,
@@ -793,38 +857,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     {
         return Err(TradingSbfError::Content.into());
     }
-    authenticate_accelerator_caller_authority_v4(
-        frame.trading_program.key,
-        caller_authority,
-        envelope,
-        frame.root.key,
-        request_bytes,
-    )?;
-
-    Ok(Box::new(AuthenticatedAcceleratorInvocationV4 {
-        request,
-        envelope,
-        hot_instruction,
-        strategy,
-        selected_action: selected_entry.selector(),
-        context,
-        product_runtime,
-        claims_program,
-        custody_program,
-        span_widths,
-        input_bank,
-        scalars,
-        identities,
-        artifact_raw_accounts: [
-            frame.account_profile_raw,
-            frame.request_profile_raw,
-            frame.lifecycle_raw,
-            frame.strategy_raw,
-            frame.transition_raw,
-            frame.effect_raw,
-        ],
-        runtime_accounts,
-    }))
+    Ok(context)
 }
 
 fn authenticate_accelerator_top_level_v4(
