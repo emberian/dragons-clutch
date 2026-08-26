@@ -619,6 +619,24 @@ pub struct CapabilityChildObservation {
     pub effect: ChildEffectObservation,
 }
 
+/// Producer-authenticated evidence for atomic recurring-Series opening.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SeriesOpenObservation {
+    pub claims_admission: Admission,
+    pub custody_admission: Admission,
+    pub quantity: u64,
+    pub basis_scale: u64,
+    pub source_debit: u64,
+    pub hoard_credit: u64,
+    pub hoard_funding_authenticated: bool,
+    pub found_state_bound_by_custody: bool,
+    pub claims_custody_join_authenticated: bool,
+    pub ticket_prepared_authenticated: bool,
+    pub ticket_consumed_candidate_authenticated: bool,
+    pub claims_effect: ChildEffectObservation,
+    pub custody_effect: ChildEffectObservation,
+}
+
 /// Execute sparse Core Found without mutating external state.
 pub fn found(request: Request, frame: FoundingFrame) -> Result<FoundingResult, Error> {
     require_request(request, Action::Found, frame.identity.market_id, frame.identity.generation)?;
@@ -745,6 +763,47 @@ pub fn open_market(
     }
     *state = candidate;
     Ok(creation)
+}
+
+/// Open one recurring-Series Market from an already-created, exactly funded
+/// Hoard, realized Custody replay, Claims founding receipt, and authenticated
+/// Trading replay candidate.
+pub fn open_series_market(
+    request: Request,
+    state: &mut CoreState,
+    observation: SeriesOpenObservation,
+) -> Result<(), Error> {
+    require_request(request, Action::OpenMarket, state.identity.market_id, state.identity.generation)?;
+    if state.phase != Phase::Founding || state.readiness != Readiness::Prepaid {
+        return Err(Error::InvalidPhase);
+    }
+    require_admission(*state, observation.claims_admission, Role::Claims)?;
+    require_admission(*state, observation.custody_admission, Role::Custody)?;
+    let collateral = observation
+        .quantity
+        .checked_mul(observation.basis_scale)
+        .ok_or(Error::ArithmeticOverflow)?;
+    if collateral == 0
+        || observation.source_debit != collateral
+        || observation.hoard_credit != collateral
+        || !observation.hoard_funding_authenticated
+        || !observation.found_state_bound_by_custody
+        || !observation.claims_custody_join_authenticated
+        || !observation.ticket_prepared_authenticated
+        || !observation.ticket_consumed_candidate_authenticated
+        || !observation.claims_effect.complete()
+        || !observation.custody_effect.complete()
+    {
+        return Err(Error::InvalidChildEffect);
+    }
+    let mut candidate = *state;
+    candidate.phase = Phase::Open;
+    candidate.readiness = Readiness::Consumed;
+    if !candidate.valid_static() {
+        return Err(Error::InvalidPhase);
+    }
+    *state = candidate;
+    Ok(())
 }
 
 /// Admit exact Claims mint and Custody principal effects for one complete set.

@@ -367,6 +367,27 @@ Core does not persist a mirror of the resulting account balance. -/
 def openCreationPlan (frame : OpenFrame) : AccountCreation :=
   planAccountCreation frame.custody frame.custodyRentMinimum 0
 
+/-- Atomic recurring-Series opening consumes a Core Founding/Prepaid Market,
+an already-funded projected Hoard that Custody has realized into the normal
+replay, an exact Claims founding receipt, and the Trading-owned Prepared to
+Consumed replay candidate. The adapter derives every Boolean observation from
+producer-bound receipts and independently authenticated post-accounts. -/
+structure SeriesOpenFrame where
+  claimsAdmission : ExecutionRelease.Admission
+  custodyAdmission : ExecutionRelease.Admission
+  quantity : Nat
+  basisScale : Nat
+  sourceDebit : Nat
+  hoardCredit : Nat
+  hoardFundingAuthenticated : Bool
+  foundStateBoundByCustody : Bool
+  claimsCustodyJoinAuthenticated : Bool
+  ticketPreparedAuthenticated : Bool
+  ticketConsumedCandidateAuthenticated : Bool
+  claimsEffect : ChildEffectObservation
+  custodyEffect : ChildEffectObservation
+  deriving DecidableEq, Repr
+
 structure TerminalFrame where
   resolutionAdmission : ExecutionRelease.Admission
   product : Product
@@ -409,6 +430,7 @@ structure RetirementFrame where
 inductive Command where
   | verifyReadiness (frame : ReadinessVerification)
   | openMarket (frame : OpenFrame)
+  | openSeriesMarket (frame : SeriesOpenFrame)
   | split (frame : SplitFrame)
   | redeem (frame : RedemptionFrame)
   | admitTerminal (frame : TerminalFrame)
@@ -449,6 +471,25 @@ def openCandidate (state : State) (frame : OpenFrame) : Except Refusal (Candidat
   if !frame.custody.valid || frame.custody.address == state.identity.marketId ||
       frame.custody.address == state.rentBeneficiaryId then
     throw .invalidAccount
+  pure {
+    post := { state with phase := .open, readiness := .consumed }
+    payout := 0
+    identityPreserved := rfl
+    rentBeneficiaryPreserved := rfl
+  }
+
+def seriesOpenCandidate
+    (state : State) (frame : SeriesOpenFrame) : Except Refusal (Candidate state) := do
+  if state.phase != .founding || state.readiness != .prepaid then throw .wrongPhase
+  if !admissionMatches state frame.claimsAdmission .claims ||
+      !admissionMatches state frame.custodyAdmission .custody then throw .wrongRelease
+  let collateral := frame.quantity * frame.basisScale
+  if frame.quantity = 0 || frame.basisScale = 0 || collateral = 0 ||
+      frame.sourceDebit != collateral || frame.hoardCredit != collateral ||
+      !frame.hoardFundingAuthenticated || !frame.foundStateBoundByCustody ||
+      !frame.claimsCustodyJoinAuthenticated || !frame.ticketPreparedAuthenticated ||
+      !frame.ticketConsumedCandidateAuthenticated || !frame.claimsEffect.complete ||
+      !frame.custodyEffect.complete then throw .childEffectRefusal
   pure {
     post := { state with phase := .open, readiness := .consumed }
     payout := 0
@@ -607,6 +648,7 @@ def retireCandidate
 def candidateFor (state : State) : Command → Except Refusal (Candidate state)
   | .verifyReadiness frame => verifyReadinessCandidate state frame
   | .openMarket frame => openCandidate state frame
+  | .openSeriesMarket frame => seriesOpenCandidate state frame
   | .split frame => splitCandidate state frame
   | .redeem frame => redemptionCandidate state frame
   | .admitTerminal frame => terminalCandidate state frame

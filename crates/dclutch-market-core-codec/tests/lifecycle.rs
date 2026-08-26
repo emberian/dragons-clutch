@@ -6,9 +6,9 @@ use dclutch_market_core_codec::{
     ChildEffectObservation, ClaimsEffectObservation, CollateralObservation, CoreState, Error,
     FoundingAccounts, FoundingFrame, FoundingQuote, Holder, Identity, MarketIdentity, Phase,
     Product, REQUEST_BYTES, Readiness, Realm, ReleaseReceipt, ReleaseSet, Representation, Request,
-    Role, STATE_BYTES, TerminalReceipt, VacantAccount, activate_capability_child, admit_terminal,
-    begin_retiring, close_capability_child, found, open_market, redeem_terminal, retire,
-    split_complete_set, verify_readiness,
+    Role, STATE_BYTES, SeriesOpenObservation, TerminalReceipt, VacantAccount,
+    activate_capability_child, admit_terminal, begin_retiring, close_capability_child, found,
+    open_market, open_series_market, redeem_terminal, retire, split_complete_set, verify_readiness,
 };
 
 fn id(byte: u8) -> Identity {
@@ -137,6 +137,24 @@ fn child() -> ChildEffectObservation {
         exact_request_authenticated: true,
         exact_receipt_authenticated: true,
         post_resource_authenticated: true,
+    }
+}
+
+fn series_observation() -> SeriesOpenObservation {
+    SeriesOpenObservation {
+        claims_admission: admission(Role::Claims),
+        custody_admission: admission(Role::Custody),
+        quantity: 7,
+        basis_scale: 11,
+        source_debit: 77,
+        hoard_credit: 77,
+        hoard_funding_authenticated: true,
+        found_state_bound_by_custody: true,
+        claims_custody_join_authenticated: true,
+        ticket_prepared_authenticated: true,
+        ticket_consumed_candidate_authenticated: true,
+        claims_effect: child(),
+        custody_effect: child(),
     }
 }
 
@@ -455,6 +473,62 @@ fn readiness_and_open_require_exact_external_child_evidence_before_commit() {
     assert_eq!(creation.donation, 5);
     assert_eq!(state.phase, Phase::Open);
     assert_eq!(state.readiness, Readiness::Consumed);
+}
+
+#[test]
+fn series_open_requires_equal_source_debit_and_hoard_credit_before_commit() {
+    let initial = found(
+        Request::administrative(Action::Found, 7, id(40)),
+        founding_frame(17, 7),
+    )
+    .expect("found succeeds")
+    .state;
+    let request = admin(Action::OpenMarket, initial);
+
+    for hostile in [
+        SeriesOpenObservation {
+            hoard_credit: 76,
+            ..series_observation()
+        },
+        SeriesOpenObservation {
+            source_debit: 76,
+            ..series_observation()
+        },
+        SeriesOpenObservation {
+            claims_effect: ChildEffectObservation {
+                exact_receipt_authenticated: false,
+                ..child()
+            },
+            ..series_observation()
+        },
+        SeriesOpenObservation {
+            found_state_bound_by_custody: false,
+            ..series_observation()
+        },
+        SeriesOpenObservation {
+            claims_custody_join_authenticated: false,
+            ..series_observation()
+        },
+        SeriesOpenObservation {
+            ticket_consumed_candidate_authenticated: false,
+            ..series_observation()
+        },
+    ] {
+        let mut candidate = initial;
+        assert_eq!(
+            open_series_market(request, &mut candidate, hostile),
+            Err(Error::InvalidChildEffect)
+        );
+        assert_eq!(candidate, initial);
+    }
+
+    let mut candidate = initial;
+    open_series_market(request, &mut candidate, series_observation())
+        .expect("exact Series founding evidence opens Market");
+    assert_eq!(candidate.phase, Phase::Open);
+    assert_eq!(candidate.readiness, Readiness::Consumed);
+    assert_eq!(candidate.identity, initial.identity);
+    assert_eq!(candidate.rent_beneficiary, initial.rent_beneficiary);
 }
 
 #[test]
