@@ -29,6 +29,7 @@ members = [
     "crates/dclutch-pyth-contract",
     "crates/dclutch-product-compiler",
     "crates/dclutch-product-contract",
+    "crates/dclutch-product-runtime-v2",
     "crates/dclutch-product-admission-contract",
     "crates/dclutch-product-payoff-codec",
     "crates/dclutch-product-payoff-svm",
