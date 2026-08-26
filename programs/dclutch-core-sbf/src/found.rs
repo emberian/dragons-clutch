@@ -1,11 +1,13 @@
 //! Exact finalized-record Found transition and prepaid Market creation.
 
+use alloc::boxed::Box;
 use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
 use dclutch_market_core_codec::{
-    Action, CoreState, FoundingAccounts, FoundingFrame, FoundingQuote, MarketCoreStateSeedsV2,
-    MarketIdentity, Product, ProjectFoundReceiptV1, Realm, Request, Role, STATE_BYTES,
-    VacantAccount, found,
+    Action, Admission, CoreState, FoundingAccounts, FoundingFrame, FoundingQuote,
+    MarketCoreStateSeedsV2, MarketIdentity, Product, ProjectFoundReceiptV1, Realm, Request, Role,
+    STATE_BYTES, VacantAccount, found,
 };
+use dclutch_product_runtime_v2_svm_reader::AuthenticatedProductRuntimeV2;
 use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV2};
 use dclutch_realm_contract::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
 use dclutch_release_set_contract::{
@@ -27,8 +29,6 @@ use solana_program::{
 };
 use solana_sdk_ids::system_program;
 use solana_system_interface::instruction::{allocate, assign, transfer};
-use alloc::boxed::Box;
-use dclutch_product_runtime_v2_svm_reader::AuthenticatedProductRuntimeV2;
 
 use crate::{
     CoreSbfError,
@@ -173,14 +173,7 @@ pub(crate) fn prepare(
     request: Request,
     rent: &Rent,
 ) -> Result<PreparedFound, solana_program::program_error::ProgramError> {
-    authenticate_found(program_id, frame, rent)?;
-    // The release-set bytes are observed only to address the immutable Registry cache.
-    // They are not accepted as a finalized record until after the current Core release
-    // has been authenticated directly from that now-immutable Registry observation.
-    let release_set_id = observe_release_set_id(frame)?;
-    authenticate_immutable_core_release(frame, release_set_id)?;
-    let (references, runtime) = authenticate_references(frame, rent, release_set_id)?;
-    authenticate_rent_credit(frame)?;
+    let (references, runtime) = authenticate_prepare_context(program_id, frame, rent)?;
     let admission = authenticate_role(
         frame.activation_cache,
         frame.registry_program,
@@ -190,6 +183,57 @@ pub(crate) fn prepare(
         references.release_set_id,
         Role::Core,
     )?;
+    finish_prepare(
+        program_id, frame, request, rent, references, runtime, admission,
+    )
+}
+
+/// Prepare Series Found from the same authority graph while consuming the
+/// Core Admission produced by its single canonical Registry role batch.
+#[inline(never)]
+pub(crate) fn prepare_with_admission(
+    program_id: &Pubkey,
+    frame: &FoundAccounts<'_, '_>,
+    request: Request,
+    rent: &Rent,
+    admission: Admission,
+) -> Result<PreparedFound, solana_program::program_error::ProgramError> {
+    let (references, runtime) = authenticate_prepare_context(program_id, frame, rent)?;
+    finish_prepare(
+        program_id, frame, request, rent, references, runtime, admission,
+    )
+}
+
+#[inline(never)]
+fn authenticate_prepare_context(
+    program_id: &Pubkey,
+    frame: &FoundAccounts<'_, '_>,
+    rent: &Rent,
+) -> Result<
+    (References, Box<AuthenticatedProductRuntimeV2>),
+    solana_program::program_error::ProgramError,
+> {
+    authenticate_found(program_id, frame, rent)?;
+    // The release-set bytes are observed only to address the immutable Registry cache.
+    // They are not accepted as a finalized record until after the current Core release
+    // has been authenticated directly from that now-immutable Registry observation.
+    let release_set_id = observe_release_set_id(frame)?;
+    authenticate_immutable_core_release(frame, release_set_id)?;
+    let (references, runtime) = authenticate_references(frame, rent, release_set_id)?;
+    authenticate_rent_credit(frame)?;
+    Ok((references, runtime))
+}
+
+#[inline(never)]
+fn finish_prepare(
+    program_id: &Pubkey,
+    frame: &FoundAccounts<'_, '_>,
+    request: Request,
+    rent: &Rent,
+    references: References,
+    runtime: Box<AuthenticatedProductRuntimeV2>,
+    admission: Admission,
+) -> Result<PreparedFound, solana_program::program_error::ProgramError> {
     authenticate_release_record(frame, rent, references.release_set_id, admission.selected)?;
     let projection = PreparedFound {
         realm_id: references.realm_id,
@@ -394,16 +438,19 @@ fn authenticate_references(
     }
     ExecutionReleaseSetV1::decode(release_bytes).map_err(|_| CoreSbfError::Reference)?;
 
-    Ok((References {
-        realm_id,
-        realm,
-        product_record_id,
-        product_id,
-        product,
-        resolution_policy_id,
-        manifest_id,
-        release_set_id,
-    }, runtime))
+    Ok((
+        References {
+            realm_id,
+            realm,
+            product_record_id,
+            product_id,
+            product,
+            resolution_policy_id,
+            manifest_id,
+            release_set_id,
+        },
+        runtime,
+    ))
 }
 
 #[inline(never)]
