@@ -1,5 +1,8 @@
 //! Chain-derived construction for real Pyth Receiver submission and reclaim.
 
+#![forbid(unsafe_code)]
+#![deny(missing_docs)]
+
 use dclutch_market_core_codec::CoreState;
 use dclutch_pyth_svm::{PostUpdateParamsView, PythReleaseV1, VerifiedEncodedVaaV1};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
@@ -24,9 +27,9 @@ use solana_program::{
 };
 use solana_sdk_ids::{system_program, sysvar};
 
-use crate::{
-    Finality, Observation, ObservedAccount,
-    versioned::{VersionedMessagePlanV0, compile_v0_message_with_optional_tables},
+pub use dclutch_resolution_core_v3_operator::{Finality, Observation, ObservedAccount};
+use dclutch_versioned_message_operator::{
+    VersionedMessagePlanV0, compile_v0_message_with_optional_tables,
 };
 
 /// Resolution submission account count frozen by the physical adapter.
@@ -139,7 +142,7 @@ pub enum ProviderTransportTransactionErrorV3 {
     /// privilege profile, or request-to-account joins.
     Frame,
     /// Finalized lookup-table selection or signed packet geometry refused.
-    Routing(crate::versioned::Error),
+    Routing(dclutch_versioned_message_operator::Error),
 }
 
 /// Build one exact real-provider submission from same-snapshot chain state.
@@ -664,6 +667,7 @@ fn require_same_finalized_observation(
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing, clippy::needless_range_loop)]
 mod tests {
     use super::*;
     use solana_address_lookup_table_interface::{
@@ -803,7 +807,7 @@ mod tests {
         );
         assert_eq!(plan.message.required_signatures, 1);
         assert_eq!(plan.message.loaded_addresses, 0);
-        assert!(plan.message.wire_bytes <= crate::versioned::PACKET_DATA_BYTES);
+        assert!(plan.message.wire_bytes <= dclutch_versioned_message_operator::PACKET_DATA_BYTES);
     }
 
     #[test]
@@ -821,7 +825,7 @@ mod tests {
         assert_eq!(
             compile_provider_submit_v0(&report, Hash::new_from_array([7; 32]), &[]),
             Err(ProviderTransportTransactionErrorV3::Routing(
-                crate::versioned::Error::PacketTooLarge,
+                dclutch_versioned_message_operator::Error::PacketTooLarge,
             ))
         );
         let table = lookup_table(&report);
@@ -840,7 +844,7 @@ mod tests {
         );
         assert_eq!(plan.message.required_signatures, 2);
         assert!(plan.message.loaded_addresses > 0);
-        assert!(plan.message.wire_bytes <= crate::versioned::PACKET_DATA_BYTES);
+        assert!(plan.message.wire_bytes <= dclutch_versioned_message_operator::PACKET_DATA_BYTES);
     }
 
     #[test]
@@ -862,7 +866,7 @@ mod tests {
                 core::slice::from_ref(&stale),
             ),
             Err(ProviderTransportTransactionErrorV3::Routing(
-                crate::versioned::Error::ObservationMismatch,
+                dclutch_versioned_message_operator::Error::ObservationMismatch,
             ))
         );
     }

@@ -72,7 +72,9 @@ mod product_graph_observation_v3 {
     };
 }
 /// Chain-derived real-provider submission and permissionless reclaim.
-pub mod provider_transport_v3;
+pub mod provider_transport_v3 {
+    pub use dclutch_provider_transport_v3_operator::*;
+}
 /// Packet-safe unsigned Rational terminal Bearer redemption construction.
 pub mod rational_terminal_v3;
 /// Chain-derived registered Direct execution and terminal workflows.
@@ -90,7 +92,9 @@ pub mod series_hot_v3;
 /// Compact projected-Market Series Consume instruction-data construction.
 pub mod series_projected_v2;
 /// Chain-derived address-table lifecycle and versioned-message construction.
-pub mod versioned;
+pub mod versioned {
+    pub use dclutch_versioned_message_operator::*;
+}
 /// Chain-derived unsigned Series and Dealer workflows.
 pub mod verticals;
 

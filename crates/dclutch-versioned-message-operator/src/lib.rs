@@ -4,7 +4,10 @@
 //! authority. This module validates exact finalized table bytes before using
 //! them and never signs, submits, or mutates an external system.
 
-use crate::{Finality, Observation, ObservedAccount};
+#![forbid(unsafe_code)]
+#![deny(missing_docs)]
+
+pub use dclutch_resolution_core_v3_operator::{Finality, Observation, ObservedAccount};
 use solana_address_lookup_table_interface::{
     instruction::{
         close_lookup_table, create_lookup_table, deactivate_lookup_table, extend_lookup_table,
