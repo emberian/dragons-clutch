@@ -15,14 +15,23 @@ use dclutch_claims_svm::{
         AffineBatchPositionV2, AffineBatchRequestLayoutV2, AffineBatchRowInputV2, AffineBatchRowV2,
         DeltaDirectionV2, SignedMagnitudeV2,
     },
+    frame_spec_v1::{
+        AFFINE_FIXED_ACCOUNT_COUNT_V1, PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V1,
+        PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V1,
+    },
     protocol_position_v2::{
         PROTOCOL_POSITION_REQUEST_BYTES_V2, ProtocolPositionActionV2, ProtocolPositionOwnerKindV2,
         ProtocolPositionPresenceV2, ProtocolPositionRequestLayoutV2, ProtocolPositionRequestV2,
     },
 };
 use dclutch_custody_contract::{
-    CUSTODY_RECEIPT_BYTES_V1, CUSTODY_REQUEST_BYTES_V1, CallerRoleV1, CompartmentV1, ContextV1,
-    CustodyRequestLayoutV1, CustodyRequestV1, OperationV1,
+    CLOSE_REPLAY_ACCOUNT_COUNT_V1 as CUSTODY_CLOSE_REPLAY_ACCOUNT_COUNT_V1,
+    CLOSE_VAULT_ACCOUNT_COUNT_V1 as CUSTODY_CLOSE_VAULT_ACCOUNT_COUNT_V1, CUSTODY_RECEIPT_BYTES_V1,
+    CUSTODY_REQUEST_BYTES_V1, CallerRoleV1, CompartmentV1, ContextV1, CustodyRequestLayoutV1,
+    CustodyRequestV1,
+    INITIALIZE_REPLAY_ACCOUNT_COUNT_V1 as CUSTODY_INITIALIZE_REPLAY_ACCOUNT_COUNT_V1,
+    OPEN_VAULT_ACCOUNT_COUNT_V1 as CUSTODY_OPEN_VAULT_ACCOUNT_COUNT_V1, OperationV1,
+    TRANSFER_ACCOUNT_COUNT_V1 as CUSTODY_TRANSFER_ACCOUNT_COUNT_V1,
 };
 use dclutch_effect_kernel::{
     v2::FixedRole,
@@ -58,15 +67,15 @@ pub const GENERAL_HOT_LOGICAL_PREFIX_ACCOUNTS_V3: u16 = 5;
 /// First action-selected General state account after the readonly Hot prefix.
 pub const GENERAL_STATE_ACCOUNT_COORDINATE_V3: u16 = GENERAL_PRIMARY_STATE_ACCOUNT_V3;
 
-const POSITION_ADMIT_ACCOUNTS: u16 = 26;
-const POSITION_CLOSE_ACCOUNTS: u16 = 15;
-const AFFINE_FIXED_ACCOUNTS: u16 = 20;
-const CUSTODY_INITIALIZE_ACCOUNTS: u16 = 12;
-const CUSTODY_OPEN_ACCOUNTS: u16 = 16;
-const CUSTODY_TRANSFER_ACCOUNTS: u16 = 14;
-const CUSTODY_CLOSE_VAULT_ACCOUNTS: u16 = 14;
-const CUSTODY_CLOSE_REPLAY_ACCOUNTS: u16 = 10;
-const MAX_ROUTE_COUNT: usize = 3;
+const POSITION_ADMIT_ACCOUNTS: u16 = PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V1;
+const POSITION_CLOSE_ACCOUNTS: u16 = PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V1;
+const AFFINE_FIXED_ACCOUNTS: u16 = AFFINE_FIXED_ACCOUNT_COUNT_V1;
+const CUSTODY_INITIALIZE_ACCOUNTS: u16 = CUSTODY_INITIALIZE_REPLAY_ACCOUNT_COUNT_V1;
+const CUSTODY_OPEN_ACCOUNTS: u16 = CUSTODY_OPEN_VAULT_ACCOUNT_COUNT_V1;
+const CUSTODY_TRANSFER_ACCOUNTS: u16 = CUSTODY_TRANSFER_ACCOUNT_COUNT_V1;
+const CUSTODY_CLOSE_VAULT_ACCOUNTS: u16 = CUSTODY_CLOSE_VAULT_ACCOUNT_COUNT_V1;
+const CUSTODY_CLOSE_REPLAY_ACCOUNTS: u16 = CUSTODY_CLOSE_REPLAY_ACCOUNT_COUNT_V1;
+const MAX_ROUTE_COUNT: usize = 4;
 
 /// Stable refusal from General artifact generation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -101,9 +110,9 @@ pub const fn general_effect_instruction_count_v3(action: Action) -> (usize, usiz
     match action {
         Action::Consider => (20, 0),
         Action::Freeze => (14, 0),
-        Action::InitializeSettlement => (41, 1),
-        Action::Collect | Action::Materialize | Action::Distribute => (61, 12),
-        Action::Close => (79, 1),
+        Action::InitializeSettlement => (54, 1),
+        Action::Collect | Action::Materialize | Action::Distribute => (48, 12),
+        Action::Close => (92, 1),
     }
 }
 
@@ -111,22 +120,22 @@ pub const fn general_effect_instruction_count_v3(action: Action) -> (usize, usiz
 pub const fn general_effect_template_bytes_v3(action: Action) -> usize {
     match action {
         Action::Consider | Action::Freeze => 0,
-        Action::InitializeSettlement => 2 * CUSTODY_REQUEST_BYTES_V1,
+        Action::InitializeSettlement => {
+            PROTOCOL_POSITION_REQUEST_BYTES_V2 + 2 * CUSTODY_REQUEST_BYTES_V1
+        }
         Action::Collect | Action::Distribute => {
-            PROTOCOL_POSITION_REQUEST_BYTES_V2
-                + AFFINE_BATCH_PLAN_HEADER_BYTES_V2
+            AFFINE_BATCH_PLAN_HEADER_BYTES_V2
                 + 2 * AFFINE_BATCH_POSITION_BYTES_V2
                 + AFFINE_BATCH_ROW_BYTES_V2
                 + CUSTODY_REQUEST_BYTES_V1
         }
         Action::Materialize => {
-            PROTOCOL_POSITION_REQUEST_BYTES_V2
-                + AFFINE_BATCH_PLAN_HEADER_BYTES_V2
+            AFFINE_BATCH_PLAN_HEADER_BYTES_V2
                 + AFFINE_BATCH_POSITION_BYTES_V2
                 + AFFINE_BATCH_ROW_BYTES_V2
                 + CUSTODY_REQUEST_BYTES_V1
         }
-        Action::Close => 3 * CUSTODY_REQUEST_BYTES_V1,
+        Action::Close => PROTOCOL_POSITION_REQUEST_BYTES_V2 + 3 * CUSTODY_REQUEST_BYTES_V1,
     }
 }
 
@@ -170,18 +179,18 @@ const fn receipt_dependency_count(action: Action) -> usize {
 pub fn general_effect_account_count_v3(action: Action) -> Result<u16> {
     let suffix = match action {
         Action::Consider | Action::Freeze => 0,
-        Action::InitializeSettlement => CUSTODY_INITIALIZE_ACCOUNTS + CUSTODY_OPEN_ACCOUNTS,
-        Action::Collect => {
-            POSITION_ADMIT_ACCOUNTS + AFFINE_FIXED_ACCOUNTS + 2 + CUSTODY_TRANSFER_ACCOUNTS
+        Action::InitializeSettlement => {
+            POSITION_ADMIT_ACCOUNTS + CUSTODY_INITIALIZE_ACCOUNTS + CUSTODY_OPEN_ACCOUNTS
         }
-        Action::Materialize => {
-            POSITION_ADMIT_ACCOUNTS + AFFINE_FIXED_ACCOUNTS + 1 + CUSTODY_TRANSFER_ACCOUNTS
+        Action::Collect | Action::Distribute => {
+            AFFINE_FIXED_ACCOUNTS + 2 + CUSTODY_TRANSFER_ACCOUNTS
         }
-        Action::Distribute => {
-            AFFINE_FIXED_ACCOUNTS + 2 + POSITION_CLOSE_ACCOUNTS + CUSTODY_TRANSFER_ACCOUNTS
-        }
+        Action::Materialize => AFFINE_FIXED_ACCOUNTS + 1 + CUSTODY_TRANSFER_ACCOUNTS,
         Action::Close => {
-            CUSTODY_TRANSFER_ACCOUNTS + CUSTODY_CLOSE_VAULT_ACCOUNTS + CUSTODY_CLOSE_REPLAY_ACCOUNTS
+            CUSTODY_TRANSFER_ACCOUNTS
+                + POSITION_CLOSE_ACCOUNTS
+                + CUSTODY_CLOSE_VAULT_ACCOUNTS
+                + CUSTODY_CLOSE_REPLAY_ACCOUNTS
         }
     };
     general_child_account_start_v3(action)
@@ -279,7 +288,6 @@ fn build_action<'a>(
         Action::Collect => build_settlement(
             action,
             2,
-            ProtocolPositionActionV2::Admit,
             CompartmentV1::External,
             CompartmentV1::Settlement,
             instructions,
@@ -291,7 +299,6 @@ fn build_action<'a>(
         Action::Materialize => build_settlement(
             action,
             1,
-            ProtocolPositionActionV2::Admit,
             CompartmentV1::Settlement,
             CompartmentV1::HoardPrincipal,
             instructions,
@@ -303,7 +310,6 @@ fn build_action<'a>(
         Action::Distribute => build_settlement(
             action,
             2,
-            ProtocolPositionActionV2::Close,
             CompartmentV1::Settlement,
             CompartmentV1::External,
             instructions,
@@ -322,10 +328,12 @@ fn build_initialize<'a>(
     templates: &'a mut [u8],
     routes: &mut [RouteInputV3<'a>; MAX_ROUTE_COUNT],
 ) -> Result<usize> {
-    let (initialize_bytes, rest) = templates.split_at_mut(CUSTODY_REQUEST_BYTES_V1);
+    let (position_bytes, rest) = templates.split_at_mut(PROTOCOL_POSITION_REQUEST_BYTES_V2);
+    let (initialize_bytes, rest) = rest.split_at_mut(CUSTODY_REQUEST_BYTES_V1);
     let open_bytes = rest
         .get_mut(..CUSTODY_REQUEST_BYTES_V1)
         .ok_or(GeneralEffectArtifactErrorV3::Geometry)?;
+    position_bytes.copy_from_slice(&position_template(ProtocolPositionActionV2::Admit)?);
     initialize_bytes.copy_from_slice(&custody_template(
         OperationV1::InitializeReplay,
         CompartmentV1::None,
@@ -336,9 +344,20 @@ fn build_initialize<'a>(
         CompartmentV1::None,
         CompartmentV1::Settlement,
     )?);
-    let initialize_start = general_child_account_start_v3(Action::InitializeSettlement);
+    let position_start = general_child_account_start_v3(Action::InitializeSettlement);
+    let initialize_start = add_accounts(position_start, POSITION_ADMIT_ACCOUNTS)?;
     let open_start = add_accounts(initialize_start, CUSTODY_INITIALIZE_ACCOUNTS)?;
     routes[0] = route(
+        FixedRole::Claims,
+        RouteKindV3::Once,
+        None,
+        None,
+        position_start,
+        POSITION_ADMIT_ACCOUNTS,
+        position_bytes,
+        &[],
+    );
+    routes[1] = route(
         FixedRole::Custody,
         RouteKindV3::Once,
         None,
@@ -348,13 +367,13 @@ fn build_initialize<'a>(
         initialize_bytes,
         &[],
     );
-    routes[1] = route(
+    routes[2] = route(
         FixedRole::Custody,
         RouteKindV3::Once,
         None,
         Some(RouteReceiptDependencyV3::new(
             FixedRole::Custody,
-            0,
+            1,
             u16::try_from(CUSTODY_RECEIPT_BYTES_V1)
                 .map_err(|_| GeneralEffectArtifactErrorV3::Geometry)?,
         )),
@@ -363,16 +382,16 @@ fn build_initialize<'a>(
         open_bytes,
         &[],
     );
-    append_custody_initialize_patches(instructions, fixed, 0, false)?;
-    append_custody_initialize_patches(instructions, fixed, 1, true)?;
-    Ok(2)
+    append_position_patches(instructions, fixed, 0, ProtocolPositionActionV2::Admit)?;
+    append_custody_initialize_patches(instructions, fixed, 1, false)?;
+    append_custody_initialize_patches(instructions, fixed, 2, true)?;
+    Ok(3)
 }
 
 #[allow(clippy::too_many_arguments)]
 fn build_settlement<'a>(
     action: Action,
     position_count: u32,
-    position_action: ProtocolPositionActionV2,
     source: CompartmentV1,
     destination: CompartmentV1,
     instructions: &mut [EffectInstructionV3],
@@ -381,28 +400,16 @@ fn build_settlement<'a>(
     templates: &'a mut [u8],
     routes: &mut [RouteInputV3<'a>; MAX_ROUTE_COUNT],
 ) -> Result<usize> {
-    let position_bytes = position_template(position_action)?;
     let (affine_bytes, affine_len) = affine_template(position_count)?;
     let custody_bytes = custody_template(OperationV1::Transfer, source, destination)?;
-    let position_first = action != Action::Distribute;
-    let position_offset = if position_first {
-        0
-    } else {
-        AFFINE_BATCH_PLAN_HEADER_BYTES_V2
-            + usize::try_from(position_count).map_err(|_| GeneralEffectArtifactErrorV3::Geometry)?
-                * AFFINE_BATCH_POSITION_BYTES_V2
-            + AFFINE_BATCH_ROW_BYTES_V2
-    };
-    let affine_offset = if position_first {
-        PROTOCOL_POSITION_REQUEST_BYTES_V2
-    } else {
-        0
-    };
-    let custody_offset = position_offset
-        .checked_add(PROTOCOL_POSITION_REQUEST_BYTES_V2)
-        .and_then(|value| value.checked_add(if position_first { affine_len } else { 0 }))
+    let affine_offset = 0;
+    let custody_offset = affine_len;
+    let expected_templates = affine_len
+        .checked_add(CUSTODY_REQUEST_BYTES_V1)
         .ok_or(GeneralEffectArtifactErrorV3::Geometry)?;
-    copy_at(templates, position_offset, &position_bytes)?;
+    if templates.len() != expected_templates {
+        return Err(GeneralEffectArtifactErrorV3::Geometry);
+    }
     copy_at(
         templates,
         affine_offset,
@@ -418,60 +425,12 @@ fn build_settlement<'a>(
             u16::try_from(position_count).map_err(|_| GeneralEffectArtifactErrorV3::Geometry)?,
         )
         .ok_or(GeneralEffectArtifactErrorV3::Geometry)?;
-    let (position_route, affine_route, position_start, affine_start, custody_start) =
-        if position_first {
-            let affine_start = add_accounts(
-                prefix,
-                if position_action == ProtocolPositionActionV2::Admit {
-                    POSITION_ADMIT_ACCOUNTS
-                } else {
-                    POSITION_CLOSE_ACCOUNTS
-                },
-            )?;
-            (
-                0,
-                1,
-                prefix,
-                affine_start,
-                add_accounts(affine_start, affine_accounts)?,
-            )
-        } else {
-            let position_start = add_accounts(prefix, affine_accounts)?;
-            (
-                1,
-                0,
-                position_start,
-                prefix,
-                add_accounts(position_start, POSITION_CLOSE_ACCOUNTS)?,
-            )
-        };
-    let position_count_accounts = if position_action == ProtocolPositionActionV2::Admit {
-        POSITION_ADMIT_ACCOUNTS
-    } else {
-        POSITION_CLOSE_ACCOUNTS
-    };
-    routes[position_route] = route(
-        FixedRole::Claims,
-        RouteKindV3::Once,
-        Some(if position_action == ProtocolPositionActionV2::Admit {
-            scalar_u16(scalar::CLAIMS_ADMIT_ACTIVE)?
-        } else {
-            scalar_u16(scalar::CLAIMS_CLOSE_ACTIVE)?
-        }),
-        None,
-        position_start,
-        position_count_accounts,
-        slice_at(
-            templates,
-            position_offset,
-            PROTOCOL_POSITION_REQUEST_BYTES_V2,
-        )?,
-        &[],
-    );
+    let affine_start = prefix;
+    let custody_start = add_accounts(affine_start, affine_accounts)?;
     let affine_fixed_len = AFFINE_BATCH_PLAN_HEADER_BYTES_V2
         + usize::try_from(position_count).map_err(|_| GeneralEffectArtifactErrorV3::Geometry)?
             * AFFINE_BATCH_POSITION_BYTES_V2;
-    routes[affine_route] = route(
+    routes[0] = route(
         FixedRole::Claims,
         RouteKindV3::AffineOnce,
         Some(scalar_u16(scalar::CLAIMS_AFFINE_ACTIVE)?),
@@ -485,7 +444,7 @@ fn build_settlement<'a>(
             AFFINE_BATCH_ROW_BYTES_V2,
         )?,
     );
-    routes[2] = route(
+    routes[1] = route(
         FixedRole::Custody,
         RouteKindV3::Once,
         Some(scalar_u16(scalar::CUSTODY_ACTIVE)?),
@@ -495,21 +454,9 @@ fn build_settlement<'a>(
         slice_at(templates, custody_offset, CUSTODY_REQUEST_BYTES_V1)?,
         &[],
     );
-    append_position_patches(
-        instructions,
-        fixed,
-        u16::try_from(position_route).map_err(|_| GeneralEffectArtifactErrorV3::Geometry)?,
-        position_action,
-    )?;
-    append_affine_patches(
-        instructions,
-        fixed,
-        item,
-        u16::try_from(affine_route).map_err(|_| GeneralEffectArtifactErrorV3::Geometry)?,
-        position_count,
-    )?;
-    append_custody_transfer_patches(instructions, fixed, 2, action == Action::Materialize)?;
-    Ok(3)
+    append_affine_patches(instructions, fixed, item, 0, position_count)?;
+    append_custody_transfer_patches(instructions, fixed, 1, action == Action::Materialize)?;
+    Ok(2)
 }
 
 fn build_close<'a>(
@@ -533,11 +480,16 @@ fn build_close<'a>(
         CompartmentV1::None,
         CompartmentV1::None,
     )?;
+    let position = position_template(ProtocolPositionActionV2::Close)?;
     copy_at(templates, 0, &transfer)?;
-    copy_at(templates, CUSTODY_REQUEST_BYTES_V1, &close_vault)?;
-    copy_at(templates, 2 * CUSTODY_REQUEST_BYTES_V1, &close_replay)?;
+    copy_at(templates, CUSTODY_REQUEST_BYTES_V1, &position)?;
+    let close_vault_offset = CUSTODY_REQUEST_BYTES_V1 + PROTOCOL_POSITION_REQUEST_BYTES_V2;
+    let close_replay_offset = close_vault_offset + CUSTODY_REQUEST_BYTES_V1;
+    copy_at(templates, close_vault_offset, &close_vault)?;
+    copy_at(templates, close_replay_offset, &close_replay)?;
     let transfer_start = general_child_account_start_v3(Action::Close);
-    let vault_start = add_accounts(transfer_start, CUSTODY_TRANSFER_ACCOUNTS)?;
+    let position_start = add_accounts(transfer_start, CUSTODY_TRANSFER_ACCOUNTS)?;
+    let vault_start = add_accounts(position_start, POSITION_CLOSE_ACCOUNTS)?;
     let replay_start = add_accounts(vault_start, CUSTODY_CLOSE_VAULT_ACCOUNTS)?;
     routes[0] = route(
         FixedRole::Custody,
@@ -550,16 +502,16 @@ fn build_close<'a>(
         &[],
     );
     routes[1] = route(
-        FixedRole::Custody,
+        FixedRole::Claims,
         RouteKindV3::Once,
         None,
         None,
-        vault_start,
-        CUSTODY_CLOSE_VAULT_ACCOUNTS,
+        position_start,
+        POSITION_CLOSE_ACCOUNTS,
         slice_at(
             templates,
             CUSTODY_REQUEST_BYTES_V1,
-            CUSTODY_REQUEST_BYTES_V1,
+            PROTOCOL_POSITION_REQUEST_BYTES_V2,
         )?,
         &[],
     );
@@ -567,25 +519,32 @@ fn build_close<'a>(
         FixedRole::Custody,
         RouteKindV3::Once,
         None,
+        None,
+        vault_start,
+        CUSTODY_CLOSE_VAULT_ACCOUNTS,
+        slice_at(templates, close_vault_offset, CUSTODY_REQUEST_BYTES_V1)?,
+        &[],
+    );
+    routes[3] = route(
+        FixedRole::Custody,
+        RouteKindV3::Once,
+        None,
         Some(RouteReceiptDependencyV3::new(
             FixedRole::Custody,
-            1,
+            2,
             u16::try_from(CUSTODY_RECEIPT_BYTES_V1)
                 .map_err(|_| GeneralEffectArtifactErrorV3::Geometry)?,
         )),
         replay_start,
         CUSTODY_CLOSE_REPLAY_ACCOUNTS,
-        slice_at(
-            templates,
-            2 * CUSTODY_REQUEST_BYTES_V1,
-            CUSTODY_REQUEST_BYTES_V1,
-        )?,
+        slice_at(templates, close_replay_offset, CUSTODY_REQUEST_BYTES_V1)?,
         &[],
     );
     append_custody_transfer_patches(instructions, fixed, 0, false)?;
-    append_custody_close_patches(instructions, fixed, 1, false)?;
-    append_custody_close_patches(instructions, fixed, 2, true)?;
-    Ok(3)
+    append_position_patches(instructions, fixed, 1, ProtocolPositionActionV2::Close)?;
+    append_custody_close_patches(instructions, fixed, 2, false)?;
+    append_custody_close_patches(instructions, fixed, 3, true)?;
+    Ok(4)
 }
 
 fn append_general_state_patches(
@@ -1812,8 +1771,9 @@ fn slice_at(input: &[u8], offset: usize, len: usize) -> Result<&[u8]> {
 const fn route_count(action: Action) -> usize {
     match action {
         Action::Consider | Action::Freeze => 0,
-        Action::InitializeSettlement => 2,
-        Action::Collect | Action::Materialize | Action::Distribute | Action::Close => 3,
+        Action::InitializeSettlement => 3,
+        Action::Collect | Action::Materialize | Action::Distribute => 2,
+        Action::Close => 4,
     }
 }
 
@@ -1884,10 +1844,11 @@ mod tests {
         for action in [Action::Collect, Action::Materialize, Action::Distribute] {
             let bytes = artifact(action);
             let program = ProgramV3::decode(&bytes).expect("decoded artifact");
-            let custody = program.route(2).expect("custody route");
+            assert_eq!(program.route_count(), 2);
+            let custody = program.route(1).expect("custody route");
             assert_eq!(custody.fixed_account_count(), CUSTODY_TRANSFER_ACCOUNTS);
             assert_eq!(custody.receipt_dependency(), None);
-            let (custody_template, item) = program.route_template(2).expect("custody template");
+            let (custody_template, item) = program.route_template(1).expect("custody template");
             assert!(item.is_empty());
             assert_eq!(
                 CustodyRequestV1::decode(custody_template)
@@ -1906,8 +1867,15 @@ mod tests {
             program.route(0).expect("transfer").fixed_account_start(),
             general_child_account_start_v3(Action::Close)
         );
-        let (vault, _) = program.route_template(1).expect("vault close");
-        let (replay, _) = program.route_template(2).expect("replay close");
+        let (position, _) = program.route_template(1).expect("position close");
+        assert_eq!(
+            ProtocolPositionRequestV2::decode(position)
+                .expect("position request")
+                .action,
+            ProtocolPositionActionV2::Close
+        );
+        let (vault, _) = program.route_template(2).expect("vault close");
+        let (replay, _) = program.route_template(3).expect("replay close");
         assert_eq!(
             CustodyRequestV1::decode(vault)
                 .expect("vault request")
@@ -1921,16 +1889,42 @@ mod tests {
             OperationV1::CloseReplay
         );
         let dependency = program
-            .route(2)
+            .route(3)
             .expect("replay route")
             .receipt_dependency()
             .expect("vault receipt dependency");
-        assert_eq!(dependency.producer_route(), 1);
+        assert_eq!(dependency.producer_route(), 2);
         assert_eq!(dependency.producer_role(), FixedRole::Custody);
         assert_eq!(
             usize::from(dependency.expected_receipt_bytes()),
             CUSTODY_RECEIPT_BYTES_V1
         );
+    }
+
+    #[test]
+    fn position_lifecycle_is_admitted_once_then_closed_once() {
+        let initialize = artifact(Action::InitializeSettlement);
+        let initialize = ProgramV3::decode(&initialize).expect("initialize");
+        let (admit, _) = initialize.route_template(0).expect("admit route");
+        assert_eq!(
+            ProtocolPositionRequestV2::decode(admit)
+                .expect("admit request")
+                .action,
+            ProtocolPositionActionV2::Admit
+        );
+        for action in [Action::Collect, Action::Materialize, Action::Distribute] {
+            let bytes = artifact(action);
+            let program = ProgramV3::decode(&bytes).expect("settlement");
+            assert_eq!(program.route_count(), 2);
+            assert_eq!(program.route(0).expect("affine").role(), FixedRole::Claims);
+            assert_eq!(
+                program.route(0).expect("affine").kind(),
+                RouteKindV3::AffineOnce
+            );
+        }
+        let close = artifact(Action::Close);
+        let close = ProgramV3::decode(&close).expect("close");
+        assert_eq!(close.route_count(), 4);
     }
 
     #[test]
