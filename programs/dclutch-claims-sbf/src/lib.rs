@@ -38,7 +38,7 @@ use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign};
 
 pub mod affine_batch_v2;
-pub mod founding_v4;
+pub mod founding_v5;
 pub mod liability_basis_v2;
 mod product_runtime_v2;
 pub mod protocol_position_v2;
@@ -204,10 +204,10 @@ pub fn process_instruction(
         return signed_delta_v3::process(program_id, accounts, instruction_data);
     }
     if instruction_data
-        .get(..dclutch_claims_svm::founding_v4::CLAIMS_FOUNDING_REQUEST_MAGIC_V4.len())
-        == Some(dclutch_claims_svm::founding_v4::CLAIMS_FOUNDING_REQUEST_MAGIC_V4.as_slice())
+        .get(..dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_REQUEST_MAGIC_V5.len())
+        == Some(dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_REQUEST_MAGIC_V5.as_slice())
     {
-        return founding_v4::process(program_id, accounts, instruction_data);
+        return founding_v5::process(program_id, accounts, instruction_data);
     }
     if instruction_data.get(..protocol_position_v2::PROTOCOL_POSITION_REQUEST_MAGIC_V2.len())
         == Some(protocol_position_v2::PROTOCOL_POSITION_REQUEST_MAGIC_V2.as_slice())
