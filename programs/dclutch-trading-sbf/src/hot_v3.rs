@@ -612,105 +612,17 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         frame.trading_program.key,
     )?;
     let (scalars, identities) = decode_accelerator_register_bank_v4(request, &input_bank)?;
-    let account_profile_data = borrow_finalized_record(
-        frame,
-        frame.account_profile_raw,
-        frame.account_profile_staging,
-        &rent,
-        descriptor.account_profile().schema().to_bytes(),
-        descriptor.account_profile().program().to_bytes(),
-    )?;
-    if descriptor.account_profile().schema().to_bytes() != ACCOUNT_PROFILE_SCHEMA_ID_V2 {
-        return Err(TradingSbfError::UnsupportedContent.into());
-    }
-    let account_profile =
-        AccountProfileV2::decode(&account_profile_data).map_err(|_| TradingSbfError::Content)?;
-    let request_profile_data = borrow_finalized_record(
-        frame,
-        frame.request_profile_raw,
-        frame.request_profile_staging,
-        &rent,
-        descriptor.request_profile().schema().to_bytes(),
-        descriptor.request_profile().program().to_bytes(),
-    )?;
-    let request_profile = decode_request_profile(*descriptor, &request_profile_data)?;
-    let transition_data = borrow_finalized_record(
-        frame,
-        frame.transition_raw,
-        frame.transition_staging,
-        &rent,
-        descriptor.transition().schema().to_bytes(),
-        descriptor.transition().program().to_bytes(),
-    )?;
-    if descriptor.transition().schema().to_bytes() != TRANSITION_SCHEMA_ID_V3
-        || strategy.strategy().transition_schema() != descriptor.transition().schema()
-        || strategy.strategy().transition_program() != descriptor.transition().program()
-    {
-        return Err(TradingSbfError::UnsupportedContent.into());
-    }
-    let transition =
-        TransitionProgramV3::decode(&transition_data).map_err(|_| TradingSbfError::Content)?;
-    let effect_data = borrow_finalized_record(
-        frame,
-        frame.effect_raw,
-        frame.effect_staging,
-        &rent,
-        descriptor.effect().schema().to_bytes(),
-        descriptor.effect().program().to_bytes(),
-    )?;
-    let effect = decode_selected_effect_v4(descriptor.effect().schema().to_bytes(), &effect_data)?;
-    let lifecycle_data = borrow_finalized_record(
-        frame,
-        frame.lifecycle_raw,
-        frame.lifecycle_staging,
-        &rent,
-        descriptor.lifecycle().schema().to_bytes(),
-        descriptor.lifecycle().program().to_bytes(),
-    )?;
-    if descriptor.lifecycle().schema().to_bytes() != SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5
-        || descriptor.derivation_policy() != descriptor.lifecycle().program()
-    {
-        return Err(TradingSbfError::UnsupportedContent.into());
-    }
-    StateLifecyclePolicyV5::decode_selected(
-        descriptor.lifecycle().program().to_bytes(),
-        hash(&lifecycle_data).to_bytes(),
-        &lifecycle_data,
-    )
-    .map_err(|_| TradingSbfError::Content)?;
-    let mut span_widths = if account_profile.uses_dynamic_fixed_spans() {
-        vec![0_u32; usize::from(account_profile.dynamic_fixed_span_count())]
-    } else {
-        Vec::new()
-    };
-    if account_profile.uses_dynamic_fixed_spans() {
-        account_profile
-            .dynamic_span_widths_from_scalars(&scalars, &mut span_widths)
-            .map_err(|_| TradingSbfError::Content)?;
-    }
-    let logical_count = if account_profile.uses_dynamic_fixed_spans() {
-        account_profile
-            .logical_account_count_with_dynamic_spans(request.tail_count(), &span_widths)
-            .map_err(|_| TradingSbfError::Content)?
-    } else {
-        account_profile
-            .logical_account_count(request.tail_count())
-            .map_err(|_| TradingSbfError::Content)?
-    };
-    if logical_count != runtime_accounts.len()
-        || request.tail_count() != product_runtime.runtime.outcome_count
-    {
+    if request.tail_count() != product_runtime.runtime.outcome_count {
         return Err(TradingSbfError::Content.into());
     }
-    require_geometry(
-        account_profile,
-        request_profile,
-        transition,
-        effect,
-        request.tail_count(),
+    let span_widths = authenticate_accelerator_artifacts_v4(
+        frame,
+        &rent,
+        &descriptor,
+        &strategy,
+        request,
         family_request,
         runtime_accounts.len(),
-        &span_widths,
         &scalars,
     )?;
 
@@ -736,45 +648,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         request_bytes,
     )?;
 
-    Ok(assemble_authenticated_accelerator_invocation_v4(
-        request,
-        envelope,
-        hot_instruction,
-        strategy,
-        context,
-        product_runtime,
-        claims_program,
-        custody_program,
-        selected_action,
-        span_widths,
-        input_bank,
-        scalars,
-        identities,
-        frame,
-        runtime_accounts,
-    ))
-}
-
-#[allow(clippy::too_many_arguments)]
-#[inline(never)]
-fn assemble_authenticated_accelerator_invocation_v4<'request, 'accounts, 'info>(
-    request: AcceleratorRequestV2<'request>,
-    envelope: HotExecutionEnvelopeV3,
-    hot_instruction: Vec<u8>,
-    strategy: Box<AuthenticatedExecutionStrategyV2>,
-    context: Box<AdmittedInvocationContextV3>,
-    product_runtime: Box<AuthenticatedProductRuntimeV3<'accounts, 'info>>,
-    claims_program: ContentId,
-    custody_program: ContentId,
-    selected_action: u32,
-    span_widths: Vec<u32>,
-    input_bank: Vec<u8>,
-    scalars: Vec<u64>,
-    identities: Vec<[u8; 32]>,
-    frame: HotFrameV3<'accounts, 'info>,
-    runtime_accounts: &'accounts [AccountInfo<'info>],
-) -> Box<AuthenticatedAcceleratorInvocationV4<'request, 'accounts, 'info>> {
-    Box::new(AuthenticatedAcceleratorInvocationV4 {
+    Ok(Box::new(AuthenticatedAcceleratorInvocationV4 {
         request,
         envelope,
         hot_instruction,
@@ -797,7 +671,121 @@ fn assemble_authenticated_accelerator_invocation_v4<'request, 'accounts, 'info>(
             frame.effect_raw,
         ],
         runtime_accounts,
-    })
+    }))
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn authenticate_accelerator_artifacts_v4(
+    frame: HotFrameV3<'_, '_>,
+    rent: &Rent,
+    descriptor: &CapabilityProgramV4,
+    strategy: &AuthenticatedExecutionStrategyV2,
+    request: AcceleratorRequestV2<'_>,
+    family_request: &[u8],
+    runtime_account_count: usize,
+    scalars: &[u64],
+) -> Result<Vec<u32>, ProgramError> {
+    let account_profile_data = borrow_finalized_record(
+        frame,
+        frame.account_profile_raw,
+        frame.account_profile_staging,
+        rent,
+        descriptor.account_profile().schema().to_bytes(),
+        descriptor.account_profile().program().to_bytes(),
+    )?;
+    if descriptor.account_profile().schema().to_bytes() != ACCOUNT_PROFILE_SCHEMA_ID_V2 {
+        return Err(TradingSbfError::UnsupportedContent.into());
+    }
+    let account_profile =
+        AccountProfileV2::decode(&account_profile_data).map_err(|_| TradingSbfError::Content)?;
+    let request_profile_data = borrow_finalized_record(
+        frame,
+        frame.request_profile_raw,
+        frame.request_profile_staging,
+        rent,
+        descriptor.request_profile().schema().to_bytes(),
+        descriptor.request_profile().program().to_bytes(),
+    )?;
+    let request_profile = decode_request_profile(*descriptor, &request_profile_data)?;
+    let transition_data = borrow_finalized_record(
+        frame,
+        frame.transition_raw,
+        frame.transition_staging,
+        rent,
+        descriptor.transition().schema().to_bytes(),
+        descriptor.transition().program().to_bytes(),
+    )?;
+    if descriptor.transition().schema().to_bytes() != TRANSITION_SCHEMA_ID_V3
+        || strategy.strategy().transition_schema() != descriptor.transition().schema()
+        || strategy.strategy().transition_program() != descriptor.transition().program()
+    {
+        return Err(TradingSbfError::UnsupportedContent.into());
+    }
+    let transition =
+        TransitionProgramV3::decode(&transition_data).map_err(|_| TradingSbfError::Content)?;
+    let effect_data = borrow_finalized_record(
+        frame,
+        frame.effect_raw,
+        frame.effect_staging,
+        rent,
+        descriptor.effect().schema().to_bytes(),
+        descriptor.effect().program().to_bytes(),
+    )?;
+    let effect = decode_selected_effect_v4(descriptor.effect().schema().to_bytes(), &effect_data)?;
+    let lifecycle_data = borrow_finalized_record(
+        frame,
+        frame.lifecycle_raw,
+        frame.lifecycle_staging,
+        rent,
+        descriptor.lifecycle().schema().to_bytes(),
+        descriptor.lifecycle().program().to_bytes(),
+    )?;
+    if descriptor.lifecycle().schema().to_bytes() != SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5
+        || descriptor.derivation_policy() != descriptor.lifecycle().program()
+    {
+        return Err(TradingSbfError::UnsupportedContent.into());
+    }
+    StateLifecyclePolicyV5::decode_selected(
+        descriptor.lifecycle().program().to_bytes(),
+        hash(&lifecycle_data).to_bytes(),
+        &lifecycle_data,
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    let mut span_widths = if account_profile.uses_dynamic_fixed_spans() {
+        vec![0_u32; usize::from(account_profile.dynamic_fixed_span_count())]
+    } else {
+        Vec::new()
+    };
+    if account_profile.uses_dynamic_fixed_spans() {
+        account_profile
+            .dynamic_span_widths_from_scalars(scalars, &mut span_widths)
+            .map_err(|_| TradingSbfError::Content)?;
+    }
+    let logical_count = if account_profile.uses_dynamic_fixed_spans() {
+        account_profile
+            .logical_account_count_with_dynamic_spans(request.tail_count(), &span_widths)
+            .map_err(|_| TradingSbfError::Content)?
+    } else {
+        account_profile
+            .logical_account_count(request.tail_count())
+            .map_err(|_| TradingSbfError::Content)?
+    };
+    if logical_count != runtime_account_count {
+        return Err(TradingSbfError::Content.into());
+    }
+    require_geometry(
+        account_profile,
+        request_profile,
+        transition,
+        effect,
+        request.tail_count(),
+        family_request,
+        runtime_account_count,
+        &span_widths,
+        scalars,
+    )?;
+    Ok(span_widths)
 }
 
 #[allow(clippy::too_many_arguments)]
