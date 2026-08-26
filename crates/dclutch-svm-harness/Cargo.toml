@@ -10,8 +10,10 @@ publish = false
 
 [dev-dependencies]
 dclutch-capability-contract = { path = "../dclutch-capability-contract" }
+dclutch-claims-svm = { path = "../dclutch-claims-svm" }
 dclutch-collateral-contract = { path = "../dclutch-collateral-contract" }
 dclutch-core-contract = { path = "../dclutch-core-contract" }
+dclutch-custody-contract = { path = "../dclutch-custody-contract" }
 dclutch-direct-contract = { path = "../dclutch-direct-contract" }
 dclutch-direct-codec = { path = "../dclutch-direct-codec" }
 dclutch-economic-adapter-contract = { path = "../dclutch-economic-adapter-contract" }
@@ -36,6 +38,7 @@ dclutch-product-payoff-v2-codec = { path = "../dclutch-product-payoff-v2-codec" 
 dclutch-product-payoff-v2-svm = { path = "../dclutch-product-payoff-v2-svm" }
 dclutch-product-runtime-v2 = { path = "../dclutch-product-runtime-v2" }
 dclutch-product-runtime-v2-admission = { path = "../dclutch-product-runtime-v2-admission" }
+dclutch-provider-transport-v3-operator = { path = "../dclutch-provider-transport-v3-operator", default-features = false }
 dclutch-rent-contract = { path = "../dclutch-rent-contract" }
 dclutch-series-contract = { path = "../dclutch-series-contract" }
 dclutch-source-contract = { path = "../dclutch-source-contract" }
@@ -43,6 +46,8 @@ dclutch-terminal-contract = { path = "../dclutch-terminal-contract" }
 base64 = "0.22"
 serde_json = "1"
 solana-program = "=3.0.0"
+solana-program-option = "=3.1.0"
+solana-program-pack = "=3.1.0"
 solana-program-test = { version = "=4.2.1", features = ["agave-unstable-api"] }
 solana-rpc-client = { version = "=4.2.1", default-features = false }
 solana-address-lookup-table-interface = { version = "=3.1.0", features = ["bincode", "bytemuck"] }
@@ -53,5 +58,6 @@ solana-sdk = "=3.0.0"
 solana-sdk-ids = "=3.1.0"
 solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
 solana-transaction = "=4.1.6"
+spl-token-interface = "=3.0.0"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
