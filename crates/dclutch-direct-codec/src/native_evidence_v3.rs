@@ -2,8 +2,9 @@
 //!
 //! Public keys and signatures are self-contained in the native instruction.
 //! Message bytes remain in the exact authenticated current top-level
-//! instruction: either Direct Hot itself or a Registry continuation containing
-//! the unchanged nested Hot bytes after its fixed 128-byte header.
+//! instruction. Direct Hot and the headerless Registry successor both carry
+//! the exact Hot bytes beginning at byte zero; the Registry role is exposed by
+//! a distinct successor encoder so the retired headered shape cannot replay.
 
 use dclutch_capability_program_contract::hot_v3::{
     HOT_FAMILY_REQUEST_OFFSET_V3, HotExecutionEnvelopeV3,
@@ -23,23 +24,18 @@ const PARTICIPANT_BYTES: usize = 32 + 64;
 pub const DIRECT_NATIVE_EVIDENCE_BYTES_V3: usize = HEADER_BYTES + SIGNATURES * PARTICIPANT_BYTES;
 /// Direct Hot begins at byte zero of a top-level Trading instruction.
 pub const DIRECT_NATIVE_EVIDENCE_DIRECT_BIAS_V3: usize = 0;
-/// Registry's fixed continuation header precedes the unchanged nested Hot wire.
-pub const DIRECT_NATIVE_EVIDENCE_REGISTRY_BIAS_V3: usize = 128;
 
 /// Authenticated top-level instruction shape containing the signed request.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DirectNativeEvidenceContainerV3 {
     /// Trading Hot is the current top-level instruction.
     TradingHot,
-    /// Registry is current; unchanged Trading Hot follows its fixed header.
-    RegistryContinuation,
 }
 
 impl DirectNativeEvidenceContainerV3 {
     const fn bias(self) -> usize {
         match self {
             Self::TradingHot => DIRECT_NATIVE_EVIDENCE_DIRECT_BIAS_V3,
-            Self::RegistryContinuation => DIRECT_NATIVE_EVIDENCE_REGISTRY_BIAS_V3,
         }
     }
 }
@@ -256,7 +252,7 @@ pub fn encode_direct_native_evidence_many_v3_atomic(
 ///
 /// `current_instruction_index` is derived by the transaction assembler from
 /// the complete top-level sequence. Callers cannot supply message offsets or a
-/// raw bias: `container` selects one of the two authenticated protocol shapes.
+/// raw bias. Headerless Registry evidence uses the distinct V4 encoder below.
 pub fn encode_direct_native_evidence_v3_atomic(
     container: DirectNativeEvidenceContainerV3,
     current_instruction_index: u16,
@@ -272,6 +268,53 @@ pub fn encode_direct_native_evidence_v3_atomic(
         container,
         current_instruction_index,
         current_instruction_data,
+        u32::MAX,
+        &signatures,
+        &mut scratch,
+        output,
+    )
+}
+
+/// Encode headerless Registry native evidence for an action-selected request.
+///
+/// The current outer Registry instruction is byte-identical to the selected
+/// Hot instruction, so all message coordinates are Hot-relative with bias
+/// zero. This successor is intentionally distinct from V3's retired headered
+/// Registry container: callers cannot supply a bias or a nested byte offset.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_direct_headerless_registry_native_evidence_many_v4_atomic(
+    current_registry_instruction_index: u16,
+    current_registry_instruction_data: &[u8],
+    tail_count: u32,
+    signatures: &[[u8; 64]],
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<(), DirectNativeEvidenceErrorV3> {
+    encode_direct_native_evidence_many_v3_atomic(
+        DirectNativeEvidenceContainerV3::TradingHot,
+        current_registry_instruction_index,
+        current_registry_instruction_data,
+        tail_count,
+        signatures,
+        scratch,
+        output,
+    )
+}
+
+/// Encode the fixed two-participant headerless Registry native evidence.
+pub fn encode_direct_headerless_registry_native_evidence_v4_atomic(
+    current_registry_instruction_index: u16,
+    current_registry_instruction_data: &[u8],
+    signatures: [[u8; 64]; SIGNATURES],
+    output: &mut [u8],
+) -> Result<(), DirectNativeEvidenceErrorV3> {
+    if output.len() != DIRECT_NATIVE_EVIDENCE_BYTES_V3 {
+        return Err(DirectNativeEvidenceErrorV3::InvalidOutputWidth);
+    }
+    let mut scratch = [0_u8; DIRECT_NATIVE_EVIDENCE_BYTES_V3];
+    encode_direct_headerless_registry_native_evidence_many_v4_atomic(
+        current_registry_instruction_index,
+        current_registry_instruction_data,
         u32::MAX,
         &signatures,
         &mut scratch,
@@ -424,7 +467,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_and_registry_use_exact_current_instruction_offsets() {
+    fn direct_and_headerless_registry_use_exact_current_instruction_offsets() {
         let hot = hot();
         let mut direct = [0_u8; DIRECT_NATIVE_EVIDENCE_BYTES_V3];
         encode_direct_native_evidence_v3_atomic(
@@ -435,28 +478,42 @@ mod tests {
             &mut direct,
         )
         .expect("direct evidence");
-        let mut registry_data = vec![0_u8; DIRECT_NATIVE_EVIDENCE_REGISTRY_BIAS_V3];
-        registry_data.extend_from_slice(&hot);
         let mut registry = [0_u8; DIRECT_NATIVE_EVIDENCE_BYTES_V3];
-        encode_direct_native_evidence_v3_atomic(
-            DirectNativeEvidenceContainerV3::RegistryContinuation,
+        encode_direct_headerless_registry_native_evidence_v4_atomic(
             3,
-            &registry_data,
+            &hot,
             [[1; 64], [2; 64]],
             &mut registry,
         )
         .expect("Registry evidence");
         assert_eq!(direct.len(), 222);
-        for (descriptor, direct_offset, registry_offset) in
-            [(2_usize, 192_u16, 320_u16), (16, 396, 524)]
-        {
-            assert_eq!(read_u16(&direct, descriptor + 8), direct_offset);
+        for (descriptor, expected_offset) in [(2_usize, 192_u16), (16, 396)] {
+            assert_eq!(read_u16(&direct, descriptor + 8), expected_offset);
             assert_eq!(read_u16(&direct, descriptor + 12), 2);
-            assert_eq!(read_u16(&registry, descriptor + 8), registry_offset);
+            assert_eq!(read_u16(&registry, descriptor + 8), expected_offset);
             assert_eq!(read_u16(&registry, descriptor + 12), 3);
             assert_eq!(read_u16(&direct, descriptor + 2), u16::MAX);
             assert_eq!(read_u16(&direct, descriptor + 6), u16::MAX);
         }
+    }
+
+    #[test]
+    fn retired_headered_registry_shape_refuses_without_output_mutation() {
+        let hot = hot();
+        let mut headered = vec![0_u8; 128];
+        headered.extend_from_slice(&hot);
+        let mut output = [0x5a_u8; DIRECT_NATIVE_EVIDENCE_BYTES_V3];
+        let before = output;
+        assert_eq!(
+            encode_direct_headerless_registry_native_evidence_v4_atomic(
+                3,
+                &headered,
+                [[1; 64], [2; 64]],
+                &mut output,
+            ),
+            Err(DirectNativeEvidenceErrorV3::InvalidCurrentInstruction)
+        );
+        assert_eq!(output, before);
     }
 
     #[test]

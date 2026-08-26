@@ -51,8 +51,9 @@ use dclutch_direct_codec::{
     intent_v2::CompactIntentV2,
     native_evidence_v3::{
         DIRECT_NATIVE_EVIDENCE_BYTES_V3, DirectNativeEvidenceContainerV3,
-        direct_native_evidence_bytes_v3, encode_direct_native_evidence_many_v3_atomic,
-        encode_direct_native_evidence_v3_atomic,
+        direct_native_evidence_bytes_v3,
+        encode_direct_headerless_registry_native_evidence_many_v4_atomic,
+        encode_direct_native_evidence_many_v3_atomic, encode_direct_native_evidence_v3_atomic,
     },
 };
 use dclutch_release_set_contract::ExecutionRoleV1;
@@ -1163,15 +1164,15 @@ fn preview_economics(
 }
 
 /// Append packet-safe native evidence immediately before an outer Registry
-/// continuation, deriving the Registry instruction index from the complete
-/// top-level prefix. Message offsets are fixed by the authenticated Registry
-/// container and cannot be supplied by callers.
-pub fn append_direct_registry_native_evidence_v5(
+/// instruction, deriving its index from the complete top-level prefix. The
+/// Registry data must be byte-identical Hot bytes beginning at zero; message
+/// offsets cannot be supplied by callers.
+pub fn append_direct_headerless_registry_native_evidence_v6(
     top_level: &mut Vec<Instruction>,
     registry: Instruction,
     signatures: [[u8; 64]; 2],
 ) -> Result<(), Error> {
-    append_direct_registry_native_evidence_many_v5(
+    append_direct_headerless_registry_native_evidence_many_v6(
         top_level,
         registry,
         DirectExecutionActionV3::InlineOrdinary,
@@ -1183,10 +1184,10 @@ pub fn append_direct_registry_native_evidence_v5(
 /// Append packet-safe action-selected evidence immediately before Registry.
 ///
 /// The current Registry instruction index is derived from `top_level`; the
-/// codec independently rechecks the nested Hot request, signature count, and
-/// exact Registry bias. Unsigned actions must omit this pair and append their
-/// Registry instruction directly.
-pub fn append_direct_registry_native_evidence_many_v5(
+/// codec independently rechecks the headerless Hot request and signature
+/// count. Unsigned actions must omit this pair and append their Registry
+/// instruction directly.
+pub fn append_direct_headerless_registry_native_evidence_many_v6(
     top_level: &mut Vec<Instruction>,
     registry: Instruction,
     action: DirectExecutionActionV3,
@@ -1195,8 +1196,7 @@ pub fn append_direct_registry_native_evidence_many_v5(
 ) -> Result<(), Error> {
     let registry_index = u16::try_from(top_level.len().checked_add(1).ok_or(Error::Arithmetic)?)
         .map_err(|_| Error::Arithmetic)?;
-    let native = native_ed25519_instruction_many(
-        DirectNativeEvidenceContainerV3::RegistryContinuation,
+    let native = headerless_registry_native_ed25519_instruction_many(
         registry_index,
         &registry.data,
         action,
@@ -1206,6 +1206,33 @@ pub fn append_direct_registry_native_evidence_many_v5(
     top_level.push(native);
     top_level.push(registry);
     Ok(())
+}
+
+fn headerless_registry_native_ed25519_instruction_many(
+    current_instruction_index: u16,
+    current_instruction_data: &[u8],
+    action: DirectExecutionActionV3,
+    tail_count: u32,
+    signatures: &[[u8; 64]],
+) -> Result<Instruction, Error> {
+    let bytes =
+        direct_native_evidence_bytes_v3(action, tail_count).map_err(|_| Error::ArtifactMismatch)?;
+    let mut scratch = vec![0_u8; bytes];
+    let mut data = vec![0_u8; bytes];
+    encode_direct_headerless_registry_native_evidence_many_v4_atomic(
+        current_instruction_index,
+        current_instruction_data,
+        tail_count,
+        signatures,
+        &mut scratch,
+        &mut data,
+    )
+    .map_err(|_| Error::ArtifactMismatch)?;
+    Ok(Instruction {
+        program_id: ed25519_program::ID,
+        accounts: Vec::new(),
+        data,
+    })
 }
 
 fn native_ed25519_instruction(
@@ -1991,19 +2018,17 @@ mod tests {
             assert_eq!(read_test_u16(&direct.data, descriptor + 12), 1);
         }
 
-        let mut registry_data = vec![0_u8; 128];
-        registry_data.extend_from_slice(&hot);
         let registry = Instruction {
             program_id: key(199),
             accounts: Vec::new(),
-            data: registry_data,
+            data: hot.clone(),
         };
         let mut sequence = vec![Instruction {
             program_id: key(198),
             accounts: Vec::new(),
             data: Vec::new(),
         }];
-        append_direct_registry_native_evidence_v5(
+        append_direct_headerless_registry_native_evidence_v6(
             &mut sequence,
             registry,
             [seller.signature, buyer.signature],
@@ -2011,7 +2036,7 @@ mod tests {
         .expect("Registry evidence");
         assert_eq!(sequence.len(), 3);
         let native = sequence.get(1).expect("native evidence");
-        for (descriptor, expected_message) in [(2_usize, 320_u16), (16, 524)] {
+        for (descriptor, expected_message) in [(2_usize, 192_u16), (16, 396)] {
             assert_eq!(
                 read_test_u16(&native.data, descriptor + 8),
                 expected_message
@@ -2051,14 +2076,10 @@ mod tests {
         let registered = Instruction {
             program_id: key(199),
             accounts: Vec::new(),
-            data: {
-                let mut data = vec![0_u8; 128];
-                data.extend_from_slice(&registered_hot);
-                data
-            },
+            data: registered_hot,
         };
         let mut registered_sequence = Vec::new();
-        append_direct_registry_native_evidence_many_v5(
+        append_direct_headerless_registry_native_evidence_many_v6(
             &mut registered_sequence,
             registered,
             DirectExecutionActionV3::RegisterSell,
@@ -2069,13 +2090,13 @@ mod tests {
         let registered_native = registered_sequence.first().expect("native evidence");
         assert_eq!(registered_native.data.first().copied(), Some(1));
         assert_eq!(registered_native.data.len(), 112);
-        assert_eq!(read_test_u16(&registered_native.data, 2 + 8), 320);
+        assert_eq!(read_test_u16(&registered_native.data, 2 + 8), 192);
         assert_eq!(read_test_u16(&registered_native.data, 2 + 10), 172);
         assert_eq!(read_test_u16(&registered_native.data, 2 + 12), 1);
 
         let unchanged = registered_sequence.clone();
         assert_eq!(
-            append_direct_registry_native_evidence_many_v5(
+            append_direct_headerless_registry_native_evidence_many_v6(
                 &mut registered_sequence,
                 unchanged.last().expect("Registry").clone(),
                 DirectExecutionActionV3::RegisterSell,
