@@ -16,6 +16,9 @@ use super::{
     EFFECT_PERMISSION_WRITE_DATA,
 };
 
+/// Safe, allocation-free typed AccountProfile V2 artifact encoder.
+pub mod encode;
+
 /// Canonical runtime-tail profile magic.
 pub const MAGIC: [u8; 8] = *b"DCLTAP02";
 /// Finalized-record schema label for runtime-tail account profiles.
