@@ -16,7 +16,7 @@ use dclutch_dealer_codec::scenario::{
     ClaimsInventoryObservation, DescriptorScenarioInput, ScenarioPlan, plan_descriptor_scenario,
 };
 use solana_program::{
-    hash::{Hasher, hash},
+    hash::{hash, hashv},
     pubkey::Pubkey,
 };
 
@@ -26,6 +26,8 @@ use super::v3_obligation::DealerObligationProjectionV3;
 pub const MAX_DEALER_SCENARIO_CUSTODY_EFFECTS_V3: usize = 4;
 /// Domain for the expected family-neutral Claims signed-delta commitment.
 pub const DEALER_CLAIMS_DELTA_DOMAIN_V3: &[u8] = b"dclutch:dealer-claims-delta:v3";
+/// Per-coordinate chaining domain for the runtime-width delta commitment.
+pub const DEALER_CLAIMS_DELTA_ITEM_DOMAIN_V3: &[u8] = b"dclutch:dealer-delta-item:v3";
 
 /// Stable refusal from atomic scenario-fill composition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -747,18 +749,31 @@ fn claims_delta_digest(
     if input.acquired.len() != input.delivered.len() {
         return Err(ScenarioComposerErrorV3::WidthMismatch);
     }
-    let mut hasher = Hasher::default();
-    hasher.hash(DEALER_CLAIMS_DELTA_DOMAIN_V3);
-    hasher.hash(&input.dealer_position.position_owner);
-    hasher.hash(&input.counterparty_position_revision.to_le_bytes());
-    hasher.hash(&split.to_le_bytes());
-    hasher.hash(&merge.to_le_bytes());
     let width =
         u32::try_from(input.acquired.len()).map_err(|_| ScenarioComposerErrorV3::WidthMismatch)?;
-    hasher.hash(&width.to_le_bytes());
+    let counterparty_revision = input.counterparty_position_revision.to_le_bytes();
+    let split_bytes = split.to_le_bytes();
+    let merge_bytes = merge.to_le_bytes();
+    let width_bytes = width.to_le_bytes();
+    let mut digest = hashv(&[
+        DEALER_CLAIMS_DELTA_DOMAIN_V3,
+        &input.dealer_position.position_owner,
+        &counterparty_revision,
+        &split_bytes,
+        &merge_bytes,
+        &width_bytes,
+    ])
+    .to_bytes();
     for (acquired, delivered) in input.acquired.iter().zip(input.delivered.iter()) {
-        hasher.hash(&acquired.to_le_bytes());
-        hasher.hash(&delivered.to_le_bytes());
+        let acquired = acquired.to_le_bytes();
+        let delivered = delivered.to_le_bytes();
+        digest = hashv(&[
+            DEALER_CLAIMS_DELTA_ITEM_DOMAIN_V3,
+            &digest,
+            &acquired,
+            &delivered,
+        ])
+        .to_bytes();
     }
-    Ok(hasher.result().to_bytes())
+    Ok(digest)
 }
