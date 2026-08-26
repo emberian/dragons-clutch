@@ -10,6 +10,7 @@
 
 pub mod affine_batch_v2;
 pub mod composition_v3;
+pub mod founding_v3;
 pub mod lbv2_terminal_v2;
 pub mod protocol_position_v2;
 
