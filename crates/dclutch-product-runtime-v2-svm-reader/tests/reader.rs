@@ -16,7 +16,16 @@ use dclutch_product_runtime_v2_admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
     RESULT_DOMAIN_SCHEMA_ID_V2,
 };
+use dclutch_product_runtime_v2_svm_reader::representation_v3::{
+    RepresentationRuntimeContextV3, RepresentationRuntimeFrameV3,
+    authenticate_product_representation_v3,
+};
 use dclutch_product_runtime_v2_svm_reader::*;
+use dclutch_rational_representation_v2_kernel::{
+    DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3, GRAPH_HEADER_BYTES,
+    GRAPH_MAGIC_V2, GRAPH_NODE_BYTES, REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
+    REPRESENTATION_GRAPH_SCHEMA_RELEASE_ID_V2, SCALAR_BYTES, SCHEMA_VERSION_V2,
+};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use solana_program::{
     account_info::AccountInfo,
@@ -62,6 +71,13 @@ struct RuntimeV3Backing {
     basis: RecordBacking,
 }
 
+struct RepresentationV3Backing {
+    runtime: RuntimeV3Backing,
+    descriptor: RecordBacking,
+    graph: RecordBacking,
+    context: RepresentationRuntimeContextV3,
+}
+
 #[derive(Clone, Copy)]
 struct RuntimeV3Snapshot {
     runtime: AuthenticatedProductRuntimeV2,
@@ -74,6 +90,17 @@ struct RuntimeV3Snapshot {
     linked_basis_raw_writable: bool,
     linked_basis_staging_writable: bool,
     linked_basis_body_digest: ContentId,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RepresentationV3Snapshot {
+    descriptor_record: AuthenticatedRecordV2,
+    graph_record: AuthenticatedRecordV2,
+    representation_authority: Pubkey,
+    basis_width: u32,
+    descriptor_id: [u8; 32],
+    graph_id: [u8; 32],
+    market_id: [u8; 32],
 }
 
 fn id(byte: u8) -> ContentId {
@@ -281,6 +308,153 @@ fn compiled_runtime_v3(kind: BasisKindV3, product_byte: u8) -> RuntimeV3Backing 
         portfolio,
         basis,
     }
+}
+
+fn put(output: &mut [u8], offset: usize, value: &[u8]) {
+    output
+        .get_mut(offset..offset + value.len())
+        .expect("fixture offset")
+        .copy_from_slice(value);
+}
+
+fn put_u32(output: &mut [u8], offset: usize, value: u32) {
+    put(output, offset, &value.to_le_bytes());
+}
+
+fn put_u64(output: &mut [u8], offset: usize, value: u64) {
+    put(output, offset, &value.to_le_bytes());
+}
+
+fn representation_graph_v3() -> Vec<u8> {
+    const WIDTH: u32 = 4;
+    let width = usize::try_from(WIDTH).expect("fixture width");
+    let mut output = vec![0_u8; GRAPH_HEADER_BYTES + GRAPH_NODE_BYTES + width * SCALAR_BYTES];
+    put(&mut output, 0, &GRAPH_MAGIC_V2);
+    put(&mut output, 8, &SCHEMA_VERSION_V2.to_le_bytes());
+    put(&mut output, 16, &[0x71; 32]);
+    put(&mut output, 48, &[0x72; 32]);
+    put_u32(&mut output, 80, WIDTH);
+    put_u32(&mut output, 84, 1);
+    put_u32(&mut output, 88, 0);
+    put_u64(&mut output, 96, 1);
+    put(&mut output, GRAPH_HEADER_BYTES, &[0x72; 32]);
+    put_u32(&mut output, GRAPH_HEADER_BYTES + 32, 0);
+    put_u32(&mut output, GRAPH_HEADER_BYTES + 36, 0);
+    put_u32(&mut output, GRAPH_HEADER_BYTES + 40, 0);
+    *output
+        .get_mut(GRAPH_HEADER_BYTES + 44)
+        .expect("node-kind byte") = 0;
+    put_u64(&mut output, GRAPH_HEADER_BYTES + 48, 0);
+    put_u64(&mut output, GRAPH_HEADER_BYTES + GRAPH_NODE_BYTES, 1);
+    output
+}
+
+fn representation_descriptor_v3(
+    graph_digest: [u8; 32],
+    context: RepresentationRuntimeContextV3,
+) -> Vec<u8> {
+    const WIDTH: u32 = 4;
+    let width = usize::try_from(WIDTH).expect("fixture width");
+    let mut output = vec![0_u8; DESCRIPTOR_HEADER_BYTES + width * DESCRIPTOR_COEFFICIENT_BYTES];
+    put(&mut output, 0, &DESCRIPTOR_MAGIC_V3);
+    put(&mut output, 8, &3_u16.to_le_bytes());
+    put(&mut output, 16, &[0x71; 32]);
+    put(&mut output, 48, &graph_digest);
+    put(&mut output, 80, &[0x72; 32]);
+    put(&mut output, 112, &context.market.to_bytes());
+    put(&mut output, 144, &context.release_set.to_bytes());
+    put(&mut output, 176, &context.receipt_mint.to_bytes());
+    put(&mut output, 208, &context.token_program.to_bytes());
+    put_u32(&mut output, 240, WIDTH);
+    put_u64(&mut output, 248, 10);
+    put_u64(&mut output, DESCRIPTOR_HEADER_BYTES, 10);
+    output
+}
+
+fn compiled_representation_v3() -> RepresentationV3Backing {
+    let runtime = compiled_runtime_v3(BasisKindV3::CategoricalQ1, 0x61);
+    let context = RepresentationRuntimeContextV3 {
+        claims_program: Pubkey::new_from_array([0x81; 32]),
+        market: Pubkey::new_from_array([0x82; 32]),
+        release_set: Pubkey::new_from_array([0x83; 32]),
+        claims_basis_id: semantic_basis_id(&runtime.basis.raw.data),
+        claims_width: 4,
+        receipt_mint: Pubkey::new_from_array([0x84; 32]),
+        token_program: Pubkey::new_from_array([0x85; 32]),
+    };
+    let graph_bytes = representation_graph_v3();
+    let graph_digest = hash(&graph_bytes).to_bytes();
+    let descriptor_bytes = representation_descriptor_v3(graph_digest, context);
+    RepresentationV3Backing {
+        runtime,
+        descriptor: record(
+            REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
+            descriptor_bytes,
+        ),
+        graph: record(REPRESENTATION_GRAPH_SCHEMA_RELEASE_ID_V2, graph_bytes),
+        context,
+    }
+}
+
+fn authenticate_representation_v3(
+    backing: &mut RepresentationV3Backing,
+) -> Result<RepresentationV3Snapshot> {
+    let product_raw = backing.runtime.product.raw.info();
+    let product_staging = backing.runtime.product.staging.info();
+    let domain_raw = backing.runtime.domain.raw.info();
+    let domain_staging = backing.runtime.domain.staging.info();
+    let portfolio_raw = backing.runtime.portfolio.raw.info();
+    let portfolio_staging = backing.runtime.portfolio.staging.info();
+    let basis_raw = backing.runtime.basis.raw.info();
+    let basis_staging = backing.runtime.basis.staging.info();
+    let descriptor_raw = backing.descriptor.raw.info();
+    let descriptor_staging = backing.descriptor.staging.info();
+    let graph_raw = backing.graph.raw.info();
+    let graph_staging = backing.graph.staging.info();
+    let authenticated = authenticate_product_representation_v3(
+        &REGISTRY,
+        &Rent::default(),
+        backing.runtime.product.coordinate.content_digest,
+        backing.descriptor.coordinate.content_digest,
+        backing.context,
+        RepresentationRuntimeFrameV3 {
+            product: ProductRuntimeFrameV3 {
+                product: FinalizedRecordFrameV2 {
+                    raw: &product_raw,
+                    staging: &product_staging,
+                },
+                result_domain: FinalizedRecordFrameV2 {
+                    raw: &domain_raw,
+                    staging: &domain_staging,
+                },
+                portfolio: FinalizedRecordFrameV2 {
+                    raw: &portfolio_raw,
+                    staging: &portfolio_staging,
+                },
+                linked_basis: FinalizedRecordFrameV2 {
+                    raw: &basis_raw,
+                    staging: &basis_staging,
+                },
+            },
+            descriptor: FinalizedRecordFrameV2 {
+                raw: &descriptor_raw,
+                staging: &descriptor_staging,
+            },
+            graph: FinalizedRecordFrameV2 {
+                raw: &graph_raw,
+                staging: &graph_staging,
+            },
+        },
+    )?;
+    Ok(RepresentationV3Snapshot {
+        descriptor_record: authenticated.descriptor_record,
+        graph_record: authenticated.graph_record,
+        representation_authority: authenticated.representation_authority,
+        basis_width: authenticated.admission.basis_width(),
+        descriptor_id: authenticated.admission.descriptor_id(),
+        graph_id: authenticated.admission.graph_id(),
+        market_id: authenticated.admission.market_id(),
+    })
 }
 
 fn authenticate(
@@ -519,4 +693,65 @@ fn v3_refuses_canonical_wrong_semantic_basis() {
             Err(Error::LinkedBasisComposition)
         ));
     }
+}
+
+#[test]
+fn representation_v3_authenticates_product_descriptor_and_selected_graph() {
+    let mut backing = compiled_representation_v3();
+    let descriptor_digest = backing.descriptor.coordinate.content_digest;
+    let graph_digest = backing.graph.coordinate.content_digest;
+    let expected_authority = Pubkey::find_program_address(
+        &[
+            dclutch_rational_representation_v2_kernel::RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
+            descriptor_digest.to_bytes().as_slice(),
+        ],
+        &backing.context.claims_program,
+    )
+    .0;
+    let authenticated =
+        authenticate_representation_v3(&mut backing).expect("exact representation graph");
+    assert_eq!(
+        authenticated.descriptor_record.content_digest,
+        descriptor_digest
+    );
+    assert_eq!(authenticated.graph_record.content_digest, graph_digest);
+    assert_eq!(authenticated.representation_authority, expected_authority);
+    assert_eq!(authenticated.basis_width, 4);
+    assert_eq!(authenticated.descriptor_id, descriptor_digest.to_bytes());
+    assert_eq!(authenticated.graph_id, [0x71; 32]);
+    assert_eq!(authenticated.market_id, [0x82; 32]);
+}
+
+#[test]
+fn representation_v3_refuses_claims_width_and_basis_substitution() {
+    let mut wrong_width = compiled_representation_v3();
+    wrong_width.context.claims_width = 3;
+    assert!(matches!(
+        authenticate_representation_v3(&mut wrong_width),
+        Err(Error::RepresentationComposition)
+    ));
+
+    let mut wrong_basis = compiled_representation_v3();
+    wrong_basis.context.claims_basis_id = id(0xf4);
+    assert!(matches!(
+        authenticate_representation_v3(&mut wrong_basis),
+        Err(Error::RepresentationComposition)
+    ));
+}
+
+#[test]
+fn representation_v3_refuses_graph_substitution_and_cross_role_alias() {
+    let mut substituted = compiled_representation_v3();
+    *substituted.graph.raw.data.last_mut().expect("graph byte") ^= 1;
+    assert!(matches!(
+        authenticate_representation_v3(&mut substituted),
+        Err(Error::RepresentationGraphRecord)
+    ));
+
+    let mut aliased = compiled_representation_v3();
+    aliased.graph.raw.key = aliased.descriptor.raw.key;
+    assert!(matches!(
+        authenticate_representation_v3(&mut aliased),
+        Err(Error::AccountFrame)
+    ));
 }

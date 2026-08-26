@@ -20,6 +20,9 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+/// Exact Product/representation Registry authentication.
+pub mod representation_v3;
+
 use dclutch_product_payoff_v2_codec::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
     runtime_v3::{
@@ -58,6 +61,12 @@ pub enum Error {
     LinkedBasisComposition,
     /// Product/domain/portfolio decoding or exact identity composition refused.
     Composition,
+    /// Rational representation descriptor record authentication refused.
+    RepresentationDescriptorRecord,
+    /// Rational representation graph record authentication refused.
+    RepresentationGraphRecord,
+    /// Rational representation descriptor, graph, or Product join refused.
+    RepresentationComposition,
     /// Optional receipt coordinates differed from independently authenticated facts.
     ReceiptMismatch,
     /// Account data could not be borrowed.

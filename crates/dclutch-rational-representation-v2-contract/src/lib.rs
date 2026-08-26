@@ -22,6 +22,7 @@ mod replay;
 mod request;
 mod seeds;
 
+pub use dclutch_rational_representation_v2_kernel::RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2;
 pub use generated::{
     ASSET_BYTES_V2, PHYSICAL_ABI_VERSION_V2, RECEIPT_BYTES_V2, RECEIPT_MAGIC_V2,
     REQUEST_HEADER_BYTES_V2, REQUEST_MAGIC_V2,
@@ -101,8 +102,6 @@ pub use seeds::{RATIONAL_RECEIPT_MINT_SEED_V2, RationalReceiptMintSeedsV2};
 
 /// Exact absent revision sentinel shared with the canonical Claims ABI.
 pub const ABSENT_REVISION: u64 = dclutch_claims_svm::NO_POSITION_REVISION;
-/// Claims PDA seed for one descriptor's representation authority.
-pub const RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2: &[u8] = b"dclutch:rational-authority:v2";
 /// Claims PDA seed for one outcome's canonical shard Mint.
 pub const RATIONAL_SHARD_MINT_SEED_V2: &[u8] = b"dclutch:rational-shard-mint:v2";
 /// Claims PDA seed for one outcome's canonical Claims custody owner.
