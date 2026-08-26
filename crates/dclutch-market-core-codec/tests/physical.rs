@@ -3,7 +3,7 @@
 use dclutch_market_core_codec::{
     Binding, CORE_EFFECT_ACK_BYTES_V1, CORE_EFFECT_ENVELOPE_BYTES_V1, CoreEffectAckV1,
     CoreEffectActionV1, CoreEffectEnvelopeV1, CoreMarketViewV1, CoreReferenceObservationV1,
-    CoreState, Error, Identity, MARKET_CORE_STATE_PDA_DOMAIN_V1, MarketCoreStateSeedsV1,
+    CoreState, Error, Identity, MARKET_CORE_STATE_PDA_DOMAIN_V2, MarketCoreStateSeedsV2,
     MarketIdentity, Phase, Product, Readiness, Realm, ReleaseSet, Role, SERIES_CORE_ACK_BYTES_V1,
     SERIES_CORE_CALLER_AUTHORITY_PDA_DOMAIN_V1, SERIES_CORE_REQUEST_BYTES_V1, SeriesCoreAckV1,
     SeriesCoreActionV1, SeriesCoreCallerSeedsV1, SeriesCoreRequestV1,
@@ -492,8 +492,8 @@ fn market_state_pda_commits_every_immutable_coordinate() {
     let identity = MarketIdentity {
         market_id: id(40),
         realm_id: id(41),
-        product_id: id(42),
-        result_domain: id(43),
+        product_record: id(42),
+        product_id: id(43),
         resolution_policy: id(44),
         capability_manifest: id(48),
         selected_release_set: id(45),
@@ -501,43 +501,55 @@ fn market_state_pda_commits_every_immutable_coordinate() {
         generation: 46,
     };
     let realm = id(41).to_bytes();
-    let product = id(42).to_bytes();
-    let result_domain = id(43).to_bytes();
+    let product_record = id(42).to_bytes();
+    let product_id = id(43).to_bytes();
     let resolution = id(44).to_bytes();
     let capability_manifest = id(48).to_bytes();
     let release_set = id(45).to_bytes();
     let registry_program = id(49).to_bytes();
     let generation = 46_u64.to_le_bytes();
     let expected: [&[u8]; 9] = [
-        MARKET_CORE_STATE_PDA_DOMAIN_V1.as_slice(),
+        MARKET_CORE_STATE_PDA_DOMAIN_V2.as_slice(),
         realm.as_slice(),
-        product.as_slice(),
-        result_domain.as_slice(),
+        product_record.as_slice(),
+        product_id.as_slice(),
         resolution.as_slice(),
         capability_manifest.as_slice(),
         release_set.as_slice(),
         registry_program.as_slice(),
         generation.as_slice(),
     ];
-    assert_eq!(MarketCoreStateSeedsV1::new(identity).as_slices(), expected);
+    assert_eq!(MarketCoreStateSeedsV2::new(identity).as_slices(), expected);
 
     let mut substituted = identity;
     substituted.generation = 47;
     assert_ne!(
-        MarketCoreStateSeedsV1::new(identity),
-        MarketCoreStateSeedsV1::new(substituted),
+        MarketCoreStateSeedsV2::new(identity),
+        MarketCoreStateSeedsV2::new(substituted),
+    );
+    substituted = identity;
+    substituted.product_record = id(51);
+    assert_ne!(
+        MarketCoreStateSeedsV2::new(identity),
+        MarketCoreStateSeedsV2::new(substituted),
+    );
+    substituted = identity;
+    substituted.product_id = id(52);
+    assert_ne!(
+        MarketCoreStateSeedsV2::new(identity),
+        MarketCoreStateSeedsV2::new(substituted),
     );
     substituted = identity;
     substituted.registry_program = id(50);
     assert_ne!(
-        MarketCoreStateSeedsV1::new(identity),
-        MarketCoreStateSeedsV1::new(substituted),
+        MarketCoreStateSeedsV2::new(identity),
+        MarketCoreStateSeedsV2::new(substituted),
     );
     substituted = identity;
     substituted.resolution_policy = id(47);
     assert_ne!(
-        MarketCoreStateSeedsV1::new(identity),
-        MarketCoreStateSeedsV1::new(substituted),
+        MarketCoreStateSeedsV2::new(identity),
+        MarketCoreStateSeedsV2::new(substituted),
     );
 }
 
@@ -549,8 +561,8 @@ fn core_state_for_view() -> CoreState {
         identity: MarketIdentity {
             market_id: id(40),
             realm_id: id(41),
+            product_record: id(47),
             product_id: id(46),
-            result_domain: id(47),
             resolution_policy: id(56),
             capability_manifest: id(67),
             selected_release_set: id(45),
@@ -572,11 +584,16 @@ fn references_for_view() -> CoreReferenceObservationV1 {
             collateral_release: id(44),
         },
         product: Product {
+            product_record: id(47),
             product_id: id(46),
-            result_domain: id(47),
+            result_domain: id(57),
+            portfolio: id(58),
+            coordinate_domain: id(59),
+            result_unit: id(65),
             claim_basis: id(48),
-            capacity_profile: id(49),
-            compiler_release: id(55),
+            liability_basis: id(68),
+            representation_release: id(69),
+            mapping_release: id(75),
             outcome_count: 3,
         },
         release_set: ReleaseSet {
@@ -610,7 +627,7 @@ fn references_for_view() -> CoreReferenceObservationV1 {
             ],
         },
         realm_record_authenticated: true,
-        product_record_authenticated: true,
+        product_graph_authenticated: true,
         release_set_record_authenticated: true,
         claims_aggregate_derivation_authenticated: true,
     }
@@ -644,7 +661,7 @@ fn core_market_view_joins_logical_market_and_distinct_claims_aggregate() {
             id(40),
             id(57),
             CoreReferenceObservationV1 {
-                product_record_authenticated: false,
+                product_graph_authenticated: false,
                 ..references
             },
         ),

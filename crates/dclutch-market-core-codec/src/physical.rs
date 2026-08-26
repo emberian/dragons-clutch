@@ -594,10 +594,10 @@ impl SeriesCoreActionV1 {
 /// resulting PDA is itself the canonical `market_id` stored in [`CoreState`];
 /// adapters must derive it first and then require exact equality to that field.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MarketCoreStateSeedsV1 {
+pub struct MarketCoreStateSeedsV2 {
     realm: [u8; IDENTITY_BYTES],
-    product: [u8; IDENTITY_BYTES],
-    result_domain: [u8; IDENTITY_BYTES],
+    product_record: [u8; IDENTITY_BYTES],
+    product_id: [u8; IDENTITY_BYTES],
     resolution_policy: [u8; IDENTITY_BYTES],
     capability_manifest: [u8; IDENTITY_BYTES],
     release_set: [u8; IDENTITY_BYTES],
@@ -605,14 +605,14 @@ pub struct MarketCoreStateSeedsV1 {
     generation: [u8; 8],
 }
 
-impl MarketCoreStateSeedsV1 {
+impl MarketCoreStateSeedsV2 {
     /// Project the unique state coordinates, excluding the derived address.
     #[must_use]
     pub const fn new(identity: MarketIdentity) -> Self {
         Self {
             realm: identity.realm_id.to_bytes(),
-            product: identity.product_id.to_bytes(),
-            result_domain: identity.result_domain.to_bytes(),
+            product_record: identity.product_record.to_bytes(),
+            product_id: identity.product_id.to_bytes(),
             resolution_policy: identity.resolution_policy.to_bytes(),
             capability_manifest: identity.capability_manifest.to_bytes(),
             release_set: identity.selected_release_set.to_bytes(),
@@ -625,10 +625,10 @@ impl MarketCoreStateSeedsV1 {
     #[must_use]
     pub fn as_slices(&self) -> [&[u8]; 9] {
         [
-            crate::MARKET_CORE_STATE_PDA_DOMAIN_V1.as_slice(),
+            crate::MARKET_CORE_STATE_PDA_DOMAIN_V2.as_slice(),
             &self.realm,
-            &self.product,
-            &self.result_domain,
+            &self.product_record,
+            &self.product_id,
             &self.resolution_policy,
             &self.capability_manifest,
             &self.release_set,
@@ -651,8 +651,9 @@ pub struct CoreReferenceObservationV1 {
     pub release_set: ReleaseSet,
     /// Exact Realm record and content identity were authenticated.
     pub realm_record_authenticated: bool,
-    /// Exact Product record and content identity were authenticated.
-    pub product_record_authenticated: bool,
+    /// Exact Product graph root, selected domain, and selected portfolio were
+    /// independently authenticated and composed.
+    pub product_graph_authenticated: bool,
     /// Exact release-set record and Registry activation were authenticated.
     pub release_set_record_authenticated: bool,
     /// Claims aggregate was derived under the selected Claims program from the
@@ -687,7 +688,7 @@ impl CoreMarketViewV1 {
         references: CoreReferenceObservationV1,
     ) -> Result<Self, Error> {
         if !references.realm_record_authenticated
-            || !references.product_record_authenticated
+            || !references.product_graph_authenticated
             || !references.release_set_record_authenticated
             || !references.claims_aggregate_derivation_authenticated
             || !references.product.valid()
@@ -696,8 +697,8 @@ impl CoreMarketViewV1 {
             || observed_claims_aggregate == observed_market
             || observed_claims_aggregate == state.rent_beneficiary
             || references.realm.realm_id != state.identity.realm_id
+            || references.product.product_record != state.identity.product_record
             || references.product.product_id != state.identity.product_id
-            || references.product.result_domain != state.identity.result_domain
             || references.release_set.release_set_id != state.identity.selected_release_set
         {
             return Err(Error::InvalidCoordinates);

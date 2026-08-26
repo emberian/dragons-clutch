@@ -12,6 +12,11 @@ exactly 352 bytes and the request is 72 bytes. The header persists only:
 - the immutable RentCredit beneficiary; and
 - a checked count of outstanding manifest-selected optional capabilities.
 
+The header persists the exact Product Runtime V2 graph-root digest and its
+stable semantic Product ID. Result-domain, portfolio, basis, release, and
+runtime-width facts remain derived from independently authenticated graph
+records rather than copied into Core.
+
 Realm, Product, release-set records, Claims aggregate/Hoard principal, Custody,
 Source funding, capability FundingState, child balances, rent, and closure facts
 remain owned by their canonical records and programs. Core reauthenticates those
@@ -48,14 +53,14 @@ PDA uses the sole release-set-owned `CallerAuthoritySeedsV1`; the target role is
 never substituted for caller role Core.
 
 The Market PDA under the Registry-selected Core program uses
-`["dclutch/market-core/state/v1", realm, product, result_domain,
+`["dclutch/market-core/state/v2", realm, product_record, product_id,
 resolution_policy, capability_manifest, release_set, registry_program,
 generation_le]`.
-`MarketCoreStateSeedsV1` is the canonical projection.
+`MarketCoreStateSeedsV2` is the canonical projection.
 
 `CoreMarketViewV1::authenticate` is a pure semantic join over a decoded sparse
 Core header plus `CoreReferenceObservationV1`. A production adapter must derive
-the observation booleans from exact finalized Realm, Product/Terms/result-domain,
+the observation booleans from exact finalized Realm, Product/domain/portfolio,
 and Registry release-set accounts and from the Claims-owned aggregate PDA; they
 are not caller-authored instruction fields. The concrete account order, owner,
 PDA, loader, and return-data checks remain the explicitly unverified isolated

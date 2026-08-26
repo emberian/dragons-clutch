@@ -53,19 +53,24 @@ def realm : Realm := {
 }
 
 def product : Product := {
-  productId := 200
-  resultDomainId := 201
-  claimBasisId := 202
-  capacityProfileId := 203
-  compilerReleaseId := 204
+  productRecordId := 200
+  productId := 201
+  resultDomainId := 202
+  portfolioId := 203
+  coordinateDomainId := 204
+  resultUnitId := 205
+  claimBasisId := 206
+  liabilityBasisId := 207
+  representationReleaseId := 208
+  mappingReleaseId := 209
   outcomeCount := 17
 }
 
 def identity : MarketIdentity := {
   marketId := 1000
   realmId := realm.realmId
+  productRecordId := product.productRecordId
   productId := product.productId
-  resultDomainId := product.resultDomainId
   resolutionPolicyId := 555
   capabilityManifestId := 556
   executionReleaseSetId := releases.releaseSetId

@@ -75,11 +75,16 @@ fn realm() -> Realm {
 
 fn product(outcome_count: u32) -> Product {
     Product {
+        product_record: id(29),
         product_id: id(30),
         result_domain: id(31),
+        portfolio: id(32),
+        coordinate_domain: id(33),
+        result_unit: id(34),
         claim_basis: id(32),
-        capacity_profile: id(33),
-        compiler_release: id(34),
+        liability_basis: id(35),
+        representation_release: id(36),
+        mapping_release: id(37),
         outcome_count,
     }
 }
@@ -88,8 +93,8 @@ fn identity() -> MarketIdentity {
     MarketIdentity {
         market_id: id(40),
         realm_id: id(20),
+        product_record: id(29),
         product_id: id(30),
-        result_domain: id(31),
         resolution_policy: id(41),
         capability_manifest: id(42),
         selected_release_set: id(10),
@@ -355,6 +360,28 @@ fn found_creates_only_the_dust_tolerant_core_market_account() {
     assert_eq!(
         found(Request::administrative(Action::Found, 7, id(40)), aliased),
         Err(Error::InvalidCoordinates)
+    );
+
+    let mut substituted_root = founding_frame(17, 0);
+    substituted_root.product.product_record = id(98);
+    assert_eq!(
+        found(
+            Request::administrative(Action::Found, 7, id(40)),
+            substituted_root,
+        ),
+        Err(Error::InvalidFunding),
+        "a Product graph-root substitution must not preserve stable Product authority",
+    );
+
+    let mut substituted_stable_id = founding_frame(17, 0);
+    substituted_stable_id.product.product_id = id(97);
+    assert_eq!(
+        found(
+            Request::administrative(Action::Found, 7, id(40)),
+            substituted_stable_id,
+        ),
+        Err(Error::InvalidFunding),
+        "a stable Product ID substitution under the same graph root must fail closed",
     );
 }
 

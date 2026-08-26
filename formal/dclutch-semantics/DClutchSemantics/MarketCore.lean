@@ -6,7 +6,7 @@ import Std.Tactic
 # Universal Market Core and funded founding lifecycle
 
 This module is the small lifecycle shared by every dClutch Market.  It owns an
-immutable Realm, canonical Product/result-domain identities, one immutable
+immutable Realm, canonical Product-record/stable-Product identities, one immutable
 execution-release set, exact prepaid creation, universal lifecycle,
 terminal admission, redemption routing, and retirement.  The Claims child is
 the sole owner of mutable claim supply and Hoard principal; Core stores only
@@ -41,28 +41,38 @@ def Realm.valid (realm : Realm) : Bool :=
   realm.realmId != 0 && realm.collateralMintId != 0 &&
   realm.tokenProgramId != 0 && realm.collateralReleaseId != 0
 
-/-- Canonical Product and result-domain coordinates selected before Found. -/
+/-- Canonical runtime-width Product projection selected before Found. The
+Product record digest is the authority root; all child coordinates are
+authenticated derivations rather than parallel persisted Core facts. -/
 structure Product where
+  productRecordId : Identity
   productId : Identity
   resultDomainId : Identity
+  portfolioId : Identity
+  coordinateDomainId : Identity
+  resultUnitId : Identity
   claimBasisId : Identity
-  capacityProfileId : Identity
-  compilerReleaseId : Identity
+  liabilityBasisId : Identity
+  representationReleaseId : Identity
+  mappingReleaseId : Identity
   outcomeCount : Nat
   deriving DecidableEq, Repr
 
 def Product.valid (product : Product) : Bool :=
-  product.productId != 0 && product.resultDomainId != 0 &&
-  product.claimBasisId != 0 && product.capacityProfileId != 0 &&
-  product.compilerReleaseId != 0 && 1 < product.outcomeCount
+  product.productRecordId != 0 && product.productId != 0 &&
+  product.resultDomainId != 0 && product.portfolioId != 0 &&
+  product.coordinateDomainId != 0 && product.resultUnitId != 0 &&
+  product.claimBasisId != 0 && product.liabilityBasisId != 0 &&
+  product.representationReleaseId != 0 && product.mappingReleaseId != 0 &&
+  1 < product.outcomeCount
 
 /-- Exact immutable Market identity.  `marketId` is the adapter-checked
 canonical content/address identity for these coordinates. -/
 structure MarketIdentity where
   marketId : Identity
   realmId : Identity
+  productRecordId : Identity
   productId : Identity
-  resultDomainId : Identity
   resolutionPolicyId : Identity
   capabilityManifestId : Identity
   executionReleaseSetId : Identity
@@ -72,7 +82,7 @@ structure MarketIdentity where
 
 def MarketIdentity.valid (identity : MarketIdentity) : Bool :=
   identity.marketId != 0 && identity.realmId != 0 &&
-  identity.productId != 0 && identity.resultDomainId != 0 &&
+  identity.productRecordId != 0 && identity.productId != 0 &&
   identity.resolutionPolicyId != 0 && identity.capabilityManifestId != 0 &&
   identity.executionReleaseSetId != 0 && identity.registryProgramId != 0
 
@@ -178,8 +188,8 @@ def foundingAccepts (frame : FoundingFrame) : Bool :=
   let plan := foundingCreationPlan frame
   frame.realm.valid && frame.product.valid && frame.identity.valid &&
   frame.identity.realmId == frame.realm.realmId &&
+  frame.identity.productRecordId == frame.product.productRecordId &&
   frame.identity.productId == frame.product.productId &&
-  frame.identity.resultDomainId == frame.product.resultDomainId &&
   frame.identity.executionReleaseSetId == frame.coreAdmission.selected.releaseSetId &&
   frame.identity.registryProgramId == frame.coreAdmission.marketRegistryProgram &&
   frame.coreAdmission.marketReleaseSetId == frame.identity.executionReleaseSetId &&
@@ -472,8 +482,8 @@ def redemptionCandidate
   if !admissionMatches state frame.claimsAdmission .claims ||
       !admissionMatches state frame.custodyAdmission .custody then throw .wrongRelease
   if !frame.productRecordAuthenticated || !frame.product.valid ||
+      frame.product.productRecordId != state.identity.productRecordId ||
       frame.product.productId != state.identity.productId ||
-      frame.product.resultDomainId != state.identity.resultDomainId ||
       frame.quantity = 0 || frame.product.outcomeCount ≤ frame.outcome ||
       !frame.claims.toChildEffectObservation.complete then
     throw .childEffectRefusal
@@ -503,8 +513,8 @@ def terminalCertificateMatches
     (state : State) (product : Product) (productRecordAuthenticated : Bool)
     (certificate : SourceResolution.Certificate) : Bool :=
   productRecordAuthenticated && product.valid &&
+  product.productRecordId == state.identity.productRecordId &&
   product.productId == state.identity.productId &&
-  product.resultDomainId == state.identity.resultDomainId &&
   certificateValid certificate &&
   (certificate.kind == .resolutionSuccess || certificate.kind == .resolutionFailure) &&
   certificate.marketId == state.identity.marketId &&
