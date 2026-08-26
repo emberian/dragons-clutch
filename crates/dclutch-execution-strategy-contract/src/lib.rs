@@ -22,6 +22,8 @@ use dclutch_capability_program_contract::CapabilityProgramV1;
 use dclutch_core_contract::ContentId;
 use dclutch_release_set_contract::ArtifactReleaseIdV1;
 
+/// Canonical admitted-AOT transcript and read-only CPI frame.
+pub mod admitted_v3;
 /// Canonical domain-separated transcripts for V3 Shadow comparison.
 pub mod shadow_digest_v3;
 /// Fixed family-neutral transport for stateless Shadow-AOT comparison.
