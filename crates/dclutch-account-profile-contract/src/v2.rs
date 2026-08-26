@@ -48,6 +48,9 @@ pub const TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE: u16 = 8;
 /// Trusted-program successor admitting only non-owning aliases of an earlier
 /// adapter-authenticated variable-data representative.
 pub const ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE: u16 = 9;
+/// Variable-alias successor deriving one protected support width by counting
+/// nonzero `u64` rows in an authenticated immutable descriptor tail.
+pub const NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE: u16 = 10;
 /// Exact V2 header width.
 pub const HEADER_BYTES: usize = 32;
 /// Exact profile-8 header width including the trusted role-identity declaration.
@@ -92,6 +95,7 @@ const OP_PROJECT_DATA_U64_SELECTED_AFFINE: u8 = 14;
 const OP_PROJECT_DATA_IDENTITY_SELECTED_AFFINE: u8 = 15;
 const OP_PROJECT_DATA_U16: u8 = 16;
 const OP_PROJECT_DATA_U8: u8 = 17;
+const OP_PROJECT_NONZERO_U64_TAIL_COUNT: u8 = 18;
 
 /// Encode one fixed-account `u8` data projection into a common `u64` scalar.
 ///
@@ -212,6 +216,8 @@ pub enum Error {
     InvalidLifecyclePrestate,
     /// A variable-width prestate was malformed, unauthenticated, or used outside profile 7.
     InvalidVariableDataPrestate,
+    /// An authenticated `u64` tail had no nonzero row.
+    EmptyNonzeroTail,
 }
 
 /// Result alias for runtime-tail profiles.
@@ -345,6 +351,32 @@ pub struct TailCountProjectionV2 {
     data_offset: u32,
 }
 
+/// One fixed authenticated descriptor tail whose nonzero `u64` rows derive a
+/// common support-width scalar.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NonzeroU64TailCountProjectionV2 {
+    account: u16,
+    destination: u16,
+    tail_offset: u32,
+}
+
+impl NonzeroU64TailCountProjectionV2 {
+    /// Fixed adapter-authenticated descriptor account.
+    pub const fn account(self) -> u16 {
+        self.account
+    }
+
+    /// Common scalar receiving the positive nonzero-row count.
+    pub const fn destination(self) -> u16 {
+        self.destination
+    }
+
+    /// Exact byte offset at which the `tail_count` `u64` rows begin.
+    pub const fn tail_offset(self) -> u32 {
+        self.tail_offset
+    }
+}
+
 impl TailCountProjectionV2 {
     /// Fixed-prefix account containing the independently authenticated Product body.
     pub const fn account(self) -> u16 {
@@ -445,6 +477,7 @@ impl<'a> AccountProfileV2<'a> {
                     | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE
                     | TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
                     | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
+                    | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
             )
         {
             return Err(Error::UnsupportedProfile);
@@ -456,6 +489,7 @@ impl<'a> AccountProfileV2<'a> {
                 | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE
                 | TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
                 | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
+                | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
         ) && read_u32(bytes, 28)? != 0
         {
             return Err(Error::NonCanonicalReserved);
@@ -629,6 +663,7 @@ impl<'a> AccountProfileV2<'a> {
             self.artifact_profile,
             TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
                 | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
+                | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
         ) {
             TRUSTED_EXECUTING_PROGRAM_HEADER_BYTES
         } else {
@@ -707,6 +742,30 @@ impl<'a> AccountProfileV2<'a> {
                     account: operation.account,
                     register: operation.register,
                     data_offset: operation.data_offset,
+                });
+            }
+            index = index.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        Ok(found)
+    }
+
+    /// Return the sole authenticated nonzero-`u64` tail projection selected
+    /// by profile 10, if present.
+    pub fn nonzero_u64_tail_count_projection(
+        self,
+    ) -> Result<Option<NonzeroU64TailCountProjectionV2>> {
+        let mut found = None;
+        let mut index = 0_u16;
+        while index < self.fixed_operations {
+            let operation = self.operation(false, index)?;
+            if operation.opcode == OP_PROJECT_NONZERO_U64_TAIL_COUNT {
+                if found.is_some() {
+                    return Err(Error::DuplicateProjection);
+                }
+                found = Some(NonzeroU64TailCountProjectionV2 {
+                    account: operation.account,
+                    destination: operation.register,
+                    tail_offset: operation.data_offset,
                 });
             }
             index = index.checked_add(1).ok_or(Error::InvalidLength)?;
@@ -805,6 +864,9 @@ impl<'a> AccountProfileV2<'a> {
             {
                 Ok(())
             }
+            NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE if adapter_authenticated_variable_data => {
+                Ok(())
+            }
             LIFECYCLE_PRESTATE_ARTIFACT_PROFILE => Err(Error::InvalidLifecyclePrestate),
             ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE => {
                 Err(Error::InvalidVariableDataPrestate)
@@ -812,6 +874,7 @@ impl<'a> AccountProfileV2<'a> {
             ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE => {
                 Err(Error::InvalidVariableDataPrestate)
             }
+            NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE => Err(Error::InvalidVariableDataPrestate),
             _ if !lifecycle_bound
                 && !adapter_authenticated_variable_data
                 && !adapter_authenticated_variable_data_alias =>
@@ -868,6 +931,11 @@ impl<'a> AccountProfileV2<'a> {
             self.validate_lifecycle_operation(operation)?;
             self.require_unique_projection(true, item, operation)?;
             item = item.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        if self.artifact_profile == NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
+            && self.nonzero_u64_tail_count_projection()?.is_none()
+        {
+            return Err(Error::NonCanonicalOperation);
         }
         Ok(())
     }
@@ -939,7 +1007,9 @@ impl<'a> AccountProfileV2<'a> {
             || self.item_identity_stride != 0
             || self.has_affine_data_length()?;
         let projection = self.tail_count_projection()?;
-        if affine && projection.is_none() {
+        if (affine || self.artifact_profile == NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE)
+            && projection.is_none()
+        {
             Err(Error::NonCanonicalOperation)
         } else {
             Ok(())
@@ -1007,6 +1077,7 @@ fn decode_trusted_environment(bytes: &[u8], artifact_profile: u16) -> Result<Tru
             | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE
             | TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
             | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
+            | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
     ) {
         return Ok(TrustedEnvironmentV2::None);
     }
@@ -1030,6 +1101,7 @@ fn decode_trusted_identity_environment(
         artifact_profile,
         TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
             | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
+            | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
     ) {
         return Ok(TrustedIdentityEnvironmentV2::None);
     }
@@ -1279,6 +1351,12 @@ fn inject_indices(
     tail_count: u32,
     scalars: &mut [u64],
 ) -> Result<()> {
+    // Fixed-geometry profiles may still bind the Product-owned runtime count
+    // without declaring any per-item register bank. There is no item-index
+    // destination to seed in that shape.
+    if profile.item_scalar_stride == 0 {
+        return Ok(());
+    }
     let mut item = 0_u32;
     while item < tail_count {
         let offset =
@@ -1377,9 +1455,8 @@ impl Operation {
         if self.account >= account_bound {
             return Err(Error::InvalidCoordinate);
         }
-        if profile.rule(self.account_item, self.account)?.prestate
-            == AccountPrestateV2::AdapterAuthenticatedVariableDataAlias
-        {
+        let account_rule = profile.rule(self.account_item, self.account)?;
+        if account_rule.prestate == AccountPrestateV2::AdapterAuthenticatedVariableDataAlias {
             // Route aliases exist only so Effect may select the same already
             // authenticated physical record in a child frame. AccountProfile
             // cannot project or require through a second logical authority.
@@ -1440,6 +1517,7 @@ impl Operation {
                             | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE
                             | TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
                             | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
+                            | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
                     )
                 {
                     return Err(Error::NonCanonicalOperation);
@@ -1489,6 +1567,7 @@ impl Operation {
                         | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE
                         | TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
                         | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
+                        | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
                 ) || item_body
                     || self.account_item
                     || self.register_item
@@ -1529,6 +1608,7 @@ impl Operation {
                         | LIFECYCLE_PRESTATE_ARTIFACT_PROFILE
                         | TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
                         | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
+                        | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
                 ) || item_body
                     || self.account_item
                     || self.register_item
@@ -1565,6 +1645,18 @@ impl Operation {
                     return Err(Error::NonCanonicalOperation);
                 }
             }
+            OP_PROJECT_NONZERO_U64_TAIL_COUNT => {
+                if profile.artifact_profile != NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
+                    || item_body
+                    || self.account_item
+                    || self.register_item
+                    || self.data_stride != 8
+                    || self.data_offset != account_rule.data_length
+                    || account_rule.prestate != AccountPrestateV2::AdapterAuthenticatedVariableData
+                {
+                    return Err(Error::NonCanonicalOperation);
+                }
+            }
             _ => return Err(Error::UnknownOperation),
         }
         if item_body
@@ -1595,6 +1687,7 @@ impl Operation {
                 | OP_PROJECT_DATA_U16
                 | OP_PROJECT_DATA_U8
                 | OP_PROJECT_TAIL_COUNT_U32
+                | OP_PROJECT_NONZERO_U64_TAIL_COUNT
         )
     }
 
@@ -1729,6 +1822,42 @@ impl Operation {
                     .and_then(|bytes| bytes.first().copied())
                     .map_or(0, u64::from);
                 write_scalar(scalars, scalar()?, value)
+            }
+            OP_PROJECT_NONZERO_U64_TAIL_COUNT => {
+                let expected = u64::from(tail_count)
+                    .checked_mul(8)
+                    .and_then(|tail| u64::from(self.data_offset).checked_add(tail))
+                    .and_then(|width| usize::try_from(width).ok())
+                    .ok_or(Error::DataLengthMismatch)?;
+                if account.data().len() != expected {
+                    return Err(Error::DataLengthMismatch);
+                }
+                let mut count = 0_u64;
+                let mut row = 0_u32;
+                while row < tail_count {
+                    let offset = u64::from(row)
+                        .checked_mul(8)
+                        .and_then(|tail| u64::from(self.data_offset).checked_add(tail))
+                        .and_then(|value| usize::try_from(value).ok())
+                        .ok_or(Error::DataOutOfBounds)?;
+                    let end = offset.checked_add(8).ok_or(Error::DataOutOfBounds)?;
+                    let value = u64::from_le_bytes(
+                        account
+                            .data()
+                            .get(offset..end)
+                            .ok_or(Error::DataOutOfBounds)?
+                            .try_into()
+                            .map_err(|_| Error::DataOutOfBounds)?,
+                    );
+                    if value != 0 {
+                        count = count.checked_add(1).ok_or(Error::InvalidLength)?;
+                    }
+                    row = row.checked_add(1).ok_or(Error::InvalidLength)?;
+                }
+                if count == 0 {
+                    return Err(Error::EmptyNonzeroTail);
+                }
+                write_scalar(scalars, scalar()?, count)
             }
             OP_PROJECT_DATA_IDENTITY => {
                 let value = projected_data_field(account.data(), rule, self.data_offset, 32)?
@@ -1925,12 +2054,18 @@ fn decode_rule(bytes: &[u8], offset: usize, artifact_profile: u16) -> Result<Acc
         ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE
             | TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
             | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
+            | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
     ) {
         match prestate_tag {
             0 => AccountPrestateV2::Exact,
             1 => AccountPrestateV2::LifecycleBound,
             2 => AccountPrestateV2::AdapterAuthenticatedVariableData,
-            3 if artifact_profile == ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE => {
+            3 if matches!(
+                artifact_profile,
+                ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
+                    | NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
+            ) =>
+            {
                 AccountPrestateV2::AdapterAuthenticatedVariableDataAlias
             }
             _ => return Err(Error::InvalidVariableDataPrestate),
