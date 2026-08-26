@@ -28,11 +28,14 @@ use solana_program::{hash::hash, pubkey::Pubkey};
 
 use crate::dispatch::TradingFamilyContextV1;
 
-/// Prepaid Custody activation and quiescent closure plans.
+/// Legacy V2 Custody lifecycle, retained only for host migration tests.
+#[cfg(not(target_os = "solana"))]
 pub mod lifecycle;
-/// Chain-derived unsigned construction for every Dealer action.
+/// Legacy V2 unsigned construction, retained only for host migration tests.
+#[cfg(not(target_os = "solana"))]
 pub mod operator;
-/// Exact Claims/Custody child packets and receipt postconditions.
+/// Legacy V2 child packets, retained only for host migration tests.
+#[cfg(not(target_os = "solana"))]
 pub mod physical;
 /// Atomic scenario-solvent Claims/Custody portfolio-fill composition.
 pub mod v3_composer;
