@@ -8,6 +8,10 @@ rust-version.workspace = true
 [lib]
 path = "src/lib.rs"
 
+[features]
+default = ["transaction-planning"]
+transaction-planning = ["dep:dclutch-versioned-message-operator", "dep:solana-hash"]
+
 [dependencies]
 dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
 dclutch-pyth-svm = { path = "../dclutch-pyth-svm" }
@@ -17,8 +21,8 @@ dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
 dclutch-resolution-codec = { path = "../dclutch-resolution-codec" }
 dclutch-resolution-core-v3-operator = { path = "../dclutch-resolution-core-v3-operator" }
 dclutch-source-contract = { path = "../dclutch-source-contract" }
-dclutch-versioned-message-operator = { path = "../dclutch-versioned-message-operator" }
-solana-hash = "=4.6.0"
+dclutch-versioned-message-operator = { path = "../dclutch-versioned-message-operator", optional = true }
+solana-hash = { version = "=4.6.0", optional = true }
 solana-program = { version = "=3.0.0", default-features = false }
 solana-sdk-ids = "=3.1.0"
 

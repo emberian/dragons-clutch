@@ -9,16 +9,20 @@ use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1
 use dclutch_registry_contract::ACTIVATION_PDA_DOMAIN_V1;
 use dclutch_release_set_contract::PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1;
 use dclutch_resolution_codec::{
-    PROVIDER_RECLAIM_REQUEST_BYTES_V3, PROVIDER_SUBMIT_REQUEST_BYTES_V3,
     PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
     PYTH_RELEASE_RECORD_SCHEMA_ID_V1, ProviderReclaimRequestV3, ProviderSubmitRequestV3,
     ProviderUpdateLifecycleV3, ProviderUpdateStatusV3,
+};
+#[cfg(feature = "transaction-planning")]
+use dclutch_resolution_codec::{
+    PROVIDER_RECLAIM_REQUEST_BYTES_V3, PROVIDER_SUBMIT_REQUEST_BYTES_V3,
 };
 use dclutch_source_contract::{
     PROVIDER_RELEASE_SCHEMA_ID_V1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2, SOURCE_SPEC_SCHEMA_ID_V1,
     SourceMaterialV2, SourceResolutionPhaseV1, SourceResolutionStateV2, SourceSpecV1,
     WINDOW_SPEC_SCHEMA_ID_V1, WindowSpecV1,
 };
+#[cfg(feature = "transaction-planning")]
 use solana_hash::Hash;
 use solana_program::{
     hash::hash,
@@ -28,6 +32,7 @@ use solana_program::{
 use solana_sdk_ids::{system_program, sysvar};
 
 pub use dclutch_resolution_core_v3_operator::{Finality, Observation, ObservedAccount};
+#[cfg(feature = "transaction-planning")]
 use dclutch_versioned_message_operator::{
     VersionedMessagePlanV0, compile_v0_message_with_optional_tables,
 };
@@ -127,6 +132,7 @@ pub struct ProviderTransportReportV3 {
 }
 
 /// Unsigned packet-safe provider transaction and its exact signing boundary.
+#[cfg(feature = "transaction-planning")]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProviderTransportTransactionPlanV3 {
     /// Exact unsigned v0 message and packet geometry.
@@ -136,6 +142,7 @@ pub struct ProviderTransportTransactionPlanV3 {
 }
 
 /// Refusal from a mutated provider report or unsafe transaction routing.
+#[cfg(feature = "transaction-planning")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProviderTransportTransactionErrorV3 {
     /// The instruction no longer had the frozen discriminator, account order,
@@ -476,6 +483,7 @@ pub fn build_provider_reclaim_v3(
 /// A lookup table is optional at the API boundary, but the 38-account route
 /// will normally refuse the 1,232-byte packet limit until a finalized active
 /// table contributes addresses.
+#[cfg(feature = "transaction-planning")]
 pub fn compile_provider_submit_v0(
     report: &ProviderTransportReportV3,
     recent_blockhash: Hash,
@@ -493,6 +501,7 @@ pub fn compile_provider_submit_v0(
 ///
 /// The permissionless resolver is both fee payer and sole transaction signer.
 /// The Resolution update-authority PDA signs only the Receiver CPI onchain.
+#[cfg(feature = "transaction-planning")]
 pub fn compile_provider_reclaim_v0(
     report: &ProviderTransportReportV3,
     recent_blockhash: Hash,
@@ -503,6 +512,7 @@ pub fn compile_provider_reclaim_v0(
     compile_provider_v0(report, recent_blockhash, lookup_tables, required_signers)
 }
 
+#[cfg(feature = "transaction-planning")]
 fn compile_provider_v0(
     report: &ProviderTransportReportV3,
     recent_blockhash: Hash,
@@ -529,6 +539,7 @@ fn compile_provider_v0(
     })
 }
 
+#[cfg(feature = "transaction-planning")]
 fn validate_submit_report(
     report: &ProviderTransportReportV3,
 ) -> Result<ProviderSubmitRequestV3, ProviderTransportTransactionErrorV3> {
@@ -568,6 +579,7 @@ fn validate_submit_report(
     Ok(request)
 }
 
+#[cfg(feature = "transaction-planning")]
 fn validate_reclaim_report(
     report: &ProviderTransportReportV3,
 ) -> Result<ProviderReclaimRequestV3, ProviderTransportTransactionErrorV3> {
@@ -592,6 +604,7 @@ fn validate_reclaim_report(
     Ok(request)
 }
 
+#[cfg(feature = "transaction-planning")]
 fn account_key(
     accounts: &[AccountMeta],
     index: usize,
@@ -602,6 +615,7 @@ fn account_key(
         .ok_or(ProviderTransportTransactionErrorV3::Frame)
 }
 
+#[cfg(feature = "transaction-planning")]
 fn exact_submit_privileges(accounts: &[AccountMeta]) -> bool {
     accounts.iter().enumerate().all(|(index, account)| {
         let expected_signer = matches!(index, 0 | 1);
@@ -610,6 +624,7 @@ fn exact_submit_privileges(accounts: &[AccountMeta]) -> bool {
     })
 }
 
+#[cfg(feature = "transaction-planning")]
 fn exact_reclaim_privileges(accounts: &[AccountMeta]) -> bool {
     accounts.iter().enumerate().all(|(index, account)| {
         let expected_signer = index == 0;
