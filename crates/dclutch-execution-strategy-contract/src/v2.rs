@@ -1,8 +1,10 @@
-//! Acyclic V3 execution-strategy selection and authenticated bank transport.
+//! Acyclic execution-strategy selection and authenticated bank transport.
 
 use core::convert::{TryFrom, TryInto};
 
-use dclutch_capability_program_contract::{v3 as capability_v3, v3::CapabilityProgramV3};
+use dclutch_capability_program_contract::{
+    v3 as capability_v3, v3::CapabilityProgramV3, v4::CapabilityProgramV4,
+};
 use dclutch_core_contract::ContentId;
 use dclutch_release_set_contract::ArtifactReleaseIdV1;
 
@@ -317,6 +319,24 @@ impl ExecutionStrategyProgramV2 {
         }
     }
 
+    /// Require CapabilityProgramV4 to select this Strategy and its exact
+    /// underlying Transition schema/content pair.
+    pub fn validate_descriptor_selection_v4(
+        self,
+        strategy_program: ContentId,
+        descriptor: CapabilityProgramV4,
+    ) -> Result<()> {
+        if descriptor.strategy().schema() == schema_id(EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2)?
+            && descriptor.strategy().program() == strategy_program
+            && descriptor.transition().schema() == self.transition_schema
+            && descriptor.transition().program() == self.transition_program
+        {
+            Ok(())
+        } else {
+            Err(Error::DescriptorMismatch)
+        }
+    }
+
     /// Selected interpreter, shadow comparator, or admitted-AOT disposition.
     pub const fn disposition(self) -> StrategyDispositionV2 {
         self.disposition
@@ -523,6 +543,38 @@ impl ExecutionStrategyCertificateV2 {
         }
     }
 
+    /// Join the Certificate tuple to one schema-bound V4 descriptor and the
+    /// independently authenticated interpreter artifact tuple.
+    #[allow(clippy::too_many_arguments)]
+    pub fn validate_v4(
+        self,
+        certificate_program: ContentId,
+        strategy_program: ContentId,
+        strategy: ExecutionStrategyProgramV2,
+        descriptor: CapabilityProgramV4,
+        artifacts: AuthenticatedInterpreterArtifactsV2,
+    ) -> Result<()> {
+        strategy.validate_descriptor_selection_v4(strategy_program, descriptor)?;
+        if strategy.certificate_program != Some(certificate_program)
+            || self.account_profile_program != descriptor.account_profile().program()
+            || self.request_profile_schema != descriptor.request_profile().schema()
+            || self.request_profile_program != descriptor.request_profile().program()
+            || self.transition_schema != descriptor.transition().schema()
+            || self.transition_program != descriptor.transition().program()
+            || self.effect_program != descriptor.effect().program()
+            || self.account_profile_program != artifacts.account_profile_program
+            || self.request_profile_schema != artifacts.request_profile_schema
+            || self.request_profile_program != artifacts.request_profile_program
+            || self.transition_schema != artifacts.transition_schema
+            || self.transition_program != artifacts.transition_program
+            || self.effect_program != artifacts.effect_program
+        {
+            Err(Error::CertificateMismatch)
+        } else {
+            Ok(())
+        }
+    }
+
     /// Require the separately Registry-authenticated ArtifactRelease identity.
     pub fn validate_artifact(self, authenticated: ArtifactReleaseIdV1) -> Result<()> {
         if self.artifact_release == authenticated {
@@ -654,6 +706,44 @@ pub fn validate_admitted_aot_v2(
         return Err(Error::AdmissionMismatch);
     }
     certificate.validate_v3(
+        certificate_program,
+        strategy_program,
+        strategy,
+        descriptor,
+        artifacts,
+    )?;
+    certificate.validate_artifact(authenticated_artifact)?;
+    Ok(AdmittedAotAuthorizationV2 { private: () })
+}
+
+/// Require the complete admitted-AOT chain for a schema-bound V4 descriptor.
+///
+/// The V4 descriptor independently binds every artifact schema/content pair;
+/// this join preserves the existing certificate wire while refusing any
+/// Strategy or underlying Transition pair that differs from those descriptor
+/// edges.
+#[allow(clippy::too_many_arguments)]
+pub fn validate_admitted_aot_v4(
+    strategy_program: ContentId,
+    strategy: ExecutionStrategyProgramV2,
+    descriptor: CapabilityProgramV4,
+    certificate_program: ContentId,
+    certificate: ExecutionStrategyCertificateV2,
+    artifacts: AuthenticatedInterpreterArtifactsV2,
+    authenticated_artifact: ArtifactReleaseIdV1,
+    authenticated_admission: Option<(ContentId, ExecutionStrategyAdmissionV2)>,
+) -> Result<AdmittedAotAuthorizationV2> {
+    if strategy.disposition != StrategyDispositionV2::AdmittedAot {
+        return Err(Error::InvalidDisposition);
+    }
+    let (admission_program, admission) = authenticated_admission.ok_or(Error::MissingAdmission)?;
+    if strategy.certificate_program != Some(certificate_program)
+        || strategy.admission_program != Some(admission_program)
+        || admission.certificate_program != certificate_program
+    {
+        return Err(Error::AdmissionMismatch);
+    }
+    certificate.validate_v4(
         certificate_program,
         strategy_program,
         strategy,
@@ -1731,6 +1821,7 @@ const _: () = assert!(capability_v3::CAPABILITY_PROGRAM_V3_BYTES == 408);
 mod tests {
     extern crate std;
 
+    use dclutch_capability_program_contract::v4::{ArtifactReferenceV4, CapabilityArtifactsV4};
     use std::vec;
 
     use super::*;
@@ -1819,6 +1910,30 @@ mod tests {
             transition_program: id(2),
             effect_program: id(13),
         }
+    }
+
+    fn descriptor_v4(strategy_program: ContentId) -> CapabilityProgramV4 {
+        CapabilityProgramV4::new(
+            id(20),
+            id(21),
+            id(22),
+            id(23),
+            id(24),
+            id(25),
+            CapabilityArtifactsV4 {
+                account_profile: ArtifactReferenceV4::new(id(30), id(10)),
+                request_profile: ArtifactReferenceV4::new(id(11), id(12)),
+                lifecycle: ArtifactReferenceV4::new(id(31), id(24)),
+                strategy: ArtifactReferenceV4::new(
+                    schema_id(EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2).expect("strategy schema"),
+                    strategy_program,
+                ),
+                transition: ArtifactReferenceV4::new(id(1), id(2)),
+                effect: ArtifactReferenceV4::new(id(32), id(13)),
+            },
+            128,
+        )
+        .expect("V4 descriptor")
     }
 
     #[test]
@@ -1994,6 +2109,66 @@ mod tests {
                 Some((id(4), admission)),
             ),
             Err(Error::CertificateMismatch)
+        );
+    }
+
+    #[test]
+    fn v4_descriptor_joins_strategy_transition_and_admitted_certificate() {
+        let strategy_program = id(30);
+        let admitted = strategy(StrategyDispositionV2::AdmittedAot);
+        let descriptor = descriptor_v4(strategy_program);
+        assert_eq!(
+            admitted.validate_descriptor_selection_v4(strategy_program, descriptor),
+            Ok(())
+        );
+        assert_eq!(
+            certificate().validate_v4(id(3), strategy_program, admitted, descriptor, artifacts()),
+            Ok(())
+        );
+        assert!(
+            validate_admitted_aot_v4(
+                strategy_program,
+                admitted,
+                descriptor,
+                id(3),
+                certificate(),
+                artifacts(),
+                artifact(14),
+                Some((id(4), ExecutionStrategyAdmissionV2::new(id(3)))),
+            )
+            .is_ok()
+        );
+
+        let hostile = CapabilityProgramV4::new(
+            descriptor.kind(),
+            descriptor.config_schema(),
+            descriptor.request_schema(),
+            descriptor.root_schema(),
+            descriptor.derivation_policy(),
+            descriptor.capacity_profile(),
+            CapabilityArtifactsV4 {
+                transition: ArtifactReferenceV4::new(id(1), id(99)),
+                ..descriptor.artifacts()
+            },
+            descriptor.root_state_bytes(),
+        )
+        .expect("hostile descriptor");
+        assert_eq!(
+            admitted.validate_descriptor_selection_v4(strategy_program, hostile),
+            Err(Error::DescriptorMismatch)
+        );
+        assert_eq!(
+            validate_admitted_aot_v4(
+                strategy_program,
+                admitted,
+                hostile,
+                id(3),
+                certificate(),
+                artifacts(),
+                artifact(14),
+                Some((id(4), ExecutionStrategyAdmissionV2::new(id(3)))),
+            ),
+            Err(Error::DescriptorMismatch)
         );
     }
 
