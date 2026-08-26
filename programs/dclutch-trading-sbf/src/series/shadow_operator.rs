@@ -394,9 +394,9 @@ mod tests {
                 .iter()
                 .all(|b| *b == 0)
         );
-        assert_eq!(SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3, 36);
-        assert_eq!(SERIES_SHADOW_ACCELERATOR_PROGRAM_ACCOUNT_V3, 44);
-        assert_eq!(SERIES_SHADOW_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3, 45);
+        assert_eq!(SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3, 38);
+        assert_eq!(SERIES_SHADOW_ACCELERATOR_PROGRAM_ACCOUNT_V3, 46);
+        assert_eq!(SERIES_SHADOW_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3, 47);
         assert_eq!(
             request.digests.family_request,
             family_request_digest_v3(&family).expect("family digest")

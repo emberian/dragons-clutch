@@ -16,7 +16,9 @@ use dclutch_capability_program_contract::{
 use dclutch_core_contract::ContentId;
 use dclutch_effect_kernel::{
     v2::FixedRole,
-    v3::{ProgramV3 as EffectProgramV3, ResolvedInvocationV3, RouteKindV3},
+    v3::{
+        ProgramV3 as EffectProgramV3, ResolvedInvocationV3, RouteKindV3, RouteReceiptDependencyV3,
+    },
 };
 use dclutch_execution_strategy_contract::v2::{
     EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyProgramV2,
@@ -38,24 +40,141 @@ pub const SERIES_WITNESS_ITEM_BYTES_V3: usize = 32;
 /// Exact IR-owned Core request width for Consume.
 pub const SERIES_CONSUME_CORE_REQUEST_BYTES_V3: usize =
     dclutch_market_core_codec::SERIES_CORE_REQUEST_BYTES_V1;
-/// Exact IR-owned Custody request width for every escrow edge.
-pub const SERIES_CUSTODY_REQUEST_BYTES_V3: usize =
+/// Exact projected pre-founding Custody request width.
+pub const SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3: usize =
+    dclutch_custody_contract::PROJECTED_CUSTODY_REQUEST_BYTES_V1;
+/// Exact Claims Founding V5 request width.
+pub const SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3: usize =
+    dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_REQUEST_BYTES_V5;
+/// Exact projected Lock-and-close-source receipt appended to Core Found.
+pub const SERIES_CONSUME_LOCK_RECEIPT_BYTES_V3: u16 = 320;
+/// Exact projected realization receipt appended to Claims Founding V5.
+pub const SERIES_CONSUME_REALIZE_RECEIPT_BYTES_V3: u16 = 320;
+/// Exact Claims Founding V5 receipt appended to final Core Open.
+pub const SERIES_CONSUME_CLAIMS_RECEIPT_BYTES_V3: u16 = 1008;
+const _: () = assert!(dclutch_custody_contract::PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1 == 320);
+const _: () = assert!(dclutch_custody_contract::PROJECTED_CUSTODY_RECEIPT_BYTES_V1 == 320);
+const _: () = assert!(dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_RECEIPT_BYTES_V5 == 1008);
+pub(crate) const SERIES_NO_RECEIPT_DEPENDENCIES_V3: [RouteReceiptDependencyV3; 0] = [];
+pub(crate) const SERIES_CORE_FOUND_RECEIPT_DEPENDENCIES_V3: [RouteReceiptDependencyV3; 1] =
+    [RouteReceiptDependencyV3::new(
+        FixedRole::Custody,
+        0,
+        SERIES_CONSUME_LOCK_RECEIPT_BYTES_V3,
+    )];
+pub(crate) const SERIES_CLAIMS_RECEIPT_DEPENDENCIES_V3: [RouteReceiptDependencyV3; 2] = [
+    RouteReceiptDependencyV3::new(FixedRole::Custody, 0, SERIES_CONSUME_LOCK_RECEIPT_BYTES_V3),
+    RouteReceiptDependencyV3::new(
+        FixedRole::Custody,
+        2,
+        SERIES_CONSUME_REALIZE_RECEIPT_BYTES_V3,
+    ),
+];
+pub(crate) const SERIES_CORE_OPEN_RECEIPT_DEPENDENCIES_V3: [RouteReceiptDependencyV3; 1] =
+    [RouteReceiptDependencyV3::new(
+        FixedRole::Claims,
+        3,
+        SERIES_CONSUME_CLAIMS_RECEIPT_BYTES_V3,
+    )];
+/// Lock projected Hoard, Core Found, realize Hoard, Claims Founding, Core Open.
+pub const SERIES_CONSUME_ROUTE_COUNT_V3: usize = 5;
+/// Request-bank offset of projected SeriesEscrow-to-Hoard Lock.
+pub const SERIES_CONSUME_LOCK_OFFSET_V3: usize = 0;
+/// Request-bank offset of the first Core call, which creates Founding state.
+pub const SERIES_CONSUME_CORE_FOUND_OFFSET_V3: usize =
+    SERIES_CONSUME_LOCK_OFFSET_V3 + SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3;
+/// Request-bank offset of projected-Hoard realization after Core Found.
+pub const SERIES_CONSUME_REALIZE_OFFSET_V3: usize =
+    SERIES_CONSUME_CORE_FOUND_OFFSET_V3 + SERIES_CONSUME_CORE_REQUEST_BYTES_V3;
+/// Request-bank offset of Claims Founding V5 after Custody realization.
+pub const SERIES_CONSUME_CLAIMS_OFFSET_V3: usize =
+    SERIES_CONSUME_REALIZE_OFFSET_V3 + SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3;
+/// Request-bank offset of the second Core call, which atomically opens Market.
+pub const SERIES_CONSUME_CORE_OPEN_OFFSET_V3: usize =
+    SERIES_CONSUME_CLAIMS_OFFSET_V3 + SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3;
+/// Exact flat IR request bank before borrowed proof and typed receipt dependencies.
+pub const SERIES_CONSUME_IR_REQUEST_BYTES_V3: usize = 2 * SERIES_CONSUME_CORE_REQUEST_BYTES_V3
+    + 2 * SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3
+    + SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3;
+/// Exact Projected Custody Lock child frame.
+pub const SERIES_CONSUME_LOCK_ACCOUNT_COUNT_V3: u16 = 14;
+/// Exact Core Found accounts other than the 1..16 ordered FundingStates.
+///
+/// This is the fixed 42-account Found/Series prefix plus the exact 15-account
+/// permit/Custody/Claims evidence suffix. The FundingState slice is inserted
+/// between them by the Core frame and is the only affine account dimension.
+pub const SERIES_CONSUME_CORE_FOUND_ACCOUNT_BASE_V3: u16 = 57;
+/// Exact Projected Custody Realize child frame.
+pub const SERIES_CONSUME_REALIZE_ACCOUNT_COUNT_V3: u16 = 12;
+/// Exact Claims Founding V5 child frame.
+pub const SERIES_CONSUME_CLAIMS_ACCOUNT_COUNT_V3: u16 = 32;
+/// Exact final Core Open frame; funding was consumed by the earlier Found route.
+pub const SERIES_CONSUME_CORE_OPEN_ACCOUNT_COUNT_V3: u16 = 37;
+/// Mathematical protocol bound on one occurrence's segregated funding list.
+pub const SERIES_CONSUME_MAXIMUM_FUNDING_STATES_V3: u16 = 16;
+/// Exact normal Custody request width for the prepared SeriesEscrow lifecycle.
+pub const SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3: usize =
     dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1;
-/// Transfer-to-Hoard, Core Found, and the two terminal cleanup routes.
-pub const SERIES_CONSUME_ROUTE_COUNT_V3: usize = 4;
-/// Request-bank offset of the pre-Found SeriesEscrow-to-Hoard transfer.
-pub const SERIES_CONSUME_TRANSFER_OFFSET_V3: usize = 0;
-/// Request-bank offset of the Core Found request.
-pub const SERIES_CONSUME_CORE_OFFSET_V3: usize = SERIES_CUSTODY_REQUEST_BYTES_V3;
-/// Request-bank offset of the post-Found escrow-Vault close.
-pub const SERIES_CONSUME_CLOSE_VAULT_OFFSET_V3: usize =
-    SERIES_CONSUME_CORE_OFFSET_V3 + SERIES_CONSUME_CORE_REQUEST_BYTES_V3;
-/// Request-bank offset of the terminal replay close.
-pub const SERIES_CONSUME_CLOSE_REPLAY_OFFSET_V3: usize =
-    SERIES_CONSUME_CLOSE_VAULT_OFFSET_V3 + SERIES_CUSTODY_REQUEST_BYTES_V3;
-/// Exact flat IR request bank for one Consume before its borrowed proof suffix.
-pub const SERIES_CONSUME_IR_REQUEST_BYTES_V3: usize =
-    SERIES_CONSUME_CORE_REQUEST_BYTES_V3 + 3 * SERIES_CUSTODY_REQUEST_BYTES_V3;
+/// Projected Initialize/Open plus normal replay/Open/Lock.
+pub const SERIES_PREPARE_ROUTE_COUNT_V3: usize = 5;
+/// Projected Initialize request-bank offset.
+pub const SERIES_PREPARE_PROJECTED_INITIALIZE_OFFSET_V3: usize = 0;
+/// Projected OpenHoard request-bank offset.
+pub const SERIES_PREPARE_PROJECTED_OPEN_OFFSET_V3: usize =
+    SERIES_PREPARE_PROJECTED_INITIALIZE_OFFSET_V3 + SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3;
+/// Normal SeriesEscrow replay initialization request-bank offset.
+pub const SERIES_PREPARE_REPLAY_INITIALIZE_OFFSET_V3: usize =
+    SERIES_PREPARE_PROJECTED_OPEN_OFFSET_V3 + SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3;
+/// Normal SeriesEscrow Vault-open request-bank offset.
+pub const SERIES_PREPARE_ESCROW_OPEN_OFFSET_V3: usize =
+    SERIES_PREPARE_REPLAY_INITIALIZE_OFFSET_V3 + SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3;
+/// Normal founder-to-SeriesEscrow lock request-bank offset.
+pub const SERIES_PREPARE_ESCROW_LOCK_OFFSET_V3: usize =
+    SERIES_PREPARE_ESCROW_OPEN_OFFSET_V3 + SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3;
+/// Exact Prepare request-bank width.
+pub const SERIES_PREPARE_IR_REQUEST_BYTES_V3: usize =
+    2 * SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3 + 3 * SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3;
+/// Exact Projected Initialize child frame, including internal ProjectFound.
+pub const SERIES_PREPARE_PROJECTED_INITIALIZE_ACCOUNT_COUNT_V3: u16 = 42;
+/// Exact Projected OpenHoard child frame.
+pub const SERIES_PREPARE_PROJECTED_OPEN_ACCOUNT_COUNT_V3: u16 = 15;
+/// Exact normal Custody InitializeReplay child frame.
+pub const SERIES_PREPARE_REPLAY_INITIALIZE_ACCOUNT_COUNT_V3: u16 = 12;
+/// Exact normal Custody OpenVault child frame.
+pub const SERIES_PREPARE_ESCROW_OPEN_ACCOUNT_COUNT_V3: u16 = 16;
+/// Exact normal Custody Transfer child frame.
+pub const SERIES_PREPARE_ESCROW_LOCK_ACCOUNT_COUNT_V3: u16 = 14;
+/// Refund/escrow cleanup, empty projected-Hoard abort, and permit refund.
+pub const SERIES_EXPIRE_ROUTE_COUNT_V3: usize = 5;
+/// Normal SeriesEscrow refund request-bank offset.
+pub const SERIES_EXPIRE_REFUND_OFFSET_V3: usize = 0;
+/// Normal SeriesEscrow Vault-close request-bank offset.
+pub const SERIES_EXPIRE_CLOSE_VAULT_OFFSET_V3: usize = SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3;
+/// Normal SeriesEscrow replay-close request-bank offset.
+pub const SERIES_EXPIRE_CLOSE_REPLAY_OFFSET_V3: usize = 2 * SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3;
+/// Empty projected-Hoard abort request-bank offset.
+pub const SERIES_EXPIRE_PROJECTED_ABORT_OFFSET_V3: usize =
+    3 * SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3;
+/// Core permit-refund request-bank offset after every Custody cleanup.
+pub const SERIES_EXPIRE_PERMIT_OFFSET_V3: usize =
+    SERIES_EXPIRE_PROJECTED_ABORT_OFFSET_V3 + SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3;
+/// Exact Core permissionless permit-refund request width before proof.
+pub const SERIES_EXPIRE_PERMIT_REQUEST_BYTES_V3: usize =
+    dclutch_market_core_codec::SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1;
+/// Exact Expire request-bank width.
+pub const SERIES_EXPIRE_IR_REQUEST_BYTES_V3: usize = 3 * SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3
+    + SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3
+    + SERIES_EXPIRE_PERMIT_REQUEST_BYTES_V3;
+/// Exact normal Custody Refund/Transfer child frame.
+pub const SERIES_EXPIRE_REFUND_ACCOUNT_COUNT_V3: u16 = 14;
+/// Exact normal Custody CloseVault child frame.
+pub const SERIES_EXPIRE_CLOSE_VAULT_ACCOUNT_COUNT_V3: u16 = 14;
+/// Exact normal Custody CloseReplay child frame.
+pub const SERIES_EXPIRE_CLOSE_REPLAY_ACCOUNT_COUNT_V3: u16 = 10;
+/// Exact Projected AbortOpenAndClose child frame.
+pub const SERIES_EXPIRE_PROJECTED_ABORT_ACCOUNT_COUNT_V3: u16 = 11;
+/// Exact Core permissionless permit-refund child frame.
+pub const SERIES_EXPIRE_PERMIT_ACCOUNT_COUNT_V3: u16 = 25;
 /// Semantic kind label for recurring Series V3 capability programs.
 pub const SERIES_SUCCESSOR_KIND_PREIMAGE_V3: &[u8] = b"dclutch/kind/series-v3";
 /// Family request schema covers the fixed semantic header, not its proof witness.
@@ -152,24 +271,46 @@ pub struct SeriesArtifactBundleV3<'a> {
     pub effect: EffectProgramV3<'a>,
 }
 
-/// Exact two-slice Core instruction selected by an executed Consume route.
+/// Exact IR-owned Core base plus proof selected by an executed Consume route.
 ///
 /// The common outer owns concatenation into CPI instruction data. Keeping the
 /// typed 336-byte Core request and authenticated proof witness separate here
-/// prevents the Series adapter from inventing either portion.
+/// prevents the Series adapter from inventing either portion. The generic
+/// role executor appends the independently typed prior Custody receipt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SeriesConsumeInvocationV3<'a> {
     /// Exact IR-owned `SeriesCoreRequestV1` bytes.
     pub core_request: &'a [u8],
     /// Exact trailing occurrence-proof bytes borrowed from the family request.
     pub witness: &'a [u8],
-    /// SHA-256 of `core_request || witness`, which binds the executed child data.
+    /// SHA-256 of `core_request || witness` before the typed receipt dependency.
+    pub base_request_digest: [u8; 32],
+}
+
+/// Exact Core permissionless permit-refund base plus occurrence proof.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SeriesExpireInvocationV3<'a> {
+    /// Exact IR-owned `SeriesPermitExpiryRequestV1` bytes.
+    pub permit_request: &'a [u8],
+    /// Exact trailing occurrence-proof bytes borrowed from the family request.
+    pub witness: &'a [u8],
+    /// SHA-256 of `permit_request || witness`.
     pub child_request_digest: [u8; 32],
 }
 
-impl SeriesConsumeInvocationV3<'_> {
+impl SeriesExpireInvocationV3<'_> {
     /// Exact concatenated Core instruction width.
     pub fn child_request_len(self) -> Result<usize> {
+        self.permit_request
+            .len()
+            .checked_add(self.witness.len())
+            .ok_or(SeriesArtifactErrorV3::Geometry)
+    }
+}
+
+impl SeriesConsumeInvocationV3<'_> {
+    /// Exact Core request-plus-proof width before the typed prior receipt.
+    pub fn base_request_len(self) -> Result<usize> {
         self.core_request
             .len()
             .checked_add(self.witness.len())
@@ -285,8 +426,13 @@ pub fn validate_series_consume_invocation_v3<'a>(
         || invocation.kind != RouteKindV3::Once
         || invocation.item.is_some()
         || invocation.repeated_item_count != 0
-        || invocation.request_offset != SERIES_CONSUME_CORE_OFFSET_V3
+        || invocation.request_offset != SERIES_CONSUME_CORE_FOUND_OFFSET_V3
         || invocation.request_len != SERIES_CONSUME_CORE_REQUEST_BYTES_V3
+        || !resolved_dependencies_match(
+            bundle.effect,
+            invocation,
+            &SERIES_CORE_FOUND_RECEIPT_DEPENDENCIES_V3,
+        )
         || ir_request_bank.len() != SERIES_CONSUME_IR_REQUEST_BYTES_V3
         || family_request.get(..SERIES_ACTION_HEADER_BYTES_V3) != Some(bundle.slices.header)
     {
@@ -321,7 +467,62 @@ pub fn validate_series_consume_invocation_v3<'a>(
     Ok(SeriesConsumeInvocationV3 {
         core_request,
         witness,
-        child_request_digest: hashv(&[core_request, witness]).to_bytes(),
+        base_request_digest: hashv(&[core_request, witness]).to_bytes(),
+    })
+}
+
+/// Bind the terminal Expire Core route to one exact permit request and proof.
+pub fn validate_series_expire_invocation_v3<'a>(
+    bundle: SeriesArtifactBundleV3<'_>,
+    invocation: ResolvedInvocationV3,
+    ir_request_bank: &'a [u8],
+    family_request: &'a [u8],
+) -> Result<SeriesExpireInvocationV3<'a>> {
+    if bundle.request.action() != SeriesActionV3::Expire
+        || invocation.role != FixedRole::Core
+        || invocation.kind != RouteKindV3::Once
+        || invocation.item.is_some()
+        || invocation.repeated_item_count != 0
+        || invocation.request_offset != SERIES_EXPIRE_PERMIT_OFFSET_V3
+        || invocation.request_len != SERIES_EXPIRE_PERMIT_REQUEST_BYTES_V3
+        || invocation.receipt_dependency.is_some()
+        || ir_request_bank.len() != SERIES_EXPIRE_IR_REQUEST_BYTES_V3
+        || family_request.get(..SERIES_ACTION_HEADER_BYTES_V3) != Some(bundle.slices.header)
+    {
+        return Err(SeriesArtifactErrorV3::Effect);
+    }
+    let request_end = invocation
+        .request_offset
+        .checked_add(invocation.request_len)
+        .ok_or(SeriesArtifactErrorV3::Geometry)?;
+    let permit_request = ir_request_bank
+        .get(invocation.request_offset..request_end)
+        .ok_or(SeriesArtifactErrorV3::Effect)?;
+    dclutch_market_core_codec::SeriesPermitExpiryRequestV1::decode(permit_request)
+        .map_err(|_| SeriesArtifactErrorV3::Effect)?;
+    let borrowed = invocation
+        .borrowed_witness
+        .ok_or(SeriesArtifactErrorV3::Effect)?;
+    if borrowed.source_offset() != SERIES_ACTION_HEADER_BYTES_V3
+        || borrowed.len() != bundle.slices.witness.len()
+    {
+        return Err(SeriesArtifactErrorV3::Effect);
+    }
+    let witness = borrowed
+        .slice(family_request)
+        .map_err(|_| SeriesArtifactErrorV3::Request)?;
+    if witness != bundle.slices.witness
+        || witness.len()
+            != usize::from(bundle.request.proof_count())
+                .checked_mul(SERIES_WITNESS_ITEM_BYTES_V3)
+                .ok_or(SeriesArtifactErrorV3::Geometry)?
+    {
+        return Err(SeriesArtifactErrorV3::Request);
+    }
+    Ok(SeriesExpireInvocationV3 {
+        permit_request,
+        witness,
+        child_request_digest: hashv(&[permit_request, witness]).to_bytes(),
     })
 }
 
@@ -450,37 +651,164 @@ fn validate_geometry(
 
 fn validate_routes(action: SeriesActionV3, effect: EffectProgramV3<'_>) -> Result<()> {
     let count = match action {
-        SeriesActionV3::Prepare | SeriesActionV3::Expire => 3_u16,
+        SeriesActionV3::Prepare => u16::try_from(SERIES_PREPARE_ROUTE_COUNT_V3)
+            .map_err(|_| SeriesArtifactErrorV3::Geometry)?,
         SeriesActionV3::Consume => u16::try_from(SERIES_CONSUME_ROUTE_COUNT_V3)
+            .map_err(|_| SeriesArtifactErrorV3::Geometry)?,
+        SeriesActionV3::Expire => u16::try_from(SERIES_EXPIRE_ROUTE_COUNT_V3)
             .map_err(|_| SeriesArtifactErrorV3::Geometry)?,
         SeriesActionV3::Retire | SeriesActionV3::Close => 0,
     };
     if effect.route_count() != count {
         return Err(SeriesArtifactErrorV3::Effect);
     }
+    let funding_state_count = if action == SeriesActionV3::Consume {
+        let found = effect.route(1).map_err(|_| SeriesArtifactErrorV3::Effect)?;
+        let count = found
+            .fixed_account_count()
+            .checked_sub(SERIES_CONSUME_CORE_FOUND_ACCOUNT_BASE_V3)
+            .ok_or(SeriesArtifactErrorV3::Geometry)?;
+        if count == 0 || count > SERIES_CONSUME_MAXIMUM_FUNDING_STATES_V3 {
+            return Err(SeriesArtifactErrorV3::Geometry);
+        }
+        count
+    } else {
+        0
+    };
     let mut index = 0_u16;
     while index < count {
         let route = effect
             .route(index)
             .map_err(|_| SeriesArtifactErrorV3::Effect)?;
-        let core = action == SeriesActionV3::Consume && index == 1;
-        let expected_role = if core {
-            FixedRole::Core
-        } else {
-            FixedRole::Custody
-        };
-        let expected_width = if core {
-            SERIES_CONSUME_CORE_REQUEST_BYTES_V3
-        } else {
-            SERIES_CUSTODY_REQUEST_BYTES_V3
-        };
+        let (expected_role, expected_width, borrows_witness, expected_accounts, expected_receipts) =
+            match action {
+                SeriesActionV3::Prepare => match index {
+                    0 => (
+                        FixedRole::Custody,
+                        SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
+                        false,
+                        Some(SERIES_PREPARE_PROJECTED_INITIALIZE_ACCOUNT_COUNT_V3),
+                        &SERIES_NO_RECEIPT_DEPENDENCIES_V3[..],
+                    ),
+                    1 => (
+                        FixedRole::Custody,
+                        SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
+                        false,
+                        Some(SERIES_PREPARE_PROJECTED_OPEN_ACCOUNT_COUNT_V3),
+                        &SERIES_NO_RECEIPT_DEPENDENCIES_V3[..],
+                    ),
+                    2 => (
+                        FixedRole::Custody,
+                        SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3,
+                        false,
+                        Some(SERIES_PREPARE_REPLAY_INITIALIZE_ACCOUNT_COUNT_V3),
+                        &SERIES_NO_RECEIPT_DEPENDENCIES_V3[..],
+                    ),
+                    3 => (
+                        FixedRole::Custody,
+                        SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3,
+                        false,
+                        Some(SERIES_PREPARE_ESCROW_OPEN_ACCOUNT_COUNT_V3),
+                        &SERIES_NO_RECEIPT_DEPENDENCIES_V3[..],
+                    ),
+                    4 => (
+                        FixedRole::Custody,
+                        SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3,
+                        false,
+                        Some(SERIES_PREPARE_ESCROW_LOCK_ACCOUNT_COUNT_V3),
+                        &SERIES_NO_RECEIPT_DEPENDENCIES_V3[..],
+                    ),
+                    _ => return Err(SeriesArtifactErrorV3::Effect),
+                },
+                SeriesActionV3::Consume => match index {
+                    0 => (
+                        FixedRole::Custody,
+                        SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
+                        false,
+                        Some(SERIES_CONSUME_LOCK_ACCOUNT_COUNT_V3),
+                        &SERIES_NO_RECEIPT_DEPENDENCIES_V3[..],
+                    ),
+                    1 => (
+                        FixedRole::Core,
+                        SERIES_CONSUME_CORE_REQUEST_BYTES_V3,
+                        true,
+                        SERIES_CONSUME_CORE_FOUND_ACCOUNT_BASE_V3.checked_add(funding_state_count),
+                        &SERIES_CORE_FOUND_RECEIPT_DEPENDENCIES_V3[..],
+                    ),
+                    2 => (
+                        FixedRole::Custody,
+                        SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
+                        false,
+                        Some(SERIES_CONSUME_REALIZE_ACCOUNT_COUNT_V3),
+                        &SERIES_NO_RECEIPT_DEPENDENCIES_V3[..],
+                    ),
+                    3 => (
+                        FixedRole::Claims,
+                        SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3,
+                        false,
+                        Some(SERIES_CONSUME_CLAIMS_ACCOUNT_COUNT_V3),
+                        &SERIES_CLAIMS_RECEIPT_DEPENDENCIES_V3[..],
+                    ),
+                    4 => (
+                        FixedRole::Core,
+                        SERIES_CONSUME_CORE_REQUEST_BYTES_V3,
+                        true,
+                        Some(SERIES_CONSUME_CORE_OPEN_ACCOUNT_COUNT_V3),
+                        &SERIES_CORE_OPEN_RECEIPT_DEPENDENCIES_V3[..],
+                    ),
+                    _ => return Err(SeriesArtifactErrorV3::Effect),
+                },
+                SeriesActionV3::Expire => match index {
+                    0 => (
+                        FixedRole::Custody,
+                        SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3,
+                        false,
+                        Some(SERIES_EXPIRE_REFUND_ACCOUNT_COUNT_V3),
+                        &SERIES_NO_RECEIPT_DEPENDENCIES_V3[..],
+                    ),
+                    1 => (
+                        FixedRole::Custody,
+                        SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3,
+                        false,
+                        Some(SERIES_EXPIRE_CLOSE_VAULT_ACCOUNT_COUNT_V3),
+                        &SERIES_NO_RECEIPT_DEPENDENCIES_V3[..],
+                    ),
+                    2 => (
+                        FixedRole::Custody,
+                        SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3,
+                        false,
+                        Some(SERIES_EXPIRE_CLOSE_REPLAY_ACCOUNT_COUNT_V3),
+                        &SERIES_NO_RECEIPT_DEPENDENCIES_V3[..],
+                    ),
+                    3 => (
+                        FixedRole::Custody,
+                        SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
+                        false,
+                        Some(SERIES_EXPIRE_PROJECTED_ABORT_ACCOUNT_COUNT_V3),
+                        &SERIES_NO_RECEIPT_DEPENDENCIES_V3[..],
+                    ),
+                    4 => (
+                        FixedRole::Core,
+                        SERIES_EXPIRE_PERMIT_REQUEST_BYTES_V3,
+                        true,
+                        Some(SERIES_EXPIRE_PERMIT_ACCOUNT_COUNT_V3),
+                        &SERIES_NO_RECEIPT_DEPENDENCIES_V3[..],
+                    ),
+                    _ => return Err(SeriesArtifactErrorV3::Effect),
+                },
+                SeriesActionV3::Retire | SeriesActionV3::Close => {
+                    return Err(SeriesArtifactErrorV3::Effect);
+                }
+            };
         if route.role() != expected_role
             || route.kind() != dclutch_effect_kernel::v3::RouteKindV3::Once
             || usize::try_from(route.fixed_request_bytes())
                 .map_err(|_| SeriesArtifactErrorV3::Geometry)?
                 != expected_width
+            || expected_accounts.is_some_and(|accounts| route.fixed_account_count() != accounts)
             || route.item_request_bytes() != 0
-            || route.borrows_witness() != core
+            || route.borrows_witness() != borrows_witness
+            || !route_dependencies_match(effect, index, expected_receipts)
         {
             return Err(SeriesArtifactErrorV3::Effect);
         }
@@ -489,6 +817,68 @@ fn validate_routes(action: SeriesActionV3, effect: EffectProgramV3<'_>) -> Resul
             .ok_or(SeriesArtifactErrorV3::Geometry)?;
     }
     Ok(())
+}
+
+fn route_dependencies_match(
+    effect: EffectProgramV3<'_>,
+    route_index: u16,
+    expected: &[RouteReceiptDependencyV3],
+) -> bool {
+    let Ok(route) = effect.route(route_index) else {
+        return false;
+    };
+    if usize::from(route.receipt_dependency_count()) != expected.len() {
+        return false;
+    }
+    let mut dependency_index = 0_u16;
+    while usize::from(dependency_index) < expected.len() {
+        if effect.route_receipt_dependency(route_index, dependency_index)
+            != expected
+                .get(usize::from(dependency_index))
+                .copied()
+                .ok_or(dclutch_effect_kernel::v3::Error::InvalidReceiptDependency)
+        {
+            return false;
+        }
+        let Some(next) = dependency_index.checked_add(1) else {
+            return false;
+        };
+        dependency_index = next;
+    }
+    true
+}
+
+pub(crate) fn resolved_dependencies_match(
+    effect: EffectProgramV3<'_>,
+    invocation: ResolvedInvocationV3,
+    expected: &[RouteReceiptDependencyV3],
+) -> bool {
+    if usize::from(invocation.receipt_dependencies.len()) != expected.len() {
+        return false;
+    }
+    let mut dependency_index = 0_u16;
+    while usize::from(dependency_index) < expected.len() {
+        let Ok(resolved) =
+            effect.resolved_receipt_dependency(invocation.receipt_dependencies, dependency_index)
+        else {
+            return false;
+        };
+        let Some(expected_dependency) = expected.get(usize::from(dependency_index)) else {
+            return false;
+        };
+        if resolved.producer_role != expected_dependency.producer_role()
+            || resolved.producer_route != expected_dependency.producer_route()
+            || resolved.producer_invocation != 0
+            || resolved.expected_receipt_bytes != expected_dependency.expected_receipt_bytes()
+        {
+            return false;
+        }
+        let Some(next) = dependency_index.checked_add(1) else {
+            return false;
+        };
+        dependency_index = next;
+    }
+    true
 }
 
 fn require_selected(selected: [u8; 32], bytes: &[u8]) -> Result<()> {
@@ -516,6 +906,9 @@ mod tests {
     extern crate std;
 
     use dclutch_capability_program_contract::v3::CAPABILITY_PROGRAM_V3_BYTES;
+    use dclutch_effect_kernel::v3::encode::{
+        EffectGeometryV3, RouteInputV3, encode_effect_program_v4_atomic,
+    };
     use dclutch_execution_strategy_contract::v2::{
         ACCELERATOR_ACK_SCHEMA_ID_V2, ACCELERATOR_REQUEST_SCHEMA_ID_V2,
         EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
@@ -580,8 +973,64 @@ mod tests {
         ContentId::new(value).expect("nonzero fixture identity")
     }
 
-    fn account_profile() -> Vec<u8> {
-        let mut output = vec![0_u8; 48];
+    fn core_id(value: u8) -> dclutch_market_core_codec::Identity {
+        dclutch_market_core_codec::Identity::new([value; 32]).expect("nonzero Core identity")
+    }
+
+    fn permit_expiry_bytes() -> [u8; SERIES_EXPIRE_PERMIT_REQUEST_BYTES_V3] {
+        let intent = dclutch_market_core_codec::FoundingIntentV5::new(
+            255,
+            core_id(1),
+            core_id(2),
+            core_id(3),
+            core_id(4),
+            core_id(5),
+            core_id(6),
+            core_id(7),
+            core_id(8),
+            core_id(9),
+            core_id(10),
+            core_id(11),
+            core_id(12),
+            core_id(13),
+            core_id(14),
+            core_id(15),
+            1,
+            1,
+            1,
+            1,
+            4,
+            1,
+        )
+        .expect("founding intent");
+        let permit = dclutch_market_core_codec::SeriesFoundingPermitV1::new(
+            intent,
+            core_id(16),
+            core_id(17),
+        )
+        .expect("founding permit");
+        dclutch_market_core_codec::SeriesPermitExpiryRequestV1::new(permit)
+            .encode()
+            .expect("permit expiry request")
+    }
+
+    fn fixture_fixed_accounts(action: SeriesActionV3) -> u16 {
+        match action {
+            SeriesActionV3::Prepare => SERIES_PREPARE_PROJECTED_INITIALIZE_ACCOUNT_COUNT_V3,
+            SeriesActionV3::Consume => SERIES_CONSUME_CORE_FOUND_ACCOUNT_BASE_V3 + 1,
+            SeriesActionV3::Expire => SERIES_EXPIRE_PERMIT_ACCOUNT_COUNT_V3,
+            SeriesActionV3::Retire | SeriesActionV3::Close => 1,
+        }
+    }
+
+    fn account_profile(action: SeriesActionV3) -> Vec<u8> {
+        let fixed_accounts = fixture_fixed_accounts(action);
+        let mut output = vec![
+            0_u8;
+            dclutch_account_profile_contract::v2::HEADER_BYTES
+                + usize::from(fixed_accounts)
+                    * dclutch_account_profile_contract::v2::RULE_BYTES
+        ];
         put(&mut output, 0, &dclutch_account_profile_contract::v2::MAGIC);
         put(
             &mut output,
@@ -593,7 +1042,7 @@ mod tests {
             10,
             &dclutch_account_profile_contract::v2::ARTIFACT_PROFILE.to_le_bytes(),
         );
-        put(&mut output, 12, &1_u16.to_le_bytes());
+        put(&mut output, 12, &fixed_accounts.to_le_bytes());
         put(&mut output, 20, &FIXTURE_SCALARS.to_le_bytes());
         output
     }
@@ -690,47 +1139,174 @@ mod tests {
     }
 
     fn effect(action: SeriesActionV3) -> Vec<u8> {
-        let route_count = match action {
-            SeriesActionV3::Prepare | SeriesActionV3::Expire => 3_u16,
-            SeriesActionV3::Consume => {
-                u16::try_from(SERIES_CONSUME_ROUTE_COUNT_V3).expect("route count")
-            }
-            SeriesActionV3::Retire | SeriesActionV3::Close => 0,
-        };
-        let route_bytes = usize::from(route_count) * dclutch_effect_kernel::v3::ROUTE_BYTES;
         let request_bytes = match action {
-            SeriesActionV3::Prepare | SeriesActionV3::Expire => 3 * SERIES_CUSTODY_REQUEST_BYTES_V3,
+            SeriesActionV3::Prepare => SERIES_PREPARE_IR_REQUEST_BYTES_V3,
             SeriesActionV3::Consume => SERIES_CONSUME_IR_REQUEST_BYTES_V3,
+            SeriesActionV3::Expire => SERIES_EXPIRE_IR_REQUEST_BYTES_V3,
             SeriesActionV3::Retire | SeriesActionV3::Close => 0,
         };
-        let mut output =
-            vec![0_u8; dclutch_effect_kernel::v3::HEADER_BYTES + route_bytes + request_bytes];
-        put(&mut output, 0, &dclutch_effect_kernel::v3::MAGIC);
-        set_byte(&mut output, 4, dclutch_effect_kernel::v3::VERSION);
-        put(&mut output, 6, &route_count.to_le_bytes());
-        put(&mut output, 12, &1_u16.to_le_bytes());
-        put(&mut output, 16, &FIXTURE_SCALARS.to_le_bytes());
-        for route in 0..usize::from(route_count) {
-            let offset = dclutch_effect_kernel::v3::HEADER_BYTES
-                + route * dclutch_effect_kernel::v3::ROUTE_BYTES;
-            let core = action == SeriesActionV3::Consume && route == 1;
-            let role = if core { 0 } else { 4 };
-            let request_width = if core {
-                SERIES_CONSUME_CORE_REQUEST_BYTES_V3
-            } else {
-                SERIES_CUSTODY_REQUEST_BYTES_V3
+        let request_bank = vec![0_u8; request_bytes];
+        let route_specs: &[(FixedRole, usize, u16, bool, &[RouteReceiptDependencyV3])] =
+            match action {
+                SeriesActionV3::Prepare => &[
+                    (
+                        FixedRole::Custody,
+                        SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
+                        SERIES_PREPARE_PROJECTED_INITIALIZE_ACCOUNT_COUNT_V3,
+                        false,
+                        &SERIES_NO_RECEIPT_DEPENDENCIES_V3,
+                    ),
+                    (
+                        FixedRole::Custody,
+                        SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
+                        SERIES_PREPARE_PROJECTED_OPEN_ACCOUNT_COUNT_V3,
+                        false,
+                        &SERIES_NO_RECEIPT_DEPENDENCIES_V3,
+                    ),
+                    (
+                        FixedRole::Custody,
+                        SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3,
+                        SERIES_PREPARE_REPLAY_INITIALIZE_ACCOUNT_COUNT_V3,
+                        false,
+                        &SERIES_NO_RECEIPT_DEPENDENCIES_V3,
+                    ),
+                    (
+                        FixedRole::Custody,
+                        SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3,
+                        SERIES_PREPARE_ESCROW_OPEN_ACCOUNT_COUNT_V3,
+                        false,
+                        &SERIES_NO_RECEIPT_DEPENDENCIES_V3,
+                    ),
+                    (
+                        FixedRole::Custody,
+                        SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3,
+                        SERIES_PREPARE_ESCROW_LOCK_ACCOUNT_COUNT_V3,
+                        false,
+                        &SERIES_NO_RECEIPT_DEPENDENCIES_V3,
+                    ),
+                ],
+                SeriesActionV3::Consume => &[
+                    (
+                        FixedRole::Custody,
+                        SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
+                        SERIES_CONSUME_LOCK_ACCOUNT_COUNT_V3,
+                        false,
+                        &SERIES_NO_RECEIPT_DEPENDENCIES_V3,
+                    ),
+                    (
+                        FixedRole::Core,
+                        SERIES_CONSUME_CORE_REQUEST_BYTES_V3,
+                        SERIES_CONSUME_CORE_FOUND_ACCOUNT_BASE_V3 + 1,
+                        true,
+                        &SERIES_CORE_FOUND_RECEIPT_DEPENDENCIES_V3,
+                    ),
+                    (
+                        FixedRole::Custody,
+                        SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
+                        SERIES_CONSUME_REALIZE_ACCOUNT_COUNT_V3,
+                        false,
+                        &SERIES_NO_RECEIPT_DEPENDENCIES_V3,
+                    ),
+                    (
+                        FixedRole::Claims,
+                        SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3,
+                        SERIES_CONSUME_CLAIMS_ACCOUNT_COUNT_V3,
+                        false,
+                        &SERIES_CLAIMS_RECEIPT_DEPENDENCIES_V3,
+                    ),
+                    (
+                        FixedRole::Core,
+                        SERIES_CONSUME_CORE_REQUEST_BYTES_V3,
+                        SERIES_CONSUME_CORE_OPEN_ACCOUNT_COUNT_V3,
+                        true,
+                        &SERIES_CORE_OPEN_RECEIPT_DEPENDENCIES_V3,
+                    ),
+                ],
+                SeriesActionV3::Expire => &[
+                    (
+                        FixedRole::Custody,
+                        SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3,
+                        SERIES_EXPIRE_REFUND_ACCOUNT_COUNT_V3,
+                        false,
+                        &SERIES_NO_RECEIPT_DEPENDENCIES_V3,
+                    ),
+                    (
+                        FixedRole::Custody,
+                        SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3,
+                        SERIES_EXPIRE_CLOSE_VAULT_ACCOUNT_COUNT_V3,
+                        false,
+                        &SERIES_NO_RECEIPT_DEPENDENCIES_V3,
+                    ),
+                    (
+                        FixedRole::Custody,
+                        SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3,
+                        SERIES_EXPIRE_CLOSE_REPLAY_ACCOUNT_COUNT_V3,
+                        false,
+                        &SERIES_NO_RECEIPT_DEPENDENCIES_V3,
+                    ),
+                    (
+                        FixedRole::Custody,
+                        SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
+                        SERIES_EXPIRE_PROJECTED_ABORT_ACCOUNT_COUNT_V3,
+                        false,
+                        &SERIES_NO_RECEIPT_DEPENDENCIES_V3,
+                    ),
+                    (
+                        FixedRole::Core,
+                        SERIES_EXPIRE_PERMIT_REQUEST_BYTES_V3,
+                        SERIES_EXPIRE_PERMIT_ACCOUNT_COUNT_V3,
+                        true,
+                        &SERIES_NO_RECEIPT_DEPENDENCIES_V3,
+                    ),
+                ],
+                SeriesActionV3::Retire | SeriesActionV3::Close => &[],
             };
-            set_byte(&mut output, offset, role);
-            set_byte(&mut output, offset + 3, u8::from(core));
-            put(&mut output, offset + 8, &1_u16.to_le_bytes());
-            put(
-                &mut output,
-                offset + 16,
-                &u32::try_from(request_width)
-                    .expect("child request width")
-                    .to_le_bytes(),
-            );
+        let mut routes = Vec::with_capacity(route_specs.len());
+        let mut dependencies = Vec::with_capacity(route_specs.len());
+        let mut cursor = 0_usize;
+        for (role, width, account_count, borrows_witness, route_dependencies) in route_specs {
+            let end = cursor.checked_add(*width).expect("request width");
+            routes.push(RouteInputV3 {
+                role: *role,
+                kind: RouteKindV3::Once,
+                enable_common_scalar: None,
+                witness_range_common_scalar: borrows_witness.then_some(0),
+                receipt_dependency: None,
+                fixed_account_start: 0,
+                fixed_account_count: *account_count,
+                item_account_start: 0,
+                item_account_count: 0,
+                fixed_request: request_bank.get(cursor..end).expect("request route"),
+                item_request: &[],
+            });
+            dependencies.push(*route_dependencies);
+            cursor = end;
         }
+        assert_eq!(cursor, request_bank.len());
+        let dependency_count = dependencies.iter().map(|items| items.len()).sum::<usize>();
+        let output_bytes = dclutch_effect_kernel::v3::HEADER_BYTES
+            + routes.len() * dclutch_effect_kernel::v3::ROUTE_BYTES
+            + dependency_count * dclutch_effect_kernel::v3::RECEIPT_DEPENDENCY_BYTES
+            + request_bytes;
+        let mut scratch = vec![0_u8; output_bytes];
+        let mut output = vec![0_u8; output_bytes];
+        encode_effect_program_v4_atomic(
+            EffectGeometryV3 {
+                fixed_accounts: fixture_fixed_accounts(action),
+                item_account_stride: 0,
+                common_scalars: FIXTURE_SCALARS,
+                item_scalar_stride: 0,
+                common_identities: 0,
+                item_identity_stride: 0,
+            },
+            &routes,
+            &dependencies,
+            &[],
+            &[],
+            &mut scratch,
+            &mut output,
+        )
+        .expect("canonical EffectProgram V4 fixture");
         output
     }
 
@@ -787,7 +1363,7 @@ mod tests {
 
     fn fixture(action: SeriesActionV3) -> Fixture {
         let template = id([41; 32]);
-        let account = account_profile();
+        let account = account_profile(action);
         let request_profile = request_profile(action);
         let transition = transition();
         let effect = effect(action);
@@ -928,8 +1504,8 @@ mod tests {
         let mut request_bank = vec![0_u8; SERIES_CONSUME_IR_REQUEST_BYTES_V3];
         request_bank
             .get_mut(
-                SERIES_CONSUME_CORE_OFFSET_V3
-                    ..SERIES_CONSUME_CORE_OFFSET_V3 + SERIES_CONSUME_CORE_REQUEST_BYTES_V3,
+                SERIES_CONSUME_CORE_FOUND_OFFSET_V3
+                    ..SERIES_CONSUME_CORE_FOUND_OFFSET_V3 + SERIES_CONSUME_CORE_REQUEST_BYTES_V3,
             )
             .expect("Core request region")
             .fill(17);
@@ -952,7 +1528,7 @@ mod tests {
                 .expect("witness")
         );
         assert_eq!(
-            selected.child_request_digest,
+            selected.base_request_digest,
             hashv(&[selected.core_request, selected.witness]).to_bytes()
         );
 
@@ -961,6 +1537,152 @@ mod tests {
         assert_eq!(
             validate_series_consume_invocation_v3(bundle, invocation, &request_bank, &padded,),
             Err(SeriesArtifactErrorV3::Request)
+        );
+    }
+
+    #[test]
+    fn consume_receipt_chain_is_exact_backward_and_typed() {
+        let fixture = fixture(SeriesActionV3::Consume);
+        let program = EffectProgramV3::decode(&fixture.effect).expect("Consume EffectProgram");
+        assert_eq!(
+            program.route(0).expect("Lock route").receipt_dependency(),
+            None
+        );
+        assert_eq!(
+            program
+                .route(1)
+                .expect("Core Found route")
+                .receipt_dependency(),
+            Some(RouteReceiptDependencyV3::new(
+                FixedRole::Custody,
+                0,
+                SERIES_CONSUME_LOCK_RECEIPT_BYTES_V3,
+            ))
+        );
+        assert_eq!(
+            program
+                .route(2)
+                .expect("Realize route")
+                .receipt_dependency(),
+            None
+        );
+        assert_eq!(
+            program
+                .route(3)
+                .expect("Claims route")
+                .receipt_dependency_count(),
+            2
+        );
+        assert_eq!(
+            program
+                .route_receipt_dependency(3, 0)
+                .expect("Claims Lock dependency"),
+            RouteReceiptDependencyV3::new(
+                FixedRole::Custody,
+                0,
+                SERIES_CONSUME_LOCK_RECEIPT_BYTES_V3,
+            )
+        );
+        assert_eq!(
+            program
+                .route_receipt_dependency(3, 1)
+                .expect("Claims Realize dependency"),
+            RouteReceiptDependencyV3::new(
+                FixedRole::Custody,
+                2,
+                SERIES_CONSUME_REALIZE_RECEIPT_BYTES_V3,
+            )
+        );
+        assert_eq!(
+            program
+                .route(4)
+                .expect("Core Open route")
+                .receipt_dependency(),
+            Some(RouteReceiptDependencyV3::new(
+                FixedRole::Claims,
+                3,
+                SERIES_CONSUME_CLAIMS_RECEIPT_BYTES_V3,
+            ))
+        );
+
+        let dependency_table = dclutch_effect_kernel::v3::HEADER_BYTES
+            + SERIES_CONSUME_ROUTE_COUNT_V3 * dclutch_effect_kernel::v3::ROUTE_BYTES;
+        let mut wrong_width = fixture.effect.clone();
+        put(
+            &mut wrong_width,
+            dependency_table + 4,
+            &(SERIES_CONSUME_LOCK_RECEIPT_BYTES_V3 + 1).to_le_bytes(),
+        );
+        let wrong = EffectProgramV3::decode(&wrong_width).expect("canonical wrong-width route");
+        assert_eq!(
+            validate_routes(SeriesActionV3::Consume, wrong),
+            Err(SeriesArtifactErrorV3::Effect)
+        );
+
+        let mut forward = fixture.effect.clone();
+        put(
+            &mut forward,
+            dependency_table + dclutch_effect_kernel::v3::RECEIPT_DEPENDENCY_BYTES + 2,
+            &4_u16.to_le_bytes(),
+        );
+        assert!(EffectProgramV3::decode(&forward).is_err());
+    }
+
+    #[test]
+    fn expire_borrows_proof_only_after_exact_permit_candidate() {
+        let fixture = fixture(SeriesActionV3::Expire);
+        let bundle = authenticate_series_artifacts_v3(
+            fixture.selection(),
+            fixture.artifacts(),
+            &fixture.request,
+        )
+        .expect("Expire bundle");
+        let scalars = projected_scalars(&fixture, bundle);
+        let identities: [[u8; 32]; 0] = [];
+        let invocation = bundle
+            .effect
+            .resolved_invocation(4, 0, 0, &scalars, &identities)
+            .expect("resolved permit-refund invocation");
+        let permit = permit_expiry_bytes();
+        let mut request_bank = vec![0_u8; SERIES_EXPIRE_IR_REQUEST_BYTES_V3];
+        request_bank
+            .get_mut(
+                SERIES_EXPIRE_PERMIT_OFFSET_V3
+                    ..SERIES_EXPIRE_PERMIT_OFFSET_V3 + SERIES_EXPIRE_PERMIT_REQUEST_BYTES_V3,
+            )
+            .expect("permit request region")
+            .copy_from_slice(&permit);
+        let selected = validate_series_expire_invocation_v3(
+            bundle,
+            invocation,
+            &request_bank,
+            &fixture.request,
+        )
+        .expect("exact permit plus occurrence proof");
+        assert_eq!(selected.permit_request, permit);
+        assert_eq!(
+            selected.witness,
+            fixture
+                .request
+                .get(SERIES_ACTION_HEADER_BYTES_V3..)
+                .expect("proof")
+        );
+        assert_eq!(
+            selected.child_request_digest,
+            hashv(&[selected.permit_request, selected.witness]).to_bytes()
+        );
+
+        *request_bank
+            .get_mut(SERIES_EXPIRE_PERMIT_OFFSET_V3)
+            .expect("magic byte") ^= 1;
+        assert_eq!(
+            validate_series_expire_invocation_v3(
+                bundle,
+                invocation,
+                &request_bank,
+                &fixture.request,
+            ),
+            Err(SeriesArtifactErrorV3::Effect)
         );
     }
 

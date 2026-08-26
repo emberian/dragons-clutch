@@ -11,7 +11,6 @@ pub mod accounts;
 /// Exact action-selected generic V3 interpreter artifacts.
 pub mod artifacts_v3;
 /// Complete Core/Custody/replay physical plans behind authenticated actions.
-pub mod composer_v3;
 /// Canonical SeriesEscrow projection into the sole Custody writer.
 pub mod custody_v3;
 /// Exact Core-to-Custody call staging behind the common Hot V3 outer.

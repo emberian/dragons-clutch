@@ -1,36 +1,45 @@
 //! Narrow Series execution staging behind the common Hot V3 outer.
 //!
 //! This module performs no CPI, account-frame selection, signing, receipt
-//! validation, or state write. It validates the four already-resolved generic
+//! validation, or state write. It validates the five already-resolved generic
 //! EffectProgram routes, joins them to the Series semantic composition, and
-//! returns the only permitted Custody transfer→Core Found→Custody cleanup call
+//! returns the only permitted projected Lock→Core Found→realize→Claims→Core Open
 //! order plus the still-uncommitted replay candidate. The common outer remains
 //! sole authority for physical accounts, current role programs, receipts, and
 //! commit order.
 
 use dclutch_capability_program_contract::hot_v3::HOT_FAMILY_REQUEST_OFFSET_V3;
+use dclutch_claims_svm::founding_v5::ClaimsFoundingRequestV5;
+use dclutch_custody_contract::{ProjectedCustodyOperationV1, ProjectedCustodyRequestV1};
 use dclutch_effect_kernel::{
     v2::FixedRole,
-    v3::{ResolvedInvocationV3, RouteKindV3},
+    v3::{ResolvedInvocationV3, RouteKindV3, RouteReceiptDependencyV3},
 };
 use dclutch_series_v3_kernel::{
-    AccountKeyV3, AuthenticatedProductProjectionV2, plan::SeriesReplayWitnessV3,
+    AccountKeyV3, AuthenticatedProductProjectionV2, composition::SeriesConsumeCompositionV3,
+    plan::SeriesReplayWitnessV3,
 };
-use solana_program::{hash::hash, pubkey::Pubkey};
+use solana_program::{
+    hash::{hash, hashv},
+    pubkey::Pubkey,
+};
 
 use super::{
     artifacts_v3::{
-        SERIES_CONSUME_CLOSE_REPLAY_OFFSET_V3, SERIES_CONSUME_CLOSE_VAULT_OFFSET_V3,
-        SERIES_CONSUME_CORE_OFFSET_V3, SERIES_CONSUME_CORE_REQUEST_BYTES_V3,
-        SERIES_CONSUME_IR_REQUEST_BYTES_V3, SERIES_CONSUME_ROUTE_COUNT_V3,
-        SERIES_CONSUME_TRANSFER_OFFSET_V3, SERIES_CUSTODY_REQUEST_BYTES_V3, SeriesArtifactBundleV3,
+        SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3, SERIES_CLAIMS_RECEIPT_DEPENDENCIES_V3,
+        SERIES_CONSUME_CLAIMS_OFFSET_V3, SERIES_CONSUME_CORE_FOUND_OFFSET_V3,
+        SERIES_CONSUME_CORE_OPEN_OFFSET_V3, SERIES_CONSUME_CORE_REQUEST_BYTES_V3,
+        SERIES_CONSUME_IR_REQUEST_BYTES_V3, SERIES_CONSUME_LOCK_OFFSET_V3,
+        SERIES_CONSUME_REALIZE_OFFSET_V3, SERIES_CONSUME_ROUTE_COUNT_V3,
+        SERIES_CORE_FOUND_RECEIPT_DEPENDENCIES_V3, SERIES_CORE_OPEN_RECEIPT_DEPENDENCIES_V3,
+        SERIES_NO_RECEIPT_DEPENDENCIES_V3, SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
+        SeriesArtifactBundleV3, resolved_dependencies_match,
     },
-    composer_v3::{
-        SeriesConsumePhysicalPlanV3, SeriesPhysicalComposerErrorV3, compose_consume_physical_v3,
-    },
-    custody_v3::SeriesCustodyPhysicalV3,
     instruction::SERIES_ACTION_HEADER_BYTES_V3,
-    projector::AuthenticatedSeriesActionV3,
+    projected_custody_v3::{
+        SeriesProjectedCustodyErrorV3, SeriesProjectedCustodyPhysicalV3, project_consume_v3,
+    },
+    projector::{AuthenticatedSeriesActionV3, SeriesProjectorErrorV3},
 };
 
 /// Stable refusal from Series Hot V3 call staging.
@@ -42,18 +51,35 @@ pub enum SeriesExecuteErrorV3 {
     Invocation,
     /// Projected child request bytes differed from the Series semantic plan.
     RequestBank,
-    /// Content, replay, schedule, Core, or Custody composition refused.
-    Composition(SeriesPhysicalComposerErrorV3),
+    /// Content, replay, schedule, or Core composition refused.
+    Composition(SeriesProjectorErrorV3),
+    /// Exact projected-Custody request construction refused.
+    ProjectedCustody(SeriesProjectedCustodyErrorV3),
 }
 
-impl From<SeriesPhysicalComposerErrorV3> for SeriesExecuteErrorV3 {
-    fn from(value: SeriesPhysicalComposerErrorV3) -> Self {
+impl From<SeriesProjectorErrorV3> for SeriesExecuteErrorV3 {
+    fn from(value: SeriesProjectorErrorV3) -> Self {
         Self::Composition(value)
+    }
+}
+
+impl From<SeriesProjectedCustodyErrorV3> for SeriesExecuteErrorV3 {
+    fn from(value: SeriesProjectedCustodyErrorV3) -> Self {
+        Self::ProjectedCustody(value)
     }
 }
 
 /// Result alias for exact Series execution staging.
 pub type Result<T> = core::result::Result<T, SeriesExecuteErrorV3>;
+
+#[derive(Clone, Copy)]
+struct SeriesInvocationExpectationV3<'a> {
+    role: FixedRole,
+    request_offset: usize,
+    request_len: usize,
+    borrows_witness: bool,
+    receipt_dependencies: &'a [RouteReceiptDependencyV3],
+}
 
 /// Common-outer observations required by the Series stage.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -107,7 +133,7 @@ pub struct SeriesStagedChildCallV3<'a> {
     invocation: ResolvedInvocationV3,
     request: &'a [u8],
     witness: Option<&'a [u8]>,
-    request_digest: [u8; 32],
+    base_request_digest: [u8; 32],
 }
 
 impl<'a> SeriesStagedChildCallV3<'a> {
@@ -121,38 +147,39 @@ impl<'a> SeriesStagedChildCallV3<'a> {
         self.request
     }
 
-    /// Exact borrowed proof suffix; present only for the Core call.
+    /// Exact borrowed proof suffix; present only for the two Core calls.
     pub const fn witness(self) -> Option<&'a [u8]> {
         self.witness
     }
 
-    /// SHA-256 of `request || witness` for this exact execution.
-    pub const fn request_digest(self) -> [u8; 32] {
-        self.request_digest
+    /// SHA-256 of the IR request plus borrowed witness, before a typed prior
+    /// receipt is appended by the common role executor.
+    pub const fn base_request_digest(self) -> [u8; 32] {
+        self.base_request_digest
     }
 }
 
-/// Four calls plus a replay candidate that remains uncommitted until receipts accept.
+/// Five calls plus a replay candidate that remains uncommitted until receipts accept.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SeriesConsumeExecutionPlanV3<'a> {
-    physical: SeriesConsumePhysicalPlanV3<'a>,
+    composition: SeriesConsumeCompositionV3,
     calls: [SeriesStagedChildCallV3<'a>; SERIES_CONSUME_ROUTE_COUNT_V3],
 }
 
 impl<'a> SeriesConsumeExecutionPlanV3<'a> {
-    /// Ordered transfer-to-Hoard, Core, close-Vault, close-replay calls.
+    /// Ordered projected Lock, Core Found, Realize, Claims, and Core Open calls.
     pub const fn calls(self) -> [SeriesStagedChildCallV3<'a>; SERIES_CONSUME_ROUTE_COUNT_V3] {
         self.calls
     }
 
     /// Semantic replay candidate; this function grants no authority to write it.
     pub const fn replay_candidate(self) -> SeriesReplayWitnessV3 {
-        self.physical.composition().replay()
+        self.composition.replay()
     }
 
     /// Full joined semantic plan used for later receipt validation and commit.
-    pub const fn physical(self) -> SeriesConsumePhysicalPlanV3<'a> {
-        self.physical
+    pub const fn composition(self) -> SeriesConsumeCompositionV3 {
+        self.composition
     }
 }
 
@@ -162,7 +189,7 @@ pub struct SeriesConsumeExecutionInputsV3<'a, 'content> {
     pub action: AuthenticatedSeriesActionV3<'content>,
     /// Complete action-selected generic artifact join.
     pub artifacts: SeriesArtifactBundleV3<'content>,
-    /// Exact four post-strategy route resolutions in program order.
+    /// Exact five post-strategy route resolutions in program order.
     pub invocations: [ResolvedInvocationV3; SERIES_CONSUME_ROUTE_COUNT_V3],
     /// Common Hot V3 request and request-bank observations.
     pub hot: SeriesHotContextV3<'a>,
@@ -178,98 +205,128 @@ pub struct SeriesConsumeExecutionInputsV3<'a, 'content> {
     pub ticket_state_bytes: &'a [u8],
     /// Current Clock slot.
     pub now_slot: u64,
-    /// Adapter-authenticated Custody wire observations.
-    pub custody_physical: SeriesCustodyPhysicalV3,
+    /// Adapter-authenticated projected-Custody wire observations.
+    pub projected_custody: SeriesProjectedCustodyPhysicalV3,
 }
 
 /// Stage one complete Consume without invoking a program or writing state.
 pub fn stage_series_consume_execution_v3<'a>(
-    inputs: SeriesConsumeExecutionInputsV3<'a, '_>,
+    inputs: SeriesConsumeExecutionInputsV3<'a, 'a>,
 ) -> Result<SeriesConsumeExecutionPlanV3<'a>> {
-    if inputs.custody_physical.parent_request_digest != inputs.hot.request_digest() {
-        return Err(SeriesExecuteErrorV3::HotContext);
-    }
-    let physical = compose_consume_physical_v3(
-        inputs.action,
-        inputs.artifacts,
-        *inputs
-            .invocations
-            .get(1)
-            .ok_or(SeriesExecuteErrorV3::Invocation)?,
-        inputs.hot.ir_request_bank(),
-        inputs.hot.family_request(),
+    let composition = inputs.action.compose_consume(
         inputs.product,
         inputs.registry_program,
         inputs.ticket_state_key,
         inputs.series_bytes,
         inputs.ticket_state_bytes,
         inputs.now_slot,
-        inputs.custody_physical,
     )?;
+    let occurrence = inputs
+        .action
+        .occurrence()
+        .ok_or(SeriesExecuteErrorV3::Invocation)?
+        .occurrence()
+        .occurrence();
+    let expiry_slot = inputs
+        .action
+        .template()
+        .retry_through(occurrence)
+        .map_err(|_| SeriesExecuteErrorV3::Invocation)?;
+    let projected =
+        project_consume_v3(composition.escrow(), expiry_slot, inputs.projected_custody)?;
+    let expected_core = composition
+        .core_request()
+        .encode()
+        .map_err(|_| SeriesExecuteErrorV3::RequestBank)?;
+    let expected_projected = [
+        projected
+            .lock_and_close_source
+            .encode()
+            .map_err(|_| SeriesExecuteErrorV3::RequestBank)?,
+        projected
+            .realize_and_close
+            .encode()
+            .map_err(|_| SeriesExecuteErrorV3::RequestBank)?,
+    ];
 
-    let custody_requests = physical.custody();
     let mut calls: [Option<SeriesStagedChildCallV3<'a>>; SERIES_CONSUME_ROUTE_COUNT_V3] =
         [None; SERIES_CONSUME_ROUTE_COUNT_V3];
     for (index, invocation) in inputs.invocations.into_iter().enumerate() {
-        let (role, offset, width, witness, custody_index) = match index {
-            0 => (
-                FixedRole::Custody,
-                SERIES_CONSUME_TRANSFER_OFFSET_V3,
-                SERIES_CUSTODY_REQUEST_BYTES_V3,
-                None,
-                Some(0),
-            ),
-            1 => (
-                FixedRole::Core,
-                SERIES_CONSUME_CORE_OFFSET_V3,
-                SERIES_CONSUME_CORE_REQUEST_BYTES_V3,
-                Some(physical.core().witness),
-                None,
-            ),
-            2 => (
-                FixedRole::Custody,
-                SERIES_CONSUME_CLOSE_VAULT_OFFSET_V3,
-                SERIES_CUSTODY_REQUEST_BYTES_V3,
-                None,
-                Some(1),
-            ),
-            3 => (
-                FixedRole::Custody,
-                SERIES_CONSUME_CLOSE_REPLAY_OFFSET_V3,
-                SERIES_CUSTODY_REQUEST_BYTES_V3,
-                None,
-                Some(2),
-            ),
+        let expected = match index {
+            0 => SeriesInvocationExpectationV3 {
+                role: FixedRole::Custody,
+                request_offset: SERIES_CONSUME_LOCK_OFFSET_V3,
+                request_len: SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
+                borrows_witness: false,
+                receipt_dependencies: &SERIES_NO_RECEIPT_DEPENDENCIES_V3,
+            },
+            1 => SeriesInvocationExpectationV3 {
+                role: FixedRole::Core,
+                request_offset: SERIES_CONSUME_CORE_FOUND_OFFSET_V3,
+                request_len: SERIES_CONSUME_CORE_REQUEST_BYTES_V3,
+                borrows_witness: true,
+                receipt_dependencies: &SERIES_CORE_FOUND_RECEIPT_DEPENDENCIES_V3,
+            },
+            2 => SeriesInvocationExpectationV3 {
+                role: FixedRole::Custody,
+                request_offset: SERIES_CONSUME_REALIZE_OFFSET_V3,
+                request_len: SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
+                borrows_witness: false,
+                receipt_dependencies: &SERIES_NO_RECEIPT_DEPENDENCIES_V3,
+            },
+            3 => SeriesInvocationExpectationV3 {
+                role: FixedRole::Claims,
+                request_offset: SERIES_CONSUME_CLAIMS_OFFSET_V3,
+                request_len: SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3,
+                borrows_witness: false,
+                receipt_dependencies: &SERIES_CLAIMS_RECEIPT_DEPENDENCIES_V3,
+            },
+            4 => SeriesInvocationExpectationV3 {
+                role: FixedRole::Core,
+                request_offset: SERIES_CONSUME_CORE_OPEN_OFFSET_V3,
+                request_len: SERIES_CONSUME_CORE_REQUEST_BYTES_V3,
+                borrows_witness: true,
+                receipt_dependencies: &SERIES_CORE_OPEN_RECEIPT_DEPENDENCIES_V3,
+            },
             _ => return Err(SeriesExecuteErrorV3::Invocation),
         };
         let request = validate_invocation(
             invocation,
-            role,
-            offset,
-            width,
-            witness.is_some(),
+            inputs.artifacts.effect,
+            expected,
             inputs.hot.ir_request_bank(),
         )?;
-        if index == 1 {
-            if request != physical.core().core_request {
+        let witness = expected
+            .borrows_witness
+            .then_some(inputs.artifacts.slices.witness);
+        if index == 1 || index == 4 {
+            if request != expected_core {
                 return Err(SeriesExecuteErrorV3::RequestBank);
             }
-        } else {
-            let custody_index = custody_index.ok_or(SeriesExecuteErrorV3::RequestBank)?;
-            let custody = *custody_requests
-                .get(custody_index)
-                .ok_or(SeriesExecuteErrorV3::RequestBank)?;
-            if custody
-                .to_bytes()
-                .map_err(|_| SeriesExecuteErrorV3::RequestBank)?
-                .as_slice()
-                != request
-            {
+        } else if index == 0 || index == 2 {
+            let projected = ProjectedCustodyRequestV1::decode(request)
+                .map_err(|_| SeriesExecuteErrorV3::RequestBank)?;
+            let operation = if index == 0 {
+                ProjectedCustodyOperationV1::LockHoardAndCloseSource
+            } else {
+                ProjectedCustodyOperationV1::RealizeAndClose
+            };
+            if projected.operation != operation {
                 return Err(SeriesExecuteErrorV3::RequestBank);
             }
+            let expected = if index == 0 {
+                expected_projected[0]
+            } else {
+                expected_projected[1]
+            };
+            if request != expected {
+                return Err(SeriesExecuteErrorV3::RequestBank);
+            }
+        } else if ClaimsFoundingRequestV5::decode(request).is_err() {
+            return Err(SeriesExecuteErrorV3::RequestBank);
         }
-        let request_digest = match witness {
-            Some(_) => physical.core().child_request_digest,
+        let base_request_digest = match witness {
+            Some(witness) => hashv(&[request, witness]).to_bytes(),
             None => hash(request).to_bytes(),
         };
         *calls
@@ -278,46 +335,47 @@ pub fn stage_series_consume_execution_v3<'a>(
             invocation,
             request,
             witness,
-            request_digest,
+            base_request_digest,
         });
     }
     let [
-        Some(transfer),
-        Some(core),
-        Some(close_vault),
-        Some(close_replay),
+        Some(lock),
+        Some(found),
+        Some(realize),
+        Some(claims),
+        Some(open),
     ] = calls
     else {
         return Err(SeriesExecuteErrorV3::Invocation);
     };
-    let calls = [transfer, core, close_vault, close_replay];
-    Ok(SeriesConsumeExecutionPlanV3 { physical, calls })
+    let calls = [lock, found, realize, claims, open];
+    Ok(SeriesConsumeExecutionPlanV3 { composition, calls })
 }
 
-fn validate_invocation(
+fn validate_invocation<'a>(
     invocation: ResolvedInvocationV3,
-    role: FixedRole,
-    request_offset: usize,
-    request_len: usize,
-    borrows_witness: bool,
-    request_bank: &[u8],
-) -> Result<&[u8]> {
-    if invocation.role != role
+    effect: dclutch_effect_kernel::v3::ProgramV3<'_>,
+    expected: SeriesInvocationExpectationV3<'_>,
+    request_bank: &'a [u8],
+) -> Result<&'a [u8]> {
+    if invocation.role != expected.role
         || invocation.kind != RouteKindV3::Once
         || invocation.item.is_some()
         || invocation.repeated_item_count != 0
-        || invocation.request_offset != request_offset
-        || invocation.request_len != request_len
+        || invocation.request_offset != expected.request_offset
+        || invocation.request_len != expected.request_len
         || invocation.fixed_account_count == 0
-        || invocation.borrowed_witness.is_some() != borrows_witness
+        || invocation.borrowed_witness.is_some() != expected.borrows_witness
+        || !resolved_dependencies_match(effect, invocation, expected.receipt_dependencies)
     {
         return Err(SeriesExecuteErrorV3::Invocation);
     }
-    let end = request_offset
-        .checked_add(request_len)
+    let end = expected
+        .request_offset
+        .checked_add(expected.request_len)
         .ok_or(SeriesExecuteErrorV3::Invocation)?;
     request_bank
-        .get(request_offset..end)
+        .get(expected.request_offset..end)
         .ok_or(SeriesExecuteErrorV3::Invocation)
 }
 
@@ -325,7 +383,28 @@ fn validate_invocation(
 mod tests {
     extern crate std;
 
+    use std::{boxed::Box, vec};
+
     use super::*;
+
+    fn empty_effect_program() -> dclutch_effect_kernel::v3::ProgramV3<'static> {
+        let mut bytes = vec![0_u8; dclutch_effect_kernel::v3::HEADER_BYTES];
+        bytes
+            .get_mut(..4)
+            .expect("magic")
+            .copy_from_slice(&dclutch_effect_kernel::v3::MAGIC);
+        *bytes.get_mut(4).expect("version") = dclutch_effect_kernel::v3::VERSION;
+        bytes
+            .get_mut(12..14)
+            .expect("fixed accounts")
+            .copy_from_slice(&1_u16.to_le_bytes());
+        bytes
+            .get_mut(16..18)
+            .expect("common scalars")
+            .copy_from_slice(&1_u16.to_le_bytes());
+        dclutch_effect_kernel::v3::ProgramV3::decode(Box::leak(bytes.into_boxed_slice()))
+            .expect("empty route program")
+    }
 
     fn invocation(role: FixedRole, offset: usize, len: usize) -> ResolvedInvocationV3 {
         ResolvedInvocationV3 {
@@ -341,6 +420,8 @@ mod tests {
             request_offset: offset,
             request_len: len,
             borrowed_witness: None,
+            receipt_dependencies: dclutch_effect_kernel::v3::ResolvedReceiptDependenciesV3::empty(),
+            receipt_dependency: None,
         }
     }
 
@@ -369,59 +450,57 @@ mod tests {
     #[test]
     fn consume_route_offsets_are_global_and_gap_free() {
         let bank = [0_u8; SERIES_CONSUME_IR_REQUEST_BYTES_V3];
-        for offset in [
-            SERIES_CONSUME_TRANSFER_OFFSET_V3,
-            SERIES_CONSUME_CLOSE_VAULT_OFFSET_V3,
-            SERIES_CONSUME_CLOSE_REPLAY_OFFSET_V3,
+        for (role, offset, width) in [
+            (
+                FixedRole::Custody,
+                SERIES_CONSUME_LOCK_OFFSET_V3,
+                SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
+            ),
+            (
+                FixedRole::Custody,
+                SERIES_CONSUME_REALIZE_OFFSET_V3,
+                SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
+            ),
+            (
+                FixedRole::Claims,
+                SERIES_CONSUME_CLAIMS_OFFSET_V3,
+                SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3,
+            ),
         ] {
-            let route = invocation(FixedRole::Custody, offset, SERIES_CUSTODY_REQUEST_BYTES_V3);
+            let route = invocation(role, offset, width);
+            let expected = SeriesInvocationExpectationV3 {
+                role,
+                request_offset: offset,
+                request_len: width,
+                borrows_witness: false,
+                receipt_dependencies: &SERIES_NO_RECEIPT_DEPENDENCIES_V3,
+            };
             assert_eq!(
-                validate_invocation(
-                    route,
-                    FixedRole::Custody,
-                    offset,
-                    SERIES_CUSTODY_REQUEST_BYTES_V3,
-                    false,
-                    &bank,
-                )
-                .expect("Custody request")
-                .len(),
-                SERIES_CUSTODY_REQUEST_BYTES_V3
+                validate_invocation(route, empty_effect_program(), expected, &bank)
+                    .expect("fixed child request")
+                    .len(),
+                width
             );
         }
         let wrong = invocation(
             FixedRole::Custody,
-            SERIES_CONSUME_TRANSFER_OFFSET_V3 + 1,
-            SERIES_CUSTODY_REQUEST_BYTES_V3,
+            SERIES_CONSUME_LOCK_OFFSET_V3 + 1,
+            SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
         );
         assert_eq!(
             validate_invocation(
                 wrong,
-                FixedRole::Custody,
-                SERIES_CONSUME_TRANSFER_OFFSET_V3,
-                SERIES_CUSTODY_REQUEST_BYTES_V3,
-                false,
+                empty_effect_program(),
+                SeriesInvocationExpectationV3 {
+                    role: FixedRole::Custody,
+                    request_offset: SERIES_CONSUME_LOCK_OFFSET_V3,
+                    request_len: SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
+                    borrows_witness: false,
+                    receipt_dependencies: &SERIES_NO_RECEIPT_DEPENDENCIES_V3,
+                },
                 &bank,
             ),
             Err(SeriesExecuteErrorV3::Invocation)
-        );
-        let core = invocation(
-            FixedRole::Core,
-            SERIES_CONSUME_CORE_OFFSET_V3,
-            SERIES_CONSUME_CORE_REQUEST_BYTES_V3,
-        );
-        assert_eq!(
-            validate_invocation(
-                core,
-                FixedRole::Core,
-                SERIES_CONSUME_CORE_OFFSET_V3,
-                SERIES_CONSUME_CORE_REQUEST_BYTES_V3,
-                false,
-                &bank,
-            )
-            .expect("Core request")
-            .len(),
-            SERIES_CONSUME_CORE_REQUEST_BYTES_V3
         );
     }
 }
