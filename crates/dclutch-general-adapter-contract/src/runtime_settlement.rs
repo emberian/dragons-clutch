@@ -213,8 +213,6 @@ pub struct RuntimeSettlementViewV2<'a> {
     pub expected_revision: u64,
     /// Immutable config-selected surplus beneficiary for Close only.
     pub surplus_beneficiary: Option<[u8; 32]>,
-    /// Unique nonzero terminal coordinate for Close only.
-    pub terminal_coordinate: u64,
 }
 
 /// Return exact `192 + 8N` bytes for one settlement effect candidate.
@@ -350,7 +348,6 @@ pub fn evaluate_runtime_settlement_v2(
             buffers.inventory_scratch,
             view.surplus_beneficiary
                 .ok_or(RuntimeSettlementErrorV2::CoordinateMismatch)?,
-            view.terminal_coordinate,
             consumed_revision,
         )?,
     };
@@ -381,8 +378,7 @@ fn selected_order<'a>(
     );
     if row_action != view.manifest.is_some()
         || (!row_action && view.manifest_order_index != 0)
-        || (view.action != RuntimeSettlementActionV2::Close
-            && (view.surplus_beneficiary.is_some() || view.terminal_coordinate != 0))
+        || (view.action != RuntimeSettlementActionV2::Close && view.surplus_beneficiary.is_some())
     {
         return Err(RuntimeSettlementErrorV2::CoordinateMismatch);
     }
@@ -527,12 +523,13 @@ fn close(
     cursor: &mut SettlementCursorHeaderV2,
     inventory: &[u8],
     beneficiary: [u8; 32],
-    terminal_coordinate: u64,
     consumed_revision: u64,
 ) -> RuntimeSettlementResultV2<RuntimeSettlementEffectHeaderV2> {
+    let terminal_coordinate = consumed_revision
+        .checked_add(1)
+        .ok_or(RuntimeSettlementErrorV2::ArithmeticOverflow)?;
     if cursor.phase != SettlementPhaseV2::ReadyToClose
         || cursor.next_order != cursor.order_count
-        || terminal_coordinate == 0
         || zero_identity(&beneficiary)
         || inventory.iter().any(|byte| *byte != 0)
     {
@@ -1198,11 +1195,6 @@ mod tests {
                 expected_revision: cursor_value.header().revision,
                 surplus_beneficiary: (action == RuntimeSettlementActionV2::Close)
                     .then_some(BENEFICIARY),
-                terminal_coordinate: if action == RuntimeSettlementActionV2::Close {
-                    42
-                } else {
-                    0
-                },
             },
             RuntimeSettlementBuffersV2 {
                 cursor_scratch: &mut cursor_scratch,
@@ -1331,16 +1323,24 @@ mod tests {
         assert_eq!(ready.header().phase, SettlementPhaseV2::ReadyToClose);
         assert_eq!(ready.header().quote_inventory, 0);
         assert!((0..16).all(|outcome| ready.inventory(outcome).expect("inventory") == 0));
+        let terminal_coordinate = ready
+            .header()
+            .revision
+            .checked_add(1)
+            .expect("terminal successor revision");
 
         let (terminal_bytes, effect) =
             settle(&fixture, &cursor, RuntimeSettlementActionV2::Close, None, 0);
         let close_effect = RuntimeSettlementEffectPlanV2::decode(&effect).expect("close effect");
         assert!(close_effect.header().terminal);
         assert_eq!(close_effect.header().beneficiary, BENEFICIARY);
-        assert_eq!(close_effect.header().terminal_coordinate, 42);
+        assert_eq!(
+            close_effect.header().terminal_coordinate,
+            terminal_coordinate
+        );
         let terminal = SettlementCursorV2::decode(&terminal_bytes).expect("terminal cursor");
         assert_eq!(terminal.header().phase, SettlementPhaseV2::Terminal);
-        assert_eq!(terminal.header().terminal_coordinate, 42);
+        assert_eq!(terminal.header().terminal_coordinate, terminal_coordinate);
     }
 
     #[test]
@@ -1393,11 +1393,6 @@ mod tests {
                     expected_revision: 1,
                     surplus_beneficiary: (action == RuntimeSettlementActionV2::Close)
                         .then_some(BENEFICIARY),
-                    terminal_coordinate: if action == RuntimeSettlementActionV2::Close {
-                        42
-                    } else {
-                        0
-                    },
                 },
                 RuntimeSettlementBuffersV2 {
                     cursor_scratch: &mut cursor_scratch,
