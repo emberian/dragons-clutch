@@ -1,7 +1,6 @@
 //! Hostile chain-observation and exact-frame tests for the Rational V2 operator.
 
 use dclutch_claims_svm::{
-    NO_POSITION_REVISION,
     liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
         LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, LiabilityBasisMarketInputV2,
@@ -9,6 +8,7 @@ use dclutch_claims_svm::{
         encode_liability_basis_position_into_v2,
     },
     protocol_position_v2::ProtocolPositionSeedsV2,
+    signed_delta_v3::SignedDeltaPlanV3,
 };
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
@@ -19,11 +19,25 @@ use dclutch_custody_contract::{
 use dclutch_market_core_codec::{
     CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase as CorePhase, Readiness,
 };
+use dclutch_product_payoff_v2_codec::{
+    registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+    runtime_v3::{
+        BasisInputV3, BasisKindV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, basis_record_bytes_v3,
+        compile_basis_v3, semantic_basis_preimage_v3,
+    },
+};
+use dclutch_product_runtime_v2::{
+    ContentId as ProductContentId, PortfolioInputV2, ResultDomainInputV2, compile_portfolio_v2,
+    compile_result_domain_v2, portfolio_record_bytes, result_domain_record_bytes,
+};
+use dclutch_product_runtime_v2_admission::{
+    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
+    RESULT_DOMAIN_SCHEMA_ID_V2,
+};
 use dclutch_rational_representation_v2_contract::{
-    ASSET_BYTES_V2, AssetV2, CallerRoleV2, RATIONAL_REPLAY_SEED_V2,
+    ABSENT_REVISION, CallerRoleV2, RATIONAL_REPLAY_SEED_V2,
     RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2, RATIONAL_SHARD_MINT_SEED_V2,
-    RATIONAL_STRUCTURED_CUSTODY_SEED_V2, RepresentationActionV2, RepresentationRequestHeaderV2,
-    RepresentationRequestV2,
+    RATIONAL_STRUCTURED_CUSTODY_SEED_V2, RepresentationActionV2, RepresentationRequestV2,
 };
 use dclutch_rational_representation_v2_kernel::{
     DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3, GRAPH_EDGE_BYTES,
@@ -52,7 +66,12 @@ use dclutch_release_set_contract::{
     ProgramIdentityV1,
 };
 use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
-use solana_program::{hash::hash, instruction::AccountMeta, pubkey::Pubkey, rent::Rent};
+use solana_program::{
+    hash::{hash, hashv},
+    instruction::AccountMeta,
+    pubkey::Pubkey,
+    rent::Rent,
+};
 use solana_program_option::COption;
 use solana_program_pack::Pack;
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
@@ -409,6 +428,117 @@ fn descriptor_bytes(
     output
 }
 
+fn product_v3_records() -> (
+    OwnedRecord,
+    OwnedRecord,
+    OwnedRecord,
+    OwnedRecord,
+    [u8; 32],
+    [u8; 32],
+) {
+    let product_id = ProductContentId::new([0x61; 32]).expect("Product identity");
+    let coordinate_domain_id = ProductContentId::new([0x22; 32]).expect("coordinate domain");
+    let result_unit_id = ProductContentId::new([0x23; 32]).expect("result unit");
+    let evaluator_release_id = [0x24; 32];
+    let provisional_input = BasisInputV3 {
+        kind: BasisKindV3::CategoricalQ1,
+        product_id: product_id.to_bytes(),
+        result_domain_id: [0x25; 32],
+        coordinate_domain_id: coordinate_domain_id.to_bytes(),
+        result_unit_id: result_unit_id.to_bytes(),
+        evaluator_release_id,
+        basis_width: OUTCOME_COUNT,
+        payout_scale: 1,
+        knot_denominator: 1,
+        knots: &[],
+        terms: &[],
+        failure_payouts: &[],
+    };
+    let mut provisional =
+        vec![
+            0_u8;
+            basis_record_bytes_v3(BasisKindV3::CategoricalQ1, OUTCOME_COUNT as usize, 0, 0)
+                .expect("basis width")
+        ];
+    compile_basis_v3(provisional_input, &mut provisional).expect("provisional basis");
+    let semantic = semantic_basis_preimage_v3(&provisional).expect("semantic basis preimage");
+    let semantic_basis_id = ProductContentId::new(
+        hashv(&[
+            SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
+            semantic.prefix(),
+            semantic.suffix(),
+        ])
+        .to_bytes(),
+    )
+    .expect("semantic basis identity");
+    let mut domain = vec![0_u8; result_domain_record_bytes(0).expect("domain width")];
+    compile_result_domain_v2(
+        ResultDomainInputV2 {
+            product_id,
+            coordinate_domain_id,
+            result_unit_id,
+            liability_basis_id: semantic_basis_id,
+            representation_release_id: ProductContentId::new([0x26; 32])
+                .expect("representation release"),
+            mapping_release_id: ProductContentId::new([0x27; 32]).expect("mapping release"),
+            cut_denominator: 1,
+            cuts: &[],
+        },
+        &mut domain,
+    )
+    .expect("result domain");
+    let result_domain = OwnedRecord::new(RESULT_DOMAIN_SCHEMA_ID_V2, domain);
+    let result_domain_id = ProductContentId::new(result_domain.digest()).expect("domain digest");
+    let mut portfolio = vec![0_u8; portfolio_record_bytes(2).expect("portfolio width")];
+    compile_portfolio_v2(
+        PortfolioInputV2 {
+            product_id,
+            result_domain_id,
+            claim_basis_id: ProductContentId::new([0x28; 32]).expect("claim basis"),
+            liability_basis_id: semantic_basis_id,
+            representation_release_id: ProductContentId::new([0x26; 32])
+                .expect("representation release"),
+            denominator: DENOMINATOR,
+            coefficients: &COEFFICIENTS,
+        },
+        &mut portfolio,
+    )
+    .expect("portfolio");
+    let portfolio = OwnedRecord::new(PORTFOLIO_SCHEMA_ID_V2, portfolio);
+    let mut product = vec![0_u8; PRODUCT_RECORD_BYTES_V2];
+    ProductRecordV2::new(
+        product_id,
+        result_domain_id,
+        ProductContentId::new(portfolio.digest()).expect("portfolio digest"),
+    )
+    .encode_into(&mut product)
+    .expect("Product record");
+    let product = OwnedRecord::new(PRODUCT_RECORD_SCHEMA_ID_V2, product);
+    let mut basis =
+        vec![
+            0_u8;
+            basis_record_bytes_v3(BasisKindV3::CategoricalQ1, OUTCOME_COUNT as usize, 0, 0)
+                .expect("basis width")
+        ];
+    compile_basis_v3(
+        BasisInputV3 {
+            result_domain_id: result_domain_id.to_bytes(),
+            ..provisional_input
+        },
+        &mut basis,
+    )
+    .expect("ProductBasisV3");
+    let basis = OwnedRecord::new(GRADED_BASIS_RECORD_SCHEMA_ID_V3, basis);
+    (
+        basis,
+        product,
+        result_domain,
+        portfolio,
+        product_id.to_bytes(),
+        semantic_basis_id.to_bytes(),
+    )
+}
+
 fn core_market(
     release_set: [u8; 32],
     realm: [u8; 32],
@@ -585,7 +715,6 @@ struct OwnedTerminal {
     hoard: Vec<u8>,
     recipient_key: Pubkey,
     recipient: Vec<u8>,
-    custody_caller: Pubkey,
     custody_authority: Pubkey,
 }
 
@@ -609,8 +738,6 @@ struct Fixture {
     product_record: OwnedRecord,
     result_domain_record: OwnedRecord,
     portfolio_record: OwnedRecord,
-    descriptor_id: [u8; 32],
-    representation_authority: Pubkey,
     replay_key: Pubkey,
     replay: Vec<u8>,
     receipt_mint_key: Pubkey,
@@ -647,12 +774,14 @@ impl Fixture {
         })
         .expect("Realm");
         let realm_record = OwnedRecord::new(REALM_SCHEMA_RELEASE_ID_V1, realm.to_bytes().to_vec());
-        let linked_basis = OwnedRecord::new([0xa1; 32], vec![0xb1; 32]);
-        let product_record = OwnedRecord::new([0xa2; 32], vec![0xb2; 32]);
-        let result_domain_record = OwnedRecord::new([0xa3; 32], vec![0xb3; 32]);
-        let portfolio_record = OwnedRecord::new([0xa4; 32], vec![0xb4; 32]);
-        let product_id = [0x61; 32];
-        let basis_id = [0x62; 32];
+        let (
+            linked_basis,
+            product_record,
+            result_domain_record,
+            portfolio_record,
+            product_id,
+            basis_id,
+        ) = product_v3_records();
         let (market, core) = core_market(
             release_set,
             realm_record.digest(),
@@ -837,8 +966,6 @@ impl Fixture {
             product_record,
             result_domain_record,
             portfolio_record,
-            descriptor_id,
-            representation_authority,
             replay_key,
             replay,
             receipt_mint_key,
@@ -894,7 +1021,6 @@ impl Fixture {
 
     fn build_terminal(&self, realm: OwnedRecord, collateral_mint_key: Pubkey) -> OwnedTerminal {
         let recipient_key = Pubkey::new_from_array([0x85; 32]);
-        let request = self.expected_terminal_request_with(&realm, recipient_key);
         let mut custody_request = CustodyRequestV1 {
             operation: OperationV1::Transfer,
             caller_role: CustodyCallerRoleV1::Claims,
@@ -903,14 +1029,14 @@ impl Fixture {
             release_set: self.release_set,
             market: self.market.to_bytes(),
             realm: realm.digest(),
-            context: PARENT_CONTEXT,
+            context: [0x69; 32],
             caller_program: CLAIMS.to_bytes(),
             semantic: ContextV1 {
-                candidate: self.descriptor_id,
+                candidate: [0x91; 32],
                 source_owner: [0; 32],
                 destination_owner: ACTOR.to_bytes(),
-                order: [0x31; 32],
-                parent_request_digest: hash(&request).to_bytes(),
+                order: [0; 32],
+                parent_request_digest: [0x92; 32],
                 order_nonce: REPRESENTATION_REVISION,
                 generation: GENERATION,
                 page_index: 0,
@@ -936,7 +1062,6 @@ impl Fixture {
         )
         .0;
         custody_request.source = hoard_key.to_bytes();
-        let custody_request_bytes = custody_request.to_bytes().expect("Custody request");
         let custody_replay_key = Pubkey::find_program_address(
             &CustodyReplaySeedsV1::from_request(custody_request).as_slices(),
             &CUSTODY,
@@ -947,25 +1072,12 @@ impl Fixture {
             &CUSTODY,
         )
         .0;
-        let custody_caller = Pubkey::find_program_address(
-            &dclutch_release_set_contract::CallerAuthoritySeedsV1::new(
-                ContentId::new(self.release_set).expect("release set"),
-                self.market.to_bytes(),
-                ExecutionRoleV1::Claims,
-                PARENT_CONTEXT,
-                hash(&custody_request_bytes).to_bytes(),
-            )
-            .expect("Custody caller seeds")
-            .as_slices(),
-            &CLAIMS,
-        )
-        .0;
         let replay = CustodyReplayV1 {
             caller_role: CustodyCallerRoleV1::Claims,
             release_set: self.release_set,
             market: self.market.to_bytes(),
             realm: realm.digest(),
-            context: PARENT_CONTEXT,
+            context: [0x69; 32],
             caller_program: CLAIMS.to_bytes(),
             rent_refund: ACTOR.to_bytes(),
             open_vault_count: 1,
@@ -977,83 +1089,23 @@ impl Fixture {
         let replay_bytes = replay.to_bytes().expect("Custody replay").to_vec();
         assert_eq!(replay_bytes.len(), CUSTODY_REPLAY_BYTES_V1);
         OwnedTerminal {
-            terminal_coordinate: OwnedRecord::new([0xa5; 32], vec![0xb5; 32]),
+            terminal_coordinate: OwnedRecord {
+                schema: [0; 32],
+                raw: CORE,
+                staging: CORE,
+                bytes: Vec::new(),
+            },
             realm,
             collateral_mint_key,
             collateral_mint: mint_data(COption::None, 6, 6),
             custody_replay_key,
             custody_replay: replay_bytes,
             hoard_key,
-            hoard: token_data(collateral_mint_key, custody_authority, 1),
+            hoard: token_data(collateral_mint_key, custody_authority, 7),
             recipient_key,
             recipient: token_data(collateral_mint_key, ACTOR, 5),
-            custody_caller,
             custody_authority,
         }
-    }
-
-    fn expected_terminal_request_with(&self, realm: &OwnedRecord, recipient: Pubkey) -> Vec<u8> {
-        let selected = self.assets.get(1).expect("winner asset");
-        let custody_owner = Pubkey::find_program_address(
-            &[
-                dclutch_rational_representation_v2_contract::RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2,
-                self.descriptor_id.as_slice(),
-                &WINNER.to_le_bytes(),
-            ],
-            &CLAIMS,
-        )
-        .0;
-        let asset = AssetV2 {
-            shard_mint: selected.shard_mint_key.to_bytes(),
-            actor_shard_account: selected.actor_shard_key.to_bytes(),
-            structured_custody_account: selected.structured_key.to_bytes(),
-            claims_custody_owner: custody_owner.to_bytes(),
-            coefficient: 7,
-            expected_shard_supply: 70,
-            expected_actor_shards: 21,
-            expected_structured_shards: 49,
-        };
-        let mut rows = vec![0; ASSET_BYTES_V2];
-        asset.encode_into(&mut rows).expect("asset row");
-        let request = RepresentationRequestV2::new(
-            RepresentationRequestHeaderV2 {
-                action: RepresentationActionV2::RedeemTerminal,
-                caller_role: CallerRoleV2::Trading,
-                release_set: self.release_set,
-                market: self.market.to_bytes(),
-                graph_id: [0x31; 32],
-                descriptor_id: self.descriptor_id,
-                parent_context: PARENT_CONTEXT,
-                actor: ACTOR.to_bytes(),
-                receipt_mint: self.receipt_mint_key.to_bytes(),
-                receipt_account: [0; 32],
-                representation_authority: self.representation_authority.to_bytes(),
-                token_program: TOKEN_2022_PROGRAM_ID,
-                realm: realm.digest(),
-                collateral_recipient: recipient.to_bytes(),
-                expected_representation_revision: REPRESENTATION_REVISION,
-                expected_claims_market_revision: 3,
-                expected_actor_position_revision: NO_POSITION_REVISION,
-                expected_custody_position_revision: 1,
-                expected_custody_replay_revision: CUSTODY_REVISION,
-                generation: GENERATION,
-                quantity: 1,
-                denominator: DENOMINATOR,
-                expected_receipt_supply: RECEIPT_SUPPLY,
-                outcome_count: OUTCOME_COUNT,
-                selected_outcome: WINNER,
-                asset_count: 1,
-            },
-            &rows,
-        )
-        .expect("terminal request");
-        let mut output = vec![
-            0;
-            dclutch_rational_representation_v2_contract::REQUEST_HEADER_BYTES_V2
-                + ASSET_BYTES_V2
-        ];
-        request.encode_into(&mut output).expect("request bytes");
-        output
     }
 
     fn terminal_observation(&self) -> TerminalObservationV2<'_> {
@@ -1160,8 +1212,9 @@ fn all_five_requests_roundtrip_with_exact_sparse_or_full_frames() {
     assert_eq!(denominate.assets.len(), 1);
     assert_eq!(issue.assets.len(), 2);
     assert!(issue.terminal.is_none());
+    let terminal_derivation = redeem.terminal.as_ref().expect("terminal identities");
     assert_eq!(
-        redeem.terminal.expect("terminal identities").realm,
+        terminal_derivation.realm,
         Pubkey::new_from_array(
             terminal
                 .terminal
@@ -1170,6 +1223,62 @@ fn all_five_requests_roundtrip_with_exact_sparse_or_full_frames() {
                 .realm
                 .digest(),
         )
+    );
+    assert_eq!(terminal_derivation.payout, 1);
+    assert_eq!(
+        terminal_derivation.signed_delta_packet_digest,
+        hash(&terminal_derivation.signed_delta_packet).to_bytes()
+    );
+    let _ = SignedDeltaPlanV3::decode(&terminal_derivation.signed_delta_packet)
+        .expect("canonical SignedDeltaV3 packet");
+    let custody = terminal_derivation
+        .custody_request
+        .expect("positive payout Custody request");
+    assert_eq!(custody.amount, 1);
+    assert_eq!(custody.context, [0x69; 32]);
+    assert_eq!(
+        custody.semantic.candidate,
+        terminal_derivation.candidate_digest
+    );
+    assert_eq!(custody.semantic.order, [0; 32]);
+    assert_eq!(
+        custody.semantic.parent_request_digest,
+        redeem.request_digest
+    );
+    assert_eq!(custody.source, terminal_derivation.hoard.to_bytes());
+    assert_eq!(custody.expected_revision, CUSTODY_REVISION);
+    assert_eq!(
+        Pubkey::find_program_address(
+            &CustodyReplaySeedsV1::from_request(custody).as_slices(),
+            &CUSTODY,
+        )
+        .0,
+        terminal_derivation.custody_replay,
+    );
+    assert_eq!(
+        Pubkey::find_program_address(
+            &CustodyAuthoritySeedsV1::from_request(custody).as_slices(),
+            &CUSTODY,
+        )
+        .0,
+        terminal_derivation.custody_authority,
+    );
+    let custody_bytes = custody.to_bytes().expect("Custody bytes");
+    assert_eq!(
+        Pubkey::find_program_address(
+            &dclutch_release_set_contract::CallerAuthoritySeedsV1::new(
+                ContentId::new(custody.release_set).expect("release"),
+                custody.market,
+                ExecutionRoleV1::Claims,
+                custody.context,
+                hash(&custody_bytes).to_bytes(),
+            )
+            .expect("caller seeds")
+            .as_slices(),
+            &CLAIMS,
+        )
+        .0,
+        terminal_derivation.custody_caller_authority,
     );
 }
 
@@ -1349,8 +1458,9 @@ fn account_order_signers_writability_and_sentinels_are_exact() {
         .terminal
         .as_ref()
         .expect("terminal fixture");
+    let derived = redeem.terminal.as_ref().expect("terminal derivation");
     for (offset, key, writable) in [
-        (36, terminal.custody_caller, false),
+        (36, derived.custody_caller_authority, false),
         (37, CUSTODY, false),
         (38, programdata(CUSTODY), false),
         (39, terminal.terminal_coordinate.raw, false),
@@ -1382,7 +1492,7 @@ fn account_order_signers_writability_and_sentinels_are_exact() {
 }
 
 #[test]
-fn hostile_chain_substitution_zero_width_replay_and_winner_refuse() {
+fn hostile_chain_substitution_zero_width_and_replay_refuse() {
     let fixture = Fixture::new(false);
     let assets = fixture.asset_observations();
     let selected = assets.get(1..2).expect("selected asset");
@@ -1475,18 +1585,81 @@ fn hostile_chain_substitution_zero_width_replay_and_winner_refuse() {
 
     let terminal_fixture = Fixture::new(true);
     let terminal_assets = terminal_fixture.asset_observations();
-    let mut wrong_winner = terminal_fixture.terminal_observation();
-    wrong_winner.outcome = 0;
+    let mut losing = terminal_fixture.terminal_observation();
+    losing.outcome = 0;
+    losing.custody_replay = observed(CUSTODY, CUSTODY, &[]);
+    let losing_redeem = construct_redeem_terminal(
+        terminal_fixture.observation(
+            terminal_assets
+                .first()
+                .map(std::slice::from_ref)
+                .expect("first asset"),
+            Mode::Terminal,
+        ),
+        losing,
+    )
+    .expect("resolved losing claim redeems at zero payout");
+    let losing_header = RepresentationRequestV2::decode(&losing_redeem.instruction.data)
+        .expect("losing request")
+        .header();
+    assert_eq!(losing_header.selected_outcome, 0);
+    assert_eq!(
+        losing_header.expected_custody_replay_revision,
+        ABSENT_REVISION
+    );
+    let losing_terminal = losing_redeem.terminal.as_ref().expect("terminal evidence");
+    assert_eq!(losing_terminal.payout, 0);
+    assert!(losing_terminal.custody_request.is_none());
+    assert_eq!(losing_terminal.custody_caller_authority, CLAIMS);
+    assert_eq!(losing_terminal.custody_replay, CUSTODY);
+    SignedDeltaPlanV3::decode(&losing_terminal.signed_delta_packet)
+        .expect("losing debit remains canonical SignedDeltaV3");
+
+    let mut wrong_context_bytes = terminal_fixture
+        .terminal
+        .as_ref()
+        .and_then(|value| CustodyReplayV1::decode(&value.custody_replay).ok())
+        .expect("Custody replay");
+    wrong_context_bytes.context = [0xbb; 32];
+    let wrong_context_bytes = wrong_context_bytes
+        .to_bytes()
+        .expect("wrong-context replay")
+        .to_vec();
+    let mut wrong_context = terminal_fixture.terminal_observation();
+    wrong_context.custody_replay.data = &wrong_context_bytes;
     assert_eq!(
         construct_redeem_terminal(
             terminal_fixture.observation(
-                terminal_assets
-                    .first()
-                    .map(std::slice::from_ref)
-                    .expect("first asset"),
+                terminal_assets.get(1..2).expect("winner asset"),
                 Mode::Terminal,
             ),
-            wrong_winner,
+            wrong_context,
+        ),
+        Err(Error::InvalidTerminal)
+    );
+
+    let mut wrong_replay_pda = terminal_fixture.terminal_observation();
+    wrong_replay_pda.custody_replay.key = Pubkey::new_from_array([0xbc; 32]);
+    assert_eq!(
+        construct_redeem_terminal(
+            terminal_fixture.observation(
+                terminal_assets.get(1..2).expect("winner asset"),
+                Mode::Terminal,
+            ),
+            wrong_replay_pda,
+        ),
+        Err(Error::InvalidTerminal)
+    );
+
+    let mut wrong_hoard_pda = terminal_fixture.terminal_observation();
+    wrong_hoard_pda.hoard.key = Pubkey::new_from_array([0xbd; 32]);
+    assert_eq!(
+        construct_redeem_terminal(
+            terminal_fixture.observation(
+                terminal_assets.get(1..2).expect("winner asset"),
+                Mode::Terminal,
+            ),
+            wrong_hoard_pda,
         ),
         Err(Error::InvalidTerminal)
     );

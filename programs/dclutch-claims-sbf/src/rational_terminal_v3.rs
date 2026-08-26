@@ -12,7 +12,8 @@ use alloc::{boxed::Box, vec, vec::Vec};
 use dclutch_claims_svm::{
     CallerRole,
     product_basis_terminal_v3::{
-        ProductBasisTerminalInputV3, encode_product_basis_terminal_signed_delta_v3,
+        ProductBasisTerminalInputV3, TERMINAL_CANDIDATE_DOMAIN_V3,
+        encode_product_basis_terminal_signed_delta_v3,
     },
     protocol_position_v2::ProtocolPositionClaimsCapabilitySeedsV2,
     signed_delta_v3::{SignedDeltaReceiptV3, SignedDeltaV3, plan_bytes},
@@ -45,8 +46,6 @@ use super::{
         execute_parent_authenticated as execute_parent_signed_delta_v3,
     },
 };
-
-const TERMINAL_CANDIDATE_DOMAIN_V3: &[u8] = b"dclutch/rational-terminal-candidate/v3";
 
 #[derive(Clone, Copy)]
 pub(crate) struct RationalTerminalFrameV3<'accounts, 'info> {

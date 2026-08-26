@@ -11,11 +11,17 @@
 //! adapter reauthenticates every observation.
 
 use dclutch_claims_svm::{
-    NO_POSITION_REVISION,
+    CallerRole, NO_POSITION_REVISION,
     liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
     },
+    product_basis_terminal_v3::{
+        ProductBasisTerminalInputV3, TERMINAL_CANDIDATE_DOMAIN_V3, TERMINAL_COORDINATE_BYTES_V2,
+        TERMINAL_COORDINATE_MAGIC_V2, TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2,
+        encode_product_basis_terminal_signed_delta_v3,
+    },
     protocol_position_v2::ProtocolPositionSeedsV2,
+    signed_delta_v3::{DeltaDirectionV3, SignedDeltaV3, plan_bytes},
 };
 use dclutch_custody_contract::{
     CUSTODY_REPLAY_BYTES_V1, CallerRoleV1 as CustodyCallerRoleV1, CompartmentV1, ContextV1,
@@ -23,6 +29,15 @@ use dclutch_custody_contract::{
     CustodyVaultSeedsV1, OperationV1,
 };
 use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, Phase as CorePhase};
+use dclutch_product_payoff_v2_codec::runtime_v3::{BasisKindV3, ProductBasisV3};
+use dclutch_product_runtime_v2::ContentId as ProductContentId;
+use dclutch_product_runtime_v2_svm_reader::{
+    FinalizedRecordFrameV2, ProductRuntimeFrameV3,
+    representation_v3::{
+        RepresentationRuntimeContextV3, RepresentationRuntimeFrameV3,
+        authenticate_product_representation_v3,
+    },
+};
 use dclutch_rational_representation_v2_contract::{
     ABSENT_REVISION, ASSET_BYTES_V2, AssetV2, CallerRoleV2, RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2,
     RATIONAL_REPLAY_BYTES_V2, RATIONAL_REPLAY_SEED_V2, RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
@@ -33,6 +48,7 @@ use dclutch_rational_representation_v2_contract::{
 use dclutch_rational_representation_v2_kernel::{
     ContentAdmissionV2, DescriptorAdmissionV2, REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
     REPRESENTATION_GRAPH_SCHEMA_RELEASE_ID_V2, RepresentationDescriptorV2, RepresentationGraphV2,
+    product_v3::{RepresentationAdmissionV3, TerminalScenarioV3},
 };
 use dclutch_realm_contract::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
@@ -40,7 +56,8 @@ use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionRele
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_token_svm::{AccountState, COption, Mint, TokenAccount, TokenProgram};
 use solana_program::{
-    hash::hash,
+    account_info::AccountInfo,
+    hash::{hash, hashv},
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
     rent::Rent,
@@ -207,16 +224,18 @@ pub struct StructuredActionInputV2 {
     pub quantity: u64,
 }
 
-/// Positive terminal payout observations.
+/// Product-terminal payout observations.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TerminalObservationV2<'a> {
-    /// Exact selected terminal outcome. It must equal the Core winner.
+    /// Exact native claim coordinate being redeemed. It need not be the
+    /// resolved winner: losing claims redeem at an exact zero payout.
     pub outcome: u32,
     /// Exact terminal shard/native quantity.
     pub quantity: u64,
     /// Finalized immutable Realm selected by Core.
     pub realm: FinalizedRecordObservationV2<'a>,
-    /// Finalized terminal coordinate selected by the LBV2 payout route.
+    /// Finalized Core-owned terminal coordinate for an ordinary graded result;
+    /// the Core program placeholder pair for categorical or failure results.
     pub terminal_coordinate: FinalizedRecordObservationV2<'a>,
     /// Current Custody replay account.
     pub custody_replay: ObservedAccountV2<'a>,
@@ -245,8 +264,8 @@ pub struct DerivedAssetIdentitiesV2 {
     pub structured_custody_account: Pubkey,
 }
 
-/// Canonical positive-terminal Custody identities.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Canonical Product-terminal SignedDelta and Custody projection.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DerivedTerminalIdentitiesV2 {
     /// Finalized Realm content identity.
     pub realm: Pubkey,
@@ -258,6 +277,18 @@ pub struct DerivedTerminalIdentitiesV2 {
     pub hoard: Pubkey,
     /// Custody transfer-authority PDA.
     pub custody_authority: Pubkey,
+    /// Exact ProductBasisV3 payout for the selected debit quantity.
+    pub payout: u64,
+    /// Canonical Claims SignedDeltaV3 packet derived from the final request.
+    pub signed_delta_packet: Vec<u8>,
+    /// SHA-256 of the canonical SignedDeltaV3 packet.
+    pub signed_delta_packet_digest: [u8; 32],
+    /// Candidate binding packet, payout, Product admission, and terminal result.
+    pub candidate_digest: [u8; 32],
+    /// Product/Claims-owned custody context persisted by LBV2 Market.
+    pub custody_context: [u8; 32],
+    /// Exact typed Custody request. It is absent for zero-payout redemption.
+    pub custody_request: Option<CustodyRequestV1>,
 }
 
 /// Complete exact unsigned Claims child instruction and derived identities.
@@ -276,7 +307,7 @@ pub struct ConstructedInstructionV2 {
     pub claims_aggregate: Pubkey,
     /// Exact action-shaped derived asset identities.
     pub assets: Vec<DerivedAssetIdentitiesV2>,
-    /// Positive-terminal Custody identities, absent for all other actions.
+    /// Product-terminal evidence, absent for all other actions.
     pub terminal: Option<DerivedTerminalIdentitiesV2>,
 }
 
@@ -302,9 +333,13 @@ struct CommonV2<'a> {
     representation_replay: Pubkey,
     claims_aggregate: Pubkey,
     claims_basis_id: [u8; 32],
+    claims_custody_context: [u8; 32],
     representation_revision: u64,
     claims_market_revision: u64,
     receipt_supply: u64,
+    product_record_digest: [u8; 32],
+    result_outcome_count: u32,
+    representation_admission: RepresentationAdmissionV3,
 }
 
 #[derive(Clone, Copy)]
@@ -349,8 +384,10 @@ pub fn construct_unwrap_structured(
     construct_structured(RepresentationActionV2::UnwrapStructured, observation, input)
 }
 
-/// Construct exact positive-payout RedeemTerminal request data and ordered
-/// account metas. The selected coordinate must equal the terminal Core winner.
+/// Construct exact ProductV3 RedeemTerminal request data and ordered account
+/// metas. Any in-domain native claim may be redeemed after resolution; a
+/// losing claim produces the same canonical SignedDelta debit and no Custody
+/// transfer because its exact payout is zero.
 pub fn construct_redeem_terminal(
     observation: RationalObservationV2<'_>,
     terminal: TerminalObservationV2<'_>,
@@ -359,14 +396,25 @@ pub fn construct_redeem_terminal(
         return Err(Error::InvalidAction);
     }
     let common = authenticate_common(observation, RepresentationActionV2::RedeemTerminal)?;
-    if !matches!(common.core.phase, CorePhase::Terminal | CorePhase::Retiring)
-        || common.core.terminal_winner != terminal.outcome
+    if common.core.phase != CorePhase::Terminal
+        || terminal.outcome >= common.representation_admission.basis_width()
     {
         return Err(Error::InvalidTerminal);
     }
     let assets = authenticate_assets(common, Some(terminal.outcome))?;
     let selected = assets.first().copied().ok_or(Error::InvalidWidth)?;
     let terminal_context = authenticate_terminal_context(common, terminal)?;
+    let payout = evaluate_terminal_payout(
+        common,
+        terminal_context.scenario,
+        terminal.outcome,
+        terminal.quantity,
+    )?;
+    let custody_replay_revision = if payout == 0 {
+        ABSENT_REVISION
+    } else {
+        authenticate_positive_custody_replay(common, terminal, terminal_context)?
+    };
     let header = request_header(
         common,
         HeaderActionV2 {
@@ -375,14 +423,20 @@ pub fn construct_redeem_terminal(
             selected_outcome: terminal.outcome,
             custody_position_revision: selected.custody_position_revision,
             actor_position_revision: NO_POSITION_REVISION,
-            custody_replay_revision: terminal_context.custody_replay.next_revision,
+            custody_replay_revision,
             realm: terminal_context.realm_id.to_bytes(),
             recipient: terminal.collateral_recipient.key.to_bytes(),
         },
     );
     let request_data = encode_request(header, &assets)?;
-    let terminal_derived =
-        derive_terminal_after_request(common, terminal, terminal_context, &request_data)?;
+    let terminal_derived = derive_terminal_after_request(
+        common,
+        terminal,
+        terminal_context,
+        &request_data,
+        payout,
+        selected,
+    )?;
     finish_instruction(
         common,
         header,
@@ -556,6 +610,29 @@ fn authenticate_common<'a>(
     {
         return Err(Error::InvalidClaims);
     }
+    let authenticated_product = authenticate_product_representation_observation_v3(
+        observation,
+        roles.claims,
+        core.identity.product_record.to_bytes(),
+        descriptor_id,
+        claims_market,
+    )?;
+    if authenticated_product.admission.descriptor_id() != descriptor_id
+        || authenticated_product.admission.graph_id() != descriptor.graph_id()
+        || authenticated_product.admission.graph_digest() != descriptor.graph_digest()
+        || authenticated_product.admission.market_id() != descriptor.market_id()
+        || authenticated_product.admission.release_set_id() != descriptor.release_set_id()
+        || authenticated_product.admission.semantic_basis_id() != claims_market.basis_id
+        || authenticated_product.admission.product_id() != claims_market.product_instance_id
+        || authenticated_product.admission.basis_width() != descriptor.outcome_count()
+        || authenticated_product.admission.receipt_mint() != descriptor.receipt_mint()
+        || authenticated_product.admission.token_program() != descriptor.token_program()
+        || authenticated_product.admission.representation_authority()
+            != representation_authority.to_bytes()
+        || authenticated_product.product_record_digest != core.identity.product_record.to_bytes()
+    {
+        return Err(Error::InvalidRepresentation);
+    }
     if !phases_admit(action, core.phase) {
         return Err(Error::InvalidCoreMarket);
     }
@@ -596,9 +673,136 @@ fn authenticate_common<'a>(
         representation_replay,
         claims_aggregate,
         claims_basis_id: claims_market.basis_id,
+        claims_custody_context: claims_market.custody_context,
         representation_revision,
         claims_market_revision: claims_market.revision,
         receipt_supply: receipt.supply,
+        product_record_digest: authenticated_product.product_record_digest,
+        result_outcome_count: authenticated_product.result_outcome_count,
+        representation_admission: authenticated_product.admission,
+    })
+}
+
+#[derive(Clone, Copy)]
+struct AuthenticatedProductObservationV3 {
+    product_record_digest: [u8; 32],
+    result_outcome_count: u32,
+    admission: RepresentationAdmissionV3,
+}
+
+struct BackingAccountV3 {
+    key: Pubkey,
+    owner: Pubkey,
+    lamports: u64,
+    data: Vec<u8>,
+    executable: bool,
+}
+
+impl BackingAccountV3 {
+    fn new(observed: ObservedAccountV2<'_>) -> Self {
+        Self {
+            key: observed.key,
+            owner: observed.owner,
+            lamports: observed.lamports,
+            data: observed.data.to_vec(),
+            executable: observed.executable,
+        }
+    }
+
+    fn info(&mut self) -> AccountInfo<'_> {
+        AccountInfo::new(
+            &self.key,
+            false,
+            false,
+            &mut self.lamports,
+            &mut self.data,
+            &self.owner,
+            self.executable,
+        )
+    }
+}
+
+fn authenticate_product_representation_observation_v3(
+    observation: RationalObservationV2<'_>,
+    claims_program: Pubkey,
+    product_digest: [u8; 32],
+    descriptor_digest: [u8; 32],
+    market: LiabilityBasisMarketViewV2,
+) -> Result<AuthenticatedProductObservationV3> {
+    let evidence = observation.product_evidence;
+    let mut product_raw = BackingAccountV3::new(evidence.product.raw);
+    let mut product_staging = BackingAccountV3::new(evidence.product.staging);
+    let mut domain_raw = BackingAccountV3::new(evidence.result_domain.raw);
+    let mut domain_staging = BackingAccountV3::new(evidence.result_domain.staging);
+    let mut portfolio_raw = BackingAccountV3::new(evidence.portfolio.raw);
+    let mut portfolio_staging = BackingAccountV3::new(evidence.portfolio.staging);
+    let mut basis_raw = BackingAccountV3::new(evidence.linked_basis.raw);
+    let mut basis_staging = BackingAccountV3::new(evidence.linked_basis.staging);
+    let mut descriptor_raw = BackingAccountV3::new(observation.descriptor.raw);
+    let mut descriptor_staging = BackingAccountV3::new(observation.descriptor.staging);
+    let mut graph_raw = BackingAccountV3::new(observation.graph.raw);
+    let mut graph_staging = BackingAccountV3::new(observation.graph.staging);
+    let product_raw = product_raw.info();
+    let product_staging = product_staging.info();
+    let domain_raw = domain_raw.info();
+    let domain_staging = domain_staging.info();
+    let portfolio_raw = portfolio_raw.info();
+    let portfolio_staging = portfolio_staging.info();
+    let basis_raw = basis_raw.info();
+    let basis_staging = basis_staging.info();
+    let descriptor_raw = descriptor_raw.info();
+    let descriptor_staging = descriptor_staging.info();
+    let graph_raw = graph_raw.info();
+    let graph_staging = graph_staging.info();
+    let authenticated = authenticate_product_representation_v3(
+        &observation.registry_program,
+        observation.rent,
+        ProductContentId::new(product_digest).map_err(|_| Error::InvalidRepresentation)?,
+        ProductContentId::new(descriptor_digest).map_err(|_| Error::InvalidRepresentation)?,
+        RepresentationRuntimeContextV3 {
+            claims_program,
+            market: observation.core_market.key,
+            release_set: Pubkey::new_from_array(market.release_set),
+            claims_basis_id: ProductContentId::new(market.basis_id)
+                .map_err(|_| Error::InvalidRepresentation)?,
+            claims_width: market.claim_count,
+            receipt_mint: observation.receipt_mint.key,
+            token_program: observation.receipt_mint.owner,
+        },
+        RepresentationRuntimeFrameV3 {
+            product: ProductRuntimeFrameV3 {
+                product: FinalizedRecordFrameV2 {
+                    raw: &product_raw,
+                    staging: &product_staging,
+                },
+                result_domain: FinalizedRecordFrameV2 {
+                    raw: &domain_raw,
+                    staging: &domain_staging,
+                },
+                portfolio: FinalizedRecordFrameV2 {
+                    raw: &portfolio_raw,
+                    staging: &portfolio_staging,
+                },
+                linked_basis: FinalizedRecordFrameV2 {
+                    raw: &basis_raw,
+                    staging: &basis_staging,
+                },
+            },
+            descriptor: FinalizedRecordFrameV2 {
+                raw: &descriptor_raw,
+                staging: &descriptor_staging,
+            },
+            graph: FinalizedRecordFrameV2 {
+                raw: &graph_raw,
+                staging: &graph_staging,
+            },
+        },
+    )
+    .map_err(|_| Error::InvalidRepresentation)?;
+    Ok(AuthenticatedProductObservationV3 {
+        product_record_digest: authenticated.product_record_digest.to_bytes(),
+        result_outcome_count: authenticated.result_outcome_count,
+        admission: authenticated.admission,
     })
 }
 
@@ -1091,10 +1295,11 @@ fn encode_request(
 struct TerminalContextV2 {
     realm_id: Pubkey,
     realm: RealmV1,
-    custody_replay: CustodyReplayV1,
+    scenario: TerminalScenarioV3,
+    hoard_before: u64,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct TerminalFrameV2<'a> {
     observation: TerminalObservationV2<'a>,
     derived: DerivedTerminalIdentitiesV2,
@@ -1118,27 +1323,12 @@ fn authenticate_terminal_context(
         realm_digest,
         common.observation.rent,
     )?;
-    authenticate_observed_record(
-        terminal.terminal_coordinate,
-        common.observation.registry_program,
-        common.observation.rent,
-    )?;
     if common.core.identity.realm_id.to_bytes() != realm_digest {
         return Err(Error::InvalidTerminal);
     }
     let realm = RealmV1::decode(terminal.realm.raw.data).map_err(|_| Error::InvalidTerminal)?;
     TokenProgram::parse(*realm.token_program()).map_err(|_| Error::InvalidTerminal)?;
-    let custody_replay = CustodyReplayV1::decode(terminal.custody_replay.data)
-        .map_err(|_| Error::InvalidTerminal)?;
-    if terminal.custody_replay.owner != common.roles.custody
-        || terminal.custody_replay.executable
-        || terminal.custody_replay.data.len() != CUSTODY_REPLAY_BYTES_V1
-        || custody_replay.open_vault_count == 0
-        || custody_replay.next_revision == u64::MAX
-        || custody_replay.generation != common.core.identity.generation
-    {
-        return Err(Error::InvalidTerminal);
-    }
+    let scenario = authenticate_terminal_scenario(common, terminal)?;
     let token_program = Pubkey::new_from_array(*realm.token_program());
     let collateral_mint = Pubkey::new_from_array(*realm.collateral_mint());
     if terminal.collateral_mint.key != collateral_mint
@@ -1150,11 +1340,171 @@ fn authenticate_terminal_context(
     {
         return Err(Error::InvalidTerminal);
     }
+    let recipient = authenticate_token_account(
+        terminal.collateral_recipient,
+        terminal.collateral_recipient.key,
+        token_program,
+        collateral_mint,
+        common.observation.actor,
+    )?;
+    let hoard = TokenAccount::parse(terminal.hoard.data).map_err(|_| Error::InvalidTerminal)?;
+    if terminal.hoard.owner != token_program
+        || terminal.hoard.executable
+        || hoard.mint != collateral_mint.to_bytes()
+        || hoard.state != AccountState::Initialized
+        || hoard.native_reserve != COption::None
+        || hoard.delegate != COption::None
+        || hoard.delegated_amount != 0
+        || hoard.close_authority != COption::None
+        || recipient.mint != collateral_mint.to_bytes()
+    {
+        return Err(Error::InvalidTerminal);
+    }
     Ok(TerminalContextV2 {
         realm_id: Pubkey::new_from_array(realm_digest),
         realm,
-        custody_replay,
+        scenario,
+        hoard_before: hoard.amount,
     })
+}
+
+fn authenticate_terminal_scenario(
+    common: CommonV2<'_>,
+    terminal: TerminalObservationV2<'_>,
+) -> Result<TerminalScenarioV3> {
+    if common.core.terminal_winner >= common.result_outcome_count {
+        return Err(Error::InvalidTerminal);
+    }
+    match common.representation_admission.basis_kind() {
+        BasisKindV3::CategoricalQ1 => {
+            require_terminal_coordinate_placeholders(common, terminal)?;
+            Ok(TerminalScenarioV3::Categorical(common.core.terminal_winner))
+        }
+        BasisKindV3::GradedExactComplement => {
+            let failure = common
+                .result_outcome_count
+                .checked_sub(1)
+                .ok_or(Error::InvalidTerminal)?;
+            if common.core.terminal_winner == failure {
+                require_terminal_coordinate_placeholders(common, terminal)?;
+                return Ok(TerminalScenarioV3::Failure);
+            }
+            let digest = common
+                .core
+                .terminal_receipt
+                .ok_or(Error::InvalidTerminal)?
+                .to_bytes();
+            authenticate_record(
+                terminal.terminal_coordinate,
+                common.roles.core,
+                TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2,
+                digest,
+                common.observation.rent,
+            )?;
+            let bytes = terminal.terminal_coordinate.raw.data;
+            if bytes.len() != TERMINAL_COORDINATE_BYTES_V2
+                || bytes.get(..8) != Some(TERMINAL_COORDINATE_MAGIC_V2.as_slice())
+                || bytes.get(8..10) != Some(2_u16.to_le_bytes().as_slice())
+                || bytes
+                    .get(10..16)
+                    .is_none_or(|value| value.iter().any(|byte| *byte != 0))
+                || bytes
+                    .get(28..32)
+                    .is_none_or(|value| value.iter().any(|byte| *byte != 0))
+            {
+                return Err(Error::InvalidTerminal);
+            }
+            let numerator = i64::from_le_bytes(
+                bytes
+                    .get(16..24)
+                    .and_then(|value| value.try_into().ok())
+                    .ok_or(Error::InvalidTerminal)?,
+            );
+            let denominator = u32::from_le_bytes(
+                bytes
+                    .get(24..28)
+                    .and_then(|value| value.try_into().ok())
+                    .ok_or(Error::InvalidTerminal)?,
+            );
+            if denominator == 0 {
+                return Err(Error::InvalidTerminal);
+            }
+            Ok(TerminalScenarioV3::Rational {
+                numerator: i128::from(numerator),
+                denominator: u64::from(denominator),
+            })
+        }
+    }
+}
+
+fn require_terminal_coordinate_placeholders(
+    common: CommonV2<'_>,
+    terminal: TerminalObservationV2<'_>,
+) -> Result<()> {
+    if terminal.terminal_coordinate.raw.key != common.roles.core
+        || terminal.terminal_coordinate.staging.key != common.roles.core
+    {
+        return Err(Error::InvalidTerminal);
+    }
+    Ok(())
+}
+
+fn evaluate_terminal_payout(
+    common: CommonV2<'_>,
+    scenario: TerminalScenarioV3,
+    outcome: u32,
+    quantity: u64,
+) -> Result<u64> {
+    let basis = ProductBasisV3::decode(common.observation.product_evidence.linked_basis.raw.data)
+        .map_err(|_| Error::InvalidRepresentation)?;
+    let width = usize::try_from(basis.basis_width()).map_err(|_| Error::InvalidWidth)?;
+    if basis.basis_width() != common.representation_admission.basis_width() {
+        return Err(Error::InvalidWidth);
+    }
+    let mut payouts = vec![0_u64; width];
+    match scenario {
+        TerminalScenarioV3::Categorical(selector) => {
+            basis.evaluate_categorical(selector, &mut payouts)
+        }
+        TerminalScenarioV3::Rational {
+            numerator,
+            denominator,
+        } => basis.evaluate_rational(numerator, denominator, &mut payouts),
+        TerminalScenarioV3::Failure => basis.evaluate_failure(&mut payouts),
+    }
+    .map_err(|_| Error::InvalidTerminal)?;
+    let selected = usize::try_from(outcome).map_err(|_| Error::InvalidWidth)?;
+    payouts
+        .get(selected)
+        .copied()
+        .ok_or(Error::InvalidWidth)?
+        .checked_mul(quantity)
+        .ok_or(Error::ArithmeticOverflow)
+}
+
+fn authenticate_positive_custody_replay(
+    common: CommonV2<'_>,
+    terminal: TerminalObservationV2<'_>,
+    context: TerminalContextV2,
+) -> Result<u64> {
+    let replay = CustodyReplayV1::decode(terminal.custody_replay.data)
+        .map_err(|_| Error::InvalidTerminal)?;
+    if terminal.custody_replay.owner != common.roles.custody
+        || terminal.custody_replay.executable
+        || terminal.custody_replay.data.len() != CUSTODY_REPLAY_BYTES_V1
+        || replay.open_vault_count == 0
+        || replay.next_revision == u64::MAX
+        || replay.generation != common.core.identity.generation
+        || replay.caller_role != CustodyCallerRoleV1::Claims
+        || replay.release_set != common.descriptor.release_set_id()
+        || replay.market != common.descriptor.market_id()
+        || replay.realm != context.realm_id.to_bytes()
+        || replay.context != common.claims_custody_context
+        || replay.caller_program != common.roles.claims.to_bytes()
+    {
+        return Err(Error::InvalidTerminal);
+    }
+    Ok(replay.next_revision)
 }
 
 fn derive_terminal_after_request(
@@ -1162,8 +1512,69 @@ fn derive_terminal_after_request(
     terminal: TerminalObservationV2<'_>,
     context: TerminalContextV2,
     request_data: &[u8],
+    payout: u64,
+    selected: ResolvedAssetV2,
 ) -> Result<DerivedTerminalIdentitiesV2> {
     let request_digest = hash(request_data).to_bytes();
+    let width = common.representation_admission.basis_width();
+    let neutral =
+        SignedDeltaV3::new(DeltaDirectionV3::Neutral, 0).map_err(|_| Error::InvalidTerminal)?;
+    let mut payout_scratch = vec![0_u64; usize::try_from(width).map_err(|_| Error::InvalidWidth)?];
+    let mut aggregate_scratch = vec![neutral; payout_scratch.len()];
+    let mut packet = vec![0_u8; plan_bytes(width, 1, 1).map_err(|_| Error::InvalidTerminal)?];
+    let planner_payout = encode_product_basis_terminal_signed_delta_v3(
+        ProductBasisTerminalInputV3 {
+            product_basis_bytes: common.observation.product_evidence.linked_basis.raw.data,
+            representation: common.representation_admission,
+            product_record_digest: common.product_record_digest,
+            market_account: common.claims_aggregate.to_bytes(),
+            market_bytes: common.observation.claims_aggregate.data,
+            position_bytes: common
+                .observation
+                .assets
+                .first()
+                .ok_or(Error::InvalidWidth)?
+                .claims_custody_position
+                .data,
+            owner: selected.identities.claims_custody_owner.to_bytes(),
+            request_id: request_digest,
+            caller_role: match common.observation.caller_role {
+                CallerRoleV2::Core => CallerRole::Core,
+                CallerRoleV2::Trading => CallerRole::Trading,
+            },
+            terminal: context.scenario,
+            claim_index: terminal.outcome,
+            quantity: terminal.quantity,
+            expected_generation: common.core.identity.generation,
+            expected_market_revision: common.claims_market_revision,
+            expected_position_revision: selected.custody_position_revision,
+            hoard_before: context.hoard_before,
+        },
+        &mut payout_scratch,
+        &mut aggregate_scratch,
+        &mut packet,
+    )
+    .map_err(|_| Error::InvalidTerminal)?;
+    if planner_payout != payout {
+        return Err(Error::InvalidTerminal);
+    }
+    let packet_digest = hash(&packet).to_bytes();
+    let candidate_digest = hashv(&[
+        TERMINAL_CANDIDATE_DOMAIN_V3,
+        &packet_digest,
+        &payout.to_le_bytes(),
+        &common.representation_admission.to_bytes(),
+        &common.core.terminal_winner.to_le_bytes(),
+    ])
+    .to_bytes();
+    let expected_revision = if payout == 0 {
+        0
+    } else {
+        RepresentationRequestV2::decode(request_data)
+            .map_err(|_| Error::InvalidRequest)?
+            .header()
+            .expected_custody_replay_revision
+    };
     let mut custody_request = CustodyRequestV1 {
         operation: OperationV1::Transfer,
         caller_role: CustodyCallerRoleV1::Claims,
@@ -1172,13 +1583,13 @@ fn derive_terminal_after_request(
         release_set: common.descriptor.release_set_id(),
         market: common.descriptor.market_id(),
         realm: context.realm_id.to_bytes(),
-        context: common.observation.parent_context,
+        context: common.claims_custody_context,
         caller_program: common.roles.claims.to_bytes(),
         semantic: ContextV1 {
-            candidate: common.descriptor.descriptor_id(),
+            candidate: candidate_digest,
             source_owner: [0; 32],
             destination_owner: common.observation.actor.to_bytes(),
-            order: common.descriptor.graph_id(),
+            order: [0; 32],
             parent_request_digest: request_digest,
             order_nonce: common.representation_revision,
             generation: common.core.identity.generation,
@@ -1194,13 +1605,11 @@ fn derive_terminal_after_request(
         token_program: *context.realm.token_program(),
         payer: [0; 32],
         rent_refund: [0; 32],
-        expected_revision: context.custody_replay.next_revision,
-        resulting_revision: context
-            .custody_replay
-            .next_revision
+        expected_revision,
+        resulting_revision: expected_revision
             .checked_add(1)
             .ok_or(Error::ArithmeticOverflow)?,
-        amount: terminal.quantity,
+        amount: payout.max(1),
         rent_lamports: 0,
     };
     let hoard = Pubkey::find_program_address(
@@ -1239,15 +1648,7 @@ fn derive_terminal_after_request(
         &common.roles.custody,
     )
     .0;
-    if terminal.custody_replay.key != replay
-        || terminal.hoard.key != hoard
-        || context.custody_replay.caller_role != CustodyCallerRoleV1::Claims
-        || context.custody_replay.release_set != custody_request.release_set
-        || context.custody_replay.market != custody_request.market
-        || context.custody_replay.realm != custody_request.realm
-        || context.custody_replay.context != custody_request.context
-        || context.custody_replay.caller_program != custody_request.caller_program
-    {
+    if terminal.hoard.key != hoard {
         return Err(Error::InvalidTerminal);
     }
     let token_program = Pubkey::new_from_array(custody_request.token_program);
@@ -1259,19 +1660,33 @@ fn derive_terminal_after_request(
         mint,
         custody_authority,
     )?;
-    authenticate_token_account(
-        terminal.collateral_recipient,
-        terminal.collateral_recipient.key,
-        token_program,
-        mint,
-        common.observation.actor,
-    )?;
+    let (custody_caller_authority, custody_replay, custody_request) = if payout == 0 {
+        if terminal.custody_replay.key != common.roles.custody {
+            return Err(Error::InvalidTerminal);
+        }
+        (common.roles.claims, common.roles.custody, None)
+    } else {
+        if terminal.custody_replay.key != replay {
+            return Err(Error::InvalidTerminal);
+        }
+        custody_request.amount = payout;
+        custody_request
+            .validate()
+            .map_err(|_| Error::InvalidTerminal)?;
+        (caller, replay, Some(custody_request))
+    };
     Ok(DerivedTerminalIdentitiesV2 {
         realm: context.realm_id,
-        custody_caller_authority: caller,
-        custody_replay: replay,
+        custody_caller_authority,
+        custody_replay,
         hoard,
         custody_authority,
+        payout,
+        signed_delta_packet: packet,
+        signed_delta_packet_digest: packet_digest,
+        candidate_digest,
+        custody_context: common.claims_custody_context,
+        custody_request,
     })
 }
 
@@ -1467,9 +1882,7 @@ fn phases_admit(action: RepresentationActionV2, core: CorePhase) -> bool {
         | RepresentationActionV2::Reconstitute
         | RepresentationActionV2::IssueStructured
         | RepresentationActionV2::UnwrapStructured => core == CorePhase::Open,
-        RepresentationActionV2::RedeemTerminal => {
-            matches!(core, CorePhase::Terminal | CorePhase::Retiring)
-        }
+        RepresentationActionV2::RedeemTerminal => core == CorePhase::Terminal,
     }
 }
 

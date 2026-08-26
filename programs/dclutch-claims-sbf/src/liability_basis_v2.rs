@@ -59,21 +59,15 @@ pub use dclutch_claims_svm::liability_basis_state_v2::{
 pub(crate) use dclutch_claims_svm::liability_basis_state_v2::{
     LiabilityBasisMarketViewV2 as MarketViewV2, LiabilityBasisPositionViewV2 as PositionViewV2,
 };
-/// Exact rational terminal-coordinate record width.
-pub const TERMINAL_COORDINATE_BYTES_V2: usize = 32;
-/// Canonical rational terminal-coordinate magic.
-pub const TERMINAL_COORDINATE_MAGIC_V2: [u8; 8] = *b"DCLTRC02";
+pub use dclutch_claims_svm::product_basis_terminal_v3::{
+    TERMINAL_COORDINATE_BYTES_V2, TERMINAL_COORDINATE_MAGIC_V2,
+    TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2,
+};
 /// LiabilityBasisV2 schema-release identity used by finalized raw records.
 pub const LIABILITY_BASIS_SCHEMA_RELEASE_ID_V2: [u8; 32] = [
     0x5c, 0x84, 0x2a, 0xe9, 0xe9, 0x15, 0x51, 0xd1, 0xaf, 0x99, 0xcf, 0x99, 0xfd, 0x53, 0x7f, 0x64,
     0xfb, 0x8d, 0xbf, 0x6a, 0x4e, 0x88, 0x3f, 0x22, 0xd9, 0x0b, 0xd5, 0xf3, 0x24, 0x5f, 0x6e, 0x2e,
 ];
-/// Rational terminal-coordinate schema identity used by finalized raw records.
-pub const TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2: [u8; 32] = [
-    0xa8, 0x66, 0x06, 0x2a, 0xe7, 0x6d, 0x3d, 0xc3, 0xa7, 0xc7, 0xce, 0xe5, 0x34, 0x0a, 0xc9, 0xe4,
-    0x1f, 0x20, 0x22, 0x69, 0xcb, 0x23, 0xe9, 0xb7, 0x04, 0x61, 0xb0, 0x16, 0xf1, 0x8d, 0x5f, 0x61,
-];
-
 const ABI_VERSION_V2: u16 = 2;
 const RECEIPT_MAGIC_V2: [u8; 8] = *b"DCLLBR02";
 const RECEIPT_BYTES_V2: usize = 168;
