@@ -32,7 +32,7 @@ pub const RECIPE_BYTES: usize = 16;
 /// Exact seed-operation width.
 pub const SEED_BYTES: usize = 40;
 /// Exact action-plan width.
-pub const ACTION_PLAN_BYTES: usize = 32;
+pub const ACTION_PLAN_BYTES: usize = 40;
 /// Solana's chain-derived maximum number of seeds per PDA.
 pub const MAX_SEEDS: u8 = 16;
 /// Solana's chain-derived maximum width of one seed.
@@ -54,6 +54,9 @@ const PLAN_CLOSE: u8 = 2;
 
 const SOURCE_COMMON: u8 = 0;
 const SOURCE_ITEM: u8 = 1;
+
+const GUARD_ALWAYS: u8 = 0;
+const GUARD_SCALAR_EQ: u8 = 1;
 
 /// Stable hostile-decode, substitution, or arithmetic refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -80,6 +83,8 @@ pub enum Error {
     ProfileMismatch,
     /// Runtime item index or flat account/register bank differed.
     RuntimeWidth,
+    /// A caller tried to execute a plan whose exact post-transition guard was false.
+    PlanDisabled,
     /// The adapter-returned PDA or an authenticated account identity differed.
     IdentityMismatch,
     /// Owner, data width, vacancy, or privilege did not realize the plan.
@@ -175,6 +180,7 @@ struct ActionPlanV3 {
     rent_credit: Option<AccountCoordinateV3>,
     principal: Option<RegisterSourceV3>,
     beneficiary: Option<RegisterSourceV3>,
+    guard: PlanGuardV3,
 }
 
 impl ActionPlanV3 {
@@ -233,12 +239,42 @@ impl SelectedLifecycleV3<'_> {
             seed_ordinal,
         )
     }
+
+    /// Evaluate the exact guard against post-transition candidate registers.
+    ///
+    /// Every enabled plan for an action is mandatory. A false guard is the
+    /// only data-defined way to skip a result-conditional operation.
+    pub fn is_enabled(
+        self,
+        profile: AccountProfileV2<'_>,
+        tail_count: u32,
+        item_index: Option<u32>,
+        registers: LifecycleRegistersV3<'_>,
+    ) -> Result<bool> {
+        self.policy.validate_account_profile(profile)?;
+        validate_runtime_width(profile, tail_count, registers)?;
+        match self.plan.guard {
+            PlanGuardV3::Always => Ok(true),
+            PlanGuardV3::ScalarEq { source, expected } => Ok(scalar_register(
+                profile, tail_count, item_index, registers, source,
+            )? == expected),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RegisterSourceV3 {
     item: bool,
     index: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PlanGuardV3 {
+    Always,
+    ScalarEq {
+        source: RegisterSourceV3,
+        expected: u64,
+    },
 }
 
 /// Borrowed exact lifecycle policy selected by `CapabilityProgramV3.derivation_policy`.
@@ -376,6 +412,9 @@ impl<'a> StateLifecyclePolicyV3<'a> {
             }
             if let Some(beneficiary) = plan.beneficiary {
                 validate_identity_source(profile, beneficiary)?;
+            }
+            if let PlanGuardV3::ScalarEq { source, .. } = plan.guard {
+                validate_scalar_source(profile, source)?;
             }
             plan_index = plan_index.checked_add(1).ok_or(Error::Arithmetic)?;
         }
@@ -541,7 +580,30 @@ impl<'a> StateLifecyclePolicyV3<'a> {
         let rent_credit = decode_optional_account(self.bytes, offset + 12)?;
         let principal = decode_optional_register(self.bytes, offset + 16)?;
         let beneficiary = decode_optional_register(self.bytes, offset + 20)?;
-        require_zero(self.bytes, offset + 24, 8)?;
+        let guard = match read_u8(self.bytes, offset + 24)? {
+            GUARD_ALWAYS => {
+                require_zero(self.bytes, offset + 25, 15)?;
+                PlanGuardV3::Always
+            }
+            GUARD_SCALAR_EQ => {
+                let source = match read_u8(self.bytes, offset + 25)? {
+                    SOURCE_COMMON => false,
+                    SOURCE_ITEM => true,
+                    _ => return Err(Error::UnknownTag),
+                };
+                let index = read_u16(self.bytes, offset + 26)?;
+                let expected = read_u64(self.bytes, offset + 28)?;
+                require_zero(self.bytes, offset + 36, 4)?;
+                PlanGuardV3::ScalarEq {
+                    source: RegisterSourceV3 {
+                        item: source,
+                        index,
+                    },
+                    expected,
+                }
+            }
+            _ => return Err(Error::UnknownTag),
+        };
         match operation {
             LifecycleOperationV3::Authenticate => {
                 if payer.is_some()
@@ -579,6 +641,7 @@ impl<'a> StateLifecyclePolicyV3<'a> {
             rent_credit,
             principal,
             beneficiary,
+            guard,
         })
     }
 
@@ -929,6 +992,14 @@ pub fn plan_lifecycle(
     context: LifecycleContextV3<'_>,
 ) -> Result<StateLifecyclePlanV3> {
     let policy = selected.policy;
+    if !selected.is_enabled(
+        context.account_profile,
+        context.tail_count,
+        context.item_index,
+        context.registers,
+    )? {
+        return Err(Error::PlanDisabled);
+    }
     let selected = selected.plan;
     policy.validate_account_profile(context.account_profile)?;
     validate_runtime_width(
@@ -1472,6 +1543,14 @@ fn read_u32(bytes: &[u8], offset: usize) -> Result<u32> {
     ))
 }
 
+fn read_u64(bytes: &[u8], offset: usize) -> Result<u64> {
+    Ok(u64::from_le_bytes(
+        slice(bytes, offset, 8)?
+            .try_into()
+            .map_err(|_| Error::InvalidLength)?,
+    ))
+}
+
 fn slice(bytes: &[u8], offset: usize, width: usize) -> Result<&[u8]> {
     let end = offset.checked_add(width).ok_or(Error::InvalidLength)?;
     bytes.get(offset..end).ok_or(Error::InvalidLength)
@@ -1535,7 +1614,7 @@ mod tests {
             ),
             (18, u16::try_from(item_operations).expect("item operations")),
             (20, 3),
-            (22, 4),
+            (22, 5),
             (24, 5),
             (26, 1),
         ] {
@@ -1649,6 +1728,19 @@ mod tests {
         output
     }
 
+    fn scalar_guarded(
+        mut plan: [u8; ACTION_PLAN_BYTES],
+        source: u8,
+        index: u16,
+        expected: u64,
+    ) -> [u8; ACTION_PLAN_BYTES] {
+        plan[24] = GUARD_SCALAR_EQ;
+        plan[25] = source;
+        put(&mut plan, 26, &index.to_le_bytes());
+        put(&mut plan, 28, &expected.to_le_bytes());
+        plan
+    }
+
     fn policy_bytes() -> Vec<u8> {
         let recipes = [
             recipe(SCOPE_FIXED, 1, 0, 5, 144, 0),
@@ -1699,14 +1791,19 @@ mod tests {
                 Some((SOURCE_COMMON, 1)),
             ),
             action_plan(4, PLAN_AUTHENTICATE, 1, None, None, None, None),
-            action_plan(
-                5,
-                PLAN_CLOSE,
+            scalar_guarded(
+                action_plan(
+                    5,
+                    PLAN_CLOSE,
+                    1,
+                    None,
+                    Some((SCOPE_FIXED, 3)),
+                    Some((SOURCE_ITEM, 3)),
+                    Some((SOURCE_COMMON, 1)),
+                ),
+                SOURCE_ITEM,
+                4,
                 1,
-                None,
-                Some((SCOPE_FIXED, 3)),
-                Some((SOURCE_ITEM, 3)),
-                Some((SOURCE_COMMON, 1)),
             ),
         ];
         let mut output = vec![
@@ -1754,9 +1851,9 @@ mod tests {
         (
             vec![
                 3, 100, 250, // common: generation/count, rent, maker bump
-                0, 10, 240, 80, // item zero
-                1, 11, 241, 90, // item one
-                2, 12, 242, 100, // item two
+                0, 10, 240, 80, 0, // item zero
+                1, 11, 241, 90, 0, // item one
+                2, 12, 242, 100, 1, // item two: terminal flag
             ],
             vec![
                 [0x11; 32], [0x22; 32], SYSTEM, SYSTEM, [7; 32], [0x31; 32], [0x32; 32], [0x33; 32],
@@ -1831,6 +1928,9 @@ mod tests {
                 .as_slice(),
             &12_u64.to_le_bytes()
         );
+        let close = policy.action_plan(5, 0).expect("record close");
+        assert_eq!(close.is_enabled(profile, 3, Some(2), registers), Ok(true));
+        assert_eq!(close.is_enabled(profile, 3, Some(1), registers), Ok(false));
     }
 
     #[test]
@@ -1955,7 +2055,7 @@ mod tests {
         let profile = AccountProfileV2::decode(&profile_bytes).expect("profile");
         let (mut scalars, identities) = registers();
         let record = policy.action_plan(3, 0).expect("record");
-        *scalars.get_mut(13).expect("item bump") = 256;
+        *scalars.get_mut(15).expect("item bump") = 256;
         assert_eq!(
             record.materialize_seed(
                 profile,
