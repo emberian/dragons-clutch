@@ -13,6 +13,9 @@
 
 #[allow(missing_docs)]
 mod generated;
+#[allow(missing_docs)]
+mod generated_hot_v3;
+mod hot_v3;
 mod plan;
 mod receipt;
 mod replay;
@@ -23,6 +26,11 @@ pub use generated::{
     ASSET_BYTES_V2, PHYSICAL_ABI_VERSION_V2, RECEIPT_BYTES_V2, RECEIPT_MAGIC_V2,
     REQUEST_HEADER_BYTES_V2, REQUEST_MAGIC_V2,
 };
+pub use generated_hot_v3::{
+    RATIONAL_TERMINAL_HOT_FIXED_ASSET_COUNT_V3, RATIONAL_TERMINAL_HOT_MAGIC_V3,
+    RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3, RATIONAL_TERMINAL_HOT_VERSION_V3,
+};
+pub use hot_v3::{RationalTerminalHotRequestV3, verify_rational_terminal_receipt_v3};
 pub use plan::{
     AffineBatchContextV2, PreparedRepresentationV2, TokenEffectIterV2, TokenEffectStyleV2,
     TokenEffectV2, prepare,
