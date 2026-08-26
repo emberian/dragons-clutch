@@ -198,6 +198,126 @@ fn verifier_selection_and_certificate_are_distinct_failure_atomic_banks() {
 }
 
 #[test]
+fn row_plans_match_whole_page_oracle_and_refuse_skips_atomically() {
+    let whole = consider_fixture();
+    let empty_verification = [0; VERIFICATION_CURSOR_BYTES_V1];
+    let empty_selection = [0; SELECTION_CURSOR_BYTES];
+    let empty_certificate = [0; VERIFIED_CANDIDATE_BYTES_V1];
+    let mut verification_scratch = [0; VERIFICATION_CURSOR_BYTES_V1];
+    let mut verification_first = [0xa5; VERIFICATION_CURSOR_BYTES_V1];
+    let mut selection_scratch = [0; SELECTION_CURSOR_BYTES];
+    let mut selection_first = [0xa5; SELECTION_CURSOR_BYTES];
+    let mut certificate_scratch = [0; VERIFIED_CANDIDATE_BYTES_V1];
+    let mut certificate_first = [0xa5; VERIFIED_CANDIDATE_BYTES_V1];
+    let first = evaluate_consider_row_v2(
+        ConsiderRowPlanViewV2 {
+            candidate: &whole.candidate,
+            policy: &whole.policy,
+            page: &whole.page,
+            verification_before: &empty_verification,
+            selection_before: &empty_selection,
+            certificate_before: &empty_certificate,
+            incumbent_certificate: None,
+            expected_page: 0,
+            expected_execution: 0,
+            expected_revision: 0,
+            limits: limits(),
+        },
+        ConsiderPlanBuffersV2 {
+            verification_scratch: &mut verification_scratch,
+            verification_output: &mut verification_first,
+            selection_scratch: &mut selection_scratch,
+            selection_output: &mut selection_first,
+            certificate_scratch: &mut certificate_scratch,
+            certificate_output: &mut certificate_first,
+        },
+    )
+    .expect("first row");
+    assert_eq!(
+        first,
+        ConsiderPlanSummaryV2 {
+            complete: false,
+            order_count: 1,
+            selection_considered: false,
+        }
+    );
+    assert_eq!(selection_first, empty_selection);
+    assert_eq!(certificate_first, empty_certificate);
+    let cursor = CandidateVerifierV1::decode(&verification_first).expect("mid-page cursor");
+    assert_eq!(cursor.next_page(), 0);
+    assert_eq!(cursor.next_execution(), 1);
+    assert_eq!(cursor.revision(), 1);
+
+    let mut skipped_verification = [0x33; VERIFICATION_CURSOR_BYTES_V1];
+    let mut skipped_selection = [0x44; SELECTION_CURSOR_BYTES];
+    let mut skipped_certificate = [0x55; VERIFIED_CANDIDATE_BYTES_V1];
+    let skipped_before = (skipped_verification, skipped_selection, skipped_certificate);
+    assert_eq!(
+        evaluate_consider_row_v2(
+            ConsiderRowPlanViewV2 {
+                candidate: &whole.candidate,
+                policy: &whole.policy,
+                page: &whole.page,
+                verification_before: &verification_first,
+                selection_before: &selection_first,
+                certificate_before: &certificate_first,
+                incumbent_certificate: None,
+                expected_page: 0,
+                expected_execution: 0,
+                expected_revision: 1,
+                limits: limits(),
+            },
+            ConsiderPlanBuffersV2 {
+                verification_scratch: &mut verification_scratch,
+                verification_output: &mut skipped_verification,
+                selection_scratch: &mut selection_scratch,
+                selection_output: &mut skipped_selection,
+                certificate_scratch: &mut certificate_scratch,
+                certificate_output: &mut skipped_certificate,
+            },
+        ),
+        Err(PlanErrorV2::CoordinateMismatch)
+    );
+    assert_eq!(
+        (skipped_verification, skipped_selection, skipped_certificate),
+        skipped_before
+    );
+
+    let mut verification_second = [0xa5; VERIFICATION_CURSOR_BYTES_V1];
+    let mut selection_second = [0xa5; SELECTION_CURSOR_BYTES];
+    let mut certificate_second = [0xa5; VERIFIED_CANDIDATE_BYTES_V1];
+    let second = evaluate_consider_row_v2(
+        ConsiderRowPlanViewV2 {
+            candidate: &whole.candidate,
+            policy: &whole.policy,
+            page: &whole.page,
+            verification_before: &verification_first,
+            selection_before: &selection_first,
+            certificate_before: &certificate_first,
+            incumbent_certificate: None,
+            expected_page: 0,
+            expected_execution: 1,
+            expected_revision: 1,
+            limits: limits(),
+        },
+        ConsiderPlanBuffersV2 {
+            verification_scratch: &mut verification_scratch,
+            verification_output: &mut verification_second,
+            selection_scratch: &mut selection_scratch,
+            selection_output: &mut selection_second,
+            certificate_scratch: &mut certificate_scratch,
+            certificate_output: &mut certificate_second,
+        },
+    )
+    .expect("terminal row");
+    assert!(second.complete);
+    assert!(second.selection_considered);
+    assert_eq!(verification_second, whole.verification);
+    assert_eq!(selection_second, whole.selection);
+    assert_eq!(certificate_second, whole.certificate);
+}
+
+#[test]
 fn incumbent_certificate_cannot_cross_product_or_batch_coordinates() {
     let fixture = consider_fixture();
     let mut substituted = fixture.certificate;

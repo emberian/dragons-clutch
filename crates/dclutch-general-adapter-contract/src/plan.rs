@@ -111,6 +111,32 @@ pub struct ConsiderPlanViewV2<'a> {
     pub limits: GeneralPlanLimitsV2,
 }
 
+/// Readonly views for one permissionless candidate execution-row step.
+pub struct ConsiderRowPlanViewV2<'a> {
+    /// Exact immutable candidate header.
+    pub candidate: &'a [u8],
+    /// Exact immutable interpreted selection policy.
+    pub policy: &'a [u8],
+    /// Exact immutable page containing the selected execution row.
+    pub page: &'a [u8],
+    /// Zero initial or canonical persisted verifier state.
+    pub verification_before: &'a [u8],
+    /// Zero initial or canonical batch selection state.
+    pub selection_before: &'a [u8],
+    /// All-zero destination for this candidate certificate.
+    pub certificate_before: &'a [u8],
+    /// Current best certificate when selection is nonempty.
+    pub incumbent_certificate: Option<&'a [u8]>,
+    /// Exact page coordinate consumed by this action.
+    pub expected_page: u32,
+    /// Exact row coordinate consumed by this action.
+    pub expected_execution: u8,
+    /// Exact optimistic verifier revision consumed by this row.
+    pub expected_revision: u64,
+    /// Config-selected immutable limits.
+    pub limits: GeneralPlanLimitsV2,
+}
+
 /// Separate scratch/candidate banks for failure-atomic consideration.
 pub struct ConsiderPlanBuffersV2<'a> {
     /// Non-authoritative 960-byte verifier scratch.
@@ -185,6 +211,115 @@ pub fn evaluate_consider_v2(
     };
     verifier
         .ingest_page_at(view.page, view.expected_revision)
+        .map_err(|_| PlanErrorV2::Transition)?;
+    if verifier.order_count() > view.limits.max_orders_per_candidate {
+        return Err(PlanErrorV2::ConfigMismatch);
+    }
+    verification_scratch.fill(0);
+    verifier
+        .encode_into(verification_scratch)
+        .map_err(|_| PlanErrorV2::Transition)?;
+    selection_scratch.copy_from_slice(view.selection_before);
+    certificate_scratch.copy_from_slice(view.certificate_before);
+    let complete = verifier.is_complete();
+    if complete {
+        if certificate_scratch.iter().any(|byte| *byte != 0) {
+            return Err(PlanErrorV2::CoordinateMismatch);
+        }
+        let verified = verifier.finish().map_err(|_| PlanErrorV2::Transition)?;
+        let incumbent = decode_incumbent(
+            selection_scratch,
+            view.incumbent_certificate,
+            candidate,
+            policy,
+        )?;
+        let selection_revision = selection_revision(selection_scratch)?;
+        consider_verified_input(
+            selection_scratch,
+            certificate_scratch,
+            ConsiderVerifiedInputV1 {
+                candidate: &candidate,
+                policy: &policy,
+                verified: &verified,
+                incumbent: incumbent.as_ref(),
+                expected_revision: selection_revision,
+            },
+        )
+        .map_err(|_| PlanErrorV2::Transition)?;
+    } else if certificate_scratch.iter().any(|byte| *byte != 0) {
+        return Err(PlanErrorV2::CoordinateMismatch);
+    }
+
+    verification_output.copy_from_slice(verification_scratch);
+    selection_output.copy_from_slice(selection_scratch);
+    certificate_output.copy_from_slice(certificate_scratch);
+    Ok(ConsiderPlanSummaryV2 {
+        complete,
+        order_count: verifier.order_count(),
+        selection_considered: complete,
+    })
+}
+
+/// Evaluate one selected candidate row into complete caller-owned candidates.
+///
+/// Candidate, policy, page, and cursor bytes are readonly. Scratch may change
+/// on refusal; verification, selection, and certificate outputs are copied
+/// only after the entire row step and optional best-valid-submitted-candidate
+/// comparison accept.
+#[inline(never)]
+pub fn evaluate_consider_row_v2(
+    view: ConsiderRowPlanViewV2<'_>,
+    buffers: ConsiderPlanBuffersV2<'_>,
+) -> PlanResultV2<ConsiderPlanSummaryV2> {
+    require_consider_row_widths(&view, &buffers)?;
+    let candidate = CandidateV1::decode(view.candidate).map_err(|_| PlanErrorV2::InvalidInput)?;
+    let policy = SelectionPolicyV1::decode(view.policy).map_err(|_| PlanErrorV2::InvalidInput)?;
+    view.limits.require_candidate(candidate)?;
+    if policy.policy_id != view.limits.selection_policy_id {
+        return Err(PlanErrorV2::ConfigMismatch);
+    }
+    let page = PageViewV1::decode(view.page).map_err(|_| PlanErrorV2::InvalidInput)?;
+    if page.candidate_id() != candidate.candidate_id
+        || page.outcome_count() != candidate.outcome_count
+        || page.page_count() != candidate.page_count
+        || page.page_index() != view.expected_page
+        || view.expected_execution >= page.execution_count()
+    {
+        return Err(PlanErrorV2::CoordinateMismatch);
+    }
+
+    let ConsiderPlanBuffersV2 {
+        verification_scratch,
+        verification_output,
+        selection_scratch,
+        selection_output,
+        certificate_scratch,
+        certificate_output,
+    } = buffers;
+    let mut verifier = if view.verification_before.iter().all(|byte| *byte == 0) {
+        if view.expected_page != 0 || view.expected_execution != 0 || view.expected_revision != 0 {
+            return Err(PlanErrorV2::CoordinateMismatch);
+        }
+        CandidateVerifierV1::begin(candidate)
+    } else {
+        let value = CandidateVerifierV1::decode(view.verification_before)
+            .map_err(|_| PlanErrorV2::InvalidInput)?;
+        if value.candidate() != candidate
+            || value.next_page() != view.expected_page
+            || value.next_execution() != view.expected_execution
+            || value.revision() != view.expected_revision
+        {
+            return Err(PlanErrorV2::CoordinateMismatch);
+        }
+        value
+    };
+    verifier
+        .ingest_execution_row_at(
+            view.page,
+            view.expected_page,
+            view.expected_execution,
+            view.expected_revision,
+        )
         .map_err(|_| PlanErrorV2::Transition)?;
     if verifier.order_count() > view.limits.max_orders_per_candidate {
         return Err(PlanErrorV2::ConfigMismatch);
@@ -484,6 +619,29 @@ fn require_effect_capacities(
 
 fn require_consider_widths(
     view: &ConsiderPlanViewV2<'_>,
+    buffers: &ConsiderPlanBuffersV2<'_>,
+) -> PlanResultV2<()> {
+    if view.candidate.len() != CANDIDATE_BYTES
+        || view.policy.len() != SELECTION_POLICY_BYTES
+        || view.page.len() != PAGE_BYTES
+        || view.verification_before.len() != VERIFICATION_CURSOR_BYTES_V1
+        || view.selection_before.len() != SELECTION_CURSOR_BYTES
+        || view.certificate_before.len() != VERIFIED_CANDIDATE_BYTES_V1
+        || buffers.verification_scratch.len() != VERIFICATION_CURSOR_BYTES_V1
+        || buffers.verification_output.len() != VERIFICATION_CURSOR_BYTES_V1
+        || buffers.selection_scratch.len() != SELECTION_CURSOR_BYTES
+        || buffers.selection_output.len() != SELECTION_CURSOR_BYTES
+        || buffers.certificate_scratch.len() != VERIFIED_CANDIDATE_BYTES_V1
+        || buffers.certificate_output.len() != VERIFIED_CANDIDATE_BYTES_V1
+    {
+        Err(PlanErrorV2::InvalidWidth)
+    } else {
+        Ok(())
+    }
+}
+
+fn require_consider_row_widths(
+    view: &ConsiderRowPlanViewV2<'_>,
     buffers: &ConsiderPlanBuffersV2<'_>,
 ) -> PlanResultV2<()> {
     if view.candidate.len() != CANDIDATE_BYTES
