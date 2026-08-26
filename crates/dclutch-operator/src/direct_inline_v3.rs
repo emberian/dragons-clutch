@@ -6,20 +6,20 @@
 //! RPC, signs maker material, signs a transaction, or submits one.
 
 use crate::{
-    foundation::{authenticate_finalized_record, decode_rent, FinalizedRecordProof},
-    product_graph_observation_v3::{
-        authenticate_product_graph_observation_v3, AuthenticatedProductGraphObservationV3,
-        FinalizedProductGraphAccountsV3,
-    },
     Finality, Observation, ObservedAccount,
+    foundation::{FinalizedRecordProof, authenticate_finalized_record, decode_rent},
+    product_graph_observation_v3::{
+        AuthenticatedProductGraphObservationV3, FinalizedProductGraphAccountsV3,
+        authenticate_product_graph_observation_v3,
+    },
 };
-use dclutch_account_profile_contract::v2::AccountPrestateV2;
-use dclutch_capability_contract::{CapabilityManifestV1, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1};
+use dclutch_account_profile_contract::v2::PhysicalAccountDataGeometryV2;
+use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
 use dclutch_capability_program_contract::{
+    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
     hot_v3::{
-        HotExecutionEnvelopeV3, HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
-        HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3,
-        HOT_CONFIG_STAGING_ACCOUNT_V3, HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
+        HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
+        HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CONFIG_STAGING_ACCOUNT_V3, HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
         HOT_DESCRIPTOR_STAGING_ACCOUNT_V3, HOT_EFFECT_RAW_ACCOUNT_V3,
         HOT_EFFECT_STAGING_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
         HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3, HOT_LIFECYCLE_RAW_ACCOUNT_V3,
@@ -31,25 +31,24 @@ use dclutch_capability_program_contract::{
         HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3, HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3,
         HOT_ROOT_ACCOUNT_V3, HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3, HOT_STRATEGY_RAW_ACCOUNT_V3,
         HOT_STRATEGY_STAGING_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
-        HOT_TRANSITION_RAW_ACCOUNT_V3, HOT_TRANSITION_STAGING_ACCOUNT_V3,
+        HOT_TRANSITION_RAW_ACCOUNT_V3, HOT_TRANSITION_STAGING_ACCOUNT_V3, HotExecutionEnvelopeV3,
     },
-    set_v2::{CapabilityProgramSetV2, CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2},
+    set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
     v4::{
         ArtifactReferenceV4, CapabilityProgramV4,
         SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
     },
-    CapabilityRootHeaderV1, CAPABILITY_ROOT_HEADER_BYTES_V1,
 };
 use dclutch_direct_codec::{
     artifacts_v4::{
-        authenticate_direct_artifacts_v4, DirectArtifactBundleV4, DirectArtifactBytesV4,
-        DirectArtifactSelectionV4,
+        DirectArtifactBundleV4, DirectArtifactBytesV4, DirectArtifactSelectionV4,
+        authenticate_direct_artifacts_v4,
     },
     execution_v3::{
-        encode_header_v3, DirectExecutionActionV3, DirectExecutionRequestV3,
         DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3, DIRECT_SIGNED_PARTICIPANT_BYTES_V3,
+        DirectExecutionActionV3, DirectExecutionRequestV3, encode_header_v3,
     },
-    intent_v2::{CompactIntentV2, COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2},
+    intent_v2::{COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2, CompactIntentV2},
 };
 use dclutch_release_set_contract::ExecutionRoleV1;
 use solana_address_lookup_table_interface::{
@@ -63,7 +62,7 @@ use solana_program::{
 };
 use solana_sdk_ids::{ed25519_program, sysvar};
 
-use crate::versioned::{compile_v0_message, VersionedMessagePlanV0};
+use crate::versioned::{VersionedMessagePlanV0, compile_v0_message};
 
 /// Exact Direct V3 InlineOrdinary family-request width.
 pub const DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3: usize =
@@ -131,9 +130,10 @@ pub struct DirectInlineHotStateV3 {
     pub fixed_accounts: Vec<ObservedAccountMetaV3>,
     /// Exact disposition-selected ExecutionStrategy account suffix.
     pub strategy_accounts: Vec<ObservedAccountMetaV3>,
-    /// Expanded AccountProfile physical address space, including the capability
-    /// root/config/Product/portfolio/linked-basis logical prefix. Those five
-    /// injected coordinates are not appended a second time.
+    /// Canonically packed AccountProfile physical representatives, including
+    /// the capability root/config/Product/portfolio/linked-basis prefix. The
+    /// common Hot adapter expands every logical route alias from this vector;
+    /// those five injected representatives are not appended a second time.
     pub runtime_accounts: Vec<ObservedAccountMetaV3>,
     /// Immutable execution release-set content identity selected by Market.
     pub release_set: [u8; 32],
@@ -833,46 +833,32 @@ fn validate_runtime_profile(
     outcome_count: u32,
 ) -> Result<(), Error> {
     let profile = bundle.account_profile;
-    let fixed = usize::from(profile.fixed_account_count());
-    let stride = usize::from(profile.item_account_stride());
-    let tail = usize::try_from(outcome_count).map_err(|_| Error::Arithmetic)?;
-    let expected = stride
-        .checked_mul(tail)
-        .and_then(|value| fixed.checked_add(value))
-        .ok_or(Error::Arithmetic)?;
-    if fixed < HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3 || state.runtime_accounts.len() != expected {
+    let expected = profile
+        .physical_account_count(outcome_count)
+        .map_err(|_| Error::RuntimeProfileMismatch)?;
+    if expected < HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3 || state.runtime_accounts.len() != expected
+    {
         return Err(Error::RuntimeProfileMismatch);
     }
-    for (coordinate, account) in state.runtime_accounts.iter().enumerate() {
-        let (item, index) = if coordinate < fixed {
-            (false, coordinate)
-        } else {
-            if stride == 0 {
-                return Err(Error::RuntimeProfileMismatch);
+    for (physical_ordinal, account) in state.runtime_accounts.iter().enumerate() {
+        let geometry = profile
+            .physical_account_geometry(outcome_count, physical_ordinal)
+            .map_err(|_| Error::RuntimeProfileMismatch)?;
+        let privileges = geometry.privileges();
+        let data_matches = match geometry.data() {
+            PhysicalAccountDataGeometryV2::Exact { bytes } => account.account.data.len() == bytes,
+            PhysicalAccountDataGeometryV2::VacantOrExact { live_bytes } => {
+                account.account.data.is_empty() || account.account.data.len() == live_bytes
             }
-            (true, (coordinate - fixed) % stride)
+            PhysicalAccountDataGeometryV2::AdapterAuthenticatedVariable { minimum_bytes } => {
+                !account.account.data.is_empty() && account.account.data.len() >= minimum_bytes
+            }
+            PhysicalAccountDataGeometryV2::Opaque => true,
         };
-        let rule = profile
-            .rule(item, u16::try_from(index).map_err(|_| Error::Arithmetic)?)
-            .map_err(|_| Error::RuntimeProfileMismatch)?;
-        let privileges = rule.privileges();
-        let expected_data = usize::try_from(rule.data_length()).map_err(|_| Error::Arithmetic)?;
-        if account.is_signer != (privileges & 1 != 0)
-            || account.is_writable != (privileges & 2 != 0)
-            || account.account.executable != (privileges & 4 != 0)
-            || (account.account.data.len() != expected_data
-                && !(rule.prestate() == AccountPrestateV2::LifecycleBound
-                    && account.account.data.is_empty()))
-        {
-            return Err(Error::RuntimeProfileMismatch);
-        }
-        let representative = profile
-            .representative(outcome_count, coordinate)
-            .map_err(|_| Error::RuntimeProfileMismatch)?;
-        if state
-            .runtime_accounts
-            .get(representative)
-            .is_none_or(|canonical| canonical.account.key != account.account.key)
+        if account.is_signer != privileges.signer()
+            || account.is_writable != privileges.writable()
+            || account.account.executable != privileges.executable()
+            || !data_matches
         {
             return Err(Error::RuntimeProfileMismatch);
         }
@@ -1013,24 +999,23 @@ mod tests {
 
     use super::*;
     use dclutch_capability_contract::{
-        ActivationPolicy, CapabilityEntryV1, CompartmentFundingV1, FundingAmountsV1,
-        FundingQuoteV1, CAPABILITY_ENTRY_BYTES, MANIFEST_HEADER_BYTES,
-        MAX_DEPENDENCIES_PER_CAPABILITY,
+        ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1,
+        FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
     };
     use dclutch_capability_program_contract::set_v2::{
-        encode_program_set_v2, encoded_program_set_bytes_v2, CapabilityDescriptorReferenceV2,
-        CapabilityProgramSetEntryV2, SelectorWidthV2,
+        CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, SelectorWidthV2,
+        encode_program_set_v2, encoded_program_set_bytes_v2,
     };
     use dclutch_custody_contract::CustodyReplayLayoutV1;
     use dclutch_direct_codec::{
         ordinary_account_artifacts_v3::DirectInlineOrdinaryAccountProfileInputV3,
         ordinary_bundle_v4::{
-            build_direct_inline_ordinary_hot_bundle_v4, DirectInlineOrdinaryHotBundleInputV4,
+            DirectInlineOrdinaryHotBundleInputV4, build_direct_inline_ordinary_hot_bundle_v4,
         },
         ordinary_effect_artifacts_v3::DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3,
         successor::{
-            DirectExecutionConfigV1, DirectRootStateV1, DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1,
-            DIRECT_MAKER_REPLAY_BYTES_V1, DIRECT_ROOT_SCHEMA_ID_V1,
+            DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, DIRECT_MAKER_REPLAY_BYTES_V1,
+            DIRECT_ROOT_SCHEMA_ID_V1, DirectExecutionConfigV1, DirectRootStateV1,
         },
     };
     use dclutch_product_runtime_v2::{
@@ -1558,6 +1543,45 @@ mod tests {
         (state, request)
     }
 
+    fn packed_runtime_accounts(
+        profile: dclutch_account_profile_contract::v2::AccountProfileV2<'_>,
+        outcome_count: u32,
+    ) -> Vec<ObservedAccountMetaV3> {
+        let count = profile
+            .physical_account_count(outcome_count)
+            .expect("physical account count");
+        (0..count)
+            .map(|ordinal| {
+                let geometry = profile
+                    .physical_account_geometry(outcome_count, ordinal)
+                    .expect("physical geometry");
+                let privileges = geometry.privileges();
+                let data_bytes = match geometry.data() {
+                    PhysicalAccountDataGeometryV2::Exact { bytes }
+                    | PhysicalAccountDataGeometryV2::VacantOrExact { live_bytes: bytes } => bytes,
+                    PhysicalAccountDataGeometryV2::AdapterAuthenticatedVariable {
+                        minimum_bytes,
+                    } => minimum_bytes
+                        .checked_add(7)
+                        .expect("variable fixture width"),
+                    PhysicalAccountDataGeometryV2::Opaque => 17,
+                };
+                ObservedAccountMetaV3 {
+                    account: ObservedAccount {
+                        observation: observation(),
+                        key: Pubkey::new_unique(),
+                        owner: key(220),
+                        lamports: 1,
+                        executable: privileges.executable(),
+                        data: vec![0; data_bytes],
+                    },
+                    is_signer: privileges.signer(),
+                    is_writable: privileges.writable(),
+                }
+            })
+            .collect()
+    }
+
     #[test]
     fn inline_request_has_exact_signed_offsets_and_u32_outcome() {
         let seller = intent(0, 1);
@@ -1694,6 +1718,81 @@ mod tests {
         assert_eq!(
             validate_frame(&stale_prefix, checked),
             Err(Error::FixedFrameMismatch)
+        );
+    }
+
+    #[test]
+    fn runtime_profile_accepts_only_packed_kernel_geometry() {
+        let (mut state, request) = chain_artifact_fixture();
+        let profile_bytes = state
+            .fixed_accounts
+            .get(HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3)
+            .expect("AccountProfile")
+            .account
+            .data
+            .clone();
+        let profile =
+            dclutch_account_profile_contract::v2::AccountProfileV2::decode(&profile_bytes)
+                .expect("AccountProfile");
+        state.runtime_accounts = packed_runtime_accounts(profile, 3);
+        assert!(
+            state.runtime_accounts.len() < profile.logical_account_count(3).expect("logical count")
+        );
+        let bundle = authenticate_chain_artifacts_v4(&state, &request, 3).expect("artifact bundle");
+        assert_eq!(validate_runtime_profile(&state, bundle, 3), Ok(()));
+
+        let mut duplicate_alias = state.clone();
+        duplicate_alias.runtime_accounts.push(
+            state
+                .runtime_accounts
+                .first()
+                .expect("first account")
+                .clone(),
+        );
+        let bundle = authenticate_chain_artifacts_v4(&duplicate_alias, &request, 3)
+            .expect("artifact bundle");
+        assert_eq!(
+            validate_runtime_profile(&duplicate_alias, bundle, 3),
+            Err(Error::RuntimeProfileMismatch)
+        );
+
+        let basis_ordinal = profile
+            .physical_account_ordinal(
+                3,
+                dclutch_capability_program_contract::hot_v3::HOT_RUNTIME_LINKED_BASIS_COORDINATE_V3,
+            )
+            .expect("basis ordinal");
+        let mut short_variable = state.clone();
+        short_variable
+            .runtime_accounts
+            .get_mut(basis_ordinal)
+            .expect("basis account")
+            .account
+            .data
+            .clear();
+        let bundle =
+            authenticate_chain_artifacts_v4(&short_variable, &request, 3).expect("artifact bundle");
+        assert_eq!(
+            validate_runtime_profile(&short_variable, bundle, 3),
+            Err(Error::RuntimeProfileMismatch)
+        );
+
+        let claims_ordinal = profile
+            .physical_account_ordinal(3, 13)
+            .expect("Claims Market ordinal");
+        let mut short_affine = state;
+        short_affine
+            .runtime_accounts
+            .get_mut(claims_ordinal)
+            .expect("Claims Market")
+            .account
+            .data
+            .pop();
+        let bundle =
+            authenticate_chain_artifacts_v4(&short_affine, &request, 3).expect("artifact bundle");
+        assert_eq!(
+            validate_runtime_profile(&short_affine, bundle, 3),
+            Err(Error::RuntimeProfileMismatch)
         );
     }
 

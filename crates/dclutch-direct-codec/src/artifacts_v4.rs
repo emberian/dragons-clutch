@@ -11,7 +11,7 @@
 //! Transition and Effect programs and commits once after fixed-role receipts.
 
 use dclutch_account_profile_contract::{
-    lifecycle_v3::{StateLifecyclePolicyV4, SUCCESSOR_SCHEMA_RELEASE_ID as LIFECYCLE_SCHEMA_ID_V4},
+    lifecycle_v3::{SUCCESSOR_SCHEMA_RELEASE_ID as LIFECYCLE_SCHEMA_ID_V4, StateLifecyclePolicyV4},
     v2::{AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2},
 };
 use dclutch_capability_program_contract::{
@@ -25,24 +25,24 @@ use dclutch_effect_kernel::{
     v3::{ProgramV3 as EffectProgramV3, SCHEMA_RELEASE_ID as EFFECT_SCHEMA_ID_V4},
 };
 use dclutch_execution_strategy_contract::v2::{
-    ExecutionStrategyProgramV2, StrategyDispositionV2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
+    EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
 use dclutch_request_profile_contract::{
-    v2::{RequestProfileV2, REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID},
     RequestProfileV1,
+    v2::{REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID, RequestProfileV2},
 };
 use dclutch_transition_vm::v3::ProgramV3 as TransitionProgramV3;
 use sha2::{Digest, Sha256};
 
 use crate::{
     execution_v3::{
-        DirectExecutionActionV3, DirectExecutionRequestV3, DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3,
-        DIRECT_EXECUTION_REQUEST_SELECTOR_OFFSET_V3, DIRECT_SUCCESSOR_KIND_ID_V3,
+        DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3, DIRECT_EXECUTION_REQUEST_SELECTOR_OFFSET_V3,
+        DIRECT_SUCCESSOR_KIND_ID_V3, DirectExecutionActionV3, DirectExecutionRequestV3,
     },
     ordinary_v3::{IDENTITY_BUYER_NATIVE_SIGNER_V3, IDENTITY_SELLER_NATIVE_SIGNER_V3},
     successor::{
-        DirectExecutionConfigV1, DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, DIRECT_ROOT_SCHEMA_ID_V1,
-        DIRECT_ROOT_STATE_BYTES_V1,
+        DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, DIRECT_ROOT_SCHEMA_ID_V1, DIRECT_ROOT_STATE_BYTES_V1,
+        DirectExecutionConfigV1,
     },
 };
 
@@ -508,19 +508,19 @@ mod tests {
 
     use dclutch_capability_program_contract::{
         set_v2::{
-            encode_program_set_v2, encoded_program_set_bytes_v2, CapabilityDescriptorReferenceV2,
-            CapabilityProgramSetEntryV2, SelectorWidthV2,
+            CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, SelectorWidthV2,
+            encode_program_set_v2, encoded_program_set_bytes_v2,
         },
         v4::{
-            ArtifactReferenceV4, CapabilityArtifactsV4, CapabilityProgramV4,
-            CAPABILITY_PROGRAM_V4_BYTES,
+            ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4,
+            CapabilityProgramV4,
         },
     };
     use dclutch_core_contract::ContentId;
     use std::{vec, vec::Vec};
 
     use super::*;
-    use crate::execution_v3::{encode_header_v3, DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3};
+    use crate::execution_v3::{DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3, encode_header_v3};
 
     struct Fixture {
         set: Vec<u8>,
@@ -623,12 +623,12 @@ mod tests {
 
     fn lifecycle_policy() -> Vec<u8> {
         use dclutch_account_profile_contract::lifecycle_v3::{
-            encode::{
-                encode_lifecycle_policy_v4_atomic, LifecycleAccountCoordinateV3,
-                LifecycleGuardInputV3, LifecycleOperationInputV3, LifecyclePlanInputV3,
-                LifecycleRecipeInputV3, LifecycleSeedInputV3,
-            },
             ACTION_PLAN_BYTES, HEADER_BYTES, PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SEED_BYTES,
+            encode::{
+                LifecycleAccountCoordinateV3, LifecycleGuardInputV3, LifecycleOperationInputV3,
+                LifecyclePlanInputV3, LifecycleRecipeInputV3, LifecycleSeedInputV3,
+                encode_lifecycle_policy_v4_atomic,
+            },
         };
         let bytes = HEADER_BYTES
             + RECIPE_BYTES

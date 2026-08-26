@@ -6,51 +6,51 @@
 //! routes, and commits once.
 
 use dclutch_account_profile_contract::{
-    lifecycle_v3::{StateLifecyclePolicyV4, SUCCESSOR_SCHEMA_RELEASE_ID as LIFECYCLE_SCHEMA_ID_V4},
+    lifecycle_v3::{SUCCESSOR_SCHEMA_RELEASE_ID as LIFECYCLE_SCHEMA_ID_V4, StateLifecyclePolicyV4},
     v2::{AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2},
 };
 use dclutch_capability_program_contract::v4::{
-    ArtifactReferenceV4, CapabilityArtifactsV4, CapabilityProgramV4, CAPABILITY_PROGRAM_V4_BYTES,
+    ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4, CapabilityProgramV4,
 };
 use dclutch_core_contract::ContentId;
 use dclutch_effect_kernel::v3::{
     ProgramV3 as EffectProgramV3, SCHEMA_RELEASE_ID as EFFECT_SCHEMA_ID_V4,
 };
 use dclutch_execution_strategy_contract::v2::{
-    ExecutionStrategyProgramV2, StrategyDispositionV2, EXECUTION_STRATEGY_PROGRAM_BYTES_V2,
-    EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
+    EXECUTION_STRATEGY_PROGRAM_BYTES_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
+    ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
 use dclutch_request_profile_contract::v2::{
-    RequestProfileV2, REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID,
+    REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID, RequestProfileV2,
 };
 use dclutch_transition_vm::v3::ProgramV3 as TransitionProgramV3;
 use sha2::{Digest, Sha256};
 
 use crate::{
     execution_v3::{
-        DirectExecutionActionV3, DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3, DIRECT_SUCCESSOR_KIND_ID_V3,
+        DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3, DIRECT_SUCCESSOR_KIND_ID_V3, DirectExecutionActionV3,
     },
     ordinary_account_artifacts_v3::{
+        DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3, DirectInlineOrdinaryAccountProfileInputV3,
         encode_direct_inline_ordinary_account_profile_v3_atomic,
-        DirectInlineOrdinaryAccountProfileInputV3, DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3,
     },
     ordinary_artifacts_v3::{
-        direct_inline_ordinary_strategy_v3, encode_inline_ordinary_request_profile_v3_atomic,
         DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_V1_BYTES_V3,
-        DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_V2_BYTES_V3,
+        DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_V2_BYTES_V3, direct_inline_ordinary_strategy_v3,
+        encode_inline_ordinary_request_profile_v3_atomic,
     },
     ordinary_effect_artifacts_v3::{
-        encode_direct_inline_ordinary_effect_v4_atomic, DIRECT_INLINE_ORDINARY_EFFECT_BYTES_V4,
-        DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3,
+        DIRECT_INLINE_ORDINARY_EFFECT_BYTES_V4, DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3,
+        encode_direct_inline_ordinary_effect_v4_atomic,
     },
     ordinary_v3::{
-        encode_direct_ordinary_transition_v3, DIRECT_ORDINARY_COMMON_IDENTITIES_V3,
-        DIRECT_ORDINARY_COMMON_SCALARS_V3, DIRECT_ORDINARY_ITEM_IDENTITY_STRIDE_V3,
-        DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3, DIRECT_ORDINARY_TRANSITION_BYTES_V3,
+        DIRECT_ORDINARY_COMMON_IDENTITIES_V3, DIRECT_ORDINARY_COMMON_SCALARS_V3,
+        DIRECT_ORDINARY_ITEM_IDENTITY_STRIDE_V3, DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3,
+        DIRECT_ORDINARY_TRANSITION_BYTES_V3, encode_direct_ordinary_transition_v3,
     },
     state_artifacts_v3::{
-        encode_direct_inline_ordinary_lifecycle_v4_atomic,
         DIRECT_INLINE_ORDINARY_LIFECYCLE_BYTES_V4,
+        encode_direct_inline_ordinary_lifecycle_v4_atomic,
     },
     successor::{
         DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, DIRECT_ROOT_SCHEMA_ID_V1, DIRECT_ROOT_STATE_BYTES_V1,

@@ -839,7 +839,7 @@ mod tests {
     extern crate std;
 
     use super::*;
-    use dclutch_transition_vm::{execute, Registers};
+    use dclutch_transition_vm::{Registers, execute};
     use std::{string::String, vec::Vec};
 
     const LEAN_VECTORS: &str =
@@ -999,7 +999,9 @@ mod tests {
         );
         assert_eq!(
             registered_claim_fill_instruction(instruction.fill),
-            Ok([b'D', b'C', b'R', b'F', 1, 0, 0, 0, 0xd0, 0x07, 0, 0, 0, 0, 0, 0,])
+            Ok([
+                b'D', b'C', b'R', b'F', 1, 0, 0, 0, 0xd0, 0x07, 0, 0, 0, 0, 0, 0,
+            ])
         );
     }
 
