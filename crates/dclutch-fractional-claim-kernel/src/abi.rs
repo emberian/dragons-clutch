@@ -2,45 +2,29 @@
 
 use core::convert::TryInto;
 
-/// Immutable terms magic.
-pub const FRACTIONAL_TERMS_MAGIC_V1: [u8; 8] = *b"DCFRTRM1";
-/// Runtime projection magic.
-pub const FRACTIONAL_PROJECTION_MAGIC_V1: [u8; 8] = *b"DCFPROJ1";
-/// Implemented schema version.
-pub const SCHEMA_VERSION_V1: u16 = 1;
-/// Fixed immutable-terms header width before one Mint identity per outcome.
-pub const FRACTIONAL_TERMS_HEADER_BYTES_V1: usize = 192;
-/// Width of one immutable shard Mint identity.
-pub const FRACTIONAL_TERMS_MINT_BYTES_V1: usize = 32;
-/// Fixed projection header width before reserve rows.
-pub const FRACTIONAL_PROJECTION_HEADER_BYTES_V1: usize = 96;
-/// Width of one `(locked native claims, shard supply)` reserve row.
-pub const FRACTIONAL_PROJECTION_ROW_BYTES_V1: usize = 16;
+pub use crate::generated_abi::{
+    FRACTIONAL_PROJECTION_HEADER_BYTES_V1, FRACTIONAL_PROJECTION_MAGIC_V1,
+    FRACTIONAL_PROJECTION_ROW_BYTES_V1, FRACTIONAL_TERMS_HEADER_BYTES_V1,
+    FRACTIONAL_TERMS_MAGIC_V1, FRACTIONAL_TERMS_MINT_BYTES_V1, SCHEMA_VERSION_V1,
+};
+use crate::generated_abi::{
+    NO_TERMINAL_OUTCOME, PROJECTION_MARKET_OFFSET, PROJECTION_OUTCOME_COUNT_OFFSET,
+    PROJECTION_PHASE_OFFSET, PROJECTION_RESERVED_BYTES, PROJECTION_RESERVED_OFFSET,
+    PROJECTION_REVISION_OFFSET, PROJECTION_TERMINAL_OUTCOME_OFFSET, PROJECTION_TERMS_ID_OFFSET,
+    PROJECTION_VERSION_OFFSET, TERMS_DENOMINATOR_OFFSET, TERMS_MARKET_OFFSET,
+    TERMS_OUTCOME_COUNT_OFFSET, TERMS_RELEASE_SET_OFFSET, TERMS_RESERVED_A_BYTES,
+    TERMS_RESERVED_A_OFFSET, TERMS_RESERVED_B_BYTES, TERMS_RESERVED_B_OFFSET,
+    TERMS_RESULT_DOMAIN_OFFSET, TERMS_TOKEN_BEHAVIOR_OFFSET, TERMS_TOKEN_PROGRAM_OFFSET,
+    TERMS_VERSION_OFFSET,
+};
 
-const TERMS_VERSION_OFFSET: usize = 8;
-const TERMS_RESERVED_A_OFFSET: usize = 10;
-const TERMS_RESERVED_A_BYTES: usize = 6;
-const TERMS_MARKET_OFFSET: usize = 16;
-const TERMS_RESULT_DOMAIN_OFFSET: usize = 48;
-const TERMS_RELEASE_SET_OFFSET: usize = 80;
-const TERMS_TOKEN_PROGRAM_OFFSET: usize = 112;
-const TERMS_TOKEN_BEHAVIOR_OFFSET: usize = 144;
-const TERMS_OUTCOME_COUNT_OFFSET: usize = 176;
-const TERMS_RESERVED_B_OFFSET: usize = 180;
-const TERMS_RESERVED_B_BYTES: usize = 4;
-const TERMS_DENOMINATOR_OFFSET: usize = 184;
-
-const PROJECTION_VERSION_OFFSET: usize = 8;
-const PROJECTION_PHASE_OFFSET: usize = 10;
-const PROJECTION_RESERVED_OFFSET: usize = 11;
-const PROJECTION_RESERVED_BYTES: usize = 5;
-const PROJECTION_TERMS_ID_OFFSET: usize = 16;
-const PROJECTION_MARKET_OFFSET: usize = 48;
-const PROJECTION_OUTCOME_COUNT_OFFSET: usize = 80;
-const PROJECTION_TERMINAL_OUTCOME_OFFSET: usize = 84;
-const PROJECTION_REVISION_OFFSET: usize = 88;
-
-const NO_TERMINAL_OUTCOME: u32 = u32::MAX;
+/// Canonical finalized-Record schema label for [`FractionalTermsV1`].
+pub const FRACTIONAL_TERMS_SCHEMA_PREIMAGE_V1: &[u8] = b"dclutch/schema/fractional-claim-terms-v1";
+/// SHA-256 identity of [`FRACTIONAL_TERMS_SCHEMA_PREIMAGE_V1`].
+pub const FRACTIONAL_TERMS_SCHEMA_ID_V1: [u8; 32] = [
+    0x48, 0x6b, 0xe3, 0x72, 0xe2, 0x44, 0x58, 0xc1, 0x74, 0xe1, 0x08, 0x04, 0x9e, 0x90, 0x90, 0xe1,
+    0xaf, 0xfc, 0x0d, 0x84, 0x81, 0x64, 0x5d, 0xfb, 0x9c, 0xfb, 0x6c, 0x33, 0x92, 0xc7, 0xca, 0xa3,
+];
 
 /// Stable hostile-decode or exact-transition refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -91,6 +75,10 @@ pub type Result<T> = core::result::Result<T, Error>;
 /// Finalized immutable-terms authentication supplied by the Record adapter.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FractionalTermsAdmissionV1 {
+    /// Terms schema selected by the immutable capability descriptor.
+    pub selected_schema_id: [u8; 32],
+    /// Terms schema observed in finalized Record coordinates.
+    pub finalized_schema_id: [u8; 32],
     /// Terms identity selected by the immutable capability descriptor.
     pub selected_terms_id: [u8; 32],
     /// Terms identity observed in the finalized Record coordinates.
@@ -134,7 +122,9 @@ impl<'a> FractionalTermsV1<'a> {
         if !admission.record_authenticated {
             return Err(Error::UnauthenticatedRecord);
         }
-        if is_zero(&admission.selected_terms_id)
+        if admission.selected_schema_id != FRACTIONAL_TERMS_SCHEMA_ID_V1
+            || admission.finalized_schema_id != FRACTIONAL_TERMS_SCHEMA_ID_V1
+            || is_zero(&admission.selected_terms_id)
             || admission.selected_terms_id != admission.finalized_terms_id
             || admission.selected_terms_id != admission.recomputed_terms_digest
             || admission.selected_terms_id != admission.finalized_terms_digest

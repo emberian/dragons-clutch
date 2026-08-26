@@ -24,12 +24,20 @@ unwrap, terminal redemption, losing-shard burn, and retirement. It does not
 parse Solana accounts, own replay state, persist balances, call Token-2022, or
 authorize a second Claims writer.
 
+`DClutchSemantics.FractionalClaimV1` proves denomination preservation, exact
+quotient/remainder decomposition, bounded winning redemption, and losing-burn
+conservation. It also owns the fixed byte layout emitted into
+`src/generated_abi.rs`. The finalized terms Record uses schema preimage
+`dclutch/schema/fractional-claim-terms-v1`; the immutable capability selects
+that schema and the SHA-256 identity of the exact terms bytes.
+
 Evidence:
 
 ```sh
 cargo test --manifest-path crates/dclutch-fractional-claim-kernel/Cargo.toml
 cargo clippy --manifest-path crates/dclutch-fractional-claim-kernel/Cargo.toml \
   --all-targets -- -D warnings
+crates/dclutch-fractional-claim-kernel/check-generated.sh
 ```
 
 This is semantic-kernel evidence. Token-2022/Custody composition, SBF verifier,

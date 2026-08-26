@@ -10,14 +10,16 @@
 //! Token Mint supply. This kernel persists neither observation.
 
 mod abi;
+#[allow(missing_docs)]
+mod generated_abi;
 mod transition;
 
 pub use abi::{
     Error, FRACTIONAL_PROJECTION_HEADER_BYTES_V1, FRACTIONAL_PROJECTION_MAGIC_V1,
     FRACTIONAL_PROJECTION_ROW_BYTES_V1, FRACTIONAL_TERMS_HEADER_BYTES_V1,
-    FRACTIONAL_TERMS_MAGIC_V1, FRACTIONAL_TERMS_MINT_BYTES_V1, FractionalPhaseV1,
-    FractionalProjectionV1, FractionalTermsAdmissionV1, FractionalTermsV1, OutcomeReserveV1,
-    Result, SCHEMA_VERSION_V1,
+    FRACTIONAL_TERMS_MAGIC_V1, FRACTIONAL_TERMS_MINT_BYTES_V1, FRACTIONAL_TERMS_SCHEMA_ID_V1,
+    FRACTIONAL_TERMS_SCHEMA_PREIMAGE_V1, FractionalPhaseV1, FractionalProjectionV1,
+    FractionalTermsAdmissionV1, FractionalTermsV1, OutcomeReserveV1, Result, SCHEMA_VERSION_V1,
 };
 pub use transition::{
     ClaimShardDivisionV1, ClaimShardInstrumentV1, RetirePlanV1, TerminalizePlanV1,

@@ -5,12 +5,13 @@
 use dclutch_fractional_claim_kernel::{
     Error, FRACTIONAL_PROJECTION_HEADER_BYTES_V1, FRACTIONAL_PROJECTION_MAGIC_V1,
     FRACTIONAL_PROJECTION_ROW_BYTES_V1, FRACTIONAL_TERMS_HEADER_BYTES_V1,
-    FRACTIONAL_TERMS_MAGIC_V1, FRACTIONAL_TERMS_MINT_BYTES_V1, FractionalPhaseV1,
-    FractionalProjectionV1, FractionalTermsAdmissionV1, FractionalTermsV1, SCHEMA_VERSION_V1,
-    TransferObservationV1, divide_claim_shards_v1, prepare_open_unwrap_v1, prepare_retire_v1,
-    prepare_terminal_redeem_v1, prepare_terminal_zero_burn_v1, prepare_terminalize_v1,
-    prepare_transfer_v1, prepare_wrap_v1,
+    FRACTIONAL_TERMS_MAGIC_V1, FRACTIONAL_TERMS_MINT_BYTES_V1, FRACTIONAL_TERMS_SCHEMA_ID_V1,
+    FRACTIONAL_TERMS_SCHEMA_PREIMAGE_V1, FractionalPhaseV1, FractionalProjectionV1,
+    FractionalTermsAdmissionV1, FractionalTermsV1, SCHEMA_VERSION_V1, TransferObservationV1,
+    divide_claim_shards_v1, prepare_open_unwrap_v1, prepare_retire_v1, prepare_terminal_redeem_v1,
+    prepare_terminal_zero_burn_v1, prepare_terminalize_v1, prepare_transfer_v1, prepare_wrap_v1,
 };
+use sha2::{Digest, Sha256};
 
 const OUTCOMES: u32 = 3;
 const DENOMINATOR: u64 = 10;
@@ -33,6 +34,14 @@ fn put(output: &mut [u8], offset: usize, value: &[u8]) {
         .get_mut(offset..end)
         .expect("fixture destination")
         .copy_from_slice(value);
+}
+
+#[test]
+fn finalized_terms_schema_identity_is_exact() {
+    assert_eq!(
+        <[u8; 32]>::from(Sha256::digest(FRACTIONAL_TERMS_SCHEMA_PREIMAGE_V1)),
+        FRACTIONAL_TERMS_SCHEMA_ID_V1
+    );
 }
 
 fn terms_bytes(denominator: u64) -> Vec<u8> {
@@ -64,6 +73,8 @@ fn terms_bytes(denominator: u64) -> Vec<u8> {
 
 fn admission() -> FractionalTermsAdmissionV1 {
     FractionalTermsAdmissionV1 {
+        selected_schema_id: FRACTIONAL_TERMS_SCHEMA_ID_V1,
+        finalized_schema_id: FRACTIONAL_TERMS_SCHEMA_ID_V1,
         selected_terms_id: TERMS_ID,
         finalized_terms_id: TERMS_ID,
         recomputed_terms_digest: TERMS_ID,
@@ -131,6 +142,12 @@ fn hostile_terms_refuse_substitution_duplicates_and_noncanonical_bytes() {
     substituted.finalized_terms_digest = identity(77);
     assert_eq!(
         FractionalTermsV1::decode(&bytes, substituted),
+        Err(Error::AdmissionMismatch)
+    );
+    let mut schema_substituted = admission();
+    schema_substituted.finalized_schema_id = identity(76);
+    assert_eq!(
+        FractionalTermsV1::decode(&bytes, schema_substituted),
         Err(Error::AdmissionMismatch)
     );
     let mut unauthenticated = admission();
