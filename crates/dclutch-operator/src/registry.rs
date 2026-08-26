@@ -36,6 +36,8 @@ use crate::{Finality, Observation, ObservedAccount, versioned::PACKET_DATA_BYTES
 
 /// Chain-derived Core+Trading Registry continuation construction.
 pub mod hot_continuation_v1;
+/// Headerless chain-derived Core+Trading Registry continuation construction.
+pub mod hot_continuation_v2;
 /// Chain-derived Core+Custody market-open Registry continuation construction.
 pub mod open_market_continuation_v1 {
     pub use dclutch_market_open_v1_operator::*;
