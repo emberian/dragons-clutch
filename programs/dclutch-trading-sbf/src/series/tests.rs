@@ -480,6 +480,18 @@ fn prepare_and_expire_commit_under_controller_without_fabricating_core() {
     assert_eq!(prepare.series_after().revision(), 4);
     assert_eq!(prepare.ticket_after().revision(), 0);
     assert_eq!(prepare.core_request(), None);
+    let (candidate_series, candidate_ticket) = prepare
+        .candidate_bytes()
+        .expect("read-only candidate bytes");
+    assert_eq!(
+        state::SeriesStateV3::decode(&candidate_series, admitted.template().occurrence_count())
+            .expect("Series candidate"),
+        prepare.series_after()
+    );
+    assert_eq!(
+        state::TicketStateV3::decode(&candidate_ticket).expect("Ticket candidate"),
+        prepare.ticket_after()
+    );
 
     let expire = lifecycle::plan_expire(
         admitted,

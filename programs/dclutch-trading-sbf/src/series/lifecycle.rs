@@ -244,6 +244,19 @@ impl OccurrenceCommitPlanV3 {
         self.funding
     }
 
+    /// Canonical candidate root tail and Ticket bytes without write authority.
+    ///
+    /// This view lets a physical adapter authenticate a child acknowledgement
+    /// against the exact proposed poststate. It neither validates an
+    /// acknowledgement nor authorizes persistence; Consume remains writable
+    /// only through [`Self::commit_after_ack`].
+    pub fn candidate_bytes(self) -> Result<([u8; 64], [u8; 64]), LifecycleErrorV3> {
+        Ok((
+            self.series_after.encode(self.occurrence_count)?,
+            self.ticket_after.encode(),
+        ))
+    }
+
     /// Validate immediate Core return data and expose the only permitted writes.
     pub fn commit_after_ack(
         self,
@@ -260,10 +273,7 @@ impl OccurrenceCommitPlanV3 {
             observed_post_resource_digest,
         )
         .map_err(|_| LifecycleErrorV3::CoreAck)?;
-        Ok((
-            self.series_after.encode(self.occurrence_count)?,
-            self.ticket_after.encode(),
-        ))
+        self.candidate_bytes()
     }
 
     /// Expose controller-owned candidate bytes for Prepare or Expire.
@@ -275,10 +285,7 @@ impl OccurrenceCommitPlanV3 {
         if self.core_request.is_some() {
             return Err(LifecycleErrorV3::CoreAck);
         }
-        Ok((
-            self.series_after.encode(self.occurrence_count)?,
-            self.ticket_after.encode(),
-        ))
+        self.candidate_bytes()
     }
 }
 
