@@ -23,6 +23,9 @@ digest. Its decoder hostile-revalidates the artifact tuple; its rebuild gate
 requires byte-for-byte identity.
 
 The generator's unit manifests are deliberately labeled ephemeral and are not
-release evidence. This package remains fail-closed: it has no production
-entrypoint or accepted embedded manifest until a separately reviewed source
-manifest and checked ELF release are selected.
+release evidence. `DCLUTCH_SERIES_SHADOW_GENERATED_INCLUDE` is the sole build
+input for an explicitly selected generator include; its source, compiler,
+toolchain, certificate, manifest, and complete-bundle identities are embedded
+in that ELF. With no such build input the crate contains no selected bundle and
+remains fail-closed. A physical entrypoint is enabled only after the separately
+authenticated Shadow callback and checked ELF release are selected.

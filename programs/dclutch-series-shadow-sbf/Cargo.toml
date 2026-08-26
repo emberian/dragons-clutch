@@ -5,6 +5,7 @@ edition = "2024"
 license = "AGPL-3.0-or-later"
 rust-version = "1.89"
 description = "Stateless Shadow-AOT accelerator for one checked Series artifact bundle"
+build = "build.rs"
 
 [lib]
 crate-type = ["cdylib", "lib"]

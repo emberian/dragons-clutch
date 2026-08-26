@@ -330,6 +330,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-rent-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-market-core-codec",
+]
+
+[[package]]
 name = "dclutch-request-profile-contract"
 version = "0.1.0"
 
@@ -356,6 +363,7 @@ version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
  "dclutch-market-core-codec",
+ "dclutch-rent-contract",
  "sha2",
 ]
 

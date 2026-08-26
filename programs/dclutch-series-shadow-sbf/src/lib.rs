@@ -12,3 +12,5 @@ extern crate alloc;
 
 /// Exact generic-interpreter and Series-semantic comparison boundary.
 pub mod evaluator;
+/// Compile-time selected, generator-produced release bundle boundary.
+pub mod release;
