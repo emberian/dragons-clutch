@@ -19,6 +19,10 @@
 #[cfg(test)]
 extern crate std;
 
+/// Immutable Realm/release selection for Token behavior V2.
+pub mod behavior_binding_v2;
+/// Lifted Token-2022 behavior profile for representation assets.
+pub mod behavior_profile_v2;
 /// Exact Token-2022 closeable-Mint lifecycle profile.
 pub mod closeable_mint;
 /// Fixed instruction specifications and exact borrowed instruction-data views.
@@ -30,6 +34,16 @@ pub mod release;
 /// Exact Mint and base Account state parsers.
 pub mod state;
 
+pub use behavior_binding_v2::{
+    TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TOKEN_BEHAVIOR_SELECTION_MAGIC_V2,
+    TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, TOKEN_BEHAVIOR_SELECTION_SCHEMA_PREIMAGE_V2,
+    TOKEN_BEHAVIOR_SELECTION_SCHEMA_V2, TokenBehaviorSelectionV2,
+};
+pub use behavior_profile_v2::{
+    InertMetadataV2, MAX_DISPLAY_DECIMALS_V2, MAX_INERT_METADATA_VALUE_BYTES_V2,
+    TOKEN_2022_BEHAVIOR_PROFILE_ID_V2, TOKEN_2022_BEHAVIOR_PROFILE_PREIMAGE_V2,
+    Token2022BehaviorAccountFactsV2, Token2022BehaviorMintFactsV2, Token2022BehaviorProfileV2,
+};
 pub use closeable_mint::{
     TOKEN_2022_CLOSEABLE_MINT_BYTES_V2, Token2022CloseableMintFactsV2,
     Token2022CloseableMintProfileV2,
