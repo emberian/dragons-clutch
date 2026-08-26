@@ -11,7 +11,9 @@ use dclutch_effect_kernel::{
     v2::FixedRole,
     v3::{ProgramV3, RouteKindV3, RouteReceiptDependencyV3},
     v4::{
-        BorrowedRangePolicyV4, BorrowedRangeV4, DynamicFixedSpanV4, ProgramV4, RequestCoordinateV4,
+        BORROWED_RANGE_BYTES_V4, BorrowedRangePolicyV4, BorrowedRangeV4, DYNAMIC_SPAN_BYTES_V4,
+        DynamicFixedSpanV4, HEADER_BYTES_V4, ProgramV4, RequestCoordinateV4,
+        encode_program_v4_atomic,
     },
 };
 use dclutch_series_v3_kernel::request::{SeriesActionRequestV3, SeriesActionV3};
@@ -58,6 +60,9 @@ pub const SERIES_CONSUME_REALIZE_ROUTE_V4: u16 = 2;
 pub const SERIES_CONSUME_CLAIMS_ROUTE_V4: u16 = 3;
 /// Final Core Open global route.
 pub const SERIES_CONSUME_OPEN_ROUTE_V4: u16 = 4;
+/// Exact DCE5 bytes added around the canonical embedded Effect V3 program.
+pub const SERIES_CONSUME_EFFECT_V4_OVERHEAD_BYTES: usize =
+    HEADER_BYTES_V4 + DYNAMIC_SPAN_BYTES_V4 + 2 * BORROWED_RANGE_BYTES_V4;
 
 const ROUTE_LOCK: u16 = SERIES_CONSUME_LOCK_ROUTE_V4;
 const ROUTE_FOUND: u16 = SERIES_CONSUME_FOUND_ROUTE_V4;
@@ -221,6 +226,41 @@ pub const fn series_consume_route_account_start_v4(route: u16, funding_count: u1
         ROUTE_OPEN => OPEN_ACCOUNT_START_BEFORE_FUNDING.checked_add(funding_count),
         _ => None,
     }
+}
+
+/// Wrap one exact Series Consume Effect V3 program in the canonical DCE5
+/// dynamic-span and duplicate-proof-range layer.
+///
+/// The caller owns both exact-sized buffers.  `output` is modified only after
+/// the embedded base and the complete successor encoding have both accepted.
+pub fn encode_series_consume_effect_v4_atomic(
+    base_program: &[u8],
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<(), SeriesConsumeEffectErrorV4> {
+    let base =
+        ProgramV3::decode(base_program).map_err(|_| SeriesConsumeEffectErrorV4::BaseProgram)?;
+    validate_base(base)?;
+    let spans = [DynamicFixedSpanV4::new(
+        ROUTE_FOUND,
+        SERIES_CONSUME_FUNDING_COUNT_SCALAR_V4,
+        SERIES_CONSUME_CORE_FOUND_ACCOUNT_BASE_V3,
+        ALLOWED_FUNDING_COUNTS,
+    )];
+    let ranges = [proof_range(ROUTE_FOUND), proof_range(ROUTE_OPEN)];
+    encode_program_v4_atomic(
+        base_program,
+        BorrowedRangePolicyV4::IdenticalReuseExactCoverage,
+        SERIES_ACTION_HEADER_OFFSET_V4,
+        &spans,
+        &ranges,
+        scratch,
+        output,
+    )
+    .map_err(|_| SeriesConsumeEffectErrorV4::Successor)?;
+    validate_successor(
+        ProgramV4::decode(output).map_err(|_| SeriesConsumeEffectErrorV4::Successor)?,
+    )
 }
 
 fn validate_successor(program: ProgramV4<'_>) -> Result<(), SeriesConsumeEffectErrorV4> {
@@ -462,10 +502,7 @@ mod tests {
             HEADER_BYTES, RECEIPT_DEPENDENCY_BYTES, ROUTE_BYTES,
             encode::{EffectGeometryV3, RouteInputV3, encode_effect_program_v4_atomic},
         },
-        v4::{
-            BORROWED_RANGE_BYTES_V4, DYNAMIC_SPAN_BYTES_V4, HEADER_BYTES_V4,
-            encode_program_v4_atomic,
-        },
+        v4::{DYNAMIC_SPAN_BYTES_V4, HEADER_BYTES_V4},
     };
 
     use super::*;
@@ -585,29 +622,11 @@ mod tests {
 
     fn successor() -> Vec<u8> {
         let base = base_program();
-        let spans = [DynamicFixedSpanV4::new(
-            ROUTE_FOUND,
-            SERIES_CONSUME_FUNDING_COUNT_SCALAR_V4,
-            SERIES_CONSUME_CORE_FOUND_ACCOUNT_BASE_V3,
-            ALLOWED_FUNDING_COUNTS,
-        )];
-        let ranges = [proof_range(ROUTE_FOUND), proof_range(ROUTE_OPEN)];
-        let width = HEADER_BYTES_V4
-            + DYNAMIC_SPAN_BYTES_V4 * spans.len()
-            + BORROWED_RANGE_BYTES_V4 * ranges.len()
-            + base.len();
+        let width = SERIES_CONSUME_EFFECT_V4_OVERHEAD_BYTES + base.len();
         let mut scratch = vec![0_u8; width];
         let mut output = vec![0_u8; width];
-        encode_program_v4_atomic(
-            &base,
-            BorrowedRangePolicyV4::IdenticalReuseExactCoverage,
-            SERIES_ACTION_HEADER_OFFSET_V4,
-            &spans,
-            &ranges,
-            &mut scratch,
-            &mut output,
-        )
-        .expect("successor program");
+        encode_series_consume_effect_v4_atomic(&base, &mut scratch, &mut output)
+            .expect("successor program");
         output
     }
 
@@ -706,5 +725,29 @@ mod tests {
             .expect("range route")
             .copy_from_slice(&ROUTE_REALIZE.to_le_bytes());
         assert!(SeriesConsumeEffectV4::decode(&hostile, &request(), 0, &scalars, &[], 2,).is_err());
+    }
+
+    #[test]
+    fn constructor_is_failure_atomic_for_wrong_base_or_width() {
+        let base = base_program();
+        let width = SERIES_CONSUME_EFFECT_V4_OVERHEAD_BYTES + base.len();
+        let mut scratch = vec![0_u8; width];
+        let mut output = vec![9_u8; width];
+        assert_eq!(
+            encode_series_consume_effect_v4_atomic(
+                base.get(1..).expect("truncated base"),
+                &mut scratch,
+                &mut output,
+            ),
+            Err(SeriesConsumeEffectErrorV4::BaseProgram)
+        );
+        assert!(output.iter().all(|byte| *byte == 9));
+
+        let mut short_scratch = vec![0_u8; width - 1];
+        assert_eq!(
+            encode_series_consume_effect_v4_atomic(&base, &mut short_scratch, &mut output,),
+            Err(SeriesConsumeEffectErrorV4::Successor)
+        );
+        assert!(output.iter().all(|byte| *byte == 9));
     }
 }
