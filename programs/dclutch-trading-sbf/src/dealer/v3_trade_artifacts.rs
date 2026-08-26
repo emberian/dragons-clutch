@@ -8,10 +8,8 @@
 //! sole borrowed request range and covers every byte after the 384-byte
 //! semantic header.
 
-#[cfg(not(target_os = "solana"))]
 extern crate alloc;
 
-#[cfg(not(target_os = "solana"))]
 use alloc::{vec, vec::Vec};
 
 use dclutch_claims_svm::signed_delta_v3::{
@@ -22,7 +20,6 @@ use dclutch_custody_contract::{
     CUSTODY_REQUEST_BYTES_V1, CustodyRequestLayoutV1, DELEGATED_CUSTODY_REQUEST_BYTES_V2,
     DelegatedCustodyRequestLayoutV2,
 };
-#[cfg(not(target_os = "solana"))]
 use dclutch_custody_contract::{CallerRoleV1, CompartmentV1, OperationV1};
 use dclutch_dealer_codec::MAX_OUTCOMES;
 #[cfg(not(target_os = "solana"))]
@@ -57,10 +54,8 @@ use dclutch_transition_vm::v3::{
     InstructionV3, ProgramGeometryV3, ProgramV3 as TransitionProgramV3, ScalarRegisterV3,
     encode_program_atomic,
 };
-#[cfg(not(target_os = "solana"))]
 use solana_program::hash::hash;
 
-#[cfg(not(target_os = "solana"))]
 use super::{
     v3_composer::{
         MAX_DEALER_SCENARIO_CUSTODY_EFFECTS_V3, ScenarioAtomicPlanV3, ScenarioCustodyEffectV3,
@@ -871,7 +866,6 @@ const fn scenario_u32_fields() -> [(DealerCustodyScalarFieldV3, usize); 2] {
 /// Custody routes are classified from the exact composer-owned requests, the
 /// SignedDelta suffix owns P and all Claims rows, and the authenticated
 /// candidate obligation account owns the repeated outcome vector.
-#[cfg(not(target_os = "solana"))]
 #[allow(clippy::too_many_arguments)]
 pub fn project_dealer_scenario_hot_registers_v4(
     request: DealerScenarioTradeRequestV3<'_>,
@@ -1044,7 +1038,6 @@ pub fn project_dealer_scenario_hot_registers_v4(
     Ok(())
 }
 
-#[cfg(not(target_os = "solana"))]
 fn project_scenario_custody_request(
     slot: u16,
     request: MultiLpCustodyRequestV3,
@@ -1134,7 +1127,6 @@ fn project_scenario_custody_request(
     Ok(())
 }
 
-#[cfg(not(target_os = "solana"))]
 fn classify_scenario_custody(request: MultiLpCustodyRequestV3) -> Option<usize> {
     let custody = request.custody();
     match (
@@ -1176,7 +1168,6 @@ fn classify_scenario_custody(request: MultiLpCustodyRequestV3) -> Option<usize> 
     }
 }
 
-#[cfg(not(target_os = "solana"))]
 fn set_scenario_scalar(
     scalars: &mut [u64],
     index: u16,
@@ -1188,7 +1179,6 @@ fn set_scenario_scalar(
     Ok(())
 }
 
-#[cfg(not(target_os = "solana"))]
 fn set_scenario_identity(
     identities: &mut [[u8; 32]],
     index: u16,
