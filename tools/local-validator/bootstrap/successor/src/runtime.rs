@@ -47,8 +47,16 @@ struct Runtime<'a> {
     plan: &'a SuccessorPlan,
     provider: &'a ProviderEvidenceInput,
     registry: Pubkey,
+    core: Pubkey,
+    core_programdata: Pubkey,
+    claims: Pubkey,
+    claims_programdata: Pubkey,
+    trading: Pubkey,
+    trading_programdata: Pubkey,
     resolution: Pubkey,
     resolution_programdata: Pubkey,
+    custody: Pubkey,
+    custody_programdata: Pubkey,
     payer: Keypair,
     worker: Keypair,
     transactions: Vec<TransactionEvidence>,
@@ -66,8 +74,16 @@ pub(crate) fn execute(args: &RunArgs) -> Result<ExecutionEvidence> {
         serde_json::from_slice(&fs::read(&args.provider_evidence_path)?)?;
     validate_inputs(args, &plan, &provider)?;
     let registry = pubkey(&plan.registry.program_id)?;
+    let core = pubkey(&plan.core.program_id)?;
+    let core_programdata = pubkey(&plan.core.programdata_id)?;
+    let claims = pubkey(&plan.claims.program_id)?;
+    let claims_programdata = pubkey(&plan.claims.programdata_id)?;
+    let trading = pubkey(&plan.trading.program_id)?;
+    let trading_programdata = pubkey(&plan.trading.programdata_id)?;
     let resolution = pubkey(&plan.resolution.program_id)?;
     let resolution_programdata = pubkey(&plan.resolution.programdata_id)?;
+    let custody = pubkey(&plan.custody.program_id)?;
+    let custody_programdata = pubkey(&plan.custody.programdata_id)?;
     let rpc = Rpc::connect(&args.rpc_url)?;
     let payer = Keypair::new();
     let worker = Keypair::new();
@@ -76,8 +92,16 @@ pub(crate) fn execute(args: &RunArgs) -> Result<ExecutionEvidence> {
         plan: &plan,
         provider: &provider,
         registry,
+        core,
+        core_programdata,
+        claims,
+        claims_programdata,
+        trading,
+        trading_programdata,
         resolution,
         resolution_programdata,
+        custody,
+        custody_programdata,
         payer,
         worker,
         transactions: Vec::new(),
@@ -99,15 +123,35 @@ pub(crate) fn execute(args: &RunArgs) -> Result<ExecutionEvidence> {
             authenticate_local_program(&mut runtime.rpc, "Registry", &plan.registry)?,
         ),
         (
+            "core".into(),
+            authenticate_local_program(&mut runtime.rpc, "Core", &plan.core)?,
+        ),
+        (
+            "claims".into(),
+            authenticate_local_program(&mut runtime.rpc, "Claims", &plan.claims)?,
+        ),
+        (
+            "trading".into(),
+            authenticate_local_program(&mut runtime.rpc, "Trading", &plan.trading)?,
+        ),
+        (
             "resolution".into(),
             authenticate_local_program(&mut runtime.rpc, "Resolution", &plan.resolution)?,
+        ),
+        (
+            "custody".into(),
+            authenticate_local_program(&mut runtime.rpc, "Custody", &plan.custody)?,
         ),
     ]);
     authenticate_provider(&mut runtime.rpc, &provider)?;
     authenticate_genesis(&mut runtime.rpc, &plan)?;
 
     runtime.activate_registry()?;
+    runtime.reauthenticate_core()?;
+    runtime.reauthenticate_claims()?;
+    runtime.reauthenticate_trading()?;
     runtime.reauthenticate_resolution()?;
+    runtime.reauthenticate_custody()?;
     runtime.accept_primary()?;
     runtime.run_funded_lifecycle(&plan.lifecycle, "lifecycle")?;
     runtime.run_funded_prefix(&plan.rollback, "rollback")?;
@@ -164,6 +208,10 @@ pub(crate) fn execute(args: &RunArgs) -> Result<ExecutionEvidence> {
         captured_release_identity_claimed: false,
         checked_production_release_claimed: false,
         registry_activated: true,
+        core_reauthenticated: true,
+        claims_reauthenticated: true,
+        trading_reauthenticated: true,
+        custody_reauthenticated: true,
         registry_reauthenticated: true,
         real_pyth_price_update_consumed: true,
         primary_resolution_executed: true,
@@ -188,9 +236,10 @@ pub(crate) fn execute(args: &RunArgs) -> Result<ExecutionEvidence> {
 impl Runtime<'_> {
     fn activate_registry(&mut self) -> Result<()> {
         let release = record(self.plan, "execution_release_set")?;
-        let registry_artifact = record(self.plan, "registry_artifact_release")?;
+        let core_artifact = record(self.plan, "core_artifact_release")?;
+        let claims_artifact = record(self.plan, "claims_artifact_release")?;
+        let trading_artifact = record(self.plan, "trading_artifact_release")?;
         let resolution_artifact = record(self.plan, "resolution_artifact_release")?;
-        let registry_programdata = pubkey(&self.plan.registry.programdata_id)?;
         let mut accounts = vec![
             AccountMeta::new(self.payer.pubkey(), true),
             AccountMeta::new(pubkey(&self.plan.activation)?, false),
@@ -199,18 +248,35 @@ impl Runtime<'_> {
         ];
         append_role(
             &mut accounts,
-            registry_artifact,
-            self.registry,
-            registry_programdata,
+            core_artifact,
+            self.core,
+            self.core_programdata,
         )?;
-        for _ in 0..4 {
-            append_role(
-                &mut accounts,
-                resolution_artifact,
-                self.resolution,
-                self.resolution_programdata,
-            )?;
-        }
+        append_role(
+            &mut accounts,
+            claims_artifact,
+            self.claims,
+            self.claims_programdata,
+        )?;
+        append_role(
+            &mut accounts,
+            trading_artifact,
+            self.trading,
+            self.trading_programdata,
+        )?;
+        append_role(
+            &mut accounts,
+            resolution_artifact,
+            self.resolution,
+            self.resolution_programdata,
+        )?;
+        let custody_artifact = record(self.plan, "custody_artifact_release")?;
+        append_role(
+            &mut accounts,
+            custody_artifact,
+            self.custody,
+            self.custody_programdata,
+        )?;
         accounts.push(AccountMeta::new_readonly(system_program::ID, false));
         accounts.push(AccountMeta::new_readonly(sysvar::rent::ID, false));
         if accounts.len() != 26 {
@@ -235,6 +301,26 @@ impl Runtime<'_> {
         Ok(())
     }
 
+    fn reauthenticate_core(&mut self) -> Result<()> {
+        let transaction = self.rpc.send(
+            "registry_reauthenticate_core",
+            &[Instruction {
+                program_id: self.registry,
+                accounts: vec![
+                    AccountMeta::new_readonly(pubkey(&self.plan.activation)?, false),
+                    AccountMeta::new_readonly(self.core, false),
+                    AccountMeta::new_readonly(self.core_programdata, false),
+                ],
+                data: RegistryInstructionV1::Reauthenticate(ExecutionRoleV1::Core)
+                    .to_bytes()
+                    .to_vec(),
+            }],
+            &self.payer,
+        )?;
+        self.transactions.push(transaction);
+        Ok(())
+    }
+
     fn reauthenticate_resolution(&mut self) -> Result<()> {
         let transaction = self.rpc.send(
             "registry_reauthenticate_resolution",
@@ -246,6 +332,66 @@ impl Runtime<'_> {
                     AccountMeta::new_readonly(self.resolution_programdata, false),
                 ],
                 data: RegistryInstructionV1::Reauthenticate(ExecutionRoleV1::Resolution)
+                    .to_bytes()
+                    .to_vec(),
+            }],
+            &self.payer,
+        )?;
+        self.transactions.push(transaction);
+        Ok(())
+    }
+
+    fn reauthenticate_claims(&mut self) -> Result<()> {
+        let transaction = self.rpc.send(
+            "registry_reauthenticate_claims",
+            &[Instruction {
+                program_id: self.registry,
+                accounts: vec![
+                    AccountMeta::new_readonly(pubkey(&self.plan.activation)?, false),
+                    AccountMeta::new_readonly(self.claims, false),
+                    AccountMeta::new_readonly(self.claims_programdata, false),
+                ],
+                data: RegistryInstructionV1::Reauthenticate(ExecutionRoleV1::Claims)
+                    .to_bytes()
+                    .to_vec(),
+            }],
+            &self.payer,
+        )?;
+        self.transactions.push(transaction);
+        Ok(())
+    }
+
+    fn reauthenticate_trading(&mut self) -> Result<()> {
+        let transaction = self.rpc.send(
+            "registry_reauthenticate_trading",
+            &[Instruction {
+                program_id: self.registry,
+                accounts: vec![
+                    AccountMeta::new_readonly(pubkey(&self.plan.activation)?, false),
+                    AccountMeta::new_readonly(self.trading, false),
+                    AccountMeta::new_readonly(self.trading_programdata, false),
+                ],
+                data: RegistryInstructionV1::Reauthenticate(ExecutionRoleV1::Trading)
+                    .to_bytes()
+                    .to_vec(),
+            }],
+            &self.payer,
+        )?;
+        self.transactions.push(transaction);
+        Ok(())
+    }
+
+    fn reauthenticate_custody(&mut self) -> Result<()> {
+        let transaction = self.rpc.send(
+            "registry_reauthenticate_custody",
+            &[Instruction {
+                program_id: self.registry,
+                accounts: vec![
+                    AccountMeta::new_readonly(pubkey(&self.plan.activation)?, false),
+                    AccountMeta::new_readonly(self.custody, false),
+                    AccountMeta::new_readonly(self.custody_programdata, false),
+                ],
+                data: RegistryInstructionV1::Reauthenticate(ExecutionRoleV1::Custody)
                     .to_bytes()
                     .to_vec(),
             }],
@@ -499,8 +645,22 @@ fn validate_inputs(
             "provider evidence is not the live, initialized, non-reclaimed localhost profile",
         ));
     }
-    if pubkey(&plan.registry.program_id)? == pubkey(&plan.resolution.program_id)? {
-        return Err(Error::new("Registry and Resolution IDs alias"));
+    let registry = pubkey(&plan.registry.program_id)?;
+    let core = pubkey(&plan.core.program_id)?;
+    let claims = pubkey(&plan.claims.program_id)?;
+    let trading = pubkey(&plan.trading.program_id)?;
+    let resolution = pubkey(&plan.resolution.program_id)?;
+    let custody = pubkey(&plan.custody.program_id)?;
+    let programs = [registry, core, claims, trading, resolution, custody];
+    if programs.iter().enumerate().any(|(index, program)| {
+        programs
+            .iter()
+            .skip(index.saturating_add(1))
+            .any(|other| other == program)
+    }) {
+        return Err(Error::new(
+            "Registry and all five role Program IDs must be pairwise distinct",
+        ));
     }
     validate_material_partition(plan)?;
     Ok(())
@@ -793,7 +953,11 @@ mod tests {
             genesis_boundary: vec![],
             account_dir: "/tmp/unused".into(),
             registry: dummy_pin([1; 32]),
-            resolution: dummy_pin([2; 32]),
+            core: dummy_pin([2; 32]),
+            claims: dummy_pin([3; 32]),
+            trading: dummy_pin([4; 32]),
+            resolution: dummy_pin([5; 32]),
+            custody: dummy_pin([6; 32]),
             activation: Pubkey::new_unique().to_string(),
             release_set_id: "11".repeat(32),
             records: BTreeMap::new(),

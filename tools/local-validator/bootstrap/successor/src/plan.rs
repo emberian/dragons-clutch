@@ -39,7 +39,7 @@ use dclutch_release_set_contract::{
 use dclutch_resolution_codec::{
     PRIMARY_CERTIFICATE_SEQUENCE_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
     RESOLUTION_CERTIFICATE_BYTES, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-    RESOLUTION_CONTROLLER_RELEASE_ID_V3,
+    RESOLUTION_CONTROLLER_RELEASE_ID_V4,
 };
 use dclutch_source_contract::{
     CapacityEnvelope, ContentId as SourceContentId, PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1,
@@ -74,9 +74,25 @@ pub(crate) struct PrepareArgs {
     pub(crate) registry_program: Pubkey,
     pub(crate) registry_elf: PathBuf,
     pub(crate) registry_sha256: String,
+    pub(crate) core_program: Pubkey,
+    pub(crate) core_elf: PathBuf,
+    pub(crate) core_sha256: String,
+    pub(crate) core_semantic_release_id: String,
+    pub(crate) claims_program: Pubkey,
+    pub(crate) claims_elf: PathBuf,
+    pub(crate) claims_sha256: String,
+    pub(crate) claims_semantic_release_id: String,
+    pub(crate) trading_program: Pubkey,
+    pub(crate) trading_elf: PathBuf,
+    pub(crate) trading_sha256: String,
+    pub(crate) trading_semantic_release_id: String,
     pub(crate) resolution_program: Pubkey,
     pub(crate) resolution_elf: PathBuf,
     pub(crate) resolution_sha256: String,
+    pub(crate) custody_program: Pubkey,
+    pub(crate) custody_elf: PathBuf,
+    pub(crate) custody_sha256: String,
+    pub(crate) custody_semantic_release_id: String,
 }
 
 #[derive(Serialize)]
@@ -262,7 +278,11 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
         )));
     }
     let registry_elf = fs::read(&args.registry_elf)?;
+    let core_elf = fs::read(&args.core_elf)?;
+    let claims_elf = fs::read(&args.claims_elf)?;
+    let trading_elf = fs::read(&args.trading_elf)?;
     let resolution_elf = fs::read(&args.resolution_elf)?;
+    let custody_elf = fs::read(&args.custody_elf)?;
     require_elf(
         "Registry",
         &registry_elf,
@@ -270,14 +290,42 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
         &args.registry_elf,
     )?;
     require_elf(
+        "Core",
+        &core_elf,
+        &args.core_sha256,
+        &args.core_elf,
+    )?;
+    require_elf(
+        "Claims",
+        &claims_elf,
+        &args.claims_sha256,
+        &args.claims_elf,
+    )?;
+    require_elf(
+        "Trading",
+        &trading_elf,
+        &args.trading_sha256,
+        &args.trading_elf,
+    )?;
+    require_elf(
         "Resolution",
         &resolution_elf,
         &args.resolution_sha256,
         &args.resolution_elf,
     )?;
+    require_elf(
+        "Custody",
+        &custody_elf,
+        &args.custody_sha256,
+        &args.custody_elf,
+    )?;
 
     let registry_programdata = programdata(args.registry_program);
+    let core_programdata = programdata(args.core_program);
+    let claims_programdata = programdata(args.claims_program);
+    let trading_programdata = programdata(args.trading_program);
     let resolution_programdata = programdata(args.resolution_program);
+    let custody_programdata = programdata(args.custody_program);
     let registry_semantic = sha256_bytes(b"dclutch/local-validator/registry-successor-v1");
     let registry_release = artifact(
         args.registry_program,
@@ -285,28 +333,71 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
         registry_semantic,
         hex32(&args.registry_sha256)?,
     )?;
+    let core_semantic = hex32(&args.core_semantic_release_id)?;
+    let core_release = artifact(
+        args.core_program,
+        core_programdata,
+        core_semantic,
+        hex32(&args.core_sha256)?,
+    )?;
+    let claims_semantic = hex32(&args.claims_semantic_release_id)?;
+    let claims_release = artifact(
+        args.claims_program,
+        claims_programdata,
+        claims_semantic,
+        hex32(&args.claims_sha256)?,
+    )?;
+    let trading_semantic = hex32(&args.trading_semantic_release_id)?;
+    let trading_release = artifact(
+        args.trading_program,
+        trading_programdata,
+        trading_semantic,
+        hex32(&args.trading_sha256)?,
+    )?;
     let resolution_release = artifact(
         args.resolution_program,
         resolution_programdata,
-        RESOLUTION_CONTROLLER_RELEASE_ID_V3,
+        RESOLUTION_CONTROLLER_RELEASE_ID_V4,
         hex32(&args.resolution_sha256)?,
     )?;
-    let registry_artifact_id = artifact_id(registry_release)?;
+    let custody_semantic = hex32(&args.custody_semantic_release_id)?;
+    let custody_release = artifact(
+        args.custody_program,
+        custody_programdata,
+        custody_semantic,
+        hex32(&args.custody_sha256)?,
+    )?;
+    let core_artifact_id = artifact_id(core_release)?;
+    let claims_artifact_id = artifact_id(claims_release)?;
+    let trading_artifact_id = artifact_id(trading_release)?;
     let resolution_artifact_id = artifact_id(resolution_release)?;
-    let registry_binding = ExecutionRoleBindingV1::new(
-        program_identity(args.registry_program)?,
-        registry_artifact_id,
+    let custody_artifact_id = artifact_id(custody_release)?;
+    let core_binding = ExecutionRoleBindingV1::new(
+        program_identity(args.core_program)?,
+        core_artifact_id,
+    );
+    let claims_binding = ExecutionRoleBindingV1::new(
+        program_identity(args.claims_program)?,
+        claims_artifact_id,
+    );
+    let trading_binding = ExecutionRoleBindingV1::new(
+        program_identity(args.trading_program)?,
+        trading_artifact_id,
     );
     let resolution_binding = ExecutionRoleBindingV1::new(
         program_identity(args.resolution_program)?,
         resolution_artifact_id,
     );
+    let custody_binding = ExecutionRoleBindingV1::new(
+        program_identity(args.custody_program)?,
+        custody_artifact_id,
+    );
     let release_set = ExecutionReleaseSetV1::new(
-        registry_binding,
+        core_binding,
+        claims_binding,
+        trading_binding,
         resolution_binding,
-        resolution_binding,
-        resolution_binding,
-        resolution_binding,
+        custody_binding,
     )
     .map_err(debug_error("execution release set"))?;
     let release_set_bytes = release_set.to_bytes();
@@ -549,10 +640,34 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
         &registry_elf,
     )?;
     writer.immutable_upgradeable_program(
+        "core",
+        args.core_program,
+        core_programdata,
+        &core_elf,
+    )?;
+    writer.immutable_upgradeable_program(
+        "claims",
+        args.claims_program,
+        claims_programdata,
+        &claims_elf,
+    )?;
+    writer.immutable_upgradeable_program(
+        "trading",
+        args.trading_program,
+        trading_programdata,
+        &trading_elf,
+    )?;
+    writer.immutable_upgradeable_program(
         "resolution",
         args.resolution_program,
         resolution_programdata,
         &resolution_elf,
+    )?;
+    writer.immutable_upgradeable_program(
+        "custody",
+        args.custody_program,
+        custody_programdata,
+        &custody_elf,
     )?;
     let mut records = BTreeMap::new();
     add_record(
@@ -562,6 +677,30 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
         args.registry_program,
         EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1,
         &release_set_bytes,
+    )?;
+    add_record(
+        &mut writer,
+        &mut records,
+        "core_artifact_release",
+        args.registry_program,
+        ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        &core_release.to_bytes(),
+    )?;
+    add_record(
+        &mut writer,
+        &mut records,
+        "claims_artifact_release",
+        args.registry_program,
+        ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        &claims_release.to_bytes(),
+    )?;
+    add_record(
+        &mut writer,
+        &mut records,
+        "trading_artifact_release",
+        args.registry_program,
+        ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        &trading_release.to_bytes(),
     )?;
     add_record(
         &mut writer,
@@ -578,6 +717,14 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
         args.registry_program,
         ARTIFACT_RELEASE_SCHEMA_ID_V1,
         &resolution_release.to_bytes(),
+    )?;
+    add_record(
+        &mut writer,
+        &mut records,
+        "custody_artifact_release",
+        args.registry_program,
+        ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        &custody_release.to_bytes(),
     )?;
     add_record(
         &mut writer,
@@ -679,12 +826,40 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
             args.registry_sha256,
             registry_semantic,
         ),
+        core: pin(
+            args.core_program,
+            core_programdata,
+            &args.core_elf,
+            args.core_sha256,
+            core_semantic,
+        ),
+        claims: pin(
+            args.claims_program,
+            claims_programdata,
+            &args.claims_elf,
+            args.claims_sha256,
+            claims_semantic,
+        ),
+        trading: pin(
+            args.trading_program,
+            trading_programdata,
+            &args.trading_elf,
+            args.trading_sha256,
+            trading_semantic,
+        ),
         resolution: pin(
             args.resolution_program,
             resolution_programdata,
             &args.resolution_elf,
             args.resolution_sha256,
-            RESOLUTION_CONTROLLER_RELEASE_ID_V3,
+            RESOLUTION_CONTROLLER_RELEASE_ID_V4,
+        ),
+        custody: pin(
+            args.custody_program,
+            custody_programdata,
+            &args.custody_elf,
+            args.custody_sha256,
+            custody_semantic,
         ),
         activation: activation.to_string(),
         release_set_id: hex(&release_set_id),
@@ -716,17 +891,33 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
 }
 
 fn validate_prepare(args: &PrepareArgs) -> Result<()> {
-    if args.registry_program == args.resolution_program
-        || args.registry_program == system_program::ID
-        || args.resolution_program == system_program::ID
+    let programs = [
+        args.registry_program,
+        args.core_program,
+        args.claims_program,
+        args.trading_program,
+        args.resolution_program,
+        args.custody_program,
+    ];
+    if programs.contains(&system_program::ID)
+        || programs.iter().enumerate().any(|(index, program)| {
+            programs
+                .iter()
+                .skip(index.saturating_add(1))
+                .any(|other| other == program)
+        })
     {
         return Err(Error::new(
-            "Registry and Resolution IDs must be distinct non-System IDs",
+            "Registry and all five role Program IDs must be pairwise-distinct non-System IDs",
         ));
     }
     for (label, path) in [
         ("Registry ELF", &args.registry_elf),
+        ("Core ELF", &args.core_elf),
+        ("Claims ELF", &args.claims_elf),
+        ("Trading ELF", &args.trading_elf),
         ("Resolution ELF", &args.resolution_elf),
+        ("Custody ELF", &args.custody_elf),
     ] {
         if !path.is_absolute() || !path.is_file() {
             return Err(Error::new(format!(
@@ -736,7 +927,24 @@ fn validate_prepare(args: &PrepareArgs) -> Result<()> {
     }
     for (label, value) in [
         ("Registry SHA-256", &args.registry_sha256),
+        ("Core SHA-256", &args.core_sha256),
+        ("Claims SHA-256", &args.claims_sha256),
+        ("Trading SHA-256", &args.trading_sha256),
         ("Resolution SHA-256", &args.resolution_sha256),
+        ("Custody SHA-256", &args.custody_sha256),
+        ("Core semantic release ID", &args.core_semantic_release_id),
+        (
+            "Claims semantic release ID",
+            &args.claims_semantic_release_id,
+        ),
+        (
+            "Trading semantic release ID",
+            &args.trading_semantic_release_id,
+        ),
+        (
+            "Custody semantic release ID",
+            &args.custody_semantic_release_id,
+        ),
     ] {
         if value.len() != 64
             || !value
@@ -985,7 +1193,7 @@ fn capability_entry(
 ) -> Result<CapabilityEntryV1> {
     CapabilityEntryV1::new(
         core_id(capability)?,
-        core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V3)?,
+        core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V4)?,
         core_id(allocation)?,
         core_id([0xd5; 32])?,
         core_id([0xd6; 32])?,
