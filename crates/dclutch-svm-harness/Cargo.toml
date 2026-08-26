@@ -18,6 +18,7 @@ dclutch-economic-adapter-contract = { path = "../dclutch-economic-adapter-contra
 dclutch-economic-kernel = { path = "../dclutch-economic-kernel" }
 dclutch-kernel = { path = "../dclutch-kernel" }
 dclutch-market-contract = { path = "../dclutch-market-contract" }
+dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
 dclutch-pyth-contract = { path = "../dclutch-pyth-contract" }
 dclutch-pyth-svm = { path = "../dclutch-pyth-svm", features = ["synthetic-local-fixture"] }
 dclutch-realm-contract = { path = "../dclutch-realm-contract" }
@@ -32,6 +33,8 @@ dclutch-product-admission-contract = { path = "../dclutch-product-admission-cont
 dclutch-product-payoff-svm = { path = "../dclutch-product-payoff-svm" }
 dclutch-product-payoff-v2-codec = { path = "../dclutch-product-payoff-v2-codec" }
 dclutch-product-payoff-v2-svm = { path = "../dclutch-product-payoff-v2-svm" }
+dclutch-product-runtime-v2 = { path = "../dclutch-product-runtime-v2" }
+dclutch-product-runtime-v2-admission = { path = "../dclutch-product-runtime-v2-admission" }
 dclutch-rent-contract = { path = "../dclutch-rent-contract" }
 dclutch-series-contract = { path = "../dclutch-series-contract" }
 dclutch-source-contract = { path = "../dclutch-source-contract" }

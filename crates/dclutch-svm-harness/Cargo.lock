@@ -1580,6 +1580,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-market-core-codec"
+version = "0.1.0"
+dependencies = [
+ "dclutch-release-set-contract",
+]
+
+[[package]]
 name = "dclutch-product-admission-contract"
 version = "0.1.0"
 dependencies = [
@@ -1608,6 +1615,17 @@ name = "dclutch-product-payoff-v2-svm"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-product-runtime-v2"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-product-runtime-v2-admission"
+version = "0.1.0"
+dependencies = [
+ "dclutch-product-runtime-v2",
+]
+
+[[package]]
 name = "dclutch-pyth-contract"
 version = "0.1.0"
 dependencies = [
@@ -1618,6 +1636,9 @@ dependencies = [
 [[package]]
 name = "dclutch-pyth-svm"
 version = "0.1.0"
+dependencies = [
+ "dclutch-registry-svm",
+]
 
 [[package]]
 name = "dclutch-realm-contract"
@@ -1673,6 +1694,7 @@ name = "dclutch-source-contract"
 version = "0.1.0"
 dependencies = [
  "dclutch-product-contract",
+ "dclutch-product-runtime-v2",
 ]
 
 [[package]]
@@ -1689,11 +1711,14 @@ dependencies = [
  "dclutch-economic-kernel",
  "dclutch-kernel",
  "dclutch-market-contract",
+ "dclutch-market-core-codec",
  "dclutch-product-admission-contract",
  "dclutch-product-contract",
  "dclutch-product-payoff-svm",
  "dclutch-product-payoff-v2-codec",
  "dclutch-product-payoff-v2-svm",
+ "dclutch-product-runtime-v2",
+ "dclutch-product-runtime-v2-admission",
  "dclutch-pyth-contract",
  "dclutch-pyth-svm",
  "dclutch-realm-contract",

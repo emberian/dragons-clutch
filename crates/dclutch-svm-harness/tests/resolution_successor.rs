@@ -1,8 +1,10 @@
 //! Real-SVM evidence for the successor Resolution controller.
 //!
-//! The compiled Registry and Resolution ELFs execute. The provider boundary is
-//! populated with the provenance-pinned receiver/router ELFs and captured
-//! account bodies; this test does not substitute a native protocol processor.
+//! The fixture prepares compiled Core, Registry, and Resolution ELFs plus the
+//! provenance-pinned receiver/router ELFs and captured provider accounts. The
+//! joined route remains explicitly unavailable until distinct real Claims,
+//! Trading, and Custody artifacts complete the five-role release set; this
+//! test therefore cannot currently claim execution evidence.
 
 use std::{env, fs, path::PathBuf, str::FromStr};
 
@@ -12,23 +14,25 @@ use dclutch_capability_contract::{
     FUNDING_STATE_BYTES, FundingAmountsV1, FundingCustodyObservationV1, FundingQuoteV1,
     FundingStateV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
 };
-use dclutch_core_contract::{ContentId as CoreContentId, MarketIdentity, MarketRoot, Phase};
-use dclutch_market_contract::market::{CategoricalMarketV1, CategoricalSettlementSummaryV1};
-use dclutch_product_contract::{
-    ContentId as ProductContentId,
-    capacity::CapacityProfileId,
-    product::{InstanceV1, InstanceV1Input},
-    result_domain::{
-        FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1, FINITE_RESULT_DOMAIN_RELEASE_ID_V1,
-        FiniteResultDomainV1,
-    },
+use dclutch_core_contract::ContentId as CoreContentId;
+use dclutch_market_core_codec::{
+    CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2,
+    MarketIdentity as CoreMarketIdentity, Phase as CorePhase, Readiness as CoreReadiness,
+};
+use dclutch_product_runtime_v2::{
+    ContentId as RuntimeProductContentId, PortfolioInputV2, ResultDomainInputV2,
+    compile_portfolio_v2, compile_result_domain_v2, portfolio_record_bytes,
+    result_domain_record_bytes,
+};
+use dclutch_product_runtime_v2_admission::{
+    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
+    RESULT_DOMAIN_SCHEMA_ID_V2,
 };
 use dclutch_pyth_svm::{FullPriceUpdateV2, local_validator_release_v1};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
     ACTIVATION_PDA_DOMAIN_V1, ArtifactActivationInputV1, ArtifactReleaseV1,
-    ArtifactUpgradePolicyV1, DeploymentObservationV1, EXECUTION_AUTHORITY_MANIFEST_SCHEMA_ID_V1,
-    ExecutionAuthorityManifestV1, ExecutionReleaseActivationInputsV1,
+    ArtifactUpgradePolicyV1, DeploymentObservationV1, ExecutionReleaseActivationInputsV1,
     activate_execution_release_set_v1,
 };
 use dclutch_registry_svm::RegistryInstructionV1;
@@ -37,34 +41,33 @@ use dclutch_release_set_contract::{
     ProgramIdentityV1,
 };
 use dclutch_resolution_codec::{
-    AcceptPythRequestV1, FundedTransitionActionV3, FundedTransitionRequestV3,
-    PRIMARY_CERTIFICATE_SEQUENCE_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
-    RESOLUTION_CERTIFICATE_BYTES, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-    RESOLUTION_CONTROLLER_RELEASE_ID_V4, ResolutionCertificateKindV1, ResolutionCertificateV1,
+    FundedTransitionActionV3, PRIMARY_CERTIFICATE_SEQUENCE_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
+    RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+    RESOLUTION_CONTROLLER_RELEASE_ID_V4, ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
 use dclutch_source_contract::{
     CapacityEnvelope, ContentId as SourceContentId, PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1,
-    ProviderReleaseV1, PythAdapterConfigV1, RecoveryAttemptV1, RecoveryMaterialSlotV1,
-    RecoveryPolicyV1, ResolutionPolicyV1, RoundingBoundary, SOURCE_MATERIAL_BYTES,
-    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V1,
-    SourceAccessProfile, SourceCapacityProfileV1, SourceMaterialInputV1,
-    SourceRecoveryMaterialInputV1, SourceResolutionPhaseV1, SourceResolutionStateV1, SourceSpecV1,
-    StatisticKind, StatisticSpecV1, WindowKind, WindowSpecV1, encode_source_material_into_v1,
+    ProviderReleaseV1, PythAdapterConfigV1, RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryAttemptV2,
+    RecoveryPolicyV2, RoundingBoundary, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+    SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SourceAccessProfile, SourceCapacityProfileV1,
+    SourceMaterialV2, SourceResolutionPhaseV1, SourceResolutionStateV2, SourceSpecV1,
+    StatisticKind, StatisticSpecV1, WindowKind, WindowSpecV1,
 };
 use solana_account::Account;
 use solana_program::{
     clock::Clock,
-    hash::{hash, hashv},
+    hash::hash,
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
     rent::Rent,
 };
 use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
 use solana_sdk::signature::Signer;
-use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
+use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
 use solana_system_interface::instruction::transfer;
 use solana_transaction::{InstructionError, Transaction, TransactionError};
 
+const CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x50; 32]);
 const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x51; 32]);
 const RESOLUTION_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x52; 32]);
 const RECEIPT_CALLER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x53; 32]);
@@ -88,14 +91,17 @@ const PRICE_UPDATE: &[u8] =
     include_bytes!("../../../fixtures/pyth/local-upgraded-2026-08-22/price-update.account");
 
 #[derive(Clone, Copy)]
-struct RecordPair {
-    raw: Pubkey,
-    staging: Pubkey,
+struct MarketSpec {
+    product_record_id: [u8; 32],
+    product_id: [u8; 32],
+    material_id: [u8; 32],
+    capability_manifest_id: [u8; 32],
+    release_set_id: [u8; 32],
+    tag: u8,
 }
 
 #[derive(Clone, Copy)]
 struct CaseAccounts {
-    market: Pubkey,
     state: Pubkey,
     certificate: Pubkey,
 }
@@ -108,7 +114,6 @@ struct FundedStepAccounts {
 
 #[derive(Clone, Copy)]
 struct LifecycleAccounts {
-    market: Pubkey,
     state: Pubkey,
     worker: Pubkey,
     recovery: FundedStepAccounts,
@@ -120,22 +125,8 @@ struct Fixture {
     test: Option<ProgramTest>,
     resolution_programdata: Pubkey,
     activation: Pubkey,
-    authority: RecordPair,
-    material: RecordPair,
-    domain: RecordPair,
-    pyth_release: RecordPair,
-    capability_manifest: RecordPair,
-    result_domain_id: [u8; 32],
-    material_id: [u8; 32],
-    recovery_allocation_id: [u8; 32],
+    product_record_id: [u8; 32],
     exhaust_allocation_id: [u8; 32],
-    provider_release_id: [u8; 32],
-    receiver: Pubkey,
-    receiver_programdata: Pubkey,
-    receiver_config: Pubkey,
-    router: Pubkey,
-    router_programdata: Pubkey,
-    price_update: Pubkey,
     primary: CaseAccounts,
     underfunded: CaseAccounts,
     lifecycle: LifecycleAccounts,
@@ -148,8 +139,12 @@ fn core_id(bytes: [u8; 32]) -> CoreContentId {
     CoreContentId::new(bytes).expect("nonzero Core content ID")
 }
 
-fn product_id(bytes: [u8; 32]) -> ProductContentId {
-    ProductContentId::new(bytes).expect("nonzero Product content ID")
+fn core_identity(bytes: [u8; 32]) -> CoreIdentity {
+    CoreIdentity::new(bytes).expect("nonzero Core identity")
+}
+
+fn runtime_product_id(bytes: [u8; 32]) -> RuntimeProductContentId {
+    RuntimeProductContentId::new(bytes).expect("nonzero Runtime Product content ID")
 }
 
 fn source_id(bytes: [u8; 32]) -> SourceContentId {
@@ -250,6 +245,31 @@ fn binding(release: ArtifactReleaseV1) -> ExecutionRoleBindingV1 {
     ExecutionRoleBindingV1::new(release.program(), artifact_id(release))
 }
 
+fn require_pairwise_distinct_role_programs(release_set: ExecutionReleaseSetV1) {
+    let core = release_set.binding(ExecutionRoleV1::Core).program();
+    let claims = release_set.binding(ExecutionRoleV1::Claims).program();
+    let trading = release_set.binding(ExecutionRoleV1::Trading).program();
+    let resolution = release_set.binding(ExecutionRoleV1::Resolution).program();
+    let custody = release_set.binding(ExecutionRoleV1::Custody).program();
+    for (left, right) in [
+        (core, claims),
+        (core, trading),
+        (core, resolution),
+        (core, custody),
+        (claims, trading),
+        (claims, resolution),
+        (claims, custody),
+        (trading, resolution),
+        (trading, custody),
+        (resolution, custody),
+    ] {
+        assert_ne!(
+            left, right,
+            "joined Resolution evidence requires five distinct real role programs"
+        );
+    }
+}
+
 fn activation_input(release: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
     let observation = DeploymentObservationV1::new(
         release.program().to_bytes(),
@@ -268,12 +288,7 @@ fn activation_input(release: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
     ArtifactActivationInputV1::new(artifact_id(release), release, observation)
 }
 
-fn add_record(
-    test: &mut ProgramTest,
-    schema: [u8; 32],
-    digest: [u8; 32],
-    data: Vec<u8>,
-) -> RecordPair {
+fn add_record(test: &mut ProgramTest, schema: [u8; 32], digest: [u8; 32], data: Vec<u8>) {
     assert_eq!(hash(&data).to_bytes(), digest, "record digest");
     let raw = Pubkey::find_program_address(
         &[RAW_RECORD_PDA_SEED_V1, &schema, &digest],
@@ -287,50 +302,53 @@ fn add_record(
     .0;
     test.add_account(raw, protocol_account(REGISTRY_PROGRAM_ID, data));
     test.add_account(staging, Account::new(0, 0, &system_program::ID));
-    RecordPair { raw, staging }
 }
 
-fn canonical_market(
-    authority_id: [u8; 32],
-    product_instance_id: [u8; 32],
-    material_id: [u8; 32],
-    tag: u8,
-) -> (Pubkey, Vec<u8>) {
-    let identity = MarketIdentity::new(
-        core_id([tag; 32]),
-        core_id(product_instance_id),
-        core_id([0xc2; 32]),
-        core_id(material_id),
-        core_id(authority_id),
-        GENERATION,
-    );
-    let identity_digest = hash(&identity.to_bytes()).to_bytes();
+fn canonical_market(spec: MarketSpec) -> (Pubkey, Vec<u8>) {
+    let provisional = CoreMarketIdentity {
+        market_id: core_identity([0xc9; 32]),
+        realm_id: core_identity([spec.tag; 32]),
+        product_record: core_identity(spec.product_record_id),
+        product_id: core_identity(spec.product_id),
+        resolution_policy: core_identity(spec.material_id),
+        capability_manifest: core_identity(spec.capability_manifest_id),
+        selected_release_set: core_identity(spec.release_set_id),
+        registry_program: core_identity(REGISTRY_PROGRAM_ID.to_bytes()),
+        generation: GENERATION,
+    };
     let market = Pubkey::find_program_address(
-        &[b"dclutch/market-root/v1", &identity_digest],
-        &REGISTRY_PROGRAM_ID,
+        &MarketCoreStateSeedsV2::new(provisional).as_slices(),
+        &CORE_PROGRAM_ID,
     )
     .0;
-    let mut root = MarketRoot::founding(identity, [0xc3; 32]).expect("Market root");
-    root.transition_phase(GENERATION, Phase::Open)
-        .expect("open Market");
-    let market_value =
-        CategoricalMarketV1::<3>::new(root, 0, [0; 3], CategoricalSettlementSummaryV1::empty())
-            .expect("categorical Market");
-    let mut bytes = vec![0_u8; CategoricalMarketV1::<3>::encoded_len().expect("Market width")];
-    market_value.encode(&mut bytes).expect("Market bytes");
-    (market, bytes)
+    let identity = CoreMarketIdentity {
+        market_id: core_identity(market.to_bytes()),
+        ..provisional
+    };
+    let bytes = CoreState {
+        phase: CorePhase::Open,
+        readiness: CoreReadiness::Consumed,
+        terminal_winner: 0,
+        identity,
+        outstanding_capabilities: 0,
+        rent_beneficiary: core_identity([0xc3; 32]),
+        terminal_receipt: None,
+    }
+    .encode()
+    .expect("open sparse Core state");
+    (market, bytes.to_vec())
 }
 
-fn fresh_state(market: Pubkey, material_id: [u8; 32]) -> (Pubkey, SourceResolutionStateV1) {
+fn fresh_state(market: Pubkey, material_id: [u8; 32]) -> (Pubkey, SourceResolutionStateV2) {
     let (state, bump) = Pubkey::find_program_address(
         &[
-            SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V1,
+            SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
             market.as_ref(),
             &GENERATION.to_le_bytes(),
         ],
         &RESOLUTION_PROGRAM_ID,
     );
-    let value = SourceResolutionStateV1::fresh(
+    let value = SourceResolutionStateV2::fresh(
         market.to_bytes(),
         GENERATION,
         source_id(material_id),
@@ -359,27 +377,19 @@ fn certificate_key(state: Pubkey, kind: u8, sequence: u64) -> Pubkey {
 
 fn add_case(
     test: &mut ProgramTest,
-    authority_id: [u8; 32],
-    product_instance_id: [u8; 32],
-    material_id: [u8; 32],
-    tag: u8,
+    spec: MarketSpec,
     certificate_kind: u8,
     certificate_sequence: u64,
 ) -> CaseAccounts {
-    let (market, market_bytes) =
-        canonical_market(authority_id, product_instance_id, material_id, tag);
-    let (state, state_value) = fresh_state(market, material_id);
+    let (market, market_bytes) = canonical_market(spec);
+    let (state, state_value) = fresh_state(market, spec.material_id);
     let certificate = certificate_key(state, certificate_kind, certificate_sequence);
-    test.add_account(market, protocol_account(REGISTRY_PROGRAM_ID, market_bytes));
+    test.add_account(market, protocol_account(CORE_PROGRAM_ID, market_bytes));
     test.add_account(
         state,
         protocol_account(RESOLUTION_PROGRAM_ID, state_value.to_bytes().to_vec()),
     );
-    CaseAccounts {
-        market,
-        state,
-        certificate,
-    }
+    CaseAccounts { state, certificate }
 }
 
 fn add_funding_account(
@@ -432,24 +442,19 @@ fn add_funding_account(
     funding
 }
 
-#[allow(clippy::too_many_arguments)]
 fn add_lifecycle_case(
     test: &mut ProgramTest,
-    authority_id: [u8; 32],
-    product_instance_id: [u8; 32],
-    material_id: [u8; 32],
-    capability_manifest_id: CoreContentId,
+    spec: MarketSpec,
     capability_manifest: CapabilityManifestV1<'_>,
-    tag: u8,
     occupied_failure: bool,
 ) -> LifecycleAccounts {
-    let (market, market_bytes) =
-        canonical_market(authority_id, product_instance_id, material_id, tag);
-    let (state, state_value) = fresh_state(market, material_id);
+    let capability_manifest_id = core_id(spec.capability_manifest_id);
+    let (market, market_bytes) = canonical_market(spec);
+    let (state, state_value) = fresh_state(market, spec.material_id);
     let recovery_certificate = certificate_key(state, 2, 1);
     let exhaustion_certificate = certificate_key(state, 3, 2);
     let failure_certificate = certificate_key(state, 4, 3);
-    test.add_account(market, protocol_account(REGISTRY_PROGRAM_ID, market_bytes));
+    test.add_account(market, protocol_account(CORE_PROGRAM_ID, market_bytes));
     test.add_account(
         state,
         protocol_account(RESOLUTION_PROGRAM_ID, state_value.to_bytes().to_vec()),
@@ -462,14 +467,13 @@ fn add_lifecycle_case(
             certificate,
             protocol_account(
                 RESOLUTION_PROGRAM_ID,
-                vec![0xa5; RESOLUTION_CERTIFICATE_BYTES],
+                vec![0xa5; RESOLUTION_CERTIFICATE_BYTES_V2],
             ),
         );
     }
-    let worker = Pubkey::new_from_array([tag.wrapping_add(0x40); 32]);
+    let worker = Pubkey::new_from_array([spec.tag.wrapping_add(0x40); 32]);
     test.add_account(worker, Account::new(101, 0, &system_program::ID));
     LifecycleAccounts {
-        market,
         state,
         worker,
         recovery: FundedStepAccounts {
@@ -505,7 +509,7 @@ fn add_lifecycle_case(
     }
 }
 
-fn require_compiled_elves() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+fn require_compiled_elves() -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
     let directory = PathBuf::from(
         env::var("SBF_OUT_DIR").expect("SBF_OUT_DIR is required for compiled Resolution evidence"),
     );
@@ -513,11 +517,14 @@ fn require_compiled_elves() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
         .expect("read exact compiled Resolution ELF");
     let registry = fs::read(directory.join("dclutch_registry_sbf.so"))
         .expect("read exact compiled Registry ELF");
+    let core =
+        fs::read(directory.join("dclutch_core_sbf.so")).expect("read exact compiled Core ELF");
     let receipt_caller = fs::read(directory.join("dclutch_resolution_receipt_test_caller_sbf.so"))
         .expect("read exact compiled receipt-caller ELF");
     for (label, elf) in [
         ("Resolution", &resolution),
         ("Registry", &registry),
+        ("Core", &core),
         ("Receipt caller", &receipt_caller),
     ] {
         assert_eq!(
@@ -527,12 +534,12 @@ fn require_compiled_elves() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
         );
         eprintln!("{label} ELF SHA-256: {:?}", hash(elf).to_bytes());
     }
-    (resolution, registry, receipt_caller)
+    (resolution, registry, core, receipt_caller)
 }
 
 impl Fixture {
     fn new() -> Self {
-        let (resolution_elf, registry_elf, receipt_caller_elf) = require_compiled_elves();
+        let (resolution_elf, registry_elf, core_elf, receipt_caller_elf) = require_compiled_elves();
         assert_eq!(
             hash(RECEIVER_ELF).to_bytes(),
             [
@@ -557,6 +564,13 @@ impl Fixture {
         test.set_compute_max_units(1_400_000);
         add_upgradeable_program(
             &mut test,
+            CORE_PROGRAM_ID,
+            &core_elf,
+            0,
+            PROTOCOL_UPGRADE_AUTHORITY,
+        );
+        add_upgradeable_program(
+            &mut test,
             REGISTRY_PROGRAM_ID,
             &registry_elf,
             0,
@@ -577,7 +591,7 @@ impl Fixture {
             PROTOCOL_UPGRADE_AUTHORITY,
         );
 
-        let core_release = artifact(REGISTRY_PROGRAM_ID, [0x71; 32], &registry_elf);
+        let core_release = artifact(CORE_PROGRAM_ID, [0x71; 32], &core_elf);
         let resolution_release = artifact(
             RESOLUTION_PROGRAM_ID,
             RESOLUTION_CONTROLLER_RELEASE_ID_V4,
@@ -590,7 +604,8 @@ impl Fixture {
             binding(resolution_release),
             binding(resolution_release),
         )
-        .expect("Core and one aliased successor release");
+        .expect("provisional unjoined release set");
+        require_pairwise_distinct_role_programs(release_set);
         let release_set_id = core_id(hash(&release_set.to_bytes()).to_bytes());
         let activation_inputs = ExecutionReleaseActivationInputsV1::new(
             activation_input(core_release),
@@ -661,24 +676,59 @@ impl Fixture {
 
         let coordinate_id = [0xa1; 32];
         let unit_id = [0xa2; 32];
-        let domain =
-            FiniteResultDomainV1::new(product_id(coordinate_id), product_id(unit_id), 1, &[0])
-                .expect("Product result domain with explicit failure");
-        let domain_bytes = domain.to_bytes();
-        let result_domain_id =
-            hashv(&[FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1, &[0], &domain_bytes]).to_bytes();
-        assert_eq!(domain.outcome_count(), 3);
-        assert_eq!(domain.failure_selector(), 2);
-        let product_instance = InstanceV1::new(InstanceV1Input {
-            terms_id: product_id([0xa3; 32]),
-            occurrence_id: product_id([0xa4; 32]),
-            claim_basis_id: product_id([0xa5; 32]),
-            result_domain_id: product_id(result_domain_id),
-            capacity_profile_id: CapacityProfileId::new(product_id([0xa6; 32])),
-            partition_cell_count: u32::from(domain.outcome_count()),
-        })
-        .expect("Product instance");
-        let product_instance_id = hash(&product_instance.to_bytes()).to_bytes();
+        let product_id = [0xa3; 32];
+        let claim_basis_id = [0xa4; 32];
+        let liability_basis_id = [0xa5; 32];
+        let representation_release_id = [0xa6; 32];
+        let mapping_release_id = [0xa7; 32];
+        let cuts = [0_i128];
+        let coefficients = [1_u64, 1, 1];
+        let mut domain_bytes =
+            vec![0_u8; result_domain_record_bytes(cuts.len()).expect("runtime domain width")];
+        compile_result_domain_v2(
+            ResultDomainInputV2 {
+                product_id: runtime_product_id(product_id),
+                coordinate_domain_id: runtime_product_id(coordinate_id),
+                result_unit_id: runtime_product_id(unit_id),
+                liability_basis_id: runtime_product_id(liability_basis_id),
+                representation_release_id: runtime_product_id(representation_release_id),
+                mapping_release_id: runtime_product_id(mapping_release_id),
+                cut_denominator: 1,
+                cuts: &cuts,
+            },
+            &mut domain_bytes,
+        )
+        .expect("canonical runtime Product domain");
+        let result_domain_id = hash(&domain_bytes).to_bytes();
+        let mut portfolio_bytes = vec![
+            0_u8;
+            portfolio_record_bytes(coefficients.len())
+                .expect("runtime portfolio width")
+        ];
+        compile_portfolio_v2(
+            PortfolioInputV2 {
+                product_id: runtime_product_id(product_id),
+                result_domain_id: runtime_product_id(result_domain_id),
+                claim_basis_id: runtime_product_id(claim_basis_id),
+                liability_basis_id: runtime_product_id(liability_basis_id),
+                representation_release_id: runtime_product_id(representation_release_id),
+                denominator: 1,
+                coefficients: &coefficients,
+            },
+            &mut portfolio_bytes,
+        )
+        .expect("canonical runtime Product portfolio");
+        let portfolio_id = hash(&portfolio_bytes).to_bytes();
+        let mut product_bytes = [0_u8; PRODUCT_RECORD_BYTES_V2];
+        ProductRecordV2::new(
+            runtime_product_id(product_id),
+            runtime_product_id(result_domain_id),
+            runtime_product_id(portfolio_id),
+        )
+        .encode_into(&mut product_bytes)
+        .expect("canonical runtime Product root");
+        let product_record_id = hash(&product_bytes).to_bytes();
+        assert_eq!(coefficients.len(), cuts.len() + 2);
 
         let capacity = SourceCapacityProfileV1::new(
             CapacityEnvelope::Measured,
@@ -734,71 +784,56 @@ impl Fixture {
         )
         .expect("terminal statistic");
         let statistic_id = source_id(hash(&statistic.to_bytes()).to_bytes());
-        let source_product_id = source_id(product_instance_id);
         let recovery_allocation_id = [0xd2; 32];
-        let recovery_policy = RecoveryPolicyV1::new(
+        let recovery_policy = RecoveryPolicyV2::new(
             capacity_id,
-            source_product_id,
             [
-                Some(RecoveryAttemptV1::new(
-                    source_spec_id,
-                    provider_id,
-                    PUBLISH_TIME + 20,
-                    source_id(recovery_allocation_id),
-                )),
+                Some(
+                    RecoveryAttemptV2::new(
+                        source_spec_id,
+                        provider_id,
+                        PUBLISH_TIME + 20,
+                        source_id(recovery_allocation_id),
+                    )
+                    .expect("positive recovery attempt"),
+                ),
                 None,
                 None,
                 None,
             ],
             1,
-            capacity,
         )
-        .expect("one ordered recovery");
-        let recovery_policy_id = source_id(hash(&recovery_policy.to_bytes()).to_bytes());
+        .expect("one ordered Product-free recovery");
+        let recovery_policy_bytes = recovery_policy.to_bytes();
+        let recovery_policy_id = source_id(hash(&recovery_policy_bytes).to_bytes());
         let exhaust_allocation_id = recovery_policy_id.to_bytes();
-        let recovery_slot =
-            RecoveryMaterialSlotV1::new(source_spec_id, source, provider_id, provider, adapter)
-                .expect("recovery material slot");
-        let policy = ResolutionPolicyV1::new(
-            capacity_id,
-            source_product_id,
+        let failure_policy_release = source_id([0xb6; 32]);
+        let material = SourceMaterialV2::new(
+            source_id(product_record_id),
             source_spec_id,
             window_id,
             statistic_id,
-            source_id(result_domain_id),
             Some(recovery_policy_id),
+            failure_policy_release,
         );
-        let mut material_bytes = [0_u8; SOURCE_MATERIAL_BYTES];
-        encode_source_material_into_v1(
-            &mut material_bytes,
-            SourceMaterialInputV1 {
-                policy: &policy,
-                capacity_profile_id: capacity_id,
-                capacity_profile: &capacity,
-                primary_source_id: source_spec_id,
-                primary_source: &source,
-                primary_provider_release_id: provider_id,
-                primary_provider_release: &provider,
-                primary_adapter_config: &adapter,
+        material
+            .validate_source_graph(
+                source_spec_id,
+                source,
                 window_id,
-                window: &window,
+                window,
                 statistic_id,
-                statistic: &statistic,
-                product_instance_id: source_product_id,
-                product_instance: &product_instance,
-                result_domain: &domain,
-                recovery: Some(SourceRecoveryMaterialInputV1 {
-                    recovery_policy_id,
-                    recovery_policy: &recovery_policy,
-                    slots: &[recovery_slot],
-                }),
-            },
-        )
-        .expect("Source material");
+                statistic,
+                Some(recovery_policy_id),
+                failure_policy_release,
+            )
+            .expect("joined compact Source material graph");
+        let material_bytes = material.to_bytes();
         let material_id = hash(&material_bytes).to_bytes();
 
         let exact_funding_rent = Rent::default().minimum_balance(FUNDING_STATE_BYTES);
-        let exact_certificate_rent = Rent::default().minimum_balance(RESOLUTION_CERTIFICATE_BYTES);
+        let exact_certificate_rent =
+            Rent::default().minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2);
         let funding_quote = FundingQuoteV1::new(
             FundingAmountsV1::new(
                 CompartmentFundingV1::native_lamports(exact_funding_rent).expect("funding rent"),
@@ -862,38 +897,43 @@ impl Fixture {
         CapabilityManifestV1::encode_into(&entries, &mut capability_manifest_bytes)
             .expect("capability manifest");
         let capability_manifest_id = hash(&capability_manifest_bytes).to_bytes();
-        let authority_value =
-            ExecutionAuthorityManifestV1::new(core_id(capability_manifest_id), release_set_id)
-                .expect("execution authority manifest");
-        let authority_bytes = authority_value.to_bytes();
-        let authority_id = hash(&authority_bytes).to_bytes();
-
-        let authority = add_record(
+        add_record(
             &mut test,
-            EXECUTION_AUTHORITY_MANIFEST_SCHEMA_ID_V1,
-            authority_id,
-            authority_bytes.to_vec(),
-        );
-        let material = add_record(
-            &mut test,
-            SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1,
+            SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
             material_id,
             material_bytes.to_vec(),
         );
-        let domain_record_digest = hash(&domain_bytes).to_bytes();
-        let domain = add_record(
+        add_record(
             &mut test,
-            FINITE_RESULT_DOMAIN_RELEASE_ID_V1,
-            domain_record_digest,
-            domain_bytes.to_vec(),
+            RECOVERY_POLICY_SCHEMA_ID_V2,
+            recovery_policy_id.to_bytes(),
+            recovery_policy_bytes.to_vec(),
         );
-        let pyth_release = add_record(
+        add_record(
+            &mut test,
+            PRODUCT_RECORD_SCHEMA_ID_V2,
+            product_record_id,
+            product_bytes.to_vec(),
+        );
+        add_record(
+            &mut test,
+            RESULT_DOMAIN_SCHEMA_ID_V2,
+            result_domain_id,
+            domain_bytes,
+        );
+        add_record(
+            &mut test,
+            PORTFOLIO_SCHEMA_ID_V2,
+            portfolio_id,
+            portfolio_bytes,
+        );
+        add_record(
             &mut test,
             PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
             provider_release_id,
             provider_release_bytes.to_vec(),
         );
-        let capability_manifest = add_record(
+        add_record(
             &mut test,
             CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
             capability_manifest_id,
@@ -901,42 +941,55 @@ impl Fixture {
         );
         let manifest = CapabilityManifestV1::decode(&capability_manifest_bytes)
             .expect("capability manifest view");
-        let manifest_id = core_id(capability_manifest_id);
         let primary = add_case(
             &mut test,
-            authority_id,
-            product_instance_id,
-            material_id,
-            0xe1,
+            MarketSpec {
+                product_record_id,
+                product_id,
+                material_id,
+                capability_manifest_id,
+                release_set_id: release_set_id.to_bytes(),
+                tag: 0xe1,
+            },
             1,
             PRIMARY_CERTIFICATE_SEQUENCE_V3,
         );
         let lifecycle = add_lifecycle_case(
             &mut test,
-            authority_id,
-            product_instance_id,
-            material_id,
-            manifest_id,
+            MarketSpec {
+                product_record_id,
+                product_id,
+                material_id,
+                capability_manifest_id,
+                release_set_id: release_set_id.to_bytes(),
+                tag: 0xe2,
+            },
             manifest,
-            0xe2,
             false,
         );
         let rollback = add_lifecycle_case(
             &mut test,
-            authority_id,
-            product_instance_id,
-            material_id,
-            manifest_id,
+            MarketSpec {
+                product_record_id,
+                product_id,
+                material_id,
+                capability_manifest_id,
+                release_set_id: release_set_id.to_bytes(),
+                tag: 0xe3,
+            },
             manifest,
-            0xe3,
             false,
         );
         let underfunded = add_case(
             &mut test,
-            authority_id,
-            product_instance_id,
-            material_id,
-            0xe4,
+            MarketSpec {
+                product_record_id,
+                product_id,
+                material_id,
+                capability_manifest_id,
+                release_set_id: release_set_id.to_bytes(),
+                tag: 0xe4,
+            },
             1,
             PRIMARY_CERTIFICATE_SEQUENCE_V3,
         );
@@ -953,22 +1006,8 @@ impl Fixture {
             test: Some(test),
             resolution_programdata: programdata_address(RESOLUTION_PROGRAM_ID),
             activation,
-            authority,
-            material,
-            domain,
-            pyth_release,
-            capability_manifest,
-            result_domain_id,
-            material_id,
-            recovery_allocation_id,
+            product_record_id,
             exhaust_allocation_id,
-            provider_release_id,
-            receiver,
-            receiver_programdata,
-            receiver_config,
-            router,
-            router_programdata,
-            price_update,
             primary,
             underfunded,
             lifecycle,
@@ -979,111 +1018,18 @@ impl Fixture {
     }
 }
 
-fn primary_instruction(fixture: &Fixture, case: CaseAccounts) -> Instruction {
-    let request = AcceptPythRequestV1 {
-        expected_generation: GENERATION,
-        expected_result_domain_id: fixture.result_domain_id,
-        expected_provider_release_id: fixture.provider_release_id,
-    }
-    .to_bytes()
-    .expect("primary request");
-    Instruction {
-        program_id: RESOLUTION_PROGRAM_ID,
-        accounts: vec![
-            AccountMeta::new(case.state, false),
-            AccountMeta::new(case.certificate, false),
-            AccountMeta::new_readonly(case.market, false),
-            AccountMeta::new_readonly(fixture.authority.raw, false),
-            AccountMeta::new_readonly(fixture.authority.staging, false),
-            AccountMeta::new_readonly(fixture.activation, false),
-            AccountMeta::new_readonly(RESOLUTION_PROGRAM_ID, false),
-            AccountMeta::new_readonly(fixture.resolution_programdata, false),
-            AccountMeta::new_readonly(fixture.material.raw, false),
-            AccountMeta::new_readonly(fixture.material.staging, false),
-            AccountMeta::new_readonly(fixture.domain.raw, false),
-            AccountMeta::new_readonly(fixture.domain.staging, false),
-            AccountMeta::new_readonly(fixture.pyth_release.raw, false),
-            AccountMeta::new_readonly(fixture.pyth_release.staging, false),
-            AccountMeta::new_readonly(fixture.price_update, false),
-            AccountMeta::new_readonly(fixture.receiver, false),
-            AccountMeta::new_readonly(fixture.receiver_programdata, false),
-            AccountMeta::new_readonly(fixture.receiver_config, false),
-            AccountMeta::new_readonly(fixture.router, false),
-            AccountMeta::new_readonly(fixture.router_programdata, false),
-            AccountMeta::new_readonly(sysvar::clock::ID, false),
-            AccountMeta::new_readonly(sysvar::rent::ID, false),
-            AccountMeta::new_readonly(system_program::ID, false),
-        ],
-        data: request.to_vec(),
-    }
-}
-
-fn funded_instruction(
-    fixture: &Fixture,
-    case: LifecycleAccounts,
-    step: FundedStepAccounts,
-    action: FundedTransitionActionV3,
-) -> Instruction {
-    let (recovery_index, allocation) = match action {
-        FundedTransitionActionV3::FailNext => (0, fixture.recovery_allocation_id),
-        FundedTransitionActionV3::Exhaust => (1, fixture.exhaust_allocation_id),
-        FundedTransitionActionV3::CommitFailure => (1, fixture.material_id),
-    };
-    let request = FundedTransitionRequestV3 {
-        action,
-        expected_generation: GENERATION,
-        expected_recovery_index: recovery_index,
-        expected_result_domain_id: fixture.result_domain_id,
-        expected_funding_allocation_id: allocation,
-    }
-    .to_bytes()
-    .expect("funded request");
-    Instruction {
-        program_id: RESOLUTION_PROGRAM_ID,
-        accounts: vec![
-            AccountMeta::new(case.state, false),
-            AccountMeta::new(step.certificate, false),
-            AccountMeta::new(step.funding, false),
-            AccountMeta::new(case.worker, false),
-            AccountMeta::new_readonly(case.market, false),
-            AccountMeta::new_readonly(fixture.authority.raw, false),
-            AccountMeta::new_readonly(fixture.authority.staging, false),
-            AccountMeta::new_readonly(fixture.activation, false),
-            AccountMeta::new_readonly(RESOLUTION_PROGRAM_ID, false),
-            AccountMeta::new_readonly(fixture.resolution_programdata, false),
-            AccountMeta::new_readonly(fixture.material.raw, false),
-            AccountMeta::new_readonly(fixture.material.staging, false),
-            AccountMeta::new_readonly(fixture.domain.raw, false),
-            AccountMeta::new_readonly(fixture.domain.staging, false),
-            AccountMeta::new_readonly(fixture.capability_manifest.raw, false),
-            AccountMeta::new_readonly(fixture.capability_manifest.staging, false),
-            AccountMeta::new_readonly(sysvar::clock::ID, false),
-            AccountMeta::new_readonly(sysvar::rent::ID, false),
-            AccountMeta::new_readonly(system_program::ID, false),
-        ],
-        data: request.to_vec(),
-    }
+fn primary_instruction(_fixture: &Fixture, _case: CaseAccounts) -> Instruction {
+    panic!("Runtime V2 direct primary ABI has not been frozen")
 }
 
 fn funded_caller_instruction(
-    fixture: &Fixture,
-    case: LifecycleAccounts,
-    step: FundedStepAccounts,
-    action: FundedTransitionActionV3,
-    fail_after_receipt: bool,
+    _fixture: &Fixture,
+    _case: LifecycleAccounts,
+    _step: FundedStepAccounts,
+    _action: FundedTransitionActionV3,
+    _fail_after_receipt: bool,
 ) -> Instruction {
-    let child = funded_instruction(fixture, case, step, action);
-    let mut accounts = Vec::with_capacity(child.accounts.len() + 1);
-    accounts.push(AccountMeta::new_readonly(RESOLUTION_PROGRAM_ID, false));
-    accounts.extend(child.accounts);
-    let mut data = Vec::with_capacity(child.data.len() + 1);
-    data.push(u8::from(fail_after_receipt));
-    data.extend(child.data);
-    Instruction {
-        program_id: RECEIPT_CALLER_PROGRAM_ID,
-        accounts,
-        data,
-    }
+    panic!("Runtime V2 funded direct ABI and return receipt have not been frozen")
 }
 
 async fn submit(
@@ -1172,6 +1118,7 @@ fn assert_exact_bounty_compartments(account: &Account, exact_funding_rent: u64) 
 }
 
 #[tokio::test]
+#[ignore = "requires distinct real Core, Claims, Trading, Resolution, and Custody artifacts"]
 async fn compiled_resolution_executes_primary_recovery_failure_and_atomic_refusal() {
     let mut fixture = Fixture::new();
     let mut context = fixture
@@ -1212,9 +1159,9 @@ async fn compiled_resolution_executes_primary_recovery_failure_and_atomic_refusa
         .await
         .expect("compiled Resolution admits the captured primary Pyth update");
     let primary_state =
-        SourceResolutionStateV1::decode(&observed(&mut context, fixture.primary.state).await.data)
-            .expect("primary Source state");
-    let primary_certificate = ResolutionCertificateV1::decode(
+        SourceResolutionStateV2::decode(&observed(&mut context, fixture.primary.state).await.data)
+            .expect("primary Runtime V2 Source state");
+    let primary_certificate = ResolutionCertificateV2::decode(
         &observed(&mut context, fixture.primary.certificate)
             .await
             .data,
@@ -1224,7 +1171,11 @@ async fn compiled_resolution_executes_primary_recovery_failure_and_atomic_refusa
     assert_eq!(primary_state.phase(), SourceResolutionPhaseV1::Resolved);
     assert_eq!(
         primary_certificate.kind,
-        ResolutionCertificateKindV1::ResolutionSuccess
+        ResolutionCertificateKindV2::ResolutionSuccess
+    );
+    assert_eq!(
+        primary_certificate.product_record_digest,
+        fixture.product_record_id
     );
     assert_eq!(
         primary_certificate.result_numerator,
@@ -1322,11 +1273,11 @@ async fn compiled_resolution_executes_primary_recovery_failure_and_atomic_refusa
     )
     .await
     .expect("compiled Resolution executes one funded ordered recovery");
-    let recovery_state = SourceResolutionStateV1::decode(
+    let recovery_state = SourceResolutionStateV2::decode(
         &observed(&mut context, fixture.lifecycle.state).await.data,
     )
     .expect("recovery Source state");
-    let recovery_certificate = ResolutionCertificateV1::decode(
+    let recovery_certificate = ResolutionCertificateV2::decode(
         &observed(&mut context, fixture.lifecycle.recovery.certificate)
             .await
             .data,
@@ -1335,10 +1286,13 @@ async fn compiled_resolution_executes_primary_recovery_failure_and_atomic_refusa
     let recovery_funding_after = observed(&mut context, fixture.lifecycle.recovery.funding).await;
     let recovery_worker_after = observed(&mut context, fixture.lifecycle.worker).await;
     assert_eq!(recovery_state.phase(), SourceResolutionPhaseV1::Recovery);
-    assert_eq!(recovery_state.active_recovery_attempt(), Some(0));
     assert_eq!(
         recovery_certificate.kind,
-        ResolutionCertificateKindV1::RecoveryAdvanced
+        ResolutionCertificateKindV2::RecoveryAdvanced
+    );
+    assert_eq!(
+        recovery_certificate.product_record_digest,
+        fixture.product_record_id
     );
     assert_eq!(recovery_certificate.attempt_index, 1);
     assert_eq!(
@@ -1380,11 +1334,11 @@ async fn compiled_resolution_executes_primary_recovery_failure_and_atomic_refusa
     )
     .await
     .expect("compiled Resolution executes exact funded exhaustion");
-    let exhausted_state = SourceResolutionStateV1::decode(
+    let exhausted_state = SourceResolutionStateV2::decode(
         &observed(&mut context, fixture.lifecycle.state).await.data,
     )
     .expect("exhausted Source state");
-    let exhaustion_certificate = ResolutionCertificateV1::decode(
+    let exhaustion_certificate = ResolutionCertificateV2::decode(
         &observed(&mut context, fixture.lifecycle.exhaustion.certificate)
             .await
             .data,
@@ -1394,10 +1348,13 @@ async fn compiled_resolution_executes_primary_recovery_failure_and_atomic_refusa
         observed(&mut context, fixture.lifecycle.exhaustion.funding).await;
     let exhaustion_worker_after = observed(&mut context, fixture.lifecycle.worker).await;
     assert_eq!(exhausted_state.phase(), SourceResolutionPhaseV1::Exhausted);
-    assert_eq!(exhausted_state.active_recovery_attempt(), None);
     assert_eq!(
         exhaustion_certificate.kind,
-        ResolutionCertificateKindV1::Exhausted
+        ResolutionCertificateKindV2::Exhausted
+    );
+    assert_eq!(
+        exhaustion_certificate.product_record_digest,
+        fixture.product_record_id
     );
     assert_ne!(exhaustion_certificate.route, [0; 32]);
     assert_eq!(exhaustion_certificate.attempt_index, 1);
@@ -1448,11 +1405,11 @@ async fn compiled_resolution_executes_primary_recovery_failure_and_atomic_refusa
     )
     .await
     .expect("compiled Resolution commits Product's explicit failure result");
-    let failure_state = SourceResolutionStateV1::decode(
+    let failure_state = SourceResolutionStateV2::decode(
         &observed(&mut context, fixture.lifecycle.state).await.data,
     )
     .expect("failure Source state");
-    let failure_certificate = ResolutionCertificateV1::decode(
+    let failure_certificate = ResolutionCertificateV2::decode(
         &observed(&mut context, fixture.lifecycle.failure.certificate)
             .await
             .data,
@@ -1466,7 +1423,11 @@ async fn compiled_resolution_executes_primary_recovery_failure_and_atomic_refusa
     );
     assert_eq!(
         failure_certificate.kind,
-        ResolutionCertificateKindV1::ResolutionFailure
+        ResolutionCertificateKindV2::ResolutionFailure
+    );
+    assert_eq!(
+        failure_certificate.product_record_digest,
+        fixture.product_record_id
     );
     assert_eq!(failure_certificate.attempt_index, 1);
     assert_eq!(
