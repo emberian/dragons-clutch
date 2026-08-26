@@ -18,6 +18,8 @@ use sha2::{Digest, Sha256};
 #[allow(dead_code, missing_docs)]
 #[doc(hidden)]
 pub mod generated;
+/// Stateless joint root/Ticket replay-plan evaluator.
+pub mod plan;
 /// Total fixed-layout Series/Ticket replay evaluator.
 pub mod replay;
 
