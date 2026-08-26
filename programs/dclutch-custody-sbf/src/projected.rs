@@ -51,7 +51,7 @@ const INITIALIZE_RENT: usize = 9;
 const INITIALIZE_SYSTEM: usize = 10;
 const INITIALIZE_FOUND_START: usize = 11;
 
-const OPEN_ACCOUNTS: usize = 14;
+const OPEN_ACCOUNTS: usize = 15;
 const OPEN_VAULT: usize = 7;
 const OPEN_AUTHORITY: usize = 8;
 const OPEN_MINT: usize = 9;
@@ -59,22 +59,25 @@ const OPEN_TOKEN_PROGRAM: usize = 10;
 const OPEN_PAYER: usize = 11;
 const OPEN_RENT: usize = 12;
 const OPEN_SYSTEM: usize = 13;
+const OPEN_MARKET: usize = 14;
 
-const LOCK_ACCOUNTS: usize = 13;
+const LOCK_ACCOUNTS: usize = 14;
 const LOCK_VAULT: usize = 7;
 const LOCK_SOURCE: usize = 8;
 const LOCK_REFUND_OWNER: usize = 9;
 const LOCK_AUTHORITY: usize = 10;
 const LOCK_MINT: usize = 11;
 const LOCK_TOKEN_PROGRAM: usize = 12;
+const LOCK_MARKET: usize = 13;
 
-const REFUND_ACCOUNTS: usize = 13;
+const REFUND_ACCOUNTS: usize = 14;
 const REFUND_VAULT: usize = 7;
 const REFUND_DESTINATION: usize = 8;
 const REFUND_OWNER: usize = 9;
 const REFUND_AUTHORITY: usize = 10;
 const REFUND_MINT: usize = 11;
 const REFUND_TOKEN_PROGRAM: usize = 12;
+const REFUND_MARKET: usize = 13;
 
 const REALIZE_ACCOUNTS: usize = 12;
 const REALIZE_VAULT: usize = 7;
@@ -411,6 +414,7 @@ fn open_hoard(
     let payer = account(accounts, OPEN_PAYER)?;
     let rent_account = account(accounts, OPEN_RENT)?;
     let system = account(accounts, OPEN_SYSTEM)?;
+    require_vacant_market(account(accounts, OPEN_MARKET)?, request)?;
     authenticate_token_frame(
         program_id,
         vault,
@@ -470,7 +474,7 @@ fn open_hoard(
     let amount = read_vault_amount(vault, authority, request)?;
     let current = read_state(account(accounts, STATE)?)?;
     let next = current
-        .open_hoard(request, request_digest, amount)
+        .open_hoard(request, request_digest, amount, true)
         .map_err(|_| CustodySbfError::Replay)?;
     commit_state(account(accounts, STATE)?, next)
 }
@@ -488,6 +492,7 @@ fn lock_hoard(
     let authority = account(accounts, LOCK_AUTHORITY)?;
     let mint = account(accounts, LOCK_MINT)?;
     let token_program = account(accounts, LOCK_TOKEN_PROGRAM)?;
+    require_vacant_market(account(accounts, LOCK_MARKET)?, request)?;
     authenticate_token_frame(
         program_id,
         vault,
@@ -604,7 +609,7 @@ fn lock_hoard(
     }
     let state = read_state(account(accounts, STATE)?)?;
     let next = state
-        .lock_hoard(request, request_digest, before, after)
+        .lock_hoard(request, request_digest, before, after, true)
         .map_err(|_| CustodySbfError::Replay)?;
     commit_state(account(accounts, STATE)?, next)
 }
@@ -622,6 +627,7 @@ fn refund_and_close(
     let authority = account(accounts, REFUND_AUTHORITY)?;
     let mint = account(accounts, REFUND_MINT)?;
     let token_program = account(accounts, REFUND_TOKEN_PROGRAM)?;
+    require_vacant_market(account(accounts, REFUND_MARKET)?, request)?;
     authenticate_token_frame(
         program_id,
         vault,
@@ -720,6 +726,7 @@ fn refund_and_close(
             before,
             after,
             account(accounts, RENT_CREDIT)?.key.to_bytes(),
+            true,
         )
         .map_err(|_| CustodySbfError::Replay)?;
     close_vault_to_rent_credit(
@@ -855,6 +862,22 @@ fn authenticate_token_frame(
         }
     } else if vault.owner != token_program.key || vault.data_len() != ACCOUNT_BYTES {
         return Err(CustodySbfError::TokenState.into());
+    }
+    Ok(())
+}
+
+fn require_vacant_market(
+    market: &AccountInfo<'_>,
+    request: ProjectedCustodyRequestV1,
+) -> Result<(), ProgramError> {
+    if market.key.to_bytes() != request.market
+        || market.owner != &system_program::ID
+        || market.data_len() != 0
+        || market.is_signer
+        || market.is_writable
+        || market.executable
+    {
+        return Err(CustodySbfError::AccountFrame.into());
     }
     Ok(())
 }
@@ -1072,9 +1095,9 @@ mod tests {
     #[test]
     fn every_projected_operation_has_one_exact_frame_width() {
         assert_eq!(INITIALIZE_ACCOUNTS, INITIALIZE_FOUND_START + 31);
-        assert_eq!(OPEN_ACCOUNTS, 14);
-        assert_eq!(LOCK_ACCOUNTS, 13);
-        assert_eq!(REFUND_ACCOUNTS, 13);
+        assert_eq!(OPEN_ACCOUNTS, 15);
+        assert_eq!(LOCK_ACCOUNTS, 14);
+        assert_eq!(REFUND_ACCOUNTS, 14);
         assert_eq!(REALIZE_ACCOUNTS, 12);
     }
 }

@@ -559,11 +559,13 @@ impl ProjectedCustodyStateV1 {
         request: ProjectedCustodyRequestV1,
         request_digest: [u8; 32],
         vault_balance: u64,
+        market_vacant: bool,
     ) -> Result<Self, ProjectedCustodyError> {
         self.authenticate_next(request, request_digest)?;
         if self.phase != ProjectedCustodyPhaseV1::Initialized
             || request.operation != ProjectedCustodyOperationV1::OpenHoard
             || vault_balance != 0
+            || !market_vacant
         {
             return Err(ProjectedCustodyError::Phase);
         }
@@ -579,12 +581,14 @@ impl ProjectedCustodyStateV1 {
         request_digest: [u8; 32],
         vault_before: u64,
         vault_after: u64,
+        market_vacant: bool,
     ) -> Result<Self, ProjectedCustodyError> {
         self.authenticate_next(request, request_digest)?;
         if self.phase != ProjectedCustodyPhaseV1::HoardOpen
             || request.operation != ProjectedCustodyOperationV1::LockHoard
             || vault_before != 0
             || vault_before.checked_add(request.amount) != Some(vault_after)
+            || !market_vacant
         {
             return Err(ProjectedCustodyError::Balance);
         }
@@ -595,6 +599,7 @@ impl ProjectedCustodyStateV1 {
     }
 
     /// Authorize expiry refund and exact vault/state closure to RentCredit.
+    #[allow(clippy::too_many_arguments)]
     pub fn refund_and_close(
         self,
         request: ProjectedCustodyRequestV1,
@@ -603,6 +608,7 @@ impl ProjectedCustodyStateV1 {
         vault_before: u64,
         vault_after: u64,
         rent_credit: [u8; 32],
+        market_vacant: bool,
     ) -> Result<ProjectedCustodyReceiptV1, ProjectedCustodyError> {
         self.authenticate_next(request, request_digest)?;
         if self.phase != ProjectedCustodyPhaseV1::HoardLocked
@@ -612,6 +618,7 @@ impl ProjectedCustodyStateV1 {
             || vault_before != self.locked_amount
             || vault_after != 0
             || rent_credit != self.request.rent_credit
+            || !market_vacant
         {
             return Err(ProjectedCustodyError::Expiry);
         }
@@ -1108,6 +1115,7 @@ mod tests {
                 request(ProjectedCustodyOperationV1::OpenHoard, 1, 0),
                 id(31),
                 0,
+                true,
             )
             .expect("open");
         let state = state
@@ -1116,6 +1124,7 @@ mod tests {
                 id(32),
                 0,
                 500,
+                true,
             )
             .expect("lock");
         let receipt = state
@@ -1172,6 +1181,7 @@ mod tests {
             request(ProjectedCustodyOperationV1::OpenHoard, 1, 0),
             id(31),
             0,
+            true,
         )
         .expect("open")
         .lock_hoard(
@@ -1179,6 +1189,7 @@ mod tests {
             id(32),
             0,
             500,
+            true,
         )
         .expect("lock");
         assert_eq!(
@@ -1189,6 +1200,7 @@ mod tests {
                 500,
                 0,
                 id(15),
+                true,
             ),
             Err(ProjectedCustodyError::Expiry)
         );
