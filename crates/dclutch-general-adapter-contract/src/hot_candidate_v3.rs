@@ -23,7 +23,7 @@ use crate::{
 };
 
 /// Exact common scalar-register count in the General Hot38 ABI.
-pub const GENERAL_HOT_COMMON_SCALARS_V3: u32 = 87;
+pub const GENERAL_HOT_COMMON_SCALARS_V3: u32 = 88;
 /// Outcome index, quantity, three claim magnitudes, and cursor inventory.
 pub const GENERAL_HOT_ITEM_SCALAR_STRIDE_V3: u32 = 6;
 /// Exact common identity-register count in the General Hot38 ABI.
@@ -207,6 +207,8 @@ pub mod scalar {
     pub const SELECTION_BEST_QUOTE_SURPLUS: u32 = 85;
     /// Trusted canonical input scratch-page count derived from bank geometry.
     pub const INPUT_SCRATCH_PAGE_COUNT: u32 = 86;
+    /// Verifier-emitted settlement-manifest row ordinal selected by the request.
+    pub const MANIFEST_ORDER_INDEX: u32 = 87;
 }
 
 /// Scalar coordinates within each Product-outcome item bank.

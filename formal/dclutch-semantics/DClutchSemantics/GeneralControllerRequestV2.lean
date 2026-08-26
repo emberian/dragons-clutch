@@ -4,9 +4,11 @@ import DClutchSemantics.GeneralControllerAbi
 /-!
 # Runtime-width General controller request V2
 
-The successor keeps the exact 64-byte request while replacing V1's final
-reserved bytes with untrusted canonical-PDA bump witnesses. Generic Trading
-recomputes the canonical PDA from authenticated seeds; these bytes are never
+The successor keeps the exact 64-byte request while assigning byte 11 to the
+canonical verifier-emitted manifest row ordinal and the final request bytes to
+untrusted canonical-PDA bump witnesses. The manifest ordinal selects a row;
+that row owns its distinct source page/execution coordinates. Generic Trading
+recomputes every PDA from authenticated seeds, so request bytes are never
 authority by themselves.
 -/
 
@@ -19,13 +21,14 @@ def requestMagic : List UInt8 :=
   [0x44, 0x43, 0x47, 0x52, 0x45, 0x51, 0x30, 0x32] -- `DCGREQ02`
 
 inductive RequestField where
-  | magic | version | action | reservedA | expectedRevision | candidateId
+  | magic | version | action | manifestOrderIndex | reservedA | expectedRevision | candidateId
   | pageIndex | executionIndex | stateBump | terminalRecordBump | reservedB
   deriving DecidableEq, Repr
 
 def requestSchema : List (FieldSpec RequestField) := [
   ⟨.magic, .bytes 8⟩, ⟨.version, .u16⟩, ⟨.action, .u8⟩,
-  ⟨.reservedA, .reserved 5⟩, ⟨.expectedRevision, .u64⟩,
+  ⟨.manifestOrderIndex, .u8⟩, ⟨.reservedA, .reserved 4⟩,
+  ⟨.expectedRevision, .u64⟩,
   ⟨.candidateId, .bytes 32⟩, ⟨.pageIndex, .u32⟩,
   ⟨.executionIndex, .u8⟩, ⟨.stateBump, .u8⟩,
   ⟨.terminalRecordBump, .u8⟩, ⟨.reservedB, .reserved 1⟩
@@ -41,7 +44,8 @@ theorem request_is_well_formed : WellFormed requestSchema := by
 
 theorem request_coordinates_are_canonical : coordinates requestLayout = [
     (.magic, 0, 8), (.version, 8, 2), (.action, 10, 1),
-    (.reservedA, 11, 5), (.expectedRevision, 16, 8),
+    (.manifestOrderIndex, 11, 1), (.reservedA, 12, 4),
+    (.expectedRevision, 16, 8),
     (.candidateId, 24, 32), (.pageIndex, 56, 4),
     (.executionIndex, 60, 1), (.stateBump, 61, 1),
     (.terminalRecordBump, 62, 1), (.reservedB, 63, 1)] := by native_decide

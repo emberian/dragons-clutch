@@ -24,6 +24,7 @@ use crate::{
         project_general_hot_candidate_v3, project_general_initialize_candidate_v3,
         project_general_selection_candidate_v3,
     },
+    runtime_manifest::SettlementManifestV2,
     runtime_selection::{
         RuntimeSelectionCursorV2, consider_verified_candidate_v2, freeze_selection_v2,
     },
@@ -65,6 +66,8 @@ pub type Result<T> = core::result::Result<T, GeneralAdmittedAcceleratorErrorV3>;
 /// Batch, and exact record digest under the immutable selection policy.
 pub fn authenticate_frozen_selection_v3<'a>(
     selection_policy_id: [u8; 32],
+    product_id: [u8; 32],
+    price_scale: u64,
     requested_candidate: Option<[u8; 32]>,
     tail_count: u32,
     frozen_selection: &[u8],
@@ -80,6 +83,8 @@ pub fn authenticate_frozen_selection_v3<'a>(
     if frozen_header.phase != crate::runtime_selection::RuntimeSelectionPhaseV2::Frozen
         || frozen_header.outcome_count != tail_count
         || frozen_header.policy_id != selection_policy_id
+        || frozen_header.product_id != product_id
+        || frozen_header.price_scale != price_scale
         || frozen_header.best_candidate_id != verified_header.candidate_id
         || frozen_header.best_candidate_coordinate != verified_header.candidate_coordinate
         || frozen_header.best_verified_revision != verified_header.revision
@@ -87,6 +92,8 @@ pub fn authenticate_frozen_selection_v3<'a>(
         || frozen_header.batch_id != verified_header.batch_id
         || frozen_header.best_verified_digest != verified_digest
         || verified_header.outcome_count != tail_count
+        || verified_header.product_id != product_id
+        || verified_header.price_scale != price_scale
         || Some(verified_header.candidate_id) != requested_candidate
     {
         return Err(GeneralAdmittedAcceleratorErrorV3::Action);
@@ -269,6 +276,8 @@ pub fn evaluate_general_admitted_initialize_v3<'a>(
     }
     authenticate_frozen_selection_v3(
         bundle.config.selection_policy_id(),
+        environment.product_record_digest,
+        bundle.config.price_scale(),
         bundle.request.candidate_id,
         tail_count,
         frozen_selection,
@@ -375,6 +384,7 @@ pub fn evaluate_general_admitted_settlement_v3<'a>(
     {
         return Err(GeneralAdmittedAcceleratorErrorV3::Action);
     }
+    authenticate_settlement_request_v3(bundle, environment, &settlement)?;
     let GeneralAdmittedSettlementBuffersV3 {
         cursor_scratch,
         cursor_output,
@@ -432,6 +442,57 @@ pub fn evaluate_general_admitted_settlement_v3<'a>(
         },
     )
     .map_err(|_| GeneralAdmittedAcceleratorErrorV3::Transport)
+}
+
+fn authenticate_settlement_request_v3(
+    bundle: GeneralArtifactBundleV3<'_>,
+    environment: GeneralHotEnvironmentV3,
+    settlement: &RuntimeSettlementViewV2<'_>,
+) -> Result<()> {
+    let request = bundle.request;
+    let verified = VerifiedCandidateV2::decode(settlement.verified)
+        .map_err(|_| GeneralAdmittedAcceleratorErrorV3::Settlement)?;
+    let verified_header = verified.header();
+    if settlement.expected_revision != request.expected_revision
+        || request.candidate_id != Some(verified_header.candidate_id)
+        || verified_header.outcome_count != bundle.tail_count
+        || verified_header.product_id != environment.product_record_digest
+        || verified_header.price_scale != bundle.config.price_scale()
+    {
+        return Err(GeneralAdmittedAcceleratorErrorV3::Action);
+    }
+    match settlement.action {
+        RuntimeSettlementActionV2::Collect | RuntimeSettlementActionV2::Distribute => {
+            if settlement.manifest_order_index != u32::from(request.manifest_order_index) {
+                return Err(GeneralAdmittedAcceleratorErrorV3::Action);
+            }
+            let manifest = SettlementManifestV2::decode(
+                settlement
+                    .manifest
+                    .ok_or(GeneralAdmittedAcceleratorErrorV3::Action)?,
+            )
+            .map_err(|_| GeneralAdmittedAcceleratorErrorV3::Settlement)?;
+            let row = manifest
+                .order(settlement.manifest_order_index)
+                .map_err(|_| GeneralAdmittedAcceleratorErrorV3::Settlement)?;
+            if row.header().source_page_index != request.page_index
+                || row.header().source_execution_index != u32::from(request.execution_index)
+            {
+                return Err(GeneralAdmittedAcceleratorErrorV3::Action);
+            }
+        }
+        RuntimeSettlementActionV2::Materialize | RuntimeSettlementActionV2::Close => {
+            if settlement.manifest.is_some()
+                || settlement.manifest_order_index != 0
+                || request.page_index != 0
+                || request.execution_index != 0
+                || request.manifest_order_index != 0
+            {
+                return Err(GeneralAdmittedAcceleratorErrorV3::Action);
+            }
+        }
+    }
+    Ok(())
 }
 
 const fn action_matches(action: Action, settlement: RuntimeSettlementActionV2) -> bool {
@@ -570,6 +631,8 @@ mod tests {
             let frozen = frozen_selection(width, &verified);
             let selected = authenticate_frozen_selection_v3(
                 POLICY,
+                PRODUCT,
+                10,
                 Some(CANDIDATE),
                 width,
                 &frozen,
@@ -581,7 +644,15 @@ mod tests {
             let mut open = frozen;
             open[10] = RuntimeSelectionPhaseV2::Open.tag();
             assert_eq!(
-                authenticate_frozen_selection_v3(POLICY, Some(CANDIDATE), width, &open, &verified,),
+                authenticate_frozen_selection_v3(
+                    POLICY,
+                    PRODUCT,
+                    10,
+                    Some(CANDIDATE),
+                    width,
+                    &open,
+                    &verified,
+                ),
                 Err(GeneralAdmittedAcceleratorErrorV3::Action)
             );
 
@@ -590,6 +661,8 @@ mod tests {
             assert_eq!(
                 authenticate_frozen_selection_v3(
                     POLICY,
+                    PRODUCT,
+                    10,
                     Some(CANDIDATE),
                     width,
                     &substituted_digest,
@@ -599,12 +672,22 @@ mod tests {
             );
 
             assert_eq!(
-                authenticate_frozen_selection_v3(POLICY, Some([25; 32]), width, &frozen, &verified,),
+                authenticate_frozen_selection_v3(
+                    POLICY,
+                    PRODUCT,
+                    10,
+                    Some([25; 32]),
+                    width,
+                    &frozen,
+                    &verified,
+                ),
                 Err(GeneralAdmittedAcceleratorErrorV3::Action)
             );
             assert_eq!(
                 authenticate_frozen_selection_v3(
                     [26; 32],
+                    PRODUCT,
+                    10,
                     Some(CANDIDATE),
                     width,
                     &frozen,
@@ -618,10 +701,37 @@ mod tests {
             assert_eq!(
                 authenticate_frozen_selection_v3(
                     POLICY,
+                    PRODUCT,
+                    10,
                     Some(CANDIDATE),
                     width,
                     &frozen,
                     &substituted_revision,
+                ),
+                Err(GeneralAdmittedAcceleratorErrorV3::Action)
+            );
+
+            assert_eq!(
+                authenticate_frozen_selection_v3(
+                    POLICY,
+                    [27; 32],
+                    10,
+                    Some(CANDIDATE),
+                    width,
+                    &frozen,
+                    &verified,
+                ),
+                Err(GeneralAdmittedAcceleratorErrorV3::Action)
+            );
+            assert_eq!(
+                authenticate_frozen_selection_v3(
+                    POLICY,
+                    PRODUCT,
+                    11,
+                    Some(CANDIDATE),
+                    width,
+                    &frozen,
+                    &verified,
                 ),
                 Err(GeneralAdmittedAcceleratorErrorV3::Action)
             );

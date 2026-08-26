@@ -80,6 +80,7 @@ mod tests {
             candidate_id,
             page_index,
             execution_index,
+            manifest_order_index: u8::from(matches!(action, Action::Collect | Action::Distribute)),
             state_bump: 42,
             terminal_record_bump: if action == Action::Close { 43 } else { 0 },
         }

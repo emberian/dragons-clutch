@@ -5,49 +5,49 @@ use std::{collections::BTreeMap, vec, vec::Vec};
 use dclutch_capability_program_contract::hot_v3::HotExecutionEnvelopeV3;
 use dclutch_core_contract::ContentId;
 use dclutch_execution_strategy_contract::v2::{
-    ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2, ACCELERATOR_REQUEST_HEADER_BYTES_V2, AcceleratorAckV2,
-    AcceleratorDispositionV2, AcceleratorRequestV2, AuthenticatedScratchPageV2, RequestTransportV2,
-    SCRATCH_PAGE_HEADER_BYTES_V2, ScratchPageKindV2,
+    AcceleratorAckV2, AcceleratorDispositionV2, AcceleratorRequestV2, AuthenticatedScratchPageV2,
+    RequestTransportV2, ScratchPageKindV2, ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2,
+    ACCELERATOR_REQUEST_HEADER_BYTES_V2, SCRATCH_PAGE_HEADER_BYTES_V2,
 };
 use dclutch_general_accelerator_test_caller_sbf::GENERAL_ACCELERATOR_TEST_CALLER_AUTHORITY_SEED_V1;
 use dclutch_general_adapter_contract::{
     account_rules_v3::general_account_profile_fixed_count_v3,
     hot_candidate_v3::{
-        GENERAL_HOT_COMMON_IDENTITIES_V3, general_hot_candidate_bank_len_v3,
-        general_hot_scalar_count_v3, identity, scalar,
+        general_hot_candidate_bank_len_v3, general_hot_scalar_count_v3, identity, scalar,
+        GENERAL_HOT_COMMON_IDENTITIES_V3,
     },
     local_state_v3::{
-        GeneralLocalStateHeaderV3, GeneralLocalStateKindV3, encode_general_local_state_v3_atomic,
-        general_local_state_len_v3,
+        encode_general_local_state_v3_atomic, general_local_state_len_v3,
+        GeneralLocalStateHeaderV3, GeneralLocalStateKindV3,
     },
-    runtime_manifest::{SettlementManifestV2, settlement_manifest_len_v2},
+    runtime_manifest::{settlement_manifest_len_v2, SettlementManifestV2},
     runtime_selection::{
-        RUNTIME_SELECTION_CURSOR_BYTES_V2, RuntimeSelectionCursorV2, RuntimeSelectionPhaseV2,
-        consider_verified_candidate_v2, freeze_selection_v2,
+        consider_verified_candidate_v2, freeze_selection_v2, RuntimeSelectionCursorV2,
+        RuntimeSelectionPhaseV2, RUNTIME_SELECTION_CURSOR_BYTES_V2,
     },
     runtime_settlement::{
-        RuntimeSettlementActionV2, RuntimeSettlementBuffersV2, RuntimeSettlementViewV2,
         evaluate_runtime_settlement_v2, initialize_runtime_settlement_v2,
-        runtime_settlement_effect_len_v2,
+        runtime_settlement_effect_len_v2, RuntimeSettlementActionV2, RuntimeSettlementBuffersV2,
+        RuntimeSettlementViewV2,
     },
     runtime_verify::{
+        evaluate_runtime_consider_row_with_manifest_v2, runtime_verifier_len_v2,
         AuthenticatedOrderTermsV2, RuntimeConsiderRowBuffersV2, RuntimeConsiderRowViewV2,
-        RuntimeManifestBuffersV2, evaluate_runtime_consider_row_with_manifest_v2,
-        runtime_verifier_len_v2,
+        RuntimeManifestBuffersV2,
     },
     runtime_width::{
+        candidate_len, execution_len, page_len, settlement_cursor_len, verified_candidate_len,
         CandidateHeaderV2, CandidateV2, ExecutionHeaderV2, ExecutionV2, PageHeaderV2, PageV2,
-        SettlementCursorV2, VerifiedCandidateHeaderV2, VerifiedCandidateV2, candidate_len,
-        execution_len, page_len, settlement_cursor_len, verified_candidate_len,
+        SettlementCursorV2, VerifiedCandidateHeaderV2, VerifiedCandidateV2,
     },
     state_artifacts_v3::{
-        GENERAL_PRIMARY_STATE_ACCOUNT_V3, GeneralReadonlyEvidenceKindV3,
-        general_readonly_evidence_v3,
+        general_readonly_evidence_v3, GeneralReadonlyEvidenceKindV3,
+        GENERAL_PRIMARY_STATE_ACCOUNT_V3,
     },
 };
 use dclutch_general_codec::{
-    Action, MAX_SELECTION_CRITERIA, SelectionCriterion, SelectionPolicyV1,
-    successor_request_v2::ControllerRequestV2,
+    successor_request_v2::ControllerRequestV2, Action, SelectionCriterion, SelectionPolicyV1,
+    MAX_SELECTION_CRITERIA,
 };
 use dclutch_general_config_contract::v3::{GeneralConfigV3, GeneralConfigV3Input};
 use solana_account::Account;
@@ -66,7 +66,7 @@ const ACCELERATOR: Pubkey = Pubkey::new_from_array([0xa1; 32]);
 const CALLER: Pubkey = Pubkey::new_from_array([0xa2; 32]);
 const REQUEST_ACCOUNT: Pubkey = Pubkey::new_from_array([0xa3; 32]);
 const DUMMY: Pubkey = Pubkey::new_from_array([0xa4; 32]);
-const PRODUCT: [u8; 32] = [0xb1; 32];
+const PRODUCT_RECORD: [u8; 64] = [0xb1; 64];
 const BATCH: [u8; 32] = [0xb2; 32];
 const POLICY: [u8; 32] = [0xb3; 32];
 const FIRST_CANDIDATE: [u8; 32] = [0xb4; 32];
@@ -90,6 +90,10 @@ struct TerminalFixture {
 
 fn content(value: u8) -> ContentId {
     ContentId::new([value; 32]).expect("nonzero content")
+}
+
+fn product_id() -> [u8; 32] {
+    hash(&PRODUCT_RECORD).to_bytes()
 }
 
 fn add_account(test: &mut ProgramTest, key: Pubkey, owner: Pubkey, data: Vec<u8>) {
@@ -117,12 +121,16 @@ fn policy() -> SelectionPolicyV1 {
 }
 
 fn config(width: u32) -> Vec<u8> {
+    config_with_price_scale(u64::from(width))
+}
+
+fn config_with_price_scale(price_scale: u64) -> Vec<u8> {
     GeneralConfigV3::new(GeneralConfigV3Input {
         capacity_profile_id: [1; 32],
         claim_basis_id: [2; 32],
         program_set_id: [3; 32],
         generation: 9,
-        price_scale: u64::from(width),
+        price_scale,
         collection_slots: 10,
         selection_slots: 10,
         settlement_slots: 10,
@@ -155,7 +163,7 @@ fn verified_candidate(
             candidate_coordinate: coordinate,
             revision,
             candidate_id,
-            product_id: PRODUCT,
+            product_id: product_id(),
             batch_id: BATCH,
             filled_lots,
             quote_debit,
@@ -281,7 +289,7 @@ fn input_bank(width: u32, action: Action) -> Vec<u8> {
         (identity::PARENT_REQUEST_DIGEST, [1; 32]),
         (identity::RELEASE_SET, [2; 32]),
         (identity::MARKET, [3; 32]),
-        (identity::PRODUCT_RECORD_DIGEST, [4; 32]),
+        (identity::PRODUCT_RECORD_DIGEST, product_id()),
         (identity::SEMANTIC_BASIS_ID, [5; 32]),
         (identity::LINKED_BASIS_RECORD_DIGEST, [6; 32]),
         (identity::REALM, [7; 32]),
@@ -370,7 +378,7 @@ fn real_sbf_fixture(
     width: u32,
     controller: ControllerRequestV2,
     bank: Vec<u8>,
-    runtime_data: BTreeMap<u16, Vec<u8>>,
+    mut runtime_data: BTreeMap<u16, Vec<u8>>,
 ) -> RealSbfFixture {
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
@@ -383,6 +391,10 @@ fn real_sbf_fixture(
     );
     add_account(&mut test, authority, system_program::ID, Vec::new());
     add_account(&mut test, DUMMY, system_program::ID, Vec::new());
+    runtime_data.entry(1).or_insert_with(|| config(width));
+    runtime_data
+        .entry(2)
+        .or_insert_with(|| PRODUCT_RECORD.to_vec());
 
     let family_request = controller.to_bytes().expect("controller request");
     let envelope = HotExecutionEnvelopeV3::new(
@@ -626,7 +638,7 @@ fn terminal_fixture(width: u32) -> TerminalFixture {
             candidate_coordinate: 2,
             price_scale: u64::from(width),
             candidate_id: BEST_CANDIDATE,
-            product_id: PRODUCT,
+            product_id: product_id(),
             batch_id: BATCH,
         },
         &ones,
@@ -840,12 +852,23 @@ fn request(
     page_index: u32,
     execution_index: u8,
 ) -> ControllerRequestV2 {
+    request_with_manifest_order(action, revision, page_index, execution_index, 0)
+}
+
+fn request_with_manifest_order(
+    action: Action,
+    revision: u64,
+    page_index: u32,
+    execution_index: u8,
+    manifest_order_index: u8,
+) -> ControllerRequestV2 {
     ControllerRequestV2 {
         action,
         expected_revision: revision,
         candidate_id: Some(BEST_CANDIDATE),
         page_index,
         execution_index,
+        manifest_order_index,
         state_bump: 1,
         terminal_record_bump: if action == Action::Close { 2 } else { 0 },
     }
@@ -862,6 +885,11 @@ fn bank_for_request(width: u32, controller: ControllerRequestV2) -> Vec<u8> {
         &mut bank,
         scalar::EXECUTION_INDEX,
         u64::from(controller.execution_index),
+    );
+    write_scalar(
+        &mut bank,
+        scalar::MANIFEST_ORDER_INDEX,
+        u64::from(controller.manifest_order_index),
     );
     bank
 }
@@ -914,12 +942,19 @@ async fn execute_settlement(
     manifest: Option<&[u8]>,
     page_index: u32,
     execution_index: u8,
+    manifest_order_index: u8,
 ) -> AcceleratorAckV2<'static> {
     let revision = SettlementCursorV2::decode(cursor)
         .expect("settlement cursor")
         .header()
         .revision;
-    let controller = request(action, revision, page_index, execution_index);
+    let controller = request_with_manifest_order(
+        action,
+        revision,
+        page_index,
+        execution_index,
+        manifest_order_index,
+    );
     let (ack, _) = execute(real_sbf_fixture(
         fixture.width,
         controller,
@@ -964,6 +999,7 @@ async fn real_sbf_consider_replaces_with_best_valid_submitted_candidate_then_fre
             candidate_id: Some(BEST_CANDIDATE),
             page_index: 2,
             execution_index: 0,
+            manifest_order_index: 0,
             state_bump: 1,
             terminal_record_bump: 0,
         };
@@ -1004,6 +1040,7 @@ async fn real_sbf_consider_replaces_with_best_valid_submitted_candidate_then_fre
             candidate_id: None,
             page_index: 0,
             execution_index: 0,
+            manifest_order_index: 0,
             state_bump: 1,
             terminal_record_bump: 0,
         };
@@ -1041,12 +1078,45 @@ async fn run_full_settlement_lifecycle(width: u32) {
     let final_manifest =
         SettlementManifestV2::decode(fixture.manifests.get(1).expect("final manifest bytes"))
             .expect("final manifest");
-    let rows = [
-        (first_manifest.as_bytes(), 0_u8, 1_u32),
-        (final_manifest.as_bytes(), 0, 2),
-        (final_manifest.as_bytes(), 1, 2),
+    let row_sources = [
+        (first_manifest.as_bytes(), 0_u8),
+        (final_manifest.as_bytes(), 0),
+        (final_manifest.as_bytes(), 1),
     ];
+    let rows = row_sources.map(|(manifest_bytes, manifest_order_index)| {
+        let manifest = SettlementManifestV2::decode(manifest_bytes).expect("manifest");
+        let selected = manifest
+            .order(u32::from(manifest_order_index))
+            .expect("selected manifest row");
+        (
+            manifest_bytes,
+            manifest_order_index,
+            selected.header().source_page_index,
+            u8::try_from(selected.header().source_execution_index).expect("source execution"),
+        )
+    });
+    assert_eq!(rows[2].1, 1);
+    assert_eq!(rows[2].2, 2);
+    assert_eq!(rows[2].3, 0);
     let mut cursor = initialized_cursor(&fixture);
+
+    // The manifest ordinal and source coordinates are distinct authenticated
+    // facts. Row zero originated on source page zero; substituting the old
+    // one-based/page-derived value must refuse without any runtime write.
+    let substituted_source = execute_settlement(
+        &fixture,
+        Action::Collect,
+        &cursor,
+        Some(first_manifest.as_bytes()),
+        1,
+        0,
+        0,
+    )
+    .await;
+    assert_eq!(
+        substituted_source.disposition(),
+        AcceleratorDispositionV2::Refused
+    );
 
     // A caller cannot skip to order three. Semantic refusal returns a typed
     // refusal and the readonly cursor/manifest accounts remain byte-identical.
@@ -1056,12 +1126,15 @@ async fn run_full_settlement_lifecycle(width: u32) {
         &cursor,
         Some(final_manifest.as_bytes()),
         2,
+        0,
         1,
     )
     .await;
     assert_eq!(refused.disposition(), AcceleratorDispositionV2::Refused);
 
-    for (expected_coordinate, (manifest, execution_index, page_index)) in rows.iter().enumerate() {
+    for (expected_coordinate, (manifest, manifest_order, page_index, execution_index)) in
+        rows.iter().enumerate()
+    {
         let ack = execute_settlement(
             &fixture,
             Action::Collect,
@@ -1069,6 +1142,7 @@ async fn run_full_settlement_lifecycle(width: u32) {
             Some(manifest),
             *page_index,
             *execution_index,
+            *manifest_order,
         )
         .await;
         assert_eq!(ack.disposition(), AcceleratorDispositionV2::Accepted);
@@ -1081,7 +1155,7 @@ async fn run_full_settlement_lifecycle(width: u32) {
             &cursor,
             RuntimeSettlementActionV2::Collect,
             Some(manifest),
-            u32::from(*execution_index),
+            u32::from(*manifest_order),
         );
         let expected = SettlementCursorV2::decode(&cursor).expect("collected cursor");
         assert_eq!(
@@ -1095,7 +1169,7 @@ async fn run_full_settlement_lifecycle(width: u32) {
     }
     assert_eq!(
         read_payload_scalar(
-            execute_settlement(&fixture, Action::Materialize, &cursor, None, 0, 0)
+            execute_settlement(&fixture, Action::Materialize, &cursor, None, 0, 0, 0)
                 .await
                 .payload(),
             scalar::CURSOR_PHASE
@@ -1110,7 +1184,9 @@ async fn run_full_settlement_lifecycle(width: u32) {
         0,
     );
 
-    for (expected_coordinate, (manifest, execution_index, page_index)) in rows.iter().enumerate() {
+    for (expected_coordinate, (manifest, manifest_order, page_index, execution_index)) in
+        rows.iter().enumerate()
+    {
         let ack = execute_settlement(
             &fixture,
             Action::Distribute,
@@ -1118,6 +1194,7 @@ async fn run_full_settlement_lifecycle(width: u32) {
             Some(manifest),
             *page_index,
             *execution_index,
+            *manifest_order,
         )
         .await;
         assert_eq!(ack.disposition(), AcceleratorDispositionV2::Accepted);
@@ -1130,7 +1207,7 @@ async fn run_full_settlement_lifecycle(width: u32) {
             &cursor,
             RuntimeSettlementActionV2::Distribute,
             Some(manifest),
-            u32::from(*execution_index),
+            u32::from(*manifest_order),
         );
     }
     let ready = SettlementCursorV2::decode(&cursor).expect("ready cursor");
@@ -1151,7 +1228,7 @@ async fn run_full_settlement_lifecycle(width: u32) {
     .await;
     assert_eq!(refused.disposition(), AcceleratorDispositionV2::Refused);
 
-    let ack = execute_settlement(&fixture, Action::Close, &cursor, None, 0, 0).await;
+    let ack = execute_settlement(&fixture, Action::Close, &cursor, None, 0, 0, 0).await;
     assert_eq!(ack.disposition(), AcceleratorDispositionV2::Accepted);
     assert_eq!(read_payload_scalar(ack.payload(), scalar::TERMINAL), 1);
     assert_eq!(read_payload_scalar(ack.payload(), scalar::CURSOR_PHASE), 8);
@@ -1209,6 +1286,7 @@ async fn hostile_n258_initializes_and_refuses_candidate_substitution() {
         &cursor,
         Some(final_manifest.as_bytes()),
         2,
+        0,
         1,
     )
     .await;
@@ -1216,7 +1294,7 @@ async fn hostile_n258_initializes_and_refuses_candidate_substitution() {
         out_of_order.disposition(),
         AcceleratorDispositionV2::Refused
     );
-    let controller = request(Action::Collect, 1, 2, 1);
+    let controller = request_with_manifest_order(Action::Collect, 1, 2, 0, 1);
     let mut runtime = runtime_for_settlement(
         &fixture,
         Action::Collect,
@@ -1238,4 +1316,37 @@ async fn hostile_n258_initializes_and_refuses_candidate_substitution() {
     ))
     .await;
     assert_eq!(ack.disposition(), AcceleratorDispositionV2::Refused);
+}
+
+#[tokio::test]
+async fn product_or_price_scale_substitution_refuses_without_runtime_writes() {
+    for width in [1_u32, 258] {
+        let fixture = terminal_fixture(width);
+        let controller = request(Action::InitializeSettlement, 0, 0, 0);
+
+        let mut substituted_product = runtime_for_initialize(&fixture);
+        substituted_product.insert(2, vec![0xcc; PRODUCT_RECORD.len()]);
+        let (ack, _) = execute(real_sbf_fixture(
+            width,
+            controller,
+            bank_for_request(width, controller),
+            substituted_product,
+        ))
+        .await;
+        assert_eq!(ack.disposition(), AcceleratorDispositionV2::Refused);
+
+        let mut substituted_scale = runtime_for_initialize(&fixture);
+        substituted_scale.insert(
+            1,
+            config_with_price_scale(u64::from(width).checked_add(1).expect("scale")),
+        );
+        let (ack, _) = execute(real_sbf_fixture(
+            width,
+            controller,
+            bank_for_request(width, controller),
+            substituted_scale,
+        ))
+        .await;
+        assert_eq!(ack.disposition(), AcceleratorDispositionV2::Refused);
+    }
 }

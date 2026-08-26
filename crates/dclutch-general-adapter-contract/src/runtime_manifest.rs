@@ -63,6 +63,8 @@ pub struct SettlementOrderHeaderV2 {
     pub outcome_count: u32,
     /// One-based global order coordinate in the Candidate.
     pub order_coordinate: u32,
+    /// Zero-based source Candidate-page index of the order's first fragment.
+    pub source_page_index: u32,
     /// Signed order nonce.
     pub nonce: u64,
     /// Candidate content identity.
@@ -77,6 +79,8 @@ pub struct SettlementOrderHeaderV2 {
     pub quote_debit: u64,
     /// Exact candidate-wide rounded quote credit.
     pub quote_credit: u64,
+    /// Zero-based source execution index of the order's first fragment.
+    pub source_execution_index: u32,
 }
 
 /// Borrowed verifier-derived settlement order with two `u64[N]` tails.
@@ -98,6 +102,7 @@ impl<'a> SettlementOrderV2<'a> {
         let header = SettlementOrderHeaderV2 {
             outcome_count: read_u32(bytes, 12)?,
             order_coordinate: read_u32(bytes, 16)?,
+            source_page_index: read_u32(bytes, 20)?,
             nonce: read_u64(bytes, 24)?,
             candidate_id: read_array32(bytes, 32)?,
             order_id: read_array32(bytes, 64)?,
@@ -105,8 +110,9 @@ impl<'a> SettlementOrderV2<'a> {
             lots: read_u64(bytes, 128)?,
             quote_debit: read_u64(bytes, 136)?,
             quote_credit: read_u64(bytes, 144)?,
+            source_execution_index: read_u32(bytes, 152)?,
         };
-        if !zero(bytes, 20, 4)? || !zero(bytes, 152, 8)? {
+        if !zero(bytes, 156, 4)? {
             return Err(RuntimeManifestErrorV2::InvalidHeader);
         }
         if bytes.len() != settlement_order_len_v2(header.outcome_count)? {
@@ -313,6 +319,7 @@ pub(crate) fn write_scaled_order_v2(
     write_header(order, &ORDER_MAGIC, ORDER_PHASE)?;
     put_u32(order, 12, header.outcome_count)?;
     put_u32(order, 16, header.order_coordinate)?;
+    put_u32(order, 20, header.source_page_index)?;
     put_u64(order, 24, header.nonce)?;
     put(order, 32, &header.candidate_id)?;
     put(order, 64, &header.order_id)?;
@@ -320,6 +327,7 @@ pub(crate) fn write_scaled_order_v2(
     put_u64(order, 128, header.lots)?;
     put_u64(order, 136, header.quote_debit)?;
     put_u64(order, 144, header.quote_credit)?;
+    put_u32(order, 152, header.source_execution_index)?;
     let outputs = derived_len(SETTLEMENT_ORDER_HEADER_BYTES_V2, header.outcome_count, 8)?;
     for outcome in 0..header.outcome_count {
         let input = multiply(read_le_tail(claim_inputs_per_lot_le, outcome)?, header.lots)?;
@@ -601,6 +609,7 @@ mod tests {
         SettlementOrderHeaderV2 {
             outcome_count: width,
             order_coordinate: coordinate,
+            source_page_index: coordinate - 1,
             nonce: 8,
             candidate_id: CANDIDATE,
             order_id: [u8::try_from(coordinate).expect("small coordinate"); 32],
@@ -608,6 +617,7 @@ mod tests {
             lots: 2,
             quote_debit: 4,
             quote_credit: 0,
+            source_execution_index: coordinate - 1,
         }
     }
 
@@ -633,6 +643,9 @@ mod tests {
                             .claim_input(width - 1),
                         Ok(2)
                     );
+                    let selected = manifest.order(rows - 1).expect("order coordinates");
+                    assert_eq!(selected.header().source_page_index, rows - 1);
+                    assert_eq!(selected.header().source_execution_index, rows - 1);
                 }
             }
         }
@@ -655,6 +668,13 @@ mod tests {
             SettlementManifestV2::decode(&bytes),
             Err(RuntimeManifestErrorV2::NonCanonicalOrder)
         );
+        bytes[second + 16..second + 20].copy_from_slice(&2_u32.to_le_bytes());
+        bytes[second + 156] = 1;
+        assert_eq!(
+            SettlementManifestV2::decode(&bytes),
+            Err(RuntimeManifestErrorV2::InvalidHeader)
+        );
+        bytes[second + 156] = 0;
         bytes.truncate(bytes.len() - 1);
         assert_eq!(
             SettlementManifestV2::decode(&bytes),

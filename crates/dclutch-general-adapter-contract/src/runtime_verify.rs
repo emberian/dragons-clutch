@@ -154,6 +154,16 @@ impl RuntimeVerifierLayoutV2 {
         264
     }
 
+    /// Source page index of the current order's first fragment.
+    pub const fn current_source_page_index() -> u32 {
+        272
+    }
+
+    /// Source execution index of the current order's first fragment.
+    pub const fn current_source_execution_index() -> u32 {
+        276
+    }
+
     /// First runtime `u64` tail offset.
     pub const fn tails_base() -> u32 {
         288
@@ -270,7 +280,7 @@ impl<'a> RuntimeCandidateVerifierV2<'a> {
             || read_u16(bytes, 8)? != VERSION
             || !zero_range(bytes, 11, 1)?
             || !zero_range(bytes, 44, 4)?
-            || !zero_range(bytes, 272, 16)?
+            || !zero_range(bytes, 280, 8)?
         {
             return Err(RuntimeVerifyErrorV2::InvalidCursor);
         }
@@ -588,6 +598,8 @@ fn evaluate_runtime_consider_row_inner_v2(
         buffers.cursor_scratch,
         execution,
         view.authenticated_order,
+        view.expected_page_index,
+        view.expected_row_index,
         view.max_orders,
         &mut manifest_writer,
     )?;
@@ -863,6 +875,7 @@ impl ManifestWriterV2<'_> {
             SettlementOrderHeaderV2 {
                 outcome_count: header.outcome_count,
                 order_coordinate: header.order_count,
+                source_page_index: read_u32(cursor, 272)?,
                 nonce: read_u64(cursor, 240)?,
                 candidate_id: header.candidate_id,
                 order_id: read_array32(cursor, 176)?,
@@ -870,6 +883,7 @@ impl ManifestWriterV2<'_> {
                 lots,
                 quote_debit,
                 quote_credit,
+                source_execution_index: read_u32(cursor, 276)?,
             },
             claim_inputs_per_lot,
             claim_outputs_per_lot,
@@ -898,6 +912,8 @@ fn ingest_execution(
     cursor: &mut [u8],
     execution: crate::runtime_width::ExecutionV2<'_>,
     order: AuthenticatedOrderTermsV2,
+    source_page_index: u32,
+    source_execution_index: u32,
     max_orders: u32,
     manifest: &mut Option<ManifestWriterV2<'_>>,
 ) -> RuntimeVerifyResultV2<()> {
@@ -916,10 +932,24 @@ fn ingest_execution(
                 return Err(RuntimeVerifyErrorV2::NonCanonicalOrder);
             }
             finalize_current_order(cursor, manifest)?;
-            start_current_order(cursor, execution, order, max_orders)?;
+            start_current_order(
+                cursor,
+                execution,
+                order,
+                source_page_index,
+                source_execution_index,
+                max_orders,
+            )?;
         }
     } else {
-        start_current_order(cursor, execution, order, max_orders)?;
+        start_current_order(
+            cursor,
+            execution,
+            order,
+            source_page_index,
+            source_execution_index,
+            max_orders,
+        )?;
     }
 
     let lots = execution_header.lots;
@@ -954,6 +984,8 @@ fn start_current_order(
     cursor: &mut [u8],
     execution: crate::runtime_width::ExecutionV2<'_>,
     order: AuthenticatedOrderTermsV2,
+    source_page_index: u32,
+    source_execution_index: u32,
     max_orders: u32,
 ) -> RuntimeVerifyResultV2<()> {
     let header = RuntimeCandidateVerifierV2::decode(cursor)?.header();
@@ -972,6 +1004,8 @@ fn start_current_order(
     put_u64(cursor, 248, order.max_lots)?;
     put_u64(cursor, 256, order.max_quote_debit_per_lot)?;
     put_u64(cursor, 264, 0)?;
+    put_u32(cursor, 272, source_page_index)?;
+    put_u32(cursor, 276, source_execution_index)?;
     let count = header.outcome_count;
     for outcome in 0..count {
         write_tail_u64(
@@ -1070,7 +1104,7 @@ fn finalize_current_order(
     put_u64(cursor, 160, add(header.quote_debit, debit)?)?;
     put_u64(cursor, 168, add(header.quote_credit, credit)?)?;
     put_byte(cursor, 10, 0)?;
-    zero_mut(cursor, 176, 96)?;
+    zero_mut(cursor, 176, 104)?;
     zero_tail(cursor, header.outcome_count, CURRENT_RECEIVE_TAIL)?;
     zero_tail(cursor, header.outcome_count, CURRENT_DELIVER_TAIL)
 }
@@ -1178,15 +1212,21 @@ fn validate_cursor(bytes: &[u8], header: RuntimeVerifierHeaderV2) -> RuntimeVeri
     if header.has_current_order {
         let current_lots = read_u64(bytes, 264)?;
         let max_lots = read_u64(bytes, 248)?;
+        let source_page_index = read_u32(bytes, 272)?;
+        let source_execution_index = read_u32(bytes, 276)?;
+        let source_precedes_cursor = source_page_index < header.next_page_index
+            || source_page_index == header.next_page_index
+                && source_execution_index < header.next_row_index;
         if zero_identity(&read_array32(bytes, 176)?)
             || zero_identity(&read_array32(bytes, 208)?)
             || max_lots == 0
             || current_lots == 0
             || current_lots > max_lots
+            || !source_precedes_cursor
         {
             return Err(RuntimeVerifyErrorV2::InvalidCursor);
         }
-    } else if !zero_range(bytes, 176, 96)?
+    } else if !zero_range(bytes, 176, 104)?
         || !tail_is_zero(bytes, header.outcome_count, CURRENT_RECEIVE_TAIL)?
         || !tail_is_zero(bytes, header.outcome_count, CURRENT_DELIVER_TAIL)?
     {
@@ -1613,6 +1653,12 @@ mod tests {
             }
         );
         assert_eq!(unchanged_verified, zero_verified);
+        let mut inconsistent_source = middle.clone();
+        inconsistent_source[272..276].copy_from_slice(&1_u32.to_le_bytes());
+        assert_eq!(
+            RuntimeCandidateVerifierV2::decode(&inconsistent_source),
+            Err(RuntimeVerifyErrorV2::InvalidCursor)
+        );
 
         let (summary, terminal, verified) = apply_row(
             &candidate,
@@ -1826,10 +1872,38 @@ mod tests {
         );
         assert_eq!(manifest.order(0).expect("first").claim_output(0), Ok(1));
         assert_eq!(
+            manifest.order(0).expect("first").header().source_page_index,
+            0
+        );
+        assert_eq!(
+            manifest
+                .order(0)
+                .expect("first")
+                .header()
+                .source_execution_index,
+            0
+        );
+        assert_eq!(
             manifest.order(1).expect("second").header().order_coordinate,
             2
         );
         assert_eq!(manifest.order(1).expect("second").claim_output(1), Ok(1));
+        assert_eq!(
+            manifest
+                .order(1)
+                .expect("second")
+                .header()
+                .source_page_index,
+            0
+        );
+        assert_eq!(
+            manifest
+                .order(1)
+                .expect("second")
+                .header()
+                .source_execution_index,
+            1
+        );
         assert!(VerifiedCandidateV2::decode(&verified_terminal).is_ok());
 
         let mut undersized_scratch = vec![0; manifest_len - 1];

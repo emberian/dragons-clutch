@@ -11,6 +11,8 @@ use super::{Action, Error, Result};
 pub const CONTROLLER_REQUEST_BYTES_V2: usize = 64;
 /// Action selector offset consumed by CapabilityProgramSet.
 pub const CONTROLLER_REQUEST_ACTION_OFFSET_V2: usize = 10;
+/// Verifier-emitted row ordinal inside the selected settlement manifest.
+pub const CONTROLLER_REQUEST_MANIFEST_ORDER_OFFSET_V2: usize = 11;
 /// Primary action-state PDA bump offset.
 pub const CONTROLLER_REQUEST_STATE_BUMP_OFFSET_V2: usize = 61;
 /// Optional terminal-record PDA bump offset.
@@ -32,6 +34,8 @@ pub struct ControllerRequestV2 {
     pub page_index: u32,
     /// Action-specific row coordinate inside the selected physical chunk.
     pub execution_index: u8,
+    /// Row ordinal inside the selected verifier-emitted settlement manifest.
+    pub manifest_order_index: u8,
     /// Untrusted canonical bump witness for the primary action state.
     pub state_bump: u8,
     /// Untrusted canonical bump witness for Close's terminal record.
@@ -50,12 +54,13 @@ impl ControllerRequestV2 {
         if read_u16(input, 8)? != VERSION {
             return Err(Error::UnsupportedVersion);
         }
-        if !zero_range(input, 11, 5)? || byte(input, 63)? != 0 {
+        if !zero_range(input, 12, 4)? || byte(input, 63)? != 0 {
             return Err(Error::NonCanonicalPadding);
         }
         let raw_candidate = read_array32(input, 24)?;
         let value = Self {
             action: Action::decode(byte(input, CONTROLLER_REQUEST_ACTION_OFFSET_V2)?)?,
+            manifest_order_index: byte(input, CONTROLLER_REQUEST_MANIFEST_ORDER_OFFSET_V2)?,
             expected_revision: read_u64(input, 16)?,
             candidate_id: if raw_candidate == [0; 32] {
                 None
@@ -82,6 +87,11 @@ impl ControllerRequestV2 {
             CONTROLLER_REQUEST_ACTION_OFFSET_V2,
             self.action as u8,
         )?;
+        put_byte(
+            &mut output,
+            CONTROLLER_REQUEST_MANIFEST_ORDER_OFFSET_V2,
+            self.manifest_order_index,
+        )?;
         put(&mut output, 16, &self.expected_revision.to_le_bytes())?;
         if let Some(candidate) = self.candidate_id {
             put(&mut output, 24, &candidate)?;
@@ -106,7 +116,9 @@ impl ControllerRequestV2 {
             return Err(Error::ZeroCoordinate);
         }
         let nonterminal_bump = self.action != Action::Close && self.terminal_record_bump != 0;
-        if nonterminal_bump {
+        let nonrow_manifest = !matches!(self.action, Action::Collect | Action::Distribute)
+            && self.manifest_order_index != 0;
+        if nonterminal_bump || nonrow_manifest {
             return Err(Error::NonCanonicalPadding);
         }
         match self.action {
@@ -211,6 +223,11 @@ mod tests {
             } else {
                 0
             },
+            manifest_order_index: if matches!(action, Action::Collect | Action::Distribute) {
+                1
+            } else {
+                0
+            },
             state_bump: 0,
             terminal_record_bump: if action == Action::Close { 255 } else { 0 },
         }
@@ -239,7 +256,7 @@ mod tests {
         let canonical = request(Action::Collect)
             .to_bytes()
             .expect("canonical request");
-        for offset in [8_usize, 11, 63] {
+        for offset in [8_usize, 12, 63] {
             let mut hostile = canonical;
             *hostile.get_mut(offset).expect("hostile offset") ^= 1;
             assert!(ControllerRequestV2::decode(&hostile).is_err());
@@ -249,6 +266,17 @@ mod tests {
         assert_eq!(
             ControllerRequestV2::decode(&terminal),
             Err(Error::NonCanonicalPadding)
+        );
+
+        let mut nonrow_manifest = request(Action::Materialize);
+        nonrow_manifest.manifest_order_index = 1;
+        assert_eq!(nonrow_manifest.to_bytes(), Err(Error::NonCanonicalPadding));
+
+        let row = request(Action::Distribute);
+        let row_bytes = row.to_bytes().expect("row request");
+        assert_eq!(
+            row_bytes[CONTROLLER_REQUEST_MANIFEST_ORDER_OFFSET_V2],
+            row.manifest_order_index
         );
     }
 }

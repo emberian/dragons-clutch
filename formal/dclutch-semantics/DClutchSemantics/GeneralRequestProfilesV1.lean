@@ -24,7 +24,15 @@ def requirePrefix (action : Action) : List Operation := [
   ⟨.requireU64, false, false, 0, 0, requestMagicWord⟩,
   ⟨.requireU16, false, false, 8, 0, ControllerRequestV2.abiVersion⟩,
   ⟨.requireU8, false, false, 10, 0, action.tag.toNat⟩,
-  ⟨.requireZeroRange, false, false, 11, 0, 5⟩
+  ⟨.requireZeroRange, false, false, 12, 0, 4⟩
+]
+
+def manifestOrderCoordinate : List Operation := [
+  ⟨.projectU8, false, false, 11, 87, 0⟩
+]
+
+def requireNoManifestOrder : List Operation := [
+  ⟨.requireU8, false, false, 11, 0, 0⟩
 ]
 
 def bumpCoordinates (action : Action) : List Operation := [
@@ -63,11 +71,13 @@ def profile (action : Action) : Profile := {
   -- The common Strategy bank has one stable geometry for all action-selected
   -- programs. Request projection fills only the action's coordinates; account
   -- projection and Transition own the remaining values.
-  commonScalars := 87
+  commonScalars := 88
   itemScalarStride := 6
   commonIdentities := 40
   itemIdentityStride := 0
   fixedOperations := requirePrefix action ++
+    (if action = .collect || action = .distribute then manifestOrderCoordinate
+      else requireNoManifestOrder) ++
     (if action = .freeze then freezeCoordinates else if action = .consider ||
       action = .collect || action = .distribute then rowCoordinates else candidateCoordinates) ++
     bumpCoordinates action
@@ -101,10 +111,23 @@ theorem freeze_has_no_candidate_projection :
           operation.requestOffset = 24 ∧ operation.immediate = 32) := by native_decide
 
 theorem row_actions_project_runtime_coordinates :
-    (profile .consider).commonScalars = 87 ∧
-      (profile .collect).commonScalars = 87 ∧
-      (profile .distribute).commonScalars = 87 ∧
+    (profile .consider).commonScalars = 88 ∧
+      (profile .collect).commonScalars = 88 ∧
+      (profile .distribute).commonScalars = 88 ∧
       (profile .consider).itemScalarStride = 6 := by native_decide
+
+theorem settlement_rows_alone_project_manifest_order :
+    ((profile .collect).fixedOperations.any
+      (fun operation => operation.kind = .projectU8 ∧
+        operation.requestOffset = 11 ∧ operation.register = 87)) ∧
+    ((profile .distribute).fixedOperations.any
+      (fun operation => operation.kind = .projectU8 ∧
+        operation.requestOffset = 11 ∧ operation.register = 87)) ∧
+    ([.consider, .freeze, .initializeSettlement, .materialize, .close].all fun action =>
+      (profile action).fixedOperations.any
+        (fun operation => operation.kind = .requireU8 ∧
+          operation.requestOffset = 11 ∧ operation.immediate = 0)) := by
+  native_decide
 
 theorem close_alone_projects_terminal_record_bump :
     (profile .close).fixedOperations.any

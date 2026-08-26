@@ -5,30 +5,31 @@ use std::{vec, vec::Vec};
 use dclutch_capability_program_contract::hot_v3::HotExecutionEnvelopeV3;
 use dclutch_core_contract::ContentId;
 use dclutch_execution_strategy_contract::v2::{
-    ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2, ACCELERATOR_REQUEST_HEADER_BYTES_V2, AcceleratorAckV2,
-    AcceleratorDispositionV2, AcceleratorRequestV2, AuthenticatedScratchPageV2, RequestTransportV2,
-    SCRATCH_PAGE_HEADER_BYTES_V2, ScratchPageKindV2,
+    AcceleratorAckV2, AcceleratorDispositionV2, AcceleratorRequestV2, AuthenticatedScratchPageV2,
+    RequestTransportV2, ScratchPageKindV2, ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2,
+    ACCELERATOR_REQUEST_HEADER_BYTES_V2, SCRATCH_PAGE_HEADER_BYTES_V2,
 };
 use dclutch_general_accelerator_test_caller_sbf::GENERAL_ACCELERATOR_TEST_CALLER_AUTHORITY_SEED_V1;
 use dclutch_general_adapter_contract::{
     account_rules_v3::general_account_profile_fixed_count_v3,
     hot_candidate_v3::{
-        GENERAL_HOT_COMMON_IDENTITIES_V3, general_hot_candidate_bank_len_v3,
-        general_hot_scalar_count_v3, scalar,
+        general_hot_candidate_bank_len_v3, general_hot_scalar_count_v3, identity, scalar,
+        GENERAL_HOT_COMMON_IDENTITIES_V3,
     },
     local_state_v3::{
-        GeneralLocalStateHeaderV3, GeneralLocalStateKindV3, encode_general_local_state_v3_atomic,
-        general_local_state_len_v3,
+        encode_general_local_state_v3_atomic, general_local_state_len_v3,
+        GeneralLocalStateHeaderV3, GeneralLocalStateKindV3,
     },
     runtime_selection::{
-        RUNTIME_SELECTION_CURSOR_BYTES_V2, RuntimeSelectionPhaseV2, consider_verified_candidate_v2,
+        consider_verified_candidate_v2, RuntimeSelectionPhaseV2, RUNTIME_SELECTION_CURSOR_BYTES_V2,
     },
-    runtime_width::{VerifiedCandidateHeaderV2, VerifiedCandidateV2, verified_candidate_len},
+    runtime_width::{verified_candidate_len, VerifiedCandidateHeaderV2, VerifiedCandidateV2},
 };
 use dclutch_general_codec::{
-    Action, MAX_SELECTION_CRITERIA, SelectionCriterion, SelectionPolicyV1,
-    successor_request_v2::ControllerRequestV2,
+    successor_request_v2::ControllerRequestV2, Action, SelectionCriterion, SelectionPolicyV1,
+    MAX_SELECTION_CRITERIA,
 };
+use dclutch_general_config_contract::v3::{GeneralConfigV3, GeneralConfigV3Input};
 use solana_account::Account;
 use solana_program::{
     hash::hash,
@@ -46,7 +47,9 @@ const CALLER: Pubkey = Pubkey::new_from_array([0xa2; 32]);
 const REQUEST_ACCOUNT: Pubkey = Pubkey::new_from_array([0xa3; 32]);
 const DUMMY: Pubkey = Pubkey::new_from_array([0xa4; 32]);
 const SELECTION_STATE: Pubkey = Pubkey::new_from_array([0xa5; 32]);
-const PRODUCT: [u8; 32] = [0xb1; 32];
+const CONFIG_ACCOUNT: Pubkey = Pubkey::new_from_array([0xa6; 32]);
+const PRODUCT_ACCOUNT: Pubkey = Pubkey::new_from_array([0xa7; 32]);
+const PRODUCT_RECORD: [u8; 64] = [0xb1; 64];
 const BATCH: [u8; 32] = [0xb2; 32];
 const POLICY: [u8; 32] = [0xb3; 32];
 const CANDIDATE: [u8; 32] = [0xb4; 32];
@@ -60,6 +63,31 @@ struct Fixture {
 
 fn content(value: u8) -> ContentId {
     ContentId::new([value; 32]).expect("nonzero content")
+}
+
+fn product_id() -> [u8; 32] {
+    hash(&PRODUCT_RECORD).to_bytes()
+}
+
+fn config() -> Vec<u8> {
+    GeneralConfigV3::new(GeneralConfigV3Input {
+        capacity_profile_id: [1; 32],
+        claim_basis_id: [2; 32],
+        program_set_id: [3; 32],
+        generation: 9,
+        price_scale: 1,
+        collection_slots: 10,
+        selection_slots: 10,
+        settlement_slots: 10,
+        max_orders_per_candidate: 4,
+        max_pages_per_candidate: 4,
+        continuation_reward_lamports: 1,
+        selection_policy_id: POLICY,
+        quote_surplus_beneficiary: [0xc2; 32],
+    })
+    .expect("General config")
+    .to_bytes()
+    .to_vec()
 }
 
 fn add_account(test: &mut ProgramTest, key: Pubkey, owner: Pubkey, data: Vec<u8>) {
@@ -93,7 +121,7 @@ fn open_selection(outcome_count: u32) -> Vec<u8> {
             candidate_coordinate: 1,
             revision: 1,
             candidate_id: CANDIDATE,
-            product_id: PRODUCT,
+            product_id: product_id(),
             batch_id: BATCH,
             filled_lots: 7,
             quote_debit: 7,
@@ -134,6 +162,12 @@ fn input_bank(outcome_count: u32) -> Vec<u8> {
         vec![0_u8; general_hot_candidate_bank_len_v3(outcome_count).expect("bank width")];
     write_scalar(&mut bank, scalar::OUTCOME_COUNT, u64::from(outcome_count));
     write_scalar(&mut bank, scalar::SETTLEMENT_POSITION_PRESENT, 0);
+    write_identity(
+        &mut bank,
+        outcome_count,
+        identity::PRODUCT_RECORD_DIGEST,
+        product_id(),
+    );
     bank
 }
 
@@ -145,6 +179,24 @@ fn write_scalar(bank: &mut [u8], coordinate: u32, value: u64) {
     bank.get_mut(start..start + 8)
         .expect("scalar bank")
         .copy_from_slice(&value.to_le_bytes());
+}
+
+fn write_identity(bank: &mut [u8], width: u32, coordinate: u32, value: [u8; 32]) {
+    let scalar_bytes = usize::try_from(general_hot_scalar_count_v3(width).expect("scalar count"))
+        .expect("scalar count")
+        .checked_mul(8)
+        .expect("scalar bytes");
+    let start = scalar_bytes
+        .checked_add(
+            usize::try_from(coordinate)
+                .expect("identity coordinate")
+                .checked_mul(32)
+                .expect("identity byte offset"),
+        )
+        .expect("identity bank offset");
+    bank.get_mut(start..start + 32)
+        .expect("identity bank")
+        .copy_from_slice(&value);
 }
 
 fn page_key(index: u32) -> Pubkey {
@@ -165,6 +217,8 @@ fn fixture(outcome_count: u32, corrupt_page: bool) -> Fixture {
     );
     add_account(&mut test, authority, system_program::ID, Vec::new());
     add_account(&mut test, DUMMY, system_program::ID, Vec::new());
+    add_account(&mut test, CONFIG_ACCOUNT, CALLER, config());
+    add_account(&mut test, PRODUCT_ACCOUNT, CALLER, PRODUCT_RECORD.to_vec());
     let selection_before = open_selection(outcome_count);
     add_account(&mut test, SELECTION_STATE, CALLER, selection_before.clone());
 
@@ -174,6 +228,7 @@ fn fixture(outcome_count: u32, corrupt_page: bool) -> Fixture {
         candidate_id: None,
         page_index: 0,
         execution_index: 0,
+        manifest_order_index: 0,
         state_bump: 1,
         terminal_record_bump: 0,
     }
@@ -266,6 +321,8 @@ fn fixture(outcome_count: u32, corrupt_page: bool) -> Fixture {
     *frame.first_mut().expect("authority frame") = authority;
     *frame.get_mut(4).expect("instructions frame") = sysvar::instructions::ID;
     *frame.get_mut(5).expect("Trading frame") = CALLER;
+    *frame.get_mut(18 + 1).expect("config runtime frame") = CONFIG_ACCOUNT;
+    *frame.get_mut(18 + 2).expect("Product runtime frame") = PRODUCT_ACCOUNT;
     *frame.get_mut(18 + 5).expect("selection runtime frame") = SELECTION_STATE;
     frame.extend(page_keys);
     let mut metas = Vec::with_capacity(frame.len() + 2);
