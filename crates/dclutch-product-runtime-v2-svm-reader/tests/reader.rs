@@ -94,8 +94,8 @@ struct RuntimeV3Snapshot {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RepresentationV3Snapshot {
-    descriptor_record: AuthenticatedRecordV2,
-    graph_record: AuthenticatedRecordV2,
+    descriptor_digest: [u8; 32],
+    graph_digest: [u8; 32],
     representation_authority: Pubkey,
     basis_width: u32,
     descriptor_id: [u8; 32],
@@ -447,9 +447,11 @@ fn authenticate_representation_v3(
         },
     )?;
     Ok(RepresentationV3Snapshot {
-        descriptor_record: authenticated.descriptor_record,
-        graph_record: authenticated.graph_record,
-        representation_authority: authenticated.representation_authority,
+        descriptor_digest: authenticated.admission.descriptor_id(),
+        graph_digest: authenticated.admission.graph_digest(),
+        representation_authority: Pubkey::new_from_array(
+            authenticated.admission.representation_authority(),
+        ),
         basis_width: authenticated.admission.basis_width(),
         descriptor_id: authenticated.admission.descriptor_id(),
         graph_id: authenticated.admission.graph_id(),
@@ -796,10 +798,10 @@ fn representation_v3_authenticates_product_descriptor_and_selected_graph() {
     let authenticated =
         authenticate_representation_v3(&mut backing).expect("exact representation graph");
     assert_eq!(
-        authenticated.descriptor_record.content_digest,
-        descriptor_digest
+        authenticated.descriptor_digest,
+        descriptor_digest.to_bytes()
     );
-    assert_eq!(authenticated.graph_record.content_digest, graph_digest);
+    assert_eq!(authenticated.graph_digest, graph_digest.to_bytes());
     assert_eq!(authenticated.representation_authority, expected_authority);
     assert_eq!(authenticated.basis_width, 4);
     assert_eq!(authenticated.descriptor_id, descriptor_digest.to_bytes());

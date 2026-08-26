@@ -20,8 +20,8 @@ use dclutch_rational_representation_v2_kernel::{
 use solana_program::{account_info::AccountInfo, pubkey::Pubkey, rent::Rent};
 
 use super::{
-    AuthenticatedProductRuntimeV3, AuthenticatedRecordV2, Error, FinalizedRecordFrameV2,
-    ProductRuntimeFrameV3, Result, authenticate_product_runtime_v3, authenticate_record, content,
+    AuthenticatedProductRuntimeV3, Error, FinalizedRecordFrameV2, ProductRuntimeFrameV3, Result,
+    authenticate_product_runtime_v3, authenticate_record, content,
 };
 
 /// Product graph plus immutable descriptor and descriptor-selected graph.
@@ -65,14 +65,12 @@ pub struct RepresentationRuntimeContextV3 {
 /// replaces reauthentication of any raw/staging pair at an effect boundary.
 #[derive(Clone, Copy)]
 pub struct AuthenticatedRepresentationRuntimeV3<'accounts, 'info> {
-    /// Independently authenticated Product runtime and ProductBasisV3.
-    pub product: AuthenticatedProductRuntimeV3<'accounts, 'info>,
-    /// Authenticated descriptor Registry coordinate.
-    pub descriptor_record: AuthenticatedRecordV2,
-    /// Authenticated descriptor-selected graph Registry coordinate.
-    pub graph_record: AuthenticatedRecordV2,
-    /// Canonical Claims PDA derived from the finalized descriptor digest.
-    pub representation_authority: Pubkey,
+    /// Exact authenticated Product graph-root digest.
+    pub product_record_digest: ContentId,
+    /// Runtime Product result selector count, including explicit failure.
+    pub result_outcome_count: u32,
+    /// Marker retaining the raw-frame lifetime in this authenticated view.
+    pub frame_lifetime: core::marker::PhantomData<&'accounts AccountInfo<'info>>,
     /// Exact immutable Product/Claims/representation join.
     pub admission: RepresentationAdmissionV3,
 }
@@ -149,6 +147,8 @@ pub fn authenticate_product_representation_v3<'accounts, 'info>(
         finalized_graph_digest: graph_record.content_digest.to_bytes(),
         record_authenticated: true,
     };
+    let product_record_digest = product.runtime.product_record.content_digest;
+    let result_outcome_count = product.runtime.outcome_count;
     let admission = admit_authenticated_representation_v3(
         product,
         context,
@@ -157,10 +157,9 @@ pub fn authenticate_product_representation_v3<'accounts, 'info>(
         graph_admission,
     )?;
     Ok(AuthenticatedRepresentationRuntimeV3 {
-        product,
-        descriptor_record,
-        graph_record,
-        representation_authority,
+        product_record_digest,
+        result_outcome_count,
+        frame_lifetime: core::marker::PhantomData,
         admission,
     })
 }
