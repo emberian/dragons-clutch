@@ -16,14 +16,15 @@ use alloc::{vec, vec::Vec};
 use dclutch_account_profile_contract::{
     lifecycle_v3::{
         ACTION_PLAN_BYTES as LIFECYCLE_PLAN_BYTES, HEADER_BYTES as LIFECYCLE_HEADER_BYTES,
+        IMMUTABLE_IDENTITY_BINDING_BYTES as LIFECYCLE_IDENTITY_BINDING_BYTES,
         PROTECTED_OUTPUT_BYTES as LIFECYCLE_PROTECTED_BYTES,
         RECIPE_BYTES as LIFECYCLE_RECIPE_BYTES, SEED_BYTES as LIFECYCLE_SEED_BYTES,
-        StateLifecyclePolicyV3,
+        StateLifecyclePolicyV4,
         encode::{
-            LifecycleAccountCoordinateV3, LifecycleGuardInputV3, LifecycleOperationInputV3,
+            LifecycleAccountCoordinateV3, LifecycleGuardInputV3,
+            LifecycleImmutableIdentityBindingInputV4, LifecycleOperationInputV3,
             LifecyclePlanInputV3, LifecycleProtectedOutputsInputV3, LifecycleRecipeInputV3,
-            LifecycleRegisterCoordinateV3, LifecycleSeedInputV3,
-            encode_lifecycle_policy_with_protected_outputs_v3_atomic,
+            LifecycleRegisterCoordinateV3, LifecycleSeedInputV3, encode_lifecycle_policy_v4_atomic,
         },
     },
     v2::{
@@ -370,12 +371,14 @@ pub fn encode_dealer_lp_account_profile_v3(
     Ok(output)
 }
 
-/// Exact protected-output lifecycle artifact width.
+/// Exact successor lifecycle artifact width, including every immutable LP identity.
+#[cfg(not(target_os = "solana"))]
 pub const DEALER_LP_LIFECYCLE_BYTES_V3: usize = LIFECYCLE_HEADER_BYTES
     + LIFECYCLE_RECIPE_BYTES
     + 4 * LIFECYCLE_SEED_BYTES
     + 2 * LIFECYCLE_PLAN_BYTES
-    + 2 * LIFECYCLE_PROTECTED_BYTES;
+    + 2 * LIFECYCLE_PROTECTED_BYTES
+    + 6 * LIFECYCLE_IDENTITY_BINDING_BYTES;
 
 /// Encode one policy containing the canonical Open-AOC and Close plans.
 #[cfg(not(target_os = "solana"))]
@@ -403,7 +406,7 @@ pub fn encode_dealer_lp_lifecycle_v3(
     ];
     let plans = [
         LifecyclePlanInputV3 {
-            action: MultiLpRequestActionV3::Open as u32,
+            action: u32::from(MultiLpRequestActionV3::Open.selector()),
             operation: LifecycleOperationInputV3::AuthenticateOrCreate,
             recipe: 0,
             payer: Some(LifecycleAccountCoordinateV3::fixed(
@@ -421,7 +424,7 @@ pub fn encode_dealer_lp_lifecycle_v3(
             guard: LifecycleGuardInputV3::Always,
         },
         LifecyclePlanInputV3 {
-            action: MultiLpRequestActionV3::Close as u32,
+            action: u32::from(MultiLpRequestActionV3::Close.selector()),
             operation: LifecycleOperationInputV3::Close,
             recipe: 0,
             payer: None,
@@ -449,16 +452,57 @@ pub fn encode_dealer_lp_lifecycle_v3(
         }),
         None,
     ];
-    encode_lifecycle_policy_with_protected_outputs_v3_atomic(
-        &recipes, &seeds, &plans, &protected, scratch, output,
+    let immutable_bindings = [
+        LifecycleImmutableIdentityBindingInputV4 {
+            plan: 0,
+            data_offset: 24,
+            canonical: LifecycleRegisterCoordinateV3::common(LP_RELEASE_IDENTITY_V3),
+        },
+        LifecycleImmutableIdentityBindingInputV4 {
+            plan: 0,
+            data_offset: 56,
+            canonical: LifecycleRegisterCoordinateV3::common(LP_MARKET_IDENTITY_V3),
+        },
+        LifecycleImmutableIdentityBindingInputV4 {
+            plan: 0,
+            data_offset: 88,
+            canonical: LifecycleRegisterCoordinateV3::common(LP_CHILD_ROOT_IDENTITY_V3),
+        },
+        LifecycleImmutableIdentityBindingInputV4 {
+            plan: 0,
+            data_offset: 120,
+            canonical: LifecycleRegisterCoordinateV3::common(LP_OWNER_IDENTITY_V3),
+        },
+        LifecycleImmutableIdentityBindingInputV4 {
+            plan: 0,
+            data_offset: 152,
+            canonical: LifecycleRegisterCoordinateV3::common(LP_OWNER_IDENTITY_V3),
+        },
+        LifecycleImmutableIdentityBindingInputV4 {
+            plan: 0,
+            data_offset: 184,
+            canonical: LifecycleRegisterCoordinateV3::common(LP_OBLIGATION_IDENTITY_V3),
+        },
+    ];
+    encode_lifecycle_policy_v4_atomic(
+        &recipes,
+        &seeds,
+        &plans,
+        &protected,
+        &immutable_bindings,
+        scratch,
+        output,
     )
     .map_err(|_| DealerLpArtifactErrorV3::Lifecycle)?;
-    StateLifecyclePolicyV3::decode(output).map_err(|_| DealerLpArtifactErrorV3::Lifecycle)?;
+    StateLifecyclePolicyV4::decode_selected([1; 32], [1; 32], output)
+        .map_err(|_| DealerLpArtifactErrorV3::Lifecycle)?;
     Ok(())
 }
 
+#[cfg(not(target_os = "solana"))]
 const DEALER_LP_REQUEST_PROFILE_OPERATIONS_V3: usize = 17;
 /// Exact LP RequestProfile bytes.
+#[cfg(not(target_os = "solana"))]
 pub const DEALER_LP_REQUEST_PROFILE_BYTES_V3: usize =
     REQUEST_HEADER_BYTES + DEALER_LP_REQUEST_PROFILE_OPERATIONS_V3 * REQUEST_OPERATION_BYTES;
 
@@ -485,7 +529,7 @@ pub fn encode_dealer_lp_request_profile_v3(
         ),
         RequestInstructionV1::require_u16(
             RequestCoordinateV1::fixed(DEALER_MULTI_LP_ACTION_SELECTOR_OFFSET_V3),
-            action as u16,
+            action.selector(),
         ),
         RequestInstructionV1::require_zero(RequestCoordinateV1::fixed(12), 4),
         RequestInstructionV1::project_identity(
@@ -561,6 +605,7 @@ pub fn encode_dealer_lp_request_profile_v3(
 }
 
 /// Exact transition instruction count for Open or Close.
+#[cfg(not(target_os = "solana"))]
 pub const fn dealer_lp_transition_operation_count_v3(action: MultiLpRequestActionV3) -> usize {
     match action {
         MultiLpRequestActionV3::Open => 15,
@@ -569,6 +614,7 @@ pub const fn dealer_lp_transition_operation_count_v3(action: MultiLpRequestActio
 }
 
 /// Exact LP TransitionVM bytes.
+#[cfg(not(target_os = "solana"))]
 pub const fn dealer_lp_transition_bytes_v3(action: MultiLpRequestActionV3) -> usize {
     TRANSITION_HEADER_BYTES
         + dealer_lp_transition_operation_count_v3(action) * TRANSITION_INSTRUCTION_BYTES
@@ -705,6 +751,7 @@ pub fn encode_dealer_lp_transition_v3(
 }
 
 /// Exact local Effect instruction count.
+#[cfg(not(target_os = "solana"))]
 pub const fn dealer_lp_effect_operation_count_v3(action: MultiLpRequestActionV3) -> usize {
     match action {
         MultiLpRequestActionV3::Open => 13,
@@ -713,6 +760,7 @@ pub const fn dealer_lp_effect_operation_count_v3(action: MultiLpRequestActionV3)
 }
 
 /// Exact LP EffectProgram bytes.
+#[cfg(not(target_os = "solana"))]
 pub const fn dealer_lp_effect_bytes_v3(action: MultiLpRequestActionV3) -> usize {
     EFFECT_HEADER_BYTES + dealer_lp_effect_operation_count_v3(action) * EFFECT_OPERATION_BYTES
 }
@@ -800,7 +848,8 @@ mod tests {
         let mut lifecycle_scratch = vec![0; DEALER_LP_LIFECYCLE_BYTES_V3];
         let mut lifecycle = vec![0; DEALER_LP_LIFECYCLE_BYTES_V3];
         encode_dealer_lp_lifecycle_v3(&mut lifecycle_scratch, &mut lifecycle).expect("lifecycle");
-        let policy = StateLifecyclePolicyV3::decode(&lifecycle).expect("decode lifecycle");
+        let policy = StateLifecyclePolicyV4::decode_selected([1; 32], [1; 32], &lifecycle)
+            .expect("decode lifecycle");
         for action in [MultiLpRequestActionV3::Open, MultiLpRequestActionV3::Close] {
             let lengths = lengths(action);
             let profile = encode_dealer_lp_account_profile_v3(DealerLpAccountProfileInputV3 {
@@ -818,12 +867,12 @@ mod tests {
             );
         }
         let open = policy
-            .action_plan(MultiLpRequestActionV3::Open as u32, 0)
+            .action_plan(u32::from(MultiLpRequestActionV3::Open.selector()), 0)
             .expect("open plan");
         assert_eq!(open.protected_output_count(), Ok(6));
         assert_eq!(open.protected_observation_count(), Ok(3));
         let close = policy
-            .action_plan(MultiLpRequestActionV3::Close as u32, 0)
+            .action_plan(u32::from(MultiLpRequestActionV3::Close.selector()), 0)
             .expect("close plan");
         assert_eq!(close.protected_output_count(), Ok(0));
     }

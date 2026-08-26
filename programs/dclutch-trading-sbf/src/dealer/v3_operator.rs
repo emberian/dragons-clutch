@@ -30,6 +30,16 @@ pub enum MultiLpRequestActionV3 {
     Close = 8,
 }
 
+impl MultiLpRequestActionV3 {
+    /// Exact selector in the sole canonical Dealer space.
+    pub const fn selector(self) -> u16 {
+        match self {
+            Self::Open => 7,
+            Self::Close => 8,
+        }
+    }
+}
+
 /// Stable refusal from unsigned request construction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MultiLpOperatorErrorV3 {
@@ -286,7 +296,7 @@ fn build(
         8,
         &DEALER_MULTI_LP_REQUEST_VERSION_V3.to_le_bytes(),
     )?;
-    write_bytes(&mut bytes, 10, &(action as u16).to_le_bytes())?;
+    write_bytes(&mut bytes, 10, &action.selector().to_le_bytes())?;
     for (offset, identity) in [
         (16, chain.release_set),
         (48, chain.market),
@@ -449,7 +459,7 @@ mod tests {
         bytes[12..16].copy_from_slice(&DEALER_MULTI_LP_ACTION_SELECTOR_OFFSET_V3.to_le_bytes());
         bytes[16] = 2;
         bytes[18..20].copy_from_slice(&1_u16.to_le_bytes());
-        bytes[32..36].copy_from_slice(&(action as u32).to_le_bytes());
+        bytes[32..36].copy_from_slice(&u32::from(action.selector()).to_le_bytes());
         bytes[36..68].copy_from_slice(&[42; 32]);
         bytes
     }
