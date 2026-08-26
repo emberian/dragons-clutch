@@ -1540,7 +1540,9 @@ version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
  "dclutch-custody-contract",
+ "dclutch-market-core-codec",
  "dclutch-realm-contract",
+ "dclutch-record-contract",
  "dclutch-registry-contract",
  "dclutch-registry-svm",
  "dclutch-release-set-contract",
@@ -1559,7 +1561,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-market-core-codec"
+version = "0.1.0"
+dependencies = [
+ "dclutch-release-set-contract",
+]
+
+[[package]]
 name = "dclutch-realm-contract"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-record-contract"
 version = "0.1.0"
 
 [[package]]

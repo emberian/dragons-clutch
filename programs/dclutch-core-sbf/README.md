@@ -8,6 +8,10 @@ programs, child CPI return data, and commit-last state writes.
 The current executable slice routes:
 
 - `Found`, using only the 72-byte Core request;
+- `OpenMarket`, using the Core request followed by one exact 672-byte Custody
+  request for replay initialization or Hoard-vault creation;
+- fixed-role Resolution effects for `CreateFund`, `VerifyFundReady`,
+  `AdmitTerminal`, and `CloseFund`;
 - `ActivateCapability` and `CloseCapability`, using the compact generic
   Trading-capability route.
 
@@ -51,6 +55,45 @@ and the canonical RentCredit before transferring only the exact missing rent,
 allocating, assigning, and writing the 352-byte state. The state and its PDA
 persist the exact Registry program used at Found; every later release
 reauthentication rejects a substituted Registry before CPI.
+
+## OpenMarket frame
+
+Instruction data is `Request(72) || CustodyRequestV1(672)`. Both staged calls
+use the fixed prefix:
+
+```text
+Core caller-authority PDA, Market, activation cache, Registry,
+Core program + ProgramData, Custody program + ProgramData,
+Realm raw + finalized cursor, Custody replay
+```
+
+`InitializeReplay` appends payer, System, and Rent (14 outer accounts).
+`OpenVault` appends Mint, vacant Hoard vault, Custody authority, token program,
+payer, System, and Rent (18 outer accounts). Core forwards its writable Market
+read-only to Custody, authenticates the sole Registry-owned finalized Realm,
+verifies the immediate Custody receipt, replay bytes, rent delta, Vault owner,
+Mint, authority, and zero token balance, and only then commits
+`Founding+Ready -> Open+Consumed`. Replay initialization is a prerequisite
+effect and does not mutate Core state.
+
+## Fixed-role Resolution frame
+
+Instruction data is:
+
+```text
+Request(72) || CoreEffectEnvelopeV1(280)
+|| CapabilityFundingHeaderV1(16) || ResolutionRoleRequestV1(288)
+```
+
+Core reauthenticates the persisted Registry and current Core and Resolution
+artifacts, derives the one Core caller-authority PDA, invokes the exact child
+frame, and requires a producer-bound 240-byte `CoreEffectAckV1` plus the
+action-specific poststate digest before any Core write. `CreateFund` is a
+prerequisite effect with no Core transition; `VerifyFundReady` commits
+`Prepaid -> Ready`; `AdmitTerminal` independently authenticates finalized
+Product Instance/Terms outer records and commits `Open+Consumed -> Terminal`;
+`CloseFund` authenticates the closure/funding projection but does not by itself
+complete Core retirement.
 
 ## Generic capability frame
 
@@ -114,7 +157,10 @@ This is a measured profile, not a universal promise for arbitrary family tails.
 ## Evidence boundary
 
 Unit tests cover hostile instruction truncation, noncanonical funding headers,
-outer-account aliases, and the exact v0 envelope. The optimized SBF build is
-checked separately for verifier stack diagnostics. Real multi-program SVM
-tests for stale/underfunded funding, substituted releases, child-ack mismatch,
-and late child failure are required before this adapter is release evidence.
+outer-account aliases, Registry substitution, and the exact v0 envelope. The
+optimized SBF build is checked separately for verifier stack diagnostics.
+`run-open-market-program-test.sh` executes real Registry, Core, and Custody ELFs
+through replay and Vault creation and checks the commit-last Core transition.
+Additional real multi-program campaigns remain required for every Resolution
+action and for late Resolution-child rollback before that adapter is release
+evidence.

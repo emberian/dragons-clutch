@@ -20,32 +20,39 @@ fees, liveness capital, Series escrow, or recovery reserve.
 
 ## Account frames
 
-Every route begins with this seven-account prefix:
+Every route begins with this nine-account prefix:
 
 | # | Account | Privilege |
 | -: | --- | --- |
 | 0 | release-pinned caller authority PDA | signer, readonly |
-| 1 | Registry activation cache | readonly |
-| 2 | Registry program | executable, readonly |
-| 3 | selected caller-role program | executable, readonly |
-| 4 | caller ProgramData | readonly |
-| 5 | immutable Realm PDA | readonly |
-| 6 | Custody replay PDA | writable |
+| 1 | persisted Core Market | readonly |
+| 2 | Registry activation cache | readonly |
+| 3 | exact persisted Registry program | executable, readonly |
+| 4 | selected caller-role program | executable, readonly |
+| 5 | caller ProgramData | readonly |
+| 6 | Registry-owned finalized Realm raw record | readonly |
+| 7 | vacant Realm staging cursor | readonly |
+| 8 | Custody replay PDA | writable |
+
+The 352-byte Market state is the join authority for its Market, Realm,
+generation, release set, and Registry coordinates. Custody independently
+derives and hashes the sole Registry raw/staging Realm pair and never accepts a
+Core-owned Realm copy.
 
 Suffixes are exact:
 
-- `InitializeReplay` (10 accounts): payer signer+writable, System program,
+- `InitializeReplay` (12 accounts): payer signer+writable, System program,
   Rent sysvar.
-- `OpenVault` (14): Mint readonly, vacant destination Vault writable, Custody
+- `OpenVault` (16): Mint readonly, vacant destination Vault writable, Custody
   authority readonly, Realm token program executable, payer signer+writable,
   System program, Rent sysvar.
-- `Transfer` (12): Mint readonly, source writable, destination writable,
+- `Transfer` (14): Mint readonly, source writable, destination writable,
   Custody authority readonly, Realm token program executable.
-- `CloseVault` (12): Mint readonly, source Vault writable, Custody authority
+- `CloseVault` (14): Mint readonly, source Vault writable, Custody authority
   readonly, Realm token program executable, rent-refund account writable. The
   refund may also be a transaction signer; signer status cannot change the
   persisted beneficiary or close semantics.
-- `CloseReplay` (8): the exact persisted replay-rent refund beneficiary
+- `CloseReplay` (10): the exact persisted replay-rent refund beneficiary
   writable. The current Registry-authenticated caller role may close only its
   exact replay context, at the exact next revision, after every Vault opened
   under that context has been closed.

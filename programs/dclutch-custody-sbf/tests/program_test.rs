@@ -7,9 +7,13 @@ use dclutch_custody_contract::{
     CallerRoleV1, CompartmentV1, ContextV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1,
     CustodyReplayV1, CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
 };
-use dclutch_realm_contract::{
-    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_PDA_DOMAIN, RealmV1, RealmV1Input,
+use dclutch_market_core_codec::{
+    CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV1, MarketIdentity, Phase, Readiness,
 };
+use dclutch_realm_contract::{
+    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
+};
+use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
@@ -41,8 +45,7 @@ use spl_token_interface::state::{Account as SplAccount, AccountState, Mint as Sp
 const CUSTODY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc1; 32]);
 const CALLER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc2; 32]);
 const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc3; 32]);
-const MARKET: [u8; 32] = [0x41; 32];
-const CONTEXT: [u8; 32] = MARKET;
+const CONTEXT: [u8; 32] = [0x41; 32];
 const ACTOR: [u8; 32] = [0x42; 32];
 const RECIPIENT: [u8; 32] = [0x43; 32];
 const GENERATION: u64 = 7;
@@ -81,6 +84,8 @@ struct Fixture {
     release_set: [u8; 32],
     realm: [u8; 32],
     realm_key: Pubkey,
+    realm_staging: Pubkey,
+    market: Pubkey,
     activation_cache: Pubkey,
     caller_programdata: Pubkey,
     mint: Pubkey,
@@ -201,14 +206,10 @@ fn activation_input(release: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
     ArtifactActivationInputV1::new(artifact_id(release), release, observation)
 }
 
-fn activation_cache(
-    registry: ArtifactReleaseV1,
-    caller: ArtifactReleaseV1,
-    custody: ArtifactReleaseV1,
-) -> ([u8; 32], Vec<u8>) {
+fn activation_cache(caller: ArtifactReleaseV1, custody: ArtifactReleaseV1) -> ([u8; 32], Vec<u8>) {
     let caller_binding = binding(caller);
     let release_set = ExecutionReleaseSetV1::new(
-        binding(registry),
+        caller_binding,
         caller_binding,
         caller_binding,
         caller_binding,
@@ -220,7 +221,7 @@ fn activation_cache(
     let mut bytes = vec![0; ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1];
     initialize_activation_cache_v1(&mut bytes, content).expect("initialize cache");
     for (role, release) in [
-        (ExecutionRoleV1::Core, registry),
+        (ExecutionRoleV1::Core, caller),
         (ExecutionRoleV1::Claims, caller),
         (ExecutionRoleV1::Trading, caller),
         (ExecutionRoleV1::Resolution, caller),
@@ -319,9 +320,7 @@ fn fixture(profile: Profile) -> (ProgramTest, Fixture) {
 
     let caller_release = release(CALLER_PROGRAM_ID, 0x51, &artifacts.caller);
     let custody_release = release(CUSTODY_PROGRAM_ID, 0x52, &artifacts.custody);
-    let registry_release = release(REGISTRY_PROGRAM_ID, 0x53, &artifacts.registry);
-    let (release_set, cache_data) =
-        activation_cache(registry_release, caller_release, custody_release);
+    let (release_set, cache_data) = activation_cache(caller_release, custody_release);
     let activation_cache = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, &release_set],
         &REGISTRY_PROGRAM_ID,
@@ -344,12 +343,58 @@ fn fixture(profile: Profile) -> (ProgramTest, Fixture) {
     .expect("Realm");
     let realm_data = realm_value.to_bytes().to_vec();
     let realm = hash(&realm_data).to_bytes();
-    let realm_key =
-        Pubkey::find_program_address(&[REALM_PDA_DOMAIN, &realm], &REGISTRY_PROGRAM_ID).0;
+    let realm_key = Pubkey::find_program_address(
+        &[RAW_RECORD_PDA_SEED_V1, &REALM_SCHEMA_RELEASE_ID_V1, &realm],
+        &REGISTRY_PROGRAM_ID,
+    )
+    .0;
+    let realm_staging = Pubkey::find_program_address(
+        &[
+            STAGING_CURSOR_PDA_SEED_V1,
+            &REALM_SCHEMA_RELEASE_ID_V1,
+            &realm,
+        ],
+        &REGISTRY_PROGRAM_ID,
+    )
+    .0;
     add_protocol_account(&mut test, realm_key, REGISTRY_PROGRAM_ID, realm_data);
+    add_protocol_account(&mut test, realm_staging, system_program::ID, Vec::new());
     add_protocol_account(&mut test, mint, token_program, mint_data());
 
-    let base_request = request_base(profile, release_set, realm, mint);
+    let mut identity = MarketIdentity {
+        market_id: CoreIdentity::new([0xff; 32]).expect("placeholder Market"),
+        realm_id: CoreIdentity::new(realm).expect("Realm identity"),
+        product_id: CoreIdentity::new([0x62; 32]).expect("Product identity"),
+        result_domain: CoreIdentity::new([0x63; 32]).expect("domain identity"),
+        resolution_policy: CoreIdentity::new([0x64; 32]).expect("resolution identity"),
+        capability_manifest: CoreIdentity::new([0x65; 32]).expect("manifest identity"),
+        selected_release_set: CoreIdentity::new(release_set).expect("release set"),
+        registry_program: CoreIdentity::new(REGISTRY_PROGRAM_ID.to_bytes()).expect("Registry"),
+        generation: GENERATION,
+    };
+    let market = Pubkey::find_program_address(
+        &MarketCoreStateSeedsV1::new(identity).as_slices(),
+        &CALLER_PROGRAM_ID,
+    )
+    .0;
+    identity.market_id = CoreIdentity::new(market.to_bytes()).expect("Market identity");
+    let market_state = CoreState {
+        phase: Phase::Open,
+        readiness: Readiness::Consumed,
+        terminal_winner: 0,
+        identity,
+        outstanding_capabilities: 0,
+        rent_beneficiary: CoreIdentity::new(ACTOR).expect("beneficiary"),
+        terminal_receipt: None,
+    };
+    add_protocol_account(
+        &mut test,
+        market,
+        CALLER_PROGRAM_ID,
+        market_state.encode().expect("Core Market").to_vec(),
+    );
+
+    let base_request = request_base(profile, release_set, realm, market, mint);
     let replay = Pubkey::find_program_address(
         &CustodyReplaySeedsV1::from_request(base_request).as_slices(),
         &CUSTODY_PROGRAM_ID,
@@ -395,6 +440,8 @@ fn fixture(profile: Profile) -> (ProgramTest, Fixture) {
             release_set,
             realm,
             realm_key,
+            realm_staging,
+            market,
             activation_cache,
             caller_programdata: programdata_address(CALLER_PROGRAM_ID),
             mint,
@@ -426,6 +473,7 @@ fn request_base(
     profile: Profile,
     release_set: [u8; 32],
     realm: [u8; 32],
+    market: Pubkey,
     mint: Pubkey,
 ) -> CustodyRequestV1 {
     CustodyRequestV1 {
@@ -434,7 +482,7 @@ fn request_base(
         source_compartment: CompartmentV1::None,
         destination_compartment: CompartmentV1::None,
         release_set,
-        market: MARKET,
+        market: market.to_bytes(),
         realm,
         context: CONTEXT,
         caller_program: CALLER_PROGRAM_ID.to_bytes(),
@@ -459,6 +507,7 @@ fn initialize_request(fixture: &Fixture, payer: Pubkey) -> CustodyRequestV1 {
         fixture.profile,
         fixture.release_set,
         fixture.realm,
+        fixture.market,
         fixture.mint,
     );
     request.payer = payer.to_bytes();
@@ -475,6 +524,7 @@ fn open_request(fixture: &Fixture, payer: Pubkey) -> CustodyRequestV1 {
         fixture.profile,
         fixture.release_set,
         fixture.realm,
+        fixture.market,
         fixture.mint,
     );
     request.operation = OperationV1::OpenVault;
@@ -495,6 +545,7 @@ fn deposit_request(fixture: &Fixture, expected_revision: u64, amount: u64) -> Cu
         fixture.profile,
         fixture.release_set,
         fixture.realm,
+        fixture.market,
         fixture.mint,
     );
     request.operation = OperationV1::Transfer;
@@ -540,6 +591,7 @@ fn close_request(fixture: &Fixture, payer: Pubkey) -> CustodyRequestV1 {
         fixture.profile,
         fixture.release_set,
         fixture.realm,
+        fixture.market,
         fixture.mint,
     );
     request.operation = OperationV1::CloseVault;
@@ -563,6 +615,7 @@ fn close_replay_request(
         fixture.profile,
         fixture.release_set,
         fixture.realm,
+        fixture.market,
         fixture.mint,
     );
     request.operation = OperationV1::CloseReplay;
@@ -595,11 +648,13 @@ fn common_metas(fixture: &Fixture, request: CustodyRequestV1) -> Vec<AccountMeta
     .0;
     vec![
         AccountMeta::new_readonly(authority, false),
+        AccountMeta::new_readonly(fixture.market, false),
         AccountMeta::new_readonly(fixture.activation_cache, false),
         AccountMeta::new_readonly(REGISTRY_PROGRAM_ID, false),
         AccountMeta::new_readonly(CALLER_PROGRAM_ID, false),
         AccountMeta::new_readonly(fixture.caller_programdata, false),
         AccountMeta::new_readonly(fixture.realm_key, false),
+        AccountMeta::new_readonly(fixture.realm_staging, false),
         AccountMeta::new(fixture.replay, false),
     ]
 }

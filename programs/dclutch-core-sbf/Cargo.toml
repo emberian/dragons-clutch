@@ -19,6 +19,7 @@ custom-panic = []
 [dependencies]
 dclutch-capability-contract = { path = "../../crates/dclutch-capability-contract" }
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
+dclutch-custody-contract = { path = "../../crates/dclutch-custody-contract" }
 dclutch-market-core-codec = { path = "../../crates/dclutch-market-core-codec" }
 dclutch-product-contract = { path = "../../crates/dclutch-product-contract" }
 dclutch-realm-contract = { path = "../../crates/dclutch-realm-contract" }
@@ -26,8 +27,10 @@ dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }
 dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }
 dclutch-registry-svm = { path = "../../crates/dclutch-registry-svm" }
 dclutch-release-set-contract = { path = "../../crates/dclutch-release-set-contract" }
+dclutch-resolution-codec = { path = "../../crates/dclutch-resolution-codec" }
 dclutch-rent-contract = { path = "../../crates/dclutch-rent-contract" }
 dclutch-source-contract = { path = "../../crates/dclutch-source-contract" }
+dclutch-token-svm = { path = "../../crates/dclutch-token-svm" }
 solana-program = { version = "=3.0.0", default-features = false }
 solana-sdk-ids = "=3.1.0"
 solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
@@ -36,9 +39,12 @@ solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
 solana-account = "=4.3.2"
 solana-hash = "=4.5.0"
 solana-message = { version = "=3.1.0", features = ["bincode"] }
+solana-program-option = "=3.1.0"
+solana-program-pack = "=3.1.0"
 solana-program-test = { version = "=4.2.1", features = ["agave-unstable-api"] }
 solana-sdk = "=3.0.0"
 solana-transaction = "=4.1.6"
+spl-token-interface = "=3.0.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [workspace]

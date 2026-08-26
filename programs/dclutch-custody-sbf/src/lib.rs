@@ -15,10 +15,12 @@ use dclutch_custody_contract::{
     CustodyAuthoritySeedsV1, CustodyReceiptV1, CustodyReplaySeedsV1, CustodyReplayV1,
     CustodyRequestV1, CustodyVaultSeedsV1, OperationV1, ReceiptEvidenceV1,
 };
+use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV1, STATE_BYTES};
 use dclutch_realm_contract::{
-    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_PDA_DOMAIN, RealmV1,
+    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1,
 };
-use dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1;
+use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use dclutch_registry_svm::{AuthenticatedRoleReceiptV1, RegistryInstructionV1};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_token_svm::{
@@ -34,31 +36,33 @@ use solana_program::{
     program_error::ProgramError,
     pubkey::Pubkey,
     rent::Rent,
-    sysvar::SysvarSerialize,
+    sysvar::{Sysvar, SysvarSerialize},
 };
 use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::create_account;
 
 /// Exact common prefix length.
-pub const COMMON_ACCOUNT_COUNT_V1: usize = 7;
+pub const COMMON_ACCOUNT_COUNT_V1: usize = 9;
 /// Exact `InitializeReplay` account count.
-pub const INITIALIZE_REPLAY_ACCOUNT_COUNT_V1: usize = 10;
+pub const INITIALIZE_REPLAY_ACCOUNT_COUNT_V1: usize = 12;
 /// Exact `OpenVault` account count.
-pub const OPEN_VAULT_ACCOUNT_COUNT_V1: usize = 14;
+pub const OPEN_VAULT_ACCOUNT_COUNT_V1: usize = 16;
 /// Exact `Transfer` account count.
-pub const TRANSFER_ACCOUNT_COUNT_V1: usize = 12;
+pub const TRANSFER_ACCOUNT_COUNT_V1: usize = 14;
 /// Exact `CloseVault` account count.
-pub const CLOSE_VAULT_ACCOUNT_COUNT_V1: usize = 12;
+pub const CLOSE_VAULT_ACCOUNT_COUNT_V1: usize = 14;
 /// Exact `CloseReplay` account count.
-pub const CLOSE_REPLAY_ACCOUNT_COUNT_V1: usize = 8;
+pub const CLOSE_REPLAY_ACCOUNT_COUNT_V1: usize = 10;
 
 const CALLER_AUTHORITY: usize = 0;
-const ACTIVATION_CACHE: usize = 1;
-const REGISTRY_PROGRAM: usize = 2;
-const CALLER_PROGRAM: usize = 3;
-const CALLER_PROGRAMDATA: usize = 4;
-const REALM: usize = 5;
-const REPLAY: usize = 6;
+const CORE_MARKET: usize = 1;
+const ACTIVATION_CACHE: usize = 2;
+const REGISTRY_PROGRAM: usize = 3;
+const CALLER_PROGRAM: usize = 4;
+const CALLER_PROGRAMDATA: usize = 5;
+const REALM: usize = 6;
+const REALM_STAGING: usize = 7;
+const REPLAY: usize = 8;
 
 /// Stable refusal from the thin Custody SBF adapter.
 #[repr(u32)]
@@ -108,8 +112,8 @@ pub fn process_instruction(
         CustodyRequestV1::decode(instruction_data).map_err(|_| CustodySbfError::Instruction)?;
     require_account_count(accounts, request.operation)?;
     let request_digest = hash(instruction_data).to_bytes();
-    authenticate_common_frame(program_id, accounts, request, request_digest)?;
-    let realm = authenticate_realm(program_id, accounts, request)?;
+    let market = authenticate_common_frame(program_id, accounts, request, request_digest)?;
+    let realm = authenticate_realm(program_id, accounts, request, market)?;
     match request.operation {
         OperationV1::InitializeReplay => {
             initialize_replay(program_id, accounts, request, request_digest)
@@ -131,18 +135,23 @@ fn authenticate_common_frame(
     accounts: &[AccountInfo<'_>],
     request: CustodyRequestV1,
     request_digest: [u8; 32],
-) -> ProgramResult {
+) -> Result<CoreState, ProgramError> {
     let caller_authority = account(accounts, CALLER_AUTHORITY)?;
+    let market = account(accounts, CORE_MARKET)?;
     let cache = account(accounts, ACTIVATION_CACHE)?;
     let registry = account(accounts, REGISTRY_PROGRAM)?;
     let caller_program = account(accounts, CALLER_PROGRAM)?;
     let caller_programdata = account(accounts, CALLER_PROGRAMDATA)?;
     let realm = account(accounts, REALM)?;
+    let realm_staging = account(accounts, REALM_STAGING)?;
     let replay = account(accounts, REPLAY)?;
 
     if !caller_authority.is_signer
         || caller_authority.is_writable
         || caller_authority.executable
+        || market.is_signer
+        || market.is_writable
+        || market.executable
         || cache.is_signer
         || cache.is_writable
         || cache.executable
@@ -158,6 +167,9 @@ fn authenticate_common_frame(
         || realm.is_signer
         || realm.is_writable
         || realm.executable
+        || realm_staging.is_signer
+        || realm_staging.is_writable
+        || realm_staging.executable
         || replay.is_signer
         || !replay.is_writable
         || replay.executable
@@ -167,6 +179,7 @@ fn authenticate_common_frame(
     if caller_program.key.to_bytes() != request.caller_program {
         return Err(CustodySbfError::Release.into());
     }
+    let market_state = authenticate_market(accounts, request)?;
     let caller_seeds = CallerAuthoritySeedsV1::new(
         ContentId::new(request.release_set).map_err(|_| CustodySbfError::Release)?,
         request.market,
@@ -182,7 +195,73 @@ fn authenticate_common_frame(
     }
     authenticate_calling_release(accounts, request)?;
     authenticate_replay_identity(program_id, replay, request)?;
-    Ok(())
+    Ok(market_state)
+}
+
+#[inline(never)]
+fn authenticate_market(
+    accounts: &[AccountInfo<'_>],
+    request: CustodyRequestV1,
+) -> Result<CoreState, ProgramError> {
+    let market = account(accounts, CORE_MARKET)?;
+    let cache = account(accounts, ACTIVATION_CACHE)?;
+    let registry = account(accounts, REGISTRY_PROGRAM)?;
+    let expected_cache = Pubkey::find_program_address(
+        &[ACTIVATION_PDA_DOMAIN_V1, &request.release_set],
+        registry.key,
+    )
+    .0;
+    if cache.key != &expected_cache
+        || cache.owner != registry.key
+        || market.data_len() != STATE_BYTES
+    {
+        return Err(CustodySbfError::Release.into());
+    }
+    let core_program = {
+        let bytes = cache
+            .try_borrow_data()
+            .map_err(|_| CustodySbfError::Release)?;
+        let activated = ActivatedExecutionReleaseSetViewV1::decode(&bytes)
+            .map_err(|_| CustodySbfError::Release)?;
+        if activated
+            .execution_release_set_id()
+            .map_err(|_| CustodySbfError::Release)?
+            .as_bytes()
+            != &request.release_set
+        {
+            return Err(CustodySbfError::Release.into());
+        }
+        Pubkey::new_from_array(
+            *activated
+                .role(ExecutionRoleV1::Core)
+                .map_err(|_| CustodySbfError::Release)?
+                .release()
+                .program()
+                .as_bytes(),
+        )
+    };
+    if market.owner != &core_program {
+        return Err(CustodySbfError::Release.into());
+    }
+    let bytes = market
+        .try_borrow_data()
+        .map_err(|_| CustodySbfError::Release)?;
+    let state = CoreState::decode(&bytes).map_err(|_| CustodySbfError::Release)?;
+    if market.key.to_bytes() != request.market
+        || state.identity.market_id.to_bytes() != request.market
+        || state.identity.realm_id.to_bytes() != request.realm
+        || state.identity.selected_release_set.to_bytes() != request.release_set
+        || state.identity.registry_program.to_bytes() != registry.key.to_bytes()
+        || state.identity.generation != request.semantic.generation
+        || Pubkey::find_program_address(
+            &MarketCoreStateSeedsV1::new(state.identity).as_slices(),
+            &core_program,
+        )
+        .0 != *market.key
+    {
+        return Err(CustodySbfError::Release.into());
+    }
+    Ok(state)
 }
 
 #[inline(never)]
@@ -242,9 +321,12 @@ fn authenticate_realm(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     request: CustodyRequestV1,
+    market: CoreState,
 ) -> Result<RealmFacts, ProgramError> {
     let cache = account(accounts, ACTIVATION_CACHE)?;
+    let registry = account(accounts, REGISTRY_PROGRAM)?;
     let realm_account = account(accounts, REALM)?;
+    let staging = account(accounts, REALM_STAGING)?;
     let cache_data = cache
         .try_borrow_data()
         .map_err(|_| CustodySbfError::Release)?;
@@ -265,28 +347,53 @@ fn authenticate_realm(
     {
         return Err(CustodySbfError::Release.into());
     }
-    let core_program = Pubkey::new_from_array(
-        *activated
-            .role(ExecutionRoleV1::Core)
-            .map_err(|_| CustodySbfError::Release)?
-            .release()
-            .program()
-            .as_bytes(),
-    );
     drop(cache_data);
 
-    if realm_account.owner != &core_program {
+    if market.identity.realm_id.to_bytes() != request.realm
+        || market.identity.registry_program.to_bytes() != registry.key.to_bytes()
+        || realm_account.owner != registry.key
+        || realm_account.data_len() != REALM_BYTES
+        || !Rent::get()
+            .map_err(|_| CustodySbfError::Realm)?
+            .is_exempt(realm_account.lamports(), REALM_BYTES)
+    {
         return Err(CustodySbfError::Realm.into());
     }
     let realm_data = realm_account
         .try_borrow_data()
         .map_err(|_| CustodySbfError::Realm)?;
     let realm_digest = hash(&realm_data).to_bytes();
-    let expected_realm =
-        Pubkey::find_program_address(&[REALM_PDA_DOMAIN, &realm_digest], &core_program).0;
-    if realm_account.key != &expected_realm || realm_digest != request.realm {
-        return Err(CustodySbfError::Realm.into());
-    }
+    let expected_realm = Pubkey::find_program_address(
+        &[
+            RAW_RECORD_PDA_SEED_V1,
+            &REALM_SCHEMA_RELEASE_ID_V1,
+            &realm_digest,
+        ],
+        registry.key,
+    )
+    .0;
+    let expected_staging = Pubkey::find_program_address(
+        &[
+            STAGING_CURSOR_PDA_SEED_V1,
+            &REALM_SCHEMA_RELEASE_ID_V1,
+            &realm_digest,
+        ],
+        registry.key,
+    )
+    .0;
+    require_realm_authority(RealmAuthorityObservation {
+        registry: *registry.key,
+        persisted_registry: Pubkey::new_from_array(market.identity.registry_program.to_bytes()),
+        expected_realm,
+        realm_key: *realm_account.key,
+        realm_owner: *realm_account.owner,
+        expected_staging,
+        staging_key: *staging.key,
+        staging_owner: *staging.owner,
+        staging_data_len: staging.data_len(),
+        realm_digest,
+        expected_digest: request.realm,
+    })?;
     let realm = RealmV1::decode(&realm_data).map_err(|_| CustodySbfError::Realm)?;
     let profile = collateral_profile(realm)?;
     if matches!(
@@ -299,6 +406,35 @@ fn authenticate_realm(
         return Err(CustodySbfError::Realm.into());
     }
     Ok(RealmFacts { realm, profile })
+}
+
+#[derive(Clone, Copy)]
+struct RealmAuthorityObservation {
+    registry: Pubkey,
+    persisted_registry: Pubkey,
+    expected_realm: Pubkey,
+    realm_key: Pubkey,
+    realm_owner: Pubkey,
+    expected_staging: Pubkey,
+    staging_key: Pubkey,
+    staging_owner: Pubkey,
+    staging_data_len: usize,
+    realm_digest: [u8; 32],
+    expected_digest: [u8; 32],
+}
+
+fn require_realm_authority(observed: RealmAuthorityObservation) -> ProgramResult {
+    if observed.registry != observed.persisted_registry
+        || observed.realm_key != observed.expected_realm
+        || observed.realm_owner != observed.registry
+        || observed.staging_key != observed.expected_staging
+        || observed.staging_owner != system_program::ID
+        || observed.staging_data_len != 0
+        || observed.realm_digest != observed.expected_digest
+    {
+        return Err(CustodySbfError::Realm.into());
+    }
+    Ok(())
 }
 
 fn collateral_profile(realm: RealmV1) -> Result<ExactTransferProfileV1, ProgramError> {
@@ -349,9 +485,9 @@ fn initialize_replay(
     request_digest: [u8; 32],
 ) -> ProgramResult {
     let replay = account(accounts, REPLAY)?;
-    let payer = account(accounts, 7)?;
-    let system = account(accounts, 8)?;
-    let rent_account = account(accounts, 9)?;
+    let payer = account(accounts, 9)?;
+    let system = account(accounts, 10)?;
+    let rent_account = account(accounts, 11)?;
     if !payer.is_signer
         || !payer.is_writable
         || payer.executable
@@ -424,13 +560,13 @@ fn open_vault(
     request_digest: [u8; 32],
     realm: RealmFacts,
 ) -> ProgramResult {
-    let mint = account(accounts, 7)?;
-    let vault = account(accounts, 8)?;
-    let authority = account(accounts, 9)?;
-    let token_program = account(accounts, 10)?;
-    let payer = account(accounts, 11)?;
-    let system = account(accounts, 12)?;
-    let rent_account = account(accounts, 13)?;
+    let mint = account(accounts, 9)?;
+    let vault = account(accounts, 10)?;
+    let authority = account(accounts, 11)?;
+    let token_program = account(accounts, 12)?;
+    let payer = account(accounts, 13)?;
+    let system = account(accounts, 14)?;
+    let rent_account = account(accounts, 15)?;
     validate_token_program_and_mint(mint, token_program, request, realm)?;
     validate_custody_authority(program_id, authority, request)?;
     validate_vault_key(program_id, vault, request, false)?;
@@ -501,11 +637,11 @@ fn execute_transfer(
     request_digest: [u8; 32],
     realm: RealmFacts,
 ) -> ProgramResult {
-    let mint = account(accounts, 7)?;
-    let source = account(accounts, 8)?;
-    let destination = account(accounts, 9)?;
-    let authority = account(accounts, 10)?;
-    let token_program = account(accounts, 11)?;
+    let mint = account(accounts, 9)?;
+    let source = account(accounts, 10)?;
+    let destination = account(accounts, 11)?;
+    let authority = account(accounts, 12)?;
+    let token_program = account(accounts, 13)?;
     validate_token_program_and_mint(mint, token_program, request, realm)?;
     validate_custody_authority(program_id, authority, request)?;
     if !source.is_writable
@@ -588,11 +724,11 @@ fn close_vault(
     request_digest: [u8; 32],
     realm: RealmFacts,
 ) -> ProgramResult {
-    let mint = account(accounts, 7)?;
-    let vault = account(accounts, 8)?;
-    let authority = account(accounts, 9)?;
-    let token_program = account(accounts, 10)?;
-    let rent_refund = account(accounts, 11)?;
+    let mint = account(accounts, 9)?;
+    let vault = account(accounts, 10)?;
+    let authority = account(accounts, 11)?;
+    let token_program = account(accounts, 12)?;
+    let rent_refund = account(accounts, 13)?;
     validate_token_program_and_mint(mint, token_program, request, realm)?;
     validate_custody_authority(program_id, authority, request)?;
     validate_vault_key(program_id, vault, request, true)?;
@@ -661,7 +797,7 @@ fn close_replay(
     request_digest: [u8; 32],
 ) -> ProgramResult {
     let replay = account(accounts, REPLAY)?;
-    let rent_refund = account(accounts, 7)?;
+    let rent_refund = account(accounts, 9)?;
     if rent_refund.key == replay.key
         || !rent_refund.is_writable
         || rent_refund.executable
@@ -1180,11 +1316,76 @@ mod tests {
 
     #[test]
     fn account_counts_are_operation_specific() {
-        assert_eq!(INITIALIZE_REPLAY_ACCOUNT_COUNT_V1, 10);
-        assert_eq!(OPEN_VAULT_ACCOUNT_COUNT_V1, 14);
-        assert_eq!(TRANSFER_ACCOUNT_COUNT_V1, 12);
-        assert_eq!(CLOSE_VAULT_ACCOUNT_COUNT_V1, 12);
-        assert_eq!(CLOSE_REPLAY_ACCOUNT_COUNT_V1, 8);
+        assert_eq!(INITIALIZE_REPLAY_ACCOUNT_COUNT_V1, 12);
+        assert_eq!(OPEN_VAULT_ACCOUNT_COUNT_V1, 16);
+        assert_eq!(TRANSFER_ACCOUNT_COUNT_V1, 14);
+        assert_eq!(CLOSE_VAULT_ACCOUNT_COUNT_V1, 14);
+        assert_eq!(CLOSE_REPLAY_ACCOUNT_COUNT_V1, 10);
+    }
+
+    #[test]
+    fn finalized_realm_authority_refuses_every_substitution_axis() {
+        let registry = Pubkey::new_from_array([0x31; 32]);
+        let digest = [0x32; 32];
+        let expected_realm = Pubkey::find_program_address(
+            &[RAW_RECORD_PDA_SEED_V1, &REALM_SCHEMA_RELEASE_ID_V1, &digest],
+            &registry,
+        )
+        .0;
+        let expected_staging = Pubkey::find_program_address(
+            &[
+                STAGING_CURSOR_PDA_SEED_V1,
+                &REALM_SCHEMA_RELEASE_ID_V1,
+                &digest,
+            ],
+            &registry,
+        )
+        .0;
+        let exact = RealmAuthorityObservation {
+            registry,
+            persisted_registry: registry,
+            expected_realm,
+            realm_key: expected_realm,
+            realm_owner: registry,
+            expected_staging,
+            staging_key: expected_staging,
+            staging_owner: system_program::ID,
+            staging_data_len: 0,
+            realm_digest: digest,
+            expected_digest: digest,
+        };
+        assert_eq!(require_realm_authority(exact), Ok(()));
+        for hostile in [
+            RealmAuthorityObservation {
+                realm_owner: Pubkey::new_unique(),
+                ..exact
+            },
+            RealmAuthorityObservation {
+                realm_key: Pubkey::new_unique(),
+                ..exact
+            },
+            RealmAuthorityObservation {
+                staging_owner: registry,
+                ..exact
+            },
+            RealmAuthorityObservation {
+                staging_key: Pubkey::new_unique(),
+                ..exact
+            },
+            RealmAuthorityObservation {
+                staging_data_len: 1,
+                ..exact
+            },
+            RealmAuthorityObservation {
+                registry: Pubkey::new_unique(),
+                ..exact
+            },
+        ] {
+            assert_eq!(
+                require_realm_authority(hostile),
+                Err(CustodySbfError::Realm.into())
+            );
+        }
     }
 
     #[test]

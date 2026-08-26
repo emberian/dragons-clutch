@@ -24,10 +24,13 @@ use solana_program::{
 };
 
 mod capability;
+mod fixed_role;
 mod found;
 mod frame;
+mod open_market;
 mod records;
 mod release;
+mod resolution;
 
 /// Exact instruction prefix shared by all Core actions.
 pub const CORE_REQUEST_PREFIX_BYTES_V1: usize = REQUEST_BYTES;
@@ -97,6 +100,14 @@ pub fn process_instruction(
         Action::Found if instruction_data.len() == REQUEST_BYTES => {
             found::process(program_id, accounts, request)
         }
+        Action::OpenMarket
+            if instruction_data.len() == open_market::OPEN_MARKET_INSTRUCTION_BYTES_V1 =>
+        {
+            let custody_bytes = instruction_data
+                .get(REQUEST_BYTES..)
+                .ok_or(CoreSbfError::Instruction)?;
+            open_market::process(program_id, accounts, request, request_bytes, custody_bytes)
+        }
         Action::ActivateCapability | Action::CloseCapability => {
             let envelope_end = CAPABILITY_PREFIX_BYTES_V1;
             let envelope_bytes = instruction_data
@@ -133,6 +144,27 @@ pub fn process_instruction(
                 role_request,
                 selection,
                 funding_header,
+            )
+        }
+        Action::VerifyReadiness | Action::AdmitTerminal | Action::Retire
+            if instruction_data.len() == resolution::RESOLUTION_CORE_INSTRUCTION_BYTES_V1 =>
+        {
+            let envelope_end = CAPABILITY_PREFIX_BYTES_V1;
+            let envelope_bytes = instruction_data
+                .get(REQUEST_BYTES..envelope_end)
+                .ok_or(CoreSbfError::Instruction)?;
+            let role_request = instruction_data
+                .get(envelope_end..)
+                .ok_or(CoreSbfError::Instruction)?;
+            let envelope = CoreEffectEnvelopeV1::decode(envelope_bytes)
+                .map_err(|_| CoreSbfError::Instruction)?;
+            resolution::process(
+                program_id,
+                accounts,
+                request,
+                envelope,
+                envelope_bytes,
+                role_request,
             )
         }
         _ => Err(CoreSbfError::Instruction.into()),

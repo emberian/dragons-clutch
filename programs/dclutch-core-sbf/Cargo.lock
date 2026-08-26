@@ -1540,6 +1540,7 @@ version = "0.1.0"
 dependencies = [
  "dclutch-capability-contract",
  "dclutch-core-contract",
+ "dclutch-custody-contract",
  "dclutch-market-core-codec",
  "dclutch-product-contract",
  "dclutch-realm-contract",
@@ -1548,17 +1549,29 @@ dependencies = [
  "dclutch-registry-svm",
  "dclutch-release-set-contract",
  "dclutch-rent-contract",
+ "dclutch-resolution-codec",
  "dclutch-source-contract",
+ "dclutch-token-svm",
  "solana-account 4.3.2",
  "solana-hash 4.5.0",
  "solana-message 3.1.0",
  "solana-program",
+ "solana-program-option",
+ "solana-program-pack",
  "solana-program-test",
  "solana-sdk",
  "solana-sdk-ids",
  "solana-system-interface 2.0.0",
  "solana-transaction 4.1.6",
+ "spl-token-interface",
  "tokio",
+]
+
+[[package]]
+name = "dclutch-custody-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-release-set-contract",
 ]
 
 [[package]]
@@ -1608,11 +1621,19 @@ name = "dclutch-rent-contract"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-resolution-codec"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-source-contract"
 version = "0.1.0"
 dependencies = [
  "dclutch-product-contract",
 ]
+
+[[package]]
+name = "dclutch-token-svm"
+version = "0.1.0"
 
 [[package]]
 name = "defmt"

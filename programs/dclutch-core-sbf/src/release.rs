@@ -16,6 +16,7 @@ use solana_program::{
 use crate::CoreSbfError;
 
 /// Authenticate the Registry cache and one role's current Loader deployment.
+#[inline(never)]
 pub(crate) fn authenticate_role<'info>(
     cache: &AccountInfo<'info>,
     registry: &AccountInfo<'info>,
