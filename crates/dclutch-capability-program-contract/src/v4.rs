@@ -8,6 +8,10 @@
 
 use core::convert::TryInto;
 
+pub use dclutch_account_profile_contract::lifecycle_v3::{
+    CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5 as SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
+    CURRENT_RENT_QUOTE_SCHEMA_RELEASE_PREIMAGE_V5 as SELECTED_LIFECYCLE_SCHEMA_RELEASE_PREIMAGE_V5,
+};
 use dclutch_capability_contract::CapabilityEntryV1;
 use dclutch_core_contract::ContentId;
 use dclutch_release_set_contract::CapabilityExecutionSelectionV1;
@@ -85,6 +89,10 @@ pub struct CapabilityProgramV4 {
 
 impl CapabilityProgramV4 {
     /// Construct one descriptor from eighteen nonzero identities.
+    ///
+    /// The lifecycle artifact must select the sole production V5 schema. A
+    /// capability with no lifecycle actions selects the canonical empty V5
+    /// artifact instead of naming an older or parallel lifecycle schema.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         kind: ContentId,
@@ -96,6 +104,9 @@ impl CapabilityProgramV4 {
         artifacts: CapabilityArtifactsV4,
         root_state_bytes: u32,
     ) -> Result<Self> {
+        if artifacts.lifecycle.schema.to_bytes() != SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5 {
+            return Err(Error::UnsupportedSchema);
+        }
         if root_state_bytes == 0
             || usize::try_from(root_state_bytes).map_err(|_| Error::InvalidRootStateBytes)?
                 > CAPABILITY_ROOT_STATE_MAX_BYTES_V1
@@ -537,7 +548,11 @@ mod tests {
         CapabilityArtifactsV4 {
             account_profile: ArtifactReferenceV4::new(id(7), id(8)),
             request_profile: ArtifactReferenceV4::new(id(9), id(10)),
-            lifecycle: ArtifactReferenceV4::new(id(11), id(12)),
+            lifecycle: ArtifactReferenceV4::new(
+                ContentId::new(SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5)
+                    .expect("selected lifecycle schema"),
+                id(12),
+            ),
             strategy: ArtifactReferenceV4::new(id(13), id(14)),
             transition: ArtifactReferenceV4::new(id(15), id(16)),
             effect: ArtifactReferenceV4::new(id(17), id(18)),
@@ -663,6 +678,33 @@ mod tests {
         assert_eq!(
             value.validate_strategy_transition(artifacts().transition, artifacts().strategy),
             Err(Error::UnsupportedContent)
+        );
+    }
+
+    #[test]
+    fn only_v5_lifecycle_schema_can_be_selected() {
+        let mut legacy = artifacts();
+        legacy.lifecycle = ArtifactReferenceV4::new(
+            ContentId::new(
+                dclutch_account_profile_contract::lifecycle_v3::SUCCESSOR_SCHEMA_RELEASE_ID,
+            )
+            .expect("legacy V4 lifecycle schema"),
+            id(12),
+        );
+        assert_eq!(
+            CapabilityProgramV4::new(id(1), id(2), id(3), id(4), id(5), id(6), legacy, 128),
+            Err(Error::UnsupportedSchema)
+        );
+
+        let mut hostile = canonical().encode();
+        hostile[CAPABILITY_PROGRAM_V4_LIFECYCLE_SCHEMA_OFFSET
+            ..CAPABILITY_PROGRAM_V4_LIFECYCLE_SCHEMA_OFFSET + 32]
+            .copy_from_slice(
+                &dclutch_account_profile_contract::lifecycle_v3::SUCCESSOR_SCHEMA_RELEASE_ID,
+            );
+        assert_eq!(
+            CapabilityProgramV4::decode(&hostile),
+            Err(Error::UnsupportedSchema)
         );
     }
 }
