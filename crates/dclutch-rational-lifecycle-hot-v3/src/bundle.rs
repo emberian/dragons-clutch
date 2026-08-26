@@ -1,6 +1,9 @@
 //! Content-addressed CapabilityProgram V3 bundle for one lifecycle action.
 
-use dclutch_account_profile_contract::v2::AccountProfileV2;
+use dclutch_account_profile_contract::v2::{
+    AccountPrestateV2, AccountProfileV2, NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE,
+    TYPED_SCALAR_ARTIFACT_PROFILE,
+};
 use dclutch_capability_program_contract::v3::{CAPABILITY_PROGRAM_V3_BYTES, CapabilityProgramV3};
 use dclutch_core_contract::ContentId;
 use dclutch_effect_kernel::{
@@ -13,6 +16,7 @@ use dclutch_execution_strategy_contract::v2::{
     EXECUTION_STRATEGY_PROGRAM_BYTES_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
     ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
+use dclutch_rational_representation_v2_kernel::DESCRIPTOR_HEADER_BYTES;
 use dclutch_rational_representation_v2_kernel::REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3;
 use dclutch_rational_representation_v2_lifecycle_contract::{
     LifecycleActionV2,
@@ -21,7 +25,10 @@ use dclutch_rational_representation_v2_lifecycle_contract::{
         RationalLifecycleHotRegisterLayoutV3,
     },
 };
-use dclutch_request_profile_contract::RequestProfileV1;
+use dclutch_request_profile_contract::{
+    RequestProfileV1,
+    v4::{REQUEST_PROFILE_V4_SCHEMA_RELEASE_ID, RequestProfileV4},
+};
 use dclutch_transition_vm::v3::ProgramV3 as TransitionProgramV3;
 use solana_program::hash::hash;
 
@@ -82,9 +89,9 @@ pub struct RationalLifecycleHotBundleV3 {
 
 /// Emit one complete action-specific lifecycle Hot bundle.
 ///
-/// The current checkpoint deliberately propagates RequestProfile V1 capacity
-/// refusal. It does not reinterpret that artifact bound as a representation
-/// support limit.
+/// Fixed-cardinality receipt/coordinate actions use the fixed V1 projector.
+/// Complete-support receipt retirement uses compact repeated-row V4 for every
+/// support width, including K=1, so V1 is not a parallel support-wide path.
 pub fn build_rational_lifecycle_hot_bundle_v3(
     input: RationalLifecycleHotBundleInputV3<'_>,
 ) -> Result<RationalLifecycleHotBundleV3> {
@@ -121,7 +128,7 @@ pub fn build_rational_lifecycle_hot_bundle_v3(
         content(input.derivation_policy)?,
         content(input.capacity_profile)?,
         digest(&effect)?,
-        content(dclutch_request_profile_contract::SCHEMA_RELEASE_ID)?,
+        content(request_profile_schema(input.action))?,
         digest(&request_profile)?,
         content(EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2)?,
         digest(&strategy)?,
@@ -151,12 +158,25 @@ pub fn validate_rational_lifecycle_hot_bundle_v3(
     let descriptor = CapabilityProgramV3::decode(&bundle.descriptor).map_err(Error::Descriptor)?;
     let account =
         AccountProfileV2::decode(&bundle.account_profile).map_err(Error::AccountProfile)?;
-    let request = RequestProfileV1::decode_selected(
-        descriptor.request_profile_program().to_bytes(),
-        hash(&bundle.request_profile).to_bytes(),
-        &bundle.request_profile,
-    )
-    .map_err(Error::RequestProfile)?;
+    let (request, projected_request_bytes) = if bundle.action != LifecycleActionV2::RetireReceipt {
+        let request = RequestProfileV1::decode_selected(
+            descriptor.request_profile_program().to_bytes(),
+            hash(&bundle.request_profile).to_bytes(),
+            &bundle.request_profile,
+        )
+        .map_err(Error::RequestProfile)?;
+        let bytes = request.request_bytes(0).map_err(Error::RequestProfile)?;
+        (request, bytes)
+    } else {
+        let request = RequestProfileV4::decode_selected(
+            descriptor.request_profile_program().to_bytes(),
+            hash(&bundle.request_profile).to_bytes(),
+            &bundle.request_profile,
+        )
+        .map_err(Error::RequestProfileV4)?;
+        let bytes = request.request_bytes().map_err(Error::RequestProfileV4)?;
+        (request.request_profile(), bytes)
+    };
     let transition = TransitionProgramV3::decode(&bundle.transition).map_err(Error::Transition)?;
     let strategy = ExecutionStrategyProgramV2::decode(&bundle.strategy).map_err(Error::Strategy)?;
     let effect = EffectProgramV3::decode_selected(
@@ -178,8 +198,7 @@ pub fn validate_rational_lifecycle_hot_bundle_v3(
     if descriptor.config_schema().to_bytes() != REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3
         || descriptor.request_schema().to_bytes() != RATIONAL_LIFECYCLE_HOT_SCHEMA_RELEASE_ID_V3
         || descriptor.account_profile() != digest(&bundle.account_profile)?
-        || descriptor.request_profile_schema().to_bytes()
-            != dclutch_request_profile_contract::SCHEMA_RELEASE_ID
+        || descriptor.request_profile_schema().to_bytes() != request_profile_schema(bundle.action)
         || descriptor.request_profile_program() != digest(&bundle.request_profile)?
         || descriptor.transition_schema().to_bytes() != EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2
         || descriptor.transition_program() != digest(&bundle.strategy)?
@@ -189,7 +208,8 @@ pub fn validate_rational_lifecycle_hot_bundle_v3(
         || strategy.transition_program() != digest(&bundle.transition)?
         || account.fixed_account_count() != logical_accounts
         || account.item_account_stride() != 0
-        || request.request_bytes(0).map_err(Error::RequestProfile)? != request_bytes
+        || !account_profile_matches(account, bundle.action)?
+        || projected_request_bytes != request_bytes
         || request.item_request_bytes() != 0
         || effect.fixed_account_count() != logical_accounts
         || effect.item_account_stride() != 0
@@ -220,6 +240,51 @@ pub fn validate_rational_lifecycle_hot_bundle_v3(
     Ok(())
 }
 
+fn account_profile_matches(
+    account: AccountProfileV2<'_>,
+    action: LifecycleActionV2,
+) -> Result<bool> {
+    let Some(product_width) = account
+        .tail_count_projection()
+        .map_err(Error::AccountProfile)?
+    else {
+        return Ok(false);
+    };
+    if product_width.account() != 4
+        || usize::from(product_width.register())
+            != dclutch_rational_representation_v2_lifecycle_contract::hot_v3::RATIONAL_LIFECYCLE_SCALAR_PRODUCT_OUTCOME_COUNT_V3
+        || usize::try_from(product_width.data_offset()).ok()
+            != Some(dclutch_product_payoff_v2_codec::runtime_v3::BASIS_WIDTH_OFFSET_V3)
+    {
+        return Ok(false);
+    }
+    if action != LifecycleActionV2::RetireReceipt {
+        return Ok(account.artifact_profile() == TYPED_SCALAR_ARTIFACT_PROFILE
+            && account
+                .nonzero_u64_tail_count_projection()
+                .map_err(Error::AccountProfile)?
+                .is_none());
+    }
+    let Some(support) = account
+        .nonzero_u64_tail_count_projection()
+        .map_err(Error::AccountProfile)?
+    else {
+        return Ok(false);
+    };
+    let descriptor = account.rule(false, 1).map_err(Error::AccountProfile)?;
+    let alias = account.rule(false, 14).map_err(Error::AccountProfile)?;
+    Ok(account.artifact_profile() == NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
+        && support.account() == 1
+        && usize::from(support.destination())
+            == dclutch_rational_representation_v2_lifecycle_contract::hot_v3::RATIONAL_LIFECYCLE_SCALAR_COORDINATE_COUNT_V3
+        && usize::try_from(support.tail_offset()).ok() == Some(DESCRIPTOR_HEADER_BYTES)
+        && descriptor.prestate() == AccountPrestateV2::AdapterAuthenticatedVariableData
+        && usize::try_from(descriptor.data_length()).ok() == Some(DESCRIPTOR_HEADER_BYTES)
+        && alias.prestate() == AccountPrestateV2::AdapterAuthenticatedVariableDataAlias
+        && alias.alias_index() == 1
+        && alias.data_length() == 0)
+}
+
 fn geometry_matches(
     account: AccountProfileV2<'_>,
     request: RequestProfileV1<'_>,
@@ -246,6 +311,14 @@ fn geometry_matches(
         && effect.item_identity_stride() == 0
 }
 
+const fn request_profile_schema(action: LifecycleActionV2) -> [u8; 32] {
+    if matches!(action, LifecycleActionV2::RetireReceipt) {
+        REQUEST_PROFILE_V4_SCHEMA_RELEASE_ID
+    } else {
+        dclutch_request_profile_contract::SCHEMA_RELEASE_ID
+    }
+}
+
 fn digest(bytes: &[u8]) -> Result<ContentId> {
     content(hash(bytes).to_bytes())
 }
@@ -264,6 +337,7 @@ mod tests {
     use dclutch_product_payoff_v2_codec::runtime_v3::{
         BASIS_HEADER_BYTES_V3, BasisInputV3, BasisKindV3, compile_basis_v3,
     };
+    use dclutch_rational_representation_v2_kernel::DESCRIPTOR_COEFFICIENT_BYTES;
 
     fn id(value: u8) -> [u8; 32] {
         [value; 32]
@@ -329,6 +403,14 @@ mod tests {
             let mut lengths = vec![0_u32; count];
             *lengths.get_mut(4).expect("Product basis") =
                 u32::try_from(basis.len()).expect("basis length");
+            if action == LifecycleActionV2::RetireReceipt {
+                let descriptor_bytes =
+                    DESCRIPTOR_HEADER_BYTES + 258_usize * DESCRIPTOR_COEFFICIENT_BYTES;
+                *lengths.get_mut(1).expect("descriptor representative") =
+                    u32::try_from(descriptor_bytes).expect("descriptor bytes");
+                *lengths.get_mut(14).expect("descriptor route alias") =
+                    u32::try_from(descriptor_bytes).expect("descriptor bytes");
+            }
             if matches!(
                 action,
                 LifecycleActionV2::ActivateCoordinate | LifecycleActionV2::RetireCoordinate
@@ -354,6 +436,58 @@ mod tests {
                 RATIONAL_LIFECYCLE_HOT_SCHEMA_RELEASE_ID_V3
             );
         }
+    }
+
+    #[test]
+    fn support_wide_retirement_binds_compact_v4_to_profile10_descriptor_count() {
+        let basis = basis();
+        let count = usize::from(
+            lifecycle_logical_account_count_v3(LifecycleActionV2::RetireReceipt, 3)
+                .expect("logical count"),
+        );
+        let descriptor_bytes = DESCRIPTOR_HEADER_BYTES + 258_usize * DESCRIPTOR_COEFFICIENT_BYTES;
+        let mut lengths = vec![0_u32; count];
+        *lengths.get_mut(1).expect("descriptor representative") =
+            u32::try_from(descriptor_bytes).expect("descriptor bytes");
+        *lengths.get_mut(4).expect("Product basis") =
+            u32::try_from(basis.len()).expect("basis bytes");
+        *lengths.get_mut(14).expect("descriptor route alias") =
+            u32::try_from(descriptor_bytes).expect("descriptor bytes");
+        let bundle = build_rational_lifecycle_hot_bundle_v3(input(
+            LifecycleActionV2::RetireReceipt,
+            3,
+            &basis,
+            &lengths,
+        ))
+        .expect("three-row bundle");
+        validate_rational_lifecycle_hot_bundle_v3(&bundle).expect("joined three-row bundle");
+        let account = AccountProfileV2::decode(&bundle.account_profile).expect("account profile");
+        assert_eq!(
+            account.artifact_profile(),
+            NONZERO_U64_TAIL_COUNT_ARTIFACT_PROFILE
+        );
+        assert_eq!(
+            account
+                .nonzero_u64_tail_count_projection()
+                .expect("projection")
+                .expect("support projection")
+                .destination(),
+            7
+        );
+        let request = RequestProfileV4::decode(&bundle.request_profile).expect("V4 profile");
+        assert_eq!(request.row_geometry().expected_row_count, 3);
+
+        let descriptor = lengths.get_mut(1).expect("descriptor representative");
+        *descriptor = descriptor.checked_sub(8).expect("short descriptor");
+        assert_eq!(
+            build_rational_lifecycle_hot_bundle_v3(input(
+                LifecycleActionV2::RetireReceipt,
+                3,
+                &basis,
+                &lengths,
+            )),
+            Err(Error::AccountObservation)
+        );
     }
 
     #[test]

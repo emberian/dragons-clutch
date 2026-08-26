@@ -18,6 +18,10 @@ use solana_sdk_ids::sysvar;
 
 use crate::{Error, Result, lifecycle_claims_account_count_v3, validate_action_geometry};
 
+// IPv6 minimum-MTU Solana packet payload. Address lookup tables can compress
+// account keys, but never instruction bytes themselves.
+const MAX_SOLANA_PACKET_BYTES: usize = 1_232;
+
 /// Checked release evidence for the immutable Trading Hot outer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CheckedRationalLifecycleHotOuterV3 {
@@ -131,6 +135,9 @@ pub fn build_rational_lifecycle_hot_instruction_v3(
     );
     data.extend_from_slice(&envelope.to_bytes());
     data.extend_from_slice(&family_bytes);
+    if data.len() > MAX_SOLANA_PACKET_BYTES {
+        return Err(Error::Operator);
+    }
 
     let mut accounts = Vec::with_capacity(
         state
@@ -272,19 +279,24 @@ mod tests {
         Pubkey::new_from_array([value; 32])
     }
 
-    fn exact_child(action: LifecycleActionV2) -> Instruction {
-        let coordinate_count = u32::from(!matches!(action, LifecycleActionV2::ActivateReceipt));
+    fn exact_child_with_coordinate_count(
+        action: LifecycleActionV2,
+        coordinate_count: u32,
+    ) -> Instruction {
         let mut coordinate_bytes = Vec::new();
-        if coordinate_count == 1 {
+        for index in 0..coordinate_count {
+            let tag = u8::try_from(index).expect("small row");
             let mut row = [0_u8; LIFECYCLE_COORDINATE_BYTES_V2];
             LifecycleCoordinateV2 {
-                outcome: 1,
+                outcome: index.checked_add(1).expect("outcome"),
                 coefficient: 1,
-                shard_mint: key(31).to_bytes(),
-                structured_custody_account: key(32).to_bytes(),
-                claims_custody_owner: key(33).to_bytes(),
-                claims_custody_position: key(34).to_bytes(),
-                position_admission: key(35).to_bytes(),
+                shard_mint: key(31_u8.checked_add(tag).expect("shard key")).to_bytes(),
+                structured_custody_account: key(41_u8.checked_add(tag).expect("custody key"))
+                    .to_bytes(),
+                claims_custody_owner: key(51_u8.checked_add(tag).expect("owner key")).to_bytes(),
+                claims_custody_position: key(61_u8.checked_add(tag).expect("Position key"))
+                    .to_bytes(),
+                position_admission: key(71_u8.checked_add(tag).expect("admission key")).to_bytes(),
                 observed_shard_lamports: 10,
                 observed_structured_lamports: 11,
                 observed_position_lamports: 12,
@@ -375,6 +387,11 @@ mod tests {
             accounts,
             data: child_data,
         }
+    }
+
+    fn exact_child(action: LifecycleActionV2) -> Instruction {
+        let coordinate_count = u32::from(!matches!(action, LifecycleActionV2::ActivateReceipt));
+        exact_child_with_coordinate_count(action, coordinate_count)
     }
 
     fn fixed() -> Vec<AccountMeta> {
@@ -471,6 +488,23 @@ mod tests {
         child.accounts.get_mut(21).expect("Position").is_writable = false;
         assert_eq!(
             build_rational_lifecycle_hot_instruction_v3(&state(&fixed), &child),
+            Err(Error::Operator)
+        );
+    }
+
+    #[test]
+    fn two_row_support_is_constructible_but_three_rows_need_staged_transport() {
+        let fixed = fixed();
+        let two = exact_child_with_coordinate_count(LifecycleActionV2::RetireReceipt, 2);
+        let result = build_rational_lifecycle_hot_instruction_v3(&state(&fixed), &two)
+            .expect("two-row Hot instruction");
+        assert_eq!(result.instruction.data.len(), 1_072);
+        assert_eq!(result.instruction.accounts.len(), 66);
+        assert!(result.requires_v0_address_lookup);
+
+        let three = exact_child_with_coordinate_count(LifecycleActionV2::RetireReceipt, 3);
+        assert_eq!(
+            build_rational_lifecycle_hot_instruction_v3(&state(&fixed), &three),
             Err(Error::Operator)
         );
     }

@@ -3,6 +3,8 @@
 use dclutch_rational_representation_v2_lifecycle_contract::{
     LifecycleActionV2,
     hot_v3::{
+        RATIONAL_LIFECYCLE_HOT_COMMON_IDENTITIES_V3, RATIONAL_LIFECYCLE_HOT_COMMON_SCALARS_V3,
+        RATIONAL_LIFECYCLE_HOT_ITEM_IDENTITIES_V3, RATIONAL_LIFECYCLE_HOT_ITEM_SCALARS_V3,
         RATIONAL_LIFECYCLE_HOT_MAGIC_V3, RATIONAL_LIFECYCLE_HOT_VERSION_V3,
         RATIONAL_LIFECYCLE_IDENTITY_DESCRIPTOR_V3, RATIONAL_LIFECYCLE_IDENTITY_GRAPH_V3,
         RATIONAL_LIFECYCLE_IDENTITY_MARKET_V3, RATIONAL_LIFECYCLE_IDENTITY_RECEIPT_MINT_V3,
@@ -27,8 +29,8 @@ use dclutch_rational_representation_v2_lifecycle_contract::{
         RATIONAL_LIFECYCLE_ITEM_SCALAR_STRUCTURED_AMOUNT_V3,
         RATIONAL_LIFECYCLE_ITEM_SCALAR_STRUCTURED_LAMPORTS_V3,
         RATIONAL_LIFECYCLE_ITEM_SCALAR_STRUCTURED_RENT_V3, RATIONAL_LIFECYCLE_SCALAR_ACTION_V3,
-        RATIONAL_LIFECYCLE_SCALAR_GENERATION_V3, RATIONAL_LIFECYCLE_SCALAR_MARKET_REVISION_V3,
-        RATIONAL_LIFECYCLE_SCALAR_OUTCOME_COUNT_V3,
+        RATIONAL_LIFECYCLE_SCALAR_COORDINATE_COUNT_V3, RATIONAL_LIFECYCLE_SCALAR_GENERATION_V3,
+        RATIONAL_LIFECYCLE_SCALAR_MARKET_REVISION_V3, RATIONAL_LIFECYCLE_SCALAR_OUTCOME_COUNT_V3,
         RATIONAL_LIFECYCLE_SCALAR_PRODUCT_OUTCOME_COUNT_V3,
         RATIONAL_LIFECYCLE_SCALAR_RECEIPT_LAMPORTS_V3, RATIONAL_LIFECYCLE_SCALAR_RECEIPT_RENT_V3,
         RATIONAL_LIFECYCLE_SCALAR_RECEIPT_SUPPLY_V3, RATIONAL_LIFECYCLE_SCALAR_RENT_AFTER_V3,
@@ -42,6 +44,10 @@ use dclutch_request_profile_contract::{
         IdentityRegisterV1, RequestCoordinateV1, RequestGeometryV1, RequestInstructionV1,
         ScalarRegisterV1, encode_request_profile_v1_atomic,
     },
+    v4::{
+        REQUEST_PROFILE_V4_HEADER_BYTES, REQUEST_PROFILE_V4_ROW_OPERATION_BYTES, RowInstructionV4,
+        RowProgramGeometryV4, encode_request_profile_v4_atomic,
+    },
 };
 use dclutch_transition_vm::v3::{
     HEADER_BYTES as TRANSITION_HEADER_BYTES, INSTRUCTION_BYTES as TRANSITION_INSTRUCTION_BYTES,
@@ -53,6 +59,84 @@ use crate::{Error, Result, validate_action_geometry};
 const BASE_REQUEST_OPERATIONS: usize = 24;
 const ROW_REQUEST_OPERATIONS: usize = 20;
 
+/// Encode the compact repeated-row RequestProfile V4 for a nonempty lifecycle support.
+///
+/// The embedded V1 program validates/projects only the exact 400-byte prefix.
+/// One canonical 272-byte row program is repeated for the descriptor-derived
+/// nonzero support count, which is supplied independently in protected scalar 7.
+/// Product outcome width remains protected scalar 10 and never supplies `K`.
+pub fn encode_rational_lifecycle_request_profile_v4(
+    action: LifecycleActionV2,
+    coordinate_count: u32,
+) -> Result<Vec<u8>> {
+    let coordinates = validate_action_geometry(action, coordinate_count)?;
+    if action != LifecycleActionV2::RetireReceipt || coordinates == 0 {
+        return Err(Error::ActionGeometry);
+    }
+    let layout = RationalLifecycleHotRegisterLayoutV3::new(coordinates);
+    let fixed = base_request_instructions(action, coordinate_count)?;
+    let embedded_geometry = RequestGeometryV1::new(
+        narrow_u32(RationalLifecycleHotLayoutV3::FIXED_BYTES)?,
+        0,
+        narrow_u16(layout.scalar_count().ok_or(Error::InvalidLength)?)?,
+        0,
+        narrow_u16(layout.identity_count().ok_or(Error::InvalidLength)?)?,
+        0,
+    );
+    let embedded_bytes = REQUEST_HEADER_BYTES
+        .checked_add(
+            fixed
+                .len()
+                .checked_mul(REQUEST_OPERATION_BYTES)
+                .ok_or(Error::InvalidLength)?,
+        )
+        .ok_or(Error::InvalidLength)?;
+    let mut embedded_scratch = vec![0_u8; embedded_bytes];
+    let mut embedded_output = vec![0_u8; embedded_bytes];
+    encode_request_profile_v1_atomic(
+        embedded_geometry,
+        &fixed,
+        &[],
+        &mut embedded_scratch,
+        &mut embedded_output,
+    )
+    .map_err(Error::RequestProfile)?;
+
+    let row_instructions = row_request_instructions_v4()?;
+    let geometry = RowProgramGeometryV4 {
+        expected_row_count: coordinate_count,
+        row_bytes: narrow_u32(RationalLifecycleHotLayoutV3::ITEM_BYTES)?,
+        request_row_count_offset: narrow_u32(RationalLifecycleHotLayoutV3::COORDINATE_COUNT)?,
+        ordered_key_offset: narrow_u32(RationalLifecycleHotLayoutV3::ITEM_OUTCOME)?,
+        protected_scalars: narrow_u16(RATIONAL_LIFECYCLE_HOT_COMMON_SCALARS_V3)?,
+        row_scalar_stride: narrow_u16(RATIONAL_LIFECYCLE_HOT_ITEM_SCALARS_V3)?,
+        protected_identities: narrow_u16(RATIONAL_LIFECYCLE_HOT_COMMON_IDENTITIES_V3)?,
+        row_identity_stride: narrow_u16(RATIONAL_LIFECYCLE_HOT_ITEM_IDENTITIES_V3)?,
+        row_count_common_scalar: narrow_u16(RATIONAL_LIFECYCLE_SCALAR_COORDINATE_COUNT_V3)?,
+        ordered_key_row_scalar: narrow_u16(RATIONAL_LIFECYCLE_ITEM_SCALAR_OUTCOME_V3)?,
+    };
+    let bytes = REQUEST_PROFILE_V4_HEADER_BYTES
+        .checked_add(embedded_output.len())
+        .and_then(|prefix| {
+            row_instructions
+                .len()
+                .checked_mul(REQUEST_PROFILE_V4_ROW_OPERATION_BYTES)
+                .and_then(|rows| prefix.checked_add(rows))
+        })
+        .ok_or(Error::InvalidLength)?;
+    let mut scratch = vec![0_u8; bytes];
+    let mut output = vec![0_u8; bytes];
+    encode_request_profile_v4_atomic(
+        &embedded_output,
+        geometry,
+        &row_instructions,
+        &mut scratch,
+        &mut output,
+    )
+    .map_err(Error::RequestProfileV4)?;
+    Ok(output)
+}
+
 /// Encode the exact descriptor/action-specialized RequestProfile.
 ///
 /// This checkpoint uses RequestProfile V1's fixed operation table. Geometry
@@ -63,6 +147,9 @@ pub fn encode_rational_lifecycle_request_profile_v3(
     coordinate_count: u32,
 ) -> Result<Vec<u8>> {
     let coordinates = validate_action_geometry(action, coordinate_count)?;
+    if action == LifecycleActionV2::RetireReceipt {
+        return encode_rational_lifecycle_request_profile_v4(action, coordinate_count);
+    }
     let layout = RationalLifecycleHotRegisterLayoutV3::new(coordinates);
     let mut instructions = Vec::with_capacity(
         BASE_REQUEST_OPERATIONS
@@ -351,6 +438,94 @@ fn append_row_request_instructions(
     Ok(())
 }
 
+fn row_request_instructions_v4() -> Result<[RowInstructionV4; ROW_REQUEST_OPERATIONS]> {
+    let offset = |value: usize| narrow_u32(value);
+    let scalar = |value: usize| narrow_u16(value);
+    let identity = |value: usize| narrow_u16(value);
+    Ok([
+        RowInstructionV4::project_u32(
+            offset(RationalLifecycleHotLayoutV3::ITEM_OUTCOME)?,
+            scalar(RATIONAL_LIFECYCLE_ITEM_SCALAR_OUTCOME_V3)?,
+        ),
+        RowInstructionV4::require_zero(
+            offset(RationalLifecycleHotLayoutV3::ITEM_RESERVED_HEAD)?,
+            4,
+        ),
+        RowInstructionV4::project_u64(
+            offset(RationalLifecycleHotLayoutV3::ITEM_COEFFICIENT)?,
+            scalar(RATIONAL_LIFECYCLE_ITEM_SCALAR_COEFFICIENT_V3)?,
+        ),
+        RowInstructionV4::project_identity(
+            offset(RationalLifecycleHotLayoutV3::ITEM_SHARD_MINT)?,
+            identity(RATIONAL_LIFECYCLE_ITEM_IDENTITY_SHARD_MINT_V3)?,
+        ),
+        RowInstructionV4::project_identity(
+            offset(RationalLifecycleHotLayoutV3::ITEM_STRUCTURED_CUSTODY)?,
+            identity(RATIONAL_LIFECYCLE_ITEM_IDENTITY_STRUCTURED_CUSTODY_V3)?,
+        ),
+        RowInstructionV4::project_identity(
+            offset(RationalLifecycleHotLayoutV3::ITEM_CUSTODY_OWNER)?,
+            identity(RATIONAL_LIFECYCLE_ITEM_IDENTITY_CUSTODY_OWNER_V3)?,
+        ),
+        RowInstructionV4::project_identity(
+            offset(RationalLifecycleHotLayoutV3::ITEM_CUSTODY_POSITION)?,
+            identity(RATIONAL_LIFECYCLE_ITEM_IDENTITY_CUSTODY_POSITION_V3)?,
+        ),
+        RowInstructionV4::project_identity(
+            offset(RationalLifecycleHotLayoutV3::ITEM_POSITION_ADMISSION)?,
+            identity(RATIONAL_LIFECYCLE_ITEM_IDENTITY_POSITION_ADMISSION_V3)?,
+        ),
+        RowInstructionV4::project_u64(
+            offset(RationalLifecycleHotLayoutV3::ITEM_SHARD_LAMPORTS)?,
+            scalar(RATIONAL_LIFECYCLE_ITEM_SCALAR_SHARD_LAMPORTS_V3)?,
+        ),
+        RowInstructionV4::project_u64(
+            offset(RationalLifecycleHotLayoutV3::ITEM_STRUCTURED_LAMPORTS)?,
+            scalar(RATIONAL_LIFECYCLE_ITEM_SCALAR_STRUCTURED_LAMPORTS_V3)?,
+        ),
+        RowInstructionV4::project_u64(
+            offset(RationalLifecycleHotLayoutV3::ITEM_POSITION_LAMPORTS)?,
+            scalar(RATIONAL_LIFECYCLE_ITEM_SCALAR_POSITION_LAMPORTS_V3)?,
+        ),
+        RowInstructionV4::project_u64(
+            offset(RationalLifecycleHotLayoutV3::ITEM_ADMISSION_LAMPORTS)?,
+            scalar(RATIONAL_LIFECYCLE_ITEM_SCALAR_ADMISSION_LAMPORTS_V3)?,
+        ),
+        RowInstructionV4::project_u64(
+            offset(RationalLifecycleHotLayoutV3::ITEM_SHARD_RENT)?,
+            scalar(RATIONAL_LIFECYCLE_ITEM_SCALAR_SHARD_RENT_V3)?,
+        ),
+        RowInstructionV4::project_u64(
+            offset(RationalLifecycleHotLayoutV3::ITEM_STRUCTURED_RENT)?,
+            scalar(RATIONAL_LIFECYCLE_ITEM_SCALAR_STRUCTURED_RENT_V3)?,
+        ),
+        RowInstructionV4::project_u64(
+            offset(RationalLifecycleHotLayoutV3::ITEM_POSITION_RENT)?,
+            scalar(RATIONAL_LIFECYCLE_ITEM_SCALAR_POSITION_RENT_V3)?,
+        ),
+        RowInstructionV4::project_u64(
+            offset(RationalLifecycleHotLayoutV3::ITEM_ADMISSION_RENT)?,
+            scalar(RATIONAL_LIFECYCLE_ITEM_SCALAR_ADMISSION_RENT_V3)?,
+        ),
+        RowInstructionV4::project_u64(
+            offset(RationalLifecycleHotLayoutV3::ITEM_SHARD_SUPPLY)?,
+            scalar(RATIONAL_LIFECYCLE_ITEM_SCALAR_SHARD_SUPPLY_V3)?,
+        ),
+        RowInstructionV4::project_u64(
+            offset(RationalLifecycleHotLayoutV3::ITEM_STRUCTURED_AMOUNT)?,
+            scalar(RATIONAL_LIFECYCLE_ITEM_SCALAR_STRUCTURED_AMOUNT_V3)?,
+        ),
+        RowInstructionV4::project_u64(
+            offset(RationalLifecycleHotLayoutV3::ITEM_POSITION_REVISION)?,
+            scalar(RATIONAL_LIFECYCLE_ITEM_SCALAR_POSITION_REVISION_V3)?,
+        ),
+        RowInstructionV4::require_zero(
+            offset(RationalLifecycleHotLayoutV3::ITEM_RESERVED_TAIL)?,
+            8,
+        ),
+    ])
+}
+
 fn request(offset: usize) -> Result<RequestCoordinateV1> {
     Ok(RequestCoordinateV1::fixed(narrow_u32(offset)?))
 }
@@ -426,7 +601,7 @@ fn narrow_u32(value: usize) -> Result<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_request_profile_contract::RequestProfileV1;
+    use dclutch_request_profile_contract::{RequestProfileV1, v4::RequestProfileV4};
     use dclutch_transition_vm::v3::ProgramV3;
 
     #[test]
@@ -441,18 +616,40 @@ mod tests {
                 .expect("request profile");
             let transition =
                 encode_rational_lifecycle_transition_v3(action, coordinates).expect("transition");
-            RequestProfileV1::decode(&request).expect("decode request profile");
+            if action == LifecycleActionV2::RetireReceipt {
+                RequestProfileV4::decode(&request).expect("decode V4 request profile");
+            } else {
+                RequestProfileV1::decode(&request).expect("decode V1 request profile");
+            }
             ProgramV3::decode(&transition).expect("decode transition");
         }
         assert_eq!(
             encode_rational_lifecycle_request_profile_v3(LifecycleActionV2::ActivateReceipt, 1,),
             Err(Error::ActionGeometry)
         );
+        RequestProfileV4::decode(
+            &encode_rational_lifecycle_request_profile_v3(LifecycleActionV2::RetireReceipt, 2)
+                .expect("two-row successor"),
+        )
+        .expect("decode two-row successor");
+    }
+
+    #[test]
+    fn compact_v4_profile_is_constant_width_for_sparse_three_row_support() {
+        let one = encode_rational_lifecycle_request_profile_v4(LifecycleActionV2::RetireReceipt, 1)
+            .expect("one-row V4");
+        let three =
+            encode_rational_lifecycle_request_profile_v4(LifecycleActionV2::RetireReceipt, 3)
+                .expect("three-row V4");
+        assert_eq!(one.len(), three.len());
+        let profile = RequestProfileV4::decode(&three).expect("decode V4");
+        assert_eq!(profile.row_geometry().expected_row_count, 3);
+        assert_eq!(profile.row_geometry().row_bytes, 272);
+        assert_eq!(profile.row_geometry().row_count_common_scalar, 7);
+        assert_eq!(profile.request_bytes(), Ok(1_216));
         assert_eq!(
-            encode_rational_lifecycle_request_profile_v3(LifecycleActionV2::RetireReceipt, 2,),
-            Err(Error::RequestProfile(
-                dclutch_request_profile_contract::Error::InvalidLength
-            ))
+            encode_rational_lifecycle_request_profile_v4(LifecycleActionV2::ActivateCoordinate, 1,),
+            Err(Error::ActionGeometry)
         );
     }
 }

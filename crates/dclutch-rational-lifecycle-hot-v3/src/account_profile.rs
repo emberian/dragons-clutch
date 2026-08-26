@@ -1,25 +1,33 @@
 //! Exact logical AccountProfile for one lifecycle action/support geometry.
 
 use dclutch_account_profile_contract::v2::{
-    HEADER_BYTES as ACCOUNT_HEADER_BYTES, OPERATION_BYTES as ACCOUNT_OPERATION_BYTES,
-    RULE_BYTES as ACCOUNT_RULE_BYTES,
+    AccountPrestateV2, HEADER_BYTES as ACCOUNT_HEADER_BYTES,
+    OPERATION_BYTES as ACCOUNT_OPERATION_BYTES, RULE_BYTES as ACCOUNT_RULE_BYTES,
+    TRUSTED_EXECUTING_PROGRAM_HEADER_BYTES, TrustedEnvironmentV2, TrustedIdentityEnvironmentV2,
     encode::{
         AccountAliasInputV2, AccountCoordinateV2, AccountEffectPermissionsV2,
         AccountOperationInputV2, AccountPrivilegesV2, AccountProfileArtifactV2, AccountRuleInputV2,
-        RegisterGeometryV2, ScalarCoordinateV2, encode_account_profile_v2_atomic,
+        AccountRuleWithPrestateInputV2, RegisterGeometryV2, ScalarCoordinateV2,
+        encode_account_profile_v2_atomic,
+        encode_account_profile_with_nonzero_u64_tail_count_v2_atomic,
     },
 };
 use dclutch_product_payoff_v2_codec::runtime_v3::{BASIS_WIDTH_OFFSET_V3, ProductBasisV3};
+use dclutch_rational_representation_v2_kernel::{
+    DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES,
+};
 use dclutch_rational_representation_v2_lifecycle_contract::{
     LifecycleActionV2,
     hot_v3::{
+        RATIONAL_LIFECYCLE_SCALAR_COORDINATE_COUNT_V3,
         RATIONAL_LIFECYCLE_SCALAR_PRODUCT_OUTCOME_COUNT_V3, RationalLifecycleHotRegisterLayoutV3,
     },
 };
 
 use crate::{Error, Result, lifecycle_logical_account_count_v3, validate_action_geometry};
 
-const PROFILE_OPERATION_COUNT: usize = 1;
+const TYPED_PROFILE_OPERATION_COUNT: usize = 1;
+const SUPPORT_PROFILE_OPERATION_COUNT: usize = 2;
 
 /// Exact account observations needed to emit one descriptor-specific profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -56,17 +64,31 @@ pub fn encode_rational_lifecycle_account_profile_v3(
     {
         return Err(Error::AccountObservation);
     }
+    let support_wide = action == LifecycleActionV2::RetireReceipt;
+    if support_wide {
+        let descriptor_bytes = usize::try_from(basis.basis_width())
+            .ok()
+            .and_then(|width| width.checked_mul(DESCRIPTOR_COEFFICIENT_BYTES))
+            .and_then(|tail| DESCRIPTOR_HEADER_BYTES.checked_add(tail))
+            .and_then(|bytes| u32::try_from(bytes).ok())
+            .ok_or(Error::InvalidLength)?;
+        if input.logical_data_lengths.get(1) != Some(&descriptor_bytes)
+            || input.logical_data_lengths.get(14) != Some(&descriptor_bytes)
+        {
+            return Err(Error::AccountObservation);
+        }
+    }
     let mut rules = Vec::with_capacity(logical_count);
     for index in 0..logical_count {
         rules.push(rule(action, index, input.logical_data_lengths)?);
     }
-    let operation = [AccountOperationInputV2::ProjectTailCountU32 {
+    let product_width = AccountOperationInputV2::ProjectTailCountU32 {
         account: AccountCoordinateV2::fixed(4),
         destination: ScalarCoordinateV2::common(narrow_u16(
             RATIONAL_LIFECYCLE_SCALAR_PRODUCT_OUTCOME_COUNT_V3,
         )?),
         data_offset: narrow_u32(BASIS_WIDTH_OFFSET_V3)?,
-    }];
+    };
     let registers = RationalLifecycleHotRegisterLayoutV3::new(coordinates);
     let geometry = RegisterGeometryV2 {
         common_scalars: narrow_u16(registers.scalar_count().ok_or(Error::InvalidLength)?)?,
@@ -74,31 +96,84 @@ pub fn encode_rational_lifecycle_account_profile_v3(
         common_identities: narrow_u16(registers.identity_count().ok_or(Error::InvalidLength)?)?,
         item_identity_stride: 0,
     };
-    let bytes = ACCOUNT_HEADER_BYTES
+    let operation_count = if support_wide {
+        SUPPORT_PROFILE_OPERATION_COUNT
+    } else {
+        TYPED_PROFILE_OPERATION_COUNT
+    };
+    let header_bytes = if support_wide {
+        TRUSTED_EXECUTING_PROGRAM_HEADER_BYTES
+    } else {
+        ACCOUNT_HEADER_BYTES
+    };
+    let bytes = header_bytes
         .checked_add(
             logical_count
                 .checked_mul(ACCOUNT_RULE_BYTES)
                 .ok_or(Error::InvalidLength)?,
         )
         .and_then(|value| {
-            PROFILE_OPERATION_COUNT
+            operation_count
                 .checked_mul(ACCOUNT_OPERATION_BYTES)
                 .and_then(|operations| value.checked_add(operations))
         })
         .ok_or(Error::InvalidLength)?;
     let mut scratch = vec![0_u8; bytes];
     let mut output = vec![0_u8; bytes];
-    encode_account_profile_v2_atomic(
-        AccountProfileArtifactV2::TypedScalar,
-        &rules,
-        &[],
-        &operation,
-        &[],
-        geometry,
-        &mut scratch,
-        &mut output,
-    )
-    .map_err(Error::AccountProfile)?;
+    if support_wide {
+        let mut lifecycle_rules = Vec::with_capacity(rules.len());
+        for (index, mut value) in rules.into_iter().enumerate() {
+            let prestate = match index {
+                1 => {
+                    value.data_length = narrow_u32(DESCRIPTOR_HEADER_BYTES)?;
+                    AccountPrestateV2::AdapterAuthenticatedVariableData
+                }
+                14 => {
+                    value.data_length = 0;
+                    AccountPrestateV2::AdapterAuthenticatedVariableDataAlias
+                }
+                _ => AccountPrestateV2::Exact,
+            };
+            lifecycle_rules.push(AccountRuleWithPrestateInputV2 {
+                rule: value,
+                prestate,
+            });
+        }
+        let operations = [
+            product_width,
+            AccountOperationInputV2::ProjectNonzeroU64TailCount {
+                account: AccountCoordinateV2::fixed(1),
+                destination: ScalarCoordinateV2::common(narrow_u16(
+                    RATIONAL_LIFECYCLE_SCALAR_COORDINATE_COUNT_V3,
+                )?),
+                tail_offset: narrow_u32(DESCRIPTOR_HEADER_BYTES)?,
+            },
+        ];
+        encode_account_profile_with_nonzero_u64_tail_count_v2_atomic(
+            TrustedEnvironmentV2::None,
+            TrustedIdentityEnvironmentV2::None,
+            &lifecycle_rules,
+            &[],
+            &operations,
+            &[],
+            geometry,
+            &mut scratch,
+            &mut output,
+        )
+        .map_err(Error::AccountProfile)?;
+    } else {
+        encode_account_profile_v2_atomic(
+            AccountProfileArtifactV2::TypedScalar,
+            &rules,
+            &[],
+            &[product_width],
+            &[],
+            geometry,
+            &mut scratch,
+            &mut output,
+        )
+        .map_err(Error::AccountProfile)?;
+    }
     Ok(output)
 }
 

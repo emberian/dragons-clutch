@@ -22,8 +22,9 @@ use dclutch_account_profile_contract::{
         StateLifecyclePolicyV4, plan_lifecycle_with_protected_outputs_atomic,
     },
     v2::{
-        AccountProfileV2, ProjectionRegistersV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2,
-        TrustedEnvironmentV2, derive_effect_permissions, project_atomic as project_accounts_atomic,
+        AccountPrestateV2, AccountProfileV2, ProjectionRegistersV2,
+        SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2, TrustedEnvironmentV2,
+        derive_effect_permissions, project_atomic as project_accounts_atomic,
         project_tail_count_atomic,
     },
 };
@@ -102,6 +103,7 @@ use dclutch_request_profile_contract::{
         BorrowedWitnessPolicyV3, BorrowedWitnessRoleV3, REQUEST_PROFILE_V3_SCHEMA_RELEASE_ID,
         RequestProfileV3,
     },
+    v4::{ProjectionRegistersV4, REQUEST_PROFILE_V4_SCHEMA_RELEASE_ID, RequestProfileV4},
 };
 use dclutch_transition_vm::v3::{
     ProgramV3 as TransitionProgramV3, RegisterInput, RegisterKindV3, RegisterOutput,
@@ -180,6 +182,7 @@ const MAX_HOT_RUNTIME_ACCOUNTS_V3: usize = 256;
 const MAX_HOT_SCALARS_V3: usize = 512;
 const MAX_HOT_IDENTITIES_V3: usize = 128;
 const MAX_HOT_REQUEST_BYTES_V3: usize = 8_192;
+const HOT_SELECTED_CONFIG_LOGICAL_ACCOUNT_V3: usize = 1;
 const HOT_LINKED_BASIS_LOGICAL_ACCOUNT_V3: usize = 4;
 
 const EXECUTION_DIGEST_DOMAIN_V3: &[u8] = b"dclutch:hot-execution:v3";
@@ -459,6 +462,13 @@ pub fn process_hot_execution_v3(
                 .map_err(|_| TradingSbfError::Content)
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let selected_config_coordinate = u16::try_from(HOT_SELECTED_CONFIG_LOGICAL_ACCOUNT_V3)
+        .map_err(|_| TradingSbfError::Content)?;
+    let selected_config_is_variable = account_profile
+        .rule(false, selected_config_coordinate)
+        .map_err(|_| TradingSbfError::Content)?
+        .prestate()
+        == AccountPrestateV2::AdapterAuthenticatedVariableData;
     let observations = runtime_accounts
         .iter()
         .zip(&runtime_data)
@@ -475,10 +485,14 @@ pub fn process_hot_execution_v3(
                     .content_digest
                     .to_bytes(),
             );
-            if coordinate == HOT_LINKED_BASIS_LOGICAL_ACCOUNT_V3 {
+            if coordinate == HOT_LINKED_BASIS_LOGICAL_ACCOUNT_V3
+                || (coordinate == HOT_SELECTED_CONFIG_LOGICAL_ACCOUNT_V3
+                    && selected_config_is_variable)
+            {
                 // The Product-runtime reader above authenticated Registry
-                // finality, schema, content digest, and the Product-owned
-                // semantic basis before this observation is constructed.
+                // finality, schema, content digest, and either the selected
+                // immutable config or Product-owned semantic basis before
+                // this observation is constructed.
                 AccountObservationV1::new_adapter_authenticated_variable_data(
                     key,
                     account.owner.to_bytes(),
@@ -508,6 +522,7 @@ pub fn process_hot_execution_v3(
         &observations,
         request_digest,
         trusted_environment,
+        product_outcome_count,
     )?;
     require_tail_count_agreement_v3(product_outcome_count, tail_count)?;
     require_geometry(
@@ -563,6 +578,11 @@ pub fn process_hot_execution_v3(
         },
     )
     .map_err(|_| TradingSbfError::Content)?;
+    require_projected_tail_count_agreement_v3(
+        account_profile,
+        product_outcome_count,
+        &account_output_scalars,
+    )?;
     require_trusted_environment_v3(
         trusted_environment,
         &account_output_scalars,
@@ -1721,11 +1741,7 @@ fn require_lifecycle_target_unwritten_v4(
     transition: TransitionProgramV3<'_>,
     forbid_request: bool,
 ) -> Result<(), ProgramError> {
-    if (forbid_request
-        && request
-            .v1()
-            .writes_register(lifecycle_request_target_v4(target))
-            .map_err(|_| TradingSbfError::Content)?)
+    if (forbid_request && request.writes_register(lifecycle_request_target_v4(target))?)
         || transition
             .writes_register(lifecycle_transition_target_v4(target))
             .map_err(|_| TradingSbfError::Content)?
@@ -3469,6 +3485,7 @@ enum RequestProfileKindV3<'a> {
     Unsigned(RequestProfileV1<'a>),
     Signed(RequestProfileV2<'a>),
     Borrowed(RequestProfileV3<'a>),
+    RepeatedRows(RequestProfileV4<'a>),
 }
 
 impl<'a> RequestProfileKindV3<'a> {
@@ -3477,6 +3494,19 @@ impl<'a> RequestProfileKindV3<'a> {
             Self::Unsigned(profile) => profile,
             Self::Signed(profile) => profile.request_profile(),
             Self::Borrowed(profile) => profile.request_profile(),
+            Self::RepeatedRows(profile) => profile.request_profile(),
+        }
+    }
+
+    fn writes_register(self, target: ProjectionTargetV1) -> Result<bool, ProgramError> {
+        match self {
+            Self::RepeatedRows(profile) => profile
+                .writes_register(target)
+                .map_err(|_| TradingSbfError::Content.into()),
+            Self::Unsigned(_) | Self::Signed(_) | Self::Borrowed(_) => self
+                .v1()
+                .writes_register(target)
+                .map_err(|_| TradingSbfError::Content.into()),
         }
     }
 
@@ -3501,6 +3531,25 @@ impl<'a> RequestProfileKindV3<'a> {
             Self::Borrowed(profile) => profile
                 .project_prefix_atomic(tail_count, family_request, registers)
                 .map_err(|_| TradingSbfError::Content.into()),
+            Self::RepeatedRows(profile) => {
+                let mut candidate_scalars = vec![0_u64; registers.output_scalars.len()];
+                let mut candidate_identities = vec![[0_u8; 32]; registers.output_identities.len()];
+                profile
+                    .project_atomic(
+                        family_request,
+                        ProjectionRegistersV4 {
+                            input_scalars: registers.input_scalars,
+                            input_identities: registers.input_identities,
+                            scratch_scalars: registers.scratch_scalars,
+                            scratch_identities: registers.scratch_identities,
+                            candidate_scalars: &mut candidate_scalars,
+                            candidate_identities: &mut candidate_identities,
+                            output_scalars: registers.output_scalars,
+                            output_identities: registers.output_identities,
+                        },
+                    )
+                    .map_err(|_| TradingSbfError::Content.into())
+            }
         }
     }
 
@@ -3514,6 +3563,17 @@ impl<'a> RequestProfileKindV3<'a> {
                 .split_request(tail_count, family_request)
                 .map(|_| ())
                 .map_err(|_| TradingSbfError::Content.into()),
+            Self::RepeatedRows(profile) => {
+                if profile
+                    .request_bytes()
+                    .map_err(|_| TradingSbfError::Content)?
+                    == family_request.len()
+                {
+                    Ok(())
+                } else {
+                    Err(TradingSbfError::Content.into())
+                }
+            }
             Self::Unsigned(_) | Self::Signed(_) => {
                 if self
                     .v1()
@@ -3549,6 +3609,11 @@ fn decode_request_profile<'a>(
     {
         RequestProfileV3::decode_selected(selected, authenticated, bytes)
             .map(RequestProfileKindV3::Borrowed)
+            .map_err(|_| TradingSbfError::Content.into())
+    } else if descriptor.request_profile_schema().to_bytes() == REQUEST_PROFILE_V4_SCHEMA_RELEASE_ID
+    {
+        RequestProfileV4::decode_selected(selected, authenticated, bytes)
+            .map(RequestProfileKindV3::RepeatedRows)
             .map_err(|_| TradingSbfError::Content.into())
     } else {
         Err(TradingSbfError::UnsupportedContent.into())
@@ -3696,13 +3761,24 @@ fn project_tail_count(
     observations: &[AccountObservationV1<'_>],
     request_digest: [u8; 32],
     trusted_environment: TrustedEnvironmentObservationV3,
+    authenticated_product_tail_count: u32,
 ) -> Result<u32, ProgramError> {
-    if profile
+    let projection = profile
         .tail_count_projection()
-        .map_err(|_| TradingSbfError::Content)?
-        .is_none()
-    {
+        .map_err(|_| TradingSbfError::Content)?;
+    if projection.is_none() {
         return Ok(0);
+    }
+    // Profile10's descriptor-support projection requires Product N to check
+    // exact `header + N*8` config geometry. Product Runtime V3 was already
+    // independently authenticated above, so use that N for the full atomic
+    // projection and recheck the profile's own projected Product scalar after.
+    if profile
+        .nonzero_u64_tail_count_projection()
+        .map_err(|_| TradingSbfError::Content)?
+        .is_some()
+    {
+        return Ok(authenticated_product_tail_count);
     }
     let fixed_count = usize::from(profile.fixed_account_count());
     let fixed = observations
@@ -3742,6 +3818,25 @@ fn project_tail_count(
     .map_err(|_| TradingSbfError::Content)?;
     require_trusted_environment_v3(trusted_environment, &output_scalars, &output_identities)?;
     Ok(tail_count)
+}
+
+fn require_projected_tail_count_agreement_v3(
+    profile: AccountProfileV2<'_>,
+    authenticated_product_tail_count: u32,
+    scalars: &[u64],
+) -> Result<(), ProgramError> {
+    let Some(projection) = profile
+        .tail_count_projection()
+        .map_err(|_| TradingSbfError::Content)?
+    else {
+        return Ok(());
+    };
+    if scalars.get(usize::from(projection.register()))
+        != Some(&u64::from(authenticated_product_tail_count))
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3843,10 +3938,7 @@ fn require_trusted_environment_register_ownership_v3(
             )
         });
     for (request_target, transition_target) in scalar.into_iter().chain(identity) {
-        if request
-            .v1()
-            .writes_register(request_target)
-            .map_err(|_| TradingSbfError::Content)?
+        if request.writes_register(request_target)?
             || transition
                 .writes_register(transition_target)
                 .map_err(|_| TradingSbfError::Content)?
@@ -4460,6 +4552,17 @@ mod tests {
 
     use super::*;
     use dclutch_account_profile_contract::lifecycle_v3::CreateStatePlanV3;
+    use dclutch_account_profile_contract::v2::{
+        HEADER_BYTES as ACCOUNT_PROFILE_HEADER_BYTES,
+        OPERATION_BYTES as ACCOUNT_PROFILE_OPERATION_BYTES,
+        RULE_BYTES as ACCOUNT_PROFILE_RULE_BYTES,
+        encode::{
+            AccountAliasInputV2, AccountCoordinateV2, AccountEffectPermissionsV2,
+            AccountOperationInputV2, AccountPrivilegesV2, AccountProfileArtifactV2,
+            AccountRuleInputV2, RegisterGeometryV2, ScalarCoordinateV2,
+            encode_account_profile_v2_atomic,
+        },
+    };
     use dclutch_transition_vm::v3::{
         HEADER_BYTES as TRANSITION_HEADER_BYTES_V3,
         INSTRUCTION_BYTES as TRANSITION_INSTRUCTION_BYTES_V3, InstructionV3, ProgramGeometryV3,
@@ -4910,6 +5013,52 @@ mod tests {
         permissions[2] = AccountPermission::program_owned_mutable();
         assert_eq!(
             require_common_projection_permissions_v3(&permissions),
+            Err(TradingSbfError::Content.into())
+        );
+    }
+
+    #[test]
+    fn projected_product_tail_count_is_rechecked_after_atomic_account_projection() {
+        let rules = [AccountRuleInputV2 {
+            privileges: AccountPrivilegesV2::new(false, false, false),
+            effect_permissions: AccountEffectPermissionsV2::new(false, false, false),
+            alias: AccountAliasInputV2::SelfCoordinate,
+            data_length: 4,
+            data_item_stride: 0,
+        }];
+        let operations = [AccountOperationInputV2::ProjectTailCountU32 {
+            account: AccountCoordinateV2::fixed(0),
+            destination: ScalarCoordinateV2::common(0),
+            data_offset: 0,
+        }];
+        let bytes = ACCOUNT_PROFILE_HEADER_BYTES
+            + ACCOUNT_PROFILE_RULE_BYTES
+            + ACCOUNT_PROFILE_OPERATION_BYTES;
+        let mut scratch = vec![0_u8; bytes];
+        let mut encoded = vec![0_u8; bytes];
+        encode_account_profile_v2_atomic(
+            AccountProfileArtifactV2::TypedScalar,
+            &rules,
+            &[],
+            &operations,
+            &[],
+            RegisterGeometryV2 {
+                common_scalars: 1,
+                item_scalar_stride: 0,
+                common_identities: 0,
+                item_identity_stride: 0,
+            },
+            &mut scratch,
+            &mut encoded,
+        )
+        .expect("tail-count profile");
+        let profile = AccountProfileV2::decode(&encoded).expect("decode profile");
+        assert_eq!(
+            require_projected_tail_count_agreement_v3(profile, 7, &[7]),
+            Ok(())
+        );
+        assert_eq!(
+            require_projected_tail_count_agreement_v3(profile, 7, &[6]),
             Err(TradingSbfError::Content.into())
         );
     }

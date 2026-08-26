@@ -45,6 +45,8 @@ pub enum Error {
     InvalidLength,
     /// Typed RequestProfile encoding or hostile decoding refused.
     RequestProfile(dclutch_request_profile_contract::Error),
+    /// Compact repeated-row RequestProfile V4 encoding or hostile decoding refused.
+    RequestProfileV4(dclutch_request_profile_contract::v4::Error),
     /// Typed TransitionVM encoding or hostile decoding refused.
     Transition(dclutch_transition_vm::v3::Error),
     /// Typed AccountProfile encoding or hostile decoding refused.

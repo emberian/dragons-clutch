@@ -348,6 +348,66 @@ impl<'a> RequestProfileV4<'a> {
         self.bytes
     }
 
+    /// Whether the embedded prefix or repeated row program writes `target`.
+    ///
+    /// V4 row-local registers are flattened into the common bank after the
+    /// protected prefix. Item-space targets are never written by V4.
+    pub fn writes_register(self, target: ProjectionTargetV1) -> Result<bool> {
+        if self
+            .embedded
+            .writes_register(target)
+            .map_err(|_| Error::InvalidEmbeddedProfile)?
+        {
+            return Ok(true);
+        }
+        if target.space != ProjectionRegisterSpaceV1::Common {
+            return Ok(false);
+        }
+        let (prefix, stride, expected_kind) = match target.kind {
+            ProjectionRegisterKindV1::Scalar => (
+                self.geometry.protected_scalars,
+                self.geometry.row_scalar_stride,
+                TARGET_SCALAR,
+            ),
+            ProjectionRegisterKindV1::Identity => (
+                self.geometry.protected_identities,
+                self.geometry.row_identity_stride,
+                TARGET_IDENTITY,
+            ),
+        };
+        let Some(row_offset) = target.index.checked_sub(prefix) else {
+            return Ok(false);
+        };
+        let row = row_offset / stride;
+        if row
+            >= u16::try_from(self.geometry.expected_row_count)
+                .map_err(|_| Error::InvalidCoordinate)?
+        {
+            return Ok(false);
+        }
+        let local = row_offset % stride;
+        let mut operation = 0_u16;
+        while operation < self.row_operation_count {
+            let selected = self.operation(operation)?;
+            let selected_kind = match selected.target {
+                Some(RowTargetV4::Scalar(_)) => TARGET_SCALAR,
+                Some(RowTargetV4::Identity(_)) => TARGET_IDENTITY,
+                None => TARGET_NONE,
+            };
+            if selected_kind == expected_kind
+                && selected.target
+                    == Some(match target.kind {
+                        ProjectionRegisterKindV1::Scalar => RowTargetV4::Scalar(local),
+                        ProjectionRegisterKindV1::Identity => RowTargetV4::Identity(local),
+                    })
+            {
+                return Ok(true);
+            }
+            operation = operation.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+        }
+        Ok(false)
+    }
+
     /// Validate and project fixed prefix plus all exact rows atomically.
     pub fn project_atomic(
         self,
@@ -1177,6 +1237,22 @@ mod tests {
             RequestProfileV4::decode_selected([9; 32], [9; 32], &bytes).expect("selected profile");
         assert_eq!(profile.row_geometry(), geometry());
         assert_eq!(profile.request_bytes(), Ok(160));
+        assert_eq!(
+            profile.writes_register(ProjectionTargetV1 {
+                kind: ProjectionRegisterKindV1::Scalar,
+                space: ProjectionRegisterSpaceV1::Common,
+                index: 6,
+            }),
+            Ok(true)
+        );
+        assert_eq!(
+            profile.writes_register(ProjectionTargetV1 {
+                kind: ProjectionRegisterKindV1::Scalar,
+                space: ProjectionRegisterSpaceV1::Item,
+                index: 0,
+            }),
+            Ok(false)
+        );
         let output = project(profile, &request([1, 4, 9]), 77).expect("projection");
         assert_eq!(output.get(2), Some(&1));
         assert_eq!(output.get(3), Some(&100));
