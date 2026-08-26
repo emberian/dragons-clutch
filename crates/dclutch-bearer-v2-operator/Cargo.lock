@@ -286,6 +286,7 @@ dependencies = [
  "dclutch-bearer-v2-contract",
  "dclutch-rational-representation-v2-contract",
  "dclutch-rational-representation-v2-kernel",
+ "dclutch-rational-representation-v2-operator",
  "dclutch-token-svm",
  "solana-program",
  "spl-associated-token-account-interface",
@@ -310,8 +311,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-economic-slice-kernel"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-effect-kernel"
 version = "0.1.0"
+
+[[package]]
+name = "dclutch-market-core-codec"
+version = "0.1.0"
+dependencies = [
+ "dclutch-release-set-contract",
+]
 
 [[package]]
 name = "dclutch-rational-representation-v2-contract"
@@ -326,6 +338,43 @@ dependencies = [
 [[package]]
 name = "dclutch-rational-representation-v2-kernel"
 version = "0.1.0"
+
+[[package]]
+name = "dclutch-rational-representation-v2-operator"
+version = "0.1.0"
+dependencies = [
+ "dclutch-claims-svm",
+ "dclutch-core-contract",
+ "dclutch-custody-contract",
+ "dclutch-economic-slice-kernel",
+ "dclutch-market-core-codec",
+ "dclutch-rational-representation-v2-contract",
+ "dclutch-rational-representation-v2-kernel",
+ "dclutch-realm-contract",
+ "dclutch-record-contract",
+ "dclutch-registry-contract",
+ "dclutch-release-set-contract",
+ "dclutch-token-svm",
+ "solana-program",
+ "solana-sdk-ids",
+ "spl-associated-token-account-interface",
+]
+
+[[package]]
+name = "dclutch-realm-contract"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-record-contract"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-registry-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-release-set-contract",
+]
 
 [[package]]
 name = "dclutch-release-set-contract"

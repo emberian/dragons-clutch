@@ -15,7 +15,15 @@ use dclutch_rational_representation_v2_contract::{
     RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2, RATIONAL_SHARD_MINT_SEED_V2, RepresentationActionV2,
     RepresentationRequestHeaderV2, RepresentationRequestV2,
 };
-use solana_program::pubkey::Pubkey;
+use dclutch_rational_representation_v2_kernel::{
+    ContentAdmissionV2, DescriptorAdmissionV2, RepresentationDescriptorV2,
+    RepresentationGraphV2,
+};
+use dclutch_rational_representation_v2_operator::{
+    ConstructedInstructionV2, RationalObservationV2, SelectedActionInputV2,
+    TerminalObservationV2,
+};
+use solana_program::{hash::hash, pubkey::Pubkey};
 use spl_associated_token_account_interface::address::get_associated_token_address_with_program_id;
 
 /// Holder token-account selection.
@@ -122,6 +130,10 @@ pub enum Error {
     InvalidScratch,
     /// Shared Rational Representation V2 request construction refused.
     Representation(dclutch_rational_representation_v2_contract::Error),
+    /// The chain-derived generic Rational operator refused the observation.
+    ChainOperator(dclutch_rational_representation_v2_operator::Error),
+    /// Finalized descriptor/graph bytes were not the selected Bearer basis vector.
+    NotBearer,
 }
 
 /// Result alias for operator construction.
@@ -264,6 +276,123 @@ pub fn construct_redeem_terminal<'a>(
         input.balances,
         asset_scratch,
     )
+}
+
+/// Construct the exact chain-derived Denominate instruction and additionally
+/// require that the finalized descriptor is a Bearer basis vector at the
+/// selected runtime outcome.
+pub fn construct_chain_denominate(
+    observation: RationalObservationV2<'_>,
+    input: SelectedActionInputV2,
+) -> Result<ConstructedInstructionV2> {
+    let built = dclutch_rational_representation_v2_operator::construct_denominate(
+        observation,
+        input,
+    )
+    .map_err(Error::ChainOperator)?;
+    authenticate_chain_basis(observation, built.representation_authority, input.outcome)?;
+    Ok(built)
+}
+
+/// Construct the exact chain-derived Reconstitute instruction under the same
+/// finalized Bearer basis-vector gate.
+pub fn construct_chain_reconstitute(
+    observation: RationalObservationV2<'_>,
+    input: SelectedActionInputV2,
+) -> Result<ConstructedInstructionV2> {
+    let built = dclutch_rational_representation_v2_operator::construct_reconstitute(
+        observation,
+        input,
+    )
+    .map_err(Error::ChainOperator)?;
+    authenticate_chain_basis(observation, built.representation_authority, input.outcome)?;
+    Ok(built)
+}
+
+/// Construct the exact chain-derived terminal Bearer redemption instruction.
+/// Claims and Custody remain the sole payout and collateral authorities.
+pub fn construct_chain_redeem_terminal(
+    observation: RationalObservationV2<'_>,
+    terminal: TerminalObservationV2<'_>,
+) -> Result<ConstructedInstructionV2> {
+    let built = dclutch_rational_representation_v2_operator::construct_redeem_terminal(
+        observation,
+        terminal,
+    )
+    .map_err(Error::ChainOperator)?;
+    authenticate_chain_basis(
+        observation,
+        built.representation_authority,
+        terminal.outcome,
+    )?;
+    Ok(built)
+}
+
+fn authenticate_chain_basis(
+    observation: RationalObservationV2<'_>,
+    representation_authority: Pubkey,
+    selected_outcome: u32,
+) -> Result<()> {
+    authenticate_basis_bytes(
+        observation.descriptor.raw.data,
+        observation.graph.raw.data,
+        representation_authority,
+        selected_outcome,
+    )
+}
+
+fn authenticate_basis_bytes(
+    descriptor_bytes: &[u8],
+    graph_bytes: &[u8],
+    representation_authority: Pubkey,
+    selected_outcome: u32,
+) -> Result<()> {
+    let descriptor_digest = hash(descriptor_bytes).to_bytes();
+    let graph_digest = hash(graph_bytes).to_bytes();
+    let descriptor = RepresentationDescriptorV2::decode(
+        descriptor_bytes,
+        DescriptorAdmissionV2 {
+            selected_descriptor_id: descriptor_digest,
+            finalized_descriptor_id: descriptor_digest,
+            recomputed_descriptor_digest: descriptor_digest,
+            finalized_descriptor_digest: descriptor_digest,
+            record_authenticated: true,
+            derived_representation_authority: representation_authority.to_bytes(),
+            authority_derivation_authenticated: true,
+        },
+    )
+    .map_err(|_| Error::NotBearer)?;
+    let graph = RepresentationGraphV2::decode(
+        graph_bytes,
+        ContentAdmissionV2 {
+            selected_graph_id: descriptor.graph_id(),
+            finalized_graph_id: descriptor.graph_id(),
+            recomputed_graph_digest: graph_digest,
+            finalized_graph_digest: graph_digest,
+            record_authenticated: true,
+        },
+    )
+    .map_err(|_| Error::NotBearer)?;
+    BearerDescriptorV2::authenticate(
+        descriptor,
+        graph,
+        dclutch_bearer_v2_contract::BearerBindingV2 {
+            descriptor_id: descriptor.descriptor_id(),
+            graph_id: descriptor.graph_id(),
+            graph_digest: descriptor.graph_digest(),
+            root_id: descriptor.root_id(),
+            market: descriptor.market_id(),
+            release_set: descriptor.release_set_id(),
+            receipt_mint: descriptor.receipt_mint(),
+            token_program: descriptor.token_program(),
+            representation_authority: descriptor.representation_authority(),
+            outcome_count: descriptor.outcome_count(),
+            denominator: descriptor.denominator(),
+            selected_outcome,
+        },
+    )
+    .map_err(|_| Error::NotBearer)?;
+    Ok(())
 }
 
 fn construct_active<'a>(
@@ -653,6 +782,50 @@ mod tests {
         assert_eq!(
             construct_denominate(bearer, active(claims_program, id(40)), &mut short),
             Err(Error::InvalidScratch)
+        );
+    }
+
+    #[test]
+    fn chain_gate_refuses_non_basis_and_selected_outcome_substitution() {
+        let graph_bytes = graph_fixture();
+        let mut descriptor_bytes = descriptor_fixture();
+        put(&mut descriptor_bytes, 48, &hash(&graph_bytes).to_bytes());
+        let claims_program = id(60);
+        let authority = Pubkey::find_program_address(
+            &[
+                RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
+                &hash(&descriptor_bytes).to_bytes(),
+            ],
+            &Pubkey::new_from_array(claims_program),
+        )
+        .0;
+        assert_eq!(
+            authenticate_basis_bytes(&descriptor_bytes, &graph_bytes, authority, SELECTED),
+            Ok(())
+        );
+        assert_eq!(
+            authenticate_basis_bytes(&descriptor_bytes, &graph_bytes, authority, 0),
+            Err(Error::NotBearer)
+        );
+
+        let mut non_basis = descriptor_bytes;
+        put_u64(&mut non_basis, DESCRIPTOR_HEADER_BYTES, DENOMINATOR);
+        let non_basis_authority = Pubkey::find_program_address(
+            &[
+                RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
+                &hash(&non_basis).to_bytes(),
+            ],
+            &Pubkey::new_from_array(claims_program),
+        )
+        .0;
+        assert_eq!(
+            authenticate_basis_bytes(
+                &non_basis,
+                &graph_bytes,
+                non_basis_authority,
+                SELECTED,
+            ),
+            Err(Error::NotBearer)
         );
     }
 }
