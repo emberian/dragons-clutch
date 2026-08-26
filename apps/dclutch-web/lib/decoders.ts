@@ -1,6 +1,6 @@
 import { PublicKey } from '@solana/web3.js';
 
-import { ascii, hex, isZero, pubkey, requireNonzero, requireZero, sha256, slice, u16, u64 } from './bytes';
+import { ascii, fromHex, hex, isZero, pubkey, requireNonzero, requireZero, sha256, slice, u16, u64 } from './bytes';
 
 export type CoreKind = 'Market' | 'Realm' | 'Position' | 'RentCredit';
 
@@ -10,13 +10,28 @@ export type BindingCheck = Readonly<{
   detail: string;
 }>;
 
-type MarketSemantics = Readonly<{
+export type MarketPhase = 'Founding' | 'Open' | 'Resolved' | 'Retiring' | 'Retired';
+
+export type MarketSettlement =
+  | Readonly<{ status: 'empty'; label: string }>
+  | Readonly<{ status: 'resolved'; label: string; route: string; winner: number; terminalSequence: string; evidenceId: string }>;
+
+export type MarketSemantics = Readonly<{
   kind: 'Market';
   realmId: string;
   generation: string;
   outcomeCount: number;
-  phase: 'Founding' | 'Open' | 'Resolved' | 'Retiring' | 'Retired';
+  phase: MarketPhase;
   identityBytes: Uint8Array;
+  productInstanceId: string;
+  claimBasisId: string;
+  resolutionPolicyId: string;
+  capabilityManifestId: string;
+  rentRefundAuthority: string;
+  hoardAtoms: string;
+  outstandingChildren: string;
+  supply: ReadonlyArray<string>;
+  settlement: MarketSettlement;
 }>;
 
 type RealmSemantics = Readonly<{
@@ -82,7 +97,7 @@ const MAGIC = Object.freeze({
   DCLRNTL2: 'RentCredit',
 } satisfies Record<string, CoreKind>);
 
-const PHASES = Object.freeze(['Founding', 'Open', 'Resolved', 'Retiring', 'Retired']);
+const PHASES = Object.freeze(['Founding', 'Open', 'Resolved', 'Retiring', 'Retired'] as const);
 const RESOLUTION_KINDS = Object.freeze(['Occurrence', 'Failure', 'Recovery']);
 const MARKET_SEED = new TextEncoder().encode('dclutch/market-root/v1');
 const REALM_SEED = new TextEncoder().encode('dclutch/realm/v1');
@@ -108,6 +123,17 @@ function kindFromMagic(data: Uint8Array): CoreKind | null {
 
 export function classifyHeader(data: Uint8Array): CoreKind | null {
   return kindFromMagic(data);
+}
+
+/**
+ * A Market names its Realm by content identity, not by address. The canonical
+ * Realm account is the content-addressed PDA of that identity under the same
+ * Core program, so a Market alone is enough to name the Realm to reacquire.
+ */
+export function deriveRealmAddress(programId: string, realmContentIdHex: string): string {
+  const digest = fromHex(realmContentIdHex, 'Realm content ID');
+  if (digest.length !== 32 || isZero(digest)) throw new Error('Realm content ID must be one nonzero 32-byte identity');
+  return PublicKey.findProgramAddressSync([REALM_SEED, digest], new PublicKey(programId))[0].toBase58();
 }
 
 export function decodeCoreAccount(observation: FullAccountObservation, expectedProgramId: string): AccountProjection {
@@ -191,6 +217,7 @@ function decodeMarket(observation: FullAccountObservation): DecodedProjection {
   const settlement = slice(bytes, settlementOffset, 64);
   const status = settlement[0];
   let settlementLabel = 'Empty';
+  let settlementSemantics: MarketSettlement = Object.freeze({ status: 'empty', label: settlementLabel });
   let winner: number | null = null;
   let resolutionDetails: ReadonlyArray<Readonly<{ label: string; value: string }>> = [];
   if (status === 0) {
@@ -207,6 +234,10 @@ function decodeMarket(observation: FullAccountObservation): DecodedProjection {
     const evidence = slice(settlement, 16, 32);
     requireNonzero(evidence, 'resolution evidence ID');
     settlementLabel = `Resolved · ${route}`;
+    settlementSemantics = Object.freeze({
+      status: 'resolved', label: settlementLabel, route, winner,
+      terminalSequence: terminalSequence.toString(), evidenceId: hex(evidence),
+    });
     resolutionDetails = [detail('Winning state', winner), detail('Terminal sequence', terminalSequence), detail('Evidence ID', hex(evidence))];
   } else {
     throw new Error(`settlement status ${status} is undefined`);
@@ -233,7 +264,16 @@ function decodeMarket(observation: FullAccountObservation): DecodedProjection {
       detail('Capability manifest ID', hex(capabilityManifestId)), detail('Rent refund authority', pubkey(rentRefund, 'Market rent-refund authority')),
       ...resolutionDetails,
     ]),
-    semantics: Object.freeze({ kind: 'Market', realmId: hex(realmId), generation: generation.toString(), outcomeCount, phase, identityBytes: slice(bytes, 32, 168) }),
+    semantics: Object.freeze({
+      kind: 'Market', realmId: hex(realmId), generation: generation.toString(), outcomeCount, phase,
+      identityBytes: slice(bytes, 32, 168),
+      productInstanceId: hex(productInstanceId), claimBasisId: hex(claimBasisId),
+      resolutionPolicyId: hex(resolutionPolicyId), capabilityManifestId: hex(capabilityManifestId),
+      rentRefundAuthority: pubkey(rentRefund, 'Market rent-refund authority'),
+      hoardAtoms: hoardAtoms.toString(), outstandingChildren: outstandingChildren.toString(),
+      supply: Object.freeze(supply.map((amount) => amount.toString())),
+      settlement: settlementSemantics,
+    }),
   });
 }
 
