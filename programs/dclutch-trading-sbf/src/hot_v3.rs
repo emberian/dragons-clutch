@@ -1723,6 +1723,7 @@ fn expand_runtime_accounts_v3<'accounts, 'info>(
     Ok(logical)
 }
 
+#[inline(never)]
 fn downgraded_effect_accounts_v3<'info>(
     profile: AccountProfileV2<'_>,
     tail_count: u32,
@@ -1850,6 +1851,7 @@ fn lifecycle_transition_target_v4(target: LifecycleRegisterTargetV3) -> Register
     }
 }
 
+#[inline(never)]
 fn require_lifecycle_register_ownership_v4(
     policy: StateLifecyclePolicyV4<'_>,
     action: u32,
@@ -2282,6 +2284,7 @@ fn require_lifecycle_replan_agreement_v4(
     }
 }
 
+#[inline(never)]
 fn require_lifecycle_effect_bindings_v4(
     plans: &[PreparedLifecycleInvocationV3],
     effect: SelectedEffectProgramV4<'_>,
@@ -3913,6 +3916,7 @@ fn require_geometry(
     }
 }
 
+#[inline(never)]
 fn require_borrowed_witness_coverage_v3<'a>(
     request_profile: RequestProfileKindV3<'a>,
     effect: SelectedEffectProgramV4<'_>,
@@ -4281,6 +4285,7 @@ fn require_trusted_environment_v3(
     }
 }
 
+#[inline(never)]
 fn require_trusted_environment_register_ownership_v3(
     profile: AccountProfileV2<'_>,
     request: RequestProfileKindV3<'_>,
