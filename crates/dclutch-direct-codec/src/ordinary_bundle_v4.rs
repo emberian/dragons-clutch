@@ -6,11 +6,12 @@
 //! routes, and commits once.
 
 use dclutch_account_profile_contract::{
-    lifecycle_v3::{SUCCESSOR_SCHEMA_RELEASE_ID as LIFECYCLE_SCHEMA_ID_V4, StateLifecyclePolicyV4},
+    lifecycle_v3::StateLifecyclePolicyV5,
     v2::{AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2},
 };
 use dclutch_capability_program_contract::v4::{
     ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4, CapabilityProgramV4,
+    SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
 };
 use dclutch_core_contract::ContentId;
 use dclutch_effect_kernel::{
@@ -50,8 +51,8 @@ use crate::{
         DIRECT_ORDINARY_TRANSITION_BYTES_V3, encode_direct_ordinary_transition_v3,
     },
     state_artifacts_v3::{
-        DIRECT_INLINE_ORDINARY_LIFECYCLE_BYTES_V4,
-        encode_direct_inline_ordinary_lifecycle_v4_atomic,
+        DIRECT_INLINE_ORDINARY_LIFECYCLE_BYTES_V5,
+        encode_direct_inline_ordinary_lifecycle_v5_atomic,
     },
     successor::{
         DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, DIRECT_ROOT_SCHEMA_ID_V1, DIRECT_ROOT_STATE_BYTES_V1,
@@ -62,20 +63,20 @@ use crate::{
 pub const DIRECT_INLINE_ORDINARY_STRATEGY_BYTES_V3: usize = EXECUTION_STRATEGY_PROGRAM_BYTES_V2;
 /// Exact CapabilityProgram descriptor width.
 pub const DIRECT_INLINE_ORDINARY_DESCRIPTOR_BYTES_V4: usize = CAPABILITY_PROGRAM_V4_BYTES;
-/// SHA-256 identity of the exact runtime-polymorphic AccountProfile11.
+/// SHA-256 identity of the exact runtime-polymorphic fixed-topology AccountProfile13.
 pub const DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_ID_V3: [u8; 32] = [
-    0xc9, 0xa9, 0x0f, 0xab, 0x1c, 0x57, 0x89, 0x01, 0x0c, 0x84, 0xe8, 0x83, 0x77, 0x6a, 0x18, 0x25,
-    0x13, 0x49, 0xd2, 0xac, 0xd0, 0xc6, 0xcf, 0x67, 0xda, 0x7d, 0x98, 0xae, 0xe4, 0x37, 0x2f, 0x1e,
+    0x3c, 0xb3, 0x57, 0xd3, 0x16, 0xd7, 0x6d, 0x73, 0xe4, 0x62, 0xc0, 0x36, 0xd7, 0x64, 0x86, 0xef,
+    0x42, 0x7d, 0x4d, 0x71, 0xec, 0x44, 0x64, 0xf3, 0xee, 0x3b, 0x2c, 0x15, 0x88, 0xd3, 0xe8, 0xb4,
 ];
-/// SHA-256 identity of the exact maker LifecycleV4 policy.
-pub const DIRECT_INLINE_ORDINARY_LIFECYCLE_ID_V4: [u8; 32] = [
-    0x7c, 0x16, 0x3e, 0xcb, 0xe0, 0x99, 0xf2, 0x8f, 0xb8, 0x4f, 0x1a, 0x85, 0xb8, 0xee, 0xe4, 0xf1,
-    0x6e, 0x9d, 0x5f, 0x25, 0x09, 0xa8, 0xc9, 0x18, 0x54, 0x3f, 0xa5, 0x7b, 0x04, 0x88, 0x31, 0xd2,
+/// SHA-256 identity of the exact maker LifecycleV5 policy.
+pub const DIRECT_INLINE_ORDINARY_LIFECYCLE_ID_V5: [u8; 32] = [
+    0xe1, 0x91, 0x46, 0xb2, 0x84, 0x23, 0x5e, 0x3a, 0x24, 0xd8, 0x94, 0xd2, 0xc9, 0x96, 0x26, 0xda,
+    0x53, 0x7e, 0xa1, 0x9e, 0x33, 0x69, 0x38, 0x6d, 0x89, 0xdd, 0xb4, 0x7f, 0x6f, 0x46, 0x36, 0x09,
 ];
 /// SHA-256 identity of the exact ordered EffectProgramV4.
 pub const DIRECT_INLINE_ORDINARY_EFFECT_ID_V4: [u8; 32] = [
-    0x55, 0xc6, 0x70, 0x7d, 0xcf, 0x1e, 0x23, 0xff, 0x88, 0x5e, 0xa1, 0xed, 0x22, 0xe7, 0xc0, 0x47,
-    0xb2, 0x6c, 0x77, 0xaf, 0xbe, 0xca, 0x28, 0x61, 0x47, 0xaf, 0x36, 0x2c, 0xd4, 0xd3, 0xd5, 0x2d,
+    0xfe, 0x9e, 0xee, 0x43, 0x96, 0x0a, 0x95, 0x3b, 0x4b, 0xd9, 0xb1, 0x43, 0xd1, 0xb1, 0x1a, 0xf0,
+    0xbd, 0xe7, 0x3e, 0xec, 0xde, 0x71, 0x20, 0x57, 0xbd, 0x1b, 0x6e, 0xa8, 0x39, 0x59, 0xc2, 0xa6,
 ];
 
 /// Chain-selected facts that are not owned by the Direct artifact family.
@@ -90,10 +91,10 @@ pub struct DirectInlineOrdinaryHotBundleInputV4<'a> {
 /// Every finalized record selected by one ordinary CapabilityProgram.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DirectInlineOrdinaryHotBundleV4 {
-    /// Runtime-width AccountProfile11 bytes.
+    /// Runtime-width fixed-topology AccountProfile13 bytes.
     pub account_profile: [u8; DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3],
-    /// Maker AuthenticateOrCreate LifecycleV4 bytes.
-    pub lifecycle_policy: [u8; DIRECT_INLINE_ORDINARY_LIFECYCLE_BYTES_V4],
+    /// Maker AuthenticateOrCreate LifecycleV5 bytes.
+    pub lifecycle_policy: [u8; DIRECT_INLINE_ORDINARY_LIFECYCLE_BYTES_V5],
     /// Signed RequestProfileV2 bytes.
     pub request_profile: [u8; DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_V2_BYTES_V3],
     /// TransitionVMV3 economic program bytes.
@@ -142,9 +143,9 @@ pub fn build_direct_inline_ordinary_hot_bundle_v4(
     )
     .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::AccountProfile)?;
 
-    let mut lifecycle_scratch = [0_u8; DIRECT_INLINE_ORDINARY_LIFECYCLE_BYTES_V4];
-    let mut lifecycle_policy = [0_u8; DIRECT_INLINE_ORDINARY_LIFECYCLE_BYTES_V4];
-    encode_direct_inline_ordinary_lifecycle_v4_atomic(
+    let mut lifecycle_scratch = [0_u8; DIRECT_INLINE_ORDINARY_LIFECYCLE_BYTES_V5];
+    let mut lifecycle_policy = [0_u8; DIRECT_INLINE_ORDINARY_LIFECYCLE_BYTES_V5];
+    encode_direct_inline_ordinary_lifecycle_v5_atomic(
         &mut lifecycle_scratch,
         &mut lifecycle_policy,
     )
@@ -190,7 +191,7 @@ pub fn build_direct_inline_ordinary_hot_bundle_v4(
         CapabilityArtifactsV4 {
             account_profile: artifact(ACCOUNT_PROFILE_SCHEMA_ID_V2, account_id)?,
             request_profile: artifact(REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID, request_id)?,
-            lifecycle: artifact(LIFECYCLE_SCHEMA_ID_V4, lifecycle_id)?,
+            lifecycle: artifact(SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5, lifecycle_id)?,
             strategy: artifact(EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2, strategy_id)?,
             transition: artifact(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID, transition_id)?,
             effect: artifact(EFFECT_SCHEMA_ID_V4, effect_id)?,
@@ -236,7 +237,10 @@ pub fn validate_direct_inline_ordinary_hot_bundle_v4(
                 digest(&bundle.request_profile),
             )?
         || descriptor.lifecycle()
-            != artifact(LIFECYCLE_SCHEMA_ID_V4, digest(&bundle.lifecycle_policy))?
+            != artifact(
+                SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
+                digest(&bundle.lifecycle_policy),
+            )?
         || descriptor.strategy()
             != artifact(
                 EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
@@ -257,7 +261,7 @@ pub fn validate_direct_inline_ordinary_hot_bundle_v4(
     let account = AccountProfileV2::decode(&bundle.account_profile)
         .map_err(|_| DirectInlineOrdinaryHotBundleErrorV4::AccountProfile)?;
     let lifecycle_id = digest(&bundle.lifecycle_policy);
-    let lifecycle = StateLifecyclePolicyV4::decode_selected(
+    let lifecycle = StateLifecyclePolicyV5::decode_selected(
         descriptor.lifecycle().program().to_bytes(),
         lifecycle_id,
         &bundle.lifecycle_policy,
@@ -364,6 +368,8 @@ mod tests {
     extern crate std;
 
     use super::*;
+    use dclutch_account_profile_contract::lifecycle_v3::SUCCESSOR_SCHEMA_RELEASE_ID;
+    use dclutch_capability_program_contract::v4::CAPABILITY_PROGRAM_V4_LIFECYCLE_SCHEMA_OFFSET;
     use dclutch_claims_svm::liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
     };
@@ -374,6 +380,8 @@ mod tests {
     };
     use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
     use dclutch_realm_contract::REALM_BYTES;
+    use dclutch_registry_contract::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
+    use dclutch_registry_svm::LOADER_V3_PROGRAM_BYTES;
     use dclutch_rent_contract::RENT_CREDIT_BYTES_V1;
     use std::{vec, vec::Vec};
 
@@ -407,14 +415,20 @@ mod tests {
                 .expect("domain");
         *output.get_mut(20).expect("portfolio alias") = *output.get(3).expect("portfolio");
         *output.get_mut(22).expect("registry") = 17;
-        *output.get_mut(23).expect("Core") = 352;
-        *output.get_mut(24).expect("activation") = 128;
-        *output.get_mut(25).expect("registry cache") = 36;
-        *output.get_mut(26).expect("program") = 36;
+        *output.get_mut(23).expect("Core") =
+            u32::try_from(dclutch_market_core_codec::STATE_BYTES).expect("Core");
+        *output.get_mut(24).expect("activation") =
+            u32::try_from(ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1).expect("activation");
+        *output.get_mut(25).expect("Registry program") =
+            u32::try_from(LOADER_V3_PROGRAM_BYTES).expect("Registry program");
+        *output.get_mut(26).expect("Trading program") =
+            u32::try_from(LOADER_V3_PROGRAM_BYTES).expect("Trading program");
         *output.get_mut(27).expect("program data") = 1_024;
-        *output.get_mut(28).expect("source admission") = 36;
+        *output.get_mut(28).expect("Claims program") =
+            u32::try_from(LOADER_V3_PROGRAM_BYTES).expect("Claims program");
         *output.get_mut(29).expect("source staging") = 1_024;
-        *output.get_mut(30).expect("destination admission") = 36;
+        *output.get_mut(30).expect("Core program") =
+            u32::try_from(LOADER_V3_PROGRAM_BYTES).expect("Core program");
         *output.get_mut(31).expect("destination staging") = 1_024;
         let position =
             u32::try_from(LIABILITY_BASIS_POSITION_HEADER_BYTES_V2 + 3 * 8).expect("position");
@@ -503,7 +517,7 @@ mod tests {
             ],
             [
                 DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_ID_V3,
-                DIRECT_INLINE_ORDINARY_LIFECYCLE_ID_V4,
+                DIRECT_INLINE_ORDINARY_LIFECYCLE_ID_V5,
                 DIRECT_INLINE_ORDINARY_EFFECT_ID_V4,
             ]
         );
@@ -519,6 +533,18 @@ mod tests {
         );
         let mut hostile = bundle;
         *hostile.effect.get_mut(128).expect("effect byte") ^= 1;
+        assert_eq!(
+            validate_direct_inline_ordinary_hot_bundle_v4(&hostile, [0x44; 32]),
+            Err(DirectInlineOrdinaryHotBundleErrorV4::Descriptor)
+        );
+    }
+
+    #[test]
+    fn lifecycle_v4_schema_substitution_has_no_successor_fallback() {
+        let mut hostile = build(256);
+        hostile.descriptor[CAPABILITY_PROGRAM_V4_LIFECYCLE_SCHEMA_OFFSET
+            ..CAPABILITY_PROGRAM_V4_LIFECYCLE_SCHEMA_OFFSET + 32]
+            .copy_from_slice(&SUCCESSOR_SCHEMA_RELEASE_ID);
         assert_eq!(
             validate_direct_inline_ordinary_hot_bundle_v4(&hostile, [0x44; 32]),
             Err(DirectInlineOrdinaryHotBundleErrorV4::Descriptor)

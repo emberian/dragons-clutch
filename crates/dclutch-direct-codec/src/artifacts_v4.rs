@@ -11,13 +11,16 @@
 //! Transition and Effect programs and commits once after fixed-role receipts.
 
 use dclutch_account_profile_contract::{
-    lifecycle_v3::{SUCCESSOR_SCHEMA_RELEASE_ID as LIFECYCLE_SCHEMA_ID_V4, StateLifecyclePolicyV4},
+    lifecycle_v3::StateLifecyclePolicyV5,
     v2::{AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2},
 };
 use dclutch_capability_program_contract::{
     hot_v3::HOT_FAMILY_REQUEST_OFFSET_V3,
     set_v2::{CapabilityProgramSetV2, SelectorWidthV2},
-    v4::{CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4},
+    v4::{
+        CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
+        SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
+    },
 };
 use dclutch_core_contract::ContentId;
 use dclutch_effect_kernel::{
@@ -125,7 +128,7 @@ pub struct DirectArtifactBundleV4<'a> {
     /// Exact runtime-tail account interpreter.
     pub account_profile: AccountProfileV2<'a>,
     /// Exact Trading-owned state lifecycle policy.
-    pub lifecycle_policy: StateLifecyclePolicyV4<'a>,
+    pub lifecycle_policy: StateLifecyclePolicyV5<'a>,
     /// Exact request interpreter.
     pub request_profile: DirectRequestProfileV3<'a>,
     /// Exact acyclic execution strategy selecting the TransitionVM record.
@@ -199,7 +202,7 @@ pub fn authenticate_direct_artifacts_v4<'a>(
                 .map_err(|_| DirectArtifactErrorV4::Geometry)?
         || descriptor.derivation_policy() != descriptor.lifecycle().program()
         || descriptor.account_profile().schema().to_bytes() != ACCOUNT_PROFILE_SCHEMA_ID_V2
-        || descriptor.lifecycle().schema().to_bytes() != LIFECYCLE_SCHEMA_ID_V4
+        || descriptor.lifecycle().schema().to_bytes() != SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5
         || descriptor.strategy().schema().to_bytes() != EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2
         || descriptor.transition().schema().to_bytes()
             != dclutch_transition_vm::v3::SCHEMA_RELEASE_ID
@@ -225,7 +228,7 @@ pub fn authenticate_direct_artifacts_v4<'a>(
         descriptor.lifecycle().program().to_bytes(),
         artifacts.lifecycle_policy,
     )?;
-    let lifecycle_policy = StateLifecyclePolicyV4::decode_selected(
+    let lifecycle_policy = StateLifecyclePolicyV5::decode_selected(
         descriptor.lifecycle().program().to_bytes(),
         digest(artifacts.lifecycle_policy),
         artifacts.lifecycle_policy,
@@ -632,7 +635,7 @@ mod tests {
             encode::{
                 LifecycleAccountCoordinateV3, LifecycleGuardInputV3, LifecycleOperationInputV3,
                 LifecyclePlanInputV3, LifecycleRecipeInputV3, LifecycleSeedInputV3,
-                encode_lifecycle_policy_v4_atomic,
+                encode_lifecycle_policy_v5_atomic,
             },
         };
         let bytes = HEADER_BYTES
@@ -664,11 +667,12 @@ mod tests {
             beneficiary: None,
             guard: LifecycleGuardInputV3::Always,
         }];
-        encode_lifecycle_policy_v4_atomic(
+        encode_lifecycle_policy_v5_atomic(
             &recipes,
             &seeds,
             &plans,
             &[None],
+            &[],
             &[],
             &mut scratch,
             &mut output,
@@ -829,7 +833,7 @@ mod tests {
                     id(digest(&request_profile)),
                 ),
                 lifecycle: ArtifactReferenceV4::new(
-                    id(LIFECYCLE_SCHEMA_ID_V4),
+                    id(SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5),
                     id(digest(&lifecycle_policy)),
                 ),
                 strategy: ArtifactReferenceV4::new(
@@ -870,7 +874,7 @@ mod tests {
     fn exact_unsigned_bundle_joins_all_finalized_content() {
         let fixture = fixture();
         let lifecycle_digest = digest(&fixture.lifecycle_policy);
-        let policy = StateLifecyclePolicyV4::decode_selected(
+        let policy = StateLifecyclePolicyV5::decode_selected(
             lifecycle_digest,
             lifecycle_digest,
             &fixture.lifecycle_policy,

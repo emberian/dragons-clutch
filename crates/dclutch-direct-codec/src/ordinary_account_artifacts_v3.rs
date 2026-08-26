@@ -6,13 +6,13 @@
 //! account frames and state layouts.
 
 use dclutch_account_profile_contract::v2::{
-    AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES, AccountPrestateV2, AccountProfileV2, OPERATION_BYTES,
+    AccountPrestateV2, AccountProfileV2, DYNAMIC_FIXED_SPAN_HEADER_BYTES, OPERATION_BYTES,
     RULE_BYTES, TrustedBuiltinIdentityV2, TrustedEnvironmentV2, TrustedIdentityEnvironmentV2,
     encode::{
         AccountAliasInputV2, AccountCoordinateV2, AccountEffectPermissionsV2,
         AccountOperationInputV2, AccountPrivilegesV2, AccountRuleInputV2,
         AccountRuleWithPrestateInputV2, IdentityCoordinateV2, RegisterGeometryV2,
-        ScalarCoordinateV2, encode_account_profile_with_authenticated_route_alias_v2_atomic,
+        ScalarCoordinateV2, encode_account_profile_with_dynamic_fixed_span_v2_atomic,
     },
 };
 use dclutch_capability_program_contract::{
@@ -20,15 +20,19 @@ use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_MARKET_OFFSET, CAPABILITY_ROOT_RELEASE_SET_OFFSET,
 };
 use dclutch_claims_svm::{
-    frame_spec_v1::{SPARSE_NATIVE_TRANSFER_ACCOUNT_COUNT_V1, SparseNativeTransferFrameSpecV1},
+    frame_spec_v1::{
+        ClaimsFrameDataV1, SPARSE_NATIVE_TRANSFER_ACCOUNT_COUNT_V1, SparseNativeTransferFrameSpecV1,
+    },
     liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
         LiabilityBasisMarketLayoutV2, LiabilityBasisPositionLayoutV2,
     },
 };
 use dclutch_custody_contract::{
-    CustodyFrameSpecV1, CustodyReplayLayoutV1, OperationV1, TRANSFER_ACCOUNT_COUNT_V1,
+    CustodyFrameDataV1, CustodyFrameSpecV1, CustodyReplayLayoutV1, OperationV1,
+    TRANSFER_ACCOUNT_COUNT_V1,
 };
+use dclutch_market_core_codec::STATE_BYTES as CORE_STATE_BYTES;
 use dclutch_product_payoff_v2_codec::runtime_v3::BASIS_WIDTH_OFFSET_V3;
 use dclutch_product_runtime_v2::{
     DOMAIN_CUT_BYTES, DOMAIN_HEADER_BYTES, PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_HEADER_BYTES,
@@ -36,6 +40,8 @@ use dclutch_product_runtime_v2::{
 };
 use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
 use dclutch_realm_contract::{REALM_BYTES, RealmLayoutV1};
+use dclutch_registry_contract::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
+use dclutch_registry_svm::LOADER_V3_PROGRAM_BYTES;
 use dclutch_rent_contract::RENT_CREDIT_BYTES_V1;
 
 use crate::{
@@ -88,16 +94,15 @@ const BASIS_PREFIX_BYTES: usize = BASIS_WIDTH_OFFSET_V3 + 4;
 const DOMAIN_AFFINE_BASE_BYTES: usize = DOMAIN_HEADER_BYTES - DOMAIN_CUT_BYTES;
 const CLAIMS_ROW_BYTES: usize = 8;
 
-/// Exact encoded Profile11 width for inline ordinary Direct execution.
-pub const DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3: usize =
-    AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES
-        + FIXED_ACCOUNTS * RULE_BYTES
-        + FIXED_OPERATIONS * OPERATION_BYTES;
+/// Exact encoded fixed-topology Profile13 width for inline ordinary Direct execution.
+pub const DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3: usize = DYNAMIC_FIXED_SPAN_HEADER_BYTES
+    + FIXED_ACCOUNTS * RULE_BYTES
+    + FIXED_OPERATIONS * OPERATION_BYTES;
 
 /// Exact account observations used to finalize one release-pinned profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DirectInlineOrdinaryAccountProfileInputV3<'a> {
-    /// Exact logical data lengths in Profile11 coordinate order.
+    /// Exact logical data lengths in Profile13 coordinate order.
     ///
     /// Runtime-width states are checked for one consistent positive Product
     /// width, while the authenticated ProductBasis record remains variable
@@ -116,7 +121,7 @@ pub enum DirectOrdinaryAccountArtifactErrorV3 {
     Profile(dclutch_account_profile_contract::v2::Error),
 }
 
-/// Emit one complete inline-ordinary Profile11 atomically.
+/// Emit one complete inline-ordinary fixed-topology Profile13 atomically.
 pub fn encode_direct_inline_ordinary_account_profile_v3_atomic(
     input: DirectInlineOrdinaryAccountProfileInputV3<'_>,
     scratch: &mut [u8],
@@ -130,7 +135,7 @@ pub fn encode_direct_inline_ordinary_account_profile_v3_atomic(
     validate_lengths(input.logical_data_lengths)?;
     let rules = rules(input.logical_data_lengths)?;
     let operations = operations()?;
-    encode_account_profile_with_authenticated_route_alias_v2_atomic(
+    encode_account_profile_with_dynamic_fixed_span_v2_atomic(
         TrustedEnvironmentV2::CurrentSlot {
             destination: scalar(SCALAR_SLOT_V3)?,
         },
@@ -140,10 +145,10 @@ pub fn encode_direct_inline_ordinary_account_profile_v3_atomic(
         TrustedBuiltinIdentityV2::SystemProgram {
             destination: identity(IDENTITY_SYSTEM_PROGRAM_V3)?,
         },
+        &[],
         &rules,
         &[],
         &operations,
-        &[],
         RegisterGeometryV2 {
             common_scalars: scalar(DIRECT_ORDINARY_COMMON_SCALARS_V3)?,
             item_scalar_stride: DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3,
@@ -231,12 +236,20 @@ fn rules(
         let account = claims
             .account(local)
             .map_err(|_| DirectOrdinaryAccountArtifactErrorV3::Frame)?;
-        rule_mut(
+        let rule = rule_mut(
             &mut output,
             usize::from(DIRECT_INLINE_CLAIMS_ACCOUNT_START_V3 + local),
-        )?
-        .rule
-        .privileges = claims_privileges(account.privileges());
+        )?;
+        let privileges = claims_privileges(account.privileges());
+        rule.rule.privileges = privileges;
+        if matches!(
+            claims
+                .data(local)
+                .map_err(|_| DirectOrdinaryAccountArtifactErrorV3::Frame)?,
+            ClaimsFrameDataV1::OpaqueData | ClaimsFrameDataV1::ProgramData(_)
+        ) {
+            *rule = opaque(privileges);
+        }
         local += 1;
     }
     let claims_market = rule_mut(&mut output, usize::from(CLAIMS_MARKET_ACCOUNT))?;
@@ -266,9 +279,17 @@ fn rules(
             let account = custody
                 .account(local)
                 .map_err(|_| DirectOrdinaryAccountArtifactErrorV3::Frame)?;
-            rule_mut(&mut output, usize::from(start + local))?
-                .rule
-                .privileges = custody_privileges(account.privileges());
+            let rule = rule_mut(&mut output, usize::from(start + local))?;
+            let privileges = custody_privileges(account.privileges());
+            rule.rule.privileges = privileges;
+            if matches!(
+                custody
+                    .data(local)
+                    .map_err(|_| DirectOrdinaryAccountArtifactErrorV3::Frame)?,
+                CustodyFrameDataV1::OpaqueData | CustodyFrameDataV1::CallerProgramData
+            ) {
+                *rule = opaque(privileges);
+            }
             local += 1;
         }
     }
@@ -480,6 +501,7 @@ const ROUTE_ALIASES: &[(u16, u16)] = &[
 ];
 
 fn validate_lengths(lengths: &[u32]) -> Result<(), DirectOrdinaryAccountArtifactErrorV3> {
+    let loader_program_bytes = width(LOADER_V3_PROGRAM_BYTES)?;
     if lengths.len() != FIXED_ACCOUNTS {
         return Err(DirectOrdinaryAccountArtifactErrorV3::Geometry);
     }
@@ -494,6 +516,11 @@ fn validate_lengths(lengths: &[u32]) -> Result<(), DirectOrdinaryAccountArtifact
         || length_at(lengths, 9)? != 0
         || length_at(lengths, 10)? != width(RENT_CREDIT_BYTES_V1)?
         || length_at(lengths, 11)? != 0
+        || length_at(lengths, 23)? != width(CORE_STATE_BYTES)?
+        || length_at(lengths, 24)? != width(ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1)?
+        || [25_usize, 26, 28, 30]
+            .iter()
+            .any(|index| length_at(lengths, *index) != Ok(loader_program_bytes))
         || length_at(lengths, 40)? != width(REALM_BYTES)?
         || length_at(lengths, 42)? != width(CustodyReplayLayoutV1::BYTES)?
     {
@@ -595,6 +622,19 @@ const fn exact(
             data_item_stride,
         },
         prestate: AccountPrestateV2::Exact,
+    }
+}
+
+const fn opaque(privileges: AccountPrivilegesV2) -> AccountRuleWithPrestateInputV2 {
+    AccountRuleWithPrestateInputV2 {
+        rule: AccountRuleInputV2 {
+            privileges,
+            effect_permissions: AccountEffectPermissionsV2::new(false, false, false),
+            alias: AccountAliasInputV2::SelfCoordinate,
+            data_length: 0,
+            data_item_stride: 0,
+        },
+        prestate: AccountPrestateV2::AuthenticatedOpaqueReadonlyData,
     }
 }
 
@@ -752,14 +792,14 @@ mod tests {
         output[18] = width(DOMAIN_AFFINE_BASE_BYTES + 3 * DOMAIN_CUT_BYTES).expect("domain");
         output[20] = output[3];
         output[22] = 17;
-        output[23] = 352;
-        output[24] = 128;
-        output[25] = 36;
-        output[26] = 36;
+        output[23] = width(CORE_STATE_BYTES).expect("Core");
+        output[24] = width(ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1).expect("activation");
+        output[25] = width(LOADER_V3_PROGRAM_BYTES).expect("Registry program");
+        output[26] = width(LOADER_V3_PROGRAM_BYTES).expect("Trading program");
         output[27] = 1_024;
-        output[28] = 36;
+        output[28] = width(LOADER_V3_PROGRAM_BYTES).expect("Claims program");
         output[29] = 1_024;
-        output[30] = 36;
+        output[30] = width(LOADER_V3_PROGRAM_BYTES).expect("Core program");
         output[31] = 1_024;
         output[32] = width(LIABILITY_BASIS_POSITION_HEADER_BYTES_V2 + 3 * CLAIMS_ROW_BYTES)
             .expect("position");
@@ -780,10 +820,13 @@ mod tests {
         output[47] = 36;
         output[73] = 165;
         for (account, representative) in ROUTE_ALIASES {
-            output[usize::from(*account)] = output[usize::from(*representative)];
+            let value = *output
+                .get(usize::from(*representative))
+                .expect("representative");
+            *output.get_mut(usize::from(*account)).expect("alias") = value;
         }
         for caller in [48_usize, 62, 76] {
-            output[caller] = 0;
+            *output.get_mut(caller).expect("caller") = 0;
         }
         output
     }
@@ -803,12 +846,13 @@ mod tests {
     }
 
     #[test]
-    fn profile11_round_trips_exact_hot_and_child_geometry() {
+    fn profile13_round_trips_exact_hot_and_child_geometry() {
         let bytes = emit(&lengths(256));
         let profile = AccountProfileV2::decode(&bytes).expect("decode");
         assert_eq!(profile.fixed_account_count(), 90);
         assert_eq!(profile.item_account_stride(), 0);
-        assert_eq!(profile.common_scalar_count(), 64);
+        assert_eq!(profile.dynamic_fixed_span_count(), 0);
+        assert_eq!(profile.common_scalar_count(), 65);
         assert_eq!(profile.item_scalar_stride(), 2);
         assert_eq!(profile.common_identity_count(), 32);
         assert_eq!(profile.item_identity_stride(), 0);
@@ -836,6 +880,22 @@ mod tests {
             EFFECT_PERMISSION_CREDIT_LAMPORTS | EFFECT_PERMISSION_WRITE_DATA
         );
         assert_eq!(maker.prestate(), AccountPrestateV2::LifecycleBound);
+        for coordinate in [12_u16, 27, 29, 31, 34, 46, 48, 62, 76] {
+            assert_eq!(
+                profile
+                    .rule(false, coordinate)
+                    .expect("opaque route")
+                    .prestate(),
+                AccountPrestateV2::AuthenticatedOpaqueReadonlyData
+            );
+        }
+        assert_eq!(
+            profile
+                .rule(false, 39)
+                .expect("ProgramData alias")
+                .prestate(),
+            AccountPrestateV2::AuthenticatedRouteAlias
+        );
         assert_eq!(
             profile.rule(false, 6).expect("payer").effect_permissions(),
             EFFECT_PERMISSION_DEBIT_LAMPORTS
@@ -845,6 +905,32 @@ mod tests {
     #[test]
     fn one_profile_is_polymorphic_across_categorical_and_graded_basis_bodies() {
         assert_eq!(emit(&lengths(256)), emit(&lengths(736)));
+    }
+
+    #[test]
+    fn checked_release_programdata_and_authority_widths_do_not_change_profile_identity() {
+        let baseline = lengths(256);
+        let mut real_deployment = baseline;
+        real_deployment[12] = 91;
+        real_deployment[27] = 1_141_117;
+        for coordinate in [39_usize, 53, 67, 81] {
+            let value = *real_deployment.get(27).expect("ProgramData");
+            *real_deployment
+                .get_mut(coordinate)
+                .expect("ProgramData alias") = value;
+        }
+        real_deployment[34] = 17;
+        real_deployment[46] = 29;
+        for coordinate in [60_usize, 74, 88] {
+            let value = *real_deployment.get(46).expect("Custody authority");
+            *real_deployment
+                .get_mut(coordinate)
+                .expect("Custody authority alias") = value;
+        }
+        real_deployment[48] = 31;
+        real_deployment[62] = 37;
+        real_deployment[76] = 41;
+        assert_eq!(emit(&baseline), emit(&real_deployment));
     }
 
     #[test]
@@ -869,7 +955,8 @@ mod tests {
         );
 
         let mut hostile = lengths(256);
-        hostile[33] += CLAIMS_ROW_BYTES as u32;
+        *hostile.get_mut(33).expect("Claims destination") +=
+            u32::try_from(CLAIMS_ROW_BYTES).expect("Claims row width");
         assert_eq!(
             encode_direct_inline_ordinary_account_profile_v3_atomic(
                 DirectInlineOrdinaryAccountProfileInputV3 {

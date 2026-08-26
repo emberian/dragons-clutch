@@ -19,7 +19,7 @@ use crate::{
 };
 
 /// Exact common scalar-bank width for inline ordinary V3.
-pub const DIRECT_ORDINARY_COMMON_SCALARS_V3: usize = 64;
+pub const DIRECT_ORDINARY_COMMON_SCALARS_V3: usize = 65;
 /// Exact common identity-bank width for inline ordinary V3.
 pub const DIRECT_ORDINARY_COMMON_IDENTITIES_V3: usize = 32;
 /// Per-Product-item scalar stride: canonical item index plus Claims quantity.
@@ -165,6 +165,8 @@ pub const SCALAR_BUYER_BUMP_V3: usize = 61;
 pub const SCALAR_CLAIM_TRANSFER_V3: usize = 62;
 /// Derived terminal fee-only Custody route enable bit.
 pub const SCALAR_FEE_SOLE_ROUTE_ENABLED_V3: usize = 63;
+/// Lifecycle V5 adapter-authenticated current Rent minimum for a 152-byte maker root.
+pub const SCALAR_MAKER_CURRENT_RENT_MINIMUM_V5: usize = 64;
 /// Program-owned maker replay magic word after fee arithmetic completes.
 pub const SCALAR_MAKER_MAGIC_V3: usize = SCALAR_FEE_DENOMINATOR_V3;
 

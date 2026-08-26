@@ -811,7 +811,7 @@ mod tests {
         let effect = effect.base();
         assert_eq!(effect.route_count(), 5);
         assert_eq!(effect.fixed_account_count(), 90);
-        assert_eq!(effect.common_scalar_count(), 64);
+        assert_eq!(effect.common_scalar_count(), 65);
         assert_eq!(effect.item_scalar_stride(), 2);
         assert_eq!(effect.common_identity_count(), 32);
         assert_eq!(effect.request_bytes(0).expect("request bank"), 3_424);

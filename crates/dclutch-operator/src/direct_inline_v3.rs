@@ -6,20 +6,20 @@
 //! RPC, signs maker material, signs a transaction, or submits one.
 
 use crate::{
-    Finality, Observation, ObservedAccount,
-    foundation::{FinalizedRecordProof, authenticate_finalized_record, decode_rent},
+    foundation::{authenticate_finalized_record, decode_rent, FinalizedRecordProof},
     product_graph_observation_v3::{
-        AuthenticatedProductGraphObservationV3, FinalizedProductGraphAccountsV3,
-        authenticate_product_graph_observation_v3,
+        authenticate_product_graph_observation_v3, AuthenticatedProductGraphObservationV3,
+        FinalizedProductGraphAccountsV3,
     },
+    Finality, Observation, ObservedAccount,
 };
 use dclutch_account_profile_contract::v2::PhysicalAccountDataGeometryV2;
-use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
+use dclutch_capability_contract::{CapabilityManifestV1, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1};
 use dclutch_capability_program_contract::{
-    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
     hot_v3::{
-        HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
-        HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CONFIG_STAGING_ACCOUNT_V3, HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
+        HotExecutionEnvelopeV3, HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
+        HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3,
+        HOT_CONFIG_STAGING_ACCOUNT_V3, HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
         HOT_DESCRIPTOR_STAGING_ACCOUNT_V3, HOT_EFFECT_RAW_ACCOUNT_V3,
         HOT_EFFECT_STAGING_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
         HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3, HOT_LIFECYCLE_RAW_ACCOUNT_V3,
@@ -31,24 +31,25 @@ use dclutch_capability_program_contract::{
         HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3, HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3,
         HOT_ROOT_ACCOUNT_V3, HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3, HOT_STRATEGY_RAW_ACCOUNT_V3,
         HOT_STRATEGY_STAGING_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
-        HOT_TRANSITION_RAW_ACCOUNT_V3, HOT_TRANSITION_STAGING_ACCOUNT_V3, HotExecutionEnvelopeV3,
+        HOT_TRANSITION_RAW_ACCOUNT_V3, HOT_TRANSITION_STAGING_ACCOUNT_V3,
     },
-    set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
+    set_v2::{CapabilityProgramSetV2, CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2},
     v4::{
         ArtifactReferenceV4, CapabilityProgramV4,
         SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
     },
+    CapabilityRootHeaderV1, CAPABILITY_ROOT_HEADER_BYTES_V1,
 };
 use dclutch_direct_codec::{
     artifacts_v4::{
-        DirectArtifactBundleV4, DirectArtifactBytesV4, DirectArtifactSelectionV4,
-        authenticate_direct_artifacts_v4,
+        authenticate_direct_artifacts_v4, DirectArtifactBundleV4, DirectArtifactBytesV4,
+        DirectArtifactSelectionV4,
     },
     execution_v3::{
-        DIRECT_SIGNED_PARTICIPANT_BYTES_V3, DirectExecutionActionV3, DirectExecutionRequestV3,
-        encode_header_v3,
+        encode_header_v3, DirectExecutionActionV3, DirectExecutionRequestV3,
+        DIRECT_SIGNED_PARTICIPANT_BYTES_V3,
     },
-    intent_v2::{COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2, CompactIntentV2},
+    intent_v2::{CompactIntentV2, COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2},
 };
 use dclutch_release_set_contract::ExecutionRoleV1;
 use solana_address_lookup_table_interface::{
@@ -62,7 +63,7 @@ use solana_program::{
 };
 use solana_sdk_ids::{ed25519_program, sysvar};
 
-use crate::versioned::{VersionedMessagePlanV0, compile_v0_message};
+use crate::versioned::{compile_v0_message, VersionedMessagePlanV0};
 
 pub use dclutch_direct_codec::execution_v3::DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3;
 
@@ -832,7 +833,7 @@ fn validate_runtime_profile(
 ) -> Result<(), Error> {
     let profile = bundle.account_profile;
     let expected = profile
-        .physical_account_count(outcome_count)
+        .physical_account_count_with_dynamic_spans(outcome_count, &[])
         .map_err(|_| Error::RuntimeProfileMismatch)?;
     if expected < HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3 || state.runtime_accounts.len() != expected
     {
@@ -840,7 +841,7 @@ fn validate_runtime_profile(
     }
     for (physical_ordinal, account) in state.runtime_accounts.iter().enumerate() {
         let geometry = profile
-            .physical_account_geometry(outcome_count, physical_ordinal)
+            .physical_account_geometry_with_dynamic_spans(outcome_count, &[], physical_ordinal)
             .map_err(|_| Error::RuntimeProfileMismatch)?;
         let privileges = geometry.privileges();
         let data_matches = match geometry.data() {
@@ -997,23 +998,24 @@ mod tests {
 
     use super::*;
     use dclutch_capability_contract::{
-        ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1,
-        FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+        ActivationPolicy, CapabilityEntryV1, CompartmentFundingV1, FundingAmountsV1,
+        FundingQuoteV1, CAPABILITY_ENTRY_BYTES, MANIFEST_HEADER_BYTES,
+        MAX_DEPENDENCIES_PER_CAPABILITY,
     };
     use dclutch_capability_program_contract::set_v2::{
-        CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, SelectorWidthV2,
-        encode_program_set_v2, encoded_program_set_bytes_v2,
+        encode_program_set_v2, encoded_program_set_bytes_v2, CapabilityDescriptorReferenceV2,
+        CapabilityProgramSetEntryV2, SelectorWidthV2,
     };
     use dclutch_custody_contract::CustodyReplayLayoutV1;
     use dclutch_direct_codec::{
         ordinary_account_artifacts_v3::DirectInlineOrdinaryAccountProfileInputV3,
         ordinary_bundle_v4::{
-            DirectInlineOrdinaryHotBundleInputV4, build_direct_inline_ordinary_hot_bundle_v4,
+            build_direct_inline_ordinary_hot_bundle_v4, DirectInlineOrdinaryHotBundleInputV4,
         },
         ordinary_effect_artifacts_v3::DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3,
         successor::{
-            DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, DIRECT_MAKER_REPLAY_BYTES_V1,
-            DIRECT_ROOT_SCHEMA_ID_V1, DirectExecutionConfigV1, DirectRootStateV1,
+            DirectExecutionConfigV1, DirectRootStateV1, DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1,
+            DIRECT_MAKER_REPLAY_BYTES_V1, DIRECT_ROOT_SCHEMA_ID_V1,
         },
     };
     use dclutch_product_runtime_v2::{
@@ -1222,14 +1224,25 @@ mod tests {
                 .expect("domain width");
         *output.get_mut(20).expect("portfolio alias") = *output.get(3).expect("portfolio");
         *output.get_mut(22).expect("Registry") = 17;
-        *output.get_mut(23).expect("Core") = 352;
-        *output.get_mut(24).expect("activation") = 128;
-        *output.get_mut(25).expect("Registry cache") = 36;
-        *output.get_mut(26).expect("Claims program") = 36;
+        *output.get_mut(23).expect("Core") =
+            u32::try_from(dclutch_market_core_codec::STATE_BYTES).expect("Core width");
+        *output.get_mut(24).expect("activation") =
+            u32::try_from(dclutch_registry_contract::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1)
+                .expect("activation width");
+        *output.get_mut(25).expect("Registry program") =
+            u32::try_from(dclutch_registry_svm::LOADER_V3_PROGRAM_BYTES)
+                .expect("Registry program width");
+        *output.get_mut(26).expect("Trading program") =
+            u32::try_from(dclutch_registry_svm::LOADER_V3_PROGRAM_BYTES)
+                .expect("Trading program width");
         *output.get_mut(27).expect("Claims ProgramData") = 1_024;
-        *output.get_mut(28).expect("source admission") = 36;
+        *output.get_mut(28).expect("Claims program") =
+            u32::try_from(dclutch_registry_svm::LOADER_V3_PROGRAM_BYTES)
+                .expect("Claims program width");
         *output.get_mut(29).expect("source staging") = 1_024;
-        *output.get_mut(30).expect("destination admission") = 36;
+        *output.get_mut(30).expect("Core program") =
+            u32::try_from(dclutch_registry_svm::LOADER_V3_PROGRAM_BYTES)
+                .expect("Core program width");
         *output.get_mut(31).expect("destination staging") = 1_024;
         let position = 128 + 3 * 8;
         *output.get_mut(32).expect("source Position") = position;
@@ -1549,12 +1562,12 @@ mod tests {
         outcome_count: u32,
     ) -> Vec<ObservedAccountMetaV3> {
         let count = profile
-            .physical_account_count(outcome_count)
+            .physical_account_count_with_dynamic_spans(outcome_count, &[])
             .expect("physical account count");
         (0..count)
             .map(|ordinal| {
                 let geometry = profile
-                    .physical_account_geometry(outcome_count, ordinal)
+                    .physical_account_geometry_with_dynamic_spans(outcome_count, &[], ordinal)
                     .expect("physical geometry");
                 let privileges = geometry.privileges();
                 let data_bytes = match geometry.data() {
