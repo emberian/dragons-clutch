@@ -66,6 +66,8 @@ pub struct RationalTerminalHotInstructionV3 {
     pub family_digest: [u8; 32],
     /// Checked release-manifest identity used for the operator decision.
     pub checked_manifest_digest: [u8; 32],
+    /// Finalized slot shared by every chain observation used to build it.
+    pub finalized_slot: u64,
 }
 
 /// Build one complete unsigned Hot38 terminal redemption instruction.
@@ -159,6 +161,7 @@ pub fn build_rational_terminal_hot_instruction_v3(
         required_wallet_signers: vec![child_accounts.get(3).ok_or(Error::HotInstruction)?.pubkey],
         family_digest: terminal.family_digest,
         checked_manifest_digest: checked.checked_manifest_digest,
+        finalized_slot: state.finalized_slot,
     })
 }
 

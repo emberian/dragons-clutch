@@ -56,6 +56,8 @@ pub mod general_physical;
 pub mod infrastructure;
 /// Chain-derived real-provider submission and permissionless reclaim.
 pub mod provider_transport_v3;
+/// Packet-safe unsigned Rational terminal Bearer redemption construction.
+pub mod rational_terminal_v3;
 /// Chain-derived registered Direct execution and terminal workflows.
 pub mod registered_direct;
 /// Chain-derived unsigned Registry activation and reauthentication workflows.

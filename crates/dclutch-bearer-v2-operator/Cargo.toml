@@ -25,8 +25,6 @@ solana-sdk-ids = "=3.1.0"
 [dev-dependencies]
 dclutch-token-svm = { path = "../dclutch-token-svm" }
 
-[workspace]
-
 [lints.rust]
 missing_docs = "deny"
 unsafe_code = "forbid"
