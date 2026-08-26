@@ -241,6 +241,20 @@ impl SelectedLifecycleV3<'_> {
         }
     }
 
+    /// Exact checked state-data width selected for this runtime tail.
+    ///
+    /// Create adapters use this before planning to query the current Rent
+    /// minimum for the same width. Authenticate and Close use it to size the
+    /// exact existing state observation.
+    pub fn target_data_bytes(self, tail_count: u32) -> Result<u32> {
+        let recipe = self.policy.recipe(self.plan.recipe)?;
+        recipe
+            .data_stride
+            .checked_mul(tail_count)
+            .and_then(|tail| recipe.data_base.checked_add(tail))
+            .ok_or(Error::Arithmetic)
+    }
+
     /// Project the exact expanded AccountProfile indices used by one invocation.
     pub fn project_account_indices(
         self,
@@ -1085,6 +1099,7 @@ pub fn plan_lifecycle(
     )? {
         return Err(Error::PlanDisabled);
     }
+    let data_bytes = selected.target_data_bytes(context.tail_count)?;
     let selected = selected.plan;
     policy.validate_account_profile(context.account_profile)?;
     validate_runtime_width(
@@ -1117,15 +1132,6 @@ pub fn plan_lifecycle(
     if state.key != context.adapter_derived_pda || !state.writable || state.executable {
         return Err(Error::IdentityMismatch);
     }
-    let data_bytes = recipe
-        .data_base
-        .checked_add(
-            recipe
-                .data_stride
-                .checked_mul(context.tail_count)
-                .ok_or(Error::Arithmetic)?,
-        )
-        .ok_or(Error::Arithmetic)?;
     let bump_seed = policy.materialize_seed_for(
         context.account_profile,
         selected,
@@ -1998,6 +2004,7 @@ mod tests {
         let maker = policy.action_plan(2, 0).expect("maker create");
         assert_eq!(maker.invocation_scope(), Ok(CoordinateScopeV3::Fixed));
         assert_eq!(maker.invocation_count(3), Ok(1));
+        assert_eq!(maker.target_data_bytes(3), Ok(144));
         assert_eq!(maker.invocation_item(3, 0), Ok(None));
         assert_eq!(maker.invocation_item(3, 1), Err(Error::InvalidCoordinate));
         assert_eq!(
@@ -2027,6 +2034,8 @@ mod tests {
         let record = policy.action_plan(3, 0).expect("record create");
         assert_eq!(record.invocation_scope(), Ok(CoordinateScopeV3::Item));
         assert_eq!(record.invocation_count(3), Ok(3));
+        assert_eq!(record.target_data_bytes(3), Ok(148));
+        assert_eq!(record.target_data_bytes(u32::MAX), Err(Error::Arithmetic));
         assert_eq!(record.invocation_item(3, 2), Ok(Some(2)));
         assert_eq!(
             record.project_account_indices(profile, 3, Some(2)),
