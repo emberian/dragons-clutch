@@ -19,9 +19,29 @@ Other generated lifecycle actions, including the distinct
 `InitializeClaims` action, remain refused until their action-specific adapters
 are joined. An ABI tag is not a claim that its runtime route is present.
 
+## Immutable infrastructure root
+
+Before an accepted Found, the current Core deployment creates one immutable
+144-byte `ProtocolInfrastructureProfileV1` PDA under
+`[b"dclutch:infrastructure:v1"]`. Its one-time 16-byte initialization is
+authorized by the exact upgrade-authority signer observed in the current Core
+ProgramData. The initializer independently authenticates finalized Registry
+and Rent `ArtifactReleaseV1` records and their current Loader deployments; both
+artifacts must already be immutable and both ProgramData accounts must have no
+upgrade authority. The profile stores only the exact Registry and Rent
+`(program, ArtifactReleaseId)` bindings. It has no update or close route.
+
+The initialization frame has exactly 14 accounts: payer, vacant profile PDA,
+Core ProgramData, current Core upgrade authority, Registry artifact
+raw/staging, Registry program/ProgramData, Rent artifact raw/staging, Rent
+program/ProgramData, Rent sysvar, and System. The payer and Core authority may
+be the same signer; every other alias is refused. Release deployment order is:
+initialize the profile while the Core authority exists, revoke the Core
+authority, finalize/activate the immutable Core artifact, then Found.
+
 ## Found frame
 
-Found has exactly 24 pairwise-distinct accounts, in this order:
+Found has exactly 31 pairwise-distinct accounts, in this order:
 
 1. payer (signer, writable)
 2. vacant/dust-prefunded Market PDA (writable)
@@ -29,14 +49,14 @@ Found has exactly 24 pairwise-distinct accounts, in this order:
 4. RentCredit program
 5. Realm raw record
 6. Realm finalized cursor
-7. Product Instance raw record
-8. Product Instance finalized cursor
-9. Product Terms raw record
-10. Product Terms finalized cursor
-11. finite result-domain raw record
-12. finite result-domain finalized cursor
-13. occurrence SourceMaterial raw record
-14. SourceMaterial finalized cursor
+7. Product Runtime V2 graph-root raw record
+8. Product finalized cursor
+9. Product-selected result-domain raw record
+10. result-domain finalized cursor
+11. Product-selected portfolio raw record
+12. portfolio finalized cursor
+13. compact SourceMaterialV2 raw record
+14. SourceMaterialV2 finalized cursor
 15. capability manifest raw record
 16. capability manifest finalized cursor
 17. execution ReleaseSet raw record
@@ -47,14 +67,32 @@ Found has exactly 24 pairwise-distinct accounts, in this order:
 22. Registry program
 23. Rent sysvar
 24. System program
+25. immutable Core infrastructure profile
+26. Registry ArtifactRelease raw record
+27. Registry ArtifactRelease finalized cursor
+28. Registry ProgramData
+29. Rent ArtifactRelease raw record
+30. Rent ArtifactRelease finalized cursor
+31. Rent ProgramData
 
 All accounts after the first two are read-only. Core authenticates every raw
 record, its dust-tolerant empty system-owned finalized cursor, all cross-record
-identities, the current Registry/Loader-backed Core artifact, the Market PDA,
-and the canonical RentCredit before transferring only the exact missing rent,
-allocating, assigning, and writing the 352-byte state. The state and its PDA
-persist the exact Registry program used at Found; every later release
-reauthentication rejects a substituted Registry before CPI.
+identities, the Market PDA, and the canonical RentCredit before transferring
+only the exact missing rent, allocating, assigning, and writing the 352-byte
+state. Trust is ordered: authenticate the Core-owned infrastructure profile;
+directly reauthenticate its immutable Registry and Rent artifacts/current
+Loader deployments; observe the selected release-set digest; reauthenticate
+the immutable current Core release; only then trust the remaining finalized
+Registry records and activation projection. RentCredit owner and PDA are bound
+to the profiled Rent program. The state and its PDA persist the exact Registry
+program used at Found; every later release reauthentication rejects a
+substituted Registry before CPI.
+
+The 208-byte SourceMaterialV2 owns only Source policy links and the selected
+Product-record content digest. Core requires that digest to equal the root of
+the independently authenticated Product/domain/portfolio graph; neither the
+Source record nor the Found request may supply stable Product, result-domain,
+portfolio, basis, release, or outcome-width facts.
 
 ## OpenMarket frame
 
@@ -90,10 +128,30 @@ artifacts, derives the one Core caller-authority PDA, invokes the exact child
 frame, and requires a producer-bound 240-byte `CoreEffectAckV1` plus the
 action-specific poststate digest before any Core write. `CreateFund` is a
 prerequisite effect with no Core transition; `VerifyFundReady` commits
-`Prepaid -> Ready`; `AdmitTerminal` independently authenticates finalized
-Product Instance/Terms outer records and commits `Open+Consumed -> Terminal`;
+`Prepaid -> Ready`; `AdmitTerminal` independently authenticates the finalized
+Product Runtime V2 graph and commits `Open+Consumed -> Terminal`;
 `CloseFund` authenticates the closure/funding projection but does not by itself
 complete Core retirement.
+
+All four actions share accounts 0 through 15: caller authority, Market,
+activation cache, Registry, Core program/ProgramData, Resolution
+program/ProgramData, SourceMaterialV2 raw/staging, capability manifest
+raw/staging, Source state, and the ordered recovery/exhaustion/failure
+FundingStates. Their exact tails are:
+
+- Create (20 total): Rent, System, RecoveryPolicyV2 raw/staging.
+- Verify (21 total): beneficiary, Clock, Rent, RecoveryPolicyV2 raw/staging.
+- Admit (24 total): terminal certificate, Rent, then Product, result-domain,
+  and portfolio raw/staging pairs.
+- Close (24 total): terminal certificate, closure receipt, beneficiary, Clock,
+  Rent, System, then RecoveryPolicyV2 raw/staging.
+
+Create, Verify, and Close independently authenticate the exact Product-free
+496-byte RecoveryPolicyV2 selected by SourceMaterialV2 and require its sole
+admitted attempt plus the Source/recovery/failure identities to select the
+same three manifest funding entries. Admit instead reauthenticates the complete
+Product graph and derives the native `u32` outcome count; no caller count or
+legacy Product bridge participates.
 
 ## Generic capability frame
 
@@ -159,8 +217,11 @@ This is a measured profile, not a universal promise for arbitrary family tails.
 Unit tests cover hostile instruction truncation, noncanonical funding headers,
 outer-account aliases, Registry substitution, and the exact v0 envelope. The
 optimized SBF build is checked separately for verifier stack diagnostics.
-`run-open-market-program-test.sh` executes real Registry, Core, and Custody ELFs
-through replay and Vault creation and checks the commit-last Core transition.
+`run-open-market-program-test.sh` executes real Registry, Rent, Core, and
+Custody ELFs. It proves exact-authority one-time profile initialization,
+mutable-infrastructure refusal, a 258-outcome Found31, Registry/Rent
+substitution and mutable-Core rollback without a Market write, then replay and
+Vault creation with the commit-last Core transition.
 Additional real multi-program campaigns remain required for every Resolution
 action and for late Resolution-child rollback before that adapter is release
 evidence.

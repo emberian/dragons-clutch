@@ -3,7 +3,7 @@
 use alloc::{boxed::Box, vec::Vec};
 
 use dclutch_market_core_codec::{
-    Admission, CoreEffectAckV1, CoreEffectEnvelopeV1, CoreState, Identity, MarketCoreStateSeedsV1,
+    Admission, CoreEffectAckV1, CoreEffectEnvelopeV1, CoreState, Identity, MarketCoreStateSeedsV2,
     Request, Role, STATE_BYTES,
 };
 use solana_program::{
@@ -352,7 +352,7 @@ pub(crate) fn authenticate_market(
     {
         return Err(CoreSbfError::Market);
     }
-    let seeds = MarketCoreStateSeedsV1::new(state.identity);
+    let seeds = MarketCoreStateSeedsV2::new(state.identity);
     if Pubkey::find_program_address(&seeds.as_slices(), program_id).0 != *market.key {
         return Err(CoreSbfError::Market);
     }

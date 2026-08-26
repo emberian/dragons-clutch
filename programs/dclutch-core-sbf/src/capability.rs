@@ -16,7 +16,7 @@ use dclutch_capability_contract::{
 use dclutch_core_contract::ContentId;
 use dclutch_market_core_codec::{
     Action, CapabilityChildObservation, CapabilityFundingHeaderV1, CoreEffectAckV1,
-    CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState, MarketCoreStateSeedsV1, Request, Role,
+    CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState, MarketCoreStateSeedsV2, Request, Role,
     STATE_BYTES, activate_capability_child, close_capability_child,
 };
 use dclutch_realm_contract::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
@@ -602,7 +602,7 @@ fn authenticate_market(
     {
         return Err(CoreSbfError::Market);
     }
-    let seeds = MarketCoreStateSeedsV1::new(state.identity);
+    let seeds = MarketCoreStateSeedsV2::new(state.identity);
     let expected = Pubkey::find_program_address(&seeds.as_slices(), program_id).0;
     if market.key != &expected {
         return Err(CoreSbfError::Market);

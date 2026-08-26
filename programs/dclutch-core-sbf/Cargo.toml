@@ -22,6 +22,8 @@ dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
 dclutch-custody-contract = { path = "../../crates/dclutch-custody-contract" }
 dclutch-market-core-codec = { path = "../../crates/dclutch-market-core-codec" }
 dclutch-product-contract = { path = "../../crates/dclutch-product-contract" }
+dclutch-product-runtime-v2 = { path = "../../crates/dclutch-product-runtime-v2" }
+dclutch-product-runtime-v2-svm-reader = { path = "../../crates/dclutch-product-runtime-v2-svm-reader" }
 dclutch-realm-contract = { path = "../../crates/dclutch-realm-contract" }
 dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }
 dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }
@@ -36,6 +38,9 @@ solana-sdk-ids = "=3.1.0"
 solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
 
 [dev-dependencies]
+dclutch-product-runtime-v2-admission = { path = "../../crates/dclutch-product-runtime-v2-admission" }
+dclutch-product-runtime-v2 = { path = "../../crates/dclutch-product-runtime-v2" }
+dclutch-product-runtime-v2-operator = { path = "../../crates/dclutch-product-runtime-v2-operator" }
 solana-account = "=4.3.2"
 solana-hash = "=4.5.0"
 solana-message = { version = "=3.1.0", features = ["bincode"] }

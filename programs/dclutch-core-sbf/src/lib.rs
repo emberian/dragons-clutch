@@ -17,6 +17,7 @@ use dclutch_market_core_codec::{
 };
 use dclutch_release_set_contract::{
     CAPABILITY_EXECUTION_SELECTION_BYTES_V1, CapabilityExecutionSelectionV1,
+    INITIALIZE_PROTOCOL_INFRASTRUCTURE_BYTES_V1, InitializeProtocolInfrastructureV1,
 };
 use solana_program::{
     account_info::AccountInfo, entrypoint::ProgramResult, program_error::ProgramError,
@@ -27,10 +28,14 @@ mod capability;
 mod fixed_role;
 mod found;
 mod frame;
+mod infrastructure;
 mod open_market;
+mod product_runtime_v2;
 mod records;
 mod release;
 mod resolution;
+
+pub use frame::{FOUND_ACCOUNT_COUNT_V2, INITIALIZE_INFRASTRUCTURE_ACCOUNT_COUNT_V1};
 
 /// Exact instruction prefix shared by all Core actions.
 pub const CORE_REQUEST_PREFIX_BYTES_V1: usize = REQUEST_BYTES;
@@ -74,6 +79,8 @@ pub enum CoreSbfError {
     Commit = 13,
     /// Checked arithmetic or bounded conversion refused.
     Arithmetic = 14,
+    /// Core bootstrap profile, artifact, Loader, or immutability authority refused.
+    Infrastructure = 15,
 }
 
 impl From<CoreSbfError> for ProgramError {
@@ -92,6 +99,11 @@ pub fn process_instruction(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
+    if instruction_data.len() == INITIALIZE_PROTOCOL_INFRASTRUCTURE_BYTES_V1 {
+        InitializeProtocolInfrastructureV1::decode(instruction_data)
+            .map_err(|_| CoreSbfError::Instruction)?;
+        return infrastructure::process_initialize(program_id, accounts);
+    }
     let request_bytes = instruction_data
         .get(..REQUEST_BYTES)
         .ok_or(CoreSbfError::Instruction)?;

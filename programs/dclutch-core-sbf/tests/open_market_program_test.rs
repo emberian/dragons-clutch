@@ -8,7 +8,7 @@ use dclutch_custody_contract::{
     CustodyReplayV1, CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
 };
 use dclutch_market_core_codec::{
-    Action, CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV1, MarketIdentity, Phase,
+    Action, CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase,
     Readiness, Request,
 };
 use dclutch_realm_contract::{
@@ -312,8 +312,8 @@ fn fixture() -> (ProgramTest, Fixture) {
     let mut identity = MarketIdentity {
         market_id: CoreIdentity::new([0xff; 32]).expect("placeholder"),
         realm_id: CoreIdentity::new(realm).expect("Realm ID"),
-        product_id: CoreIdentity::new([0x61; 32]).expect("Product"),
-        result_domain: CoreIdentity::new([0x62; 32]).expect("domain"),
+        product_record: CoreIdentity::new([0x61; 32]).expect("Product record"),
+        product_id: CoreIdentity::new([0x62; 32]).expect("Product"),
         resolution_policy: CoreIdentity::new([0x63; 32]).expect("resolution"),
         capability_manifest: CoreIdentity::new([0x64; 32]).expect("manifest"),
         selected_release_set: CoreIdentity::new(release_set).expect("release"),
@@ -321,7 +321,7 @@ fn fixture() -> (ProgramTest, Fixture) {
         generation: GENERATION,
     };
     let market = Pubkey::find_program_address(
-        &MarketCoreStateSeedsV1::new(identity).as_slices(),
+        &MarketCoreStateSeedsV2::new(identity).as_slices(),
         &CORE_PROGRAM_ID,
     )
     .0;
