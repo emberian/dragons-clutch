@@ -45,6 +45,9 @@ pub const LIFECYCLE_PRESTATE_ARTIFACT_PROFILE: u16 = 6;
 pub const ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE: u16 = 7;
 /// Variable-data successor with an optional trusted current-executing-program identity.
 pub const TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE: u16 = 8;
+/// Trusted-program successor admitting only non-owning aliases of an earlier
+/// adapter-authenticated variable-data representative.
+pub const ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE: u16 = 9;
 /// Exact V2 header width.
 pub const HEADER_BYTES: usize = 32;
 /// Exact profile-8 header width including the trusted role-identity declaration.
@@ -88,6 +91,38 @@ const OP_PROJECT_DATA_IDENTITY_SELECTED: u8 = 13;
 const OP_PROJECT_DATA_U64_SELECTED_AFFINE: u8 = 14;
 const OP_PROJECT_DATA_IDENTITY_SELECTED_AFFINE: u8 = 15;
 const OP_PROJECT_DATA_U16: u8 = 16;
+const OP_PROJECT_DATA_U8: u8 = 17;
+
+/// Encode one fixed-account `u8` data projection into a common `u64` scalar.
+///
+/// The destination receives the exact zero-extended byte. All arguments are
+/// validated before `output` is mutated.
+pub fn encode_project_data_u8_operation_v2(
+    output: &mut [u8],
+    account: u16,
+    register: u16,
+    data_offset: u32,
+) -> Result<()> {
+    if output.len() != OPERATION_BYTES || data_offset.checked_add(1).is_none() {
+        return Err(Error::InvalidLength);
+    }
+    let mut candidate = [0_u8; OPERATION_BYTES];
+    *candidate.first_mut().ok_or(Error::InvalidLength)? = OP_PROJECT_DATA_U8;
+    candidate
+        .get_mut(2..4)
+        .ok_or(Error::InvalidLength)?
+        .copy_from_slice(&account.to_le_bytes());
+    candidate
+        .get_mut(6..8)
+        .ok_or(Error::InvalidLength)?
+        .copy_from_slice(&register.to_le_bytes());
+    candidate
+        .get_mut(8..12)
+        .ok_or(Error::InvalidLength)?
+        .copy_from_slice(&data_offset.to_le_bytes());
+    output.copy_from_slice(&candidate);
+    Ok(())
+}
 
 /// Encode one fixed-account `u16` data projection into a common `u64` scalar.
 ///
@@ -283,6 +318,11 @@ pub enum AccountPrestateV2 {
     /// The runtime adapter authenticated the exact nonempty record body and
     /// the profile declares a checked fixed prefix rather than its full width.
     AdapterAuthenticatedVariableData,
+    /// This fixed-prefix coordinate is a non-owning route alias of an earlier
+    /// adapter-authenticated variable-data representative. It inherits that
+    /// representative's exact observation and carries no independent width or
+    /// authentication bit.
+    AdapterAuthenticatedVariableDataAlias,
 }
 
 /// Hostile-decoded account rule template.
@@ -404,6 +444,7 @@ impl<'a> AccountProfileV2<'a> {
                     | LIFECYCLE_PRESTATE_ARTIFACT_PROFILE
                     | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE
                     | TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
+                    | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
             )
         {
             return Err(Error::UnsupportedProfile);
@@ -414,6 +455,7 @@ impl<'a> AccountProfileV2<'a> {
                 | LIFECYCLE_PRESTATE_ARTIFACT_PROFILE
                 | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE
                 | TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
+                | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
         ) && read_u32(bytes, 28)? != 0
         {
             return Err(Error::NonCanonicalReserved);
@@ -583,7 +625,11 @@ impl<'a> AccountProfileV2<'a> {
     }
 
     const fn header_bytes(self) -> usize {
-        if self.artifact_profile == TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE {
+        if matches!(
+            self.artifact_profile,
+            TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
+                | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
+        ) {
             TRUSTED_EXECUTING_PROGRAM_HEADER_BYTES
         } else {
             HEADER_BYTES
@@ -702,6 +748,7 @@ impl<'a> AccountProfileV2<'a> {
     fn validate_rules(self) -> Result<()> {
         let mut lifecycle_bound = false;
         let mut adapter_authenticated_variable_data = false;
+        let mut adapter_authenticated_variable_data_alias = false;
         let mut fixed = 0_u16;
         while fixed < self.fixed_accounts {
             let rule = self.rule(false, fixed)?;
@@ -713,6 +760,16 @@ impl<'a> AccountProfileV2<'a> {
             lifecycle_bound |= rule.prestate == AccountPrestateV2::LifecycleBound;
             adapter_authenticated_variable_data |=
                 rule.prestate == AccountPrestateV2::AdapterAuthenticatedVariableData;
+            if rule.prestate == AccountPrestateV2::AdapterAuthenticatedVariableDataAlias {
+                let representative = self.rule(false, rule.alias_index)?;
+                if representative.prestate != AccountPrestateV2::AdapterAuthenticatedVariableData
+                    || representative.alias_kind != AliasKindV2::SelfCoordinate
+                    || representative.alias_index != 0
+                {
+                    return Err(Error::InvalidVariableDataPrestate);
+                }
+                adapter_authenticated_variable_data_alias = true;
+            }
             fixed = fixed.checked_add(1).ok_or(Error::InvalidLength)?;
         }
         let mut item = 0_u16;
@@ -726,6 +783,8 @@ impl<'a> AccountProfileV2<'a> {
             lifecycle_bound |= rule.prestate == AccountPrestateV2::LifecycleBound;
             adapter_authenticated_variable_data |=
                 rule.prestate == AccountPrestateV2::AdapterAuthenticatedVariableData;
+            adapter_authenticated_variable_data_alias |=
+                rule.prestate == AccountPrestateV2::AdapterAuthenticatedVariableDataAlias;
             item = item.checked_add(1).ok_or(Error::InvalidLength)?;
         }
         match self.artifact_profile {
@@ -740,11 +799,25 @@ impl<'a> AccountProfileV2<'a> {
                 Ok(())
             }
             TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE => Ok(()),
+            ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
+                if adapter_authenticated_variable_data
+                    && adapter_authenticated_variable_data_alias =>
+            {
+                Ok(())
+            }
             LIFECYCLE_PRESTATE_ARTIFACT_PROFILE => Err(Error::InvalidLifecyclePrestate),
             ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE => {
                 Err(Error::InvalidVariableDataPrestate)
             }
-            _ if !lifecycle_bound && !adapter_authenticated_variable_data => Ok(()),
+            ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE => {
+                Err(Error::InvalidVariableDataPrestate)
+            }
+            _ if !lifecycle_bound
+                && !adapter_authenticated_variable_data
+                && !adapter_authenticated_variable_data_alias =>
+            {
+                Ok(())
+            }
             _ if lifecycle_bound => Err(Error::InvalidLifecyclePrestate),
             _ => Err(Error::InvalidVariableDataPrestate),
         }
@@ -933,6 +1006,7 @@ fn decode_trusted_environment(bytes: &[u8], artifact_profile: u16) -> Result<Tru
             | LIFECYCLE_PRESTATE_ARTIFACT_PROFILE
             | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE
             | TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
+            | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
     ) {
         return Ok(TrustedEnvironmentV2::None);
     }
@@ -952,7 +1026,11 @@ fn decode_trusted_identity_environment(
     bytes: &[u8],
     artifact_profile: u16,
 ) -> Result<TrustedIdentityEnvironmentV2> {
-    if artifact_profile != TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE {
+    if !matches!(
+        artifact_profile,
+        TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
+            | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
+    ) {
         return Ok(TrustedIdentityEnvironmentV2::None);
     }
     let destination = read_u16(bytes, TRUSTED_EXECUTING_PROGRAM_IDENTITY_OFFSET)?;
@@ -1125,8 +1203,15 @@ fn validate_accounts(
         if account.privileges() != rule.privileges {
             return Err(Error::PrivilegeMismatch);
         }
-        if account.adapter_authenticated_variable_data()
-            != (rule.prestate == AccountPrestateV2::AdapterAuthenticatedVariableData)
+        let variable_representative =
+            rule.prestate == AccountPrestateV2::AdapterAuthenticatedVariableData;
+        let variable_alias =
+            rule.prestate == AccountPrestateV2::AdapterAuthenticatedVariableDataAlias;
+        if (variable_representative && !account.adapter_authenticated_variable_data())
+            || (variable_alias && account.adapter_authenticated_variable_data())
+            || (!variable_representative
+                && !variable_alias
+                && account.adapter_authenticated_variable_data())
         {
             return Err(Error::InvalidVariableDataPrestate);
         }
@@ -1147,6 +1232,11 @@ fn validate_accounts(
             {
                 return Err(Error::InvalidVariableDataPrestate);
             }
+            AccountPrestateV2::AdapterAuthenticatedVariableDataAlias
+                if account.data().is_empty() || account.adapter_authenticated_variable_data() =>
+            {
+                return Err(Error::InvalidVariableDataPrestate);
+            }
             _ => {}
         }
         let representative = profile.representative(tail_count, coordinate)?;
@@ -1154,13 +1244,18 @@ fn validate_accounts(
             .get(representative)
             .copied()
             .ok_or(Error::InvalidCoordinate)?;
+        let canonical_rule = expanded_rule(profile, representative)?;
         if account.key() != canonical.key()
             || account.owner() != canonical.owner()
             || account.lamports() != canonical.lamports()
             || account.data() != canonical.data()
             || account.privileges() != canonical.privileges()
-            || account.adapter_authenticated_variable_data()
-                != canonical.adapter_authenticated_variable_data()
+            || (variable_alias
+                && (canonical_rule.prestate != AccountPrestateV2::AdapterAuthenticatedVariableData
+                    || !canonical.adapter_authenticated_variable_data()))
+            || (!variable_alias
+                && account.adapter_authenticated_variable_data()
+                    != canonical.adapter_authenticated_variable_data())
         {
             return Err(Error::AliasMismatch);
         }
@@ -1282,6 +1377,14 @@ impl Operation {
         if self.account >= account_bound {
             return Err(Error::InvalidCoordinate);
         }
+        if profile.rule(self.account_item, self.account)?.prestate
+            == AccountPrestateV2::AdapterAuthenticatedVariableDataAlias
+        {
+            // Route aliases exist only so Effect may select the same already
+            // authenticated physical record in a child frame. AccountProfile
+            // cannot project or require through a second logical authority.
+            return Err(Error::InvalidVariableDataPrestate);
+        }
         let identity = matches!(
             self.opcode,
             OP_REQUIRE_KEY
@@ -1318,6 +1421,7 @@ impl Operation {
             | OP_PROJECT_DATA_IDENTITY
             | OP_PROJECT_DATA_U32
             | OP_PROJECT_DATA_U16
+            | OP_PROJECT_DATA_U8
             | OP_PROJECT_TAIL_COUNT_U32 => {
                 if self.data_stride != 0 {
                     return Err(Error::NonCanonicalOperation);
@@ -1327,7 +1431,7 @@ impl Operation {
                 {
                     return Err(Error::NonCanonicalOperation);
                 }
-                if self.opcode == OP_PROJECT_DATA_U16
+                if matches!(self.opcode, OP_PROJECT_DATA_U16 | OP_PROJECT_DATA_U8)
                     && !matches!(
                         profile.artifact_profile,
                         TYPED_SCALAR_ARTIFACT_PROFILE
@@ -1335,6 +1439,7 @@ impl Operation {
                             | LIFECYCLE_PRESTATE_ARTIFACT_PROFILE
                             | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE
                             | TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
+                            | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
                     )
                 {
                     return Err(Error::NonCanonicalOperation);
@@ -1383,6 +1488,7 @@ impl Operation {
                         | LIFECYCLE_PRESTATE_ARTIFACT_PROFILE
                         | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE
                         | TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
+                        | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
                 ) || item_body
                     || self.account_item
                     || self.register_item
@@ -1422,6 +1528,7 @@ impl Operation {
                         | TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE
                         | LIFECYCLE_PRESTATE_ARTIFACT_PROFILE
                         | TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
+                        | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
                 ) || item_body
                     || self.account_item
                     || self.register_item
@@ -1486,6 +1593,7 @@ impl Operation {
                 | OP_PROJECT_DATA_IDENTITY_SELECTED_AFFINE
                 | OP_PROJECT_DATA_U32
                 | OP_PROJECT_DATA_U16
+                | OP_PROJECT_DATA_U8
                 | OP_PROJECT_TAIL_COUNT_U32
         )
     }
@@ -1614,6 +1722,12 @@ impl Operation {
                     })
                     .transpose()?
                     .unwrap_or(0);
+                write_scalar(scalars, scalar()?, value)
+            }
+            OP_PROJECT_DATA_U8 => {
+                let value = projected_data_field(account.data(), rule, self.data_offset, 1)?
+                    .and_then(|bytes| bytes.first().copied())
+                    .map_or(0, u64::from);
                 write_scalar(scalars, scalar()?, value)
             }
             OP_PROJECT_DATA_IDENTITY => {
@@ -1768,6 +1882,17 @@ fn validate_rule(rule: AccountRuleV2, item: bool, index: u16, fixed_count: u16) 
     {
         return Err(Error::InvalidVariableDataPrestate);
     }
+    if rule.prestate == AccountPrestateV2::AdapterAuthenticatedVariableDataAlias
+        && (item
+            || rule.alias_kind != AliasKindV2::Fixed
+            || rule.alias_index >= index
+            || rule.privileges != 0
+            || rule.effect_permissions != 0
+            || rule.data_length != 0
+            || rule.data_item_stride != 0)
+    {
+        return Err(Error::InvalidVariableDataPrestate);
+    }
     match rule.alias_kind {
         AliasKindV2::SelfCoordinate if rule.alias_index == 0 => Ok(()),
         AliasKindV2::Fixed
@@ -1799,11 +1924,15 @@ fn decode_rule(bytes: &[u8], offset: usize, artifact_profile: u16) -> Result<Acc
         artifact_profile,
         ADAPTER_AUTHENTICATED_VARIABLE_DATA_ARTIFACT_PROFILE
             | TRUSTED_EXECUTING_PROGRAM_ARTIFACT_PROFILE
+            | ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE
     ) {
         match prestate_tag {
             0 => AccountPrestateV2::Exact,
             1 => AccountPrestateV2::LifecycleBound,
             2 => AccountPrestateV2::AdapterAuthenticatedVariableData,
+            3 if artifact_profile == ADAPTER_AUTHENTICATED_VARIABLE_DATA_ALIAS_ARTIFACT_PROFILE => {
+                AccountPrestateV2::AdapterAuthenticatedVariableDataAlias
+            }
             _ => return Err(Error::InvalidVariableDataPrestate),
         }
     } else if prestate_tag == 0 {
@@ -2500,20 +2629,22 @@ mod tests {
                 } else {
                     accounts.get(..4).expect("short accounts")
                 };
-            assert!(project_atomic(
-                profile,
-                2,
-                used,
-                ProjectionRegistersV2 {
-                    input_scalars: &input_scalars,
-                    input_identities: &input_identities,
-                    scratch_scalars: &mut scratch_scalars,
-                    scratch_identities: &mut scratch_identities,
-                    output_scalars: &mut output_scalars,
-                    output_identities: &mut output_identities,
-                }
-            )
-            .is_err());
+            assert!(
+                project_atomic(
+                    profile,
+                    2,
+                    used,
+                    ProjectionRegistersV2 {
+                        input_scalars: &input_scalars,
+                        input_identities: &input_identities,
+                        scratch_scalars: &mut scratch_scalars,
+                        scratch_identities: &mut scratch_identities,
+                        output_scalars: &mut output_scalars,
+                        output_identities: &mut output_identities,
+                    }
+                )
+                .is_err()
+            );
             assert_eq!(output_scalars, before_scalars);
             assert_eq!(output_identities, before_identities);
         }
