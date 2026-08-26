@@ -6,7 +6,8 @@
 //! semantics.  The common Trading hot outer remains the sole executor and
 //! receipt sequencer for the resulting route coordinates.
 
-use dclutch_custody_contract::{CUSTODY_REQUEST_BYTES_V1, CustodyRequestV1};
+use dclutch_capability_program_contract::hot_v3::HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3;
+use dclutch_custody_contract::{CUSTODY_REQUEST_BYTES_V1, DELEGATED_CUSTODY_REQUEST_BYTES_V2};
 use dclutch_effect_kernel::{
     v2::FixedRole,
     v3::{ProgramV3, RouteKindV3},
@@ -15,12 +16,11 @@ use dclutch_effect_kernel::{
 use super::{
     v3_composer::{MAX_DEALER_SCENARIO_CUSTODY_EFFECTS_V3, ScenarioAtomicPlanV3},
     v3_equity_operator::{DEALER_EQUITY_HEADER_BYTES_V3, DealerEquityRequestV3},
-    v3_multi_lp::{MultiLpActionV3, MultiLpPlanV3},
+    v3_multi_lp::{MultiLpActionV3, MultiLpCustodyRequestV3, MultiLpPlanV3},
 };
 
 const SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3: u16 = 20;
 const CUSTODY_TRANSFER_ACCOUNT_COUNT_V1: u16 = 14;
-const HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3: u16 = 5;
 const DEALER_LOCAL_STATE_ACCOUNT_COUNT_V3: u16 = 2;
 
 /// Exact maximum Custody invocations in one Dealer V3 action.
@@ -47,7 +47,7 @@ pub type DealerRouteResultV3<T> = core::result::Result<T, DealerRouteErrorV3>;
 /// One expected canonical Custody request sequence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DealerCustodySequenceV3 {
-    requests: [Option<CustodyRequestV1>; MAX_DEALER_CUSTODY_ROUTES_V3],
+    requests: [Option<MultiLpCustodyRequestV3>; MAX_DEALER_CUSTODY_ROUTES_V3],
     count: u8,
 }
 
@@ -63,14 +63,14 @@ impl DealerCustodySequenceV3 {
             return Err(DealerRouteErrorV3::InvalidSequence);
         }
         for (index, destination) in requests.iter_mut().take(count).enumerate() {
-            *destination = Some(
+            *destination = Some(MultiLpCustodyRequestV3::Canonical(
                 effects
                     .get(index)
                     .copied()
                     .flatten()
                     .ok_or(DealerRouteErrorV3::InvalidSequence)?
                     .request,
-            );
+            ));
         }
         if effects.iter().skip(count).any(Option::is_some) {
             return Err(DealerRouteErrorV3::InvalidSequence);
@@ -113,7 +113,7 @@ impl DealerCustodySequenceV3 {
     }
 
     /// Decode one active request.
-    pub fn request(self, index: u8) -> DealerRouteResultV3<CustodyRequestV1> {
+    pub fn request(self, index: u8) -> DealerRouteResultV3<MultiLpCustodyRequestV3> {
         if index >= self.count {
             return Err(DealerRouteErrorV3::InvalidSequence);
         }
@@ -224,10 +224,15 @@ pub fn authenticate_dealer_custody_routes_v3(
                 let actual = request_bank
                     .get(resolved.request_offset..end)
                     .ok_or(DealerRouteErrorV3::InvalidProgram)?;
-                let expected_bytes = expected_request
-                    .to_bytes()
+                let mut expected_bytes =
+                    [0_u8; dclutch_custody_contract::DELEGATED_CUSTODY_REQUEST_BYTES_V2];
+                let expected_slice = expected_bytes
+                    .get_mut(..expected_request.encoded_len())
+                    .ok_or(DealerRouteErrorV3::InvalidSequence)?;
+                expected_request
+                    .encode_into(expected_slice)
                     .map_err(|_| DealerRouteErrorV3::InvalidSequence)?;
-                if actual != expected_bytes {
+                if actual != expected_slice {
                     return Err(DealerRouteErrorV3::RequestMismatch);
                 }
                 *routes
@@ -421,7 +426,8 @@ fn validate_equity_route_grammar(
     if program.route_count() != route_count || program.item_account_stride() != 0 {
         return Err(DealerRouteErrorV3::InvalidProgram);
     }
-    let mut expected_start = HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3;
+    let mut expected_start = u16::try_from(HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3)
+        .map_err(|_| DealerRouteErrorV3::InvalidProgram)?;
     let mut route_index = 0_u16;
     while route_index < route_count {
         let route = program
@@ -440,6 +446,9 @@ fn validate_equity_route_grammar(
         };
         let expected_request = if claims {
             0
+        } else if plan.action == MultiLpActionV3::Add && route_index == 0 {
+            u32::try_from(DELEGATED_CUSTODY_REQUEST_BYTES_V2)
+                .map_err(|_| DealerRouteErrorV3::InvalidProgram)?
         } else {
             u32::try_from(CUSTODY_REQUEST_BYTES_V1)
                 .map_err(|_| DealerRouteErrorV3::InvalidProgram)?

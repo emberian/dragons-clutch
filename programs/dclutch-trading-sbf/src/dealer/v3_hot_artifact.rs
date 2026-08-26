@@ -11,28 +11,40 @@
 extern crate alloc;
 
 #[cfg(not(target_os = "solana"))]
-use alloc::vec::Vec;
+use alloc::{vec, vec::Vec};
 
+use dclutch_capability_program_contract::hot_v3::HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3;
 use dclutch_claims_svm::signed_delta_v3::SIGNED_DELTA_RECEIPT_BYTES_V3;
 use dclutch_custody_contract::{
-    CUSTODY_REQUEST_BYTES_V1, CallerRoleV1, CompartmentV1, CustodyRequestV1, OperationV1,
+    CUSTODY_REQUEST_BYTES_V1, CallerRoleV1, CompartmentV1, CustodyRequestLayoutV1,
+    DELEGATED_CUSTODY_REQUEST_BYTES_V2, DelegatedCustodyRequestLayoutV2, OperationV1,
 };
 use dclutch_effect_kernel::{
     v2::FixedRole,
     v3::{
-        HEADER_BYTES, OPERATION_BYTES, ROUTE_BYTES, RouteKindV3, RouteReceiptDependencyV3,
+        HEADER_BYTES, OPERATION_BYTES, RECEIPT_DEPENDENCY_BYTES, ROUTE_BYTES, RouteKindV3,
+        RouteReceiptDependencyV3,
         encode::{
             AccountCoordinateV3, EffectGeometryV3, EffectInstructionV3, IdentityCoordinateV3,
             RequestSpaceV3, RouteInputV3, ScalarCoordinateV3, encode_effect_program_v3_atomic,
         },
     },
 };
+#[cfg(not(target_os = "solana"))]
+use solana_program::hash::hash;
 
-use super::{v3_equity_operator::DEALER_EQUITY_HEADER_BYTES_V3, v3_multi_lp::MultiLpActionV3};
+use super::{
+    v3_equity_operator::{
+        DEALER_EQUITY_HEADER_BYTES_V3, DealerEquityRequestV3, EquityRequestActionV3,
+    },
+    v3_multi_lp::{MultiLpActionV3, MultiLpCustodyRequestV3, MultiLpPlanV3},
+};
 
 /// Logical Hot coordinates injected by the common outer before family suffix:
 /// root, config, Product root, portfolio, and linked liability basis.
 pub const DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3: u16 = 5;
+const _: () =
+    assert!(DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3 as usize == HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3);
 /// Exact canonical Custody transfer frame.
 pub const DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3: u16 = 14;
 /// Exact canonical SignedDelta frame before its Position tail.
@@ -65,23 +77,6 @@ const OBLIGATION_TOTAL_SHARES_OFFSET_V3: u32 = 184;
 const LP_REVISION_OFFSET_V3: u32 = 16;
 const LP_SHARES_OFFSET_V3: u32 = 216;
 
-// Canonical generated Custody V1 wire offsets. Every generated artifact is
-// round-tripped through CustodyRequestV1 in tests, so ABI drift refuses rather
-// than silently moving a patch to another field.
-const CUSTODY_TRANSFER_INDEX_OFFSET_V1: u32 = 14;
-const CUSTODY_PARENT_DIGEST_OFFSET_V1: u32 = 304;
-const CUSTODY_EXPECTED_REVISION_OFFSET_V1: u32 = 592;
-const CUSTODY_RESULTING_REVISION_OFFSET_V1: u32 = 600;
-const CUSTODY_ORDER_NONCE_OFFSET_V1: u32 = 608;
-const CUSTODY_GENERATION_OFFSET_V1: u32 = 616;
-const CUSTODY_AMOUNT_OFFSET_V1: u32 = 624;
-const CUSTODY_RENT_LAMPORTS_OFFSET_V1: u32 = 632;
-const CUSTODY_PAGE_INDEX_OFFSET_V1: u32 = 640;
-const CUSTODY_EXECUTION_INDEX_OFFSET_V1: u32 = 644;
-const CUSTODY_IDENTITY_OFFSETS_V1: [u32; CUSTODY_IDENTITY_FIELD_COUNT_V3] = [
-    16, 48, 80, 112, 144, 176, 208, 240, 272, 336, 368, 400, 432, 464, 496, 528, 560,
-];
-
 /// Stable artifact construction refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DealerEquityArtifactErrorV3 {
@@ -89,6 +84,8 @@ pub enum DealerEquityArtifactErrorV3 {
     Geometry,
     /// A Custody template was not the exact static transfer kind for its route.
     CustodyTemplate,
+    /// Signed request, semantic plan, or register facts did not rejoin exactly.
+    Projection,
     /// Checked byte/register/account arithmetic overflowed.
     Arithmetic,
     /// The family-neutral EffectProgram encoder refused the complete artifact.
@@ -173,8 +170,7 @@ pub fn dealer_custody_scalar_register_v3(
         DealerCustodyScalarFieldV3::PageIndex => 7,
         DealerCustodyScalarFieldV3::ExecutionIndex => 8,
     };
-    slot
-        .checked_mul(CUSTODY_SCALAR_STRIDE_V3)
+    slot.checked_mul(CUSTODY_SCALAR_STRIDE_V3)
         .and_then(|offset| CUSTODY_SCALAR_BASE_V3.checked_add(offset))
         .and_then(|base| base.checked_add(field))
 }
@@ -203,16 +199,169 @@ pub fn dealer_custody_identity_register_v3(
         DealerCustodyIdentityFieldV3::Payer => 15,
         DealerCustodyIdentityFieldV3::RentRefund => 16,
     };
-    slot
-        .checked_mul(CUSTODY_IDENTITY_STRIDE_V3)
+    slot.checked_mul(CUSTODY_IDENTITY_STRIDE_V3)
         .and_then(|offset| CUSTODY_IDENTITY_BASE_V3.checked_add(offset))
         .and_then(|base| base.checked_add(field))
+}
+
+/// Common identity register containing the exact delegated Custody authority.
+pub fn dealer_external_delegate_identity_register_v3(action: MultiLpActionV3) -> Option<u16> {
+    if action != MultiLpActionV3::Add {
+        return None;
+    }
+    u16::try_from(custody_slot_count(action))
+        .ok()
+        .and_then(|slots| slots.checked_mul(CUSTODY_IDENTITY_STRIDE_V3))
+        .and_then(|width| CUSTODY_IDENTITY_BASE_V3.checked_add(width))
+}
+
+/// Exact scalar register count selected by one equity action.
+pub fn dealer_equity_scalar_count_v3(
+    action: MultiLpActionV3,
+) -> Result<usize, DealerEquityArtifactErrorV3> {
+    scalar_count(action).map(usize::from)
+}
+
+/// Exact identity register count selected by one equity action.
+pub fn dealer_equity_identity_count_v3(
+    action: MultiLpActionV3,
+) -> Result<usize, DealerEquityArtifactErrorV3> {
+    identity_count(action).map(usize::from)
+}
+
+/// Build the exact Hot register bank from one authenticated request and plan.
+///
+/// This is an unsigned-operator projection, not a second semantic authority:
+/// every emitted register is copied from the exact request, the canonical
+/// physical plan, or one child request already owned by that plan. Both output
+/// buffers remain byte-for-byte unchanged on every refusal.
+#[cfg(not(target_os = "solana"))]
+pub fn project_dealer_equity_hot_registers_v3(
+    request: DealerEquityRequestV3<'_>,
+    plan: MultiLpPlanV3,
+    scalars: &mut [u64],
+    identities: &mut [[u8; 32]],
+) -> Result<(), DealerEquityArtifactErrorV3> {
+    let request_action = match request.action() {
+        EquityRequestActionV3::Contribute => MultiLpActionV3::Add,
+        EquityRequestActionV3::Redeem => MultiLpActionV3::Remove,
+    };
+    if request_action != plan.action
+        || request.shares != plan.share_delta
+        || (plan.action == MultiLpActionV3::Add && request.collateral != plan.collateral_in)
+        || (plan.action == MultiLpActionV3::Remove && request.collateral != 0)
+    {
+        return Err(DealerEquityArtifactErrorV3::Projection);
+    }
+    let expected_scalars = dealer_equity_scalar_count_v3(plan.action)?;
+    let expected_identities = dealer_equity_identity_count_v3(plan.action)?;
+    if scalars.len() != expected_scalars || identities.len() != expected_identities {
+        return Err(DealerEquityArtifactErrorV3::Geometry);
+    }
+    let signed_position_count = request
+        .claims_plan()
+        .map_err(|_| DealerEquityArtifactErrorV3::Projection)?
+        .map_or(0, |signed| signed.position_count());
+    if signed_position_count > 2 {
+        return Err(DealerEquityArtifactErrorV3::Geometry);
+    }
+
+    let parent_request_digest = hash(request.bytes()).to_bytes();
+    let mut by_slot = [None; 3];
+    let active_count = usize::from(plan.custody_count);
+    if active_count > plan.custody.len() {
+        return Err(DealerEquityArtifactErrorV3::Projection);
+    }
+    for effect in plan.custody.iter().take(active_count) {
+        let child = effect
+            .ok_or(DealerEquityArtifactErrorV3::Projection)?
+            .request;
+        let custody = child.custody();
+        if custody.semantic.parent_request_digest != parent_request_digest {
+            return Err(DealerEquityArtifactErrorV3::Projection);
+        }
+        let slot = equity_custody_slot(plan.action, child)
+            .ok_or(DealerEquityArtifactErrorV3::Projection)?;
+        if by_slot
+            .get_mut(slot)
+            .ok_or(DealerEquityArtifactErrorV3::Projection)?
+            .replace(child)
+            .is_some()
+        {
+            return Err(DealerEquityArtifactErrorV3::Projection);
+        }
+        let mut encoded = vec![0; child.encoded_len()];
+        child
+            .encode_into(&mut encoded)
+            .map_err(|_| DealerEquityArtifactErrorV3::Projection)?;
+    }
+    if plan.custody.iter().skip(active_count).any(Option::is_some) {
+        return Err(DealerEquityArtifactErrorV3::Projection);
+    }
+    let expected_amounts = match plan.action {
+        MultiLpActionV3::Add => [plan.collateral_in, plan.maximum_complete_sets_to_merge, 0],
+        MultiLpActionV3::Remove => [
+            plan.minimum_complete_sets_to_split,
+            plan.collateral_out,
+            plan.maximum_complete_sets_to_merge,
+        ],
+    };
+    for (slot, amount) in expected_amounts
+        .iter()
+        .copied()
+        .take(custody_slot_count(plan.action))
+        .enumerate()
+    {
+        match by_slot[slot] {
+            Some(child) if amount != 0 && child.custody().amount == amount => {}
+            None if amount == 0 => {}
+            _ => return Err(DealerEquityArtifactErrorV3::Projection),
+        }
+    }
+
+    let mut staged_scalars = vec![0_u64; expected_scalars];
+    let mut staged_identities = vec![[0_u8; 32]; expected_identities];
+    staged_scalars[usize::from(DEALER_EQUITY_OBLIGATION_REVISION_SCALAR_V3)] =
+        plan.obligation_revision_after;
+    staged_scalars[usize::from(DEALER_EQUITY_TOTAL_SHARES_SCALAR_V3)] =
+        plan.total_equity_shares_after;
+    staged_scalars[usize::from(DEALER_EQUITY_LP_REVISION_SCALAR_V3)] = plan.lp_revision_after;
+    staged_scalars[usize::from(DEALER_EQUITY_LP_SHARES_SCALAR_V3)] = plan.lp_equity_shares_after;
+    staged_scalars[usize::from(DEALER_EQUITY_WITNESS_OFFSET_SCALAR_V3)] =
+        u64::try_from(dealer_equity_witness_offset_v3())
+            .map_err(|_| DealerEquityArtifactErrorV3::Arithmetic)?;
+    staged_scalars[usize::from(DEALER_EQUITY_WITNESS_BYTES_SCALAR_V3)] =
+        u64::try_from(request.claims_packet().len())
+            .map_err(|_| DealerEquityArtifactErrorV3::Arithmetic)?;
+    staged_identities[usize::from(DEALER_EQUITY_PARENT_REQUEST_DIGEST_IDENTITY_V3)] =
+        parent_request_digest;
+    for (slot, child) in by_slot
+        .iter()
+        .copied()
+        .take(custody_slot_count(plan.action))
+        .enumerate()
+    {
+        let Some(child) = child else { continue };
+        project_custody_registers(
+            u16::try_from(slot).map_err(|_| DealerEquityArtifactErrorV3::Arithmetic)?,
+            child,
+            &mut staged_scalars,
+            &mut staged_identities,
+        )?;
+    }
+    scalars.copy_from_slice(&staged_scalars);
+    identities.copy_from_slice(&staged_identities);
+    Ok(())
 }
 
 /// Exact encoded EffectProgram width for one action-specific P0/P1/P2 shape.
 pub fn dealer_equity_effect_program_bytes_v3(
     action: MultiLpActionV3,
+    signed_position_count: u32,
 ) -> Result<usize, DealerEquityArtifactErrorV3> {
+    if signed_position_count > 2 {
+        return Err(DealerEquityArtifactErrorV3::Geometry);
+    }
     let slots = custody_slot_count(action);
     let routes = slots
         .checked_add(1)
@@ -220,15 +369,34 @@ pub fn dealer_equity_effect_program_bytes_v3(
     let operations = slots
         .checked_mul(27)
         .and_then(|value| value.checked_add(4))
+        .and_then(|value| {
+            value.checked_add(usize::from(action == MultiLpActionV3::Add).saturating_mul(3))
+        })
         .ok_or(DealerEquityArtifactErrorV3::Arithmetic)?;
+    let template_bytes = match action {
+        MultiLpActionV3::Add => {
+            DELEGATED_CUSTODY_REQUEST_BYTES_V2.checked_add(CUSTODY_REQUEST_BYTES_V1)
+        }
+        MultiLpActionV3::Remove => slots.checked_mul(CUSTODY_REQUEST_BYTES_V1),
+    }
+    .ok_or(DealerEquityArtifactErrorV3::Arithmetic)?;
+    let dependency_bytes = if signed_position_count == 0 {
+        0
+    } else {
+        slots
+            .checked_sub(1)
+            .and_then(|count| count.checked_mul(RECEIPT_DEPENDENCY_BYTES))
+            .ok_or(DealerEquityArtifactErrorV3::Arithmetic)?
+    };
     HEADER_BYTES
         .checked_add(
             routes
                 .checked_mul(ROUTE_BYTES)
                 .ok_or(DealerEquityArtifactErrorV3::Arithmetic)?,
         )
+        .and_then(|value| value.checked_add(dependency_bytes))
         .and_then(|value| value.checked_add(operations.checked_mul(OPERATION_BYTES)?))
-        .and_then(|value| value.checked_add(slots.checked_mul(CUSTODY_REQUEST_BYTES_V1)?))
+        .and_then(|value| value.checked_add(template_bytes))
         .ok_or(DealerEquityArtifactErrorV3::Arithmetic)
 }
 
@@ -241,7 +409,7 @@ pub fn dealer_equity_effect_program_bytes_v3(
 pub fn encode_dealer_equity_effect_program_v3(
     action: MultiLpActionV3,
     signed_position_count: u32,
-    custody_templates: &[CustodyRequestV1],
+    custody_templates: &[MultiLpCustodyRequestV3],
     scratch: &mut [u8],
     output: &mut [u8],
 ) -> Result<(), DealerEquityArtifactErrorV3> {
@@ -249,7 +417,7 @@ pub fn encode_dealer_equity_effect_program_v3(
     if custody_templates.len() != slots || signed_position_count > 2 {
         return Err(DealerEquityArtifactErrorV3::Geometry);
     }
-    let expected = dealer_equity_effect_program_bytes_v3(action)?;
+    let expected = dealer_equity_effect_program_bytes_v3(action, signed_position_count)?;
     if scratch.len() != expected || output.len() != expected {
         return Err(DealerEquityArtifactErrorV3::Geometry);
     }
@@ -262,11 +430,11 @@ pub fn encode_dealer_equity_effect_program_v3(
     let mut templates = Vec::with_capacity(slots);
     for (slot, template) in custody_templates.iter().copied().enumerate() {
         validate_template(action, slot, template)?;
-        templates.push(
-            template
-                .to_bytes()
-                .map_err(|_| DealerEquityArtifactErrorV3::CustodyTemplate)?,
-        );
+        let mut encoded = vec![0_u8; template.encoded_len()];
+        template
+            .encode_into(&mut encoded)
+            .map_err(|_| DealerEquityArtifactErrorV3::CustodyTemplate)?;
+        templates.push(encoded);
     }
     let mut routes = Vec::with_capacity(slots.saturating_add(1));
     let mut account_start = DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3;
@@ -338,7 +506,12 @@ pub fn encode_dealer_equity_effect_program_v3(
     let fixed_accounts = lp_account
         .checked_add(1)
         .ok_or(DealerEquityArtifactErrorV3::Arithmetic)?;
-    let mut instructions = Vec::with_capacity(slots.saturating_mul(27).saturating_add(4));
+    let mut instructions = Vec::with_capacity(
+        slots
+            .saturating_mul(27)
+            .saturating_add(4)
+            .saturating_add(usize::from(action == MultiLpActionV3::Add).saturating_mul(3)),
+    );
     instructions.extend_from_slice(&[
         EffectInstructionV3::write_u64(
             AccountCoordinateV3::fixed(obligation_account),
@@ -363,7 +536,7 @@ pub fn encode_dealer_equity_effect_program_v3(
     ]);
     for slot in 0..slots {
         let route = if slot == 0 { 0 } else { slot + 1 };
-        push_custody_projection(slot, route, &mut instructions)?;
+        push_custody_projection(action, slot, route, &mut instructions)?;
     }
     let geometry = EffectGeometryV3 {
         fixed_accounts,
@@ -379,16 +552,23 @@ pub fn encode_dealer_equity_effect_program_v3(
 
 #[cfg(not(target_os = "solana"))]
 fn push_custody_projection(
+    action: MultiLpActionV3,
     slot: usize,
     route: usize,
     output: &mut Vec<EffectInstructionV3>,
 ) -> Result<(), DealerEquityArtifactErrorV3> {
     let slot = u16::try_from(slot).map_err(|_| DealerEquityArtifactErrorV3::Arithmetic)?;
     let route = u16::try_from(route).map_err(|_| DealerEquityArtifactErrorV3::Arithmetic)?;
+    let delegated = action == MultiLpActionV3::Add && slot == 0;
+    let base = if delegated {
+        DelegatedCustodyRequestLayoutV2::BASE
+    } else {
+        0
+    };
     output.push(EffectInstructionV3::write_request_u16(
         route,
         RequestSpaceV3::Fixed,
-        CUSTODY_TRANSFER_INDEX_OFFSET_V1,
+        request_offset(base, CustodyRequestLayoutV1::TRANSFER_INDEX)?,
         ScalarCoordinateV3::common(custody_scalar(
             slot,
             DealerCustodyScalarFieldV3::TransferIndex,
@@ -397,66 +577,88 @@ fn push_custody_projection(
     output.push(EffectInstructionV3::write_request_identity(
         route,
         RequestSpaceV3::Fixed,
-        CUSTODY_PARENT_DIGEST_OFFSET_V1,
+        request_offset(base, CustodyRequestLayoutV1::PARENT_REQUEST_DIGEST)?,
         IdentityCoordinateV3::common(DEALER_EQUITY_PARENT_REQUEST_DIGEST_IDENTITY_V3),
     ));
-    for (field, offset) in identity_fields()
-        .into_iter()
-        .zip(CUSTODY_IDENTITY_OFFSETS_V1)
-    {
+    for (field, offset) in identity_fields().into_iter().zip(identity_offsets()) {
         output.push(EffectInstructionV3::write_request_identity(
             route,
             RequestSpaceV3::Fixed,
-            offset,
+            request_offset(base, offset)?,
             IdentityCoordinateV3::common(custody_identity(slot, field)?),
         ));
     }
     for (field, offset) in [
         (
             DealerCustodyScalarFieldV3::ExpectedRevision,
-            CUSTODY_EXPECTED_REVISION_OFFSET_V1,
+            CustodyRequestLayoutV1::EXPECTED_REVISION,
         ),
         (
             DealerCustodyScalarFieldV3::ResultingRevision,
-            CUSTODY_RESULTING_REVISION_OFFSET_V1,
+            CustodyRequestLayoutV1::RESULTING_REVISION,
         ),
         (
             DealerCustodyScalarFieldV3::OrderNonce,
-            CUSTODY_ORDER_NONCE_OFFSET_V1,
+            CustodyRequestLayoutV1::ORDER_NONCE,
         ),
         (
             DealerCustodyScalarFieldV3::Generation,
-            CUSTODY_GENERATION_OFFSET_V1,
+            CustodyRequestLayoutV1::GENERATION,
         ),
-        (DealerCustodyScalarFieldV3::Amount, CUSTODY_AMOUNT_OFFSET_V1),
+        (
+            DealerCustodyScalarFieldV3::Amount,
+            CustodyRequestLayoutV1::AMOUNT,
+        ),
         (
             DealerCustodyScalarFieldV3::RentLamports,
-            CUSTODY_RENT_LAMPORTS_OFFSET_V1,
+            CustodyRequestLayoutV1::RENT_LAMPORTS,
         ),
     ] {
         output.push(EffectInstructionV3::write_request_u64(
             route,
             RequestSpaceV3::Fixed,
-            offset,
+            request_offset(base, offset)?,
             ScalarCoordinateV3::common(custody_scalar(slot, field)?),
         ));
     }
     for (field, offset) in [
         (
             DealerCustodyScalarFieldV3::PageIndex,
-            CUSTODY_PAGE_INDEX_OFFSET_V1,
+            CustodyRequestLayoutV1::PAGE_INDEX,
         ),
         (
             DealerCustodyScalarFieldV3::ExecutionIndex,
-            CUSTODY_EXECUTION_INDEX_OFFSET_V1,
+            CustodyRequestLayoutV1::EXECUTION_INDEX,
         ),
     ] {
         output.push(EffectInstructionV3::write_request_u32(
             route,
             RequestSpaceV3::Fixed,
-            offset,
+            request_offset(base, offset)?,
             ScalarCoordinateV3::common(custody_scalar(slot, field)?),
         ));
+    }
+    if delegated {
+        let delegate = dealer_external_delegate_identity_register_v3(action)
+            .ok_or(DealerEquityArtifactErrorV3::Arithmetic)?;
+        let amount = custody_scalar(slot, DealerCustodyScalarFieldV3::Amount)?;
+        output.push(EffectInstructionV3::write_request_identity(
+            route,
+            RequestSpaceV3::Fixed,
+            request_offset(0, DelegatedCustodyRequestLayoutV2::DELEGATE_BEFORE)?,
+            IdentityCoordinateV3::common(delegate),
+        ));
+        for offset in [
+            DelegatedCustodyRequestLayoutV2::TOTAL_DEBIT,
+            DelegatedCustodyRequestLayoutV2::ALLOWANCE_BEFORE,
+        ] {
+            output.push(EffectInstructionV3::write_request_u64(
+                route,
+                RequestSpaceV3::Fixed,
+                request_offset(0, offset)?,
+                ScalarCoordinateV3::common(amount),
+            ));
+        }
     }
     Ok(())
 }
@@ -464,7 +666,7 @@ fn push_custody_projection(
 fn validate_template(
     action: MultiLpActionV3,
     slot: usize,
-    template: CustodyRequestV1,
+    template: MultiLpCustodyRequestV3,
 ) -> Result<(), DealerEquityArtifactErrorV3> {
     let expected = match (action, slot) {
         (MultiLpActionV3::Add, 0) => (CompartmentV1::External, CompartmentV1::TradingPrincipal),
@@ -483,14 +685,157 @@ fn validate_template(
         ),
         _ => return Err(DealerEquityArtifactErrorV3::Geometry),
     };
-    if template.operation != OperationV1::Transfer
-        || template.caller_role != CallerRoleV1::Trading
-        || (
-            template.source_compartment,
-            template.destination_compartment,
-        ) != expected
+    let custody = template.custody();
+    let kind_matches = matches!(
+        (action, slot, template),
+        (
+            MultiLpActionV3::Add,
+            0,
+            MultiLpCustodyRequestV3::Delegated(_)
+        ) | (
+            MultiLpActionV3::Add,
+            1,
+            MultiLpCustodyRequestV3::Canonical(_)
+        ) | (
+            MultiLpActionV3::Remove,
+            _,
+            MultiLpCustodyRequestV3::Canonical(_)
+        )
+    );
+    if !kind_matches
+        || custody.operation != OperationV1::Transfer
+        || custody.caller_role != CallerRoleV1::Trading
+        || (custody.source_compartment, custody.destination_compartment) != expected
     {
         return Err(DealerEquityArtifactErrorV3::CustodyTemplate);
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "solana"))]
+fn equity_custody_slot(action: MultiLpActionV3, request: MultiLpCustodyRequestV3) -> Option<usize> {
+    let custody = request.custody();
+    match (
+        action,
+        request,
+        custody.source_compartment,
+        custody.destination_compartment,
+    ) {
+        (
+            MultiLpActionV3::Add,
+            MultiLpCustodyRequestV3::Delegated(_),
+            CompartmentV1::External,
+            CompartmentV1::TradingPrincipal,
+        ) => Some(0),
+        (
+            MultiLpActionV3::Add,
+            MultiLpCustodyRequestV3::Canonical(_),
+            CompartmentV1::HoardPrincipal,
+            CompartmentV1::TradingPrincipal,
+        ) => Some(1),
+        (
+            MultiLpActionV3::Remove,
+            MultiLpCustodyRequestV3::Canonical(_),
+            CompartmentV1::TradingPrincipal,
+            CompartmentV1::HoardPrincipal,
+        ) => Some(0),
+        (
+            MultiLpActionV3::Remove,
+            MultiLpCustodyRequestV3::Canonical(_),
+            CompartmentV1::TradingPrincipal,
+            CompartmentV1::External,
+        ) => Some(1),
+        (
+            MultiLpActionV3::Remove,
+            MultiLpCustodyRequestV3::Canonical(_),
+            CompartmentV1::HoardPrincipal,
+            CompartmentV1::TradingPrincipal,
+        ) => Some(2),
+        _ => None,
+    }
+}
+
+#[cfg(not(target_os = "solana"))]
+fn project_custody_registers(
+    slot: u16,
+    request: MultiLpCustodyRequestV3,
+    scalars: &mut [u64],
+    identities: &mut [[u8; 32]],
+) -> Result<(), DealerEquityArtifactErrorV3> {
+    let custody = request.custody();
+    for (field, value) in [
+        (
+            DealerCustodyScalarFieldV3::TransferIndex,
+            u64::from(custody.semantic.transfer_index),
+        ),
+        (
+            DealerCustodyScalarFieldV3::ExpectedRevision,
+            custody.expected_revision,
+        ),
+        (
+            DealerCustodyScalarFieldV3::ResultingRevision,
+            custody.resulting_revision,
+        ),
+        (
+            DealerCustodyScalarFieldV3::OrderNonce,
+            custody.semantic.order_nonce,
+        ),
+        (
+            DealerCustodyScalarFieldV3::Generation,
+            custody.semantic.generation,
+        ),
+        (DealerCustodyScalarFieldV3::Amount, custody.amount),
+        (
+            DealerCustodyScalarFieldV3::RentLamports,
+            custody.rent_lamports,
+        ),
+        (
+            DealerCustodyScalarFieldV3::PageIndex,
+            u64::from(custody.semantic.page_index),
+        ),
+        (
+            DealerCustodyScalarFieldV3::ExecutionIndex,
+            u64::from(custody.semantic.execution_index),
+        ),
+    ] {
+        let register = dealer_custody_scalar_register_v3(slot, field)
+            .ok_or(DealerEquityArtifactErrorV3::Arithmetic)?;
+        *scalars
+            .get_mut(usize::from(register))
+            .ok_or(DealerEquityArtifactErrorV3::Geometry)? = value;
+    }
+    let values = [
+        custody.release_set,
+        custody.market,
+        custody.realm,
+        custody.context,
+        custody.caller_program,
+        custody.semantic.candidate,
+        custody.semantic.source_owner,
+        custody.semantic.destination_owner,
+        custody.semantic.order,
+        custody.source,
+        custody.destination,
+        custody.source_vault_context,
+        custody.destination_vault_context,
+        custody.mint,
+        custody.token_program,
+        custody.payer,
+        custody.rent_refund,
+    ];
+    for (field, value) in identity_fields().into_iter().zip(values) {
+        let register = dealer_custody_identity_register_v3(slot, field)
+            .ok_or(DealerEquityArtifactErrorV3::Arithmetic)?;
+        *identities
+            .get_mut(usize::from(register))
+            .ok_or(DealerEquityArtifactErrorV3::Geometry)? = value;
+    }
+    if let MultiLpCustodyRequestV3::Delegated(delegated) = request {
+        let register = dealer_external_delegate_identity_register_v3(MultiLpActionV3::Add)
+            .ok_or(DealerEquityArtifactErrorV3::Arithmetic)?;
+        *identities
+            .get_mut(usize::from(register))
+            .ok_or(DealerEquityArtifactErrorV3::Geometry)? = delegated.delegate_before;
     }
     Ok(())
 }
@@ -515,6 +860,7 @@ fn identity_count(action: MultiLpActionV3) -> Result<u16, DealerEquityArtifactEr
         .ok()
         .and_then(|slots| slots.checked_mul(CUSTODY_IDENTITY_STRIDE_V3))
         .and_then(|width| CUSTODY_IDENTITY_BASE_V3.checked_add(width))
+        .and_then(|width| width.checked_add(u16::from(action == MultiLpActionV3::Add)))
         .ok_or(DealerEquityArtifactErrorV3::Arithmetic)
 }
 
@@ -530,6 +876,34 @@ fn custody_identity(
     field: DealerCustodyIdentityFieldV3,
 ) -> Result<u16, DealerEquityArtifactErrorV3> {
     dealer_custody_identity_register_v3(slot, field).ok_or(DealerEquityArtifactErrorV3::Arithmetic)
+}
+
+fn request_offset(base: usize, field: usize) -> Result<u32, DealerEquityArtifactErrorV3> {
+    base.checked_add(field)
+        .and_then(|offset| u32::try_from(offset).ok())
+        .ok_or(DealerEquityArtifactErrorV3::Arithmetic)
+}
+
+const fn identity_offsets() -> [usize; CUSTODY_IDENTITY_FIELD_COUNT_V3] {
+    [
+        CustodyRequestLayoutV1::RELEASE_SET,
+        CustodyRequestLayoutV1::MARKET,
+        CustodyRequestLayoutV1::REALM,
+        CustodyRequestLayoutV1::CONTEXT,
+        CustodyRequestLayoutV1::CALLER_PROGRAM,
+        CustodyRequestLayoutV1::CANDIDATE,
+        CustodyRequestLayoutV1::SOURCE_OWNER,
+        CustodyRequestLayoutV1::DESTINATION_OWNER,
+        CustodyRequestLayoutV1::ORDER,
+        CustodyRequestLayoutV1::SOURCE,
+        CustodyRequestLayoutV1::DESTINATION,
+        CustodyRequestLayoutV1::SOURCE_VAULT_CONTEXT,
+        CustodyRequestLayoutV1::DESTINATION_VAULT_CONTEXT,
+        CustodyRequestLayoutV1::MINT,
+        CustodyRequestLayoutV1::TOKEN_PROGRAM,
+        CustodyRequestLayoutV1::PAYER,
+        CustodyRequestLayoutV1::RENT_REFUND,
+    ]
 }
 
 const fn identity_fields() -> [DealerCustodyIdentityFieldV3; CUSTODY_IDENTITY_FIELD_COUNT_V3] {
@@ -562,7 +936,7 @@ pub const fn dealer_equity_witness_offset_v3() -> usize {
 #[cfg(all(test, not(target_os = "solana")))]
 mod tests {
     use super::*;
-    use dclutch_custody_contract::ContextV1;
+    use dclutch_custody_contract::{ContextV1, CustodyRequestV1, DelegatedCustodyRequestV2};
     use dclutch_effect_kernel::v3::ProgramV3;
     use std::vec;
 
@@ -618,19 +992,46 @@ mod tests {
         }
     }
 
+    fn delegated_template(custody: CustodyRequestV1) -> MultiLpCustodyRequestV3 {
+        MultiLpCustodyRequestV3::Delegated(DelegatedCustodyRequestV2 {
+            custody,
+            starts_atomic_debit: true,
+            terminal: true,
+            delegate_before: [31; 32],
+            delegate_after: [0; 32],
+            total_debit: custody.amount,
+            allowance_before: custody.amount,
+            allowance_after: 0,
+        })
+    }
+
+    const fn canonical_template(custody: CustodyRequestV1) -> MultiLpCustodyRequestV3 {
+        MultiLpCustodyRequestV3::Canonical(custody)
+    }
+
+    fn encoded(request: MultiLpCustodyRequestV3) -> Vec<u8> {
+        let mut output = vec![0; request.encoded_len()];
+        request.encode_into(&mut output).expect("template bytes");
+        output
+    }
+
     #[test]
     fn typed_p2_contribution_artifact_has_exact_routes_and_dependency() {
         let templates = [
-            transfer_template(CompartmentV1::External, CompartmentV1::TradingPrincipal, 22),
-            transfer_template(
+            delegated_template(transfer_template(
+                CompartmentV1::External,
+                CompartmentV1::TradingPrincipal,
+                22,
+            )),
+            canonical_template(transfer_template(
                 CompartmentV1::HoardPrincipal,
                 CompartmentV1::TradingPrincipal,
                 24,
-            ),
+            )),
         ];
         let width =
-            dealer_equity_effect_program_bytes_v3(MultiLpActionV3::Add).expect("artifact width");
-        assert_eq!(width, 2_864);
+            dealer_equity_effect_program_bytes_v3(MultiLpActionV3::Add, 2).expect("artifact width");
+        assert_eq!(width, 3_048);
         let mut scratch = vec![0; width];
         let mut output = vec![0; width];
         encode_dealer_equity_effect_program_v3(
@@ -645,15 +1046,15 @@ mod tests {
         assert_eq!(program.route_count(), 3);
         assert_eq!(program.fixed_account_count(), 57);
         assert_eq!(program.common_scalar_count(), 24);
-        assert_eq!(program.common_identity_count(), 35);
-        assert_eq!(program.fixed_operation_count(), 58);
+        assert_eq!(program.common_identity_count(), 36);
+        assert_eq!(program.fixed_operation_count(), 61);
         assert_eq!(program.item_operation_count(), 0);
 
         let custody_in = program.route(0).expect("cash route");
         assert_eq!(custody_in.role(), FixedRole::Custody);
         assert_eq!(custody_in.fixed_account_start(), 5);
         assert_eq!(custody_in.fixed_account_count(), 14);
-        assert_eq!(custody_in.fixed_request_bytes(), 672);
+        assert_eq!(custody_in.fixed_request_bytes(), 776);
         assert_eq!(custody_in.receipt_dependency(), None);
 
         let claims = program.route(1).expect("Claims route");
@@ -675,31 +1076,35 @@ mod tests {
         );
         assert_eq!(
             program.route_template(0).expect("cash template").0,
-            templates[0].to_bytes().expect("cash bytes")
+            encoded(templates[0])
         );
         assert_eq!(
             program.route_template(2).expect("merge template").0,
-            templates[1].to_bytes().expect("merge bytes")
+            encoded(templates[1])
         );
     }
 
     #[test]
     fn typed_p0_redemption_retains_all_conditional_custody_slots() {
         let templates = [
-            transfer_template(
+            canonical_template(transfer_template(
                 CompartmentV1::TradingPrincipal,
                 CompartmentV1::HoardPrincipal,
                 22,
-            ),
-            transfer_template(CompartmentV1::TradingPrincipal, CompartmentV1::External, 24),
-            transfer_template(
+            )),
+            canonical_template(transfer_template(
+                CompartmentV1::TradingPrincipal,
+                CompartmentV1::External,
+                24,
+            )),
+            canonical_template(transfer_template(
                 CompartmentV1::HoardPrincipal,
                 CompartmentV1::TradingPrincipal,
                 26,
-            ),
+            )),
         ];
-        let width =
-            dealer_equity_effect_program_bytes_v3(MultiLpActionV3::Remove).expect("artifact width");
+        let width = dealer_equity_effect_program_bytes_v3(MultiLpActionV3::Remove, 0)
+            .expect("artifact width");
         assert_eq!(width, 4_216);
         let mut scratch = vec![0; width];
         let mut output = vec![0; width];
@@ -736,15 +1141,19 @@ mod tests {
     #[test]
     fn wrong_compartment_or_output_width_refuses_atomically() {
         let wrong = [
-            transfer_template(CompartmentV1::TradingPrincipal, CompartmentV1::External, 22),
-            transfer_template(
+            canonical_template(transfer_template(
+                CompartmentV1::TradingPrincipal,
+                CompartmentV1::External,
+                22,
+            )),
+            canonical_template(transfer_template(
                 CompartmentV1::HoardPrincipal,
                 CompartmentV1::TradingPrincipal,
                 24,
-            ),
+            )),
         ];
         let width =
-            dealer_equity_effect_program_bytes_v3(MultiLpActionV3::Add).expect("artifact width");
+            dealer_equity_effect_program_bytes_v3(MultiLpActionV3::Add, 2).expect("artifact width");
         let mut scratch = vec![0xa5; width];
         let mut output = vec![0x5a; width];
         assert_eq!(
@@ -760,12 +1169,16 @@ mod tests {
         assert!(output.iter().all(|byte| *byte == 0x5a));
 
         let valid = [
-            transfer_template(CompartmentV1::External, CompartmentV1::TradingPrincipal, 22),
-            transfer_template(
+            delegated_template(transfer_template(
+                CompartmentV1::External,
+                CompartmentV1::TradingPrincipal,
+                22,
+            )),
+            canonical_template(transfer_template(
                 CompartmentV1::HoardPrincipal,
                 CompartmentV1::TradingPrincipal,
                 24,
-            ),
+            )),
         ];
         assert_eq!(
             encode_dealer_equity_effect_program_v3(

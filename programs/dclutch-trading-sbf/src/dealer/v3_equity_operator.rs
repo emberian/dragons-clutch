@@ -713,6 +713,8 @@ pub fn collateral_projection_digest_v3(frame: MultiLpCollateralFrameV3) -> [u8; 
         &frame.lp_external_account,
         &frame.lp_owner,
         &frame.lp_external_balance.to_le_bytes(),
+        &frame.lp_external_delegate,
+        &frame.lp_external_delegated_amount.to_le_bytes(),
         &frame.principal_vault,
         &frame.principal_balance.to_le_bytes(),
         &frame.hoard_vault,

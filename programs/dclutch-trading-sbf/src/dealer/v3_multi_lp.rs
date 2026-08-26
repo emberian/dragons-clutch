@@ -8,19 +8,21 @@
 //! pool. Fees, future order flow, and Market Hoard principal are absent.
 
 use dclutch_custody_contract::{
-    CallerRoleV1, CompartmentV1, ContextV1, CustodyReceiptV1, CustodyRequestV1,
-    CustodyVaultSeedsV1, OperationV1,
+    CUSTODY_REQUEST_BYTES_V1, CallerRoleV1, CompartmentV1, ContextV1, CustodyAuthoritySeedsV1,
+    CustodyReceiptV1, CustodyRequestV1, CustodyVaultSeedsV1, DELEGATED_CUSTODY_RECEIPT_BYTES_V2,
+    DELEGATED_CUSTODY_REQUEST_BYTES_V2, DelegatedCustodyReceiptV2, DelegatedCustodyRequestV2,
+    OperationV1,
 };
 use dclutch_dealer_codec::scenario::{ClaimsInventoryObservation, ScenarioSolvencyReport};
 use solana_program::{hash::hash, pubkey::Pubkey};
 
 use super::v3_equity::{
-    plan_pool_equity_v3, PoolEquityActionV3, PoolEquityContributionV3, PoolEquityInputV3,
-    PoolEquityPlanV3, PoolEquityRedemptionV3,
+    PoolEquityActionV3, PoolEquityContributionV3, PoolEquityInputV3, PoolEquityPlanV3,
+    PoolEquityRedemptionV3, plan_pool_equity_v3,
 };
 use super::v3_obligation::{
-    stage_equity_share_supply_v3, DealerObligationProjectionV3, EquityShareDeltaV3,
-    ObligationErrorV3,
+    DealerObligationProjectionV3, EquityShareDeltaV3, ObligationErrorV3,
+    stage_equity_share_supply_v3,
 };
 
 /// PDA domain for one LP position beneath a canonical Dealer child root.
@@ -356,6 +358,10 @@ pub struct MultiLpCollateralFrameV3 {
     pub lp_owner: [u8; 32],
     /// External balance before the operation.
     pub lp_external_balance: u64,
+    /// Exact Custody delegate currently installed on the external account.
+    pub lp_external_delegate: [u8; 32],
+    /// Exact remaining delegated allowance; contributions exhaust it atomically.
+    pub lp_external_delegated_amount: u64,
     /// Canonical TradingPrincipal vault.
     pub principal_vault: [u8; 32],
     /// TradingPrincipal balance before the operation.
@@ -426,11 +432,54 @@ impl MultiLpIntentV3<'_> {
     }
 }
 
+/// Exact canonical Custody request selected for one pool effect.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MultiLpCustodyRequestV3 {
+    /// Ordinary Custody V1 route whose source is already Custody-owned.
+    Canonical(CustodyRequestV1),
+    /// External LP debit that exhausts one exact delegated allowance.
+    Delegated(DelegatedCustodyRequestV2),
+}
+
+impl MultiLpCustodyRequestV3 {
+    /// Borrow the nested canonical Custody coordinates.
+    pub const fn custody(self) -> CustodyRequestV1 {
+        match self {
+            Self::Canonical(request) => request,
+            Self::Delegated(request) => request.custody,
+        }
+    }
+
+    /// Exact child request width selected by its distinct magic.
+    pub const fn encoded_len(self) -> usize {
+        match self {
+            Self::Canonical(_) => CUSTODY_REQUEST_BYTES_V1,
+            Self::Delegated(_) => DELEGATED_CUSTODY_REQUEST_BYTES_V2,
+        }
+    }
+
+    /// Encode into one exact caller-owned request buffer.
+    pub fn encode_into(self, output: &mut [u8]) -> MultiLpResultV3<()> {
+        if output.len() != self.encoded_len() {
+            return Err(MultiLpErrorV3::Custody);
+        }
+        match self {
+            Self::Canonical(request) => {
+                output.copy_from_slice(&request.to_bytes().map_err(|_| MultiLpErrorV3::Custody)?)
+            }
+            Self::Delegated(request) => {
+                output.copy_from_slice(&request.encode().map_err(|_| MultiLpErrorV3::Custody)?)
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Exact Custody transfer and post-balance evidence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MultiLpCustodyEffectV3 {
     /// Canonical Custody request.
-    pub request: CustodyRequestV1,
+    pub request: MultiLpCustodyRequestV3,
     /// Required source balance after execution.
     pub source_after: u64,
     /// Required destination balance after execution.
@@ -476,6 +525,10 @@ pub struct MultiLpPlanV3 {
     pub obligation_revision_after: u64,
     /// Required next LP Position revision.
     pub lp_revision_after: u64,
+    /// Exact total junior-equity share supply after this action.
+    pub total_equity_shares_after: u64,
+    /// Exact executing LP's junior-equity share balance after this action.
+    pub lp_equity_shares_after: u64,
 }
 
 /// Plan one multi-LP capital change without performing CPI or writes.
@@ -694,6 +747,8 @@ pub fn prepare_multi_lp_v3(
         lp_digest_after: hash(&staged_lp).to_bytes(),
         obligation_revision_after: staged_projection.revision(),
         lp_revision_after: next_lp.revision,
+        total_equity_shares_after: staged_projection.total_equity_shares(),
+        lp_equity_shares_after: next_lp.equity_shares,
     })
 }
 
@@ -713,20 +768,50 @@ pub fn verify_multi_lp_custody_receipt_v3(
         .copied()
         .flatten()
         .ok_or(MultiLpErrorV3::Custody)?;
-    let request_bytes = effect
-        .request
-        .to_bytes()
-        .map_err(|_| MultiLpErrorV3::Custody)?;
-    let receipt = CustodyReceiptV1::decode(custody_receipt).map_err(|_| MultiLpErrorV3::Custody)?;
-    receipt
-        .verify_for(
-            effect.request,
-            hash(&request_bytes).to_bytes(),
-            custody_poststate_commitment,
-        )
-        .map_err(|_| MultiLpErrorV3::Custody)?;
-    if receipt.evidence.source_after != effect.source_after
-        || receipt.evidence.destination_after != effect.destination_after
+    let mut request_bytes = [0_u8; DELEGATED_CUSTODY_REQUEST_BYTES_V2];
+    let request_slice = request_bytes
+        .get_mut(..effect.request.encoded_len())
+        .ok_or(MultiLpErrorV3::Custody)?;
+    effect.request.encode_into(request_slice)?;
+    let request_digest = hash(request_slice).to_bytes();
+    let evidence = match effect.request {
+        MultiLpCustodyRequestV3::Canonical(request) => {
+            let receipt =
+                CustodyReceiptV1::decode(custody_receipt).map_err(|_| MultiLpErrorV3::Custody)?;
+            receipt
+                .verify_for(request, request_digest, custody_poststate_commitment)
+                .map_err(|_| MultiLpErrorV3::Custody)?;
+            receipt.evidence
+        }
+        MultiLpCustodyRequestV3::Delegated(request) => {
+            if custody_receipt.len() != DELEGATED_CUSTODY_RECEIPT_BYTES_V2 {
+                return Err(MultiLpErrorV3::Custody);
+            }
+            let receipt = DelegatedCustodyReceiptV2::decode(custody_receipt)
+                .map_err(|_| MultiLpErrorV3::Custody)?;
+            if receipt.starts_atomic_debit != request.starts_atomic_debit
+                || receipt.terminal != request.terminal
+                || receipt.delegate_before != request.delegate_before
+                || receipt.delegate_after != request.delegate_after
+                || receipt.total_debit != request.total_debit
+                || receipt.allowance_before != request.allowance_before
+                || receipt.allowance_after != request.allowance_after
+            {
+                return Err(MultiLpErrorV3::Custody);
+            }
+            receipt
+                .custody
+                .verify_for(
+                    request.custody,
+                    request_digest,
+                    custody_poststate_commitment,
+                )
+                .map_err(|_| MultiLpErrorV3::Custody)?;
+            receipt.custody.evidence
+        }
+    };
+    if evidence.source_after != effect.source_after
+        || evidence.destination_after != effect.destination_after
     {
         return Err(MultiLpErrorV3::Postcondition);
     }
@@ -881,7 +966,7 @@ fn authenticate_lp_position(
     Ok(lp)
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum EquityCustodyTransferV3 {
     ExternalToPrincipal,
     PrincipalToExternal,
@@ -1087,6 +1172,29 @@ fn stage_equity_custody_transfer(
         rent_lamports: 0,
     };
     request.validate().map_err(|_| MultiLpErrorV3::Custody)?;
+    let request = if kind == EquityCustodyTransferV3::ExternalToPrincipal {
+        let authority = Pubkey::find_program_address(
+            &CustodyAuthoritySeedsV1::from_request(request).as_slices(),
+            &Pubkey::new_from_array(context.custody_program),
+        )
+        .0
+        .to_bytes();
+        if frame.lp_external_delegate != authority || frame.lp_external_delegated_amount != amount {
+            return Err(MultiLpErrorV3::Custody);
+        }
+        MultiLpCustodyRequestV3::Delegated(DelegatedCustodyRequestV2 {
+            custody: request,
+            starts_atomic_debit: true,
+            terminal: true,
+            delegate_before: authority,
+            delegate_after: [0; 32],
+            total_debit: amount,
+            allowance_before: amount,
+            allowance_after: 0,
+        })
+    } else {
+        MultiLpCustodyRequestV3::Canonical(request)
+    };
     *output.get_mut(*count).ok_or(MultiLpErrorV3::Custody)? = Some(MultiLpCustodyEffectV3 {
         request,
         source_after,
@@ -1153,8 +1261,8 @@ fn write_u64(bytes: &mut [u8], offset: usize, value: u64) -> MultiLpResultV3<()>
 #[cfg(test)]
 mod tests {
     use super::super::v3_obligation::{
-        DealerObligationProjectionV3, DEALER_OBLIGATION_HEADER_BYTES_V3,
-        DEALER_OBLIGATION_MAGIC_V3, DEALER_OBLIGATION_VERSION_V3,
+        DEALER_OBLIGATION_HEADER_BYTES_V3, DEALER_OBLIGATION_MAGIC_V3,
+        DEALER_OBLIGATION_VERSION_V3, DealerObligationProjectionV3,
     };
     use super::*;
 
@@ -1275,6 +1383,17 @@ mod tests {
             lp_external_account: [14; 32],
             lp_owner: [8; 32],
             lp_external_balance: 100,
+            lp_external_delegate: Pubkey::find_program_address(
+                &[
+                    dclutch_custody_contract::CUSTODY_AUTHORITY_PDA_DOMAIN_V1,
+                    &context.market,
+                    &context.release_set,
+                ],
+                &Pubkey::new_from_array(context.custody_program),
+            )
+            .0
+            .to_bytes(),
+            lp_external_delegated_amount: 10,
             principal_vault,
             principal_balance: 20,
             hoard_vault,
@@ -1447,6 +1566,8 @@ mod tests {
                 lp_external_account: [14; 32],
                 lp_owner: [8; 32],
                 lp_external_balance: 100,
+                lp_external_delegate: [0; 32],
+                lp_external_delegated_amount: 0,
                 principal_vault,
                 principal_balance: 20,
                 hoard_vault,

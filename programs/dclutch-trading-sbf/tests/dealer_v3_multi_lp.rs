@@ -2,7 +2,10 @@
 
 use dclutch_capability_program_contract::set_v1::CapabilityProgramSetV1;
 use dclutch_claims_svm::affine_batch_v2::AFFINE_BATCH_PLAN_MAGIC_V2;
-use dclutch_custody_contract::{CompartmentV1, CustodyVaultSeedsV1};
+use dclutch_custody_contract::{
+    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CompartmentV1, CustodyRequestV1, CustodyVaultSeedsV1,
+    DELEGATED_CUSTODY_REQUEST_MAGIC_V2,
+};
 use dclutch_dealer_codec::scenario::ClaimsInventoryObservation;
 use dclutch_effect_kernel::v3::ProgramV3 as EffectProgramV3;
 use dclutch_trading_sbf::dealer::{
@@ -12,10 +15,16 @@ use dclutch_trading_sbf::dealer::{
         EquityPoolChainProjectionV3, EquityRequestActionV3, EquityRequestIntentV3,
         build_equity_request_v3, materialize_equity_intent_v3, prepare_equity_request_v3,
     },
+    v3_hot_artifact::{
+        dealer_equity_effect_program_bytes_v3, dealer_equity_identity_count_v3,
+        dealer_equity_scalar_count_v3, encode_dealer_equity_effect_program_v3,
+        project_dealer_equity_hot_registers_v3,
+    },
     v3_multi_lp::{
         DEALER_LP_POSITION_BYTES_V3, DEALER_LP_POSITION_PDA_DOMAIN_V3,
         DealerLpAccountObservationV3, DealerLpPositionV3, MultiLpActionV3,
-        MultiLpCollateralFrameV3, MultiLpContextV3, MultiLpIntentV3, prepare_multi_lp_v3,
+        MultiLpCollateralFrameV3, MultiLpContextV3, MultiLpCustodyRequestV3, MultiLpIntentV3,
+        prepare_multi_lp_v3,
     },
     v3_obligation::{
         DEALER_OBLIGATION_HEADER_BYTES_V3, DEALER_OBLIGATION_MAGIC_V3,
@@ -54,6 +63,7 @@ struct Fixture {
     context: MultiLpContextV3,
     principal_vault: [u8; 32],
     hoard_vault: [u8; 32],
+    custody_authority: [u8; 32],
     lp_address: [u8; 32],
     lp: [u8; DEALER_LP_POSITION_BYTES_V3],
     obligations: Vec<u8>,
@@ -97,6 +107,12 @@ fn fixture() -> Fixture {
     )
     .0
     .to_bytes();
+    let custody_authority = Pubkey::find_program_address(
+        &[CUSTODY_AUTHORITY_PDA_DOMAIN_V1, &[1; 32], &[6; 32]],
+        &Pubkey::new_from_array(custody),
+    )
+    .0
+    .to_bytes();
     let lp_address = Pubkey::find_program_address(
         &[DEALER_LP_POSITION_PDA_DOMAIN_V3, &[5; 32], &[8; 32]],
         &Pubkey::new_from_array(trading),
@@ -122,6 +138,7 @@ fn fixture() -> Fixture {
         context,
         principal_vault,
         hoard_vault,
+        custody_authority,
         lp_address,
         lp,
         obligations: obligation_bytes(&[0, 0, 0], 20),
@@ -141,49 +158,48 @@ fn program_set(selector: u16) -> Vec<u8> {
     bytes
 }
 
-fn equity_effect(custody_request: &[u8], claims_first: bool) -> Vec<u8> {
-    let templates = custody_request.len().checked_mul(2).expect("templates");
-    let mut bytes = vec![0; 128 + templates];
-    bytes[..4].copy_from_slice(b"DCE3");
-    bytes[4] = 3;
-    bytes[6..8].copy_from_slice(&3_u16.to_le_bytes());
-    bytes[12..14].copy_from_slice(&57_u16.to_le_bytes());
-    bytes[16..18].copy_from_slice(&5_u16.to_le_bytes());
-    bytes[20..22].copy_from_slice(&1_u16.to_le_bytes());
-    let (custody, claims) = if claims_first { (64, 32) } else { (32, 64) };
-    bytes[custody] = 4;
-    bytes[custody + 1] = 0;
-    bytes[custody + 2] = 1;
-    bytes[custody + 6..custody + 8].copy_from_slice(&5_u16.to_le_bytes());
-    bytes[custody + 8..custody + 10].copy_from_slice(&14_u16.to_le_bytes());
-    bytes[custody + 16..custody + 20].copy_from_slice(
-        &u32::try_from(custody_request.len())
-            .expect("Custody width")
-            .to_le_bytes(),
-    );
-    bytes[claims] = 1;
-    bytes[claims + 1] = 0;
-    bytes[claims + 2] = 1;
-    bytes[claims + 3] = 1;
-    bytes[claims + 4..claims + 6].copy_from_slice(&3_u16.to_le_bytes());
-    bytes[claims + 6..claims + 8].copy_from_slice(&19_u16.to_le_bytes());
-    bytes[claims + 8..claims + 10].copy_from_slice(&22_u16.to_le_bytes());
-    bytes[claims + 14..claims + 16].copy_from_slice(&1_u16.to_le_bytes());
-    let merge = 96;
-    bytes[merge] = 4;
-    bytes[merge + 1] = 0;
-    bytes[merge + 2] = 1;
-    bytes[merge + 4..merge + 6].copy_from_slice(&4_u16.to_le_bytes());
-    bytes[merge + 6..merge + 8].copy_from_slice(&41_u16.to_le_bytes());
-    bytes[merge + 8..merge + 10].copy_from_slice(&14_u16.to_le_bytes());
-    bytes[merge + 16..merge + 20].copy_from_slice(
-        &u32::try_from(custody_request.len())
-            .expect("Custody width")
-            .to_le_bytes(),
-    );
-    bytes[128..128 + custody_request.len()].copy_from_slice(custody_request);
-    bytes[128 + custody_request.len()..].copy_from_slice(custody_request);
-    bytes
+fn encode_custody_request(request: MultiLpCustodyRequestV3) -> Vec<u8> {
+    let mut output = vec![0; request.encoded_len()];
+    request.encode_into(&mut output).expect("Custody request");
+    output
+}
+
+fn inactive_merge_template(cash: MultiLpCustodyRequestV3, f: &Fixture) -> CustodyRequestV1 {
+    let mut merge = cash.custody();
+    merge.source_compartment = CompartmentV1::HoardPrincipal;
+    merge.destination_compartment = CompartmentV1::TradingPrincipal;
+    merge.semantic.source_owner = [0; 32];
+    merge.semantic.destination_owner = [0; 32];
+    merge.source = f.hoard_vault;
+    merge.destination = f.principal_vault;
+    merge.source_vault_context = f.context.market;
+    merge.destination_vault_context = f.context.child_root;
+    merge.semantic.transfer_index = 1;
+    merge.expected_revision = merge.expected_revision.checked_add(1).expect("revision");
+    merge.resulting_revision = merge.expected_revision.checked_add(1).expect("revision");
+    merge.amount = 1;
+    merge
+}
+
+fn equity_effect(
+    cash: MultiLpCustodyRequestV3,
+    merge: CustodyRequestV1,
+    signed_position_count: u32,
+) -> Vec<u8> {
+    let templates = [cash, MultiLpCustodyRequestV3::Canonical(merge)];
+    let width = dealer_equity_effect_program_bytes_v3(MultiLpActionV3::Add, signed_position_count)
+        .expect("Dealer effect width");
+    let mut scratch = vec![0; width];
+    let mut output = vec![0; width];
+    encode_dealer_equity_effect_program_v3(
+        MultiLpActionV3::Add,
+        signed_position_count,
+        &templates,
+        &mut scratch,
+        &mut output,
+    )
+    .expect("Dealer effect");
+    output
 }
 
 #[test]
@@ -212,6 +228,8 @@ fn runtime_width_equity_request_is_chain_derived_and_rejoins_physical_intent() {
         lp_external_account: [14; 32],
         lp_owner: [8; 32],
         lp_external_balance: 100,
+        lp_external_delegate: f.custody_authority,
+        lp_external_delegated_amount: 10,
         principal_vault: f.principal_vault,
         principal_balance: 20,
         hoard_vault: f.hoard_vault,
@@ -320,23 +338,19 @@ fn runtime_width_equity_request_is_chain_derived_and_rejoins_physical_intent() {
     assert_eq!(post_dealer_claims, [0, 15, 30]);
     assert_eq!(post_lp_claims, [10, 5, 0]);
 
-    let custody_request = physical.custody[0]
-        .expect("cash Custody")
-        .request
-        .to_bytes()
-        .expect("Custody request");
-    let mut request_bank = Vec::with_capacity(custody_request.len() * 2);
-    request_bank.extend_from_slice(&custody_request);
-    request_bank.extend_from_slice(&custody_request);
-    let scalars = [
-        1,
-        u64::try_from(DEALER_EQUITY_HEADER_BYTES_V3).expect("header"),
-        u64::try_from(request.claims_packet().len()).expect("packet"),
-        1,
-        0,
-    ];
-    let identities = [[1; 32]];
-    let effect_bytes = equity_effect(&custody_request, false);
+    let cash = physical.custody[0].expect("cash Custody").request;
+    let merge = inactive_merge_template(cash, &f);
+    let cash_bytes = encode_custody_request(cash);
+    let merge_bytes = merge.to_bytes().expect("merge request");
+    let mut request_bank = Vec::with_capacity(cash_bytes.len() + merge_bytes.len());
+    request_bank.extend_from_slice(&cash_bytes);
+    request_bank.extend_from_slice(&merge_bytes);
+    let mut scalars = vec![0; dealer_equity_scalar_count_v3(physical.action).expect("scalars")];
+    let mut identities =
+        vec![[0; 32]; dealer_equity_identity_count_v3(physical.action).expect("identities")];
+    project_dealer_equity_hot_registers_v3(request, physical, &mut scalars, &mut identities)
+        .expect("chain-derived Hot registers");
+    let effect_bytes = equity_effect(cash, merge, 2);
     let effect = EffectProgramV3::decode(&effect_bytes).expect("Dealer Hot effect");
     let composition = authenticate_dealer_equity_routes_v3(
         effect,
@@ -352,7 +366,8 @@ fn runtime_width_equity_request_is_chain_derived_and_rejoins_physical_intent() {
     assert_eq!(composition.claims_route(), Some(1));
     assert_eq!(composition.custody().count(), 1);
 
-    let reversed = equity_effect(&custody_request, true);
+    let mut reversed = effect_bytes.clone();
+    reversed[32] = 1;
     assert!(
         authenticate_dealer_equity_routes_v3(
             EffectProgramV3::decode(&reversed).expect("reversed structural effect"),
@@ -416,6 +431,8 @@ fn unsigned_equity_builder_refuses_dilution_before_emitting_request() {
             lp_external_account: [14; 32],
             lp_owner: [8; 32],
             lp_external_balance: 100,
+            lp_external_delegate: f.custody_authority,
+            lp_external_delegated_amount: 10,
             principal_vault: f.principal_vault,
             principal_balance: 20,
             hoard_vault: f.hoard_vault,
@@ -532,6 +549,8 @@ fn proportional_contribution_and_redemption_are_physical() {
                 lp_external_account: [14; 32],
                 lp_owner: [8; 32],
                 lp_external_balance: 100,
+                lp_external_delegate: f.custody_authority,
+                lp_external_delegated_amount: 10,
                 principal_vault: f.principal_vault,
                 principal_balance: 20,
                 hoard_vault: f.hoard_vault,
@@ -566,10 +585,22 @@ fn proportional_contribution_and_redemption_are_physical() {
         );
         assert_ne!(before, after);
         let first = plan.custody[0].expect("cash Custody effect");
-        assert_ne!(
-            first.request.to_bytes().expect("request")[..8],
-            AFFINE_BATCH_PLAN_MAGIC_V2
-        );
+        match (action, first.request) {
+            (MultiLpActionV3::Add, MultiLpCustodyRequestV3::Delegated(request)) => {
+                let encoded = request.encode().expect("delegated request");
+                assert_eq!(encoded[..8], DELEGATED_CUSTODY_REQUEST_MAGIC_V2);
+                assert_eq!(request.delegate_before, f.custody_authority);
+                assert_eq!((request.total_debit, request.allowance_before), (10, 10));
+                assert!(request.terminal);
+            }
+            (MultiLpActionV3::Remove, MultiLpCustodyRequestV3::Canonical(request)) => {
+                assert_ne!(
+                    request.to_bytes().expect("request")[..8],
+                    AFFINE_BATCH_PLAN_MAGIC_V2
+                );
+            }
+            _ => panic!("action-specific Custody successor"),
+        }
     }
 }
 
@@ -607,6 +638,8 @@ fn substituted_lp_owner_or_oversized_exit_refuses_before_state_candidates() {
             lp_external_account: [14; 32],
             lp_owner: [18; 32],
             lp_external_balance: 100,
+            lp_external_delegate: [0; 32],
+            lp_external_delegated_amount: 0,
             principal_vault: f.principal_vault,
             principal_balance: 20,
             hoard_vault: f.hoard_vault,
