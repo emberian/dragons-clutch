@@ -407,11 +407,12 @@ fn validate_geometry(
             | DirectExecutionActionV3::SplitInline
             | DirectExecutionActionV3::MergeInline
     );
-    if complementary
-        != (account.item_account_stride() != 0
-            && transition.item_scalar_stride() != 0
-            && effect.item_account_stride() != 0)
-    {
+    if !tail_shape_is_admissible(
+        complementary,
+        account.item_account_stride(),
+        transition.item_scalar_stride(),
+        effect.item_account_stride(),
+    ) {
         return Err(DirectArtifactErrorV3::Geometry);
     }
     let mut route = 0_u16;
@@ -428,6 +429,25 @@ fn validate_geometry(
             .ok_or(DirectArtifactErrorV3::Geometry)?;
     }
     Ok(())
+}
+
+const fn tail_shape_is_admissible(
+    complementary: bool,
+    account_item_stride: u16,
+    transition_item_scalar_stride: u16,
+    effect_item_account_stride: u16,
+) -> bool {
+    if complementary {
+        account_item_stride != 0
+            && transition_item_scalar_stride != 0
+            && effect_item_account_stride != 0
+    } else {
+        // Ordinary runtime-width Claims vectors use the Product-authenticated
+        // canonical item index and affine scalar/request banks without one
+        // physical account per outcome. Per-item physical accounts are reserved
+        // for complementary record/Position families.
+        account_item_stride == 0 && effect_item_account_stride == 0
+    }
 }
 
 fn require_selected(selected: [u8; 32], bytes: &[u8]) -> Result<()> {
@@ -955,5 +975,14 @@ mod tests {
             ),
             Err(DirectArtifactErrorV3::NativeSignature)
         );
+    }
+
+    #[test]
+    fn ordinary_runtime_tail_does_not_require_per_outcome_accounts() {
+        assert!(tail_shape_is_admissible(false, 0, 1, 0));
+        assert!(tail_shape_is_admissible(false, 0, 0, 0));
+        assert!(!tail_shape_is_admissible(false, 1, 1, 1));
+        assert!(tail_shape_is_admissible(true, 1, 1, 1));
+        assert!(!tail_shape_is_admissible(true, 0, 1, 0));
     }
 }
