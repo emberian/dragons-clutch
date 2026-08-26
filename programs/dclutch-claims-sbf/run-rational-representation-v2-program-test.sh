@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repository="$(git rev-parse --show-toplevel)"
+repository="$(cd "$(dirname "$0")/../.." && pwd)"
 sbf_out="$(mktemp -d "${TMPDIR:-/tmp}/dclutch-rational-representation-v2-sbf.XXXXXX")"
 token_source="$(mktemp -d "${TMPDIR:-/tmp}/dclutch-token-2022-v11.XXXXXX")"
 token_archive="$token_source/spl-token-2022-11.0.0.crate"
