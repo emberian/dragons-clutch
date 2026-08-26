@@ -23,6 +23,7 @@ dclutch-product-runtime-v2-admission = { path = "../dclutch-product-runtime-v2-a
 dclutch-record-contract = { path = "../dclutch-record-contract" }
 dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
 dclutch-representation-composition-v3-kernel = { path = "../dclutch-representation-composition-v3-kernel" }
+dclutch-rent-contract = { path = "../dclutch-rent-contract" }
 dclutch-request-profile-contract = { path = "../dclutch-request-profile-contract" }
 dclutch-resolution-core-v3-operator = { path = "../dclutch-resolution-core-v3-operator" }
 dclutch-token-svm = { path = "../dclutch-token-svm" }
@@ -32,6 +33,7 @@ sha2 = "=0.10.9"
 solana-hash = "=4.6.0"
 solana-program = { version = "=3.0.0", default-features = false }
 solana-sdk-ids = "=3.1.0"
+spl-token-2022-interface = { version = "=3.1.1", default-features = false }
 
 [workspace]
 

@@ -13,6 +13,7 @@ mod artifacts;
 mod claims;
 mod composition;
 mod records;
+mod token2022;
 
 use dclutch_fractional_claim_contract::{
     FractionalActionV1, FractionalArtifactBundleV1, FractionalFamilyRequestInputV1,
@@ -46,14 +47,24 @@ pub use claims::{
     lower_fractional_action_to_signed_delta_v1, validate_fractional_signed_delta_chain_result_v1,
 };
 pub use composition::{
-    CheckedFractionalCompositionV1, check_fractional_composition_bundle_v1,
-    decode_and_check_fractional_composition_v1,
+    CheckedFractionalCompositionV1, CheckedFractionalExposureV3,
+    check_fractional_composition_bundle_v1, decode_and_check_fractional_composition_v1,
+    decode_and_check_fractional_exposure_v3,
 };
 pub use records::{
     CheckedFractionalReleaseInputV1, CheckedFractionalReleaseV1, FinalizedArtifactRecordV1,
     FractionalArtifactRecordSnapshotV1, FractionalChainArtifactSnapshotV1,
     FractionalPreparedChainArtifactsV1, authenticate_fractional_chain_artifacts_v1,
     prepare_fractional_chain_artifacts_v1,
+};
+pub use token2022::{
+    FractionalDenominatorExecutionV1, FractionalLifecycleRentClosePlanV2, FractionalMintSnapshotV1,
+    FractionalPhysicalTokenEffectsV1, FractionalPhysicalTokenObservationV1,
+    FractionalPhysicalUnsignedV0PlanV1, FractionalRetirementTokenPlanV1,
+    FractionalTokenAccountSnapshotV1, FractionalTokenActionSnapshotV1, FractionalTokenEffectPlanV1,
+    FractionalTokenEffectV1, build_fractional_physical_unsigned_v0_from_chain_v1,
+    plan_fractional_lifecycle_rent_close_v2, plan_fractional_retirement_token_effects_v1,
+    plan_fractional_token_effect_v1,
 };
 
 /// Exact semantic coordinates obtained from authenticated chain state.
@@ -182,6 +193,10 @@ pub enum Error {
     Composition,
     /// Canonical Claims SignedDelta lowering, frame, receipt, or post-state refused.
     Claims,
+    /// Selected TokenBehaviorV2, Token-owned state, or exact Token-2022 effect refused.
+    Token,
+    /// Canonical producer-subtree retirement or lifecycle RentV2 closure refused.
+    Rent,
 }
 
 /// Result alias.
