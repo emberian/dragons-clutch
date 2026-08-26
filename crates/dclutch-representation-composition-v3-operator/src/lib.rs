@@ -13,6 +13,8 @@
 
 /// Canonical composition-admitted compact Trading Hot construction.
 pub mod hot_v3;
+/// Market-neutral V6 composition-admitted Trading Hot construction.
+pub mod hot_v6;
 
 use dclutch_product_payoff_v2_codec::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,

@@ -24,14 +24,16 @@ use dclutch_product_runtime_v2_operator::{ProductCompilationInputV2, compile_pro
 use dclutch_rational_lifecycle_hot_v3::{
     CheckedRationalLifecycleHotOuterV3, RationalLifecycleHotStateV3,
     RationalLifecycleSelectedAccountProfileInputV5, RationalLifecycleSelectedBundleInputV5,
-    RationalLifecycleSelectedSelectionV5, build_rational_lifecycle_selected_bundle_v5,
-    lifecycle_logical_account_count_v3,
+    RationalLifecycleSelectedBundleInputV6, RationalLifecycleSelectedSelectionV5,
+    RationalLifecycleSelectedSelectionV6, build_rational_lifecycle_selected_bundle_v5,
+    build_rational_lifecycle_selected_bundle_v6, lifecycle_logical_account_count_v3,
 };
 use dclutch_rational_representation_v2_contract::{
     AuthenticatedTokenBehaviorV2, TokenBehaviorRecordAdmissionV2, authenticate_token_behavior_v2,
 };
 use dclutch_rational_representation_v2_kernel::{
-    RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2, REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
+    DescriptorAdmissionV2, RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
+    REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3, RepresentationDescriptorV2,
     descriptor_v3::{
         RepresentationDescriptorInputV3, encode_representation_descriptor_v3_atomic,
         representation_descriptor_bytes_v3,
@@ -60,7 +62,7 @@ use dclutch_representation_composition_v3_operator::{
     RepresentationCompositionObservationV3, authenticate_composition_v3,
     build_claims_lifecycle_plan_v3, build_composition_admission_plan_v3, build_publication_plan_v3,
     compile_unsigned_packet_v0, hot_v3::build_composition_lifecycle_hot_plan_v3,
-    validate_publication_candidates_v3,
+    hot_v6::build_composition_lifecycle_hot_plan_v6, validate_publication_candidates_v3,
 };
 use dclutch_token_svm::{
     TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_BYTES_V2,
@@ -621,6 +623,50 @@ fn selected_lifecycle_bundle(
     .expect("selected lifecycle bundle")
 }
 
+fn selected_lifecycle_bundle_v6(
+    fixture: &ChainFixture,
+    behavior: AuthenticatedTokenBehaviorV2,
+) -> dclutch_rational_lifecycle_hot_v3::RationalLifecycleSelectedBundleV6 {
+    let action = LifecycleActionV2::ActivateReceipt;
+    let logical = usize::from(
+        lifecycle_logical_account_count_v3(action, 0).expect("ActivateReceipt logical accounts"),
+    );
+    let mut lengths = vec![0_u32; logical];
+    *lengths.get_mut(1).expect("Token selection coordinate") =
+        u32::try_from(TOKEN_BEHAVIOR_SELECTION_BYTES_V2).expect("Token selection width");
+    *lengths.get_mut(4).expect("ProductBasis coordinate") =
+        u32::try_from(fixture.basis.raw.data.len()).expect("ProductBasis width");
+    *lengths.get_mut(14).expect("descriptor coordinate") =
+        u32::try_from(fixture.execution_descriptor.raw.data.len()).expect("descriptor width");
+    let mut lifecycle_scratch = vec![0; LIFECYCLE_POLICY_BYTES_V5];
+    let mut lifecycle = vec![0; LIFECYCLE_POLICY_BYTES_V5];
+    encode_lifecycle_policy_v5_atomic(
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &mut lifecycle_scratch,
+        &mut lifecycle,
+    )
+    .expect("LifecycleV5");
+    build_rational_lifecycle_selected_bundle_v6(RationalLifecycleSelectedBundleInputV6 {
+        action,
+        account_profile: RationalLifecycleSelectedAccountProfileInputV5 {
+            logical_data_lengths: &lengths,
+            product_basis: &fixture.basis.raw.data,
+        },
+        authenticated_token_behavior: behavior,
+        kind: id(95),
+        root_schema: id(96),
+        lifecycle_policy: &lifecycle,
+        capacity_profile: id(97),
+        root_state_bytes: 64,
+    })
+    .expect("market-neutral V6 lifecycle bundle")
+}
+
 fn hot_fixed_accounts(
     market: Pubkey,
     trading: Pubkey,
@@ -853,6 +899,126 @@ fn k3_n258_composition_admission_builds_packet_safe_selected_hot() {
             RationalLifecycleSelectedSelectionV5 {
                 bundle: &bundle,
                 authenticated_token_behavior: behavior,
+            },
+        )
+        .err(),
+        Some(Error::HotAdapter)
+    );
+}
+
+#[test]
+fn k3_n258_v6_keeps_capability_market_neutral_and_binds_runtime_descriptor() {
+    let fixture = ChainFixture::n258();
+    let admission =
+        build_composition_admission_plan_v3(fixture.observed()).expect("K3/N258 admission");
+    let admitted = admission.admitted();
+    let descriptor = admitted.execution_descriptor();
+    let behavior = selected_token_behavior(descriptor);
+    let bundle = selected_lifecycle_bundle_v6(&fixture, behavior);
+    let trading = Pubkey::new_from_array(id(100));
+    let fixed = hot_fixed_accounts(
+        Pubkey::new_from_array(id(40)),
+        trading,
+        fixture.execution_descriptor.raw.key,
+    );
+    let root_data = [0_u8; 64];
+    let state = RationalLifecycleHotStateV3 {
+        fixed_accounts: &fixed,
+        strategy_accounts: &[],
+        root_data: &root_data,
+        release_set: id(41),
+        market: Pubkey::new_from_array(id(40)),
+        generation: 1,
+        finalized_slot: SLOT,
+        hot_outer: Some(CheckedRationalLifecycleHotOuterV3 {
+            trading_program: trading,
+            artifact_release: id(101),
+            checked_manifest_digest: id(102),
+        }),
+    };
+    let claims_accounts = claims_activate_receipt_accounts(&fixture, trading);
+    let header = LifecycleHeaderV2 {
+        action: LifecycleActionV2::ActivateReceipt,
+        release_set: descriptor.release_set_id(),
+        market: descriptor.market_id(),
+        graph_id: descriptor.graph_id(),
+        descriptor_id: descriptor.descriptor_id(),
+        parent_context: [0; 32],
+        representation_authority: descriptor.representation_authority(),
+        receipt_mint: descriptor.receipt_mint(),
+        token_program: descriptor.token_program(),
+        rent_credit: id(104),
+        rent_program: id(105),
+        generation: 1,
+        expected_claims_market_revision: 2,
+        observed_receipt_lamports: 100,
+        receipt_rent_principal: 100,
+        expected_receipt_supply: 0,
+        outcome_count: descriptor.outcome_count(),
+        coordinate_count: 0,
+        rent_credit_before: 200,
+        rent_credit_after: 200,
+    };
+    let plan = build_composition_lifecycle_hot_plan_v6(
+        admission,
+        &state,
+        header,
+        &[],
+        fixture.claims.key,
+        &claims_accounts,
+        RationalLifecycleSelectedSelectionV6 {
+            bundle: &bundle,
+            authenticated_token_behavior: behavior,
+            representation_descriptor: descriptor,
+        },
+    )
+    .expect("market-neutral selected Hot");
+    assert_eq!((plan.representation_width, plan.product_width), (3, 258));
+    assert_eq!(plan.lifecycle.request.len(), 400);
+    assert_eq!(plan.hot.instruction.data.len(), 528);
+    let payer = Pubkey::new_from_array(id(106));
+    let table = observed_lookup_table(&plan.hot.instruction, payer);
+    let packet = compile_unsigned_packet_v0(
+        payer,
+        core::slice::from_ref(&plan.hot.instruction),
+        Hash::new_from_array(id(107)),
+        observation(),
+        core::slice::from_ref(&table),
+        1_400_000,
+        1,
+    )
+    .expect("complete V6 compact Hot packet");
+    assert_eq!(packet.wire_bytes, 899);
+    assert_eq!(packet.loaded_addresses, 55);
+    assert_eq!(packet.required_signatures, 1);
+    assert_eq!(1_232 - packet.wire_bytes, 333);
+
+    let hostile_id = id(109);
+    let hostile_descriptor = RepresentationDescriptorV2::decode(
+        &fixture.execution_descriptor.raw.data,
+        DescriptorAdmissionV2 {
+            selected_descriptor_id: hostile_id,
+            finalized_descriptor_id: hostile_id,
+            recomputed_descriptor_digest: hostile_id,
+            finalized_descriptor_digest: hostile_id,
+            record_authenticated: true,
+            derived_representation_authority: descriptor.representation_authority(),
+            authority_derivation_authenticated: true,
+        },
+    )
+    .expect("hostile descriptor identity");
+    assert_eq!(
+        build_composition_lifecycle_hot_plan_v6(
+            admission,
+            &state,
+            header,
+            &[],
+            fixture.claims.key,
+            &claims_accounts,
+            RationalLifecycleSelectedSelectionV6 {
+                bundle: &bundle,
+                authenticated_token_behavior: behavior,
+                representation_descriptor: hostile_descriptor,
             },
         )
         .err(),
