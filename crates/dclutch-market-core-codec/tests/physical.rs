@@ -7,8 +7,10 @@ use dclutch_market_core_codec::{
     MARKET_CORE_STATE_PDA_DOMAIN_V2, MarketCoreStateSeedsV2, MarketIdentity, Phase, Product,
     Readiness, Realm, ReleaseSet, Role, SERIES_CORE_ACK_BYTES_V1,
     SERIES_CORE_CALLER_AUTHORITY_PDA_DOMAIN_V1, SERIES_CORE_REQUEST_BYTES_V1,
-    SERIES_FOUNDING_PERMIT_BYTES_V1, SERIES_FOUNDING_PERMIT_PDA_DOMAIN_V1, SeriesCoreAckV1,
-    SeriesCoreActionV1, SeriesCoreCallerSeedsV1, SeriesCoreRequestV1, SeriesFoundingPermitV1,
+    SERIES_FOUNDING_PERMIT_BYTES_V1, SERIES_FOUNDING_PERMIT_PDA_DOMAIN_V1,
+    SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1, SeriesCoreAckV1, SeriesCoreActionV1,
+    SeriesCoreCallerSeedsV1, SeriesCoreRequestV1, SeriesFoundingPermitV1,
+    SeriesPermitExpiryRequestV1,
 };
 use dclutch_release_set_contract::{CALLER_AUTHORITY_PDA_DOMAIN_V1, ExecutionRoleV1};
 
@@ -510,6 +512,41 @@ fn series_founding_permit_refuses_hostile_aliases_and_substitutions() {
     assert_eq!(
         permit.verify_for_intent_and_request(founding_intent(), id(95), id(97)),
         Err(Error::InvalidCoordinates)
+    );
+}
+
+#[test]
+fn permissionless_series_permit_expiry_wraps_one_exact_candidate() {
+    let request = SeriesPermitExpiryRequestV1::new(founding_permit());
+    let bytes = request.encode().expect("expiry request encodes");
+    assert_eq!(bytes.len(), SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1);
+    assert_eq!(SeriesPermitExpiryRequestV1::decode(&bytes), Ok(request));
+    assert_eq!(request.permit(), founding_permit());
+
+    let short = bytes
+        .get(..bytes.len().saturating_sub(1))
+        .expect("expiry request has a shorter prefix");
+    assert_eq!(
+        SeriesPermitExpiryRequestV1::decode(short),
+        Err(Error::InvalidLength)
+    );
+    let mut hostile = bytes;
+    hostile[0] ^= 1;
+    assert_eq!(
+        SeriesPermitExpiryRequestV1::decode(&hostile),
+        Err(Error::InvalidMagic)
+    );
+    let mut hostile = bytes;
+    hostile[10] = 1;
+    assert_eq!(
+        SeriesPermitExpiryRequestV1::decode(&hostile),
+        Err(Error::NonzeroReserved)
+    );
+    let mut hostile = bytes;
+    hostile[32] ^= 1;
+    assert_eq!(
+        SeriesPermitExpiryRequestV1::decode(&hostile),
+        Err(Error::InvalidMagic)
     );
 }
 

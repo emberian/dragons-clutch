@@ -9,6 +9,7 @@
 use crate::{
     Error, FOUNDING_INTENT_BYTES_V5, Identity, PHYSICAL_ABI_VERSION_V1,
     SERIES_FOUNDING_PERMIT_BYTES_V1, SERIES_FOUNDING_PERMIT_MAGIC_V1,
+    SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1, SERIES_PERMIT_EXPIRY_REQUEST_MAGIC_V1,
     generated_physical::{
         SERIES_FOUNDING_INTENT_BASIS_SCALE_OFFSET, SERIES_FOUNDING_INTENT_BUMP_OFFSET,
         SERIES_FOUNDING_INTENT_CLAIMS_PROGRAM_OFFSET, SERIES_FOUNDING_INTENT_EXPIRY_SLOT_OFFSET,
@@ -27,7 +28,9 @@ use crate::{
         SERIES_FOUNDING_INTENT_TRADING_PROGRAM_OFFSET, SERIES_FOUNDING_INTENT_VERSION_OFFSET,
         SERIES_PERMIT_BASIS_SCALE_OFFSET, SERIES_PERMIT_BUMP_OFFSET,
         SERIES_PERMIT_CLAIMS_INTENT_DIGEST_OFFSET, SERIES_PERMIT_CLAIMS_PROGRAM_OFFSET,
-        SERIES_PERMIT_CLAIMS_REQUEST_DIGEST_OFFSET, SERIES_PERMIT_EXPIRY_SLOT_OFFSET,
+        SERIES_PERMIT_CLAIMS_REQUEST_DIGEST_OFFSET, SERIES_PERMIT_EXPIRY_MAGIC_OFFSET,
+        SERIES_PERMIT_EXPIRY_PERMIT_OFFSET, SERIES_PERMIT_EXPIRY_RESERVED_OFFSET,
+        SERIES_PERMIT_EXPIRY_SLOT_OFFSET, SERIES_PERMIT_EXPIRY_VERSION_OFFSET,
         SERIES_PERMIT_FOUNDER_OFFSET, SERIES_PERMIT_FUNDING_SOURCE_OFFSET,
         SERIES_PERMIT_GENERATION_OFFSET, SERIES_PERMIT_HOARD_OFFSET, SERIES_PERMIT_MAGIC_OFFSET,
         SERIES_PERMIT_MARKET_OFFSET, SERIES_PERMIT_NORMAL_REPLAY_REVISION_OFFSET,
@@ -469,6 +472,84 @@ impl SeriesFoundingPermitSeedsV1 {
             &self.market,
             &self.ticket_context,
         ]
+    }
+}
+
+/// Permissionless cleanup request for one still-unallocated prefunded permit.
+///
+/// The nested permit is caller-supplied because the canonical PDA remains
+/// System-owned with zero data until Consume. Core must derive that PDA,
+/// authenticate expired Ticket state, and refuse this route once the permit
+/// has been allocated or assigned.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SeriesPermitExpiryRequestV1 {
+    permit: SeriesFoundingPermitV1,
+}
+
+impl SeriesPermitExpiryRequestV1 {
+    /// Construct cleanup for one exact deterministic permit candidate.
+    #[must_use]
+    pub const fn new(permit: SeriesFoundingPermitV1) -> Self {
+        Self { permit }
+    }
+
+    /// Hostile-decode the exact 32-byte header plus nested 608-byte permit.
+    pub fn decode(input: &[u8]) -> Result<Self, Error> {
+        if input.len() != SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1 {
+            return Err(Error::InvalidLength);
+        }
+        if input.get(
+            SERIES_PERMIT_EXPIRY_MAGIC_OFFSET
+                ..SERIES_PERMIT_EXPIRY_MAGIC_OFFSET
+                    .saturating_add(SERIES_PERMIT_EXPIRY_REQUEST_MAGIC_V1.len()),
+        ) != Some(SERIES_PERMIT_EXPIRY_REQUEST_MAGIC_V1.as_slice())
+        {
+            return Err(Error::InvalidMagic);
+        }
+        if read_u16(input, SERIES_PERMIT_EXPIRY_VERSION_OFFSET)? != PHYSICAL_ABI_VERSION_V1 {
+            return Err(Error::UnsupportedVersion);
+        }
+        if input
+            .get(SERIES_PERMIT_EXPIRY_RESERVED_OFFSET..SERIES_PERMIT_EXPIRY_PERMIT_OFFSET)
+            .ok_or(Error::InvalidLength)?
+            .iter()
+            .any(|byte| *byte != 0)
+        {
+            return Err(Error::NonzeroReserved);
+        }
+        let permit = SeriesFoundingPermitV1::decode(
+            input
+                .get(SERIES_PERMIT_EXPIRY_PERMIT_OFFSET..)
+                .ok_or(Error::InvalidLength)?,
+        )?;
+        Ok(Self { permit })
+    }
+
+    /// Encode the exact permissionless cleanup request.
+    pub fn encode(self) -> Result<[u8; SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1], Error> {
+        let mut output = [0; SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1];
+        put(
+            &mut output,
+            SERIES_PERMIT_EXPIRY_MAGIC_OFFSET,
+            &SERIES_PERMIT_EXPIRY_REQUEST_MAGIC_V1,
+        )?;
+        put_u16(
+            &mut output,
+            SERIES_PERMIT_EXPIRY_VERSION_OFFSET,
+            PHYSICAL_ABI_VERSION_V1,
+        )?;
+        put(
+            &mut output,
+            SERIES_PERMIT_EXPIRY_PERMIT_OFFSET,
+            &self.permit.encode()?,
+        )?;
+        Ok(output)
+    }
+
+    /// Deterministic permit candidate supplied for cleanup.
+    #[must_use]
+    pub const fn permit(self) -> SeriesFoundingPermitV1 {
+        self.permit
     }
 }
 

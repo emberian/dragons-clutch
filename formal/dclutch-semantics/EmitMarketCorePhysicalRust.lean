@@ -23,6 +23,7 @@ def main : IO Unit := do
   IO.println s!"pub const SERIES_CORE_ACK_BYTES_V1: usize = {seriesAckBytes};"
   IO.println s!"pub const SERIES_FOUNDING_PERMIT_BYTES_V1: usize = {seriesPermitBytes};"
   IO.println s!"pub const FOUNDING_INTENT_BYTES_V5: usize = {seriesFoundingIntentBytes};"
+  IO.println s!"pub const SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1: usize = {seriesPermitExpiryBytes};"
   IO.println s!"pub const CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1: usize = {capabilityFundingHeaderBytes};"
   IO.println s!"pub const CAPABILITY_FUNDING_MAX_ENTRIES_V1: usize = {capabilityFundingMaxEntries};"
   IO.println s!"pub const CORE_EFFECT_INITIALIZE_CLAIMS_ACTION_TAG_V1: u8 = {initializeClaimsActionTag};"
@@ -31,6 +32,7 @@ def main : IO Unit := do
   emitBytes "SERIES_CORE_REQUEST_MAGIC_V1" seriesMagic
   emitBytes "SERIES_CORE_ACK_MAGIC_V1" seriesAckMagic
   emitBytes "SERIES_FOUNDING_PERMIT_MAGIC_V1" seriesPermitMagic
+  emitBytes "SERIES_PERMIT_EXPIRY_REQUEST_MAGIC_V1" seriesPermitExpiryMagic
   emitBytes "CAPABILITY_FUNDING_LIST_MAGIC_V1" capabilityFundingMagic
   emitBytes "CORE_EFFECT_DIGEST_DOMAIN_V1" effectDigestDomain
   emitBytes "SERIES_CORE_CALLER_AUTHORITY_PDA_DOMAIN_V1" seriesCallerAuthorityDomain
@@ -48,5 +50,7 @@ def main : IO Unit := do
     IO.println s!"pub(crate) const {SeriesPermitField.rustName field.spec.name}: usize = {field.offset};"
   for field in seriesFoundingIntentLayout do
     IO.println s!"pub(crate) const {SeriesFoundingIntentField.rustName field.spec.name}: usize = {field.offset};"
+  for field in seriesPermitExpiryLayout do
+    IO.println s!"pub(crate) const {SeriesPermitExpiryField.rustName field.spec.name}: usize = {field.offset};"
   for field in capabilityFundingHeaderLayout do
     IO.println s!"pub(crate) const {CapabilityFundingHeaderField.rustName field.spec.name}: usize = {field.offset};"

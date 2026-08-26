@@ -20,6 +20,7 @@ def ackMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x43, 0x41, 0x4b, 0x31]
 def seriesMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x43, 0x53, 0x52, 0x31]
 def seriesAckMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x43, 0x53, 0x41, 0x31]
 def seriesPermitMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x53, 0x46, 0x50, 0x31]
+def seriesPermitExpiryMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x53, 0x46, 0x58, 0x31]
 def capabilityFundingMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x43, 0x46, 0x4c, 0x31]
 def effectDigestDomain : List UInt8 := "dclutch/core-effect/v1".toUTF8.toList
 def seriesCallerAuthorityDomain : List UInt8 := "dclutch/series-core-caller/v1".toUTF8.toList
@@ -374,5 +375,38 @@ theorem series_founding_intent_schema_unique :
     (seriesFoundingIntentSchema.map fun field => field.name).Nodup := by native_decide
 theorem series_founding_intent_fields_disjoint : seriesFoundingIntentLayout.Pairwise Before :=
   specializeFrom_pairwise 0 seriesFoundingIntentSchema
+
+/-! Permissionless expiry supplies the deterministic permit candidate because
+the prefunded PDA is still System-owned with zero data. Core derives the PDA
+from the nested permit and authenticates expired Ticket state before signing
+the refund. -/
+inductive SeriesPermitExpiryField where
+  | magic | version | reserved | permit
+  deriving DecidableEq, Repr
+
+def seriesPermitExpirySchema : List (FieldSpec SeriesPermitExpiryField) := [
+  ⟨.magic, .bytes 8⟩, ⟨.version, .u16⟩, ⟨.reserved, .reserved 22⟩,
+  ⟨.permit, .bytes seriesPermitBytes⟩
+]
+
+def seriesPermitExpiryLayout : List (PlacedField SeriesPermitExpiryField) :=
+  specialize seriesPermitExpirySchema
+def seriesPermitExpiryBytes : Nat := schemaWidth seriesPermitExpirySchema
+
+namespace SeriesPermitExpiryField
+
+def rustName : SeriesPermitExpiryField → String
+  | .magic => "SERIES_PERMIT_EXPIRY_MAGIC_OFFSET"
+  | .version => "SERIES_PERMIT_EXPIRY_VERSION_OFFSET"
+  | .reserved => "SERIES_PERMIT_EXPIRY_RESERVED_OFFSET"
+  | .permit => "SERIES_PERMIT_EXPIRY_PERMIT_OFFSET"
+
+end SeriesPermitExpiryField
+
+theorem series_permit_expiry_schema_width : seriesPermitExpiryBytes = 640 := by native_decide
+theorem series_permit_expiry_schema_unique :
+    (seriesPermitExpirySchema.map fun field => field.name).Nodup := by native_decide
+theorem series_permit_expiry_fields_disjoint : seriesPermitExpiryLayout.Pairwise Before :=
+  specializeFrom_pairwise 0 seriesPermitExpirySchema
 
 end DClutch.MarketCorePhysicalAbi
