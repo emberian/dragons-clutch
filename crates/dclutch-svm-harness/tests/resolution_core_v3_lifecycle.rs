@@ -14,8 +14,8 @@ use dclutch_capability_contract::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
     CapabilityEntryV1, CapabilityFundingDerivationV1, CapabilityManifestV1, CompartmentFundingV1,
     ContentId as CapabilityContentId, FUNDING_STATE_BYTES, FundingAmountsV1,
-    FundingCustodyObservationV1, FundingQuoteV1, FundingStateV1, MANIFEST_HEADER_BYTES,
-    MAX_DEPENDENCIES_PER_CAPABILITY,
+    FundingCustodyObservationV1, FundingQuoteV1, FundingStateV1, FundingStatus,
+    MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
 };
 use dclutch_core_contract::ContentId as CoreContentId;
 use dclutch_market_core_codec::{
@@ -50,8 +50,11 @@ use dclutch_resolution_codec::{
 };
 use dclutch_resolution_core_v3_operator::{
     Finality, Observation, ObservedAccount, ResolutionAdmitTerminalSnapshotV3,
-    ResolutionCloseFundSnapshotV3, build_resolution_admit_terminal_v3,
-    build_resolution_close_fund_v3, validate_resolution_close_fund_report_v3,
+    ResolutionCloseFundSnapshotV3, ResolutionCreateFundSnapshotV3,
+    ResolutionVerifyFundReadySnapshotV3, build_resolution_admit_terminal_v3,
+    build_resolution_close_fund_v3, build_resolution_create_fund_v3,
+    build_resolution_verify_fund_ready_v3, validate_resolution_close_fund_report_v3,
+    validate_resolution_create_fund_report_v3, validate_resolution_verify_fund_ready_report_v3,
 };
 use dclutch_source_contract::{
     CapacityEnvelope, ContentId as SourceContentId, RECOVERY_POLICY_SCHEMA_ID_V2,
@@ -299,15 +302,7 @@ fn add_active_funding(
     state
         .activate(manifest_id, manifest, custody, 1)
         .expect("active FundingState");
-    let derivation = CapabilityFundingDerivationV1::new(
-        market.to_bytes(),
-        GENERATION,
-        manifest_id,
-        manifest,
-        state,
-    )
-    .expect("funding derivation");
-    let key = Pubkey::find_program_address(&derivation.seed_components(), &RESOLUTION_PROGRAM_ID).0;
+    let key = funding_key(market, manifest_id, manifest, entry_index);
     test.add_account(
         key,
         Account {
@@ -321,7 +316,34 @@ fn add_active_funding(
     key
 }
 
-fn fixture() -> Fixture {
+fn funding_key(
+    market: Pubkey,
+    manifest_id: CapabilityContentId,
+    manifest: CapabilityManifestV1<'_>,
+    entry_index: u16,
+) -> Pubkey {
+    let rent = Rent::default().minimum_balance(FUNDING_STATE_BYTES);
+    let custody = FundingCustodyObservationV1::native_only(
+        rent.checked_mul(2)
+            .and_then(|value| value.checked_add(BOUNTY))
+            .expect("bounded funding custody"),
+        rent,
+    )
+    .expect("native funding custody");
+    let state = FundingStateV1::new(manifest_id, manifest, entry_index, custody)
+        .expect("pending FundingState");
+    let derivation = CapabilityFundingDerivationV1::new(
+        market.to_bytes(),
+        GENERATION,
+        manifest_id,
+        manifest,
+        state,
+    )
+    .expect("funding derivation");
+    Pubkey::find_program_address(&derivation.seed_components(), &RESOLUTION_PROGRAM_ID).0
+}
+
+fn fixture(preload_terminal: bool) -> Fixture {
     let elves = artifacts();
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
@@ -544,8 +566,16 @@ fn fixture() -> Fixture {
     .0;
     identity.market_id = CoreIdentity::new(market.to_bytes()).expect("Market");
     let state = CoreState {
-        phase: Phase::Open,
-        readiness: Readiness::Consumed,
+        phase: if preload_terminal {
+            Phase::Open
+        } else {
+            Phase::Founding
+        },
+        readiness: if preload_terminal {
+            Readiness::Consumed
+        } else {
+            Readiness::Prepaid
+        },
         terminal_winner: 0,
         identity,
         outstanding_capabilities: 0,
@@ -568,41 +598,25 @@ fn fixture() -> Fixture {
         ],
         &RESOLUTION_PROGRAM_ID,
     );
-    let mut source_value = SourceResolutionStateV2::fresh(
-        market.to_bytes(),
-        GENERATION,
-        source_id(material_id),
-        rent_credit.to_bytes(),
-        source_bump,
-        0,
-        0,
-    )
-    .expect("fresh Source")
-    .state();
-    let result_domain = ResultDomainV2::decode(&domain_bytes).expect("ResultDomain view");
-    let decision = source_value
-        .resolve_primary_from_authenticated_domain(
-            source_id(material_id),
-            material_value,
-            source_id(product_record_id),
-            result_domain,
-            source_id([0xb3; 32]),
-            -1,
-            1,
-            GENERATION,
-            TERMINAL_TIME,
-            TERMINAL_SEQUENCE,
-        )
-        .expect("provider-authenticated terminal Source projection");
-    assert_eq!(decision.selector(), 0);
-    test.add_account(
-        source,
-        protocol_account(RESOLUTION_PROGRAM_ID, source_value.to_bytes().to_vec()),
-    );
-
+    if !preload_terminal {
+        test.add_account(
+            source,
+            Account {
+                lamports: 1,
+                data: Vec::new(),
+                owner: system_program::ID,
+                executable: false,
+                rent_epoch: 0,
+            },
+        );
+    }
     let manifest_id = CapabilityContentId::new(manifest_id_bytes).expect("manifest identity");
-    let funding = [0_u16, 1, 2]
-        .map(|entry| add_active_funding(&mut test, market, manifest_id, manifest, entry));
+    let funding = if preload_terminal {
+        [0_u16, 1, 2]
+            .map(|entry| add_active_funding(&mut test, market, manifest_id, manifest, entry))
+    } else {
+        [0_u16, 1, 2].map(|entry| funding_key(market, manifest_id, manifest, entry))
+    };
     let certificate = Pubkey::find_program_address(
         &[
             RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
@@ -613,35 +627,68 @@ fn fixture() -> Fixture {
         &RESOLUTION_PROGRAM_ID,
     )
     .0;
-    let certificate_value = ResolutionCertificateV2 {
-        kind: ResolutionCertificateKindV2::ResolutionSuccess,
-        market: market.to_bytes(),
-        route: [0xb4; 32],
-        source_material: material_id,
-        product_record_digest: product_record_id,
-        provider_evidence: [0xb3; 32],
-        funding_allocation: [0; 32],
-        receipt_account: certificate.to_bytes(),
-        generation: GENERATION,
-        attempt_index: 0,
-        schedule_index: 0,
-        selector: decision.selector(),
-        work_paid: 0,
-        funding_remaining: 0,
-        result_numerator: -1,
-        result_denominator: 1,
-        observed_at: u64::try_from(TERMINAL_TIME).expect("positive terminal time"),
-    };
-    test.add_account(
-        certificate,
-        protocol_account(
-            RESOLUTION_PROGRAM_ID,
-            certificate_value
-                .to_bytes()
-                .expect("terminal certificate")
-                .to_vec(),
-        ),
-    );
+    if preload_terminal {
+        let mut source_value = SourceResolutionStateV2::fresh(
+            market.to_bytes(),
+            GENERATION,
+            source_id(material_id),
+            rent_credit.to_bytes(),
+            source_bump,
+            0,
+            0,
+        )
+        .expect("fresh Source")
+        .state();
+        let result_domain = ResultDomainV2::decode(&domain_bytes).expect("ResultDomain view");
+        let decision = source_value
+            .resolve_primary_from_authenticated_domain(
+                source_id(material_id),
+                material_value,
+                source_id(product_record_id),
+                result_domain,
+                source_id([0xb3; 32]),
+                -1,
+                1,
+                GENERATION,
+                TERMINAL_TIME,
+                TERMINAL_SEQUENCE,
+            )
+            .expect("provider-authenticated terminal Source projection");
+        assert_eq!(decision.selector(), 0);
+        test.add_account(
+            source,
+            protocol_account(RESOLUTION_PROGRAM_ID, source_value.to_bytes().to_vec()),
+        );
+        let certificate_value = ResolutionCertificateV2 {
+            kind: ResolutionCertificateKindV2::ResolutionSuccess,
+            market: market.to_bytes(),
+            route: [0xb4; 32],
+            source_material: material_id,
+            product_record_digest: product_record_id,
+            provider_evidence: [0xb3; 32],
+            funding_allocation: [0; 32],
+            receipt_account: certificate.to_bytes(),
+            generation: GENERATION,
+            attempt_index: 0,
+            schedule_index: 0,
+            selector: decision.selector(),
+            work_paid: 0,
+            funding_remaining: 0,
+            result_numerator: -1,
+            result_denominator: 1,
+            observed_at: u64::try_from(TERMINAL_TIME).expect("positive terminal time"),
+        };
+        test.add_account(
+            certificate,
+            protocol_account(
+                RESOLUTION_PROGRAM_ID,
+                certificate_value
+                    .to_bytes()
+                    .expect("terminal certificate")
+                    .to_vec(),
+            ),
+        );
+    }
     let closure = Pubkey::find_program_address(
         &[
             SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V2,
@@ -708,6 +755,13 @@ async fn required_observed(context: &mut ProgramTestContext, key: Pubkey) -> Obs
     )
 }
 
+async fn observed_or_vacant(context: &mut ProgramTestContext, key: Pubkey) -> ObservedAccount {
+    match observed(context, key).await {
+        Some(account) => into_observed(key, account),
+        None => vacant_observed(key),
+    }
+}
+
 fn vacant_observed(key: Pubkey) -> ObservedAccount {
     ObservedAccount {
         observation: finality(),
@@ -731,6 +785,61 @@ async fn submit(
         blockhash,
     );
     context.banks_client.process_transaction(transaction).await
+}
+
+async fn create_snapshot(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+) -> ResolutionCreateFundSnapshotV3 {
+    ResolutionCreateFundSnapshotV3 {
+        market: required_observed(context, fixture.market).await,
+        activation_cache: required_observed(context, fixture.activation).await,
+        registry_program: required_observed(context, REGISTRY_PROGRAM_ID).await,
+        core_program: required_observed(context, CORE_PROGRAM_ID).await,
+        core_programdata: required_observed(context, fixture.core_programdata).await,
+        resolution_program: required_observed(context, RESOLUTION_PROGRAM_ID).await,
+        resolution_programdata: required_observed(context, fixture.resolution_programdata).await,
+        source_material: required_observed(context, fixture.source_material.raw).await,
+        source_material_staging: vacant_observed(fixture.source_material.staging),
+        capability_manifest: required_observed(context, fixture.capability_manifest.raw).await,
+        capability_manifest_staging: vacant_observed(fixture.capability_manifest.staging),
+        source_destination: observed_or_vacant(context, fixture.source).await,
+        recovery_destination: observed_or_vacant(context, fixture.funding[0]).await,
+        exhaustion_destination: observed_or_vacant(context, fixture.funding[1]).await,
+        failure_destination: observed_or_vacant(context, fixture.funding[2]).await,
+        rent_sysvar: required_observed(context, sysvar::rent::ID).await,
+        system_program: required_observed(context, system_program::ID).await,
+        recovery_policy: required_observed(context, fixture.recovery_policy.raw).await,
+        recovery_policy_staging: vacant_observed(fixture.recovery_policy.staging),
+    }
+}
+
+async fn verify_snapshot(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+) -> ResolutionVerifyFundReadySnapshotV3 {
+    ResolutionVerifyFundReadySnapshotV3 {
+        market: required_observed(context, fixture.market).await,
+        activation_cache: required_observed(context, fixture.activation).await,
+        registry_program: required_observed(context, REGISTRY_PROGRAM_ID).await,
+        core_program: required_observed(context, CORE_PROGRAM_ID).await,
+        core_programdata: required_observed(context, fixture.core_programdata).await,
+        resolution_program: required_observed(context, RESOLUTION_PROGRAM_ID).await,
+        resolution_programdata: required_observed(context, fixture.resolution_programdata).await,
+        source_material: required_observed(context, fixture.source_material.raw).await,
+        source_material_staging: vacant_observed(fixture.source_material.staging),
+        capability_manifest: required_observed(context, fixture.capability_manifest.raw).await,
+        capability_manifest_staging: vacant_observed(fixture.capability_manifest.staging),
+        source_state: required_observed(context, fixture.source).await,
+        recovery_funding: required_observed(context, fixture.funding[0]).await,
+        exhaustion_funding: required_observed(context, fixture.funding[1]).await,
+        failure_funding: required_observed(context, fixture.funding[2]).await,
+        beneficiary: required_observed(context, fixture.rent_credit).await,
+        clock_sysvar: required_observed(context, sysvar::clock::ID).await,
+        rent_sysvar: required_observed(context, sysvar::rent::ID).await,
+        recovery_policy: required_observed(context, fixture.recovery_policy.raw).await,
+        recovery_policy_staging: vacant_observed(fixture.recovery_policy.staging),
+    }
 }
 
 async fn admit_snapshot(
@@ -833,8 +942,138 @@ async fn retirement_snapshot(
 }
 
 #[tokio::test]
+async fn current_resolution_creates_and_activates_exact_funding() {
+    let mut fixture = fixture(false);
+    let mut context = fixture
+        .test
+        .take()
+        .expect("unstarted ProgramTest")
+        .start_with_context()
+        .await;
+    let mut clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("ProgramTest Clock");
+    clock.slot = clock.slot.max(1);
+    clock.unix_timestamp = TERMINAL_TIME;
+    context.set_sysvar(&clock);
+
+    let payer = context.payer.pubkey();
+    let create_snapshot = create_snapshot(&mut context, &fixture).await;
+    assert_eq!(create_snapshot.system_program.key, system_program::ID);
+    assert_eq!(create_snapshot.system_program.owner, native_loader::ID);
+    assert!(create_snapshot.system_program.executable);
+    assert!(!create_snapshot.system_program.data.is_empty());
+    let create =
+        build_resolution_create_fund_v3(&create_snapshot).expect("chain-derived CreateFund");
+    validate_resolution_create_fund_report_v3(&create).expect("exact CreateFund report");
+    assert!(create.source_top_up_lamports > 0);
+    assert!(
+        create
+            .funding_top_up_lamports
+            .iter()
+            .all(|value| *value > 0)
+    );
+
+    let mut create_instructions = Vec::with_capacity(5);
+    create_instructions.push(transfer(
+        &payer,
+        &fixture.source,
+        create.source_top_up_lamports,
+    ));
+    for (funding, top_up) in fixture
+        .funding
+        .into_iter()
+        .zip(create.funding_top_up_lamports)
+    {
+        create_instructions.push(transfer(&payer, &funding, top_up));
+    }
+    create_instructions.push(create.instruction);
+    submit(&mut context, &create_instructions)
+        .await
+        .expect("prepay and create canonical Source funding");
+
+    let source = SourceResolutionStateV2::decode(
+        &observed(&mut context, fixture.source)
+            .await
+            .expect("created Source")
+            .data,
+    )
+    .expect("Source state");
+    assert_eq!(source.phase(), SourceResolutionPhaseV1::Primary);
+    for funding in fixture.funding {
+        let state = FundingStateV1::decode(
+            &observed(&mut context, funding)
+                .await
+                .expect("created Funding")
+                .data,
+        )
+        .expect("Funding state");
+        assert_eq!(state.status(), FundingStatus::Pending);
+    }
+
+    let verify =
+        build_resolution_verify_fund_ready_v3(&verify_snapshot(&mut context, &fixture).await)
+            .expect("chain-derived VerifyFundReady");
+    validate_resolution_verify_fund_ready_report_v3(&verify).expect("exact VerifyFundReady report");
+    let before_privilege_refusal = retirement_snapshot(&mut context, &fixture).await;
+    let mut read_only_beneficiary = verify.instruction.clone();
+    read_only_beneficiary
+        .accounts
+        .get_mut(16)
+        .expect("beneficiary account")
+        .is_writable = false;
+    assert!(
+        submit(&mut context, &[read_only_beneficiary])
+            .await
+            .is_err(),
+        "read-only beneficiary privilege must refuse"
+    );
+    assert_eq!(
+        retirement_snapshot(&mut context, &fixture).await,
+        before_privilege_refusal,
+        "privilege refusal preserves Source, Funds, Core, and RentCredit"
+    );
+
+    let beneficiary_before = observed(&mut context, fixture.rent_credit)
+        .await
+        .expect("RentCredit")
+        .lamports;
+    submit(&mut context, &[verify.instruction])
+        .await
+        .expect("activate exact three-ledger Resolution funding");
+    let ready = CoreState::decode(
+        &observed(&mut context, fixture.market)
+            .await
+            .expect("Market")
+            .data,
+    )
+    .expect("Core state");
+    assert_eq!(ready.phase, Phase::Founding);
+    assert_eq!(ready.readiness, Readiness::Ready);
+    assert_eq!(
+        observed(&mut context, fixture.rent_credit)
+            .await
+            .expect("RentCredit")
+            .lamports,
+        beneficiary_before + verify.expected_beneficiary_credit_lamports
+    );
+    for funding in fixture.funding {
+        let state = FundingStateV1::decode(
+            &observed(&mut context, funding)
+                .await
+                .expect("active Funding")
+                .data,
+        )
+        .expect("Funding state");
+        assert_eq!(state.status(), FundingStatus::Active);
+    }
+}
+
+#[tokio::test]
 async fn current_resolution_admits_retires_closes_and_rolls_back_late_refusal() {
-    let mut fixture = fixture();
+    let mut fixture = fixture(true);
     let mut context = fixture
         .test
         .take()
