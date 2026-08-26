@@ -55,6 +55,7 @@ import DClutchSemantics.StateLifecyclePolicyV5Abi
 import DClutchSemantics.AccountProfileV2Profile13
 import DClutchSemantics.RepresentationCompositionV3Abi
 import DClutchSemantics.EffectProgramV4Abi
+import DClutchSemantics.RationalCrossDomainV3
 
 /-!
 Fresh Lean-owned semantics for dClutch's compact protocol specializer.
