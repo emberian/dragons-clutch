@@ -678,6 +678,11 @@ impl FractionalExposureTerminalCandidateV2 {
         self.settlement_request
     }
 
+    /// Borrow the exact terminal request for an onchain-safe Hot candidate.
+    pub const fn settlement_request_ref(&self) -> &TerminalSettlementRequestV3 {
+        &self.settlement_request
+    }
+
     /// SHA-256 of the exact Fractional V2 request, bound as parent context.
     pub const fn fractional_request_digest(&self) -> [u8; 32] {
         self.fractional_request_digest

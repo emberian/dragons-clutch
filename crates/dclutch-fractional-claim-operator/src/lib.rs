@@ -13,6 +13,7 @@ mod artifacts;
 mod claims;
 mod composition;
 mod exposure_action_v2;
+mod hot_v2;
 mod records;
 mod token2022;
 
@@ -64,6 +65,12 @@ pub use exposure_action_v2::{
     plan_fractional_exposure_retirement_v2, plan_fractional_exposure_terminal_candidate_v2,
     plan_fractional_exposure_token_effect_v2,
     validate_fractional_exposure_terminal_postcondition_v2,
+};
+pub use hot_v2::{
+    FractionalHotChildCoordinatesV2, FractionalHotProfileV2, FractionalHotRetirementCoordinatesV2,
+    FractionalHotTokenCoordinatesV2, lower_fractional_hot_rent_close_v2,
+    lower_fractional_hot_retirement_effects_v2, lower_fractional_hot_signed_delta_v2,
+    lower_fractional_hot_terminal_v2, lower_fractional_hot_token_effect_v2,
 };
 pub use records::{
     CheckedFractionalReleaseInputV1, CheckedFractionalReleaseV1, FinalizedArtifactRecordV1,
