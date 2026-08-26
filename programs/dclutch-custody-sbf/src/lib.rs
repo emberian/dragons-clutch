@@ -13,13 +13,14 @@ use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
     CUSTODY_RECEIPT_BYTES_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1,
     CustodyAuthoritySeedsV1, CustodyReceiptV1, CustodyReplaySeedsV1, CustodyReplayV1,
-    CustodyRequestV1, CustodyVaultSeedsV1, OperationV1, ReceiptEvidenceV1,
-    PROJECTED_CUSTODY_REQUEST_BYTES_V1, PROJECTED_CUSTODY_REQUEST_MAGIC_V1,
-    ProjectedCustodyRequestV1,
+    CustodyRequestV1, CustodyVaultSeedsV1, DELEGATED_CUSTODY_REQUEST_BYTES_V2,
+    DELEGATED_CUSTODY_REQUEST_MAGIC_V2, OperationV1, PROJECTED_CUSTODY_REQUEST_BYTES_V1,
+    PROJECTED_CUSTODY_REQUEST_MAGIC_V1, ProjectedCustodyRequestV1, ReceiptEvidenceV1,
 };
 
+mod delegated;
 mod projected;
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV1, STATE_BYTES};
+use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1,
 };
@@ -112,6 +113,12 @@ pub fn process_instruction(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
+    if instruction_data.len() == DELEGATED_CUSTODY_REQUEST_BYTES_V2
+        && instruction_data.get(..DELEGATED_CUSTODY_REQUEST_MAGIC_V2.len())
+            == Some(DELEGATED_CUSTODY_REQUEST_MAGIC_V2.as_slice())
+    {
+        return delegated::process(program_id, accounts, instruction_data);
+    }
     if instruction_data.len() == PROJECTED_CUSTODY_REQUEST_BYTES_V1
         && instruction_data.get(..PROJECTED_CUSTODY_REQUEST_MAGIC_V1.len())
             == Some(PROJECTED_CUSTODY_REQUEST_MAGIC_V1.as_slice())
@@ -266,7 +273,7 @@ fn authenticate_market(
         || state.identity.registry_program.to_bytes() != registry.key.to_bytes()
         || state.identity.generation != request.semantic.generation
         || Pubkey::find_program_address(
-            &MarketCoreStateSeedsV1::new(state.identity).as_slices(),
+            &MarketCoreStateSeedsV2::new(state.identity).as_slices(),
             &core_program,
         )
         .0 != *market.key
@@ -649,6 +656,11 @@ fn execute_transfer(
     request_digest: [u8; 32],
     realm: RealmFacts,
 ) -> ProgramResult {
+    // External debits must use the distinct V2 wire so an apparently correct
+    // balance delta cannot retain hidden delegated spending authority.
+    if request.source_compartment == CompartmentV1::External {
+        return Err(CustodySbfError::Instruction.into());
+    }
     let mint = account(accounts, 9)?;
     let source = account(accounts, 10)?;
     let destination = account(accounts, 11)?;

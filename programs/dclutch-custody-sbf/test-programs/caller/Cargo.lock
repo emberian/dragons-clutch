@@ -279,6 +279,7 @@ version = "0.1.0"
 name = "dclutch-custody-contract"
 version = "0.1.0"
 dependencies = [
+ "dclutch-market-core-codec",
  "dclutch-release-set-contract",
 ]
 
@@ -290,6 +291,13 @@ dependencies = [
  "dclutch-custody-contract",
  "dclutch-release-set-contract",
  "solana-program",
+]
+
+[[package]]
+name = "dclutch-market-core-codec"
+version = "0.1.0"
+dependencies = [
+ "dclutch-release-set-contract",
 ]
 
 [[package]]

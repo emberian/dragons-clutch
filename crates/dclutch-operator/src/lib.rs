@@ -42,6 +42,8 @@ use solana_sdk_ids::system_program;
 
 /// Chain-derived compiled Direct transaction construction.
 pub mod compiled_direct;
+/// Exact delegated-allowance Custody successor CPI construction.
+pub mod delegated_custody;
 /// Chain-derived action-selected Direct V3 inline execution construction.
 pub mod direct_inline_v3;
 /// Exact unsigned signing material for the Direct V2 successor.
