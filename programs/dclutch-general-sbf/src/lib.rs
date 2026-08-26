@@ -24,33 +24,35 @@ use dclutch_general_codec::{
     PAGE_BYTES, SELECTION_CURSOR_BYTES, SELECTION_POLICY_BYTES, SETTLEMENT_CURSOR_BYTES,
     SelectionCursorV1, SelectionPolicyV1,
 };
-use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
-use dclutch_registry_svm::{AuthenticatedRoleReceiptV1, RegistryInstructionV1};
-use dclutch_release_set_contract::ExecutionRoleV1;
+use dclutch_general_config_contract::{
+    GENERAL_ACTIVATION_REQUEST_BYTES_V2, GENERAL_CONFIG_BYTES_V2, GENERAL_ROOT_PDA_DOMAIN_V2,
+    GeneralConfigV2, GeneralLifecycleV2, GeneralRootV2,
+};
+use dclutch_market_core_codec::{CORE_EFFECT_ENVELOPE_BYTES_V1, CORE_EFFECT_MAGIC_V1};
 use solana_program::{
-    account_info::AccountInfo,
-    entrypoint::ProgramResult,
-    instruction::{AccountMeta, Instruction},
-    program::{get_return_data, invoke},
-    program_error::ProgramError,
+    account_info::AccountInfo, entrypoint::ProgramResult, hash::hash, program_error::ProgramError,
     pubkey::Pubkey,
 };
-use std::vec::Vec;
+
+mod activation_handler;
 
 /// Exact account count for streamed candidate consideration.
-pub const CONSIDER_ACCOUNT_COUNT_V1: usize = 12;
+pub const CONSIDER_ACCOUNT_COUNT_V2: usize = 10;
 /// Exact account count for selection freeze.
-pub const FREEZE_ACCOUNT_COUNT_V1: usize = 6;
+pub const FREEZE_ACCOUNT_COUNT_V2: usize = 4;
 /// Exact account count for settlement initialization.
-pub const INITIALIZE_ACCOUNT_COUNT_V1: usize = 9;
+pub const INITIALIZE_ACCOUNT_COUNT_V2: usize = 7;
 /// Exact reserved account count for physical settlement actions.
-pub const SETTLEMENT_ACCOUNT_COUNT_V1: usize = 24;
+pub const SETTLEMENT_ACCOUNT_COUNT_V2: usize = 22;
+/// Exact account count for Core-authenticated General activation.
+pub const ACTIVATE_ACCOUNT_COUNT_V2: usize = 8;
+/// Exact instruction width for a Core envelope plus General activation request.
+pub const ACTIVATE_INSTRUCTION_BYTES_V2: usize =
+    CORE_EFFECT_ENVELOPE_BYTES_V1 + GENERAL_ACTIVATION_REQUEST_BYTES_V2;
 
 const MARKET: usize = 0;
-const ACTIVATION_CACHE: usize = 1;
-const REGISTRY_PROGRAM: usize = 2;
-const TRADING_PROGRAM: usize = 3;
-const TRADING_PROGRAMDATA: usize = 4;
+const GENERAL_ROOT: usize = 1;
+const GENERAL_CONFIG: usize = 2;
 
 /// Stable physical-adapter refusal.
 #[repr(u32)]
@@ -76,6 +78,10 @@ pub enum GeneralSbfError {
     Borrow = 8,
     /// Canonical Claims/Custody child integration is not linked yet.
     ChildUnavailable = 9,
+    /// Core-authenticated root activation or exact replay refused.
+    RootActivation = 10,
+    /// A root write, allocation, assignment, or acknowledgement refused.
+    Commit = 11,
 }
 
 impl From<GeneralSbfError> for ProgramError {
@@ -85,45 +91,59 @@ impl From<GeneralSbfError> for ProgramError {
 }
 
 #[cfg(not(feature = "no-entrypoint"))]
-solana_program::entrypoint_no_alloc!(process_instruction);
+solana_program::entrypoint_no_alloc!(program_entrypoint);
 
-/// Reauthenticate Trading and execute one exact General action.
-#[inline(never)]
-pub fn process_instruction(
+#[cfg(not(feature = "no-entrypoint"))]
+fn program_entrypoint(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
+    process_general_family(program_id, accounts, instruction_data)
+}
+
+/// Execute the reusable General family behind the canonical Trading entrypoint.
+///
+/// The standalone wrapper is measurement-only. The release build calls this
+/// handler after its shared Trading-family dispatch and admission boundary.
+#[inline(never)]
+pub fn process_general_family(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    if instruction_data.len() == ACTIVATE_INSTRUCTION_BYTES_V2
+        && instruction_data.get(..CORE_EFFECT_MAGIC_V1.len())
+            == Some(CORE_EFFECT_MAGIC_V1.as_slice())
+    {
+        return activation_handler::process(program_id, accounts, instruction_data);
+    }
     if instruction_data.len() != CONTROLLER_REQUEST_BYTES {
         return Err(GeneralSbfError::Instruction.into());
     }
     let request =
         ControllerRequestV1::decode(instruction_data).map_err(|_| GeneralSbfError::Instruction)?;
-    validate_common(program_id, accounts, request.action)?;
-    let release_set_id = reauthenticate_trading(program_id, accounts)?;
-    process_authenticated(program_id, accounts, request, release_set_id)
+    let config = validate_hot_context(program_id, accounts, request.action)?;
+    process_hot(program_id, accounts, request, config)
 }
 
-/// Execute after exact Registry Trading reauthentication.
+/// Execute after exact activated-root and content-addressed-config validation.
 ///
 /// This function is public so host tests can exercise state rollback without
-/// replacing Solana's Registry CPI runtime.
+/// replacing Solana account loading.
 #[inline(never)]
-pub fn process_authenticated(
+pub fn process_hot(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     request: ControllerRequestV1,
-    release_set_id: [u8; 32],
+    config: GeneralConfigV2,
 ) -> ProgramResult {
-    if release_set_id.iter().all(|byte| *byte == 0) {
-        return Err(GeneralSbfError::ReleaseAdmission.into());
-    }
     match request.action {
-        Action::Consider => process_consider(program_id, accounts, request),
-        Action::Freeze => process_freeze(program_id, accounts, request),
-        Action::InitializeSettlement => process_initialize(program_id, accounts, request),
+        Action::Consider => process_consider(program_id, accounts, request, config),
+        Action::Freeze => process_freeze(program_id, accounts, request, config),
+        Action::InitializeSettlement => process_initialize(program_id, accounts, request, config),
         Action::Collect | Action::Materialize | Action::Distribute | Action::Close => {
-            if accounts.len() != SETTLEMENT_ACCOUNT_COUNT_V1 {
+            if accounts.len() != SETTLEMENT_ACCOUNT_COUNT_V2 {
                 Err(GeneralSbfError::AccountFrame.into())
             } else {
                 Err(GeneralSbfError::ChildUnavailable.into())
@@ -132,111 +152,311 @@ pub fn process_authenticated(
     }
 }
 
-fn validate_common(
+fn validate_hot_context(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     action: Action,
-) -> ProgramResult {
+) -> Result<GeneralConfigV2, ProgramError> {
     let expected = match action {
-        Action::Consider => CONSIDER_ACCOUNT_COUNT_V1,
-        Action::Freeze => FREEZE_ACCOUNT_COUNT_V1,
-        Action::InitializeSettlement => INITIALIZE_ACCOUNT_COUNT_V1,
+        Action::Consider => CONSIDER_ACCOUNT_COUNT_V2,
+        Action::Freeze => FREEZE_ACCOUNT_COUNT_V2,
+        Action::InitializeSettlement => INITIALIZE_ACCOUNT_COUNT_V2,
         Action::Collect | Action::Materialize | Action::Distribute | Action::Close => {
-            SETTLEMENT_ACCOUNT_COUNT_V1
+            SETTLEMENT_ACCOUNT_COUNT_V2
         }
     };
     if accounts.len() != expected
         || accounts.iter().any(|account| account.is_signer)
         || accounts[MARKET].executable
         || accounts[MARKET].is_writable
-        || accounts[ACTIVATION_CACHE].executable
-        || accounts[ACTIVATION_CACHE].is_writable
-        || !accounts[REGISTRY_PROGRAM].executable
-        || accounts[REGISTRY_PROGRAM].is_writable
-        || !accounts[TRADING_PROGRAM].executable
-        || accounts[TRADING_PROGRAM].is_writable
-        || accounts[TRADING_PROGRAM].key != program_id
-        || accounts[TRADING_PROGRAMDATA].executable
-        || accounts[TRADING_PROGRAMDATA].is_writable
-        || accounts[REGISTRY_PROGRAM].key == program_id
+        || accounts[GENERAL_ROOT].owner != program_id
+        || accounts[GENERAL_ROOT].executable
+        || accounts[GENERAL_ROOT].is_writable
+        || accounts[GENERAL_CONFIG].executable
+        || accounts[GENERAL_CONFIG].is_writable
     {
         return Err(GeneralSbfError::AccountFrame.into());
     }
-    Ok(())
+    let root = {
+        let bytes = accounts[GENERAL_ROOT]
+            .try_borrow_data()
+            .map_err(|_| GeneralSbfError::Borrow)?;
+        GeneralRootV2::decode(&bytes).map_err(|_| GeneralSbfError::ImmutableInput)?
+    };
+    let config = {
+        let bytes = accounts[GENERAL_CONFIG]
+            .try_borrow_data()
+            .map_err(|_| GeneralSbfError::Borrow)?;
+        if bytes.len() != GENERAL_CONFIG_BYTES_V2 || hash(&bytes).to_bytes() != root.config_id() {
+            return Err(GeneralSbfError::ImmutableInput.into());
+        }
+        GeneralConfigV2::decode(&bytes).map_err(|_| GeneralSbfError::ImmutableInput)?
+    };
+    if root.lifecycle() != GeneralLifecycleV2::Active
+        || root.market() != accounts[MARKET].key.to_bytes()
+        || root.generation() != config.generation()
+    {
+        return Err(GeneralSbfError::ImmutableInput.into());
+    }
+    let generation = root.generation().to_le_bytes();
+    require_pda(
+        program_id,
+        &accounts[GENERAL_ROOT],
+        &[
+            GENERAL_ROOT_PDA_DOMAIN_V2,
+            accounts[MARKET].key.as_ref(),
+            &generation,
+            &root.config_id(),
+        ],
+        GeneralSbfError::ImmutableInput,
+    )?;
+    Ok(config)
 }
 
 #[inline(never)]
-fn reauthenticate_trading(
+#[cfg(any())]
+fn process_core_activation(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
-) -> Result<[u8; 32], ProgramError> {
-    let registry = &accounts[REGISTRY_PROGRAM];
-    let cache = &accounts[ACTIVATION_CACHE];
-    if cache.owner != registry.key {
-        return Err(GeneralSbfError::ReleaseAdmission.into());
+    instruction_data: &[u8],
+) -> ProgramResult {
+    if accounts.len() != ACTIVATE_ACCOUNT_COUNT_V2 {
+        return Err(GeneralSbfError::AccountFrame.into());
     }
-    let (release_set_id, trading) = {
-        let bytes = cache
+    let envelope_bytes = instruction_data
+        .get(..CORE_EFFECT_ENVELOPE_BYTES_V1)
+        .ok_or(GeneralSbfError::Instruction)?;
+    let request_bytes = instruction_data
+        .get(CORE_EFFECT_ENVELOPE_BYTES_V1..)
+        .ok_or(GeneralSbfError::Instruction)?;
+    let envelope =
+        CoreEffectEnvelopeV1::decode(envelope_bytes).map_err(|_| GeneralSbfError::Instruction)?;
+    let request = GeneralActivationRequestV2::decode(request_bytes)
+        .map_err(|_| GeneralSbfError::Instruction)?;
+    let request_digest = identity(hash(request_bytes).to_bytes())?;
+    envelope
+        .validate_role_request(request_bytes.len(), request_digest)
+        .map_err(|_| GeneralSbfError::RootActivation)?;
+    validate_activation_frame(program_id, accounts, envelope, request)?;
+
+    let config = {
+        let config_bytes = accounts[3]
             .try_borrow_data()
             .map_err(|_| GeneralSbfError::Borrow)?;
-        let view = ActivatedExecutionReleaseSetViewV1::decode(&bytes)
-            .map_err(|_| GeneralSbfError::ReleaseAdmission)?;
-        let release_set = view
-            .execution_release_set_id()
-            .map_err(|_| GeneralSbfError::ReleaseAdmission)?;
-        let role = view
-            .role(ExecutionRoleV1::Trading)
-            .map_err(|_| GeneralSbfError::ReleaseAdmission)?;
-        (release_set.to_bytes(), role)
+        if hash(&config_bytes).to_bytes() != request.config_id() {
+            return Err(GeneralSbfError::RootActivation.into());
+        }
+        GeneralConfigV2::decode(&config_bytes).map_err(|_| GeneralSbfError::RootActivation)?
     };
-    require_pda(
-        registry.key,
-        cache,
-        &[ACTIVATION_PDA_DOMAIN_V1, &release_set_id],
-        GeneralSbfError::ReleaseAdmission,
+    if config.generation() != envelope.generation() {
+        return Err(GeneralSbfError::RootActivation.into());
+    }
+
+    let market = envelope.market().to_bytes();
+    let generation = envelope.generation().to_le_bytes();
+    let config_id = request.config_id();
+    let (expected_root, bump) = Pubkey::find_program_address(
+        &[GENERAL_ROOT_PDA_DOMAIN_V2, &market, &generation, &config_id],
+        program_id,
+    );
+    if accounts[2].key != &expected_root || request.root() != expected_root.to_bytes() {
+        return Err(GeneralSbfError::RootActivation.into());
+    }
+    request
+        .require_normalized_root_lamports(accounts[2].lamports())
+        .map_err(|_| GeneralSbfError::RootActivation)?;
+
+    let expected = GeneralRootV2::active(market, config_id, envelope.generation())
+        .map_err(|_| GeneralSbfError::RootActivation)?;
+    if accounts[2].owner == program_id {
+        let root_bytes = accounts[2]
+            .try_borrow_data()
+            .map_err(|_| GeneralSbfError::Borrow)?;
+        let present =
+            GeneralRootV2::decode(&root_bytes).map_err(|_| GeneralSbfError::RootActivation)?;
+        if present != expected {
+            return Err(GeneralSbfError::RootActivation.into());
+        }
+    } else {
+        if accounts[2].owner != &system_program::ID || accounts[2].data_len() != 0 {
+            return Err(GeneralSbfError::RootActivation.into());
+        }
+        let bump_seed = [bump];
+        let signer = [
+            GENERAL_ROOT_PDA_DOMAIN_V2,
+            market.as_slice(),
+            generation.as_slice(),
+            config_id.as_slice(),
+            bump_seed.as_slice(),
+        ];
+        let root_space =
+            u64::try_from(GENERAL_ROOT_BYTES_V2).map_err(|_| GeneralSbfError::Commit)?;
+        invoke_signed(
+            &allocate(accounts[2].key, root_space),
+            &[accounts[2].clone(), accounts[4].clone()],
+            &[&signer],
+        )
+        .map_err(|_| GeneralSbfError::Commit)?;
+        invoke_signed(
+            &assign(accounts[2].key, program_id),
+            &[accounts[2].clone(), accounts[4].clone()],
+            &[&signer],
+        )
+        .map_err(|_| GeneralSbfError::Commit)?;
+        if accounts[2].owner != program_id || accounts[2].data_len() != GENERAL_ROOT_BYTES_V2 {
+            return Err(GeneralSbfError::Commit.into());
+        }
+        let mut root_bytes = accounts[2]
+            .try_borrow_mut_data()
+            .map_err(|_| GeneralSbfError::Borrow)?;
+        if root_bytes.iter().any(|byte| *byte != 0) {
+            return Err(GeneralSbfError::Commit.into());
+        }
+        root_bytes.copy_from_slice(&expected.to_bytes());
+    }
+
+    let acknowledgement = activation_ack(
+        program_id,
+        envelope,
+        envelope_bytes,
+        request_bytes,
+        expected,
     )?;
-    let release = trading.release();
-    if release.program().as_bytes() != &program_id.to_bytes()
-        || release.programdata() != accounts[TRADING_PROGRAMDATA].key.to_bytes()
-    {
-        return Err(GeneralSbfError::ReleaseAdmission.into());
-    }
-    let instruction = Instruction {
-        program_id: *registry.key,
-        accounts: Vec::from([
-            AccountMeta::new_readonly(*cache.key, false),
-            AccountMeta::new_readonly(*accounts[TRADING_PROGRAM].key, false),
-            AccountMeta::new_readonly(*accounts[TRADING_PROGRAMDATA].key, false),
-        ]),
-        data: RegistryInstructionV1::Reauthenticate(ExecutionRoleV1::Trading)
-            .to_bytes()
-            .to_vec(),
-    };
-    invoke(
-        &instruction,
-        &[
-            cache.clone(),
-            accounts[TRADING_PROGRAM].clone(),
-            accounts[TRADING_PROGRAMDATA].clone(),
-            registry.clone(),
-        ],
+    set_return_data(
+        &acknowledgement
+            .encode()
+            .map_err(|_| GeneralSbfError::Commit)?,
+    );
+    Ok(())
+}
+
+#[cfg(any())]
+fn activation_ack(
+    program_id: &Pubkey,
+    envelope: CoreEffectEnvelopeV1,
+    envelope_bytes: &[u8],
+    request_bytes: &[u8],
+    root: GeneralRootV2,
+) -> Result<CoreEffectAckV1, ProgramError> {
+    let envelope_length = u32::try_from(envelope_bytes.len())
+        .map_err(|_| GeneralSbfError::Instruction)?
+        .to_le_bytes();
+    let request_length = u32::try_from(request_bytes.len())
+        .map_err(|_| GeneralSbfError::Instruction)?
+        .to_le_bytes();
+    let effect_digest = identity(
+        hashv(&[
+            &CORE_EFFECT_DIGEST_DOMAIN_V1,
+            &envelope_length,
+            envelope_bytes,
+            &request_length,
+            request_bytes,
+        ])
+        .to_bytes(),
+    )?;
+    CoreEffectAckV1::new(
+        envelope.action(),
+        envelope.target_role(),
+        identity(program_id.to_bytes())?,
+        envelope.release_set(),
+        envelope.market(),
+        envelope.context(),
+        effect_digest,
+        identity(hash(&root.to_bytes()).to_bytes())?,
+        0,
+        root.revision(),
+        0,
+        0,
     )
-    .map_err(|_| GeneralSbfError::ReleaseAdmission)?;
-    let (producer, bytes) = get_return_data().ok_or(GeneralSbfError::ReleaseAdmission)?;
-    if producer != *registry.key {
-        return Err(GeneralSbfError::ReleaseAdmission.into());
-    }
-    let receipt = AuthenticatedRoleReceiptV1::decode(&bytes)
-        .map_err(|_| GeneralSbfError::ReleaseAdmission)?;
-    if receipt.role() != ExecutionRoleV1::Trading
-        || receipt.execution_release_set_id().as_bytes() != &release_set_id
-        || receipt.program().as_bytes() != &program_id.to_bytes()
-        || receipt.artifact_release_id() != trading.artifact_release_id()
-        || receipt.semantic_release_id() != release.semantic_release_id()
+    .map_err(|_| GeneralSbfError::Commit.into())
+}
+
+#[cfg(any())]
+fn validate_activation_frame(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    envelope: CoreEffectEnvelopeV1,
+    request: GeneralActivationRequestV2,
+) -> ProgramResult {
+    let authority = &accounts[0];
+    let core_program = &accounts[1];
+    let root = &accounts[2];
+    let config = &accounts[3];
+    let system = &accounts[4];
+    if !authority.is_signer
+        || authority.is_writable
+        || authority.executable
+        || !core_program.executable
+        || core_program.is_signer
+        || core_program.is_writable
+        || !root.is_writable
+        || root.is_signer
+        || root.executable
+        || config.is_writable
+        || config.is_signer
+        || config.executable
+        || system.key != &system_program::ID
+        || !system.executable
+        || system.is_signer
+        || system.is_writable
+        || accounts.iter().enumerate().any(|(left, account)| {
+            accounts
+                .iter()
+                .skip(left + 1)
+                .any(|other| other.key == account.key)
+        })
     {
-        return Err(GeneralSbfError::ReleaseAdmission.into());
+        return Err(GeneralSbfError::AccountFrame.into());
     }
-    Ok(release_set_id)
+    if envelope.action() != CoreEffectActionV1::ActivateCapability
+        || envelope.caller_program().to_bytes() != core_program.key.to_bytes()
+        || envelope.caller_authority().to_bytes() != authority.key.to_bytes()
+        || envelope.expected_resource_a_revision() != 0
+        || envelope.expected_resource_b_revision() != 0
+        || request.root() != root.key.to_bytes()
+    {
+        return Err(GeneralSbfError::RootActivation.into());
+    }
+    validate_core_caller_authority(authority, core_program, envelope)?;
+    validate_capability_implementation(program_id, core_program.key, envelope.target_role())
+}
+
+#[cfg(any())]
+fn validate_core_caller_authority(
+    authority: &AccountInfo<'_>,
+    core_program: &AccountInfo<'_>,
+    envelope: CoreEffectEnvelopeV1,
+) -> ProgramResult {
+    let authority_seeds = envelope
+        .caller_authority_seeds()
+        .map_err(|_| GeneralSbfError::ReleaseAdmission)?;
+    let (expected_authority, _) =
+        Pubkey::find_program_address(&authority_seeds.as_slices(), core_program.key);
+    if authority.key == &expected_authority {
+        Ok(())
+    } else {
+        Err(GeneralSbfError::ReleaseAdmission.into())
+    }
+}
+
+/// Deliberately isolated until the Registry representation of multiple
+/// capability implementations behind the Trading role is frozen.
+#[cfg(any())]
+fn validate_capability_implementation(
+    program_id: &Pubkey,
+    core_program_id: &Pubkey,
+    target_role: Role,
+) -> ProgramResult {
+    if program_id != core_program_id && target_role != Role::Core {
+        Ok(())
+    } else {
+        Err(GeneralSbfError::ReleaseAdmission.into())
+    }
+}
+
+#[cfg(any())]
+fn identity(bytes: [u8; 32]) -> Result<Identity, ProgramError> {
+    Identity::new(bytes).map_err(|_| GeneralSbfError::RootActivation.into())
 }
 
 #[inline(never)]
@@ -244,17 +464,18 @@ fn process_consider(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     request: ControllerRequestV1,
+    config: GeneralConfigV2,
 ) -> ProgramResult {
-    if accounts.len() != CONSIDER_ACCOUNT_COUNT_V1 {
+    if accounts.len() != CONSIDER_ACCOUNT_COUNT_V2 {
         return Err(GeneralSbfError::AccountFrame.into());
     }
-    let selection = &accounts[5];
-    let verification = &accounts[6];
-    let certificate = &accounts[7];
-    let candidate_account = &accounts[8];
-    let policy_account = &accounts[9];
-    let page_account = &accounts[10];
-    let incumbent_account = &accounts[11];
+    let selection = &accounts[3];
+    let verification = &accounts[4];
+    let certificate = &accounts[5];
+    let candidate_account = &accounts[6];
+    let policy_account = &accounts[7];
+    let page_account = &accounts[8];
+    let incumbent_account = &accounts[9];
     require_owned_state(program_id, selection, SELECTION_CURSOR_BYTES, true)?;
     require_owned_state(program_id, verification, VERIFICATION_CURSOR_BYTES_V1, true)?;
     require_owned_state(program_id, certificate, VERIFIED_CANDIDATE_BYTES_V1, true)?;
@@ -264,6 +485,9 @@ fn process_consider(
 
     let candidate = decode_candidate(candidate_account)?;
     let policy = decode_policy(policy_account)?;
+    config
+        .require_selection_policy(policy.policy_id)
+        .map_err(|_| GeneralSbfError::ImmutableInput)?;
     let candidate_id = request.candidate_id.ok_or(GeneralSbfError::Instruction)?;
     if candidate.candidate_id != candidate_id {
         return Err(GeneralSbfError::ImmutableInput.into());
@@ -311,6 +535,14 @@ fn process_consider(
 
     let mut verifier = load_verifier(verification, candidate, request)?;
     ingest_verifier(&mut verifier, page_account, request.expected_revision)?;
+    config
+        .require_candidate_envelope(
+            candidate.outcome_count,
+            candidate.page_count,
+            candidate.price_scale,
+            verifier.order_count(),
+        )
+        .map_err(|_| GeneralSbfError::Verification)?;
 
     if verifier.is_complete() {
         let verified = finish_verifier(verifier)?;
@@ -475,11 +707,12 @@ fn process_freeze(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     request: ControllerRequestV1,
+    config: GeneralConfigV2,
 ) -> ProgramResult {
-    if accounts.len() != FREEZE_ACCOUNT_COUNT_V1 {
+    if accounts.len() != FREEZE_ACCOUNT_COUNT_V2 {
         return Err(GeneralSbfError::AccountFrame.into());
     }
-    let selection = &accounts[5];
+    let selection = &accounts[3];
     require_owned_state(program_id, selection, SELECTION_CURSOR_BYTES, true)?;
     let mut bytes = [0_u8; SELECTION_CURSOR_BYTES];
     {
@@ -489,6 +722,9 @@ fn process_freeze(
         bytes.copy_from_slice(&source);
     }
     let cursor = SelectionCursorV1::decode(&bytes).map_err(|_| GeneralSbfError::Selection)?;
+    config
+        .require_selection_policy(cursor.policy_id)
+        .map_err(|_| GeneralSbfError::Selection)?;
     require_pda(
         program_id,
         selection,
@@ -513,14 +749,15 @@ fn process_initialize(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     request: ControllerRequestV1,
+    config: GeneralConfigV2,
 ) -> ProgramResult {
-    if accounts.len() != INITIALIZE_ACCOUNT_COUNT_V1 {
+    if accounts.len() != INITIALIZE_ACCOUNT_COUNT_V2 {
         return Err(GeneralSbfError::AccountFrame.into());
     }
-    let selection = &accounts[5];
-    let settlement = &accounts[6];
-    let certificate = &accounts[7];
-    let candidate_account = &accounts[8];
+    let selection = &accounts[3];
+    let settlement = &accounts[4];
+    let certificate = &accounts[5];
+    let candidate_account = &accounts[6];
     require_owned_state(program_id, selection, SELECTION_CURSOR_BYTES, false)?;
     require_owned_state(program_id, settlement, SETTLEMENT_CURSOR_BYTES, true)?;
     require_owned_state(program_id, certificate, VERIFIED_CANDIDATE_BYTES_V1, false)?;
@@ -529,6 +766,14 @@ fn process_initialize(
     if request.candidate_id != Some(candidate.candidate_id) {
         return Err(GeneralSbfError::Instruction.into());
     }
+    config
+        .require_candidate_envelope(
+            candidate.outcome_count,
+            candidate.page_count,
+            candidate.price_scale,
+            0,
+        )
+        .map_err(|_| GeneralSbfError::ImmutableInput)?;
     require_pda(
         program_id,
         selection,
@@ -571,6 +816,11 @@ fn process_initialize(
     let selection_bytes = selection
         .try_borrow_data()
         .map_err(|_| GeneralSbfError::Borrow)?;
+    let selection_cursor =
+        SelectionCursorV1::decode(&selection_bytes).map_err(|_| GeneralSbfError::Selection)?;
+    config
+        .require_selection_policy(selection_cursor.policy_id)
+        .map_err(|_| GeneralSbfError::Selection)?;
     let mut settlement_bytes = [0_u8; SETTLEMENT_CURSOR_BYTES];
     {
         let source = settlement
@@ -698,11 +948,27 @@ fn require_pda(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dclutch_capability_contract::{
+        ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityFundingDerivationV1,
+        CapabilityManifestV1, CompartmentFundingV1, ContentId, FundingAmountsV1,
+        FundingCustodyObservationV1, FundingQuoteV1, FundingStateV1, MANIFEST_HEADER_BYTES,
+        MAX_DEPENDENCIES_PER_CAPABILITY,
+    };
     use dclutch_general_codec::{
         ExecutionV1, MAX_EXECUTIONS_PER_PAGE, MAX_OUTCOMES, MAX_SELECTION_CRITERIA, PageV1, Phase,
         SelectionCriterion, SettlementCursorV1,
     };
-    use std::{boxed::Box, vec};
+    use dclutch_general_config_contract::{
+        GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_CAPABILITY_RELEASE_ID_V2,
+        GENERAL_CHILD_DERIVATION_ID_V2, GENERAL_CHILD_SCHEMA_ID_V2, GeneralActivationRequestV2,
+        GeneralConfigV2Input,
+    };
+    use dclutch_market_core_codec::{
+        CORE_EFFECT_DIGEST_DOMAIN_V1, CoreEffectActionV1, CoreEffectEnvelopeV1, Identity, Role,
+    };
+    use solana_program::hash::hashv;
+    use solana_sdk_ids::system_program;
+    use std::{boxed::Box, vec, vec::Vec};
 
     fn id(low: u8) -> [u8; 32] {
         let mut value = [0_u8; 32];
@@ -724,15 +990,35 @@ mod tests {
         owner: Pubkey,
         executable: bool,
     ) -> AccountInfo<'static> {
+        account_with(key, false, writable, 1, data, owner, executable)
+    }
+
+    fn account_with(
+        key: Pubkey,
+        signer: bool,
+        writable: bool,
+        lamports: u64,
+        data: Vec<u8>,
+        owner: Pubkey,
+        executable: bool,
+    ) -> AccountInfo<'static> {
         AccountInfo::new(
             Box::leak(Box::new(key)),
-            false,
+            signer,
             writable,
-            Box::leak(Box::new(1)),
+            Box::leak(Box::new(lamports)),
             Box::leak(data.into_boxed_slice()),
             Box::leak(Box::new(owner)),
             executable,
         )
+    }
+
+    fn core_identity(bytes: [u8; 32]) -> Identity {
+        Identity::new(bytes).expect("nonzero identity")
+    }
+
+    fn content(bytes: [u8; 32]) -> ContentId {
+        ContentId::new(bytes).expect("nonzero content identity")
     }
 
     fn candidate() -> CandidateV1 {
@@ -756,6 +1042,26 @@ mod tests {
             criterion_count: 3,
             criteria,
         }
+    }
+
+    fn config() -> GeneralConfigV2 {
+        GeneralConfigV2::new(GeneralConfigV2Input {
+            capacity_profile_id: id(61),
+            claim_basis_id: id(62),
+            capability_release_id: GENERAL_CAPABILITY_RELEASE_ID_V2,
+            generation: 7,
+            price_scale: 2,
+            collection_slots: 10,
+            selection_slots: 11,
+            settlement_slots: 12,
+            max_orders_per_candidate: 32,
+            max_pages_per_candidate: 1,
+            continuation_reward_lamports: 5,
+            selection_policy_id: policy().policy_id,
+            outcome_count: 2,
+            quote_surplus_beneficiary: id(63),
+        })
+        .expect("config")
     }
 
     fn page() -> [u8; PAGE_BYTES] {
@@ -797,27 +1103,29 @@ mod tests {
     }
 
     fn common(program_id: Pubkey, market: Pubkey) -> Vec<AccountInfo<'static>> {
+        let config = config();
+        let config_bytes = config.to_bytes();
+        let config_id = hash(&config_bytes).to_bytes();
+        let generation = config.generation().to_le_bytes();
+        let root_key = Pubkey::find_program_address(
+            &[
+                GENERAL_ROOT_PDA_DOMAIN_V2,
+                market.as_ref(),
+                &generation,
+                &config_id,
+            ],
+            &program_id,
+        )
+        .0;
+        let root =
+            GeneralRootV2::active(market.to_bytes(), config_id, config.generation()).expect("root");
         vec![
             account(market, false, Vec::new(), Pubkey::new_unique(), false),
+            account(root_key, false, root.to_bytes().to_vec(), program_id, false),
             account(
                 Pubkey::new_unique(),
                 false,
-                Vec::new(),
-                Pubkey::new_unique(),
-                false,
-            ),
-            account(
-                Pubkey::new_unique(),
-                false,
-                Vec::new(),
-                Pubkey::new_unique(),
-                true,
-            ),
-            account(program_id, false, Vec::new(), Pubkey::new_unique(), true),
-            account(
-                Pubkey::new_unique(),
-                false,
-                Vec::new(),
+                config_bytes.to_vec(),
                 Pubkey::new_unique(),
                 false,
             ),
@@ -935,26 +1243,138 @@ mod tests {
         }
     }
 
+    fn execute(
+        program_id: &Pubkey,
+        accounts: &[AccountInfo<'_>],
+        request: ControllerRequestV1,
+    ) -> ProgramResult {
+        process_instruction(
+            program_id,
+            accounts,
+            &request.to_bytes().expect("request bytes"),
+        )
+    }
+
+    fn process_instruction(
+        program_id: &Pubkey,
+        accounts: &[AccountInfo<'_>],
+        instruction_data: &[u8],
+    ) -> ProgramResult {
+        process_general_family(program_id, accounts, instruction_data)
+    }
+
     #[test]
     fn authenticated_consider_streams_and_commits_exact_certificate() {
         let program_id = Pubkey::new_unique();
         let market = Pubkey::new_unique();
         let frame = consider_frame(program_id, market);
-        process_authenticated(&program_id, &frame, consider_request(), id(90)).expect("consider");
+        execute(&program_id, &frame, consider_request()).expect("consider");
         let selection =
-            SelectionCursorV1::decode(&frame[5].try_borrow_data().expect("selection borrow"))
+            SelectionCursorV1::decode(&frame[3].try_borrow_data().expect("selection borrow"))
                 .expect("selection");
         assert_eq!(selection.best_candidate_id, Some(candidate().candidate_id));
         assert_eq!(selection.revision, 1);
         let certificate =
-            VerifiedCandidateV1::decode(&frame[7].try_borrow_data().expect("certificate borrow"))
+            VerifiedCandidateV1::decode(&frame[5].try_borrow_data().expect("certificate borrow"))
                 .expect("certificate");
         assert_eq!(certificate.complete_set_quantity, 1);
         assert_eq!(certificate.quote_surplus, 1);
         let verifier =
-            CandidateVerifierV1::decode(&frame[6].try_borrow_data().expect("verification borrow"))
+            CandidateVerifierV1::decode(&frame[4].try_borrow_data().expect("verification borrow"))
                 .expect("verification");
         assert!(verifier.is_complete());
+    }
+
+    #[test]
+    fn substituted_config_policy_and_inactive_root_refuse_before_state_change() {
+        let program_id = Pubkey::new_unique();
+        let market = Pubkey::new_unique();
+
+        let config_substitution = consider_frame(program_id, market);
+        let before = [
+            config_substitution[3]
+                .try_borrow_data()
+                .expect("selection")
+                .to_vec(),
+            config_substitution[4]
+                .try_borrow_data()
+                .expect("verification")
+                .to_vec(),
+            config_substitution[5]
+                .try_borrow_data()
+                .expect("certificate")
+                .to_vec(),
+        ];
+        config_substitution[2]
+            .try_borrow_mut_data()
+            .expect("config")
+            .get_mut(168)
+            .expect("selection policy byte")
+            .clone_from(&52);
+        assert_eq!(
+            execute(&program_id, &config_substitution, consider_request()),
+            Err(GeneralSbfError::ImmutableInput.into())
+        );
+        for (index, expected) in [(3, &before[0]), (4, &before[1]), (5, &before[2])] {
+            assert_eq!(
+                config_substitution[index]
+                    .try_borrow_data()
+                    .expect("unchanged state")
+                    .as_ref(),
+                expected.as_slice()
+            );
+        }
+
+        let mut policy_substitution = consider_frame(program_id, market);
+        let mut substituted_policy = policy();
+        substituted_policy.policy_id = id(52);
+        let substituted_policy_key = Pubkey::find_program_address(
+            &[
+                GENERAL_POLICY_PDA_DOMAIN_V1,
+                market.as_ref(),
+                &substituted_policy.policy_id,
+            ],
+            &program_id,
+        )
+        .0;
+        policy_substitution[7] = account(
+            substituted_policy_key,
+            false,
+            substituted_policy
+                .to_bytes()
+                .expect("substituted policy")
+                .to_vec(),
+            program_id,
+            false,
+        );
+        let verification_before = policy_substitution[4]
+            .try_borrow_data()
+            .expect("verification")
+            .to_vec();
+        assert_eq!(
+            execute(&program_id, &policy_substitution, consider_request()),
+            Err(GeneralSbfError::ImmutableInput.into())
+        );
+        assert_eq!(
+            policy_substitution[4]
+                .try_borrow_data()
+                .expect("unchanged verification")
+                .as_ref(),
+            verification_before.as_slice()
+        );
+
+        let inactive = consider_frame(program_id, market);
+        let mut root = GeneralRootV2::decode(&inactive[1].try_borrow_data().expect("root"))
+            .expect("active root");
+        root.begin_retiring(1).expect("retiring root");
+        inactive[1]
+            .try_borrow_mut_data()
+            .expect("root")
+            .copy_from_slice(&root.to_bytes());
+        assert_eq!(
+            execute(&program_id, &inactive, consider_request()),
+            Err(GeneralSbfError::ImmutableInput.into())
+        );
     }
 
     #[test]
@@ -962,37 +1382,36 @@ mod tests {
         let program_id = Pubkey::new_unique();
         let market = Pubkey::new_unique();
         let frame = consider_frame(program_id, market);
-        let selection_before = frame[5].try_borrow_data().expect("selection").to_vec();
-        let verification_before = frame[6].try_borrow_data().expect("verification").to_vec();
-        let certificate_before = frame[7].try_borrow_data().expect("certificate").to_vec();
-        frame[10].try_borrow_mut_data().expect("page")[16] ^= 1;
+        let selection_before = frame[3].try_borrow_data().expect("selection").to_vec();
+        let verification_before = frame[4].try_borrow_data().expect("verification").to_vec();
+        let certificate_before = frame[5].try_borrow_data().expect("certificate").to_vec();
+        frame[8].try_borrow_mut_data().expect("page")[16] ^= 1;
         assert_eq!(
-            process_authenticated(&program_id, &frame, consider_request(), id(90)),
+            execute(&program_id, &frame, consider_request()),
             Err(GeneralSbfError::Verification.into())
         );
         assert_eq!(
-            frame[5].try_borrow_data().expect("selection").as_ref(),
+            frame[3].try_borrow_data().expect("selection").as_ref(),
             selection_before.as_slice()
         );
         assert_eq!(
-            frame[6].try_borrow_data().expect("verification").as_ref(),
+            frame[4].try_borrow_data().expect("verification").as_ref(),
             verification_before.as_slice()
         );
         assert_eq!(
-            frame[7].try_borrow_data().expect("certificate").as_ref(),
+            frame[5].try_borrow_data().expect("certificate").as_ref(),
             certificate_before.as_slice()
         );
 
-        frame[10].try_borrow_mut_data().expect("page")[16] ^= 1;
-        process_authenticated(&program_id, &frame, consider_request(), id(90))
-            .expect("first consider");
-        let snapshot = frame[5].try_borrow_data().expect("selection").to_vec();
+        frame[8].try_borrow_mut_data().expect("page")[16] ^= 1;
+        execute(&program_id, &frame, consider_request()).expect("first consider");
+        let snapshot = frame[3].try_borrow_data().expect("selection").to_vec();
         assert_eq!(
-            process_authenticated(&program_id, &frame, consider_request(), id(90)),
+            execute(&program_id, &frame, consider_request()),
             Err(GeneralSbfError::Verification.into())
         );
         assert_eq!(
-            frame[5].try_borrow_data().expect("selection").as_ref(),
+            frame[3].try_borrow_data().expect("selection").as_ref(),
             snapshot.as_slice()
         );
     }
@@ -1002,11 +1421,10 @@ mod tests {
         let program_id = Pubkey::new_unique();
         let market = Pubkey::new_unique();
         let consider = consider_frame(program_id, market);
-        process_authenticated(&program_id, &consider, consider_request(), id(90))
-            .expect("consider");
+        execute(&program_id, &consider, consider_request()).expect("consider");
 
-        let selection_bytes = consider[5].try_borrow_data().expect("selection").to_vec();
-        let selection_key = *consider[5].key;
+        let selection_bytes = consider[3].try_borrow_data().expect("selection").to_vec();
+        let selection_key = *consider[3].key;
         let mut freeze = common(program_id, market);
         freeze.push(account(
             selection_key,
@@ -1022,7 +1440,7 @@ mod tests {
             page_index: 0,
             execution_index: 0,
         };
-        process_authenticated(&program_id, &freeze, freeze_request, id(90)).expect("freeze");
+        execute(&program_id, &freeze, freeze_request).expect("freeze");
 
         let candidate = candidate();
         let settlement_key = Pubkey::find_program_address(
@@ -1039,7 +1457,7 @@ mod tests {
             account(
                 selection_key,
                 false,
-                freeze[5].try_borrow_data().expect("selection").to_vec(),
+                freeze[3].try_borrow_data().expect("selection").to_vec(),
                 program_id,
                 false,
             ),
@@ -1051,16 +1469,16 @@ mod tests {
                 false,
             ),
             account(
-                *consider[7].key,
+                *consider[5].key,
                 false,
-                consider[7].try_borrow_data().expect("certificate").to_vec(),
+                consider[5].try_borrow_data().expect("certificate").to_vec(),
                 program_id,
                 false,
             ),
             account(
-                *consider[8].key,
+                *consider[6].key,
                 false,
-                consider[8].try_borrow_data().expect("candidate").to_vec(),
+                consider[6].try_borrow_data().expect("candidate").to_vec(),
                 program_id,
                 false,
             ),
@@ -1072,14 +1490,440 @@ mod tests {
             page_index: 0,
             execution_index: 0,
         };
-        process_authenticated(&program_id, &initialize, request, id(90)).expect("initialize");
+        execute(&program_id, &initialize, request).expect("initialize");
         let settlement =
-            SettlementCursorV1::decode(&initialize[6].try_borrow_data().expect("settlement"))
+            SettlementCursorV1::decode(&initialize[4].try_borrow_data().expect("settlement"))
                 .expect("settlement cursor");
         assert_eq!(settlement.phase, Phase::Collecting);
         assert_eq!(settlement.next_page, 0);
         assert_eq!(settlement.next_execution, 0);
         assert_eq!(settlement.claim_inventory, [0; MAX_OUTCOMES]);
         assert_eq!(settlement.quote_inventory, 0);
+    }
+
+    fn activation_fixture(
+        program_id: Pubkey,
+        core_program: Pubkey,
+        market: Pubkey,
+    ) -> (
+        Vec<AccountInfo<'static>>,
+        Vec<u8>,
+        CoreEffectEnvelopeV1,
+        GeneralActivationRequestV2,
+    ) {
+        let config = config();
+        let config_bytes = config.to_bytes();
+        let config_id = hash(&config_bytes).to_bytes();
+        let generation = config.generation().to_le_bytes();
+        let root_key = Pubkey::find_program_address(
+            &[
+                GENERAL_ROOT_PDA_DOMAIN_V2,
+                market.as_ref(),
+                &generation,
+                &config_id,
+            ],
+            &program_id,
+        )
+        .0;
+        let native_rent = CompartmentFundingV1::native_lamports(1).expect("native Rent");
+        let not_applicable = CompartmentFundingV1::not_applicable();
+        let quote = FundingQuoteV1::new(
+            FundingAmountsV1::new(
+                native_rent,
+                not_applicable,
+                not_applicable,
+                not_applicable,
+                not_applicable,
+                not_applicable,
+                not_applicable,
+            )
+            .expect("funding amounts"),
+            None,
+        )
+        .expect("funding quote");
+        let entry = CapabilityEntryV1::new(
+            content(GENERAL_CAPABILITY_KIND_ID_V1),
+            content(GENERAL_CAPABILITY_RELEASE_ID_V2),
+            content(config_id),
+            content(config.capacity_profile_id()),
+            content(GENERAL_CHILD_SCHEMA_ID_V2),
+            content(GENERAL_CHILD_DERIVATION_ID_V2),
+            ActivationPolicy::RequiredAtFounding,
+            0,
+            0,
+            [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+            quote,
+        )
+        .expect("General entry");
+        let mut manifest_bytes = vec![0; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
+        CapabilityManifestV1::encode_into(&[entry], &mut manifest_bytes).expect("manifest encodes");
+        let manifest_id = content(hash(&manifest_bytes).to_bytes());
+        let manifest = CapabilityManifestV1::decode(&manifest_bytes).expect("manifest");
+        let pending_custody =
+            FundingCustodyObservationV1::native_only(2, 1).expect("pending funding custody");
+        let mut funding = FundingStateV1::new(manifest_id, manifest, 0, pending_custody)
+            .expect("pending funding");
+        funding
+            .activate(manifest_id, manifest, pending_custody, 44)
+            .expect("active funding");
+        let funding_derivation = CapabilityFundingDerivationV1::new(
+            market.to_bytes(),
+            config.generation(),
+            manifest_id,
+            manifest,
+            funding,
+        )
+        .expect("funding derivation");
+        let funding_key =
+            Pubkey::find_program_address(&funding_derivation.seed_components(), &program_id).0;
+        let rent_credit = Pubkey::new_unique();
+        let request = GeneralActivationRequestV2::new(
+            root_key.to_bytes(),
+            config_id,
+            manifest_id.to_bytes(),
+            funding_key.to_bytes(),
+            rent_credit.to_bytes(),
+            0,
+            44,
+            1,
+            1,
+        )
+        .expect("activation request");
+        let request_bytes = request.to_bytes();
+        let request_digest = core_identity(hash(&request_bytes).to_bytes());
+        let release = core_identity(id(71));
+        let context = core_identity(id(72));
+        let parent = core_identity(id(73));
+        let provisional = CoreEffectEnvelopeV1::new(
+            CoreEffectActionV1::ActivateCapability,
+            Role::Trading,
+            core_identity(core_program.to_bytes()),
+            core_identity(id(74)),
+            release,
+            core_identity(market.to_bytes()),
+            context,
+            parent,
+            request_digest,
+            config.generation(),
+            0,
+            0,
+            u32::try_from(request_bytes.len()).expect("request width"),
+        )
+        .expect("provisional envelope");
+        let authority = Pubkey::find_program_address(
+            &provisional
+                .caller_authority_seeds()
+                .expect("authority seeds")
+                .as_slices(),
+            &core_program,
+        )
+        .0;
+        let envelope = CoreEffectEnvelopeV1::new(
+            CoreEffectActionV1::ActivateCapability,
+            Role::Trading,
+            core_identity(core_program.to_bytes()),
+            core_identity(authority.to_bytes()),
+            release,
+            core_identity(market.to_bytes()),
+            context,
+            parent,
+            request_digest,
+            config.generation(),
+            0,
+            0,
+            u32::try_from(request_bytes.len()).expect("request width"),
+        )
+        .expect("envelope");
+        let root =
+            GeneralRootV2::active(market.to_bytes(), config_id, config.generation()).expect("root");
+        let accounts = vec![
+            account_with(
+                authority,
+                true,
+                false,
+                1,
+                Vec::new(),
+                system_program::ID,
+                false,
+            ),
+            account_with(
+                core_program,
+                false,
+                false,
+                1,
+                Vec::new(),
+                Pubkey::new_unique(),
+                true,
+            ),
+            account_with(
+                root_key,
+                false,
+                true,
+                1,
+                root.to_bytes().to_vec(),
+                program_id,
+                false,
+            ),
+            account_with(
+                Pubkey::new_unique(),
+                false,
+                false,
+                1,
+                config_bytes.to_vec(),
+                Pubkey::new_unique(),
+                false,
+            ),
+            account_with(
+                Pubkey::new_unique(),
+                false,
+                false,
+                1,
+                manifest_bytes,
+                Pubkey::new_unique(),
+                false,
+            ),
+            account_with(
+                funding_key,
+                false,
+                true,
+                1,
+                funding.to_bytes().to_vec(),
+                program_id,
+                false,
+            ),
+            account_with(
+                rent_credit,
+                false,
+                true,
+                1,
+                Vec::new(),
+                system_program::ID,
+                false,
+            ),
+            account_with(
+                system_program::ID,
+                false,
+                false,
+                1,
+                Vec::new(),
+                Pubkey::new_unique(),
+                true,
+            ),
+        ];
+        let mut instruction = Vec::from(envelope.encode().expect("envelope bytes"));
+        instruction.extend_from_slice(&request_bytes);
+        (accounts, instruction, envelope, request)
+    }
+
+    #[test]
+    fn exact_core_activation_replay_returns_authenticated_ack() {
+        let program_id = Pubkey::new_unique();
+        let core_program = Pubkey::new_unique();
+        let market = Pubkey::new_unique();
+        let (accounts, instruction, envelope, _request) =
+            activation_fixture(program_id, core_program, market);
+        let root_before = accounts[2].try_borrow_data().expect("root").to_vec();
+        process_instruction(&program_id, &accounts, &instruction).expect("activation replay");
+        assert_eq!(
+            accounts[2].try_borrow_data().expect("root").as_ref(),
+            root_before.as_slice()
+        );
+        let root = GeneralRootV2::decode(&accounts[2].try_borrow_data().expect("root"))
+            .expect("decode root");
+        let funding = FundingStateV1::decode(&accounts[5].try_borrow_data().expect("funding"))
+            .expect("decode funding");
+        let ack = activation_handler::activation_ack(
+            &program_id,
+            envelope,
+            &instruction[..CORE_EFFECT_ENVELOPE_BYTES_V1],
+            &instruction[CORE_EFFECT_ENVELOPE_BYTES_V1..],
+            root,
+            funding,
+        )
+        .expect("activation ack");
+        let envelope_length = u32::try_from(CORE_EFFECT_ENVELOPE_BYTES_V1)
+            .expect("envelope width")
+            .to_le_bytes();
+        let request_length = u32::try_from(GENERAL_ACTIVATION_REQUEST_BYTES_V2)
+            .expect("request width")
+            .to_le_bytes();
+        let effect_digest = core_identity(
+            hashv(&[
+                &CORE_EFFECT_DIGEST_DOMAIN_V1,
+                &envelope_length,
+                &instruction[..CORE_EFFECT_ENVELOPE_BYTES_V1],
+                &request_length,
+                &instruction[CORE_EFFECT_ENVELOPE_BYTES_V1..],
+            ])
+            .to_bytes(),
+        );
+        ack.validate_for(
+            envelope,
+            core_identity(program_id.to_bytes()),
+            effect_digest,
+        )
+        .expect("ack validates");
+        assert_eq!(ack.pre_resource_a_revision(), 0);
+        assert_eq!(ack.post_resource_a_revision(), 1);
+        assert_eq!(ack.pre_resource_b_revision(), 0);
+        assert_eq!(ack.post_resource_b_revision(), 1);
+    }
+
+    #[test]
+    fn hostile_core_authority_manifest_config_and_rent_refuse_without_state_change() {
+        let program_id = Pubkey::new_unique();
+        let core_program = Pubkey::new_unique();
+        let market = Pubkey::new_unique();
+
+        let (mut authority_substitution, instruction, _, _) =
+            activation_fixture(program_id, core_program, market);
+        let root_before = authority_substitution[2]
+            .try_borrow_data()
+            .expect("root")
+            .to_vec();
+        let funding_before = authority_substitution[5]
+            .try_borrow_data()
+            .expect("funding")
+            .to_vec();
+        authority_substitution[0] = account_with(
+            Pubkey::new_unique(),
+            true,
+            false,
+            1,
+            Vec::new(),
+            system_program::ID,
+            false,
+        );
+        assert_eq!(
+            process_instruction(&program_id, &authority_substitution, &instruction),
+            Err(GeneralSbfError::RootActivation.into())
+        );
+        assert_eq!(
+            authority_substitution[2]
+                .try_borrow_data()
+                .expect("unchanged root")
+                .as_ref(),
+            root_before.as_slice()
+        );
+        assert_eq!(
+            authority_substitution[5]
+                .try_borrow_data()
+                .expect("unchanged funding")
+                .as_ref(),
+            funding_before.as_slice()
+        );
+
+        let (manifest_substitution, instruction, _, _) =
+            activation_fixture(program_id, core_program, market);
+        let root_before = manifest_substitution[2]
+            .try_borrow_data()
+            .expect("root")
+            .to_vec();
+        let funding_before = manifest_substitution[5]
+            .try_borrow_data()
+            .expect("funding")
+            .to_vec();
+        manifest_substitution[4]
+            .try_borrow_mut_data()
+            .expect("manifest")
+            .get_mut(16)
+            .expect("manifest entry")
+            .clone_from(&0x7f);
+        assert_eq!(
+            process_instruction(&program_id, &manifest_substitution, &instruction),
+            Err(GeneralSbfError::RootActivation.into())
+        );
+        assert_eq!(
+            manifest_substitution[2]
+                .try_borrow_data()
+                .expect("unchanged root")
+                .as_ref(),
+            root_before.as_slice()
+        );
+        assert_eq!(
+            manifest_substitution[5]
+                .try_borrow_data()
+                .expect("unchanged funding")
+                .as_ref(),
+            funding_before.as_slice()
+        );
+
+        let (config_substitution, instruction, _, _) =
+            activation_fixture(program_id, core_program, market);
+        let root_before = config_substitution[2]
+            .try_borrow_data()
+            .expect("root")
+            .to_vec();
+        let funding_before = config_substitution[5]
+            .try_borrow_data()
+            .expect("funding")
+            .to_vec();
+        config_substitution[3]
+            .try_borrow_mut_data()
+            .expect("config")
+            .get_mut(168)
+            .expect("policy byte")
+            .clone_from(&52);
+        assert_eq!(
+            process_instruction(&program_id, &config_substitution, &instruction),
+            Err(GeneralSbfError::RootActivation.into())
+        );
+        assert_eq!(
+            config_substitution[2]
+                .try_borrow_data()
+                .expect("unchanged root")
+                .as_ref(),
+            root_before.as_slice()
+        );
+        assert_eq!(
+            config_substitution[5]
+                .try_borrow_data()
+                .expect("unchanged funding")
+                .as_ref(),
+            funding_before.as_slice()
+        );
+
+        let (mut rent_substitution, instruction, _, _) =
+            activation_fixture(program_id, core_program, market);
+        let rent_root_key = *rent_substitution[2].key;
+        let rent_root_bytes = rent_substitution[2]
+            .try_borrow_data()
+            .expect("root")
+            .to_vec();
+        rent_substitution[2] = account_with(
+            rent_root_key,
+            false,
+            true,
+            2,
+            rent_root_bytes,
+            program_id,
+            false,
+        );
+        let root_before = rent_substitution[2]
+            .try_borrow_data()
+            .expect("root")
+            .to_vec();
+        let funding_before = rent_substitution[5]
+            .try_borrow_data()
+            .expect("funding")
+            .to_vec();
+        assert_eq!(
+            process_instruction(&program_id, &rent_substitution, &instruction),
+            Err(GeneralSbfError::RootActivation.into())
+        );
+        assert_eq!(
+            rent_substitution[2]
+                .try_borrow_data()
+                .expect("unchanged root")
+                .as_ref(),
+            root_before.as_slice()
+        );
+        assert_eq!(
+            rent_substitution[5]
+                .try_borrow_data()
+                .expect("unchanged funding")
+                .as_ref(),
+            funding_before.as_slice()
+        );
     }
 }
