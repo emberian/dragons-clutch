@@ -141,6 +141,66 @@ a { color: inherit; }
 .local-provenance { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
 .local-provenance span { padding: 7px 9px; border: 1px solid var(--line); border-radius: 7px; color: #647269; font: 8px var(--font-geist-mono); }
 
+/* Chain-derived operator surface */
+.operator-shell { padding-bottom: 90px; }
+.operator-hero { display: grid; grid-template-columns: minmax(0,1.5fr) minmax(380px,.72fr); gap: 60px; align-items: end; padding: clamp(58px,7vw,96px) 0 42px; }
+.operator-hero h1 { margin-top: 12px; font-size: clamp(44px,5.5vw,76px); }
+.operator-hero h1 em { color: var(--acid); font-style: normal; }
+.operator-hero > div > p:last-child { max-width: 760px; margin: 24px 0 0; color: var(--muted); font-size: 15px; line-height: 1.65; }
+.operator-counts { display: grid; grid-template-columns: repeat(3,1fr); gap: 1px; overflow: hidden; border: 1px solid var(--line); border-radius: 13px; background: var(--line); }
+.operator-counts article { min-width: 0; padding: 19px 15px; background: rgba(8,16,12,.96); }
+.operator-counts strong, .operator-counts span { display: block; }
+.operator-counts strong { color: var(--acid); font: 500 28px var(--font-geist-mono); }
+.operator-counts span { margin-top: 8px; color: #718077; font: 8px/1.45 var(--font-geist-mono); text-transform: uppercase; }
+.operator-inspector, .operator-wave, .operator-handoff { margin-top: 16px; padding: 25px; border: 1px solid var(--line); border-radius: 16px; background: rgba(9,18,13,.8); box-shadow: 0 26px 70px rgba(0,0,0,.16); }
+.operator-inspector > header, .operator-wave > header, .operator-handoff > header { display: grid; grid-template-columns: 34px 1fr; gap: 13px; align-items: start; margin-bottom: 22px; }
+.operator-inspector > header > span, .operator-wave > header > span, .operator-handoff > header > span { color: var(--acid); font: 10px var(--font-geist-mono); }
+.operator-inspector h2, .operator-wave h2, .operator-handoff h2 { margin: 0; font-size: 18px; }
+.operator-inspector header p, .operator-wave header p, .operator-handoff header p { max-width: 850px; margin: 7px 0 0; color: #75837a; font-size: 10px; line-height: 1.55; }
+.operator-coordinate-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; }
+.operator-coordinate-grid .wide { grid-column: span 2; }
+.operator-coordinate-grid label > span, .operator-handoff label > span { display: block; margin-bottom: 7px; color: #708077; font: 8px var(--font-geist-mono); text-transform: uppercase; letter-spacing: .06em; }
+.operator-inspector > button { width: auto; min-width: 230px; margin-top: 15px; }
+.operator-role-grid { display: grid; grid-template-columns: repeat(6,1fr); gap: 1px; margin-top: 18px; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: var(--line); }
+.operator-role-grid article { min-width: 0; padding: 14px; background: rgba(5,12,8,.96); }
+.operator-role-grid span, .operator-role-grid strong, .operator-role-grid small { display: block; overflow-wrap: anywhere; }
+.operator-role-grid span { color: var(--acid); font: 8px var(--font-geist-mono); text-transform: uppercase; }
+.operator-role-grid strong { margin-top: 9px; font: 10px var(--font-geist-mono); }
+.operator-role-grid small { margin-top: 6px; color: #617067; font: 7px/1.5 var(--font-geist-mono); }
+.operator-family-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; }
+.operator-family-grid > article { min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: 11px; background: rgba(3,9,6,.55); }
+.operator-family-grid h3 { margin: 0 0 13px; color: #d4ddd6; font-size: 14px; }
+.operator-action { padding: 13px 0; border-top: 1px solid var(--line); }
+.operator-action strong { display: block; margin-top: 9px; font-size: 10px; line-height: 1.45; }
+.operator-action p { margin: 6px 0 0; color: #66756c; font-size: 8px; line-height: 1.55; }
+.operator-action a { display: inline-block; margin-top: 8px; color: var(--acid); font: 8px var(--font-geist-mono); text-decoration: none; }
+.operator-status { display: inline-block; padding: 4px 6px; border: 1px solid var(--line); border-radius: 5px; color: #88968d; font: 7px var(--font-geist-mono); text-transform: uppercase; }
+.operator-status.constructible { color: var(--acid); border-color: rgba(185,255,100,.24); background: rgba(185,255,100,.05); }
+.operator-status.request-only { color: #efd784; border-color: rgba(239,215,132,.22); background: rgba(239,215,132,.04); }
+.operator-status.awaiting-abi { color: #ff9b88; border-color: rgba(255,126,102,.2); background: rgba(255,126,102,.035); }
+.operator-handoff-grid { display: grid; grid-template-columns: minmax(0,1fr) 360px; gap: 14px; }
+.operator-handoff-grid form, .operator-handoff-grid aside { padding: 18px; border: 1px solid var(--line); border-radius: 11px; background: rgba(4,10,7,.65); }
+.operator-handoff textarea { min-height: 140px; font: 9px/1.5 var(--font-geist-mono); }
+.operator-handoff form button, .operator-handoff aside button { width: auto; margin-top: 12px; }
+.operator-handoff aside h3 { margin: 12px 0 0; font: 13px var(--font-geist-mono); }
+.operator-handoff aside > p { color: #69776e; font-size: 9px; line-height: 1.5; }
+.operator-handoff aside dl { margin: 18px 0 0; border-top: 1px solid var(--line); }
+.operator-handoff aside dl div { display: flex; justify-content: space-between; gap: 16px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.operator-handoff aside dt { color: #65736a; font-size: 8px; }
+.operator-handoff aside dd { margin: 0; font: 8px var(--font-geist-mono); text-align: right; }
+
+@media (max-width: 1050px) {
+  .operator-hero, .operator-handoff-grid { grid-template-columns: 1fr; }
+  .operator-coordinate-grid, .operator-family-grid { grid-template-columns: repeat(2,1fr); }
+  .operator-role-grid { grid-template-columns: repeat(3,1fr); }
+}
+@media (max-width: 680px) {
+  .operator-hero { gap: 28px; }
+  .operator-counts, .operator-coordinate-grid, .operator-family-grid, .operator-role-grid { grid-template-columns: 1fr; }
+  .operator-coordinate-grid .wide { grid-column: auto; }
+  .operator-inspector, .operator-wave, .operator-handoff { padding: 17px; }
+}
+
 /* Product preview */
 .product-shell { width: min(1420px, calc(100% - 48px)); margin: 0 auto; padding-bottom: 60px; }
 .product-nav { min-height: 72px; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; border-bottom: 1px solid var(--line); }
