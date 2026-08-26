@@ -23,6 +23,7 @@ use dclutch_account_profile_contract::{
     },
     v2::{
         AccountPrestateV2, AccountProfileV2, ProjectionRegistersV2,
+        DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE,
         SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2, TrustedEnvironmentV2,
         derive_effect_permissions, project_atomic as project_accounts_atomic,
         project_tail_count_atomic,
@@ -1668,7 +1669,7 @@ fn expand_runtime_accounts_v3<'accounts, 'info>(
     injected: [&'accounts AccountInfo<'info>; 5],
     supplied_suffix: &'accounts [AccountInfo<'info>],
 ) -> Result<Vec<&'accounts AccountInfo<'info>>, ProgramError> {
-    let dynamic = profile.dynamic_fixed_span_count() != 0;
+    let dynamic = profile.artifact_profile() == DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE;
     let logical_count = if dynamic {
         profile
             .logical_account_count_with_dynamic_spans(tail_count, span_counts)
@@ -1752,7 +1753,7 @@ fn downgraded_effect_accounts_v3<'info>(
     span_counts: &[u32],
     logical_accounts: &[&AccountInfo<'info>],
 ) -> Result<Vec<AccountInfo<'info>>, ProgramError> {
-    if profile.dynamic_fixed_span_count() != 0 {
+    if profile.artifact_profile() == DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE {
         return downgrade_dynamic_child_accounts_v4(
             profile,
             tail_count,
@@ -4972,7 +4973,7 @@ mod tests {
     use super::*;
     use dclutch_account_profile_contract::lifecycle_v3::CreateStatePlanV3;
     use dclutch_account_profile_contract::v2::{
-        AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES, AccountPrestateV2,
+        AccountPrestateV2, DYNAMIC_FIXED_SPAN_HEADER_BYTES,
         HEADER_BYTES as ACCOUNT_PROFILE_HEADER_BYTES,
         OPERATION_BYTES as ACCOUNT_PROFILE_OPERATION_BYTES,
         RULE_BYTES as ACCOUNT_PROFILE_RULE_BYTES, TrustedBuiltinIdentityV2, TrustedEnvironmentV2,
@@ -4982,7 +4983,7 @@ mod tests {
             AccountOperationInputV2, AccountPrivilegesV2, AccountProfileArtifactV2,
             AccountRuleInputV2, AccountRuleWithPrestateInputV2, RegisterGeometryV2,
             ScalarCoordinateV2, encode_account_profile_v2_atomic,
-            encode_account_profile_with_authenticated_route_alias_v2_atomic,
+            encode_account_profile_with_dynamic_fixed_span_v2_atomic,
         },
     };
     use dclutch_transition_vm::v3::{
@@ -5049,7 +5050,7 @@ mod tests {
     }
 
     #[test]
-    fn authenticated_route_aliases_expand_once_and_downgrade_child_privileges() {
+    fn profile13_zero_spans_expand_aliases_and_downgrade_child_privileges() {
         const READONLY: AccountPrivilegesV2 = AccountPrivilegesV2::new(false, false, false);
         const WRITABLE: AccountPrivilegesV2 = AccountPrivilegesV2::new(false, true, false);
         const NO_EFFECTS: AccountEffectPermissionsV2 =
@@ -5084,7 +5085,7 @@ mod tests {
             exact(READONLY),
             alias,
         ];
-        let width = AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES
+        let width = DYNAMIC_FIXED_SPAN_HEADER_BYTES
             .checked_add(
                 rules
                     .len()
@@ -5094,12 +5095,12 @@ mod tests {
             .expect("width");
         let mut scratch = vec![0_u8; width];
         let mut bytes = vec![0_u8; width];
-        encode_account_profile_with_authenticated_route_alias_v2_atomic(
+        encode_account_profile_with_dynamic_fixed_span_v2_atomic(
             TrustedEnvironmentV2::None,
             TrustedIdentityEnvironmentV2::None,
             TrustedBuiltinIdentityV2::SystemProgram { destination: 0 },
-            &rules,
             &[],
+            &rules,
             &[],
             &[],
             RegisterGeometryV2 {
@@ -5111,8 +5112,10 @@ mod tests {
             &mut scratch,
             &mut bytes,
         )
-        .expect("profile11");
-        let profile = AccountProfileV2::decode(&bytes).expect("decode profile11");
+        .expect("profile13 zero spans");
+        let profile = AccountProfileV2::decode(&bytes).expect("decode profile13");
+        assert_eq!(profile.artifact_profile(), DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE);
+        assert_eq!(profile.dynamic_fixed_span_count(), 0);
 
         let make_account = |writable| {
             let key = Box::leak(Box::new(Pubkey::new_unique()));
