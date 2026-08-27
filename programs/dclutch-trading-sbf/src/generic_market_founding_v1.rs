@@ -1290,6 +1290,57 @@ mod tests {
     }
 
     #[test]
+    fn the_heap_profile_slot_admits_only_the_instructions_sysvar() {
+        let sysvar = solana_sdk_ids::sysvar::instructions::ID;
+        let other = solana_program::pubkey::Pubkey::new_from_array([9; 32]);
+        let owner = solana_sdk_ids::sysvar::ID;
+
+        // The one admissible shape: the canonical sysvar, readonly, unsigned,
+        // and not executable. Nothing about its contents is asserted here - the
+        // adapter re-derives the grant from those bytes and applies agave's own
+        // sanitize bounds to them.
+        let mut lamports = 1_u64;
+        let mut data = [0_u8; 0];
+        assert_eq!(
+            authenticate_instructions_sysvar_v1(&AccountInfo::new(
+                &sysvar,
+                false,
+                false,
+                &mut lamports,
+                &mut data,
+                &owner,
+                false,
+            )),
+            Ok(())
+        );
+
+        // Every substitution an assembler could make in that slot. A frame that
+        // cannot deliver the heap this route is declared to need has to refuse
+        // here, not run out of memory four stages later.
+        for (key, signer, writable, executable) in [
+            (&other, false, false, false),
+            (&sysvar, true, false, false),
+            (&sysvar, false, true, false),
+            (&sysvar, false, false, true),
+        ] {
+            let mut lamports = 1_u64;
+            let mut data = [0_u8; 0];
+            assert_eq!(
+                authenticate_instructions_sysvar_v1(&AccountInfo::new(
+                    key,
+                    signer,
+                    writable,
+                    &mut lamports,
+                    &mut data,
+                    &owner,
+                    executable,
+                )),
+                Err(TradingSbfError::Content.into()),
+            );
+        }
+    }
+
+    #[test]
     fn frame_width_is_runtime_funding_polymorphic() {
         let count = |funding: usize| {
             GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V1
