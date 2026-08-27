@@ -661,7 +661,7 @@ fn common_metas_for_bytes(
     request: CustodyRequestV1,
     request_bytes: &[u8],
 ) -> Vec<AccountMeta> {
-    let digest = hash(&request_bytes).to_bytes();
+    let digest = hash(request_bytes).to_bytes();
     let authority = Pubkey::find_program_address(
         &CallerAuthoritySeedsV1::new(
             ContentId::new(request.release_set).expect("release set"),
