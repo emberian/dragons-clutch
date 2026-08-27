@@ -37,10 +37,23 @@ use solana_program::{hash::hash, pubkey::Pubkey};
 
 fn obligation_bytes(values: &[u64], lp: u64) -> Vec<u8> {
     let mut bytes = vec![0; DEALER_OBLIGATION_HEADER_BYTES_V3 + values.len() * 8];
-    bytes[..8].copy_from_slice(&DEALER_OBLIGATION_MAGIC_V3);
-    bytes[8..10].copy_from_slice(&DEALER_OBLIGATION_VERSION_V3.to_le_bytes());
-    bytes[12..16].copy_from_slice(&(values.len() as u32).to_le_bytes());
-    bytes[16..24].copy_from_slice(&9_u64.to_le_bytes());
+    bytes
+        .get_mut(..8)
+        .expect("obligation offset in bounds")
+        .copy_from_slice(&DEALER_OBLIGATION_MAGIC_V3);
+    bytes
+        .get_mut(8..10)
+        .expect("obligation offset in bounds")
+        .copy_from_slice(&DEALER_OBLIGATION_VERSION_V3.to_le_bytes());
+    let value_count = u32::try_from(values.len()).expect("obligation value count fits in u32");
+    bytes
+        .get_mut(12..16)
+        .expect("obligation offset in bounds")
+        .copy_from_slice(&value_count.to_le_bytes());
+    bytes
+        .get_mut(16..24)
+        .expect("obligation offset in bounds")
+        .copy_from_slice(&9_u64.to_le_bytes());
     for (offset, value) in [
         (24, [1; 32]),
         (56, [2; 32]),
@@ -48,12 +61,21 @@ fn obligation_bytes(values: &[u64], lp: u64) -> Vec<u8> {
         (120, [4; 32]),
         (152, [5; 32]),
     ] {
-        bytes[offset..offset + 32].copy_from_slice(&value);
+        bytes
+            .get_mut(offset..offset + 32)
+            .expect("obligation offset in bounds")
+            .copy_from_slice(&value);
     }
-    bytes[184..192].copy_from_slice(&lp.to_le_bytes());
+    bytes
+        .get_mut(184..192)
+        .expect("obligation offset in bounds")
+        .copy_from_slice(&lp.to_le_bytes());
     for (index, value) in values.iter().enumerate() {
         let offset = DEALER_OBLIGATION_HEADER_BYTES_V3 + index * 8;
-        bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+        bytes
+            .get_mut(offset..offset + 8)
+            .expect("obligation offset in bounds")
+            .copy_from_slice(&value.to_le_bytes());
     }
     bytes
 }
@@ -148,14 +170,35 @@ fn fixture() -> Fixture {
 
 fn program_set(selector: u16) -> Vec<u8> {
     let mut bytes = vec![0; 72];
-    bytes[..8].copy_from_slice(b"DCLTCPS1");
-    bytes[8..10].copy_from_slice(&1_u16.to_le_bytes());
-    bytes[10..12].copy_from_slice(&1_u16.to_le_bytes());
-    bytes[12..16].copy_from_slice(&DEALER_EQUITY_SELECTOR_OFFSET_V3.to_le_bytes());
-    bytes[16] = 2;
-    bytes[18..20].copy_from_slice(&1_u16.to_le_bytes());
-    bytes[32..36].copy_from_slice(&u32::from(selector).to_le_bytes());
-    bytes[36..68].copy_from_slice(&[42; 32]);
+    bytes
+        .get_mut(..8)
+        .expect("program set offset in bounds")
+        .copy_from_slice(b"DCLTCPS1");
+    bytes
+        .get_mut(8..10)
+        .expect("program set offset in bounds")
+        .copy_from_slice(&1_u16.to_le_bytes());
+    bytes
+        .get_mut(10..12)
+        .expect("program set offset in bounds")
+        .copy_from_slice(&1_u16.to_le_bytes());
+    bytes
+        .get_mut(12..16)
+        .expect("program set offset in bounds")
+        .copy_from_slice(&DEALER_EQUITY_SELECTOR_OFFSET_V3.to_le_bytes());
+    *bytes.get_mut(16).expect("program set offset in bounds") = 2;
+    bytes
+        .get_mut(18..20)
+        .expect("program set offset in bounds")
+        .copy_from_slice(&1_u16.to_le_bytes());
+    bytes
+        .get_mut(32..36)
+        .expect("program set offset in bounds")
+        .copy_from_slice(&u32::from(selector).to_le_bytes());
+    bytes
+        .get_mut(36..68)
+        .expect("program set offset in bounds")
+        .copy_from_slice(&[42; 32]);
     bytes
 }
 
@@ -293,7 +336,10 @@ fn runtime_width_equity_request_is_chain_derived_and_rejoins_physical_intent() {
     assert_eq!(request.claims_packet().len(), 464);
     assert_eq!(
         request.claims_packet().as_ptr(),
-        request_bytes[DEALER_EQUITY_HEADER_BYTES_V3..].as_ptr()
+        request_bytes
+            .get(DEALER_EQUITY_HEADER_BYTES_V3..)
+            .expect("request offset in bounds")
+            .as_ptr()
     );
     let mut decoded_claims = [0; 3];
     let intent = materialize_equity_intent_v3(request, chain, &mut decoded_claims).expect("intent");
@@ -380,7 +426,7 @@ fn runtime_width_equity_request_is_chain_derived_and_rejoins_physical_intent() {
     assert_eq!(composition.custody().count(), 1);
 
     let mut reversed = effect_bytes.clone();
-    reversed[32] = 1;
+    *reversed.get_mut(32).expect("effect offset in bounds") = 1;
     assert!(
         authenticate_dealer_equity_routes_v3(
             EffectProgramV3::decode(&reversed).expect("reversed structural effect"),
@@ -617,7 +663,7 @@ fn proportional_contribution_and_redemption_are_physical() {
                     AFFINE_BATCH_PLAN_MAGIC_V2
                 );
             }
-            _ => panic!("action-specific Custody successor"),
+            _ => unreachable!("action-specific Custody successor"),
         }
     }
 }
