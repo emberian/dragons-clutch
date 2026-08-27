@@ -14,6 +14,16 @@ use core::convert::TryInto;
 
 /// Typed funding quotes, custody observations, PDA projections, and transitions.
 pub mod funding;
+/// Lean-emitted byte coordinates for the `DCLTCAP1` manifest, the `DCLTFQ01`
+/// typed funding quote, the `DCLTCFS1` funding state, and the `DCLTMOR1`
+/// opening-readiness record.
+///
+/// This module is the crate's single authority for every width, offset, magic
+/// and seed domain in the family; the constants below are projections of it.
+/// Some coordinates this crate does not itself read are still emitted, because
+/// the same Lean schema also drives the browser's shared manifest decoder.
+#[allow(missing_docs, dead_code)]
+pub(crate) mod generated_abi;
 /// SDK-free readiness account frames and state-transition planning.
 pub mod readiness_frame;
 /// Exact readiness instruction wires without SVM dependencies.
@@ -27,34 +37,34 @@ pub use template::*;
 pub use dclutch_core_contract::ContentId;
 
 /// Exact manifest header width.
-pub const MANIFEST_HEADER_BYTES: usize = 16;
+pub const MANIFEST_HEADER_BYTES: usize = generated_abi::CAPABILITY_MANIFEST_HEADER_BYTES_V1;
 /// Exact profile-1 capability-entry width.
-pub const CAPABILITY_ENTRY_BYTES: usize = 528;
+pub const CAPABILITY_ENTRY_BYTES: usize = generated_abi::CAPABILITY_ENTRY_BYTES_V1;
 /// Exact transient Market-opening readiness width.
-pub const MARKET_OPENING_READINESS_BYTES: usize = 128;
+pub const MARKET_OPENING_READINESS_BYTES: usize = generated_abi::MARKET_OPENING_READINESS_BYTES_V1;
 /// Chain-derived maximum byte width of one Solana PDA seed component.
 pub const SVM_MAX_PDA_SEED_BYTES: usize = 32;
 /// Maximum profile-1 manifest byte width.
-pub const MAX_MANIFEST_BYTES: usize =
-    MANIFEST_HEADER_BYTES + MAX_CAPABILITIES * CAPABILITY_ENTRY_BYTES;
+pub const MAX_MANIFEST_BYTES: usize = generated_abi::CAPABILITY_MANIFEST_MAX_BYTES_V1;
 
 /// Provisional artifact-profile bound on capability entries.
 ///
 /// This is neither a mathematical nor a product limit. The lifting plan is a
 /// new manifest artifact profile with a wider layout, preserving profile-1
 /// content identities and founding new Markets against the wider preimage.
-pub const MAX_CAPABILITIES: usize = 16;
+pub const MAX_CAPABILITIES: usize = generated_abi::MAX_CAPABILITIES_V1;
 /// Provisional artifact-profile bound on dependencies per entry.
 ///
 /// Dependencies are sorted entry indices rather than globally assigned bits.
 /// A later artifact profile may widen this array without introducing a closed
 /// capability-kind registry.
-pub const MAX_DEPENDENCIES_PER_CAPABILITY: usize = 16;
+pub const MAX_DEPENDENCIES_PER_CAPABILITY: usize =
+    generated_abi::MAX_DEPENDENCIES_PER_CAPABILITY_V1;
 
 /// Canonical manifest magic.
-pub const MANIFEST_MAGIC: [u8; 8] = *b"DCLTCAP1";
+pub const MANIFEST_MAGIC: [u8; 8] = generated_abi::CAPABILITY_MANIFEST_MAGIC_V1;
 /// Implemented manifest schema version.
-pub const MANIFEST_SCHEMA_VERSION: u16 = 1;
+pub const MANIFEST_SCHEMA_VERSION: u16 = generated_abi::CAPABILITY_MANIFEST_SCHEMA_VERSION_V1;
 /// Opaque schema/validator-release identity for canonical profile-1 manifests.
 ///
 /// The SVM adapter and offchain operators share this semantic owner when they
@@ -68,53 +78,59 @@ pub const CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
     0x2f, 0x43, 0x4c, 0x4b, 0xc4, 0x20, 0xee, 0xfd, 0x0f, 0x7a, 0x15, 0x0a, 0x90, 0x82, 0x88, 0xdf,
 ];
 /// Implemented provisional artifact profile.
-pub const ARTIFACT_PROFILE_V1: u16 = 1;
+pub const ARTIFACT_PROFILE_V1: u16 = generated_abi::CAPABILITY_MANIFEST_ARTIFACT_PROFILE_V1;
 /// Canonical transient Market-opening readiness magic.
-pub const MARKET_OPENING_READINESS_MAGIC: [u8; 8] = *b"DCLTMOR1";
+pub const MARKET_OPENING_READINESS_MAGIC: [u8; 8] =
+    generated_abi::MARKET_OPENING_READINESS_MAGIC_V1;
 /// Implemented Market-opening readiness schema.
-pub const MARKET_OPENING_READINESS_SCHEMA_VERSION: u16 = 1;
+pub const MARKET_OPENING_READINESS_SCHEMA_VERSION: u16 =
+    generated_abi::MARKET_OPENING_READINESS_SCHEMA_VERSION_V1;
 /// Adapter PDA seed domain for one transient Market-opening readiness child.
 ///
 /// This crate derives no Solana address. The adapter derives it from this
 /// domain plus exact Market key and generation, then authenticates the record.
-pub const MARKET_OPENING_READINESS_PDA_DOMAIN: &[u8] = b"dclutch/open-readiness/v1";
+pub const MARKET_OPENING_READINESS_PDA_DOMAIN: &[u8] =
+    generated_abi::MARKET_OPENING_READINESS_PDA_DOMAIN_V1;
 
 /// The exact canonical empty-manifest preimage.
 pub const EMPTY_MANIFEST_BYTES: [u8; MANIFEST_HEADER_BYTES] = [
     b'D', b'C', b'L', b'T', b'C', b'A', b'P', b'1', 1, 0, 1, 0, 0, 0, 0, 0,
 ];
 
-const MANIFEST_SCHEMA_OFFSET: usize = 8;
-const MANIFEST_PROFILE_OFFSET: usize = 10;
-const MANIFEST_COUNT_OFFSET: usize = 12;
-const MANIFEST_RESERVED_OFFSET: usize = 14;
-const MANIFEST_RESERVED_BYTES: usize = 2;
+const MANIFEST_SCHEMA_OFFSET: usize = generated_abi::CAPABILITY_MANIFEST_SCHEMA_OFFSET_V1;
+const MANIFEST_PROFILE_OFFSET: usize = generated_abi::CAPABILITY_MANIFEST_PROFILE_OFFSET_V1;
+const MANIFEST_COUNT_OFFSET: usize = generated_abi::CAPABILITY_MANIFEST_COUNT_OFFSET_V1;
+const MANIFEST_RESERVED_OFFSET: usize = generated_abi::CAPABILITY_MANIFEST_RESERVED_OFFSET_V1;
+const MANIFEST_RESERVED_BYTES: usize = generated_abi::CAPABILITY_MANIFEST_HEADER_RESERVED_BYTES_V1;
 
-const KIND_ID_OFFSET: usize = 0;
-const RELEASE_ID_OFFSET: usize = 32;
-const CONFIG_ID_OFFSET: usize = 64;
-const CAPACITY_PROFILE_ID_OFFSET: usize = 96;
-const CHILD_SCHEMA_ID_OFFSET: usize = 128;
-const CHILD_DERIVATION_ID_OFFSET: usize = 160;
-const ACTIVATION_POLICY_OFFSET: usize = 192;
-const DEPENDENCY_COUNT_OFFSET: usize = 193;
-const ENTRY_RESERVED_OFFSET: usize = 194;
-const ENTRY_RESERVED_BYTES: usize = 6;
-const ACTIVATION_DEADLINE_OFFSET: usize = 200;
-const DEPENDENCIES_OFFSET: usize = 208;
-const QUOTE_OFFSET: usize = 224;
+const KIND_ID_OFFSET: usize = generated_abi::CAPABILITY_ENTRY_KIND_ID_OFFSET_V1;
+const RELEASE_ID_OFFSET: usize = generated_abi::CAPABILITY_ENTRY_RELEASE_ID_OFFSET_V1;
+const CONFIG_ID_OFFSET: usize = generated_abi::CAPABILITY_ENTRY_CONFIG_ID_OFFSET_V1;
+const CAPACITY_PROFILE_ID_OFFSET: usize =
+    generated_abi::CAPABILITY_ENTRY_CAPACITY_PROFILE_ID_OFFSET_V1;
+const CHILD_SCHEMA_ID_OFFSET: usize = generated_abi::CAPABILITY_ENTRY_CHILD_SCHEMA_ID_OFFSET_V1;
+const CHILD_DERIVATION_ID_OFFSET: usize =
+    generated_abi::CAPABILITY_ENTRY_CHILD_DERIVATION_ID_OFFSET_V1;
+const ACTIVATION_POLICY_OFFSET: usize = generated_abi::CAPABILITY_ENTRY_ACTIVATION_POLICY_OFFSET_V1;
+const DEPENDENCY_COUNT_OFFSET: usize = generated_abi::CAPABILITY_ENTRY_DEPENDENCY_COUNT_OFFSET_V1;
+const ENTRY_RESERVED_OFFSET: usize = generated_abi::CAPABILITY_ENTRY_RESERVED_OFFSET_V1;
+const ENTRY_RESERVED_BYTES: usize = generated_abi::CAPABILITY_ENTRY_RESERVED_BYTES_V1;
+const ACTIVATION_DEADLINE_OFFSET: usize =
+    generated_abi::CAPABILITY_ENTRY_ACTIVATION_DEADLINE_OFFSET_V1;
+const DEPENDENCIES_OFFSET: usize = generated_abi::CAPABILITY_ENTRY_DEPENDENCIES_OFFSET_V1;
+const QUOTE_OFFSET: usize = generated_abi::CAPABILITY_ENTRY_QUOTE_OFFSET_V1;
 
-const READINESS_SCHEMA_OFFSET: usize = 8;
-const READINESS_RESERVED_OFFSET: usize = 10;
-const READINESS_RESERVED_BYTES: usize = 6;
-const READINESS_MARKET_OFFSET: usize = 16;
-const READINESS_GENERATION_OFFSET: usize = 48;
-const READINESS_MANIFEST_OFFSET: usize = 56;
-const READINESS_ENTRY_COUNT_OFFSET: usize = 88;
-const READINESS_NEXT_ENTRY_OFFSET: usize = 90;
-const READINESS_BODY_RESERVED_OFFSET: usize = 92;
-const READINESS_BODY_RESERVED_BYTES: usize = 4;
-const READINESS_RENT_REFUND_OFFSET: usize = 96;
+const READINESS_SCHEMA_OFFSET: usize = generated_abi::READINESS_SCHEMA_OFFSET_V1;
+const READINESS_RESERVED_OFFSET: usize = generated_abi::READINESS_RESERVED_OFFSET_V1;
+const READINESS_RESERVED_BYTES: usize = generated_abi::READINESS_HEADER_RESERVED_BYTES_V1;
+const READINESS_MARKET_OFFSET: usize = generated_abi::READINESS_MARKET_OFFSET_V1;
+const READINESS_GENERATION_OFFSET: usize = generated_abi::READINESS_GENERATION_OFFSET_V1;
+const READINESS_MANIFEST_OFFSET: usize = generated_abi::READINESS_MANIFEST_OFFSET_V1;
+const READINESS_ENTRY_COUNT_OFFSET: usize = generated_abi::READINESS_ENTRY_COUNT_OFFSET_V1;
+const READINESS_NEXT_ENTRY_OFFSET: usize = generated_abi::READINESS_NEXT_ENTRY_OFFSET_V1;
+const READINESS_BODY_RESERVED_OFFSET: usize = generated_abi::READINESS_BODY_RESERVED_OFFSET_V1;
+const READINESS_BODY_RESERVED_BYTES: usize = generated_abi::READINESS_BODY_RESERVED_BYTES_V1;
+const READINESS_RENT_REFUND_OFFSET: usize = generated_abi::READINESS_RENT_REFUND_OFFSET_V1;
 
 /// Explicit refusal returned by manifest and funding contracts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

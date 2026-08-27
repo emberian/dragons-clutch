@@ -14,27 +14,35 @@
 
 use core::convert::TryInto;
 
+/// Lean-emitted byte coordinates for `RealmV1` and `PositionV1`.
+///
+/// This module is the crate's single authority for every Realm and Position
+/// width, offset, magic and seed domain; the constants below are projections
+/// of it. Some coordinates this crate does not itself read are still emitted,
+/// because the same Lean schema also drives the browser's decoder.
+#[allow(missing_docs, dead_code)]
+mod generated_abi;
 mod realm_layout;
 
 pub use realm_layout::RealmLayoutV1;
 
 /// Exact byte width of one immutable [`RealmV1`] record.
-pub const REALM_BYTES: usize = 112;
+pub const REALM_BYTES: usize = generated_abi::REALM_BYTES_V1;
 /// Fixed Position bytes before its `N` eight-byte outcome balances.
-pub const POSITION_BASE_BYTES: usize = 88;
+pub const POSITION_BASE_BYTES: usize = generated_abi::POSITION_BASE_BYTES_V1;
 /// Exact byte width of a two-outcome Position.
-pub const BINARY_POSITION_BYTES: usize = 104;
+pub const BINARY_POSITION_BYTES: usize = generated_abi::BINARY_POSITION_BYTES_V1;
 /// Exact byte width of a sixteen-outcome Position.
-pub const MAX_POSITION_BYTES: usize = 216;
+pub const MAX_POSITION_BYTES: usize = generated_abi::MAX_POSITION_BYTES_V1;
 /// Minimum categorical width represented by this measured profile.
-pub const MIN_OUTCOMES: usize = 2;
+pub const MIN_OUTCOMES: usize = generated_abi::MIN_OUTCOMES_V1;
 /// Maximum categorical width in this provisional measured profile.
-pub const MAX_OUTCOMES: usize = 16;
+pub const MAX_OUTCOMES: usize = generated_abi::MAX_OUTCOMES_V1;
 
 /// Canonical Realm account magic.
-pub const REALM_MAGIC: [u8; 8] = *b"DCLTRLM1";
+pub const REALM_MAGIC: [u8; 8] = generated_abi::REALM_MAGIC_V1;
 /// Implemented Realm schema version.
-pub const REALM_SCHEMA_VERSION: u16 = 1;
+pub const REALM_SCHEMA_VERSION: u16 = generated_abi::REALM_SCHEMA_VERSION_V1;
 /// Canonical finalized-record schema label for [`RealmV1`].
 pub const REALM_SCHEMA_RELEASE_PREIMAGE_V1: &[u8] = b"dclutch/schema/realm-v1";
 /// SHA-256 identity of [`REALM_SCHEMA_RELEASE_PREIMAGE_V1`].
@@ -43,30 +51,32 @@ pub const REALM_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
     0xdc, 0x38, 0x06, 0xa5, 0xed, 0x49, 0x8f, 0xea, 0xe4, 0x3e, 0xd3, 0x78, 0x5b, 0x5d, 0x0c, 0x69,
 ];
 /// Domain seed preceding a Realm content identity in its SVM PDA derivation.
-pub const REALM_PDA_DOMAIN: &[u8] = b"dclutch/realm/v1";
+pub const REALM_PDA_DOMAIN: &[u8] = generated_abi::REALM_PDA_DOMAIN_V1;
 
 /// Canonical native Position account magic.
-pub const POSITION_MAGIC: [u8; 8] = *b"DCLTPOS1";
+pub const POSITION_MAGIC: [u8; 8] = generated_abi::POSITION_MAGIC_V1;
 /// Implemented Position schema version.
-pub const POSITION_SCHEMA_VERSION: u16 = 1;
+pub const POSITION_SCHEMA_VERSION: u16 = generated_abi::POSITION_SCHEMA_VERSION_V1;
 /// Domain seed preceding Market and owner keys in a Position PDA derivation.
-pub const POSITION_PDA_DOMAIN: &[u8] = b"dclutch/position/v1";
+pub const POSITION_PDA_DOMAIN: &[u8] = generated_abi::POSITION_PDA_DOMAIN_V1;
 
-const REALM_MINT_AUTHORITY_POLICY_OFFSET: usize = 10;
-const REALM_FREEZE_AUTHORITY_POLICY_OFFSET: usize = 11;
-const REALM_RESERVED_OFFSET: usize = 12;
-const REALM_RESERVED_BYTES: usize = 4;
-const REALM_TOKEN_PROGRAM_OFFSET: usize = 16;
-const REALM_COLLATERAL_MINT_OFFSET: usize = 48;
-const REALM_ADAPTER_RELEASE_ID_OFFSET: usize = 80;
+const REALM_MINT_AUTHORITY_POLICY_OFFSET: usize =
+    generated_abi::REALM_MINT_AUTHORITY_POLICY_OFFSET_V1;
+const REALM_FREEZE_AUTHORITY_POLICY_OFFSET: usize =
+    generated_abi::REALM_FREEZE_AUTHORITY_POLICY_OFFSET_V1;
+const REALM_RESERVED_OFFSET: usize = generated_abi::REALM_RESERVED_OFFSET_V1;
+const REALM_RESERVED_BYTES: usize = generated_abi::REALM_RESERVED_BYTES_V1;
+const REALM_TOKEN_PROGRAM_OFFSET: usize = generated_abi::REALM_TOKEN_PROGRAM_OFFSET_V1;
+const REALM_COLLATERAL_MINT_OFFSET: usize = generated_abi::REALM_COLLATERAL_MINT_OFFSET_V1;
+const REALM_ADAPTER_RELEASE_ID_OFFSET: usize = generated_abi::REALM_ADAPTER_RELEASE_ID_OFFSET_V1;
 
-const POSITION_OUTCOME_COUNT_OFFSET: usize = 10;
-const POSITION_RESERVED_OFFSET: usize = 11;
-const POSITION_RESERVED_BYTES: usize = 5;
-const POSITION_MARKET_OFFSET: usize = 16;
-const POSITION_OWNER_OFFSET: usize = 48;
-const POSITION_GENERATION_OFFSET: usize = 80;
-const POSITION_BALANCES_OFFSET: usize = 88;
+const POSITION_OUTCOME_COUNT_OFFSET: usize = generated_abi::POSITION_OUTCOME_COUNT_OFFSET_V1;
+const POSITION_RESERVED_OFFSET: usize = generated_abi::POSITION_RESERVED_OFFSET_V1;
+const POSITION_RESERVED_BYTES: usize = generated_abi::POSITION_RESERVED_BYTES_V1;
+const POSITION_MARKET_OFFSET: usize = generated_abi::POSITION_MARKET_OFFSET_V1;
+const POSITION_OWNER_OFFSET: usize = generated_abi::POSITION_OWNER_OFFSET_V1;
+const POSITION_GENERATION_OFFSET: usize = generated_abi::POSITION_GENERATION_OFFSET_V1;
+const POSITION_BALANCES_OFFSET: usize = generated_abi::POSITION_BASE_BYTES_V1;
 
 /// Explicit refusal returned by a Realm or Position contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

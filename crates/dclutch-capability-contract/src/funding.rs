@@ -9,21 +9,25 @@ use crate::{
     read_u64, require_nonzero_identifier, require_zero, subslice,
 };
 
+use crate::generated_abi;
+
 /// Exact width of one typed compartment allocation.
-pub const FUNDING_ALLOCATION_BYTES: usize = 16;
+pub const FUNDING_ALLOCATION_BYTES: usize = generated_abi::CAPABILITY_FUNDING_ALLOCATION_BYTES_V1;
 /// Exact width of seven typed compartments plus two independent totals.
-pub const FUNDING_AMOUNTS_BYTES: usize = 128;
+pub const FUNDING_AMOUNTS_BYTES: usize = generated_abi::CAPABILITY_FUNDING_AMOUNTS_BYTES_V1;
 /// Exact width of an optional Realm-collateral binding.
-pub const REALM_COLLATERAL_BINDING_BYTES: usize = 160;
+pub const REALM_COLLATERAL_BINDING_BYTES: usize =
+    generated_abi::CAPABILITY_FUNDING_BINDING_BYTES_V1;
 /// Exact immutable funding-quote width.
-pub const FUNDING_QUOTE_BYTES: usize = 304;
+pub const FUNDING_QUOTE_BYTES: usize = generated_abi::CAPABILITY_FUNDING_QUOTE_BYTES_V1;
 /// Exact mutable funding-state width.
-pub const FUNDING_STATE_BYTES: usize = 320;
+pub const FUNDING_STATE_BYTES: usize = generated_abi::CAPABILITY_FUNDING_STATE_BYTES_V1;
 
 /// Canonical funding-quote magic.
-pub const FUNDING_QUOTE_MAGIC: [u8; 8] = *b"DCLTFQ01";
+pub const FUNDING_QUOTE_MAGIC: [u8; 8] = generated_abi::CAPABILITY_FUNDING_QUOTE_MAGIC_V1;
 /// Implemented typed funding-quote schema.
-pub const FUNDING_QUOTE_SCHEMA_VERSION: u16 = 1;
+pub const FUNDING_QUOTE_SCHEMA_VERSION: u16 =
+    generated_abi::CAPABILITY_FUNDING_QUOTE_SCHEMA_VERSION_V1;
 /// Byte offset of the remaining Rent-compartment lamport amount.
 ///
 /// Published for one caller shape: a data-defined capability activation, whose
@@ -35,60 +39,80 @@ pub const FUNDING_QUOTE_SCHEMA_VERSION: u16 = 1;
 /// `the_published_rent_amount_offset_reads_the_rent_quote` requires it to read
 /// back exactly what `remaining().rent().amount()` returns.
 pub const FUNDING_STATE_REMAINING_RENT_AMOUNT_OFFSET_V1: usize =
-    STATE_REMAINING_OFFSET + AMOUNTS_RENT_OFFSET + ALLOCATION_AMOUNT_OFFSET;
+    generated_abi::CAPABILITY_FUNDING_STATE_REMAINING_RENT_AMOUNT_OFFSET_V1;
 
 /// Canonical funding-state magic.
-pub const FUNDING_STATE_MAGIC: [u8; 8] = *b"DCLTCFS1";
+pub const FUNDING_STATE_MAGIC: [u8; 8] = generated_abi::CAPABILITY_FUNDING_STATE_MAGIC_V1;
 /// Implemented typed funding-state schema.
-pub const FUNDING_STATE_SCHEMA_VERSION: u16 = 1;
+pub const FUNDING_STATE_SCHEMA_VERSION: u16 =
+    generated_abi::CAPABILITY_FUNDING_STATE_SCHEMA_VERSION_V1;
 
 /// Adapter PDA seed domain for a manifest-selected funding-state account.
-pub const CAPABILITY_FUNDING_PDA_DOMAIN_V1: &[u8] = b"dclutch/cap-funding/v1";
+pub const CAPABILITY_FUNDING_PDA_DOMAIN_V1: &[u8] = generated_abi::CAPABILITY_FUNDING_PDA_DOMAIN_V1;
 /// Adapter PDA seed domain for its token-signing funding authority.
-pub const CAPABILITY_FUNDING_AUTHORITY_PDA_DOMAIN_V1: &[u8] = b"dclutch/cap-fund-auth/v1";
+pub const CAPABILITY_FUNDING_AUTHORITY_PDA_DOMAIN_V1: &[u8] =
+    generated_abi::CAPABILITY_FUNDING_AUTHORITY_PDA_DOMAIN_V1;
 /// Adapter PDA seed domain for its optional Realm-collateral vault.
-pub const CAPABILITY_FUNDING_VAULT_PDA_DOMAIN_V1: &[u8] = b"dclutch/cap-fund-vault/v1";
+pub const CAPABILITY_FUNDING_VAULT_PDA_DOMAIN_V1: &[u8] =
+    generated_abi::CAPABILITY_FUNDING_VAULT_PDA_DOMAIN_V1;
 
-const QUOTE_SCHEMA_OFFSET: usize = 8;
-const QUOTE_COLLATERAL_KIND_OFFSET: usize = 10;
-const QUOTE_RESERVED_OFFSET: usize = 11;
-const QUOTE_RESERVED_BYTES: usize = 5;
-const QUOTE_COLLATERAL_BINDING_OFFSET: usize = 16;
-const QUOTE_AMOUNTS_OFFSET: usize =
-    QUOTE_COLLATERAL_BINDING_OFFSET + REALM_COLLATERAL_BINDING_BYTES;
+const QUOTE_SCHEMA_OFFSET: usize = generated_abi::CAPABILITY_FUNDING_QUOTE_SCHEMA_OFFSET_V1;
+const QUOTE_COLLATERAL_KIND_OFFSET: usize =
+    generated_abi::CAPABILITY_FUNDING_QUOTE_COLLATERAL_KIND_OFFSET_V1;
+const QUOTE_RESERVED_OFFSET: usize = generated_abi::CAPABILITY_FUNDING_QUOTE_RESERVED_OFFSET_V1;
+const QUOTE_RESERVED_BYTES: usize = generated_abi::CAPABILITY_FUNDING_QUOTE_RESERVED_BYTES_V1;
+const QUOTE_COLLATERAL_BINDING_OFFSET: usize =
+    generated_abi::CAPABILITY_FUNDING_QUOTE_BINDING_OFFSET_V1;
+const QUOTE_AMOUNTS_OFFSET: usize = generated_abi::CAPABILITY_FUNDING_QUOTE_AMOUNTS_OFFSET_V1;
 
-const ALLOCATION_CLASS_OFFSET: usize = 0;
-const ALLOCATION_RESERVED_OFFSET: usize = 1;
-const ALLOCATION_RESERVED_BYTES: usize = 7;
-const ALLOCATION_AMOUNT_OFFSET: usize = 8;
+const ALLOCATION_CLASS_OFFSET: usize = generated_abi::CAPABILITY_FUNDING_ALLOCATION_CLASS_OFFSET_V1;
+const ALLOCATION_RESERVED_OFFSET: usize =
+    generated_abi::CAPABILITY_FUNDING_ALLOCATION_RESERVED_OFFSET_V1;
+const ALLOCATION_RESERVED_BYTES: usize =
+    generated_abi::CAPABILITY_FUNDING_ALLOCATION_RESERVED_BYTES_V1;
+const ALLOCATION_AMOUNT_OFFSET: usize =
+    generated_abi::CAPABILITY_FUNDING_ALLOCATION_AMOUNT_OFFSET_V1;
 
-const AMOUNTS_RENT_OFFSET: usize = 0;
-const AMOUNTS_CREATION_OFFSET: usize = 16;
-const AMOUNTS_WORK_OFFSET: usize = 32;
-const AMOUNTS_PROVIDER_OFFSET: usize = 48;
-const AMOUNTS_BOUNTY_OFFSET: usize = 64;
-const AMOUNTS_LIQUIDITY_OFFSET: usize = 80;
-const AMOUNTS_SERVICE_OFFSET: usize = 96;
-const AMOUNTS_NATIVE_TOTAL_OFFSET: usize = 112;
-const AMOUNTS_REALM_TOTAL_OFFSET: usize = 120;
+const AMOUNTS_RENT_OFFSET: usize = generated_abi::CAPABILITY_FUNDING_AMOUNTS_RENT_OFFSET_V1;
+const AMOUNTS_CREATION_OFFSET: usize = generated_abi::CAPABILITY_FUNDING_AMOUNTS_CREATION_OFFSET_V1;
+const AMOUNTS_WORK_OFFSET: usize = generated_abi::CAPABILITY_FUNDING_AMOUNTS_WORK_OFFSET_V1;
+const AMOUNTS_PROVIDER_OFFSET: usize = generated_abi::CAPABILITY_FUNDING_AMOUNTS_PROVIDER_OFFSET_V1;
+const AMOUNTS_BOUNTY_OFFSET: usize = generated_abi::CAPABILITY_FUNDING_AMOUNTS_BOUNTY_OFFSET_V1;
+const AMOUNTS_LIQUIDITY_OFFSET: usize =
+    generated_abi::CAPABILITY_FUNDING_AMOUNTS_LIQUIDITY_OFFSET_V1;
+const AMOUNTS_SERVICE_OFFSET: usize = generated_abi::CAPABILITY_FUNDING_AMOUNTS_SERVICE_OFFSET_V1;
+const AMOUNTS_NATIVE_TOTAL_OFFSET: usize =
+    generated_abi::CAPABILITY_FUNDING_AMOUNTS_NATIVE_TOTAL_OFFSET_V1;
+const AMOUNTS_REALM_TOTAL_OFFSET: usize =
+    generated_abi::CAPABILITY_FUNDING_AMOUNTS_REALM_TOTAL_OFFSET_V1;
 
-const BINDING_REALM_ID_OFFSET: usize = 0;
-const BINDING_RELEASE_ID_OFFSET: usize = 32;
-const BINDING_TOKEN_PROGRAM_OFFSET: usize = 64;
-const BINDING_MINT_OFFSET: usize = 96;
-const BINDING_BENEFICIARY_OFFSET: usize = 128;
+const BINDING_REALM_ID_OFFSET: usize = generated_abi::CAPABILITY_FUNDING_BINDING_REALM_ID_OFFSET_V1;
+const BINDING_RELEASE_ID_OFFSET: usize =
+    generated_abi::CAPABILITY_FUNDING_BINDING_RELEASE_ID_OFFSET_V1;
+const BINDING_TOKEN_PROGRAM_OFFSET: usize =
+    generated_abi::CAPABILITY_FUNDING_BINDING_TOKEN_PROGRAM_OFFSET_V1;
+const BINDING_MINT_OFFSET: usize = generated_abi::CAPABILITY_FUNDING_BINDING_MINT_OFFSET_V1;
+const BINDING_BENEFICIARY_OFFSET: usize =
+    generated_abi::CAPABILITY_FUNDING_BINDING_BENEFICIARY_OFFSET_V1;
 
-const STATE_SCHEMA_OFFSET: usize = 8;
-const STATE_STATUS_OFFSET: usize = 10;
-const STATE_HEADER_RESERVED_OFFSET: usize = 11;
-const STATE_HEADER_RESERVED_BYTES: usize = 5;
-const STATE_MANIFEST_ID_OFFSET: usize = 16;
-const STATE_ENTRY_INDEX_OFFSET: usize = 48;
-const STATE_BODY_RESERVED_OFFSET: usize = 50;
-const STATE_BODY_RESERVED_BYTES: usize = 6;
-const STATE_ACTIVATION_SLOT_OFFSET: usize = 56;
-const STATE_REMAINING_OFFSET: usize = 64;
-const STATE_RELEASED_OFFSET: usize = STATE_REMAINING_OFFSET + FUNDING_AMOUNTS_BYTES;
+const STATE_SCHEMA_OFFSET: usize = generated_abi::CAPABILITY_FUNDING_STATE_SCHEMA_OFFSET_V1;
+const STATE_STATUS_OFFSET: usize = generated_abi::CAPABILITY_FUNDING_STATE_STATUS_OFFSET_V1;
+const STATE_HEADER_RESERVED_OFFSET: usize =
+    generated_abi::CAPABILITY_FUNDING_STATE_HEADER_RESERVED_OFFSET_V1;
+const STATE_HEADER_RESERVED_BYTES: usize =
+    generated_abi::CAPABILITY_FUNDING_STATE_HEADER_RESERVED_BYTES_V1;
+const STATE_MANIFEST_ID_OFFSET: usize =
+    generated_abi::CAPABILITY_FUNDING_STATE_MANIFEST_ID_OFFSET_V1;
+const STATE_ENTRY_INDEX_OFFSET: usize =
+    generated_abi::CAPABILITY_FUNDING_STATE_ENTRY_INDEX_OFFSET_V1;
+const STATE_BODY_RESERVED_OFFSET: usize =
+    generated_abi::CAPABILITY_FUNDING_STATE_BODY_RESERVED_OFFSET_V1;
+const STATE_BODY_RESERVED_BYTES: usize =
+    generated_abi::CAPABILITY_FUNDING_STATE_BODY_RESERVED_BYTES_V1;
+const STATE_ACTIVATION_SLOT_OFFSET: usize =
+    generated_abi::CAPABILITY_FUNDING_STATE_ACTIVATION_SLOT_OFFSET_V1;
+const STATE_REMAINING_OFFSET: usize = generated_abi::CAPABILITY_FUNDING_STATE_REMAINING_OFFSET_V1;
+const STATE_RELEASED_OFFSET: usize = generated_abi::CAPABILITY_FUNDING_STATE_RELEASED_OFFSET_V1;
 
 /// Asset class of one funding compartment.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
