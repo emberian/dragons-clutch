@@ -487,10 +487,29 @@ The moment you revoke, that is the deploy. There is no third option.
 ### 5.1 Observed, 2026-08-27T08:53Z — 12 bounded read-only calls
 
 Every call is logged by `tools/release/devnet-observe.sh` (`--out` writes
-`rpc-reads.log` with a UTC timestamp, method and params per line):
-`getGenesisHash` ×1, `getVersion` ×1, `getEpochInfo` ×1, `getMultipleAccounts`
-×2, `getAccountInfo` ×3, `getMinimumBalanceForRentExemption` ×3,
-`getSignaturesForAddress` ×1. No writes, no signing, no keypairs, no airdrops.
+`rpc-reads.log`, one UTC timestamp / method / params line per call). No writes,
+no signing, no keypairs, no airdrops. The complete log for the observation this
+section reports:
+
+```text
+08:53:39Z  getGenesisHash                      []
+08:53:40Z  getVersion                          []
+08:53:40Z  getEpochInfo                        []
+08:53:40Z  getMultipleAccounts                 [router, receiver, push-oracle]                     finalized
+08:53:40Z  getAccountInfo                      9hLWdeVh…  dataSlice(0,45)                          finalized
+08:53:40Z  getAccountInfo                      3UV7w2yT…  dataSlice(0,45)                          finalized
+08:53:40Z  getAccountInfo                      9nxngQjx…  dataSlice(0,45)                          finalized
+08:53:41Z  getMultipleAccounts                 [Config, GuardianSet[0], bridge config, SOL/USD]    finalized
+08:53:41Z  getMinimumBalanceForRentExemption   [0]
+08:53:41Z  getMinimumBalanceForRentExemption   [1]
+08:53:41Z  getMinimumBalanceForRentExemption   [1000000]
+08:53:41Z  getSignaturesForAddress             7AviUf9nL…  limit 1000                              finalized
+```
+
+Twelve calls, two seconds, one endpoint. The three ProgramData reads take only
+the 45-byte header — this lane never re-fetched the megabyte-scale ELF bodies,
+because `PROVENANCE.md` already owns those digests and re-hashing them would be
+a megabyte of traffic to re-learn a fact the repository holds.
 
 **Every fact pinned by `fixtures/pyth/upgraded-2026-08-26/PROVENANCE.md` on
 2026-08-26 still reproduces exactly.** Nothing moved:
