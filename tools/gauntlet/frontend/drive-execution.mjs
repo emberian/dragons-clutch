@@ -96,6 +96,9 @@ const transcript = {
 };
 function step(name, facts) {
   transcript.steps.push({ name, at: new Date().toISOString(), ...facts });
+  // Written after EVERY step: a transcript that only exists if the whole drive
+  // survives is evidence that evaporates at the worst moment.
+  writeFileSync(`${outDir}/transcript.json`, JSON.stringify(transcript, null, 2));
   console.log(`== ${name}`);
 }
 
@@ -278,6 +281,9 @@ await fill('Core program · label only', programs.core);
 await fill('Trading program · label only', programs.trading);
 await fill('Market addresses · one per line', market);
 await page.getByRole('button', { name: 'Read activity' }).click();
+// Wait for the READ to answer (the evidence strip renders only then), not for
+// the idle placeholder this page honestly shows before any read.
+await page.locator('.trade-v3-evidence article', { hasText: 'Watched addresses' }).waitFor();
 // A node without transaction history honestly answers empty; the surface must
 // say that is the node speaking. Accept either the row or the honest answer.
 await page.locator('.activity-row, .market-empty').first().waitFor();
