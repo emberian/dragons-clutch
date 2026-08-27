@@ -175,6 +175,24 @@ global `127.0.0.1:20890` slot.
 | `series-consume-replayed-ticket-refusal` | 390,694 | 370,694 | 20,000 | 1,029,306 (73.5%) |
 | `series-consume-substituted-programdata-refusal` | 209,223 | 189,223 | 20,000 | 1,210,777 (86.5%) |
 
+### The tiers deliberately NOT budgeted here
+
+Not an oversight, and each can opt in with the one witness entry `TIERS.md`
+documents:
+
+- **`direct/`** — the stateless Direct AOT accelerator runs at 1,400–2,700 CU
+  per transaction. Three orders of magnitude from the ceiling; a budget would
+  be decoration. It already carries
+  `the-campaign-stayed-under-the-protocol-compute-ceiling`.
+- **`claims-custody/`** — worth budgeting on the merits, since Claims and
+  Custody are two of the three programs whose changes moved `DCLTGMF1`. Not done
+  here for one mechanical reason: its bindings key on wildcard labels
+  (`custody *: open vault`) and a budget must name exactly one transaction, so
+  its budgets need either literal labels or wildcard support that this lane did
+  not build speculatively.
+- **`dealer/`** — its witness file was being edited by the FAM-PROF lane while
+  this one ran. Deferred rather than raced.
+
 ### Recorded, not enforced
 
 - `dcltgmf1-stage-5-open-and-outer-joins` — the RPC truncates the finalized log
