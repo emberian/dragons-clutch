@@ -152,11 +152,46 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
     let mut rent_credit_sha256 = None;
     let mut rent_credit_semantic_release = None;
     let mut record_publication = None;
+    // Seven optional observed Loader V3 ProgramData accounts and seven optional
+    // genesis-install slots. The DEPLOYMENT SLOT is never one of these values:
+    // it is hostile-decoded out of the resulting account image by exactly the
+    // parse the on-chain authenticator runs. What these choose is which image.
+    let mut deployments = plan::RoleDeploymentsV1::default();
     let mut iterator = arguments.into_iter();
     while let Some(argument) = iterator.next() {
         let value = iterator
             .next()
             .ok_or_else(|| Error::new(format!("{argument} requires a value")))?;
+        if let Some(rest) = argument.strip_prefix("--") {
+            if let Some(role) = rest.strip_suffix("-observed-programdata")
+                && let Some(target) = deployment_target(&mut deployments, role)
+            {
+                if target
+                    .observed_programdata
+                    .replace(PathBuf::from(&value))
+                    .is_some()
+                {
+                    return Err(Error::new(format!("{argument} may be supplied only once")));
+                }
+                continue;
+            }
+            if let Some(role) = rest.strip_suffix("-genesis-deployment-slot")
+                && let Some(target) = deployment_target(&mut deployments, role)
+            {
+                if target.genesis_deployment_slot != 0 {
+                    return Err(Error::new(format!("{argument} may be supplied only once")));
+                }
+                target.genesis_deployment_slot = value.parse::<u64>().map_err(|_| {
+                    Error::new(format!("{argument} must be a decimal u64 slot number"))
+                })?;
+                if target.genesis_deployment_slot == 0 {
+                    return Err(Error::new(format!(
+                        "{argument} is zero, which is what absence already means"
+                    )));
+                }
+                continue;
+            }
+        }
         let slot = match argument.as_str() {
             "--account-dir" => &mut account_dir,
             "--output" => &mut output,
@@ -255,6 +290,7 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
             None => plan::RecordPublicationV1::Genesis,
             Some(value) => plan::RecordPublicationV1::parse(value)?,
         },
+        deployments,
     };
     let path = args.plan_path.clone();
     let prepared = plan::prepare(args)?;
@@ -277,6 +313,26 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
     Ok(())
 }
 
+/// Resolve one launcher role name to its deployment-source slot.
+///
+/// `None` means the name is not a role, which lets the caller fall through to
+/// the ordinary flag table instead of swallowing a typo.
+fn deployment_target<'a>(
+    deployments: &'a mut plan::RoleDeploymentsV1,
+    role: &str,
+) -> Option<&'a mut plan::RoleDeploymentInputV1> {
+    match role {
+        "registry" => Some(&mut deployments.registry),
+        "core" => Some(&mut deployments.core),
+        "claims" => Some(&mut deployments.claims),
+        "trading" => Some(&mut deployments.trading),
+        "resolution" => Some(&mut deployments.resolution),
+        "custody" => Some(&mut deployments.custody),
+        "rent-credit" => Some(&mut deployments.rent_credit),
+        _ => None,
+    }
+}
+
 fn required(value: Option<String>, label: &str) -> Result<String> {
     value.ok_or_else(|| Error::new(format!("{label} is required")))
 }
@@ -295,6 +351,6 @@ fn parse_pubkey(value: Option<String>, label: &str) -> Result<Pubkey> {
 
 fn usage() {
     println!(
-        "Usage:\n  dclutch-local-successor-bootstrap prepare --account-dir ABSOLUTE_NEW_DIR --output ABSOLUTE_NEW_JSON --registry-program-id PUBKEY --registry-elf ABSOLUTE_ELF --registry-sha256 SHA256 --registry-semantic-release-id SHA256 --core-program-id PUBKEY --core-elf ABSOLUTE_ELF --core-sha256 SHA256 --core-semantic-release-id SHA256 --core-bootstrap-upgrade-authority PUBKEY --claims-program-id PUBKEY --claims-elf ABSOLUTE_ELF --claims-sha256 SHA256 --claims-semantic-release-id SHA256 --trading-program-id PUBKEY --trading-elf ABSOLUTE_ELF --trading-sha256 SHA256 --trading-semantic-release-id SHA256 --resolution-program-id PUBKEY --resolution-elf ABSOLUTE_ELF --resolution-sha256 SHA256 --resolution-semantic-release-id SHA256 --custody-program-id PUBKEY --custody-elf ABSOLUTE_ELF --custody-sha256 SHA256 --custody-semantic-release-id SHA256 --rent-credit-program-id PUBKEY --rent-credit-elf ABSOLUTE_ELF --rent-credit-sha256 SHA256 --rent-credit-semantic-release-id SHA256 [--record-publication genesis|transaction]\n  dclutch-local-successor-bootstrap run --spec ABSOLUTE_JSON [--keypair-seed 64_LOWERCASE_HEX]\n  dclutch-local-successor-bootstrap demo-market --registry-program-id PUBKEY\n\nThe run command is the canonical same-process supervisor. It creates one ephemeral Core authority only in memory, prepares its public key into fresh genesis inputs, starts a guarded foreground localhost validator, initializes Core infrastructure, proves pre-revocation release refusal, revokes Loader-v3 authority to None, and activates the immutable release set. It never reads a wallet or CLI configuration.\n\n--keypair-seed is a TEST-ONLY affordance and is REFUSED unless the spec's RPC endpoint is on localhost or 127.0.0.1. With it, every signing key the campaign generates is derived deterministically as SHA-256(domain || 0 || seed || 0 || role-name || 0 || per-role index) read as an ed25519 secret seed, which collapses the find_program_address bump-search noise the gauntlet's compute budgets have to tolerate. It also makes every one of those private keys reproducible by anyone who can read the seed off a command line, a shell history or a checked-in script, so on any public cluster it would hand a stranger the campaign's funded accounts, mint authorities and upgrade authorities. Default is a fresh unreproducible key per request."
+        "Usage:\n  dclutch-local-successor-bootstrap prepare --account-dir ABSOLUTE_NEW_DIR --output ABSOLUTE_NEW_JSON --registry-program-id PUBKEY --registry-elf ABSOLUTE_ELF --registry-sha256 SHA256 --registry-semantic-release-id SHA256 --core-program-id PUBKEY --core-elf ABSOLUTE_ELF --core-sha256 SHA256 --core-semantic-release-id SHA256 --core-bootstrap-upgrade-authority PUBKEY --claims-program-id PUBKEY --claims-elf ABSOLUTE_ELF --claims-sha256 SHA256 --claims-semantic-release-id SHA256 --trading-program-id PUBKEY --trading-elf ABSOLUTE_ELF --trading-sha256 SHA256 --trading-semantic-release-id SHA256 --resolution-program-id PUBKEY --resolution-elf ABSOLUTE_ELF --resolution-sha256 SHA256 --resolution-semantic-release-id SHA256 --custody-program-id PUBKEY --custody-elf ABSOLUTE_ELF --custody-sha256 SHA256 --custody-semantic-release-id SHA256 --rent-credit-program-id PUBKEY --rent-credit-elf ABSOLUTE_ELF --rent-credit-sha256 SHA256 --rent-credit-semantic-release-id SHA256 [--record-publication genesis|transaction] [--ROLE-observed-programdata ABSOLUTE_ACCOUNT_BODY] [--ROLE-genesis-deployment-slot U64]\n  dclutch-local-successor-bootstrap run --spec ABSOLUTE_JSON [--keypair-seed 64_LOWERCASE_HEX]\n  dclutch-local-successor-bootstrap demo-market --registry-program-id PUBKEY\n\nThe run command is the canonical same-process supervisor. It creates one ephemeral Core authority only in memory, prepares its public key into fresh genesis inputs, starts a guarded foreground localhost validator, initializes Core infrastructure, proves pre-revocation release refusal, revokes Loader-v3 authority to None, and activates the immutable release set. It never reads a wallet or CLI configuration.\n\nA ROLE is one of registry, core, claims, trading, resolution, custody, rent-credit. --ROLE-observed-programdata takes a complete Loader V3 ProgramData account body read off a cluster and mints that role's ArtifactReleaseV1 from it; --ROLE-genesis-deployment-slot writes a slot into the genesis install this plan materializes so a LOCAL rehearsal exercises a nonzero deployment slot. The two are mutually exclusive, and NEITHER supplies the slot the release binds: that is always hostile-decoded out of the resulting ProgramData image by the same parse the on-chain authenticator runs.\n\n--keypair-seed is a TEST-ONLY affordance and is REFUSED unless the spec's RPC endpoint is on localhost or 127.0.0.1. With it, every signing key the campaign generates is derived deterministically as SHA-256(domain || 0 || seed || 0 || role-name || 0 || per-role index) read as an ed25519 secret seed, which collapses the find_program_address bump-search noise the gauntlet's compute budgets have to tolerate. It also makes every one of those private keys reproducible by anyone who can read the seed off a command line, a shell history or a checked-in script, so on any public cluster it would hand a stranger the campaign's funded accounts, mint authorities and upgrade authorities. Default is a fresh unreproducible key per request."
     );
 }

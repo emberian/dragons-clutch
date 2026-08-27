@@ -23,7 +23,10 @@ use dclutch_product_runtime_v2_operator::{
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1;
-use dclutch_registry_svm::{REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1, RegistryInstructionV1};
+use dclutch_registry_svm::{
+    LOADER_V3_PROGRAMDATA_METADATA_BYTES, ProgramDataMetadataV3View,
+    REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1, RegistryInstructionV1,
+};
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, ExecutionRoleV1, InitializeProtocolInfrastructureV1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1,
@@ -43,8 +46,8 @@ use crate::{
     Error, Result,
     model::{ProgramPin, RunProgramInput, SuccessorPlan, SuccessorRunEvidence, SuccessorRunSpec},
     plan::{
-        PrepareArgs, hex, hex32, loader_programdata_bytes, loader_programdata_bytes_after_revoke,
-        pubkey, validate_program_ids,
+        PrepareArgs, RoleDeploymentInputV1, RoleDeploymentsV1, hex, hex32,
+        loader_programdata_bytes, programdata_bytes_after_revoke, pubkey, validate_program_ids,
     },
     rpc::{Rpc, account_evidence, validate_loopback_url},
     seed::{KeyForge, role},
@@ -269,6 +272,8 @@ pub(crate) fn found_through_open(
         return Err(Error::new("healthy RPC origin changed after launch"));
     }
 
+    let observed_slots = observe_deployment_slots(&mut rpc, &plan)?;
+
     let hostile = forge.keypair(role::HOSTILE_AUTHORITY);
     let mut transactions = vec![
         rpc.airdrop(
@@ -418,11 +423,13 @@ pub(crate) fn found_through_open(
         "generated one ephemeral Core authority in process memory".into(),
         "prepared exact public-key-only genesis plan".into(),
         "started and health-bound guarded localhost validator".into(),
+        observed_slots,
         "proved wrong-authority infrastructure refusal".into(),
     ];
-    // Whatever the publication mode contributed happened before the profile
-    // existed, so it belongs here in the order the chain saw it.
-    completed.splice(2..2, publication_steps);
+    // Whatever the publication mode contributed happened after the chain was
+    // up and its deployment slots were read, and before the profile existed,
+    // so it belongs here in the order the chain saw it.
+    completed.splice(4..4, publication_steps);
     completed.extend::<Vec<String>>(vec![
         "initialized exact Core Registry/Rent infrastructure profile".into(),
         "proved release activation refuses before Core revocation".into(),
@@ -445,6 +452,85 @@ pub(crate) fn found_through_open(
         completed,
         forge,
     })
+}
+
+/// The seven role pins in the canonical launcher order.
+fn role_pins(plan: &SuccessorPlan) -> [(&'static str, &ProgramPin); 7] {
+    [
+        ("registry", &plan.registry),
+        ("core", &plan.core),
+        ("claims", &plan.claims),
+        ("trading", &plan.trading),
+        ("resolution", &plan.resolution),
+        ("custody", &plan.custody),
+        ("rent-credit", &plan.rent_credit),
+    ]
+}
+
+/// Read every role's deployment slot back off the live chain, before the first
+/// record body exists.
+///
+/// The plan decoded each slot out of a `ProgramData` account image and every
+/// minted body binds it; `ArtifactReleaseV1::authenticate_deployment` refuses
+/// `DeploymentSlotMismatch` on chain if that number is wrong. This step turns
+/// the plan's number into an observation *of this chain*, through the same
+/// `ProgramDataMetadataV3View` parse the contract itself runs — so a
+/// disagreement costs a refusal here, before rent is spent, instead of at
+/// activation.
+///
+/// It also waits out the Loader's own rule. A Loader V3 program becomes
+/// executable only *after* the slot it was deployed in, so a campaign whose
+/// programs claim slot `s` cannot invoke them until the chain is past `s`.
+/// That rule is invisible when every slot is zero, which is exactly why it was
+/// never enforced before.
+fn observe_deployment_slots(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<String> {
+    let mut highest = 0_u64;
+    let mut observed: Vec<String> = Vec::new();
+    for (label, pin) in role_pins(plan) {
+        let programdata = pubkey(&pin.programdata_id)?;
+        let account = rpc.required_account(programdata, label)?;
+        if account.owner != bpf_loader_upgradeable::ID || account.executable {
+            return Err(Error::new(format!(
+                "{label} ProgramData is not a nonexecutable Loader-v3 account"
+            )));
+        }
+        let view = ProgramDataMetadataV3View::parse(&account.data).map_err(|error| {
+            Error::new(format!(
+                "{label} ProgramData did not hostile-decode as Loader v3: {error:?}"
+            ))
+        })?;
+        if view.deployment_slot() != pin.deployment_slot {
+            return Err(Error::new(format!(
+                "{label} deployment slot on chain is {} but every minted release body binds {}",
+                view.deployment_slot(),
+                pin.deployment_slot
+            )));
+        }
+        if hex(&sha2::Sha256::digest(&account.data)) != pin.programdata_sha256 {
+            return Err(Error::new(format!(
+                "{label} ProgramData on chain is not the image its release was decoded from"
+            )));
+        }
+        highest = highest.max(view.deployment_slot());
+        observed.push(format!("{label}={}", view.deployment_slot()));
+    }
+    let deadline = Instant::now() + VALIDATOR_READY_TIMEOUT;
+    loop {
+        let current = rpc.finalized_slot()?;
+        if current > highest {
+            break;
+        }
+        if Instant::now() >= deadline {
+            return Err(Error::new(format!(
+                "chain is still at slot {current} and no Loader-v3 program is executable until after slot {highest}"
+            )));
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+    Ok(format!(
+        "observed seven Loader-v3 deployment slots off the live chain and matched every minted release body: {}",
+        observed.join(" ")
+    ))
 }
 
 fn prepare_args(spec: &SuccessorRunSpec, authority: Pubkey) -> Result<PrepareArgs> {
@@ -484,7 +570,23 @@ fn prepare_args(spec: &SuccessorRunSpec, authority: Pubkey) -> Result<PrepareArg
             None => crate::plan::RecordPublicationV1::Genesis,
             Some(value) => crate::plan::RecordPublicationV1::parse(value)?,
         },
+        deployments: RoleDeploymentsV1 {
+            registry: role_deployment_input(&spec.registry),
+            core: role_deployment_input(&spec.core),
+            claims: role_deployment_input(&spec.claims),
+            trading: role_deployment_input(&spec.trading),
+            resolution: role_deployment_input(&spec.resolution),
+            custody: role_deployment_input(&spec.custody),
+            rent_credit: role_deployment_input(&spec.rent_credit),
+        },
     })
+}
+
+fn role_deployment_input(input: &RunProgramInput) -> RoleDeploymentInputV1 {
+    RoleDeploymentInputV1 {
+        observed_programdata: input.observed_programdata.as_deref().map(PathBuf::from),
+        genesis_deployment_slot: input.genesis_deployment_slot.unwrap_or(0),
+    }
 }
 
 fn initialize_instruction(
@@ -1206,28 +1308,64 @@ fn validate_program_pin(
     if sha2::Sha256::digest(&elf).as_slice() != expected_elf {
         return Err(Error::new(format!("{label} ELF digest mismatch")));
     }
-    let expected_programdata = loader_programdata_bytes(&elf, bootstrap_authority);
     let genesis = plan
         .genesis_accounts
         .get(&format!("loader.{label}.programdata"))
         .ok_or_else(|| Error::new(format!("missing {label} ProgramData genesis pin")))?;
-    if genesis.data_sha256 != hex(&sha2::Sha256::digest(&expected_programdata)) {
+    if genesis.data_sha256 != pin.programdata_sha256 {
         return Err(Error::new(format!(
-            "{label} ProgramData header/ELF genesis hash mismatch"
+            "{label} genesis ProgramData is not the image its deployment facts were decoded from"
         )));
     }
-    if label == "core" {
-        let post_revoke = loader_programdata_bytes_after_revoke(
-            &elf,
-            bootstrap_authority.ok_or_else(|| Error::new("Core bootstrap authority was absent"))?,
-        );
-        if plan.core_bootstrap.post_revoke_programdata_sha256
-            != hex(&sha2::Sha256::digest(&post_revoke))
-        {
-            return Err(Error::new(
-                "Core post-revoke immutable ProgramData hash mismatch",
-            ));
+    if genesis.data_len != elf.len().saturating_add(LOADER_V3_PROGRAMDATA_METADATA_BYTES) {
+        return Err(Error::new(format!(
+            "{label} ProgramData width is not the Loader-v3 45-byte metadata plus its exact ELF"
+        )));
+    }
+    // Only a genesis install can be regenerated from `(elf, slot, authority)`.
+    // A real revoked account retains its former authority in bytes 13..45 and
+    // no triple reproduces that litter, which is exactly why an observed image
+    // is carried by digest instead of rebuilt.
+    match pin.deployment_source.as_str() {
+        "genesis-install" => {
+            let expected = loader_programdata_bytes(&elf, pin.deployment_slot, bootstrap_authority);
+            if genesis.data_sha256 != hex(&sha2::Sha256::digest(&expected)) {
+                return Err(Error::new(format!(
+                    "{label} ProgramData header/ELF genesis hash mismatch"
+                )));
+            }
+            if label == "core" {
+                let post_revoke = programdata_bytes_after_revoke(&expected)?;
+                if plan.core_bootstrap.post_revoke_programdata_sha256
+                    != hex(&sha2::Sha256::digest(&post_revoke))
+                {
+                    return Err(Error::new(
+                        "Core post-revoke immutable ProgramData hash mismatch",
+                    ));
+                }
+            }
         }
+        // An observed account's poststate is not reconstructible here, and it
+        // does not have to be: the supervisor reads the real ProgramData back
+        // off the chain after `SetAuthority(None)` and compares it against
+        // `post_revoke_programdata_sha256`, which is a stronger check than
+        // rebuilding the bytes this process already believes.
+        "observed-programdata-account" => {}
+        other => {
+            return Err(Error::new(format!(
+                "{label} names an unknown deployment source {other}"
+            )));
+        }
+    }
+    if label == "core"
+        && (bootstrap_authority.is_none()
+            || genesis.data_sha256 != plan.core_bootstrap.genesis_programdata_sha256
+            || plan.core_bootstrap.post_revoke_programdata_sha256
+                == plan.core_bootstrap.genesis_programdata_sha256)
+    {
+        return Err(Error::new(
+            "Core genesis ProgramData is not the authority-bearing pre-init observation",
+        ));
     }
     Ok(())
 }
@@ -1420,7 +1558,7 @@ mod tests {
         let mut elf = vec![0_u8; 64];
         elf[..4].copy_from_slice(b"\x7fELF");
         elf[48..52].copy_from_slice(&3_u32.to_le_bytes());
-        let genesis = loader_programdata_bytes(&elf, Some(authority.pubkey()));
+        let genesis = loader_programdata_bytes(&elf, 0, Some(authority.pubkey()));
         let body = serde_json::json!({
             "pubkey": programdata.to_string(),
             "account": {
@@ -1476,7 +1614,12 @@ mod tests {
         let observed = rpc
             .required_account(programdata, "revoked ProgramData")
             .expect("revoked ProgramData");
-        let expected = loader_programdata_bytes_after_revoke(&elf, authority.pubkey());
+        let expected = programdata_bytes_after_revoke(&loader_programdata_bytes(
+            &elf,
+            0,
+            Some(authority.pubkey()),
+        ))
+        .expect("revoke poststate");
         assert_eq!(observed.data, expected);
         let view = dclutch_registry_svm::ProgramDataV3View::parse(&observed.data)
             .expect("Registry parses real Loader poststate");
@@ -1566,6 +1709,7 @@ mod tests {
             rent_credit_sha256: rent_sha,
             rent_credit_semantic_release_id: "17".repeat(32),
             record_publication: crate::plan::RecordPublicationV1::Genesis,
+            deployments: RoleDeploymentsV1::default(),
         })
         .expect("prepare real-SBF infrastructure plan");
         validate_plan(&plan).expect("validate real-SBF plan");

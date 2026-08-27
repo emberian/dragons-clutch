@@ -10,6 +10,19 @@ pub(crate) struct RunProgramInput {
     pub(crate) elf_sha256: String,
     pub(crate) semantic_release_id: String,
     pub(crate) attestation: String,
+    /// Additive and optional. A complete Loader V3 `ProgramData` account body
+    /// observed on a cluster: present, the role's release is minted from that
+    /// observation and its deployment slot is decoded out of it. This is the
+    /// deploy-day shape.
+    #[serde(default)]
+    pub(crate) observed_programdata: Option<String>,
+    /// Additive and optional, and **local rehearsal only**. The slot written
+    /// into the genesis install this plan materializes, so a local campaign can
+    /// exercise a nonzero deployment slot end to end instead of the zero a
+    /// genesis install would otherwise have. It is refused together with
+    /// `observed_programdata`: an observation is not a caller's to overwrite.
+    #[serde(default)]
+    pub(crate) genesis_deployment_slot: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -74,6 +87,19 @@ pub(crate) struct ProgramPin {
     pub(crate) semantic_release_id: String,
     pub(crate) artifact_release_id: String,
     pub(crate) upgrade_authority: Option<String>,
+    /// The slot this role's `ArtifactReleaseV1` binds, hostile-decoded out of a
+    /// Loader V3 `ProgramData` account image by the same reader the on-chain
+    /// `authenticate_deployment` uses. Never a caller-supplied number.
+    pub(crate) deployment_slot: u64,
+    /// `"genesis-install"` or `"observed-programdata-account"`. A genesis
+    /// install has no deploy transaction and so no slot to observe; only the
+    /// second value describes a shape a cluster can be in.
+    pub(crate) deployment_source: String,
+    /// SHA-256 of the exact `ProgramData` account image the slot was decoded
+    /// from. For an observed account this is the only carrier of the retained
+    /// former-authority bytes, which no `(elf, slot, authority)` triple
+    /// regenerates.
+    pub(crate) programdata_sha256: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
