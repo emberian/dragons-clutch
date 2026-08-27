@@ -2457,14 +2457,9 @@ dependencies = [
  "dclutch-registry-svm",
  "dclutch-release-set-contract",
  "dclutch-rent-contract",
- "solana-account 4.6.0",
  "solana-program",
- "solana-program-test",
- "solana-sdk",
  "solana-sdk-ids",
  "solana-system-interface 2.0.0",
- "solana-transaction 4.2.0",
- "tokio",
 ]
 
 [[package]]
