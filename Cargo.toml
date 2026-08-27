@@ -51,6 +51,7 @@ members = [
     "crates/dclutch-rational-representation-v2-lifecycle-contract",
     "crates/dclutch-rational-representation-v2-operator",
     "crates/dclutch-rational-lifecycle-hot-v3",
+    "crates/dclutch-registry-activation-auth-v1",
     "crates/dclutch-registry-contract",
     "crates/dclutch-registry-svm",
     "crates/dclutch-relay-contract",

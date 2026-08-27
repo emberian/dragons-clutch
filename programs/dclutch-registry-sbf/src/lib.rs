@@ -28,13 +28,16 @@ use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_BYTES_V1,
     ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1, ArtifactActivationInputV1,
-    ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
-    activate_execution_role_into_v1, immutable_release_elf_digest_v1,
+    ArtifactReleaseV1, DeploymentObservationV1, activate_execution_role_into_v1,
     initialize_activation_cache_v1,
 };
+use dclutch_registry_activation_auth_v1::{
+    authenticate_activated_role_in_cache_v1, cached_role_deployment_observation_v1,
+    require_readonly_frame,
+};
 use dclutch_registry_svm::{
-    AuthenticatedRoleReceiptV1, ProgramDataV3View, ProgramV3View,
-    REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1, RegistryInstructionV1,
+    ProgramDataV3View, ProgramV3View, REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1,
+    RegistryInstructionV1,
 };
 use dclutch_release_set_contract::{
     EXECUTION_RELEASE_SET_BYTES_V1, EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1,
@@ -249,39 +252,19 @@ fn process_reauthenticate(
     let cache = next(&mut iterator)?;
     let program = next(&mut iterator)?;
     let programdata = next(&mut iterator)?;
-    if cache.is_signer
-        || cache.is_writable
-        || cache.executable
-        || program.is_signer
-        || program.is_writable
-        || !program.executable
-        || programdata.is_signer
-        || programdata.is_writable
-        || programdata.executable
-    {
-        return Err(RegistryError::AccountFrame.into());
-    }
+    require_readonly_frame(cache, program, programdata)
+        .map_err(|_| RegistryError::AccountFrame)?;
     let cache_data = cache.try_borrow_data().map_err(|_| RegistryError::Borrow)?;
     let activated = ActivatedExecutionReleaseSetViewV1::decode(&cache_data)
         .map_err(|_| RegistryError::ActivationCache)?;
     authenticate_cache_identity(program_id, cache, activated)?;
-    let activated_role = activated
-        .role(role)
-        .map_err(|_| RegistryError::ActivationCache)?;
-    let release = activated_role.release();
-    let observation = cached_role_deployment_observation(program, programdata, release)?;
-    activated_role
-        .authenticate_current_deployment(observation)
+    // The body below this point is shared with every role adapter that reads
+    // the cache directly instead of invoking this route. A child entered under
+    // a Registry continuation cannot CPI back here at all -- the Registry is
+    // already on the stack -- so the two readers must be the same code, not
+    // two implementations of the same rule.
+    let receipt = authenticate_activated_role_in_cache_v1(activated, role, program, programdata)
         .map_err(|_| RegistryError::Deployment)?;
-    let receipt = AuthenticatedRoleReceiptV1::new(
-        role,
-        activated
-            .execution_release_set_id()
-            .map_err(|_| RegistryError::ActivationCache)?,
-        release.program(),
-        activated_role.artifact_release_id(),
-        release.semantic_release_id(),
-    );
     set_return_data(&receipt.to_bytes());
     Ok(())
 }
@@ -366,76 +349,16 @@ fn authenticate_artifact_role(
 /// guarantee and keeps the full current-ELF hash. Identity, link, ownership,
 /// executability, deployment slot, and authority are rechecked either way by
 /// `authenticate_deployment`.
+/// The single implementation lives in `dclutch-registry-activation-auth-v1`,
+/// because the same observation is now made by every role adapter reading the
+/// cache directly. This wrapper only remaps its refusal onto Registry's own.
 fn cached_role_deployment_observation(
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
     release: ArtifactReleaseV1,
 ) -> Result<DeploymentObservationV1, ProgramError> {
-    match release.upgrade_policy() {
-        ArtifactUpgradePolicyV1::Immutable => {
-            immutable_deployment_observation(program, programdata, release)
-        }
-        ArtifactUpgradePolicyV1::ExactAuthority => {
-            deployment_observation(program, programdata, release)
-        }
-    }
-}
-
-/// Observe one immutable deployment without re-hashing its complete ELF.
-///
-/// Only callable for a release the activation cache already admitted; see
-/// [`cached_role_deployment_observation`] for the argument. First admission
-/// must still use [`deployment_observation`], because the claimed digest of a
-/// finalized artifact-release record is checked against the deployed bytes
-/// exactly once, there.
-fn immutable_deployment_observation(
-    program: &AccountInfo<'_>,
-    programdata: &AccountInfo<'_>,
-    release: ArtifactReleaseV1,
-) -> Result<DeploymentObservationV1, ProgramError> {
-    if release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
-        || release.upgrade_authority().is_some()
-        || program.key.to_bytes() != release.program().to_bytes()
-        || programdata.key.to_bytes() != release.programdata()
-        || program.owner != &bpf_loader_upgradeable::ID
-        || programdata.owner != &bpf_loader_upgradeable::ID
-        || !program.executable
-        || programdata.executable
-    {
-        return Err(RegistryError::Deployment.into());
-    }
-    let program_bytes = program
-        .try_borrow_data()
-        .map_err(|_| RegistryError::Borrow)?;
-    let program_view =
-        ProgramV3View::parse(&program_bytes).map_err(|_| RegistryError::Deployment)?;
-    let derived =
-        Pubkey::find_program_address(&[program.key.as_ref()], &bpf_loader_upgradeable::ID).0;
-    if program_view.programdata() != release.programdata() || programdata.key != &derived {
-        return Err(RegistryError::Deployment.into());
-    }
-    drop(program_bytes);
-    let programdata_bytes = programdata
-        .try_borrow_data()
-        .map_err(|_| RegistryError::Borrow)?;
-    let programdata_view =
-        ProgramDataV3View::parse(&programdata_bytes).map_err(|_| RegistryError::Deployment)?;
-    let elf_digest = immutable_release_elf_digest_v1(release, programdata_view.upgrade_authority())
-        .map_err(|_| RegistryError::Deployment)?;
-    DeploymentObservationV1::new(
-        program.key.to_bytes(),
-        program.owner.to_bytes(),
-        program.executable,
-        programdata.key.to_bytes(),
-        programdata.owner.to_bytes(),
-        programdata.executable,
-        program_view.programdata(),
-        bpf_loader_upgradeable::ID.to_bytes(),
-        programdata_view.deployment_slot(),
-        elf_digest,
-        None,
-    )
-    .map_err(|_| RegistryError::Deployment.into())
+    cached_role_deployment_observation_v1(program, programdata, release)
+        .map_err(|_| RegistryError::Deployment.into())
 }
 
 /// Observe one deployment by hashing its complete current ELF tail.
