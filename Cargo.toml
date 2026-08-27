@@ -104,8 +104,6 @@ members = [
     "programs/dclutch-series-sbf",
 ]
 exclude = [
-    # blocked: awaiting GENERAL_ROOT_PDA_DOMAIN_V2 contract counterpart
-    "programs/dclutch-general-sbf",
     # blocked: this crate's own Cargo.toml requests dclutch-trading-sbf's
     # "shadow-accelerator-auth-only" feature, which cfg-gates out hot_v3
     # (and other modules) in dclutch-trading-sbf. Under root `cargo check
