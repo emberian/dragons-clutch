@@ -82,7 +82,7 @@ Measured bands:
 | tier-1 Found31, its rollback case, the profile init, the non-terminal `DCLTPCB1` refusal | **0** | same pair |
 | tier-4 founding case | 24,000 | six runs of the same ProgramTest campaign on the same ELFs |
 | tier-4 late-Hoard refusal | 15,000 | same six |
-| tier-4 substituted-ProgramData refusal | 6,000 | seven runs; it was 1,500 over the first six, and the seventh — taken after the 2026-08-27 Custody frame change — drew 4,500 higher. Three iterations. This lane did not distinguish noise from that change. |
+| tier-4 substituted-ProgramData refusal | 6,000 | seven runs; it was 1,500 over the first **six**, and the seventh drew 4,500 higher on ELFs that had not changed a byte. Three iterations. Six runs did not bound this band. |
 
 The tolerance rule follows from that, mechanically:
 
