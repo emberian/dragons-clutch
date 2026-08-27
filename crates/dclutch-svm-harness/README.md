@@ -1,21 +1,25 @@
 # dClutch SVM harness
 
-This is a standalone, real-SVM integration harness. It deliberately loads the
-compiled `dclutch_sbf.so` ELF through `solana-program-test`; it never registers
-a native processor or mocks the adapter.
+This is a standalone, real-SVM integration harness. It deliberately loads
+compiled successor role-program ELFs through `solana-program-test`; it never
+registers a native processor or mocks an adapter.
 
-Build the intended SBF artifact first, then run from this crate with an
+Build the intended SBF artifacts first, then run from this crate with an
 explicit artifact directory:
 
 ```sh
-SBF_OUT_DIR=../../target/deploy cargo test --test failure_route
+SBF_OUT_DIR=../../target/deploy cargo test --test resolution_core_v3_lifecycle
 ```
 
-`SBF_OUT_DIR` must contain `dclutch_sbf.so`. The tests fail early with an
-honest prerequisite message when it is missing. The exercised slices are
-immutable collateral-Realm creation through a real System CPI and the
-permissionless, body-free failure route. The harness does not yet test a
-provider price update.
+Each campaign fails early with an honest prerequisite message naming the ELF it
+could not read.
+
+Every campaign that loaded the gen-2 monolith `dclutch_sbf.so`, or one of the
+gen-2 measurement programs, was banished with those programs on 2026-08-27; the
+deleted files are listed in `~/dev/dclutch-legacy/svm-harness-tests/` and remain
+in git history. The `RelayedMainnetStateV1` campaign was not banished: its
+adapter moved into the Resolution role program and `relayed_mainnet_state.rs`
+now loads `dclutch_resolution_proof_sbf.so`.
 
 The successor Resolution campaign executes the compiled Registry and
 Resolution ELFs against the provenance-pinned local-validator projection of
@@ -62,12 +66,6 @@ The clean ProgramTest campaign observed these instruction costs:
 This is local real-SVM evidence. The captured update is synthetic-local, and
 the campaign is not provider availability, devnet, deployment, or mainnet
 evidence.
-
-Run Realm creation evidence with:
-
-```sh
-SBF_OUT_DIR=../../target/deploy cargo test --test realm_creation
-```
 
 The experimental Direct successor has a separate four-ELF physical campaign.
 Build `dclutch_claims_proof_sbf.so`, `dclutch_controller_proof_sbf.so`, and

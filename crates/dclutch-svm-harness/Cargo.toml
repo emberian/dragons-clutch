@@ -11,18 +11,15 @@ publish = false
 [dev-dependencies]
 dclutch-capability-contract = { path = "../dclutch-capability-contract" }
 dclutch-claims-svm = { path = "../dclutch-claims-svm" }
-dclutch-collateral-contract = { path = "../dclutch-collateral-contract" }
 dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-custody-contract = { path = "../dclutch-custody-contract" }
 dclutch-direct-contract = { path = "../dclutch-direct-contract" }
 dclutch-direct-codec = { path = "../dclutch-direct-codec" }
-dclutch-kernel = { path = "../dclutch-kernel" }
 dclutch-market-contract = { path = "../dclutch-market-contract" }
 dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
 dclutch-market-open-v1-operator = { path = "../dclutch-market-open-v1-operator" }
 dclutch-market-retirement-v1-operator = { path = "../dclutch-market-retirement-v1-operator" }
 dclutch-resolution-core-v3-operator = { path = "../dclutch-resolution-core-v3-operator" }
-dclutch-pyth-contract = { path = "../dclutch-pyth-contract" }
 dclutch-pyth-svm = { path = "../dclutch-pyth-svm", features = ["synthetic-local-fixture"] }
 dclutch-realm-contract = { path = "../dclutch-realm-contract" }
 dclutch-record-contract = { path = "../dclutch-record-contract" }
@@ -33,16 +30,11 @@ dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
 dclutch-resolution-codec = { path = "../dclutch-resolution-codec" }
 dclutch-token-svm = { path = "../dclutch-token-svm" }
 dclutch-product-contract = { path = "../dclutch-product-contract" }
-dclutch-product-admission-contract = { path = "../dclutch-product-admission-contract" }
-dclutch-product-payoff-svm = { path = "../dclutch-product-payoff-svm" }
-dclutch-product-payoff-v2-codec = { path = "../dclutch-product-payoff-v2-codec" }
-dclutch-product-payoff-v2-svm = { path = "../dclutch-product-payoff-v2-svm" }
 dclutch-product-runtime-v2 = { path = "../dclutch-product-runtime-v2" }
 dclutch-product-runtime-v2-admission = { path = "../dclutch-product-runtime-v2-admission" }
 dclutch-provider-transport-v3-operator = { path = "../dclutch-provider-transport-v3-operator", default-features = false }
 dclutch-rent-contract = { path = "../dclutch-rent-contract" }
 dclutch-source-contract = { path = "../dclutch-source-contract" }
-dclutch-terminal-contract = { path = "../dclutch-terminal-contract" }
 base64 = "0.22"
 serde_json = "1"
 solana-program = "=3.0.0"
