@@ -13,9 +13,16 @@ use core::convert::TryInto;
 /// Content-bound Product admission and pure Claims transition candidates.
 pub mod product_claims;
 
+/// Degree-one through degree-three B-spline liability bases.
+pub mod spline;
+
 #[rustfmt::skip]
 #[allow(missing_docs)]
 mod generated;
+
+#[rustfmt::skip]
+#[allow(missing_docs)]
+mod generated_spline;
 
 pub use generated::{
     AGREEMENT_CASES_V2, RAMP_COORDINATE_DENOMINATOR_OFFSET_V2, RAMP_COORDINATE_NUMERATOR_OFFSET_V2,
@@ -24,6 +31,22 @@ pub use generated::{
     RAMP_RESERVED_BYTES_V2, RAMP_RESERVED_OFFSET_V2, RAMP_RIGHT_NUMERATOR_OFFSET_V2,
     RAMP_SCALE_OFFSET_V2, RAMP_SCHEMA_VERSION_V2, RAMP_VERSION_OFFSET_V2, REFUSAL_CASES_V2,
     TRANSITION_CASES_V2, TRANSITION_MAX_WIDTH_V2,
+};
+
+pub use generated_spline::{
+    SPLINE_AGREEMENT_CASES_V2, SPLINE_COORDINATE_DENOMINATOR_OFFSET_V2,
+    SPLINE_COORDINATE_NUMERATOR_OFFSET_V2, SPLINE_DEGREE_OFFSET_V2, SPLINE_KNOT_BYTES_V2,
+    SPLINE_KNOT_COUNT_OFFSET_V2, SPLINE_KNOT_DENOMINATOR_OFFSET_V2, SPLINE_KNOTS_OFFSET_V2,
+    SPLINE_MAGIC_OFFSET_V2, SPLINE_MAGIC_V2, SPLINE_MAX_KNOTS_V2, SPLINE_MAX_WIDTH_V2,
+    SPLINE_PROFILE_OFFSET_V2, SPLINE_PROFILE_V2, SPLINE_REFUSAL_BUFFER_V2, SPLINE_REFUSAL_CASES_V2,
+    SPLINE_REQUEST_BYTES_V2, SPLINE_RESERVED_BYTES_V2, SPLINE_RESERVED_OFFSET_V2,
+    SPLINE_SCALE_OFFSET_V2, SPLINE_SCHEMA_VERSION_V2, SPLINE_VERSION_OFFSET_V2,
+};
+
+pub use spline::{
+    SPLINE_MAX_DEGREE_V2, SPLINE_MAX_SUPPORT_V2, SPLINE_MIN_DEGREE_V2, SplineBasisV2,
+    SplineRequestV2, SplineWeightsV2, apportion_spline_v2, decode_and_evaluate_spline_v2,
+    decode_spline_request_v2, evaluate_spline_basis_v2, evaluate_spline_v2,
 };
 
 /// One Lean-emitted accepted request and its exact two-claim payout.
@@ -80,6 +103,31 @@ pub struct TransitionCaseV2 {
     pub error_tag: u8,
 }
 
+/// One Lean-emitted accepted B-spline request and its exact payout partition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SplineAgreementCaseV2 {
+    /// Exact canonical request bytes.
+    pub request: [u8; SPLINE_REQUEST_BYTES_V2],
+    /// Runtime claim width this case uses.
+    pub width: usize,
+    /// Exact payouts, zero padded to the physical capacity.
+    pub expected: [u64; SPLINE_MAX_WIDTH_V2],
+}
+
+/// One Lean-emitted hostile B-spline request and its stable refusal tag.
+///
+/// The buffer is one byte wider than the canonical record so an over-length
+/// input is expressible; `request_len` names the bytes actually offered.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SplineRefusalCaseV2 {
+    /// Hostile request bytes, zero padded to the refusal buffer.
+    pub request: [u8; SPLINE_REFUSAL_BUFFER_V2],
+    /// Bytes of `request` the case actually offers to the decoder.
+    pub request_len: usize,
+    /// Stable [`Error::tag`] value.
+    pub error_tag: u8,
+}
+
 /// Stable refusal from hostile decoding or checked economic arithmetic.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -113,6 +161,16 @@ pub enum Error {
     OutcomeOutOfRange,
     /// A retired quantity was not backed by outstanding supply.
     InsufficientSupply,
+    /// A B-spline degree was outside the physical one-through-three profile.
+    UnsupportedDegree,
+    /// A knot count did not carry `2 * degree + 2` knots, or exceeded capacity.
+    KnotCountOutOfRange,
+    /// Inactive knot slots were not canonical zero.
+    NonCanonicalKnotPadding,
+    /// The active knot vector was not nondecreasing.
+    KnotsNotOrdered,
+    /// The located knot span was degenerate or outside the basis domain.
+    DegenerateSpan,
 }
 
 impl Error {
@@ -134,6 +192,11 @@ impl Error {
             Self::Insolvent => 12,
             Self::OutcomeOutOfRange => 13,
             Self::InsufficientSupply => 14,
+            Self::UnsupportedDegree => 15,
+            Self::KnotCountOutOfRange => 16,
+            Self::NonCanonicalKnotPadding => 17,
+            Self::KnotsNotOrdered => 18,
+            Self::DegenerateSpan => 19,
         }
     }
 }
@@ -708,25 +771,25 @@ fn require_same_nonempty_width(left: &[u64], right: &[u64]) -> Result<()> {
     Ok(())
 }
 
-fn read_u16(input: &[u8], offset: usize) -> Result<u16> {
+pub(crate) fn read_u16(input: &[u8], offset: usize) -> Result<u16> {
     Ok(u16::from_le_bytes(bytes(input, offset)?))
 }
 
-fn read_u32(input: &[u8], offset: usize) -> Result<u32> {
+pub(crate) fn read_u32(input: &[u8], offset: usize) -> Result<u32> {
     Ok(u32::from_le_bytes(bytes(input, offset)?))
 }
 
-fn read_i64(input: &[u8], offset: usize) -> Result<i64> {
+pub(crate) fn read_i64(input: &[u8], offset: usize) -> Result<i64> {
     Ok(i64::from_le_bytes(bytes(input, offset)?))
 }
 
-fn bytes<const N: usize>(input: &[u8], offset: usize) -> Result<[u8; N]> {
+pub(crate) fn bytes<const N: usize>(input: &[u8], offset: usize) -> Result<[u8; N]> {
     slice(input, offset, N)?
         .try_into()
         .map_err(|_| Error::InvalidLength)
 }
 
-fn slice(input: &[u8], offset: usize, width: usize) -> Result<&[u8]> {
+pub(crate) fn slice(input: &[u8], offset: usize, width: usize) -> Result<&[u8]> {
     let end = offset.checked_add(width).ok_or(Error::InvalidLength)?;
     input.get(offset..end).ok_or(Error::InvalidLength)
 }
