@@ -924,15 +924,14 @@ mod tests {
     }
 
     fn input<'a>(
-        basis: &'a [u8],
-        representation: RepresentationAdmissionV3,
-        exposure: &'a [u8],
+        representation_admission: (&'a [u8], RepresentationAdmissionV3, &'a [u8]),
         state: &'a State,
         terminal: TerminalScenarioV3,
         claim_index: u32,
         quantity: u64,
         hoard_before: u64,
     ) -> ProductBasisTerminalInputV3<'a> {
+        let (basis, representation, exposure) = representation_admission;
         ProductBasisTerminalInputV3 {
             product_basis_bytes: basis,
             representation,
@@ -977,9 +976,7 @@ mod tests {
         let mut packet = vec![0_u8; plan_bytes(4, 1, 1).expect("packet bytes")];
         let collateral = encode_product_basis_terminal_signed_delta_v3(
             input(
-                &basis,
-                admission,
-                &exposure,
+                (&basis, admission, &exposure),
                 &state,
                 TerminalScenarioV3::Categorical(1),
                 1,
@@ -1033,7 +1030,14 @@ mod tests {
             let mut packet = vec![0_u8; plan_bytes(3, 1, 1).expect("packet bytes")];
             assert_eq!(
                 encode_product_basis_terminal_signed_delta_v3(
-                    input(&basis, admission, &exposure, &state, terminal, 2, 2, hoard),
+                    input(
+                        (&basis, admission, &exposure),
+                        &state,
+                        terminal,
+                        2,
+                        2,
+                        hoard
+                    ),
                     &mut payouts,
                     &mut translation,
                     &mut claims_payouts,
@@ -1067,9 +1071,7 @@ mod tests {
             assert_eq!(
                 encode_product_basis_terminal_signed_delta_v3(
                     input(
-                        &basis,
-                        admission,
-                        &exposure,
+                        (&basis, admission, &exposure),
                         &state,
                         TerminalScenarioV3::Categorical(selector),
                         2,
@@ -1106,9 +1108,7 @@ mod tests {
         assert_eq!(
             encode_product_basis_terminal_signed_delta_v3(
                 input(
-                    &basis,
-                    admission,
-                    &exposure,
+                    (&basis, admission, &exposure),
                     &wrong_basis,
                     TerminalScenarioV3::Categorical(1),
                     1,
@@ -1127,9 +1127,7 @@ mod tests {
         assert_eq!(
             encode_product_basis_terminal_signed_delta_v3(
                 input(
-                    &basis,
-                    admission,
-                    &exposure,
+                    (&basis, admission, &exposure),
                     &overdrawn,
                     TerminalScenarioV3::Categorical(1),
                     1,
@@ -1147,9 +1145,7 @@ mod tests {
         assert_eq!(
             encode_product_basis_terminal_signed_delta_v3(
                 input(
-                    &basis,
-                    admission,
-                    &exposure,
+                    (&basis, admission, &exposure),
                     &valid,
                     TerminalScenarioV3::Categorical(1),
                     1,
@@ -1168,9 +1164,7 @@ mod tests {
         assert_eq!(
             encode_product_basis_terminal_signed_delta_v3(
                 input(
-                    &basis,
-                    admission,
-                    &exposure,
+                    (&basis, admission, &exposure),
                     &valid,
                     TerminalScenarioV3::Categorical(1),
                     1,

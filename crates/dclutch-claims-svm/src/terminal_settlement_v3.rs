@@ -726,11 +726,17 @@ mod tests {
         let receipt = TerminalSettlementReceiptV3::new(request, evidence(9)).expect("receipt");
         let bytes = receipt.to_bytes();
         assert_eq!(
-            TerminalSettlementReceiptV3::decode(&bytes[..bytes.len() - 1]),
+            TerminalSettlementReceiptV3::decode(
+                bytes
+                    .get(..bytes.len() - 1)
+                    .expect("receipt truncated by one byte")
+            ),
             Err(TerminalSettlementErrorV3::InvalidLength)
         );
         let mut reserved = bytes;
-        reserved[1007] = 1;
+        *reserved
+            .get_mut(1007)
+            .expect("reserved byte offset in bounds") = 1;
         assert_eq!(
             TerminalSettlementReceiptV3::decode(&reserved),
             Err(TerminalSettlementErrorV3::NonCanonical)
