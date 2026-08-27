@@ -38,6 +38,7 @@ use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign};
 
 pub mod affine_batch_v2;
+pub mod custody_replay_v1;
 pub mod founding_v5;
 pub mod liability_basis_v2;
 pub mod market_closure_v1;
@@ -247,6 +248,16 @@ pub fn process_instruction(
         == Some(dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_REQUEST_MAGIC_V5.as_slice())
     {
         return founding_v5::process(program_id, accounts, instruction_data);
+    }
+    // The Custody request ABI is this route's own wire: Claims forwards one
+    // canonical `InitializeReplay` it recomputed itself, the way Core carries a
+    // Custody request through `open_market`. The magic belongs to Custody and
+    // collides with no Claims family, and the width pins it further.
+    if instruction_data.len() == dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1
+        && instruction_data.get(..dclutch_custody_contract::CUSTODY_REQUEST_MAGIC_V1.len())
+            == Some(dclutch_custody_contract::CUSTODY_REQUEST_MAGIC_V1.as_slice())
+    {
+        return custody_replay_v1::process(program_id, accounts, instruction_data);
     }
     if instruction_data.get(..protocol_position_v2::PROTOCOL_POSITION_REQUEST_MAGIC_V2.len())
         == Some(protocol_position_v2::PROTOCOL_POSITION_REQUEST_MAGIC_V2.as_slice())
