@@ -822,3 +822,15 @@ chain. Cost basis measured: deploy ~31.7 parked + 0.0287 activation + dust.
   claims report the PASS COUNT and 20-seed MEAN; M-46's bisect uses those.
   Watchlist the new frame gate prints: four functions within 512 B of the
   4,096 wall (3,904/3,840/3,776/3,776/3,584).
+
+- DEPLOY-1 addendum (PAYOUT's FE handoff): browser redemption step 2 rides
+  the deployed markets' published ALTs (DCLTSQ03, role byte 1, wallet at
+  coordinate 0 possibly writable; 1,869 B legacy vs 1,006 on an ALT) and the
+  builder evaluates the Product off-chain (coordinate 23's PDA digests the
+  payout). The FE wiring lands when the smoke's markets publish their tables.
+- SN7 batch: a workspace-enumerating check gate — root cargo check CANNOT
+  see the nested test-caller workspaces (PAYOUT's enum change left root
+  green + three crates red; only the campaign build caught it). The SBOM's
+  39-workspace discovery is the enumeration to reuse.
+- LINGER item: genref regen once the tree quiets (two lanes deferred it
+  rather than publish unlanded line numbers as generated truth — correct).
