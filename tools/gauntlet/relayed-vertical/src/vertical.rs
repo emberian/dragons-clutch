@@ -30,9 +30,9 @@ use dclutch_resolution_core_v3_operator::{
     validate_resolution_create_fund_report_v3, validate_resolution_verify_fund_ready_report_v3,
 };
 use dclutch_source_contract::{
-    PROVIDER_RELEASE_SCHEMA_ID_V1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
-    SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SOURCE_SPEC_SCHEMA_ID_V1, SourceResolutionPhaseV1,
-    WINDOW_SPEC_SCHEMA_ID_V1,
+    MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1, PROVIDER_RELEASE_SCHEMA_ID_V1,
+    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
+    SOURCE_SPEC_SCHEMA_ID_V1, SourceResolutionPhaseV1, WINDOW_SPEC_SCHEMA_ID_V1,
 };
 use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::transfer;
@@ -222,8 +222,7 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
     // in more wallets than the founder's — the abort lane's refund wallet
     // held half the supply on the first executed walk).
     {
-        let token_program =
-            Pubkey::new_from_array(dclutch_token_svm::TOKEN_2022_PROGRAM_ID);
+        let token_program = Pubkey::new_from_array(dclutch_token_svm::TOKEN_2022_PROGRAM_ID);
         let recorded: Vec<(String, Pubkey)> = session
             .accounts
             .iter()
@@ -280,15 +279,37 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
         None,
         &mut session.transactions,
     )?;
+    // The venue's manipulation floor, published beside the source graph: the
+    // record KAPPA's founding guard binds to the Source and the collateral
+    // unit. The founding already refused or admitted UNDER kappa host-side
+    // (input.rs); this makes the floor it admitted against a finalized record
+    // anyone can re-derive the bound from.
+    // Nothing on chain consumes the floor yet (the Core+Claims closure is
+    // queued behind W1b), so the published pair is evidence, not an input.
+    let _manipulation_floor_record = publish_record(
+        &mut session.rpc,
+        registry_program,
+        &authority,
+        MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
+        &facts.manipulation_floor_bytes,
+        None,
+        &mut session.transactions,
+    )?;
     stages.push(StageV1 {
         stage: "relayed release records".into(),
         outcome: "executed".into(),
         note: format!(
-            "Published the RelayerKeySetV1 (n=1, m=1, key {}) and the RelayedAdapterConfigV1 \
-             (account_set_id {}) as finalized Registry records. With the producer's own \
-             publications this completes the section-12.8 record set on the rehearsal chain.",
+            "Published the RelayerKeySetV1 (n=1, m=1, key {}), the RelayedAdapterConfigV1 \
+             (account_set_id {}) and the ManipulationFloorV1 (record {}, curve-derived floor \
+             {} lamports) as finalized Registry records. With the producer's own publications \
+             this completes the section-12.8 record set on the rehearsal chain. The founding \
+             was admitted UNDER kappa = 1/4: principal {} of the {}-atom cap.",
             attestation.pubkey(),
             hex(&facts.account_set_id),
+            hex(&facts.manipulation_floor_digest),
+            dclutch_source_contract::BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1,
+            facts.admitted_principal_atoms,
+            facts.admitted_principal_cap_atoms,
         ),
     });
     ledger.observe(
@@ -633,6 +654,15 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
         "account_set_id": hex(&facts.account_set_id),
         "market": market.to_string(),
         "walk_bounty_lamports": WALK_BOUNTY_LAMPORTS,
+        "founding_admission": {
+            "kappa_numerator": dclutch_source_contract::CHAIN_STATE_DEFAULT_KAPPA_NUMERATOR_V1,
+            "kappa_denominator": dclutch_source_contract::CHAIN_STATE_DEFAULT_KAPPA_DENOMINATOR_V1,
+            "manipulation_floor_lamports":
+                dclutch_source_contract::BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1,
+            "manipulation_floor_record": hex(&facts.manipulation_floor_digest),
+            "principal_atoms": facts.admitted_principal_atoms.to_string(),
+            "principal_cap_atoms": facts.admitted_principal_cap_atoms.to_string(),
+        },
         "stages": stages,
         "walk_detail": walk_result,
         "conservation_verdict": if conserved { "conserved" } else { "violated" },
@@ -709,10 +739,12 @@ fn success_walk(
     let artifacts = daemon::observe_dry_run(&request.relayer_bin, &request.work, &dry_config)?;
     // The artifacts MUST carry the rehearsal label: dropping it would convert
     // a rehearsal into a claim about mainnet. Refuse to continue without it.
-    let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(
-        artifacts.slot_dir.join("manifest.json"),
-    )?)?;
-    if manifest.get("rehearsal_twin").is_none_or(serde_json::Value::is_null) {
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(artifacts.slot_dir.join("manifest.json"))?)?;
+    if manifest
+        .get("rehearsal_twin")
+        .is_none_or(serde_json::Value::is_null)
+    {
         return Err(Error::new(
             "the dry-run manifest carries no rehearsal_twin label; refusing to treat unlabelled              attestations as rehearsal evidence",
         ));
@@ -808,8 +840,12 @@ fn success_walk(
     // static-serve directory a verifier can poll. Serving it publicly stays
     // the separately authorized act.
     let public_dir = request.work.join("public");
-    let publish_stdout =
-        daemon::publish_log(&request.relayer_bin, &request.work, &dry_config, &public_dir)?;
+    let publish_stdout = daemon::publish_log(
+        &request.relayer_bin,
+        &request.work,
+        &dry_config,
+        &public_dir,
+    )?;
     let latest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(public_dir.join("LATEST.json"))?)?;
     let published_lines = latest

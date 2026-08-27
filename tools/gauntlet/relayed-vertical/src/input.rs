@@ -41,10 +41,14 @@ use dclutch_relay_contract::{
 use dclutch_release_set_contract::ProgramIdentityV1;
 use dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V4;
 use dclutch_source_contract::{
-    CapacityEnvelope, ContentId as SourceContentId, ProviderReleaseV1,
+    BONDING_CURVE_FLOOR_DERIVATION_ID_V1, BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1,
+    CHAIN_STATE_DEFAULT_KAPPA_DENOMINATOR_V1, CHAIN_STATE_DEFAULT_KAPPA_NUMERATOR_V1,
+    CapacityEnvelope, ContentId as SourceContentId, ManipulationFloorBasis, ManipulationFloorV1,
+    PRINCIPAL_CAPACITY_LIFTING_PLAN_ID_V1, ProviderReleaseV1,
     RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1, RoundingBoundary,
     SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SourceAccessProfile, SourceCapacityProfileV1,
     SourceMaterialV2, SourceSpecV1, StatisticKind, StatisticSpecV1, WindowKind, WindowSpecV1,
+    admit_founding_principal,
 };
 use solana_sdk_ids::sysvar;
 
@@ -136,6 +140,10 @@ pub(crate) struct RelayedMarketFactsV1 {
     pub(crate) portfolio_digest: [u8; 32],
     pub(crate) manifest_bytes: Vec<u8>,
     pub(crate) max_observation_age_seconds: u64,
+    pub(crate) manipulation_floor_bytes: Vec<u8>,
+    pub(crate) manipulation_floor_digest: [u8; 32],
+    pub(crate) admitted_principal_atoms: u128,
+    pub(crate) admitted_principal_cap_atoms: u128,
 }
 
 /// The wall-clock terminal window, chosen per walk.
@@ -255,16 +263,24 @@ pub(crate) fn relayed_market_input(
     let representation = demo_id("representation/categorical-fixed-width", &[]);
     let mapping = demo_id("mapping/scaled-integer-cut", &[&coordinate_domain]);
 
+    // §6.5's κ, stated on the profile (KAPPA's founding guard). κ is
+    // PROVISIONAL and its lifting plan IS the profile's own envelope_basis_id,
+    // so the AGENTS.md obligation is discharged with no parallel mechanism.
     let capacity = SourceCapacityProfileV1::new(
-        CapacityEnvelope::Measured,
+        CapacityEnvelope::Provisional,
         1,
         0,
         source_content(demo_id("relayed/capacity/terminal-verifier", &[]))?,
-        source_content(demo_id("relayed/capacity/envelope-basis", &[]))?,
+        source_content(PRINCIPAL_CAPACITY_LIFTING_PLAN_ID_V1)?,
         512,
         4,
     )
-    .map_err(|error| Error::new(format!("relayed source capacity: {error:?}")))?;
+    .map_err(|error| Error::new(format!("relayed source capacity: {error:?}")))?
+    .bounding_principal(
+        CHAIN_STATE_DEFAULT_KAPPA_NUMERATOR_V1,
+        CHAIN_STATE_DEFAULT_KAPPA_DENOMINATOR_V1,
+    )
+    .map_err(|error| Error::new(format!("relayed source kappa: {error:?}")))?;
     let capacity_id = source_content(record_identity(&capacity.to_bytes()))?;
 
     // 5. SourceSpecV1: coordinate/unit equal to the Product domain's, relayed
@@ -279,6 +295,29 @@ pub(crate) fn relayed_market_input(
     );
     let source_spec_bytes = source_spec.to_bytes();
     let source_spec_digest = record_identity(&source_spec_bytes);
+
+    // The venue's manipulation floor (§5.4, curve-derived: a curve floor does
+    // not fall as the coin's liquidity thins). Its identity is the digest of
+    // its own body, like every other record in this graph, and its venue
+    // binding is the adapter_config_id the Source itself names — for the
+    // relayed family, the venue's ArtifactReleaseV1 (§12.4). The collateral
+    // unit is the rehearsal Realm's native-lamport stand-in: one collateral
+    // atom represents one lamport, which is the unit the curve floor is
+    // denominated in.
+    let collateral_unit_id = source_content(demo_id(
+        "relayed/collateral-unit/realm-native-lamports",
+        &[],
+    ))?;
+    let manipulation_floor = ManipulationFloorV1::new(
+        ManipulationFloorBasis::CurveDerived,
+        source_content(source_spec_digest)?,
+        source_content(venue_release_digest)?,
+        collateral_unit_id,
+        source_content(BONDING_CURVE_FLOOR_DERIVATION_ID_V1)?,
+        BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1,
+    );
+    let manipulation_floor_bytes = manipulation_floor.to_bytes().to_vec();
+    let manipulation_floor_digest = record_identity(&manipulation_floor_bytes);
 
     // 6. WindowSpecV1, Terminal, with real width (§12.3, TWIN's finding).
     let window = WindowSpecV1::new(
@@ -486,6 +525,57 @@ pub(crate) fn relayed_market_input(
     };
     crate::market::validate_market_input(&input)?;
 
+    // The market founds UNDER the capacity predicate, host-side (the on-chain
+    // closure is queued behind W1b's founding-root ADR; until then the
+    // campaign that founds is the enforcement site). Hoard principal is the
+    // complete-set quantity times the basis scale — the producer founds
+    // quantity = initial_collateral_atoms / 2 at categorical scale 1
+    // (market.rs, "The complete-set quantity times the basis scale is the
+    // Hoard principal").
+    let total_principal_atoms = u128::from(input.initial_collateral_atoms / 2);
+    let capacity_kappa = capacity
+        .principal_capacity()
+        .map_err(|error| Error::new(format!("relayed kappa read-back: {error:?}")))?;
+    admit_founding_principal(
+        capacity_kappa,
+        manipulation_floor,
+        source_content(source_spec_digest)?,
+        source_spec,
+        collateral_unit_id,
+        total_principal_atoms,
+    )
+    .map_err(|error| {
+        Error::new(format!(
+            "the founding principal ({total_principal_atoms} atoms) is refused by kappa = \
+             {CHAIN_STATE_DEFAULT_KAPPA_NUMERATOR_V1}/{CHAIN_STATE_DEFAULT_KAPPA_DENOMINATOR_V1} \
+             against the {BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1}-lamport curve floor: \
+             {error:?}"
+        ))
+    })?;
+    // The bound is exercised at its exact boundary, not just under it: the
+    // largest admitted principal at kappa = 1/4 against the 18.618074 SOL
+    // floor is 4,654,518,500 lamports, and one more atom refuses.
+    let admitted_principal_cap_atoms = u128::from(CHAIN_STATE_DEFAULT_KAPPA_NUMERATOR_V1)
+        * u128::from(BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1)
+        / u128::from(CHAIN_STATE_DEFAULT_KAPPA_DENOMINATOR_V1);
+    if capacity_kappa
+        .admit(
+            manipulation_floor.floor_atoms(),
+            admitted_principal_cap_atoms,
+        )
+        .is_err()
+        || capacity_kappa
+            .admit(
+                manipulation_floor.floor_atoms(),
+                admitted_principal_cap_atoms + 1,
+            )
+            .is_ok()
+    {
+        return Err(Error::new(
+            "the kappa admission boundary is not where the predicate says it is",
+        ));
+    }
+
     Ok(RelayedMarketFactsV1 {
         input,
         account_set_id: set_id,
@@ -505,6 +595,10 @@ pub(crate) fn relayed_market_input(
         portfolio_digest,
         manifest_bytes: manifest,
         max_observation_age_seconds,
+        manipulation_floor_bytes,
+        manipulation_floor_digest,
+        admitted_principal_atoms: total_principal_atoms,
+        admitted_principal_cap_atoms,
     })
 }
 

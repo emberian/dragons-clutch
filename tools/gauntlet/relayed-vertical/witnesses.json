@@ -44,6 +44,13 @@
       "provenance": "The bounty is the capability manifest's own founding-time quote, debited from the market's escrowed explicit-failure compartment. Nobody chooses what the walk pays at walk time; the campaign asserts the walker's balance moved by exactly this amount less the fee."
     },
     {
+      "id": "the-founding-is-under-kappa",
+      "kind": "plan-jq",
+      "query": "((.founding_admission.principal_atoms | tonumber) > 0 and (.founding_admission.principal_atoms | tonumber) <= (.founding_admission.principal_cap_atoms | tonumber) and .founding_admission.principal_cap_atoms == \"4654518500\") | tostring",
+      "expect": "true",
+      "provenance": "KAPPA's section-6.5 founding guard: at the default kappa = 1/4 against the 18.618074 SOL curve-derived manipulation floor, the largest admitted total Hoard principal is 4,654,518,500 lamports. The campaign founds host-side UNDER that bound (the Core+Claims closure is queued behind W1b), publishes the ManipulationFloorV1 it admitted against, and exercises the boundary: the cap admits, one more atom refuses."
+    },
+    {
       "id": "every-stage-executed",
       "kind": "plan-jq",
       "query": "[.stages[] | select(.outcome != \"executed\" and .outcome != \"running\")] | length | tostring",
