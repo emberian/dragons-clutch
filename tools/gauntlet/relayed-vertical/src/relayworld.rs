@@ -359,7 +359,9 @@ pub(crate) fn publish_routing_table(
 }
 
 pub(crate) fn await_finalized_slot(rpc: &mut Rpc, minimum_slot: u64) -> Result<()> {
-    for _ in 0..600 {
+    // 300 seconds, matching the producer: a co-tenant laptop can stall
+    // finalization past a minute while the validator is healthy.
+    for _ in 0..3_000 {
         if rpc.finalized_slot()? >= minimum_slot {
             return Ok(());
         }

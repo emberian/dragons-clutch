@@ -996,7 +996,11 @@ pub(crate) fn publish_routing_table(
 }
 
 fn await_finalized_slot(rpc: &mut Rpc, minimum_slot: u64) -> Result<()> {
-    for _ in 0..600 {
+    // 300 seconds, not 60: a co-tenant laptop under several concurrent SBF
+    // builds can stall finalization past a minute while the validator is
+    // healthy (observed 2026-08-27, a full founding lost at the abort lane's
+    // wait). A genuinely wedged validator still dies here, just later.
+    for _ in 0..3_000 {
         if rpc.finalized_slot()? >= minimum_slot {
             return Ok(());
         }
