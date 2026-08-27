@@ -295,8 +295,14 @@ Measured offline against the real HEAD artifacts (`plan-tx.json`, this lane):
 
 **Measured on chain** by the §6 dry run: exactly **27 transactions** — nine
 `Begin → Append → Finalize` triples, every body fitting in a single Append —
-**510,387 CU** in total and **135,000 lamports** of fees. The whole phase costs
-about 0.024 SOL of rent and 0.000135 SOL of fees, and takes 27 finalized slots.
+**510,387 CU** in total and **135,000 lamports** of fees, over 27 finalized
+slots.
+
+Reading the nine resulting accounts back off that chain gives **23,942,400
+lamports**, equal to the predicted total to the lamport, each account at its
+predicted size and owned by the Registry program. The transient staging cursor
+is created and closed within each publication and refunded to the sponsor, so it
+does not appear in the standing cost.
 
 `tools/local-validator/bootstrap/successor` gained
 `--record-publication transaction` for exactly this (`fab6aaf`). Under it the
