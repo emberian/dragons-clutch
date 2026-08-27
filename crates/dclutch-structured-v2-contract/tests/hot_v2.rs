@@ -21,7 +21,15 @@ use support::{
 const COEFFICIENTS: [u64; 2] = [1, 3];
 const QUANTITY: u64 = 4;
 
-/// Profile coordinates used by every fixture below.
+/// Arbitrary distinct coordinates, and deliberately NOT the frame's.
+///
+/// The candidate never learns the account frame: it checks that an effect's
+/// five accounts do not alias each other and that the authority is exactly the
+/// root or the actor, which is true of any injective assignment. Testing it at
+/// the frame's own coordinates would hide that independence, and would also
+/// suggest these constants are an account layout. They are not -- `frame.rs`
+/// is the only layout authority, decision 0011 says why, and the operator's
+/// `tests/actions.rs` is where the two are made to agree.
 const TOKEN_PROGRAM_COORDINATE: u16 = 0;
 const ROOT_COORDINATE: u16 = 1;
 const OWNER_COORDINATE: u16 = 2;
