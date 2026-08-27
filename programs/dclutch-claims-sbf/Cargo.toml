@@ -21,7 +21,6 @@ dclutch-claims-svm = { path = "../../crates/dclutch-claims-svm" }
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
 dclutch-custody-contract = { path = "../../crates/dclutch-custody-contract" }
 dclutch-economic-slice-kernel = { path = "../../crates/dclutch-economic-slice-kernel" }
-dclutch-liability-basis-v2-kernel = { path = "../../crates/dclutch-liability-basis-v2-kernel" }
 dclutch-market-core-codec = { path = "../../crates/dclutch-market-core-codec" }
 dclutch-product-contract = { path = "../../crates/dclutch-product-contract" }
 dclutch-product-payoff-v2-codec = { path = "../../crates/dclutch-product-payoff-v2-codec" }

@@ -207,11 +207,6 @@ pub fn process_instruction(
     if instruction_data.get(..CORE_EFFECT_MAGIC_V1.len()) == Some(CORE_EFFECT_MAGIC_V1.as_slice()) {
         return process_core_effect(program_id, accounts, instruction_data);
     }
-    if instruction_data.get(..liability_basis_v2::LIABILITY_BASIS_ACTION_MAGIC_V2.len())
-        == Some(liability_basis_v2::LIABILITY_BASIS_ACTION_MAGIC_V2.as_slice())
-    {
-        return liability_basis_v2::process(program_id, accounts, instruction_data);
-    }
     if instruction_data
         .get(..dclutch_claims_svm::market_closure_v1::CLAIMS_MARKET_CLOSURE_REQUEST_MAGIC_V1.len())
         == Some(
