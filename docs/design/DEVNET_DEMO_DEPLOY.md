@@ -326,11 +326,19 @@ per two bytes, so Trading alone is ~692k CU at 1,384,680 bytes and five real
 artifacts in one transaction cannot fit under the 1,400,000 maximum. A partially
 activated cache cannot decode, so no reader can consume a half-activated set.
 
-Worst measured single activation locally: **Trading, 710,601 CU** — and that was
-at 1,287,728 bytes, i.e. 0.552 CU per byte all-in. HEAD's Trading is 1,384,680
-bytes, which *projects* to ≈764,000 CU. That is a projection from one
-measurement, not a measurement; **re-measure it at the deploy commit.** It has
-~55% headroom today and Trading is the artifact most likely to keep growing.
+Measured in the §6 dry run, at the exact ELF sizes in [§4.1](#41-per-artifact-at-head-3b0c5883):
+
+| role | ELF bytes | activation CU | CU/byte |
+|---|---:|---:|---:|
+| Core | 1,007,224 | 549,984 | 0.546 |
+| Claims | 1,073,376 | 582,441 | 0.543 |
+| **Trading** | **1,384,680** | **730,945** | **0.528** |
+| Resolution | 527,504 | 299,713 | 0.568 |
+
+Trading is the worst and sits at **52% of the 1,400,000 maximum** — comfortable,
+and the five together would be ~2.16M, which is why one role per transaction is
+a requirement rather than a preference. Trading is also the artifact most likely
+to keep growing, so this is the number to re-measure at the deploy commit.
 
 ### 3.4 Market lifecycle
 
