@@ -28,7 +28,7 @@ use dclutch_realm_contract::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
     ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1,
-    ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
+    ArtifactReleaseV1, DeploymentObservationV1, require_slot_pinned_release_v1,
 };
 use dclutch_registry_svm::{
     ProgramDataV3View, ProgramV3View,
@@ -704,12 +704,13 @@ fn authenticate_infrastructure_artifact(
     }
     let release = ArtifactReleaseV1::decode(&raw.data)
         .map_err(|_| MarketRetirementOperatorErrorV1::Release)?;
-    if release.upgrade_policy() != ArtifactUpgradePolicyV1::Immutable
-        || release.program().to_bytes() != program.key.to_bytes()
+    if release.program().to_bytes() != program.key.to_bytes()
         || release.programdata() != programdata.key.to_bytes()
     {
         return Err(MarketRetirementOperatorErrorV1::Release);
     }
+    require_slot_pinned_release_v1(release)
+        .map_err(|_| MarketRetirementOperatorErrorV1::Release)?;
     release
         .authenticate_deployment(deployment_observation(program, programdata)?)
         .map_err(|_| MarketRetirementOperatorErrorV1::Release)

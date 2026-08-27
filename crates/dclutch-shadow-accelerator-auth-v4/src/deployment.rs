@@ -6,7 +6,8 @@
 //! This is the single implementation; `dclutch-trading-sbf` calls into it.
 
 use dclutch_registry_contract::{
-    ArtifactReleaseV1, DeploymentObservationV1, immutable_release_elf_digest_v1,
+    ArtifactReleaseV1, DeploymentObservationV1, Error as RegistryContractError,
+    require_slot_pinned_release_v1, slot_pinned_release_elf_digest_v1,
 };
 use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
 use solana_program::{account_info::AccountInfo, hash::hash, pubkey::Pubkey};
@@ -33,16 +34,20 @@ pub fn authenticate_current_deployment(
 ///
 /// `release` must come from the Registry activation cache, where
 /// `activate_execution_role_into_v1` already authenticated a chain-observed
-/// deployment — including the complete ELF digest — before persisting it. For
-/// an `Immutable` Loader V3 deployment whose release and whose observed
-/// ProgramData both carry no upgrade authority, that admitted ELF can never be
-/// redeployed, so hashing a megabyte-scale ELF on every hot action recomputes
-/// an already-authenticated fact. `dclutch_registry_contract::immutable_registry`
-/// owns that argument and the Registry role batch already relies on it.
-/// Identity, ProgramData link, Loader ownership, executability, the exact
-/// deployment slot, and the absent upgrade authority are still checked here and
-/// again by `authenticate_deployment`; an upgradeable activated release keeps
-/// the full current-ELF hash.
+/// deployment — including the complete ELF digest — before persisting it. That
+/// admitted digest is reused while the release's PIN still holds: an
+/// `Immutable` deployment can never be redeployed at all, and an
+/// `ExactAuthority` deployment cannot have moved while its observed ProgramData
+/// still carries the exact slot the activation bound (decision 0012). Either
+/// way, hashing a megabyte-scale ELF on every hot action would recompute an
+/// already-authenticated fact.
+/// `dclutch_registry_contract::slot_pinned_release_elf_digest_v1` owns that
+/// argument and the Registry role batch already relies on it. Identity,
+/// ProgramData link, Loader ownership, executability, the exact deployment
+/// slot, and the exact upgrade authority are still checked here and again by
+/// `authenticate_deployment`. A pin that no longer holds REFUSES — it never
+/// falls back to hashing, because on any state the Loader can actually reach
+/// the hash would only confirm what the slot already said.
 pub fn authenticate_activated_current_deployment(
     release: ArtifactReleaseV1,
     program: &AccountInfo<'_>,
@@ -88,17 +93,24 @@ fn authenticate_deployment_v2(
     let programdata_bytes = programdata
         .try_borrow_data()
         .map_err(|_| ShadowAcceleratorAuthErrorV4::Content)?;
-    let programdata_view =
-        ProgramDataV3View::parse(&programdata_bytes).map_err(|_| ShadowAcceleratorAuthErrorV4::Content)?;
-    if programdata_view.upgrade_authority().is_some() {
-        return Err(ShadowAcceleratorAuthErrorV4::Content);
-    }
-    let elf_digest = activation_bound_elf
-        .then(|| {
-            immutable_release_elf_digest_v1(release, programdata_view.upgrade_authority()).ok()
-        })
-        .flatten()
-        .unwrap_or_else(|| hash(programdata_view.elf()).to_bytes());
+    let programdata_view = ProgramDataV3View::parse(&programdata_bytes)
+        .map_err(|_| ShadowAcceleratorAuthErrorV4::Content)?;
+    require_slot_pinned_release_v1(release).map_err(|_| ShadowAcceleratorAuthErrorV4::Content)?;
+    let elf_digest = if activation_bound_elf {
+        slot_pinned_release_elf_digest_v1(
+            release,
+            programdata_view.upgrade_authority(),
+            programdata_view.deployment_slot(),
+        )
+        .map_err(|error| match error {
+            RegistryContractError::ReleaseSupersededByUpgrade => {
+                ShadowAcceleratorAuthErrorV4::ReleaseSuperseded
+            }
+            _ => ShadowAcceleratorAuthErrorV4::Content,
+        })?
+    } else {
+        hash(programdata_view.elf()).to_bytes()
+    };
     let observation = DeploymentObservationV1::new(
         program.key.to_bytes(),
         program.owner.to_bytes(),
@@ -115,5 +127,10 @@ fn authenticate_deployment_v2(
     .map_err(|_| ShadowAcceleratorAuthErrorV4::Content)?;
     release
         .authenticate_deployment(observation)
-        .map_err(|_| ShadowAcceleratorAuthErrorV4::Content)
+        .map_err(|error| match error {
+            RegistryContractError::ReleaseSupersededByUpgrade => {
+                ShadowAcceleratorAuthErrorV4::ReleaseSuperseded
+            }
+            _ => ShadowAcceleratorAuthErrorV4::Content,
+        })
 }

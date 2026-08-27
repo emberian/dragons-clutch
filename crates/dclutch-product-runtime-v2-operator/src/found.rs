@@ -16,7 +16,7 @@ use dclutch_product_runtime_v2_admission::{
 use dclutch_realm_contract::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
 use dclutch_registry_contract::{
     ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1,
-    ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
+    ArtifactReleaseV1, DeploymentObservationV1, require_slot_pinned_release_v1,
 };
 use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_release_set_contract::{
@@ -528,7 +528,7 @@ fn authenticate_activation(
     {
         return Err(Error::CrossRecordMismatch);
     }
-    authenticate_current_deployment(state.core_program, state.core_programdata, release, true)?;
+    authenticate_current_deployment(state.core_program, state.core_programdata, release)?;
     Ok(())
 }
 
@@ -579,12 +579,10 @@ fn authenticate_artifact(
         authenticate_product_record(registry, ARTIFACT_RELEASE_SCHEMA_ID_V1, observation)?;
     let release =
         ArtifactReleaseV1::decode(observation.raw.data).map_err(|_| Error::InvalidRecord)?;
-    if release.program().to_bytes() != program.key.to_bytes()
-        || release.upgrade_policy() != ArtifactUpgradePolicyV1::Immutable
-    {
+    if release.program().to_bytes() != program.key.to_bytes() {
         return Err(Error::CrossRecordMismatch);
     }
-    authenticate_current_deployment(program, programdata, release, true)?;
+    authenticate_current_deployment(program, programdata, release)?;
     let artifact_release = ArtifactReleaseIdV1::new(coordinate.content_digest.to_bytes())
         .map_err(|_| Error::InvalidRecord)?;
     Ok(ExecutionRoleBindingV1::new(
@@ -593,12 +591,19 @@ fn authenticate_artifact(
     ))
 }
 
+/// Mirror the on-chain founding admission for one Loader V3 deployment.
+///
+/// This host path always hashes the observed ELF, so its soundness never rested
+/// on immutability; what the release's upgrade policy decides is only WHICH
+/// deployments are admissible at all. Decision 0012 made that the two canonical
+/// pinned shapes, and `authenticate_deployment` still holds the deployment to
+/// the exact slot and exact authority the release bound.
 fn authenticate_current_deployment(
     program: AccountObservationV2<'_>,
     programdata: AccountObservationV2<'_>,
     release: ArtifactReleaseV1,
-    require_immutable: bool,
 ) -> Result<()> {
+    require_slot_pinned_release_v1(release).map_err(|_| Error::AccountAuthority)?;
     if release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
         || release.program().to_bytes() != program.key.to_bytes()
         || release.programdata() != programdata.key.to_bytes()
@@ -606,7 +611,6 @@ fn authenticate_current_deployment(
         || programdata.owner != bpf_loader_upgradeable::ID
         || !program.executable
         || programdata.executable
-        || (require_immutable && release.upgrade_policy() != ArtifactUpgradePolicyV1::Immutable)
     {
         return Err(Error::AccountAuthority);
     }

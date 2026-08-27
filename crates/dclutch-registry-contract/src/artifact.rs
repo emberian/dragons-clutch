@@ -248,7 +248,7 @@ impl ArtifactReleaseV1 {
             return Err(Error::ProgramDataExecutable);
         }
         if observed.deployment_slot != self.deployment_slot {
-            return Err(Error::DeploymentSlotMismatch);
+            return Err(self.slot_pin_refusal(observed.deployment_slot));
         }
         if observed.elf_digest != self.elf_digest {
             return Err(Error::ElfDigestMismatch);
@@ -257,6 +257,28 @@ impl ArtifactReleaseV1 {
             return Err(Error::UpgradeAuthorityMismatch);
         }
         Ok(())
+    }
+
+    /// Name a slot mismatch: superseded by an upgrade, or plain staleness.
+    ///
+    /// An `Immutable` release pins a slot that nothing can move, so any
+    /// mismatch is a substituted or wrong-generation observation. An
+    /// `ExactAuthority` release pins a slot the named authority CAN move, and
+    /// under Loader V3 only forward: `Upgrade` refuses when
+    /// `clock.slot == programdata.slot` ("Program was deployed in this block
+    /// already"), and so does the `Close` that a redeploy would have to precede
+    /// it with. A strictly later observed slot on a slot-pinned release is
+    /// therefore exactly one event — the substrate was upgraded — and it gets
+    /// its own name so an operator reads a remedy instead of a mystery.
+    pub(crate) const fn slot_pin_refusal(self, observed_deployment_slot: u64) -> Error {
+        match self.upgrade_policy {
+            ArtifactUpgradePolicyV1::ExactAuthority
+                if observed_deployment_slot > self.deployment_slot =>
+            {
+                Error::ReleaseSupersededByUpgrade
+            }
+            _ => Error::DeploymentSlotMismatch,
+        }
     }
 }
 

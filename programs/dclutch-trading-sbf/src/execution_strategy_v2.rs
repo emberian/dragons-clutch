@@ -22,7 +22,7 @@ use dclutch_execution_strategy_contract::v2::{
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
     ARTIFACT_RELEASE_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
-    ArtifactUpgradePolicyV1,
+    require_slot_pinned_release_v1,
 };
 use dclutch_release_set_contract::ArtifactReleaseIdV1;
 use dclutch_shadow_accelerator_auth_v4::{ShadowAcceleratorAuthErrorV4, deployment};
@@ -47,12 +47,18 @@ const _: () = assert!(
     ShadowAcceleratorAuthErrorV4::Content as u32 == TradingSbfError::Content as u32,
     "the published Shadow callback boundary must raise Trading's Content code"
 );
+const _: () = assert!(
+    ShadowAcceleratorAuthErrorV4::ReleaseSuperseded as u32
+        == TradingSbfError::ReleaseSuperseded as u32,
+    "the published Shadow callback boundary must raise Trading's ReleaseSuperseded code"
+);
 
 impl From<ShadowAcceleratorAuthErrorV4> for TradingSbfError {
     fn from(value: ShadowAcceleratorAuthErrorV4) -> Self {
         match value {
             ShadowAcceleratorAuthErrorV4::Release => Self::Release,
             ShadowAcceleratorAuthErrorV4::Content => Self::Content,
+            ShadowAcceleratorAuthErrorV4::ReleaseSuperseded => Self::ReleaseSuperseded,
         }
     }
 }
@@ -281,7 +287,7 @@ fn authenticate_shadow_aot(
         )
         .map_err(|_| TradingSbfError::Content)?;
     let artifact_release_id = certificate.artifact_release();
-    let artifact_release = authenticate_immutable_artifact(
+    let artifact_release = authenticate_pinned_artifact(
         registry_program,
         rent,
         account(accounts, SHADOW_ARTIFACT_RAW)?,
@@ -339,7 +345,7 @@ fn authenticate_admitted_aot(
         admission_program_id,
     )?;
     let artifact_release_id = certificate.artifact_release();
-    let artifact_release = authenticate_immutable_artifact(
+    let artifact_release = authenticate_pinned_artifact(
         registry_program,
         rent,
         account(accounts, ADMITTED_ARTIFACT_RAW)?,
@@ -489,7 +495,7 @@ fn authenticate_admission(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn authenticate_immutable_artifact(
+fn authenticate_pinned_artifact(
     registry_program: &Pubkey,
     rent: &Rent,
     raw: &AccountInfo<'_>,
@@ -514,11 +520,7 @@ fn authenticate_immutable_artifact(
         &data,
     )?;
     let release = ArtifactReleaseV1::decode(&data).map_err(|_| TradingSbfError::Content)?;
-    if release.upgrade_policy() != ArtifactUpgradePolicyV1::Immutable
-        || release.upgrade_authority().is_some()
-    {
-        return Err(TradingSbfError::Content);
-    }
+    require_slot_pinned_release_v1(release).map_err(|_| TradingSbfError::Content)?;
     drop(data);
     authenticate_current_deployment(release, accelerator_program, accelerator_programdata)?;
     Ok(release)

@@ -168,7 +168,7 @@ pub(crate) fn authenticate_roles<'accounts, 'info>(
             entry.program,
             entry.programdata,
         )
-        .map_err(|_| CoreSbfError::Release)?;
+        .map_err(CoreSbfError::from)?;
     }
     Ok(RoleBatchAdmissions {
         registry: expected_registry,
@@ -345,7 +345,7 @@ pub(crate) fn authenticate_role<'info>(
         role_program,
         role_programdata,
     )
-    .map_err(|_| CoreSbfError::Release)?;
+    .map_err(CoreSbfError::from)?;
     let observed = selected_binding(selected, role);
     if observed.program.to_bytes() != role_program.key.to_bytes()
         || observed.artifact_release.to_bytes() != receipt.artifact_release_id().to_bytes()
