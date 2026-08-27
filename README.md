@@ -114,6 +114,8 @@ test shadows, registered in the same refusal-band and census regime.
   programs, routes and their execution status, refusal codes with meanings,
   compute budgets, ADR index, ABI tables. Regenerate with
   `tools/genref/generate.sh`; `--check` byte-compares.
+- [`docs/guides/`](docs/guides) — thin hand-written guides (trader,
+  operator, reader) that link into the generated reference.
 - [`docs/evidence/`](docs/evidence) — dated execution evidence.
 - [`docs/OMISSION_INDEX.md`](docs/OMISSION_INDEX.md) — the challenge ledger:
   what the successor deliberately does not do yet, and what would reopen each

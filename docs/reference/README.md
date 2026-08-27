@@ -18,7 +18,7 @@ directory is hand-maintained, so nothing in it can drift silently: regenerate
 with `tools/genref/generate.sh`, verify with
 `tools/genref/generate.sh --check`.
 
-Current totals: **13 programs**, **98 routes**
+Current totals: **13 programs**, **100 routes**
 (57 with an in-tree execution binding), **198 protocol
 refusal codes**.
 
@@ -35,6 +35,10 @@ refusal codes**.
 - [decisions.md](decisions.md) -- the architecture decision records.
 - [abi/](abi/README.md) -- record layouts, magics, PDA seed domains, schema
   identities, and account tables, per surface.
+
+The hand-written [guides](../guides/README.md) -- trader, operator, reader --
+are the narrative entry points; they link into these tables rather than
+restating them.
 
 Evidence level, stated once for the whole reference: everything here
 describes a locally executed protocol -- ProgramTest banks and local Agave

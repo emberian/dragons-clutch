@@ -407,6 +407,10 @@ refusal codes**.
 - [abi/](abi/README.md) -- record layouts, magics, PDA seed domains, schema
   identities, and account tables, per surface.
 
+The hand-written [guides](../guides/README.md) -- trader, operator, reader --
+are the narrative entry points; they link into these tables rather than
+restating them.
+
 Evidence level, stated once for the whole reference: everything here
 describes a locally executed protocol -- ProgramTest banks and local Agave
 validators. Nothing is deployed to any cluster and nothing is released.
