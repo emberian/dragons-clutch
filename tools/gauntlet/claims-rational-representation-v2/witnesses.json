@@ -56,6 +56,12 @@
       "query": ".transactions[] | select(.label == \"claims rational-representation-v2: caller refuses after a complete terminal redemption\") | (if .error == null then \"committed\" else ([.logs[] | select(. == \"Program GCkWCknJ46pyPNHC9DPjTxedvjLHYJUVioxe7X5o6xa4 success\")] | length | tostring) end)",
       "expect": "1",
       "provenance": "A rollback case is only evidence if the thing being rolled back actually happened. This asserts, from the runtime's own log, that a transaction the ledger records as FAILED contains a completed Claims invocation (which itself only returns after real Custody and real Token-2022 both succeeded, per the terminal redemption's own account frame). The `if .error == null` guard makes a campaign that accidentally let the transaction commit fail this witness rather than pass it."
+    },
+    {
+      "id": "the-wallet-payout-transactions-are-inside-their-cu-budgets",
+      "kind": "cu-budget",
+      "campaign": "claims-rational-representation-v2-programtest",
+      "provenance": "The budgets live in tools/gauntlet/CU_BUDGETS.json; this witness carries no number of its own. The independent value is Solana's 1,400,000 per-transaction MAX_COMPUTE_UNIT_LIMIT. This campaign carried no CU witness at all until the wallet payout landed, which is why its three rows are the only ones named: they are the first routes a WALLET reaches on its own, so a regression here is a regression a user meets rather than one a keeper absorbs. Every transaction a budget row names is a LITERAL label the recorder emits; the wildcards in bindings.json are the census's and must never be copied into a budget, which would make the row AMBIGUOUS."
     }
   ]
 }

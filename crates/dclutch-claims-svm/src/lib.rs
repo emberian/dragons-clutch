@@ -103,17 +103,37 @@ pub enum Error {
 /// Result alias for this ABI.
 pub type Result<T> = core::result::Result<T, Error>;
 
-/// Registry role authorized to invoke the Claims child.
+/// Registry execution role of the program running one Claims transition.
+///
+/// The discriminants are `ExecutionRoleV1`'s own, so a byte on a Claims wire
+/// and a byte in a `CallerAuthoritySeedsV1` seed list mean the same thing.
+///
+/// Which values a given wire ADMITS is that wire's own decision and each one
+/// owns a private `decode_role`. `Core` and `Trading` are the two roles that can
+/// be an EXTERNAL caller: they reach Claims by CPI and prove it with a
+/// release-pinned caller-authority PDA only their program can sign. `Claims`
+/// names the case with no external caller at all -- the Claims program executing
+/// its own top-level route -- so a wire that exists only to be CPI'd into must
+/// keep refusing it. See `signed_delta_v3::decode_role` for the one wire that
+/// admits it and `docs/decisions/0008-custody-namespace-owner.md` §8 for why.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum CallerRole {
     /// Market-Core orchestration such as Series founding.
     Core = 0,
+    /// The Claims program itself, executing a top-level route with no external
+    /// caller program in the chain.
+    Claims = 1,
     /// Trading orchestration such as Dealer and General clearing.
     Trading = 2,
 }
 
 impl CallerRole {
+    /// Decode the `ClaimsPlanV1` role byte.
+    ///
+    /// This wire is reached only by CPI -- its authority is a caller-program PDA
+    /// (`lib.rs::authenticate_authority`) -- so `Claims` has no proof to offer
+    /// here and stays refused.
     fn decode(value: u8) -> Result<Self> {
         match value {
             0 => Ok(Self::Core),

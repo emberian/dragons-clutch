@@ -1,4 +1,41 @@
 //! Family-neutral Product terminal settlement through SignedDelta and Custody.
+//!
+//! # Who may settle, and what they prove
+//!
+//! The request's execution role selects the proof that must stand at coordinate
+//! 0, which the frame spec pins as a signer in every mode:
+//!
+//! | role | coordinate 0 | the entitled party |
+//! |---|---|---|
+//! | `Core` | `CallerAuthoritySeedsV1` PDA under the Core program | a lifecycle orchestration |
+//! | `Trading` | the same PDA under the activated Trading program | a venue transition |
+//! | `Claims` | the Position owner's own signature | the wallet that holds the claims |
+//!
+//! `Core` and `Trading` are EXTERNAL callers: they reach this route by CPI, and
+//! only the Registry-activated program of that role can sign its authority PDA.
+//! `Claims` names the case with no external caller at all — this program running
+//! top-level — so there is no caller program to derive a PDA under, and the
+//! authority is the one the Position itself names.
+//!
+//! **A signature at coordinate 0 equal to `request.owner` is by itself the proof
+//! that the Position is wallet-held.** A program-derived address has no private
+//! key, so a Trading record owner and a Claims capability owner cannot produce
+//! it; the route needs no owner-kind tag and no extra account to tell the
+//! families apart. The chain closes downstream without a second guard:
+//! `product_basis_terminal_v3::validate_joins` refuses unless the Position
+//! header's `owner` equals `request.owner`, and `signed_delta_v3`'s
+//! `build_candidates` refuses unless the Position account IS the canonical PDA
+//! under `(aggregate, owner)`.
+//!
+//! Nothing else about the route changes with the role. One evaluator computes
+//! the payout, one Custody transfer moves it, one receipt records it — which is
+//! why this is a widened admission and not a second route. See
+//! `docs/decisions/0008-custody-namespace-owner.md` §8.
+//!
+//! **LBV2 Positions carry no lien.** The state is a header plus a balance
+//! vector with a zero-checked reserved word; there is no escrow, lock or
+//! delegate field. So owner authorization at terminal cannot bypass an
+//! encumbrance — there is none to bypass.
 
 // Every private phase is reachable only after `process` proves the one exact
 // 35-account frame. Fixed indexing below therefore cannot observe a short
@@ -11,6 +48,7 @@ extern crate alloc;
 use alloc::{boxed::Box, vec, vec::Vec};
 
 use dclutch_claims_svm::{
+    CallerRole,
     liability_basis_state_v2::LiabilityBasisMarketViewV2,
     product_basis_terminal_v3::{
         ProductClaimsTerminalAdmissionV3, ProductClaimsTerminalInputV3,
@@ -75,7 +113,7 @@ use super::{
         RationalTerminalFrameV3, TerminalCustodyInputV3, execute_terminal_custody_v3,
     },
     signed_delta_v3::{
-        AuthenticatedSignedDeltaParentV3, SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3,
+        AuthenticatedSignedDeltaParentV3, ParentAuthorityV3, SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3,
         authenticate_parent_releases, execute_parent_authenticated,
     },
 };
@@ -296,6 +334,7 @@ fn execute(
         &prepared.packet,
         AuthenticatedSignedDeltaParentV3 {
             caller_role: input.caller_role,
+            authority: parent_authority(input),
             release_set: input.release_set,
             market: input.market,
             parent_context: input.parent_context,
@@ -445,7 +484,31 @@ fn authenticate_extra_privileges(
     {
         return Err(ClaimsSbfError::Accounts.into());
     }
+    // Coordinate 0 is a signer in every mode; WHOSE signature is what the role
+    // selects. Under `Claims` there is no caller program to derive an authority
+    // PDA under, and the entitled party is the Position's owner. Binding the
+    // signer to `input.owner` closes the chain by itself: the evaluator refuses
+    // unless the Position header's `owner` equals it
+    // (`product_basis_terminal_v3::validate_joins`), and `build_candidates`
+    // refuses unless the Position account IS the canonical PDA under
+    // `(aggregate, owner)`. A Trading record owner and a Claims capability owner
+    // are both program-derived addresses with no key, so neither can produce
+    // this proof -- which is why the route needs no owner-kind tag to tell a
+    // wallet-held Position from resting inventory or a capability shard.
+    if input.caller_role == CallerRole::Claims && accounts[0].key.to_bytes() != input.owner {
+        return Err(ClaimsSbfError::Accounts.into());
+    }
     Ok(())
+}
+
+/// Which proof coordinate 0 must carry for this request's execution role.
+const fn parent_authority(
+    input: dclutch_claims_svm::terminal_settlement_v3::TerminalSettlementRequestInputV3,
+) -> ParentAuthorityV3 {
+    match input.caller_role {
+        CallerRole::Claims => ParentAuthorityV3::PositionOwner(input.owner),
+        CallerRole::Core | CallerRole::Trading => ParentAuthorityV3::CallerProgramPda,
+    }
 }
 
 fn authenticate_core(

@@ -45,7 +45,7 @@ use super::{
     ClaimsSbfError,
     rational_product_v3::{AuthenticatedRationalProductV3, authenticate_terminal_scenario_v3},
     signed_delta_v3::{
-        AuthenticatedSignedDeltaParentV3, SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3,
+        AuthenticatedSignedDeltaParentV3, ParentAuthorityV3, SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3,
         execute_parent_authenticated as execute_parent_signed_delta_v3,
     },
 };
@@ -234,6 +234,11 @@ pub(crate) fn execute_rational_terminal_v3<'accounts, 'info>(
         &packet,
         AuthenticatedSignedDeltaParentV3 {
             caller_role: caller_role(header.caller_role),
+            // The representation route is always CPI'd by a venue or lifecycle
+            // program; `CallerRoleV2` cannot even spell anything else. The
+            // Position debited here is the Claims capability PDA's, not a
+            // wallet's, so the owner-signature proof does not apply.
+            authority: ParentAuthorityV3::CallerProgramPda,
             release_set: header.release_set,
             market: header.market,
             parent_context: header.parent_context,

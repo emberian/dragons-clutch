@@ -773,9 +773,15 @@ fn commit_candidates(
     Ok(())
 }
 
+/// Map this wire's execution role onto the release set's.
+///
+/// The `Claims` arm makes the mapping total; it is not an admission. This wire's
+/// `decode_role` refuses the byte, because its authority is a caller-program PDA
+/// and `Claims` is precisely the role with no caller program.
 const fn execution_role(role: CallerRole) -> ExecutionRoleV1 {
     match role {
         CallerRole::Core => ExecutionRoleV1::Core,
+        CallerRole::Claims => ExecutionRoleV1::Claims,
         CallerRole::Trading => ExecutionRoleV1::Trading,
     }
 }

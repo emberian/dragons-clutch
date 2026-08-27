@@ -458,6 +458,12 @@ impl SparseNativeTransferReceiptV1 {
     }
 }
 
+/// Decode the sparse native transfer's execution-role byte.
+///
+/// [`CallerRole::Claims`] stays refused. This wire's authority is a
+/// caller-program PDA and nothing else, so the role that means "no external
+/// caller program" has no proof to offer here. Only
+/// `signed_delta_v3::decode_role` admits it.
 fn decode_role(value: u8) -> Result<CallerRole> {
     match value {
         0 => Ok(CallerRole::Core),

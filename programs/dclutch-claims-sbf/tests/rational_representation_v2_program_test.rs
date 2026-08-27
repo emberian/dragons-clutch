@@ -20,16 +20,23 @@ use dclutch_claims_sbf::liability_basis_v2::{
     TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2, encode_liability_basis_market_v2,
     encode_liability_basis_position_v2, encode_terminal_coordinate_v2,
 };
+use dclutch_claims_sbf::signed_delta_v3::SignedDeltaSbfErrorV3;
 use dclutch_claims_svm::{
     CallerRole,
     custody_replay_v1::ClaimsCustodyReplayRequestV1,
     liability_basis_state_v2::{LiabilityBasisMarketLayoutV2, LiabilityBasisMarketViewV2},
     product_basis_terminal_v3::{
-        ProductBasisTerminalInputV3, TERMINAL_CANDIDATE_DOMAIN_V3,
+        ProductBasisTerminalInputV3, ProductClaimsTerminalAdmissionV3,
+        ProductClaimsTerminalInputV3, TERMINAL_CANDIDATE_DOMAIN_V3,
         encode_product_basis_terminal_signed_delta_v3,
+        encode_product_claims_terminal_signed_delta_v3,
     },
     protocol_position_v2::{ProtocolPositionClaimsCapabilitySeedsV2, ProtocolPositionSeedsV2},
     signed_delta_v3::{DeltaDirectionV3, SignedDeltaV3, plan_bytes},
+    terminal_settlement_v3::{
+        TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3, TERMINAL_SETTLEMENT_CANDIDATE_DOMAIN_V3,
+        TerminalSettlementRequestInputV3, TerminalSettlementRequestV3,
+    },
 };
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
@@ -179,8 +186,17 @@ const PERMUTED_COEFFICIENTS: [u64; K] = [5, 2, 3];
 /// to satisfy all three, and moving the width broke the second one four
 /// transactions deep with a bare `0x5008`.
 const CUSTODY_CLAIMS: [u64; K] = [4, 7, 8];
-/// The actor's own claim quantities, held at the winning coordinate only.
-const ACTOR_CLAIMS: [u64; K] = [0, 2, 0];
+/// The actor's own claim quantities: the wallet-held Position's balance vector.
+///
+/// Coordinate 0 is a LOSING coordinate and the wallet holds one claim there on
+/// purpose. A terminal redemption of a losing coordinate is a real transition
+/// that pays zero -- the claim is burned, the aggregate's supply falls, and no
+/// Custody transfer happens at all -- and it is the only way to reach
+/// `terminal_settlement_v3`'s zero-payout branch from a wallet. Nothing else in
+/// the campaign reads this coordinate: the aggregate's supply is derived from
+/// this vector by [`aggregate_claims`], the shard layer is bound to
+/// [`CUSTODY_CLAIMS`] alone, and every representation assertion is at [`WINNER`].
+const ACTOR_CLAIMS: [u64; K] = [1, 2, 0];
 const SHARD_DECIMALS: [u8; K] = [6, u8::MAX, 9];
 const RECEIPT_DECIMALS: u8 = 19;
 /// The cursor a freshly created Claims-role replay carries.
@@ -428,6 +444,27 @@ struct Fixture {
     result_domain_staging: Pubkey,
     portfolio_record: Pubkey,
     portfolio_staging: Pubkey,
+    /// Finalized Product graph-root digest.
+    ///
+    /// These five are what the family-neutral terminal-settlement wire needs and
+    /// the Rational wire does not: `DCLTSQ03` names the Product, basis and
+    /// exposure identities directly, where `RepresentationRequestV2` reaches
+    /// them through the descriptor. Same records, same fixture, different wire.
+    product_digest: [u8; 32],
+    /// Product-owned semantic LiabilityBasisV2 identity.
+    semantic_basis_id: [u8; 32],
+    /// Finalized ProductBasisV3 raw-record digest.
+    linked_basis_digest: [u8; 32],
+    /// SHA-256 of the finalized composition-exposure bytes.
+    graph_digest: [u8; 32],
+    /// The Core terminal receipt digest, when this fixture is a resolved Market.
+    terminal_record_digest: Option<[u8; 32]>,
+    /// Finalized ResultDomainV2 record digest.
+    result_domain_digest: [u8; 32],
+    /// Exact finalized ProductBasisV3 bytes.
+    linked_basis_bytes: Vec<u8>,
+    /// Exact finalized composition-exposure bytes.
+    graph_bytes: Vec<u8>,
     representation_replay: Pubkey,
     receipt_mint: Pubkey,
     actor_receipt: Pubkey,
@@ -1630,7 +1667,18 @@ fn fixture_with(terminal: bool, receipt_roles: ReceiptMintRoles) -> (ProgramTest
     // so it needs the replay's rent on top of its own rent exemption. Sized from
     // the replay width rather than a round number: a fixture constant chosen to
     // make a transfer succeed is a fixture deciding a protocol fact.
-    add_funded_empty(&mut test, actor.pubkey(), CUSTODY_REPLAY_BYTES_V1);
+    // Enough for the replay rent the actor prepays in step one AND for the fees
+    // of step two, which the wallet pays for itself in
+    // `the_position_owner_pays_its_own_fee_and_still_authorizes_the_payout`. The
+    // width is doubled rather than a lamport literal added so it stays a rent
+    // computation and not a magic number.
+    add_funded_empty(
+        &mut test,
+        actor.pubkey(),
+        CUSTODY_REPLAY_BYTES_V1
+            .checked_mul(2)
+            .expect("actor funding width"),
+    );
     let (release_set, cache_data) = activation_cache(&artifacts);
     let activation_cache = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, &release_set],
@@ -1964,6 +2012,14 @@ fn fixture_with(terminal: bool, receipt_roles: ReceiptMintRoles) -> (ProgramTest
         result_domain_staging: product_claims.result_domain_staging,
         portfolio_record: product_claims.portfolio_record,
         portfolio_staging: product_claims.portfolio_staging,
+        product_digest: product_claims.product_digest,
+        semantic_basis_id: product_claims.basis_id,
+        linked_basis_digest: product_claims.linked_basis_digest,
+        graph_digest,
+        terminal_record_digest: terminal_coordinate.map(|(_, _, digest)| digest),
+        result_domain_digest: product_claims.result_domain_id,
+        linked_basis_bytes: product_claims.linked_basis_bytes.clone(),
+        graph_bytes: graph.clone(),
         representation_replay,
         receipt_mint,
         actor_receipt,
@@ -4518,4 +4574,1040 @@ async fn the_unhashed_founding_context_is_not_the_namespace() {
         "the raw founding action context",
     )
     .await;
+}
+
+// ---------------------------------------------------------------------------
+// The redemption's step two: a PLAIN WALLET-HELD Position gets paid.
+//
+// Everything above redeems through the Rational representation: the debited
+// Position is owned by a Claims capability PDA and the wallet's entitlement is
+// proved by burning shards. The fixture has ALWAYS also carried
+// `fixture.actor_position` -- an LBV2 Position at `(aggregate, actor.pubkey())`
+// holding `ACTOR_CLAIMS` -- and until now nothing in the tree could pay it.
+// `claims/terminal_settlement_v3::process` computes exactly the right number and
+// moves exactly the right atoms; its admission took `Core | Trading` callers, so
+// the only party who could never reach it was the one who owns the claims.
+//
+// The widened admission is role `Claims`: this program executing top-level with
+// no caller program, where coordinate 0 carries the OWNER'S OWN SIGNATURE. A
+// program-derived address has no private key, so that signature is itself the
+// proof the Position is wallet-held.
+// ---------------------------------------------------------------------------
+
+/// Everything a wallet payout may be bent by, for the hostiles.
+#[derive(Clone, Copy, Default)]
+struct WalletPayoutOverrides {
+    /// Execution role on the wire.
+    caller_role: Option<CallerRole>,
+    /// `request.owner` -- the Position owner the evaluator will join.
+    owner: Option<[u8; 32]>,
+    /// The account at coordinate 0, when it must differ from `request.owner`.
+    authority: Option<Pubkey>,
+    /// The Position account, when it must differ from the canonical one.
+    position_account: Option<Pubkey>,
+    /// `request.position`.
+    position: Option<[u8; 32]>,
+    /// The claim coordinate debited.
+    claim_index: Option<u32>,
+    /// The claim atoms debited.
+    quantity: Option<u64>,
+    /// The Core terminal receipt this request claims to settle.
+    terminal_record_digest: Option<[u8; 32]>,
+    /// The optimistic Custody replay cursor.
+    expected_custody_revision: Option<u64>,
+    /// Coordinate 14/15, when they must not be this program.
+    caller_program: Option<(Pubkey, Pubkey)>,
+    /// Make the owner the transaction's FEE PAYER rather than a second signer.
+    owner_pays_the_fee: bool,
+    /// Present the authority coordinate without its signature.
+    authority_withholds_its_signature: bool,
+    /// The optimistic aggregate revision.
+    expected_market_revision: Option<u64>,
+    /// The optimistic Position revision.
+    expected_position_revision: Option<u64>,
+}
+
+/// The exact 640-byte request for one wallet payout out of this fixture.
+///
+/// Nothing here is a restatement: every identity is read off the fixture's own
+/// records, which is what the browser will do off the chain.
+fn wallet_payout_request(
+    fixture: &Fixture,
+    overrides: WalletPayoutOverrides,
+) -> TerminalSettlementRequestV3 {
+    let terminal = fixture.terminal_accounts.expect("terminal fixture");
+    TerminalSettlementRequestV3::new(TerminalSettlementRequestInputV3 {
+        caller_role: overrides.caller_role.unwrap_or(CallerRole::Claims),
+        release_set: fixture.release_set,
+        market: fixture.market.to_bytes(),
+        realm: fixture.realm_id,
+        parent_context: fixture.parent_context,
+        product_record_digest: fixture.product_digest,
+        exposure_id: fixture.graph_id,
+        exposure_digest: fixture.graph_digest,
+        terminal_record_digest: overrides.terminal_record_digest.unwrap_or(
+            fixture
+                .terminal_record_digest
+                .expect("a resolved Market carries a terminal receipt"),
+        ),
+        owner: overrides.owner.unwrap_or(fixture.actor.pubkey().to_bytes()),
+        position: overrides
+            .position
+            .unwrap_or(fixture.actor_position.to_bytes()),
+        recipient_owner: fixture.actor.pubkey().to_bytes(),
+        recipient_token_account: terminal.recipient.to_bytes(),
+        claims_program: CLAIMS_PROGRAM_ID.to_bytes(),
+        custody_program: CUSTODY_PROGRAM_ID.to_bytes(),
+        collateral_mint: terminal.collateral_mint.to_bytes(),
+        token_program: TOKEN_PROGRAM_ID.to_bytes(),
+        semantic_basis_id: fixture.semantic_basis_id,
+        linked_basis_record_digest: fixture.linked_basis_digest,
+        generation: GENERATION,
+        expected_market_revision: overrides.expected_market_revision.unwrap_or(0),
+        expected_position_revision: overrides.expected_position_revision.unwrap_or(0),
+        expected_custody_revision: overrides
+            .expected_custody_revision
+            .unwrap_or(CUSTODY_EXPECTED_REVISION),
+        quantity: overrides.quantity.unwrap_or(
+            ACTOR_CLAIMS
+                .get(WINNERS)
+                .copied()
+                .expect("actor winner claims"),
+        ),
+        claim_index: overrides.claim_index.unwrap_or(WINNER),
+        transfer_index: 0,
+    })
+    .expect("canonical wallet payout request")
+}
+
+/// Rebuild, host-side, the packet and payout the chain will derive.
+///
+/// The Custody caller PDA depends on the Custody request digest, which depends
+/// on the candidate digest, which depends on the packet digest and the payout.
+/// So a builder cannot address this frame without evaluating the Product -- and
+/// this function is the campaign's proof that the arithmetic is reproducible
+/// from public state alone. It is also what a browser builder has to do.
+fn wallet_payout_plan(
+    fixture: &Fixture,
+    request_bytes: &[u8],
+    prestate: &WalletPayoutPrestate,
+) -> Option<(u64, [u8; 32])> {
+    let request = TerminalSettlementRequestV3::decode(request_bytes).expect("canonical request");
+    let input = request.input();
+    let admission = ProductClaimsTerminalAdmissionV3::new(
+        input.exposure_id,
+        input.exposure_digest,
+        [0x61; 32],
+        fixture.result_domain_digest,
+        [0x62; 32],
+        [0x63; 32],
+        input.semantic_basis_id,
+        input.linked_basis_record_digest,
+        input.market,
+        input.release_set,
+        [0x68; 32],
+        OUTCOME_COUNT,
+        1,
+    )
+    .expect("terminal admission projection");
+    let neutral = SignedDeltaV3::new(DeltaDirectionV3::Neutral, 0).expect("neutral delta");
+    let mut payouts = vec![0_u64; K];
+    let mut translation_scratch = vec![0_u64; K];
+    let mut claims_payouts = vec![0_u64; K];
+    let mut aggregate_deltas = vec![neutral; K];
+    let mut packet = vec![0_u8; plan_bytes(OUTCOME_COUNT, 1, 1).expect("wallet payout packet")];
+    let payout = encode_product_claims_terminal_signed_delta_v3(
+        ProductClaimsTerminalInputV3 {
+            product_basis_bytes: &fixture.linked_basis_bytes,
+            admission,
+            composition_exposure_bytes: &fixture.graph_bytes,
+            composition_exposure_admission: RecordAdmissionV3 {
+                selected_id: input.exposure_id,
+                finalized_id: input.exposure_id,
+                recomputed_digest: fixture.graph_digest,
+                finalized_digest: input.exposure_digest,
+                record_authenticated: true,
+            },
+            product_record_digest: input.product_record_digest,
+            market_account: fixture.aggregate.to_bytes(),
+            market_bytes: &prestate.aggregate,
+            position_bytes: &prestate.position,
+            owner: input.owner,
+            request_id: hash(request_bytes).to_bytes(),
+            caller_role: input.caller_role,
+            terminal: TerminalScenarioV3::Categorical(WINNER),
+            claim_index: input.claim_index,
+            quantity: input.quantity,
+            expected_generation: input.generation,
+            expected_market_revision: input.expected_market_revision,
+            expected_position_revision: input.expected_position_revision,
+            hoard_before: prestate.hoard,
+        },
+        &mut payouts,
+        &mut translation_scratch,
+        &mut claims_payouts,
+        &mut aggregate_deltas,
+        &mut packet,
+    )
+    .ok()?;
+    Some((payout, hash(&packet).to_bytes()))
+}
+
+/// The live economic prestate one wallet payout is built against.
+///
+/// Read off the chain rather than restated from fixture constants, because the
+/// Custody caller PDA depends on the payout, which depends on the Position's and
+/// the aggregate's ACTUAL contents. A second redemption after a partial one has
+/// a different prestate and a different address, and a builder that assumed the
+/// genesis numbers would address the wrong account. So does a browser.
+struct WalletPayoutPrestate {
+    aggregate: Vec<u8>,
+    position: Vec<u8>,
+    hoard: u64,
+}
+
+async fn wallet_payout_prestate(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+    position: Pubkey,
+) -> WalletPayoutPrestate {
+    let terminal = fixture.terminal_accounts.expect("terminal fixture");
+    let hoard = observed(context, terminal.hoard).await;
+    WalletPayoutPrestate {
+        aggregate: observed(context, fixture.aggregate).await.data,
+        position: observed(context, position).await.data,
+        hoard: token_amount(&hoard),
+    }
+}
+
+/// The Custody caller-authority PDA this route will sign for.
+///
+/// When the plan does not evaluate at all -- a request whose owner does not own
+/// the Position, say -- there is no address to derive, and none is needed: such a
+/// request is refused by the evaluator long before Custody is reached. The
+/// inert Claims program id stands there so the hostile still presents a
+/// well-formed frame and fails for the reason it is testing.
+fn wallet_payout_custody_caller(
+    fixture: &Fixture,
+    request_bytes: &[u8],
+    prestate: &WalletPayoutPrestate,
+) -> Pubkey {
+    let request = TerminalSettlementRequestV3::decode(request_bytes).expect("canonical request");
+    let input = request.input();
+    let terminal = fixture.terminal_accounts.expect("terminal fixture");
+    let request_digest = hash(request_bytes).to_bytes();
+    let Some((payout, packet_digest)) = wallet_payout_plan(fixture, request_bytes, prestate) else {
+        return CLAIMS_PROGRAM_ID;
+    };
+    let candidate_digest = hashv(&[
+        TERMINAL_SETTLEMENT_CANDIDATE_DOMAIN_V3,
+        &request_digest,
+        &packet_digest,
+        &payout.to_le_bytes(),
+        &input.exposure_digest,
+        &input.terminal_record_digest,
+    ])
+    .to_bytes();
+    let custody = CustodyRequestV1 {
+        operation: OperationV1::Transfer,
+        caller_role: CustodyCallerRoleV1::Claims,
+        source_compartment: CompartmentV1::HoardPrincipal,
+        destination_compartment: CompartmentV1::External,
+        release_set: input.release_set,
+        market: input.market,
+        realm: input.realm,
+        context: fixture.custody_context,
+        caller_program: CLAIMS_PROGRAM_ID.to_bytes(),
+        semantic: ContextV1 {
+            candidate: candidate_digest,
+            source_owner: [0; 32],
+            destination_owner: input.recipient_owner,
+            order: [0; 32],
+            parent_request_digest: request_digest,
+            order_nonce: input.expected_position_revision,
+            generation: input.generation,
+            page_index: 0,
+            execution_index: 0,
+            transfer_index: input.transfer_index,
+        },
+        source: terminal.hoard.to_bytes(),
+        destination: terminal.recipient.to_bytes(),
+        source_vault_context: fixture.custody_context,
+        destination_vault_context: [0; 32],
+        mint: input.collateral_mint,
+        token_program: input.token_program,
+        payer: [0; 32],
+        rent_refund: [0; 32],
+        expected_revision: input.expected_custody_revision,
+        resulting_revision: input
+            .expected_custody_revision
+            .checked_add(1)
+            .expect("resulting revision"),
+        amount: payout,
+        rent_lamports: 0,
+    };
+    if payout == 0 {
+        // There is no Custody CPI to authorize. `authenticate_zero_custody_accounts`
+        // requires this coordinate to BE the Claims program -- an inert value
+        // that cannot be mistaken for an authority -- and a zero-amount
+        // `CustodyRequestV1` would not even validate.
+        return CLAIMS_PROGRAM_ID;
+    }
+    let custody_digest = hash(&custody.to_bytes().expect("Custody request")).to_bytes();
+    Pubkey::find_program_address(
+        &CallerAuthoritySeedsV1::new(
+            ContentId::new(input.release_set).expect("release set"),
+            input.market,
+            ExecutionRoleV1::Claims,
+            fixture.custody_context,
+            custody_digest,
+        )
+        .expect("Claims Custody caller seeds")
+        .as_slices(),
+        &CLAIMS_PROGRAM_ID,
+    )
+    .0
+}
+
+/// The exact 35-account terminal-settlement frame for a wallet payout.
+fn wallet_payout_instruction(
+    fixture: &Fixture,
+    overrides: WalletPayoutOverrides,
+    prestate: &WalletPayoutPrestate,
+) -> (Instruction, Vec<u8>) {
+    let terminal = fixture.terminal_accounts.expect("terminal fixture");
+    let request = wallet_payout_request(fixture, overrides);
+    let request_bytes = request.to_bytes().to_vec();
+    let authority = overrides.authority.unwrap_or(fixture.actor.pubkey());
+    let position = overrides.position_account.unwrap_or(fixture.actor_position);
+    let (caller_program, caller_programdata) = overrides
+        .caller_program
+        .unwrap_or((CLAIMS_PROGRAM_ID, fixture.claims_programdata));
+    let accounts = vec![
+        // Coordinate 0. Under `Core`/`Trading` this is a release-pinned caller
+        // PDA; under `Claims` it is the owner, who can sign because it has a key.
+        if overrides.owner_pays_the_fee {
+            AccountMeta::new(authority, true)
+        } else {
+            AccountMeta::new_readonly(authority, !overrides.authority_withholds_its_signature)
+        },
+        AccountMeta::new(fixture.aggregate, false),
+        AccountMeta::new_readonly(fixture.linked_basis_record, false),
+        AccountMeta::new_readonly(fixture.linked_basis_staging, false),
+        AccountMeta::new_readonly(fixture.product_record, false),
+        AccountMeta::new_readonly(fixture.product_staging, false),
+        AccountMeta::new_readonly(fixture.result_domain_record, false),
+        AccountMeta::new_readonly(fixture.result_domain_staging, false),
+        AccountMeta::new_readonly(fixture.portfolio_record, false),
+        AccountMeta::new_readonly(fixture.portfolio_staging, false),
+        AccountMeta::new_readonly(sysvar::rent::ID, false),
+        AccountMeta::new_readonly(fixture.market, false),
+        AccountMeta::new_readonly(fixture.activation_cache, false),
+        AccountMeta::new_readonly(REGISTRY_PROGRAM_ID, false),
+        AccountMeta::new_readonly(caller_program, false),
+        AccountMeta::new_readonly(caller_programdata, false),
+        AccountMeta::new_readonly(CLAIMS_PROGRAM_ID, false),
+        AccountMeta::new_readonly(fixture.claims_programdata, false),
+        AccountMeta::new_readonly(CORE_PROGRAM_ID, false),
+        AccountMeta::new_readonly(fixture.core_programdata, false),
+        AccountMeta::new(position, false),
+        AccountMeta::new_readonly(fixture.graph_raw, false),
+        AccountMeta::new_readonly(fixture.graph_staging, false),
+        AccountMeta::new_readonly(
+            wallet_payout_custody_caller(fixture, &request_bytes, prestate),
+            false,
+        ),
+        AccountMeta::new_readonly(CUSTODY_PROGRAM_ID, false),
+        // The CategoricalQ1 placeholder pair: this basis has no rational
+        // terminal coordinate, and the route pins both to the Rent sysvar.
+        AccountMeta::new_readonly(sysvar::rent::ID, false),
+        AccountMeta::new_readonly(sysvar::rent::ID, false),
+        AccountMeta::new_readonly(terminal.realm_raw, false),
+        AccountMeta::new_readonly(terminal.realm_staging, false),
+        AccountMeta::new(terminal.custody_replay, false),
+        AccountMeta::new_readonly(terminal.collateral_mint, false),
+        AccountMeta::new(terminal.hoard, false),
+        AccountMeta::new(terminal.recipient, false),
+        AccountMeta::new_readonly(terminal.custody_authority, false),
+        AccountMeta::new_readonly(TOKEN_PROGRAM_ID, false),
+    ];
+    assert_eq!(accounts.len(), TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3);
+    (
+        Instruction {
+            program_id: CLAIMS_PROGRAM_ID,
+            accounts,
+            data: request_bytes.clone(),
+        },
+        request_bytes,
+    )
+}
+
+/// Submit one wallet payout over a live address-lookup table.
+///
+/// This route CANNOT ride a legacy packet. Its frame is thirty-five accounts and
+/// its request is six hundred and forty bytes: 1,869 bytes measured against the
+/// 1,232-byte limit. That is a protocol fact about terminal settlement, not a
+/// campaign choice, and it is the one asymmetry between the redemption's two
+/// steps -- step one (`custody_replay_v1`, 711 bytes) is deliberately legacy so
+/// a redeemer can always create the cursor, and step two needs a published
+/// table. Any redemption builder, including the browser's, has to publish one.
+async fn submit_wallet_payout(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+    table: Pubkey,
+    addresses: &[Pubkey],
+    overrides: WalletPayoutOverrides,
+    label: &str,
+) -> Submission {
+    let position = overrides.position_account.unwrap_or(fixture.actor_position);
+    let prestate = wallet_payout_prestate(context, fixture, position).await;
+    let (instruction, _) = wallet_payout_instruction(fixture, overrides, &prestate);
+    let fee_payer = if overrides.owner_pays_the_fee {
+        overrides.authority.unwrap_or(fixture.actor.pubkey())
+    } else {
+        context.payer.pubkey()
+    };
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    let message = VersionedMessage::V0(
+        v0::Message::try_compile(
+            &fee_payer,
+            &[instruction],
+            &[AddressLookupTableAccount {
+                key: table,
+                addresses: addresses.to_vec(),
+            }],
+            blockhash,
+        )
+        .expect("v0 wallet payout message"),
+    );
+    // Sign with exactly the keys the compiled message demands, in its order. A
+    // hostile that moves the authority coordinate to a different identity moves
+    // the signer set with it, and guessing that set is how a campaign starts
+    // failing for the wrong reason.
+    let required = usize::from(message.header().num_required_signatures);
+    let signers: Vec<&Keypair> = message
+        .static_account_keys()
+        .get(..required)
+        .expect("required signers")
+        .iter()
+        .map(|key| {
+            if key == &context.payer.pubkey() {
+                &context.payer
+            } else {
+                assert_eq!(
+                    key,
+                    &fixture.actor.pubkey(),
+                    "the campaign holds no key for this required signer"
+                );
+                &fixture.actor
+            }
+        })
+        .collect();
+    let transaction =
+        VersionedTransaction::try_new(message, &signers).expect("signed v0 wallet payout");
+    let signature = transaction
+        .signatures
+        .first()
+        .expect("signed transaction")
+        .to_string();
+    let wire_bytes = 1 + transaction.signatures.len() * 64 + transaction.message.serialize().len();
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
+    let processed = context
+        .banks_client
+        .process_transaction_with_metadata(transaction)
+        .await
+        .expect("wallet payout processing");
+    let accepted = processed.result.is_ok();
+    let failure = processed.result.err().map(|error| format!("{error:?}"));
+    let (logs, compute_units) = processed
+        .metadata
+        .map(|metadata| (metadata.log_messages, metadata.compute_units_consumed))
+        .unwrap_or_default();
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: Some(compute_units),
+        wire_bytes: Some(wire_bytes),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
+    Submission {
+        accepted,
+        compute_units,
+        wire_bytes,
+        logs,
+    }
+}
+
+/// Publish the lookup table one wallet payout needs, and hand back its addresses.
+async fn wallet_payout_lookup_table(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+    label_prefix: &str,
+) -> (Pubkey, Vec<Pubkey>) {
+    let prestate = wallet_payout_prestate(context, fixture, fixture.actor_position).await;
+    let (instruction, _) =
+        wallet_payout_instruction(fixture, WalletPayoutOverrides::default(), &prestate);
+    // The legacy shape is measured, not assumed: this is the number that says an
+    // ordinary transaction cannot carry this route.
+    let legacy = legacy_wire_bytes(context.payer.pubkey(), instruction.clone(), Hash::default());
+    assert!(
+        legacy > PACKET_LIMIT,
+        "if a wallet payout ever fits a legacy packet, say so and drop the table: {legacy} bytes"
+    );
+    let addresses = lookup_addresses(
+        context.payer.pubkey(),
+        fixture.actor.pubkey(),
+        &[instruction],
+    );
+    let (table, _) = create_live_lookup_table(context, &addresses, label_prefix).await;
+    (table, addresses)
+}
+
+/// One coordinate's outstanding claim supply in the LBV2 aggregate.
+fn lbv2_market_supply(bytes: &[u8], outcome: u32) -> u64 {
+    let index = usize::try_from(outcome).expect("outcome index");
+    let offset = LiabilityBasisMarketLayoutV2::SUPPLIES
+        .checked_add(
+            index
+                .checked_mul(LiabilityBasisMarketLayoutV2::SUPPLY_STRIDE)
+                .expect("supply offset"),
+        )
+        .expect("supply offset");
+    u64::from_le_bytes(
+        bytes
+            .get(offset..offset.checked_add(8).expect("supply end"))
+            .expect("LBV2 aggregate supply")
+            .try_into()
+            .expect("LBV2 supply width"),
+    )
+}
+
+/// The Claims-role Custody replay's cursor.
+///
+/// Not [`replay_revision`], which reads the REPRESENTATION replay: these are two
+/// different accounts with two different widths, and reading one with the
+/// other's decoder is exactly the confusion decision 0008 §7 exists about.
+fn custody_replay_revision(account: &Account) -> u64 {
+    CustodyReplayV1::decode(&account.data)
+        .expect("live Claims-role replay")
+        .next_revision
+}
+
+/// Refuse-and-prove: the named custom code appeared and no value moved.
+fn assert_refused_with(result: &Submission, code: u32, label: &str) {
+    assert!(!result.accepted, "{label} must refuse: {:#?}", result.logs);
+    assert!(
+        result.logs.iter().any(|log| log
+            == &format!("Program {CLAIMS_PROGRAM_ID} failed: custom program error: {code:#x}")),
+        "{label} must refuse with {code:#x}: {:#?}",
+        result.logs
+    );
+}
+
+/// STEP TWO OF THE REDEMPTION: a plain wallet's Position gets paid.
+///
+/// The actor is an ordinary keypair. Its Position is the canonical LBV2 PDA at
+/// `(aggregate, actor)`, it holds `ACTOR_CLAIMS` and nothing has ever been able
+/// to pay it: `terminal_settlement_v3` computed exactly the right number and
+/// admitted `Core | Trading` callers only, so the one party who could not reach
+/// it was the one who owns the claims.
+///
+/// Here the actor signs for itself under execution role `Claims` and the whole
+/// chain closes: signer == `request.owner` == the Position header's owner == the
+/// canonical Position PDA's second seed.
+#[tokio::test]
+async fn a_wallet_held_position_is_paid_from_the_resolved_markets_hoard() {
+    let (test, fixture) = fixture(true);
+    let mut context = test.start_with_context().await;
+    create_claims_custody_replay(&mut context, &fixture).await;
+    let (table, addresses) = wallet_payout_lookup_table(
+        &mut context,
+        &fixture,
+        "claims rational-representation-v2: wallet payout",
+    )
+    .await;
+    let before = snapshot(&mut context, &fixture).await;
+    assert_eq!(
+        lbv2_position_quantity(&before.actor_position.data, WINNER),
+        ACTOR_CLAIMS[WINNERS],
+        "the wallet's own claims at the winning coordinate"
+    );
+
+    let result = submit_wallet_payout(
+        &mut context,
+        &fixture,
+        table,
+        &addresses,
+        WalletPayoutOverrides::default(),
+        "claims rational-representation-v2: a wallet-held Position is paid",
+    )
+    .await;
+    if !result.accepted {
+        eprintln!("wallet payout refusal logs:\n{}", result.logs.join("\n"));
+    }
+    assert!(result.accepted, "the wallet payout must commit");
+    assert!(
+        result.wire_bytes <= PACKET_LIMIT,
+        "the v0 shape must fit a packet once the table carries the frame: {} bytes",
+        result.wire_bytes
+    );
+
+    let after = snapshot(&mut context, &fixture).await;
+    let paid = ACTOR_CLAIMS[WINNERS];
+    // Collateral: the Hoard pays exactly `quantity * payout_per_claim`, which for
+    // a CategoricalQ1 basis at payout scale one is `quantity`.
+    assert_eq!(
+        token_amount(after.hoard.as_ref().expect("Hoard")),
+        INITIAL_HOARD_ATOMS - paid
+    );
+    assert_eq!(
+        token_amount(after.recipient.as_ref().expect("recipient")),
+        INITIAL_RECIPIENT_ATOMS + paid
+    );
+    // Claims: the wallet's winning coordinate is burned, and the aggregate's
+    // outstanding supply falls by the same atoms. Nothing else moves.
+    assert_eq!(
+        lbv2_position_quantity(&after.actor_position.data, WINNER),
+        0
+    );
+    assert_eq!(
+        lbv2_market_supply(&after.aggregate.data, WINNER),
+        aggregate_claims()[WINNERS] - paid
+    );
+    for index in 0..K {
+        if index == WINNERS {
+            continue;
+        }
+        let outcome = u32::try_from(index).expect("outcome index");
+        assert_eq!(
+            lbv2_market_supply(&after.aggregate.data, outcome),
+            lbv2_market_supply(&before.aggregate.data, outcome),
+            "a terminal payout touches exactly the coordinate it debits"
+        );
+    }
+    assert_eq!(lbv2_revision(&after.aggregate.data), 1);
+    assert_eq!(lbv2_revision(&after.actor_position.data), 1);
+    // The Claims-role cursor advanced exactly once, from the value
+    // `InitializeReplay` wrote.
+    assert_eq!(
+        custody_replay_revision(after.custody_replay.as_ref().expect("Claims-role replay")),
+        CUSTODY_EXPECTED_REVISION + 1
+    );
+    // The representation layer is untouched: this redemption went nowhere near
+    // the shard Mints or the Claims capability Positions.
+    for index in 0..K {
+        assert_account_content_eq(
+            after.positions.get(index).expect("custody Position"),
+            before.positions.get(index).expect("pre custody Position"),
+        );
+        assert_account_content_eq(
+            after.shard_mints.get(index).expect("shard Mint"),
+            before.shard_mints.get(index).expect("pre shard Mint"),
+        );
+    }
+}
+
+/// The browser's shape: ONE wallet pays the fee and authorizes the redemption.
+///
+/// The frame spec pins coordinate 0 to a readonly signer, which is right for a
+/// caller-authority PDA and impossible for a fee payer -- an account that is both
+/// compiles to a single WRITABLE signer entry. Under role `Claims` the pin is
+/// relaxed along that one axis, so the account a browser wallet actually
+/// produces is admissible. This test is the reason that relaxation is not dead
+/// code.
+#[tokio::test]
+async fn the_position_owner_pays_its_own_fee_and_still_authorizes_the_payout() {
+    let (test, fixture) = fixture(true);
+    let mut context = test.start_with_context().await;
+    create_claims_custody_replay(&mut context, &fixture).await;
+    let (table, addresses) = wallet_payout_lookup_table(
+        &mut context,
+        &fixture,
+        "claims rational-representation-v2: owner-paid wallet payout",
+    )
+    .await;
+    let before = snapshot(&mut context, &fixture).await;
+
+    let result = submit_wallet_payout(
+        &mut context,
+        &fixture,
+        table,
+        &addresses,
+        WalletPayoutOverrides {
+            owner_pays_the_fee: true,
+            ..WalletPayoutOverrides::default()
+        },
+        "claims rational-representation-v2: the Position owner pays its own fee",
+    )
+    .await;
+    if !result.accepted {
+        eprintln!("owner-paid refusal logs:\n{}", result.logs.join("\n"));
+    }
+    assert!(
+        result.accepted,
+        "a single wallet must be able to pay for and authorize its own redemption"
+    );
+    let after = snapshot(&mut context, &fixture).await;
+    assert_eq!(
+        token_amount(after.hoard.as_ref().expect("Hoard")),
+        token_amount(before.hoard.as_ref().expect("pre Hoard")) - ACTOR_CLAIMS[WINNERS]
+    );
+    assert_eq!(
+        lbv2_position_quantity(&after.actor_position.data, WINNER),
+        0
+    );
+}
+
+/// A losing coordinate pays ZERO and says so honestly.
+///
+/// The claims are still burned and the aggregate's supply still falls -- a
+/// worthless claim is a claim, and retiring it is a real transition -- but no
+/// Custody transfer happens at all, the Hoard and the recipient are
+/// byte-identical afterwards, and the Claims-role replay cursor does not move.
+/// This is `terminal_settlement_v3`'s zero-payout branch, which nothing in the
+/// tree had ever executed.
+#[tokio::test]
+async fn a_losing_coordinate_pays_zero_and_leaves_the_hoard_byte_identical() {
+    let (test, fixture) = fixture(true);
+    let mut context = test.start_with_context().await;
+    create_claims_custody_replay(&mut context, &fixture).await;
+    let (table, addresses) = wallet_payout_lookup_table(
+        &mut context,
+        &fixture,
+        "claims rational-representation-v2: losing wallet coordinate",
+    )
+    .await;
+    let before = snapshot(&mut context, &fixture).await;
+    let losing = 0_u32;
+    assert_ne!(losing, WINNER);
+    let held = ACTOR_CLAIMS[0];
+    assert!(held > 0, "the wallet must hold a losing claim to burn one");
+
+    let result = submit_wallet_payout(
+        &mut context,
+        &fixture,
+        table,
+        &addresses,
+        WalletPayoutOverrides {
+            claim_index: Some(losing),
+            quantity: Some(held),
+            ..WalletPayoutOverrides::default()
+        },
+        "claims rational-representation-v2: a losing wallet coordinate pays zero",
+    )
+    .await;
+    if !result.accepted {
+        eprintln!("losing payout refusal logs:\n{}", result.logs.join("\n"));
+    }
+    assert!(result.accepted, "a zero payout is a commit, not a refusal");
+    assert!(
+        !result
+            .logs
+            .iter()
+            .any(|log| log == &format!("Program {CUSTODY_PROGRAM_ID} success")),
+        "a zero payout must not invoke Custody: {:#?}",
+        result.logs
+    );
+
+    let after = snapshot(&mut context, &fixture).await;
+    assert_account_content_eq(
+        after.hoard.as_ref().expect("Hoard"),
+        before.hoard.as_ref().expect("pre Hoard"),
+    );
+    assert_account_content_eq(
+        after.recipient.as_ref().expect("recipient"),
+        before.recipient.as_ref().expect("pre recipient"),
+    );
+    assert_eq!(
+        custody_replay_revision(after.custody_replay.as_ref().expect("Claims-role replay")),
+        CUSTODY_EXPECTED_REVISION,
+        "no transfer means no cursor advance"
+    );
+    assert_eq!(
+        lbv2_position_quantity(&after.actor_position.data, losing),
+        0
+    );
+    assert_eq!(
+        lbv2_position_quantity(&after.actor_position.data, WINNER),
+        ACTOR_CLAIMS[WINNERS],
+        "the winning coordinate is untouched"
+    );
+    assert_eq!(
+        lbv2_market_supply(&after.aggregate.data, losing),
+        aggregate_claims()[0] - held
+    );
+}
+
+/// The replay cursor is what refuses a second redemption of the same claims.
+///
+/// The first payout takes one of the wallet's two claims. The second names the
+/// revisions the first left behind -- so the aggregate and the Position join
+/// cleanly -- and carries the STALE Custody cursor. That is the double-spend
+/// shape, and Custody is what stops it.
+#[tokio::test]
+async fn a_stale_custody_cursor_refuses_the_second_wallet_payout() {
+    let (test, fixture) = fixture(true);
+    let mut context = test.start_with_context().await;
+    create_claims_custody_replay(&mut context, &fixture).await;
+    let (table, addresses) = wallet_payout_lookup_table(
+        &mut context,
+        &fixture,
+        "claims rational-representation-v2: replayed wallet payout",
+    )
+    .await;
+
+    let first = submit_wallet_payout(
+        &mut context,
+        &fixture,
+        table,
+        &addresses,
+        WalletPayoutOverrides {
+            quantity: Some(1),
+            ..WalletPayoutOverrides::default()
+        },
+        "claims rational-representation-v2: the first half of a wallet payout",
+    )
+    .await;
+    if !first.accepted {
+        eprintln!("first payout refusal logs:\n{}", first.logs.join("\n"));
+    }
+    assert!(first.accepted, "the first payout must commit");
+    let before = snapshot(&mut context, &fixture).await;
+    assert_eq!(
+        custody_replay_revision(before.custody_replay.as_ref().expect("Claims-role replay")),
+        CUSTODY_EXPECTED_REVISION + 1
+    );
+
+    let replayed = submit_wallet_payout(
+        &mut context,
+        &fixture,
+        table,
+        &addresses,
+        WalletPayoutOverrides {
+            quantity: Some(1),
+            expected_market_revision: Some(1),
+            expected_position_revision: Some(1),
+            expected_custody_revision: Some(CUSTODY_EXPECTED_REVISION),
+            ..WalletPayoutOverrides::default()
+        },
+        "claims rational-representation-v2: a wallet payout on a stale Custody cursor",
+    )
+    .await;
+    assert!(
+        !replayed.accepted,
+        "a stale cursor must refuse: {:#?}",
+        replayed.logs
+    );
+    let after = snapshot(&mut context, &fixture).await;
+    assert_account_content_eq(
+        after.hoard.as_ref().expect("Hoard"),
+        before.hoard.as_ref().expect("pre Hoard"),
+    );
+    assert_account_content_eq(&after.actor_position, &before.actor_position);
+    assert_account_content_eq(&after.aggregate, &before.aggregate);
+    assert_account_content_eq(
+        after.custody_replay.as_ref().expect("Claims-role replay"),
+        before
+            .custody_replay
+            .as_ref()
+            .expect("pre Claims-role replay"),
+    );
+}
+
+/// Every way a wallet payout can be bent, and the exact refusal for each.
+///
+/// One fixture, one prestate, six substitutions. Each asserts the named code and
+/// that the Hoard, the recipient, the wallet's Position and the aggregate are
+/// byte-identical afterwards -- a refusal after a partial write would be worse
+/// than an acceptance.
+#[tokio::test]
+async fn the_wallet_payout_hostiles_refuse_and_move_nothing() {
+    let (test, fixture) = fixture(true);
+    let mut context = test.start_with_context().await;
+    create_claims_custody_replay(&mut context, &fixture).await;
+    let (table, addresses) = wallet_payout_lookup_table(
+        &mut context,
+        &fixture,
+        "claims rational-representation-v2: wallet payout hostiles",
+    )
+    .await;
+    let before = snapshot(&mut context, &fixture).await;
+    let stranger = context.payer.pubkey();
+    assert_ne!(stranger, fixture.actor.pubkey());
+    let another_partys_position = fixture.assets.get(WINNERS).expect("winner asset").position;
+
+    for (overrides, code, label) in [
+        (
+            // The owner is named but did not sign. The frame spec's SIGNER pin
+            // at coordinate 0 is what refuses, before any economics is read.
+            WalletPayoutOverrides {
+                authority_withholds_its_signature: true,
+                ..WalletPayoutOverrides::default()
+            },
+            SignedDeltaSbfErrorV3::Accounts as u32,
+            "the owner named but not signing",
+        ),
+        (
+            // A signature from someone who is not the owner. Coordinate 0 must
+            // BE `request.owner`, so this never reaches the Position.
+            WalletPayoutOverrides {
+                authority: Some(stranger),
+                ..WalletPayoutOverrides::default()
+            },
+            ClaimsSbfError::Accounts as u32,
+            "a signer who is not the Position owner",
+        ),
+        (
+            // ... and naming that stranger as the owner too does not help. The
+            // evaluator's Position join is what fires first: the offered
+            // account's header says the actor owns it. Behind that stands
+            // `build_candidates`, which would refuse the same frame again
+            // because the canonical PDA under `(aggregate, stranger)` is not
+            // this account -- two independent derivations of the same fact.
+            WalletPayoutOverrides {
+                authority: Some(stranger),
+                owner: Some(stranger.to_bytes()),
+                owner_pays_the_fee: true,
+                ..WalletPayoutOverrides::default()
+            },
+            ClaimsSbfError::Economic as u32,
+            "a stranger claiming to own this Position",
+        ),
+        (
+            // Another party's Position at this same Market, offered with the
+            // wallet's own signature. Same join, other direction: the account is
+            // canonical for ITS owner, and its owner is not the signer.
+            WalletPayoutOverrides {
+                position_account: Some(another_partys_position),
+                position: Some(another_partys_position.to_bytes()),
+                ..WalletPayoutOverrides::default()
+            },
+            ClaimsSbfError::Economic as u32,
+            "another party's Position at this Market",
+        ),
+        (
+            // A substituted certificate: the request names a terminal receipt
+            // the Core Market does not carry.
+            WalletPayoutOverrides {
+                terminal_record_digest: Some([0x5a; 32]),
+                ..WalletPayoutOverrides::default()
+            },
+            ClaimsSbfError::Identity as u32,
+            "a substituted terminal certificate",
+        ),
+        (
+            // Role `Claims` means THIS program is the executor. A caller program
+            // coordinate naming anything else leaves an unauthenticated
+            // executable in the frame, and is refused.
+            WalletPayoutOverrides {
+                caller_program: Some((TEST_CALLER_PROGRAM_ID, fixture.caller_programdata)),
+                ..WalletPayoutOverrides::default()
+            },
+            SignedDeltaSbfErrorV3::Release as u32,
+            "role Claims with a foreign caller program",
+        ),
+        (
+            // The other crossing: an EXTERNAL role offering the owner's
+            // signature where its own release-pinned PDA belongs.
+            WalletPayoutOverrides {
+                caller_role: Some(CallerRole::Trading),
+                caller_program: Some((TEST_CALLER_PROGRAM_ID, fixture.caller_programdata)),
+                ..WalletPayoutOverrides::default()
+            },
+            SignedDeltaSbfErrorV3::Release as u32,
+            "role Trading with an owner signature at the authority coordinate",
+        ),
+    ] {
+        let result = submit_wallet_payout(
+            &mut context,
+            &fixture,
+            table,
+            &addresses,
+            overrides,
+            &format!("claims rational-representation-v2: wallet payout with {label}"),
+        )
+        .await;
+        assert_refused_with(&result, code, label);
+        let after = snapshot(&mut context, &fixture).await;
+        assert_account_content_eq(
+            after.hoard.as_ref().expect("Hoard"),
+            before.hoard.as_ref().expect("pre Hoard"),
+        );
+        assert_account_content_eq(
+            after.recipient.as_ref().expect("recipient"),
+            before.recipient.as_ref().expect("pre recipient"),
+        );
+        assert_account_content_eq(&after.actor_position, &before.actor_position);
+        assert_account_content_eq(&after.aggregate, &before.aggregate);
+        assert_account_content_eq(
+            after.custody_replay.as_ref().expect("Claims-role replay"),
+            before
+                .custody_replay
+                .as_ref()
+                .expect("pre Claims-role replay"),
+        );
+    }
+}
+
+/// An UNRESOLVED Market pays nothing, at the Core join.
+///
+/// The Market is walked back to `Phase::Open` with its terminal receipt removed
+/// -- through the bank, so the alteration actually reaches the chain -- and the
+/// same request that just worked is refused. The Core state's own address is
+/// derived from its identity, which does not move, so this is a phase refusal
+/// and not an address one.
+#[tokio::test]
+async fn an_unresolved_market_pays_no_wallet_position() {
+    let (test, fixture) = fixture(true);
+    let mut context = test.start_with_context().await;
+    create_claims_custody_replay(&mut context, &fixture).await;
+    let (table, addresses) = wallet_payout_lookup_table(
+        &mut context,
+        &fixture,
+        "claims rational-representation-v2: unresolved wallet payout",
+    )
+    .await;
+    let before = snapshot(&mut context, &fixture).await;
+
+    let resolved = observed(&mut context, fixture.market).await;
+    let mut state = CoreState::decode(&resolved.data).expect("resolved Core state");
+    assert_eq!(state.phase, CorePhase::Terminal);
+    state.phase = CorePhase::Open;
+    state.terminal_winner = 0;
+    state.terminal_receipt = None;
+    let mut unresolved = resolved.clone();
+    unresolved.data = state.encode().expect("unresolved Core state").to_vec();
+    context.set_account(&fixture.market, &AccountSharedData::from(unresolved));
+
+    let result = submit_wallet_payout(
+        &mut context,
+        &fixture,
+        table,
+        &addresses,
+        WalletPayoutOverrides::default(),
+        "claims rational-representation-v2: a wallet payout against an unresolved Market",
+    )
+    .await;
+    assert_refused_with(
+        &result,
+        ClaimsSbfError::Identity as u32,
+        "an unresolved Market",
+    );
+    let after = snapshot(&mut context, &fixture).await;
+    assert_account_content_eq(
+        after.hoard.as_ref().expect("Hoard"),
+        before.hoard.as_ref().expect("pre Hoard"),
+    );
+    assert_account_content_eq(&after.actor_position, &before.actor_position);
 }

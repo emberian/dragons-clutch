@@ -403,6 +403,229 @@
       "outcome": "refused",
       "refusal": "claims/ClaimsSbfError::Accounts",
       "note": "The consequence of the row above, recorded for what it is rather than for what it looks like: the Issue committed nothing, so no representation replay exists to carry revision one and the unwrap is refused on Accounts (0x5001) at 251,184 CU. BurnReceipt is never the thing that fails, because there is never anything to unwrap."
+    },
+    {
+      "label": "claims rational-representation-v2: a wallet-held Position is paid",
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "STEP TWO OF THE REDEMPTION, and the first execution this route has ever had. A PLAIN WALLET signs for its own Position under the widened execution role Claims (decision 0008 s8): coordinate 0 carries the owner's signature instead of a caller-program PDA, and because a program-derived address has no key, that signature IS the proof the Position is wallet-held. 354,370 CU. Hoard 9 -> 7 and recipient 5 -> 7 for the two claims the wallet held at the winning coordinate; the Position's winning balance is burned to zero, the aggregate's supply falls by the same atoms, no other coordinate moves, both revisions advance by one and the Claims-role cursor advances from the value InitializeReplay wrote. The representation layer -- shard Mints, capability Positions -- is byte-identical."
+    },
+    {
+      "label": "claims rational-representation-v2: the Position owner pays its own fee",
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "THE BROWSER'S SHAPE. One wallet pays the fee AND authorizes, so coordinate 0 arrives WRITABLE: an account that is both a fee payer and a readonly signer compiles to a single writable-signer entry, and there is no message in which one wallet can present itself readonly. Decision 0008 s8.4 relaxes the frame spec's readonly pin for role Claims along that one axis only. 354,369 CU -- one unit under the two-signer shape, which is the whole cost of the difference."
+    },
+    {
+      "label": "claims rational-representation-v2: a losing wallet coordinate pays zero",
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "terminal_settlement_v3's ZERO-PAYOUT BRANCH, which nothing in the tree had ever executed. 223,244 CU. The wallet's claim at a losing coordinate is burned and the aggregate's supply falls -- a worthless claim is still a claim, and retiring it is a real transition -- but Custody is never invoked (no 'Program <custody> success' in the logs), the Hoard and the recipient are byte-identical afterwards, and the Claims-role cursor does not move. authenticate_zero_custody_accounts is what re-derives the whole Custody frame from the persisted namespace without spending it."
+    },
+    {
+      "label": "claims rational-representation-v2: the first half of a wallet payout",
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "A PARTIAL redemption: one of the wallet's two winning claims, 354,370 CU. Exists to set up the stale-cursor row below, and to record that quantity is a caller coordinate the evaluator bounds against the Position's own balance rather than a whole-position sweep."
+    },
+    {
+      "label": "claims rational-representation-v2: a wallet payout on a stale Custody cursor",
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Identity",
+      "note": "HOSTILE, the double-spend shape. The second payout names the revisions the first left behind, so the aggregate and the Position join cleanly, and carries the STALE Custody cursor. Refused Identity (0x5002) at 226,195 CU, and the honest depth is that CLAIMS refuses it, not Custody: authenticate_custody_accounts reads the replay's own next_revision and compares it to the request before any CPI is issued, so the transfer is never attempted. Hoard, recipient, Position, aggregate and replay all byte-identical."
+    },
+    {
+      "label": "claims rational-representation-v2: a wallet payout against an unresolved Market",
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Identity",
+      "note": "HOSTILE. The Core Market is walked back to Phase::Open with its terminal receipt removed -- through the bank, so the alteration actually reaches the chain -- and the same request that just committed is refused Identity (0x5002) at 15,670 CU. The Core state's address is derived from an identity that does not move, so this is a PHASE refusal and not an address one."
+    },
+    {
+      "label": "claims rational-representation-v2: wallet payout with the owner named but not signing",
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/SignedDeltaSbfErrorV3::Accounts",
+      "note": "HOSTILE. The owner is named in the request and present in the frame WITHOUT its signature. The SignedDeltaV3 frame spec's SIGNER pin at coordinate 0 refuses first, 0x5201 at 103,634 CU, before any economics is read. Naming an owner is not authorizing anything."
+    },
+    {
+      "label": "claims rational-representation-v2: wallet payout with a signer who is not the Position owner",
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Accounts",
+      "note": "HOSTILE. A valid signature from an identity that is not request.owner. Coordinate 0 must BE the owner under role Claims, so this refuses Accounts (0x5001) at 8,212 CU -- the cheapest refusal in the set, before the aggregate is even decoded."
+    },
+    {
+      "label": "claims rational-representation-v2: wallet payout with a stranger claiming to own this Position",
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Economic",
+      "note": "HOSTILE, the same substitution pushed one step further: the stranger signs AND is named as the owner, so the authority check passes. The evaluator's Position join then refuses Economic (0x5005) at 59,869 CU because the offered account's header says the actor owns it. Behind that stands signed_delta_v3::build_candidates, which would refuse the same frame again on the canonical PDA under (aggregate, stranger) -- two independent derivations of one fact, and the first one is enough."
+    },
+    {
+      "label": "claims rational-representation-v2: wallet payout with another party's Position at this Market",
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Economic",
+      "note": "HOSTILE, the same join from the other direction: a Claims capability Position at this same Market, canonical for ITS owner, offered with the wallet's signature. Economic (0x5005) at 59,870 CU. A wallet cannot redeem the representation layer's collateral by pointing at it."
+    },
+    {
+      "label": "claims rational-representation-v2: wallet payout with a substituted terminal certificate",
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Identity",
+      "note": "HOSTILE. The request names a terminal receipt digest the Core Market does not carry. Identity (0x5002) at 18,964 CU: the certificate is what fixes the resolved value the basis is evaluated at, so a caller-chosen one would be a caller-chosen payout."
+    },
+    {
+      "label": "claims rational-representation-v2: wallet payout with role Claims with a foreign caller program",
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/SignedDeltaSbfErrorV3::Release",
+      "note": "HOSTILE. Role Claims means THIS program is the executor and there is no external caller, so coordinates 14/15 are pinned to the Claims program and its ProgramData. A frame naming the test caller there leaves an unauthenticated executable in a role slot; refused Release (0x5202) at 105,911 CU."
+    },
+    {
+      "label": "claims rational-representation-v2: wallet payout with role Trading with an owner signature at the authority coordinate",
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/SignedDeltaSbfErrorV3::Release",
+      "note": "HOSTILE, the crossing in the other direction and the sharpest one in the set: an EXTERNAL role offering a wallet signature where its own release-pinned caller PDA belongs. Refused Release (0x5202) at 223,065 CU. The owner-signature proof is admissible under role Claims and nowhere else; the two authority kinds do not substitute for one another."
+    },
+    {
+      "label": "claims rational-representation-v2: wallet payout: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table creation. No dClutch program is invoked. Terminal settlement's 35-account frame plus its 640-byte request measures 1,869 bytes as a legacy transaction against a 1,232-byte limit, so this route CANNOT ride an ordinary packet -- unlike the replay creation that precedes it, which deliberately can. Any redemption builder, the browser's included, publishes a table."
+    },
+    {
+      "label": "claims rational-representation-v2: wallet payout: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table extension. No dClutch program is invoked."
+    },
+    {
+      "label": "claims rational-representation-v2: owner-paid wallet payout: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table creation. No dClutch program is invoked. Terminal settlement's 35-account frame plus its 640-byte request measures 1,869 bytes as a legacy transaction against a 1,232-byte limit, so this route CANNOT ride an ordinary packet -- unlike the replay creation that precedes it, which deliberately can. Any redemption builder, the browser's included, publishes a table."
+    },
+    {
+      "label": "claims rational-representation-v2: owner-paid wallet payout: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table extension. No dClutch program is invoked."
+    },
+    {
+      "label": "claims rational-representation-v2: losing wallet coordinate: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table creation. No dClutch program is invoked. Terminal settlement's 35-account frame plus its 640-byte request measures 1,869 bytes as a legacy transaction against a 1,232-byte limit, so this route CANNOT ride an ordinary packet -- unlike the replay creation that precedes it, which deliberately can. Any redemption builder, the browser's included, publishes a table."
+    },
+    {
+      "label": "claims rational-representation-v2: losing wallet coordinate: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table extension. No dClutch program is invoked."
+    },
+    {
+      "label": "claims rational-representation-v2: replayed wallet payout: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table creation. No dClutch program is invoked. Terminal settlement's 35-account frame plus its 640-byte request measures 1,869 bytes as a legacy transaction against a 1,232-byte limit, so this route CANNOT ride an ordinary packet -- unlike the replay creation that precedes it, which deliberately can. Any redemption builder, the browser's included, publishes a table."
+    },
+    {
+      "label": "claims rational-representation-v2: replayed wallet payout: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table extension. No dClutch program is invoked."
+    },
+    {
+      "label": "claims rational-representation-v2: wallet payout hostiles: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table creation. No dClutch program is invoked. Terminal settlement's 35-account frame plus its 640-byte request measures 1,869 bytes as a legacy transaction against a 1,232-byte limit, so this route CANNOT ride an ordinary packet -- unlike the replay creation that precedes it, which deliberately can. Any redemption builder, the browser's included, publishes a table."
+    },
+    {
+      "label": "claims rational-representation-v2: wallet payout hostiles: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table extension. No dClutch program is invoked."
+    },
+    {
+      "label": "claims rational-representation-v2: unresolved wallet payout: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table creation. No dClutch program is invoked. Terminal settlement's 35-account frame plus its 640-byte request measures 1,869 bytes as a legacy transaction against a 1,232-byte limit, so this route CANNOT ride an ordinary packet -- unlike the replay creation that precedes it, which deliberately can. Any redemption builder, the browser's included, publishes a table."
+    },
+    {
+      "label": "claims rational-representation-v2: unresolved wallet payout: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table extension. No dClutch program is invoked."
     }
   ]
 }

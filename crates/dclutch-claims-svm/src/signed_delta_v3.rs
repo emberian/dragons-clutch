@@ -1221,9 +1221,23 @@ pub fn plan_bytes(
     )
 }
 
+/// Decode the SignedDeltaV3 plan's execution-role byte.
+///
+/// This is the ONE Claims wire that admits [`CallerRole::Claims`], because it is
+/// the one whose authority coordinate can carry a proof other than a
+/// caller-program PDA. `Core` and `Trading` reach this plan by CPI and prove it
+/// with a release-pinned `CallerAuthoritySeedsV1` PDA their program signs;
+/// `Claims` names the case where the Claims program IS the top-level executor
+/// and the proof at that coordinate is the Position owner's own signature.
+///
+/// A plan is only ever built by an enclosing Claims route
+/// (`execute_parent_authenticated`); the top-level `process` entry point refuses
+/// role `Claims` outright, since a PDA under the Claims program is exactly what
+/// no external submitter can sign.
 fn decode_role(value: u8) -> Result<CallerRole> {
     match value {
         0 => Ok(CallerRole::Core),
+        1 => Ok(CallerRole::Claims),
         2 => Ok(CallerRole::Trading),
         _ => Err(SignedDeltaErrorV3::UnknownTag),
     }

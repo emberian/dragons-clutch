@@ -239,8 +239,17 @@ impl TerminalSettlementRequestV3 {
         )?;
         require_zero(bytes, 11, 5)?;
         require_zero(bytes, 638, 2)?;
+        // The three execution roles that can settle a Product terminal. `Core`
+        // and `Trading` are EXTERNAL callers: they reach this route by CPI and
+        // coordinate 0 is the release-pinned caller-authority PDA their program
+        // signed. `Claims` is this program executing the route top-level with no
+        // caller program at all, and coordinate 0 is then the Position owner's
+        // own signature -- the proof that the Position is wallet-held, since a
+        // program-derived owner has no key to sign with. See
+        // `docs/decisions/0008-custody-namespace-owner.md` §8.
         let caller_role = match byte(bytes, ROLE_OFFSET)? {
             0 => CallerRole::Core,
+            1 => CallerRole::Claims,
             2 => CallerRole::Trading,
             _ => return Err(TerminalSettlementErrorV3::NonCanonical),
         };
@@ -696,6 +705,34 @@ mod tests {
             assert_eq!(
                 TerminalSettlementReceiptV3::decode(&receipt.to_bytes()),
                 Ok(receipt)
+            );
+        }
+    }
+
+    /// The three admissible execution roles, and the byte that is not one.
+    ///
+    /// `Claims = 1` is the widened admission (decision 0008 §8): the Claims
+    /// program executing this route top-level, with the Position owner's own
+    /// signature at the authority coordinate instead of a caller-program PDA.
+    /// The wire admits exactly the three roles that can settle a Product
+    /// terminal, and byte 3 -- `ExecutionRoleV1::Resolution`, a real role that is
+    /// not one of them -- is refused, so "in the enum" is not the admission rule.
+    #[test]
+    fn every_settling_role_round_trips_and_no_other_byte_is_one() {
+        for role in [CallerRole::Core, CallerRole::Claims, CallerRole::Trading] {
+            let mut input = request().input();
+            input.caller_role = role;
+            let request = TerminalSettlementRequestV3::new(input).expect("request");
+            let bytes = request.to_bytes();
+            assert_eq!(bytes[ROLE_OFFSET], role as u8);
+            assert_eq!(TerminalSettlementRequestV3::decode(&bytes), Ok(request));
+        }
+        let mut bytes = request().to_bytes();
+        for byte in [3_u8, 4, 5, 255] {
+            bytes[ROLE_OFFSET] = byte;
+            assert_eq!(
+                TerminalSettlementRequestV3::decode(&bytes),
+                Err(TerminalSettlementErrorV3::NonCanonical)
             );
         }
     }
