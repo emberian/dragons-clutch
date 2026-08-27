@@ -1,3 +1,4 @@
+import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
 import { LIVE, liveRpcAccount, mutate } from '../fixtures/liveOpenMarket';
@@ -12,7 +13,13 @@ import {
   MARKET_DISCOVERY_MAX_ADDRESSES,
 } from './marketDiscovery';
 import { deriveFinalizedRecordAddressesV1 } from './releaseRegistry';
-import { CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, REALM_SCHEMA_RELEASE_ID_V1 } from './generated/coreFound';
+import {
+  CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+  LIABILITY_BASIS_MARKET_CUSTODY_CONTEXT_OFFSET,
+  LIABILITY_BASIS_MARKET_GENERATION_OFFSET,
+  LIABILITY_BASIS_MARKET_RELEASE_SET_OFFSET,
+  REALM_SCHEMA_RELEASE_ID_V1,
+} from './generated/coreFound';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
 
 /**
@@ -29,6 +36,7 @@ const SYSTEM_PROGRAM = '11111111111111111111111111111111';
 const CORE = LIVE.programs.core;
 const REGISTRY = LIVE.programs.registry;
 const CLAIMS = LIVE.programs.claims;
+const CUSTODY = LIVE.programs.custody;
 const SLOT = '99';
 
 function client(
@@ -56,6 +64,34 @@ function client(
 
 async function recordAddresses(schema: Uint8Array, body: Uint8Array): Promise<Readonly<{ record: string; staging: string }>> {
   return deriveFinalizedRecordAddressesV1(REGISTRY, schema, await sha256(body));
+}
+
+/**
+ * The Custody namespace the campaign that founded this Market chose.
+ *
+ * `SHA-256("dclutch:projected-hoard-context:v1" || SHA-256(campaign-domain ||
+ * 0 || market || generation_le || release_set))`. The inner domain belongs to
+ * `tools/local-validator/bootstrap/successor/src/market.rs` and is a campaign
+ * convenience, not a protocol constant -- restated here only to reproduce ONE
+ * recorded artifact. Shipped code reads the namespace off the Claims aggregate.
+ */
+async function liveFoundingNamespace(): Promise<Uint8Array> {
+  const aggregate = LIVE.claimsAggregate.data;
+  const generation = new DataView(aggregate.buffer, aggregate.byteOffset, aggregate.byteLength)
+    .getBigUint64(LIABILITY_BASIS_MARKET_GENERATION_OFFSET, true);
+  const generationBytes = new Uint8Array(8);
+  new DataView(generationBytes.buffer).setBigUint64(0, generation, true);
+  const context = await sha256(new Uint8Array([
+    ...new TextEncoder().encode('dclutch/local-campaign/founding-context/v1'),
+    0,
+    ...new PublicKey(LIVE.market.address).toBytes(),
+    ...generationBytes,
+    ...aggregate.slice(LIABILITY_BASIS_MARKET_RELEASE_SET_OFFSET, LIABILITY_BASIS_MARKET_RELEASE_SET_OFFSET + 32),
+  ]));
+  return sha256(new Uint8Array([
+    ...new TextEncoder().encode('dclutch:projected-hoard-context:v1'),
+    ...context,
+  ]));
 }
 
 /** The whole finalized graph the campaign left behind. */
@@ -110,15 +146,79 @@ describe('Market discovery cards', () => {
     expect(card.bindings.find((check) => check.label === 'Registry authority')?.ok).toBe(true);
   });
 
-  it('never presents a Hoard figure it cannot name the account for', async () => {
+  it('says the Hoard is UNREAD when no Custody program was selected', async () => {
     const discovery = await inspectMarketDiscoveryV1(client(await liveChain()), {
       coreProgramId: CORE, registryProgramId: REGISTRY, claimsProgramId: CLAIMS, addresses: [LIVE.market.address],
     });
     const card = discovery.cards[0];
     if (card.status !== 'decoded') throw new Error(card.refusal);
-    expect(card.hoard.status).toBe('not-derivable');
-    expect(card.hoard.reason).toMatch(/namespaced by the founding action context/);
-    expect(JSON.stringify(card)).not.toContain('hoardAtoms');
+    expect(card.hoard.status).toBe('unread');
+    expect(JSON.stringify(card)).not.toContain('principalAtoms');
+  });
+
+  /**
+   * The recorded chain is a Market whose aggregate does not reach its own
+   * Hoard: it was founded before `FoundingV5` persisted the namespace it had
+   * authenticated, so `custody_context` is the Market address while the
+   * principal sits under the founding digest. The browser must say so and show
+   * no figure, rather than deriving a plausible address and going quiet.
+   */
+  it('refuses the Hoard of a Market whose persisted namespace does not reach it', async () => {
+    const discovery = await inspectMarketDiscoveryV1(client(await liveChain()), {
+      coreProgramId: CORE, registryProgramId: REGISTRY, claimsProgramId: CLAIMS, custodyProgramId: CUSTODY,
+      addresses: [LIVE.market.address],
+    });
+    const card = discovery.cards[0];
+    if (card.status !== 'decoded') throw new Error(card.refusal);
+    expect(card.hoard.status).toBe('refused');
+    if (card.hoard.status !== 'refused') throw new Error('unreachable');
+    expect(card.hoard.address).not.toBe(LIVE.hoardVault.address);
+    expect(card.hoard.reason).toMatch(/no account exists at the derived Hoard Vault/);
+    expect(JSON.stringify(card)).not.toContain('principalAtoms');
+  });
+
+  /**
+   * One field, and the whole collateral path opens. Nothing else about these
+   * bytes changes: the same aggregate, the same live Hoard, the same Realm --
+   * only the 32 bytes `FoundingV5` now writes truthfully.
+   */
+  it('derives and authenticates the Hoard once the aggregate tells the truth', async () => {
+    const accounts = await liveChain();
+    accounts.set(LIVE.hoardVault.address, liveRpcAccount(LIVE.hoardVault));
+    accounts.set(LIVE.claimsAggregate.address, liveRpcAccount(LIVE.claimsAggregate, {
+      data: mutate(LIVE.claimsAggregate.data, LIABILITY_BASIS_MARKET_CUSTODY_CONTEXT_OFFSET, await liveFoundingNamespace()),
+    }));
+    const discovery = await inspectMarketDiscoveryV1(client(accounts), {
+      coreProgramId: CORE, registryProgramId: REGISTRY, claimsProgramId: CLAIMS, custodyProgramId: CUSTODY,
+      addresses: [LIVE.market.address],
+    });
+    const card = discovery.cards[0];
+    if (card.status !== 'decoded') throw new Error(card.refusal);
+    if (card.hoard.status !== 'derived') throw new Error(card.hoard.reason);
+    expect(card.hoard.address).toBe(LIVE.hoardVault.address);
+    expect(card.hoard.tokenProgram).toBe(card.collateral.status === 'bound' ? card.collateral.tokenProgram : '');
+    if (card.liability.status !== 'bound') throw new Error(card.liability.reason);
+    expect(card.hoard.principalAtoms).toBe(card.liability.requiredBackingAtoms);
+  });
+
+  it('refuses a Hoard whose token owner is not this Market\'s Custody authority', async () => {
+    const accounts = await liveChain();
+    accounts.set(LIVE.claimsAggregate.address, liveRpcAccount(LIVE.claimsAggregate, {
+      data: mutate(LIVE.claimsAggregate.data, LIABILITY_BASIS_MARKET_CUSTODY_CONTEXT_OFFSET, await liveFoundingNamespace()),
+    }));
+    accounts.set(LIVE.hoardVault.address, liveRpcAccount(LIVE.hoardVault, {
+      data: mutate(LIVE.hoardVault.data, 32, new PublicKey(LIVE.founder).toBytes()),
+    }));
+    const discovery = await inspectMarketDiscoveryV1(client(accounts), {
+      coreProgramId: CORE, registryProgramId: REGISTRY, claimsProgramId: CLAIMS, custodyProgramId: CUSTODY,
+      addresses: [LIVE.market.address],
+    });
+    const card = discovery.cards[0];
+    if (card.status !== 'decoded') throw new Error(card.refusal);
+    expect(card.hoard.status).toBe('refused');
+    if (card.hoard.status !== 'refused') throw new Error('unreachable');
+    expect(card.hoard.address).toBe(LIVE.hoardVault.address);
+    expect(card.hoard.reason).toMatch(/Custody transfer authority/);
   });
 
   it('says liabilities are UNREAD rather than showing an empty supply vector', async () => {

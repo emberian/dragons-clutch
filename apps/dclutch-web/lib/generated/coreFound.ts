@@ -73,3 +73,7 @@ export const LIABILITY_BASIS_POSITION_BASIS_OFFSET = 88 as const;
 export const LIABILITY_BASIS_POSITION_RESERVED_OFFSET = 120 as const;
 export const LIABILITY_BASIS_MARKET_SEED_V2 = new TextEncoder().encode('dclutch:lbv2:market');
 export const LIABILITY_BASIS_POSITION_SEED_V2 = new TextEncoder().encode('dclutch:lbv2:position');
+
+export const CUSTODY_VAULT_PDA_DOMAIN_V1 = new TextEncoder().encode('dclutch:custody-vault:v1');
+export const CUSTODY_AUTHORITY_PDA_DOMAIN_V1 = new TextEncoder().encode('dclutch:custody-authority:v1');
+export const CUSTODY_COMPARTMENT_HOARD_PRINCIPAL_TAG_V1 = 3 as const;

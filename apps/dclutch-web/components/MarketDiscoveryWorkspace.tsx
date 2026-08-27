@@ -73,7 +73,9 @@ function MarketCard({ card }: Readonly<{ card: MarketDiscoveryCardV1 }>) {
       <div><dt>Finalized observed slot</dt><dd>{card.observedSlot}</dd></div>
     </dl>
     <p className="market-hoard-note">Supplies are the exact claim liabilities the Market&apos;s Claims aggregate records. They are not liquidity, TVL, or a balance available to any participant.</p>
-    <p className="market-capability-refusal"><span>Hoard not derivable</span>{card.hoard.reason}</p>
+    {card.hoard.status === 'derived'
+      ? <p className="market-hoard-note">Hoard principal <strong>{card.hoard.principalAtoms}</strong> atoms, held by this Market&apos;s Custody transfer authority at <span title={card.hoard.address}>{shortAddressV1(card.hoard.address)}</span>, in the Custody namespace the Claims aggregate records.</p>
+      : <p className="market-capability-refusal"><span>Hoard {card.hoard.status}</span>{card.hoard.reason}</p>}
     <p className="market-observation"><Link href={`/markets/${card.address}`}>Open this Market field by field →</Link></p>
     {card.collateral.status !== 'bound' && <p className="market-refusal">{card.collateral.reason}</p>}
     {card.liability.status !== 'bound' && <p className="market-refusal">{card.liability.reason}</p>}
@@ -94,6 +96,7 @@ export default function MarketDiscoveryWorkspace() {
   const [coreProgram, setCoreProgram] = useState('');
   const [registryProgram, setRegistryProgram] = useState('');
   const [claimsProgram, setClaimsProgram] = useState('');
+  const [custodyProgram, setCustodyProgram] = useState('');
   const [addressList, setAddressList] = useState('');
   const [enumeration, setEnumeration] = useState<MarketEnumerationV1 | null>(null);
   const [enumerationStatus, setEnumerationStatus] = useState('No Core program enumeration has been attempted.');
@@ -124,6 +127,7 @@ export default function MarketDiscoveryWorkspace() {
         coreProgramId: coreProgram,
         registryProgramId: registryProgram === '' ? null : registryProgram,
         claimsProgramId: claimsProgram === '' ? null : claimsProgram,
+        custodyProgramId: custodyProgram === '' ? null : custodyProgram,
         addresses,
         enumeration: enumeration !== null && enumeration.mode === 'program-scan' && enumeration.addresses.join('\n') === addresses.join('\n') ? enumeration : undefined,
       });
@@ -178,6 +182,7 @@ export default function MarketDiscoveryWorkspace() {
         <label><span>Core program</span><input required value={coreProgram} onChange={(event) => setCoreProgram(event.target.value.trim())} /></label>
         <label><span>Registry program · optional</span><input value={registryProgram} onChange={(event) => setRegistryProgram(event.target.value.trim())} /></label>
         <label><span>Claims program · optional</span><input value={claimsProgram} onChange={(event) => setClaimsProgram(event.target.value.trim())} /></label>
+        <label><span>Custody program · optional</span><input value={custodyProgram} onChange={(event) => setCustodyProgram(event.target.value.trim())} /></label>
       </div>
       <label><span>Known Market addresses · one canonical base58 address per line</span><textarea rows={6} value={addressList} onChange={(event) => setAddressList(event.target.value)} /></label>
       <div className="direct-actions">

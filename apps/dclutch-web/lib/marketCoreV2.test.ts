@@ -1,15 +1,18 @@
 import { readFileSync } from 'node:fs';
 
+import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
+import { fromHex, hex, sha256 } from './bytes';
 import {
-  MARKET_HOARD_UNDERIVABLE_V1,
   decodeClaimsAggregateV2,
   decodeClaimsPositionV2,
   decodeMarketCoreStateV2,
   deriveClaimsAggregateAddressV2,
   deriveClaimsPositionAddressV2,
+  deriveCustodyAuthorityAddressV1,
   deriveMarketCoreAddressV2,
+  deriveMarketHoardAddressV1,
 } from './marketCoreV2';
 
 /**
@@ -40,6 +43,40 @@ const account = (name: string) => {
   if (entry === null || entry === undefined) throw new Error(`live fixture is missing ${name}`);
   return Object.freeze({ ...entry, data: accountBytes(entry.dataHex, `${name} bytes`) });
 };
+
+/**
+ * The Custody namespace the campaign that founded this Market chose.
+ *
+ * Two hashes, and neither is a protocol constant this browser may assume:
+ *
+ *   1. the FOUNDING ACTION CONTEXT, `SHA-256(campaign-domain || 0 || market ||
+ *      generation_le || release_set)`. The domain is
+ *      `dclutch/local-campaign/founding-context/v1` and it belongs to
+ *      `tools/local-validator/bootstrap/successor/src/market.rs`, a campaign
+ *      convenience the protocol never sees. Any 32 bytes are admissible there.
+ *   2. the NAMESPACE, `SHA-256("dclutch:projected-hoard-context:v1" ||
+ *      context)`, which the founding pins and Custody creates the Hoard under.
+ *
+ * Step 1 is restated here to reproduce ONE recorded campaign's artifact from
+ * facts the fixture already carries, and for no other purpose. A shipped
+ * surface must read the namespace off the Claims aggregate, which is why the
+ * aggregate persisting it is what ADR 0008 is about.
+ */
+async function foundingCustodyNamespace(market: string, releaseSetId: string, generation: string): Promise<string> {
+  const generationBytes = new Uint8Array(8);
+  new DataView(generationBytes.buffer).setBigUint64(0, BigInt(generation), true);
+  const context = await sha256(new Uint8Array([
+    ...new TextEncoder().encode('dclutch/local-campaign/founding-context/v1'),
+    0,
+    ...new PublicKey(market).toBytes(),
+    ...generationBytes,
+    ...fromHex(releaseSetId, 'selected release set'),
+  ]));
+  return hex(await sha256(new Uint8Array([
+    ...new TextEncoder().encode('dclutch:projected-hoard-context:v1'),
+    ...context,
+  ])));
+}
 
 describe('the Market a live dClutch chain actually holds', () => {
   it('decodes the first locally Open Market from its finalized bytes', () => {
@@ -114,8 +151,40 @@ describe('the Market a live dClutch chain actually holds', () => {
     // Token account layout: mint@0, owner@32, amount u64@64.
     const amount = new DataView(vault.data.buffer, vault.data.byteOffset, vault.data.byteLength).getBigUint64(64, true);
     expect(amount.toString()).toBe(aggregate.maximumSupplyAtoms);
-    // And the browser still cannot NAME that vault from the Market alone.
-    expect(MARKET_HOARD_UNDERIVABLE_V1).toContain('founding action context');
+    // The vault is owned by this Market's context-free Custody transfer
+    // authority, which is what makes it THIS Market's Hoard and not a token
+    // account at a coincidental address.
+    expect(new PublicKey(vault.data.slice(32, 64)).toBase58()).toBe(
+      deriveCustodyAuthorityAddressV1(live.programs.custody, account('market').address, aggregate.selectedReleaseSetId),
+    );
+  });
+
+  it('names the live Hoard from the founding namespace, and only from that', async () => {
+    const market = account('market').address;
+    const aggregate = decodeClaimsAggregateV2(account('claimsAggregate').address, account('claimsAggregate').data);
+    const namespace = await foundingCustodyNamespace(market, aggregate.selectedReleaseSetId, aggregate.generation);
+    expect(deriveMarketHoardAddressV1(live.programs.custody, market, aggregate.selectedReleaseSetId, namespace))
+      .toBe(account('hoardVault').address);
+  });
+
+  /**
+   * The recorded chain is itself the witness for ADR 0008.
+   *
+   * This Market was founded before `FoundingV5` persisted the namespace it had
+   * authenticated, so its aggregate says `custody_context = <the Market
+   * address>` while its principal sits under the founding digest. Both
+   * statements are finalized bytes off a real validator, and they do not agree:
+   * every payout route deriving from the aggregate names an account that has
+   * never existed. Kept as a case rather than a comment because it is the only
+   * thing in this repository that proves the defect was live rather than
+   * theoretical.
+   */
+  it('records a Market whose persisted namespace does not reach its own Hoard', () => {
+    const market = account('market').address;
+    const aggregate = decodeClaimsAggregateV2(account('claimsAggregate').address, account('claimsAggregate').data);
+    expect(new PublicKey(fromHex(aggregate.custodyContext, 'persisted namespace')).toBase58()).toBe(market);
+    expect(deriveMarketHoardAddressV1(live.programs.custody, market, aggregate.selectedReleaseSetId, aggregate.custodyContext))
+      .not.toBe(account('hoardVault').address);
   });
 
   it('refuses a Position whose declared claim count does not match its width', () => {
