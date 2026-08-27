@@ -2,7 +2,7 @@
 
 Status: **read-only survey. Nothing has been copied, moved, or committed.** This
 document establishes what would be required before any artifact could cross the
-greenfield boundary in [AGENTS.md](../../AGENTS.md) §1 and
+greenfield boundary in [AGENTS.md](../../../../AGENTS.md) §1 and
 [PROVENANCE.md](../PROVENANCE.md) §2. It is not a decision and not an approval.
 
 Survey date: 2026-08-18. Surveyor: read-only inventory lane.

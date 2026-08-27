@@ -1,0 +1,1485 @@
+================================================================================
+COMMIT MESSAGE REPORT
+Every commit message in dragons-clutch (698) and degg-research (80), read in
+full — subjects and bodies — and condensed.
+
+Read 2026-08-22.  dragons-clutch at HEAD 91b52ac; degg-research at HEAD 6b18b96.
+This file is not committed.
+================================================================================
+
+
+################################################################################
+PART ONE — DRAGONS-CLUTCH
+698 commits, 2026-08-18 to 2026-08-22
+################################################################################
+
+================================================================================
+1. THE ARC
+================================================================================
+
+--- ERA 0: BRING-UP, AND THE DECISION TO MAKE GATES SAY TRUE THINGS (08-18) ---
+
+The repository opens with 7149114 "Initial Dragon's Clutch research prototype"
+and fa4efb4 "Record initialized repository baseline", then immediately settles
+the working posture in 75b5763 "Authority: local commits are default work; dev
+remotes are not gated hosts."  The defining commit of the era is f58f1a2 "Pin and
+install Verus 0.2026.08.15 and Rocq 9.2.0; make proof gates report truth", whose
+body is a list of the ways the proof gates were lying: the Verus E0 probe FAILS,
+the Rocq PASS is definition-typechecking with zero theorems and one
+machine-checked *vacuous* conjunct, all three Verus shadow files fail with type
+errors.  "Nothing is verified; the gates now say exactly that."  That sentence is
+the project's whole epistemic method stated on day one, and every later era is
+recognizably downstream of it.  245c965 syncs the prose to match.
+
+--- ERA 1: THE CLEARING PLANE (08-18) ---
+
+The economics arrive as design first, then as code that corrects the design.
+67c5984 and 4b0df95 propose the fractional-payout policy and BatchRelationV1
+(the coupled relation that closes P1-B structurally via a single global virtual
+split/merge pair).  d60ccf3 lands the kernel: transfer_internal, terminal
+complete-set redemption, and — the real content — all nine transitions
+restructured to complete every check before the first write, making the
+on-Err-unchanged contract structural rather than incidental.  f7caf04
+"Implement coupled BatchRelationV1: pairing-complete clearing lands" is the
+era's keystone: ~3130 lines, 33 falsifiers, exhaustive oracles over 2592 books
+× 9 candidates — and a design correction the oracle found (§8.4's slack-floor
+rule emits a forbidden self-cross residue).  a23c7e9 arms the economics lab
+with 83 tests and TRC-003, the fixture proving one materialized leg of a
+fractional set strands permanently.  f671156 makes the vertical model settle
+entirely from witness slices.  7ca01ad removes every policy-selecting Python
+default per P0-5.
+
+--- ERA 2: WAVE 3 — EVIDENCE PLANE, PERSISTED ACCOUNTS, COST, FIRST ELF (08-18) ---
+
+79ab6c1 builds the typed WindowResult evidence plane (constructible only through
+a sealed state machine; bare-summary substitution is a compile error proven by a
+compile_fail doctest).  efb0ed5 "Close P1-C: persisted-state account family,
+cross-page closure, frozen grid" lands eight accounts with encode/decode/validate
+and cross-account binds_* checkers, page-set commitments proving density and
+cross-page strict ordering under adversarial mutation, and the realm
+max_outcomes frozen at 16.  Around it: the ABI cost arm 1a10cbf (which refuses
+quoted totals that do not sum, and grows an abi-audit that parses account_len
+from the Rust source so ABI drift turns the lab red instead of silently ageing
+it), the static client a974c81, the baseline-manifest tool 2aac18e, and the first
+evidence-gated resolution plus a reproducible 102,568-byte SBF ELF in d936eaa.
+cf4a8fc emits the first clean-tree baseline manifest at 28/28 gates.
+b4d4e5f runs the closing drift review.  This era invents the two habits that
+never leave: a manifest of declared gates with expected dispositions, and a
+"drift review" that reads the prose against the code and files P2s.
+
+--- ERA 3: THE INSTRUCTION WAVE (08-18) ---
+
+The program grows one instruction family at a time, each commit ending with a
+findings paragraph.  da2fbf7 gives portfolio orders a persisted page encoding;
+9c43863 replaces single-position refusal with the CLO-DELTA-V1 delta-accounting
+invariant; 9bf0f4b splits the processor into module-per-instruction and finds
+the blocker that shapes the next six months of work — OrderPage v3 exceeds SBF
+frames at decode, 8640 against 4096.  1d0c257 lands permissionless CreateMarket
+with 23 negative tests; c2f7054 ports Split to CLO-DELTA and discovers the
+reference adapter has no Merge arm at all; e2b887a lands FeedAdvance,
+evidence-gated Resolve and RedeemInternal, with the load-bearing divergence that
+the maturity cursor is READ from the feed account so callers can no longer assert
+maturity; cb6d232 implements Merge at the semantic owner; 868a747 ports the
+collateral-policy decoder and answers the cap question honestly by refusing to
+answer it.  5cb4ad1 lands PlaceOrder and blocks CancelOrder and SettlePage with
+*measured* numbers rather than opinions.  8f5bf49 regenerates the SVM harness to
+52/52 byte-exact and records the era's headline measured blocker: Resolve
+consumes the full 1,400,000 CU ceiling and aborts.
+
+--- ERA 4: THE STREAMING RELATION, TERMS V3, PAGE V4 (08-18) ---
+
+a7f513e "Streaming relation verifier: 1,280-byte frames, P-BATCH-03 checkpoint"
+answers the 39KB-frame blocker with a push-style resumable verification whose
+working set is one order, plus 19,520 verdict comparisons at zero divergence.
+927d4bc "TermsAccount v3: unified revision" closes three converged threads in one
+schema and drops Resolve from ceiling-abort to 536,123 CU.  e780d5b "OrderPage
+v4: derived-rank ids, tombstones, per-order expiry, streaming writer" kills the
+page-burning griefing vector by construction and reports that the abi-audit has
+been silently DEAD since the terms commit.  3b6404a integrates orders onto v4 and
+*deletes* 115 lines while gaining two capabilities.  7635a30 resurrects and
+hardens the abi-audit.  The era ends at 01d0008 "The lifecycle walk PASSES:
+PROJECT.md section-10 items 1-10 as one SVM gate" — ten transactions through one
+real validator, terminal identity closing on six equations read from on-chain
+bytes, every number derived twice.
+
+--- ERA 5: TOKEN-2022 AND GENESIS (08-18) ---
+
+5c88505 lands the Token-2022 CPI leg on a real bank (and finds the proposed
+33-byte hoard-authority seed cannot exist).  472b7fe adds the genesis plane —
+and is the one commit in the repository whose body is truncated mid-sentence.
+50c6e35 makes the token plane mandatory, which invalidates every recorded account
+count and forces 7ce4c09 "Mark SVM evidence stale."
+
+--- ERA 6: THE THEORY WAVE (08-18) ---
+
+Six commits with no code in them that reshape everything after.  f422533
+inventories the certificate stack and corrects two prior beliefs.  f2d078e
+"Risk-summed positions: the payoff map is a positive unital linear map" proves
+the solvency theorem is a Markov-map corollary and REFUTES the project's own fee
+premise.  334a8ac "Optimality-certificate mapping: the decomposition is FALSE,
+with counterexamples."  d34120a "Dual is the measure: proved for the degrees we
+implement, refuted beyond" — dual-hood proved, measure-hood proved at degrees 0
+and 1 and refuted at 2+ with an executable arbitrage.  2d0d9b6 settles verified
+bytecode with a no, and observes that every P0 in the project's own adversarial
+review was a missing predicate that would have compiled perfectly.  88840e6
+lands the Lean model — 86 theorems, zero sorry — and returns four corrections to
+the design's own proof sketch.
+
+--- ERA 7: THE TERSE CODEX BAND (08-18 → 08-19) ---
+
+Roughly 200 consecutive commits (10b5158 through 52fb11f) written by a different
+hand: subject-only, no bodies, no Co-Authored-By, many in conventional-commit
+form — "feat(sbf): make Token-2022 bearer supply authoritative", "fix(sbf): keep
+bearer exit within SBF frames", "test(svm): exercise bearer mint truth".  This
+band carries real work (bearer-truth cutover, native B-spline resolution, the
+sealed source archive, prefund-safe PDAs, ResolutionWork, Direct selection V3
+groundwork, the liveness profile) but records none of its reasoning.  4a54585
+"Handoff back to codex" bridges into it and 858f408 "Harness regeneration
+verified" bridges out with one of the best diagnostic bodies in the tree.
+
+--- ERA 8: R1 SEAL, DIRECT V3, AND THE REATTRIBUTION (08-19) ---
+
+52fb11f re-aims GOAL.md and the prose returns.  8b42cd6 "Seal final R1 truth
+boundary"; 6aaa2a1 ledgers a default-ELF identity fork caused by a rustdoc-link
+fix inside the closure; a57b9e3 records the first independent Persvati
+attestation (40/40 portable gates).  Then the Direct V3 lane: 8ad6734 closes the
+audit-RED blockers, f5d60b2 implements the complete tag-37..46 handler family
+against a dispatcher that still refuses all of it, bed3308 routes it, 4a83fdb
+discovers live on the bank that a direct lamport move before an inner create
+unbalances the whole transaction, b3b1d17 drives the routed campaign, fb72b34
+merges.  006eea6 is the era's method commit: "Refute the V3 lane's
+pre-existing-failure claim by measurement."  Then the largest single correction
+in the repository — 3aa1317 "Reattribute the compute ceiling from architecture to
+a software hasher", 7a600d0 and 374cc77 removing sha2 from the SBF graph, 6c25df4
+re-measuring the SVM evidence the conversion moved, cfba5bb resealing.  Two
+recorded STOPs dissolve as measurements rather than promotions.  7105e63 scores
+the planning corpus against what was built: ~14% against a self-reported 53%.
+
+--- ERA 9: FRAME TIERS AND TIER 2 PORTFOLIO CLEARING (08-19 → 08-20) ---
+
+806245d/d2858ee (Tier 1 out-params), a04176f (Tier 0: ten opt-z overflowers under
+the 4 KiB line), b1a1d4b/5600a3d (Tier 3 host-side hygiene) clear the frames.
+Then eight numbered joins: T2-5 policy profile 11008da, T2-2 page-to-order
+projection 00f001c, T2-4 live-cardinality binding 3f12b41, T2-1 ClearWork
+checkpoint codec c923f5f, T2-3 staged creation 6724117, T2-6a general epoch
+78554cf, T2-6b the on-chain streaming walk efdbf78, T2-6c slices and close
+028c206, T2-7 candidate selection 390fde5, T2-8 entitlement and consumption
+1cd5d92/b790007.  87fd342 "Merge T2-6: ... A 40-order 3-page book with two
+portfolio orders and three tombstones walks to VERIFIED across ~20 transactions
+with the verdict byte-equal to the host relation."  6e4702a "Merge T2-8:
+entitlement freeze and generalized settlement consumption — the eighth join."
+Interleaved: reseal cycles A (59b5ffd/9d84e55), B (536e0b8/6827749), C
+(be24ded/7e6066f), D (3bcdeec/788581c), each a full reseal-plus-manifest chain
+with every CU row re-derived from that cycle's own bank logs.
+
+--- ERA 10: THE DECIDE-EVERYTHING WAVE (08-20) ---
+
+6ec3009 opens it.  23f7ee6 lands the complete decision census — 43 entries across
+eight clusters, each with owner, file:line surfaces, options, evidence, blocked
+work, urgency.  Ten standalone reports fan out (ec63ce3 R4 terminal ratification,
+244022e fee-base selection with the composite arm modeled, 1817770
+general-clearing policy freeze, c919ab5 clearing-plane promotion, d5a58f4
+RevenuePolicy, 142ee55 realm admission + Token-2022, 1b879d8 deploy economics,
+660e77e ADR-0003 supersession, 1e1ac17 R2 cutover), then e2e9ada synthesizes and
+eb0b24b "Record the adopted decisions and adopt ADR-0005" — ember delegates on
+the weakest-choice principle, ten adoptions with the one principle-inverted item
+deferred with its tension named.  1b7cfb4 and 100e97e propagate the record
+through every stale-status doc.  Alongside: b3815a0 builds the seven-page GitHub
+Pages microsite; 3a775a7 composts the corpus into a site content map and a
+forty-concept inventory; e757b64 merges the general-plane signed validator walk
+(44 confirmed transactions on a real loopback validator).
+
+--- ERA 11: TERMINALCLOSURE AND THE DISAGREEMENT EXHIBIT (08-20) ---
+
+8d7ba4f adds the wire, b6cbbfa lands TerminalClosure for the general clearing
+plane (tags 60-67), 2c20576 drives it end to end cleared and lapsed, 966ee2c
+merges: "A cleared epoch reclaims 531,639,600 of 531,652,377 lamports; the
+residual is exactly the declared-permanent policy artifact."  934bdd6 reseals
+(cycle E) and retracts a prior reproducibility claim.  Then the exhibit:
+b3d1151 design, 11dfdf7 checked script (which corrects the design prose
+executably: 76 of 77 candidates clear, not all 77), 1a85746 the bank walk,
+0a46fc9 the published page, 8880c57 the merge — "both models think they won and
+the sum of their self-assessed edges is exactly the disagreement traded."
+2df3904 authors the .spw conceptual canon.
+
+--- ERA 12: FEE PLUMBING TO THE BOUNDARY, CYCLE F (08-21) ---
+
+65de358 authors the composite fee-base shape with both rates as explicit zeros;
+1512250 RevenuePolicyV1 with the treasury deferral made structural (a sentinel
+that refuses); c5b3fdc the record layout; 525ec13 the admission boundary;
+61175bf the bank refusal battery; 56ec1ed merges.  04acf61 clears the in-closure
+doc debts so one reseal wave carries all of them, and 927d04b seals cycle F with
+a corrected attribution (the relocation divergence tracks an unresolved symlink
+component, not relocation) and a loophole closed by its own rule.
+
+--- ERA 13: THE NO-MORE-HOLES SWARM (08-21) ---
+
+37675a9 adopts the directive; c275b00 changes the swarm process to a shared tree
+with a suite lock.  The wave that empties the blockers: 90ca751 exhibits the gap
+red-first, 53dc33f grows reservation schema v2 with the partial-fill ledger,
+a144d14 generalizes EntitleSlice, 7274c59 generalizes consumption, b73a817
+drives it on the bank with five mutation falsifiers (one of which found a real
+hole first time round), 47c7a77 retires PartialFillLedger.  c36b3ce realizes the
+rounding pot.  cd54bb7 "Retire VirtualPot: pay, then mint, then deliver" and
+41c231f "Retire VirtualMergeCredit: deliver, then burn, then pay" — the second
+is the split read backwards, and f9871af logs it: "the blocker list is empty."
+In parallel: 0e1bc44 the keeper (a state-derived cranker holding no memory
+between polls), f58d342 the Operator Bench, 7947c0c derives the degree-2/3
+moment cone, 647b33c gates the candidate price plane on it, cc14bcc binds it on
+chain, 5d84f43 generates a 3,360-row Lean/Rust degree corpus, 24925ea and
+d5b70dc and 5c53d7f wire and close the v2 pull source on a real bank, b1744e5
+"Take custody on the default ELF for the first time", 219d239 the scale
+campaigns, 0175a1e and a4c3962 the keeper gate and the eight defects a real
+validator found.
+
+--- ERA 14: CYCLE G AND THE GATE REPAIRS (08-21 → 08-22) ---
+
+df1d99e "Seal cycle G, and give the quote model the coordinates it was missing"
+— eleven landings sealed at once, four corrections to the quote model, and the
+relocated-Cargo-home probe reporting INDEPENDENT for the first time.  Then a
+short, sharp band of gate-honesty repairs: 1b74004 rustdoc links, 31ede41 the
+SBOM, 1699c37 the Verus batch shadow's excluded-source pins, 4e433f8 the ABI
+arm, bb60c2a two counts the gates declare about themselves, 23d9059 a gate whose
+declared evidence line had never once matched.  5ae3a32 reseals the manifest at
+100/101 with one recorded contradiction.  88fa515 corrects the attestation's two
+findings (an orphan ref that would kill the verifier in a fresh clone), 902e8d2
+re-emits, 91b52ac logs cycle G closed.
+
+
+================================================================================
+2. THE FINDINGS LEDGER
+Every commit whose body carries a real finding, correction, refutation, or
+retraction.  One line each.
+================================================================================
+
+--- GATES AND PROOF HONESTY ---
+
+f58f1a2  Pin and install Verus and Rocq; make proof gates report truth
+         The E0 probe FAILS under Verus, the Rocq PASS is typechecking with zero
+         theorems and one machine-checked *vacuous* conjunct, all three Verus
+         shadows fail — "Nothing is verified; the gates now say exactly that."
+
+a974c81  Static client: checked equality gates, CSP honesty
+         The FNV fallback that read as verification is removed; the old canonical
+         terms digest is annotated superseded rather than overwritten.
+
+2aac18e  Add baseline-manifest tool; annotate P0-1 remote status
+         The host rlib digest is path-volatile and excluded with reason inline;
+         the tool caught a concurrent lane's golden regeneration unprompted.
+
+e780d5b  OrderPage v4
+         The abi-audit has been DEAD — erroring, not reporting — since the terms
+         commit 927d4bc, with a pinned-substitution masking hazard behind it.
+
+7635a30  abi-audit resurrected and hardened
+         Repaired, it owed 34 named drift lines; unknown tokens now become named
+         drift lines rather than a quiet exit 2.
+
+ecfd552  Require sealed liveness evidence to be committed, not merely present
+         .gitignore excludes *.so and *.log, so a plain `git add` of a seal root
+         committed 11 of 24 files — and every gate stayed green, because they all
+         hash working-tree files.  "Verified for whoever built it and unverifiable
+         for whoever clones the repository."
+
+23d9059  Make the license gate record the evidence line it declares
+         The gate's key pattern has NEVER matched: the checker emits tab-separated
+         records and the pattern spelled the separators as spaces, so every green
+         run — including the sealed cb94c27 baseline — stored the sha256 of the
+         empty string as its evidence.
+
+bb60c2a  Correct two counts the profile gates declare about themselves
+         `note` is a declaration field, not a matched pattern, so both counts
+         drifted unnoticed while the gates they describe stayed green.  45 tests
+         was really 83; a 1,490,544-byte ELF claim was two seals stale.
+
+88fa515  Correct the seal's two attestation findings
+         runtime_ref/evidence_ref/source_ref were pinned to 9cbc835, a pre-rewrite
+         twin reachable from no published ref — which would kill the seal's own
+         verifier in any fresh clone.  Plus a scalar carrying cycle F's number.
+
+1457a9e  Give the seal's gates the four corrections to hold
+         Two relocation tests asserted a divergence the amended probe no longer
+         produces, "which is exactly when a gate rots" — rewritten to exercise
+         the weld in both directions against a synthetic diverged probe.
+
+710341b  Enumerate the svm_run.txt staleness instead of forging a regeneration
+         More stale than the report said: names four tests that no longer exist,
+         records 9 collateral-leg tests where there are 17, omits 25 test files.
+         Also: the default gate's key pattern expects a shasum line the script
+         never emits, so that profile's ELF identity was captured nowhere.
+
+7150a01  Amend Phase M's housekeeping item: neither half is free-standing
+         "The two rustdoc warnings" was a snapshot; the real count is 13 across 9
+         files, every one inside the sealed source closure, so they ride a reseal.
+
+04acf61  Clear the in-closure doc debts
+         The roadmap listed orders_batch.rs:1536 as a twelfth warning site.  It is
+         not one — rustdoc does not check link privacy on a private fn.
+
+--- KERNEL, RELATION, AND ECONOMICS ---
+
+d60ccf3  Kernel: transfer_internal, terminal complete-set redemption
+         The pre-existing mutation-on-error window was unreachable by arithmetic
+         argument; the reorder makes on-Err-unchanged structural, not incidental.
+
+f7caf04  Implement coupled BatchRelationV1
+         Design correction found by the oracle: §8.4's slack-floor rule as written
+         emits a forbidden self-cross residue on a {A:1,C:1}/{B:1,C:1} book.  Six
+         deviations from the design text, each test-backed.
+
+a23c7e9  Economics lab arms, cross-language fixtures
+         TRC-003: one materialized leg of a fractional set strands permanently
+         even with the complete-set primitive.
+
+f671156  Vertical model clears and settles through the coupled relation
+         Landed trace name deviates from design §14.3; the R-b price-unit/atom
+         rounding boundary is recorded per ledger but never exercised.
+
+5b38578  Night drift review: A-H pass
+         Two P2s recorded: the econ-lab Python policy defaults violate P0-5's
+         spirit, and VERTICAL_MODEL.md lacks the coupled-path section.
+
+79ab6c1  Typed WindowResult evidence plane; collateral digest unification
+         STAT-RELATIVE-TERMINAL-TWAP-05 is inadmissible in V1 without 256-bit
+         compare; payout_map is necessarily non-injective — never invert it; and
+         the load-bearing negative: decode accepts a foreign policy, only
+         recompute-and-compare rejects.
+
+eacf95f  Distributional claims design: B-spline partition of unity
+         Adversarial corrections: at most d+1 nonzero weights, and degree ≥ 2
+         interval ambiguity BREAKS — point-evidence-only, with the deg-1 interval
+         rule proven via a monotone moment argument.
+
+9c43863  Multi-position closure: delta-accounting invariant
+         The locally-undetectable fabricated-history residue is named rather than
+         argued away, and mapped to the PDA/authentication obligations.
+
+868a747  Rust collateral-policy decoder
+         "The honest cap answer": the policy has NO per-market cap field, and
+         max_supply_atoms is a Realm-wide mint-admission ceiling, not a cap in
+         disguise — mapping it would let every market absorb the whole admitted
+         supply, a WORSE failure than zero.  Market creation stays blocked.
+
+1de0920  Kernel resolve_with_vector: the named residue closes
+         The central theorem falsified against 63,108 funded-to-exactly-the-
+         requirement cases: no counterexample.  MAX_PAYOUTS lifts; the account
+         path keeps its bridge, blocked on two layout facts, recorded as a
+         blocker rather than deferred-as-unneeded.
+
+f2d078e  Risk-summed positions: the payoff map is a positive unital linear map
+         Fee verdict: dispersion is NOT the quotient norm — REFUTED, with the
+         exact relationship (quotient norm = 2× the price envelope of Gini
+         dispersion).  New adversarial finding: at boundary prices the dispersion
+         kernel exceeds span(1), so zero-priced-outcome risk transfer is FEELESS.
+         Cross-reference and calendar margining get provably ZERO model-free
+         relief (subadditivity is equality on product joint spaces).
+
+334a8ac  Optimality-certificate mapping: the decomposition is FALSE
+         E2 is decisive: the canonical fills and a feasible rival tie on two
+         components while the rival beats a third, and the relation refuses it.
+         Three findings outlive the negative result — total unimodularity under
+         P-a (no integrality gap at all), closed-form exact integer duals, and
+         P1-B being infeasible rather than refused by a check.
+
+d34120a  Dual is the measure: proved for the degrees we implement, refuted beyond
+         Dual-hood PROVED; measure-hood PROVED at degrees 0 and 1 and REFUTED at
+         2+ with an executable arbitrage.  A second, independent reason degrees 2
+         and 3 must refuse.  Reconciles with 334a8ac: canonical selection among
+         optima is what is uncertified, not optimality itself.
+
+88840e6  Lean model foundation: 86 theorems, zero sorry
+         Four corrections to the design's proof sketch: the per-weight upper bound
+         is not a hypothesis but a consequence; claim four is over the wrong index
+         set; claim three is exact, not a lower bound; and new — the u128 headroom
+         is a partition-of-unity corollary nobody had stated (naively the liability
+         sum needs 2^132, and had the checked add fired the market would brick).
+
+342247c  Record fee-economics findings and required doc corrections
+         Twelve assertions in the canonical economics documents are unsupported or
+         refuted by in-repo research, including a proved zero-price fee-evasion
+         channel absent from the fee's own laundering threat list.  Also: what is
+         actually built (an orphaned dispersion_fee_step, IntentFeeCarry with zero
+         consumers, RevenuePolicy as prose in four documents and zero code).
+
+9f7c155  Absorb the RISK_SUMMED_POSITIONS results into the canonical fee docs
+         Fixes the unsupported assertions one by one: the 20 bp midpoint figure
+         holds at size only, the break-even inequality is unbounded at every
+         currently-true configuration, the $2,000/dollar figure is assumed
+         arithmetic, the O(1) reimbursement index was never built.
+
+8030605  Falsify the composite fee base against the economics laboratory
+         The one row it cannot represent at all — the 10^30 laundering falsifier,
+         numerator 10^39 — is CARRIED rather than dropped, so the differential
+         names its own bound instead of hiding it.
+
+697f36f  Kill three mutants of the pot's cash closed form
+         Never subtracting the realized residue would mint against atoms the
+         payees were already denied; crediting instead of debiting overshoots by
+         twice it; converting each slice rather than cumulative differences rounds
+         every half-atom slice to zero and never funds the mint.
+
+cd54bb7  Retire VirtualPot: pay, then mint, then deliver
+         "The derivation refutes the shape the row was filed under, so it is
+         written down."  The freeze cannot mint — raising collateral_atoms there
+         would attribute the same Hoard token atoms twice.  A lazy per-slice mint
+         deadlocks for a second reason.  VirtualMergeCredit re-filed as narrower.
+
+41c231f  Retire VirtualMergeCredit: deliver, then burn, then pay
+         The merge is the one-ended BUY, not a sell, which fixes the order: credit
+         a payee first and the pot goes negative by exactly the value of the sets
+         it has not burned, releasing collateral against outstanding claims.
+
+--- SBF, FRAMES, AND COMPUTE ---
+
+d936eaa  Evidence-gated resolution lands; SBF bring-up
+         Obligation-10 finding: the offline adapter's by-value frames exceed SBF's
+         4 KiB limit (dead-code eliminated here, but recorded).
+
+9bf0f4b  SBF foundation: module-per-instruction split; Token-2022 probe passes
+         BLOCKER: OrderPage v3 exceeds SBF frames at decode, 8640 vs 4096.  Host
+         pin 1.89.0 cannot build the Agave 4.2.1 test runtime.  And: the earlier
+         "Token-2022 absent" conclusion was an OFFLINE ARTIFACT, not a fact.
+
+5cb4ad1  PlaceOrder on-chain; cancellation and settlement blocked with measured findings
+         Relation verify needs 39-45KB frames against 4,096; the page→BookV1
+         projection is undefined on-chain; layout has no streaming WRITER; the
+         frozen page format has NO cancellation representation; portfolio
+         placement is a wire gap; caller-chosen order ids are a page-burning
+         griefing vector; placement's 177-block fold likely exceeds the budget.
+
+8f5bf49  SVM harness regenerated: 52/52 byte-exact; Resolve exceeds the CU ceiling
+         MEASURED blocker: Resolve consumes the full 1,400,000 CU and aborts;
+         RedeemInternal 1,356,878 (97%).  The exhaustion is asserted exactly so a
+         cheaper program forces re-measurement.
+
+e2b887a  FeedAdvance, evidence-gated Resolve, RedeemInternal on-chain
+         "Finding worth canon: four functions overflowed SBF frames INVISIBLY to
+         host gates."  Fixed via caller-slot loads plus inline(never).
+
+cb6d232  Merge implemented at the semantic owner
+         Frame diagnostics resolved by reading the linker map: the analyser runs
+         before gc-sections, and none of the flagged functions reach the image.
+
+c2f7054  Split ported to CLO-DELTA-V1; Materialize/Dematerialize implemented
+         The reference adapter has NO Merge arm — SBF_BRINGUP's "all three"
+         sentence is wrong.  An alarm test now fails the day the reference grows
+         one.  Harness SVM fixtures stale at 9 vs 10 accounts.
+
+1d0c257  CreateMarket implemented
+         collateral_cap is written 0, so markets cannot accept collateral until
+         the decoder exists; created_slot 0 pending a clock plane; the frozen
+         error enum forces one refusal onto the 0x3fff catch-all.
+
+89e329c  Vector spine implemented: 25 vectors, first executor, ten drift findings
+         The proposal's six-surface headline is stale (twelve enums, three
+         unmapped); CodecError::code() silently extends a PROPOSED registry;
+         clutch-sbf carries a parallel 0x3000 numbering with the forbidden
+         catch-all; §4.3 is unreproducible as written; the self-cross refusal
+         class is allocation-variant-dependent.
+
+25fb3c2  Closing drift review waves 5-8
+         P1 repaired in review: SBF_BRINGUP contradicted the dispatched code in
+         BOTH directions — stub claims against implemented CancelOrder, and
+         does-not-fit against a recorded 536K CU, and no-CPI against the ELF's own
+         sol_invoke_signed_rust import, checked at byte level.
+
+5c88505  Token-2022 CPI leg
+         Plan bug: the proposed 33-byte hoard-authority seed CANNOT EXIST (32-byte
+         cap).  The per-owner half of reconciliation is provably not checkable
+         (holders split and transfer), which strengthens the single-truth cutover.
+
+858f408  Harness regeneration verified: both SVM gates PASS again
+         "The coordinator's earlier failures were MISDIAGNOSED as a program-account
+         placement problem."  Measured cause: a program whose deployment slot IS
+         the current slot is not yet visible, and getHealth turns green while the
+         bank is at slot 0.  Readiness is now proved by executing a transaction.
+         Also: the largest CU line item is not the CPI — it is the layout crate's
+         own software SHA-256.
+
+6668a86  Handoff: record the unreproduced harness PASS accurately
+         The attempt sits unpushed because its PASS could not be reproduced: the
+         ELF digest agrees exactly, yet every transaction returns "Program is not
+         deployed" — a placement failure, not the account-count failure it fixed.
+
+3aa1317  Reattribute the compute ceiling from architecture to a software hasher
+         Verified by independent clean rebuild: removing the software SHA-256 cuts
+         every measured instruction 3-8× and dissolves two recorded STOPs,
+         including Direct V2's 1,400,000-CU rollback, which now completes at
+         226,071.  "The measurements were right; the generalization drawn from
+         them was not."
+
+374cc77  Drop the software SHA-256 out of the SBF program entirely
+         sha2::compress256 was the single largest symbol in the deployable ELF at
+         53,952 bytes — 3.6% of the whole program — arriving through exactly one
+         unconditional dependency edge.
+
+6c25df4  Re-measure the SVM evidence the syscall conversion moved
+         The source_ingest one-in-five flake: two byte-identical transactions
+         distinguished solely by a blockhash rotating on wall-clock time between
+         two slow sends.  Five times faster they share a blockhash and the runtime
+         dedupes the second — "the answer under test was never the program's."
+         Identified as a latent defect the speedup EXPOSED, not a behaviour change.
+
+4a83fdb  Defer direct lamport moves past every create CPI
+         The runtime syncs only the accounts passed to a callee at CPI entry, so a
+         direct lamport move on a caller-only account before an inner create
+         desynchronizes the instruction-wide lamport sum and the whole transaction
+         refuses as unbalanced — measured live on the first routed Finalize.
+
+d8cc665  Single-site epoch validation in the V4 page and placement seams
+         The same immutable bytes were hostile-validated up to five times per
+         instruction; PlaceOrder V4 falls 1,249,641 → 787,232 CU with no refusal
+         removed.
+
+78554cf  T2-6a: general InitEpoch and FreezeEpoch
+         No grid at freeze, and the reason is measured: the third per-page fold
+         would push a four-page freeze past the ceiling (2-page freeze 712k CU
+         with it, 477k without).
+
+a04176f  Bring the ten opt-z frame overflowers under the 4 KiB SBF line
+         Named with both numbers each (backend estimate / disassembly max direct
+         r10); opt-z build diagnostics fall 205 → 90 lines and the opt-z SVM suite
+         goes from failing to green.
+
+c4a2ec3  Keep the composite numerator loop off the end_pass frame
+         Inlining the per-owner numerator grew end_pass 832 → 1,152 bytes;
+         extracting it recovers 128.  The remaining +192 is the join's own new
+         state, and is named rather than absorbed.
+
+--- IDENTITY, SEALS, AND REPRODUCIBILITY ---
+
+6aaa2a1  Ledger the default-ELF identity fork from 9c371fe
+         The sealed a5725a3d identity reproduces at ec77d0b but NOT at HEAD: the
+         rustdoc-link fix in resolution.rs sits inside the 88-file closure.
+
+ee90b27  Record hbox independent SBF rebuild with classified divergence
+         The divergence from the sealed artifact is exhaustively attributed to
+         Anza's per-OS platform-tools artifact, with ZERO bytes from source,
+         dependencies, or host paths.
+
+cbbc2a0  Reconcile basis-mode STOP with landed 3a81b38 repair
+         Four documents claimed a gap that was already repaired and sealed inside
+         the ELF.  The STOP is rewritten to its honest successor rather than
+         merely deleted.
+
+934bdd6  Reseal the liveness policy profile at the TerminalClosure ELF
+         "One prior claim is RETRACTED": the e8ba31d5 seal's byte-identical
+         cross-path probe was a coincidence, not a property.  The convention
+         becomes an observed-digest LIST.  Separately: no terminal row is
+         reclassified REFUNDABLE, and the reason is structural rather than
+         evidentiary — the funding ledger is optional at every creating
+         instruction, so rent_principal_recorded is a property of the CALL.
+
+927d04b  Reseal the liveness policy profile at the fee-boundary ELF (cycle F)
+         Corrected attribution: two controls differing only in where the relocated
+         home sat BOTH reproduced canonical bytes, so the divergence tracks a
+         CARGO_HOME path with an unresolved symlink component, not relocation.
+         The checker now refuses a diverged probe with no controls behind it.
+         Also: rung W1 grew a family by its own rule, because the disagreement
+         exhibit's observations are HOTTER than the quoted families'.
+
+5f04b14  Resolve the relocation probe's Cargo home, per the cycle-F finding
+         "The probe was measuring the harness rather than the recipe."  Pre- and
+         post-amendment macOS readings are not comparable, and the code says so.
+
+8c2465d  Disposition the mock ELF's path sensitivity against the proven mechanism
+         The sharp part: at the cycle-D HEAD the MOCK diverged across paths while
+         the DEFAULT did not, because a hash-sorted tie needs two symbols equal on
+         every stable key and the mock feature changes the symbol set.  Neither
+         profile predicts the other.  NOT MEASURED HERE — the suite spinlock was
+         held by another lane at both checks, "the swarm has priority."
+
+c55f471  Land the formatter sweep the wave left uncommitted
+         A format-only sweep forks the ELF identity anyway: reflow moves line
+         numbers, and line numbers reach .rodata through core::panic::Location.
+         Committed separately so the fork is attributable to the formatter.
+
+916731b  Carry the probe alias where the checker already puts it
+         artifact.maximum.stage is not an inventory row; adding it made the
+         checker compare a row against itself and fail.
+
+--- PROMOTION, QUOTES, AND THE KEEPER ---
+
+7105e63  Score the original planning corpus against what was built
+         ~14% of planned commitments are in the sealed runtime against a
+         self-reported 53%.  Names the two-order scope of the merged venue, the
+         structurally unclearable portfolio path, and the terminal-inventory
+         regression introduced by the merge itself.
+
+006eea6  Refute the V3 lane's pre-existing-failure claim by measurement
+         Both declared SVM gates run clean on main; the branch's four failures are
+         branch-introduced, not inherited.  Records the method error (testing a
+         branch against a base ELF) and "my own truncated-log near-miss."
+
+12713d1  Record both-profile green and the inherited fixture repair
+         Corrected attribution: the merge-base carried a broken native fixture
+         binding an inconsistent source version, and the failures were
+         unobservable because an ArtifactKind variant landed without updating
+         three svm test helpers, so the suite could not compile at all.
+
+9db3290  Integrate with main: joined_lifecycle arm and cancellation framing
+         "Corrects two doc defects of my own making": an earlier edit silently
+         dropped "Cancel" from the predecessor-audit sentence, erasing the word
+         that named a route V3 does not have.
+
+8ad6734  Close audit-RED blockers in Direct V3 model correction
+         DIRECT_ORDER_BODY_BYTES_V3 corrected 99 → 107 — the constant omitted the
+         trailing expiry_epoch u64.  Zero-envelope reservations were a release
+         trap that stranded abort/lapse permanently.
+
+6531d12  Seal the Direct V3 families and retire the close-evidence blocker
+         "One correction to the promotion report's rent story, found by the
+         campaign rather than argued": it names two stranded families; there is a
+         THIRD.  The honest per-epoch structural strand is 35,941,440 lamports —
+         five times the published figure.
+
+396e11d  Quote the walk plane at rung W1 without moving a live flag
+         The promotion report's table was compiled against the superseded root,
+         where 23 of the 25 measured maxima and 5 of the 25 selected limits
+         differ from the current seal's.
+
+0175a1e  Add the keeper gate, and five defects it and the review found
+         CloseGeneralReservation pays the reservation's stored *wallet* owner, the
+         one route with a different recipient rule and the one the keeper got
+         wrong.  A receipt's absence was read as "needs entitling."  An empty
+         walk-rank index was an error rather than the proof the phase is over.
+         **The W1 creation rows do not price the shape a keeper must send** — every
+         row was measured WITHOUT the funding-ledger sibling, and at the row's own
+         60,000 limit a ledgered InitEpoch exhausted its meter at 59,850 and died.
+         And the gate ran the keeper through `cargo run`, so kill -9 orphaned it
+         and TWO keepers drove one epoch.
+
+a4c3962  Green the keeper gate: three more defects the real bank found
+         A LIVELOCK between two actions — CloseGeneralPot removes the pot, the
+         next poll reads absence as "freeze is due," forever; and the progress
+         guard could not see it because it compared only against the previous
+         action.  CloseGeneralClearWork with a standing SELECTED record needs a
+         proof tail.  And the gate demanded a log line for the step nearest its own
+         SIGKILL — "that IS the crash being injected, so requiring the line would
+         be requiring the crash not to happen."  Wire answer confirmed by the
+         validator's own transport: six Fold instructions frame, seven do not, so
+         the sealed [12, 12, 8] plan CANNOT BE SENT.
+
+42948f4  Measure the widest fold batch the wire can actually carry
+         BATCH_SIZES picked its widths from the compute bound alone.  FoldBatch(12)
+         — a sealed, quoted row with a selected limit and a keeper reward — prices
+         a transaction 2,002 bytes against a 1,232-byte budget.
+
+df1d99e  Seal cycle G, and give the quote model the coordinates it was missing
+         FOUR corrections, all wrong rather than imprecise: EntitleSlice gains a
+         page coordinate (a flat row understated the real transaction 3.7-fold);
+         the 1,500-CU PDA quantum is carried rather than averaged away; the
+         ledgered shapes are the quoted ones; and the fold plan is re-derived under
+         the wire.  First seal to report the relocation probe INDEPENDENT.
+
+7e99471  Attribute the tick-table rows to the term that actually moves them
+         The tick table is NOT a CU risk at PlaceOrder.  The term that moves these
+         rows is PDA derivation: find_program_address pays one
+         create_program_address per failed attempt, so a route carries a term
+         proportional to 255 − bump.  Deltas are printed, not asserted — "one run
+         cannot separate a shape term from a bump term."
+
+a133073  Say the derivation quantum exactly, and say what the count is a bound on
+         1,500 CU, not the 1,200 the InitEpoch pair implied: across two runs with
+         different genesis keys the placement rows agree only at that value.
+
+846afab  Say 1,500 in the two places the campaign left saying 1,200
+         Two passages survived beside the corrected figure, so the file stated two
+         quanta for one syscall — and the module header contradicted itself inside
+         four lines.
+
+24428fc  Stop the bench gate from leaking a daemon and adopting a stranger bank
+         The cleanup trap killed cargo, not the daemon, which then answered the
+         NEXT run's readiness probe — that run drove 27 steps against the previous
+         run's bank.  And await_ready never checked its own child was alive, so a
+         port collision meant polling a stranger's ledger: "confident, meaningless
+         evidence."
+
+a2e981c  Name where two committed account images disagree
+         The runner reported only the two lengths, useless when they are equal —
+         which they usually are, because a grown schema makes every image the new
+         length and only the appended field disagrees.
+
+cec0848  Teach the committed walk's expectation model the reservation v2 ledger
+         "Silent agreement, wrong bytes": the codec accepted the zero because an
+         unstamped ledger is exactly what the atomic portfolio route legitimately
+         carries.
+
+b73a817  Drive the partial-fill bank campaigns and falsify the ledger by mutation
+         The fourth mutation falsifier found a real hole first time round: the host
+         fixture's buyers reserved exactly the consideration, so no price
+         improvement existed to release and the mutant survived.
+
+--- THE PRICE PLANE AND THE MOMENT CONE ---
+
+d4f349b  Retire the stale degree-2/3 admission refusal claim
+         Three places told readers degrees two and three refuse at terms
+         admission; none has been true since 2026-08-19.  "Correcting the claim
+         UPGRADES a risk rather than retiring one" — 7.4's no-arbitrage warning
+         was excused on the ground that the smooth rungs could not be created.
+
+5847a3f  Record the generated degree corpus and the now-live price-gate gap
+         "The second addition is a risk, not a capability."  Nothing distinguishes
+         a simplex point from a moment vector; the moment-body admission test is
+         open and not built.
+
+7947c0c  Derive the degree-2/3 moment cone and its admission condition
+         Theorem 7.6.8: NO finite family of linear price inequalities can decide
+         membership, because the cone has a strictly convex boundary arc — so an
+         implementable stage is sound-of-refusal or complete, never both.  The
+         wide-support residual is stated as open rather than waved away.
+
+91b8c9b  Record the price plane as gated in the relation, open at the seam
+         CURRENT_TRUTH said the moment-body test was OPEN and not built, and that
+         clutch-batch contained no occurrence of `degree`.  Both now false — and
+         the seam is still open: nothing on chain binds a degree yet.
+
+e9c2acb  Correct the sign of the certificate profit in 7.6.9
+         A violated certificate is bought for a negative outlay, so the profit is
+         the negation of the price the stage computes.
+
+3690bb3  Stop naming a degree-three supremum I did not derive
+         The n=4 butterfly supremum was printed as √3/2 on the strength of a
+         numeric match.  What the derivation establishes is a certified rational
+         upper bound, which is what soundness needs.
+
+d5a03ad  Say what binding the wrong degree does
+         The outcome count cannot distinguish the degrees, so a mis-bound
+         descriptor names a different cone and can refuse an arbitrage-free price.
+         A caller obligation the relation cannot check.
+
+c520f1b  Stop asserting an unproved scaling invariance in a doc comment
+         True and observed on the corpus rows, not proved here, and nothing in the
+         file depends on it — so the comment says exactly that.
+
+353c294  State the corpus value range as the range it actually is
+         corpusValues sweeps [origin − 2, last + 4]; two documents said "two above
+         the high one."  The rows are unchanged; the description was wrong.
+
+5d84f43  Generate a 3,360-row Lean/Rust degree corpus from a checked evaluator
+         The generic evaluator reaches an identical RationalBasis on three hand
+         witnesses and exactly TWICE the representation on the fourth, because the
+         hand derivation reduced and the generic path never does.  A wrong-cubic-
+         denominator mutant is "the executable form of a real documented
+         divergence: the design doc still prints 6h³ while the evaluator uses 12h³."
+
+--- THEORY AND SURVEY ---
+
+f422533  Certificate-stack inventory: separability, licensing, Lean discipline
+         Two corrections: the plonky3 fork's issue is a COMPLETENESS bug — its own
+         verifier rejects upstream proofs — not accepted forgery; and fhir does
+         have dev-dependency consumers.  Lean discipline confirmed and stronger
+         than ours.  TESTQALOG is three weeks stale.
+
+2d0d9b6  Verified bytecode paths: no to emission, and a third path we had not named
+         sBPF already HAS mechanized semantics (CertSBF, plus a Solana-Foundation
+         Lean 4 port) — but NOBODY models syscalls, and our correctness rides on
+         address derivation and invoke_signed, axioms in every model that exists.
+         Lean-to-SBF infeasible; whole-program TV settled by scale (~24,700 lines
+         of Lean for 86 bytes, against our 332,368-byte ELF).  The decisive point:
+         "Every P0 in our own adversarial review was a MISSING PREDICATE, and all
+         six would have compiled perfectly."  Names Aeneas/Charon as a third path.
+
+3046126  Record succinct-clearing feasibility finding
+         Corrects two overstated project cautions and surfaces one hand-written
+         Rust AIR twin as debt.
+
+660e77e  Add the adr-0003-supersession decision report
+         Measured: Lean 212 zero-sorry theorems verified by rebuild and axiom
+         audit; Verus ~1.5 of 11 planned obligations; Rocq ZERO theorems with one
+         machine-checked vacuous conjunct.
+
+1b879d8  Add the deploy-economics + upgrade-posture decision report
+         "Headline the register did not have": the "Tier 0 made opt-z fully green"
+         premise is STALE — measured, opt-z is 23% smaller and RED, with 31 frame
+         diagnostics and a faulting market-construction path.  Also: the deploy
+         script points at a superseded artifact and must be repointed before the
+         collector funds the deployer.
+
+1e1ac17  Add the r2-cutover-and-registry-flip decision report
+         The E4 trial rebase is CLEAN across 153 commits of drift; the plan's
+         V3-coordination gate is already green; the freeze is not faucet-blocked;
+         a frozen SourceSpecV2 is cluster-specific by construction and the Phase-1
+         checklist never names its cluster; the SDK 1.2.0-vs-2.0.0 discrepancy is
+         a named STOP.
+
+95e2c2f  Write the R2 Phase-0 pre-cutover runbook
+         The E2 trigger is written as two conditions fixed in advance, "because a
+         span chosen after seeing the data is not a criterion."  Pre-staging found
+         neither the receiver program id nor the Config PDA is recorded anywhere
+         in-tree.  A revoked upgrade authority still leaves the previous authority
+         in bytes 13..45 of the ProgramData.
+
+--- EXHIBITS, SITE, AND THE BENCH ---
+
+11dfdf7  Add the disagreement-exhibit checked script (L1)
+         "One design-prose claim is corrected executably": of the 77 exact in-band
+         simplex candidates, 76 clear the package pair; the p2=2960 corner exceeds
+         the conservatively-inward package buy limit and is named.
+
+7f8d4c5  Recompute E's net from its own legs in the disagreement check
+         "The zero-sum line was a tautology as written."
+
+d08e3c0  Open the Friday clutch: the Operator Bench gets a trade mode
+         Three things learned the hard way: an eight-outcome CreateMarket carries
+         26 accounts and a second writable signer overflows the packet by 52
+         bytes; the frozen allocation policy fills strict orders IN FULL, so an
+         eligible order with no counterparty refuses the WHOLE candidate rather
+         than partially filling; and a transaction touching the boxed body without
+         the 256 KiB heap frame does not refuse — it fails to complete.  Plus
+         decoder drift: reading exactly two outcomes rendered an eight-outcome
+         market as a two-outcome one.
+
+043e36b  Read the book, not the belief, when previewing what crosses
+         The painter compared your value against what the automaton WOULD quote
+         rather than the limit actually resting on the page.  "A preview of what
+         crosses has to read the book, or it is a preview of something else."
+
+557952d  Record what the three gates said, and what the bank did
+         The midpoint coordinate was refused StrictUnderfill because the person's
+         ticket is priced out there, leaving the automaton's bid eligible, strict
+         and unpaired — "exactly the failure the ladder exists to survive, observed
+         rather than argued."
+
+f98aa7b  Read order identities as the canonical ranks they are
+         Abbreviating an order id the way an owner identity is abbreviated printed
+         000000000000 for every order — structurally true, completely useless, and
+         it made the Ticket screen's join look like it matched everything.
+
+b1744e5  Take custody on the default ELF for the first time
+         "The default artifact's value boundary works" had never been observed
+         once.  Also corrects a doc reference naming a test file never written.
+
+583949f  Retire the three "not wired yet" notes the v2 wire made false
+         All three were true when written and none of them is now.
+
+0e2661e  Name the four addresses the source join compares, in one struct
+         Eight positional arguments, four of them 32-byte arrays — a call site
+         transposing a derived address with a presented one would still have
+         typechecked, "which is exactly the mistake this seam exists to make
+         impossible."
+
+fbb5998  Seal against the derived archive address, not the presented key
+         Nothing was wrong, but "a caller-supplied expected key is never accepted
+         anywhere in this program" is a rule that should be readable at the call,
+         not reconstructed from an earlier line.
+
+7f359d0  Refresh the conceptual canon against the capability wave
+         Four discrepancies recorded rather than smoothed, the load-bearing one
+         being seal_lag: the tree's blocker list is empty while the sealed profile
+         still reads [PartialFillLedger, VirtualPot] — "the condition the seal
+         exists to make visible rather than a drift to repair."
+
+e454932  Sweep CURRENT_TRUTH to cycle G, and close the canon's seal_lag
+         CURRENT_TRUTH was pinned two seals back and asserted THREE DIFFERENT ELF
+         identities across sections 2, 3 and 4.  Two matrix claims were false
+         rather than stale.
+
+8c49bbe  Sweep the profile README to what this seal measured
+         "Four claims were not merely stale but false, and they are the ones worth
+         naming."
+
+1699c37  Re-record the batch shadow's excluded-source pins, and say the delta plainly
+         Unlike the earlier re-pin, this delta is NOT semantics-preserving — and
+         the paragraph it replaces "had also gone internally confused," claiming
+         all three production files byte-identical while listing two digests
+         already re-recorded past it.
+
+4e433f8  Re-pin the landed ABI arm
+         MAX_INTENT_BYTES 310 → 402: the ceiling is no longer a placement.  Every
+         relation bound re-verified by hand because the audit refuses to re-derive
+         them; only the blob digest moved.
+
+
+================================================================================
+3. CONVENTIONS OBSERVED
+================================================================================
+
+SUBJECTS.  Capitalized imperative, no trailing period, typically 6-12 words, and
+almost always carrying a *story* rather than a category — the verb is what
+changed and the tail is why it matters:
+
+    "Green the keeper gate: three more defects the real bank found"
+    "Reattribute the compute ceiling from architecture to a software hasher"
+    "Stop naming a degree-three supremum I did not derive"
+    "Take custody on the default ELF for the first time"
+    "Retire VirtualPot: pay, then mint, then deliver"
+    "Say what binding the wrong degree does"
+
+Frequent forms: colon-headline plus consequence; "Retire X" / "Close X" /
+"Retract X" for obligations discharged; "Say X" / "Name X" / "Stop X-ing" for
+prose that was over- or under-claiming.  Zero exact-duplicate subjects across
+698 commits.  28 subjects begin lowercase; 22 of those use conventional-commit
+prefixes (feat/fix/test/docs with a scope: `feat(sbf):`, `test(source):`,
+`docs(svm):`) and all 22 sit inside one contiguous 08-18/08-19 band.
+
+BODIES.  Hard-wrapped at ~72-76 columns, prose paragraphs, no bullet-only
+bodies outside doc-sweep commits.  The canonical shape is four movements:
+
+  1. What landed, in one dense paragraph naming the real objects and numbers.
+  2. One paragraph per surprise, correction, or deviation, each stated against
+     the thing it contradicts ("Design correction found by the oracle…",
+     "Finding worth canon…", "The honest cap answer…", "One correction to the
+     promotion report's rent story, found by the campaign rather than argued").
+  3. A gates-and-counts line: "layout 83, reference 38, clutch-sbf 85+7, kernel
+     16, vertical 19, batch 61, vector spine 25/25" — exact test counts and
+     byte/CU figures, never "all tests pass."
+  4. The honest boundary, unhedged: "HOST-TESTED only; no live tags, accounts,
+     or instructions."  "Host-model code: tested, not verified, not the SVM
+     relation."  "This is SBF-executed focused local-bank evidence for the
+     sealed instruction set, nothing more."
+
+CLAIM-PLANE VOCABULARY.  A small closed vocabulary is used with discipline and
+never inflated: PROPOSED / MODEL-ONLY / DESIGN-ONLY / HOST-TESTED /
+SBF-EXECUTED / MEASURED / UNPROMOTED / CHECKED-FINITE / STOP / retired /
+recorded residual / declared-permanent.  Measurements are labelled MEASURED and
+distinguished from arguments; several commits say so explicitly ("measured, not
+argued", "observed rather than argued", "reported not tuned", "found not
+chosen").
+
+NEGATIVE RESULTS ARE FIRST-CLASS.  Refutations get their own commits and their
+own subjects ("the decomposition is FALSE, with counterexamples"), retractions
+are labelled as retractions and the superseded text is kept and labelled
+historical rather than deleted, and several commits carry corrections to the
+author's own earlier prose in the same voice ("two doc defects of my own
+making", "my own truncated-log near-miss").
+
+CO-AUTHORED-BY.  320 commits carry `Co-Authored-By: Claude Fable 5`, 112 carry
+`Claude Opus 5`, and 266 carry no trailer at all.  The Opus band is the 08-18
+foundation work; the Fable band runs 08-19 to 08-22; the trailerless commits are
+almost entirely the terse codex band plus the "Goal log:" entries.
+
+UNSIGNED-COMMIT EPOCH.  62 commits are GPG-signed and every one of them is dated
+2026-08-18.  From 2026-08-19 onward all 636 commits are unsigned — an exact
+match for the documented convention that 1Password rejects signing during
+autonomous runs, so an unsigned commit marks work produced while ember was away.
+One commit says so in its own body: 0bf9305 "(Unsigned: 1Password unavailable
+during autonomous run.)"
+
+COMMITS THAT BREAK THE CONVENTIONS.
+  * The 22 conventional-commit-prefixed subjects (e67c315, e55ff2f, f934a31,
+    0e84918, 054b2f6, fa166fb, 0a01b0a, 3a0e45b, ceac012, 7cf7150, a749930,
+    a1dad6d, 7d78596, 434a0d3, 60fd8bc, ce445ac, bf7f698, 44bed19, 0e4bd51,
+    1adee63, 3440b8e, a85d48b) — a different hand's house style, in one band.
+  * ~200 subject-only commits in that same band (10b5158 … 52fb11f) with no
+    bodies at all: real work with no recorded reasoning.
+  * 472b7fe "Genesis plane" — the body stops mid-sentence: "…with the
+    10,240-byte grow".  Nothing follows.  The only truncated body in the tree.
+  * 5943688 "Design continuous claims and passive range liquidity" — a
+    substantial design landing with a one-line subject and no body or trailer.
+  * 388 of 698 bodies (56%) are empty after stripping the Co-Authored-By
+    trailer; 49 of those are "Goal log: …" entries, which are a deliberate
+    lightweight journal rather than a lapse.
+  * 7c6852f "Rewrap a section docstring" and 400bcbf "Drop the mut the
+    undemotion left behind" — one-line janitorial commits with no body, kept
+    separate rather than folded, which is itself the convention working.
+
+
+================================================================================
+4. ODDITIES
+================================================================================
+
+THINGS REFERENCED THAT NEVER LANDED, OR NEVER MATCHED.
+  * 23d9059 — a declared gate evidence pattern that had never once matched, so
+    every green run of the license gate, including a sealed baseline, recorded
+    the sha256 of the empty string as its proof.
+  * 88fa515 — a seal pinned to commit 9cbc835, "a pre-rewrite twin reachable
+    from no published ref", which would have killed the seal's own verifier in
+    any fresh clone.
+  * b1744e5 — "corrects a doc reference in source_identity.rs that named a test
+    file that was never written."
+  * 916731b — a probe alias added to the terminal inventory made the checker
+    compare a row against itself.
+  * e780d5b / 7635a30 — the abi-audit erroring instead of reporting for an
+    entire era, "owing 34 named drift lines" when repaired.
+  * 5f04b14 — a reproducibility probe that had been "measuring the harness
+    rather than the recipe" for three consecutive seals.
+  * 583949f — three separate module notes saying "not wired yet" about things
+    that had been wired.
+  * 04acf61 — a roadmap item listing a twelfth rustdoc warning site that does
+    not exist.
+
+DUPLICATE AND NEAR-DUPLICATE MESSAGES.  No two subjects are byte-identical, but
+several families are near-twins:
+  * The schema-v2 manifest family, six commits in one day: d78f299 "Emit checked
+    schema v2 baseline manifest", 3294dcd "Refresh stable schema v2 baseline
+    manifest", 9625100 "Record checked schema v2 baseline", 8e7f827 "Record
+    checked schema v2 baseline manifest", 5b68601 "Refresh schema v2 baseline
+    manifest after post-seal wave", bd89de3 "Emit checked 100-gate schema v2
+    baseline manifest."
+  * The reseal chorus: "Reseal the baseline manifest for cycle A/B/C/D/E/G at
+    100/100" (9d84e55, 6827749, 7e6066f, 788581c, cb94c27, 5ae3a32) — six
+    commits differing in one letter.
+  * The PDA quantum, fixed twice: a133073 "Say the derivation quantum exactly"
+    then 846afab "Say 1,500 in the two places the campaign left saying 1,200."
+  * The rustdoc links, cleared four separate times as four separate identity
+    forks: 04acf61, 95c15f1, 59d540f, 1b74004.
+  * Two consecutive commits both correcting the same doc drift: 7ce4c09 and
+    cbbc2a0 and 7e45371 all sweep the same superseded-seal citation.
+
+MERGE MESSAGES THAT CARRY SUBSTANCE.  38 merges, and roughly a dozen are real
+summaries rather than "Merge branch":
+  * fb72b34 — the complete Direct V3 lifecycle, with the CU ceiling cleared and
+    "V3 is an epoch-atomic two-order book by design: there is no per-order
+    cancellation."
+  * 87fd342 — T2-6, "walks to VERIFIED across ~20 transactions with the verdict
+    byte-equal to the host relation."
+  * 966ee2c — TerminalClosure, with the lamport reconciliation in the message.
+  * 6e4702a — T2-8, "the eighth join."
+  * e757b64 — 44 signed confirmed transactions on a real loopback validator.
+  * 8880c57 — the disagreement exhibit, with the whole thesis in one sentence.
+  * 3b20ea6, 1e3c79f, 0dbb158, 576a163, 6bc6628, b1b4369, 7354df8, 8fe5f9e,
+    b8a409c, 5a94c1d — each a one-paragraph statement of what the join is and
+    what it deliberately does not claim.
+
+OUT-OF-ORDER DATES.  01a004b "Add the two R2 pull-profile runtime capabilities"
+is dated 2026-08-19 but sits in the log between two 2026-08-20 commits: it was
+authored on a branch, left as a trial rebase for two days, re-measured clean
+read-only at 95e2c2f, and finally merged at 5a94c1d on 08-21.  A commit that
+sat as evidence rather than as code.
+
+THE FIVE FUNNIEST / STRANGEST.
+
+  1. a4c3962 "Green the keeper gate: three more defects the real bank found" —
+     for one clause: the gate demanded a log line for the step nearest its own
+     SIGKILL, "and that IS the crash being injected, so requiring the line would
+     be requiring the crash not to happen."  A test whose assertion forbade the
+     condition under test.  In the same message, a livelock between two
+     *different* actions that a previous-action-only progress guard was
+     structurally blind to.
+
+  2. 3690bb3 "Stop naming a degree-three supremum I did not derive" — a whole
+     commit, first person, whose entire content is retracting a closed form that
+     had been printed on the strength of a numeric match.  The nearest thing the
+     repository has to a confession, and it is four lines long.
+
+  3. 24428fc "Stop the bench gate from leaking a daemon and adopting a stranger
+     bank" — a leaked daemon from a previous run answering the next run's
+     readiness probe, so the walk drove 27 steps against a bank it did not
+     create.  "A walk driven against someone else's bank produces confident,
+     meaningless evidence."
+
+  4. 6c25df4's flake paragraph — a one-in-five failure traced to two
+     byte-identical transactions separated only by a blockhash rotating on
+     wall-clock time; make the program five times faster and they share a
+     blockhash, and the runtime dedupes the second before the program runs at
+     all.  "The answer under test was never the program's."  Classified as a
+     latent defect the speedup *exposed*, with six-of-six on the old ELF given
+     as the evidence for that classification.
+
+  5. e6f46c6 "Close the LEAN_MODEL_PLAN's someone-decides clause: someone
+     decided" — the entire commit, subject and all.  Honourable mention to
+     7f8d4c5's "The zero-sum line was a tautology as written", to 400bcbf "Drop
+     the mut the undemotion left behind", and to 7c6852f "Rewrap a section
+     docstring", which is a commit.
+
+
+================================================================================
+5. STATS — DRAGONS-CLUTCH
+================================================================================
+
+Total commits ...................... 698
+Date span .......................... 2026-08-18 → 2026-08-22 (5 calendar days)
+Merge commits ...................... 38
+Busiest days ....................... 2026-08-19  241
+                                     2026-08-18  176
+                                     2026-08-20  144
+                                     2026-08-21  126
+                                     2026-08-22   11
+Git author ......................... ember arlynx, 698/698 (100%)
+Co-Authored-By trailer ............. Claude Fable 5   320  (46%)
+                                     Claude Opus 5    112  (16%)
+                                     none             266  (38%)
+Bodies empty (after stripping the trailer) ...... 388 (56%)
+  of which "Goal log: …" journal entries ........  49
+Subjects starting lowercase ........  28
+Conventional-commit-prefixed subjects  22 (all in one 08-18/08-19 band)
+Exact duplicate subjects ...........   0
+GPG-signed ......................... 62 (all 2026-08-18); 636 unsigned
+Commits with "reseal" in the subject   24
+Reseal cycles ...................... A, B, C, D, E, F, G (seven), plus the
+                                     pre-cycle R1 seal and its attestation
+
+
+################################################################################
+PART TWO — DEGG-RESEARCH
+80 commits, 2026-08-18 to 2026-08-21
+################################################################################
+
+================================================================================
+1. THE ARC
+================================================================================
+
+--- ERA 0: BRING-UP AND THE EARLY DRAFTS (08-18) ---
+
+d0d5c25 "Initial Dark Egg research and Draft 3 packet", da9206d baseline, then
+7005548 "Make ordinary local commits default work" — the same authority note as
+the sibling repo, with the same reasoning ("the explicit-commit-authorization
+guideline was a codex practice, not project policy").  e11645b lands the
+guarded-event foundations exposition: a three-layer calculus story with the body
+kept label-free and 25 claims resolved in an appendix to evidence class and exact
+path:line.  That split — argument in the body, traceability in an appendix —
+becomes the packet's permanent structure.  fba1105 and d2cd46c and f087fea carry
+Draft 4 across the definitions, data-reporting, and IAC filings, each with its
+own claim-audit ledger and each rebuilt as a PDF.  2c00da2 is the Tufte pass
+("omit needless words"), and e6c8bed audits the whole Draft 5 packet to PASS
+AFTER REPAIRS with twelve narrowing edits.
+
+--- ERA 1: LEGAL GROUND AND THE DECLARATIVE TURN (08-18) ---
+
+429192a lands LEGAL_ANALYSIS.md — nine sections of in-house work product with a
+per-citation ledger, 28 citations verified by primary-source fetch and 2 flagged
+unverified and not relied on — plus the John review packet, and replaces the
+counsel gate with an honest description of the actual process.  1a4da56 is the
+register change that defines the rest of the repo: "Draft 6: filings argue
+positions in the audience's categories, two-thirds length" — 20 numbered
+declarative positions replacing interrogative framing, ceiling-exhaust sentences
+deleted ("ceilings bound wording, never generate prose"), pages 9/10/9/1 → 6/7/6/1
+with every dropped point itemized and veto-able.  7a101ab triages 42 committee
+questions into 8 memos.
+
+--- ERA 2: THE RESEARCH ENGINES (08-18) ---
+
+The filings get evidence built for them, in a single night, each engine
+independent of the thing it checks.  a1a57c1 builds an independent FBA oracle
+from the specifications alone (digests pinned BEFORE reading the reference) and
+runs a 300-million-case differential.  169e5c4 freezes the refusal-class priority
+and closes the differential at zero divergences of any kind.  fb88fa8 makes the
+relation into data (Relation-IR with Clear lowering, 2,116,916 cases against both
+oracles).  8401bbc models inclusion and availability over a from-description
+Merkle mountain range with equivocation verdicts.  d34a790 runs the
+bundling-invariance corpus over 683k decompositions.  d3394d9 computes
+manipulation-cost lower bounds in exact rationals over 1,080 rows.  56bddb4 lands
+the Shielded baseline and MEASURES the honest core: 377 of 1,125 alternative
+publications are admissible.  8642a6d adds the settlement relation.  3b719c5
+reconciles all of it into a single VERDICTS status page with per-rung status.
+
+--- ERA 3: THE LANDSCAPE AND THE CANDIDATE FILINGS (08-18) ---
+
+728b215 surveys eleven filed comments and measures obviousness — which of our
+positions are crowded, which are preempted, which are corpus-wide zeros.  1b9fd51
+maps the open matters and finds the IAC's published Session II agenda ("The Rise
+of Agentic Finance") is a direct answer to material already written.  020c321
+writes the operatorless-agents memo with "trustless" priced honestly.  bea2d38
+and 9631e34 and 99cc2f6 turn candidate comments into real filings — the 24/7
+perpetuals comment, the Conflicts NPRM comment, the Data Q4 insert — each with
+its FR quotes programmatically verified against GPO retrievals.  0c22ae7 fixes
+ten named typographic diseases while proving the content is preserved as
+character multisets.
+
+--- ERA 4: THE ENGINEERING-GROUNDED DRAFTS (08-19) ---
+
+d7fc6b7 audits Draft 8 against engineering evidence; 7df9c01 and a1b8aea fork
+Draft 10 with a full claim-delta plan executed against the sibling repo's
+CURRENT_TRUTH at a named commit.  24be501/08a0fc3/ec9b026/f0cd755 add the
+confidential energy dispatch relation and its TFHE candidate validator as a
+fourth machine-checked negative.  0dd6601/4ce0ce6/e4bfabf are Draft 11 — the
+system named, the VERIFIED/STOP label blocks unwound into prose, eleven scattered
+nothing-is-deployed negations collapsed to one status paragraph.  4caeb80 and
+e4429c9 are Draft 12, "written for a reader, not a reviewer."  3f021fe is the
+filing-process and forward-calendar memo, sourced entirely from primary sources
+with retrieval dates.  8f9cfef is Draft 13, compressed to the content floor.
+
+--- ERA 5: THE AI-AUTHORED FILING SET (08-20 → 08-21) ---
+
+ec842fc records the inaugural IAC meeting.  b23107e is Draft 14, submission-ready
+and meeting-responsive, with the devnet placeholders resolved honestly and — per
+ember's direction — every performative disclaimer removed.  Then the pivot:
+f2c442f "Draft 15 IAC: written fresh, positions first, the system as witness" (six
+positions, 1,122 words, 3 pages) and 588d461 "Sign the statement: AI-authored
+attribution and first-person standing", followed by 678ffd8 for the joint
+comments and e35415f/f41699a/316682e/41088c8 for the facilitator's cover letter.
+Four rounds of desk review are applied as their own commits (72b3582, e0b94b2,
+5f12b58), 18367f2 builds the FILING set with the review banners off, 77e13c0
+collects it with a submission map, and 21212ea runs the off-hours manipulation
+sweep the perpetuals comment demanded so 5e0ff98 can cite it.  a2acbd2 gates
+Position 3's witness clause on the disagreement exhibit going green in the sibling
+repo.  6b18b96 adds the portal submission crib.
+
+
+================================================================================
+2. THE FINDINGS LEDGER
+================================================================================
+
+429192a  In-house legal analysis, John review packet; counsel gate replaced
+         Found by citation verification: Staff Letter 26-09 is from the MARKET
+         PARTICIPANTS Division, not the Division of Market Oversight.  28 of 30
+         citations verified by primary-source fetch; 2 flagged unverified and
+         explicitly not relied on.
+
+2c00da2  Draft 5: Tufte pass over all four filings
+         F-6 fully applied — "a second occurrence had survived Draft 4"; one
+         unbacked universal removed; the cover's submitter-association warning
+         replaced with a neutral review-gate line.
+
+e6c8bed  Draft 5 packet audit: repairs applied, consolidated claim ledger built
+         The Draft 4 addendum's half-applied F-6 record is corrected.  Filing
+         sentences decoupled from mutable engineering state, "specifics live in
+         the ledger, re-pinned once at filing time."
+
+a1a57c1  Independent FBA oracle: 300M-case differential, zero semantic divergences
+         11,587 refusal-CLASS-only divergences in 16 pairs trace to two
+         check-priority choices the spec leaves open — "a real gap since §8 makes
+         the failure class a public typed output."  Pinned by tests asserting the
+         divergence PERSISTS; nothing reconciled.  And a finding against itself:
+         the independent oracle omits the reservation_bound witness.
+
+169e5c4  Freeze refusal-class priority; differential closes at zero divergences
+         The frozen order adopts the reference oracle's observed order because the
+         golden corpus pins it — "rationale recorded, not asserted as superior."
+         Epistemics stated plainly: allocation agreement remains independent
+         CORROBORATION; refusal-class agreement is now CONFORMANCE.
+
+728b215  Filed-comments landscape: 11 comments surveyed, obviousness measured
+         The IAC has no archived public written statements — early-filer ground is
+         empty.  P-D5 is crowded (4 of 5 filers); P-R6 is preempted by a named
+         2026-07-14 filer, "recommend ceding by name."  SEC publishes no comment
+         index (five URL patterns 404) — later refuted, see 3f021fe.  One comment
+         body lost to rate limiting; blocks recorded, nothing fabricated.
+
+17d1ace  Drift-review fixes: authenticated → supplied in three memos
+         "The accumulator authenticates nothing (its own header says so); memo
+         language crossed evidence-gated into authenticated and is corrected."
+
+8ab492d  Attestation posting-path spec; live-session ceiling corrected at source
+         Primary-source verified: a sibling repo commit records an executed live
+         MPC-TLS session against real api.coinbase.com, so "no live provider
+         session" was TOO STRONG.  The corrected ceiling distinguishes the
+         recorded exchange-API session from the absent model-provider session.
+         Also: the value-gap finding — a posted record commits a body, not a
+         value; no payout path exists on this shape alone.  "The spec states it
+         does not retire the gap it addresses."
+
+8401bbc  Inclusion/availability model: MMR log, receipts, equivocation proofs
+         A test caught cross-batch receipt honoring when the domain digest was
+         bound only in the leaf; padded sealing added after the root LEAKED
+         occupancy.  Open falsifiers stated plainly: no attribution (the largest
+         gap), censorship has only timeouts, receipts disclose rank, availability
+         is declared not modeled.
+
+d34a790  Bundling-invariance corpus: 683k decompositions, witnesses found not chosen
+         Smallest witness FOUND: [1,0] and [0,1] are each cash-or-nothing; held
+         together they are [1,1], and the same criterion labels the pair
+         differently with zero mint, burn, or transfer.  "Discoveries reported not
+         tuned": support-union criteria are provably invariant, which NARROWS the
+         memo's own claim; complete-set survives only by permitting three labels;
+         invariance is necessary, not sufficient, pinned by degenerate controls.
+
+d3394d9  Manipulation-cost lower bounds: exact table, four surprises, one refutation
+         Window LENGTH does not enter the cost — refuting the memo's own "choose
+         the window so moving the reference costs more" line.  Longer required
+         holds make the attack CHEAPER absent competing flow.  Burn saturates
+         while capital does not.  And the commissioned understatement hypothesis
+         is REFUTED: per-bucket-independent pricing OVERSTATES, because the fee
+         residue ratchets price toward the adversary — with the two estimators
+         that genuinely understate recorded in its place.
+
+abcc94d  Perpetuals filing corrected by its own experiment
+         "This is the evidence loop working in the right direction: the experiment
+         fixed the filing before anyone read it."  Sampling structure, not window
+         length.
+
+56bddb4  Shielded baseline (P1-4): the composition test passes, honest core measured
+         MEASURED, not asserted: 377 of 1,125 alternative publications are
+         admissible including all 33 well-formed (tick, volume) pairs — the
+         executor owns the public result completely, a threshold committee would
+         not change that, and ONLY a proof of correct evaluation closes it.  The
+         90,082-case differential's "tautology boundary stated loudly."
+         Composition gap C-1 recorded as a passing test.
+
+3b719c5  VERDICTS reconciled to tonight's packets; C-1 refund gap closed
+         Per-rung status with the conformance-vs-corroboration distinction carried
+         verbatim; the 377-of-1,125 measurement given as the REASON the proof rung
+         is needed.  The lying-executor residual recorded as open, not hidden.
+
+8642a6d  Settlement relation (P1-7): spec plus deterministic model
+         Findings recorded in the spec: public settlement RECONSTRUCTS the hidden
+         book, and substituted-but-consistent results settle — correctness stays
+         upstream.
+
+9631e34  Two more go/no-go candidates: Conflicts NPRM comment; Data Q4 insert
+         "The spine is the proposal's own gap between asserted property and
+         procedural compliance object, found during verification."  Consistency
+         with the definitions filing's no-position analyzed and concluded plainly
+         as a scope choice, not a view claim.
+
+99cc2f6  Perpetuals filing Draft 1; operatorless addendum lands in IAC Draft 8
+         "Coordinator call recorded: the Draft 7 slack premise was FALSE against
+         the actual artifact" — the statement renders at 8 pages with page 8
+         holding only review apparatus.  The one-line cover addition overflowed
+         both ways and was withdrawn per fallback.
+
+1b9fd51  Open-matters map: IAC agenda published, twelve open dockets
+         Found a directly-on-point fully-collateralized event-contract reporting
+         NPRM that CLOSED July 31 — a missed window, which is why a standing watch
+         is established.  regulations.gov 429'd and sec.gov 403'd, so counts are
+         uncross-checked and stated as such.
+
+8bf7f6c  Attestation suites reproduced: 86 tests green on pinned breadstuffs tree
+         Caveat recorded: Lean emit NOT re-run — the committed emitted descriptor
+         was exercised and its Lean pinning inherited from the commit.  Transport
+         chosen as git archive (213 MB) over rsync (30.7 GB) because it pins
+         exactly what was tested.
+
+020c321  Operatorless-agents memo and IAC addendum candidate
+         "Trustless" priced honestly: the executor host and pinned notary are
+         today's enumerated trusted roles, and a pinned notary IS an operator for
+         that function.
+
+0c22ae7  Typography: STIX Two Text, ten spacing diseases fixed
+         Content verified preserved as character multisets; "the only deltas are
+         repeated table-header rows from new page breaks."
+
+3f021fe  Add filing-process and forward-calendar memo
+         Eight corrections to two companion memos.  The largest REFUTES 728b215:
+         the SEC DOES publish comment-letter indexes — the prior lane used a
+         retired URL shape — and those indexes hold seven filers absent from the
+         CFTC dockets plus five ex parte memoranda.  "There is no speaking channel
+         and none was missed": eight CFTC advisory notices 2023-2026 checked, not
+         one provides for oral comment.  Transcript lag measured from HTTP
+         last-modified headers: 85-281 days under prior sponsors, 14 for the AAC.
+
+a1b8aea  Fork Draft 10 regulatory sources with engineering claim deltas
+         Replaces the STALE "no live archive-to-resolution join / caller evidence
+         is not source-authenticated" story with the two-ELF truth; records Direct
+         V2 Select as a measured non-promotable STOP at exactly 1,400,000 CU; caps
+         any future selection claim at "best valid submitted candidate."
+
+ef10f29  Correct the compute-ceiling attribution in both Draft 13 filings
+         The two measured stops were real measurements whose CAUSE was a software
+         SHA-256 implementation, not the verification architecture.  Both filings
+         carry the sealed post-syscall numbers.
+
+8f9cfef  Draft 13: compress every document to its content floor
+         "All three body lanes converged on the same result: the 55-65 percent
+         target is UNREACHABLE without deleting protected claims."
+
+72b3582  Apply the desk review: name the recomputation boundary, fix the attribution
+         Recomputation verifies execution over the book it is GIVEN; input
+         integrity is other instruments' question.  The meeting discussion is
+         re-attributed to the facilitator's attendance, reported to the author —
+         "the literally true provenance."
+
+e0b94b2  Apply the perpetuals desk review: the stayed contract answered by name
+         The meeting sentence weakened to its true form: formal verification was
+         raised BEFORE the Committee, not by it.
+
+5f12b58  Apply the fourth desk review: re-anchor Position 3, answer Q19's other half
+         "The fabricated Q8 mooring replaced with Question 1's real hook," and the
+         false competition-interest attribution struck "to let the sentence stand
+         on its own feet."
+
+21212ea  Sweep the manipulation cost of a thin off-hours session
+         A test asserts every one of 8,640 rows is the v1 model evaluated at that
+         row's thin depth, and the 864 depth-ratio-1 rows reproduce v1 exactly —
+         so the session layer adds NO arithmetic.  Cost never rises as the session
+         thins in all 8,640 rows.  A retention ratio above 10000 records that the
+         thin session offered no discount, "not that a design is dearer to attack
+         than v1 already reports."  1,440 rows carry a dash rather than a number
+         because their buckets outlast the session.
+
+b23107e  Draft 14: the submission-ready pass, meeting-responsive and de-armored
+         The devnet placeholders resolve honestly: no public-cluster deployment
+         exists.  Per ember's direction the performative disclaimers are gone —
+         "no 'requests approval of nothing,' no 'not legal opinions,' no
+         incantations.  Factual scope statements survive once each, stated as
+         information."
+
+41088c8  Resolve the cover's weave brackets; write the perpetuals comment fresh
+         "The peanut gallery's verdict taken: red-pen remarks read as unfinished,
+         so the brackets became prose and the loom sentence stays honest about
+         both hands revising."
+
+0b9ccc1  Fix the swapped joint-docket numbers in the fresh statement's sources
+         Two docket numbers transposed in a filing's own source list.
+
+
+================================================================================
+3. CONVENTIONS OBSERVED — DEGG-RESEARCH
+================================================================================
+
+Same house style, adapted to documents rather than code.  Subjects are
+capitalized imperative with a story, often naming the draft number and the move
+("Draft 6: filings argue positions in the audience's categories, two-thirds
+length"; "Draft 12: rewrite the three filings for a reader, not a reviewer";
+"Draft 15 IAC: written fresh, positions first, the system as witness").  Zero
+lowercase subjects, zero conventional-commit prefixes, zero duplicate subjects.
+
+Bodies carry the same four movements as the sibling repo, with document-specific
+substitutions: instead of test counts, page and word counts, always exact ("IAC
+statement 11 pp / 5,489 words to 10 pp / 5,091"); instead of gate lists, the
+verification method ("every FR quote programmatically verified against GPO
+retrievals", "content verified preserved as character multisets", "28 citations
+verified by primary-source fetch; 2 flagged unverified and not relied on");
+instead of claim planes, ceilings and ledger rows (V-17..V-21, C024, V-39, F-6).
+
+Three phrases recur and are load-bearing: "Nothing filed" / "nothing submitted,
+no regulator contacted" appears at the end of nearly every substantive body;
+"placeholders intact" tracks the identity fields; and "reported not tuned" /
+"found not chosen" marks experimental results, exactly as in dragons-clutch.
+
+Co-Authored-By: Claude Opus 5 on 34 commits (the 08-18 foundation), Claude Fable
+5 on 28 (08-19 onward), and 18 with no trailer.  25 of 80 bodies are empty.
+28 commits are GPG-signed and all 28 are dated 2026-08-18; the remaining 52 are
+unsigned — the same epoch boundary as the sibling repo, to the day.
+
+Breaks: 18be77e "Regulatory packet: Draft 8 review editions", d7fc6b7, 7df9c01,
+24be501, 08a0fc3, ec9b026, f0cd755, b8e1a83, d1eff47, 882a205, 0dd6601, 4ce0ce6,
+e4bfabf, 9ceab9b, 4caeb80, e4429c9 — a band of subject-only commits covering
+Drafts 8 through 12, i.e. the same "terse era" that the sibling repo has, in the
+same days, from the same other hand.
+
+
+================================================================================
+4. ODDITIES — DEGG-RESEARCH
+================================================================================
+
+  * 728b215 states as a finding that the SEC publishes no comment index, with
+    five 404'ing URL patterns as evidence.  3f021fe, a day later, refutes it: the
+    indexes exist, the prior lane used a retired URL shape, and they hold seven
+    filers the CFTC dockets do not.  A finding and its retraction, both recorded,
+    a day apart — the cleanest example in either repo of the method working.
+  * 1b9fd51 records a directly-on-point NPRM that had already closed on July 31.
+    A missed opportunity written down as a finding rather than quietly noted.
+  * a1a57c1's caveat is a finding against the commit's own instrument: "the
+    independent oracle omits the reservation_bound witness."
+  * The only merge commit in the repo, 77277d1, merges an experiment whose entire
+    purpose was to run a computation a filing had promised to run — and 5e0ff98,
+    two commits later, files it.
+  * fb88fa8's body ends with a parenthetical that is pure swarm archaeology:
+    "(Repo checker transiently red on a sibling lane's in-flight file, not
+    these.)"
+  * 588d461 "Sign the statement: AI-authored attribution and first-person
+    standing" and 5b204cb, which fills the header identity as "Claude Fable 5 (AI
+    author), via Ember Richardson Arlynx (facilitator)" — the moment the
+    repository stops describing an authorship arrangement and adopts one.
+  * The strangest single line in either repo, from 41088c8: "The peanut gallery's
+    verdict taken."
+
+
+================================================================================
+5. STATS — DEGG-RESEARCH
+================================================================================
+
+Total commits ...................... 80
+Date span .......................... 2026-08-18 → 2026-08-21 (4 calendar days)
+Merge commits ......................  1
+Busiest days ....................... 2026-08-18  37
+                                     2026-08-20  22
+                                     2026-08-19  20
+                                     2026-08-21   1
+Git author ......................... ember arlynx, 80/80 (100%)
+Co-Authored-By trailer ............. Claude Opus 5   34  (43%)
+                                     Claude Fable 5  28  (35%)
+                                     none            18  (23%)
+Bodies empty (after stripping the trailer) ...... 25 (31%)
+Subjects starting lowercase ........   0
+Exact duplicate subjects ...........   0
+GPG-signed .........................  28 (all 2026-08-18); 52 unsigned
+Draft numbers traversed ............ 3 → 15, plus a separately numbered
+                                     perpetuals comment at Draft 3
+
+
+================================================================================
+COMBINED: 778 commits read.  1 file written.  Nothing committed.
+================================================================================

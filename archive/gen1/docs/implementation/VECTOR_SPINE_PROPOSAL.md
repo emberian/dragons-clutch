@@ -5,7 +5,7 @@ is a design proposal that has not crossed a review gate. Nothing here is
 IMPLEMENTED, MODEL, or frozen. No file under `fixtures/` has been created, no
 crate has been changed, and no root Cargo workspace has been created. This
 document is the reviewable artifact required by
-[`CODEX_HANDOFF.md`](../../CODEX_HANDOFF.md) §7 P1 packet 2 before any of that
+[`CODEX_HANDOFF.md`](../../../handoffs/CODEX_HANDOFF.md) §7 P1 packet 2 before any of that
 work begins.
 
 This document does not claim that any implementation currently agrees with any

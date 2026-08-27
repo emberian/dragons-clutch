@@ -14,7 +14,7 @@ Ground truth read: `crates/clutch-kernel/src/lib.rs` (the transitions,
 `required_collateral_for`, `resolve_with_vector`, hypotheses (H1)/(H2));
 [`../implementation/DISTRIBUTIONAL_CLAIMS_DESIGN.md`](../implementation/DISTRIBUTIONAL_CLAIMS_DESIGN.md)
 (the B-spline basis, §3 solvency theorem, §7 portfolios, §15–16 addenda);
-[`../../PROJECT.md`](../../PROJECT.md) (product frame, §9 non-goals);
+[`../../PROJECT.md`](../../../handoffs/PROJECT.md) (product frame, §9 non-goals);
 [`../FEE_GEOMETRY.md`](../FEE_GEOMETRY.md) and
 [`../implementation/POLICY_ANALYSIS_LOTS_FEES.md`](../implementation/POLICY_ANALYSIS_LOTS_FEES.md)
 (the dispersion fee thesis, hypothesis-grade).

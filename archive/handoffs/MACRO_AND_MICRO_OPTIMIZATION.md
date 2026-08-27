@@ -202,7 +202,7 @@ interpretations and one runtime/model consistency assumption do not.
 
 The broader generality findings — collateral-program mismatch, owner-rounding
 admission restrictions, capacity profiles, and the payoff compiler — live in
-[`docs/reviews/ARCHITECTURE_REVIEW_2026-08-22.md`](docs/reviews/ARCHITECTURE_REVIEW_2026-08-22.md).
+[`docs/reviews/ARCHITECTURE_REVIEW_2026-08-22.md`](../gen1/docs/reviews/ARCHITECTURE_REVIEW_2026-08-22.md).
 
 ## Ground rules (read before touching anything)
 

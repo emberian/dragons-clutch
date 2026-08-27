@@ -6,7 +6,7 @@ and future source.
 ## 1. First-party license
 
 First-party Dragon's Clutch source and documentation are intended to be licensed
-under `AGPL-3.0-or-later`, as recorded in the repository [LICENSE](../LICENSE).
+under `AGPL-3.0-or-later`, as recorded in the repository [LICENSE](../../../LICENSE).
 Every public release must include the license, corresponding source, build and
 installation material required by the license, and appropriate notices.
 

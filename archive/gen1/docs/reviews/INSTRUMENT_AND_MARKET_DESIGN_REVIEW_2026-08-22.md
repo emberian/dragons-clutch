@@ -81,7 +81,7 @@ than counting inherited prompts.
 This review treats code and named execution evidence as stronger than prose.
 The principal current sources are:
 
-- [`CURRENT_TRUTH.md`](../../CURRENT_TRUTH.md), especially §§3–6;
+- [`CURRENT_TRUTH.md`](../../../handoffs/CURRENT_TRUTH.md), especially §§3–6;
 - [`ARCHITECTURE_REVIEW_2026-08-22.md`](ARCHITECTURE_REVIEW_2026-08-22.md);
 - [`PRODUCT_COMPILER_AND_SERIES_V1.md`](../design/PRODUCT_COMPILER_AND_SERIES_V1.md);
 - [`PRICE_MEASURE_WITNESS_V2.md`](../design/PRICE_MEASURE_WITNESS_V2.md);

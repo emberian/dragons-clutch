@@ -5,7 +5,7 @@ Purpose: post-compaction execution map for Codex, Claude/Luade, and supervised
 subagents.  This is a priority and dependency document, not a capability or
 release claim.
 
-[`../CURRENT_TRUTH.md`](../CURRENT_TRUTH.md) remains the claim vocabulary and
+[`../CURRENT_TRUTH.md`](../../handoffs/CURRENT_TRUTH.md) remains the claim vocabulary and
 accepted-evidence ledger.  [`V1_BACKLOG.md`](V1_BACKLOG.md) remains the detailed
 historical queue.  This document says what to do next, which work can safely run
 in parallel, and which attractive work must wait.

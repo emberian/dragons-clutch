@@ -35,7 +35,7 @@ Ground truth read for this design:
 - [`BATCH_RELATION_V1_DESIGN.md`](BATCH_RELATION_V1_DESIGN.md) — portfolio
   coefficient vectors, virtual complete-set conversion, per-outcome
   conservation, and the §18 implementation record.
-- [`../../PROJECT.md`](../../PROJECT.md) §6 — the current posture that
+- [`../../PROJECT.md`](../../../handoffs/PROJECT.md) §6 — the current posture that
   fractional payout vectors are reserved for ambiguity policies. **This design
   changes that posture** (§10.1).
 

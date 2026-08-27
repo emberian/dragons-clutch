@@ -2,8 +2,8 @@
 
 Status date: 2026-08-23. This is the operational entry point for implementation
 and evidence status. [`PROJECT.md`](PROJECT.md) is the canonical product brief,
-[`AGENTS.md`](AGENTS.md) is the authority and correctness policy, and the
-source-backed [`architecture review`](docs/reviews/ARCHITECTURE_REVIEW_2026-08-22.md)
+[`AGENTS.md`](../../AGENTS.md) is the authority and correctness policy, and the
+source-backed [`architecture review`](../gen1/docs/reviews/ARCHITECTURE_REVIEW_2026-08-22.md)
 owns the post-Cycle-G repair and successor queue.
 
 This file supersedes current-status and test-count claims in [`GOAL.md`](GOAL.md),
@@ -51,7 +51,7 @@ owners, traded it through General V1, settled, resolved from that sealed
 archive, redeemed, and withdrew all 128 collateral atoms. The strict joined-v4
 Operator parser landed at `633a366`, the immutable public-safe evidence at
 `94f5143`, and its current documentation at `bbfeaa5`. The retained record is
-[`docs/reviews/evidence/local-real-pyth-joined-lifecycle-2026-08-23`](docs/reviews/evidence/local-real-pyth-joined-lifecycle-2026-08-23/).
+[`docs/reviews/evidence/local-real-pyth-joined-lifecycle-2026-08-23`](../gen1/docs/reviews/evidence/local-real-pyth-joined-lifecycle-2026-08-23/).
 
 This campaign is **SBF-EXECUTED and UNPROMOTED**. Its observation and guardian
 quorum are synthetic, its network and disposable signers are local, and its
@@ -71,7 +71,7 @@ SHA-256
 `0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7`** — the
 runtime carrying intents **36–73** (the highest is `SealSourceArchiveV2`, tag
 73). Its audit is archived under
-[`research/liveness-policy-profile/artifacts/0d52c561909cedef`](research/liveness-policy-profile/artifacts/0d52c561909cedef/audit/RUNTIME_ARTIFACT_AUDIT.md):
+[`research/liveness-policy-profile/artifacts/0d52c561909cedef`](../gen1/research/liveness-policy-profile/artifacts/0d52c561909cedef/audit/RUNTIME_ARTIFACT_AUDIT.md):
 pass 1 = pass 2 byte-identical from the canonical checkout and confirmed at two
 commits, zero first-party frame diagnostics surviving final LTO, all **66,106**
 direct `r10` references at or below 4,096 bytes, the same reviewed ten-symbol
@@ -156,7 +156,7 @@ Runtime evidence is artifact-specific:
   expectation made the gate fail specifically on committed bytes. The walk
   still had 11 genesis prerequisites and is focused **SBF-EXECUTED** evidence,
   not a blank-bank venue or the complete schema-v2 baseline. The exact record
-  is [`docs/implementation/COMMITTED_SBF_WALK.md`](docs/implementation/COMMITTED_SBF_WALK.md).
+  is [`docs/implementation/COMMITTED_SBF_WALK.md`](../gen1/docs/implementation/COMMITTED_SBF_WALK.md).
 
 **Cycle G's manifest and portable attestation have been run.** The checked-in
 `MANIFEST.baseline.json` is schema v2, emitted from `88fa515` and committed at
@@ -255,7 +255,7 @@ The scoped adversarial review at `f48b13c` found no hidden active P0 in the
 reviewed artifact, reservation, replay, withdrawal, or spline transitions. It
 did find the cross-cutting predictable-PDA pre-funding P1 and reaffirmed the
 source, native-resolution, and settlement STOPs. See
-[`docs/reviews/OVERNIGHT_INTEGRATION_REDTEAM.md`](docs/reviews/OVERNIGHT_INTEGRATION_REDTEAM.md).
+[`docs/reviews/OVERNIGHT_INTEGRATION_REDTEAM.md`](../gen1/docs/reviews/OVERNIGHT_INTEGRATION_REDTEAM.md).
 Artifact stage/final creation closed its part of that P1 at `e7d975b`; the
 typed policy/Realm/Profile/market plane closed its part at `ceac012`/`7cf7150`;
 and `a274bef` exercised Market, Reservation, and second-owner Position/Replay

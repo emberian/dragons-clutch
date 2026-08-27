@@ -1,8 +1,8 @@
 # V1 dependency-ordered execution backlog
 
 Status date: 2026-08-19. Checkboxes record accepted evidence, not effort and not
-authorization. [`../CURRENT_TRUTH.md`](../CURRENT_TRUTH.md) is the status and
-claim boundary; [`../PROJECT.md`](../PROJECT.md) is the product brief.
+authorization. [`../CURRENT_TRUTH.md`](../../handoffs/CURRENT_TRUTH.md) is the status and
+claim boundary; [`../PROJECT.md`](../../handoffs/PROJECT.md) is the product brief.
 
 Do not skip a gate because later code already exists. Later work remains useful
 model/prototype material, but it cannot promote the lifecycle while an earlier

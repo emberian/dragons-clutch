@@ -3,7 +3,7 @@
 Status: **PROPOSED design document.** Nothing in this file is a frozen policy, a
 landed implementation, or an evidence claim. Every policy decision below is
 presented as explicitly named PROPOSED variants; per the handoff blocker "policy
-freeze" ([`CODEX_HANDOFF.md`](../../CODEX_HANDOFF.md) §7 P0-5), convenience code
+freeze" ([`CODEX_HANDOFF.md`](../../../handoffs/CODEX_HANDOFF.md) §7 P0-5), convenience code
 may not canonize a policy, and an implementation lane following this document
 must build the variant scaffolding without selecting a silent default. Where
 this document says "recommended," that is a design recommendation awaiting the

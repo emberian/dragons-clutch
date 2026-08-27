@@ -1,7 +1,7 @@
 # Standing goal (2026-08-19): swarmcycle until project is complete
 
 > Status/claim authority stays with [`CURRENT_TRUTH.md`](CURRENT_TRUTH.md) and
-> [`docs/SWARM_ROADMAP_2026-08-19.md`](docs/SWARM_ROADMAP_2026-08-19.md). This
+> [`docs/SWARM_ROADMAP_2026-08-19.md`](../gen1/docs/SWARM_ROADMAP_2026-08-19.md). This
 > file is the standing-goal execution trail (Fable session, ember authorized).
 
 **Goal (UPGRADED by ember, 2026-08-19 ~18:00):** close out the remaining
@@ -1245,7 +1245,7 @@ J. SMALL-FIX BATCH (stale blocker row, mock path-sensitivity, queued
 
 > **Historical execution log.** For current capability claims, STOPs, and the
 > dependency-ordered queue, use [`CURRENT_TRUTH.md`](CURRENT_TRUTH.md) and
-> [`docs/V1_BACKLOG.md`](docs/V1_BACKLOG.md). Entries below record what agents
+> [`docs/V1_BACKLOG.md`](../gen1/docs/V1_BACKLOG.md). Entries below record what agents
 > believed or measured when written; later implementation and adversarial review
 > supersede several “current,” “next,” and completion statements.
 

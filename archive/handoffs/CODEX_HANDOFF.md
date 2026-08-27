@@ -2,7 +2,7 @@
 
 > Superseded for current work on 2026-08-22 by
 > [`CURRENT_TRUTH.md`](CURRENT_TRUTH.md) and the
-> [`architecture review`](docs/reviews/ARCHITECTURE_REVIEW_2026-08-22.md).
+> [`architecture review`](../gen1/docs/reviews/ARCHITECTURE_REVIEW_2026-08-22.md).
 > The measurements and gate pointers below remain useful. Its
 > “capability-complete” phrase names the bounded Cycle-G matrix, not the full
 > recovered product thesis, every collateral profile, or every settlement

@@ -2,10 +2,10 @@
 
 Status date: 2026-08-19. The former long-form Claude snapshot is preserved in
 Git history but is no longer a current-status document. Start here, then read
-[`AGENTS.md`](AGENTS.md), [`PROJECT.md`](PROJECT.md),
+[`AGENTS.md`](../../AGENTS.md), [`PROJECT.md`](PROJECT.md),
 [`CURRENT_TRUTH.md`](CURRENT_TRUTH.md), and
-[`docs/SWARM_ROADMAP_2026-08-19.md`](docs/SWARM_ROADMAP_2026-08-19.md) in that
-order. Use [`docs/V1_BACKLOG.md`](docs/V1_BACKLOG.md) as the deeper historical
+[`docs/SWARM_ROADMAP_2026-08-19.md`](../gen1/docs/SWARM_ROADMAP_2026-08-19.md) in that
+order. Use [`docs/V1_BACKLOG.md`](../gen1/docs/V1_BACKLOG.md) as the deeper historical
 queue after the roadmap. The roadmap is the current dependency and lane-routing
 guide; this older handoff remains useful context but not a promotion ledger.
 
@@ -68,7 +68,7 @@ remaining refusal was the strict liveness seal correctly detecting the new ELF
 identity caused by the rustdoc-link repair. Commit `b5700a9` closes that final
 identity gap with new same-ELF measurements and stack evidence. The subsequent
 schema-v2 emission and post-commit full check are 94/94. Read
-[`docs/implementation/BASELINE_MANIFEST_DIAGNOSTIC_2026-08-19.md`](docs/implementation/BASELINE_MANIFEST_DIAGNOSTIC_2026-08-19.md)
+[`docs/implementation/BASELINE_MANIFEST_DIAGNOSTIC_2026-08-19.md`](../gen1/docs/implementation/BASELINE_MANIFEST_DIAGNOSTIC_2026-08-19.md)
 for the historical convergence trail.
 
 Resume R1 in this exact order:
@@ -133,7 +133,7 @@ gate; that is an artifact-specific result, not a semantic or system release
 claim.
 
 The controlling semantic note is
-[`docs/design/NATIVE_AND_LOWERED_SEMANTICS.md`](docs/design/NATIVE_AND_LOWERED_SEMANTICS.md).
+[`docs/design/NATIVE_AND_LOWERED_SEMANTICS.md`](../gen1/docs/design/NATIVE_AND_LOWERED_SEMANTICS.md).
 
 ## What is now genuinely executable
 
