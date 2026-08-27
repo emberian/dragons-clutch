@@ -167,7 +167,12 @@ pub(crate) fn process(
     } else {
         None
     };
-    let child_account_count = child_account_count(resolution_request.action);
+    let child_account_count = match resolution_request.action {
+        ResolutionCoreActionV1::AdmitTerminal => RESOLUTION_ADMIT_CHILD_ACCOUNT_COUNT_V1,
+        // The fund actions' child frame is the outer frame, whichever of its
+        // two admissible widths `validate_outer_frame` accepted.
+        _ => accounts.len(),
+    };
     invoke_fixed_role(
         program_id,
         &frame,
@@ -318,7 +323,7 @@ fn authenticate_request_coordinates(
             request.beneficiary == state.rent_beneficiary.to_bytes()
                 && request.beneficiary
                     == account(
-                        frame.child_accounts(RESOLUTION_VERIFY_OUTER_ACCOUNT_COUNT_V1)?,
+                        frame.child_accounts(VERIFY_BENEFICIARY + 1)?,
                         VERIFY_BENEFICIARY,
                     )?
                     .key
@@ -329,7 +334,7 @@ fn authenticate_request_coordinates(
             request.beneficiary == state.rent_beneficiary.to_bytes()
                 && request.beneficiary
                     == account(
-                        frame.child_accounts(RESOLUTION_CLOSE_OUTER_ACCOUNT_COUNT_V1)?,
+                        frame.child_accounts(CLOSE_BENEFICIARY + 1)?,
                         CLOSE_BENEFICIARY,
                     )?
                     .key
@@ -398,9 +403,18 @@ fn validate_outer_frame(
     action: ResolutionCoreActionV1,
 ) -> Result<(), CoreSbfError> {
     let expected = outer_account_count(action);
-    if accounts.len() != expected || accounts.iter().any(|value| value.is_signer) {
+    // The three fund actions end with the finalized RecoveryPolicyV2 pair. A
+    // material that bought no recovery walk has no such record, so its frame
+    // is the same frame without those two tail positions; whether the short
+    // shape is admissible is decided against the authenticated material in
+    // `authenticate_recovery_policy`, not here.
+    let admissible_count = accounts.len() == expected
+        || (action != ResolutionCoreActionV1::AdmitTerminal
+            && accounts.len() == expected.saturating_sub(2));
+    if !admissible_count || accounts.iter().any(|value| value.is_signer) {
         return Err(CoreSbfError::AccountFrame);
     }
+    let has_policy_positions = accounts.len() == expected;
     require_distinct(accounts)?;
     let common = FixedRoleAccountsV1::parse(program_id, accounts)?;
     if common.market().owner != program_id {
@@ -441,11 +455,13 @@ fn validate_outer_frame(
         ResolutionCoreActionV1::CreateFund => {
             require_sysvar(account(accounts, CREATE_RENT)?, sysvar::rent::ID)?;
             require_program(account(accounts, CREATE_SYSTEM)?, system_program::ID)?;
-            require_readonly_pair(
-                accounts,
-                CREATE_RECOVERY_POLICY,
-                CREATE_RECOVERY_POLICY_STAGING,
-            )?;
+            if has_policy_positions {
+                require_readonly_pair(
+                    accounts,
+                    CREATE_RECOVERY_POLICY,
+                    CREATE_RECOVERY_POLICY_STAGING,
+                )?;
+            }
         }
         ResolutionCoreActionV1::VerifyFundReady => {
             let beneficiary = account(accounts, VERIFY_BENEFICIARY)?;
@@ -454,11 +470,13 @@ fn validate_outer_frame(
             }
             require_sysvar(account(accounts, VERIFY_CLOCK)?, sysvar::clock::ID)?;
             require_sysvar(account(accounts, VERIFY_RENT)?, sysvar::rent::ID)?;
-            require_readonly_pair(
-                accounts,
-                VERIFY_RECOVERY_POLICY,
-                VERIFY_RECOVERY_POLICY_STAGING,
-            )?;
+            if has_policy_positions {
+                require_readonly_pair(
+                    accounts,
+                    VERIFY_RECOVERY_POLICY,
+                    VERIFY_RECOVERY_POLICY_STAGING,
+                )?;
+            }
         }
         ResolutionCoreActionV1::AdmitTerminal => {
             let certificate = account(accounts, ADMIT_CERTIFICATE)?;
@@ -490,11 +508,13 @@ fn validate_outer_frame(
             require_sysvar(account(accounts, CLOSE_CLOCK)?, sysvar::clock::ID)?;
             require_sysvar(account(accounts, CLOSE_RENT)?, sysvar::rent::ID)?;
             require_program(account(accounts, CLOSE_SYSTEM)?, system_program::ID)?;
-            require_readonly_pair(
-                accounts,
-                CLOSE_RECOVERY_POLICY,
-                CLOSE_RECOVERY_POLICY_STAGING,
-            )?;
+            if has_policy_positions {
+                require_readonly_pair(
+                    accounts,
+                    CLOSE_RECOVERY_POLICY,
+                    CLOSE_RECOVERY_POLICY_STAGING,
+                )?;
+            }
         }
     }
     Ok(())
@@ -526,27 +546,53 @@ fn authenticate_recovery_policy(
         &material_data,
     )?;
     let material = SourceMaterialV2::decode(&material_data).map_err(|_| CoreSbfError::Reference)?;
-    let recovery_id = material.recovery_policy().ok_or(CoreSbfError::Reference)?;
-    let policy_account = account(accounts, policy_index)?;
-    let policy_data = policy_account
-        .try_borrow_data()
-        .map_err(|_| CoreSbfError::FinalizedRecord)?;
-    if policy_data.len() != RECOVERY_POLICY_BYTES_V2 {
-        return Err(CoreSbfError::Reference);
-    }
-    authenticate_finalized_record(
-        frame.registry().key,
-        policy_account,
-        account(accounts, staging_index)?,
-        &rent,
-        RECOVERY_POLICY_SCHEMA_ID_V2,
-        recovery_id.to_bytes(),
-        &policy_data,
-    )?;
-    let policy = RecoveryPolicyV2::decode(&policy_data).map_err(|_| CoreSbfError::Reference)?;
-    if policy.attempt_count() != 1 {
-        return Err(CoreSbfError::Reference);
-    }
+    // A material either bought an ordered recovery walk or it did not, and the
+    // two shapes authenticate differently on purpose. `Some` is the original
+    // path, byte for byte. `None` is the §12.7/§12.8 no-recovery market — the
+    // one whose whole failure walk is the funded
+    // `Primary -> Exhausted -> FailureCommitted` — and before this arm existed
+    // it could not exist at all: this guard demanded a recovery policy the
+    // exhaust transition refuses, so no live founding could ever reach the
+    // executed walk.
+    let policy = match material.recovery_policy() {
+        Some(recovery_id) => {
+            let policy_account = account(accounts, policy_index)?;
+            let policy_data = policy_account
+                .try_borrow_data()
+                .map_err(|_| CoreSbfError::FinalizedRecord)?;
+            if policy_data.len() != RECOVERY_POLICY_BYTES_V2 {
+                return Err(CoreSbfError::Reference);
+            }
+            authenticate_finalized_record(
+                frame.registry().key,
+                policy_account,
+                account(accounts, staging_index)?,
+                &rent,
+                RECOVERY_POLICY_SCHEMA_ID_V2,
+                recovery_id.to_bytes(),
+                &policy_data,
+            )?;
+            let policy =
+                RecoveryPolicyV2::decode(&policy_data).map_err(|_| CoreSbfError::Reference)?;
+            if policy.attempt_count() != 1 {
+                return Err(CoreSbfError::Reference);
+            }
+            Some((recovery_id, policy))
+        }
+        None => {
+            // No recovery policy record exists, so the frame carries no
+            // positions for one: the short frame IS the statement that none
+            // exists, and the authenticated material is what makes that
+            // statement checkable rather than a caller's choice. The two
+            // policy indices are the frame's own tail, so absence is exactly
+            // "the frame ends before them".
+            if accounts.len() > policy_index {
+                return Err(CoreSbfError::Reference);
+            }
+            let _ = staging_index;
+            None
+        }
+    };
     let manifest_data = account(accounts, CAPABILITY_MANIFEST)?
         .try_borrow_data()
         .map_err(|_| CoreSbfError::FinalizedRecord)?;
@@ -561,24 +607,80 @@ fn authenticate_recovery_policy(
     )?;
     let manifest =
         CapabilityManifestV1::decode(&manifest_data).map_err(|_| CoreSbfError::Funding)?;
-    let recovery_allocation = policy
-        .attempt(0)
-        .map_err(|_| CoreSbfError::Reference)?
-        .funding_allocation_id()
-        .to_bytes();
-    for (entry_index, expected_config) in [
-        (request.recovery_entry_index, recovery_allocation),
-        (request.exhaustion_entry_index, recovery_id.to_bytes()),
-        (request.failure_entry_index, request.source_material),
-    ] {
+    match policy {
+        Some((recovery_id, policy)) => {
+            let recovery_allocation = policy
+                .attempt(0)
+                .map_err(|_| CoreSbfError::Reference)?
+                .funding_allocation_id()
+                .to_bytes();
+            for (entry_index, expected_config) in [
+                (request.recovery_entry_index, recovery_allocation),
+                (request.exhaustion_entry_index, recovery_id.to_bytes()),
+                (request.failure_entry_index, request.source_material),
+            ] {
+                let entry = manifest
+                    .entry(entry_index)
+                    .map_err(|_| CoreSbfError::Funding)?;
+                if entry.config_id().to_bytes() != expected_config
+                    || entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V4
+                {
+                    return Err(CoreSbfError::Funding);
+                }
+            }
+        }
+        None => authenticate_no_recovery_entries(manifest, request)?,
+    }
+    Ok(())
+}
+
+/// Pin the three funding entries of a material that bought no recovery walk.
+///
+/// With no recovery policy there is no allocation identity and no policy
+/// digest to pin the recovery and exhaustion entries to, so the rule becomes
+/// structural: three pairwise-distinct Resolution-controller entries, exactly
+/// one of which — the failure entry — is configured by this market's own
+/// Source material. The funded deadline walk admits a compartment by that
+/// same configuration comparison (`funded::plan_funding_release`), so the two
+/// non-material compartments can never stand in for the escrow; they exist,
+/// prepaid, until `CloseFund` refunds them with the failure compartment.
+#[inline(never)]
+fn authenticate_no_recovery_entries(
+    manifest: CapabilityManifestV1<'_>,
+    request: ResolutionRoleRequestV1,
+) -> Result<(), CoreSbfError> {
+    if request.recovery_entry_index == request.exhaustion_entry_index
+        || request.recovery_entry_index == request.failure_entry_index
+        || request.exhaustion_entry_index == request.failure_entry_index
+    {
+        return Err(CoreSbfError::Funding);
+    }
+    let mut configs = [[0_u8; 32]; 3];
+    for (slot, entry_index) in [
+        request.recovery_entry_index,
+        request.exhaustion_entry_index,
+        request.failure_entry_index,
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let entry = manifest
             .entry(entry_index)
             .map_err(|_| CoreSbfError::Funding)?;
-        if entry.config_id().to_bytes() != expected_config
-            || entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V4
-        {
+        if entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V4 {
             return Err(CoreSbfError::Funding);
         }
+        if let Some(config) = configs.get_mut(slot) {
+            *config = entry.config_id().to_bytes();
+        }
+    }
+    let [recovery_config, exhaustion_config, failure_config] = configs;
+    if failure_config != request.source_material
+        || recovery_config == request.source_material
+        || exhaustion_config == request.source_material
+        || recovery_config == exhaustion_config
+    {
+        return Err(CoreSbfError::Funding);
     }
     Ok(())
 }

@@ -139,7 +139,15 @@ pub(crate) fn process_core_effect(
         ResolutionCoreActionV1::AdmitTerminal => ADMIT_TERMINAL_ACCOUNT_COUNT,
         ResolutionCoreActionV1::CloseFund => CLOSE_FUND_ACCOUNT_COUNT,
     };
-    if accounts.len() != expected_accounts {
+    // The three fund actions end with the finalized RecoveryPolicyV2 pair. A
+    // material that bought no recovery walk has no such record, so its frame
+    // is the same frame without those two tail positions; whether the short
+    // shape is admissible is decided against the authenticated material in
+    // `authenticate_recovery_policy`, not here.
+    let admissible_count = accounts.len() == expected_accounts
+        || (request.action != ResolutionCoreActionV1::AdmitTerminal
+            && accounts.len() == expected_accounts.saturating_sub(2));
+    if !admissible_count {
         return Err(ResolutionError::AccountFrame.into());
     }
     let common = parse_common(accounts)?;
@@ -604,13 +612,8 @@ fn process_create<'info>(
         .map_err(|_| ResolutionError::SourceMaterial)?;
     let material =
         SourceMaterialV2::decode(&material_data).map_err(|_| ResolutionError::SourceMaterial)?;
-    let recovery_policy = authenticate_recovery_policy(
-        common,
-        accounts.get(18).ok_or(ResolutionError::AccountFrame)?,
-        accounts.get(19).ok_or(ResolutionError::AccountFrame)?,
-        material,
-        rent,
-    )?;
+    let recovery_policy =
+        authenticate_recovery_policy(common, accounts.get(18), accounts.get(19), material, rent)?;
     let manifest_data = common
         .capability_manifest
         .try_borrow_data()
@@ -783,13 +786,8 @@ fn process_verify(
         .map_err(|_| ResolutionError::SourceMaterial)?;
     let material =
         SourceMaterialV2::decode(&material_data).map_err(|_| ResolutionError::SourceMaterial)?;
-    let recovery_policy = authenticate_recovery_policy(
-        common,
-        accounts.get(19).ok_or(ResolutionError::AccountFrame)?,
-        accounts.get(20).ok_or(ResolutionError::AccountFrame)?,
-        material,
-        rent,
-    )?;
+    let recovery_policy =
+        authenticate_recovery_policy(common, accounts.get(19), accounts.get(20), material, rent)?;
     let manifest_data = common
         .capability_manifest
         .try_borrow_data()
@@ -1100,13 +1098,7 @@ fn process_close<'info>(
     if clock.unix_timestamp <= 0 {
         return Err(ResolutionError::Sysvar.into());
     }
-    authenticate_finalized_funding_policy(
-        common,
-        accounts.get(22).ok_or(ResolutionError::AccountFrame)?,
-        accounts.get(23).ok_or(ResolutionError::AccountFrame)?,
-        request,
-        rent,
-    )?;
+    authenticate_finalized_funding_policy(common, accounts.get(22), accounts.get(23), request, rent)?;
     let manifest_data = common
         .capability_manifest
         .try_borrow_data()
@@ -1315,46 +1307,95 @@ fn process_close<'info>(
 
 fn authenticate_funding_entries(
     material: SourceMaterialV2,
-    recovery_policy: RecoveryPolicyV2,
+    recovery_policy: Option<RecoveryPolicyV2>,
     manifest: CapabilityManifestV1<'_>,
     request: ResolutionRoleRequestV1,
 ) -> ProgramResult {
-    let recovery_policy_id = material
-        .recovery_policy()
-        .ok_or(ResolutionError::SourceMaterial)?;
-    if recovery_policy.attempt_count() != 1 {
-        return Err(ResolutionError::SourceMaterial.into());
-    }
-    let recovery_allocation = recovery_policy
-        .attempt(0)
-        .map_err(|_| ResolutionError::SourceMaterial)?
-        .funding_allocation_id()
-        .to_bytes();
-    for (index, expected_config) in [
-        (request.recovery_entry_index, recovery_allocation),
-        (
-            request.exhaustion_entry_index,
-            recovery_policy_id.to_bytes(),
-        ),
-        (request.failure_entry_index, request.source_material),
-    ] {
-        let entry = manifest
-            .entry(index)
-            .map_err(|_| ResolutionError::Funding)?;
-        if entry.config_id().to_bytes() != expected_config
-            || entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V4
-        {
-            return Err(ResolutionError::Funding.into());
+    match (material.recovery_policy(), recovery_policy) {
+        (Some(recovery_policy_id), Some(recovery_policy)) => {
+            if recovery_policy.attempt_count() != 1 {
+                return Err(ResolutionError::SourceMaterial.into());
+            }
+            let recovery_allocation = recovery_policy
+                .attempt(0)
+                .map_err(|_| ResolutionError::SourceMaterial)?
+                .funding_allocation_id()
+                .to_bytes();
+            for (index, expected_config) in [
+                (request.recovery_entry_index, recovery_allocation),
+                (
+                    request.exhaustion_entry_index,
+                    recovery_policy_id.to_bytes(),
+                ),
+                (request.failure_entry_index, request.source_material),
+            ] {
+                let entry = manifest
+                    .entry(index)
+                    .map_err(|_| ResolutionError::Funding)?;
+                if entry.config_id().to_bytes() != expected_config
+                    || entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V4
+                {
+                    return Err(ResolutionError::Funding.into());
+                }
+            }
+            Ok(())
         }
+        // The §12.7 no-recovery material. There is no allocation identity and
+        // no policy digest to pin the recovery and exhaustion entries to, so
+        // the rule is structural: three pairwise-distinct Resolution-controller
+        // entries, exactly one of which — the failure entry — is configured by
+        // this market's own Source material. `funded::plan_funding_release`
+        // admits the escrow by that same configuration comparison, so the two
+        // non-material compartments can never stand in for it; they exist,
+        // prepaid, until `CloseFund` refunds them.
+        (None, None) => {
+            if request.recovery_entry_index == request.exhaustion_entry_index
+                || request.recovery_entry_index == request.failure_entry_index
+                || request.exhaustion_entry_index == request.failure_entry_index
+            {
+                return Err(ResolutionError::Funding.into());
+            }
+            let mut configs = [[0_u8; 32]; 3];
+            for (slot, index) in [
+                request.recovery_entry_index,
+                request.exhaustion_entry_index,
+                request.failure_entry_index,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let entry = manifest
+                    .entry(index)
+                    .map_err(|_| ResolutionError::Funding)?;
+                if entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V4 {
+                    return Err(ResolutionError::Funding.into());
+                }
+                if let Some(config) = configs.get_mut(slot) {
+                    *config = entry.config_id().to_bytes();
+                }
+            }
+            let [recovery_config, exhaustion_config, failure_config] = configs;
+            if failure_config != request.source_material
+                || recovery_config == request.source_material
+                || exhaustion_config == request.source_material
+                || recovery_config == exhaustion_config
+            {
+                return Err(ResolutionError::Funding.into());
+            }
+            Ok(())
+        }
+        // The caller's authentication and the material disagree about whether
+        // a recovery policy exists, which is a bug in this program rather than
+        // a hostile input; refuse rather than pick a side.
+        _ => Err(ResolutionError::SourceMaterial.into()),
     }
-    Ok(())
 }
 
 #[inline(never)]
 fn authenticate_finalized_funding_policy(
     common: CommonAccounts<'_, '_>,
-    raw: &AccountInfo<'_>,
-    staging: &AccountInfo<'_>,
+    raw: Option<&AccountInfo<'_>>,
+    staging: Option<&AccountInfo<'_>>,
     request: &ResolutionRoleRequestV1,
     rent: &Rent,
 ) -> ProgramResult {
@@ -1376,28 +1417,40 @@ fn authenticate_finalized_funding_policy(
 
 fn authenticate_recovery_policy(
     common: CommonAccounts<'_, '_>,
-    raw: &AccountInfo<'_>,
-    staging: &AccountInfo<'_>,
+    raw: Option<&AccountInfo<'_>>,
+    staging: Option<&AccountInfo<'_>>,
     material: SourceMaterialV2,
     rent: &Rent,
-) -> Result<RecoveryPolicyV2, ProgramError> {
-    let policy_id = material
-        .recovery_policy()
-        .ok_or(ResolutionError::SourceMaterial)?;
-    let policy_data = raw
-        .try_borrow_data()
-        .map_err(|_| ResolutionError::FinalizedRecord)?;
-    authenticate_finalized_record(
-        *common.registry_program.key,
-        raw,
-        staging,
-        rent,
-        RECOVERY_POLICY_SCHEMA_ID_V2,
-        policy_id.to_bytes(),
-        &policy_data,
-        RecordKind::RecoveryPolicyV2,
-    )?;
-    RecoveryPolicyV2::decode(&policy_data).map_err(|_| ResolutionError::SourceMaterial.into())
+) -> Result<Option<RecoveryPolicyV2>, ProgramError> {
+    match (material.recovery_policy(), raw, staging) {
+        (Some(policy_id), Some(raw), Some(staging)) => {
+            let policy_data = raw
+                .try_borrow_data()
+                .map_err(|_| ResolutionError::FinalizedRecord)?;
+            authenticate_finalized_record(
+                *common.registry_program.key,
+                raw,
+                staging,
+                rent,
+                RECOVERY_POLICY_SCHEMA_ID_V2,
+                policy_id.to_bytes(),
+                &policy_data,
+                RecordKind::RecoveryPolicyV2,
+            )?;
+            RecoveryPolicyV2::decode(&policy_data)
+                .map(Some)
+                .map_err(|_| ResolutionError::SourceMaterial.into())
+        }
+        // The no-recovery material has no policy record and therefore no
+        // frame positions carrying one: the short frame IS the statement
+        // that none exists, and the authenticated material is what makes
+        // that statement checkable rather than a caller's choice.
+        (None, None, None) => Ok(None),
+        // A frame width that disagrees with the authenticated material —
+        // policy positions without a policy, or a policy with nowhere to
+        // present it — is refused rather than reconciled.
+        _ => Err(ResolutionError::AccountFrame.into()),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
