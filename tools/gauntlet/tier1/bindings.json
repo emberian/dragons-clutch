@@ -333,7 +333,8 @@
       ],
       "program": "trading",
       "outcome": "refused",
-      "note": "HOSTILE, and the boundary this route is judged on. While the founding remains satisfiable the authority over funded principal may not be destroyed; an unwind that let anyone empty a live founding would be a worse defect than the permanent stranding it was written to fix. The refusal is raised by Custody's own transition rather than by the Trading outer, so it is credited to no Trading code, and the runner requires the whole multi-instruction transaction to roll back to a fee-only debit and the prestate to be bit-for-bit where it was."
+      "note": "HOSTILE, and the boundary this route is judged on. While the founding remains satisfiable the authority over funded principal may not be destroyed; an unwind that let anyone empty a live founding would be a worse defect than the permanent stranding it was written to fix. The refusal is Custody's own transition, not the Trading outer's, and it is credited to `Expiry` rather than `Replay` because the kernel has always distinguished the two and this program stopped flattening them - a terminal whose entire safety property is that it refuses at the wrong time has to be able to say that is what happened. The runner requires the whole multi-instruction transaction to roll back to a fee-only debit and then re-authenticates the prestate to prove the refusal moved nothing.",
+      "refusal": "custody/CustodySbfError::Expiry"
     },
     {
       "label": "unwind an expired founding's funded source compartment (DCLTPCA1)",

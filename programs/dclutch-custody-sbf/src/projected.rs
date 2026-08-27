@@ -9,9 +9,10 @@ use dclutch_custody_contract::{
     PROJECTED_CUSTODY_ABORT_SOURCE_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V1,
     PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1,
     PROJECTED_CUSTODY_OPEN_SOURCE_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1,
-    PROJECTED_CUSTODY_STATE_BYTES_V1, ProjectedCustodyCallerSeedsV1, ProjectedCustodyLockReceiptV1,
-    ProjectedCustodyOperationV1, ProjectedCustodyReceiptV1, ProjectedCustodyRequestV1,
-    ProjectedCustodyStateSeedsV1, ProjectedCustodyStateV1, normal_replay_from_realization_v1,
+    PROJECTED_CUSTODY_STATE_BYTES_V1, ProjectedCustodyCallerSeedsV1, ProjectedCustodyError,
+    ProjectedCustodyLockReceiptV1, ProjectedCustodyOperationV1, ProjectedCustodyReceiptV1,
+    ProjectedCustodyRequestV1, ProjectedCustodyStateSeedsV1, ProjectedCustodyStateV1,
+    normal_replay_from_realization_v1,
 };
 use dclutch_market_core_codec::{
     Action, CoreState, Identity, ProjectFoundReceiptV1, ProjectFoundRequestV1, Request, STATE_BYTES,
@@ -859,7 +860,7 @@ fn refund_and_close(
             account(accounts, RENT_CREDIT)?.key.to_bytes(),
             true,
         )
-        .map_err(|_| CustodySbfError::Replay)?;
+        .map_err(expiry_or_replay)?;
     close_vault_to_rent_credit(
         vault,
         authority,
@@ -976,7 +977,7 @@ fn abort_open_and_close(
             rent_credit.key.to_bytes(),
             true,
         )
-        .map_err(|_| CustodySbfError::Replay)?;
+        .map_err(expiry_or_replay)?;
     let rent_before = rent_credit.lamports();
     close_vault_to_rent_credit(
         vault,
@@ -1082,7 +1083,7 @@ fn abort_source_and_close(
             rent_credit.key.to_bytes(),
             true,
         )
-        .map_err(|_| CustodySbfError::Replay)?;
+        .map_err(expiry_or_replay)?;
     close_aborted_source_projection(
         accounts,
         source,
@@ -2110,6 +2111,18 @@ fn close_specific_vault_to_rent_credit<'info>(
         ]],
     )
     .map_err(|_| CustodySbfError::TokenCpi.into())
+}
+
+/// Report an expiry-gated terminal's refusal as what it is.
+///
+/// The kernel distinguishes `Expiry` - attempted at the wrong time - from every
+/// other replay refusal. Flattening them lost exactly the distinction a reader
+/// of a refused unwind needs.
+fn expiry_or_replay(error: ProjectedCustodyError) -> CustodySbfError {
+    match error {
+        ProjectedCustodyError::Expiry => CustodySbfError::Expiry,
+        _ => CustodySbfError::Replay,
+    }
 }
 
 fn close_state_to_rent_credit(

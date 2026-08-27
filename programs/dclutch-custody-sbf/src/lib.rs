@@ -106,6 +106,15 @@ pub enum CustodySbfError {
     Postcondition = 9,
     /// Replay state could not be committed after all effects succeeded.
     Commit = 10,
+    /// An expiry-gated terminal was attempted at the wrong time.
+    ///
+    /// The kernel has always distinguished this from [`Self::Replay`]; this
+    /// program used to flatten both into it, so a projection refusing an early
+    /// unwind reported "replay PDA, owner, bytes, or revision refused" - which
+    /// is not what happened and is not what a reader needs to know. For a
+    /// terminal whose entire safety property is that it refuses while the
+    /// founding is still satisfiable, the refusal has to be able to say so.
+    Expiry = 11,
 }
 
 impl From<CustodySbfError> for ProgramError {
