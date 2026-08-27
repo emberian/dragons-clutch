@@ -33,7 +33,11 @@ export * from './lib/refusals';
 // escrow the market funded at founding.
 export * from './lib/failureWalk';
 
-// The Direct trading path: chain-derived inline buy/sell construction.
+// The Direct trading path: chain-derived inline buy/sell construction, and
+// the spine inspection that names which walls stand between a market and a
+// trade.
+export * from './lib/directTradeSpine';
+export * from './lib/directTicket';
 export * from './lib/directTransaction';
 export * from './lib/directInlineV3';
 export * from './lib/directCodec';

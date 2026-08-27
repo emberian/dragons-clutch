@@ -307,7 +307,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
                 <li key={index} className={decoded.settlement.status === 'terminal' && decoded.settlement.winner === index ? 'winning-outcome' : ''}>
                   <span>claim {index}</span>
                   <strong>{amount}</strong>
-                  {decoded.settlement.status === 'terminal' && <small>{decoded.settlement.winner === index ? 'winning · pays one collateral atom per claim atom' : 'losing · pays zero'}</small>}
+                  {decoded.settlement.status === 'terminal' && <small>{decoded.settlement.winner === index ? 'winning · pays out under the Market\u2019s own basis (one atom per claim atom when categorical)' : 'losing · pays zero'}</small>}
                 </li>
               ))}
             </ol>

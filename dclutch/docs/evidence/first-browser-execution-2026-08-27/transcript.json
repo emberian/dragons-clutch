@@ -1,0 +1,76 @@
+{
+  "intent": "first browser-built state-mutating transaction against a live dClutch chain",
+  "honest_label": "local-validator execution evidence; not devnet, not mainnet, no official deployment; the signing key is the journey campaign seed derivation, TEST-ONLY and loopback-only",
+  "base_url": "http://127.0.0.1:3211",
+  "endpoint": "http://127.0.0.1:23890",
+  "market": "BxPN7kzQEjtiaVgciwq4nKjcWzYKdkg9q63eYuvgdgKT",
+  "programs": {
+    "core": "2rJGzuF2AduNJCc2td1y87ApUk8NhiCUGhsKCNRqhd8o",
+    "registry": "87syw3eBN6nrXYT5RkkRSBKcRbciD1sg5X3R3hu7mh7e",
+    "claims": "9fAcEn8fhVkmJmhx4xFfquNshTryNC6cQ9ieKwAPBMY6",
+    "custody": "7H6H9NabHSQtLVpiAaMKgmuRV5VVWD5VPGzpFYNGDbiD",
+    "trading": "H3yrZV5ekNATUhhydami88bahXYtrP5fZig31LEU8UM8"
+  },
+  "wallet": {
+    "name": "Journey Evidence Wallet",
+    "address": "5HLEhFSRXiuMMqYsMbLcCPajaDH19Q5PTCgZ1qHvcgp5",
+    "derivation": "seed.rs: SHA-256(domain||0||sha256('dclutch/fe-trader/evidence-seed/v3')||0||'founding-founder'||0||u32le(0))"
+  },
+  "steps": [
+    {
+      "name": "wallet connected through the Wallet Standard registry",
+      "at": "2026-08-27T21:56:18.299Z",
+      "owner": "5HLEhFSRXiuMMqYsMbLcCPajaDH19Q5PTCgZ1qHvcgp5"
+    },
+    {
+      "name": "portfolio shows the founder Position redeemable on the resolved Market",
+      "at": "2026-08-27T21:56:18.675Z",
+      "redeemableAtoms": "500000000"
+    },
+    {
+      "name": "the browser derived the complete replay-creation plan from the aggregate",
+      "at": "2026-08-27T21:56:19.068Z",
+      "rendered": "Replay to create42oipYoza83GVhJH89wWYWyuqEqt7uFMVEs6YbbeBDvTExact prepaid rent2895360 lamports · refunds to the connected walletTransaction655 bytes · legacy · one signerCustody request digestd02a8f47ffc3513f…"
+    },
+    {
+      "name": "the page confirmed the browser-built transaction on chain",
+      "at": "2026-08-27T21:56:24.715Z",
+      "signature": "3Uy2Z9nCLfiXwgWC1BXpN1DfTDm2DjavaQYi7M8QqaVvmYuaSYKkW3JUf1aKwPQojNdE8yptohamuKkzbYn3scFW",
+      "replay": "42oipYoza83GVhJH89wWYWyuqEqt7uFMVEs6YbbeBDvT",
+      "nextRevision": "1",
+      "rendered": "Signature 3Uy2Z9nCLfiXwgWC1BXpN1DfTDm2DjavaQYi7M8QqaVvmYuaSYKkW3JUf1aKwPQojNdE8yptohamuKkzbYn3scFW. The Claims-role Custody replay now exists at 42oipYoza83GVhJH89wWYWyuqEqt7uFMVEs6YbbeBDvT with next revision 1 — the exact cursor a payout replays against."
+    },
+    {
+      "name": "independent decoder agrees: Claims-role replay exists, created by the wallet that signed",
+      "at": "2026-08-27T21:56:24.731Z",
+      "owner": "7H6H9NabHSQtLVpiAaMKgmuRV5VVWD5VPGzpFYNGDbiD",
+      "bytes": 288,
+      "magic": "DCLCUSS1",
+      "callerRole": 1,
+      "market": "BxPN7kzQEjtiaVgciwq4nKjcWzYKdkg9q63eYuvgdgKT",
+      "rentRefund": "5HLEhFSRXiuMMqYsMbLcCPajaDH19Q5PTCgZ1qHvcgp5",
+      "nextRevision": 1,
+      "slot": 5648,
+      "fee": 5000,
+      "computeUnits": 145138,
+      "logTail": [
+        "Program 9fAcEn8fhVkmJmhx4xFfquNshTryNC6cQ9ieKwAPBMY6 consumed 144988 of 499850 compute units",
+        "Program return: 9fAcEn8fhVkmJmhx4xFfquNshTryNC6cQ9ieKwAPBMY6 RENMQ1VTQzEBAAABAAAAAILVUfxJBRiDs98mbaRIieqdXjPSjIhej/CSpYxVWJV2osUZ1P5xqr0ox38OcfWikbVJcZ0iIRITMOle+ob8oVqEY/XBn0FsV4GmJI8+GJbpuVq5mlvUkHCdySPseto3PAV7hFsfPmSXZO8O7dW+QFROfr8F/AtAzZnTP9BUcBlX0CqPR//DUT988o/1Y0xyBi72GXdD5ksjzwK4dwtOzxwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAALiwAAAAAAEMnt5gVYjiZmzkXRiRo5cCHomRLEUSE5h+5anZe5j4fU5MXHlbBS+N5r+cyxT6ORcIh1jfWxo0OTmc73Lm2xj8AAAAAAAAAAAAAAAAAAAAA",
+        "Program 9fAcEn8fhVkmJmhx4xFfquNshTryNC6cQ9ieKwAPBMY6 success"
+      ],
+      "transactionHistoryNote": null
+    },
+    {
+      "name": "market detail renders the resolved phase and the trading verdict as named reasons",
+      "at": "2026-08-27T21:56:26.055Z",
+      "phase": "Retiring",
+      "tradeStatus": "Refused: this Market's authenticated capability manifest lists 3 entries and none is the Direct successor kind — Direct trading was never part of this Market's founding, which is the Market's own choice, not an outage",
+      "tradeRefusal": "Refused: this Market's authenticated capability manifest lists 3 entries and none is the Direct successor kind — Direct trading was never part of this Market's founding, which is the Market's own choice, not an outage"
+    },
+    {
+      "name": "the activity surface lists the browser-built transaction from the node history",
+      "at": "2026-08-27T21:56:26.935Z",
+      "newestRow": "3Uy2Z9nCLf…kzbYn3scFWsucceededslot 5648 · 2026-08-27 21:56:18 UTC (node-reported)Touched because ofowner walletPrograms invokedCompute budget · Claims (selected)Fee5000 lamportsOwner lamport delta-2900360"
+    }
+  ]
+}

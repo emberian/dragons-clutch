@@ -201,8 +201,12 @@ PY
     case "$state" in
         MUTABLE)
             TOTAL_OPEN=$((TOTAL_OPEN + lamports))
+            # --keypair names the FEE PAYER explicitly: without it the CLI
+            # falls back to the machine's default signer config and refuses
+            # outright where none exists ("No default signer found") -- found
+            # by the first real --execute on devnet (SMOKE-0, 2026-08-27).
             {
-                printf 'solana program close %s --url %s --authority <AUTHORITY_KEYPAIR>' "$id" "$URL"
+                printf 'solana program close %s --url %s --keypair <AUTHORITY_KEYPAIR> --authority <AUTHORITY_KEYPAIR>' "$id" "$URL"
                 [ -n "$RECIPIENT" ] && printf ' --recipient %s' "$RECIPIENT"
                 printf ' --bypass-warning\n'
             } >> "$WORK/commands"
@@ -224,7 +228,7 @@ if [ -n "$BUFFER_AUTHORITY" ]; then
     # most common way to lose SOL on a deploy that failed partway.
     solana program show --buffers --buffer-authority "$BUFFER_AUTHORITY" --url "$URL" 2>&1 | sed 's/^/  /'
     {
-        printf 'solana program close --buffers --url %s --authority <AUTHORITY_KEYPAIR>' "$URL"
+        printf 'solana program close --buffers --url %s --keypair <AUTHORITY_KEYPAIR> --authority <AUTHORITY_KEYPAIR>' "$URL"
         [ -n "$RECIPIENT" ] && printf ' --recipient %s' "$RECIPIENT"
         printf '\n'
     } >> "$WORK/commands"

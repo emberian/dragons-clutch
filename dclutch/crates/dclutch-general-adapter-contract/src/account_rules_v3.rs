@@ -491,6 +491,37 @@ fn common_rule(
     widths: GeneralExternalAccountWidthsV3,
 ) -> Result<AccountRuleWithPrestateInputV2> {
     match coordinate {
+        // The capability root. Physically writable already; what is withheld is
+        // the EFFECT grant, and the seven settlement actions need none — none of
+        // them advances the root.
+        //
+        // **`OpenBatch` and `CloseBatch` will need it, and it is available.**
+        // `GeneralRootV2::open_batch` / `close_batch` advance `revision`,
+        // `next_batch_sequence` and `open_batches`, and neither has ever run on
+        // a chain: every caller in the tree is host-side or a test, so this
+        // root's revision has been frozen at its activation value since the day
+        // it was created. Establishing that the write is possible at all was the
+        // one blocker-class question in front of those two triples, and the
+        // answer is yes on every leg:
+        //
+        // * the composite root is a TRADING-owned PDA -- `outer.rs` allocates it
+        //   and assigns it to the family program, and Core's activation
+        //   post-condition requires exactly that owner;
+        // * Trading's commit path guards root writes by OFFSET, not by owner:
+        //   `require_root_write_is_state_only` refuses only offsets below
+        //   `CAPABILITY_ROOT_HEADER_BYTES_V1`, which is precisely the boundary
+        //   the `GeneralRootV2` tail begins at;
+        // * coordinate 0 is deliberately exempt from the read-only clamp Trading
+        //   applies to common coordinates 1..=4;
+        // * and Direct and Series already do it -- Direct's registered and
+        //   ordinary effect programs write the root's open-maker count through
+        //   this exact shape.
+        //
+        // So the change those triples need here is one argument: `no_effects()`
+        // becomes `AccountEffectPermissionsV2::new(false, false, true)`, action-
+        // selected, for the two actions that advance the root and no others.
+        // Granting it to an action that does not write the root would widen what
+        // a release may do for nothing in return.
         0 => Ok(exact_rule(
             false,
             true,

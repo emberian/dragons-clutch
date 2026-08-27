@@ -5,6 +5,25 @@
 //! replay, and child-request coordinates in the same register bank consumed by
 //! the common EffectProgram. The Product-owned tail is folded at runtime; no
 //! outcome width is compiled into an artifact.
+//!
+//! **These seven programs are now Lean-authored.**
+//! `formal/dclutch-semantics/DClutchSemantics/GeneralTransitionV3.lean` states
+//! every conjunct; `EmitGeneralTransitionV3Rust.lean` emits
+//! `generated_transition_programs_v3.rs`; and
+//! `every_authored_program_is_byte_identical_to_the_lean_authored_one` below
+//! requires the builder in this module to reproduce those bytes exactly, for
+//! all seven actions.
+//!
+//! Until this landed the General family had no Lean counterpart for its
+//! transition artifacts at all -- the same gap `73f0793` closed for Direct --
+//! and the imperative builder below was the sole authority for what a General
+//! release admits. Nothing changed shape: the gate is byte-identity with what
+//! the builder already produced, so no artifact digest moved.
+//!
+//! The seven collection and candidate actions have no program in either place.
+//! Authoring theirs in Lean, and deleting the builder in favour of the emitted
+//! arrays, is the remaining work; the byte gate is what makes the second step
+//! safe to take one action at a time.
 
 use crate::effect_artifacts_v3::unauthored_actions;
 use dclutch_general_codec::Action;
@@ -38,6 +57,32 @@ pub enum GeneralTransitionArtifactErrorV3 {
 
 /// Result alias for General transition artifacts.
 pub type Result<T> = core::result::Result<T, GeneralTransitionArtifactErrorV3>;
+
+#[rustfmt::skip]
+#[allow(missing_docs)]
+#[path = "generated_transition_programs_v3.rs"]
+mod generated;
+
+pub use generated::*;
+
+/// Borrow the exact Lean-authored TransitionVM program for one General action.
+///
+/// The empty slice is not a usable program: `ProgramV3::decode` refuses it, so
+/// an unauthored action cannot be admitted with any program at all. It is the
+/// same fail-closed shape `general_request_profile_bytes_v1` uses.
+#[must_use]
+pub const fn general_transition_program_bytes_lean_v3(action: Action) -> &'static [u8] {
+    match action {
+        unauthored_actions!() => &[],
+        Action::Consider => &GENERAL_CONSIDER_TRANSITION_V3,
+        Action::Freeze => &GENERAL_FREEZE_TRANSITION_V3,
+        Action::InitializeSettlement => &GENERAL_INITIALIZE_TRANSITION_V3,
+        Action::Collect => &GENERAL_COLLECT_TRANSITION_V3,
+        Action::Materialize => &GENERAL_MATERIALIZE_TRANSITION_V3,
+        Action::Distribute => &GENERAL_DISTRIBUTE_TRANSITION_V3,
+        Action::Close => &GENERAL_CLOSE_TRANSITION_V3,
+    }
+}
 
 /// Harmless initializer for caller-owned instruction workspaces.
 pub const GENERAL_TRANSITION_INSTRUCTION_PLACEHOLDER_V3: InstructionV3 =
@@ -516,6 +561,174 @@ mod tests {
         )
         .expect("program");
         output
+    }
+
+    /// **The byte gate.** Every program this module builds is exactly the one
+    /// Lean authored.
+    ///
+    /// This is the whole point of the Lean module: the builder below is
+    /// imperative Rust, and until now it was the sole authority for what a
+    /// General release admits — an emitter and an authenticator that share an
+    /// author are not two authorities (ADR-0010 §5), and here they were not even
+    /// two files. Byte-identity is the strongest available statement that the
+    /// transcription is faithful, and because it holds, nothing regenerated and
+    /// no artifact digest moved when the Lean module landed.
+    #[test]
+    fn every_authored_program_is_byte_identical_to_the_lean_authored_one() {
+        for action in ACTIONS {
+            let built = artifact(action);
+            let authored = general_transition_program_bytes_lean_v3(action);
+            assert_eq!(
+                built.as_slice(),
+                authored,
+                "{action:?} built a program the Lean module did not author",
+            );
+            assert!(!authored.is_empty());
+        }
+    }
+
+    /// The emitted section counts and widths are the ones this module declares.
+    ///
+    /// Two authorities state the same geometry — the Rust `match` and the Lean
+    /// program's own section lengths — so this is what stops a regenerated
+    /// program disagreeing with the count that sizes its caller's workspace.
+    #[test]
+    fn the_emitted_geometry_agrees_with_the_declared_instruction_counts() {
+        for (action, (prelude, item, epilogue), bytes) in [
+            (
+                Action::Consider,
+                (
+                    GENERAL_CONSIDER_PRELUDE_INSTRUCTIONS_V3,
+                    GENERAL_CONSIDER_ITEM_INSTRUCTIONS_V3,
+                    GENERAL_CONSIDER_EPILOGUE_INSTRUCTIONS_V3,
+                ),
+                GENERAL_CONSIDER_TRANSITION_BYTES_V3,
+            ),
+            (
+                Action::Freeze,
+                (
+                    GENERAL_FREEZE_PRELUDE_INSTRUCTIONS_V3,
+                    GENERAL_FREEZE_ITEM_INSTRUCTIONS_V3,
+                    GENERAL_FREEZE_EPILOGUE_INSTRUCTIONS_V3,
+                ),
+                GENERAL_FREEZE_TRANSITION_BYTES_V3,
+            ),
+            (
+                Action::InitializeSettlement,
+                (
+                    GENERAL_INITIALIZE_PRELUDE_INSTRUCTIONS_V3,
+                    GENERAL_INITIALIZE_ITEM_INSTRUCTIONS_V3,
+                    GENERAL_INITIALIZE_EPILOGUE_INSTRUCTIONS_V3,
+                ),
+                GENERAL_INITIALIZE_TRANSITION_BYTES_V3,
+            ),
+            (
+                Action::Collect,
+                (
+                    GENERAL_COLLECT_PRELUDE_INSTRUCTIONS_V3,
+                    GENERAL_COLLECT_ITEM_INSTRUCTIONS_V3,
+                    GENERAL_COLLECT_EPILOGUE_INSTRUCTIONS_V3,
+                ),
+                GENERAL_COLLECT_TRANSITION_BYTES_V3,
+            ),
+            (
+                Action::Materialize,
+                (
+                    GENERAL_MATERIALIZE_PRELUDE_INSTRUCTIONS_V3,
+                    GENERAL_MATERIALIZE_ITEM_INSTRUCTIONS_V3,
+                    GENERAL_MATERIALIZE_EPILOGUE_INSTRUCTIONS_V3,
+                ),
+                GENERAL_MATERIALIZE_TRANSITION_BYTES_V3,
+            ),
+            (
+                Action::Distribute,
+                (
+                    GENERAL_DISTRIBUTE_PRELUDE_INSTRUCTIONS_V3,
+                    GENERAL_DISTRIBUTE_ITEM_INSTRUCTIONS_V3,
+                    GENERAL_DISTRIBUTE_EPILOGUE_INSTRUCTIONS_V3,
+                ),
+                GENERAL_DISTRIBUTE_TRANSITION_BYTES_V3,
+            ),
+            (
+                Action::Close,
+                (
+                    GENERAL_CLOSE_PRELUDE_INSTRUCTIONS_V3,
+                    GENERAL_CLOSE_ITEM_INSTRUCTIONS_V3,
+                    GENERAL_CLOSE_EPILOGUE_INSTRUCTIONS_V3,
+                ),
+                GENERAL_CLOSE_TRANSITION_BYTES_V3,
+            ),
+        ] {
+            assert_eq!(
+                general_transition_instruction_count_v3(action),
+                (prelude, item, epilogue),
+                "{action:?} section counts",
+            );
+            assert_eq!(
+                general_transition_program_bytes_v3(action).expect("bytes"),
+                bytes,
+                "{action:?} encoded width",
+            );
+            assert_eq!(
+                bytes,
+                HEADER_BYTES + (prelude + item + epilogue) * INSTRUCTION_BYTES,
+                "{action:?} width is not its own header plus its own instructions",
+            );
+        }
+    }
+
+    /// The Lean register schema is the one the Rust bank declares.
+    ///
+    /// `GeneralTransitionV3.lean` types the register space as three constructor
+    /// lists whose order IS the wire index, and `hot_candidate_v3.rs` remains
+    /// the name authority. This is the join: if either side renumbers, the
+    /// emitted programs address a bank the other side does not have, and the
+    /// byte gate above would refuse for a reason that reads as a transcription
+    /// error rather than as the schema move it actually is.
+    #[test]
+    fn the_lean_register_schema_is_the_one_the_rust_bank_declares() {
+        assert_eq!(
+            GENERAL_TRANSITION_COMMON_SCALARS_V3,
+            GENERAL_HOT_COMMON_SCALARS_V3
+        );
+        assert_eq!(
+            GENERAL_TRANSITION_ITEM_SCALAR_STRIDE_V3,
+            GENERAL_HOT_ITEM_SCALAR_STRIDE_V3
+        );
+        assert_eq!(
+            GENERAL_TRANSITION_COMMON_IDENTITIES_V3,
+            GENERAL_HOT_COMMON_IDENTITIES_V3
+        );
+        assert_eq!(
+            GENERAL_TRANSITION_ITEM_IDENTITY_STRIDE_V3,
+            GENERAL_HOT_ITEM_IDENTITY_STRIDE_V3
+        );
+        assert_eq!(GENERAL_AUTHORED_TRANSITION_ACTION_COUNT_V3, ACTIONS.len());
+        // The two highest coordinates each bank names must be inside the width
+        // the emitted programs were encoded against, or an instruction that
+        // addresses one is decodable and out of range at fold time.
+        assert!(scalar::ROOT_LIFECYCLE_ACTIVE < GENERAL_TRANSITION_COMMON_SCALARS_V3);
+        assert!(item_scalar::CURSOR_INVENTORY < GENERAL_TRANSITION_ITEM_SCALAR_STRIDE_V3);
+        assert!(identity::TERMINAL_OWNER < GENERAL_TRANSITION_COMMON_IDENTITIES_V3);
+    }
+
+    /// An unauthored action borrows no program, and the empty slice is refused
+    /// by the decoder rather than treated as a permissive one.
+    #[test]
+    fn an_unauthored_action_borrows_no_lean_authored_program() {
+        for action in [
+            Action::OpenBatch,
+            Action::PlaceOrder,
+            Action::CancelOrder,
+            Action::CloseBatch,
+            Action::SubmitCandidate,
+            Action::VerifyCandidateRow,
+            Action::ReleaseOrder,
+        ] {
+            let bytes = general_transition_program_bytes_lean_v3(action);
+            assert!(bytes.is_empty(), "{action:?} borrowed a program");
+            assert!(ProgramV3::decode(bytes).is_err());
+        }
     }
 
     #[test]

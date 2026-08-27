@@ -761,3 +761,11 @@ ember's explicit go.
   cluster. The cliff doctrine's second exhibit (first: the copied-1312).
   The K-lift is a SESSION-SPLIT question (paged Issue) — belongs to the
   cliff-doctrine design pass, which still awaits ember's go.
+
+- RULED (GEN-TRIPLES, 2026-08-27): NO fifth profile count — ADR-0010 §4's
+  7-and-14 grammar stands; a partially-authored action set must have no legal
+  release. GEN-SEVEN queues as ONE coordinated unit (all seven triples + the
+  campaign + one batched regeneration, one commit series) at the current
+  wave's convergence. Every rung is laid: GeneralTransitionV3.lean (first-run
+  byte-identical), the four state envelopes, the OpenBatch root-write answer
+  at common_rule's coordinate-0 arm. Evidence: GENERAL_TRIPLES_2026_08_27.md.

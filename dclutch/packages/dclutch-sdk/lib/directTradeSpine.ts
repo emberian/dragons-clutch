@@ -1,0 +1,285 @@
+import { PublicKey } from '@solana/web3.js';
+
+import { hex, requireNonzero, requireZero, sha256, slice, u16, u64 } from './bytes';
+import { decodeCapabilityManifestV1 } from './capabilityManifest';
+import {
+  decodeDirectDescriptorV4,
+  decodeDirectProgramSetV2,
+} from './directHotChain';
+import * as DirectAbi from './generated/directInlineV3';
+import { CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1 } from './generated/coreFound';
+import {
+  decodeClaimsAggregateV2,
+  decodeMarketCoreStateV2,
+  deriveClaimsAggregateAddressV2,
+  deriveClaimsPositionAddressV2,
+  type MarketCoreStateV2,
+} from './marketCoreV2';
+import { deriveFinalizedRecordAddressesV1 } from './releaseRegistry';
+import { type RpcAccount, type SolanaRpcClient } from './rpc';
+
+/**
+ * The Direct trade spine: what the chain itself says about trading this
+ * Market, before any route manifest exists.
+ *
+ * The full Hot route needs a 39-account frame, per-outcome runtime accounts
+ * and one canonical lookup table — transport an operator publishes. But the
+ * facts a TRADER needs first are all reachable from the Market alone: whether
+ * a Direct capability is in the manifest, whether its activated root exists,
+ * the immutable price scale and fee the config pins, and the Product width.
+ * This module derives exactly those, from finalized reads, and names every
+ * wall it hits in the chain's own vocabulary — because on this protocol a
+ * refusal with its reason IS the honest product surface.
+ */
+
+export type DirectTradeWallV1 = Readonly<{
+  name: string;
+  detail: string;
+}>;
+
+export type DirectTradeSpineV1 = Readonly<{
+  status: 'inspected';
+  observedSlot: string;
+  marketAddress: string;
+  phase: MarketCoreStateV2['phase'];
+  generation: string;
+  entryIndex: number;
+  manifestRecordAddress: string;
+  programSetId: string;
+  configId: string;
+  descriptorId: string;
+  priceScale: bigint;
+  feeBasisPoints: number;
+  feeRecipient: string;
+  outcomeCount: number | null;
+  aggregateAddress: string | null;
+  rootAddress: string | null;
+  rootExists: boolean | null;
+  positionAddress: string | null;
+  positionExists: boolean | null;
+  walls: ReadonlyArray<DirectTradeWallV1>;
+  tradable: boolean;
+  reason: string;
+}> | Readonly<{ status: 'refused'; reason: string }>;
+
+export type DirectTradeSpineRequestV1 = Readonly<{
+  marketAddress: string;
+  coreProgramId: string;
+  registryProgramId: string;
+  tradingProgramId?: string | null;
+  claimsProgramId?: string | null;
+  /** The connected wallet, if any: lets the spine check the trading prestate. */
+  owner?: string | null;
+}>;
+
+function canonical(value: string, field: string): string {
+  const key = new PublicKey(value).toBase58();
+  if (key !== value) throw new Error(`${field} must be canonical base58 text`);
+  return key;
+}
+
+function optional(value: string | null | undefined, field: string): string | null {
+  return value === undefined || value === null || value === '' ? null : canonical(value, field);
+}
+
+function generationBytes(generation: bigint): Uint8Array {
+  const bytes = new Uint8Array(8);
+  new DataView(bytes.buffer).setBigUint64(0, generation, true);
+  return bytes;
+}
+
+function entryIndexBytes(index: number): Uint8Array {
+  const bytes = new Uint8Array(2);
+  new DataView(bytes.buffer).setUint16(0, index, true);
+  return bytes;
+}
+
+async function finalizedRecordBody(
+  client: Pick<SolanaRpcClient, 'multipleAccounts'>,
+  registryProgramId: string,
+  schema: Uint8Array,
+  digest: Uint8Array,
+  floor: string,
+  field: string,
+): Promise<Readonly<{ address: string; data: Uint8Array }>> {
+  const derived = deriveFinalizedRecordAddressesV1(registryProgramId, schema, digest);
+  const observation = await client.multipleAccounts([derived.record], floor);
+  const account = observation.accounts[0]?.account ?? null;
+  if (account === null) throw new Error(`${field} record is absent at ${derived.record}`);
+  if (account.owner !== registryProgramId || account.executable) throw new Error(`${field} record is not Registry-owned finalized data`);
+  const observedDigest = await sha256(account.data);
+  if (hex(observedDigest) !== hex(digest)) throw new Error(`${field} record bytes differ from their selected content identity`);
+  return Object.freeze({ address: derived.record, data: account.data });
+}
+
+function decodeDirectConfig(bytes: Uint8Array): Readonly<{ priceScale: bigint; feeBasisPoints: number; feeRecipient: string }> {
+  if (bytes.length !== DirectAbi.DIRECT_EXECUTION_CONFIG_BYTES_V1
+      || hex(slice(bytes, DirectAbi.DIRECT_CONFIG_MAGIC_OFFSET_V1, 8)) !== hex(DirectAbi.DIRECT_CONFIG_MAGIC_V1)
+      || u16(bytes, DirectAbi.DIRECT_CONFIG_VERSION_OFFSET_V1) !== 1) throw new Error('Direct config has the wrong exact ABI');
+  requireZero(bytes, DirectAbi.DIRECT_CONFIG_RESERVED_A_OFFSET_V1, 6, 'Direct config header');
+  requireZero(bytes, DirectAbi.DIRECT_CONFIG_RESERVED_B_OFFSET_V1, 6, 'Direct config fee field');
+  const feeRecipient = slice(bytes, DirectAbi.DIRECT_CONFIG_FEE_RECIPIENT_OFFSET_V1, 32);
+  requireNonzero(feeRecipient, 'Direct fee recipient');
+  const priceScale = u64(bytes, DirectAbi.DIRECT_CONFIG_PRICE_SCALE_OFFSET_V1);
+  const feeBasisPoints = u16(bytes, DirectAbi.DIRECT_CONFIG_FEE_BPS_OFFSET_V1);
+  if (priceScale === 0n || feeBasisPoints > 10_000) throw new Error('Direct config price scale or fee rate is invalid');
+  return Object.freeze({ priceScale, feeBasisPoints, feeRecipient: new PublicKey(feeRecipient).toBase58() });
+}
+
+/**
+ * The three walls between a signed intent and an executed fill, named by their
+ * owners. These are protocol facts recorded by the journey campaign
+ * (tools/gauntlet/journey/src/journey.rs) and the Direct program-test gate;
+ * they are stated so a reader knows exactly what stands between this preview
+ * and an execution, instead of a disabled button with no reason.
+ */
+export const DIRECT_PACKET_WALL_V1: DirectTradeWallV1 = Object.freeze({
+  name: 'packet',
+  detail: 'A real trade does not fit the network’s message size yet. The trade itself is 4 bytes under the 1,232-byte limit, but it must also carry a compute-budget instruction, and with that it is 36 bytes over (1,268 > 1,232). Fixing this is protocol work on the Direct/Registry seam — nothing your browser or wallet can do differently.',
+});
+
+export const DIRECT_PRESTATE_WALL_V1: DirectTradeWallV1 = Object.freeze({
+  name: 'prestate',
+  detail: 'Your wallet does not have a position on this market yet, and the instruction that would open one from a wallet does not exist yet — opening a position is itself a protected change, and today only the protocol’s own programs can make it. The pattern for the wallet version is already landed (ADR-0008 §7); shipping it is protocol work, not yours.',
+});
+
+/** Inspect everything the chain can say about Direct trading this Market. */
+export async function inspectDirectTradeSpineV1(
+  client: Pick<SolanaRpcClient, 'finalizedSlot' | 'multipleAccounts'>,
+  request: DirectTradeSpineRequestV1,
+): Promise<DirectTradeSpineV1> {
+  try {
+    const marketAddress = canonical(request.marketAddress, 'Market address');
+    const coreProgramId = canonical(request.coreProgramId, 'Core program');
+    const registryProgramId = canonical(request.registryProgramId, 'Registry program');
+    const tradingProgramId = optional(request.tradingProgramId, 'Trading program');
+    const claimsProgramId = optional(request.claimsProgramId, 'Claims program');
+    const owner = optional(request.owner, 'owner');
+
+    const floor = await client.finalizedSlot();
+    const marketObservation = await client.multipleAccounts([marketAddress], floor);
+    const marketAccount = marketObservation.accounts[0]?.account ?? null;
+    if (marketAccount === null) return Object.freeze({ status: 'refused', reason: `no account exists at ${marketAddress} at finalized commitment` });
+    if (marketAccount.owner !== coreProgramId || marketAccount.executable) {
+      return Object.freeze({ status: 'refused', reason: `the account at ${marketAddress} is not owned by the selected Core program (owner ${marketAccount.owner})` });
+    }
+    const market = decodeMarketCoreStateV2(marketAddress, marketAccount.data);
+    if (market.identity.registryProgram !== registryProgramId) {
+      return Object.freeze({ status: 'refused', reason: `this Market selected Registry program ${market.identity.registryProgram}, not ${registryProgramId}` });
+    }
+
+    const manifestDigest = Uint8Array.from((market.identity.capabilityManifestId.match(/../g) ?? []).map((value) => Number.parseInt(value, 16)));
+    const manifestRecord = await finalizedRecordBody(client, registryProgramId, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, manifestDigest, floor, 'capability manifest');
+    const entries = decodeCapabilityManifestV1(manifestRecord.data);
+    const directEntry = entries.find((entry) => hex(entry.kind) === hex(DirectAbi.DIRECT_SUCCESSOR_KIND_ID_V3)) ?? null;
+    if (directEntry === null) {
+      return Object.freeze({
+        status: 'refused',
+        reason: `this Market's authenticated capability manifest lists ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'} and none is the Direct successor kind — Direct trading was never part of this Market's founding, which is the Market's own choice, not an outage`,
+      });
+    }
+
+    const programSetRecord = await finalizedRecordBody(client, registryProgramId, DirectAbi.CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, directEntry.programSet, floor, 'CapabilityProgramSetV2');
+    const selected = decodeDirectProgramSetV2(programSetRecord.data);
+    if (hex(selected.schema) !== hex(DirectAbi.CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID)) {
+      return Object.freeze({ status: 'refused', reason: 'the Direct entry selects a descriptor schema other than CapabilityProgramV4' });
+    }
+    const descriptorRecord = await finalizedRecordBody(client, registryProgramId, selected.schema, selected.program, floor, 'CapabilityProgramV4 descriptor');
+    const descriptor = decodeDirectDescriptorV4(descriptorRecord.data);
+    const configRecord = await finalizedRecordBody(client, registryProgramId, descriptor.configSchema, directEntry.config, floor, 'Direct config');
+    const config = decodeDirectConfig(configRecord.data);
+
+    const walls: DirectTradeWallV1[] = [];
+    if (market.phase !== 'Open') {
+      walls.push(Object.freeze({ name: 'phase', detail: `this Market is ${market.phase} — trading is only open while a Market is Open` }));
+    }
+
+    let rootAddress: string | null = null;
+    let rootExists: boolean | null = null;
+    let aggregateAddress: string | null = null;
+    let outcomeCount: number | null = null;
+    let positionAddress: string | null = null;
+    let positionExists: boolean | null = null;
+    const probes: string[] = [];
+    if (tradingProgramId !== null) {
+      rootAddress = PublicKey.findProgramAddressSync([
+        DirectAbi.CAPABILITY_ROOT_PDA_DOMAIN_V1,
+        new PublicKey(marketAddress).toBytes(),
+        generationBytes(BigInt(market.identity.generation)),
+        manifestDigest,
+        entryIndexBytes(directEntry.index),
+        directEntry.kind,
+        directEntry.programSet,
+        directEntry.config,
+      ], new PublicKey(tradingProgramId))[0].toBase58();
+      probes.push(rootAddress);
+    }
+    if (claimsProgramId !== null) {
+      aggregateAddress = deriveClaimsAggregateAddressV2(claimsProgramId, marketAddress);
+      probes.push(aggregateAddress);
+    }
+    let probeAccounts = new Map<string, RpcAccount | null>();
+    if (probes.length > 0) {
+      const observation = await client.multipleAccounts(probes, floor);
+      probeAccounts = new Map(observation.accounts.map((entry) => [entry.address, entry.account]));
+    }
+    if (rootAddress !== null) {
+      const root = probeAccounts.get(rootAddress) ?? null;
+      rootExists = root !== null && root.owner === tradingProgramId && root.data.length > 0;
+      if (!rootExists) {
+        walls.push(Object.freeze({ name: 'activation', detail: `this Market founded a Direct trading capability but never switched it on — no activation root exists at ${rootAddress}. Activation is the operator’s move, not yours.` }));
+      }
+    }
+    if (aggregateAddress !== null && claimsProgramId !== null) {
+      const aggregateAccount = probeAccounts.get(aggregateAddress) ?? null;
+      if (aggregateAccount !== null && aggregateAccount.owner === claimsProgramId) {
+        const aggregate = decodeClaimsAggregateV2(aggregateAddress, aggregateAccount.data);
+        outcomeCount = aggregate.claimCount;
+      }
+      if (owner !== null) {
+        positionAddress = deriveClaimsPositionAddressV2(claimsProgramId, aggregateAddress, owner);
+        const positionObservation = await client.multipleAccounts([positionAddress], floor);
+        positionExists = (positionObservation.accounts[0]?.account ?? null) !== null;
+        if (!positionExists) {
+          walls.push(DIRECT_PRESTATE_WALL_V1);
+        }
+      }
+    }
+    walls.push(DIRECT_PACKET_WALL_V1);
+
+    const tradable = market.phase === 'Open' && (rootExists ?? false);
+    return Object.freeze({
+      status: 'inspected',
+      observedSlot: floor,
+      marketAddress,
+      phase: market.phase,
+      generation: market.identity.generation,
+      entryIndex: directEntry.index,
+      manifestRecordAddress: manifestRecord.address,
+      programSetId: hex(directEntry.programSet),
+      configId: hex(directEntry.config),
+      descriptorId: hex(selected.program),
+      priceScale: config.priceScale,
+      feeBasisPoints: config.feeBasisPoints,
+      feeRecipient: config.feeRecipient,
+      outcomeCount,
+      aggregateAddress,
+      rootAddress,
+      rootExists,
+      positionAddress,
+      positionExists,
+      walls: Object.freeze(walls),
+      tradable,
+      reason: tradable
+        ? `Direct entry ${directEntry.index} is founded and activated: immutable price scale ${config.priceScale}, fee ${config.feeBasisPoints} bps. Executing a fill still crosses the named walls below.`
+        : `Direct entry ${directEntry.index} is founded (price scale ${config.priceScale}, fee ${config.feeBasisPoints} bps) and ${walls.length} named wall${walls.length === 1 ? '' : 's'} stand${walls.length === 1 ? 's' : ''} between a signed intent and an executed fill.`,
+    });
+  } catch (error) {
+    return Object.freeze({ status: 'refused', reason: error instanceof Error ? error.message : 'the Direct spine inspection refused without a usable reason' });
+  }
+}
+
+/** Convenience: does a nonzero balance make sense to offer at this width. */
+export function spineAdmitsOutcomeV1(spine: DirectTradeSpineV1, outcome: number): boolean {
+  return spine.status === 'inspected' && spine.outcomeCount !== null && Number.isInteger(outcome) && outcome >= 0 && outcome < spine.outcomeCount;
+}

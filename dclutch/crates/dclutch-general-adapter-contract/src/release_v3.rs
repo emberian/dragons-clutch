@@ -586,4 +586,67 @@ mod tests {
         assert_eq!(profile, GeneralReleaseProfileV1::Complete);
         assert!(profile.action_count() > GENERAL_ACTION_PROGRAM_COUNT_V3);
     }
+
+    /// **The seven triples are ONE unit for release admission, not seven.**
+    ///
+    /// GEN-ESCROW's evidence document lists eleven sites "in dependency order",
+    /// which reads as an order you can walk one action at a time — author
+    /// `OpenBatch` everywhere, exercise it, then the next. The profile table
+    /// this module owns says otherwise, and it is worth deciding rather than
+    /// rediscovering: `from_entry_count` maps a set to exactly one of four
+    /// profiles, whose action counts are 7 and 14 and nothing else. **There is
+    /// no eight-action profile**, so a release carrying one authored collection
+    /// or candidate triple has no legal set to be published in.
+    ///
+    /// The consequence is a scheduling fact, not a defect. An eighth triple can
+    /// be authored and unit-tested, and it cannot be joined, admitted, reached
+    /// through the accelerator, or executed by the campaign — which is exactly
+    /// the "parked, not landed" state the STRUCT-CAMP doctrine names and this
+    /// cycle has already paid for twice. Either all seven land together, or
+    /// ADR-0010 §4 gains a fifth profile, and that record already says such an
+    /// addition "is a visible edit, not a consequence of publishing a longer
+    /// set" — so it is an authority decision, not a lane's to take.
+    #[test]
+    fn there_is_no_profile_between_the_seven_settlement_triples_and_all_fourteen() {
+        // Every count a partial authoring would produce, refused by the table.
+        for count in [9_usize, 10, 11, 12, 13] {
+            assert_eq!(
+                GeneralReleaseProfileV1::from_entry_count(count),
+                Err(GeneralReleaseErrorV3::ProgramSet),
+                "entry count {count} selected a profile",
+            );
+        }
+        // Eight entries IS legal, and it is seven actions plus the activation
+        // descriptor — not eight actions. So even the one count between 7 and
+        // 14 that a set may carry cannot name an eighth authored triple.
+        let eight = GeneralReleaseProfileV1::from_entry_count(8).expect("eight is a legal set");
+        assert_eq!(eight, GeneralReleaseProfileV1::SettlementWithActivation);
+        assert_eq!(eight.action_count(), GENERAL_ACTION_PROGRAM_COUNT_V3);
+        assert!(eight.has_activation_entry());
+        // The only two action counts any profile declares.
+        let counts: std::vec::Vec<usize> = [
+            GeneralReleaseProfileV1::SettlementOnly,
+            GeneralReleaseProfileV1::SettlementWithActivation,
+            GeneralReleaseProfileV1::Complete,
+            GeneralReleaseProfileV1::CompleteWithActivation,
+        ]
+        .into_iter()
+        .map(GeneralReleaseProfileV1::action_count)
+        .collect();
+        assert_eq!(
+            counts,
+            vec![
+                GENERAL_ACTION_PROGRAM_COUNT_V3,
+                GENERAL_ACTION_PROGRAM_COUNT_V3,
+                GENERAL_ACTION_PROGRAM_COUNT_V4,
+                GENERAL_ACTION_PROGRAM_COUNT_V4,
+            ],
+        );
+        // And admission joins the narrow count alone, so `Complete` stays a
+        // legal set and an inadmissible release until all seven are authored.
+        assert_eq!(
+            GENERAL_ACTION_PROGRAM_COUNT_V4 - GENERAL_ACTION_PROGRAM_COUNT_V3,
+            7
+        );
+    }
 }

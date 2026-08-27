@@ -14,6 +14,7 @@ import { marketsLs, marketsShow } from './commands/markets';
 import { portfolio } from './commands/portfolio';
 import { redeem } from './commands/redeem';
 import { refusal } from './commands/refusal';
+import { spine } from './commands/spine';
 import { intentCommand, tradeCommand } from './commands/trade';
 import { walk } from './commands/walk';
 import { fail, STDIO, type Io } from './output';
@@ -29,6 +30,7 @@ commands:
   intent sell|buy                  sign one Direct compact intent to a file (--out)
   buy                              cross a sell intent (--take, or --counter-keypair) and submit
   sell                             cross a buy intent (--take, or --counter-keypair) and submit
+  spine                            is this market Direct-tradable now, and which walls stand (--market)
   redeem                           create the Claims-role Custody replay; state the payout honestly
   found                            drive the run-spec founding producer (--spec; --demo to preview)
   walk                             the funded failure walk: commit a passed deadline, collect the bounty
@@ -116,6 +118,8 @@ export async function run(argv: ReadonlyArray<string>, env: NodeJS.ProcessEnv, i
         return await tradeCommand(context, io, 'buy', env);
       case 'sell':
         return await tradeCommand(context, io, 'sell', env);
+      case 'spine':
+        return await spine(context, io, rest[0], env);
       case 'redeem':
         return await redeem(context, io, env);
       case 'found':

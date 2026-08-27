@@ -358,7 +358,11 @@ impl GeneralBatchV1 {
     #[must_use]
     pub fn batch_id(self) -> [u8; 32] {
         let bytes = self.to_bytes();
-        digest(bytes.get(..GENERAL_BATCH_PREFIX_BYTES_V1).unwrap_or_default())
+        digest(
+            bytes
+                .get(..GENERAL_BATCH_PREFIX_BYTES_V1)
+                .unwrap_or_default(),
+        )
     }
 
     /// Admit one signed order, ESCROWING its exact worst-case obligation.

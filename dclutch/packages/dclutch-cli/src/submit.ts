@@ -21,12 +21,9 @@ export type SubmitOutcome = Readonly<{
 }>;
 
 export async function submitAndConfirm(client: SolanaRpcClient, wire: Uint8Array, io: Io): Promise<SubmitOutcome> {
-  let signature: string;
-  try {
-    signature = await client.sendRawTransaction(wire);
-  } catch (error) {
-    throw new Error(nameRefusals(error instanceof Error ? error.message : String(error)));
-  }
+  // Errors propagate unnamed; the command's one `fail` renderer names any
+  // custom code exactly once at the terminal boundary.
+  const signature = await client.sendRawTransaction(wire);
   io.out(`submitted ${signature}`);
   for (let attempt = 0; attempt < POLL_ATTEMPTS; attempt += 1) {
     const [status] = await client.signatureStatuses([signature]);
