@@ -79,10 +79,15 @@ ELF_DIR="$WORK/elf"
 # ------------------------------------------------------------------- 1. source
 if [ "$WORKTREE" = 1 ]; then
     SOURCE="$REPO"
-    SOURCE_REVISION="worktree-$(git -C "$REPO" rev-parse HEAD)"
-    SOURCE_DIGEST="worktree"
+    # The launcher's attestation gate requires a 40-hex commit and a 64-hex
+    # archive digest; worktree mode satisfies the SHAPE with HEAD plus a
+    # tree+diff digest and says so in the attestation's own assumptions.
+    SOURCE_REVISION="$(git -C "$REPO" rev-parse HEAD)"
+    SOURCE_DIGEST="$( { git -C "$REPO" ls-tree -r --full-tree HEAD; git -C "$REPO" diff HEAD; } | sha256_stdin )"
+    WORKTREE_NOTE="built from a DIRTY WORKING TREE at commit $SOURCE_REVISION; archive_sha256 is a tree-plus-diff digest, not an archive digest, and this run is development evidence only"
     say "building from the WORKING TREE (development mode; not release evidence)"
 else
+    WORKTREE_NOTE=""
     SOURCE_REVISION="$(git -C "$REPO" rev-parse "$COMMIT")"
     SOURCE_DIGEST="$(git -C "$REPO" ls-tree -r --full-tree "$SOURCE_REVISION" | sha256_stdin)"
     SOURCE="$WORK/source"
@@ -247,6 +252,7 @@ run_walk() {
             --arg solana_version "$SOLANA_VERSION" \
             --arg build_command "cargo build-sbf --manifest-path programs/$package/Cargo.toml" \
             --arg build_log_sha256 "$(sha256 "$log")" \
+            --arg worktree_note "${WORKTREE_NOTE:- }" \
             '{
                 schema: "dclutch-gauntlet-artifact-attestation-v1",
                 elf_path: $elf_path, elf_sha256: $elf_sha256, program_id: $program_id,
@@ -257,10 +263,10 @@ run_walk() {
                 build_command: $build_command, build_log_sha256: $build_log_sha256,
                 verifier: { status: "clean", diagnostic_count: 0 },
                 sbf_backend_frame_diagnostics: 0,
-                assumptions: [
+                assumptions: ([
                     "program_id is a gauntlet-local address derived offline from a fixed domain and the role name; no private key exists for it",
                     "this runner REFUSES a nonzero backend frame diagnostic count before it reaches this file, so zero here is checked, not assumed"
-                ]
+                ] + (if ($worktree_note | length) > 1 then [$worktree_note] else [] end))
             }' > "$run/attestation/$role.json"
     done
 

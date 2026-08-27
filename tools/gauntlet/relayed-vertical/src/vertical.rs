@@ -341,6 +341,19 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
             &authority,
         )?);
     }
+    // The Core-driven funding frame carries a 656-byte effect envelope over an
+    // 18-account frame: past the bare legacy packet, so it rides its own
+    // routing table exactly as the journey's recovery-shaped ladder does. The
+    // union address probe adds the two verify-only positions so one table
+    // serves both transitions.
+    let funding_table_probe = solana_program::instruction::Instruction {
+        program_id: core_program,
+        accounts: vec![
+            solana_program::instruction::AccountMeta::new(rent_beneficiary, false),
+            solana_program::instruction::AccountMeta::new_readonly(sysvar::clock::ID, false),
+        ],
+        data: Vec::new(),
+    };
     let create = build_resolution_create_fund_v3(&fund_snapshot(
         &mut session.rpc,
         market,
@@ -356,10 +369,20 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
         funding,
     )?)
     .map_err(|error| Error::new(format!("chain-derived CreateFund after prepay: {error:?}")))?;
-    session.transactions.push(session.rpc.send(
+    let (_funding_table, _funding_routed, funding_observation, funding_tables) =
+        relayworld::publish_routing_table(
+            &mut session.rpc,
+            &authority,
+            "resolution-funding",
+            &[create.instruction.clone(), funding_table_probe],
+            &mut session.transactions,
+        )?;
+    session.transactions.push(session.rpc.send_v0(
         "relayed vertical: a no-recovery Market creates its own Resolution funding",
         std::slice::from_ref(&create.instruction),
         &authority,
+        funding_observation,
+        &funding_tables,
     )?);
     let verify = build_resolution_verify_fund_ready_v3(&verify_snapshot(
         &mut session.rpc,
@@ -379,10 +402,12 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
     .map_err(|error| Error::new(format!("chain-derived VerifyFundReady: {error:?}")))?;
     validate_resolution_verify_fund_ready_report_v3(&verify)
         .map_err(|error| Error::new(format!("VerifyFundReady report: {error:?}")))?;
-    session.transactions.push(session.rpc.send(
+    session.transactions.push(session.rpc.send_v0(
         "relayed vertical: activate the no-recovery Resolution funding",
         std::slice::from_ref(&verify.instruction),
         &authority,
+        funding_observation,
+        &funding_tables,
     )?);
     for (label, address) in [
         ("recovery companion Fund", funding[0]),
