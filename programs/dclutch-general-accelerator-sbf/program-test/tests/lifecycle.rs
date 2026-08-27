@@ -12,6 +12,11 @@ use dclutch_execution_strategy_contract::v2::{
 use dclutch_general_accelerator_test_caller_sbf::GENERAL_ACCELERATOR_TEST_CALLER_AUTHORITY_SEED_V1;
 use dclutch_general_adapter_contract::{
     account_rules_v3::general_account_profile_fixed_count_v3,
+    candidate_v1::{
+        CandidateVerifyRowBuffersV1, CandidateVerifyRowViewV1, GeneralCandidateOpeningV1,
+        GeneralCandidateV1, authenticate_candidate_identity_v1, general_candidate_identity_v1,
+        verify_candidate_row_v1,
+    },
     collection_v1::{
         GeneralBatchOpeningV1, GeneralBatchV1, GeneralOrderHeaderV1, GeneralOrderPhaseV1,
         GeneralOrderStateV1, GeneralOrderV1, MakerFundingV1, authenticate_batch_candidate_v1,
@@ -35,11 +40,7 @@ use dclutch_general_adapter_contract::{
         evaluate_runtime_settlement_v2, initialize_runtime_settlement_v2,
         runtime_settlement_effect_len_v2,
     },
-    runtime_verify::{
-        AuthenticatedOrderTermsV2, RuntimeConsiderRowBuffersV2, RuntimeConsiderRowViewV2,
-        RuntimeManifestBuffersV2, evaluate_runtime_consider_row_with_manifest_v2,
-        runtime_verifier_len_v2,
-    },
+    runtime_verify::{AuthenticatedOrderTermsV2, runtime_verifier_len_v2},
     runtime_width::{
         CandidateHeaderV2, CandidateV2, ExecutionHeaderV2, ExecutionV2, PageHeaderV2, PageV2,
         SettlementCursorV2, VerifiedCandidateHeaderV2, VerifiedCandidateV2, candidate_len,
@@ -86,6 +87,10 @@ const POLICY: [u8; 32] = [0xb3; 32];
 const FIRST_CANDIDATE: [u8; 32] = [0xb4; 32];
 const BEST_CANDIDATE: [u8; 32] = [0xb5; 32];
 const OWNER: [u8; 32] = [0xc1; 32];
+const SOLVER: [u8; 32] = [0xc3; 32];
+const SUBMISSION_SLOT: u64 = 1_100;
+const CANDIDATE_PAGE_REVISION: u64 = 11;
+const CRANK_REWARD_LAMPORTS: u64 = 5_000;
 const BENEFICIARY: [u8; 32] = [0xc2; 32];
 
 struct RealSbfFixture {
@@ -100,6 +105,10 @@ struct TerminalFixture {
     verifier: Vec<u8>,
     verified: Vec<u8>,
     manifests: Vec<Vec<u8>>,
+    /// The candidate's OWN digest, not a chosen literal.
+    candidate_id: [u8; 32],
+    /// The submission record the verification advanced and paid out of.
+    submission: GeneralCandidateV1,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -832,26 +841,66 @@ fn terminal_fixture(width: u32) -> TerminalFixture {
         left.iter().rev().cmp(right.iter().rev())
     });
 
+    // The candidate carries its OWN digest as its identity. `CandidateV2`
+    // treats `candidate_id` as a declared field and checks nothing about it, so
+    // a literal here -- which is what this fixture used -- is a candidate that
+    // could have named any identity at all, including one already verified
+    // under other prices. Encode once to fix every other byte, then re-encode
+    // with the digest those bytes produce.
     let mut candidate = vec![0_u8; candidate_len(width).expect("candidate width")];
+    let header = CandidateHeaderV2 {
+        outcome_count: width,
+        page_count: 3,
+        candidate_coordinate: 2,
+        price_scale: u64::from(width),
+        candidate_id: BEST_CANDIDATE,
+        product_id: product_id(),
+        batch_id: identity,
+    };
+    CandidateV2::encode_into(header, &ones, &mut candidate).expect("draft candidate");
+    let candidate_id = general_candidate_identity_v1(&candidate).expect("candidate identity");
     CandidateV2::encode_into(
         CandidateHeaderV2 {
-            outcome_count: width,
-            page_count: 3,
-            candidate_coordinate: 2,
-            price_scale: u64::from(width),
-            candidate_id: BEST_CANDIDATE,
-            product_id: product_id(),
-            batch_id: identity,
+            candidate_id,
+            ..header
         },
         &ones,
         &mut candidate,
     )
-    .expect("candidate");
+    .expect("addressed candidate");
+    authenticate_candidate_identity_v1(CandidateV2::decode(&candidate).expect("candidate"))
+        .expect("the candidate is its own digest");
     authenticate_batch_candidate_v1(
         batch,
         CandidateV2::decode(&candidate).expect("candidate").header(),
     )
     .expect("candidate authenticates against the closed batch");
+
+    // The submission record: the account `Consider` reads and that nothing
+    // wrote before this. It funds exactly the cranks its own life requires --
+    // one per row, one for the consideration, one to close out.
+    let opening_probe = GeneralCandidateOpeningV1 {
+        outcome_count: width,
+        page_count: 3,
+        page_revision: CANDIDATE_PAGE_REVISION,
+        submitted_slot: SUBMISSION_SLOT,
+        candidate_id,
+        batch_id: identity,
+        solver_id: SOLVER,
+        row_count: 3,
+        reward_rate_lamports: CRANK_REWARD_LAMPORTS,
+    };
+    let mut submission = GeneralCandidateV1::submit(
+        batch,
+        CandidateV2::decode(&candidate).expect("candidate"),
+        CANDIDATE_PAGE_REVISION,
+        3,
+        CRANK_REWARD_LAMPORTS,
+        SOLVER,
+        opening_probe.work_capacity().expect("work capacity"),
+        SUBMISSION_SLOT,
+    )
+    .expect("submit the candidate against the closed batch");
 
     // Each page is deliberately unbalanced. The complete candidate alone has
     // the uniform relation required for a complete-set materialization.
@@ -880,8 +929,8 @@ fn terminal_fixture(width: u32) -> TerminalFixture {
                 outcome_count: width,
                 page_coordinate,
                 page_count: 3,
-                revision: 11 + u64::try_from(index).expect("page revision"),
-                candidate_id: BEST_CANDIDATE,
+                revision: CANDIDATE_PAGE_REVISION,
+                candidate_id,
             },
             &[row],
             &mut page,
@@ -896,32 +945,47 @@ fn terminal_fixture(width: u32) -> TerminalFixture {
             settlement_manifest_len_v2(width, manifest_count).expect("manifest width");
         let mut manifest_scratch = vec![0_u8; manifest_len];
         let mut manifest_output = vec![0xa5; manifest_len];
-        let summary = evaluate_runtime_consider_row_with_manifest_v2(
-            RuntimeConsiderRowViewV2 {
+        // THE CAMPAIGN'S CERTIFICATE IS NOW DERIVED, NOT FABRICATED. This used
+        // to call the evaluator directly with terms and a page revision the
+        // fixture chose. It now goes through the protocol's own verification
+        // verb, which binds the page to this submission's candidate at the
+        // revision the submission pinned, authenticates the row against the
+        // ESCROWED order record it names, and pays one crank out of the
+        // candidate's own work escrow.
+        let summary = verify_candidate_row_v1(
+            CandidateVerifyRowViewV1 {
+                batch,
+                submission,
                 candidate: &candidate,
                 page: &page,
+                order: order_bytes_for(&placed, index),
                 cursor_before: &cursor,
                 verified_before: &zero_verified,
-                authenticated_order: *terms,
                 expected_page_index: u32::try_from(index).expect("page index"),
                 expected_row_index: 0,
-                expected_page_revision: 11 + u64::try_from(index).expect("page revision"),
                 expected_revision: u64::try_from(index).expect("revision"),
-                max_orders: 3,
             },
-            RuntimeConsiderRowBuffersV2 {
+            CandidateVerifyRowBuffersV1 {
                 cursor_scratch: &mut cursor_scratch,
                 cursor_output: &mut cursor_output,
                 verified_scratch: &mut verified_scratch,
                 verified_output: &mut verified_output,
-            },
-            RuntimeManifestBuffersV2 {
                 manifest_scratch: &mut manifest_scratch,
                 manifest_output: &mut manifest_output,
             },
         )
         .expect("verified row");
         assert_eq!(summary.complete, index == 2);
+        assert_eq!(summary.reward.lamports, CRANK_REWARD_LAMPORTS);
+        // The terms the verb derived are the ones this fixture independently
+        // projected from the same order record.
+        assert_eq!(
+            *terms,
+            GeneralOrderV1::decode(order_bytes_for(&placed, index))
+                .expect("order")
+                .terms()
+        );
+        submission = summary.submission;
         cursor = cursor_output;
         if manifest_count != 0 {
             manifests.push(manifest_output);
@@ -931,12 +995,27 @@ fn terminal_fixture(width: u32) -> TerminalFixture {
         }
     }
     assert_eq!(manifests.len(), 2);
+    // Two rows paid, and the remainder is what the consideration is for.
+    submission
+        .record_verified(batch, &verified)
+        .expect("the certificate this verification produced");
+    assert_eq!(
+        submission.state().verification_remaining,
+        CRANK_REWARD_LAMPORTS
+    );
     TerminalFixture {
         width,
         verifier: cursor,
         verified,
         manifests,
+        candidate_id,
+        submission,
     }
+}
+
+/// The order record one candidate row names, in the candidate's own row order.
+fn order_bytes_for(placed: &[(Vec<u8>, u64)], index: usize) -> &[u8] {
+    &placed.get(index).expect("placed order").0
 }
 
 fn initialized_cursor(fixture: &TerminalFixture) -> Vec<u8> {
@@ -1059,15 +1138,17 @@ fn runtime_for_settlement(
 }
 
 fn request(
+    fixture: &TerminalFixture,
     action: Action,
     revision: u64,
     page_index: u32,
     execution_index: u8,
 ) -> ControllerRequestV2 {
-    request_with_manifest_order(action, revision, page_index, execution_index, 0)
+    request_with_manifest_order(fixture, action, revision, page_index, execution_index, 0)
 }
 
 fn request_with_manifest_order(
+    fixture: &TerminalFixture,
     action: Action,
     revision: u64,
     page_index: u32,
@@ -1077,7 +1158,7 @@ fn request_with_manifest_order(
     ControllerRequestV2 {
         action,
         expected_revision: revision,
-        candidate_id: Some(BEST_CANDIDATE),
+        candidate_id: Some(fixture.candidate_id),
         page_index,
         execution_index,
         manifest_order_index,
@@ -1109,7 +1190,7 @@ fn bank_for_request(width: u32, controller: ControllerRequestV2) -> Vec<u8> {
 async fn execute_initialize(
     fixture: &TerminalFixture,
 ) -> (AcceleratorDispositionV2, ExecutionEvidence) {
-    let controller = request(Action::InitializeSettlement, 0, 0, 0);
+    let controller = request(fixture, Action::InitializeSettlement, 0, 0, 0);
     let (ack, _, evidence) = execute(real_sbf_fixture(
         fixture.width,
         controller,
@@ -1163,6 +1244,7 @@ async fn execute_settlement(
         .header()
         .revision;
     let controller = request_with_manifest_order(
+        fixture,
         action,
         revision,
         page_index,
@@ -1459,7 +1541,7 @@ async fn run_full_settlement_lifecycle(width: u32) {
 
     // A late child-precondition failure (nonzero Position table on terminal
     // close) refuses the entire candidate before any observed account changes.
-    let close_request = request(Action::Close, ready.header().revision, 0, 0);
+    let close_request = request(&fixture, Action::Close, ready.header().revision, 0, 0);
     let mut hostile_bank = bank_for_request(fixture.width, close_request);
     write_scalar(&mut hostile_bank, scalar::POSITION_TABLE_COUNT, 1);
     let (refused, _, _) = execute(real_sbf_fixture(
@@ -1537,7 +1619,7 @@ async fn hostile_n258_initializes_and_refuses_candidate_substitution() {
         out_of_order.disposition(),
         AcceleratorDispositionV2::Refused
     );
-    let controller = request_with_manifest_order(Action::Collect, 1, 2, 0, 1);
+    let controller = request_with_manifest_order(&fixture, Action::Collect, 1, 2, 0, 1);
     let mut runtime = runtime_for_settlement(
         &fixture,
         Action::Collect,
@@ -1565,7 +1647,7 @@ async fn hostile_n258_initializes_and_refuses_candidate_substitution() {
 async fn product_or_price_scale_substitution_refuses_without_runtime_writes() {
     for width in [1_u32, 258] {
         let fixture = terminal_fixture(width);
-        let controller = request(Action::InitializeSettlement, 0, 0, 0);
+        let controller = request(&fixture, Action::InitializeSettlement, 0, 0, 0);
 
         let mut substituted_product = runtime_for_initialize(&fixture);
         substituted_product.insert(2, vec![0xcc; PRODUCT_RECORD.len()]);
