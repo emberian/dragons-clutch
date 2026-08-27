@@ -452,13 +452,26 @@ The last two rows are the lane's central claim, executed: **an interrupted run
 resumed from the chain alone.** No state file was written or read at any point.
 Zero duplicate transactions, zero re-spent rent.
 
-Independently, the **supervisor's own campaign still runs to Open** on port
-20990 under the refactored `rpc_origin` (99+ transactions through record
-publication, the Product graph, and into the founding ladder) — which is the
-regression control that matters, because replacing the loopback rail is exactly
-the change that could have broken the thing the rail protected.
+### 8.4 The regression control
 
-### 8.4 Gates
+Replacing the loopback rail is exactly the change that could have broken the
+thing the rail protected, so the control is the supervisor's own campaign, run
+end to end on a separate port (20990) under the refactored `rpc_origin`, with
+`record_publication = "transaction"` so the nine bodies go on chain as real
+Registry transactions rather than at genesis:
+
+```text
+SUPERVISOR COMPLETE: 143 transactions, 34 completed steps
+last step: executed DCLTPCA1 after expiry — the source principal is back with
+           the party that supplied it, and the source vault …
+```
+
+Genesis → record publication → infrastructure init → pre-revocation refusal
+proof → Core revocation → five-role activation → late-failure rollback → the
+Product graph → `DCLTGMF1` founding → the `DCLTPCA1` expiry-abort lane, all
+green. The rail moved; nothing under it did.
+
+### 8.5 Gates
 
 | gate | result |
 |---|---|
