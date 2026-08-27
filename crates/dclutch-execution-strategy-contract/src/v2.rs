@@ -1821,7 +1821,9 @@ const _: () = assert!(capability_v3::CAPABILITY_PROGRAM_V3_BYTES == 408);
 mod tests {
     extern crate std;
 
-    use dclutch_capability_program_contract::v4::{ArtifactReferenceV4, CapabilityArtifactsV4};
+    use dclutch_capability_program_contract::v4::{
+        ArtifactReferenceV4, CapabilityArtifactsV4, SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
+    };
     use std::vec;
 
     use super::*;
@@ -1923,7 +1925,11 @@ mod tests {
             CapabilityArtifactsV4 {
                 account_profile: ArtifactReferenceV4::new(id(30), id(10)),
                 request_profile: ArtifactReferenceV4::new(id(11), id(12)),
-                lifecycle: ArtifactReferenceV4::new(id(31), id(24)),
+                lifecycle: ArtifactReferenceV4::new(
+                    schema_id(SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5)
+                        .expect("selected lifecycle schema"),
+                    id(24),
+                ),
                 strategy: ArtifactReferenceV4::new(
                     schema_id(EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2).expect("strategy schema"),
                     strategy_program,
