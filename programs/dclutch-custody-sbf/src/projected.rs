@@ -210,12 +210,24 @@ fn authenticate_common(
     {
         return Err(CustodySbfError::AccountFrame.into());
     }
-    let terminal = matches!(
-        request.operation,
+    // Which operations close accounts, and therefore need the RentCredit
+    // writable. Written as an exhaustive `match` rather than a `matches!` on
+    // purpose: adding an operation to this enum must be a COMPILE ERROR here,
+    // not a frame refusal 5,364 compute units into a transaction with nothing
+    // naming the cause. `AbortSourceAndClose` was added and silently omitted,
+    // which is exactly how a list that is exhaustive by intent rather than by
+    // the compiler fails.
+    let terminal = match request.operation {
         ProjectedCustodyOperationV1::RefundAndClose
-            | ProjectedCustodyOperationV1::AbortOpenAndClose
-            | ProjectedCustodyOperationV1::LockHoardAndCloseSource
-    );
+        | ProjectedCustodyOperationV1::AbortOpenAndClose
+        | ProjectedCustodyOperationV1::AbortSourceAndClose
+        | ProjectedCustodyOperationV1::LockHoardAndCloseSource => true,
+        ProjectedCustodyOperationV1::Initialize
+        | ProjectedCustodyOperationV1::OpenHoard
+        | ProjectedCustodyOperationV1::LockHoard
+        | ProjectedCustodyOperationV1::RealizeAndClose
+        | ProjectedCustodyOperationV1::OpenSourceCompartment => false,
+    };
     if rent_credit.is_writable != terminal {
         return Err(CustodySbfError::AccountFrame.into());
     }
