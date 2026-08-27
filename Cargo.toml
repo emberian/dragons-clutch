@@ -56,6 +56,7 @@ members = [
     "crates/dclutch-rational-lifecycle-hot-v3",
     "crates/dclutch-registry-contract",
     "crates/dclutch-registry-svm",
+    "crates/dclutch-relay-contract",
     "crates/dclutch-release-set-contract",
     "crates/dclutch-release-tool",
     "crates/dclutch-resolution-codec",
@@ -105,6 +106,7 @@ members = [
     "programs/dclutch-general-accelerator-sbf",
     "programs/dclutch-series-sbf",
     "programs/dclutch-series-shadow-sbf",
+    "tools/gauntlet/program-test-evidence",
 ]
 resolver = "2"
 

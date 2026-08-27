@@ -1694,6 +1694,7 @@ dependencies = [
  "dclutch-product-runtime-v2-admission",
  "dclutch-product-runtime-v2-operator",
  "dclutch-product-runtime-v2-svm-reader",
+ "dclutch-program-test-evidence",
  "dclutch-realm-contract",
  "dclutch-record-contract",
  "dclutch-registry-contract",
@@ -2334,6 +2335,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-program-test-evidence"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-provider-transport-v3-operator"
 version = "0.1.0"
 dependencies = [
@@ -2490,6 +2495,17 @@ dependencies = [
  "dclutch-core-contract",
  "dclutch-release-set-contract",
  "sha2 0.10.9",
+]
+
+[[package]]
+name = "dclutch-relay-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
+ "dclutch-source-contract",
 ]
 
 [[package]]

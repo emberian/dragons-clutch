@@ -43,8 +43,8 @@
     },
     {
       "route": "series/*",
-      "reason": "Series family artifact, not part of the seven-role successor release set; no tier deploys it.",
-      "owner": "cycle-2 tranche A (WAVE.md), Series"
+      "reason": "STRUCTURALLY UNREACHABLE, not merely un-driven. Every route of programs/dclutch-series-sbf ends in a Core CPI that Core refuses by construction: the adapter sends exactly SERIES_CORE_REQUEST_BYTES_V1 (336) bytes with no receipt tail (series-sbf/src/lib.rs:844), while Core's dispatch for that magic requires a tail of CLAIMS_FOUNDING_RECEIPT_BYTES_V5 (1008) or PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1 (320), both filtered on start >= 336, so a bare request falls through to CoreSbfError::Instruction. Core also has NO handler for SeriesCoreActionV1::{Prepare, Expire, Close}; series_open.rs:253 and series_consume.rs:296 both require Consume. So no tier anyone writes can execute these four routes or raise these twelve codes. It is also the only consumer of the v1 dclutch-series-codec; Core, Trading, series-shadow and the operator are all on dclutch-series-v3-kernel, whose Core seam DOES execute (see core/series_consume::process). Full argument: docs/evidence/SERIES_ADAPTER_CORE_SEAM_2026_08_27.md. This needs an owner DECISION -- delete the superseded path per AGENTS.md, or write an ADR for the Core-side Prepare/Expire/Close seam -- not a test.",
+      "owner": "UNASSIGNED — needs an owner decision, not a test (TA-SER, 2026-08-27)"
     },
     {
       "route": "series-shadow/*",
@@ -229,11 +229,6 @@
     {
       "route": "core/series_open::process",
       "reason": "Series Core route; needs the Series family tier and a Claims FoundingV5 receipt.",
-      "owner": "cycle-2 tranche A (WAVE.md), Series"
-    },
-    {
-      "route": "core/series_consume::process",
-      "reason": "Series Core route; needs the Series family tier and a projected-Custody Lock receipt.",
       "owner": "cycle-2 tranche A (WAVE.md), Series"
     },
     {

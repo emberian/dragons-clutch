@@ -1461,8 +1461,18 @@ fn series_instruction(fixture: &SeriesFixture) -> Instruction {
     }
 }
 
+/// Submit one Series occurrence and, if the gauntlet asked, record it.
+///
+/// `label` is the census binding key. The evidence is written only when
+/// `DCLUTCH_PROGRAM_TEST_EVIDENCE_DIR` is set, so this stays an ordinary test
+/// under a bare `cargo test`. The submit goes through
+/// `process_transaction_with_metadata` rather than `process_transaction`
+/// because the census cross-checks every claimed route against the runtime's
+/// own `Program <address> invoke [n]` lines, and a producer that cannot
+/// surface those cannot be corroborated.
 async fn execute_series(
     mut fixture: SeriesFixture,
+    label: &str,
 ) -> (
     SeriesFixture,
     solana_program_test::ProgramTestContext,
@@ -1481,12 +1491,32 @@ async fn execute_series(
         &[&context.payer],
         blockhash,
     );
-    let failure = context
+    let signature = transaction
+        .signatures
+        .first()
+        .copied()
+        .expect("a signed transaction has a signature")
+        .to_string();
+    let outcome = context
         .banks_client
-        .process_transaction(transaction)
+        .process_transaction_with_metadata(transaction)
         .await
-        .err()
-        .map(|error| format!("{error:?}"));
+        .expect("the bank processed the transaction");
+    let failure = outcome.result.err().map(|error| format!("{error:?}"));
+    let slot = context.banks_client.get_root_slot().await.unwrap_or_default();
+    let (logs, compute_units) = outcome.metadata.map_or_else(
+        || (Vec::new(), None),
+        |metadata| (metadata.log_messages, Some(metadata.compute_units_consumed)),
+    );
+    dclutch_program_test_evidence::record(&dclutch_program_test_evidence::TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: compute_units,
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
     (fixture, context, failure)
 }
 
@@ -1678,7 +1708,7 @@ async fn assert_series_found_rollback(
 #[tokio::test]
 async fn series_consume_accepts_258_outcomes_and_commits_found_with_permit() {
     let fixture = series_fixture(SeriesFault::None);
-    let (fixture, context, failure) = execute_series(fixture).await;
+    let (fixture, context, failure) = execute_series(fixture, "Series occurrence Consume founds its Market with a Core permit").await;
     assert_eq!(failure, None, "Series Found must complete under 1.4M CU");
     assert_eq!(fixture.base.outcome_count, 258);
 
@@ -1725,7 +1755,7 @@ async fn series_consume_accepts_258_outcomes_and_commits_found_with_permit() {
 #[tokio::test]
 async fn series_consume_hostile_batch_programdata_refuses_with_byte_exact_rollback() {
     let fixture = series_fixture(SeriesFault::BatchClaimsProgramdata);
-    let (fixture, context, failure) = execute_series(fixture).await;
+    let (fixture, context, failure) = execute_series(fixture, "Series Consume refuses a substituted Claims ProgramData").await;
     let failure = failure.expect("substituted Claims ProgramData must refuse");
     assert!(
         failure.contains("Custom(3)"),
@@ -1737,7 +1767,7 @@ async fn series_consume_hostile_batch_programdata_refuses_with_byte_exact_rollba
 #[tokio::test]
 async fn series_consume_late_hoard_refusal_rolls_back_found_and_all_replay_state() {
     let fixture = series_fixture(SeriesFault::LateHoardBalance);
-    let (fixture, context, failure) = execute_series(fixture).await;
+    let (fixture, context, failure) = execute_series(fixture, "Series Consume refuses a late Hoard postcondition").await;
     let failure = failure.expect("late Hoard postcondition must refuse");
     assert!(
         failure.contains("Custom(11)"),
