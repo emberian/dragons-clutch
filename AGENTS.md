@@ -77,6 +77,13 @@ construction belong outside the kernel in explicitly named adapters.
 - Before every commit, inspect the complete staged path list. If the shared
   index contains another lane's files, stop and coordinate; a named-file `add`
   does not make a subsequent whole-index commit safe.
+- Use `tools/lane.sh` for commits, pinned `rustfmt`, wave-board entries, and
+  running a script another lane might edit concurrently. The raw commands
+  (`git commit --only`, `rustup run 1.97.1 rustfmt --edition 2024`, appending
+  to the board by hand) remain valid — the wrapper just carries the
+  discipline (refusing empty/wildcard commit path lists, a post-commit
+  readback, crate-root and mid-run-edit guards) so it isn't re-learned by
+  hand each time. See `tools/lane/README.md`.
 - Build vertical executable slices. A slice includes kernel semantics, adapter,
   operator construction, and an honest user-visible status; no layer may claim
   completion alone.
