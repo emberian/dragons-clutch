@@ -347,7 +347,7 @@ fn hot_heap_outstanding() -> (u64, u64) {
     )))]
     {
         let probe = Vec::<u8>::with_capacity(1);
-        let floor = solana_program::entrypoint::HEAP_START_ADDRESS as usize;
+        let floor = usize::try_from(solana_program::entrypoint::HEAP_START_ADDRESS).unwrap_or(0);
         (
             u64::try_from((probe.as_ptr() as usize).saturating_sub(floor)).unwrap_or(u64::MAX),
             0,

@@ -951,7 +951,10 @@ impl<T> Drop for ScratchVecV1<'_, T> {
         // SAFETY: the first `len` elements are initialized and owned by this
         // bank; dropping them in place is exactly what `Vec` does.
         unsafe {
-            core::ptr::drop_in_place(slice::from_raw_parts_mut(self.block.as_ptr(), self.len))
+            core::ptr::drop_in_place(core::ptr::slice_from_raw_parts_mut(
+                self.block.as_ptr(),
+                self.len,
+            ))
         };
         if self.capacity == 0 {
             return;
