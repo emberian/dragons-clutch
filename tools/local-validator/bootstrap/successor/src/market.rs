@@ -844,27 +844,38 @@ fn publish_market_records(
         None,
         transactions,
     )?;
-    // Which schema the adapter-config body publishes under is the provider
-    // release's own statement, not a spec field a caller could skew: the Pyth
-    // extension names a PythAdapterConfigV1; the relayed extension names the
-    // VENUE's ArtifactReleaseV1 (MAINNET_STATE_RELAY.md section 12.4). A third
-    // extension is refused because no schema is known for it.
+    // Which schema the adapter-config body publishes under is the SOURCE
+    // SPEC's access profile: the Pyth terminal profile names a
+    // PythAdapterConfigV1; the relayed profile names the VENUE's
+    // ArtifactReleaseV1 (MAINNET_STATE_RELAY.md section 12.4). Any other
+    // profile is refused because no adapter-config schema is known for it.
+    //
+    // It USED to switch on `ProviderReleaseV1.adapter_release_id`, against the
+    // provider-extension constants. That reading of the field is
+    // `PythProviderAdapterObligationV1::from_material_view`'s, and it is not
+    // the one the live V3 provider route enforces:
+    // `authenticate_provider_release` requires that same field to equal the
+    // published Pyth release's `adapter_id`, and the two values differ, so a
+    // release cannot satisfy both. Switching here on the access profile asks
+    // the question this code actually has -- which provider extension is this
+    // -- of a field whose meaning nothing else contests, and one that
+    // `PythProviderAdapterObligationV2::from_authenticated_records` pins for
+    // the same graph it consumes.
     let adapter_config_schema = {
-        let provider = dclutch_source_contract::ProviderReleaseV1::decode(&decode_hex(
-            &input.provider_release_hex,
-        )?)
-        .map_err(|error| Error::new(format!("ProviderReleaseV1: {error:?}")))?;
-        match provider.adapter_release_id().to_bytes() {
-            dclutch_source_contract::PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1 => {
+        let source_spec =
+            dclutch_source_contract::SourceSpecV1::decode(&decode_hex(&input.source_spec_hex)?)
+                .map_err(|error| Error::new(format!("SourceSpecV1: {error:?}")))?;
+        match source_spec.access_profile() {
+            dclutch_source_contract::SourceAccessProfile::PythTerminalOneTransaction => {
                 PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1
             }
-            dclutch_source_contract::RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1 => {
+            dclutch_source_contract::SourceAccessProfile::RelayedObservationRecord => {
                 dclutch_registry_contract::ARTIFACT_RELEASE_SCHEMA_ID_V1
             }
             other => {
                 return Err(Error::new(format!(
-                    "the provider release names an adapter extension this publisher has no                      adapter-config schema for: {}",
-                    hex(&other)
+                    "the source spec names an access profile this publisher has no adapter-config \
+                     schema for: {other:?}"
                 )));
             }
         }
@@ -3838,10 +3849,10 @@ pub(crate) fn demo_market_input(registry: Pubkey) -> Result<MarketRunInput> {
     use dclutch_pyth_svm::{FullPriceUpdateV2, synthetic_fixture::local_validator_release_v1};
     use dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V4;
     use dclutch_source_contract::{
-        CapacityEnvelope, PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1, ProviderReleaseV1,
-        PythAdapterConfigV1, RECOVERY_POLICY_MAX_ATTEMPTS_V2, RecoveryAttemptV2, RoundingBoundary,
-        SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SourceAccessProfile, SourceCapacityProfileV1,
-        SourceSpecV1, StatisticKind, StatisticSpecV1, WindowKind, WindowSpecV1,
+        CapacityEnvelope, ProviderReleaseV1, PythAdapterConfigV1, RECOVERY_POLICY_MAX_ATTEMPTS_V2,
+        RecoveryAttemptV2, RoundingBoundary, SOURCE_FAILURE_POLICY_RELEASE_ID_V2,
+        SourceAccessProfile, SourceCapacityProfileV1, SourceSpecV1, StatisticKind, StatisticSpecV1,
+        WindowKind, WindowSpecV1,
     };
 
     // The release this Market resolves against is the LOCAL-VALIDATOR
@@ -3896,18 +3907,36 @@ pub(crate) fn demo_market_input(registry: Pubkey) -> Result<MarketRunInput> {
     let capacity_id = source_content(record_identity(&capacity.to_bytes()))?;
 
     let pyth_release_bytes = fixture.release().to_bytes();
-    // `adapter_release_id` is the PROVIDER EXTENSION this release belongs to,
-    // and it is a closed protocol constant rather than anything about this
-    // fixture: `PythProviderAdapterObligationV1::from_material_view` refuses
-    // any release that is not the Pyth extension, and the demo publisher picks
-    // the adapter-config schema off the same field. Naming the captured
-    // release's own `adapter_id` here -- which is what it reads like it should
-    // be, and what this campaign tried first -- refuses on both sides at once:
-    // `UnsupportedProviderExtension` on chain, and "no adapter-config schema
-    // for this extension" before the record is even published.
+    // `adapter_release_id` is the PUBLISHED PYTH RELEASE's own `adapter_id`,
+    // and getting here took two chain refusals and a contradiction worth
+    // recording, because TWO LIVE READERS OF THIS ONE FIELD DISAGREE ABOUT WHAT
+    // IT HOLDS:
+    //
+    //   * `PythProviderAdapterObligationV1::from_material_view`
+    //     (dclutch-source-contract lib.rs) refuses anything that is not
+    //     `PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1` -- the field is "which
+    //     provider EXTENSION is this", a closed constant.
+    //   * `authenticate_provider_release` (resolution-proof-sbf provider_v3.rs)
+    //     refuses anything that is not `pyth_release.adapter_id()` -- the field
+    //     is "which adapter release does this provider deployment carry".
+    //
+    // The two constants differ, so no `ProviderReleaseV1` satisfies both. The
+    // live V3 provider route goes through the V2 obligation
+    // (`from_authenticated_records`, which does NOT check the extension) and
+    // then `authenticate_provider_release`, so the SECOND reading is the one a
+    // chain enforces and this is its value. The V1 obligation is not on that
+    // path.
+    //
+    // Measured, in order: `adapter_id` refused at the publisher below, which
+    // was selecting the adapter-config schema off this field and taking V1's
+    // reading; the extension constant then refused ON CHAIN with
+    // ResolutionError::ProviderObservation (0x800A) after 1,070,265 CU. Both
+    // refusals were correct given their own reading. The publisher now selects
+    // on the source spec's access profile instead, which is a real extension
+    // discriminator and is pinned by the same obligation that consumes it.
     let provider_release = ProviderReleaseV1::new(
         source_content(demo_id("provider-family/pyth", &[]))?,
-        source_content(PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1)?,
+        source_content(adapter)?,
         source_content(record_identity(&pyth_release_bytes))?,
         source_content(fixture.release().price_update_codec_id())?,
         source_content(fixture.release().router_abi_id())?,
