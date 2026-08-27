@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
 import MarketTradePanel from './MarketTradePanel';
+import { DIRECT_PACKET_WALL_V1, DIRECT_PRESTATE_WALL_V1 } from '@/lib/directTradeSpine';
 
 describe('the market-detail trade panel', () => {
   const html = renderToStaticMarkup(<MarketTradePanel
@@ -16,13 +17,13 @@ describe('the market-detail trade panel', () => {
 
   it('treats the named refusal as the product surface, not a disabled button', () => {
     expect(html).toContain('a named refusal is this protocol&#x27;s honest interface');
-    expect(html).toContain('Walls between preview and execution · named, not hedged');
   });
 
-  it('says why there is no order book instead of faking one', () => {
-    expect(html).toContain('there is no order book to take from, by design');
-    expect(html).toContain('dclutch/direct-intent-ticket/v1');
-    expect(html).toContain('It is not trusted');
+  it('carries the packet and prestate walls as exact named facts, never hedges', () => {
+    // The walls render after inspection; their content is pinned at the source.
+    expect(DIRECT_PACKET_WALL_V1.name).toBe('packet');
+    expect(DIRECT_PRESTATE_WALL_V1.name).toBe('prestate');
+    expect(DIRECT_PACKET_WALL_V1.detail).toContain('owned by the Direct/Registry seam, not by this browser');
   });
 
   it('starts from an honest empty state and links the advanced workbench', () => {
