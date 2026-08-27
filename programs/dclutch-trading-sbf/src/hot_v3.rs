@@ -6253,6 +6253,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
         prior_receipt_bytes: Vec::new(),
         route: 0,
     });
+    hot_heap_mark!("child-execution-state");
     if effect.route_count() == 0 {
         return Ok(execution.transcript);
     }
@@ -6351,6 +6352,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                     .checked_add(1)
                     .ok_or(TradingSbfError::Content)?;
             }
+            hot_heap_mark!("child-dependencies");
             let prior_receipt = if execution.prior_receipt_bytes.is_empty() {
                 None
             } else {
@@ -6494,7 +6496,9 @@ fn execute_child_routes_v3<'accounts, 'info>(
                     return Err(TradingSbfError::UnsupportedContent.into());
                 }
             };
+            hot_heap_mark!("child-invoked");
             let (producer, receipt_bytes) = get_return_data().ok_or(TradingSbfError::Transition)?;
+            hot_heap_mark!("child-return-data");
             if producer != *child_program.key {
                 return Err(TradingSbfError::Transition.into());
             }
@@ -6540,6 +6544,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                 &child_digest,
             ])
             .to_bytes();
+            hot_heap_mark!("child-banked");
             invocation = invocation.checked_add(1).ok_or(TradingSbfError::Content)?;
         }
         execution.route = route.checked_add(1).ok_or(TradingSbfError::Content)?;
@@ -8098,6 +8103,24 @@ fn commit_output_lamports_v3(
     Ok(())
 }
 
+/// Require every account this commit could have changed to be left rent-exempt.
+///
+/// **Only the writable ones.** This is a POSTCONDITION of the commit, and the
+/// commit can only reach an account the transaction made writable: both writes
+/// it performs -- `commit_output_lamports_v3`'s `try_borrow_mut_lamports` and
+/// `commit_data_effect`'s `try_borrow_mut_data` -- refuse on a readonly
+/// account, and so does every child CPI. Asserting exemption of a readonly
+/// coordinate is therefore never a fact about this execution; it is a fact
+/// about someone else's account, and it is one that is false on every cluster
+/// for the coordinates a Direct frame carries.
+///
+/// Measured, the first time this pass ever ran to completion: the canonical
+/// bundle refused `Commit` here on **coordinate 11, the System Program** -- 1
+/// lamport against a 21-byte NativeLoader record whose exemption minimum is
+/// 1,036,528. Builtins are not rent-exempt and never have been. The frame also
+/// carries the collateral token program, four child program records and the
+/// loader's ProgramData accounts, none of them writable and none of them this
+/// instruction's to underwrite.
 fn require_committed_rent_exemption_v3(
     accounts: &[&AccountInfo<'_>],
     aliases: &[usize],
@@ -8107,6 +8130,7 @@ fn require_committed_rent_exemption_v3(
     for (coordinate, account) in accounts.iter().enumerate() {
         if *aliases.get(coordinate).ok_or(TradingSbfError::Commit)? == coordinate
             && (coordinate == 0) == root_only
+            && account.is_writable
             && account.data_len() != 0
             && !rent.is_exempt(account.lamports(), account.data_len())
         {
