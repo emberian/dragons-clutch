@@ -2863,6 +2863,49 @@ boundary, so none executes on the canonical Interpreted Direct bundle and the
 strictly worse heap than what it replaced. Not a fail-closed, not polish: debt
 with a number.
 
+### DIAG-82, 2026-08-27: two rows the 82-diagnostic regression opened
+
+**M-61 -- the 20-seed sweep's per-seed CU is a bump-search lottery, re-rolled by
+any change at all to the Trading ELF; M-46's bisect method has to know that.**
+Measured across all twenty seeds, before and after a pure out-of-line refactor
+(`9dc2a6bb`) whose real cost is one extra call: every per-seed delta decomposes
+as `n x 1,500 + ~50`. The `~50` is the call (residual 46..56 on nineteen of the
+twenty seeds). The `n x 1,500` is `find_program_address` -- up to 31 iterations,
+a swing of +/-46,000 CU -- re-rolling because the trading ELF digest feeds the
+identities the fixture derives, so **changing one byte of that ELF redraws every
+seed's bump search**. Consequences, all of them practical: (a) "worst margin
+8,238" was never a property of the code; the same tip with a 440-byte-larger ELF
+measures 3,689, on a seed that was not the worst before, at 20/20 either way.
+(b) M-46 tells the next CU lane to bisect `211079f6..a4be9a83` *against the
+sweep*; done per-seed that will chase +/-46,000 CU of noise and attribute it to
+whichever commit it lands on. The bisect statistic has to be the **pass count
+and the twenty-seed mean**, not one seed's number. (c) A lane reporting a margin
+should report the ELF digest beside it or the number does not mean anything.
+Cheap fix available to whoever takes the next CU lane: have the sweep print the
+trading ELF sha256 and the twenty-seed mean, so the lottery is visible in the
+output rather than in this row.
+
+**M-62 -- a feature-flag variant of a linked program is a DIFFERENT program, and
+no gate in the tree treated it as one.** The rule M-45 is the sibling of. Five
+stages count SBF frame diagnostics (`run.sh`, `run-journey.sh`, `run-dealer.sh`,
+`run-general.sh`, `checked-release-candidate.sh`) and every one of them built
+`dclutch-trading-sbf` at default features or did not build it at all. The
+accelerators link it with `default-features = false` and their own feature set;
+that is a different monomorphization with different inlining and therefore
+different frames, and it carried 82 frame-overwrite diagnostics on
+`hot_v3::execute_child_routes_v3` -- 5,184 bytes against a 4,096-byte bound --
+from `3071fbe8` until the checked-release candidate went red on 2026-08-27 with
+a devnet deploy in flight. The gate that caught it is the one that runs last.
+Wired shut in `d1378427` for the frame class specifically (the Trading seam
+runner and the Dealer tier now build the accelerator links; the release
+candidate frame-checks every program under `programs/`, enumerated from the
+directory so a list cannot go stale again). **What is NOT closed is the general
+form**: no gate in this tree measures anything else -- heap, CU, ELF size,
+account extents -- on a non-default feature set of a program another program
+links, and a lane that reports "Trading is unchanged" today means Trading at
+`default = ["families"]`. Owner: whoever next measures a Trading number that a
+family accelerator also has to live with.
+
 ---
 
 *Gen-1 did not fail to write things down. It wrote them down — in reviews, in a
