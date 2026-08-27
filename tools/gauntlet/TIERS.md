@@ -192,6 +192,11 @@ the report shows the campaign.
   discriminants. A new dispatch shape goes here. The rule when extending: an
   unrecognised dispatch position must land in `unclassified` and be printed, not
   dropped.
+- A `blocked.json` entry that no longer describes anything true is reported in
+  the census's **Stale blocking entries** section: either it matches no
+  enumerated route at all, or it still blocks a route that has since executed.
+  A blocking entry outlives its reason as easily as a test outlives its
+  invariant; delete it when it appears there.
 - `MAX_DISPATCH_DEPTH` bounds how far the enumerator follows a dispatch chain.
   Raising it finds more action tags and more internal-branch noise; the current
   value of 2 is entry dispatch plus one action match.

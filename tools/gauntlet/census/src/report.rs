@@ -55,6 +55,7 @@ fn blocked_for<'a>(blocked: &'a BlockedSet, id: &str) -> Option<&'a Blocked> {
 }
 
 pub struct Totals {
+    pub stale_blocked: usize,
     pub routes: usize,
     pub routes_executed: usize,
     pub routes_refused_only: usize,
@@ -68,8 +69,11 @@ pub struct Totals {
 #[allow(clippy::too_many_lines)]
 pub fn render(inventory: &Inventory, ledger: &Ledger, blocked: &BlockedSet) -> (String, Totals) {
     let coverage = coverage(ledger);
+    let mut used_blocked: BTreeSet<&str> = BTreeSet::new();
+    let mut stale_because_executed: Vec<(String, String)> = Vec::new();
     let mut out = String::new();
     let mut totals = Totals {
+        stale_blocked: 0,
         routes: 0,
         routes_executed: 0,
         routes_refused_only: 0,
@@ -141,6 +145,16 @@ pub fn render(inventory: &Inventory, ledger: &Ledger, blocked: &BlockedSet) -> (
                 let executed = coverage.executed.contains(id);
                 let refused = coverage.refused.contains(id);
                 let count = coverage.by_route.get(id).copied().unwrap_or(0);
+                if executed || refused {
+                    // A route that has run does not need a blocker. Remember the
+                    // entry so it can be reported as stale and deleted.
+                    if let Some(entry) = blocked_for(blocked, id) {
+                        // It matched something, so it is not orphaned — it is
+                        // stale for the sharper reason reported below.
+                        used_blocked.insert(entry.route.as_str());
+                        stale_because_executed.push((entry.route.clone(), route.id.clone()));
+                    }
+                }
                 let status = if executed {
                     totals.routes_executed += 1;
                     format!("EXECUTED ({count}x)")
@@ -152,6 +166,7 @@ pub fn render(inventory: &Inventory, ledger: &Ledger, blocked: &BlockedSet) -> (
                     match blocked_for(blocked, id) {
                         Some(entry) => {
                             totals.routes_never_blocked += 1;
+                            used_blocked.insert(entry.route.as_str());
                             let held = reasons.iter().position(|(_, r)| r == &entry.reason);
                             let marker = if let Some(index) = held {
                                 reasons[index].0.clone()
@@ -257,6 +272,38 @@ pub fn render(inventory: &Inventory, ledger: &Ledger, blocked: &BlockedSet) -> (
         }
     }
 
+    let orphaned: Vec<&Blocked> = blocked
+        .blocked
+        .iter()
+        .filter(|entry| !used_blocked.contains(entry.route.as_str()))
+        .collect();
+    if !orphaned.is_empty() || !stale_because_executed.is_empty() {
+        totals.stale_blocked = orphaned.len() + stale_because_executed.len();
+        let _ = writeln!(out, "## Stale blocking entries");
+        let _ = writeln!(out);
+        let _ = writeln!(
+            out,
+            "A blocking entry outlives its reason as easily as a test outlives its\n\
+             invariant. These entries in `blocked.json` no longer describe anything\n\
+             true and should be deleted."
+        );
+        let _ = writeln!(out);
+        for entry in orphaned {
+            let _ = writeln!(
+                out,
+                "- `{}` matches no enumerated route [{}]",
+                entry.route, entry.owner
+            );
+        }
+        for (pattern, route) in &stale_because_executed {
+            let _ = writeln!(
+                out,
+                "- `{pattern}` still blocks `{route}`, **which has now executed** — delete it"
+            );
+        }
+        let _ = writeln!(out);
+    }
+
     let _ = writeln!(out, "## Totals");
     let _ = writeln!(out);
     let _ = writeln!(out, "| measure | count |");
@@ -293,6 +340,11 @@ pub fn render(inventory: &Inventory, ledger: &Ledger, blocked: &BlockedSet) -> (
         out,
         "| unclassified dispatch positions | {} |",
         totals.unclassified
+    );
+    let _ = writeln!(
+        out,
+        "| stale blocking entries to delete | {} |",
+        totals.stale_blocked
     );
     let _ = writeln!(out);
     let _ = writeln!(

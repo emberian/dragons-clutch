@@ -289,7 +289,8 @@ fn command_report(options: &Options) -> Result<(), String> {
     write_atomic(out, rendered.as_bytes())?;
     eprintln!(
         "census: {} routes | {} executed | {} refused-only | {} never-executed \
-         ({} blocked, {} unclaimed) | {}/{} refusal codes observed | {} unclassified",
+         ({} blocked, {} unclaimed) | {}/{} refusal codes observed | {} unclassified \
+         | {} stale blocking entries",
         totals.routes,
         totals.routes_executed,
         totals.routes_refused_only,
@@ -298,7 +299,8 @@ fn command_report(options: &Options) -> Result<(), String> {
         totals.routes_never - totals.routes_never_blocked,
         totals.refusals_observed,
         totals.refusals,
-        totals.unclassified
+        totals.unclassified,
+        totals.stale_blocked
     );
     Ok(())
 }
