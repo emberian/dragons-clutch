@@ -8,10 +8,12 @@ use std::{
 
 use dclutch_market_core_codec::CoreState;
 use serde::Serialize;
+use solana_sdk::signature::Signer;
 
 use crate::{
     Error, Result,
-    ledger::{ConservationLedgerV1, ObservationV1},
+    ledger::{ConservationLedgerV1, LamportClaimV1, ObservationV1},
+    resolution::{self, ProviderLegVerdictV1},
     stages::{self, MarketAddressesV1, StageReportV1},
 };
 
@@ -63,6 +65,9 @@ pub(crate) struct JourneyTranscriptV1 {
     pub(crate) claim_unit_atoms: u64,
     pub(crate) markets: Vec<MarketPhaseV1>,
     pub(crate) stages: Vec<StageReportV1>,
+    /// How far the Pyth transport could carry this Market, and exactly what
+    /// stopped it.
+    pub(crate) provider_legs: ProviderLegVerdictV1,
     pub(crate) gaps: Vec<GapV1>,
     pub(crate) observations: Vec<ObservationV1>,
     pub(crate) transactions_total: usize,
@@ -80,15 +85,44 @@ pub(crate) fn execute(
     let mut session = crate::runtime::found_through_open(spec_path, keypair_seed)?;
     let addresses = MarketAddressesV1::from_evidence(&session.accounts)?;
 
-    let mut ledger = ConservationLedgerV1::new(addresses.mint);
+    let mut ledger = ConservationLedgerV1::new(addresses.mint, session.authority.pubkey());
     let (claim_unit_atoms, decimals) = stages::admit_open_market(
         &mut session.rpc,
         &addresses,
         &session.accounts,
         crate::plan::pubkey(&session.plan.custody.program_id)?,
+        crate::plan::pubkey(&session.plan.rent_credit.program_id)?,
         &mut ledger,
     )?;
-    ledger.observe(&mut session.rpc, "founding through Open", 0, 0)?;
+    // The whole cast is registered with the ledger BEFORE the first census, so
+    // that every account the journey later creates is first seen as a checked
+    // vacancy rather than as a balance with no predecessor. That ordering is
+    // what makes L7 applicable across the stages that spend the most lamports;
+    // see `stages::plan_holders` and `resolution::watch`.
+    let mut holders = stages::plan_holders(holder_count, &mut ledger)?;
+    let resolution_addresses = resolution::derive(
+        &mut session.rpc,
+        &session.plan,
+        &addresses,
+        &session.accounts,
+    )?;
+    resolution::watch(&mut ledger, &resolution_addresses);
+
+    ledger.observe(
+        &mut session.rpc,
+        "founding through Open",
+        0,
+        0,
+        // The founding's lamport placements are the tier-1 producer's, and this
+        // ledger does not restate them: it would be re-deriving another
+        // campaign's arithmetic and calling the agreement evidence. L7 begins
+        // at the first journey-owned boundary.
+        LamportClaimV1::inapplicable(
+            "the founding's lamport movements belong to the tier-1 producer and are covered by \
+             tier 1's own witnesses; this ledger accounts for lamports from the first \
+             journey-owned boundary onward",
+        ),
+    )?;
 
     let mut stages = vec![StageReportV1 {
         stage: "founding through Open".into(),
@@ -105,13 +139,12 @@ pub(crate) fn execute(
             .into(),
     }];
 
-    let (holders, distribution) = stages::distribute_collateral(
+    let (distribution, distribution_fees) = stages::distribute_collateral(
         &mut session.rpc,
         &addresses,
         &session.authority,
         decimals,
-        holder_count,
-        &mut ledger,
+        &mut holders,
         &mut session.transactions,
         &mut session.accounts,
     )?;
@@ -124,37 +157,69 @@ pub(crate) fn execute(
         "post-open life: collateral distribution",
         0,
         0,
+        LamportClaimV1::fees(distribution_fees),
     )?;
 
-    stages.push(stages::holder_to_holder(
+    let (ring, ring_fees) = stages::holder_to_holder(
         &mut session.rpc,
         &addresses,
         &session.authority,
         decimals,
         &holders,
         &mut session.transactions,
-    )?);
+    )?;
+    stages.push(ring);
     ledger.observe(
         &mut session.rpc,
         "post-open life: holder-to-holder collateral",
         0,
         0,
+        LamportClaimV1::fees(ring_fees),
     )?;
 
-    stages.push(stages::recover_rent(
+    let (resolution_report, provider_legs, resolution_fees) = resolution::resolve(
+        &mut session.rpc,
+        &session.authority,
+        &resolution_addresses,
+        &mut session.transactions,
+    )?;
+    stages.push(resolution_report);
+    // The funding ladder moves lamports and no collateral at all: the Source
+    // state and three Funds are lamport compartments, and the Hoard is not a
+    // party to any of it. Declaring zero on both atom laws is the strong claim.
+    ledger.observe(
+        &mut session.rpc,
+        "resolution: create and activate the Market's Resolution funding",
+        0,
+        0,
+        LamportClaimV1::fees(resolution_fees),
+    )?;
+
+    let (rent, rent_fees) = stages::recover_rent(
         &mut session.rpc,
         &session.plan,
         &session.accounts,
         &session.authority,
         &mut session.transactions,
-    )?);
-    ledger.observe(&mut session.rpc, "rent recovery", 0, 0)?;
+    )?;
+    stages.push(rent);
+    ledger.observe(
+        &mut session.rpc,
+        "rent recovery",
+        0,
+        0,
+        LamportClaimV1::fees(rent_fees),
+    )?;
 
     let markets = vec![
-        market_phase(&mut session.rpc, "founding_market", addresses.founding_market)?,
+        market_phase(
+            &mut session.rpc,
+            "founding_market",
+            addresses.founding_market,
+        )?,
         market_phase(&mut session.rpc, "found31_market", addresses.found31_market)?,
     ];
-    let gaps = gap_register();
+    let gaps = gap_register(&provider_legs);
     for gap in &gaps {
         stages.push(StageReportV1 {
             stage: gap.stage.clone(),
@@ -184,6 +249,7 @@ pub(crate) fn execute(
         claim_unit_atoms,
         markets,
         stages,
+        provider_legs,
         gaps,
         observations: ledger.observations().to_vec(),
         transactions_total: session.transactions.len(),
@@ -205,7 +271,11 @@ pub(crate) fn execute(
     Ok(transcript)
 }
 
-fn market_phase(rpc: &mut crate::rpc::Rpc, label: &str, address: solana_sdk::pubkey::Pubkey) -> Result<MarketPhaseV1> {
+fn market_phase(
+    rpc: &mut crate::rpc::Rpc,
+    label: &str,
+    address: solana_sdk::pubkey::Pubkey,
+) -> Result<MarketPhaseV1> {
     let account = rpc.required_account(address, label)?;
     let state = CoreState::decode(&account.data)
         .map_err(|error| Error::new(format!("{label} Core state: {error:?}")))?;
@@ -225,7 +295,13 @@ fn market_phase(rpc: &mut crate::rpc::Rpc, label: &str, address: solana_sdk::pub
 /// wallet at all, so there is no honest transaction to submit and record. Each
 /// entry names the exact predicate, so the claim is checkable without rerunning
 /// anything.
-fn gap_register() -> Vec<GapV1> {
+///
+/// Two of JRNY-1's five entries are gone from this list, because the campaign
+/// now executes them: the resolution FUNDING ladder is a stage, and the rent
+/// SWEEP always was. What is left is the trading half, which is behind three
+/// independent walls rather than the one the Hot gate looked like, and the
+/// terminal half, which is behind one.
+fn gap_register(provider: &ProviderLegVerdictV1) -> Vec<GapV1> {
     vec![
         GapV1 {
             stage: "post-open life: outcome-token distribution and holder-to-holder transfers".into(),
@@ -241,7 +317,7 @@ fn gap_register() -> Vec<GapV1> {
                      ExecutionRoleV1::Trading; sparse_native_transfer_v1.rs authenticate_authority \
                      and authenticate_releases). Only a program can sign its own PDA, so on a \
                      validator carrying the immutable five-role release set the sole admissible \
-                     caller is the deployed Trading program -- and Trading's outer dispatch routes \
+                     caller is the deployed Trading program -- and Trading\'s outer dispatch routes \
                      everything that is not DCLTGMF1, DCLTPCB1, DCLTPCA1, or the capability seal \
                      into hot_v3::process_hot_execution_v3. So the whole of post-Open Claims life \
                      is behind the Hot gate, not just Direct fills. There is no wallet-constructible \
@@ -256,7 +332,7 @@ fn gap_register() -> Vec<GapV1> {
                 "custody/process_instruction#CloseVault".into(),
             ],
             owner: "W2i (Trading Hot gate)".into(),
-            reason: "Custody's nine-account common prefix has the same shape: index 0 is a signing \
+            reason: "Custody\'s nine-account common prefix has the same shape: index 0 is a signing \
                      CallerAuthority PDA and index 4 is the caller program, re-authenticated \
                      against the activation cache. A holder cannot open, deposit to, or withdraw \
                      from a vault directly; the operation has to arrive by CPI from an activated \
@@ -264,60 +340,115 @@ fn gap_register() -> Vec<GapV1> {
                 .into(),
         },
         GapV1 {
-            stage: "resolution: deliver the Pyth provider evidence and reach Terminal".into(),
+            stage: "trading: N holders fill through the real Registry Hot continuation".into(),
             routes: vec![
-                "core/resolution::process#CreateFund".into(),
-                "core/persist_state#VerifyFundReady".into(),
-                "core/execute_provider_v3::process#ExecuteProvider".into(),
+                "registry/hot_continuation_v2::process".into(),
+                "trading/hot_v3::process_hot_execution_v3".into(),
+                "direct/ordinary_bundle_v4 (InlineOrdinary)".into(),
+            ],
+            owner: "BUNDLE (pattern 1, the artifact-derived chain-fixture builder); the packet \
+                    arithmetic below is a Registry/Direct wire decision"
+                .into(),
+            reason: "The Hot DOOR is open -- `registry_hot_continuation` is 15/15 at the real \
+                     32,768-byte heap under a 1,400,000 CU ceiling -- and this campaign still \
+                     cannot walk through it, for three independent reasons that are worth keeping \
+                     separate because they have different owners and different fixes.\n\n\
+                     (1) PRESTATE. The gate proves the bundle against a ProgramTest bank into \
+                     which the whole Direct artifact family is PLANTED: nine finalized Registry \
+                     record pairs (manifest, ProgramSetV2, CapabilityProgramV4 descriptor, \
+                     DirectExecutionConfigV1, AccountProfile, RequestProfile, Transition, Effect, \
+                     LifecyclePolicy), the capability root, the capability seal, a Claims Position \
+                     per party and two maker replay roots. The founding publishes NONE of them. \
+                     Six of those planting sites do have real routes (Registry Begin/Append/\
+                     Finalize for every record, and the seal outer, which the gate itself proves \
+                     executes) -- but the Claims Positions do not: admitting a second party a \
+                     Position is itself a Claims mutation, so the trading prestate is behind the \
+                     Hot gate that the trade is behind. That circularity is the finding, and it is \
+                     what pattern 1 has to break.\n\n\
+                     (2) SHAPE. The canonical family is not protocol-wide; it is derived for ONE \
+                     market geometry. `direct-hot/src/lib.rs` builds its AccountProfile widths from \
+                     a THREE-claim aggregate (coordinate 13 = header + 3 rows; coordinates 32/33 = \
+                     Position header + 3 rows) and a THREE-cut result domain (coordinate 18). This \
+                     campaign\'s Market is the SOL/USD range product: four outcomes, two cuts. So \
+                     even with the prestate published, the shipped artifact identities do not \
+                     describe this Market, and the family has to be regenerated per market shape. \
+                     A builder that takes the artifacts as given would bend the MARKET to the \
+                     fixture, which is the fixture-is-never-the-authority failure in its purest \
+                     form.\n\n\
+                     (3) PACKET. Computed, not measured, and it needs measuring: the harness pins \
+                     its canonical two-instruction wire at exactly 1,228 bytes with FOUR bytes of \
+                     margin under the 1,232-byte limit, and it reaches its 1,400,000 CU ceiling \
+                     through ProgramTest\'s `set_compute_max_units` bank override. A validator has \
+                     no such override: the default limit is 200,000 per instruction, so a real \
+                     submission must carry `SetComputeUnitLimit` itself. That instruction adds the \
+                     ComputeBudget program id to the static key list (a program id can never be \
+                     resolved through an address lookup table) plus its own compiled instruction: \
+                     32 + 8 = 40 bytes, for 1,268 -- 36 bytes OVER the packet limit. If that \
+                     arithmetic holds, the canonical Direct Hot continuation is provable in \
+                     ProgramTest and unsubmittable on a chain, and the fix is a wire decision at \
+                     its owner, not a campaign trick."
+                .into(),
+        },
+        GapV1 {
+            stage: "trading: replay pressure and concurrent submission".into(),
+            routes: vec!["direct/successor::MakerReplayRootV1 nonce advance".into()],
+            owner: "this tier, the day a fill executes".into(),
+            reason: "Both probes are written to run the moment a fill lands, and both are stated \
+                     here so the day they run is not the day they are designed. REPLAY: resubmit \
+                     the byte-identical bundle and require SuccessorError::NonceMismatch, surfaced \
+                     as TradingSbfError::Transition. That refusal has no on-chain test anywhere in \
+                     the tree today -- the nearest thing submits the same bundle twice inside a \
+                     mutation test whose assertion is about a corrupted byte, so a replay refusal \
+                     and a corruption refusal are indistinguishable in it. CONCURRENCY: two \
+                     holders submitting fills against the same maker in one slot; exactly one must \
+                     commit and the other must refuse on the nonce rather than both committing or \
+                     both refusing. Neither is constructible until (3) above is answered."
+                .into(),
+        },
+        GapV1 {
+            stage: "resolution: the Pyth transport carries this Market to Terminal".into(),
+            routes: vec![
+                "resolution/provider_transport_v3#Submit".into(),
+                "resolution/provider_transport_v3#Execute".into(),
                 "core/persist_state#AdmitTerminal".into(),
             ],
-            owner: "the Source/provider tier (campaign composition only)".into(),
-            reason: "A MISSING CAMPAIGN, and — as of this revision — nothing worse. The journey's \
-                     first execution reported this stage as a PROTOCOL gap: that the atomic \
-                     founding and the resolution lifecycle were mutually exclusive prestates, \
-                     because every route that mints a terminal receipt consumes a \
-                     SourceResolutionStateV2 and the only route that creates one, \
-                     core/resolution::process#CreateFund, admitted Founding+Prepaid alone, which \
-                     DCLTGMF1's commit-last open_series_market skips straight past. That was true \
-                     when it was written and is NOT true here. `edfcb24` admitted the second \
-                     prestate and `60a2101` walked it end to end against the compiled ELFs; the \
-                     gate is now resolution_fund_prestate_admissible \
-                     (programs/dclutch-core-sbf/src/resolution.rs:386), which takes \
-                     (Founding, Prepaid) OR (Open, Consumed) and refuses anything already carrying \
-                     a terminal receipt. So an atomically founded Market CAN reach a certificate, \
-                     and the two prestates this campaign leaves on the ledger -- the founded \
-                     Market at Open+Consumed and the canonical Found31 Market at Founding+Prepaid \
-                     -- are now BOTH admissible starting points. What is missing is a campaign \
-                     that composes the ladder: CreateFund, VerifyFundReady, a posted Pyth update, \
-                     a Core-driven execution, AdmitTerminal. This journey does not build one, and \
-                     that is the whole of the remaining gap."
+            owner: "the demo Market\'s own source graph (market.rs::demo_market_input), \
+                    journey-adjacent"
                 .into(),
+            reason: provider.detail.clone(),
         },
         GapV1 {
             stage: "redemption: winners redeem through terminal settlement".into(),
             routes: vec!["claims/terminal_settlement_v3::process".into()],
-            owner: "TA-CL, behind the Hot gate; and the missing resolution campaign".into(),
-            reason: "Terminal settlement needs a Market with terminal_receipt set, which needs the \
-                     resolution ladder actually driven -- reachable at this revision, but no \
-                     campaign drives it -- AND it is a SignedDeltaV3-framed Claims route, so it \
-                     carries the same signing-CallerAuthority requirement as every other Claims \
-                     mutation. The Hot gate is the structural half and would block this even on a \
-                     Market that had already reached Terminal."
+            owner: "the resolution gap above, then the Hot gate".into(),
+            reason: "Two walls, in this order. Terminal settlement needs a Market carrying a \
+                     terminal receipt, and this campaign now gets closer to one than any before it \
+                     -- the Source state exists, the three Funds are Active -- and still stops at \
+                     the provider legs for the reason the resolution gap gives. Behind that, \
+                     settlement is a SignedDeltaV3-framed Claims route and carries the same \
+                     signing-CallerAuthority requirement as every other Claims mutation, so it is \
+                     also behind the Hot gate. The loser side is worth stating precisely because \
+                     it is the half that gets skipped: a zero-payout redemption must refuse or \
+                     move exactly zero atoms, and which of the two it does is the thing to \
+                     measure, not to assume."
                 .into(),
         },
         GapV1 {
             stage: "retirement and rent closure".into(),
             routes: vec![
+                "resolution/core_v3#CloseFund".into(),
                 "core/begin_retiring::process#BeginRetiring".into(),
                 "core/retire_v1::process#Retire".into(),
                 "rent/process_close_v2#Close".into(),
             ],
-            owner: "cycle-2 retirement, behind the missing resolution campaign".into(),
-            reason: "BeginRetiring admits only Phase::Terminal, and rent close_v2 additionally \
-                     requires a retired Market plus a Core close-authority signer. Both sit behind \
-                     a Market that has reached Terminal, which is reachable at this revision and \
-                     simply not driven yet. The rent SWEEP half of recovery needs none of it and \
-                     this journey executes it."
+            owner: "the resolution gap above".into(),
+            reason: "BeginRetiring admits only Phase::Terminal and rent close_v2 additionally \
+                     requires a retired Market plus a Core close-authority signer, so the whole \
+                     retirement half sits behind the terminal receipt the provider legs would \
+                     mint. Nothing else stands in its way: `build_resolution_close_fund_v3` and \
+                     the retirement operator take the same chain-derived, non-signing frames the \
+                     funding ladder does, and this campaign already drives that ladder. The rent \
+                     SWEEP half of recovery needs none of it and this journey executes it."
                 .into(),
         },
     ]

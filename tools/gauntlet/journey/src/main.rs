@@ -47,6 +47,7 @@ mod seed;
 // ------------------------------------------------------------- this campaign
 mod journey;
 mod ledger;
+mod resolution;
 mod stages;
 
 type Result<T> = core::result::Result<T, Error>;

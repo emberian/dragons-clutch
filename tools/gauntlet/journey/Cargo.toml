@@ -37,6 +37,7 @@ dclutch-registry-svm = { path = "../../../crates/dclutch-registry-svm" }
 dclutch-release-set-contract = { path = "../../../crates/dclutch-release-set-contract" }
 dclutch-rent-contract = { path = "../../../crates/dclutch-rent-contract" }
 dclutch-resolution-codec = { path = "../../../crates/dclutch-resolution-codec" }
+dclutch-resolution-core-v3-operator = { path = "../../../crates/dclutch-resolution-core-v3-operator" }
 dclutch-source-contract = { path = "../../../crates/dclutch-source-contract" }
 dclutch-token-svm = { path = "../../../crates/dclutch-token-svm" }
 dclutch-versioned-message-operator = { path = "../../../crates/dclutch-versioned-message-operator" }

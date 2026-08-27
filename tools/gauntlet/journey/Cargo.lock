@@ -420,6 +420,7 @@ dependencies = [
  "dclutch-release-set-contract",
  "dclutch-rent-contract",
  "dclutch-resolution-codec",
+ "dclutch-resolution-core-v3-operator",
  "dclutch-source-contract",
  "dclutch-token-svm",
  "dclutch-versioned-message-operator",

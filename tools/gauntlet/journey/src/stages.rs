@@ -108,6 +108,11 @@ impl MarketAddressesV1 {
 pub(crate) struct HolderV1 {
     pub(crate) label: String,
     pub(crate) owner: Keypair,
+    /// The collateral account's key, held only until the distribution stage
+    /// creates it. It is drawn before the ledger's first census so the census
+    /// preceding the creation records a checked vacancy at that address; see
+    /// `plan_holders`.
+    pub(crate) token: Option<Keypair>,
     pub(crate) token_account: Pubkey,
 }
 
@@ -122,6 +127,7 @@ pub(crate) fn admit_open_market(
     addresses: &MarketAddressesV1,
     evidence: &BTreeMap<String, AccountEvidence>,
     custody_program: Pubkey,
+    rent_program: Pubkey,
     ledger: &mut ConservationLedgerV1,
 ) -> Result<(u64, u8)> {
     let market = rpc.required_account(addresses.founding_market, "founded Market")?;
@@ -234,6 +240,32 @@ pub(crate) fn admit_open_market(
             ledger.watch(label, address);
         }
     }
+
+    // Every lifecycle credit's refund wallet, discovered the same way. L6 asks
+    // where a closed account's rent went and L7 asks where the payer's lamports
+    // landed; both answers name a wallet whose address is inside a credit's own
+    // immutable bytes, so the wallets are read out of the credits rather than
+    // assumed to be the founder. Registering them HERE, before the first
+    // census, is what lets L7 difference them at every later boundary instead
+    // of meeting them for the first time already holding a swept surplus.
+    for (label, recorded) in evidence {
+        if recorded.data_len != LIFECYCLE_RENT_CREDIT_BYTES_V2
+            || recorded.owner != rent_program.to_string()
+        {
+            continue;
+        }
+        let address = pubkey(&recorded.address)?;
+        let Some(account) = rpc.account(address)? else {
+            continue;
+        };
+        let Ok(credit) = LifecycleRentCreditV2::decode(&account.data) else {
+            continue;
+        };
+        ledger.watch(
+            &format!("{label}_refund_wallet"),
+            Pubkey::new_from_array(credit.refund_wallet().to_bytes()),
+        );
+    }
     Ok((claim_unit_atoms, decimals))
 }
 
@@ -245,22 +277,53 @@ pub(crate) fn admit_open_market(
 /// them is a Claims mutation, which the journey records as its named gap. The
 /// distinction matters and the transcript keeps it: nothing here mints, moves,
 /// or implies a single unit of any outcome.
+/// Draw the N holders and register them with the ledger before anything runs.
+///
+/// This is split out of the distribution stage on purpose. The ledger's L7
+/// differences every watched account between consecutive censuses, and an
+/// account that first appears at the boundary that created it has no
+/// predecessor balance — so L7 would have to report `inapplicable` at exactly
+/// the stage that spends the most lamports. Drawing the keys up front and
+/// registering the addresses means the census BEFORE the distribution sees each
+/// holder as a real, checked vacancy, and the law applies across the stage that
+/// funds them.
+pub(crate) fn plan_holders(
+    holder_count: u32,
+    ledger: &mut ConservationLedgerV1,
+) -> Result<Vec<HolderV1>> {
+    if holder_count == 0 {
+        return Err(Error::new(
+            "a journey with no holders is the founding again; --holders must be positive",
+        ));
+    }
+    let mut holders = Vec::with_capacity(holder_count as usize);
+    for index in 0..holder_count {
+        let owner = Keypair::new();
+        let token = Keypair::new();
+        let label = format!("holder_{index}");
+        ledger.track_token_account(&label, token.pubkey());
+        holders.push(HolderV1 {
+            label,
+            owner,
+            token_account: token.pubkey(),
+            token: Some(token),
+        });
+    }
+    Ok(holders)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn distribute_collateral(
     rpc: &mut Rpc,
     addresses: &MarketAddressesV1,
     payer: &Keypair,
     decimals: u8,
-    holder_count: u32,
-    ledger: &mut ConservationLedgerV1,
+    holders: &mut [HolderV1],
     transactions: &mut Vec<TransactionEvidence>,
     accounts: &mut BTreeMap<String, AccountEvidence>,
-) -> Result<(Vec<HolderV1>, StageReportV1)> {
-    if holder_count == 0 {
-        return Err(Error::new(
-            "a journey with no holders is the founding again; --holders must be positive",
-        ));
-    }
+) -> Result<(StageReportV1, u64)> {
+    let holder_count = u32::try_from(holders.len())
+        .map_err(|_| Error::new("holder count exceeded a u32, which no load knob needs"))?;
     let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
     let wallet_rent = rpc.minimum_balance(ACCOUNT_BYTES)?;
     let founder_before = {
@@ -286,13 +349,15 @@ pub(crate) fn distribute_collateral(
     // nothing to send.
     let share = founder_before / u64::from(holder_count).saturating_add(1);
 
-    let mut holders = Vec::with_capacity(holder_count as usize);
     let mut compute_units = 0_u64;
     let mut submitted = 0_usize;
-    for index in 0..holder_count {
-        let owner = Keypair::new();
-        let token = Keypair::new();
-        let label = format!("holder_{index}");
+    let mut fees = 0_u64;
+    for (index, holder) in holders.iter_mut().enumerate() {
+        let token = holder.token.take().ok_or_else(|| {
+            Error::new("a holder's token keypair was already consumed; distribution runs once")
+        })?;
+        let owner = &holder.owner;
+        let label = holder.label.clone();
         let mut initialize = Vec::with_capacity(33);
         initialize.push(INITIALIZE_ACCOUNT_3);
         initialize.extend_from_slice(owner.pubkey().as_ref());
@@ -336,6 +401,7 @@ pub(crate) fn distribute_collateral(
             &[&token],
         )?;
         compute_units = compute_units.saturating_add(evidence.compute_units_consumed.unwrap_or(0));
+        fees = fees.saturating_add(evidence.fee_lamports.unwrap_or(0));
         submitted += 1;
         transactions.push(evidence);
 
@@ -351,13 +417,10 @@ pub(crate) fn distribute_collateral(
                 "{label} did not reach the exact funded holder poststate"
             )));
         }
-        accounts.insert(format!("journey_{label}"), account_evidence(token.pubkey(), &account));
-        ledger.track_token_account(&label, token.pubkey());
-        holders.push(HolderV1 {
-            label,
-            owner,
-            token_account: token.pubkey(),
-        });
+        accounts.insert(
+            format!("journey_{label}"),
+            account_evidence(token.pubkey(), &account),
+        );
     }
 
     let (outcome, note) = if share > 0 {
@@ -388,7 +451,6 @@ pub(crate) fn distribute_collateral(
         )
     };
     Ok((
-        holders,
         StageReportV1 {
             stage: "post-open life: collateral distribution".into(),
             outcome: outcome.into(),
@@ -396,6 +458,7 @@ pub(crate) fn distribute_collateral(
             compute_units,
             note,
         },
+        fees,
     ))
 }
 
@@ -410,22 +473,26 @@ pub(crate) fn holder_to_holder(
     decimals: u8,
     holders: &[HolderV1],
     transactions: &mut Vec<TransactionEvidence>,
-) -> Result<StageReportV1> {
+) -> Result<(StageReportV1, u64)> {
     if holders.len() < 2 {
-        return Ok(StageReportV1 {
-            stage: "post-open life: holder-to-holder collateral".into(),
-            outcome: "blocked".into(),
-            transactions: 0,
-            compute_units: 0,
-            note: "a holder-to-holder transfer needs at least two holders; run with --holders 2 or \
-                   more."
-                .into(),
-        });
+        return Ok((
+            StageReportV1 {
+                stage: "post-open life: holder-to-holder collateral".into(),
+                outcome: "blocked".into(),
+                transactions: 0,
+                compute_units: 0,
+                note: "a holder-to-holder transfer needs at least two holders; run with --holders \
+                       2 or more."
+                    .into(),
+            },
+            0,
+        ));
     }
     let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
     let mut compute_units = 0_u64;
     let mut submitted = 0_usize;
     let mut moved = 0_u64;
+    let mut fees = 0_u64;
     // One hop around the ring: every holder both sends and receives, so no
     // holder's balance is left untouched by the stage the ledger then checks.
     for index in 0..holders.len() {
@@ -466,6 +533,7 @@ pub(crate) fn holder_to_holder(
             &[&source.owner],
         )?;
         compute_units = compute_units.saturating_add(evidence.compute_units_consumed.unwrap_or(0));
+        fees = fees.saturating_add(evidence.fee_lamports.unwrap_or(0));
         submitted += 1;
         moved = moved.saturating_add(amount);
         transactions.push(evidence);
@@ -493,13 +561,16 @@ pub(crate) fn holder_to_holder(
             ),
         )
     };
-    Ok(StageReportV1 {
-        stage: "post-open life: holder-to-holder collateral".into(),
-        outcome: outcome.into(),
-        transactions: submitted,
-        compute_units,
-        note,
-    })
+    Ok((
+        StageReportV1 {
+            stage: "post-open life: holder-to-holder collateral".into(),
+            outcome: outcome.into(),
+            transactions: submitted,
+            compute_units,
+            note,
+        },
+        fees,
+    ))
 }
 
 /// Recover the rent the founding accumulated, and prove the floor holds.
@@ -520,7 +591,7 @@ pub(crate) fn recover_rent(
     evidence: &BTreeMap<String, AccountEvidence>,
     payer: &Keypair,
     transactions: &mut Vec<TransactionEvidence>,
-) -> Result<StageReportV1> {
+) -> Result<(StageReportV1, u64)> {
     let rent_program = pubkey(&plan.rent_credit.program_id)?;
     let minimum = rpc.minimum_balance(LIFECYCLE_RENT_CREDIT_BYTES_V2)?;
 
@@ -571,18 +642,21 @@ pub(crate) fn recover_rent(
         .max_by_key(|(_, _, lamports)| *lamports)
         .cloned()
     else {
-        return Ok(StageReportV1 {
-            stage: "rent recovery".into(),
-            outcome: "blocked".into(),
-            transactions: 0,
-            compute_units: 0,
-            note: format!(
-                "none of the {} lifecycle credits the founding left holds more than the \
-                 {minimum}-lamport rent minimum ({census}), so there is no surplus to sweep and \
-                 rent/process_sweep_v2#Sweep stays unexecuted.",
-                credits.len()
-            ),
-        });
+        return Ok((
+            StageReportV1 {
+                stage: "rent recovery".into(),
+                outcome: "blocked".into(),
+                transactions: 0,
+                compute_units: 0,
+                note: format!(
+                    "none of the {} lifecycle credits the founding left holds more than the \
+                     {minimum}-lamport rent minimum ({census}), so there is no surplus to sweep \
+                     and rent/process_sweep_v2#Sweep stays unexecuted.",
+                    credits.len()
+                ),
+            },
+            0,
+        ));
     };
     let surplus = credit_lamports.saturating_sub(minimum);
 
@@ -618,6 +692,7 @@ pub(crate) fn recover_rent(
         payer,
     )?;
     compute_units = compute_units.saturating_add(refused.compute_units_consumed.unwrap_or(0));
+    let mut fees = refused.fee_lamports.unwrap_or(0);
     transactions.push(refused);
     let after_refusal = rpc.required_account(credit_address, "lifecycle RentCreditV2")?;
     if after_refusal.lamports != credit.lamports {
@@ -626,7 +701,10 @@ pub(crate) fn recover_rent(
         ));
     }
 
-    let wallet_before = rpc.account(wallet)?.map(|value| value.lamports).unwrap_or(0);
+    let wallet_before = rpc
+        .account(wallet)?
+        .map(|value| value.lamports)
+        .unwrap_or(0);
     let payer_before = rpc
         .account(payer.pubkey())?
         .map(|value| value.lamports)
@@ -640,6 +718,7 @@ pub(crate) fn recover_rent(
     let fee = executed
         .fee_lamports
         .ok_or_else(|| Error::new("the sweep transaction omitted its exact fee"))?;
+    fees = fees.saturating_add(fee);
     transactions.push(executed);
 
     let after = rpc.required_account(credit_address, "lifecycle RentCreditV2")?;
@@ -691,17 +770,20 @@ pub(crate) fn recover_rent(
         }
     }
 
-    Ok(StageReportV1 {
-        stage: "rent recovery".into(),
-        outcome: "executed".into(),
-        transactions: 2,
-        compute_units,
-        note: format!(
-            "swept {surplus} lamports of accumulated lifecycle rent out of `{credit_label}` to \
-             the immutable refund wallet that credit itself names, leaving exactly the \
-             {minimum}-lamport rent minimum, after proving a sweep of one lamport more refuses \
-             and moves nothing. The credit was found by surplus, not by name, across every \
-             lifecycle credit the founding left ({census})."
-        ),
-    })
+    Ok((
+        StageReportV1 {
+            stage: "rent recovery".into(),
+            outcome: "executed".into(),
+            transactions: 2,
+            compute_units,
+            note: format!(
+                "swept {surplus} lamports of accumulated lifecycle rent out of `{credit_label}` \
+                 to the immutable refund wallet that credit itself names, leaving exactly the \
+                 {minimum}-lamport rent minimum, after proving a sweep of one lamport more \
+                 refuses and moves nothing. The credit was found by surplus, not by name, across \
+                 every lifecycle credit the founding left ({census})."
+            ),
+        },
+        fees,
+    ))
 }

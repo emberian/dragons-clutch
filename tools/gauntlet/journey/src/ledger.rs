@@ -45,6 +45,18 @@
 //! arrive at the declared beneficiary. Rent is the one value in the system that
 //! is not collateral and still must not evaporate.
 //!
+//! **L7 lamport accounting.** The fee payer's lamports move by exactly the fees
+//! its own transactions paid, plus whatever landed in an account this ledger
+//! watches. This is the law the other six cannot state, and the trading stages
+//! are what forced it: L1..L5 are about collateral ATOMS and say nothing about
+//! the lamport side of a fill, and L6 only fires when a watched account CLOSES,
+//! so a route that quietly debited whoever submitted it — or that placed rent
+//! into an account nobody named — passes all six. Stated as
+//! `payer_delta + fees + watched_growth == 0`, it is the general form of the
+//! per-transaction check the rent-sweep stage already made by hand for one
+//! route ("the fee payer moved by exactly the fee and nothing else"), and it is
+//! exactly the "debit == credit + fee" claim a fill has to satisfy.
+//!
 //! A law that cannot be evaluated at a given boundary — no aggregate yet, no
 //! Hoard yet — is recorded as `Inapplicable` with the reason. It is never
 //! silently skipped: a law that quietly stops applying is how a conservation
@@ -61,10 +73,43 @@ use solana_sdk::pubkey::Pubkey;
 
 use crate::{Error, Result, rpc::Rpc};
 
+/// What a stage claims about the lamports it moved, for L7.
+///
+/// `fees_lamports` is never a prediction: it is summed off the stage's own
+/// transaction evidence, so L7 compares the chain against what the chain
+/// charged rather than against a number this campaign chose.
+#[derive(Clone, Debug, Default, Serialize)]
+pub(crate) struct LamportClaimV1 {
+    /// Fees the stage's own transactions paid, summed from their evidence.
+    pub(crate) fees_lamports: u64,
+    /// Why L7 cannot be evaluated at this boundary, when it cannot. A stage
+    /// that cannot account for its lamports says so; it never stays silent.
+    pub(crate) inapplicable: Option<String>,
+}
+
+impl LamportClaimV1 {
+    /// A stage whose lamport movement this ledger does not account for, and why.
+    pub(crate) fn inapplicable(reason: impl Into<String>) -> Self {
+        Self {
+            fees_lamports: 0,
+            inapplicable: Some(reason.into()),
+        }
+    }
+
+    /// A stage that paid exactly these fees and placed everything else in
+    /// accounts the ledger watches.
+    pub(crate) fn fees(fees_lamports: u64) -> Self {
+        Self {
+            fees_lamports,
+            inapplicable: None,
+        }
+    }
+}
+
 /// One law's outcome at one stage boundary.
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct VerdictV1 {
-    /// `L1`..`L6`.
+    /// `L1`..`L7`.
     pub(crate) law: String,
     /// `holds`, `violated`, or `inapplicable`.
     pub(crate) status: String,
@@ -125,6 +170,10 @@ pub(crate) struct ObservationV1 {
     /// Collateral atoms the stage said it would move in or out of the Hoard,
     /// signed. Zero is the strong claim, not the absent one.
     pub(crate) declared_hoard_delta: i128,
+    /// What the stage claims about the lamports it moved.
+    pub(crate) lamports: LamportClaimV1,
+    /// The fee payer's lamports at this census.
+    pub(crate) payer_lamports: u64,
     pub(crate) mint_supply: u64,
     /// label -> raw atoms, for every tracked collateral token account.
     pub(crate) token_atoms: BTreeMap<String, u64>,
@@ -149,6 +198,9 @@ pub(crate) struct ConservationLedgerV1 {
     aggregate: Option<Pubkey>,
     /// Collateral atoms one claim of one outcome is worth.
     claim_unit_atoms: u64,
+    /// The key that pays for every journey-owned transaction. L7 is stated
+    /// about this account because it is the only one every stage debits.
+    payer: Pubkey,
     token_accounts: BTreeMap<String, Pubkey>,
     positions: BTreeMap<String, Pubkey>,
     watched: BTreeMap<String, Pubkey>,
@@ -161,12 +213,13 @@ impl ConservationLedgerV1 {
     /// The Hoard, the aggregate and the claim unit are not known until the
     /// founding commits, so they are admitted later. Until then the laws that
     /// need them record themselves inapplicable rather than vanishing.
-    pub(crate) fn new(mint: Pubkey) -> Self {
+    pub(crate) fn new(mint: Pubkey, payer: Pubkey) -> Self {
         Self {
             mint,
             hoard: None,
             aggregate: None,
             claim_unit_atoms: 0,
+            payer,
             token_accounts: BTreeMap::new(),
             positions: BTreeMap::new(),
             watched: BTreeMap::new(),
@@ -218,7 +271,12 @@ impl ConservationLedgerV1 {
         stage: &str,
         declared_collateral_delta: i128,
         declared_hoard_delta: i128,
+        lamports: LamportClaimV1,
     ) -> Result<()> {
+        let payer_lamports = rpc
+            .account(self.payer)?
+            .map(|account| account.lamports)
+            .unwrap_or(0);
         let slot = rpc.finalized_slot()?;
         let mint_account = rpc.required_account(self.mint, "collateral Mint")?;
         let mint_bytes = mint_account
@@ -332,6 +390,8 @@ impl ConservationLedgerV1 {
             slot,
             declared_collateral_delta,
             declared_hoard_delta,
+            lamports,
+            payer_lamports,
             mint_supply: mint.supply,
             token_atoms,
             tracked_collateral,
@@ -547,7 +607,99 @@ impl ConservationLedgerV1 {
             }
         });
 
+        // L7 lamport accounting.
+        verdicts.push(self.evaluate_lamports(now));
+
         verdicts
+    }
+
+    /// L7: the payer's lamports moved by exactly its fees plus what landed in
+    /// accounts this ledger watches.
+    ///
+    /// The growth term is summed only over labels present at BOTH boundaries.
+    /// A label the stage introduced has no predecessor balance to subtract, and
+    /// silently treating its whole balance as growth would let a stage admit an
+    /// account into the ledger and its own leak in the same breath. So a
+    /// boundary that introduced a watched label reports `inapplicable` and
+    /// NAMES the labels, rather than reporting a green it did not earn.
+    fn evaluate_lamports(&self, now: &ObservationV1) -> VerdictV1 {
+        if let Some(reason) = &now.lamports.inapplicable {
+            return VerdictV1::inapplicable("L7", reason);
+        }
+        let Some(previous) = self.observations.last() else {
+            return VerdictV1::inapplicable("L7", "the first census has no predecessor");
+        };
+        let introduced: Vec<&str> = now
+            .accounts
+            .keys()
+            .filter(|label| !previous.accounts.contains_key(*label))
+            .map(String::as_str)
+            .collect();
+        if !introduced.is_empty() {
+            return VerdictV1::inapplicable(
+                "L7",
+                &format!(
+                    "this boundary admitted {} account(s) the previous census did not watch ({}), \
+                     so their balances have no predecessor to difference against; L7 resumes at \
+                     the next boundary",
+                    introduced.len(),
+                    introduced.join(", ")
+                ),
+            );
+        }
+        let mut watched_growth: i128 = 0;
+        for (label, after) in &now.accounts {
+            let Some(before) = previous.accounts.get(label) else {
+                continue;
+            };
+            watched_growth += i128::from(after.lamports) - i128::from(before.lamports);
+        }
+        let payer_delta = i128::from(now.payer_lamports) - i128::from(previous.payer_lamports);
+        // The payer may itself be a watched account; counting it on both sides
+        // would make the law assert an identity. Subtract it back out.
+        let payer_label_growth: i128 = now
+            .accounts
+            .iter()
+            .filter(|(label, state)| {
+                state.address == self.payer.to_string()
+                    && previous.accounts.contains_key(label.as_str())
+            })
+            .map(|(label, after)| {
+                let before = previous
+                    .accounts
+                    .get(label)
+                    .map(|state| state.lamports)
+                    .unwrap_or(0);
+                i128::from(after.lamports) - i128::from(before)
+            })
+            .sum();
+        let residual = payer_delta + i128::from(now.lamports.fees_lamports) + watched_growth
+            - payer_label_growth;
+        if residual == 0 {
+            VerdictV1::holds(
+                "L7",
+                format!(
+                    "the payer moved {payer_delta} lamports since `{}`, its transactions paid {} in \
+                     fees, and watched accounts gained {}; debit == credit + fee",
+                    previous.stage,
+                    now.lamports.fees_lamports,
+                    watched_growth - payer_label_growth
+                ),
+            )
+        } else {
+            VerdictV1::violated(
+                "L7",
+                format!(
+                    "the payer moved {payer_delta} lamports since `{}` and its transactions paid {} \
+                     in fees, but watched accounts gained {}; {residual} lamports are unaccounted \
+                     for. L1..L6 cannot see this: they are stated about collateral atoms and about \
+                     accounts that CLOSE, and nothing closed here.",
+                    previous.stage,
+                    now.lamports.fees_lamports,
+                    watched_growth - payer_label_growth
+                ),
+            )
+        }
     }
 
     /// Every census taken, in order.
