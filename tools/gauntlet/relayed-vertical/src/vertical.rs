@@ -215,6 +215,36 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
     // owes.
     ledger.track_token_account("founder_wallet", founder_wallet);
     ledger.track_position("founder_position", founder_position);
+    // L1 is only as total as the set it names, so the rest of the collateral
+    // partition is DISCOVERED, exactly as the journey does it: every address
+    // the founding recorded is re-read live, and any live Token-2022 account
+    // of this Mint joins the partition (the tier-1 campaign leaves collateral
+    // in more wallets than the founder's — the abort lane's refund wallet
+    // held half the supply on the first executed walk).
+    {
+        let token_program =
+            Pubkey::new_from_array(dclutch_token_svm::TOKEN_2022_PROGRAM_ID);
+        let recorded: Vec<(String, Pubkey)> = session
+            .accounts
+            .iter()
+            .map(|(label, evidence)| Ok((label.clone(), pubkey(&evidence.address)?)))
+            .collect::<Result<_>>()?;
+        for (label, address) in recorded {
+            if address == founder_wallet || address == hoard {
+                continue;
+            }
+            let Some(account) = session.rpc.account(address)? else {
+                continue;
+            };
+            let is_collateral = account.owner == token_program
+                && dclutch_token_svm::TokenAccount::parse(&account.data)
+                    .map(|parsed| parsed.mint == mint.to_bytes())
+                    .unwrap_or(false);
+            if is_collateral {
+                ledger.track_token_account(&label, address);
+            }
+        }
+    }
 
     // Keep the campaign payer comfortably funded for the publications and the
     // prepaid outputs; this is fee-side lamports, not market collateral.
