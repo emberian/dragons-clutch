@@ -80,138 +80,154 @@ spec contains semantic market inputs—not account addresses or caller-authored
 digests. The Rust compiler and chain-derived operators own every record digest,
 PDA, instruction frame, and next publication action.
 
-## The current stopping point
+## What the campaign reaches: an Open Market
 
 Measured on a real localhost validator with all seven real artifacts bound into
-the release set: the campaign publishes the record graph, creates the Market
-through canonical Core Found31 at **232,537** compute units (16.6% of Solana's
-1,400,000 maximum), and then **attempts `DCLTPCB1` at its own generation and
-fails**.
-
-That failure is this runner's most useful current output, so it is stated first:
+the release set. The campaign publishes the record graph, creates a Market
+through canonical Core Found31, stages the entire projected-Custody prestate
+through `DCLTPCB1` at its own generation, and then founds a *second* Market
+atomically through `DCLTGMF1`.
 
 ```text
-Program log: Error: memory allocation failed, out of memory
-Program <trading> consumed 561,101 of 1,399,700 compute units
+slot=1444 cu=223540   create canonical Found31 Market
+slot=2021 cu=754119   create the projected-Custody founding prestate (DCLTPCB1)
+slot=2630 cu=1184132  found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF1)
 ```
 
-Custody's `Initialize` (340,799 CU, including the Core `ProjectFound` CPI) and
-`OpenHoard` (109,545 CU, including the Token-2022 vault initialization) both
-succeed. The route then exhausts the program heap entering
-`OpenSourceCompartment`, with **838,599 compute units unspent**. The four-stage
-ladder is heap-bound, not compute-bound.
+**The Market is Open.** One transaction carries five stages in one rollback
+domain — Custody `LockHoardAndCloseSource`, Core Found-and-permit, Custody
+`RealizeAndClose`, Claims `FoundingV5`, and Core Open **last** — at 84.6% of
+Solana's 1,400,000 compute maximum:
 
-**No runner can fix this.** Requesting a 256 KiB heap frame was tried and
-measured to change nothing: `RequestHeapFrame` enlarges the region the runtime
-grants, while `solana-program-entrypoint` builds its `BumpAllocator` with the
-compile-time constant `HEAP_LENGTH = 32 * 1024` and never asks how much it was
-actually given (`solana-program-entrypoint-3.1.1/src/lib.rs:39,226`). The bound
-is program-side and belongs to `projected_custody_bootstrap_v1`, which holds
-three stages' worth of allocations live against an allocator that never frees.
+| stage | program | CU |
+|---|---|---:|
+| Lock (Registry reauth 27,562; Token-2022 `TransferChecked` and `CloseAccount`) | Custody | 105,722 |
+| Found and permit (Registry reauth 48,071) | Core | 414,957 |
+| Realize (Registry reauth 27,562) | Custody | 87,222 |
+| Claims `FoundingV5` (four Registry reauths) | Claims | 260,279 |
+| Open, commit-last, plus the outer's five joins — **arithmetic**, the RPC truncated the log | Core + Trading | 315,652 |
 
 Release-set activation is one role per transaction; the worst of the five is
-Trading at **717,496** CU, 51.3% of the maximum.
+Trading at 710,601 CU.
 
-Found31's figure is also a correction. This file previously said it exhausted
-the compute maximum outright, and then that it cost "about 247,000". Both are
-superseded by measurement. The original cause was on-chain hashing of whole
-ProgramData ELFs at about one compute unit per two bytes, with the ~1.0 MB Core
-ELF hashed twice in one transaction; `c61376d` fixed it at two sites needing
-opposite treatments, and nothing was weakened - the fast path additionally
-requires the immutable policy and an absent live upgrade authority, which the
-hashing path never demanded on its own.
+### `DCLTPCB1` is no longer heap-bound, and it never was program-side
 
-**The Market is Found, not Open.**
+This file used to say that the four-stage bootstrap exhausted the program heap
+entering `OpenSourceCompartment` and that **no runner could fix it**, because
+`RequestHeapFrame` enlarges the region the runtime grants while the stock
+`solana-program-entrypoint` allocator is built with the compile-time constant
+`HEAP_LENGTH = 32 * 1024`. That was true of the tree that measured it.
 
-## Why `DCLTGMF1` is not built here
+`9abed0c` gave Trading its own entrypoint and its own allocator, which
+re-derives the grant from the instructions sysvar under agave's own
+`sanitize_requested_heap_size`, and allowed exactly two routes to lift the
+ceiling: `DCLTGMF1` and `DCLTPCB1`. That still did nothing, for a reason worth
+recording: the adapter finds the sysvar by scanning the **top-level
+instruction's own account list**, and neither route presented it. **The grant
+was a wire fact, not a transaction fact.** Both routes now carry one
+authenticated readonly sysvar slot in their fixed prefix, and both founding
+transactions carry `ComputeBudget::RequestHeapFrame`. Frame widths moved by one:
+`DCLTPCB1` 78 → 79 fixed (82 here), `DCLTGMF1` `134 + funding_count` →
+`135 + funding_count` (138 here).
 
-**Not because it cannot succeed.** It could not, until `dba22b5`. Core's Found
-stage authenticates the liability basis as a **Registry**-owned `ProductBasisV3`
-(magic `DCLTPAY3`, schema `GRADED_BASIS_RECORD_SCHEMA_ID_V3`, semantic domain
-`dclutch/product-basis/semantic/v3`) and writes that record's digest and
-semantic identity into the `ClaimsFoundingRequestV5` it commits to inside the
-one-shot permit. Claims `FoundingV5` then demanded an account carrying **that
-same digest** which decoded as a legacy **Core**-owned `LinkedBasisRecordV2`
-(magic `DCLTLNK2`, length 224 or 248). Equal digests mean equal bytes, and no
-byte string is both records — so the Lock → Found/permit → Realize → Claims →
-Open chain was unsatisfiable, and this runner did not ship a stage that pretends.
+With the grant reaching the route, `DCLTPCB1` completes all four stages with
+645,581 CU unspent. It is neither heap-bound nor compute-bound.
 
-The Claims lane has since made `FoundingV5` authenticate the basis Core actually
-commits and deleted the legacy path. **This campaign already publishes exactly
-that record**, so nothing here needed to change: the founding outer is now
-satisfiable and simply has not been built.
+### Five pre-fundings, two of them exact
 
-What building it needs, recorded because establishing it was most of this lane's
-cost:
+Nothing in the protocol funds these. Core allocates the Market and the one-shot
+founding permit and Claims allocates the aggregate, the founder Position, and
+the admission with `allocate` + `assign` only — **never a transfer**.
 
-- **137 accounts** (`134 + funding_count`): four readonly raw-request accounts,
-  then Lock (14), Found (`34 + funding_count + 15`), Realize (12), Claims (32),
-  Open (23), over the same `publish_routing_table` machinery `DCLTPCB1` uses.
-- **No account in the frame may be a transaction-level signer** — every stage's
-  signer is a PDA under `invoke_signed` — so the fee payer must be a key that
-  appears nowhere in it.
-- **Four pre-fundings, not three.** Claims `FoundingV5` allocates the aggregate,
-  the founder Position, and the admission with `allocate` + `assign` and never
-  transfers, so all three vacant program addresses need
-  `rent.minimum_balance(width)`. The fourth is the Found caller-authority PDA:
-  index 0 of the Found sub-frame is both the Trading caller PDA and Core's
-  `payer`, and `FoundAccounts::parse` requires it signer-and-writable.
-- The prestate `DCLTPCB1` leaves is exactly what its Lock stage consumes, so the
-  two stages compose without a third party agreeing about anything.
+| account | requirement |
+|---|---|
+| Market | `lamports == rent.minimum_balance(352)` **exactly** — an over-funded Market refuses |
+| one-shot permit | `lamports == rent.minimum_balance(608)` **exactly** |
+| Claims aggregate | at least `rent.minimum_balance(256 + 8·claim_count)` |
+| founder Position | at least `rent.minimum_balance(128 + 8·claim_count)` |
+| Claims admission | at least `rent.minimum_balance(512)` |
 
-## What the campaign does reach
+All three Claims balances are **digest-bearing**: Core reads them at the Found
+stage and folds them into the Claims request it commits to inside the permit, so
+a pre-funding one lamport off does not overpay — it moves a digest and refuses
+at Claims. Earlier revisions of this file said three, then four. The Found
+caller-authority PDA, the fourth, needs nothing: the Market being exactly
+rent-funded makes the kernel's Market rent top-up zero and the payer transfer is
+skipped.
 
-## What the campaign does reach
+### The runner authors no digest
 
-Every protocol gap W1b, W1c, and W1d found on the *prestate* path is closed, and
-the first two stages are now **executed** rather than merely assemblable:
+The founding commits to values that do not exist yet, and the campaign's
+discipline survives that. The Lock and Realize receipts are produced by running
+the Custody kernel's own transitions over the exact prestate bytes `DCLTPCB1`
+left on chain — the `SourceFunded` projection and its normal source replay are
+read back, not modelled. The permit intent and the Claims request are assembled
+from the same authenticated coordinates, in the same order, that Core rebuilds
+inside the Found stage. The one value that cannot be read back is the candidate
+Core state the Found stage will write, whose digest the Realize receipt commits
+to two stages early; every field of it is fixed by the kernel, and the encoding
+is cross-checked by re-encoding the Found31 Market's own decoded state and
+requiring the bytes the chain is holding.
 
-- the founding capability root — derived, never created (`728299a`,
-  `docs/decisions/0004-founding-capability-root.md`). Core derives the root
-  address from the authenticated Market-selected capability manifest entry and
-  never persists or reads a root account at founding.
-- the projected replay and the Hoard vault (`28d2da6`), the funded source
-  compartment (`d3ba6a1`), and the capability `FundingState`s (`2fffe79`) — all
-  four staged by `DCLTPCB1` in one rollback domain, against a Market that does
-  not exist yet, without weakening normal Custody's live-Market membrane. The
-  first two of the four execute on chain; the third is where the heap runs out.
-- the liability basis the Product declares — published for the first time
-  (`4b12ee1`). It had never existed; Found31 does not read it and nothing
-  noticed.
+### Final poststate
 
-The bootstrap stage runs two adversarial cases against the real chain, both
-asserting the whole four-stage domain leaves nothing behind. One is sound:
-a well-formed but **non-terminal** projected-Custody request in the terminal
-slot refuses at 16,396 CU, inside `decode_projected_request` and before any CPI.
+| account | owner | bytes | contents |
+|---|---|---:|---|
+| Market | Core | 352 | phase **`Open`**, readiness **`Consumed`**, no terminal receipt, derived identity, rent beneficiary the founding generation's credit |
+| Claims aggregate | Claims | 288 | `256 + 8×4` for a four-outcome Product |
+| founder Position | Claims | 160 | `128 + 8×4` |
+| Claims admission | Claims | 512 | |
+| Hoard vault | Token-2022 | 165 | the exact founding principal, `Initialized`, no delegate or close authority |
+| normal Custody replay | Custody | 288 | realized in place from the 808-byte projection, one open vault, `next_revision == 1` |
+| source vault, source replay, permit | — | — | **closed / consumed**, all three returned to the lifecycle credit |
 
-The other is **not yet evidence, and is recorded as such**. The **reordered
-FundingState tail** case refuses, but at 561,607 CU against an out-of-memory
-death at 561,101 — it is refusing on the allocator, in the same place the honest
-transaction dies, not on the manifest binding it claims to test. A refusal whose
-compute profile matches an unrelated crash is not attributable to the coordinate
-under test. Its discriminator is the honest transaction succeeding with an
-identical frame shape, which waits on the heap bound above.
+### The hostile cases
 
-Four things the frame forced, recorded because each fails late and opaquely:
+Six, all executed against the real chain, all required to fail and to leave no
+poststate behind.
 
-- The founding runs at **its own generation**. Every projected-Custody stage
-  asserts the inverse of a live Market and Core's projection requires the Market
-  vacant, so the Found31 Market cannot be reused.
-- The **principal supplier is not the rent payer**: Custody requires the source
-  funder's owner to sign while non-writable, and the payer must be writable.
-  Privileges are per key, not per index.
-- The projection sub-frame's payer slot is a **rent-capacity witness** — a
-  distinct funded readonly key, because `parse_project` requires it unsigned and
-  unwritable while the kernel still debits the Market rent against its lamports.
+- **`DCLTGMF1` refuses a substituted Claims request**, 33,594 CU,
+  `TradingSbfError::Content` raised before Trading's first CPI. The substituted
+  readonly record differs in exactly one coordinate — the **founder** whose
+  Position and admission the founding mints — and is otherwise byte-identical.
+  Lock, Found, Realize, and Claims all roll back; the runner requires a fee-only
+  debit and all five allocated accounts still vacant.
+- **`DCLTPCB1` refuses a reordered FundingState tail**, 685,198 CU. Earlier runs
+  recorded this case as *not evidence*, because it refused within a few hundred
+  CU of an out-of-memory death at the same place. It is attributable now: the
+  honest transaction succeeds with an identical frame shape at 754,119, so the
+  refusal is 68,921 CU short of anywhere the honest path ends.
+- **`DCLTPCB1` refuses a well-formed but non-terminal request**, 22,860 CU,
+  inside `decode_projected_request` before any CPI.
+- plus the three Found31 and Registry cases this file already described.
+
+### What the frame forced
+
+- The founding runs at **its own generation**: every projected-Custody stage
+  asserts the inverse of a live Market, so the Found31 Market cannot be reused.
+- The **principal supplier is not the rent payer**, and the beneficiary is named
+  once — Custody requires the principal's owner to sign while non-writable and
+  the payer to be writable, and privileges are per key. The same key is the
+  founding artifact's `beneficiary`, the Lock's `refund_owner`, the owner of the
+  Token-2022 source wallet, and the lifecycle credit's refund wallet.
+- **No account in the `DCLTGMF1` frame is a transaction-level signer**, so the
+  fee payer is the one key that appears nowhere in it. **65 distinct keys**,
+  eleven of them writable, against agave's 128-account lock limit.
+- Privileges are **unioned per key** before sending. The Market is the clearest
+  case: Custody's Lock stage requires it non-writable and vacant, and Core's
+  Found stage creates it.
 - `context_digest = sha256(b"dclutch:projected-hoard-context:v1" || context)`
   while `funding_source_context` is that context **undigested**; both are
   caller-PDA seed inputs, so a wrong one produces an address for which no
   signature exists.
+- The Market identity the campaign carries has a **placeholder `market_id`**,
+  because `market_id` is not one of the nine Market-address seeds. That is
+  harmless until a founding has to commit to the digest of the Core state the
+  Found stage will write.
 
-Two earlier defects on that path were fixed at their semantic owners: the host
+Two earlier defects on this path were fixed at their semantic owners: the host
 Found/RentV2 projections refused the real System Program (`c25de27`), and the
 capability-root selection was a SHA-256 fixed point and so unsatisfiable for
-every well-formed artifact (`386f254`). The full decomposition, the measured
-per-role activation table, the current artifact digests, and the complete
-transcript are in
+every well-formed artifact (`386f254`). The full decomposition, the per-role
+activation table, the artifact digests, and the complete transcript are in
 `docs/evidence/GENERIC_FOUNDING_REACHABILITY_2026_08_26.md`.
