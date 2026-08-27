@@ -11,7 +11,7 @@ path = "src/lib.rs"
 
 [dependencies]
 dclutch-core-contract = { path = "../dclutch-core-contract" }
-dclutch-execution-strategy-contract = { path = "../dclutch-execution-strategy-contract" }
+dclutch-execution-strategy-contract = { path = "../dclutch-execution-strategy-contract", features = ["alloc"] }
 dclutch-registry-contract = { path = "../dclutch-registry-contract" }
 dclutch-registry-svm = { path = "../dclutch-registry-svm" }
 dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }

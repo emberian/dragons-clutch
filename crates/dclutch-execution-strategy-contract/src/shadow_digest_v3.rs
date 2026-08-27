@@ -8,7 +8,9 @@ use core::convert::TryFrom;
 
 use dclutch_core_contract::ContentId;
 use dclutch_sha256_adapter::digestv;
-use sha2::{Digest, Sha256};
+
+#[cfg(feature = "alloc")]
+extern crate alloc;
 
 /// Domain for complete family request bytes.
 pub const FAMILY_REQUEST_DIGEST_DOMAIN_V3: &[u8] = b"dclutch:shadow-family-request:v3";
@@ -186,7 +188,11 @@ pub fn receipt_dependencies_digest_v4(
         put(&mut entry, 0, &[dependency.producer_role as u8])?;
         put(&mut entry, 1, &dependency.producer_route.to_le_bytes())?;
         put(&mut entry, 3, &dependency.producer_invocation.to_le_bytes())?;
-        put(&mut entry, 7, &dependency.expected_receipt_bytes.to_le_bytes())?;
+        put(
+            &mut entry,
+            7,
+            &dependency.expected_receipt_bytes.to_le_bytes(),
+        )?;
         put(&mut tail, index * RECEIPT_DEPENDENCY_BYTES_V4, &entry)?;
     }
     let written = dependencies.len() * RECEIPT_DEPENDENCY_BYTES_V4;
@@ -194,7 +200,8 @@ pub fn receipt_dependencies_digest_v4(
         RECEIPT_DEPENDENCIES_DIGEST_DOMAIN_V4,
         &[0_u8],
         &count.to_le_bytes(),
-        tail.get(..written).ok_or(ShadowDigestErrorV3::CountOverflow)?,
+        tail.get(..written)
+            .ok_or(ShadowDigestErrorV3::CountOverflow)?,
     ]);
     if digest == [0; 32] {
         Err(ShadowDigestErrorV3::ZeroDigest)
@@ -277,98 +284,327 @@ pub fn family_request_digest_v3(bytes: &[u8]) -> Result<ContentId> {
     .map_err(|_| ShadowDigestErrorV3::ZeroDigest)
 }
 
+// ---------------------------------------------------------------------------
+// The one-shot preimage builders.
+//
+// SHA-256 is a pure function of its preimage, but WHICH implementation runs is
+// worth ~104.75 CU per byte against ~0.5 for the runtime's `sol_sha256`
+// syscall. The syscall is one-shot over a slice list -- there is no resumable
+// state, and `solana_sha256_hasher::Hasher` is software even on chain -- so a
+// streaming caller has to restate its preimage as the slice list it always
+// was. For these three the slice list is not a constant: it grows with the
+// observation count, the register widths, and the route count, and the widest
+// admissible shapes (256 runtime accounts, 512 scalars, route_count x
+// tail_count routes) do not fit an SBF 4,096-byte frame.
+//
+// So the scratch is the CALLER'S. That is the whole API change: the caller
+// sizes two buffers from the counts it already holds, and on the hot path it
+// takes them from the scratch region it already opens for this phase. The
+// preimages below are byte-for-byte what the streaming versions absorbed --
+// every digest in the tree is unchanged -- and nothing here allocates.
+// ---------------------------------------------------------------------------
+
+/// Refusal added by the one-shot builders.
+///
+/// Kept out of [`ShadowDigestErrorV3`]'s existing variants because it is a
+/// caller-side sizing mistake, not a malformed transcript.
+const fn scratch_error() -> ShadowDigestErrorV3 {
+    ShadowDigestErrorV3::CountOverflow
+}
+
+/// Write `bytes` at `at`, returning the next offset.
+fn absorb(buffer: &mut [u8], at: usize, bytes: &[u8]) -> Result<usize> {
+    let end = at.checked_add(bytes.len()).ok_or_else(scratch_error)?;
+    buffer
+        .get_mut(at..end)
+        .ok_or_else(scratch_error)?
+        .copy_from_slice(bytes);
+    Ok(end)
+}
+
+/// Append one slice to the caller's list, returning the next index.
+fn push_slice<'p>(slices: &mut [&'p [u8]], at: usize, slice: &'p [u8]) -> Result<usize> {
+    *slices.get_mut(at).ok_or_else(scratch_error)? = slice;
+    at.checked_add(1).ok_or_else(scratch_error)
+}
+
+/// Borrow `[at, at + len)` of an already-filled scratch buffer.
+fn scratch_span(buffer: &[u8], at: usize, len: usize) -> Result<&[u8]> {
+    let end = at.checked_add(len).ok_or_else(scratch_error)?;
+    buffer.get(at..end).ok_or_else(scratch_error)
+}
+
+fn count_bytes(count: usize) -> Result<[u8; 4]> {
+    Ok(u32::try_from(count)
+        .map_err(|_| ShadowDigestErrorV3::CountOverflow)?
+        .to_le_bytes())
+}
+
+/// Fixed scratch bytes one runtime observation contributes.
+///
+/// `lamports || signer || writable || executable || 0 || data_len`, which is
+/// exactly the run of scalars between the observation's two borrowed 32-byte
+/// identities and its borrowed data.
+pub const RUNTIME_OBSERVATION_SCALAR_BYTES_V3: usize = 16;
+
+/// Scratch bytes [`runtime_observations_digest_in_v3`] needs for `count`.
+#[must_use]
+pub const fn runtime_observations_scratch_bytes_v3(count: usize) -> usize {
+    // The domain's trailing zero and the observation count, then one scalar
+    // run per observation.
+    5 + count * RUNTIME_OBSERVATION_SCALAR_BYTES_V3
+}
+
+/// Slice-list entries [`runtime_observations_digest_in_v3`] needs for `count`.
+#[must_use]
+pub const fn runtime_observations_scratch_slices_v3(count: usize) -> usize {
+    // domain, header, then key/owner/scalars/data per observation.
+    2 + count * 4
+}
+
 /// Digest exact runtime observations in AccountProfile logical order.
-pub fn runtime_observations_digest_v3(
-    observations: &[ShadowRuntimeObservationV3<'_>],
+///
+/// Byte-for-byte the preimage the streaming version absorbed. `scratch` and
+/// `slices` must be at least [`runtime_observations_scratch_bytes_v3`] and
+/// [`runtime_observations_scratch_slices_v3`] of `observations.len()`.
+#[inline(never)]
+pub fn runtime_observations_digest_in_v3<'p>(
+    observations: &'p [ShadowRuntimeObservationV3<'p>],
+    scratch: &'p mut [u8],
+    slices: &mut [&'p [u8]],
 ) -> Result<ContentId> {
-    let mut hasher = begin(RUNTIME_OBSERVATION_DIGEST_DOMAIN_V3);
-    absorb_count(&mut hasher, observations.len())?;
+    let mut at = absorb(scratch, 0, &[0_u8])?;
+    at = absorb(scratch, at, &count_bytes(observations.len())?)?;
+    let header_len = at;
     for observation in observations {
         if observation.signer || observation.writable {
             return Err(ShadowDigestErrorV3::PrivilegedRuntimeObservation);
         }
-        hasher.update(observation.key);
-        hasher.update(observation.owner);
-        hasher.update(observation.lamports.to_le_bytes());
-        hasher.update([u8::from(observation.signer)]);
-        hasher.update([u8::from(observation.writable)]);
-        hasher.update([u8::from(observation.executable)]);
-        hasher.update([0_u8]);
-        absorb_bytes(&mut hasher, observation.data)?;
+        at = absorb(scratch, at, &observation.lamports.to_le_bytes())?;
+        at = absorb(
+            scratch,
+            at,
+            &[
+                u8::from(observation.signer),
+                u8::from(observation.writable),
+                u8::from(observation.executable),
+                0_u8,
+            ],
+        )?;
+        at = absorb(scratch, at, &count_bytes(observation.data.len())?)?;
     }
-    finish(hasher)
+    // The mutable borrow ends here: `scratch` becomes the shared borrow the
+    // slice list needs, at the same lifetime, so the list can name spans of it.
+    let scratch: &'p [u8] = scratch;
+    let mut next = push_slice(slices, 0, RUNTIME_OBSERVATION_DIGEST_DOMAIN_V3)?;
+    next = push_slice(slices, next, scratch_span(scratch, 0, header_len)?)?;
+    let mut cursor = header_len;
+    for observation in observations {
+        next = push_slice(slices, next, observation.key.as_slice())?;
+        next = push_slice(slices, next, observation.owner.as_slice())?;
+        next = push_slice(
+            slices,
+            next,
+            scratch_span(scratch, cursor, RUNTIME_OBSERVATION_SCALAR_BYTES_V3)?,
+        )?;
+        if !observation.data.is_empty() {
+            next = push_slice(slices, next, observation.data)?;
+        }
+        cursor = cursor
+            .checked_add(RUNTIME_OBSERVATION_SCALAR_BYTES_V3)
+            .ok_or_else(scratch_error)?;
+    }
+    let preimage = slices.get(..next).ok_or_else(scratch_error)?;
+    ContentId::new(digestv(preimage)).map_err(|_| ShadowDigestErrorV3::ZeroDigest)
+}
+
+/// Scratch bytes [`candidate_digest_in_v3`] needs for `scalars` of that width.
+#[must_use]
+pub const fn candidate_scratch_bytes_v3(scalar_count: usize) -> usize {
+    // zero, tail_count, scalar count, identity count, then the scalar run.
+    13 + scalar_count * 8
+}
+
+/// Slice-list entries [`candidate_digest_in_v3`] needs for that identity width.
+#[must_use]
+pub const fn candidate_scratch_slices_v3(identity_count: usize) -> usize {
+    // domain, the contiguous header-and-scalars run, then one per identity.
+    2 + identity_count
 }
 
 /// Digest one complete interpreted scalar/identity candidate bank.
+#[inline(never)]
+pub fn candidate_digest_in_v3<'p>(
+    tail_count: u32,
+    scalars: &[u64],
+    identities: &'p [[u8; 32]],
+    scratch: &'p mut [u8],
+    slices: &mut [&'p [u8]],
+) -> Result<ContentId> {
+    let mut at = absorb(scratch, 0, &[0_u8])?;
+    at = absorb(scratch, at, &tail_count.to_le_bytes())?;
+    at = absorb(scratch, at, &count_bytes(scalars.len())?)?;
+    at = absorb(scratch, at, &count_bytes(identities.len())?)?;
+    for scalar in scalars {
+        at = absorb(scratch, at, &scalar.to_le_bytes())?;
+    }
+    let scratch: &'p [u8] = scratch;
+    let mut next = push_slice(slices, 0, CANDIDATE_DIGEST_DOMAIN_V3)?;
+    // The header and the whole scalar run are contiguous, so they are ONE
+    // slice: the syscall charges per slice as well as per byte.
+    next = push_slice(slices, next, scratch_span(scratch, 0, at)?)?;
+    for identity in identities {
+        next = push_slice(slices, next, identity.as_slice())?;
+    }
+    let preimage = slices.get(..next).ok_or_else(scratch_error)?;
+    ContentId::new(digestv(preimage)).map_err(|_| ShadowDigestErrorV3::ZeroDigest)
+}
+
+/// Scratch bytes one resolved route contributes to the effect preimage.
+pub const EFFECT_ROUTE_SCRATCH_BYTES_V3: usize = 84;
+
+/// Scratch bytes [`effect_digest_in_v3`] needs for those widths.
+#[must_use]
+pub const fn effect_scratch_bytes_v3(lamport_count: usize, route_count: usize) -> usize {
+    // zero, tail_count, lamport count, the lamport run, the request length;
+    // then the route count and one fixed run per route.
+    13 + lamport_count * 8 + 4 + route_count * EFFECT_ROUTE_SCRATCH_BYTES_V3
+}
+
+/// Slice-list entries [`effect_digest_in_v3`] always needs.
+///
+/// Four, whatever the widths: the domain, the header-and-lamports run, the
+/// borrowed request bank, and the count-and-routes run.
+pub const EFFECT_SCRATCH_SLICES_V3: usize = 4;
+
+/// Digest one complete interpreted effect projection before physical writes.
+#[inline(never)]
+pub fn effect_digest_in_v3<'p>(
+    projection: ShadowEffectProjectionV3<'p>,
+    scratch: &'p mut [u8],
+    slices: &mut [&'p [u8]],
+) -> Result<ContentId> {
+    let mut at = absorb(scratch, 0, &[0_u8])?;
+    at = absorb(scratch, at, &projection.tail_count.to_le_bytes())?;
+    at = absorb(scratch, at, &count_bytes(projection.output_lamports.len())?)?;
+    for lamports in projection.output_lamports {
+        at = absorb(scratch, at, &lamports.to_le_bytes())?;
+    }
+    at = absorb(scratch, at, &count_bytes(projection.request_bank.len())?)?;
+    let header_len = at;
+    at = absorb(scratch, at, &count_bytes(projection.routes.len())?)?;
+    let routes_at = header_len;
+    for route in projection.routes {
+        route.validate()?;
+        at = absorb(scratch, at, &[route.role as u8, route.kind as u8])?;
+        match route.item {
+            Some(item) => {
+                at = absorb(scratch, at, &[1_u8])?;
+                at = absorb(scratch, at, &item.to_le_bytes())?;
+            }
+            None => at = absorb(scratch, at, &[0_u8; 5])?,
+        }
+        at = absorb(scratch, at, &route.fixed_account_start.to_le_bytes())?;
+        at = absorb(scratch, at, &route.fixed_account_count.to_le_bytes())?;
+        at = absorb(scratch, at, &route.item_account_start.to_le_bytes())?;
+        at = absorb(scratch, at, &route.item_account_count.to_le_bytes())?;
+        at = absorb(scratch, at, &route.item_account_stride.to_le_bytes())?;
+        at = absorb(scratch, at, &route.repeated_item_count.to_le_bytes())?;
+        at = absorb(scratch, at, &route.request_offset.to_le_bytes())?;
+        at = absorb(scratch, at, &route.request_len.to_le_bytes())?;
+        match route.borrowed_witness {
+            Some((offset, len)) => {
+                at = absorb(scratch, at, &[1_u8])?;
+                at = absorb(scratch, at, &offset.to_le_bytes())?;
+                at = absorb(scratch, at, &len.to_le_bytes())?;
+            }
+            None => at = absorb(scratch, at, &[0_u8; 9])?,
+        }
+        match route.receipt_dependency {
+            Some(dependency) => {
+                at = absorb(scratch, at, &[1_u8, dependency.producer_role as u8])?;
+                at = absorb(scratch, at, &dependency.producer_route.to_le_bytes())?;
+                at = absorb(scratch, at, &dependency.producer_invocation.to_le_bytes())?;
+                at = absorb(
+                    scratch,
+                    at,
+                    &dependency.expected_receipt_bytes.to_le_bytes(),
+                )?;
+            }
+            None => at = absorb(scratch, at, &[0_u8; 10])?,
+        }
+        at = absorb(scratch, at, &route.receipt_dependency_count.to_le_bytes())?;
+        at = absorb(scratch, at, &route.receipt_dependencies_digest)?;
+    }
+    let routes_len = at.checked_sub(routes_at).ok_or_else(scratch_error)?;
+    let scratch: &'p [u8] = scratch;
+    let mut next = push_slice(slices, 0, EFFECT_DIGEST_DOMAIN_V3)?;
+    next = push_slice(slices, next, scratch_span(scratch, 0, header_len)?)?;
+    if !projection.request_bank.is_empty() {
+        next = push_slice(slices, next, projection.request_bank)?;
+    }
+    next = push_slice(slices, next, scratch_span(scratch, routes_at, routes_len)?)?;
+    let preimage = slices.get(..next).ok_or_else(scratch_error)?;
+    ContentId::new(digestv(preimage)).map_err(|_| ShadowDigestErrorV3::ZeroDigest)
+}
+
+/// Digest exact runtime observations in AccountProfile logical order.
+///
+/// The allocating convenience form of [`runtime_observations_digest_in_v3`],
+/// for callers with no scratch discipline of their own -- host emitters, the
+/// accelerator boundaries, and the Series shadow evaluator.
+///
+/// **`trading-sbf` still takes this form, and that is debt with a name, not a
+/// design.** An on-chain caller counting heap should size the two buffers from
+/// counts it already holds and take them out of the scratch region it already
+/// opens for the phase. `hot_v3` has five call sites across these three
+/// digests (`runtime_transcript_digest_v3`, `execute_admitted_candidate_v3`,
+/// `execute_shadow_candidate_v3`, and the accelerator caller-authority
+/// transcript) and none is migrated yet. All five are gated on a shadow or
+/// admitted caller authority, so none executes on the canonical Interpreted
+/// Direct bundle -- which is exactly why moving them buys no measured heap
+/// today, and why they were not moved in the commit that took the software
+/// SHA-256 out.
+#[cfg(feature = "alloc")]
+#[inline(never)]
+pub fn runtime_observations_digest_v3(
+    observations: &[ShadowRuntimeObservationV3<'_>],
+) -> Result<ContentId> {
+    let mut scratch = alloc::vec![0_u8; runtime_observations_scratch_bytes_v3(observations.len())];
+    let mut slices = alloc::vec![
+        [].as_slice();
+        runtime_observations_scratch_slices_v3(observations.len())
+    ];
+    runtime_observations_digest_in_v3(observations, &mut scratch, &mut slices)
+}
+
+/// Digest one complete interpreted scalar/identity candidate bank.
+///
+/// The allocating convenience form of [`candidate_digest_in_v3`].
+#[cfg(feature = "alloc")]
+#[inline(never)]
 pub fn candidate_digest_v3(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
 ) -> Result<ContentId> {
-    let mut hasher = begin(CANDIDATE_DIGEST_DOMAIN_V3);
-    hasher.update(tail_count.to_le_bytes());
-    absorb_count(&mut hasher, scalars.len())?;
-    absorb_count(&mut hasher, identities.len())?;
-    for scalar in scalars {
-        hasher.update(scalar.to_le_bytes());
-    }
-    for identity in identities {
-        hasher.update(identity);
-    }
-    finish(hasher)
+    let mut scratch = alloc::vec![0_u8; candidate_scratch_bytes_v3(scalars.len())];
+    let mut slices = alloc::vec![[].as_slice(); candidate_scratch_slices_v3(identities.len())];
+    candidate_digest_in_v3(tail_count, scalars, identities, &mut scratch, &mut slices)
 }
 
 /// Digest one complete interpreted effect projection before physical writes.
+///
+/// The allocating convenience form of [`effect_digest_in_v3`].
+#[cfg(feature = "alloc")]
+#[inline(never)]
 pub fn effect_digest_v3(projection: ShadowEffectProjectionV3<'_>) -> Result<ContentId> {
-    let mut hasher = begin(EFFECT_DIGEST_DOMAIN_V3);
-    hasher.update(projection.tail_count.to_le_bytes());
-    absorb_count(&mut hasher, projection.output_lamports.len())?;
-    for lamports in projection.output_lamports {
-        hasher.update(lamports.to_le_bytes());
-    }
-    absorb_bytes(&mut hasher, projection.request_bank)?;
-    absorb_count(&mut hasher, projection.routes.len())?;
-    for route in projection.routes {
-        route.validate()?;
-        hasher.update([route.role as u8]);
-        hasher.update([route.kind as u8]);
-        match route.item {
-            Some(item) => {
-                hasher.update([1_u8]);
-                hasher.update(item.to_le_bytes());
-            }
-            None => hasher.update([0_u8; 5]),
-        }
-        hasher.update(route.fixed_account_start.to_le_bytes());
-        hasher.update(route.fixed_account_count.to_le_bytes());
-        hasher.update(route.item_account_start.to_le_bytes());
-        hasher.update(route.item_account_count.to_le_bytes());
-        hasher.update(route.item_account_stride.to_le_bytes());
-        hasher.update(route.repeated_item_count.to_le_bytes());
-        hasher.update(route.request_offset.to_le_bytes());
-        hasher.update(route.request_len.to_le_bytes());
-        match route.borrowed_witness {
-            Some((offset, len)) => {
-                hasher.update([1_u8]);
-                hasher.update(offset.to_le_bytes());
-                hasher.update(len.to_le_bytes());
-            }
-            None => hasher.update([0_u8; 9]),
-        }
-        match route.receipt_dependency {
-            Some(dependency) => {
-                hasher.update([1_u8]);
-                hasher.update([dependency.producer_role as u8]);
-                hasher.update(dependency.producer_route.to_le_bytes());
-                hasher.update(dependency.producer_invocation.to_le_bytes());
-                hasher.update(dependency.expected_receipt_bytes.to_le_bytes());
-            }
-            None => hasher.update([0_u8; 10]),
-        }
-        hasher.update(route.receipt_dependency_count.to_le_bytes());
-        hasher.update(route.receipt_dependencies_digest);
-    }
-    finish(hasher)
+    let mut scratch = alloc::vec![
+        0_u8;
+        effect_scratch_bytes_v3(projection.output_lamports.len(), projection.routes.len())
+    ];
+    let mut slices = alloc::vec![[].as_slice(); EFFECT_SCRATCH_SLICES_V3];
+    effect_digest_in_v3(projection, &mut scratch, &mut slices)
 }
 
 /// Digest one action-selected invocation context.
@@ -390,34 +626,327 @@ pub fn invocation_context_digest_v3(context: ShadowInvocationContextV3) -> Resul
     .map_err(|_| ShadowDigestErrorV3::ZeroDigest)
 }
 
-fn begin(domain: &[u8]) -> Sha256 {
-    let mut hasher = Sha256::new();
-    hasher.update(domain);
-    hasher.update([0_u8]);
-    hasher
-}
-
-fn absorb_count(hasher: &mut Sha256, count: usize) -> Result<()> {
-    let count = u32::try_from(count).map_err(|_| ShadowDigestErrorV3::CountOverflow)?;
-    hasher.update(count.to_le_bytes());
-    Ok(())
-}
-
-fn absorb_bytes(hasher: &mut Sha256, bytes: &[u8]) -> Result<()> {
-    absorb_count(hasher, bytes.len())?;
-    hasher.update(bytes);
-    Ok(())
-}
-
-fn finish(hasher: Sha256) -> Result<ContentId> {
-    ContentId::new(hasher.finalize().into()).map_err(|_| ShadowDigestErrorV3::ZeroDigest)
-}
-
 #[cfg(test)]
 mod tests {
     extern crate std;
 
     use super::*;
+
+    extern crate alloc;
+
+    use alloc::vec;
+    use alloc::vec::Vec;
+
+    use sha2::{Digest, Sha256};
+
+    // ---- THE ORACLE -------------------------------------------------------
+    // The streaming implementation, verbatim as it stood before the one-shot
+    // builders replaced it, over a SOFTWARE SHA-256 that no shipped ELF links
+    // any more. It exists so the differential test below compares two
+    // independent constructions of the preimage. Comparing a one-shot builder
+    // to its own allocating wrapper would pass no matter what either did.
+
+    fn oracle_begin(domain: &[u8]) -> Sha256 {
+        let mut hasher = Sha256::new();
+        hasher.update(domain);
+        hasher.update([0_u8]);
+        hasher
+    }
+
+    fn oracle_count(hasher: &mut Sha256, count: usize) -> Result<()> {
+        let count = u32::try_from(count).map_err(|_| ShadowDigestErrorV3::CountOverflow)?;
+        hasher.update(count.to_le_bytes());
+        Ok(())
+    }
+
+    fn oracle_bytes(hasher: &mut Sha256, bytes: &[u8]) -> Result<()> {
+        oracle_count(hasher, bytes.len())?;
+        hasher.update(bytes);
+        Ok(())
+    }
+
+    fn oracle_finish(hasher: Sha256) -> Result<ContentId> {
+        ContentId::new(hasher.finalize().into()).map_err(|_| ShadowDigestErrorV3::ZeroDigest)
+    }
+
+    fn oracle_runtime_observations(
+        observations: &[ShadowRuntimeObservationV3<'_>],
+    ) -> Result<ContentId> {
+        let mut hasher = oracle_begin(RUNTIME_OBSERVATION_DIGEST_DOMAIN_V3);
+        oracle_count(&mut hasher, observations.len())?;
+        for observation in observations {
+            if observation.signer || observation.writable {
+                return Err(ShadowDigestErrorV3::PrivilegedRuntimeObservation);
+            }
+            hasher.update(observation.key);
+            hasher.update(observation.owner);
+            hasher.update(observation.lamports.to_le_bytes());
+            hasher.update([u8::from(observation.signer)]);
+            hasher.update([u8::from(observation.writable)]);
+            hasher.update([u8::from(observation.executable)]);
+            hasher.update([0_u8]);
+            oracle_bytes(&mut hasher, observation.data)?;
+        }
+        oracle_finish(hasher)
+    }
+
+    fn oracle_candidate(
+        tail_count: u32,
+        scalars: &[u64],
+        identities: &[[u8; 32]],
+    ) -> Result<ContentId> {
+        let mut hasher = oracle_begin(CANDIDATE_DIGEST_DOMAIN_V3);
+        hasher.update(tail_count.to_le_bytes());
+        oracle_count(&mut hasher, scalars.len())?;
+        oracle_count(&mut hasher, identities.len())?;
+        for scalar in scalars {
+            hasher.update(scalar.to_le_bytes());
+        }
+        for identity in identities {
+            hasher.update(identity);
+        }
+        oracle_finish(hasher)
+    }
+
+    fn oracle_effect(projection: ShadowEffectProjectionV3<'_>) -> Result<ContentId> {
+        let mut hasher = oracle_begin(EFFECT_DIGEST_DOMAIN_V3);
+        hasher.update(projection.tail_count.to_le_bytes());
+        oracle_count(&mut hasher, projection.output_lamports.len())?;
+        for lamports in projection.output_lamports {
+            hasher.update(lamports.to_le_bytes());
+        }
+        oracle_bytes(&mut hasher, projection.request_bank)?;
+        oracle_count(&mut hasher, projection.routes.len())?;
+        for route in projection.routes {
+            route.validate()?;
+            hasher.update([route.role as u8]);
+            hasher.update([route.kind as u8]);
+            match route.item {
+                Some(item) => {
+                    hasher.update([1_u8]);
+                    hasher.update(item.to_le_bytes());
+                }
+                None => hasher.update([0_u8; 5]),
+            }
+            hasher.update(route.fixed_account_start.to_le_bytes());
+            hasher.update(route.fixed_account_count.to_le_bytes());
+            hasher.update(route.item_account_start.to_le_bytes());
+            hasher.update(route.item_account_count.to_le_bytes());
+            hasher.update(route.item_account_stride.to_le_bytes());
+            hasher.update(route.repeated_item_count.to_le_bytes());
+            hasher.update(route.request_offset.to_le_bytes());
+            hasher.update(route.request_len.to_le_bytes());
+            match route.borrowed_witness {
+                Some((offset, len)) => {
+                    hasher.update([1_u8]);
+                    hasher.update(offset.to_le_bytes());
+                    hasher.update(len.to_le_bytes());
+                }
+                None => hasher.update([0_u8; 9]),
+            }
+            match route.receipt_dependency {
+                Some(dependency) => {
+                    hasher.update([1_u8]);
+                    hasher.update([dependency.producer_role as u8]);
+                    hasher.update(dependency.producer_route.to_le_bytes());
+                    hasher.update(dependency.producer_invocation.to_le_bytes());
+                    hasher.update(dependency.expected_receipt_bytes.to_le_bytes());
+                }
+                None => hasher.update([0_u8; 10]),
+            }
+            hasher.update(route.receipt_dependency_count.to_le_bytes());
+            hasher.update(route.receipt_dependencies_digest);
+        }
+        oracle_finish(hasher)
+    }
+    // ---- end of the oracle ------------------------------------------------
+
+    /// The one-shot builders must reproduce the streaming preimage EXACTLY.
+    ///
+    /// This is the only control that matters for the conversion: every digest
+    /// in this tree that was ever committed by a host emitter, stored in a
+    /// record, or compared by an accelerator was produced by the streaming
+    /// versions. A one-shot builder that drew its slice boundaries correctly
+    /// but mis-ordered one scalar would still be a perfectly good hash of a
+    /// different preimage, and nothing else in the tree would notice until a
+    /// stored transcript stopped matching.
+    #[test]
+    fn one_shot_builders_reproduce_the_streaming_digests() {
+        let data_a = [7_u8; 40];
+        let data_b: [u8; 0] = [];
+        let data_c = [9_u8; 3];
+        for observations in [
+            Vec::new(),
+            vec![ShadowRuntimeObservationV3 {
+                key: [1; 32],
+                owner: [2; 32],
+                lamports: 0,
+                data: &data_b,
+                signer: false,
+                writable: false,
+                executable: false,
+            }],
+            vec![
+                ShadowRuntimeObservationV3 {
+                    key: [3; 32],
+                    owner: [4; 32],
+                    lamports: u64::MAX,
+                    data: &data_a,
+                    signer: false,
+                    writable: false,
+                    executable: true,
+                },
+                ShadowRuntimeObservationV3 {
+                    key: [5; 32],
+                    owner: [6; 32],
+                    lamports: 1,
+                    data: &data_c,
+                    signer: false,
+                    writable: false,
+                    executable: false,
+                },
+                ShadowRuntimeObservationV3 {
+                    key: [0; 32],
+                    owner: [0; 32],
+                    lamports: 0,
+                    data: &data_b,
+                    signer: false,
+                    writable: false,
+                    executable: false,
+                },
+            ],
+        ] {
+            let mut scratch = vec![0_u8; runtime_observations_scratch_bytes_v3(observations.len())];
+            let mut slices =
+                vec![[].as_slice(); runtime_observations_scratch_slices_v3(observations.len())];
+            assert_eq!(
+                runtime_observations_digest_in_v3(&observations, &mut scratch, &mut slices)
+                    .expect("one-shot runtime observations"),
+                oracle_runtime_observations(&observations).expect("oracle"),
+                "runtime observation preimage diverged at {} observations",
+                observations.len()
+            );
+        }
+
+        for (tail, scalars, identities) in [
+            (0_u32, Vec::new(), Vec::new()),
+            (3, vec![0_u64, u64::MAX, 7], vec![[1_u8; 32]]),
+            (
+                u32::MAX,
+                vec![1_u64; 9],
+                vec![[0_u8; 32], [255_u8; 32], [17_u8; 32]],
+            ),
+        ] {
+            let mut scratch = vec![0_u8; candidate_scratch_bytes_v3(scalars.len())];
+            let mut slices = vec![[].as_slice(); candidate_scratch_slices_v3(identities.len())];
+            assert_eq!(
+                candidate_digest_in_v3(tail, &scalars, &identities, &mut scratch, &mut slices)
+                    .expect("one-shot candidate"),
+                oracle_candidate(tail, &scalars, &identities).expect("oracle"),
+                "candidate preimage diverged"
+            );
+        }
+
+        let bank = [11_u8; 71];
+        let route_present = ShadowResolvedRouteV3 {
+            role: ShadowRouteRoleV3::Claims,
+            kind: ShadowRouteKindV3::Each,
+            item: Some(4),
+            fixed_account_start: 1,
+            fixed_account_count: 2,
+            item_account_start: 3,
+            item_account_count: 4,
+            item_account_stride: 5,
+            repeated_item_count: 1,
+            request_offset: 7,
+            request_len: 8,
+            borrowed_witness: Some((9, 10)),
+            receipt_dependency: Some(ShadowReceiptDependencyV3 {
+                producer_role: ShadowRouteRoleV3::Core,
+                producer_route: 11,
+                producer_invocation: 12,
+                expected_receipt_bytes: 13,
+            }),
+            receipt_dependency_count: 1,
+            receipt_dependencies_digest: [14; 32],
+        };
+        let route_absent = ShadowResolvedRouteV3 {
+            role: ShadowRouteRoleV3::Custody,
+            kind: ShadowRouteKindV3::Once,
+            item: None,
+            repeated_item_count: 0,
+            item_account_count: 0,
+            borrowed_witness: None,
+            receipt_dependency: None,
+            receipt_dependency_count: 0,
+            receipt_dependencies_digest: [0; 32],
+            ..route_present
+        };
+        let lamports = [1_u64, 0, u64::MAX];
+        for (lamports, bank, routes) in [
+            (&lamports[..0], &bank[..0], &[][..]),
+            (&lamports[..], &bank[..], &[route_present][..]),
+            (
+                &lamports[..1],
+                &bank[..5],
+                &[route_absent, route_present, route_absent][..],
+            ),
+        ] {
+            let projection = ShadowEffectProjectionV3 {
+                tail_count: 2,
+                output_lamports: lamports,
+                request_bank: bank,
+                routes,
+            };
+            let mut scratch = vec![0_u8; effect_scratch_bytes_v3(lamports.len(), routes.len())];
+            let mut slices = vec![[].as_slice(); EFFECT_SCRATCH_SLICES_V3];
+            assert_eq!(
+                effect_digest_in_v3(projection, &mut scratch, &mut slices)
+                    .expect("one-shot effect"),
+                oracle_effect(projection).expect("oracle"),
+                "effect preimage diverged over {} routes",
+                routes.len()
+            );
+        }
+    }
+
+    /// The route scratch constant is the encoder's own width, not a guess.
+    #[test]
+    fn the_effect_route_scratch_width_is_what_the_encoder_writes() {
+        let route = ShadowResolvedRouteV3 {
+            role: ShadowRouteRoleV3::Claims,
+            kind: ShadowRouteKindV3::Once,
+            item: None,
+            fixed_account_start: 0,
+            fixed_account_count: 0,
+            item_account_start: 0,
+            item_account_count: 0,
+            item_account_stride: 0,
+            repeated_item_count: 0,
+            request_offset: 0,
+            request_len: 0,
+            borrowed_witness: None,
+            receipt_dependency: None,
+            receipt_dependency_count: 0,
+            receipt_dependencies_digest: [0; 32],
+        };
+        let projection = ShadowEffectProjectionV3 {
+            tail_count: 0,
+            output_lamports: &[],
+            request_bank: &[],
+            routes: &[route],
+        };
+        // Exactly the computed size: one byte short must refuse.
+        let exact = effect_scratch_bytes_v3(0, 1);
+        let mut slices = vec![[].as_slice(); EFFECT_SCRATCH_SLICES_V3];
+        let mut scratch = vec![0_u8; exact];
+        assert!(effect_digest_in_v3(projection, &mut scratch, &mut slices).is_ok());
+        let mut short = vec![0_u8; exact - 1];
+        assert_eq!(
+            effect_digest_in_v3(projection, &mut short, &mut slices),
+            Err(ShadowDigestErrorV3::CountOverflow)
+        );
+    }
 
     fn id(value: u8) -> ContentId {
         ContentId::new([value; 32]).expect("nonzero")

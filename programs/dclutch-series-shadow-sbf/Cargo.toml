@@ -22,7 +22,7 @@ dclutch-account-profile-contract = { path = "../../crates/dclutch-account-profil
 dclutch-capability-program-contract = { path = "../../crates/dclutch-capability-program-contract" }
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
 dclutch-effect-kernel = { path = "../../crates/dclutch-effect-kernel" }
-dclutch-execution-strategy-contract = { path = "../../crates/dclutch-execution-strategy-contract" }
+dclutch-execution-strategy-contract = { path = "../../crates/dclutch-execution-strategy-contract", features = ["alloc"] }
 dclutch-market-core-codec = { path = "../../crates/dclutch-market-core-codec" }
 dclutch-product-runtime-v2-svm-reader = { path = "../../crates/dclutch-product-runtime-v2-svm-reader" }
 dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }
