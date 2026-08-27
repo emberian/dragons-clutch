@@ -6,7 +6,10 @@
 //! historical Rent principal, and immutable RentCredit beneficiary.
 
 use crate::{
+    candidate_v1::{GENERAL_CANDIDATE_BYTES_V1, GeneralCandidateV1},
+    collection_v1::{GENERAL_BATCH_BYTES_V1, GeneralBatchV1, GeneralOrderV1, general_order_len_v1},
     runtime_selection::{RUNTIME_SELECTION_CURSOR_BYTES_V2, RuntimeSelectionCursorV2},
+    runtime_verify::{RuntimeCandidateVerifierV2, runtime_verifier_len_v2},
     runtime_width::{SettlementCursorV2, settlement_cursor_len},
 };
 
@@ -19,6 +22,10 @@ pub const GENERAL_LOCAL_STATE_HEADER_BYTES_V3: usize = 64;
 
 const KIND_SELECTION: u8 = 1;
 const KIND_SETTLEMENT: u8 = 2;
+const KIND_BATCH: u8 = 3;
+const KIND_ORDER: u8 = 4;
+const KIND_CANDIDATE: u8 = 5;
+const KIND_VERIFIER: u8 = 6;
 
 /// Typed byte offsets consumed by AccountProfile and Effect artifacts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -72,12 +79,28 @@ impl GeneralLocalStateLayoutV3 {
 }
 
 /// Semantic body kind selected by one action artifact.
+///
+/// The first two kinds are the settlement half's own cursors. The four that
+/// follow are the collection and candidate halves' records, which existed as
+/// pure contract types with no physical envelope at all: nothing said what
+/// their canonical PDA bump was, who owned their rent, or how a vacant
+/// successor is created. A record with no envelope cannot be the primary state
+/// of a Trading lifecycle plan, which is why the seven collection and candidate
+/// actions could not have an artifact triple before this.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GeneralLocalStateKindV3 {
     /// Candidate submission and best-valid-submitted selection state.
     Selection,
     /// Permissionless collect/materialize/distribute settlement state.
     Settlement,
+    /// One batch window's immutable opening and mutable counters.
+    Batch,
+    /// One admitted order: signed terms, per-outcome vectors, live phase.
+    Order,
+    /// One content-addressed candidate submission and its work escrow.
+    Candidate,
+    /// One candidate's streamed row-verification cursor.
+    Verifier,
 }
 
 impl GeneralLocalStateKindV3 {
@@ -86,13 +109,31 @@ impl GeneralLocalStateKindV3 {
         match self {
             Self::Selection => KIND_SELECTION,
             Self::Settlement => KIND_SETTLEMENT,
+            Self::Batch => KIND_BATCH,
+            Self::Order => KIND_ORDER,
+            Self::Candidate => KIND_CANDIDATE,
+            Self::Verifier => KIND_VERIFIER,
         }
+    }
+
+    /// Whether this kind's body width is fixed rather than Product-width.
+    ///
+    /// A fixed-width body needs no `outcome_count` to size, and its
+    /// AccountProfile rule is `Exact` with a zero item stride rather than a
+    /// header plus a per-outcome stride.
+    #[must_use]
+    pub const fn is_fixed_width(self) -> bool {
+        matches!(self, Self::Selection | Self::Batch | Self::Candidate)
     }
 
     fn decode(value: u8) -> Result<Self> {
         match value {
             KIND_SELECTION => Ok(Self::Selection),
             KIND_SETTLEMENT => Ok(Self::Settlement),
+            KIND_BATCH => Ok(Self::Batch),
+            KIND_ORDER => Ok(Self::Order),
+            KIND_CANDIDATE => Ok(Self::Candidate),
+            KIND_VERIFIER => Ok(Self::Verifier),
             _ => Err(GeneralLocalStateErrorV3::InvalidKind),
         }
     }
@@ -159,6 +200,42 @@ impl<'a> GeneralLocalStateV3<'a> {
                     return Err(GeneralLocalStateErrorV3::InvalidLength);
                 }
             }
+            // Each of the four below hostile-decodes through its own semantic
+            // owner. The envelope asserts no field of a body it does not own;
+            // what it adds is the physical lifecycle the record never had.
+            GeneralLocalStateKindV3::Batch => {
+                if body.len() != GENERAL_BATCH_BYTES_V1 {
+                    return Err(GeneralLocalStateErrorV3::InvalidLength);
+                }
+                GeneralBatchV1::decode(body).map_err(|_| GeneralLocalStateErrorV3::InvalidBody)?;
+            }
+            GeneralLocalStateKindV3::Order => {
+                let order = GeneralOrderV1::decode(body)
+                    .map_err(|_| GeneralLocalStateErrorV3::InvalidBody)?;
+                if body.len()
+                    != general_order_len_v1(order.header().outcome_count)
+                        .map_err(|_| GeneralLocalStateErrorV3::InvalidLength)?
+                {
+                    return Err(GeneralLocalStateErrorV3::InvalidLength);
+                }
+            }
+            GeneralLocalStateKindV3::Candidate => {
+                if body.len() != GENERAL_CANDIDATE_BYTES_V1 {
+                    return Err(GeneralLocalStateErrorV3::InvalidLength);
+                }
+                GeneralCandidateV1::decode(body)
+                    .map_err(|_| GeneralLocalStateErrorV3::InvalidBody)?;
+            }
+            GeneralLocalStateKindV3::Verifier => {
+                let cursor = RuntimeCandidateVerifierV2::decode(body)
+                    .map_err(|_| GeneralLocalStateErrorV3::InvalidBody)?;
+                if body.len()
+                    != runtime_verifier_len_v2(cursor.header().outcome_count)
+                        .map_err(|_| GeneralLocalStateErrorV3::InvalidLength)?
+                {
+                    return Err(GeneralLocalStateErrorV3::InvalidLength);
+                }
+            }
         }
         Ok(Self { header, body })
     }
@@ -201,6 +278,12 @@ pub fn general_local_state_len_v3(
         GeneralLocalStateKindV3::Selection => RUNTIME_SELECTION_CURSOR_BYTES_V2,
         GeneralLocalStateKindV3::Settlement => settlement_cursor_len(outcome_count)
             .map_err(|_| GeneralLocalStateErrorV3::InvalidLength)?,
+        GeneralLocalStateKindV3::Batch => GENERAL_BATCH_BYTES_V1,
+        GeneralLocalStateKindV3::Order => general_order_len_v1(outcome_count)
+            .map_err(|_| GeneralLocalStateErrorV3::InvalidLength)?,
+        GeneralLocalStateKindV3::Candidate => GENERAL_CANDIDATE_BYTES_V1,
+        GeneralLocalStateKindV3::Verifier => runtime_verifier_len_v2(outcome_count)
+            .map_err(|_| GeneralLocalStateErrorV3::InvalidLength)?,
     };
     GENERAL_LOCAL_STATE_HEADER_BYTES_V3
         .checked_add(body)
@@ -222,6 +305,23 @@ pub fn encode_general_local_state_v3_atomic(
         }
         GeneralLocalStateKindV3::Settlement => {
             SettlementCursorV2::decode(body)
+                .map_err(|_| GeneralLocalStateErrorV3::InvalidBody)?
+                .header()
+                .outcome_count
+        }
+        // The two fixed-width records carry an outcome count of their own and
+        // it does not size the body; one is the width every other coordinate
+        // in the batch agrees on, and asserting it here would make the
+        // envelope a second authority over a field the record already owns.
+        GeneralLocalStateKindV3::Batch | GeneralLocalStateKindV3::Candidate => 1,
+        GeneralLocalStateKindV3::Order => {
+            GeneralOrderV1::decode(body)
+                .map_err(|_| GeneralLocalStateErrorV3::InvalidBody)?
+                .header()
+                .outcome_count
+        }
+        GeneralLocalStateKindV3::Verifier => {
+            RuntimeCandidateVerifierV2::decode(body)
                 .map_err(|_| GeneralLocalStateErrorV3::InvalidBody)?
                 .header()
                 .outcome_count
@@ -320,7 +420,209 @@ mod tests {
     use std::vec;
 
     use super::*;
+    use crate::collection_v1::{
+        GeneralBatchOpeningV1, GeneralOrderHeaderV1, GeneralOrderPhaseV1, GeneralOrderStateV1,
+    };
     use crate::runtime_width::{SettlementCursorHeaderV2, SettlementPhaseV2};
+    use dclutch_general_config_contract::root::GeneralRootV2;
+
+    const ALL_KINDS: [GeneralLocalStateKindV3; 6] = [
+        GeneralLocalStateKindV3::Selection,
+        GeneralLocalStateKindV3::Settlement,
+        GeneralLocalStateKindV3::Batch,
+        GeneralLocalStateKindV3::Order,
+        GeneralLocalStateKindV3::Candidate,
+        GeneralLocalStateKindV3::Verifier,
+    ];
+
+    fn id(low: u8) -> [u8; 32] {
+        let mut value = [0_u8; 32];
+        value[0] = low;
+        value
+    }
+
+    fn batch_body(width: u32) -> std::vec::Vec<u8> {
+        let mut root = GeneralRootV2::active(id(1), id(2), 7).expect("active root");
+        let revision = root.revision();
+        let batch = crate::collection_v1::GeneralBatchV1::open(
+            &mut root,
+            GeneralBatchOpeningV1 {
+                outcome_count: width,
+                sequence: 0,
+                generation: 7,
+                market: id(1),
+                product_id: id(3),
+                config_id: id(2),
+                price_scale: 100,
+                collection_close_slot: 1_000,
+                settlement_close_slot: 2_000,
+                max_orders: 4,
+            },
+            revision,
+            10,
+        )
+        .expect("open batch");
+        batch.to_bytes().to_vec()
+    }
+
+    fn order_body(width: u32) -> std::vec::Vec<u8> {
+        let count = usize::try_from(width).expect("width");
+        let mut receive = vec![0_u64; count];
+        let mut deliver = vec![0_u64; count];
+        receive[0] = 1;
+        deliver[count - 1] = 2;
+        let mut bytes = vec![0_u8; general_order_len_v1(width).expect("order width")];
+        GeneralOrderV1::encode_into(
+            GeneralOrderHeaderV1 {
+                outcome_count: width,
+                nonce: 5,
+                owner_id: id(9),
+                market: id(1),
+                batch_id: id(4),
+                generation: 7,
+                max_lots: 10,
+                max_quote_debit_per_lot: 5,
+                valid_until_slot: 2_000,
+            },
+            &receive,
+            &deliver,
+            GeneralOrderStateV1 {
+                phase: GeneralOrderPhaseV1::Placed,
+                admitted_slot: 10,
+                released_slot: 0,
+            },
+            &mut bytes,
+        )
+        .expect("order record");
+        bytes
+    }
+
+    fn envelope(kind: GeneralLocalStateKindV3, body: &[u8]) -> std::vec::Vec<u8> {
+        let len = GENERAL_LOCAL_STATE_HEADER_BYTES_V3 + body.len();
+        let mut scratch = vec![0_u8; len];
+        let mut output = vec![0xa5_u8; len];
+        encode_general_local_state_v3_atomic(
+            GeneralLocalStateHeaderV3 {
+                kind,
+                bump: 251,
+                rent_principal: 4_321,
+                beneficiary: [8; 32],
+            },
+            body,
+            &mut scratch,
+            &mut output,
+        )
+        .expect("envelope");
+        output
+    }
+
+    /// The six kinds partition the tag space and nothing else decodes.
+    ///
+    /// The four collection and candidate kinds are new: before them, those
+    /// records had no physical envelope at all, so no Trading lifecycle plan
+    /// could name one as its primary state and no action over them could have
+    /// an artifact triple.
+    #[test]
+    fn every_state_kind_has_a_distinct_tag_and_no_other_tag_decodes() {
+        let mut seen = std::vec::Vec::new();
+        for kind in ALL_KINDS {
+            let tag = kind.tag();
+            assert!(!seen.contains(&tag), "duplicate kind tag {tag}");
+            assert_eq!(
+                GeneralLocalStateKindV3::decode(tag).expect("kind decodes"),
+                kind
+            );
+            seen.push(tag);
+        }
+        for tag in [0_u8, 7, 8, 255] {
+            assert_eq!(
+                GeneralLocalStateKindV3::decode(tag),
+                Err(GeneralLocalStateErrorV3::InvalidKind),
+                "tag {tag} decoded as a kind",
+            );
+        }
+    }
+
+    /// Widths at both runtime widths, and the fixed/variable split is real.
+    #[test]
+    fn every_state_kind_sizes_at_both_runtime_widths() {
+        for kind in ALL_KINDS {
+            let narrow = general_local_state_len_v3(kind, 1).expect("width at 1");
+            let wide = general_local_state_len_v3(kind, 258).expect("width at 258");
+            assert!(narrow > GENERAL_LOCAL_STATE_HEADER_BYTES_V3);
+            if kind.is_fixed_width() {
+                assert_eq!(narrow, wide, "{kind:?} claimed fixed width and moved");
+            } else {
+                assert!(wide > narrow, "{kind:?} claimed Product width and did not");
+            }
+        }
+    }
+
+    /// The two collection records round-trip through the envelope.
+    ///
+    /// `Candidate` and `Verifier` bodies cannot be built from a pure
+    /// constructor -- a candidate's identity is its own masked digest and a
+    /// verifier cursor is written by the first row verification -- so their
+    /// envelopes are exercised where those bodies exist, by their own actions'
+    /// artifacts and by the campaign.
+    #[test]
+    fn the_collection_records_round_trip_through_the_envelope() {
+        for width in [1_u32, 3, 258] {
+            for (kind, body) in [
+                (GeneralLocalStateKindV3::Batch, batch_body(width)),
+                (GeneralLocalStateKindV3::Order, order_body(width)),
+            ] {
+                let encoded = envelope(kind, &body);
+                let decoded = GeneralLocalStateV3::decode(&encoded).expect("decode");
+                assert_eq!(decoded.header().kind, kind);
+                assert_eq!(decoded.header().bump, 251);
+                assert_eq!(decoded.body(), body.as_slice());
+                assert_eq!(
+                    encoded.len(),
+                    general_local_state_len_v3(kind, width).expect("width"),
+                );
+            }
+        }
+    }
+
+    /// A body that is not the kind the header names is refused, both ways.
+    ///
+    /// The envelope's kind byte is what the AccountProfile rule and the
+    /// transition conjunct both read; if it could disagree with the bytes
+    /// behind it, an artifact authored for one record would authenticate
+    /// another.
+    #[test]
+    fn a_body_that_is_not_its_declared_kind_refuses() {
+        let batch = batch_body(3);
+        let order = order_body(3);
+        for (kind, body) in [
+            (GeneralLocalStateKindV3::Batch, &order),
+            (GeneralLocalStateKindV3::Order, &batch),
+            (GeneralLocalStateKindV3::Candidate, &batch),
+            (GeneralLocalStateKindV3::Verifier, &order),
+        ] {
+            let len = GENERAL_LOCAL_STATE_HEADER_BYTES_V3 + body.len();
+            let mut scratch = vec![0_u8; len];
+            let mut output = vec![0xa5_u8; len];
+            let before = output.clone();
+            assert!(
+                encode_general_local_state_v3_atomic(
+                    GeneralLocalStateHeaderV3 {
+                        kind,
+                        bump: 251,
+                        rent_principal: 4_321,
+                        beneficiary: [8; 32],
+                    },
+                    body,
+                    &mut scratch,
+                    &mut output,
+                )
+                .is_err(),
+                "{kind:?} accepted another record's bytes",
+            );
+            assert_eq!(output, before);
+        }
+    }
 
     fn settlement(outcome_count: u32) -> std::vec::Vec<u8> {
         let mut output = vec![0; settlement_cursor_len(outcome_count).expect("cursor width")];
