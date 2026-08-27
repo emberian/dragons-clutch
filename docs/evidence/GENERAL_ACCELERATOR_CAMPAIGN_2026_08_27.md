@@ -177,3 +177,55 @@ submit. It is not execution, and it does not make this campaign a fast lane:
 this campaign still submits legacy messages, so the tier clause it fails is
 still failed here. The N = 1 fast lane described above remains admissible and
 unbuilt.
+
+## Addendum — the candidate now comes from a real batch (GEN-COLLECT, 2026-08-27)
+
+Everything above was executed against an order flow that did not exist. The
+candidate's `batch_id` was the literal `[0xb2; 32]`, and each Execution row's
+`AuthenticatedOrderTermsV2` — the `max_lots` and `max_quote_debit_per_lot` the
+verifier enforces `ExcessLots` and `QuoteLimit` against — was a value the
+fixture asserted directly. Both are recorded as holes A and B of `M-12` in
+`docs/decisions/0009-general-batch-collection.md`.
+
+At `e898d56` the same seven actions run against a batch that was really opened
+and orders that were really placed. `terminal_fixture` now opens a
+`GeneralBatchV1` against a real `GeneralRootV2` (consuming the root's exact next
+sequence), admits three `GeneralOrderV1` records with maker funding checked
+against each order's worst case, closes the batch, and asserts the root returns
+to `open_batches == 0`. The candidate's `batch_id` is the digest of that
+opening; the row terms come from `authenticate_order_execution_v1`.
+
+**This does not re-take the tables above, because it did not move them.**
+`accounts`, `legacy packet` and `scratch pages` are identical in all fourteen
+rows. That is the control: exchanging fabricated identities for real ones
+changes the inputs' *provenance*, not the frame's geometry, and without the
+table above there would have been nothing to check that against.
+
+Two deltas, neither of which changes a conclusion here:
+
+- **Every action costs exactly one CU less** than the tables above — all
+  fourteen rows, uniformly −1. This is not from the collection half, which
+  changes only which identities the fixture feeds in. The tree carried
+  uncommitted edits to `dclutch-capability-program-contract`, which this
+  program links. Flagged, not chased.
+- **The repeated settlement rows permute.** Pages are now laid out in real
+  identity order. The note above already says these rows "cannot be compared
+  positionally"; that caveat is now load-bearing rather than precautionary.
+
+**One defect found, of the kind only real identities can find.**
+`runtime_verify::le_numeric_id` (`:1345`) orders a 32-byte identity as a
+**little-endian 256-bit integer** — byte 31 first — which is not the
+lexicographic order of `[u8; 32]`. The old fixture's identities were
+`[low, 0, 0, …]`, where every high byte is zero and the two orderings agree, so
+the distinction was untestable. A real `order_id` is a SHA-256 digest, where
+they disagree almost always: sorting by Rust's own `Ord` refused three of the
+four suites outright with `NonCanonicalOrder`. **A candidate builder must sort
+by the protocol's identity order**, and the fixture now does, with the reason
+written beside the sort.
+
+**The census is unmoved and this addendum does not claim otherwise.** This is
+still `solana-program-test` submitting legacy messages, so it still fails the
+same tier clause for the same measured reason — six of seven N=258 actions
+exceed the 1,232-byte limit. `general-accelerator/process_instruction` remains
+NEVER-EXECUTED. What changed is what the accelerator was fed, not the transport
+it was fed through.
