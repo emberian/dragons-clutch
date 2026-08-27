@@ -150,6 +150,121 @@
       "program": "claims",
       "outcome": "executed",
       "note": "The losing-outcome terminal: raw shards are burned through a real permissioned Token-2022 burn with no Custody payout, and the burned/held remainder is conserved exactly."
+    },
+    {
+      "label": "claims rational-representation-v2: cross-role replay: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table creation. No dClutch program is invoked."
+    },
+    {
+      "label": "claims rational-representation-v2: cross-role replay: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table extension. No dClutch program is invoked."
+    },
+    {
+      "label": "claims rational-representation-v2: create the Claims-role Custody replay",
+      "routes": [
+        "claims/process_instruction",
+        "claims/custody_replay_v1::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The Claims-role Custody replay this Market's redemption needs, CREATED rather than planted. Claims forwards a Custody InitializeReplay under its own release-pinned caller authority; Custody creates the account at the role-seeded replay PDA (decision 0008 section 7). Every terminal case in this campaign now opens with this transaction, so the redemption below consumes the cursor the chain actually wrote -- revision 1, zero open Vaults -- instead of one the fixture invented. 711 legacy bytes against the 1,232 limit, asserted: creating this cursor must not require a published lookup table."
+    },
+    {
+      "label": "claims rational-representation-v2: replay creation with the Core Market standing in for the Claims aggregate",
+      "routes": [
+        "claims/process_instruction",
+        "claims/custody_replay_v1::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Identity",
+      "note": "HOSTILE. The Core Market account is offered where the Claims aggregate belongs. Claims derives the aggregate PDA from the wire's Market and refuses Identity (0x5002); the campaign asserts neither the Claims-role replay nor the Trading-role one exists afterwards."
+    },
+    {
+      "label": "claims rational-representation-v2: replay creation with the Trading-role replay address offered for a Claims-role cursor",
+      "routes": [
+        "claims/process_instruction",
+        "claims/custody_replay_v1::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Identity",
+      "note": "HOSTILE, and the role-seeded address spoof specifically. The Trading compartment's own replay address is offered as the place to write a Claims-role cursor. Claims derives the Claims-role address from the request it built and refuses Identity (0x5002); Custody would derive it too, one layer down."
+    },
+    {
+      "label": "claims rational-representation-v2: a second replay creation",
+      "routes": [
+        "claims/process_instruction",
+        "claims/custody_replay_v1::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Identity",
+      "note": "Creation is permissionless, so the second submitter has to lose HARMLESSLY. Claims requires the replay account to be vacant and System-owned before it forwards anything, so this refuses Identity (0x5002) before Custody is reached; the campaign asserts the live cursor is byte-identical and the first prepayer keeps the rent refund."
+    },
+    {
+      "label": "claims rational-representation-v2: a Trading-role replay at the Claims-role address",
+      "routes": [
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Identity",
+      "note": "HOSTILE. With the role in the replay seeds a replay's bytes and its address agree by construction, so this state is forged directly into the account -- the only way it can exist. The winning terminal redemption refuses Identity (0x5002) and the campaign asserts the Hoard and the recipient are byte-identical. Custody would refuse it a layer down on ReplayBindingMismatch; the point is that Claims does not get there."
+    },
+    {
+      "label": "claims rational-representation-v2: substituted custody namespace: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table creation. No dClutch program is invoked."
+    },
+    {
+      "label": "claims rational-representation-v2: substituted custody namespace: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table extension. No dClutch program is invoked."
+    },
+    {
+      "label": "claims rational-representation-v2: custody namespace substituted with the Market address",
+      "routes": [
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Identity",
+      "note": "HOSTILE (decision 0008 section 4). The aggregate's persisted custody_context is overwritten with the Market's OWN ADDRESS -- the value FoundingV5 wrote before decision 0008, and the one the first open Market is still stuck with; the founding's own state is untouched, so only the Market's CLAIM about where its Hoard lives moves. Refuses Identity (0x5002) with the Hoard, the recipient and the Custody replay byte-identical and no successful Custody transfer."
+    },
+    {
+      "label": "claims rational-representation-v2: custody namespace substituted with a second founding's context digest",
+      "routes": [
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Identity",
+      "note": "HOSTILE (decision 0008 section 4). The aggregate's persisted custody_context is overwritten with another founding's projected-Hoard digest, a well-formed namespace belonging to a different Market; the founding's own state is untouched, so only the Market's CLAIM about where its Hoard lives moves. Refuses Identity (0x5002) with the Hoard, the recipient and the Custody replay byte-identical and no successful Custody transfer."
+    },
+    {
+      "label": "claims rational-representation-v2: custody namespace substituted with the raw founding action context",
+      "routes": [
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Identity",
+      "note": "HOSTILE (decision 0008 section 4). The aggregate's persisted custody_context is overwritten with the UNHASHED founding action context, one SHA-256 short of the real namespace and the coordinate the funding source compartment uses; the founding's own state is untouched, so only the Market's CLAIM about where its Hoard lives moves. Refuses Identity (0x5002) with the Hoard, the recipient and the Custody replay byte-identical and no successful Custody transfer."
     }
   ]
 }
