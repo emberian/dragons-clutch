@@ -82,7 +82,7 @@ Measured bands:
 | tier-1 Found31, its rollback case, the profile init, the non-terminal `DCLTPCB1` refusal | **0** | same pair |
 | tier-4 founding case | 24,000 | six runs of the same ProgramTest campaign on the same ELFs |
 | tier-4 late-Hoard refusal | 15,000 | same six |
-| tier-4 substituted-ProgramData refusal | 1,500 | same six |
+| tier-4 substituted-ProgramData refusal | 6,000 | seven runs; it was 1,500 over the first six, and the seventh — taken after the 2026-08-27 Custody frame change — drew 4,500 higher. Three iterations. This lane did not distinguish noise from that change. |
 
 The tolerance rule follows from that, mechanically:
 
@@ -173,7 +173,7 @@ global `127.0.0.1:20890` slot.
 | `series-consume-founds-with-permit-replay-campaign` | 767,295 | 737,295 | 30,000 | 662,705 (47.3%) |
 | `series-consume-late-hoard-refusal` | 722,942 | 692,942 | 30,000 | 707,058 (50.5%) |
 | `series-consume-replayed-ticket-refusal` | 390,694 | 370,694 | 20,000 | 1,029,306 (73.5%) |
-| `series-consume-substituted-programdata-refusal` | 204,723 | 184,723 | 20,000 | 1,215,277 (86.8%) |
+| `series-consume-substituted-programdata-refusal` | 209,223 | 189,223 | 20,000 | 1,210,777 (86.5%) |
 
 ### Recorded, not enforced
 

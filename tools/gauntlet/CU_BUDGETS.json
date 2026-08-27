@@ -347,11 +347,11 @@
       "campaign": "tier4-series-occurrence-programtest",
       "scope": "transaction",
       "transaction": "Series Consume refuses a substituted Claims ProgramData",
-      "measured": 184723,
+      "measured": 189223,
       "tolerance": 20000,
-      "budget": 204723,
+      "budget": 209223,
       "enforced": true,
-      "provenance": "Highest of six runs; band 1,500 — the quietest transaction in the fast lane and the closest thing it has to a deterministic row."
+      "provenance": "Highest of SEVEN runs, range 183,223-189,223, band 6,000. It was the quietest row in the fast lane at band 1,500 over the first six runs; the seventh, taken after the 2026-08-27 Custody frame change (`the callee must be ABSENT from the frame`), drew 189,223. 4,500 is exactly three bump-search iterations, so this lane did NOT distinguish noise from that change and does not claim to have. The re-pin is to the highest observed draw, which is what `measured` means here; the budget rose 4,500 and the row was green at the old budget with 15,500 to spare either way."
     },
     {
       "id": "hot-canonical-bundle-phase-subtotals",
