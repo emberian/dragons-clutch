@@ -475,3 +475,10 @@ QUEUED with owners:
   direct-aot-sbf still decodes the V1 wire (AcceleratorRequestV1/AckV1).
   The two orphan V1 schema IDs are clean deletes; the wire types are NOT
   until that program migrates. Never delete "V1 accelerator" as one unit.
+
+- Tranche-A Direct, method ready: registered_fill_artifacts_v4.rs is the LAST
+  hand-written V3 program — author in TransitionVMV3.lean, gate on byte
+  identity, then strengthen (LEANGUARD's 73f0793 is the worked example).
+- Small batch: fixtures:verify provenance regen for realm-contract/src/lib.rs
+  (moved by TSGEN's f5dfe5d); the direct-inline alias-table retirement once
+  W2o yields; the inline.rs:308 composition theorem LEANGUARD queued.
