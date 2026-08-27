@@ -654,3 +654,14 @@ QUEUED with owners:
 - Mystery for hygiene: target/deploy/dclutch_sbf.so is 9.0MB, rebuilt TODAY,
   referenced by nothing — find what rebuilds a deleted program's ELF and stop
   it (63 SOL if a deploy glob ever eats it).
+
+- Journey trading stages (trigger: DECOMP's 20/20 + geometry-parametric
+  artifacts): three independent walls named by JRNY-2 — prestate (Claims
+  admission is behind the Hot gate; CUSTROLE's replay-creation is the pattern
+  for the wallet-side), SHAPE (the shipped Direct profile is emitted for the
+  3-claim/3-cut canonical geometry; a 4-claim/2-cut market needs
+  geometry-parametric artifact emission — BUNDLE's derivation + the emitters
+  converge here), and PACKET (1,228 + SetComputeUnitLimit = 1,268 > 1,232:
+  the journey's trades ride v0/ALT from day one).
+- CU-BUDGET rows owed: CreateFund (86% of ceiling) and VerifyFundReady (84%)
+  are unbudgeted; CreateFund's frame is 2,016 B on ALTs. Add at next tier run.
