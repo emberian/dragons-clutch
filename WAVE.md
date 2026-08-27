@@ -253,3 +253,15 @@ question with a recommended answer, not an inventory row.
 - The Hoard vault has no chain-derivable address (namespaced by caller-chosen
   founding context) — frontend refuses-with-reason today; decide whether the
   context belongs in a discoverable record.
+
+- DCLLBX02 (liability-basis V2 route): campaign green + census EXECUTED, but
+  its ONLY issuance path (Split) composes an External source compartment that
+  Custody refuses by design (84b1426), and nothing on chain finalizes its
+  record type (CL's earlier finding). Live route or superseded second truth?
+  Fable-wave architecture call; the candidate fix (compose the DCLCUDQ2
+  delegated V2 wire in liability_basis_v2.rs) is real protocol work either way.
+- Relayer daemon slice note: consumption (1,534 B) and full-body append
+  (1,377 B) exceed legacy packets — witnessed by label in the relayed tier;
+  the daemon must build v0/ALT for those two when it goes live. The failure
+  walk deliberately stays legacy-fitting (991 B) — it must never depend on an
+  ALT a silent operator never published.
