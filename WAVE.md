@@ -371,3 +371,31 @@ General root real; three artifact generations have one encoder each; the
 funded failure walk executes; terminal windows have width and a one-answer
 proof. Formatting: use `rustup run 1.97.1 rustfmt --edition 2024` — bare
 rustfmt is unpinned and reflows ~178 lines of hot_v3.
+
+## The closing pattern language (orientation, 2026-08-27)
+
+~45 open items collapse into seven patterns; five have one-stone moves:
+1. BUNDLE BUILDER: one family-generic chain-fixture builder derived from the
+   emitted artifacts themselves (direct-hot is the reference to generalize).
+   Kills GEN-HOT/DLR-HOT/physical verticals/most census reds AND the
+   fixture-bent-to-wrong-side genus. Dispatch after W2n lands (it owns
+   direct-hot fixtures today).
+2. EXACT-PIN GENUS WITNESS: census extension enumerating every Exact
+   width/count/length constraint in profiles+dispatchers, verdicted against
+   live-cluster shapes. RegisterBuy's defects become rows; unknown genus
+   members surface.
+3. ONE-AUTHORITY COMPLETION: DCLTCPR1 encoder + coreFound convergence + a TS
+   BACKEND on the Lean emitters (kills the web hand-mirror genus permanently),
+   with a grep-driven completeness inventory as the done-criterion.
+4. THE DEMO VERTICAL: recovery leg + daemon runtime + v0/ALT wires + product
+   records + wizard defaults + devnet rehearsal = ONE journey-shaped lane
+   ending in a real graduation market resolving on devnet.
+5. GENERATED REFERENCE: the protocol manual generated from the same
+   authorities (ABIs, refusal tables, census, budgets, ADRs); guides
+   hand-written thin on top; one pipeline also ships the real app to Pages.
+6. UNIVERSAL LEDGER: the six-law conservation engine becomes every family
+   campaign's gate once (1) exists.
+7. LANE WRAPPER: tools/lane.sh — enforced --only, pinned rustfmt, board
+   helper; retires four recurring accident classes.
+Sizing: patterned ≈ 10–14 lanes ≈ 2–3 swarmcycles to closed-or-explicitly-
+parked (vs ~25 bespoke). Parked-by-ember: the FRI/STARK assurance floor.
