@@ -6,8 +6,36 @@ defaultTargets = ["DClutchSemantics"]
 name = "DClutchSemantics"
 
 [[lean_exe]]
-name = "emit-vectors"
-root = "EmitVectors"
+name = "emit-account-profile-abi-rust"
+root = "EmitAccountProfileAbiRust"
+
+[[lean_exe]]
+name = "emit-account-profile-v2-profile14-rust"
+root = "EmitAccountProfileV2Profile14Rust"
+
+[[lean_exe]]
+name = "emit-capability-execution-abi-rust"
+root = "EmitCapabilityExecutionAbiRust"
+
+[[lean_exe]]
+name = "emit-capability-program-abi-rust"
+root = "EmitCapabilityProgramAbiRust"
+
+[[lean_exe]]
+name = "emit-capability-program-set-v1-rust"
+root = "EmitCapabilityProgramSetV1Rust"
+
+[[lean_exe]]
+name = "emit-capability-program-set-v2-rust"
+root = "EmitCapabilityProgramSetV2Rust"
+
+[[lean_exe]]
+name = "emit-capability-program-v3-abi-rust"
+root = "EmitCapabilityProgramV3AbiRust"
+
+[[lean_exe]]
+name = "emit-capability-program-v4-abi-rust"
+root = "EmitCapabilityProgramV4AbiRust"
 
 [[lean_exe]]
 name = "emit-claim-sbf-profile"
@@ -18,8 +46,44 @@ name = "emit-claim-vector"
 root = "EmitClaimVector"
 
 [[lean_exe]]
+name = "emit-claims-market-closure-v1-rust"
+root = "EmitClaimsMarketClosureV1Rust"
+
+[[lean_exe]]
+name = "emit-claims-representation-abi-rust"
+root = "EmitClaimsRepresentationAbiRust"
+
+[[lean_exe]]
+name = "emit-custody-abi-rust"
+root = "EmitCustodyAbiRust"
+
+[[lean_exe]]
 name = "emit-custody-vector"
 root = "EmitCustodyVector"
+
+[[lean_exe]]
+name = "emit-dealer-liquidity-abi-rust"
+root = "EmitDealerLiquidityAbiRust"
+
+[[lean_exe]]
+name = "emit-dealer-trading-profile-rust"
+root = "EmitDealerTradingProfileRust"
+
+[[lean_exe]]
+name = "emit-direct-codec-rust"
+root = "EmitDirectCodecRust"
+
+[[lean_exe]]
+name = "emit-direct-controller-vectors"
+root = "EmitDirectControllerVectors"
+
+[[lean_exe]]
+name = "emit-direct-intent-v2-rust"
+root = "EmitDirectIntentV2Rust"
+
+[[lean_exe]]
+name = "emit-direct-lifecycle-abi-rust"
+root = "EmitDirectLifecycleAbiRust"
 
 [[lean_exe]]
 name = "emit-direct-program"
@@ -30,36 +94,148 @@ name = "emit-direct-program-rust"
 root = "EmitDirectProgramRust"
 
 [[lean_exe]]
-name = "emit-direct-controller-vectors"
-root = "EmitDirectControllerVectors"
+name = "emit-direct-program-v2-rust"
+root = "EmitDirectProgramV2Rust"
 
 [[lean_exe]]
-name = "emit-direct-codec-rust"
-root = "EmitDirectCodecRust"
+name = "emit-direct-successor-abi-rust"
+root = "EmitDirectSuccessorAbiRust"
+
+[[lean_exe]]
+name = "emit-direct-translation-corpus"
+root = "EmitDirectTranslationCorpus"
 
 [[lean_exe]]
 name = "emit-economic-vectors"
 root = "EmitEconomicVectors"
 
 [[lean_exe]]
-name = "emit-direct-lifecycle-abi-rust"
-root = "EmitDirectLifecycleAbiRust"
+name = "emit-effect-program-v4-abi-rust"
+root = "EmitEffectProgramV4AbiRust"
 
 [[lean_exe]]
-name = "emit-registered-controller-abi-rust"
-root = "EmitRegisteredControllerAbiRust"
+name = "emit-execution-strategy-v2-abi-rust"
+root = "EmitExecutionStrategyV2AbiRust"
+
+[[lean_exe]]
+name = "emit-fractional-claim-v1-abi-rust"
+root = "EmitFractionalClaimV1AbiRust"
+
+[[lean_exe]]
+name = "emit-general-config-abi-rust"
+root = "EmitGeneralConfigAbiRust"
+
+[[lean_exe]]
+name = "emit-general-config-v3-abi-rust"
+root = "EmitGeneralConfigV3AbiRust"
 
 [[lean_exe]]
 name = "emit-general-controller-abi-rust"
 root = "EmitGeneralControllerAbiRust"
 
 [[lean_exe]]
+name = "emit-general-request-profiles-v1-rust"
+root = "EmitGeneralRequestProfilesV1Rust"
+
+[[lean_exe]]
 name = "emit-liability-basis-v2-rust"
 root = "EmitLiabilityBasisV2Rust"
 
 [[lean_exe]]
-name = "emit-transition-vm-v2-rust"
-root = "EmitTransitionVMV2Rust"
+name = "emit-market-core-physical-rust"
+root = "EmitMarketCorePhysicalRust"
+
+[[lean_exe]]
+name = "emit-market-core-rust"
+root = "EmitMarketCoreRust"
+
+[[lean_exe]]
+name = "emit-market-retirement-v1-rust"
+root = "EmitMarketRetirementV1Rust"
+
+[[lean_exe]]
+name = "emit-product-graded-basis-admission-v3-abi-rust"
+root = "EmitProductGradedBasisAdmissionV3AbiRust"
+
+[[lean_exe]]
+name = "emit-product-payoff-rust"
+root = "EmitProductPayoffRust"
+
+[[lean_exe]]
+name = "emit-product-payoff-translation-corpus"
+root = "EmitProductPayoffTranslationCorpus"
+
+[[lean_exe]]
+name = "emit-product-representation-exposure-v3-abi-rust"
+root = "EmitProductRepresentationExposureV3AbiRust"
+
+[[lean_exe]]
+name = "emit-product-representation-v3-abi-rust"
+root = "EmitProductRepresentationV3AbiRust"
+
+[[lean_exe]]
+name = "emit-product-runtime-v2-rust"
+root = "EmitProductRuntimeV2Rust"
+
+[[lean_exe]]
+name = "emit-protocol-infrastructure-profile-abi-rust"
+root = "EmitProtocolInfrastructureProfileAbiRust"
+
+[[lean_exe]]
+name = "emit-rational-cross-domain-v3-rust"
+root = "EmitRationalCrossDomainV3Rust"
+
+[[lean_exe]]
+name = "emit-rational-representation-v2-descriptor-rust"
+root = "EmitRationalRepresentationV2DescriptorRust"
+
+[[lean_exe]]
+name = "emit-rational-representation-v2-physical-abi-rust"
+root = "EmitRationalRepresentationV2PhysicalAbiRust"
+
+[[lean_exe]]
+name = "emit-rational-representation-v2-translation-corpus"
+root = "EmitRationalRepresentationV2TranslationCorpus"
+
+[[lean_exe]]
+name = "emit-rational-terminal-hot-v3-rust"
+root = "EmitRationalTerminalHotV3Rust"
+
+[[lean_exe]]
+name = "emit-registered-controller-abi-rust"
+root = "EmitRegisteredControllerAbiRust"
+
+[[lean_exe]]
+name = "emit-registered-creation-translation-corpus"
+root = "EmitRegisteredCreationTranslationCorpus"
+
+[[lean_exe]]
+name = "emit-relayed-mainnet-state-v1-abi-rust"
+root = "EmitRelayedMainnetStateV1AbiRust"
+
+[[lean_exe]]
+name = "emit-relayed-venue-decoding-rules-v1-rust"
+root = "EmitRelayedVenueDecodingRulesV1Rust"
+
+[[lean_exe]]
+name = "emit-representation-composition-v3-abi-rust"
+root = "EmitRepresentationCompositionV3AbiRust"
+
+[[lean_exe]]
+name = "emit-request-profile-abi-rust"
+root = "EmitRequestProfileAbiRust"
+
+[[lean_exe]]
+name = "emit-request-profile-v4-abi-rust"
+root = "EmitRequestProfileV4AbiRust"
+
+[[lean_exe]]
+name = "emit-series-core-found-ack-v2-rust"
+root = "EmitSeriesCoreFoundAckV2Rust"
+
+[[lean_exe]]
+name = "emit-series-occurrence-v3-rust"
+root = "EmitSeriesOccurrenceV3Rust"
 
 [[lean_exe]]
 name = "emit-source-material-v2-abi-rust"
@@ -82,21 +258,17 @@ name = "emit-source-resolution-terminal-v2-abi-rust"
 root = "EmitSourceResolutionTerminalV2AbiRust"
 
 [[lean_exe]]
-name = "emit-request-profile-abi-rust"
-root = "EmitRequestProfileAbiRust"
-
-[[lean_exe]]
-name = "emit-request-profile-v4-abi-rust"
-root = "EmitRequestProfileV4AbiRust"
+name = "emit-state-lifecycle-policy-v5-abi-rust"
+root = "EmitStateLifecyclePolicyV5AbiRust"
 
 [[lean_exe]]
 name = "emit-structured-v2-abi-rust"
 root = "EmitStructuredV2AbiRust"
 
 [[lean_exe]]
-name = "emit-relayed-mainnet-state-v1-abi-rust"
-root = "EmitRelayedMainnetStateV1AbiRust"
+name = "emit-transition-vm-v2-rust"
+root = "EmitTransitionVMV2Rust"
 
 [[lean_exe]]
-name = "emit-relayed-venue-decoding-rules-v1-rust"
-root = "EmitRelayedVenueDecodingRulesV1Rust"
+name = "emit-vectors"
+root = "EmitVectors"
