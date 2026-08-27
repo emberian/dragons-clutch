@@ -181,3 +181,26 @@ pool prices, majors). Cross-cluster truth transport:
   Solana account reads, verifiable against the devnet core bridge) — MR lane
   owns pinning whether this actually supports what we need.
 - Later hardening path: multi-relayer quorum, TEE-attested signer.
+
+## Close-out doctrine (ember, 2026-08-27)
+
+1. **Holistic over combinatorial.** The census answered "does each route run at
+   all." The next evidence tier is JOURNEYS: whole flows and use cases under
+   simulated load (create → many traders → resolve → redeem → retire; replay
+   pressure; concurrency), orchestrated at high abstraction. Route-level tiers
+   remain as regression floors; new testing effort goes to journeys.
+2. **Subagents yield.** A lane collects context, implements, commits, and
+   YIELDS. Campaigns, integration, and cross-lane convergence happen at the
+   orchestrator or in a dedicated integrator lane. No do-everything marathons.
+3. **Commit early and often.** A commit does not need to be a tested or
+   integrated unit. Git is the safety net; use it liberally.
+4. **No more re-measuring into tables.** Record verdicts and deltas; a number
+   is written down only when it is load-bearing for a decision.
+5. **The purge**: reference/stale/superseded code is banished to
+   ~/dev/dclutch-legacy (copy for grep convenience; git history is the
+   authoritative record). Banished so far: the gen-2 monolith
+   (programs/dclutch-sbf), series-sbf, effect-sbf, economic-sbf,
+   product-payoff-sbf, product-evidence-sbf. In progress (integrator lane):
+   the verticals live/dead split, dealer/general contracts, the remaining
+   gen-2 cascade, and the census denominator correction. The repo's contents
+   converge to ONLY the active built system.
