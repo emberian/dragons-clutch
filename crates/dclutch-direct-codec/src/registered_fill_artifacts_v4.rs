@@ -652,6 +652,55 @@ mod host {
             }
         }
 
+        /// A REGISTERED SELL RECORD, AS THIS FAMILY WOULD WRITE ONE, IS UNFILLABLE.
+        ///
+        /// The fill re-proves both reservations rather than trusting them:
+        /// `sellerMaximum - sellerFilled` must equal `sellerReservedClaims`
+        /// exactly. A freshly registered record has `filled == 0`, so its claim
+        /// reserve has to be its signed maximum.
+        ///
+        /// The family's ONLY EffectProgramV4 --
+        /// `encode_direct_register_buy_effect_v4_atomic` -- writes
+        /// `DirectRegisteredRecordLayoutV2::RESERVED_CLAIMS` from
+        /// `REGISTERED_SCALAR_ZERO_V4`, which is right for the Buy it was written
+        /// for and wrong for every Sell. A Sell Effect copied from it produces a
+        /// record no fill can ever admit, at any maximum. That is what this test
+        /// decides, over the whole family of records such an Effect can write.
+        ///
+        /// The fix costs no schema, which is worth recording because the
+        /// neighbouring gaps do: the value a Sell Effect must write is the signed
+        /// maximum, and the shared creation bank already carries it at
+        /// `REGISTERED_SCALAR_MAXIMUM_V4`. It is one instruction operand, and it
+        /// is exactly the kind of one-operand difference that copying RegisterBuy
+        /// hides -- the record decodes, the creation admits, and nothing refuses
+        /// until a fill that no test in the family runs.
+        #[test]
+        fn a_seller_record_carrying_the_reserve_this_family_writes_can_never_be_filled() {
+            let identities = valid_identities();
+            for maximum in [2_u64, 20, 1_000] {
+                // One bank, one difference: the seller record's claim reserve.
+                let mut bank = matched_scalars();
+                bank[FILL_SCALAR_QUANTITY_V4] = 2;
+                bank[FILL_SCALAR_SELLER_MAXIMUM_V4] = maximum;
+                bank[FILL_SCALAR_SELLER_FILLED_V4] = 0;
+
+                // What `REGISTERED_SCALAR_ZERO_V4` puts in the record.
+                let mut written_by_the_buy_effect = bank;
+                written_by_the_buy_effect[FILL_SCALAR_SELLER_RESERVED_CLAIMS_V4] = 0;
+                refuses_without_output_commit(written_by_the_buy_effect, identities);
+
+                // What a Sell Effect must write instead: the signed maximum.
+                let mut corrected = bank;
+                corrected[FILL_SCALAR_SELLER_RESERVED_CLAIMS_V4] = maximum;
+                let output = execute(corrected, identities);
+                assert_eq!(
+                    output[FILL_SCALAR_SELLER_RESERVED_CLAIMS_AFTER_V4],
+                    maximum - 2,
+                    "a record reserving its own maximum fills at maximum {maximum}"
+                );
+            }
+        }
+
         /// THE FILL'S READ SET, MEASURED -- and the writers it is still owed.
         ///
         /// `registered_bundle_v4`'s

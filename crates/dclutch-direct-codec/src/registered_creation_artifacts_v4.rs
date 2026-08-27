@@ -867,6 +867,15 @@ mod tests {
     }
 
     fn execute(action: DirectExecutionActionV3) -> std::vec::Vec<u64> {
+        execute_with(action, None).expect("the canonical creation must be admitted")
+    }
+
+    /// Execute one registered creation, optionally zeroing one identity register
+    /// first, and return the output bank on admission.
+    fn execute_with(
+        action: DirectExecutionActionV3,
+        unwritten_identity: Option<usize>,
+    ) -> Option<std::vec::Vec<u64>> {
         let profile_bytes = profile(action);
         let profile_id: [u8; 32] = Sha256::digest(profile_bytes).into();
         let profile = RequestProfileV2::decode_selected(profile_id, profile_id, &profile_bytes)
@@ -879,6 +888,9 @@ mod tests {
         identities[REGISTERED_IDENTITY_LIFECYCLE_RENT_CREDIT_V4] = id(7);
         identities[REGISTERED_IDENTITY_LIFECYCLE_RENT_PROGRAM_V4] = id(8);
         identities[REGISTERED_IDENTITY_COLLATERAL_SOURCE_V4] = id(10);
+        if let Some(index) = unwritten_identity {
+            *identities.get_mut(index).expect("identity coordinate") = [0; 32];
+        }
         set_scalar(&mut scalars, REGISTERED_SCALAR_ROOT_PHASE_V4, 0);
         set_scalar(&mut scalars, REGISTERED_SCALAR_SLOT_V4, 10);
         set_scalar(&mut scalars, REGISTERED_SCALAR_OUTCOME_COUNT_V4, 3);
@@ -939,8 +951,53 @@ mod tests {
                 identities: &mut output_identities,
             },
         )
-        .expect("execute");
-        output_scalars
+        .ok()?;
+        Some(output_scalars)
+    }
+
+    /// WHAT A `RegisterSell` MAY NOT INHERIT FROM `RegisterBuy`, decided.
+    ///
+    /// `e03a51fd` ruled that anyone building on RegisterBuy as a template must
+    /// rebase on it. This is the part of that ruling a Sell hits first, and it
+    /// is not a privilege or a signer: it is a register with one writer inside
+    /// a window a Sell has no reason to carry.
+    ///
+    /// `REGISTERED_IDENTITY_COLLATERAL_SOURCE_V4` is written exactly once in the
+    /// family -- `project_key(SOURCE_ACCOUNT, ..)` in
+    /// `registered_account_artifacts_v4.rs`, where `SOURCE_ACCOUNT` is fixed
+    /// coordinate 50, inside the Custody `Transfer` window that starts at
+    /// `DIRECT_REGISTER_BUY_DEPOSIT_ACCOUNT_START_V4`. A Sell opens no Custody
+    /// replay, no vault and no deposit, so a Sell AccountProfile drops that whole
+    /// window -- and the SHARED creation Transition still compares the register
+    /// against the maker's signed collateral account UNCONDITIONALLY, outside the
+    /// side branch. The comparison then reads all zeros while the request decoder
+    /// makes the signed side nonzero, so it can never hold.
+    ///
+    /// Same genus as `52f14fa`'s find and as registers 50/51 in `8d57faec`:
+    /// invisible because no registered creation has ever executed on a chain, and
+    /// invisible to `every_register_the_effect_reads_has_a_declared_writer` for a
+    /// specific reason -- that witness perturbs the EFFECT, and this register is
+    /// read by the TRANSITION.
+    ///
+    /// A Sell lane picks one: branch the comparison out for a Sell, keep a
+    /// non-Custody source-account coordinate in the Sell profile, or extend the
+    /// witness to Transition reads. This test decides only that doing nothing
+    /// refuses.
+    #[test]
+    fn a_sell_that_drops_the_custody_window_unwrites_the_collateral_source() {
+        for action in [
+            DirectExecutionActionV3::RegisterSell,
+            DirectExecutionActionV3::RegisterBuy,
+        ] {
+            assert!(
+                execute_with(action, None).is_some(),
+                "the canonical creation is admitted when the profile writes it"
+            );
+            assert!(
+                execute_with(action, Some(REGISTERED_IDENTITY_COLLATERAL_SOURCE_V4)).is_none(),
+                "an unwritten collateral source must refuse"
+            );
+        }
     }
 
     #[test]
