@@ -52,7 +52,9 @@ use std::{cell::RefCell, collections::BTreeMap};
 use sha2::{Digest as _, Sha256};
 use solana_sdk::signature::Keypair;
 
-use crate::{Error, Result, plan::hex, rpc::validate_loopback_url};
+use crate::{
+    Error, Result, cluster::seeded_keys_admissible as cluster_admits_seeded_keys, plan::hex,
+};
 
 /// Domain separator for every seeded campaign key.
 ///
@@ -92,6 +94,14 @@ pub(crate) mod role {
     pub(crate) const SUBSTITUTED_FOUNDER: &str = "substituted-founder";
 }
 
+/// Domain separator for a persisted per-role key's higher indices.
+///
+/// Distinct from [`KEYPAIR_SEED_DOMAIN_V1`] so that a persisted campaign and a
+/// seeded one can never derive the same key even if somebody's file happened to
+/// hold the same 32 bytes as somebody's `--keypair-seed`.
+pub(crate) const PERSISTED_KEY_DOMAIN_V1: &[u8] =
+    b"dclutch/local-successor-bootstrap/persisted-key/v1";
+
 /// Where a campaign's signing keys come from.
 enum KeyOriginV1 {
     /// The default. One fresh key per request, unreproducible by anyone,
@@ -100,6 +110,35 @@ enum KeyOriginV1 {
     /// Test-only. Every key is a pure function of this seed, the role name, and
     /// how many keys that role has already been issued.
     Seeded([u8; 32]),
+    /// The driver's origin: one keypair FILE per role, held by the operator.
+    ///
+    /// # Why index 0 is the file's own key, exactly
+    ///
+    /// The operator has to *fund* these addresses, and funding happens outside
+    /// this tool — `solana transfer`, a faucet, a wallet. So the address that
+    /// `solana address -k core-upgrade-authority.json` prints must be the
+    /// address this campaign pays fees from, with no derivation in between.
+    /// Index 0 is therefore the file's key verbatim.
+    ///
+    /// # Why higher indices are derived rather than demanded
+    ///
+    /// A campaign asks a role for its n-th key, and n depends on which lanes
+    /// the market path takes. Demanding a file per (role, index) would make the
+    /// operator's obligation depend on a control-flow detail they cannot see,
+    /// and a missing file would surface halfway through a founding ladder. So
+    /// index n > 0 is `SHA-256(DOMAIN || 0 || file-secret || 0 || role || 0 ||
+    /// n)`: total, reproducible from a file the operator already holds, and
+    /// impossible to run out of.
+    ///
+    /// # Why this is not the `--keypair-seed` footgun
+    ///
+    /// `--keypair-seed` is refused off loopback because the seed rides on a
+    /// command line, into a shell history, into a checked-in script. A file
+    /// path is not the secret; the file is, and it is the same file the
+    /// operator already trusts with the funded wallet. What this origin does
+    /// owe the evidence is honesty: `private_key_persisted` is TRUE for such a
+    /// run, because a key that outlives the process is exactly what it is.
+    Persisted(BTreeMap<String, [u8; 32]>),
 }
 
 /// The campaign's sole source of signing keys.
@@ -131,10 +170,16 @@ impl KeyForge {
         let Some(value) = keypair_seed else {
             return Ok(Self::random());
         };
-        // The gate, before anything is derived. `validate_loopback_url` is the
-        // one owner of "is this a loopback origin"; this is the one owner of
-        // "may a seeded key exist against it".
-        if validate_loopback_url(rpc_url).is_err() {
+        // The gate, before anything is derived. `crate::cluster` is the one
+        // owner of "which cluster is this and what may happen there"; this is
+        // the one owner of "may a seeded key exist against it".
+        //
+        // The question asked is deliberately `may_use_seeded_keys`, not "did
+        // the URL parse as loopback". A devnet origin the operator explicitly
+        // acknowledged is an *admitted* origin, and admitting it must not
+        // quietly admit reproducible private keys with it — the whole footgun
+        // below is that the operator meant to reach a real cluster.
+        if !cluster_admits_seeded_keys(rpc_url) {
             return Err(Error::new(format!(
                 "--keypair-seed REFUSED for RPC endpoint {rpc_url}. Seeded keypairs are a \
                  TEST-ONLY affordance: the seed is a command-line argument, so every private \
@@ -156,12 +201,44 @@ impl KeyForge {
         })
     }
 
+    /// Build a forge from per-role secrets the operator holds on disk.
+    ///
+    /// `secrets` maps a [`role`] name to the 32-byte ed25519 secret seed read
+    /// out of that role's keypair file. Every role the campaign will ask for
+    /// must be present: this is checked here, once, against the caller's own
+    /// required list, so a missing file is a refusal before the first
+    /// transaction rather than a surprise inside a ladder.
+    pub(crate) fn persisted(
+        secrets: BTreeMap<String, [u8; 32]>,
+        required: &[&'static str],
+    ) -> Result<Self> {
+        let missing = required
+            .iter()
+            .filter(|role| !secrets.contains_key(**role))
+            .copied()
+            .collect::<Vec<_>>();
+        if !missing.is_empty() {
+            return Err(Error::new(format!(
+                "no keypair was supplied for {}. A campaign against a cluster it did not create \
+                 has no way to invent a funded signer, so every role it will sign for must be a \
+                 file you hold.",
+                missing.join(", ")
+            )));
+        }
+        Ok(Self {
+            origin: KeyOriginV1::Persisted(secrets),
+            issued: RefCell::new(BTreeMap::new()),
+        })
+    }
+
     /// Issue the next keypair for `role`.
     ///
     /// Under a seed this is `SHA-256(DOMAIN || 0 || seed || 0 || role || 0 ||
     /// index)` read as an ed25519 secret seed, where `index` counts prior
-    /// issues under the same role. The counter advances either way, so a run
-    /// with and a run without a seed ask for keys in exactly the same order.
+    /// issues under the same role. Under a persisted store, index 0 is the
+    /// file's own key and index n is the same construction under
+    /// [`PERSISTED_KEY_DOMAIN_V1`]. The counter advances in every case, so runs
+    /// under all three origins ask for keys in exactly the same order.
     pub(crate) fn keypair(&self, role: &'static str) -> Keypair {
         let index = {
             let mut issued = self.issued.borrow_mut();
@@ -170,19 +247,24 @@ impl KeyForge {
             *counter = counter.saturating_add(1);
             index
         };
-        match self.origin {
+        match &self.origin {
             KeyOriginV1::Random => Keypair::new(),
             KeyOriginV1::Seeded(seed) => {
-                let mut material = Sha256::new();
-                material.update(KEYPAIR_SEED_DOMAIN_V1);
-                material.update([0]);
-                material.update(seed);
-                material.update([0]);
-                material.update(role.as_bytes());
-                material.update([0]);
-                material.update(index.to_le_bytes());
-                Keypair::new_from_array(material.finalize().into())
+                Keypair::new_from_array(derive(KEYPAIR_SEED_DOMAIN_V1, seed, role, index))
             }
+            KeyOriginV1::Persisted(secrets) => match secrets.get(role) {
+                // Unreachable for any role in the caller's required list, which
+                // `persisted` checked. A role outside that list is a campaign
+                // path the driver has not been taught to fund, and a fresh
+                // unfunded key is the honest answer: every transaction it signs
+                // for fails visibly at the cluster rather than being paid for
+                // by somebody else's balance.
+                None => Keypair::new(),
+                Some(secret) if index == 0 => Keypair::new_from_array(*secret),
+                Some(secret) => {
+                    Keypair::new_from_array(derive(PERSISTED_KEY_DOMAIN_V1, secret, role, index))
+                }
+            },
         }
     }
 
@@ -191,20 +273,45 @@ impl KeyForge {
         match self.origin {
             KeyOriginV1::Random => "random-per-run",
             KeyOriginV1::Seeded(_) => "seeded-deterministic",
+            KeyOriginV1::Persisted(_) => "persisted-per-role",
         }
     }
 
-    /// SHA-256 of the seed, or `None` for a random campaign.
+    /// Whether any key this forge issues outlives the process.
+    ///
+    /// The evidence document's `private_key_persisted` field. It is a separate
+    /// claim from `derivation_label`, and a driver run must not be able to
+    /// inherit the supervisor's constant `false`.
+    pub(crate) fn persists_private_keys(&self) -> bool {
+        matches!(self.origin, KeyOriginV1::Persisted(_))
+    }
+
+    /// SHA-256 of the seed, or `None` for a random or persisted campaign.
     ///
     /// The digest and not the seed: it identifies which seed produced a run's
     /// compute-unit numbers without the evidence file itself becoming a way to
-    /// sign as the campaign.
+    /// sign as the campaign. A persisted campaign has no single seed, and
+    /// digesting the operator's files would put a fingerprint of a live funded
+    /// key into a document meant to be published.
     pub(crate) fn seed_sha256(&self) -> Option<String> {
         match self.origin {
-            KeyOriginV1::Random => None,
+            KeyOriginV1::Random | KeyOriginV1::Persisted(_) => None,
             KeyOriginV1::Seeded(seed) => Some(hex(&Sha256::digest(seed))),
         }
     }
+}
+
+/// The one derivation both keyed origins share.
+fn derive(domain: &[u8], secret: &[u8; 32], role: &str, index: u32) -> [u8; 32] {
+    let mut material = Sha256::new();
+    material.update(domain);
+    material.update([0]);
+    material.update(secret);
+    material.update([0]);
+    material.update(role.as_bytes());
+    material.update([0]);
+    material.update(index.to_le_bytes());
+    material.finalize().into()
 }
 
 #[cfg(test)]
@@ -302,7 +409,10 @@ mod tests {
                 "the refusal must say why, got: {}",
                 refusal.0
             );
-            assert!(refusal.0.contains(endpoint), "the refusal must name {endpoint}");
+            assert!(
+                refusal.0.contains(endpoint),
+                "the refusal must name {endpoint}"
+            );
         }
         // An absent seed is unaffected: a random campaign is safe anywhere.
         assert!(KeyForge::parse(None, "https://api.mainnet-beta.solana.com/").is_ok());
@@ -312,6 +422,81 @@ mod tests {
     fn localhost_by_name_is_admitted() {
         assert!(KeyForge::parse(Some(SEED), "http://localhost:20890/").is_ok());
         assert!(KeyForge::parse(Some(SEED), "http://[::1]:20890/").is_ok());
+    }
+
+    #[test]
+    fn a_persisted_roles_first_key_is_the_file_itself() {
+        // The property the operator depends on: the address they funded with
+        // `solana address -k core-upgrade-authority.json` is the address this
+        // campaign pays fees from, with nothing derived in between.
+        let secret = [7_u8; 32];
+        let file_key = Keypair::new_from_array(secret);
+        let forge = KeyForge::persisted(
+            BTreeMap::from([(role::CORE_UPGRADE_AUTHORITY.to_owned(), secret)]),
+            &[role::CORE_UPGRADE_AUTHORITY],
+        )
+        .expect("one supplied role");
+        assert_eq!(
+            forge.keypair(role::CORE_UPGRADE_AUTHORITY).pubkey(),
+            file_key.pubkey(),
+            "index 0 must be the file's own key"
+        );
+        // ...and the second key under the same role is derived, not the file
+        // again, so two accounts never collapse into one.
+        let second = forge.keypair(role::CORE_UPGRADE_AUTHORITY).pubkey();
+        assert_ne!(second, file_key.pubkey());
+        // Reproducible from the same file, which is what makes a resumed
+        // campaign able to sign for what the first attempt created.
+        let resumed = KeyForge::persisted(
+            BTreeMap::from([(role::CORE_UPGRADE_AUTHORITY.to_owned(), secret)]),
+            &[role::CORE_UPGRADE_AUTHORITY],
+        )
+        .expect("one supplied role");
+        let _ = resumed.keypair(role::CORE_UPGRADE_AUTHORITY);
+        assert_eq!(
+            resumed.keypair(role::CORE_UPGRADE_AUTHORITY).pubkey(),
+            second
+        );
+    }
+
+    #[test]
+    fn a_persisted_campaign_refuses_a_role_it_was_given_no_file_for() {
+        let refusal = KeyForge::persisted(
+            BTreeMap::from([(role::CORE_UPGRADE_AUTHORITY.to_owned(), [7_u8; 32])]),
+            &[role::CORE_UPGRADE_AUTHORITY, role::COLLATERAL_MINT],
+        )
+        .err()
+        .expect("a missing role must refuse");
+        assert!(refusal.0.contains(role::COLLATERAL_MINT));
+        assert!(!refusal.0.contains(role::CORE_UPGRADE_AUTHORITY));
+    }
+
+    #[test]
+    fn the_two_keyed_origins_are_domain_separated() {
+        // The same 32 bytes as a --keypair-seed and as a persisted file must
+        // never produce the same key, or a lab seed could sign for a funded
+        // devnet account.
+        let material = [9_u8; 32];
+        let seeded = KeyForge::parse(Some(&hex(&material)), LOOPBACK).expect("loopback seed");
+        let persisted = KeyForge::persisted(
+            BTreeMap::from([(role::COLLATERAL_MINT.to_owned(), material)]),
+            &[role::COLLATERAL_MINT],
+        )
+        .expect("persisted");
+        // Compare at index 1, where both origins derive rather than one of
+        // them returning the file verbatim.
+        let _ = seeded.keypair(role::COLLATERAL_MINT);
+        let _ = persisted.keypair(role::COLLATERAL_MINT);
+        assert_ne!(
+            seeded.keypair(role::COLLATERAL_MINT).pubkey(),
+            persisted.keypair(role::COLLATERAL_MINT).pubkey()
+        );
+        assert_eq!(persisted.derivation_label(), "persisted-per-role");
+        assert!(persisted.persists_private_keys());
+        assert!(!seeded.persists_private_keys());
+        assert!(!KeyForge::random().persists_private_keys());
+        // The evidence must not carry a fingerprint of a live funded key.
+        assert_eq!(persisted.seed_sha256(), None);
     }
 
     #[test]

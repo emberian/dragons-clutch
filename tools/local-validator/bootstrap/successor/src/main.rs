@@ -4,6 +4,8 @@ use std::{env, error::Error as StdError, fmt, io::Write, path::PathBuf};
 
 use solana_sdk::pubkey::Pubkey;
 
+mod campaign;
+mod cluster;
 mod market;
 mod model;
 mod plan;
@@ -62,6 +64,7 @@ fn run() -> Result<()> {
         Some("prepare") => run_prepare(arguments.collect()),
         Some("demo-market") => run_demo_market(arguments.collect()),
         Some("run") => run_runtime(arguments.collect()),
+        Some("campaign") => run_campaign(arguments.collect()),
         Some("help" | "-h" | "--help") | None => {
             usage();
             Ok(())
@@ -90,6 +93,88 @@ fn run_runtime(arguments: Vec<String>) -> Result<()> {
         }
     }
     runtime::execute(&absolute(spec, "--spec")?, keypair_seed.as_deref())
+}
+
+/// The devnet driver's command line.
+///
+/// Two things are deliberately NOT flags here. There is no `--keypair-seed`:
+/// the driver's keys come from files the operator holds, and a reproducible
+/// key on a public cluster is the footgun `seed.rs` documents at length. And
+/// there is no `--force`: every refusal this driver can raise is a statement
+/// about the chain, and the fix is to change the chain or the plan, never to
+/// tell the tool to stop noticing.
+fn run_campaign(arguments: Vec<String>) -> Result<()> {
+    let mut rpc_url = None;
+    let mut acknowledgment = None;
+    let mut plan = None;
+    let mut evidence = None;
+    let mut through = None;
+    let mut execute = false;
+    let mut keypairs = std::collections::BTreeMap::new();
+    let mut iterator = arguments.into_iter();
+    while let Some(argument) = iterator.next() {
+        // The one valueless flag, matched before anything demands a value.
+        if argument == "--execute" {
+            if execute {
+                return Err(Error::new("--execute may be supplied only once"));
+            }
+            execute = true;
+            continue;
+        }
+        let value = iterator
+            .next()
+            .ok_or_else(|| Error::new(format!("{argument} requires a value")))?;
+        if let Some(role) = argument.strip_prefix("--keypair-") {
+            let role = *campaign::KEYPAIR_ROLES
+                .iter()
+                .find(|known| **known == role)
+                .ok_or_else(|| {
+                    Error::new(format!(
+                        "--keypair-{role} names no campaign role; the roles are {}",
+                        campaign::KEYPAIR_ROLES.join(", ")
+                    ))
+                })?;
+            let secret = campaign::read_keypair_file(&PathBuf::from(&value), role)?;
+            if keypairs.insert(role.to_owned(), secret).is_some() {
+                return Err(Error::new(format!(
+                    "--keypair-{role} may be supplied only once"
+                )));
+            }
+            continue;
+        }
+        let slot = match argument.as_str() {
+            "--rpc-url" => &mut rpc_url,
+            campaign::DEVNET_ACKNOWLEDGMENT_FLAG_NAME => &mut acknowledgment,
+            "--plan" => &mut plan,
+            "--evidence" => &mut evidence,
+            "--through" => &mut through,
+            _ => {
+                return Err(Error::new(format!("unknown campaign argument: {argument}")));
+            }
+        };
+        if slot.replace(value).is_some() {
+            return Err(Error::new(format!("{argument} may be supplied only once")));
+        }
+    }
+    let origin = cluster::ClusterOriginV1::parse(
+        &required(rpc_url, "--rpc-url")?,
+        acknowledgment.as_deref(),
+    )?;
+    let args = campaign::CampaignArgsV1 {
+        origin,
+        plan_path: absolute(plan, "--plan")?,
+        evidence_path: match evidence {
+            None => None,
+            Some(path) => Some(absolute(Some(path), "--evidence")?),
+        },
+        keypairs,
+        execute,
+        through: match through.as_deref() {
+            None => campaign::StageV1::Founding,
+            Some(value) => campaign::StageV1::parse(value)?,
+        },
+    };
+    campaign::execute(args)
 }
 
 fn run_demo_market(arguments: Vec<String>) -> Result<()> {
@@ -350,6 +435,39 @@ fn parse_pubkey(value: Option<String>, label: &str) -> Result<Pubkey> {
 }
 
 fn usage() {
+    usage_supervisor();
+    println!(
+        "\n  dclutch-local-successor-bootstrap campaign --rpc-url URL [{ack} GENESIS_HASH] --plan \
+         ABSOLUTE_JSON --keypair-ROLE ABSOLUTE_KEYPAIR_JSON... [--evidence ABSOLUTE_JSON] \
+         [--through STAGE] [--execute]\n\nThe campaign command is the EXTERNAL-CLUSTER driver. It \
+         launches no validator, holds no ephemeral authority, and signs only with keypair files \
+         you hold. Default is PREFLIGHT: the connection is opened read-only and a method \
+         allowlist refuses anything that is not a read, so a preflight cannot write rather than \
+         intending not to. --execute opts into writing.\n\nORIGIN. A loopback origin needs no \
+         ceremony. Any other origin is refused unless {ack} names devnet's genesis hash in full, \
+         and the cluster's own getGenesisHash is checked against it at connect. {help}\n\nSTAGES \
+         (--through, default founding): {stages}. Every stage detects its own completion by \
+         READING THE CHAIN, never from a state file, so re-running after any failure is always \
+         safe -- which is the shape devnet requires, because devnet dies mid-ladder. `substrate` \
+         never writes: this driver does not deploy programs and has no code path that could. It \
+         reports each role's observed deployment slot against the slot its release binds, which \
+         under decision 0012 is the whole invariant -- a moved slot is the fail-closed condition, \
+         not a deploy error.\n\nROLES for --keypair-ROLE: {roles}. Index 0 of each role is that \
+         file's own key, so the address `solana address -k FILE` prints is the address you fund. \
+         There is no --keypair-seed here: a reproducible private key on a public cluster is the \
+         footgun seed.rs documents.",
+        ack = campaign::DEVNET_ACKNOWLEDGMENT_FLAG_NAME,
+        help = campaign::acknowledgment_help(),
+        stages = campaign::StageV1::ORDER
+            .iter()
+            .map(|stage| stage.name())
+            .collect::<Vec<_>>()
+            .join(", "),
+        roles = campaign::KEYPAIR_ROLES.join(", "),
+    );
+}
+
+fn usage_supervisor() {
     println!(
         "Usage:\n  dclutch-local-successor-bootstrap prepare --account-dir ABSOLUTE_NEW_DIR --output ABSOLUTE_NEW_JSON --registry-program-id PUBKEY --registry-elf ABSOLUTE_ELF --registry-sha256 SHA256 --registry-semantic-release-id SHA256 --core-program-id PUBKEY --core-elf ABSOLUTE_ELF --core-sha256 SHA256 --core-semantic-release-id SHA256 --core-bootstrap-upgrade-authority PUBKEY --claims-program-id PUBKEY --claims-elf ABSOLUTE_ELF --claims-sha256 SHA256 --claims-semantic-release-id SHA256 --trading-program-id PUBKEY --trading-elf ABSOLUTE_ELF --trading-sha256 SHA256 --trading-semantic-release-id SHA256 --resolution-program-id PUBKEY --resolution-elf ABSOLUTE_ELF --resolution-sha256 SHA256 --resolution-semantic-release-id SHA256 --custody-program-id PUBKEY --custody-elf ABSOLUTE_ELF --custody-sha256 SHA256 --custody-semantic-release-id SHA256 --rent-credit-program-id PUBKEY --rent-credit-elf ABSOLUTE_ELF --rent-credit-sha256 SHA256 --rent-credit-semantic-release-id SHA256 [--record-publication genesis|transaction] [--ROLE-observed-programdata ABSOLUTE_ACCOUNT_BODY] [--ROLE-genesis-deployment-slot U64]\n  dclutch-local-successor-bootstrap run --spec ABSOLUTE_JSON [--keypair-seed 64_LOWERCASE_HEX]\n  dclutch-local-successor-bootstrap demo-market --registry-program-id PUBKEY\n\nThe run command is the canonical same-process supervisor. It creates one ephemeral Core authority only in memory, prepares its public key into fresh genesis inputs, starts a guarded foreground localhost validator, initializes Core infrastructure, proves pre-revocation release refusal, revokes Loader-v3 authority to None, and activates the immutable release set. It never reads a wallet or CLI configuration.\n\nA ROLE is one of registry, core, claims, trading, resolution, custody, rent-credit. --ROLE-observed-programdata takes a complete Loader V3 ProgramData account body read off a cluster and mints that role's ArtifactReleaseV1 from it; --ROLE-genesis-deployment-slot writes a slot into the genesis install this plan materializes so a LOCAL rehearsal exercises a nonzero deployment slot. The two are mutually exclusive, and NEITHER supplies the slot the release binds: that is always hostile-decoded out of the resulting ProgramData image by the same parse the on-chain authenticator runs.\n\n--keypair-seed is a TEST-ONLY affordance and is REFUSED unless the spec's RPC endpoint is on localhost or 127.0.0.1. With it, every signing key the campaign generates is derived deterministically as SHA-256(domain || 0 || seed || 0 || role-name || 0 || per-role index) read as an ed25519 secret seed, which collapses the find_program_address bump-search noise the gauntlet's compute budgets have to tolerate. It also makes every one of those private keys reproducible by anyone who can read the seed off a command line, a shell history or a checked-in script, so on any public cluster it would hand a stranger the campaign's funded accounts, mint authorities and upgrade authorities. Default is a fresh unreproducible key per request."
     );
