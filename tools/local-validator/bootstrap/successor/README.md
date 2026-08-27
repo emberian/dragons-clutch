@@ -36,7 +36,11 @@ localhost transactions:
 
 1. Core initialization of the sole Registry/Rent infrastructure profile.
 2. Loader-v3 revocation of Core's ephemeral authority to `None`, followed by
-   Registry activation of the five-role immutable release set.
+   Registry activation of the five-role immutable release set. Activation is
+   **one role per transaction**: whole-ELF hashing costs about one compute unit
+   per two bytes, so admitting the real seven artifacts in a single transaction
+   cannot fit under the chain maximum. A partially activated cache cannot
+   decode, so no reader can consume a half-activated release set.
 
 Loader-v3 owns authority presence with the tag at byte 12. Its real
 `Some -> None` serialization leaves bytes 13..45 as inactive storage rather
@@ -78,37 +82,55 @@ PDA, instruction frame, and next publication action.
 
 ## The current stopping point
 
-Measured on a real localhost validator on 2026-08-26, the campaign reaches
-Found31 and **Found31 does not execute**: it exhausts Solana's per-transaction
-maximum of 1,400,000 compute units. Worse, when the real
-Claims/Trading/Resolution/Custody artifacts are supplied through
-`DCLUTCH_SUCCESSOR_*_ELF`, the five-role Registry activation exhausts the same
-maximum before the campaign reaches any Market work at all; the run therefore
-binds those four roles to distinct immutable deployments of the much smaller
-Registry ELF. Release authentication hashes whole
-ProgramData ELFs on chain -- the ~1.0 MB Core ELF twice in the same
-transaction, once inside Core and once inside the Registry role CPI -- and that
-hashing alone is roughly 1.19M CU. The compute limit is already the protocol
-maximum, so there is no headroom to buy. No Market is created and the Market is
-not Open. The full decomposition, and the two defects that had to be fixed
-before the campaign could get this far, are in
-`docs/evidence/GENERIC_FOUNDING_REACHABILITY_2026_08_26.md`.
+Measured on a real localhost validator on 2026-08-26, with **all seven real
+artifacts bound into the release set**, the campaign runs 46 finalized
+transactions in 747 seconds and **creates the Market**. Canonical Core Found31
+executes at **234,043** compute units, 16.7% of Solana's 1,400,000
+per-transaction maximum. Release-set activation is now one role per transaction;
+the worst of the five is Trading at **682,276** CU, 48.7% of the maximum.
 
-Beyond that ceiling, the atomic generic founding outer (`DCLTGMF1`,
-`programs/dclutch-trading-sbf/src/generic_market_founding_v1.rs`) -- which has
-the correct Lock -> Found/permit -> Realize -> Claims FoundingV5 -> Core
-Open-last order in one rollback domain -- remains unreachable for two
-structural reasons recorded with file and line in the same document:
+That is a change from the first campaign, which is worth stating plainly because
+this paragraph used to say the opposite. Found31 then exhausted the maximum
+outright, and five-role activation with the real artifacts could not execute at
+all, so the run had to bind Claims, Trading, Resolution, and Custody to distinct
+immutable deployments of the much smaller Registry ELF. Both causes were the
+same: on-chain hashing of whole ProgramData ELFs, about one compute unit per two
+bytes, with the ~1.0 MB Core ELF hashed twice inside one transaction. `c61376d`
+fixed it in two different ways, because the two sites needed opposite
+treatments. Recurring readers stopped re-deriving a digest that activation had
+already authenticated and that an immutable Loader v3 deployment cannot change.
+First admission — the one site that checks an artifact record's *claimed* digest
+against the bytes actually deployed — kept hashing, and activation was split so
+that a transaction hashes one artifact rather than five. Nothing was weakened;
+the fast path additionally requires the immutable policy and an absent live
+upgrade authority, which the hashing path never demanded on its own.
 
-- a Trading capability root can only be activated against a Core Market that
-  already exists, and generic founding needs one for the Market it is about to
-  create; and
+**The Market is Found. It is not Open.** The Open-last chain needs the atomic
+generic founding outer (`DCLTGMF1`,
+`programs/dclutch-trading-sbf/src/generic_market_founding_v1.rs`), which has the
+correct Lock -> Found/permit -> Realize -> Claims FoundingV5 -> Core Open-last
+order in one rollback domain and remains unreachable for two structural reasons:
+
+- the founding capability root. `docs/decisions/0004-founding-capability-root.md`
+  **decides** this: the root is derived by Core from the authenticated
+  Market-selected capability manifest entry and never persisted or read at
+  founding, and the root account is created afterwards by the unchanged ordinary
+  activation route. The decision is made and the file plan is written; the
+  implementation is queued.
 - no live Trading route emits the projected-Custody `Initialize`/`OpenHoard`
-  requests whose resulting state the outer's Lock stage consumes.
+  requests whose resulting state the outer's Lock stage consumes. This is still
+  open, and it is a new vertical slice rather than a wiring change:
+  `projected_custody_composition_v4.rs` is a *Lock* adapter that can emit only
+  `LockHoardAndCloseSource` and requires the projected state to already be in
+  phase `HoardOpen`.
 
-A third defect on that path -- the capability-root selection was a SHA-256
-fixed point and so unsatisfiable for every well-formed artifact -- was fixed at
-its semantic owner in `386f254`.
+Two earlier defects on that path were fixed at their semantic owners: the host
+Found/RentV2 projections refused the real System Program (`c25de27`), and the
+capability-root selection was a SHA-256 fixed point and so unsatisfiable for
+every well-formed artifact (`386f254`). The full decomposition, the measured
+per-role activation table, the current artifact digests, and the complete
+46-transaction transcript are in
+`docs/evidence/GENERIC_FOUNDING_REACHABILITY_2026_08_26.md`.
 
 ## Safety boundary
 

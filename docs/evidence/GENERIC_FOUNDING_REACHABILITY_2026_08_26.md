@@ -16,7 +16,24 @@ refusal on a specific input, not a proof over all inputs. The CU figures are
 measured on this validator with these exact artifacts, and are labelled
 measured-profile, not mathematical.
 
+## Superseded in part on 2026-08-26 by the W1b lane
+
+**The Market is now Found.** Everything below the "Headline" heading is the
+historical record of the first campaign and is kept verbatim as such. Two of its
+findings no longer hold, and the current truth is in
+[the W1b supersession section](#w1b-supersession-2026-08-26), which carries the
+new measurements, the new artifact digests, and the new campaign transcript.
+Read that section for what is true now; read the rest for how it was found.
+
+| Then | Now |
+|---|---|
+| Registry activation with the real seven artifacts could not execute | executes; five transactions, worst role **682,276** CU |
+| Found31 exhausted the 1,400,000 CU maximum | executes; **234,043** CU, and the Market account exists |
+| The Market is not Open, and it is not Found either | the Market is **Found**. It is still **not Open** |
+
 ## Headline
+
+*(historical, 2026-08-26, first campaign)*
 
 **The Market is not Open, and it is not Found either.** The campaign reaches
 canonical Core Found31 and Found31 exhausts Solana's per-transaction maximum of
@@ -29,12 +46,15 @@ third is a measurement handed to the lane that owns it.
 |---|---|
 | Host Found/RentV2 projections refused the real System Program | fixed, `c25de27` |
 | Capability-root selection was a SHA-256 fixed point | fixed, `386f254` |
-| Found31 exceeds the 1.4M CU maximum (on-chain full-ELF hashing) | measured, owner is the W2 registry fast path |
-| Registry activation with the real seven artifacts also exceeds it | measured, same cause |
-| No route creates a pre-Market Trading capability root | recorded, needs a protocol decision |
-| No live route creates the projected-Custody state the outer's Lock consumes | recorded, needs an implementation owner |
+| Found31 exceeds the 1.4M CU maximum (on-chain full-ELF hashing) | **fixed, `c61376d`** |
+| Registry activation with the real seven artifacts also exceeds it | **fixed, `c61376d`** |
+| No route creates a pre-Market Trading capability root | **decided, `docs/decisions/0004-founding-capability-root.md`; implementation queued** |
+| No live route creates the projected-Custody state the outer's Lock consumes | open; needs an implementation owner |
 
 ## Artifacts
+
+*(historical, 2026-08-26, first campaign; the current artifacts are in the
+supersession section above)*
 
 Built from the working tree at this commit with the pinned toolchain
 (`cargo-build-sbf 4.0.0`, `platform-tools v1.53`, `rustc 1.89.0`), default
@@ -231,7 +251,199 @@ the first before it was run. The campaign's early refusals cost 5,777 CU (wrong
 infrastructure authority) and 6,958 CU (substituted lifecycle credit in
 Found31), because they refuse before reaching the release membrane at all.
 
-## Why the atomic outer is still unreachable
+
+## W1b supersession 2026-08-26
+
+Same evidence boundary as the rest of this document: one
+`solana-test-validator 4.0.2` bound to 127.0.0.1, fresh genesis, local-validator
+evidence only. Not devnet, not mainnet, not a deployment, no formal verification
+claimed. Every CU figure is measured-profile on this validator with these exact
+artifacts.
+
+### What changed
+
+`c61376d` split the two defects that wore the same symptom.
+
+**Recurring readers stopped recomputing an authenticated fact.** Registry
+reauthentication (`programs/dclutch-registry-sbf/src/lib.rs`) and Core's Found
+path (`programs/dclutch-core-sbf/src/infrastructure.rs`) now take
+`immutable_release_elf_digest_v1` through one shared
+`cached_role_deployment_observation`, exactly as `batch_v2.rs` already did. Core
+gains the same split for its immutable infrastructure profile: first admission
+in `process_initialize` still hashes, recurring `authenticate_profile` does not.
+The fast path is **strictly stronger** than the hash it replaces — it requires
+the immutable policy, an absent recorded authority, and an absent live upgrade
+authority, none of which the hashing path demanded on its own — and identity,
+link, ownership, executability, deployment slot, and authority are all still
+rechecked.
+
+**Activation could not be optimised, so it was split.** First admission is the
+one site that checks an artifact record's *claimed* `elf_digest` against the
+bytes actually deployed; a finalized record is attacker-publishable until then.
+`RegistryInstructionV1::ActivateRole` therefore admits exactly one role per
+transaction, so the largest single hash is one artifact rather than five. The
+activation cache was already an incrementally written, idempotent, alias-checked
+buffer, and a partially written cache cannot `decode`, so no reader can consume
+a half-activated release set.
+
+### Artifacts
+
+Built from `dcd7ac3` in an isolated `git archive HEAD` tree with the pinned
+toolchain (`cargo-build-sbf 4.0.0`, `platform-tools v1.53`, `rustc 1.89.0`),
+default release profile, no `--lto` and no `--optimize-size`.
+
+| Program | Bytes | SHA-256 |
+|---|---:|---|
+| `dclutch_registry_sbf.so` | 220,728 | `954ebcf92cbbed25e3f22d817f894275a566cf2f4d1903b52bc2cb893e727f79` |
+| `dclutch_core_sbf.so` | 1,008,472 | `5b75d2f4e358514dc6da1c19911d101416047df1c4d9707dd368981b299f8e1e` |
+| `dclutch_claims_sbf.so` | 1,074,256 | `66ddc6c9daa23dc022f42be9ed15cd8274de8e791d0cb3d66745ba38e5d849b2` |
+| `dclutch_trading_sbf.so` | 1,287,344 | `43fb1bad091bd89ef9a6cc9114f15612044ef97b7fe18e441743200dcba3fbb3` |
+| `dclutch_resolution_proof_sbf.so` | 463,576 | `9722b3241d252c1a0d51bf5eef178aa6aace963eaa0865da9e89cce54f8fcb8c` |
+| `dclutch_custody_sbf.so` | 330,440 | `5ae26631d815e944d7d55e8d0544fe684b2d01d25909833e009e5858d85260fe` |
+| `dclutch_rent_sbf.so` | 152,312 | `3486a8197af492317a756e2fce659d399c5e32ff16323edac34fc1f1cafa7b8b` |
+
+**This campaign binds all seven real artifacts.** The earlier substitution of the
+much smaller Registry ELF for the Claims, Trading, Resolution, and Custody roles
+is gone; it existed only because five-role activation could not otherwise
+execute.
+
+### Measured: activation now fits, one role at a time
+
+| Role | ELF bytes | Measured CU | Share of the 1,400,000 maximum |
+|---|---:|---:|---:|
+| Core | 1,008,472 | 549,108 | 39.2% |
+| Claims | 1,074,256 | 570,883 | 40.8% |
+| Trading | 1,287,344 | **682,276** | **48.7%** |
+| Resolution | 463,576 | 273,751 | 19.6% |
+| Custody | 330,440 | 219,442 | 15.7% |
+
+The worst single activation transaction is Trading at 682,276 CU. The previous
+five-role transaction with these same artifacts consumed 1,399,850 and failed
+with `Computational budget exceeded`.
+
+The rate inferred in the historical section holds: Trading hashes 1,287,344
+bytes for roughly 642,000 CU of the 682,276, or about one CU per 2.0 bytes.
+
+### Measured: Found31 executes
+
+```text
+slot=1461 fee=5000 compute_units=234043 create canonical Found31 Market
+```
+
+**234,043 CU, 16.7% of the maximum**, against 1,399,850-and-failing before. The
+predicted saving was ~1,193,700 CU of ELF hashing; the observed transaction is
+1,165,807 CU cheaper than the one that died at the ceiling, which is that
+prediction to within the noise of what the failed transaction never got to run.
+
+The Market account exists. Both Found31 hostile cases still refuse, and the
+expensive one got much cheaper because the membrane it had to re-derive before
+contradicting the Market identity is no longer expensive:
+
+| Refusal | Then | Now |
+|---|---:|---:|
+| `Found31 refuses substituted lifecycle credit` | 6,958 | 6,958 |
+| `Found31 refuses a substituted Market coordinate and rolls the transaction back` | 829,172 | 141,896 |
+
+### Campaign transcript
+
+Forty-six confirmed transactions in 747 seconds against one validator. Eight
+lines are hostile cases; each was required to fail and required to leave no
+poststate behind.
+
+```text
+slot=52 fee=5000 compute_units=5777 real-SBF wrong-authority initialization
+slot=84 fee=5000 compute_units=226831 real-SBF infrastructure init
+slot=116 fee=5000 compute_units=538050 real-SBF activation before revoke
+slot=148 fee=5000 compute_units=2520 real-SBF Core Loader revoke
+slot=180 fee=5000 compute_units=549108 activate immutable release-set role: Core
+slot=212 fee=5000 compute_units=570883 activate immutable release-set role: Claims
+slot=244 fee=5000 compute_units=682276 activate immutable release-set role: Trading
+slot=276 fee=5000 compute_units=273751 activate immutable release-set role: Resolution
+slot=308 fee=5000 compute_units=219442 activate immutable release-set role: Custody
+slot=340 fee=5000 compute_units=27020 publish record: Begin
+slot=372 fee=5000 compute_units=12848 publish record: Append
+slot=404 fee=5000 compute_units=10688 publish record: substituted refund wallet refuses
+slot=436 fee=5000 compute_units=19959 publish record: Finalize
+slot=468 fee=15000 compute_units=5263 create real Token-2022 collateral and raw-atom wallet
+slot=500 fee=5000 compute_units=27022 publish record: Begin
+slot=532 fee=5000 compute_units=12850 publish record: Append
+slot=564 fee=5000 compute_units=10688 publish record: substituted refund wallet refuses
+slot=596 fee=5000 compute_units=20027 publish record: Finalize
+slot=628 fee=5000 compute_units=24022 publish Product graph: Product Begin
+slot=660 fee=5000 compute_units=11350 publish Product graph: Product Append
+slot=692 fee=5000 compute_units=17027 publish Product graph: Product Finalize
+slot=724 fee=5000 compute_units=30022 publish Product graph: ResultDomain Begin
+slot=756 fee=5000 compute_units=14350 publish Product graph: ResultDomain Append
+slot=788 fee=5000 compute_units=23187 publish Product graph: ResultDomain Finalize
+slot=820 fee=5000 compute_units=24022 publish Product graph: Portfolio Begin
+slot=852 fee=5000 compute_units=11350 publish Product graph: Portfolio Append
+slot=884 fee=5000 compute_units=17155 publish Product graph: Portfolio Finalize
+slot=916 fee=5000 compute_units=24022 publish record: Begin
+slot=948 fee=5000 compute_units=11350 publish record: Append
+slot=980 fee=5000 compute_units=17123 publish record: Finalize
+slot=1012 fee=5000 compute_units=18020 publish record: Begin
+slot=1044 fee=5000 compute_units=8348 publish record: Append
+slot=1076 fee=5000 compute_units=11408 publish record: Finalize
+slot=1108 fee=5000 compute_units=18022 publish record: Begin
+slot=1140 fee=5000 compute_units=8352 publish record: Append
+slot=1172 fee=5000 compute_units=8352 publish record: Append
+slot=1204 fee=5000 compute_units=8350 publish record: Append
+slot=1236 fee=5000 compute_units=12515 publish record: Finalize
+slot=1268 fee=5000 compute_units=7121 create Market-scoped lifecycle RentCreditV2
+slot=1300 fee=5000 compute_units=10661 create Found31 routing address lookup table
+slot=1332 fee=5000 compute_units=11807 extend Found31 routing table page 0
+slot=1364 fee=5000 compute_units=8869 extend Found31 routing table page 1
+slot=1397 fee=5000 compute_units=6958 Found31 refuses substituted lifecycle credit
+slot=1429 fee=5000 compute_units=141896 Found31 refuses a substituted Market coordinate and rolls the transaction back
+slot=1461 fee=5000 compute_units=234043 create canonical Found31 Market
+slot=1493 fee=5000 compute_units=22977 real-SBF late substituted activation
+```
+
+The late-substitution rollback case that the earlier run never reached now runs:
+a substituted role ProgramData in a Custody role activation, in a
+two-instruction transaction whose first instruction is a lamport transfer, must
+refuse and leave neither the transfer recipient nor any cache mutation behind.
+It costs 22,977 CU rather than the old five-role frame's cost, because a
+ten-account activation contradicts the substituted deployment before it hashes.
+
+### Why the Market is still not Open
+
+Blocker C is closed. The Open-last chain still needs the atomic outer
+(`DCLTGMF1`), and that is gated on the two remaining structural facts.
+
+**Blocker A is decided but not implemented.**
+`docs/decisions/0004-founding-capability-root.md` resolves the lifecycle cycle:
+the founding capability root is *derived* by Core from the authenticated
+Market-selected capability manifest entry and never persisted or read, and the
+root account is created afterwards by the unchanged ordinary activation route.
+The historical section below proposed two options and guessed the second was
+likelier; both were rejected, because the root account is never dereferenced
+anywhere except `authenticate_root` and every field of its header is a pure
+function of the request plus the manifest. The ADR carries the exact wire
+consequence, the frame arithmetic (139 to 137 accounts), the required refusals,
+and the file plan.
+
+**Blocker B is open, and its shape is not what this document assumed.** The
+historical section names
+`programs/dclutch-trading-sbf/src/projected_custody_composition_v4.rs` as the
+dead family-neutral route. Read at
+`projected_custody_composition_v4.rs:256-264` and `:418-433`, that module is a
+**Lock** adapter: it can emit only `LockHoardAndCloseSource`, and it *requires*
+the projected state to already be in phase `HoardOpen`. Dispatching to it
+bootstraps nothing. The real gap is that Custody's `Initialize` (42 accounts,
+`programs/dclutch-custody-sbf/src/projected.rs:382`) and `OpenHoard` (15
+accounts, `:490`) each require a signing `ProjectedCustodyCallerSeedsV1` PDA
+under the Trading program (`:156`, `:201-205`), so they are reachable only by
+CPI from a Trading dispatch branch that does not exist; and the only in-tree
+constructor of those two requests, `series/projected_custody_v3.rs:85
+project_prepare_v3`, is Series-shaped and has no non-test caller. A
+family-neutral bootstrap is a new Trading route, not a wiring change.
+
+## Why the atomic outer was unreachable
+
+*(historical, 2026-08-26, first campaign; Blocker A is now decided and Blocker C
+is closed — see the supersession section above)*
+
 
 The outer itself
 (`programs/dclutch-trading-sbf/src/generic_market_founding_v1.rs`,
@@ -387,6 +599,8 @@ behind.
 
 ## Campaign transcript
 
+*(historical, 2026-08-26, first campaign)*
+
 Forty confirmed transactions in 690 seconds against one validator, ending in
 the Found31 refusal above. Every line is a finalized transaction; the eight
 lines that name a refusal are the campaign's hostile cases, and each was
@@ -458,23 +672,39 @@ for the fast path: the cheap check is behind the expensive one.
 
 ## What an open-market snapshot would unlock, and what to do next
 
-Nothing downstream of Found is unblocked by this run, and it is worth being
-plain about that: there is no Market account, so there is no Claims aggregate,
-no founder Position, no Hoard, and nothing for the Hot path, the portfolio
-route, or `/markets/:market` to read.
+The Market account now exists, so the founder-facing surfaces have a real Core
+state to read for the first time. What still does **not** exist is everything
+the atomic outer would create in the same rollback domain: there is no Claims
+aggregate, no founder Position, and no Hoard, because Found is not Open.
 
-The ordered path to a first Open market is now concrete:
+The ordered path to a first Open market, updated:
 
-1. **Get Found31 under 1.4M CU** — stop hashing immutable ELFs on chain
-   (W2, `310d018` direction). This is the only blocker that is a pure
-   optimisation; the authentication it replaces is already implied by the
-   immutable deployment binding.
-2. **Decide what a founding capability root is** (Blocker A) and implement the
-   route that creates one, together with the manifest's FundingState accounts.
-3. **Add the family-neutral projected-Custody bootstrap** (Blocker B):
-   `Initialize`, `OpenHoard`, and a funded funding-source vault under a Trading
-   caller PDA.
-4. **Then** drive `DCLTGMF1`. The frame is 139 account references at three
-   funding states, so it needs the same address-lookup-table routing this lane
-   added, and it will be measured against the same 1.4M ceiling with five CPIs
-   in one rollback domain.
+1. ~~**Get Found31 under 1.4M CU**~~ — **done, `c61376d`.** Found31 costs
+   234,043 CU and the worst activation transaction costs 682,276 CU, both
+   measured above. The saving is structural, not a tuning pass: recurring
+   readers stopped recomputing an authenticated digest, and first admission was
+   split one role per transaction rather than weakened.
+2. **Implement the derived founding capability root** (Blocker A) —
+   *decided* in `docs/decisions/0004-founding-capability-root.md`, with the
+   wire change, the frame arithmetic, the required refusals, and the file plan
+   already written. No route needs to be *created*: Core derives the root
+   address instead of reading an account, and ordinary activation keeps sole
+   authority over creating the account later.
+3. **Add the family-neutral projected-Custody bootstrap** (Blocker B) — a new
+   Trading dispatch route that emits `Initialize` and `OpenHoard` under a
+   `ProjectedCustodyCallerSeedsV1` signer, plus a funded funding-source vault.
+   This is a new vertical slice, not a dispatch wiring change; see the
+   supersession section for why `projected_custody_composition_v4.rs` cannot
+   serve.
+4. **Then** drive `DCLTGMF1`. After Blocker A the frame is 137 account
+   references at three funding states, so it needs the same address-lookup-table
+   routing this lane added, and it will be measured against the same 1.4M
+   ceiling with five CPIs in one rollback domain. Found31's 234,043 CU is the
+   only one of those five stages measured so far.
+
+The on-chain founding-outer hostile case this document wants — a substituted
+Claims request account proving byte-exact rollback of the whole
+Lock -> Found -> Realize -> Claims -> Open chain — still needs the route to
+execute, and therefore still waits on Blocker B. The pure cross-request join
+tests remain what they were: a pure function checked without a chain, and not
+execution evidence.
