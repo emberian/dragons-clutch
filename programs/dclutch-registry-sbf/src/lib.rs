@@ -25,15 +25,15 @@ use core::convert::TryFrom;
 
 use dclutch_core_contract::ContentId;
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry_activation_auth_v1::{
+    authenticate_activated_role_in_cache_v1, cached_role_deployment_observation_v1,
+    require_readonly_frame,
+};
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_BYTES_V1,
     ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1, ArtifactActivationInputV1,
     ArtifactReleaseV1, DeploymentObservationV1, activate_execution_role_into_v1,
     initialize_activation_cache_v1,
-};
-use dclutch_registry_activation_auth_v1::{
-    authenticate_activated_role_in_cache_v1, cached_role_deployment_observation_v1,
-    require_readonly_frame,
 };
 use dclutch_registry_svm::{
     ProgramDataV3View, ProgramV3View, REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1,
@@ -252,8 +252,7 @@ fn process_reauthenticate(
     let cache = next(&mut iterator)?;
     let program = next(&mut iterator)?;
     let programdata = next(&mut iterator)?;
-    require_readonly_frame(cache, program, programdata)
-        .map_err(|_| RegistryError::AccountFrame)?;
+    require_readonly_frame(cache, program, programdata).map_err(|_| RegistryError::AccountFrame)?;
     let cache_data = cache.try_borrow_data().map_err(|_| RegistryError::Borrow)?;
     let activated = ActivatedExecutionReleaseSetViewV1::decode(&cache_data)
         .map_err(|_| RegistryError::ActivationCache)?;

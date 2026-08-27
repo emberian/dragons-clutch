@@ -77,7 +77,7 @@ use solana_program::{
 };
 use solana_sdk_ids::{system_program, sysvar};
 
-use super::reauthenticate;
+use super::authenticate_activated_role;
 
 /// LiabilityBasisV2 instruction magic.
 pub const LIABILITY_BASIS_ACTION_MAGIC_V2: [u8; 8] = *b"DCLLBX02";
@@ -843,28 +843,31 @@ fn authenticate_releases(
     accounts: &LiabilityBasisAccountsV2<'_, '_>,
     market: MarketViewV2,
 ) -> Result<(), ProgramError> {
-    let claims = reauthenticate(
+    let claims = authenticate_activated_role(
         accounts.registry,
         accounts.cache,
         ExecutionRoleV1::Claims,
         accounts.claims_program,
         accounts.claims_programdata,
+        &market.release_set,
     )
     .map_err(|_| LiabilityBasisSbfErrorV2::Release)?;
-    let custody = reauthenticate(
+    let custody = authenticate_activated_role(
         accounts.registry,
         accounts.cache,
         ExecutionRoleV1::Custody,
         accounts.custody_program,
         accounts.custody_programdata,
+        &market.release_set,
     )
     .map_err(|_| LiabilityBasisSbfErrorV2::Release)?;
-    let core = reauthenticate(
+    let core = authenticate_activated_role(
         accounts.registry,
         accounts.cache,
         ExecutionRoleV1::Core,
         accounts.core_program,
         accounts.core_programdata,
+        &market.release_set,
     )
     .map_err(|_| LiabilityBasisSbfErrorV2::Release)?;
     for receipt in [claims, custody, core] {

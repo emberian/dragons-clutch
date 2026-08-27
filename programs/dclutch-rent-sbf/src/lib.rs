@@ -12,17 +12,14 @@
 
 extern crate alloc;
 
-use alloc::vec::Vec;
 use core::convert::TryFrom;
 
 use dclutch_core_contract::ContentId;
+use dclutch_registry_activation_auth_v1::authenticate_activated_role_v1;
 use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
-use dclutch_registry_svm::{
-    AuthenticatedRoleReceiptV1, RegistryInstructionV1,
-    continuation_v1::{
-        REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationAdmissionSeedsV1,
-        RegistryContinuationRequestV1,
-    },
+use dclutch_registry_svm::continuation_v1::{
+    REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationAdmissionSeedsV1,
+    RegistryContinuationRequestV1,
 };
 use dclutch_release_set_contract::ExecutionRoleV1;
 use dclutch_rent_contract::{
@@ -43,8 +40,7 @@ use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,
     hash::hash,
-    instruction::{AccountMeta, Instruction},
-    program::{get_return_data, invoke, invoke_signed, set_return_data},
+    program::{invoke_signed, set_return_data},
     program_error::ProgramError,
     pubkey::Pubkey,
     rent::Rent,
@@ -876,41 +872,29 @@ fn authenticate_lifecycle_credit_v2(
     Ok(state)
 }
 
+/// Authenticate the current Core deployment out of the Registry-owned cache.
+///
+/// Rent is reached as a child of a Registry continuation, where a CPI back into
+/// the Registry is reentrancy and Solana refuses it, so the
+/// `RegistryInstructionV1::Reauthenticate` invocation this replaced is retired
+/// with no fallback. The cache is Registry-owned at a Registry-derived address
+/// and carries the whole receipt; the credit's own `release_set()` names the
+/// activation generation the address must be derived from.
 #[inline(never)]
 fn authenticate_current_core_v2(
     accounts: &CloseAccountsV2<'_, '_>,
     state: LifecycleRentCreditV2,
 ) -> ProgramResult {
-    let instruction = Instruction {
-        program_id: *accounts.registry_program.key,
-        accounts: Vec::from([
-            AccountMeta::new_readonly(*accounts.activation_cache.key, false),
-            AccountMeta::new_readonly(*accounts.core_program.key, false),
-            AccountMeta::new_readonly(*accounts.core_programdata.key, false),
-        ]),
-        data: RegistryInstructionV1::Reauthenticate(ExecutionRoleV1::Core)
-            .to_bytes()
-            .to_vec(),
-    };
-    invoke(
-        &instruction,
-        &[
-            accounts.activation_cache.clone(),
-            accounts.core_program.clone(),
-            accounts.core_programdata.clone(),
-            accounts.registry_program.clone(),
-        ],
+    let receipt = authenticate_activated_role_v1(
+        accounts.registry_program,
+        accounts.activation_cache,
+        &state.release_set().to_bytes(),
+        ExecutionRoleV1::Core,
+        accounts.core_program,
+        accounts.core_programdata,
     )
     .map_err(|_| RentSbfError::Release)?;
-    let (producer, bytes) = get_return_data().ok_or(RentSbfError::Release)?;
-    if producer != *accounts.registry_program.key {
-        return Err(RentSbfError::Release.into());
-    }
-    let receipt = AuthenticatedRoleReceiptV1::decode(&bytes).map_err(|_| RentSbfError::Release)?;
-    if receipt.role() != ExecutionRoleV1::Core
-        || receipt.program().as_bytes() != &accounts.core_program.key.to_bytes()
-        || receipt.execution_release_set_id().as_bytes() != &state.release_set().to_bytes()
-    {
+    if receipt.program().as_bytes() != &accounts.core_program.key.to_bytes() {
         return Err(RentSbfError::Release.into());
     }
     Ok(())

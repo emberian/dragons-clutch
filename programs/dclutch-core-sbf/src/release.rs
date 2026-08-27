@@ -6,20 +6,14 @@ use dclutch_core_contract::ContentId;
 use dclutch_market_core_codec::{
     Admission, Binding, CoreState, Identity, ReleaseReceipt, ReleaseSet, RetirementAdmissions, Role,
 };
+use dclutch_registry_activation_auth_v1::authenticate_activated_role_v1;
 use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use dclutch_registry_svm::{
-    AuthenticatedRoleReceiptV1, RegistryInstructionV1,
-    batch_v2::{AuthenticatedRoleBatchReceiptV2, RoleBatchRequestV2},
+    batch_v2::RoleBatchRequestV2,
     continuation_v1::{RegistryContinuationAdmissionSeedsV1, RegistryContinuationRequestV1},
 };
 use dclutch_release_set_contract::ExecutionRoleV1;
-use solana_program::{
-    account_info::AccountInfo,
-    hash::hash,
-    instruction::{AccountMeta, Instruction},
-    program::{get_return_data, invoke},
-    pubkey::Pubkey,
-};
+use solana_program::{account_info::AccountInfo, hash::hash, pubkey::Pubkey};
 use solana_sdk_ids::system_program;
 
 use crate::CoreSbfError;
@@ -44,13 +38,6 @@ impl<'accounts, 'info> RoleDeploymentAccounts<'accounts, 'info> {
             programdata,
         }
     }
-}
-
-#[derive(Clone, Copy)]
-struct ExpectedRoleObservation {
-    role: Role,
-    program: [u8; 32],
-    programdata: [u8; 32],
 }
 
 /// One cache/release-set authentication carrying a fixed requested role set.
@@ -108,7 +95,7 @@ impl RoleBatchAdmissions {
 }
 
 /// Authenticate one Registry cache and a canonical ordered subset of current
-/// role deployments through a single CPI and immediate fixed receipt.
+/// role deployments, reading the cache directly and invoking nothing.
 #[inline(never)]
 pub(crate) fn authenticate_roles<'accounts, 'info>(
     cache: &'accounts AccountInfo<'info>,
@@ -153,54 +140,36 @@ pub(crate) fn authenticate_roles<'accounts, 'info>(
         .iter()
         .map(|entry| registry_role(entry.role))
         .collect::<Vec<_>>();
+    // The request is still CONSTRUCTED and never sent. It is the owner of the
+    // canonical-order rule -- strictly ascending role tags, which also forbids
+    // a repeated role -- and of the mask this admission is keyed by, and
+    // rebuilding either of those here would be a second copy that could drift.
+    // What is gone is the invocation: composing this request and CPI-ing it
+    // into the Registry is the same reentrancy the per-role route was, so a
+    // Core reached under a Registry continuation could not run it, and there is
+    // no fallback to it.
     let request = RoleBatchRequestV2::new(
         ContentId::new(release_set_id).map_err(|_| CoreSbfError::Release)?,
         cache_digest,
         &registry_roles,
     )
     .map_err(|_| CoreSbfError::Release)?;
-    let request_bytes = request.to_bytes();
-    let mut metas = Vec::with_capacity(1 + requested.len() * 2);
-    let mut infos = Vec::with_capacity(2 + requested.len() * 2);
-    let mut expected_observations = Vec::with_capacity(requested.len());
-    metas.push(AccountMeta::new_readonly(*cache.key, false));
-    infos.push(cache.clone());
     for entry in requested {
         validate_release_accounts(cache, registry, entry.program, entry.programdata)?;
-        metas.push(AccountMeta::new_readonly(*entry.program.key, false));
-        metas.push(AccountMeta::new_readonly(*entry.programdata.key, false));
-        infos.push(entry.program.clone());
-        infos.push(entry.programdata.clone());
-        expected_observations.push(ExpectedRoleObservation {
-            role: entry.role,
-            program: entry.program.key.to_bytes(),
-            programdata: entry.programdata.key.to_bytes(),
-        });
+        // Every fact the batch receipt carried per role -- program identity,
+        // ProgramData link, Loader ownership, executability, deployment slot,
+        // artifact and semantic release, and the ELF digest under the release's
+        // own upgrade policy -- is established here against the same cache.
+        authenticate_activated_role_v1(
+            registry,
+            cache,
+            &release_set_id,
+            registry_role(entry.role),
+            entry.program,
+            entry.programdata,
+        )
+        .map_err(|_| CoreSbfError::Release)?;
     }
-    infos.push(registry.clone());
-    let instruction = Instruction {
-        program_id: *registry.key,
-        accounts: metas,
-        data: request_bytes.to_vec(),
-    };
-    invoke(&instruction, &infos).map_err(|_| CoreSbfError::Release)?;
-    let (producer, receipt_bytes) = get_return_data().ok_or(CoreSbfError::Release)?;
-    if producer != *registry.key {
-        return Err(CoreSbfError::Release);
-    }
-    let expected_request_digest =
-        ContentId::new(hash(&request_bytes).to_bytes()).map_err(|_| CoreSbfError::Release)?;
-    verify_role_batch_receipt(
-        &receipt_bytes,
-        registry.key.to_bytes(),
-        cache.key.to_bytes(),
-        cache_digest,
-        release_set_id,
-        expected_request_digest,
-        request.role_mask(),
-        &expected_observations,
-        selected,
-    )?;
     Ok(RoleBatchAdmissions {
         registry: expected_registry,
         release_set_id: identity(release_set_id)?,
@@ -329,50 +298,6 @@ pub(crate) fn authenticate_continuation_roles<'accounts, 'info>(
     ))
 }
 
-#[inline(never)]
-#[allow(clippy::too_many_arguments)]
-fn verify_role_batch_receipt(
-    receipt_bytes: &[u8],
-    registry_program: [u8; 32],
-    activation_cache: [u8; 32],
-    activation_cache_digest: ContentId,
-    release_set_id: [u8; 32],
-    request_digest: ContentId,
-    role_mask: u8,
-    expected_observations: &[ExpectedRoleObservation],
-    selected: ReleaseSet,
-) -> Result<(), CoreSbfError> {
-    let receipt = AuthenticatedRoleBatchReceiptV2::decode(receipt_bytes)
-        .map_err(|_| CoreSbfError::Release)?;
-    if receipt.registry_program().to_bytes() != registry_program
-        || receipt.activation_cache() != activation_cache
-        || receipt.activation_cache_digest() != activation_cache_digest
-        || receipt.release_set_id().to_bytes() != release_set_id
-        || receipt.request_digest() != request_digest
-        || usize::from(receipt.role_count()) != expected_observations.len()
-        || receipt.role_mask() != role_mask
-    {
-        return Err(CoreSbfError::Release);
-    }
-    for (index, expected) in expected_observations.iter().copied().enumerate() {
-        let observation = receipt
-            .observation(index)
-            .ok_or(CoreSbfError::Release)?
-            .map_err(|_| CoreSbfError::Release)?;
-        let selected = selected_binding(selected, expected.role);
-        if observation.role() != registry_role(expected.role)
-            || observation.program().to_bytes() != expected.program
-            || observation.programdata() != expected.programdata
-            || observation.program().to_bytes() != selected.program.to_bytes()
-            || observation.artifact_release_id().to_bytes() != selected.artifact_release.to_bytes()
-            || observation.semantic_release_id().to_bytes() != selected.semantic_release.to_bytes()
-        {
-            return Err(CoreSbfError::Release);
-        }
-    }
-    Ok(())
-}
-
 /// Authenticate the Registry cache and one role's current Loader deployment.
 #[inline(never)]
 pub(crate) fn authenticate_role<'info>(
@@ -406,39 +331,21 @@ pub(crate) fn authenticate_role<'info>(
         release_projection(view)?
     };
     let registry_role = registry_role(role);
-    let instruction = Instruction {
-        program_id: *registry.key,
-        accounts: Vec::from([
-            AccountMeta::new_readonly(*cache.key, false),
-            AccountMeta::new_readonly(*role_program.key, false),
-            AccountMeta::new_readonly(*role_programdata.key, false),
-        ]),
-        data: RegistryInstructionV1::Reauthenticate(registry_role)
-            .to_bytes()
-            .to_vec(),
-    };
-    invoke(
-        &instruction,
-        &[
-            cache.clone(),
-            role_program.clone(),
-            role_programdata.clone(),
-            registry.clone(),
-        ],
+    // The current deployment is authenticated from the cache this function
+    // already read, not by invoking the Registry. Core is a child of a Registry
+    // continuation, so a CPI from here is reentrancy -- the Registry is already
+    // at depth one and Solana refuses depth four onto it. The role, the release
+    // set and the Program identity are all checked inside
+    // `authenticate_activated_role_v1`, which is the Registry's own code.
+    let receipt = authenticate_activated_role_v1(
+        registry,
+        cache,
+        &release_set_id,
+        registry_role,
+        role_program,
+        role_programdata,
     )
     .map_err(|_| CoreSbfError::Release)?;
-    let (producer, receipt_bytes) = get_return_data().ok_or(CoreSbfError::Release)?;
-    if producer != *registry.key {
-        return Err(CoreSbfError::Release);
-    }
-    let receipt =
-        AuthenticatedRoleReceiptV1::decode(&receipt_bytes).map_err(|_| CoreSbfError::Release)?;
-    if receipt.role() != registry_role
-        || receipt.execution_release_set_id().to_bytes() != release_set_id
-        || receipt.program().to_bytes() != role_program.key.to_bytes()
-    {
-        return Err(CoreSbfError::Release);
-    }
     let observed = selected_binding(selected, role);
     if observed.program.to_bytes() != role_program.key.to_bytes()
         || observed.artifact_release.to_bytes() != receipt.artifact_release_id().to_bytes()
@@ -565,11 +472,6 @@ pub(crate) fn identity(bytes: [u8; 32]) -> Result<Identity, CoreSbfError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_registry_svm::batch_v2::{
-        ROLE_BATCH_RECEIPT_BYTES_V2, RoleBatchReceiptInputV2, RoleDeploymentObservationV2,
-        encode_role_batch_receipt_v2,
-    };
-    use dclutch_release_set_contract::{ArtifactReleaseIdV1, ProgramIdentityV1};
 
     fn test_identity(fill: u8) -> Identity {
         Identity::new([fill; 32]).expect("nonzero identity")
@@ -581,47 +483,6 @@ mod tests {
             artifact_release: test_identity(fill + 10),
             semantic_release: test_identity(fill + 20),
         }
-    }
-
-    fn receipt_observation(
-        role: Role,
-        binding: Binding,
-        programdata: [u8; 32],
-    ) -> RoleDeploymentObservationV2 {
-        RoleDeploymentObservationV2::new(
-            registry_role(role),
-            ProgramIdentityV1::new(binding.program.to_bytes()).expect("program"),
-            programdata,
-            ArtifactReleaseIdV1::new(binding.artifact_release.to_bytes()).expect("artifact"),
-            ContentId::new(binding.semantic_release.to_bytes()).expect("semantic release"),
-            7,
-        )
-        .expect("observation")
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn receipt_bytes(
-        registry: [u8; 32],
-        cache: [u8; 32],
-        cache_digest: ContentId,
-        release_set_id: ContentId,
-        request_digest: ContentId,
-        observations: &[RoleDeploymentObservationV2],
-    ) -> [u8; ROLE_BATCH_RECEIPT_BYTES_V2] {
-        let mut output = [0; ROLE_BATCH_RECEIPT_BYTES_V2];
-        encode_role_batch_receipt_v2(
-            RoleBatchReceiptInputV2 {
-                registry_program: ProgramIdentityV1::new(registry).expect("Registry"),
-                activation_cache: cache,
-                activation_cache_digest: cache_digest,
-                release_set_id,
-                request_digest,
-                observations,
-            },
-            &mut output,
-        )
-        .expect("receipt");
-        output
     }
 
     #[test]
@@ -682,115 +543,6 @@ mod tests {
         }
         assert_eq!(
             batch.admission(Role::Resolution),
-            Err(CoreSbfError::Release)
-        );
-    }
-
-    #[test]
-    fn batch_receipt_substitution_refuses_before_admission_projection() {
-        let registry = [90; 32];
-        let cache = [91; 32];
-        let cache_digest = ContentId::new([92; 32]).expect("cache digest");
-        let release_set_id = ContentId::new([93; 32]).expect("release set");
-        let request_digest = ContentId::new([94; 32]).expect("request digest");
-        let selected = ReleaseSet {
-            release_set_id: test_identity(93),
-            bindings: [
-                test_binding(1),
-                test_binding(2),
-                test_binding(3),
-                test_binding(4),
-                test_binding(5),
-            ],
-        };
-        let [core, claims, _trading, _resolution, _custody] = selected.bindings;
-        let core_programdata = [31; 32];
-        let claims_programdata = [32; 32];
-        let expected = [
-            ExpectedRoleObservation {
-                role: Role::Core,
-                program: core.program.to_bytes(),
-                programdata: core_programdata,
-            },
-            ExpectedRoleObservation {
-                role: Role::Claims,
-                program: claims.program.to_bytes(),
-                programdata: claims_programdata,
-            },
-        ];
-        let core_observation = receipt_observation(Role::Core, core, core_programdata);
-        let claims_observation = receipt_observation(Role::Claims, claims, claims_programdata);
-        let observations = [core_observation, claims_observation];
-        let valid = receipt_bytes(
-            registry,
-            cache,
-            cache_digest,
-            release_set_id,
-            request_digest,
-            &observations,
-        );
-        assert_eq!(
-            verify_role_batch_receipt(
-                &valid,
-                registry,
-                cache,
-                cache_digest,
-                release_set_id.to_bytes(),
-                request_digest,
-                0b11,
-                &expected,
-                selected,
-            ),
-            Ok(())
-        );
-
-        let substituted_programdata = [
-            receipt_observation(Role::Core, core, [99; 32]),
-            claims_observation,
-        ];
-        let hostile = receipt_bytes(
-            registry,
-            cache,
-            cache_digest,
-            release_set_id,
-            request_digest,
-            &substituted_programdata,
-        );
-        assert_eq!(
-            verify_role_batch_receipt(
-                &hostile,
-                registry,
-                cache,
-                cache_digest,
-                release_set_id.to_bytes(),
-                request_digest,
-                0b11,
-                &expected,
-                selected,
-            ),
-            Err(CoreSbfError::Release)
-        );
-
-        let hostile_cache = receipt_bytes(
-            registry,
-            [88; 32],
-            cache_digest,
-            release_set_id,
-            request_digest,
-            &observations,
-        );
-        assert_eq!(
-            verify_role_batch_receipt(
-                &hostile_cache,
-                registry,
-                cache,
-                cache_digest,
-                release_set_id.to_bytes(),
-                request_digest,
-                0b11,
-                &expected,
-                selected,
-            ),
             Err(CoreSbfError::Release)
         );
     }

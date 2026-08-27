@@ -49,7 +49,9 @@ use solana_program::{
 use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign};
 
-use super::{affine_batch_v2::authenticate_runtime_product_basis_core_v3, reauthenticate};
+use super::{
+    affine_batch_v2::authenticate_runtime_product_basis_core_v3, authenticate_activated_role,
+};
 use crate::liability_basis_v2::{
     LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
     LiabilityBasisMarketInputV2, LiabilityBasisPositionInputV2, MarketViewV2,
@@ -623,12 +625,13 @@ fn authenticate_releases(
             accounts.custody_programdata,
         ),
     ] {
-        let receipt = reauthenticate(
+        let receipt = authenticate_activated_role(
             accounts.registry,
             accounts.cache,
             role,
             program,
             programdata,
+            &request.release_set(),
         )
         .map_err(|_| ClaimsFoundingSbfErrorV5::Release)?;
         if receipt.execution_release_set_id().as_bytes() != &request.release_set() {

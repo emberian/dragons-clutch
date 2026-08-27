@@ -1,6 +1,6 @@
 //! Physical pre-founding Hoard custody rooted in Core ProjectFound return data.
 
-use alloc::{vec, vec::Vec};
+use alloc::vec::Vec;
 use core::convert::TryFrom;
 
 use dclutch_custody_contract::{
@@ -17,8 +17,8 @@ use dclutch_custody_contract::{
 use dclutch_market_core_codec::{
     Action, CoreState, Identity, ProjectFoundReceiptV1, ProjectFoundRequestV1, Request, STATE_BYTES,
 };
+use dclutch_registry_activation_auth_v1::authenticate_activated_role_v1;
 use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
-use dclutch_registry_svm::{AuthenticatedRoleReceiptV1, RegistryInstructionV1};
 use dclutch_release_set_contract::ExecutionRoleV1;
 use dclutch_rent_contract::lifecycle_v2::LifecycleRentCreditV2;
 use dclutch_token_svm::{
@@ -305,35 +305,19 @@ fn authenticate_release<'info>(
         return Err(CustodySbfError::Release.into());
     }
     drop(cache_data);
-    let instruction = Instruction {
-        program_id: *registry.key,
-        accounts: vec![
-            AccountMeta::new_readonly(*cache.key, false),
-            AccountMeta::new_readonly(*caller_program.key, false),
-            AccountMeta::new_readonly(*caller_programdata.key, false),
-        ],
-        data: RegistryInstructionV1::Reauthenticate(ExecutionRoleV1::Trading)
-            .to_bytes()
-            .to_vec(),
-    };
-    invoke(
-        &instruction,
-        &[
-            cache.clone(),
-            caller_program.clone(),
-            caller_programdata.clone(),
-            registry.clone(),
-        ],
+    // The caller's current deployment is authenticated from the same cache
+    // rather than by invoking the Registry: this route is reached under a
+    // Registry continuation, where a CPI back to the Registry is reentrancy.
+    let receipt = authenticate_activated_role_v1(
+        registry,
+        cache,
+        &request.release_set,
+        ExecutionRoleV1::Trading,
+        caller_program,
+        caller_programdata,
     )
     .map_err(|_| CustodySbfError::Release)?;
-    let (producer, bytes) = get_return_data().ok_or(CustodySbfError::Release)?;
-    let receipt =
-        AuthenticatedRoleReceiptV1::decode(&bytes).map_err(|_| CustodySbfError::Release)?;
-    if producer != *registry.key
-        || receipt.role() != ExecutionRoleV1::Trading
-        || receipt.execution_release_set_id().as_bytes() != &request.release_set
-        || receipt.program().as_bytes() != &request.caller_program
-    {
+    if receipt.program().as_bytes() != &request.caller_program {
         return Err(CustodySbfError::Release.into());
     }
     Ok(())

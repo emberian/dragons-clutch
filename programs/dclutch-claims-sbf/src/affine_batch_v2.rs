@@ -42,7 +42,7 @@ use solana_program::{
 };
 use solana_sdk_ids::sysvar;
 
-use super::{product_runtime_v2::authenticate_product_runtime_v2, reauthenticate};
+use super::{authenticate_activated_role, product_runtime_v2::authenticate_product_runtime_v2};
 use crate::liability_basis_v2::{
     LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
     LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, MarketViewV2, PositionViewV2,
@@ -428,28 +428,32 @@ fn authenticate_releases(
     accounts: &AffineBatchAccountsV2<'_, '_>,
     plan: AffineBatchPlanV2<'_>,
 ) -> Result<(), ProgramError> {
-    let caller = reauthenticate(
+    let release_set = plan.release_set();
+    let caller = authenticate_activated_role(
         accounts.registry,
         accounts.cache,
         execution_role(plan.caller_role()),
         accounts.caller_program,
         accounts.caller_programdata,
+        &release_set,
     )
     .map_err(|_| AffineBatchSbfErrorV2::Release)?;
-    let claims = reauthenticate(
+    let claims = authenticate_activated_role(
         accounts.registry,
         accounts.cache,
         ExecutionRoleV1::Claims,
         accounts.claims_program,
         accounts.claims_programdata,
+        &release_set,
     )
     .map_err(|_| AffineBatchSbfErrorV2::Release)?;
-    let core = reauthenticate(
+    let core = authenticate_activated_role(
         accounts.registry,
         accounts.cache,
         ExecutionRoleV1::Core,
         accounts.core_program,
         accounts.core_programdata,
+        &release_set,
     )
     .map_err(|_| AffineBatchSbfErrorV2::Release)?;
     for receipt in [caller, claims, core] {
@@ -560,13 +564,9 @@ pub(crate) fn authenticate_runtime_product_basis_core_v3(
         },
     )
     .map_err(|_| AffineBatchSbfErrorV2::ProductBasis)?;
-    let product = authenticate_product_basis_v3(
-        registry.key,
-        &rent,
-        runtime,
-        product_frame.linked_basis,
-    )
-    .map_err(|_| AffineBatchSbfErrorV2::ProductBasis)?;
+    let product =
+        authenticate_product_basis_v3(registry.key, &rent, runtime, product_frame.linked_basis)
+            .map_err(|_| AffineBatchSbfErrorV2::ProductBasis)?;
     if product.runtime.product_record.content_digest.to_bytes() != expected_product_record_digest
         || product.runtime.product_id.to_bytes() != market.product_instance_id
         || product.runtime.liability_basis_id.to_bytes() != market.basis_id

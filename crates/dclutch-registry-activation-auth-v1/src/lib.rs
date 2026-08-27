@@ -278,10 +278,7 @@ pub fn cached_role_deployment_observation_v1(
             None,
         )
     } else {
-        (
-            hash(programdata_view.elf()).to_bytes(),
-            observed_authority,
-        )
+        (hash(programdata_view.elf()).to_bytes(), observed_authority)
     };
     DeploymentObservationV1::new(
         program.key.to_bytes(),

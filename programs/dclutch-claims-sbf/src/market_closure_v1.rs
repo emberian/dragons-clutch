@@ -33,7 +33,7 @@ use solana_program::{
 };
 use solana_sdk_ids::system_program;
 
-use super::{ClaimsSbfError, reauthenticate};
+use super::{ClaimsSbfError, authenticate_activated_role};
 
 /// Core caller PDA signer.
 pub const AUTHORITY_ACCOUNT_V1: usize = 0;
@@ -352,12 +352,13 @@ fn authenticate_releases(
             accounts.core_programdata,
         ),
     ] {
-        let receipt = reauthenticate(
+        let receipt = authenticate_activated_role(
             accounts.registry,
             accounts.cache,
             role,
             program,
             programdata,
+            &release_set,
         )?;
         if receipt.execution_release_set_id().as_bytes() != &release_set {
             return Err(ClaimsMarketClosureSbfErrorV1::Authority.into());

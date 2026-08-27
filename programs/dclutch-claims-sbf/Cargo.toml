@@ -33,6 +33,7 @@ dclutch-representation-composition-v3-kernel = { path = "../../crates/dclutch-re
 dclutch-rational-representation-v2-lifecycle-contract = { path = "../../crates/dclutch-rational-representation-v2-lifecycle-contract" }
 dclutch-realm-contract = { path = "../../crates/dclutch-realm-contract" }
 dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }
+dclutch-registry-activation-auth-v1 = { path = "../../crates/dclutch-registry-activation-auth-v1" }
 dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }
 dclutch-registry-svm = { path = "../../crates/dclutch-registry-svm" }
 dclutch-rent-contract = { path = "../../crates/dclutch-rent-contract" }
