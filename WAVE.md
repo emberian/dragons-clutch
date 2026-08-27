@@ -398,9 +398,9 @@ rustfmt is unpinned and reflows ~178 lines of hot_v3.
 7. LANE WRAPPER: tools/lane.sh — enforced --only, pinned rustfmt, board
    helper; retires four recurring accident classes.
 Sizing: patterned ≈ 10–14 lanes ≈ 2–3 swarmcycles to closed-or-explicitly-
-parked (vs ~25 bespoke). Parked: deep assurance beyond fail-closed labeling — the universal (vs
-per-case) round-trip and refinement theorems where today's evidence is
-corpus-based.
+parked (vs ~25 bespoke). Parked: the universal round-trip and refinement theorems — today's evidence
+is per-case corpora and emitter checks, which prove the cases and nothing
+else. That gap is real debt, parked by decision, not covered by anything.
 
 ## Doctrine, distilled by the Fable derpage review from the whole board
 
