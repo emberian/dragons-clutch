@@ -28,6 +28,28 @@
 //! success with the grant still inert. Hot stays off the extended-heap list and
 //! the packet assertion below still records why -- but nothing rides on it any
 //! more, which is the outcome the decision was holding out for.
+//!
+//! # And the compute ceiling is now the wall, at one failure in twenty
+//!
+//! Read the CU figure this prints as ONE DRAW, not as the number. The Hot path
+//! derives program addresses whose seeds include the fixture's maker keys, and
+//! `try_find_program_address` costs 1,500 CU per attempt, so the total is a
+//! function of how deep the bump search happens to go for the keys in play.
+//! `waist::fixture_keypair` pins those keys so this figure is reproducible;
+//! `DCLUTCH_FIXTURE_SEED=<n>` redraws them.
+//!
+//! Measured over seeds 0..=19 against ONE ELF
+//! (`14b22a31bb9cabf782047da15eee99ad4f7a1002d17a9f48c256137f6115a2c9`):
+//! nineteen succeeded, spanning 1,336,865 to 1,386,359 CU, and **seed 10 FAILED
+//! -- `exceeded CUs meter at BPF instruction`, 1,399,944 of 1,400,000.** The
+//! ceiling is not a margin this path has; it is a coin the makers' keys flip.
+//! 1,400,000 is also the runtime's maximum, so there is nothing to request.
+//!
+//! The lane that met this spread before it was pinned recorded it as "codegen
+//! noise of +-20,000 CU between builds of the same source". It is not codegen:
+//! the same ELF, run repeatedly with fresh keys, spans the same range, and with
+//! the keys pinned it is exact to the unit across runs. Anyone quoting a single
+//! CU figure for this path should say which seed produced it.
 
 use dclutch_trading_sbf::TradingSbfError;
 use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
@@ -209,7 +231,9 @@ async fn a_requested_heap_frame_is_inert_for_hot_and_does_not_fit_its_packet() {
     // figure off this path is codegen noise of about +-20,000 CU. What is
     // asserted is the ceiling.
     println!(
-        "hot tail at the protocol default heap: {} CU of 1,400,000 ({} spare)",
+        "hot tail at the protocol default heap, fixture seed {}: {} CU of \
+         1,400,000 ({} spare)",
+        std::env::var("DCLUTCH_FIXTURE_SEED").unwrap_or_else(|_| "0".to_owned()),
         metadata.compute_units_consumed,
         1_400_000_u64.saturating_sub(metadata.compute_units_consumed),
     );
