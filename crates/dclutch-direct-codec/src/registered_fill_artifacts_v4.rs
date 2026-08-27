@@ -188,7 +188,10 @@ mod host {
         use dclutch_request_profile_contract::{
             ProjectionRegistersV1, RequestProfileV1, project_atomic,
         };
-        use dclutch_transition_vm::v3::{RegisterInput, RegisterOutput, execute_fold_atomic};
+        use dclutch_transition_vm::v3::{
+            RegisterInput, RegisterKindV3, RegisterOutput, RegisterSpaceV3, RegisterWriteTargetV3,
+            execute_fold_atomic,
+        };
 
         use super::*;
         use crate::{
@@ -709,7 +712,11 @@ mod host {
         /// static write declarations. The fill has no Effect, no AccountProfile
         /// and no LifecycleV5, so the same method runs one artifact earlier: each
         /// common register is perturbed in isolation and counted as READ exactly
-        /// when it moves the shipped transition's decision or its output bank.
+        /// when it moves the shipped transition's decision or one of the
+        /// registers the transition DECLARES it writes. The observation is
+        /// restricted to those writes deliberately -- `execute_fold_atomic`
+        /// copies the whole scratch bank to the output bank, so a whole-bank
+        /// comparison reports every carried register as read.
         ///
         /// Two writers exist in this family today, and this test names them: the
         /// RequestProfile above projects the matcher's quantity and execution
@@ -852,6 +859,28 @@ mod host {
                     FILL_IDENTITY_BUYER_MAKER_REPLAY_OWNER_V4,
                 ]
             );
+
+            // THE SCHEMA HAS NO SLACK, and now that is a measurement rather
+            // than a coincidence. The read set is the EXACT complement of the
+            // transition's declared write set: every one of the ninety-six
+            // scalars is either derived by this program or read by it, and none
+            // is merely carried. That was invisible while the measurement
+            // compared whole output banks, because `execute_fold_atomic` copies
+            // scratch to output and a carried register is indistinguishable
+            // from a read one there.
+            let (written_scalars, written_identities) = transition_write_set();
+            assert!(written_identities.is_empty(), "the fill writes no identity");
+            let mut union = read_scalars.clone();
+            union.extend(written_scalars.iter().copied());
+            union.sort_unstable();
+            union.dedup();
+            assert_eq!(union.len(), DIRECT_REGISTERED_FILL_COMMON_SCALARS_V4);
+            assert_eq!(written_scalars.len(), 42);
+            assert!(
+                read_scalars
+                    .iter()
+                    .all(|index| !written_scalars.contains(index))
+            );
         }
 
         /// Perturb every common register in isolation against the canonical
@@ -859,7 +888,8 @@ mod host {
         fn measured_read_set() -> (std::vec::Vec<usize>, std::vec::Vec<usize>) {
             let base_scalars = matched_scalars();
             let base_identities = valid_identities();
-            let base = resolve(base_scalars, base_identities);
+            let writes = transition_write_set();
+            let base = resolve(&writes, base_scalars, base_identities);
             assert!(base.is_some(), "the baseline fill must be admitted");
 
             let mut scalars = std::vec::Vec::new();
@@ -871,7 +901,7 @@ mod host {
                     .any(|candidate| {
                         let mut perturbed = base_scalars;
                         *perturbed.get_mut(index).expect("scalar coordinate") = candidate;
-                        resolve(perturbed, base_identities) != base
+                        resolve(&writes, perturbed, base_identities) != base
                     });
                 if moved {
                     scalars.push(index);
@@ -887,7 +917,7 @@ mod host {
                     .any(|candidate| {
                         let mut perturbed = base_identities;
                         *perturbed.get_mut(index).expect("identity coordinate") = candidate;
-                        resolve(base_scalars, perturbed) != base
+                        resolve(&writes, base_scalars, perturbed) != base
                     });
                 if moved {
                     identities.push(index);
@@ -896,11 +926,59 @@ mod host {
             (scalars, identities)
         }
 
-        /// Execute the emitted program, returning the output bank on admission.
+        /// The registers the shipped transition declares it writes -- the only
+        /// output coordinates a read measurement may observe.
+        ///
+        /// Both item strides are zero, so the common bank is the whole bank.
+        #[allow(clippy::type_complexity)]
+        fn transition_write_set() -> (std::vec::Vec<usize>, std::vec::Vec<usize>) {
+            let mut scratch = [0_u8; DIRECT_REGISTERED_FILL_TRANSITION_BYTES_V4];
+            let mut bytes = [0_u8; DIRECT_REGISTERED_FILL_TRANSITION_BYTES_V4];
+            encode_direct_registered_fill_transition_v4_atomic(&mut scratch, &mut bytes)
+                .expect("transition");
+            let transition = ProgramV3::decode(&bytes).expect("decode");
+            assert_eq!(DIRECT_REGISTERED_FILL_ITEM_SCALAR_STRIDE_V4, 0);
+            assert_eq!(DIRECT_REGISTERED_FILL_ITEM_IDENTITY_STRIDE_V4, 0);
+            let scalars = (0..DIRECT_REGISTERED_FILL_COMMON_SCALARS_V4)
+                .filter(|index| {
+                    transition
+                        .writes_register(RegisterWriteTargetV3 {
+                            kind: RegisterKindV3::Scalar,
+                            space: RegisterSpaceV3::Common,
+                            index: u16::try_from(*index).expect("scalar register"),
+                        })
+                        .expect("writes")
+                })
+                .collect();
+            let identities = (0..DIRECT_REGISTERED_FILL_COMMON_IDENTITIES_V4)
+                .filter(|index| {
+                    transition
+                        .writes_register(RegisterWriteTargetV3 {
+                            kind: RegisterKindV3::Identity,
+                            space: RegisterSpaceV3::Common,
+                            index: u16::try_from(*index).expect("identity register"),
+                        })
+                        .expect("writes")
+                })
+                .collect();
+            (scalars, identities)
+        }
+
+        /// Execute the emitted program and return what a read is OBSERVABLE IN:
+        /// its admission, and the registers it writes.
+        ///
+        /// `execute_fold_atomic` copies the whole scratch bank to the output
+        /// bank, so every register the program never touches appears in the
+        /// output VERBATIM. Comparing whole output banks therefore reports
+        /// "read" for pass-through, which is not a read; restricting the
+        /// observation to the program's own declared writes is what makes the
+        /// measurement a measurement rather than an enumeration of the bank.
+        #[allow(clippy::type_complexity)]
         fn resolve(
+            writes: &(std::vec::Vec<usize>, std::vec::Vec<usize>),
             input: [u64; DIRECT_REGISTERED_FILL_COMMON_SCALARS_V4],
             identities: [[u8; 32]; DIRECT_REGISTERED_FILL_COMMON_IDENTITIES_V4],
-        ) -> Option<[u64; DIRECT_REGISTERED_FILL_COMMON_SCALARS_V4]> {
+        ) -> Option<(std::vec::Vec<u64>, std::vec::Vec<[u8; 32]>)> {
             let mut scratch = [0_u8; DIRECT_REGISTERED_FILL_TRANSITION_BYTES_V4];
             let mut bytes = [0_u8; DIRECT_REGISTERED_FILL_TRANSITION_BYTES_V4];
             encode_direct_registered_fill_transition_v4_atomic(&mut scratch, &mut bytes)
@@ -926,8 +1004,19 @@ mod host {
                     identities: &mut identity_output,
                 },
             )
-            .ok()
-            .map(|()| output)
+            .ok()?;
+            Some((
+                writes
+                    .0
+                    .iter()
+                    .map(|index| *output.get(*index).expect("scalar"))
+                    .collect(),
+                writes
+                    .1
+                    .iter()
+                    .map(|index| *identity_output.get(*index).expect("identity"))
+                    .collect(),
+            ))
         }
 
         /// The boundary itself stays admissible: a venue rate exactly at the
