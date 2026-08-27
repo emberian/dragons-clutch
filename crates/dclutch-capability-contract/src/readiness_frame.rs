@@ -335,11 +335,18 @@ impl<'a> ManifestContentCommitmentV1<'a> {
 
 /// Adapter-authenticated immutable beneficiary of a pre-existing RentCredit.
 ///
-/// Before Begin, the adapter must decode the canonical `RentCreditV1`, verify
-/// its program ownership and PDA derivation from its own persisted bump, and
-/// use the decoded refund authority to construct this value.  This contract
+/// Before Begin, the adapter must decode the canonical rent-credit account,
+/// verify its program ownership and PDA derivation from its own persisted bump,
+/// and use the decoded refund authority to construct this value.  This contract
 /// intentionally does not duplicate the rent-credit account codec or create a
 /// fallback direct-refund path.
+///
+/// The credit this reads was `RentCreditV1`. Its Create route was deleted on
+/// 2026-08-27 as superseded, so no such account can be created any more; the
+/// live credit is `LifecycleRentCreditV2`, whose refund destination is fixed by
+/// the credit itself rather than by a beneficiary the caller names. Repointing
+/// readiness at V2 belongs with whoever next drives readiness through a real
+/// Market — this type has no live caller today.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuthenticatedRentCreditBeneficiaryV1([u8; READINESS_PUBKEY_BYTES]);
 

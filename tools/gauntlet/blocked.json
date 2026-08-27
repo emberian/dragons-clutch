@@ -187,16 +187,6 @@
       "owner": "cycle-2 (WAVE.md), retirement"
     },
     {
-      "route": "rent/process_create#Create",
-      "reason": "RentCreditV1 Create. Superseded on the live path by the Market-scoped LifecycleRentCreditV2 that tier 1 does exercise; AGENTS.md forbids preserving parallel legacy/current authority paths, so this is a supersession decision, not a missing test.",
-      "owner": "UNASSIGNED \u2014 owner decision (delete V1, or state why both survive)"
-    },
-    {
-      "route": "rent/process_withdraw#Withdraw",
-      "reason": "RentCreditV1 Withdraw; same supersession question as V1 Create.",
-      "owner": "UNASSIGNED \u2014 owner decision (delete V1, or state why both survive)"
-    },
-    {
       "route": "rent/process_close_v2#Close",
       "reason": "LifecycleRentCreditV2 Close. JRNY-1 now executes the Sweep half of rent recovery, and Close is the other half: it is not a structural blocker either, it needs a RETIRED Market plus a Core close-authority signer, and no campaign reaches a retired Market yet. A tier that drives a Market to Terminal and retires it discharges this.",
       "owner": "cycle-2 retirement (behind a terminal Market), then JRNY-1"
