@@ -177,10 +177,12 @@ impl LogicalFrameV1 {
         &self,
         profile: AccountProfileV2<'_>,
         tail_count: u32,
+        spans: &[u32],
         coordinate: usize,
     ) -> Result<&BuiltAccountV1, BuilderError> {
-        let representative = profile_ops::representative(profile, tail_count, coordinate)?;
-        self.get(representative).ok_or(BuilderError::Binding(line!()))
+        let representative = profile_ops::representative(profile, tail_count, spans, coordinate)?;
+        self.get(representative)
+            .ok_or(BuilderError::Binding(line!()))
     }
 }
 
@@ -204,18 +206,22 @@ pub struct PackedAccountV1 {
 pub fn pack_frame(
     profile: AccountProfileV2<'_>,
     tail_count: u32,
+    spans: &[u32],
     frame: &LogicalFrameV1,
 ) -> Result<Vec<PackedAccountV1>, BuilderError> {
-    let logical_count = profile_ops::logical_count(profile, tail_count)?;
+    let logical_count = profile_ops::logical_count(profile, tail_count, spans)?;
     if frame.len() != logical_count {
         return Err(BuilderError::Profile(line!()));
     }
-    let physical_count = profile_ops::physical_count(profile, tail_count)?;
+    let physical_count = profile_ops::physical_count(profile, tail_count, spans)?;
     let mut packed: Vec<Option<BuiltAccountV1>> = vec![None; physical_count];
     for coordinate in 0..logical_count {
-        let value = frame.resolve(profile, tail_count, coordinate)?;
-        let ordinal = profile_ops::ordinal(profile, tail_count, coordinate)?;
-        match packed.get_mut(ordinal).ok_or(BuilderError::Profile(line!()))? {
+        let value = frame.resolve(profile, tail_count, spans, coordinate)?;
+        let ordinal = profile_ops::ordinal(profile, tail_count, spans, coordinate)?;
+        match packed
+            .get_mut(ordinal)
+            .ok_or(BuilderError::Profile(line!()))?
+        {
             Some(existing) if existing != value => return Err(BuilderError::Binding(line!())),
             Some(_) => {}
             slot @ None => *slot = Some(value.clone()),
@@ -226,7 +232,7 @@ pub fn pack_frame(
         .enumerate()
         .map(|(ordinal, value)| {
             let built = value.ok_or(BuilderError::Binding(line!()))?;
-            let geometry = profile_ops::geometry(profile, tail_count, ordinal)?;
+            let geometry = profile_ops::geometry(profile, tail_count, spans, ordinal)?;
             // Width is a fact about what the chain holds at execution, so an
             // externally installed account validates its chain view, not the
             // inert install placeholder.
@@ -303,8 +309,7 @@ pub fn program_with_view(key: Pubkey, programdata: Pubkey) -> BuiltAccountV1 {
 
 /// [`program_with_view`] at the canonical Loader-derived ProgramData address.
 pub fn program_with_deployed_view(key: Pubkey) -> BuiltAccountV1 {
-    let programdata =
-        Pubkey::find_program_address(&[key.as_ref()], &bpf_loader_upgradeable::ID).0;
+    let programdata = Pubkey::find_program_address(&[key.as_ref()], &bpf_loader_upgradeable::ID).0;
     program_with_view(key, programdata)
 }
 

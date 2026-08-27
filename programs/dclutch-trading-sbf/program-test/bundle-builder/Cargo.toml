@@ -14,6 +14,7 @@ dclutch-claims-svm = { path = "../../../../crates/dclutch-claims-svm" }
 dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
 dclutch-custody-contract = { path = "../../../../crates/dclutch-custody-contract" }
 dclutch-effect-kernel = { path = "../../../../crates/dclutch-effect-kernel" }
+dclutch-execution-strategy-contract = { path = "../../../../crates/dclutch-execution-strategy-contract" }
 dclutch-record-contract = { path = "../../../../crates/dclutch-record-contract" }
 dclutch-registry-contract = { path = "../../../../crates/dclutch-registry-contract" }
 dclutch-release-set-contract = { path = "../../../../crates/dclutch-release-set-contract" }
@@ -27,6 +28,8 @@ solana-sdk-ids = "=3.1.0"
 
 [dev-dependencies]
 dclutch-direct-codec = { path = "../../../../crates/dclutch-direct-codec" }
+dclutch-general-adapter-contract = { path = "../../../../crates/dclutch-general-adapter-contract" }
+dclutch-general-codec = { path = "../../../../crates/dclutch-general-codec" }
 dclutch-direct-hot-program-test-support = { path = "../direct-hot" }
 dclutch-market-core-codec = { path = "../../../../crates/dclutch-market-core-codec" }
 

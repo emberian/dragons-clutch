@@ -32,10 +32,14 @@ use solana_program::{
 use solana_sdk_ids::{system_program, sysvar};
 
 use crate::{
-    BuilderError, WaistFactsV1, profile_ops,
+    BuilderError, WaistFactsV1,
     artifacts::{ArtifactSetV1, DerivedArtifactsV1, DerivedRecordV1, derive_artifact_facts},
     frame::{BuiltAccountV1, LogicalFrameV1, data_account, external, pack_frame, program, vacant},
-    registers::{ContentProjectionKeysV1, EngineInputV1, EngineOutputV1, ObservedAccountV1, run_engine},
+    profile_ops,
+    registers::{
+        ContentProjectionKeysV1, EngineInputV1, EngineOutputV1, ObservedAccountV1,
+        SpanWidthInputV1, derive_dynamic_span_widths, run_engine,
+    },
     routes::{DerivedAuthorityV1, derive_authority},
 };
 
@@ -106,6 +110,9 @@ pub struct BuiltBundleV1 {
     pub logical: LogicalFrameV1,
     /// The engine's final run (registers, request bank, invocations).
     pub engine: EngineOutputV1,
+    /// Authenticated dynamic fixed-span widths this bundle was packed at, one
+    /// per span the AccountProfile declares (empty when it declares none).
+    pub span_counts: Vec<u32>,
 }
 
 /// One account with its derived rollback classification.
@@ -159,7 +166,22 @@ pub fn build_bundle(input: &BundleInputV1<'_>) -> Result<BuiltBundleV1, BuilderE
     let profile =
         AccountProfileV2::decode(input.set.account_profile).map_err(|_| BuilderError::Artifact)?;
     let tail_count = input.scenario.tail_count;
-    let logical_count = profile_ops::logical_count(profile, tail_count)?;
+    // The span widths come before the frame exists: they *are* the frame's
+    // width. Derived from the artifacts and the family request, exactly as the
+    // Hot executor derives them before it expands one account.
+    let span_counts = derive_dynamic_span_widths(&SpanWidthInputV1 {
+        profile,
+        request_profile_bytes: input.set.request_profile,
+        request_profile_schema: facts.request_profile.schema,
+        effect_bytes: input.set.effect,
+        strategy_bytes: input.set.strategy,
+        waist: input.waist,
+        tail_count,
+        family_request: input.scenario.family_request,
+        clock_slot: input.scenario.clock_slot,
+    })?;
+    let spans = span_counts.as_slice();
+    let logical_count = profile_ops::logical_count(profile, tail_count, spans)?;
 
     // The Hot envelope: root prestate is the digest of the bound root bytes.
     let envelope = HotExecutionEnvelopeV3::new(
@@ -178,10 +200,7 @@ pub fn build_bundle(input: &BundleInputV1<'_>) -> Result<BuiltBundleV1, BuilderE
     // Seed the logical frame: campaign bindings plus the shared runtime prefix.
     let mut frame = LogicalFrameV1::new(logical_count);
     frame.bind(0, input.fixed.root.clone())?;
-    frame.bind(
-        1,
-        finalized_raw(input.rent, &facts.config),
-    )?;
+    frame.bind(1, finalized_raw(input.rent, &facts.config))?;
     frame.bind(2, finalized_raw(input.rent, &input.fixed.product))?;
     frame.bind(3, finalized_raw(input.rent, &input.fixed.portfolio))?;
     frame.bind(4, finalized_raw(input.rent, &input.fixed.linked_basis))?;
@@ -192,7 +211,7 @@ pub fn build_bundle(input: &BundleInputV1<'_>) -> Result<BuiltBundleV1, BuilderE
     // complete frame. Alias coordinates stay unbound.
     let mut derived_coordinates: Vec<usize> = Vec::new();
     for coordinate in 0..logical_count {
-        let representative = profile_ops::representative(profile, tail_count, coordinate)?;
+        let representative = profile_ops::representative(profile, tail_count, spans, coordinate)?;
         if representative == coordinate && frame.get(coordinate).is_none() {
             derived_coordinates.push(coordinate);
             frame.adopt(coordinate, vacant(placeholder_key(coordinate)))?;
@@ -210,10 +229,10 @@ pub fn build_bundle(input: &BundleInputV1<'_>) -> Result<BuiltBundleV1, BuilderE
     let mut engine_output = None;
     let mut authorities = Vec::new();
     for _round in 0..4 {
-        let observations = observe_frame(profile, tail_count, &frame)?;
+        let observations = observe_frame(profile, tail_count, spans, &frame)?;
         for (coordinate, observation) in observations.iter().enumerate() {
-            let ordinal = profile_ops::ordinal(profile, tail_count, coordinate)?;
-            let geometry = profile_ops::geometry(profile, tail_count, ordinal)?;
+            let ordinal = profile_ops::ordinal(profile, tail_count, spans, coordinate)?;
+            let geometry = profile_ops::geometry(profile, tail_count, spans, ordinal)?;
             let declared = geometry.data();
             let observed = observation.data.len();
             let mismatch = match declared {
@@ -253,6 +272,7 @@ pub fn build_bundle(input: &BundleInputV1<'_>) -> Result<BuiltBundleV1, BuilderE
             generation: input.scenario.generation,
             observations: &observations,
             content_keys,
+            span_counts: spans,
             rent: input.rent,
         })?;
         let mut changed = false;
@@ -274,9 +294,11 @@ pub fn build_bundle(input: &BundleInputV1<'_>) -> Result<BuiltBundleV1, BuilderE
         }
         authorities.clear();
         for invocation in &output.invocations {
-            if let Some(authority) =
-                derive_authority(invocation, input.waist.release_set, input.waist.trading_program)?
-            {
+            if let Some(authority) = derive_authority(
+                invocation,
+                input.waist.release_set,
+                input.waist.trading_program,
+            )? {
                 let current = frame
                     .get(authority.coordinate)
                     .ok_or(BuilderError::Binding(line!()))?
@@ -301,7 +323,7 @@ pub fn build_bundle(input: &BundleInputV1<'_>) -> Result<BuiltBundleV1, BuilderE
     let engine = engine_output.ok_or(BuilderError::Projection("adoption-divergence"))?;
 
     // Pack the runtime frame; assemble the fixed frame; join them.
-    let packed = pack_frame(profile, tail_count, &frame)?;
+    let packed = pack_frame(profile, tail_count, spans, &frame)?;
     let fixed = fixed_hot_frame(input, &facts)?;
 
     let mut metas: Vec<AccountMeta> = fixed.iter().map(|value| value.meta.clone()).collect();
@@ -326,9 +348,11 @@ pub fn build_bundle(input: &BundleInputV1<'_>) -> Result<BuiltBundleV1, BuilderE
         })
         .collect();
     for candidate in packed.iter().skip(HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3) {
-        if !accounts.iter().any(|value| value.key == candidate.built.key) {
-            let snapshot =
-                candidate.snapshot && candidate.built.key != input.scenario.payer;
+        if !accounts
+            .iter()
+            .any(|value| value.key == candidate.built.key)
+        {
+            let snapshot = candidate.snapshot && candidate.built.key != input.scenario.payer;
             accounts.push(InstallAccountV1 {
                 key: candidate.built.key,
                 account: candidate.built.account.clone(),
@@ -370,6 +394,7 @@ pub fn build_bundle(input: &BundleInputV1<'_>) -> Result<BuiltBundleV1, BuilderE
         authorities,
         logical: frame,
         engine,
+        span_counts,
     })
 }
 
@@ -377,13 +402,15 @@ pub fn build_bundle(input: &BundleInputV1<'_>) -> Result<BuiltBundleV1, BuilderE
 fn observe_frame(
     profile: AccountProfileV2<'_>,
     tail_count: u32,
+    spans: &[u32],
     frame: &LogicalFrameV1,
 ) -> Result<Vec<ObservedAccountV1>, BuilderError> {
     (0..frame.len())
         .map(|coordinate| {
-            let built = frame.resolve(profile, tail_count, coordinate)?;
-            let ordinal = profile_ops::ordinal(profile, tail_count, coordinate)?;
-            let privileges = profile_ops::geometry(profile, tail_count, ordinal)?.privileges();
+            let built = frame.resolve(profile, tail_count, spans, coordinate)?;
+            let ordinal = profile_ops::ordinal(profile, tail_count, spans, coordinate)?;
+            let privileges =
+                profile_ops::geometry(profile, tail_count, spans, ordinal)?.privileges();
             let view = built.chain_view();
             Ok(ObservedAccountV1 {
                 key: built.key.to_bytes(),
@@ -443,7 +470,10 @@ fn fixed_hot_frame(
         HOT_MARKET_ACCOUNT_V3,
         fixed_readonly(input.fixed.market.clone()),
     )?;
-    set(HOT_ROOT_ACCOUNT_V3, fixed_writable(input.fixed.root.clone()))?;
+    set(
+        HOT_ROOT_ACCOUNT_V3,
+        fixed_writable(input.fixed.root.clone()),
+    )?;
     for (raw, staging, record) in [
         (
             HOT_MANIFEST_RAW_ACCOUNT_V3,

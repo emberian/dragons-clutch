@@ -30,9 +30,10 @@ use dclutch_account_profile_contract::{
         plan_lifecycle_with_protected_outputs_atomic,
     },
     v2::{
-        AccountPrestateV2, AccountProfileV2, ProjectionRegistersV2, TrustedEnvironmentV2,
-        derive_effect_permissions, derive_effect_permissions_with_dynamic_spans,
-        project_atomic as project_accounts_atomic, project_dynamic_fixed_spans_atomic,
+        AccountPrestateV2, AccountProfileV2, DynamicFixedSpanV2, ProjectionRegistersV2,
+        TrustedEnvironmentV2, derive_effect_permissions,
+        derive_effect_permissions_with_dynamic_spans, project_atomic as project_accounts_atomic,
+        project_dynamic_fixed_spans_atomic,
     },
 };
 use dclutch_capability_program_contract::hot_v3::HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3;
@@ -41,9 +42,13 @@ use dclutch_effect_kernel::{
     v3::{ProgramV3 as EffectBaseV3, ProjectionV3, ResolvedInvocationV3},
     v4::{ProgramV4 as EffectProgramV4, ResolvedWriteRangeV4, project_atomic_visiting},
 };
+use dclutch_execution_strategy_contract::v2::{
+    BankTransportV2, ExecutionStrategyProgramV2, StrategyDispositionV2, classify_bank_transport_v2,
+};
 use dclutch_rent_contract::lifecycle_v2::LifecycleRentCreditV2;
 use dclutch_request_profile_contract::{
-    ProjectionRegistersV1, RequestProfileV1, SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1,
+    ProjectionRegisterKindV1, ProjectionRegisterSpaceV1, ProjectionRegistersV1, ProjectionTargetV1,
+    RequestProfileV1, SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1,
     project_atomic as project_request_atomic,
     v2::{
         NativeEd25519InstructionViewV1, NativeSignatureRegistersV1,
@@ -132,6 +137,10 @@ pub struct EngineInputV1<'a> {
     pub observations: &'a [ObservedAccountV1],
     /// Content digests for the shared runtime prefix.
     pub content_keys: ContentProjectionKeysV1,
+    /// Authenticated dynamic fixed-span widths, one per declared span; empty
+    /// for a profile that declares none. Derived by
+    /// [`derive_dynamic_span_widths`], never stated by a campaign.
+    pub span_counts: &'a [u32],
     /// Current rent schedule.
     pub rent: &'a Rent,
 }
@@ -191,9 +200,12 @@ pub fn run_engine(input: &EngineInputV1<'_>) -> Result<EngineOutputV1, BuilderEr
     let profile = input.profile;
     let tail_count = input.tail_count;
     let lifecycle_digest = digest32(input.lifecycle_bytes);
-    let lifecycle =
-        StateLifecyclePolicyV5::decode_selected(lifecycle_digest, lifecycle_digest, input.lifecycle_bytes)
-            .map_err(|_| BuilderError::Projection("lifecycle-decode"))?;
+    let lifecycle = StateLifecyclePolicyV5::decode_selected(
+        lifecycle_digest,
+        lifecycle_digest,
+        input.lifecycle_bytes,
+    )
+    .map_err(|_| BuilderError::Projection("lifecycle-decode"))?;
     let profile_join = lifecycle
         .validate_account_profile_join(profile)
         .map_err(|_| BuilderError::Projection("profile-join"))?;
@@ -213,12 +225,13 @@ pub fn run_engine(input: &EngineInputV1<'_>) -> Result<EngineOutputV1, BuilderEr
         .request_bytes(tail_count)
         .map_err(|_| BuilderError::Projection("request-bytes"))?;
 
-    let logical_count = profile_ops::logical_count(profile, tail_count)?;
+    let span_counts = input.span_counts;
+    let logical_count = profile_ops::logical_count(profile, tail_count, span_counts)?;
     if input.observations.len() != logical_count {
         return Err(BuilderError::Projection("observation-width"));
     }
     let aliases = (0..logical_count)
-        .map(|coordinate| profile_ops::representative(profile, tail_count, coordinate))
+        .map(|coordinate| profile_ops::representative(profile, tail_count, span_counts, coordinate))
         .collect::<Result<Vec<usize>, _>>()?;
 
     // Phase 2 inputs: the observation bank, with the shared runtime prefix's
@@ -322,7 +335,13 @@ pub fn run_engine(input: &EngineInputV1<'_>) -> Result<EngineOutputV1, BuilderEr
             output_identities: &mut next_identities,
         };
         if profile.uses_dynamic_fixed_spans() {
-            project_dynamic_fixed_spans_atomic(profile, tail_count, &[], &observations, registers)
+            project_dynamic_fixed_spans_atomic(
+                profile,
+                tail_count,
+                span_counts,
+                &observations,
+                registers,
+            )
         } else {
             project_accounts_atomic(profile, tail_count, &observations, registers)
         }
@@ -462,7 +481,12 @@ pub fn run_engine(input: &EngineInputV1<'_>) -> Result<EngineOutputV1, BuilderEr
         .map_err(|_| BuilderError::Projection("effect-account-count"))?;
     let mut permissions = vec![AccountPermission::read_only(); logical_count];
     if profile.uses_dynamic_fixed_spans() {
-        derive_effect_permissions_with_dynamic_spans(profile, tail_count, &[], &mut permissions)
+        derive_effect_permissions_with_dynamic_spans(
+            profile,
+            tail_count,
+            span_counts,
+            &mut permissions,
+        )
     } else {
         derive_effect_permissions(profile, tail_count, &mut permissions)
     }
@@ -531,16 +555,45 @@ enum RequestProfileKind<'a> {
     Signed(RequestProfileV2<'a>),
 }
 
+impl<'a> RequestProfileKind<'a> {
+    /// The V1 projector, which both kinds ultimately delegate projection to.
+    fn base(self) -> RequestProfileV1<'a> {
+        match self {
+            Self::Unsigned(profile) => profile,
+            Self::Signed(profile) => profile.request_profile(),
+        }
+    }
+
+    /// Whether any request projection writes `target`.
+    fn writes_register(self, target: ProjectionTargetV1) -> Result<bool, BuilderError> {
+        match self {
+            Self::Unsigned(profile) => profile
+                .writes_register(target)
+                .map_err(|_| BuilderError::Spans("writes-register")),
+            Self::Signed(profile) => profile
+                .writes_register(target)
+                .map_err(|_| BuilderError::Spans("writes-register")),
+        }
+    }
+}
+
 fn decode_request_profile<'a>(
     input: &EngineInputV1<'a>,
 ) -> Result<RequestProfileKind<'a>, BuilderError> {
-    let authenticated = digest32(input.request_profile_bytes);
-    if input.request_profile_schema == REQUEST_PROFILE_SCHEMA_ID_V1 {
-        RequestProfileV1::decode_selected(authenticated, authenticated, input.request_profile_bytes)
+    decode_request_profile_bytes(input.request_profile_bytes, input.request_profile_schema)
+}
+
+fn decode_request_profile_bytes(
+    bytes: &[u8],
+    schema: [u8; 32],
+) -> Result<RequestProfileKind<'_>, BuilderError> {
+    let authenticated = digest32(bytes);
+    if schema == REQUEST_PROFILE_SCHEMA_ID_V1 {
+        RequestProfileV1::decode_selected(authenticated, authenticated, bytes)
             .map(RequestProfileKind::Unsigned)
             .map_err(|_| BuilderError::Projection("request-profile-v1"))
-    } else if input.request_profile_schema == REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID {
-        RequestProfileV2::decode_selected(authenticated, authenticated, input.request_profile_bytes)
+    } else if schema == REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID {
+        RequestProfileV2::decode_selected(authenticated, authenticated, bytes)
             .map(RequestProfileKind::Signed)
             .map_err(|_| BuilderError::Projection("request-profile-v2"))
     } else {
@@ -548,6 +601,224 @@ fn decode_request_profile<'a>(
         // named boundary of this engine; no reproduced family needs them yet.
         Err(BuilderError::Projection("request-profile-schema"))
     }
+}
+
+/// Everything the dynamic fixed-span width derivation consumes.
+///
+/// The same artifact bytes the bundle already holds, plus the strategy record —
+/// which the rest of the builder never decodes, and which the span rule needs
+/// because a *profile-only* span is admissible under exactly one disposition.
+pub struct SpanWidthInputV1<'a> {
+    /// Decoded account profile.
+    pub profile: AccountProfileV2<'a>,
+    /// Request profile record bytes plus the schema the descriptor names.
+    pub request_profile_bytes: &'a [u8],
+    /// Schema release identity of the request profile.
+    pub request_profile_schema: [u8; 32],
+    /// Effect program record bytes.
+    pub effect_bytes: &'a [u8],
+    /// Execution strategy record bytes.
+    pub strategy_bytes: &'a [u8],
+    /// Release-waist facts (the trusted executing-program identity).
+    pub waist: WaistFactsV1,
+    /// Product-authenticated runtime item count.
+    pub tail_count: u32,
+    /// Family request bytes (after the Hot envelope).
+    pub family_request: &'a [u8],
+    /// Trusted current slot.
+    pub clock_slot: u64,
+}
+
+/// Derive the authenticated dynamic fixed-span widths for one bundle.
+///
+/// This is `hot_v3::authenticate_dynamic_span_widths_v3` on the host, phase for
+/// phase, and it is the reason the builder can pack a spans profile at all: the
+/// widths are *not* the account-vector length, they are projected out of the
+/// artifacts and the family request before any account is expanded.
+///
+/// Two kinds of span exist and they get their width from different places:
+///
+/// - **Request-owned**: the span's `count_scalar` is a common scalar some
+///   request-projection operation writes. Its width comes from projecting the
+///   family request once into a throwaway bank.
+/// - **AccountProfile-only** (General's sole span): nothing in the request
+///   writes the selector, so the width comes from the canonical register-bank
+///   geometry — `classify_bank_transport_v2(scalars, identities)` — and the
+///   span is admissible **only** under `AdmittedAot`, only as the trailing
+///   span, and only when no EffectV4 span claims the same selector.
+pub fn derive_dynamic_span_widths(input: &SpanWidthInputV1<'_>) -> Result<Vec<u32>, BuilderError> {
+    let profile = input.profile;
+    let effect = EffectProgramV4::decode(input.effect_bytes)
+        .map_err(|_| BuilderError::Spans("effect-decode"))?;
+    let span_count = profile.dynamic_fixed_span_count();
+    if !profile.uses_dynamic_fixed_spans() || span_count == 0 {
+        if span_count != 0 || effect.span_count() != 0 {
+            return Err(BuilderError::Spans("undeclared-spans"));
+        }
+        return Ok(Vec::new());
+    }
+    let strategy = ExecutionStrategyProgramV2::decode(input.strategy_bytes)
+        .map_err(|_| BuilderError::Spans("strategy-decode"))?;
+    let disposition = strategy.disposition();
+
+    let tail_count = input.tail_count;
+    let effect_base = effect.base();
+    let scalar_count = effect_base
+        .scalar_count(tail_count)
+        .map_err(|_| BuilderError::Spans("scalar-count"))?;
+    let identity_count = effect_base
+        .identity_count(tail_count)
+        .map_err(|_| BuilderError::Spans("identity-count"))?;
+
+    // The throwaway projection: the same seeded prefix phase 1 uses, then the
+    // family request. Only `projected_scalars` outlives it.
+    let mut input_scalars = vec![0_u64; scalar_count];
+    let mut input_identities = vec![[0_u8; 32]; identity_count];
+    *input_identities
+        .get_mut(HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3)
+        .ok_or(BuilderError::Spans("parent-digest-register"))? = digest32(input.family_request);
+    seed_trusted_environment(
+        profile,
+        input.waist.trading_program,
+        input.clock_slot,
+        &mut input_scalars,
+        &mut input_identities,
+    )
+    .map_err(|_| BuilderError::Spans("trusted-environment"))?;
+    let mut scratch_scalars = input_scalars.clone();
+    let mut scratch_identities = input_identities.clone();
+    let mut projected_scalars = input_scalars.clone();
+    let mut projected_identities = input_identities.clone();
+    let request_profile =
+        decode_request_profile_bytes(input.request_profile_bytes, input.request_profile_schema)?;
+    project_request_atomic(
+        request_profile.base(),
+        tail_count,
+        input.family_request,
+        ProjectionRegistersV1 {
+            input_scalars: &input_scalars,
+            input_identities: &input_identities,
+            scratch_scalars: &mut scratch_scalars,
+            scratch_identities: &mut scratch_identities,
+            output_scalars: &mut projected_scalars,
+            output_identities: &mut projected_identities,
+        },
+    )
+    .map_err(|_| BuilderError::Spans("request-projection"))?;
+
+    let transport_page_count = match classify_bank_transport_v2(
+        u32::try_from(scalar_count).map_err(|_| BuilderError::Arithmetic)?,
+        u32::try_from(identity_count).map_err(|_| BuilderError::Arithmetic)?,
+    )
+    .map_err(|_| BuilderError::Spans("bank-transport"))?
+    {
+        BankTransportV2::InlineReturnData { .. } => None,
+        BankTransportV2::AuthenticatedScratchPages { page_count, .. } => Some(page_count),
+    };
+    let mut transport_span = None;
+    let mut index = 0_u16;
+    while index < span_count {
+        let span = profile
+            .dynamic_fixed_span(index)
+            .map_err(|_| BuilderError::Spans("span-decode"))?;
+        let target = ProjectionTargetV1 {
+            kind: ProjectionRegisterKindV1::Scalar,
+            space: ProjectionRegisterSpaceV1::Common,
+            index: span.count_scalar(),
+        };
+        let request_owned = request_profile.writes_register(target)?;
+        let effect_owned = (0..effect.span_count()).any(|effect_index| {
+            effect
+                .span(effect_index)
+                .is_ok_and(|value| value.selector_common_scalar() == span.count_scalar())
+        });
+        if request_owned {
+            if !effect_owned {
+                require_trailing_profile_only_span(profile, span)?;
+            }
+        } else {
+            if effect_owned
+                || disposition != StrategyDispositionV2::AdmittedAot
+                || transport_span.is_some()
+            {
+                return Err(BuilderError::Spans("unowned-span"));
+            }
+            require_trailing_profile_only_span(profile, span)?;
+            let page_count = transport_page_count.ok_or(BuilderError::Spans("inline-bank"))?;
+            *projected_scalars
+                .get_mut(usize::from(span.count_scalar()))
+                .ok_or(BuilderError::Spans("selector-register"))? = u64::from(page_count);
+            transport_span = Some(index);
+        }
+        index = index.checked_add(1).ok_or(BuilderError::Arithmetic)?;
+    }
+    let mut effect_span = 0_u16;
+    while effect_span < effect.span_count() {
+        let selector = effect
+            .span(effect_span)
+            .map_err(|_| BuilderError::Spans("effect-span-decode"))?
+            .selector_common_scalar();
+        if !(0..span_count).any(|profile_index| {
+            profile
+                .dynamic_fixed_span(profile_index)
+                .is_ok_and(|value| value.count_scalar() == selector)
+        }) {
+            return Err(BuilderError::Spans("effect-span-unmatched"));
+        }
+        effect_span = effect_span.checked_add(1).ok_or(BuilderError::Arithmetic)?;
+    }
+    let mut widths = vec![0_u32; usize::from(span_count)];
+    profile
+        .dynamic_span_widths_from_scalars(&projected_scalars, &mut widths)
+        .map_err(|_| BuilderError::Spans("widths-from-scalars"))?;
+    effect
+        .account_count(tail_count, &projected_scalars)
+        .map_err(|_| BuilderError::Spans("effect-account-count"))?;
+    if disposition == StrategyDispositionV2::AdmittedAot
+        && transport_page_count.is_some() != transport_span.is_some()
+    {
+        return Err(BuilderError::Spans("transport-span-mismatch"));
+    }
+    Ok(widths)
+}
+
+/// An AccountProfile-only span must be the trailing one.
+fn require_trailing_profile_only_span(
+    profile: AccountProfileV2<'_>,
+    span: DynamicFixedSpanV2,
+) -> Result<(), BuilderError> {
+    if span.insertion_coordinate() == profile.fixed_account_count() {
+        Ok(())
+    } else {
+        Err(BuilderError::Spans("non-trailing-span"))
+    }
+}
+
+/// Seed the trusted-environment registers phase 1 seeds, for the throwaway
+/// bank the span projection runs in.
+fn seed_trusted_environment(
+    profile: AccountProfileV2<'_>,
+    trading_program: Pubkey,
+    clock_slot: u64,
+    scalars: &mut [u64],
+    identities: &mut [[u8; 32]],
+) -> Result<(), BuilderError> {
+    if let TrustedEnvironmentV2::CurrentSlot { destination } = profile.trusted_environment() {
+        *scalars
+            .get_mut(usize::from(destination))
+            .ok_or(BuilderError::Spans("slot-register"))? = clock_slot;
+    }
+    if let Some(destination) = profile.trusted_current_executing_program_identity() {
+        *identities
+            .get_mut(usize::from(destination))
+            .ok_or(BuilderError::Spans("program-register"))? = trading_program.to_bytes();
+    }
+    if let Some(destination) = profile.trusted_system_program_identity() {
+        *identities
+            .get_mut(usize::from(destination))
+            .ok_or(BuilderError::Spans("system-register"))? = system_program::ID.to_bytes();
+    }
+    Ok(())
 }
 
 fn current_rent_quotes(
@@ -671,10 +942,7 @@ fn preplan_lifecycle(
                         if seed.checked_add(1) != Some(seed_count) {
                             return Err(BuilderError::Lifecycle("bump-position"));
                         }
-                        let slices = seed_bytes
-                            .iter()
-                            .map(Vec::as_slice)
-                            .collect::<Vec<&[u8]>>();
+                        let slices = seed_bytes.iter().map(Vec::as_slice).collect::<Vec<&[u8]>>();
                         derived = Some(Pubkey::find_program_address(
                             &slices,
                             &input.waist.trading_program,
@@ -836,9 +1104,10 @@ fn apply_candidates(
     accounts: &mut [AccountInput],
 ) -> Result<(), BuilderError> {
     for derivation in states {
-        let (lamports, data_len) = match derivation.plan.ok_or(BuilderError::Lifecycle(
-            "candidate-plan",
-        ))? {
+        let (lamports, data_len) = match derivation
+            .plan
+            .ok_or(BuilderError::Lifecycle("candidate-plan"))?
+        {
             StateLifecyclePlanV3::Authenticate(_) => continue,
             StateLifecyclePlanV3::Create(plan) => (
                 plan.state_after,
@@ -895,7 +1164,10 @@ fn resolve_invocations(
             // caller-authority coordinate from them. Synthesize the shadow
             // geometry so the authority can be derived.
             let end = request_offset
-                .checked_add(usize::try_from(declared.fixed_request_bytes()).map_err(|_| BuilderError::Arithmetic)?)
+                .checked_add(
+                    usize::try_from(declared.fixed_request_bytes())
+                        .map_err(|_| BuilderError::Arithmetic)?,
+                )
                 .ok_or(BuilderError::Arithmetic)?;
             let request = request_bank
                 .get(request_offset..end)

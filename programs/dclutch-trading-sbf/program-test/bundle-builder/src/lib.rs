@@ -48,22 +48,37 @@ pub mod routes;
 ///
 /// A spans-typed profile (artifact profile 13) answers alias and geometry
 /// queries only through its `_with_dynamic_spans` variants, even at zero
-/// declared spans. Nonzero span widths are a named boundary of this builder:
-/// every reproduced family so far runs at zero spans.
+/// declared spans. Every query here takes the authenticated span widths —
+/// empty for a profile that declares none, and derived by
+/// [`crate::registers::derive_dynamic_span_widths`] otherwise, never stated by
+/// a campaign. A non-spans profile is refused a nonempty width vector, exactly
+/// as `hot_v3::expand_runtime_accounts_v3` refuses one.
 pub mod profile_ops {
-    use dclutch_account_profile_contract::v2::{
-        AccountProfileV2, PhysicalAccountGeometryV2,
-    };
+    use dclutch_account_profile_contract::v2::{AccountProfileV2, PhysicalAccountGeometryV2};
 
     use crate::BuilderError;
+
+    /// Refuse span widths a non-spans profile cannot carry.
+    fn checked(profile: AccountProfileV2<'_>, spans: &[u32]) -> Result<bool, BuilderError> {
+        let dynamic = profile.uses_dynamic_fixed_spans();
+        if dynamic {
+            if spans.len() != usize::from(profile.dynamic_fixed_span_count()) {
+                return Err(BuilderError::Profile(line!()));
+            }
+        } else if !spans.is_empty() {
+            return Err(BuilderError::Profile(line!()));
+        }
+        Ok(dynamic)
+    }
 
     /// Logical account count at this tail.
     pub fn logical_count(
         profile: AccountProfileV2<'_>,
         tail_count: u32,
+        spans: &[u32],
     ) -> Result<usize, BuilderError> {
-        if profile.uses_dynamic_fixed_spans() {
-            profile.logical_account_count_with_dynamic_spans(tail_count, &[])
+        if checked(profile, spans)? {
+            profile.logical_account_count_with_dynamic_spans(tail_count, spans)
         } else {
             profile.logical_account_count(tail_count)
         }
@@ -74,9 +89,10 @@ pub mod profile_ops {
     pub fn physical_count(
         profile: AccountProfileV2<'_>,
         tail_count: u32,
+        spans: &[u32],
     ) -> Result<usize, BuilderError> {
-        if profile.uses_dynamic_fixed_spans() {
-            profile.physical_account_count_with_dynamic_spans(tail_count, &[])
+        if checked(profile, spans)? {
+            profile.physical_account_count_with_dynamic_spans(tail_count, spans)
         } else {
             profile.physical_account_count(tail_count)
         }
@@ -87,10 +103,11 @@ pub mod profile_ops {
     pub fn representative(
         profile: AccountProfileV2<'_>,
         tail_count: u32,
+        spans: &[u32],
         coordinate: usize,
     ) -> Result<usize, BuilderError> {
-        if profile.uses_dynamic_fixed_spans() {
-            profile.representative_with_dynamic_spans(tail_count, &[], coordinate)
+        if checked(profile, spans)? {
+            profile.representative_with_dynamic_spans(tail_count, spans, coordinate)
         } else {
             profile.representative(tail_count, coordinate)
         }
@@ -101,10 +118,11 @@ pub mod profile_ops {
     pub fn ordinal(
         profile: AccountProfileV2<'_>,
         tail_count: u32,
+        spans: &[u32],
         coordinate: usize,
     ) -> Result<usize, BuilderError> {
-        if profile.uses_dynamic_fixed_spans() {
-            profile.physical_account_ordinal_with_dynamic_spans(tail_count, &[], coordinate)
+        if checked(profile, spans)? {
+            profile.physical_account_ordinal_with_dynamic_spans(tail_count, spans, coordinate)
         } else {
             profile.physical_account_ordinal(tail_count, coordinate)
         }
@@ -115,10 +133,15 @@ pub mod profile_ops {
     pub fn geometry(
         profile: AccountProfileV2<'_>,
         tail_count: u32,
+        spans: &[u32],
         physical_ordinal: usize,
     ) -> Result<PhysicalAccountGeometryV2, BuilderError> {
-        if profile.uses_dynamic_fixed_spans() {
-            profile.physical_account_geometry_with_dynamic_spans(tail_count, &[], physical_ordinal)
+        if checked(profile, spans)? {
+            profile.physical_account_geometry_with_dynamic_spans(
+                tail_count,
+                spans,
+                physical_ordinal,
+            )
         } else {
             profile.physical_account_geometry(tail_count, physical_ordinal)
         }
@@ -141,6 +164,9 @@ pub enum BuilderError {
     Binding(u32),
     /// The host projection pipeline refused (see the stage name).
     Projection(&'static str),
+    /// Dynamic fixed-span width derivation refused (see the stage name); the
+    /// stage names mirror `hot_v3::authenticate_dynamic_span_widths_v3`.
+    Spans(&'static str),
     /// The lifecycle preplan refused or derived an unusable plan.
     Lifecycle(&'static str),
     /// A child route's request kind is not yet understood by the builder.
