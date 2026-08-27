@@ -27,6 +27,7 @@ use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
     CallerRoleV1 as CustodyCallerRoleV1, CompartmentV1, ContextV1, CustodyAuthoritySeedsV1,
     CustodyReplaySeedsV1, CustodyReplayV1, CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
+    PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
 };
 use dclutch_market_core_codec::{
     CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase as CorePhase, Readiness,
@@ -42,11 +43,11 @@ use dclutch_product_runtime_v2::{
     ContentId as RuntimeContentId, PortfolioInputV2, ResultDomainInputV2, compile_portfolio_v2,
     compile_result_domain_v2, portfolio_record_bytes, result_domain_record_bytes,
 };
-use dclutch_program_test_evidence::TransactionEvidence;
 use dclutch_product_runtime_v2_admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
     RESULT_DOMAIN_SCHEMA_ID_V2,
 };
+use dclutch_program_test_evidence::TransactionEvidence;
 use dclutch_rational_representation_v2_contract::{
     ABSENT_REVISION, ASSET_BYTES_V2, AssetV2, CallerRoleV2, RATIONAL_ASSET_ACCOUNT_COUNT_V2,
     RATIONAL_BASE_ACCOUNT_COUNT_V2, RATIONAL_REPLAY_BYTES_V2, RATIONAL_REPLAY_MAGIC_V2,
@@ -127,6 +128,33 @@ const INITIAL_HOARD_ATOMS: u64 = 9;
 const PACKET_LIMIT: usize = 1_232;
 const TOKEN_2022_V11_PROVENANCE: &str = include_str!("../fixtures/token-2022-v11.provenance");
 
+/// The caller-chosen founding action context one `DCLTGMF1` founding carries.
+///
+/// `GenericFoundingRequestV1::context` is caller-owned: the protocol never
+/// requires it to be the Market address, and the campaign that founded the
+/// first open Market derives it from the Market, generation, and release set
+/// under its own domain (`tools/local-validator/bootstrap/successor/src/market.rs`).
+/// Any 32 bytes are admissible, so this fixture uses opaque ones on purpose —
+/// a fixture that picked a *derivable* context would silently re-admit the
+/// assumption this campaign exists to refuse.
+const FOUNDING_ACTION_CONTEXT_V1: [u8; 32] = [0x6f; 32];
+
+/// The Market's Custody namespace, exactly as the founding routes derive it.
+///
+/// `generic_market_founding_v1::authenticate_projected_lock_join_v1` pins
+/// `context_digest = SHA-256(PROJECTED_HOARD_CONTEXT_DOMAIN_V1 || context)`,
+/// Custody's `open_hoard` creates the Hoard Vault under that digest, and
+/// `RealizeAndClose` rewrites the projection in place as the Market's normal
+/// replay at the same digest. This is therefore the one context coordinate the
+/// founded Market's collateral actually lives under — not the Market address.
+fn founding_custody_context() -> [u8; 32] {
+    hashv(&[
+        PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
+        &FOUNDING_ACTION_CONTEXT_V1,
+    ])
+    .to_bytes()
+}
+
 struct Artifacts {
     claims: Vec<u8>,
     custody: Vec<u8>,
@@ -165,6 +193,13 @@ struct Fixture {
     release_set: [u8; 32],
     realm_id: [u8; 32],
     parent_context: [u8; 32],
+    /// The Market's Custody namespace — see [`founding_custody_context`].
+    ///
+    /// Deliberately NOT the representation request's `parent_context` and
+    /// deliberately NOT the Market address. Those three were one value here
+    /// until this campaign separated them, which is why a Hoard that does not
+    /// live at the Market address had never been exercised.
+    custody_context: [u8; 32],
     market: Pubkey,
     aggregate: Pubkey,
     actor_position: Pubkey,
@@ -1055,7 +1090,7 @@ fn terminal_custody(
     release_set: [u8; 32],
     market: Pubkey,
     realm_id: [u8; 32],
-    parent_context: [u8; 32],
+    custody_context: [u8; 32],
     actor: Pubkey,
     collateral_mint: Pubkey,
     recipient: Pubkey,
@@ -1069,7 +1104,7 @@ fn terminal_custody(
         release_set,
         market: market.to_bytes(),
         realm: realm_id,
-        context: parent_context,
+        context: custody_context,
         caller_program: CLAIMS_PROGRAM_ID.to_bytes(),
         semantic: ContextV1 {
             candidate: candidate_digest,
@@ -1085,7 +1120,11 @@ fn terminal_custody(
         },
         source: [0x91; 32],
         destination: recipient.to_bytes(),
-        source_vault_context: market.to_bytes(),
+        // The Hoard Vault lives under the Market's Custody namespace, which is
+        // where the founding put it. Writing `market.to_bytes()` here — as this
+        // helper did until this campaign — would bend the fixture to the side of
+        // the guard under test and hide the defect it exists to witness.
+        source_vault_context: custody_context,
         destination_vault_context: [0; 32],
         mint: collateral_mint.to_bytes(),
         token_program: TOKEN_2022_PROGRAM_ID,
@@ -1117,7 +1156,7 @@ fn terminal_custody(
         ContentId::new(release_set).expect("release set"),
         market.to_bytes(),
         ExecutionRoleV1::Claims,
-        parent_context,
+        custody_context,
         hash(&request_bytes).to_bytes(),
     )
     .expect("Claims caller seeds");
@@ -1193,7 +1232,7 @@ fn terminal_candidate_digest(
             product_instance_id: product.product_id,
             basis_id: product.basis_id,
             realm_id,
-            custody_context: [0x68; 32],
+            custody_context: founding_custody_context(),
             generation: GENERATION,
         },
         &[3, 9],
@@ -1449,7 +1488,9 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
         product_instance_id: product_claims.product_id,
         basis_id: product_claims.basis_id,
         realm_id,
-        custody_context: [0x68; 32],
+        // What `FoundingV5` persists for a `DCLTGMF1`-founded Market: the
+        // authenticated Custody namespace the realized replay carries.
+        custody_context: founding_custody_context(),
         generation: GENERATION,
     };
     let aggregate_data =
@@ -1554,11 +1595,22 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
     add_funded_empty(&mut test, representation_replay, RATIONAL_REPLAY_BYTES_V2);
 
     let parent_context = [0x68; 32];
+    let custody_context = founding_custody_context();
+    assert_ne!(
+        custody_context,
+        market.to_bytes(),
+        "the Custody namespace must not be the Market address, or this campaign proves nothing"
+    );
+    assert_ne!(
+        custody_context, parent_context,
+        "the Custody namespace and the representation parent context are different facts"
+    );
     let fixture_stub = Fixture {
         actor,
         release_set,
         realm_id,
         parent_context,
+        custody_context,
         market,
         aggregate,
         actor_position,
@@ -1622,7 +1674,7 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
                 fixture.release_set,
                 fixture.market,
                 fixture.realm_id,
-                fixture.parent_context,
+                fixture.custody_context,
                 fixture.actor.pubkey(),
                 collateral_mint,
                 recipient,
@@ -1642,12 +1694,31 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
                     fixture.assets[1],
                 ),
             );
+        // The Hoard this fixture funds is the one a founding leaves, and it is
+        // NOT the one a market-address namespace would name. Pinned here so a
+        // later edit that quietly re-conflates the two fails loudly instead of
+        // making the campaign vacuous again.
+        assert_ne!(
+            hoard,
+            Pubkey::find_program_address(
+                &CustodyVaultSeedsV1::new(
+                    fixture.market.to_bytes(),
+                    fixture.release_set,
+                    fixture.market.to_bytes(),
+                    CompartmentV1::HoardPrincipal,
+                )
+                .as_slices(),
+                &CUSTODY_PROGRAM_ID,
+            )
+            .0,
+            "a Hoard namespaced by the Market address is a different account"
+        );
         let replay_state = CustodyReplayV1 {
             caller_role: CustodyCallerRoleV1::Claims,
             release_set: fixture.release_set,
             market: fixture.market.to_bytes(),
             realm: fixture.realm_id,
-            context: fixture.parent_context,
+            context: fixture.custody_context,
             caller_program: CLAIMS_PROGRAM_ID.to_bytes(),
             rent_refund: fixture.actor.pubkey().to_bytes(),
             open_vault_count: 1,
@@ -1994,7 +2065,11 @@ fn lookup_addresses(payer: Pubkey, actor: Pubkey, instructions: &[Instruction]) 
     addresses
 }
 
-async fn process_legacy(context: &mut ProgramTestContext, instruction: Instruction, label: &str) -> u64 {
+async fn process_legacy(
+    context: &mut ProgramTestContext,
+    instruction: Instruction,
+    label: &str,
+) -> u64 {
     let blockhash = context
         .banks_client
         .get_latest_blockhash()
@@ -2058,7 +2133,12 @@ async fn create_live_lookup_table(
     let payer = context.payer.pubkey();
     let (create, table) = create_lookup_table(payer, payer, clock.slot);
     let mut compute_units = vec![
-        process_legacy(context, create, &format!("{label_prefix}: create lookup table")).await,
+        process_legacy(
+            context,
+            create,
+            &format!("{label_prefix}: create lookup table"),
+        )
+        .await,
     ];
     for (index, chunk) in addresses.chunks(20).enumerate() {
         compute_units.push(
