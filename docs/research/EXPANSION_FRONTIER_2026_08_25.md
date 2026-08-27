@@ -118,6 +118,33 @@ Existing Product Payoff V2 exact-rational evaluation and wide checked
 arithmetic are starting material. Market and Claims layouts do not change
 until the pure theorem and hostile translation corpus are accepted.
 
+### Slice two, landed 2026-08-27: the degree-1–3 B-spline family
+
+The second slice is `LiabilityBasisV2Spline`. Each elementary claim is one
+B-spline basis function, so the outstanding supply vector is the control
+polygon and terminal liability is the spline curve at the resolved
+coordinate. The ramp's single apportionment boundary generalizes to every
+width: `cumulativeFloorBoundaryV2` floors the running weight sum and each
+claim receives the difference between consecutive floors, which is exact by
+telescoping — so there is still no second rounding decision and still no
+residue, at any width. `apportion_width_two` proves the ramp is its width-two
+instance.
+
+The gate above is met for this slice: the pure theorem and the hostile
+corpus both exist, and no layout has changed. Two things are **not** done and
+must not be assumed by a later lane.
+
+- **There is no degree ≥ 2 price-plane gate.** At degree ≥ 2 the simplex
+  condition stops being the no-arbitrage condition, and a Market that could
+  select such a basis without a moment-cone-style admission would carry an
+  executable arbitrage. Degree ≤ 1 is unaffected and provably so. **Trigger:
+  before any Market descriptor can select degree ≥ 2.**
+- **The kernel still has no consumer**, so `M-8` is unchanged by this slice.
+
+`docs/research/BSPLINE_ECLIPSE_SCORECARD_2026_08_27.md` compares the result
+against generation one axis by axis, including where generation one is still
+ahead.
+
 ## Frontier 3: exact denominated claim shards
 
 Exact-denominator Structured remains the zero-remainder fast profile. It is
