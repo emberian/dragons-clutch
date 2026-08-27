@@ -141,6 +141,29 @@ The three admissible provenance kinds, from `DESIGN.md`:
 Reading a value out of the code under test and asserting it equals itself is
 not a witness, however many lines it takes.
 
+## The tiers that exist
+
+| tier | directory | backing | what it drives |
+|---|---|---|---|
+| 1 | `tier1/` | localhost validator | the infrastructure floor: seven-artifact bootstrap through Found31 |
+| Direct | `direct/` | `solana-program-test` | the stateless Direct V2 AOT accelerator |
+
+**Numbered directories turned out to be a bad idea.** `tier<N>` is a global
+namespace with no allocator, and on 2026-08-27 three lanes claimed the same two
+numbers inside twenty minutes, each silently overwriting the previous lane's
+`bindings.json`. One of those collisions produced a green-looking run that
+evaluated one campaign's evidence against another campaign's bindings. **Name a
+new tier's directory after its family, not after a number.** A family name
+cannot collide, and it tells a reader what the tier is for.
+
+The witness evaluator `tier1/check-witnesses.sh` is SHARED, not tier-1-specific;
+it only lives there for historical reasons. Call it, do not fork it — a second
+copy is a parallel authority path under `AGENTS.md`, and the two copies will
+diverge on the day one of them learns something. Its third argument is
+whatever CONTEXT file the tier wants `expect_from` to read; tier 1 passes the
+bootstrap plan, `direct/` passes a hand-derived expectations file merged with
+its build stage's artifact record.
+
 ## Adding a family tier
 
 1. **Check the census first.** `run.sh --mode census` takes seconds and prints
@@ -182,6 +205,26 @@ census` is the cheap mode; it does static enumeration only and says so.
 A fast lane is always **additional** evidence, never a substitute: a route whose
 only observation came from a fast lane is recorded with that campaign name, and
 the report shows the campaign.
+
+`direct/` is the worked example of a tier that meets all four. It answers them
+one at a time inside its own evidence document, in a `fast_lane` block beside
+the numbers they qualify, rather than in prose in a file nobody opens next to
+the table. Copy that habit: a fast-lane claim asserted in aggregate ("this tier
+satisfies TIERS.md") is unfalsifiable, and four separate sentences are not.
+
+Two of its answers are worth stealing. **The packet limit**: ProgramTest submits
+no packet, so the producer serialises every transaction itself and records
+`wire_bytes`, and a witness checks the measured extent against Solana's stated
+1,232 bytes. The tier does not depend on the runtime to enforce the limit; it
+measures against it. **Frame diagnostics**: `cargo build-sbf` exits ZERO when
+the SBF backend reports that a call overwrites its own stack frame, so the
+tier's build stage counts them and refuses to run the campaign at all if the
+count is nonzero. An artifact the toolchain calls potentially-undefined should
+not be producing evidence, and only the build stage is in a position to say so.
+
+One honest gap no ProgramTest tier can close: **ProgramTest has no finalized
+commitment.** `slot` orders a campaign and proves nothing about finality. Say
+that in the tier rather than letting the field's name imply otherwise.
 
 ## Extension points in the census tool
 
