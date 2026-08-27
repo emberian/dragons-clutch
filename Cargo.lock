@@ -1575,6 +1575,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-capability-seal-contract"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-claims-proof-sbf"
 version = "0.1.0"
 dependencies = [

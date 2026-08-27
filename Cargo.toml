@@ -5,6 +5,7 @@ members = [
     "crates/dclutch-bearer-v2-operator",
     "crates/dclutch-capability-contract",
     "crates/dclutch-capability-program-contract",
+    "crates/dclutch-capability-seal-contract",
     "crates/dclutch-claims-svm",
     "crates/dclutch-collateral-contract",
     "crates/dclutch-core-contract",
