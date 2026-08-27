@@ -58,6 +58,32 @@ pub fn account_set_id_preimage_len_v1(entry_count: usize) -> Result<usize> {
         .ok_or(Error::ArithmeticOverflow)
 }
 
+/// Decode one wire-carried account-set entry.
+///
+/// The wire form of an entry *is* its contribution to the `account_set_id`
+/// preimage, byte for byte, so a caller that re-encodes what it decoded here
+/// cannot produce a different identity by transcribing a field twice.
+pub fn decode_account_set_entry_v1(entries: &[u8], index: usize) -> Result<AccountSetEntryV1> {
+    let offset = index
+        .checked_mul(ACCOUNT_SET_ENTRY_PREIMAGE_BYTES)
+        .ok_or(Error::ArithmeticOverflow)?;
+    let key: [u8; ADDRESS_BYTES] = crate::array(entries, offset)?;
+    let owner_offset = offset.checked_add(32).ok_or(Error::ArithmeticOverflow)?;
+    let expected_owner: [u8; ADDRESS_BYTES] = crate::array(entries, owner_offset)?;
+    let width_offset = offset.checked_add(64).ok_or(Error::ArithmeticOverflow)?;
+    let inline_len = crate::u16_at(entries, width_offset)?;
+    require_nonzero(&key)?;
+    require_nonzero(&expected_owner)?;
+    if usize::from(inline_len) > MAX_RELAYED_INLINE_BYTES_V1 {
+        return Err(Error::InvalidInlineWidth);
+    }
+    Ok(AccountSetEntryV1 {
+        key,
+        expected_owner,
+        inline_len,
+    })
+}
+
 /// Encode the one canonical `account_set_id` preimage.
 ///
 /// The caller hashes exactly the written bytes.  Every field separator is an
@@ -618,6 +644,52 @@ mod tests {
         let mut other = [0u8; 232];
         encode_account_set_id_preimage_v1(&mut other, [9; 32], [8; 32], &widened).expect("encode");
         assert_ne!(buffer, other);
+    }
+
+    #[test]
+    fn a_wire_entry_decodes_to_the_bytes_the_preimage_would_have_written() {
+        let entries = [
+            AccountSetEntryV1 {
+                key: [1; 32],
+                expected_owner: [2; 32],
+                inline_len: 36,
+            },
+            AccountSetEntryV1 {
+                key: [3; 32],
+                expected_owner: [4; 32],
+                inline_len: 424,
+            },
+        ];
+        let width = account_set_id_preimage_len_v1(entries.len()).expect("width");
+        let mut preimage = [0u8; 232];
+        encode_account_set_id_preimage_v1(&mut preimage, [9; 32], [8; 32], &entries)
+            .expect("encode");
+        let tail = preimage
+            .get(ACCOUNT_SET_PREIMAGE_HEADER_BYTES..width)
+            .expect("entry tail");
+        for (index, expected) in entries.iter().enumerate() {
+            assert_eq!(decode_account_set_entry_v1(tail, index), Ok(*expected));
+        }
+        assert_eq!(
+            decode_account_set_entry_v1(tail, entries.len()),
+            Err(Error::InvalidLength),
+            "a read past the declared tail must refuse, not wrap"
+        );
+    }
+
+    #[test]
+    fn a_wire_entry_with_a_zero_key_or_owner_refuses() {
+        let blank = [0u8; ACCOUNT_SET_ENTRY_PREIMAGE_BYTES];
+        assert_eq!(
+            decode_account_set_entry_v1(&blank, 0),
+            Err(Error::ZeroIdentifier)
+        );
+        let mut owner_only = blank;
+        put(&mut owner_only, 0, &[1u8; 32]).expect("key");
+        assert_eq!(
+            decode_account_set_entry_v1(&owner_only, 0),
+            Err(Error::ZeroIdentifier)
+        );
     }
 
     #[test]

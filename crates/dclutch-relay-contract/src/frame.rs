@@ -1,4 +1,4 @@
-//! Exact ordered account frames for the four relay record routes.
+//! Exact ordered account frames for the five relay record routes.
 //!
 //! Counts, privileges and the complete no-alias policy are checked here; the
 //! *semantic* identity of each position (that this really is the Market, that
@@ -9,8 +9,10 @@
 //! The relay routes are their own instruction family with their own magic, they
 //! name account classes that no Source route has (a relayer key set, an
 //! observation record), and `SourceAccountRoleV1`'s constructor is private to
-//! its crate.  The Source acceptance frame that *consumes* a sealed record is a
-//! separate question and belongs to `dclutch-source-contract`.
+//! its crate.  The consumption frame is here too, for the same reason and one
+//! more: it names the *venue's* pinned artifact release and the pinned account
+//! set, neither of which is a Source concept, and it is dispatched behind this
+//! family's own magic rather than the Source instruction wire.
 
 use crate::{ADDRESS_BYTES, Error, Result};
 
@@ -61,6 +63,26 @@ pub enum RelayAccountNameV1 {
     InstructionsSysvar,
     /// The System Program.
     SystemProgram,
+    /// The Resolution-owned `SourceResolutionStateV2` this consumption resolves.
+    SourceResolutionState,
+    /// The terminal `ResolutionCertificateV2` this consumption writes.
+    ResolutionCertificate,
+    /// The raw immutable `ArtifactReleaseV1` pinning the observed venue program.
+    VenueArtifactRelease,
+    /// The finalized staging vacancy proving the venue release is immutable.
+    VenueArtifactReleaseStagingVacancy,
+    /// The raw immutable Product Runtime V2 Product record.
+    ProductRecord,
+    /// The finalized staging vacancy proving the Product record is immutable.
+    ProductRecordStagingVacancy,
+    /// The raw immutable Product Runtime V2 result domain.
+    ResultDomain,
+    /// The finalized staging vacancy proving the result domain is immutable.
+    ResultDomainStagingVacancy,
+    /// The raw immutable Product Runtime V2 portfolio record.
+    PortfolioRecord,
+    /// The finalized staging vacancy proving the portfolio record is immutable.
+    PortfolioRecordStagingVacancy,
 }
 
 /// One ordered SDK-free account-role requirement.
@@ -97,8 +119,7 @@ const fn role(name: RelayAccountNameV1, signer: bool, writable: bool) -> RelayAc
 const WORKER: RelayAccountRoleV1 = role(RelayAccountNameV1::Worker, true, true);
 const MARKET_READ: RelayAccountRoleV1 = role(RelayAccountNameV1::Market, false, false);
 const CORE_PROGRAM: RelayAccountRoleV1 = role(RelayAccountNameV1::CoreProgram, false, false);
-const ACTIVATION: RelayAccountRoleV1 =
-    role(RelayAccountNameV1::RegistryActivation, false, false);
+const ACTIVATION: RelayAccountRoleV1 = role(RelayAccountNameV1::RegistryActivation, false, false);
 const RECORD: RelayAccountRoleV1 = role(RelayAccountNameV1::Record, false, true);
 const MATERIAL: RelayAccountRoleV1 = role(RelayAccountNameV1::SourceMaterial, false, false);
 const MATERIAL_STAGE: RelayAccountRoleV1 = role(
@@ -138,6 +159,33 @@ const RENT: RelayAccountRoleV1 = role(RelayAccountNameV1::RentSysvar, false, fal
 const CLOCK: RelayAccountRoleV1 = role(RelayAccountNameV1::ClockSysvar, false, false);
 const INSTRUCTIONS: RelayAccountRoleV1 = role(RelayAccountNameV1::InstructionsSysvar, false, false);
 const SYSTEM: RelayAccountRoleV1 = role(RelayAccountNameV1::SystemProgram, false, false);
+const RECORD_CONSUME: RelayAccountRoleV1 = role(RelayAccountNameV1::Record, false, true);
+const SOURCE_STATE: RelayAccountRoleV1 =
+    role(RelayAccountNameV1::SourceResolutionState, false, true);
+const CERTIFICATE: RelayAccountRoleV1 =
+    role(RelayAccountNameV1::ResolutionCertificate, false, true);
+const VENUE_RELEASE: RelayAccountRoleV1 =
+    role(RelayAccountNameV1::VenueArtifactRelease, false, false);
+const VENUE_RELEASE_STAGE: RelayAccountRoleV1 = role(
+    RelayAccountNameV1::VenueArtifactReleaseStagingVacancy,
+    false,
+    false,
+);
+const PRODUCT: RelayAccountRoleV1 = role(RelayAccountNameV1::ProductRecord, false, false);
+const PRODUCT_STAGE: RelayAccountRoleV1 = role(
+    RelayAccountNameV1::ProductRecordStagingVacancy,
+    false,
+    false,
+);
+const RESULT_DOMAIN: RelayAccountRoleV1 = role(RelayAccountNameV1::ResultDomain, false, false);
+const RESULT_DOMAIN_STAGE: RelayAccountRoleV1 =
+    role(RelayAccountNameV1::ResultDomainStagingVacancy, false, false);
+const PORTFOLIO: RelayAccountRoleV1 = role(RelayAccountNameV1::PortfolioRecord, false, false);
+const PORTFOLIO_STAGE: RelayAccountRoleV1 = role(
+    RelayAccountNameV1::PortfolioRecordStagingVacancy,
+    false,
+    false,
+);
 
 /// Exact record-creation frame.
 ///
@@ -213,6 +261,51 @@ pub const SEAL_RECORD_FRAME_V1: [RelayAccountRoleV1; 8] = [
 pub const RETIRE_RECORD_FRAME_V1: [RelayAccountRoleV1; 4] =
     [WORKER, MARKET_READ, RECORD, BENEFICIARY_WRITE];
 
+/// Exact consumption frame: one sealed record into one terminal result.
+///
+/// Read the writability column as the authority statement it is.  Exactly three
+/// positions are writable — the record whose phase advances to `Consumed`, the
+/// Source state that becomes terminal, and the certificate this route creates —
+/// and everything else, the Market included, is read.  The relayer key set is
+/// deliberately absent: signatures were authenticated when the record was filled
+/// and sealed, and after sealing the record's program ownership and PDA
+/// derivation are the authority, so re-presenting the key set here would be a
+/// second place to get the same question wrong.
+///
+/// The venue's `ArtifactReleaseV1` is the position that carries P-B.  It is
+/// named by the Source spec, so which third-party deployment a market is pinned
+/// to is a founding-time content identity rather than a caller's choice.
+pub const CONSUME_RECORD_FRAME_V1: [RelayAccountRoleV1; 28] = [
+    WORKER,
+    MARKET_READ,
+    CORE_PROGRAM,
+    ACTIVATION,
+    RECORD_CONSUME,
+    SOURCE_STATE,
+    CERTIFICATE,
+    MATERIAL,
+    MATERIAL_STAGE,
+    SPEC,
+    SPEC_STAGE,
+    PROVIDER,
+    PROVIDER_STAGE,
+    WINDOW,
+    WINDOW_STAGE,
+    CONFIG,
+    CONFIG_STAGE,
+    VENUE_RELEASE,
+    VENUE_RELEASE_STAGE,
+    PRODUCT,
+    PRODUCT_STAGE,
+    RESULT_DOMAIN,
+    RESULT_DOMAIN_STAGE,
+    PORTFOLIO,
+    PORTFOLIO_STAGE,
+    CLOCK,
+    RENT,
+    SYSTEM,
+];
+
 /// Closed exact account-frame selector.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RelayFrameKindV1 {
@@ -224,6 +317,8 @@ pub enum RelayFrameKindV1 {
     SealRecord,
     /// [`RETIRE_RECORD_FRAME_V1`].
     RetireRecord,
+    /// [`CONSUME_RECORD_FRAME_V1`].
+    ConsumeRecord,
 }
 
 /// Return the exact ordered roles for one relay operation.
@@ -233,6 +328,7 @@ pub const fn relay_frame_roles_v1(kind: RelayFrameKindV1) -> &'static [RelayAcco
         RelayFrameKindV1::AppendObservation => &APPEND_OBSERVATION_FRAME_V1,
         RelayFrameKindV1::SealRecord => &SEAL_RECORD_FRAME_V1,
         RelayFrameKindV1::RetireRecord => &RETIRE_RECORD_FRAME_V1,
+        RelayFrameKindV1::ConsumeRecord => &CONSUME_RECORD_FRAME_V1,
     }
 }
 
@@ -282,15 +378,15 @@ pub fn validate_relay_frame_v1(
 mod tests {
     use super::*;
 
-    fn frame(kind: RelayFrameKindV1) -> [RelayAccountPrivilegeV1; 21] {
+    fn frame(kind: RelayFrameKindV1) -> [RelayAccountPrivilegeV1; 28] {
         let roles = relay_frame_roles_v1(kind);
         let mut built = [RelayAccountPrivilegeV1 {
             key: [0; 32],
             is_signer: false,
             is_writable: false,
-        }; 21];
+        }; 28];
         for (index, expected) in roles.iter().enumerate() {
-            let slot = built.get_mut(index).expect("within twenty-one");
+            let slot = built.get_mut(index).expect("within twenty-eight");
             let mut key = [0u8; 32];
             let first = key.get_mut(0).expect("first byte");
             *first = u8::try_from(index).expect("small") + 1;
@@ -308,6 +404,7 @@ mod tests {
             RelayFrameKindV1::AppendObservation,
             RelayFrameKindV1::SealRecord,
             RelayFrameKindV1::RetireRecord,
+            RelayFrameKindV1::ConsumeRecord,
         ] {
             let built = frame(kind);
             let width = relay_frame_roles_v1(kind).len();
@@ -349,6 +446,35 @@ mod tests {
         assert_eq!(
             validate_relay_frame_v1(RelayFrameKindV1::AppendObservation, exact),
             Err(Error::InvalidAccountFrame)
+        );
+    }
+
+    #[test]
+    fn consumption_writes_exactly_the_record_the_source_state_and_the_certificate() {
+        let expected = [
+            RelayAccountNameV1::Worker,
+            RelayAccountNameV1::Record,
+            RelayAccountNameV1::SourceResolutionState,
+            RelayAccountNameV1::ResolutionCertificate,
+        ];
+        let mut seen = 0usize;
+        for role in CONSUME_RECORD_FRAME_V1
+            .iter()
+            .filter(|role| role.is_writable())
+        {
+            assert_eq!(
+                Some(role.name()),
+                expected.get(seen).copied(),
+                "consumption acquired a write authority it does not have"
+            );
+            seen = seen.saturating_add(1);
+        }
+        assert_eq!(seen, expected.len(), "a writable position went missing");
+        assert!(
+            !CONSUME_RECORD_FRAME_V1
+                .iter()
+                .any(|role| role.name() == RelayAccountNameV1::RelayerKeySet),
+            "the key set has no business in a route that verifies no signature"
         );
     }
 
