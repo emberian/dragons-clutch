@@ -230,9 +230,22 @@ path.
    measured at 16 CU per action with no account, packet or scratch-page moved.
 3. A capability seal for the selected `(descriptor, action)` pair — its own
    outer, already implemented (`hot_v3::process_capability_seal_v1`).
-4. `build_general_hot_instruction_v3` exercised against a real `GeneralHotStateV3`.
-   Still true as written: the twelve `general_hot_v3` operator tests synthesize
-   `GeneralHotInstructionV3` values directly and never enter the builder.
+4. ~~`build_general_hot_instruction_v3` exercised against a real
+   `GeneralHotStateV3`.~~ — landed (GEN-ART, `09bd277`).
+   `programs/dclutch-general-accelerator-sbf/program-test/tests/hot_instruction_v3.rs`
+   assembles one complete finalized snapshot -- real Product graph, real Market,
+   real composite root, all thirty-nine fixed-frame coordinates, and a runtime
+   suffix generated entirely from the emitted `AccountProfileV2` -- and builds,
+   compiles and refuses through it: ten tests, seven of them adversarial with
+   exact `GeneralHotOperatorErrorV3` variants.
+
+   Running it is what found the thing this item existed to find. The tail of
+   `project_general_lifecycle_v5` compared `general_child_account_start_v3`
+   against literal 8/9 -- `general_readonly_evidence_start_v3`'s own table,
+   copied -- and children begin AFTER evidence, so SIX of the seven actions were
+   refused outright with `Lifecycle`. Fixed in `1755c86` by two conjuncts whose
+   two sides have independent authors, with the stale form's six-action failure
+   kept as the reversion witness.
 5. ~~The packet witness for the N=258 account sets~~ — landed
    (`docs/evidence/GENERAL_ALT_PACKET_WITNESS_2026_08_27.md`).
 6. The Trading hot tail past phase 7 (W2i), which is not General's to move.
