@@ -236,9 +236,10 @@ mod tests {
         // The dynamic path is reached through the one entry point that owns
         // it; `downgraded_effect_accounts_v3` dispatches on
         // `uses_dynamic_fixed_spans` and runs the same whole-frame check.
+        let declared = crate::hot_v3::child_route_privileges_v3(profile, 0, &span_counts, &logical)
+            .expect("declared privileges");
         let child =
-            crate::hot_v3::downgraded_effect_accounts_v3(profile, 0, &span_counts, &logical)
-                .expect("child views");
+            crate::hot_v3::downgraded_effect_accounts_v3(&logical, &declared).expect("child views");
         let at = |coordinate: usize| child.view(coordinate).expect("child view");
         // 18 is the Shared Market representative and owns every privilege fact
         // about the physical account. 20 is an authenticated route alias of it:
@@ -272,8 +273,7 @@ mod tests {
         let logical = expand_dynamic_physical_accounts_v4(profile, 0, &span_counts, &view)
             .expect("logical expansion");
         assert!(
-            crate::hot_v3::downgraded_effect_accounts_v3(profile, 0, &span_counts, &logical)
-                .is_err()
+            crate::hot_v3::child_route_privileges_v3(profile, 0, &span_counts, &logical).is_err()
         );
     }
 
@@ -297,8 +297,7 @@ mod tests {
         let logical = expand_dynamic_physical_accounts_v4(profile, 0, &span_counts, &view)
             .expect("logical expansion");
         assert!(
-            crate::hot_v3::downgraded_effect_accounts_v3(profile, 0, &span_counts, &logical)
-                .is_err()
+            crate::hot_v3::child_route_privileges_v3(profile, 0, &span_counts, &logical).is_err()
         );
     }
 

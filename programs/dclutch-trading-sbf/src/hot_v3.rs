@@ -2457,12 +2457,14 @@ fn execute_authenticated_hot_v3(
     // building a duplicate of it, so the table the commit executes is the one
     // the transition was handed and the replan reproduced.
     let lifecycle_plans = preplanned_plans;
-    let effect_accounts = downgraded_effect_accounts_v3(
+    // One byte per logical coordinate, decoded once, whole frame checked here.
+    let effect_privileges = child_route_privileges_v3(
         account_profile,
         tail_count,
         &dynamic_spans.widths,
         &runtime_accounts,
     )?;
+    let effect_accounts = downgraded_effect_accounts_v3(&runtime_accounts, &effect_privileges)?;
     hot_heap_mark!("downgraded-effects");
     preflight_child_routes_v3(
         program_id,
@@ -3885,11 +3887,8 @@ fn expand_runtime_accounts_v3<'accounts, 'info>(
 /// coordinates a particular request touches, which is a different program.
 #[derive(Clone, Copy)]
 pub struct DowngradedEffectAccountsV3<'a, 'accounts, 'info> {
-    profile: AccountProfileV2<'a>,
-    tail_count: u32,
-    span_counts: &'a [u32],
     logical: &'a [&'accounts AccountInfo<'info>],
-    dynamic: bool,
+    declared: &'a [u8],
 }
 
 impl<'a, 'accounts, 'info> DowngradedEffectAccountsV3<'a, 'accounts, 'info> {
@@ -3903,39 +3902,20 @@ impl<'a, 'accounts, 'info> DowngradedEffectAccountsV3<'a, 'accounts, 'info> {
         self.logical.is_empty()
     }
 
-    /// The declared route privileges of one logical coordinate.
-    ///
-    /// Every privilege comes from the REPRESENTATIVE coordinate -- the semantic
-    /// owner of the physical account's authenticated declaration -- and never
-    /// from an authenticated route alias, which the AccountProfile validator
-    /// requires to be emitted privilege-free and which therefore states nothing.
-    fn declared(self, coordinate: usize) -> Result<RouteAccountPrivilegesV2, ProgramError> {
-        if self.dynamic {
-            return dynamic_declared_privileges_v4(
-                self.profile,
-                self.tail_count,
-                self.span_counts,
-                coordinate,
-            );
-        }
-        self.profile
-            .route_privileges(
-                self.tail_count,
-                self.profile
-                    .representative(self.tail_count, coordinate)
-                    .map_err(|_| TradingSbfError::Content)?,
-            )
-            .map_err(|_| TradingSbfError::Content.into())
-    }
-
-    /// One coordinate's child view.
+    /// One coordinate's child view, from the privilege byte decoded once.
     pub fn view(self, coordinate: usize) -> Result<AccountInfo<'info>, ProgramError> {
-        child_route_view_v3(
-            self.logical
-                .get(coordinate)
-                .ok_or(TradingSbfError::Content)?,
-            self.declared(coordinate)?,
-        )
+        let declared = *self
+            .declared
+            .get(coordinate)
+            .ok_or(TradingSbfError::Content)?;
+        let mut logical = (*self
+            .logical
+            .get(coordinate)
+            .ok_or(TradingSbfError::Content)?)
+        .clone();
+        logical.is_signer = declared & DECLARED_SIGNER_V3 != 0;
+        logical.is_writable = declared & DECLARED_WRITABLE_V3 != 0;
+        Ok(logical)
     }
 
     /// How many coordinates in one window carry a given program.
@@ -3988,11 +3968,45 @@ impl<'a, 'accounts, 'info> DowngradedEffectAccountsV3<'a, 'accounts, 'info> {
 
 #[inline(never)]
 pub(crate) fn downgraded_effect_accounts_v3<'a, 'accounts, 'info>(
-    profile: AccountProfileV2<'a>,
-    tail_count: u32,
-    span_counts: &'a [u32],
     logical_accounts: &'a [&'accounts AccountInfo<'info>],
+    declared: &'a [u8],
 ) -> Result<DowngradedEffectAccountsV3<'a, 'accounts, 'info>, ProgramError> {
+    if logical_accounts.len() != declared.len() {
+        return Err(TradingSbfError::Content.into());
+    }
+    Ok(DowngradedEffectAccountsV3 {
+        logical: logical_accounts,
+        declared,
+    })
+}
+
+/// Declared-signer bit of a packed privilege byte.
+const DECLARED_SIGNER_V3: u8 = 1;
+/// Declared-writable bit of a packed privilege byte.
+const DECLARED_WRITABLE_V3: u8 = 2;
+
+/// Decode every logical coordinate's declared route privileges ONCE, and check
+/// the whole frame while doing it.
+///
+/// One byte per coordinate -- 91 of them on the canonical Direct bundle, plus
+/// the allocator's probe -- against the 4,368 bytes the materialised
+/// `AccountInfo` bank cost. Decoding on demand at gather time instead would
+/// allocate nothing at all, but every gathered coordinate would re-walk the
+/// profile's representative and route-privilege rules, and the two child-route
+/// walks gather most of the frame twice: measured at +51,329 CU against a
+/// budget with 87,406 left. A byte is the right size for a fact that is three
+/// bits wide.
+///
+/// The check is the whole-frame one the materialised bank performed, unchanged
+/// and still eager: a declaration writable where the transaction is not, or
+/// whose executability disagrees with the account, refuses the instruction here
+/// -- not when some later route happens to gather that coordinate.
+pub(crate) fn child_route_privileges_v3(
+    profile: AccountProfileV2<'_>,
+    tail_count: u32,
+    span_counts: &[u32],
+    logical_accounts: &[&AccountInfo<'_>],
+) -> Result<Vec<u8>, ProgramError> {
     let dynamic = profile.uses_dynamic_fixed_spans();
     let logical_count = if dynamic {
         dynamic_logical_account_count_v4(profile, tail_count, span_counts)?
@@ -4007,30 +4021,41 @@ pub(crate) fn downgraded_effect_accounts_v3<'a, 'accounts, 'info>(
     if logical_accounts.len() != logical_count {
         return Err(TradingSbfError::Content.into());
     }
-    let accounts = DowngradedEffectAccountsV3 {
-        profile,
-        tail_count,
-        span_counts,
-        logical: logical_accounts,
-        dynamic,
-    };
-    // The whole-frame privilege check, eagerly, materialising nothing.
+    let mut declared = Vec::new();
+    declared
+        .try_reserve_exact(logical_count)
+        .map_err(|_| TradingSbfError::Content)?;
     let mut coordinate = 0_usize;
     while coordinate < logical_count {
+        let privileges = if dynamic {
+            dynamic_declared_privileges_v4(profile, tail_count, span_counts, coordinate)?
+        } else {
+            profile
+                .route_privileges(
+                    tail_count,
+                    profile
+                        .representative(tail_count, coordinate)
+                        .map_err(|_| TradingSbfError::Content)?,
+                )
+                .map_err(|_| TradingSbfError::Content)?
+        };
         require_child_route_privileges_v3(
-            accounts
-                .logical
+            logical_accounts
                 .get(coordinate)
                 .ok_or(TradingSbfError::Content)?,
-            accounts.declared(coordinate)?,
+            privileges,
         )?;
+        declared.push(
+            u8::from(privileges.signer())
+                .wrapping_mul(DECLARED_SIGNER_V3)
+                .wrapping_add(u8::from(privileges.writable()).wrapping_mul(DECLARED_WRITABLE_V3)),
+        );
         coordinate = coordinate.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
-    Ok(accounts)
+    Ok(declared)
 }
 
-/// Build one child CPI view of a physical account from the privileges its
-/// semantic owner declares.
+/// Refuse a declared privilege the physical account cannot carry.
 ///
 /// An authenticated route alias declares no privileges of its own -- the
 /// AccountProfile validator's route-alias contract requires the producer to
@@ -4052,19 +4077,6 @@ pub(crate) fn downgraded_effect_accounts_v3<'a, 'accounts, 'info>(
 /// claims a signer Trading cannot produce seeds for still fails closed in the
 /// runtime. Executability is exact in both directions: it is a property of the
 /// account, never granted or suppressed by a route.
-fn child_route_view_v3<'info>(
-    account: &AccountInfo<'info>,
-    declared: RouteAccountPrivilegesV2,
-) -> Result<AccountInfo<'info>, ProgramError> {
-    require_child_route_privileges_v3(account, declared)?;
-    let mut logical = account.clone();
-    logical.is_signer = declared.signer();
-    logical.is_writable = declared.writable();
-    Ok(logical)
-}
-
-/// The refusal half of [`child_route_view_v3`], separated so the whole-frame
-/// check can run over every coordinate without materialising a single view.
 fn require_child_route_privileges_v3(
     account: &AccountInfo<'_>,
     declared: RouteAccountPrivilegesV2,
@@ -9303,8 +9315,10 @@ mod tests {
         assert_eq!(logical.len(), 7);
         assert_eq!(logical[4].key, logical[6].key);
 
-        let child = downgraded_effect_accounts_v3(profile, 0, &[], &logical)
-            .expect("downgrade route views");
+        let declared =
+            child_route_privileges_v3(profile, 0, &[], &logical).expect("declared privileges");
+        let child =
+            downgraded_effect_accounts_v3(&logical, &declared).expect("downgrade route views");
         // Coordinate 6 is an authenticated route alias of the writable
         // representative 4. An alias is emitted privilege-free, so it states
         // nothing at all, and a child CPI meta built from the alias would hand
@@ -9341,7 +9355,7 @@ mod tests {
             &withheld[5..],
         )
         .expect("expand physical representatives");
-        assert!(downgraded_effect_accounts_v3(profile, 0, &[], &withheld_logical).is_err());
+        assert!(child_route_privileges_v3(profile, 0, &[], &withheld_logical).is_err());
         assert!(
             expand_runtime_accounts_v3(
                 profile,
@@ -9432,7 +9446,9 @@ mod tests {
         let program = account(true);
         let logical = [&plain, &program, &program];
 
-        let child = downgraded_effect_accounts_v3(profile, 0, &[], &logical)
+        let declared =
+            child_route_privileges_v3(profile, 0, &[], &logical).expect("declared privileges");
+        let child = downgraded_effect_accounts_v3(&logical, &declared)
             .expect("alias of an executable representative downgrades");
         assert!(child.view(1).expect("child view").executable);
         assert!(
@@ -9451,9 +9467,9 @@ mod tests {
         // The representative's own executable bit is still checked against the
         // physical account, in both directions.
         let hostile = [&plain, &plain, &plain];
-        assert!(downgraded_effect_accounts_v3(profile, 0, &[], &hostile).is_err());
+        assert!(child_route_privileges_v3(profile, 0, &[], &hostile).is_err());
         let inverted = [&program, &program, &program];
-        assert!(downgraded_effect_accounts_v3(profile, 0, &[], &inverted).is_err());
+        assert!(child_route_privileges_v3(profile, 0, &[], &inverted).is_err());
     }
 
     /// A role callee is resolved by PHYSICAL account, not by coordinate count.
