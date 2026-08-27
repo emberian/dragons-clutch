@@ -7,6 +7,8 @@
 
 use core::convert::{TryFrom, TryInto};
 
+use dclutch_capability_seal_contract::{SealedArtifactV1, SealedProfileJoinV1, SealedRoleV1};
+
 use super::{
     AccountObservationV1, EFFECT_PERMISSION_CREDIT_LAMPORTS, EFFECT_PERMISSION_DEBIT_LAMPORTS,
     EFFECT_PERMISSION_WRITE_DATA,
@@ -808,9 +810,55 @@ impl<'a> StateLifecyclePolicyV5<'a> {
         Ok(Self(policy))
     }
 
+    /// Construct the same view over bytes a Trading seal has already validated.
+    ///
+    /// Decision 0005 owns the argument: the caller has just recomputed
+    /// `sha256(bytes)` against the identity the authenticated descriptor names
+    /// for the lifecycle policy, and the seal is addressed under the
+    /// interpreter release now executing. The artifact profile is still checked
+    /// here, from these bytes.
+    pub fn from_sealed(bytes: &'a [u8], sealed: SealedArtifactV1<'_>) -> Result<Self> {
+        sealed
+            .require(SealedRoleV1::LifecyclePolicy, bytes)
+            .map_err(|_| Error::InvalidLength)?;
+        let policy = StateLifecyclePolicyV3::decode_shape(bytes)?;
+        if policy.artifact_profile != CURRENT_RENT_QUOTE_ARTIFACT_PROFILE_V5 {
+            return Err(Error::UnsupportedProfile);
+        }
+        Ok(Self(policy))
+    }
+
     /// Exact canonical V5 bytes.
     pub const fn bytes(self) -> &'a [u8] {
         self.0.bytes()
+    }
+
+    /// Record this policy's sealed join to one exact AccountProfile.
+    ///
+    /// The join is a fact about the pair, so the seal owns it rather than
+    /// either row. `sealed` names the two byte ranges the seal writer proved it
+    /// for, and this refuses unless they are exactly these two artifacts.
+    pub fn sealed_account_profile_join<'b>(
+        self,
+        profile: AccountProfileV2<'b>,
+        sealed: SealedProfileJoinV1<'b>,
+    ) -> Result<ValidatedProfileJoinV3<'b>>
+    where
+        'a: 'b,
+    {
+        let policy_bytes = self.0.bytes();
+        let profile_bytes = profile.bytes();
+        if !core::ptr::eq(sealed.policy().as_ptr(), policy_bytes.as_ptr())
+            || sealed.policy().len() != policy_bytes.len()
+            || !core::ptr::eq(sealed.profile().as_ptr(), profile_bytes.as_ptr())
+            || sealed.profile().len() != profile_bytes.len()
+        {
+            return Err(Error::InvalidCoordinate);
+        }
+        Ok(ValidatedProfileJoinV3 {
+            policy: policy_bytes,
+            profile: profile_bytes,
+        })
     }
 
     /// Validate this policy's join to one exact AccountProfile and record it.
@@ -996,6 +1044,18 @@ impl<'a> StateLifecyclePolicyV3<'a> {
 
     /// Hostile-decode one complete exact artifact.
     pub fn decode(bytes: &'a [u8]) -> Result<Self> {
+        let value = Self::decode_shape(bytes)?;
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Parse only the fixed header, the section counts and the exact width.
+    ///
+    /// `decode` runs this and then `validate`; a sealed view runs this alone.
+    /// Every field the view exposes is read here, from these bytes, on both
+    /// paths -- see Decision 0005 for why skipping `validate` over bytes pinned
+    /// by their own digest is the same proposition.
+    fn decode_shape(bytes: &'a [u8]) -> Result<Self> {
         if bytes.len() < HEADER_BYTES {
             return Err(Error::InvalidLength);
         }
@@ -1097,7 +1157,6 @@ impl<'a> StateLifecyclePolicyV3<'a> {
         if bytes.len() != expected {
             return Err(Error::InvalidLength);
         }
-        value.validate()?;
         Ok(value)
     }
 
@@ -1202,10 +1261,12 @@ impl<'a> StateLifecyclePolicyV3<'a> {
             if let Some(payer) = plan.payer {
                 validate_account_coordinate(profile, payer)?;
                 validate_invocation_reference(recipe.account.scope, payer.scope)?;
+                require_representative_coordinate(profile, payer)?;
             }
             if let Some(credit) = plan.rent_credit {
                 validate_account_coordinate(profile, credit)?;
                 validate_invocation_reference(recipe.account.scope, credit.scope)?;
+                require_representative_coordinate(profile, credit)?;
             }
             if let Some(principal) = plan.principal {
                 validate_scalar_source(profile, principal)?;
@@ -3264,6 +3325,27 @@ fn validate_invocation_source(
     }
 }
 
+/// Require a plan coordinate to be the semantic owner of its own authority.
+///
+/// An `AuthenticatedRouteAlias` rule is a privilege-free logical view whose
+/// authority lives entirely at its representative: it declares no privileges
+/// and no effect permissions, and an adapter records a planned balance only at
+/// the representative. A plan that named an alias therefore both failed
+/// [`require_permissions`], which reads the named rule and never follows the
+/// alias, and re-read a balance an earlier invocation had already spent. The
+/// representative is the only coordinate a plan may name.
+fn require_representative_coordinate(
+    profile: AccountProfileV2<'_>,
+    coordinate: AccountCoordinateV3,
+) -> Result<()> {
+    if rule_for_coordinate(profile, coordinate)?.prestate()
+        == AccountPrestateV2::AuthenticatedRouteAlias
+    {
+        return Err(Error::ProfileMismatch);
+    }
+    Ok(())
+}
+
 fn require_permissions(
     profile: AccountProfileV2<'_>,
     coordinate: AccountCoordinateV3,
@@ -4809,7 +4891,12 @@ mod tests {
                 data_base,
                 data_stride,
             }];
-            let seeds = [encode::LifecycleSeedInputV3::CanonicalBump];
+            // Artifact profile 1 is the caller-bump family: its bump seed must
+            // be a scalar register, and `validate` refuses a `CanonicalBump`
+            // there because the adapter-derived bump belongs to profiles 2+.
+            // This test exists for the recipe/rule width join, which every
+            // profile shares, so it stays on the encoder it actually names.
+            let seeds = [encode::LifecycleSeedInputV3::CommonScalar { index: 1, width: 1 }];
             let plans = [encode::LifecyclePlanInputV3 {
                 action: 1,
                 operation: encode::LifecycleOperationInputV3::AuthenticateOrCreate,

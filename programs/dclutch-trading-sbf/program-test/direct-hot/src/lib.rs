@@ -39,20 +39,20 @@ use dclutch_product_runtime_v2::{
 use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
 use dclutch_registry_contract::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
 use dclutch_registry_svm::LOADER_V3_PROGRAM_BYTES;
-use dclutch_rent_contract::RENT_CREDIT_BYTES_V1;
+use dclutch_rent_contract::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
 use sha2::{Digest, Sha256};
 
 /// Capacity-profile identity used only by this reproducible ProgramTest fixture.
 pub const DIRECT_HOT_FIXTURE_CAPACITY_PROFILE_V5: [u8; 32] = [0x44; 32];
 /// Exact descriptor identity emitted for the fixed fixture capacity profile.
 pub const DIRECT_HOT_FIXTURE_DESCRIPTOR_ID_V5: [u8; 32] = [
-    0xbb, 0x90, 0x81, 0xcf, 0xa2, 0xcc, 0x86, 0x1d, 0xda, 0x85, 0xae, 0x60, 0x49, 0x0e, 0xda, 0x5a,
-    0x5f, 0x50, 0xa9, 0xc3, 0xbe, 0x6d, 0x82, 0x7f, 0x2a, 0xd3, 0xef, 0xc9, 0xd5, 0x06, 0xad, 0xf6,
+    0xd4, 0xfa, 0xea, 0xaf, 0x9d, 0x9b, 0x22, 0x8f, 0x45, 0xe6, 0x5d, 0x9e, 0xcf, 0x87, 0xfd, 0xf8,
+    0x2a, 0x01, 0x0c, 0xfa, 0xaf, 0x3e, 0x36, 0xce, 0x1c, 0xdb, 0x28, 0x1a, 0x1c, 0x00, 0x38, 0x25,
 ];
 /// Exact one-entry ProgramSet identity selecting the fixture descriptor.
 pub const DIRECT_HOT_FIXTURE_PROGRAM_SET_ID_V5: [u8; 32] = [
-    0x7b, 0x6c, 0x01, 0x8a, 0x45, 0xa5, 0x22, 0x36, 0xf4, 0xf9, 0xfe, 0x2b, 0xcb, 0xf8, 0x4a, 0xaf,
-    0x90, 0xe8, 0xe0, 0x92, 0xe6, 0xf9, 0x00, 0x75, 0xb1, 0x4b, 0x99, 0x5c, 0x4d, 0xe4, 0x36, 0x7c,
+    0x03, 0x53, 0x88, 0x60, 0x17, 0x96, 0xdf, 0x87, 0x35, 0xee, 0x4e, 0x33, 0x65, 0xde, 0x4e, 0x5d,
+    0x02, 0xf5, 0x5c, 0x65, 0x79, 0x6f, 0x23, 0x19, 0xb7, 0x0d, 0xdd, 0x2c, 0xa3, 0xee, 0x00, 0x7c,
 ];
 /// Superseded over-wide domain AccountProfile identity used only for hostile refusal evidence.
 pub const STALE_DIRECT_ACCOUNT_PROFILE_ID_V3: [u8; 32] = [
@@ -229,9 +229,10 @@ fn direct_logical_data_lengths_v5(
             dclutch_direct_codec::successor::DIRECT_MAKER_REPLAY_BYTES_V1,
         )?;
     }
-    for coordinate in [7_usize, 10] {
-        put_width(&mut output, coordinate, RENT_CREDIT_BYTES_V1)?;
-    }
+    put_width(&mut output, 7, LIFECYCLE_RENT_CREDIT_BYTES_V2)?;
+    // Coordinate 10 is the executable Rent program that owns the credit. Its
+    // rule is opaque, so this width is descriptive only and never pinned.
+    put_width(&mut output, 10, LOADER_V3_PROGRAM_BYTES)?;
     put_width(
         &mut output,
         13,
@@ -459,8 +460,11 @@ mod tests {
     #[test]
     fn real_widths_bind_exact_rent_activation_and_program_geometry() {
         let fixture = build_direct_hot_artifact_fixture_v5(real_widths()).expect("fixture");
-        assert_eq!(fixture.logical_data_lengths.get(7), Some(&48));
-        assert_eq!(fixture.logical_data_lengths.get(10), Some(&48));
+        assert_eq!(fixture.logical_data_lengths.get(7), Some(&128));
+        assert_eq!(
+            fixture.logical_data_lengths.get(10),
+            Some(&u32::try_from(LOADER_V3_PROGRAM_BYTES).expect("Rent program width"))
+        );
         assert_eq!(fixture.logical_data_lengths.get(18), Some(&256));
         assert_eq!(
             fixture.logical_data_lengths.get(24),
@@ -512,13 +516,15 @@ mod tests {
     }
 
     #[test]
-    fn legacy_rentcredit_width_and_zero_programdata_refuse() {
+    fn superseded_rentcredit_width_and_zero_programdata_refuse() {
         assert_eq!(
             DirectHotDeploymentWidthsV5::new(0, 971_053, 934_037),
             Err(DirectHotFixtureErrorV5::InvalidWidth)
         );
         let mut fixture = build_direct_hot_artifact_fixture_v5(real_widths()).expect("fixture");
-        *fixture.logical_data_lengths.get_mut(7).expect("RentCredit") = 64;
+        // The V1 RentCredit width the profile used to pin; the adapter
+        // authenticates 128 bytes of LifecycleRentCreditV2.
+        *fixture.logical_data_lengths.get_mut(7).expect("RentCredit") = 48;
         assert_eq!(
             build_direct_inline_ordinary_hot_bundle_v4(DirectInlineOrdinaryHotBundleInputV4 {
                 account_profile: DirectInlineOrdinaryAccountProfileInputV3 {

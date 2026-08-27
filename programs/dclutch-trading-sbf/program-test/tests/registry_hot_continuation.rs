@@ -63,6 +63,10 @@ const TRADING_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x92; 32]);
 const CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x93; 32]);
 const CLAIMS_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x94; 32]);
 const CUSTODY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x95; 32]);
+/// Rent program owning the sole Market-lifecycle RentCredit. It is observed,
+/// never invoked, on the Direct Hot path: the adapter re-derives the credit as
+/// a PDA of its own account owner and requires that owner in the frame.
+const RENT_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x97; 32]);
 const LOOKUP_TABLE: Pubkey = Pubkey::new_from_array([0x96; 32]);
 const COMPUTE_LIMIT: u64 = 1_400_000;
 
@@ -282,6 +286,7 @@ fn direct_case(
         core_program: CORE_PROGRAM_ID,
         claims_program: CLAIMS_PROGRAM_ID,
         custody_program: CUSTODY_PROGRAM_ID,
+        rent_program: RENT_PROGRAM_ID,
         release_set: releases.release_set,
         activation_cache: releases.activation,
         trading_programdata: releases.trading_programdata,

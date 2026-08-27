@@ -86,7 +86,12 @@ use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1
 use dclutch_release_set_contract::{
     CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1, ExecutionRoleV1,
 };
-use dclutch_rent_contract::{RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1};
+use dclutch_rent_contract::{
+    RefundAuthority,
+    lifecycle_v2::{
+        LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
+    },
+};
 use dclutch_token_svm::LEGACY_TOKEN_PROGRAM_ID;
 use solana_account::Account;
 use solana_program::{
@@ -131,6 +136,8 @@ pub struct DirectHotChainInputV5 {
     pub claims_program: Pubkey,
     /// Current Custody program.
     pub custody_program: Pubkey,
+    /// Rent program owning the Market-lifecycle RentCredit.
+    pub rent_program: Pubkey,
     /// Exact immutable execution-release-set content identity.
     pub release_set: [u8; 32],
     /// Current complete activation cache.
@@ -388,6 +395,7 @@ fn validate_input(input: DirectHotChainInputV5) -> Result<(), DirectHotChainFixt
         input.core_program,
         input.claims_program,
         input.custody_program,
+        input.rent_program,
         input.activation_cache,
         input.trading_programdata,
         input.core_programdata,
@@ -541,7 +549,9 @@ fn market_and_claims(
         market_id: core_identity(market.to_bytes())?,
         ..provisional
     };
-    let rent_credit = rent_credit(input.registry_program, input.payer)?;
+    // One credit per Market lifecycle, and the Market is its own PDA seed.
+    let rent_credit =
+        lifecycle_rent_credit(input.rent_program, market, input.release_set, input.payer)?;
     let core_bytes = CoreState {
         phase: Phase::Open,
         readiness: Readiness::Consumed,
@@ -1211,15 +1221,12 @@ fn logical_accounts(
     set(
         &mut logical,
         7,
-        rent_credit_account(rent, input.registry_program, input.makers[0], true)?,
+        lifecycle_rent_credit_account(rent, input, state.market)?,
     )?;
     set(&mut logical, 8, vacant(capability.buyer_maker, true))?;
+    // Coordinate 9 is the authenticated route alias of the sole payer at 6.
     set(&mut logical, 9, external_payer(input.payer))?;
-    set(
-        &mut logical,
-        10,
-        rent_credit_account(rent, input.registry_program, input.makers[1], true)?,
-    )?;
+    set(&mut logical, 10, program(input.rent_program))?;
     set(&mut logical, 11, program(system_program::ID))?;
 
     let claims = claims_request(input, product, state, request)?;
@@ -1677,32 +1684,56 @@ fn finalized_raw(rent: &Rent, record: &Finalized, writable: bool) -> ChainAccoun
     )
 }
 
-fn rent_credit(
-    program: Pubkey,
-    authority: Pubkey,
-) -> Result<(Pubkey, RentCreditV1), DirectHotChainFixtureErrorV5> {
-    let authority = RefundAuthority::new(authority.to_bytes())
-        .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
+/// The sole Market-lifecycle RentCredit.
+///
+/// `LifecycleRentCreditV2` is keyed by Market and generation alone, so one
+/// credit serves the whole Market lifecycle and both replay-root creations. The
+/// adapter re-derives it from the credit account's own owner, which is why the
+/// Rent program is a coordinate of the Direct profile.
+fn lifecycle_rent_credit(
+    rent_program: Pubkey,
+    market: Pubkey,
+    release_set: [u8; 32],
+    refund_wallet: Pubkey,
+) -> Result<(Pubkey, LifecycleRentCreditV2), DirectHotChainFixtureErrorV5> {
     let (key, bump) = Pubkey::find_program_address(
-        &[RENT_CREDIT_PDA_DOMAIN_V1, &authority.to_bytes()],
-        &program,
+        &[
+            LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+            market.as_ref(),
+            &GENERATION.to_le_bytes(),
+        ],
+        &rent_program,
     );
-    Ok((key, RentCreditV1::new(authority, bump)))
+    let credit = LifecycleRentCreditV2::new(
+        RefundAuthority::new(refund_wallet.to_bytes())
+            .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?,
+        LifecycleAccountIdV2::new(market.to_bytes())
+            .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?,
+        LifecycleAccountIdV2::new(release_set)
+            .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?,
+        GENERATION,
+        bump,
+    )
+    .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
+    Ok((key, credit))
 }
 
-fn rent_credit_account(
+fn lifecycle_rent_credit_account(
     rent: &Rent,
-    program: Pubkey,
-    authority: Pubkey,
-    writable: bool,
+    input: DirectHotChainInputV5,
+    market: Pubkey,
 ) -> Result<ChainAccount, DirectHotChainFixtureErrorV5> {
-    let (key, credit) = rent_credit(program, authority)?;
+    let (key, credit) =
+        lifecycle_rent_credit(input.rent_program, market, input.release_set, input.payer)?;
+    // `owned` funds an account to the current rent minimum for its own data
+    // width, which is exactly the rent exemption the adapter requires of the
+    // credit at its 128 bytes.
     Ok(owned(
         rent,
         key,
-        program,
+        input.rent_program,
         credit.to_bytes().to_vec(),
-        writable,
+        true,
     ))
 }
 
@@ -1757,6 +1788,8 @@ fn core_content(value: [u8; 32]) -> Result<CoreContentId, DirectHotChainFixtureE
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
+    use dclutch_rent_contract::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
+
     use super::*;
 
     fn input() -> DirectHotChainInputV5 {
@@ -1766,6 +1799,7 @@ mod tests {
             core_program: key(3),
             claims_program: key(4),
             custody_program: key(5),
+            rent_program: key(14),
             release_set: [6; 32],
             activation_cache: key(7),
             trading_programdata: key(8),
@@ -1842,6 +1876,76 @@ mod tests {
         );
         assert!(fixture.externally_installed_keys.contains(&input.payer));
         assert!(!fixture.rollback_snapshot_keys.contains(&input.payer));
+    }
+
+    /// The live RentCredit the adapter authenticates: one credit for the whole
+    /// Market lifecycle, 128 canonical V2 bytes, rent-exempt at that width,
+    /// bound to the executing Market/release-set/generation, and a PDA of the
+    /// Rent program that the frame also carries as an executable coordinate.
+    #[test]
+    fn the_frame_carries_one_v2_lifecycle_credit_and_its_rent_program() {
+        let input = input();
+        let rent = Rent::default();
+        let artifacts =
+            build_direct_hot_artifact_fixture_v5(input.deployment_widths).expect("artifacts");
+        let config = DirectExecutionConfigV1::new(PRICE_SCALE, FEE_BPS, input.payer.to_bytes())
+            .expect("config")
+            .encode();
+        let product = product_fixture(input, &rent).expect("product");
+        let manifest = capability_manifest(input, &artifacts, &config).expect("manifest");
+        let market = market_and_claims(input, &product, &manifest, &rent)
+            .expect("state")
+            .market;
+        let fixture = build_direct_hot_chain_fixture_v5(input).expect("chain fixture");
+        let (credit_key, credit) =
+            lifecycle_rent_credit(input.rent_program, market, input.release_set, input.payer)
+                .expect("credit");
+        let account = fixture
+            .accounts
+            .iter()
+            .find(|value| value.key == credit_key)
+            .expect("lifecycle RentCredit account");
+        assert_eq!(account.account.owner, input.rent_program);
+        assert!(!account.account.executable);
+        assert_eq!(account.account.data.len(), LIFECYCLE_RENT_CREDIT_BYTES_V2);
+        assert_eq!(account.account.data, credit.to_bytes().to_vec());
+        assert!(
+            rent.is_exempt(account.account.lamports, LIFECYCLE_RENT_CREDIT_BYTES_V2),
+            "credit must be rent-exempt at its exact width"
+        );
+        assert_eq!(credit.market().to_bytes(), market.to_bytes());
+        assert_eq!(credit.release_set().to_bytes(), input.release_set);
+        assert_eq!(credit.generation(), GENERATION);
+        assert_eq!(
+            Pubkey::create_program_address(
+                &[
+                    LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+                    market.as_ref(),
+                    &GENERATION.to_le_bytes(),
+                    &[credit.pda_seeds().bump()],
+                ],
+                &input.rent_program,
+            )
+            .expect("credit PDA"),
+            credit_key
+        );
+        let rent_program = fixture
+            .accounts
+            .iter()
+            .find(|value| value.key == input.rent_program)
+            .expect("Rent program account");
+        assert!(rent_program.account.executable);
+        // Exactly one credit: the second per-authority V1 credit is gone.
+        assert_eq!(
+            fixture
+                .accounts
+                .iter()
+                .filter(
+                    |value| value.account.owner == input.rent_program && !value.account.executable
+                )
+                .count(),
+            1
+        );
     }
 
     #[test]

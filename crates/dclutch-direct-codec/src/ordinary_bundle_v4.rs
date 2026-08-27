@@ -65,13 +65,13 @@ pub const DIRECT_INLINE_ORDINARY_STRATEGY_BYTES_V3: usize = EXECUTION_STRATEGY_P
 pub const DIRECT_INLINE_ORDINARY_DESCRIPTOR_BYTES_V4: usize = CAPABILITY_PROGRAM_V4_BYTES;
 /// SHA-256 identity of the exact runtime-polymorphic fixed-topology AccountProfile14.
 pub const DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_ID_V3: [u8; 32] = [
-    0x96, 0x1c, 0x9b, 0x05, 0xf6, 0xbe, 0xc6, 0x22, 0x0e, 0x6e, 0xf1, 0xd8, 0x2e, 0xc3, 0x45, 0xc6,
-    0x66, 0x0a, 0xdc, 0x62, 0x92, 0x5c, 0x96, 0x18, 0xda, 0x85, 0x22, 0xd6, 0xaa, 0xe7, 0x3b, 0xcc,
+    0xa2, 0xac, 0x6d, 0xb6, 0x8f, 0xd7, 0x1f, 0x7a, 0xfb, 0x82, 0x9e, 0x23, 0x6e, 0x91, 0x74, 0x9d,
+    0xa0, 0x7d, 0xb6, 0x2c, 0xb3, 0x2d, 0x04, 0xcb, 0x5f, 0x7c, 0x6c, 0xaf, 0x25, 0xc9, 0x21, 0x0a,
 ];
 /// SHA-256 identity of the exact maker LifecycleV5 policy.
 pub const DIRECT_INLINE_ORDINARY_LIFECYCLE_ID_V5: [u8; 32] = [
-    0xe1, 0x91, 0x46, 0xb2, 0x84, 0x23, 0x5e, 0x3a, 0x24, 0xd8, 0x94, 0xd2, 0xc9, 0x96, 0x26, 0xda,
-    0x53, 0x7e, 0xa1, 0x9e, 0x33, 0x69, 0x38, 0x6d, 0x89, 0xdd, 0xb4, 0x7f, 0x6f, 0x46, 0x36, 0x09,
+    0x19, 0x3b, 0xe6, 0xe3, 0xb1, 0x1e, 0x70, 0x88, 0x31, 0xc4, 0xe0, 0xa8, 0x41, 0xdf, 0xe9, 0x8c,
+    0x0b, 0xd7, 0x09, 0xa9, 0x07, 0x23, 0xd1, 0xf1, 0x93, 0x5d, 0xf2, 0xb3, 0x3d, 0xc5, 0x85, 0xbc,
 ];
 /// SHA-256 identity of the exact ordered EffectProgramV4.
 pub const DIRECT_INLINE_ORDINARY_EFFECT_ID_V4: [u8; 32] = [
@@ -369,6 +369,10 @@ mod tests {
 
     use super::*;
     use dclutch_account_profile_contract::lifecycle_v3::SUCCESSOR_SCHEMA_RELEASE_ID;
+    use dclutch_account_profile_contract::{
+        EFFECT_PERMISSION_CREDIT_LAMPORTS, EFFECT_PERMISSION_DEBIT_LAMPORTS, lifecycle_v3,
+        v2::AccountPrestateV2,
+    };
     use dclutch_capability_program_contract::v4::CAPABILITY_PROGRAM_V4_LIFECYCLE_SCHEMA_OFFSET;
     use dclutch_claims_svm::liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
@@ -382,7 +386,16 @@ mod tests {
     use dclutch_realm_contract::REALM_BYTES;
     use dclutch_registry_contract::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
     use dclutch_registry_svm::LOADER_V3_PROGRAM_BYTES;
-    use dclutch_rent_contract::RENT_CREDIT_BYTES_V1;
+    use dclutch_rent_contract::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
+
+    use crate::{
+        execution_v3::DirectExecutionActionV3,
+        state_artifacts_v3::{
+            DIRECT_BUYER_MAKER_ACCOUNT_V3, DIRECT_LIFECYCLE_RENT_CREDIT_ACCOUNT_V3,
+            DIRECT_LIFECYCLE_RENT_PROGRAM_ACCOUNT_V3, DIRECT_MAKER_PAYER_ACCOUNT_V3,
+            DIRECT_MAKER_PAYER_ROUTE_ALIAS_ACCOUNT_V3, DIRECT_SELLER_MAKER_ACCOUNT_V3,
+        },
+    };
     use std::{vec, vec::Vec};
 
     fn logical_lengths(basis_bytes: u32) -> Vec<u32> {
@@ -401,10 +414,10 @@ mod tests {
             *output.get_mut(coordinate).expect("maker") =
                 u32::try_from(crate::successor::DIRECT_MAKER_REPLAY_BYTES_V1).expect("maker");
         }
-        *output.get_mut(7).expect("seller rent") =
-            u32::try_from(RENT_CREDIT_BYTES_V1).expect("RentCredit width");
-        *output.get_mut(10).expect("buyer rent") =
-            u32::try_from(RENT_CREDIT_BYTES_V1).expect("RentCredit width");
+        *output.get_mut(7).expect("lifecycle RentCredit") =
+            u32::try_from(LIFECYCLE_RENT_CREDIT_BYTES_V2).expect("RentCredit width");
+        *output.get_mut(10).expect("Rent program") =
+            u32::try_from(LOADER_V3_PROGRAM_BYTES).expect("Rent program width");
         *output.get_mut(13).expect("claims aggregate") =
             u32::try_from(LIABILITY_BASIS_MARKET_HEADER_BYTES_V2 + 3 * 8).expect("aggregate");
         *output.get_mut(14).expect("basis alias") = basis_bytes;
@@ -536,6 +549,118 @@ mod tests {
         assert_eq!(
             validate_direct_inline_ordinary_hot_bundle_v4(&hostile, [0x44; 32]),
             Err(DirectInlineOrdinaryHotBundleErrorV4::Descriptor)
+        );
+    }
+
+    /// The two artifacts the adapter joins agree on which coordinate owns each
+    /// lifecycle authority, and each named coordinate is the semantic owner of
+    /// that authority rather than a route alias of it.
+    #[test]
+    fn every_lifecycle_plan_names_a_representative_carrying_its_effect_authority() {
+        let bundle = build(256);
+        let profile = AccountProfileV2::decode(&bundle.account_profile).expect("profile");
+        let policy_id = digest(&bundle.lifecycle_policy);
+        let policy =
+            StateLifecyclePolicyV5::decode_selected(policy_id, policy_id, &bundle.lifecycle_policy)
+                .expect("policy");
+        policy.validate_account_profile(profile).expect("join");
+        let action = DirectExecutionActionV3::InlineOrdinary as u32;
+        assert_eq!(policy.action_plan_count(action).expect("plans"), 2);
+        for (ordinal, state) in [
+            (0_u16, DIRECT_SELLER_MAKER_ACCOUNT_V3),
+            (1, DIRECT_BUYER_MAKER_ACCOUNT_V3),
+        ] {
+            let indices = policy
+                .action_plan(action, ordinal)
+                .expect("plan")
+                .project_account_indices(profile, 3, None)
+                .expect("indices");
+            assert_eq!(indices.state(), usize::from(state));
+            assert_eq!(
+                indices.payer(),
+                Some(usize::from(DIRECT_MAKER_PAYER_ACCOUNT_V3))
+            );
+            assert_eq!(
+                indices.rent_credit(),
+                Some(usize::from(DIRECT_LIFECYCLE_RENT_CREDIT_ACCOUNT_V3))
+            );
+        }
+        // Exactly the predicates `require_permissions` applies to the named
+        // coordinate's own rule, which never follows a route alias.
+        let payer = profile
+            .rule(false, DIRECT_MAKER_PAYER_ACCOUNT_V3)
+            .expect("payer");
+        assert_ne!(
+            payer.effect_permissions() & EFFECT_PERMISSION_DEBIT_LAMPORTS,
+            0
+        );
+        assert_ne!(payer.prestate(), AccountPrestateV2::AuthenticatedRouteAlias);
+        let credit = profile
+            .rule(false, DIRECT_LIFECYCLE_RENT_CREDIT_ACCOUNT_V3)
+            .expect("credit");
+        assert_ne!(
+            credit.effect_permissions() & EFFECT_PERMISSION_CREDIT_LAMPORTS,
+            0
+        );
+        assert_ne!(
+            credit.prestate(),
+            AccountPrestateV2::AuthenticatedRouteAlias
+        );
+    }
+
+    /// Reversion evidence for the payer defect: the buyer plan as it stood
+    /// before this repair named coordinate 9, the route alias of the sole
+    /// payer. `require_permissions` reads the named rule and never follows the
+    /// alias, so the alias's zero effect permissions were exactly the refusal
+    /// the adapter raised mid-preplan. The join now refuses it up front, and
+    /// refuses it on either funding field.
+    #[test]
+    fn a_plan_that_names_an_alias_coordinate_refuses_the_join() {
+        let bundle = build(256);
+        let profile = AccountProfileV2::decode(&bundle.account_profile).expect("profile");
+        assert_eq!(
+            profile
+                .rule(false, DIRECT_MAKER_PAYER_ROUTE_ALIAS_ACCOUNT_V3)
+                .expect("alias")
+                .effect_permissions(),
+            0
+        );
+        let plan_table = lifecycle_v3::HEADER_BYTES
+            + 2 * lifecycle_v3::RECIPE_BYTES
+            + 10 * lifecycle_v3::SEED_BYTES;
+        let buyer_plan = plan_table + lifecycle_v3::ACTION_PLAN_BYTES;
+        for field_offset in [8_usize, 12] {
+            let mut hostile = bundle.lifecycle_policy;
+            hostile
+                .get_mut(buyer_plan + field_offset + 2..buyer_plan + field_offset + 4)
+                .expect("coordinate index")
+                .copy_from_slice(&DIRECT_MAKER_PAYER_ROUTE_ALIAS_ACCOUNT_V3.to_le_bytes());
+            let hostile_id = digest(&hostile);
+            let policy = StateLifecyclePolicyV5::decode_selected(hostile_id, hostile_id, &hostile)
+                .expect("hostile policy remains decodable");
+            assert_eq!(
+                policy.validate_account_profile(profile),
+                Err(lifecycle_v3::Error::ProfileMismatch),
+                "funding field at plan offset {field_offset}"
+            );
+        }
+    }
+
+    /// The Rent program coordinate that replaced the second V1 credit carries
+    /// no lifecycle authority at all, so no plan can fund or close through it.
+    #[test]
+    fn the_rent_program_coordinate_carries_no_lifecycle_authority() {
+        let bundle = build(256);
+        let profile = AccountProfileV2::decode(&bundle.account_profile).expect("profile");
+        let rule = profile
+            .rule(false, DIRECT_LIFECYCLE_RENT_PROGRAM_ACCOUNT_V3)
+            .expect("Rent program");
+        assert_eq!(rule.effect_permissions(), 0);
+        assert!(rule.route_privileges().executable());
+        assert!(!rule.route_privileges().writable());
+        assert_eq!(
+            rule.prestate(),
+            AccountPrestateV2::AuthenticatedOpaqueReadonlyData
         );
     }
 

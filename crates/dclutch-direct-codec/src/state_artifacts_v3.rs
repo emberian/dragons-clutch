@@ -37,16 +37,29 @@ use crate::{
 
 /// Seller replay-root state coordinate in the Direct AccountProfile.
 pub const DIRECT_SELLER_MAKER_ACCOUNT_V3: u16 = 5;
-/// Seller replay-root creation payer coordinate.
-pub const DIRECT_SELLER_MAKER_PAYER_ACCOUNT_V3: u16 = 6;
-/// Seller permanent RentCredit coordinate.
-pub const DIRECT_SELLER_MAKER_RENT_CREDIT_ACCOUNT_V3: u16 = 7;
+/// Sole replay-root creation payer coordinate.
+///
+/// One rent payer funds both replay-root creations, and coordinate 9 is its
+/// authenticated route alias. A plan names the REPRESENTATIVE, never the alias:
+/// `require_permissions` reads the named rule directly, and the adapter records
+/// a planned balance only at the representative, so naming 9 both observed a
+/// permission-free alias rule and re-read the payer's pre-debit balance.
+pub const DIRECT_MAKER_PAYER_ACCOUNT_V3: u16 = 6;
+/// Sole lifecycle-scoped RentCredit coordinate.
+///
+/// A `LifecycleRentCreditV2` is keyed by Market and generation alone, so one
+/// credit serves the whole Market lifecycle and both replay-root plans name it.
+pub const DIRECT_LIFECYCLE_RENT_CREDIT_ACCOUNT_V3: u16 = 7;
 /// Buyer replay-root state coordinate in the Direct AccountProfile.
 pub const DIRECT_BUYER_MAKER_ACCOUNT_V3: u16 = 8;
-/// Buyer replay-root creation payer coordinate.
-pub const DIRECT_BUYER_MAKER_PAYER_ACCOUNT_V3: u16 = 9;
-/// Buyer permanent RentCredit coordinate.
-pub const DIRECT_BUYER_MAKER_RENT_CREDIT_ACCOUNT_V3: u16 = 10;
+/// Route alias of [`DIRECT_MAKER_PAYER_ACCOUNT_V3`], named by no plan.
+pub const DIRECT_MAKER_PAYER_ROUTE_ALIAS_ACCOUNT_V3: u16 = 9;
+/// Executable Rent program that owns the lifecycle RentCredit.
+///
+/// The adapter authenticates the credit as a PDA of its own account owner and
+/// requires that owner to be present in the frame as an executable readonly
+/// account, so the Rent program is a coordinate of the profile.
+pub const DIRECT_LIFECYCLE_RENT_PROGRAM_ACCOUNT_V3: u16 = 10;
 
 const RECIPE_COUNT: usize = 2;
 const SEEDS_PER_RECIPE: usize = 5;
@@ -112,15 +125,11 @@ pub fn encode_direct_inline_ordinary_lifecycle_v5_atomic(
     let plans = [
         maker_plan(
             0,
-            DIRECT_SELLER_MAKER_PAYER_ACCOUNT_V3,
-            DIRECT_SELLER_MAKER_RENT_CREDIT_ACCOUNT_V3,
             SCALAR_SELLER_RENT_PRINCIPAL_OBSERVATION_V3,
             IDENTITY_SELLER_RENT_BENEFICIARY_OBSERVATION_V3,
         )?,
         maker_plan(
             1,
-            DIRECT_BUYER_MAKER_PAYER_ACCOUNT_V3,
-            DIRECT_BUYER_MAKER_RENT_CREDIT_ACCOUNT_V3,
             SCALAR_BUYER_RENT_PRINCIPAL_OBSERVATION_V3,
             IDENTITY_BUYER_RENT_BENEFICIARY_OBSERVATION_V3,
         )?,
@@ -192,8 +201,6 @@ const fn maker_recipe(state: u16, seed_start: u16) -> LifecycleRecipeInputV3 {
 
 fn maker_plan(
     recipe: u16,
-    payer: u16,
-    rent_credit: u16,
     principal: usize,
     beneficiary: usize,
 ) -> Result<LifecyclePlanInputV3, DirectStateArtifactErrorV3> {
@@ -201,8 +208,12 @@ fn maker_plan(
         action: DirectExecutionActionV3::InlineOrdinary as u32,
         operation: LifecycleOperationInputV3::AuthenticateOrCreate,
         recipe,
-        payer: Some(LifecycleAccountCoordinateV3::fixed(payer)),
-        rent_credit: Some(LifecycleAccountCoordinateV3::fixed(rent_credit)),
+        payer: Some(LifecycleAccountCoordinateV3::fixed(
+            DIRECT_MAKER_PAYER_ACCOUNT_V3,
+        )),
+        rent_credit: Some(LifecycleAccountCoordinateV3::fixed(
+            DIRECT_LIFECYCLE_RENT_CREDIT_ACCOUNT_V3,
+        )),
         principal: Some(LifecycleRegisterCoordinateV3::common(scalar(principal)?)),
         beneficiary: Some(LifecycleRegisterCoordinateV3::common(identity(
             beneficiary,

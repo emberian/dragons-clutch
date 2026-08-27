@@ -45,7 +45,7 @@ use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
 use dclutch_realm_contract::{REALM_BYTES, RealmLayoutV1};
 use dclutch_registry_contract::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
 use dclutch_registry_svm::LOADER_V3_PROGRAM_BYTES;
-use dclutch_rent_contract::RENT_CREDIT_BYTES_V1;
+use dclutch_rent_contract::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
 
 use crate::{
     ordinary_effect_artifacts_v3::{
@@ -299,11 +299,24 @@ fn rules(
             0,
         );
     }
-    for account in [7_usize, 10] {
-        let rule = rule_mut(&mut output, account)?;
-        rule.rule.privileges = writable;
-        rule.rule.effect_permissions = AccountEffectPermissionsV2::new(false, true, false);
-    }
+    // One lifecycle-scoped RentCredit serves the whole Market lifecycle: a
+    // `LifecycleRentCreditV2` PDA is keyed by Market and generation alone, so
+    // the two per-authority V1 credits this profile used to pin were never two
+    // accounts on chain. Coordinate 7 is that sole credit; the adapter requires
+    // it writable so a Close may credit it, and authenticates its 128 bytes,
+    // rent exemption, Market/release-set/generation binding, and PDA itself.
+    *rule_mut(&mut output, 7)? = exact(
+        writable,
+        AccountEffectPermissionsV2::new(false, true, false),
+        width(LIFECYCLE_RENT_CREDIT_BYTES_V2)?,
+        0,
+    );
+    // The Rent program owns that credit. The adapter derives the credit from
+    // `account.owner` and then requires the owner to appear in the frame as an
+    // executable readonly account, so the Rent program is a coordinate here.
+    // Its record is a loader's business -- 36 bytes under the upgradeable
+    // loader, a whole ELF under a fixed loader -- so nothing pins its width.
+    *rule_mut(&mut output, 10)? = opaque(executable);
     // The System Program is a chain-supplied builtin, not a protocol record: a
     // live validator backs it with a NativeLoader account whose width is the
     // validator's business (21 bytes under solana-program-test, 14 on Agave).
@@ -371,11 +384,23 @@ fn rules(
                 custody_privileges(account.privileges())
             };
             rule.rule.privileges = privileges;
+            // A Realm-selected token program owns the byte width of its own
+            // mint and token accounts -- a Token-2022 mint carrying extensions
+            // is not 82 bytes and an ImmutableOwner account is not 165 -- and
+            // the loader that deployed that program owns the program record's
+            // width. None of those three widths is Direct's to assert, and
+            // Custody independently authenticates all three accounts against
+            // the Realm. This is 52f14fa's coordinate-11 ruling applied to the
+            // collateral adapter.
             if matches!(
                 custody
                     .data(local)
                     .map_err(|_| DirectOrdinaryAccountArtifactErrorV3::Frame)?,
-                CustodyFrameDataV1::OpaqueData | CustodyFrameDataV1::CallerProgramData
+                CustodyFrameDataV1::OpaqueData
+                    | CustodyFrameDataV1::CallerProgramData
+                    | CustodyFrameDataV1::TokenMint
+                    | CustodyFrameDataV1::TokenAccount
+                    | CustodyFrameDataV1::TokenProgram
             ) {
                 *rule = opaque(privileges);
             }
@@ -643,12 +668,13 @@ fn validate_lengths(lengths: &[u32]) -> Result<(), DirectOrdinaryAccountArtifact
         || length_at(lengths, 4)? < width(BASIS_PREFIX_BYTES)?
         || length_at(lengths, 5)? != width(DIRECT_MAKER_REPLAY_BYTES_V1)?
         || length_at(lengths, 6)? != 0
-        || length_at(lengths, 7)? != width(RENT_CREDIT_BYTES_V1)?
+        || length_at(lengths, 7)? != width(LIFECYCLE_RENT_CREDIT_BYTES_V2)?
         || length_at(lengths, 8)? != width(DIRECT_MAKER_REPLAY_BYTES_V1)?
         || length_at(lengths, 9)? != 0
-        || length_at(lengths, 10)? != width(RENT_CREDIT_BYTES_V1)?
-        // Coordinate 11 is the chain's System Program: its NativeLoader record
-        // width belongs to the validator, so nothing here may pin it.
+        // Coordinates 10 and 11 are chain-supplied programs -- the Rent program
+        // that owns the lifecycle credit and the System Program. A loader owns
+        // the first record's width and the validator owns the second's, so
+        // nothing here may pin either.
         || length_at(lengths, 23)? != width(CORE_STATE_BYTES)?
         || length_at(lengths, 24)? != width(ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1)?
         || [25_usize, 26, 28, 30]
@@ -913,6 +939,8 @@ mod tests {
     use std::{vec, vec::Vec};
 
     use super::*;
+    use dclutch_rent_contract::RENT_CREDIT_BYTES_V1;
+
     use dclutch_account_profile_contract::{
         AccountObservationV1, EFFECT_PERMISSION_CREDIT_LAMPORTS, EFFECT_PERMISSION_DEBIT_LAMPORTS,
         EFFECT_PERMISSION_WRITE_DATA,
@@ -932,9 +960,9 @@ mod tests {
             width(PORTFOLIO_HEADER_BYTES + 3 * PORTFOLIO_COEFFICIENT_BYTES).expect("portfolio");
         output[4] = basis_bytes;
         output[5] = width(DIRECT_MAKER_REPLAY_BYTES_V1).expect("maker");
-        output[7] = width(RENT_CREDIT_BYTES_V1).expect("seller RentCredit");
+        output[7] = width(LIFECYCLE_RENT_CREDIT_BYTES_V2).expect("lifecycle RentCredit");
         output[8] = width(DIRECT_MAKER_REPLAY_BYTES_V1).expect("maker");
-        output[10] = width(RENT_CREDIT_BYTES_V1).expect("buyer RentCredit");
+        output[10] = width(LOADER_V3_PROGRAM_BYTES).expect("Rent program");
         output[13] =
             width(LIABILITY_BASIS_MARKET_HEADER_BYTES_V2 + 3 * CLAIMS_ROW_BYTES).expect("market");
         output[14] = basis_bytes;
@@ -1089,6 +1117,26 @@ mod tests {
             profile.rule(false, 6).expect("payer").effect_permissions(),
             EFFECT_PERMISSION_DEBIT_LAMPORTS
         );
+        let credit = profile.rule(false, 7).expect("lifecycle RentCredit");
+        assert_eq!(credit.prestate(), AccountPrestateV2::Exact);
+        assert_eq!(
+            credit.data_length(),
+            width(LIFECYCLE_RENT_CREDIT_BYTES_V2).expect("credit width")
+        );
+        assert_eq!(credit.data_length(), 128);
+        assert_eq!(
+            credit.effect_permissions(),
+            EFFECT_PERMISSION_CREDIT_LAMPORTS
+        );
+        assert!(credit.route_privileges().writable());
+        assert!(!credit.route_privileges().signer());
+        let rent_program = profile.rule(false, 10).expect("Rent program");
+        assert_eq!(
+            rent_program.prestate(),
+            AccountPrestateV2::AuthenticatedOpaqueReadonlyData
+        );
+        assert!(rent_program.route_privileges().executable());
+        assert_eq!(rent_program.effect_permissions(), 0);
     }
 
     #[test]
@@ -1121,6 +1169,32 @@ mod tests {
         real_deployment[62] = 37;
         real_deployment[76] = 41;
         assert_eq!(emit(&baseline), emit(&real_deployment));
+    }
+
+    /// A Realm may select Token-2022, whose mint and token accounts carry
+    /// extensions, and its Rent/token programs may sit under either loader.
+    /// None of those widths is Direct's to assert.
+    #[test]
+    fn extended_collateral_and_program_record_widths_do_not_change_profile_identity() {
+        let baseline = lengths(256);
+        let mut token_2022 = baseline;
+        // Token-2022 mint: 82 base + TLV padding + MetadataPointer + TransferFeeConfig.
+        token_2022[43] = 82 + 83 + 6 + 234;
+        // Token-2022 accounts: 165 base + TLV padding + ImmutableOwner.
+        for coordinate in [44_usize, 45, 73] {
+            *token_2022.get_mut(coordinate).expect("token account") = 165 + 5 + 4;
+        }
+        // A fixed-loader token program carries its whole ELF, not 36 bytes.
+        token_2022[47] = 1_141_117;
+        // The Rent program under a fixed loader, likewise.
+        token_2022[10] = 987_654;
+        for (account, representative) in ROUTE_ALIASES {
+            let value = *token_2022
+                .get(usize::from(*representative))
+                .expect("representative");
+            *token_2022.get_mut(usize::from(*account)).expect("alias") = value;
+        }
+        assert_eq!(emit(&baseline), emit(&token_2022));
     }
 
     #[test]
@@ -1163,25 +1237,32 @@ mod tests {
         );
     }
 
+    /// The V1 48-byte and legacy 64-byte credit geometries are exactly what the
+    /// adapter refused: it authenticates 128 bytes of `LifecycleRentCreditV2`.
     #[test]
-    fn legacy_64_byte_rent_credit_geometry_refuses_atomically() {
-        let mut hostile = lengths(256);
-        hostile[7] = 64;
-        hostile[10] = 64;
-        let mut scratch = [0_u8; DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3];
-        let mut output = [0x5a_u8; DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3];
-        let before = output;
-        assert_eq!(
-            encode_direct_inline_ordinary_account_profile_v3_atomic(
-                DirectInlineOrdinaryAccountProfileInputV3 {
-                    logical_data_lengths: &hostile,
-                },
-                &mut scratch,
-                &mut output,
-            ),
-            Err(DirectOrdinaryAccountArtifactErrorV3::Geometry)
-        );
-        assert_eq!(output, before);
+    fn superseded_rent_credit_geometries_refuse_atomically() {
+        for hostile_width in [
+            width(RENT_CREDIT_BYTES_V1).expect("V1 RentCredit width"),
+            64,
+        ] {
+            let mut hostile = lengths(256);
+            hostile[7] = hostile_width;
+            let mut scratch = [0_u8; DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3];
+            let mut output = [0x5a_u8; DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3];
+            let before = output;
+            assert_eq!(
+                encode_direct_inline_ordinary_account_profile_v3_atomic(
+                    DirectInlineOrdinaryAccountProfileInputV3 {
+                        logical_data_lengths: &hostile,
+                    },
+                    &mut scratch,
+                    &mut output,
+                ),
+                Err(DirectOrdinaryAccountArtifactErrorV3::Geometry),
+                "RentCredit width {hostile_width}"
+            );
+            assert_eq!(output, before);
+        }
     }
 
     #[test]
@@ -1441,7 +1522,8 @@ mod tests {
 
         // Two distinct representatives may still never share one key.
         let mut hostile = direct_observations();
-        hostile.copy_alias(10, 7);
+        let seller = *hostile.keys.get(5).expect("seller replay root");
+        hostile.set_key(8, seller);
         assert_eq!(hostile.project(), Err(ProfileError::CrossItemAlias));
     }
 

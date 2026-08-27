@@ -1368,7 +1368,7 @@ mod tests {
     use dclutch_realm_contract::REALM_BYTES;
     use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
     use dclutch_release_set_contract::CapabilityExecutionSelectionV1;
-    use dclutch_rent_contract::RENT_CREDIT_BYTES_V1;
+    use dclutch_rent_contract::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
     use solana_address_lookup_table_interface::state::LookupTableMeta;
     use solana_program::{account_info::AccountInfo, rent::Rent, sysvar::SysvarSerialize};
     use solana_sdk_ids::system_program;
@@ -1554,10 +1554,11 @@ mod tests {
             *output.get_mut(coordinate).expect("maker") =
                 u32::try_from(DIRECT_MAKER_REPLAY_BYTES_V1).expect("maker width");
         }
-        *output.get_mut(7).expect("seller RentCredit") =
-            u32::try_from(RENT_CREDIT_BYTES_V1).expect("RentCredit width");
-        *output.get_mut(10).expect("buyer RentCredit") =
-            u32::try_from(RENT_CREDIT_BYTES_V1).expect("RentCredit width");
+        *output.get_mut(7).expect("lifecycle RentCredit") =
+            u32::try_from(LIFECYCLE_RENT_CREDIT_BYTES_V2).expect("RentCredit width");
+        *output.get_mut(10).expect("Rent program") =
+            u32::try_from(dclutch_registry_svm::LOADER_V3_PROGRAM_BYTES)
+                .expect("Rent program width");
         *output.get_mut(13).expect("Claims aggregate") = 256 + 3 * 8;
         *output.get_mut(14).expect("basis alias") = *output.get(4).expect("basis");
         *output.get_mut(16).expect("Product alias") =
