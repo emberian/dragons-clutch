@@ -14,7 +14,7 @@ request grammar.
 | program | package | refusal band | entry routes | action routes | refusal codes | entrypoint |
 | --- | --- | --- | --- | --- | --- | --- |
 | `claims` | `dclutch-claims-sbf` | 0x5 | 12 | 2 | 81 | `process_instruction` (programs/dclutch-claims-sbf/src/lib.rs:55) |
-| `core` | `dclutch-core-sbf` | 0x3 | 15 | 9 | 16 | `process_instruction` (programs/dclutch-core-sbf/src/lib.rs:140) |
+| `core` | `dclutch-core-sbf` | 0x3 | 15 | 11 | 16 | `process_instruction` (programs/dclutch-core-sbf/src/lib.rs:140) |
 | `custody` | `dclutch-custody-sbf` | 0x6 | 8 | 9 | 12 | `process_instruction` (programs/dclutch-custody-sbf/src/lib.rs:140) |
 | `dealer` | `dclutch-dealer-sbf` | 0x7 | 1 | 0 | 10 | `process_instruction` (programs/dclutch-dealer-sbf/src/lib.rs:319) |
 | `dealer-accelerator` | `dclutch-dealer-accelerator-sbf` | 0xD | 1 | 0 | 3 | `program_entrypoint` (programs/dclutch-dealer-accelerator-sbf/src/lib.rs:67) |
