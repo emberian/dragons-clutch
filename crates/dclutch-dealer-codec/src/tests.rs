@@ -141,7 +141,14 @@ fn base_request(action: Action, state: State) -> Request {
         side: Side::TakerBuys,
         outcome: 0,
         expected_state_revision: state.state_revision,
-        now: 10,
+        // The canonical request for an action carries the slot only where the
+        // action's transition reads one. `execute` round-trips every request
+        // through `to_bytes`, so a helper that stamped 10 everywhere would make
+        // the five padding actions unencodable.
+        now: match action.now_discipline() {
+            NowDisciplineV1::CanonicalZero => 0,
+            NowDisciplineV1::ExecutionSlot => 10,
+        },
         quantity: 0,
         expected_candidate_id: state.active_candidate_id,
         actor_id: [0; 32],
@@ -754,4 +761,112 @@ fn hostile_lengths_tags_reserved_bytes_and_stale_revision_refuse() {
         execute(initial, stale, &active, None, None),
         Err(Error::StaleCoordinate)
     );
+}
+
+/// Every action, both directions, over the wire.
+///
+/// The `now` coordinate is padding for the five commands that carry no slot in
+/// `DClutchSemantics.DealerLiquidity.Command` and a live slot for the three
+/// that do. Before `Action::now_discipline` owned that fact, the shape rule and
+/// the SBF adapter's `authenticate_clock` each restated a piece of it and
+/// disagreed: `AddLiquidity` and `RemoveLiquidity` needed `now == 0` to encode
+/// and `now == clock.slot` to authenticate, which no slot the chain can offer
+/// satisfies. This walks all eight actions so no future action can be added to
+/// one statement and forgotten in the other.
+#[test]
+fn every_action_states_its_now_discipline_once_and_over_the_wire() {
+    const ALL: [Action; 8] = [
+        Action::ScheduleReplacement,
+        Action::ActivateReplacement,
+        Action::Fill,
+        Action::EnterTerminal,
+        Action::Unwind,
+        Action::Retire,
+        Action::AddLiquidity,
+        Action::RemoveLiquidity,
+    ];
+    let disciplines = ALL.map(Action::now_discipline);
+    assert_eq!(
+        disciplines,
+        [
+            NowDisciplineV1::ExecutionSlot, // ScheduleReplacement
+            NowDisciplineV1::ExecutionSlot, // ActivateReplacement
+            NowDisciplineV1::ExecutionSlot, // Fill
+            NowDisciplineV1::CanonicalZero, // EnterTerminal
+            NowDisciplineV1::CanonicalZero, // Unwind
+            NowDisciplineV1::CanonicalZero, // Retire
+            NowDisciplineV1::CanonicalZero, // AddLiquidity
+            NowDisciplineV1::CanonicalZero, // RemoveLiquidity
+        ]
+    );
+
+    for action in ALL {
+        let canonical = shape_canonical(action);
+        let bytes = canonical
+            .to_bytes()
+            .unwrap_or_else(|error| panic!("{action:?} is shape-canonical: {error:?}"));
+        assert_eq!(Request::decode(&bytes), Ok(canonical), "{action:?}");
+
+        // The hostile client from the AddLiquidity/RemoveLiquidity
+        // unreachability witness: patch the slot straight into the wire bytes,
+        // because a padding action's encoder refuses to produce it.
+        let mut patched = bytes;
+        patched[generated::REQUEST_NOW_OFFSET..generated::REQUEST_NOW_OFFSET + 8]
+            .copy_from_slice(&7_u64.to_le_bytes());
+        match action.now_discipline() {
+            NowDisciplineV1::CanonicalZero => {
+                assert_eq!(
+                    Request::decode(&patched),
+                    Err(Error::NonCanonicalPadding),
+                    "{action:?} reads no slot, so a nonzero now is padding"
+                );
+                assert_eq!(
+                    Request {
+                        now: 7,
+                        ..canonical
+                    }
+                    .to_bytes(),
+                    Err(Error::NonCanonicalPadding),
+                    "{action:?} must refuse in the encoder too"
+                );
+            }
+            NowDisciplineV1::ExecutionSlot => {
+                assert_eq!(
+                    Request::decode(&patched).map(|request| request.now),
+                    Ok(7),
+                    "{action:?} consumes the slot, so the shape may not pin it"
+                );
+            }
+        }
+    }
+}
+
+/// One shape-canonical request per action at the shared initial state.
+fn shape_canonical(action: Action) -> Request {
+    let base = base_request(action, initial_state());
+    match action {
+        Action::ScheduleReplacement => Request {
+            actor_id: policy().dealer_id,
+            replacement_candidate_id: id(12),
+            ..base
+        },
+        Action::ActivateReplacement => Request {
+            replacement_candidate_id: id(12),
+            ..base
+        },
+        Action::Fill | Action::Unwind => Request {
+            quantity: 10,
+            ..base
+        },
+        Action::EnterTerminal => Request {
+            actor_id: policy().market_id,
+            ..base
+        },
+        Action::Retire => base,
+        Action::AddLiquidity | Action::RemoveLiquidity => Request {
+            quantity: 10,
+            actor_id: policy().dealer_id,
+            ..base
+        },
+    }
 }

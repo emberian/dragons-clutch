@@ -3,8 +3,8 @@
 #[cfg(test)]
 mod tests {
     use dclutch_dealer_codec::{
-        Action, CANDIDATE_BYTES, CandidateInput, CurveBand, CurveInput, MAX_OUTCOMES, Phase,
-        Policy, Request, Side, State, encode_candidate,
+        Action, CANDIDATE_BYTES, CandidateInput, CurveBand, CurveInput, MAX_OUTCOMES,
+        NowDisciplineV1, Phase, Policy, Request, Side, State, encode_candidate,
     };
     use solana_account::Account;
     use solana_instruction::{AccountMeta, Instruction};
@@ -111,7 +111,12 @@ mod tests {
             side: Side::TakerBuys,
             outcome: 0,
             expected_state_revision: state.state_revision,
-            now: 10,
+            // Derived, never stamped: the five actions whose transition reads
+            // no slot must encode `now == 0`. See `Action::now_discipline`.
+            now: match action.now_discipline() {
+                NowDisciplineV1::CanonicalZero => 0,
+                NowDisciplineV1::ExecutionSlot => 10,
+            },
             quantity: 0,
             expected_candidate_id: state.active_candidate_id,
             actor_id: [0; 32],

@@ -37,11 +37,18 @@
       "provenance": "A DealerSbfError::Release refusal is only evidence about release authentication if a Registry CPI actually happened; Dealer maps a failed `invoke` and a missing/foreign return value to the same code, so the code alone cannot distinguish 'the Registry refused' from 'Dealer refused before calling it'. The chain's own `invoke [2]` line is the discriminator, and this witness requires it on every transaction whose label claims that depth. Cross-checked against the census's independent corroboration of the same logs."
     },
     {
-      "id": "both-liquidity-actions-are-unreachable-at-every-offered-slot",
+      "id": "both-liquidity-actions-reach-the-release-stage-at-a-real-slot",
       "kind": "evidence-jq",
-      "query": "[.transactions[] | select(.label | test(\"Liquidity at the\")) | .error] | sort | join(\"|\")",
-      "expect": "InstructionError(0, Custom(0))|InstructionError(0, Custom(4))",
-      "provenance": "Two protocol rules with no common solution. `Request::validate_shape` (crates/dclutch-dealer-codec/src/lib.rs) refuses AddLiquidity and RemoveLiquidity unless `now == 0`; `authenticate_clock` (programs/dclutch-dealer-sbf/src/lib.rs) refuses unless `now == clock.slot` for every action except Retire. A submitted transaction never executes in the genesis slot, so the shape-canonical form refuses on the Clock (code 4) and the clock-canonical form refuses at decode (code 0). This witness pins BOTH halves, which is what makes the unreachability a chain observation rather than an argument about two files. It is expected to fail the day the contradiction is fixed, and that is the point: it is the marker for a defect, not a specification of one."
+      "query": "[.transactions[] | select(.label | test(\"Liquidity into the real Registry\")) | .error] | sort | join(\"|\")",
+      "expect": "InstructionError(0, Custom(5))|InstructionError(0, Custom(5))",
+      "provenance": "This replaces `both-liquidity-actions-are-unreachable-at-every-offered-slot`, which pinned a contradiction and was written to fail the day it was fixed. It was fixed: `Request::validate_shape` and `authenticate_clock` had each restated which actions carry a slot, and disagreed, so AddLiquidity and RemoveLiquidity needed `now == 0` to encode and `now == clock.slot` to authenticate and no slot the chain can offer satisfied both. `Action::now_discipline` in crates/dclutch-dealer-codec/src/lib.rs is now the single owner of that fact and both sides read it. What is pinned here is the OTHER direction, which is what a regression would break: the two liquidity actions get past instruction shape, the 23-account frame, identity, their actor rule and their Clock rule, and refuse at the Registry reauthentication CPI (code 5) like the other five actions. A reintroduced Clock disagreement shows up here as code 4."
+    },
+    {
+      "id": "a-slot-in-the-padding-is-refused-at-decode",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.label | test(\"carrying a slot in its padding\")) | .error] | sort | join(\"|\")",
+      "expect": "InstructionError(0, Custom(0))|InstructionError(0, Custom(0))|InstructionError(0, Custom(0))",
+      "provenance": "The hostile half of the same rule. `DClutchSemantics.DealerLiquidity.Command` carries a slot only inside `Replacement`, `Activation` and `Fill`; `enterTerminal`, `unwind`, `retire`, `addLiquidity` and `removeLiquidity` have no time coordinate at all, so their `now` is padding and one semantic request must have exactly one encoding. The campaign patches a real slot straight into the wire bytes for RemoveLiquidity, EnterTerminal and Unwind -- the encoder will not produce that form -- and each must refuse at decode with Instruction (0). Without this, relaxing the padding rule to 'fix' a clock complaint would admit 2^64 encodings of the same liquidity adjustment, each with its own request digest."
     }
   ]
 }

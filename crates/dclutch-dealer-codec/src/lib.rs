@@ -971,6 +971,26 @@ impl ReleaseReceipt {
     }
 }
 
+/// The exact discipline one action's request shape imposes on `now`.
+///
+/// The flat wire request carries one `now` field for every action, but the
+/// Dealer semantics does not: `DClutchSemantics.DealerLiquidity.Command`
+/// carries a slot only inside `Replacement`, `Activation` and `Fill`. The
+/// remaining five commands -- `enterTerminal`, `unwind`, `retire`,
+/// `addLiquidity`, `removeLiquidity` -- have no time coordinate at all, so
+/// their `now` is padding and must be canonically zero, exactly as their
+/// unused `outcome`, `quantity`, `actor_id` and `replacement_candidate_id`
+/// are. This is one fact with one owner: both the request shape and the
+/// adapter's Clock authentication read it here.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NowDisciplineV1 {
+    /// The transition never reads `now`; the field is padding and must be `0`.
+    CanonicalZero,
+    /// The transition consumes `now` as a slot and it must equal the executing
+    /// slot.
+    ExecutionSlot,
+}
+
 /// Data-defined transition action.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Action {
@@ -993,6 +1013,28 @@ pub enum Action {
 }
 
 impl Action {
+    /// Report whether this action's transition consumes the `now` coordinate.
+    ///
+    /// The match is exhaustive on purpose: an action added to the enum is a
+    /// compile error here, and therefore cannot silently inherit a slot rule
+    /// its Lean command has no field for.
+    #[must_use]
+    pub const fn now_discipline(self) -> NowDisciplineV1 {
+        match self {
+            // `Replacement.now`, `Activation.now`, `Fill.now`.
+            Self::ScheduleReplacement | Self::ActivateReplacement | Self::Fill => {
+                NowDisciplineV1::ExecutionSlot
+            }
+            // `Resolution`, `Unwind`, `retire` and `LiquidityChange` carry no
+            // slot in the semantics.
+            Self::EnterTerminal
+            | Self::Unwind
+            | Self::Retire
+            | Self::AddLiquidity
+            | Self::RemoveLiquidity => NowDisciplineV1::CanonicalZero,
+        }
+    }
+
     fn decode(value: u8) -> Result<Self> {
         match value {
             generated::ACTION_SCHEDULE_REPLACEMENT => Ok(Self::ScheduleReplacement),
@@ -1059,7 +1101,10 @@ pub struct Request {
     pub outcome: u8,
     /// Exact expected state revision.
     pub expected_state_revision: u64,
-    /// Current time for time-sensitive actions.
+    /// Executing slot for the three actions whose transition reads it, and
+    /// canonical zero padding for the five that do not. See
+    /// [`Action::now_discipline`]; the adapter's Clock authentication reads the
+    /// same fact.
     pub now: u64,
     /// Fill or unwind quantity.
     pub quantity: u64,
@@ -1169,6 +1214,14 @@ impl Request {
         {
             return Err(Error::ZeroCoordinate);
         }
+        // One owner for the `now` rule. `authenticate_clock` in the Dealer
+        // adapter reads the same `now_discipline`, so the shape and the slot
+        // binding cannot disagree the way they did when this restated
+        // `self.now != 0` per action and the adapter restated the exemption
+        // list per action.
+        if self.action.now_discipline() == NowDisciplineV1::CanonicalZero && self.now != 0 {
+            return Err(Error::NonCanonicalPadding);
+        }
         let zero_actor = is_zero(&self.actor_id);
         let zero_replacement = is_zero(&self.replacement_candidate_id);
         let canonical_non_fill_side = self.side == Side::TakerBuys;
@@ -1216,7 +1269,6 @@ impl Request {
             Action::Retire => {
                 if !canonical_non_fill_side
                     || self.outcome != 0
-                    || self.now != 0
                     || self.quantity != 0
                     || !zero_actor
                     || !zero_replacement
@@ -1225,11 +1277,7 @@ impl Request {
                 }
             }
             Action::AddLiquidity | Action::RemoveLiquidity => {
-                if !canonical_non_fill_side
-                    || self.now != 0
-                    || self.quantity == 0
-                    || zero_actor
-                    || !zero_replacement
+                if !canonical_non_fill_side || self.quantity == 0 || zero_actor || !zero_replacement
                 {
                     return Err(Error::NonCanonicalPadding);
                 }

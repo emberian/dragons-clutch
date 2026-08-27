@@ -31,8 +31,8 @@ use dclutch_custody_contract::{
 };
 use dclutch_dealer_codec::{
     Action, CANDIDATE_BYTES, CandidateView, ClaimAction, CustodyRole, Inputs, MAX_OUTCOMES,
-    POLICY_BYTES, Plan, Policy, RECEIPT_BYTES, REQUEST_BYTES, ReleaseReceipt, Request, STATE_BYTES,
-    Side, State, interpret,
+    NowDisciplineV1, POLICY_BYTES, Plan, Policy, RECEIPT_BYTES, REQUEST_BYTES, ReleaseReceipt,
+    Request, STATE_BYTES, Side, State, interpret,
 };
 use dclutch_economic_slice_kernel::{
     Phase as ClaimsPhase, market_identity, market_outcome_count, market_phase,
@@ -1062,12 +1062,21 @@ fn read_token(accounts: &[AccountInfo<'_>], index: usize) -> Result<TokenAccount
     Ok(token)
 }
 
+/// Bind the request's `now` coordinate to the executing slot.
+///
+/// The expectation is DERIVED from [`Action::now_discipline`], the codec's
+/// single statement of which commands carry a slot in the Dealer semantics.
+/// Restating it here as a hand-listed exemption is what made `AddLiquidity`
+/// and `RemoveLiquidity` unreachable at every slot the chain can offer: their
+/// request shape requires `now == 0` and this check named only `Retire`, so no
+/// encoding satisfied both. A slot expectation may only ever be `0` or
+/// `clock.slot`; nothing else is representable.
 fn authenticate_clock(accounts: &[AccountInfo<'_>], request: Request) -> ProgramResult {
     let clock =
         Clock::from_account_info(&accounts[CLOCK_SYSVAR]).map_err(|_| DealerSbfError::Clock)?;
-    let expected = match request.action {
-        Action::Retire => 0,
-        _ => clock.slot,
+    let expected = match request.action.now_discipline() {
+        NowDisciplineV1::CanonicalZero => 0,
+        NowDisciplineV1::ExecutionSlot => clock.slot,
     };
     if request.now != expected {
         return Err(DealerSbfError::Clock.into());
