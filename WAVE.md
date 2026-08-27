@@ -447,3 +447,9 @@ QUEUED with owners:
   ARCHITECTURE.md still narrates the MarketRoot era.
 - Banish checklist gains: sweep apps/dclutch-web for the deleted program's
   vocabulary in the same commit; abi:*:verify wired into npm test.
+
+- U-014 owner, sharpened by the late sweep: the accelerator migration is
+  PARTIAL — schema identity is V2 tree-wide (~20 consumers) but
+  direct-aot-sbf still decodes the V1 wire (AcceleratorRequestV1/AckV1).
+  The two orphan V1 schema IDs are clean deletes; the wire types are NOT
+  until that program migrates. Never delete "V1 accelerator" as one unit.
