@@ -703,8 +703,19 @@ genesis installs and wrong for every real deploy.
 It is load-bearing on chain, not just in evidence:
 `programs/dclutch-core-sbf/src/infrastructure.rs::require_loader_linkage` reads
 `programdata_view.deployment_slot()` into the `DeploymentObservationV1` that
-`release.authenticate_deployment(observation)` checks. A record claiming slot 0
-against a ProgramData deployed at slot 488,7xx,xxx refuses.
+`release.authenticate_deployment(observation)` checks, and
+`crates/dclutch-registry-contract/src/artifact.rs:250` is unambiguous:
+
+```rust
+if observed.deployment_slot != self.deployment_slot {
+    return Err(Error::DeploymentSlotMismatch);
+}
+```
+
+A record claiming slot 0 against a ProgramData deployed at slot 488,7xx,xxx
+refuses. The measured local deploy landed at slot 167 and its redeploy at 531 —
+the value is not even stable across two runs on the same machine, so it cannot
+be pre-committed.
 
 **Fix**: a per-role `--<role>-deployment-slot` on `prepare` and a matching
 run-spec field, defaulting to 0 so local runs are unchanged. Small, additive,
@@ -735,9 +746,12 @@ observed, after --final        tag=3  slot=531  authtag=0  [13..45]=8d2e3468…0
 loader-accounts, no authority  tag=3  slot=0    authtag=0  [13..45]=0000…0000
 ```
 
-This does **not** break the chain: `require_pinned_immutable_deployment` checks
-the ELF digest, the authority being `None`, and the exact deployment slot — it
-never hashes the whole ProgramData account. It **does** break the frontend's
+This does **not** break the chain. `authenticate_deployment`
+(`crates/dclutch-registry-contract/src/artifact.rs:229-260`) compares identity,
+the ProgramData link, both owners, both executable flags, the deployment slot,
+the **ELF digest**, and the upgrade authority — and nothing else. There is no
+whole-account digest in the observation, so the retained bytes are invisible to
+it. It **does** break the frontend's
 `authenticateDeployment`, which contract item 4 of
 `docs/evidence/CHECKED_RELEASE_CANDIDATE_2026_08_26.md` specifies as a byte-exact
 geometry-and-digest gate. Every devnet role would be refused by the browser.
