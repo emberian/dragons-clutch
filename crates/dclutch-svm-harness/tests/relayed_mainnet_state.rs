@@ -1194,3 +1194,61 @@ async fn a_quorum_below_the_release_threshold_never_seals() {
     assert_eq!(view.phase(), Ok(RelayedRecordPhaseV1::Sealed));
     assert_eq!(view.seal_count(), Ok(3));
 }
+
+/// The swap tripwire of §4.10, made checkable rather than rhetorical.
+///
+/// "Swapping trust roots never moves semantics" is only worth saying if it is
+/// falsifiable. Two provider releases with **disjoint relayer key sets** — a
+/// 1-of-1 and a 3-of-5 — differ in `provider_deployment_release_id` and agree,
+/// byte for byte, in `decoding_rules_id`. If a future transport ever needs a
+/// different `decoding_rules_id`, the family has leaked semantics into
+/// transport and this test is where that shows up.
+#[test]
+fn two_disjoint_relayer_key_sets_share_one_decoding_rules_identity() {
+    let (_, account_set_id) = account_set();
+    let config = RelayedAdapterConfigV1::new(
+        account_set_id,
+        0,
+        0,
+        u64::from(WINDOW_MAX_AGE_SECONDS),
+        CLUSTER_SKEW_SECONDS,
+    )
+    .expect("relayed adapter config");
+    let decoding_rules_id = hash(&config.to_bytes().expect("config bytes")).to_bytes();
+
+    let solo = RelayerKeySetV1::new(&[[0x11; 32]], 1).expect("1-of-1 key set");
+    let mut quorum_keys = [[0x21; 32], [0x22; 32], [0x23; 32], [0x24; 32], [0x25; 32]];
+    quorum_keys.sort_unstable();
+    let quorum = RelayerKeySetV1::new(&quorum_keys, 3).expect("3-of-5 key set");
+    let solo_id = hash(&solo.to_bytes().expect("bytes")).to_bytes();
+    let quorum_id = hash(&quorum.to_bytes().expect("bytes")).to_bytes();
+    assert_ne!(solo_id, quorum_id, "the two trust roots must be distinct");
+
+    let release_of = |deployment: [u8; 32]| {
+        ProviderReleaseV1::new(
+            source_id(RELAYED_FAMILY_RELEASE_ID_V1),
+            source_id(RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1),
+            source_id(deployment),
+            source_id(decoding_rules_id),
+            source_id(RELAYED_RECORD_TRANSPORT_PROFILE_ID_V1),
+        )
+    };
+    let poa = release_of(solo_id);
+    let multi = release_of(quorum_id);
+
+    assert_ne!(
+        poa.provider_deployment_release_id(),
+        multi.provider_deployment_release_id(),
+        "the trust root must be the thing that moved"
+    );
+    assert_eq!(
+        poa.decoding_rules_id().to_bytes(),
+        multi.decoding_rules_id().to_bytes(),
+        "swapping the trust root moved the decoding rules: the family has leaked semantics into transport"
+    );
+    assert_eq!(poa.provider_family_id(), multi.provider_family_id());
+    assert_eq!(poa.transport_profile_id(), multi.transport_profile_id());
+
+    // And the account set both rows resolve against is the same 32 bytes.
+    assert_eq!(config.account_set_id(), account_set_id);
+}
