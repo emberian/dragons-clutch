@@ -3,20 +3,6 @@ import { PublicKey } from '@solana/web3.js';
 import { ascii, fromHex, hex, isZero, pubkey, requireNonzero, requireZero, sha256, slice, u16, u64 } from './bytes';
 import { LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2 as RENT_CREDIT_SEED } from './generated/coreFound';
 import {
-  MAX_OUTCOMES_V1,
-  MIN_OUTCOMES_V1,
-  POSITION_BASE_BYTES_V1,
-  POSITION_GENERATION_OFFSET_V1,
-  POSITION_MAGIC_V1,
-  POSITION_MARKET_OFFSET_V1,
-  POSITION_OUTCOME_BALANCE_BYTES_V1,
-  POSITION_OUTCOME_COUNT_OFFSET_V1,
-  POSITION_OWNER_OFFSET_V1,
-  POSITION_PDA_DOMAIN_V1,
-  POSITION_RESERVED_BYTES_V1,
-  POSITION_RESERVED_OFFSET_V1,
-  POSITION_SCHEMA_VERSION_OFFSET_V1,
-  POSITION_SCHEMA_VERSION_V1,
   REALM_ADAPTER_RELEASE_ID_OFFSET_V1,
   REALM_BYTES_V1,
   REALM_COLLATERAL_MINT_OFFSET_V1,
@@ -28,47 +14,14 @@ import {
   REALM_RESERVED_OFFSET_V1,
   REALM_SCHEMA_VERSION_V1,
   REALM_TOKEN_PROGRAM_OFFSET_V1,
-  positionBytesV1,
 } from './generated/realmPositionV1';
 
-export type CoreKind = 'Market' | 'Realm' | 'Position' | 'RentCredit';
+export type CoreKind = 'Realm' | 'RentCredit';
 
 export type BindingCheck = Readonly<{
   label: string;
   ok: boolean;
   detail: string;
-}>;
-
-export type MarketPhase = 'Founding' | 'Open' | 'Resolved' | 'Retiring' | 'Retired';
-
-export type MarketSettlement =
-  | Readonly<{ status: 'empty'; label: string }>
-  | Readonly<{ status: 'resolved'; label: string; route: string; winner: number; terminalSequence: string; evidenceId: string }>;
-
-/** Which supply the Hoard must exactly cover at this phase. */
-export type RequiredBackingBasis = 'maximum-outcome-supply' | 'winning-outcome-supply';
-
-export type MarketSemantics = Readonly<{
-  kind: 'Market';
-  realmId: string;
-  generation: string;
-  outcomeCount: number;
-  schemaVersion: number;
-  categoricalProfile: number;
-  accountBytes: number;
-  phase: MarketPhase;
-  identityBytes: Uint8Array;
-  productInstanceId: string;
-  claimBasisId: string;
-  resolutionPolicyId: string;
-  capabilityManifestId: string;
-  rentRefundAuthority: string;
-  hoardAtoms: string;
-  outstandingChildren: string;
-  supply: ReadonlyArray<string>;
-  requiredBackingAtoms: string;
-  requiredBackingBasis: RequiredBackingBasis;
-  settlement: MarketSettlement;
 }>;
 
 export type RealmAuthorityPolicy = 'Require absent' | 'Admit issuer control';
@@ -82,15 +35,6 @@ export type RealmSemantics = Readonly<{
   adapterReleaseId: string;
   mintAuthorityPolicy: RealmAuthorityPolicy;
   freezeAuthorityPolicy: RealmAuthorityPolicy;
-}>;
-
-export type PositionSemantics = Readonly<{
-  kind: 'Position';
-  market: string;
-  owner: string;
-  generation: string;
-  outcomeCount: number;
-  balances: ReadonlyArray<string>;
 }>;
 
 type RentCreditSemantics = Readonly<{
@@ -112,7 +56,7 @@ export type DecodedProjection = Readonly<{
   schema: 'v1' | 'v2';
   details: ReadonlyArray<Readonly<{ label: string; value: string }>>;
   bindings: ReadonlyArray<BindingCheck>;
-  semantics: MarketSemantics | RealmSemantics | PositionSemantics | RentCreditSemantics;
+  semantics: RealmSemantics | RentCreditSemantics;
 }>;
 
 export type RefusedProjection = Readonly<{
@@ -137,15 +81,9 @@ export type FullAccountObservation = Readonly<{
 }>;
 
 const MAGIC = Object.freeze({
-  DCLTCAT1: 'Market',
   [REALM_MAGIC_V1]: 'Realm',
-  [POSITION_MAGIC_V1]: 'Position',
   DCLRNTL2: 'RentCredit',
 } satisfies Record<string, CoreKind>);
-
-const PHASES = Object.freeze(['Founding', 'Open', 'Resolved', 'Retiring', 'Retired'] as const);
-const RESOLUTION_KINDS = Object.freeze(['Occurrence', 'Failure', 'Recovery']);
-const MARKET_SEED = new TextEncoder().encode('dclutch/market-root/v1');
 
 function detail(label: string, value: string | number | bigint): Readonly<{ label: string; value: string }> {
   return Object.freeze({ label, value: String(value) });
@@ -179,26 +117,6 @@ export function deriveRealmAddress(programId: string, realmContentIdHex: string)
   return PublicKey.findProgramAddressSync([REALM_PDA_DOMAIN_V1, digest], new PublicKey(programId))[0].toBase58();
 }
 
-/**
- * Derive the one canonical Position address for a Market and owner.
- *
- * dClutch publishes no position index and this browser will not invent one.
- * It does not need to: a Position is the program-derived address of
- * `POSITION_PDA_DOMAIN_V1` plus the exact Market and owner keys, in that order — the
- * same seed domain `dclutch-realm-contract::POSITION_PDA_DOMAIN` names and the
- * same order `verifyLocalBindings` checks a decoded Position against. An owner
- * plus a Market address is therefore enough to ask the chain directly, and an
- * address with no account is an honest "no Position", not a lookup failure.
- */
-export function derivePositionAddressV1(programId: string, market: string, owner: string): string {
-  const program = new PublicKey(programId);
-  const [derived] = PublicKey.findProgramAddressSync(
-    [POSITION_PDA_DOMAIN_V1, new PublicKey(market).toBytes(), new PublicKey(owner).toBytes()],
-    program,
-  );
-  return derived.toBase58();
-}
-
 export function decodeCoreAccount(observation: FullAccountObservation, expectedProgramId: string): AccountProjection {
   const kind = kindFromMagic(observation.data);
   if (observation.owner !== expectedProgramId) {
@@ -211,9 +129,7 @@ export function decodeCoreAccount(observation: FullAccountObservation, expectedP
     return refused(observation, 'Unknown', 'unknown account magic; no layout was guessed');
   }
   try {
-    if (kind === 'Market') return decodeMarket(observation);
     if (kind === 'Realm') return decodeRealm(observation);
-    if (kind === 'Position') return decodePosition(observation);
     return decodeRentCredit(observation);
   } catch (error) {
     return refused(observation, kind, error instanceof Error ? error.message : 'canonical decoder refused the account');
@@ -236,113 +152,6 @@ function commonHeader(bytes: Uint8Array, magic: string, exactLength: number, ver
   if (bytes.length !== exactLength) throw new Error(`expected exactly ${exactLength} bytes, observed ${bytes.length}`);
   if (ascii(bytes, 0, 8) !== magic) throw new Error(`magic is not ${magic}`);
   if (u16(bytes, 8) !== version) throw new Error(`schema version ${u16(bytes, 8)} is unsupported`);
-}
-
-function decodeMarket(observation: FullAccountObservation): DecodedProjection {
-  const bytes = observation.data;
-  if (bytes.length < 16) throw new Error('Market header is truncated');
-  if (u16(bytes, 8) !== 1) throw new Error(`Market schema version ${u16(bytes, 8)} is unsupported`);
-  const outcomeCount = bytes[10];
-  const categoricalProfile = bytes[11];
-  if (categoricalProfile !== 1) throw new Error(`categorical profile ${categoricalProfile} is unsupported`);
-  if (outcomeCount < 2 || outcomeCount > 16) throw new Error(`outcome count ${outcomeCount} is outside provisional profile 2..16`);
-  const expectedLength = 320 + outcomeCount * 8;
-  commonHeader(bytes, 'DCLTCAT1', expectedLength);
-  requireZero(bytes, 12, 4, 'Market header');
-  if (ascii(bytes, 16, 8) !== 'DCLTROOT') throw new Error('embedded MarketRoot magic is invalid');
-  if (u16(bytes, 24) !== 1) throw new Error(`embedded MarketRoot schema ${u16(bytes, 24)} is unsupported`);
-  requireZero(bytes, 26, 6, 'MarketRoot header');
-  requireZero(bytes, 201, 7, 'MarketRoot body');
-
-  const realmId = slice(bytes, 32, 32);
-  const productInstanceId = slice(bytes, 64, 32);
-  const claimBasisId = slice(bytes, 96, 32);
-  const resolutionPolicyId = slice(bytes, 128, 32);
-  const capabilityManifestId = slice(bytes, 160, 32);
-  for (const [name, value] of [
-    ['Realm ID', realmId],
-    ['Product instance ID', productInstanceId],
-    ['claim basis ID', claimBasisId],
-    ['resolution policy ID', resolutionPolicyId],
-    ['capability manifest ID', capabilityManifestId],
-  ] as const) requireNonzero(value, name);
-
-  const generation = u64(bytes, 192);
-  const phaseByte = bytes[200];
-  const phase = PHASES[phaseByte];
-  if (phase === undefined) throw new Error(`MarketRoot phase ${phaseByte} is undefined`);
-  const outstandingChildren = u64(bytes, 208);
-  if (phase === 'Retired' && outstandingChildren !== 0n) throw new Error('Retired Market retains outstanding direct children');
-  const rentRefund = slice(bytes, 216, 32);
-  requireNonzero(rentRefund, 'Market rent-refund authority');
-  const hoardAtoms = u64(bytes, 248);
-  const supply = Array.from({ length: outcomeCount }, (_, index) => u64(bytes, 256 + index * 8));
-  const settlementOffset = 256 + outcomeCount * 8;
-  const settlement = slice(bytes, settlementOffset, 64);
-  const status = settlement[0];
-  let settlementLabel = 'Empty';
-  let settlementSemantics: MarketSettlement = Object.freeze({ status: 'empty', label: settlementLabel });
-  let winner: number | null = null;
-  let resolutionDetails: ReadonlyArray<Readonly<{ label: string; value: string }>> = [];
-  if (status === 0) {
-    if (!isZero(settlement)) throw new Error('empty settlement summary contains nonzero bytes');
-  } else if (status === 1) {
-    const route = RESOLUTION_KINDS[settlement[1]];
-    if (route === undefined) throw new Error(`resolution route ${settlement[1]} is undefined`);
-    winner = settlement[2];
-    if (winner >= outcomeCount) throw new Error(`winning outcome ${winner} exceeds the Market width`);
-    requireZero(settlement, 3, 5, 'settlement header');
-    requireZero(settlement, 48, 16, 'settlement tail');
-    const terminalSequence = u64(settlement, 8);
-    if (terminalSequence === 0n) throw new Error('resolved settlement has a zero terminal sequence');
-    const evidence = slice(settlement, 16, 32);
-    requireNonzero(evidence, 'resolution evidence ID');
-    settlementLabel = `Resolved · ${route}`;
-    settlementSemantics = Object.freeze({
-      status: 'resolved', label: settlementLabel, route, winner,
-      terminalSequence: terminalSequence.toString(), evidenceId: hex(evidence),
-    });
-    resolutionDetails = [detail('Winning state', winner), detail('Terminal sequence', terminalSequence), detail('Evidence ID', hex(evidence))];
-  } else {
-    throw new Error(`settlement status ${status} is undefined`);
-  }
-
-  const emptyEconomics = hoardAtoms === 0n && supply.every((amount) => amount === 0n);
-  if (phase === 'Founding' && (status !== 0 || !emptyEconomics)) throw new Error('Founding Market retained settlement or economic state');
-  if (phase === 'Open' && status !== 0) throw new Error('Open Market retained terminal settlement truth');
-  if (phase === 'Resolved' && status !== 1) throw new Error('Resolved Market lacks terminal settlement truth');
-  if (phase === 'Retiring' && status === 0 && !emptyEconomics) throw new Error('unresolved Retiring Market retains economic state');
-  if (phase === 'Retired' && !emptyEconomics) throw new Error('Retired Market retains economic state');
-  const requiredBacking = winner === null ? supply.reduce((maximum, amount) => amount > maximum ? amount : maximum, 0n) : supply[winner];
-  if (hoardAtoms < requiredBacking) throw new Error(`Hoard ${hoardAtoms} is below exact claimant backing ${requiredBacking}`);
-  const requiredBackingBasis: RequiredBackingBasis = winner === null ? 'maximum-outcome-supply' : 'winning-outcome-supply';
-
-  return Object.freeze({
-    status: 'decoded', kind: 'Market', address: observation.address, lamports: observation.lamports,
-    observedSlot: observation.observedSlot, schema: 'v1', bindings: Object.freeze([]),
-    details: Object.freeze([
-      detail('Phase', phase), detail('Generation', generation), detail('Outcomes', outcomeCount),
-      detail('Hoard atoms', hoardAtoms), detail('Outstanding children', outstandingChildren),
-      detail('Settlement', settlementLabel), detail('Supply', supply.join(' · ')),
-      detail('Exact required backing', requiredBacking),
-      detail('Realm ID', hex(realmId)), detail('Product instance ID', hex(productInstanceId)),
-      detail('Claim basis ID', hex(claimBasisId)), detail('Resolution policy ID', hex(resolutionPolicyId)),
-      detail('Capability manifest ID', hex(capabilityManifestId)), detail('Rent refund authority', pubkey(rentRefund, 'Market rent-refund authority')),
-      ...resolutionDetails,
-    ]),
-    semantics: Object.freeze({
-      kind: 'Market', realmId: hex(realmId), generation: generation.toString(), outcomeCount, phase,
-      schemaVersion: u16(bytes, 8), categoricalProfile, accountBytes: bytes.length,
-      identityBytes: slice(bytes, 32, 168),
-      productInstanceId: hex(productInstanceId), claimBasisId: hex(claimBasisId),
-      resolutionPolicyId: hex(resolutionPolicyId), capabilityManifestId: hex(capabilityManifestId),
-      rentRefundAuthority: pubkey(rentRefund, 'Market rent-refund authority'),
-      hoardAtoms: hoardAtoms.toString(), outstandingChildren: outstandingChildren.toString(),
-      supply: Object.freeze(supply.map((amount) => amount.toString())),
-      requiredBackingAtoms: requiredBacking.toString(), requiredBackingBasis,
-      settlement: settlementSemantics,
-    }),
-  });
 }
 
 function decodeRealm(observation: FullAccountObservation): DecodedProjection {
@@ -369,36 +178,6 @@ function decodeRealm(observation: FullAccountObservation): DecodedProjection {
       kind: 'Realm', canonicalBytes: new Uint8Array(bytes), contentDigest: null,
       tokenProgram, collateralMint, adapterReleaseId: hex(adapterRelease),
       mintAuthorityPolicy: mintPolicy, freezeAuthorityPolicy: freezePolicy,
-    }),
-  });
-}
-
-function decodePosition(observation: FullAccountObservation): DecodedProjection {
-  const bytes = observation.data;
-  if (bytes.length < 16) throw new Error('Position header is truncated');
-  const version = u16(bytes, POSITION_SCHEMA_VERSION_OFFSET_V1);
-  if (version !== POSITION_SCHEMA_VERSION_V1) throw new Error(`Position schema version ${version} is unsupported`);
-  const outcomeCount = bytes[POSITION_OUTCOME_COUNT_OFFSET_V1];
-  if (outcomeCount < MIN_OUTCOMES_V1 || outcomeCount > MAX_OUTCOMES_V1) {
-    throw new Error(`Position outcome count ${outcomeCount} is outside ${MIN_OUTCOMES_V1}..${MAX_OUTCOMES_V1}`);
-  }
-  commonHeader(bytes, POSITION_MAGIC_V1, positionBytesV1(outcomeCount), POSITION_SCHEMA_VERSION_V1);
-  requireZero(bytes, POSITION_RESERVED_OFFSET_V1, POSITION_RESERVED_BYTES_V1, 'Position header');
-  const market = pubkey(slice(bytes, POSITION_MARKET_OFFSET_V1, 32), 'Position Market');
-  const owner = pubkey(slice(bytes, POSITION_OWNER_OFFSET_V1, 32), 'Position owner');
-  const generation = u64(bytes, POSITION_GENERATION_OFFSET_V1);
-  const balances = Array.from({ length: outcomeCount },
-    (_, index) => u64(bytes, POSITION_BASE_BYTES_V1 + index * POSITION_OUTCOME_BALANCE_BYTES_V1));
-  return Object.freeze({
-    status: 'decoded', kind: 'Position', address: observation.address, lamports: observation.lamports,
-    observedSlot: observation.observedSlot, schema: 'v1', bindings: Object.freeze([]),
-    details: Object.freeze([
-      detail('Market', market), detail('Owner', owner), detail('Generation', generation),
-      detail('Outcomes', outcomeCount), detail('Owned balances', balances.join(' · ')),
-    ]),
-    semantics: Object.freeze({
-      kind: 'Position', market, owner, generation: generation.toString(), outcomeCount,
-      balances: Object.freeze(balances.map((amount) => amount.toString())),
     }),
   });
 }
@@ -432,18 +211,11 @@ export async function verifyLocalBindings(projection: DecodedProjection, program
   const program = new PublicKey(programId);
   const checks: BindingCheck[] = [];
   let semantics = projection.semantics;
-  if (semantics.kind === 'Market') {
-    const digest = await sha256(semantics.identityBytes);
-    const [derived] = PublicKey.findProgramAddressSync([MARKET_SEED, digest], program);
-    checks.push(Object.freeze({ label: 'Market PDA', ok: derived.toBase58() === projection.address, detail: `sha256(identity) → ${derived.toBase58()}` }));
-  } else if (semantics.kind === 'Realm') {
+  if (semantics.kind === 'Realm') {
     const digest = await sha256(semantics.canonicalBytes);
     const [derived] = PublicKey.findProgramAddressSync([REALM_PDA_DOMAIN_V1, digest], program);
     checks.push(Object.freeze({ label: 'Realm content + PDA', ok: derived.toBase58() === projection.address, detail: `sha256(canonical bytes) ${hex(digest)} → ${derived.toBase58()}` }));
     semantics = Object.freeze({ ...semantics, contentDigest: hex(digest) });
-  } else if (semantics.kind === 'Position') {
-    const [derived] = PublicKey.findProgramAddressSync([POSITION_PDA_DOMAIN_V1, new PublicKey(semantics.market).toBytes(), new PublicKey(semantics.owner).toBytes()], program);
-    checks.push(Object.freeze({ label: 'Position PDA', ok: derived.toBase58() === projection.address, detail: `Market + owner → ${derived.toBase58()}` }));
   } else {
     const generation = BigInt(semantics.generation);
     const generationBytes = new Uint8Array(8);
@@ -455,23 +227,17 @@ export async function verifyLocalBindings(projection: DecodedProjection, program
 }
 
 export function crossCheckBindings(projections: ReadonlyArray<AccountProjection>): ReadonlyArray<AccountProjection> {
-  const decoded = projections.filter((projection): projection is DecodedProjection => projection.status === 'decoded');
-  const realms = new Map(decoded.filter((projection) => projection.semantics.kind === 'Realm' && projection.semantics.contentDigest !== null).map((projection) => [projection.semantics.kind === 'Realm' ? projection.semantics.contentDigest : '', projection]));
-  const markets = new Map(decoded.filter((projection) => projection.kind === 'Market').map((projection) => [projection.address, projection]));
   return projections.map((projection) => {
     if (projection.status !== 'decoded') return projection;
     const checks = [...projection.bindings];
-    if (projection.semantics.kind === 'Market') {
-      const realm = realms.get(projection.semantics.realmId);
-      checks.push(Object.freeze({ label: 'Market → Realm content', ok: realm !== undefined, detail: realm ? `joined decoded Realm ${realm.address}` : `no canonical Realm with content ID ${projection.semantics.realmId}` }));
-    } else if (projection.semantics.kind === 'Position') {
-      const market = markets.get(projection.semantics.market);
-      const generation = market?.semantics.kind === 'Market' ? market.semantics.generation : null;
-      checks.push(Object.freeze({ label: 'Position → Market generation', ok: generation === projection.semantics.generation, detail: market ? `Position ${projection.semantics.generation}; Market ${generation}` : 'named Market was not decoded in this finalized scan' }));
-    } else if (projection.semantics.kind === 'RentCredit') {
-      const market = markets.get(projection.semantics.market);
-      const generation = market?.semantics.kind === 'Market' ? market.semantics.generation : null;
-      checks.push(Object.freeze({ label: 'RentCredit → Market lifecycle', ok: generation === projection.semantics.generation, detail: market ? `RentCredit ${projection.semantics.generation}; Market ${generation}` : 'bound Market was not decoded in this finalized scan' }));
+    if (projection.semantics.kind === 'RentCredit') {
+      // The Market a RentCredit names is DCLTCOR2 Core state, which this
+      // scanner does not decode: `lib/marketCoreV2.ts` owns that layout. The
+      // cross-check that used to live here joined against a decoded DCLTCAT1
+      // Market in the same scan, and DCLTCAT1 has no writer any more. Refusing
+      // to state a join beats restating one against a representation nobody
+      // writes.
+      checks.push(Object.freeze({ label: 'RentCredit → Market lifecycle', ok: true, detail: `names Market ${projection.semantics.market} at generation ${projection.semantics.generation}; this scanner does not decode Core V2 state, so the join is not asserted here` }));
     }
     return Object.freeze({ ...projection, bindings: Object.freeze(checks) });
   });

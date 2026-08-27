@@ -1,22 +1,12 @@
 {
   "format": "dclutch-web/canonical-rust-fixtures/v1",
-  "status": "FROZEN, AND NOW UNBLOCKED. Its generator, apps/dclutch-web/fixtures/rust, was banished with the DCLTCAT1 stratum (it encoded CategoricalMarketV1 and PositionV1), and npm run fixtures:verify went with it. Nothing re-derives these bytes. It survived only because lib/decoders.ts's DCLTCAT1 and Realm arms still had one live consumer, lib/economicSuccessor.ts. That consumer was DELETED on 2026-08-27 (FABLE-ARCH P4). Nothing outside lib/decoders.test.ts now reaches those arms: delete this file, lib/decoders.test.ts, and the DCLTCAT1/Position arms together, in the lane that owns decoders.ts.",
+  "status": "FROZEN. Its generator, apps/dclutch-web/fixtures/rust, was banished with the DCLTCAT1 stratum, and npm run fixtures:verify went with it. Nothing re-derives these bytes. The Market (DCLTCAT1) and Position (DCLTPOS1) accounts were dropped when lib/decoders.ts lost the arms that read them; what remains is the Realm (DCLTRLM1) and lifecycle RentCredit (DCLRNTL2) the scanner still decodes. Restoring a gate means giving those two layouts a Lean-emitted TS/Rust pair, the pattern-3 move.",
   "programId": "7gyGAp71YXQRoxmFBaHxofQXAipvgHyBKPyxmdSJxyvz",
   "accounts": [
     {
       "kind": "Realm",
       "address": "BFP4bfgSLruoMjuZj6iHcQUweu3DJCF1hnEjZvm4PvgS",
       "dataHex": "44434c54524c4d3101000001000000000b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d"
-    },
-    {
-      "kind": "Market",
-      "address": "7CuJSi6uEyTFD7TUmyiUyszv51b5v1K4tXGXhvC5Y8DU",
-      "dataHex": "44434c5443415431010003010000000044434c54524f4f5401000000000000003bda98b500c0de22309e1023ba42cc6cd5904eb9e09acfd0e94d04672bb15ba502020202020202020202020202020202020202020202020202020202020202020303030303030303030303030303030303030303030303030303030303030303040404040404040404040404040404040404040404040404040404040404040405050505050505050505050505050505050505050505050505050505050505050700000000000000000000000000000000000000000000000808080808080808080808080808080808080808080808080808080808080808000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
-    },
-    {
-      "kind": "Position",
-      "address": "5jN3AHxL9YaApxa8J44xYsrYiG7rCK6MdrHVGKyezbZp",
-      "dataHex": "44434c54504f533101000300000000005c32a5a852f9e527f827956e19ae09fe42f8313a4d7d66eca552a58942865f0716161616161616161616161616161616161616161616161616161616161616160700000000000000050000000000000000000000000000000c00000000000000"
     },
     {
       "kind": "RentCredit",

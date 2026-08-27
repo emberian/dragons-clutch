@@ -26,7 +26,7 @@ function observation(account: (typeof fixture.accounts)[number], data = bytes(ac
   });
 }
 
-describe('canonical Rust account fixtures', () => {
+describe('frozen canonical Rust account fixtures', () => {
   it('strict-decodes and locally authenticates every emitted account', async () => {
     const decoded: AccountProjection[] = [];
     for (const account of fixture.accounts) {
@@ -46,19 +46,31 @@ describe('canonical Rust account fixtures', () => {
   });
 
   it('refuses version drift, trailing bytes, and owner substitution', () => {
-    const market = fixture.accounts.find((account) => account.kind === 'Market');
-    if (market === undefined) throw new Error('fixture omitted Market');
+    const realm = fixture.accounts.find((account) => account.kind === 'Realm');
+    if (realm === undefined) throw new Error('fixture omitted Realm');
 
-    const versionDrift = bytes(market.dataHex);
+    const versionDrift = bytes(realm.dataHex);
     versionDrift[8] = 2;
-    expect(decodeCoreAccount(observation(market, versionDrift), fixture.programId).status).toBe('refused');
+    expect(decodeCoreAccount(observation(realm, versionDrift), fixture.programId).status).toBe('refused');
 
-    const trailing = new Uint8Array(bytes(market.dataHex).length + 1);
-    trailing.set(bytes(market.dataHex));
-    expect(decodeCoreAccount(observation(market, trailing), fixture.programId).status).toBe('refused');
+    const trailing = new Uint8Array(bytes(realm.dataHex).length + 1);
+    trailing.set(bytes(realm.dataHex));
+    expect(decodeCoreAccount(observation(realm, trailing), fixture.programId).status).toBe('refused');
 
-    const substituted = Object.freeze({ ...observation(market), owner: '11111111111111111111111111111111' });
+    const substituted = Object.freeze({ ...observation(realm), owner: '11111111111111111111111111111111' });
     expect(decodeCoreAccount(substituted, fixture.programId).status).toBe('refused');
+  });
+
+  it('classifies no DCLTCAT1 or DCLTPOS1 header, because nothing writes them', () => {
+    const encoder = new TextEncoder();
+    for (const magic of ['DCLTCAT1', 'DCLTPOS1']) {
+      const data = new Uint8Array(344);
+      data.set(encoder.encode(magic), 0);
+      const projection = decodeCoreAccount(observation(fixture.accounts[0], data), fixture.programId);
+      expect(projection.status).toBe('refused');
+      if (projection.status !== 'refused') throw new Error('a buried representation decoded');
+      expect(projection.kind).toBe('Unknown');
+    }
   });
 
   it('refuses aliased lifecycle identities and detects cross-generation RentCredit reuse', async () => {
