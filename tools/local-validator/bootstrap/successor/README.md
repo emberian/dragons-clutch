@@ -105,24 +105,51 @@ that a transaction hashes one artifact rather than five. Nothing was weakened;
 the fast path additionally requires the immutable policy and an absent live
 upgrade authority, which the hashing path never demanded on its own.
 
-**The Market is Found. It is not Open.** The Open-last chain needs the atomic
-generic founding outer (`DCLTGMF1`,
+**The Market is Found. It is not Open.** The campaign still stops where the
+measurement above stops; this runner has gained no new stage. The Open-last chain
+needs the atomic generic founding outer (`DCLTGMF1`,
 `programs/dclutch-trading-sbf/src/generic_market_founding_v1.rs`), which has the
 correct Lock -> Found/permit -> Realize -> Claims FoundingV5 -> Core Open-last
-order in one rollback domain and remains unreachable for two structural reasons:
+order in one rollback domain.
 
-- the founding capability root. `docs/decisions/0004-founding-capability-root.md`
-  **decides** this: the root is derived by Core from the authenticated
-  Market-selected capability manifest entry and never persisted or read at
-  founding, and the root account is created afterwards by the unchanged ordinary
-  activation route. The decision is made and the file plan is written; the
-  implementation is queued.
-- no live Trading route emits the projected-Custody `Initialize`/`OpenHoard`
-  requests whose resulting state the outer's Lock stage consumes. This is still
-  open, and it is a new vertical slice rather than a wiring change:
-  `projected_custody_composition_v4.rs` is a *Lock* adapter that can emit only
-  `LockHoardAndCloseSource` and requires the projected state to already be in
-  phase `HoardOpen`.
+Two of the three structural reasons it was unreachable are now fixed, and the
+third was found underneath them:
+
+- the founding capability root — **implemented** (`728299a`,
+  `docs/decisions/0004-founding-capability-root.md`). Core derives the root
+  address from the authenticated Market-selected capability manifest entry and
+  never persists or reads a root account at founding; ordinary activation still
+  creates it afterwards. Two accounts left the outer frame, so `DCLTGMF1` at
+  three funding states is now **137** account references, not 139.
+- no live Trading route emitted the projected-Custody `Initialize`/`OpenHoard`
+  requests whose resulting state the Lock stage consumes — **implemented**
+  (`28d2da6`). `DCLTPCB1` is a 60-account Trading route that drives both under
+  their single-use `ProjectedCustodyCallerSeedsV1` signers in one rollback
+  domain. It also needed `f30d087`: the caller PDA seed domain was thirty-five
+  bytes against Solana's thirty-two-byte cap, so **no projected-Custody
+  transition could ever have signed**, and the whole projected family was dead at
+  runtime.
+- **the Lock stage's funding source is not creatable.** This is the open blocker,
+  and it belongs to Custody rather than Trading.
+  `LockHoardAndCloseSource` consumes and closes a source vault and a *normal*
+  `CustodyReplayV1` whose `market` field is the Market being founded, while
+  requiring that same Market account to be a vacant System account. Every route
+  that can write a normal replay goes through `authenticate_market`
+  (`programs/dclutch-custody-sbf/src/lib.rs:216-278`), which unconditionally
+  requires live Core-owned state at that address. The two requirements cannot
+  both hold, so a first founding has no reachable prestate for those two
+  accounts. Relaxing `authenticate_market` is the wrong fix — it would
+  permanently widen normal custody's live-Market membrane. The shape that fits is
+  a new projected-family Custody operation that opens a *source* compartment
+  against a vacant Market, as `OpenHoard` already does for `HoardPrincipal`, plus
+  its Trading bootstrap branch.
+
+When that lands, this runner needs a new stage before the founding outer: publish
+the four readonly request accounts, run `DCLTPCB1`, create the funding source, and
+then route `DCLTGMF1`'s 137 accounts over the same address-lookup-table machinery
+`publish_routing_table` already provides for Found31. `REMAINING_OPEN_SEAM` in
+`src/market.rs` still carries first-campaign prose that this README has since
+corrected twice; it should be rewritten by whoever adds that stage.
 
 Two earlier defects on that path were fixed at their semantic owners: the host
 Found/RentV2 projections refused the real System Program (`c25de27`), and the

@@ -31,6 +31,21 @@ Read that section for what is true now; read the rest for how it was found.
 | Found31 exhausted the 1,400,000 CU maximum | executes; **234,043** CU, and the Market account exists |
 | The Market is not Open, and it is not Found either | the Market is **Found**. It is still **not Open** |
 
+## Superseded again on 2026-08-26 by the W1c lane
+
+Blockers A and B are **implemented**, and a third structural blocker was found
+beneath them. The current truth about reachability is in
+[the W1c supersession section](#w1c-supersession-2026-08-26). That section adds
+**no on-chain evidence**: W1b's transcript and CU figures remain the newest
+measurements. The Market is still **not Open**.
+
+| W1b said | W1c |
+|---|---|
+| Blocker A decided, implementation queued | implemented, `728299a`; frame 139 to 137 |
+| Blocker B needs a new Trading vertical | implemented, `28d2da6`; `DCLTPCB1`, 60 accounts |
+| (unrecorded) | the projected-Custody caller PDA seed domain was 35 bytes and **could never derive an address**, so the entire projected family was dead at runtime; fixed `f30d087` |
+| "plus a funded funding-source vault", as part of Blocker B | **Blocker C**, its own Custody-side vertical: the Lock stage's funding source cannot be created, and cannot be built on the existing normal-custody handlers |
+
 ## Headline
 
 *(historical, 2026-08-26, first campaign)*
@@ -48,8 +63,10 @@ third is a measurement handed to the lane that owns it.
 | Capability-root selection was a SHA-256 fixed point | fixed, `386f254` |
 | Found31 exceeds the 1.4M CU maximum (on-chain full-ELF hashing) | **fixed, `c61376d`** |
 | Registry activation with the real seven artifacts also exceeds it | **fixed, `c61376d`** |
-| No route creates a pre-Market Trading capability root | **decided, `docs/decisions/0004-founding-capability-root.md`; implementation queued** |
-| No live route creates the projected-Custody state the outer's Lock consumes | open; needs an implementation owner |
+| No route creates a pre-Market Trading capability root | **decided, `docs/decisions/0004-founding-capability-root.md`; implemented, `728299a`** |
+| No live route creates the projected-Custody state the outer's Lock consumes | **implemented, `28d2da6`** |
+| The projected-Custody caller PDA seed domain exceeded 32 bytes, so no projected transition could ever sign | **fixed, `f30d087`** (found by W1c) |
+| No route creates the funding source the outer's Lock consumes and closes | open; needs a Custody-side implementation owner |
 
 ## Artifacts
 
@@ -708,3 +725,217 @@ Lock -> Found -> Realize -> Claims -> Open chain — still needs the route to
 execute, and therefore still waits on Blocker B. The pure cross-request join
 tests remain what they were: a pure function checked without a chain, and not
 execution evidence.
+
+## W1c supersession 2026-08-26
+
+**This section adds no on-chain evidence.** No validator campaign was run for it.
+Everything below is source-level: implemented routes, unit-tested refusals, and
+one structural impossibility established by reading the code that decides it. The
+CU figures and the transcript in the W1b section remain the newest measurements
+and are unchanged. Read this section for what is now *implemented* and for why the
+outer is still not executable; read W1b for what has actually run.
+
+### Blocker A is implemented
+
+`docs/decisions/0004-founding-capability-root.md` was decided at `dcd7ac3` with an
+exact file plan and no implementation: the account counts were still 35 and 24 and
+`authenticate_root` still read a root account. `728299a` implements all seven
+steps.
+
+Core now rebuilds `CapabilityRootHeaderV1` from facts it has already
+authenticated and requires the request to name the address that derives from it.
+The Found stage's funding authentication already decodes the Market-selected
+manifest, so the derivation shares that decode instead of paying for a second one
+inside the founding transaction. The Open stage does not re-derive: Found
+persisted the derived address in the Core-owned permit, and `authenticate_permit`
+and `authenticate_open_request` both require it, so an Open stage that disagreed
+with its own Found stage cannot be constructed. That is the ADR's "must be
+impossible" refusal, discharged by construction rather than by a second
+derivation.
+
+The strengthening the ADR predicted is real and now enforced: `manifest`,
+`entry_index`, `kind`, and `capability_release` were previously supplied entirely
+by the founder and checked only for self-consistency, so **nothing bound the
+selection to the Market's own authenticated capability manifest**. The manifest
+identity is now the one Found authenticated and the kind and release come from
+that manifest's own indexed entry, as Decision 0003 already required of the
+ordinary route. The operator no longer accepts the four coordinates as free
+parameters at all.
+
+Wire and frame, exactly as the ADR specified: the request keeps its 400 bytes and
+spends its previously unchecked `392..400` tail on `capability_entry_index` plus
+reserved bytes `decode` now requires to be zero; Found goes 35 to 34, Open 24 to
+23, and `DCLTGMF1` at three funding states goes **139 to 137**. The frame-width
+test in `generic_market_founding_v1.rs` asserted 139 and now asserts 137.
+
+Unit refusals added: a foreign manifest, an entry index outside the authenticated
+entry count, a sibling entry's exact kind and release, non-canonical manifest
+bytes, every nonzero reserved tail byte, and a substituted `capability_root` in
+the outer's `request_join` tests, which had never substituted it at all.
+
+### Blocker B is implemented — `DCLTPCB1`
+
+`28d2da6` adds the family-neutral projected-Custody bootstrap the W1b handoff
+specified. It is one Trading dispatch branch, bound to one terminal
+`LockHoardAndCloseSource` request and one founding artifact, driving Custody
+`Initialize` (42 accounts) and `OpenHoard` (15 accounts) under their single-use
+`ProjectedCustodyCallerSeedsV1` signers in a single rollback domain, so a Market
+is never left holding a replay with no Hoard. The frame is 60 accounts.
+
+The family-neutrality is structural rather than asserted. A replay reaches
+`HoardOpen` by exactly two transitions, and Custody's `authenticate_next` admits a
+successor only when all thirty of its non-transition fields match the persisted
+request byte-for-byte. `ProjectedCustodyRequestV1::founding_prestate_v1` therefore
+builds both prestates by functional update from the terminal request, varying
+exactly the four fields Custody permits to vary. No family, escrow shape, or
+ticket namespace can enter, and the superseded Series-shaped constructor is
+deleted.
+
+The found-to-lock conjunction the outer evaluated inline is now a shared predicate
+both routes call. A prestate this route creates is admissible at Lock because the
+two routes evaluate the *same* predicate, not because two constructors agree.
+
+Child CPI metas are built from this route's own authenticated frame — a direct
+instruction, never an Effect-V3 route adapter, so it never consults a downgraded
+privilege view. Writable and signer masks are asserted rather than mirrored from
+the runtime. The Custody program is taken from the Registry-activated release set
+the request names, so a substituted program cannot receive a Trading-derived
+caller signature. Neither transition returns data, so the persisted replay is the
+receipt: it is read back and required to be exactly the poststate of the request
+just signed.
+
+### Defect 4 — the projected-Custody caller PDA could never be derived
+
+The projected family was unreachable for a reason no one had recorded, underneath
+both blockers above.
+
+`PROJECTED_CUSTODY_CALLER_PDA_DOMAIN_V1` was `dclutch:projected-custody-caller:v1`
+— **thirty-five bytes**. A Solana PDA seed is capped at thirty-two, so
+`find_program_address` refuses every one of the 255 bumps and **no address exists**.
+Custody demands that signature for `Initialize`, `OpenHoard`, `LockHoard`,
+`RealizeAndClose`, `AbortOpenAndClose`, and `LockHoardAndCloseSource`, so *every*
+projected-Custody transition was dead at runtime — the Series prepare and consume
+path, `projected_custody_composition_v4`, and the atomic outer's own Lock and
+Realize stages included.
+
+It compiled, unit-tested, and reviewed clean for as long as it existed, because
+nothing in the tree had ever derived the address. It surfaced the first time a
+test did: the assertion that each prestate has its own single-use caller authority
+panicked with `Unable to find a viable program address bump seed`. This is the
+sharpest available argument for the project's own rule that a slice must include
+operator construction and executable evidence — a pure-kernel review of that
+constant finds nothing wrong with it.
+
+Fixed at `f30d087`: the domain is now `dclutch:proj-custody-caller:v1` (thirty
+bytes). Static assertions cover every Custody PDA domain, and a test asserts the
+real precondition on the real seed vector rather than on the constant. **Every
+projected-Custody caller PDA address has moved**; any fixture pinning one must be
+regenerated. A repo-wide sweep of `*SEED*`/`*PDA*` byte-string constants found one
+other over-long domain, not in this lane's ownership and with no seed use today:
+`GENERAL_CANDIDATE_PAGE_PDA_DOMAIN_V1` is thirty-three bytes at
+`crates/dclutch-general-contract/src/lib.rs:120`.
+
+### Blocker C — the Lock stage's funding source is not creatable, and cannot be built on the existing normal-custody handlers
+
+`DCLTGMF1` is **still not executable**, and the reason is a third structural
+blocker that this lane established and that the W1b handoff had folded into
+Blocker B as the parenthetical "plus a funded funding-source vault". It is not a
+sub-task of Blocker B. It is a Custody-side protocol gap, and the two requirements
+that create it are mutually unsatisfiable today.
+
+`LockHoardAndCloseSource` consumes and closes two accounts that
+`projected_custody_bootstrap_v1` deliberately does not touch — the funding source
+vault at frame index 8 and the funding source replay at index 12:
+
+```text
+custody-sbf/src/projected.rs:1213-1250  source vault  = PDA[CUSTODY_VAULT_PDA_DOMAIN_V1,
+                                          request.market, release_set,
+                                          funding_source_context, compartment]
+custody-sbf/src/projected.rs:1226-1245  source replay = PDA[CUSTODY_REPLAY_PDA_DOMAIN_V1,
+                                          request.market, release_set,
+                                          funding_source_context]
+                                        decoded as a NORMAL CustodyReplayV1
+custody-contract/src/projected.rs:749-790  replay.market == request.market,
+                                          caller_role == Trading,
+                                          open_vault_count == 1,
+                                          generation == request.generation
+custody-sbf/src/projected.rs:971,1257-1271  request.market must be VACANT:
+                                          owner == system_program, data_len() == 0
+```
+
+The source must therefore name the very Market being founded, while that Market's
+account is still a vacant System account. Every route that can write a normal
+`CustodyReplayV1` requires the opposite:
+
+- normal `InitializeReplay`, `OpenVault`, and `Transfer` all pass through
+  `authenticate_market` (`custody-sbf/src/lib.rs:216-278`), which unconditionally
+  requires `market.data_len() == STATE_BYTES` and `market.owner == core_program`,
+  and re-derives `MarketCoreStateSeedsV2` against the live state. `CustodyReplayV1::initialize`
+  has exactly one caller, and it is behind that check.
+- the only other producer of a normal replay is
+  `normal_replay_from_realization_v1`, which mints precisely the shape Lock wants
+  (Trading role, one open vault, `next_revision` 1) but is reachable only from
+  `realize_and_close`, which also requires a live Core-owned Market at
+  `request.market` (`custody-sbf/src/projected.rs:857-864`).
+
+The Market address is a PDA over an identity that includes `generation`, so a
+previous market's realized leftovers can never sit at the next founding's address
+either. A first founding has no reachable prestate for those two accounts.
+
+**This must not be resolved by relaxing `authenticate_market`.** That check is
+what makes normal custody's whole surface a live-Market membrane; widening it to
+admit a vacant Market would be a permanent enlargement bought to fix one
+transaction's ordering — the same trade Decision 0004 rejected for
+`activate_capability_child`. The shape that fits the existing design is a new
+projected-family Custody operation that opens a *source* compartment against a
+vacant Market and takes `market_vacant` explicitly, exactly as `OpenHoard` already
+does for `HoardPrincipal`, plus its Trading bootstrap branch. `OpenHoard` cannot
+serve: it pins the compartment to `HoardPrincipal`, which
+`ProjectedCustodyRequestV1::validate` explicitly forbids as a funding source, and
+it writes a `ProjectedCustodyStateV1` where Lock requires a `CustodyReplayV1`.
+
+That is a Custody protocol addition with its own wire, its own frame, its own
+refusals, and its own owner. It is the last thing between here and an Open Market.
+
+### Artifacts
+
+Built from `28d2da6` in an isolated `git archive HEAD` tree with the same pinned
+toolchain W1b used (`cargo-build-sbf 4.0.0`, `platform-tools v1.53`,
+`rustc 1.89.0`), default release profile, no `--lto` and no `--optimize-size`.
+Only the three programs this lane changed were rebuilt; Registry, Claims,
+Resolution, and Rent are unchanged from the W1b table above. **These ELFs have
+not been deployed or executed** — no campaign was run for this section.
+
+| Program | Bytes | SHA-256 |
+|---|---:|---|
+| `dclutch_core_sbf.so` | 1,007,032 | `c212c8ea3907e2256c441717e538fdf2b6b0fed22e6c2f7836a42883889490d2` |
+| `dclutch_custody_sbf.so` | 330,432 | `6434093093bf14615e47c58fd2bcef784af05ed7dae1b8b4e5a14f84d3fcf4ac` |
+| `dclutch_trading_sbf.so` | 1,309,048 | `47931749058f0ee0023836cb6020571c0955ac6632d3d3e1d4a6feeaf7515382` |
+
+Core shrank by 1,440 bytes: dropping the capability-root account read removed
+more code than the derivation added. Trading grew by 21,704 bytes for the new
+bootstrap route.
+
+### The path to a first Open Market, corrected again
+
+1. ~~Get Found31 under 1.4M CU~~ — done, `c61376d`, 234,043 CU measured.
+2. ~~Implement the derived founding capability root (Blocker A)~~ — done,
+   `728299a`.
+3. ~~Add the family-neutral projected-Custody bootstrap (Blocker B)~~ — done,
+   `28d2da6`, plus the underivable-seed fix at `f30d087` without which neither it
+   nor anything else in the family could have signed.
+4. **Make the Lock stage's funding source creatable (Blocker C)** — open, unowned,
+   and a new Custody-side vertical as described above. No amount of Trading wiring
+   reaches it.
+5. **Then** drive `DCLTGMF1` at 137 account references over the address-lookup-table
+   routing this campaign already builds, and measure five CPIs in one rollback
+   domain against the 1.4M ceiling. Found31's 234,043 CU remains the only one of
+   those five stages measured.
+
+The on-chain founding-outer hostile case this document has wanted since the first
+campaign — a substituted Claims request account proving byte-exact rollback of the
+whole Lock to Open chain — is **still not claimed**, and now waits on Blocker C
+rather than Blocker B. The cross-request join tests added in this lane, including
+the capability-root substitution, are what they have always been: pure functions
+checked without a chain. They are not execution evidence and are not counted as
+any.
