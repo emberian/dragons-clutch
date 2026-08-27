@@ -506,21 +506,26 @@ fn gap_register() -> Vec<GapV1> {
                 .into(),
         },
         GapV1 {
-            stage: "retirement and rent closure".into(),
+            stage: "retirement: the atomic close of Claims, Custody and the Hoard".into(),
             routes: vec![
-                "resolution/core_v3#CloseFund".into(),
-                "core/begin_retiring::process#BeginRetiring".into(),
                 "core/retire_v1::process#Retire".into(),
+                "core/resolution::process#Retire".into(),
                 "rent/process_close_v2#Close".into(),
             ],
-            owner: "the resolution gap above".into(),
-            reason: "BeginRetiring admits only Phase::Terminal and rent close_v2 additionally \
-                     requires a retired Market plus a Core close-authority signer, so the whole \
-                     retirement half sits behind the terminal receipt the provider legs would \
-                     mint. Nothing else stands in its way: `build_resolution_close_fund_v3` and \
-                     the retirement operator take the same chain-derived, non-signing frames the \
-                     funding ladder does, and this campaign already drives that ladder. The rent \
-                     SWEEP half of recovery needs none of it and this journey executes it."
+            owner: "the Hot gate, which is not where this gap was expected to be".into(),
+            reason: "This gap used to read \'behind the terminal receipt\'. The receipt now exists, \
+                     this campaign begins retiring and closes the whole Source subtree, and the \
+                     gap MOVED rather than closing. `build_market_retirement_v1` compiles ONE \
+                     atomic Registry continuation that closes the Claims aggregate, the Custody \
+                     replay and the Hoard vault together, and it refuses to compile at all while \
+                     the Hoard holds a single atom -- partial Custody settlement cannot retire. \
+                     That is the correct rule. But this Market\'s Hoard holds the entire founding \
+                     principal, emptying it means redeeming, and redemption is a Claims mutation \
+                     behind the Hot gate. So the LAST step of the Market\'s life is behind the \
+                     same door as the middle of it, and the retirement stage reports it with the \
+                     Hoard\'s measured balance rather than by reading the operator. `rent/\
+                     process_close_v2#Close` is behind the retirement in turn: it needs a retired \
+                     Market and a Core close-authority signer."
                 .into(),
         },
     ]

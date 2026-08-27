@@ -1,13 +1,13 @@
 {
   "campaign": "journey",
-  "note": "The journey's OWN transactions only. The journey submits every tier-1 transaction before these, and run-journey.sh merges tools/gauntlet/tier1/bindings.json in front of this file at run time rather than keeping a second copy of them — a copy would rot the first time tier 1 changed, and the census fails both an unbound transaction and a binding that matched nothing, so the rot would surface as a red run on someone else's change. Everything here happens after the Market is Open. The routing-table transactions the resolution and provider frames need are bound by tier 1's `create * routing address lookup table` and `extend * routing table page *` rows: an oversized frame is an oversized frame whoever builds it, and giving this tier its own copy of those two rows would make them ambiguous rather than covered.",
+  "note": "The journey's OWN transactions only. The journey submits every tier-1 transaction before these, and run-journey.sh merges tools/gauntlet/tier1/bindings.json in front of this file at run time rather than keeping a second copy of them \u2014 a copy would rot the first time tier 1 changed, and the census fails both an unbound transaction and a binding that matched nothing, so the rot would surface as a red run on someone else's change. Everything here happens after the Market is Open. The routing-table transactions the resolution and provider frames need are bound by tier 1's `create * routing address lookup table` and `extend * routing table page *` rows: an oversized frame is an oversized frame whoever builds it, and giving this tier its own copy of those two rows would make them ambiguous rather than covered.",
   "bindings": [
     {
       "label": "journey: open and fund synthetic holder *",
       "routes": [],
       "program": "",
       "outcome": "executed",
-      "note": "One transaction per synthetic holder: System create_account, Token-2022 InitializeAccount3, Token-2022 TransferChecked. No dClutch program is invoked, and saying so explicitly is the honest form — this is the COLLATERAL leg of post-Open life. Giving a holder outcome tokens is a Claims mutation and is the journey's named gap."
+      "note": "One transaction per synthetic holder: System create_account, Token-2022 InitializeAccount3, Token-2022 TransferChecked. No dClutch program is invoked, and saying so explicitly is the honest form \u2014 this is the COLLATERAL leg of post-Open life. Giving a holder outcome tokens is a Claims mutation and is the journey's named gap."
     },
     {
       "label": "journey: holder-to-holder collateral transfer *",
@@ -21,7 +21,7 @@
       "routes": [],
       "program": "",
       "outcome": "executed",
-      "note": "Four System transfers and nothing else. `CreateFund` consumes PRECOMMITTED, PREPAID destinations — the Source state and three Funds must be System-owned, empty, and holding exactly rent plus the native principal their own manifest entry quotes — so the funding and the creation are two facts and this campaign keeps them in two transactions. The exact top-up per destination is the operator's arithmetic, not this tier's: `build_resolution_create_fund_v3` returns it and the campaign re-derives the report afterwards and refuses to proceed unless every remaining top-up is zero."
+      "note": "Four System transfers and nothing else. `CreateFund` consumes PRECOMMITTED, PREPAID destinations \u2014 the Source state and three Funds must be System-owned, empty, and holding exactly rent plus the native principal their own manifest entry quotes \u2014 so the funding and the creation are two facts and this campaign keeps them in two transactions. The exact top-up per destination is the operator's arithmetic, not this tier's: `build_resolution_create_fund_v3` returns it and the campaign re-derives the report afterwards and refuses to proceed unless every remaining top-up is zero."
     },
     {
       "label": "journey: over-funding a Resolution Fund by one lamport refuses the creation",
@@ -35,9 +35,9 @@
       "outcome": "refused",
       "unnamed_refusal": {
         "code": 0,
-        "reason": "PLACEHOLDER — replaced from the first green run's logs"
+        "reason": "PLACEHOLDER \u2014 replaced from the first green run's logs"
       },
-      "note": "HOSTILE. A Fund's lamports must equal rent plus EXACTLY the native principal its own manifest entry quotes, and both directions matter: over-funding is not a donation a prepaid compartment may keep. The refusal must also roll the extra lamport back with it, or the Fund becomes permanently unfundable and the refusal is worse than useless — the campaign re-derives the creation report afterwards and refuses to continue if any top-up is nonzero."
+      "note": "HOSTILE. A Fund's lamports must equal rent plus EXACTLY the native principal its own manifest entry quotes, and both directions matter: over-funding is not a donation a prepaid compartment may keep. The refusal must also roll the extra lamport back with it, or the Fund becomes permanently unfundable and the refusal is worse than useless \u2014 the campaign re-derives the creation report afterwards and refuses to continue if any top-up is nonzero."
     },
     {
       "label": "journey: an Open Market creates its own Resolution Fund",
@@ -63,7 +63,7 @@
       "outcome": "refused",
       "unnamed_refusal": {
         "code": 0,
-        "reason": "PLACEHOLDER — replaced from the first green run's logs"
+        "reason": "PLACEHOLDER \u2014 replaced from the first green run's logs"
       },
       "note": "HOSTILE. The Source PDA is one per Market generation and the prepaid-output rule admits only a System-owned, empty account, so a second creation cannot overwrite the first. Submitted as the byte-identical frame that had just succeeded, which is the only version of this test that proves the guard rather than proving that two different frames differ."
     },
@@ -77,7 +77,7 @@
       ],
       "program": "core",
       "outcome": "executed",
-      "note": "Activation, and the assertion that matters is a NEGATIVE one: Core stays `Open + Consumed`. An already-open Market consumed its readiness at the commit-last Open, so rewriting it to `Ready` would be a second author for a fact the three FundingState accounts already hold — and terminal admission rechecks those, not the phase. The campaign also asserts the Market's rent beneficiary gained EXACTLY the lamports the operator declared."
+      "note": "Activation, and the assertion that matters is a NEGATIVE one: Core stays `Open + Consumed`. An already-open Market consumed its readiness at the commit-last Open, so rewriting it to `Ready` would be a second author for a fact the three FundingState accounts already hold \u2014 and terminal admission rechecks those, not the phase. The campaign also asserts the Market's rent beneficiary gained EXACTLY the lamports the operator declared."
     },
     {
       "label": "journey: the captured Wormhole router initializes its synthetic guardian set",
@@ -126,7 +126,7 @@
       "routes": [],
       "program": "",
       "outcome": "executed",
-      "note": "`verify_encoded_vaa_v1` against guardian set zero — REAL signature verification by the real router ELF, not a fixture assertion. The campaign then reads the buffer back and requires ProcessingStatus::Verified. No dClutch program is invoked; this is the provider's own truth being established before dClutch reads any of it."
+      "note": "`verify_encoded_vaa_v1` against guardian set zero \u2014 REAL signature verification by the real router ELF, not a fixture assertion. The campaign then reads the buffer back and requires ProcessingStatus::Verified. No dClutch program is invoked; this is the provider's own truth being established before dClutch reads any of it."
     },
     {
       "label": "journey: prepay the provider update lifecycle",
@@ -163,7 +163,36 @@
       ],
       "program": "core",
       "outcome": "executed",
-      "note": "THE MARKET RESOLVES. Core drives the provider execution, the adapter decodes the posted update under the CHAIN_STATE_SOURCES rules, the statistic and window admit it, and a ResolutionSuccess certificate is minted at the Market's own terminal winner. Poststate asserted: Phase Terminal, a terminal receipt naming the certificate this campaign prepaid, Source Resolved, and a certificate whose selector equals the winner the Market itself records — the last of those is the one that would catch a certificate bound to a different Market's material."
+      "note": "THE MARKET RESOLVES. Core drives the provider execution, the adapter decodes the posted update under the CHAIN_STATE_SOURCES rules, the statistic and window admit it, and a ResolutionSuccess certificate is minted at the Market's own terminal winner. Poststate asserted: Phase Terminal, a terminal receipt naming the certificate this campaign prepaid, Source Resolved, and a certificate whose selector equals the winner the Market itself records \u2014 the last of those is the one that would catch a certificate bound to a different Market's material."
+    },
+    {
+      "label": "journey: a resolved Market begins retiring",
+      "routes": [
+        "core/begin_retiring::process#BeginRetiring",
+        "core/process_instruction"
+      ],
+      "program": "core",
+      "outcome": "executed",
+      "note": "Five accounts, no signer, no lookup table, and PERMISSIONLESS: a Market that has resolved may be retired by anyone, because the permission is the terminal receipt rather than a key. The route admits only Phase::Terminal, so this transaction existing at all is evidence that the provider legs above really resolved the Market rather than leaving it plausibly resolved."
+    },
+    {
+      "label": "journey: prepay the Source closure receipt",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "One System transfer. Same rule as every other precommitted output in this protocol: the receipt is prepaid before the route that writes it, and the campaign cross-checks the operator's derived address against the one it funded so a derivation drift is a named mismatch rather than a transfer into nowhere."
+    },
+    {
+      "label": "journey: Resolution closes the Source subtree of a retiring Market",
+      "routes": [
+        "core/resolution::process#CloseFund",
+        "core/process_instruction",
+        "resolution/process_close#CloseFund",
+        "resolution/core_effect::process_core_effect"
+      ],
+      "program": "core",
+      "outcome": "executed",
+      "note": "The Source subtree closes atomically: all three Resolution Funds are gone afterwards and a SourceClosureReceiptV2 binding THIS Market exists. The campaign asserts the Market's rent beneficiary gained exactly the lamports the operator declared -- the closure is where a Market's resolution rent comes back, and 'the balance went up' would be a direction-of-travel observation rather than a check. This stage deliberately runs BEFORE rent recovery: sweeping first would leave the larger half of the surplus sitting in the credit."
     },
     {
       "label": "journey: sweeping past the rent floor refuses",
@@ -174,7 +203,7 @@
       "program": "rent",
       "outcome": "refused",
       "refusal": "rent/RentSbfError::Balance",
-      "note": "HOSTILE, and the half that matters. Sweep needs NO signature at all — three accounts, one of them a sysvar — so the only thing standing between the lifecycle credit and being drained below its own rent minimum is the checked balance plan. A sweep of exactly one lamport more than the surplus must refuse Balance (0x2004), 'exact checked contract balance plan refused'. The producer additionally asserts the credit's lamports did not move."
+      "note": "HOSTILE, and the half that matters. Sweep needs NO signature at all \u2014 three accounts, one of them a sysvar \u2014 so the only thing standing between the lifecycle credit and being drained below its own rent minimum is the checked balance plan. A sweep of exactly one lamport more than the surplus must refuse Balance (0x2004), 'exact checked contract balance plan refused'. The producer additionally asserts the credit's lamports did not move."
     },
     {
       "label": "journey: sweep lifecycle rent surplus to the refund wallet",
@@ -184,7 +213,7 @@
       ],
       "program": "rent",
       "outcome": "executed",
-      "note": "Rent recovery, and the first execution of this route by any tier. The founding leaves SEVERAL lifecycle credits — one per projected-Custody prestate lane plus Found31's — and only the lane that actually closed accounts into its credit carries a surplus, so the stage discovers the credit by surplus rather than naming one. Sweep is the only route that moves that surplus back out while the Market is alive. The producer asserts the credit is left holding EXACTLY the rent minimum, that the refund wallet the credit's own bytes name gains exactly the surplus, and — because that wallet is NOT the fee payer here — that the payer's balance moved by exactly the fee and nothing else. Anything vaguer than that is a direction-of-travel observation rather than a check."
+      "note": "Rent recovery, and the first execution of this route by any tier. The founding leaves SEVERAL lifecycle credits \u2014 one per projected-Custody prestate lane plus Found31's \u2014 and only the lane that actually closed accounts into its credit carries a surplus, so the stage discovers the credit by surplus rather than naming one. Sweep is the only route that moves that surplus back out while the Market is alive. The producer asserts the credit is left holding EXACTLY the rent minimum, that the refund wallet the credit's own bytes name gains exactly the surplus, and \u2014 because that wallet is NOT the fee payer here \u2014 that the payer's balance moved by exactly the fee and nothing else. Anything vaguer than that is a direction-of-travel observation rather than a check."
     }
   ]
 }
